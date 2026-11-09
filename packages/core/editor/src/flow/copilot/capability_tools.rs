@@ -13,6 +13,7 @@ use flow_like_types::base64::{Engine as _, engine::general_purpose::STANDARD};
 use flow_like_types::bot::BotCapability;
 use serde_json::{Value, json};
 
+use super::bot_notes::NotesHandle;
 use super::memory_tools::MemoryHandle;
 use super::platform::PLATFORM_TOOL_IMAGE_URLS_FIELD;
 
@@ -102,6 +103,19 @@ fn connector_ask_message(tool: &str, args: &Value) -> String {
 }
 
 fn ask_message(tool: &str, args: &Value) -> String {
+    if let Some(message) = tools::crew::ask_message(tool, args) {
+        return message;
+    }
+    if tools::configuration::requires_approval(tool) {
+        let fields = args
+            .get("changes")
+            .and_then(Value::as_object)
+            .map(|fields| fields.keys().cloned().collect::<Vec<_>>().join(", "))
+            .unwrap_or_default();
+        return format!(
+            "The bot wants to change its {fields}. Review the proposed values. Approved changes take effect on the next turn."
+        );
+    }
     if tools::services::POLICY_TOOLS.contains(&tool) {
         return connector_ask_message(tool, args);
     }
@@ -173,6 +187,13 @@ macro_rules! registered_tools {
 }
 
 registered_tools!(
+    "bot_configuration",
+    "bot_models",
+    "bot_update_configuration",
+    "list_bots",
+    "get_bot",
+    "create_bot",
+    "update_bot",
     "file_list",
     "file_read",
     "file_save",
@@ -194,6 +215,9 @@ registered_tools!(
     "message_owner",
     "list_people",
     "message_person",
+    "user_context_available",
+    "user_context_request",
+    "user_context_set_status",
     "schedule_task",
     "list_tasks",
     "cancel_task",
@@ -343,6 +367,7 @@ pub struct HostTools {
     names: BTreeSet<&'static str>,
     code_languages: Vec<String>,
     memory: Option<MemoryHandle>,
+    notes: Option<NotesHandle>,
 }
 
 impl HostTools {
@@ -360,6 +385,7 @@ impl HostTools {
                 .collect(),
             code_languages: Vec::new(),
             memory: None,
+            notes: None,
         }
     }
 
@@ -389,6 +415,7 @@ impl HostTools {
                 .collect(),
             code_languages: Vec::new(),
             memory: None,
+            notes: None,
         }
     }
 
@@ -400,6 +427,17 @@ impl HostTools {
 
     pub fn memory(&self) -> Option<&MemoryHandle> {
         self.memory.as_ref()
+    }
+
+    /// Keeps the bot's notes in the conversation the turn answers; every bot gets the notes
+    /// tools and section when a host passes them.
+    pub fn with_notes(mut self, notes: NotesHandle) -> Self {
+        self.notes = Some(notes);
+        self
+    }
+
+    pub fn notes(&self) -> Option<&NotesHandle> {
+        self.notes.as_ref()
     }
 
     /// The languages `code_run` runs on this host (`ToolEnv::code_languages`). None: the host
@@ -416,6 +454,17 @@ impl HostTools {
     pub fn with_shell(mut self, available: bool) -> Self {
         if !available {
             self.names.remove("shell_run");
+        }
+        self
+    }
+
+    /// A host only advertises context requests when it can reach this conversation's people.
+    pub fn with_user_context(mut self, available: bool) -> Self {
+        if !available {
+            self.names
+                .remove(tools::user_context::USER_CONTEXT_AVAILABLE);
+            self.names.remove(tools::user_context::USER_CONTEXT_REQUEST);
+            self.names.remove(tools::user_context::USER_CONTEXT_SET_STATUS);
         }
         self
     }
@@ -450,7 +499,9 @@ mod tests {
                 spec.name
             );
             assert!(
-                required_capability(&spec).is_some() || is_secret_tool(spec.name),
+                required_capability(&spec).is_some()
+                    || is_secret_tool(spec.name)
+                    || tools::configuration::is_settings_tool(spec.name),
                 "{} has no capability",
                 spec.name
             );
@@ -482,6 +533,9 @@ mod tests {
                 matches!(
                     name,
                     "knowledge_drop"
+                        | "bot_update_configuration"
+                        | "create_bot"
+                        | "update_bot"
                         | "shell_run"
                         | "browser_open"
                         | "computer_screenshot"

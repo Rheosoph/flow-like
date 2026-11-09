@@ -23,7 +23,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 
 const SCHEDULING_CAPABILITY: &str = "scheduling";
 const COLUMNS: &str = "id, bot_id, kind, run_at, cron, timezone, instruction, title, next_run_at,
-    last_run_at, enabled, created_by, created_at";
+    last_run_at, enabled, created_by, created_at, monitoring";
 
 struct Stored {
     task: BotTask,
@@ -51,6 +51,7 @@ fn read_task(row: &Row<'_>) -> rusqlite::Result<Stored> {
             next_run_at: rfc(row.get(8)?),
             last_run_at: rfc(row.get(9)?),
             enabled: row.get::<_, i64>(10)? != 0,
+            monitoring: row.get::<_, i64>(13)? != 0,
             created_by: TaskCreator::parse(&created_by).unwrap_or(TaskCreator::Owner),
             created_at: timestamp(row.get(12)?).to_rfc3339(),
         },
@@ -117,6 +118,7 @@ fn micros_of(text: &str) -> Option<i64> {
 fn trigger_for(task: &BotTask) -> TriggerBody {
     TriggerBody {
         source: TriggerSource::Schedule,
+        monitoring: task.monitoring,
         ref_id: task.id.clone(),
         title: task.title.chars().take(TRIGGER_TITLE_MAX_CHARS).collect(),
         text: task
@@ -207,8 +209,8 @@ impl LocalBotStore {
             let (run_at, cron, timezone) = parts_of(&schedule);
             tx.execute(
                 "INSERT INTO tasks (id, bot_id, kind, run_at, cron, timezone, instruction, title,
-                     next_run_at, last_run_at, enabled, created_by, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, ?11, ?12, ?12)",
+                     next_run_at, last_run_at, enabled, created_by, created_at, updated_at, monitoring)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, ?11, ?12, ?12, ?13)",
                 params![
                     id,
                     bot_id,
@@ -223,7 +225,8 @@ impl LocalBotStore {
                         .map(|at| at.timestamp_micros()),
                     i64::from(request.enabled.unwrap_or(true)),
                     created_by.stored(),
-                    now
+                    now,
+                    i64::from(request.monitoring)
                 ],
             )?;
             find(tx, bot_id, &id)
@@ -265,6 +268,12 @@ impl LocalBotStore {
                 tx.execute(
                     "UPDATE tasks SET enabled = ?1 WHERE id = ?2",
                     params![i64::from(enabled), task_id],
+                )?;
+            }
+            if let Some(monitoring) = request.monitoring {
+                tx.execute(
+                    "UPDATE tasks SET monitoring = ?1 WHERE id = ?2",
+                    params![i64::from(monitoring), task_id],
                 )?;
             }
             if request.instruction.is_some() || request.title.is_some() {

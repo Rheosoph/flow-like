@@ -8,6 +8,7 @@ import {
 	type LucideIcon,
 	MessageCircleQuestionIcon,
 	ShieldQuestionIcon,
+	SlidersHorizontalIcon,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useCallback, useState } from "react";
@@ -18,12 +19,17 @@ import {
 	initialAskUserDrafts,
 	isAskUserFormComplete,
 } from "../../lib/ask-user";
+import { requiresFreshToolApproval } from "../../lib/frontend-tool-approval-scope";
 import {
 	type GlobalToolPrompt,
 	type GlobalToolSecret,
 	useGlobalChatStore,
 } from "../../state/global-chat/global-chat-store";
 import { restoreGlobalChatConversation } from "../../state/global-chat/global-chat-stream";
+import {
+	BotConfigurationChanges,
+	useBotSettingsApprovalText,
+} from "../bots-tab/configuration-changes";
 import { BOTS_ROUTE } from "../bots-tab/dock-selection";
 import { SecretRequestForm } from "../bots-tab/secret-request-form";
 import { BotAvatar } from "../bots/bot-avatar";
@@ -288,6 +294,10 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 	const ask = prompt.ask ?? EMPTY_ASK;
 	const [drafts, setDrafts] = useState(() => initialAskUserDrafts(ask));
 	const isApproval = prompt.kind === "approval";
+	const isConfiguration =
+		isApproval && requiresFreshToolApproval(prompt.toolName);
+	const settingsText = useBotSettingsApprovalText(prompt.toolName);
+	const rememberable = !isConfiguration && prompt.rememberable !== false;
 	const tone: RequestTone = isApproval ? "warning" : "primary";
 
 	const canSend = isAskUserFormComplete(ask, drafts);
@@ -295,8 +305,11 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 		ask.questions.length === 1 && ask.questions[0].mode === "freeform";
 	// A lone question is the card's subject; its generic "needs input" title would only repeat
 	// what the eyebrow already says.
-	const title =
-		!isApproval && prompt.description ? prompt.description : prompt.title;
+	const title = isConfiguration
+		? settingsText.title
+		: !isApproval && prompt.description
+			? prompt.description
+			: prompt.title;
 
 	const submit = () => {
 		if (!canSend) return;
@@ -305,7 +318,8 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 
 	const hasBody =
 		Boolean(prompt.appId) ||
-		(isApproval && Boolean(prompt.description)) ||
+		(isApproval && !isConfiguration && Boolean(prompt.description)) ||
+		(isApproval && Boolean(prompt.configurationChanges)) ||
 		(!isApproval && ask.questions.length > 0);
 
 	return (
@@ -318,14 +332,20 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 			<RequestCard
 				tone={tone}
 				live
-				aria-label={prompt.title}
+				aria-label={title}
 				className="max-h-full shadow-floating"
 			>
 				<RequestCardHeader
 					mark={
 						<AskingBotMark
 							view={asking}
-							icon={isApproval ? ShieldQuestionIcon : MessageCircleQuestionIcon}
+							icon={
+								isConfiguration
+									? SlidersHorizontalIcon
+									: isApproval
+										? ShieldQuestionIcon
+										: MessageCircleQuestionIcon
+							}
 							tone={tone}
 						/>
 					}
@@ -337,6 +357,7 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 							: t("needsAnAnswer", "Needs an answer")
 					}`}
 					title={title}
+					description={isConfiguration ? settingsText.hint : undefined}
 					className={hasBody ? undefined : "pb-4"}
 				/>
 				{hasBody && (
@@ -348,6 +369,7 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 							/>
 						) : (
 							isApproval &&
+							!isConfiguration &&
 							prompt.description && <RequestDetails text={prompt.description} />
 						)}
 						{!isApproval && (
@@ -358,12 +380,20 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 								onSubmit={isSingleFreeform ? submit : undefined}
 							/>
 						)}
+						{isApproval && prompt.configurationChanges && (
+							<BotConfigurationChanges changes={prompt.configurationChanges} />
+						)}
 					</RequestCardBody>
 				)}
 				<RequestCardFooter
+					className={
+						isConfiguration
+							? "[&>div:last-child]:max-w-full [&>div:last-child]:flex-wrap [&>div:last-child]:justify-end"
+							: undefined
+					}
 					start={
 						isApproval &&
-						prompt.rememberable !== false && (
+						rememberable && (
 							<RememberApproval
 								prompt={prompt}
 								name={asking.name}
@@ -384,7 +414,9 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 						}
 					>
 						{isApproval
-							? t("bots:crew.approval.deny", "Deny")
+							? isConfiguration
+								? settingsText.reject
+								: t("bots:crew.approval.deny", "Deny")
 							: t("cancel", "Cancel")}
 					</Button>
 					<Button
@@ -395,14 +427,18 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 							if (isApproval) {
 								prompt.respond({
 									approved: true,
-									remember: prompt.rememberable !== false && remember,
+									remember: rememberable && remember,
 								});
 							} else {
 								submit();
 							}
 						}}
 					>
-						{isApproval ? t("settings:approve", "Approve") : t("send", "Send")}
+						{isConfiguration
+							? settingsText.approve
+							: isApproval
+								? t("settings:approve", "Approve")
+								: t("send", "Send")}
 					</Button>
 				</RequestCardFooter>
 			</RequestCard>

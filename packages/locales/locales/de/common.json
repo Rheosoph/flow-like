@@ -9,6 +9,7 @@
 	"aBriefDescriptionOfWhatYourPackageDoes": "Eine kurze Beschreibung dessen, was dein Paket macht...",
 	"accept": "Akzeptieren",
 	"accepted": "Angenommen",
+	"acceptingInvitation": "",
 	"acceptsAccept": "Akzeptiert: {{accept}}",
 	"access": "Zugriff",
 	"accessAndPeople": "Zugriff & Personen",
@@ -1343,6 +1344,7 @@
 	"included": "Eingeschlossen",
 	"includeRootConfigjsonTokenizerjsonTokenizer_configjsonSafetensorsAndForVlmARootProcessorconfigDependencyBit": "Füge im Stammverzeichnis config.json, tokenizer.json, tokenizer_config.json, safetensors und bei VLM ein Bit mit der processor-config-Abhängigkeit hinzu.",
 	"includeValue": "Wert einschließen",
+	"incompleteInviteLink": "",
 	"indent": "Einrücken",
 	"indexeddbCurrentlyInUse": "IndexierteDB · derzeit in Gebrauch",
 	"indexeddbStoresValVal2Records": "IndexierteDB · {{stores}} {{val}} · {{val2}} Datensätze",
@@ -3778,5 +3780,14 @@
 	"labelUnlockable": "{{label}} — du kannst das freischalten",
 	"yourRoleOnThisProjectCannotOpenLabelDescription": "Deine Rolle in diesem Projekt kann {{label}} nicht öffnen. {{description}}",
 	"unlockLabel": "{{label}} freischalten",
-	"latestSavedDraftOrPinnedFlow": "Neueste führt den gespeicherten Entwurf aus, einschließlich unveröffentlichter Änderungen. Eine angeheftete Version behält denselben veröffentlichten Stand."
+	"latestSavedDraftOrPinnedFlow": "Neueste führt den gespeicherten Entwurf aus, einschließlich unveröffentlichter Änderungen. Eine angeheftete Version behält denselben veröffentlichten Stand.",
+	"joinRoom": {
+		"already": "",
+		"full": "",
+		"invalid": "",
+		"joined": "",
+		"retry": "",
+		"signInRequired": "",
+		"usedUp": ""
+	}
 }

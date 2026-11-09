@@ -19,6 +19,7 @@ import {
 } from "../../hooks/use-inbox";
 import { apiErrorMessage } from "../../lib/api-error";
 import type {
+	IBotRoomLimits,
 	IConversation,
 	IConversationMember,
 } from "../../state/backend-state/inbox-state";
@@ -50,6 +51,7 @@ import {
 	type PickerSource,
 	PrincipalPicker,
 } from "./principal-picker";
+import { RoomBotSetup, ownRoomBots, selectedBotLimits } from "./room-bot-setup";
 import { RoomInviteLinks } from "./room-invite-links";
 import { RoomLimitsDialog } from "./room-limits-dialog";
 import type { CrewDirectory } from "./use-crew-directory";
@@ -353,6 +355,11 @@ function InviteSection({
 	const { t } = useTranslation("bots");
 	const invite = useInviteToConversation();
 	const [picked, setPicked] = useState<PickedPrincipal[]>([]);
+	const [settingUp, setSettingUp] = useState(false);
+	const [botLimits, setBotLimits] = useState<Record<string, IBotRoomLimits>>(
+		{},
+	);
+	const ownBots = ownRoomBots(picked);
 	const selected = new Set(picked.map((principal) => principal.id));
 	const toggle = (principal: PickedPrincipal) =>
 		setPicked((list) =>
@@ -364,10 +371,17 @@ function InviteSection({
 		invite
 			.mutateAsync({
 				conversationId: conversation.id,
-				request: { principal_ids: picked.map((principal) => principal.id) },
+				request: {
+					principal_ids: picked.map((principal) => principal.id),
+					...(ownBots.length > 0
+						? { bot_limits: selectedBotLimits(picked, botLimits) }
+						: {}),
+				},
 			})
 			.then(({ added, invited }) => {
 				setPicked([]);
+				setSettingUp(false);
+				setBotLimits({});
 				toast.success(
 					t("roomMembers.sent", "{{added}} added, {{invited}} invited", {
 						added: added.length,
@@ -388,28 +402,57 @@ function InviteSection({
 			<h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
 				{t("roomMembers.invite", "Bring someone in")}
 			</h3>
-			<PrincipalPicker
-				source={source}
-				selected={selected}
-				multiple
-				serverRule={{
-					conversationId: conversation.id,
-					memberIds: conversation.members.map((member) => member.principal_id),
-					invitedIds: (conversation.pending ?? []).map(
-						(member) => member.principal_id,
-					),
-				}}
-				onPick={toggle}
-			/>
-			<Button
-				type="button"
-				disabled={picked.length === 0 || invite.isPending}
-				onClick={() => void send()}
-			>
-				{t("roomMembers.send", "Add or invite {{count}}", {
-					count: picked.length,
-				})}
-			</Button>
+			{settingUp ? (
+				<RoomBotSetup
+					bots={ownBots}
+					limits={botLimits}
+					disabled={invite.isPending}
+					onChange={(id, limits) =>
+						setBotLimits((current) => ({ ...current, [id]: limits }))
+					}
+				/>
+			) : (
+				<PrincipalPicker
+					source={source}
+					selected={selected}
+					multiple
+					serverRule={{
+						conversationId: conversation.id,
+						memberIds: conversation.members.map(
+							(member) => member.principal_id,
+						),
+						invitedIds: (conversation.pending ?? []).map(
+							(member) => member.principal_id,
+						),
+					}}
+					onPick={toggle}
+				/>
+			)}
+			<div className="flex flex-wrap justify-end gap-2">
+				{settingUp && (
+					<Button
+						type="button"
+						variant="outline"
+						disabled={invite.isPending}
+						onClick={() => setSettingUp(false)}
+					>
+						{t("roomLimits.setup.back", "Back")}
+					</Button>
+				)}
+				<Button
+					type="button"
+					disabled={picked.length === 0 || invite.isPending}
+					onClick={() =>
+						ownBots.length > 0 && !settingUp ? setSettingUp(true) : void send()
+					}
+				>
+					{ownBots.length > 0 && !settingUp
+						? t("roomLimits.setup.continue", "Continue to bot setup")
+						: t("roomMembers.send", "Add or invite {{count}}", {
+								count: picked.length,
+							})}
+				</Button>
+			</div>
 		</section>
 	);
 }
@@ -449,7 +492,7 @@ export function RoomMembersDialog({
 	return (
 		<>
 			<Dialog open={open} onOpenChange={onOpenChange}>
-				<DialogContent className="flex max-h-[85dvh] flex-col overflow-y-auto sm:max-w-md">
+				<DialogContent className="flex max-h-[85dvh] flex-col overflow-hidden sm:max-w-md">
 					<DialogHeader>
 						<DialogTitle className="flex items-center gap-2">
 							<UsersIcon className="size-4" aria-hidden />
@@ -462,30 +505,32 @@ export function RoomMembersDialog({
 							)}
 						</DialogDescription>
 					</DialogHeader>
-					<MembersList
-						conversation={conversation}
-						directory={directory}
-						ownBotIds={ownBotIds}
-						me={me}
-						onEditLimits={setEditing}
-						onRemove={setRemoving}
-					/>
-					<PendingList
-						conversation={conversation}
-						directory={directory}
-						me={me}
-					/>
-					{open && (
-						<InviteSection conversation={conversation} source={source} />
-					)}
-					{open && conversation.kind === "group" && (
-						<RoomInviteLinks conversation={conversation} me={me} />
-					)}
+					<div className="flex min-h-0 flex-col gap-4 overflow-y-auto pr-1">
+						<MembersList
+							conversation={conversation}
+							directory={directory}
+							ownBotIds={ownBotIds}
+							me={me}
+							onEditLimits={setEditing}
+							onRemove={setRemoving}
+						/>
+						<PendingList
+							conversation={conversation}
+							directory={directory}
+							me={me}
+						/>
+						{open && (
+							<InviteSection conversation={conversation} source={source} />
+						)}
+						{open && conversation.kind === "group" && (
+							<RoomInviteLinks conversation={conversation} me={me} />
+						)}
+					</div>
 					{conversation.kind === "group" && self && (
 						<Button
 							type="button"
 							variant="outline"
-							className="text-destructive hover:text-destructive"
+							className="shrink-0 text-destructive hover:text-destructive"
 							onClick={() => setLeaving(true)}
 						>
 							<LogOutIcon aria-hidden />

@@ -1,0 +1,217 @@
+---
+import "./data-page.css";
+import {
+  LuBrain,
+  LuDatabase,
+  LuPencilLine,
+  LuSearch,
+  LuSparkles,
+  LuTable2,
+} from "react-icons/lu";
+import CodeBlock from "../pillar/CodeBlock";
+import PillarLayout from "../pillar/PillarLayout.astro";
+import DataLabels from "./DataLabels";
+import DataOntology from "./DataOntology";
+import DataQuery from "./DataQuery";
+import { tData } from "../../i18n/locales/pages/data";
+import type { Lang } from "../../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = "en" } = Astro.props;
+const t = (key: string) => tData(lang, key);
+
+const docs = "https://docs.flow-like.com/apps/data-studio/";
+const download = lang === "en" ? "/download" : `/${lang}/download`;
+const webApp = "https://app.flow-like.com";
+
+const studio = [
+  { key: "lance", icon: LuDatabase },
+  { key: "search", icon: LuSearch },
+  { key: "sql", icon: LuTable2 },
+  { key: "explore", icon: LuPencilLine },
+  { key: "forecast", icon: LuBrain },
+  { key: "flux", icon: LuSparkles },
+] as const;
+
+const sources = [
+  "PostgreSQL", "MySQL", "SQLite", "DuckDB", "ClickHouse", "Oracle", "BigQuery",
+  "Athena", "FlightSQL", "Delta Lake", "Iceberg", "Parquet", "CSV", "JSON", "Lance",
+];
+
+const heroSql = `SELECT region, SUM(total) AS revenue
+FROM shop.orders
+GROUP BY region;`;
+
+const meaningPoints =[1, 2, 3, 4].map((index) => t(`data.meaning.point${index}`));
+const learn = ["forecast", "train", "auto", "onnx"].map((key) => t(`data.learn.${key}`));
+const govern = ["labels", "actions", "locked", "audit"];
+
+const history = [42, 48, 45, 53, 51, 58, 55, 63, 60, 66];
+const forecast = [68, 71, 69, 74, 77];
+const band = [4, 6, 8, 10, 12];
+const point = (index: number, value: number) => `${20 + index * 32},${180 - value * 2}`;
+const historyPath = history.map((value, index) => point(index, value)).join(" ");
+const forecastStart = history.length - 1;
+const forecastPath = [history[forecastStart], ...forecast]
+  .map((value, index) => point(forecastStart + index, value))
+  .join(" ");
+const bandPath = [
+  ...forecast.map((value, index) => point(forecastStart + 1 + index, value + band[index])),
+  ...forecast
+    .map((value, index) => point(forecastStart + 1 + index, value - band[index]))
+    .reverse(),
+].join(" ");
+---
+
+<PillarLayout lang={lang} title={t("data.meta.title")} description={t("data.meta.description")} keywords={t("data.meta.keywords")} path="/data">
+  <section class="dark pl-hero" style="color-scheme:dark" data-dark-hero aria-labelledby="dt-hero-title">
+    <div class="pl-aura" aria-hidden="true"></div>
+    <div class="pl-hero-copy">
+      <span class="pl-eyebrow"><i></i>{t("data.hero.eyebrow")}</span>
+      <h1 id="dt-hero-title">{t("data.hero.title.l1")}<br /><em>{t("data.hero.title.em")}</em></h1>
+      <p>{t("data.hero.body")}</p>
+      <div class="pl-actions">
+        <a class="pl-btn pl-btn--primary" href={download}>{t("data.hero.cta.primary")} <span aria-hidden="true">↗</span></a>
+        <a class="pl-btn" href={docs}>{t("data.hero.cta.secondary")} <span aria-hidden="true">→</span></a>
+      </div>
+    </div>
+    <div class="pl-hero-visual dt-hero-card" aria-hidden="true">
+      <div class="dt-hero-sources">
+        <span><b>orders</b>PostgreSQL</span>
+        <span><b>shipments</b>Parquet</span>
+        <span><b>tickets</b>Data Studio</span>
+      </div>
+      <CodeBlock code={heroSql} language="sql" title="revenue.sql" badge="DataFusion" />
+      <div class="dt-hero-bars">
+        <span><i style="width:100%"></i>Americas</span>
+        <span><i style="width:77%"></i>EMEA</span>
+        <span><i style="width:38%"></i>APAC</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="pl-section" aria-labelledby="dt-studio-title">
+    <div class="pl-heading">
+      <div>
+        <span class="pl-eyebrow">01 / {t("data.studio.eyebrow")}</span>
+        <h2 id="dt-studio-title">{t("data.studio.title")}</h2>
+      </div>
+      <div class="pl-intro"><p>{t("data.studio.body")}</p></div>
+    </div>
+    <ul class="pl-cards">
+      {studio.map((item) => {
+        const Icon = item.icon;
+        return (
+          <li class="pl-card">
+            <Icon aria-hidden="true" />
+            <h3>{t(`data.studio.${item.key}.title`)}</h3>
+            <p>{t(`data.studio.${item.key}.body`)}</p>
+          </li>
+        );
+      })}
+    </ul>
+  </section>
+
+  <section class="dark pl-section" style="color-scheme:dark" aria-labelledby="dt-query-title">
+    <div class="pl-heading">
+      <div>
+        <span class="pl-eyebrow">02 / {t("data.query.eyebrow")}</span>
+        <h2 id="dt-query-title">{t("data.query.title.l1")}<br /><em>{t("data.query.title.l2")}</em></h2>
+      </div>
+      <div class="pl-intro"><p>{t("data.query.body")}</p></div>
+    </div>
+    <DataQuery client:visible />
+    <ul class="dt-sources" aria-label="Sources you can query">
+      {sources.map((source) => <li>{source}</li>)}
+    </ul>
+  </section>
+
+  <section class="pl-section" aria-labelledby="dt-meaning-title">
+    <div class="pl-heading">
+      <div>
+        <span class="pl-eyebrow">03 / {t("data.meaning.eyebrow")}</span>
+        <h2 id="dt-meaning-title">{t("data.meaning.title")}</h2>
+      </div>
+      <div class="pl-intro">
+        <p>{t("data.meaning.body")}</p>
+      </div>
+    </div>
+    <DataOntology client:visible />
+    <ul class="pl-points dt-meaning-points">
+      {meaningPoints.map((item) => <li>{item}</li>)}
+    </ul>
+  </section>
+
+  <section class="dark pl-section pl-split" style="color-scheme:dark" aria-labelledby="dt-learn-title">
+    <div>
+      <span class="pl-eyebrow">04 / {t("data.learn.eyebrow")}</span>
+      <h2 id="dt-learn-title">{t("data.learn.title.l1")}<br /><em>{t("data.learn.title.l2")}</em></h2>
+      <p class="pl-lead">{t("data.learn.body")}</p>
+      <ul class="pl-points">
+        {learn.map((item) => <li>{item}</li>)}
+      </ul>
+    </div>
+    <figure class="dt-forecast" aria-label="A forecast with its confidence band">
+      <svg viewBox="0 0 460 200" aria-hidden="true">
+        <line class="dt-forecast-now" x1={20 + forecastStart * 32} y1="10" x2={20 + forecastStart * 32} y2="190" />
+        <polygon class="dt-forecast-band" points={bandPath} />
+        <polyline class="dt-forecast-history" points={historyPath} />
+        <polyline class="dt-forecast-next" points={forecastPath} />
+      </svg>
+      <figcaption>
+        <span>History</span>
+        <span>Forecast · TimesFM 2.5</span>
+        <span>Checked on a held-out window</span>
+      </figcaption>
+    </figure>
+  </section>
+
+  <section class="pl-section" aria-labelledby="dt-govern-title">
+    <div class="pl-heading">
+      <div>
+        <span class="pl-eyebrow">05 / {t("data.govern.eyebrow")}</span>
+        <h2 id="dt-govern-title">{t("data.govern.title")}</h2>
+      </div>
+      <div class="pl-intro"><p>{t("data.govern.body")}</p></div>
+    </div>
+    <p class="dt-labels-intro">{t("data.govern.labels.demo")}</p>
+    <DataLabels client:visible />
+    <ol class="pl-pillars dt-govern-pillars">
+      {govern.map((key, index) => (
+        <li>
+          <span>0{index + 1}</span>
+          <h3>{t(`data.govern.${key}.title`)}</h3>
+          <p>{t(`data.govern.${key}.body`)}</p>
+        </li>
+      ))}
+    </ol>
+  </section>
+
+  <section class="pl-section pl-split dt-bi" aria-labelledby="dt-bi-title">
+    <div>
+      <span class="pl-eyebrow">06 / {t("data.bi.eyebrow")}</span>
+      <h2 id="dt-bi-title">{t("data.bi.title")}</h2>
+      <p class="pl-lead">{t("data.bi.body")}</p>
+      <a class="pl-link" href="/modern-bi">{t("data.bi.link")} <span aria-hidden="true">→</span></a>
+    </div>
+    <ul class="dt-charts" aria-hidden="true">
+      {["Bar", "Line", "Pie", "Radar", "Heatmap", "Scatter", "Funnel", "Treemap", "Sunburst", "Calendar", "Sankey", "Plotly"].map((name) => <li>{name}</li>)}
+    </ul>
+  </section>
+
+  <section class="dark pl-cta" style="color-scheme:dark" aria-labelledby="dt-cta-title">
+    <div class="pl-aura" aria-hidden="true"></div>
+    <h2 id="dt-cta-title">{t("data.cta.title")}</h2>
+    <p>{t("data.cta.body")}</p>
+    <div class="pl-actions">
+      <a class="pl-btn pl-btn--primary" href={download}>{t("data.cta.download")} <span aria-hidden="true">↗</span></a>
+      <a class="pl-btn" href={webApp}>{t("data.cta.web")} <span aria-hidden="true">↗</span></a>
+      <a class="pl-btn" href={docs}>{t("data.cta.docs")} <span aria-hidden="true">→</span></a>
+    </div>
+    <nav class="pl-related" aria-label="More of Flow-Like">
+      <a href="/apps">Apps</a>
+      <a href="/bots">Bots</a>
+      <a href="/modern-bi">Business intelligence</a>
+    </nav>
+  </section>
+</PillarLayout>

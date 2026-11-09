@@ -3,11 +3,16 @@ import {
 	EMOTION_CALIBRATION_REVISION,
 	calibrateEmotionScores,
 } from "./calibration";
-import { BOT_EMOTION_REVISION, type EmotionScores } from "./protocol";
+import {
+	BOT_EMOTION_LABELS,
+	BOT_EMOTION_REVISION,
+	type EmotionScores,
+	scoresFromOutput,
+} from "./protocol";
 import { EmotionScorer, chooseExpression, expressionScores } from "./scoring";
 
-// Relevant raw probabilities captured with the pinned q8 model in a browser.
-// The original implementation chose neutral for both hostile German drafts.
+// Probability fixtures. Lettuce keeps the same labels, and these samples still
+// resolve to the same faces under its thresholds.
 const EXAMPLES: { text: string; expression: string; raw: EmotionScores }[] = [
 	{
 		text: "I am sad 😊",
@@ -103,6 +108,23 @@ const EXAMPLES: { text: string; expression: string; raw: EmotionScores }[] = [
 		},
 	},
 ];
+
+describe("emotion graph output", () => {
+	it("reads the first row of 28 probabilities in label order", () => {
+		const values = Array.from({ length: 56 }, () => 0);
+		values[17] = 0.9;
+		values[28] = 0.2;
+		expect(scoresFromOutput(values).joy).toBe(0.9);
+		expect(scoresFromOutput(values).neutral).toBe(0);
+		expect(
+			Object.keys(scoresFromOutput(BOT_EMOTION_LABELS.map(() => 0.1))),
+		).toEqual([...BOT_EMOTION_LABELS]);
+	});
+
+	it("rejects a vector that is not a row of labels", () => {
+		expect(() => scoresFromOutput([0.2, 0.4])).toThrow(/returned 2 scores/);
+	});
+});
 
 describe("pinned emotion calibration", () => {
 	it("uses thresholds from the same revision as the inference model", () => {

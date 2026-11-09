@@ -210,6 +210,7 @@ pub fn hosted_bit() -> Value {
 
 fn grant_of(state: &Hub) -> DeviceTurnGrant {
     DeviceTurnGrant {
+        delivery_only: false,
         turn: turn_of(state, TurnStatus::Running),
         host_id: format!("device:{}", state.device_id()),
         conversation: DeviceConversation {
@@ -247,6 +248,7 @@ fn grant_of(state: &Hub) -> DeviceTurnGrant {
             room: None,
         }),
         models: DeviceModels {
+            decision: None,
             model_id: MODEL_ID.into(),
             completion: hosted_bit(),
             fallbacks: Vec::new(),

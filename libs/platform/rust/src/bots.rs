@@ -26,6 +26,8 @@ wire_enum!(
         /// Desktop or device bots only.
         CommandLine => "command_line",
         Encryption => "encryption",
+        /// Requests current context from a consenting conversation participant.
+        UserContext => "user_context",
         Webhook => "webhook",
     }
 );
@@ -77,6 +79,9 @@ pub struct BotModelPolicy {
     pub primary: Option<String>,
     /// At most 3 bit ids.
     pub fallbacks: Vec<String>,
+    /// System One Bit for response decisions; absent disables decision routing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
 }
 
 /// How sensitive the data a bot handles is.

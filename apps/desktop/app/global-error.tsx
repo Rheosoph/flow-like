@@ -3,14 +3,16 @@
 import { captureTelemetryError } from "@flow-like/flow-like-ui/lib/telemetry/errors";
 import { useTranslation } from "@flow-like/locales";
 import { useEffect } from "react";
+import { ErrorDetails } from "../components/error-details";
 
 export default function GlobalError({
 	error,
 }: Readonly<{
-	error: Error & { digest?: string };
+	error: unknown;
 }>) {
 	const { t } = useTranslation("common");
 	useEffect(() => {
+		console.error("Application startup failed:", error);
 		captureTelemetryError(error, {
 			level: "fatal",
 			culprit: "app/global-error-boundary",
@@ -40,6 +42,7 @@ export default function GlobalError({
 					<p style={{ fontSize: "0.875rem", color: "#a1a1aa" }}>
 						{t("anUnexpectedErrorOccurred", "An unexpected error occurred.")}
 					</p>
+					<ErrorDetails error={error} />
 					<div style={{ display: "flex", gap: "12px" }}>
 						<button
 							type="button"

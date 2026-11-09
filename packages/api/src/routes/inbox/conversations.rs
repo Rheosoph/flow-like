@@ -4,7 +4,7 @@ use super::{
     delivery::people_to_wake,
     image::sign_images,
     insert_copies,
-    invitations::{self, InviteMode, Invitee},
+    invitations::{self, InviteMode, InviteOutcome, Invitee},
     lock_conversation, member_conversation,
     members::{Principal, join_copies, lock_live_bots, requested_members},
     model::{
@@ -16,9 +16,10 @@ use super::{
     wake, wake_members,
 };
 use crate::{
-    entity::{conversation, conversation_member},
+    entity::{bot, conversation, conversation_member},
     error::ApiError,
     middleware::jwt::AppUser,
+    routes::bots::model::BotSettings,
     state::AppState,
 };
 use axum::{
@@ -28,6 +29,8 @@ use axum::{
 };
 use chrono::{DateTime, FixedOffset};
 use flow_like_types::{
+    bot::BotCapability,
+    bot_effective::BotRoomLimits,
     create_id,
     inbox::{
         ConversationEncryption, ConversationKind, InboxEntryKind, MAX_CONVERSATION_MEMBERS,
@@ -37,9 +40,10 @@ use flow_like_types::{
 use sea_orm::{
     ActiveModelTrait,
     ActiveValue::Set,
-    ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, QueryFilter,
+    ColumnTrait, ConnectionTrait, DatabaseTransaction, DbErr, EntityTrait, QueryFilter,
     sea_query::{Expr, OnConflict},
 };
+use std::collections::BTreeMap;
 
 pub(super) const TITLE_MAX_CHARS: usize = 120;
 
@@ -70,6 +74,11 @@ pub(super) fn validate_new_conversation(
     creator: &str,
     request: CreateConversationRequest,
 ) -> Result<NewConversation, ApiError> {
+    if request.kind == ConversationKind::Direct && !request.bot_limits.is_empty() {
+        return Err(ApiError::bad_request(
+            "Group memory settings apply only to group conversations",
+        ));
+    }
     let members = requested_members(creator, request.members);
     let title = normalize_title(request.title)?;
     match request.kind {
@@ -296,6 +305,46 @@ pub(crate) fn exchange_key(low: &str, high: &str) -> String {
     format!("exchange:{low}:{high}")
 }
 
+/// How a person's direct conversation with their own bot is encrypted: end to end while the bot
+/// has the `encryption` capability.
+pub(crate) fn own_bot_encryption(bot: &bot::Model) -> ConversationEncryption {
+    if BotSettings::from_row(bot).has(BotCapability::Encryption) {
+        ConversationEncryption::E2e
+    } else {
+        ConversationEncryption::Plain
+    }
+}
+
+/// Brings the owner's direct conversation with `bot` to [`own_bot_encryption`]. Earlier entries
+/// keep their form. Whether it changed.
+pub(crate) async fn sync_own_bot_direct<C: ConnectionTrait>(
+    db: &C,
+    bot: &bot::Model,
+) -> Result<bool, DbErr> {
+    let encryption = stored(own_bot_encryption(bot).as_str());
+    let updated = conversation::Entity::update_many()
+        .col_expr(conversation::Column::Encryption, Expr::value(encryption.clone()))
+        .col_expr(conversation::Column::UpdatedAt, Expr::value(now_millis()))
+        .filter(conversation::Column::DirectKey.eq(direct_pair_key(&bot.owner_id, &bot.id)))
+        .filter(conversation::Column::Encryption.ne(encryption))
+        .exec(db)
+        .await?;
+    Ok(updated.rows_affected > 0)
+}
+
+/// `id` when it names one of `sub`'s live bots.
+async fn own_bot<C: ConnectionTrait>(
+    db: &C,
+    sub: &str,
+    id: &str,
+) -> Result<Option<bot::Model>, DbErr> {
+    bot::Entity::find_by_id(id)
+        .filter(bot::Column::OwnerId.eq(sub))
+        .filter(bot::Column::DeletedAt.is_null())
+        .one(db)
+        .await
+}
+
 async fn direct_conversation_id<C: ConnectionTrait>(
     db: &C,
     key: &str,
@@ -393,13 +442,8 @@ pub async fn get_conversation(
     Path(conversation_id): Path<String>,
     Query(query): Query<ReaderQuery>,
 ) -> Result<Json<Conversation>, ApiError> {
-    let reader = super::acting_reader(
-        &state.db,
-        &user,
-        query.as_bot.as_deref(),
-        &conversation_id,
-    )
-    .await?;
+    let reader =
+        super::acting_reader(&state.db, &user, query.as_bot.as_deref(), &conversation_id).await?;
     Ok(Json(
         visible_conversation(&state, &reader, &conversation_id).await?,
     ))
@@ -407,19 +451,24 @@ pub async fn get_conversation(
 
 /// The pair's direct conversation: the existing one, which writing answers if you hold a
 /// request in it, or a new one once the other member passes the member rules. Whoever isn't
-/// one of your own bots receives it as a request. Returns the id and the people to wake.
+/// one of your own bots receives it as a request. A conversation with your own bot is encrypted
+/// as the bot is ([`own_bot_encryption`]), whatever the request asks. Returns the id.
 async fn open_direct(
     state: &AppState,
     sub: &str,
     plan: &NewConversation,
 ) -> Result<String, ApiError> {
     let key = direct_pair_key(sub, &plan.members[0]);
+    let own = own_bot(&state.db, sub, &plan.members[0]).await?;
     if let Some(id) = direct_conversation_id(&state.db, &key).await? {
         let people = state
             .transaction(|txn| {
-                let (id, sub) = (id.clone(), sub.to_string());
+                let (id, sub, own) = (id.clone(), sub.to_string(), own.clone());
                 Box::pin(async move {
                     lock_conversation(txn, &id).await?;
+                    if let Some(bot) = &own {
+                        sync_own_bot_direct(txn, bot).await?;
+                    }
                     let mut people =
                         requests::answer_by_writing(txn, &id, &sub, now_millis()).await?;
                     super::deletion::reopen(txn, &id, &sub).await?;
@@ -431,10 +480,11 @@ async fn open_direct(
         wake(state, people).await;
         return Ok(id);
     }
-    let direct = requests::plan_direct(&state.db, sub, &plan.members[0], plan.encryption).await?;
+    let encryption = own.as_ref().map_or(plan.encryption, own_bot_encryption);
+    let direct = requests::plan_direct(&state.db, sub, &plan.members[0], encryption).await?;
     let id = state
         .transaction(|txn| {
-            let (sub, direct, encryption) = (sub.to_string(), direct.clone(), plan.encryption);
+            let (sub, direct) = (sub.to_string(), direct.clone());
             Box::pin(async move {
                 if !direct.request {
                     lock_live_bots(txn, &sub, std::slice::from_ref(&direct.other)).await?;
@@ -465,10 +515,28 @@ async fn open_direct(
     Ok(id)
 }
 
+/// Creates the group and applies its initial invitations and limits in one transaction.
+/// The caller locks its own bots before calling this helper.
+pub(super) async fn create_group_in<C: ConnectionTrait>(
+    txn: &C,
+    id: &str,
+    sub: &str,
+    plan: &NewConversation,
+    invitees: &[Invitee],
+    limits: &BTreeMap<String, BotRoomLimits>,
+    now: DateTime<FixedOffset>,
+) -> Result<InviteOutcome, ApiError> {
+    let wake = start_group(txn, id, sub, plan, &[], now).await?;
+    let mut outcome = invitations::invite_in(txn, id, sub, invitees, limits, now).await?;
+    outcome.wake.extend(wake);
+    Ok(outcome)
+}
+
 async fn open_group(
     state: &AppState,
     sub: &str,
     plan: &NewConversation,
+    limits: BTreeMap<String, BotRoomLimits>,
 ) -> Result<String, ApiError> {
     let invitees = invitations::classify(&state.db, sub, &plan.members).await?;
     let others: Vec<Principal> = invitees
@@ -476,34 +544,25 @@ async fn open_group(
         .filter(|invitee| invitee.mode == InviteMode::AddNow)
         .map(|invitee| invitee.principal.clone())
         .collect();
-    let asked: Vec<Invitee> = invitees
-        .into_iter()
-        .filter(|invitee| invitee.mode == InviteMode::Invite)
-        .collect();
     let id = create_id();
     let outcome = state
         .transaction(|txn| {
-            let (id, sub, plan, others, asked) = (
+            let (id, sub, plan, others, invitees, limits) = (
                 id.clone(),
                 sub.to_string(),
                 plan.clone(),
                 others.clone(),
-                asked.clone(),
+                invitees.clone(),
+                limits.clone(),
             );
             Box::pin(async move {
                 lock_live_bots(txn, &sub, &others).await?;
-                let now = now_millis();
-                let mut wake = start_group(txn, &id, &sub, &plan, &others, now).await?;
-                let invited =
-                    invitations::invite_in(txn, &id, &sub, &asked, &Default::default(), now)
-                        .await?;
-                wake.extend(invited.wake.iter().cloned());
-                Ok::<_, ApiError>((wake, invited.invited))
+                create_group_in(txn, &id, &sub, &plan, &invitees, &limits, now_millis()).await
             })
         })
         .await?;
-    wake(state, outcome.0).await;
-    invitations::notify_invited(state, sub, &id, &outcome.1).await;
+    wake(state, outcome.wake).await;
+    invitations::notify_invited(state, sub, &id, &outcome.invited).await;
     Ok(id)
 }
 
@@ -528,10 +587,11 @@ pub async fn create_conversation(
     Json(body): Json<CreateConversationRequest>,
 ) -> Result<Json<Conversation>, ApiError> {
     let sub = user.sub()?;
+    let limits = body.bot_limits.clone();
     let plan = validate_new_conversation(&sub, body)?;
     let id = match plan.kind {
         ConversationKind::Direct => open_direct(&state, &sub, &plan).await?,
-        ConversationKind::Group => open_group(&state, &sub, &plan).await?,
+        ConversationKind::Group => open_group(&state, &sub, &plan, limits).await?,
     };
     Ok(Json(
         visible_conversation(&state, &Reader::own(&sub), &id).await?,

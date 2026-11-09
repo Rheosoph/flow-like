@@ -95,7 +95,7 @@ export const crewSeries: readonly BotSeriesDefinition[] = [
 	{
 		id: "garden",
 		label: "Garden",
-		description: "Leafy companions for the windowsill and the vegetable patch.",
+		description: "Plants and small companions from the garden.",
 	},
 	{
 		id: "music",

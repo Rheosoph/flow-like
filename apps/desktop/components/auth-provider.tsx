@@ -4,6 +4,7 @@ import {
 	useInvalidateInfiniteInvoke,
 	useInvalidateInvoke,
 	useInvoke,
+	useQuery,
 } from "@flow-like/flow-like-ui";
 import type { IProfile } from "@flow-like/flow-like-ui";
 import { createAccountTokenProvider } from "@flow-like/flow-like-ui/components/account/account-session";
@@ -54,6 +55,7 @@ import { SignInLinkDialog } from "./sign-in-link-dialog";
 import { ProfileSyncer, TauriBackend } from "./tauri-provider";
 
 const AUTH_CHANGED_EVENT = "fl-auth-changed";
+const ONBOARDING_PROFILE_ID = "__flow_like_onboarding__";
 const SIGN_IN_FAILED_MESSAGE =
 	"Sign-in could not be completed. Start a new sign-in request.";
 
@@ -69,6 +71,15 @@ interface OpenIdConfigResponse extends UserManagerSettings {
 }
 
 const OPEN_ID_CONFIG_CACHE_PREFIX = "flow-like.openid-config:";
+
+interface NativeAuthContext {
+	profileId: string;
+	hub: string;
+}
+
+async function getNativeAuthContext(): Promise<NativeAuthContext> {
+	return invoke<NativeAuthContext>("native_auth_context");
+}
 
 /**
  * The last configuration the hub served. Without one an offline start builds no
@@ -218,14 +229,34 @@ export function DesktopAuthProvider({
 		backend.userState,
 		[],
 	);
+	// Restoring profiles changes getProfile before the full restore has finished.
+	// Keep its login scope until onboarding explicitly refreshes the native context.
+	const useNativeContext =
+		isTauri() &&
+		(!currentProfile.data?.id ||
+			authConfig?.profileId === ONBOARDING_PROFILE_ID);
+	const nativeContext = useQuery({
+		queryKey: ["getNativeAuthContext"],
+		queryFn: getNativeAuthContext,
+		enabled: useNativeContext,
+		// A reconnect must not release the scope before onboarding completes.
+		staleTime:
+			authConfig?.profileId === ONBOARDING_PROFILE_ID
+				? Number.POSITIVE_INFINITY
+				: 0,
+	});
+	const bootstrapContext = useNativeContext ? nativeContext.data : undefined;
 
-	const hubUrl = currentProfile.data?.hub ?? "api.flow-like.com";
+	const hubUrl =
+		bootstrapContext?.hub ?? currentProfile.data?.hub ?? "api.flow-like.com";
 	const hubSecure = currentProfile.data?.secure ?? true;
 	const currentHub = getApiOrigin({
 		hub: hubUrl,
 		secure: hubSecure,
 	} as IProfile);
-	const profileId = currentProfile.data?.id ?? "";
+	// The native onboarding scope lets a fresh install sign in before choosing models.
+	const profileId =
+		bootstrapContext?.profileId ?? currentProfile.data?.id ?? "";
 	const matchesHub =
 		authConfig?.hub === currentHub && authConfig.profileId === profileId;
 	const visibleAuth =
@@ -615,7 +646,10 @@ export function DesktopAuthProvider({
 				{lifted?.scope === scope && (
 					<Fragment key={scope}>
 						{authConfig && lifted.providerKey === providerKey && (
-							<AuthInner hub={authConfig.hub} />
+							<AuthInner
+								hub={authConfig.hub}
+								onboarding={authConfig.profileId === ONBOARDING_PROFILE_ID}
+							/>
 						)}
 						{children}
 					</Fragment>
@@ -626,7 +660,10 @@ export function DesktopAuthProvider({
 	);
 }
 
-function AuthInner({ hub }: Readonly<{ hub: string }>) {
+function AuthInner({
+	hub,
+	onboarding,
+}: Readonly<{ hub: string; onboarding: boolean }>) {
 	const auth = useAuth();
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
@@ -735,6 +772,8 @@ function AuthInner({ hub }: Readonly<{ hub: string }>) {
 				// Ensure user record exists in DB before profile operations
 				await Promise.allSettled([invalidate(backend.userState.getInfo, [])]);
 			}
+			// Onboarding refreshes these after every restored profile is saved.
+			if (onboarding) return;
 
 			await Promise.allSettled([
 				...(signedIn
@@ -756,6 +795,7 @@ function AuthInner({ hub }: Readonly<{ hub: string }>) {
 		})();
 	}, [
 		backend,
+		onboarding,
 		auth?.isAuthenticated,
 		auth?.user?.access_token,
 		auth?.user?.profile?.sub,
@@ -763,7 +803,7 @@ function AuthInner({ hub }: Readonly<{ hub: string }>) {
 		invalidateInfinite,
 	]);
 
-	return (
+	return onboarding ? null : (
 		<ProfileSyncer
 			hub={hub}
 			auth={{

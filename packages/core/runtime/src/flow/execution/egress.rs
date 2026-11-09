@@ -227,7 +227,15 @@ impl GuardedHttpClient {
     /// server-side URL and DNS checks. Credential-bearing API clients can use
     /// this after validating the initial destination.
     pub fn without_redirects(environment: ExecutionEnvironment) -> Result<Self> {
-        let client = install_guard(reqwest::Client::builder(), environment)
+        Self::configured_without_redirects(environment, |builder| builder)
+    }
+
+    /// Configures timeouts or retries while retaining DNS checks and refusing redirects.
+    pub fn configured_without_redirects(
+        environment: ExecutionEnvironment,
+        configure: impl FnOnce(reqwest::ClientBuilder) -> reqwest::ClientBuilder,
+    ) -> Result<Self> {
+        let client = install_guard(configure(reqwest::Client::builder()), environment)
             .redirect(redirect::Policy::none())
             .build()
             .map_err(|e| anyhow!("Failed to build HTTP client: {e}"))?;
@@ -502,17 +510,25 @@ mod tests {
 
     #[test]
     fn no_redirect_client_retains_the_server_url_guard() {
-        let client = GuardedHttpClient::without_redirects(ExecutionEnvironment::Server).unwrap();
-        assert_eq!(client.environment(), ExecutionEnvironment::Server);
-        for url in [
-            "http://169.254.169.254/",
-            "http://metadata.google.internal/",
-            "http://127.0.0.1/",
-            "http://[fd00:ec2::254]/",
+        for client in [
+            GuardedHttpClient::without_redirects(ExecutionEnvironment::Server).unwrap(),
+            GuardedHttpClient::configured_without_redirects(
+                ExecutionEnvironment::Server,
+                |builder| builder.retry(reqwest::retry::never()),
+            )
+            .unwrap(),
         ] {
-            assert!(client.get(url).is_err(), "{url} must be refused");
+            assert_eq!(client.environment(), ExecutionEnvironment::Server);
+            for url in [
+                "http://169.254.169.254/",
+                "http://metadata.google.internal/",
+                "http://127.0.0.1/",
+                "http://[fd00:ec2::254]/",
+            ] {
+                assert!(client.get(url).is_err(), "{url} must be refused");
+            }
+            assert!(client.get("https://aiplatform.googleapis.com/v1").is_ok());
         }
-        assert!(client.get("https://aiplatform.googleapis.com/v1").is_ok());
     }
 
     #[test]
@@ -542,7 +558,17 @@ mod tests {
                         .unwrap();
                 });
 
-                let client = GuardedHttpClient::without_redirects(environment).unwrap();
+                let client = GuardedHttpClient::configured_without_redirects(
+                    environment,
+                    |builder| {
+                        builder
+                            .no_proxy()
+                            .retry(reqwest::retry::never())
+                            .redirect(redirect::Policy::limited(5))
+                            .timeout(Duration::from_secs(5))
+                    },
+                )
+                .unwrap();
                 // Bypass only the initial URL check for the loopback fixture.
                 let response = client
                     .client

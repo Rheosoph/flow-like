@@ -14,8 +14,10 @@ use flow_like_bot_memory::model::{Role, Seq, SeqSpan};
 use flow_like_bot_memory::pointer::PartRef;
 use flow_like_bot_memory::store::{CompactionState, Lease, MemoryStores};
 use flow_like_bot_memory::testing::{HashEmbedder, StubLlm};
-use flow_like_bot_memory::tools::{Deleted, HistoryReader};
-use flow_like_bot_memory::{FactSource, ModelBudget};
+use flow_like_bot_memory::tools::{
+    Deleted, HistoryReader, MemorySaveArgs, WriteGate, WriteOutcome, memory_save,
+};
+use flow_like_bot_memory::{Embedder, Fact, FactSource, ModelBudget};
 use flow_like_types::Result;
 use flow_like_types::inbox::{InboxEntryKind, plain_envelope, tombstone_envelope};
 use serde_json::{Value, json};
@@ -256,6 +258,190 @@ impl Host {
 
 fn small_budget() -> ModelBudget {
     ModelBudget::hosted(8_192, 1_024)
+}
+
+async fn save_for_maintenance(
+    host: &Host,
+    seq: Seq,
+    now: DateTime<Utc>,
+    ttl_seconds: Option<u64>,
+) -> Fact {
+    let evidence = host.reader.message(seq).await.unwrap().unwrap();
+    let saved = memory_save(
+        host.session.engine(),
+        &MemorySaveArgs {
+            text: "The project retains a maintenance reference marker.".into(),
+            ttl_seconds,
+            ..Default::default()
+        },
+        &evidence,
+        WriteGate::default(),
+        now,
+    )
+    .await
+    .unwrap();
+    match saved {
+        WriteOutcome::Done((fact, _)) => fact,
+        other => panic!("memory was not saved: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn background_maintenance_purges_expiry_and_keeps_its_cadence_after_reopening() {
+    let host = Host::new(small_budget()).await;
+    let trigger = host.copy.user("Remember the temporary reference marker.");
+    let request = host.request(trigger);
+    let fact =
+        save_for_maintenance(&host, trigger, request.now - Duration::minutes(2), Some(60)).await;
+    let stores = host.session.engine().stores();
+    assert!(stores.facts.get(&fact.id).await.unwrap().is_some());
+
+    let state = stores.state.load().await.unwrap();
+    stores
+        .state
+        .save(&CompactionState {
+            lease: Some(Lease {
+                holder: "other maintenance host".into(),
+                until: request.now + Duration::minutes(5),
+            }),
+            ..state
+        })
+        .await
+        .unwrap();
+    let busy = host
+        .session
+        .after_turn(host.reader.as_ref(), &request)
+        .await;
+    assert!(busy.busy && !busy.optimized, "{busy:?}");
+    assert!(stores.facts.get(&fact.id).await.unwrap().is_some());
+    let state = stores.state.load().await.unwrap();
+    assert!(state.last_maintenance_at.is_none());
+    stores
+        .state
+        .save(&CompactionState {
+            lease: None,
+            ..state
+        })
+        .await
+        .unwrap();
+
+    let first = host
+        .session
+        .after_turn(host.reader.as_ref(), &request)
+        .await;
+    assert!(first.optimized && !first.busy, "{first:?}");
+    assert_eq!(first.expired_facts, 1);
+    assert!(stores.facts.get(&fact.id).await.unwrap().is_none());
+    assert_eq!(
+        stores.state.load().await.unwrap().last_maintenance_at,
+        Some(request.now)
+    );
+    let second = host
+        .session
+        .after_turn(host.reader.as_ref(), &request)
+        .await;
+    assert!(!second.optimized, "{second:?}");
+
+    let embedder = Arc::new(SwitchEmbedder::new(Arc::new(HashEmbedder::new("hash", 64))));
+    let reopened = MemorySession::new(
+        MemoryStores::open_local(host._dir.path(), embedder.clone())
+            .await
+            .unwrap(),
+        Arc::new(SwitchLlm::new(host.llm.clone())),
+        embedder,
+        host.inbox.clone(),
+        SessionOptions::new(small_budget(), tz()),
+    );
+    let early_request = TurnRequest {
+        now: request.now + Duration::hours(6) - Duration::seconds(1),
+        ..request.clone()
+    };
+    let early = reopened
+        .after_turn(host.reader.as_ref(), &early_request)
+        .await;
+    assert!(!early.optimized, "{early:?}");
+    let due_request = TurnRequest {
+        now: request.now + Duration::hours(6),
+        ..request
+    };
+    let due = reopened
+        .after_turn(host.reader.as_ref(), &due_request)
+        .await;
+    assert!(due.optimized && !due.busy, "{due:?}");
+    assert_eq!(due.expired_facts, 0);
+    let saved = reopened.engine().stores().state.load().await.unwrap();
+    assert_eq!(saved.last_maintenance_at, Some(due_request.now));
+    assert!(saved.lease.is_none());
+}
+
+struct UnavailableEmbedder;
+
+#[async_trait]
+impl Embedder for UnavailableEmbedder {
+    fn model_id(&self) -> &str {
+        "hash"
+    }
+
+    async fn embed_documents(&self, _: &[String]) -> Result<Vec<Vec<f32>>> {
+        flow_like_types::bail!("embedding service unavailable")
+    }
+
+    async fn embed_query(&self, _: &str) -> Result<Vec<f32>> {
+        flow_like_types::bail!("embedding service unavailable")
+    }
+}
+
+#[tokio::test]
+async fn failed_maintenance_releases_its_lease_and_retries_on_the_next_turn() {
+    let host = Host::new(small_budget()).await;
+    assert!(
+        host.session
+            .refresh(host.llm.clone(), Arc::new(UnavailableEmbedder))
+    );
+    let trigger = host.copy.user("Remember the reference marker.");
+    let request = host.request(trigger);
+    save_for_maintenance(&host, trigger, request.now, None).await;
+    let failed = host
+        .session
+        .after_turn(host.reader.as_ref(), &request)
+        .await;
+    assert!(!failed.optimized && !failed.busy, "{failed:?}");
+    let state = host.session.engine().stores().state.load().await.unwrap();
+    assert!(state.last_maintenance_at.is_none());
+    assert!(state.lease.is_none());
+    assert!(
+        !host
+            .session
+            .engine()
+            .stores()
+            .facts
+            .vectors_current()
+            .await
+            .unwrap()
+    );
+
+    assert!(
+        host.session
+            .refresh(host.llm.clone(), Arc::new(HashEmbedder::new("hash", 64)))
+    );
+    let retry = TurnRequest {
+        now: request.now + Duration::minutes(1),
+        ..request
+    };
+    let done = host.session.after_turn(host.reader.as_ref(), &retry).await;
+    assert!(done.optimized && !done.busy, "{done:?}");
+    assert!(
+        host.session
+            .engine()
+            .stores()
+            .facts
+            .vectors_current()
+            .await
+            .unwrap()
+    );
+    let state = host.session.engine().stores().state.load().await.unwrap();
+    assert_eq!(state.last_maintenance_at, Some(retry.now));
+    assert!(state.lease.is_none());
 }
 
 #[tokio::test]

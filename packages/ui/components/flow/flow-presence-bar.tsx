@@ -60,6 +60,7 @@ import {
 	sortCollaborators,
 } from "./flow-presence-bar-model";
 import { BoardStatusItem } from "./shell/board-status-bar";
+import { UserAvailabilityBadge } from "../account/availability-badge";
 
 /** Faces shown in the status bar before the count takes over. */
 const FACEPILE_LIMIT = 4;
@@ -288,6 +289,7 @@ export const FlowPresenceBar = memo(function FlowPresenceBar({
 					{sorted.slice(0, FACEPILE_LIMIT).map((collab) => (
 						<PresenceFace
 							key={collab.sub}
+							subject={collab.sub}
 							identity={identityOf(collab.sub, peerUsers)}
 							typing={isTypingInEditor?.(collab.sub) ?? false}
 							away={isAway?.(collab.sub) ?? false}
@@ -346,10 +348,11 @@ export const FlowPresenceBar = memo(function FlowPresenceBar({
 });
 
 const PresenceFace = memo(function PresenceFace({
+	subject,
 	identity,
 	typing,
 	away,
-}: Readonly<{ identity: PresenceIdentity; typing: boolean; away: boolean }>) {
+}: Readonly<{ subject: string; identity: PresenceIdentity; typing: boolean; away: boolean }>) {
 	return (
 		<span
 			className={cn("relative inline-flex", away && "opacity-50")}
@@ -373,6 +376,13 @@ const PresenceFace = memo(function PresenceFace({
 					{identity.shortName.charAt(0).toUpperCase()}
 				</AvatarFallback>
 			</Avatar>
+			{!typing && (
+				<UserAvailabilityBadge
+					subject={subject}
+					dot
+					className="absolute -bottom-0.5 -right-0.5"
+				/>
+			)}
 			{typing && (
 				<span
 					className="absolute -bottom-0.5 -right-0.5 flex size-2 animate-pulse items-center justify-center rounded-full bg-primary text-primary-foreground ring-1 ring-background motion-reduce:animate-none"
@@ -691,6 +701,7 @@ const CollaboratorRow = memo(function CollaboratorRow({
 							{t("you", "You")}
 						</Badge>
 					)}
+					<UserAvailabilityBadge subject={collab.sub} />
 					{collab.sessions > 1 && (
 						<span className="shrink-0 text-[11px] text-muted-foreground">
 							·{" "}

@@ -7,9 +7,11 @@
 
 use crate::hub::{HubFailure, TurnHub};
 use flow_like_device_crypto::inbox::{
-    ALGORITHM, InboxKeyVault, InboxKeyring, PublicInboxKey, Recipient, Scope, seal_all,
+    ALGORITHM, InboxKeyVault, InboxKeyring, MAX_ENVELOPE_KEYS, Member, PublicInboxKey, Recipient,
+    RecipientKey, Scope, seal_all,
 };
 use flow_like_local_bots::InboxEntry;
+use flow_like_types::bot_turn::BotRunCheckpoint;
 use flow_like_types::inbox::{EnvelopeKind, check_envelope, plain_envelope};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -264,11 +266,101 @@ impl E2eHost {
         serde_json::from_slice(&plaintext).ok()
     }
 
+    /// Keep recovery state readable only by this bot's retained inbox keys. The authenticated
+    /// scope separates checkpoints from messages and prevents moving one to another turn.
+    pub async fn seal_checkpoint(
+        &self,
+        bot_id: &str,
+        conversation_id: &str,
+        turn_id: &str,
+        checkpoint: &BotRunCheckpoint,
+    ) -> Result<BotRunCheckpoint, E2eFailure> {
+        let unavailable = || {
+            E2eFailure::new(
+                CODE_E2E_UNAVAILABLE,
+                "The recovery checkpoint could not be sealed",
+            )
+        };
+        checkpoint.validate().map_err(|_| unavailable())?;
+        let key = self
+            .keyring
+            .active(bot_id)
+            .map_err(|_| unavailable())?
+            .ok_or_else(unavailable)?;
+        let recipient = Recipient {
+            principal_id: bot_id.to_owned(),
+            key_id: key.key_id,
+            public_key: key.public_key,
+        };
+        let message_id = format!("bot-checkpoint:{turn_id}:{}", checkpoint.revision);
+        let scope = Scope {
+            conversation_id,
+            message_id: &message_id,
+            sender_id: bot_id,
+        };
+        let plaintext = serde_json::to_vec(checkpoint).map_err(|_| unavailable())?;
+        let envelope = flow_like_device_crypto::inbox::seal(&scope, &recipient, &plaintext)
+            .map_err(|_| unavailable())?;
+        let sealed = BotRunCheckpoint {
+            state: json!({"sealed_checkpoint": 1, "envelope": envelope}),
+            ..checkpoint.clone()
+        };
+        sealed.validate().map_err(|_| unavailable())?;
+        Ok(sealed)
+    }
+
+    /// Open a saved checkpoint and verify the public storage metadata against its authenticated
+    /// copy. A missing key or unreadable record must never restart the request from scratch.
+    pub async fn open_checkpoint(
+        &self,
+        bot_id: &str,
+        conversation_id: &str,
+        turn_id: &str,
+        checkpoint: &BotRunCheckpoint,
+    ) -> Result<BotRunCheckpoint, E2eFailure> {
+        let unreadable = || {
+            E2eFailure::new(
+                CODE_E2E_UNREADABLE,
+                "The recovery checkpoint could not be opened",
+            )
+        };
+        checkpoint.validate().map_err(|_| unreadable())?;
+        if checkpoint
+            .state
+            .get("sealed_checkpoint")
+            .and_then(Value::as_u64)
+            != Some(1)
+        {
+            return Err(unreadable());
+        }
+        let envelope = checkpoint.state.get("envelope").ok_or_else(unreadable)?;
+        let message_id = format!("bot-checkpoint:{turn_id}:{}", checkpoint.revision);
+        let scope = Scope {
+            conversation_id,
+            message_id: &message_id,
+            sender_id: bot_id,
+        };
+        let plaintext = self
+            .keyring
+            .open(bot_id, &scope, envelope)
+            .map_err(|_| unreadable())?;
+        let mut opened: BotRunCheckpoint =
+            serde_json::from_slice(&plaintext).map_err(|_| unreadable())?;
+        opened.validate().map_err(|_| unreadable())?;
+        if opened.revision != checkpoint.revision {
+            return Err(unreadable());
+        }
+        opened.started_at_ms = checkpoint.started_at_ms;
+        opened.deadline_at_ms = checkpoint.deadline_at_ms;
+        Ok(opened)
+    }
+
+    /// Every active member with the keys of all their devices, newest last.
     async fn recipients(
         &self,
         bot_id: &str,
         conversation_id: &str,
-    ) -> Result<Vec<Recipient>, E2eFailure> {
+    ) -> Result<Vec<Member>, E2eFailure> {
         let hub = |failure: HubFailure| {
             E2eFailure::new(
                 CODE_E2E_UNAVAILABLE,
@@ -302,7 +394,7 @@ impl E2eHost {
             .read("inbox/keys", vec![("principals", members.join(","))])
             .await
             .map_err(hub)?;
-        let mut newest: HashMap<&str, Recipient> = HashMap::new();
+        let mut keys: HashMap<&str, Vec<RecipientKey>> = HashMap::new();
         for key in listed
             .get("keys")
             .and_then(Value::as_array)
@@ -319,25 +411,29 @@ impl E2eHost {
                 continue;
             };
             if let Some(member) = members.iter().find(|member| member.as_str() == principal) {
-                newest.insert(
-                    member,
-                    Recipient {
-                        principal_id: principal.to_owned(),
+                let held = keys.entry(member).or_default();
+                if !held.iter().any(|known| known.key_id == key_id) {
+                    held.push(RecipientKey {
                         key_id: key_id.to_owned(),
                         public_key: public_key.to_owned(),
-                    },
-                );
+                    });
+                }
             }
         }
         members
             .iter()
-            .map(|member| {
-                newest.remove(member.as_str()).ok_or_else(|| {
-                    E2eFailure::new(
-                        CODE_E2E_MEMBER_KEY,
-                        format!("'{member}' has published no key to seal to"),
-                    )
-                })
+            .map(|member| match keys.remove(member.as_str()) {
+                Some(mut held) => {
+                    let skip = held.len().saturating_sub(MAX_ENVELOPE_KEYS);
+                    Ok(Member {
+                        principal_id: member.clone(),
+                        keys: held.split_off(skip),
+                    })
+                }
+                None => Err(E2eFailure::new(
+                    CODE_E2E_MEMBER_KEY,
+                    format!("'{member}' has published no key to seal to"),
+                )),
             })
             .collect()
     }

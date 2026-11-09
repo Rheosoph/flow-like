@@ -15,26 +15,29 @@
 
 mod account;
 mod approvals;
+mod authorization;
 pub(crate) mod commands;
 pub(crate) mod connector_commands;
-pub(crate) mod grant_commands;
 mod e2e;
-mod e2e_vault;
+pub(crate) mod e2e_vault;
 pub(crate) mod gate;
+pub(crate) mod grant_commands;
 mod host;
 mod hub;
 pub(crate) mod interactive;
 mod memory;
+mod notes;
 mod notify;
 mod owner_notify;
-mod rule;
+mod recovery;
 mod room_updates;
-pub(crate) mod skill_commands;
-pub(crate) mod task_commands;
-mod task_tick;
+mod rule;
 mod runner;
+pub(crate) mod skill_commands;
 mod store;
 pub(crate) mod talk;
+pub(crate) mod task_commands;
+mod task_tick;
 mod transcript;
 
 #[cfg(test)]
@@ -48,8 +51,8 @@ mod tests;
 
 pub use account::AccountHost;
 pub(crate) use gate::ApprovalGate;
-pub(crate) use owner_notify::notifier_for;
 pub use host::BotHost;
+pub(crate) use owner_notify::notifier_for;
 
 use account::AccountConfig;
 use host::{HostConfig, TurnEvents, TurnInfo};
@@ -129,7 +132,7 @@ pub fn start(app: &AppHandle) {
     );
     let e2e = Arc::new(e2e::E2eHost::new(
         hub,
-        Arc::new(e2e_vault::KeychainVault),
+        Arc::new(e2e_vault::KeychainVault::BOTS),
         host_id(app),
     ));
     account.enable_e2e(e2e.clone());

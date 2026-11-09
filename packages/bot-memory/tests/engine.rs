@@ -5,6 +5,7 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -12,14 +13,16 @@ use chrono_tz::Tz;
 use flow_like_bot_memory::compaction::{
     CompactionConfig, CompactionPlan, PlannerInput, Trigger, TurnPhase, plan_compaction,
 };
-use flow_like_bot_memory::engine::{CompactionInput, CompactionOutcome, MemoryBusy, MemoryEngine};
+use flow_like_bot_memory::engine::{CompactionInput, CompactionOutcome, MemoryEngine};
 use flow_like_bot_memory::facts::{Evidence, Fact, FactKind, integrate_facts};
 use flow_like_bot_memory::llm::{Embedder, LlmRequest, LlmTask, MemoryLlm};
 use flow_like_bot_memory::model::{FactSource, HistoryItem, Seq, SeqSpan};
 use flow_like_bot_memory::pointer::PartRef;
 use flow_like_bot_memory::prompt::ModelBudget;
 use flow_like_bot_memory::retrieval::{Recency, parse_time_range};
-use flow_like_bot_memory::store::{FactFilter, FactQuery, MemoryStores};
+use flow_like_bot_memory::store::{
+    CompactionState, FactFilter, FactQuery, Lease, MemoryStores, StateConflict,
+};
 use flow_like_bot_memory::testing::{HashEmbedder, SpanLine, StubLlm, Transcript, span_lines};
 use flow_like_bot_memory::text::content_hash;
 use flow_like_bot_memory::tools::{
@@ -211,6 +214,32 @@ impl Embedder for FlakyEmbedder {
     }
 }
 
+struct GatedEmbedder {
+    inner: HashEmbedder,
+    gated: AtomicBool,
+    entered: Notify,
+    release: Notify,
+}
+
+#[async_trait]
+impl Embedder for GatedEmbedder {
+    fn model_id(&self) -> &str {
+        self.inner.model_id()
+    }
+
+    async fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        if !self.gated.swap(true, Ordering::SeqCst) {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+        self.inner.embed_documents(texts).await
+    }
+
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        self.inner.embed_query(text).await
+    }
+}
+
 /// Every compacted message is in a summary and no two active summaries overlap.
 async fn assert_covered(stores: &MemoryStores, items: &[HistoryItem]) {
     let state = stores.state.load().await.unwrap();
@@ -258,16 +287,16 @@ async fn overlapping_compactions_keep_every_compacted_message_in_a_summary() {
 
     let first = spawn_compaction(engine.clone(), soft, items.clone(), transcript.now());
     llm.entered.notified().await;
-    let mut second = spawn_compaction(engine.clone(), hard, items.clone(), transcript.now());
-    let early = tokio::time::timeout(std::time::Duration::from_secs(3), &mut second).await;
+    let second = spawn_compaction(engine.clone(), hard, items.clone(), transcript.now());
+    let second = tokio::time::timeout(Duration::from_secs(10), second)
+        .await
+        .expect("another compaction can finish while the first model call waits")
+        .unwrap()
+        .unwrap();
+    assert!(!second.stale, "{second:?}");
     llm.release.notify_one();
-    first.await.unwrap().unwrap();
-    let second = match early {
-        Ok(joined) => joined.unwrap(),
-        Err(_) => second.await.unwrap(),
-    }
-    .unwrap();
-    assert!(second.stale, "{second:?}");
+    let first = first.await.unwrap().unwrap();
+    assert!(first.stale, "the older draft must be discarded: {first:?}");
     assert_covered(engine.stores(), &items).await;
 }
 
@@ -285,10 +314,15 @@ async fn compactions_from_two_engines_on_one_store_keep_every_message() {
     let first = spawn_compaction(gated.clone(), soft, items.clone(), transcript.now());
     llm.entered.notified().await;
     let second = spawn_compaction(other.clone(), hard, items.clone(), transcript.now());
-    let second = second.await.unwrap().unwrap();
-    assert!(second.stale, "{second:?}");
+    let second = tokio::time::timeout(Duration::from_secs(10), second)
+        .await
+        .expect("a separate engine can compact while the first model call waits")
+        .unwrap()
+        .unwrap();
+    assert!(!second.stale, "{second:?}");
     llm.release.notify_one();
-    first.await.unwrap().unwrap();
+    let first = first.await.unwrap().unwrap();
+    assert!(first.stale, "the older draft must be discarded: {first:?}");
     let reopened = MemoryStores::open_local(dir.path(), hash()).await.unwrap();
     assert_covered(&reopened, &items).await;
 }
@@ -351,15 +385,16 @@ async fn idle_mining_never_moves_compaction_back() {
         tokio::spawn(async move { engine.mine_idle(&transcript.history, 6, now).await })
     };
     llm.entered.notified().await;
-    let mut compaction = spawn_compaction(engine.clone(), planned, items.clone(), now);
-    let early = tokio::time::timeout(std::time::Duration::from_secs(3), &mut compaction).await;
+    let compaction = spawn_compaction(engine.clone(), planned, items.clone(), now);
+    let outcome = tokio::time::timeout(Duration::from_secs(10), compaction)
+        .await
+        .expect("compaction can finish while idle extraction waits")
+        .unwrap()
+        .unwrap();
+    assert!(!outcome.stale);
     llm.release.notify_one();
-    mining.await.unwrap().unwrap();
-    let outcome = match early {
-        Ok(joined) => joined.unwrap(),
-        Err(_) => compaction.await.unwrap(),
-    }
-    .unwrap();
+    let mining = mining.await.unwrap();
+    assert!(mining.is_err_and(|error| error.is::<StateConflict>()));
     let state = engine.stores().state.load().await.unwrap();
     assert!(
         state.compacted_through >= outcome.state.compacted_through,
@@ -500,6 +535,9 @@ fn stored(
         valid_to: None,
         recorded_at: said,
         expired_at: None,
+        geojson: None,
+        time: None,
+        expires_at: None,
         evidence: vec![Evidence {
             speaker: None,
             seq: 1,
@@ -585,6 +623,10 @@ async fn time_cues_rank_rather_than_hide_lasting_facts() {
             offset: 0,
             now,
             recency: Recency::default(),
+            sort: Default::default(),
+            geojson: None,
+            radius_m: None,
+            area: None,
         })
         .await
         .unwrap()
@@ -927,18 +969,22 @@ async fn truncated_summary_answers_do_not_block_compaction() {
     assert!(state.pending_rewrites.is_empty(), "{state:?}");
 }
 
-/// Follow-up 4: tool writes and idle maintenance take the same lease as compactions: another
-/// engine on the store is refused while it is held, the same engine waits its turn.
+/// A slow background model call leaves explicit writes available on both engine handles.
+/// The background draft is discarded after those writes change the memory.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tool_writes_and_maintenance_respect_the_lease() {
+async fn tool_writes_and_maintenance_finish_while_compaction_prepares() {
     let dir = tempfile::tempdir().unwrap();
     let llm = Arc::new(GatedLlm::new(LlmTask::NowBlock));
     let gated = Arc::new(engine(&dir, llm.clone(), hash()).await);
-    let other = engine(&dir, Arc::new(StubLlm::new()), hash()).await;
-    let mut transcript = chat(20, garden);
+    let other = Arc::new(engine(&dir, Arc::new(StubLlm::new()), hash()).await);
+    let forgetter = Arc::new(engine(&dir, Arc::new(StubLlm::new()), hash()).await);
+    let mut transcript = chat(20, |turn| match turn {
+        0 => "My favourite tea is genmaicha.".to_string(),
+        _ => garden(turn),
+    });
     let asked = transcript.user("Please remember that I am allergic to peanuts.");
     let evidence = transcript.history.get(asked).unwrap();
-    let kept = said(1, "The user's dog is called Rex.", start());
+    let kept = said(1, "The user's favourite tea is genmaicha.", start());
     other
         .stores()
         .facts
@@ -947,46 +993,48 @@ async fn tool_writes_and_maintenance_respect_the_lease() {
         .unwrap();
     let items = transcript.items();
     let now = transcript.now();
-    let compaction = spawn_compaction(gated.clone(), plan(&items, 2), items.clone(), now);
-    llm.entered.notified().await;
+    let before = gated.stores().state.load().await.unwrap();
+    let compaction = spawn_compaction(gated.clone(), plan(&items, 2), items, now);
+    tokio::time::timeout(Duration::from_secs(10), llm.entered.notified())
+        .await
+        .expect("the compaction reaches its gate");
+    assert_eq!(gated.stores().state.load().await.unwrap(), before);
+    assert!(gated.stores().segments.all().await.unwrap().is_empty());
 
     let save = MemorySaveArgs {
         text: "The user is allergic to peanuts.".into(),
-        evidence_seq: None,
         kind: Some("profile".into()),
-        subject: None,
-        valid_from: None,
-        valid_to: None,
+        ..Default::default()
     };
-    let saved = memory_save(&other, &save, &evidence, WriteGate::default(), now).await;
-    assert!(
-        saved.as_ref().is_err_and(|error| error.is::<MemoryBusy>()),
-        "{saved:?}"
-    );
-    let forgotten = memory_forget(
-        &other,
-        &MemoryForgetArgs {
-            id: kept.id.clone(),
-        },
-        WriteGate::default(),
-        now,
+    tokio::time::timeout(Duration::from_secs(10), other.optimize(now))
+        .await
+        .expect("maintenance does not wait for the model")
+        .unwrap();
+    let forgotten = tokio::time::timeout(
+        Duration::from_secs(10),
+        memory_forget(
+            &forgetter,
+            &MemoryForgetArgs {
+                id: kept.id.clone(),
+            },
+            WriteGate::default(),
+            now,
+        ),
     )
-    .await;
-    assert!(
-        forgotten
-            .as_ref()
-            .is_err_and(|error| error.is::<MemoryBusy>()),
-        "{forgotten:?}"
-    );
-    let optimized = other.optimize(now).await;
-    assert!(
-        optimized
-            .as_ref()
-            .is_err_and(|error| error.is::<MemoryBusy>()),
-        "{optimized:?}"
-    );
+    .await
+    .expect("forgetting finishes while the compaction model is still paused")
+    .unwrap();
+    assert!(matches!(forgotten, WriteOutcome::Done(_)));
 
-    let waiting = {
+    let saving = {
+        let other = other.clone();
+        let save = save.clone();
+        let evidence = evidence.clone();
+        tokio::spawn(async move {
+            memory_save(&other, &save, &evidence, WriteGate::default(), now).await
+        })
+    };
+    let same_engine_save = {
         let gated = gated.clone();
         let save = save.clone();
         let evidence = evidence.clone();
@@ -994,14 +1042,490 @@ async fn tool_writes_and_maintenance_respect_the_lease() {
             memory_save(&gated, &save, &evidence, WriteGate::default(), now).await
         })
     };
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    assert!(
-        !waiting.is_finished(),
-        "the same engine waits for its compaction"
-    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let saved = saving.await.unwrap().unwrap();
+        assert!(matches!(saved, WriteOutcome::Done(_)), "{saved:?}");
+        let saved = same_engine_save.await.unwrap().unwrap();
+        assert!(matches!(saved, WriteOutcome::Done(_)), "{saved:?}");
+    })
+    .await
+    .expect("explicit writes finish while the compaction model is still paused");
+    assert!(!compaction.is_finished());
     llm.release.notify_one();
-    compaction.await.unwrap().unwrap();
-    let saved = waiting.await.unwrap().unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(10), compaction)
+        .await
+        .expect("the stale draft finishes without publishing")
+        .unwrap()
+        .unwrap();
+    assert!(outcome.stale, "{outcome:?}");
+    let persisted = MemoryStores::open_local(dir.path(), hash()).await.unwrap();
+    let facts = persisted.facts.all(&FactFilter::default()).await.unwrap();
+    assert_eq!(
+        facts.iter().filter(|fact| fact.text == save.text).count(),
+        1,
+        "the concurrent saves must not create duplicate facts: {facts:?}"
+    );
+    assert!(persisted.facts.get(&kept.id).await.unwrap().is_none());
+    assert!(
+        facts.iter().all(|fact| !fact.text.contains("genmaicha")),
+        "the draft must not restore a forgotten fact under a new id: {facts:?}"
+    );
+    assert!(persisted.segments.all().await.unwrap().is_empty());
+    let state = persisted.state.load().await.unwrap();
+    assert!(state.lease.is_none());
+    assert!(state.compacted_through.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelling_compaction_preparation_leaves_memory_writable() {
+    let dir = tempfile::tempdir().unwrap();
+    let llm = Arc::new(GatedLlm::new(LlmTask::NowBlock));
+    let gated = Arc::new(engine(&dir, llm.clone(), hash()).await);
+    let other = engine(&dir, Arc::new(StubLlm::new()), hash()).await;
+    let mut transcript = chat(20, garden);
+    let asked = transcript.user("Please remember that I am allergic to peanuts.");
+    let evidence = transcript.history.get(asked).unwrap();
+    let items = transcript.items();
+    let now = transcript.now();
+    let before = gated.stores().state.load().await.unwrap();
+    let compaction = spawn_compaction(gated.clone(), plan(&items, 2), items, now);
+    tokio::time::timeout(Duration::from_secs(10), llm.entered.notified())
+        .await
+        .expect("the compaction reaches its model call");
+    compaction.abort();
+    assert!(compaction.await.unwrap_err().is_cancelled());
+    assert_eq!(gated.stores().state.load().await.unwrap(), before);
+    assert!(gated.stores().segments.all().await.unwrap().is_empty());
+    let save = MemorySaveArgs {
+        text: "The user is allergic to peanuts.".into(),
+        kind: Some("profile".into()),
+        ..Default::default()
+    };
+    for writer in [gated.as_ref(), &other] {
+        let saved = tokio::time::timeout(
+            Duration::from_secs(10),
+            memory_save(writer, &save, &evidence, WriteGate::default(), now),
+        )
+        .await
+        .expect("cancelling preparation leaves both engine handles writable")
+        .unwrap();
+        assert!(matches!(saved, WriteOutcome::Done(_)), "{saved:?}");
+    }
+    let persisted = MemoryStores::open_local(dir.path(), hash()).await.unwrap();
+    assert_eq!(
+        persisted.facts.count(&FactFilter::default()).await.unwrap(),
+        1
+    );
+    assert!(persisted.state.load().await.unwrap().lease.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resetting_memory_invalidates_a_compaction_prepared_at_revision_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let llm = Arc::new(GatedLlm::new(LlmTask::NowBlock));
+    let gated = Arc::new(engine(&dir, llm.clone(), hash()).await);
+    let resetter = engine(&dir, Arc::new(StubLlm::new()), hash()).await;
+    let transcript = chat(20, |turn| match turn {
+        0 => "My favourite tea is genmaicha.".to_string(),
+        _ => garden(turn),
+    });
+    let items = transcript.items();
+    let now = transcript.now();
+    assert_eq!(gated.stores().state.load().await.unwrap().revision, 0);
+    let compaction = spawn_compaction(gated.clone(), plan(&items, 2), items, now);
+    tokio::time::timeout(Duration::from_secs(10), llm.entered.notified())
+        .await
+        .expect("the draft reaches its model call before any memory is committed");
+    tokio::time::timeout(Duration::from_secs(10), resetter.reset(now))
+        .await
+        .expect("reset does not wait for the model")
+        .unwrap();
+    let reset_state = resetter.stores().state.load().await.unwrap();
+    assert!(reset_state.revision > 0);
+    assert!(reset_state.lease.is_none());
+    llm.release.notify_one();
+    let outcome = tokio::time::timeout(Duration::from_secs(10), compaction)
+        .await
+        .expect("the draft is invalidated by reset")
+        .unwrap()
+        .unwrap();
+    assert!(outcome.stale, "{outcome:?}");
+    let persisted = MemoryStores::open_local(dir.path(), hash()).await.unwrap();
+    assert_eq!(persisted.state.load().await.unwrap(), reset_state);
+    assert!(persisted.segments.all().await.unwrap().is_empty());
+    assert!(
+        persisted
+            .facts
+            .all(&FactFilter::default())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_extraction_cannot_restore_a_fact_forgotten_during_preparation() {
+    for separate_engine in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let llm = Arc::new(GatedLlm::new(LlmTask::FactExtraction));
+        let miner = Arc::new(engine(&dir, llm.clone(), hash()).await);
+        let other = engine(&dir, Arc::new(StubLlm::new()), hash()).await;
+        let transcript = Arc::new(chat(4, |turn| match turn {
+            0 => "My favourite tea is genmaicha.".to_string(),
+            _ => garden(turn),
+        }));
+        let kept = said(1, "The user's favourite tea is genmaicha.", start());
+        miner
+            .stores()
+            .facts
+            .insert(std::slice::from_ref(&kept))
+            .await
+            .unwrap();
+        let now = transcript.now();
+        let mining = {
+            let miner = miner.clone();
+            let transcript = transcript.clone();
+            tokio::spawn(async move { miner.mine_idle(&transcript.history, 8, now).await })
+        };
+        tokio::time::timeout(Duration::from_secs(10), llm.entered.notified())
+            .await
+            .expect("idle extraction reaches its model call");
+        assert!(miner.stores().state.load().await.unwrap().lease.is_none());
+        let writer = if separate_engine {
+            &other
+        } else {
+            miner.as_ref()
+        };
+        let forgotten = tokio::time::timeout(
+            Duration::from_secs(10),
+            memory_forget(
+                writer,
+                &MemoryForgetArgs {
+                    id: kept.id.clone(),
+                },
+                WriteGate::default(),
+                now,
+            ),
+        )
+        .await
+        .expect("forgetting finishes before idle extraction resumes")
+        .unwrap();
+        assert!(matches!(forgotten, WriteOutcome::Done(_)));
+        llm.release.notify_one();
+        let mining = tokio::time::timeout(Duration::from_secs(10), mining)
+            .await
+            .expect("stale extraction is discarded")
+            .unwrap();
+        assert!(
+            mining
+                .as_ref()
+                .is_err_and(|error| error.is::<StateConflict>()),
+            "{mining:?}"
+        );
+        let persisted = MemoryStores::open_local(dir.path(), hash()).await.unwrap();
+        assert!(
+            persisted
+                .facts
+                .all(&FactFilter::default())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let state = persisted.state.load().await.unwrap();
+        assert!(state.mined_through.is_none());
+        assert!(state.lease.is_none());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_slow_save_reconciles_again_after_a_newer_fact_is_saved() {
+    for separate_engine in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let llm = Arc::new(GatedLlm::new(LlmTask::FactUpdate));
+        let gated = Arc::new(engine(&dir, llm.clone(), hash()).await);
+        let other = engine(&dir, Arc::new(StubLlm::new()), hash()).await;
+        let mut transcript = Transcript::new(start());
+        let berlin_seq = transcript.user("My city is Berlin.");
+        transcript.bot("Noted.");
+        let paris_seq = transcript.user("Please remember that my city is Paris.");
+        transcript.bot("Noted.");
+        let rome_seq = transcript.user("Please remember that my city is Rome.");
+        let berlin = said(berlin_seq, "The user's city is Berlin.", start());
+        gated
+            .stores()
+            .facts
+            .insert(std::slice::from_ref(&berlin))
+            .await
+            .unwrap();
+        let now = transcript.now();
+        let paris_evidence = transcript.history.get(paris_seq).unwrap();
+        let paris_save = {
+            let gated = gated.clone();
+            tokio::spawn(async move {
+                memory_save(
+                    &gated,
+                    &MemorySaveArgs {
+                        text: "The user's city is Paris.".into(),
+                        kind: Some("profile".into()),
+                        ..Default::default()
+                    },
+                    &paris_evidence,
+                    WriteGate::default(),
+                    now,
+                )
+                .await
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(10), llm.entered.notified())
+            .await
+            .expect("the first save reaches reconciliation");
+        assert!(gated.stores().state.load().await.unwrap().lease.is_none());
+        let writer = if separate_engine {
+            &other
+        } else {
+            gated.as_ref()
+        };
+        let rome_saved = tokio::time::timeout(
+            Duration::from_secs(10),
+            memory_save(
+                writer,
+                &MemorySaveArgs {
+                    text: "The user's city is Rome.".into(),
+                    kind: Some("profile".into()),
+                    ..Default::default()
+                },
+                &transcript.history.get(rome_seq).unwrap(),
+                WriteGate::default(),
+                now,
+            ),
+        )
+        .await
+        .expect("a newer save finishes while the first model call waits")
+        .unwrap();
+        assert!(matches!(rome_saved, WriteOutcome::Done(_)));
+        llm.release.notify_one();
+        let paris_saved = tokio::time::timeout(Duration::from_secs(10), paris_save)
+            .await
+            .expect("the older save reconciles against the newer memory")
+            .unwrap()
+            .unwrap();
+        assert!(matches!(paris_saved, WriteOutcome::Done(_)));
+        let persisted = MemoryStores::open_local(dir.path(), hash()).await.unwrap();
+        let active = persisted.facts.all(&FactFilter::default()).await.unwrap();
+        assert_eq!(active.len(), 1, "{active:?}");
+        assert_eq!(active[0].text, "The user's city is Rome.");
+        assert_eq!(active[0].evidence[0].seq, rome_seq);
+        assert!(persisted.state.load().await.unwrap().lease.is_none());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_slow_save_cannot_recreate_a_fact_forgotten_during_reconciliation() {
+    for separate_engine in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let llm = Arc::new(GatedLlm::new(LlmTask::FactUpdate));
+        let gated = Arc::new(engine(&dir, llm.clone(), hash()).await);
+        let other = engine(&dir, Arc::new(StubLlm::new()), hash()).await;
+        let mut transcript = Transcript::new(start());
+        let berlin_seq = transcript.user("My city is Berlin.");
+        transcript.bot("Noted.");
+        let paris_seq = transcript.user("Please remember that my city is Paris.");
+        let berlin = said(berlin_seq, "The user's city is Berlin.", start());
+        gated
+            .stores()
+            .facts
+            .insert(std::slice::from_ref(&berlin))
+            .await
+            .unwrap();
+        let now = transcript.now();
+        let evidence = transcript.history.get(paris_seq).unwrap();
+        let saving = {
+            let gated = gated.clone();
+            tokio::spawn(async move {
+                memory_save(
+                    &gated,
+                    &MemorySaveArgs {
+                        text: "The user's city is Paris.".into(),
+                        kind: Some("profile".into()),
+                        ..Default::default()
+                    },
+                    &evidence,
+                    WriteGate::default(),
+                    now,
+                )
+                .await
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(10), llm.entered.notified())
+            .await
+            .expect("the save reaches its model call");
+        let forgetter = if separate_engine {
+            &other
+        } else {
+            gated.as_ref()
+        };
+        let forgotten = tokio::time::timeout(
+            Duration::from_secs(10),
+            memory_forget(
+                forgetter,
+                &MemoryForgetArgs {
+                    id: berlin.id.clone(),
+                },
+                WriteGate::default(),
+                now,
+            ),
+        )
+        .await
+        .expect("forgetting completes while the older save waits")
+        .unwrap();
+        assert!(matches!(forgotten, WriteOutcome::Done(_)));
+        llm.release.notify_one();
+        let saved = tokio::time::timeout(Duration::from_secs(10), saving)
+            .await
+            .expect("the older save stops after the deletion")
+            .unwrap();
+        assert!(saved.is_err_and(|error| error.is::<StateConflict>()));
+        let persisted = MemoryStores::open_local(dir.path(), hash()).await.unwrap();
+        assert!(
+            persisted
+                .facts
+                .all(&FactFilter::default())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(persisted.state.load().await.unwrap().lease.is_none());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn slow_reembedding_leaves_writes_available_and_cannot_restore_forgotten_facts() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = engine(&dir, Arc::new(StubLlm::new()), hash()).await;
+    let kept = said(1, "The user's favourite tea is genmaicha.", start());
+    old.stores()
+        .facts
+        .insert(std::slice::from_ref(&kept))
+        .await
+        .unwrap();
+    let embedder = Arc::new(GatedEmbedder {
+        inner: HashEmbedder::new("new-embedding-model", 64),
+        gated: AtomicBool::new(false),
+        entered: Notify::new(),
+        release: Notify::new(),
+    });
+    let engine = Arc::new(engine(&dir, Arc::new(StubLlm::new()), embedder.clone()).await);
+    let now = start();
+    let optimization = {
+        let engine = engine.clone();
+        tokio::spawn(async move { engine.optimize(now).await })
+    };
+    tokio::time::timeout(Duration::from_secs(10), embedder.entered.notified())
+        .await
+        .expect("optimization reaches the embedding model");
+    assert!(engine.stores().state.load().await.unwrap().lease.is_none());
+    let forgotten = tokio::time::timeout(
+        Duration::from_secs(10),
+        memory_forget(
+            &engine,
+            &MemoryForgetArgs {
+                id: kept.id.clone(),
+            },
+            WriteGate::default(),
+            now,
+        ),
+    )
+    .await
+    .expect("forgetting does not wait for reembedding")
+    .unwrap();
+    assert!(matches!(forgotten, WriteOutcome::Done(_)));
+    let mut transcript = Transcript::new(now);
+    let asked = transcript.user("Please remember that I am allergic to peanuts.");
+    let save = MemorySaveArgs {
+        text: "The user is allergic to peanuts.".into(),
+        kind: Some("profile".into()),
+        ..Default::default()
+    };
+    let saved = tokio::time::timeout(
+        Duration::from_secs(10),
+        memory_save(
+            &engine,
+            &save,
+            &transcript.history.get(asked).unwrap(),
+            WriteGate::default(),
+            now,
+        ),
+    )
+    .await
+    .expect("saving does not wait for reembedding")
+    .unwrap();
+    assert!(matches!(saved, WriteOutcome::Done(_)));
+    embedder.release.notify_one();
+    let optimization = tokio::time::timeout(Duration::from_secs(10), optimization)
+        .await
+        .expect("stale reembedding is discarded")
+        .unwrap();
+    assert!(optimization.is_err_and(|error| error.is::<StateConflict>()));
+    let persisted = MemoryStores::open_local(dir.path(), hash()).await.unwrap();
+    let facts = persisted.facts.all(&FactFilter::default()).await.unwrap();
+    assert_eq!(facts.len(), 1, "{facts:?}");
+    assert_eq!(facts[0].text, save.text);
+    assert!(persisted.state.load().await.unwrap().lease.is_none());
+}
+
+#[tokio::test]
+async fn explicit_save_waits_until_an_abandoned_lease_expires() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine(&dir, Arc::new(StubLlm::new()), hash()).await;
+    let now = start();
+    engine
+        .stores()
+        .state
+        .save(&CompactionState {
+            lease: Some(Lease {
+                holder: "stopped-engine".into(),
+                until: now + chrono::Duration::milliseconds(250),
+            }),
+            ..CompactionState::default()
+        })
+        .await
+        .unwrap();
+    let mut transcript = Transcript::new(now);
+    let asked = transcript.user("Please remember that I am allergic to peanuts.");
+    let evidence = transcript.history.get(asked).unwrap();
+    let save = MemorySaveArgs {
+        geojson: None,
+        time: None,
+        ttl_seconds: None,
+
+        text: "The user is allergic to peanuts.".into(),
+        evidence_seq: None,
+        kind: Some("profile".into()),
+        subject: None,
+        valid_from: None,
+        valid_to: None,
+    };
+    let started = Instant::now();
+    let saved = tokio::time::timeout(
+        Duration::from_secs(5),
+        memory_save(&engine, &save, &evidence, WriteGate::default(), now),
+    )
+    .await
+    .expect("the supplied clock advances while waiting for expiry")
+    .unwrap();
     assert!(matches!(saved, WriteOutcome::Done(_)), "{saved:?}");
-    assert!(other.stores().facts.get(&kept.id).await.unwrap().is_some());
+    assert!(
+        started.elapsed() >= Duration::from_millis(250),
+        "the live foreign lease must not be stolen using the wall clock"
+    );
+    assert_eq!(
+        engine
+            .stores()
+            .facts
+            .count(&FactFilter::default())
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(engine.stores().state.load().await.unwrap().lease.is_none());
 }

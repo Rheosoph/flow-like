@@ -163,6 +163,9 @@ pub struct DeviceModels {
     pub embedding: Option<Value>,
     #[serde(default)]
     pub embedding_model_id: Option<String>,
+    /// The hosted System One Bit used for the bot's response decisions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,6 +180,10 @@ pub struct DeviceConversation {
 /// A claim's result: the turn is the device's until `turn.lease_until`, kept by heartbeats.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeviceTurnGrant {
+    /// Only publish the already-finished checkpoint. Models are unused, and no model or tool
+    /// execution is permitted; a missing completed checkpoint fails the grant.
+    #[serde(default)]
+    pub delivery_only: bool,
     /// The claimed turn with `batched` and `requester_name`.
     pub turn: BotTurn,
     pub host_id: String,
@@ -184,6 +191,7 @@ pub struct DeviceTurnGrant {
     pub bot: DeviceBotSpec,
     #[serde(default)]
     pub requester: Option<DeviceRequester>,
+    /// Empty when `delivery_only` is set.
     pub models: DeviceModels,
     /// Acts as the bot for this turn (inbox reads, secrets, grants, memory, workspace presign,
     /// notify).
@@ -251,6 +259,21 @@ pub struct DeviceSilentRequest {
     pub host_id: String,
     #[serde(default)]
     pub usage: Option<DeviceUsageReport>,
+}
+
+/// `POST …/turns/{turn}/wait`: defer until one room participant speaks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceWaitRequest {
+    pub host_id: String,
+    pub participant_id: String,
+    #[serde(default)]
+    pub usage: Option<DeviceUsageReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceWaitResponse {
+    /// `parked`, `already_answered`, `unavailable`, or `superseded` by a new topic.
+    pub status: String,
 }
 
 /// `POST …/turns/{turn}/park`: the turn needs its owner's approval and sleeps until answered.

@@ -5,7 +5,11 @@ import {
 	sha256Hex,
 	signingKey,
 } from "../channel/aws-sigv4";
-import type { RealtimeTransport, RealtimeWakeup } from "./types";
+import type {
+	RealtimeProviderStage,
+	RealtimeTransport,
+	RealtimeWakeup,
+} from "./types";
 
 const MAX_FRAME_BYTES = 64 * 1024;
 const NATS_CONNECT_TIMEOUT_MS = 10_000;
@@ -21,7 +25,23 @@ export interface RealtimeProviderConnection {
 
 export interface RealtimeProviderCallbacks {
 	wakeup(wakeup: RealtimeWakeup): void;
-	disconnected(): void;
+	disconnected(reason?: string): void;
+}
+
+/** A provider connection that failed before it was live, and the step it stopped at. */
+export class RealtimeProviderError extends Error {
+	constructor(
+		readonly stage: RealtimeProviderStage,
+		message: string,
+	) {
+		super(message);
+	}
+}
+
+const SOCKET_READY_TIMEOUT_MS = 10_000;
+
+export function errorReason(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 export interface RealtimeProviderOptions {
@@ -88,7 +108,12 @@ function wake(callbacks: RealtimeProviderCallbacks, value: unknown): void {
 
 interface SocketHandlers {
 	opened(socket: WebSocket): void;
-	message(data: unknown, socket: WebSocket, ready: () => void): void;
+	message(
+		data: unknown,
+		socket: WebSocket,
+		ready: () => void,
+		advance: (stage: RealtimeProviderStage) => void,
+	): void;
 	tick?(socket: WebSocket): void;
 }
 
@@ -106,8 +131,12 @@ function socketConnection(
 		socket.binaryType = "arraybuffer";
 		let settled = false;
 		let closed = false;
+		let stage: RealtimeProviderStage = "handshake";
 		let tick: ReturnType<typeof setInterval> | undefined;
-		const timer = setTimeout(() => fail(), 10_000);
+		const timer = setTimeout(
+			() => fail(`no answer within ${SOCKET_READY_TIMEOUT_MS / 1000} s`),
+			SOCKET_READY_TIMEOUT_MS,
+		);
 		const close = () => {
 			if (closed) return;
 			closed = true;
@@ -116,11 +145,14 @@ function socketConnection(
 			signal.removeEventListener("abort", aborted);
 			socket.close();
 		};
-		const fail = () => {
+		const fail = (reason: string) => {
 			if (closed) return;
 			close();
-			if (settled) callbacks.disconnected();
-			else reject(new Error("Realtime provider connection failed"));
+			if (settled) callbacks.disconnected(reason);
+			else reject(new RealtimeProviderError(stage, reason));
+		};
+		const advance = (next: RealtimeProviderStage) => {
+			stage = next;
 		};
 		const aborted = () => {
 			close();
@@ -134,32 +166,39 @@ function socketConnection(
 				tick = setInterval(() => {
 					try {
 						handlers.tick?.(socket);
-					} catch {
-						fail();
+					} catch (error) {
+						fail(errorReason(error));
 					}
 				}, 20_000);
 			resolve({ close });
 		};
 		signal.addEventListener("abort", aborted, { once: true });
 		socket.addEventListener("open", () => {
+			stage = "connect";
 			try {
 				if (socket.protocol !== protocol)
-					throw new Error("Realtime provider selected an unsupported protocol");
+					throw new Error(
+						`the provider chose protocol "${socket.protocol}" instead of "${protocol}"`,
+					);
 				handlers.opened(socket);
-			} catch {
-				fail();
+			} catch (error) {
+				fail(errorReason(error));
 			}
 		});
 		socket.addEventListener("message", (event) => {
 			if (closed) return;
 			try {
-				handlers.message(event.data, socket, ready);
-			} catch {
-				fail();
+				handlers.message(event.data, socket, ready, advance);
+			} catch (error) {
+				fail(errorReason(error));
 			}
 		});
-		socket.addEventListener("close", fail);
-		socket.addEventListener("error", fail);
+		// A failed socket fires `error` and then `close`; only `close` carries a code.
+		socket.addEventListener("close", (event) =>
+			fail(
+				`closed with code ${event.code}${event.reason ? `: ${event.reason}` : ""}`,
+			),
+		);
 	});
 }
 
@@ -324,7 +363,7 @@ async function aws(
 					]),
 				);
 			},
-			message(data, socket, ready) {
+			message(data, socket, ready, advance) {
 				if (
 					!(data instanceof ArrayBuffer) ||
 					data.byteLength + buffer.byteLength > MAX_FRAME_BYTES
@@ -353,7 +392,10 @@ async function aws(
 					buffer = buffer.slice(offset + length);
 					if (type === 0x20) {
 						if (payload.length !== 2 || payload[1] !== 0)
-							throw new Error("MQTT connection denied");
+							throw new Error(
+								`MQTT connection denied (CONNACK return code ${payload[1] ?? "missing"})`,
+							);
+						advance("subscribe");
 						socket.send(
 							mqttPacket(0x82, [0, 1, ...mqttString(transport.topic), 0]),
 						);
@@ -364,7 +406,9 @@ async function aws(
 							payload[1] !== 1 ||
 							payload[2] !== 0
 						)
-							throw new Error("MQTT subscription denied");
+							throw new Error(
+								`MQTT subscription to ${transport.topic} denied (SUBACK code ${payload[2] ?? "missing"})`,
+							);
 						ready();
 					} else if (type >> 4 === 3) {
 						if (payload.length < 2 || (type & 6) !== 0)

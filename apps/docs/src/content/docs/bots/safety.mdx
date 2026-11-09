@@ -1,0 +1,100 @@
+---
+title: Safety and permissions
+description: How bots stay under your control — rights that never exceed yours, approvals for anything with consequences, data labels that stop leaks, write-only secrets and end-to-end encryption.
+---
+
+import AccessCalculator from "../../../components/bots/AccessCalculator";
+import ApprovalDemo from "../../../components/bots/ApprovalDemo";
+import OutboundGuard from "../../../components/bots/OutboundGuard";
+
+Bots act for you, so every safeguard starts from one rule: **a bot never has more than you do.** On top of that, you decide what it may do without asking, which data it may send out, and who can read its messages.
+
+## Who a bot is
+
+Each bot has its own identity. Everything it does is recorded under its name, and wherever it appears, its avatar carries your picture in a corner so everyone can see whose bot it is. Its usage is billed to you.
+
+A bot isn't a user account: it has no password, no roles of its own and never shows up in user lists. When you delete a bot, past messages and records still show who did what.
+
+## What a bot may do in an app
+
+In each app, a bot works with **your current role**. Lose access to an app and your bots lose it too. For each app you attach, you can narrow the bot further:
+
+- **Read only**: look at files, tables, boards and events.
+- **Read + call events**: the same, plus calling the app's events.
+- **Full (your role)**: everything your role allows.
+- **Custom**: pick from 21 permissions, limit files to folders or make them read-only, and allow only certain tables, boards or events.
+
+These restrictions apply in every chat, your own included. In a room, the [room limits](/bots/rooms/#room-limits) narrow them again.
+
+<AccessCalculator client:visible />
+
+## Approvals
+
+Tools with consequences stop and ask before they run: sending mail to a new domain, calling a new website, running a program on the command line, opening a site in the browser, taking the screen, messaging a person, running a skill's code and changing the bot's own settings. Each ability on the [Capabilities](/bots/capabilities/) page says when it asks.
+
+You answer with:
+
+- **Allow once**: this exact call runs; the next one asks again.
+- **Always allow**: calls of the same kind run from now on. The approval is narrow on purpose: allowing reads from one site doesn't allow writing to it or reading another site, and allowing `git` doesn't allow any other program.
+- **Deny**: the call is refused and the bot is told not to retry it.
+
+<ApprovalDemo client:visible />
+
+Review and revoke standing approvals in the bot's details under **Allowed actions**. Cards waiting for you collect under **Needs you** and arrive as push notifications.
+
+**Some actions always ask.** A bot changing its own settings and a bot asking you for a secret can't be allowed for good, and Auto mode never approves them. Deleting a table, dropping a knowledge index and deleting files are never approved by inference.
+
+**Auto mode.** In a chat you're watching, Auto mode runs tools and applies changes without asking each time, except for the actions above. Use it when you'll review the result afterwards.
+
+**Background turns.** When a schedule, webhook or mail wakes the bot and nobody is watching, the bot's decision model checks whether your own messages or the bot's instructions clearly cover the exact call. A yes runs that one call and is never saved as an approval. Content from the trigger itself, such as the text of a mail, never counts as permission. Otherwise the turn pauses until you answer, for up to 7 days.
+
+## Data labels
+
+Every bot carries a label for the most sensitive data it may handle: **Public**, **Internal**, **Confidential** or **Restricted**, plus whether it handles personal data. Files, tables and other resources can carry the same labels.
+
+The label shapes the bot's instructions, and it is enforced where data could leave:
+
+- During a turn, the bot tracks the most sensitive label among everything it read, sub-tasks included.
+- Once that is above the bot's own level, the tools that send data out refuse for the rest of the turn: sending and replying to mail, web requests, calls to connected services, and image generation.
+- A bot labelled above Internal can't send prompts to an external image model at all.
+- Files and results it creates keep the highest label of what they were made from.
+
+<OutboundGuard client:visible />
+
+## Secrets
+
+Bots often need API keys or passwords. Secrets are built so that **people can write them but nobody can read them back**, and the model never sees them:
+
+- Add secrets in the editor's **Secrets** step, or answer a bot's request with the masked field on its approval card.
+- The bot refers to a secret as `{{secret:NAME}}`. Its host swaps in the value at the moment of use, for example in a web request header, a command or a browser form.
+- Secret values are encrypted with a key unique to the bot. Only the bot itself can read a value, and only during a running turn. Every read is logged.
+- Values that show up in command, browser or screen output are scrubbed, including URL-encoded and base64 forms.
+- Web requests send secrets over https only, and each secret is approved per site.
+
+A bot holds up to 50 secrets of up to 16 KB each. Bots that live only on your computer keep their secrets encrypted with a key in your system keychain.
+
+## End-to-end encryption
+
+Bots on the desktop app or a device can switch on **End-to-end encryption**. Your 1:1 chat with the bot then becomes end-to-end encrypted. The bot's host and each app you're signed in to (desktop, phone or browser) hold their own private key. Every message is sealed for each of those keys, so the server stores it but can't read it. The bot's details show its key fingerprint and let you rotate the key.
+
+- An app can read the messages sealed after it first opened your chats while signed in. Older messages show as **Encrypted message** there.
+- Switching encryption off makes new messages readable to the server again. Messages that are already encrypted stay encrypted.
+
+Because the server can't read encrypted conversations:
+
+- Cloud bots can't hold the ability or answer in encrypted conversations.
+- Encrypted chats have no file attachments or calls, and encrypted rooms have no invite links and no room memory.
+- Secrets sealed for a bot's host can't be used by turns that run in the cloud.
+
+## Limits that keep costs in check
+
+| Limit | Default |
+|---|---|
+| Turns a non-owner can start per bot | 20 a day |
+| Turns bots start for each other | daily cap by plan |
+| Outgoing mail | 500 recipients per bot, 2,000 per account a day |
+| Incoming mail | 200 per bot a day |
+| Webhook calls | 30 a minute per webhook |
+| Generated images | 50 per bot a day |
+
+The **Usage & limits** view shows each bot's AI cost, calls and runtime against monthly limits, overall and per room. Lower them any time; limits set by your organization apply on top.

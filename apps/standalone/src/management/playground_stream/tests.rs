@@ -27,6 +27,7 @@ fn picture(bytes: &[u8]) -> LiveFrame {
         kind: PlaygroundFrameKind::Computer,
         caption: "Desktop".into(),
         taken: Instant::now(),
+        observation: None,
     }
 }
 
@@ -138,8 +139,15 @@ impl Viewer {
 }
 
 fn attach(host: Fake) -> (Viewer, tokio::task::JoinHandle<Result<()>>) {
+    attach_observations(host, true)
+}
+
+fn attach_observations(
+    host: Fake,
+    observations: bool,
+) -> (Viewer, tokio::task::JoinHandle<Result<()>>) {
     let (near, far) = tokio::io::duplex(256 * 1024);
-    let task = tokio::spawn(serve(far, host, "bot_1".into(), PACE));
+    let task = tokio::spawn(serve(far, host, "bot_1".into(), observations, PACE));
     (
         Viewer {
             io: near,
@@ -301,4 +309,66 @@ async fn a_malformed_message_ends_the_stream() {
         .expect("the stream ends")
         .unwrap();
     assert!(result.is_err());
+}
+
+fn observation(at: u64) -> InteractionObservation {
+    InteractionObservation {
+        captured_at_ms: at,
+        width: 640,
+        height: 400,
+        pointer: None,
+        focus: None,
+        action: None,
+        mapping: None,
+    }
+}
+
+#[tokio::test]
+async fn changed_observations_arrive_even_when_the_pixels_do_not_change() {
+    let host = Fake::default();
+    host.show(b"same pixels");
+    host.0.lock().unwrap().frame.as_mut().unwrap().observation = Some(observation(1000));
+    let (mut viewer, task) = attach(host.clone());
+    let first = viewer.frame().await;
+    assert_eq!(first.meta.observation, Some(observation(1000)));
+    host.0.lock().unwrap().frame.as_mut().unwrap().observation = Some(observation(2000));
+    let next = viewer.frame().await;
+    assert_eq!(next.jpeg, first.jpeg);
+    assert_eq!(next.meta.observation, Some(observation(2000)));
+    task.abort();
+}
+
+#[tokio::test]
+async fn legacy_viewers_receive_no_observation_extension() {
+    let host = Fake::default();
+    host.show(b"legacy pixels");
+    host.0.lock().unwrap().frame.as_mut().unwrap().observation = Some(observation(1000));
+    let (mut viewer, task) = attach_observations(host, false);
+    let frame = viewer.frame().await;
+    assert!(frame.meta.observation.is_none());
+    assert!(
+        serde_json::to_value(&frame.meta)
+            .unwrap()
+            .get("observation")
+            .is_none()
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn an_oversized_observation_is_dropped_and_the_stream_survives() {
+    let host = Fake::default();
+    host.show(b"big overlay");
+    let mut huge = observation(1000);
+    huge.focus = Some(flow_like_types_contracts::interaction::InteractionFocus {
+        label: "x".repeat(PLAYGROUND_MAX_JSON * 2),
+        bounds: None,
+    });
+    host.0.lock().unwrap().frame.as_mut().unwrap().observation = Some(huge);
+    let (mut viewer, task) = attach(host.clone());
+    let frame = viewer.frame().await;
+    assert!(frame.meta.observation.is_none());
+    assert!(!frame.jpeg.is_empty());
+    assert!(!task.is_finished());
+    task.abort();
 }

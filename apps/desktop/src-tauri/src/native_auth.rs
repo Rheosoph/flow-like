@@ -19,6 +19,156 @@ pub(crate) mod recovery;
 mod store;
 pub(crate) use interactive::{handle_callback, initialize, request_login};
 
+pub(crate) const ONBOARDING_PROFILE_ID: &str = "__flow_like_onboarding__";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AuthContext {
+    profile_id: String,
+    hub: String,
+}
+
+fn onboarding_hub(default_hub: &str) -> Result<String, String> {
+    let hub = flow_like::hub::hub_origin(default_hub, true).ok_or("The default hub is missing")?;
+    canonical_hub(&hub)
+}
+
+fn auth_context(settings: &crate::settings::Settings) -> Result<AuthContext, String> {
+    let profile = settings
+        .profiles
+        .get(&settings.current_profile)
+        .or_else(|| settings.profiles.values().next());
+    context_for_profile(
+        profile.map(|profile| &profile.hub_profile),
+        &settings.default_hub,
+    )
+}
+
+fn context_for_profile(
+    profile: Option<&flow_like::profile::Profile>,
+    default_hub: &str,
+) -> Result<AuthContext, String> {
+    match profile {
+        Some(profile) => Ok(AuthContext {
+            profile_id: profile.id.clone(),
+            hub: flow_like::hub::hub_origin(&profile.hub, profile.secure)
+                .ok_or("This profile has no valid hub origin")?,
+        }),
+        None => Ok(AuthContext {
+            profile_id: ONBOARDING_PROFILE_ID.to_owned(),
+            hub: onboarding_hub(default_hub)?,
+        }),
+    }
+}
+
+#[tauri::command]
+pub(crate) async fn native_auth_context(
+    app_handle: tauri::AppHandle,
+) -> Result<AuthContext, String> {
+    let settings = crate::state::TauriSettingsState::construct(&app_handle)
+        .await
+        .map_err(|_| "Settings are unavailable")?;
+    let settings = settings.lock().await;
+    auth_context(&settings)
+}
+
+#[tauri::command]
+pub(crate) async fn native_auth_complete_onboarding(
+    app_handle: tauri::AppHandle,
+) -> Result<AuthContext, String> {
+    // Wait for an exchange already in flight before moving its single-use grant.
+    let _callback = interactive::LOGIN_LOCK.lock().await;
+    let settings = crate::state::TauriSettingsState::construct(&app_handle)
+        .await
+        .map_err(|_| "Settings are unavailable")?;
+    let settings = settings.lock().await;
+    let context = auth_context(&settings)?;
+    if let Some(profile) = settings.profiles.get(&context.profile_id) {
+        claim_onboarding_session(&profile.hub_profile, &settings.default_hub).await?;
+    }
+    Ok(context)
+}
+
+/// Move the grant while both scopes are locked, so only one profile can renew it.
+pub(crate) async fn move_profile_session(
+    source_id: &str,
+    target_id: &str,
+    hub: &str,
+) -> Result<(), String> {
+    move_profile_session_inner(source_id, target_id, hub, true, false).await
+}
+
+async fn move_profile_session_inner(
+    source_id: &str,
+    target_id: &str,
+    hub: &str,
+    notify: bool,
+    require_login: bool,
+) -> Result<(), String> {
+    if source_id == target_id {
+        return Ok(());
+    }
+    let (source_key, source) = session(source_id, hub).await?;
+    let (target_key, target) = session(target_id, hub).await?;
+    // Profile edits already serialize on settings. Also order locks for direct callers.
+    let (mut source, mut target) = if source_key < target_key {
+        let source = source.lock().await;
+        let target = target.lock().await;
+        (source, target)
+    } else {
+        let target = target.lock().await;
+        let source = source.lock().await;
+        (source, target)
+    };
+    let original = source.load(&source_key).await?.clone();
+    if require_login && original.user.is_none() && original.pending_login.is_none() {
+        return Ok(());
+    }
+    let previous_target = target.load(&target_key).await?.clone();
+    let moved = SavedSession {
+        generation: uuid::Uuid::new_v4().to_string(),
+        ..original.clone()
+    };
+    // Remove the old durable grant before exposing its replacement. A failed target
+    // write restores the source and revokes the target's in-memory replacement.
+    if let Err(error) = source
+        .save(
+            &source_key,
+            SavedSession {
+                consumed_login: original.consumed_login.clone(),
+                ..Default::default()
+            },
+        )
+        .await
+    {
+        source.save(&source_key, original).await?;
+        return Err(error);
+    }
+    if let Err(error) = target.save(&target_key, moved).await {
+        target.save(&target_key, previous_target).await?;
+        source.save(&source_key, original).await?;
+        return Err(error);
+    }
+    if notify {
+        interactive::changed(source_id, hub);
+        interactive::changed(target_id, hub);
+    }
+    Ok(())
+}
+
+pub(crate) async fn claim_onboarding_session(
+    profile: &flow_like::profile::Profile,
+    default_hub: &str,
+) -> Result<(), String> {
+    let Ok(hub) = onboarding_hub(default_hub) else {
+        return Ok(());
+    };
+    if flow_like::hub::hub_origin(&profile.hub, profile.secure).as_deref() != Some(hub.as_str()) {
+        return Ok(());
+    }
+    move_profile_session_inner(ONBOARDING_PROFILE_ID, &profile.id, &hub, false, true).await
+}
+
 /// Profile removal and hub changes revoke both saved grants and active device/run leases.
 pub(crate) async fn invalidate_profile(
     profile: &flow_like::profile::Profile,
@@ -89,6 +239,8 @@ struct SavedSession {
     user: Option<Value>,
     #[serde(default)]
     pending_login: Option<interactive::PendingLogin>,
+    #[serde(default)]
+    consumed_login: Option<interactive::ConsumedLogin>,
 }
 
 impl Default for SavedSession {
@@ -98,6 +250,7 @@ impl Default for SavedSession {
             configuration: None,
             user: None,
             pending_login: None,
+            consumed_login: None,
         }
     }
 }
@@ -425,6 +578,7 @@ async fn commit_session(
         configuration: Some(configuration),
         user: Some(user),
         pending_login: None,
+        consumed_login: saved.consumed_login.clone(),
     };
     session.save(&hub, saved).await?;
     session.snapshot()

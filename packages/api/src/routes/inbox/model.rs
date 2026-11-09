@@ -2,17 +2,30 @@ use crate::entity::{conversation_member, inbox_entry, inbox_key};
 use chrono::{DateTime, FixedOffset};
 use flow_like_types::{
     Value,
+    bot_effective::BotRoomLimits,
     inbox::{ConversationEncryption, ConversationKind, EntryCursor, InboxEntryKind},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use utoipa::{IntoParams, ToSchema};
 
+/// The memory sources a bot may recall in one conversation. Other groups' histories remain
+/// inaccessible through this response; keys identify their saved fact stores only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct BotMemoryPolicy {
+    pub room: bool,
+    pub use_owner_memory: bool,
+    pub shared_room_keys: Vec<String>,
+}
+
 /// A principal in a conversation.
 #[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct ConversationMember {
     /// A user sub or a bot id.
     pub principal_id: String,
+    /// The participant's public display name, when one is available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// `user` or `bot`.
     #[schema(example = "user")]
     pub kind: String,
@@ -28,6 +41,7 @@ impl From<conversation_member::Model> for ConversationMember {
     fn from(row: conversation_member::Model) -> Self {
         Self {
             principal_id: row.principal_id,
+            name: None,
             kind: row.principal_kind.to_ascii_lowercase(),
             added_by: row.added_by,
             joined_at: row.joined_at,
@@ -160,6 +174,10 @@ pub struct CreateConversationRequest {
     /// `plain` (default) or `e2e`.
     #[schema(value_type = Option<String>, example = "plain")]
     pub encryption: Option<ConversationEncryption>,
+    /// Initial group settings for your own bots. Other bot owners configure theirs on acceptance.
+    #[serde(default)]
+    #[schema(value_type = Object)]
+    pub bot_limits: BTreeMap<String, BotRoomLimits>,
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -300,6 +318,8 @@ pub struct EntriesQuery {
     /// Read the inbox of one of your bots instead of your own: every conversation it is in.
     #[serde(rename = "as")]
     pub as_bot: Option<String>,
+    /// One message from this reader's copy. Cannot be combined with cursors or positions.
+    pub message_id: Option<String>,
     /// Only entries older than this cursor.
     pub before: Option<String>,
     /// Only entries newer than this cursor.

@@ -1,6 +1,6 @@
 //! The memory wiring of an account bot's turn: its conversation over the hub as the engine's
 //! history, summaries written to the hub as the bot. Groups keep separate history and recall
-//! the bot's owner-taught memory without changing it.
+//! only the private and shared knowledge their current settings allow.
 
 use crate::hub::TurnHub;
 use async_trait::async_trait;
@@ -383,6 +383,30 @@ fn hub_memory_room(conversation: &Value, bot_id: &str, owner_id: Option<&str>) -
     (room && bot_member).then_some(true)
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct HubMemoryAccess {
+    pub room: bool,
+    pub use_owner_memory: bool,
+    pub shared_room_keys: Vec<String>,
+}
+
+/// The hub resolves membership and both ends of memory sharing on every turn. A scoped bot
+/// token can read this policy without receiving other groups' messages or member lists.
+pub async fn hub_memory_access(
+    hub: &Arc<dyn TurnHub>,
+    bot_id: &str,
+    conversation_id: &str,
+) -> Option<HubMemoryAccess> {
+    let value = hub
+        .read(
+            &format!("inbox/conversations/{conversation_id}/memory"),
+            vec![("as", bot_id.to_string())],
+        )
+        .await
+        .ok()?;
+    serde_json::from_value(value).ok()
+}
+
 /// The memory source of an account bot's direct or group turn. The host supplies the owner
 /// from its claim; interactive hosts resolve it from the bot's account record.
 pub async fn hub_source_for(
@@ -397,11 +421,15 @@ pub async fn hub_source_for(
     let conversation = owner_hub
         .read(
             &format!("inbox/conversations/{conversation_id}"),
-            Vec::new(),
+            vec![("as", bot_id.to_string())],
         )
         .await
         .ok()?;
     let room = hub_memory_room(&conversation, bot_id, owner_id)?;
+    let access = hub_memory_access(hub, bot_id, conversation_id).await?;
+    if access.room != room {
+        return None;
+    }
     let entries = PositionEntries::new(HubPages {
         hub: hub.clone(),
         bot_id: bot_id.to_string(),
@@ -431,6 +459,8 @@ pub async fn hub_source_for(
         }),
         key: format!("account/{conversation_id}"),
         room,
+        use_owner_memory: access.use_owner_memory,
+        shared_room_keys: access.shared_room_keys,
         trigger_seq,
         timezone: local_timezone(),
         state_block: String::new(),

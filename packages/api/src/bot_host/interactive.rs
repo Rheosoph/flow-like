@@ -24,7 +24,7 @@ use flow_like_types::{
     inbox::{InboxEntryKind, plain_envelope},
     tokio::{self, task::JoinHandle},
 };
-use sea_orm::EntityTrait;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
@@ -48,6 +48,21 @@ pub(crate) struct InteractiveTurn {
 }
 
 impl InteractiveTurn {
+    pub(crate) async fn ephemeral_user_context(&self, state: &AppState) -> Result<bool, ApiError> {
+        use crate::entity::inbox_entry;
+        let trigger = inbox_entry::Entity::find()
+            .filter(inbox_entry::Column::InboxId.eq(&self.turn.bot_id))
+            .filter(inbox_entry::Column::ConversationId.eq(&self.turn.conversation_id))
+            .filter(inbox_entry::Column::MessageId.eq(&self.turn.trigger_message_id))
+            .one(&state.db)
+            .await?;
+        Ok(trigger.is_some_and(|entry| {
+            entry.envelope.get("body").is_some_and(|body| {
+                flow_like_types::bot_user_context::response_for(body, &entry.sender_id, &self.turn.bot_id)
+            })
+        }))
+    }
+
     pub(crate) async fn find(
         state: &AppState,
         owner_id: &str,

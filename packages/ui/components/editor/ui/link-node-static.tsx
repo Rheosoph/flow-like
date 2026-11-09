@@ -6,10 +6,12 @@ import type { SlateElementProps } from "platejs/static";
 
 import { getLinkAttributes } from "@platejs/link";
 import { SlateElement } from "platejs/static";
+import { useEditorAssetUrl } from "../hooks/use-editor-asset-url";
 
 export function LinkElementStatic(props: SlateElementProps<TLinkElement>) {
 	const { t } = useTranslation("common");
 	const url = props.element.url;
+	const resolvedUrl = useEditorAssetUrl(url);
 
 	// Check if this is an invalid node reference
 	if (typeof url === "string" && url.startsWith("invalid://")) {
@@ -66,6 +68,18 @@ export function LinkElementStatic(props: SlateElementProps<TLinkElement>) {
 		);
 	}
 
+	const linkAttributes = getLinkAttributes(props.editor, {
+		...props.element,
+		url: resolvedUrl ?? "",
+	});
+	// Local storage can return a native asset or inline bytes. Only accept these
+	// after storage resolution, and offer them as files instead of navigating.
+	const localDownload =
+		resolvedUrl !== url &&
+		resolvedUrl &&
+		/^(?:asset:\/\/localhost\/|blob:|data:)/.test(resolvedUrl)
+			? resolvedUrl
+			: undefined;
 	return (
 		<SlateElement
 			{...props}
@@ -73,7 +87,9 @@ export function LinkElementStatic(props: SlateElementProps<TLinkElement>) {
 			className="font-medium text-primary underline decoration-primary underline-offset-4"
 			attributes={{
 				...props.attributes,
-				...getLinkAttributes(props.editor, props.element),
+				...linkAttributes,
+				href: localDownload ?? linkAttributes.href,
+				download: localDownload ? "" : undefined,
 			}}
 		>
 			{props.children}

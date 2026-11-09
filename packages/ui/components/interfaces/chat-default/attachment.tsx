@@ -3,10 +3,28 @@
 import type { IBackendState } from "../../../state/backend-state";
 import type { IAttachment } from "./chat-db";
 
+/** Mirror `PORTABLE_INLINE_IMAGE_BYTES` and `PORTABLE_INLINE_IMAGES_BYTES` in flow-like-types. */
+const INLINE_IMAGE_BYTES = 3_750_000;
+const INLINE_IMAGES_BYTES = 4_000_000;
+
+/**
+ * Whether `file` reaches a model unchanged when sent inline: it is no image, or it fits its share
+ * of what one message inlines. A larger image is better sent as a signed link, so a provider that
+ * fetches links reads the original rather than a copy shrunk to fit.
+ */
+export function fitsInlineUnchanged(file: File, files: readonly File[]) {
+	if (!file.type.startsWith("image/")) return true;
+	const images = files.filter((each) => each.type.startsWith("image/")).length;
+	return (
+		file.size <=
+		Math.min(INLINE_IMAGE_BYTES, INLINE_IMAGES_BYTES / Math.max(images, 1))
+	);
+}
+
 export async function fileToAttachment(
 	files: File[],
 	backend: IBackendState,
-	offline: boolean,
+	offline: boolean | ((file: File) => boolean),
 	assertCurrent?: () => void,
 ): Promise<IAttachment[]> {
 	if (!files || files.length === 0) return [];
@@ -15,7 +33,10 @@ export async function fileToAttachment(
 
 	for (const file of files) {
 		assertCurrent?.();
-		const url = await backend.helperState.fileToUrl(file, offline);
+		const url = await backend.helperState.fileToUrl(
+			file,
+			typeof offline === "function" ? offline(file) : offline,
+		);
 		assertCurrent?.();
 		attachments.push({
 			name: file.name,

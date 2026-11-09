@@ -31,6 +31,12 @@ pub struct TurnJob {
     pub conversation_id: String,
     pub profile_id: Option<String>,
     pub prompt: String,
+    /// A call listening cue, rendered without tools or new work.
+    pub acknowledgement: bool,
+    /// The authenticated trigger shares temporary context, excluded from memory and checkpoints.
+    pub ephemeral_user_context: bool,
+    /// Routine owner notices are delivered by the host for this background event.
+    pub suppress_owner_notifications: bool,
     pub history: Vec<UnifiedChatMessage>,
     /// New messages and events from this room, checked while the turn is running.
     pub room_updates: Option<Arc<dyn flow_like::flow::copilot::platform::RoomUpdates>>,
@@ -46,6 +52,10 @@ pub struct TurnJob {
     pub answered_round: Option<flow_like::flow::copilot::bot_talk::AnsweredRound>,
     /// The run spec the hub returned with the claim, for a runner that needs it.
     pub claim: Option<Arc<dyn Any + Send + Sync>>,
+    /// Durable, scoped execution state for a host that supports restart recovery.
+    pub recovery: Option<Arc<dyn flow_like::flow::copilot::run_recovery::BotRunRecovery>>,
+    /// The bot's notes in this conversation, when the host keeps them for it.
+    pub notes: Option<flow_like::flow::copilot::bot_notes::NotesHandle>,
 }
 
 impl TurnJob {
@@ -80,8 +90,70 @@ pub enum RunError {
 
 #[async_trait]
 pub trait TurnRunner: Send + Sync + 'static {
+    /// The optional configured decision model, shared by bounded classification tasks.
+    async fn classify(
+        &self,
+        _job: &TurnJob,
+        _request: &flow_like::flow_like_model_provider::systemone::SystemOneRequest,
+    ) -> Result<Option<flow_like::flow_like_model_provider::systemone::SystemOneResponse>, RunError>
+    {
+        Ok(None)
+    }
+    /// Optional participation classification, before the primary model or tools run.
+    async fn decide(
+        &self,
+        job: &TurnJob,
+        request: &flow_like::flow_like_model_provider::systemone::SystemOneRequest,
+    ) -> Result<flow_like::flow::copilot::decision::Decision, RunError> {
+        use flow_like::flow::copilot::decision::{self, Decision};
+        match self.classify(job, request).await? {
+            Some(response) => {
+                decision::parse(request, &response).map_err(|error| RunError::Failed {
+                    code: CODE_SETUP.into(),
+                    message: error.to_string(),
+                })
+            }
+            None => Ok(Decision::AnswerNow),
+        }
+    }
     async fn run(&self, job: TurnJob) -> Result<String, RunError>;
     fn cancel(&self, run_id: &str);
+}
+
+/// Only text and speaker identity reach the classifier, within a bounded recent window.
+pub fn participation_request(
+    job: &TurnJob,
+    trigger: &str,
+    entries: &[flow_like_local_bots::InboxEntry],
+    participants: &[flow_like::flow::copilot::decision::DecisionParticipant],
+) -> flow_like_types::Result<flow_like::flow_like_model_provider::systemone::SystemOneRequest> {
+    use flow_like::flow::copilot::decision;
+    use flow_like_types::inbox::{InboxEntryKind, is_tombstone};
+    let mut recent: Vec<_> = entries
+        .iter()
+        .rev()
+        .filter(|entry| !is_tombstone(&entry.envelope))
+        .filter_map(|entry| {
+            let text = entry.envelope.get("body")?.get("text")?.as_str()?;
+            Some(json!({"sender_id": entry.sender_id, "kind": entry.kind,
+                "text": decision::excerpt(text, 1000)}))
+        })
+        .take(12)
+        .collect();
+    recent.reverse();
+    let call = entries
+        .iter()
+        .any(|entry| entry.message_id == trigger && entry.kind == InboxEntryKind::Transcript);
+    decision::request(
+        &job.bot_id,
+        json!({
+            "prompt": decision::excerpt(&job.prompt, 4000),
+            "addressed": job.requester.as_ref().is_none_or(|requester| requester.addressed),
+            "interaction": if call { "call" } else { "chat" },
+            "recent_messages": recent,
+        }),
+        participants,
+    )
 }
 
 /// A reply the person did not ask for, to show as a notification.
@@ -119,6 +191,8 @@ pub struct TurnInfo {
     pub finished_at: Option<String>,
     pub error_code: Option<String>,
     pub reply_message_id: Option<String>,
+    /// The line the running bot shows while it works, from its notes.
+    pub status_text: Option<String>,
 }
 
 pub fn now() -> String {

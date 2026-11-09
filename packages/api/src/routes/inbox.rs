@@ -32,8 +32,8 @@ pub(crate) mod activity;
 pub(crate) mod approvals;
 pub mod blocks;
 pub mod conversations;
-pub mod delivery;
 pub mod deletion;
+pub mod delivery;
 pub mod entries;
 pub(crate) mod exchange;
 pub mod files;
@@ -45,6 +45,7 @@ pub mod links;
 pub(crate) mod mail_threads;
 pub(crate) mod marks;
 pub mod members;
+pub mod memory;
 pub mod model;
 pub(crate) mod outreach;
 pub(crate) mod person_push;
@@ -58,6 +59,9 @@ pub mod stars;
 mod targets;
 pub(crate) mod triggers;
 pub mod turns;
+mod user_context;
+#[cfg(test)]
+mod user_context_tests;
 mod view;
 
 #[cfg(test)]
@@ -99,6 +103,7 @@ pub(crate) const INBOX_DIRECT_FIXED: &str = "INBOX_DIRECT_FIXED";
 pub(crate) const INBOX_REMOVE_NOT_ALLOWED: &str = "INBOX_REMOVE_NOT_ALLOWED";
 pub(crate) const INBOX_MESSAGE_ID_TAKEN: &str = "INBOX_MESSAGE_ID_TAKEN";
 pub(crate) const INBOX_ENVELOPES_MISMATCH: &str = "INBOX_ENVELOPES_MISMATCH";
+pub(crate) const INBOX_ENCRYPTION_MISMATCH: &str = "INBOX_ENCRYPTION_MISMATCH";
 pub(crate) const INBOX_TARGET_NOT_FOUND: &str = "INBOX_TARGET_NOT_FOUND";
 pub(crate) const INBOX_NOT_YOUR_MESSAGE: &str = "INBOX_NOT_YOUR_MESSAGE";
 pub(crate) const INBOX_KEY_EXISTS: &str = "INBOX_KEY_EXISTS";
@@ -146,11 +151,17 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/conversations/{conversation_id}",
-            get(conversations::get_conversation).patch(conversations::rename_conversation).delete(deletion::delete_conversation),
+            get(conversations::get_conversation)
+                .patch(conversations::rename_conversation)
+                .delete(deletion::delete_conversation),
         )
         .route(
             "/conversations/{conversation_id}/image",
             put(image::set_conversation_image).delete(image::remove_conversation_image),
+        )
+        .route(
+            "/conversations/{conversation_id}/memory",
+            get(memory::get_memory_policy),
         )
         .route(
             "/conversations/{conversation_id}/members",
@@ -410,7 +421,7 @@ async fn member_conversation<C: ConnectionTrait>(
 }
 
 /// Active members of the conversations, in the order they joined.
-async fn active_members<C: ConnectionTrait>(
+pub(crate) async fn active_members<C: ConnectionTrait>(
     db: &C,
     conversation_ids: &[String],
 ) -> Result<Vec<conversation_member::Model>, DbErr> {

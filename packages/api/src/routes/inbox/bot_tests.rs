@@ -1,6 +1,6 @@
 use super::{
     BOT_TURN_NOT_CLAIMED, Reader,
-    conversations::{NewConversation, member_row, start_group},
+    conversations::{NewConversation, member_row, start_direct, start_group, sync_own_bot_direct},
     delivery::BotRecipient,
     entries::{SendAs, send_as, send_in},
     fixture::{
@@ -15,7 +15,7 @@ use super::{
     view::conversations_for,
     watched_inboxes,
 };
-use crate::entity::{conversation, conversation_member, inbox_entry};
+use crate::entity::{bot, conversation, conversation_member, inbox_entry};
 use axum::http::StatusCode;
 use flow_like_types::{
     bot::BotLocation,
@@ -544,4 +544,56 @@ async fn only_a_persons_new_reaction_to_a_bots_own_message_wakes_that_bot() {
         reacted(&removal).is_empty(),
         "taking a reaction back wakes nobody"
     );
+}
+
+#[tokio::test]
+async fn the_owners_direct_chat_with_a_bot_follows_its_encryption() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", "DESKTOP").await;
+    insert_bot(&db, "bot_2", "user-a", "DESKTOP").await;
+    let chat = start_direct(
+        &db,
+        "user-a",
+        &bot_principal("bot_1"),
+        ConversationEncryption::Plain,
+        at(0),
+    )
+    .await
+    .unwrap();
+    let other = start_direct(
+        &db,
+        "user-a",
+        &bot_principal("bot_2"),
+        ConversationEncryption::Plain,
+        at(0),
+    )
+    .await
+    .unwrap();
+    let encryption = |id: String| {
+        let db = db.clone();
+        async move {
+            conversation::Entity::find_by_id(id)
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap()
+                .encryption
+        }
+    };
+    let mut bot = bot::Entity::find_by_id("bot_1")
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!sync_own_bot_direct(&db, &bot).await.unwrap());
+
+    bot.capabilities = json!(["encryption"]);
+    assert!(sync_own_bot_direct(&db, &bot).await.unwrap());
+    assert_eq!(encryption(chat.clone()).await, "E2E");
+    assert_eq!(encryption(other.clone()).await, "PLAIN", "only this bot's chat");
+    assert!(!sync_own_bot_direct(&db, &bot).await.unwrap());
+
+    bot.capabilities = json!([]);
+    assert!(sync_own_bot_direct(&db, &bot).await.unwrap());
+    assert_eq!(encryption(chat).await, "PLAIN");
 }

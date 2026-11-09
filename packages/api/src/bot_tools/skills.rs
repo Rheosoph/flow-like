@@ -55,12 +55,10 @@ impl SkillJobs for ApiSkillJobs {
                 package: None,
             });
         };
-        let mut packages = crate::execution::wasm_resolve::resolve_wasm_packages(
-            &self.state,
-            &self.workspace,
-        )
-        .await
-        .unwrap_or_default();
+        let mut packages =
+            crate::execution::wasm_resolve::resolve_wasm_packages(&self.state, &self.workspace)
+                .await
+                .unwrap_or_default();
         let package = packages.remove(&package_id).ok_or_else(|| {
             format!("The package '{package_id}' is not available for this bot's workspace")
         })?;
@@ -138,7 +136,10 @@ async fn workspace_store(
         RuntimeCredentials::scoped(owner, workspace, state, CredentialsAccess::EditAppContent)
             .await
             .map_err(workspace_store_error)?;
-    credentials.to_store(false).await.map_err(workspace_store_error)
+    credentials
+        .to_store(false)
+        .await
+        .map_err(workspace_store_error)
 }
 
 fn refused(message: impl Into<String>) -> ApiError {
@@ -189,7 +190,9 @@ async fn run_import_job(
 ) -> Result<ImportedSkill, ApiError> {
     let credential = owner_credentials(state, owner, workspace)
         .await
-        .map_err(|error| ApiError::internal(format!("Scoping the workspace credential failed: {error}")))?;
+        .map_err(|error| {
+            ApiError::internal(format!("Scoping the workspace credential failed: {error}"))
+        })?;
     let job = ToolJob {
         tool: SKILL_IMPORT.to_string(),
         args: json!({ "path": path }),
@@ -205,8 +208,9 @@ async fn run_import_job(
         },
         credentials: BTreeMap::from([(
             workspace.to_string(),
-            serde_json::to_value(credential)
-                .map_err(|error| ApiError::internal(format!("Encoding the credential failed: {error}")))?,
+            serde_json::to_value(credential).map_err(|error| {
+                ApiError::internal(format!("Encoding the credential failed: {error}"))
+            })?,
         )]),
         models: JobModels::default(),
         allow_expensive_documents: false,
@@ -226,7 +230,9 @@ async fn run_import_job(
         .await
         .map_err(|message| {
             tracing::warn!(%message, bot_id, "[skills] the import job failed");
-            ApiError::bad_gateway("The executor could not read the skill zip. Nothing was imported.")
+            ApiError::bad_gateway(
+                "The executor could not read the skill zip. Nothing was imported.",
+            )
         })?;
     parse_reply(&reply.output)
 }

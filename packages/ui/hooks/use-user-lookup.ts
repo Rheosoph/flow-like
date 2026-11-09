@@ -185,6 +185,7 @@ export function useUserLookup(userId?: string | null) {
 		...userLookupQueryOptions(source, userId),
 		enabled: Boolean(userId) && local === undefined,
 		placeholderData: local ?? undefined,
+		refetchInterval: (query) => (query.state.data?.bot ? false : 30_000),
 	});
 }
 

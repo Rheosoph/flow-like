@@ -15,6 +15,7 @@ pub mod model;
 pub mod pointer;
 pub mod prompt;
 pub mod retrieval;
+pub mod spatial;
 pub mod store;
 pub mod summary;
 pub mod testing;

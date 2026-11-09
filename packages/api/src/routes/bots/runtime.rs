@@ -156,6 +156,11 @@ pub(super) async fn load_chat_bot<C: ConnectionTrait>(
             profile_app_ids,
             workspace_app_id: None,
             embedding_model: settings.embedding_model,
+            decision_model: settings.model.decision.clone(),
+            decision_hosted_only: settings.location != flow_like_types::bot::BotLocation::Desktop,
+            acknowledgement: false,
+            ephemeral_user_context: false,
+            suppress_owner_notifications: false,
             stt_model: settings.stt_model,
             tts_model: settings.tts_model,
             image_model: settings.image_model,
@@ -164,10 +169,12 @@ pub(super) async fn load_chat_bot<C: ConnectionTrait>(
             tool_host: BotToolHost::Chat,
             host_tools: Default::default(),
             skills: Vec::new(),
+            skills_ranked: false,
             requester: None,
             permissions: Default::default(),
             connectors,
             compute: Default::default(),
+            recovery: None,
         },
         model: settings.model,
     }))
@@ -243,6 +250,15 @@ async fn profile_app_ids<C: ConnectionTrait>(
     let Some(profile_id) = bot_profile_id.filter(|id| *id != request_profile.id) else {
         return Ok(request_apps());
     };
+    owner_profile_app_ids(db, owner_id, profile_id).await
+}
+
+/// The apps `profile_id` lists when it is one of `owner_id`'s live profiles; empty otherwise.
+pub(crate) async fn owner_profile_app_ids<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    profile_id: &str,
+) -> Result<BTreeSet<String>, ApiError> {
     let apps: Option<Option<Value>> = profile::Entity::find()
         .select_only()
         .column(profile::Column::Apps)
@@ -487,6 +503,7 @@ mod tests {
             settings.name = Some("Fluxy".into());
             settings.instructions = Some("Always add tests.".into());
             settings.model = BotModelPolicy {
+                decision: None,
                 primary: Some("model-a".into()),
                 fallbacks: Vec::new(),
             };
@@ -667,6 +684,7 @@ mod tests {
                 pii: true,
             };
             settings.model = BotModelPolicy {
+                decision: None,
                 primary: Some("model-a".into()),
                 fallbacks: vec!["model-b".into()],
             };

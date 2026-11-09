@@ -43,6 +43,10 @@ pub struct ConversationTurn {
     pub status: String,
     /// The message the bot is answering.
     pub trigger_message_id: String,
+    /// What the bot is doing right now, one short line it set itself; only while running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "Lesson 2 of 6")]
+    pub status_text: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -60,6 +64,7 @@ impl From<bot_turn::Model> for ConversationTurn {
             bot_id: turn.bot_id,
             status: turn.status.to_ascii_lowercase(),
             trigger_message_id: turn.trigger_message_id,
+            status_text: turn.status_text,
             created_at: turn.created_at.to_rfc3339(),
             updated_at: turn.updated_at.to_rfc3339(),
         }

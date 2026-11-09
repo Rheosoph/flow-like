@@ -14,8 +14,8 @@ use crate::outcome::ToolOutput;
 use crate::spec::{Approval, ToolSpec, schema_of};
 
 pub use reference::{
-    FileRef, ResolvedFile, guess_mime, handle_for, require_storage_read, resolve, sha256_hex,
-    workspace_of,
+    FileRef, ResolvedFile, guess_mime, handle_for, markdown_url, require_storage_read, resolve,
+    sha256_hex, workspace_of,
 };
 
 pub const FILE_LIST: &str = "file_list";
@@ -90,19 +90,19 @@ pub fn specs() -> Vec<ToolSpec> {
         ),
         spec(
             FILE_READ,
-            "Read a file as text (documents are converted; long text is paged with offset). Binary files return a handle instead. A file can be a workspace path, another app's path, a message attachment like '#12.a1' or a handle.",
+            "Read a file as text (documents are converted; long text is paged with offset). Binary files return a handle instead. A file can be a workspace path, another app's path, a message attachment like '#12.a1' or a handle. Use the returned markdown_url, when present, as the destination in [filename](markdown_url) or ![description](markdown_url) to share the file in chat.",
             false,
             schema_of::<FileReadArgs>(),
         ),
         spec(
             FILE_SAVE,
-            "Copy a file from any source into the bot's workspace and return its handle.",
+            "Copy a file from any source into the bot's workspace and return its handle. Share it in chat using [filename](markdown_url) with the returned markdown_url.",
             true,
             schema_of::<FileSaveArgs>(),
         ),
         spec(
             FILE_WRITE,
-            "Write text or base64 content to a file in the bot's workspace.",
+            "Write text or base64 content to a file in the bot's workspace. Share it in chat using [filename](markdown_url) with the returned markdown_url.",
             true,
             schema_of::<FileWriteArgs>(),
         ),
@@ -163,6 +163,7 @@ fn binary_result(
         "mime": file.mime,
         "bytes": file.bytes.len(),
         "handle": handle,
+        "markdown_url": markdown_url(&handle),
         "note": "Binary file: it cannot be shown as text. Pass the handle to a tool that reads this type.",
     }))
     .classified(file.classification);
@@ -222,6 +223,7 @@ pub async fn file_read(env: &dyn ToolEnv, args: FileReadArgs) -> ToolResult<Tool
         "next_offset": more.then_some(end),
         "text": &text[start..end],
         "handle": handle,
+        "markdown_url": markdown_url(&handle),
     }))
     .truncated(more)
     .classified(file.classification))
@@ -239,9 +241,11 @@ pub async fn file_save(env: &dyn ToolEnv, args: FileSaveArgs) -> ToolResult<Tool
             .await?;
     }
     let handle = handle_for(&workspace, &path, &file.bytes, &file.mime);
-    Ok(ToolOutput::new(json!({ "handle": handle }))
-        .saved(handle)
-        .classified(file.classification))
+    Ok(
+        ToolOutput::new(json!({ "handle": handle, "markdown_url": markdown_url(&handle) }))
+            .saved(handle)
+            .classified(file.classification),
+    )
 }
 
 pub async fn file_write(env: &dyn ToolEnv, args: FileWriteArgs) -> ToolResult<ToolOutput> {
@@ -275,5 +279,8 @@ pub async fn file_write(env: &dyn ToolEnv, args: FileWriteArgs) -> ToolResult<To
     let mime = args.mime.unwrap_or_else(|| guess_mime(&path));
     env.write_workspace(&path, bytes.clone(), &mime).await?;
     let handle = handle_for(&workspace, &path, &bytes, &mime);
-    Ok(ToolOutput::new(json!({ "handle": handle })).saved(handle))
+    Ok(
+        ToolOutput::new(json!({ "handle": handle, "markdown_url": markdown_url(&handle) }))
+            .saved(handle),
+    )
 }

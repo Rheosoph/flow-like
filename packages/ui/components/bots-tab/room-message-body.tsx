@@ -31,6 +31,7 @@ export function roomChatMessage(
 		reactorName?: (id: string) => string;
 		replyTarget?: ConversationMessage;
 		files?: IMessage["files"];
+		storageBotId?: string;
 	} = {},
 ): IMessage {
 	const text =
@@ -65,6 +66,7 @@ export function roomChatMessage(
 						messageId: target.id,
 						role: target.mine ? IRole.User : IRole.Assistant,
 						text: target.content.text,
+						...(target.userContextDerived ? { userContextDerived: true } : {}),
 					},
 				}
 			: undefined;
@@ -72,6 +74,7 @@ export function roomChatMessage(
 		id: message.id,
 		appId: GLOBAL_CHAT_APP_ID,
 		sessionId: conversationId,
+		...(options.storageBotId ? { storageBotId: options.storageBotId } : {}),
 		inner: {
 			role: message.mine ? IRole.User : IRole.Assistant,
 			content: error
@@ -86,6 +89,8 @@ export function roomChatMessage(
 						: ""),
 		},
 		...(error ? { error } : {}),
+		...(message.userContext ? { userContext: message.userContext } : {}),
+		...(message.userContextDerived ? { userContextDerived: true } : {}),
 		...(message.approval
 			? {
 					approval: {

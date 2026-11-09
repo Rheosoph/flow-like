@@ -5,11 +5,18 @@
 //! looking after. Desktop and device hosts claim through `routes/bots/turns.rs`.
 
 pub(crate) mod approvals;
+pub(crate) mod authorization;
 mod cap;
+mod decision;
+pub(crate) mod decision_wait;
+mod event_decision;
 pub(crate) mod history;
 pub(crate) mod interactive;
 pub(crate) mod ledger;
 pub(crate) mod memory;
+mod monitor_baseline;
+pub(crate) mod notes;
+pub(crate) mod recovery;
 mod room_updates;
 pub(crate) mod talk;
 pub(crate) mod task_schedules;
@@ -34,6 +41,8 @@ mod interactive_tests;
 mod ledger_tests;
 #[cfg(test)]
 mod memory_tests;
+#[cfg(test)]
+mod recovery_tests;
 #[cfg(test)]
 mod talk_tests;
 #[cfg(test)]
@@ -127,7 +136,12 @@ pub async fn recover(state: &AppState) -> Result<Recovered, ApiError> {
     if let Err(error) = tasks::fire_due(state).await {
         tracing::warn!(%error, "Bot task sweep incomplete");
     }
-    let recovered = ledger::recover_in(&state.db, now).await?;
+    let recovered = state
+        .transaction(|txn| Box::pin(async move { ledger::recover_in(txn, now).await }))
+        .await?;
+    if let Err(error) = decision_wait::cleanup(&state.db, now).await {
+        tracing::warn!(%error, "Bot participant wait cleanup failed");
+    }
     match ledger::hand_back_in(&state.db, now).await {
         Ok(handed_back) if !handed_back.is_empty() => {
             tracing::info!(

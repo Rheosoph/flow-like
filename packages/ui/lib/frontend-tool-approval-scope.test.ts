@@ -43,6 +43,25 @@ describe("StandingApprovals", () => {
 });
 
 describe("resolveFrontendToolApprovalScope", () => {
+	test("configuration changes always use a new, non-rememberable approval", () => {
+		const resolve = (requestId: string) =>
+			resolveFrontendToolApprovalScope({
+				requestId,
+				toolName: "bot_update_configuration",
+				approvalKind: "mutating",
+				approvalSessionKey: "shared-configuration",
+				arguments: { changes: { capabilities: ["internet"] } },
+			});
+		expect(resolve("change-1")).toEqual({
+			sessionKey: "bot_update_configuration:request:change-1",
+			rememberable: false,
+		});
+		expect(resolve("change-2").sessionKey).not.toBe(
+			resolve("change-1").sessionKey,
+		);
+		expect(grantScopes("bot_update_configuration", {})).toBeNull();
+		expect(grantKeys("bot_update_configuration", {})).toEqual([]);
+	});
 	test("forecast saves approve one exact request without a session waiver", () => {
 		expect(
 			resolveFrontendToolApprovalScope({

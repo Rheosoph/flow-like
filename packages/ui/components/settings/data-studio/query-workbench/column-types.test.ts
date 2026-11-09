@@ -37,6 +37,18 @@ describe("classifyColumn", () => {
 		expect(classifyColumn(column("created_by", "Binary"))).toBe("binary");
 	});
 
+	test("keeps nested Arrow values structured instead of using their element type", () => {
+		for (const type of [
+			"List(Int64)",
+			"FixedSizeList(Float32, 1536)",
+			"Struct(created_at: Timestamp(ms), enabled: Boolean)",
+			"List(Binary)",
+		]) {
+			expect(classifyColumn(column("payload", type))).toBe("json");
+			expect(isNumericTypeName(type)).toBe(false);
+		}
+	});
+
 	test("leaves text that only sounds like a person", () => {
 		expect(classifyColumn(column("username"))).toBe("text");
 		expect(classifyColumn(column("group_by"))).toBe("text");

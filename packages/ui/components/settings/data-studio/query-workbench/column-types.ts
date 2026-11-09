@@ -24,14 +24,18 @@ const NUMERIC_TYPE = /int|float|double|decimal|numeric|number|real|serial/;
 export function isNumericTypeName(typeName: string): boolean {
 	const type = typeName.toLowerCase();
 	return (
-		!/bool|date|time|timestamp|instant|duration|interval/.test(type) &&
-		NUMERIC_TYPE.test(type)
+		!/bool|date|time|timestamp|instant|duration|interval|json|struct|list|array|map|object|record/.test(
+			type,
+		) && NUMERIC_TYPE.test(type)
 	);
 }
 
 export function classifyColumn(column: QueryColumn): ColumnKind {
 	if (isGeometryMetadata(column.metadata)) return "geometry";
 	const type = column.type_name.toLowerCase();
+	// Nested Arrow types include their element types. A list of numbers remains
+	// structured data and must not be formatted as one number.
+	if (/json|struct|list|array|map|object|record/.test(type)) return "json";
 	if (/binary/.test(type)) return "binary";
 	if (/bool/.test(type)) return "boolean";
 	// A duration is a length of time and a Time32/Time64 a time of day; neither
@@ -44,7 +48,6 @@ export function classifyColumn(column: QueryColumn): ColumnKind {
 		// is all the SQL layer knows, so the name is the only remaining signal.
 		return looksLikeTemporalName(column.name) ? "temporal" : "number";
 	}
-	if (/json|struct|list|array|map|object|record/.test(type)) return "json";
 	// A `created_by` or `user_sub` column holds a person, not a string.
 	return looksLikeUserColumnName(column.name) ? "user" : "text";
 }

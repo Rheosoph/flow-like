@@ -65,15 +65,18 @@ describe("the shell with the real views", () => {
 		const { root } = await mount(fixture("small"));
 		const column = root.querySelector('aside[data-fw-region="rail"]');
 		const rail = column?.firstElementChild as HTMLElement;
-		expect(column?.className).toContain("group/rail");
 		expect(rail.dataset.fwTab).toBe("inputs");
 		expect(rail.className).toContain("flex-[0_1_auto]");
 		const dock = column?.querySelector<HTMLElement>("[data-fw-dock=rail]");
 		const fill = dock?.className.split(" ") ?? [];
 		expect(fill).toContain("bg-transparent");
 		expect(fill).not.toContain("bg-card");
-		expect(fill).toContain("group-has-[[data-fw-over]]/rail:bg-card");
-		expect(fill).toContain("group-has-[[data-fw-tab=runs]]/rail:bg-card");
+		expect(fill).toContain(
+			"[[data-fw-region=rail]:has([data-fw-over])_&]:bg-card",
+		);
+		expect(fill).toContain(
+			"[[data-fw-region=rail]:has([data-fw-tab=runs])_&]:bg-card",
+		);
 	});
 
 	test("narrow: the Inputs pane with the phone dock", async () => {

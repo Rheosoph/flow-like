@@ -13,6 +13,7 @@ import { Button } from "../../../ui/button";
 import { Label } from "../../../ui/label";
 import { Textarea } from "../../../ui/textarea";
 import { BotNotice, BotStepPanel } from "../bot-editor-parts";
+import { BotDecisionModelField } from "./decision-model-field";
 import { BotModelPicker } from "./model-picker";
 import { type BotModelOption, useBotModelOptions } from "./use-bot-models";
 
@@ -91,6 +92,7 @@ export function BrainStep({
 					exclude={model.fallbacks}
 					onChange={(primary) =>
 						onModelChange({
+							...model,
 							primary,
 							fallbacks: model.fallbacks.filter((id) => id !== primary),
 						})
@@ -105,6 +107,11 @@ export function BrainStep({
 			{location === "server" && primaryIsLocal && (
 				<BotNotice tone="warning">{t("editor.brain.localOnServer")}</BotNotice>
 			)}
+			<BotDecisionModelField
+				value={model.decision ?? null}
+				location={location}
+				onChange={(decision) => onModelChange({ ...model, decision })}
+			/>
 			{children}
 		</BotStepPanel>
 	);

@@ -12,7 +12,7 @@ public enum NativeSystemIntegration {
     @MainActor static func refreshBotStatus() {
         WidgetCenter.shared.reloadAllTimelines()
         #if os(iOS)
-        Task { await FlowBotActivities.refresh(NativeStore.shared.snapshot()) }
+        Task { await FlowBotActivities.refresh() }
         #endif
     }
 
@@ -35,8 +35,8 @@ public enum NativeSystemIntegration {
         }
         #if os(iOS)
         Task {
-            await FlowRunActivities.refresh(snapshot)
-            await FlowBotActivities.refresh(snapshot)
+            await FlowRunActivities.refresh()
+            await FlowBotActivities.refresh()
         }
         #endif
     }

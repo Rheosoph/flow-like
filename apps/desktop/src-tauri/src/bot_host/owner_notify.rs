@@ -174,7 +174,10 @@ struct Live(AppHandle);
 #[async_trait]
 impl OwnerDirectory for Live {
     async fn local_bot(&self, bot_id: &str) -> Result<Option<Bot>> {
-        let Some(bots) = self.0.try_state::<crate::functions::local_bots::LocalBots>() else {
+        let Some(bots) = self
+            .0
+            .try_state::<crate::functions::local_bots::LocalBots>()
+        else {
             return Ok(None);
         };
         let id = bot_id.to_owned();
@@ -220,10 +223,7 @@ impl OwnerDirectory for Live {
     }
 }
 
-fn owner_message_request(
-    message_id: &str,
-    text: &str,
-) -> flow_like_local_bots::SendEntryRequest {
+fn owner_message_request(message_id: &str, text: &str) -> flow_like_local_bots::SendEntryRequest {
     flow_like_local_bots::SendEntryRequest {
         message_id: message_id.to_owned(),
         kind: flow_like_types::inbox::InboxEntryKind::Message,
@@ -410,8 +410,9 @@ mod tests {
     #[tokio::test]
     async fn a_muted_local_bot_still_writes_but_shows_nothing_and_is_counted() {
         let fakes = Arc::new(Fakes::default());
-        *fakes.local.lock().unwrap() =
-            Some(local_bot(json!({ "kind": "pip", "mute_notifications": true })));
+        *fakes.local.lock().unwrap() = Some(local_bot(
+            json!({ "kind": "pip", "mute_notifications": true }),
+        ));
         let notifier = notifier(&fakes);
         let receipt = notifier.deliver(notice()).await.unwrap();
         assert!(receipt.muted && receipt.posted);
@@ -431,7 +432,10 @@ mod tests {
             [("bot_1".to_owned(), Some("mail-thread".to_owned()))]
         );
         let shown = fakes.shown.lock().unwrap().clone();
-        assert_eq!((shown[0].title.as_str(), shown[0].key.as_str()), ("Ada", "bot-notify-tool:mo-9"));
+        assert_eq!(
+            (shown[0].title.as_str(), shown[0].key.as_str()),
+            ("Ada", "bot-notify-tool:mo-9")
+        );
     }
 
     #[tokio::test]

@@ -56,11 +56,27 @@ export const sidebar = [
 		collapsed: true,
 	},
 	{
-		label: "Build Apps",
+		label: "Bots",
+		badge: { text: "New", variant: "tip" },
+		collapsed: false,
+		items: [
+			{ label: "Overview", slug: "bots/overview" },
+			{ label: "Create a Bot", slug: "bots/create" },
+			{ label: "Capabilities", slug: "bots/capabilities" },
+			{ label: "Where Bots Run", slug: "bots/hosts" },
+			{ label: "Triggers & Automation", slug: "bots/triggers" },
+			{ label: "Rooms & People", slug: "bots/rooms" },
+			{ label: "Memory & Workspace", slug: "bots/memory" },
+			{ label: "Safety & Permissions", slug: "bots/safety" },
+			{ label: "API & SDKs", slug: "bots/api" },
+		],
+	},
+	{
+		label: "Apps",
 		collapsed: true,
 		items: [
 			{
-				label: "Apps",
+				label: "Building Apps",
 				collapsed: true,
 				items: [
 					{
@@ -78,30 +94,6 @@ export const sidebar = [
 					{
 						label: "Runtime Variables",
 						slug: "apps/runtime-variables",
-					},
-					{
-						label: "Pages",
-						slug: "apps/pages",
-					},
-					{
-						label: "Routes",
-						slug: "apps/routes",
-					},
-					{
-						label: "Widgets",
-						slug: "apps/widgets",
-					},
-					{
-						label: "Chat UI",
-						slug: "apps/chat-ui",
-					},
-					{
-						label: "Custom UI (A2UI)",
-						slug: "apps/a2ui",
-					},
-					{
-						label: "Events",
-						slug: "apps/events",
 					},
 					{
 						label: "Templates",
@@ -127,9 +119,39 @@ export const sidebar = [
 						label: "Offline access",
 						slug: "apps/offline-access",
 					},
+				],
+			},
+			{
+				label: "Interfaces",
+				collapsed: true,
+				items: [
+					{
+						label: "Events",
+						slug: "apps/events",
+					},
 					{
 						label: "Release and roll back Events",
 						slug: "apps/event-releases",
+					},
+					{
+						label: "Pages",
+						slug: "apps/pages",
+					},
+					{
+						label: "Routes",
+						slug: "apps/routes",
+					},
+					{
+						label: "Widgets",
+						slug: "apps/widgets",
+					},
+					{
+						label: "Chat UI",
+						slug: "apps/chat-ui",
+					},
+					{
+						label: "Custom UI (A2UI)",
+						slug: "apps/a2ui",
 					},
 				],
 			},
@@ -184,24 +206,6 @@ export const sidebar = [
 				],
 			},
 			{
-				label: "Data Studio",
-				collapsed: true,
-				items: [
-					{
-						label: "Overview",
-						slug: "apps/data-studio",
-					},
-					{
-						label: "Ontology & Knowledge Graph",
-						slug: "topics/ontology/overview",
-					},
-					{
-						label: "Shared & Remote Ontologies",
-						slug: "topics/ontology/remote",
-					},
-				],
-			},
-			{
 				label: "Packages & Extensions",
 				collapsed: true,
 				items: [
@@ -214,6 +218,86 @@ export const sidebar = [
 						slug: "start/packages-library",
 					},
 				],
+			},
+		],
+	},
+	{
+		label: "Data",
+		collapsed: true,
+		items: [
+			{
+				label: "Data Studio",
+				slug: "apps/data-studio",
+			},
+			{
+				label: "Ontology & Knowledge Graph",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "topics/ontology/overview",
+					},
+					{
+						label: "Shared & Remote Ontologies",
+						slug: "topics/ontology/remote",
+					},
+				],
+			},
+			{
+				label: "Data Science",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "topics/datascience/overview",
+					},
+					{
+						label: "Data Loading & Storage",
+						slug: "topics/datascience/loading",
+					},
+					{
+						label: "Choosing a Lance Index",
+						slug: "topics/datascience/lance-indexes",
+					},
+					{
+						label: "DataFusion & SQL",
+						slug: "topics/datascience/datafusion",
+					},
+					{
+						label: "Data Visualization",
+						slug: "topics/datascience/visualization",
+					},
+					{
+						label: "AI-Powered Analysis",
+						slug: "topics/datascience/ai-analysis",
+					},
+				],
+			},
+			{
+				label: "Machine Learning",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview & Model Choice",
+						slug: "topics/datascience/ml",
+					},
+					{
+						label: "Advanced Configuration",
+						slug: "topics/datascience/ml-configuration",
+					},
+					{
+						label: "Auto Training",
+						slug: "topics/datascience/ml-auto-training",
+					},
+				],
+			},
+			{
+				label: "Business Intelligence",
+				slug: "topics/business-intelligence/overview",
+			},
+			{
+				label: "Data Pipelines",
+				slug: "topics/data-pipelines/overview",
 			},
 		],
 	},
@@ -271,54 +355,6 @@ export const sidebar = [
 				],
 			},
 			{
-				label: "Data Science",
-				collapsed: true,
-				items: [
-					{
-						label: "Overview",
-						slug: "topics/datascience/overview",
-					},
-					{
-						label: "Data Loading & Storage",
-						slug: "topics/datascience/loading",
-					},
-					{
-						label: "Choosing a Lance Index",
-						slug: "topics/datascience/lance-indexes",
-					},
-					{
-						label: "DataFusion & SQL",
-						slug: "topics/datascience/datafusion",
-					},
-					{
-						label: "Machine Learning",
-						collapsed: true,
-						items: [
-							{
-								label: "Overview & Model Choice",
-								slug: "topics/datascience/ml",
-							},
-							{
-								label: "Advanced Configuration",
-								slug: "topics/datascience/ml-configuration",
-							},
-							{
-								label: "Auto Training",
-								slug: "topics/datascience/ml-auto-training",
-							},
-						],
-					},
-					{
-						label: "Data Visualization",
-						slug: "topics/datascience/visualization",
-					},
-					{
-						label: "AI-Powered Analysis",
-						slug: "topics/datascience/ai-analysis",
-					},
-				],
-			},
-			{
 				label: "Internal Tools",
 				slug: "topics/internal-tools/overview",
 			},
@@ -361,14 +397,6 @@ export const sidebar = [
 			{
 				label: "Chatbots",
 				slug: "topics/chatbots/overview",
-			},
-			{
-				label: "Data Pipelines",
-				slug: "topics/data-pipelines/overview",
-			},
-			{
-				label: "Business Intelligence",
-				slug: "topics/business-intelligence/overview",
 			},
 			{
 				label: "Coming From",

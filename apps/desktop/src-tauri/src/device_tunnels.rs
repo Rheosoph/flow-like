@@ -216,8 +216,12 @@ pub(crate) async fn device_bot_take_over(
 ) -> Result<(), String> {
     main_webview(&webview)?;
     checked_device(&device_id)?;
-    playground::control(&device_id, &bot_id, flow_like_device_protocol::PlaygroundControl::TakeOver)
-        .await
+    playground::control(
+        &device_id,
+        &bot_id,
+        flow_like_device_protocol::PlaygroundControl::TakeOver,
+    )
+    .await
 }
 
 #[cfg(desktop)]
@@ -229,8 +233,12 @@ pub(crate) async fn device_bot_hand_back(
 ) -> Result<(), String> {
     main_webview(&webview)?;
     checked_device(&device_id)?;
-    playground::control(&device_id, &bot_id, flow_like_device_protocol::PlaygroundControl::HandBack)
-        .await
+    playground::control(
+        &device_id,
+        &bot_id,
+        flow_like_device_protocol::PlaygroundControl::HandBack,
+    )
+    .await
 }
 
 /// Ends the bot's browser sessions and any mouse or keyboard action in flight.
@@ -243,7 +251,12 @@ pub(crate) async fn device_bot_stop(
 ) -> Result<(), String> {
     main_webview(&webview)?;
     checked_device(&device_id)?;
-    playground::control(&device_id, &bot_id, flow_like_device_protocol::PlaygroundControl::Stop).await
+    playground::control(
+        &device_id,
+        &bot_id,
+        flow_like_device_protocol::PlaygroundControl::Stop,
+    )
+    .await
 }
 
 /// One mouse or keyboard event for a taken-over bot screen; positions are pixels of the picture

@@ -102,7 +102,8 @@ impl Seen {
 #[cfg(test)]
 pub(super) fn test_bot(appearance: Value) -> Bot {
     use chrono::{DateTime, FixedOffset};
-    let at: DateTime<FixedOffset> = DateTime::parse_from_rfc3339("2026-01-01T00:00:00+00:00").unwrap();
+    let at: DateTime<FixedOffset> =
+        DateTime::parse_from_rfc3339("2026-01-01T00:00:00+00:00").unwrap();
     Bot {
         id: "bot_1".into(),
         owner_id: flow_like_local_bots::LOCAL_OWNER_ID.into(),
@@ -141,13 +142,21 @@ mod tests {
 
     #[test]
     fn an_asked_for_reply_makes_no_alert() {
-        assert_eq!(reply_alert(&bot(json!({ "kind": "pip" })), false, "re-1", "Hi"), None);
+        assert_eq!(
+            reply_alert(&bot(json!({ "kind": "pip" })), false, "re-1", "Hi"),
+            None
+        );
     }
 
     #[test]
     fn a_proactive_reply_alerts_under_the_bots_name_and_opens_its_chat() {
-        let alert =
-            reply_alert(&bot(json!({ "kind": "pip" })), true, "re-1", "Report\nready").unwrap();
+        let alert = reply_alert(
+            &bot(json!({ "kind": "pip" })),
+            true,
+            "re-1",
+            "Report\nready",
+        )
+        .unwrap();
         assert_eq!(alert.title, "Ada");
         assert_eq!(alert.body, "Report ready");
         assert_eq!(alert.link, "/bots?bot=bot_1");

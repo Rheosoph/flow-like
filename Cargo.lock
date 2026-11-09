@@ -10802,6 +10802,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -10833,6 +10834,7 @@ dependencies = [
  "flow-like-model-provider",
  "flow-like-storage",
  "flow-like-types",
+ "geo 0.31.0",
  "regex",
  "serde",
  "serde_json",
@@ -12089,6 +12091,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",
+ "flow-like-types-contracts",
  "rand_core 0.6.4",
  "serde",
  "serde_json",
@@ -20264,7 +20267,7 @@ checksum = "3e2e65a1a2e43cfcb47a895c4c8b10d1f4a61097f9f254f183aee60cad9c651d"
 [[package]]
 name = "markitdown"
 version = "0.2.0"
-source = "git+https://github.com/Rheosoph/markitdown-rs.git?rev=0c7dc7a2c6ddd0ecacf0f2ad7c1f9c72373c4eab#0c7dc7a2c6ddd0ecacf0f2ad7c1f9c72373c4eab"
+source = "git+https://github.com/Rheosoph/markitdown-rs.git?rev=f3bd1dade3c5532fa0629b2045bae6f701eff48e#f3bd1dade3c5532fa0629b2045bae6f701eff48e"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -36155,7 +36158,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "windows 0.61.3",
- "windows-core 0.62.2",
+ "windows-core 0.61.2",
 ]
 
 [[package]]

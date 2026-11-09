@@ -437,6 +437,11 @@ pub async fn upsert_profile(
     // Custom bits are managed only through upsert_custom_bit/remove_custom_bit;
     // a client-provided profile copy must never wipe them.
     let mut profile = profile;
+    if profile.hub_profile.id == crate::native_auth::ONBOARDING_PROFILE_ID {
+        return Err(TauriFunctionError::new(
+            "This profile ID is reserved for sign-in.",
+        ));
+    }
     if let Some(icon) = profile
         .hub_profile
         .icon
@@ -603,11 +608,18 @@ pub async fn remap_profile_id(
     )
     .await?;
     if local_id != server_id {
-        crate::native_auth::invalidate_profile(&profile.hub_profile)
-            .await
-            .map_err(|error| TauriFunctionError::new(&error))?;
-        if let Some(replaced) = settings.profiles.get(&server_id) {
+        let hub = flow_like::hub::hub_origin(&profile.hub_profile.hub, profile.hub_profile.secure);
+        if let Some(replaced) = settings.profiles.get(&server_id)
+            && flow_like::hub::hub_origin(&replaced.hub_profile.hub, replaced.hub_profile.secure)
+                != hub
+        {
             crate::native_auth::invalidate_profile(&replaced.hub_profile)
+                .await
+                .map_err(|error| TauriFunctionError::new(&error))?;
+        }
+        if let Some(hub) = hub {
+            // The hub assigned this same profile a new ID. Move its login with it.
+            crate::native_auth::move_profile_session(&local_id, &server_id, &hub)
                 .await
                 .map_err(|error| TauriFunctionError::new(&error))?;
         }

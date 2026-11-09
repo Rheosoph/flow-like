@@ -16,6 +16,7 @@ use flow_like::{
 use flow_like_catalog_core::FlowPath;
 use flow_like_model_provider::{
     history::History,
+    image_generation::openrouter::{ImageCapabilities, capabilities_url, prepare_request},
     provider::{ImageGenerationModelProvider, ModelProvider},
 };
 use flow_like_types::{
@@ -1464,103 +1465,111 @@ async fn generate_huggingface(
     }])
 }
 
-fn collect_openrouter_images(value: &Value, images: &mut Vec<(String, Value)>) {
-    match value {
-        Value::Object(object) => {
-            if let Some(url) = object
-                .get("url")
-                .or_else(|| object.get("data_url"))
-                .or_else(|| value.pointer("/image_url/url"))
-                .or_else(|| value.pointer("/imageUrl/url"))
-                .and_then(Value::as_str)
-                .filter(|url| url.starts_with("data:image/") || url.starts_with("http"))
-            {
-                images.push((url.to_string(), value.clone()));
-            }
+fn openrouter_fields(
+    req: &ImageGenerationRequest,
+    options: &ImageGenerationProviderOptions,
+) -> Value {
+    let mut body = flow_like_types::json::Map::new();
+    body.insert("prompt".to_string(), json!(req.prompt));
+    body.insert("n".to_string(), json!(req.count));
+    insert_string_if_some(&mut body, "negative_prompt", req.negative_prompt.clone());
+    insert_string_if_some(&mut body, "aspect_ratio", req.aspect_ratio.clone());
+    insert_string_if_some(&mut body, "size", req.size.clone());
+    insert_string_if_some(&mut body, "quality", req.quality.clone());
+    insert_string_if_some(&mut body, "background", req.background.clone());
+    insert_u64_if_some(&mut body, "seed", req.seed);
+    // Generic requests use the model's format. Explicit node options remain explicit.
+    insert_string_if_some(
+        &mut body,
+        "output_format",
+        options.normalized().output_format,
+    );
+    merge_options(&mut body, &req.provider_options);
+    Value::Object(body)
+}
 
-            for value in object.values() {
-                collect_openrouter_images(value, images);
-            }
+fn parse_openrouter_images(value: &Value) -> flow_like_types::Result<Vec<GeneratedImage>> {
+    let data = value
+        .get("data")
+        .and_then(Value::as_array)
+        .filter(|data| !data.is_empty())
+        .ok_or_else(|| anyhow!("OpenRouter image response contained no image data"))?;
+    let mut images = Vec::with_capacity(data.len());
+    for item in data {
+        let encoded = item
+            .get("b64_json")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("OpenRouter image response contained no inline image"))?;
+        if encoded.len() > capped::MAX_IMAGE_BYTES.div_ceil(3) * 4 {
+            bail!("OpenRouter image exceeds the size limit");
         }
-        Value::Array(values) => {
-            for value in values {
-                collect_openrouter_images(value, images);
-            }
+        let bytes = STANDARD
+            .decode(encoded)
+            .map_err(|error| anyhow!("OpenRouter image contains invalid base64: {error}"))?;
+        let mime = match flow_like_types::image::guess_format(&bytes) {
+            Ok(flow_like_types::image::ImageFormat::Png) => "image/png",
+            Ok(flow_like_types::image::ImageFormat::Jpeg) => "image/jpeg",
+            Ok(flow_like_types::image::ImageFormat::WebP) => "image/webp",
+            _ => bail!("OpenRouter returned an unsupported image format"),
+        };
+        let mut metadata = item.clone();
+        if let Some(metadata) = metadata.as_object_mut() {
+            metadata.remove("b64_json");
         }
-        _ => {}
+        images.push(GeneratedImage {
+            bytes,
+            mime_type: Some(mime.to_owned()),
+            provider_metadata: metadata,
+        });
     }
+    capped::ensure_within_caps(images.iter().map(|image| image.bytes.len()))?;
+    Ok(images)
 }
 
 async fn generate_openrouter(
     client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &ImageGenerationRequest,
+    options: &ImageGenerationProviderOptions,
 ) -> flow_like_types::Result<Vec<GeneratedImage>> {
     let endpoint =
         get_param(provider, "endpoint").unwrap_or_else(|| "https://openrouter.ai/api/v1".into());
     let endpoint = normalize_base_endpoint(&endpoint, "/api/v1");
     let api_key = get_required_param(provider, "api_key")?;
-    let mut model_id = get_provider_model(provider, "google/gemini-2.5-flash-image");
-    if provider.provider_name == PROVIDER_OPENROUTER && !looks_like_image_model(&model_id) {
-        model_id = "google/gemini-2.5-flash-image".to_string();
+    let model_id = get_provider_model(provider, "google/gemini-2.5-flash-image");
+    let response = client
+        .get(&capabilities_url(&endpoint, &model_id)?)?
+        .bearer_auth(&api_key)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(reqwest::Error::without_url)?;
+    let status = response.status();
+    if !status.is_success() {
+        bail!("OpenRouter image capabilities returned HTTP {status}");
     }
-
-    let mut body = flow_like_types::json::Map::new();
-    body.insert("model".to_string(), json!(model_id));
-    body.insert(
-        "messages".to_string(),
-        json!([
-            {
-                "role": "user",
-                "content": req.prompt,
-            }
-        ]),
-    );
-    body.insert("modalities".to_string(), json!(["image", "text"]));
-    body.insert("stream".to_string(), json!(false));
-    body.insert("n".to_string(), json!(req.count));
-
-    let mut image_config = flow_like_types::json::Map::new();
-    insert_string_if_some(&mut image_config, "aspect_ratio", req.aspect_ratio.clone());
-    insert_string_if_some(&mut image_config, "image_size", req.size.clone());
-    if !image_config.is_empty() {
-        body.insert("image_config".to_string(), Value::Object(image_config));
-    }
-
-    merge_options(&mut body, &req.provider_options);
+    let bytes = capped::read_capped(response, 512 * 1024).await?;
+    let value: Value = flow_like_types::json::from_slice(&bytes)
+        .map_err(|_| anyhow!("OpenRouter image capabilities returned invalid JSON"))?;
+    let capabilities = ImageCapabilities::from_endpoints(&value)?;
+    let body = prepare_request(&model_id, openrouter_fields(req, options), &capabilities)?;
 
     let response = client
-        .post(&format!(
-            "{}/chat/completions",
-            endpoint.trim_end_matches('/')
-        ))?
+        .post(&format!("{}/images", endpoint.trim_end_matches('/')))?
         .bearer_auth(api_key)
         .header("Content-Type", "application/json")
-        .json(&Value::Object(body))
+        .timeout(std::time::Duration::from_secs(300))
+        .json(&body)
         .send()
-        .await?;
+        .await
+        .map_err(reqwest::Error::without_url)?;
     let value = read_error_response(response).await?;
-
-    let mut image_refs = Vec::new();
-    if let Some(choices) = value.get("choices").and_then(Value::as_array) {
-        for choice in choices {
-            if let Some(message) = choice.get("message") {
-                collect_openrouter_images(message, &mut image_refs);
-            }
-        }
-    }
-
-    let mut images = Vec::with_capacity(image_refs.len());
-    for (url, metadata) in image_refs {
-        images.push(image_from_url_or_data(client, &url, metadata, Some("image/png")).await?);
-    }
-
-    if images.is_empty() {
-        bail!("OpenRouter image response contained no image data");
-    }
-
-    Ok(images)
+    parse_openrouter_images(&value)
 }
+
+#[cfg(test)]
+#[path = "generation/openrouter_tests.rs"]
+mod openrouter_tests;
 
 fn mistral_mime_from_file_type(file_type: &str) -> Option<String> {
     match file_type
@@ -1803,7 +1812,11 @@ async fn generate_with_provider(
     if matches!(options, ImageGenerationProviderOptions::StableDiffusion(_)) {
         bail!("stable-diffusion.cpp image options require a stable-diffusion.cpp provider");
     }
-    let client = if provider.provider_name == PROVIDER_VERTEX {
+    let client = if provider.provider_name == PROVIDER_OPENROUTER {
+        GuardedHttpClient::configured_without_redirects(environment, |builder| {
+            builder.retry(reqwest::retry::never())
+        })?
+    } else if provider.provider_name == PROVIDER_VERTEX {
         GuardedHttpClient::without_redirects(environment)?
     } else {
         GuardedHttpClient::new(environment)?
@@ -1818,7 +1831,7 @@ async fn generate_with_provider(
         PROVIDER_XAI => generate_xai(&client, provider, req).await,
         PROVIDER_TOGETHER => generate_together(&client, provider, req).await,
         PROVIDER_HUGGINGFACE => generate_huggingface(&client, provider, req).await,
-        PROVIDER_OPENROUTER => generate_openrouter(&client, provider, req).await,
+        PROVIDER_OPENROUTER => generate_openrouter(&client, provider, req, options).await,
         PROVIDER_MISTRAL => generate_mistral(&client, provider, req).await,
         other => bail!("Unsupported image generation provider: {other}"),
     }

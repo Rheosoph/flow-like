@@ -150,6 +150,9 @@ pub(crate) async fn execute(
         super::native_tool_bridge::execution_cancellation(),
         auto_approved,
     )
+    .with_configuration(Arc::new(
+        super::bot_tools::configuration::DesktopConfiguration::new(app, runtime.clone(), host.clone()),
+    ))
     .with_scheduler(scheduler)
     .with_skills(
         super::bot_tools::skills::skills_for(
@@ -163,6 +166,15 @@ pub(crate) async fn execute(
     .with_mail(super::bot_tools::mail::mail_for(app, &runtime.context.bot_id, host.clone()).await)
     .with_people(
         super::bot_tools::people::people_for(app, &runtime.context.bot_id, host.clone()).await,
+    )
+    .with_user_context(
+        super::bot_tools::user_context::context_for(
+            app,
+            &runtime.context.bot_id,
+            options.inbox_conversation_id.as_deref(),
+            host.clone(),
+        )
+        .await,
     )
     .with_images(Arc::new(super::bot_tools::images::DesktopImages::new(
         runtime.clone(),
@@ -200,6 +212,15 @@ pub(crate) async fn execute(
         runtime.context.has(BotCapability::BrowserUse),
         runtime.context.has(BotCapability::ComputerUse),
     ));
+    let env = if runtime.context.toolset == flow_like::flow::copilot::BotToolset::FlowPilot {
+        env.with_crew(Arc::new(super::bot_tools::crew::DesktopCrew::new(
+            app,
+            runtime.clone(),
+            host.clone(),
+        )))
+    } else {
+        env
+    };
     let mut value = run_tool(env, tool, args.clone()).await?;
     host.session.assert_current_profile().await?;
     if let (Some(gate), false) = (&gate, auto_approved) {
@@ -354,6 +375,9 @@ pub(crate) struct DesktopToolEnv {
     notifier: Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>>,
     mail: Option<Arc<dyn flow_like_bot_tools::email::MailBackend>>,
     people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
+    user_context: Option<Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>>,
+    configuration: Option<Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>>,
+    crew: Option<Arc<dyn flow_like_bot_tools::crew::CrewBackend>>,
     images: Option<Arc<super::bot_tools::images::DesktopImages>>,
     connectors: Option<Arc<dyn flow_like_bot_tools::services::ConnectorSource>>,
 }
@@ -409,6 +433,9 @@ impl DesktopToolEnv {
             notifier: None,
             mail: None,
             people: None,
+            user_context: None,
+            configuration: None,
+            crew: None,
             images: None,
             connectors: None,
         }
@@ -419,6 +446,20 @@ impl DesktopToolEnv {
         connectors: Arc<dyn flow_like_bot_tools::services::ConnectorSource>,
     ) -> Self {
         self.connectors = Some(connectors);
+        self
+    }
+
+    pub(crate) fn with_configuration(
+        mut self,
+        configuration: Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>,
+    ) -> Self {
+        self.configuration = Some(configuration);
+        self
+    }
+
+    /// Flux's management of its owner's bots; other bots never get one.
+    pub(crate) fn with_crew(mut self, crew: Arc<dyn flow_like_bot_tools::crew::CrewBackend>) -> Self {
+        self.crew = Some(crew);
         self
     }
 
@@ -443,6 +484,11 @@ impl DesktopToolEnv {
         people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
     ) -> Self {
         self.people = people;
+        self
+    }
+
+    pub(crate) fn with_user_context(mut self, context: Option<Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>>) -> Self {
+        self.user_context = context;
         self
     }
 
@@ -664,6 +710,16 @@ impl ToolEnv for DesktopToolEnv {
         self.scheduler.clone()
     }
 
+    fn configuration(
+        &self,
+    ) -> Option<Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>> {
+        self.configuration.clone()
+    }
+
+    fn crew(&self) -> Option<Arc<dyn flow_like_bot_tools::crew::CrewBackend>> {
+        self.crew.clone()
+    }
+
     fn connectors(&self) -> Option<Arc<dyn flow_like_bot_tools::services::ConnectorSource>> {
         self.connectors.clone()
     }
@@ -678,6 +734,10 @@ impl ToolEnv for DesktopToolEnv {
 
     fn notifier(&self) -> Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>> {
         self.notifier.clone()
+    }
+
+    fn user_context(&self) -> Option<Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>> {
+        self.user_context.clone()
     }
 
     fn people(&self) -> Option<Arc<dyn flow_like_bot_tools::PeopleBackend>> {

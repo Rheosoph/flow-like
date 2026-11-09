@@ -166,6 +166,72 @@ impl ProfileHub {
 
 #[async_trait]
 impl TurnHub for ProfileHub {
+    fn supports_recovery(&self) -> bool {
+        true
+    }
+
+    async fn checkpoint_load(
+        &self,
+        _bot_id: &str,
+        turn_id: &str,
+        host_id: &str,
+        attempt: u32,
+    ) -> Result<Option<flow_like_types::bot_turn::BotRunCheckpoint>, HubFailure> {
+        let value = self
+            .call(
+                Method::GET,
+                &format!("bots/turns/{turn_id}/checkpoint"),
+                &[
+                    ("host_id", host_id.into()),
+                    ("attempt", attempt.to_string()),
+                ],
+                None,
+            )
+            .await?;
+        decode(value.get("checkpoint").cloned().unwrap_or(Value::Null))
+    }
+
+    async fn previous_monitor_result(
+        &self,
+        _bot_id: &str,
+        turn_id: &str,
+        host_id: &str,
+        attempt: u32,
+    ) -> Result<Option<String>, HubFailure> {
+        let value = self
+            .call(
+                Method::GET,
+                &format!("bots/turns/{turn_id}/checkpoint"),
+                &[
+                    ("host_id", host_id.into()),
+                    ("attempt", attempt.to_string()),
+                    ("monitor_baseline", "true".into()),
+                ],
+                None,
+            )
+            .await?;
+        let result: Option<String> =
+            decode(value.get("monitor_result").cloned().unwrap_or(Value::Null))?;
+        Ok(result.map(|text| text.chars().take(4_000).collect()))
+    }
+
+    async fn checkpoint_save(
+        &self,
+        _bot_id: &str,
+        turn_id: &str,
+        host_id: &str,
+        attempt: u32,
+        checkpoint: &flow_like_types::bot_turn::BotRunCheckpoint,
+    ) -> Result<(), HubFailure> {
+        self.call(
+            Method::PUT,
+            &format!("bots/turns/{turn_id}/checkpoint"),
+            &[],
+            Some(json!({"host_id": host_id, "attempt": attempt, "checkpoint": checkpoint})),
+        )
+        .await
+        .map(|_| ())
+    }
     fn with_runtime_token(&self, token: &str) -> Option<Arc<dyn TurnHub>> {
         Some(Arc::new(ProfileHub {
             app: self.app.clone(),
@@ -401,6 +467,23 @@ impl TurnHub for ProfileHub {
         .map(drop)
     }
 
+    async fn wait_for(
+        &self,
+        turn_id: &str,
+        host_id: &str,
+        participant_id: &str,
+    ) -> Result<WaitOutcome, HubFailure> {
+        let value = self
+            .call(
+                Method::POST,
+                &format!("bots/turns/{turn_id}/wait"),
+                &[],
+                Some(json!({ "host_id": host_id, "participant_id": participant_id })),
+            )
+            .await?;
+        decode(value["status"].clone())
+    }
+
     async fn park(
         &self,
         turn_id: &str,
@@ -441,6 +524,15 @@ impl TurnHub for ProfileHub {
         body: Value,
     ) -> Result<Value, HubFailure> {
         self.call(Method::PUT, path, &query, Some(body)).await
+    }
+
+    async fn patch(
+        &self,
+        path: &str,
+        query: Vec<(&'static str, String)>,
+        body: Value,
+    ) -> Result<Value, HubFailure> {
+        self.call(Method::PATCH, path, &query, Some(body)).await
     }
 
     async fn delete(

@@ -148,6 +148,8 @@ pub async fn user_info(
             user_info.avatar = Some(signed_avatar_url);
         }
 
+        user_info.additional_information =
+            flow_like_types::user_availability::public_information(user_info.additional_information);
         return Ok(Json(user_info));
     }
 

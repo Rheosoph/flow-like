@@ -13,6 +13,10 @@ import { createId } from "@paralleldrive/cuid2";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef } from "react";
 import { useAuth } from "react-oidc-context";
+import {
+	invalidateBotConfiguration,
+	invalidateBots,
+} from "../../hooks/use-bots";
 import { useFrontendRuntimeToolExecutor } from "../../hooks/use-frontend-runtime-tool-executor";
 import {
 	IAppVisibility,
@@ -76,6 +80,8 @@ import {
 	type ApprovalOwner,
 	StandingApprovals,
 	grantStoreOf,
+	proposedBotSettings,
+	requiresFreshToolApproval,
 	resolveFrontendToolApprovalScope,
 } from "../../lib/frontend-tool-approval-scope";
 import {
@@ -1453,6 +1459,10 @@ function promptForDialog(
 		destructive: dialog.override?.destructive ?? false,
 		rememberable,
 		rememberAppId: rememberable ? approvalScope.appId : undefined,
+		configurationChanges: proposedBotSettings(
+			request.toolName,
+			request.arguments,
+		),
 		toolName: request.toolName,
 		title:
 			dialog.override?.title ||
@@ -8230,15 +8240,16 @@ Completion contract: build complete helper logic first and add the Event entry l
 				const asking = askingChat(request);
 				const owner = approvalOwner(asking);
 				const needsApproval =
-					!selectAutoMode(
+					requiresFreshToolApproval(request.toolName) ||
+					(!selectAutoMode(
 						useGlobalChatStore.getState(),
 						asking.conversationId,
 					) &&
-					(approval?.kind === "mutating" || approval?.kind === "execute") &&
-					!shouldSkipUnavailableCreateTableApproval(
-						request.toolName,
-						request.arguments,
-					);
+						(approval?.kind === "mutating" || approval?.kind === "execute") &&
+						!shouldSkipUnavailableCreateTableApproval(
+							request.toolName,
+							request.arguments,
+						));
 
 				let remembered = false;
 				const contextAppId = request.context?.appId || request.context?.app_id;
@@ -8660,6 +8671,31 @@ Completion contract: build complete helper logic first and add the Event entry l
 			disposed = true;
 			stop?.();
 		};
+	}, [queryClient]);
+
+	useEffect(() => {
+		const refreshed = new Set<string>();
+		return useGlobalChatStore.subscribe((state) => {
+			for (const run of Object.values(state.runs)) {
+				for (const step of run.message?.plan_steps ?? []) {
+					if (
+						step.status !== "done" ||
+						!step.toolName ||
+						!requiresFreshToolApproval(step.toolName)
+					)
+						continue;
+					const key = `${run.runId}:${step.id}`;
+					if (refreshed.has(key)) continue;
+					refreshed.add(key);
+					if (step.toolName === "bot_update_configuration")
+						invalidateBotConfiguration(
+							queryClient,
+							conversationBotId(run.conversationId),
+						);
+					else invalidateBots(queryClient);
+				}
+			}
+		});
 	}, [queryClient]);
 
 	useEffect(() => {

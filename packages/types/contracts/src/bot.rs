@@ -59,6 +59,8 @@ pub enum BotCapability {
     Encryption,
     /// A webhook that wakes the bot.
     Webhook,
+    /// Requests current context from a person who chooses what to share in this conversation.
+    UserContext,
     /// FlowPilot's complete toolset: builds, edits and debugs apps and flows, FlowScript
     /// included. Flux holds it, and so do duplicates of a bot that holds it; no other bot gets it.
     Flowpilot,
@@ -66,7 +68,7 @@ pub enum BotCapability {
 
 impl BotCapability {
     /// Every capability, in the order the settings list them.
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 26] = [
         Self::Internet,
         Self::WebRequests,
         Self::ProfileApps,
@@ -91,6 +93,7 @@ impl BotCapability {
         Self::CommandLine,
         Self::Encryption,
         Self::Webhook,
+        Self::UserContext,
         Self::Flowpilot,
     ];
 
@@ -120,6 +123,7 @@ impl BotCapability {
             Self::CommandLine => "command_line",
             Self::Encryption => "encryption",
             Self::Webhook => "webhook",
+            Self::UserContext => "user_context",
             Self::Flowpilot => "flowpilot",
         }
     }
@@ -242,6 +246,9 @@ pub struct BotModelPolicy {
     pub primary: Option<String>,
     /// Bit ids to try, in order, where the primary is unavailable.
     pub fallbacks: Vec<String>,
+    /// System One Bit for response decisions; absent disables decision routing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
 }
 
 #[cfg(test)]
@@ -279,6 +286,7 @@ mod tests {
                 "command_line",
                 "encryption",
                 "webhook",
+                "user_context",
                 "flowpilot",
             ]
         );
@@ -441,6 +449,7 @@ mod tests {
             json!({ "primary": null, "fallbacks": [] })
         );
         let policy = BotModelPolicy {
+            decision: None,
             primary: Some("model-a".into()),
             fallbacks: vec!["model-b".into(), "model-c".into()],
         };
@@ -452,6 +461,16 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<BotModelPolicy>(wire).unwrap(),
             policy
+        );
+        let enabled = BotModelPolicy {
+            decision: Some("decision-bit".into()),
+            ..policy
+        };
+        let wire = serde_json::to_value(&enabled).unwrap();
+        assert_eq!(wire["decision"], "decision-bit");
+        assert_eq!(
+            serde_json::from_value::<BotModelPolicy>(wire).unwrap(),
+            enabled
         );
     }
 }

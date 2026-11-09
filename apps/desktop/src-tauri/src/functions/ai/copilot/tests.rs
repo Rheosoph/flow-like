@@ -456,8 +456,8 @@ fn seed_failed_rich_candidate(state: &Arc<StdMutex<WorkflowToolLoopState>>) {
 // 1x1 transparent PNG — enough for arg/stdin plumbing assertions (real
 // snapshots must be larger for the model to perceive them).
 fn test_chat_image() -> ChatImage {
-    ChatImage {
-            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_string(),
-            media_type: "image/png".to_string(),
-        }
+    ChatImage::inline(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_string(),
+        "image/png".to_string(),
+    )
 }

@@ -3,7 +3,7 @@
 //! core bot run. Models are reached through the hub with the turn's executor token.
 
 use super::{
-    backends::{BotRoutes, HubMail, HubNotifier, HubPeople, HubScheduler},
+    backends::{BotRoutes, HubMail, HubNotifier, HubPeople, HubScheduler, HubUserContext},
     env::{DeviceToolEnv, HubSecrets, MachineBackends, Machines, PresignedAccess},
     hub::{DeviceRunSpec, TurnCreds},
 };
@@ -45,7 +45,16 @@ use tokio::sync::Notify;
 pub const CODE_RUN_FAILED: &str = "BOT_TURN_FAILED";
 pub const CODE_SETUP: &str = "BOT_TURN_SETUP";
 
-const TOOLS_NEEDING_UNLINKED_SERVICES: [&str; 6] = [
+const TOOLS_NEEDING_UNLINKED_SERVICES: [&str; 13] = [
+    // Device runtime tokens have no endpoint for an approved settings change or for managing
+    // the owner's bots.
+    "bot_configuration",
+    "bot_models",
+    "bot_update_configuration",
+    "list_bots",
+    "get_bot",
+    "create_bot",
+    "update_bot",
     "skill_load",
     "skill_propose",
     "connector_tools",
@@ -83,7 +92,62 @@ fn bit_of(value: &serde_json::Value, role: &str) -> Result<Bit, RunError> {
         .map_err(|error| setup(format!("The hub sent an unreadable {role} model: {error}")))
 }
 
+async fn saved_reply(
+    recovery: Option<&Arc<dyn flow_like::flow::copilot::run_recovery::BotRunRecovery>>,
+    delivery_only: bool,
+) -> Result<Option<String>, RunError> {
+    let answer = match recovery {
+        Some(recovery) => recovery
+            .load()
+            .await
+            .map_err(|error| setup(error.to_string()))?
+            .as_ref()
+            .map(flow_like::flow::copilot::run_recovery::finished_reply)
+            .transpose()
+            .map_err(|error| setup(error.to_string()))?
+            .flatten(),
+        None => None,
+    };
+    if delivery_only && answer.is_none() {
+        return Err(setup(
+            "The completed checkpoint required by this delivery claim is unavailable",
+        ));
+    }
+    Ok(answer)
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    use flow_like::flow::copilot::run_recovery::BotRunRecovery;
+    use flow_like_types::bot_turn::BotRunCheckpoint;
+
+    #[derive(Debug)]
+    struct EmptyRecovery;
+
+    #[async_trait]
+    impl BotRunRecovery for EmptyRecovery {
+        async fn load(&self) -> flow_like_types::Result<Option<BotRunCheckpoint>> {
+            Ok(None)
+        }
+        async fn save(&self, _: &BotRunCheckpoint) -> flow_like_types::Result<()> {
+            panic!("Delivery must never create new execution state")
+        }
+    }
+
+    #[tokio::test]
+    async fn delivery_claims_require_a_finished_checkpoint_before_execution() {
+        assert!(saved_reply(None, true).await.is_err());
+        let empty: Arc<dyn BotRunRecovery> = Arc::new(EmptyRecovery);
+        assert!(saved_reply(Some(&empty), true).await.is_err());
+        assert_eq!(saved_reply(Some(&empty), false).await.unwrap(), None);
+    }
+}
+
 fn profile_of(grant: &DeviceTurnGrant) -> Result<(Profile, Bit, Option<Bit>), RunError> {
+    if grant.delivery_only {
+        return Err(setup("This claim only permits publishing its saved answer"));
+    }
     let completion = bit_of(&grant.models.completion, "completion")?;
     let embedding = grant
         .models
@@ -96,6 +160,21 @@ fn profile_of(grant: &DeviceTurnGrant) -> Result<(Profile, Bit, Option<Bit>), Ru
         bits.push(bit_of(fallback, "fallback")?);
     }
     bits.extend(embedding.clone());
+    bits.extend(
+        grant
+            .models
+            .decision
+            .as_ref()
+            .and_then(|value| bit_of(value, "decision").ok())
+            .filter(|bit| {
+                bit.try_to_systemone().is_some_and(|parameters| {
+                    parameters.context_length > 0
+                        && flow_like::flow_like_model_provider::provider::is_hosted_provider_name(
+                            &parameters.provider.provider_name,
+                        )
+                })
+            }),
+    );
     let profile = Profile {
         name: grant.bot.name.clone(),
         bits: bits.iter().map(|bit| bit.id.clone()).collect(),
@@ -182,6 +261,14 @@ fn context_of(grant: &DeviceTurnGrant, job: &TurnJob, tools: HostTools) -> BotRu
         profile_app_ids: spec.profile_app_ids.clone(),
         workspace_app_id: spec.workspace_app_id.clone(),
         embedding_model: spec.embedding_model.clone(),
+        decision_model: grant
+            .models
+            .decision
+            .as_ref()
+            .and_then(|value| value.get("id"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        decision_hosted_only: true,
         stt_model: spec.stt_model.clone(),
         tts_model: spec.tts_model.clone(),
         image_model: spec.image_model.clone(),
@@ -190,10 +277,15 @@ fn context_of(grant: &DeviceTurnGrant, job: &TurnJob, tools: HostTools) -> BotRu
         tool_host: BotToolHost::CoreOnly,
         host_tools: tools,
         skills: spec.skills.clone(),
+        skills_ranked: false,
         requester,
+        acknowledgement: job.acknowledgement,
+        ephemeral_user_context: job.ephemeral_user_context,
+        suppress_owner_notifications: job.suppress_owner_notifications,
         permissions: Default::default(),
         connectors: spec.connectors.clone(),
         compute: Default::default(),
+        recovery: job.recovery.clone().map(Into::into),
     }
 }
 
@@ -253,6 +345,7 @@ impl DeviceRunner {
             .bot
             .workspace_app_id
             .clone()
+            .or_else(|| grant.bot.capabilities.contains(&BotCapability::UserContext).then(String::new))
             .ok_or_else(|| setup("The bot has no workspace app yet"))?;
         let models = Arc::new(StateModels {
             state: self.state.clone(),
@@ -260,7 +353,7 @@ impl DeviceRunner {
             embedding: embedding.clone(),
             token: creds.executor_token(),
             usage: ModelUsageContext {
-                app_id: Some(workspace.clone()),
+                app_id: (!workspace.is_empty()).then(|| workspace.clone()),
                 run_id: Some(grant.turn.id.clone()),
                 api_base_url: None,
             },
@@ -284,6 +377,7 @@ impl DeviceRunner {
                 .with_notifier(Arc::new(HubNotifier(routes.clone())))
                 .with_scheduler(Arc::new(HubScheduler(routes.clone())))
                 .with_people(Arc::new(HubPeople(routes.clone())))
+                .with_user_context(Arc::new(HubUserContext(routes.clone())))
                 .with_mail(Arc::new(HubMail(routes.clone())));
             Arc::new(DeviceToolEnv::new(env, machine.clone()))
         }))
@@ -322,11 +416,78 @@ fn history_of(job: &TurnJob) -> Vec<ChatMessage> {
 
 #[async_trait]
 impl TurnRunner for DeviceRunner {
-    async fn run(&self, job: TurnJob) -> Result<String, RunError> {
+    async fn classify(
+        &self,
+        job: &TurnJob,
+        request: &flow_like::flow_like_model_provider::systemone::SystemOneRequest,
+    ) -> Result<Option<flow_like::flow_like_model_provider::systemone::SystemOneResponse>, RunError>
+    {
+        use flow_like::flow::copilot::decision;
+        let spec = job
+            .claim_as::<DeviceRunSpec>()
+            .ok_or_else(|| setup("The claim carried no device run spec"))?;
+        if spec.grant.delivery_only {
+            return Ok(None);
+        }
+        let Some(value) = &spec.grant.models.decision else {
+            return Ok(None);
+        };
+        let bit = bit_of(value, "decision")?;
+        let parameters = bit
+            .try_to_systemone()
+            .ok_or_else(|| setup("Expected a SystemOne decision model"))?;
+        if !flow_like::flow_like_model_provider::provider::is_hosted_provider_name(
+            &parameters.provider.provider_name,
+        ) {
+            return Err(setup(
+                "Device bot decision models must use the hosted proxy",
+            ));
+        }
+        let mut request = request.clone();
+        request.state["context"]["bot_name"] = serde_json::json!(spec.grant.bot.name);
+        request.state["context"]["instructions"] = serde_json::json!(decision::excerpt(
+            spec.grant.bot.instructions.as_deref().unwrap_or_default(),
+            2_000,
+        ));
+        let model = self
+            .state
+            .model_factory
+            .build_systemone(
+                &bit,
+                self.state.clone(),
+                spec.creds.executor_token(),
+                Some(ModelUsageContext {
+                    app_id: spec.grant.bot.workspace_app_id.clone(),
+                    run_id: Some(job.run_id.clone()),
+                    api_base_url: Some(self.base_url.clone()),
+                }),
+            )
+            .await
+            .map_err(|error| setup(error.to_string()))?;
+        let response = model
+            .invoke(&request)
+            .await
+            .map_err(|error| setup(error.to_string()))?;
+        response
+            .validate_for(&request)
+            .map_err(|error| setup(error.to_string()))?;
+        Ok(Some(response))
+    }
+
+    async fn run(&self, mut job: TurnJob) -> Result<String, RunError> {
         let spec = job
             .claim_as::<DeviceRunSpec>()
             .ok_or_else(|| setup("The claim carried no device run spec"))?;
         let grant = &spec.grant;
+        job.recovery = job.recovery.map(|recovery| {
+            Arc::new(flow_like_bot_host::recovery::CappedRecovery::new(
+                recovery,
+                grant.deadline.saturating_mul(1000),
+            )) as Arc<dyn flow_like::flow::copilot::run_recovery::BotRunRecovery>
+        });
+        if let Some(answer) = saved_reply(job.recovery.as_ref(), grant.delivery_only).await? {
+            return Ok(answer);
+        }
         let (profile, completion, embedding) = profile_of(grant)?;
         let profile = Arc::new(profile);
         let machine = self.machine_for(grant);
@@ -456,6 +617,9 @@ impl DeviceRunner {
         token: &Option<String>,
         mutating: &Arc<AtomicBool>,
     ) -> Option<flow_like::flow::copilot::HeadlessMemory> {
+        if !context.remembers() {
+            return None;
+        }
         let source = job.memory.clone()?.0;
         let app_id = context.workspace_app_id.clone()?;
         let connection = flow_like_bot_tools_host::AppAccess::connection(access.as_ref(), &app_id)

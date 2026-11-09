@@ -1,5 +1,6 @@
-import { User, UserManager, type StateStore } from "oidc-client-ts";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { coordinateOidcRenewal } from "@flow-like/flow-like-ui/lib/auth/oidc-renewal";
+import { type StateStore, User, UserManager } from "oidc-client-ts";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({
@@ -101,7 +102,66 @@ beforeEach(() => {
 	store.bind(manager);
 });
 
+afterEach(async () => {
+	manager.stopSilentRenew();
+	await manager.events.unload();
+	vi.useRealTimers();
+});
+
 describe("native login grant ownership", () => {
+	test("a failed automatic renewal does not rearm itself through session reads", async () => {
+		vi.useFakeTimers();
+		const user = User.fromStorageString(serializedUser);
+		user.expires_at = Math.floor(Date.now() / 1000) + 30;
+		saved = {
+			generation: "signed-in",
+			initialized: true,
+			user: user.toStorageString(),
+			authority: settings.authority,
+			clientId: settings.client_id,
+		};
+		const nativeCommand = mocks.invoke.getMockImplementation();
+		if (!nativeCommand) throw new Error("Native command mock is missing");
+		mocks.invoke.mockImplementation(async (command, args) => {
+			if (command === "native_auth_refresh") {
+				throw new Error("Authentication service is unavailable");
+			}
+			return nativeCommand(command, args);
+		});
+		coordinateOidcRenewal(manager);
+		manager.startSilentRenew();
+		await manager.getUser();
+		const refreshes = () =>
+			mocks.invoke.mock.calls.filter(
+				([command]) => command === "native_auth_refresh",
+			);
+
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(refreshes()).toHaveLength(1);
+		await manager.getUser();
+		await vi.advanceTimersByTimeAsync(10_000);
+		expect(refreshes()).toHaveLength(1);
+		expect((await manager.getUser())?.access_token).toBe("first");
+
+		// A replacement session still schedules renewal at its own expiry.
+		user.access_token = "replacement";
+		user.expires_at = Math.floor(Date.now() / 1000) + 120;
+		saved.user = user.toStorageString();
+		expect((await manager.getUser())?.access_token).toBe("replacement");
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(refreshes()).toHaveLength(2);
+	});
+
+	test("explicit session reloads still publish the unchanged signed-in user", async () => {
+		const loaded = vi.fn();
+		manager.events.addUserLoaded(loaded);
+		await manager.getUser();
+		await manager.getUser();
+		expect(loaded).not.toHaveBeenCalled();
+		const user = await manager.getUser(true);
+		expect(loaded).toHaveBeenCalledExactlyOnceWith(user);
+	});
+
 	test("concurrent startup migrates once and erases browser credentials after commit", async () => {
 		const users = await Promise.all([store.get("user"), store.get("user")]);
 		expect(users).toEqual([publicSnapshot().user, publicSnapshot().user]);
@@ -156,7 +216,9 @@ describe("native login grant ownership", () => {
 		const user = await manager.signinSilent();
 		expect(user?.access_token).toBe("renewed");
 		expect(user?.refresh_token).toBeUndefined();
-		expect(User.fromStorageString(saved.user!).refresh_token).toBe("refresh-rotated");
+		expect(User.fromStorageString(saved.user!).refresh_token).toBe(
+			"refresh-rotated",
+		);
 		expect(loaded).toHaveBeenCalledWith(user);
 		expect(mocks.invoke).toHaveBeenCalledWith("native_auth_refresh", {
 			profileId: "profile",

@@ -1,0 +1,52 @@
+.bd-host-facts {
+	display: grid;
+	gap: 0.7rem;
+	margin: 0;
+}
+
+.bd-host-facts > div {
+	padding-bottom: 0.7rem;
+	border-bottom: 1px solid var(--bd-line);
+}
+
+.bd-host-facts > div:last-child {
+	padding-bottom: 0;
+	border-bottom: 0;
+}
+
+.bd-host-facts dt {
+	color: var(--bd-muted);
+	font-size: 0.72rem;
+	font-weight: 650;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+.bd-host-facts dd {
+	margin: 0.15rem 0 0;
+	font-size: 0.85rem;
+}
+
+.bd-host-toggles {
+	display: grid;
+	gap: 0.35rem;
+	margin-top: 0.6rem;
+}
+
+.bd-host-toggle {
+	align-items: center;
+	padding: 0.35rem 0.55rem;
+}
+
+.bd-host-toggle input {
+	margin: 0;
+}
+
+.bd-host-message {
+	margin-top: 0.75rem;
+	padding: 0.6rem 0.75rem;
+	border: 1px solid color-mix(in oklab, var(--bd-warn) 40%, transparent);
+	border-radius: 9px;
+	background: var(--bd-warn-soft);
+	font-size: 0.8rem;
+}

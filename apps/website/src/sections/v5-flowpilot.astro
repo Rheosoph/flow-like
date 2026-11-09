@@ -1,91 +1,114 @@
 ---
-import FlowPilotUseCaseLoader from "../components/showcase/flowpilot-usecase-loader";
-import type { Lang, TranslationKey } from "../i18n";
-import { defaultLang, translations } from "../i18n";
+import { BotAvatar } from "@flow-like/flow-like-ui/components/bots/bot-avatar";
+import BotCrewShowcase, { type BotCrewCopy } from "../components/v5/bot-crew-showcase";
+import type { Lang } from "../i18n";
+import { defaultLang, useTranslations } from "../i18n";
 
 interface Props { lang?: Lang; }
 const { lang = defaultLang } = Astro.props;
-const t = (key: TranslationKey): string => {
-  const localized = translations[lang] as Record<string, string>;
-  const english = translations.en as Record<string, string>;
-  return localized?.[key] ?? english[key] ?? key;
+const t = useTranslations(lang);
+const crewCopy = (prefix: string): BotCrewCopy["roles"] => [
+  t(`${prefix}.scout`),
+  t(`${prefix}.byte`),
+  t(`${prefix}.flux`),
+  t(`${prefix}.post`),
+  t(`${prefix}.loop`),
+];
+const copy: BotCrewCopy = {
+  label: t("v5.bots.demo.label"),
+  title: t("v5.bots.demo.title"),
+  hint: t("v5.bots.demo.hint"),
+  pause: t("v5.bots.demo.pause"),
+  resume: t("v5.bots.demo.resume"),
+  statusWorking: t("v5.bots.demo.working"),
+  statusDone: t("v5.bots.demo.done"),
+  resultLabel: t("v5.bots.demo.result"),
+  roles: crewCopy("v5.bots.role"),
+  missions: ["research", "data", "build"].map((mission) => ({
+    label: t(`v5.bots.mission.${mission}.label`),
+    prompt: t(`v5.bots.mission.${mission}.prompt`),
+    result: t(`v5.bots.mission.${mission}.result`),
+    tasks: crewCopy(`v5.bots.mission.${mission}`),
+  })),
 };
+const download = lang === "en" ? "/download" : `/${lang}/download`;
 ---
 
-<section id="flowpilot" class="dark v5-flowpilot pilot-section" style="color-scheme:dark">
-  <div class="aura" aria-hidden="true"></div>
+<section id="flowpilot" class="dark v5-flowpilot pilot-section" style="color-scheme:dark" aria-labelledby="crew-heading">
+  <div class="pilot-aura" aria-hidden="true"></div>
   <div class="pilot-heading">
-    <span class="eyebrow">03 / FLOWPILOT</span>
-    <h2>{t("v5.flowpilot.title.l1")}<br /><em>{t("v5.flowpilot.title.em")}</em><br />{t("v5.flowpilot.title.l3")}</h2>
-    <p>{t("v5.flowpilot.body")}</p>
+    <div>
+      <span class="eyebrow">03 / {t("v5.bots.eyebrow")}</span>
+      <h2 id="crew-heading">{t("v5.flowpilot.title.l1")}<br /><em>{t("v5.flowpilot.title.em")}</em></h2>
+    </div>
+    <div class="pilot-intro">
+      <p>{t("v5.flowpilot.body")}</p>
+      <a class="crew-cta" href={download}>{t("v5.bots.cta")} <span aria-hidden="true">↗</span></a>
+    </div>
   </div>
-  <div class="pilot-stage">
-    <div class="pilot-fallback" aria-label="FlowPilot interactive preview loading">
-      <header class="fallback-bar">
-        <span class="fallback-orb" aria-hidden="true"></span>
-        <strong>FlowPilot</strong>
-        <span class="fallback-badge">Supplier Ops · governed</span>
-      </header>
-      <div class="fallback-thread">
-        <div class="fallback-message fallback-user">
-          <p>Resolve the supplier delay without impacting next week's production. Details attached.</p>
-          <span class="fallback-file"><b>PDF</b> supplier-delay-notice.pdf</span>
-        </div>
-        <div class="fallback-message fallback-agent">
-          <small>FlowPilot</small>
-          <p>Reading the delay notice and checking the affected purchase orders.</p>
-          <span class="fallback-progress"><i></i><i></i><i></i></span>
-        </div>
+
+  <BotCrewShowcase client:visible copy={copy} />
+
+  <div class="pilot-details">
+    <div class="flux-intro">
+      <div class="flux-portrait" aria-hidden="true">
+        <BotAvatar appearance={{ kind: "flux", backdrop: "none" }} pose="happy" size={112} animated={false} decorative />
       </div>
-      <div class="fallback-composer">
-        <span>Ask FlowPilot...</span>
-        <b aria-hidden="true">↑</b>
+      <div>
+        <span class="eyebrow">{t("v5.bots.flux.label")}</span>
+        <h3>{t("v5.bots.flux.title")}</h3>
+        <p>{t("v5.bots.flux.body")}</p>
+        <a class="pilot-link" href="https://docs.flow-like.com/studio/flowpilot/">{t("v5.bots.flux.link")} <span aria-hidden="true">↗</span></a>
       </div>
     </div>
-    <FlowPilotUseCaseLoader client:only="react" className="h-[32rem]" />
+    <div class="crew-ownership">
+      <span class="ownership-symbol" aria-hidden="true">✳</span>
+      <h3>{t("v5.bots.own.title")}</h3>
+      <p>{t("v5.bots.own.body")}</p>
+      <small>{t("v5.bots.own.note")}</small>
+    </div>
   </div>
 </section>
 
 <style>
-  .eyebrow { font: 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .16em; color: var(--muted-foreground); }
-
-  .pilot-section { position: relative; min-height: 100vh; display: grid; grid-template-columns: .8fr 1.2fr; gap: clamp(60px, 8vw, 154px); align-items: center; overflow: hidden; padding: 140px var(--website-content-edge); border-top: 1px solid var(--border); background: var(--background); color: var(--foreground); }
-  .aura { position: absolute; top: 0; left: -25%; width: 800px; height: 800px; border-radius: 50%; background: radial-gradient(circle, color-mix(in oklab, var(--primary) 25%, transparent), transparent 65%); filter: blur(20px); }
-  .pilot-heading { position: relative; z-index: 2; }
-  .pilot-heading h2 { margin: 24px 0 35px; font-size: clamp(52px, 6vw, 92px); line-height: .92; letter-spacing: -.065em; }
-  .pilot-heading h2 em { color: var(--muted-foreground); font-style: normal; font-weight: 400; }
-  .pilot-heading > p { max-width: 470px; color: var(--muted-foreground); font-size: 15px; line-height: 1.65; }
-
-  .pilot-stage { position: relative; z-index: 2; min-width: 0; min-height: 32rem; }
-  .pilot-stage :global(astro-island) { position: absolute; inset: 0; display: block; opacity: 0; transition: opacity .2s ease; }
-  .pilot-stage.flowpilot-ready :global(astro-island) { opacity: 1; }
-
-  .pilot-fallback { height: 32rem; display: flex; flex-direction: column; overflow: hidden; border: 1px solid color-mix(in oklab, var(--primary) 20%, var(--border)); border-radius: 12px; background: color-mix(in oklab, var(--background) 95%, transparent); box-shadow: 0 24px 70px rgb(0 0 0 / 40%); transition: opacity .2s ease; }
-  .pilot-stage.flowpilot-ready .pilot-fallback { opacity: 0; visibility: hidden; }
-  .fallback-bar { display: flex; align-items: center; gap: 9px; min-height: 48px; padding: 7px 12px; border-bottom: 1px solid var(--border); background: color-mix(in oklab, var(--muted) 40%, transparent); font-size: 12px; }
-  .fallback-orb { width: 31px; height: 31px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #fff8, transparent 22%), conic-gradient(from 30deg, #f05b3f, #f6a53a, #ef3e57, #8b5cf6, #f05b3f); box-shadow: 0 0 20px color-mix(in oklab, var(--primary) 35%, transparent); }
-  .fallback-badge { margin-left: auto; padding: 3px 8px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted-foreground); font: 9px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .fallback-thread { flex: 1; display: flex; flex-direction: column; gap: 18px; padding: 22px 16px; }
-  .fallback-message { max-width: 82%; padding: 11px 13px; border-radius: 12px; color: var(--foreground); font-size: 12px; line-height: 1.55; }
-  .fallback-message p { margin: 0; }
-  .fallback-user { align-self: flex-end; border: 1px solid color-mix(in oklab, var(--primary) 26%, var(--border)); background: color-mix(in oklab, var(--primary) 10%, var(--muted)); }
-  .fallback-agent { align-self: flex-start; border: 1px solid var(--border); background: color-mix(in oklab, var(--muted) 42%, transparent); }
-  .fallback-agent small { display: block; margin-bottom: 5px; color: var(--muted-foreground); font-size: 9px; text-transform: uppercase; letter-spacing: .12em; }
-  .fallback-file { display: flex; align-items: center; gap: 7px; margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--border); color: var(--muted-foreground); font-size: 10px; }
-  .fallback-file b { padding: 2px 4px; border-radius: 3px; background: color-mix(in oklab, var(--primary) 16%, transparent); color: var(--primary); font: 8px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .fallback-progress { display: flex; gap: 4px; margin-top: 10px; }
-  .fallback-progress i { width: 5px; height: 5px; border-radius: 50%; background: var(--primary); opacity: .55; }
-  .fallback-progress i:nth-child(2) { opacity: .35; }
-  .fallback-progress i:nth-child(3) { opacity: .2; }
-  .fallback-composer { min-height: 62px; margin: 0 10px 10px; padding: 10px 11px; display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in oklab, var(--background) 85%, var(--muted)); color: var(--muted-foreground); font-size: 11px; }
-  .fallback-composer b { margin-left: auto; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; background: var(--primary); color: var(--primary-foreground); font-size: 15px; }
-
-  @media (max-width: 1050px) {
-    .pilot-section { grid-template-columns: 1fr; gap: 60px; }
-    .pilot-stage { max-width: 760px; width: 100%; justify-self: center; }
+  .pilot-section { position: relative; isolation: isolate; padding: 130px var(--website-content-edge) 110px; border-top: 1px solid var(--border); background: var(--background); color: var(--foreground); }
+  .pilot-aura { position: absolute; z-index: -1; inset: 0; overflow: hidden; pointer-events: none; background: radial-gradient(ellipse at 76% 28%, color-mix(in oklab, var(--primary) 9%, transparent), transparent 55%); }
+  .eyebrow { font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .13em; color: var(--muted-foreground); }
+  .pilot-heading { display: grid; grid-template-columns: 1.5fr 1fr; align-items: end; gap: 60px; margin-bottom: 54px; }
+  .pilot-heading h2 { margin: 24px 0 0; font-size: clamp(42px, 4.7vw, 76px); line-height: 1.04; letter-spacing: -.055em; text-wrap: balance; }
+  .pilot-heading h2 em { font-style: normal; color: var(--accent); }
+  .pilot-intro { max-width: 420px; justify-self: end; padding-bottom: 4px; }
+  .pilot-intro p { margin: 0 0 24px; color: var(--muted-foreground); font-size: 15px; line-height: 1.75; }
+  .crew-cta { display: inline-flex; align-items: center; justify-content: space-between; gap: 28px; min-height: 46px; padding: 12px 18px; border: 1px solid color-mix(in oklab, var(--primary) 60%, var(--border)); border-radius: 9px; background: var(--primary); color: var(--primary-foreground); font-size: 13px; font-weight: 650; text-decoration: none; transition: background .2s ease, transform .2s ease; }
+  .crew-cta:hover { background: color-mix(in oklab, var(--primary) 85%, white); transform: translateY(-2px); }
+  .pilot-section a:focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; }
+  .pilot-details { display: grid; grid-template-columns: 1.55fr 1fr; gap: 60px; margin-top: 48px; padding-top: 40px; border-top: 1px solid var(--border); }
+  .flux-intro { display: flex; gap: 22px; align-items: flex-start; }
+  .flux-portrait { flex: 0 0 112px; margin-top: 8px; border-radius: 50%; background: radial-gradient(circle, color-mix(in oklab, var(--primary) 16%, transparent), transparent 72%); }
+  .flux-intro h3, .crew-ownership h3 { margin: 12px 0; font-size: clamp(23px, 2.2vw, 32px); line-height: 1.2; letter-spacing: -.035em; text-wrap: balance; }
+  .pilot-details p { margin: 0; max-width: 540px; color: var(--muted-foreground); font-size: 14px; line-height: 1.75; }
+  .pilot-link { display: inline-flex; align-items: center; gap: 14px; margin-top: 20px; color: var(--foreground); font-size: 12px; text-decoration: underline; text-underline-offset: 5px; text-decoration-color: var(--border); }
+  .pilot-link:hover { color: var(--accent); }
+  .crew-ownership { padding-left: 40px; border-left: 1px solid var(--border); }
+  .ownership-symbol { color: var(--accent); font-size: 24px; line-height: 1; }
+  .crew-ownership small { display: block; margin-top: 14px; color: var(--muted-foreground); font-size: 11px; line-height: 1.6; }
+  @media (max-width: 1100px) {
+    .pilot-heading { grid-template-columns: 1.3fr 1fr; gap: 32px; }
+    .pilot-details { gap: 32px; }
+    .flux-intro { gap: 16px; }
+    .flux-portrait { display: none; }
+    .crew-ownership { padding-left: 28px; }
   }
   @media (max-width: 800px) {
-    .pilot-section { padding: 110px 22px; }
-    .pilot-heading h2 { font-size: 56px; }
+    .pilot-section { padding: 90px 22px 80px; }
+    .pilot-heading { grid-template-columns: 1fr; gap: 24px; margin-bottom: 34px; }
+    .pilot-heading h2 { font-size: clamp(38px, 7.5vw, 60px); }
+    .pilot-intro { max-width: 560px; justify-self: start; }
+    .pilot-details { grid-template-columns: 1fr; gap: 32px; margin-top: 32px; padding-top: 30px; }
+    .crew-ownership { padding: 28px 0 0; border-left: 0; border-top: 1px solid var(--border); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .crew-cta { transition: none; }
+    .crew-cta:hover { transform: none; }
   }
 </style>

@@ -6,6 +6,7 @@ import type {
 } from "../../state/backend-state/inbox-state";
 import {
 	type BotSpeechVoice,
+	callSpeechChunks,
 	createBotCallSpeech,
 	speechBitReference,
 	speechCharacterLimit,
@@ -53,7 +54,7 @@ function snapshot(
 	return { entries, items: foldInboxEntries(entries), voices };
 }
 async function settle() {
-	for (let i = 0; i < 12; i++) await Promise.resolve();
+	for (let i = 0; i < 24; i++) await Promise.resolve();
 }
 function deferred<T>() {
 	let resolve!: (value: T) => void;
@@ -143,6 +144,51 @@ test("one participant supplies a reply and later election changes never replay i
 	expect(h.spoken).toEqual([]);
 });
 
+test("a bot waiting for another bot speaks its follow-up in the same call", async () => {
+	const h = harness();
+	const first = entry(
+		"peer-answer",
+		2,
+		"message",
+		{
+			text: "The first bot's answer",
+			reply_to: "spoken",
+		},
+		"peer",
+	);
+	const followUp = reply("follow-up", 3, "My follow-up", {
+		reply_to: first.message_id,
+	});
+	const entries = [transcript, first, followUp];
+	const voices = new Map([
+		["bot", voice],
+		["peer", voice],
+	]);
+	h.controller.update(snapshot(entries, voices));
+	await settle();
+	h.controller.update(snapshot(entries, voices));
+	await settle();
+	expect(h.spoken).toEqual(["The first bot's answer", "My follow-up"]);
+	expect(h.played).toEqual(h.spoken);
+	h.controller.dispose();
+});
+
+test("reply chains outside this call and cyclic references never start speech", async () => {
+	const h = harness();
+	h.controller.update(
+		snapshot([
+			transcript,
+			reply("typed-answer", 2, "Typed", { reply_to: "typed" }),
+			reply("typed-follow-up", 3, "Still typed", { reply_to: "typed-answer" }),
+			reply("cycle-a", 4, "Cycle A", { reply_to: "cycle-b" }),
+			reply("cycle-b", 5, "Cycle B", { reply_to: "cycle-a" }),
+		]),
+	);
+	await settle();
+	expect(h.spoken).toEqual([]);
+	h.controller.dispose();
+});
+
 test("voice lookup may finish after a new reply without replaying the join baseline", async () => {
 	const old = reply("old", 2);
 	const h = harness([transcript, old]);
@@ -155,14 +201,14 @@ test("voice lookup may finish after a new reply without replaying the join basel
 	expect(h.spoken).toEqual(["new"]);
 });
 
-test("synthesis and playback remain serial and all long-reply chunks finish before the next reply", async () => {
+test("calls prefetch one short chunk while playing and finish the reply before starting another", async () => {
 	const first = deferred<void>();
 	const starts: string[] = [];
-	let plays = 0;
+	const played: string[] = [];
 	const h = harness([transcript], {
-		play: async () => {
-			plays++;
-			if (plays === 1) await first.promise;
+		play: async (blob) => {
+			played.push(await blob.text());
+			if (played.length === 1) await first.promise;
 		},
 		synthesize: async (_voice, text) => {
 			starts.push(text);
@@ -170,17 +216,199 @@ test("synthesis and playback remain serial and all long-reply chunks finish befo
 		},
 	});
 	h.controller.update(
-		snapshot([
-			transcript,
-			reply("long", 2, "a".repeat(4100)),
-			reply("next", 3),
-		]),
+		snapshot([transcript, reply("long", 2, "a".repeat(640)), reply("next", 3)]),
 	);
 	await settle();
-	expect(starts).toEqual(["a".repeat(4096)]);
+	expect(starts).toEqual(["a".repeat(160), "a".repeat(240)]);
+	expect(played).toEqual(["a".repeat(160)]);
 	first.resolve();
 	await settle();
-	expect(starts).toEqual(["a".repeat(4096), "aaaa", "next"]);
+	expect(starts).toEqual([
+		"a".repeat(160),
+		"a".repeat(240),
+		"a".repeat(240),
+		"next",
+	]);
+	expect(played).toEqual(starts);
+});
+
+test("call chunks prefer phrase boundaries and keep the opening shorter than later chunks", () => {
+	const opening = "The opening sentence has enough context to read naturally. "
+		.repeat(2)
+		.trim();
+	const text = `${opening}\n${"More detail follows in a longer explanation. ".repeat(12).trim()}`;
+	const chunks = callSpeechChunks(text);
+	expect(chunks[0]).toBe(opening);
+	expect(Array.from(chunks[0]).length).toBeLessThanOrEqual(160);
+	expect(
+		chunks.slice(1).every((chunk) => Array.from(chunk).length <= 240),
+	).toBe(true);
+	expect(chunks.join(" ")).toBe(text.replace(/\s+/g, " "));
+	expect(callSpeechChunks("A short reply.")).toEqual(["A short reply."]);
+	const exactBoundary = `${"A ".repeat(79)}x.`;
+	expect(callSpeechChunks(`${exactBoundary} Next sentence.`)).toEqual([
+		exactBoundary,
+		"Next sentence.",
+	]);
+	expect(
+		callSpeechChunks("😀".repeat(500)).map((chunk) => Array.from(chunk).length),
+	).toEqual([160, 240, 100]);
+	expect(callSpeechChunks("😀a", 1)).toEqual(["😀", "a"]);
+});
+
+test("pending prefetch is discarded when the call or reply is cancelled", async () => {
+	for (const invalidation of [
+		"dispose",
+		"edit",
+		"delete",
+		"election",
+	] as const) {
+		const playback = deferred<void>();
+		const prefetch = deferred<Blob>();
+		let elected = true;
+		let synthesized = 0;
+		const played: string[] = [];
+		const h = harness([transcript], {
+			canSpeak: () => elected,
+			synthesize: async (_voice, text) =>
+				++synthesized === 1 ? new Blob([text]) : prefetch.promise,
+			play: async (blob) => {
+				played.push(await blob.text());
+				await playback.promise;
+			},
+			stop: () => playback.resolve(),
+		});
+		const entries = [transcript, reply("long", 2, "a".repeat(640))];
+		h.controller.update(snapshot(entries));
+		await settle();
+		expect(synthesized).toBe(2);
+		expect(played).toEqual(["a".repeat(160)]);
+		if (invalidation === "dispose") h.controller.dispose();
+		else if (invalidation === "election") {
+			elected = false;
+			h.controller.update(snapshot(entries));
+			elected = true;
+			h.controller.update(snapshot(entries));
+		} else {
+			h.controller.update(
+				snapshot([
+					...entries,
+					entry("changed", 3, invalidation, {
+						target: "long",
+						text: "Revised",
+					}),
+				]),
+			);
+		}
+		prefetch.resolve(new Blob(["late"]));
+		await settle();
+		expect(played).toEqual(["a".repeat(160)]);
+		expect(synthesized).toBe(2);
+		expect(h.errors).toEqual([]);
+		h.controller.dispose();
+	}
+});
+
+test("prefetch failures are handled while playback is pending and later replies still speak", async () => {
+	const playback = deferred<void>();
+	const prefetch = deferred<Blob>();
+	const failure = new Error("Synthesis failed");
+	let synthesized = 0;
+	const played: string[] = [];
+	const h = harness([transcript], {
+		synthesize: async (_voice, text) =>
+			++synthesized === 2 ? prefetch.promise : new Blob([text]),
+		play: async (blob) => {
+			played.push(await blob.text());
+			if (played.length === 1) await playback.promise;
+		},
+	});
+	h.controller.update(
+		snapshot([transcript, reply("long", 2, "a".repeat(640)), reply("next", 3)]),
+	);
+	await settle();
+	prefetch.reject(failure);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	expect(played).toEqual(["a".repeat(160)]);
+	expect(h.errors).toEqual([]);
+	playback.resolve();
+	await settle();
+	expect(played).toEqual(["a".repeat(160), "next"]);
+	expect(h.errors).toEqual([failure]);
+	h.controller.dispose();
+});
+
+test("a prefetch rejected after disposal cannot play or report a stale error", async () => {
+	const playback = deferred<void>();
+	const prefetch = deferred<Blob>();
+	let synthesized = 0;
+	const h = harness([transcript], {
+		synthesize: async (_voice, text) =>
+			++synthesized === 1 ? new Blob([text]) : prefetch.promise,
+		play: () => playback.promise,
+		stop: () => playback.resolve(),
+	});
+	h.controller.update(
+		snapshot([transcript, reply("long", 2, "a".repeat(640))]),
+	);
+	await settle();
+	expect(synthesized).toBe(2);
+	h.controller.dispose();
+	prefetch.reject(new Error("Late failure"));
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	expect(synthesized).toBe(2);
+	expect(h.errors).toEqual([]);
+});
+
+test("failed playback waits for its prefetch before synthesizing the next reply", async () => {
+	for (const outcome of ["resolve", "reject"] as const) {
+		const playback = deferred<void>();
+		const prefetch = deferred<Blob>();
+		const failure = new Error("Playback failed");
+		const starts: string[] = [];
+		const played: string[] = [];
+		let active = 0;
+		let overlap = 0;
+		const h = harness([transcript], {
+			synthesize: async (_voice, text) => {
+				starts.push(text);
+				active++;
+				overlap = Math.max(overlap, active);
+				try {
+					return starts.length === 2
+						? await prefetch.promise
+						: new Blob([text]);
+				} finally {
+					active--;
+				}
+			},
+			play: async (blob) => {
+				played.push(await blob.text());
+				if (played.length === 1) await playback.promise;
+			},
+		});
+		h.controller.update(
+			snapshot([
+				transcript,
+				reply("long", 2, "a".repeat(640)),
+				reply("next", 3),
+			]),
+		);
+		await settle();
+		playback.reject(failure);
+		await settle();
+		expect(starts).toEqual(["a".repeat(160), "a".repeat(240)]);
+		expect(active).toBe(1);
+		if (outcome === "resolve") prefetch.resolve(new Blob(["discarded"]));
+		else prefetch.reject(new Error("Discarded synthesis failed"));
+		await settle();
+		expect(starts).toEqual(["a".repeat(160), "a".repeat(240), "next"]);
+		expect(played).toEqual(["a".repeat(160), "next"]);
+		expect(overlap).toBe(1);
+		expect(active).toBe(0);
+		expect(h.errors).toEqual([failure]);
+		h.controller.dispose();
+	}
 });
 
 test("leaving during synthesis discards the result and pending replies", async () => {
@@ -197,16 +425,16 @@ test("leaving during synthesis discards the result and pending replies", async (
 
 test("bot replies use the selected voice's lower character limit", async () => {
 	const h = harness();
-	const text = "😀".repeat(4100);
+	const text = "😀".repeat(410);
 	h.controller.update(
 		snapshot(
 			[transcript, reply("long", 2, text)],
-			new Map([["bot", { ...voice, maxInputCharacters: 2000 }]]),
+			new Map([["bot", { ...voice, maxInputCharacters: 100 }]]),
 		),
 	);
 	await settle();
 	expect(h.spoken.map((chunk) => Array.from(chunk).length)).toEqual([
-		2000, 2000, 100,
+		100, 100, 100, 100, 10,
 	]);
 	expect(h.spoken.join("")).toBe(text);
 	expect(h.played).toEqual(h.spoken);

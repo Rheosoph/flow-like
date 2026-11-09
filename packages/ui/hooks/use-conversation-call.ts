@@ -10,10 +10,10 @@ import {
 	type SttChoice,
 	type Utterance,
 	bytesToBase64,
-	createSerialQueue,
 	encodeWav,
 } from "../lib/realtime/call-listening";
 import { createCallSpeechOutput } from "../lib/realtime/call-speech-output";
+import { createCallTranscription } from "../lib/realtime/call-transcription";
 import {
 	type CallMediaError,
 	type CallVideoKind,
@@ -41,7 +41,12 @@ import type { ConversationRoom, RoomAwareness } from "./use-conversation-room";
 import { newInboxMessageId, useSendInboxEntry } from "./use-inbox";
 import { useIncomingCallJoin } from "./use-incoming-call-join";
 
-export type CallError = "denied" | "unavailable" | "full" | "failed";
+export type CallError =
+	| "denied"
+	| "unavailable"
+	| "full"
+	| "failed"
+	| "transcription";
 
 export interface CallParticipantView {
 	sub: string;
@@ -95,6 +100,8 @@ export interface ConversationCallState {
 	toggleMute: () => void;
 	/** Bots are given a transcript of your microphone while you are in the call. */
 	listening: boolean;
+	/** A provisional transcript of your current utterance, visible only on this device. */
+	transcriptDraft: string;
 	/** The speaker has a speech model to transcribe with. */
 	canListen: boolean;
 	/** The conversation has bot members, so listening has someone to serve. */
@@ -150,6 +157,7 @@ interface Session {
 	peer: string;
 	stream: MediaStream;
 	context: AudioContext | null;
+	contextChanged: (() => void) | null;
 	localMeter: Meter | null;
 	outputs: Map<string, Output>;
 	poll: ReturnType<typeof setInterval> | null;
@@ -162,7 +170,10 @@ interface Session {
 	speakingBot: string | null;
 	speechOutput: ReturnType<typeof createCallSpeechOutput> | null;
 	listener: CallListener | null;
-	transcripts: ReturnType<typeof createSerialQueue<SpokenUtterance>> | null;
+	listeningGeneration: number;
+	transcripts: ReturnType<
+		typeof createCallTranscription<SpokenUtterance>
+	> | null;
 	video: ReturnType<typeof createVideoCapture> | null;
 }
 
@@ -228,6 +239,7 @@ function stopOutput(output: Output) {
 }
 
 function stopListening(session: Session) {
+	session.listeningGeneration++;
 	session.listening = false;
 	session.transcripts?.close();
 	session.transcripts = null;
@@ -236,6 +248,8 @@ function stopListening(session: Session) {
 }
 
 function releaseSession(session: Session) {
+	if (session.contextChanged)
+		session.context?.removeEventListener("statechange", session.contextChanged);
 	if (session.botEchoTimer !== null) clearTimeout(session.botEchoTimer);
 	session.speechOutput?.dispose();
 	stopListening(session);
@@ -282,7 +296,9 @@ function publish(session: Session) {
 
 function localStreams(session: Session): MediaStream[] {
 	return [
-		session.speechOutput?.stream ?? session.stream,
+		session.context?.state === "running"
+			? (session.speechOutput?.stream ?? session.stream)
+			: session.stream,
 		session.video?.state.camera,
 		session.video?.state.screen,
 	].filter((stream): stream is MediaStream => Boolean(stream));
@@ -321,6 +337,7 @@ export function useConversationCall(
 	const [joined, setJoined] = useState(false);
 	const [speaking, setSpeaking] = useState<ReadonlySet<string>>(NO_SPEAKERS);
 	const [error, setError] = useState<CallError | null>(null);
+	const [transcriptDraft, setTranscriptDraft] = useState("");
 	const [video, setVideo] = useState<VideoCaptureState>(NO_VIDEO);
 	const joinAttempt = useRef(0);
 	const joining = useRef(false);
@@ -356,6 +373,7 @@ export function useConversationCall(
 				if (session.botEchoTimer !== null) clearTimeout(session.botEchoTimer);
 				session.botEchoTimer = null;
 				session.botSpeaking = true;
+				session.transcripts?.resetPartial();
 				session.listener?.setPaused(true);
 			} else if (session.botSpeaking && session.botEchoTimer === null) {
 				// Allow playback already buffered by WebRTC to finish before listening again.
@@ -469,6 +487,7 @@ export function useConversationCall(
 		setJoined(false);
 		setVideo(NO_VIDEO);
 		setSpeaking(NO_SPEAKERS);
+		setTranscriptDraft("");
 	}, []);
 
 	const leave = useCallback(async () => {
@@ -597,6 +616,7 @@ export function useConversationCall(
 				peer,
 				stream,
 				context,
+				contextChanged: null,
 				localMeter: makeMeter(context, stream, me),
 				outputs: new Map(),
 				poll: null,
@@ -609,13 +629,11 @@ export function useConversationCall(
 				speakingBot: null,
 				speechOutput: null,
 				listener: null,
+				listeningGeneration: 0,
 				transcripts: null,
 				video: null,
 			};
-			if (
-				context?.state === "running" &&
-				optionsRef.current?.persistCallEvents !== false
-			) {
+			if (context && optionsRef.current?.persistCallEvents !== false) {
 				try {
 					session.speechOutput = createCallSpeechOutput(
 						context,
@@ -655,6 +673,11 @@ export function useConversationCall(
 				setSpeaking((current) => (sameSet(current, next) ? current : next));
 			}, SPEAKING_POLL_MS);
 			sessionRef.current = session;
+			session.contextChanged = () => {
+				if (sessionRef.current === session)
+					engineRef.current?.setLocalStreams(localStreams(session));
+			};
+			context?.addEventListener("statechange", session.contextChanged);
 			publish(session);
 			engineRef.current?.setLocalStreams(localStreams(session));
 			setJoined(true);
@@ -724,6 +747,8 @@ export function useConversationCall(
 			track.enabled = !session.muted;
 		}
 		session.listener?.setPaused(session.muted || session.botSpeaking);
+		if (session.muted || session.botSpeaking)
+			session.transcripts?.resetPartial();
 		publish(session);
 	}, []);
 
@@ -767,76 +792,109 @@ export function useConversationCall(
 		sessionRef.current?.speechOutput?.stop();
 	}, []);
 
-	const transcribe = useCallback(
-		async (session: Session, utterance: SpokenUtterance) => {
-			const { listen: options, audio: audioState } = listenRef.current;
-			if (
-				!options?.stt ||
-				!audioState ||
-				optionsRef.current?.persistCallEvents === false
-			)
-				return;
-			const wav = encodeWav(utterance.samples);
-			const result = await audioState.transcribe({
-				bit_id: options.stt.bitId,
-				audio_base64: bytesToBase64(wav),
-				mime: "audio/wav",
-				local: options.stt.route === "local",
-			});
-			const text = result.text.trim();
-			if (!text || sessionRef.current !== session || !session.listening) return;
-			const origin =
-				startTimesRef.current.get(session.callId) ?? session.joinedAt;
-			await sendEntry({
-				conversationId: session.conversationId,
-				request: {
-					message_id: newInboxMessageId(),
-					kind: "transcript",
-					envelope: {
-						v: 1,
-						enc: "none",
-						body: {
-							call: session.callId,
-							text,
-							offset_ms: Math.max(0, Math.round(utterance.spokenAt - origin)),
-							duration_ms: utterance.durationMs,
-							mentions: options.mentionsIn(text),
-						},
-					},
-				},
-			});
-		},
-		[sendEntry],
-	);
-
 	const setListening = useCallback(
 		(on: boolean) => {
 			const session = sessionRef.current;
 			if (!session) return;
 			if (!on) {
 				stopListening(session);
+				setTranscriptDraft("");
 				publish(session);
 				return;
 			}
+			const { listen: listenOptions, audio: audioState } = listenRef.current;
+			const stt = listenOptions?.stt;
 			if (
 				session.listening ||
-				!listenRef.current.listen?.stt ||
+				!stt ||
+				!audioState ||
 				optionsRef.current?.persistCallEvents === false
 			)
 				return;
 			session.listening = true;
-			session.transcripts = createSerialQueue<SpokenUtterance>((utterance) =>
-				transcribe(session, utterance),
-			);
+			const generation = ++session.listeningGeneration;
+			const isCurrent = () =>
+				sessionRef.current === session &&
+				session.listening &&
+				session.listeningGeneration === generation &&
+				optionsRef.current?.persistCallEvents !== false;
+			const transcripts = createCallTranscription<SpokenUtterance>({
+				transcribe: async (utterance) => {
+					const { listen: currentListen, audio: currentAudio } =
+						listenRef.current;
+					const currentStt = currentListen?.stt;
+					if (!isCurrent() || !currentStt || !currentAudio) return "";
+					const result = await currentAudio.transcribe({
+						bit_id: currentStt.bitId,
+						audio_base64: bytesToBase64(encodeWav(utterance.samples)),
+						mime: "audio/wav",
+						local: currentStt.route === "local",
+					});
+					return result.text.trim();
+				},
+				onPartial: (text) => {
+					if (isCurrent()) setTranscriptDraft(text);
+				},
+				onFinal: async (text, utterance) => {
+					if (!isCurrent()) return;
+					const origin =
+						startTimesRef.current.get(session.callId) ?? session.joinedAt;
+					await sendEntry({
+						conversationId: session.conversationId,
+						request: {
+							message_id: newInboxMessageId(),
+							kind: "transcript",
+							envelope: {
+								v: 1,
+								enc: "none",
+								body: {
+									call: session.callId,
+									text,
+									offset_ms: Math.max(
+										0,
+										Math.round(utterance.spokenAt - origin),
+									),
+									duration_ms: utterance.durationMs,
+									mentions: listenRef.current.listen?.mentionsIn(text) ?? [],
+								},
+							},
+						},
+					});
+				},
+				onError: (cause) => {
+					if (!isCurrent()) return;
+					console.warn("Transcribing call audio failed", cause);
+					setError("transcription");
+				},
+			});
+			session.transcripts = transcripts;
+			setTranscriptDraft("");
+			setError(null);
 			publish(session);
-			startCallListener(session.stream, (utterance) =>
-				session.transcripts?.push({
-					...utterance,
-					spokenAt: Date.now() - END_SILENCE_MS - utterance.durationMs,
-				}),
+			const captured = (
+				utterance: Utterance,
+				final: boolean,
+			): SpokenUtterance => ({
+				...utterance,
+				spokenAt:
+					utterance.capturedAt ??
+					Date.now() - (final ? END_SILENCE_MS : 0) - utterance.durationMs,
+			});
+			startCallListener(
+				session.stream,
+				(utterance) => transcripts.final(captured(utterance, true)),
+				{
+					context: session.context ?? undefined,
+					paused: session.muted || session.botSpeaking,
+					onPartial: (utterance) => {
+						if (isCurrent() && !session.muted && !session.botSpeaking)
+							transcripts.partial(captured(utterance, false));
+					},
+					onReset: () => transcripts.resetPartial(),
+				},
 			)
 				.then((listener) => {
-					if (sessionRef.current !== session || !session.listening) {
+					if (!isCurrent()) {
 						listener.stop();
 						return;
 					}
@@ -845,11 +903,15 @@ export function useConversationCall(
 				})
 				.catch((cause) => {
 					console.warn("Listening to the microphone failed", cause);
+					if (!isCurrent()) return;
 					stopListening(session);
+					setTranscriptDraft("");
+					const failure = errorOf(cause);
+					setError(failure === "failed" ? "transcription" : failure);
 					publish(session);
 				});
 		},
-		[transcribe],
+		[sendEntry],
 	);
 
 	const view = useMemo<LiveCallView | null>(
@@ -920,6 +982,7 @@ export function useConversationCall(
 			leave,
 			toggleMute,
 			listening: listeningNow,
+			transcriptDraft,
 			canListen: Boolean(
 				listen?.stt && audio && options?.persistCallEvents !== false,
 			),
@@ -953,6 +1016,7 @@ export function useConversationCall(
 			leave,
 			toggleMute,
 			listeningNow,
+			transcriptDraft,
 			listen?.stt,
 			listen?.hasBots,
 			audio,

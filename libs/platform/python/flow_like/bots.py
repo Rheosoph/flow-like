@@ -28,6 +28,8 @@ class BotModelPolicy:
 
     primary: str | None = None
     fallbacks: list[str] = field(default_factory=list)
+    # A System One Bit; None keeps the usual response rules.
+    decision: str | None = None
 
 
 @dataclass
@@ -91,7 +93,11 @@ class BotSecret:
 
 def _wire(value: Any) -> Any:
     if is_dataclass(value) and not isinstance(value, type):
-        return {item.name: getattr(value, item.name) for item in fields(value) if item.name != "raw"}
+        return {
+            item.name: getattr(value, item.name)
+            for item in fields(value)
+            if item.name != "raw" and not (item.name == "decision" and getattr(value, item.name) is None)
+        }
     return value
 
 
@@ -107,7 +113,11 @@ def _bot(data: dict[str, Any]) -> Bot:
         description=data.get("description"),
         instructions=data.get("instructions"),
         appearance=data.get("appearance") or {},
-        model=BotModelPolicy(primary=model.get("primary"), fallbacks=list(model.get("fallbacks") or [])),
+        model=BotModelPolicy(
+            primary=model.get("primary"),
+            fallbacks=list(model.get("fallbacks") or []),
+            decision=model.get("decision"),
+        ),
         classification=BotClassification(
             classification=classification.get("classification"),
             pii=bool(classification.get("pii", False)),

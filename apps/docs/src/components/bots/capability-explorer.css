@@ -1,0 +1,111 @@
+.bd-cap-controls {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	align-items: center;
+}
+
+.bd-cap-banner {
+	margin-bottom: 1rem;
+	padding: 0.65rem 0.85rem;
+	border: 1px solid color-mix(in oklab, var(--bd-warn) 40%, transparent);
+	border-radius: 10px;
+	background: var(--bd-warn-soft);
+	font-size: 0.82rem;
+}
+
+.bd-cap-group + .bd-cap-group {
+	margin-top: 1.25rem;
+}
+
+.bd-cap-group > .bd-eyebrow {
+	margin-bottom: 0.6rem;
+}
+
+.bd-cap {
+	display: flex;
+	flex-direction: column;
+	gap: 0.55rem;
+	padding: 0.9rem;
+	border: 1px solid var(--bd-line);
+	border-radius: 11px;
+	background: var(--bd-bg);
+	transition: opacity 0.2s ease, border-color 0.2s ease;
+}
+
+.bd-cap[data-available="false"] {
+	opacity: 0.5;
+	border-style: dashed;
+}
+
+.bd-cap-head {
+	display: flex;
+	gap: 0.65rem;
+	align-items: center;
+}
+
+.bd-cap-icon {
+	display: grid;
+	place-items: center;
+	width: 2rem;
+	height: 2rem;
+	flex: none;
+	border-radius: 8px;
+	background: var(--bd-accent-soft);
+	color: var(--bd-accent);
+}
+
+.bd-cap-icon svg {
+	width: 1rem;
+	height: 1rem;
+}
+
+.bd-cap-name {
+	font-size: 0.92rem;
+	font-weight: 650;
+	line-height: 1.2;
+}
+
+.bd-cap-id {
+	color: var(--bd-faint);
+	background: none;
+	padding: 0;
+}
+
+.bd-cap-desc {
+	color: var(--bd-muted);
+	font-size: 0.82rem;
+}
+
+.bd-cap-flags:empty {
+	display: none;
+}
+
+.bd-cap-more {
+	margin-top: auto;
+	font-size: 0.8rem;
+}
+
+.bd-cap-more summary {
+	width: fit-content;
+	color: var(--bd-muted);
+	cursor: pointer;
+	font-weight: 600;
+}
+
+.bd-cap-more summary:hover {
+	color: var(--bd-text);
+}
+
+.bd-cap-more[open] summary {
+	margin-bottom: 0.5rem;
+}
+
+.bd-cap-more p {
+	margin-bottom: 0.5rem;
+	color: var(--bd-muted);
+}
+
+.bd-cap-more strong {
+	color: var(--bd-text);
+}

@@ -310,6 +310,7 @@ pub(crate) async fn park_in<C: ConnectionTrait>(
     let card = &named_requester(txn, turn, card).await?;
     let parked = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_WAITING))
+        .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(bot_turn::Column::HostId, Expr::value(None::<String>))
         .col_expr(
             bot_turn::Column::LeaseUntil,
@@ -389,6 +390,7 @@ async fn notify_owner(state: &AppState, turn: &bot_turn::Model, card: &ApprovalR
         state,
         &format!("botapproval_{}", card.id),
         DispatchNotificationInput {
+            notification_priority: Default::default(),
             bot_context: Some(flow_like_types::bot_notify::BotNotificationContext {
                 bot_id: turn.bot_id.clone(),
                 review_only: card.secret.is_some(),
@@ -434,7 +436,13 @@ async fn answer_transaction(
     let conversation = open_conversation(txn, owner_id, bot_id, &turn.conversation_id, now)
         .await?
         .ok_or_else(|| unknown_approval(turn_id, &answer.approval_id))?;
-    lock(txn, &conversation).await?;
+    let origin = super::talk::turn_origin_conversation(txn, &turn).await?;
+    let mut rooms = vec![conversation.as_str(), origin.as_str()];
+    rooms.sort_unstable();
+    rooms.dedup();
+    for room in rooms {
+        lock(txn, room).await?;
+    }
     answer_in(txn, owner_id, bot_id, turn_id, answer, &conversation, now).await
 }
 
@@ -500,6 +508,7 @@ pub(crate) async fn answer_in<C: ConnectionTrait + Send + Sync>(
     .await?;
     let queued = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_QUEUED))
+        .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(bot_turn::Column::HostId, Expr::value(None::<String>))
         .col_expr(
             bot_turn::Column::LeaseUntil,
@@ -520,6 +529,9 @@ pub(crate) async fn answer_in<C: ConnectionTrait + Send + Sync>(
             format!("Turn '{turn_id}' stopped waiting"),
         ));
     }
+    super::recovery::rebase_deadline_in(txn, &turn.id, now).await?;
+    let origin = super::talk::turn_origin_conversation(txn, &turn).await?;
+    super::decision_wait::clear_before_in(txn, bot_id, &origin, now).await?;
     let turn = ledger::find(txn, turn_id, Some(owner_id))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("Turn '{turn_id}' not found")))?;
@@ -626,6 +638,7 @@ pub(crate) async fn expire_in<C: ConnectionTrait>(
 ) -> Result<Option<Sent>, ApiError> {
     let ended = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_CANCELLED))
+        .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(
             bot_turn::Column::ErrorCode,
             Expr::value(ERROR_APPROVAL_EXPIRED),
@@ -639,6 +652,7 @@ pub(crate) async fn expire_in<C: ConnectionTrait>(
     if ended.rows_affected == 0 {
         return Ok(None);
     }
+    super::recovery::clear_in(txn, &turn.id).await?;
     let Some(conversation) = conversation else {
         return Ok(None);
     };

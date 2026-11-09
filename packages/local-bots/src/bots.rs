@@ -643,8 +643,45 @@ impl LocalBotStore {
     /// Merges `request` into the stored bot; omitted fields stay, `null` clears (a built-in's
     /// name too, which brings back its default).
     pub fn update_bot(&self, bot_id: &str, request: UpdateBotRequest) -> Result<Bot> {
+        self.update_bot_with(bot_id, |_| Ok(request))
+    }
+
+    /// Applies a JSON patch and preserves omitted model-policy fields. Reading the policy,
+    /// merging it and saving the bot share one write transaction.
+    pub fn patch_bot(&self, bot_id: &str, mut patch: Value) -> Result<Bot> {
+        self.update_bot_with(bot_id, |current| {
+            let fields = patch
+                .as_object_mut()
+                .ok_or_else(|| Error::invalid("The bot patch must be an object"))?;
+            if let Some(model) = fields.get_mut("model") {
+                let updates = model
+                    .as_object()
+                    .ok_or_else(|| Error::invalid("model must be an object"))?;
+                if let Some(key) = updates
+                    .keys()
+                    .find(|key| !matches!(key.as_str(), "primary" | "fallbacks" | "decision"))
+                {
+                    return Err(Error::invalid(format!("Unknown model field: {key}")));
+                }
+                let mut merged = serde_json::to_value(&current.model)?;
+                for (key, value) in updates {
+                    merged[key] = value.clone();
+                }
+                *model = merged;
+            }
+            serde_json::from_value(patch)
+                .map_err(|error| Error::invalid(format!("Invalid bot patch: {error}")))
+        })
+    }
+
+    fn update_bot_with(
+        &self,
+        bot_id: &str,
+        request: impl FnOnce(&BotSettings) -> Result<UpdateBotRequest>,
+    ) -> Result<Bot> {
         self.write(|tx, changes| {
             let current = required_bot(tx, bot_id)?;
+            let request = request(&current.settings)?;
             let next = validation::apply_patch(&current.settings, current.system, request)?;
             if next == current.settings {
                 return Ok(current.into_bot());

@@ -3,7 +3,9 @@ use std::io::Cursor;
 use enigo::{Axis, Button, Coordinate, Direction, Mouse};
 use image::{DynamicImage, ImageFormat};
 
-use super::computer::{BotComputer, BotPointerButton, BotScreen};
+use super::computer::{
+    BotComputer, BotPointerButton, BotScreen, CapturedDesktop, CapturedSurface, WindowState, now_ms,
+};
 use crate::computer::keyboard::parse_key_chord;
 use crate::computer::native::{self, gestures};
 use crate::computer::window::{WindowInfo, capture_window, launch_application, pick_window};
@@ -92,8 +94,11 @@ impl BotComputer {
     }
 
     pub async fn screenshot_window(&self, query: &str) -> flow_like_types::Result<BotScreen> {
-        let window = resolve(self.windows().await?, query)?;
+        let _operation = self.operation.lock().await;
+        let before = self.windows().await?;
+        let window = resolve(before.clone(), query)?;
         let id = window.id.clone();
+        let at_ms = now_ms();
         let captured = tokio::task::spawn_blocking(move || capture_window(&id))
             .await??
             .ok_or_else(|| {
@@ -113,12 +118,38 @@ impl BotComputer {
         )?;
         let mut png = Vec::new();
         image.write_to(&mut Cursor::new(&mut png), ImageFormat::Png)?;
+        let (windows, pointer) = tokio::task::spawn_blocking(|| {
+            (
+                native::windows().ok(),
+                native::input::observed_cursor_position(),
+            )
+        })
+        .await?;
+        let mut captured = CapturedDesktop::new(
+            frame.clone(),
+            CapturedSurface::Window(WindowState::from(&window)),
+            Some(&before),
+        );
+        captured.stable = captured.validate(None, windows.as_deref()).is_ok();
+        let captured_window = windows.as_deref().map(|all| {
+            all.iter()
+                .filter(|other| other.id == window.id)
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+        let mut observation = self.describe(&frame, captured_window.as_deref(), pointer);
+        observation.captured_at_ms = at_ms;
+        if !captured.stable {
+            observation.focus = None;
+            observation.pointer = None;
+        }
         let screen = BotScreen {
             png,
             width: image.width(),
             height: image.height(),
+            observation: Some(observation),
         };
-        *self.frame.lock().unwrap_or_else(|e| e.into_inner()) = Some(frame);
+        *self.captured.lock().unwrap_or_else(|e| e.into_inner()) = Some(captured);
         Ok(screen)
     }
 
@@ -131,38 +162,55 @@ impl BotComputer {
         width: Option<i32>,
         height: Option<i32>,
     ) -> flow_like_types::Result<String> {
-        let window = resolve(self.windows().await?, query)?;
-        let (name, bounds) = match operation {
-            BotWindowOp::Focus => ("focus", None),
-            BotWindowOp::Close => ("close", None),
-            BotWindowOp::Minimize => ("minimize", None),
-            BotWindowOp::Maximize => ("maximize", None),
-            BotWindowOp::Move | BotWindowOp::Resize => {
-                let (width, height) = (
-                    width.unwrap_or(window.width as i32),
-                    height.unwrap_or(window.height as i32),
-                );
-                if width <= 0 || height <= 0 {
-                    return Err(flow_like_types::anyhow!("Window size must be positive"));
-                }
-                (
-                    "move_resize",
-                    Some((x.unwrap_or(window.x), y.unwrap_or(window.y), width, height)),
-                )
-            }
+        let _operation = self.operation.lock().await;
+        let name = match operation {
+            BotWindowOp::Focus => "focus",
+            BotWindowOp::Close => "close",
+            BotWindowOp::Minimize => "minimize",
+            BotWindowOp::Maximize => "maximize",
+            BotWindowOp::Move | BotWindowOp::Resize => "move_resize",
         };
-        let id = window.id.clone();
-        tokio::task::spawn_blocking(move || native::operate_window(&id, name, bounds)).await??;
-        Ok(format!(
-            "{operation:?} applied to window '{}' ({})",
-            window.title, window.id
-        ))
+        self.begin_action(name, None);
+        let result = async {
+            let window = resolve(self.windows().await?, query)?;
+            let bounds = match operation {
+                BotWindowOp::Move | BotWindowOp::Resize => {
+                    let (width, height) = (
+                        width.unwrap_or(window.width as i32),
+                        height.unwrap_or(window.height as i32),
+                    );
+                    if width <= 0 || height <= 0 {
+                        return Err(flow_like_types::anyhow!("Window size must be positive"));
+                    }
+                    Some((x.unwrap_or(window.x), y.unwrap_or(window.y), width, height))
+                }
+                _ => None,
+            };
+            let id = window.id.clone();
+            self.clear_capture();
+            tokio::task::spawn_blocking(move || native::operate_window(&id, name, bounds))
+                .await??;
+            Ok(format!(
+                "{operation:?} applied to window '{}' ({})",
+                window.title, window.id
+            ))
+        }
+        .await;
+        self.finish_action(&result);
+        result
     }
 
     pub async fn launch(&self, program: &str, args: &[String]) -> flow_like_types::Result<String> {
+        let _operation = self.operation.lock().await;
+        self.begin_action("launch", None);
+        self.clear_capture();
         let (path, arguments) = (program.to_string(), args.to_vec());
-        let pid =
-            tokio::task::spawn_blocking(move || launch_application(&path, &arguments)).await??;
+        let result = tokio::task::spawn_blocking(move || launch_application(&path, &arguments))
+            .await
+            .map_err(flow_like_types::Error::from)
+            .and_then(|result| result);
+        self.finish_action(&result);
+        let pid = result?;
         tokio::time::sleep(std::time::Duration::from_millis(LAUNCH_SETTLE_MS)).await;
         Ok(if pid >= 0 {
             format!("Started {program} (pid {pid})")
@@ -172,6 +220,8 @@ impl BotComputer {
     }
 
     pub async fn inject(&self, input: BotInput) -> flow_like_types::Result<()> {
+        let _operation = self.operation.lock().await;
+        self.clear_capture();
         match input {
             BotInput::Move { fx, fy } => {
                 let point = primary_point(fx, fy).await?;

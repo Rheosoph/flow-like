@@ -27,6 +27,7 @@ export const BOT_CAPABILITIES = [
 	"command_line",
 	"encryption",
 	"webhook",
+	"user_context",
 	"flowpilot",
 ] as const;
 export type BotCapability = (typeof BOT_CAPABILITIES)[number];
@@ -82,6 +83,8 @@ export const SYSTEM_BOT_CAPABILITIES: Readonly<
 export interface IBotModelPolicy {
 	primary: string | null;
 	fallbacks: string[];
+	/** System One Bit for response decisions; absent or null disables it. */
+	decision?: string | null;
 }
 
 export interface IBot {
@@ -378,6 +381,56 @@ export type BotTurnStatus =
 	| "failed"
 	| "cancelled";
 
+export type BotNoteState = "open" | "closed";
+
+export interface IBotNoteSensitivity {
+	classification?: string | null;
+	pii: boolean;
+}
+
+export interface IBotNoteVersion {
+	version: number;
+	title: string;
+	status?: string | null;
+	body: string;
+	state: BotNoteState;
+	updated_by: string;
+	updated_at: number;
+}
+
+/** A bot's working note in one conversation; only the bot's owner reads it. */
+export interface IBotNote {
+	key: string;
+	title: string;
+	status?: string | null;
+	body: string;
+	state: BotNoteState;
+	version: number;
+	sensitivity: IBotNoteSensitivity;
+	updated_by: string;
+	created_at: number;
+	updated_at: number;
+	/** Newest first; only on a single note read. */
+	history?: IBotNoteVersion[];
+}
+
+/** What a message shows of a note: everyone sees the title and status, never the body. */
+export interface IBotNoteRef {
+	key: string;
+	version: number;
+	title: string;
+	status?: string | null;
+	closed?: boolean;
+}
+
+export interface IBotNoteWrite {
+	title?: string;
+	status?: string;
+	body?: string;
+	state?: BotNoteState;
+	expected_version?: number;
+}
+
 /** A turn a bot works on without a chat window (`bot-host://turn`). */
 export interface IBotTurn {
 	/** Also the run id. */
@@ -390,6 +443,8 @@ export interface IBotTurn {
 	error_code?: string | null;
 	/** The approval card a `waiting` turn sleeps on. */
 	reply_message_id?: string | null;
+	/** What the bot says it is doing right now. */
+	status_text?: string | null;
 	updated_at?: string;
 }
 
@@ -420,6 +475,37 @@ export interface IBotEncryptionHost {
 	rotate(botId: string): Promise<IBotEncryptionStatus>;
 }
 
+/** Positions are fractions of the associated image, before or after resizing. */
+export interface IBotInteractionPoint {
+	x: number;
+	y: number;
+}
+
+export interface IBotInteractionRect extends IBotInteractionPoint {
+	width: number;
+	height: number;
+}
+
+export interface IBotInteractionObservation {
+	captured_at_ms: number;
+	width: number;
+	height: number;
+	pointer: {
+		position: IBotInteractionPoint;
+		source: "observed" | "dispatched";
+	} | null;
+	focus: { label: string; bounds: IBotInteractionRect | null } | null;
+	action: {
+		/** Action name only; never typed text or key values. */
+		kind: string;
+		phase: "running" | "completed" | "failed";
+		at_ms: number;
+		target: IBotInteractionPoint | null;
+		target_bounds: IBotInteractionRect | null;
+	} | null;
+	mapping: { x: number; y: number; width: number; height: number } | null;
+}
+
 /** What the bot panel's Computer tab shows: the latest picture of the bot's browser or screen. */
 export interface IBotComputerView {
 	state: "asleep" | "active";
@@ -429,6 +515,7 @@ export interface IBotComputerView {
 	/** A `data:` URL of the picture. */
 	image: string | null;
 	age_ms: number | null;
+	observation?: IBotInteractionObservation | null;
 	/** The owner has paused the bot's computer calls. */
 	taken_over?: boolean;
 	/** The owner can drive the picture with mouse and keyboard (device bots with a screen). */
@@ -643,6 +730,7 @@ export interface IBotMailThreadView {
 
 /** A task a bot runs for its owner at a time: once or on a cron schedule in a time zone. */
 export interface IBotTask {
+	monitoring?: boolean;
 	id: string;
 	bot_id: string;
 	kind: "once" | "cron";
@@ -662,6 +750,7 @@ export interface IBotTask {
 }
 
 export interface ICreateBotTaskRequest {
+	monitoring?: boolean;
 	kind: "once" | "cron";
 	at?: string;
 	cron?: string;
@@ -671,6 +760,7 @@ export interface ICreateBotTaskRequest {
 }
 
 export interface IUpdateBotTaskRequest {
+	monitoring?: boolean;
 	at?: string;
 	cron?: string;
 	tz?: string;
@@ -823,6 +913,21 @@ export interface IBotState {
 	webhookUrl?(botId: string, webhook: IBotWebhook): Promise<string>;
 	/** Creates the workspace on first use; repeating it returns the same app. Refused for Flux for now. */
 	getWorkspace?(botId: string): Promise<IBotWorkspace>;
+	/** The bot's notes in one conversation, without history; owner only. */
+	listNotes?(botId: string, conversationId: string): Promise<IBotNote[]>;
+	/** With history. */
+	getNote?(
+		botId: string,
+		conversationId: string,
+		key: string,
+	): Promise<IBotNote>;
+	/** Rejects with a 409 error when `expected_version` is stale. */
+	updateNote?(
+		botId: string,
+		conversationId: string,
+		key: string,
+		write: IBotNoteWrite,
+	): Promise<IBotNote>;
 	/** The picture of an account bot's current look; absent where nothing pushes notifications. */
 	getAvatar?(botId: string): Promise<IBotAvatar>;
 	/** Uploads `image`, a data URL of `appearance`; refused when the bot looks different now. */

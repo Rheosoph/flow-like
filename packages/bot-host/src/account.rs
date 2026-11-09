@@ -6,29 +6,35 @@
 //! poll forward.
 
 use crate::{
+    authorization::{HubAuthority, RunnerInference},
     e2e::{self, E2eHost},
     gate::ApprovalGate,
     host::{
         CODE_CANCELLED, CODE_MODEL, CODE_TIMEOUT, CODE_UNREADABLE, FINISHED_KEPT, HubToken,
         MAX_FAILURE_DETAIL_CHARS, MAX_REPLY_CHARS, RunError, TurnEvents, TurnInfo, TurnJob,
-        TurnRunner, clipped, now, reply_body,
+        TurnRunner, clipped, now, participation_request, reply_body,
     },
-    hub::{Claimed, HubFailure, HubGrants, TurnHub, TurnSession},
+    hub::{Claimed, HubFailure, HubGrants, TurnHub, TurnSession, WaitOutcome},
     memory::{self, JobMemory},
+    notes::{HubNotes, StatusTurn},
     room_updates::{HubRoomUpdates, RoomUpdateTracker},
     transcript,
 };
 use flow_like::flow::copilot::{
     TurnRequester,
+    bot_notes::NotesHandle,
     bot_talk::AnsweredRound,
+    decision::{self, Decision, DecisionParticipant},
+    decision_event::{self, EventDecision},
     memory_open::follow_up,
     tool_grants::{GrantStore, clear_tokens, resume_note},
 };
 use flow_like_local_bots::InboxEntry;
 use flow_like_types::{
-    bot_message::ApprovalRequest,
+    bot_message::{ApprovalRequest, MessageBody},
     bot_turn::{
-        BotTurn, MAX_ATTEMPTS, TurnAudience, TurnStatus, failure_message_id, reply_message_id,
+        BotTurn, DEFAULT_TURN_DEADLINE_SECS, TurnAudience, TurnStatus, failure_message_id,
+        reply_message_id,
     },
     inbox::{ConversationKind, InboxEntryKind, plain_envelope},
 };
@@ -48,7 +54,6 @@ pub const CODE_TAKEN: &str = "BOT_TURN_TAKEN";
 pub const CODE_HUB: &str = "BOT_TURN_HUB";
 pub const CODE_REPLY_REFUSED: &str = "BOT_TURN_REPLY_REFUSED";
 const CODE_SETUP: &str = "BOT_TURN_SETUP";
-const ASK_PREVIEW_CHARS: usize = 300;
 
 #[derive(Debug, Clone)]
 pub struct AccountConfig {
@@ -72,7 +77,7 @@ impl AccountConfig {
             poll: Duration::from_secs(30),
             max_backoff: Duration::from_secs(300),
             heartbeat: Duration::from_secs(15),
-            deadline: Duration::from_secs(600),
+            deadline: Duration::from_secs(DEFAULT_TURN_DEADLINE_SECS),
             send_retries: 3,
             send_retry_delay: Duration::from_secs(2),
             presence: Duration::from_secs(60),
@@ -99,6 +104,7 @@ struct Live {
     info: TurnInfo,
     cancel: Arc<watch::Sender<Option<Cancel>>>,
     posting: bool,
+    notes: Option<NotesHandle>,
 }
 
 #[derive(Default)]
@@ -111,6 +117,13 @@ struct End {
     status: TurnStatus,
     error_code: String,
     reply: Option<String>,
+}
+
+struct LateContinuation {
+    conversation_id: String,
+    kind: ConversationKind,
+    transcript: transcript::Transcript,
+    answered_round: Option<AnsweredRound>,
 }
 
 impl End {
@@ -218,7 +231,7 @@ impl AccountHost {
     /// Cancels a queued or running turn through the hub's owner cancel, so the turn ends instead
     /// of being queued again, and stops it here. False when it isn't live or its reply is being
     /// posted.
-    pub async fn cancel(&self, turn_id: &str) -> bool {
+    pub async fn cancel(&self, turn_id: &str) -> Result<bool, HubFailure> {
         let (bot_id, id) = {
             let state = lock(&self.inner.state);
             let Some(live) = state
@@ -226,15 +239,13 @@ impl AccountHost {
                 .values()
                 .find(|live| live.info.id == turn_id && !live.posting)
             else {
-                return false;
+                return Ok(false);
             };
             live.cancel.send_replace(Some(Cancel::User));
             (live.info.bot_id.clone(), live.info.id.clone())
         };
-        if let Err(failure) = self.inner.hub.cancel_turn(&bot_id, &id).await {
-            tracing::debug!(%failure, turn_id, "Bot host: the hub's cancel failed; the lease will expire");
-        }
-        true
+        self.inner.hub.cancel_turn(&bot_id, &id).await?;
+        Ok(true)
     }
 
     /// Stops reporting this host's bots; call on sign-out and when the app exits.
@@ -326,6 +337,7 @@ impl Inner {
                     info: info_of(&turn, TurnStatus::Queued),
                     cancel: Arc::new(cancel),
                     posting: false,
+                    notes: None,
                 };
                 started.push((live.info.clone(), key.clone(), turn.id, receiver));
                 state.live.insert(key, live);
@@ -432,12 +444,30 @@ impl Inner {
                 (hub_token, hub, None)
             }
         };
-        let mut entries = match hub.entries(bot_id, conversation_id).await {
-            Ok(entries) => entries,
+        let continuation = match self.late_answer(lead, &hub).await {
+            Ok(continuation) => continuation,
             Err(failure) if failure.lease_lost() => return End::lease_lost(),
             Err(failure) => {
-                tracing::debug!(%failure, "Bot host: reading an account conversation failed");
+                tracing::debug!(%failure, "Bot host: reading a delayed answer's context failed");
                 return End::failed(CODE_HUB);
+            }
+        };
+        let continued = continuation.is_some();
+        // A resumed turn's token is scoped to its origin room. The ask-result endpoint supplies
+        // the exchange's answer, so the host never needs to read that exchange with this token.
+        let mut entries = if continued {
+            Vec::new()
+        } else {
+            match hub
+                .entries_for_turn(bot_id, conversation_id, &lead.trigger_message_id)
+                .await
+            {
+                Ok(entries) => entries,
+                Err(failure) if failure.lease_lost() => return End::lease_lost(),
+                Err(failure) => {
+                    tracing::debug!(%failure, "Bot host: reading an account conversation failed");
+                    return End::failed(CODE_HUB);
+                }
             }
         };
         entries.reverse();
@@ -456,6 +486,44 @@ impl Inner {
                 }
             };
         }
+        if let Some(entry) = entries.iter().find(|entry| {
+            entry.message_id == lead.trigger_message_id
+                && matches!(
+                    entry.kind,
+                    InboxEntryKind::Message | InboxEntryKind::Transcript
+                )
+                && entry
+                    .envelope
+                    .get("body")
+                    .is_some_and(decision::is_acknowledgement_body)
+        }) {
+            let room = hub
+                .read(
+                    &format!("inbox/conversations/{conversation_id}"),
+                    vec![("as", bot_id.clone())],
+                )
+                .await;
+            let bot_sender = room
+                .as_ref()
+                .ok()
+                .and_then(|room| room.get("members"))
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|members| {
+                    members.iter().any(|member| {
+                        member
+                            .get("principal_id")
+                            .and_then(serde_json::Value::as_str)
+                            == Some(entry.sender_id.as_str())
+                            && member
+                                .get("kind")
+                                .and_then(serde_json::Value::as_str)
+                                .is_some_and(|kind| kind.eq_ignore_ascii_case("bot"))
+                    })
+                });
+            if bot_sender {
+                return self.stay_silent(lead).await;
+            }
+        }
         let kind = match lead.audience {
             TurnAudience::Room => ConversationKind::Group,
             TurnAudience::Owner => ConversationKind::Direct,
@@ -470,11 +538,18 @@ impl Inner {
             entry.message_id == lead.trigger_message_id && entry.kind == InboxEntryKind::Reaction
         });
         let mut reactions = Vec::new();
+        let mut chat_conversation = conversation_id.clone();
+        let mut audience = lead.audience;
         let mut answered_round = None;
-        let transcript = match self.late_answer(lead, &hub).await {
-            Some((transcript, round)) => {
-                answered_round = round;
-                transcript
+        let transcript = match continuation {
+            Some(continuation) => {
+                chat_conversation = continuation.conversation_id;
+                audience = match continuation.kind {
+                    ConversationKind::Direct => TurnAudience::Owner,
+                    ConversationKind::Group => TurnAudience::Room,
+                };
+                answered_round = continuation.answered_round;
+                continuation.transcript
             }
             None if reacting => {
                 let answered: Vec<String> = std::iter::once(lead.trigger_message_id.clone())
@@ -503,12 +578,27 @@ impl Inner {
                 Err(_) => return self.abandon(lead, CODE_UNREADABLE).await,
             },
         };
+        // Keep the claimed turn's identity and trigger, while every reply (including failures)
+        // goes to the conversation whose scope the runtime token permits.
+        let mut execution_turn = lead.clone();
+        execution_turn.conversation_id = chat_conversation.clone();
+        execution_turn.audience = audience;
+        let lead = &execution_turn;
         let trigger_seq = entries
             .iter()
             .find(|entry| entry.message_id == lead.trigger_message_id)
             .and_then(|entry| entry.seq);
+        let ephemeral_user_context = entries.iter().any(|entry| {
+            entry.message_id == lead.trigger_message_id
+                && entry.envelope.get("body").is_some_and(|body| {
+                    flow_like_types::bot_user_context::response_for(body, &entry.sender_id, bot_id)
+                })
+        });
         let owner_hub = if minted_by_hub { &hub } else { &self.hub };
-        let memory = if sealed {
+        // The exchange's memory would replace the reconstructed origin conversation and the
+        // delayed-answer prompt. A continuation keeps that explicit transcript, even on old hubs
+        // whose ask results have no round counter.
+        let memory = if sealed || continued || ephemeral_user_context {
             None
         } else {
             memory::hub_source_for(
@@ -528,7 +618,9 @@ impl Inner {
         });
         let seen = grants.list().await.unwrap_or_default();
         let no_prompt = transcript.prompt.is_empty();
-        let prompt = match resume_note(grants.as_ref()).await {
+        let note = resume_note(grants.as_ref()).await;
+        let resumed = note.is_some();
+        let prompt = match note {
             Some(note) => format!("{}\n\n{note}", transcript.prompt),
             None => transcript.prompt,
         };
@@ -540,7 +632,7 @@ impl Inner {
             requester_name: lead.requester_name.clone(),
             owner_id: lead.owner_id.clone(),
             owner_name: None,
-            audience: lead.audience,
+            audience,
             room: None,
             addressed: transcript.addressed,
             reactions,
@@ -550,7 +642,7 @@ impl Inner {
         }
         let (runner, stop_id) = (self.runner.clone(), lead.id.clone());
         let gate = ApprovalGate::new(grants.clone(), &lead.id, move || runner.cancel(&stop_id));
-        let room_updates = (kind == ConversationKind::Group && answered_round.is_none())
+        let room_updates = (kind == ConversationKind::Group && !continued)
             .then(|| {
                 if reacting {
                     entries.last()
@@ -570,52 +662,439 @@ impl Inner {
                     RoomUpdateTracker::new(bot_id, &lead.owner_id, trigger, names.clone()),
                 )) as Arc<dyn flow_like::flow::copilot::platform::RoomUpdates>
             });
-        let job = TurnJob {
+        let recovery: Option<Arc<dyn flow_like::flow::copilot::run_recovery::BotRunRecovery>> =
+            (self.hub.supports_recovery() && !ephemeral_user_context).then(|| {
+                let recovery = crate::recovery::HubRecovery::new(
+                    self.hub.clone(),
+                    lead,
+                    &self.config.host_id,
+                    chrono::Utc::now().timestamp_millis().saturating_add(
+                        self.config.deadline.as_millis().min(i64::MAX as u128) as i64,
+                    ),
+                );
+                let recovery = if sealed {
+                    // Decrypting this turn already required the host's retained inbox keys.
+                    recovery.with_encryption(
+                        self.e2e
+                            .get()
+                            .expect("a sealed turn has an encryption host")
+                            .clone(),
+                        conversation_id.clone(),
+                    )
+                } else {
+                    recovery
+                };
+                Arc::new(recovery)
+                    as Arc<dyn flow_like::flow::copilot::run_recovery::BotRunRecovery>
+            });
+        let checkpoint = if let Some(recovery) = &recovery {
+            match recovery.load().await {
+                Ok(checkpoint) => checkpoint,
+                Err(error) => {
+                    return self
+                        .retry_or_fail(
+                            key,
+                            lead,
+                            &hub,
+                            CODE_SETUP,
+                            &format!("The saved execution state could not be read: {error}"),
+                            sealed,
+                            cancel,
+                        )
+                        .await;
+                }
+            }
+        } else {
+            None
+        };
+        let recovering = checkpoint.is_some();
+        let saved_delivery = match checkpoint
+            .as_ref()
+            .map(decision_event::saved_delivery)
+            .transpose()
+        {
+            Ok(delivery) => delivery.flatten(),
+            Err(error) => {
+                return self
+                    .retry_or_fail(
+                        key,
+                        lead,
+                        &hub,
+                        CODE_SETUP,
+                        &error.to_string(),
+                        sealed,
+                        cancel,
+                    )
+                    .await;
+            }
+        };
+        let notes = (!sealed && !minted_by_hub && !ephemeral_user_context).then(|| {
+            HubNotes::new(
+                owner_hub.clone(),
+                bot_id,
+                &chat_conversation,
+                Some(StatusTurn {
+                    turn_id: lead.id.clone(),
+                    host_id: self.config.host_id.clone(),
+                }),
+            )
+            .handle(transcript.topic_at)
+        });
+        if let Some(live) = lock(&self.state).live.get_mut(key) {
+            live.notes = notes.clone();
+        }
+        let mut job = TurnJob {
             run_id: lead.id.clone(),
             bot_id: bot_id.clone(),
-            conversation_id: conversation_id.clone(),
+            conversation_id: chat_conversation,
             profile_id: None,
             prompt,
+            acknowledgement: false,
+            ephemeral_user_context,
+            suppress_owner_notifications: false,
             history: transcript.history,
             room_updates,
+            notes: notes.clone(),
             memory: memory.clone(),
             gate: gate.clone(),
             requester: Some(requester.clone()),
             hub_token,
             answered_round,
             claim,
+            recovery,
         };
+        gate.set_inference(Some(RunnerInference::new(
+            self.runner.clone(),
+            &job,
+            grants.clone(),
+            Arc::new(HubAuthority::new(
+                owner_hub.clone(),
+                bot_id,
+                &lead.id,
+                &lead.owner_id,
+                self.e2e.get().cloned(),
+            )),
+        )));
+        let call_utterance = entries.iter().any(|entry| {
+            entry.message_id == lead.trigger_message_id && entry.kind == InboxEntryKind::Transcript
+        });
+        let explicit_ask = entries.iter().any(|entry| {
+            entry.message_id == lead.trigger_message_id
+                && entry.kind == InboxEntryKind::Message
+                && entry.sender_id != lead.bot_id
+                && entry.sender_id != lead.owner_id
+                && crate::rule::is_plain(entry)
+                && entry
+                    .envelope
+                    .get("body")
+                    .and_then(|body| MessageBody::parse(body).ok())
+                    .is_some_and(|body| {
+                        body.mentions.contains(&lead.bot_id)
+                            && body.ask.is_some_and(|ask| {
+                                ask.id == entry.message_id
+                                    && ask.chain.last().is_none_or(|id| id == &entry.sender_id)
+                            })
+                    })
+        });
+        let event = (saved_delivery.is_some()
+            || (!resumed && !continued && !explicit_ask && !recovering))
+            .then(|| crate::event::trigger(&entries, &lead.trigger_message_id))
+            .flatten();
+        if event.as_ref().is_some_and(decision_event::monitoring)
+            && saved_delivery.is_none_or(|delivery| delivery.choice.is_none())
+        {
+            let previous = match self
+                .hub
+                .previous_monitor_result(bot_id, &lead.id, &self.config.host_id, lead.attempts)
+                .await
+            {
+                Ok(previous) => previous,
+                Err(error) => {
+                    tracing::warn!(%error, bot_id, "Bot host: previous monitoring result is unavailable");
+                    None
+                }
+            };
+            job.prompt = format!(
+                "{}\n\nCurrent scheduled check:\n{}",
+                crate::event::baseline_note(previous.as_deref()),
+                job.prompt
+            );
+        }
+        let mut event_delivery = saved_delivery.and_then(|delivery| delivery.choice);
+        if let Some(event) = &event
+            && saved_delivery.is_none()
+            && !resumed
+            && !recovering
+        {
+            let classified = tokio::select! {
+                biased;
+                reason = cancelled(cancel) => return End::by(reason),
+                result = tokio::time::timeout(Duration::from_secs(decision::TIMEOUT_SECS), crate::event::classify(self.runner.as_ref(), &job, event, None)) => result,
+            };
+            match classified {
+                Ok(Ok(Some(EventDecision::Ignore))) => return self.stay_silent(lead).await,
+                Ok(Ok(choice)) => event_delivery = choice,
+                Ok(Err(RunError::SessionChanged)) => {
+                    return End::dropped(crate::host::CODE_SESSION_CHANGED);
+                }
+                Ok(Err(_)) | Err(_) => tracing::warn!(
+                    bot_id,
+                    "Bot host: event decision unavailable; processing normally"
+                ),
+            }
+            let instruction = if decision_event::monitoring(event) {
+                decision_event::MONITOR_INSTRUCTION
+            } else {
+                event_delivery
+                    .map(EventDecision::instruction)
+                    .unwrap_or_default()
+            };
+            if !instruction.is_empty() {
+                job.prompt
+                    .push_str(&format!("\n\nHost delivery instruction: {instruction}"));
+                job.suppress_owner_notifications = true;
+            }
+        }
+        let delivery_state = saved_delivery.or_else(|| {
+            job.suppress_owner_notifications
+                .then(|| decision_event::EventDelivery {
+                    choice: event_delivery,
+                    monitoring: event.as_ref().is_some_and(decision_event::monitoring),
+                })
+        });
+        let event_recovery =
+            delivery_state.and_then(|delivery| crate::event::attach_delivery(&mut job, delivery));
+        // An explicit delegation already selected this bot to answer. Participation decisions
+        // must not silently drop that answer or wait for the caller that is waiting on it.
+        if (kind == ConversationKind::Group || call_utterance)
+            && event.is_none()
+            && !continued
+            && !explicit_ask
+            && !resumed
+            && !recovering
+        {
+            let decide = async {
+                let room = hub
+                    .read(
+                        &format!("inbox/conversations/{conversation_id}"),
+                        vec![("as", bot_id.clone())],
+                    )
+                    .await
+                    .map_err(|error| RunError::Retry {
+                        code: CODE_HUB.into(),
+                        message: error.to_string(),
+                    })?;
+                let participants = room
+                    .get("members")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    // The hub cannot recognize an explicit override inside a sealed message.
+                    // Omit participant waits until their routing can stay on the decrypting host.
+                    .filter(|_| !sealed)
+                    .filter(|member| {
+                        member
+                            .get("status")
+                            .and_then(serde_json::Value::as_str)
+                            .is_none_or(|status| status.eq_ignore_ascii_case("active"))
+                    })
+                    .filter_map(|member| {
+                        let id = member.get("principal_id")?.as_str()?;
+                        Some(DecisionParticipant {
+                            id: id.to_owned(),
+                            name: member
+                                .get("name")
+                                .and_then(serde_json::Value::as_str)
+                                .or_else(|| names.get(id).map(String::as_str))
+                                .unwrap_or(id)
+                                .to_owned(),
+                            kind: member.get("kind")?.as_str()?.to_owned(),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let request =
+                    participation_request(&job, &lead.trigger_message_id, &entries, &participants)
+                        .map_err(|error| RunError::Failed {
+                            code: CODE_SETUP.into(),
+                            message: error.to_string(),
+                        })?;
+                self.runner.decide(&job, &request).await
+            };
+            let decision = tokio::select! {
+                biased;
+                reason = cancelled(cancel) => return End::by(reason),
+                result = tokio::time::timeout(Duration::from_secs(decision::TIMEOUT_SECS), decide) => result,
+            };
+            match decision {
+                Ok(Ok(Decision::NoAnswer)) => return self.stay_silent(lead).await,
+                Ok(Ok(Decision::WaitFor(participant))) => {
+                    if kind != ConversationKind::Group {
+                        return self.stay_silent(lead).await;
+                    }
+                    match self
+                        .hub
+                        .wait_for(&lead.id, &self.config.host_id, &participant)
+                        .await
+                    {
+                        Ok(WaitOutcome::Parked) => {
+                            return End {
+                                status: TurnStatus::Done,
+                                error_code: flow_like_types::bot_turn::ERROR_SILENT.to_owned(),
+                                reply: None,
+                            };
+                        }
+                        Ok(WaitOutcome::AlreadyAnswered) => {}
+                        Ok(WaitOutcome::Unavailable) => {}
+                        Ok(WaitOutcome::Superseded) => return self.stay_silent(lead).await,
+                        Err(error) if error.lease_lost() => return End::lease_lost(),
+                        Err(error) => {
+                            tracing::warn!(%error, bot_id, "Bot host: participant wait could not be saved");
+                            return self.abandon(lead, CODE_SETUP).await;
+                        }
+                    }
+                }
+                Ok(Err(RunError::SessionChanged)) => {
+                    return End::dropped(crate::host::CODE_SESSION_CHANGED);
+                }
+                Ok(Err(_)) | Err(_) => tracing::warn!(
+                    bot_id,
+                    "Bot host: decision model unavailable; using normal response behavior"
+                ),
+                Ok(Ok(Decision::Acknowledge)) => job.acknowledgement = call_utterance,
+                Ok(Ok(Decision::AnswerNow)) => {}
+            }
+        }
+        let acknowledgement = job.acknowledgement;
+        let event_job = delivery_state.map(|_| job.clone());
+        let deadline =
+            crate::recovery::remaining_deadline(job.recovery.as_ref(), self.config.deadline);
+        let approval_recovery = job.recovery.clone();
         let outcome = tokio::select! {
             biased;
             reason = cancelled(cancel) => {
                 self.runner.cancel(&lead.id);
                 return End::by(reason);
             }
-            outcome = tokio::time::timeout(self.config.deadline, self.runner.run(job)) => outcome,
+            outcome = tokio::time::timeout(deadline, self.runner.run(job)) => outcome,
         };
         if let Some(card) = gate.parked() {
+            if let Err(error) =
+                crate::recovery::preserve_unexecuted_approval(approval_recovery.as_ref(), &gate)
+                    .await
+            {
+                return self
+                    .retry_or_fail(
+                        key,
+                        lead,
+                        &hub,
+                        CODE_SETUP,
+                        &format!("The pending approval could not be saved: {error}"),
+                        sealed,
+                        cancel,
+                    )
+                    .await;
+            }
             return self.park(key, lead, &hub, &card, sealed, cancel).await;
         }
+        let failed_execution = if let Some(job) = &event_job {
+            crate::event::failed_execution(job).await
+        } else {
+            false
+        };
+        if failed_execution {
+            event_delivery = None;
+        }
+        let pending_monitor = delivery_state.is_some_and(|saved| saved.monitoring)
+            && event_delivery.is_none()
+            && !failed_execution
+            && matches!(&outcome, Ok(Ok(text)) if !text.trim().is_empty());
+        if pending_monitor {
+            event_delivery = Some(EventDecision::Notify);
+        }
+        if let (Some(event), Some(job), Ok(Ok(text))) = (&event, &event_job, &outcome)
+            && decision_event::monitoring(event)
+            && pending_monitor
+            && !text.trim().is_empty()
+        {
+            let classified = tokio::select! {
+                biased;
+                reason = cancelled(cancel) => return End::by(reason),
+                result = tokio::time::timeout(Duration::from_secs(decision::TIMEOUT_SECS), crate::event::classify(self.runner.as_ref(), job, event, Some(text))) => result,
+            };
+            match classified {
+                Ok(Ok(choice)) => event_delivery = Some(choice.unwrap_or(EventDecision::Notify)),
+                Ok(Err(RunError::SessionChanged)) => {
+                    return End::dropped(crate::host::CODE_SESSION_CHANGED);
+                }
+                Ok(Err(_)) | Err(_) => {
+                    event_delivery = Some(EventDecision::Notify);
+                    tracing::warn!(
+                        bot_id,
+                        "Bot host: monitoring decision unavailable; delivering the result"
+                    );
+                }
+            }
+        }
+        if let Some(recovery) = &event_recovery
+            && !failed_execution
+            && matches!(&outcome, Ok(Ok(_)))
+            && delivery_state.is_some_and(|saved| saved.choice != event_delivery)
+            && let Err(error) = recovery.record(event_delivery).await
+        {
+            return self
+                .post(
+                    key,
+                    lead,
+                    &hub,
+                    &format!(
+                        "The event completed, but its delivery state could not be saved: {error}"
+                    ),
+                    Some(CODE_SETUP),
+                    sealed,
+                    cancel,
+                )
+                .await;
+        }
+        if matches!(&outcome, Ok(Ok(_))) && event_delivery.is_some_and(EventDecision::quiet) {
+            let end = self.stay_silent(lead).await;
+            if end.status == TurnStatus::Done {
+                clear_tokens(grants.as_ref(), &seen).await;
+                if let Some(JobMemory(source)) = memory {
+                    follow_up(bot_id, source);
+                }
+            }
+            return end;
+        }
         match outcome {
-            Ok(Ok(text)) if requester.answer_is_silent(&text) => self.stay_silent(lead).await,
+            Ok(Ok(text))
+                if requester.answer_is_silent(&text)
+                    || (acknowledgement
+                        && flow_like::flow::copilot::bot_run::is_silent_reply(&text)) =>
+            {
+                self.stay_silent(lead).await
+            }
             Ok(Err(RunError::SessionChanged)) => End::dropped(crate::host::CODE_SESSION_CHANGED),
-            Ok(Err(_)) if requester.may_stay_silent() => self.stay_silent(lead).await,
+            Ok(Err(_)) if event.is_none() && requester.may_stay_silent() => {
+                self.stay_silent(lead).await
+            }
             Ok(Err(RunError::Retry { code, message })) => {
                 self.retry_or_fail(key, lead, &hub, &code, &message, sealed, cancel)
                     .await
             }
-            Err(_) if requester.may_stay_silent() => {
+            Err(_) if event.is_none() && requester.may_stay_silent() => {
                 self.runner.cancel(&lead.id);
                 self.stay_silent(lead).await
             }
             Ok(Ok(text)) if !text.trim().is_empty() => {
                 let end = self
-                    .post(
+                    .post_with_delivery(
                         key,
                         lead,
                         &hub,
                         &clipped(&text, MAX_REPLY_CHARS),
                         None,
+                        event_delivery,
+                        acknowledgement,
                         sealed,
                         cancel,
                     )
@@ -623,7 +1102,9 @@ impl Inner {
                 if end.status == TurnStatus::Done {
                     clear_tokens(grants.as_ref(), &seen).await;
                 }
-                if let (Some(JobMemory(source)), TurnStatus::Done) = (memory, &end.status) {
+                if !acknowledgement
+                    && let (Some(JobMemory(source)), TurnStatus::Done) = (memory, &end.status)
+                {
                     follow_up(bot_id, source);
                 }
                 end
@@ -662,13 +1143,13 @@ impl Inner {
         sealed: bool,
         cancel: &mut watch::Receiver<Option<Cancel>>,
     ) -> End {
-        if lead.attempts < MAX_ATTEMPTS {
-            match self.hub.release(&lead.id, &self.config.host_id, code).await {
-                Ok(()) => return End::dropped(code),
-                Err(failure) if failure.lease_lost() => return End::lease_lost(),
-                Err(failure) => {
-                    tracing::warn!(%failure, turn_id = %lead.id, "Bot host: releasing a failed turn for retry failed");
-                }
+        // Claim generations keep increasing across approvals and manual retries. The hub owns
+        // the separate recovery budget and decides whether another retry is available.
+        match self.hub.release(&lead.id, &self.config.host_id, code).await {
+            Ok(()) => return End::dropped(code),
+            Err(failure) if failure.lease_lost() => return End::lease_lost(),
+            Err(failure) => {
+                tracing::warn!(%failure, turn_id = %lead.id, "Bot host: releasing a failed turn for retry failed");
             }
         }
         let text = format!(
@@ -713,47 +1194,60 @@ impl Inner {
         &self,
         lead: &BotTurn,
         hub: &Arc<dyn TurnHub>,
-    ) -> Option<(transcript::Transcript, Option<AnsweredRound>)> {
-        let asked = match hub.ask_result(&lead.bot_id, &lead.id).await {
-            Ok(asked) => asked?,
-            Err(failure) => {
-                tracing::debug!(%failure, "Bot host: the hub could not say whether an answer woke this turn");
-                return None;
-            }
+    ) -> Result<Option<LateContinuation>, HubFailure> {
+        let Some(asked) = hub.ask_result(&lead.bot_id, &lead.id).await? else {
+            return Ok(None);
         };
         let mut origin = hub
             .entries(&lead.bot_id, &asked.origin_conversation)
-            .await
-            .unwrap_or_default();
+            .await?;
         origin.reverse();
-        let earlier = origin.last().and_then(|newest| {
-            transcript::transcript(
-                &lead.bot_id,
-                ConversationKind::Direct,
-                &newest.message_id,
-                &origin,
-                &HashMap::new(),
-                &lead.owner_id,
+        let conversation = hub
+            .read(
+                &format!("inbox/conversations/{}", asked.origin_conversation),
+                Vec::new(),
             )
-            .ok()
+            .await
+            .ok();
+        let owner_direct = conversation.as_ref().is_some_and(|conversation| {
+            memory::hub_owner_direct(conversation, &lead.bot_id)
+                && conversation["members"].as_array().is_some_and(|members| {
+                    members.iter().any(|member| {
+                        member["principal_id"].as_str() == Some(lead.owner_id.as_str())
+                    })
+                })
         });
-        let (history, latest) = match earlier {
-            Some(earlier) => (earlier.history, Some(earlier.prompt)),
-            None => (Vec::new(), None),
+        let kind = if owner_direct {
+            ConversationKind::Direct
+        } else {
+            ConversationKind::Group
         };
-        let latest = latest.filter(|text| !text.trim().is_empty());
+        let history = transcript::continuation_history(
+            &lead.bot_id,
+            kind,
+            &origin,
+            &HashMap::new(),
+            &lead.owner_id,
+        );
         let transcript = transcript::Transcript {
             prompt: flow_like_types::bot_message::ask_result_prompt(
                 &asked.callee_name,
-                &clipped(&asked.question, ASK_PREVIEW_CHARS),
+                &asked.question,
                 &asked.answer,
                 asked.failed,
-                latest.as_deref(),
+                None,
             ),
             history,
             addressed: true,
+            topic_at: transcript::topic_at(&origin),
         };
-        Some((transcript, asked.answered_round()))
+        let answered_round = asked.answered_round();
+        Ok(Some(LateContinuation {
+            conversation_id: asked.origin_conversation,
+            kind,
+            transcript,
+            answered_round,
+        }))
     }
 
     /// Asks the hub to park the turn this host holds; the hub posts the card as the bot.
@@ -799,6 +1293,23 @@ impl Inner {
         sealed: bool,
         cancel: &mut watch::Receiver<Option<Cancel>>,
     ) -> End {
+        self.post_with_delivery(key, lead, hub, text, failure, None, false, sealed, cancel)
+            .await
+    }
+
+    async fn post_with_delivery(
+        &self,
+        key: &Key,
+        lead: &BotTurn,
+        hub: &Arc<dyn TurnHub>,
+        text: &str,
+        failure: Option<&str>,
+        event_delivery: Option<EventDecision>,
+        acknowledgement: bool,
+        sealed: bool,
+        cancel: &mut watch::Receiver<Option<Cancel>>,
+    ) -> End {
+        let note;
         {
             let mut state = lock(&self.state);
             let Some(live) = state.live.get_mut(key) else {
@@ -808,13 +1319,29 @@ impl Inner {
                 return End::by(reason);
             }
             live.posting = true;
+            note = live.notes.as_ref().and_then(NotesHandle::touched);
         }
         let message_id = if failure.is_some() {
             failure_message_id(&lead.bot_id, &lead.trigger_message_id)
         } else {
             reply_message_id(&lead.bot_id, &lead.trigger_message_id)
         };
-        let body = reply_body(&lead.trigger_message_id, lead.hops, text, failure);
+        let mut body = reply_body(&lead.trigger_message_id, lead.hops, text, failure);
+        if failure.is_none() && !acknowledgement {
+            crate::notes::attach_note(&mut body, note.as_ref());
+        }
+        if failure.is_none() && acknowledgement {
+            body[decision::ACKNOWLEDGEMENT_FIELD] = json!(true);
+        }
+        if failure.is_none() && event_delivery == Some(EventDecision::Respond) {
+            body[decision_event::REPLY_DELIVERY_FIELD] = json!("respond");
+        }
+        if lead.conversation_id != key.1 {
+            // The trigger belongs to the bot exchange and is not a message in the origin room.
+            if let Some(body) = body.as_object_mut() {
+                body.remove("reply_to");
+            }
+        }
         let message = if sealed {
             match self.sealed_message(lead, &message_id, &body).await {
                 Ok(message) => message,
@@ -927,6 +1454,7 @@ impl Inner {
             live.info.finished_at = Some(now());
             live.info.error_code = (!end.error_code.is_empty()).then_some(end.error_code);
             live.info.reply_message_id = end.reply;
+            live.info.status_text = None;
             state.finished.push_back(live.info.clone());
             while state.finished.len() > FINISHED_KEPT {
                 state.finished.pop_front();
@@ -953,5 +1481,6 @@ fn info_of(turn: &BotTurn, status: TurnStatus) -> TurnInfo {
         finished_at: None,
         error_code: None,
         reply_message_id: None,
+        status_text: None,
     }
 }

@@ -128,8 +128,57 @@ describe("receive-only provider adapters", () => {
 		const socket = Socket.sockets[0];
 		Object.defineProperty(socket, "protocol", { value: "" });
 		socket.dispatchEvent(new Event("open"));
-		await expect(pending).rejects.toThrow(
-			"Realtime provider connection failed",
+		await expect(pending).rejects.toMatchObject({
+			stage: "connect",
+			message:
+				'the provider chose protocol "" instead of "json.webpubsub.azure.v1"',
+		});
+	});
+
+	test("AWS names the step a connection stopped at and why a live one dropped", async () => {
+		const opened = async (count: number) => {
+			await vi.waitFor(() => expect(Socket.sockets).toHaveLength(count));
+			const socket = Socket.sockets[count - 1];
+			socket.dispatchEvent(new Event("open"));
+			return socket;
+		};
+
+		const silent = openRealtimeProvider(awsGrant, callbacks(), signal());
+		const silentResult = expect(silent).rejects.toMatchObject({
+			stage: "handshake",
+			message: "no answer within 10 s",
+		});
+		await vi.waitFor(() => expect(Socket.sockets).toHaveLength(1));
+		await vi.advanceTimersByTimeAsync(10_000);
+		await silentResult;
+
+		const refused = openRealtimeProvider(awsGrant, callbacks(), signal());
+		(await opened(2)).message(Uint8Array.of(0x20, 2, 0, 5).buffer);
+		await expect(refused).rejects.toMatchObject({
+			stage: "connect",
+			message: "MQTT connection denied (CONNACK return code 5)",
+		});
+
+		const denied = openRealtimeProvider(awsGrant, callbacks(), signal());
+		const deniedSocket = await opened(3);
+		deniedSocket.message(Uint8Array.of(0x20, 2, 0, 0).buffer);
+		deniedSocket.message(Uint8Array.of(0x90, 3, 0, 1, 0x80).buffer);
+		await expect(denied).rejects.toMatchObject({
+			stage: "subscribe",
+			message: `MQTT subscription to ${awsGrant.topic} denied (SUBACK code 128)`,
+		});
+
+		const events = callbacks();
+		const live = openRealtimeProvider(awsGrant, events, signal());
+		const liveSocket = await opened(4);
+		liveSocket.message(Uint8Array.of(0x20, 2, 0, 0).buffer);
+		liveSocket.message(Uint8Array.of(0x90, 3, 0, 1, 0).buffer);
+		await live;
+		liveSocket.dispatchEvent(
+			Object.assign(new Event("close"), { code: 1006, reason: "" }),
+		);
+		expect(events.disconnected).toHaveBeenCalledExactlyOnceWith(
+			"closed with code 1006",
 		);
 	});
 

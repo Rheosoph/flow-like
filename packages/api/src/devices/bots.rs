@@ -27,9 +27,9 @@ use crate::{
 };
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Path, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::{HeaderMap, StatusCode},
-    routing::post,
+    routing::{get, post},
 };
 use chrono::{DateTime, Duration, FixedOffset};
 use flow_like_types::{
@@ -39,8 +39,9 @@ use flow_like_types::{
         BUSY_POLL_MS, DeviceBotInfo, DeviceClaimRequest, DeviceForgetRequest, DeviceForgetResponse,
         DeviceHeartbeatRequest, DeviceHeartbeatResponse, DeviceParkRequest, DevicePollRequest,
         DevicePollResponse, DeviceReleaseRequest, DeviceReplyRequest, DeviceReplyResponse,
-        DeviceSilentRequest, DeviceTurnGrant, DeviceTurnState, IDLE_POLL_MS, MAX_POLL_MS,
-        MAX_REPLY_BYTES, REFRESHED_TOKEN_SECS, TOKEN_REFRESH_SECS,
+        DeviceSilentRequest, DeviceTurnGrant, DeviceTurnState, DeviceWaitRequest,
+        DeviceWaitResponse, IDLE_POLL_MS, MAX_POLL_MS, MAX_REPLY_BYTES, REFRESHED_TOKEN_SECS,
+        TOKEN_REFRESH_SECS,
     },
     inbox::{InboxEntryKind, is_valid_message_id},
 };
@@ -61,8 +62,17 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/{id}/bots/poll", post(poll))
         .route("/{id}/bots/hosts/forget", post(forget))
         .route("/{id}/bots/turns/{turn_id}/claim", post(claim))
+        .route(
+            "/{id}/bots/turns/{turn_id}/checkpoint",
+            get(checkpoint_load)
+                .put(checkpoint_save)
+                .layer(DefaultBodyLimit::max(
+                    flow_like_types::bot_turn::MAX_CHECKPOINT_BYTES + 4096,
+                )),
+        )
         .route("/{id}/bots/turns/{turn_id}/heartbeat", post(heartbeat))
         .route("/{id}/bots/turns/{turn_id}/silent", post(silent))
+        .route("/{id}/bots/turns/{turn_id}/wait", post(wait))
         .route("/{id}/bots/turns/{turn_id}/park", post(park))
         .route("/{id}/bots/turns/{turn_id}/release", post(release))
         .route(
@@ -93,6 +103,102 @@ async fn owner_of(
 
 fn host(host_id: String) -> Result<String, ApiError> {
     checked_host_id(TurnHostRequest { host_id })
+}
+
+async fn checkpoint_claim(
+    state: &AppState,
+    id: &str,
+    turn_id: &str,
+    headers: &HeaderMap,
+    method: &str,
+    host_id: String,
+    attempt: u32,
+) -> Result<crate::bot_host::recovery::Claim, ApiError> {
+    let owner_id = devices::device_principal(
+        &devices::context(state),
+        id,
+        headers,
+        method,
+        &format!("/devices/{id}/bots/turns/{turn_id}/checkpoint"),
+        false,
+    )
+    .await?
+    .status
+    .owner_id;
+    held_turn(&state.db, &owner_id, id, turn_id).await?;
+    Ok(crate::bot_host::recovery::Claim {
+        turn_id: turn_id.to_owned(),
+        owner_id,
+        host_id: host(host_id)?,
+        attempt,
+    })
+}
+
+#[utoipa::path(get, path = "/devices/{id}/bots/turns/{turn_id}/checkpoint", tag = "devices",
+    description = "Reads a bound bot turn's checkpoint under the device's current lease.",
+    params(("id" = String, Path), ("turn_id" = String, Path),
+        crate::routes::bots::checkpoint::CheckpointQuery),
+    responses((status = 200, description = "The saved execution state", body = crate::routes::bots::checkpoint::CheckpointResponse),
+        (status = 401, description = "Device session or proof is invalid"),
+        (status = 409, description = "The device lost the claim")))]
+pub(crate) async fn checkpoint_load(
+    State(state): State<AppState>,
+    Path((id, turn_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Query(query): Query<crate::routes::bots::checkpoint::CheckpointQuery>,
+) -> Result<Json<crate::routes::bots::checkpoint::CheckpointResponse>, ApiError> {
+    let claim = checkpoint_claim(
+        &state,
+        &id,
+        &turn_id,
+        &headers,
+        "GET",
+        query.host_id,
+        query.attempt,
+    )
+    .await?;
+    if query.monitor_baseline {
+        return Ok(Json(crate::routes::bots::checkpoint::CheckpointResponse {
+            checkpoint: None,
+            monitor_result: crate::bot_host::recovery::previous_monitor_result_in(
+                &state.db,
+                &claim,
+                now_millis(),
+            )
+            .await?,
+        }));
+    }
+    Ok(Json(crate::routes::bots::checkpoint::CheckpointResponse {
+        checkpoint: crate::bot_host::recovery::load_in(&state.db, &claim, now_millis()).await?,
+        monitor_result: None,
+    }))
+}
+
+#[utoipa::path(put, path = "/devices/{id}/bots/turns/{turn_id}/checkpoint", tag = "devices",
+    description = "Saves a bound bot turn's checkpoint with its claim attempt and checkpoint revision.",
+    params(("id" = String, Path), ("turn_id" = String, Path)),
+    request_body = crate::routes::bots::checkpoint::SaveCheckpoint,
+    responses((status = 200, description = "The checkpoint was saved"),
+        (status = 401, description = "Device session or proof is invalid"),
+        (status = 409, description = "The claim or checkpoint revision changed")))]
+pub(crate) async fn checkpoint_save(
+    State(state): State<AppState>,
+    Path((id, turn_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<crate::routes::bots::checkpoint::SaveCheckpoint>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let claim = checkpoint_claim(
+        &state,
+        &id,
+        &turn_id,
+        &headers,
+        "PUT",
+        body.host_id,
+        body.attempt,
+    )
+    .await?;
+    crate::bot_host::recovery::save(&state.db, state.db_dialect, &claim, &body.checkpoint).await?;
+    Ok(Json(serde_json::json!({"saved": true})))
 }
 
 async fn held_turn<C: ConnectionTrait>(
@@ -349,8 +455,8 @@ async fn give_up(state: &AppState, turn: &bot_turn::Model, host_id: &str, error:
 }
 
 /// Fresh tokens for the ones that have less than [`TOKEN_REFRESH_SECS`] left.
-async fn refreshed(
-    state: &AppState,
+pub(crate) async fn refreshed<C: ConnectionTrait>(
+    db: &C,
     turn: &bot_turn::Model,
     request: &DeviceHeartbeatRequest,
 ) -> Result<
@@ -362,10 +468,28 @@ async fn refreshed(
 > {
     let horizon = chrono::Utc::now().timestamp() + TOKEN_REFRESH_SECS;
     let due = |expires_at: Option<i64>| expires_at.is_some_and(|at| at < horizon);
+    if bots_grant::has_finished_checkpoint(db, turn, &request.host_id).await? {
+        let bot_token = if due(request.bot_token_expires_at) {
+            Some(
+                bots_grant::bot_token(
+                    db,
+                    &turn.owner_id,
+                    &turn.bot_id,
+                    &turn.id,
+                    bots_grant::DELIVERY_TTL_SECS,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+        // A completed checkpoint cannot acquire executor credentials through a heartbeat.
+        return Ok((bot_token, None));
+    }
     let bot_token = if due(request.bot_token_expires_at) {
         Some(
             bots_grant::bot_token(
-                &state.db,
+                db,
                 &turn.owner_id,
                 &turn.bot_id,
                 &turn.id,
@@ -377,8 +501,11 @@ async fn refreshed(
         None
     };
     let executor = if due(request.executor_token_expires_at) {
-        let workspace = live_workspace(&state.db, &turn.owner_id, &turn.bot_id).await?;
-        let conversation = bots_grant::conversation_of(state, &turn.conversation_id).await?;
+        let workspace = live_workspace(db, &turn.owner_id, &turn.bot_id).await?;
+        let conversation = crate::entity::conversation::Entity::find_by_id(&turn.conversation_id)
+            .one(db)
+            .await?
+            .ok_or_else(|| ApiError::not_found("The turn's conversation is gone"))?;
         let kind = flow_like_types::inbox::ConversationKind::parse(&conversation.kind)
             .unwrap_or(flow_like_types::inbox::ConversationKind::Group);
         Some(bots_grant::executor_token(
@@ -429,7 +556,7 @@ pub(crate) async fn heartbeat(
     held_turn(&state.db, &owner, &id, &turn_id).await?;
     let turn =
         ledger::heartbeat_in(&state.db, &turn_id, Some(&owner), &host_id, now_millis()).await?;
-    let (bot_token, executor_token) = refreshed(&state, &turn, &body).await?;
+    let (bot_token, executor_token) = refreshed(&state.db, &turn, &body).await?;
     Ok(Json(DeviceHeartbeatResponse {
         turn: ledger::turn_json(&turn, Vec::new()),
         bot_token,
@@ -490,6 +617,101 @@ pub(crate) async fn silent(
     Ok(Json(ended))
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn wait_in<C: ConnectionTrait>(
+    db: &C,
+    owner: &str,
+    device_id: &str,
+    turn_id: &str,
+    host_id: &str,
+    participant_id: &str,
+    now: DateTime<FixedOffset>,
+) -> Result<DeviceWaitResponse, ApiError> {
+    use crate::bot_host::decision_wait::{ParkOutcome, park_wait_in};
+    let turn = held_turn(db, owner, device_id, turn_id).await?;
+    let status = match park_wait_in(db, &turn, host_id, participant_id, now).await? {
+        ParkOutcome::Parked => "parked",
+        ParkOutcome::AlreadyAnswered => "already_answered",
+        ParkOutcome::Unavailable => "unavailable",
+        ParkOutcome::Superseded => "superseded",
+        ParkOutcome::LeaseLost => {
+            return Err(lease_lost(host_id, turn_id, "wait for a participant"));
+        }
+    };
+    Ok(DeviceWaitResponse {
+        status: status.to_owned(),
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = "/devices/{id}/bots/turns/{turn_id}/wait",
+    tag = "devices",
+    description = "A device defers its bot's response until a named room participant speaks.",
+    params(
+        ("id" = String, Path, description = "Device ID"),
+        ("turn_id" = String, Path, description = "The claimed turn")
+    ),
+    request_body = super::openapi_registry::wait_schema::DeviceWaitRequest,
+    responses(
+        (status = 200, description = "Status is parked, already_answered, unavailable or superseded", body = super::openapi_registry::wait_schema::DeviceWaitResponse),
+        (status = 401, description = "The device session or request proof is invalid or revoked"),
+        (status = 404, description = "No such turn for a bot bound to this device"),
+        (status = 409, description = "BOT_TURN_LEASE_LOST: the device no longer holds the turn")
+    )
+)]
+pub(crate) async fn wait(
+    State(state): State<AppState>,
+    Path((id, turn_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<DeviceWaitRequest>,
+) -> Result<Json<DeviceWaitResponse>, ApiError> {
+    let owner = owner_of(
+        &state,
+        &id,
+        &headers,
+        &format!("/bots/turns/{turn_id}/wait"),
+    )
+    .await?;
+    let host_id = host(body.host_id)?;
+    if body.participant_id.is_empty() || body.participant_id.len() > 128 {
+        return Err(ApiError::bad_request(
+            "participant_id must name a room member",
+        ));
+    }
+    let turn = held_turn(&state.db, &owner, &id, &turn_id).await?;
+    let ended = state
+        .transaction(|txn| {
+            let (owner, id, turn_id, host_id, participant_id, room) = (
+                owner.clone(),
+                id.clone(),
+                turn_id.clone(),
+                host_id.clone(),
+                body.participant_id.clone(),
+                turn.conversation_id.clone(),
+            );
+            Box::pin(async move {
+                crate::routes::inbox::approvals::lock(txn, &room).await?;
+                wait_in(
+                    txn,
+                    &owner,
+                    &id,
+                    &turn_id,
+                    &host_id,
+                    &participant_id,
+                    now_millis(),
+                )
+                .await
+            })
+        })
+        .await?;
+    if ended.status == "parked" {
+        bots_grant::settle(&state, &owner, body.usage.as_ref(), true).await;
+        wake(&state, [owner]).await;
+    }
+    Ok(Json(ended))
+}
+
 fn valid_error_code(code: &str) -> bool {
     (1..=MAX_ERROR_CODE_CHARS).contains(&code.len())
         && code
@@ -535,7 +757,11 @@ pub(crate) async fn release_in<C: ConnectionTrait>(
     if !released {
         return Err(lease_lost(&request.host_id, turn_id, "release it"));
     }
-    Ok((turn_state(db, owner, turn_id).await?, retry_at))
+    let state = turn_state(db, owner, turn_id).await?;
+    let retry_at = (state.turn.status == flow_like_types::bot_turn::TurnStatus::Queued)
+        .then_some(retry_at)
+        .flatten();
+    Ok((state, retry_at))
 }
 
 #[utoipa::path(
@@ -570,8 +796,15 @@ pub(crate) async fn release(
     )
     .await?;
     body.host_id = host(std::mem::take(&mut body.host_id))?;
-    let (ended, retry_at) =
-        release_in(&state.db, &owner, &id, &turn_id, &body, now_millis()).await?;
+    let (ended, retry_at) = state
+        .transaction(|txn| {
+            let (owner, id, turn_id, body) =
+                (owner.clone(), id.clone(), turn_id.clone(), body.clone());
+            Box::pin(
+                async move { release_in(txn, &owner, &id, &turn_id, &body, now_millis()).await },
+            )
+        })
+        .await?;
     if let Some(retry_at) = retry_at {
         worker::kick_later(retry_at);
     }

@@ -98,8 +98,48 @@ pub struct Claimed {
     pub session: Option<TurnSession>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaitOutcome {
+    Parked,
+    AlreadyAnswered,
+    Unavailable,
+    Superseded,
+}
+
 #[async_trait]
 pub trait TurnHub: Send + Sync + 'static {
+    async fn previous_monitor_result(
+        &self,
+        _bot_id: &str,
+        _turn_id: &str,
+        _host_id: &str,
+        _attempt: u32,
+    ) -> Result<Option<String>, HubFailure> {
+        Ok(None)
+    }
+    fn supports_recovery(&self) -> bool {
+        false
+    }
+    async fn checkpoint_load(
+        &self,
+        _bot_id: &str,
+        _turn_id: &str,
+        _host_id: &str,
+        _attempt: u32,
+    ) -> Result<Option<flow_like_types::bot_turn::BotRunCheckpoint>, HubFailure> {
+        Err(HubFailure::offline("This hub cannot recover bot turns"))
+    }
+    async fn checkpoint_save(
+        &self,
+        _bot_id: &str,
+        _turn_id: &str,
+        _host_id: &str,
+        _attempt: u32,
+        _checkpoint: &flow_like_types::bot_turn::BotRunCheckpoint,
+    ) -> Result<(), HubFailure> {
+        Err(HubFailure::offline("This hub cannot recover bot turns"))
+    }
     async fn list(&self) -> Result<Vec<BotTurn>, HubFailure>;
     async fn claim(&self, turn_id: &str, host_id: &str) -> Result<BotTurn, HubFailure>;
     /// Claims the turn together with the credentials and run spec the hub returns with the claim.
@@ -129,6 +169,48 @@ pub trait TurnHub: Send + Sync + 'static {
         bot_id: &str,
         conversation_id: &str,
     ) -> Result<Vec<InboxEntry>, HubFailure>;
+    /// Include the original trigger when resumed work has fallen outside recent history.
+    async fn entries_for_turn(
+        &self,
+        bot_id: &str,
+        conversation_id: &str,
+        trigger_message_id: &str,
+    ) -> Result<Vec<InboxEntry>, HubFailure> {
+        let mut entries = self.entries(bot_id, conversation_id).await?;
+        if entries
+            .iter()
+            .any(|entry| entry.message_id == trigger_message_id)
+            || !self.supports_recovery()
+        {
+            return Ok(entries);
+        }
+        let page = self
+            .read(
+                &format!("inbox/conversations/{conversation_id}/entries"),
+                vec![
+                    ("as", bot_id.to_owned()),
+                    ("message_id", trigger_message_id.to_owned()),
+                ],
+            )
+            .await?;
+        let original = entries_of(page)?;
+        if original.iter().any(|entry| {
+            entry.conversation_id != conversation_id || entry.message_id != trigger_message_id
+        }) || original.len() > 1
+        {
+            return Err(HubFailure::offline(
+                "The hub returned an unrelated turn trigger",
+            ));
+        }
+        entries.extend(original);
+        entries.sort_by(|a, b| {
+            b.seq
+                .cmp(&a.seq)
+                .then_with(|| b.created_at.cmp(&a.created_at))
+                .then_with(|| b.id.cmp(&a.id))
+        });
+        Ok(entries)
+    }
     async fn send(
         &self,
         bot_id: &str,
@@ -201,6 +283,15 @@ pub trait TurnHub: Send + Sync + 'static {
     async fn silent(&self, _turn_id: &str, _host_id: &str) -> Result<(), HubFailure> {
         Err(HubFailure::offline("This hub cannot end turns silently"))
     }
+    /// Completes this turn silently and records its dependency on another room participant.
+    async fn wait_for(
+        &self,
+        _turn_id: &str,
+        _host_id: &str,
+        _participant_id: &str,
+    ) -> Result<WaitOutcome, HubFailure> {
+        Ok(WaitOutcome::Unavailable)
+    }
     /// For a turn a late answer woke: the question and the answer. `None` for any other turn.
     async fn ask_result(
         &self,
@@ -235,6 +326,15 @@ pub trait TurnHub: Send + Sync + 'static {
         _body: Value,
     ) -> Result<Value, HubFailure> {
         Err(HubFailure::offline("This hub offers no key writes"))
+    }
+    /// A PATCH with the signed-in session: how a bot's notes are written.
+    async fn patch(
+        &self,
+        _path: &str,
+        _query: Vec<(&'static str, String)>,
+        _body: Value,
+    ) -> Result<Value, HubFailure> {
+        Err(HubFailure::offline("This hub offers no note writes"))
     }
     /// A DELETE with the signed-in session: how a rotated inbox key is revoked.
     async fn delete(

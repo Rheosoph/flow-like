@@ -508,6 +508,7 @@ async fn notify_stage(
             state,
             &id,
             DispatchNotificationInput {
+                notification_priority: Default::default(),
                 bot_context: None,
                 user_id,
                 app_id: Some(app_id.to_string()),

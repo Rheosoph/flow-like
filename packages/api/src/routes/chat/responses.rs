@@ -59,7 +59,8 @@ fn prepare_upstream_body(
     request_body = serde_json::Value,
     description = "Relay an OpenAI Responses API call to the hosted provider backing the model Bit. Only Bits whose provider declares the `Responses` API surface are accepted.",
     responses(
-        (status = 200, description = "LLM response (streaming or JSON)")
+        (status = 200, description = "LLM response (streaming or JSON)"),
+        (status = 413, description = "The request is larger than 6,000,000 bytes, inline media included")
     )
 )]
 #[tracing::instrument(name = "POST /responses", skip_all)]

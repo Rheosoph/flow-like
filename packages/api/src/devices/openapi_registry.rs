@@ -10,7 +10,35 @@ use super::{
     },
 };
 use crate::routes::devices::RenameDeviceRequest;
-use utoipa::OpenApi;
+use serde::Serialize;
+use utoipa::{OpenApi, ToSchema};
+
+/// OpenAPI shapes of the wait contract types, which live in a crate without utoipa.
+pub(crate) mod wait_schema {
+    use super::*;
+
+    /// What the device reports of the model usage when it ends the turn.
+    #[derive(Serialize, ToSchema)]
+    pub struct DeviceUsageReport {
+        pub operation_id: String,
+        /// Wall-clock milliseconds the model-driven part of the turn ran.
+        pub elapsed_ms: i64,
+    }
+
+    /// Defer the turn until one room participant speaks.
+    #[derive(Serialize, ToSchema)]
+    pub struct DeviceWaitRequest {
+        pub host_id: String,
+        pub participant_id: String,
+        pub usage: Option<DeviceUsageReport>,
+    }
+
+    #[derive(Serialize, ToSchema)]
+    pub struct DeviceWaitResponse {
+        /// `parked`, `already_answered`, `unavailable`, or `superseded` by a new topic.
+        pub status: String,
+    }
+}
 
 #[derive(OpenApi)]
 #[openapi(
@@ -24,8 +52,11 @@ use utoipa::OpenApi;
         super::management::my_access,
         super::bots::poll,
         super::bots::claim,
+        super::bots::checkpoint_load,
+        super::bots::checkpoint_save,
         super::bots::heartbeat,
         super::bots::silent,
+        super::bots::wait,
         super::bots::park,
         super::bots::release,
         super::bots::reply,
@@ -48,6 +79,9 @@ use utoipa::OpenApi;
         MyAccess,
         AccessGrant,
         AccessRole,
+        wait_schema::DeviceWaitRequest,
+        wait_schema::DeviceWaitResponse,
+        wait_schema::DeviceUsageReport,
     ))
 )]
 pub(crate) struct RegistryApi;
@@ -58,6 +92,50 @@ mod tests {
     use serde_json::Value;
     use std::collections::BTreeSet;
     use utoipa::OpenApi;
+
+    #[test]
+    fn wait_schemas_match_the_contract_types() {
+        use flow_like_types::device_bot::{DeviceWaitRequest, DeviceWaitResponse};
+        let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
+        let keys = |schema: &str| -> BTreeSet<String> {
+            spec.pointer(&format!("/components/schemas/{schema}/properties"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("schema '{schema}' is not registered"))
+                .keys()
+                .cloned()
+                .collect()
+        };
+        let fields = |value: Value| -> BTreeSet<String> {
+            value.as_object().unwrap().keys().cloned().collect()
+        };
+        assert_eq!(
+            keys("DeviceWaitRequest"),
+            fields(
+                serde_json::to_value(DeviceWaitRequest {
+                    host_id: String::new(),
+                    participant_id: String::new(),
+                    usage: None,
+                })
+                .unwrap()
+            )
+        );
+        assert_eq!(
+            keys("DeviceWaitResponse"),
+            fields(
+                serde_json::to_value(DeviceWaitResponse {
+                    status: String::new()
+                })
+                .unwrap()
+            )
+        );
+        assert_eq!(
+            spec.pointer(
+                "/paths/~1devices~1{id}~1bots~1turns~1{turn_id}~1wait/post/requestBody/content/application~1json/schema/$ref"
+            )
+            .and_then(Value::as_str),
+            Some("#/components/schemas/DeviceWaitRequest")
+        );
+    }
 
     #[test]
     fn registry_paths_are_documented() {

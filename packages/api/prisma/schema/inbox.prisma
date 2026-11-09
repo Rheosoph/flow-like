@@ -24,11 +24,13 @@ model Conversation {
   segments       ConversationSegment[]
   files          ConversationFile[]
   botTurns       BotTurn[]
+  decisionWaits  BotDecisionWait[]
   pinnedFor      PinnedConversation[]
   pinnedMessages PinnedMessage[]
   stars          StarredMessage[]
   meetings       Meeting[]
   inviteLinks    ConversationInviteLink[]
+  botNotes       BotNote[]
 
   @@unique([createdBy, importKey])
 }

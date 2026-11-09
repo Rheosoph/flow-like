@@ -296,6 +296,8 @@
 	"nodes2": "Nodes",
 	"noDescriptionFound": "Keine Beschreibung gefunden.",
 	"nodesLength": "Nodes ({{length}})",
+	"skillTools": "",
+	"skillsLength": "",
 	"nodeStorage": "Node-Speicher",
 	"noExternalLinksProvided": "Keine externen Links angegeben",
 	"noLinksAvailable": "Keine Links verfügbar",

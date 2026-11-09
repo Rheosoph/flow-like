@@ -208,4 +208,70 @@ export const cosmosShapes: readonly BotShapeDefinition[] = [
 			</>
 		),
 	}),
+	crewShape({
+		id: "zuri",
+		label: "Zuri",
+		series: "cosmos",
+		description:
+			"A green alien with wide dark eyes and gently swaying antennae.",
+		palette: {
+			body: "#a7d786",
+			background: "#e9e4f6",
+			ink: "#293e38",
+			accent: "#5b9b75",
+			clothing: "#70649a",
+			cheek: "#d0e9a7",
+		},
+		backgroundDetailColors: ["accent"],
+		eyeStyle: "dots",
+		mouthScale: 0.8,
+		bodyMotion: "float",
+		silhouette:
+			"M18 49C18 32 32 27 50 27C68 27 82 32 82 49C82 65 67 79 59 83L66 100H34L41 83C33 79 18 65 18 49Z",
+		clothingClip: "M41 83H59L66 100H34Z",
+		anchors: {
+			head: { x: 50, y: 28, width: 46 },
+			eyes: { left: [36, 56], right: [64, 56], radius: 7.4 },
+			mouth: [50, 75],
+			neck: { y: 84, bottom: 100, width: 32 },
+			hand: [33, 87],
+		},
+		renderBackDetails: ({ palette, equipment }) =>
+			!equipment?.head &&
+			[-1, 1].map((side) => (
+				<BotMotion
+					key={side}
+					kind="sway"
+					origin={[50 + side * 15, 33]}
+					duration={3800}
+					delay={side === -1 ? 0 : -1100}
+					amount={6}
+				>
+					<path
+						d={`M${50 + side * 15} 33Q${50 + side * 17} 22 ${50 + side * 23} 19`}
+						fill="none"
+						stroke={palette.accent}
+						strokeWidth="3"
+						strokeLinecap="round"
+					/>
+					<circle cx={50 + side * 23} cy="18" r="4.5" fill={palette.accent} />
+					<circle
+						cx={49 + side * 23}
+						cy="17"
+						r="1.3"
+						fill={palette.sclera}
+						opacity=".7"
+					/>
+				</BotMotion>
+			)),
+		renderDetails: ({ palette }) => (
+			<path
+				d="M29 42Q34 34 44 34"
+				fill="none"
+				stroke={palette.cheek}
+				strokeWidth="3"
+				strokeLinecap="round"
+			/>
+		),
+	}),
 ];

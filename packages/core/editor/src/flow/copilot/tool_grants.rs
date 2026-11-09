@@ -1,7 +1,8 @@
 //! Standing tool approvals for bots. A call that asks the owner is first matched against the
 //! bot's grants (`(tool, scope)` pairs kept by the host's [`GrantStore`]): a grant runs the call
-//! without asking, on every host. A headless turn with no grant parks: it posts an approval card
-//! and sleeps until the owner answers; a one-time answer leaves a token for the resumed run.
+//! without asking, on every host. A headless turn can infer authorization for a concrete call
+//! from the owner's instructions. Otherwise it posts an approval card and sleeps until the
+//! owner answers; a one-time answer leaves a token for the resumed run.
 //!
 //! [`grant_scopes`] is the one scope rule. Interactive chats use it too, so the app's
 //! "Always allow" and a headless turn's grant mean the same thing:
@@ -18,7 +19,7 @@
 //! | `message_person` | `person:<id>` |
 //! | `data_sources` attach | `connection:<kind>:<host>:<port>:<database>` |
 //! | `web_request` | `web:<site>:read` or `web:<site>:write`, plus `web:<site>:secret:<NAME>` per secret sent |
-//! | `http_request`, `forecast_tool`, `flowpilot_board_review`, `app_build`, `apply_home_layout` | none: asked every time |
+//! | `http_request`, `forecast_tool`, `flowpilot_board_review`, `app_build`, `apply_home_layout`, `bot_update_configuration`, `create_bot`, `update_bot` | none: asked every time |
 //! | every other tool that asks | `*` |
 //!
 //! The document cost check is the grant `(documents, documents.expensive)`.
@@ -33,15 +34,19 @@ use serde_json::Value;
 
 use flow_like_bot_tools as tools;
 
+use super::tool_authorization::AuthorizationInference;
 use super::tool_spec::spec_arg_str;
 
-const NOT_GRANTABLE: [&str; 6] = [
+const NOT_GRANTABLE: [&str; 9] = [
     "http_request",
     "forecast_tool",
     "flowpilot_board_review",
     "app_build",
     "apply_home_layout",
     SECRET_REQUEST_TOOL,
+    tools::configuration::BOT_UPDATE_CONFIGURATION,
+    tools::crew::CREATE_BOT,
+    tools::crew::UPDATE_BOT,
 ];
 
 /// One stored `(tool, scope)` pair.
@@ -290,6 +295,7 @@ pub async fn record_card_answer(
     let scopes: Vec<String> = card
         .scope
         .split(',')
+        .filter(|_| !NOT_GRANTABLE.contains(&card.tool.as_str()))
         .filter(|scope| !scope.is_empty())
         .map(str::to_string)
         .collect();
@@ -349,6 +355,7 @@ pub fn approval_request(
         requester_name: None,
         room: None,
         secret: secret_ask(tool, args),
+        configuration_changes: tools::configuration::proposed_changes(tool, args),
     }
 }
 
@@ -382,18 +389,59 @@ pub async fn headless_answer(
     context_app: Option<&str>,
     description: &str,
 ) -> HeadlessAnswer {
+    headless_answer_with_inference(store, turn_id, tool, args, context_app, description, None).await
+}
+
+/// Irreversible deletion and explicit review boundaries always require an owner's answer.
+/// Document cost approvals use their separate gate and never reach inference.
+pub fn permits_authorization_inference(tool: &str, args: &Value) -> bool {
+    !NOT_GRANTABLE.contains(&tool)
+        && tool != DOCUMENTS_TOOL
+        && tool != "knowledge_drop"
+        && !(tool == "database_tool" && arg(args, "operation", "operation") == "delete_table")
+        && !(tool == "storage_tool" && arg(args, "operation", "operation") == "delete_files")
+}
+
+/// An inferred answer covers only this concrete call; it never writes a standing grant.
+pub async fn headless_answer_with_inference(
+    store: &dyn GrantStore,
+    turn_id: &str,
+    tool: &str,
+    args: &Value,
+    context_app: Option<&str>,
+    description: &str,
+    inference: Option<&dyn AuthorizationInference>,
+) -> HeadlessAnswer {
     match check_call(store, tool, args, context_app).await {
         Ok(check) if check.runs() => HeadlessAnswer::Run,
-        Ok(GrantCheck::Denied) => HeadlessAnswer::Refuse(format!(
-            "The owner refused this {tool} call. Do not try it again; tell them what you could not do."
-        )),
-        Ok(_) => HeadlessAnswer::Park(approval_request(
-            turn_id,
-            tool,
-            args,
-            context_app,
-            description,
-        )),
+        Ok(GrantCheck::Denied) => {
+            if let Some(inference) = inference {
+                inference.record_refusal(tool, args, context_app);
+            }
+            HeadlessAnswer::Refuse(format!(
+                "The owner refused this {tool} call. Do not try it again; tell them what you could not do."
+            ))
+        }
+        Ok(_) => {
+            if permits_authorization_inference(tool, args)
+                && let Some(inference) = inference
+                && flow_like_types::tokio::time::timeout(
+                    super::tool_authorization::DECISION_TIMEOUT,
+                    inference.infer(tool, args, context_app, description),
+                )
+                .await
+                .unwrap_or(false)
+            {
+                return HeadlessAnswer::Run;
+            }
+            HeadlessAnswer::Park(approval_request(
+                turn_id,
+                tool,
+                args,
+                context_app,
+                description,
+            ))
+        }
         Err(error) => HeadlessAnswer::Refuse(format!(
             "The owner's standing approvals could not be read ({error}). Nothing was run."
         )),
@@ -473,6 +521,277 @@ mod tests {
 
     #[derive(Default)]
     struct Memory(Mutex<Vec<GrantKey>>);
+
+    #[derive(Default)]
+    struct Infer {
+        calls: std::sync::atomic::AtomicUsize,
+        refused: Mutex<Vec<String>>,
+        allow: bool,
+    }
+
+    #[async_trait]
+    impl AuthorizationInference for Infer {
+        async fn infer(&self, tool: &str, args: &Value, _: Option<&str>, _: &str) -> bool {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.allow
+                && !self
+                    .refused
+                    .lock()
+                    .unwrap()
+                    .contains(&args_hash(tool, args))
+        }
+
+        fn record_refusal(&self, tool: &str, args: &Value, _: Option<&str>) {
+            self.refused.lock().unwrap().push(args_hash(tool, args));
+        }
+    }
+
+    #[tokio::test]
+    async fn inference_authorizes_one_call_without_storing_a_grant() {
+        let store = Memory::default();
+        let inference = Infer {
+            allow: true,
+            ..Default::default()
+        };
+        let args = json!({"app_id":"a", "event_id":"e"});
+        assert_eq!(
+            headless_answer_with_inference(
+                &store,
+                "t",
+                "call_app_event",
+                &args,
+                None,
+                "Run event",
+                Some(&inference)
+            )
+            .await,
+            HeadlessAnswer::Run
+        );
+        assert!(store.list().await.unwrap().is_empty());
+        assert!(matches!(
+            headless_answer(&store, "t", "call_app_event", &args, None, "").await,
+            HeadlessAnswer::Park(_)
+        ));
+        let uncertain = Infer::default();
+        assert!(matches!(
+            headless_answer_with_inference(
+                &store,
+                "t",
+                "call_app_event",
+                &args,
+                None,
+                "",
+                Some(&uncertain)
+            )
+            .await,
+            HeadlessAnswer::Park(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn explicit_approvals_and_refusals_take_precedence_over_inference() {
+        let store = Memory::default();
+        let inference = Infer {
+            allow: true,
+            ..Default::default()
+        };
+        let args = json!({"app_id":"a", "event_id":"e"});
+        record_answer(
+            &store,
+            "call_app_event",
+            &args,
+            None,
+            ApprovalDecision::Always,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            headless_answer_with_inference(
+                &store,
+                "t",
+                "call_app_event",
+                &args,
+                None,
+                "",
+                Some(&inference)
+            )
+            .await,
+            HeadlessAnswer::Run
+        );
+        record_answer(
+            &store,
+            "call_app_event",
+            &args,
+            None,
+            ApprovalDecision::Deny,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            headless_answer_with_inference(
+                &store,
+                "t",
+                "call_app_event",
+                &args,
+                None,
+                "",
+                Some(&inference)
+            )
+            .await,
+            HeadlessAnswer::Refuse(_)
+        ));
+        assert_eq!(inference.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(
+            *inference.refused.lock().unwrap(),
+            vec![args_hash("call_app_event", &args)]
+        );
+        let once_store = Memory::default();
+        record_answer(
+            &once_store,
+            "call_app_event",
+            &args,
+            None,
+            ApprovalDecision::Once,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            headless_answer_with_inference(
+                &once_store,
+                "t",
+                "call_app_event",
+                &args,
+                None,
+                "",
+                Some(&inference)
+            )
+            .await,
+            HeadlessAnswer::Run
+        );
+        assert_eq!(inference.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn inference_cannot_waive_explicit_review_or_destructive_deletion() {
+        let store = Memory::default();
+        let inference = Infer {
+            allow: true,
+            ..Default::default()
+        };
+        let mut cases: Vec<_> = NOT_GRANTABLE
+            .iter()
+            .map(|tool| (*tool, json!({})))
+            .collect();
+        cases.extend([
+            (
+                "database_tool",
+                json!({"operation":"delete_table", "table_name":"records"}),
+            ),
+            ("storage_tool", json!({"operation":"delete_files"})),
+            ("knowledge_drop", json!({"index":"records"})),
+            (DOCUMENTS_TOOL, json!({})),
+        ]);
+        for (tool, args) in cases {
+            assert!(
+                matches!(
+                    headless_answer_with_inference(
+                        &store,
+                        "t",
+                        tool,
+                        &args,
+                        None,
+                        "",
+                        Some(&inference)
+                    )
+                    .await,
+                    HeadlessAnswer::Park(_)
+                ),
+                "{tool}"
+            );
+        }
+        assert_eq!(inference.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn unavailable_grants_never_fall_back_to_inference() {
+        struct Unavailable;
+        #[async_trait]
+        impl GrantStore for Unavailable {
+            async fn list(&self) -> flow_like_types::Result<Vec<GrantKey>> {
+                Err(flow_like_types::anyhow!("store unavailable"))
+            }
+            async fn put(&self, _: &str, _: &str) -> flow_like_types::Result<()> {
+                unreachable!()
+            }
+            async fn delete(&self, _: &str, _: &str) -> flow_like_types::Result<bool> {
+                Ok(false)
+            }
+        }
+        let inference = Infer {
+            allow: true,
+            ..Default::default()
+        };
+        assert!(matches!(
+            headless_answer_with_inference(
+                &Unavailable,
+                "t",
+                "email_reply",
+                &json!({}),
+                None,
+                "",
+                Some(&inference)
+            )
+            .await,
+            HeadlessAnswer::Refuse(_)
+        ));
+        assert_eq!(inference.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(inference.refused.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn configuration_changes_require_one_approval_for_each_exact_call() {
+        let tool = tools::configuration::BOT_UPDATE_CONFIGURATION;
+        let store = Memory::default();
+        let args =
+            json!({"changes":{"instructions":"a".repeat(8_000),"capabilities":["internet"]}});
+        store.put(tool, SCOPE_ALL).await.unwrap();
+        assert_eq!(
+            check_call(&store, tool, &args, None).await.unwrap(),
+            GrantCheck::Missing
+        );
+        let HeadlessAnswer::Park(mut card) =
+            headless_answer(&store, "turn", tool, &args, None, "Change my settings").await
+        else {
+            panic!("settings must ask");
+        };
+        assert!(card.scope.is_empty());
+        assert_eq!(card.configuration_changes, Some(args["changes"].clone()));
+        // A stored or stale card cannot turn this tool into a standing permission.
+        card.scope = "*".into();
+        record_card_answer(&store, &card, ApprovalDecision::Always)
+            .await
+            .unwrap();
+        let different = json!({"changes":{"capabilities":["command_line"]}});
+        assert_eq!(
+            check_call(&store, tool, &different, None).await.unwrap(),
+            GrantCheck::Missing
+        );
+        assert_eq!(
+            check_call(&store, tool, &args, None).await.unwrap(),
+            GrantCheck::Once
+        );
+        assert_eq!(
+            check_call(&store, tool, &args, None).await.unwrap(),
+            GrantCheck::Missing
+        );
+        record_answer(&store, tool, &args, None, ApprovalDecision::Deny)
+            .await
+            .unwrap();
+        assert!(matches!(
+            headless_answer(&store, "turn", tool, &args, None, "").await,
+            HeadlessAnswer::Refuse(_)
+        ));
+    }
 
     #[async_trait]
     impl GrantStore for Memory {

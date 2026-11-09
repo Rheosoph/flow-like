@@ -20,7 +20,8 @@ use utoipa::{IntoParams, ToSchema};
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct BotFactList {
     /// Newest first. Each fact: `id`, `text`, `kind`, `subject`, `source`, `confidence`,
-    /// `recorded_at`, `valid_from`, `valid_to`, `superseded_by` and `evidence` (`seq`,
+    /// `recorded_at`, `valid_from`, `valid_to`, optional `geojson`, `time`, `expires_at`,
+    /// `superseded_by` and `evidence` (`seq`,
     /// `message_id`, `quote`, `at`).
     #[schema(value_type = Vec<Object>)]
     pub facts: Vec<FactView>,

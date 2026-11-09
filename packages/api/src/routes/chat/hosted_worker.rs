@@ -14,7 +14,7 @@ use axum::{
     body::Body,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use chrono::{DateTime, Utc};
 use flow_like::flow_like_model_provider::provider::ModelApiSurface;
@@ -571,6 +571,63 @@ async fn flush(
     write_json(state, id, "head.json", head).await
 }
 
+async fn retain_failure(
+    bucket: &FlowLikeStore,
+    id: &str,
+    error: ApiError,
+    provider_request_started: bool,
+) -> Result<(), ApiError> {
+    let head = match read_stored_json::<StreamHead>(bucket, id, "head.json").await? {
+        Some(mut head) => {
+            // The reader may already have received these headers and chunks.
+            head.done = true;
+            head.error = Some(if provider_request_started {
+                "Hosted AI response was interrupted; usage is being reconciled".into()
+            } else {
+                "Hosted AI request could not be started".into()
+            });
+            head
+        }
+        None => {
+            // Before headers are published, return the same public error as the direct route.
+            let response = error.into_response();
+            let head = StreamHead {
+                chunks: 1,
+                status: response.status().as_u16(),
+                content_type: "application/json".into(),
+                retry_after: response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToOwned::to_owned),
+                done: true,
+                error: None,
+            };
+            let body = axum::body::to_bytes(response.into_body(), MAX_RESPONSE_BYTES)
+                .await
+                .map_err(|_| ApiError::internal("Unable to retain hosted AI error response"))?;
+            let mut body: serde_json::Value = serde_json::from_slice(&body)?;
+            // ErrorReport extensions stay in this process. Retained replies use the operation ID.
+            if let Some(error) = body
+                .get_mut("error")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                error.remove("id");
+            }
+            let body = Bytes::from(serde_json::to_vec(&body)?);
+            bucket.put(&job_path(id, "chunks/00000000")?, body).await?;
+            head
+        }
+    };
+    bucket
+        .put(
+            &job_path(id, "head.json")?,
+            Bytes::from(serde_json::to_vec(&head)?),
+        )
+        .await?;
+    Ok(())
+}
+
 pub(crate) async fn work(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -659,24 +716,7 @@ pub(crate) async fn work(
             )
             .await;
         }
-        let mut head = read_json::<StreamHead>(&state, &id, "head.json")
-            .await?
-            .unwrap_or(StreamHead {
-                status: if provider_request_started {
-                    502
-                } else {
-                    error.status().as_u16()
-                },
-                content_type: "text/event-stream".into(),
-                ..Default::default()
-            });
-        head.done = true;
-        head.error = Some(if provider_request_started {
-            "Hosted AI response was interrupted; usage is being reconciled".into()
-        } else {
-            "Hosted AI request could not be started".into()
-        });
-        write_json(&state, &id, "head.json", &head).await?;
+        retain_failure(&state.meta_bucket, &id, error, provider_request_started).await?;
         let _ = state
             .meta_bucket
             .as_generic()
@@ -947,6 +987,94 @@ mod tests {
         };
         assert!(!initial_request_started(&job.request));
         assert!(remaining_request_ms(&job).is_err());
+    }
+
+    #[tokio::test]
+    async fn failures_before_response_headers_keep_public_status_and_json() {
+        for provider_request_started in [false, true] {
+            for error in [
+                ApiError::bad_request("This image model does not support the requested format"),
+                ApiError::UNAUTHORIZED,
+                ApiError::too_many_requests("The image provider is busy"),
+                ApiError::service_unavailable("private-provider-token"),
+            ] {
+                let status = error.status();
+                let code = error.public_code().to_string();
+                let message = error.public_message().map(ToOwned::to_owned);
+                let bucket = Arc::new(FlowLikeStore::Memory(Arc::new(
+                    flow_like_storage::object_store::memory::InMemory::new(),
+                )));
+                let id = "failed-image";
+                retain_failure(&bucket, id, error, provider_request_started)
+                    .await
+                    .unwrap();
+                let response =
+                    read_response(bucket, id.into(), Utc::now() + chrono::Duration::seconds(5))
+                        .await
+                        .unwrap();
+                assert_eq!(response.status(), status);
+                assert_eq!(response.headers()["content-type"], "application/json");
+                let body = axum::body::to_bytes(response.into_body(), MAX_RESPONSE_BYTES)
+                    .await
+                    .expect("a rejected image request returns a complete response");
+                let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                if !code.is_empty() {
+                    assert_eq!(body["error"]["code"], code);
+                }
+                if let Some(message) = message {
+                    assert_eq!(body["error"]["message"], message);
+                }
+                assert!(body["error"].get("id").is_none());
+                assert!(!body.to_string().contains("private-provider-token"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn failures_after_response_headers_preserve_the_existing_stream() {
+        let bucket = Arc::new(FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        )));
+        let id = "interrupted-chat";
+        let chunk = Bytes::from_static(b"data: partial\n\n");
+        let head = StreamHead {
+            status: 200,
+            chunks: 1,
+            content_type: "text/event-stream".into(),
+            retry_after: Some("30".into()),
+            done: false,
+            error: None,
+        };
+        bucket
+            .put(
+                &job_path(id, "head.json").unwrap(),
+                Bytes::from(serde_json::to_vec(&head).unwrap()),
+            )
+            .await
+            .unwrap();
+        bucket
+            .put(&job_path(id, "chunks/00000000").unwrap(), chunk.clone())
+            .await
+            .unwrap();
+        retain_failure(
+            &bucket,
+            id,
+            ApiError::bad_gateway("private-provider-token"),
+            true,
+        )
+        .await
+        .unwrap();
+        let response = read_response(bucket, id.into(), Utc::now() + chrono::Duration::seconds(5))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["content-type"], "text/event-stream");
+        assert_eq!(response.headers()["retry-after"], "30");
+        let mut body = response.into_body().into_data_stream();
+        assert_eq!(body.next().await.unwrap().unwrap(), chunk);
+        let error = body.next().await.unwrap().unwrap_err().to_string();
+        assert!(error.contains("interrupted"), "{error}");
+        assert!(!error.contains("private-provider-token"), "{error}");
     }
 
     #[tokio::test]

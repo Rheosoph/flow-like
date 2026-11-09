@@ -1,13 +1,16 @@
 //! The browser and the computer of a bot on this device (`browser_*`, `computer_*`): the
 //! machines of `flow-like-bot-machine` in this process, plus what the bot panel's Computer tab shows.
 
-pub mod view;
 pub(crate) mod connectors;
+pub(crate) mod configuration;
+pub(crate) mod crew;
 pub(crate) mod images;
 pub(crate) mod mail;
 pub(crate) mod people;
 pub(crate) mod schedule;
 pub(crate) mod skills;
+pub mod view;
+pub(crate) mod user_context;
 
 use std::sync::Arc;
 

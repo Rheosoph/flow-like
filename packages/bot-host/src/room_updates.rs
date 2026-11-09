@@ -105,6 +105,10 @@ impl RoomUpdateTracker {
             return None;
         }
         let body = entry.envelope.get("body")?;
+        // Context replies start their own turn, where memory is disabled before any values enter.
+        if flow_like_types::bot_user_context::is_ephemeral_body(body) {
+            return None;
+        }
         let target = || body_target(&entry.envelope);
         let text = match entry.kind {
             InboxEntryKind::Message | InboxEntryKind::Trigger => {
@@ -346,6 +350,43 @@ mod tests {
             tracker.consume(&entries),
             ["[Message m5] person (member, not your owner) wrote: hello"]
         );
+    }
+
+    #[test]
+    fn temporary_context_never_steers_an_already_running_turn() {
+        let trigger = message(1, "owner", "find a place");
+        let mut tracker = tracker(&trigger);
+        let entries = [
+            event(
+                2,
+                "bot",
+                InboxEntryKind::Message,
+                json!({
+                    "text": "share your location", "user_context_request": {}
+                }),
+            ),
+            event(
+                3,
+                "owner",
+                InboxEntryKind::Message,
+                json!({
+                    "text": "temporary values", "user_context_response": {}
+                }),
+            ),
+            event(
+                4,
+                "bot",
+                InboxEntryKind::Message,
+                json!({
+                    "text": "derived location", "user_context_derived": true
+                }),
+            ),
+            message(5, "owner", "ordinary follow-up"),
+        ];
+        let updates = tracker.consume(&entries);
+        assert_eq!(updates.len(), 1);
+        assert!(updates[0].contains("ordinary follow-up"));
+        assert!(tracker.consume(&entries).is_empty());
     }
 
     #[test]

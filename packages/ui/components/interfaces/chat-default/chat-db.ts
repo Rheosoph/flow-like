@@ -4,6 +4,7 @@ import type { IHistoryMessage } from "../../../lib/schema/llm/history";
 import { installRuntimeHistoryGuard } from "../../../lib/service-runtime/history-guard";
 import type { IAgentDebugReport } from "../../../state/global-chat/agent-debug-report";
 import type { ConversationNote } from "../../bots-tab/fold-entries";
+import type { UserContextCardData } from "../../bots-tab/user-context-entry";
 import type { FlowScriptWorkspaceCandidate } from "../../flowpilot/flowscript-workspace-candidates";
 import type { BotExchangeView } from "../../global-chat/bot-exchange";
 import { finalizePlanSteps } from "./chat-event-fold";
@@ -250,6 +251,7 @@ export interface IMessageApproval {
 	scopes: string[];
 	requesterName?: string;
 	room?: string;
+	configurationChanges?: Record<string, unknown>;
 	secret?: { name: string; description: string; replace?: boolean };
 	answer?: "once" | "always" | "deny";
 }
@@ -269,6 +271,9 @@ export interface IMessageNotice {
 export interface IMessage {
 	/** Set on a bot's approval card: the message renders as the card, not as text. */
 	approval?: IMessageApproval;
+	userContext?: UserContextCardData;
+	/** Visible in the transcript; excluded from later model input and automatic references. */
+	userContextDerived?: boolean;
 	/** Set on a line between messages: the message renders as a pill, without actions. */
 	notice?: IMessageNotice;
 	id: string;
@@ -282,6 +287,8 @@ export interface IMessage {
 	appId: string;
 	sessionId: string;
 	inner: IHistoryMessage;
+	/** Bot whose workspace resolves relative file links in this message. */
+	storageBotId?: string;
 	/** Reply or reaction context, kept separately from the user's visible text. */
 	interaction?: IChatMessageInteraction;
 	files: IAttachment[];

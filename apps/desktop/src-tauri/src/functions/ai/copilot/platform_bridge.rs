@@ -48,6 +48,23 @@ pub(super) fn frontend_platform_tool_spec(
     }
 }
 
+fn frontend_platform_tool_spec_for_bot(
+    tool_set: FrontendPlatformToolSet,
+    tool_name: &str,
+    bot: Option<&flow_like::flow::copilot::BotRunContext>,
+) -> Option<flow_like::flow::copilot::tool_spec::PlatformToolSpec> {
+    frontend_platform_tool_spec(tool_set, tool_name).or_else(|| {
+        if tool_set != FrontendPlatformToolSet::Global
+            || !flow_like_bot_tools::configuration::is_settings_tool(tool_name)
+        {
+            return None;
+        }
+        bot?.tool_specs(false)
+            .into_iter()
+            .find(|spec| spec.name == tool_name)
+    })
+}
+
 pub(super) fn global_orchestrator_tool_scope_error(
     tool_set: FrontendPlatformToolSet,
     tool_name: &str,
@@ -114,7 +131,11 @@ impl PlatformToolBridge for DesktopPlatformBridge {
         if let Some(error) = global_orchestrator_tool_scope_error(self.tool_set, tool_name) {
             return error;
         }
-        let Some(spec) = frontend_platform_tool_spec(self.tool_set, tool_name) else {
+        let Some(spec) = frontend_platform_tool_spec_for_bot(
+            self.tool_set,
+            tool_name,
+            self.bridge.bot_context(),
+        ) else {
             return serde_json::json!({
                 "status": "error",
                 "code": "platform_tool_not_advertised",
@@ -172,6 +193,74 @@ impl PlatformToolBridge for DesktopPlatformBridge {
             Err(err) => {
                 serde_json::json!({ "status": "error", "error": err.to_string() }).to_string()
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod configuration_tests {
+    use super::*;
+    use flow_like::flow::copilot::{BotRunContext, BotToolset, HostTools, TurnRequester};
+    use flow_like_bot_tools::configuration::{
+        BOT_CONFIGURATION, BOT_MODELS, BOT_UPDATE_CONFIGURATION,
+    };
+    use flow_like_types::bot_turn::TurnAudience;
+
+    #[test]
+    fn flux_resolves_configuration_tools_only_for_the_owning_bot_turn() {
+        let mut bot = BotRunContext {
+            toolset: BotToolset::FlowPilot,
+            capabilities: Vec::new(),
+            workspace_app_id: None,
+            host_tools: HostTools::linked(),
+            ..Default::default()
+        };
+        for name in [BOT_CONFIGURATION, BOT_MODELS, BOT_UPDATE_CONFIGURATION] {
+            assert!(
+                frontend_platform_tool_spec_for_bot(FrontendPlatformToolSet::Global, name, None)
+                    .is_none()
+            );
+            let spec = frontend_platform_tool_spec_for_bot(
+                FrontendPlatformToolSet::Global,
+                name,
+                Some(&bot),
+            )
+            .expect(name);
+            let core = flow_like::flow::copilot::find_bot_tool_spec(name).unwrap();
+            assert_eq!(spec.approval.effect(), core.approval.effect());
+            assert_eq!((spec.schema)(), (core.schema)());
+            assert!(crate::functions::ai::native_tool_bridge::supports(
+                name,
+                &serde_json::json!({})
+            ));
+            assert!(
+                frontend_platform_tool_spec_for_bot(
+                    FrontendPlatformToolSet::BoardRuntime,
+                    name,
+                    Some(&bot)
+                )
+                .is_none()
+            );
+        }
+        bot.requester = Some(TurnRequester {
+            requester_id: "member".into(),
+            requester_name: None,
+            owner_id: "owner".into(),
+            owner_name: None,
+            audience: TurnAudience::Room,
+            room: None,
+            addressed: true,
+            reactions: Vec::new(),
+        });
+        for name in [BOT_CONFIGURATION, BOT_MODELS, BOT_UPDATE_CONFIGURATION] {
+            assert!(
+                frontend_platform_tool_spec_for_bot(
+                    FrontendPlatformToolSet::Global,
+                    name,
+                    Some(&bot)
+                )
+                .is_none()
+            );
         }
     }
 }

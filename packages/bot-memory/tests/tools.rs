@@ -20,6 +20,7 @@ use flow_like_bot_memory::tools::{
     MessageGetArgs, SummaryExpandArgs, WriteGate, WriteOutcome, history_read, history_search,
     memory_forget, memory_save, memory_search, message_get, summary_expand,
 };
+use serde_json::json;
 use tempfile::TempDir;
 
 /// The `#seq` of each hit line, in order.
@@ -100,6 +101,9 @@ fn fact(id: &str, text: &str, seq: Seq) -> Fact {
         valid_to: None,
         recorded_at: start(),
         expired_at: None,
+        geojson: None,
+        time: None,
+        expires_at: None,
         evidence: vec![Evidence {
             speaker: None,
             seq,
@@ -525,6 +529,12 @@ async fn memory_search_pages_neither_repeat_nor_skip() {
         let page = memory_search(
             &stores,
             &MemorySearchArgs {
+                timeframe: None,
+                sort: Default::default(),
+                geojson: None,
+                radius_m: None,
+                area: None,
+
                 query: "garden bed tomatoes near the shed".into(),
                 kind: None,
                 time_range: None,
@@ -565,6 +575,10 @@ async fn memory_save_keeps_the_users_words_once() {
     let asked = transcript.user("Please remember that I am allergic to peanuts.");
     let evidence = transcript.history.get(asked).unwrap();
     let args = MemorySaveArgs {
+        geojson: None,
+        time: None,
+        ttl_seconds: None,
+
         text: "The user is allergic to peanuts.".into(),
         evidence_seq: None,
         kind: Some("profile".into()),
@@ -628,6 +642,12 @@ async fn memory_search_pages_with_a_cursor_and_checks_its_arguments() {
     stores.facts.insert(&facts).await.unwrap();
     let now = start() + Duration::days(2);
     let search = |cursor: Option<&str>, kind: Option<&str>| MemorySearchArgs {
+        timeframe: None,
+        sort: Default::default(),
+        geojson: None,
+        radius_m: None,
+        area: None,
+
         query: "garden vegetable".into(),
         kind: kind.map(str::to_string),
         time_range: None,
@@ -660,4 +680,216 @@ async fn memory_search_pages_with_a_cursor_and_checks_its_arguments() {
     assert!(none.text.starts_with("No memories match"));
     let wrong = memory_search(&stores, &search(None, Some("rumour")), now, Tz::UTC).await;
     assert!(wrong.unwrap_err().to_string().contains("is not a kind"));
+}
+
+#[tokio::test]
+async fn optional_context_roundtrips_and_ttl_expires_at_the_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine(&dir).await;
+    let now = DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).unwrap();
+    let mut transcript = Transcript::new(now);
+    let seq = transcript.user("The delivery arrives at the Berlin office tomorrow at 9.");
+    let evidence = transcript.history.get(seq).unwrap();
+    let args: MemorySaveArgs = serde_json::from_value(json!({
+        "text": "The delivery arrives at the Berlin office.",
+        "kind": "event",
+        "geojson": {"type":"Point", "coordinates":[13.405,52.52]},
+        "time": "2026-11-09T09:00:00+01:00",
+        "ttl_seconds": 3600
+    }))
+    .unwrap();
+    let WriteOutcome::Done((saved, _)) =
+        memory_save(&engine, &args, &evidence, WriteGate::default(), now)
+            .await
+            .unwrap()
+    else {
+        panic!("memory was not saved");
+    };
+    assert_eq!(saved.geojson, args.geojson);
+    assert_eq!(
+        saved.time.unwrap().to_rfc3339(),
+        "2026-11-09T08:00:00+00:00"
+    );
+    assert_eq!(saved.expires_at, Some(now + Duration::hours(1)));
+    assert_eq!(
+        engine.stores().facts.get(&saved.id).await.unwrap(),
+        Some(saved.clone())
+    );
+
+    let repeated = MemorySaveArgs {
+        text: args.text.clone(),
+        kind: args.kind.clone(),
+        ..Default::default()
+    };
+    let WriteOutcome::Done((merged, _)) = memory_save(
+        &engine,
+        &repeated,
+        &evidence,
+        WriteGate::default(),
+        now + Duration::seconds(1),
+    )
+    .await
+    .unwrap() else {
+        panic!("memory was not merged");
+    };
+    assert_eq!(merged.id, saved.id);
+    assert_eq!(merged.geojson, saved.geojson);
+    assert_eq!(merged.time, saved.time);
+    assert_eq!(merged.expires_at, saved.expires_at);
+
+    let search: MemorySearchArgs = serde_json::from_value(json!({
+        "sort":"distance", "geojson":{"type":"Point", "coordinates":[13.405,52.52]},
+        "radius_m": 0, "include_superseded": true
+    }))
+    .unwrap();
+    let live = memory_search(
+        engine.stores(),
+        &search,
+        now + Duration::seconds(3599),
+        Tz::UTC,
+    )
+    .await
+    .unwrap();
+    assert!(live.text.contains(&saved.id), "{}", live.text);
+    assert!(
+        live.text.contains("time=2026-11-09T08:00:00+00:00"),
+        "{}",
+        live.text
+    );
+    assert!(live.text.contains("geojson="));
+    assert!(live.text.contains("expires_at="));
+    let expired = memory_search(engine.stores(), &search, now + Duration::hours(1), Tz::UTC)
+        .await
+        .unwrap();
+    assert!(!expired.text.contains(&saved.id), "{}", expired.text);
+}
+
+#[tokio::test]
+async fn invalid_context_is_rejected_before_any_memory_is_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine(&dir).await;
+    let now = DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).unwrap();
+    let mut transcript = Transcript::new(now);
+    let seq = transcript.user("Remember the temporary delivery location.");
+    let evidence = transcript.history.get(seq).unwrap();
+    for metadata in [
+        json!({"ttl_seconds":0}),
+        json!({"ttl_seconds":u64::MAX}),
+        json!({"geojson":{"type":"Point", "coordinates":[181,52]}}),
+        json!({"geojson":{"type":"Point", "coordinates":[13]}}),
+    ] {
+        let mut value = json!({"text":"The delivery location is temporary."});
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(metadata.as_object().unwrap().clone());
+        let args: MemorySaveArgs = serde_json::from_value(value).unwrap();
+        assert!(
+            memory_save(&engine, &args, &evidence, WriteGate::default(), now)
+                .await
+                .is_err()
+        );
+    }
+    assert!(
+        serde_json::from_value::<MemorySaveArgs>(json!({"text":"Delivery", "time":"tomorrow"}))
+            .is_err()
+    );
+    assert_eq!(
+        engine
+            .stores()
+            .facts
+            .count(&Default::default())
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn structured_search_checks_constraints_even_without_stored_facts() {
+    let dir = tempfile::tempdir().unwrap();
+    let stores = stores(&dir).await;
+    for value in [
+        json!({"sort":"distance"}),
+        json!({"radius_m":5}),
+        json!({"geojson":{"type":"Point", "coordinates":[0,0]}, "radius_m":-1}),
+        json!({"area":{"type":"Point", "coordinates":[0,0]}}),
+        json!({"time_range":"nonsense"}),
+        json!({"timeframe":{"from":"2026-11-09T12:00:00Z", "to":"2026-11-09T11:00:00Z"}}),
+        json!({"time_range":"today", "timeframe":{"from":"2026-11-09T00:00:00Z", "to":"2026-11-10T00:00:00Z"}}),
+    ] {
+        let args: MemorySearchArgs = serde_json::from_value(value.clone()).unwrap();
+        assert!(
+            memory_search(&stores, &args, start(), Tz::UTC)
+                .await
+                .is_err(),
+            "accepted {value}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn expired_memory_stays_expired_when_remined_and_can_be_explicitly_saved_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine(&dir).await;
+    let now = DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).unwrap();
+    let mut transcript = Transcript::new(now);
+    let seq = transcript.user("Keep the delivery code for one minute.");
+    let evidence = transcript.history.get(seq).unwrap();
+    let args = MemorySaveArgs {
+        text: "The delivery code is 1234.".into(),
+        ttl_seconds: Some(60),
+        ..Default::default()
+    };
+    let WriteOutcome::Done((saved, _)) =
+        memory_save(&engine, &args, &evidence, WriteGate::default(), now)
+            .await
+            .unwrap()
+    else {
+        panic!("not saved");
+    };
+    let later = now + Duration::seconds(61);
+    let mut remined = saved.clone();
+    remined.id = Fact::new_id();
+    remined.recorded_at = later;
+    remined.expires_at = None;
+    let report = flow_like_bot_memory::facts::integrate_facts(
+        &engine.stores().facts,
+        &StubLlm::new(),
+        vec![remined],
+        Tz::UTC,
+        later,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        report.decisions[0].action,
+        UpdateAction::Merge {
+            target: saved.id.clone()
+        }
+    );
+    let search = MemorySearchArgs::default();
+    assert!(
+        !memory_search(engine.stores(), &search, later, Tz::UTC)
+            .await
+            .unwrap()
+            .text
+            .contains(&saved.id)
+    );
+
+    let WriteOutcome::Done((renewed, action)) =
+        memory_save(&engine, &args, &evidence, WriteGate::default(), later)
+            .await
+            .unwrap()
+    else {
+        panic!("explicit re-save was refused");
+    };
+    assert_eq!(action, UpdateAction::Add);
+    assert_ne!(renewed.id, saved.id);
+    assert_eq!(renewed.expires_at, Some(later + Duration::seconds(60)));
+    let recalled = memory_search(engine.stores(), &search, later, Tz::UTC)
+        .await
+        .unwrap();
+    assert!(recalled.text.contains(&renewed.id));
+    assert!(!recalled.text.contains(&saved.id));
 }

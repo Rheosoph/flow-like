@@ -58,6 +58,7 @@ fn google_token_cache() -> &'static RwLock<Option<CachedAccessToken>> {
 
 #[derive(Clone, Debug)]
 pub struct DispatchNotificationInput {
+    pub notification_priority: flow_like_types::user_availability::NotificationPriority,
     pub bot_context: Option<flow_like_types::bot_notify::BotNotificationContext>,
     pub user_id: String,
     pub app_id: Option<String>,
@@ -71,11 +72,27 @@ pub struct DispatchNotificationInput {
     pub source_node_id: Option<String>,
 }
 
+impl DispatchNotificationInput {
+    /// Approval and review cards are addressed to the person, so they pass Focus like mentions.
+    pub(crate) fn focus_priority(&self) -> flow_like_types::user_availability::NotificationPriority {
+        use flow_like_types::user_availability::NotificationPriority;
+        let addressed = self
+            .bot_context
+            .as_ref()
+            .is_some_and(|context| context.review_only || context.approval_id.is_some());
+        match self.notification_priority {
+            NotificationPriority::Routine if addressed => NotificationPriority::Mention,
+            priority => priority,
+        }
+    }
+}
+
 /// Provider acceptance does not confirm that a device displayed the notification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PushDispatchStatus {
     Disabled,
+    Suppressed,
     NoTargets,
     Accepted,
     Partial,
@@ -640,6 +657,13 @@ async fn push_to_user(
     input: &DispatchNotificationInput,
     retry_failed_only: bool,
 ) -> flow_like_types::Result<PushDispatchStatus> {
+    let availability = crate::routes::user::availability::load(&state.db, &input.user_id).await?;
+    if !availability.allows_notification(
+        input.focus_priority(),
+        chrono::Utc::now().timestamp_millis(),
+    ) {
+        return Ok(PushDispatchStatus::Suppressed);
+    }
     let config = &state.platform_config.push_notifications;
     if !config.enabled {
         return Ok(PushDispatchStatus::Disabled);
@@ -1431,6 +1455,15 @@ fn notification_string_data(
 ) -> HashMap<String, String> {
     let mut data = HashMap::new();
     data.insert("notification_id".to_string(), notification_id.to_string());
+    data.insert(
+        "notification_priority".to_string(),
+        match input.notification_priority {
+            flow_like_types::user_availability::NotificationPriority::Routine => "routine",
+            flow_like_types::user_availability::NotificationPriority::Mention => "mention",
+            flow_like_types::user_availability::NotificationPriority::Call => "call",
+        }
+        .to_string(),
+    );
     if let Some(context) = &input.bot_context {
         data.insert("user_id".to_string(), input.user_id.clone());
         if let Some(scope) = target
@@ -2243,6 +2276,7 @@ mod tests {
 
     fn notification_input() -> DispatchNotificationInput {
         DispatchNotificationInput {
+            notification_priority: Default::default(),
             bot_context: None,
             user_id: "user-id".to_string(),
             app_id: Some("app-id".to_string()),
@@ -2261,6 +2295,47 @@ mod tests {
         body.get("message")
             .and_then(serde_json::Value::as_object)
             .expect("FCM body contains a message object")
+    }
+
+    #[test]
+    fn approval_and_review_pushes_pass_focus_like_mentions() {
+        use flow_like_types::user_availability::{
+            AvailabilityOverride, AvailabilitySource, AvailabilityState, AvailabilityStatus,
+            NotificationPriority,
+        };
+        let focus = AvailabilityState {
+            status_override: Some(AvailabilityOverride {
+                status: AvailabilityStatus::Focus,
+                source: AvailabilitySource::Manual,
+                until: i64::MAX,
+            }),
+            ..Default::default()
+        };
+        let routine = notification_input();
+        assert!(!focus.allows_notification(routine.focus_priority(), 0));
+        for context in [
+            flow_like_types::bot_notify::BotNotificationContext {
+                bot_id: "bot_1".into(),
+                approval_id: Some("approval_1".into()),
+                ..Default::default()
+            },
+            flow_like_types::bot_notify::BotNotificationContext {
+                bot_id: "bot_1".into(),
+                review_only: true,
+                ..Default::default()
+            },
+        ] {
+            let mut input = notification_input();
+            input.bot_context = Some(context);
+            assert_eq!(input.focus_priority(), NotificationPriority::Mention);
+            assert!(focus.allows_notification(input.focus_priority(), 0));
+        }
+        let mut reply = notification_input();
+        reply.bot_context = Some(flow_like_types::bot_notify::BotNotificationContext {
+            bot_id: "bot_1".into(),
+            ..Default::default()
+        });
+        assert!(!focus.allows_notification(reply.focus_priority(), 0));
     }
 
     #[test]
@@ -2288,6 +2363,7 @@ mod tests {
         assert!(android["message"].get("notification").is_none());
         assert_eq!(android["message"]["android"]["priority"], "HIGH");
         let data = &android["message"]["data"];
+        assert_eq!(data["notification_priority"], "routine");
         assert_eq!(data["user_id"], input.user_id);
         assert_eq!(data["native_scope"], "profile-a");
         assert_eq!(data["approval_id"], "approval_1");

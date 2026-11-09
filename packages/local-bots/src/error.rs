@@ -42,6 +42,8 @@ pub mod codes {
     pub const INBOX_SEGMENT_RANGE: &str = "INBOX_SEGMENT_RANGE";
     /// A segment's parent is not its bot's higher-level segment covering it.
     pub const INBOX_SEGMENT_PARENT: &str = "INBOX_SEGMENT_PARENT";
+    /// A note moved past the version an edit was made against.
+    pub const NOTE_CONFLICT: &str = "NOTE_CONFLICT";
 }
 
 /// Why a local bot or inbox operation was refused or failed. The message is what the person

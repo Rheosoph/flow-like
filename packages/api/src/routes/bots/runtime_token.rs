@@ -3,8 +3,8 @@
 
 use super::owned_bot;
 use crate::{
-    bot_permission::{SignedBotToken, sign_bot_token},
-    entity::bot_turn,
+    bot_permission::{MAX_BOT_TOKEN_TTL_SECONDS, SignedBotToken, sign_bot_token},
+    entity::{bot_turn, conversation},
     error::ApiError,
     middleware::jwt::{AppUser, BotUser},
     state::AppState,
@@ -13,7 +13,10 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use flow_like_types::bot_turn::TurnAudience;
+use flow_like_types::{
+    bot_turn::{TurnAudience, TurnStatus},
+    inbox::ConversationKind,
+};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -33,7 +36,8 @@ pub struct BotRuntimeToken {
 }
 
 /// The identity a token for `turn_id` carries: the turn must be the bot's and the caller's.
-/// A room turn pins the room so its invitation limits apply.
+/// A room turn pins the room so its invitation limits apply. Late answers retain the original
+/// conversation's scope rather than the exchange that delivered the answer.
 pub(crate) async fn bot_user_for_turn<C: ConnectionTrait>(
     db: &C,
     owner_id: &str,
@@ -47,12 +51,58 @@ pub(crate) async fn bot_user_for_turn<C: ConnectionTrait>(
         .one(db)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("Turn '{turn_id}' not found")))?;
-    let in_room = TurnAudience::parse(&turn.audience) == Some(TurnAudience::Room);
+    let origin = crate::bot_host::talk::turn_origin_conversation(db, &turn).await?;
+    let conv_id = if origin == turn.conversation_id {
+        (TurnAudience::parse(&turn.audience) == Some(TurnAudience::Room))
+            .then_some(turn.conversation_id)
+    } else {
+        let kind = conversation::Entity::find_by_id(&origin)
+            .one(db)
+            .await?
+            .and_then(|row| ConversationKind::parse(&row.kind))
+            .ok_or_else(|| ApiError::forbidden("The original conversation is unavailable"))?;
+        match kind {
+            ConversationKind::Group => {
+                crate::bot_permission::room_limits(db, bot_id, &origin).await?;
+                Some(origin)
+            }
+            ConversationKind::Direct => {
+                if !crate::bot_host::memory::is_owner_direct(db, &origin, owner_id, bot_id).await? {
+                    return Err(ApiError::forbidden(
+                        "The original conversation is not the bot's active conversation with its owner",
+                    ));
+                }
+                None
+            }
+        }
+    };
     Ok(BotUser {
         bot_id: bot_id.to_string(),
         turn_id: turn.id,
-        conv_id: in_room.then_some(turn.conversation_id),
+        conv_id,
     })
+}
+
+/// Tokens that outlive a request are only for turns a host still works on.
+pub(crate) async fn ensure_live_turn<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    bot_id: &str,
+    turn_id: &str,
+) -> Result<(), ApiError> {
+    let turn = bot_turn::Entity::find_by_id(turn_id)
+        .filter(bot_turn::Column::BotId.eq(bot_id))
+        .filter(bot_turn::Column::OwnerId.eq(owner_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("Turn '{turn_id}' not found")))?;
+    match TurnStatus::parse(&turn.status) {
+        Some(TurnStatus::Queued | TurnStatus::Running | TurnStatus::Waiting) => Ok(()),
+        _ => Err(ApiError::conflict(format!(
+            "Turn '{turn_id}' is {}; a token is only issued for a turn that is queued, running or waiting",
+            turn.status.to_ascii_lowercase()
+        ))),
+    }
 }
 
 #[utoipa::path(
@@ -64,7 +114,8 @@ pub(crate) async fn bot_user_for_turn<C: ConnectionTrait>(
     responses(
         (status = 200, description = "A short-lived token that acts as the bot for this turn.", body = BotRuntimeToken),
         (status = 401, description = "Not signed in"),
-        (status = 404, description = "You have no such bot or turn")
+        (status = 404, description = "You have no such bot or turn"),
+        (status = 409, description = "The turn is already done, failed or cancelled")
     ),
     security(("bearer_auth" = []))
 )]
@@ -77,7 +128,8 @@ pub async fn mint_runtime_token(
 ) -> Result<Json<BotRuntimeToken>, ApiError> {
     let owner_id = user.sub()?;
     let bot = bot_user_for_request(&state, &owner_id, bot_id, body.turn_id.as_deref()).await?;
-    let SignedBotToken { token, expires_at } = sign_bot_token(&bot, None)
+    let ttl = body.turn_id.as_ref().map(|_| MAX_BOT_TOKEN_TTL_SECONDS);
+    let SignedBotToken { token, expires_at } = sign_bot_token(&bot, ttl)
         .map_err(|error| ApiError::internal_error(flow_like_types::anyhow!(error)))?;
     Ok(Json(BotRuntimeToken { token, expires_at }))
 }
@@ -143,7 +195,11 @@ async fn bot_user_for_request(
         _ => bot_id,
     };
     let bot = match turn_id {
-        Some(turn_id) => bot_user_for_turn(&state.db, owner_id, &bot_id, turn_id.trim()).await?,
+        Some(turn_id) => {
+            let turn_id = turn_id.trim();
+            ensure_live_turn(&state.db, owner_id, &bot_id, turn_id).await?;
+            bot_user_for_turn(&state.db, owner_id, &bot_id, turn_id).await?
+        }
         None => bot_user_for_direct(&state.db, owner_id, &bot_id).await?,
     };
     crate::bot_caller::usage_identity(&state.db, &bot).await?;
@@ -162,4 +218,47 @@ pub(crate) async fn bot_user_for_direct<C: ConnectionTrait>(
         turn_id: format!("direct:{}", flow_like_types::create_id()),
         conv_id: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::routes::inbox::fixture;
+    use sea_orm::{ActiveModelTrait, Set};
+
+    #[tokio::test]
+    async fn tokens_are_only_issued_for_live_turns() {
+        let db = fixture::database().await;
+        fixture::insert_bot(&db, "bot_a", "user-a", "DESKTOP").await;
+        let lease = fixture::at(60);
+        fixture::running_turn(&db, "t-run", "bot_a", "room", "host", lease).await;
+        assert!(
+            ensure_live_turn(&db, "user-a", "bot_a", "t-run")
+                .await
+                .is_ok()
+        );
+        for (stored, expected) in [
+            ("QUEUED", true),
+            ("WAITING", true),
+            ("DONE", false),
+            ("FAILED", false),
+            ("CANCELLED", false),
+        ] {
+            let mut turn: bot_turn::ActiveModel = fixture::turn(&db, "t-run").await.into();
+            turn.status = Set(stored.into());
+            turn.update(&db).await.unwrap();
+            assert_eq!(
+                ensure_live_turn(&db, "user-a", "bot_a", "t-run")
+                    .await
+                    .is_ok(),
+                expected,
+                "{stored}"
+            );
+        }
+        assert!(
+            ensure_live_turn(&db, "user-b", "bot_a", "t-run")
+                .await
+                .is_err()
+        );
+    }
 }

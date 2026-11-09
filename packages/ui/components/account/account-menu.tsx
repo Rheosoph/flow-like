@@ -31,6 +31,10 @@ import {
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { SidebarMenuButton } from "../ui/sidebar";
+import {
+	AccountAvailabilityDot,
+	AccountAvailabilityMenu,
+} from "./account-availability-menu";
 
 export interface AccountMenuProps {
 	compact?: boolean;
@@ -86,10 +90,13 @@ export function AccountMenu({
 		<>
 			<span className="relative shrink-0">
 				{avatarContent}
-				{notificationCount > 0 ? (
+				{notificationCount > 0 && (
 					<span className="absolute -right-1 -top-1 min-w-3.5 rounded-full bg-primary px-1 text-center text-[9px] font-semibold leading-3.5 text-primary-foreground ring-2 ring-sidebar tabular-nums">
 						{count}
 					</span>
+				)}
+				{signedIn ? (
+					<AccountAvailabilityDot />
 				) : (
 					<span
 						aria-hidden="true"
@@ -148,6 +155,7 @@ export function AccountMenu({
 					</div>
 				</DropdownMenuLabel>
 				<DropdownMenuSeparator />
+				{signedIn && <AccountAvailabilityMenu />}
 				{signedIn && showUpgrade && (
 					<>
 						<DropdownMenuItem asChild className={itemClass}>

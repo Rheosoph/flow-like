@@ -4,9 +4,10 @@
 
 pub(super) use crate::routes::inbox::fixture::{assert_code, at, delete_bot, insert_bot, says};
 use crate::{
-    entity::{conversation, conversation_member, inbox_entry},
+    entity::{bot_decision_wait, conversation, conversation_member, inbox_entry},
     routes::inbox::delivery::{BotDelivery, BotRecipient},
 };
+use chrono::{DateTime, Duration, FixedOffset};
 use flow_like_types::{
     bot::BotLocation,
     inbox::{ConversationKind, InboxEntryKind},
@@ -40,6 +41,26 @@ pub(super) async fn database() -> DatabaseConnection {
     .await
     .unwrap();
     db
+}
+
+pub(super) async fn participant_wait(
+    db: &DatabaseConnection,
+    bot_id: &str,
+    room: &str,
+    created_at: DateTime<FixedOffset>,
+) {
+    bot_decision_wait::ActiveModel {
+        bot_id: Set(bot_id.to_owned()),
+        conversation_id: Set(room.to_owned()),
+        participant_id: Set("user-b".into()),
+        trigger_message_id: Set("wait-trigger".into()),
+        after_seq: Set(1),
+        expires_at: Set(created_at + Duration::hours(24)),
+        created_at: Set(created_at),
+    }
+    .insert(db)
+    .await
+    .unwrap();
 }
 
 /// A conversation with these active members (`user-…` ids are people, `bot_…` ids are bots).

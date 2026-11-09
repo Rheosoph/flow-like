@@ -74,6 +74,10 @@ export function useCallErrorText() {
 					"crew.call.error.failed",
 					"The call didn't start. Try again.",
 				),
+				transcription: t(
+					"crew.call.error.transcription",
+					"Bots couldn't hear that. Check your speech model and try again.",
+				),
 			})[error],
 		[t],
 	);
@@ -217,6 +221,7 @@ export function ConversationCallBar({
 		| "leave"
 		| "toggleMute"
 		| "listening"
+		| "transcriptDraft"
 		| "canListen"
 		| "botsPresent"
 		| "setListening"
@@ -378,6 +383,15 @@ export function ConversationCallBar({
 					</Button>
 				)}
 			</div>
+			{call.joined && call.listening && call.transcriptDraft && (
+				<output
+					data-slot="call-transcript-draft"
+					aria-label={t("crew.call.liveTranscript", "Live transcript")}
+					className="block max-h-24 overflow-y-auto px-4.5 pb-2 text-sm text-muted-foreground @max-[820px]/bots:px-3"
+				>
+					{call.transcriptDraft}
+				</output>
+			)}
 			{mediaError && (
 				<p role="alert" className="px-4 pb-2 text-sm text-destructive">
 					{mediaError}

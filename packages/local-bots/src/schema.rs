@@ -312,6 +312,45 @@ pub(crate) const MIGRATIONS: &[&str] = &[
                        OR (target.seq IS NULL AND target.created_at > c.owner_cleared_at))
             ))
         );",
+    // Group participation decisions survive host restarts without adding chat messages.
+    "CREATE TABLE room_decisions (
+        bot_id TEXT NOT NULL REFERENCES bots (id) ON DELETE CASCADE,
+        conversation_id TEXT NOT NULL REFERENCES conversations (id) ON DELETE CASCADE,
+        handled_through INTEGER NOT NULL,
+        participant_id TEXT,
+        expires_at INTEGER,
+        PRIMARY KEY (bot_id, conversation_id)
+    ) STRICT;",
+    "CREATE TABLE bot_run_checkpoints (
+        turn_id TEXT PRIMARY KEY NOT NULL,
+        bot_id TEXT NOT NULL REFERENCES bots (id) ON DELETE CASCADE,
+        conversation_id TEXT NOT NULL REFERENCES conversations (id) ON DELETE CASCADE,
+        trigger_message_id TEXT NOT NULL REFERENCES entries (message_id) ON DELETE CASCADE,
+        revision INTEGER NOT NULL DEFAULT 0,
+        checkpoint TEXT,
+        cancelled INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE INDEX bot_run_checkpoints_room ON bot_run_checkpoints (bot_id, conversation_id);",
+    "ALTER TABLE tasks ADD COLUMN monitoring INTEGER NOT NULL DEFAULT 0;",
+    // Working state a bot keeps in one conversation; the body is read only by the bot and the owner.
+    "CREATE TABLE bot_notes (
+        bot_id TEXT NOT NULL REFERENCES bots (id) ON DELETE CASCADE,
+        conversation_id TEXT NOT NULL REFERENCES conversations (id) ON DELETE CASCADE,
+        key TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT,
+        body TEXT NOT NULL DEFAULT '',
+        state TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        classification TEXT,
+        pii INTEGER NOT NULL DEFAULT 0,
+        updated_by TEXT NOT NULL,
+        history TEXT NOT NULL DEFAULT '[]',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (bot_id, conversation_id, key)
+    ) STRICT;",
 ];
 
 pub(crate) fn open(path: &Path) -> Result<Connection> {

@@ -64,8 +64,8 @@ function StageSlot({
 
 /**
  * The 400 px rail: the rail sizes to its fields, so on a short form the dock follows the last field and
- * sticks to the bottom only once the list scrolls (the Runs list fills the column). `group/rail` lets the
- * dock take its card fill from what the rail shows.
+ * sticks to the bottom only once the list scrolls (the Runs list fills the column). The dock takes its
+ * card fill from what the rail shows through `data-fw-region="rail"`.
  */
 function RailColumn({
 	parts,
@@ -77,7 +77,7 @@ function RailColumn({
 		<aside
 			aria-label={label}
 			data-fw-region="rail"
-			className="group/rail flex min-h-0 w-100 shrink-0 flex-col border-hairline border-r bg-surface-sunken"
+			className="flex min-h-0 w-100 shrink-0 flex-col border-hairline border-r bg-surface-sunken"
 		>
 			<Rail {...view} />
 			<div data-fw-region="dock" className="shrink-0">

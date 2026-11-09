@@ -1,7 +1,7 @@
 //! GitHub Copilot SDK chat sessions and event handling.
 
 use super::agent_surface::{build_flowpilot_agent_surface, live_board_handle};
-use super::attachments::build_copilot_attachments;
+use super::attachments::{build_copilot_attachments, inline_image_links};
 use super::backend_types::FlowPilotAgentBackendKind;
 use super::client_pool::{
     COPILOT_CLIENT, COPILOT_SINGLETON_CLIENT_GATE, NestedCopilotClientLease,
@@ -83,6 +83,8 @@ pub(super) async fn copilot_sdk_chat_internal(
     read_only: bool,
 ) -> Result<UnifiedCopilotResponse, String> {
     use copilot_sdk::SessionEventData;
+
+    let current_images = inline_image_links(current_images).await;
 
     const MAX_WORKFLOW_IDLE_CONTINUATIONS: u8 = 2;
 

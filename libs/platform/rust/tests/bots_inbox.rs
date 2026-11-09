@@ -258,6 +258,7 @@ async fn bots_are_listed_created_and_updated_with_typed_models() {
         .create_bot(&CreateBot {
             capabilities: vec![BotCapability::Internet, BotCapability::SelectedApps],
             model: Some(BotModelPolicy {
+                decision: None,
                 primary: Some("bit_model".into()),
                 fallbacks: Vec::new(),
             }),

@@ -267,6 +267,42 @@ describe("ApprovalCard", () => {
 			readOnly: false,
 		});
 
+	test("configuration cards show every proposed value and cannot offer Always allow", async () => {
+		const instructions = `${"A complete instruction.\n".repeat(100)}Final instruction.`;
+		await show(
+			card({
+				tool: "bot_update_configuration",
+				configurationChanges: {
+					name: "Atlas",
+					instructions,
+					capabilities: ["internet"],
+				},
+				scopes: ["*"],
+			} as never),
+		);
+		expect(
+			container.querySelector("[data-slot='bot-configuration-changes']")
+				?.textContent,
+		).toContain(instructions);
+		expect(container.textContent).toContain("Atlas");
+		expect(container.textContent).toContain("Internet");
+		expect(container.querySelector("header")?.textContent).toContain(
+			"Scout wants to update its settings",
+		);
+		expect(container.querySelector("header")?.textContent).not.toContain(
+			"bot_update_configuration",
+		);
+		expect(button("Always allow")).toBeUndefined();
+		expect(button("Allow once")).toBeUndefined();
+		expect(button("Reject changes")).toBeDefined();
+		await click(button("Approve changes"));
+		expect(answers).toEqual([["bot_a", approval.turnId, approval.id, "once"]]);
+		expect(
+			container.querySelector("[data-slot='approval-answer']")?.textContent,
+		).toBe("Changes approved");
+		expect(button("Approve changes")).toBeUndefined();
+	});
+
 	test("says what the bot wants, with the tool and the scope in plain words", async () => {
 		await show(card());
 		const text = container.textContent ?? "";

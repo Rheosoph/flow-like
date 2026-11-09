@@ -146,6 +146,7 @@ fn person_push(
     text: &str,
 ) -> DispatchNotificationInput {
     DispatchNotificationInput {
+        notification_priority: Default::default(),
         bot_context: None,
         user_id: person_id.to_string(),
         app_id: None,

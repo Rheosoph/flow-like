@@ -1,0 +1,61 @@
+---
+title: Capabilities
+description: The 26 abilities a bot can have, what each one unlocks, which ones ask you first, and which need the desktop app or a device.
+---
+
+import CapabilityExplorer from "../../../components/bots/CapabilityExplorer";
+
+A bot's abilities decide which tools its model may use. **Every ability starts switched off.** A bot with none can still talk, ask you questions, keep notes for a long task and read its own settings, but it can't reach anything outside the conversation.
+
+<CapabilityExplorer client:visible />
+
+## Web: Internet or Web requests
+
+The two web abilities protect against different risks:
+
+- **Internet** hands research to a separate, sealed researcher. It searches and reads public pages but gets only the question, never the bot's memory, files or secrets. Instructions hidden in a web page can't use the bot's other tools.
+- **Web requests** let the bot call APIs and fetch URLs itself, such as RSS feeds, JSON endpoints or webhooks of other services. It asks before each new site, approves reading and writing separately, and asks again for each secret it wants to send there. Secrets travel over https only and are scrubbed from responses.
+
+Give a news-digest bot **Internet**. Give a bot that reads a feed from a URL in its instructions, or posts to an API on a schedule, **Web requests**.
+
+## Apps
+
+**All apps in a profile** and **Selected apps** let the bot discover your apps' interfaces and use them the way you would: call an app's events, chat with its chat interface, or open and fill a page. It works with your role in each app, narrowed by the [restrictions you set](/bots/safety/#what-a-bot-may-do-in-an-app). Running an app's events and pages asks you first unless you allowed it.
+
+## Hands
+
+- **Run code** runs Python 3.12, a scientific Python build (numpy, pandas, scipy, scikit-learn, matplotlib and more) or JavaScript in a WebAssembly sandbox. Each run starts fresh, sees only its own input and output folders, and has no network unless you approve named hosts. Results land in the bot's workspace. Operators can mirror the runtimes; see [Bot code runtimes](/self-hosting/code-runtimes/).
+- **Computer use**, **Browser** and **Command line** work on the bot's own desktop or device. Watch the bot, take over with your own mouse and keyboard (hold Esc for a second to hand back) or stop it from its **Computer** tab.
+- **Skills** are instructions and scripts the bot follows for recurring jobs. It only sees skills you approved, and can propose new ones for you to review.
+- **Delegation** splits big jobs into parallel sub-tasks on the subtask model. Sub-tasks can't ask you questions, schedule, send mail or message people.
+- **Image generation** uses the bot's image model: up to 4 images per call, 8 per turn and 50 per day.
+
+## Talk
+
+- **Email** gives the bot its own `@flow-like.me` address. Mail it receives wakes it in your 1:1 chat, and mail it sends to a new recipient domain asks you first. See [Triggers](/bots/triggers/#email).
+- **Notify you** sends push notifications to your phone and desktop.
+- **Channels** lets the bot message people you chat with. Its first message to each person asks you first. Slack, Teams, Telegram and Discord come later.
+- **User context** lets the bot ask a person for their location, preferences or current activity. The person chooses what to share.
+- **Connectors** use services you connected and MCP servers. Each connector has its own policy: never, ask, ask every time, or always allow reads.
+- **Webhook** lets you create URLs that wake the bot. See [Triggers](/bots/triggers/#webhooks).
+
+## Memory and data
+
+- **Memory** remembers facts from your chats and recalls them later. It needs an embedding model. See [Memory and workspace](/bots/memory/).
+- **Files** and **Data Studio** give the bot a private workspace for files and tables, stored like an app's storage and databases.
+- **Documents** reads, summarizes and extracts files, and creates Word, Excel, PowerPoint and PDF documents.
+- **Knowledge** builds searchable indexes over your files.
+- **Data connections** attach external databases such as Postgres, MySQL or ODBC sources.
+- **Scheduling** lets the bot run once at a set time or on a cron schedule.
+
+## Security
+
+**End-to-end encryption** keeps the bot's private key on its host, so only you and that host can read its messages and secrets. The cloud never holds the key, which is why this ability needs the desktop app or a device. See [Safety and permissions](/bots/safety/#end-to-end-encryption).
+
+## FlowPilot
+
+**FlowPilot** is FlowPilot's complete toolset: it builds, edits and debugs your apps and flows, FlowScript included. Only [Flux](/studio/flowpilot/) holds it, and so do duplicates of a bot that holds it. It can't be switched on or off.
+
+## Where tools run
+
+A bot in the cloud runs files, documents, code, images, web requests, connectors and skills on Flow-Like's executor. On a self-hosted server without an executor these tools report that they're unavailable. Bots on the desktop app or a device run their tools on that machine. Phones have no command line, and iPhones can't run code yet.

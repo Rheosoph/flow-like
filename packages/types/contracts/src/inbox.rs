@@ -22,6 +22,10 @@ pub const ENTRY_ID_MAX_CHARS: usize = 64;
 
 const PLAIN_FIELDS: [&str; 3] = ["v", "enc", "body"];
 const SEALED_FIELDS: [&str; 5] = ["v", "enc", "key_id", "enc_key", "ct"];
+const SEALED_KEYS_FIELDS: [&str; 4] = ["v", "enc", "ct", "keys"];
+const WRAPPED_KEY_FIELDS: [&str; 3] = ["key_id", "enc_key", "ck"];
+/// The device keys one member's sealed envelope names: a principal's active key limit.
+pub const MAX_ENVELOPE_KEYS: usize = 20;
 
 macro_rules! wire_enum {
     ($(#[$meta:meta])* $name:ident { $($(#[$variant_meta:meta])* $variant:ident => $id:literal),+ $(,)? }) => {
@@ -151,6 +155,7 @@ pub enum EnvelopeError {
     BodyNotAnObject,
     MissingField(&'static str),
     UnexpectedField(String),
+    BadKeys,
     TooLarge(usize),
 }
 
@@ -171,6 +176,10 @@ impl fmt::Display for EnvelopeError {
             Self::UnexpectedField(field) => {
                 write!(f, "envelope field \"{field}\" is not part of envelope v1")
             }
+            Self::BadKeys => write!(
+                f,
+                "a sealed envelope's \"keys\" needs 1 to {MAX_ENVELOPE_KEYS} objects with exactly the non-empty strings \"key_id\", \"enc_key\" and \"ck\""
+            ),
             Self::TooLarge(bytes) => write!(
                 f,
                 "the envelope has {bytes} bytes; at most {MAX_ENVELOPE_BYTES} are allowed"
@@ -182,9 +191,9 @@ impl fmt::Display for EnvelopeError {
 impl std::error::Error for EnvelopeError {}
 
 /// Checks an envelope v1 without reading its content: `v` is 1, a plain envelope carries an
-/// object `body`, a sealed one carries string `key_id`, `enc_key` and `ct`, nothing else is
-/// present (a sealed envelope can't smuggle a readable body) and it serializes to at most
-/// [`MAX_ENVELOPE_BYTES`].
+/// object `body`, a sealed one carries string `key_id`, `enc_key` and `ct` (one key) or `ct`
+/// and `keys` (one wrapped content key per device), nothing else is present (a sealed envelope
+/// can't smuggle a readable body) and it serializes to at most [`MAX_ENVELOPE_BYTES`].
 pub fn check_envelope(envelope: &Value) -> Result<EnvelopeKind, EnvelopeError> {
     let fields = envelope.as_object().ok_or(EnvelopeError::NotAnObject)?;
     if fields.get("v").and_then(Value::as_u64) != Some(ENVELOPE_VERSION) {
@@ -224,17 +233,46 @@ fn check_plain_fields(fields: &Fields) -> Result<EnvelopeKind, EnvelopeError> {
     Ok(EnvelopeKind::Plain)
 }
 
-fn check_sealed_fields(fields: &Fields) -> Result<EnvelopeKind, EnvelopeError> {
-    only_fields(fields, &SEALED_FIELDS)?;
-    let missing = ["key_id", "enc_key", "ct"].into_iter().find(|field| {
+fn missing_string(fields: &Fields, names: &[&'static str]) -> Option<&'static str> {
+    names.iter().copied().find(|field| {
         !fields
             .get(*field)
             .and_then(Value::as_str)
             .is_some_and(|value| !value.is_empty())
-    });
-    match missing {
+    })
+}
+
+fn check_sealed_fields(fields: &Fields) -> Result<EnvelopeKind, EnvelopeError> {
+    if fields.contains_key("keys") {
+        return check_sealed_keys(fields);
+    }
+    only_fields(fields, &SEALED_FIELDS)?;
+    match missing_string(fields, &["key_id", "enc_key", "ct"]) {
         Some(field) => Err(EnvelopeError::MissingField(field)),
         None => Ok(EnvelopeKind::Sealed),
+    }
+}
+
+fn check_sealed_keys(fields: &Fields) -> Result<EnvelopeKind, EnvelopeError> {
+    only_fields(fields, &SEALED_KEYS_FIELDS)?;
+    if let Some(field) = missing_string(fields, &["ct"]) {
+        return Err(EnvelopeError::MissingField(field));
+    }
+    let keys = fields
+        .get("keys")
+        .and_then(Value::as_array)
+        .filter(|keys| (1..=MAX_ENVELOPE_KEYS).contains(&keys.len()))
+        .ok_or(EnvelopeError::BadKeys)?;
+    let wrapped = |key: &Value| {
+        key.as_object().is_some_and(|key| {
+            key.len() == WRAPPED_KEY_FIELDS.len()
+                && missing_string(key, &WRAPPED_KEY_FIELDS).is_none()
+        })
+    };
+    if keys.iter().all(wrapped) {
+        Ok(EnvelopeKind::Sealed)
+    } else {
+        Err(EnvelopeError::BadKeys)
     }
 }
 
@@ -499,6 +537,9 @@ pub const TRIGGER_PAYLOAD_MAX_BYTES: usize = 32 * 1024;
 /// the bot's conversation with them; the bot answers it like an owner message with 0 hops.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TriggerBody {
+    /// Set by the scheduling host for a task that checks for useful changes.
+    #[serde(default)]
+    pub monitoring: bool,
     pub source: TriggerSource,
     /// The task, webhook, mail or event that fired; with the time it fires it names the entry.
     pub ref_id: String,
@@ -832,6 +873,47 @@ mod tests {
         })
     }
 
+    fn sealed_keys() -> Value {
+        json!({
+            "v": 1,
+            "enc": "hpke-x25519-sha256-chacha20poly1305",
+            "ct": "Y3Q",
+            "keys": [
+                { "key_id": "key-1", "enc_key": "ZW5j", "ck": "Y2s" },
+                { "key_id": "key-2", "enc_key": "ZW5j", "ck": "Y2s" },
+            ],
+        })
+    }
+
+    #[test]
+    fn a_keys_envelope_is_refused_when_its_keys_are_malformed() {
+        let mut cases = Vec::new();
+        for keys in [
+            json!([]),
+            json!("key-1"),
+            json!([{ "key_id": "key-1", "enc_key": "ZW5j" }]),
+            json!([{ "key_id": "key-1", "enc_key": "ZW5j", "ck": "" }]),
+            json!([{ "key_id": "key-1", "enc_key": "ZW5j", "ck": "Y2s", "body": "x" }]),
+            json!(vec![
+                json!({ "key_id": "k", "enc_key": "e", "ck": "c" });
+                MAX_ENVELOPE_KEYS + 1
+            ]),
+        ] {
+            let mut envelope = sealed_keys();
+            envelope["keys"] = keys;
+            cases.push((envelope, EnvelopeError::BadKeys));
+        }
+        let mut no_ct = sealed_keys();
+        no_ct["ct"] = json!("");
+        cases.push((no_ct, EnvelopeError::MissingField("ct")));
+        let mut both = sealed_keys();
+        both["key_id"] = json!("key-1");
+        cases.push((both, EnvelopeError::UnexpectedField("key_id".into())));
+        for (envelope, expected) in cases {
+            assert_eq!(check_envelope(&envelope), Err(expected), "{envelope}");
+        }
+    }
+
     #[test]
     fn kinds_use_lowercase_ids_and_read_stored_uppercase_values() {
         for kind in InboxEntryKind::ALL {
@@ -977,6 +1059,7 @@ mod tests {
     #[test]
     fn a_trigger_body_round_trips_and_enforces_its_limits() {
         let body = TriggerBody {
+            monitoring: false,
             source: TriggerSource::Schedule,
             ref_id: "task-1".into(),
             title: "Report".into(),
@@ -1050,6 +1133,7 @@ mod tests {
         let plain = plain_envelope(json!({ "text": "Hi", "reply_to": "msg_1" }));
         assert_eq!(check_envelope(&plain), Ok(EnvelopeKind::Plain));
         assert_eq!(check_envelope(&sealed()), Ok(EnvelopeKind::Sealed));
+        assert_eq!(check_envelope(&sealed_keys()), Ok(EnvelopeKind::Sealed));
         assert_eq!(body_target(&plain), None);
         let reaction = plain_envelope(json!({ "target": "msg_1", "emoji": "👍", "op": "add" }));
         assert_eq!(body_target(&reaction), Some("msg_1"));

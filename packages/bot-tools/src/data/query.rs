@@ -4,6 +4,7 @@ use flow_like_storage::databases::sql_guard::validate_readonly_sql;
 use flow_like_storage::databases::workbench::{
     WorkbenchLimits, WorkbenchSchema, execute_readonly_sql_across_apps,
 };
+use flow_like_storage::datafusion::{common::TableReference, prelude::SessionContext};
 use flow_like_types::Bytes;
 use serde_json::{Value, json};
 
@@ -14,7 +15,29 @@ use crate::error::{ToolError, ToolResult, code};
 use crate::files::{handle_for, workspace_of};
 use crate::layout::normalize_path;
 use crate::outcome::ToolOutput;
-use crate::tables::{SaveMode, save_rows, validate_table_name};
+use crate::tables::{SaveMode, ensure_not_memory_table, save_rows, validate_table_name};
+
+fn validate_memory_access(sql: &str) -> ToolResult<()> {
+    let state = SessionContext::new().state();
+    let dialect = &state.config().options().sql_parser.dialect;
+    let statement = state
+        .sql_to_statement(sql, dialect)
+        .map_err(|error| ToolError::invalid(format!("Invalid SQL: {error}")))?;
+    for reference in state
+        .resolve_table_references(&statement)
+        .map_err(|error| ToolError::invalid(format!("Invalid SQL: {error}")))?
+    {
+        let (schema, table) = match &reference {
+            TableReference::Partial { schema, table }
+            | TableReference::Full { schema, table, .. } => (schema.as_ref(), table.as_ref()),
+            TableReference::Bare { .. } => continue,
+        };
+        if schema.eq_ignore_ascii_case(WORKSPACE_SCHEMA) {
+            ensure_not_memory_table(table)?;
+        }
+    }
+    Ok(())
+}
 
 enum Target {
     Table { name: String, mode: SaveMode },
@@ -110,6 +133,7 @@ pub async fn data_query(env: &dyn ToolEnv, args: DataQueryArgs) -> ToolResult<To
             "Only one read-only SELECT or WITH statement is allowed: {error:#}. To keep a result, use save_as"
         ))
     })?;
+    validate_memory_access(&args.sql)?;
     let target = target_of(args.save_as.as_ref())?;
     let max_rows = args
         .max_rows

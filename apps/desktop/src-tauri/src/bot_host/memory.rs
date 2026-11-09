@@ -109,7 +109,7 @@ pub fn is_owner_direct(conversation: &Conversation, bot_id: &str) -> bool {
 }
 
 /// The memory source of a turn in the owner's direct chat or a group the bot belongs to.
-pub fn source_for(
+pub async fn source_for(
     store: &Arc<dyn HostStore>,
     conversation: &Conversation,
     bot_id: &str,
@@ -125,6 +125,22 @@ pub fn source_for(
     {
         return None;
     }
+    let limits = if room {
+        store
+            .room_limits(&conversation.id, bot_id)
+            .await
+            .ok()?
+            .unwrap_or_default()
+    } else {
+        Default::default()
+    };
+    let mut shared_room_keys = Vec::new();
+    if !room || limits.use_shared_memory {
+        shared_room_keys = store.shared_memory_rooms(bot_id).await.unwrap_or_default();
+        shared_room_keys.retain(|key| key != &conversation.id);
+    }
+    shared_room_keys.sort();
+    shared_room_keys.dedup();
     let trigger_seq = Seq::try_from(trigger?.seq?).ok()?;
     let entries = PositionEntries::new(StorePages {
         store: store.clone(),
@@ -145,6 +161,8 @@ pub fn source_for(
         }),
         key: conversation.id.clone(),
         room,
+        use_owner_memory: !room || limits.use_owner_memory,
+        shared_room_keys,
         trigger_seq,
         timezone: local_timezone(),
         state_block: String::new(),

@@ -40,7 +40,7 @@ pub struct BotTurn {
     /// `queued`, `running`, `done`, `failed` or `cancelled`.
     #[schema(value_type = String, example = "running")]
     pub status: contract::TurnStatus,
-    /// Claims so far, takeovers of an expired lease included.
+    /// Monotonic claim generation, including approval handoffs and expired-lease takeovers.
     pub attempts: u32,
     /// The host holding the lease.
     pub host_id: Option<String>,
@@ -96,7 +96,7 @@ impl From<contract::BotTurn> for BotTurn {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct BotTurnList {
-    /// Oldest first; one per bot and conversation, the newest message's turn.
+    /// Oldest first; one per bot and conversation, prioritizing interrupted work.
     pub turns: Vec<BotTurn>,
 }
 
@@ -267,6 +267,73 @@ pub async fn heartbeat_turn(
     Ok(turn_response(&turn, Vec::new()))
 }
 
+/// The live status line a host shows for a turn it holds.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct TurnStatusRequest {
+    /// The host holding the turn.
+    #[schema(example = "desktop:7f3c1a")]
+    pub host_id: String,
+    /// One line of at most 120 characters, such as "Lesson 2 of 6". Empty or missing clears it.
+    #[serde(default)]
+    #[schema(example = "Lesson 2 of 6")]
+    pub status_text: Option<String>,
+}
+
+fn checked_status_text(text: Option<String>) -> Result<Option<String>, ApiError> {
+    let Some(text) = text.map(|text| text.trim().to_string()).filter(|text| !text.is_empty())
+    else {
+        return Ok(None);
+    };
+    if text.chars().count() > flow_like_types::bot_notes::MAX_STATUS_CHARS
+        || text.chars().any(char::is_control)
+    {
+        return Err(ApiError::bad_request(format!(
+            "status_text is one line of at most {} characters",
+            flow_like_types::bot_notes::MAX_STATUS_CHARS
+        )));
+    }
+    Ok(Some(text))
+}
+
+#[utoipa::path(
+    put,
+    path = "/bots/turns/{turn_id}/status",
+    tag = "Bots",
+    params(("turn_id" = String, Path, description = "The turn you claimed")),
+    request_body = TurnStatusRequest,
+    responses(
+        (status = 204, description = "People in the conversation see the status line while the turn runs; it clears when the turn stops."),
+        (status = 400, description = "host_id is invalid, or status_text is longer than 120 characters or has a line break"),
+        (status = 401, description = "Not signed in"),
+        (status = 404, description = "You have no such turn"),
+        (status = 409, description = "BOT_TURN_LEASE_LOST: the turn isn't running under this host any more; stop working on it")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(name = "PUT /bots/turns/{turn_id}/status", skip(state, user, body))]
+pub async fn set_turn_status(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(turn_id): Path<String>,
+    Json(body): Json<TurnStatusRequest>,
+) -> Result<StatusCode, ApiError> {
+    let sub = user.sub()?;
+    let host_id = checked_host_id(TurnHostRequest {
+        host_id: body.host_id,
+    })?;
+    let status_text = checked_status_text(body.status_text)?;
+    ledger::set_owned_status_text_in(
+        &state.db,
+        &turn_id,
+        &sub,
+        &host_id,
+        status_text.as_deref(),
+        now_millis(),
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[utoipa::path(
     post,
     path = "/bots/turns/{turn_id}/silent",
@@ -306,6 +373,73 @@ pub async fn silent_turn(
         .await?
         .ok_or_else(|| ledger::Refusal::NotFound.into_api(&turn_id))?;
     Ok(turn_response(&done, Vec::new()))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct TurnWaitRequest {
+    pub host_id: String,
+    pub participant_id: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct TurnWaitResponse {
+    /// `parked`, `already_answered`, `unavailable`, or `superseded` by a new topic.
+    pub status: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/bots/turns/{turn_id}/wait",
+    tag = "Bots",
+    params(("turn_id" = String, Path, description = "The turn you claimed")),
+    request_body = TurnWaitRequest,
+    responses(
+        (status = 200, description = "The bot waits for a participant, or the host should continue because the participant already answered or cannot be waited for.", body = TurnWaitResponse),
+        (status = 400, description = "Invalid host or participant id"),
+        (status = 401, description = "Not signed in"),
+        (status = 404, description = "You have no such turn"),
+        (status = 409, description = "BOT_TURN_LEASE_LOST: this host no longer holds the turn")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn wait_turn(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(turn_id): Path<String>,
+    Json(body): Json<TurnWaitRequest>,
+) -> Result<Json<TurnWaitResponse>, ApiError> {
+    use crate::bot_host::decision_wait::{ParkOutcome, park_wait};
+    let sub = user.sub()?;
+    let host_id = checked_host_id(TurnHostRequest {
+        host_id: body.host_id,
+    })?;
+    if body.participant_id.is_empty() || body.participant_id.len() > 128 {
+        return Err(ApiError::bad_request(
+            "participant_id must name a room member",
+        ));
+    }
+    let turn = ledger::find(&state.db, &turn_id, Some(&sub))
+        .await?
+        .ok_or_else(|| ledger::Refusal::NotFound.into_api(&turn_id))?;
+    let status = match park_wait(&state, &turn, &host_id, &body.participant_id).await? {
+        ParkOutcome::Parked => {
+            wake(&state, [sub]).await;
+            "parked"
+        }
+        ParkOutcome::AlreadyAnswered => "already_answered",
+        ParkOutcome::Unavailable => "unavailable",
+        ParkOutcome::Superseded => "superseded",
+        ParkOutcome::LeaseLost => {
+            return Err(ApiError::coded(
+                StatusCode::CONFLICT,
+                ledger::BOT_TURN_LEASE_LOST,
+                "The host no longer holds this turn".to_owned(),
+            ));
+        }
+    };
+    Ok(Json(TurnWaitResponse {
+        status: status.to_owned(),
+    }))
 }
 
 /// Whether the interactive chat still holds the turn of a message it sent.
@@ -362,8 +496,10 @@ pub async fn retry_turn(
 ) -> Result<Json<BotTurn>, ApiError> {
     let sub = user.sub()?;
     let bot = owned_bot(&state.db, &sub, &bot_id).await?;
-    let turn = ledger::retry_in(&state.db, &sub, &bot.id, &turn_id, now_millis())
-        .await?
+    let turn = state.transaction(|txn| {
+        let (sub, bot_id, turn_id) = (sub.clone(), bot.id.clone(), turn_id.clone());
+        Box::pin(async move { ledger::retry_in(txn, &sub, &bot_id, &turn_id, now_millis()).await })
+    }).await?
         .ok_or_else(|| ledger::Refusal::NotFound.into_api(&turn_id))?;
     crate::bot_host::dispatch_turns(&state, vec![turn.id.clone()]).await;
     wake(&state, [sub]).await;

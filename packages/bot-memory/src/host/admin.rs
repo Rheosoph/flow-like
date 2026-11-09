@@ -42,6 +42,12 @@ pub struct FactView {
     pub recorded_at: String,
     pub valid_from: Option<String>,
     pub valid_to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geojson: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
     pub superseded_by: Option<String>,
     pub evidence: Vec<EvidenceView>,
     /// An opaque room scope. Its positions cannot be opened in the owner's direct chat.
@@ -68,6 +74,9 @@ impl From<Fact> for FactView {
             recorded_at: fact.recorded_at.to_rfc3339(),
             valid_from: fact.valid_from.map(|at| at.to_rfc3339()),
             valid_to: fact.valid_to.map(|at| at.to_rfc3339()),
+            geojson: fact.geojson,
+            time: fact.time.map(|at| at.to_rfc3339()),
+            expires_at: fact.expires_at.map(|at| at.to_rfc3339()),
             superseded_by: fact.superseded_by,
             evidence: fact
                 .evidence
@@ -230,11 +239,12 @@ impl FactAdmin {
         }
     }
 
-    /// Drops every table of the memory.
+    /// Clears direct and room memories while keeping their revisions, so prepared drafts
+    /// cannot restore the removed content.
     pub async fn reset(&self) -> Result<()> {
         for room in self.room_engines().await? {
-            room.stores().drop_all().await?;
+            room.reset(Utc::now()).await?;
         }
-        self.engine.stores().drop_all().await
+        self.engine.reset(Utc::now()).await
     }
 }

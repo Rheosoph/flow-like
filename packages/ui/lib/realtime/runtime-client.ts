@@ -1,10 +1,6 @@
 import type { RealtimeRuntime } from "./runtime";
 import { RealtimePortClient } from "./runtime-port-client";
-import type {
-	RealtimeClient,
-	RealtimeClientOptions,
-	RealtimeConnectionSession,
-} from "./types";
+import type { RealtimeClientOptions, RealtimeConnectionSession } from "./types";
 
 export { getRealtimeClientForRuntime } from "./runtime-port-client";
 
@@ -29,7 +25,7 @@ export class BrowserRealtimeClient extends RealtimePortClient {
 export async function getRealtimeClient(
 	session: RealtimeConnectionSession,
 	options?: RealtimeClientOptions,
-): Promise<RealtimeClient> {
+): Promise<BrowserRealtimeClient> {
 	const client = new BrowserRealtimeClient(session, options);
 	await client.connect();
 	return client;

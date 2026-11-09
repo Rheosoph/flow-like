@@ -47,7 +47,7 @@ use std::{
     time::Duration,
 };
 use tauri::{
-    AppHandle, State,
+    AppHandle, Manager, State,
     ipc::{Channel, InvokeResponseBody},
 };
 use tokio::sync::watch;
@@ -425,18 +425,40 @@ pub async fn global_chat(
 ) -> Result<UnifiedCopilotResponse, String> {
     let mut finish = None;
     let mut bot_memory = None;
+    let mut notes = None;
+    let mut recovery = None;
+    let mut inbox_conversation_id = None;
+    let mut ephemeral_user_context = false;
     let mut legacy_memory_read_only = interactive.is_some();
+    let mut legacy_memory_allowed = interactive.as_ref().map(|_| false);
     let bot_turn_id = interactive
         .as_ref()
         .zip(bot_id.as_deref())
         .map(|(args, bot)| flow_like_types::bot_turn::turn_id(bot, &args.trigger_message_id));
     if let (Some(args), Some(bot)) = (interactive, bot_id.as_deref())
-        && let Some(run) = crate::bot_host::interactive::open_for_app(&app_handle, bot, args).await
+        && let Some(mut run) =
+            crate::bot_host::interactive::open_for_app(&app_handle, bot, args).await
     {
         let guard =
             crate::bot_host::interactive::begin(Some(&app_handle), bot, run.conversation_id());
-        legacy_memory_read_only = !run.owner_direct().await;
-        bot_memory = run.memory().await;
+        inbox_conversation_id = Some(run.conversation_id().to_owned());
+        ephemeral_user_context = run.ephemeral_user_context().await?;
+        let access = run.legacy_memory_access().await;
+        legacy_memory_allowed = Some(access.is_some());
+        legacy_memory_read_only = access.unwrap_or(true);
+        if !ephemeral_user_context {
+            bot_memory = run.memory().await;
+            recovery = run
+                .recovery(
+                    app_handle
+                        .try_state::<Arc<flow_like_bot_host::e2e::E2eHost>>()
+                        .map(|host| host.inner().clone()),
+                )
+                .await?;
+        }
+        if !ephemeral_user_context {
+            notes = run.notes().await;
+        }
         let hold = run.hold();
         finish = Some(crate::bot_host::interactive::Finish {
             memory: bot_memory.clone(),
@@ -468,11 +490,16 @@ pub async fn global_chat(
             model_id,
             reasoning_effort,
             conversation_id,
+            inbox_conversation_id,
             auto_approve: auto_approve.unwrap_or(false),
             interaction_mode:
                 crate::functions::ai::native_tool_bridge::NativeInteractionMode::Interactive,
             bot_memory,
+            notes,
+            ephemeral_user_context,
+            recovery,
             legacy_memory_read_only,
+            legacy_memory_allowed,
             bot_turn_id,
             ..Default::default()
         },
@@ -482,10 +509,37 @@ pub async fn global_chat(
     if let Some(finish) = finish {
         match &result {
             Ok(response) => finish.end(&response.message, None).await,
+            Err(error)
+                if error == "FlowPilot Bits run was cancelled" || error == "Run cancelled" =>
+            {
+                finish.cancel().await?;
+            }
             Err(error) => finish.end(error, Some("BOT_TURN_INTERACTIVE_FAILED")).await,
         }
     }
     result
+}
+
+fn allows_legacy_owner_memory(
+    explicit: Option<bool>,
+    source: Option<bool>,
+    requester: Option<&flow_like::flow::copilot::TurnRequester>,
+    nested: bool,
+) -> bool {
+    if let Some(allowed) = source {
+        return allowed && explicit.unwrap_or(true);
+    }
+    // A bot-to-bot exchange has no authoritative owner or group memory policy. A caller's
+    // grant to ask another bot must not turn the callee's private memory on implicitly.
+    if nested {
+        return false;
+    }
+    explicit.unwrap_or_else(|| {
+        requester.is_none_or(|requester| {
+            requester.audience == flow_like_types::bot_turn::TurnAudience::Owner
+                && requester.requester_id == requester.owner_id
+        })
+    })
 }
 
 pub async fn global_chat_native(
@@ -522,8 +576,19 @@ pub async fn global_chat_native(
     let nested_talk = options.bot_talk.take();
     let answered_round = options.answered_round.take();
     let bot_memory = options.bot_memory.take();
+    let notes = options.notes.take();
+    let recovery = options.recovery.take();
     let room_updates = options.room_updates.take();
     let requester = options.requester.take();
+    let acknowledgement = options.acknowledgement;
+    let ephemeral_user_context = options.ephemeral_user_context;
+    let suppress_owner_notifications = options.suppress_owner_notifications;
+    let legacy_memory_allowed = allows_legacy_owner_memory(
+        options.legacy_memory_allowed,
+        bot_memory.as_ref().map(|source| source.use_owner_memory),
+        requester.as_ref(),
+        nested_talk.is_some(),
+    );
     let room_memory = options.legacy_memory_read_only
         || bot_memory.as_ref().is_some_and(|source| source.room)
         || requester.as_ref().is_some_and(|requester| {
@@ -537,6 +602,7 @@ pub async fn global_chat_native(
     });
     options.attachments = attachments_manifest.clone().unwrap_or_default();
     let conversation_id = options.conversation_id.clone();
+    let has_inbox_conversation = options.inbox_conversation_id.is_some();
     let run_id = Some(run_id.unwrap_or_else(flow_like_types::create_id));
     let _native_run = crate::functions::ai::native_tool_bridge::claim_run(
         &app_handle,
@@ -593,6 +659,33 @@ pub async fn global_chat_native(
             None
         }
     };
+    if let Some(recovery) = &recovery
+        && let Some(checkpoint) = recovery.load().await.map_err(|error| error.to_string())?
+        && let Some(message) = flow_like::flow::copilot::run_recovery::finished_reply(&checkpoint)
+            .map_err(|error| error.to_string())?
+    {
+        if identity
+            .as_ref()
+            .and_then(|identity| identity.auth.as_ref())
+            .is_some_and(|auth| !auth.is_current())
+        {
+            return Err(
+                "The desktop session changed before the saved reply could be delivered.".into(),
+            );
+        }
+        let _ = channel.send(message.clone());
+        return Ok(UnifiedCopilotResponse {
+            message,
+            commands: Vec::new(),
+            suggestions: Vec::new(),
+            components: Vec::new(),
+            canvas_settings: None,
+            root_component_id: None,
+            flowscript_workspace: None,
+            flow_ir_commit: None,
+            active_scope: scope,
+        });
+    }
     let model_selection = FlowPilotModelSelection::parse(model_id);
     // Without a webview nobody can answer questions or see inline pages, so a bot gets only the
     // tools this desktop runs natively.
@@ -621,10 +714,23 @@ pub async fn global_chat_native(
             ));
     }
     let model_state = Arc::new(model_state);
+    if let Some(bot) = bot.as_mut() {
+        let context = std::sync::Arc::make_mut(&mut bot.context);
+        context.host_tools = std::mem::take(&mut context.host_tools)
+            .with_user_context(has_inbox_conversation);
+        if let Some(notes) = notes {
+            context.host_tools = std::mem::take(&mut context.host_tools).with_notes(notes);
+        }
+        std::sync::Arc::make_mut(&mut bot.context).recovery = recovery.map(Into::into);
+        std::sync::Arc::make_mut(&mut bot.context).acknowledgement = acknowledgement;
+        std::sync::Arc::make_mut(&mut bot.context).ephemeral_user_context = ephemeral_user_context;
+        std::sync::Arc::make_mut(&mut bot.context).suppress_owner_notifications =
+            suppress_owner_notifications;
+    }
     if let (Some(bot), Some(requester)) = (bot.as_mut(), requester) {
         std::sync::Arc::make_mut(&mut bot.context).requester = Some(requester);
     }
-    let talk = match bot.as_ref() {
+    let talk = match bot.as_ref().filter(|bot| !bot.context.acknowledgement) {
         Some(bot) => {
             bot_talk::talk_for(
                 &app_handle,
@@ -751,8 +857,8 @@ pub async fn global_chat_native(
             .map(str::to_string),
         None => embedding_model_id,
     };
-    let embedding_model_id =
-        embedding_model_id.filter(|_| headless_memory.is_none() || room_memory);
+    let embedding_model_id = embedding_model_id
+        .filter(|_| legacy_memory_allowed && (headless_memory.is_none() || room_memory));
     let memory =
         if let (Some(profile_arc), Some(embedding_id)) = (&profile, embedding_model_id.as_ref()) {
             match profile_arc
@@ -878,7 +984,11 @@ pub async fn global_chat_native(
     });
 
     let backend = match &bot {
-        Some(bot) if !bot.runs_flowpilot() || bot_model.is_some() => FlowPilotChatBackend::Bits,
+        Some(bot)
+            if bot.context.acknowledgement || !bot.runs_flowpilot() || bot_model.is_some() =>
+        {
+            FlowPilotChatBackend::Bits
+        }
         _ => model_selection.backend,
     };
     let result = async {
@@ -1175,6 +1285,24 @@ pub async fn global_chat_delete_memory(
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+
+    #[test]
+    fn nested_bots_need_an_authoritative_source_for_private_memory() {
+        for (explicit, source, nested, expected) in [
+            (None, None, false, true),
+            (None, None, true, false),
+            (Some(true), None, true, false),
+            (None, Some(false), true, false),
+            (None, Some(true), true, true),
+            (Some(true), Some(false), false, false),
+            (Some(false), Some(true), false, false),
+        ] {
+            assert_eq!(
+                allows_legacy_owner_memory(explicit, source, None, nested),
+                expected,
+            );
+        }
+    }
 
     async fn fixture(id: &str, retain_for_resume: bool) -> GlobalChatRunGuard {
         let channel = InProcessChannel::register(id, Duration::from_secs(60)).await;

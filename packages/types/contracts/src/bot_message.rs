@@ -76,6 +76,10 @@ pub struct MessageBody {
     /// that chat holds the turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interactive: Option<InteractiveMark>,
+    /// The bot note this reply was written with: its title and status show on the message, its
+    /// body only to the bot's owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<crate::bot_notes::NoteRef>,
 }
 
 /// Names the interactive chat run that answers a message.
@@ -110,6 +114,9 @@ pub struct ApprovalRequest {
     /// answers `once` (or `deny`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret: Option<SecretAsk>,
+    /// The full proposed settings patch, shown before approving a bot configuration change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration_changes: Option<Value>,
 }
 
 /// A secret name has at most this many characters.
@@ -182,6 +189,13 @@ impl ApprovalRequest {
             MAX_NAME_CHARS,
         )?;
         check_line("body.approval.room", self.room.as_deref(), MAX_NAME_CHARS)?;
+        if self
+            .configuration_changes
+            .as_ref()
+            .is_some_and(|changes| !changes.is_object())
+        {
+            return refuse("body.approval.configuration_changes must be an object".to_string());
+        }
         self.secret.as_ref().map_or(Ok(()), SecretAsk::check)
     }
 }
@@ -454,6 +468,10 @@ impl MessageBody {
                 &mark.client_run_id,
                 MAX_NAME_CHARS,
             )?;
+        }
+        if let Some(note) = &self.note {
+            note.check()
+                .map_err(|error| BodyError(format!("body.note: {error}")))?;
         }
         Ok(())
     }
@@ -1131,6 +1149,21 @@ mod conversation_file_tests {
             "id": "ap-1", "turn_id": "bt_1", "tool": SECRET_REQUEST_TOOL,
             "summary": "Wants GITHUB_TOKEN", "scope": "", "args_hash": "h", "secret": secret,
         } })
+    }
+
+    #[test]
+    fn configuration_approvals_keep_the_full_patch_beyond_the_summary_limit() {
+        let changes = json!({ "instructions": "Read carefully.\n".repeat(100), "name": "Atlas" });
+        let raw = json!({ "approval": {
+            "id": "ap-1", "turn_id": "bt_1", "tool": "bot_update_configuration",
+            "summary": "Change my settings", "scope": "", "args_hash": "h",
+            "configuration_changes": changes,
+        } });
+        let body = MessageBody::parse(&raw).unwrap();
+        assert_eq!(body.approval.unwrap().configuration_changes, Some(changes));
+        let mut invalid = raw;
+        invalid["approval"]["configuration_changes"] = json!(["name"]);
+        assert!(MessageBody::parse(&invalid).is_err());
     }
 
     #[test]

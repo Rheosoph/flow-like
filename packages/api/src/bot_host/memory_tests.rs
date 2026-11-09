@@ -3,11 +3,13 @@
 
 use super::{
     fixture::{conversation, database, insert_bot, message},
-    memory::{ServerEntries, ServerSegments, is_owner_direct, memory_room},
+    memory::{ServerEntries, ServerSegments, is_owner_direct, memory_policy, memory_room},
 };
 use crate::{
     db::DbDialect,
-    entity::{conversation as conversation_entity, conversation_segment, inbox_entry},
+    entity::{
+        conversation as conversation_entity, conversation_member, conversation_segment, inbox_entry,
+    },
     routes::inbox::fixture::at,
 };
 use flow_like_bot_memory::{
@@ -63,6 +65,116 @@ async fn set_last_seq(db: &DatabaseConnection, last: i64) {
 async fn direct(db: &DatabaseConnection) {
     insert_bot(db, BOT, OWNER, "SERVER").await;
     conversation(db, "c1", "DIRECT", "PLAIN", &[OWNER, BOT]).await;
+}
+
+async fn memory_limits(db: &DatabaseConnection, room: &str, value: Value) {
+    let row = conversation_member::Entity::find_by_id((room.to_string(), BOT.to_string()))
+        .one(db)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut row: conversation_member::ActiveModel = row.into();
+    row.limits = Set(Some(value));
+    row.update(db).await.unwrap();
+}
+
+#[tokio::test]
+async fn group_memory_switches_control_both_directions_and_follow_revocation() {
+    let db = database().await;
+    direct(&db).await;
+    for room in [
+        "source",
+        "destination",
+        "private",
+        "left",
+        "pending",
+        "sealed",
+    ] {
+        conversation(
+            &db,
+            room,
+            "GROUP",
+            if room == "sealed" { "E2E" } else { "PLAIN" },
+            &[OWNER, BOT],
+        )
+        .await;
+    }
+    for room in ["source", "left", "pending", "sealed"] {
+        memory_limits(&db, room, json!({"share_memory": true})).await;
+    }
+    for (room, left, status) in [
+        ("left", Some(at(2)), "ACTIVE"),
+        ("pending", None, "PENDING"),
+    ] {
+        let row = conversation_member::Entity::find_by_id((room.to_string(), BOT.to_string()))
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut row: conversation_member::ActiveModel = row.into();
+        row.left_at = Set(left);
+        row.status = Set(status.into());
+        row.update(&db).await.unwrap();
+    }
+    let direct = memory_policy(&db, "c1", OWNER, BOT).await.unwrap().unwrap();
+    assert!(!direct.room && direct.use_owner_memory);
+    assert_eq!(direct.shared_room_keys, ["account/source"]);
+    for bits in 0..8 {
+        memory_limits(
+            &db,
+            "destination",
+            json!({
+                "use_owner_memory": bits & 1 != 0,
+                "use_shared_memory": bits & 2 != 0,
+                "share_memory": bits & 4 != 0,
+            }),
+        )
+        .await;
+        let policy = memory_policy(&db, "destination", OWNER, BOT)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(policy.use_owner_memory, bits & 1 != 0);
+        assert_eq!(
+            policy.shared_room_keys,
+            if bits & 2 != 0 {
+                vec!["account/source"]
+            } else {
+                vec![]
+            }
+        );
+        let owner = memory_policy(&db, "c1", OWNER, BOT).await.unwrap().unwrap();
+        assert_eq!(
+            owner
+                .shared_room_keys
+                .contains(&"account/destination".to_string()),
+            bits & 4 != 0
+        );
+    }
+    memory_limits(&db, "source", json!({"share_memory": false})).await;
+    assert!(
+        memory_policy(&db, "destination", OWNER, BOT)
+            .await
+            .unwrap()
+            .unwrap()
+            .shared_room_keys
+            .is_empty()
+    );
+    memory_limits(&db, "destination", json!({"use_owner_memory": "invalid"})).await;
+    assert!(memory_policy(&db, "destination", OWNER, BOT).await.is_err());
+    conversation(&db, "other-direct", "DIRECT", "PLAIN", &["user-b", BOT]).await;
+    assert!(
+        memory_policy(&db, "other-direct", OWNER, BOT)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        memory_policy(&db, "sealed", OWNER, BOT)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 fn entries(db: &DatabaseConnection) -> ServerEntries {

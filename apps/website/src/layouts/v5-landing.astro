@@ -2,6 +2,7 @@
 import "@flow-like/flow-like-ui/global.css";
 import "../styles/website-base.css";
 import { Header } from "../components/header";
+import PageBotHelpers from "../components/v5/page-bot-helpers";
 
 import V5Hero from "../sections/v5-hero.astro";
 import V5Apps from "../sections/v5-apps.astro";
@@ -160,12 +161,32 @@ const websiteLd = {
       <V5Flowpilot lang={lang} />
       <V5Control lang={lang} />
       <V5Book lang={lang} />
+      <PageBotHelpers client:load />
     </main>
     <NotesFooterV4 lang={lang} />
   </body>
 </html>
 
 <script>
+  const motionButtons = document.querySelectorAll<HTMLButtonElement>("[data-bot-motion-toggle]");
+  function updateBotMotionButtons(paused: boolean) {
+    motionButtons.forEach((button) => {
+      button.setAttribute("aria-pressed", String(paused));
+      button.textContent = (paused ? button.dataset.resumeLabel : button.dataset.pauseLabel) ?? "";
+    });
+  }
+  motionButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const paused = document.documentElement.dataset.botMotionPaused !== "true";
+      document.documentElement.dataset.botMotionPaused = String(paused);
+      window.dispatchEvent(new CustomEvent("flowlike:bot-motion", { detail: { paused } }));
+    });
+  });
+  window.addEventListener("flowlike:bot-motion", (event) => {
+    updateBotMotionButtons((event as CustomEvent<{ paused: boolean }>).detail.paused);
+  });
+  updateBotMotionButtons(document.documentElement.dataset.botMotionPaused === "true");
+
   // Match the viewport scrollbar to the section in view without changing page tokens.
   const surfaces = Array.from(document.querySelectorAll<HTMLElement>(
     "#content > section, body > section, body > footer",

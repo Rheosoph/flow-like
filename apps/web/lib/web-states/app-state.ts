@@ -30,6 +30,7 @@ import type {
 	ResolvedExplore,
 } from "@flow-like/flow-like-ui/components/store/explore/explore-types";
 import { isMissingResourceError } from "@flow-like/flow-like-ui/lib/api-error";
+import { fetchAllAppPages } from "@flow-like/flow-like-ui/lib/app-listing";
 import {
 	type IForkJobView,
 	resolveOnlineFork,
@@ -228,7 +229,9 @@ export class WebAppState implements IAppState {
 
 	async getApps(): Promise<[IApp, IMetadata | undefined][]> {
 		return stabilizeMetadataEntries(
-			await apiGet<[IApp, IMetadata | undefined][]>("apps", this.backend.auth),
+			await fetchAllAppPages((offset, limit) =>
+				apiGet(`apps?offset=${offset}&limit=${limit}`, this.backend.auth),
+			),
 		);
 	}
 

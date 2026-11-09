@@ -3,13 +3,13 @@
 //! person and the two bots belong to, and the callee's turn runs through `global_chat_native`
 //! like any other headless bot turn. Account bots join through the hub later.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use flow_like::{
     copilot::{CopilotScope, UnifiedChatMessage},
     flow::copilot::{
-        BotRunContext, ChatRole, FLUX_BOT_NAME, GENERAL_BOT_DESCRIPTION, GENERAL_BOT_NAME,
+        BotRunContext, FLUX_BOT_NAME, GENERAL_BOT_DESCRIPTION, GENERAL_BOT_NAME, TurnRequester,
         bot_talk::{
             AnsweredRound, BotPresence, BotTalk, BotTalkHost, CrewMember, HeadlessPermission,
             NestedBotTurn,
@@ -17,14 +17,13 @@ use flow_like::{
     },
 };
 use flow_like_local_bots::{
-    Bot, CreateConversationRequest, EntriesQuery, InboxEntry, LOCAL_OWNER_ID, LocalBotStore,
-    SendEntryRequest,
+    Bot, CreateConversationRequest, EntriesQuery, LOCAL_OWNER_ID, LocalBotStore, SendEntryRequest,
 };
 use flow_like_types::{
     anyhow,
     bot::{BotLocation, BotSystemKind},
     create_id,
-    inbox::{ActivityBody, ConversationKind, InboxEntryKind, plain_envelope},
+    inbox::{ActivityBody, ConversationKind, InboxEntryKind, is_tombstone, plain_envelope},
 };
 use serde_json::json;
 use tauri::{AppHandle, Manager, ipc::Channel};
@@ -40,7 +39,8 @@ use crate::{
 
 const FLUX_DESCRIPTION: &str = "Builds, edits and debugs your apps and flows";
 const EXCHANGE_TITLE_SEPARATOR: &str = " ↔ ";
-const HISTORY_ENTRIES: u64 = 41;
+const HISTORY_MESSAGES: usize = 40;
+const HISTORY_PAGE_SIZE: u64 = 100;
 
 /// The bot talk of a run on this desktop: the asking bot's own when another bot's ask started
 /// the run, else a fresh one that goes on counting from `answered` when a late answer woke the
@@ -62,7 +62,6 @@ pub(super) async fn talk_for(
             app: app.clone(),
             profile_id: profile_id.to_string(),
             gate,
-            callee: Mutex::new(None),
         })
     } else {
         Arc::new(crate::bot_host::talk::AccountTalkHost::new(
@@ -97,7 +96,6 @@ struct DesktopTalkHost {
     app: AppHandle,
     profile_id: String,
     gate: Option<Arc<ApprovalGate>>,
-    callee: Mutex<Option<CrewMember>>,
 }
 
 impl DesktopTalkHost {
@@ -187,7 +185,6 @@ impl BotTalkHost for DesktopTalkHost {
         callee: &CrewMember,
     ) -> flow_like_types::Result<String> {
         let (caller_member, callee_member) = (caller.clone(), callee.clone());
-        *self.callee.lock().unwrap_or_else(|p| p.into_inner()) = Some(callee.clone());
         self.store(move |store| exchange_of(store, &caller_member, &callee_member))
             .await?
             .ok_or_else(|| unknown_bot(callee))
@@ -199,26 +196,31 @@ impl BotTalkHost for DesktopTalkHost {
         sender: &CrewMember,
         text: &str,
     ) -> flow_like_types::Result<String> {
-        let callee = self
-            .callee
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
-            .filter(|callee| callee.id != sender.id);
         let (conversation_id, member, text) = (
             conversation_id.to_string(),
             sender.clone(),
             text.to_string(),
         );
-        self.store(move |store| {
-            let message_id = record_in(store, &conversation_id, &member, &text)?;
-            if let (Some(message_id), Some(callee)) = (&message_id, &callee) {
-                record_ask_activity(store, &conversation_id, message_id, &member, callee, &text);
-            }
-            Ok(message_id)
-        })
-        .await?
-        .ok_or_else(|| unknown_bot(sender))
+        self.store(move |store| record_in(store, &conversation_id, &member, &text))
+            .await?
+            .ok_or_else(|| unknown_bot(sender))
+    }
+
+    async fn record_question(
+        &self,
+        conversation_id: &str,
+        caller: &CrewMember,
+        question: &str,
+        _round: u32,
+    ) -> flow_like_types::Result<String> {
+        let (conversation_id, member, question) = (
+            conversation_id.to_string(),
+            caller.clone(),
+            question.to_string(),
+        );
+        self.store(move |store| record_question_in(store, &conversation_id, &member, &question))
+            .await?
+            .ok_or_else(|| unknown_bot(caller))
     }
 
     async fn run_turn(&self, turn: NestedBotTurn) -> flow_like_types::Result<String> {
@@ -267,7 +269,12 @@ async fn answer_turn(
     let options = NativeRunOptions {
         profile_id: Some(profile_id.clone()),
         conversation_id: Some(run_id.clone()),
+        inbox_conversation_id: Some(turn.conversation_id.clone()),
         bot_talk: Some(turn.talk),
+        requester: Some(TurnRequester::nested_bot(
+            turn.caller.id.clone(),
+            turn.caller.name.clone(),
+        )),
         ..Default::default()
     };
     let response = with_execution_profile(
@@ -416,6 +423,7 @@ fn exchange_of(
         )),
         members: vec![pair[0].0.clone(), pair[1].0.clone()],
         encryption: None,
+        bot_limits: Default::default(),
     })?;
     Ok(Some(conversation.id))
 }
@@ -443,6 +451,36 @@ fn record_in(
     Ok(Some(entry.message_id))
 }
 
+/// The recipient belongs to this exchange. A nested ask must not change the recipient used
+/// when the parent resumes, and recording an answer must not create another ask activity.
+fn record_question_in(
+    store: &LocalBotStore,
+    conversation_id: &str,
+    caller: &CrewMember,
+    question: &str,
+) -> flow_like_local_bots::Result<Option<String>> {
+    let Some(caller_row) = row_id(store, caller)? else {
+        return Ok(None);
+    };
+    let callee_id = store
+        .conversation(conversation_id)?
+        .and_then(|conversation| {
+            conversation.members.into_iter().find_map(|member| {
+                (member.principal_id != caller_row && member.principal_id != LOCAL_OWNER_ID)
+                    .then_some(member.principal_id)
+            })
+        });
+    let callee = match callee_id {
+        Some(id) => store.get_bot(&id)?.map(crew_member),
+        None => None,
+    };
+    let message_id = record_in(store, conversation_id, caller, question)?;
+    if let (Some(message_id), Some(callee)) = (&message_id, &callee) {
+        record_ask_activity(store, conversation_id, message_id, caller, callee, question);
+    }
+    Ok(message_id)
+}
+
 /// Leaves the question as an activity in the asker's chat and in the callee's, when that exists.
 /// A failure is logged: the ask goes on without it.
 fn record_ask_activity(
@@ -467,13 +505,6 @@ fn record_ask_activity(
     }
 }
 
-fn message_text(entry: &InboxEntry) -> Option<&str> {
-    (entry.kind == InboxEntryKind::Message)
-        .then(|| entry.envelope.get("body")?.get("text")?.as_str())
-        .flatten()
-        .filter(|text| !text.trim().is_empty())
-}
-
 /// What `callee` and the bot asking it said in the exchange before the question, oldest first:
 /// the callee's messages are its own answers, the other bot's are the user turns.
 fn history_before(
@@ -482,38 +513,54 @@ fn history_before(
     question_message_id: &str,
     callee: &str,
 ) -> flow_like_local_bots::Result<Vec<UnifiedChatMessage>> {
-    let page = store.entries_as(
-        conversation_id,
-        callee,
-        &EntriesQuery {
-            limit: Some(HISTORY_ENTRIES),
-            ..Default::default()
-        },
-    )?;
-    let mut earlier: Vec<UnifiedChatMessage> = page
-        .entries
-        .iter()
-        .skip_while(|entry| entry.message_id != question_message_id)
-        .skip(1)
-        .filter_map(|entry| {
-            Some(UnifiedChatMessage {
-                role: if entry.sender_id == callee {
-                    ChatRole::Assistant
-                } else {
-                    ChatRole::User
-                },
-                content: message_text(entry)?.to_string(),
-                images: None,
-            })
-        })
-        .collect();
-    earlier.reverse();
-    Ok(earlier)
+    let mut before = None;
+    let mut found_question = false;
+    let mut earlier = Vec::new();
+    loop {
+        let page = store.entries_as(
+            conversation_id,
+            callee,
+            &EntriesQuery {
+                before,
+                limit: Some(HISTORY_PAGE_SIZE),
+                ..Default::default()
+            },
+        )?;
+        let mut topic_boundary = false;
+        for entry in page.entries {
+            if !found_question {
+                found_question = entry.message_id == question_message_id;
+                continue;
+            }
+            topic_boundary = entry.kind == InboxEntryKind::Topic
+                && flow_like_bot_host::rule::is_plain(&entry)
+                && !is_tombstone(&entry.envelope);
+            earlier.push(entry);
+            if topic_boundary {
+                break;
+            }
+        }
+        earlier.reverse();
+        let history = flow_like_bot_host::transcript::render_history(
+            callee,
+            ConversationKind::Direct,
+            &earlier,
+            &Default::default(),
+            LOCAL_OWNER_ID,
+            HISTORY_MESSAGES,
+        );
+        if history.len() == HISTORY_MESSAGES || topic_boundary || page.next_before.is_none() {
+            return Ok(history);
+        }
+        earlier.reverse();
+        before = page.next_before;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flow_like::flow::copilot::ChatRole;
     use flow_like_local_bots::{ChangeNotifier, CreateBotRequest, KeyError, SecretKeyProvider};
     use zeroize::Zeroizing;
 
@@ -657,10 +704,76 @@ mod tests {
             .entries;
         let senders: Vec<&str> = entries
             .iter()
-            .filter(|entry| message_text(entry).is_some())
+            .filter(|entry| entry.kind == InboxEntryKind::Message)
             .map(|entry| entry.sender_id.as_str())
             .collect();
         assert_eq!(senders, [ledger.id.as_str(), scout.id.as_str()]);
+    }
+
+    #[test]
+    fn nested_answers_do_not_record_another_ask_or_change_its_recipient() {
+        let (store, _dir) = store();
+        let scout = bot(&store, "Scout", None);
+        let ledger = bot(&store, "Ledger", None);
+        let digest = bot(&store, "Digest", None);
+        let chats: Vec<_> = [&scout, &ledger, &digest]
+            .iter()
+            .map(|member| {
+                store
+                    .create_conversation(CreateConversationRequest {
+                        kind: ConversationKind::Direct,
+                        title: None,
+                        members: vec![member.id.clone()],
+                        encryption: None,
+                        bot_limits: Default::default(),
+                    })
+                    .unwrap()
+                    .id
+            })
+            .collect();
+        let first = exchange_of(&store, &scout, &ledger).unwrap().unwrap();
+        let second = exchange_of(&store, &ledger, &digest).unwrap().unwrap();
+
+        let ask = record_question_in(&store, &first, &scout, "Q3 total?")
+            .unwrap()
+            .unwrap();
+        let nested = record_question_in(&store, &second, &ledger, "Q3 source?")
+            .unwrap()
+            .unwrap();
+        record_in(&store, &second, &digest, "The report says 1.2M.").unwrap();
+        record_in(&store, &first, &ledger, "1.2M").unwrap();
+        let follow_up = record_question_in(&store, &first, &scout, "And Q4?")
+            .unwrap()
+            .unwrap();
+
+        let activities: Vec<Vec<ActivityBody>> = chats
+            .iter()
+            .map(|chat| {
+                let mut entries = store
+                    .entries(chat, &EntriesQuery::default())
+                    .unwrap()
+                    .entries;
+                entries.reverse();
+                entries
+                    .iter()
+                    .filter(|entry| entry.kind == InboxEntryKind::Activity)
+                    .map(|entry| ActivityBody::parse(&entry.envelope["body"]).unwrap())
+                    .collect()
+            })
+            .collect();
+        let first_ask = ActivityBody::bot_ask(&ask, &scout.id, &ledger.id, &first, "Q3 total?");
+        let nested_ask =
+            ActivityBody::bot_ask(&nested, &ledger.id, &digest.id, &second, "Q3 source?");
+        let follow_up_ask =
+            ActivityBody::bot_ask(&follow_up, &scout.id, &ledger.id, &first, "And Q4?");
+        assert_eq!(
+            activities,
+            [
+                vec![first_ask.clone(), follow_up_ask.clone()],
+                vec![first_ask, nested_ask.clone(), follow_up_ask],
+                vec![nested_ask],
+            ]
+        );
     }
 
     #[test]
@@ -696,5 +809,88 @@ mod tests {
                 .len()
                 >= 3
         );
+    }
+
+    #[test]
+    fn a_question_keeps_its_history_when_newer_messages_fill_multiple_pages() {
+        let (store, _dir) = store();
+        let scout = bot(&store, "Scout", None);
+        let ledger = bot(&store, "Ledger", None);
+        let conversation = exchange_of(&store, &scout, &ledger).unwrap().unwrap();
+        for index in 0..45 {
+            let sender = if index % 2 == 0 { &scout } else { &ledger };
+            record_in(&store, &conversation, sender, &format!("Earlier {index}")).unwrap();
+        }
+        let question = record_in(&store, &conversation, &scout, "Current question")
+            .unwrap()
+            .unwrap();
+        for index in 0..105 {
+            record_in(&store, &conversation, &scout, &format!("Later {index}")).unwrap();
+        }
+
+        let history = history_before(&store, &conversation, &question, &ledger.id).unwrap();
+
+        assert_eq!(history.len(), HISTORY_MESSAGES);
+        for (message, index) in history.iter().zip(5..45) {
+            assert_eq!(message.content, format!("Earlier {index}"));
+            assert_eq!(matches!(message.role, ChatRole::Assistant), index % 2 == 1);
+        }
+    }
+
+    #[test]
+    fn an_exchange_respects_topic_boundaries_edits_and_deleted_messages() {
+        let (store, _dir) = store();
+        let scout = bot(&store, "Scout", None);
+        let ledger = bot(&store, "Ledger", None);
+        let conversation = exchange_of(&store, &scout, &ledger).unwrap().unwrap();
+        let event = |sender: &str, kind, body| {
+            store
+                .send(
+                    &conversation,
+                    sender,
+                    SendEntryRequest {
+                        message_id: format!("event-{}", create_id()),
+                        kind,
+                        envelope: Some(plain_envelope(body)),
+                        envelopes: None,
+                    },
+                )
+                .unwrap()
+        };
+        record_in(&store, &conversation, &scout, "Old topic").unwrap();
+        event(LOCAL_OWNER_ID, InboxEntryKind::Topic, json!({}));
+        let original = record_in(&store, &conversation, &scout, "Check Q3")
+            .unwrap()
+            .unwrap();
+        event(
+            LOCAL_OWNER_ID,
+            InboxEntryKind::Topic,
+            json!({ "deleted": true }),
+        );
+        record_in(&store, &conversation, &ledger, "I am checking.").unwrap();
+        event(
+            &scout.id,
+            InboxEntryKind::Edit,
+            json!({ "target": original, "text": "Check Q4" }),
+        );
+        let deleted = record_in(&store, &conversation, &scout, "Discard this")
+            .unwrap()
+            .unwrap();
+        event(
+            &scout.id,
+            InboxEntryKind::Delete,
+            json!({ "target": deleted }),
+        );
+        let question = record_in(&store, &conversation, &scout, "Any update?")
+            .unwrap()
+            .unwrap();
+
+        let history = history_before(&store, &conversation, &question, &ledger.id).unwrap();
+
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].content, "Check Q4");
+        assert!(matches!(history[0].role, ChatRole::User));
+        assert_eq!(history[1].content, "I am checking.");
+        assert!(matches!(history[1].role, ChatRole::Assistant));
     }
 }

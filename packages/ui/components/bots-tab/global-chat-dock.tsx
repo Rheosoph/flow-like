@@ -10,6 +10,7 @@ import { useChatBotView } from "../global-chat/use-global-chat-bot";
 import { Button } from "../ui/button";
 import { BotChatFrame, type BotPanelControl } from "./bot-chat-frame";
 import type { BotPanelActions } from "./bot-details";
+import { BotDirectCall } from "./bot-direct-call";
 import { botPanelTabs, shownBotPanelTab } from "./bot-panel-tabs";
 import { useDockPanelLayout } from "./crew-split-layout";
 import type { DockSelection } from "./dock-selection";
@@ -54,50 +55,61 @@ export function GlobalChatDock({
 	const back = t("crew.dock.back", "Back to your crew");
 	const close = t("crew.dock.close", "Close chat");
 	return (
-		<BotChatFrame
-			view={chatBot}
-			relay={draft.listener}
-			panel={panel}
-			actions={actions}
-			start={
-				<Button
-					type="button"
-					variant="ghost"
-					size="icon"
-					className={cn(CORNER_BUTTON, "hidden @max-[820px]/bots:inline-flex")}
-					onClick={onClose}
-					aria-label={back}
-					title={back}
+		<BotDirectCall key={botId} bot={botId ? chatBot.bot : undefined}>
+			{({ button, bar }) => (
+				<BotChatFrame
+					view={chatBot}
+					relay={draft.listener}
+					panel={panel}
+					actions={actions}
+					start={
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							className={cn(
+								CORNER_BUTTON,
+								"hidden @max-[820px]/bots:inline-flex",
+							)}
+							onClick={onClose}
+							aria-label={back}
+							title={back}
+						>
+							<ArrowLeftIcon aria-hidden />
+						</Button>
+					}
+					end={
+						<>
+							{button}
+							<Button
+								type="button"
+								variant="ghost"
+								size="icon"
+								className={cn(CORNER_BUTTON, "@max-[820px]/bots:hidden")}
+								onClick={onClose}
+								aria-label={close}
+								title={close}
+							>
+								<XIcon aria-hidden />
+							</Button>
+						</>
+					}
 				>
-					<ArrowLeftIcon aria-hidden />
-				</Button>
-			}
-			end={
-				<Button
-					type="button"
-					variant="ghost"
-					size="icon"
-					className={cn(CORNER_BUTTON, "@max-[820px]/bots:hidden")}
-					onClick={onClose}
-					aria-label={close}
-					title={close}
-				>
-					<XIcon aria-hidden />
-				</Button>
-			}
-		>
-			<div
-				className="flex min-h-0 flex-1 flex-col"
-				onPointerDownCapture={enableOverlayAutoOpen}
-				onKeyDownCapture={enableOverlayAutoOpen}
-			>
-				<GlobalChatBody
-					variant="overlay"
-					botId={botId}
-					onDraftChange={draft.report}
-					pillInset
-				/>
-			</div>
-		</BotChatFrame>
+					<div
+						className="flex min-h-0 flex-1 flex-col"
+						onPointerDownCapture={enableOverlayAutoOpen}
+						onKeyDownCapture={enableOverlayAutoOpen}
+					>
+						{bar && <div className="shrink-0 pt-14">{bar}</div>}
+						<GlobalChatBody
+							variant="overlay"
+							botId={botId}
+							onDraftChange={draft.report}
+							pillInset={!bar}
+						/>
+					</div>
+				</BotChatFrame>
+			)}
+		</BotDirectCall>
 	);
 }

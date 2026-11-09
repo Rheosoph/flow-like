@@ -8,7 +8,12 @@ import type {
 	INotificationEvent,
 } from "@flow-like/flow-like-ui";
 import { NotificationIcon } from "@flow-like/flow-like-ui/components/notifications/notification-icon";
+import { useUserAvailability } from "@flow-like/flow-like-ui/hooks/use-user-availability";
 import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
+import {
+	shouldPresentUserNotification,
+	waitForAvailabilityToSettle,
+} from "@flow-like/flow-like-ui/lib/availability-notifications";
 import { isScriptNavigationUrl } from "@flow-like/flow-like-ui/lib/navigation-url";
 import { remoteNotificationIcon } from "@flow-like/flow-like-ui/lib/notification-icon";
 import { useQueryClient } from "@tanstack/react-query";
@@ -33,6 +38,7 @@ import {
 import {
 	type LocalNotificationOptions,
 	presentLocalNotification,
+	remoteNotificationPriority,
 	shouldShowRemotePushToast,
 } from "../lib/notification-presentation";
 import { addLocalNotification } from "../lib/notifications-db";
@@ -201,6 +207,19 @@ export default function NotificationProvider({
 	const auth = useAuth();
 	const router = useClientRouter();
 	const backend = useBackend();
+	const availability = useUserAvailability();
+	const localAvailability = useUserAvailability({ local: true });
+	const availabilityRef = useRef(availability.data);
+	availabilityRef.current = availability.data;
+	const localAvailabilityRef = useRef(localAvailability.data);
+	localAvailabilityRef.current = localAvailability.data;
+	const availabilityLoadingRef = useRef(false);
+	availabilityLoadingRef.current =
+		availability.isLoading || localAvailability.isLoading;
+	const settleAvailability = useCallback(
+		() => waitForAvailabilityToSettle(() => availabilityLoadingRef.current),
+		[],
+	);
 	const tauriBackend = backend as TauriBackend | undefined;
 	const authContext = tauriBackend?.auth ?? auth;
 	const currentUser = authContext.user;
@@ -705,9 +724,15 @@ export default function NotificationProvider({
 							| "WORKFLOW"
 							| "SYSTEM") ?? "SYSTEM",
 				});
+				await settleAvailability();
 				if (
 					!abort.signal.aborted &&
 					matchesBotPushIdentity(notification, pushIdentity.current) &&
+					shouldPresentUserNotification(
+						availabilityRef.current,
+						localAvailabilityRef.current,
+						remoteNotificationPriority(notification.data),
+					) &&
 					shouldShowRemotePushToast(platform)
 				) {
 					showNotificationToast(
@@ -791,7 +816,16 @@ export default function NotificationProvider({
 					sourceNodeId: notification.source_node_id,
 				});
 
-				if (isBotChatFocused(notification.link)) continue;
+				await settleAvailability();
+				if (
+					!shouldPresentUserNotification(
+						availabilityRef.current,
+						localAvailabilityRef.current,
+						"routine",
+					) ||
+					isBotChatFocused(notification.link)
+				)
+					continue;
 
 				if (
 					notificationApi.current &&
@@ -852,7 +886,7 @@ export default function NotificationProvider({
 				}
 			})();
 		};
-	}, [userId, appId, storeNotification]);
+	}, [userId, appId, storeNotification, settleAvailability]);
 
 	return null;
 }

@@ -2400,6 +2400,7 @@ async fn deliver_notice(state: &AppState, effect: &str, id: &str) -> Result<(), 
         state,
         &format!("{effect}:{id}"),
         crate::push_notifications::DispatchNotificationInput {
+            notification_priority: Default::default(),
             bot_context: None,
             user_id,
             app_id: None,

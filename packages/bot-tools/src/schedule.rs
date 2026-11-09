@@ -39,8 +39,12 @@ pub trait Scheduler: Send + Sync {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ScheduleTaskArgs {
+    /// Check for meaningful changes and stay quiet when none are found. Use only for monitoring, never for a reminder or a requested report.
+    #[serde(default)]
+    pub monitoring: bool,
     /// What to do when the task fires, written for yourself: the instruction is the only thing you
-    /// get then, so name the file, site or person it concerns. At most 4,000 characters.
+    /// get then, so include the topic, relevant context and the next action. Name the file, site
+    /// or person it concerns, and any memory pointers needed to resume. At most 4,000 characters.
     pub instruction: String,
     /// A short name shown to the owner. Defaults to the start of the instruction.
     #[serde(default)]
@@ -75,7 +79,7 @@ pub fn specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: SCHEDULE_TASK,
-            description: "Schedule work for yourself. Give exactly one of `at` (an RFC 3339 time with offset), `in_minutes` (relative, for \"in 2 hours\") or `cron` (recurring, with `tz`). When it fires you get the instruction as a message from the owner and answer in their chat. A recurring task runs at most every 5 minutes; a bot keeps at most 50 tasks.",
+            description: "Schedule work for yourself. Proactively set a one-time follow-up when an ongoing topic has a useful next action at a known future time, such as checking an expected reply or revisiting a deadline. Check `list_tasks` first to avoid duplicates and respect the owner's reminder preferences. Give exactly one of `at` (an RFC 3339 time with offset, resolved in the owner's time zone), `in_minutes` (relative, for \"in 2 hours\") or `cron` (recurring, with `tz`). Prefer `at` or `in_minutes` for follow-ups; use `cron` only for an established recurring need. When it fires you get the instruction as a message from the owner and answer in their chat. Include enough context to resume and confirm a reminder only after it is saved. A recurring task runs at most every 5 minutes; a bot keeps at most 50 tasks.",
             capability: Some(CAPABILITY),
             module: "schedule",
             approval: Approval::None,
@@ -166,6 +170,7 @@ pub fn request_from(args: ScheduleTaskArgs) -> ToolResult<CreateBotTask> {
         instruction: args.instruction,
         title: args.title,
         enabled: None,
+        monitoring: args.monitoring,
     })
 }
 
@@ -173,6 +178,7 @@ fn task_json(task: &BotTask) -> serde_json::Value {
     json!({
         "id": task.id,
         "title": task.title,
+        "monitoring": task.monitoring,
         "kind": task.kind,
         "at": task.at,
         "cron": task.cron,
@@ -261,6 +267,7 @@ mod tests {
                 next_run_at: request.at,
                 last_run_at: None,
                 enabled: true,
+                monitoring: request.monitoring,
                 created_by: TaskCreator::Bot,
                 created_at: Utc::now().to_rfc3339(),
             };

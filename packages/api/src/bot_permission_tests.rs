@@ -1,10 +1,11 @@
 use super::*;
 use crate::{
-    entity::{bot_turn, membership},
+    entity::{bot_turn, conversation, inbox_entry, json_types::StringList, membership, profile},
     routes::bots::runtime_token::bot_user_for_turn,
     routes::inbox::fixture::{at, delete_bot, insert_bot},
 };
 use axum::http::StatusCode;
+use flow_like::profile::ProfileApp;
 use flow_like_types::bot_effective::ALL_ROLE_BITS;
 use flow_like_types::bot_restrictions::BOT_NEVER_BITS;
 use sea_orm::{
@@ -31,6 +32,9 @@ async fn database() -> DatabaseConnection {
         schema.create_table_from_entity(membership::Entity),
         schema.create_table_from_entity(bot_app::Entity),
         schema.create_table_from_entity(bot_turn::Entity),
+        schema.create_table_from_entity(conversation::Entity),
+        schema.create_table_from_entity(inbox_entry::Entity),
+        schema.create_table_from_entity(profile::Entity),
     ] {
         let mut table = Table::create();
         table.table(source.get_table_name().unwrap().clone());
@@ -92,6 +96,49 @@ async fn attach(db: &DatabaseConnection, app_id: &str, mask: Option<i64>, scopes
     ))
     .await
     .unwrap();
+}
+
+async fn insert_profile(db: &DatabaseConnection, id: &str, user_id: &str, apps: &[&str]) {
+    let apps: Vec<ProfileApp> = apps
+        .iter()
+        .map(|app_id| ProfileApp::new(app_id.to_string()))
+        .collect();
+    profile::ActiveModel {
+        id: Set(id.into()),
+        name: Set(id.into()),
+        apps: Set(Some(serde_json::to_value(apps).unwrap())),
+        hub: Set("api.flow-like.com".into()),
+        user_id: Set(user_id.into()),
+        created_at: Set(at(0)),
+        updated_at: Set(at(0)),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .unwrap();
+}
+
+async fn scope_bot(db: &DatabaseConnection, capabilities: &[&str], profile_id: Option<&str>) {
+    bot::ActiveModel {
+        id: Set(BOT.into()),
+        capabilities: Set(StringList(
+            capabilities.iter().map(|id| id.to_string()).collect(),
+        )),
+        profile_id: Set(profile_id.map(str::to_owned)),
+        ..Default::default()
+    }
+    .update(db)
+    .await
+    .unwrap();
+}
+
+/// A live bot of OWNER without attached apps, its owner editing `APP`, which `profile-1` lists.
+async fn profile_world() -> DatabaseConnection {
+    let db = database().await;
+    insert_bot(&db, BOT, OWNER, "SERVER").await;
+    owner_role(&db, OWNER, APP, edit_bits()).await;
+    insert_profile(&db, "profile-1", OWNER, &[APP]).await;
+    db
 }
 
 async fn join_room(db: &DatabaseConnection, left: bool) {
@@ -221,6 +268,91 @@ async fn an_unattached_app_is_closed_but_the_workspace_is_open() {
 }
 
 #[tokio::test]
+async fn a_profile_app_opens_while_the_bot_holds_profile_apps() {
+    let db = profile_world().await;
+    scope_bot(&db, &["profile_apps"], Some("profile-1")).await;
+    let granted = bot_grant_in(&db, &bot_user(None), APP).await.unwrap();
+    assert_eq!(granted.permissions.bits(), edit_bits());
+    assert_eq!(granted.owner_id, OWNER);
+
+    scope_bot(&db, &["selected_apps"], Some("profile-1")).await;
+    assert_eq!(
+        bits(&db, &bot_user(None)).await.unwrap_err().status(),
+        StatusCode::FORBIDDEN,
+        "switching profile_apps off closes the profile's apps"
+    );
+}
+
+#[tokio::test]
+async fn only_the_owners_live_profile_opens_its_apps() {
+    let db = profile_world().await;
+    owner_role(&db, OWNER, "app-2", edit_bits()).await;
+    scope_bot(&db, &["profile_apps"], Some("profile-1")).await;
+    assert_eq!(
+        bot_grant_in(&db, &bot_user(None), "app-2")
+            .await
+            .unwrap_err()
+            .status(),
+        StatusCode::FORBIDDEN,
+        "an app outside the profile stays closed"
+    );
+
+    insert_profile(&db, "profile-theirs", "someone-else", &[APP]).await;
+    scope_bot(&db, &["profile_apps"], Some("profile-theirs")).await;
+    assert_eq!(
+        bits(&db, &bot_user(None)).await.unwrap_err().status(),
+        StatusCode::FORBIDDEN,
+        "another person's profile opens nothing"
+    );
+
+    scope_bot(&db, &["profile_apps"], Some("profile-1")).await;
+    db.execute_unprepared(
+        r#"UPDATE public."Profile" SET "deletedAt" = '2023-11-15T00:00:00+00:00' WHERE "id" = 'profile-1'"#,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        bits(&db, &bot_user(None)).await.unwrap_err().status(),
+        StatusCode::FORBIDDEN,
+        "a deleted profile opens nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_profile_app_needs_the_owners_role_and_keeps_the_room_limits() {
+    let db = profile_world().await;
+    insert_profile(&db, "profile-2", OWNER, &["app-2"]).await;
+    scope_bot(&db, &["profile_apps"], Some("profile-2")).await;
+    assert_eq!(
+        bot_grant_in(&db, &bot_user(None), "app-2")
+            .await
+            .unwrap_err()
+            .status(),
+        StatusCode::FORBIDDEN,
+        "a listed app the owner is not a member of stays closed"
+    );
+
+    scope_bot(&db, &["profile_apps"], Some("profile-1")).await;
+    join_room(&db, false).await;
+    let read = RolePermissions::ReadFiles.bits();
+    db.execute_unprepared(&format!(
+        r#"UPDATE public."ConversationMember" SET "limits" = '{{"mask":{read}}}'"#
+    ))
+    .await
+    .unwrap();
+    assert_eq!(bits(&db, &bot_user(Some(ROOM))).await.unwrap(), read);
+}
+
+#[tokio::test]
+async fn an_attached_profile_app_keeps_its_row_restrictions() {
+    let db = profile_world().await;
+    let read = RolePermissions::ReadFiles.bits();
+    attach(&db, APP, Some(read), "{}").await;
+    scope_bot(&db, &["profile_apps"], Some("profile-1")).await;
+    assert_eq!(bits(&db, &bot_user(None)).await.unwrap(), read);
+}
+
+#[tokio::test]
 async fn a_restriction_applies_on_the_next_call() {
     let db = world(edit_bits(), None).await;
     assert_eq!(bits(&db, &bot_user(None)).await.unwrap(), edit_bits());
@@ -308,6 +440,156 @@ async fn the_runtime_token_binds_the_owners_own_turn_and_pins_a_room() {
             "{caller} {turn_id}"
         );
     }
+}
+
+async fn late_answer_turn(db: &DatabaseConnection, id: &str, origin: &str) {
+    turn(db, id, OWNER, "ROOM").await;
+    let question_id = format!("question-{id}");
+    for (message_id, sender, seq, body) in [
+        (
+            question_id.clone(),
+            BOT,
+            1,
+            serde_json::json!({
+                "text": "What is the total?",
+                "ask": {
+                    "id": question_id,
+                    "origin_conversation": origin,
+                    "hops": 1,
+                    "reply_by": "2026-11-15T00:00:00Z",
+                    "round": 1
+                }
+            }),
+        ),
+        (
+            format!("m-{id}"),
+            "bot_b",
+            2,
+            serde_json::json!({ "text": "42", "reply_to": question_id }),
+        ),
+    ] {
+        inbox_entry::ActiveModel {
+            id: Set(message_id.clone()),
+            inbox_id: Set(BOT.into()),
+            conversation_id: Set(ROOM.into()),
+            message_id: Set(message_id),
+            sender_id: Set(sender.into()),
+            kind: Set("MESSAGE".into()),
+            envelope: Set(flow_like_types::inbox::plain_envelope(body)),
+            seq: Set(Some(seq)),
+            created_at: Set(at(seq)),
+            cleared: Set(Some(false)),
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+}
+
+async fn token_origin(db: &DatabaseConnection, id: &str, kind: &str, other: &str) {
+    conversation::ActiveModel {
+        id: Set(id.into()),
+        kind: Set(kind.into()),
+        encryption: Set("PLAIN".into()),
+        created_by: Set(OWNER.into()),
+        created_at: Set(at(0)),
+        updated_at: Set(at(0)),
+        last_activity_at: Set(at(0)),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .unwrap();
+    for (principal, kind) in [(BOT, "BOT"), (other, "USER")] {
+        conversation_member::ActiveModel {
+            conversation_id: Set(id.into()),
+            principal_id: Set(principal.into()),
+            principal_kind: Set(kind.into()),
+            status: Set("ACTIVE".into()),
+            joined_at: Set(at(0)),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_late_answer_runtime_token_returns_to_the_owner_direct_scope() {
+    let db = world(edit_bits(), None).await;
+    token_origin(&db, "owner-direct", "DIRECT", OWNER).await;
+    late_answer_turn(&db, "late-direct", "owner-direct").await;
+    let bot = bot_user_for_turn(&db, OWNER, BOT, "late-direct")
+        .await
+        .unwrap();
+    assert_eq!(bot.turn_id, "late-direct");
+    assert_eq!(bot.conv_id, None);
+}
+
+#[tokio::test]
+async fn a_late_answer_runtime_token_keeps_the_original_rooms_limits() {
+    let db = world(edit_bits(), None).await;
+    token_origin(&db, "original-room", "GROUP", OWNER).await;
+    let read = RolePermissions::ReadFiles.bits();
+    conversation_member::Entity::update_many()
+        .col_expr(
+            conversation_member::Column::Limits,
+            sea_orm::sea_query::Expr::value(serde_json::json!({ "mask": read })),
+        )
+        .filter(conversation_member::Column::ConversationId.eq("original-room"))
+        .filter(conversation_member::Column::PrincipalId.eq(BOT))
+        .exec(&db)
+        .await
+        .unwrap();
+    late_answer_turn(&db, "late-room", "original-room").await;
+    let bot = bot_user_for_turn(&db, OWNER, BOT, "late-room")
+        .await
+        .unwrap();
+    assert_eq!(bot.conv_id.as_deref(), Some("original-room"));
+    assert_eq!(bits(&db, &bot).await.unwrap(), read);
+
+    conversation_member::Entity::update_many()
+        .col_expr(
+            conversation_member::Column::LeftAt,
+            sea_orm::sea_query::Expr::value(at(1)),
+        )
+        .filter(conversation_member::Column::ConversationId.eq("original-room"))
+        .filter(conversation_member::Column::PrincipalId.eq(BOT))
+        .exec(&db)
+        .await
+        .unwrap();
+    assert_eq!(
+        bot_user_for_turn(&db, OWNER, BOT, "late-room")
+            .await
+            .unwrap_err()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn a_late_answer_runtime_token_never_widens_an_unverified_origin() {
+    let db = world(edit_bits(), None).await;
+    token_origin(&db, "foreign-direct", "DIRECT", "someone-else").await;
+    token_origin(&db, "unknown-kind", "UNKNOWN", OWNER).await;
+    for origin in ["missing-origin", "foreign-direct", "unknown-kind"] {
+        let id = format!("late-{origin}");
+        late_answer_turn(&db, &id, origin).await;
+        assert_eq!(
+            bot_user_for_turn(&db, OWNER, BOT, &id)
+                .await
+                .unwrap_err()
+                .status(),
+            StatusCode::FORBIDDEN,
+            "{origin}"
+        );
+    }
+    turn(&db, "missing-ask-metadata", OWNER, "ROOM").await;
+    let bot = bot_user_for_turn(&db, OWNER, BOT, "missing-ask-metadata")
+        .await
+        .unwrap();
+    assert_eq!(bot.conv_id.as_deref(), Some(ROOM));
 }
 
 #[test]

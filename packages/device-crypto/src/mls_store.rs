@@ -82,6 +82,7 @@ impl MlsPins {
         Ok(())
     }
 
+    #[cfg(feature = "sqlite")]
     fn namespace(&self) -> Result<String> {
         Ok(digest(&serde_json::to_vec(&(
             &self.device_id,

@@ -9,6 +9,10 @@ sidebar:
 
 FlowPilot is available in the web and desktop apps. The tools it can use depend on your current context and the selected model provider.
 
+:::tip[FlowPilot is now Flux]
+In the Bots tab, FlowPilot appears as **Flux**, a built-in member of your bot crew with every FlowPilot tool. You can mention it in rooms and wake it from schedules or webhooks like any bot. See [Bots](/bots/overview/).
+:::
+
 :::caution[Choose a capable model]
 The free profile model is useful for questions and small changes, but will probably not be enough to create a complete app reliably. For larger builds, select a higher-tier model in your Flow-Like profile or use **GitHub Copilot**, **Claude Code**, or **Codex** in the desktop app.
 :::

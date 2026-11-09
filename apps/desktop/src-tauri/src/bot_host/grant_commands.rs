@@ -1,4 +1,7 @@
-use super::{approvals, store::{AppStore, HostStore}};
+use super::{
+    approvals,
+    store::{AppStore, HostStore},
+};
 use crate::functions::local_bots::{LocalBots, on_store};
 use flow_like_types::tool_grant::{ApprovalDecision, ToolGrant, ToolGrantKey};
 use std::sync::Arc;

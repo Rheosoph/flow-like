@@ -1,4 +1,5 @@
 import type { BoardRenderer } from "../../hooks/use-board-renderer";
+import type { RealtimeStatus } from "../realtime/types";
 
 export interface DiagnosticsBuild {
 	readonly version: string | null;
@@ -21,6 +22,8 @@ export interface DiagnosticsSession {
 	readonly language: string | null;
 	readonly boardRendererPreference: BoardRenderer | null;
 	readonly boardRendererInUse: BoardRenderer | null;
+	/** Null where this app does not report it (the desktop owns its connection natively). */
+	readonly realtime: RealtimeStatus | null;
 }
 
 export interface DiagnosticsSize {

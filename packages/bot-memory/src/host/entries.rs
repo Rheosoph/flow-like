@@ -74,6 +74,7 @@ fn plain_body(envelope: &Value) -> Option<&Value> {
     (envelope.get("enc").and_then(Value::as_str) == Some(PLAIN_ENCRYPTION))
         .then(|| envelope.get("body"))
         .flatten()
+        .filter(|body| !flow_like_types::bot_user_context::is_ephemeral_body(body))
 }
 
 fn part_index(id: &str) -> u16 {
@@ -565,5 +566,26 @@ mod email_trigger_tests {
         let reply = room_item_of(&entry, "bot", "owner").unwrap();
         assert_eq!(reply.role, Role::External);
         assert_eq!(reply.speaker.unwrap().id, "another_bot");
+    }
+
+    #[test]
+    fn user_context_and_derived_answers_are_excluded_from_memory_input() {
+        let mut entry = trigger_entry("email");
+        entry.kind = InboxEntryKind::Message;
+        for marker in [
+            "user_context_request",
+            "user_context_response",
+            "user_context_derived",
+        ] {
+            entry.envelope = json!({"v":1,"enc":"none","body":{"text":"Sensitive location and a nearby recommendation",marker:"request1"}});
+            assert!(
+                item_of(&entry, "bot").is_none(),
+                "{marker} entered private memory"
+            );
+            assert!(
+                room_item_of(&entry, "bot", "owner").is_none(),
+                "{marker} entered group memory"
+            );
+        }
     }
 }

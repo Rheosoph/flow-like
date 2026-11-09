@@ -22,6 +22,7 @@ import {
 	Split,
 	SquareTerminal,
 	Table2,
+	UserRound,
 	Webhook,
 	Workflow,
 } from "lucide-react";
@@ -58,6 +59,7 @@ export const BOT_CAPABILITY_GROUPS: readonly {
 		id: "talk",
 		capabilities: [
 			"email",
+			"user_context",
 			"channels",
 			"connectors",
 			"push_notifications",
@@ -105,5 +107,6 @@ export const BOT_CAPABILITY_ICONS: Readonly<Record<BotCapability, LucideIcon>> =
 		command_line: SquareTerminal,
 		encryption: LockKeyhole,
 		webhook: Webhook,
+		user_context: UserRound,
 		flowpilot: Workflow,
 	};

@@ -28,6 +28,7 @@ import type {
 	ExploreSearchResponse,
 	ResolvedExplore,
 } from "@flow-like/flow-like-ui/components/store/explore/explore-types";
+import { fetchAllAppPages } from "@flow-like/flow-like-ui/lib/app-listing";
 import {
 	type IForkJobView,
 	resolveOnlineFork,
@@ -658,6 +659,45 @@ export class AppState implements IAppState {
 		);
 	}
 
+	private async cacheRemoteApps(
+		entries: [IApp, IMetadata | undefined][],
+		localIds: ReadonlySet<string>,
+	): Promise<void> {
+		for (const [app, meta] of entries) {
+			appsDB.visibility
+				.put({
+					visibility: app.visibility ?? IAppVisibility.Private,
+					appId: app.id,
+				})
+				.catch(() => {});
+
+			if (localIds.has(app.id)) {
+				invoke("update_app", { app }).catch(() => {});
+				if (meta)
+					invoke("push_app_meta", {
+						appId: app.id,
+						metadata: meta,
+						preserveUpdatedAt: true,
+					}).catch(() => {});
+				continue;
+			}
+
+			if (!meta) continue;
+			try {
+				await invoke("create_app", {
+					metadata: meta,
+					bits: app.bits,
+					id: app.id,
+					addToProfile: false,
+				});
+				// Keep the server's visibility and timestamps after creating the local copy.
+				await invoke("update_app", { app });
+			} catch (error) {
+				console.warn(`Failed to cache remote app ${app.id} locally:`, error);
+			}
+		}
+	}
+
 	async getApps(): Promise<[IApp, IMetadata | undefined][]> {
 		const localApps = sortAppEntries(
 			await invoke<[IApp, IMetadata | undefined][]>("get_apps"),
@@ -676,23 +716,16 @@ export class AppState implements IAppState {
 		const syncRemote = async () => {
 			const mergedData = new Map<string, [IApp, IMetadata | undefined]>();
 
-			const remoteData = remoteAppEntries(
-				await fetcher<[IApp, IMetadata | undefined][]>(
+			const remoteData = await fetchAllAppPages((offset, limit) =>
+				fetcher<[IApp, IMetadata | undefined][]>(
 					profile,
-					"apps",
+					`apps?offset=${offset}&limit=${limit}`,
 					undefined,
 					this.backend.auth,
 				),
 			);
 
 			for (const [app, meta] of remoteData) {
-				appsDB.visibility
-					.put({
-						visibility: app.visibility ?? IAppVisibility.Private,
-						appId: app.id,
-					})
-					.catch(() => {});
-
 				const exists = localApps.find(([localApp]) => localApp.id === app.id);
 				if (exists) {
 					// Keep the local metadata record: it is the copy the rest of the
@@ -711,39 +744,10 @@ export class AppState implements IAppState {
 						app,
 						exists[1] ? mergeMetadataMedia(exists[1], meta) : meta,
 					]);
-					invoke("update_app", { app }).catch(() => {});
-					if (meta)
-						invoke("push_app_meta", {
-							appId: app.id,
-							metadata: meta,
-							preserveUpdatedAt: true,
-						}).catch(() => {});
 					continue;
 				}
 
 				mergedData.set(app.id, [app, meta]);
-
-				if (meta) {
-					try {
-						await invoke("create_app", {
-							metadata: meta,
-							bits: app.bits,
-							id: app.id,
-							addToProfile: false,
-						});
-					} catch (error) {
-						console.warn(
-							`Failed to cache remote app ${app.id} locally:`,
-							error,
-						);
-						continue;
-					}
-					// create_app stamps a brand-new manifest with the current time,
-					// which would make every app pulled down for the first time look
-					// freshly updated on the next local-first paint. Write the remote
-					// record over it so the stored timestamps match the server's.
-					await invoke("update_app", { app }).catch(() => {});
-				}
 			}
 
 			for (const [app, meta] of localApps) {
@@ -752,6 +756,13 @@ export class AppState implements IAppState {
 				}
 			}
 
+			// The library can show the remote result while native copies are still being written.
+			this.backend.backgroundTaskHandler(
+				this.cacheRemoteApps(
+					remoteData,
+					new Set(localApps.map(([app]) => app.id)),
+				),
+			);
 			return sortAppEntries(Array.from(mergedData.values()));
 		};
 

@@ -337,6 +337,7 @@ describe("BotCustomizer", () => {
 			dark: true,
 			effect: "crt",
 			skills: ["code"],
+			mute_notifications: true,
 		};
 		const original = structuredClone(initial);
 		const ownedPackIds = ["basics-crew"];
@@ -369,7 +370,8 @@ describe("BotCustomizer", () => {
 		expect(next.variant).toBeUndefined();
 		expect(next.dark).toBeUndefined();
 		expect(next.effect).toBe("crt");
-		expect(next.skills).toBeUndefined();
+		expect(next.skills).toEqual(["code"]);
+		expect(next.mute_notifications).toBe(true);
 		expect(canSaveBotAppearance(next, withGear, ownedPackIds)).toBe(true);
 		expect(button("Save bot").disabled).toBe(false);
 		expect(onSave).not.toHaveBeenCalled();
@@ -1533,5 +1535,113 @@ describe("BotCustomizer", () => {
 				(item) => item.type === "button",
 			),
 		).toBe(true);
+	});
+});
+
+describe("BotCustomizer locks and shuffles", () => {
+	const look: BotAppearance = {
+		kind: "round",
+		equipment: { head: "cap", neck: "scarf" },
+		colors: { body: { kind: "swatch", colorId: "holo-aurora" } },
+		frame: "square",
+		backdrop: "dots",
+		skills: ["code"],
+	};
+
+	async function withRandom(value: number, run: () => Promise<void>) {
+		const random = vi.spyOn(Math, "random").mockReturnValue(value);
+		try {
+			await run();
+		} finally {
+			random.mockRestore();
+		}
+	}
+
+	it("keeps locked parts and fits a new character around a locked outfit", async () => {
+		const onChange = await mount(look);
+		await click("Lock outfit");
+		await click("Lock finish");
+		expect(button("Lock outfit").getAttribute("aria-pressed")).toBe("true");
+		expect(button("Randomize bot").textContent).toBe("Randomize rest");
+		await withRandom(0.9, () => click("Randomize bot"));
+		const next = onChange.mock.lastCall?.[0] as BotAppearance;
+		expect(next.kind).toBe("round");
+		expect(next.equipment).toEqual(look.equipment);
+		expect(next.frame).toBe("square");
+		expect(next.backdrop).toBe("dots");
+		expect(next.skills).toEqual(["code"]);
+		expect(Object.keys(next.colors ?? {}).length).toBeGreaterThan(0);
+		for (const selection of Object.values(next.colors ?? {}))
+			expect(getBotColorSelectionPaint(selection, catalog)?.kind).toBe("solid");
+	});
+
+	it("disables Randomize when every part is locked and marks locked sections", async () => {
+		await mount(look);
+		for (const part of ["character", "outfit", "colors", "finish"])
+			await click(`Lock ${part}`);
+		expect(button("Randomize bot").disabled).toBe(true);
+		const locked = [
+			...group("Customization sections").querySelectorAll("button"),
+		].filter((tab) => tab.hasAttribute("data-locked"));
+		expect(locked.map((tab) => tab.textContent)).toEqual([
+			"1Crew",
+			"2Outfit",
+			"3Colors",
+			"4Finish",
+		]);
+		await section("Colors");
+		expect(button("Shuffle colors").disabled).toBe(true);
+		await click("Lock colors");
+		expect(button("Shuffle colors").disabled).toBe(false);
+		expect(button("Randomize bot").disabled).toBe(false);
+	});
+
+	it("shuffles only the character, drawing from the filtered series", async () => {
+		const onChange = await mount(look);
+		await click("Tech1", group("Character series"));
+		expect(button("Shuffle character").textContent).toBe("Shuffle shown");
+		await withRandom(0.1, () => click("Shuffle character"));
+		expect(onChange.mock.lastCall?.[0]).toEqual({
+			...look,
+			kind: "angular",
+			equipment: { neck: "scarf" },
+		});
+		expect(
+			button("Tech1", group("Character series")).getAttribute("aria-pressed"),
+		).toBe("true");
+	});
+
+	it("shuffles the outfit from the selected collection only", async () => {
+		const withGear: BotCatalog = {
+			...catalog,
+			packs: {
+				...catalog.packs,
+				"tech-crew": {
+					...catalog.packs["tech-crew"],
+					equipmentIds: ["helm", "scarf"],
+				},
+			},
+		};
+		const onChange = await mount(
+			{ kind: "angular", frame: "square" },
+			vi.fn(),
+			{
+				catalog: withGear,
+			},
+		);
+		await section("Outfit");
+		expect(button("Shuffle outfit").textContent).toBe("Shuffle");
+		const tech = [
+			...group("Outfit collections").querySelectorAll("button"),
+		].find((entry) => entry.textContent?.startsWith("Tech Crew"));
+		if (!tech) throw new Error("Missing Tech Crew collection");
+		await act(async () => tech.click());
+		expect(button("Shuffle outfit").textContent).toBe("Shuffle shown");
+		await withRandom(0.9, () => click("Shuffle outfit"));
+		expect(onChange.mock.lastCall?.[0]).toEqual({
+			kind: "angular",
+			frame: "square",
+			equipment: { head: "helm", neck: "scarf" },
+		});
 	});
 });

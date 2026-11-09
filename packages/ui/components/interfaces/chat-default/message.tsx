@@ -28,6 +28,8 @@ import { observeResize } from "../../../lib/observe-resize";
 import { IRole } from "../../../lib/schema/llm/history";
 import { cn } from "../../../lib/utils";
 import { ChatApprovalCard } from "../../bots-tab/approval-card";
+import { BotFileAssets } from "../../bots-tab/bot-file-assets";
+import { UserContextCard } from "../../bots-tab/user-context-card";
 import { ThinkingStamp } from "../../thinking/thinking-stamp";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
@@ -82,7 +84,7 @@ import { UsageStats } from "./usage-stats";
 /** Lines of a sent message shown before it collapses behind "Show more". */
 const COLLAPSED_ASK_LINES = 6;
 
-function ThinkingIndicator() {
+function ThinkingIndicator({ text }: { text?: string }) {
 	const { t } = useTranslation("chat");
 	return (
 		<div className="flex items-center gap-1.5 py-1">
@@ -92,7 +94,7 @@ function ThinkingIndicator() {
 				<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:300ms]" />
 			</div>
 			<span className="text-xs text-muted-foreground ml-1">
-				{t("thinking", "Thinking…")}
+				{text ?? t("thinking", "Thinking…")}
 			</span>
 		</div>
 	);
@@ -101,6 +103,7 @@ function ThinkingIndicator() {
 interface MessageProps {
 	message: IMessage;
 	loading?: boolean;
+	loadingText?: string;
 	onMessageUpdate?: (
 		messageId: string,
 		updates: Partial<IMessage>,
@@ -509,6 +512,7 @@ export const MessageComponent = memo(
 	function MessageComponent({
 		message,
 		loading,
+		loadingText,
 		onMessageUpdate,
 		editable,
 		onReply,
@@ -890,7 +894,7 @@ export const MessageComponent = memo(
 		const hasCornerReactions = Boolean(onReaction || hasSelectedReactions);
 
 		return (
-			<>
+			<BotFileAssets botId={message.storageBotId}>
 				<div
 					data-fl-chat-message-row
 					className={cn(
@@ -1016,7 +1020,9 @@ export const MessageComponent = memo(
 									    dots the unsegmented empty turn shows. */}
 									{loading &&
 										!messageContent.text &&
-										planSteps.length === 0 && <ThinkingIndicator />}
+										planSteps.length === 0 && (
+											<ThinkingIndicator text={loadingText} />
+										)}
 									{inlineSegments.map((segment, index) =>
 										segment.widgets ? (
 											<MessageWidgets
@@ -1082,7 +1088,7 @@ export const MessageComponent = memo(
 								</>
 							) : loading && !isUser && messageContent.text === "" ? (
 								planSteps.length > 0 ? null : (
-									<ThinkingIndicator />
+									<ThinkingIndicator text={loadingText} />
 								)
 							) : loading && !isUser && messageContent.text !== "" ? (
 								<div data-fl-chat-prose>
@@ -1148,6 +1154,9 @@ export const MessageComponent = memo(
 						)}
 						{message.approval && (
 							<ChatApprovalCard approval={message.approval} />
+						)}
+						{message.userContext && (
+							<UserContextCard context={message.userContext} />
 						)}
 						{trailingContent?.map((entry) => (
 							<AnchoredContentBlock key={entry.key} entry={entry} />
@@ -1321,12 +1330,13 @@ export const MessageComponent = memo(
 						trigger={null}
 					/>
 				)}
-			</>
+			</BotFileAssets>
 		);
 	},
 	(prev, next) => {
 		return (
 			prev.message.inner.content === next.message.inner.content &&
+			prev.message.storageBotId === next.message.storageBotId &&
 			prev.message.files === next.message.files &&
 			prev.message.rating === next.message.rating &&
 			prev.message.reactions === next.message.reactions &&
@@ -1341,10 +1351,13 @@ export const MessageComponent = memo(
 			prev.message.widgets === next.message.widgets &&
 			prev.message.error === next.message.error &&
 			prev.message.approval === next.message.approval &&
+			prev.message.userContext === next.message.userContext &&
+			prev.message.userContextDerived === next.message.userContextDerived &&
 			prev.appId === next.appId &&
 			prev.boardId === next.boardId &&
 			prev.eventId === next.eventId &&
 			prev.loading === next.loading &&
+			prev.loadingText === next.loadingText &&
 			prev.widgetSnapshots === next.widgetSnapshots &&
 			prev.anchoredContent === next.anchoredContent &&
 			prev.pending?.phase === next.pending?.phase &&

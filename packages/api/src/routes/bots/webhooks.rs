@@ -333,6 +333,7 @@ pub(crate) fn trigger_for(
         hook.instruction.clone()
     };
     TriggerBody {
+        monitoring: false,
         source: TriggerSource::Webhook,
         ref_id: hook.id.clone(),
         title: truncated(&hook.name, TRIGGER_TITLE_MAX_CHARS),

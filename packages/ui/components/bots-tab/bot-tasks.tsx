@@ -9,7 +9,7 @@ import {
 	PlusIcon,
 	Trash2Icon,
 } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { toast } from "sonner";
 import {
 	useBotTasks,
@@ -25,6 +25,7 @@ import type {
 } from "../../state/backend-state/bot-state";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import {
 	MAX_BOT_TASKS,
@@ -49,6 +50,7 @@ function NewTask({
 	onCreate: (request: ICreateBotTaskRequest) => void;
 }>) {
 	const { t } = useTranslation("bots");
+	const monitoringId = useId();
 	const [draft, setDraft] = useState<TaskDraft>(() =>
 		emptyTaskDraft(browserTimeZone()),
 	);
@@ -121,6 +123,26 @@ function NewTask({
 				placeholder={t("panel.tasks.instruction", "What should the bot do?")}
 				aria-label={t("panel.tasks.instructionLabel", "Instruction")}
 			/>
+			<label htmlFor={monitoringId} className="flex items-start gap-2 text-sm">
+				<Switch
+					id={monitoringId}
+					checked={draft.monitoring ?? false}
+					onCheckedChange={(monitoring) => set({ monitoring })}
+					aria-label={t(
+						"panel.tasks.monitoring",
+						"Only report meaningful changes",
+					)}
+				/>
+				<span>
+					{t("panel.tasks.monitoring", "Only report meaningful changes")}
+					<span className="block text-xs text-muted-foreground">
+						{t(
+							"panel.tasks.monitoringHint",
+							"Uses the bot's decision model after each check. Leave off for reminders and regular reports.",
+						)}
+					</span>
+				</span>
+			</label>
 			<Button
 				type="submit"
 				size="sm"
@@ -169,6 +191,8 @@ function TaskRow({
 			<div className="min-w-0 flex-1">
 				<p className="truncate text-sm font-medium">{task.title}</p>
 				<p className="truncate text-xs text-muted-foreground">
+					{task.monitoring &&
+						`${t("panel.tasks.monitoringLabel", "Monitoring")} · `}
 					{describeSchedule(task, i18n?.language)}
 					{" · "}
 					{nextRun(task, t("panel.tasks.next", "Next"), fallback)}

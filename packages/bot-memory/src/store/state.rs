@@ -52,8 +52,14 @@ pub struct CompactionState {
     pub compactions: u32,
     #[serde(default)]
     pub updated_at: Option<DateTime<Utc>>,
+    /// Last successful expiry cleanup, embedding and index maintenance for this conversation.
+    #[serde(default)]
+    pub last_maintenance_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub lease: Option<Lease>,
+    /// Bumped before forgetting or resetting, so an older save cannot recreate removed facts.
+    #[serde(default)]
+    pub forget_generation: u64,
     /// Bumped by every save.
     #[serde(default)]
     pub revision: u64,
@@ -130,6 +136,11 @@ impl StateStore {
             .rows(&format!("id = '{ROW_ID}'"), &COLUMNS, 1, 0)
             .await?;
         Ok(rows.into_iter().next())
+    }
+
+    /// Materializes the state before preparation, so reset can discover new room stores.
+    pub(crate) async fn initialize(&self) -> Result<()> {
+        self.ensure_row().await
     }
 
     /// The saved state, or the empty state of a bot that never compacted.

@@ -407,7 +407,12 @@ async fn the_browser_and_the_computer_exist_only_where_the_machine_hands_them_ou
     let bot = bot(&[BotCapability::BrowserUse]);
     let bare = env_for(&host, &bot);
     assert!(bare.browser().is_none() && bare.computer().is_none());
-    let value = call(&bare, "browser_open", json!({ "url": "https://example.com" })).await;
+    let value = call(
+        &bare,
+        "browser_open",
+        json!({ "url": "https://example.com" }),
+    )
+    .await;
     assert_eq!(code(&value), "not_yet");
 
     let tools = host_tools();

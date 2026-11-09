@@ -160,7 +160,9 @@ pub struct BotSkill {
 }
 
 /// What a bot sees of an active skill in its prompt.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize, JsonSchema,
+)]
 pub struct SkillIndexEntry {
     pub name: String,
     pub description: String,
@@ -253,13 +255,15 @@ pub fn hidden_unicode(text: &str) -> Option<char> {
     let chars: Vec<char> = text.chars().collect();
     for (index, &c) in chars.iter().enumerate() {
         let symbol = |other: Option<&char>| {
-            other.is_some_and(|other| !other.is_ascii() && !other.is_alphanumeric() && !other.is_whitespace())
+            other.is_some_and(|other| {
+                !other.is_ascii() && !other.is_alphanumeric() && !other.is_whitespace()
+            })
         };
         let emoji_joiner = c == '\u{200D}'
             && symbol(index.checked_sub(1).and_then(|before| chars.get(before)))
             && symbol(chars.get(index + 1));
-        let emoji_selector = c == '\u{FE0F}'
-            && symbol(index.checked_sub(1).and_then(|before| chars.get(before)));
+        let emoji_selector =
+            c == '\u{FE0F}' && symbol(index.checked_sub(1).and_then(|before| chars.get(before)));
         if (emoji_joiner || emoji_selector) || !is_hidden(c) {
             continue;
         }
@@ -375,7 +379,8 @@ pub struct ParsedSkill {
 
 fn unquote(value: &str) -> String {
     let value = value.trim();
-    let quoted = |quote: char| value.len() >= 2 && value.starts_with(quote) && value.ends_with(quote);
+    let quoted =
+        |quote: char| value.len() >= 2 && value.starts_with(quote) && value.ends_with(quote);
     if quoted('"') {
         let inner = &value[1..value.len() - 1];
         let mut out = String::with_capacity(inner.len());
@@ -418,7 +423,12 @@ fn front_matter_field(lines: &[&str], key: &str) -> Option<String> {
             .into_iter()
             .skip_while(|line| line.is_empty())
             .collect();
-        return Some(lines.join(if literal { "\n" } else { " " }).trim().to_string());
+        return Some(
+            lines
+                .join(if literal { "\n" } else { " " })
+                .trim()
+                .to_string(),
+        );
     }
     let mut value = unquote(inline);
     for line in continuation.iter().filter(|line| !line.is_empty()) {
@@ -464,11 +474,16 @@ pub fn parse_skill_md(text: &str) -> Result<ParsedSkill, String> {
 /// The skills a prompt names: active ones by name, at most [`MAX_PROMPT_SKILLS`] and
 /// [`MAX_PROMPT_BYTES`] of lines in all. The second value counts the skills left out.
 pub fn prompt_index(skills: &[SkillIndexEntry]) -> (Vec<String>, usize) {
-    let mut sorted: Vec<&SkillIndexEntry> = skills.iter().collect();
+    let mut sorted = skills.to_vec();
     sorted.sort();
+    prompt_index_in_order(&sorted)
+}
+
+/// Apply the usual prompt budget after a host has ranked the approved skills for this turn.
+pub fn prompt_index_in_order(skills: &[SkillIndexEntry]) -> (Vec<String>, usize) {
     let mut lines = Vec::new();
     let mut bytes = 0;
-    for skill in sorted.iter().take(MAX_PROMPT_SKILLS) {
+    for skill in skills.iter().take(MAX_PROMPT_SKILLS) {
         let line = format!("- {} — {}", skill.name, skill.description.trim());
         if bytes + line.len() + 1 > MAX_PROMPT_BYTES {
             break;
@@ -476,7 +491,7 @@ pub fn prompt_index(skills: &[SkillIndexEntry]) -> (Vec<String>, usize) {
         bytes += line.len() + 1;
         lines.push(line);
     }
-    let left_out = sorted.len() - lines.len();
+    let left_out = skills.len() - lines.len();
     (lines, left_out)
 }
 
@@ -570,28 +585,49 @@ mod tests {
         assert_eq!(parsed.description, "Extract text: tables and forms");
         assert_eq!(parsed.body, "# Steps\n\n1. Do it");
 
-        let folded = parse_skill_md(
-            "---\nname: a\ndescription: >\n  First line\n  second line\n---\nbody",
-        )
-        .unwrap();
+        let folded =
+            parse_skill_md("---\nname: a\ndescription: >\n  First line\n  second line\n---\nbody")
+                .unwrap();
         assert_eq!(folded.description, "First line second line");
     }
 
     #[test]
     fn front_matter_errors_name_the_problem() {
-        assert!(parse_skill_md("no front matter").unwrap_err().contains("---"));
-        assert!(parse_skill_md("---\nname: a\n").unwrap_err().contains("closing"));
-        assert!(parse_skill_md("---\ndescription: x\n---\n").unwrap_err().contains("'name'"));
+        assert!(
+            parse_skill_md("no front matter")
+                .unwrap_err()
+                .contains("---")
+        );
+        assert!(
+            parse_skill_md("---\nname: a\n")
+                .unwrap_err()
+                .contains("closing")
+        );
+        assert!(
+            parse_skill_md("---\ndescription: x\n---\n")
+                .unwrap_err()
+                .contains("'name'")
+        );
         assert!(parse_skill_md("---\nname: A B\ndescription: x\n---\n").is_err());
         let long = format!("---\nname: a\ndescription: {}\n---\n", "x".repeat(1_025));
         assert!(parse_skill_md(&long).unwrap_err().contains("1024"));
-        let big = format!("---\nname: a\ndescription: d\n---\n{}", "x".repeat(MAX_BODY_BYTES + 1));
+        let big = format!(
+            "---\nname: a\ndescription: d\n---\n{}",
+            "x".repeat(MAX_BODY_BYTES + 1)
+        );
         assert!(parse_skill_md(&big).unwrap_err().contains("bytes"));
     }
 
     #[test]
     fn hidden_unicode_is_refused_in_every_field() {
-        for hidden in ['\u{200B}', '\u{202E}', '\u{E0041}', '\u{2066}', '\u{0007}', '\u{FEFF}'] {
+        for hidden in [
+            '\u{200B}',
+            '\u{202E}',
+            '\u{E0041}',
+            '\u{2066}',
+            '\u{0007}',
+            '\u{FEFF}',
+        ] {
             let body = format!("ignore{hidden}this");
             assert_eq!(hidden_unicode(&body), Some(hidden), "{hidden:?}");
             assert!(check_body(&body).is_err());
@@ -604,7 +640,10 @@ mod tests {
     #[test]
     fn ordinary_text_and_emoji_pass() {
         assert_eq!(hidden_unicode("Grüße\n\ttab — ok 日本語"), None);
-        assert_eq!(hidden_unicode("ok \u{2764}\u{FE0F} \u{1F468}\u{200D}\u{1F469}"), None);
+        assert_eq!(
+            hidden_unicode("ok \u{2764}\u{FE0F} \u{1F468}\u{200D}\u{1F469}"),
+            None
+        );
         assert!(hidden_unicode("a\u{200D}b").is_some());
         assert!(hidden_unicode("a\u{FE0F}").is_some());
     }
@@ -632,7 +671,16 @@ mod tests {
     fn paths_may_not_escape_the_skill_folder() {
         assert_eq!(safe_relative_path("refs/a.md").unwrap(), "refs/a.md");
         assert_eq!(safe_relative_path("refs\\a.md").unwrap(), "refs/a.md");
-        for bad in ["../a", "a/../b", "/etc/passwd", "a//b", "C:/x", "", "a/./b", "a\u{202E}b"] {
+        for bad in [
+            "../a",
+            "a/../b",
+            "/etc/passwd",
+            "a//b",
+            "C:/x",
+            "",
+            "a/./b",
+            "a\u{202E}b",
+        ] {
             assert!(safe_relative_path(bad).is_err(), "{bad}");
         }
     }
@@ -646,7 +694,13 @@ mod tests {
             uncovered_tags(&tags(&["net.http", "oauth"]), &held(&["internet"])),
             ["connectors"]
         );
-        assert!(uncovered_tags(&tags(&["net.http", "oauth"]), &held(&["internet", "connectors"])).is_empty());
+        assert!(
+            uncovered_tags(
+                &tags(&["net.http", "oauth"]),
+                &held(&["internet", "connectors"])
+            )
+            .is_empty()
+        );
         assert_eq!(
             uncovered_tags(&tags(&["net.ws", "net.dns"]), &held(&[])),
             ["internet"]

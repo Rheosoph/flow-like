@@ -1,0 +1,88 @@
+.bd-approval-scenarios {
+	margin-bottom: 1rem;
+}
+
+.bd-approval-scenarios .bd-button[aria-pressed="true"] {
+	border-color: color-mix(in oklab, var(--bd-accent) 55%, transparent);
+	background: var(--bd-accent-soft);
+}
+
+.bd-approval-card {
+	display: grid;
+	gap: 0.75rem;
+	align-content: start;
+	padding: 1rem;
+	border: 1px solid color-mix(in oklab, var(--bd-accent) 35%, var(--bd-line));
+	border-radius: 12px;
+	background: var(--bd-bg);
+	box-shadow: 0 8px 28px color-mix(in oklab, black 18%, transparent);
+}
+
+.bd-approval-top {
+	display: flex;
+	gap: 0.7rem;
+	align-items: flex-start;
+}
+
+.bd-approval-title {
+	font-size: 0.92rem;
+	font-weight: 650;
+	overflow-wrap: anywhere;
+}
+
+.bd-approval-layout {
+	grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+}
+
+@media (max-width: 50rem) {
+	.bd-approval-layout {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+.bd-approval-trigger {
+	margin-top: 0.15rem;
+	color: var(--bd-muted);
+	font-size: 0.75rem;
+}
+
+.bd-approval-tool {
+	width: fit-content;
+	padding: 0.15rem 0.45rem;
+	border-radius: 6px;
+	background: var(--bd-surface-strong);
+	color: var(--bd-muted);
+}
+
+.bd-approval-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.4rem;
+}
+
+.bd-approval-actions .bd-button[aria-pressed="true"]:not(.bd-button--primary) {
+	border-color: var(--bd-faint);
+	background: var(--bd-surface-strong);
+}
+
+.bd-approval-card .bd-note {
+	margin-top: 0;
+}
+
+.bd-approval-side {
+	display: grid;
+	gap: 0.85rem;
+	align-content: start;
+}
+
+.bd-approval-steps {
+	display: grid;
+	gap: 0.55rem;
+	padding-left: 1.2rem;
+	color: var(--bd-muted);
+	font-size: 0.83rem;
+}
+
+.bd-approval-steps strong {
+	color: var(--bd-text);
+}

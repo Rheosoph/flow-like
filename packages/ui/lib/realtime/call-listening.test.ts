@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { type IBit, IBitTypes } from "../schema";
 import {
 	STT_LOCAL_PROVIDER,
+	type Utterance,
 	bytesToBase64,
 	createSerialQueue,
 	createUtteranceSegmenter,
@@ -42,6 +43,75 @@ const join = (...parts: Float32Array[]) => {
 };
 
 describe("createUtteranceSegmenter", () => {
+	test("previews growing audio during speech and preserves the final utterance", () => {
+		const previews: Utterance[] = [];
+		const segmenter = createUtteranceSegmenter({
+			onPartial: (utterance) => previews.push(utterance),
+		});
+		expect(feed(segmenter, tone(2500))).toEqual([]);
+		expect(previews.map((utterance) => utterance.durationMs)).toEqual([
+			1000, 2000,
+		]);
+		expect(previews.map((utterance) => utterance.offsetMs)).toEqual([0, 0]);
+		const firstSamples = previews[0].samples.slice();
+		const final = feed(segmenter, silence(1000));
+		expect(final).toHaveLength(1);
+		expect(final[0].durationMs).toBe(2650);
+		expect(final[0].samples.slice(0, firstSamples.length)).toEqual(
+			firstSamples,
+		);
+		expect(previews[0].samples).toEqual(firstSamples);
+		expect(previews).toHaveLength(2);
+		expect(segmenter.flush()).toBeNull();
+	});
+
+	test("previews respect minimum speech and their configured interval", () => {
+		const previews: Utterance[] = [];
+		const segmenter = createUtteranceSegmenter({
+			partialMs: 300,
+			onPartial: (utterance) => previews.push(utterance),
+		});
+		feed(segmenter, join(tone(200), silence(1000)));
+		expect(previews).toEqual([]);
+		feed(segmenter, tone(1000));
+		expect(previews.map((utterance) => utterance.durationMs)).toEqual([
+			600, 900, 1200,
+		]);
+	});
+
+	test("reset starts previews afresh without including discarded speech", () => {
+		const previews: Utterance[] = [];
+		const segmenter = createUtteranceSegmenter({
+			onPartial: (utterance) => previews.push(utterance),
+		});
+		feed(segmenter, tone(1500));
+		segmenter.reset();
+		feed(segmenter, tone(1000, 0.1));
+		expect(previews.map((utterance) => utterance.durationMs)).toEqual([
+			1000, 1000,
+		]);
+		expect(previews.map((utterance) => utterance.offsetMs)).toEqual([0, 1500]);
+		expect(previews[1].samples).toEqual(tone(1000, 0.1));
+		expect(segmenter.flush()?.samples).toEqual(previews[1].samples);
+	});
+
+	test("maximum-length cuts restart previews without duplicating the final audio", () => {
+		const previews: Utterance[] = [];
+		const segmenter = createUtteranceSegmenter({
+			maxMs: 2000,
+			onPartial: (utterance) => previews.push(utterance),
+		});
+		const final = feed(segmenter, tone(4000));
+		expect(final.map((utterance) => utterance.offsetMs)).toEqual([0, 2000]);
+		expect(final.map((utterance) => utterance.durationMs)).toEqual([
+			2000, 2000,
+		]);
+		expect(previews.map((utterance) => utterance.offsetMs)).toEqual([0, 2000]);
+		expect(previews.map((utterance) => utterance.durationMs)).toEqual([
+			1000, 1000,
+		]);
+	});
+
 	test("cuts one utterance after 700 ms of silence", () => {
 		const segmenter = createUtteranceSegmenter();
 		const found = feed(

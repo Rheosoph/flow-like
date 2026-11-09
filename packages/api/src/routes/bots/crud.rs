@@ -10,7 +10,7 @@ use super::{
 use crate::{
     audit, capacity,
     db::coordination::coordinate,
-    entity::{bot, bot_app, bot_secret, profile},
+    entity::{bit, bot, bot_app, bot_secret, profile},
     error::ApiError,
     middleware::jwt::AppUser,
     routes::{inbox, user::ensure_user_exists},
@@ -182,6 +182,11 @@ async fn verify_references<C: ConnectionTrait>(
     before: Option<&BotSettings>,
     after: &BotSettings,
 ) -> Result<(), ApiError> {
+    if before.is_none_or(|before| {
+        before.model.decision != after.model.decision || before.location != after.location
+    }) {
+        verify_decision_model(db, after).await?;
+    }
     if let Some(profile_id) = after.profile_id.as_deref()
         && profile_changed(before, after)
     {
@@ -193,6 +198,52 @@ async fn verify_references<C: ConnectionTrait>(
         verify_device(db, owner_id, device_id).await?;
     }
     Ok(())
+}
+
+/// Server and managed-device bots may only send decision context through a catalog-hosted System One model.
+pub(super) async fn verify_decision_model<C: ConnectionTrait>(
+    db: &C,
+    settings: &BotSettings,
+) -> Result<(), ApiError> {
+    let Some(id) = settings
+        .model
+        .decision
+        .as_deref()
+        .filter(|_| settings.location != BotLocation::Desktop)
+    else {
+        return Ok(());
+    };
+    let selected = bit::Entity::find_by_id(id)
+        .one(db)
+        .await?
+        .map(flow_like::bit::Bit::from);
+    if selected.as_ref().is_some_and(is_hosted_decision_model) {
+        return Ok(());
+    }
+    Err(ApiError::bad_request(
+        "Server and managed-device bots require a hosted System One decision model",
+    ))
+}
+
+pub(crate) fn is_hosted_decision_model(bit: &flow_like::bit::Bit) -> bool {
+    bit.try_to_systemone().is_some_and(|parameters| {
+        parameters.context_length > 0
+            && matches!(
+                parameters
+                    .provider
+                    .provider_name
+                    .trim()
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "hosted"
+                    | "premium"
+                    | "internal"
+                    | "hosted:openrouter"
+                    | "hosted:typesafe"
+                    | "hosted:cloudflare"
+                    | "hosted:systemone_compatible"
+            )
+    })
 }
 
 /// Inserts a bot the owner created unless [`admit_new_bot`] refuses it, under the owner's lock.
@@ -239,7 +290,7 @@ async fn save_settings<C: ConnectionTrait>(
 
 /// A bot after a patch and the names of the fields it changed.
 #[derive(Debug)]
-pub(super) struct Patched {
+pub(crate) struct Patched {
     pub bot: bot::Model,
     pub changed: Vec<&'static str>,
 }
@@ -248,7 +299,7 @@ pub(super) struct Patched {
 /// changed. The caller holds the bot's lock, so concurrent patches apply one after the other
 /// instead of the later one restoring what the earlier one changed; when `body` sets the
 /// location to `server` it holds the owner's lock first, so the server-bot count is exact.
-pub(super) async fn patch_in<C: ConnectionTrait>(
+pub(crate) async fn patch_in<C: ConnectionTrait>(
     db: &C,
     owner_id: &str,
     bot_id: &str,
@@ -272,10 +323,11 @@ pub(super) async fn patch_in<C: ConnectionTrait>(
         admit_server_bot(db, owner_id).await?;
     }
     let changed = before.changed_fields(&after);
-    Ok(Patched {
-        bot: save_settings(db, owner_id, current, &after).await?,
-        changed,
-    })
+    let bot = save_settings(db, owner_id, current, &after).await?;
+    if before.has(BotCapability::Encryption) != after.has(BotCapability::Encryption) {
+        inbox::conversations::sync_own_bot_direct(db, &bot).await?;
+    }
+    Ok(Patched { bot, changed })
 }
 
 /// Marks the bot deleted and drops its app attachments and secrets with it.
@@ -333,6 +385,57 @@ pub async fn list_bots(
     }))
 }
 
+/// The owner's bots: Assistant and Flux first, then the bots they created, oldest first.
+pub(crate) async fn owner_bots(state: &AppState, owner_id: &str) -> Result<Vec<Bot>, ApiError> {
+    let bots = provision::bots_with_system(state, owner_id).await?;
+    Ok(bots.into_iter().map(Bot::from).collect())
+}
+
+/// Creates a bot of the owner's own from `body`, within their limits.
+pub(crate) async fn create_owned(
+    state: &AppState,
+    owner_id: &str,
+    body: CreateBotRequest,
+) -> Result<Bot, ApiError> {
+    let (preset_id, settings) = validation::create_settings(body)?;
+    verify_references(&state.db, owner_id, None, &settings).await?;
+    ensure_user_exists(state, owner_id).await?;
+    let now = chrono::Utc::now().fixed_offset();
+    let row = provision::new_bot_row(owner_id, None, preset_id, &settings, now)?;
+    Ok(Bot::from(
+        insert_custom_bot(state, owner_id, settings.location, row).await?,
+    ))
+}
+
+/// Merges `body` into the owner's bot under its lock and moves its task schedules along when
+/// its location changed.
+pub(crate) async fn update_owned(
+    state: &AppState,
+    owner_id: &str,
+    bot_id: &str,
+    body: UpdateBotRequest,
+) -> Result<Patched, ApiError> {
+    let patched = state
+        .transaction(|txn| {
+            let (owner_id, bot_id, body) = (owner_id.to_string(), bot_id.to_string(), body.clone());
+            Box::pin(async move {
+                if body.location == Some(BotLocation::Server) {
+                    coordinate(txn, "bot-owner", &[&owner_id]).await?;
+                }
+                lock_bot(txn, &bot_id).await?;
+                patch_in(txn, &owner_id, &bot_id, body).await
+            })
+        })
+        .await?;
+    if patched.changed.contains(&"location") {
+        crate::bot_host::task_schedules::sync_bot(state, bot_id).await;
+    }
+    if patched.changed.contains(&"capabilities") {
+        inbox::wake(state, [owner_id.to_string()]).await;
+    }
+    Ok(patched)
+}
+
 #[utoipa::path(
     post,
     path = "/bots",
@@ -355,12 +458,7 @@ pub async fn create_bot(
     Json(body): Json<CreateBotRequest>,
 ) -> Result<Json<Bot>, ApiError> {
     let sub = user.sub()?;
-    let (preset_id, settings) = validation::create_settings(body)?;
-    verify_references(&state.db, &sub, None, &settings).await?;
-    ensure_user_exists(&state, &sub).await?;
-    let now = chrono::Utc::now().fixed_offset();
-    let row = provision::new_bot_row(&sub, None, preset_id, &settings, now)?;
-    let bot = Bot::from(insert_custom_bot(&state, &sub, settings.location, row).await?);
+    let bot = create_owned(&state, &sub, body).await?;
     audit!(
         state,
         user,
@@ -424,21 +522,7 @@ pub async fn update_bot(
     Json(body): Json<UpdateBotRequest>,
 ) -> Result<Json<Bot>, ApiError> {
     let sub = user.sub()?;
-    let patched = state
-        .transaction(|txn| {
-            let (sub, bot_id, body) = (sub.clone(), bot_id.clone(), body.clone());
-            Box::pin(async move {
-                if body.location == Some(BotLocation::Server) {
-                    coordinate(txn, "bot-owner", &[&sub]).await?;
-                }
-                lock_bot(txn, &bot_id).await?;
-                patch_in(txn, &sub, &bot_id, body).await
-            })
-        })
-        .await?;
-    if patched.changed.contains(&"location") {
-        crate::bot_host::task_schedules::sync_bot(&state, &bot_id).await;
-    }
+    let patched = update_owned(&state, &sub, &bot_id, body).await?;
     if !patched.changed.is_empty() {
         audit!(
             state,

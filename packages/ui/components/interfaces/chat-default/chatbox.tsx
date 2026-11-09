@@ -1,6 +1,6 @@
 "use client";
 
-import { i18n as i18next } from "@flow-like/locales";
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import AudioLines from "lucide-react/dist/esm/icons/audio-lines.js";
 import AudioWaveform from "lucide-react/dist/esm/icons/audio-waveform.js";
 import CornerDownRight from "lucide-react/dist/esm/icons/corner-down-right.js";
@@ -15,9 +15,11 @@ import X from "lucide-react/dist/esm/icons/x.js";
 import {
 	type ReactNode,
 	forwardRef,
+	memo,
 	useCallback,
 	useEffect,
 	useImperativeHandle,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -102,6 +104,16 @@ export interface ChatBoxThinking {
 	readonly onChange: (id: string) => void;
 }
 
+const DEFAULT_TOOLS = ["Reason"];
+
+function formatTime(seconds: number) {
+	const mins = Math.floor(seconds / 60);
+	const secs = seconds % 60;
+	return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
+const ComposerFileManager = memo(FileManagerDialog);
+
 export interface ChatBoxRef {
 	setInput: (text: string) => void;
 	clearInput?: () => void;
@@ -128,7 +140,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			voiceMode = "record",
 			voiceInvoke = "manual",
 			voiceMaxDuration = 0,
-			availableTools = ["Reason"],
+			availableTools = DEFAULT_TOOLS,
 			defaultActiveTools = ["Reason"],
 			sendDisabled = false,
 			sendHint,
@@ -151,8 +163,6 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			useState<string[]>(defaultActiveTools);
 		const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
 		const [showFileManager, setShowFileManager] = useState(false);
-		const visibleFiles = attachedFiles.slice(0, 6);
-		const previewUrls = useImagePreviewUrls(visibleFiles);
 
 		const [recordedAudio, setRecordedAudio] = useState<File | null>(null);
 		const [recordedDuration, setRecordedDuration] = useState(0);
@@ -368,10 +378,10 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			setRecordedDuration(0);
 		};
 
-		const removeRecordedAudio = () => {
+		const removeRecordedAudio = useCallback(() => {
 			setRecordedAudio(null);
 			setRecordedDuration(0);
-		};
+		}, []);
 
 		const startTranscription = () => {
 			if (!audioInput || effectiveVoiceMode !== "stt") return;
@@ -386,12 +396,6 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			speech.stop();
 		};
 
-		const formatTime = (seconds: number) => {
-			const mins = Math.floor(seconds / 60);
-			const secs = seconds % 60;
-			return `${mins}:${secs.toString().padStart(2, "0")}`;
-		};
-
 		const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
 			if (e.nativeEvent.isComposing || composing) return;
 			if (mentionPicker.handleKeyDown(e)) return;
@@ -401,14 +405,17 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			}
 		};
 
-		const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-			if (!fileUpload) return;
-			const files = e.target.files;
-			if (files) {
-				const fileArray = Array.from(files);
-				setAttachedFiles((prev) => [...prev, ...fileArray]);
-			}
-		};
+		const handleFileUpload = useCallback(
+			(e: React.ChangeEvent<HTMLInputElement>) => {
+				if (!fileUpload) return;
+				const files = e.target.files;
+				if (files) {
+					const fileArray = Array.from(files);
+					setAttachedFiles((prev) => [...prev, ...fileArray]);
+				}
+			},
+			[fileUpload],
+		);
 
 		const addFiles = useCallback(
 			(files: File[]) => {
@@ -486,133 +493,48 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			e.preventDefault();
 		}, []);
 
-		const handleRemoveFile = (index: number) => {
+		const handleRemoveFile = useCallback((index: number) => {
 			setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
-		};
+		}, []);
 
-		const handleRemoveFiles = (indices: number[]) => {
+		const handleRemoveFiles = useCallback((indices: number[]) => {
 			setAttachedFiles((prev) => prev.filter((_, i) => !indices.includes(i)));
-		};
+		}, []);
 
-		const handleToolToggle = (tool: string) => {
+		const clearFiles = useCallback(() => setAttachedFiles([]), []);
+		const openFileManager = useCallback(() => setShowFileManager(true), []);
+
+		const handleToolToggle = useCallback((tool: string) => {
 			setActiveTools((prev) =>
 				prev.includes(tool) ? prev.filter((t) => t !== tool) : [...prev, tool],
 			);
-		};
+		}, []);
+
+		const runStatus = useMemo(
+			() => renderRunStatus?.(showStop),
+			[renderRunStatus, showStop],
+		);
 
 		return (
 			<div className="w-full max-w-screen-xl px-2">
-				{/* Attachments Preview */}
-				{(activeTools.length > 0 ||
-					attachedFiles.length > 0 ||
-					recordedAudio) && (
-					<div className="mb-3 space-y-2">
-						{/* Recorded Audio Preview */}
-						{recordedAudio && (
-							<div className="flex items-center gap-2 p-2 bg-background border border-border rounded-lg">
-								<div className="w-8 h-8 bg-primary/10 rounded flex items-center justify-center flex-shrink-0">
-									<MicIcon className="w-4 h-4 text-primary" />
-								</div>
-								<div className="flex flex-col min-w-0 flex-1">
-									<span className="text-xs font-medium">
-										{i18next.t("audioRecording", "Audio Recording")}
-									</span>
-									<span className="text-xs text-muted-foreground">
-										{formatTime(recordedDuration)} •{" "}
-										{(recordedAudio.size / 1024).toFixed(1)} KB
-									</span>
-								</div>
-								<Button
-									type="button"
-									size="sm"
-									variant="ghost"
-									className="h-5 w-5 p-0 rounded-full hover:bg-destructive hover:text-destructive-foreground flex-shrink-0"
-									onClick={removeRecordedAudio}
-								>
-									<X className="w-3 h-3" />
-								</Button>
-							</div>
-						)}
+				<AttachmentStrip
+					hasActiveTools={activeTools.length > 0}
+					files={attachedFiles}
+					recordedAudio={recordedAudio}
+					recordedDuration={recordedDuration}
+					onRemoveAudio={removeRecordedAudio}
+					onRemoveFile={handleRemoveFile}
+					onShowAll={openFileManager}
+					onClearAll={clearFiles}
+				/>
 
-						{/* Attached files — one quiet chip per file, wrapping inline. */}
-						{attachedFiles.length > 0 && (
-							<div className="flex flex-wrap items-center gap-1.5">
-								{visibleFiles.map((file, index) => (
-									<div
-										key={`${file.name}-${index}`}
-										className="group flex h-8 min-w-0 max-w-56 items-center gap-2 rounded-full border py-0 pr-1 pl-1.5 transition-colors hover:border-ring"
-										style={{
-											borderColor: "var(--fl-chat-rule, var(--border))",
-										}}
-									>
-										{isImageFile(file) ? (
-											<img
-												src={previewUrls.get(file)}
-												alt={file.name}
-												className="size-6 shrink-0 rounded-full object-cover"
-											/>
-										) : (
-											<span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted">
-												<FileIcon className="size-3 text-muted-foreground" />
-											</span>
-										)}
-										<span className="min-w-0 flex-1 truncate text-xs font-medium">
-											{file.name}
-										</span>
-										<span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
-											{humanFileSize(file.size, true)}
-										</span>
-										<Button
-											type="button"
-											size="sm"
-											variant="ghost"
-											aria-label={i18next.t("removeName", "Remove {{name}}", {
-												name: file.name,
-											})}
-											className="size-6 shrink-0 rounded-full p-0 text-muted-foreground opacity-60 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"
-											onClick={() => handleRemoveFile(index)}
-										>
-											<X className="size-3" />
-										</Button>
-									</div>
-								))}
-
-								{attachedFiles.length > 6 && (
-									<Button
-										type="button"
-										size="sm"
-										variant="ghost"
-										className="h-8 rounded-full px-3 text-xs text-muted-foreground"
-										onClick={() => setShowFileManager(true)}
-									>
-										+{attachedFiles.length - 6} more
-									</Button>
-								)}
-
-								{attachedFiles.length > 1 && (
-									<Button
-										type="button"
-										size="sm"
-										variant="ghost"
-										className="h-8 rounded-full px-3 text-xs text-muted-foreground hover:text-destructive"
-										onClick={() => setAttachedFiles([])}
-									>
-										{i18next.t("clearAll", "Clear all")}
-									</Button>
-								)}
-							</div>
-						)}
-					</div>
-				)}
-
-				{/* File Manager Dialog */}
-				<FileManagerDialog
+				<ComposerFileManager
 					open={showFileManager}
 					onOpenChange={setShowFileManager}
 					files={attachedFiles}
 					onRemoveFile={handleRemoveFile}
 					onRemoveFiles={handleRemoveFiles}
-					onClearAll={() => setAttachedFiles([])}
+					onClearAll={clearFiles}
 				/>
 
 				<form
@@ -665,170 +587,22 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 						{/* Tool bar and settings */}
 						<div className="flex w-full items-center justify-between rounded-b-xl">
-							{/* Left side buttons */}
-							<div className="flex min-w-0 flex-wrap items-center gap-1 p-2 pt-0">
-								{/* File Upload Button */}
-								{fileUpload && (
-									<Popover>
-										<PopoverTrigger asChild>
-											<Button
-												aria-label={i18next.t(
-													"addAttachment",
-													"Add attachment",
-												)}
-												type="button"
-												size="sm"
-												variant="ghost"
-												className="h-11 w-11 sm:h-8 sm:w-8 p-0 hover:bg-accent rounded-lg transition-colors"
-											>
-												<Plus className="w-4 h-4 text-muted-foreground" />
-											</Button>
-										</PopoverTrigger>
-										<PopoverContent
-											side="top"
-											align="start"
-											className="mb-2 w-52 rounded-xl p-1.5"
-										>
-											<input
-												type="file"
-												id="file-upload"
-												className="hidden"
-												onChange={handleFileUpload}
-												multiple
-											/>
-											<input
-												type="file"
-												id="folder-upload"
-												className="hidden"
-												onChange={handleFileUpload}
-												multiple
-												// @ts-ignore
-												directory=""
-												webkitdirectory=""
-											/>
-											<div className="space-y-0.5">
-												<label
-													htmlFor="file-upload"
-													className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors hover:bg-accent"
-												>
-													<FileIcon className="size-4 text-muted-foreground" />
-													{i18next.t("files", "Files")}
-												</label>
-												<label
-													htmlFor="folder-upload"
-													className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors hover:bg-accent"
-												>
-													<FolderIcon className="size-4 text-muted-foreground" />
-													{i18next.t("folder", "Folder")}
-												</label>
-											</div>
-										</PopoverContent>
-									</Popover>
-								)}
-
-								{model && <ChatModelPicker {...model} />}
-
-								{thinking && thinking.options.length > 0 && (
-									<ThinkingPicker
-										value={thinking.value}
-										options={thinking.options}
-										onChange={thinking.onChange}
-										className="h-11 w-11 sm:h-8 sm:w-8"
-									/>
-								)}
-
-								{actions}
-
-								{/* Tools Settings Button with Active Tools Badge */}
-								{(availableTools?.length ?? 0) > 0 && (
-									<div className="relative">
-										<Popover>
-											<PopoverTrigger asChild>
-												<Button
-													aria-label={i18next.t("chooseTools", "Choose tools")}
-													type="button"
-													size="sm"
-													variant="ghost"
-													className="h-11 w-11 sm:h-8 sm:w-8 p-0 hover:bg-accent rounded-lg transition-colors relative"
-												>
-													<WrenchIcon className="w-4 h-4 text-muted-foreground" />
-												</Button>
-											</PopoverTrigger>
-											<PopoverContent side="top" className="w-48 p-2 mb-2">
-												<div className="space-y-1">
-													<div className="text-xs font-medium text-muted-foreground px-2 pb-1">
-														{i18next.t("tools", "Tools")}
-													</div>
-													{availableTools.map((tool) => (
-														// biome-ignore lint/a11y/useKeyWithClickEvents: pointer-only tool rows, kept as-is; keyboard support needs focusable buttons, which would change the popover's initial focus and tab order.
-														<div
-															key={tool}
-															className="flex items-center gap-2 p-2 hover:bg-accent rounded cursor-pointer transition-colors"
-															onClick={() => handleToolToggle(tool)}
-														>
-															<div
-																className={`w-2 h-2 rounded-full transition-colors ${
-																	activeTools.includes(tool)
-																		? "bg-primary"
-																		: "bg-muted"
-																}`}
-															/>
-															<span className="text-sm">{tool}</span>
-															{activeTools.includes(tool) && (
-																<span className="text-xs text-primary ml-auto">
-																	✓
-																</span>
-															)}
-														</div>
-													))}
-												</div>
-											</PopoverContent>
-										</Popover>
-									</div>
-								)}
-
-								{/* Active Tools */}
-								{activeTools.length > 0 && (
-									<div className="flex items-center gap-2 flex-wrap ml-2">
-										{activeTools.map((tool) => (
-											<span
-												key={tool}
-												className="inline-flex items-center gap-1.5 px-2 py-1 bg-primary/10 text-primary text-xs rounded-full border border-primary/20"
-											>
-												<div className="w-1.5 h-1.5 bg-primary rounded-full" />
-												{tool}
-											</span>
-										))}
-									</div>
-								)}
-
-								{/* Attachments Count Badge */}
-								{attachedFiles.length > 0 && (
-									<div className="relative group">
-										<button
-											type="button"
-											onClick={() => setAttachedFiles([])}
-											className="flex items-center gap-1 px-2 py-1 bg-accent/50 hover:bg-destructive hover:text-destructive-foreground rounded-full transition-colors cursor-pointer"
-											title={i18next.t(
-												"clearAllAttachments",
-												"Clear all attachments",
-											)}
-										>
-											<FileIcon className="w-3 h-3 text-muted-foreground group-hover:text-destructive-foreground" />
-											<span className="text-xs text-muted-foreground group-hover:text-destructive-foreground font-medium">
-												{attachedFiles.length}
-											</span>
-										</button>
-										<div className="absolute -top-1 -right-1 w-4 h-4 bg-background border border-border rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-destructive hover:text-destructive-foreground">
-											<X className="w-2.5 h-2.5" />
-										</div>
-									</div>
-								)}
-							</div>
+							<ComposerTools
+								fileUpload={fileUpload}
+								model={model}
+								thinking={thinking}
+								actions={actions}
+								availableTools={availableTools}
+								activeTools={activeTools}
+								attachedCount={attachedFiles.length}
+								onFileUpload={handleFileUpload}
+								onToolToggle={handleToolToggle}
+								onClearFiles={clearFiles}
+							/>
 
 							{/* Send Button & Audio Controls */}
 							<div className="p-2 pt-0 flex items-center gap-2">
-								{renderRunStatus?.(showStop)}
+								{runStatus}
 
 								{/* Voice-to-text transcription button (STT mode) */}
 								{audioInput && effectiveVoiceMode === "stt" && (
@@ -1029,6 +803,310 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 		);
 	},
 );
+
+interface AttachmentStripProps {
+	readonly hasActiveTools: boolean;
+	readonly files: File[];
+	readonly recordedAudio: File | null;
+	readonly recordedDuration: number;
+	readonly onRemoveAudio: () => void;
+	readonly onRemoveFile: (index: number) => void;
+	readonly onShowAll: () => void;
+	readonly onClearAll: () => void;
+}
+
+/** Recorded audio and file chips above the composer. Memoized so typing never re-renders previews. */
+const AttachmentStrip = memo(function AttachmentStrip({
+	hasActiveTools,
+	files,
+	recordedAudio,
+	recordedDuration,
+	onRemoveAudio,
+	onRemoveFile,
+	onShowAll,
+	onClearAll,
+}: AttachmentStripProps) {
+	const { t } = useTranslation();
+	const visibleFiles = files.slice(0, 6);
+	const previewUrls = useImagePreviewUrls(visibleFiles);
+
+	if (!hasActiveTools && files.length === 0 && !recordedAudio) return null;
+
+	return (
+		<div className="mb-3 space-y-2">
+			{recordedAudio && (
+				<div className="flex items-center gap-2 p-2 bg-background border border-border rounded-lg">
+					<div className="w-8 h-8 bg-primary/10 rounded flex items-center justify-center flex-shrink-0">
+						<MicIcon className="w-4 h-4 text-primary" />
+					</div>
+					<div className="flex flex-col min-w-0 flex-1">
+						<span className="text-xs font-medium">
+							{t("audioRecording", "Audio Recording")}
+						</span>
+						<span className="text-xs text-muted-foreground">
+							{formatTime(recordedDuration)} •{" "}
+							{(recordedAudio.size / 1024).toFixed(1)} KB
+						</span>
+					</div>
+					<Button
+						type="button"
+						size="sm"
+						variant="ghost"
+						className="h-5 w-5 p-0 rounded-full hover:bg-destructive hover:text-destructive-foreground flex-shrink-0"
+						onClick={onRemoveAudio}
+					>
+						<X className="w-3 h-3" />
+					</Button>
+				</div>
+			)}
+
+			{/* Attached files — one quiet chip per file, wrapping inline. */}
+			{files.length > 0 && (
+				<div className="flex flex-wrap items-center gap-1.5">
+					{visibleFiles.map((file, index) => (
+						<div
+							key={`${file.name}-${index}`}
+							className="group flex h-8 min-w-0 max-w-56 items-center gap-2 rounded-full border py-0 pr-1 pl-1.5 transition-colors hover:border-ring"
+							style={{
+								borderColor: "var(--fl-chat-rule, var(--border))",
+							}}
+						>
+							{isImageFile(file) ? (
+								<img
+									src={previewUrls.get(file)}
+									alt={file.name}
+									className="size-6 shrink-0 rounded-full object-cover"
+								/>
+							) : (
+								<span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted">
+									<FileIcon className="size-3 text-muted-foreground" />
+								</span>
+							)}
+							<span className="min-w-0 flex-1 truncate text-xs font-medium">
+								{file.name}
+							</span>
+							<span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+								{humanFileSize(file.size, true)}
+							</span>
+							<Button
+								type="button"
+								size="sm"
+								variant="ghost"
+								aria-label={t("removeName", "Remove {{name}}", {
+									name: file.name,
+								})}
+								className="size-6 shrink-0 rounded-full p-0 text-muted-foreground opacity-60 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"
+								onClick={() => onRemoveFile(index)}
+							>
+								<X className="size-3" />
+							</Button>
+						</div>
+					))}
+
+					{files.length > 6 && (
+						<Button
+							type="button"
+							size="sm"
+							variant="ghost"
+							className="h-8 rounded-full px-3 text-xs text-muted-foreground"
+							onClick={onShowAll}
+						>
+							+{files.length - 6} more
+						</Button>
+					)}
+
+					{files.length > 1 && (
+						<Button
+							type="button"
+							size="sm"
+							variant="ghost"
+							className="h-8 rounded-full px-3 text-xs text-muted-foreground hover:text-destructive"
+							onClick={onClearAll}
+						>
+							{t("clearAll", "Clear all")}
+						</Button>
+					)}
+				</div>
+			)}
+		</div>
+	);
+});
+
+interface ComposerToolsProps {
+	readonly fileUpload: boolean;
+	readonly model?: ChatBoxModel;
+	readonly thinking?: ChatBoxThinking;
+	readonly actions?: ReactNode;
+	readonly availableTools: string[];
+	readonly activeTools: string[];
+	readonly attachedCount: number;
+	readonly onFileUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+	readonly onToolToggle: (tool: string) => void;
+	readonly onClearFiles: () => void;
+}
+
+/** The composer's left controls. None depend on the draft, so typing skips them. */
+const ComposerTools = memo(function ComposerTools({
+	fileUpload,
+	model,
+	thinking,
+	actions,
+	availableTools,
+	activeTools,
+	attachedCount,
+	onFileUpload,
+	onToolToggle,
+	onClearFiles,
+}: ComposerToolsProps) {
+	const { t } = useTranslation();
+	return (
+		<div className="flex min-w-0 flex-wrap items-center gap-1 p-2 pt-0">
+			{fileUpload && (
+				<Popover>
+					<PopoverTrigger asChild>
+						<Button
+							aria-label={t("addAttachment", "Add attachment")}
+							type="button"
+							size="sm"
+							variant="ghost"
+							className="h-11 w-11 sm:h-8 sm:w-8 p-0 hover:bg-accent rounded-lg transition-colors"
+						>
+							<Plus className="w-4 h-4 text-muted-foreground" />
+						</Button>
+					</PopoverTrigger>
+					<PopoverContent
+						side="top"
+						align="start"
+						className="mb-2 w-52 rounded-xl p-1.5"
+					>
+						<input
+							type="file"
+							id="file-upload"
+							className="hidden"
+							onChange={onFileUpload}
+							multiple
+						/>
+						<input
+							type="file"
+							id="folder-upload"
+							className="hidden"
+							onChange={onFileUpload}
+							multiple
+							// @ts-ignore
+							directory=""
+							webkitdirectory=""
+						/>
+						<div className="space-y-0.5">
+							<label
+								htmlFor="file-upload"
+								className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors hover:bg-accent"
+							>
+								<FileIcon className="size-4 text-muted-foreground" />
+								{t("files", "Files")}
+							</label>
+							<label
+								htmlFor="folder-upload"
+								className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors hover:bg-accent"
+							>
+								<FolderIcon className="size-4 text-muted-foreground" />
+								{t("folder", "Folder")}
+							</label>
+						</div>
+					</PopoverContent>
+				</Popover>
+			)}
+
+			{model && <ChatModelPicker {...model} />}
+
+			{thinking && thinking.options.length > 0 && (
+				<ThinkingPicker
+					value={thinking.value}
+					options={thinking.options}
+					onChange={thinking.onChange}
+					className="h-11 w-11 sm:h-8 sm:w-8"
+				/>
+			)}
+
+			{actions}
+
+			{availableTools.length > 0 && (
+				<div className="relative">
+					<Popover>
+						<PopoverTrigger asChild>
+							<Button
+								aria-label={t("chooseTools", "Choose tools")}
+								type="button"
+								size="sm"
+								variant="ghost"
+								className="h-11 w-11 sm:h-8 sm:w-8 p-0 hover:bg-accent rounded-lg transition-colors relative"
+							>
+								<WrenchIcon className="w-4 h-4 text-muted-foreground" />
+							</Button>
+						</PopoverTrigger>
+						<PopoverContent side="top" className="w-48 p-2 mb-2">
+							<div className="space-y-1">
+								<div className="text-xs font-medium text-muted-foreground px-2 pb-1">
+									{t("tools", "Tools")}
+								</div>
+								{availableTools.map((tool) => (
+									// biome-ignore lint/a11y/useKeyWithClickEvents: pointer-only tool rows, kept as-is; keyboard support needs focusable buttons, which would change the popover's initial focus and tab order.
+									<div
+										key={tool}
+										className="flex items-center gap-2 p-2 hover:bg-accent rounded cursor-pointer transition-colors"
+										onClick={() => onToolToggle(tool)}
+									>
+										<div
+											className={`w-2 h-2 rounded-full transition-colors ${
+												activeTools.includes(tool) ? "bg-primary" : "bg-muted"
+											}`}
+										/>
+										<span className="text-sm">{tool}</span>
+										{activeTools.includes(tool) && (
+											<span className="text-xs text-primary ml-auto">✓</span>
+										)}
+									</div>
+								))}
+							</div>
+						</PopoverContent>
+					</Popover>
+				</div>
+			)}
+
+			{activeTools.length > 0 && (
+				<div className="flex items-center gap-2 flex-wrap ml-2">
+					{activeTools.map((tool) => (
+						<span
+							key={tool}
+							className="inline-flex items-center gap-1.5 px-2 py-1 bg-primary/10 text-primary text-xs rounded-full border border-primary/20"
+						>
+							<div className="w-1.5 h-1.5 bg-primary rounded-full" />
+							{tool}
+						</span>
+					))}
+				</div>
+			)}
+
+			{attachedCount > 0 && (
+				<div className="relative group">
+					<button
+						type="button"
+						onClick={onClearFiles}
+						className="flex items-center gap-1 px-2 py-1 bg-accent/50 hover:bg-destructive hover:text-destructive-foreground rounded-full transition-colors cursor-pointer"
+						title={t("clearAllAttachments", "Clear all attachments")}
+					>
+						<FileIcon className="w-3 h-3 text-muted-foreground group-hover:text-destructive-foreground" />
+						<span className="text-xs text-muted-foreground group-hover:text-destructive-foreground font-medium">
+							{attachedCount}
+						</span>
+					</button>
+					<div className="absolute -top-1 -right-1 w-4 h-4 bg-background border border-border rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-destructive hover:text-destructive-foreground">
+						<X className="w-2.5 h-2.5" />
+					</div>
+				</div>
+			)}
+		</div>
+	);
+});
 
 /** Send's stand-in while a response streams; the ring spins until every response is cancelling. */
 function StopButton({ stop }: { stop: ChatBoxStop }) {

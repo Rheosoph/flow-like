@@ -4,7 +4,9 @@
 //! `todo/bots-capabilities/lanes/HOST-SERVER-TOOLS.md`.
 
 mod access;
+mod configuration;
 pub(crate) mod connectors;
+mod crew;
 mod directory;
 mod email;
 mod executor;
@@ -40,7 +42,7 @@ pub(crate) fn executor_for(state: &AppState) -> Option<std::sync::Arc<dyn ToolEx
     DispatcherExecutor::of(state).map(|executor| std::sync::Arc::new(executor) as _)
 }
 
-/// The bot tools of one turn, or `None` when the bot has no workspace or the host offers none.
+/// The bot tools of one turn, including configuration tools before a workspace exists.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn turn_host(
     state: &AppState,
@@ -53,9 +55,10 @@ pub(crate) async fn turn_host(
     token: Option<String>,
     grants: std::sync::Arc<dyn flow_like::flow::copilot::tool_grants::GrantStore>,
     conv_id: Option<&str>,
+    context_conversation: Option<&str>,
     site: Option<flow_like_bot_tools::TurnSite>,
 ) -> Option<std::sync::Arc<BotToolsHost>> {
-    let workspace = bot.workspace_app_id.clone()?;
+    let workspace = bot.workspace_app_id.clone().unwrap_or_default();
     let principal = BotUser {
         bot_id: bot.bot_id.clone(),
         turn_id: turn_id.to_string(),
@@ -94,58 +97,86 @@ pub(crate) async fn turn_host(
         site,
     ));
     let scheduler = std::sync::Arc::new(schedule::ApiScheduler::new(state, owner, &bot.bot_id));
-    Some(std::sync::Arc::new(
-        BotToolsHost::new(TurnDeps {
-            owner: owner.to_string(),
-            bot: principal.clone(),
-            turn_id: turn_id.to_string(),
-            workspace: workspace.clone(),
-            host_tools: bot.host_tools.clone(),
-            directory: std::sync::Arc::new(directory::ApiDirectory {
-                state: state.clone(),
-                principal: principal.clone(),
-                bot: bot.clone(),
-            }),
-            access: std::sync::Arc::new(access::ApiAccess::for_bot(
-                state.clone(),
-                principal,
-                &workspace,
-            )),
-            models: TurnModels {
-                source,
-                chat: Some(chat.clone()),
-                embedding,
-            },
-            executor: executor_for(state),
-            grants,
-            secrets: std::sync::Arc::new(secrets::ServerSecrets::new(state, &bot.bot_id)),
-            connectors: Some(std::sync::Arc::new(connectors::ApiConnectors::new(
-                state,
-                owner,
-                &bot.bot_id,
-            ))),
-        })
-        .with_notifier(notifier)
-        .with_people(std::sync::Arc::new(crate::bot_people::ServerPeople::new(
-            state,
-            &bot.bot_id,
-            owner,
-        )))
-        .with_scheduler(scheduler)
-        .with_skills(std::sync::Arc::new(skills::ApiSkills::new(
+    let crew = (bot.toolset == flow_like::flow::copilot::BotToolset::FlowPilot).then(|| {
+        std::sync::Arc::new(crew::ApiCrew::new(
             state,
             owner,
             &bot.bot_id,
-        )))
-        .with_skill_jobs(std::sync::Arc::new(skills::ApiSkillJobs {
-            skills: skills::ApiSkills::new(state, owner, &bot.bot_id),
-            state: state.clone(),
-            workspace: workspace.clone(),
-        }))
-        .with_images(std::sync::Arc::new(images::ImageBits::new(
             std::sync::Arc::new(profile.clone()),
             flow_like_state.clone(),
-            bot.image_model.clone(),
-        )))
+        )) as std::sync::Arc<dyn flow_like_bot_tools::crew::CrewBackend>
+    });
+    let host = BotToolsHost::new(TurnDeps {
+        owner: owner.to_string(),
+        bot: principal.clone(),
+        turn_id: turn_id.to_string(),
+        workspace: workspace.clone(),
+        host_tools: bot.host_tools.clone().with_user_context(
+            bot.has(flow_like_types::bot::BotCapability::UserContext)
+                && context_conversation.is_some(),
+        ),
+        directory: std::sync::Arc::new(directory::ApiDirectory {
+            state: state.clone(),
+            principal: principal.clone(),
+            bot: bot.clone(),
+        }),
+        access: std::sync::Arc::new(access::ApiAccess::for_bot(
+            state.clone(),
+            principal,
+            &workspace,
+        )),
+        models: TurnModels {
+            source,
+            chat: Some(chat.clone()),
+            embedding,
+        },
+        executor: executor_for(state),
+        grants,
+        secrets: std::sync::Arc::new(secrets::ServerSecrets::new(state, &bot.bot_id)),
+        connectors: Some(std::sync::Arc::new(connectors::ApiConnectors::new(
+            state,
+            owner,
+            &bot.bot_id,
+        ))),
+    })
+    .with_configuration(std::sync::Arc::new(configuration::ApiConfiguration::new(
+        state,
+        owner,
+        &bot.bot_id,
+        std::sync::Arc::new(profile.clone()),
+        flow_like_state.clone(),
+    )))
+    .with_notifier(notifier)
+    .with_people(std::sync::Arc::new(crate::bot_people::ServerPeople::new(
+        state,
+        &bot.bot_id,
+        owner,
+    )))
+    .with_user_context(std::sync::Arc::new(
+        crate::routes::bots::user_context::ServerUserContext::new(
+            state,
+            &bot.bot_id,
+            context_conversation,
+        ),
     ))
+    .with_scheduler(scheduler)
+    .with_skills(std::sync::Arc::new(skills::ApiSkills::new(
+        state,
+        owner,
+        &bot.bot_id,
+    )))
+    .with_skill_jobs(std::sync::Arc::new(skills::ApiSkillJobs {
+        skills: skills::ApiSkills::new(state, owner, &bot.bot_id),
+        state: state.clone(),
+        workspace: workspace.clone(),
+    }))
+    .with_images(std::sync::Arc::new(images::ImageBits::new(
+        std::sync::Arc::new(profile.clone()),
+        flow_like_state.clone(),
+        bot.image_model.clone(),
+    )));
+    Some(std::sync::Arc::new(match crew {
+        Some(crew) => host.with_crew(crew),
+        None => host,
+    }))
 }

@@ -26,7 +26,8 @@ use crate::secret_text::{Scrubber, fill_secrets};
 use crate::spec::{Approval, ToolSpec, schema_of};
 
 pub use backend::{
-    BrowserBackend, BrowserStep, Download, PageState, ScrollTo, SnapshotRequest, SnapshotView,
+    BrowserBackend, BrowserScreen, BrowserStep, Download, PageState, ScrollTo, SnapshotRequest,
+    SnapshotView,
 };
 
 pub const BROWSER_OPEN: &str = "browser_open";
@@ -353,6 +354,7 @@ pub async fn browser_snapshot(
             "url": view.page.url,
             "title": view.page.title,
             "snapshot": text,
+            "observation": backend.observation().await.ok().flatten(),
         }))
         .truncated(view.truncated || cut))
     }
@@ -466,6 +468,9 @@ async fn act_inner(
     enforce_site(backend, state, &page).await?;
     let mut result = page_json(&page);
     if let Some(object) = result.as_object_mut() {
+        if let Ok(Some(observation)) = backend.observation().await {
+            object.insert("observation".into(), json!(observation));
+        }
         object.insert("action".into(), json!(args.action));
         object.insert(
             "note".into(),
@@ -487,17 +492,24 @@ pub async fn browser_screenshot(
         .map_err(ToolError::from)?
         .ok_or_else(no_page)?;
     enforce_site(backend.as_ref(), &state, &page).await?;
-    let png = backend.screenshot().await.map_err(ToolError::from)?;
+    let capture = backend.capture().await.map_err(ToolError::from)?;
+    let png = capture.png;
     let mut output = ToolOutput::new(json!({
         "url": page.url,
         "title": page.title,
         "bytes": png.len(),
+        "observation": &capture.observation,
     }));
+    let mut annotated = ToolOutput::new(json!({}));
+    if crate::interaction_image::append(&mut annotated, &png, capture.observation.as_ref()) {
+        output.result["feedback_legend"] = json!(crate::interaction_image::LEGEND);
+    }
     output.images.push(ToolImage {
         label: format!("Screenshot of {}", page.url),
         mime: "image/png".into(),
         data: Bytes::from(png),
     });
+    output.images.extend(annotated.images);
     Ok(output)
 }
 

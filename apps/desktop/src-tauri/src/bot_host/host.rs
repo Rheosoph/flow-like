@@ -7,26 +7,30 @@
 use super::{
     gate::ApprovalGate,
     memory::{self, JobMemory},
+    notes::{LocalNotes, StatusSink},
     room_updates::LocalRoomUpdates,
     rule::{self, Waiting},
     store::{HostStore, StoreGrants},
     transcript::{self, Unreadable},
 };
 use chrono::{Duration as Age, Utc};
-use flow_like::{
-    flow::copilot::{
-        memory_open::follow_up,
-        platform::RoomUpdates,
-        tool_grants::{GrantStore, clear_tokens, resume_note},
-    },
+use flow_like::flow::copilot::{
+    decision::{self, Decision, DecisionParticipant},
+    bot_notes::NotesHandle,
+    decision_event::{self, EventDecision},
+    memory_open::follow_up,
+    platform::RoomUpdates,
+    tool_grants::{GrantStore, clear_tokens, resume_note},
 };
 use flow_like_local_bots::{Bot, Conversation, InboxEntry, LOCAL_OWNER_ID, SendEntryRequest};
-use flow_like_types::{bot_effective::BotRoomLimits, bot_message::ApprovalRequest};
 use flow_like_types::{
     bot::BotSystemKind,
-    bot_turn::{TurnStatus, failure_message_id, reply_message_id, turn_id},
+    bot_turn::{
+        DEFAULT_TURN_DEADLINE_SECS, TurnStatus, failure_message_id, reply_message_id, turn_id,
+    },
     inbox::{ConversationKind, InboxEntryKind, PrincipalKind, plain_envelope},
 };
+use flow_like_types::{bot_effective::BotRoomLimits, bot_message::ApprovalRequest};
 use std::{
     collections::{BTreeSet, HashMap, HashSet, VecDeque},
     sync::{Arc, Mutex, MutexGuard, PoisonError},
@@ -47,7 +51,7 @@ impl Default for HostConfig {
     fn default() -> Self {
         Self {
             slots: 4,
-            deadline: Duration::from_secs(600),
+            deadline: Duration::from_secs(DEFAULT_TURN_DEADLINE_SECS),
             max_age: Age::hours(24),
         }
     }
@@ -67,6 +71,7 @@ struct Live {
     cancel: watch::Sender<Option<Cancel>>,
     rerun: bool,
     posting: bool,
+    notes: Option<NotesHandle>,
 }
 
 #[derive(Default)]
@@ -249,21 +254,28 @@ impl BotHost {
 
     /// Cancels a queued or running turn without a reply; false when it isn't live or its reply is
     /// already being posted. The message stays unanswered until the next one arrives.
-    pub fn cancel(&self, turn_id: &str) -> bool {
-        let mut state = lock(&self.inner.state);
-        let Some(live) = state.live.values().find(|live| live.info.id == turn_id) else {
-            return false;
+    pub async fn cancel(&self, turn_id: &str) -> Result<bool, String> {
+        let (bot, room, trigger) = {
+            let state = lock(&self.inner.state);
+            let Some(live) = state.live.values().find(|live| live.info.id == turn_id) else {
+                return Ok(false);
+            };
+            if live.posting {
+                return Ok(false);
+            }
+            (
+                live.info.bot_id.clone(),
+                live.info.conversation_id.clone(),
+                live.info.trigger_message_id.clone(),
+            )
         };
-        if live.posting {
-            return false;
+        self.inner.store.cancel_run(&bot, &room, &trigger).await?;
+        let mut state = lock(&self.inner.state);
+        if let Some(live) = state.live.values().find(|live| live.info.id == turn_id) {
+            live.cancel.send_replace(Some(Cancel::User));
         }
-        live.cancel.send_replace(Some(Cancel::User));
-        let abandoned = (
-            live.info.bot_id.clone(),
-            live.info.trigger_message_id.clone(),
-        );
-        state.abandoned.insert(abandoned);
-        true
+        state.abandoned.insert((bot, trigger));
+        Ok(true)
     }
 }
 
@@ -359,17 +371,134 @@ impl Inner {
         if bot.system == Some(BotSystemKind::Flux) {
             return None;
         }
+        let recovery = match self.store.recovery_trigger(bot_id, &conversation.id).await {
+            Ok(trigger) => trigger,
+            Err(error) => {
+                tracing::warn!(%error, bot_id, "Bot host: recovery state could not be read");
+                return None;
+            }
+        };
+        if let Some(trigger) = recovery {
+            let prior: Vec<_> = entries
+                .iter()
+                .filter(|entry| entry.seq <= trigger.seq)
+                .cloned()
+                .collect();
+            let qualifying = |hold| {
+                rule::waiting_held(
+                    conversation.kind,
+                    bot_id,
+                    &prior,
+                    trigger.created_at - Age::seconds(1),
+                    hold,
+                    false,
+                )
+                .filter(|waiting| waiting.message_id == trigger.message_id)
+            };
+            let held = Some(super::interactive::hold_now(bot_id, &conversation.id));
+            if let Some(waiting) = qualifying(held) {
+                return Some((bot, waiting));
+            }
+            if qualifying(None).is_none()
+                && let Err(error) = self
+                    .store
+                    .cancel_run(bot_id, &conversation.id, &trigger.message_id)
+                    .await
+            {
+                tracing::warn!(%error, bot_id, "Bot host: a stale recovery checkpoint could not be retired");
+            }
+            return None;
+        }
         let not_before = (Utc::now() - self.config.max_age).fixed_offset();
         let hold = super::interactive::hold_now(bot_id, &conversation.id);
         let mentioned_only = self.mentioned_only(conversation, bot_id).await;
-        let waiting = rule::waiting_held(
+        let decision_state = {
+            if bot.model.decision.is_none() {
+                if let Err(error) = self.store.clear_room_wait(bot_id, &conversation.id).await {
+                    tracing::warn!(%error, bot_id, "Bot host: participant wait could not be cleared");
+                    return None;
+                }
+            }
+            match self
+                .store
+                .room_decision_state(bot_id, &conversation.id)
+                .await
+            {
+                Ok(state) => Some(state),
+                Err(error) => {
+                    tracing::warn!(%error, bot_id, "Bot host: participation state could not be read");
+                    return None;
+                }
+            }
+        };
+        let waiting_pending = decision_state
+            .as_ref()
+            .is_some_and(|state| state.participant_id.is_some() && !state.ready);
+        let normal = rule::waiting_held(
             conversation.kind,
             bot_id,
             entries,
             not_before,
             Some(hold),
-            mentioned_only,
-        )?;
+            mentioned_only || waiting_pending,
+        );
+        let resumed = decision_state
+            .as_ref()
+            .filter(|state| state.ready)
+            .and_then(|state| {
+                rule::waiting_participant(
+                    conversation.kind,
+                    bot_id,
+                    state.participant_id.as_deref()?,
+                    state.handled_through,
+                    entries,
+                    not_before,
+                    Some(hold),
+                )
+            });
+        let spoken = (conversation.kind == ConversationKind::Group
+            && bot.model.decision.is_some()
+            && !mentioned_only)
+            .then(|| {
+                rule::waiting_participant(
+                    conversation.kind,
+                    bot_id,
+                    LOCAL_OWNER_ID,
+                    decision_state
+                        .as_ref()
+                        .map_or(0, |state| state.handled_through),
+                    entries,
+                    not_before,
+                    Some(hold),
+                )
+            })
+            .flatten()
+            .filter(|waiting| {
+                entries.iter().any(|entry| {
+                    entry.message_id == waiting.message_id
+                        && entry.kind == InboxEntryKind::Transcript
+                })
+            });
+        let waiting = normal
+            .into_iter()
+            .chain(resumed)
+            .chain(spoken)
+            .max_by_key(|waiting| waiting.seq)?;
+        match self.store.run_cancelled(bot_id, &waiting.message_id).await {
+            Ok(false) => {}
+            Ok(true) => return None,
+            Err(error) => {
+                tracing::warn!(%error, bot_id, "Bot host: cancellation state could not be read");
+                return None;
+            }
+        }
+        if let Some(state) = decision_state {
+            if waiting.seq.is_none_or(|seq| seq <= state.handled_through)
+                || (state.participant_id.is_some() && !state.ready && !waiting.addressed)
+            {
+                return None;
+            }
+        }
         Some((bot, waiting))
     }
 
@@ -455,11 +584,13 @@ impl Inner {
                         finished_at: None,
                         error_code: None,
                         reply_message_id: None,
+                        status_text: None,
                     },
                     trigger_seq: None,
                     cancel: sender,
                     rerun: false,
                     posting: false,
+                    notes: None,
                 };
                 retarget(&mut live, bot_id, &waiting);
                 publish = Some(live.info.clone());
@@ -492,7 +623,7 @@ impl Inner {
         self.finish(&key, end);
     }
 
-    async fn execute(&self, key: &Key, cancel: &mut watch::Receiver<Option<Cancel>>) -> End {
+    async fn execute(self: &Arc<Self>, key: &Key, cancel: &mut watch::Receiver<Option<Cancel>>) -> End {
         let (bot_id, conversation_id) = key;
         let Some((conversation, entries)) = self.read(conversation_id).await else {
             return End::store_changed();
@@ -502,15 +633,26 @@ impl Inner {
         };
         let run_id = self.start(key, &waiting);
         let names = self.names(&conversation).await;
-        let memory = memory::source_for(
-            &self.store,
-            &conversation,
-            bot_id,
-            entries
-                .iter()
-                .find(|entry| entry.message_id == waiting.message_id),
-        )
-        .map(JobMemory);
+        let ephemeral_user_context = entries.iter().any(|entry| {
+            entry.message_id == waiting.message_id
+                && entry.envelope.get("body").is_some_and(|body| {
+                    flow_like_types::bot_user_context::response_for(body, &entry.sender_id, bot_id)
+                })
+        });
+        let memory = if ephemeral_user_context {
+            None
+        } else {
+            memory::source_for(
+                &self.store,
+                &conversation,
+                bot_id,
+                entries
+                    .iter()
+                    .find(|entry| entry.message_id == waiting.message_id),
+            )
+            .await
+            .map(JobMemory)
+        };
         let mut oldest_first = entries;
         oldest_first.reverse();
         let reacting = oldest_first.iter().any(|entry| {
@@ -547,32 +689,32 @@ impl Inner {
         if reacting && transcript.prompt.is_empty() {
             return End::silent();
         }
-        let requester = (conversation.kind == ConversationKind::Group
-            || reacting
-            || !transcript.addressed)
-            .then(|| {
-                let requester_id = oldest_first
-                    .iter()
-                    .find(|entry| entry.message_id == waiting.message_id)
-                    .map_or(LOCAL_OWNER_ID, |entry| entry.sender_id.as_str())
-                    .to_owned();
-                flow_like::flow::copilot::TurnRequester {
-                    requester_name: names.get(&requester_id).cloned(),
-                    requester_id,
-                    owner_id: LOCAL_OWNER_ID.to_owned(),
-                    owner_name: names.get(LOCAL_OWNER_ID).cloned(),
-                    audience: waiting.audience,
-                    room: conversation.title.clone(),
-                    addressed: transcript.addressed,
-                    reactions,
-                }
-            });
+        let requester =
+            (conversation.kind == ConversationKind::Group || reacting || !transcript.addressed)
+                .then(|| {
+                    let requester_id = oldest_first
+                        .iter()
+                        .find(|entry| entry.message_id == waiting.message_id)
+                        .map_or(LOCAL_OWNER_ID, |entry| entry.sender_id.as_str())
+                        .to_owned();
+                    flow_like::flow::copilot::TurnRequester {
+                        requester_name: names.get(&requester_id).cloned(),
+                        requester_id,
+                        owner_id: LOCAL_OWNER_ID.to_owned(),
+                        owner_name: names.get(LOCAL_OWNER_ID).cloned(),
+                        audience: waiting.audience,
+                        room: conversation.title.clone(),
+                        addressed: transcript.addressed,
+                        reactions,
+                    }
+                });
         let grants: Arc<dyn GrantStore> = Arc::new(StoreGrants {
             store: self.store.clone(),
             bot_id: bot_id.clone(),
         });
         let seen = grants.list().await.unwrap_or_default();
         let note = resume_note(grants.as_ref()).await;
+        let resumed = note.is_some();
         let waiting = Waiting {
             proactive: waiting.proactive || note.is_some(),
             ..waiting
@@ -597,17 +739,77 @@ impl Inner {
                         self.store.clone(),
                         bot_id,
                         trigger,
-                        names,
+                        names.clone(),
                     )) as Arc<dyn RoomUpdates>
                 })
             })
             .flatten();
-        let job = TurnJob {
+        let recovery: Option<Arc<dyn flow_like::flow::copilot::run_recovery::BotRunRecovery>> =
+            (self.store.supports_recovery() && !ephemeral_user_context).then(|| {
+                Arc::new(super::recovery::LocalRecovery::new(
+                    self.store.clone(),
+                    bot_id,
+                    conversation_id,
+                    &waiting.message_id,
+                    chrono::Utc::now().timestamp_millis().saturating_add(
+                        self.config.deadline.as_millis().min(i64::MAX as u128) as i64,
+                    ),
+                ))
+                    as Arc<dyn flow_like::flow::copilot::run_recovery::BotRunRecovery>
+            });
+        let checkpoint = if let Some(recovery) = &recovery {
+            match recovery.load().await {
+                Ok(checkpoint) => checkpoint,
+                Err(error) => {
+                    tracing::warn!(%error, bot_id, "Bot host: saved execution state could not be read");
+                    return End::abandoned(CODE_SETUP);
+                }
+            }
+        } else {
+            None
+        };
+        let recovering = checkpoint.is_some();
+        let saved_delivery = match checkpoint
+            .as_ref()
+            .map(decision_event::saved_delivery)
+            .transpose()
+        {
+            Ok(delivery) => delivery.flatten(),
+            Err(error) => {
+                tracing::warn!(%error, bot_id, "Bot host: saved event delivery could not be read");
+                return End::abandoned(CODE_SETUP);
+            }
+        };
+        let notes = if ephemeral_user_context {
+            None
+        } else {
+            let host = Arc::downgrade(self);
+            let sink_key = key.clone();
+            let status: StatusSink = Arc::new(move |text| {
+                if let Some(host) = host.upgrade() {
+                    host.set_status(&sink_key, text);
+                }
+            });
+            LocalNotes::handle(
+                self.store.clone(),
+                bot_id,
+                conversation_id,
+                Some(status),
+                transcript.topic_at,
+            )
+        };
+        if let Some(live) = lock(&self.state).live.get_mut(key) {
+            live.notes = notes.clone();
+        }
+        let mut job = TurnJob {
             run_id: run_id.clone(),
             bot_id: bot_id.clone(),
             conversation_id: conversation_id.clone(),
             profile_id: bot.profile_id.clone(),
             prompt,
+            acknowledgement: false,
+            ephemeral_user_context,
+            suppress_owner_notifications: false,
             history: transcript.history,
             memory: memory.clone(),
             room_updates,
@@ -616,21 +818,304 @@ impl Inner {
             hub_token: None,
             answered_round: None,
             claim: None,
+            recovery,
+            notes,
         };
+        if bot.model.decision.is_some() {
+            let authority = Arc::new(super::authorization::LocalAuthority::new(
+                self.store.clone(),
+                bot_id,
+                conversation_id,
+                flow_like_bot_host::event::trigger(&oldest_first, &waiting.message_id),
+            ));
+            gate.set_inference(Some(flow_like_bot_host::authorization::RunnerInference::new(
+                self.runner.clone(),
+                &job,
+                grants.clone(),
+                authority,
+            )));
+        }
+        let call_utterance = oldest_first.iter().any(|entry| {
+            entry.message_id == waiting.message_id && entry.kind == InboxEntryKind::Transcript
+        });
+        let event = (saved_delivery.is_some()
+            || (!resumed
+                && !recovering
+                && !explicitly_delegated(bot_id, &waiting.message_id, &oldest_first)))
+        .then(|| flow_like_bot_host::event::trigger(&oldest_first, &waiting.message_id))
+        .flatten();
+        if event.as_ref().is_some_and(decision_event::monitoring)
+            && saved_delivery.is_none_or(|delivery| delivery.choice.is_none())
+        {
+            let previous = match self
+                .store
+                .previous_monitor_result(bot_id, conversation_id, &waiting.message_id)
+                .await
+            {
+                Ok(previous) => previous,
+                Err(error) => {
+                    tracing::warn!(%error, bot_id, "Bot host: previous monitoring result is unavailable");
+                    None
+                }
+            };
+            job.prompt = format!(
+                "{}\n\nCurrent scheduled check:\n{}",
+                flow_like_bot_host::event::baseline_note(previous.as_deref()),
+                job.prompt
+            );
+        }
+        let mut event_delivery = saved_delivery.and_then(|delivery| delivery.choice);
+        if let Some(event) = &event
+            && bot.model.decision.is_some()
+            && saved_delivery.is_none()
+            && !resumed
+            && !recovering
+        {
+            let classified = tokio::select! {
+                biased;
+                reason = cancelled(cancel) => return End::by(reason),
+                result = tokio::time::timeout(Duration::from_secs(decision::TIMEOUT_SECS), flow_like_bot_host::event::classify(self.runner.as_ref(), &job, event, None)) => result,
+            };
+            match classified {
+                Ok(Ok(Some(EventDecision::Ignore))) => {
+                    return self.quiet_event(key, &waiting).await;
+                }
+                Ok(Ok(choice)) => event_delivery = choice,
+                Ok(Err(RunError::SessionChanged)) => return End::cancelled(CODE_SESSION_CHANGED),
+                Ok(Err(_)) | Err(_) => tracing::warn!(
+                    bot_id,
+                    "Bot host: event decision unavailable; processing normally"
+                ),
+            }
+            let instruction = if decision_event::monitoring(event) {
+                decision_event::MONITOR_INSTRUCTION
+            } else {
+                event_delivery
+                    .map(EventDecision::instruction)
+                    .unwrap_or_default()
+            };
+            if !instruction.is_empty() {
+                job.prompt
+                    .push_str(&format!("\n\nHost delivery instruction: {instruction}"));
+                job.suppress_owner_notifications = true;
+            }
+        }
+        let delivery_state = saved_delivery.or_else(|| {
+            job.suppress_owner_notifications
+                .then(|| decision_event::EventDelivery {
+                    choice: event_delivery,
+                    monitoring: event.as_ref().is_some_and(decision_event::monitoring),
+                })
+        });
+        let event_recovery = delivery_state
+            .and_then(|delivery| flow_like_bot_host::event::attach_delivery(&mut job, delivery));
+        if (conversation.kind == ConversationKind::Group || call_utterance)
+            && event.is_none()
+            && bot.model.decision.is_some()
+            && !resumed
+            && !recovering
+            && !explicitly_delegated(bot_id, &waiting.message_id, &oldest_first)
+        {
+            let participants = conversation
+                .members
+                .iter()
+                .map(|member| DecisionParticipant {
+                    id: member.principal_id.clone(),
+                    name: names
+                        .get(&member.principal_id)
+                        .cloned()
+                        .unwrap_or_else(|| member.principal_id.clone()),
+                    kind: member.kind.as_str().to_owned(),
+                })
+                .collect::<Vec<_>>();
+            if let Ok(request) =
+                participation_request(&job, &waiting.message_id, &oldest_first, &participants)
+            {
+                let decision = tokio::select! {
+                    biased;
+                    reason = cancelled(cancel) => return End::by(reason),
+                    result = tokio::time::timeout(Duration::from_secs(decision::TIMEOUT_SECS), self.runner.decide(&job, &request)) => result,
+                };
+                match decision {
+                    Ok(Ok(Decision::NoAnswer)) => {
+                        return match self
+                            .store
+                            .settle_room_decision(
+                                bot_id,
+                                conversation_id,
+                                &waiting.message_id,
+                                None,
+                            )
+                            .await
+                        {
+                            Ok(_) => End::silent(),
+                            Err(error) => {
+                                tracing::warn!(%error, bot_id, "Bot host: participation decision could not be saved");
+                                End::abandoned(CODE_SETUP)
+                            }
+                        };
+                    }
+                    Ok(Ok(Decision::WaitFor(participant))) => {
+                        let participant = (conversation.kind == ConversationKind::Group)
+                            .then_some(participant.as_str());
+                        match self
+                            .store
+                            .settle_room_decision(
+                                bot_id,
+                                conversation_id,
+                                &waiting.message_id,
+                                participant,
+                            )
+                            .await
+                        {
+                            Ok(flow_like_local_bots::RoomWaitOutcome::Parked)
+                                if participant.is_none() =>
+                            {
+                                return End::silent();
+                            }
+                            Ok(flow_like_local_bots::RoomWaitOutcome::Parked) => {
+                                return End::waiting();
+                            }
+                            Ok(flow_like_local_bots::RoomWaitOutcome::AlreadyAnswered) => {}
+                            Ok(flow_like_local_bots::RoomWaitOutcome::Unavailable) => {}
+                            Ok(flow_like_local_bots::RoomWaitOutcome::Superseded) => {
+                                return End::silent();
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, bot_id, "Bot host: participant wait could not be saved");
+                                return End::abandoned(CODE_SETUP);
+                            }
+                        }
+                    }
+                    Ok(Err(RunError::SessionChanged)) => {
+                        return End::cancelled(CODE_SESSION_CHANGED);
+                    }
+                    Ok(Err(_)) | Err(_) => tracing::warn!(
+                        bot_id,
+                        "Bot host: decision model unavailable; using normal response behavior"
+                    ),
+                    Ok(Ok(Decision::Acknowledge)) => job.acknowledgement = call_utterance,
+                    Ok(Ok(Decision::AnswerNow)) => {}
+                }
+            }
+        }
+        if (conversation.kind == ConversationKind::Group || call_utterance)
+            && bot.model.decision.is_some()
+        {
+            if let Err(error) = self.store.clear_room_wait(bot_id, conversation_id).await {
+                tracing::warn!(%error, bot_id, "Bot host: previous participant wait could not be cleared");
+                return End::abandoned(CODE_SETUP);
+            }
+        }
+        let deadline = flow_like_bot_host::recovery::remaining_deadline(
+            job.recovery.as_ref(),
+            self.config.deadline,
+        );
+        let approval_recovery = job.recovery.clone();
+        let acknowledgement = job.acknowledgement;
+        let event_job = delivery_state.map(|_| job.clone());
         let outcome = tokio::select! {
             biased;
             reason = cancelled(cancel) => {
                 self.runner.cancel(&run_id);
                 return End::by(reason);
             }
-            outcome = tokio::time::timeout(self.config.deadline, self.runner.run(job)) => outcome,
+            outcome = tokio::time::timeout(deadline, self.runner.run(job)) => outcome,
         };
         if let Some(card) = gate.parked() {
+            if let Err(error) = flow_like_bot_host::recovery::preserve_unexecuted_approval(
+                approval_recovery.as_ref(),
+                &gate,
+            )
+            .await
+            {
+                return self
+                    .fail(
+                        key,
+                        &waiting,
+                        CODE_SETUP,
+                        &format!("The pending approval could not be saved: {error}"),
+                        cancel,
+                    )
+                    .await;
+            }
             return self.park(key, &waiting, &card, cancel).await;
         }
-        let quiet = requester.as_ref().is_some_and(|r| r.may_stay_silent());
+        let failed_execution = if let Some(job) = &event_job {
+            flow_like_bot_host::event::failed_execution(job).await
+        } else {
+            false
+        };
+        if failed_execution {
+            event_delivery = None;
+        }
+        let pending_monitor = delivery_state.is_some_and(|saved| saved.monitoring)
+            && event_delivery.is_none()
+            && !failed_execution
+            && matches!(&outcome, Ok(Ok(text)) if !text.trim().is_empty());
+        if pending_monitor {
+            event_delivery = Some(EventDecision::Notify);
+        }
+        if let (Some(event), Some(job), Ok(Ok(text))) = (&event, &event_job, &outcome)
+            && decision_event::monitoring(event)
+            && pending_monitor
+            && !text.trim().is_empty()
+        {
+            let classified = tokio::select! {
+                biased;
+                reason = cancelled(cancel) => return End::by(reason),
+                result = tokio::time::timeout(Duration::from_secs(decision::TIMEOUT_SECS), flow_like_bot_host::event::classify(self.runner.as_ref(), job, event, Some(text))) => result,
+            };
+            match classified {
+                Ok(Ok(choice)) => event_delivery = Some(choice.unwrap_or(EventDecision::Notify)),
+                Ok(Err(RunError::SessionChanged)) => return End::cancelled(CODE_SESSION_CHANGED),
+                Ok(Err(_)) | Err(_) => {
+                    event_delivery = Some(EventDecision::Notify);
+                    tracing::warn!(
+                        bot_id,
+                        "Bot host: monitoring decision unavailable; delivering the result"
+                    );
+                }
+            }
+        }
+        if let Some(recovery) = &event_recovery
+            && !failed_execution
+            && matches!(&outcome, Ok(Ok(_)))
+            && delivery_state.is_some_and(|saved| saved.choice != event_delivery)
+            && let Err(error) = recovery.record(event_delivery).await
+        {
+            return self
+                .post(
+                    key,
+                    &waiting,
+                    &format!(
+                        "The event completed, but its delivery state could not be saved: {error}"
+                    ),
+                    Some(CODE_SETUP),
+                    cancel,
+                )
+                .await;
+        }
+        if matches!(&outcome, Ok(Ok(_))) && event_delivery.is_some_and(EventDecision::quiet) {
+            clear_tokens(grants.as_ref(), &seen).await;
+            if let Some(JobMemory(source)) = memory {
+                follow_up(bot_id, source);
+            }
+            return self.quiet_event(key, &waiting).await;
+        }
+        let quiet = event.is_none() && requester.as_ref().is_some_and(|r| r.may_stay_silent());
+        let output_waiting = Waiting {
+            proactive: waiting.proactive && event_delivery != Some(EventDecision::Respond),
+            ..waiting.clone()
+        };
         match outcome {
-            Ok(Ok(text)) if requester.as_ref().is_some_and(|r| r.answer_is_silent(&text)) => {
+            Ok(Ok(text))
+                if requester
+                    .as_ref()
+                    .is_some_and(|r| r.answer_is_silent(&text))
+                    || (acknowledgement
+                        && flow_like::flow::copilot::bot_run::is_silent_reply(&text)) =>
+            {
                 End::silent()
             }
             Ok(Err(RunError::SessionChanged)) => End::cancelled(CODE_SESSION_CHANGED),
@@ -641,18 +1126,21 @@ impl Inner {
             }
             Ok(Ok(text)) if !text.trim().is_empty() => {
                 let end = self
-                    .post(
+                    .post_reply(
                         key,
-                        &waiting,
+                        &output_waiting,
                         &clipped(&text, MAX_REPLY_CHARS),
                         None,
+                        acknowledgement,
                         cancel,
                     )
                     .await;
                 if end.status == TurnStatus::Done {
                     clear_tokens(grants.as_ref(), &seen).await;
                 }
-                if let (Some(JobMemory(source)), TurnStatus::Done) = (memory, &end.status) {
+                if !acknowledgement
+                    && let (Some(JobMemory(source)), TurnStatus::Done) = (memory, &end.status)
+                {
                     follow_up(bot_id, source);
                 }
                 end
@@ -715,7 +1203,8 @@ impl Inner {
                     card.tool,
                     clipped(&error, MAX_FAILURE_DETAIL_CHARS)
                 );
-                self.post(key, waiting, &text, Some(CODE_SETUP), cancel).await
+                self.post(key, waiting, &text, Some(CODE_SETUP), cancel)
+                    .await
             }
         }
     }
@@ -774,6 +1263,24 @@ impl Inner {
         names
     }
 
+    async fn quiet_event(&self, key: &Key, waiting: &Waiting) -> End {
+        match self
+            .store
+            .settle_room_decision(&key.0, &key.1, &waiting.message_id, None)
+            .await
+        {
+            Ok(
+                flow_like_local_bots::RoomWaitOutcome::Parked
+                | flow_like_local_bots::RoomWaitOutcome::Superseded,
+            ) => End::silent(),
+            Ok(_) => End::abandoned(CODE_NOT_WAITING),
+            Err(error) => {
+                tracing::warn!(%error, "Bot host: quiet background result could not be recorded");
+                End::abandoned(CODE_SETUP)
+            }
+        }
+    }
+
     /// Posts the bot's reply, unless the turn was cancelled first; from here on it can't be.
     async fn post(
         &self,
@@ -783,6 +1290,20 @@ impl Inner {
         error_code: Option<&str>,
         cancel: &mut watch::Receiver<Option<Cancel>>,
     ) -> End {
+        self.post_reply(key, waiting, text, error_code, false, cancel)
+            .await
+    }
+
+    async fn post_reply(
+        &self,
+        key: &Key,
+        waiting: &Waiting,
+        text: &str,
+        error_code: Option<&str>,
+        acknowledgement: bool,
+        cancel: &mut watch::Receiver<Option<Cancel>>,
+    ) -> End {
+        let note;
         {
             let mut state = lock(&self.state);
             let Some(live) = state.live.get_mut(key) else {
@@ -792,6 +1313,7 @@ impl Inner {
                 return End::by(reason);
             }
             live.posting = true;
+            note = live.notes.as_ref().and_then(NotesHandle::touched);
         }
         let (bot_id, conversation_id) = key;
         let message_id = if error_code.is_some() {
@@ -799,10 +1321,22 @@ impl Inner {
         } else {
             reply_message_id(bot_id, &waiting.message_id)
         };
-        let request = reply_request(message_id.clone(), waiting, text, error_code);
+        let mut request = reply_request(message_id.clone(), waiting, text, error_code);
+        if error_code.is_none()
+            && acknowledgement
+            && let Some(envelope) = request.envelope.as_mut()
+        {
+            envelope["body"][decision::ACKNOWLEDGEMENT_FIELD] = serde_json::json!(true);
+        }
+        if error_code.is_none()
+            && !acknowledgement
+            && let Some(envelope) = request.envelope.as_mut()
+        {
+            flow_like_bot_host::notes::attach_note(&mut envelope["body"], note.as_ref());
+        }
         match self.store.send(conversation_id, bot_id, request).await {
             Ok(_) => {
-                if error_code.is_none() && waiting.proactive {
+                if error_code.is_none() && !acknowledgement && waiting.proactive {
                     self.alert_owner(bot_id, &message_id, text).await;
                 }
                 End::posted(message_id, error_code)
@@ -838,6 +1372,22 @@ impl Inner {
         info.id
     }
 
+    /// Shows `status` on the running turn; `None` clears it.
+    fn set_status(&self, key: &Key, status: Option<String>) {
+        let info = {
+            let mut state = lock(&self.state);
+            let Some(live) = state.live.get_mut(key) else {
+                return;
+            };
+            if live.info.status != TurnStatus::Running || live.info.status_text == status {
+                return;
+            }
+            live.info.status_text = status;
+            live.info.clone()
+        };
+        self.events.turn(&info);
+    }
+
     fn finish(&self, key: &Key, end: End) {
         let (info, rerun) = {
             let mut state = lock(&self.state);
@@ -848,6 +1398,7 @@ impl Inner {
             live.info.finished_at = Some(now());
             live.info.error_code = end.error_code;
             live.info.reply_message_id = end.reply;
+            live.info.status_text = None;
             if end.abandon {
                 state
                     .abandoned
@@ -863,6 +1414,67 @@ impl Inner {
         if rerun {
             self.poke(Some(&key.1));
         }
+    }
+}
+
+fn explicitly_delegated(bot_id: &str, trigger: &str, entries: &[InboxEntry]) -> bool {
+    entries.iter().any(|entry| {
+        entry.message_id == trigger
+            && entry.kind == InboxEntryKind::Message
+            && entry.sender_id != bot_id
+            && entry.sender_id != LOCAL_OWNER_ID
+            && rule::is_plain(entry)
+            && entry
+                .envelope
+                .get("body")
+                .and_then(|body| flow_like_types::bot_message::MessageBody::parse(body).ok())
+                .is_some_and(|body| {
+                    body.mentions.iter().any(|id| id == bot_id)
+                        && body.ask.is_some_and(|ask| {
+                            ask.id == entry.message_id
+                                && ask.chain.last().is_none_or(|id| id == &entry.sender_id)
+                        })
+                })
+    })
+}
+
+#[cfg(test)]
+mod participation_guards {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn only_a_valid_addressed_bot_request_bypasses_participation() {
+        let mut entry = InboxEntry {
+            id: "entry".into(),
+            message_id: "question".into(),
+            conversation_id: "room".into(),
+            sender_id: "peer".into(),
+            kind: InboxEntryKind::Message,
+            envelope: plain_envelope(json!({
+                "text": "What is the total?", "mentions": ["bot"],
+                "ask": {
+                    "id": "question", "origin_conversation": "origin", "hops": 1,
+                    "reply_by": (Utc::now() + Age::days(1)).to_rfc3339(),
+                    "chain": ["peer"], "wait_secs": 30, "round": 1,
+                },
+            })),
+            created_at: Utc::now().fixed_offset(),
+            seq: Some(1),
+            cursor: String::new(),
+        };
+        let delegated = |entry: &InboxEntry| {
+            explicitly_delegated("bot", "question", std::slice::from_ref(entry))
+        };
+        assert!(delegated(&entry));
+        entry.envelope["body"]["ask"]["chain"] = json!(["another-bot"]);
+        assert!(!delegated(&entry));
+        entry.envelope["body"]["ask"]["chain"] = json!(["peer"]);
+        entry.sender_id = LOCAL_OWNER_ID.into();
+        assert!(!delegated(&entry));
+        entry.sender_id = "peer".into();
+        entry.envelope["body"]["ask"]["id"] = json!("");
+        assert!(!delegated(&entry));
     }
 }
 

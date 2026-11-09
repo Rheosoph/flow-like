@@ -6,6 +6,7 @@ use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
+pub(super) static LOGIN_LOCK: Mutex<()> = Mutex::const_new(());
 static PROMPTS: LazyLock<std::sync::Mutex<HashMap<String, Instant>>> =
     LazyLock::new(std::sync::Mutex::default);
 const LOGIN_TTL_SECONDS: u64 = 10 * 60;
@@ -25,6 +26,30 @@ pub(super) struct PendingLogin {
     expires: u64,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub(super) struct ConsumedLogin {
+    fingerprint: String,
+    redirect_uri: String,
+}
+
+impl ConsumedLogin {
+    fn new(fields: &HashMap<String, String>, redirect_uri: String) -> Self {
+        let ordered: std::collections::BTreeMap<_, _> = fields.iter().collect();
+        let fingerprint = URL_SAFE_NO_PAD.encode(Sha256::digest(
+            serde_json::to_vec(&ordered).expect("callback fields serialize"),
+        ));
+        Self {
+            fingerprint,
+            redirect_uri,
+        }
+    }
+
+    fn matches(&self, url: &reqwest::Url, fields: &HashMap<String, String>) -> bool {
+        callback_matches(url, &self.redirect_uri)
+            && self.fingerprint == Self::new(fields, self.redirect_uri.clone()).fingerprint
+    }
+}
+
 struct Discovery {
     configuration: Configuration,
     authorization_endpoint: String,
@@ -37,6 +62,9 @@ pub(super) async fn profile_hub(app: &AppHandle, profile_id: &str) -> Result<Str
         .await
         .map_err(|_| "Settings are unavailable")?;
     let settings = state.lock().await;
+    if profile_id == ONBOARDING_PROFILE_ID {
+        return onboarding_hub(&settings.default_hub);
+    }
     let profile = settings
         .profiles
         .get(profile_id)
@@ -206,18 +234,23 @@ async fn begin_login_for_generation(
     profile_id: String,
     expected_generation: Option<&str>,
 ) -> Result<(), String> {
+    let _login = LOGIN_LOCK.lock().await;
     initialize(app_handle.clone());
     let (hub, key, session, generation) = {
         let settings = crate::state::TauriSettingsState::construct(&app_handle)
             .await
             .map_err(|_| "Settings are unavailable")?;
         let settings = settings.lock().await;
-        let profile = settings
-            .profiles
-            .get(&profile_id)
-            .ok_or("The authentication profile no longer exists")?;
-        let hub = flow_like::hub::hub_origin(&profile.hub_profile.hub, profile.hub_profile.secure)
-            .ok_or("This profile has no valid hub origin")?;
+        let hub = if profile_id == ONBOARDING_PROFILE_ID && settings.profiles.is_empty() {
+            onboarding_hub(&settings.default_hub)?
+        } else {
+            let profile = settings
+                .profiles
+                .get(&profile_id)
+                .ok_or("The authentication profile no longer exists")?;
+            flow_like::hub::hub_origin(&profile.hub_profile.hub, profile.hub_profile.secure)
+                .ok_or("This profile has no valid hub origin")?
+        };
         // Profile changes revoke under this same lock. Capture the generation before
         // a hub change can invalidate this intent and then restore the previous hub.
         let (key, session) = session(&profile_id, &hub).await?;
@@ -496,6 +529,72 @@ fn callback_matches(received: &reqwest::Url, redirect: &str) -> bool {
             && received.path().trim_matches('/').is_empty())
 }
 
+enum CallbackClaim {
+    Unmatched,
+    Replayed,
+    Pending(PendingLogin, String),
+}
+
+async fn claim_callback(
+    key: &str,
+    session: &Mutex<Session>,
+    url: &reqwest::Url,
+    fields: &HashMap<String, String>,
+    state: &str,
+) -> Result<CallbackClaim, String> {
+    let mut session = session.lock().await;
+    let saved = match session.load(key).await {
+        Ok(saved) => saved.clone(),
+        Err(_) => return Ok(CallbackClaim::Unmatched),
+    };
+    // iOS and launch-URL replay can deliver the same authorization response
+    // concurrently or after completion. Keep only a digest, never the code.
+    if saved
+        .consumed_login
+        .as_ref()
+        .is_some_and(|login| login.matches(url, fields))
+    {
+        return Ok(CallbackClaim::Replayed);
+    }
+    let Some(pending) = saved
+        .pending_login
+        .clone()
+        .filter(|pending| pending.state == state)
+    else {
+        return Ok(CallbackClaim::Unmatched);
+    };
+    if pending.expires <= now_seconds() || !callback_matches(url, &pending.redirect_uri) {
+        return Err("Authentication callback expired or targets another redirect".into());
+    }
+    if fields.get("iss").is_some_and(|issuer| {
+        issuer
+            != pending
+                .configuration
+                .issuer
+                .as_ref()
+                .unwrap_or(&pending.configuration.authority)
+    }) || fields
+        .get("client_id")
+        .is_some_and(|client| client != &pending.configuration.client_id)
+    {
+        return Err(
+            "Authentication callback belongs to another identity provider or client".into(),
+        );
+    }
+    let generation = saved.generation.clone();
+    session
+        .save(
+            key,
+            SavedSession {
+                pending_login: None,
+                consumed_login: Some(ConsumedLogin::new(fields, pending.redirect_uri.clone())),
+                ..saved
+            },
+        )
+        .await?;
+    Ok(CallbackClaim::Pending(pending, generation))
+}
+
 pub(crate) async fn handle_callback(app: &AppHandle, raw: &str) -> Result<bool, String> {
     let (url, fields) = callback_fields(raw)?;
     let Some(state) = fields
@@ -504,65 +603,33 @@ pub(crate) async fn handle_callback(app: &AppHandle, raw: &str) -> Result<bool, 
     else {
         return Ok(false);
     };
+    let _callback = LOGIN_LOCK.lock().await;
     let profiles = {
         let settings = crate::state::TauriSettingsState::construct(app)
             .await
             .map_err(|_| "Settings are unavailable")?;
         let settings = settings.lock().await;
-        settings
+        let mut profiles = settings
             .profiles
             .values()
-            .map(|profile| profile.hub_profile.clone())
-            .collect::<Vec<_>>()
+            .filter_map(|profile| {
+                flow_like::hub::hub_origin(&profile.hub_profile.hub, profile.hub_profile.secure)
+                    .map(|hub| (profile.hub_profile.id.clone(), hub))
+            })
+            .collect::<Vec<_>>();
+        if let Ok(hub) = onboarding_hub(&settings.default_hub) {
+            profiles.push((ONBOARDING_PROFILE_ID.to_owned(), hub));
+        }
+        profiles
     };
-    for profile in profiles {
-        let Some(hub) = flow_like::hub::hub_origin(&profile.hub, profile.secure) else {
-            continue;
-        };
-        let (key, session) = session(&profile.id, &hub).await?;
-        let (pending, generation) = {
-            let mut session = session.lock().await;
-            let saved = match session.load(&key).await {
-                Ok(saved) => saved.clone(),
-                Err(_) => continue,
+    for (profile_id, hub) in profiles {
+        let (key, session) = session(&profile_id, &hub).await?;
+        let (pending, generation) =
+            match claim_callback(&key, &session, &url, &fields, state).await? {
+                CallbackClaim::Unmatched => continue,
+                CallbackClaim::Replayed => return Ok(true),
+                CallbackClaim::Pending(pending, generation) => (pending, generation),
             };
-            let Some(pending) = saved
-                .pending_login
-                .clone()
-                .filter(|pending| &pending.state == state)
-            else {
-                continue;
-            };
-            if pending.expires <= now_seconds() || !callback_matches(&url, &pending.redirect_uri) {
-                return Err("Authentication callback expired or targets another redirect".into());
-            }
-            if fields.get("iss").is_some_and(|issuer| {
-                issuer
-                    != pending
-                        .configuration
-                        .issuer
-                        .as_ref()
-                        .unwrap_or(&pending.configuration.authority)
-            }) || fields
-                .get("client_id")
-                .is_some_and(|client| client != &pending.configuration.client_id)
-            {
-                return Err(
-                    "Authentication callback belongs to another identity provider or client".into(),
-                );
-            }
-            let generation = saved.generation.clone();
-            session
-                .save(
-                    &key,
-                    SavedSession {
-                        pending_login: None,
-                        ..saved
-                    },
-                )
-                .await?;
-            (pending, generation)
-        };
         if fields.contains_key("error") {
             return Err("Sign-in was cancelled or refused by the identity provider".into());
         }
@@ -623,11 +690,11 @@ pub(crate) async fn handle_callback(app: &AppHandle, raw: &str) -> Result<bool, 
             }
             user["refresh_token"] = refresh.clone();
         }
-        if profile_hub(app, &profile.id).await? != hub {
+        if profile_hub(app, &profile_id).await? != hub {
             return Err("The profile hub changed during sign-in".into());
         }
         write_session(
-            profile.id.clone(),
+            profile_id.clone(),
             hub.clone(),
             generation,
             pending.configuration,
@@ -635,12 +702,12 @@ pub(crate) async fn handle_callback(app: &AppHandle, raw: &str) -> Result<bool, 
         )
         .await?;
         if let Ok(mut prompts) = PROMPTS.lock() {
-            prompts.remove(&profile.id);
+            prompts.remove(&profile_id);
         }
         crate::utils::emit_to_ui(
             app,
             "native-auth-changed",
-            json!({"profileId":profile.id,"hub":hub}),
+            json!({"profileId":profile_id,"hub":hub}),
         );
         return Ok(true);
     }
@@ -749,6 +816,147 @@ mod tests {
         assert!(!callback_matches(
             &reqwest::Url::parse("https://app.flow-like.com/another?state=a").unwrap(),
             redirect
+        ));
+    }
+
+    #[tokio::test]
+    async fn replayed_callbacks_are_consumed_once_before_and_after_session_commit() {
+        let pending = login_request(Discovery {
+            configuration: config(),
+            authorization_endpoint: "https://issuer.test/authorize".into(),
+            redirect_uri: "https://app.flow-like.com/desktop/callback".into(),
+            scope: "openid".into(),
+        })
+        .unwrap();
+        let hub = format!("https://{}.test", uuid::Uuid::new_v4());
+        let (key, session) = session("callback-profile", &hub).await.unwrap();
+        session
+            .lock()
+            .await
+            .save(
+                &key,
+                SavedSession {
+                    pending_login: Some(pending.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let (url, fields) = callback_fields(&format!(
+            "flow-like://auth?state={}&code=single-use-code",
+            pending.state
+        ))
+        .unwrap();
+        let (first, second) = tokio::join!(
+            claim_callback(&key, &session, &url, &fields, &pending.state),
+            claim_callback(&key, &session, &url, &fields, &pending.state),
+        );
+        let generation = match (first.unwrap(), second.unwrap()) {
+            (CallbackClaim::Pending(_, generation), CallbackClaim::Replayed)
+            | (CallbackClaim::Replayed, CallbackClaim::Pending(_, generation)) => generation,
+            _ => panic!("The code must be exchanged exactly once"),
+        };
+        let expiry = now_seconds() + 3600;
+        let token = format!(
+            "e30.{}.signature",
+            URL_SAFE_NO_PAD.encode(json!({"sub":"alice","exp":expiry}).to_string())
+        );
+        write_session(
+            "callback-profile".into(),
+            hub,
+            generation,
+            config(),
+            json!({"access_token":token,"profile":{"sub":"alice"},"expires_at":expiry}).to_string(),
+        )
+        .await
+        .unwrap();
+
+        // Re-read durable state as a newly started process would.
+        let restarted = Mutex::new(Session::default());
+        assert!(matches!(
+            claim_callback(&key, &restarted, &url, &fields, &pending.state)
+                .await
+                .unwrap(),
+            CallbackClaim::Replayed
+        ));
+        let (url, fields) = callback_fields(&format!(
+            "https://app.flow-like.com/desktop/callback?code=single-use-code&state={}",
+            pending.state
+        ))
+        .unwrap();
+        assert!(matches!(
+            claim_callback(&key, &restarted, &url, &fields, &pending.state)
+                .await
+                .unwrap(),
+            CallbackClaim::Replayed
+        ));
+        let (url, fields) = callback_fields(&format!(
+            "flow-like://auth?state={}&code=different-code",
+            pending.state
+        ))
+        .unwrap();
+        assert!(matches!(
+            claim_callback(&key, &restarted, &url, &fields, &pending.state)
+                .await
+                .unwrap(),
+            CallbackClaim::Unmatched
+        ));
+        let persisted =
+            String::from_utf8(store::read(&key).await.unwrap().unwrap().to_vec()).unwrap();
+        assert!(!persisted.contains("single-use-code"));
+    }
+
+    #[tokio::test]
+    async fn finishing_onboarding_preserves_a_login_still_open_in_the_browser() {
+        let pending = login_request(Discovery {
+            configuration: config(),
+            authorization_endpoint: "https://issuer.test/authorize".into(),
+            redirect_uri: "https://app.flow-like.com/desktop/callback".into(),
+            scope: "openid".into(),
+        })
+        .unwrap();
+        let hub = format!("https://{}.test", uuid::Uuid::new_v4());
+        let (source_key, source) = session(ONBOARDING_PROFILE_ID, &hub).await.unwrap();
+        source
+            .lock()
+            .await
+            .save(
+                &source_key,
+                SavedSession {
+                    pending_login: Some(pending.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let profile = flow_like::profile::Profile {
+            id: "selected".into(),
+            hub: hub.clone(),
+            secure: true,
+            ..Default::default()
+        };
+        claim_onboarding_session(&profile, &hub).await.unwrap();
+        assert!(
+            source
+                .lock()
+                .await
+                .load(&source_key)
+                .await
+                .unwrap()
+                .pending_login
+                .is_none()
+        );
+        let (key, target) = session(&profile.id, &hub).await.unwrap();
+        let (url, fields) = callback_fields(&format!(
+            "flow-like://auth?state={}&code=single-use-code",
+            pending.state
+        ))
+        .unwrap();
+        assert!(matches!(
+            claim_callback(&key, &target, &url, &fields, &pending.state)
+                .await
+                .unwrap(),
+            CallbackClaim::Pending(_, _)
         ));
     }
 

@@ -286,6 +286,39 @@ export interface DeviceCrypto {
 		password: Uint8Array,
 		ciphertext: Uint8Array,
 	): unknown;
+	/** A new inbox key: the base64url seed to keep and its public half. */
+	inboxNewKey(): {
+		seed: string;
+		key_id: string;
+		algorithm: string;
+		public_key: string;
+		fingerprint: string;
+	};
+	inboxPublicKey(seed: string): {
+		key_id: string;
+		algorithm: string;
+		public_key: string;
+		fingerprint: string;
+	};
+	inboxSeal(
+		scope: { conversation_id: string; message_id: string; sender_id: string },
+		members: {
+			principal_id: string;
+			keys: { key_id: string; public_key: string }[];
+		}[],
+		body: unknown,
+	): Record<string, unknown>;
+	/** Opened bodies, `null` where none of `seeds` opens an entry. */
+	inboxOpen(
+		seeds: string[],
+		principalId: string,
+		entries: {
+			conversation_id: string;
+			message_id: string;
+			sender_id: string;
+			envelope: unknown;
+		}[],
+	): unknown[];
 	rewrapControllerVaults(
 		deviceId: string,
 		currentPassword: Uint8Array,

@@ -27,7 +27,9 @@ use serde_json::{Value, json};
 
 use super::bot_run::{BotRunContext, BotToolBridge, BotToolHost, BotToolset, bot_system_prompt};
 use super::bot_talk::ASK_BOT_TOOL;
-use super::platform::{PlatformCopilot, PlatformSurface, PlatformToolBridge};
+use super::platform::{
+    IncompleteWork, PlatformCopilot, PlatformSurface, PlatformToolBridge, WorkStopReason,
+};
 use super::tool_spec::{
     MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL, PlatformToolSpec, ToolApprovalSpec,
     resolve_tool_approval_timing,
@@ -49,17 +51,19 @@ const MAX_FILES: usize = 20;
 const MAX_FILE_REFERENCE_CHARS: usize = 400;
 const MAX_ID_CHARS: usize = 64;
 const MAX_OUTPUT_CHARS: usize = 20_000;
-const CHILD_ROUNDS: usize = 12;
-const CHILD_TIME_LIMIT: Duration = Duration::from_secs(300);
-const TURN_TIME_BUDGET: Duration = Duration::from_secs(600);
+const CHILD_ROUNDS: usize = 64;
+const CHILD_TIME_LIMIT: Duration = Duration::from_secs(900);
+const TURN_TIME_BUDGET: Duration =
+    Duration::from_secs(flow_like_types::bot_turn::DEFAULT_TURN_DEADLINE_SECS);
 const MIN_CHILD_TIME: Duration = Duration::from_secs(5);
 const CANCEL_POLL: Duration = Duration::from_millis(250);
-const TOOL_TIMEOUT_SECS: u64 = 660;
+const TOOL_TIMEOUT_SECS: u64 = 1860;
 
-const DESCRIPTION: &str = r#"Run 1 to 6 independent parts of a big job in parallel and get one result per part. Each worker is a copy of you that sees only its `instruction` (complete and self-contained), the `files` you name and the capabilities in `tools` (a subset of yours; omit it to give all it may have). Workers can't ask questions, remember, message people, send email, schedule, start sub-tasks or do anything that needs your owner's approval; do those yourself from their results. Set `output_schema` (a JSON Schema) when you need structured output; the result is then validated and `output` is the JSON value. `max_parallel` is 1 to 4 (default 3). Each result has `status` (done, failed, timeout or budget), `output`, `saved` handles and `usage`. A worker's output is unverified until you've read it."#;
+const DESCRIPTION: &str = r#"Run 1 to 6 independent parts of a big job in parallel and get one result per part. Each worker is a copy of you that sees only its `instruction` (complete and self-contained), the `files` you name and the capabilities in `tools` (a subset of yours; omit it to give all it may have). Workers can't ask questions, remember, message people, send email, schedule, start sub-tasks or do anything that needs your owner's approval; do those yourself from their results. Browser and computer workers share your interactive surfaces and run one at a time. Narrow `tools` for research workers so they can run alongside them. Workers can plan and carry out dependent steps within their own part. Set `output_schema` (a JSON Schema) when you need structured output; the result is then validated and `output` is the JSON value. `max_parallel` is 1 to 4 (default 3). Each result has `status` (done, failed, timeout, budget or blocked), `output`, `saved` handles and `usage`. A worker's output is unverified until you've read it."#;
 
 /// Capabilities a sub-task never gets: they act beyond the job, keep state, or need the owner.
-const CHILD_EXCLUDED_CAPABILITIES: [BotCapability; 7] = [
+const CHILD_EXCLUDED_CAPABILITIES: [BotCapability; 8] = [
+    BotCapability::UserContext,
     BotCapability::Memory,
     BotCapability::Delegation,
     BotCapability::Scheduling,
@@ -71,7 +75,10 @@ const CHILD_EXCLUDED_CAPABILITIES: [BotCapability; 7] = [
 
 /// Tools a sub-task is refused by name, whatever its capabilities: they ask a person, park the
 /// turn, reach other bots, people or channels, or delegate again.
-const CHILD_REFUSED_TOOLS: [&str; 15] = [
+const CHILD_REFUSED_TOOLS: [&str; 18] = [
+    "user_context_available",
+    "user_context_request",
+    "user_context_set_status",
     "ask_user",
     ASK_BOT_TOOL,
     SPAWN_SUBTASKS_TOOL,
@@ -137,7 +144,7 @@ pub(super) fn offered_to(bot: &BotRunContext) -> bool {
 pub(super) fn ability_line(offered: &[&str]) -> Option<String> {
     offered.contains(&SPAWN_SUBTASKS_TOOL).then(|| {
         format!(
-            "- Sub-tasks: `{SPAWN_SUBTASKS_TOOL}` runs up to {MAX_TASKS} independent parts of a big job in parallel. Use it when the parts don't depend on each other and each takes real work; do small jobs yourself. A worker sees only the instruction, files and capabilities you give it, and can't ask questions, remember, message people, send email, schedule, start sub-tasks or do anything that needs your owner's approval: do those yourself from the results. Check every result's status and read the output before relying on it."
+            "- Sub-tasks: `{SPAWN_SUBTASKS_TOOL}` runs up to {MAX_TASKS} independent parts of a big job in parallel. Use it when the parts don't depend on each other and each takes real work; do small jobs yourself. Give each worker a complete goal, success criteria and relevant evidence. A worker can plan dependent steps within its part, but sees only the instruction, files and capabilities you give it. Browser and computer workers share your surfaces and run one at a time; narrow other workers' capabilities to keep independent research parallel. Workers can't ask questions, remember, message people, send email, schedule, start sub-tasks or do anything that needs your owner's approval: do those yourself from the results. Check every result's status and verify its output before relying on it."
         )
     })
 }
@@ -229,10 +236,17 @@ impl ModelSubtaskRunner {
 impl SubtaskRunner for ModelSubtaskRunner {
     async fn run(&self, child: ChildTurn) -> flow_like_types::Result<String> {
         let on_token = child.on_token.map(|sink| move |frame: String| sink(frame));
-        PlatformCopilot::new(self.state.clone(), self.profile.clone())
+        let copilot = PlatformCopilot::new(self.state.clone(), self.profile.clone())
             .with_thinking(self.thinking)
             .with_tool_specs(child.tool_specs)
-            .with_tool_rounds(child.tool_rounds)
+            .with_tool_rounds(child.tool_rounds);
+        // Output-schema repair is a single tool-free completion.
+        let copilot = if child.tool_rounds > 0 {
+            copilot.with_long_running()
+        } else {
+            copilot
+        };
+        copilot
             .chat(
                 PlatformSurface::Subtask,
                 child.system_prompt,
@@ -280,9 +294,23 @@ impl SubtaskEnv {
         }
     }
 
+    /// Caps the budget at the time left until the host's turn deadline.
+    pub fn with_deadline_at_ms(mut self, deadline_at_ms: Option<i64>) -> Self {
+        if let Some(deadline) = deadline_at_ms {
+            self.turn_budget = self
+                .turn_budget
+                .min(time_until(deadline, chrono::Utc::now().timestamp_millis()));
+        }
+        self
+    }
+
     fn remaining(&self) -> Duration {
         self.turn_budget.saturating_sub(self.started.elapsed())
     }
+}
+
+fn time_until(deadline_at_ms: i64, now_ms: i64) -> Duration {
+    Duration::from_millis(deadline_at_ms.saturating_sub(now_ms).max(0) as u64)
 }
 
 /// Wraps `inner` in the turn's label check and, for a bot offered the tool, answers
@@ -306,6 +334,7 @@ pub(super) fn attach(
         bot: bot.clone(),
         inner,
         env,
+        interactive: Arc::new(tokio::sync::Mutex::new(())),
     })
 }
 
@@ -313,6 +342,49 @@ struct SubtaskBridge {
     bot: Arc<BotRunContext>,
     inner: Arc<dyn PlatformToolBridge>,
     env: SubtaskEnv,
+    // Hold the surface for a worker's entire observe/act sequence, across spawn batches.
+    interactive: Arc<tokio::sync::Mutex<()>>,
+}
+
+fn is_interactive_tool(tool_name: &str) -> bool {
+    tool_name.starts_with("browser_") || tool_name.starts_with("computer_")
+}
+
+/// Takes the shared browser/computer lock on a worker's first interactive call and keeps it
+/// until the worker's run ends.
+struct LazySurface {
+    lock: Arc<tokio::sync::Mutex<()>>,
+    held: tokio::sync::Mutex<Option<tokio::sync::OwnedMutexGuard<()>>>,
+    inner: Arc<dyn PlatformToolBridge>,
+}
+
+#[async_trait]
+impl PlatformToolBridge for LazySurface {
+    async fn call(&self, tool_name: &str, arguments: Value) -> String {
+        if is_interactive_tool(tool_name) {
+            let mut held = self.held.lock().await;
+            if held.is_none() {
+                *held = Some(self.lock.clone().lock_owned().await);
+            }
+        }
+        self.inner.call(tool_name, arguments).await
+    }
+
+    async fn drain_steering(&self) -> Vec<String> {
+        self.inner.drain_steering().await
+    }
+
+    fn watches_room(&self) -> bool {
+        self.inner.watches_room()
+    }
+
+    async fn drain_room_updates(&self) -> Vec<String> {
+        self.inner.drain_room_updates().await
+    }
+
+    async fn is_cancelled(&self) -> bool {
+        self.inner.is_cancelled().await
+    }
 }
 
 #[async_trait]
@@ -321,6 +393,28 @@ impl PlatformToolBridge for SubtaskBridge {
         if tool_name == SPAWN_SUBTASKS_TOOL {
             return self.spawn(arguments).await;
         }
+        let _surface = if is_interactive_tool(tool_name) {
+            match self
+                .limited(self.env.remaining(), self.interactive.lock())
+                .await
+            {
+                Limited::Finished(guard) => Some(guard),
+                Limited::TimedOut => {
+                    return refusal_json(
+                        tool_name,
+                        "The turn's time budget expired while waiting for the shared browser or computer.",
+                    );
+                }
+                Limited::Cancelled => {
+                    return refusal_json(
+                        tool_name,
+                        "The turn was cancelled while waiting for the shared browser or computer.",
+                    );
+                }
+            }
+        } else {
+            None
+        };
         self.inner.call(tool_name, arguments).await
     }
 
@@ -531,6 +625,8 @@ fn child_capabilities(parent: &BotRunContext, requested: Option<&[String]>) -> C
 fn child_context(parent: &BotRunContext, capabilities: Vec<BotCapability>) -> BotRunContext {
     BotRunContext {
         capabilities,
+        // The parent journals the delegation call. A child must not overwrite its checkpoint.
+        recovery: None,
         tool_host: match parent.tool_host {
             BotToolHost::Chat => BotToolHost::Native,
             other => other,
@@ -689,6 +785,7 @@ enum Status {
     Failed,
     Timeout,
     Budget,
+    Blocked,
 }
 
 impl Status {
@@ -698,6 +795,7 @@ impl Status {
             Self::Failed => "failed",
             Self::Timeout => "timeout",
             Self::Budget => "budget",
+            Self::Blocked => "blocked",
         }
     }
 }
@@ -714,6 +812,20 @@ impl Outcome {
             status: Status::Failed,
             output: Value::Null,
             error: Some(error.into()),
+        }
+    }
+
+    fn from_error(error: flow_like_types::Error) -> Self {
+        match error.downcast_ref::<IncompleteWork>() {
+            Some(incomplete) => Self {
+                status: match incomplete.reason {
+                    WorkStopReason::Budget => Status::Budget,
+                    WorkStopReason::Blocked => Status::Blocked,
+                },
+                output: Value::String(clip(incomplete.output.trim(), MAX_OUTPUT_CHARS)),
+                error: Some(error.to_string()),
+            },
+            None => Self::failed(error.to_string()),
         }
     }
 }
@@ -772,13 +884,22 @@ impl SubtaskBridge {
         }
         let parent_request = parent_request.as_str();
         let spawned = Instant::now();
-        let mut results: Vec<(usize, TaskResult)> = stream::iter(
-            plan.tasks.into_iter().enumerate(),
-        )
-        .map(|(index, task)| async move { (index, self.run_task(parent_request, task).await) })
-        .buffer_unordered(plan.max_parallel)
-        .collect()
-        .await;
+        let parallelism = tokio::sync::Semaphore::new(plan.max_parallel);
+        let mut results: Vec<(usize, TaskResult)> =
+            stream::iter(plan.tasks.into_iter().enumerate())
+                .map(|(index, task)| {
+                    let parallelism = &parallelism;
+                    async move {
+                        (
+                            index,
+                            self.run_task(parent_request, task, parallelism).await,
+                        )
+                    }
+                })
+                // Waiting for the shared surface does not occupy a worker slot.
+                .buffer_unordered(MAX_TASKS)
+                .collect()
+                .await;
         self.env
             .compute
             .add_waited(spawned.elapsed().as_millis().min(u64::MAX as u128) as u64);
@@ -859,7 +980,12 @@ impl SubtaskBridge {
         sink(event.to_string());
     }
 
-    async fn run_task(&self, parent_request: &str, task: Task) -> TaskResult {
+    async fn run_task(
+        &self,
+        parent_request: &str,
+        task: Task,
+        parallelism: &tokio::sync::Semaphore,
+    ) -> TaskResult {
         let started = Instant::now();
         let meter = Arc::new(ChildMeter::default());
         let request_id = format!("{parent_request}:task:{}", task.id);
@@ -867,45 +993,63 @@ impl SubtaskBridge {
         let outcome = if self.inner.is_cancelled().await {
             Outcome::failed("The turn was cancelled before this task started.")
         } else if remaining < self.env.min_child_time {
-            Outcome {
-                status: Status::Budget,
-                output: Value::Null,
-                error: Some(
-                    "Too little of the turn's time was left to start this task.".to_string(),
-                ),
-            }
+            budget_exhausted()
         } else {
-            self.emit(
-                &request_id,
-                parent_request,
-                String::new(),
-                Some(("started", "progress")),
-            );
-            let outcome = self
-                .run_child(
-                    &task,
-                    remaining.min(self.env.child_limit),
-                    &meter,
-                    parent_request,
-                    &request_id,
-                )
+            let ready = self
+                .limited(remaining, async {
+                    parallelism
+                        .acquire()
+                        .await
+                        .expect("the batch semaphore stays open")
+                })
                 .await;
-            let status = if outcome.status == Status::Done {
-                "done"
-            } else {
-                "error"
-            };
-            self.emit(
-                &request_id,
-                parent_request,
-                String::new(),
-                Some(("finished", status)),
-            );
-            outcome
+            match ready {
+                Limited::Finished(_slot) => {
+                    let remaining = self.env.remaining();
+                    if self.inner.is_cancelled().await {
+                        Outcome::failed("The turn was cancelled before this task started.")
+                    } else if remaining < self.env.min_child_time {
+                        budget_exhausted()
+                    } else {
+                        let running_since = Instant::now();
+                        self.emit(
+                            &request_id,
+                            parent_request,
+                            String::new(),
+                            Some(("started", "progress")),
+                        );
+                        let outcome = self
+                            .run_child(
+                                &task,
+                                remaining.min(self.env.child_limit),
+                                &meter,
+                                parent_request,
+                                &request_id,
+                            )
+                            .await;
+                        self.env.compute.add_child(
+                            running_since.elapsed().as_millis().min(u64::MAX as u128) as u64,
+                        );
+                        let status = if outcome.status == Status::Done {
+                            "done"
+                        } else {
+                            "error"
+                        };
+                        self.emit(
+                            &request_id,
+                            parent_request,
+                            String::new(),
+                            Some(("finished", status)),
+                        );
+                        outcome
+                    }
+                }
+                Limited::TimedOut => budget_exhausted(),
+                Limited::Cancelled => {
+                    Outcome::failed("The turn was cancelled before this task started.")
+                }
+            }
         };
-        self.env
-            .compute
-            .add_child(started.elapsed().as_millis().min(u64::MAX as u128) as u64);
         TaskResult {
             id: task.id,
             outcome,
@@ -925,9 +1069,10 @@ impl SubtaskBridge {
             }
         };
         tokio::select! {
-            output = work => Limited::Finished(output),
-            _ = tokio::time::sleep(limit) => Limited::TimedOut,
+            biased;
             _ = cancelled => Limited::Cancelled,
+            _ = tokio::time::sleep(limit) => Limited::TimedOut,
+            output = work => Limited::Finished(output),
         }
     }
 
@@ -978,7 +1123,11 @@ impl SubtaskBridge {
             inner: Arc::new(BotToolBridge {
                 bot: child.clone(),
                 inner: Arc::new(ApprovalGate {
-                    inner: self.inner.clone(),
+                    inner: Arc::new(LazySurface {
+                        lock: self.interactive.clone(),
+                        held: tokio::sync::Mutex::new(None),
+                        inner: self.inner.clone(),
+                    }),
                     meter: meter.clone(),
                 }),
             }),
@@ -995,7 +1144,7 @@ impl SubtaskBridge {
         };
         let text = match self.limited(limit, self.env.runner.run(first)).await {
             Limited::Finished(Ok(text)) => text,
-            Limited::Finished(Err(error)) => return Outcome::failed(error.to_string()),
+            Limited::Finished(Err(error)) => return Outcome::from_error(error),
             Limited::TimedOut => return timed_out(limit),
             Limited::Cancelled => return Outcome::failed("The turn was cancelled."),
         };
@@ -1024,7 +1173,7 @@ impl SubtaskBridge {
         };
         let repaired = match self.limited(left, self.env.runner.run(repair)).await {
             Limited::Finished(Ok(text)) => text,
-            Limited::Finished(Err(error)) => return Outcome::failed(error.to_string()),
+            Limited::Finished(Err(error)) => return Outcome::from_error(error),
             Limited::TimedOut => return timed_out(left),
             Limited::Cancelled => return Outcome::failed("The turn was cancelled."),
         };
@@ -1044,6 +1193,14 @@ fn done(output: Value) -> Outcome {
         status: Status::Done,
         output,
         error: None,
+    }
+}
+
+fn budget_exhausted() -> Outcome {
+    Outcome {
+        status: Status::Budget,
+        output: Value::Null,
+        error: Some("Too little of the turn's time was left to start this task.".to_string()),
     }
 }
 
@@ -1070,7 +1227,7 @@ fn invalid_output(text: &str, problem: &str) -> Outcome {
 
 fn child_system_prompt(child: &BotRunContext) -> String {
     format!(
-        "{}\n\n## YOU ARE A SUB-TASK\nYou are one worker in a job {name} split into parts. {name} gave you the instruction below and reads only your final reply. You see none of the conversation and nobody can answer questions, so never ask; decide on safe defaults and say which. You can't message people, send email, schedule, use memory, start sub-tasks, or run anything that needs your owner's approval. When the instruction needs one of those, do the rest and say exactly what you could not do. Current UTC date: {date}. Reply with the result only, no preamble and no UI fences.",
+        "{}\n\n## YOU ARE A SUB-TASK\nYou are one worker in a job {name} split into parts. {name} gave you the instruction below and reads only your final reply. You see none of the conversation and nobody can answer questions, so never ask; decide on safe defaults and say which. For work with dependent steps, use update_work_plan to track the goal, evidence and next actions, then keep executing until the result is verified or a concrete blocker prevents progress. Update the plan as work finishes. After context compaction, inspect the current browser or computer state before acting again. Never repeat a completed mutation just because its earlier output is no longer in context. You can't message people, send email, schedule, use memory, start sub-tasks, or run anything that needs your owner's approval. When the instruction needs one of those, do the rest and say exactly what you could not do. Report completed work, verification evidence and remaining blockers accurately. Current UTC date: {date}. Reply with the result only, no preamble and no UI fences.",
         bot_system_prompt(child),
         name = child.name,
         date = chrono::Utc::now().format("%Y-%m-%d"),
@@ -1200,6 +1357,9 @@ mod tests {
         UntilCancelled,
         Fail,
         Sequence(Arc<Mutex<Vec<String>>>),
+        Incomplete(WorkStopReason, String),
+        Wait(Arc<tokio::sync::Notify>),
+        Surface(Box<Behavior>),
     }
 
     #[derive(Debug, Clone)]
@@ -1207,6 +1367,7 @@ mod tests {
         tools: Vec<String>,
         system_prompt: String,
         user_prompt: String,
+        tool_rounds: usize,
     }
 
     struct FakeRunner {
@@ -1215,6 +1376,7 @@ mod tests {
         peak: AtomicU64,
         running: AtomicU64,
         calls: Mutex<Vec<(String, String)>>,
+        started: tokio::sync::Notify,
     }
 
     impl FakeRunner {
@@ -1225,6 +1387,7 @@ mod tests {
                 peak: AtomicU64::new(0),
                 running: AtomicU64::new(0),
                 calls: Mutex::new(Vec::new()),
+                started: tokio::sync::Notify::new(),
             })
         }
 
@@ -1245,10 +1408,24 @@ mod tests {
                     .collect(),
                 system_prompt: child.system_prompt.clone(),
                 user_prompt: child.user_prompt.clone(),
+                tool_rounds: child.tool_rounds,
             });
             let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
+            struct Running<'a>(&'a AtomicU64);
+            impl Drop for Running<'_> {
+                fn drop(&mut self) {
+                    self.0.fetch_sub(1, Ordering::SeqCst);
+                }
+            }
+            let _running = Running(&self.running);
             self.peak.fetch_max(now, Ordering::SeqCst);
-            let result = match (self.behavior)(&child.user_prompt) {
+            self.started.notify_one();
+            let mut behavior = (self.behavior)(&child.user_prompt);
+            while let Behavior::Surface(next) = behavior {
+                child.bridge.call("browser_snapshot", json!({})).await;
+                behavior = *next;
+            }
+            let result = match behavior {
                 Behavior::Reply(text) => Ok(text),
                 Behavior::Fail => Err(flow_like_types::anyhow!("model unavailable")),
                 Behavior::Sleep(duration) => {
@@ -1274,8 +1451,15 @@ mod tests {
                         replies.remove(0)
                     })
                 }
+                Behavior::Incomplete(reason, output) => {
+                    Err(IncompleteWork { reason, output }.into())
+                }
+                Behavior::Wait(release) => {
+                    release.notified().await;
+                    Ok("finished".into())
+                }
+                Behavior::Surface(_) => unreachable!("surface wrappers are unwrapped above"),
             };
-            self.running.fetch_sub(1, Ordering::SeqCst);
             result
         }
     }
@@ -1386,6 +1570,23 @@ mod tests {
             host_tools: HostTools::linked(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn quiet_parent_keeps_owner_notifications_denied_in_children() {
+        let mut parent = parent_bot();
+        parent.suppress_owner_notifications = true;
+        let child = child_context(
+            &parent,
+            vec![BotCapability::PushNotifications, BotCapability::Email],
+        );
+        assert!(child.suppress_owner_notifications);
+        assert!(
+            !child
+                .tool_specs(false)
+                .iter()
+                .any(|tool| tool.name == "message_owner")
+        );
     }
 
     struct Rig {
@@ -1575,6 +1776,298 @@ mod tests {
         runner.peak.store(0, Ordering::SeqCst);
         assert_eq!(spawn(&rig, tasks(6)).await["status"], "ok");
         assert_eq!(runner.peak.load(Ordering::SeqCst), DEFAULT_PARALLEL as u64);
+    }
+
+    fn interactive_bot() -> BotRunContext {
+        let mut bot = parent_bot();
+        bot.capabilities
+            .extend([BotCapability::BrowserUse, BotCapability::ComputerUse]);
+        bot
+    }
+
+    #[tokio::test]
+    async fn browser_and_computer_workers_share_one_surface_across_batches() {
+        let runner = FakeRunner::new(|_| {
+            Behavior::Surface(Box::new(Behavior::Sleep(Duration::from_millis(60))))
+        });
+        let rig = rig_with(
+            interactive_bot(),
+            runner.clone(),
+            ParentBridge::new(),
+            TURN_TIME_BUDGET,
+            CHILD_TIME_LIMIT,
+        );
+        let browser = json!({"tasks":[
+            {"instruction":"browser one", "tools":["browser_use"]},
+            {"instruction":"browser two", "tools":["browser_use"]}
+        ]});
+        let computer = json!({"tasks":[{"instruction":"computer", "tools":["computer_use"]}]});
+        let (first, second) = tokio::join!(spawn(&rig, browser), spawn(&rig, computer));
+        for result in [first, second] {
+            for task in result["results"].as_array().unwrap() {
+                assert_eq!(task["status"], "done", "{task}");
+            }
+        }
+        assert_eq!(runner.peak.load(Ordering::SeqCst), 1);
+        assert_eq!(locked(&runner.seen).len(), 3);
+    }
+
+    #[tokio::test]
+    async fn waiting_surface_workers_leave_capacity_for_research() {
+        let runner = FakeRunner::new(|prompt| {
+            let sleep = Behavior::Sleep(Duration::from_millis(60));
+            if prompt.contains("research") {
+                sleep
+            } else {
+                Behavior::Surface(Box::new(sleep))
+            }
+        });
+        let rig = rig_with(
+            interactive_bot(),
+            runner.clone(),
+            ParentBridge::new(),
+            TURN_TIME_BUDGET,
+            CHILD_TIME_LIMIT,
+        );
+        let result = spawn(
+            &rig,
+            json!({"max_parallel":2, "tasks":[
+                {"instruction":"browser one", "tools":["browser_use"]},
+                {"instruction":"browser two", "tools":["browser_use"]},
+                {"instruction":"computer", "tools":["computer_use"]},
+                {"instruction":"research", "tools":["internet"]}
+            ]}),
+        )
+        .await;
+        assert!(
+            result["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|task| task["status"] == "done")
+        );
+        assert_eq!(runner.peak.load(Ordering::SeqCst), 2);
+        assert!(
+            locked(&runner.seen)
+                .iter()
+                .any(|seen| seen.user_prompt.contains("research"))
+        );
+    }
+
+    #[tokio::test]
+    async fn parent_surface_calls_wait_for_the_workers_observe_act_sequence() {
+        let release = Arc::new(tokio::sync::Notify::new());
+        let worker_release = release.clone();
+        let runner = FakeRunner::new(move |_| {
+            Behavior::Surface(Box::new(Behavior::Wait(worker_release.clone())))
+        });
+        let rig = rig_with(
+            interactive_bot(),
+            runner.clone(),
+            ParentBridge::new(),
+            TURN_TIME_BUDGET,
+            CHILD_TIME_LIMIT,
+        );
+        let parent_call = async {
+            runner.started.notified().await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let call = rig.bridge.call("computer_windows", json!({}));
+            tokio::pin!(call);
+            assert!(futures::poll!(&mut call).is_pending());
+            assert!(locked(&rig.parent.calls).is_empty());
+            release.notify_one();
+            call.await;
+            assert_eq!(runner.running.load(Ordering::SeqCst), 0);
+        };
+        let (_, ()) = tokio::time::timeout(Duration::from_secs(30), async {
+            tokio::join!(
+                spawn(
+                    &rig,
+                    json!({"tasks":[{"instruction":"inspect the page", "tools":["browser_use"]}]})
+                ),
+                parent_call
+            )
+        })
+        .await
+        .unwrap();
+        assert_eq!(*locked(&rig.parent.calls), ["computer_windows"]);
+    }
+
+    #[tokio::test]
+    async fn cancellation_drops_the_surface_owner_and_its_waiting_workers() {
+        let runner =
+            FakeRunner::new(|_| Behavior::Surface(Box::new(Behavior::UntilCancelled)));
+        let rig = rig_with(
+            interactive_bot(),
+            runner.clone(),
+            ParentBridge::new(),
+            TURN_TIME_BUDGET,
+            CHILD_TIME_LIMIT,
+        );
+        let cancel = async {
+            runner.started.notified().await;
+            rig.parent.cancelled.store(true, Ordering::SeqCst);
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(30), async {
+            tokio::join!(
+                spawn(
+                    &rig,
+                    json!({"tasks":[
+                        {"instruction":"inspect the page", "tools":["browser_use"]},
+                        {"instruction":"inspect another page", "tools":["browser_use"]},
+                        {"instruction":"inspect the computer", "tools":["computer_use"]}
+                    ]})
+                ),
+                cancel
+            )
+        })
+        .await
+        .unwrap();
+        assert!(
+            result["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|task| task["status"] == "failed")
+        );
+        assert_eq!(runner.running.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn queued_surface_workers_use_the_remaining_turn_budget() {
+        let runner =
+            FakeRunner::new(|_| Behavior::Surface(Box::new(Behavior::Sleep(Duration::from_secs(10)))));
+        let rig = rig_with(
+            interactive_bot(),
+            runner.clone(),
+            ParentBridge::new(),
+            Duration::from_millis(250),
+            CHILD_TIME_LIMIT,
+        );
+        let result = spawn(&rig, tasks(2)).await;
+        assert_eq!(result["results"][0]["status"], "timeout");
+        assert_eq!(result["results"][1]["status"], "timeout");
+        assert_eq!(runner.running.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            spawn(&rig, tasks(1)).await["results"][0]["status"],
+            "budget"
+        );
+        assert_eq!(locked(&runner.seen).len(), 2);
+    }
+
+    #[tokio::test]
+    async fn workers_without_interactive_calls_run_in_parallel_despite_interactive_tools() {
+        let runner = FakeRunner::new(|_| Behavior::Sleep(Duration::from_millis(80)));
+        let rig = rig_with(
+            interactive_bot(),
+            runner.clone(),
+            ParentBridge::new(),
+            TURN_TIME_BUDGET,
+            CHILD_TIME_LIMIT,
+        );
+        spawn(&rig, tasks(3)).await;
+        assert_eq!(runner.peak.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn the_subtask_budget_is_capped_by_the_host_deadline() {
+        assert_eq!(time_until(180_000, 0), Duration::from_secs(180));
+        assert_eq!(time_until(10, 50), Duration::ZERO);
+        let runner = FakeRunner::replying("x");
+        let env = rig_env(runner, Some(chrono::Utc::now().timestamp_millis() + 180_000));
+        assert!(env.turn_budget <= Duration::from_secs(180));
+        assert!(env.turn_budget > Duration::from_secs(170));
+        let past = rig_env(
+            FakeRunner::replying("x"),
+            Some(chrono::Utc::now().timestamp_millis() - 1),
+        );
+        assert_eq!(past.turn_budget, Duration::ZERO);
+    }
+
+    fn rig_env(runner: Arc<FakeRunner>, deadline: Option<i64>) -> SubtaskEnv {
+        SubtaskEnv::new(
+            runner,
+            None,
+            TurnLabel::new(&parent_bot(), None),
+            parent_bot().compute.clone(),
+        )
+        .with_deadline_at_ms(deadline)
+    }
+
+    #[tokio::test]
+    async fn workers_have_time_to_plan_execute_and_verify_dependent_steps() {
+        let runner = FakeRunner::replying("verified");
+        let rig = make_rig(runner.clone());
+        spawn(&rig, tasks(1)).await;
+        let seen = &locked(&runner.seen)[0];
+        assert_eq!(seen.tool_rounds, 64);
+        assert!(seen.system_prompt.contains("update_work_plan"));
+        assert!(
+            seen.system_prompt
+                .contains("Never repeat a completed mutation")
+        );
+        assert!(seen.system_prompt.contains("verification evidence"));
+        assert!(CHILD_TIME_LIMIT < TURN_TIME_BUDGET);
+        assert!(spawn_subtasks_tool_spec().timeout_secs > TURN_TIME_BUDGET.as_secs());
+    }
+
+    #[tokio::test]
+    async fn unfinished_workers_preserve_partial_output_without_claiming_completion() {
+        let runner = FakeRunner::new(|prompt| {
+            if prompt.contains("part 0") {
+                Behavior::Incomplete(
+                    WorkStopReason::Budget,
+                    "Implemented changes; tests remain.".into(),
+                )
+            } else if prompt.contains("part 1") {
+                Behavior::Incomplete(
+                    WorkStopReason::Blocked,
+                    "Read the page; login is required.".into(),
+                )
+            } else {
+                Behavior::Reply("Verified result".into())
+            }
+        });
+        let rig = make_rig(runner);
+        let result = spawn(&rig, tasks(3)).await;
+        assert_eq!(result["results"][0]["status"], "budget");
+        assert_eq!(
+            result["results"][0]["output"],
+            "Implemented changes; tests remain."
+        );
+        assert_eq!(result["results"][1]["status"], "blocked");
+        assert_eq!(
+            result["results"][1]["output"],
+            "Read the page; login is required."
+        );
+        assert_eq!(result["results"][2]["status"], "done");
+        assert!(result["results"][0]["error"].is_string());
+        assert!(result["results"][1]["error"].is_string());
+    }
+
+    #[tokio::test]
+    async fn an_unfinished_schema_worker_does_not_run_a_repair_that_could_mask_the_blocker() {
+        let runner = FakeRunner::new(|_| {
+            Behavior::Incomplete(
+                WorkStopReason::Blocked,
+                "The data source is unavailable.".into(),
+            )
+        });
+        let rig = make_rig(runner.clone());
+        let result = spawn(
+            &rig,
+            json!({"tasks":[{
+                "instruction":"read the data",
+                "output_schema":{"type":"object", "required":["count"]}
+            }]}),
+        )
+        .await;
+        assert_eq!(result["results"][0]["status"], "blocked");
+        assert_eq!(
+            result["results"][0]["output"],
+            "The data source is unavailable."
+        );
+        assert_eq!(locked(&runner.seen).len(), 1);
     }
 
     #[tokio::test]

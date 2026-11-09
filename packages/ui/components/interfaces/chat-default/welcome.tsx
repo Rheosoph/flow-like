@@ -16,6 +16,8 @@ import {
 } from "./chatbox";
 import { isVoiceEnabled, resolveChatVoiceConfig } from "./voice-config";
 
+const NO_TOOLS: string[] = [];
+
 /** Who the empty conversation greets the user as. */
 export interface ChatWelcomeGreeting {
 	title: string;
@@ -59,6 +61,48 @@ export function ChatWelcome({
 	const description = greeting.description?.trim();
 	const voiceConfig = useMemo(() => resolveChatVoiceConfig(config), [config]);
 	const voiceEnabled = isVoiceEnabled(voiceConfig);
+
+	const onDraftChange = composer.onDraftChange;
+	const handleContentChange = useCallback(
+		(content: string) => {
+			setCurrentMessage(content);
+			activity.report(content);
+			onDraftChange?.(content);
+		},
+		[activity, onDraftChange],
+	);
+
+	// Typing re-renders the welcome for its suggestions; the mark and title stay put.
+	const header = useMemo(
+		() => (
+			// The mark carries the invitation; the app's own name stays as the
+			// single line of context a user needs to know where they are.
+			<div
+				className="flex flex-col items-center gap-3"
+				data-fl-chat-welcome-header
+			>
+				{greeting.mark ?? (
+					<ChatPlaceholder
+						config={config}
+						appId={appId}
+						size={168}
+						activity={activity}
+					/>
+				)}
+				<div className="space-y-1 text-center">
+					<h1 className="text-base font-semibold tracking-tight">
+						{greeting.title}
+					</h1>
+					{description && (
+						<p className="line-clamp-2 text-sm text-muted-foreground">
+							{description}
+						</p>
+					)}
+				</div>
+			</div>
+		),
+		[greeting.mark, greeting.title, description, config, appId, activity],
+	);
 
 	const handleVoiceModeSend = useCallback(
 		(content: string, audioFile?: File) => {
@@ -289,46 +333,18 @@ export function ChatWelcome({
 						maxWidth: "min(var(--fl-chat-content-width, 64rem), 40rem)",
 					}}
 				>
-					{/* The mark carries the invitation; the app's own name stays as the
-					    single line of context a user needs to know where they are. */}
-					<div
-						className="flex flex-col items-center gap-3"
-						data-fl-chat-welcome-header
-					>
-						{greeting.mark ?? (
-							<ChatPlaceholder
-								config={config}
-								appId={appId}
-								size={168}
-								activity={activity}
-							/>
-						)}
-						<div className="space-y-1 text-center">
-							<h1 className="text-base font-semibold tracking-tight">
-								{greeting.title}
-							</h1>
-							{description && (
-								<p className="line-clamp-2 text-sm text-muted-foreground">
-									{description}
-								</p>
-							)}
-						</div>
-					</div>
+					{header}
 
 					<div className="mx-auto max-w-2xl space-y-3">
 						<ChatBox
 							ref={chatBox}
-							availableTools={config?.tools ?? []}
+							availableTools={config?.tools ?? NO_TOOLS}
 							defaultActiveTools={config?.default_tools ?? []}
 							onSendMessage={onSendMessage}
 							thinking={composer.thinking}
 							model={composer.model}
 							actions={composer.actions}
-							onContentChange={(content) => {
-								setCurrentMessage(content);
-								activity.report(content);
-								composer.onDraftChange?.(content);
-							}}
+							onContentChange={handleContentChange}
 							fileUpload={config?.allow_file_upload ?? false}
 							audioInput={voiceEnabled}
 							voiceMode={voiceConfig.mode === "stt" ? "stt" : "record"}

@@ -97,6 +97,7 @@ impl Scheduler for AccountScheduler {
             "tz": request.tz,
             "instruction": request.instruction,
             "title": request.title,
+            "monitoring": request.monitoring,
         });
         let created = self
             .api

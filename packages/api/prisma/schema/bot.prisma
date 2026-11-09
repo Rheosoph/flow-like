@@ -44,6 +44,7 @@ model Bot {
   permissionsTo   BotPermission[]       @relation("BotPermissionTo")
   hostHeartbeats  BotHostHeartbeat[]
   turns           BotTurn[]
+  decisionWaits   BotDecisionWait[]
   toolGrants      BotToolGrant[]
   mailThreads     BotMailThread[]
   mailMessages    BotMailMessage[]
@@ -52,6 +53,7 @@ model Bot {
   tasks           BotTask[]
   skills          BotSkill[]
   segments        ConversationSegment[]
+  notes           BotNote[]
 
   @@unique([ownerId, systemKey])
   @@unique([ownerId, importKey])
@@ -231,6 +233,8 @@ model BotTurn {
   requesterId      String?
   /// OWNER | ROOM: an owner-only conversation, or a room shared with other people.
   audience         String       @default("OWNER")
+  /// The running turn's live status line, at most 120 characters; cleared when it stops running.
+  statusText       String?
   createdAt        DateTime     @default(now()) @db.Timestamptz(3)
   updatedAt        DateTime     @updatedAt @db.Timestamptz(3)
 
@@ -238,7 +242,54 @@ model BotTurn {
   @@index([status, leaseUntil])
   @@index([ownerId, status])
   @@index([botId, requesterId, createdAt])
+  checkpoint       BotTurnCheckpoint?
 }
+
+/// Keyed, versioned working state a bot keeps in one conversation (see `bot_notes` in the contracts crate).
+/// The body is read only by the bot and its owner; title and status show on the replies that touched it.
+model BotNote {
+  botId          String
+  bot            Bot          @relation(fields: [botId], references: [id], onDelete: Cascade)
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  /// Lowercase letters, digits and hyphens.
+  key            String
+  title          String
+  /// One short line shown with the title.
+  status         String?
+  /// Markdown, at most 16 KiB.
+  body           String       @default("")
+  /// OPEN | CLOSED
+  state          String       @default("OPEN")
+  /// Starts at 1; bumped by every change. Writers compare-and-set on it.
+  version        Int
+  /// DataClassification, lowercase: the most sensitive data the note was written under.
+  classification String?
+  pii            Boolean      @default(false)
+  /// The bot id, or the owner's sub when the owner edited it last.
+  updatedBy      String
+  /// Previous `NoteVersion`s, newest first, at most 5.
+  history        Json         @default("[]")
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime     @default(now()) @db.Timestamptz(3)
+
+  @@id([botId, conversationId, key])
+  @@index([conversationId])
+}
+
+/// A bot turn's latest durable execution boundary, preserved across lease takeovers.
+model BotTurnCheckpoint {
+  turnId       String   @id
+  turn         BotTurn  @relation(fields: [turnId], references: [id], onDelete: Cascade)
+  revision     BigInt
+  claimAttempt Int
+  recoveryAttempts Int @default(0)
+  startedAtMs  BigInt
+  deadlineAtMs BigInt
+  state        Json
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+}
+
 
 /// A public URL that wakes a bot: `POST /bots/hooks/{id}` with the secret (or an HMAC signature
 /// keyed by its hash) writes a `trigger` entry with `instruction` and the payload into the bot's
@@ -278,6 +329,7 @@ model BotTask {
   nextRunAt   DateTime? @db.Timestamptz(3)
   lastRunAt   DateTime? @db.Timestamptz(3)
   enabled     Boolean   @default(true)
+  monitoring  Boolean?  @default(false)
   /// BOT | OWNER
   createdBy   String
   createdAt   DateTime  @default(now()) @db.Timestamptz(3)
@@ -285,4 +337,21 @@ model BotTask {
 
   @@index([botId])
   @@index([enabled, nextRunAt])
+}
+
+/// A room decision waiting for one participant's next message.
+model BotDecisionWait {
+  botId            String
+  bot              Bot          @relation(fields: [botId], references: [id], onDelete: Cascade)
+  conversationId   String
+  conversation     Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  participantId    String
+  triggerMessageId String
+  afterSeq         BigInt
+  expiresAt        DateTime     @db.Timestamptz(3)
+  createdAt        DateTime     @default(now()) @db.Timestamptz(3)
+
+  @@id([botId, conversationId])
+  @@index([conversationId, participantId])
+  @@index([expiresAt])
 }

@@ -5,6 +5,7 @@
 //! and cleanup of streaming uploads. A delete also removes the folders it
 //! leaves empty, through the same pinned handles and never the store root.
 
+use crate::object_path::decode_path_segment;
 use async_trait::async_trait;
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::fs::{Dir, OpenOptions};
@@ -18,6 +19,7 @@ use object_store::{
     PutResult, RenameOptions, RenameTargetMode, Result, UploadPart, path::Path,
 };
 use std::{
+    borrow::Cow,
     collections::BTreeSet,
     fs::{File, Metadata},
     io::{self, Seek, SeekFrom, Write},
@@ -31,12 +33,23 @@ use std::{
 
 static NEXT_STAGE: AtomicU64 = AtomicU64::new(1);
 
+/// How a percent-encoded object key segment maps to a name on disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DiskNames {
+    /// The encoded segment is the file name, the layout `LocalFileSystem` gave app storage.
+    Encoded,
+    /// The decoded segment is the file name, so a folder a person owns keeps its real names
+    /// and listings report them as encoded keys.
+    Decoded,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct SecureLocalStore {
     root: Arc<PinnedDir>,
     // Preserve the existing local compare-and-swap contract for calls through
     // this store instance. External filesystem writers do not hold this lock.
     mutations: Arc<Mutex<()>>,
+    names: DiskNames,
 }
 
 /// Windows cap-std mutations resolve a path from a directory handle. Keep
@@ -206,28 +219,6 @@ fn windows_alias(name: &str) -> bool {
     })
 }
 
-fn segments(location: &Path) -> Result<Vec<&str>> {
-    location
-        .as_ref()
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let mut components = FsPath::new(part).components();
-            if !matches!(components.next(), Some(Component::Normal(_)))
-                || components.next().is_some()
-                || part.contains('\\')
-            {
-                return Err(denied(location));
-            }
-            #[cfg(windows)]
-            if windows_alias(part) {
-                return Err(denied(location));
-            }
-            Ok(part)
-        })
-        .collect()
-}
-
 fn symlink_check(parent: &Dir, name: &str, location: &Path, missing_ok: bool) -> Result<()> {
     match parent.symlink_metadata(name) {
         Ok(metadata) if metadata.file_type().is_symlink() => Err(denied(location)),
@@ -258,12 +249,12 @@ fn open_child(parent: &PinnedDir, name: &str, location: &Path, create: bool) -> 
 /// Removes `folders[depth]` from `chain[depth]` while it is empty, deepest first; `chain[0]` is
 /// the root, which is never removed. A folder that still holds an entry, or that can't be
 /// removed, ends the walk.
-fn prune_empty_folders(mut chain: Vec<PinnedDir>, folders: &[&str]) {
+fn prune_empty_folders(mut chain: Vec<PinnedDir>, folders: &[Cow<'_, str>]) {
     for (depth, folder) in folders.iter().enumerate().rev() {
         // Windows refuses to remove a directory while any handle to it is open.
         chain.truncate(depth + 1);
         match chain.last() {
-            Some(parent) if parent.remove_dir(folder).is_ok() => {}
+            Some(parent) if parent.remove_dir(&**folder).is_ok() => {}
             _ => return,
         }
     }
@@ -326,28 +317,68 @@ async fn blocking<T: Send + 'static>(
 }
 
 impl SecureLocalStore {
-    pub(super) fn new(prefix: &FsPath) -> Result<Self> {
+    pub(super) fn new(prefix: &FsPath, names: DiskNames) -> Result<Self> {
         let root = PinnedDir::root(prefix).map_err(|source| error(&Path::default(), source))?;
         Ok(Self {
             root: Arc::new(root),
             mutations: Arc::new(Mutex::new(())),
+            names,
         })
+    }
+
+    pub(super) fn names(&self) -> DiskNames {
+        self.names
+    }
+
+    /// The on-disk name of every segment of `location`, each a single normal component.
+    pub(super) fn segments<'a>(&self, location: &'a Path) -> Result<Vec<Cow<'a, str>>> {
+        location
+            .as_ref()
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .map(|part| {
+                let name = match self.names {
+                    DiskNames::Encoded => Cow::Borrowed(part),
+                    DiskNames::Decoded => decode_path_segment(part),
+                };
+                let mut components = FsPath::new(&*name).components();
+                if !matches!(components.next(), Some(Component::Normal(_)))
+                    || components.next().is_some()
+                    || name.contains(['/', '\\'])
+                {
+                    return Err(denied(location));
+                }
+                #[cfg(windows)]
+                if windows_alias(&name) {
+                    return Err(denied(location));
+                }
+                Ok(name)
+            })
+            .collect()
+    }
+
+    fn entry_location(&self, prefix: &Path, name: &str) -> Result<Path> {
+        match self.names {
+            DiskNames::Encoded if prefix.as_ref().is_empty() => Ok(Path::parse(name)?),
+            DiskNames::Encoded => Ok(Path::parse(format!("{prefix}/{name}"))?),
+            DiskNames::Decoded => Ok(prefix.clone().join(name)),
+        }
     }
 
     fn directory(&self, location: &Path, create: bool) -> Result<PinnedDir> {
         let mut current = self.root.as_ref().clone();
-        for segment in segments(location)? {
-            current = open_child(&current, segment, location, create)?;
+        for segment in self.segments(location)? {
+            current = open_child(&current, &segment, location, create)?;
         }
         Ok(current)
     }
 
     fn parent(&self, location: &Path, create: bool) -> Result<(PinnedDir, String)> {
-        let mut parts = segments(location)?;
-        let name = parts.pop().ok_or_else(|| denied(location))?.to_owned();
+        let mut parts = self.segments(location)?;
+        let name = parts.pop().ok_or_else(|| denied(location))?.into_owned();
         let mut current = self.root.as_ref().clone();
         for segment in parts {
-            current = open_child(&current, segment, location, create)?;
+            current = open_child(&current, &segment, location, create)?;
         }
         Ok((current, name))
     }
@@ -391,25 +422,25 @@ impl SecureLocalStore {
     }
 
     fn delete(&self, location: &Path) -> Result<()> {
-        if location.filename().is_some_and(staged_name) {
+        let mut folders = self.segments(location)?;
+        let name = folders.pop().ok_or_else(|| denied(location))?;
+        if staged_name(&name) {
             return Err(denied(location));
         }
         let _guard = self
             .mutations
             .lock()
             .map_err(|_| generic("Local mutation lock poisoned"))?;
-        let mut folders = segments(location)?;
-        let name = folders.pop().ok_or_else(|| denied(location))?;
         let mut chain = Vec::with_capacity(folders.len() + 1);
         let mut parent = self.root.as_ref().clone();
         for folder in &folders {
             let child = open_child(&parent, folder, location, false)?;
             chain.push(std::mem::replace(&mut parent, child));
         }
-        symlink_check(&parent, name, location, false)?;
+        symlink_check(&parent, &name, location, false)?;
         // unlink never follows the final component if another process swaps it.
         parent
-            .remove_file(name)
+            .remove_file(&*name)
             .map_err(|source| error(location, source))?;
         chain.push(parent);
         prune_empty_folders(chain, &folders);
@@ -690,21 +721,14 @@ impl SecureLocalStore {
             let Ok(name) = entry.file_name().into_string() else {
                 continue;
             };
-            let location = match Path::parse(format!(
-                "{}{name}",
-                if frame.prefix.as_ref().is_empty() {
-                    String::new()
-                } else {
-                    format!("{}/", frame.prefix)
-                }
-            )) {
+            let location = match self.entry_location(&frame.prefix, &name) {
                 Ok(location) => location,
                 Err(source) => {
-                    emit(Err(source.into()));
+                    emit(Err(source));
                     return;
                 }
             };
-            if segments(&location).is_err() {
+            if self.segments(&location).is_err() {
                 continue;
             }
             let metadata = match frame.parent.symlink_metadata(&name) {
@@ -1021,7 +1045,7 @@ impl ObjectStore for SecureLocalStore {
 
 #[cfg(test)]
 mod tests {
-    use super::{SecureLocalStore, windows_alias};
+    use super::{DiskNames, SecureLocalStore, windows_alias};
     use futures::TryStreamExt;
     use object_store::{ObjectStore, path::Path};
 
@@ -1029,7 +1053,7 @@ mod tests {
     fn listing_runs_without_a_tokio_runtime() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("file.txt"), b"content").unwrap();
-        let store = SecureLocalStore::new(root.path()).unwrap();
+        let store = SecureLocalStore::new(root.path(), DiskNames::Encoded).unwrap();
         let files = futures::executor::block_on(store.list(None).try_collect::<Vec<_>>()).unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].location, Path::from("file.txt"));
@@ -1039,7 +1063,7 @@ mod tests {
     fn listing_a_regular_file_prefix_returns_no_entries() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("file.txt"), b"content").unwrap();
-        let store = SecureLocalStore::new(root.path()).unwrap();
+        let store = SecureLocalStore::new(root.path(), DiskNames::Encoded).unwrap();
         let files = futures::executor::block_on(
             store
                 .list(Some(&Path::from("file.txt")))

@@ -271,6 +271,32 @@ describe("ConversationCallBar listening", () => {
 	const toggle = (container: Element) =>
 		container.querySelector<HTMLButtonElement>("[role=switch]");
 
+	test("shows the provisional transcript only while joined and listening", async () => {
+		const { ConversationCallBar } = await import("./conversation-call");
+		for (const [joined, listening] of [
+			[true, true],
+			[false, true],
+			[true, false],
+		]) {
+			const { state } = joinedState({
+				joined,
+				listening,
+				transcriptDraft: "Check the plan",
+			});
+			const container = await render((c) =>
+				c(ConversationCallBar, { call: state as never, me: "me", directory }),
+			);
+			const draft = container.querySelector(
+				"[data-slot=call-transcript-draft]",
+			);
+			if (joined && listening) {
+				expect(draft?.textContent).toBe("Check the plan");
+				expect(draft?.tagName).toBe("OUTPUT");
+				expect(label(draft)).toBe("Live transcript");
+			} else expect(draft).toBeNull();
+		}
+	});
+
 	test("has no toggle when the conversation has no bots", async () => {
 		const { ConversationCallBar } = await import("./conversation-call");
 		const { state } = joinedState({ botsPresent: false });

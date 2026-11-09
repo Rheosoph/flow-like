@@ -912,13 +912,28 @@ export class InboxState implements IInboxState {
 		request: IInviteRequest,
 	): Promise<IInviteResponse> {
 		const operation = `invite to conversation ${conversationId}`;
-		const session = this.invitationSession(operation);
+		const account = await this.accountFor(conversationId);
+		if (!account) {
+			const conversation = await this.here(conversationId, () =>
+				localInbox.addMembers(
+					conversationId,
+					request.principal_ids,
+					request.bot_limits,
+				),
+			);
+			return { added: request.principal_ids, invited: [], conversation };
+		}
+		await this.refuseLocalMembers(
+			request.principal_ids,
+			account.sub,
+			operation,
+		);
 		return expectRecord(
 			await post<IInviteResponse>(
-				session.profile,
-				`${conversationPath(conversationId)}/invitations`,
+				account.profile,
+				`${conversationPath(account.id)}/invitations`,
 				request,
-				session.auth,
+				account.auth,
 			),
 			operation,
 		);
@@ -1051,12 +1066,17 @@ export class InboxState implements IInboxState {
 		botId: string,
 		limits: IBotRoomLimits | null,
 	): Promise<void> {
-		const session = this.invitationSession(`set the room limits of ${botId}`);
+		const account = await this.accountFor(conversationId);
+		if (!account) {
+			return this.here(conversationId, () =>
+				localInbox.setMemberLimits(conversationId, botId, limits),
+			);
+		}
 		await patch(
-			session.profile,
-			`${conversationPath(conversationId)}/members/${encodeURIComponent(botId)}/limits`,
+			account.profile,
+			`${conversationPath(account.id)}/members/${encodeURIComponent(botId)}/limits`,
 			{ limits },
-			session.auth,
+			account.auth,
 		);
 	}
 

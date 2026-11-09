@@ -93,9 +93,11 @@ async fn release_package(app: &AppHandle, bots: &LocalBots, package_id: &str) {
     let lookup = package_id.to_string();
     let release = on_store(bots, move |store| store.release_package(&lookup)).await;
     if matches!(release, Ok(true))
-        && let Err(error) =
-            crate::functions::registry::registry_uninstall_package(app.clone(), package_id.to_string())
-                .await
+        && let Err(error) = crate::functions::registry::registry_uninstall_package(
+            app.clone(),
+            package_id.to_string(),
+        )
+        .await
     {
         tracing::warn!(%error, package_id, "The package of a deleted skill was not uninstalled");
     }
@@ -117,7 +119,11 @@ pub async fn local_bot_install_skill_package(
         .map_err(|error| error.to_string())?;
     let mut installed_here = false;
     let mut package = client.get_installed(&package_id).await;
-    if package.is_none() || version.as_ref().is_some_and(|v| package.as_ref().is_some_and(|p| &p.version != v)) {
+    if package.is_none()
+        || version
+            .as_ref()
+            .is_some_and(|v| package.as_ref().is_some_and(|p| &p.version != v))
+    {
         crate::functions::registry::registry_install_package(
             app.clone(),
             package_id.clone(),
@@ -130,7 +136,8 @@ pub async fn local_bot_install_skill_package(
         installed_here = package.is_none();
         package = client.get_installed(&package_id).await;
     }
-    let package = package.ok_or_else(|| format!("Package '{package_id}' could not be installed"))?;
+    let package =
+        package.ok_or_else(|| format!("Package '{package_id}' could not be installed"))?;
     let entries: Vec<CreateBotSkill> = package
         .manifest
         .skills

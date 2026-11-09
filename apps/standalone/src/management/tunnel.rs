@@ -42,6 +42,7 @@ pub(crate) enum OpenTarget {
 pub(crate) struct PlaygroundTarget {
     pub host: crate::playground::MachineHost,
     pub bot_id: String,
+    pub observations: bool,
 }
 
 fn require_playground_owner(authority: &Authority) -> Result<()> {
@@ -52,7 +53,7 @@ fn require_playground_owner(authority: &Authority) -> Result<()> {
     feature = "playground",
     any(target_os = "macos", windows, target_os = "linux")
 ))]
-fn playground(authority: &Authority, bot_id: &str) -> Result<OpenTarget> {
+fn playground(authority: &Authority, bot_id: &str, observations: bool) -> Result<OpenTarget> {
     require_playground_owner(authority)?;
     let host = crate::playground::shared_machine_host().ok_or_else(|| {
         refusal(
@@ -63,6 +64,7 @@ fn playground(authority: &Authority, bot_id: &str) -> Result<OpenTarget> {
     Ok(OpenTarget::BotPlayground(PlaygroundTarget {
         host,
         bot_id: bot_id.to_owned(),
+        observations,
     }))
 }
 
@@ -70,7 +72,7 @@ fn playground(authority: &Authority, bot_id: &str) -> Result<OpenTarget> {
     feature = "playground",
     any(target_os = "macos", windows, target_os = "linux")
 )))]
-fn playground(_: &Authority, _: &str) -> Result<OpenTarget> {
+fn playground(_: &Authority, _: &str, _: bool) -> Result<OpenTarget> {
     Err(refusal(
         RejectionCode::Unsupported,
         "This device agent was built without the bot playground",
@@ -1043,9 +1045,10 @@ impl TunnelAuthority {
                 authority.require(ManagementCapability::ModelUse, None, None)?;
                 gateway(&authority)
             }
-            flow_like_device_protocol::TunnelTarget::BotPlayground { ref bot_id } => {
-                playground(&self.authority()?, bot_id)
-            }
+            flow_like_device_protocol::TunnelTarget::BotPlayground {
+                ref bot_id,
+                observations,
+            } => playground(&self.authority()?, bot_id, observations),
         }
     }
 

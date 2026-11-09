@@ -146,6 +146,7 @@ impl LocalBotStore {
                 )?;
             }
             tx.execute("DELETE FROM parked_turns WHERE turn_id = ?1", [turn_id])?;
+            crate::recovery::rebase_deadline(tx, turn_id, now_micros() / 1_000)?;
             changes.conversation(&direct);
             changes.bot(bot_id);
             Ok(Some(ParkedTurn {

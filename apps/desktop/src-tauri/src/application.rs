@@ -5,10 +5,14 @@
 // Tauri retain its required mobile `staticlib`/`cdylib` contract without
 // archiving the full desktop dependency graph into those artifacts on every
 // host build.
-mod deeplink;
+#[cfg(target_os = "android")]
+mod android_bot_runtime;
+#[cfg(target_os = "android")]
+mod android_mobile;
 mod bot_host;
 #[cfg(feature = "code-sandbox")]
 mod code_sandbox;
+mod deeplink;
 #[cfg(desktop)]
 mod device_models;
 mod device_tunnels;
@@ -27,10 +31,6 @@ mod local_page_actions;
 #[cfg(any(test, not(debug_assertions)))]
 mod logging;
 mod native_auth;
-#[cfg(target_os = "android")]
-mod android_mobile;
-#[cfg(target_os = "android")]
-mod android_bot_runtime;
 mod offline_writes;
 mod profile;
 mod realtime;
@@ -696,6 +696,7 @@ pub fn run() {
         .manage(state::TauriRecordingState::new())
         .manage(run_report_queue)
         .manage(offline_writes::OfflineWrites::new())
+        .manage(functions::inbox_e2e::PersonKeys::default())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
@@ -1523,6 +1524,7 @@ pub fn run() {
             functions::local_bots::local_inbox_rename,
             functions::local_bots::local_inbox_set_image,
             functions::local_bots::local_inbox_add_members,
+            functions::local_bots::local_inbox_set_member_limits,
             functions::local_bots::local_inbox_remove_member,
             functions::local_bots::local_inbox_delete_conversation,
             functions::local_bots::local_inbox_entries,
@@ -1541,11 +1543,17 @@ pub fn run() {
             functions::local_bots::history::local_inbox_entries_by_position,
             functions::local_bots::history::local_inbox_topic,
             functions::local_bots::history::local_inbox_segments,
+            functions::local_bots::notes::local_bots_notes_list,
+            functions::local_bots::notes::local_bots_notes_get,
+            functions::local_bots::notes::local_bots_notes_update,
             functions::local_bots::history::local_inbox_import_history,
             functions::local_bots::history::local_inbox_write_segment,
             bot_host::commands::bot_host_turns,
             bot_host::commands::bot_host_e2e_status,
             bot_host::commands::bot_host_e2e_rotate_key,
+            functions::inbox_e2e::inbox_e2e_key,
+            functions::inbox_e2e::inbox_e2e_seal,
+            functions::inbox_e2e::inbox_e2e_open,
             bot_host::commands::bot_host_cancel_turn,
             bot_host::grant_commands::local_bot_tool_grants,
             bot_host::grant_commands::local_bot_put_tool_grant,
@@ -1603,6 +1611,8 @@ pub fn run() {
             execution_open_auth_session,
             execution_set_auth,
             native_auth::native_auth_read,
+            native_auth::native_auth_context,
+            native_auth::native_auth_complete_onboarding,
             native_auth::native_auth_write,
             native_auth::native_auth_clear,
             native_auth::native_auth_refresh,

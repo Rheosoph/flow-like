@@ -1,6 +1,6 @@
 //! Conversations as their reader sees them, in a constant number of statements however many
 //! conversations there are: one for the conversations with their unread counts and newest
-//! message ids, one for the active members, one for the newest messages.
+//! message ids, one for the active members, two for participant names, one for the newest messages.
 
 use super::{
     MEMBER_BLOCKED, MEMBER_DECLINED, MEMBER_PENDING, Reader, active_members,
@@ -171,11 +171,19 @@ async fn members_by_conversation<C: ConnectionTrait>(
     conversation_ids: &[String],
 ) -> Result<HashMap<String, Vec<ConversationMember>>, DbErr> {
     let mut members: HashMap<String, Vec<ConversationMember>> = HashMap::new();
-    for member in active_members(db, conversation_ids).await? {
-        members
-            .entry(member.conversation_id.clone())
-            .or_default()
-            .push(member.into());
+    let active = active_members(db, conversation_ids).await?;
+    let ids: HashSet<&str> = active
+        .iter()
+        .map(|member| member.principal_id.as_str())
+        .collect();
+    let names =
+        crate::bot_host::history::sender_names(db, &ids.into_iter().collect::<Vec<_>>()).await?;
+    for member in active {
+        let conversation_id = member.conversation_id.clone();
+        let name = names.get(&member.principal_id).cloned();
+        let mut member = ConversationMember::from(member);
+        member.name = name;
+        members.entry(conversation_id).or_default().push(member);
     }
     Ok(members)
 }

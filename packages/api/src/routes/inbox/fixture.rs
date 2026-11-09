@@ -39,14 +39,14 @@ const TABLES: [&str; 8] = [
         UNIQUE ("inboxId", "messageId"), UNIQUE ("inboxId", "conversationId", "seq"))"#,
     r#"CREATE TABLE public."App" ("id" TEXT PRIMARY KEY, "botId" TEXT UNIQUE)"#,
     r#"CREATE TABLE public."User" (
-        "id" TEXT PRIMARY KEY, "name" TEXT, "username" TEXT, "preferredUsername" TEXT)"#,
+        "id" TEXT PRIMARY KEY, "name" TEXT, "username" TEXT, "preferredUsername" TEXT, "additionalInformation" TEXT, "updatedAt" TEXT)"#,
     r#"CREATE TABLE public."BotTurn" (
         "id" TEXT PRIMARY KEY, "botId" TEXT NOT NULL, "ownerId" TEXT NOT NULL,
         "conversationId" TEXT NOT NULL, "triggerMessageId" TEXT NOT NULL,
         "hostKind" TEXT NOT NULL, "status" TEXT NOT NULL, "attempts" INTEGER NOT NULL,
         "hostId" TEXT, "leaseUntil" TEXT, "operationId" TEXT, "replyMessageId" TEXT,
         "errorCode" TEXT, "hops" INTEGER NOT NULL, "requesterId" TEXT,
-        "audience" TEXT NOT NULL DEFAULT 'OWNER', "createdAt" TEXT NOT NULL,
+        "audience" TEXT NOT NULL DEFAULT 'OWNER', "statusText" TEXT, "createdAt" TEXT NOT NULL,
         "updatedAt" TEXT NOT NULL, UNIQUE ("botId", "triggerMessageId"))"#,
     r#"CREATE TABLE public."ConversationSegment" (
         "id" TEXT PRIMARY KEY, "conversationId" TEXT NOT NULL, "authorId" TEXT NOT NULL,
@@ -72,6 +72,7 @@ pub(crate) async fn database() -> DatabaseConnection {
         schema.create_table_from_entity(bot::Entity),
         schema.create_table_from_entity(membership::Entity),
         schema.create_table_from_entity(mutation_lock::Entity),
+        schema.create_table_from_entity(crate::entity::bot_turn_checkpoint::Entity),
     ] {
         let mut table = Table::create();
         table.table(source.get_table_name().unwrap().clone());
@@ -80,6 +81,12 @@ pub(crate) async fn database() -> DatabaseConnection {
         }
         db.execute(&table).await.unwrap();
     }
+    db.execute(&schema.create_table_from_entity(crate::entity::bot_decision_wait::Entity))
+        .await
+        .unwrap();
+    db.execute(&schema.create_table_from_entity(crate::entity::bot_note::Entity))
+        .await
+        .unwrap();
     for statement in TABLES
         .iter()
         .chain(&super::marks::TEST_TABLES)
@@ -220,6 +227,7 @@ pub(crate) async fn running_turn(
         hops: Set(1),
         requester_id: Set(None),
         audience: Set("OWNER".into()),
+        status_text: Set(None),
         created_at: Set(at(0)),
         updated_at: Set(at(0)),
     }

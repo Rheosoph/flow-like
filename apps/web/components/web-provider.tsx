@@ -40,6 +40,8 @@ import {
 	useQueryClient,
 } from "@flow-like/flow-like-ui";
 import type { ICommandSync } from "@flow-like/flow-like-ui/lib";
+import { withEndToEnd } from "@flow-like/flow-like-ui/lib/inbox-e2e";
+import { browserInboxCrypto } from "@flow-like/flow-like-ui/lib/inbox-e2e-browser";
 import type { IAIState } from "@flow-like/flow-like-ui/state/backend-state/ai-state";
 import type { IAnalyticsState } from "@flow-like/flow-like-ui/state/backend-state/analytics-state";
 import { i18n as i18next } from "@flow-like/locales";
@@ -145,7 +147,11 @@ export class WebBackend implements IBackendState {
 		this.sinkState = new WebSinkState(this.backendRef);
 		this.salesState = new WebSalesState(this.backendRef);
 		this.botState = new WebBotState(this.backendRef);
-		this.inboxState = new WebInboxState(this.backendRef);
+		this.inboxState = withEndToEnd(
+			new WebInboxState(this.backendRef),
+			browserInboxCrypto,
+			() => this.backendRef.auth?.user?.profile?.sub,
+		);
 		this.meetingClient = createWebMeetingClient(this.backendRef);
 		this.usageState = new WebUsageState(this.backendRef);
 		this.audioState = new WebAudioState(this.backendRef);

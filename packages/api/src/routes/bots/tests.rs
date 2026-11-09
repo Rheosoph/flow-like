@@ -17,7 +17,7 @@ use super::{
 };
 use crate::{
     db::DbDialect,
-    entity::{bot, bot_app, bot_secret, membership, role},
+    entity::{bit, bot, bot_app, bot_secret, membership, role},
     error::ApiError,
 };
 use axum::http::StatusCode;
@@ -29,7 +29,8 @@ use flow_like_types::{
 };
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectOptions, ConnectionTrait, Database,
-    DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, Schema, sea_query::Table,
+    DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, Schema, TransactionTrait,
+    sea_query::Table,
 };
 use serde_json::json;
 
@@ -42,6 +43,7 @@ async fn database() -> DatabaseConnection {
         .unwrap();
     let schema = Schema::new(db.get_database_backend());
     for source in [
+        schema.create_table_from_entity(bit::Entity),
         schema.create_table_from_entity(bot::Entity),
         schema.create_table_from_entity(bot_app::Entity),
         schema.create_table_from_entity(bot_secret::Entity),
@@ -97,6 +99,126 @@ async fn soft_delete(db: &DatabaseConnection, row: &bot::Model) {
 
 fn keys(bots: &[bot::Model]) -> Vec<Option<&str>> {
     bots.iter().map(|row| row.system_key.as_deref()).collect()
+}
+
+#[tokio::test]
+async fn server_decision_models_require_hosted_systemone_and_survive_unrelated_edits() {
+    use crate::entity::sea_orm_active_enums::BitType;
+    let db = database().await;
+    for (id, kind, provider) in [
+        ("decision-hosted", BitType::SystemOne, "hosted:typesafe"),
+        ("decision-local", BitType::SystemOne, "Local"),
+        ("decision-custom", BitType::SystemOne, "custom:systemone"),
+        ("chat-hosted", BitType::Llm, "hosted:openrouter"),
+    ] {
+        bit::ActiveModel {
+            id: Set(id.into()),
+            r#type: Set(kind),
+            hub: Set("test".into()),
+            parameters: Set(Some(json!({ "context_length": 4096, "provider": {
+                "provider_name": provider, "model_id": "decision-model"
+            } }))),
+            created_at: Set(at(0)),
+            updated_at: Set(at(0)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+    }
+    let bot = custom_bot(&db, "owner", "Decider", at(0)).await;
+    for id in [
+        "decision-local",
+        "decision-custom",
+        "chat-hosted",
+        "missing",
+    ] {
+        let request = serde_json::from_value(json!({ "model": { "decision": id } })).unwrap();
+        assert_eq!(
+            patch_in(&db, "owner", &bot.id, request)
+                .await
+                .unwrap_err()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let request =
+        serde_json::from_value(json!({ "model": { "decision": " decision-hosted " } })).unwrap();
+    let saved = patch_in(&db, "owner", &bot.id, request).await.unwrap();
+    assert_eq!(
+        BotSettings::from_row(&saved.bot).model.decision.as_deref(),
+        Some("decision-hosted")
+    );
+    let copy = clone_in(&db, "owner", &bot.id, at(1)).await.unwrap();
+    assert_eq!(
+        BotSettings::from_row(&copy.bot).model.decision.as_deref(),
+        Some("decision-hosted")
+    );
+    let renamed = patch_in(
+        &db,
+        "owner",
+        &bot.id,
+        serde_json::from_value(json!({ "name": "Renamed" })).unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        BotSettings::from_row(&renamed.bot)
+            .model
+            .decision
+            .as_deref(),
+        Some("decision-hosted")
+    );
+    let cleared = patch_in(
+        &db,
+        "owner",
+        &bot.id,
+        serde_json::from_value(json!({ "model": { "decision": null } })).unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(BotSettings::from_row(&cleared.bot).model.decision, None);
+    patch_in(
+        &db,
+        "owner",
+        &bot.id,
+        serde_json::from_value(
+            json!({ "location": "desktop", "model": { "decision": "decision-local" } }),
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        patch_in(
+            &db,
+            "owner",
+            &bot.id,
+            serde_json::from_value(json!({ "location": "server" })).unwrap()
+        )
+        .await
+        .unwrap_err()
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    for id in [
+        "decision-local",
+        "decision-custom",
+        "chat-hosted",
+        "missing",
+    ] {
+        let request = serde_json::from_value(json!({
+            "location": "device", "device_id": "managed-device", "model": { "decision": id }
+        }))
+        .unwrap();
+        assert_eq!(
+            patch_in(&db, "owner", &bot.id, request)
+                .await
+                .unwrap_err()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
 }
 
 #[tokio::test]
@@ -346,6 +468,95 @@ async fn a_patch_merges_onto_the_stored_bot() {
         .await
         .unwrap_err();
     assert_eq!(intruder.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_configuration_patch_keeps_model_fields_changed_since_approval() {
+    let db = database().await;
+    let row = custom_bot(&db, "owner", "Scout", at(0)).await;
+    let saved = patch_in(
+        &db,
+        "owner",
+        &row.id,
+        UpdateBotRequest {
+            model: Some(BotModelPolicy {
+                primary: Some("chat-before".into()),
+                fallbacks: vec!["fallback-before".into()],
+                decision: Some("decision-before".into()),
+            }),
+            instructions: Some(Some("Keep this instruction.".into())),
+            location: Some(BotLocation::Desktop),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let approved_changes = json!({"model": {"primary": "chat-approved"}});
+
+    // Another edit completes while the configuration approval is open.
+    let mut newer_model = BotSettings::from_row(&saved.bot).model;
+    newer_model.fallbacks = vec!["fallback-newer".into()];
+    newer_model.decision = Some("decision-newer".into());
+    patch_in(
+        &db,
+        "owner",
+        &row.id,
+        UpdateBotRequest {
+            model: Some(newer_model),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let txn = db.begin().await.unwrap();
+    let patched = super::configuration::patch_in(&txn, "owner", &row.id, approved_changes)
+        .await
+        .unwrap();
+    txn.commit().await.unwrap();
+    assert_eq!(patched.changed, ["model"]);
+    let current = BotSettings::from_row(&owned_bot(&db, "owner", &row.id).await.unwrap());
+    assert_eq!(current.model.primary.as_deref(), Some("chat-approved"));
+    assert_eq!(current.model.fallbacks, ["fallback-newer"]);
+    assert_eq!(current.model.decision.as_deref(), Some("decision-newer"));
+    assert_eq!(current.instructions.as_deref(), Some("Keep this instruction."));
+
+    let cleared = super::configuration::patch_in(
+        &db,
+        "owner",
+        &row.id,
+        json!({"model": {"decision": null}}),
+    )
+    .await
+    .unwrap();
+    let cleared = BotSettings::from_row(&cleared.bot);
+    assert_eq!(cleared.model.primary, current.model.primary);
+    assert_eq!(cleared.model.fallbacks, current.model.fallbacks);
+    assert_eq!(cleared.model.decision, None);
+}
+
+#[tokio::test]
+async fn configuration_patches_cannot_change_ownership_or_another_owners_bot() {
+    let db = database().await;
+    let row = custom_bot(&db, "owner", "Scout", at(0)).await;
+    for changes in [json!({"owner_id": "intruder"}), json!({"location": "server"})] {
+        let error = super::configuration::patch_in(&db, "owner", &row.id, changes)
+            .await
+            .unwrap_err();
+        assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+    }
+    let error = super::configuration::patch_in(
+        &db,
+        "intruder",
+        &row.id,
+        json!({"name": "Changed"}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.status(), StatusCode::NOT_FOUND);
+    let stored = owned_bot(&db, "owner", &row.id).await.unwrap();
+    assert_eq!(stored.name.as_deref(), Some("Scout"));
+    assert_eq!(stored.updated_at, row.updated_at);
 }
 
 #[test]
@@ -600,6 +811,7 @@ async fn a_duplicate_copies_the_settings_and_the_apps_the_owner_still_uses() {
         instructions: Some("Cite your sources".into()),
         appearance: json!({ "kind": "pip", "frame": "round" }),
         model: BotModelPolicy {
+            decision: None,
             primary: Some("model-a".into()),
             fallbacks: vec!["model-b".into()],
         },

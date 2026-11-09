@@ -32,6 +32,28 @@ const MUTE_KEY: &str = "muted";
 const NO_PREVIEW: &str = "Sent you a message";
 const CALL_STARTED: &str = "Started a call";
 
+fn notification_priority(
+    entry: &InboxEntry,
+    recipient: &str,
+) -> flow_like_types::user_availability::NotificationPriority {
+    use flow_like_types::user_availability::NotificationPriority;
+    if InboxEntryKind::parse(&entry.kind) == Some(InboxEntryKind::Call) {
+        return NotificationPriority::Call;
+    }
+    if entry.envelope["enc"].as_str() == Some("none")
+        && entry.envelope["body"]["mentions"]
+            .as_array()
+            .is_some_and(|mentions| {
+                mentions
+                    .iter()
+                    .any(|value| value.as_str() == Some(recipient))
+            })
+    {
+        return NotificationPriority::Mention;
+    }
+    NotificationPriority::Routine
+}
+
 pub(crate) fn is_muted(limits: Option<&Value>) -> bool {
     limits
         .and_then(|limits| limits.get(MUTE_KEY))
@@ -151,6 +173,7 @@ pub(crate) async fn notify_message<C: ConnectionTrait>(
         sink.send(
             &stable_id(recipient, &entry.message_id),
             DispatchNotificationInput {
+                notification_priority: notification_priority(entry, recipient),
                 bot_context: None,
                 user_id: recipient.clone(),
                 app_id: None,
@@ -241,6 +264,40 @@ pub async fn set_mute(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_stored_call_or_recipient_mention_gets_a_focus_exception() {
+        use flow_like_types::user_availability::NotificationPriority;
+        let mut entry = super::InboxEntry {
+            id: "copy".into(),
+            message_id: "message".into(),
+            conversation_id: "room".into(),
+            sender_id: "sender".into(),
+            kind: "message".into(),
+            envelope: serde_json::json!({"v":1,"enc":"none","body":{"text":"Hello","mentions":["recipient"]}}),
+            created_at: chrono::Utc::now().fixed_offset(),
+            seq: Some(1),
+            cursor: "cursor".into(),
+        };
+        assert_eq!(
+            super::notification_priority(&entry, "recipient"),
+            NotificationPriority::Mention
+        );
+        assert_eq!(
+            super::notification_priority(&entry, "other"),
+            NotificationPriority::Routine
+        );
+        entry.envelope["enc"] = "sealed".into();
+        assert_eq!(
+            super::notification_priority(&entry, "recipient"),
+            NotificationPriority::Routine
+        );
+        entry.kind = "call".into();
+        assert_eq!(
+            super::notification_priority(&entry, "recipient"),
+            NotificationPriority::Call
+        );
+    }
+
     #[test]
     fn notification_links_keep_identifiers_in_their_query_parameters() {
         assert_eq!(

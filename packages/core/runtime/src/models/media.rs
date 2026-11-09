@@ -408,9 +408,12 @@ const _: () = assert!(base64_len(COHERE_CAPS.call) <= 20 * MB);
 const _: () = assert!(base64_len(PERPLEXITY_CAPS.call) < 72 * MIB);
 const _: () = assert!(base64_len(TGI_CAPS.call) < 2 * MB);
 
-/// What a run sends the API's model relay inline in one call, beside the call's text documents
-/// and messages within the relay's request limit.
+/// What a call sends inline through one of the API's model hops (the relay of private Bits, the
+/// proxy of hosted models), beside the call's text documents and messages within the hop's
+/// request limit.
 const RELAY_CAPS: InlineCaps = InlineCaps::total(4 * MB);
+/// Largest image a call downloads to fit into its inline limit; camera photos are far below.
+const MAX_SOURCE_IMAGE_BYTES: u64 = 32 * MIB;
 const _: () = assert!(
     base64_len(RELAY_CAPS.call) + base64_len(DIRECT_POLICY.text_bytes) < MAX_REQUEST_BYTES as u64
 );
@@ -592,16 +595,26 @@ impl MediaReader {
         Self::TEXT_ONLY.with_images(Reads::INLINE.only(types))
     }
 
+    /// The reader of a call through one of the API's model hops, whose request limit bounds what
+    /// travels inline.
+    fn through_api(self) -> Self {
+        Self {
+            caps: self.caps.within(RELAY_CAPS),
+            ..self
+        }
+    }
+
     /// The reader of the client `ModelFactory` builds for `provider`, by its name, API surface
-    /// and endpoint.
+    /// and endpoint. A hosted model is called through the API's proxy.
     pub fn for_provider(provider: &ModelProvider) -> Self {
         let name = provider.provider_name.trim().to_ascii_lowercase();
         if is_hosted_provider_name(&name) {
-            return match name.strip_prefix("hosted:").unwrap_or("openrouter") {
+            let reader = match name.strip_prefix("hosted:").unwrap_or("openrouter") {
                 "openai" => Self::openai(OpenAiHost::Platform, provider.api_surface_or_default()),
                 "bedrock" => Self::BEDROCK,
                 _ => Self::OPENROUTER,
             };
+            return reader.through_api();
         }
         let surface = provider.api_surface.unwrap_or(ModelApiSurface::Responses);
         match name.strip_prefix("custom:").unwrap_or(&name) {
@@ -865,14 +878,10 @@ impl RemoteMediaModel {
             downloads: EnvironmentSource::new(environment),
             own_storage,
         };
-        let reader = MediaReader {
-            caps: reader.caps.within(RELAY_CAPS),
-            ..reader
-        };
         Self::with(
             inner,
             Arc::new(source),
-            reader,
+            reader.through_api(),
             InlinePolicy::direct(environment),
         )
     }
@@ -1894,7 +1903,8 @@ impl Resolution {
         }
     }
 
-    /// Sets a Rig part's source, and the type of an image that only its response typed.
+    /// Sets a Rig part's source, and an inlined image's type: the one its response named, or the
+    /// one it was re-encoded as to fit.
     fn apply(&self, part: &mut UserContent) {
         let source = match self {
             Self::Inline(media) => media.source(),
@@ -1903,9 +1913,9 @@ impl Resolution {
         match part {
             UserContent::Image(image) => {
                 if let Self::Inline(media) = self
-                    && image.media_type.is_none()
+                    && let Some(inlined) = image_type(media.mime())
                 {
-                    image.media_type = image_type(media.mime());
+                    image.media_type = Some(inlined);
                 }
                 image.data = source;
             }
@@ -1983,7 +1993,7 @@ async fn fetch_media(
         .prepare()
         .await
         .map_err(|error| anyhow!("Media for the model could not be fetched: {error}"))?;
-    let fetcher = MediaFetcher::new(source, policy, caps);
+    let fetcher = MediaFetcher::new(source, policy, caps).shared_by(&candidates);
     let mut inlined = Vec::with_capacity(candidates.len());
     {
         let pending: Vec<_> = candidates
@@ -2008,6 +2018,8 @@ struct MediaFetcher<'a> {
     deadline: Instant,
     text_left: AtomicU64,
     binary_left: AtomicU64,
+    /// The binary parts of the call, which share its budget.
+    binary_parts: u64,
 }
 
 impl<'a> MediaFetcher<'a> {
@@ -2019,7 +2031,31 @@ impl<'a> MediaFetcher<'a> {
             deadline: Instant::now() + policy.deadline,
             text_left: AtomicU64::new(policy.text_bytes),
             binary_left: AtomicU64::new(caps.call),
+            binary_parts: 1,
         }
+    }
+
+    fn shared_by(self, candidates: &[Candidate]) -> Self {
+        let binary_parts = candidates
+            .iter()
+            .filter(|candidate| candidate.class == MediaClass::Binary)
+            .count() as u64;
+        Self {
+            binary_parts: binary_parts.max(1),
+            ..self
+        }
+    }
+
+    /// The bytes an image is fitted into: the provider's limit for one image, and an even share
+    /// of the call's budget when the call inlines several parts.
+    fn image_target(&self, limit: u64) -> u64 {
+        limit.min(self.caps.call / self.binary_parts)
+    }
+
+    /// A cached part this call can send: an image only when it is within this call's target.
+    fn sends_cached(&self, candidate: &Candidate, media: &InlinedMedia) -> bool {
+        candidate.kind != Kind::Image
+            || media.bytes <= self.image_target(self.part_limit(candidate))
     }
 
     fn left(&self, class: MediaClass) -> &AtomicU64 {
@@ -2095,12 +2131,18 @@ impl<'a> MediaFetcher<'a> {
             candidate.url.clone(),
         );
         let mut charge = self.charge(candidate.class);
-        if cached && let Some(media) = MEDIA_CACHE.get(&key) {
+        if cached
+            && let Some(media) = MEDIA_CACHE.get(&key)
+            && self.sends_cached(candidate, &media)
+        {
             self.spend(candidate, &media, charge)?;
             return Ok(media);
         }
         let limit = self.part_limit(candidate);
-        let failure_key = (key.clone(), limit);
+        let failure_key = match candidate.kind {
+            Kind::Image => (key.clone(), self.image_target(limit)),
+            _ => (key.clone(), limit),
+        };
         if cached && let Some(failed) = FAILED_FETCHES.get(&failure_key) {
             return Err(failed.error());
         }
@@ -2134,15 +2176,22 @@ impl<'a> MediaFetcher<'a> {
         Ok(media)
     }
 
+    /// Reads a part within `limit`. An image may be larger, up to [`MAX_SOURCE_IMAGE_BYTES`], and
+    /// is fitted into its target afterwards; it holds no more than `limit` of the call's budget
+    /// while it arrives.
     async fn download(
         &self,
         candidate: &Candidate,
         limit: u64,
         charge: &mut Charge<'_>,
     ) -> Result<InlinedMedia> {
+        let read_limit = match candidate.kind {
+            Kind::Image => limit.max(MAX_SOURCE_IMAGE_BYTES),
+            _ => limit,
+        };
         let (mime, body) = if self.source.reads_file(&candidate.url) {
-            let body = self.source.read_file(&candidate.url, limit).await?;
-            charge.hold(body.len() as u64, true)?;
+            let body = self.source.read_file(&candidate.url, read_limit).await?;
+            charge.hold((body.len() as u64).min(limit), true)?;
             let mime = match &candidate.mime {
                 Some(mime) => mime.clone(),
                 None => file_image_type(&candidate.url)?.to_mime_type().to_owned(),
@@ -2155,10 +2204,24 @@ impl<'a> MediaFetcher<'a> {
                 Some(mime) => mime.clone(),
                 None => response_image_type(&response)?.to_mime_type().to_owned(),
             };
-            (
-                mime,
-                read_within(response, limit, &candidate.part_label(), charge).await?,
-            )
+            let body =
+                read_within(response, read_limit, limit, &candidate.part_label(), charge).await?;
+            (mime, body)
+        };
+        let (mime, body) = match candidate.kind {
+            Kind::Image => {
+                let target = self.image_target(limit);
+                let label = if target < limit {
+                    format!(
+                        "share of this call's inline limit for each of its {} inline parts",
+                        self.binary_parts
+                    )
+                } else {
+                    format!("limit for {}", candidate.part_label())
+                };
+                fit_image(mime, body, target, &label).await?
+            }
+            _ => (mime, body),
         };
         match candidate.class {
             MediaClass::Text => InlinedMedia::text(&mime, &body),
@@ -2205,11 +2268,41 @@ fn file_image_type(url: &str) -> Result<ImageMediaType> {
         .ok_or_else(|| anyhow!("the file names no image type a model accepts"))
 }
 
+/// An image over `target` bytes re-encoded to fit, losing only the detail the target demands.
+/// `label` names what the target is in an error.
+async fn fit_image(
+    mime: String,
+    body: Vec<u8>,
+    target: u64,
+    label: &str,
+) -> Result<(String, Vec<u8>)> {
+    if body.len() as u64 <= target {
+        return Ok((mime, body));
+    }
+    let size = body.len();
+    let max_bytes = usize::try_from(target).unwrap_or(usize::MAX);
+    let (body, fitted) = flow_like_types::tokio::task::spawn_blocking(move || {
+        let fitted = flow_like_types::images::fit_image_within(&body, max_bytes);
+        (body, fitted)
+    })
+    .await
+    .map_err(|error| anyhow!("fitting the image into the inline limit stopped: {error}"))?;
+    match fitted {
+        Ok(Some(fitted)) => Ok((fitted.media_type.to_owned(), fitted.bytes)),
+        Ok(None) => Ok((mime, body)),
+        Err(error) => Err(BeyondBudget(format!(
+            "it is {size} bytes, over the {target}-byte {label}, and could not be made to fit: {error}"
+        ))
+        .into()),
+    }
+}
+
 /// The response body, refused as beyond the budget once it exceeds `limit` bytes or what `charge`
-/// can hold. A declared length is held before the body is read.
+/// can hold of its first `held_at_most`. A declared length is held before the body is read.
 async fn read_within(
     mut response: reqwest::Response,
     limit: u64,
+    held_at_most: u64,
     label: &str,
     charge: &mut Charge<'_>,
 ) -> Result<Vec<u8>> {
@@ -2220,7 +2313,7 @@ async fn read_within(
             ))
             .into());
         }
-        charge.hold(length, true)?;
+        charge.hold(length.min(held_at_most), true)?;
     }
     let mut body = Vec::new();
     while let Some(chunk) = response
@@ -2234,7 +2327,7 @@ async fn read_within(
                 BeyondBudget(format!("it is over the {limit}-byte limit for {label}")).into(),
             );
         }
-        charge.hold(read, false)?;
+        charge.hold(read.min(held_at_most), false)?;
         body.extend_from_slice(&chunk);
     }
     Ok(body)
@@ -2992,6 +3085,9 @@ pub(crate) mod tests {
             ("openai", Kind::Document, 50 * MB),
             ("azure", Kind::Image, 20 * MB),
             ("custom:ollama", Kind::Image, 20 * MIB),
+            ("hosted:bedrock", Kind::Image, 3_750_000),
+            ("hosted:openai", Kind::Image, 4 * MB),
+            ("hosted:openrouter", Kind::Document, 4 * MB),
         ] {
             assert_eq!(reader(name).caps.part(kind), expected, "{name} {kind:?}");
         }
@@ -3337,7 +3433,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn media_over_the_provider_caps_fails_the_call() {
         let server = serve(vec![
-            ("/huge.png", Reply::Declared(4_000_000)),
+            ("/huge.png", Reply::Declared(MAX_SOURCE_IMAGE_BYTES + 1)),
             ("/first.png", Reply::ok(PNG)),
             ("/second.png", Reply::ok(PNG)),
         ])
@@ -3350,7 +3446,7 @@ pub(crate) mod tests {
         assert!(
             error.contains(
                 "The image (image/png) at host '127.0.0.1' could not be sent to the model inline: \
-                 it is 4000000 bytes, over the 3750000-byte limit for one image sent inline"
+                 it is 33554433 bytes, over the 33554432-byte limit for one image sent inline"
             ),
             "{error}"
         );
@@ -3367,9 +3463,9 @@ pub(crate) mod tests {
         let error = failure(&both, direct(small, TEST_POLICY)).await;
         assert!(
             error.contains(&format!(
-                "its {} bytes exceed the 8 bytes left of this call's {}-byte inline limit",
+                "it is {} bytes, over the {}-byte share of this call's inline limit for each of its 2 inline parts, and could not be made to fit",
                 PNG.len(),
-                PNG.len() + 8
+                (PNG.len() + 8) / 2
             )),
             "{error}"
         );
@@ -3383,6 +3479,45 @@ pub(crate) mod tests {
             error.contains("2 media parts to send inline, more than the 1"),
             "{error}"
         );
+    }
+
+    #[tokio::test]
+    async fn images_over_the_provider_caps_are_fitted_into_them() {
+        let photo = flow_like_types::image::DynamicImage::ImageRgb8(
+            flow_like_types::image::RgbImage::from_fn(320, 240, |x, y| {
+                flow_like_types::image::Rgb([
+                    (x % 256) as u8,
+                    (y % 256) as u8,
+                    ((x * y) % 256) as u8,
+                ])
+            }),
+        );
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        photo
+            .write_to(&mut encoded, flow_like_types::image::ImageFormat::Png)
+            .unwrap();
+        let png: &'static [u8] = Box::leak(encoded.into_inner().into_boxed_slice());
+        let server = serve(vec![("/photo.png", Reply::ok(png))]).await;
+        let original = history(vec![user(vec![
+            text("read the receipt"),
+            image(server.url("/photo.png"), Some("image/png")),
+        ])]);
+        let cap = png.len() as u64 / 2;
+        let tight = MediaReader {
+            caps: InlineCaps::total(cap),
+            ..reader("custom:bedrock")
+        };
+
+        let fitted = prepared(&original, tight).await;
+
+        let data_url = url_at(&fitted, 0, 1);
+        let payload = data_url
+            .strip_prefix("data:image/jpeg;base64,")
+            .expect("the photo is re-encoded as JPEG");
+        let bytes = STANDARD.decode(payload).unwrap();
+        assert!(bytes.len() as u64 <= cap);
+        let decoded = flow_like_types::image::load_from_memory(&bytes).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (320, 240));
     }
 
     #[tokio::test]

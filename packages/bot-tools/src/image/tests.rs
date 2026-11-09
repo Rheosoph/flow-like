@@ -105,7 +105,7 @@ async fn images_land_in_the_workspace_and_reach_the_model() {
     assert!(outcome.is_ok(), "{:?}", outcome.error);
     assert_eq!(outcome.saved.len(), 2);
     assert_eq!(outcome.images.len(), 2);
-    for handle in &outcome.saved {
+    for (index, handle) in outcome.saved.iter().enumerate() {
         assert_eq!(handle.app_id, WORKSPACE);
         assert!(
             handle.path.starts_with("bot/images/img-"),
@@ -113,6 +113,10 @@ async fn images_land_in_the_workspace_and_reach_the_model() {
             handle.path
         );
         assert!(handle.path.ends_with(".png"));
+        assert_eq!(
+            outcome.result["images"][index]["markdown_url"],
+            format!("storage://apps/{WORKSPACE}/app/{}", handle.path)
+        );
         assert!(
             env.files
                 .lock()
@@ -123,6 +127,8 @@ async fn images_land_in_the_workspace_and_reach_the_model() {
     assert_ne!(outcome.saved[0].path, outcome.saved[1].path);
     assert_eq!(outcome.result["ai_generated"], true);
     assert_eq!(outcome.result["left_this_turn"], 6);
+    assert_eq!(outcome.result["requested_size"], "1536x1024");
+    assert!(outcome.result.get("size").is_none());
     let job = images.jobs.lock().expect("jobs")[0].clone();
     assert_eq!(job.size, "1536x1024");
     assert_eq!(job.seed, Some(3));

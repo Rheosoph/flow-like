@@ -1,0 +1,1029 @@
+/* Sensitivity badges, styled like the app's */
+
+.dt-badges {
+	display: inline-flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	align-items: center;
+}
+
+.dt-badge {
+	--tone: var(--muted-foreground);
+	display: inline-flex;
+	gap: 5px;
+	align-items: center;
+	padding: 2px 8px;
+	border: 1px solid color-mix(in oklab, var(--tone) 40%, transparent);
+	border-radius: 999px;
+	background: color-mix(in oklab, var(--tone) 12%, transparent);
+	color: color-mix(in oklab, var(--tone) 85%, var(--foreground));
+	font-size: 11px;
+	font-weight: 650;
+	line-height: 1.5;
+	white-space: nowrap;
+}
+
+.dt-badge > i {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--tone);
+}
+
+.dt-badge[data-level="internal"] {
+	--tone: #4f7fe0;
+}
+
+.dt-badge[data-level="confidential"] {
+	--tone: #e09a28;
+}
+
+.dt-badge[data-level="restricted"] {
+	--tone: #e5484d;
+}
+
+.dt-badge--pii {
+	--tone: var(--foreground);
+	background: var(--background);
+}
+
+.dt-badge--pii svg {
+	width: 11px;
+	height: 11px;
+}
+
+/* Hero */
+
+.dt-hero-card {
+	display: grid;
+	gap: 14px;
+	padding: 22px;
+	border: 1px solid color-mix(in oklab, var(--foreground) 12%, transparent);
+	border-radius: 20px;
+	background: color-mix(in oklab, var(--card) 85%, transparent);
+	box-shadow: 0 30px 90px color-mix(in oklab, var(--primary) 18%, transparent);
+	backdrop-filter: blur(16px);
+	animation: pl-float 8s ease-in-out infinite;
+}
+
+.dt-hero-sources {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.dt-hero-sources span {
+	display: inline-flex;
+	gap: 8px;
+	align-items: baseline;
+	padding: 6px 12px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: var(--background);
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
+
+.dt-hero-sources b {
+	color: var(--foreground);
+	font: 600 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.dt-hero-bars {
+	display: grid;
+	gap: 8px;
+	font-size: 12.5px;
+	color: var(--muted-foreground);
+}
+
+.dt-hero-bars span {
+	display: grid;
+	grid-template-columns: 1fr 80px;
+	gap: 12px;
+	align-items: center;
+}
+
+.dt-hero-bars i {
+	height: 12px;
+	border-radius: 4px;
+	background: linear-gradient(90deg, var(--primary), var(--accent));
+}
+
+/* Query */
+
+.dt-query {
+	display: grid;
+	gap: 16px;
+}
+
+.dt-query-bar {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	justify-content: space-between;
+}
+
+.dt-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	min-inline-size: 0;
+	margin: 0;
+	padding: 4px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--card);
+}
+
+.dt-tabs button {
+	min-height: 38px;
+	padding: 0 14px;
+	border: 0;
+	border-radius: 9px;
+	background: transparent;
+	color: var(--muted-foreground);
+	font: inherit;
+	font-size: 13.5px;
+	font-weight: 650;
+	cursor: pointer;
+}
+
+.dt-tabs button[aria-pressed="true"] {
+	background: var(--foreground);
+	color: var(--background);
+}
+
+.dt-query-stage {
+	display: grid;
+	grid-template-columns: minmax(0, 0.78fr) minmax(0, 1.4fr);
+	gap: 28px;
+	align-items: start;
+	padding: 28px;
+	border: 1px solid var(--border);
+	border-radius: 20px;
+	background: radial-gradient(
+			ellipse at 15% 20%,
+			color-mix(in oklab, var(--primary) 10%, transparent),
+			transparent 60%
+		), color-mix(in oklab, var(--card) 70%, transparent);
+	animation: dt-rise 0.4s ease both;
+}
+
+.dt-schemas {
+	display: grid;
+	gap: 0;
+	padding-top: 6px;
+}
+
+.dt-schema {
+	position: relative;
+	margin-bottom: -10px;
+	overflow: hidden;
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	background: var(--card);
+	box-shadow: 0 16px 36px rgb(0 0 0 / 0.28);
+	transform: rotate(var(--tilt, 0deg));
+	transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s
+		ease;
+}
+
+.dt-schema:last-child {
+	margin-bottom: 0;
+}
+
+.dt-schema[data-active="true"],
+.dt-schema:hover {
+	z-index: 2;
+	border-color: color-mix(in oklab, var(--accent) 60%, var(--border));
+	box-shadow: 0 22px 50px
+		color-mix(in oklab, var(--accent) 22%, rgb(0 0 0 / 0.3));
+	transform: rotate(0deg) translateY(-4px) scale(1.02);
+}
+
+.dt-schema header {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	padding: 10px 14px;
+	border-bottom: 1px solid var(--border);
+	background: color-mix(in oklab, var(--muted) 45%, transparent);
+	font-size: 12.5px;
+}
+
+.dt-schema header svg {
+	width: 14px;
+	height: 14px;
+	color: var(--accent);
+}
+
+.dt-schema header b {
+	color: var(--muted-foreground);
+	font: 600 12.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.dt-schema header b span {
+	color: var(--foreground);
+}
+
+.dt-schema header small {
+	margin-left: auto;
+	color: var(--muted-foreground);
+	font-size: 11px;
+}
+
+.dt-schema ul {
+	display: grid;
+	margin: 0;
+	padding: 6px 0;
+	list-style: none;
+}
+
+.dt-schema li {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto auto;
+	gap: 10px;
+	align-items: center;
+	padding: 5px 14px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
+
+.dt-schema li code,
+.dt-labels-table li code {
+	overflow: hidden;
+	color: var(--foreground);
+	font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.dt-schema li[data-used="true"] {
+	background: color-mix(in oklab, var(--accent) 9%, transparent);
+	box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.dt-schema-type {
+	color: var(--muted-foreground);
+	font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.dt-schema-label {
+	display: inline-flex;
+	gap: 4px;
+	align-items: center;
+	justify-content: flex-end;
+	min-width: 104px;
+}
+
+.dt-schema-pii {
+	padding: 1px 5px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	color: var(--foreground);
+	font-size: 9.5px;
+	font-weight: 700;
+}
+
+.dt-query-main {
+	display: grid;
+	gap: 16px;
+	min-width: 0;
+}
+
+.dt-ask {
+	display: grid;
+	gap: 12px;
+	align-content: start;
+	min-height: 260px;
+	padding: 20px;
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	background: var(--background);
+}
+
+.dt-ask p {
+	margin: 0;
+	font-size: 14px;
+	line-height: 1.6;
+}
+
+.dt-ask-you {
+	justify-self: end;
+	max-width: 88%;
+	padding: 10px 14px;
+	border-radius: 14px 14px 4px 14px;
+	background: var(--muted);
+}
+
+.dt-ask-flux {
+	padding: 12px 14px;
+	border: 1px solid color-mix(in oklab, var(--accent) 35%, var(--border));
+	border-radius: 12px;
+}
+
+.dt-ask-flux b {
+	font-size: 12.5px;
+}
+
+.dt-ask-flux p {
+	margin-top: 4px;
+	color: var(--muted-foreground);
+}
+
+.dt-result {
+	overflow: hidden;
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	background: var(--background);
+}
+
+.dt-result header {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 16px;
+	align-items: center;
+	justify-content: space-between;
+	padding: 10px 16px;
+	border-bottom: 1px solid var(--border);
+	color: var(--muted-foreground);
+	font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.dt-result-label {
+	display: inline-flex;
+	gap: 8px;
+	align-items: center;
+	font-family: inherit;
+}
+
+.dt-result table {
+	width: 100%;
+	margin: 0;
+	border: 0;
+	border-collapse: collapse;
+	font-size: 14px;
+}
+
+.dt-result :is(th, td) {
+	padding: 11px 16px;
+	border: 0;
+	background: none;
+	text-align: left;
+}
+
+.dt-result th {
+	color: var(--muted-foreground);
+	font: 600 10.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	border-bottom: 1px solid var(--border);
+}
+
+.dt-result tbody tr + tr td {
+	border-top: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
+}
+
+.dt-result tbody tr:hover td {
+	background: color-mix(in oklab, var(--muted) 40%, transparent);
+}
+
+.dt-result td:nth-child(2),
+.dt-result th:nth-child(2) {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+.dt-result td:first-child {
+	font-weight: 600;
+}
+
+.dt-result-bar {
+	width: 36%;
+}
+
+.dt-result-bar i {
+	display: block;
+	height: 8px;
+	border-radius: 999px;
+	background: color-mix(in oklab, var(--primary) 40%, var(--muted));
+	transition: width 0.4s ease;
+}
+
+.dt-result-bar i[data-top="true"] {
+	background: linear-gradient(90deg, var(--primary), var(--accent));
+}
+
+.dt-sources {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 26px 0 0;
+	padding: 0;
+	list-style: none;
+}
+
+.dt-sources li {
+	padding: 6px 12px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	color: var(--muted-foreground);
+	font-size: 12.5px;
+	font-weight: 600;
+}
+
+@keyframes dt-rise {
+	from {
+		opacity: 0;
+		transform: translateY(8px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+
+/* Ontology */
+
+.dt-onto {
+	display: grid;
+	grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+	gap: 22px;
+	align-items: stretch;
+}
+
+.dt-onto-graph {
+	position: relative;
+	min-width: 0;
+	min-height: 440px;
+	border: 1px solid var(--border);
+	border-radius: 18px;
+	background-color: var(--card);
+	background-image: radial-gradient(
+		color-mix(in oklab, var(--foreground) 8%, transparent) 1px,
+		transparent 1px
+	);
+	background-size: 18px 18px;
+}
+
+.dt-onto-graph svg {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+}
+
+.dt-onto-graph line {
+	stroke: color-mix(in oklab, var(--foreground) 20%, transparent);
+	stroke-width: 1.5;
+}
+
+.dt-onto-graph text {
+	fill: var(--muted-foreground);
+	font: 600 11px ui-sans-serif, system-ui, sans-serif;
+	paint-order: stroke;
+	stroke: var(--card);
+	stroke-width: 6px;
+	stroke-linejoin: round;
+}
+
+.dt-onto-graph g[data-active="true"] line {
+	stroke: var(--accent);
+	stroke-width: 2.2;
+}
+
+.dt-onto-graph g[data-active="true"] text {
+	fill: var(--accent);
+}
+
+.dt-onto-node {
+	position: absolute;
+	min-width: 104px;
+	padding: 9px 16px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: var(--background);
+	color: var(--foreground);
+	font: inherit;
+	font-size: 13.5px;
+	font-weight: 650;
+	transform: translate(-50%, -50%);
+	cursor: pointer;
+	box-shadow: 0 8px 20px color-mix(in oklab, var(--foreground) 8%, transparent);
+	transition: background 0.2s, color 0.2s, border-color 0.2s, transform 0.2s;
+}
+
+.dt-onto-node:hover {
+	border-color: color-mix(in oklab, var(--accent) 50%, var(--border));
+	transform: translate(-50%, -50%) scale(1.04);
+}
+
+.dt-onto-node[aria-pressed="true"] {
+	border-color: transparent;
+	background: linear-gradient(100deg, var(--primary), var(--accent));
+	color: var(--primary-foreground);
+}
+
+.dt-onto-panel {
+	display: grid;
+	gap: 12px;
+	align-content: start;
+	padding: 22px;
+	border: 1px solid var(--border);
+	border-radius: 18px;
+	background: var(--card);
+}
+
+.dt-onto-kind,
+.dt-labels-kicker {
+	color: var(--muted-foreground);
+	font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+}
+
+.dt-onto-panel h3 {
+	margin: 0;
+	font-size: 24px;
+	letter-spacing: -0.03em;
+}
+
+.dt-onto-source {
+	margin: 0;
+	color: var(--muted-foreground);
+	font-size: 13.5px;
+}
+
+.dt-onto-source code {
+	padding: 1px 6px;
+	border-radius: 5px;
+	background: var(--muted);
+	color: var(--foreground);
+	font-size: 12.5px;
+}
+
+.dt-onto-props {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.dt-onto-props li {
+	padding: 3px 9px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.dt-onto-links {
+	display: grid;
+	gap: 4px;
+	margin: 0;
+	font-size: 13px;
+}
+
+.dt-onto-links em {
+	color: var(--accent);
+	font-style: normal;
+}
+
+.dt-onto-action {
+	display: grid;
+	gap: 2px;
+	padding: 12px 14px;
+	border: 1px solid color-mix(in oklab, var(--accent) 35%, var(--border));
+	border-radius: 12px;
+}
+
+.dt-onto-action b {
+	font-size: 14px;
+}
+
+.dt-onto-action span {
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
+
+.pl-code--compact pre {
+	padding: 10px 0;
+	font-size: 11.5px;
+}
+
+.dt-meaning-points {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 14px 40px;
+	margin-top: 36px;
+}
+
+/* Forecast */
+
+.dt-forecast {
+	display: grid;
+	gap: 14px;
+	margin: 0;
+	padding: 26px;
+	border: 1px solid var(--border);
+	border-radius: 20px;
+	background: color-mix(in oklab, var(--card) 80%, transparent);
+}
+
+.dt-forecast svg {
+	width: 100%;
+	height: auto;
+}
+
+.dt-forecast-history,
+.dt-forecast-next {
+	fill: none;
+	stroke-width: 3;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+.dt-forecast-history {
+	stroke: var(--foreground);
+}
+
+.dt-forecast-next {
+	stroke: var(--accent);
+	stroke-dasharray: 6 6;
+}
+
+.dt-forecast-band {
+	fill: color-mix(in oklab, var(--accent) 22%, transparent);
+}
+
+.dt-forecast-now {
+	stroke: var(--border);
+	stroke-dasharray: 3 4;
+}
+
+.dt-forecast figcaption {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 18px;
+	color: var(--muted-foreground);
+	font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Governance: labels demo */
+
+.dt-labels-intro {
+	max-width: 620px;
+	margin: -24px 0 22px;
+	color: var(--muted-foreground);
+	font-size: 14px;
+	line-height: 1.6;
+}
+
+.dt-labels-demo {
+	display: grid;
+	grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+	gap: 20px;
+	margin-bottom: 56px;
+}
+
+.dt-labels-table {
+	overflow: hidden;
+	border: 1px solid var(--border);
+	border-radius: 18px;
+	background: var(--card);
+	box-shadow: 0 24px 60px color-mix(in oklab, var(--foreground) 7%, transparent);
+}
+
+.dt-labels-table header {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	padding: 14px 18px;
+	border-bottom: 1px solid var(--border);
+	font-size: 14px;
+}
+
+.dt-labels-table header svg {
+	width: 16px;
+	height: 16px;
+	color: var(--accent);
+}
+
+.dt-labels-table header b {
+	font: 650 14px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.dt-labels-table header small {
+	margin-left: auto;
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
+
+.dt-labels-head,
+.dt-labels-table li {
+	display: grid;
+	grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.7fr) minmax(150px, 1fr) 96px;
+	gap: 12px;
+	align-items: center;
+	padding: 0 18px;
+}
+
+.dt-labels-head {
+	padding-top: 12px;
+	padding-bottom: 8px;
+	color: var(--muted-foreground);
+	font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+}
+
+.dt-labels-table ul {
+	margin: 0;
+	padding: 0 0 8px;
+	list-style: none;
+}
+
+.dt-labels-table li {
+	min-height: 48px;
+	border-top: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+}
+
+.dt-level-select {
+	--tone: var(--muted-foreground);
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	justify-self: start;
+	border: 1px solid color-mix(in oklab, var(--tone) 40%, transparent);
+	border-radius: 999px;
+	background: color-mix(in oklab, var(--tone) 12%, transparent);
+	transition: background 0.2s, border-color 0.2s;
+}
+
+.dt-level-select[data-level="internal"] {
+	--tone: #4f7fe0;
+}
+
+.dt-level-select[data-level="confidential"] {
+	--tone: #e09a28;
+}
+
+.dt-level-select[data-level="restricted"] {
+	--tone: #e5484d;
+}
+
+.dt-level-select > i {
+	position: absolute;
+	left: 11px;
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--tone);
+	pointer-events: none;
+}
+
+.dt-level-select select {
+	appearance: none;
+	padding: 6px 30px 6px 26px;
+	border: 0;
+	border-radius: 999px;
+	background: transparent
+		url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+		no-repeat right 10px center / 12px;
+	color: color-mix(in oklab, var(--tone) 85%, var(--foreground));
+	font: inherit;
+	font-size: 12.5px;
+	font-weight: 650;
+	cursor: pointer;
+}
+
+.dt-level-select select:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.dt-pii-switch {
+	position: relative;
+	display: inline-flex;
+	justify-self: start;
+	cursor: pointer;
+}
+
+.dt-pii-switch input {
+	position: absolute;
+	inset: 0;
+	opacity: 0;
+	cursor: pointer;
+}
+
+.dt-pii-switch > span[aria-hidden="true"] {
+	display: inline-flex;
+	align-items: center;
+	width: 52px;
+	height: 26px;
+	padding: 3px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: var(--muted);
+	transition: background 0.2s;
+}
+
+.dt-pii-switch > span[aria-hidden="true"] svg {
+	width: 20px;
+	height: 20px;
+	padding: 3px;
+	border-radius: 50%;
+	background: var(--background);
+	color: var(--muted-foreground);
+	box-shadow: 0 1px 3px rgb(0 0 0 / 0.2);
+	transition: transform 0.2s, color 0.2s;
+}
+
+.dt-pii-switch input:checked + span {
+	border-color: transparent;
+	background: linear-gradient(100deg, var(--primary), var(--accent));
+}
+
+.dt-pii-switch input:checked + span svg {
+	color: var(--accent);
+	transform: translateX(26px);
+}
+
+.dt-pii-switch input:focus-visible + span {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.dt-labels-side {
+	display: grid;
+	gap: 14px;
+	align-content: start;
+	padding: 24px;
+	border: 1px solid var(--border);
+	border-radius: 18px;
+	background: var(--card);
+}
+
+.dt-labels-result .dt-badge {
+	padding: 5px 14px;
+	font-size: 15px;
+}
+
+.dt-labels-result .dt-badge > i {
+	width: 9px;
+	height: 9px;
+}
+
+.dt-labels-hint,
+.dt-labels-rule,
+.dt-labels-meta {
+	margin: 0;
+	color: var(--muted-foreground);
+	font-size: 13.5px;
+	line-height: 1.6;
+}
+
+.dt-labels-hint {
+	color: var(--foreground);
+}
+
+.dt-labels-meta code {
+	white-space: nowrap;
+	padding: 1px 5px;
+	border-radius: 5px;
+	background: var(--muted);
+	color: var(--foreground);
+	font-size: 11.5px;
+}
+
+.dt-labels-preview {
+	display: grid;
+	gap: 8px;
+	padding-top: 14px;
+	border-top: 1px solid var(--border);
+}
+
+.dt-labels-card {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	gap: 12px;
+	align-items: center;
+	padding: 14px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--background);
+}
+
+.dt-labels-card svg {
+	width: 18px;
+	height: 18px;
+	color: var(--accent);
+}
+
+.dt-labels-card div {
+	display: grid;
+}
+
+.dt-labels-card b {
+	font: 650 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.dt-labels-card small {
+	color: var(--muted-foreground);
+	font-size: 11.5px;
+}
+
+.dt-govern-pillars {
+	margin-top: 8px;
+}
+
+/* Dashboards */
+
+.dt-charts {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 10px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.dt-charts li {
+	padding: 18px;
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	background: var(--card);
+	font-size: 14px;
+	font-weight: 650;
+	text-align: center;
+}
+
+@media (max-width: 1000px) {
+	.dt-query-stage,
+	.dt-onto,
+	.dt-labels-demo {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.dt-schemas {
+		grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+		gap: 12px;
+	}
+
+	.dt-schema {
+		margin-bottom: 0;
+		transform: none;
+	}
+
+	.dt-onto-graph {
+		min-height: 0;
+		aspect-ratio: 3 / 2;
+	}
+
+	.dt-meaning-points {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+@media (max-width: 640px) {
+	.dt-query-stage {
+		padding: 14px;
+	}
+
+	.dt-labels-head {
+		display: none;
+	}
+
+	.dt-labels-table li {
+		grid-template-columns: minmax(0, 1fr) auto auto;
+		gap: 8px;
+		padding: 10px 14px;
+	}
+
+	.dt-labels-table li .dt-schema-type {
+		display: none;
+	}
+
+	.dt-onto-node {
+		min-width: 0;
+		padding: 6px 10px;
+		font-size: 11.5px;
+	}
+
+	.dt-onto-graph text {
+		display: none;
+	}
+
+	.dt-charts {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.dt-hero-card,
+	.dt-query-stage,
+	.dt-schema {
+		animation: none;
+		transition: none;
+	}
+}

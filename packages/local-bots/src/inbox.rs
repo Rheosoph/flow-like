@@ -11,6 +11,7 @@ mod pins;
 mod positions;
 mod segments;
 mod targets;
+mod user_context;
 
 use crate::{
     LOCAL_OWNER_ID,
@@ -36,7 +37,7 @@ use flow_like_types::{
 };
 use rusqlite::{Connection, OptionalExtension, Params, Row, params};
 use serde_json::Value;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 pub use files::LocalConversationFile;
 #[cfg(test)]
@@ -551,6 +552,7 @@ struct NewConversation {
     kind: ConversationKind,
     title: Option<String>,
     members: Vec<String>,
+    bot_limits: BTreeMap<String, BotRoomLimits>,
 }
 
 fn validate_new_conversation(request: CreateConversationRequest) -> Result<NewConversation> {
@@ -560,6 +562,12 @@ fn validate_new_conversation(request: CreateConversationRequest) -> Result<NewCo
         ));
     }
     let members = requested_members(request.members);
+    validate_bot_limits(&request.bot_limits, &members)?;
+    if request.kind != ConversationKind::Group && !request.bot_limits.is_empty() {
+        return Err(Error::invalid(
+            "Bot setup applies only to group conversations",
+        ));
+    }
     let title = normalize_title(request.title)?;
     match request.kind {
         ConversationKind::Direct if members.len() != 1 => Err(Error::invalid(format!(
@@ -582,8 +590,46 @@ fn validate_new_conversation(request: CreateConversationRequest) -> Result<NewCo
             kind,
             title,
             members,
+            bot_limits: request.bot_limits,
         }),
     }
+}
+
+fn validate_bot_limits(limits: &BTreeMap<String, BotRoomLimits>, members: &[String]) -> Result<()> {
+    for (bot_id, limits) in limits {
+        if !members.contains(bot_id) {
+            return Err(Error::invalid(format!(
+                "Bot setup names '{bot_id}', which is not being added"
+            )));
+        }
+        if limits.mask.is_some_and(|mask| mask < 0) {
+            return Err(Error::invalid(
+                "Room limits: the permission mask can't be negative",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn save_bot_limits(
+    tx: &Connection,
+    conversation_id: &str,
+    limits: &BTreeMap<String, BotRoomLimits>,
+) -> Result<()> {
+    for (bot_id, limits) in limits {
+        tx.execute(
+            "UPDATE conversation_members SET limits = ?3
+             WHERE conversation_id = ?1 AND principal_id = ?2 AND principal_kind = ?4
+               AND left_at IS NULL AND status = 'ACTIVE'",
+            params![
+                conversation_id,
+                bot_id,
+                serde_json::to_string(limits)?,
+                PrincipalKind::Bot.as_str()
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 fn existing_direct(tx: &Connection, other: &str) -> Result<Option<String>> {
@@ -653,6 +699,7 @@ fn start_group(tx: &Connection, plan: &NewConversation, changes: &mut Changes) -
         join_bot(tx, &conversation_id, other, now, changes)?;
         member_event(tx, &conversation_id, MemberOp::Join, &other.id, now)?;
     }
+    save_bot_limits(tx, &conversation_id, &plan.bot_limits)?;
     changes.conversation(&conversation_id);
     Ok(conversation_id)
 }
@@ -743,6 +790,7 @@ fn send_in(
         return Ok(existing);
     }
     member_conversation(tx, conversation_id, sender_id)?;
+    user_context::validate(tx, conversation_id, sender_id, outgoing)?;
     if outgoing.kind.targets_message() {
         targets::check_target(
             tx,
@@ -765,13 +813,15 @@ fn send_in(
         &outgoing.conversation_files,
     )?;
     let at = next_event_time(tx, conversation_id)?;
+    let mut envelope = outgoing.envelope.clone();
+    user_context::mark_derived(tx, conversation_id, sender_id, outgoing.kind, &mut envelope)?;
     let entry = insert_event(
         tx,
         conversation_id,
         &outgoing.message_id,
         sender_id,
         outgoing.kind,
-        outgoing.envelope.clone(),
+        envelope,
         at,
     )?;
     if entry.kind == InboxEntryKind::Delete {
@@ -854,7 +904,7 @@ fn validate_send(request: SendEntryRequest) -> Result<Outgoing> {
     })
 }
 
-fn entry_by_message_id(db: &Connection, message_id: &str) -> Result<Option<InboxEntry>> {
+pub(crate) fn entry_by_message_id(db: &Connection, message_id: &str) -> Result<Option<InboxEntry>> {
     Ok(db
         .prepare_cached(&format!(
             "SELECT {ENTRY_COLUMNS} FROM entries WHERE message_id = ?1"
@@ -1049,9 +1099,14 @@ pub(crate) fn bot_conversations(
     ))?;
     ids.iter()
         .map(|conversation_id| {
-            let entries = statement
+            let mut entries: Vec<InboxEntry> = statement
                 .query_map([conversation_id], read_entry)?
                 .collect::<rusqlite::Result<_>>()?;
+            for entry in &mut entries {
+                if flow_like_types::bot_user_context::is_ephemeral_body(&entry.envelope["body"]) {
+                    entry.envelope = flow_like_types::inbox::tombstone_envelope();
+                }
+            }
             Ok(ExportedConversation {
                 conversation: visible(db, conversation_id)?,
                 entries,
@@ -1190,7 +1245,18 @@ impl LocalBotStore {
 
     /// Adds local bots to a group; current members are skipped.
     pub fn add_members(&self, conversation_id: &str, members: Vec<String>) -> Result<Conversation> {
+        self.add_members_with_limits(conversation_id, members, BTreeMap::new())
+    }
+
+    /// Adds bots and stores their setup in the same transaction, before the host can run them.
+    pub fn add_members_with_limits(
+        &self,
+        conversation_id: &str,
+        members: Vec<String>,
+        bot_limits: BTreeMap<String, BotRoomLimits>,
+    ) -> Result<Conversation> {
         let candidates = requested_members(members);
+        validate_bot_limits(&bot_limits, &candidates)?;
         if candidates.len() >= MAX_CONVERSATION_MEMBERS {
             return Err(member_limit(format!(
                 "A conversation has at most {MAX_CONVERSATION_MEMBERS} members; you asked to add {}",
@@ -1201,6 +1267,10 @@ impl LocalBotStore {
             let principals = local_bots(tx, &candidates)?;
             if !principals.is_empty() {
                 add_in(tx, conversation_id, &principals, changes)?;
+                save_bot_limits(tx, conversation_id, &bot_limits)?;
+                if !bot_limits.is_empty() {
+                    changes.conversation(conversation_id);
+                }
             }
             visible(tx, conversation_id)
         })
@@ -1272,6 +1342,34 @@ impl LocalBotStore {
                     })
                 })
                 .transpose()
+        })
+    }
+
+    /// Every active group whose saved knowledge this bot may reuse, including older groups
+    /// beyond the inbox list's display limit.
+    pub fn shared_memory_rooms(&self, bot_id: &str) -> Result<Vec<String>> {
+        self.read(|db| {
+            let mut statement = db.prepare_cached(
+                "SELECT m.conversation_id, m.limits FROM conversation_members m
+                 JOIN conversations c ON c.id = m.conversation_id
+                 WHERE m.principal_id = ?1 AND m.principal_kind = 'bot'
+                   AND m.left_at IS NULL AND m.status = 'ACTIVE' AND c.kind = 'group'
+                 ORDER BY m.conversation_id",
+            )?;
+            let rows = statement.query_map([bot_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })?;
+            let mut shared = Vec::new();
+            for row in rows {
+                let (id, limits) = row?;
+                let limits = limits
+                    .as_deref()
+                    .and_then(|text| serde_json::from_str::<BotRoomLimits>(text).ok());
+                if limits.is_some_and(|limits| limits.share_memory) {
+                    shared.push(id);
+                }
+            }
+            Ok(shared)
         })
     }
 

@@ -1,9 +1,19 @@
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     routing::{get, post},
 };
 
 use crate::state::AppState;
+
+/// The largest request a hosted model takes, inline media included. A run's media handling keeps
+/// what it inlines for a hosted model within this, and links travel instead where they can.
+pub(crate) const MAX_MODEL_REQUEST_BYTES: usize =
+    flow_like::flow_like_model_provider::llm::relay::MAX_REQUEST_BYTES;
+
+pub(crate) fn model_request_limit() -> DefaultBodyLimit {
+    DefaultBodyLimit::max(MAX_MODEL_REQUEST_BYTES)
+}
 
 mod bedrock_auth;
 pub mod completions;
@@ -21,6 +31,9 @@ pub mod usage;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/completions", post(completions::invoke_llm))
+        .route(
+            "/completions",
+            post(completions::invoke_llm).layer(model_request_limit()),
+        )
         .route("/usage", get(usage::get_llm_usage))
 }

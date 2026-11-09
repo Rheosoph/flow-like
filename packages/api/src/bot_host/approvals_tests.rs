@@ -3,11 +3,13 @@ use super::{
         BOT_APPROVAL_UNKNOWN, BOT_TURN_NOT_WAITING, Expired, GrantRows, answer_in, cancel_in,
         expire_in, grant_in, list_grants, park_in, revoke_in,
     },
-    fixture::{assert_code, at, conversation, database, delivery, insert_bot, recipient},
+    fixture::{
+        assert_code, at, conversation, database, delivery, insert_bot, participant_wait, recipient,
+    },
     ledger::{self, BOT_TURN_LEASE_LOST, ClaimRequest, claim_in, enqueue_in, recover_in},
 };
 use crate::{
-    entity::{bot_tool_grant, bot_turn, inbox_entry},
+    entity::{bot_decision_wait, bot_tool_grant, bot_turn, inbox_entry},
     routes::inbox::now_millis,
 };
 use axum::http::StatusCode;
@@ -148,6 +150,58 @@ async fn resolve(
 
 fn rows(db: &DatabaseConnection) -> GrantRows<Arc<DatabaseConnection>> {
     GrantRows::new(Arc::new(db.clone()), BOT, OWNER)
+}
+
+#[tokio::test]
+async fn approval_resume_clears_only_the_origin_rooms_older_dependency() {
+    for newer in [false, true] {
+        let (db, mut turn) = running().await;
+        conversation(&db, "origin", "GROUP", "PLAIN", &[OWNER, BOT]).await;
+        conversation(&db, "other", "GROUP", "PLAIN", &[OWNER, BOT]).await;
+        bot_turn::Entity::update_many()
+            .col_expr(bot_turn::Column::ConversationId, Expr::value("origin"))
+            .filter(bot_turn::Column::Id.eq(&turn.id))
+            .exec(&db)
+            .await
+            .unwrap();
+        turn.conversation_id = "origin".into();
+        let card = card(&turn);
+        let now = now_millis();
+        park_in(&db, &turn, HOST, &card, "c1", now).await.unwrap();
+        let cutoff = now + Duration::seconds(2);
+        participant_wait(
+            &db,
+            BOT,
+            "origin",
+            cutoff + Duration::seconds(if newer { 1 } else { -1 }),
+        )
+        .await;
+        participant_wait(&db, BOT, "other", now).await;
+        let (resumed, _) = answer_in(
+            &db,
+            OWNER,
+            BOT,
+            &turn.id,
+            &answer(&card, ApprovalDecision::Once),
+            "c1",
+            cutoff,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resumed.status, STORED_QUEUED);
+        let origin = bot_decision_wait::Entity::find_by_id((BOT.into(), "origin".into()))
+            .one(&db)
+            .await
+            .unwrap();
+        assert_eq!(origin.is_some(), newer);
+        assert!(
+            bot_decision_wait::Entity::find_by_id((BOT.into(), "other".into()))
+                .one(&db)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
 }
 
 #[tokio::test]
@@ -585,4 +639,40 @@ async fn an_expired_notification_cannot_approve_before_the_sweeper_runs() {
     assert!(list_grants(&db, OWNER, BOT, true).await.unwrap().is_empty());
     let unchanged = ledger::find(&db, &turn.id, None).await.unwrap().unwrap();
     assert_eq!(unchanged.status, STORED_WAITING);
+}
+
+#[tokio::test]
+async fn an_approval_answered_after_the_deadline_rebases_it_without_touching_the_state() {
+    use crate::entity::bot_turn_checkpoint;
+    let (db, turn, card) = parked().await;
+    let state = json!({"version":1,"phase":"tools_in_flight"});
+    let started = (now_millis() - Duration::hours(3)).timestamp_millis();
+    super::recovery::ensure_metadata(&db, &turn).await.unwrap();
+    bot_turn_checkpoint::Entity::update_many()
+        .col_expr(bot_turn_checkpoint::Column::Revision, Expr::value(4))
+        .col_expr(bot_turn_checkpoint::Column::StartedAtMs, Expr::value(started))
+        .col_expr(
+            bot_turn_checkpoint::Column::DeadlineAtMs,
+            Expr::value(started + 1_800_000),
+        )
+        .col_expr(bot_turn_checkpoint::Column::State, Expr::value(state.clone()))
+        .filter(bot_turn_checkpoint::Column::TurnId.eq(&turn.id))
+        .exec(&db)
+        .await
+        .unwrap();
+    let before = now_millis().timestamp_millis();
+    resolve(&db, &turn, &card, ApprovalDecision::Once)
+        .await
+        .unwrap();
+    let row = bot_turn_checkpoint::Entity::find_by_id(&turn.id)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(row.started_at_ms >= before);
+    assert_eq!(
+        row.deadline_at_ms,
+        row.started_at_ms + super::worker::MAX_TURN_RUNTIME_MS
+    );
+    assert_eq!((row.revision, row.state), (4, state));
 }

@@ -182,6 +182,11 @@ describe("BotTasksView", () => {
 			"2026-11-04T09:30",
 		);
 		expect(button("Add task").disabled).toBe(false);
+		const monitoring = container.querySelector(
+			'[role="switch"]',
+		) as HTMLButtonElement;
+		expect(monitoring.getAttribute("aria-checked")).toBe("false");
+		await click(monitoring);
 		await act(async () => {
 			(
 				container.querySelector("form") as unknown as HTMLFormElement
@@ -196,6 +201,10 @@ describe("BotTasksView", () => {
 		expect(created[0]?.kind).toBe("once");
 		expect(created[0]?.at).toBe(new Date("2026-11-04T09:30").toISOString());
 		expect(created[0]?.instruction).toBe("Check the report");
+		expect(created[0]?.monitoring).toBe(true);
+		expect(
+			container.querySelector('[role="switch"]')?.getAttribute("aria-checked"),
+		).toBe("false");
 	});
 
 	test("a repeating task needs five cron fields", async () => {

@@ -1,6 +1,10 @@
 // @vitest-environment happy-dom
 
 import { registerNativeActionRun } from "@flow-like/flow-like-ui/lib/native-action-result";
+import type {
+	IBotState,
+	IBotTurn,
+} from "@flow-like/flow-like-ui/state/backend-state/bot-state";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, createElement } from "react";
 import { type Root, createRoot } from "react-dom/client";
@@ -32,6 +36,7 @@ const mocks = vi.hoisted(() => ({
 	},
 	backend: {
 		profile: { id: "profile-a" } as { id: string } | undefined,
+		botState: undefined as IBotState | undefined,
 		userState: { getProfile: vi.fn() },
 		appState: { getApp: vi.fn(async () => ({ id: "app" })) },
 		eventState: { getEventAuthoritative: vi.fn() },
@@ -203,6 +208,7 @@ beforeEach(() => {
 	mocks.auth.isAuthenticated = true;
 	mocks.auth.user.profile.sub = "user-a";
 	mocks.backend.profile = { id: "profile-a" };
+	mocks.backend.botState = undefined;
 	mocks.backend.userState.getProfile.mockResolvedValue({ id: "profile-a" });
 	mocks.loadSnapshot.mockImplementation(() => new Promise(() => {}));
 	mocks.resolveNotificationIcons.mockResolvedValue({});
@@ -492,6 +498,104 @@ function notificationSnapshot(user = "user-a"): NativeSnapshot {
 		apps: [],
 	};
 }
+
+function botSnapshot(): NativeSnapshot {
+	return {
+		...notificationSnapshot(),
+		bots: [
+			{
+				id: "bot",
+				title: "Scout",
+				local: false,
+				encrypted: false,
+				enabled: true,
+				surfaces: [],
+				action: { kind: "open_bot", botId: "bot" },
+			},
+		],
+		sections: [
+			{ kind: "bot_tasks", title: "Bot tasks", state: "ready", items: [] },
+		],
+	};
+}
+
+function latestBotItems() {
+	const publication = mocks.invoke.mock.calls
+		.filter(([command]) => command === "native_publish_snapshot")
+		.at(-1)?.[1].snapshot as NativeSnapshot | undefined;
+	return publication?.sections.find((section) => section.kind === "bot_tasks")
+		?.items;
+}
+
+const queuedTurn: IBotTurn = {
+	id: "turn",
+	bot_id: "bot",
+	conversation_id: "room",
+	status: "queued",
+};
+
+test("fresh catalog status replaces an older queued status before publication", async () => {
+	const snapshot = deferred<NativeSnapshot>();
+	mocks.backend.botState = {
+		getMobileStatus: vi.fn(async () => [queuedTurn]),
+	} as unknown as IBotState;
+	mocks.loadSnapshot.mockReturnValue(snapshot.promise);
+	await render();
+	await act(async () => {
+		mocks.loadSnapshot.mock.calls[0][7]?.([{ ...queuedTurn, status: "done" }]);
+		snapshot.resolve(botSnapshot());
+	});
+	expect(latestBotItems()).toEqual([]);
+});
+
+test("a pending status response cannot restore a turn completed by a newer event", async () => {
+	const status = deferred<IBotTurn[]>();
+	let deliver: (turn: IBotTurn) => void = () => {};
+	mocks.backend.botState = {
+		getMobileStatus: vi.fn(() => status.promise),
+		turns: {
+			list: async () => [],
+			subscribe: async (listener: (turn: IBotTurn) => void) => {
+				deliver = listener;
+				return () => {};
+			},
+		},
+	} as unknown as IBotState;
+	mocks.loadSnapshot.mockResolvedValue(botSnapshot());
+	await render();
+	await act(async () => deliver({ ...queuedTurn, status: "done" }));
+	await act(async () => status.resolve([queuedTurn]));
+	expect(latestBotItems()).toEqual([]);
+});
+
+test("an older status poll cannot undo a newer empty catalog read", async () => {
+	const status = deferred<IBotTurn[]>();
+	mocks.backend.botState = {
+		getMobileStatus: vi.fn(() => status.promise),
+	} as unknown as IBotState;
+	mocks.loadSnapshot.mockImplementation(async (...args) => {
+		args[7]?.([]);
+		return botSnapshot();
+	});
+	await render();
+	await act(async () => status.resolve([queuedTurn]));
+	expect(latestBotItems()).toEqual([]);
+});
+
+test("a late initial host read cannot restore turns absent from authoritative status", async () => {
+	const local = deferred<IBotTurn[]>();
+	mocks.backend.botState = {
+		getMobileStatus: async () => [],
+		turns: {
+			list: () => local.promise,
+			subscribe: async () => () => {},
+		},
+	} as unknown as IBotState;
+	mocks.loadSnapshot.mockResolvedValue(botSnapshot());
+	await render();
+	await act(async () => local.resolve([queuedTurn]));
+	expect(latestBotItems()).toEqual([]);
+});
 
 test("publishes usable widgets and handles actions before notification images finish", async () => {
 	const icons = deferred<Record<string, { text: string }>>();

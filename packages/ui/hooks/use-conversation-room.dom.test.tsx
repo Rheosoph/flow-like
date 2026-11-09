@@ -14,6 +14,7 @@ import {
 	restoreDomGlobals,
 	settle,
 } from "../components/bots-tab/testing/dom-harness";
+import { deriveLiveCall } from "../lib/realtime/conversation-call";
 import type {
 	IConversation,
 	IConversationMember,
@@ -216,11 +217,6 @@ describe("conversation room eligibility", () => {
 		["a person alone", conversation([person("me")]), "me"],
 		["an empty room", conversation([]), "me"],
 		[
-			"a local bot room",
-			conversation([person("me"), person("bot-1", "bot")], true),
-			"me",
-		],
-		[
 			"a nonmember",
 			conversation([person("other"), person("bot-1", "bot")]),
 			"me",
@@ -244,6 +240,70 @@ describe("conversation room eligibility", () => {
 			expect(latest).toBeUndefined();
 		});
 	}
+
+	test("a local bot call publishes microphone state without account signaling", async () => {
+		signaling = [];
+		const render = await setup();
+		const item = conversation([person("me"), person("bot-1", "bot")], true);
+		await render(item);
+		const room = latest;
+		expect(room?.provider.room?.peerId).toBeTruthy();
+		expect(room?.awareness.getLocalState()?.sub).toBe("me");
+		const changed = mock(() => {});
+		room?.awareness.on("change", changed);
+		room?.awareness.setLocalStateField("call", {
+			id: "call-1",
+			joined: true,
+			muted: false,
+			listening: true,
+			peer: room.provider.room?.peerId,
+			voiceBots: ["bot-1"],
+		});
+		expect(changed).toHaveBeenCalledTimes(1);
+		expect(
+			room?.awareness.getStates().get(room.awareness.clientID),
+		).toMatchObject({
+			sub: "me",
+			call: { id: "call-1", joined: true },
+		});
+		if (!room) throw new Error("The local call room was not created");
+		expect(
+			deriveLiveCall(
+				room.awareness.getStates(),
+				room.awareness.clientID,
+				new Set(["me"]),
+			),
+		).toMatchObject({
+			callId: "call-1",
+			participants: [
+				{ sub: "me", local: true, listening: true, voiceBots: ["bot-1"] },
+			],
+		});
+		await render({ ...item });
+		expect(latest).toBe(room);
+		room?.awareness.off("change", changed);
+		room?.awareness.setLocalStateField("call", undefined);
+		expect(changed).toHaveBeenCalledTimes(1);
+		expect(getAccess).not.toHaveBeenCalled();
+		expect(created).toHaveLength(0);
+		await render(item, "me", false);
+		expect(latest).toBeUndefined();
+		await render(item);
+		expect(latest).not.toBe(room);
+		expect(latest?.awareness.getLocalState()?.call).toBeUndefined();
+	});
+
+	test("a local room never substitutes for calls with other people", async () => {
+		const render = await setup();
+		await render(
+			conversation(
+				[person("me"), person("other"), person("bot-1", "bot")],
+				true,
+			),
+		);
+		expect(latest).toBeUndefined();
+		expect(getAccess).not.toHaveBeenCalled();
+	});
 
 	test("requires configured signaling even for a direct bot call", async () => {
 		signaling = [];

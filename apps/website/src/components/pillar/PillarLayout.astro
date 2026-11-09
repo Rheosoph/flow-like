@@ -1,0 +1,69 @@
+---
+import "@flow-like/flow-like-ui/global.css";
+import "../../styles/website-base.css";
+import "./pillar.css";
+import { Header } from "../header";
+import NotesFooterV4 from "../../sections/notes-footer-v4.astro";
+import type { Lang } from "../../i18n";
+
+interface Props {
+  lang?: Lang;
+  title: string;
+  description: string;
+  keywords: string;
+  /** The page's path without a language prefix, e.g. "/bots". */
+  path: string;
+}
+
+const { lang = "en", title, description, keywords, path } = Astro.props;
+const site = "https://flow-like.com";
+const canonical = `${site}${path}`;
+const ogImage = `${site}/og.png`;
+const pageLd = {
+  "@context": "https://schema.org",
+  "@type": "WebPage",
+  name: title,
+  url: canonical,
+  description,
+  inLanguage: lang,
+  isPartOf: { "@type": "WebSite", name: "Flow-Like", url: site },
+};
+---
+
+<!doctype html>
+<html lang={lang} class="scroll-smooth light" style="color-scheme: light;">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta name="keywords" content={keywords} />
+    <meta name="robots" content="index,follow,max-image-preview:large" />
+    <meta name="generator" content={Astro.generator} />
+    <link rel="canonical" href={canonical} />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Flow-Like" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:locale" content="en_US" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImage} />
+    <script type="application/ld+json" is:inline set:html={JSON.stringify(pageLd)} />
+  </head>
+  <body class="bg-background text-foreground antialiased pl-body">
+    <a href="#content" class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-100 focus:rounded-md focus:bg-background focus:px-4 focus:py-2 focus:text-sm">Skip to content</a>
+    <Header client:load pathname={Astro.url.pathname} darkHero />
+    <main id="content" class="w-full max-w-full overflow-x-clip">
+      <slot />
+    </main>
+    <NotesFooterV4 lang={lang} />
+  </body>
+</html>

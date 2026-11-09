@@ -296,6 +296,8 @@
 	"nodes2": "노드",
 	"noDescriptionFound": "설명이 없습니다.",
 	"nodesLength": "노드 ({{length}})",
+	"skillTools": "",
+	"skillsLength": "",
 	"nodeStorage": "노드 저장소",
 	"noExternalLinksProvided": "제공된 외부 링크가 없습니다",
 	"noLinksAvailable": "사용 가능한 링크가 없습니다",

@@ -11,15 +11,15 @@ use serde_json::{Value, json};
 
 use crate::engine::MemoryEngine;
 use crate::facts::{
-    Evidence, Fact, FactKind, RejectReason, UpdateAction, attribute_statement, integrate_facts,
-    normalize_subject, statement_subject,
+    Evidence, Fact, FactKind, RejectReason, UpdateAction, attribute_statement, normalize_subject,
+    statement_subject,
 };
 use crate::model::{FactSource, HistoryItem, Role, Seq, SeqSpan};
 use crate::pointer::{PartRef, Pointer};
 use crate::retrieval::{Recency, TimeRange, is_temporal_question, parse_time_range};
 use crate::store::{
-    FactFilter, FactQuery, HistoryIndex, HistoryQuery, MemoryStores, ScoredFact, ScoredSegment,
-    SegmentStore,
+    FactFilter, FactQuery, FactSort, HistoryIndex, HistoryQuery, MemoryStores, ScoredFact,
+    ScoredSegment, SegmentStore,
 };
 use crate::summary::{SegmentSummary, render_span_item};
 use crate::text::{
@@ -428,14 +428,28 @@ pub async fn history_search(
     })
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MemorySearchArgs {
+    #[serde(default)]
     pub query: String,
     /// profile, preference, event, decision or knowledge.
     #[serde(default)]
     pub kind: Option<String>,
     #[serde(default)]
     pub time_range: Option<String>,
+    /// An exact half-open interval [from, to), with RFC 3339 offsets.
+    #[serde(default)]
+    pub timeframe: Option<TimeRange>,
+    #[serde(default)]
+    pub sort: FactSort,
+    /// A GeoJSON Point in longitude, latitude order for distance queries.
+    #[serde(default)]
+    pub geojson: Option<Value>,
+    #[serde(default)]
+    pub radius_m: Option<f64>,
+    /// A GeoJSON Polygon or MultiPolygon that the memory's geometry intersects.
+    #[serde(default)]
+    pub area: Option<Value>,
     /// Superseded facts too; on by default for questions about how things were.
     #[serde(default)]
     pub include_superseded: Option<bool>,
@@ -473,7 +487,22 @@ pub async fn memory_search(
 ) -> Result<ToolOutput> {
     let limit = results(args.limit);
     let skip = offset(args.cursor.as_deref())?;
-    let (range, hint) = time_scope(args.time_range.as_deref(), &args.query, now, tz);
+    if args.timeframe.is_some() && args.time_range.is_some() {
+        bail!("Give either timeframe or time_range, not both");
+    }
+    let (mut range, mut hint) = time_scope(args.time_range.as_deref(), &args.query, now, tz);
+    if args.time_range.is_some() && range.is_none() {
+        bail!(
+            "Invalid time_range; use a date range such as 2026-10-01..2026-10-07 or an RFC 3339 timeframe"
+        );
+    }
+    if let Some(timeframe) = args.timeframe {
+        if timeframe.from >= timeframe.to {
+            bail!("timeframe.from must be before timeframe.to");
+        }
+        range = Some(timeframe);
+        hint = None;
+    }
     let filter = FactFilter {
         include_superseded: args
             .include_superseded
@@ -490,10 +519,34 @@ pub async fn memory_search(
         offset: skip,
         now,
         recency: Recency::default(),
+        sort: args.sort,
+        geojson: args.geojson.clone(),
+        radius_m: args.radius_m,
+        area: args.area.clone(),
     };
+    let structured = args.geojson.is_some()
+        || args.area.is_some()
+        || args.sort != FactSort::Relevance
+        || args.timeframe.is_some();
+    if structured {
+        return crate::host::recall::structured_memory(stores, &query, tz, MAX_TOKENS).await;
+    }
     let mut facts = stores.facts.search(&query).await?;
+    let owner_budget = if stores.shared_facts.is_empty() {
+        MAX_TOKENS / 2
+    } else {
+        MAX_TOKENS / 4
+    };
+    let shared_budget = MAX_TOKENS / 2
+        - if stores.owner_facts.is_some() {
+            owner_budget
+        } else {
+            0
+        };
     let owner_memory =
-        crate::host::recall::owner_memory(stores, &query, false, tz, MAX_TOKENS / 2).await?;
+        crate::host::recall::owner_memory(stores, &query, false, tz, owner_budget).await?;
+    let shared_memory =
+        crate::host::recall::shared_memory(stores, &query, true, tz, shared_budget).await?;
     let segments = if skip == 0 {
         stores
             .segments
@@ -502,21 +555,29 @@ pub async fn memory_search(
     } else {
         Vec::new()
     };
-    if facts.is_empty() && segments.is_empty() && owner_memory.text.is_empty() {
+    if facts.is_empty()
+        && segments.is_empty()
+        && owner_memory.text.is_empty()
+        && shared_memory.text.is_empty()
+    {
         return Ok(ToolOutput::complete(format!(
             "No memories match \"{}\".",
             one_line(&args.query)
         )));
     }
-    let more = facts.len() > limit || owner_memory.more;
+    let more = facts.len() > limit || owner_memory.more || shared_memory.more;
     facts.truncate(limit);
     let next = more.then(|| (skip + limit).to_string());
     let mut text = render_memory(&facts, &segments, tz);
-    if !owner_memory.text.is_empty() {
+    if !owner_memory.text.is_empty() || !shared_memory.text.is_empty() {
         text = format!(
             "{}\n\n{}",
             truncate_to_tokens(&text, MAX_TOKENS / 2),
-            owner_memory.text
+            [owner_memory.text, shared_memory.text]
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n")
         );
     }
     if let Some(cursor) = &next {
@@ -545,6 +606,7 @@ fn render_memory(facts: &[ScoredFact], segments: &[ScoredSegment], tz: Tz) -> St
         for scored in facts {
             text.push('\n');
             text.push_str(&truncate_chars(&scored.fact.line(tz), 400));
+            text.push_str(&scored.fact.context_suffix());
         }
     }
     if !segments.is_empty() {
@@ -644,7 +706,7 @@ impl WriteGate {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemorySaveArgs {
     pub text: String,
     /// The message that states the fact, in this conversation. Defaults to the trigger.
@@ -658,6 +720,15 @@ pub struct MemorySaveArgs {
     pub valid_from: Option<String>,
     #[serde(default)]
     pub valid_to: Option<String>,
+    /// A grounded GeoJSON geometry in WGS84 longitude, latitude order.
+    #[serde(default)]
+    pub geojson: Option<Value>,
+    /// The time the memory concerns, independent of when it was saved.
+    #[serde(default)]
+    pub time: Option<DateTime<Utc>>,
+    /// Positive seconds from this save until the fact stops participating in recall.
+    #[serde(default)]
+    pub ttl_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -674,8 +745,8 @@ pub enum WriteOutcome<T> {
 
 /// Saves a fact the conversation asked to remember, with `evidence` (normally the user's last
 /// message) as its pointer. Only the user's own words can become profile facts or preferences.
-/// The write runs under the engine's lease: it waits for the engine's other memory work and is
-/// refused with `MemoryBusy` while another engine holds the lease.
+/// The write runs under the engine's lease: it waits for the engine's other memory work and
+/// retries for up to 30 seconds while another engine holds the lease.
 pub async fn memory_save(
     engine: &MemoryEngine,
     args: &MemorySaveArgs,
@@ -683,6 +754,23 @@ pub async fn memory_save(
     gate: WriteGate,
     now: DateTime<Utc>,
 ) -> Result<WriteOutcome<(Fact, UpdateAction)>> {
+    let geojson = args
+        .geojson
+        .as_ref()
+        .map(crate::spatial::normalize_geojson)
+        .transpose()?;
+    let expires_at = args
+        .ttl_seconds
+        .map(|seconds| {
+            let duration = i64::try_from(seconds)
+                .ok()
+                .filter(|seconds| *seconds > 0)
+                .and_then(chrono::Duration::try_seconds)
+                .ok_or_else(|| anyhow!("ttl_seconds must be a positive, representable duration"))?;
+            now.checked_add_signed(duration)
+                .ok_or_else(|| anyhow!("ttl_seconds exceeds the supported date range"))
+        })
+        .transpose()?;
     if args.evidence_seq.is_some_and(|seq| seq != evidence.seq) {
         return Ok(WriteOutcome::Rejected {
             reason: RejectReason::NoEvidence,
@@ -736,6 +824,9 @@ pub async fn memory_save(
             .as_deref()
             .and_then(|value| parse_datetime(value, tz)),
         recorded_at: now,
+        geojson,
+        time: args.time,
+        expires_at,
         expired_at: None,
         evidence: vec![Evidence {
             seq: evidence.seq,
@@ -753,21 +844,7 @@ pub async fn memory_save(
         content_hash: String::new(),
     };
     fact.rehash();
-    let leased = engine.lease(now).await?;
-    let integrated = integrate_facts(
-        &engine.stores().facts,
-        engine.llm(),
-        vec![fact.clone()],
-        tz,
-        now,
-    )
-    .await;
-    let report = engine.release(leased, integrated).await?;
-    let action = report
-        .decisions
-        .into_iter()
-        .next()
-        .map_or(UpdateAction::Add, |decision| decision.action);
+    let (fact, action) = engine.save_fact(fact, now).await?;
     Ok(WriteOutcome::Done((fact, action)))
 }
 
@@ -800,17 +877,7 @@ pub async fn memory_forget(
     if !gate.allows() {
         return Ok(WriteOutcome::NeedsConfirmation { preview: fact.text });
     }
-    let leased = engine.lease(now).await?;
-    let forgotten = forget_facts(stores, std::slice::from_ref(&fact), false).await;
-    if forgotten.is_ok()
-        && let Err(error) = stores.facts.prune().await
-    {
-        tracing::warn!(
-            "Pruning old memory versions after forgetting {} failed; optimize drops them later: {error:#}",
-            fact.id
-        );
-    }
-    engine.release(leased, forgotten).await?;
+    let fact = engine.forget_fact(&fact.id, now).await?;
     Ok(WriteOutcome::Done(fact))
 }
 
@@ -851,20 +918,32 @@ fn object(properties: Value, required: &[&str]) -> Value {
 
 pub fn tool_definitions() -> Vec<ToolDefinition> {
     let time_range = json!({ "type": "string", "description": "e.g. \"last week\", \"in October\", \"2026-10-01..2026-10-07\"" });
+    let geojson = json!({ "type": "object", "description": "GeoJSON geometry in WGS84 [longitude, latitude] order. Use grounded coordinates. Supports Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon and GeometryCollection. Cut antimeridian-crossing lines and rings into Multi geometries." });
     vec![
         ToolDefinition {
             name: "memory_search",
-            description: "Search remembered facts and conversation summaries. Results cite #seq pointers into the history.",
+            description: "Search remembered facts and conversation summaries. Use an empty query for structured searches: distance from a GeoJSON Point, radius in meters, intersection with a GeoJSON area, or chronological ordering and timeframe. Spatial and chronological searches return facts only. Expired TTL facts are always excluded. Results cite #seq pointers into the history.",
             parameters: object(
                 json!({
                     "query": { "type": "string" },
                     "kind": { "type": "string", "enum": ["profile", "preference", "event", "decision", "knowledge"] },
                     "time_range": time_range,
+                    "timeframe": object(json!({
+                        "from": { "type": "string", "format": "date-time", "description": "Inclusive RFC 3339 start with offset." },
+                        "to": { "type": "string", "format": "date-time", "description": "Exclusive RFC 3339 end with offset." }
+                    }), &["from", "to"]),
+                    "sort": { "type": "string", "enum": ["relevance", "distance", "time_asc", "time_desc"], "description": "Distance needs geojson. Time uses the explicit memory time, otherwise its validity start or evidence time." },
+                    "geojson": { "type": "object", "properties": {
+                        "type": { "type": "string", "enum": ["Point"] },
+                        "coordinates": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 3 }
+                    }, "required": ["type", "coordinates"], "additionalProperties": false, "description": "Reference Point [longitude, latitude] for distance sorting or radius_m." },
+                    "radius_m": { "type": "number", "minimum": 0, "description": "Inclusive maximum distance in meters from geojson. Requires geojson." },
+                    "area": { "type": "object", "description": "GeoJSON Polygon or MultiPolygon; keep memories whose geometry intersects the area, including its boundary. Polygon holes are excluded." },
                     "include_superseded": { "type": "boolean", "description": "Also facts that were later replaced." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": MAX_RESULTS },
                     "cursor": { "type": "string" }
                 }),
-                &["query"],
+                &[],
             ),
         },
         ToolDefinition {
@@ -920,7 +999,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "memory_save",
-            description: "Remember a fact as a full sentence that starts with its subject. When saving an earlier statement, set evidence_seq to the message that actually stated it so its author and trust are preserved. Omit evidence_seq only when the current message states the fact.",
+            description: "Remember a fact as a full sentence that starts with its subject. Attach optional grounded geojson and time when the fact concerns a place or event. ttl_seconds makes temporary information expire from recall; expiry does not schedule a reminder. When saving an earlier statement, set evidence_seq to the message that actually stated it so its author and trust are preserved. Omit evidence_seq only when the current message states the fact.",
             parameters: object(
                 json!({
                     "text": { "type": "string" },
@@ -928,7 +1007,10 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                     "kind": { "type": "string", "enum": ["profile", "preference", "event", "decision", "knowledge"] },
                     "subject": { "type": "string" },
                     "valid_from": { "type": "string" },
-                    "valid_to": { "type": "string" }
+                    "valid_to": { "type": "string" },
+                    "geojson": geojson,
+                    "time": { "type": "string", "format": "date-time", "description": "The time the memory concerns, as RFC 3339 with offset; independent of its save time." },
+                    "ttl_seconds": { "type": "integer", "minimum": 1, "description": "Seconds from saving until expiry. Omit for no expiry. Repeating a fact preserves its existing expiry." }
                 }),
                 &["text"],
             ),

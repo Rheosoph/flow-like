@@ -140,12 +140,15 @@ export function randomizeBotColors({
 	catalog,
 	ownedPackIds,
 	effect = "none",
+	textures = true,
 	random = Math.random,
 }: {
 	shape: BotShapeDefinition;
 	catalog: BotCatalog;
 	ownedPackIds?: readonly string[];
 	effect?: BotEffect;
+	/** Off keeps every slot solid, for looks that already carry a backdrop or halo. */
+	textures?: boolean;
 	random?: () => number;
 }): NonNullable<BotAppearance["colors"]> {
 	const slots = getBotCustomizableColorSlots(shape);
@@ -225,7 +228,7 @@ export function randomizeBotColors({
 			: [original(slot)];
 	const textureRoll = random();
 	const textureSlot =
-		textureRoll < 0.82
+		!textures || textureRoll < 0.82
 			? undefined
 			: textureRoll < 0.94 && slots.includes("clothing")
 				? "clothing"

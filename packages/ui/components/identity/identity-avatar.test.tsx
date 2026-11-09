@@ -70,6 +70,20 @@ describe("ResolvedIdentityAvatar", () => {
 		expect(document.querySelector(".fl-bot")).toBeNull();
 	});
 
+	test("rounds a person's box, so a ring around it follows the face", () => {
+		const document = render(
+			<ResolvedIdentityAvatar
+				identity={person()}
+				size={24}
+				className="ring-2 ring-card"
+			/>,
+		);
+
+		const root = document.body.firstElementChild;
+		expect(root?.className).toContain("rounded-full");
+		expect(root?.className).toContain("ring-2");
+	});
+
 	test("draws a bot with its owner in the corner and says whose it is", () => {
 		const document = render(
 			<ResolvedIdentityAvatar identity={botIdentity()} size={40} />,

@@ -9,6 +9,7 @@
 pub mod history;
 mod hub;
 pub mod moves;
+pub mod notes;
 pub mod workspace;
 
 use flow_like_local_bots::{
@@ -216,7 +217,9 @@ fn keychain_key(create: bool) -> Result<Zeroizing<[u8; 32]>, KeyError> {
     use chacha20poly1305::{KeyInit, XChaCha20Poly1305, aead::OsRng};
     // Serialize first creation so concurrent secret writes always use the same key.
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = LOCK.lock().map_err(|_| KeyError::Unavailable("Android credential store is busy".into()))?;
+    let _guard = LOCK
+        .lock()
+        .map_err(|_| KeyError::Unavailable("Android credential store is busy".into()))?;
     const KEY: &str = "local-bots:secret-key:v1";
     let secret = match crate::android_mobile::secure_read(KEY).map_err(KeyError::Unavailable)? {
         Some(value) => value,
@@ -225,9 +228,16 @@ fn keychain_key(create: bool) -> Result<Zeroizing<[u8; 32]>, KeyError> {
             crate::android_mobile::secure_write(KEY, &secret).map_err(KeyError::Unavailable)?;
             secret
         }
-        None => return Err(KeyError::Missing("This device's key for bot secrets is missing".into())),
+        None => {
+            return Err(KeyError::Missing(
+                "This device's key for bot secrets is missing".into(),
+            ));
+        }
     };
-    secret.as_slice().try_into().map(Zeroizing::new)
+    secret
+        .as_slice()
+        .try_into()
+        .map(Zeroizing::new)
         .map_err(|_| KeyError::Missing("This device's key for bot secrets is damaged".into()))
 }
 
@@ -639,9 +649,25 @@ pub async fn local_inbox_add_members(
     state: State<'_, LocalBots>,
     conversation_id: String,
     members: Vec<String>,
+    bot_limits: Option<
+        std::collections::BTreeMap<String, flow_like_types::bot_effective::BotRoomLimits>,
+    >,
 ) -> Result<Conversation, CommandError> {
     with_store(state, move |store| {
-        store.add_members(&conversation_id, members)
+        store.add_members_with_limits(&conversation_id, members, bot_limits.unwrap_or_default())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn local_inbox_set_member_limits(
+    state: State<'_, LocalBots>,
+    conversation_id: String,
+    bot_id: String,
+    limits: Option<flow_like_types::bot_effective::BotRoomLimits>,
+) -> Result<Option<flow_like_types::bot_effective::BotRoomLimits>, CommandError> {
+    with_store(state, move |store| {
+        store.set_member_limits(&conversation_id, &bot_id, limits)
     })
     .await
 }

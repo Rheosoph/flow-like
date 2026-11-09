@@ -41,6 +41,8 @@ pub fn schema_of<T: JsonSchema>() -> Value {
 
 pub fn specs() -> Vec<ToolSpec> {
     let mut all = crate::files::specs();
+    all.extend(crate::configuration::specs());
+    all.extend(crate::crew::specs());
     all.extend(crate::knowledge::specs());
     all.extend(crate::documents::specs());
     all.extend(crate::code::specs());
@@ -48,6 +50,7 @@ pub fn specs() -> Vec<ToolSpec> {
     all.extend(crate::email::specs());
     all.extend(crate::notify::specs());
     all.extend(crate::people::specs());
+    all.extend(crate::user_context::specs());
     all.extend(crate::schedule::specs());
     all.extend(crate::skills::specs());
     all.extend(crate::browser::specs());

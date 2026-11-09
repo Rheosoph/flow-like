@@ -47,6 +47,10 @@ async fn groups_recall_owner_rules_and_save_attributed_statements_without_changi
     let saved = memory_save(
         &owner,
         &MemorySaveArgs {
+            geojson: None,
+            time: None,
+            ttl_seconds: None,
+
             text: rule.into(),
             evidence_seq: None,
             kind: Some("preference".into()),
@@ -69,6 +73,7 @@ async fn groups_recall_owner_rules_and_save_attributed_statements_without_changi
 
     let mut options = SessionOptions::new(ModelBudget::hosted(32_768, 4_096), Tz::UTC);
     options.room_key = Some("account/team".into());
+    options.use_owner_memory = true;
     let session = Arc::new(
         MemorySession::open(
             connection.clone(),
@@ -177,6 +182,7 @@ async fn groups_recall_owner_rules_and_save_attributed_statements_without_changi
 
     let mut other_options = SessionOptions::new(ModelBudget::hosted(32_768, 4_096), Tz::UTC);
     other_options.room_key = Some("account/other-team".into());
+    other_options.use_owner_memory = true;
     let other = MemorySession::open(
         connection,
         None,
@@ -251,6 +257,9 @@ async fn owner_only_search_results_remain_pageable_from_a_room() {
             valid_to: None,
             recorded_at: now,
             expired_at: None,
+            geojson: None,
+            time: None,
+            expires_at: None,
             evidence: vec![Evidence {
                 seq: index as u64 + 1,
                 message_id: word.to_string(),
@@ -269,7 +278,10 @@ async fn owner_only_search_results_remain_pageable_from_a_room() {
         fact.content_hash = flow_like_bot_memory::text::content_hash(&fact.subject, &fact.text);
         owner.facts.insert(&[fact]).await.unwrap();
     }
-    let room = MemoryStores::open_room(connection, embedder, None, "team").await;
+    let room = MemoryStores::open_room(connection, embedder, None, "team")
+        .await
+        .with_recall_sources(true, &[])
+        .await;
     let mut args: MemorySearchArgs =
         serde_json::from_value(json!({ "query": "filename convention", "limit": 1 })).unwrap();
     let mut seen = HashSet::new();

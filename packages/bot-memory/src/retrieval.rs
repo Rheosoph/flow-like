@@ -311,9 +311,13 @@ pub fn memory_block(facts: &[Fact], tz: Tz, max_tokens: u32) -> String {
     let mut used = estimate_tokens(MEMORY_OPEN) + estimate_tokens(MEMORY_CLOSE) + 1;
     let mut lines = Vec::new();
     for fact in facts {
-        let line = truncate_chars(&fact.line(tz), 400)
-            .replace('<', "‹")
-            .replace('>', "›");
+        let line = format!(
+            "{}{}",
+            truncate_chars(&fact.line(tz), 400),
+            fact.context_suffix()
+        )
+        .replace('<', "‹")
+        .replace('>', "›");
         let tokens = estimate_tokens(&line) + 1;
         if used + tokens > max_tokens {
             break;
@@ -459,6 +463,9 @@ mod tests {
             valid_to: None,
             recorded_at: at,
             expired_at: None,
+            geojson: None,
+            time: None,
+            expires_at: None,
             evidence: vec![Evidence {
                 speaker: None,
                 seq: 4812,

@@ -65,6 +65,7 @@ pub(crate) fn ask_trigger(message_id: &str, message: &str) -> Result<TriggerBody
         )));
     }
     Ok(TriggerBody {
+        monitoring: false,
         source: TriggerSource::Event,
         ref_id: message_id.to_string(),
         title: FROM_A_FLOW.to_string(),

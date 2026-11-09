@@ -2084,6 +2084,7 @@ export function initialActionParameters(
 export function OntologyActionParameterForm({
 	actionId,
 	schema,
+	description,
 	parameters,
 	disabled,
 	onChange,
@@ -2091,6 +2092,7 @@ export function OntologyActionParameterForm({
 }: Readonly<{
 	actionId: string;
 	schema?: Record<string, unknown>;
+	description?: string;
 	parameters: Record<string, unknown>;
 	disabled: boolean;
 	onChange: (parameters: Record<string, unknown>) => void;
@@ -2131,10 +2133,11 @@ export function OntologyActionParameterForm({
 			<div>
 				<Label>{t("parameters", "Parameters")}</Label>
 				<p className="text-xs text-muted-foreground">
-					{t(
-						"valuesAreValidatedAgainstTheSavedActionContract",
-						"Values are validated against the saved action contract.",
-					)}
+					{description ??
+						t(
+							"valuesAreValidatedAgainstTheSavedActionContract",
+							"Values are validated against the saved action contract.",
+						)}
 				</p>
 			</div>
 			<div className="space-y-3 rounded-lg border p-3">

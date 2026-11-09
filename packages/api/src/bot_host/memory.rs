@@ -1,6 +1,6 @@
 //! The server host's memory wiring: the bot's copy of its conversation as the engine's history,
 //! summaries written to the inbox as the bot, and the rule for which turns remember.
-//! Groups keep separate history and recall the bot's owner-taught memory read-only.
+//! Groups keep separate history and recall only the memory their settings allow.
 
 use crate::bot_tools::ApiAccess;
 use crate::state::AppState;
@@ -9,7 +9,7 @@ use crate::{
     entity::{bot_turn, conversation, conversation_member, conversation_segment, inbox_entry},
     error::ApiError,
     routes::inbox::{
-        model::WriteSegmentRequest,
+        model::{BotMemoryPolicy, WriteSegmentRequest},
         now_millis,
         segments::{validate_segment, write_bot_segment, write_segment_in},
     },
@@ -32,7 +32,8 @@ use flow_like_bot_memory::{Deleted, HistoryReader, Seq};
 use flow_like_bot_tools_host::AppAccess;
 use flow_like_types::{
     Result,
-    inbox::{ConversationKind, InboxEntryKind, body_target},
+    bot_effective::BotRoomLimits,
+    inbox::{ConversationEncryption, ConversationKind, InboxEntryKind, body_target},
 };
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder,
@@ -97,6 +98,86 @@ pub(crate) async fn memory_room<C: ConnectionTrait>(
     Ok(is_owner_direct(db, conversation_id, owner_id, bot_id)
         .await?
         .then_some(false))
+}
+
+/// Resolves both directions of group memory sharing from current memberships. No copied facts
+/// or cached permission grants are needed when a group stops sharing or a bot leaves it.
+pub(crate) async fn memory_policy<C: ConnectionTrait>(
+    db: &C,
+    conversation_id: &str,
+    owner_id: &str,
+    bot_id: &str,
+) -> Result<Option<BotMemoryPolicy>, DbErr> {
+    let Some(room) = memory_room(db, conversation_id, owner_id, bot_id).await? else {
+        return Ok(None);
+    };
+    let Some(conversation) = conversation::Entity::find_by_id(conversation_id)
+        .one(db)
+        .await?
+    else {
+        return Ok(None);
+    };
+    if ConversationEncryption::parse(&conversation.encryption)
+        != Some(ConversationEncryption::Plain)
+    {
+        return Ok(None);
+    }
+    let memberships = conversation_member::Entity::find()
+        .filter(conversation_member::Column::PrincipalId.eq(bot_id))
+        .filter(crate::routes::inbox::active_member())
+        .all(db)
+        .await?;
+    let limits = if room {
+        let Some(member) = memberships
+            .iter()
+            .find(|member| member.conversation_id == conversation_id)
+        else {
+            return Ok(None);
+        };
+        match &member.limits {
+            Some(value) => {
+                serde_json::from_value::<BotRoomLimits>(value.clone()).map_err(|error| {
+                    DbErr::Custom(format!("Bot memory settings are unreadable: {error}"))
+                })?
+            }
+            None => BotRoomLimits::default(),
+        }
+    } else {
+        BotRoomLimits::default()
+    };
+    let mut shared_room_keys = Vec::new();
+    if !room || limits.use_shared_memory {
+        let sources: Vec<String> = memberships
+            .into_iter()
+            .filter(|member| member.conversation_id != conversation_id)
+            .filter(|member| {
+                member
+                    .limits
+                    .as_ref()
+                    .and_then(|value| serde_json::from_value::<BotRoomLimits>(value.clone()).ok())
+                    .is_some_and(|limits| limits.share_memory)
+            })
+            .map(|member| member.conversation_id)
+            .collect();
+        if !sources.is_empty() {
+            shared_room_keys = conversation::Entity::find()
+                .filter(conversation::Column::Id.is_in(sources))
+                .filter(conversation::Column::Kind.eq("GROUP"))
+                .filter(conversation::Column::Encryption.eq("PLAIN"))
+                .all(db)
+                .await?
+                .into_iter()
+                .map(|source| format!("account/{}", source.id))
+                .collect();
+            shared_room_keys.sort();
+            shared_room_keys.dedup();
+        }
+    }
+    Ok(Some(BotMemoryPolicy {
+        room,
+        use_owner_memory: !room || limits.use_owner_memory,
+        shared_room_keys,
+    }))
 }
 
 impl ServerEntries {
@@ -362,12 +443,13 @@ pub(crate) async fn open_turn(
     if !bot.remembers() || bot.memory_model(None).is_none() || bot.workspace_app_id.is_none() {
         return None;
     }
-    let room = memory_room(&state.db, &turn.conversation_id, &turn.owner_id, &turn.bot_id)
+    let policy = memory_policy(&state.db, &turn.conversation_id, &turn.owner_id, &turn.bot_id)
         .await
         .unwrap_or_else(|error| {
             tracing::warn!(%error, turn_id = %turn.id, "Bot turn: memory skipped, conversation unreadable");
             None
         })?;
+    let room = policy.room;
     let entries = ServerEntries {
         db: state.db.clone(),
         bot_id: turn.bot_id.clone(),
@@ -391,6 +473,8 @@ pub(crate) async fn open_turn(
         sink,
         key: format!("account/{}", turn.conversation_id),
         room,
+        use_owner_memory: policy.use_owner_memory,
+        shared_room_keys: policy.shared_room_keys,
         trigger_seq,
         timezone: Tz::UTC,
         state_block: String::new(),

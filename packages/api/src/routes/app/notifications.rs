@@ -273,6 +273,7 @@ pub async fn create_notification(
     let result = dispatch_notification_with_status(
         &state,
         DispatchNotificationInput {
+            notification_priority: Default::default(),
             bot_context: None,
             user_id: target_sub,
             app_id: Some(app_id),

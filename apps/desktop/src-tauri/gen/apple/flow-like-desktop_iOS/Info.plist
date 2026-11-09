@@ -9,7 +9,7 @@
 	<key>FirebaseAppDelegateProxyEnabled</key>
 	<false/>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Flow Like uses your location when you request it in a workflow or map.</string>
+	<string>Flow Like uses your location when you request it in a workflow or map, or choose to share it with a bot.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>Flow Like monitors the regions you enable so location Events can run when you arrive or leave, including while the app is closed.</string>
 	<key>CFBundleDevelopmentRegion</key>
@@ -33,12 +33,12 @@
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
+			<key>CFBundleURLName</key>
+			<string>flow-like</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>flow-like</string>
 			</array>
-			<key>CFBundleURLName</key>
-			<string>flow-like</string>
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
@@ -133,7 +133,7 @@
 		<string>INSendMessageIntent</string>
 	</array>
 	<key>NSLocationUsageDescription</key>
-	<string>Flow Like uses your location when you request it in a workflow or map.</string>
+	<string>Flow Like uses your location when you request it in a workflow or map, or choose to share it with a bot.</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>

@@ -1,4 +1,4 @@
-use super::{Fixture, create, fixture};
+use super::{Fixture, TestKey, create, fixture};
 use crate::{Bot, LOCAL_OWNER_ID};
 use chrono::{Duration, Utc};
 use flow_like_types::{
@@ -132,7 +132,105 @@ fn a_due_task_writes_one_trigger_from_the_person_and_wakes_the_inbox() {
     assert_eq!(entries[0].sender_id, LOCAL_OWNER_ID);
     assert_eq!(entries[0].envelope["body"]["source"], "schedule");
     assert_eq!(entries[0].envelope["body"]["ref_id"], task.id);
+    assert_eq!(entries[0].envelope["body"]["monitoring"], false);
     assert!(f.changes.take().len() >= 1 || !before.is_empty());
+}
+
+#[test]
+fn monitoring_opt_in_survives_edits_reopen_and_firing() {
+    let f = fixture();
+    let bot = scheduler_bot(&f);
+    let task = f
+        .store
+        .create_task(
+            &bot.id,
+            CreateBotTask {
+                monitoring: true,
+                ..hourly()
+            },
+            TaskCreator::Owner,
+        )
+        .unwrap();
+    assert!(task.monitoring);
+    let renamed = f
+        .store
+        .update_task(
+            &bot.id,
+            &task.id,
+            UpdateBotTask {
+                title: Some("Check for changes".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(renamed.monitoring);
+    let reopened = f.open_again(TestKey::default()).unwrap();
+    assert!(reopened.tasks(&bot.id).unwrap()[0].monitoring);
+    let fired = reopened.fire_due_tasks(later(&renamed)).unwrap();
+    assert!(fired[0].monitoring);
+    let entries = triggers(&f, &bot);
+    assert_eq!(entries[0].sender_id, LOCAL_OWNER_ID);
+    let body = flow_like_types::inbox::TriggerBody::parse(&entries[0].envelope["body"]).unwrap();
+    assert!(body.monitoring);
+    assert_eq!(body.ref_id, task.id);
+    assert_eq!(body.source, flow_like_types::inbox::TriggerSource::Schedule);
+
+    let regular = reopened
+        .update_task(
+            &bot.id,
+            &task.id,
+            UpdateBotTask {
+                monitoring: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(!regular.monitoring);
+    reopened.fire_due_tasks(later(&regular)).unwrap();
+    let entries = triggers(&f, &bot);
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].envelope["body"]["monitoring"], false);
+}
+
+#[test]
+fn legacy_tasks_and_wire_requests_remain_regular_reminders() {
+    let f = fixture();
+    let bot = scheduler_bot(&f);
+    let mut request = serde_json::to_value(once(5)).unwrap();
+    request.as_object_mut().unwrap().remove("monitoring");
+    let legacy: CreateBotTask = serde_json::from_value(request).unwrap();
+    assert!(!legacy.monitoring);
+    let task = f
+        .store
+        .create_task(&bot.id, legacy, TaskCreator::Owner)
+        .unwrap();
+    let mut view = serde_json::to_value(&task).unwrap();
+    view.as_object_mut().unwrap().remove("monitoring");
+    assert!(!serde_json::from_value::<BotTask>(view).unwrap().monitoring);
+    assert_eq!(
+        serde_json::from_value::<UpdateBotTask>(json!({"title":"Renamed"}))
+            .unwrap()
+            .monitoring,
+        None
+    );
+
+    let raw = f.raw();
+    raw.execute_batch("ALTER TABLE tasks DROP COLUMN monitoring;")
+        .unwrap();
+    let migration = crate::schema::MIGRATIONS
+        .iter()
+        .find(|migration| migration.contains("ALTER TABLE tasks ADD COLUMN monitoring"))
+        .unwrap();
+    raw.execute_batch(migration).unwrap();
+    let reopened = f.open_again(TestKey::default()).unwrap();
+    assert!(!reopened.tasks(&bot.id).unwrap()[0].monitoring);
+    reopened.fire_due_tasks(later(&task)).unwrap();
+    assert_eq!(triggers(&f, &bot)[0].envelope["body"]["monitoring"], false);
+    let legacy_trigger = flow_like_types::inbox::TriggerBody::parse(&json!({
+        "source":"schedule", "ref_id":task.id, "title":"Reminder", "text":"Check the report"
+    }))
+    .unwrap();
+    assert!(!legacy_trigger.monitoring);
 }
 
 #[test]
@@ -251,6 +349,7 @@ fn a_trigger_is_idempotent_by_message_id() {
     let f = fixture();
     let bot = scheduler_bot(&f);
     let body = flow_like_types::inbox::TriggerBody {
+        monitoring: false,
         source: flow_like_types::inbox::TriggerSource::Webhook,
         ref_id: "hook".into(),
         title: "Hook".into(),

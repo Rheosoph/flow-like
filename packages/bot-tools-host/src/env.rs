@@ -42,7 +42,10 @@ pub trait SecretSource: Send + Sync {
 pub trait ImageSource: Send + Sync {
     async fn images(
         &self,
-    ) -> std::result::Result<Arc<dyn flow_like_bot_tools::image::ImageBackend>, flow_like_bot_tools::image::ImageUnavailable>;
+    ) -> std::result::Result<
+        Arc<dyn flow_like_bot_tools::image::ImageBackend>,
+        flow_like_bot_tools::image::ImageUnavailable,
+    >;
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +83,9 @@ pub struct HostEnv {
     object_writes: bool,
     notifier: Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>>,
     people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
+    user_context: Option<Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>>,
+    configuration: Option<Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>>,
+    crew: Option<Arc<dyn flow_like_bot_tools::crew::CrewBackend>>,
     scheduler: Option<Arc<dyn flow_like_bot_tools::Scheduler>>,
     skills: Option<Arc<dyn flow_like_bot_tools::SkillHost>>,
     mail: Option<Arc<dyn flow_like_bot_tools::email::MailBackend>>,
@@ -119,6 +125,9 @@ impl HostEnv {
             object_writes: true,
             notifier: None,
             people: None,
+            user_context: None,
+            configuration: None,
+            crew: None,
             scheduler: None,
             skills: None,
             mail: None,
@@ -170,6 +179,27 @@ impl HostEnv {
         self
     }
 
+    pub fn with_user_context(
+        mut self,
+        user_context: Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>,
+    ) -> Self {
+        self.user_context = Some(user_context);
+        self
+    }
+
+    pub fn with_configuration(
+        mut self,
+        configuration: Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>,
+    ) -> Self {
+        self.configuration = Some(configuration);
+        self
+    }
+
+    pub fn with_crew(mut self, crew: Arc<dyn flow_like_bot_tools::crew::CrewBackend>) -> Self {
+        self.crew = Some(crew);
+        self
+    }
+
     pub fn with_notifier(mut self, notifier: Arc<dyn flow_like_bot_tools::OwnerNotifier>) -> Self {
         self.notifier = Some(notifier);
         self
@@ -200,7 +230,10 @@ impl HostEnv {
     }
 
     fn files_allowed(&self, app_id: &str) -> Result<()> {
-        if self.is_workspace(app_id) || is_conversation_app(app_id) || self.rights.get(app_id).is_some_and(|rights| rights.files) {
+        if self.is_workspace(app_id)
+            || is_conversation_app(app_id)
+            || self.rights.get(app_id).is_some_and(|rights| rights.files)
+        {
             return Ok(());
         }
         Err(anyhow!(
@@ -274,6 +307,22 @@ impl ToolEnv for HostEnv {
 
     fn people(&self) -> Option<Arc<dyn flow_like_bot_tools::PeopleBackend>> {
         self.people.clone()
+    }
+
+    fn user_context(
+        &self,
+    ) -> Option<Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>> {
+        self.user_context.clone()
+    }
+
+    fn configuration(
+        &self,
+    ) -> Option<Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>> {
+        self.configuration.clone()
+    }
+
+    fn crew(&self) -> Option<Arc<dyn flow_like_bot_tools::crew::CrewBackend>> {
+        self.crew.clone()
     }
 
     fn allow_expensive_documents(&self) -> bool {
@@ -385,8 +434,10 @@ impl ToolEnv for HostEnv {
 
     async fn images(
         &self,
-    ) -> std::result::Result<Arc<dyn flow_like_bot_tools::image::ImageBackend>, flow_like_bot_tools::image::ImageUnavailable>
-    {
+    ) -> std::result::Result<
+        Arc<dyn flow_like_bot_tools::image::ImageBackend>,
+        flow_like_bot_tools::image::ImageUnavailable,
+    > {
         match &self.images {
             Some(source) => source.images().await,
             None => Err(flow_like_bot_tools::image::ImageUnavailable::NotOnThisHost),

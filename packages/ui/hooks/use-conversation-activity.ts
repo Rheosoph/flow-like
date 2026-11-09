@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	type ConversationBotActivity,
@@ -22,6 +22,7 @@ import type {
 } from "../state/backend-state/inbox-state";
 import type { ConversationRoom } from "./use-conversation-room";
 import { inboxKeys } from "./use-inbox";
+import { invalidateBotConfiguration } from "./use-bots";
 
 export type { ConversationBotActivity };
 export type { ConversationTurnStatus };
@@ -115,11 +116,30 @@ function useConversationBots(
 		[conversation.members],
 	);
 	const apiTurns = enabled ? (query.data ?? NO_TURNS) : NO_TURNS;
-
-	return useMemo(
+	const queryClient = useQueryClient();
+	const previousActivity = useRef<{
+		conversation: string;
+		bots: ReadonlySet<string>;
+	}>({
+		conversation: conversation.id,
+		bots: new Set(),
+	});
+	const activity = useMemo(
 		() => mergeBotActivity(apiTurns, live, botIds, Date.now()),
 		[apiTurns, live, botIds],
 	);
+	useEffect(() => {
+		const next = new Set(activity.map((bot) => bot.botId));
+		const previous = previousActivity.current;
+		if (previous.conversation === conversation.id) {
+			for (const botId of previous.bots) {
+				if (!next.has(botId)) invalidateBotConfiguration(queryClient, botId);
+			}
+		}
+		previousActivity.current = { conversation: conversation.id, bots: next };
+	}, [activity, conversation.id, queryClient]);
+
+	return activity;
 }
 
 function useTypingPeople(

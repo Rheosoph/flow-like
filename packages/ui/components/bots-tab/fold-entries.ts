@@ -1,5 +1,6 @@
 import { compareInboxCursors } from "../../hooks/use-inbox";
 import { isRecord } from "../../lib/response-shape";
+import type { IBotNoteRef } from "../../state/backend-state/bot-state";
 import type {
 	IInboxApprovalSecret,
 	IInboxAttachmentPart,
@@ -12,7 +13,13 @@ import {
 	approvalResponseOf,
 	plainBody,
 } from "./approval-entry";
+import { noteRefOf } from "./bot-note-entry";
 import { isSelfPrincipal } from "./crew-model";
+import {
+	type UserContextCardData,
+	userContextRequestOf,
+	userContextResponseOf,
+} from "./user-context-entry";
 
 export interface ConversationReaction {
 	emoji: string;
@@ -37,6 +44,7 @@ export interface ConversationApproval {
 	requesterName?: string;
 	room?: string;
 	secret?: IInboxApprovalSecret;
+	configurationChanges?: Record<string, unknown>;
 	answer?: ApprovalDecision;
 }
 
@@ -91,6 +99,9 @@ export interface ConversationMessage {
 	errorCode?: string;
 	attachments?: IInboxAttachmentPart[];
 	approval?: ConversationApproval;
+	userContext?: UserContextCardData;
+	userContextDerived?: boolean;
+	note?: IBotNoteRef;
 	/** Recipients of the email this message was sent as. */
 	mailedTo?: string[];
 	edited: boolean;
@@ -430,6 +441,17 @@ export function foldInboxEntries(
 			continue;
 		}
 		if (entry.kind === "message") {
+			const contextResponse = userContextResponseOf(entry);
+			if (contextResponse) {
+				const card = messages.get(contextResponse.request_id);
+				if (
+					card?.userContext?.request.subject_id ===
+						contextResponse.subject_id &&
+					card.userContext.request.bot_id === contextResponse.bot_id
+				)
+					card.userContext.answer = contextResponse.decision;
+				continue;
+			}
 			const response = approvalResponseOf(entry);
 			if (response) {
 				const card = messages.get(response.approval_id);
@@ -438,7 +460,9 @@ export function foldInboxEntries(
 			}
 			const replyTo = text(plainBody(entry)?.reply_to);
 			const approval = approvalOf(entry);
+			const contextRequest = userContextRequestOf(entry);
 			const mailedTo = mailedToOf(entry);
+			const note = noteRefOf(entry);
 			const message: ConversationMessage = {
 				type: "message",
 				id: entry.message_id,
@@ -448,11 +472,16 @@ export function foldInboxEntries(
 				time: entryTime(entry),
 				content: inboxMessageContent(entry),
 				mentions: mentionsOf(entry),
+				...(contextRequest ? { userContext: { request: contextRequest } } : {}),
+				...(typeof plainBody(entry)?.user_context_derived === "string"
+					? { userContextDerived: true }
+					: {}),
 				...(errorCodeOf(entry) ? { errorCode: errorCodeOf(entry) } : {}),
 				...(attachmentsOf(entry).length > 0
 					? { attachments: attachmentsOf(entry) }
 					: {}),
 				...(replyTo ? { replyTo } : {}),
+				...(note ? { note } : {}),
 				...(mailedTo.length > 0 ? { mailedTo } : {}),
 				...(approval
 					? {
@@ -464,6 +493,7 @@ export function foldInboxEntries(
 								scopes: approval.scope.split(",").filter(Boolean),
 								requesterName: approval.requester_name ?? approval.requester_id,
 								room: approval.room,
+								configurationChanges: approval.configuration_changes,
 								...(approval.secret ? { secret: approval.secret } : {}),
 							},
 						}
