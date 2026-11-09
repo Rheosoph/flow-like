@@ -526,6 +526,15 @@ impl TurnHub for ProfileHub {
         self.call(Method::PUT, path, &query, Some(body)).await
     }
 
+    async fn patch(
+        &self,
+        path: &str,
+        query: Vec<(&'static str, String)>,
+        body: Value,
+    ) -> Result<Value, HubFailure> {
+        self.call(Method::PATCH, path, &query, Some(body)).await
+    }
+
     async fn delete(
         &self,
         path: &str,

@@ -55,7 +55,7 @@ fn frontend_platform_tool_spec_for_bot(
 ) -> Option<flow_like::flow::copilot::tool_spec::PlatformToolSpec> {
     frontend_platform_tool_spec(tool_set, tool_name).or_else(|| {
         if tool_set != FrontendPlatformToolSet::Global
-            || !flow_like_bot_tools::configuration::is_configuration_tool(tool_name)
+            || !flow_like_bot_tools::configuration::is_settings_tool(tool_name)
         {
             return None;
         }

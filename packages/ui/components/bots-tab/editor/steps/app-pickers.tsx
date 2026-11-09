@@ -2,16 +2,7 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { AppWindow, Search } from "lucide-react";
-import {
-	useCallback,
-	useEffect,
-	useId,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
-import { toast } from "sonner";
-import { useBotApps, useSetBotApp } from "../../../../hooks/use-bots";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useInvoke } from "../../../../hooks/use-invoke";
 import { IAppVisibility } from "../../../../lib/schema/app/app";
 import type { IProfile } from "../../../../lib/schema/profile/profile";
@@ -27,7 +18,7 @@ import {
 } from "../../../ui/select";
 import { Skeleton } from "../../../ui/skeleton";
 import { BotAppAccess } from "../../bot-app-restrictions";
-import { useBotErrorMessage } from "../bot-editor-copy";
+import type { BotAppDraft } from "../use-bot-app-draft";
 
 interface AppOption {
 	id: string;
@@ -96,29 +87,37 @@ export function BotProfilePicker({
 	);
 }
 
-function useLibraryApps(): { apps: AppOption[]; isLoading: boolean } {
+function useLibraryApps(localOnly: boolean): {
+	apps: AppOption[];
+	isLoading: boolean;
+} {
 	const backend = useBackend();
 	const apps = useInvoke(backend.appState.getApps, backend.appState, []);
 	return useMemo(
 		() => ({
 			isLoading: apps.isLoading,
 			apps: (apps.data ?? [])
-				.filter(([app]) => app.visibility !== IAppVisibility.Offline)
+				// Account bots need a hub membership, even when they run on the desktop.
+				.filter(
+					([app]) => localOnly || app.visibility !== IAppVisibility.Offline,
+				)
 				.map(([app, metadata]) => ({ id: app.id, name: metadata?.name ?? "" })),
 		}),
-		[apps.data, apps.isLoading],
+		[apps.data, apps.isLoading, localOnly],
 	);
 }
 
 /** Apps for a bot that doesn't exist yet: the picks are attached right after it is created. */
 export function PendingAppPicker({
+	localOnly = false,
 	selected,
 	onChange,
 }: Readonly<{
+	localOnly?: boolean;
 	selected: readonly string[];
 	onChange: (ids: string[]) => void;
 }>) {
-	const { apps, isLoading } = useLibraryApps();
+	const { apps, isLoading } = useLibraryApps(localOnly);
 	const isChecked = useCallback(
 		(appId: string) => selected.includes(appId),
 		[selected],
@@ -142,24 +141,23 @@ export function PendingAppPicker({
 	);
 }
 
-/** A tick that is still being saved; `ticket` tells a newer tick of the same app from an older one. */
-interface PendingAppChange {
-	checked: boolean;
-	ticket: number;
-}
-
-/** Apps of an existing bot: every change is saved right away. */
-export function AttachedAppPicker({ botId }: Readonly<{ botId: string }>) {
-	const { t } = useTranslation("bots");
-	const errorMessage = useBotErrorMessage();
-	const library = useLibraryApps();
-	const attached = useBotApps(botId);
-	const { mutateAsync: setApp } = useSetBotApp();
-	const [pending, setPending] = useState<Record<string, PendingAppChange>>({});
-	const tickets = useRef(0);
+/** App access stays in the editor draft across step changes, until Save or Discard. */
+export function AttachedAppPicker({
+	botId,
+	localOnly = false,
+	appAccess,
+}: Readonly<{
+	botId: string;
+	localOnly?: boolean;
+	appAccess: BotAppDraft;
+}>) {
+	const library = useLibraryApps(localOnly);
 	const apps = useMemo(() => {
 		const roles = new Map(
-			(attached.data ?? []).map((entry) => [entry.app_id, entry.owner_role]),
+			appAccess.apps.map((entry) => [
+				entry.app_id,
+				entry.added_at ? entry.owner_role : undefined,
+			]),
 		);
 		const listed = library.apps.map((app) => ({
 			...app,
@@ -169,41 +167,24 @@ export function AttachedAppPicker({ botId }: Readonly<{ botId: string }>) {
 			.filter((appId) => !library.apps.some((app) => app.id === appId))
 			.map((appId) => ({ id: appId, name: "", role: roles.get(appId) }));
 		return [...listed, ...missing];
-	}, [attached.data, library.apps]);
+	}, [appAccess.apps, library.apps]);
 	const isChecked = useCallback(
-		(appId: string) =>
-			pending[appId]?.checked ??
-			(attached.data ?? []).some((entry) => entry.app_id === appId),
-		[attached.data, pending],
-	);
-	const toggle = useCallback(
-		async (appId: string, checked: boolean) => {
-			tickets.current += 1;
-			const ticket = tickets.current;
-			setPending((current) => ({ ...current, [appId]: { checked, ticket } }));
-			try {
-				await setApp({ botId, appId, attached: checked });
-			} catch (error) {
-				toast.error(errorMessage(error, t("editor.abilities.appsFailed")));
-			} finally {
-				setPending((current) => {
-					if (current[appId]?.ticket !== ticket) return current;
-					const { [appId]: _, ...rest } = current;
-					return rest;
-				});
-			}
-		},
-		[botId, errorMessage, setApp, t],
+		(appId: string) => appAccess.apps.some((entry) => entry.app_id === appId),
+		[appAccess.apps],
 	);
 	return (
 		<div className="flex flex-col gap-4">
 			<AppChecklist
 				apps={apps}
-				isLoading={library.isLoading || attached.isLoading}
+				isLoading={library.isLoading || appAccess.loading}
 				isChecked={isChecked}
-				onToggle={toggle}
+				onToggle={appAccess.setAttached}
 			/>
-			<BotAppAccess botId={botId} />
+			<BotAppAccess
+				botId={botId}
+				apps={appAccess.apps}
+				onRestrictionsChange={appAccess.setRestrictions}
+			/>
 		</div>
 	);
 }

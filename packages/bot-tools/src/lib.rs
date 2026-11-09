@@ -8,6 +8,7 @@ pub mod code;
 pub mod computer;
 pub mod configuration;
 pub mod convert;
+pub mod crew;
 #[cfg(feature = "data")]
 pub mod data;
 pub mod data_backend;
@@ -95,6 +96,10 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         configuration::BOT_UPDATE_CONFIGURATION => {
             configuration::update(env, parse_args(tool, args)?).await
         }
+        crew::LIST_BOTS => crew::list_bots(env, parse_args(tool, args)?).await,
+        crew::GET_BOT => crew::get_bot(env, parse_args(tool, args)?).await,
+        crew::CREATE_BOT => crew::create_bot(env, args).await,
+        crew::UPDATE_BOT => crew::update_bot(env, parse_args(tool, args)?).await,
         files::FILE_LIST => files::file_list(env, parse_args(tool, args)?).await,
         files::FILE_READ => files::file_read(env, parse_args(tool, args)?).await,
         files::FILE_SAVE => files::file_save(env, parse_args(tool, args)?).await,

@@ -358,7 +358,7 @@ impl FlowPath {
             path.pop();
         }
 
-        let store = LocalObjectStore::new(path.clone())?;
+        let store = LocalObjectStore::host_folder(path.clone())?;
         let store_hash = hash_string_non_cryptographic(&store.to_string()).to_string();
         let store = FlowLikeStore::Local(Arc::new(store));
         let cacheable_store: Arc<dyn Cacheable> = Arc::new(store);

@@ -309,3 +309,64 @@ fn deleting_the_bot_removes_its_saved_execution_state() {
         .unwrap();
     assert_eq!(count, 0);
 }
+
+#[test]
+fn an_approval_answer_rebases_the_deadline_and_keeps_revision_and_state() {
+    use flow_like_types::bot_message::{ApprovalRequest, ApprovalResponse};
+    use flow_like_types::tool_grant::{ApprovalDecision, approval_message_id};
+    let f = fixture();
+    let bot = f.bot("Scout");
+    let room = f.direct(&bot);
+    f.text(&room.id, LOCAL_OWNER_ID, "task");
+    let saved = checkpoint(1);
+    f.store
+        .save_run_checkpoint(&bot.id, &room.id, "task", &saved)
+        .unwrap();
+    let turn = flow_like_types::bot_turn::turn_id(&bot.id, "task");
+    let card = ApprovalRequest {
+        id: approval_message_id(&turn, "hash1"),
+        turn_id: turn.clone(),
+        tool: "code_run".into(),
+        summary: "Run code".into(),
+        scope: "host:example.com".into(),
+        args_hash: "hash1".into(),
+        requester_id: None,
+        requester_name: None,
+        room: None,
+        secret: None,
+        configuration_changes: None,
+    };
+    f.store
+        .park_turn(&turn, &bot.id, &room.id, "task", &card)
+        .unwrap();
+    let response = ApprovalResponse {
+        approval_id: card.id.clone(),
+        decision: ApprovalDecision::Once,
+    };
+    f.store.resolve_parked(&bot.id, &turn, &response).unwrap();
+    let rebased = f
+        .store
+        .run_checkpoint(&bot.id, &room.id, "task")
+        .unwrap()
+        .unwrap();
+    assert_eq!((rebased.revision, &rebased.state), (1, &saved.state));
+    assert!(rebased.started_at_ms > saved.started_at_ms);
+    assert_eq!(
+        rebased.deadline_at_ms - rebased.started_at_ms,
+        flow_like_types::bot_turn::DEFAULT_TURN_DEADLINE_SECS as i64 * 1000
+    );
+    let mut next = checkpoint(2);
+    next.started_at_ms = rebased.started_at_ms;
+    next.deadline_at_ms = rebased.deadline_at_ms;
+    f.store
+        .save_run_checkpoint(&bot.id, &room.id, "task", &next)
+        .unwrap();
+    let mut shifted = checkpoint(3);
+    shifted.started_at_ms = next.started_at_ms + 1;
+    shifted.deadline_at_ms = next.deadline_at_ms + 1;
+    assert!(
+        f.store
+            .save_run_checkpoint(&bot.id, &room.id, "task", &shifted)
+            .is_err()
+    );
+}

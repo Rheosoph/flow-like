@@ -23,9 +23,9 @@ pub(crate) const TURN_RUNNING: &str = "RUNNING";
 pub(crate) const TURN_DONE: &str = "DONE";
 pub(crate) const TURN_QUEUED: &str = "QUEUED";
 
-const COMPLETE_INTERACTIVE_SQL: &str = r#"UPDATE "BotTurn" SET "status" = $1, "replyMessageId" = $2, "leaseUntil" = NULL, "updatedAt" = $3 WHERE "id" = $4 AND "botId" = $5 AND "conversationId" = $6 AND "status" = $7 AND ("hostId" IS NULL OR "hostId" = $8) RETURNING "hops""#;
+const COMPLETE_INTERACTIVE_SQL: &str = r#"UPDATE "BotTurn" SET "status" = $1, "replyMessageId" = $2, "statusText" = NULL, "leaseUntil" = NULL, "updatedAt" = $3 WHERE "id" = $4 AND "botId" = $5 AND "conversationId" = $6 AND "status" = $7 AND ("hostId" IS NULL OR "hostId" = $8) RETURNING "hops""#;
 
-const COMPLETE_TURN_SQL: &str = r#"UPDATE "BotTurn" SET "status" = $1, "replyMessageId" = $2, "leaseUntil" = NULL, "updatedAt" = $3 WHERE "id" = $4 AND "botId" = $5 AND "conversationId" = $6 AND "status" = $7 AND "hostId" = $8 AND "leaseUntil" > $9 RETURNING "hops""#;
+const COMPLETE_TURN_SQL: &str = r#"UPDATE "BotTurn" SET "status" = $1, "replyMessageId" = $2, "statusText" = NULL, "leaseUntil" = NULL, "updatedAt" = $3 WHERE "id" = $4 AND "botId" = $5 AND "conversationId" = $6 AND "status" = $7 AND "hostId" = $8 AND "leaseUntil" > $9 RETURNING "hops""#;
 
 fn clipped(value: &str) -> String {
     value.chars().take(80).collect()

@@ -258,6 +258,19 @@ fn parse_image_media_type(value: &str) -> Option<ImageMediaType> {
     }
 }
 
+/// A chat image as the model receives it: its checked link, or its base64 data.
+pub(super) fn chat_image_content(image: &ChatImage) -> UserContent {
+    UserContent::Image(Image {
+        data: match &image.url {
+            Some(url) => DocumentSourceKind::Url(url.clone()),
+            None => DocumentSourceKind::Base64(image.data.clone()),
+        },
+        media_type: parse_image_media_type(&image.media_type),
+        detail: Some(ImageDetail::Auto),
+        additional_params: None,
+    })
+}
+
 /// Which FlowPilot surface a rig/Bits loop is serving.
 ///
 /// The surface picks the advertised tool set and the round budget; everything else about the loop
@@ -1102,14 +1115,7 @@ impl PlatformCopilot {
             additional_params: None,
         })];
         if let Some(images) = &current_images {
-            for img in images {
-                prompt_contents.push(UserContent::Image(Image {
-                    data: DocumentSourceKind::Base64(img.data.clone()),
-                    media_type: parse_image_media_type(&img.media_type),
-                    detail: Some(ImageDetail::Auto),
-                    additional_params: None,
-                }));
-            }
+            prompt_contents.extend(images.iter().map(chat_image_content));
         }
         let reference_images: Vec<UserContent> = prompt_contents
             .iter()
@@ -1135,14 +1141,7 @@ impl PlatformCopilot {
                             additional_params: None,
                         })];
                     if let Some(images) = &msg.images {
-                        for img in images {
-                            contents.push(UserContent::Image(Image {
-                                data: DocumentSourceKind::Base64(img.data.clone()),
-                                media_type: parse_image_media_type(&img.media_type),
-                                detail: Some(ImageDetail::Auto),
-                                additional_params: None,
-                            }));
-                        }
+                        contents.extend(images.iter().map(chat_image_content));
                     }
                     OneOrMany::many(contents)
                         .ok()

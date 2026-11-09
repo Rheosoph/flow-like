@@ -321,3 +321,225 @@ async fn geometry_migration_backfills_and_indexes_without_changing_spatial_resul
     assert!(plan.contains("ScalarIndexQuery"), "{plan}");
     assert!(plan.contains(&geometry_index.name), "{plan}");
 }
+
+#[tokio::test]
+async fn purge_prunes_history_only_after_deleting_or_a_pending_prune() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = now();
+    let stores = open_stores(&dir).await;
+    let mut expired = fact("f_expired", "The user's temporary badge is 4411.", at);
+    expired.expires_at = Some(at);
+    stores
+        .facts
+        .insert(&[expired, fact("f_kept", "The user likes tea.", at)])
+        .await
+        .unwrap();
+    assert_eq!(stores.facts.purge_expired(at).await.unwrap(), 1);
+    let facts = raw(&dir, "facts").await;
+    assert_eq!(facts.list_versions().await.unwrap().len(), 1);
+
+    stores
+        .facts
+        .insert(&[fact("f_more", "The user likes coffee.", at)])
+        .await
+        .unwrap();
+    stores
+        .facts
+        .insert(&[fact("f_again", "The user likes juice.", at)])
+        .await
+        .unwrap();
+    let before = facts.list_versions().await.unwrap().len();
+    assert!(before >= 2);
+    assert_eq!(stores.facts.purge_expired(at).await.unwrap(), 0);
+    assert!(facts.list_versions().await.unwrap().len() >= before);
+}
+
+#[tokio::test]
+async fn purge_drops_markers_older_than_the_retention_horizon() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = now();
+    let stores = open_stores(&dir).await;
+    let old = at - Duration::days(200);
+    let mut expired = fact("f_old", "The user's temporary badge is 4411.", old);
+    expired.expires_at = Some(old + Duration::hours(1));
+    stores.facts.insert(&[expired]).await.unwrap();
+    assert_eq!(stores.facts.purge_expired(old + Duration::days(1)).await.unwrap(), 1);
+    let markers = raw(&dir, "facts_expiry");
+    assert_eq!(markers.await.list(None, 10, 0).await.unwrap().len(), 1);
+
+    let mut recent = fact("f_recent", "The user's temporary badge is 9900.", at);
+    recent.expires_at = Some(at + Duration::hours(1));
+    stores.facts.insert(&[recent]).await.unwrap();
+    assert_eq!(stores.facts.purge_expired(at + Duration::hours(2)).await.unwrap(), 1);
+    let markers = raw(&dir, "facts_expiry").await.list(None, 10, 0).await.unwrap();
+    assert_eq!(markers.len(), 1);
+    assert_eq!(markers[0]["cutoff"], json!((at + Duration::hours(1)).timestamp_millis()));
+}
+
+fn location_query(at: DateTime<Utc>) -> FactQuery {
+    FactQuery {
+        text: String::new(),
+        filter: FactFilter::default(),
+        time_hint: None,
+        limit: 10,
+        offset: 0,
+        now: at,
+        recency: Recency::default(),
+        sort: FactSort::Distance,
+        geojson: Some(json!({"type":"Point","coordinates":[0.0,0.0]})),
+        radius_m: Some(200_000.0),
+        area: None,
+    }
+}
+
+fn located(id: &str, text: &str, at: DateTime<Utc>, longitude: f64) -> Fact {
+    let mut fact = fact(id, text, at);
+    fact.geojson = Some(json!({"type":"Point","coordinates":[longitude, 0.0]}));
+    fact
+}
+
+#[tokio::test]
+async fn radius_search_filters_by_distance_and_rejects_invalid_queries_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = now();
+    let stores = open_stores(&dir).await;
+    stores
+        .facts
+        .insert(&[
+            located("f_near", "The user's cafe is near.", at, 1.0),
+            located("f_far", "The user's office is far.", at, 20.0),
+        ])
+        .await
+        .unwrap();
+    let found = stores.facts.search(&location_query(at)).await.unwrap();
+    assert_eq!(
+        found.iter().map(|hit| hit.fact.id.as_str()).collect::<Vec<_>>(),
+        ["f_near"]
+    );
+    let mut invalid = location_query(at);
+    invalid.geojson = Some(json!({"type":"Point","coordinates":[500,0]}));
+    assert!(stores.facts.search(&invalid).await.is_err());
+}
+
+#[tokio::test]
+async fn location_search_without_text_caps_the_rows_it_examines() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = now();
+    let stores = open_stores(&dir).await;
+    let facts: Vec<_> = (0..5_001)
+        .map(|index| {
+            located(
+                &format!("f_{index}"),
+                &format!("The user's numbered place is {index}."),
+                at,
+                0.001,
+            )
+        })
+        .collect();
+    stores.facts.insert(&facts).await.unwrap();
+    let error = stores
+        .facts
+        .search(&location_query(at))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("narrow"), "{error}");
+    let mut texted = location_query(at);
+    texted.text = "numbered place".into();
+    assert!(!stores.facts.search(&texted).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn geometry_backfill_skips_unindexable_rows_and_marks_the_table_ready() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = now();
+    let stores = open_stores(&dir).await;
+    stores
+        .facts
+        .insert(&[
+            located("f_a", "The user's cafe is one.", at, 1.0),
+            located("f_b", "The user's cafe is two.", at, 1.0),
+            located("f_bad", "The user's cafe is three.", at, 2.0),
+        ])
+        .await
+        .unwrap();
+    raw(&dir, "facts")
+        .await
+        .drop_columns(&["geometry"])
+        .await
+        .unwrap();
+    raw(&dir, "facts")
+        .await
+        .update(
+            "id = 'f_bad'",
+            std::collections::HashMap::from([(
+                "geojson".to_string(),
+                json!(r#"{"type":"Point","coordinates":[500,0]}"#),
+            )]),
+        )
+        .await
+        .unwrap();
+    drop(stores);
+
+    let reopened = open_stores(&dir).await;
+    let found = reopened.facts.search(&location_query(at)).await.unwrap();
+    assert_eq!(found.len(), 2, "unmigrated rows still resolve by exact parse");
+    let engine = engine(reopened);
+    engine.optimize(at).await.unwrap();
+    assert_eq!(
+        raw(&dir, "facts")
+            .await
+            .count(Some("geometry IS NOT NULL".into()))
+            .await
+            .unwrap(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn readers_do_not_migrate_another_rooms_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = now();
+    let owner = open_stores(&dir).await;
+    owner
+        .facts
+        .insert(&[fact("f_owner", "The user likes tea.", at)])
+        .await
+        .unwrap();
+    drop(owner);
+    raw(&dir, "facts")
+        .await
+        .drop_columns(&["geometry"])
+        .await
+        .unwrap();
+
+    let connection =
+        flow_like_storage::databases::vector::lancedb::connect_lance(dir.path().to_str().unwrap())
+            .execute()
+            .await
+            .unwrap();
+    let room = MemoryStores::open_room(
+        connection,
+        Arc::new(HashEmbedder::new("hash", 64)),
+        None,
+        "account/room-a",
+    )
+    .await
+    .with_recall_sources(true, &[])
+    .await;
+    let source = room.owner_facts.as_ref().unwrap();
+    assert!(source.get("f_owner").await.unwrap().is_none());
+    assert!(
+        raw(&dir, "facts")
+            .await
+            .schema()
+            .await
+            .unwrap()
+            .field_with_name("geometry")
+            .is_err()
+    );
+
+    let owner = open_stores(&dir).await;
+    assert!(owner.facts.get("f_owner").await.unwrap().is_some());
+    assert!(source.get("f_owner").await.unwrap().is_some());
+}

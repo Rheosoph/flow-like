@@ -17,6 +17,8 @@ export interface Utterance {
 	/** Where the utterance starts, in ms since the segmenter began. */
 	offsetMs: number;
 	durationMs: number;
+	/** Wall-clock start of the captured audio, when supplied by the microphone listener. */
+	capturedAt?: number;
 }
 
 export interface SegmenterOptions {
@@ -25,6 +27,9 @@ export interface SegmenterOptions {
 	minMs?: number;
 	silenceMs?: number;
 	maxMs?: number;
+	/** Cumulative audio snapshots while speech is still being captured. */
+	onPartial?: (utterance: Utterance) => void;
+	partialMs?: number;
 }
 
 export function rms(samples: ArrayLike<number>): number {
@@ -57,6 +62,7 @@ export function createUtteranceSegmenter(options: SegmenterOptions = {}) {
 	const maxSamples = (options.maxMs ?? MAX_UTTERANCE_MS) * perMs;
 	const keepSamples = TRAILING_KEEP_MS * perMs;
 	const preRollSamples = PRE_ROLL_MS * perMs;
+	const partialSamples = (options.partialMs ?? 1000) * perMs;
 
 	let position = 0;
 	let preRoll: Float32Array[] = [];
@@ -66,6 +72,22 @@ export function createUtteranceSegmenter(options: SegmenterOptions = {}) {
 	let start = 0;
 	let lastLoudEnd = 0;
 	let speaking = false;
+	let lastPartialLength = 0;
+
+	const preview = () => {
+		if (
+			!options.onPartial ||
+			lastLoudEnd - start < minSamples ||
+			length - lastPartialLength < partialSamples
+		)
+			return;
+		lastPartialLength = length;
+		options.onPartial({
+			samples: concat(parts, length),
+			offsetMs: Math.round(start / perMs),
+			durationMs: Math.round(length / perMs),
+		});
+	};
 
 	const finish = (): Utterance | null => {
 		const speech = lastLoudEnd - start;
@@ -75,6 +97,7 @@ export function createUtteranceSegmenter(options: SegmenterOptions = {}) {
 		speaking = false;
 		parts = [];
 		length = 0;
+		lastPartialLength = 0;
 		if (speech < minSamples) return null;
 		return {
 			samples: samples.slice(),
@@ -105,6 +128,7 @@ export function createUtteranceSegmenter(options: SegmenterOptions = {}) {
 				speaking = true;
 				position += chunk.length;
 				lastLoudEnd = position;
+				preview();
 				return out;
 			}
 			parts.push(chunk);
@@ -114,7 +138,7 @@ export function createUtteranceSegmenter(options: SegmenterOptions = {}) {
 			if (position - lastLoudEnd >= silenceSamples || length >= maxSamples) {
 				const done = finish();
 				if (done) out.push(done);
-			}
+			} else if (loud) preview();
 			return out;
 		},
 		flush(): Utterance | null {
@@ -126,6 +150,7 @@ export function createUtteranceSegmenter(options: SegmenterOptions = {}) {
 			length = 0;
 			preRoll = [];
 			preRollLength = 0;
+			lastPartialLength = 0;
 		},
 	};
 }

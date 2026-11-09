@@ -2,6 +2,17 @@ import type { BotShapeDefinition } from "../types";
 import { crewShape, ovalPath } from "./helpers";
 import { BotMotion } from "./motion";
 
+const webberLegs = [
+	[31, 52, "M31 52L22 39Q20 37 18 40L11 51"],
+	[28, 61, "M28 61L16 52Q13 51 12 55L8 65"],
+	[28, 70, "M28 70L15 69Q12 69 13 73L16 82"],
+	[33, 78, "M33 78L23 83Q21 85 24 88L30 93"],
+	[69, 52, "M69 52L78 39Q80 37 82 40L89 51"],
+	[72, 61, "M72 61L84 52Q87 51 88 55L92 65"],
+	[72, 70, "M72 70L85 69Q88 69 87 73L84 82"],
+	[67, 78, "M67 78L77 83Q79 85 76 88L70 93"],
+] as const;
+
 export const gardenShapes: readonly BotShapeDefinition[] = [
 	crewShape({
 		id: "prickles",
@@ -263,6 +274,83 @@ export const gardenShapes: readonly BotShapeDefinition[] = [
 					))}
 				</g>
 			</>
+		),
+	}),
+	crewShape({
+		id: "webber",
+		label: "Webber",
+		series: "garden",
+		description:
+			"A velvet-purple garden spider with eight dancing legs and a silk thread.",
+		backgroundDetailColors: ["accent"],
+		palette: {
+			body: "#9c85bf",
+			background: "#e6efdf",
+			accent: "#6c578c",
+			clothing: "#4f796a",
+			cheek: "#e7adbd",
+			sclera: "#fff9ed",
+		},
+		eyeStyle: "round",
+		cheeks: true,
+		silhouette: ovalPath(50, 66, 26, 25),
+		anchors: {
+			head: { x: 50, y: 40, width: 42 },
+			eyes: { left: [40, 62], right: [60, 62], radius: 5 },
+			mouth: [50, 76],
+			neck: { y: 82, bottom: 91, width: 40 },
+			hand: [24, 76],
+		},
+		renderBackDetails: ({ palette, equipment }) => (
+			<>
+				{!equipment?.head && (
+					<path
+						d="M50 0V31"
+						fill="none"
+						stroke={palette.accent}
+						strokeWidth="1"
+						opacity=".35"
+					/>
+				)}
+				{webberLegs.map(([x, y, d], index) => (
+					<BotMotion
+						key={d}
+						kind="flutter"
+						origin={[x, y]}
+						duration={3600}
+						delay={index * -450}
+						amount={3}
+					>
+						<path
+							d={d}
+							fill="none"
+							stroke={palette.accent}
+							strokeWidth="4"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+						/>
+					</BotMotion>
+				))}
+				<ellipse cx="50" cy="44" rx="21" ry="18" fill={palette.body} />
+				<path
+					d="M42 32Q50 28 58 32M45 36Q50 34 55 36"
+					fill="none"
+					stroke={palette.accent}
+					strokeWidth="2"
+					strokeLinecap="round"
+					opacity=".55"
+				/>
+			</>
+		),
+		renderDetails: ({ palette }) => (
+			<path
+				d="M33 52Q37 47 42 47M58 47Q63 47 67 52"
+				fill="none"
+				stroke={palette.sclera}
+				strokeWidth="2.5"
+				strokeLinecap="round"
+				opacity=".4"
+			/>
 		),
 	}),
 ];

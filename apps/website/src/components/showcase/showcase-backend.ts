@@ -18,6 +18,7 @@ import {
 	EmptyTemplateState,
 	EmptyUserState,
 } from "@flow-like/flow-like-ui/state/backend-state/empty-states";
+import { EmptyLockedStorageState } from "@flow-like/flow-like-ui/state/backend-state/empty-states/locked-storage-state";
 
 /**
  * Barrel-free stub backend for the showcase islands.
@@ -49,6 +50,7 @@ export class EmptyBackend implements IBackendState {
 	helperState = new EmptyHelperState();
 	roleState = new EmptyRoleState();
 	storageState = new EmptyStorageState();
+	lockedStorageState = new EmptyLockedStorageState();
 	teamState = new EmptyTeamState();
 	templateState = new EmptyTemplateState();
 	userState = new EmptyUserState();

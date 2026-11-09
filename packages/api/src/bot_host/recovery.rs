@@ -11,7 +11,8 @@ use axum::http::StatusCode;
 use chrono::{DateTime, FixedOffset};
 use flow_like::flow::copilot::run_recovery::BotRunRecovery;
 use flow_like_types::bot_turn::{
-    BotRunCheckpoint, INTERACTIVE_HOST_PREFIX, STORED_QUEUED, STORED_RUNNING,
+    BotRunCheckpoint, INTERACTIVE_HOST_PREFIX, STORED_DONE, STORED_QUEUED, STORED_RUNNING,
+    TurnHostKind,
 };
 use flow_like_types::inbox::{ConversationEncryption, EnvelopeError, EnvelopeKind, check_envelope};
 use sea_orm::{
@@ -121,7 +122,9 @@ impl Claim {
             .add(bot_turn::Column::Attempts.eq(i32::try_from(self.attempt).unwrap_or(-1)))
             .add(bot_turn::Column::LeaseUntil.gt(now));
         if self.interactive() {
-            held.add(bot_turn::Column::Status.eq(STORED_QUEUED)).add(
+            held.add(bot_turn::Column::Status.eq(STORED_QUEUED))
+                .add(bot_turn::Column::HostKind.eq(TurnHostKind::Desktop.stored()))
+                .add(
                 Condition::any()
                     .add(bot_turn::Column::HostId.is_null())
                     .add(bot_turn::Column::HostId.eq(&self.host_id)),
@@ -358,6 +361,54 @@ pub(crate) async fn save_in<C: ConnectionTrait>(
         .insert(db)
         .await?;
     }
+    Ok(())
+}
+
+/// The only deadline change: an owner's approval answer or retry grants the saved turn a fresh
+/// runtime. Revision and state stay, because sealed checkpoints bind the revision.
+pub(crate) async fn rebase_deadline_in<C: ConnectionTrait>(
+    db: &C,
+    turn_id: &str,
+    now: DateTime<FixedOffset>,
+) -> Result<(), sea_orm::DbErr> {
+    let started = now.timestamp_millis();
+    bot_turn_checkpoint::Entity::update_many()
+        .col_expr(bot_turn_checkpoint::Column::StartedAtMs, Expr::value(started))
+        .col_expr(
+            bot_turn_checkpoint::Column::DeadlineAtMs,
+            Expr::value(started.saturating_add(super::worker::MAX_TURN_RUNTIME_MS)),
+        )
+        .filter(bot_turn_checkpoint::Column::TurnId.eq(turn_id))
+        .filter(bot_turn_checkpoint::Column::Revision.gt(0))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
+/// A finished turn keeps no checkpoint: `DONE` and `CANCELLED` are final, while `FAILED` keeps
+/// its checkpoint so the owner can retry. A `DONE` monitoring turn keeps its checkpoint, the
+/// baseline of the next check.
+pub(crate) async fn clear_finished_in<C: ConnectionTrait>(
+    db: &C,
+    turn_id: &str,
+) -> Result<(), sea_orm::DbErr> {
+    let Some(turn) = bot_turn::Entity::find_by_id(turn_id).one(db).await? else {
+        return Ok(());
+    };
+    if turn.status == STORED_DONE && super::monitor_baseline::is_monitoring(db, &turn).await? {
+        return Ok(());
+    }
+    clear_in(db, turn_id).await
+}
+
+pub(crate) async fn clear_in<C: ConnectionTrait>(
+    db: &C,
+    turn_id: &str,
+) -> Result<(), sea_orm::DbErr> {
+    bot_turn_checkpoint::Entity::delete_many()
+        .filter(bot_turn_checkpoint::Column::TurnId.eq(turn_id))
+        .exec(db)
+        .await?;
     Ok(())
 }
 

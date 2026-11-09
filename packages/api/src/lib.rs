@@ -222,11 +222,13 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         // and hosted Bits already point their base URL at `{api}/api/v1`.
         .route(
             "/responses",
-            post(routes::chat::responses::invoke_responses),
+            post(routes::chat::responses::invoke_responses)
+                .layer(routes::chat::model_request_limit()),
         )
         .route(
             "/systemone",
-            post(routes::chat::systemone::invoke_systemone),
+            post(routes::chat::systemone::invoke_systemone)
+                .layer(routes::chat::model_request_limit()),
         )
         .nest("/courses", routes::course::routes())
         .nest("/embeddings", routes::embeddings::routes())

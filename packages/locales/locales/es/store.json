@@ -300,6 +300,8 @@
 	"nodes2": "Nodos",
 	"noDescriptionFound": "No se encontró descripción.",
 	"nodesLength": "Nodos ({{length}})",
+	"skillTools": "",
+	"skillsLength": "",
 	"nodeStorage": "Almacenamiento de nodos",
 	"noExternalLinksProvided": "No se proporcionaron enlaces externos",
 	"noLinksAvailable": "No hay enlaces disponibles",

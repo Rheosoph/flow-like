@@ -9,6 +9,7 @@ import {
 	useCreateBot,
 	useDeleteBot,
 	useSetBotApp,
+	useSetBotAppRestrictions,
 	useUpdateBot,
 } from "../../../hooks/use-bots";
 import { ApiResponseError } from "../../../lib/api-error";
@@ -113,6 +114,7 @@ export function useBotEditorSubmit(
 	const { mutateAsync: updateBot } = useUpdateBot();
 	const { mutateAsync: deleteBot } = useDeleteBot();
 	const { mutateAsync: setBotApp } = useSetBotApp();
+	const { mutateAsync: setAppRestrictions } = useSetBotAppRestrictions();
 	const [error, setError] = useState<string | null>(null);
 	const { task, begin, release } = useBotEditorTask();
 
@@ -135,11 +137,26 @@ export function useBotEditorSubmit(
 		return bot;
 	};
 
-	const save = (bot: IBot) => {
+	const save = async (bot: IBot) => {
 		const request = editor.updateRequest ?? {};
-		return Object.keys(request).length
-			? updateBot({ botId: bot.id, request })
-			: Promise.resolve(bot);
+		const saved = Object.keys(request).length
+			? await updateBot({ botId: bot.id, request })
+			: bot;
+		for (const { appId, attached, restrictions } of editor.appAccess.changes) {
+			if (attached !== undefined) {
+				await setBotApp({ botId: bot.id, appId, attached });
+				editor.appAccess.markAttachedSaved(appId, attached);
+			}
+			if (restrictions) {
+				const savedRestrictions = await setAppRestrictions({
+					botId: bot.id,
+					appId,
+					restrictions,
+				});
+				editor.appAccess.markRestrictionsSaved(appId, savedRestrictions);
+			}
+		}
+		return saved;
 	};
 
 	const submit = async () => {

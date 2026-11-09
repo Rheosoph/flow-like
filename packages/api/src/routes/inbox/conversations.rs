@@ -16,9 +16,10 @@ use super::{
     wake, wake_members,
 };
 use crate::{
-    entity::{conversation, conversation_member},
+    entity::{bot, conversation, conversation_member},
     error::ApiError,
     middleware::jwt::AppUser,
+    routes::bots::model::BotSettings,
     state::AppState,
 };
 use axum::{
@@ -28,6 +29,7 @@ use axum::{
 };
 use chrono::{DateTime, FixedOffset};
 use flow_like_types::{
+    bot::BotCapability,
     bot_effective::BotRoomLimits,
     create_id,
     inbox::{
@@ -38,7 +40,7 @@ use flow_like_types::{
 use sea_orm::{
     ActiveModelTrait,
     ActiveValue::Set,
-    ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, QueryFilter,
+    ColumnTrait, ConnectionTrait, DatabaseTransaction, DbErr, EntityTrait, QueryFilter,
     sea_query::{Expr, OnConflict},
 };
 use std::collections::BTreeMap;
@@ -303,6 +305,46 @@ pub(crate) fn exchange_key(low: &str, high: &str) -> String {
     format!("exchange:{low}:{high}")
 }
 
+/// How a person's direct conversation with their own bot is encrypted: end to end while the bot
+/// has the `encryption` capability.
+pub(crate) fn own_bot_encryption(bot: &bot::Model) -> ConversationEncryption {
+    if BotSettings::from_row(bot).has(BotCapability::Encryption) {
+        ConversationEncryption::E2e
+    } else {
+        ConversationEncryption::Plain
+    }
+}
+
+/// Brings the owner's direct conversation with `bot` to [`own_bot_encryption`]. Earlier entries
+/// keep their form. Whether it changed.
+pub(crate) async fn sync_own_bot_direct<C: ConnectionTrait>(
+    db: &C,
+    bot: &bot::Model,
+) -> Result<bool, DbErr> {
+    let encryption = stored(own_bot_encryption(bot).as_str());
+    let updated = conversation::Entity::update_many()
+        .col_expr(conversation::Column::Encryption, Expr::value(encryption.clone()))
+        .col_expr(conversation::Column::UpdatedAt, Expr::value(now_millis()))
+        .filter(conversation::Column::DirectKey.eq(direct_pair_key(&bot.owner_id, &bot.id)))
+        .filter(conversation::Column::Encryption.ne(encryption))
+        .exec(db)
+        .await?;
+    Ok(updated.rows_affected > 0)
+}
+
+/// `id` when it names one of `sub`'s live bots.
+async fn own_bot<C: ConnectionTrait>(
+    db: &C,
+    sub: &str,
+    id: &str,
+) -> Result<Option<bot::Model>, DbErr> {
+    bot::Entity::find_by_id(id)
+        .filter(bot::Column::OwnerId.eq(sub))
+        .filter(bot::Column::DeletedAt.is_null())
+        .one(db)
+        .await
+}
+
 async fn direct_conversation_id<C: ConnectionTrait>(
     db: &C,
     key: &str,
@@ -409,19 +451,24 @@ pub async fn get_conversation(
 
 /// The pair's direct conversation: the existing one, which writing answers if you hold a
 /// request in it, or a new one once the other member passes the member rules. Whoever isn't
-/// one of your own bots receives it as a request. Returns the id and the people to wake.
+/// one of your own bots receives it as a request. A conversation with your own bot is encrypted
+/// as the bot is ([`own_bot_encryption`]), whatever the request asks. Returns the id.
 async fn open_direct(
     state: &AppState,
     sub: &str,
     plan: &NewConversation,
 ) -> Result<String, ApiError> {
     let key = direct_pair_key(sub, &plan.members[0]);
+    let own = own_bot(&state.db, sub, &plan.members[0]).await?;
     if let Some(id) = direct_conversation_id(&state.db, &key).await? {
         let people = state
             .transaction(|txn| {
-                let (id, sub) = (id.clone(), sub.to_string());
+                let (id, sub, own) = (id.clone(), sub.to_string(), own.clone());
                 Box::pin(async move {
                     lock_conversation(txn, &id).await?;
+                    if let Some(bot) = &own {
+                        sync_own_bot_direct(txn, bot).await?;
+                    }
                     let mut people =
                         requests::answer_by_writing(txn, &id, &sub, now_millis()).await?;
                     super::deletion::reopen(txn, &id, &sub).await?;
@@ -433,10 +480,11 @@ async fn open_direct(
         wake(state, people).await;
         return Ok(id);
     }
-    let direct = requests::plan_direct(&state.db, sub, &plan.members[0], plan.encryption).await?;
+    let encryption = own.as_ref().map_or(plan.encryption, own_bot_encryption);
+    let direct = requests::plan_direct(&state.db, sub, &plan.members[0], encryption).await?;
     let id = state
         .transaction(|txn| {
-            let (sub, direct, encryption) = (sub.to_string(), direct.clone(), plan.encryption);
+            let (sub, direct) = (sub.to_string(), direct.clone());
             Box::pin(async move {
                 if !direct.request {
                     lock_live_bots(txn, &sub, std::slice::from_ref(&direct.other)).await?;

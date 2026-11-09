@@ -203,6 +203,7 @@ export async function loadNativeSnapshot(
 	now = new Date(),
 	onNotificationSources?: (sources: NativeNotificationIconSource[]) => void,
 	eventCatalog?: NativeEventCatalog,
+	onBotTurnsRead?: Parameters<typeof loadNativeBotCatalog>[1],
 ): Promise<NativeSnapshot> {
 	const [
 		libraryResult,
@@ -227,7 +228,7 @@ export async function loadNativeSnapshot(
 		authenticated && backend.usageState
 			? backend.usageState.getUsageSummary()
 			: Promise.resolve(undefined),
-		loadNativeBotCatalog(backend),
+		loadNativeBotCatalog(backend, onBotTurnsRead),
 	]);
 	const reads = {
 		apps: libraryResult,

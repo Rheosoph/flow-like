@@ -30,6 +30,20 @@ const FIXTURE: DiagnosticsReport = {
 		language: "de",
 		boardRendererPreference: "egui",
 		boardRendererInUse: "react-flow",
+		realtime: {
+			runner: "shared-worker",
+			state: "connected",
+			provider: {
+				transport: "aws_mqtt",
+				live: false,
+				failure: {
+					stage: "handshake",
+					message: "no answer within 10 s",
+					elapsedMs: 10_004,
+					at: Date.UTC(2026, 10, 9, 12, 0, 0),
+				},
+			},
+		},
 	},
 	browser: {
 		name: "Google Chrome",
@@ -157,6 +171,37 @@ describe("formatDiagnosticsReport", () => {
 		expect(text).not.toContain("WebGPU vendor");
 		expect(text).toContain("Usage: unknown");
 		expect(text).toContain("Error: blocked");
+	});
+
+	it("reports how live updates arrive and the newest provider failure", () => {
+		const text = formatDiagnosticsReport(FIXTURE);
+		expect(text).toContain("Live updates: polling");
+		expect(text).toContain("Live updates granted transport: aws_mqtt");
+		expect(text).toContain("Live updates runner: shared worker");
+		expect(text).toContain(
+			"Live updates last failure: aws_mqtt connection failed at handshake after 10004 ms: no answer within 10 s (2026-11-09T12:00:00.000Z)",
+		);
+
+		const live = formatDiagnosticsReport({
+			...FIXTURE,
+			session: FIXTURE.session && {
+				...FIXTURE.session,
+				realtime: {
+					runner: "in-tab",
+					state: "connected",
+					provider: { transport: "aws_mqtt", live: true },
+				},
+			},
+		});
+		expect(live).toContain("Live updates: live (aws_mqtt)");
+		expect(live).toContain("Live updates runner: this tab");
+		expect(live).toContain("Live updates last failure: none");
+
+		const desktop = formatDiagnosticsReport({
+			...FIXTURE,
+			session: FIXTURE.session && { ...FIXTURE.session, realtime: null },
+		});
+		expect(desktop).toContain("Live updates: not reported");
 	});
 });
 

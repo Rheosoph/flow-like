@@ -17,6 +17,12 @@ const STREAMING: ChatSurfaceOptions = {
 };
 const SETTLED: ChatSurfaceOptions = { streaming: false, canSendMessages: true };
 
+/**
+ * Split so Tailwind's source scan can't compile it: as a real rule, `:root:has(&) *` makes Chromium
+ * restyle every element on each DOM change.
+ */
+const ROOT_ESCAPE_CLASS = ["[:root:has(&)", "_*]:hidden"].join("");
+
 const lines = (...objects: unknown[]) =>
 	objects.map((object) => JSON.stringify(object)).join("\n");
 
@@ -358,8 +364,7 @@ describe("chat policy", () => {
 				type: "text",
 				content: "x",
 				style: {
-					className:
-						"p-4 bg-[url(file:///etc/x)] [:root:has(&)_*]:hidden fixed z-50",
+					className: `p-4 bg-[url(file:///etc/x)] ${ROOT_ESCAPE_CLASS} fixed z-50`,
 					cursor: "url(https://example.com/c.png), auto",
 					background: { image: { url: "file:///etc/passwd" } },
 				},

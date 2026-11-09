@@ -7,6 +7,7 @@
 use super::{
     gate::ApprovalGate,
     memory::{self, JobMemory},
+    notes::{LocalNotes, StatusSink},
     room_updates::LocalRoomUpdates,
     rule::{self, Waiting},
     store::{HostStore, StoreGrants},
@@ -15,6 +16,7 @@ use super::{
 use chrono::{Duration as Age, Utc};
 use flow_like::flow::copilot::{
     decision::{self, Decision, DecisionParticipant},
+    bot_notes::NotesHandle,
     decision_event::{self, EventDecision},
     memory_open::follow_up,
     platform::RoomUpdates,
@@ -69,6 +71,7 @@ struct Live {
     cancel: watch::Sender<Option<Cancel>>,
     rerun: bool,
     posting: bool,
+    notes: Option<NotesHandle>,
 }
 
 #[derive(Default)]
@@ -253,23 +256,25 @@ impl BotHost {
     /// already being posted. The message stays unanswered until the next one arrives.
     pub async fn cancel(&self, turn_id: &str) -> Result<bool, String> {
         let (bot, room, trigger) = {
-            let mut state = lock(&self.inner.state);
+            let state = lock(&self.inner.state);
             let Some(live) = state.live.values().find(|live| live.info.id == turn_id) else {
                 return Ok(false);
             };
             if live.posting {
                 return Ok(false);
             }
-            live.cancel.send_replace(Some(Cancel::User));
-            let ids = (
+            (
                 live.info.bot_id.clone(),
                 live.info.conversation_id.clone(),
                 live.info.trigger_message_id.clone(),
-            );
-            state.abandoned.insert((ids.0.clone(), ids.2.clone()));
-            ids
+            )
         };
         self.inner.store.cancel_run(&bot, &room, &trigger).await?;
+        let mut state = lock(&self.inner.state);
+        if let Some(live) = state.live.values().find(|live| live.info.id == turn_id) {
+            live.cancel.send_replace(Some(Cancel::User));
+        }
+        state.abandoned.insert((bot, trigger));
         Ok(true)
     }
 }
@@ -379,16 +384,28 @@ impl Inner {
                 .filter(|entry| entry.seq <= trigger.seq)
                 .cloned()
                 .collect();
-            let waiting = rule::waiting_held(
-                conversation.kind,
-                bot_id,
-                &prior,
-                trigger.created_at - Age::seconds(1),
-                Some(super::interactive::hold_now(bot_id, &conversation.id)),
-                false,
-            )?;
-            if waiting.message_id == trigger.message_id {
+            let qualifying = |hold| {
+                rule::waiting_held(
+                    conversation.kind,
+                    bot_id,
+                    &prior,
+                    trigger.created_at - Age::seconds(1),
+                    hold,
+                    false,
+                )
+                .filter(|waiting| waiting.message_id == trigger.message_id)
+            };
+            let held = Some(super::interactive::hold_now(bot_id, &conversation.id));
+            if let Some(waiting) = qualifying(held) {
                 return Some((bot, waiting));
+            }
+            if qualifying(None).is_none()
+                && let Err(error) = self
+                    .store
+                    .cancel_run(bot_id, &conversation.id, &trigger.message_id)
+                    .await
+            {
+                tracing::warn!(%error, bot_id, "Bot host: a stale recovery checkpoint could not be retired");
             }
             return None;
         }
@@ -567,11 +584,13 @@ impl Inner {
                         finished_at: None,
                         error_code: None,
                         reply_message_id: None,
+                        status_text: None,
                     },
                     trigger_seq: None,
                     cancel: sender,
                     rerun: false,
                     posting: false,
+                    notes: None,
                 };
                 retarget(&mut live, bot_id, &waiting);
                 publish = Some(live.info.clone());
@@ -604,7 +623,7 @@ impl Inner {
         self.finish(&key, end);
     }
 
-    async fn execute(&self, key: &Key, cancel: &mut watch::Receiver<Option<Cancel>>) -> End {
+    async fn execute(self: &Arc<Self>, key: &Key, cancel: &mut watch::Receiver<Option<Cancel>>) -> End {
         let (bot_id, conversation_id) = key;
         let Some((conversation, entries)) = self.read(conversation_id).await else {
             return End::store_changed();
@@ -761,6 +780,27 @@ impl Inner {
                 return End::abandoned(CODE_SETUP);
             }
         };
+        let notes = if ephemeral_user_context {
+            None
+        } else {
+            let host = Arc::downgrade(self);
+            let sink_key = key.clone();
+            let status: StatusSink = Arc::new(move |text| {
+                if let Some(host) = host.upgrade() {
+                    host.set_status(&sink_key, text);
+                }
+            });
+            LocalNotes::handle(
+                self.store.clone(),
+                bot_id,
+                conversation_id,
+                Some(status),
+                transcript.topic_at,
+            )
+        };
+        if let Some(live) = lock(&self.state).live.get_mut(key) {
+            live.notes = notes.clone();
+        }
         let mut job = TurnJob {
             run_id: run_id.clone(),
             bot_id: bot_id.clone(),
@@ -779,7 +819,22 @@ impl Inner {
             answered_round: None,
             claim: None,
             recovery,
+            notes,
         };
+        if bot.model.decision.is_some() {
+            let authority = Arc::new(super::authorization::LocalAuthority::new(
+                self.store.clone(),
+                bot_id,
+                conversation_id,
+                flow_like_bot_host::event::trigger(&oldest_first, &waiting.message_id),
+            ));
+            gate.set_inference(Some(flow_like_bot_host::authorization::RunnerInference::new(
+                self.runner.clone(),
+                &job,
+                grants.clone(),
+                authority,
+            )));
+        }
         let call_utterance = oldest_first.iter().any(|entry| {
             entry.message_id == waiting.message_id && entry.kind == InboxEntryKind::Transcript
         });
@@ -1248,6 +1303,7 @@ impl Inner {
         acknowledgement: bool,
         cancel: &mut watch::Receiver<Option<Cancel>>,
     ) -> End {
+        let note;
         {
             let mut state = lock(&self.state);
             let Some(live) = state.live.get_mut(key) else {
@@ -1257,6 +1313,7 @@ impl Inner {
                 return End::by(reason);
             }
             live.posting = true;
+            note = live.notes.as_ref().and_then(NotesHandle::touched);
         }
         let (bot_id, conversation_id) = key;
         let message_id = if error_code.is_some() {
@@ -1270,6 +1327,12 @@ impl Inner {
             && let Some(envelope) = request.envelope.as_mut()
         {
             envelope["body"][decision::ACKNOWLEDGEMENT_FIELD] = serde_json::json!(true);
+        }
+        if error_code.is_none()
+            && !acknowledgement
+            && let Some(envelope) = request.envelope.as_mut()
+        {
+            flow_like_bot_host::notes::attach_note(&mut envelope["body"], note.as_ref());
         }
         match self.store.send(conversation_id, bot_id, request).await {
             Ok(_) => {
@@ -1309,6 +1372,22 @@ impl Inner {
         info.id
     }
 
+    /// Shows `status` on the running turn; `None` clears it.
+    fn set_status(&self, key: &Key, status: Option<String>) {
+        let info = {
+            let mut state = lock(&self.state);
+            let Some(live) = state.live.get_mut(key) else {
+                return;
+            };
+            if live.info.status != TurnStatus::Running || live.info.status_text == status {
+                return;
+            }
+            live.info.status_text = status;
+            live.info.clone()
+        };
+        self.events.turn(&info);
+    }
+
     fn finish(&self, key: &Key, end: End) {
         let (info, rerun) = {
             let mut state = lock(&self.state);
@@ -1319,6 +1398,7 @@ impl Inner {
             live.info.finished_at = Some(now());
             live.info.error_code = end.error_code;
             live.info.reply_message_id = end.reply;
+            live.info.status_text = None;
             if end.abandon {
                 state
                     .abandoned

@@ -99,15 +99,29 @@ async function attachTap(
 export async function startCallListener(
 	stream: MediaStream,
 	onUtterance: (utterance: Utterance) => void,
-	options: { context?: AudioContext; paused?: boolean } = {},
+	options: {
+		context?: AudioContext;
+		paused?: boolean;
+		onPartial?: (utterance: Utterance) => void;
+		onReset?: () => void;
+	} = {},
 ): Promise<CallListener> {
 	// Reuse the context unlocked by the call gesture, including on mobile browsers.
 	const context = options.context ?? new AudioContext();
 	const ownsContext = options.context === undefined;
 	let source: MediaStreamAudioSourceNode | undefined;
 	let detach: (() => void) | undefined;
+	let processedSamples = 0;
+	let clockOrigin: number | null = null;
+	const captured = (utterance: Utterance): Utterance => ({
+		...utterance,
+		capturedAt: (clockOrigin ?? Date.now()) + utterance.offsetMs,
+	});
 	const segmenter = createUtteranceSegmenter({
 		sampleRate: LISTEN_SAMPLE_RATE,
+		onPartial: options.onPartial
+			? (utterance) => options.onPartial?.(captured(utterance))
+			: undefined,
 	});
 	let paused = options.paused ?? false;
 	let stopped = false;
@@ -126,11 +140,15 @@ export async function startCallListener(
 		source = context.createMediaStreamSource(stream);
 		detach = await attachTap(context, source, (block) => {
 			if (stopped || paused) return;
-			for (const utterance of segmenter.push(
-				resample(block, context.sampleRate, LISTEN_SAMPLE_RATE),
-			)) {
-				onUtterance(utterance);
+			const samples = resample(block, context.sampleRate, LISTEN_SAMPLE_RATE);
+			// The segmenter skips paused audio, so anchor its clock again after a pause.
+			clockOrigin ??=
+				Date.now() -
+				((processedSamples + samples.length) / LISTEN_SAMPLE_RATE) * 1000;
+			for (const utterance of segmenter.push(samples)) {
+				onUtterance(captured(utterance));
 			}
+			processedSamples += samples.length;
 		});
 	} catch (cause) {
 		release();
@@ -139,15 +157,20 @@ export async function startCallListener(
 
 	return {
 		setPaused(next) {
-			if (next === paused) return;
+			if (stopped || next === paused) return;
 			paused = next;
-			if (next) segmenter.reset();
+			if (next) {
+				segmenter.reset();
+				clockOrigin = null;
+				options.onReset?.();
+			}
 		},
 		stop() {
 			if (stopped) return;
 			stopped = true;
 			const last = segmenter.flush();
-			if (last) onUtterance(last);
+			if (last) onUtterance(captured(last));
+			options.onReset?.();
 			release();
 		},
 	};

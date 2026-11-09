@@ -150,6 +150,9 @@ pub(super) async fn delete_in<C: ConnectionTrait>(
     pinned_conversation::Entity::delete_by_id((principal.to_string(), conversation_id.to_string()))
         .exec(db)
         .await?;
+    if conversation.kind.eq_ignore_ascii_case("DIRECT") {
+        crate::bot_host::notes::clear_owner_notes_in(db, conversation_id, principal).await?;
+    }
     Ok(people)
 }
 

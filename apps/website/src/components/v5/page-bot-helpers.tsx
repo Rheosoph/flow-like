@@ -2,13 +2,14 @@ import { useEffect } from "react";
 import type { BotFrame } from "./page-bot-scene";
 import "./page-bot-helpers.css";
 
+/** The crew from the bots showcase: Flux, Byte, Post, Scout and Loop. */
 const helpers = {
-	hero: { color: "#ff865f", tool: "wrench" },
-	apps: { color: "#7fbddf", tool: "cable" },
-	platform: { color: "#b9a2df", tool: "driver" },
-	control: { color: "#a7ce91", tool: "inspect" },
-	book: { color: "#e7bc68", tool: "pencil" },
-} as const;
+	hero: { kind: "flux", tool: "wrench" },
+	apps: { kind: "chip", tool: "cable" },
+	platform: { kind: "mochi", tool: "driver" },
+	control: { kind: "pip", tool: "inspect" },
+	book: { kind: "orbi", tool: "pencil" },
+} as const satisfies Record<string, Pick<BotFrame, "kind" | "tool">>;
 
 type HelperName = keyof typeof helpers;
 interface Anchor {
@@ -364,7 +365,7 @@ export default function PageBotHelpers() {
 					y: atlasY,
 					width: anchor.width,
 					height: anchor.height,
-					color: helper.color,
+					kind: helper.kind,
 					tool: helper.tool,
 					walk: anchor.walk,
 					work: anchor.work,

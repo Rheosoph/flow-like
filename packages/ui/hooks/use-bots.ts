@@ -77,6 +77,11 @@ function forgetBotLookups(queryClient: QueryClient, botId: string) {
 }
 
 /** Refresh settings written by a bot tool outside the settings editor. */
+/** Every bot query: after Flux created a bot or changed another one. */
+export function invalidateBots(queryClient: QueryClient) {
+	void queryClient.invalidateQueries({ queryKey: botKeys.all });
+}
+
 export function invalidateBotConfiguration(
 	queryClient: QueryClient,
 	botId?: string | null,

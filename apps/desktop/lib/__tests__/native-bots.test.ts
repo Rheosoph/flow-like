@@ -8,7 +8,10 @@ import type {
 	IInboxEntry,
 } from "@flow-like/flow-like-ui/state/backend-state/inbox-state";
 import { describe, expect, test, vi } from "vitest";
-import { createBotActivityRegistrar } from "../native-bot-activities";
+import {
+	type NativeBotActivityToken,
+	createBotActivityRegistrar,
+} from "../native-bot-activities";
 import {
 	isNativeDeliveryRetryable,
 	loadNativeBotCatalog,
@@ -514,4 +517,65 @@ test("Live Activity tokens bind to scope and target and re-register on token rot
 			pushToken: "bb".repeat(32),
 		}),
 	);
+});
+
+test("a rejected activity registration does not block other tokens and retries later", async () => {
+	const register = createBotActivityRegistrar();
+	const local = {
+		activityId: "local-activity",
+		botId: "local-bot",
+		turnId: "local-turn",
+		scope,
+		pushToken: "aa".repeat(32),
+	};
+	const account = { ...local, activityId: "account-activity", botId: "bot" };
+	const send = vi.fn(async (token: NativeBotActivityToken) => {
+		if (token === local) throw new Error("Bot not found");
+	});
+	await register(scope, "device", [local, account], send, () => true);
+	await register(scope, "device", [local, account], send, () => true);
+	expect(send.mock.calls.map(([token]) => token.activityId)).toEqual([
+		"local-activity",
+		"account-activity",
+		"local-activity",
+	]);
+});
+
+test("a failed activity removal does not block other removals or new registrations", async () => {
+	const register = createBotActivityRegistrar();
+	const tokens = ["first", "second", "third"].map((activityId) => ({
+		activityId,
+		botId: "bot",
+		turnId: activityId,
+		scope,
+		pushToken: "aa".repeat(32),
+	}));
+	const send = vi.fn(async () => {});
+	await register(scope, "device", tokens.slice(0, 2), send, () => true);
+	const remove = vi
+		.fn(async (_token: NativeBotActivityToken) => {})
+		.mockRejectedValueOnce(new Error("Temporary failure"));
+	await register(scope, "device", tokens.slice(2), send, () => true, remove);
+	await register(scope, "device", tokens.slice(2), send, () => true, remove);
+	expect(remove.mock.calls.map(([token]) => token.activityId)).toEqual([
+		"first",
+		"second",
+		"first",
+	]);
+	expect(send).toHaveBeenCalledTimes(3);
+	expect(send).toHaveBeenLastCalledWith(tokens[2]);
+});
+
+test("the native catalog reports only successful authoritative turn reads", async () => {
+	const { backend, context } = fixture();
+	const onTurnsRead = vi.fn();
+	await loadNativeBotCatalog(context.backend, onTurnsRead);
+	expect(onTurnsRead).toHaveBeenCalledExactlyOnceWith([turn]);
+	onTurnsRead.mockClear();
+	backend.botState.getMobileStatus.mockRejectedValueOnce(new Error("Offline"));
+	await loadNativeBotCatalog(context.backend, onTurnsRead);
+	expect(onTurnsRead).not.toHaveBeenCalled();
+	backend.botState.getMobileStatus.mockResolvedValueOnce([]);
+	await loadNativeBotCatalog(context.backend, onTurnsRead);
+	expect(onTurnsRead).toHaveBeenCalledExactlyOnceWith([]);
 });

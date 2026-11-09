@@ -17,6 +17,7 @@ import {
 	type RealtimePollRequest,
 	type RealtimePollResponse,
 	type RealtimePort,
+	type RealtimeProviderStatus,
 	type RealtimeRunSubscription,
 	type RealtimeSubscription,
 	isTerminalRunStatus,
@@ -77,6 +78,7 @@ interface Scope {
 	blockedFailures: number;
 	unavailable: Map<string, { failures: number; retryAt: number }>;
 	provider?: RealtimeProviderSession;
+	providerStatus?: RealtimeProviderStatus;
 	wakeTimer?: ReturnType<typeof setTimeout>;
 	wakePending?: boolean;
 }
@@ -460,6 +462,11 @@ export class RealtimeRuntime {
 			}
 			this.send(connected, { type: "ready" });
 			this.send(connected, { type: "state", state: scope.state });
+			if (scope.providerStatus)
+				this.send(connected, {
+					type: "provider",
+					status: scope.providerStatus,
+				});
 			this.sweep ??= setInterval(
 				() => this.expirePorts(),
 				this.options.sweepMs,
@@ -793,6 +800,11 @@ export class RealtimeRuntime {
 						this.schedule(scope, 0);
 					}
 				}, 100);
+			},
+			status: (status) => {
+				scope.providerStatus = status;
+				for (const port of scope.ports)
+					this.send(port, { type: "provider", status });
 			},
 		});
 		scope.provider.sync(

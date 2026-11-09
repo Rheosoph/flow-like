@@ -236,6 +236,131 @@ try {
 		...(await leave()),
 	});
 
+	await start("direct", "default");
+	const longReply = [
+		"The first part of this answer starts playing while the next part is being prepared.",
+		"The rest follows in order, so you can keep listening as each short phrase becomes ready. "
+			.repeat(5)
+			.trim(),
+	].join(" ");
+	const liveOpening = "Show these words while I am still talking";
+	const liveFinal = `${liveOpening}, then include the rest of my sentence`;
+	await page.evaluate(
+		({ opening, answer }) => {
+			window.botCallTest.setReplyText(answer);
+			window.botCallTest.beginSpeaking(opening);
+		},
+		{ opening: liveOpening, answer: longReply },
+	);
+	await page.waitForFunction(
+		(text) =>
+			document.querySelector('[data-slot="call-transcript-draft"]')
+				?.textContent === text,
+		{},
+		liveOpening,
+	);
+	state = await snapshot();
+	assert.equal(
+		state.speaking,
+		true,
+		"live transcription appears before speech stops",
+	);
+	assert.equal(
+		state.sent.filter((entry) => entry.kind === "transcript").length,
+		0,
+	);
+	assert.equal(
+		state.entries.filter((entry) => entry.kind === "message").length,
+		0,
+	);
+	assert.equal(state.speech.length, 0, "draft speech does not wake a bot");
+	const firstPreviewBytes = state.transcriptions.at(-1).bytes;
+	await page.evaluate(
+		(text) => window.botCallTest.beginSpeaking(text),
+		liveFinal,
+	);
+	await page.waitForFunction(
+		(text) =>
+			document.querySelector('[data-slot="call-transcript-draft"]')
+				?.textContent === text,
+		{},
+		liveFinal,
+	);
+	state = await snapshot();
+	assert.equal(state.speaking, true);
+	assert.ok(
+		state.transcriptions.at(-1).bytes > firstPreviewBytes,
+		"later drafts transcribe the growing utterance",
+	);
+	assert.equal(
+		state.sent.filter((entry) => entry.kind === "transcript").length,
+		0,
+	);
+	await page.evaluate(() => window.botCallTest.endSpeaking());
+	await reply(longReply);
+	await page.waitForFunction(
+		() => window.botCallTest.snapshot().playbacks === 1,
+	);
+	state = await snapshot();
+	assert.equal(
+		state.sent.filter((entry) => entry.kind === "transcript").length,
+		1,
+		"the finished utterance is persisted once",
+	);
+	assert.equal(await page.$('[data-slot="call-transcript-draft"]'), null);
+	assert.equal(
+		state.speech.length,
+		2,
+		"only the first chunk and one prefetched chunk are prepared during initial playback",
+	);
+	assert.ok(Array.from(state.speech[0].text).length <= 160);
+	assert.ok(Array.from(state.speech[1].text).length <= 240);
+	assert.equal(
+		state.synthesis[1].completedPlaybacks,
+		0,
+		"the next chunk is requested before initial playback finishes",
+	);
+	await page.waitForFunction(
+		(text) => {
+			const state = window.botCallTest.snapshot();
+			return (
+				state.speech.map((request) => request.text).join(" ") === text &&
+				state.playbackEvents.filter((event) => event.kind === "end").length ===
+					state.speech.length
+			);
+		},
+		{},
+		longReply,
+	);
+	state = await snapshot();
+	assert.ok(
+		state.speech.length >= 3,
+		"a long reply is split into several chunks",
+	);
+	assert.ok(
+		state.speech
+			.slice(1)
+			.every((request) => Array.from(request.text).length <= 240),
+	);
+	assert.deepEqual(
+		state.playbackEvents,
+		state.speech.flatMap((_request, index) => [
+			{ kind: "start", id: index + 1 },
+			{ kind: "end", id: index + 1 },
+		]),
+		"native playback keeps every chunk in order without overlapping",
+	);
+	assert.ok(state.transcriptions.every((request) => request.wav));
+	await page.screenshot({
+		path: resolve(output, "streamed-call.png"),
+		fullPage: true,
+	});
+	results.push({
+		scenario: "live transcript before silence and incremental bot speech",
+		...(await leave()),
+		screenshot: resolve(output, "streamed-call.png"),
+	});
+
 	await start("direct", "none");
 	await say("Answer in text please");
 	await reply("Scout heard: Answer in text please");

@@ -10,8 +10,8 @@ use crate::{
             EXACT_MATCH_BONUS, MAX_SEARCH_LEN, PREFIX_MATCH_BONUS, RankableUser,
             SUBSTRING_MATCH_BONUS, SearchTerm, TOKEN_MATCH_PENALTY, WEIGHT_EMAIL, WEIGHT_ID,
             WEIGHT_NAME, WEIGHT_PREFERRED_USERNAME, WEIGHT_USERNAME, WORD_PREFIX_MATCH_BONUS,
-            escape_like_pattern, humanize_email_local_part, is_exact_identifier_match,
-            is_idp_handle, normalize_search_query, sanitize_display_name, score_candidate,
+            escape_like_pattern, is_exact_identifier_match, is_idp_handle, normalize_search_query,
+            score_candidate,
         },
         sign_avatar,
     },
@@ -130,7 +130,8 @@ impl UserLookupResponse {
         let availability = flow_like_types::user_availability::AvailabilityState::read(
             user.additional_information.as_ref(),
         )
-        .current(chrono::Utc::now().timestamp_millis());
+        .current(chrono::Utc::now().timestamp_millis())
+        .without_calendar_schedule();
         // Rows provisioned before display names were derived — and every row
         // `ensure_user_exists` creates — carry no name, and with `lookup.email` off
         // there is then nothing left to render but the raw id. `derive_display_name`
@@ -140,10 +141,10 @@ impl UserLookupResponse {
         let name = lookup
             .name
             .then(|| {
-                user.name
-                    .as_deref()
-                    .and_then(sanitize_display_name)
-                    .or_else(|| user.email.as_deref().and_then(humanize_email_local_part))
+                crate::bot_host::history::public_person_name(
+                    user.name.as_deref(),
+                    user.email.as_deref(),
+                )
             })
             .flatten();
 

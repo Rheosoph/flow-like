@@ -296,6 +296,8 @@
 	"nodes2": "节点",
 	"noDescriptionFound": "未找到描述。",
 	"nodesLength": "节点（{{length}}）",
+	"skillTools": "",
+	"skillsLength": "",
 	"nodeStorage": "节点存储",
 	"noExternalLinksProvided": "未提供外部链接",
 	"noLinksAvailable": "暂无可用链接",

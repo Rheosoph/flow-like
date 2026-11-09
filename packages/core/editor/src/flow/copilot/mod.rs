@@ -9,6 +9,7 @@ pub mod assistant;
 pub mod behavioral_evaluation;
 pub mod behavioral_state;
 pub mod benchmark_cases;
+pub mod bot_notes;
 pub mod bot_run;
 pub mod bot_talk;
 mod capability_tools;
@@ -40,6 +41,7 @@ mod skill_selection;
 pub mod stream;
 mod subtasks;
 mod tool_arguments;
+pub mod tool_authorization;
 pub mod tool_grants;
 #[cfg(test)]
 mod tool_schema_tests;
@@ -112,6 +114,7 @@ pub use manifest::{
     ManifestCatalogNode, ManifestCatalogPin, ManifestError, ManifestSource, ManifestSourceStatus,
     default_flowscript_module_templates,
 };
+pub use bot_notes::{NotesHandle, NotesStore, notes_tool_specs};
 pub use memory_tools::{HeadlessMemory, MemoryHandle, MemoryTurnSource, memory_tool_specs};
 pub use provider::{CatalogProvider, node_to_metadata, pin_to_metadata};
 /// Re-export of the rig tool trait so non-rig adapter crates can bound on it (e.g. to derive
@@ -179,10 +182,7 @@ use futures::StreamExt;
 use rig::{
     OneOrMany,
     completion::Completion,
-    message::{
-        AssistantContent, DocumentSourceKind, Image, ImageDetail, ImageMediaType,
-        ToolResult as RigToolResult, ToolResultContent, UserContent,
-    },
+    message::{AssistantContent, ToolResult as RigToolResult, ToolResultContent, UserContent},
     streaming::{StreamedAssistantContent, ToolCallDeltaContent},
     tools::ThinkTool,
 };
@@ -1272,34 +1272,13 @@ impl Copilot {
 
         let prompt = user_prompt.clone();
 
-        // Helper to convert media type string to ImageMediaType
-        let parse_media_type = |s: &str| -> Option<ImageMediaType> {
-            match s.to_lowercase().as_str() {
-                "image/jpeg" | "jpeg" | "jpg" => Some(ImageMediaType::JPEG),
-                "image/png" | "png" => Some(ImageMediaType::PNG),
-                "image/gif" | "gif" => Some(ImageMediaType::GIF),
-                "image/webp" | "webp" => Some(ImageMediaType::WEBP),
-                "image/heic" | "heic" => Some(ImageMediaType::HEIC),
-                "image/heif" | "heif" => Some(ImageMediaType::HEIF),
-                "image/svg+xml" | "svg" | "svg+xml" => Some(ImageMediaType::SVG),
-                _ => None,
-            }
-        };
-
         let mut prompt_contents = vec![UserContent::Text(rig::message::Text {
             text: prompt.clone(),
             additional_params: None,
         })];
 
         if let Some(images) = &current_images {
-            for img in images {
-                prompt_contents.push(UserContent::Image(Image {
-                    data: DocumentSourceKind::Base64(img.data.clone()),
-                    media_type: parse_media_type(&img.media_type),
-                    detail: Some(ImageDetail::Auto),
-                    additional_params: None,
-                }));
-            }
+            prompt_contents.extend(images.iter().map(platform::chat_image_content));
         }
 
         let prompt_message = rig::message::Message::User {
@@ -1323,16 +1302,8 @@ impl Copilot {
                                 additional_params: None,
                             })];
 
-                        // Add images if present
                         if let Some(images) = &msg.images {
-                            for img in images {
-                                contents.push(UserContent::Image(Image {
-                                    data: DocumentSourceKind::Base64(img.data.clone()),
-                                    media_type: parse_media_type(&img.media_type),
-                                    detail: Some(ImageDetail::Auto),
-                                    additional_params: None,
-                                }));
-                            }
+                            contents.extend(images.iter().map(platform::chat_image_content));
                         }
 
                         // Use many() which returns Result, handle the error case

@@ -512,10 +512,10 @@ async fn original_reference_images_survive_compaction_while_old_screenshots_expi
         20,
         true,
         PlatformSurface::Orchestrator,
-        Some(vec![ChatImage {
-            data: reference.into(),
-            media_type: "image/png".into(),
-        }]),
+        Some(vec![ChatImage::inline(
+            reference.into(),
+            "image/png".into(),
+        )]),
     )
     .await
     .0

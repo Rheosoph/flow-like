@@ -1244,6 +1244,8 @@ mod tests {
             column: "ownerId".into(),
         };
         assert_before(&plan, "BotTurnCheckpoint", "BotTurn");
+        assert_before(&plan, "BotDecisionWait", "Bot");
+        assert_before(&plan, "BotNote", "Bot");
         for (table, expected) in [
             (
                 "BotPermission",
@@ -1254,6 +1256,8 @@ mod tests {
                 ],
             ),
             ("BotHostHeartbeat", vec![of_the_bots("botId")]),
+            ("BotDecisionWait", vec![of_the_bots("botId")]),
+            ("BotNote", vec![of_the_bots("botId")]),
             ("BotToolGrant", vec![of_the_bots("botId")]),
             ("BotTurn", vec![of_the_bots("botId"), owner.clone()]),
             ("ConversationSegment", vec![of_the_bots("authorId")]),
@@ -1312,6 +1316,8 @@ mod tests {
             "BotToolGrant",
             "BotTurn",
             "BotTurnCheckpoint",
+            "BotDecisionWait",
+            "BotNote",
             "ConversationSegment",
         ] {
             assert!(

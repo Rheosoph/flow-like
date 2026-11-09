@@ -5245,6 +5245,12 @@
 			"updateStaged": "",
 			"whereElse": ""
 		},
+		"bots": {
+			"create": "",
+			"empty": "",
+			"loading": "",
+			"title": ""
+		},
 		"capacity": {
 			"bytes": "",
 			"certificates": "",

@@ -111,8 +111,16 @@ pub(super) fn mark_derived(
             return Err(Error::invalid("The message being answered was deleted"));
         }
     }
-    if let Some(target) = envelope["body"]["reply_to"].as_str()
-        && let Some(entry) = entry_by_message_id(db, target)?
+    let answered = match envelope["body"]["reply_to"].as_str() {
+        Some(target) => entry_by_message_id(db, target)?,
+        None => None,
+    };
+    let answered = match answered {
+        Some(entry) => Some(entry),
+        None => latest_foreign_message(db, conversation, sender)?
+            .filter(|entry| answers_bot(&entry.envelope["body"], sender)),
+    };
+    if let Some(entry) = answered
         && entry.conversation_id == conversation
         && is_ephemeral_body(&entry.envelope["body"])
     {
@@ -137,4 +145,26 @@ pub(super) fn mark_derived(
         envelope["body"][DERIVED_FIELD] = Value::String(request_id.to_owned());
     }
     Ok(())
+}
+
+fn latest_foreign_message(
+    db: &Connection,
+    conversation: &str,
+    sender: &str,
+) -> Result<Option<InboxEntry>> {
+    Ok(db
+        .prepare_cached(&format!(
+            "SELECT {ENTRY_COLUMNS} FROM entries
+             WHERE conversation_id = ?1 AND kind = 'message' AND sender_id != ?2
+             ORDER BY seq DESC LIMIT 1"
+        ))?
+        .query_row(params![conversation, sender], read_entry)
+        .optional()?)
+}
+
+fn answers_bot(body: &Value, bot: &str) -> bool {
+    match body.get(flow_like_types::bot_user_context::DERIVED_FIELD) {
+        Some(_) => true,
+        None => body["user_context_response"]["bot_id"].as_str() == Some(bot),
+    }
 }

@@ -15,6 +15,7 @@ pub mod event_sink_commands;
 pub mod feedback;
 pub mod file;
 pub mod flow;
+pub mod inbox_e2e;
 pub mod local_bots;
 pub mod native;
 pub mod native_bot_input;

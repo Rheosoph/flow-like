@@ -163,7 +163,8 @@ impl MemoryStores {
                     embedder.clone(),
                     self.write_options.clone(),
                 )
-                .await,
+                .await
+                .read_only(),
             )
         } else {
             None
@@ -182,7 +183,8 @@ impl MemoryStores {
                 self.write_options.clone(),
                 format!("{ROOM_PREFIX}{scope}_{}", FactStore::TABLE),
             )
-            .await;
+            .await
+            .read_only();
             self.shared_facts.push(SharedFacts { scope, facts });
         }
         self

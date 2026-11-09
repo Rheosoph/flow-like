@@ -218,9 +218,33 @@ mod files {
         assert_eq!(handle.app_id, WORKSPACE);
         assert_eq!(handle.sha256, sha256_hex(b"# hello"));
         assert_eq!(handle.bytes, 7);
+        let url = format!("storage://apps/{WORKSPACE}/app/bot/notes/a.md");
+        assert_eq!(written.result["markdown_url"], url);
         let read = call(&env, "file_read", json!({ "file": "bot/notes/a.md" })).await;
         assert_eq!(ok(&read).result["text"], "# hello");
         assert_eq!(read.result["kind"], "text");
+        assert_eq!(read.result["markdown_url"], url);
+    }
+
+    #[test]
+    fn markdown_destinations_preserve_storage_paths_and_escape_markdown() {
+        let path = "bot/files/Übersicht (2)#1 100%.pdf";
+        let handle = handle_for(WORKSPACE, path, b"pdf", "application/pdf");
+        let url = crate::files::markdown_url(&handle).expect("storage reference");
+        let prefix = format!("storage://apps/{WORKSPACE}/app/");
+        assert_eq!(
+            url,
+            format!("{prefix}bot/files/%C3%9Cbersicht%20%282%29%231%20100%25.pdf")
+        );
+        let destination = url.strip_prefix(&prefix).expect("owned storage reference");
+        assert_eq!(
+            flow_like_storage::normalize_object_path(destination),
+            flow_like_storage::normalize_object_path(path)
+        );
+        let encoded = handle_for(WORKSPACE, destination, b"pdf", "application/pdf");
+        assert_eq!(crate::files::markdown_url(&encoded), Some(url));
+        let conversation = handle_for("conversation_room-1", "file-1.png", b"png", "image/png");
+        assert!(crate::files::markdown_url(&conversation).is_none());
     }
 
     #[tokio::test]
@@ -330,6 +354,10 @@ mod files {
         assert_eq!(outcome.result["kind"], "binary");
         assert_eq!(outcome.result["handle"]["mime"], "image/png");
         assert_eq!(outcome.result["handle"]["bytes"], 7);
+        assert_eq!(
+            outcome.result["markdown_url"],
+            format!("storage://apps/{WORKSPACE}/app/img.png")
+        );
         assert!(outcome.result.get("text").is_none());
     }
 
@@ -515,6 +543,10 @@ mod files {
         assert_eq!(saved.saved[0].path, "bot/files/plan.md");
         assert_eq!(saved.saved[0].app_id, WORKSPACE);
         assert_eq!(saved.saved[0].mime, "text/markdown");
+        assert_eq!(
+            saved.result["markdown_url"],
+            format!("storage://apps/{WORKSPACE}/app/bot/files/plan.md")
+        );
         assert_eq!(
             env.get(WORKSPACE, "bot/files/plan.md")
                 .expect("copy")

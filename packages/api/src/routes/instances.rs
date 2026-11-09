@@ -40,15 +40,18 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/chat/completions",
-            post(crate::routes::chat::completions::invoke_instance_llm),
+            post(crate::routes::chat::completions::invoke_instance_llm)
+                .layer(crate::routes::chat::model_request_limit()),
         )
         .route(
             "/responses",
-            post(crate::routes::chat::responses::invoke_instance_responses),
+            post(crate::routes::chat::responses::invoke_instance_responses)
+                .layer(crate::routes::chat::model_request_limit()),
         )
         .route(
             "/systemone",
-            post(crate::routes::chat::systemone::invoke_instance_systemone),
+            post(crate::routes::chat::systemone::invoke_instance_systemone)
+                .layer(crate::routes::chat::model_request_limit()),
         )
         .route(
             "/embeddings/embed",

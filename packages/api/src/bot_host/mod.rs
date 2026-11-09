@@ -5,6 +5,7 @@
 //! looking after. Desktop and device hosts claim through `routes/bots/turns.rs`.
 
 pub(crate) mod approvals;
+pub(crate) mod authorization;
 mod cap;
 mod decision;
 pub(crate) mod decision_wait;
@@ -14,6 +15,7 @@ pub(crate) mod interactive;
 pub(crate) mod ledger;
 pub(crate) mod memory;
 mod monitor_baseline;
+pub(crate) mod notes;
 pub(crate) mod recovery;
 mod room_updates;
 pub(crate) mod talk;

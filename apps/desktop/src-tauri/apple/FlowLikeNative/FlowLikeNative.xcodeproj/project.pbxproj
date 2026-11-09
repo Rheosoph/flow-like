@@ -25,6 +25,7 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		8CFE0A9777BE4EFA9750AB11 /* ActivityReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CFE0A9777BE4EFA9750AB12 /* ActivityReconciler.swift */; };
 		0439A960076446FDE913F50A /* Info-iOS.plist in Resources */ = {isa = PBXBuildFile; fileRef = B6FFB8ABD94250929BE1A4B9 /* Info-iOS.plist */; };
 		0729F49152F60513DB4E3B57 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA82390B8228CFFBEE45A347 /* ShareViewController.swift */; };
 		0C195C69CBCFED84C19CCC79 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA82390B8228CFFBEE45A347 /* ShareViewController.swift */; };
@@ -98,6 +99,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		8CFE0A9777BE4EFA9750AB12 /* ActivityReconciler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityReconciler.swift; sourceTree = "<group>"; };
 		01A708413E3811BBA282C3B3 /* AppIcons.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIcons.swift; sourceTree = "<group>"; };
 		096D979797F0DAF58CF04119 /* Info-iOS.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "Info-iOS.plist"; sourceTree = "<group>"; };
 		0D3552550A5268ACB5D2C106 /* CBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CBridge.swift; sourceTree = "<group>"; };
@@ -249,6 +251,7 @@
 			children = (
 				EE922AFABCE32B3F84FDA161 /* ActionResults.swift */,
 				B07B9BCFE973893E69CE2B9D /* ActivityBridge.swift */,
+				8CFE0A9777BE4EFA9750AB12 /* ActivityReconciler.swift */,
 				01A708413E3811BBA282C3B3 /* AppIcons.swift */,
 				912AF874D5D500E030DFA67C /* BotNotifications.swift */,
 				6CBF20FC760102F8D0FC93CE /* BotDeviceServices.swift */,
@@ -519,6 +522,7 @@
 			files = (
 				2682AC5B354E66C06DD1D31D /* ActionResults.swift in Sources */,
 				642D8DAAEDFC3027EDB45E99 /* ActivityBridge.swift in Sources */,
+				8CFE0A9777BE4EFA9750AB11 /* ActivityReconciler.swift in Sources */,
 				A1336D7925D53443BC3D7AB6 /* AppIcons.swift in Sources */,
 				E9B325FAFD94532342DA2F7D /* BotNotifications.swift in Sources */,
 				159BD23E8667A1D3C8E77AFE /* BotDeviceServices.swift in Sources */,

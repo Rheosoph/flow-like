@@ -3,6 +3,7 @@
 
 pub(crate) mod connectors;
 pub(crate) mod configuration;
+pub(crate) mod crew;
 pub(crate) mod images;
 pub(crate) mod mail;
 pub(crate) mod people;

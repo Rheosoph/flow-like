@@ -281,9 +281,7 @@ impl AppDirectory for NoConfigurationApps {
     }
 }
 
-async fn configuration_host(
-    grants: Arc<MemoryGrants>,
-) -> (Arc<BotToolsHost>, Arc<Configuration>) {
+async fn configuration_host(grants: Arc<MemoryGrants>) -> (Arc<BotToolsHost>, Arc<Configuration>) {
     let configuration = Arc::new(Configuration::default());
     let host = BotToolsHost::new(TurnDeps {
         owner: OWNER.into(),
@@ -311,7 +309,11 @@ async fn configuration_host(
 async fn configuration_discovery_needs_no_workspace_apps_or_executor() {
     let (host, configuration) = configuration_host(Arc::new(MemoryGrants::default())).await;
     for tool in ["bot_configuration", "bot_models"] {
-        let output = parse(&host.run_unattended(&AtomicBool::new(false), tool, json!({})).await);
+        let output = parse(
+            &host
+                .run_unattended(&AtomicBool::new(false), tool, json!({}))
+                .await,
+        );
         assert_eq!(output["status"], "ok", "{output}");
         assert!(host.parked().is_none());
     }
@@ -322,44 +324,74 @@ struct ContextWithoutApps;
 
 #[async_trait]
 impl flow_like_bot_tools::user_context::UserContextBackend for ContextWithoutApps {
-    async fn available(&self) -> flow_like_types::Result<flow_like_bot_tools::user_context::UserContextAvailability> {
+    async fn available(
+        &self,
+    ) -> flow_like_types::Result<flow_like_bot_tools::user_context::UserContextAvailability> {
         Ok(flow_like_bot_tools::user_context::UserContextAvailability {
             participants: vec![flow_like_bot_tools::user_context::UserContextParticipant {
-                id: OWNER.into(), name: "Owner".into(),
+                id: OWNER.into(),
+                name: "Owner".into(),
             }],
             fields: flow_like_types::bot_user_context::UserContextField::ALL.to_vec(),
             device_support: "unknown_until_shared".into(),
         })
     }
 
-    async fn request(&self, args: flow_like_bot_tools::user_context::UserContextRequestArgs) -> flow_like_types::Result<flow_like_bot_tools::user_context::UserContextRequestReceipt> {
-        Ok(flow_like_bot_tools::user_context::UserContextRequestReceipt {
-            request_id: "context-request".into(), conversation_id: "room".into(),
-            subject_id: args.subject_id, expires_at: 100_000,
-        })
+    async fn request(
+        &self,
+        args: flow_like_bot_tools::user_context::UserContextRequestArgs,
+    ) -> flow_like_types::Result<flow_like_bot_tools::user_context::UserContextRequestReceipt> {
+        Ok(
+            flow_like_bot_tools::user_context::UserContextRequestReceipt {
+                request_id: "context-request".into(),
+                conversation_id: "room".into(),
+                subject_id: args.subject_id,
+                expires_at: 100_000,
+            },
+        )
     }
 }
 
 #[flow_like_types::tokio::test]
 async fn context_exchange_needs_no_workspace_app_scope_or_owner_approval() {
     let host = BotToolsHost::new(TurnDeps {
-        owner: OWNER.into(), bot: bot_user(), turn_id: TURN.into(), workspace: String::new(),
+        owner: OWNER.into(),
+        bot: bot_user(),
+        turn_id: TURN.into(),
+        workspace: String::new(),
         host_tools: routing::host_tools(false, &[]),
         directory: Arc::new(NoConfigurationApps),
         access: Arc::new(Access::new(&[]).await),
-        models: TurnModels { source: Arc::new(NoModels), chat: None, embedding: None },
+        models: TurnModels {
+            source: Arc::new(NoModels),
+            chat: None,
+            embedding: None,
+        },
         executor: None,
         grants: Arc::new(MemoryGrants::default()),
         secrets: Arc::new(JobSecrets(Default::default())),
         connectors: None,
-    }).with_user_context(Arc::new(ContextWithoutApps));
+    })
+    .with_user_context(Arc::new(ContextWithoutApps));
     let mutating = AtomicBool::new(false);
-    let available = parse(&host.run_unattended(&mutating, "user_context_available", json!({})).await);
+    let available = parse(
+        &host
+            .run_unattended(&mutating, "user_context_available", json!({}))
+            .await,
+    );
     assert_eq!(available["status"], "ok", "{available}");
     assert_eq!(available["participants"][0]["id"], OWNER);
-    let requested = parse(&host.run_unattended(&mutating, "user_context_request", json!({
-        "subject_id": OWNER, "fields": ["timezone"], "purpose": "Find a meeting time",
-    })).await);
+    let requested = parse(
+        &host
+            .run_unattended(
+                &mutating,
+                "user_context_request",
+                json!({
+                    "subject_id": OWNER, "fields": ["timezone"], "purpose": "Find a meeting time",
+                }),
+            )
+            .await,
+    );
     assert_eq!(requested["status"], "pending", "{requested}");
     assert!(requested.get("values").is_none());
     let proposed = parse(&host.run_unattended(&mutating, "user_context_set_status", json!({
@@ -368,19 +400,27 @@ async fn context_exchange_needs_no_workspace_app_scope_or_owner_approval() {
     assert_eq!(proposed["status"], "pending", "{proposed}");
     assert!(host.parked().is_none());
 
-    let channel = InProcessChannel::register("user-context-without-apps", Duration::from_secs(30)).await;
+    let channel =
+        InProcessChannel::register("user-context-without-apps", Duration::from_secs(30)).await;
     let (frames, mut received) = mpsc::unbounded_channel();
     let plain = ServerPlatformBridge::orchestrator(channel.clone(), frames.clone());
     let refused = parse(&plain.call("user_context_available", json!({})).await);
     assert_eq!(refused["code"], "platform_tool_not_advertised");
     let bot_without_host = ServerPlatformBridge::bot(channel.clone(), frames.clone());
-    let refused = parse(&bot_without_host.call("user_context_available", json!({})).await);
+    let refused = parse(
+        &bot_without_host
+            .call("user_context_available", json!({}))
+            .await,
+    );
     assert_eq!(refused["code"], "platform_tool_not_advertised");
-    let enabled = ServerPlatformBridge::orchestrator(channel, frames)
-        .with_bot_tools(Some(Arc::new(host)));
+    let enabled =
+        ServerPlatformBridge::orchestrator(channel, frames).with_bot_tools(Some(Arc::new(host)));
     let listed = parse(&enabled.call("user_context_available", json!({})).await);
     assert_eq!(listed["participants"][0]["id"], OWNER);
-    assert!(received.try_recv().is_err(), "Context runs on the host without a browser tool request");
+    assert!(
+        received.try_recv().is_err(),
+        "Context runs on the host without a browser tool request"
+    );
 }
 
 #[flow_like_types::tokio::test]
@@ -403,7 +443,10 @@ async fn configuration_changes_ignore_standing_grants_and_consume_exact_approval
     let applied = parse(&resumed.run_unattended(&mutating, tool, args.clone()).await);
     assert_eq!(applied["status"], "ok", "{applied}");
     assert!(mutating.load(Ordering::SeqCst));
-    assert_eq!(*configuration.updates.lock().unwrap(), vec![args["changes"].clone()]);
+    assert_eq!(
+        *configuration.updates.lock().unwrap(),
+        vec![args["changes"].clone()]
+    );
     let repeated = parse(&resumed.run_unattended(&mutating, tool, args).await);
     assert_eq!(repeated["code"], "bot_tool_waiting_for_approval");
     assert_eq!(configuration.updates.lock().unwrap().len(), 1);
@@ -438,7 +481,9 @@ impl flow_like_bot_tools::SkillHost for Skills {
         request: flow_like_types::bot_skill::CreateBotSkill,
     ) -> flow_like_types::Result<flow_like_types::bot_skill::BotSkill> {
         if self.2.load(Ordering::SeqCst) {
-            return Err(flow_like_types::anyhow!("The bot already has 20 skills waiting for approval"));
+            return Err(flow_like_types::anyhow!(
+                "The bot already has 20 skills waiting for approval"
+            ));
         }
         self.1.lock().unwrap().push(request);
         Ok(self.0.clone())
@@ -455,13 +500,15 @@ impl super::skills::SkillJobs for Skills {
         Ok(flow_like_bot_tools_host::SkillCallJob {
             skill: self.0.clone(),
             package_id: self.0.source.package_id().unwrap_or_default().into(),
-            package: self.0.source.package_id().map(|_| flow_like_types::dispatch::WasmPackageRef {
-                version: "1.0.0".into(),
-                wasm_hash: "hash".into(),
-                wasm_url: "https://example.test/skill.wasm".into(),
-                cwasm_url: "https://example.test/skill.cwasm".into(),
-                cwasm_checksum: "checksum".into(),
-                permissions: None,
+            package: self.0.source.package_id().map(|_| {
+                flow_like_types::dispatch::WasmPackageRef {
+                    version: "1.0.0".into(),
+                    wasm_hash: "hash".into(),
+                    wasm_url: "https://example.test/skill.wasm".into(),
+                    cwasm_url: "https://example.test/skill.cwasm".into(),
+                    cwasm_checksum: "checksum".into(),
+                    permissions: None,
+                }
             }),
         })
     }
@@ -492,8 +539,16 @@ async fn skill_host(
     let tools = routing::host_tools(executor.is_some(), &[]);
     let host = host_with(executor, tools).await;
     let host = Arc::try_unwrap(host).unwrap_or_else(|_| panic!("host is not shared"));
-    let skills = Arc::new(Skills(skill, Mutex::new(Vec::new()), AtomicBool::new(false)));
-    (host.with_skills(skills.clone()).with_skill_jobs(skills.clone()), skills)
+    let skills = Arc::new(Skills(
+        skill,
+        Mutex::new(Vec::new()),
+        AtomicBool::new(false),
+    ));
+    (
+        host.with_skills(skills.clone())
+            .with_skill_jobs(skills.clone()),
+        skills,
+    )
 }
 
 #[flow_like_types::tokio::test]
@@ -506,7 +561,9 @@ async fn package_skill_load_discovers_tools_on_the_executor() {
     assert_eq!(jobs.len(), 1);
     let job: ToolJob = serde_json::from_str(&jobs[0].3).unwrap();
     assert_eq!(job.tool, "skill_load");
-    let package = job.skill_call.expect("the executor needs the skill package");
+    let package = job
+        .skill_call
+        .expect("the executor needs the skill package");
     assert_eq!(package.skill.name, "report");
     assert_eq!(package.skill.tools, ["build_report"]);
     assert_eq!(package.package_id, "com.example.reports");
@@ -523,7 +580,9 @@ async fn instruction_skill_load_also_runs_on_the_executor() {
     assert_eq!(output["ran_on"], "executor", "{output}");
     let jobs = executor.jobs.lock().unwrap();
     let job: ToolJob = serde_json::from_str(&jobs[0].3).unwrap();
-    let skill = job.skill_call.expect("the executor receives the approved instructions");
+    let skill = job
+        .skill_call
+        .expect("the executor receives the approved instructions");
     assert_eq!(skill.skill.name, "report");
     assert!(skill.package.is_none());
 }
@@ -547,7 +606,10 @@ async fn skill_tools_without_an_executor_never_fall_back_to_the_api() {
     let (host, skills) = skill_host(None, package_skill()).await;
     for tool in ["skill_load", "skill_propose", "skill_call", "skill_run"] {
         let output = parse(&host.run(tool, json!({ "name": "report" })).await);
-        assert_eq!(output["code"], "bot_tool_needs_executor", "{tool}: {output}");
+        assert_eq!(
+            output["code"], "bot_tool_needs_executor",
+            "{tool}: {output}"
+        );
     }
     assert!(skills.1.lock().unwrap().is_empty());
 }
@@ -583,7 +645,8 @@ async fn missing_or_failed_skill_proposals_are_never_persisted() {
         body: "Collect the facts.".into(),
         tools: Vec::new(),
     });
-    *executor.output.lock().unwrap() = Some(json!({ "status": "error", "error": { "code": "invalid_args" } }));
+    *executor.output.lock().unwrap() =
+        Some(json!({ "status": "error", "error": { "code": "invalid_args" } }));
     let failed = parse(&host.run("skill_propose", json!({ "name": "report" })).await);
     assert_eq!(failed["status"], "error", "{failed}");
     assert!(skills.1.lock().unwrap().is_empty());
@@ -814,6 +877,78 @@ async fn a_headless_turn_runs_what_a_grant_or_a_one_time_answer_covers() {
     assert_eq!(again["code"], "bot_tool_waiting_for_approval");
 }
 
+struct Infer {
+    allow: bool,
+    calls: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl flow_like::flow::copilot::tool_authorization::AuthorizationInference for Infer {
+    async fn infer(&self, tool: &str, _: &Value, _: Option<&str>, _: &str) -> bool {
+        self.calls.lock().unwrap().push(tool.to_string());
+        self.allow
+    }
+}
+
+#[flow_like_types::tokio::test]
+async fn inferred_owner_intent_runs_one_call_without_a_card_or_grant() {
+    for allow in [true, false] {
+        let executor = Arc::new(FakeExecutor::default());
+        let grants = Arc::new(MemoryGrants::default());
+        let host = host_with_grants(
+            Some(executor.clone()),
+            routing::host_tools(true, &["python".to_string()]),
+            grants.clone(),
+        )
+        .await;
+        let inference = Arc::new(Infer {
+            allow,
+            calls: Mutex::new(Vec::new()),
+        });
+        host.set_inference(inference.clone());
+        let mutating = AtomicBool::new(false);
+        let ran = parse(
+            &host
+                .run_unattended(&mutating, "code_run", asking_args("code_run"))
+                .await,
+        );
+        if allow {
+            assert_eq!(ran["ran_on"], "executor");
+            assert!(host.parked().is_none());
+        } else {
+            assert_eq!(ran["code"], "bot_tool_waiting_for_approval");
+            assert!(executor.jobs.lock().unwrap().is_empty());
+        }
+        assert!(grants.list().await.unwrap().is_empty());
+        assert_eq!(*inference.calls.lock().unwrap(), vec!["code_run"]);
+    }
+}
+
+#[flow_like_types::tokio::test]
+async fn inference_never_waives_a_destructive_drop() {
+    let host = host_with(
+        Some(Arc::new(FakeExecutor::default())),
+        routing::host_tools(true, &[]),
+    )
+    .await;
+    let inference = Arc::new(Infer {
+        allow: true,
+        calls: Mutex::new(Vec::new()),
+    });
+    host.set_inference(inference.clone());
+    let waiting = parse(
+        &host
+            .run_unattended(
+                &AtomicBool::new(false),
+                "knowledge_drop",
+                asking_args("knowledge_drop"),
+            )
+            .await,
+    );
+    assert_eq!(waiting["code"], "bot_tool_waiting_for_approval");
+    assert!(inference.calls.lock().unwrap().is_empty());
+}
+
 #[flow_like_types::tokio::test]
 async fn a_refusal_the_owner_gave_is_told_to_the_model_and_runs_nothing() {
     let executor = Arc::new(FakeExecutor::default());
@@ -1010,7 +1145,10 @@ async fn every_configuration_change_requires_fresh_browser_approval() {
         reply(&channel, &request, response).await;
         let output = parse(&call.await.unwrap());
         assert_eq!(output["status"], if approved { "ok" } else { "denied" });
-        assert_eq!(configuration.updates.lock().unwrap().len(), count_before + usize::from(approved));
+        assert_eq!(
+            configuration.updates.lock().unwrap().len(),
+            count_before + usize::from(approved)
+        );
     }
     assert_eq!(grants.list().await.unwrap(), vec![GrantKey::new(tool, "*")]);
     channel.close().await;
@@ -1035,30 +1173,43 @@ async fn flux_runs_configuration_on_the_server_and_keeps_its_authoring_bridge() 
     let call = {
         let bridge = bridge.clone();
         flow_like_types::tokio::spawn(async move {
-            bridge.call("bot_update_configuration", json!({"changes": {"name": "Flow helper"}})).await
+            bridge
+                .call(
+                    "bot_update_configuration",
+                    json!({"changes": {"name": "Flow helper"}}),
+                )
+                .await
         })
     };
     let request = frame(received.recv().await.unwrap());
     assert_eq!(request["approvalOnly"], true);
-    reply(&channel, &request, json!({
-        "requestId": request["requestId"], "approved": true,
-        "result": {"status": "ok", "native_approved": true},
-    })).await;
+    reply(
+        &channel,
+        &request,
+        json!({
+            "requestId": request["requestId"], "approved": true,
+            "result": {"status": "ok", "native_approved": true},
+        }),
+    )
+    .await;
     assert_eq!(parse(&call.await.unwrap())["status"], "ok");
     assert_eq!(configuration.updates.lock().unwrap().len(), 1);
 
     let authoring = {
         let bridge = bridge.clone();
-        flow_like_types::tokio::spawn(async move {
-            bridge.call("list_apps", json!({})).await
-        })
+        flow_like_types::tokio::spawn(async move { bridge.call("list_apps", json!({})).await })
     };
     let request = frame(received.recv().await.unwrap());
     assert_eq!(request["toolName"], "list_apps");
     assert!(request.get("approvalOnly").is_none());
-    reply(&channel, &request, json!({
-        "requestId": request["requestId"], "approved": true, "result": {"apps": []},
-    })).await;
+    reply(
+        &channel,
+        &request,
+        json!({
+            "requestId": request["requestId"], "approved": true, "result": {"apps": []},
+        }),
+    )
+    .await;
     assert_eq!(parse(&authoring.await.unwrap())["status"], "ok");
     channel.close().await;
 }
@@ -1196,7 +1347,10 @@ async fn the_job_carries_the_owners_image_bit_to_the_executor_and_counts_saved_i
         .as_ref()
         .expect("the job names the image model");
     assert_eq!(image.bit["id"], "my-image");
-    assert_eq!(image.bit["parameters"]["provider"]["params"]["api_key"], "sk-private-key");
+    assert_eq!(
+        image.bit["parameters"]["provider"]["params"]["api_key"],
+        "sk-private-key"
+    );
     assert_eq!(image.left, 8);
     assert!(!format!("{:?}", job.models).contains("sk-private-key"));
     drop(jobs);

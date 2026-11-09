@@ -13,12 +13,14 @@ import {
 	type IMessage,
 	globalChatDb,
 } from "../../state/global-chat/global-chat-db";
+import { useChatPreparationStore } from "../../state/global-chat/global-chat-preparation";
 import {
 	type GlobalChatRun,
 	type GlobalToolPrompt,
 	MAX_CONCURRENT_GLOBAL_CHAT_RUNS,
 	useGlobalChatStore,
 } from "../../state/global-chat/global-chat-store";
+import type { IChatConcurrency } from "../interfaces/chat-default/chat";
 import type { ISendMessageFunction } from "../interfaces/chat-default/chatbox";
 import { GlobalChatBody } from "./global-chat-body";
 
@@ -30,8 +32,15 @@ const harness = vi.hoisted(() => ({
 		  }
 		| undefined,
 	bodies: [] as Record<string, unknown>[],
+	uploads: [] as { resolve: (attachments: unknown[]) => void }[],
 	disclosure: undefined as string | undefined,
 	pushed: [] as unknown[],
+	concurrency: undefined as IChatConcurrency | undefined,
+	loadingText: undefined as string | undefined,
+	isStreamActive: false,
+	targetGate: undefined as Promise<null> | undefined,
+	holdStream: false,
+	stream: undefined as { resolve: () => void } | undefined,
 	welcome: undefined as
 		| { title: string; description?: string; examples?: string[] }
 		| undefined,
@@ -81,6 +90,10 @@ vi.mock("../interfaces/chat-default/chat", async () => {
 			ref?: Ref<unknown>;
 			onSendMessage: ISendMessageFunction;
 			inlinePrompt?: ReactNode;
+			inlineContent?: ReactNode;
+			concurrency?: IChatConcurrency;
+			loadingText?: string;
+			isStreamActive?: boolean;
 			composerActions?: ReactNode;
 			config?: { ai_disclosure?: string };
 		}) => {
@@ -89,10 +102,14 @@ vi.mock("../interfaces/chat-default/chat", async () => {
 					harness.pushed.push(messages),
 			}));
 			harness.send = props.onSendMessage;
+			harness.concurrency = props.concurrency;
+			harness.loadingText = props.loadingText;
+			harness.isStreamActive = Boolean(props.isStreamActive);
 			harness.disclosure = props.config?.ai_disclosure;
 			return (
 				<>
 					<div data-testid="inline-prompt">{props.inlinePrompt}</div>
+					<div data-testid="inline-content">{props.inlineContent}</div>
 					<div data-testid="composer-actions">{props.composerActions}</div>
 				</>
 			);
@@ -128,7 +145,14 @@ vi.mock("../interfaces/chat-default/attachment", async (importOriginal) => ({
 	fileToAttachment: () =>
 		new Promise((resolve) => {
 			harness.upload = { resolve };
+			harness.uploads.push(harness.upload);
 		}),
+}));
+vi.mock("../../state/global-chat/bot-inbox", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../state/global-chat/bot-inbox")
+	>()),
+	ensureBotTarget: () => harness.targetGate ?? Promise.resolve(null),
 }));
 vi.mock(
 	"../../state/global-chat/global-chat-web-transport",
@@ -139,7 +163,11 @@ vi.mock(
 		webGlobalChatStart:
 			(options: { body: Record<string, unknown> }) => async () => {
 				harness.bodies.push(options.body);
-				return {};
+				if (harness.holdStream)
+					await new Promise<void>((resolve) => {
+						harness.stream = { resolve };
+					});
+				return { message: "The answer." };
 			},
 	}),
 );
@@ -274,7 +302,15 @@ beforeEach(async () => {
 	harness.send = undefined;
 	harness.upload = undefined;
 	harness.bodies = [];
+	harness.uploads = [];
 	harness.pushed = [];
+	harness.concurrency = undefined;
+	harness.loadingText = undefined;
+	harness.isStreamActive = false;
+	harness.targetGate = undefined;
+	harness.holdStream = false;
+	harness.stream = undefined;
+	useChatPreparationStore.setState({ replies: {} });
 	harness.welcome = undefined;
 	useAuthStatusStore.getState().setSignedIn(true);
 	useBackendStore.getState().setBackend(backendWith([]));
@@ -306,6 +342,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+	useChatPreparationStore.setState({ replies: {} });
 	await act(async () => root.unmount());
 	host.remove();
 	useGlobalChatStore.setState({
@@ -337,6 +374,107 @@ async function sendWhileOpening(conversationId: string) {
 	});
 	await settle();
 }
+
+describe("immediate reply feedback", () => {
+	test("acknowledges during setup and hands the same status text to the empty stream", async () => {
+		let ready!: () => void;
+		harness.targetGate = new Promise<null>((resolve) => {
+			ready = () => resolve(null);
+		});
+		harness.holdStream = true;
+		let sending: Promise<void> | undefined;
+		await act(async () => {
+			sending = harness.send?.("Hello");
+		});
+		expect(
+			host.querySelector("[data-chat-preparation]")?.textContent,
+		).toContain("Got it. I’m getting started.");
+		expect(harness.isStreamActive).toBe(true);
+		expect(harness.concurrency?.runs).toEqual([]);
+		expect(harness.bodies).toEqual([]);
+		await act(async () => {
+			ready();
+		});
+		await settle();
+		expect(
+			Object.keys(useChatPreparationStore.getState().replies),
+		).toHaveLength(0);
+		expect(Object.keys(useGlobalChatStore.getState().runs)).toHaveLength(1);
+		expect(harness.loadingText).toBe("Got it. I’m getting started.");
+		expect(harness.isStreamActive).toBe(true);
+		await act(async () => {
+			harness.stream?.resolve();
+			await sending;
+		});
+		expect(harness.isStreamActive).toBe(false);
+		expect(
+			useGlobalChatStore
+				.getState()
+				.messages.map((message) => message.inner.content),
+		).toEqual(["Hello", "The answer."]);
+		const saved = await globalChatDb.messages.toArray();
+		expect(
+			saved.some((message) =>
+				JSON.stringify(message).includes("getting started"),
+			),
+		).toBe(false);
+	});
+
+	test("reserves preparation capacity without requeueing its own last slot", async () => {
+		const sending: (Promise<void> | undefined)[] = [];
+		for (let index = 0; index < MAX_CONCURRENT_GLOBAL_CHAT_RUNS; index += 1) {
+			await act(async () => {
+				sending.push(
+					harness.send?.(`Read file ${index}`, [
+						new File(["notes"], `notes-${index}.txt`),
+					]),
+				);
+			});
+		}
+		expect(harness.concurrency?.atCapacity).toBe(true);
+		expect(useGlobalChatStore.getState().queue).toEqual([]);
+		await act(async () => {
+			await harness.send?.("Next question");
+		});
+		expect(
+			useGlobalChatStore.getState().queue.map((entry) => entry.content),
+		).toEqual(["Next question"]);
+		await act(async () => {
+			for (const upload of harness.uploads)
+				upload.resolve([
+					{ url: "https://files.test/notes.txt", name: "notes.txt" },
+				]);
+			await Promise.all(sending);
+		});
+		await settle();
+		expect(harness.bodies).toHaveLength(MAX_CONCURRENT_GLOBAL_CHAT_RUNS + 1);
+		expect(useGlobalChatStore.getState().queue).toEqual([]);
+		expect(
+			Object.keys(useChatPreparationStore.getState().replies),
+		).toHaveLength(0);
+	});
+
+	test("a setup failure clears the acknowledgement and busy controls", async () => {
+		let fail!: (reason: Error) => void;
+		harness.targetGate = new Promise<null>((_resolve, reject) => {
+			fail = reject;
+		});
+		let sending: Promise<void> | undefined;
+		await act(async () => {
+			sending = harness.send?.("Hello");
+		});
+		const result = sending?.catch((error) => error);
+		await act(async () => {
+			fail(new Error("Inbox unavailable"));
+			await result;
+		});
+		expect(await result).toMatchObject({ message: "Inbox unavailable" });
+		expect(host.querySelector("[data-chat-preparation]")).toBeNull();
+		expect(harness.isStreamActive).toBe(false);
+		expect(harness.concurrency?.runs).toEqual([]);
+		expect(harness.bodies).toEqual([]);
+	});
+});
 
 describe("a send goes where it was typed", () => {
 	test("another chat at its run limit doesn't hold it back", async () => {

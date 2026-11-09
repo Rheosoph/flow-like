@@ -13,6 +13,7 @@ use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseTransaction, DbErr, EntityTr
 pub mod apps;
 pub mod ask;
 pub mod avatar;
+pub(crate) mod authorization;
 pub(crate) mod checkpoint;
 pub mod clone;
 pub mod configuration;
@@ -24,6 +25,7 @@ pub mod mail;
 pub mod live_activities;
 pub mod memory;
 pub mod model;
+pub mod notes;
 pub mod notify;
 pub mod people;
 pub mod permissions;
@@ -62,6 +64,7 @@ mod workspace_tests;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route("/{bot_id}/turns/{turn_id}/authorization-context", get(authorization::context))
         .route("/{bot_id}/user-context/available", get(user_context::available))
         .route("/{bot_id}/user-context/request", post(user_context::request))
         .route("/{bot_id}/usage", get(super::usage_budgets::get_bot))
@@ -87,6 +90,7 @@ pub fn routes() -> Router<AppState> {
         .route("/turns/{turn_id}/checkpoint", get(checkpoint::load).put(checkpoint::save)
             .layer(DefaultBodyLimit::max(flow_like_types::bot_turn::MAX_CHECKPOINT_BYTES + 4096)))
         .route("/turns/{turn_id}/heartbeat", post(turns::heartbeat_turn))
+        .route("/turns/{turn_id}/status", put(turns::set_turn_status))
         .route("/turns/{turn_id}/silent", post(turns::silent_turn))
         .route("/turns/{turn_id}/wait", post(turns::wait_turn))
         .route("/turns/{turn_id}/hold", post(turns::hold_turn))
@@ -114,6 +118,11 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/{bot_id}/runtime-token",
             post(runtime_token::mint_runtime_token),
+        )
+        .route("/{bot_id}/notes", get(notes::list_notes))
+        .route(
+            "/{bot_id}/notes/{conversation_id}/{key}",
+            get(notes::get_note).patch(notes::write_note),
         )
         .route("/{bot_id}/memory", delete(memory::reset_memory))
         .route("/{bot_id}/memory/facts", get(memory::list_facts))

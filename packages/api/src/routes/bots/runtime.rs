@@ -250,6 +250,15 @@ async fn profile_app_ids<C: ConnectionTrait>(
     let Some(profile_id) = bot_profile_id.filter(|id| *id != request_profile.id) else {
         return Ok(request_apps());
     };
+    owner_profile_app_ids(db, owner_id, profile_id).await
+}
+
+/// The apps `profile_id` lists when it is one of `owner_id`'s live profiles; empty otherwise.
+pub(crate) async fn owner_profile_app_ids<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    profile_id: &str,
+) -> Result<BTreeSet<String>, ApiError> {
     let apps: Option<Option<Value>> = profile::Entity::find()
         .select_only()
         .column(profile::Column::Apps)

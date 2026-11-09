@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { RealtimeProviderSession } from "./provider-session";
-import type {
-	RealtimeProviderCallbacks,
-	RealtimeProviderOpener,
+import {
+	type RealtimeProviderCallbacks,
+	RealtimeProviderError,
+	type RealtimeProviderOpener,
 } from "./providers";
 import { type RealtimeFetch, RealtimeRuntime } from "./runtime";
 import type {
@@ -298,9 +299,13 @@ describe("shared provider lifecycle", () => {
 		forbidden = true;
 		first.subscribe([{ run_id: "run" }]);
 		await vi.advanceTimersByTimeAsync(2);
-		expect(first.messages.at(-1)).toEqual({
+		expect(first.messages.at(-2)).toEqual({
 			type: "state",
 			state: "unauthorized",
+		});
+		expect(first.messages.at(-1)).toEqual({
+			type: "provider",
+			status: { transport: "nats", live: false },
 		});
 		forbidden = false;
 		first.send({
@@ -533,6 +538,91 @@ describe("shared provider lifecycle", () => {
 		expect(open).toHaveBeenCalledTimes(1);
 		await vi.advanceTimersByTimeAsync(200);
 		expect(open).toHaveBeenCalledTimes(2);
+	});
+
+	test("tabs learn whether the provider is live and why it last failed", async () => {
+		let callbacks!: RealtimeProviderCallbacks;
+		const open = vi
+			.fn<RealtimeProviderOpener>()
+			.mockRejectedValueOnce(
+				new RealtimeProviderError("handshake", "no answer within 10 s"),
+			)
+			.mockImplementation(async (_transport, events) => {
+				callbacks = events;
+				return { close() {} };
+			});
+		const fetcher = vi.fn<RealtimeFetch>(async (url) =>
+			String(url).endsWith("/connect") ? grant() : empty(),
+		);
+		const runtime = create(fetcher, open, longLease);
+		const first = port(runtime, "first");
+		const statuses = () =>
+			first.messages.flatMap((message) =>
+				message.type === "provider" ? [message.status] : [],
+			);
+		first.subscribe();
+		await vi.advanceTimersByTimeAsync(2);
+		expect(statuses().at(-1)).toEqual({
+			transport: "nats",
+			live: false,
+			failure: {
+				stage: "handshake",
+				message: "no answer within 10 s",
+				elapsedMs: expect.any(Number),
+				at: expect.any(Number),
+			},
+		});
+
+		await vi.advanceTimersByTimeAsync(2_100);
+		expect(open).toHaveBeenCalledTimes(2);
+		expect(statuses().at(-1)).toMatchObject({
+			transport: "nats",
+			live: true,
+			failure: { stage: "handshake" },
+		});
+		const later = port(runtime, "later");
+		expect(
+			later.messages.find((message) => message.type === "provider"),
+		).toMatchObject({ status: { live: true } });
+
+		callbacks.disconnected("closed with code 1006");
+		await vi.advanceTimersByTimeAsync(1);
+		expect(statuses().at(-1)).toMatchObject({
+			live: false,
+			failure: { stage: "lost", message: "closed with code 1006" },
+		});
+	});
+
+	test("an attempt replaced by a newer one is not reported as a failure", async () => {
+		const status = vi.fn();
+		const open = vi.fn<RealtimeProviderOpener>(
+			(_transport, _events, signal) =>
+				new Promise((_resolve, reject) =>
+					signal.addEventListener("abort", () =>
+						reject(new Error("Realtime provider connection aborted")),
+					),
+				),
+		);
+		const session = new RealtimeProviderSession({
+			fetch: vi.fn<RealtimeFetch>(async () => grant()),
+			open,
+			changed() {},
+			wakeup() {},
+			status,
+		});
+		const account: RealtimeConnectionSession = {
+			scope: "account",
+			url: "https://hub.test/api/v1/realtime/poll",
+			headers: { Authorization: "Bearer user" },
+		};
+		session.sync(account, "configured");
+		await vi.advanceTimersByTimeAsync(1);
+		session.pause();
+		await vi.advanceTimersByTimeAsync(1);
+		expect(status.mock.calls.map(([value]) => value)).toEqual([
+			{ transport: "nats", live: false },
+		]);
+		session.close();
 	});
 
 	test("reconnects back off to five minutes and reset only after a minute of stable connection", async () => {

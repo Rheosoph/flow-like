@@ -164,6 +164,7 @@ pub(crate) async fn notify_for_reply<C: ConnectionTrait>(
         return Ok(false);
     }
     let posted = inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::InboxId.eq(reply.bot_id))
         .filter(inbox_entry::Column::MessageId.eq(reply.message_id))
         .filter(inbox_entry::Column::SenderId.eq(reply.bot_id))
         .filter(inbox_entry::Column::ConversationId.eq(&turn.conversation_id))

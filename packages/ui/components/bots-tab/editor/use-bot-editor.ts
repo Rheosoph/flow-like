@@ -7,6 +7,7 @@ import type {
 	BotCapability,
 	BotLocation,
 	IBot,
+	IBotApp,
 	IBotModelPolicy,
 	IUpdateBotRequest,
 } from "../../../state/backend-state/bot-state";
@@ -39,6 +40,7 @@ import {
 import { type BotPresetMatch, rankBotPresets } from "./bot-preset-match";
 import { type BotPreset, findBotPreset } from "./bot-presets";
 import type { BotIdentityChange } from "./bot-preview-panel";
+import { type BotAppDraft, useBotAppDraft } from "./use-bot-app-draft";
 
 type DraftSetter = (draft: BotDraft | ((draft: BotDraft) => BotDraft)) => void;
 
@@ -61,6 +63,7 @@ export interface BotEditor {
 	matches: BotPresetMatch[];
 	choice: string | null;
 	pendingAppIds: string[];
+	appAccess: BotAppDraft;
 	/** Switched off by the last move, because the new host can't do them. */
 	removedCapabilities: BotCapability[];
 	/** Switched back on by the last move, after an earlier move had switched them off. */
@@ -203,7 +206,11 @@ const placeAnywhere = (draft: BotDraft) => draft;
 export function useBotEditor(
 	mode: BotEditorMode,
 	bot: IBot | null,
-	options: { localOnly?: boolean; initialDeviceId?: string } = {},
+	options: {
+		localOnly?: boolean;
+		initialDeviceId?: string;
+		savedApps?: readonly IBotApp[];
+	} = {},
 ): BotEditor {
 	const localOnly = options.localOnly === true;
 	const place = localOnly ? keepOnThisComputer : placeAnywhere;
@@ -234,6 +241,7 @@ export function useBotEditor(
 		[place],
 	);
 	const [pendingAppIds, setPendingAppIds] = useState<string[]>([]);
+	const appAccess = useBotAppDraft(options.savedApps);
 	const [locationChange, setLocationChange] =
 		useState<BotLocationChange>(NO_LOCATION_CHANGE);
 	const {
@@ -299,18 +307,21 @@ export function useBotEditor(
 		matches,
 		choice,
 		pendingAppIds,
+		appAccess,
 		removedCapabilities: locationChange.removed,
 		restoredCapabilities: locationChange.restored,
 		problems,
 		flaggedSteps,
 		updateRequest,
-		dirty: isDirty(
-			original,
-			updateRequest,
-			draft,
-			untouched,
-			place(startOn(createEmptyBotDraft())),
-		),
+		dirty:
+			appAccess.changes.length > 0 ||
+			isDirty(
+				original,
+				updateRequest,
+				draft,
+				untouched,
+				place(startOn(createEmptyBotDraft())),
+			),
 		goTo,
 		setDescribeText: describe.setText,
 		pickPreset: (preset) => {

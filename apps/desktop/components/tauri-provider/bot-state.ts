@@ -11,6 +11,8 @@ import type {
 	IBotMailAvailability,
 	IBotMailThread,
 	IBotMailThreadView,
+	IBotNote,
+	IBotNoteWrite,
 	IBotPermission,
 	IBotPermissions,
 	IBotPresence,
@@ -68,6 +70,10 @@ import { idsOf, localRegistries } from "../../lib/local-bots/registry";
 import { localSkills } from "../../lib/local-bots/skills";
 import { BotTurnHost } from "../../lib/local-bots/turns";
 import type { TauriBackend } from "../tauri-provider";
+
+function noteRoute(botId: string, conversationId: string, key: string): string {
+	return `${botPath(botId)}/notes/${encodeURIComponent(conversationId)}/${encodeURIComponent(key)}`;
+}
 
 function appPath(botId: string, appId: string): string {
 	return `${botPath(botId)}/apps/${encodeURIComponent(appId)}`;
@@ -260,6 +266,65 @@ export class BotState implements IBotState {
 			visibility: IAppVisibility.Private,
 		});
 		return workspace;
+	}
+
+	async listNotes(botId: string, conversationId: string): Promise<IBotNote[]> {
+		const account = await this.accountFor(botId);
+		if (!account)
+			return this.here(botId, () =>
+				invoke<IBotNote[]>("local_bots_notes_list", { botId, conversationId }),
+			);
+		const response = await get<{ notes?: IBotNote[] }>(
+			account.profile,
+			`${botPath(account.id)}/notes?conversation_id=${encodeURIComponent(conversationId)}`,
+			account.auth,
+		);
+		return asArray<IBotNote>(response?.notes);
+	}
+
+	async getNote(
+		botId: string,
+		conversationId: string,
+		key: string,
+	): Promise<IBotNote> {
+		const account = await this.accountFor(botId);
+		if (!account)
+			return this.here(botId, () =>
+				invoke<IBotNote>("local_bots_notes_get", {
+					botId,
+					conversationId,
+					key,
+				}),
+			);
+		return get<IBotNote>(
+			account.profile,
+			noteRoute(account.id, conversationId, key),
+			account.auth,
+		);
+	}
+
+	async updateNote(
+		botId: string,
+		conversationId: string,
+		key: string,
+		write: IBotNoteWrite,
+	): Promise<IBotNote> {
+		const account = await this.accountFor(botId);
+		if (!account)
+			return this.here(botId, () =>
+				invoke<IBotNote>("local_bots_notes_update", {
+					botId,
+					conversationId,
+					key,
+					write,
+				}),
+			);
+		return patch<IBotNote>(
+			account.profile,
+			noteRoute(account.id, conversationId, key),
+			write,
+			account.auth,
+		);
 	}
 
 	/** Only the hub pushes notifications, so only an account bot has a picture there. */

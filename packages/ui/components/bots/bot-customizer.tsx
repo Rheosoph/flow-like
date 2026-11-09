@@ -1,5 +1,6 @@
 "use client";
 
+import { Dices, Lock, LockOpen } from "lucide-react";
 import {
 	type ReactNode,
 	memo,
@@ -8,7 +9,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { BOT_OPTIONS, resolveBotAppearance } from "./appearance";
+import { resolveBotAppearance } from "./appearance";
 import { BotAvatar } from "./bot-avatar";
 import { BotColorPicker } from "./bot-color-picker";
 import { BotOutfitTile } from "./bot-outfit-tile";
@@ -26,7 +27,11 @@ import {
 	getBotPackContents,
 	getBotShapePacks,
 } from "./packs";
-import { randomizeBotColors } from "./random-colors";
+import {
+	BOT_LOOK_PARTS,
+	type BotLookPart,
+	randomizeBotLook,
+} from "./random-look";
 import { getBotSaveEligibility } from "./save-eligibility";
 import { BOT_AGENT_STATES, BOT_MOODS } from "./states";
 import {
@@ -39,6 +44,7 @@ import {
 	type BotColorPackDefinition,
 	type BotColorSelection,
 	type BotColorSlot,
+	type BotEquipmentDefinition,
 	type BotEquipmentSlot,
 	type BotExpression,
 	type BotMood,
@@ -155,9 +161,15 @@ const PREVIEW_POSES: readonly (readonly [BotPose, string])[] = [
 	["sleep", "Sleep"],
 	["track", "Follow cursor"],
 ];
+const PART_LABELS: Record<BotLookPart, string> = {
+	crew: "Character",
+	outfit: "Outfit",
+	colors: "Colors",
+	finish: "Finish",
+};
 
-function randomItem<T>(items: readonly T[]): T {
-	return items[Math.floor(Math.random() * items.length)];
+function isLookPart(section: Section): section is BotLookPart {
+	return (BOT_LOOK_PARTS as readonly string[]).includes(section);
 }
 
 // Keep the crew's SVG artwork stable while the selected bot changes.
@@ -229,6 +241,39 @@ function Tile({
 	);
 }
 
+function ShuffleButton({
+	part,
+	locked,
+	filtered,
+	onShuffle,
+}: Readonly<{
+	part: BotLookPart;
+	locked: boolean;
+	filtered: boolean;
+	onShuffle: () => void;
+}>) {
+	const label = PART_LABELS[part].toLowerCase();
+	return (
+		<button
+			type="button"
+			className="fl-bot-studio-shuffle"
+			aria-label={`Shuffle ${label}`}
+			disabled={locked}
+			title={
+				locked
+					? `Unlock ${label} to shuffle it`
+					: filtered
+						? `Picks from the ${part === "crew" ? "characters" : "collection"} shown`
+						: undefined
+			}
+			onClick={onShuffle}
+		>
+			{locked ? <Lock aria-hidden="true" /> : <Dices aria-hidden="true" />}
+			{locked ? "Locked" : filtered ? "Shuffle shown" : "Shuffle"}
+		</button>
+	);
+}
+
 /** A controlled visual editor, with catalog extensions available in every picker. */
 export function BotCustomizer({
 	value,
@@ -254,6 +299,7 @@ export function BotCustomizer({
 	const [pose, setPose] = useState<BotPose>("idle");
 	const [expression, setExpression] = useState<BotExpression>("neutral");
 	const [previewState, setPreviewState] = useState<PreviewState>("custom");
+	const [locked, setLocked] = useState<readonly BotLookPart[]>([]);
 	const previewMood = previewState.startsWith("mood:")
 		? (previewState.slice(5) as BotMood)
 		: undefined;
@@ -346,20 +392,24 @@ export function BotCustomizer({
 			? ({ kind: "all" } as const)
 			: requestedOutfitCollection;
 	const outfitQuery = outfitSearch.trim().toLocaleLowerCase();
-	const visibleEquipment = availableEquipment.filter((item) => {
+	const inOutfitCollection = (item: BotEquipmentDefinition) => {
 		const itemPacks = getBotEquipmentPacks(item.id, catalog);
-		const matchesCollection =
+		return (
 			outfitCollection.kind === "all" ||
 			(outfitCollection.kind === "other"
 				? itemPacks.length === 0
-				: itemPacks.some((pack) => pack.id === outfitCollection.id));
-		return (
-			matchesCollection &&
-			`${item.label} ${itemPacks.map((pack) => pack.label).join(" ")}`
-				.toLocaleLowerCase()
-				.includes(outfitQuery)
+				: itemPacks.some((pack) => pack.id === outfitCollection.id))
 		);
-	});
+	};
+	const visibleEquipment = availableEquipment.filter(
+		(item) =>
+			inOutfitCollection(item) &&
+			`${item.label} ${getBotEquipmentPacks(item.id, catalog)
+				.map((pack) => pack.label)
+				.join(" ")}`
+				.toLocaleLowerCase()
+				.includes(outfitQuery),
+	);
 	const groupedEquipment = new Set<string>();
 	const themedOutfits = outfitPacks
 		.filter(
@@ -450,66 +500,40 @@ export function BotCustomizer({
 	}
 
 	function randomize() {
-		const available = shapes.filter((item) =>
-			canUseBotShape(item.id, catalog, ownedPackIds),
+		replaceAppearance(
+			randomizeBotLook({
+				value,
+				catalog,
+				ownedPackIds,
+				parts: BOT_LOOK_PARTS,
+				locked,
+			}),
 		);
-		const alternatives = available.filter(
-			(item) => item.id !== appearance.kind,
+	}
+
+	/** Rerolls one part, drawing from what that section currently shows. */
+	function shuffle(part: BotLookPart) {
+		const shownShapes = new Set(visibleShapes.map((item) => item.id));
+		setSaveError(undefined);
+		onChange(
+			randomizeBotLook({
+				value,
+				catalog,
+				ownedPackIds,
+				parts: [part],
+				locked,
+				shapeFilter: (item) => shownShapes.has(item.id),
+				equipmentFilter: inOutfitCollection,
+			}),
 		);
-		const candidates = alternatives.length ? alternatives : available;
-		const kind = candidates.length
-			? randomItem(candidates).id
-			: catalog.defaultKind;
-		const equipment: NonNullable<BotAppearance["equipment"]> = {};
-		const accessorySlots = BOT_EQUIPMENT_SLOTS.filter(
-			(slot) =>
-				slot !== "neck" &&
-				Object.values(catalog.equipment).some(
-					(item) =>
-						item.slot === slot &&
-						isBotEquipmentCompatible(item, catalog.shapes[kind]) &&
-						canUseBotEquipment(item.id, catalog, ownedPackIds),
-				),
+	}
+
+	function toggleLock(part: BotLookPart) {
+		setLocked((current) =>
+			current.includes(part)
+				? current.filter((entry) => entry !== part)
+				: [...current, part],
 		);
-		// One outfit and one accessory keep the face readable without crowding the character.
-		const chosenSlots: BotEquipmentSlot[] = ["neck"];
-		if (accessorySlots.length) chosenSlots.push(randomItem(accessorySlots));
-		for (const equipmentSlot of chosenSlots) {
-			const items = Object.values(catalog.equipment).filter(
-				(item) =>
-					item.slot === equipmentSlot &&
-					isBotEquipmentCompatible(item, catalog.shapes[kind]) &&
-					canUseBotEquipment(item.id, catalog, ownedPackIds),
-			);
-			if (items.length && (equipmentSlot === "neck" || Math.random() >= 0.25))
-				equipment[equipmentSlot] = randomItem(items).id;
-		}
-		const colors = randomizeBotColors({
-			shape: catalog.shapes[kind],
-			catalog,
-			ownedPackIds,
-			effect: value.effect,
-		});
-		const textured = Object.values(colors).some(
-			(selection) =>
-				selection?.kind === "swatch" &&
-				catalog.colors[selection.colorId].paint.kind !== "solid",
-		);
-		// Give a texture, backdrop or halo room to stand on its own.
-		const decoration = textured ? 0 : Math.random();
-		replaceAppearance({
-			kind,
-			equipment,
-			colors,
-			frame: randomItem(BOT_OPTIONS.frame),
-			backdrop: decoration >= 0.88 ? randomItem(BOT_OPTIONS.backdrop) : "none",
-			halo:
-				decoration >= 0.78 && decoration < 0.88
-					? randomItem(BOT_OPTIONS.halo)
-					: "none",
-			effect: value.effect,
-			emote: Math.random() < 0.75 ? "none" : randomItem(BOT_OPTIONS.emote),
-		});
 	}
 
 	function selectColor(
@@ -762,11 +786,38 @@ export function BotCustomizer({
 						type="button"
 						aria-label="Randomize bot"
 						className="fl-bot-studio-randomize"
+						disabled={locked.length === BOT_LOOK_PARTS.length}
 						onClick={randomize}
 					>
-						Randomize
+						<Dices aria-hidden="true" />
+						{locked.length ? "Randomize rest" : "Randomize"}
 					</button>
 				</div>
+				<fieldset
+					className="fl-bot-studio-locks"
+					aria-label="Keep when randomizing"
+				>
+					<legend>Keep when randomizing</legend>
+					{BOT_LOOK_PARTS.map((part) => {
+						const isLocked = locked.includes(part);
+						return (
+							<button
+								key={part}
+								type="button"
+								aria-label={`Lock ${PART_LABELS[part].toLowerCase()}`}
+								aria-pressed={isLocked}
+								onClick={() => toggleLock(part)}
+							>
+								{isLocked ? (
+									<Lock aria-hidden="true" />
+								) : (
+									<LockOpen aria-hidden="true" />
+								)}
+								{PART_LABELS[part]}
+							</button>
+						);
+					})}
+				</fieldset>
 				<div className="fl-bot-studio-preview-controls">
 					<button
 						type="button"
@@ -1016,6 +1067,9 @@ export function BotCustomizer({
 							type="button"
 							aria-pressed={section === entry.id}
 							aria-controls={`${id}-panel`}
+							data-locked={
+								(isLookPart(entry.id) && locked.includes(entry.id)) || undefined
+							}
 							onClick={() => setSection(entry.id)}
 						>
 							<span className="fl-bot-studio-step" aria-hidden="true">
@@ -1047,16 +1101,30 @@ export function BotCustomizer({
 												: "Choose the skills your bot represents."}
 							</p>
 						</div>
-						{section === "outfit" && (
-							<button
-								type="button"
-								className="fl-bot-studio-text-button"
-								disabled={!Object.keys(appearance.equipment).length}
-								onClick={() => update({ equipment: {} })}
-							>
-								Reset outfit
-							</button>
-						)}
+						<div className="fl-bot-studio-panel-actions">
+							{section === "outfit" && (
+								<button
+									type="button"
+									className="fl-bot-studio-text-button"
+									disabled={!Object.keys(appearance.equipment).length}
+									onClick={() => update({ equipment: {} })}
+								>
+									Reset outfit
+								</button>
+							)}
+							{isLookPart(section) && (
+								<ShuffleButton
+									part={section}
+									locked={locked.includes(section)}
+									filtered={
+										section === "crew"
+											? !!query || series.kind !== "all"
+											: section === "outfit" && outfitCollection.kind !== "all"
+									}
+									onShuffle={() => shuffle(section)}
+								/>
+							)}
+						</div>
 					</header>
 					{section === "crew" && (
 						<>

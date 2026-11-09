@@ -381,6 +381,56 @@ export type BotTurnStatus =
 	| "failed"
 	| "cancelled";
 
+export type BotNoteState = "open" | "closed";
+
+export interface IBotNoteSensitivity {
+	classification?: string | null;
+	pii: boolean;
+}
+
+export interface IBotNoteVersion {
+	version: number;
+	title: string;
+	status?: string | null;
+	body: string;
+	state: BotNoteState;
+	updated_by: string;
+	updated_at: number;
+}
+
+/** A bot's working note in one conversation; only the bot's owner reads it. */
+export interface IBotNote {
+	key: string;
+	title: string;
+	status?: string | null;
+	body: string;
+	state: BotNoteState;
+	version: number;
+	sensitivity: IBotNoteSensitivity;
+	updated_by: string;
+	created_at: number;
+	updated_at: number;
+	/** Newest first; only on a single note read. */
+	history?: IBotNoteVersion[];
+}
+
+/** What a message shows of a note: everyone sees the title and status, never the body. */
+export interface IBotNoteRef {
+	key: string;
+	version: number;
+	title: string;
+	status?: string | null;
+	closed?: boolean;
+}
+
+export interface IBotNoteWrite {
+	title?: string;
+	status?: string;
+	body?: string;
+	state?: BotNoteState;
+	expected_version?: number;
+}
+
 /** A turn a bot works on without a chat window (`bot-host://turn`). */
 export interface IBotTurn {
 	/** Also the run id. */
@@ -393,6 +443,8 @@ export interface IBotTurn {
 	error_code?: string | null;
 	/** The approval card a `waiting` turn sleeps on. */
 	reply_message_id?: string | null;
+	/** What the bot says it is doing right now. */
+	status_text?: string | null;
 	updated_at?: string;
 }
 
@@ -861,6 +913,21 @@ export interface IBotState {
 	webhookUrl?(botId: string, webhook: IBotWebhook): Promise<string>;
 	/** Creates the workspace on first use; repeating it returns the same app. Refused for Flux for now. */
 	getWorkspace?(botId: string): Promise<IBotWorkspace>;
+	/** The bot's notes in one conversation, without history; owner only. */
+	listNotes?(botId: string, conversationId: string): Promise<IBotNote[]>;
+	/** With history. */
+	getNote?(
+		botId: string,
+		conversationId: string,
+		key: string,
+	): Promise<IBotNote>;
+	/** Rejects with a 409 error when `expected_version` is stale. */
+	updateNote?(
+		botId: string,
+		conversationId: string,
+		key: string,
+		write: IBotNoteWrite,
+	): Promise<IBotNote>;
 	/** The picture of an account bot's current look; absent where nothing pushes notifications. */
 	getAvatar?(botId: string): Promise<IBotAvatar>;
 	/** Uploads `image`, a data URL of `appearance`; refused when the bot looks different now. */

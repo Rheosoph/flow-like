@@ -256,6 +256,42 @@ test("configuration approval shows the complete prompt and model mapping without
 	expect(host.querySelector("#inline-tool-prompt-remember")).toBeNull();
 });
 
+test.each([
+	["Approve changes", true],
+	["Reject changes", false],
+] as const)(
+	"configuration action %s answers only this proposal",
+	async (label, approved) => {
+		const respond = vi.fn();
+		await show(
+			approval({
+				toolName: "bot_update_configuration",
+				title: "Approve bot_update_configuration",
+				description: "The bot wants to change its image_model.",
+				appId: undefined,
+				configurationChanges: { image_model: "profile:image-1" },
+				respond,
+			}),
+		);
+		expect(host.querySelector("header")?.textContent).toContain(
+			"Update bot settings",
+		);
+		expect(host.querySelector("header")?.textContent).not.toContain(
+			"bot_update_configuration",
+		);
+		expect(host.textContent).not.toContain(
+			"The bot wants to change its image_model.",
+		);
+		expect(host.querySelector("#inline-tool-prompt-remember")).toBeNull();
+		const action = Array.from(host.querySelectorAll("button")).find(
+			(button) => button.textContent === label,
+		);
+		expect(action).toBeDefined();
+		await act(async () => action?.click());
+		expect(respond).toHaveBeenCalledWith({ approved, remember: false });
+	},
+);
+
 describe("secret prompt", () => {
 	const secretPrompt = (
 		store: (value: string) => Promise<void>,

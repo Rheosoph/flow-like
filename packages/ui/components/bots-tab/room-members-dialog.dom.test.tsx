@@ -312,7 +312,7 @@ describe("bot setup before joining", () => {
 		const owner = window.document.querySelector(
 			'button[role="switch"][aria-label="Use 1:1 memory"]',
 		);
-		await act(async () => (owner as HTMLElement).click());
+		await act(async () => (owner as unknown as HTMLElement).click());
 		await act(async () => button("Add or invite 1").click());
 		await settle();
 		expect(invited).toEqual([
@@ -346,7 +346,7 @@ describe("bot setup before joining", () => {
 		const sharing = () =>
 			window.document.querySelector(
 				'button[role="switch"][aria-label="Contribute to shared memory"]',
-			) as HTMLElement;
+			) as unknown as HTMLElement;
 		await act(async () => sharing().click());
 		await act(async () => button("Back").click());
 		expect(created).toEqual([]);

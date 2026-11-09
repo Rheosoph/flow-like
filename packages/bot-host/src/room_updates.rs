@@ -357,15 +357,30 @@ mod tests {
         let trigger = message(1, "owner", "find a place");
         let mut tracker = tracker(&trigger);
         let entries = [
-            event(2, "bot", InboxEntryKind::Message, json!({
-                "text": "share your location", "user_context_request": {}
-            })),
-            event(3, "owner", InboxEntryKind::Message, json!({
-                "text": "temporary values", "user_context_response": {}
-            })),
-            event(4, "bot", InboxEntryKind::Message, json!({
-                "text": "derived location", "user_context_derived": true
-            })),
+            event(
+                2,
+                "bot",
+                InboxEntryKind::Message,
+                json!({
+                    "text": "share your location", "user_context_request": {}
+                }),
+            ),
+            event(
+                3,
+                "owner",
+                InboxEntryKind::Message,
+                json!({
+                    "text": "temporary values", "user_context_response": {}
+                }),
+            ),
+            event(
+                4,
+                "bot",
+                InboxEntryKind::Message,
+                json!({
+                    "text": "derived location", "user_context_derived": true
+                }),
+            ),
             message(5, "owner", "ordinary follow-up"),
         ];
         let updates = tracker.consume(&entries);

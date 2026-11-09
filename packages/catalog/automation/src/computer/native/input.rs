@@ -47,7 +47,11 @@ pub(crate) fn observed_cursor_position() -> Option<(i32, i32)> {
     if wayland() {
         return None;
     }
-    let worker = start().ok()?;
+    let worker = slot()
+        .lock()
+        .ok()?
+        .clone()
+        .filter(|w| w.alive.load(Ordering::Acquire))?;
     run_job(&worker, RELEASE_TIMEOUT, |input| input.location()).ok()
 }
 

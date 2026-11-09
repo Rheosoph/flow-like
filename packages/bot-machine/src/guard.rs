@@ -157,6 +157,20 @@ impl GuardedComputer {
         Ok(self.channel.takeover.take_note())
     }
 
+    async fn enter_fresh(&self) -> Result<Option<String>> {
+        self.channel.takeover.guard().map_err(failure)?;
+        self.channel
+            .takeover
+            .require_fresh(false)
+            .map_err(failure)?;
+        let note = self.enter().await?;
+        self.channel
+            .takeover
+            .require_fresh(false)
+            .map_err(failure)?;
+        Ok(note)
+    }
+
     fn shown(&self, mut screen: Screen, note: Option<String>) -> Screen {
         self.channel.publish(
             &screen.png,
@@ -180,16 +194,7 @@ impl ComputerBackend for GuardedComputer {
     }
 
     async fn act(&self, action: &ComputerAction) -> Result<String> {
-        self.channel.takeover.guard().map_err(failure)?;
-        self.channel
-            .takeover
-            .require_fresh(false)
-            .map_err(failure)?;
-        let note = self.enter().await?;
-        self.channel
-            .takeover
-            .require_fresh(false)
-            .map_err(failure)?;
+        let note = self.enter_fresh().await?;
         let done = self.inner.act(action).await?;
         Ok(match note {
             Some(note) => format!("{done}. {note}"),
@@ -211,7 +216,7 @@ impl ComputerBackend for GuardedComputer {
     }
 
     async fn window(&self, window: &str, op: WindowOp, bounds: WindowBounds) -> Result<String> {
-        let note = self.enter().await?;
+        let note = self.enter_fresh().await?;
         let done = self.inner.window(window, op, bounds).await?;
         Ok(match note {
             Some(note) => format!("{done}. {note}"),
@@ -220,7 +225,7 @@ impl ComputerBackend for GuardedComputer {
     }
 
     async fn launch(&self, program: &str, args: &[String]) -> Result<String> {
-        let note = self.enter().await?;
+        let note = self.enter_fresh().await?;
         let done = self.inner.launch(program, args).await?;
         Ok(match note {
             Some(note) => format!("{done}. {note}"),

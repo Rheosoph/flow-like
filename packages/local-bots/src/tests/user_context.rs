@@ -281,3 +281,29 @@ fn user_context_deleted_snapshot_does_not_leave_an_unmarked_answer() {
         .is_err()
     );
 }
+
+#[test]
+fn every_bot_message_of_a_context_turn_is_derived() {
+    let f = fixture();
+    let bot = enabled_bot(&f, "Guide");
+    let room = f.direct(&bot);
+    let request = make_request(&room, &bot, "ctx9");
+    f.send(&room.id, &bot.id, &request.id, "message", json!({REQUEST_FIELD:request}))
+        .unwrap();
+    f.send(&room.id, "local", &request.response_message_id(), "message", response_body(&request))
+        .unwrap();
+    let first = f
+        .send(&room.id, &bot.id, "plain1", "message", json!({"text":"One moment."}))
+        .unwrap();
+    let second = f
+        .send(&room.id, &bot.id, "plain2", "message", json!({"text":"Done."}))
+        .unwrap();
+    assert_eq!(first.envelope["body"][DERIVED_FIELD], request.id);
+    assert_eq!(second.envelope["body"][DERIVED_FIELD], request.id);
+    f.send(&room.id, "local", "human1", "message", json!({"text":"Thanks"}))
+        .unwrap();
+    let later = f
+        .send(&room.id, &bot.id, "plain3", "message", json!({"text":"Welcome."}))
+        .unwrap();
+    assert!(later.envelope["body"].get(DERIVED_FIELD).is_none());
+}

@@ -180,7 +180,7 @@ export const TableElement = withHOC(
 				)}
 				style={{ paddingLeft: marginLeft }}
 			>
-				<div className="group/table relative w-fit">
+				<div className="relative w-fit">
 					<div className="overflow-x-auto max-w-full">
 						<table
 							className={cn(
@@ -540,7 +540,7 @@ function RowDragHandle({ dragRef }: { dragRef: React.Ref<any> }) {
 			className={cn(
 				"absolute top-1/2 left-0 z-51 h-6 w-4 -translate-y-1/2 p-0 focus-visible:ring-0 focus-visible:ring-offset-0",
 				"cursor-grab active:cursor-grabbing",
-				'opacity-0 transition-opacity duration-100 group-hover/row:opacity-100 group-has-data-[resizing="true"]/row:opacity-0',
+				'opacity-0 transition-opacity duration-100 group-hover/row:opacity-100 [tr:has([data-resizing="true"])_&]:opacity-0',
 			)}
 			onClick={() => {
 				editor.tf.select(element);
@@ -676,7 +676,7 @@ export function TableCellElement({
 									className={cn(
 										"absolute top-0 z-30 h-full w-1 bg-ring",
 										"left-[-1.5px]",
-										'hidden animate-in fade-in group-has-[[data-resizer-left]:hover]/table:block group-has-[[data-resizer-left][data-resizing="true"]]/table:block',
+										'hidden animate-in fade-in [table:has([data-resizer-left]:hover)_&]:block [table:has([data-resizer-left][data-resizing="true"])_&]:block',
 									)}
 								/>
 							)}
@@ -701,17 +701,17 @@ export function TableCellHeaderElement(
 const columnResizeVariants = cva("hidden animate-in fade-in", {
 	variants: {
 		colIndex: {
-			0: 'group-has-[[data-col="0"]:hover]/table:block group-has-[[data-col="0"][data-resizing="true"]]/table:block',
-			1: 'group-has-[[data-col="1"]:hover]/table:block group-has-[[data-col="1"][data-resizing="true"]]/table:block',
-			2: 'group-has-[[data-col="2"]:hover]/table:block group-has-[[data-col="2"][data-resizing="true"]]/table:block',
-			3: 'group-has-[[data-col="3"]:hover]/table:block group-has-[[data-col="3"][data-resizing="true"]]/table:block',
-			4: 'group-has-[[data-col="4"]:hover]/table:block group-has-[[data-col="4"][data-resizing="true"]]/table:block',
-			5: 'group-has-[[data-col="5"]:hover]/table:block group-has-[[data-col="5"][data-resizing="true"]]/table:block',
-			6: 'group-has-[[data-col="6"]:hover]/table:block group-has-[[data-col="6"][data-resizing="true"]]/table:block',
-			7: 'group-has-[[data-col="7"]:hover]/table:block group-has-[[data-col="7"][data-resizing="true"]]/table:block',
-			8: 'group-has-[[data-col="8"]:hover]/table:block group-has-[[data-col="8"][data-resizing="true"]]/table:block',
-			9: 'group-has-[[data-col="9"]:hover]/table:block group-has-[[data-col="9"][data-resizing="true"]]/table:block',
-			10: 'group-has-[[data-col="10"]:hover]/table:block group-has-[[data-col="10"][data-resizing="true"]]/table:block',
+			0: '[table:has([data-col="0"]:hover)_&]:block [table:has([data-col="0"][data-resizing="true"])_&]:block',
+			1: '[table:has([data-col="1"]:hover)_&]:block [table:has([data-col="1"][data-resizing="true"])_&]:block',
+			2: '[table:has([data-col="2"]:hover)_&]:block [table:has([data-col="2"][data-resizing="true"])_&]:block',
+			3: '[table:has([data-col="3"]:hover)_&]:block [table:has([data-col="3"][data-resizing="true"])_&]:block',
+			4: '[table:has([data-col="4"]:hover)_&]:block [table:has([data-col="4"][data-resizing="true"])_&]:block',
+			5: '[table:has([data-col="5"]:hover)_&]:block [table:has([data-col="5"][data-resizing="true"])_&]:block',
+			6: '[table:has([data-col="6"]:hover)_&]:block [table:has([data-col="6"][data-resizing="true"])_&]:block',
+			7: '[table:has([data-col="7"]:hover)_&]:block [table:has([data-col="7"][data-resizing="true"])_&]:block',
+			8: '[table:has([data-col="8"]:hover)_&]:block [table:has([data-col="8"][data-resizing="true"])_&]:block',
+			9: '[table:has([data-col="9"]:hover)_&]:block [table:has([data-col="9"][data-resizing="true"])_&]:block',
+			10: '[table:has([data-col="10"]:hover)_&]:block [table:has([data-col="10"][data-resizing="true"])_&]:block',
 		},
 	},
 });

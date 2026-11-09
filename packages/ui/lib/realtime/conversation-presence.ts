@@ -9,6 +9,7 @@ export interface ConversationBotActivity {
 	botId: string;
 	status: ConversationTurnStatus;
 	since: number;
+	statusText?: string;
 }
 
 const STATUS_RANK: Record<ConversationTurnStatus, number> = {
@@ -21,6 +22,10 @@ const MAX_SUB_LENGTH = 128;
 
 function isActiveStatus(status: unknown): status is ConversationTurnStatus {
 	return typeof status === "string" && status in STATUS_RANK;
+}
+
+function statusTextOf(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function timeMs(value: string | null | undefined): number | undefined {
@@ -42,13 +47,14 @@ export function mergeBotActivity(
 ): ConversationBotActivity[] {
 	const byId = new Map<
 		string,
-		{ botId: string; status: unknown; since: number }
+		{ botId: string; status: unknown; since: number; statusText?: string }
 	>();
 	for (const turn of apiTurns) {
 		byId.set(turn.id, {
 			botId: turn.bot_id,
 			status: turn.status,
 			since: timeMs(turn.created_at) ?? now,
+			statusText: statusTextOf(turn.status_text),
 		});
 	}
 	for (const turn of liveTurns) {
@@ -57,6 +63,7 @@ export function mergeBotActivity(
 			botId: turn.bot_id,
 			status: turn.status,
 			since: timeMs(turn.started_at) ?? known?.since ?? now,
+			statusText: statusTextOf(turn.status_text) ?? known?.statusText,
 		});
 	}
 
@@ -69,6 +76,7 @@ export function mergeBotActivity(
 			botId: turn.botId,
 			status: turn.status,
 			since: turn.since,
+			...(turn.statusText ? { statusText: turn.statusText } : {}),
 		});
 	}
 	return [...perBot.values()].sort((a, b) => a.since - b.since);

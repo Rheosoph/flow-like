@@ -1,7 +1,14 @@
 "use client";
 
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
-import { BrainIcon, Loader2Icon, Trash2Icon } from "lucide-react";
+import {
+	BookmarkIcon,
+	BrainIcon,
+	CircleAlertIcon,
+	Clock3Icon,
+	Loader2Icon,
+	Trash2Icon,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
@@ -50,41 +57,54 @@ function MemoryRow({
 	const { t } = useTranslation("chat");
 	const forget = t("forgetThisMemory", "Forget this memory");
 	return (
-		<li className="group flex items-start gap-2 rounded-lg border border-border/50 bg-muted/30 p-2.5">
-			<div className="min-w-0 flex-1">
-				<p className="whitespace-pre-wrap wrap-break-word text-sm text-foreground">
-					{entry.content}
-				</p>
-				<div className="mt-1.5 flex items-center gap-1.5">
+		<li className="group rounded-2xl border border-border/65 bg-card p-4 shadow-xs transition-colors hover:border-emerald-500/30">
+			<div className="mb-3 flex items-center gap-2">
+				<span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">
+					<BookmarkIcon className="size-3.5" aria-hidden />
+				</span>
+				<div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
 					{entry.role && entry.role !== "observation" && (
 						<Badge
 							variant="secondary"
-							className="h-4 px-1.5 text-[10px] font-normal"
+							className="max-w-full rounded-md bg-muted/60 px-2 py-0.5 text-[11px] font-medium capitalize wrap-break-word whitespace-normal"
 						>
 							{entry.role}
 						</Badge>
 					)}
-					<span className="text-[11px] text-muted-foreground">
-						{formatMemoryAge(entry.timestamp)}
-					</span>
+					{Boolean(entry.timestamp) && (
+						<time
+							dateTime={new Date(entry.timestamp).toISOString()}
+							title={new Date(entry.timestamp).toLocaleString()}
+							className="inline-flex items-center gap-1 text-[11px] text-muted-foreground"
+						>
+							<Clock3Icon className="size-3" aria-hidden />
+							{formatMemoryAge(entry.timestamp)}
+						</time>
+					)}
 				</div>
+				<Button
+					type="button"
+					variant="ghost"
+					size="icon"
+					disabled={busy}
+					onClick={() => onDelete(entry.id)}
+					aria-label={forget}
+					title={forget}
+					className="-mr-1 size-8 shrink-0 rounded-lg text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive focus-visible:text-destructive"
+				>
+					{busy ? (
+						<Loader2Icon
+							className="size-3.5 motion-safe:animate-spin"
+							aria-hidden
+						/>
+					) : (
+						<Trash2Icon className="size-3.5" aria-hidden />
+					)}
+				</Button>
 			</div>
-			<Button
-				type="button"
-				variant="ghost"
-				size="icon"
-				disabled={busy}
-				onClick={() => onDelete(entry.id)}
-				aria-label={forget}
-				title={forget}
-				className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
-			>
-				{busy ? (
-					<Loader2Icon className="size-3.5 animate-spin" />
-				) : (
-					<Trash2Icon className="size-3.5" />
-				)}
-			</Button>
+			<p className="whitespace-pre-wrap wrap-break-word text-sm leading-6 text-foreground">
+				{entry.content}
+			</p>
 		</li>
 	);
 }
@@ -173,47 +193,93 @@ export function MemoryList({
 	const entries = state.status === "ready" ? state.entries : [];
 
 	return (
-		<div className={cn("flex min-h-0 flex-col gap-3", className)}>
+		<div className={cn("flex min-h-0 min-w-0 flex-col gap-4", className)}>
 			{!active && (
-				<p className="rounded-md border border-border/50 bg-muted/40 px-2.5 py-2 text-xs text-muted-foreground">
+				<p className="rounded-xl border border-border/60 bg-muted/30 px-3.5 py-3 text-xs leading-5 text-muted-foreground">
 					{t(
 						"bots:memory.off",
 						"Memory is off. Choose an embedding model in bot settings to recall and save memories. You can still review and delete saved memories here.",
 					)}
 				</p>
 			)}
+			{state.status === "ready" && entries.length > 0 && (
+				<div className="flex shrink-0 items-center gap-2.5 px-1">
+					<span className="flex size-8 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">
+						<BrainIcon className="size-4" aria-hidden />
+					</span>
+					<p className="text-sm font-medium tracking-tight">
+						{t("bots:memory.count", "{{count}} memories", {
+							count: entries.length,
+							defaultValue_one: "{{count}} memory",
+						})}
+					</p>
+				</div>
+			)}
 			<ScrollArea
-				className={cn("min-h-0 pr-3", listClassName)}
+				className={cn("min-h-0 min-w-0 pr-3", listClassName)}
 				viewportClassName="max-h-[inherit] [&>div]:block! [&>div]:w-full [&>div]:min-w-0"
 			>
 				{state.status === "loading" && (
-					<output className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-						<Loader2Icon className="size-4 animate-spin" aria-hidden />
-						{t("loading", "Loading…")}
-					</output>
+					<div className="space-y-3 py-1">
+						<output className="flex items-center justify-center gap-2 py-5 text-xs text-muted-foreground">
+							<Loader2Icon
+								className="size-4 motion-safe:animate-spin"
+								aria-hidden
+							/>
+							{t("loading", "Loading…")}
+						</output>
+						{[0, 1, 2].map((row) => (
+							<div
+								key={row}
+								aria-hidden
+								className="space-y-3 rounded-2xl border border-border/50 p-4 motion-safe:animate-pulse"
+							>
+								<div className="h-5 w-24 rounded-md bg-muted" />
+								<div className="h-3 w-full rounded bg-muted/70" />
+								<div className="h-3 w-2/3 rounded bg-muted/70" />
+							</div>
+						))}
+					</div>
 				)}
 				{state.status === "failed" && (
 					<div
 						role="alert"
-						className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground"
+						className="flex flex-col items-center gap-3 rounded-2xl border border-border/60 bg-muted/20 px-5 py-10 text-center text-sm text-muted-foreground"
 					>
-						<p>{t("bots:memory.loadFailed", "Couldn't load memories")}</p>
-						<p className="max-w-80 text-xs wrap-break-word">{state.message}</p>
+						<span className="flex size-11 items-center justify-center rounded-2xl bg-muted">
+							<CircleAlertIcon className="size-5" aria-hidden />
+						</span>
+						<p className="font-medium text-foreground">
+							{t("bots:memory.loadFailed", "Couldn't load memories")}
+						</p>
+						<p className="max-w-80 text-xs leading-5 wrap-break-word">
+							{state.message}
+						</p>
 						<Button
 							type="button"
 							variant="outline"
 							size="sm"
 							onClick={() => void load()}
+							className="mt-1 rounded-lg"
 						>
 							{t("bots:crew.retry", "Try again")}
 						</Button>
 					</div>
 				)}
 				{state.status === "ready" && entries.length === 0 && (
-					<div className="flex flex-col items-center gap-1 py-10 text-center text-sm text-muted-foreground">
-						<BrainIcon className="size-6 opacity-40" aria-hidden />
-						<p>{t("noMemoriesSavedYet", "No memories saved yet.")}</p>
-						<p className="text-xs">
+					<div className="flex flex-col items-center rounded-2xl border border-dashed border-border/80 bg-muted/15 px-6 py-12 text-center">
+						<div className="mb-5 rounded-full bg-emerald-500/5 p-3">
+							<span className="flex size-14 items-center justify-center rounded-2xl border border-emerald-500/15 bg-background shadow-xs">
+								<BrainIcon
+									className="size-6 text-emerald-700/80 dark:text-emerald-400/80"
+									aria-hidden
+								/>
+							</span>
+						</div>
+						<p className="text-sm font-medium tracking-tight">
+							{t("noMemoriesSavedYet", "No memories saved yet.")}
+						</p>
+						<p className="mt-2 max-w-64 text-xs leading-5 text-muted-foreground">
 							{emptyHint ??
 								t(
 									"theAssistantStoresSalientFactsAsYouChat",
@@ -223,7 +289,7 @@ export function MemoryList({
 					</div>
 				)}
 				{entries.length > 0 && (
-					<ul className="flex flex-col gap-2 py-1">
+					<ul className="flex flex-col gap-3 py-1">
 						{entries.map((entry) => (
 							<MemoryRow
 								key={entry.id}
@@ -236,20 +302,14 @@ export function MemoryList({
 				)}
 			</ScrollArea>
 			{entries.length > 0 && (
-				<div className="flex shrink-0 items-center justify-between gap-2">
-					<span className="text-xs text-muted-foreground">
-						{t("bots:memory.count", "{{count}} memories", {
-							count: entries.length,
-							defaultValue_one: "{{count}} memory",
-						})}
-					</span>
+				<div className="flex shrink-0 items-center justify-end border-t border-border/60 pt-3">
 					<Button
 						type="button"
-						variant="outline"
+						variant="ghost"
 						size="sm"
 						disabled={clearing}
 						onClick={clearAll}
-						className="gap-1.5 text-destructive hover:text-destructive"
+						className="gap-1.5 rounded-lg text-xs text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
 					>
 						{clearing ? (
 							<Loader2Icon className="size-3.5 animate-spin" aria-hidden />

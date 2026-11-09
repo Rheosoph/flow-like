@@ -131,7 +131,13 @@ impl BotComputer {
             Some(&before),
         );
         captured.stable = captured.validate(None, windows.as_deref()).is_ok();
-        let mut observation = self.describe(&frame, windows.as_deref(), pointer);
+        let captured_window = windows.as_deref().map(|all| {
+            all.iter()
+                .filter(|other| other.id == window.id)
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+        let mut observation = self.describe(&frame, captured_window.as_deref(), pointer);
         observation.captured_at_ms = at_ms;
         if !captured.stable {
             observation.focus = None;

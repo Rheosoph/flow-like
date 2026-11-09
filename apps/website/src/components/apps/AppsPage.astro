@@ -1,0 +1,211 @@
+---
+import "./apps-page.css";
+import {
+  LuCloud,
+  LuDatabase,
+  LuFolderOpen,
+  LuGlobe,
+  LuHistory,
+  LuLayoutDashboard,
+  LuMonitor,
+  LuMousePointerClick,
+  LuServer,
+  LuShieldCheck,
+  LuSmartphone,
+  LuWorkflow,
+  LuZap,
+} from "react-icons/lu";
+import PillarLayout from "../pillar/PillarLayout.astro";
+import AppsBuild from "./AppsBuild";
+import AppsInterfaces from "./AppsInterfaces";
+import { tApps } from "../../i18n/locales/pages/apps";
+import type { Lang } from "../../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = "en" } = Astro.props;
+const t = (key: string) => tApps(lang, key);
+
+const docs = "https://docs.flow-like.com/apps/overview/";
+const download = lang === "en" ? "/download" : `/${lang}/download`;
+const webApp = "https://app.flow-like.com";
+
+const layers = [
+  { key: "pages", icon: LuLayoutDashboard },
+  { key: "events", icon: LuZap },
+  { key: "flows", icon: LuWorkflow },
+  { key: "data", icon: LuDatabase },
+  { key: "access", icon: LuShieldCheck },
+] as const;
+
+const anatomy = [
+  { key: "flows", icon: LuWorkflow },
+  { key: "pages", icon: LuLayoutDashboard },
+  { key: "events", icon: LuZap },
+  { key: "data", icon: LuDatabase },
+  { key: "storage", icon: LuFolderOpen },
+  { key: "templates", icon: LuHistory },
+] as const;
+
+const ship = ["versions", "releases", "roles", "audit"];
+
+const hosts = [
+  { key: "desktop", icon: LuMonitor },
+  { key: "web", icon: LuGlobe },
+  { key: "mobile", icon: LuSmartphone },
+  { key: "devices", icon: LuServer },
+  { key: "cloud", icon: LuCloud },
+  { key: "local", icon: LuMousePointerClick },
+] as const;
+
+const languages = [
+  "Rust", "Python", "TypeScript", "Go", "C++", "C#", "Java", "Kotlin",
+  "Swift", "Zig", "Nim", "Lua", "MoonBit", "Grain", "AssemblyScript",
+];
+---
+
+<PillarLayout lang={lang} title={t("apps.meta.title")} description={t("apps.meta.description")} keywords={t("apps.meta.keywords")} path="/apps">
+  <section class="dark pl-hero" style="color-scheme:dark" data-dark-hero aria-labelledby="ap-hero-title">
+    <div class="pl-aura" aria-hidden="true"></div>
+    <div class="pl-hero-copy">
+      <span class="pl-eyebrow"><i></i>{t("apps.hero.eyebrow")}</span>
+      <h1 id="ap-hero-title">{t("apps.hero.title.l1")}<br /><em>{t("apps.hero.title.em")}</em></h1>
+      <p>{t("apps.hero.body")}</p>
+      <div class="pl-actions">
+        <a class="pl-btn pl-btn--primary" href={download}>{t("apps.hero.cta.primary")} <span aria-hidden="true">↗</span></a>
+        <a class="pl-btn" href={docs}>{t("apps.hero.cta.secondary")} <span aria-hidden="true">→</span></a>
+      </div>
+    </div>
+    <ol class="pl-hero-visual ap-stack" aria-label="The layers of an app">
+      {layers.map((layer, index) => {
+        const Icon = layer.icon;
+        return (
+          <li style={`--i:${index}`}>
+            <Icon aria-hidden="true" />
+            <span>{t(`apps.hero.layer.${layer.key}`)}</span>
+            <small>{t(`apps.hero.layer.${layer.key}.hint`)}</small>
+          </li>
+        );
+      })}
+    </ol>
+  </section>
+
+  <section class="pl-section" aria-labelledby="ap-anatomy-title">
+    <div class="pl-heading">
+      <div>
+        <span class="pl-eyebrow">01 / {t("apps.anatomy.eyebrow")}</span>
+        <h2 id="ap-anatomy-title">{t("apps.anatomy.title")}</h2>
+      </div>
+      <div class="pl-intro"><p>{t("apps.anatomy.body")}</p></div>
+    </div>
+    <ul class="pl-cards">
+      {anatomy.map((item) => {
+        const Icon = item.icon;
+        return (
+          <li class="pl-card">
+            <Icon aria-hidden="true" />
+            <h3>{t(`apps.anatomy.${item.key}.title`)}</h3>
+            <p>{t(`apps.anatomy.${item.key}.body`)}</p>
+          </li>
+        );
+      })}
+    </ul>
+  </section>
+
+  <section class="dark pl-section" style="color-scheme:dark" aria-labelledby="ap-interfaces-title">
+    <div class="pl-heading">
+      <div>
+        <span class="pl-eyebrow">02 / {t("apps.interfaces.eyebrow")}</span>
+        <h2 id="ap-interfaces-title">{t("apps.interfaces.title.l1")}<br /><em>{t("apps.interfaces.title.l2")}</em></h2>
+      </div>
+      <div class="pl-intro"><p>{t("apps.interfaces.body")}</p></div>
+    </div>
+    <AppsInterfaces client:visible />
+  </section>
+
+  <section class="pl-section" aria-labelledby="ap-build-title">
+    <div class="pl-heading">
+      <div>
+        <span class="pl-eyebrow">03 / {t("apps.build.eyebrow")}</span>
+        <h2 id="ap-build-title">{t("apps.build.title")}</h2>
+      </div>
+      <div class="pl-intro">
+        <p>{t("apps.build.body")}</p>
+        <a class="pl-link" href="https://docs.flow-like.com/studio/flowscript/">FlowScript <span aria-hidden="true">↗</span></a>
+      </div>
+    </div>
+    <AppsBuild client:visible />
+  </section>
+
+  <section class="dark pl-section ap-ship" style="color-scheme:dark" aria-labelledby="ap-ship-title">
+    <div class="pl-heading">
+      <div>
+        <span class="pl-eyebrow">04 / {t("apps.ship.eyebrow")}</span>
+        <h2 id="ap-ship-title">{t("apps.ship.title.l1")}<br /><em>{t("apps.ship.title.l2")}</em></h2>
+      </div>
+      <div class="pl-intro"><p>{t("apps.ship.body")}</p></div>
+    </div>
+    <ol class="pl-pillars">
+      {ship.map((key, index) => (
+        <li>
+          <span>0{index + 1}</span>
+          <h3>{t(`apps.ship.${key}.title`)}</h3>
+          <p>{t(`apps.ship.${key}.body`)}</p>
+        </li>
+      ))}
+    </ol>
+  </section>
+
+  <section class="pl-section" aria-labelledby="ap-anywhere-title">
+    <div class="pl-heading">
+      <div>
+        <span class="pl-eyebrow">05 / {t("apps.anywhere.eyebrow")}</span>
+        <h2 id="ap-anywhere-title">{t("apps.anywhere.title")}</h2>
+      </div>
+      <div class="pl-intro"><p>{t("apps.anywhere.body")}</p></div>
+    </div>
+    <ul class="pl-cards">
+      {hosts.map((host) => {
+        const Icon = host.icon;
+        return (
+          <li class="pl-card">
+            <Icon aria-hidden="true" />
+            <h3>{t(`apps.anywhere.${host.key}.title`)}</h3>
+            <p>{t(`apps.anywhere.${host.key}.body`)}</p>
+          </li>
+        );
+      })}
+    </ul>
+  </section>
+
+  <section class="pl-section pl-split ap-extend" aria-labelledby="ap-extend-title">
+    <div>
+      <span class="pl-eyebrow">06 / {t("apps.extend.eyebrow")}</span>
+      <h2 id="ap-extend-title">{t("apps.extend.title")}</h2>
+      <p class="pl-lead">{t("apps.extend.body")}</p>
+      <a class="pl-link" href="https://docs.flow-like.com/dev/wasm-nodes/overview/">{t("apps.extend.link")} <span aria-hidden="true">↗</span></a>
+    </div>
+    <div class="ap-extend-visual" aria-hidden="true">
+      <span class="ap-extend-count">2,000+</span>
+      <span class="ap-extend-label">built-in nodes</span>
+      <ul>
+        {languages.map((language) => <li>{language}</li>)}
+      </ul>
+      <span class="ap-extend-label">→ WebAssembly, sandboxed</span>
+    </div>
+  </section>
+
+  <section class="dark pl-cta" style="color-scheme:dark" aria-labelledby="ap-cta-title">
+    <div class="pl-aura" aria-hidden="true"></div>
+    <h2 id="ap-cta-title">{t("apps.cta.title")}</h2>
+    <p>{t("apps.cta.body")}</p>
+    <div class="pl-actions">
+      <a class="pl-btn pl-btn--primary" href={download}>{t("apps.cta.download")} <span aria-hidden="true">↗</span></a>
+      <a class="pl-btn" href={webApp}>{t("apps.cta.web")} <span aria-hidden="true">↗</span></a>
+      <a class="pl-btn" href={docs}>{t("apps.cta.docs")} <span aria-hidden="true">→</span></a>
+    </div>
+    <nav class="pl-related" aria-label="More of Flow-Like">
+      <a href="/data">Data</a>
+      <a href="/bots">Bots</a>
+    </nav>
+  </section>
+</PillarLayout>

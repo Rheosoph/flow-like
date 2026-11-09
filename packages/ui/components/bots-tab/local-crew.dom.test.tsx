@@ -190,6 +190,7 @@ const backend = {
 		getInfo: async () => {
 			throw new Error("Signed out");
 		},
+		getProfile: async () => null,
 		lookupUser,
 		lookupUsers,
 	},

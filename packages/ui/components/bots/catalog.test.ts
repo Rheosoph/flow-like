@@ -54,7 +54,7 @@ describe("bot catalog", () => {
 	});
 
 	it("ships twenty-three crew series, each equipment slot and seventeen skills", () => {
-		expect(Object.keys(defaultBotCatalog.shapes)).toHaveLength(129);
+		expect(Object.keys(defaultBotCatalog.shapes)).toHaveLength(131);
 		expect(Object.keys(defaultBotCatalog.series)).toHaveLength(23);
 		for (const [series, size] of Object.entries({
 			flow: 4,
@@ -64,13 +64,13 @@ describe("bot catalog", () => {
 			zoo: 5,
 			tech: 5,
 			snacks: 5,
-			cosmos: 5,
+			cosmos: 6,
 			pro: 5,
 			office: 7,
 			workshop: 6,
 			ocean: 6,
 			fantasy: 6,
-			garden: 6,
+			garden: 7,
 			music: 6,
 			adventure: 6,
 			arcade: 6,

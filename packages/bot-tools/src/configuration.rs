@@ -37,9 +37,26 @@ pub fn is_configuration_tool(name: &str) -> bool {
     )
 }
 
-/// Auto mode and standing tool grants never approve a settings change.
+/// Auto mode and standing tool grants never approve a settings change: one to this bot's own
+/// settings, a new bot, or another bot's settings.
 pub fn requires_approval(name: &str) -> bool {
-    name == BOT_UPDATE_CONFIGURATION
+    name == BOT_UPDATE_CONFIGURATION || crate::crew::requires_approval(name)
+}
+
+/// Tools bound to the owner's bots rather than to an app or the workspace: this bot's own
+/// settings, and Flux's management of the owner's other bots. They need a bot turn and take no
+/// app scope.
+pub fn is_settings_tool(name: &str) -> bool {
+    is_configuration_tool(name) || crate::crew::is_crew_tool(name)
+}
+
+/// The proposed settings an approval card shows for a settings change; `None` for every other
+/// tool.
+pub fn proposed_changes(name: &str, args: &Value) -> Option<Value> {
+    if name == BOT_UPDATE_CONFIGURATION {
+        return args.get("changes").cloned();
+    }
+    crate::crew::proposed_changes(name, args)
 }
 
 #[async_trait]
@@ -60,7 +77,8 @@ pub struct UpdateArgs {
     pub changes: Value,
 }
 
-fn changes_schema() -> Value {
+/// The JSON Schema properties of every settings field [`validate_changes`] accepts.
+pub(crate) fn settings_properties(capabilities: &[&str]) -> serde_json::Map<String, Value> {
     let mut properties = serde_json::Map::new();
     for (name, max) in TEXT_FIELDS {
         properties.insert(
@@ -70,8 +88,8 @@ fn changes_schema() -> Value {
     }
     properties.insert("capabilities".into(), json!({
         "type": "array", "uniqueItems": true,
-        "description": "The complete desired capability list. Read bot_configuration first and preserve capabilities the owner wants to keep. Host and built-in restrictions still apply.",
-        "items": {"type":"string", "enum": BotCapability::ALL.map(BotCapability::as_str)},
+        "description": "The complete desired capability list. Read the current settings first and preserve capabilities the owner wants to keep. Host and built-in restrictions still apply.",
+        "items": {"type":"string", "enum": capabilities},
     }));
     properties.insert("model".into(), json!({
         "type": "object", "additionalProperties": false, "minProperties": 1,
@@ -82,6 +100,11 @@ fn changes_schema() -> Value {
             "fallbacks": {"type": "array", "maxItems": 3, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256}}
         }
     }));
+    properties
+}
+
+fn changes_schema() -> Value {
+    let properties = settings_properties(&BotCapability::ALL.map(BotCapability::as_str));
     json!({"type": "object", "additionalProperties": false, "minProperties": 1, "properties": properties})
 }
 

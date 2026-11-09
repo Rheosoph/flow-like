@@ -170,7 +170,6 @@ export function Providers({
 								<TooltipProvider>
 									<ToastProvider />
 									<TauriProvider>
-										<DownloadNotificationProvider />
 										<OfflineWritesNotifier />
 										<RpaPermissionProvider />
 										<LocalSinkConsentProvider />
@@ -179,6 +178,7 @@ export function Providers({
 												<OAuthExecutionProvider>
 													<DesktopAuthProvider>
 														<Toaster />
+														<DownloadNotificationProvider />
 														<PendingInviteRedeemer />
 														<DeviceModelUnlockProvider />
 														<NotificationProvider />

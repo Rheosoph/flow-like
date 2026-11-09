@@ -17,9 +17,30 @@ export interface FrontendToolApprovalScope {
 	appId?: string;
 }
 
-/** Changes to a bot's own settings require a new user decision for every call. */
+const BOT_SETTINGS_TOOLS: ReadonlySet<string> = new Set([
+	"bot_update_configuration",
+	"create_bot",
+	"update_bot",
+]);
+
+/** A bot's settings change, its own or Flux creating or changing one, needs a new decision for every call. */
 export function requiresFreshToolApproval(toolName: string): boolean {
-	return toolName === "bot_update_configuration";
+	return BOT_SETTINGS_TOOLS.has(toolName);
+}
+
+/** The settings an approval shows: a new bot's whole request, or the changes to one. */
+export function proposedBotSettings(
+	toolName: string,
+	args: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+	if (!BOT_SETTINGS_TOOLS.has(toolName)) return undefined;
+	if (toolName === "create_bot") return args;
+	const changes = args.changes;
+	if (typeof changes !== "object" || changes === null || Array.isArray(changes))
+		return undefined;
+	return toolName === "update_bot" && typeof args.bot_id === "string"
+		? { bot_id: args.bot_id, ...changes }
+		: (changes as Record<string, unknown>);
 }
 
 function nonEmptyString(value: unknown): string | undefined {

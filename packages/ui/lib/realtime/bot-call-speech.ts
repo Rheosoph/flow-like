@@ -65,6 +65,42 @@ export function speechChunks(text: string, maximum?: number): string[] {
 	return chunks;
 }
 
+/** Start calls with a short phrase, then prepare speech in bounded chunks. */
+export function callSpeechChunks(text: string, maximum?: number): string[] {
+	const modelLimit = speechCharacterLimit(maximum);
+	const characters = Array.from(text.trim());
+	const chunks: string[] = [];
+	for (let from = 0; from < characters.length; ) {
+		const limit = Math.min(modelLimit, chunks.length === 0 ? 160 : 240);
+		let end = Math.min(from + limit, characters.length);
+		if (end < characters.length) {
+			let wordEnd = end;
+			let foundWord = false;
+			for (let at = end; at > from + Math.floor(limit / 2); at--) {
+				const previous = characters[at - 1];
+				const next = characters[at];
+				if (
+					/[。！？\n]/.test(previous) ||
+					(/[.!?;:,…]/.test(previous) && /\s/.test(next))
+				) {
+					end = at;
+					break;
+				}
+				if (!foundWord && /\s/.test(previous)) {
+					wordEnd = at;
+					foundWord = true;
+				}
+			}
+			if (end === from + limit) end = wordEnd;
+		}
+		const chunk = characters.slice(from, end).join("").trim();
+		if (chunk) chunks.push(chunk);
+		from = end;
+		while (from < characters.length && /\s/.test(characters[from])) from++;
+	}
+	return chunks;
+}
+
 function sameVoice(
 	a: BotSpeechVoice | null | undefined,
 	b: BotSpeechVoice,
@@ -153,14 +189,38 @@ export function createBotCallSpeech({
 							resolve();
 						};
 					});
-				for (const text of speechChunks(
+				if (!valid(reply)) continue;
+				const chunks = callSpeechChunks(
 					[...plainMarkdownLines(reply.text)].join("\n"),
 					reply.voice.maxInputCharacters,
-				)) {
+				);
+				const prepare = async (text: string) => {
+					try {
+						return {
+							ok: true as const,
+							blob: await synthesize(reply.voice, text),
+						};
+					} catch (error) {
+						// Prefetch may fail before playback finishes or after the call ends.
+						return { ok: false as const, error };
+					}
+				};
+				let pending = chunks.length ? prepare(chunks[0]) : undefined;
+				for (let index = 0; pending; index++) {
+					const result = await pending;
+					pending = undefined;
 					if (!valid(reply)) break;
-					const blob = await synthesize(reply.voice, text);
-					if (!valid(reply)) break;
-					await play(blob, reply.botId);
+					if (!result.ok) throw result.error;
+					const playback = play(result.blob, reply.botId);
+					if (index + 1 < chunks.length && valid(reply))
+						pending = prepare(chunks[index + 1]);
+					try {
+						await playback;
+					} catch (error) {
+						// Finish the in-flight synthesis before another reply uses the model.
+						await pending;
+						throw error;
+					}
 				}
 			} catch (error) {
 				if (valid(reply)) onError(error);

@@ -21,3 +21,14 @@ export function shouldPresentUserNotification(
 		)
 	);
 }
+
+export async function waitForAvailabilityToSettle(
+	isLoading: () => boolean,
+	timeoutMs = 5_000,
+	pollMs = 50,
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (isLoading() && Date.now() < deadline) {
+		await new Promise((resolve) => setTimeout(resolve, pollMs));
+	}
+}

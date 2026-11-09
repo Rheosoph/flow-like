@@ -16,6 +16,7 @@ import { ChatSurface } from "../interfaces/chat-default/chat-surface";
 import type { ISendMessageFunction } from "../interfaces/chat-default/chatbox";
 import { ChatFeedbackEnabledContext } from "../interfaces/chat-default/message";
 import { Button } from "../ui/button";
+import { BotNoteChip } from "./bot-note-chip";
 import { ConversationActivityLine } from "./conversation-activity-line";
 import {
 	HistoryState,
@@ -91,9 +92,10 @@ export function ConversationChat({
 		[blocks],
 	);
 	const attachments = useRoomAttachments(conversationId, allMessages);
+	const encrypted = thread.conversation.encryption === "e2e";
 	const chatConfig = useMemo(
-		() => ({ allow_file_upload: !readOnly }),
-		[readOnly],
+		() => ({ allow_file_upload: !readOnly && !encrypted }),
+		[readOnly, encrypted],
 	);
 	const mentionCandidates = useMemo(
 		() =>
@@ -145,6 +147,9 @@ export function ConversationChat({
 					reactorName: (id) => (directory(id).isMe ? you : directory(id).name),
 					replyTarget: message.replyTo ? known.get(message.replyTo) : undefined,
 					files: attachments.get(message.id),
+					storageBotId: directory(message.senderId).isBot
+						? message.senderId
+						: undefined,
 					notice: message.content.kind === "sealed" ? sealed : unsupported,
 					mentions: message.mentions.map((id) => ({
 						id,
@@ -245,8 +250,10 @@ export function ConversationChat({
 				const pinner = marks.pinnedBy.get(message.id);
 				const starred = marks.starred.has(message.id);
 				const marked = Boolean(pinner) || starred;
-				const mailedTo = byId.get(message.id)?.mailedTo;
-				if (!lead && !older && !marked && !mailedTo) return null;
+				const source = byId.get(message.id);
+				const mailedTo = source?.mailedTo;
+				const note = source?.note;
+				if (!lead && !older && !marked && !mailedTo && !note) return null;
 				return (
 					<div className="mb-1.5 flex flex-col gap-3">
 						{older}
@@ -259,6 +266,15 @@ export function ConversationChat({
 							/>
 						)}
 						{mailedTo && <MailSentLine to={mailedTo} />}
+						{note && source && (
+							<BotNoteChip
+								note={note}
+								botId={source.senderId}
+								conversationId={conversationId}
+								directory={directory}
+								me={thread.me}
+							/>
+						)}
 					</div>
 				);
 			},
@@ -302,6 +318,9 @@ export function ConversationChat({
 			actions,
 			marks,
 			thread.text,
+			thread.me,
+			directory,
+			conversationId,
 			mentionables,
 			placeholder,
 			disabledReason,

@@ -54,6 +54,8 @@ pub struct TurnJob {
     pub claim: Option<Arc<dyn Any + Send + Sync>>,
     /// Durable, scoped execution state for a host that supports restart recovery.
     pub recovery: Option<Arc<dyn flow_like::flow::copilot::run_recovery::BotRunRecovery>>,
+    /// The bot's notes in this conversation, when the host keeps them for it.
+    pub notes: Option<flow_like::flow::copilot::bot_notes::NotesHandle>,
 }
 
 impl TurnJob {
@@ -189,6 +191,8 @@ pub struct TurnInfo {
     pub finished_at: Option<String>,
     pub error_code: Option<String>,
     pub reply_message_id: Option<String>,
+    /// The line the running bot shows while it works, from its notes.
+    pub status_text: Option<String>,
 }
 
 pub fn now() -> String {

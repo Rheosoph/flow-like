@@ -13,7 +13,7 @@ use serde_json::json;
 
 use crate::env::ToolEnv;
 use crate::error::{ToolError, ToolResult, code};
-use crate::files::{guess_mime, handle_for};
+use crate::files::{guess_mime, handle_for, markdown_url};
 use crate::layout::IMAGES_DIR;
 use crate::outcome::{ToolImage, ToolOutput};
 use crate::spec::{Approval, ToolSpec, schema_of};
@@ -86,7 +86,7 @@ pub struct ImageGenerateArgs {
 pub fn specs() -> Vec<ToolSpec> {
     vec![ToolSpec {
         name: IMAGE_GENERATE,
-        description: "Generate up to 4 images from a text prompt with the bot's image model. The images are saved in the workspace under bot/images/, shown in the chat and returned as handles; you also see them. Generation takes a while and may cost money: at most 4 images per call, 8 per turn and 50 per day. The prompt is sent to the model's provider. Generated images are marked as AI-generated; say so when you share them.",
+        description: "Generate up to 4 images from a text prompt with the bot's image model. The images are saved in the workspace under bot/images/ and returned as handles; you also see them. Show each image in chat with ![description](markdown_url), using that image's returned markdown_url. Generation takes a while and may cost money: at most 4 images per call, 8 per turn and 50 per day. The prompt is sent to the model's provider. Generated images are marked as AI-generated; say so when you share them.",
         capability: Some("image_generation"),
         module: "image",
         approval: Approval::None,
@@ -303,7 +303,11 @@ pub async fn image_generate(env: &dyn ToolEnv, args: ImageGenerateArgs) -> ToolR
         } else {
             hidden += 1;
         }
-        files.push(json!({ "file": handle, "metadata": image.metadata }));
+        files.push(json!({
+            "file": handle,
+            "markdown_url": markdown_url(&handle),
+            "metadata": image.metadata,
+        }));
         saved.push(handle);
     }
     if hidden > 0 {

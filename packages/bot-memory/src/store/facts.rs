@@ -2,11 +2,11 @@
 //! the filters need (subject, kind, validity, supersession, evidence positions).
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use flow_like_storage::arrow_schema::{DataType, Field, Schema};
 use flow_like_storage::geometry::geometry_field;
 use flow_like_storage::lancedb::Connection;
@@ -51,6 +51,21 @@ const COLUMNS: [&str; 23] = [
     "content_hash",
     "embedding_model",
 ];
+
+/// Expiry markers older than this no longer guard against re-mined evidence.
+const MARKER_RETENTION_DAYS: i64 = 90;
+
+const METADATA_COLUMNS: [(&str, &str); 4] = [
+    ("geojson", "string"),
+    ("geometry", "geometry"),
+    ("time", "int64"),
+    ("expires_at", "int64"),
+];
+
+/// Most rows a location search without text examines, since each is parsed exactly.
+const MAX_LOCATION_SCAN: usize = 5_000;
+
+const MISSING_GEOMETRY: &str = "geometry IS NULL AND geojson IS NOT NULL";
 
 /// `end_at` of a fact that holds until further notice.
 const OPEN_END: i64 = i64::MAX;
@@ -250,6 +265,10 @@ impl FactRow {
     }
 }
 
+fn index_text(text: &str) -> Result<Value> {
+    crate::spatial::index_geometry(&serde_json::from_str(text)?)
+}
+
 fn to_facts(rows: Vec<FactRow>) -> Result<Vec<Fact>> {
     rows.into_iter().map(FactRow::into_fact).collect()
 }
@@ -360,13 +379,16 @@ impl FactQuery {
             || self.filter.time_range.is_some()
     }
 
-    fn sql(&self) -> Result<String> {
+    fn sql(&self, geometry_complete: bool) -> Result<String> {
         let mut filter = self.filter.sql(self.now);
         if let Some(area) = &self.area {
             let wkt = quote(&crate::spatial::area_wkt(area)?);
-            filter.push_str(&format!(
-                " AND ST_Intersects(geometry, ST_GeomFromText({wkt}))"
-            ));
+            let intersects = format!("ST_Intersects(geometry, ST_GeomFromText({wkt}))");
+            if geometry_complete {
+                filter.push_str(&format!(" AND {intersects}"));
+            } else {
+                filter.push_str(&format!(" AND ({intersects} OR ({MISSING_GEOMETRY}))"));
+            }
         } else if self.geojson.is_some() {
             filter.push_str(" AND geojson IS NOT NULL");
         }
@@ -375,24 +397,8 @@ impl FactQuery {
         Ok(filter)
     }
 
-    fn matches_location(&self, fact: &Fact) -> Result<bool> {
-        if self.geojson.is_none() && self.area.is_none() {
-            return Ok(true);
-        }
-        let Some(location) = &fact.geojson else {
-            return Ok(false);
-        };
-        if let (Some(point), Some(radius)) = (&self.geojson, self.radius_m)
-            && crate::spatial::distance_m(location, point)? > radius
-        {
-            return Ok(false);
-        }
-        if let Some(area) = &self.area
-            && !crate::spatial::intersects_area(location, area)?
-        {
-            return Ok(false);
-        }
-        Ok(true)
+    fn place(&self) -> Result<crate::spatial::Place> {
+        crate::spatial::Place::new(self.geojson.as_ref(), self.radius_m, self.area.as_ref())
     }
 
     /// Uses the same ordering when a host merges hits from several authorized conversations.
@@ -427,6 +433,8 @@ pub struct FactStore {
     table: Table,
     expiry: ExpiryStore,
     geometry_ready: AtomicBool,
+    prune_pending: AtomicBool,
+    migrates: bool,
     embedder: Arc<dyn Embedder>,
 }
 
@@ -457,19 +465,33 @@ impl FactStore {
             table: Table::open(connection, name, Some("text"), write_options).await,
             expiry,
             geometry_ready: AtomicBool::new(false),
+            prune_pending: AtomicBool::new(true),
+            migrates: true,
             embedder,
         }
     }
 
+    /// Marks a handle on another room's table: it never alters that table's schema.
+    pub(crate) fn read_only(mut self) -> Self {
+        self.migrates = false;
+        self
+    }
+
     async fn ensure_metadata(&self) -> Result<()> {
-        self.table
-            .ensure_nullable_columns(&[
-                ("geojson", "string"),
-                ("geometry", "geometry"),
-                ("time", "int64"),
-                ("expires_at", "int64"),
-            ])
-            .await
+        if !self.migrates {
+            return Ok(());
+        }
+        self.table.ensure_nullable_columns(&METADATA_COLUMNS).await
+    }
+
+    /// A table the owning room has not migrated yet holds no recallable facts for others.
+    async fn readable(&self) -> Result<bool> {
+        self.ensure_metadata().await?;
+        if self.migrates {
+            return Ok(true);
+        }
+        let names: Vec<&str> = METADATA_COLUMNS.iter().map(|(name, _)| *name).collect();
+        self.table.has_columns(&names).await
     }
 
     pub fn embedder(&self) -> &Arc<dyn Embedder> {
@@ -530,7 +552,9 @@ impl FactStore {
     }
 
     async fn read(&self, filter: &str) -> Result<Vec<Fact>> {
-        self.ensure_metadata().await?;
+        if !self.readable().await? {
+            return Ok(Vec::new());
+        }
         to_facts(self.table.all_rows(filter, columns()).await?)
     }
 
@@ -564,7 +588,9 @@ impl FactStore {
     }
 
     pub async fn count(&self, filter: &FactFilter) -> Result<usize> {
-        self.ensure_metadata().await?;
+        if !self.readable().await? {
+            return Ok(0);
+        }
         self.table.count(Some(filter.sql(Utc::now()))).await
     }
 
@@ -633,10 +659,19 @@ impl FactStore {
                 .delete(&in_list("id", chunk.iter().map(|fact| fact.id.as_str())))
                 .await?;
         }
-        // Retry pruning even if a previous run deleted the rows and then failed to prune.
-        if !expired.is_empty() || self.expiry.has_markers().await? {
+        let stale = self
+            .expiry
+            .drop_older_than(now - Duration::days(MARKER_RETENTION_DAYS))
+            .await?;
+        if !expired.is_empty() || stale > 0 {
+            self.prune_pending.store(true, AtomicOrdering::Release);
+        }
+        if self.prune_pending.load(AtomicOrdering::Acquire) {
             self.table.prune().await?;
             self.expiry.prune().await?;
+            self.prune_pending.store(false, AtomicOrdering::Release);
+        } else {
+            self.table.optimize().await?;
         }
         Ok(expired.len())
     }
@@ -660,10 +695,9 @@ impl FactStore {
         vector: Option<&[f32]>,
         limit: usize,
     ) -> Result<Vec<Neighbour>> {
-        if !self.table.exists().await? {
+        if !self.table.exists().await? || !self.readable().await? {
             return Ok(Vec::new());
         }
-        self.ensure_metadata().await?;
         let scope = FactFilter {
             subject: Some(candidate.subject.clone()),
             ..FactFilter::default()
@@ -721,20 +755,32 @@ impl FactStore {
     /// lasting facts stay eligible. An empty query lists the newest facts.
     pub async fn search(&self, query: &FactQuery) -> Result<Vec<ScoredFact>> {
         query.validate()?;
-        if !self.table.exists().await? {
+        if !self.table.exists().await? || !self.readable().await? {
             return Ok(Vec::new());
         }
-        self.ensure_metadata().await?;
-        if query.area.is_some() {
-            // Complete the derived-column migration before filtering. A fallback OR prevents
-            // Lance from using the RTree; new writes always populate this column directly.
-            self.backfill_geometry().await?;
-        }
-        let filter = query.sql()?;
+        let geometry_complete = query.area.is_none() || self.geometry_complete().await?;
+        let filter = query.sql(geometry_complete)?;
+        let place = query.place()?;
         if query.text.trim().is_empty() {
+            let rows = if place.is_empty() {
+                self.table.all_rows(&filter, columns()).await?
+            } else {
+                let rows = self
+                    .table
+                    .rows(&filter, columns(), MAX_LOCATION_SCAN + 1, 0)
+                    .await?;
+                if rows.len() > MAX_LOCATION_SCAN {
+                    bail!(
+                        "The location search matches more than {MAX_LOCATION_SCAN} memories; narrow it with a subject, kind, timeframe or smaller area, or add search text"
+                    );
+                }
+                rows
+            };
             let mut scored = Vec::new();
-            for fact in self.read(&filter).await? {
-                if query.matches_location(&fact)? {
+            for fact in to_facts(rows)? {
+                if fact.geojson.as_ref().map_or(place.is_empty(), |location| {
+                    place.matches(location).unwrap_or(false)
+                }) {
                     scored.push(ScoredFact { fact, score: 0.0 });
                 }
             }
@@ -775,7 +821,12 @@ impl FactStore {
                 continue;
             };
             let fact = serde_json::from_value::<FactRow>(row)?.into_fact()?;
-            if !query.matches_location(&fact)? {
+            if !place.is_empty()
+                && !fact
+                    .geojson
+                    .as_ref()
+                    .is_some_and(|location| place.matches(location).unwrap_or(false))
+            {
                 continue;
             }
             let weight = if fact.kind.decays() {
@@ -843,7 +894,18 @@ impl FactStore {
         self.table.optimize().await
     }
 
-    async fn backfill_geometry(&self) -> Result<()> {
+    async fn geometry_complete(&self) -> Result<bool> {
+        if self.geometry_ready.load(AtomicOrdering::Acquire) {
+            return Ok(true);
+        }
+        let complete = self.table.count(Some(MISSING_GEOMETRY.to_string())).await? == 0;
+        if complete {
+            self.geometry_ready.store(true, AtomicOrdering::Release);
+        }
+        Ok(complete)
+    }
+
+    pub(crate) async fn backfill_geometry(&self) -> Result<()> {
         if self.geometry_ready.load(AtomicOrdering::Acquire) {
             return Ok(());
         }
@@ -853,26 +915,25 @@ impl FactStore {
         }
         let rows: Vec<Value> = self
             .table
-            .all_rows(
-                "geometry IS NULL AND geojson IS NOT NULL",
-                &["id", "geojson"],
-            )
+            .all_rows(MISSING_GEOMETRY, &["id", "geojson"])
             .await?;
-        for row in rows {
-            let Some(text) = row["geojson"].as_str() else {
-                continue;
+        let mut by_text = BTreeMap::<String, usize>::new();
+        for row in &rows {
+            if let Some(text) = row["geojson"].as_str() {
+                *by_text.entry(text.to_string()).or_default() += 1;
+            }
+        }
+        for text in by_text.into_keys() {
+            let geometry = match index_text(&text) {
+                Ok(geometry) => geometry,
+                Err(error) => {
+                    tracing::warn!("Skipping a memory with unindexable geojson: {error:#}");
+                    continue;
+                }
             };
-            let Some(id) = row["id"].as_str() else {
-                continue;
-            };
-            let geometry = crate::spatial::index_geometry(&serde_json::from_str(text)?)?;
             self.table
                 .update(
-                    &format!(
-                        "id = {} AND geometry IS NULL AND geojson = {}",
-                        quote(id),
-                        quote(text)
-                    ),
+                    &format!("geometry IS NULL AND geojson = {}", quote(&text)),
                     HashMap::from([("geometry".to_string(), geometry)]),
                 )
                 .await?;

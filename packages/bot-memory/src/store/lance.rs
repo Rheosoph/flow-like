@@ -194,6 +194,16 @@ impl Table {
         Ok(())
     }
 
+    /// Whether the table has every named column; a missing table counts as complete.
+    pub(crate) async fn has_columns(&self, names: &[&str]) -> Result<bool> {
+        if !self.exists().await? {
+            return Ok(true);
+        }
+        let store = self.store.read().await;
+        let schema = store.schema().await?;
+        Ok(names.iter().all(|name| schema.field_with_name(name).is_ok()))
+    }
+
     /// Creates the table with its first rows in one commit; another creator winning is fine.
     pub(crate) async fn create_with(&self, rows: RecordBatch) -> Result<()> {
         if self.exists().await? {

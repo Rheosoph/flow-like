@@ -2,6 +2,9 @@
 
 use copilot_sdk::{AttachmentType, UserMessageAttachment};
 use flow_like::copilot::ChatImage;
+use flow_like_types::images::{
+    PORTABLE_INLINE_IMAGE_BYTES, PORTABLE_INLINE_IMAGES_BYTES, fit_image_within,
+};
 use std::path::PathBuf;
 
 fn copilot_attachment_extension(media_type: &str) -> &'static str {
@@ -119,70 +122,121 @@ fn local_asset_path(url: &str) -> Option<PathBuf> {
 /// Maximum size of a single fetched attachment; larger ones are skipped to bound memory use.
 const MAX_ATTACHMENT_BYTES: u64 = 512 * 1024 * 1024;
 
-/// Resolve chat attachment URLs (local tmp files via the asset protocol, or presigned tmp uploads)
-/// into base64 `ChatImage`s for the model — mirrors the simple chat's attachment handling, keeping
-/// large blobs out of the frontend store and IPC payloads.
+/// Resolve chat attachment URLs into the images the model receives. A presigned http(s) upload
+/// stays a link: the model's media handling hands it to a provider that fetches links and inlines
+/// it, fitted to the provider's limits, for any other. A local file (asset protocol) is inlined
+/// here, fitted into its share of [`PORTABLE_INLINE_IMAGES_BYTES`] so a call through the API's
+/// model proxy stays within its request limit.
 pub(super) async fn resolve_attachment_images(urls: &[String]) -> Vec<ChatImage> {
-    use flow_like_types::base64::{Engine as _, engine::general_purpose::STANDARD};
-
+    let local = urls
+        .iter()
+        .filter(|url| local_asset_path(url).is_some())
+        .count();
+    let share = inline_share(local);
     let mut images = Vec::with_capacity(urls.len());
     for url in urls {
-        let bytes = if let Some(path) = local_asset_path(url) {
+        let media_type = attachment_media_type(url);
+        if let Some(path) = local_asset_path(url) {
             match tokio::fs::read(&path).await {
-                Ok(bytes) => Some(bytes),
+                Ok(bytes) => images.extend(inline_image(bytes, media_type, share).await),
                 Err(error) => {
                     eprintln!("[global_chat] failed to read local attachment: {error}");
-                    None
                 }
             }
         } else if url.starts_with("http://") || url.starts_with("https://") {
-            match flow_like_types::reqwest::get(url).await {
-                Ok(response) => {
-                    // Reject oversized attachments by Content-Length before buffering the body into
-                    // memory (a malicious URL could otherwise OOM the process).
-                    if response
-                        .content_length()
-                        .is_some_and(|len| len > MAX_ATTACHMENT_BYTES)
-                    {
-                        eprintln!("[global_chat] attachment exceeds size limit, skipped");
-                        None
-                    } else {
-                        match response.bytes().await {
-                            Ok(bytes) if bytes.len() as u64 <= MAX_ATTACHMENT_BYTES => {
-                                Some(bytes.to_vec())
-                            }
-                            Ok(_) => {
-                                eprintln!("[global_chat] attachment exceeds size limit, skipped");
-                                None
-                            }
-                            Err(error) => {
-                                eprintln!(
-                                    "[global_chat] failed to read attachment: {}",
-                                    error.without_url()
-                                );
-                                None
-                            }
-                        }
-                    }
-                }
-                Err(error) => {
-                    eprintln!(
-                        "[global_chat] failed to fetch attachment: {}",
-                        error.without_url()
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        if let Some(bytes) = bytes {
-            images.push(ChatImage {
-                data: STANDARD.encode(&bytes),
-                media_type: attachment_media_type(url),
-            });
+            images.push(ChatImage::link(url.clone(), media_type));
         }
     }
     images
+}
+
+/// The images with every link downloaded and inlined, for agents that read image files rather
+/// than links (Codex, Claude Code, GitHub Copilot).
+pub(super) async fn inline_image_links(images: Option<Vec<ChatImage>>) -> Option<Vec<ChatImage>> {
+    let images = images?;
+    let links = images.iter().filter(|image| image.url.is_some()).count();
+    if links == 0 {
+        return Some(images);
+    }
+    let share = inline_share(links);
+    let mut inlined = Vec::with_capacity(images.len());
+    for image in images {
+        let Some(url) = image.url.as_deref() else {
+            inlined.push(image);
+            continue;
+        };
+        if let Some(bytes) = download_attachment(url).await {
+            inlined.extend(inline_image(bytes, image.media_type, share).await);
+        }
+    }
+    (!inlined.is_empty()).then_some(inlined)
+}
+
+/// The bytes each of `count` images inlined together may take.
+fn inline_share(count: usize) -> usize {
+    PORTABLE_INLINE_IMAGE_BYTES.min(PORTABLE_INLINE_IMAGES_BYTES / count.max(1))
+}
+
+/// The image inlined as base64, fitted into `max_bytes`; `None` when it fits at no size.
+async fn inline_image(bytes: Vec<u8>, media_type: String, max_bytes: usize) -> Option<ChatImage> {
+    use flow_like_types::base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    let fitted = tokio::task::spawn_blocking(move || {
+        let fitted = fit_image_within(&bytes, max_bytes);
+        (bytes, fitted)
+    })
+    .await;
+    match fitted {
+        Ok((_, Ok(Some(fitted)))) => Some(ChatImage::inline(
+            STANDARD.encode(&fitted.bytes),
+            fitted.media_type.to_owned(),
+        )),
+        Ok((bytes, Ok(None))) => Some(ChatImage::inline(STANDARD.encode(&bytes), media_type)),
+        Ok((_, Err(error))) => {
+            eprintln!(
+                "[global_chat] attachment image skipped, it does not fit {max_bytes} bytes: {error}"
+            );
+            None
+        }
+        Err(error) => {
+            eprintln!("[global_chat] attachment image skipped, fitting it failed: {error}");
+            None
+        }
+    }
+}
+
+async fn download_attachment(url: &str) -> Option<Vec<u8>> {
+    let response = match flow_like_types::reqwest::get(url).await {
+        Ok(response) => response,
+        Err(error) => {
+            eprintln!(
+                "[global_chat] failed to fetch attachment: {}",
+                error.without_url()
+            );
+            return None;
+        }
+    };
+    // Reject oversized attachments by Content-Length before buffering the body into memory (a
+    // malicious URL could otherwise OOM the process).
+    if response
+        .content_length()
+        .is_some_and(|len| len > MAX_ATTACHMENT_BYTES)
+    {
+        eprintln!("[global_chat] attachment exceeds size limit, skipped");
+        return None;
+    }
+    match response.bytes().await {
+        Ok(bytes) if bytes.len() as u64 <= MAX_ATTACHMENT_BYTES => Some(bytes.to_vec()),
+        Ok(_) => {
+            eprintln!("[global_chat] attachment exceeds size limit, skipped");
+            None
+        }
+        Err(error) => {
+            eprintln!(
+                "[global_chat] failed to read attachment: {}",
+                error.without_url()
+            );
+            None
+        }
+    }
 }

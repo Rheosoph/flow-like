@@ -20,6 +20,7 @@ export const EMOTION_THROTTLE_MS = 300;
 export const EXPRESSION_HOLD_MS = 900;
 export const SENT_REACTION_MS = 2_000;
 const SEND_HANDOFF_MS = 600;
+const CUE_CACHE_SIZE = 8;
 
 export class BotExpressionController {
 	private owner = {};
@@ -34,6 +35,7 @@ export class BotExpressionController {
 	private holdTimer?: ReturnType<typeof setTimeout>;
 	private settleTimer?: ReturnType<typeof setTimeout>;
 	private draftContext: EmotionInput["messages"] = [];
+	private cues = new Map<string, BotExpression | undefined>();
 	private clearedDraft?: { text: string; expression: BotExpression };
 	private disposed = false;
 	private unsubscribe: () => void;
@@ -122,10 +124,10 @@ export class BotExpressionController {
 			this.client.cancel(this.owner);
 			this.active = undefined;
 		}
-		const explicit = explicitDraftCue(bounded.draft);
+		const explicit = this.explicitCue(bounded.draft);
 		if (explicit) {
 			if (
-				explicit !== explicitDraftCue(prior.draft) ||
+				explicit !== this.explicitCue(prior.draft) ||
 				this.state.status !== "ready"
 			) {
 				clearTimeout(this.holdTimer);
@@ -135,7 +137,7 @@ export class BotExpressionController {
 			}
 		} else if (this.state.status !== "ready")
 			this.setExpression(draftCue(bounded.draft));
-		else if (explicitDraftCue(prior.draft)) this.setExpression("neutral");
+		else if (this.explicitCue(prior.draft)) this.setExpression("neutral");
 		this.scheduleInference();
 	}
 
@@ -166,11 +168,21 @@ export class BotExpressionController {
 			);
 	}
 
+	/** One keystroke checks the same few drafts up to six times; a pass costs ~0.5 ms on a full draft. */
+	private explicitCue(draft: string) {
+		if (this.cues.has(draft)) return this.cues.get(draft);
+		const cue = explicitDraftCue(draft);
+		if (this.cues.size >= CUE_CACHE_SIZE)
+			this.cues.delete(this.cues.keys().next().value as string);
+		this.cues.set(draft, cue);
+		return cue;
+	}
+
 	private canApply(input: EmotionInput) {
 		// Keep a result while more words are appended, but never apply a replaced draft.
 		return (
 			this.input.draft.startsWith(input.draft) &&
-			explicitDraftCue(input.draft) === explicitDraftCue(this.input.draft) &&
+			this.explicitCue(input.draft) === this.explicitCue(this.input.draft) &&
 			JSON.stringify(this.input.messages) === JSON.stringify(input.messages)
 		);
 	}

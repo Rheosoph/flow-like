@@ -72,6 +72,11 @@ pub fn truncate_to_tokens(text: &str, max_tokens: u32) -> String {
     cut
 }
 
+/// Replaces angle brackets so recalled text cannot open or close a prompt tag.
+pub fn escape_angles(text: &str) -> String {
+    text.replace('<', "‹").replace('>', "›")
+}
+
 /// Whitespace, line breaks included, collapsed to single spaces.
 pub fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")

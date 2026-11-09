@@ -1,32 +1,25 @@
 //! Image attachments the browser sends as links (`GlobalChatRequest::attachment_urls`).
 //!
 //! The browser uploads each file to `/tmp` and sends the signed download link, so the expected
-//! link is the caller's own upload on the platform's object store. That store may sit on the API's
-//! internal network, so those links are fetched as they are. Any other link must be public HTTPS
-//! and is fetched under the server egress guard. Every fetch is bounded in time and size, a failed
-//! one is skipped, and links are never logged: a signed link is a credential.
+//! link is the caller's own upload on the platform's object store. Any other link must be public
+//! HTTPS. A link that passes reaches the model as a link: the model's media handling hands it to
+//! a provider that fetches links, signed again for minutes when it points into the platform's
+//! storage, and inlines it, fitted to the provider's limits, for any other provider. Links are
+//! never logged: a signed link is a credential.
 
-use std::time::Duration;
-
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use flow_like::copilot::ChatImage;
 use flow_like::flow_like_model_provider::egress::ProviderEgress;
-use flow_like_types::reqwest::{Client, Url};
-use futures::future::join_all;
+use flow_like_types::reqwest::Url;
 
 use crate::{
     credentials::storage_path_segment,
-    media_links::{Route, StorageScope, fetch, route},
+    media_links::{StorageScope, route},
     state::AppState,
 };
 
 const MAX_ATTACHMENT_URLS: usize = 8;
-/// Above what vision models accept; bounds what one link can make the server hold.
-const MAX_ATTACHMENT_BYTES: usize = 20 * 1024 * 1024;
-/// Per link, from connecting to the last body byte.
-const ATTACHMENT_FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Fetches the attachment links into base64 images for the model, in request order.
+/// The attachment links the model may receive, in request order.
 pub(super) async fn resolve_attachment_images(
     state: &AppState,
     sub: &str,
@@ -37,11 +30,11 @@ pub(super) async fn resolve_attachment_images(
         return Vec::new();
     }
     let own = own_uploads(state, sub).await;
-    fetch_images(own.as_ref(), urls).await
+    checked_links(own.as_ref(), urls)
 }
 
 /// The http(s) links among the first [`MAX_ATTACHMENT_URLS`] entries, with their position. Other
-/// schemes (`data:`, `blob:`) never reach the network.
+/// schemes (`data:`, `blob:`) never reach the model.
 fn http_urls(urls: &[String]) -> Vec<(usize, Url)> {
     urls.iter()
         .take(MAX_ATTACHMENT_URLS)
@@ -62,7 +55,7 @@ fn upload_prefix(sub: &str) -> String {
 }
 
 /// Where `/tmp` points the caller's download links, signed the way `routes::tmp` signs an
-/// upload. `None` when the store cannot sign; then only public HTTPS links are fetched.
+/// upload. `None` when the store cannot sign; then only public HTTPS links pass.
 async fn own_uploads(state: &AppState, sub: &str) -> Option<StorageScope> {
     let probed = async {
         let store = state.master_credentials().await?.to_store(false).await?;
@@ -73,77 +66,38 @@ async fn own_uploads(state: &AppState, sub: &str) -> Option<StorageScope> {
         Ok(Some(own)) => Some(own),
         Ok(None) => {
             tracing::warn!(
-                "[global_chat] signed upload links do not end in the object key; only public HTTPS attachments are fetched"
+                "[global_chat] signed upload links do not end in the object key; only public HTTPS attachments pass"
             );
             None
         }
         Err(error) => {
             tracing::warn!(
                 %error,
-                "[global_chat] could not sign an upload probe; only public HTTPS attachments are fetched"
+                "[global_chat] could not sign an upload probe; only public HTTPS attachments pass"
             );
             None
         }
     }
 }
 
-fn build_client(route: Route) -> Option<Client> {
-    route
-        .client()
-        .map_err(|error| {
-            tracing::warn!(%error, "[global_chat] could not build the attachment HTTP client");
+/// The caller's own uploads and public HTTPS links, as images the model receives by link.
+fn checked_links(own: Option<&StorageScope>, urls: Vec<(usize, Url)>) -> Vec<ChatImage> {
+    urls.into_iter()
+        .filter_map(|(index, url)| match route(&url, own, ProviderEgress::Public) {
+            Ok(_) => Some(ChatImage::link(
+                url.to_string(),
+                attachment_media_type(&url).to_owned(),
+            )),
+            Err(_) => {
+                tracing::warn!(
+                    index,
+                    host = url.host_str().unwrap_or_default(),
+                    "[global_chat] attachment link is neither the caller's upload nor public HTTPS, skipped"
+                );
+                None
+            }
         })
-        .ok()
-}
-
-async fn fetch_images(own: Option<&StorageScope>, urls: Vec<(usize, Url)>) -> Vec<ChatImage> {
-    let routed: Vec<(usize, Route, Url)> = urls
-        .into_iter()
-        .filter_map(
-            |(index, url)| match route(&url, own, ProviderEgress::Public) {
-                Ok(route) => Some((index, route, url)),
-                Err(_) => {
-                    tracing::warn!(
-                        index,
-                        host = url.host_str().unwrap_or_default(),
-                        "[global_chat] attachment link is neither the caller's upload nor public HTTPS, skipped"
-                    );
-                    None
-                }
-            },
-        )
-        .collect();
-    let client_for = |wanted: Route| {
-        routed
-            .iter()
-            .any(|(_, route, _)| *route == wanted)
-            .then(|| build_client(wanted))
-            .flatten()
-    };
-    let own_client = client_for(Route::OwnStorage);
-    let public_client = client_for(Route::Guarded(ProviderEgress::Public));
-    let fetches = routed.into_iter().filter_map(|(index, route, url)| {
-        let client = match route {
-            Route::OwnStorage => own_client.as_ref(),
-            Route::Guarded(_) => public_client.as_ref(),
-        }?;
-        Some(fetch_image(client, index, url))
-    });
-    join_all(fetches).await.into_iter().flatten().collect()
-}
-
-async fn fetch_image(client: &Client, index: usize, url: Url) -> Option<ChatImage> {
-    let media_type = attachment_media_type(&url).to_owned();
-    match fetch(client, url, MAX_ATTACHMENT_BYTES, ATTACHMENT_FETCH_TIMEOUT).await {
-        Ok(bytes) => Some(ChatImage {
-            data: STANDARD.encode(bytes),
-            media_type,
-        }),
-        Err(error) => {
-            tracing::warn!(index, %error, "[global_chat] attachment skipped");
-            None
-        }
-    }
+        .collect()
 }
 
 /// The image type the link's file extension names, PNG for any other.
@@ -163,9 +117,9 @@ fn attachment_media_type(url: &Url) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media_links::tests::{ok, s3_store, serve};
+    use crate::media_links::tests::s3_store;
     use flow_like_storage::Path;
-    use std::sync::atomic::Ordering;
+    use std::time::Duration;
 
     fn url(raw: &str) -> Url {
         Url::parse(raw).unwrap()
@@ -226,29 +180,36 @@ mod tests {
     }
 
     #[flow_like_types::tokio::test]
-    async fn only_own_uploads_reach_an_internal_store() {
-        let (store, served) = serve(ok("JPEG")).await;
+    async fn only_own_uploads_and_public_links_reach_the_model() {
+        let store = "127.0.0.1:9000";
         let own = StorageScope::signed_by(&s3_store(&format!("http://{store}")), "tmp/user/me/")
             .await
             .unwrap()
             .unwrap();
+        let own_upload =
+            format!("http://{store}/content/tmp/user/me/2026/10/28/k3x9.jpg?X-Amz-Signature=abc");
         let urls = [
-            format!("http://{store}/content/tmp/user/me/2026/10/28/k3x9.jpg?X-Amz-Signature=abc"),
+            own_upload.clone(),
             format!("http://{store}/content/tmp/user/other/2026/10/28/k3x9.jpg"),
             format!("https://{store}/content/tmp/user/me/2026/10/28/k3x9.jpg"),
-            format!(
-                "http://localhost:{}/content/tmp/user/me/2026/10/28/k3x9.jpg",
-                store.port()
-            ),
+            "https://images.example.com/photo.webp".to_owned(),
         ]
         .iter()
         .enumerate()
         .map(|(index, raw)| (index, url(raw)))
         .collect();
-        let images = fetch_images(Some(&own), urls).await;
-        assert_eq!(images.len(), 1);
-        assert_eq!(images[0].data, STANDARD.encode("JPEG"));
-        assert_eq!(images[0].media_type, "image/jpeg");
-        assert_eq!(served.load(Ordering::SeqCst), 1);
+        let images = checked_links(Some(&own), urls);
+        let links: Vec<_> = images
+            .iter()
+            .map(|image| (image.url.as_deref().unwrap(), image.media_type.as_str()))
+            .collect();
+        assert_eq!(
+            links,
+            [
+                (own_upload.as_str(), "image/jpeg"),
+                ("https://images.example.com/photo.webp", "image/webp"),
+            ]
+        );
+        assert!(images.iter().all(|image| image.data.is_empty()));
     }
 }

@@ -13,11 +13,12 @@ use flow_like_types::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use utoipa::ToSchema;
 
 #[path = "calendar_data.rs"]
 mod calendar_data;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LinkCalendar {
     pub provider_id: String,
@@ -136,6 +137,20 @@ async fn fetch(
     .map_err(ApiError::bad_request)
 }
 
+#[utoipa::path(
+    post,
+    path = "/user/availability/calendars",
+    tag = "user",
+    description = "Link a Google or Microsoft calendar connected through this hub so your status can follow your meetings. You can link up to four calendars.",
+    request_body = LinkCalendar,
+    responses(
+        (status = 200, description = "Your availability with the calendar linked", body = Object),
+        (status = 400, description = "The calendar could not be read or four calendars are already linked"),
+        (status = 401, description = "Not signed in")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(name = "POST /user/availability/calendars", skip_all)]
 pub async fn link(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -201,6 +216,20 @@ pub async fn link(
     Ok(Json(updated.view(now)))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/user/availability/calendars/{id}",
+    tag = "user",
+    description = "Unlink a calendar from your availability.",
+    params(("id" = String, Path, description = "The linked calendar's id")),
+    responses(
+        (status = 200, description = "Your availability without the calendar", body = Object),
+        (status = 401, description = "Not signed in"),
+        (status = 409, description = "Your availability changed at the same time. Try again")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(name = "DELETE /user/availability/calendars/{id}", skip_all)]
 pub async fn unlink(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -220,11 +249,29 @@ pub async fn unlink(
     Ok(Json(updated.view(chrono::Utc::now().timestamp_millis())))
 }
 
+#[utoipa::path(
+    post,
+    path = "/user/availability/calendars/refresh",
+    tag = "user",
+    description = "Refresh your availability from your linked calendars. A refresh within a minute of the last check returns the cached result instead of asking the calendar providers again.",
+    responses(
+        (status = 200, description = "Your availability, refreshed or cached", body = Object),
+        (status = 401, description = "Not signed in"),
+        (status = 409, description = "Your linked calendars changed during the refresh")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(name = "POST /user/availability/calendars/refresh", skip_all)]
 pub async fn refresh(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
 ) -> Result<Json<UserAvailability>, ApiError> {
     let subject = user.sub()?;
+    let stored = load(&state.db, &subject).await?;
+    let now = chrono::Utc::now().timestamp_millis();
+    if super::refresh_throttled(&stored, now) {
+        return Ok(Json(stored.view(now)));
+    }
     refresh_for(&state, &subject).await.map(Json)
 }
 

@@ -253,6 +253,10 @@ async fn foreground_hold_binds_one_host_and_fences_it_after_background_takeover(
         )
         .col_expr(bot_turn::Column::Attempts, Expr::value(0))
         .col_expr(bot_turn::Column::HostId, Expr::value(None::<String>))
+        .col_expr(
+            bot_turn::Column::HostKind,
+            Expr::value(flow_like_types::bot_turn::STORED_DESKTOP),
+        )
         .filter(bot_turn::Column::Id.eq(&running.turn_id))
         .exec(&db)
         .await
@@ -560,4 +564,112 @@ async fn retired_bot_checkpoints_are_purged_and_cannot_be_recreated() {
             .is_none()
     );
     assert!(save(&db, &claim, &snapshot(), 4).await.is_err());
+}
+
+#[tokio::test]
+async fn an_interactive_claim_cannot_touch_a_server_turn() {
+    let (db, running) = setup().await;
+    bot_turn::Entity::update_many()
+        .col_expr(
+            bot_turn::Column::Status,
+            Expr::value(flow_like_types::bot_turn::STORED_QUEUED),
+        )
+        .col_expr(bot_turn::Column::Attempts, Expr::value(0))
+        .col_expr(bot_turn::Column::HostId, Expr::value(None::<String>))
+        .filter(bot_turn::Column::Id.eq(&running.turn_id))
+        .exec(&db)
+        .await
+        .unwrap();
+    let foreground = Claim {
+        host_id: "interactive:first".into(),
+        attempt: 0,
+        ..running
+    };
+    assert!(recovery::load_in(&db, &foreground, at(2)).await.is_err());
+    assert!(save(&db, &foreground, &snapshot(), 2).await.is_err());
+}
+
+async fn stored_checkpoint(
+    db: &DatabaseConnection,
+    turn_id: &str,
+) -> Option<crate::entity::bot_turn_checkpoint::Model> {
+    crate::entity::bot_turn_checkpoint::Entity::find_by_id(turn_id)
+        .one(db)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_retry_rebases_the_deadline_and_keeps_revision_and_state() {
+    let (db, claim) = setup().await;
+    save(&db, &claim, &snapshot(), 2).await.unwrap();
+    assert!(
+        ledger::fail_held_in(&db, &claim.turn_id, &claim.host_id, "BOT_TURN_TIMEOUT", at(3))
+            .await
+            .unwrap()
+    );
+    let later = at(10_000);
+    ledger::retry_in(&db, "user-a", "bot_1", &claim.turn_id, later)
+        .await
+        .unwrap()
+        .unwrap();
+    let row = stored_checkpoint(&db, &claim.turn_id).await.unwrap();
+    assert_eq!(row.started_at_ms, later.timestamp_millis());
+    assert_eq!(
+        row.deadline_at_ms,
+        later.timestamp_millis() + super::worker::MAX_TURN_RUNTIME_MS
+    );
+    assert_eq!((row.revision, row.state), (1, snapshot().state));
+    let rebased = BotRunCheckpoint {
+        started_at_ms: row.started_at_ms,
+        deadline_at_ms: row.deadline_at_ms,
+        ..snapshot()
+    };
+    assert_eq!(
+        super::worker::recovery_runtime_ms(Some(&rebased), later.timestamp_millis()),
+        super::worker::MAX_TURN_RUNTIME_MS
+    );
+}
+
+#[tokio::test]
+async fn crash_recovery_keeps_the_saved_deadline() {
+    let (db, claim) = setup().await;
+    save(&db, &claim, &snapshot(), 2).await.unwrap();
+    ledger::recover_in(&db, at(10_000)).await.unwrap();
+    let row = stored_checkpoint(&db, &claim.turn_id).await.unwrap();
+    assert_eq!(row.started_at_ms, snapshot().started_at_ms);
+    assert_eq!(row.deadline_at_ms, snapshot().deadline_at_ms);
+}
+
+#[tokio::test]
+async fn finished_turns_drop_their_checkpoint_but_failed_turns_keep_it_for_a_retry() {
+    let (db, claim) = setup().await;
+    save(&db, &claim, &snapshot(), 2).await.unwrap();
+    assert!(
+        ledger::fail_held_in(&db, &claim.turn_id, &claim.host_id, "BOT_TURN_TIMEOUT", at(3))
+            .await
+            .unwrap()
+    );
+    assert!(stored_checkpoint(&db, &claim.turn_id).await.is_some());
+    ledger::retry_in(&db, "user-a", "bot_1", &claim.turn_id, at(4))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(ledger::take_in(&db, &claim.turn_id, "host-2", at(5)).await.unwrap());
+    assert!(
+        ledger::complete_silent_in(&db, &claim.turn_id, "host-2", at(6))
+            .await
+            .unwrap()
+    );
+    assert!(stored_checkpoint(&db, &claim.turn_id).await.is_none());
+}
+
+#[tokio::test]
+async fn cancelling_a_turn_drops_its_checkpoint() {
+    let (db, claim) = setup().await;
+    save(&db, &claim, &snapshot(), 2).await.unwrap();
+    ledger::cancel_owned_in(&db, "user-a", "bot_1", &claim.turn_id, at(3))
+        .await
+        .unwrap();
+    assert!(stored_checkpoint(&db, &claim.turn_id).await.is_none());
 }

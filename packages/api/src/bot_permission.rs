@@ -9,10 +9,12 @@ use crate::{
     error::ApiError,
     middleware::jwt::{AppPermissionResponse, BotUser, member_role},
     permission::role_permission::RolePermissions,
+    routes::bots::{model::BotSettings, runtime::owner_profile_app_ids},
     state::AppState,
 };
 use flow_like::flow::copilot::EffectivePermissions;
 use flow_like::flow::execution::ExecutionPrincipal;
+use flow_like_types::bot::BotCapability;
 use flow_like_types::bot_effective::BotRoomLimits;
 use flow_like_types::bot_restrictions::BotScopes;
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect};
@@ -122,13 +124,33 @@ async fn is_workspace<C: ConnectionTrait>(
         .is_some())
 }
 
-/// The bot's row restrictions in `app_id`: `None` when the app is neither attached nor the
-/// bot's workspace, which leaves the bot without access.
+/// Whether `app_id` is in the owner's profile the bot names, while it holds `profile_apps`.
+async fn in_bot_profile<C: ConnectionTrait>(
+    db: &C,
+    bot: &bot::Model,
+    app_id: &str,
+) -> Result<bool, ApiError> {
+    let settings = BotSettings::from_row(bot);
+    let Some(profile_id) = settings
+        .profile_id
+        .as_deref()
+        .filter(|_| settings.has(BotCapability::ProfileApps))
+    else {
+        return Ok(false);
+    };
+    Ok(owner_profile_app_ids(db, &bot.owner_id, profile_id)
+        .await?
+        .contains(app_id))
+}
+
+/// The bot's row restrictions in `app_id`: an attached app's own, none for the bot's workspace
+/// or an app of its profile, and `None` for any other app, which leaves the bot without access.
 async fn app_restrictions<C: ConnectionTrait>(
     db: &C,
-    bot_id: &str,
+    bot: &bot::Model,
     app_id: &str,
 ) -> Result<Option<(Option<i64>, BotScopes)>, ApiError> {
+    let bot_id = bot.id.as_str();
     if let Some(row) = bot_app::Entity::find_by_id((bot_id.to_string(), app_id.to_string()))
         .one(db)
         .await?
@@ -139,9 +161,8 @@ async fn app_restrictions<C: ConnectionTrait>(
         })?;
         return Ok(Some((row.permission_mask, scopes)));
     }
-    Ok(is_workspace(db, bot_id, app_id)
-        .await?
-        .then(|| (None, BotScopes::default())))
+    let open = is_workspace(db, bot_id, app_id).await? || in_bot_profile(db, bot, app_id).await?;
+    Ok(open.then(|| (None, BotScopes::default())))
 }
 
 /// The limits its owner set when accepting the bot's invitation into `conv_id`; the bot must be an active member.
@@ -167,16 +188,19 @@ pub(crate) async fn room_limits<C: ConnectionTrait>(
     }
 }
 
-/// bot live and attached → owner's live role → expand → strip `BOT_NEVER` → bot row mask → room
-/// limits → resource scopes. Any missing link answers with a refusal.
+/// bot live and attached (or the app in its profile) → owner's live role → expand → strip
+/// `BOT_NEVER` → bot row mask → room limits → resource scopes. Any missing link answers with a
+/// refusal.
 pub async fn bot_grant_in<C: ConnectionTrait>(
     db: &C,
     bot: &BotUser,
     app_id: &str,
 ) -> Result<BotGrant, ApiError> {
     let row = live_bot(db, &bot.bot_id).await?;
-    let Some((mask, scopes)) = app_restrictions(db, &bot.bot_id, app_id).await? else {
-        return Err(refusal("Bot is not attached to this app"));
+    let Some((mask, scopes)) = app_restrictions(db, &row, app_id).await? else {
+        return Err(refusal(
+            "Bot is not attached to this app and the app is not in the bot's profile",
+        ));
     };
     let owner_role = member_role(db, &row.owner_id, app_id)
         .await?

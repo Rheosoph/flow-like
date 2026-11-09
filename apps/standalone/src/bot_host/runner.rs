@@ -45,11 +45,16 @@ use tokio::sync::Notify;
 pub const CODE_RUN_FAILED: &str = "BOT_TURN_FAILED";
 pub const CODE_SETUP: &str = "BOT_TURN_SETUP";
 
-const TOOLS_NEEDING_UNLINKED_SERVICES: [&str; 9] = [
-    // Device runtime tokens have no endpoint for an approved settings change.
+const TOOLS_NEEDING_UNLINKED_SERVICES: [&str; 13] = [
+    // Device runtime tokens have no endpoint for an approved settings change or for managing
+    // the owner's bots.
     "bot_configuration",
     "bot_models",
     "bot_update_configuration",
+    "list_bots",
+    "get_bot",
+    "create_bot",
+    "update_bot",
     "skill_load",
     "skill_propose",
     "connector_tools",

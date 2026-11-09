@@ -58,9 +58,7 @@ async fn claim(
         host_id,
         attempt,
     };
-    if !claim.interactive() || kind == TurnHostKind::Device {
-        super::turns::user_claimable(kind, &claim.turn_id)?;
-    }
+    super::turns::user_claimable(kind, &claim.turn_id)?;
     Ok(claim)
 }
 

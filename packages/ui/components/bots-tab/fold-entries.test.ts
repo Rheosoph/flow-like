@@ -199,7 +199,13 @@ describe("foldInboxEntries", () => {
 					1,
 					"r1",
 				),
-				entry("room", "me", { change: "title", removed: true, by: "me" }, 2, "r2"),
+				entry(
+					"room",
+					"me",
+					{ change: "title", removed: true, by: "me" },
+					2,
+					"r2",
+				),
 				entry("room", "me", { change: "image", by: "me" }, 3, "r3"),
 				entry(
 					"room",
@@ -522,12 +528,28 @@ describe("approval cards", () => {
 	};
 
 	test("the full configuration patch survives inbox parsing", () => {
-		const changes = { name: "Atlas", instructions: "Full instructions.\n".repeat(100) };
-		const [card] = messages(foldInboxEntries([
-			entry("message", "bot_a", { approval: {
-				...approval, tool: "bot_update_configuration", scope: "", configuration_changes: changes,
-			} }, 0, "ap-1"),
-		]));
+		const changes = {
+			name: "Atlas",
+			instructions: "Full instructions.\n".repeat(100),
+		};
+		const [card] = messages(
+			foldInboxEntries([
+				entry(
+					"message",
+					"bot_a",
+					{
+						approval: {
+							...approval,
+							tool: "bot_update_configuration",
+							scope: "",
+							configuration_changes: changes,
+						},
+					},
+					0,
+					"ap-1",
+				),
+			]),
+		);
 		expect(card.approval?.configurationChanges).toEqual(changes);
 	});
 

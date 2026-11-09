@@ -13,7 +13,7 @@ use crate::error::ApiError;
 use flow_like_types::anyhow;
 
 /// The rows of each table that go with a deleted bot, selected by the bot's id (`$root`).
-pub fn retired_bot_rows() -> [(&'static str, Predicate); 11] {
+pub fn retired_bot_rows() -> [(&'static str, Predicate); 13] {
     let by = |column: &str| Predicate::Root {
         column: column.to_owned(),
     };
@@ -22,6 +22,8 @@ pub fn retired_bot_rows() -> [(&'static str, Predicate); 11] {
             column: "turnId".into(), parent: "BotTurn".into(), parent_column: "id".into(),
             inner: Box::new(by("botId")),
         }),
+        ("BotDecisionWait", by("botId")),
+        ("BotNote", by("botId")),
         ("BotPermission", by("fromBotId")),
         ("BotPermission", by("toBotId")),
         ("BotHostHeartbeat", by("botId")),
@@ -112,6 +114,8 @@ mod tests {
             schema.create_table_from_entity(crate::entity::bot_mail_message::Entity),
             schema.create_table_from_entity(crate::entity::bot_turn::Entity),
             schema.create_table_from_entity(crate::entity::bot_turn_checkpoint::Entity),
+            schema.create_table_from_entity(crate::entity::bot_decision_wait::Entity),
+            schema.create_table_from_entity(crate::entity::bot_note::Entity),
         ] {
             let mut table = Table::create();
             table.table(source.get_table_name().unwrap().clone());
@@ -231,5 +235,32 @@ mod tests {
         assert_eq!(segments, ["s3", "s4"]);
 
         assert_eq!(purge_retired_bot(&db, "bot_1").await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_deleted_bot_takes_its_decision_waits() {
+        use crate::entity::bot_decision_wait;
+        let wait = |bot: &str, room: &str| bot_decision_wait::ActiveModel {
+            bot_id: Set(bot.into()),
+            conversation_id: Set(room.into()),
+            participant_id: Set("user-b".into()),
+            trigger_message_id: Set("m1".into()),
+            after_seq: Set(1),
+            expires_at: Set(at(100)),
+            created_at: Set(at(0)),
+        };
+        let db = database().await;
+        bot_decision_wait::Entity::insert_many([
+            wait("bot_1", "c1"),
+            wait("bot_1", "c2"),
+            wait("bot_2", "c1"),
+        ])
+        .exec_without_returning(&db)
+        .await
+        .unwrap();
+        assert_eq!(purge_retired_bot(&db, "bot_1").await.unwrap(), 2);
+        let left = bot_decision_wait::Entity::find().all(&db).await.unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].bot_id, "bot_2");
     }
 }

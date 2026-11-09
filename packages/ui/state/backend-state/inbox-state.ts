@@ -1,5 +1,5 @@
 import type { IRealtimeAccess } from "../../lib/realtime/types";
-import type { IBotScopes } from "./bot-state";
+import type { IBotNoteRef, IBotScopes } from "./bot-state";
 
 export type ConversationKind = "direct" | "group";
 export type ConversationEncryption = "plain" | "e2e";
@@ -26,13 +26,14 @@ export interface IInboxPlainEnvelope<Body = unknown> {
 	body: Body;
 }
 
-/** Sealed to one recipient's inbox key; only that recipient can open it. */
+/** Sealed to one recipient: to one key, or to each key of their devices. Only they open it. */
 export interface IInboxSealedEnvelope {
 	v: 1;
 	enc: string;
-	key_id: string;
-	enc_key: string;
 	ct: string;
+	key_id?: string;
+	enc_key?: string;
+	keys?: { key_id: string; enc_key: string; ck: string }[];
 }
 
 export type IInboxEnvelope = IInboxPlainEnvelope | IInboxSealedEnvelope;
@@ -86,6 +87,8 @@ export interface IInboxMessageBody {
 	approval_response?: IInboxApprovalResponse;
 	user_context_request?: IUserContextRequest;
 	user_context_response?: IUserContextResponse;
+	/** The note a bot reply wrote or changed; the text is only the owner's to read. */
+	note?: IBotNoteRef;
 }
 
 export type UserContextField =
@@ -99,7 +102,10 @@ export type UserContextField =
 	| "device";
 
 export interface IUserContextRequest {
-	status_change?: { status: import("../../lib/availability").AvailabilityStatus; duration_minutes: number };
+	status_change?: {
+		status: import("../../lib/availability").AvailabilityStatus;
+		duration_minutes: number;
+	};
 	id: string;
 	bot_id: string;
 	subject_id: string;
@@ -505,6 +511,8 @@ export interface IConversationTurn {
 	bot_id: string;
 	status: ConversationTurnStatus;
 	trigger_message_id: string;
+	/** What the bot says it is doing right now. */
+	status_text?: string | null;
 	created_at: string;
 	updated_at: string;
 }

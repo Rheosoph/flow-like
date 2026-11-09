@@ -151,7 +151,7 @@ const bots = new Map<string, IBot>([
 		}),
 	],
 	[WRITER, bot(WRITER)],
-	[PAINTER, bot(PAINTER, { appearance: { kind: "lava" } })],
+	[PAINTER, bot(PAINTER, { appearance: { kind: "retired-character" } })],
 	[
 		HELPER,
 		bot(HELPER, { model: { primary: "model-a", fallbacks: ["model-gone"] } }),
@@ -331,6 +331,7 @@ const backend = {
 	userState: {
 		getInfo: async () => ({ id: "me", name: "Felix Schultz" }),
 		getSettingsProfile: async () => ({ hub_profile: { id: "profile-now" } }),
+		getProfile: async () => null,
 		lookupUser: async () => null,
 		lookupUsers: async () => [],
 	},

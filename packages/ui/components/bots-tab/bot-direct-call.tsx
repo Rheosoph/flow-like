@@ -6,8 +6,12 @@ import { PhoneIcon } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { useBotCallSpeech } from "../../hooks/use-bot-call-speech";
+import { useConversationActivity } from "../../hooks/use-conversation-activity";
 import { useConversationCall } from "../../hooks/use-conversation-call";
-import { useConversationRoom } from "../../hooks/use-conversation-room";
+import {
+	type ConversationRoom,
+	useConversationRoom,
+} from "../../hooks/use-conversation-room";
 import { useInboxEntries } from "../../hooks/use-inbox";
 import { useSpeechModel } from "../../hooks/use-speech-model";
 import { useBackend } from "../../state/backend-state";
@@ -15,6 +19,7 @@ import { type IBot, LOCAL_OWNER_ID } from "../../state/backend-state/bot-state";
 import type { IConversation } from "../../state/backend-state/inbox-state";
 import { botConversation } from "../../state/global-chat/bot-history";
 import { Button } from "../ui/button";
+import { ConversationActivityLine } from "./conversation-activity-line";
 import {
 	CallButton,
 	ConversationCallBar,
@@ -22,7 +27,7 @@ import {
 } from "./conversation-call";
 import { foldInboxEntries } from "./fold-entries";
 import { callMentions } from "./mentions";
-import { useCrewDirectory } from "./use-crew-directory";
+import { type CrewDirectory, useCrewDirectory } from "./use-crew-directory";
 
 const EMPTY_CONVERSATION: IConversation = {
 	id: "",
@@ -112,13 +117,26 @@ export function BotDirectCall({
 		if (call.error) toast.error(errorText(call.error));
 	}, [call.error, errorText]);
 	const listenRequested = useRef(false);
+	useEffect(() => {
+		if (call.error) listenRequested.current = false;
+	}, [call.error]);
 	const start = useCallback(async () => {
 		listenRequested.current = true;
-		await call.start();
+		try {
+			await call.start();
+		} catch (cause) {
+			listenRequested.current = false;
+			throw cause;
+		}
 	}, [call.start]);
 	const join = useCallback(async () => {
 		listenRequested.current = true;
-		await call.join();
+		try {
+			await call.join();
+		} catch (cause) {
+			listenRequested.current = false;
+			throw cause;
+		}
 	}, [call.join]);
 	const leave = useCallback(async () => {
 		listenRequested.current = false;
@@ -158,11 +176,44 @@ export function BotDirectCall({
 	return children({
 		button,
 		bar: call.live ? (
-			<ConversationCallBar
-				call={{ ...call, join, leave }}
-				directory={directory}
-				me={me}
-			/>
+			<>
+				<ConversationCallBar
+					call={{ ...call, join, leave }}
+					directory={directory}
+					me={me}
+				/>
+				{call.joined && (
+					<BotCallActivity
+						conversation={conversation}
+						me={me}
+						newestEntryKey={pages?.[0]?.tail ?? entries[0]?.cursor}
+						room={room}
+						directory={directory}
+					/>
+				)}
+			</>
 		) : null,
 	});
+}
+
+function BotCallActivity({
+	conversation,
+	me,
+	newestEntryKey,
+	room,
+	directory,
+}: {
+	conversation: IConversation;
+	me: string | null;
+	newestEntryKey: string | undefined;
+	room: ConversationRoom | undefined;
+	directory: CrewDirectory;
+}) {
+	const activity = useConversationActivity(
+		conversation,
+		me,
+		newestEntryKey,
+		room,
+	);
+	return <ConversationActivityLine {...activity} directory={directory} />;
 }

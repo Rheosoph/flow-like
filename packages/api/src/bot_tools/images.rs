@@ -36,7 +36,9 @@ impl ImageBits {
     }
 
     fn used(&self) -> std::sync::MutexGuard<'_, u32> {
-        self.used.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.used
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     pub(crate) fn left(&self) -> u32 {

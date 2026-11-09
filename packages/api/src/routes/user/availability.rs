@@ -77,6 +77,27 @@ where
     Err(ApiError::conflict("Your availability changed. Try again"))
 }
 
+const CALENDAR_REFRESH_MIN_INTERVAL_MS: i64 = 60_000;
+
+pub(crate) fn refresh_throttled(stored: &AvailabilityState, now: i64) -> bool {
+    stored
+        .calendar_checked_at
+        .saturating_add(CALENDAR_REFRESH_MIN_INTERVAL_MS)
+        > now
+}
+
+#[utoipa::path(
+    get,
+    path = "/user/availability",
+    tag = "user",
+    description = "Your current availability status, notification preferences and linked calendars. A linked calendar is refreshed when its cached result expired.",
+    responses(
+        (status = 200, description = "Your availability", body = Object),
+        (status = 401, description = "Not signed in")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(name = "GET /user/availability", skip_all)]
 pub async fn get(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -86,13 +107,28 @@ pub async fn get(
     let now = chrono::Utc::now().timestamp_millis();
     if !stored.calendar_links.is_empty()
         && stored.calendar_valid_until <= now
-        && stored.calendar_checked_at.saturating_add(60_000) <= now
+        && !refresh_throttled(&stored, now)
     {
         return calendars::refresh_for(&state, &sub).await.map(Json);
     }
     Ok(Json(stored.view(now)))
 }
 
+#[utoipa::path(
+    put,
+    path = "/user/availability",
+    tag = "user",
+    description = "Set your status (available, busy, focus or away) for 1 to 240 minutes and/or your notification preferences. Other people see the status beside your identity.",
+    request_body(content = Object, description = "status, duration_minutes and preferences; provide a status or preferences"),
+    responses(
+        (status = 200, description = "Your updated availability", body = Object),
+        (status = 400, description = "Invalid duration or nothing to change"),
+        (status = 401, description = "Not signed in"),
+        (status = 409, description = "Your availability changed at the same time. Try again")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(name = "PUT /user/availability", skip_all)]
 pub async fn set(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -120,6 +156,19 @@ pub async fn set(
     Ok(Json(updated.view(now)))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/user/availability",
+    tag = "user",
+    description = "Remove your manual status so your availability follows your calendar again.",
+    responses(
+        (status = 200, description = "Your updated availability", body = Object),
+        (status = 401, description = "Not signed in"),
+        (status = 409, description = "Your availability changed at the same time. Try again")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(name = "DELETE /user/availability", skip_all)]
 pub async fn clear(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -197,5 +246,17 @@ mod tests {
         let stored = load(&db, "person").await.unwrap();
         assert_eq!(stored.current(0).status, AvailabilityStatus::Available);
         assert!(!stored.preferences.allow_calls);
+    }
+
+    #[test]
+    fn refresh_is_throttled_for_a_minute_after_a_check() {
+        let state = AvailabilityState {
+            calendar_checked_at: 1_000,
+            ..Default::default()
+        };
+        assert!(refresh_throttled(&state, 1_000));
+        assert!(refresh_throttled(&state, 60_999));
+        assert!(!refresh_throttled(&state, 61_000));
+        assert!(!refresh_throttled(&AvailabilityState::default(), 61_000));
     }
 }

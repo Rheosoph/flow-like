@@ -32,8 +32,12 @@ export function createBotActivityRegistrar() {
 				)
 			)
 				continue;
-			if (unregister) await unregister(record.token);
-			if (isCurrent()) registered.delete(key);
+			try {
+				if (unregister) await unregister(record.token);
+				if (isCurrent()) registered.delete(key);
+			} catch {
+				// Retry this removal without blocking the other activities.
+			}
 		}
 		for (const token of tokens.slice(0, 8)) {
 			if (!isCurrent()) return;
@@ -47,8 +51,12 @@ export function createBotActivityRegistrar() {
 				continue;
 			const key = JSON.stringify([scope, targetId, token.activityId]);
 			if (registered.get(key)?.token.pushToken === token.pushToken) continue;
-			await register(token);
-			if (isCurrent()) registered.set(key, { targetId, token });
+			try {
+				await register(token);
+				if (isCurrent()) registered.set(key, { targetId, token });
+			} catch {
+				// Local or deleted turns may have no hub record. Keep syncing the rest.
+			}
 		}
 		if (registered.size > 64) registered.clear();
 	};

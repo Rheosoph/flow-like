@@ -327,6 +327,15 @@ pub trait TurnHub: Send + Sync + 'static {
     ) -> Result<Value, HubFailure> {
         Err(HubFailure::offline("This hub offers no key writes"))
     }
+    /// A PATCH with the signed-in session: how a bot's notes are written.
+    async fn patch(
+        &self,
+        _path: &str,
+        _query: Vec<(&'static str, String)>,
+        _body: Value,
+    ) -> Result<Value, HubFailure> {
+        Err(HubFailure::offline("This hub offers no note writes"))
+    }
     /// A DELETE with the signed-in session: how a rotated inbox key is revoked.
     async fn delete(
         &self,

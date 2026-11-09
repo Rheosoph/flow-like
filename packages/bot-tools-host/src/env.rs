@@ -85,6 +85,7 @@ pub struct HostEnv {
     people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
     user_context: Option<Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>>,
     configuration: Option<Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>>,
+    crew: Option<Arc<dyn flow_like_bot_tools::crew::CrewBackend>>,
     scheduler: Option<Arc<dyn flow_like_bot_tools::Scheduler>>,
     skills: Option<Arc<dyn flow_like_bot_tools::SkillHost>>,
     mail: Option<Arc<dyn flow_like_bot_tools::email::MailBackend>>,
@@ -126,6 +127,7 @@ impl HostEnv {
             people: None,
             user_context: None,
             configuration: None,
+            crew: None,
             scheduler: None,
             skills: None,
             mail: None,
@@ -190,6 +192,11 @@ impl HostEnv {
         configuration: Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>,
     ) -> Self {
         self.configuration = Some(configuration);
+        self
+    }
+
+    pub fn with_crew(mut self, crew: Arc<dyn flow_like_bot_tools::crew::CrewBackend>) -> Self {
+        self.crew = Some(crew);
         self
     }
 
@@ -312,6 +319,10 @@ impl ToolEnv for HostEnv {
         &self,
     ) -> Option<Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>> {
         self.configuration.clone()
+    }
+
+    fn crew(&self) -> Option<Arc<dyn flow_like_bot_tools::crew::CrewBackend>> {
+        self.crew.clone()
     }
 
     fn allow_expensive_documents(&self) -> bool {

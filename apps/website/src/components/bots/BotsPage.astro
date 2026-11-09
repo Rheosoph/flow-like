@@ -1,0 +1,306 @@
+---
+import "./bots-page.css";
+import { BotAvatar } from "@flow-like/flow-like-ui/components/bots/bot-avatar";
+import PillarLayout from "../pillar/PillarLayout.astro";
+import BotsDay, { type BotsDayEvent } from "./BotsDay";
+import BotsHosts, { type BotsHostCopy } from "./BotsHosts";
+import {
+  BOT_CAPABILITY_GROUPS,
+  BOT_CAPABILITY_ICONS,
+  BOT_PRESETS,
+  CREW,
+  type BotLocation,
+  type CrewId,
+  LOCAL_ONLY_BOT_CAPABILITIES,
+  capabilityLabel,
+  groupLabel,
+  presetDescription,
+  presetName,
+} from "./bot-site-data";
+import { tBots } from "../../i18n/locales/pages/bots";
+import type { Lang } from "../../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = "en" } = Astro.props;
+const t = (key: string) => tBots(lang, key);
+
+const docs = "https://docs.flow-like.com/bots/overview/";
+const download = lang === "en" ? "/download" : `/${lang}/download`;
+const webApp = "https://app.flow-like.com";
+
+const heroCrew: { id: CrewId; status: string }[] = [
+  { id: "scout", status: t("bots.hero.status.scout") },
+  { id: "post", status: t("bots.hero.status.post") },
+  { id: "flux", status: t("bots.hero.status.flux") },
+  { id: "byte", status: t("bots.hero.status.byte") },
+  { id: "loop", status: t("bots.hero.status.loop") },
+];
+
+const dayEvents: BotsDayEvent[] = [
+  { time: "07:00", kind: t("bots.wake.kind.schedule"), bot: "scout", trigger: t("bots.wake.e1.trigger"), reply: t("bots.wake.e1.reply") },
+  { time: "08:42", kind: t("bots.wake.kind.email"), bot: "post", trigger: t("bots.wake.e2.trigger"), reply: t("bots.wake.e2.reply"), approval: t("bots.wake.e2.approval") },
+  { time: "10:15", kind: t("bots.wake.kind.webhook"), bot: "loop", trigger: t("bots.wake.e3.trigger"), reply: t("bots.wake.e3.reply") },
+  { time: "13:30", kind: t("bots.wake.kind.room"), bot: "byte", trigger: t("bots.wake.e4.trigger"), reply: t("bots.wake.e4.reply"), room: t("bots.rooms.chat.room"), chart: true },
+  { time: "16:05", kind: t("bots.wake.kind.flow"), bot: "loop", trigger: t("bots.wake.e5.trigger"), reply: t("bots.wake.e5.reply") },
+  { time: "22:00", kind: t("bots.wake.kind.monitor"), bot: "scout", trigger: t("bots.wake.e6.trigger"), reply: t("bots.wake.e6.reply"), quiet: true },
+];
+const dayCopy = {
+  pause: t("bots.wake.pause"),
+  play: t("bots.wake.play"),
+  chatWith: t("bots.wake.chatWith"),
+  inRoom: t("bots.wake.inRoom"),
+  deny: t("bots.wake.deny"),
+  once: t("bots.wake.once"),
+  always: t("bots.wake.always"),
+};
+
+const hostCopy = (id: BotLocation): BotsHostCopy => ({
+  label: t(`bots.hosts.${id}.label`),
+  tagline: t(`bots.hosts.${id}.tagline`),
+  answers: t(`bots.hosts.${id}.answers`),
+  models: t(`bots.hosts.${id}.models`),
+  bestFor: t(`bots.hosts.${id}.bestFor`),
+});
+const hosts = { server: hostCopy("server"), desktop: hostCopy("desktop"), device: hostCopy("device") };
+const hostLabels = {
+  where: t("bots.hosts.where"),
+  answers: t("bots.hosts.answers"),
+  models: t("bots.hosts.models"),
+  bestFor: t("bots.hosts.bestFor"),
+  unavailable: t("bots.hosts.unavailable"),
+};
+
+const pillars = ["rights", "asks", "secrets", "data"].map((key) => ({
+  title: t(`bots.charge.${key}.title`),
+  body: t(`bots.charge.${key}.body`),
+}));
+
+const roomPoints = [1, 2, 3, 4].map((index) => t(`bots.rooms.point${index}`));
+
+const facts = [1, 2, 3].map((index) => ({
+  text: t(`bots.memory.fact${index}`),
+  quote: t(`bots.memory.fact${index}.quote`),
+  kind: t(`bots.memory.fact${index}.kind`),
+}));
+---
+
+<PillarLayout lang={lang} title={t("bots.meta.title")} description={t("bots.meta.description")} keywords={t("bots.meta.keywords")} path="/bots">
+  <section class="dark pl-hero" style="color-scheme:dark" data-dark-hero aria-labelledby="bp-hero-title">
+    <div class="pl-aura" aria-hidden="true"></div>
+    <div class="pl-hero-copy">
+      <span class="pl-eyebrow"><i></i>{t("bots.hero.eyebrow")}</span>
+      <h1 id="bp-hero-title">{t("bots.hero.title.l1")}<br /><em>{t("bots.hero.title.em")}</em></h1>
+      <p>{t("bots.hero.body")}</p>
+      <div class="pl-actions">
+        <a class="pl-btn pl-btn--primary" href={download}>{t("bots.hero.cta.primary")} <span aria-hidden="true">↗</span></a>
+        <a class="pl-btn" href={docs}>{t("bots.hero.cta.secondary")} <span aria-hidden="true">→</span></a>
+      </div>
+    </div>
+    <ul class="bp-hero-crew" aria-label="Bots at work">
+      {heroCrew.map((member, index) => (
+        <li style={`--i:${index}`}>
+          <span class="bp-hero-avatar">
+            <BotAvatar appearance={{ ...CREW[member.id].appearance, backdrop: "none" }} pose={index === 2 ? "happy" : "idle"} size={index === 2 ? 132 : 96} animated={false} decorative />
+          </span>
+          <span class="bp-hero-status"><b>{CREW[member.id].name}</b>{member.status}</span>
+        </li>
+      ))}
+    </ul>
+  </section>
+
+  <section class="pl-section" aria-labelledby="bp-jobs-title">
+    <div class="pl-heading">
+      <div>
+        <span class="pl-eyebrow">01 / {t("bots.jobs.eyebrow")}</span>
+        <h2 id="bp-jobs-title">{t("bots.jobs.title")}</h2>
+      </div>
+      <div class="pl-intro">
+        <p>{t("bots.jobs.body")}</p>
+        <blockquote class="bp-describe">{t("bots.jobs.example")}</blockquote>
+      </div>
+    </div>
+    <ul class="bp-presets">
+      {BOT_PRESETS.map((preset) => (
+        <li class="bp-preset">
+          <BotAvatar appearance={preset.appearance} size={72} animated={false} decorative />
+          <h3>{presetName(preset.id)}</h3>
+          <p>{presetDescription(preset.id)}</p>
+          <ul class="pl-chips">
+            {preset.capabilities.map((id) => {
+              const Icon = BOT_CAPABILITY_ICONS[id];
+              return <li><Icon aria-hidden="true" />{capabilityLabel(id)}</li>;
+            })}
+          </ul>
+        </li>
+      ))}
+    </ul>
+  </section>
+
+  <section class="dark pl-section" style="color-scheme:dark" aria-labelledby="bp-wake-title">
+    <div class="pl-heading">
+      <div>
+        <span class="pl-eyebrow">02 / {t("bots.wake.eyebrow")}</span>
+        <h2 id="bp-wake-title">{t("bots.wake.title.l1")}<br /><em>{t("bots.wake.title.l2")}</em></h2>
+      </div>
+      <div class="pl-intro"><p>{t("bots.wake.body")}</p></div>
+    </div>
+    <BotsDay client:visible events={dayEvents} copy={dayCopy} />
+  </section>
+
+  <section class="pl-section" aria-labelledby="bp-hosts-title">
+    <div class="pl-heading">
+      <div>
+        <span class="pl-eyebrow">03 / {t("bots.hosts.eyebrow")}</span>
+        <h2 id="bp-hosts-title">{t("bots.hosts.title")}</h2>
+      </div>
+      <div class="pl-intro"><p>{t("bots.hosts.body")}</p></div>
+    </div>
+    <BotsHosts client:visible hosts={hosts} labels={hostLabels} />
+  </section>
+
+  <section class="dark pl-section bp-charge" style="color-scheme:dark" aria-labelledby="bp-charge-title">
+    <div class="pl-heading">
+      <div>
+        <span class="pl-eyebrow">04 / {t("bots.charge.eyebrow")}</span>
+        <h2 id="bp-charge-title">{t("bots.charge.title.l1")}<br /><em>{t("bots.charge.title.l2")}</em></h2>
+      </div>
+      <div class="pl-intro">
+        <p>{t("bots.charge.body")}</p>
+        <svg class="bp-venn" viewBox="0 0 300 210" role="img" aria-label="Your role, intersected with the bot's limits and the room's limits">
+          <circle cx="120" cy="84" r="56" />
+          <circle cx="180" cy="84" r="56" />
+          <circle cx="150" cy="128" r="52" />
+          <text x="58" y="18" text-anchor="middle">your role</text>
+          <text x="242" y="18" text-anchor="middle">bot limits</text>
+          <text x="150" y="204" text-anchor="middle">room limits</text>
+          <path d="M58 26v20M242 26v20" />
+          <text x="150" y="98" text-anchor="middle" class="bp-venn-core">it may do</text>
+        </svg>
+      </div>
+    </div>
+    <ol class="pl-pillars">
+      {pillars.map((pillar, index) => (
+        <li>
+          <span>0{index + 1}</span>
+          <h3>{pillar.title}</h3>
+          <p>{pillar.body}</p>
+        </li>
+      ))}
+    </ol>
+  </section>
+
+  <section class="pl-section pl-split" aria-labelledby="bp-rooms-title">
+    <div class="bp-room-chat" aria-hidden="true">
+      <header><span># {t("bots.rooms.chat.room")}</span><span class="bp-room-members">
+        <BotAvatar appearance={{ ...CREW.byte.appearance, backdrop: "none" }} size={22} animated={false} decorative />
+        <BotAvatar appearance={{ ...CREW.scout.appearance, backdrop: "none" }} size={22} animated={false} decorative />
+        <BotAvatar appearance={{ ...CREW.post.appearance, backdrop: "none" }} size={22} animated={false} decorative />
+        <i>M</i><i>Y</i>
+      </span></header>
+      <div class="bp-room-line bp-room-line--person"><i>M</i><div><b>Mara</b><p>{t("bots.rooms.chat.mara")}</p></div></div>
+      <div class="bp-room-line">
+        <BotAvatar appearance={{ ...CREW.byte.appearance, backdrop: "none" }} size={34} pose="happy" animated={false} decorative />
+        <div><b>Byte</b><p>{t("bots.rooms.chat.byte")}</p>
+          <div class="bp-room-chart">{[38, 44, 41, 72, 55, 49, 52].map((value, index) => <i style={`height:${value}%`} data-peak={index === 3 ? "true" : undefined} />)}</div>
+        </div>
+      </div>
+      <div class="bp-room-line">
+        <BotAvatar appearance={{ ...CREW.scout.appearance, backdrop: "none" }} size={34} animated={false} decorative />
+        <div><b>Scout</b><p>{t("bots.rooms.chat.scout")}</p></div>
+      </div>
+      <div class="bp-room-line bp-room-line--you"><p>{t("bots.rooms.chat.you")}</p></div>
+      <div class="bp-room-typing"><BotAvatar appearance={{ ...CREW.post.appearance, backdrop: "none" }} size={18} animated={false} decorative /> Post is working…</div>
+    </div>
+    <div>
+      <span class="pl-eyebrow">05 / {t("bots.rooms.eyebrow")}</span>
+      <h2 id="bp-rooms-title">{t("bots.rooms.title")}</h2>
+      <p class="pl-lead">{t("bots.rooms.body")}</p>
+      <ul class="pl-points">
+        {roomPoints.map((point) => <li>{point}</li>)}
+      </ul>
+    </div>
+  </section>
+
+  <section class="dark pl-section" style="color-scheme:dark" aria-labelledby="bp-memory-title">
+    <div class="pl-heading">
+      <div>
+        <span class="pl-eyebrow">06 / {t("bots.memory.eyebrow")}</span>
+        <h2 id="bp-memory-title">{t("bots.memory.title")}</h2>
+      </div>
+      <div class="pl-intro"><p>{t("bots.memory.body")}</p></div>
+    </div>
+    <ul class="bp-facts">
+      {facts.map((fact) => (
+        <li>
+          <span class="bp-fact-kind">{fact.kind}</span>
+          <h3>{fact.text}</h3>
+          <blockquote>{fact.quote}</blockquote>
+        </li>
+      ))}
+    </ul>
+  </section>
+
+  <section class="pl-section bp-flux" aria-labelledby="bp-flux-title">
+    <div class="bp-flux-portrait" aria-hidden="true">
+      <BotAvatar appearance={{ kind: "flux", backdrop: "none" }} pose="happy" size={180} animated={false} decorative />
+    </div>
+    <div>
+      <span class="pl-eyebrow">07 / {t("bots.flux.eyebrow")}</span>
+      <h2 id="bp-flux-title">{t("bots.flux.title")}</h2>
+      <p class="pl-lead">{t("bots.flux.body")}</p>
+      <a class="pl-link" href="https://docs.flow-like.com/studio/flowpilot/">{t("bots.flux.link")} <span aria-hidden="true">↗</span></a>
+    </div>
+  </section>
+
+  <section class="pl-section bp-abilities" aria-labelledby="bp-abilities-title">
+    <div class="pl-heading">
+      <div>
+        <span class="pl-eyebrow">08 / {t("bots.abilities.eyebrow")}</span>
+        <h2 id="bp-abilities-title">{t("bots.abilities.title")}</h2>
+      </div>
+      <div class="pl-intro">
+        <p>{t("bots.abilities.body")}</p>
+        <a class="pl-link" href="https://docs.flow-like.com/bots/capabilities/">{t("bots.abilities.link")} <span aria-hidden="true">↗</span></a>
+      </div>
+    </div>
+    <div class="bp-ability-groups">
+      {BOT_CAPABILITY_GROUPS.map((group) => (
+        <div class="bp-ability-group">
+          <h3>{groupLabel(group.id)}</h3>
+          <ul>
+            {group.capabilities.map((id) => {
+              const Icon = BOT_CAPABILITY_ICONS[id];
+              return (
+                <li>
+                  <Icon aria-hidden="true" />
+                  <span>{capabilityLabel(id)}</span>
+                  {LOCAL_ONLY_BOT_CAPABILITIES.includes(id) && <em>{t("bots.abilities.local")}</em>}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ))}
+    </div>
+  </section>
+
+  <section class="dark pl-cta" style="color-scheme:dark" aria-labelledby="bp-cta-title">
+    <div class="pl-aura" aria-hidden="true"></div>
+    <div class="bp-cta-crew" aria-hidden="true">
+      {(["scout", "byte", "flux", "post", "loop"] as const).map((id) => (
+        <BotAvatar appearance={{ ...CREW[id].appearance, backdrop: "none" }} pose="happy" size={64} animated={false} decorative />
+      ))}
+    </div>
+    <h2 id="bp-cta-title">{t("bots.cta.title")}</h2>
+    <p>{t("bots.cta.body")}</p>
+    <div class="pl-actions">
+      <a class="pl-btn pl-btn--primary" href={download}>{t("bots.cta.download")} <span aria-hidden="true">↗</span></a>
+      <a class="pl-btn" href={webApp}>{t("bots.cta.web")} <span aria-hidden="true">↗</span></a>
+      <a class="pl-btn" href={docs}>{t("bots.cta.docs")} <span aria-hidden="true">→</span></a>
+    </div>
+    <nav class="pl-related" aria-label="More of Flow-Like">
+      <a href="/apps">Apps</a>
+      <a href="/data">Data</a>
+    </nav>
+  </section>
+</PillarLayout>

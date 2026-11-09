@@ -11,6 +11,7 @@ import {
 	type RealtimeListener,
 	type RealtimeMessage,
 	type RealtimePort,
+	type RealtimeProviderStatus,
 	type RealtimeSubscription,
 	type RealtimeUpdate,
 } from "./types";
@@ -57,6 +58,7 @@ export class RealtimePortClient implements RealtimeClient {
 	private subscriptionVersion = 0;
 	private activity: RealtimeActivity = { online: true, visible: true };
 	private state: RealtimeConnectionState = "connecting";
+	private provider?: RealtimeProviderStatus;
 	private port?: ClientPort;
 	private worker?: SharedWorker;
 	private closed = false;
@@ -149,9 +151,11 @@ export class RealtimePortClient implements RealtimeClient {
 		if (this.closed) return () => {};
 		this.listeners.add(listener);
 		void Promise.resolve()
-			.then(() => {
+			.then(async () => {
 				if (!this.closed && this.listeners.has(listener))
-					return listener({ type: "state", state: this.state });
+					await listener({ type: "state", state: this.state });
+				if (this.provider && !this.closed && this.listeners.has(listener))
+					await listener({ type: "provider", status: this.provider });
 			})
 			.catch(() => {});
 		return () => {
@@ -253,6 +257,11 @@ export class RealtimePortClient implements RealtimeClient {
 		}
 		if (message.type === "state") {
 			this.state = message.state;
+			this.notify(message);
+			return;
+		}
+		if (message.type === "provider") {
+			this.provider = message.status;
 			this.notify(message);
 			return;
 		}

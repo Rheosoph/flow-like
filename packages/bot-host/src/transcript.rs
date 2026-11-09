@@ -28,6 +28,17 @@ pub struct Transcript {
     /// Something since the bot's last message names it or replies to it, or the conversation is
     /// direct; otherwise the bot reads along.
     pub addressed: bool,
+    /// Epoch milliseconds of the newest "New topic" marker in the conversation, if any.
+    pub topic_at: Option<i64>,
+}
+
+/// When the newest live "New topic" marker of `entries` was written.
+pub fn topic_at(entries: &[InboxEntry]) -> Option<i64> {
+    entries
+        .iter()
+        .filter(|entry| entry.kind == InboxEntryKind::Topic && !is_tombstone(&entry.envelope))
+        .map(|entry| entry.created_at.timestamp_millis())
+        .max()
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -76,6 +87,12 @@ fn render(body: &MessageBody) -> String {
             }
             text.push_str(&note);
         }
+    }
+    if let Some(note) = &body.note {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&note.line());
     }
     text
 }
@@ -176,6 +193,7 @@ pub fn transcript(
                 HISTORY_ENTRIES,
             ),
             addressed: true,
+            topic_at: topic_at(&entries[..=upto]),
         });
     }
     let answered = match lines.last() {
@@ -207,6 +225,7 @@ pub fn transcript(
         prompt,
         history,
         addressed,
+        topic_at: topic_at(&entries[..=upto]),
     })
 }
 
@@ -371,6 +390,7 @@ pub fn reaction_turn(
             prompt,
             history,
             addressed,
+            topic_at: topic_at(entries),
         },
         reactions,
     }

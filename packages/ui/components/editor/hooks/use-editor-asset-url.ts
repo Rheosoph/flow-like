@@ -1,9 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { signedUrlExpiry } from "../../../lib/stable-asset-url";
 import { useBackend } from "../../../state/backend-state";
 import type { IStorageState } from "../../../state/backend-state/storage-state";
+import {
+	type EditorAssetResolver,
+	EditorAssetResolverContext,
+} from "../asset-resolver-context";
 import {
 	isStorageUrl,
 	parseEditorStorageReference,
@@ -42,23 +46,33 @@ export async function resolveEditorAssetUrl(
 export function useEditorAssetUrl(url: string | undefined): string | undefined {
 	const backend = useBackend();
 	const { appId, scope } = useEditorUpload();
-	const [asset, setAsset] = useState<{ source: string; url: string }>();
+	const hostResolver = useContext(EditorAssetResolverContext);
+	const resolver = url && hostResolver?.accepts(url) ? hostResolver : undefined;
+	const needsResolution = Boolean(resolver || isStorageUrl(url));
+	const [asset, setAsset] = useState<{
+		source: string;
+		url: string;
+		resolver?: EditorAssetResolver;
+		storage: IStorageState;
+	}>();
 	const source = `${appId ?? ""}:${scope}:${url ?? ""}`;
 
 	useEffect(() => {
-		if (!url || !isStorageUrl(url)) return;
+		if (!url || !needsResolution) return;
 		let cancelled = false;
 		let timer: ReturnType<typeof setTimeout>;
 		const refresh = async () => {
 			try {
-				const resolved = await resolveEditorAssetUrl(
-					url,
-					backend.storageState,
-					appId,
-					scope,
-				);
+				const resolved = await (resolver
+					? resolver.resolve(url)
+					: resolveEditorAssetUrl(url, backend.storageState, appId, scope));
 				if (cancelled) return;
-				setAsset({ source, url: resolved });
+				setAsset({
+					source,
+					url: resolved,
+					resolver,
+					storage: backend.storageState,
+				});
 				const expiry = signedUrlExpiry(resolved);
 				const delay = Math.max(
 					30_000,
@@ -79,8 +93,20 @@ export function useEditorAssetUrl(url: string | undefined): string | undefined {
 			cancelled = true;
 			clearTimeout(timer);
 		};
-	}, [url, appId, scope, source, backend.storageState]);
+	}, [
+		url,
+		appId,
+		scope,
+		source,
+		backend.storageState,
+		resolver,
+		needsResolution,
+	]);
 
-	if (!isStorageUrl(url)) return url;
-	return asset?.source === source ? asset.url : undefined;
+	if (!needsResolution) return url;
+	return asset?.source === source &&
+		asset.resolver === resolver &&
+		asset.storage === backend.storageState
+		? asset.url
+		: undefined;
 }

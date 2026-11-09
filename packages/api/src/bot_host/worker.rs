@@ -42,7 +42,7 @@ use chrono::{DateTime, Duration as ChronoDuration, FixedOffset};
 use flow_like::{
     copilot::flowpilot_thinking,
     flow::copilot::{
-        BotToolHost, HeadlessMemory, PlatformContextInput, bot_platform_context,
+        BotToolHost, HeadlessMemory, NotesHandle, PlatformContextInput, bot_platform_context,
         bot_talk::{AnsweredRound, BotPresence, BotTalk},
         decision_event::{self, EventDecision},
         find_bot_tool_spec,
@@ -71,6 +71,7 @@ use flow_like_types::{
 use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde_json::json;
 use std::{
+    future::Future,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -383,10 +384,42 @@ impl PlatformToolBridge for HeadlessBridge {
         {
             return true;
         }
-        !ledger::holds_lease(&self.state.db, &self.turn_id, &self.host_id, now_millis())
-            .await
-            .unwrap_or(true)
+        !holds_lease_or_retry(&self.state.db, &self.turn_id, &self.host_id).await
     }
+}
+
+pub(super) fn usable_decision_model<'a>(
+    access: &crate::routes::ai::global_chat::ProfileModelAccess,
+    bit_id: Option<&'a str>,
+    turn_id: &str,
+) -> Option<&'a str> {
+    let bit_id = bit_id?;
+    match access.rejection(Some(bit_id)) {
+        Some(rejection) => {
+            tracing::warn!(%rejection, turn_id, "Bot participation decision unavailable; using normal response handling");
+            None
+        }
+        None => Some(bit_id),
+    }
+}
+
+const LEASE_CHECK_RETRIES: u32 = 2;
+const LEASE_CHECK_BACKOFF: Duration = Duration::from_millis(150);
+
+/// A database error is retried before it counts as a lost lease; `Ok(false)` is final.
+pub(super) async fn holds_lease_or_retry(db: &DatabaseConnection, turn_id: &str, host_id: &str) -> bool {
+    for attempt in 0..=LEASE_CHECK_RETRIES {
+        match ledger::holds_lease(db, turn_id, host_id, now_millis()).await {
+            Ok(held) => return held,
+            Err(error) => {
+                tracing::warn!(turn_id, attempt, %error, "bot turn lease check failed");
+                if attempt < LEASE_CHECK_RETRIES {
+                    tokio::time::sleep(LEASE_CHECK_BACKOFF * (attempt + 1)).await;
+                }
+            }
+        }
+    }
+    false
 }
 
 async fn turn_requester(
@@ -535,6 +568,11 @@ pub(crate) fn answer_request(turn: &bot_turn::Model, answer: &Answer) -> Option<
         {
             envelope["body"][decision_event::REPLY_DELIVERY_FIELD] = json!("respond");
         }
+        if let Some(note) = &answer.note
+            && let Some(envelope) = request.envelope.as_mut()
+        {
+            envelope["body"]["note"] = json!(note);
+        }
         if answer.acknowledgement
             && let Some(envelope) = request.envelope.as_mut()
         {
@@ -559,6 +597,8 @@ pub(crate) struct Answer {
     /// A participant wait already completed the held turn in its own transaction.
     pub(crate) completed: bool,
     pub(crate) event_delivery: Option<EventDecision>,
+    /// The note the turn last wrote or closed; the reply carries it as `body.note`.
+    pub(crate) note: Option<flow_like_types::bot_notes::NoteRef>,
 }
 
 async fn attempt(
@@ -634,6 +674,7 @@ async fn attempt(
             silent: true,
             completed: false,
             event_delivery: None,
+            note: None,
         });
     }
     let reacting = trigger_kind == Some(InboxEntryKind::Reaction);
@@ -682,6 +723,7 @@ async fn attempt(
             silent: true,
             completed: false,
             event_delivery: None,
+            note: None,
         });
     }
     let mut chat_conversation = turn.conversation_id.clone();
@@ -752,7 +794,10 @@ async fn attempt(
                 && saved_delivery
                     .is_some_and(|delivery| delivery.monitoring && delivery.choice.is_none())
             {
-                event_delivery = Some(EventDecision::Notify);
+                event_delivery = Some(
+                    super::event_decision::limit_notify(&state.db, turn, EventDecision::Notify)
+                        .await,
+                );
                 if let Some(event) = super::event_decision::trigger(state, turn).await?
                     && let Some(bit_id) = row
                         .model_policy
@@ -774,7 +819,14 @@ async fn attempt(
                     .await
                     {
                         Ok(choice) => {
-                            event_delivery = Some(choice.unwrap_or(EventDecision::Notify))
+                            event_delivery = Some(
+                                super::event_decision::limit_notify(
+                                    &state.db,
+                                    turn,
+                                    choice.unwrap_or(EventDecision::Notify),
+                                )
+                                .await,
+                            )
                         }
                         Err(error) => {
                             tracing::warn!(%error, turn_id = %turn.id, "Saved monitoring result could not be classified; delivering it")
@@ -801,6 +853,7 @@ async fn attempt(
                 resumed: true,
                 completed: false,
                 event_delivery,
+                note: None,
             });
         }
     }
@@ -849,9 +902,16 @@ async fn attempt(
         if let Some(rejection) = access.rejection(Some(bit_id)) {
             tracing::warn!(%rejection, turn_id = %turn.id, "Bot event decision unavailable; processing normally");
         } else {
-            match super::event_decision::classify(state, turn, bit_id, event, &event_context, None)
-                .await
-            {
+            let classified =
+                super::event_decision::classify(state, turn, bit_id, event, &event_context, None)
+                    .await;
+            let classified = match classified {
+                Ok(choice) => Ok(
+                    super::event_decision::guard_ignore(&state.db, turn, event, choice).await,
+                ),
+                Err(error) => Err(error),
+            };
+            match classified {
                 Ok(Some(EventDecision::Ignore)) => {
                     return Ok(Answer {
                         acknowledgement: false,
@@ -860,9 +920,17 @@ async fn attempt(
                         silent: true,
                         completed: false,
                         event_delivery: Some(EventDecision::Ignore),
+                        note: None,
                     });
                 }
-                Ok(choice) => event_delivery = choice,
+                Ok(choice) => {
+                    event_delivery = match choice {
+                        Some(choice) => {
+                            Some(super::event_decision::limit_notify(&state.db, turn, choice).await)
+                        }
+                        None => None,
+                    }
+                }
                 Err(error) => {
                     tracing::warn!(%error, turn_id = %turn.id, "Bot event decision failed; processing normally")
                 }
@@ -911,10 +979,8 @@ async fn attempt(
         && asker.is_none()
         && !resumed
     {
-        if let Some(bit_id) = bot.model.decision.as_deref() {
-            if let Some(rejection) = access.rejection(Some(bit_id)) {
-                return Err(rejection.into());
-            }
+        if let Some(bit_id) = usable_decision_model(&access, bot.model.decision.as_deref(), &turn.id)
+        {
             use flow_like::flow::copilot::decision::{Decision, TIMEOUT_SECS};
             let decision = tokio::time::timeout(
                 Duration::from_secs(TIMEOUT_SECS),
@@ -937,6 +1003,7 @@ async fn attempt(
                         silent: true,
                         completed: false,
                         event_delivery: None,
+                        note: None,
                     });
                 }
                 Ok(Ok(Decision::WaitFor(participant))) => {
@@ -950,6 +1017,7 @@ async fn attempt(
                             silent: true,
                             completed: false,
                             event_delivery: None,
+                            note: None,
                         });
                     }
                     use super::decision_wait::ParkOutcome;
@@ -964,6 +1032,7 @@ async fn attempt(
                                 silent: true,
                                 completed: true,
                                 event_delivery: None,
+                                note: None,
                             });
                         }
                         ParkOutcome::Superseded => {
@@ -974,6 +1043,7 @@ async fn attempt(
                                 silent: true,
                                 completed: false,
                                 event_delivery: None,
+                                note: None,
                             });
                         }
                         ParkOutcome::AlreadyAnswered | ParkOutcome::Unavailable => {}
@@ -1102,6 +1172,17 @@ async fn attempt(
         bot.context.host_tools =
             memory_turn.host_tools(std::mem::take(&mut bot.context.host_tools));
     }
+    let notes = NotesHandle::new(
+        super::notes::ServerNotes {
+            db: state.db.clone(),
+            bot_id: turn.bot_id.clone(),
+            conversation_id: chat_conversation.clone(),
+            turn: Some((turn.id.clone(), host_id.to_string())),
+        }
+        .shared(),
+        transcript.topic_at,
+    );
+    bot.context.host_tools = std::mem::take(&mut bot.context.host_tools).with_notes(notes.clone());
     let room_memory = kind == ConversationKind::Group;
     let owner_memory_allowed =
         super::memory::memory_policy(&state.db, &chat_conversation, owner, &turn.bot_id)
@@ -1176,6 +1257,11 @@ async fn attempt(
         )),
     )
     .await;
+    if let Some(bot_tools) = &bot_tools
+        && let Some(model) = usable_decision_model(&access, bot.model.decision.as_deref(), &turn.id)
+    {
+        bot_tools.set_inference(Arc::new(super::authorization::ServerInference::new(state, turn, model)));
+    }
     let bridge: Arc<dyn PlatformToolBridge> = Arc::new(HeadlessBridge {
         state: state.clone(),
         turn_id: turn.id.clone(),
@@ -1298,6 +1384,7 @@ async fn attempt(
                 silent: true,
                 completed: false,
                 event_delivery: None,
+                note: None,
             })
         }
         Ok(Ok(text))
@@ -1317,13 +1404,19 @@ async fn attempt(
                 && (delivery_state.is_some_and(|saved| saved.monitoring)
                     || event.as_ref().is_some_and(decision_event::monitoring));
             if pending_monitor {
-                event_delivery = Some(EventDecision::Notify);
+                event_delivery = Some(
+                    super::event_decision::limit_notify(&state.db, turn, EventDecision::Notify)
+                        .await,
+                );
             }
             if let Some(event) = &event
                 && decision_event::monitoring(event)
                 && pending_monitor
             {
-                event_delivery = Some(EventDecision::Notify);
+                event_delivery = Some(
+                    super::event_decision::limit_notify(&state.db, turn, EventDecision::Notify)
+                        .await,
+                );
                 if let Some(bit_id) = decision_bit.as_deref() {
                     match super::event_decision::classify(
                         state,
@@ -1336,7 +1429,14 @@ async fn attempt(
                     .await
                     {
                         Ok(choice) => {
-                            event_delivery = Some(choice.unwrap_or(EventDecision::Notify))
+                            event_delivery = Some(
+                                super::event_decision::limit_notify(
+                                    &state.db,
+                                    turn,
+                                    choice.unwrap_or(EventDecision::Notify),
+                                )
+                                .await,
+                            )
                         }
                         Err(error) => {
                             tracing::warn!(%error, turn_id = %turn.id, "Bot monitoring decision failed; delivering the result")
@@ -1360,6 +1460,7 @@ async fn attempt(
                 silent: event_delivery.is_some_and(EventDecision::quiet),
                 completed: false,
                 event_delivery,
+                note: notes.touched(),
             })
         }
     }
@@ -1480,8 +1581,11 @@ async fn complete_failure_in<C: ConnectionTrait>(
     failure_code: Option<&str>,
     now: DateTime<FixedOffset>,
 ) -> Result<(), ApiError> {
-    if let Some(code) = failure_code {
-        ledger::mark_failed_after_reply_in(db, &turn.id, message_id, code, now).await?;
+    match failure_code {
+        Some(code) => {
+            ledger::mark_failed_after_reply_in(db, &turn.id, message_id, code, now).await?;
+        }
+        None => super::recovery::clear_finished_in(db, &turn.id).await?,
     }
     Ok(())
 }
@@ -1612,7 +1716,7 @@ pub(crate) async fn finish(
             }
             let Some(request) = answer_request(turn, &answer) else {
                 match ledger::complete_silent_in(&state.db, &turn.id, host_id, now).await {
-                    Ok(true) => {}
+                    Ok(true) => wake(state, [turn.owner_id.clone()]).await,
                     Ok(false) => {
                         tracing::warn!(turn_id = %turn.id, "Bot turn: the lease was lost before the silent outcome was recorded")
                     }
@@ -1649,7 +1753,10 @@ pub(crate) async fn finish(
                 })
                 .await
             {
-                Ok(true) => kick_later(retry_at),
+                Ok(true) => {
+                    kick_later(retry_at);
+                    wake(state, [turn.owner_id.clone()]).await;
+                }
                 Ok(false) => {}
                 Err(error) => {
                     tracing::warn!(%error, turn_id = %turn.id, "Bot turn: retry not queued")
@@ -1681,8 +1788,12 @@ async fn record_failure(
     code: &str,
     now: DateTime<FixedOffset>,
 ) {
-    if let Err(error) = ledger::fail_held_in(&state.db, &turn.id, host_id, code, now).await {
-        tracing::warn!(%error, turn_id = %turn.id, "Bot turn: failure not recorded");
+    match ledger::fail_held_in(&state.db, &turn.id, host_id, code, now).await {
+        Ok(true) => wake(state, [turn.owner_id.clone()]).await,
+        Ok(false) => {}
+        Err(error) => {
+            tracing::warn!(%error, turn_id = %turn.id, "Bot turn: failure not recorded");
+        }
     }
 }
 
@@ -1723,6 +1834,17 @@ fn spawn_heartbeat(
     })
 }
 
+pub(super) async fn run_while_notifying<T>(
+    work: impl Future<Output = T>,
+    notification: impl Future<Output = ()>,
+) -> T {
+    tokio::pin!(work);
+    tokio::select! {
+        result = &mut work => result,
+        () = notification => work.await,
+    }
+}
+
 /// Runs a claimed turn to its end, keeping its lease alive while it runs.
 async fn run_claimed(state: &AppState, host_id: &str, claimed: Claimed) {
     let (turn, batched) = (claimed.turn, claimed.batched);
@@ -1737,7 +1859,11 @@ async fn run_claimed(state: &AppState, host_id: &str, claimed: Claimed) {
     let follow_up: FollowUp = Arc::default();
     let unaddressed = AtomicBool::new(false);
     let result = tokio::select! {
-        result = attempt(state, &turn, host_id, &mutating, &follow_up, &unaddressed, &batched) => Some(result),
+        // Status delivery must not delay work when a push provider is unavailable.
+        result = run_while_notifying(
+            attempt(state, &turn, host_id, &mutating, &follow_up, &unaddressed, &batched),
+            wake(state, [turn.owner_id.clone()]),
+        ) => Some(result),
         () = lost.notified() => None,
     };
     let result = match result {

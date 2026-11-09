@@ -84,14 +84,18 @@ const stats = {
 		Omit<ITranscribeRequest, "audio_base64"> & { bytes: number; wav: boolean }
 	>,
 	speech: [] as ISpeakRequest[],
+	synthesis: [] as Array<{ id: number; completedPlaybacks: number }>,
 	sent: [] as ISendInboxEntryRequest[],
 	playbacks: 0,
+	activePlaybacks: 0,
+	playbackEvents: [] as Array<{ kind: "start" | "end"; id: number }>,
 	localAudioConnections: 0,
 	peakOutput: 0,
 	contexts: [] as AudioContext[],
 	microphones: [] as MediaStream[],
 };
 let phrase = "";
+let replyText: string | null = null;
 let microphoneContext: AudioContext | null = null;
 let microphoneGain: GainNode | null = null;
 const NativeAudioContext = window.AudioContext;
@@ -123,7 +127,18 @@ class ObservedAudioContext extends NativeAudioContext {
 		const start = source.start.bind(source);
 		const connect = source.connect.bind(source);
 		source.start = (...args) => {
+			const id = Math.round((source.buffer?.getChannelData(0)[0] ?? 0) * 100);
+			source.addEventListener(
+				"ended",
+				() => {
+					stats.activePlaybacks--;
+					stats.playbackEvents.push({ kind: "end", id });
+				},
+				{ once: true },
+			);
 			stats.playbacks++;
+			stats.activePlaybacks++;
+			stats.playbackEvents.push({ kind: "start", id });
 			stats.peakOutput = 0;
 			start(...args);
 		};
@@ -232,7 +247,8 @@ const backend = {
 								v: 1,
 								enc: "none",
 								body: {
-									text: `${directory(botId).name} heard: ${body.text}`,
+									text:
+										replyText ?? `${directory(botId).name} heard: ${body.text}`,
 									reply_to: sent.message_id,
 								},
 							},
@@ -255,12 +271,21 @@ const backend = {
 		},
 		speak: async (request: ISpeakRequest) => {
 			stats.speech.push(request);
+			const id = stats.speech.length;
+			stats.synthesis.push({
+				id,
+				completedPlaybacks: stats.playbackEvents.filter(
+					(event) => event.kind === "end",
+				).length,
+			});
 			if (voice === "failure")
 				throw new Error("Fixture voice service unavailable");
 			const samples = Float32Array.from(
 				{ length: 22_400 },
 				(_, index) => 0.25 * Math.sin((2 * Math.PI * 880 * index) / 16_000),
 			);
+			// Tag the first sample so native decoding/playback can identify each chunk.
+			samples[0] = id / 100;
 			return new Blob([encodeWav(samples)], { type: "audio/wav" });
 		},
 	},
@@ -313,17 +338,30 @@ function GroupCall() {
 	);
 }
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+function beginSpeaking(text: string) {
+	phrase = text;
+	if (!microphoneGain) throw new Error("Join before speaking");
+	microphoneGain.gain.value = 0.2;
+}
+async function endSpeaking() {
+	if (!microphoneGain) throw new Error("Join before speaking");
+	microphoneGain.gain.value = 0;
+	await pause(1000);
+}
 window.botCallTest = {
 	async utterance(text: string) {
-		phrase = text;
-		if (!microphoneGain) throw new Error("Join before speaking");
-		microphoneGain.gain.value = 0.2;
-		await pause(1000);
-		microphoneGain.gain.value = 0;
-		await pause(1000);
+		beginSpeaking(text);
+		await pause(750);
+		await endSpeaking();
+	},
+	beginSpeaking,
+	endSpeaking,
+	setReplyText(text: string) {
+		replyText = text;
 	},
 	snapshot: () => ({
 		...stats,
+		speaking: microphoneGain?.gain.value !== 0,
 		contexts: stats.contexts.map((context) => context.state),
 		microphones: stats.microphones.map((stream) =>
 			stream.getTracks().map((track) => track.readyState),
@@ -338,6 +376,9 @@ declare global {
 	interface Window {
 		botCallTest: {
 			utterance(text: string): Promise<void>;
+			beginSpeaking(text: string): void;
+			endSpeaking(): Promise<void>;
+			setReplyText(text: string): void;
 			snapshot(): object;
 			dispose(): Promise<void>;
 		};

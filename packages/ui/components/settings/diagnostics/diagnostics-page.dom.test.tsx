@@ -2,6 +2,10 @@
 import React, { type ReactNode, act } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	clearRealtimeStatus,
+	useRealtimeStatus,
+} from "../../../lib/realtime/realtime-status";
 import { DiagnosticsPage } from "./diagnostics-page";
 
 const fixture = vi.hoisted(() => ({
@@ -74,6 +78,7 @@ beforeEach(() => {
 afterEach(async () => {
 	await act(async () => root.unmount());
 	container.remove();
+	clearRealtimeStatus();
 });
 
 describe("DiagnosticsPage", () => {
@@ -122,6 +127,50 @@ describe("DiagnosticsPage", () => {
 		expect(report).toContain("API base URL: https://api.example.com");
 		expect(report).toContain("Account ID: user-42");
 		expect(report).toContain("Developer mode: yes");
+		expect(report).toContain("Live updates: not reported");
 		expect(fixture.toast.success).toHaveBeenCalledOnce();
+	});
+
+	it("shows that live updates fell back to polling and where the provider failed", async () => {
+		useRealtimeStatus.setState({
+			status: {
+				runner: "in-tab",
+				state: "connected",
+				provider: {
+					transport: "aws_mqtt",
+					live: false,
+					failure: {
+						stage: "handshake",
+						message: "no answer within 10 s",
+						elapsedMs: 10_004,
+						at: Date.UTC(2026, 10, 9, 12),
+					},
+				},
+			},
+		});
+		await act(async () => {
+			root.render(<DiagnosticsPage build={BUILD} />);
+		});
+		await until(() => container.textContent?.includes("user-42") ?? false);
+		const text = container.textContent ?? "";
+		expect(text).toContain("Live updates");
+		expect(text).toContain("Polling");
+		expect(text).toContain(
+			"Runs in this tab because the shared worker did not start.",
+		);
+		expect(text).toContain(
+			"WebSocket handshake after 10.0 s (no answer within 10 s)",
+		);
+
+		await act(async () => {
+			useRealtimeStatus.setState({
+				status: {
+					runner: "shared-worker",
+					state: "connected",
+					provider: { transport: "aws_mqtt", live: true },
+				},
+			});
+		});
+		expect(container.textContent).toContain("Live via AWS IoT");
 	});
 });

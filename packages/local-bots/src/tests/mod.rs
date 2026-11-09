@@ -4,6 +4,7 @@ mod deletion;
 mod files;
 mod history;
 mod inbox;
+mod notes;
 mod paging;
 mod permissions;
 mod pins;

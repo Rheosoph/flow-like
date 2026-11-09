@@ -167,7 +167,7 @@ pub(super) async fn derived<C: ConnectionTrait>(
     outgoing: &Outgoing,
     members: &[conversation_member::Model],
 ) -> Result<Option<String>, ApiError> {
-    use flow_like_types::bot_user_context::{DERIVED_FIELD, is_ephemeral_body};
+    use flow_like_types::bot_user_context::DERIVED_FIELD;
     let Content::Plain(envelope) = &outgoing.content else {
         return Ok(None);
     };
@@ -175,11 +175,33 @@ pub(super) async fn derived<C: ConnectionTrait>(
         member.principal_id == sender
             && PrincipalKind::parse(&member.principal_kind) == Some(PrincipalKind::Bot)
     });
-    if envelope["body"].get(DERIVED_FIELD).is_some() && !is_bot {
+    let claimed = envelope["body"].get(DERIVED_FIELD).is_some();
+    if claimed && !is_bot {
         return Err(ApiError::forbidden(
             "Only a bot may mark a derived context reply",
         ));
     }
+    let earned = earned_request(db, conversation, sender, outgoing, members, is_bot).await?;
+    if claimed && earned.is_none() {
+        return Err(ApiError::bad_request(
+            "A derived context marker needs a reply to a shared context answer",
+        ));
+    }
+    Ok(earned)
+}
+
+async fn earned_request<C: ConnectionTrait>(
+    db: &C,
+    conversation: &str,
+    sender: &str,
+    outgoing: &Outgoing,
+    members: &[conversation_member::Model],
+    is_bot: bool,
+) -> Result<Option<String>, ApiError> {
+    use flow_like_types::bot_user_context::{DERIVED_FIELD, is_ephemeral_body};
+    let Content::Plain(envelope) = &outgoing.content else {
+        return Ok(None);
+    };
     if !is_bot || outgoing.kind != InboxEntryKind::Message {
         return Ok(None);
     }

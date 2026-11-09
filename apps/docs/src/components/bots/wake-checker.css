@@ -1,0 +1,56 @@
+.bd-wake-stage {
+	display: grid;
+	gap: 0.9rem;
+	align-content: start;
+	padding: 1rem;
+	border: 1px solid var(--bd-line);
+	border-radius: 12px;
+	background: var(--bd-bg);
+}
+
+.bd-wake-message {
+	justify-self: start;
+	max-width: 100%;
+	padding: 0.6rem 0.8rem;
+	border-radius: 4px 12px 12px 12px;
+	background: var(--bd-surface-strong);
+}
+
+.bd-wake-sender {
+	display: block;
+	margin-bottom: 0.15rem;
+	color: var(--bd-muted);
+	font-size: 0.72rem;
+	font-weight: 650;
+}
+
+.bd-wake-message p {
+	font-size: 0.86rem;
+}
+
+.bd-wake-message mark {
+	padding: 0 0.2rem;
+	border-radius: 4px;
+	background: var(--bd-accent-soft);
+	color: var(--bd-accent);
+	font-weight: 650;
+}
+
+.bd-wake-quote {
+	display: block;
+	margin-bottom: 0.3rem;
+	padding-left: 0.5rem;
+	border-left: 2px solid var(--bd-line);
+	color: var(--bd-muted);
+	font-size: 0.75rem;
+}
+
+.bd-wake-bot {
+	display: grid;
+	gap: 0.6rem;
+	justify-items: start;
+}
+
+.bd-wake-bot > :last-child {
+	width: 100%;
+}

@@ -450,6 +450,7 @@ describe("collectDiagnostics", () => {
 			language: "en",
 			boardRendererPreference: "egui" as const,
 			boardRendererInUse: "react-flow" as const,
+			realtime: null,
 		};
 		const merged = withDiagnosticsContext(report, { session });
 		expect(merged.session).toEqual(session);

@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use chrono::{DateTime, Utc};
 use flow_like_storage::arrow_schema::Schema;
 use flow_like_storage::lancedb::{Connection, table::WriteOptions};
 use flow_like_types::Result;
@@ -147,8 +148,13 @@ impl ExpiryStore {
         }))
     }
 
-    pub(crate) async fn has_markers(&self) -> Result<bool> {
-        Ok(self.table.count(None).await? > 0)
+    pub(crate) async fn drop_older_than(&self, horizon: DateTime<Utc>) -> Result<usize> {
+        let filter = format!("cutoff < {}", millis(horizon));
+        let stale = self.table.count(Some(filter.clone())).await?;
+        if stale > 0 {
+            self.table.delete(&filter).await?;
+        }
+        Ok(stale)
     }
 
     pub(crate) async fn refresh(&self) -> Result<()> {

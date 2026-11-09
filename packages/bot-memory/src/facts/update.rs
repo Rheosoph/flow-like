@@ -137,8 +137,6 @@ pub fn merge_into(target: &Fact, candidate: &Fact) -> Fact {
         merged.valid_to = merged.valid_to.or(candidate.valid_to);
         merged.geojson = merged.geojson.or_else(|| candidate.geojson.clone());
         merged.time = merged.time.or(candidate.time);
-        // Repeated extraction adds evidence without renewing a retention deadline.
-        merged.expires_at = merged.expires_at.or(candidate.expires_at);
     }
     if merged.segment_id.is_none() {
         merged.segment_id = candidate.segment_id.clone();
@@ -495,6 +493,10 @@ async fn decide(
     };
     let (action, decided_by) = guard_context(action, decided_by, candidate, neighbours);
     let (action, decided_by) = guard_time(action, decided_by, candidate, neighbours);
+    let action = match action {
+        UpdateAction::AddSuperseded { .. } if requested => UpdateAction::Add,
+        other => other,
+    };
     Ok(guard_trust(action, decided_by, candidate, neighbours))
 }
 
@@ -1120,6 +1122,14 @@ mod tests {
             1,
         );
         assert_eq!(merge_into(&unlocated, &existing).geojson, existing.geojson);
+    }
+
+    #[test]
+    fn merging_never_gives_a_permanent_fact_an_expiry() {
+        let permanent = fact("f_old", "The user likes tea.", FactSource::UserStated, 1);
+        let mut candidate = fact("f_new", "The user likes tea.", FactSource::UserStated, 2);
+        candidate.expires_at = Some(candidate.recorded_at + chrono::Duration::hours(1));
+        assert_eq!(merge_into(&permanent, &candidate).expires_at, None);
     }
 
     #[test]

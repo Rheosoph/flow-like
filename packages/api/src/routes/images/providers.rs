@@ -286,10 +286,9 @@ pub(super) async fn call(
         })
         .map(str::to_owned);
     if !response.status().is_success() {
-        if provider == Provider::OpenRouter && matches!(response.status().as_u16(), 400 | 404 | 422)
-        {
+        if provider == Provider::OpenRouter {
             // Refresh metadata on the next request without replaying a paid generation.
-            capabilities::invalidate(model);
+            capabilities::invalidate_for_status(model, response.status().as_u16());
         }
         // Upstream bodies can echo prompts, credentials, or account identifiers.
         tracing::warn!(

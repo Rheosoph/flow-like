@@ -81,6 +81,7 @@ export function nativeBotUrl(
 /** Native surfaces cache display data only. Instructions, messages and encrypted content stay in the app. */
 export async function loadNativeBotCatalog(
 	backend: IBackendState,
+	onTurnsRead?: (turns: readonly IBotTurn[]) => void,
 ): Promise<NativeBotCatalog> {
 	const catalog: NativeBotCatalog = {
 		bots: [],
@@ -96,6 +97,7 @@ export async function loadNativeBotCatalog(
 			backend.botState?.turns?.list() ??
 			Promise.resolve([]),
 	]);
+	if (turnsRead.status === "fulfilled") onTurnsRead?.(turnsRead.value);
 	const bots =
 		botsRead.status === "fulfilled" ? botsRead.value.slice(0, 100) : [];
 	const conversations =

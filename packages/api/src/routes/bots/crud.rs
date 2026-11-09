@@ -323,10 +323,11 @@ pub(crate) async fn patch_in<C: ConnectionTrait>(
         admit_server_bot(db, owner_id).await?;
     }
     let changed = before.changed_fields(&after);
-    Ok(Patched {
-        bot: save_settings(db, owner_id, current, &after).await?,
-        changed,
-    })
+    let bot = save_settings(db, owner_id, current, &after).await?;
+    if before.has(BotCapability::Encryption) != after.has(BotCapability::Encryption) {
+        inbox::conversations::sync_own_bot_direct(db, &bot).await?;
+    }
+    Ok(Patched { bot, changed })
 }
 
 /// Marks the bot deleted and drops its app attachments and secrets with it.
@@ -384,6 +385,57 @@ pub async fn list_bots(
     }))
 }
 
+/// The owner's bots: Assistant and Flux first, then the bots they created, oldest first.
+pub(crate) async fn owner_bots(state: &AppState, owner_id: &str) -> Result<Vec<Bot>, ApiError> {
+    let bots = provision::bots_with_system(state, owner_id).await?;
+    Ok(bots.into_iter().map(Bot::from).collect())
+}
+
+/// Creates a bot of the owner's own from `body`, within their limits.
+pub(crate) async fn create_owned(
+    state: &AppState,
+    owner_id: &str,
+    body: CreateBotRequest,
+) -> Result<Bot, ApiError> {
+    let (preset_id, settings) = validation::create_settings(body)?;
+    verify_references(&state.db, owner_id, None, &settings).await?;
+    ensure_user_exists(state, owner_id).await?;
+    let now = chrono::Utc::now().fixed_offset();
+    let row = provision::new_bot_row(owner_id, None, preset_id, &settings, now)?;
+    Ok(Bot::from(
+        insert_custom_bot(state, owner_id, settings.location, row).await?,
+    ))
+}
+
+/// Merges `body` into the owner's bot under its lock and moves its task schedules along when
+/// its location changed.
+pub(crate) async fn update_owned(
+    state: &AppState,
+    owner_id: &str,
+    bot_id: &str,
+    body: UpdateBotRequest,
+) -> Result<Patched, ApiError> {
+    let patched = state
+        .transaction(|txn| {
+            let (owner_id, bot_id, body) = (owner_id.to_string(), bot_id.to_string(), body.clone());
+            Box::pin(async move {
+                if body.location == Some(BotLocation::Server) {
+                    coordinate(txn, "bot-owner", &[&owner_id]).await?;
+                }
+                lock_bot(txn, &bot_id).await?;
+                patch_in(txn, &owner_id, &bot_id, body).await
+            })
+        })
+        .await?;
+    if patched.changed.contains(&"location") {
+        crate::bot_host::task_schedules::sync_bot(state, bot_id).await;
+    }
+    if patched.changed.contains(&"capabilities") {
+        inbox::wake(state, [owner_id.to_string()]).await;
+    }
+    Ok(patched)
+}
+
 #[utoipa::path(
     post,
     path = "/bots",
@@ -406,12 +458,7 @@ pub async fn create_bot(
     Json(body): Json<CreateBotRequest>,
 ) -> Result<Json<Bot>, ApiError> {
     let sub = user.sub()?;
-    let (preset_id, settings) = validation::create_settings(body)?;
-    verify_references(&state.db, &sub, None, &settings).await?;
-    ensure_user_exists(&state, &sub).await?;
-    let now = chrono::Utc::now().fixed_offset();
-    let row = provision::new_bot_row(&sub, None, preset_id, &settings, now)?;
-    let bot = Bot::from(insert_custom_bot(&state, &sub, settings.location, row).await?);
+    let bot = create_owned(&state, &sub, body).await?;
     audit!(
         state,
         user,
@@ -475,21 +522,7 @@ pub async fn update_bot(
     Json(body): Json<UpdateBotRequest>,
 ) -> Result<Json<Bot>, ApiError> {
     let sub = user.sub()?;
-    let patched = state
-        .transaction(|txn| {
-            let (sub, bot_id, body) = (sub.clone(), bot_id.clone(), body.clone());
-            Box::pin(async move {
-                if body.location == Some(BotLocation::Server) {
-                    coordinate(txn, "bot-owner", &[&sub]).await?;
-                }
-                lock_bot(txn, &bot_id).await?;
-                patch_in(txn, &sub, &bot_id, body).await
-            })
-        })
-        .await?;
-    if patched.changed.contains(&"location") {
-        crate::bot_host::task_schedules::sync_bot(&state, &bot_id).await;
-    }
+    let patched = update_owned(&state, &sub, &bot_id, body).await?;
     if !patched.changed.is_empty() {
         audit!(
             state,

@@ -39,9 +39,91 @@ function context() {
 	};
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+	vi.unstubAllGlobals();
+	vi.restoreAllMocks();
+});
 
 describe("call microphone capture", () => {
+	test("previews speech before silence and preserves its capture time on final delivery", async () => {
+		const audio = context();
+		let now = 10_000;
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		const onUtterance = vi.fn();
+		const onPartial = vi.fn();
+		const onReset = vi.fn();
+		const listener = await startCallListener({} as MediaStream, onUtterance, {
+			context: audio.context,
+			onPartial,
+			onReset,
+		});
+		for (let index = 0; index < 9; index++) {
+			now += 128;
+			audio.block(0.1);
+		}
+		expect(onPartial).toHaveBeenCalledOnce();
+		expect(onPartial.mock.calls[0][0]).toMatchObject({
+			offsetMs: 0,
+			durationMs: 1024,
+			capturedAt: 10_000,
+		});
+		expect(onUtterance).not.toHaveBeenCalled();
+		for (let index = 0; index < 6; index++) {
+			now += 128;
+			audio.block(0);
+		}
+		expect(onPartial).toHaveBeenCalledOnce();
+		expect(onUtterance).toHaveBeenCalledOnce();
+		expect(onUtterance.mock.calls[0][0]).toMatchObject({
+			durationMs: 1302,
+			capturedAt: 10_000,
+		});
+		listener.stop();
+		listener.stop();
+		expect(onReset).toHaveBeenCalledOnce();
+	});
+
+	test("pausing invalidates previews and anchors resumed speech after the pause", async () => {
+		const audio = context();
+		let now = 10_000;
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		const onUtterance = vi.fn();
+		const onPartial = vi.fn();
+		const onReset = vi.fn();
+		const listener = await startCallListener({} as MediaStream, onUtterance, {
+			context: audio.context,
+			onPartial,
+			onReset,
+		});
+		for (let index = 0; index < 8; index++) {
+			now += 128;
+			audio.block(0.1);
+		}
+		listener.setPaused(true);
+		listener.setPaused(true);
+		expect(onReset).toHaveBeenCalledOnce();
+		for (let index = 0; index < 20; index++) audio.block(0.1);
+		expect(onPartial).toHaveBeenCalledOnce();
+		listener.setPaused(false);
+		now = 30_000;
+		for (let index = 0; index < 8; index++) {
+			now += 128;
+			audio.block(0.2);
+		}
+		expect(onPartial).toHaveBeenCalledTimes(2);
+		expect(onPartial.mock.calls[1][0]).toMatchObject({
+			offsetMs: 1024,
+			durationMs: 1024,
+			capturedAt: 30_000,
+		});
+		listener.stop();
+		expect(onUtterance).toHaveBeenCalledOnce();
+		expect(onUtterance.mock.calls[0][0]).toMatchObject({
+			capturedAt: 30_000,
+		});
+		expect(onReset).toHaveBeenCalledTimes(2);
+	});
+
 	test("re-enabling listening registers its worklet once per call context", async () => {
 		const audio = context();
 		const addModule = vi.fn(async () => {});

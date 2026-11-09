@@ -310,6 +310,7 @@ pub(crate) async fn park_in<C: ConnectionTrait>(
     let card = &named_requester(txn, turn, card).await?;
     let parked = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_WAITING))
+        .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(bot_turn::Column::HostId, Expr::value(None::<String>))
         .col_expr(
             bot_turn::Column::LeaseUntil,
@@ -507,6 +508,7 @@ pub(crate) async fn answer_in<C: ConnectionTrait + Send + Sync>(
     .await?;
     let queued = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_QUEUED))
+        .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(bot_turn::Column::HostId, Expr::value(None::<String>))
         .col_expr(
             bot_turn::Column::LeaseUntil,
@@ -527,6 +529,7 @@ pub(crate) async fn answer_in<C: ConnectionTrait + Send + Sync>(
             format!("Turn '{turn_id}' stopped waiting"),
         ));
     }
+    super::recovery::rebase_deadline_in(txn, &turn.id, now).await?;
     let origin = super::talk::turn_origin_conversation(txn, &turn).await?;
     super::decision_wait::clear_before_in(txn, bot_id, &origin, now).await?;
     let turn = ledger::find(txn, turn_id, Some(owner_id))
@@ -635,6 +638,7 @@ pub(crate) async fn expire_in<C: ConnectionTrait>(
 ) -> Result<Option<Sent>, ApiError> {
     let ended = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_CANCELLED))
+        .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(
             bot_turn::Column::ErrorCode,
             Expr::value(ERROR_APPROVAL_EXPIRED),
@@ -648,6 +652,7 @@ pub(crate) async fn expire_in<C: ConnectionTrait>(
     if ended.rows_affected == 0 {
         return Ok(None);
     }
+    super::recovery::clear_in(txn, &turn.id).await?;
     let Some(conversation) = conversation else {
         return Ok(None);
     };

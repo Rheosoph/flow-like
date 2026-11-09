@@ -396,6 +396,33 @@ async fn the_bot_opens_the_sealed_message_and_seals_its_reply_to_every_member() 
 }
 
 #[tokio::test]
+async fn every_device_of_a_member_opens_the_reply() {
+    let f = Fixture::start(&["encryption"], true).await;
+    let phone = person_ring();
+    let phone_key = phone.ensure(ALICE).unwrap().0;
+    f.hub
+        .keys
+        .lock()
+        .unwrap()
+        .push(directory_key(ALICE, &phone_key));
+    let entry = f.sealed_entry(1, "m1", "from my laptop");
+    let (status, _) = f.run_turn(vec![entry]).await.unwrap();
+    assert_eq!(status, TurnStatus::Done);
+
+    let sent = f.hub.sent.lock().unwrap().clone();
+    let message_id = sent[0]["message_id"].as_str().unwrap();
+    let envelope = &sent[0]["envelopes"][ALICE];
+    assert_eq!(envelope["keys"].as_array().unwrap().len(), 2);
+    for ring in [&f.alice, &phone] {
+        let plaintext = ring
+            .open(ALICE, &scope(message_id, BOT), envelope)
+            .unwrap();
+        let body: Value = serde_json::from_slice(&plaintext).unwrap();
+        assert_eq!(body["text"], "answer to: from my laptop");
+    }
+}
+
+#[tokio::test]
 async fn the_server_never_receives_plaintext_or_memory_of_an_encrypted_turn() {
     let f = Fixture::start(&["encryption"], true).await;
     let entry = f.sealed_entry(1, "m1", "launch code 4711");

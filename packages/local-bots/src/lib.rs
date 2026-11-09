@@ -15,6 +15,7 @@ mod connectors;
 mod error;
 mod inbox;
 mod model;
+mod notes;
 mod permissions;
 mod recovery;
 mod room_decisions;
