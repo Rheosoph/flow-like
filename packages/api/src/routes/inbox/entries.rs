@@ -1,5 +1,6 @@
 use super::{
-    Event, INBOX_ENVELOPES_MISMATCH, INBOX_HANDLE_NOT_ALLOWED, INBOX_MESSAGE_ID_TAKEN,
+    Event, INBOX_ENCRYPTION_MISMATCH, INBOX_ENVELOPES_MISMATCH, INBOX_HANDLE_NOT_ALLOWED,
+    INBOX_MESSAGE_ID_TAKEN,
     acting_reader, active_members, active_membership, allocate_seqs, conversation_not_found,
     delivery::{
         Addressed, BotDelivery, BotRecipient, bot_recipients, deliver_to_bots, live_bots,
@@ -529,10 +530,14 @@ fn envelopes_for(
             .iter()
             .map(|member| (member.principal_id.clone(), envelope.clone()))
             .collect()),
-        (Content::Plain(_), ConversationEncryption::E2e) => Err(ApiError::bad_request(
+        (Content::Plain(_), ConversationEncryption::E2e) => Err(ApiError::coded(
+            StatusCode::BAD_REQUEST,
+            INBOX_ENCRYPTION_MISMATCH,
             "This conversation is end-to-end encrypted: send envelopes, one sealed envelope per member",
         )),
-        (Content::Sealed(_), ConversationEncryption::Plain) => Err(ApiError::bad_request(
+        (Content::Sealed(_), ConversationEncryption::Plain) => Err(ApiError::coded(
+            StatusCode::BAD_REQUEST,
+            INBOX_ENCRYPTION_MISMATCH,
             "This conversation is not end-to-end encrypted: send one plain envelope",
         )),
         (Content::Sealed(envelopes), ConversationEncryption::E2e) => {
@@ -1150,7 +1155,7 @@ async fn read_entries<C: ConnectionTrait>(
     request_body = SendEntryRequest,
     responses(
         (status = 200, description = "Your copy of the event, with its position `seq`; every active member, you included, received one. Sending the same message_id again returns this copy without sending twice. As a bot, the message answers the turn its host claimed.", body = InboxEntry),
-        (status = 400, description = "The message id, kind, an envelope or the body is malformed, the envelope form doesn't match the conversation's encryption, or `turn` and `as` don't come together"),
+        (status = 400, description = "The message id, kind, an envelope or the body is malformed, or `turn` and `as` don't come together; INBOX_ENCRYPTION_MISMATCH: the envelope form doesn't match the conversation's encryption (reload the conversation and send again)"),
         (status = 401, description = "Not signed in"),
         (status = 403, description = "INBOX_NOT_YOUR_MESSAGE: you can only edit or delete messages you sent; INBOX_HANDLE_NOT_ALLOWED: only a bot attaches workspace files, from its own workspace"),
         (status = 404, description = "You (or the bot you send as) are not in this conversation, or `as` is not one of your bots"),

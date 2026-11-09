@@ -461,6 +461,21 @@ impl BotRunContext {
             .collect()
     }
 
+    /// Flux's management of its owner's bots: only for a turn the owner asked, where the host
+    /// runs the tools.
+    fn crew_tool_specs(&self) -> Vec<PlatformToolSpec> {
+        if !self.owner_asked() {
+            return Vec::new();
+        }
+        linked_tool_names()
+            .into_iter()
+            .filter(|name| {
+                flow_like_bot_tools::crew::is_crew_tool(name) && self.host_tools.runs(name)
+            })
+            .filter_map(bot_tool_spec)
+            .collect()
+    }
+
     /// Whether the owner woke this turn (or chats live); `false` for a room member's message.
     pub fn owner_asked(&self) -> bool {
         self.requester
@@ -542,6 +557,7 @@ impl BotRunContext {
             global.extend(self.capability_tool_specs().into_iter().filter(|spec| {
                 flow_like_bot_tools::configuration::is_configuration_tool(spec.name)
             }));
+            global.extend(self.crew_tool_specs());
             global.extend(self.memory_engine_tool_specs());
             global.extend(
                 self.capability_tool_specs()
@@ -644,6 +660,11 @@ impl BotRunContext {
                     self.label()
                 ),
             ));
+        }
+        if flow_like_bot_tools::crew::is_crew_tool(tool_name) {
+            flow_like_bot_tools::crew::validate_call(tool_name, &arguments)
+                .map_err(|error| refusal(tool_name, "invalid_args", false, error.to_string()))?;
+            return Ok(arguments);
         }
         if flow_like_bot_tools::configuration::requires_approval(tool_name) {
             let parsed: flow_like_bot_tools::configuration::UpdateArgs =
@@ -1190,7 +1211,7 @@ impl PlatformToolBridge for DeniedToolBridge {
                 "This tool is disabled for the current turn; nothing was run.".into(),
             );
         }
-        if flow_like_bot_tools::configuration::is_configuration_tool(name) {
+        if flow_like_bot_tools::configuration::is_settings_tool(name) {
             return match self.bot.prepare_tool_call(name, arguments) {
                 Ok(arguments) => self.inner.call(name, arguments).await,
                 Err(refusal) => refusal,
@@ -1200,7 +1221,7 @@ impl PlatformToolBridge for DeniedToolBridge {
     }
     fn supports_tool(&self, name: &str) -> bool {
         !self.bot.denies_tool(name)
-            && (!flow_like_bot_tools::configuration::is_configuration_tool(name)
+            && (!flow_like_bot_tools::configuration::is_settings_tool(name)
                 || self.bot.offers(name))
             && self.inner.supports_tool(name)
     }
@@ -1429,6 +1450,12 @@ fn memory_ability_line(offered: &[&str]) -> Option<String> {
 fn configuration_ability_line(offered: &[&str]) -> Option<String> {
     offered.contains(&flow_like_bot_tools::configuration::BOT_CONFIGURATION).then(|| {
         "- Your settings: `bot_configuration` reads your name, description, instructions, capabilities and model mappings. When a requested task needs a disabled capability or a missing model mapping, inspect these settings and use `bot_models` to recommend a compatible model from your owner's profile. `bot_update_configuration` proposes only the necessary changes for your owner to review. Every change requires their explicit approval, including in auto mode. Changes apply on the next turn; continue this turn with its existing permissions and model mappings.".to_string()
+    })
+}
+
+fn crew_ability_line(offered: &[&str]) -> Option<String> {
+    offered.contains(&flow_like_bot_tools::crew::CREATE_BOT).then(|| {
+        "## BOTS\nYou build and adjust your owner's bots as you build apps. A bot is a persona with its own conversation that acts with the owner's rights and holds only the capabilities switched on for it. When the owner asks for a bot, an assistant that does something on its own, or a change to one of their bots, call `list_bots` first so you change an existing bot instead of creating a duplicate, and `get_bot` before `update_bot`. Write its instructions as a complete system prompt for its role. Switch on only the capabilities its purpose needs, and pick models with `bot_models` only when the owner asks for specific ones. When the bot needs an app that does not exist yet, build the app first, then create the bot with `selected_apps` and that app in `app_ids`. Creating or changing a bot always asks the owner; a declined or failed call changed nothing. Say which settings the owner can still adjust in the Bots tab: look, data classification, secrets, tasks and per-app restrictions.".to_string()
     })
 }
 
@@ -1758,6 +1785,7 @@ pub fn bot_system_prompt(bot: &BotRunContext) -> String {
             .chain(who)
             .chain(memory_ability_line(&bot.offered_tools()))
             .chain(configuration_ability_line(&bot.offered_tools()))
+            .chain(crew_ability_line(&bot.offered_tools()))
             .chain(capability_tool_lines(bot, &bot.offered_tools()))
             .collect();
         return if extras.is_empty() {
@@ -1801,7 +1829,7 @@ pub fn bot_system_prompt(bot: &BotRunContext) -> String {
         "Everything else is switched off. When your owner asks for something you can't do, say what is missing; they can change your capabilities in your settings.".to_string()
     });
     sections.push(
-        "## LEAVE TO FLUX\nBuilding, changing or debugging apps, workflows, boards, pages, widgets, Events, FlowScript or the Home page is Flux's work. When your owner asks for that, say so and suggest asking Flux; never claim you built or changed one.".to_string(),
+        "## LEAVE TO FLUX\nBuilding, changing or debugging apps, workflows, boards, pages, widgets, Events, FlowScript or the Home page, creating a bot and changing another bot's settings are Flux's work. When your owner asks for that, say so and suggest asking Flux; never claim you built or changed one.".to_string(),
     );
     sections.push(format!(
         "## DATA\n{}",

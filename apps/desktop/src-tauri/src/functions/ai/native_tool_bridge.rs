@@ -62,6 +62,8 @@ pub struct NativeRunOptions {
     /// A headless bot turn's conversation: when the bot remembers, its memory replaces the last
     /// entries as the turn's history.
     pub bot_memory: Option<flow_like::flow::copilot::MemoryTurnSource>,
+    /// The bot's notes in this turn's inbox conversation; never set for sealed conversations.
+    pub notes: Option<flow_like::flow::copilot::bot_notes::NotesHandle>,
     /// Shared or unreadable interactive conversation metadata forbids legacy memory writes.
     pub legacy_memory_read_only: bool,
     /// An interactive inbox run's explicit owner-memory permission. Missing metadata denies

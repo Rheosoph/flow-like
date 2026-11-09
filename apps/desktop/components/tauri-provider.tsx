@@ -55,6 +55,7 @@ import type {
 } from "@flow-like/flow-like-ui/lib";
 import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
 import { requiresInteractiveSignIn } from "@flow-like/flow-like-ui/lib/auth/oidc-renewal";
+import { withEndToEnd } from "@flow-like/flow-like-ui/lib/inbox-e2e";
 import type { MeetingClient } from "@flow-like/flow-like-ui/lib/meetings/types";
 import { completeMediaUpload } from "@flow-like/flow-like-ui/lib/profile-media-upload";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
@@ -78,6 +79,8 @@ import {
 	withHubAuth,
 } from "../lib/hub-auth";
 import { scheduleIDBCleanup } from "../lib/idb-maintenance";
+import { tauriInboxCrypto } from "../lib/inbox-e2e";
+import { accountSession } from "../lib/local-bots/account";
 import { isIOSDevice, isMobileDevice } from "../lib/platform";
 import {
 	type OnlineProfile,
@@ -248,7 +251,11 @@ export class TauriBackend implements IBackendState {
 		this.sinkState = new SinkState();
 		this.salesState = new SalesState(this);
 		this.botState = new BotState(this);
-		this.inboxState = new InboxState(this);
+		this.inboxState = withEndToEnd(
+			new InboxState(this),
+			tauriInboxCrypto,
+			() => accountSession(this)?.sub,
+		);
 		this.meetingClient = createNativeMeetingClient(this);
 		this.usageState = new UsageState(this);
 		this.audioState = new AudioState(this);

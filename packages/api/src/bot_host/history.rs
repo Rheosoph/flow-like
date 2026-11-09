@@ -33,6 +33,8 @@ pub(crate) struct Transcript {
     /// Something since the bot's last message names it or replies to it, or the conversation is
     /// direct; otherwise the bot reads along.
     pub addressed: bool,
+    /// Epoch milliseconds of the latest "New topic" marker in the entries read, when there is one.
+    pub topic_at: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -104,7 +106,26 @@ pub(super) fn render(body: &MessageBody) -> String {
             text.push_str(&note);
         }
     }
+    if let Some(note) = &body.note {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&note.line());
+    }
     text
+}
+
+/// When the latest "New topic" marker among `window` was written.
+fn topic_at_of(window: &[inbox_entry::Model]) -> Option<i64> {
+    window
+        .iter()
+        .filter(|entry| {
+            InboxEntryKind::parse(&entry.kind) == Some(InboxEntryKind::Topic)
+                && !is_tombstone(&entry.envelope)
+                && plain_body(&entry.envelope).is_some()
+        })
+        .map(|entry| entry.created_at.timestamp_millis())
+        .max()
 }
 
 fn clipped(text: &str, max: usize) -> String {
@@ -332,6 +353,7 @@ pub(crate) async fn transcript<C: ConnectionTrait>(
         addressed: context_prompt.is_some()
             || kind != ConversationKind::Group
             || addressed_to(&lines, bot_id),
+        topic_at: topic_at_of(&window),
     })
 }
 
@@ -551,6 +573,7 @@ pub(crate) async fn reaction_turn<C: ConnectionTrait>(
             prompt,
             history,
             addressed,
+            topic_at: topic_at_of(&window),
         },
         reactions,
     })

@@ -122,7 +122,10 @@ import {
 	isAgentBackendProvider,
 	normalizeAIProvider,
 } from "../flowpilot/types";
-import { fileToAttachment } from "../interfaces/chat-default/attachment";
+import {
+	fileToAttachment,
+	fitsInlineUnchanged,
+} from "../interfaces/chat-default/attachment";
 import type {
 	IChatConcurrency,
 	IChatRef,
@@ -762,17 +765,24 @@ export function GlobalChatBody({
 			if (nativeRequest) await authorizeNativeRequest();
 
 			// Any file type is accepted: files become local tmp files (Tauri) or presigned tmp
-			// uploads — only URLs travel through IPC and land in IndexedDB, no blobs. FlowPilot
-			// itself only reads images (vision); every attachment is also listed in a manifest so
-			// it can hand the relevant files to apps it calls (call_app_chat `forward_files`).
+			// uploads — only URLs travel through IPC and land in IndexedDB, no blobs. A signed-in
+			// bot chat uploads an image that would not reach the model unchanged inline, so a
+			// provider that fetches links reads the original; FlowPilot's history keeps local
+			// files that do not expire. FlowPilot itself only reads images (vision); every
+			// attachment is also listed in a manifest so it can hand the relevant files to apps it
+			// calls (call_app_chat `forward_files`).
 			const allFiles = filesAttached ?? [];
+			const uploadsLinks =
+				isBotConversation(sessionId) && authRef.current.isAuthenticated;
+			const keepLocal = (file: File) =>
+				!uploadsLinks || fitsInlineUnchanged(file, allFiles);
 			let attachments: Awaited<ReturnType<typeof fileToAttachment>> = [];
 			if (allFiles.length > 0) {
 				try {
 					attachments = await fileToAttachment(
 						allFiles,
 						backend,
-						true,
+						keepLocal,
 						nativeRequest ? checkCurrent : undefined,
 					);
 					checkCurrent();

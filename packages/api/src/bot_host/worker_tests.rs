@@ -351,6 +351,7 @@ fn a_reply_answers_the_trigger_one_hop_further_and_a_failure_names_its_code() {
         hops: 2,
         requester_id: Some("user-a".into()),
         audience: "OWNER".into(),
+        status_text: None,
         created_at: at(0),
         updated_at: at(0),
     };
@@ -687,6 +688,7 @@ fn only_a_spoken_answer_posts_a_reply() {
         hops: 0,
         requester_id: None,
         audience: "ROOM".into(),
+        status_text: None,
         created_at: now_millis(),
         updated_at: now_millis(),
     };
@@ -697,6 +699,7 @@ fn only_a_spoken_answer_posts_a_reply() {
         silent: true,
         completed: false,
         event_delivery: None,
+        note: None,
     };
     assert!(answer_request(&turn, &silent).is_none());
     let mut spoken = Answer {
@@ -706,6 +709,7 @@ fn only_a_spoken_answer_posts_a_reply() {
         silent: false,
         completed: false,
         event_delivery: None,
+        note: None,
     };
     assert!(answer_request(&turn, &spoken).is_some());
     spoken.acknowledgement = true;

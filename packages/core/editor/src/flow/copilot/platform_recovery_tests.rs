@@ -322,10 +322,7 @@ async fn durable_payload_omits_images_and_retains_reference_fingerprints() {
             store.clone(),
             20,
             "Inspect the app inventory.",
-            Some(vec![ChatImage {
-                data: data.into(),
-                media_type: "image/png".into()
-            }])
+            Some(vec![ChatImage::inline(data.into(), "image/png".into())])
         )
         .await
         .0

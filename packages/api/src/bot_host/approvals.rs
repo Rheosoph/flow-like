@@ -310,6 +310,7 @@ pub(crate) async fn park_in<C: ConnectionTrait>(
     let card = &named_requester(txn, turn, card).await?;
     let parked = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_WAITING))
+        .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(bot_turn::Column::HostId, Expr::value(None::<String>))
         .col_expr(
             bot_turn::Column::LeaseUntil,
@@ -507,6 +508,7 @@ pub(crate) async fn answer_in<C: ConnectionTrait + Send + Sync>(
     .await?;
     let queued = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_QUEUED))
+        .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(bot_turn::Column::HostId, Expr::value(None::<String>))
         .col_expr(
             bot_turn::Column::LeaseUntil,
@@ -636,6 +638,7 @@ pub(crate) async fn expire_in<C: ConnectionTrait>(
 ) -> Result<Option<Sent>, ApiError> {
     let ended = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_CANCELLED))
+        .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(
             bot_turn::Column::ErrorCode,
             Expr::value(ERROR_APPROVAL_EXPIRED),

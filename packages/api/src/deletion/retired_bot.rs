@@ -13,7 +13,7 @@ use crate::error::ApiError;
 use flow_like_types::anyhow;
 
 /// The rows of each table that go with a deleted bot, selected by the bot's id (`$root`).
-pub fn retired_bot_rows() -> [(&'static str, Predicate); 12] {
+pub fn retired_bot_rows() -> [(&'static str, Predicate); 13] {
     let by = |column: &str| Predicate::Root {
         column: column.to_owned(),
     };
@@ -23,6 +23,7 @@ pub fn retired_bot_rows() -> [(&'static str, Predicate); 12] {
             inner: Box::new(by("botId")),
         }),
         ("BotDecisionWait", by("botId")),
+        ("BotNote", by("botId")),
         ("BotPermission", by("fromBotId")),
         ("BotPermission", by("toBotId")),
         ("BotHostHeartbeat", by("botId")),
@@ -114,6 +115,7 @@ mod tests {
             schema.create_table_from_entity(crate::entity::bot_turn::Entity),
             schema.create_table_from_entity(crate::entity::bot_turn_checkpoint::Entity),
             schema.create_table_from_entity(crate::entity::bot_decision_wait::Entity),
+            schema.create_table_from_entity(crate::entity::bot_note::Entity),
         ] {
             let mut table = Table::create();
             table.table(source.get_table_name().unwrap().clone());

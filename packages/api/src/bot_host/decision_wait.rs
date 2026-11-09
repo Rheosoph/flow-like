@@ -409,6 +409,7 @@ pub(crate) async fn park_wait_in<C: ConnectionTrait>(
     if !newer.is_empty() {
         bot_turn::Entity::update_many()
             .col_expr(bot_turn::Column::Status, Expr::value(STORED_DONE))
+            .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
             .col_expr(bot_turn::Column::ErrorCode, Expr::value(ERROR_SILENT))
             .col_expr(bot_turn::Column::UpdatedAt, Expr::value(now))
             .filter(bot_turn::Column::BotId.eq(&turn.bot_id))

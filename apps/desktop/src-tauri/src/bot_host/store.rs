@@ -179,6 +179,26 @@ pub trait HostStore: Send + Sync + 'static {
     ) -> Result<bool, String> {
         Ok(false)
     }
+    fn supports_notes(&self) -> bool {
+        false
+    }
+    async fn list_notes(
+        &self,
+        _bot_id: &str,
+        _conversation_id: &str,
+    ) -> Result<Vec<flow_like_types::bot_notes::BotNote>, String> {
+        Err("This store keeps no notes".into())
+    }
+    async fn write_note(
+        &self,
+        _bot_id: &str,
+        _conversation_id: &str,
+        _key: &str,
+        _change: flow_like_types::bot_notes::NoteChange,
+        _author: flow_like_types::bot_notes::NoteAuthor,
+    ) -> Result<flow_like_types::bot_notes::BotNote, String> {
+        Err("This store keeps no notes".into())
+    }
     /// Stores the summary bot `author_id`'s memory wrote.
     async fn write_segment(
         &self,
@@ -265,6 +285,29 @@ impl HostStore for AppStore {
                 .find_map(|(id, entry)| (id == bot).then_some(entry)))
         })
         .await
+    }
+    fn supports_notes(&self) -> bool {
+        true
+    }
+    async fn list_notes(
+        &self,
+        bot_id: &str,
+        conversation_id: &str,
+    ) -> Result<Vec<flow_like_types::bot_notes::BotNote>, String> {
+        let (bot, room) = (bot_id.to_owned(), conversation_id.to_owned());
+        self.with(move |store| store.list_notes(&bot, &room)).await
+    }
+    async fn write_note(
+        &self,
+        bot_id: &str,
+        conversation_id: &str,
+        key: &str,
+        change: flow_like_types::bot_notes::NoteChange,
+        author: flow_like_types::bot_notes::NoteAuthor,
+    ) -> Result<flow_like_types::bot_notes::BotNote, String> {
+        let (bot, room, key) = (bot_id.to_owned(), conversation_id.to_owned(), key.to_owned());
+        self.with(move |store| store.write_note(&bot, &room, &key, &change, &author, None))
+            .await
     }
     async fn conversations(&self) -> Result<Vec<Conversation>, String> {
         self.with(|store| store.host_conversations()).await

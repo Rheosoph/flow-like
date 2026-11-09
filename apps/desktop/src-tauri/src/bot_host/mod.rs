@@ -19,13 +19,14 @@ mod authorization;
 pub(crate) mod commands;
 pub(crate) mod connector_commands;
 mod e2e;
-mod e2e_vault;
+pub(crate) mod e2e_vault;
 pub(crate) mod gate;
 pub(crate) mod grant_commands;
 mod host;
 mod hub;
 pub(crate) mod interactive;
 mod memory;
+mod notes;
 mod notify;
 mod owner_notify;
 mod recovery;
@@ -131,7 +132,7 @@ pub fn start(app: &AppHandle) {
     );
     let e2e = Arc::new(e2e::E2eHost::new(
         hub,
-        Arc::new(e2e_vault::KeychainVault),
+        Arc::new(e2e_vault::KeychainVault::BOTS),
         host_id(app),
     ));
     account.enable_e2e(e2e.clone());

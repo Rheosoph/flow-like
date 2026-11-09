@@ -20,7 +20,7 @@ const chatTimeline = [
 	{ kind: "wait", ms: 5000 },
 ];
 
-const chatIntro = [
+const chatIntro: { role: "user" | "assistant"; content: string }[] = [
 	{
 		role: "assistant",
 		content:

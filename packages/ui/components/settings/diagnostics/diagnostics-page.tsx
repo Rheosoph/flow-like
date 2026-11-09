@@ -73,6 +73,15 @@ import {
 	WEBGPU_LIMIT_NAMES,
 	type WebGpuStatus,
 } from "../../../lib/diagnostics/types";
+import {
+	realtimeDelivery,
+	useRealtimeStatus,
+} from "../../../lib/realtime/realtime-status";
+import type {
+	RealtimeProviderStage,
+	RealtimeProviderStatus,
+	RealtimeStatus,
+} from "../../../lib/realtime/types";
 import { cn, humanFileSize } from "../../../lib/utils";
 import {
 	useAuthStatusStore,
@@ -231,6 +240,7 @@ function useDiagnosticsSession(): DiagnosticsSession {
 	const webGl2 = useWebGlSupport("webgl2");
 	const accountId = signedIn ? (info.data?.id ?? null) : null;
 	const language = i18n.resolvedLanguage ?? i18n.language ?? null;
+	const realtime = useRealtimeStatus((state) => state.status);
 
 	return useMemo(
 		() => ({
@@ -241,6 +251,7 @@ function useDiagnosticsSession(): DiagnosticsSession {
 			boardRendererPreference: ready ? renderer : null,
 			boardRendererInUse:
 				ready && webGl2 !== null ? activeRenderer(renderer, webGl2) : null,
+			realtime,
 		}),
 		[
 			signedInState,
@@ -250,6 +261,7 @@ function useDiagnosticsSession(): DiagnosticsSession {
 			ready,
 			renderer,
 			webGl2,
+			realtime,
 		],
 	);
 }
@@ -713,8 +725,97 @@ function SessionCard({
 				>
 					<Value>{rendererLabel(session?.boardRendererInUse ?? null, t)}</Value>
 				</InfoRow>
+				<LiveUpdatesRow realtime={session?.realtime ?? null} />
 			</Rows>
 		</SectionCard>
+	);
+}
+
+const TRANSPORT_NAMES: Readonly<
+	Record<NonNullable<RealtimeProviderStatus["transport"]>, string>
+> = {
+	aws_mqtt: "AWS IoT",
+	azure_web_pubsub: "Azure Web PubSub",
+	gcp_firebase_rtdb: "Firebase",
+	nats: "NATS",
+	http: "HTTP",
+};
+
+function deliveryLabel(realtime: RealtimeStatus | null, t: SettingsT) {
+	if (!realtime)
+		return t("diagnosticsLiveUpdatesNotReported", "Not reported by this app");
+	const transport = realtime.provider?.transport;
+	switch (realtimeDelivery(realtime)) {
+		case "live":
+			return t("diagnosticsLiveUpdatesLive", "Live via {{transport}}", {
+				transport: transport ? TRANSPORT_NAMES[transport] : "",
+			});
+		case "polling":
+			return t("diagnosticsLiveUpdatesPolling", "Polling");
+		case "paused":
+			return t("diagnosticsLiveUpdatesPaused", "Paused");
+		case "off":
+			return t("diagnosticsLiveUpdatesOff", "Not connected");
+	}
+}
+
+function stageLabel(stage: RealtimeProviderStage, t: SettingsT) {
+	return {
+		grant: t("diagnosticsLiveUpdatesStageGrant", "requesting access"),
+		handshake: t("diagnosticsLiveUpdatesStageHandshake", "WebSocket handshake"),
+		connect: t("diagnosticsLiveUpdatesStageConnect", "connecting"),
+		subscribe: t("diagnosticsLiveUpdatesStageSubscribe", "subscribing"),
+		lost: t("diagnosticsLiveUpdatesStageLost", "connection lost"),
+	}[stage];
+}
+
+function LiveUpdatesRow({
+	realtime,
+}: Readonly<{ realtime: RealtimeStatus | null }>) {
+	const { t, i18n } = useTranslation("settings");
+	const provider = realtime?.provider;
+	const failure = provider?.failure;
+	const notes = [
+		realtime?.runner === "in-tab" &&
+			t(
+				"diagnosticsLiveUpdatesInTab",
+				"Runs in this tab because the shared worker did not start.",
+			),
+		provider?.transport === "http" &&
+			t(
+				"diagnosticsLiveUpdatesNoChannel",
+				"The API granted no live channel, so updates arrive by polling.",
+			),
+		failure &&
+			t(
+				"diagnosticsLiveUpdatesFailure",
+				"Last failure {{time}}: {{stage}} after {{seconds}} s ({{message}}).",
+				{
+					time: formatTimestamp(
+						new Date(failure.at).toISOString(),
+						i18n.language,
+					),
+					stage: stageLabel(failure.stage, t),
+					seconds: (failure.elapsedMs / 1000).toFixed(1),
+					message: failure.message,
+				},
+			),
+	].filter((note): note is string => Boolean(note));
+	return (
+		<InfoRow
+			label={t("diagnosticsLiveUpdates", "Live updates")}
+			hint={
+				notes.length > 0
+					? notes.map((note) => (
+							<span key={note} className="block">
+								{note}
+							</span>
+						))
+					: undefined
+			}
+		>
+			<Value>{deliveryLabel(realtime, t)}</Value>
+		</InfoRow>
 	);
 }
 

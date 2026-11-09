@@ -280,6 +280,7 @@
 		"activity": {
 			"queued": "",
 			"running": "",
+			"runningStatus": "",
 			"typingMany": "",
 			"typingOne": "",
 			"typingTwo": "",
@@ -305,7 +306,10 @@
 				"tts_model": "",
 				"image_model": "",
 				"vision_model": "",
-				"subtask_model": ""
+				"subtask_model": "",
+				"look": "",
+				"location": "",
+				"app_ids": ""
 			},
 			"deny": "",
 			"failed": "",
@@ -328,7 +332,22 @@
 			},
 			"title": "",
 			"triggeredBy": "",
-			"triggeredByInRoom": ""
+			"triggeredByInRoom": "",
+			"createBot": {
+				"title": "",
+				"requestTitle": "",
+				"hint": "",
+				"approve": "",
+				"reject": "",
+				"approved": "",
+				"rejected": ""
+			},
+			"updateBot": {
+				"title": "",
+				"requestTitle": "",
+				"hint": "",
+				"target": ""
+			}
 		},
 		"botSettings": "",
 		"botTag": "",
@@ -1380,6 +1399,26 @@
 			"title_one": "",
 			"title_other": ""
 		}
+	},
+	"notes": {
+		"body": "",
+		"cancel": "",
+		"closeNote": "",
+		"closed": "",
+		"conflict": "",
+		"edit": "",
+		"loadFailed": "",
+		"loading": "",
+		"open": "",
+		"ownerOnly": "",
+		"reopen": "",
+		"save": "",
+		"saveFailed": "",
+		"status": "",
+		"statusPlaceholder": "",
+		"updatedBy": "",
+		"updatedSince": "",
+		"you": ""
 	},
 	"panel": {
 		"back": "",

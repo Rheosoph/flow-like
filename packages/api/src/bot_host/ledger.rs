@@ -221,6 +221,7 @@ fn queued_row(
         hops: Set(i32::try_from(recipient.hops).unwrap_or(i32::MAX)),
         requester_id: Set(Some(waking.requester_id.clone())),
         audience: Set(waking.audience.stored().to_string()),
+        status_text: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
     }
@@ -712,6 +713,7 @@ pub(crate) async fn take_in<C: ConnectionTrait>(
 ) -> Result<bool, DbErr> {
     let taken = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_RUNNING))
+        .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(bot_turn::Column::HostId, Expr::value(host_id))
         .col_expr(bot_turn::Column::LeaseUntil, Expr::value(lease_from(now)))
         .col_expr(
@@ -777,6 +779,7 @@ async fn fold_into<C: ConnectionTrait>(
     }
     bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_CANCELLED))
+        .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(bot_turn::Column::ErrorCode, Expr::value(ERROR_BATCHED))
         .col_expr(
             bot_turn::Column::ReplyMessageId,
@@ -932,6 +935,15 @@ pub(crate) async fn heartbeat_in<C: ConnectionTrait>(
             .await?
             .ok_or_else(|| Refusal::NotFound.into_api(turn_id));
     }
+    Err(lease_lost(db, turn_id, owner_id, host_id).await?)
+}
+
+async fn lease_lost<C: ConnectionTrait>(
+    db: &C,
+    turn_id: &str,
+    owner_id: Option<&str>,
+    host_id: &str,
+) -> Result<ApiError, ApiError> {
     let turn = find(db, turn_id, owner_id)
         .await?
         .ok_or_else(|| Refusal::NotFound.into_api(turn_id))?;
@@ -942,11 +954,53 @@ pub(crate) async fn heartbeat_in<C: ConnectionTrait>(
     } else {
         "its lease ran out; claim it again".to_string()
     };
-    Err(ApiError::coded(
+    Ok(ApiError::coded(
         StatusCode::CONFLICT,
         BOT_TURN_LEASE_LOST,
         format!("Host '{host_id}' no longer holds turn '{turn_id}': {reason}"),
     ))
+}
+
+/// Sets the live status line of a turn the host holds (`None` clears it), under the same
+/// filters as [`heartbeat_in`]. `false`: the lease is no longer the host's.
+pub(crate) async fn set_status_text_in<C: ConnectionTrait>(
+    db: &C,
+    turn_id: &str,
+    host_id: &str,
+    status_text: Option<&str>,
+    now: DateTime<FixedOffset>,
+) -> Result<bool, DbErr> {
+    let set = bot_turn::Entity::update_many()
+        .col_expr(
+            bot_turn::Column::StatusText,
+            Expr::value(status_text.map(str::to_owned)),
+        )
+        .filter(bot_turn::Column::Id.eq(turn_id))
+        .filter(bot_turn::Column::Status.eq(STORED_RUNNING))
+        .filter(bot_turn::Column::HostId.eq(host_id))
+        .filter(bot_turn::Column::LeaseUntil.gt(now))
+        .exec(db)
+        .await?;
+    Ok(set.rows_affected > 0)
+}
+
+/// [`set_status_text_in`] for a host acting for `owner_id`: a turn that isn't theirs reads as
+/// missing, one the host no longer holds is [`BOT_TURN_LEASE_LOST`].
+pub(crate) async fn set_owned_status_text_in<C: ConnectionTrait>(
+    db: &C,
+    turn_id: &str,
+    owner_id: &str,
+    host_id: &str,
+    status_text: Option<&str>,
+    now: DateTime<FixedOffset>,
+) -> Result<(), ApiError> {
+    find(db, turn_id, Some(owner_id))
+        .await?
+        .ok_or_else(|| Refusal::NotFound.into_api(turn_id))?;
+    if set_status_text_in(db, turn_id, host_id, status_text, now).await? {
+        return Ok(());
+    }
+    Err(lease_lost(db, turn_id, Some(owner_id), host_id).await?)
 }
 
 /// Whether `host_id` still holds a live lease on the turn.
@@ -976,6 +1030,7 @@ pub(crate) async fn fail_held_in<C: ConnectionTrait>(
 ) -> Result<bool, DbErr> {
     let ended = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_FAILED))
+        .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(bot_turn::Column::ErrorCode, Expr::value(error_code))
         .col_expr(
             bot_turn::Column::LeaseUntil,
@@ -1002,6 +1057,7 @@ pub(crate) async fn mark_failed_after_reply_in<C: ConnectionTrait>(
 ) -> Result<bool, DbErr> {
     let marked = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_FAILED))
+        .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(bot_turn::Column::ErrorCode, Expr::value(error_code))
         .col_expr(bot_turn::Column::UpdatedAt, Expr::value(now))
         .filter(bot_turn::Column::Id.eq(turn_id))
@@ -1021,6 +1077,7 @@ pub(crate) async fn complete_silent_in<C: ConnectionTrait>(
 ) -> Result<bool, DbErr> {
     let done = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_DONE))
+        .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(bot_turn::Column::ErrorCode, Expr::value(ERROR_SILENT))
         .col_expr(
             bot_turn::Column::LeaseUntil,
@@ -1058,6 +1115,7 @@ pub(crate) async fn release_for_retry_in<C: ConnectionTrait>(
     }
     let released = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_QUEUED))
+        .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(bot_turn::Column::HostId, Expr::value(None::<String>))
         .col_expr(bot_turn::Column::LeaseUntil, Expr::value(retry_at))
         .col_expr(bot_turn::Column::ErrorCode, Expr::value(error_code))
@@ -1103,6 +1161,7 @@ pub(crate) async fn cancel_owned_in<C: ConnectionTrait>(
 ) -> Result<bot_turn::Model, ApiError> {
     let cancelled = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_CANCELLED))
+        .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(
             bot_turn::Column::ErrorCode,
             Expr::value(ERROR_OWNER_CANCELLED),
@@ -1149,6 +1208,7 @@ async fn end_unfinished_in<C: ConnectionTrait>(
 ) -> Result<(), DbErr> {
     bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(status))
+        .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(bot_turn::Column::ErrorCode, Expr::value(error_code))
         .col_expr(
             bot_turn::Column::LeaseUntil,
@@ -1250,6 +1310,7 @@ pub(crate) async fn retry_in<C: ConnectionTrait>(
     }
     let queued = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_QUEUED))
+        .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(bot_turn::Column::HostId, Expr::value(None::<String>))
         .col_expr(
             bot_turn::Column::LeaseUntil,
@@ -1404,6 +1465,7 @@ async fn requeue_all<C: ConnectionTrait>(
     }
     Ok(bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_QUEUED))
+        .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(bot_turn::Column::ErrorCode, Expr::value(ERROR_RESUMING))
         .col_expr(bot_turn::Column::HostId, Expr::value(None::<String>))
         .col_expr(
@@ -1432,6 +1494,7 @@ pub(super) async fn end_all<C: ConnectionTrait>(
     }
     Ok(bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(status))
+        .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(bot_turn::Column::ErrorCode, Expr::value(error_code))
         .col_expr(
             bot_turn::Column::LeaseUntil,

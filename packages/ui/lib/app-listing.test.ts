@@ -15,7 +15,7 @@ describe("fetchAllAppPages", () => {
 			offsets.push(offset);
 			return apps.slice(offset, offset + limit);
 		});
-		expect(result).toEqual(apps);
+		expect<unknown>(result).toEqual(apps);
 		expect(offsets).toEqual([0, 100, 200]);
 	});
 
@@ -24,7 +24,7 @@ describe("fetchAllAppPages", () => {
 		const result = await fetchAllAppPages(
 			async (offset) => pages[offset / 100],
 		);
-		expect(result).toEqual(entries(200));
+		expect<unknown>(result).toEqual(entries(200));
 	});
 
 	test("rejects a failed later page instead of reporting a partial library", async () => {
@@ -39,7 +39,9 @@ describe("fetchAllAppPages", () => {
 
 	test("keeps apps whose metadata is absent", async () => {
 		const apps = [[{ id: "no-metadata" }, null], [{ id: "missing" }]];
-		await expect(fetchAllAppPages(async () => apps)).resolves.toEqual(apps);
+		await expect<Promise<unknown>>(
+			fetchAllAppPages(async () => apps),
+		).resolves.toEqual(apps);
 	});
 
 	test.each([undefined, {}, [[null, null]], [[{ id: "app" }, "invalid"]]])(

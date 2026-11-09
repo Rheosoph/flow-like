@@ -16,6 +16,7 @@ import {
 	useBotLabels,
 	useUpsertBotSecret,
 } from "../../hooks/use-bots";
+import { requiresFreshToolApproval } from "../../lib/frontend-tool-approval-scope";
 import { BotAvatar } from "../bots/bot-avatar";
 import type { BotAppearance } from "../bots/types";
 import type { IMessageApproval } from "../interfaces/chat-default/chat-db";
@@ -30,7 +31,10 @@ import {
 } from "../interfaces/chat-default/request-card";
 import { Button } from "../ui/button";
 import type { ApprovalDecision } from "./approval-entry";
-import { BotConfigurationChanges } from "./configuration-changes";
+import {
+	BotConfigurationChanges,
+	useBotSettingsApprovalText,
+} from "./configuration-changes";
 import type { ConversationApproval } from "./fold-entries";
 import { useGrantLabel } from "./grant-labels";
 import { SecretRequestForm } from "./secret-request-form";
@@ -99,7 +103,8 @@ export function ApprovalCard({
 	const upsertSecret = useUpsertBotSecret();
 	const [sent, setSent] = useState<ApprovalDecision>();
 	const decision = approval.answer ?? sent;
-	const isConfiguration = approval.tool === "bot_update_configuration";
+	const isConfiguration = requiresFreshToolApproval(approval.tool);
+	const settingsText = useBotSettingsApprovalText(approval.tool);
 	const rememberable = !isConfiguration && approval.scopes.length > 0;
 	const tone = decisionTone(decision);
 	const disabled = readOnly || isPending;
@@ -165,14 +170,8 @@ export function ApprovalCard({
 						<span data-slot="approval-answer">
 							{isConfiguration
 								? decision === "deny"
-									? t(
-											"crew.approval.configuration.rejected",
-											"Changes rejected",
-										)
-									: t(
-											"crew.approval.configuration.approved",
-											"Changes approved",
-										)
+									? settingsText.rejected
+									: settingsText.approved
 								: decisionText(decision, !!secret)}
 						</span>
 					) : (
@@ -186,11 +185,7 @@ export function ApprovalCard({
 								name: botName,
 							})
 						: isConfiguration
-							? t(
-									"crew.approval.configuration.requestTitle",
-									"{{name}} wants to update its settings",
-									{ name: botName },
-								)
+							? settingsText.requestTitle(botName)
 							: t("crew.approval.title", "{{name}} wants to {{summary}}", {
 									name: botName,
 									summary: lowerFirst(approval.summary || approval.tool),
@@ -198,14 +193,7 @@ export function ApprovalCard({
 				}
 				description={
 					<>
-						{isConfiguration && !decision && (
-							<p>
-								{t(
-									"crew.approval.configuration.hint",
-									"Only the settings below will change, starting with the next turn.",
-								)}
-							</p>
-						)}
+						{isConfiguration && !decision && <p>{settingsText.hint}</p>}
 						{!secret && !isConfiguration && (
 							<p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
 								<code className="rounded-md border border-border/60 bg-muted/60 px-1.5 py-0.5 font-mono text-[11px] text-foreground/80">
@@ -280,7 +268,7 @@ export function ApprovalCard({
 					>
 						<BanIcon aria-hidden />
 						{isConfiguration
-							? t("crew.approval.configuration.reject", "Reject changes")
+							? settingsText.reject
 							: t("crew.approval.deny", "Deny")}
 					</Button>
 					<Button
@@ -293,7 +281,7 @@ export function ApprovalCard({
 					>
 						<CheckIcon aria-hidden />
 						{isConfiguration
-							? t("crew.approval.configuration.approve", "Approve changes")
+							? settingsText.approve
 							: t("crew.approval.once", "Allow once")}
 					</Button>
 					{rememberable && (

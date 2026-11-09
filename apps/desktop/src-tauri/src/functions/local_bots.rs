@@ -9,6 +9,7 @@
 pub mod history;
 mod hub;
 pub mod moves;
+pub mod notes;
 pub mod workspace;
 
 use flow_like_local_bots::{

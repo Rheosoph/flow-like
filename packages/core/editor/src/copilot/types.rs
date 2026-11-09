@@ -65,10 +65,7 @@ impl From<crate::a2ui::copilot::A2UIChatMessage> for UnifiedChatMessage {
             content: msg.content,
             images: msg.images.map(|imgs| {
                 imgs.into_iter()
-                    .map(|img| ChatImage {
-                        data: img.data,
-                        media_type: img.media_type,
-                    })
+                    .map(|img| ChatImage::inline(img.data, img.media_type))
                     .collect()
             }),
         }

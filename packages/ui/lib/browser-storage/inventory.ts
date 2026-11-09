@@ -54,6 +54,7 @@ export type BrowserStoreId =
 	| "preferences"
 	| "oauth"
 	| "deviceVault"
+	| "inboxKeys"
 	| "pendingSync";
 
 interface DatabasePart {
@@ -191,6 +192,11 @@ const STORE_DEFINITIONS: readonly StoreDefinition[] = [
 		id: "deviceVault",
 		category: "protected",
 		databases: [{ name: "flow-like-device-management" }],
+	},
+	{
+		id: "inboxKeys",
+		category: "protected",
+		databases: [{ name: "flow-like-inbox-keys" }],
 	},
 	{
 		id: "pendingSync",

@@ -1,14 +1,18 @@
 import {
 	type RealtimeProviderConnection,
+	RealtimeProviderError,
 	type RealtimeProviderOpener,
 	RealtimeProviderProtocolError,
 	boundedJson,
+	errorReason,
 	openRealtimeProvider,
 } from "./providers";
 import {
 	MAX_REALTIME_TIMEOUT_MS,
 	type RealtimeConnectResponse,
 	type RealtimeConnectionSession,
+	type RealtimeProviderStage,
+	type RealtimeProviderStatus,
 	type RealtimeTransport,
 } from "./types";
 
@@ -201,6 +205,7 @@ export class RealtimeProviderSession {
 	private notBefore = 0;
 	private rejected = false;
 	private nonces = new Set<string>();
+	private status: RealtimeProviderStatus = { live: false };
 
 	constructor(
 		private readonly options: {
@@ -208,6 +213,7 @@ export class RealtimeProviderSession {
 			changed(): void;
 			wakeup(): void;
 			open?: RealtimeProviderOpener;
+			status?(status: RealtimeProviderStatus): void;
 		},
 	) {}
 
@@ -262,7 +268,36 @@ export class RealtimeProviderSession {
 		this.connection?.close();
 		this.connection = undefined;
 		this.connected = false;
+		if (live) this.report({ ...this.status, live: false });
 		return live;
+	}
+
+	private report(next: RealtimeProviderStatus): void {
+		const current = this.status;
+		if (
+			current.live === next.live &&
+			current.transport === next.transport &&
+			current.failure === next.failure
+		)
+			return;
+		this.status = next;
+		this.options.status?.(next);
+	}
+
+	/** Records why the current attempt stopped; an attempt a newer one replaced is not a failure. */
+	private failed(
+		epoch: number,
+		stage: RealtimeProviderStage,
+		message: string,
+		since: number,
+	): void {
+		if (this.epoch !== epoch) return;
+		const at = Date.now();
+		this.report({
+			...this.status,
+			live: false,
+			failure: { stage, message, elapsedMs: at - since, at },
+		});
 	}
 
 	/** Every grant costs the API a provider credential, so no retry outpaces this schedule. */
@@ -287,6 +322,7 @@ export class RealtimeProviderSession {
 		preference: RealtimeTransportPreference,
 		epoch: number,
 		signal: AbortSignal,
+		started: number,
 	): Promise<RealtimeGrant | undefined> {
 		const url = new URL(api);
 		url.pathname = `${api.pathname.slice(0, -4)}connect`;
@@ -317,12 +353,19 @@ export class RealtimeProviderSession {
 				return;
 			}
 			this.rejected = refused;
+			this.failed(
+				epoch,
+				"grant",
+				`POST /realtime/connect answered ${response.status}`,
+				started,
+			);
 			this.retry(epoch, [400, 403, 404, 405, 501].includes(response.status));
 			return;
 		}
 		try {
 			return parseRealtimeGrant(await boundedJson(response), receivedAt);
 		} catch (error) {
+			this.failed(epoch, "grant", errorReason(error), started);
 			this.retry(epoch, error instanceof RealtimeProviderProtocolError);
 		}
 	}
@@ -344,10 +387,13 @@ export class RealtimeProviderSession {
 		if (this.release()) this.options.changed();
 		const controller = new AbortController();
 		this.controller = controller;
-		const deadline = setTimeout(
-			() => controller.abort(),
-			NEGOTIATION_TIMEOUT_MS,
-		);
+		const started = Date.now();
+		let stage: RealtimeProviderStage = "grant";
+		let timedOut = false;
+		const deadline = setTimeout(() => {
+			timedOut = true;
+			controller.abort();
+		}, NEGOTIATION_TIMEOUT_MS);
 		const current = () => this.epoch === epoch && !controller.signal.aborted;
 		try {
 			const api = new URL(session.url);
@@ -364,16 +410,19 @@ export class RealtimeProviderSession {
 					preference,
 					epoch,
 					controller.signal,
+					started,
 				));
 			if (!grant || !current()) return;
 			this.grant = { key, value: grant };
 			this.rejected = false;
 			this.blockedFailures = 0;
+			this.report({ ...this.status, transport: grant.transport.type });
 			const waitChanged = this.maxPollWaitMs !== grant.max_poll_wait_ms;
 			this.maxPollWaitMs = grant.max_poll_wait_ms;
 			if (grant.transport.type !== "http" && preference === "configured") {
+				stage = "handshake";
 				if (refusesCleartextGrant(api, grant.transport))
-					throw new Error("Realtime provider grant is not encrypted");
+					throw new Error("the grant names an unencrypted provider URL");
 				const connection = await (this.options.open ?? openRealtimeProvider)(
 					grant.transport,
 					{
@@ -384,7 +433,15 @@ export class RealtimeProviderSession {
 								this.nonces.delete(this.nonces.values().next().value as string);
 							this.options.wakeup();
 						},
-						disconnected: () => this.retry(epoch),
+						disconnected: (reason) => {
+							this.failed(
+								epoch,
+								"lost",
+								reason ?? "the provider closed the connection",
+								this.connectedAt,
+							);
+							this.retry(epoch);
+						},
 					},
 					controller.signal,
 					{ clockOffsetMs: grant.clockOffsetMs },
@@ -396,6 +453,7 @@ export class RealtimeProviderSession {
 				this.connection = connection;
 				this.connectedAt = Date.now();
 				this.connected = true;
+				this.report({ ...this.status, live: true });
 				this.options.changed();
 			} else if (waitChanged) this.options.changed();
 			this.timer = setTimeout(
@@ -405,7 +463,15 @@ export class RealtimeProviderSession {
 				},
 				Math.max(1_000, Math.min(2_147_483_647, grant.renewAt - Date.now())),
 			);
-		} catch {
+		} catch (error) {
+			this.failed(
+				epoch,
+				error instanceof RealtimeProviderError ? error.stage : stage,
+				timedOut
+					? `no grant and connection within ${NEGOTIATION_TIMEOUT_MS / 1000} s`
+					: errorReason(error),
+				started,
+			);
 			this.retry(epoch);
 		} finally {
 			clearTimeout(deadline);

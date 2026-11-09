@@ -673,7 +673,7 @@ impl ServerPlatformBridge {
         }
         if self.specialist.is_none()
             && !self.read_only
-            && (flow_like_bot_tools::configuration::is_configuration_tool(tool_name)
+            && (flow_like_bot_tools::configuration::is_settings_tool(tool_name)
                 || flow_like_bot_tools::user_context::is_user_context_tool(tool_name))
             && self.bot_tools.as_ref().is_some_and(|host| host.handles(tool_name))
         {
@@ -1035,7 +1035,7 @@ impl PlatformToolBridge for ServerPlatformBridge {
                 .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string());
         }
 
-        if (self.bot || flow_like_bot_tools::configuration::is_configuration_tool(tool_name)
+        if (self.bot || flow_like_bot_tools::configuration::is_settings_tool(tool_name)
             || flow_like_bot_tools::user_context::is_user_context_tool(tool_name))
             && let Some(bot_tools) = self
                 .bot_tools

@@ -1,5 +1,6 @@
 use super::{
-    INBOX_DIRECT_FIXED, INBOX_ENVELOPES_MISMATCH, INBOX_KEY_EXISTS, INBOX_KEY_LIMIT,
+    INBOX_DIRECT_FIXED, INBOX_ENCRYPTION_MISMATCH, INBOX_ENVELOPES_MISMATCH, INBOX_KEY_EXISTS,
+    INBOX_KEY_LIMIT,
     INBOX_MEMBER_LIMIT, INBOX_MESSAGE_ID_TAKEN, INBOX_NOT_YOUR_MESSAGE, INBOX_REMOVE_NOT_ALLOWED,
     INBOX_TARGET_NOT_FOUND, Reader, active_membership,
     conversations::{
@@ -720,8 +721,10 @@ async fn end_to_end_sends_need_exactly_one_sealed_envelope_per_active_member() {
         .unwrap_err();
     assert_code(&error, StatusCode::CONFLICT, INBOX_ENVELOPES_MISMATCH);
     assert!(names(&error, "user-c"), "{error:?}");
-    let refused = send_in(&db, "secret", "user-a", &text("msg_plain"), at(3)).await;
-    assert_eq!(refused.unwrap_err().status(), StatusCode::BAD_REQUEST);
+    let refused = send_in(&db, "secret", "user-a", &text("msg_plain"), at(3))
+        .await
+        .unwrap_err();
+    assert_code(&refused, StatusCode::BAD_REQUEST, INBOX_ENCRYPTION_MISMATCH);
 }
 
 #[tokio::test]

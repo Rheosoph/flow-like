@@ -696,6 +696,7 @@ pub fn run() {
         .manage(state::TauriRecordingState::new())
         .manage(run_report_queue)
         .manage(offline_writes::OfflineWrites::new())
+        .manage(functions::inbox_e2e::PersonKeys::default())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
@@ -1542,11 +1543,17 @@ pub fn run() {
             functions::local_bots::history::local_inbox_entries_by_position,
             functions::local_bots::history::local_inbox_topic,
             functions::local_bots::history::local_inbox_segments,
+            functions::local_bots::notes::local_bots_notes_list,
+            functions::local_bots::notes::local_bots_notes_get,
+            functions::local_bots::notes::local_bots_notes_update,
             functions::local_bots::history::local_inbox_import_history,
             functions::local_bots::history::local_inbox_write_segment,
             bot_host::commands::bot_host_turns,
             bot_host::commands::bot_host_e2e_status,
             bot_host::commands::bot_host_e2e_rotate_key,
+            functions::inbox_e2e::inbox_e2e_key,
+            functions::inbox_e2e::inbox_e2e_seal,
+            functions::inbox_e2e::inbox_e2e_open,
             bot_host::commands::bot_host_cancel_turn,
             bot_host::grant_commands::local_bot_tool_grants,
             bot_host::grant_commands::local_bot_put_tool_grant,

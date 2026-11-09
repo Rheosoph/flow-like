@@ -194,6 +194,7 @@ mod tests {
     async fn complete(db: &DatabaseConnection, turn: &bot_turn::Model, saved: BotRunCheckpoint) {
         bot_turn::Entity::update_many()
             .col_expr(bot_turn::Column::Status, Expr::value(STORED_DONE))
+            .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
             .filter(bot_turn::Column::Id.eq(&turn.id))
             .exec(db)
             .await

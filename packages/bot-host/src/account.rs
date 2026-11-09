@@ -16,11 +16,13 @@ use crate::{
     },
     hub::{Claimed, HubFailure, HubGrants, TurnHub, TurnSession, WaitOutcome},
     memory::{self, JobMemory},
+    notes::{HubNotes, StatusTurn},
     room_updates::{HubRoomUpdates, RoomUpdateTracker},
     transcript,
 };
 use flow_like::flow::copilot::{
     TurnRequester,
+    bot_notes::NotesHandle,
     bot_talk::AnsweredRound,
     decision::{self, Decision, DecisionParticipant},
     decision_event::{self, EventDecision},
@@ -102,6 +104,7 @@ struct Live {
     info: TurnInfo,
     cancel: Arc<watch::Sender<Option<Cancel>>>,
     posting: bool,
+    notes: Option<NotesHandle>,
 }
 
 #[derive(Default)]
@@ -334,6 +337,7 @@ impl Inner {
                     info: info_of(&turn, TurnStatus::Queued),
                     cancel: Arc::new(cancel),
                     posting: false,
+                    notes: None,
                 };
                 started.push((live.info.clone(), key.clone(), turn.id, receiver));
                 state.live.insert(key, live);
@@ -724,6 +728,21 @@ impl Inner {
                     .await;
             }
         };
+        let notes = (!sealed && !minted_by_hub && !ephemeral_user_context).then(|| {
+            HubNotes::new(
+                owner_hub.clone(),
+                bot_id,
+                &chat_conversation,
+                Some(StatusTurn {
+                    turn_id: lead.id.clone(),
+                    host_id: self.config.host_id.clone(),
+                }),
+            )
+            .handle(transcript.topic_at)
+        });
+        if let Some(live) = lock(&self.state).live.get_mut(key) {
+            live.notes = notes.clone();
+        }
         let mut job = TurnJob {
             run_id: lead.id.clone(),
             bot_id: bot_id.clone(),
@@ -735,6 +754,7 @@ impl Inner {
             suppress_owner_notifications: false,
             history: transcript.history,
             room_updates,
+            notes: notes.clone(),
             memory: memory.clone(),
             gate: gate.clone(),
             requester: Some(requester.clone()),
@@ -1219,6 +1239,7 @@ impl Inner {
             ),
             history,
             addressed: true,
+            topic_at: transcript::topic_at(&origin),
         };
         let answered_round = asked.answered_round();
         Ok(Some(LateContinuation {
@@ -1288,6 +1309,7 @@ impl Inner {
         sealed: bool,
         cancel: &mut watch::Receiver<Option<Cancel>>,
     ) -> End {
+        let note;
         {
             let mut state = lock(&self.state);
             let Some(live) = state.live.get_mut(key) else {
@@ -1297,6 +1319,7 @@ impl Inner {
                 return End::by(reason);
             }
             live.posting = true;
+            note = live.notes.as_ref().and_then(NotesHandle::touched);
         }
         let message_id = if failure.is_some() {
             failure_message_id(&lead.bot_id, &lead.trigger_message_id)
@@ -1304,6 +1327,9 @@ impl Inner {
             reply_message_id(&lead.bot_id, &lead.trigger_message_id)
         };
         let mut body = reply_body(&lead.trigger_message_id, lead.hops, text, failure);
+        if failure.is_none() && !acknowledgement {
+            crate::notes::attach_note(&mut body, note.as_ref());
+        }
         if failure.is_none() && acknowledgement {
             body[decision::ACKNOWLEDGEMENT_FIELD] = json!(true);
         }
@@ -1428,6 +1454,7 @@ impl Inner {
             live.info.finished_at = Some(now());
             live.info.error_code = (!end.error_code.is_empty()).then_some(end.error_code);
             live.info.reply_message_id = end.reply;
+            live.info.status_text = None;
             state.finished.push_back(live.info.clone());
             while state.finished.len() > FINISHED_KEPT {
                 state.finished.pop_front();
@@ -1454,5 +1481,6 @@ fn info_of(turn: &BotTurn, status: TurnStatus) -> TurnInfo {
         finished_at: None,
         error_code: None,
         reply_message_id: None,
+        status_text: None,
     }
 }

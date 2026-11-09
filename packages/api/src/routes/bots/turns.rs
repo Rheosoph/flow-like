@@ -267,6 +267,73 @@ pub async fn heartbeat_turn(
     Ok(turn_response(&turn, Vec::new()))
 }
 
+/// The live status line a host shows for a turn it holds.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct TurnStatusRequest {
+    /// The host holding the turn.
+    #[schema(example = "desktop:7f3c1a")]
+    pub host_id: String,
+    /// One line of at most 120 characters, such as "Lesson 2 of 6". Empty or missing clears it.
+    #[serde(default)]
+    #[schema(example = "Lesson 2 of 6")]
+    pub status_text: Option<String>,
+}
+
+fn checked_status_text(text: Option<String>) -> Result<Option<String>, ApiError> {
+    let Some(text) = text.map(|text| text.trim().to_string()).filter(|text| !text.is_empty())
+    else {
+        return Ok(None);
+    };
+    if text.chars().count() > flow_like_types::bot_notes::MAX_STATUS_CHARS
+        || text.chars().any(char::is_control)
+    {
+        return Err(ApiError::bad_request(format!(
+            "status_text is one line of at most {} characters",
+            flow_like_types::bot_notes::MAX_STATUS_CHARS
+        )));
+    }
+    Ok(Some(text))
+}
+
+#[utoipa::path(
+    put,
+    path = "/bots/turns/{turn_id}/status",
+    tag = "Bots",
+    params(("turn_id" = String, Path, description = "The turn you claimed")),
+    request_body = TurnStatusRequest,
+    responses(
+        (status = 204, description = "People in the conversation see the status line while the turn runs; it clears when the turn stops."),
+        (status = 400, description = "host_id is invalid, or status_text is longer than 120 characters or has a line break"),
+        (status = 401, description = "Not signed in"),
+        (status = 404, description = "You have no such turn"),
+        (status = 409, description = "BOT_TURN_LEASE_LOST: the turn isn't running under this host any more; stop working on it")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(name = "PUT /bots/turns/{turn_id}/status", skip(state, user, body))]
+pub async fn set_turn_status(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(turn_id): Path<String>,
+    Json(body): Json<TurnStatusRequest>,
+) -> Result<StatusCode, ApiError> {
+    let sub = user.sub()?;
+    let host_id = checked_host_id(TurnHostRequest {
+        host_id: body.host_id,
+    })?;
+    let status_text = checked_status_text(body.status_text)?;
+    ledger::set_owned_status_text_in(
+        &state.db,
+        &turn_id,
+        &sub,
+        &host_id,
+        status_text.as_deref(),
+        now_millis(),
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[utoipa::path(
     post,
     path = "/bots/turns/{turn_id}/silent",

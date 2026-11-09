@@ -86,7 +86,7 @@ fn owner_membership(owner_id: &str) -> RelationDef {
 }
 
 /// The bot's apps with the owner's role in each, in one query.
-pub(super) async fn attached_apps<C: ConnectionTrait>(
+pub(crate) async fn attached_apps<C: ConnectionTrait>(
     db: &C,
     owner_id: &str,
     bot_id: &str,
@@ -223,6 +223,39 @@ pub(super) async fn attach_in<C: ConnectionTrait>(
     Ok(inserted > 0)
 }
 
+/// Attaches an app the owner is a member of to their bot; true when this call attached it.
+pub(crate) async fn attach_owned(
+    state: &AppState,
+    owner_id: &str,
+    bot_id: &str,
+    app_id: &str,
+) -> Result<bool, ApiError> {
+    owned_bot(&state.db, owner_id, bot_id).await?;
+    state
+        .transaction(|txn| {
+            let (owner_id, bot_id, app_id) =
+                (owner_id.to_string(), bot_id.to_string(), app_id.to_string());
+            Box::pin(async move { attach(txn, &owner_id, &bot_id, &app_id).await })
+        })
+        .await
+}
+
+/// Detaches an app from the owner's bot; true when it was attached.
+pub(crate) async fn detach_owned(
+    state: &AppState,
+    owner_id: &str,
+    bot_id: &str,
+    app_id: &str,
+) -> Result<bool, ApiError> {
+    owned_bot(&state.db, owner_id, bot_id).await?;
+    let removed = bot_app::Entity::delete_many()
+        .filter(bot_app::Column::BotId.eq(bot_id))
+        .filter(bot_app::Column::AppId.eq(app_id))
+        .exec(&state.db)
+        .await?;
+    Ok(removed.rows_affected > 0)
+}
+
 #[utoipa::path(
     get,
     path = "/bots/{bot_id}/apps",
@@ -273,13 +306,7 @@ pub async fn attach_bot_app(
     Path((bot_id, app_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let sub = user.sub()?;
-    owned_bot(&state.db, &sub, &bot_id).await?;
-    let attached = state
-        .transaction(|txn| {
-            let (sub, bot_id, app_id) = (sub.clone(), bot_id.clone(), app_id.clone());
-            Box::pin(async move { attach(txn, &sub, &bot_id, &app_id).await })
-        })
-        .await?;
+    let attached = attach_owned(&state, &sub, &bot_id, &app_id).await?;
     if attached {
         audit_branch!(state, user, app_id, "bot.app.attach", "Bot", bot_id);
     }
@@ -309,13 +336,7 @@ pub async fn detach_bot_app(
     Path((bot_id, app_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let sub = user.sub()?;
-    owned_bot(&state.db, &sub, &bot_id).await?;
-    let removed = bot_app::Entity::delete_many()
-        .filter(bot_app::Column::BotId.eq(&bot_id))
-        .filter(bot_app::Column::AppId.eq(&app_id))
-        .exec(&state.db)
-        .await?;
-    if removed.rows_affected > 0 {
+    if detach_owned(&state, &sub, &bot_id, &app_id).await? {
         audit_branch!(state, user, app_id, "bot.app.detach", "Bot", bot_id);
     }
     Ok(StatusCode::NO_CONTENT)

@@ -923,7 +923,7 @@ impl FrontendToolBridge {
         cancellation: Option<CancellationToken>,
     ) -> Value {
         apply_tool_context(&tool_name, &mut arguments, self.context.as_ref());
-        if flow_like_bot_tools::configuration::is_configuration_tool(&tool_name) {
+        if flow_like_bot_tools::configuration::is_settings_tool(&tool_name) {
             let Some(bot) = self.bot_context() else {
                 return json!({"status":"error", "tool":tool_name,
                     "code":"bot_tool_unavailable", "message":"This tool requires a bot turn."});
@@ -1447,7 +1447,7 @@ fn apply_tool_context(
         return;
     };
     // These tools are bound to the bot turn, and their strict schemas accept no app scope.
-    if flow_like_bot_tools::configuration::is_configuration_tool(tool_name) {
+    if flow_like_bot_tools::configuration::is_settings_tool(tool_name) {
         return;
     }
     // Research accepts only the caller's public brief. Ambient workspace IDs are neither

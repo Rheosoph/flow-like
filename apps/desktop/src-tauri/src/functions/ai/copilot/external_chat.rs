@@ -1,6 +1,7 @@
 //! External-provider chat orchestration and recovery.
 
 use super::agent_surface::{build_flowpilot_agent_surface, live_board_handle};
+use super::attachments::inline_image_links;
 use super::backend_types::{FlowPilotAgentBackendKind, FlowPilotAgentTransportKind};
 use super::cli_resolution::{external_agent_cli_resolution_failure, find_cli_resolution};
 use super::client_pool::{
@@ -90,6 +91,7 @@ pub(super) async fn external_code_agent_chat_internal(
     nested: bool,
     read_only: bool,
 ) -> Result<UnifiedCopilotResponse, String> {
+    let current_images = inline_image_links(current_images).await;
     let global_agent = global.is_some();
     let live_board = live_board_handle(&app_handle, board);
     let live_board_snapshot = live_board.as_ref().map(|live_board| live_board.snapshot());

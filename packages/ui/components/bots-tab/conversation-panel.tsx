@@ -582,7 +582,7 @@ function ConversationView({
 		text,
 		actions,
 		marks: threadMarks.marks,
-		readOnly: encrypted || blocked,
+		readOnly: blocked,
 		call: threadCall,
 	};
 
@@ -696,12 +696,7 @@ function ConversationView({
 								"crew.blocks.composer",
 								"This conversation is blocked. Manage your blocked users and bots to allow messages again.",
 							)
-						: encrypted
-							? t(
-									"crew.composer.encrypted",
-									"Writing in end-to-end encrypted chats isn't available in this app yet.",
-								)
-							: null
+						: null
 				}
 				mentionables={mentionables}
 				activity={activity}

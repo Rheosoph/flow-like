@@ -13,6 +13,10 @@ import { createId } from "@paralleldrive/cuid2";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef } from "react";
 import { useAuth } from "react-oidc-context";
+import {
+	invalidateBotConfiguration,
+	invalidateBots,
+} from "../../hooks/use-bots";
 import { useFrontendRuntimeToolExecutor } from "../../hooks/use-frontend-runtime-tool-executor";
 import {
 	IAppVisibility,
@@ -76,11 +80,10 @@ import {
 	type ApprovalOwner,
 	StandingApprovals,
 	grantStoreOf,
+	proposedBotSettings,
 	requiresFreshToolApproval,
 	resolveFrontendToolApprovalScope,
 } from "../../lib/frontend-tool-approval-scope";
-import { isRecord } from "../../lib/response-shape";
-import { invalidateBotConfiguration } from "../../hooks/use-bots";
 import {
 	inspectLiveAppPage,
 	interactWithAppPage,
@@ -1456,11 +1459,10 @@ function promptForDialog(
 		destructive: dialog.override?.destructive ?? false,
 		rememberable,
 		rememberAppId: rememberable ? approvalScope.appId : undefined,
-		configurationChanges:
-			requiresFreshToolApproval(request.toolName) &&
-			isRecord(request.arguments.changes)
-				? request.arguments.changes
-				: undefined,
+		configurationChanges: proposedBotSettings(
+			request.toolName,
+			request.arguments,
+		),
 		toolName: request.toolName,
 		title:
 			dialog.override?.title ||
@@ -8677,17 +8679,20 @@ Completion contract: build complete helper logic first and add the Event entry l
 			for (const run of Object.values(state.runs)) {
 				for (const step of run.message?.plan_steps ?? []) {
 					if (
-						step.toolName !== "bot_update_configuration" ||
-						step.status !== "done"
+						step.status !== "done" ||
+						!step.toolName ||
+						!requiresFreshToolApproval(step.toolName)
 					)
 						continue;
 					const key = `${run.runId}:${step.id}`;
 					if (refreshed.has(key)) continue;
 					refreshed.add(key);
-					invalidateBotConfiguration(
-						queryClient,
-						conversationBotId(run.conversationId),
-					);
+					if (step.toolName === "bot_update_configuration")
+						invalidateBotConfiguration(
+							queryClient,
+							conversationBotId(run.conversationId),
+						);
+					else invalidateBots(queryClient);
 				}
 			}
 		});

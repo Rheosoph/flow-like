@@ -19,7 +19,7 @@
 //! | `message_person` | `person:<id>` |
 //! | `data_sources` attach | `connection:<kind>:<host>:<port>:<database>` |
 //! | `web_request` | `web:<site>:read` or `web:<site>:write`, plus `web:<site>:secret:<NAME>` per secret sent |
-//! | `http_request`, `forecast_tool`, `flowpilot_board_review`, `app_build`, `apply_home_layout` | none: asked every time |
+//! | `http_request`, `forecast_tool`, `flowpilot_board_review`, `app_build`, `apply_home_layout`, `bot_update_configuration`, `create_bot`, `update_bot` | none: asked every time |
 //! | every other tool that asks | `*` |
 //!
 //! The document cost check is the grant `(documents, documents.expensive)`.
@@ -37,7 +37,7 @@ use flow_like_bot_tools as tools;
 use super::tool_authorization::AuthorizationInference;
 use super::tool_spec::spec_arg_str;
 
-const NOT_GRANTABLE: [&str; 7] = [
+const NOT_GRANTABLE: [&str; 9] = [
     "http_request",
     "forecast_tool",
     "flowpilot_board_review",
@@ -45,6 +45,8 @@ const NOT_GRANTABLE: [&str; 7] = [
     "apply_home_layout",
     SECRET_REQUEST_TOOL,
     tools::configuration::BOT_UPDATE_CONFIGURATION,
+    tools::crew::CREATE_BOT,
+    tools::crew::UPDATE_BOT,
 ];
 
 /// One stored `(tool, scope)` pair.
@@ -353,9 +355,7 @@ pub fn approval_request(
         requester_name: None,
         room: None,
         secret: secret_ask(tool, args),
-        configuration_changes: tools::configuration::requires_approval(tool)
-            .then(|| args.get("changes").cloned())
-            .flatten(),
+        configuration_changes: tools::configuration::proposed_changes(tool, args),
     }
 }
 

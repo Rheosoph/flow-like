@@ -5,7 +5,14 @@ import { unwatchedInboxPredicate } from "@flow-like/flow-like-ui/hooks/use-inbox
 import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
 import { registerConversationFeed } from "@flow-like/flow-like-ui/lib/realtime/conversation-feed";
 import { ConversationFeedHub } from "@flow-like/flow-like-ui/lib/realtime/conversation-feed-hub";
-import { getRealtimeClient } from "@flow-like/flow-like-ui/lib/realtime/runtime-client";
+import {
+	clearRealtimeStatus,
+	recordRealtimeUpdate,
+} from "@flow-like/flow-like-ui/lib/realtime/realtime-status";
+import {
+	type BrowserRealtimeClient,
+	getRealtimeClient,
+} from "@flow-like/flow-like-ui/lib/realtime/runtime-client";
 import type { RealtimeClient } from "@flow-like/flow-like-ui/lib/realtime/types";
 import { useBackend } from "@flow-like/flow-like-ui/state/backend-state";
 import { useQueryClient } from "@tanstack/react-query";
@@ -30,7 +37,7 @@ export function WebRealtimeBridge({ enabled }: { enabled: boolean }) {
 	useEffect(() => {
 		if (!enabled || !subject || !authRef.current.isAuthenticated) return;
 		let stopped = false;
-		let client: RealtimeClient | undefined;
+		let client: BrowserRealtimeClient | undefined;
 		let unsubscribe: (() => void) | undefined;
 		let retryTimer: ReturnType<typeof setTimeout> | undefined;
 		let failures = 0;
@@ -107,8 +114,13 @@ export function WebRealtimeBridge({ enabled }: { enabled: boolean }) {
 				break;
 			}
 			clientRef.current = client;
+			const owned = client;
 			unsubscribe = client.subscribe(async (update) => {
-				if (!currentAccount() || update.type !== "snapshot") return;
+				if (!currentAccount()) return;
+				if (update.type !== "snapshot") {
+					recordRealtimeUpdate(owned.mode, update);
+					return;
+				}
 				for (const item of update.snapshot.conversations ?? [])
 					feedHub.deliver(item.conversation_id, item.entries, { as: item.as });
 				if (!update.snapshot.notifications) return;
@@ -167,6 +179,7 @@ export function WebRealtimeBridge({ enabled }: { enabled: boolean }) {
 		window.addEventListener("offline", activity);
 		return () => {
 			stopped = true;
+			clearRealtimeStatus();
 			registerConversationFeed(null);
 			clearTimeout(retryTimer);
 			unsubscribe?.();

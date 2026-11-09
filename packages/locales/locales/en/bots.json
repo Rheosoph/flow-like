@@ -280,6 +280,7 @@
 		"activity": {
 			"queued": "Waiting for {{name}}",
 			"running": "{{name}} is answering",
+			"runningStatus": "{{name}} · {{status}}",
 			"typingMany": "Several people are typing",
 			"typingOne": "{{name}} is typing",
 			"typingTwo": "{{first}} and {{second}} are typing",
@@ -333,7 +334,10 @@
 				"tts_model": "Speech model",
 				"image_model": "Image model",
 				"vision_model": "Vision model",
-				"subtask_model": "Subtask model"
+				"subtask_model": "Subtask model",
+				"look": "Look",
+				"location": "Runs on",
+				"app_ids": "Apps"
 			},
 			"deny": "Deny",
 			"failed": "Couldn't send your answer. Try again.",
@@ -356,7 +360,22 @@
 			},
 			"title": "{{name}} wants to {{summary}}",
 			"triggeredBy": "Triggered by {{name}}",
-			"triggeredByInRoom": "Triggered by {{name}} in {{room}}"
+			"triggeredByInRoom": "Triggered by {{name}} in {{room}}",
+			"createBot": {
+				"title": "Create a bot",
+				"requestTitle": "{{name}} wants to create a bot",
+				"hint": "The bot is created with the settings below. You can change it in the Bots tab later.",
+				"approve": "Create bot",
+				"reject": "Don't create",
+				"approved": "Bot creation approved",
+				"rejected": "Bot creation rejected"
+			},
+			"updateBot": {
+				"title": "Change a bot's settings",
+				"requestTitle": "{{name}} wants to change a bot's settings",
+				"hint": "Only the settings below will change, starting with the bot's next turn.",
+				"target": "Bot"
+			}
 		},
 		"botSettings": "Settings for {{name}}",
 		"botTag": "Bot",
@@ -1352,6 +1371,26 @@
 			"title_one": "{{count}} bot lives only on this computer",
 			"title_other": "{{count}} bots live only on this computer"
 		}
+	},
+	"notes": {
+		"body": "Note",
+		"cancel": "Cancel",
+		"closeNote": "Close note",
+		"closed": "Closed",
+		"conflict": "The note changed while you were editing. The latest version is loaded; try again.",
+		"edit": "Edit",
+		"loadFailed": "Couldn't load this note.",
+		"loading": "Loading note…",
+		"open": "Open note",
+		"ownerOnly": "Only you can see this note",
+		"reopen": "Reopen",
+		"save": "Save",
+		"saveFailed": "Couldn't save the note.",
+		"status": "Status",
+		"statusPlaceholder": "Status",
+		"updatedBy": "Updated {{when}} by {{who}}",
+		"updatedSince": "Updated since this message",
+		"you": "You"
 	},
 	"panel": {
 		"back": "Back to the chat",

@@ -997,6 +997,109 @@ impl BrowserMlsEndpoint {
     }
 }
 
+#[derive(Serialize)]
+struct NewInboxKey<'a> {
+    seed: &'a str,
+    #[serde(flatten)]
+    key: &'a crate::inbox::PublicInboxKey,
+}
+
+#[derive(Deserialize)]
+struct InboxScope {
+    conversation_id: String,
+    message_id: String,
+    sender_id: String,
+}
+
+impl InboxScope {
+    fn scope(&self) -> crate::inbox::Scope<'_> {
+        crate::inbox::Scope {
+            conversation_id: &self.conversation_id,
+            message_id: &self.message_id,
+            sender_id: &self.sender_id,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct InboxSealedEntry {
+    #[serde(flatten)]
+    scope: InboxScope,
+    envelope: serde_json::Value,
+}
+
+/// A new inbox key: its base64url seed for this browser's store and its public half.
+#[wasm_bindgen(js_name = inboxNewKey)]
+pub fn inbox_new_key() -> std::result::Result<JsValue, JsValue> {
+    let secret = crate::inbox::InboxSecret::generate();
+    encode(&NewInboxKey {
+        seed: &secret.encoded_seed(),
+        key: secret.public(),
+    })
+    .map_err(error)
+}
+
+/// The public half of a stored seed.
+#[wasm_bindgen(js_name = inboxPublicKey)]
+pub fn inbox_public_key(seed: &str) -> std::result::Result<JsValue, JsValue> {
+    crate::inbox::InboxSecret::from_encoded(seed)
+        .map_err(error_any)
+        .and_then(|secret| encode(secret.public()))
+        .map_err(error)
+}
+
+/// `body` sealed once per member to each of their keys, by principal id.
+#[wasm_bindgen(js_name = inboxSeal)]
+pub fn inbox_seal(
+    scope: JsValue,
+    members: JsValue,
+    body: JsValue,
+) -> std::result::Result<JsValue, JsValue> {
+    let sealed = || -> Result<JsValue> {
+        let scope: InboxScope = decode(scope)?;
+        let members: Vec<crate::inbox::Member> = decode(members)?;
+        let plaintext = serde_json::to_vec(&decode::<serde_json::Value>(body)?)?;
+        let envelopes =
+            crate::inbox::seal_all(&scope.scope(), &members, &plaintext).map_err(error_any)?;
+        encode(&envelopes)
+    };
+    sealed().map_err(error)
+}
+
+/// The bodies of `entries` sent to `principal_id`, opened with `seeds`; `null` where an entry is
+/// sealed to none of them.
+#[wasm_bindgen(js_name = inboxOpen)]
+pub fn inbox_open(
+    seeds: Vec<String>,
+    principal_id: &str,
+    entries: JsValue,
+) -> std::result::Result<JsValue, JsValue> {
+    let opened = || -> Result<JsValue> {
+        let seeds = Zeroizing::new(seeds);
+        let secrets = seeds
+            .iter()
+            .map(|seed| crate::inbox::InboxSecret::from_encoded(seed))
+            .collect::<crate::Result<Vec<_>>>()
+            .map_err(error_any)?;
+        let entries: Vec<InboxSealedEntry> = decode(entries)?;
+        let bodies: Vec<Option<serde_json::Value>> = entries
+            .iter()
+            .map(|entry| {
+                crate::inbox::open_with(
+                    &secrets,
+                    &entry.scope.scope(),
+                    principal_id,
+                    &entry.envelope,
+                )
+                .ok()
+                .and_then(|plaintext| serde_json::from_slice(&plaintext).ok())
+            })
+            .collect();
+        encode(&bodies)
+    };
+    opened().map_err(error)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

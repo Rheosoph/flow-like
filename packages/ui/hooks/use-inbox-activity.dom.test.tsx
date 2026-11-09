@@ -7,6 +7,7 @@ import type {
 	IConversation,
 	IConversationTurn,
 	IInboxEntry,
+	IInboxPlainEnvelope,
 } from "../state/backend-state/inbox-state";
 import { useConversationActivity } from "./use-conversation-activity";
 import {
@@ -36,13 +37,18 @@ const turn: IConversationTurn = {
 	created_at: "2026-11-08T12:00:00Z",
 	updated_at: "2026-11-08T12:00:00Z",
 };
+const envelope: IInboxPlainEnvelope = {
+	v: 1,
+	enc: "none",
+	body: { text: "Hello" },
+};
 const entry: IInboxEntry = {
 	id: "entry",
 	message_id: "message",
 	conversation_id: "room",
 	sender_id: "owner",
 	kind: "message",
-	envelope: { v: 1, enc: "none", body: { text: "Hello" } },
+	envelope,
 	created_at: turn.created_at,
 	cursor: "2:entry",
 };
@@ -68,8 +74,8 @@ function Chat({ withFiles }: { withFiles: boolean }) {
 					conversationId: "room",
 					request: {
 						message_id: entry.message_id,
-						kind: entry.kind,
-						envelope: entry.envelope,
+						kind: "message",
+						envelope,
 					},
 				});
 	return <output>{activity.bots.map((bot) => bot.status).join(",")}</output>;

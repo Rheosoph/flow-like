@@ -15,6 +15,7 @@ pub(crate) mod interactive;
 pub(crate) mod ledger;
 pub(crate) mod memory;
 mod monitor_baseline;
+pub(crate) mod notes;
 pub(crate) mod recovery;
 mod room_updates;
 pub(crate) mod talk;

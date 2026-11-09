@@ -280,6 +280,7 @@
 		"activity": {
 			"queued": "",
 			"running": "",
+			"runningStatus": "",
 			"typingMany": "",
 			"typingOne": "",
 			"typingTwo": "",
@@ -333,7 +334,10 @@
 				"tts_model": "Sprachausgabemodell",
 				"image_model": "Bildmodell",
 				"vision_model": "Modell zur Bilderkennung",
-				"subtask_model": "Modell für Teilaufgaben"
+				"subtask_model": "Modell für Teilaufgaben",
+				"look": "",
+				"location": "",
+				"app_ids": ""
 			},
 			"deny": "",
 			"failed": "",
@@ -356,7 +360,22 @@
 			},
 			"title": "",
 			"triggeredBy": "",
-			"triggeredByInRoom": ""
+			"triggeredByInRoom": "",
+			"createBot": {
+				"title": "",
+				"requestTitle": "",
+				"hint": "",
+				"approve": "",
+				"reject": "",
+				"approved": "",
+				"rejected": ""
+			},
+			"updateBot": {
+				"title": "",
+				"requestTitle": "",
+				"hint": "",
+				"target": ""
+			}
 		},
 		"botSettings": "Einstellungen für {{name}}",
 		"botTag": "Bot",
@@ -1352,6 +1371,26 @@
 			"title_one": "{{count}} Bot lebt nur auf diesem Computer",
 			"title_other": "{{count}} Bots leben nur auf diesem Computer"
 		}
+	},
+	"notes": {
+		"body": "",
+		"cancel": "",
+		"closeNote": "",
+		"closed": "",
+		"conflict": "",
+		"edit": "",
+		"loadFailed": "",
+		"loading": "",
+		"open": "",
+		"ownerOnly": "",
+		"reopen": "",
+		"save": "",
+		"saveFailed": "",
+		"status": "",
+		"statusPlaceholder": "",
+		"updatedBy": "",
+		"updatedSince": "",
+		"you": ""
 	},
 	"panel": {
 		"back": "",

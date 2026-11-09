@@ -54,10 +54,33 @@ pub enum AgentType {
 /// An image attachment in a chat message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatImage {
-    /// Base64-encoded image data, without a data URL prefix.
+    /// Base64-encoded image data, without a data URL prefix. Empty for an image sent as `url`.
     pub data: String,
     /// MIME type, such as `image/png` or `image/jpeg`.
     pub media_type: String,
+    /// A link the host checked, sent to the model in place of `data` so the provider fetches it
+    /// or the model's media handling inlines it. Never read from a request: a caller's own link
+    /// would reach those fetches unchecked.
+    #[serde(skip)]
+    pub url: Option<String>,
+}
+
+impl ChatImage {
+    pub fn inline(data: String, media_type: String) -> Self {
+        Self {
+            data,
+            media_type,
+            url: None,
+        }
+    }
+
+    pub fn link(url: String, media_type: String) -> Self {
+        Self {
+            data: String::new(),
+            media_type,
+            url: Some(url),
+        }
+    }
 }
 
 /// A message in the chat history.

@@ -46,7 +46,7 @@ const TABLES: [&str; 8] = [
         "hostKind" TEXT NOT NULL, "status" TEXT NOT NULL, "attempts" INTEGER NOT NULL,
         "hostId" TEXT, "leaseUntil" TEXT, "operationId" TEXT, "replyMessageId" TEXT,
         "errorCode" TEXT, "hops" INTEGER NOT NULL, "requesterId" TEXT,
-        "audience" TEXT NOT NULL DEFAULT 'OWNER', "createdAt" TEXT NOT NULL,
+        "audience" TEXT NOT NULL DEFAULT 'OWNER', "statusText" TEXT, "createdAt" TEXT NOT NULL,
         "updatedAt" TEXT NOT NULL, UNIQUE ("botId", "triggerMessageId"))"#,
     r#"CREATE TABLE public."ConversationSegment" (
         "id" TEXT PRIMARY KEY, "conversationId" TEXT NOT NULL, "authorId" TEXT NOT NULL,
@@ -82,6 +82,9 @@ pub(crate) async fn database() -> DatabaseConnection {
         db.execute(&table).await.unwrap();
     }
     db.execute(&schema.create_table_from_entity(crate::entity::bot_decision_wait::Entity))
+        .await
+        .unwrap();
+    db.execute(&schema.create_table_from_entity(crate::entity::bot_note::Entity))
         .await
         .unwrap();
     for statement in TABLES
@@ -224,6 +227,7 @@ pub(crate) async fn running_turn(
         hops: Set(1),
         requester_id: Set(None),
         audience: Set("OWNER".into()),
+        status_text: Set(None),
         created_at: Set(at(0)),
         updated_at: Set(at(0)),
     }

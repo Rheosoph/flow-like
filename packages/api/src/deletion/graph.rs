@@ -413,14 +413,17 @@ fn build() -> FkGraph {
     );
     graph.register::<crate::entity::bot_turn_checkpoint::Entity>();
     graph.register::<crate::entity::bot_decision_wait::Entity>();
-    for (column, parent) in [("botId", "Bot"), ("conversationId", "Conversation")] {
-        graph.edges.push(FkEdge {
-            child: "BotDecisionWait".to_owned(),
-            column: column.to_owned(),
-            parent: parent.to_owned(),
-            parent_column: "id".to_owned(),
-            action: FkAction::Cascade,
-        });
+    graph.register::<crate::entity::bot_note::Entity>();
+    for child in ["BotDecisionWait", "BotNote"] {
+        for (column, parent) in [("botId", "Bot"), ("conversationId", "Conversation")] {
+            graph.edges.push(FkEdge {
+                child: child.to_owned(),
+                column: column.to_owned(),
+                parent: parent.to_owned(),
+                parent_column: "id".to_owned(),
+                action: FkAction::Cascade,
+            });
+        }
     }
     for &(name, primary_key, columns) in SQL_TABLES {
         graph.tables.insert(

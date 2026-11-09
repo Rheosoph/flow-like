@@ -218,6 +218,13 @@ export function useStorageCopy(): StorageCopy {
 						"Encrypted keys for managing your devices.",
 					),
 				},
+				inboxKeys: {
+					label: t("storageStoreInboxKeys", "Message keys"),
+					description: t(
+						"storageStoreInboxKeysDescription",
+						"This browser's key for end-to-end encrypted chats. Without it, those messages stay unreadable here.",
+					),
+				},
 				pendingSync: {
 					label: t("storageStorePendingSync", "Changes waiting to sync"),
 					description: t(

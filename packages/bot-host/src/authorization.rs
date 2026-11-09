@@ -445,6 +445,7 @@ mod tests {
             answered_round: None,
             claim: None,
             recovery: None,
+            notes: None,
         };
         RunnerInference::new(
             Arc::new(DecisionRunner {
@@ -529,6 +530,7 @@ mod tests {
             answered_round: None,
             claim: None,
             recovery: None,
+            notes: None,
         };
         let source = Arc::new(CountingAuthority(Default::default()));
         let inference =

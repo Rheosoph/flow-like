@@ -75,17 +75,16 @@ A bot holds up to 50 secrets of up to 16 KB each. Bots that live only on your co
 
 ## End-to-end encryption
 
-Bots on the desktop app or a device can switch on **End-to-end encryption**. The bot's private key stays on its host, and messages to and from it are sealed for each recipient, so the server stores them but can't read them. The bot's details show its key fingerprint and let you rotate the key.
+Bots on the desktop app or a device can switch on **End-to-end encryption**. Your 1:1 chat with the bot then becomes end-to-end encrypted. The bot's host and each app you're signed in to (desktop, phone or browser) hold their own private key. Every message is sealed for each of those keys, so the server stores it but can't read it. The bot's details show its key fingerprint and let you rotate the key.
+
+- An app can read the messages sealed after it first opened your chats while signed in. Older messages show as **Encrypted message** there.
+- Switching encryption off makes new messages readable to the server again. Messages that are already encrypted stay encrypted.
 
 Because the server can't read encrypted conversations:
 
 - Cloud bots can't hold the ability or answer in encrypted conversations.
-- Encrypted rooms have no invite links and no room memory.
+- Encrypted chats have no file attachments or calls, and encrypted rooms have no invite links and no room memory.
 - Secrets sealed for a bot's host can't be used by turns that run in the cloud.
-
-:::note
-Writing in end-to-end encrypted chats isn't available in the apps yet. Bots on a device already talk to your hub over an encrypted connection, and their screens are end-to-end encrypted.
-:::
 
 ## Limits that keep costs in check
 

@@ -42,7 +42,7 @@ use chrono::{DateTime, Duration as ChronoDuration, FixedOffset};
 use flow_like::{
     copilot::flowpilot_thinking,
     flow::copilot::{
-        BotToolHost, HeadlessMemory, PlatformContextInput, bot_platform_context,
+        BotToolHost, HeadlessMemory, NotesHandle, PlatformContextInput, bot_platform_context,
         bot_talk::{AnsweredRound, BotPresence, BotTalk},
         decision_event::{self, EventDecision},
         find_bot_tool_spec,
@@ -568,6 +568,11 @@ pub(crate) fn answer_request(turn: &bot_turn::Model, answer: &Answer) -> Option<
         {
             envelope["body"][decision_event::REPLY_DELIVERY_FIELD] = json!("respond");
         }
+        if let Some(note) = &answer.note
+            && let Some(envelope) = request.envelope.as_mut()
+        {
+            envelope["body"]["note"] = json!(note);
+        }
         if answer.acknowledgement
             && let Some(envelope) = request.envelope.as_mut()
         {
@@ -592,6 +597,8 @@ pub(crate) struct Answer {
     /// A participant wait already completed the held turn in its own transaction.
     pub(crate) completed: bool,
     pub(crate) event_delivery: Option<EventDecision>,
+    /// The note the turn last wrote or closed; the reply carries it as `body.note`.
+    pub(crate) note: Option<flow_like_types::bot_notes::NoteRef>,
 }
 
 async fn attempt(
@@ -667,6 +674,7 @@ async fn attempt(
             silent: true,
             completed: false,
             event_delivery: None,
+            note: None,
         });
     }
     let reacting = trigger_kind == Some(InboxEntryKind::Reaction);
@@ -715,6 +723,7 @@ async fn attempt(
             silent: true,
             completed: false,
             event_delivery: None,
+            note: None,
         });
     }
     let mut chat_conversation = turn.conversation_id.clone();
@@ -844,6 +853,7 @@ async fn attempt(
                 resumed: true,
                 completed: false,
                 event_delivery,
+                note: None,
             });
         }
     }
@@ -910,6 +920,7 @@ async fn attempt(
                         silent: true,
                         completed: false,
                         event_delivery: Some(EventDecision::Ignore),
+                        note: None,
                     });
                 }
                 Ok(choice) => {
@@ -992,6 +1003,7 @@ async fn attempt(
                         silent: true,
                         completed: false,
                         event_delivery: None,
+                        note: None,
                     });
                 }
                 Ok(Ok(Decision::WaitFor(participant))) => {
@@ -1005,6 +1017,7 @@ async fn attempt(
                             silent: true,
                             completed: false,
                             event_delivery: None,
+                            note: None,
                         });
                     }
                     use super::decision_wait::ParkOutcome;
@@ -1019,6 +1032,7 @@ async fn attempt(
                                 silent: true,
                                 completed: true,
                                 event_delivery: None,
+                                note: None,
                             });
                         }
                         ParkOutcome::Superseded => {
@@ -1029,6 +1043,7 @@ async fn attempt(
                                 silent: true,
                                 completed: false,
                                 event_delivery: None,
+                                note: None,
                             });
                         }
                         ParkOutcome::AlreadyAnswered | ParkOutcome::Unavailable => {}
@@ -1157,6 +1172,17 @@ async fn attempt(
         bot.context.host_tools =
             memory_turn.host_tools(std::mem::take(&mut bot.context.host_tools));
     }
+    let notes = NotesHandle::new(
+        super::notes::ServerNotes {
+            db: state.db.clone(),
+            bot_id: turn.bot_id.clone(),
+            conversation_id: chat_conversation.clone(),
+            turn: Some((turn.id.clone(), host_id.to_string())),
+        }
+        .shared(),
+        transcript.topic_at,
+    );
+    bot.context.host_tools = std::mem::take(&mut bot.context.host_tools).with_notes(notes.clone());
     let room_memory = kind == ConversationKind::Group;
     let owner_memory_allowed =
         super::memory::memory_policy(&state.db, &chat_conversation, owner, &turn.bot_id)
@@ -1358,6 +1384,7 @@ async fn attempt(
                 silent: true,
                 completed: false,
                 event_delivery: None,
+                note: None,
             })
         }
         Ok(Ok(text))
@@ -1433,6 +1460,7 @@ async fn attempt(
                 silent: event_delivery.is_some_and(EventDecision::quiet),
                 completed: false,
                 event_delivery,
+                note: notes.touched(),
             })
         }
     }

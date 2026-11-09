@@ -123,6 +123,7 @@ pub struct InteractiveRun {
     args: InteractiveArgs,
     home: Home,
     encryption: Option<Arc<super::e2e::E2eHost>>,
+    notes: Option<flow_like::flow::copilot::bot_notes::NotesHandle>,
 }
 
 impl InteractiveRun {
@@ -147,6 +148,7 @@ impl InteractiveRun {
             args,
             home,
             encryption: None,
+            notes: None,
         })
     }
 
@@ -200,6 +202,46 @@ impl InteractiveRun {
                     .map(|access| access.room)
             }
         }
+    }
+
+    /// The bot's notes for this run, unless the conversation is sealed. The reply carries the
+    /// note the run touched. No live status: the person watches the stream.
+    pub async fn notes(&mut self) -> Option<flow_like::flow::copilot::bot_notes::NotesHandle> {
+        let handle = match &self.home {
+            Home::Local(store) => {
+                let entries = store.newest(&self.args.conversation_id).await.ok()?;
+                super::notes::LocalNotes::handle(
+                    store.clone(),
+                    &self.bot_id,
+                    &self.args.conversation_id,
+                    None,
+                    flow_like_bot_host::transcript::topic_at(&entries),
+                )?
+            }
+            Home::Account(hub) => {
+                let entries = hub
+                    .entries_for_turn(
+                        &self.bot_id,
+                        &self.args.conversation_id,
+                        &self.args.trigger_message_id,
+                    )
+                    .await
+                    .ok()?;
+                let trigger = trigger_of(entries.clone(), &self.args.trigger_message_id)?;
+                if flow_like_bot_host::e2e::is_sealed(&trigger) {
+                    return None;
+                }
+                flow_like_bot_host::notes::HubNotes::new(
+                    hub.clone(),
+                    &self.bot_id,
+                    &self.args.conversation_id,
+                    None,
+                )
+                .handle(flow_like_bot_host::transcript::topic_at(&entries))
+            }
+        };
+        self.notes = Some(handle.clone());
+        Some(handle)
     }
 
     pub fn host_id(&self) -> String {
@@ -384,6 +426,8 @@ impl InteractiveRun {
         });
         if let Some(code) = error_code {
             body["error"] = json!({ "code": code });
+        } else if let Some(notes) = &self.notes {
+            flow_like_bot_host::notes::attach_note(&mut body, notes.touched().as_ref());
         }
         body
     }

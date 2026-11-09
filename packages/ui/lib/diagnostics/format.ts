@@ -1,4 +1,9 @@
 import type { BoardRenderer } from "../../hooks/use-board-renderer";
+import {
+	describeRealtimeFailure,
+	realtimeDelivery,
+} from "../realtime/realtime-status";
+import type { RealtimeStatus } from "../realtime/types";
 import { humanFileSize } from "../utils";
 import { CAPABILITY_LABELS } from "./capabilities";
 import { gpuDisplayName } from "./graphics";
@@ -115,6 +120,29 @@ const buildLines: SectionLines = ({ build, environment }) => [
 const rendererName = (value: BoardRenderer | null) =>
 	value ? BOARD_RENDERER_NAMES[value] : UNKNOWN;
 
+function realtimeLines(realtime: RealtimeStatus | null): Line[] {
+	if (!realtime) return [["Live updates", "not reported"]];
+	const { provider } = realtime;
+	const delivery = realtimeDelivery(realtime);
+	return [
+		[
+			"Live updates",
+			delivery === "live" ? `live (${provider?.transport})` : delivery,
+		],
+		["Live updates granted transport", text(provider?.transport)],
+		[
+			"Live updates runner",
+			realtime.runner === "shared-worker" ? "shared worker" : "this tab",
+		],
+		[
+			"Live updates last failure",
+			provider?.failure
+				? `${describeRealtimeFailure(provider.failure, provider.transport)} (${new Date(provider.failure.at).toISOString()})`
+				: "none",
+		],
+	];
+}
+
 const sessionLines: SectionLines = ({ session }) => {
 	if (!session) return [["Session", "not collected"]];
 	return [
@@ -127,6 +155,7 @@ const sessionLines: SectionLines = ({ session }) => {
 			rendererName(session.boardRendererPreference),
 		],
 		["Board renderer in use", rendererName(session.boardRendererInUse)],
+		...realtimeLines(session.realtime),
 	];
 };
 

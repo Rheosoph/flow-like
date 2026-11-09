@@ -452,6 +452,7 @@ mod tests {
             hops: Set(0),
             requester_id: Set(None),
             audience: Set("OWNER".into()),
+            status_text: Set(None),
             created_at: Set(time),
             updated_at: Set(time),
         }

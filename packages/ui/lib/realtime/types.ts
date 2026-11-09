@@ -208,8 +208,41 @@ export interface RealtimeActivity {
 	visible: boolean;
 }
 
+/** Where a provider connection attempt stopped; `lost` is a live connection that dropped. */
+export type RealtimeProviderStage =
+	| "grant"
+	| "handshake"
+	| "connect"
+	| "subscribe"
+	| "lost";
+
+export interface RealtimeProviderFailure {
+	stage: RealtimeProviderStage;
+	message: string;
+	elapsedMs: number;
+	/** Epoch milliseconds. */
+	at: number;
+}
+
+/** Whether wakeups arrive over a provider connection or only the replay's own polls deliver. */
+export interface RealtimeProviderStatus {
+	/** The transport the API granted; unset until it answered. */
+	transport?: RealtimeTransport["type"];
+	live: boolean;
+	/** The newest failure, kept after the connection recovers. */
+	failure?: RealtimeProviderFailure;
+}
+
+/** What a tab knows about its account's realtime connection. */
+export interface RealtimeStatus {
+	runner: "shared-worker" | "in-tab";
+	state: RealtimeConnectionState;
+	provider?: RealtimeProviderStatus;
+}
+
 export type RealtimeUpdate =
 	| { type: "state"; state: RealtimeConnectionState }
+	| { type: "provider"; status: RealtimeProviderStatus }
 	| { type: "snapshot"; snapshot: RealtimePollResponse };
 
 export type RealtimeListener = (update: RealtimeUpdate) => void | Promise<void>;
@@ -258,6 +291,7 @@ export type RealtimeMessage =
 	| { type: "ready" }
 	| { type: "expired" }
 	| { type: "state"; state: RealtimeConnectionState }
+	| { type: "provider"; status: RealtimeProviderStatus }
 	| {
 			type: "snapshot";
 			delivery_id: string;

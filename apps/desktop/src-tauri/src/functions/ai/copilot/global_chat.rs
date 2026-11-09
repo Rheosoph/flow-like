@@ -425,6 +425,7 @@ pub async fn global_chat(
 ) -> Result<UnifiedCopilotResponse, String> {
     let mut finish = None;
     let mut bot_memory = None;
+    let mut notes = None;
     let mut recovery = None;
     let mut inbox_conversation_id = None;
     let mut ephemeral_user_context = false;
@@ -454,6 +455,9 @@ pub async fn global_chat(
                         .map(|host| host.inner().clone()),
                 )
                 .await?;
+        }
+        if !ephemeral_user_context {
+            notes = run.notes().await;
         }
         let hold = run.hold();
         finish = Some(crate::bot_host::interactive::Finish {
@@ -491,6 +495,7 @@ pub async fn global_chat(
             interaction_mode:
                 crate::functions::ai::native_tool_bridge::NativeInteractionMode::Interactive,
             bot_memory,
+            notes,
             ephemeral_user_context,
             recovery,
             legacy_memory_read_only,
@@ -571,6 +576,7 @@ pub async fn global_chat_native(
     let nested_talk = options.bot_talk.take();
     let answered_round = options.answered_round.take();
     let bot_memory = options.bot_memory.take();
+    let notes = options.notes.take();
     let recovery = options.recovery.take();
     let room_updates = options.room_updates.take();
     let requester = options.requester.take();
@@ -712,6 +718,9 @@ pub async fn global_chat_native(
         let context = std::sync::Arc::make_mut(&mut bot.context);
         context.host_tools = std::mem::take(&mut context.host_tools)
             .with_user_context(has_inbox_conversation);
+        if let Some(notes) = notes {
+            context.host_tools = std::mem::take(&mut context.host_tools).with_notes(notes);
+        }
         std::sync::Arc::make_mut(&mut bot.context).recovery = recovery.map(Into::into);
         std::sync::Arc::make_mut(&mut bot.context).acknowledgement = acknowledgement;
         std::sync::Arc::make_mut(&mut bot.context).ephemeral_user_context = ephemeral_user_context;

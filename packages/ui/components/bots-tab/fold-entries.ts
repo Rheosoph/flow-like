@@ -1,5 +1,6 @@
 import { compareInboxCursors } from "../../hooks/use-inbox";
 import { isRecord } from "../../lib/response-shape";
+import type { IBotNoteRef } from "../../state/backend-state/bot-state";
 import type {
 	IInboxApprovalSecret,
 	IInboxAttachmentPart,
@@ -12,6 +13,7 @@ import {
 	approvalResponseOf,
 	plainBody,
 } from "./approval-entry";
+import { noteRefOf } from "./bot-note-entry";
 import { isSelfPrincipal } from "./crew-model";
 import {
 	type UserContextCardData,
@@ -99,6 +101,7 @@ export interface ConversationMessage {
 	approval?: ConversationApproval;
 	userContext?: UserContextCardData;
 	userContextDerived?: boolean;
+	note?: IBotNoteRef;
 	/** Recipients of the email this message was sent as. */
 	mailedTo?: string[];
 	edited: boolean;
@@ -459,6 +462,7 @@ export function foldInboxEntries(
 			const approval = approvalOf(entry);
 			const contextRequest = userContextRequestOf(entry);
 			const mailedTo = mailedToOf(entry);
+			const note = noteRefOf(entry);
 			const message: ConversationMessage = {
 				type: "message",
 				id: entry.message_id,
@@ -477,6 +481,7 @@ export function foldInboxEntries(
 					? { attachments: attachmentsOf(entry) }
 					: {}),
 				...(replyTo ? { replyTo } : {}),
+				...(note ? { note } : {}),
 				...(mailedTo.length > 0 ? { mailedTo } : {}),
 				...(approval
 					? {

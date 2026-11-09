@@ -43,7 +43,7 @@ import { AppState } from "../app-state";
 type AppEntry = [IApp, IMetadata | undefined];
 
 function entry(id: string, visibility = IAppVisibility.Private): AppEntry {
-	return [{ id, visibility, bits: [] }, { name: id }] as AppEntry;
+	return [{ id, visibility, bits: [] }, { name: id }] as unknown as AppEntry;
 }
 
 function deferred() {

@@ -8,6 +8,7 @@ import type { CrewDirectory } from "./use-crew-directory";
 export interface BotActivity {
 	botId: string;
 	status: "queued" | "running" | "waiting";
+	statusText?: string;
 }
 
 const MAX_AVATARS = 3;
@@ -46,7 +47,12 @@ export function ConversationActivityLine({
 		const parts = bots.map((bot) => {
 			const name = directory(bot.botId).name;
 			if (bot.status === "running")
-				return t("crew.activity.running", "{{name}} is answering", { name });
+				return bot.statusText
+					? t("crew.activity.runningStatus", "{{name}} · {{status}}", {
+							name,
+							status: bot.statusText,
+						})
+					: t("crew.activity.running", "{{name}} is answering", { name });
 			if (bot.status === "queued")
 				return t("crew.activity.queued", "Waiting for {{name}}", { name });
 			return t("crew.activity.waiting", "{{name}} is waiting for approval", {

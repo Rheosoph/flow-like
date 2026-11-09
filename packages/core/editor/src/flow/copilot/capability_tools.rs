@@ -103,6 +103,9 @@ fn connector_ask_message(tool: &str, args: &Value) -> String {
 }
 
 fn ask_message(tool: &str, args: &Value) -> String {
+    if let Some(message) = tools::crew::ask_message(tool, args) {
+        return message;
+    }
     if tools::configuration::requires_approval(tool) {
         let fields = args
             .get("changes")
@@ -187,6 +190,10 @@ registered_tools!(
     "bot_configuration",
     "bot_models",
     "bot_update_configuration",
+    "list_bots",
+    "get_bot",
+    "create_bot",
+    "update_bot",
     "file_list",
     "file_read",
     "file_save",
@@ -494,7 +501,7 @@ mod tests {
             assert!(
                 required_capability(&spec).is_some()
                     || is_secret_tool(spec.name)
-                    || tools::configuration::is_configuration_tool(spec.name),
+                    || tools::configuration::is_settings_tool(spec.name),
                 "{} has no capability",
                 spec.name
             );
@@ -527,6 +534,8 @@ mod tests {
                     name,
                     "knowledge_drop"
                         | "bot_update_configuration"
+                        | "create_bot"
+                        | "update_bot"
                         | "shell_run"
                         | "browser_open"
                         | "computer_screenshot"

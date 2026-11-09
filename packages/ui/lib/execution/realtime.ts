@@ -118,7 +118,7 @@ export async function followRealtimeExecution(options: {
 			if (options.signal.aborted) return abort();
 			options.signal.addEventListener("abort", abort, { once: true });
 			unsubscribe = client.subscribe(async (update) => {
-				if (options.signal.aborted) return;
+				if (options.signal.aborted || update.type === "provider") return;
 				if (update.type === "state") {
 					if (update.state === "closed")
 						reject(

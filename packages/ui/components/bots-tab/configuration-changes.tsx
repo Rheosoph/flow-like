@@ -3,19 +3,24 @@
 import { useTranslation } from "@flow-like/locales";
 import {
 	AlignLeftIcon,
+	AppWindowIcon,
 	BotIcon,
 	ChevronDownIcon,
 	CodeIcon,
 	CpuIcon,
 	FileTextIcon,
 	type LucideIcon,
+	MapPinIcon,
 	SlidersHorizontalIcon,
+	SmileIcon,
 	SparklesIcon,
 	UnlinkIcon,
 } from "lucide-react";
 import { useId, useState } from "react";
+import { useBotLabels, useBots } from "../../hooks/use-bots";
 import { cn } from "../../lib/utils";
 import type { BotCapability } from "../../state/backend-state/bot-state";
+import { BotAvatar } from "../bots/bot-avatar";
 import { useBotCapabilityLabel } from "./bot-labels";
 import { BOT_CAPABILITY_ICONS } from "./editor/bot-capability-groups";
 
@@ -31,7 +36,105 @@ const FIELDS: Record<string, { label: string; icon: LucideIcon }> = {
 	image_model: { label: "Image model", icon: CpuIcon },
 	vision_model: { label: "Vision model", icon: CpuIcon },
 	subtask_model: { label: "Subtask model", icon: CpuIcon },
+	look: { label: "Look", icon: SmileIcon },
+	location: { label: "Runs on", icon: MapPinIcon },
+	app_ids: { label: "Apps", icon: AppWindowIcon },
 };
+
+export type BotSettingsTool =
+	| "bot_update_configuration"
+	| "create_bot"
+	| "update_bot";
+
+/** Titles and answers for approving a bot's settings change: its own, a new bot, or another bot. */
+export function useBotSettingsApprovalText(tool: string | undefined) {
+	const { t } = useTranslation("bots");
+	if (tool === "create_bot")
+		return {
+			title: t("crew.approval.createBot.title", "Create a bot"),
+			requestTitle: (name: string) =>
+				t(
+					"crew.approval.createBot.requestTitle",
+					"{{name}} wants to create a bot",
+					{
+						name,
+					},
+				),
+			hint: t(
+				"crew.approval.createBot.hint",
+				"The bot is created with the settings below. You can change it in the Bots tab later.",
+			),
+			approve: t("crew.approval.createBot.approve", "Create bot"),
+			reject: t("crew.approval.createBot.reject", "Don't create"),
+			approved: t("crew.approval.createBot.approved", "Bot creation approved"),
+			rejected: t("crew.approval.createBot.rejected", "Bot creation rejected"),
+		};
+	const changes = {
+		approve: t("crew.approval.configuration.approve", "Approve changes"),
+		reject: t("crew.approval.configuration.reject", "Reject changes"),
+		approved: t("crew.approval.configuration.approved", "Changes approved"),
+		rejected: t("crew.approval.configuration.rejected", "Changes rejected"),
+	};
+	if (tool === "update_bot")
+		return {
+			...changes,
+			title: t("crew.approval.updateBot.title", "Change a bot's settings"),
+			requestTitle: (name: string) =>
+				t(
+					"crew.approval.updateBot.requestTitle",
+					"{{name}} wants to change a bot's settings",
+					{ name },
+				),
+			hint: t(
+				"crew.approval.updateBot.hint",
+				"Only the settings below will change, starting with the bot's next turn.",
+			),
+		};
+	return {
+		...changes,
+		title: t("crew.approval.configuration.title", "Update bot settings"),
+		requestTitle: (name: string) =>
+			t(
+				"crew.approval.configuration.requestTitle",
+				"{{name}} wants to update its settings",
+				{ name },
+			),
+		hint: t(
+			"crew.approval.configuration.hint",
+			"Only the settings below will change, starting with the next turn.",
+		),
+	};
+}
+
+/** The bot an `update_bot` approval changes, by name and look. */
+function TargetBot({ botId }: { botId: string }) {
+	const { t } = useTranslation("bots");
+	const labels = useBotLabels();
+	const bot = useBots().data?.find((candidate) => candidate.id === botId);
+	return (
+		<div
+			className="flex min-w-0 items-center gap-2.5 rounded-xl border border-border/60 bg-background/60 px-3 py-2"
+			data-slot="bot-configuration-target"
+		>
+			{bot && (
+				<BotAvatar
+					appearance={bot.appearance}
+					size={28}
+					animated={false}
+					decorative
+				/>
+			)}
+			<div className="min-w-0">
+				<p className="text-xs text-muted-foreground">
+					{t("crew.approval.updateBot.target", "Bot")}
+				</p>
+				<p className="truncate text-sm font-medium">
+					{(bot && labels(bot).name) || botId}
+				</p>
+			</div>
+		</div>
+	);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -280,7 +383,8 @@ export function BotConfigurationChanges({
 }: { changes: Record<string, unknown> }) {
 	const { t } = useTranslation("bots");
 	const titleId = useId();
-	const entries = Object.entries(changes);
+	const { bot_id: target, ...settings } = changes;
+	const entries = Object.entries(settings);
 	return (
 		<section
 			className="min-w-0 space-y-3"
@@ -299,6 +403,7 @@ export function BotConfigurationChanges({
 					)}
 				</span>
 			</div>
+			{typeof target === "string" && <TargetBot botId={target} />}
 			{entries.length === 0 ? (
 				<p className="text-sm text-muted-foreground">
 					{t("crew.approval.configuration.noChanges", "No settings to change")}

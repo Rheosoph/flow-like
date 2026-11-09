@@ -1,4 +1,4 @@
-use super::secure_local::SecureLocalStore;
+use super::secure_local::{DiskNames, SecureLocalStore};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
@@ -26,26 +26,41 @@ impl std::fmt::Display for LocalObjectStore {
 
 impl LocalObjectStore {
     pub fn new(prefix: PathBuf) -> Result<Self> {
-        Self::new_with_android_safe(prefix, cfg!(target_os = "android"))
+        Self::open(prefix, DiskNames::Encoded)
     }
 
     /// Retained for callers selecting Android behavior. The descriptor backend
     /// enforces the same create-only contract on every platform.
     pub fn new_with_android_safe(prefix: PathBuf, _android_safe: bool) -> Result<Self> {
+        Self::open(prefix, DiskNames::Encoded)
+    }
+
+    /// A store over a folder a person owns, such as a picked or mounted share.
+    /// Keys stay percent-encoded like every other store, but each segment addresses the
+    /// decoded name on disk: `F%C3%BCgen.pdf` opens `Fügen.pdf`, and listings encode the
+    /// real names. App storage keeps [`Self::new`], whose files are named by the encoded key.
+    pub fn host_folder(prefix: PathBuf) -> Result<Self> {
+        Self::open(prefix, DiskNames::Decoded)
+    }
+
+    fn open(prefix: PathBuf, names: DiskNames) -> Result<Self> {
         if !prefix.exists() {
             fs::create_dir_all(&prefix).map_err(|source| object_store::Error::Generic {
                 store: "LocalObjectStore",
                 source: source.into(),
             })?;
         }
-        let secure = SecureLocalStore::new(&prefix)?;
+        let secure = SecureLocalStore::new(&prefix, names)?;
         let store = LocalFileSystem::new_with_prefix(prefix)?;
         Ok(Self { store, secure })
     }
 
     pub fn path_to_filesystem(&self, location: &Path) -> Result<PathBuf> {
         let path = self.store.path_to_filesystem(location)?;
-        Ok(path)
+        match self.secure.names() {
+            DiskNames::Encoded => Ok(path),
+            DiskNames::Decoded => self.decoded_path(location),
+        }
     }
 
     pub fn metadata(&self, location: &Path) -> Result<Option<std::fs::Metadata>> {
@@ -54,6 +69,13 @@ impl LocalObjectStore {
 
     /// Resolve a directory prefix, including the empty prefix for the store root.
     pub fn directory_to_filesystem(&self, location: &Path) -> Result<PathBuf> {
+        match self.secure.names() {
+            DiskNames::Encoded => self.encoded_directory(location),
+            DiskNames::Decoded => self.decoded_path(location),
+        }
+    }
+
+    fn encoded_directory(&self, location: &Path) -> Result<PathBuf> {
         // object_store validates the final component as a filename, rejecting empty
         // paths and names ending in #<digits>. A directory prefix has neither restriction.
         // Resolve a placeholder child without creating it, then remove that component.
@@ -61,6 +83,12 @@ impl LocalObjectStore {
             .store
             .path_to_filesystem(&location.clone().join(".flow-like-directory-path"))?;
         path.pop();
+        Ok(path)
+    }
+
+    fn decoded_path(&self, location: &Path) -> Result<PathBuf> {
+        let mut path = self.encoded_directory(&Path::default())?;
+        path.extend(self.secure.segments(location)?.iter().map(|name| &**name));
         Ok(path)
     }
 }
@@ -188,6 +216,98 @@ mod tests {
                 .is_err()
         );
         fs::remove_dir_all(parent).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_host_folder_addresses_real_names_through_encoded_keys() {
+        use crate::object_path::normalize_object_path;
+        use futures::TryStreamExt;
+
+        const RAW_NAME: &str = "Übersicht (2)#1.pdf";
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("Fügen")).unwrap();
+        fs::write(root.path().join("Fügen").join(RAW_NAME), b"share").unwrap();
+        let store = LocalObjectStore::host_folder(root.path().into()).unwrap();
+        let key = Path::from("Fügen").join(RAW_NAME);
+
+        let listed: Vec<_> = store
+            .list(None)
+            .map_ok(|meta| meta.location)
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(listed, [key.clone()]);
+        assert_eq!(
+            store
+                .list_with_delimiter(None)
+                .await
+                .unwrap()
+                .common_prefixes,
+            [Path::from("Fügen")]
+        );
+        let nested = store
+            .list_with_delimiter(Some(&Path::from("Fügen")))
+            .await
+            .unwrap();
+        assert_eq!(nested.objects[0].location, key);
+
+        for location in [
+            key.clone(),
+            normalize_object_path(&format!("Fügen/{RAW_NAME}")),
+        ] {
+            assert_eq!(
+                store.get(&location).await.unwrap().bytes().await.unwrap(),
+                Bytes::from_static(b"share")
+            );
+        }
+        let canonical = root.path().canonicalize().unwrap();
+        assert_eq!(
+            store.path_to_filesystem(&key).unwrap(),
+            canonical.join("Fügen").join(RAW_NAME)
+        );
+        assert_eq!(
+            store.directory_to_filesystem(&Path::from("Fügen")).unwrap(),
+            canonical.join("Fügen")
+        );
+
+        let written = Path::from("Fügen").join("Ärger 100%.txt");
+        store
+            .put(&written, PutPayload::from_static(b"new"))
+            .await
+            .unwrap();
+        assert_eq!(
+            fs::read(root.path().join("Fügen").join("Ärger 100%.txt")).unwrap(),
+            b"new"
+        );
+        store.delete(&written).await.unwrap();
+        assert!(!root.path().join("Fügen").join("Ärger 100%.txt").exists());
+
+        for escape in [
+            Path::from(".."),
+            Path::from("Fügen").join(".."),
+            normalize_object_path("Fügen%2F..%2F..%2Fsecret"),
+        ] {
+            assert!(
+                matches!(
+                    store.get(&escape).await,
+                    Err(object_store::Error::PermissionDenied { .. })
+                ),
+                "{escape}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn app_storage_names_files_by_the_encoded_key() {
+        let root = tempfile::tempdir().unwrap();
+        let store = LocalObjectStore::new(root.path().into()).unwrap();
+        let key = Path::from("Fügen.txt");
+        store
+            .put(&key, PutPayload::from_static(b"data"))
+            .await
+            .unwrap();
+        assert!(root.path().join(key.as_ref()).is_file());
+        assert!(!root.path().join("Fügen.txt").exists());
     }
 
     #[tokio::test]

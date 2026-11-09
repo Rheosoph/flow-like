@@ -16,6 +16,7 @@ pub use generated::*;
 
 pub mod caller_apps;
 pub mod bot_decision_wait;
+pub mod bot_note;
 pub mod bot_turn_checkpoint;
 pub mod json_types;
 mod relations;

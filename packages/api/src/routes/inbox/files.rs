@@ -367,16 +367,20 @@ pub(crate) async fn readable_file<C: ConnectionTrait>(
 }
 
 const MAX_VISION_IMAGES: u64 = 4;
-const MAX_VISION_IMAGE_BYTES: i64 = 5 * 1024 * 1024;
+/// The largest picture a model call downloads to fit into its provider's inline limit.
+const MAX_VISION_IMAGE_BYTES: i64 = 32 * 1024 * 1024;
+/// How long the bot turn answering a message reads its pictures, tool rounds included.
+const VISION_URL_TTL: Duration = Duration::from_secs(60 * 60);
 
-/// The pictures a message carries, ready for a vision model. Only files of `conversation_id` that
-/// are ready and not deleted; a file that can't be read is skipped.
+/// The pictures a message carries, as signed links for a vision model. The model's media handling
+/// hands them to a provider that fetches links and inlines them, fitted to its limits, for any
+/// other. Only files of `conversation_id` that are ready and not deleted; a file that can't be
+/// signed is skipped.
 pub(crate) async fn message_images(
     state: &AppState,
     conversation_id: &str,
     message_id: &str,
 ) -> Vec<flow_like::flow::copilot::ChatImage> {
-    use base64::Engine;
     let files = conversation_file::Entity::find()
         .filter(conversation_file::Column::ConversationId.eq(conversation_id))
         .filter(conversation_file::Column::MessageId.eq(message_id))
@@ -391,23 +395,23 @@ pub(crate) async fn message_images(
     if files.is_empty() {
         return Vec::new();
     }
-    let Ok(store) = content_store(state).await else {
+    let Ok(master) = state.master_credentials().await else {
         return Vec::new();
     };
+    let Ok(store) = master.to_store(false).await else {
+        return Vec::new();
+    };
+    let ttl = master.signing_ttl(VISION_URL_TTL);
     let mut images = Vec::with_capacity(files.len());
     for file in files {
         let location = ObjectPath::from(object_key(conversation_id, &stored_file_name(&file)));
-        let bytes = match store.as_generic().get(&location).await {
-            Ok(result) => result.bytes().await,
-            Err(error) => Err(error),
-        };
-        match bytes {
-            Ok(bytes) => images.push(flow_like::flow::copilot::ChatImage {
-                data: base64::engine::general_purpose::STANDARD.encode(bytes),
-                media_type: file.mime,
-            }),
+        match store.sign("GET", &location, ttl).await {
+            Ok(url) => images.push(flow_like::flow::copilot::ChatImage::link(
+                url.to_string(),
+                file.mime,
+            )),
             Err(error) => {
-                tracing::warn!(%error, file_id = %file.id, "Reading a conversation image for a bot turn failed");
+                tracing::warn!(%error, file_id = %file.id, "Signing a conversation image for a bot turn failed");
             }
         }
     }

@@ -19,13 +19,17 @@ import {
 	initialAskUserDrafts,
 	isAskUserFormComplete,
 } from "../../lib/ask-user";
+import { requiresFreshToolApproval } from "../../lib/frontend-tool-approval-scope";
 import {
 	type GlobalToolPrompt,
 	type GlobalToolSecret,
 	useGlobalChatStore,
 } from "../../state/global-chat/global-chat-store";
 import { restoreGlobalChatConversation } from "../../state/global-chat/global-chat-stream";
-import { BotConfigurationChanges } from "../bots-tab/configuration-changes";
+import {
+	BotConfigurationChanges,
+	useBotSettingsApprovalText,
+} from "../bots-tab/configuration-changes";
 import { BOTS_ROUTE } from "../bots-tab/dock-selection";
 import { SecretRequestForm } from "../bots-tab/secret-request-form";
 import { BotAvatar } from "../bots/bot-avatar";
@@ -291,7 +295,8 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 	const [drafts, setDrafts] = useState(() => initialAskUserDrafts(ask));
 	const isApproval = prompt.kind === "approval";
 	const isConfiguration =
-		isApproval && prompt.toolName === "bot_update_configuration";
+		isApproval && requiresFreshToolApproval(prompt.toolName);
+	const settingsText = useBotSettingsApprovalText(prompt.toolName);
 	const rememberable = !isConfiguration && prompt.rememberable !== false;
 	const tone: RequestTone = isApproval ? "warning" : "primary";
 
@@ -301,7 +306,7 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 	// A lone question is the card's subject; its generic "needs input" title would only repeat
 	// what the eyebrow already says.
 	const title = isConfiguration
-		? t("bots:crew.approval.configuration.title", "Update bot settings")
+		? settingsText.title
 		: !isApproval && prompt.description
 			? prompt.description
 			: prompt.title;
@@ -352,14 +357,7 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 							: t("needsAnAnswer", "Needs an answer")
 					}`}
 					title={title}
-					description={
-						isConfiguration
-							? t(
-									"bots:crew.approval.configuration.hint",
-									"Only the settings below will change, starting with the next turn.",
-								)
-							: undefined
-					}
+					description={isConfiguration ? settingsText.hint : undefined}
 					className={hasBody ? undefined : "pb-4"}
 				/>
 				{hasBody && (
@@ -417,7 +415,7 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 					>
 						{isApproval
 							? isConfiguration
-								? t("bots:crew.approval.configuration.reject", "Reject changes")
+								? settingsText.reject
 								: t("bots:crew.approval.deny", "Deny")
 							: t("cancel", "Cancel")}
 					</Button>
@@ -437,7 +435,7 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 						}}
 					>
 						{isConfiguration
-							? t("bots:crew.approval.configuration.approve", "Approve changes")
+							? settingsText.approve
 							: isApproval
 								? t("settings:approve", "Approve")
 								: t("send", "Send")}

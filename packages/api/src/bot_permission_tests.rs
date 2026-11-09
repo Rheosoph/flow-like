@@ -306,12 +306,9 @@ async fn only_the_owners_live_profile_opens_its_apps() {
     );
 
     scope_bot(&db, &["profile_apps"], Some("profile-1")).await;
-    profile::ActiveModel {
-        id: Set("profile-1".into()),
-        deleted_at: Set(Some(at(1))),
-        ..Default::default()
-    }
-    .update(&db)
+    db.execute_unprepared(
+        r#"UPDATE public."Profile" SET "deletedAt" = '2023-11-15T00:00:00+00:00' WHERE "id" = 'profile-1'"#,
+    )
     .await
     .unwrap();
     assert_eq!(

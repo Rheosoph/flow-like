@@ -349,6 +349,12 @@ pub trait ToolEnv: Send + Sync {
         None
     }
 
+    /// The owner's bots for Flux's `list_bots`, `get_bot`, `create_bot` and `update_bot`, after
+    /// host-enforced owner approval; `None` where the host can't manage them.
+    fn crew(&self) -> Option<Arc<dyn crate::crew::CrewBackend>> {
+        None
+    }
+
     /// The bot's scheduled tasks; `None` where the host keeps none.
     fn scheduler(&self) -> Option<Arc<dyn crate::schedule::Scheduler>> {
         None

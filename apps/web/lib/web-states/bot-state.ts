@@ -9,6 +9,8 @@ import type {
 	IBotMailAvailability,
 	IBotMailThread,
 	IBotMailThreadView,
+	IBotNote,
+	IBotNoteWrite,
 	IBotPermission,
 	IBotPermissions,
 	IBotPresence,
@@ -45,6 +47,10 @@ import {
 
 function botPath(botId: string): string {
 	return `bots/${encodeURIComponent(botId)}`;
+}
+
+function notePath(botId: string, conversationId: string, key: string): string {
+	return `${botPath(botId)}/notes/${encodeURIComponent(conversationId)}/${encodeURIComponent(key)}`;
 }
 
 function toolGrantsPath(botId: string): string {
@@ -137,6 +143,38 @@ export class WebBotState implements IBotState {
 				this.backend.auth,
 			),
 			botId,
+		);
+	}
+
+	async listNotes(botId: string, conversationId: string): Promise<IBotNote[]> {
+		const response = await apiGet<{ notes?: IBotNote[] }>(
+			`${botPath(botId)}/notes?conversation_id=${encodeURIComponent(conversationId)}`,
+			this.backend.auth,
+		);
+		return asArray<IBotNote>(response?.notes);
+	}
+
+	async getNote(
+		botId: string,
+		conversationId: string,
+		key: string,
+	): Promise<IBotNote> {
+		return apiGet<IBotNote>(
+			notePath(botId, conversationId, key),
+			this.backend.auth,
+		);
+	}
+
+	async updateNote(
+		botId: string,
+		conversationId: string,
+		key: string,
+		write: IBotNoteWrite,
+	): Promise<IBotNote> {
+		return apiPatch<IBotNote>(
+			notePath(botId, conversationId, key),
+			write,
+			this.backend.auth,
 		);
 	}
 

@@ -76,6 +76,7 @@ pub(crate) struct BotToolsHost {
     people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
     user_context: Option<Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>>,
     configuration: Option<Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>>,
+    crew: Option<Arc<dyn flow_like_bot_tools::crew::CrewBackend>>,
     scheduler: Option<Arc<dyn flow_like_bot_tools::Scheduler>>,
     skills: Option<Arc<dyn flow_like_bot_tools::SkillHost>>,
     skill_jobs: Option<Arc<dyn super::skills::SkillJobs>>,
@@ -145,6 +146,7 @@ impl BotToolsHost {
             people: None,
             user_context: None,
             configuration: None,
+            crew: None,
             scheduler: None,
             skills: None,
             skill_jobs: None,
@@ -173,6 +175,15 @@ impl BotToolsHost {
         configuration: Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>,
     ) -> Self {
         self.configuration = Some(configuration);
+        self
+    }
+
+    /// Flux's management of its owner's bots; other bots never get one.
+    pub(crate) fn with_crew(
+        mut self,
+        crew: Arc<dyn flow_like_bot_tools::crew::CrewBackend>,
+    ) -> Self {
+        self.crew = Some(crew);
         self
     }
 
@@ -414,7 +425,7 @@ impl BotToolsHost {
             classification: flow_like_types::data_classification::DataClassification::Internal,
             apps: Vec::new(),
         };
-        let scope = if flow_like_bot_tools::configuration::is_configuration_tool(tool)
+        let scope = if flow_like_bot_tools::configuration::is_settings_tool(tool)
             || flow_like_bot_tools::user_context::is_user_context_tool(tool)
         {
             &empty_scope
@@ -445,6 +456,9 @@ impl BotToolsHost {
         }
         if let Some(configuration) = &self.configuration {
             env = env.with_configuration(configuration.clone());
+        }
+        if let Some(crew) = &self.crew {
+            env = env.with_crew(crew.clone());
         }
         if let Some(people) = &self.people {
             env = env.with_people(people.clone());

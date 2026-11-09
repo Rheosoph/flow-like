@@ -7,6 +7,7 @@
 use super::{
     gate::ApprovalGate,
     memory::{self, JobMemory},
+    notes::{LocalNotes, StatusSink},
     room_updates::LocalRoomUpdates,
     rule::{self, Waiting},
     store::{HostStore, StoreGrants},
@@ -15,6 +16,7 @@ use super::{
 use chrono::{Duration as Age, Utc};
 use flow_like::flow::copilot::{
     decision::{self, Decision, DecisionParticipant},
+    bot_notes::NotesHandle,
     decision_event::{self, EventDecision},
     memory_open::follow_up,
     platform::RoomUpdates,
@@ -69,6 +71,7 @@ struct Live {
     cancel: watch::Sender<Option<Cancel>>,
     rerun: bool,
     posting: bool,
+    notes: Option<NotesHandle>,
 }
 
 #[derive(Default)]
@@ -581,11 +584,13 @@ impl Inner {
                         finished_at: None,
                         error_code: None,
                         reply_message_id: None,
+                        status_text: None,
                     },
                     trigger_seq: None,
                     cancel: sender,
                     rerun: false,
                     posting: false,
+                    notes: None,
                 };
                 retarget(&mut live, bot_id, &waiting);
                 publish = Some(live.info.clone());
@@ -618,7 +623,7 @@ impl Inner {
         self.finish(&key, end);
     }
 
-    async fn execute(&self, key: &Key, cancel: &mut watch::Receiver<Option<Cancel>>) -> End {
+    async fn execute(self: &Arc<Self>, key: &Key, cancel: &mut watch::Receiver<Option<Cancel>>) -> End {
         let (bot_id, conversation_id) = key;
         let Some((conversation, entries)) = self.read(conversation_id).await else {
             return End::store_changed();
@@ -775,6 +780,27 @@ impl Inner {
                 return End::abandoned(CODE_SETUP);
             }
         };
+        let notes = if ephemeral_user_context {
+            None
+        } else {
+            let host = Arc::downgrade(self);
+            let sink_key = key.clone();
+            let status: StatusSink = Arc::new(move |text| {
+                if let Some(host) = host.upgrade() {
+                    host.set_status(&sink_key, text);
+                }
+            });
+            LocalNotes::handle(
+                self.store.clone(),
+                bot_id,
+                conversation_id,
+                Some(status),
+                transcript.topic_at,
+            )
+        };
+        if let Some(live) = lock(&self.state).live.get_mut(key) {
+            live.notes = notes.clone();
+        }
         let mut job = TurnJob {
             run_id: run_id.clone(),
             bot_id: bot_id.clone(),
@@ -793,6 +819,7 @@ impl Inner {
             answered_round: None,
             claim: None,
             recovery,
+            notes,
         };
         if bot.model.decision.is_some() {
             let authority = Arc::new(super::authorization::LocalAuthority::new(
@@ -1276,6 +1303,7 @@ impl Inner {
         acknowledgement: bool,
         cancel: &mut watch::Receiver<Option<Cancel>>,
     ) -> End {
+        let note;
         {
             let mut state = lock(&self.state);
             let Some(live) = state.live.get_mut(key) else {
@@ -1285,6 +1313,7 @@ impl Inner {
                 return End::by(reason);
             }
             live.posting = true;
+            note = live.notes.as_ref().and_then(NotesHandle::touched);
         }
         let (bot_id, conversation_id) = key;
         let message_id = if error_code.is_some() {
@@ -1298,6 +1327,12 @@ impl Inner {
             && let Some(envelope) = request.envelope.as_mut()
         {
             envelope["body"][decision::ACKNOWLEDGEMENT_FIELD] = serde_json::json!(true);
+        }
+        if error_code.is_none()
+            && !acknowledgement
+            && let Some(envelope) = request.envelope.as_mut()
+        {
+            flow_like_bot_host::notes::attach_note(&mut envelope["body"], note.as_ref());
         }
         match self.store.send(conversation_id, bot_id, request).await {
             Ok(_) => {
@@ -1337,6 +1372,22 @@ impl Inner {
         info.id
     }
 
+    /// Shows `status` on the running turn; `None` clears it.
+    fn set_status(&self, key: &Key, status: Option<String>) {
+        let info = {
+            let mut state = lock(&self.state);
+            let Some(live) = state.live.get_mut(key) else {
+                return;
+            };
+            if live.info.status != TurnStatus::Running || live.info.status_text == status {
+                return;
+            }
+            live.info.status_text = status;
+            live.info.clone()
+        };
+        self.events.turn(&info);
+    }
+
     fn finish(&self, key: &Key, end: End) {
         let (info, rerun) = {
             let mut state = lock(&self.state);
@@ -1347,6 +1398,7 @@ impl Inner {
             live.info.finished_at = Some(now());
             live.info.error_code = end.error_code;
             live.info.reply_message_id = end.reply;
+            live.info.status_text = None;
             if end.abandon {
                 state
                     .abandoned

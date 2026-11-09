@@ -1048,7 +1048,7 @@ fn global_assistant_specs_for_bot(
     if let Some(bot) = bot {
         specs.extend(
             bot.tool_specs(memory_enabled).into_iter().filter(|spec| {
-                flow_like_bot_tools::configuration::is_configuration_tool(spec.name)
+                flow_like_bot_tools::configuration::is_settings_tool(spec.name)
             }),
         );
     }

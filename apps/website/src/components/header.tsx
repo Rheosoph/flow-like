@@ -10,6 +10,7 @@ import {
 	LuBot,
 	LuBuilding2,
 	LuCpu,
+	LuDatabase,
 	LuDownload,
 	LuExternalLink,
 	LuFactory,
@@ -17,6 +18,7 @@ import {
 	LuFileText,
 	LuGlobe,
 	LuLandmark,
+	LuLayoutGrid,
 	LuPackage,
 	LuScale,
 	LuServer,
@@ -98,6 +100,13 @@ function getLocalizedPath(path: string, targetLang: Lang) {
 	}
 	return `/${targetLang}${rest === "/" ? "" : rest}`;
 }
+
+/** The three product pillars, in the homepage's order. */
+const PRODUCT_LINKS = [
+	{ label: "Apps", href: "/apps", icon: LuLayoutGrid },
+	{ label: "Data", href: "/data", icon: LuDatabase },
+	{ label: "Bots", href: "/bots", icon: LuBot },
+] as const;
 
 function localizeHref(lang: Lang, href: string): string {
 	if (lang === "en" || href.startsWith("http") || href.startsWith("mailto:"))
@@ -535,6 +544,18 @@ function MobileMenu({
 				</div>
 
 				<nav className="p-4 space-y-6">
+					<div className="space-y-1">
+						{PRODUCT_LINKS.map((item) => (
+							<MobileNavItem
+								key={item.href}
+								href={item.href}
+								icon={item.icon}
+								label={item.label}
+								highlight
+								onClick={onClose}
+							/>
+						))}
+					</div>
 					{/* Solutions Section */}
 					<div>
 						<p className="text-xs text-muted-foreground uppercase tracking-wider mb-3 px-3 font-medium">
@@ -971,6 +992,15 @@ export function Header({ pathname, darkHero = false }: HeaderProps) {
 
 					{/* Desktop Navigation */}
 					<nav className="hidden lg:flex items-center gap-1">
+						{PRODUCT_LINKS.map((item) => (
+							<a
+								key={item.href}
+								href={item.href}
+								className="px-3 py-2 text-sm font-medium text-foreground/70 hover:text-foreground transition-colors duration-300"
+							>
+								{item.label}
+							</a>
+						))}
 						<NavSolutionsDropdown groups={solutionsGroups} />
 						<NavDropdown label="Resources" items={resourceItems} />
 						<a

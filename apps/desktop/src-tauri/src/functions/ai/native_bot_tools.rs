@@ -212,6 +212,15 @@ pub(crate) async fn execute(
         runtime.context.has(BotCapability::BrowserUse),
         runtime.context.has(BotCapability::ComputerUse),
     ));
+    let env = if runtime.context.toolset == flow_like::flow::copilot::BotToolset::FlowPilot {
+        env.with_crew(Arc::new(super::bot_tools::crew::DesktopCrew::new(
+            app,
+            runtime.clone(),
+            host.clone(),
+        )))
+    } else {
+        env
+    };
     let mut value = run_tool(env, tool, args.clone()).await?;
     host.session.assert_current_profile().await?;
     if let (Some(gate), false) = (&gate, auto_approved) {
@@ -368,6 +377,7 @@ pub(crate) struct DesktopToolEnv {
     people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
     user_context: Option<Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>>,
     configuration: Option<Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>>,
+    crew: Option<Arc<dyn flow_like_bot_tools::crew::CrewBackend>>,
     images: Option<Arc<super::bot_tools::images::DesktopImages>>,
     connectors: Option<Arc<dyn flow_like_bot_tools::services::ConnectorSource>>,
 }
@@ -425,6 +435,7 @@ impl DesktopToolEnv {
             people: None,
             user_context: None,
             configuration: None,
+            crew: None,
             images: None,
             connectors: None,
         }
@@ -443,6 +454,12 @@ impl DesktopToolEnv {
         configuration: Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>,
     ) -> Self {
         self.configuration = Some(configuration);
+        self
+    }
+
+    /// Flux's management of its owner's bots; other bots never get one.
+    pub(crate) fn with_crew(mut self, crew: Arc<dyn flow_like_bot_tools::crew::CrewBackend>) -> Self {
+        self.crew = Some(crew);
         self
     }
 
@@ -697,6 +714,10 @@ impl ToolEnv for DesktopToolEnv {
         &self,
     ) -> Option<Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>> {
         self.configuration.clone()
+    }
+
+    fn crew(&self) -> Option<Arc<dyn flow_like_bot_tools::crew::CrewBackend>> {
+        self.crew.clone()
     }
 
     fn connectors(&self) -> Option<Arc<dyn flow_like_bot_tools::services::ConnectorSource>> {
