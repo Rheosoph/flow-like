@@ -1,0 +1,66 @@
+---
+title: Create a bot
+description: Set up a bot step by step, from a plain-language description to its look, models, abilities, host, data label and secrets.
+---
+
+import PresetGallery from "../../../components/bots/PresetGallery";
+
+Open **Bots** and choose **New bot**. The editor walks through seven steps. You can jump between them, and everything stays editable after the bot exists.
+
+## 1. Describe
+
+Write what the bot should do in your own words, for example *"every morning, look up what our competitors announced and send me a short digest"*. Flow-Like matches your description against its presets and suggests the closest. Pick a different one or **Start from scratch**.
+
+<PresetGallery client:visible />
+
+## 2. Look
+
+Give the bot a character, outfit, colors and effects in the bot customizer. Each section has its own **Shuffle**, and you can lock the parts you like before randomizing the rest. The look shows up everywhere the bot appears, with your picture in a corner so people know whose bot it is.
+
+## 3. Brain
+
+The **Brain** step holds the bot's instructions and models:
+
+| Setting | What it does |
+|---|---|
+| **System prompt** | Who the bot is and how it works. Up to 8,000 characters. |
+| **Chat models** | A primary model plus up to three fallbacks. A host that can't run the primary tries the fallbacks in order, for example a local model on your desktop with a cloud fallback for when the bot runs in the cloud. |
+| **Decision model** | A small, fast model that decides when to answer or briefly acknowledge, whether a background event deserves a reply, which skills fit, and whether your earlier instructions cover a tool call. Without one, these decisions are off. |
+| **Subtask model** | Runs the parallel parts of a big job when the bot delegates. A smaller model keeps them cheap. |
+| **Embedding model** | Powers its memory. Memory stays off without one. |
+| **Image model** | Used by image generation. |
+
+A model left unset is chosen by the host the bot runs on. The editor also holds pins for speech recognition, speech and vision models.
+
+:::note[Models depend on the host]
+Bots in the cloud use hosted models your plan includes, or a provider you connected with your own key. Bots on a managed device use hosted models. Only the desktop app can run models on your own hardware. See [Where bots run](/bots/hosts/).
+:::
+
+## 4. Abilities
+
+Abilities decide which tools the bot gets. **All are off until you switch them on.** They're grouped as Web, Apps, Hands, Talk, Memory & data, and Security. The [Capabilities](/bots/capabilities/) page lists every one with the tools behind it.
+
+If the bot uses your apps, choose **All apps in a profile** or **Selected apps**. For each app you can narrow what it may do: **Read only**, **Read + call events**, **Full (your role)** or a custom set. See [Safety and permissions](/bots/safety/).
+
+## 5. Runs on
+
+Pick the bot's host: **Cloud**, **Desktop app** or **Device**. Computer use, Browser, Command line and End-to-end encryption need the desktop app or a device. Moving a bot to the cloud switches them off, and moving it back switches them on again. See [Where bots run](/bots/hosts/).
+
+## 6. Data & safety
+
+Label the most sensitive data the bot may work with: **Public**, **Internal**, **Confidential** or **Restricted**, plus whether it handles personal data. The label is part of its instructions and decides when its outbound tools refuse; see [data labels](/bots/safety/#data-labels).
+
+Bots on the desktop app or a device can also switch on **end-to-end encryption**, so only you and the bot's host can read its messages and secrets.
+
+## 7. Secrets
+
+Store API keys, passwords and tokens the bot needs. Secrets are write-only: once saved, no person and no screen can read a value back, and the model only ever sees a placeholder like `{{secret:GITHUB_TOKEN}}`. A bot can hold up to 50 secrets of up to 16 KB each. Names use capital letters, digits and underscores.
+
+A bot can also ask you for a secret mid-conversation. You paste it into a masked field on the approval card, and it goes straight into the bot's secret store. See [Secrets](/bots/safety/#secrets).
+
+## After it exists
+
+- **Chat with it** from the Bots tab, the Home widgets or your phone.
+- **Let it change itself.** A bot can propose changes to its own name, instructions, abilities or models. You see exactly what changes and approve or reject it. Changes apply from its next turn, and nothing approves them automatically.
+- **Duplicate it** to start a variant with the same setup.
+- **Limits:** up to 50 custom bots per account. Only bots that run in the cloud count toward your plan's bot limit; Assistant and Flux never count.

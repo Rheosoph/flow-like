@@ -43,7 +43,7 @@
 	display: block;
 	margin-bottom: 0.35rem;
 	color: var(--bd-muted);
-	font: 600 0.68rem/1.4 var(--sl-font-mono, ui-monospace, monospace);
+	font: 600 0.68rem / 1.4 var(--sl-font-mono, ui-monospace, monospace);
 	letter-spacing: 0.1em;
 	text-transform: uppercase;
 }
@@ -70,7 +70,18 @@
 	margin-bottom: 1rem;
 }
 
-.bd-segment {
+.bd fieldset {
+	min-inline-size: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+
+.bd output {
+	display: block;
+}
+
+.bd .bd-segment {
 	display: inline-flex;
 	flex-wrap: wrap;
 	gap: 0.25rem;
@@ -100,9 +111,7 @@
 	color: var(--bd-muted);
 	font-size: 0.8rem;
 	font-weight: 600;
-	transition:
-		background 0.15s ease,
-		color 0.15s ease;
+	transition: background 0.15s ease, color 0.15s ease;
 }
 
 .bd-segment button:hover {
@@ -112,7 +121,8 @@
 .bd-segment button[aria-pressed="true"] {
 	background: var(--bd-accent-soft);
 	color: var(--bd-text);
-	box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--bd-accent) 45%, transparent);
+	box-shadow: inset 0 0 0 1px
+		color-mix(in oklab, var(--bd-accent) 45%, transparent);
 }
 
 .bd-button {
@@ -277,7 +287,8 @@
 	font-size: 0.92rem;
 }
 
-.bd-verdict p {
+.bd-verdict-detail {
+	display: block;
 	margin-top: 0.15rem;
 	color: var(--bd-muted);
 	font-size: 0.83rem;
@@ -314,14 +325,14 @@
 	accent-color: var(--bd-accent);
 }
 
-.bd-toggle span {
+.bd-toggle-text {
 	display: grid;
 	gap: 0.1rem;
 	font-size: 0.83rem;
 	font-weight: 600;
 }
 
-.bd-toggle small {
+.bd-toggle-text small {
 	color: var(--bd-muted);
 	font-size: 0.75rem;
 	font-weight: 450;
@@ -359,6 +370,17 @@
 	margin-top: 0.85rem;
 	color: var(--bd-muted);
 	font-size: 0.78rem;
+	overflow-wrap: anywhere;
+}
+
+.bd-builtin {
+	display: flex;
+	gap: 1rem;
+	align-items: flex-start;
+}
+
+.bd-builtin-chips {
+	margin-top: 0.6rem;
 }
 
 .bd-mono {

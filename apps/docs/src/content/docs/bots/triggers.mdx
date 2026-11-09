@@ -1,0 +1,99 @@
+---
+title: Triggers and automation
+description: What wakes a bot — messages, rooms, other bots, schedules, webhooks, email and flows — and how background turns decide what deserves your attention.
+---
+
+import WakeChecker from "../../../components/bots/WakeChecker";
+
+A bot does nothing until something wakes it. Messages from people wake it in conversations. Schedules, webhooks, email and flows wake it in the background: each lands in your 1:1 chat with the bot as a note, such as **Scheduled: Morning digest** or **Email from lena@acme.com: Invoice**, so the bot works with its full history, memory and abilities, and you can follow up right there.
+
+## Messages and rooms
+
+Every message in a 1:1 chat with a bot wakes it. In rooms the rules are subtler:
+
+<WakeChecker client:visible />
+
+- **An @mention or a reply** to one of its messages always wakes the bot.
+- **Reading along.** Otherwise the bot reads people's messages and decides for itself whether answering helps. It may well stay silent. The bot's owner can switch this off per room with **Answer only when mentioned**.
+- **People other than the owner** can wake a bot up to 20 times a day each. When someone hits the cap, the bot says so in the room. The owner is never capped.
+
+See [Rooms and people](/bots/rooms/) for invitations, limits and room memory.
+
+## Other bots
+
+Bots wake each other in two ways:
+
+- **In a room**, a bot's message wakes another bot only if it @mentions or replies to it. Bots never read along with other bots.
+- **Asking directly.** A bot can ask another of your bots a question and wait for the answer. The first time, you choose **Allow once**, **Always allow** or **Deny**; Always allow covers that direction only. Each exchange is kept in a room with you and both bots.
+
+To keep bots from spinning, a chain of bots waking each other stops after 3 hops, a bot asks the same bot at most 5 questions per trigger, and turns that bots start for each other count toward a daily cap set by your plan. Messages from people never count.
+
+## Schedules
+
+With **Scheduling** on, a bot runs tasks:
+
+- **Once**, at a date and time.
+- **Recurring**, on a cron schedule with a time zone, at most every 5 minutes.
+
+You create tasks in the bot's details under **Tasks**, with a title (up to 200 characters) and an instruction (up to 4,000). The bot can also schedule, list and cancel its own tasks when you ask it to in chat. A bot holds up to 50 tasks.
+
+Mark a task **Only report meaningful changes** for monitoring jobs: after each run the bot's decision model judges the result and only interrupts you when something changed. A run missed while the host was away fires once when it's back.
+
+## Webhooks
+
+With **Webhook** on, create webhook URLs in the bot's details under **Webhooks**. Each one has a name, an optional instruction ("A webhook was called. Look at its payload and decide what to do." if you leave it empty) and a secret that is shown once.
+
+```bash
+curl -X POST "https://api.flow-like.com/api/v1/bots/hooks/<hook_id>?wait=20" \
+  -H "X-Flow-Like-Webhook-Secret: $SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"event": "deploy.failed", "service": "billing"}'
+```
+
+The editor shows ready-made examples with your real URL. Use your own hub's API address when you self-host.
+
+**Authentication.** Send the secret in the `X-Flow-Like-Webhook-Secret` header, as `Authorization: Bearer <secret>`, or as `?secret=`. For providers that sign payloads, sign the raw body with HMAC-SHA256 and send `X-Flow-Like-Signature: sha256=<hex>`; the key is the signing key the editor shows. You can rotate the secret at any time.
+
+**Payload.** JSON bodies arrive parsed, text stays text, and binary arrives base64-encoded. Payloads over 32 KB are saved as a file in the bot's workspace instead.
+
+**Response.** The call returns `202` as soon as the turn is queued. Add `?wait=N` (up to 30 seconds) to receive `200` with the bot's reply if it answers in time.
+
+| Status | Meaning |
+|---|---|
+| `202` | Queued. The body carries the turn's state. |
+| `200` | Answered within `wait`. |
+| `401` | Wrong or missing secret or signature. |
+| `403` | The webhook is disabled or the bot's Webhook ability is off. |
+| `413` | Body larger than 256 KB. |
+| `429` | More than 30 calls a minute. |
+
+A bot holds up to 10 webhooks. Bots that live only on your computer while you're signed out have no webhook URL.
+
+## Email
+
+With **Email** on, claim an address for the bot under **Mail**, such as `scout@flow-like.me`. Plus-tags like `scout+invoices@flow-like.me` reach it too. An address can change up to 10 times a day, and a released address stays reserved for 30 days.
+
+Incoming mail wakes the bot in your 1:1 chat:
+
+- Automated mail, mail without a sender and mail that fails SPF, DKIM or DMARC checks are dropped.
+- Mail from a sender whose domain can't be verified still arrives, marked as possibly spoofed.
+- Every mail is marked as untrusted content: the bot treats it as data, not as instructions.
+- Up to 10 attachments of 3 MB each are saved to the bot's workspace.
+- A bot receives up to 200 mails a day.
+
+Sending asks you before each new recipient domain. Choosing **Always allow** on a reply turns on automatic replies. Outgoing mail is capped at 500 recipients per bot and 2,000 per account a day, with at most 20 recipients per mail.
+
+## From your flows
+
+The **Ask Bot** node (`bots_ask_bot`, in the **Bots** category) sends a message to one of your bots from any flow, as if a flow event had woken it. Set **Wait (seconds)** up to 100 to get the **Reply** back into the flow, or 0 to continue as soon as the turn is queued. The exchange lands in the bot's chat with you, marked **Event: From a flow**.
+
+The node reaches bots in the cloud and bots on a desktop that is online, but not bots that live only on your computer while you're signed out. Code can do the same through the API; see [API and SDKs](/bots/api/).
+
+## What background turns decide on their own
+
+Nobody watches a background turn, so the bot's **decision model** does two extra jobs:
+
+1. **Filtering.** For webhook and email triggers, it can drop events that need no action, handle them quietly, answer, or notify you. Mail you send from your own address is never dropped.
+2. **Authorizing.** When a tool needs your approval, it checks whether your own messages or the bot's instructions clearly cover that exact call. If so, the call runs once. If not, the turn pauses and you get an approval card with a push. The text of the trigger itself never counts as permission. See [Approvals](/bots/safety/#approvals).
+
+Without a decision model, background events are always handled and every approval waits for you.

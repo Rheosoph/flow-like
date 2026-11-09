@@ -1,0 +1,89 @@
+.bd-access-controls {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+	gap: 0.75rem;
+	margin-bottom: 1rem;
+}
+
+.bd-access-controls .bd-field + .bd-field {
+	margin-top: 0;
+}
+
+.bd-access-table {
+	position: relative;
+	overflow-x: auto;
+	border: 1px solid var(--bd-line);
+	border-radius: 11px;
+	background: var(--bd-bg);
+}
+
+.bd-access-table table {
+	display: table;
+	width: 100%;
+	min-width: 26rem;
+	margin: 0;
+	border: 0;
+	border-collapse: collapse;
+	font-size: 0.83rem;
+}
+
+.bd-access-table :is(th, td) {
+	padding: 0.45rem 0.5rem;
+	border: 0;
+	border-top: 1px solid var(--bd-line);
+	background: none;
+	text-align: center;
+	vertical-align: middle;
+}
+
+.bd-access-table :is(th, td):first-child {
+	width: 40%;
+	padding-left: 0.85rem;
+	text-align: left;
+}
+
+.bd-access-table tbody th {
+	font-weight: 450;
+}
+
+.bd-access-table thead th {
+	border-top: 0;
+	color: var(--bd-muted);
+	font-size: 0.7rem;
+	font-weight: 650;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+.bd-access-table tr[data-result="true"] {
+	background: color-mix(in oklab, var(--bd-good) 7%, transparent);
+}
+
+.bd-access-table input {
+	margin: 0;
+	accent-color: var(--bd-accent);
+}
+
+.bd-access-mark {
+	display: inline-grid;
+	place-items: center;
+	width: 1.35rem;
+	height: 1.35rem;
+	border-radius: 999px;
+	color: var(--bd-bad);
+	background: var(--bd-bad-soft);
+}
+
+.bd-access-mark[data-on="true"] {
+	color: var(--bd-good);
+	background: var(--bd-good-soft);
+}
+
+.bd-access-mark svg {
+	width: 0.8rem;
+	height: 0.8rem;
+}
+
+.bd-access-na {
+	color: var(--bd-faint);
+}

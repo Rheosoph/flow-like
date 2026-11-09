@@ -1,0 +1,66 @@
+---
+title: Where bots run
+description: Run a bot in the cloud, in your desktop app or on a managed device. What each host offers, when it answers, which models it can use, and how Flux hands builds to your desktop.
+---
+
+import HostPlanner from "../../../components/bots/HostPlanner";
+
+Every bot lives on exactly one **host**. The host picks up the bot's turns, runs its model and tools, and writes its answers back. Wherever the bot runs, you talk to it from any device you're signed in on.
+
+<HostPlanner client:visible />
+
+## Cloud
+
+A cloud bot runs on Flow-Like's servers, around the clock. Pick it for bots that should answer while your computer sleeps: digests, inbox triage, webhook and mail handling, watching your apps.
+
+- **Always on.** A server worker claims each turn within seconds.
+- **Models.** Hosted models your plan includes, or a model provider you connected with your own key. Local models can't run here; give the bot a cloud fallback.
+- **No screen, browser or shell.** Computer use, Browser, Command line and End-to-end encryption are unavailable.
+- **Plan limit.** Only cloud bots count toward your plan's bot limit.
+- **Reads its conversations.** A cloud bot can't take part in end-to-end encrypted conversations, because the server would have to read them.
+
+A single turn can run for up to 30 minutes.
+
+## Desktop app
+
+A desktop bot runs inside the Flow-Like desktop app on your computer.
+
+- **Answers while the app runs.** The app checks for new turns about every 30 seconds. Turns that arrive while it's closed wait, and expire after an hour.
+- **Every model in your profile,** local models on your own hardware included.
+- **Every ability,** including the computer's screen, a real browser, the command line and end-to-end encryption.
+- **Phones count too.** The iOS and Android apps answer desktop bots while they're open. Phones have no command line, and iPhones can't run code yet.
+
+Bots you create while signed out always run here, until you [move them to your account](/bots/overview/#without-an-account).
+
+## Device
+
+A device bot runs on one of your [managed devices](/devices/), such as a server in your office, a mini PC or a home lab machine, through the Flow-Like device agent.
+
+- **Answers while the device agent runs.** The agent fetches turns from your hub over HTTPS, and only that one device can pick up the bot's turns.
+- **Hosted models** through Flow-Like's model service.
+- **Every ability.** On Linux, browser and computer use run on a virtual display.
+- **Encrypted screen.** Watching or taking over a device bot's screen is end-to-end encrypted and works only in the desktop app.
+
+Choose the device in the editor's **Runs on** step. If the agent isn't running there, the bot shows as offline and answers once it comes back.
+
+## Flux and your desktop
+
+Flux runs in the cloud, but its build tools need a desktop. While your desktop app is online, Flux's turns go to it, so it can build, edit and debug apps from a room or a background trigger. If the desktop doesn't pick a turn up within 45 seconds, the cloud takes it back and Flux answers without its build tools.
+
+## What happens when a host is away
+
+| Situation | What happens |
+|---|---|
+| Desktop app closed, device agent stopped | New turns wait. A turn nobody picks up within an hour expires. |
+| A scheduled task came due while the host was away | It fires once when the host is back, not once per missed run. |
+| A turn waits for your approval | It holds without blocking the host and expires after 7 days. |
+
+## Choosing a host
+
+| You want the bot to… | Run it on |
+|---|---|
+| Work around the clock without your computer | Cloud |
+| Use local models or keep data on your machine | Desktop app |
+| Use your screen, browser or terminal while you work | Desktop app |
+| Run unattended with a browser or shell, on hardware you control | Device |
+| Keep its messages unreadable to the server | Desktop app or device, with end-to-end encryption |

@@ -5,27 +5,45 @@ import {
 } from "@flow-like/flow-like-ui/components/bots-tab/editor/bot-capability-groups";
 import { BOT_PRESETS } from "@flow-like/flow-like-ui/components/bots-tab/editor/bot-presets";
 import {
-	BOT_LOCATIONS,
-	type BotCapability,
-	type BotLocation,
-	isBotCapabilityAvailable,
-	LOCAL_ONLY_BOT_CAPABILITIES,
-	SYSTEM_BOT_APPEARANCES,
-	SYSTEM_BOT_CAPABILITIES,
-} from "@flow-like/flow-like-ui/state/backend-state/bot-state";
-import {
 	DATA_CLASSIFICATIONS,
 	type DataClassification,
 } from "@flow-like/flow-like-ui/lib/data-classification";
+import {
+	BOT_LOCATIONS,
+	type BotCapability,
+	type BotLocation,
+	type BotPermission,
+	type BotRestrictionPreset,
+	LOCAL_ONLY_BOT_CAPABILITIES,
+	SYSTEM_BOT_APPEARANCES,
+	SYSTEM_BOT_CAPABILITIES,
+	isBotCapabilityAvailable,
+} from "@flow-like/flow-like-ui/state/backend-state/bot-state";
 import {
 	capabilities as capabilityCopy,
 	editor as editorCopy,
 	locations as locationCopy,
 	presets as presetCopy,
+	restrictions as restrictionCopy,
 	system as systemCopy,
 } from "../../../../../packages/locales/locales/en/bots.json";
 
-export type { BotCapability, BotLocation, DataClassification };
+export function permissionLabel(id: BotPermission): string {
+	return restrictionCopy.permissions[id];
+}
+
+export function restrictionPresetLabel(id: BotRestrictionPreset): string {
+	return restrictionCopy.presets[id];
+}
+
+export type {
+	BotCapability,
+	BotCapabilityGroupId,
+	BotLocation,
+	BotPermission,
+	BotRestrictionPreset,
+	DataClassification,
+};
 export {
 	BOT_CAPABILITY_GROUPS,
 	BOT_CAPABILITY_ICONS,
@@ -58,12 +76,24 @@ export function locationDescription(id: BotLocation): string {
 	return locationCopy[id].description;
 }
 
+export function editorLocationMessage(
+	key: "turnedOff" | "turnedBackOn",
+	capabilities: string,
+): string {
+	return editorCopy.location[key].replace("{{capabilities}}", capabilities);
+}
+
 export function presetCopyOf(id: string): {
 	name: string;
 	description: string;
 	instructions: string;
 } {
-	const copy = (presetCopy as Record<string, { name: string; description: string; instructions: string }>)[id];
+	const copy = (
+		presetCopy as Record<
+			string,
+			{ name: string; description: string; instructions: string }
+		>
+	)[id];
 	return copy ?? { name: id, description: "", instructions: "" };
 }
 
@@ -84,7 +114,9 @@ export const BUILT_IN_BOTS = [
 	},
 ] as const;
 
-export const CLASSIFICATION_LABELS: Readonly<Record<DataClassification, string>> = {
+export const CLASSIFICATION_LABELS: Readonly<
+	Record<DataClassification, string>
+> = {
 	public: "Public",
 	internal: "Internal",
 	confidential: "Confidential",

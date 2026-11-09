@@ -1,0 +1,59 @@
+---
+title: Bots
+description: Bots are AI teammates with their own identity, abilities and host. Learn what they do, where they run and how they stay under your control.
+---
+
+import { CardGrid, LinkCard } from "@astrojs/starlight/components";
+import BuiltInBots from "../../../components/bots/BuiltInBots";
+import TurnLifecycle from "../../../components/bots/TurnLifecycle";
+
+A **bot** is an AI teammate you set up once and then talk to, invite into rooms, put on a schedule, send mail or call from your flows. Each bot has its own name and look, instructions, models, a set of abilities you switch on, and one host it runs on: the cloud, your desktop app or a device you manage.
+
+Bots act for you. In an app, a bot never has more rights than your own role there, and you can narrow them further. Its usage is billed to your account. Anything with consequences, like mailing someone new, calling a new website or running a command, stops and asks you first.
+
+## Assistant and Flux
+
+Every account has two built-in bots you can't delete:
+
+<BuiltInBots />
+
+Flux is FlowPilot as a member of your crew: the [FlowPilot guide](/studio/flowpilot/) describes everything it can build. Flux also builds and adjusts your other bots. Ask it for a bot, such as "a bot that answers questions about my sales app", and it writes the instructions, switches on the abilities the bot needs and gives it the apps it should use, building an app first when none fits. Every new bot and every change to one shows you the proposed settings and waits for your approval. The Assistant is a general helper. Both work without an account.
+
+## The Bots tab
+
+Open **Bots** in the sidebar to see your crew:
+
+- **Your crew** lists your bots. Select one to chat with it and open its details.
+- **Needs you** collects approval cards from your bots, invitations and questions that wait for an answer.
+- **Rooms and people** holds your 1:1 chats and the rooms you share with people and bots.
+
+A bot's details have tabs for what it holds: **Details** (abilities, host, models, tasks, webhooks, skills, allowed actions, usage), **Files** and **Data** from its workspace, **Computer** for its screen and browser, **Memory** for what it remembers, and **Mail** for its inbox. Tabs a bot can't use stay hidden.
+
+You can also put bots on your Home page with the **Bot chat**, **Crew** and **Messages** widgets. See [Customize your Home](/start/home/).
+
+## How a turn runs
+
+Everything a bot does happens in **turns**. A turn starts when something wakes the bot, runs on its host, and ends with an answer in a conversation. Choose a trigger and a host to follow one:
+
+<TurnLifecycle client:visible />
+
+Bots work headless: a turn runs on the bot's host whether or not anyone has a chat open. Apps, the API and the SDKs are only windows onto the same conversations.
+
+## Without an account
+
+Signed out, the desktop app lets you create bots that live only on that computer, with their files, secrets and chats stored locally. Assistant and Flux work too.
+
+When you sign in, the Bots tab offers to **move your bots to your account**. Flow-Like first checks that your account can hold every part of each bot, copies its workspace files and verifies them twice, and only then removes the local copy. An interrupted move can simply be started again.
+
+## Next steps
+
+<CardGrid>
+	<LinkCard title="Create a bot" href="/bots/create/" description="Describe it, pick a look, choose its brain and abilities." />
+	<LinkCard title="Capabilities" href="/bots/capabilities/" description="All 26 abilities and the tools behind them." />
+	<LinkCard title="Where bots run" href="/bots/hosts/" description="Cloud, desktop app or a managed device." />
+	<LinkCard title="Triggers and automation" href="/bots/triggers/" description="Schedules, webhooks, email, flows and rooms." />
+	<LinkCard title="Rooms and people" href="/bots/rooms/" description="Bring people and bots into one conversation." />
+	<LinkCard title="Memory and workspace" href="/bots/memory/" description="What a bot remembers and where its files live." />
+	<LinkCard title="Safety and permissions" href="/bots/safety/" description="Approvals, rights, data labels and secrets." />
+	<LinkCard title="API and SDKs" href="/bots/api/" description="Drive bots and conversations from code." />
+</CardGrid>

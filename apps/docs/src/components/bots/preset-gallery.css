@@ -1,0 +1,91 @@
+.bd-preset {
+	display: grid;
+	grid-template-columns: minmax(11rem, 0.8fr) minmax(0, 2fr);
+	gap: 1rem;
+}
+
+@media (max-width: 50rem) {
+	.bd-preset {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+.bd-preset-list {
+	display: grid;
+	gap: 0.25rem;
+	align-content: start;
+}
+
+@media (max-width: 50rem) {
+	.bd-preset-list {
+		grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+	}
+}
+
+.bd-preset-option {
+	appearance: none;
+	display: flex;
+	align-items: center;
+	gap: 0.55rem;
+	width: 100%;
+	padding: 0.3rem 0.6rem 0.3rem 0.3rem;
+	border: 1px solid transparent;
+	border-radius: 10px;
+	background: transparent;
+	color: var(--bd-muted);
+	font: inherit;
+	font-size: 0.83rem;
+	font-weight: 600;
+	text-align: left;
+	cursor: pointer;
+	transition: background 0.15s ease, color 0.15s ease;
+}
+
+.bd-preset-option:hover {
+	background: var(--bd-bg);
+	color: var(--bd-text);
+}
+
+.bd-preset-option[aria-pressed="true"] {
+	border-color: color-mix(in oklab, var(--bd-accent) 40%, transparent);
+	background: var(--bd-accent-soft);
+	color: var(--bd-text);
+}
+
+.bd-preset-detail {
+	display: grid;
+	gap: 1rem;
+	align-content: start;
+	padding: 1.1rem;
+	border: 1px solid var(--bd-line);
+	border-radius: 12px;
+	background: var(--bd-bg);
+}
+
+.bd-preset-hero {
+	display: flex;
+	gap: 1rem;
+	align-items: center;
+}
+
+@media (max-width: 30rem) {
+	.bd-preset-hero {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+}
+
+.bd-preset-meta {
+	margin-top: 0.6rem;
+}
+
+.bd-preset-quote {
+	margin: 0;
+	padding: 0.75rem 0.9rem;
+	border-left: 3px solid var(--bd-accent);
+	border-radius: 0 9px 9px 0;
+	background: var(--bd-surface);
+	color: var(--bd-text);
+	font-size: 0.84rem;
+	font-style: normal;
+}

@@ -56,6 +56,22 @@ export const sidebar = [
 		collapsed: true,
 	},
 	{
+		label: "Bots",
+		badge: { text: "New", variant: "tip" },
+		collapsed: false,
+		items: [
+			{ label: "Overview", slug: "bots/overview" },
+			{ label: "Create a Bot", slug: "bots/create" },
+			{ label: "Capabilities", slug: "bots/capabilities" },
+			{ label: "Where Bots Run", slug: "bots/hosts" },
+			{ label: "Triggers & Automation", slug: "bots/triggers" },
+			{ label: "Rooms & People", slug: "bots/rooms" },
+			{ label: "Memory & Workspace", slug: "bots/memory" },
+			{ label: "Safety & Permissions", slug: "bots/safety" },
+			{ label: "API & SDKs", slug: "bots/api" },
+		],
+	},
+	{
 		label: "Build Apps",
 		collapsed: true,
 		items: [
