@@ -27,6 +27,7 @@ import dynamic from "next/dynamic";
 import { Suspense, useEffect } from "react";
 import { AppSidebar } from "../components/app-sidebar";
 import { DesktopAuthProvider } from "../components/auth-provider";
+import { ComposerBarcodeScanner } from "../components/composer-barcode-scanner";
 import { DeeplinkNavigationHandler } from "../components/deeplink-navigation-handler";
 import { DeviceModelUnlockProvider } from "../components/device-model-unlock-provider";
 import DownloadNotificationProvider from "../components/download-notification-provider";
@@ -194,6 +195,7 @@ export function Providers({
 																				<Suspense fallback={null}>
 																					<NativeIntegrationProvider />
 																				</Suspense>
+																				<ComposerBarcodeScanner />
 																				<AppSidebar>{children}</AppSidebar>
 																				<ChatActivityProvider />
 																				<GlobalToolBridge />

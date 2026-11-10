@@ -657,6 +657,50 @@ pub type WasmPackageResolver = Arc<
         + Sync,
 >;
 
+/// A run whose channel, artifact and admission are settled but whose executor is
+/// not invoked yet. It owns everything the invocation needs.
+pub struct PreparedStreamingRun {
+    dispatcher: Arc<Dispatcher>,
+    request: DispatchRequest,
+}
+
+impl PreparedStreamingRun {
+    /// Invokes the executor and waits for its stream prelude. A failure releases
+    /// the admission exactly as [`Dispatcher::dispatch_streaming_with_run`] does.
+    pub async fn invoke(self) -> Result<(DispatchResponse, ByteStream), RunDispatchError> {
+        let Self {
+            dispatcher,
+            request,
+        } = self;
+        let backend = dispatcher.config.backend.clone();
+        let result = match backend {
+            #[cfg(feature = "lambda")]
+            ExecutionBackend::LambdaStream => {
+                dispatcher
+                    .dispatch_lambda_stream(&create_id(), &request)
+                    .await
+            }
+            _ => Err(DispatchError::Configuration(format!(
+                "Streaming dispatch not supported for {backend:?} backend. Use LambdaStream backend."
+            ))),
+        };
+        if let Err(error) = &result {
+            dispatcher.release_undelivered(&request.run_id, error).await;
+        }
+        result.map_err(RunDispatchError::after_admission)
+    }
+}
+
+fn executor_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "Failed to build the dispatch HTTP client with a connect timeout");
+            reqwest::Client::new()
+        })
+}
+
 /// Unified job dispatcher
 #[derive(Clone)]
 pub struct Dispatcher {
@@ -741,7 +785,7 @@ impl Dispatcher {
 
         Self {
             config: Arc::new(config),
-            http_client: reqwest::Client::new(),
+            http_client: executor_http_client(),
             staging_bucket,
             artifact_ensurer: std::sync::OnceLock::new(),
             async_wasm_package_resolver: std::sync::OnceLock::new(),
@@ -761,7 +805,7 @@ impl Dispatcher {
     pub fn from_config(config: DispatchConfig) -> Self {
         Self {
             config: Arc::new(config),
-            http_client: reqwest::Client::new(),
+            http_client: executor_http_client(),
             staging_bucket: None,
             artifact_ensurer: std::sync::OnceLock::new(),
             async_wasm_package_resolver: std::sync::OnceLock::new(),
@@ -1152,6 +1196,39 @@ impl Dispatcher {
         request: DispatchRequest,
         _run: Option<RunRecord>,
     ) -> Result<(DispatchResponse, ByteStream), RunDispatchError> {
+        validate_runtime_variable_transport(&self.config.backend, &request)
+            .map_err(RunDispatchError::before_admission)?;
+        Err(RunDispatchError::before_admission(
+            DispatchError::Configuration("Streaming dispatch requires the 'lambda' feature".into()),
+        ))
+    }
+
+    /// The part of [`Self::dispatch_streaming_with_run`] that decides the run: channel,
+    /// artifact and admission. The executor is invoked later by
+    /// [`PreparedStreamingRun::invoke`], so a caller can answer its client in between.
+    #[cfg(feature = "lambda")]
+    pub async fn prepare_streaming_with_run(
+        self: &Arc<Self>,
+        mut request: DispatchRequest,
+        run: Option<RunRecord>,
+    ) -> Result<PreparedStreamingRun, RunDispatchError> {
+        validate_runtime_variable_transport(&self.config.backend, &request)
+            .map_err(RunDispatchError::before_admission)?;
+        let backend = self.config.backend.clone();
+        self.prepare(&mut request, &backend, "realtime", run)
+            .await?;
+        Ok(PreparedStreamingRun {
+            dispatcher: Arc::clone(self),
+            request,
+        })
+    }
+
+    #[cfg(not(feature = "lambda"))]
+    pub async fn prepare_streaming_with_run(
+        self: &Arc<Self>,
+        request: DispatchRequest,
+        _run: Option<RunRecord>,
+    ) -> Result<PreparedStreamingRun, RunDispatchError> {
         validate_runtime_variable_transport(&self.config.backend, &request)
             .map_err(RunDispatchError::before_admission)?;
         Err(RunDispatchError::before_admission(

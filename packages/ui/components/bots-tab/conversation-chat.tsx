@@ -29,6 +29,7 @@ import {
 	type ThreadHistory,
 	ThreadNote,
 } from "./conversation-messages";
+import { isSelfPrincipal } from "./crew-model";
 import type { ConversationBlock, ConversationMessage } from "./fold-entries";
 import { type Mentionable, inlineMentions, mentionedIn } from "./mentions";
 import { MessageMarkLine, MessageMenu } from "./message-marks";
@@ -143,6 +144,10 @@ export function ConversationChat({
 			const chat = list.map((message) =>
 				roomChatMessage(message, conversationId, {
 					errorTitle,
+					ownBot: isSelfPrincipal(
+						directory(message.senderId).ownerId,
+						thread.me,
+					),
 					editedLabel,
 					reactorName: (id) => (directory(id).isMe ? you : directory(id).name),
 					replyTarget: message.replyTo ? known.get(message.replyTo) : undefined,

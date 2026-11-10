@@ -5,12 +5,15 @@ import type {
 	IInboxEntry,
 	IUserContextRequest,
 	IUserContextResponse,
+	IUserContextRevoke,
 } from "../../state/backend-state/inbox-state";
 import { plainBody } from "./approval-entry";
 
 export interface UserContextCardData {
 	request: IUserContextRequest;
 	answer?: IUserContextResponse["decision"];
+	response?: IUserContextResponse;
+	revoked?: boolean;
 }
 
 export function userContextRequestOf(
@@ -65,21 +68,24 @@ export function userContextRequestOf(
 	return value as unknown as IUserContextRequest;
 }
 
+function finite(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value);
+}
+
 export function userContextResponseOf(
 	entry: IInboxEntry,
-):
-	| Pick<
-			IUserContextResponse,
-			"request_id" | "subject_id" | "bot_id" | "decision"
-	  >
-	| undefined {
+): IUserContextResponse | undefined {
 	const value = plainBody(entry)?.user_context_response;
 	if (
 		!isRecord(value) ||
 		typeof value.request_id !== "string" ||
 		value.subject_id !== entry.sender_id ||
 		value.conversation_id !== entry.conversation_id ||
-		typeof value.bot_id !== "string"
+		typeof value.bot_id !== "string" ||
+		!finite(value.captured_at) ||
+		!finite(value.expires_at) ||
+		!isRecord(value.values) ||
+		!isRecord(value.unavailable)
 	)
 		return;
 	if (
@@ -88,10 +94,22 @@ export function userContextResponseOf(
 		value.decision !== "deny"
 	)
 		return;
-	return {
-		request_id: value.request_id,
-		subject_id: entry.sender_id,
-		bot_id: value.bot_id,
-		decision: value.decision,
-	};
+	return value as unknown as IUserContextResponse;
+}
+
+export function userContextRevokeOf(
+	entry: IInboxEntry,
+): IUserContextRevoke | undefined {
+	const value = plainBody(entry)?.user_context_revoke;
+	if (
+		!isRecord(value) ||
+		typeof value.request_id !== "string" ||
+		typeof value.bot_id !== "string" ||
+		typeof value.subject_id !== "string" ||
+		value.subject_id !== entry.sender_id ||
+		value.conversation_id !== entry.conversation_id ||
+		!finite(value.revoked_at)
+	)
+		return;
+	return value as unknown as IUserContextRevoke;
 }

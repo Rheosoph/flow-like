@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.4
 # Official Node LTS binary, with native amd64 and arm64 variants.
-FROM node:24.20.0-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS node
+FROM node:24.22.2-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9 AS node
 
 # ============================================================
 # Stage 1: Browser WebAssembly bundles
@@ -36,7 +36,7 @@ RUN --mount=type=cache,target=/cargo-home,id=cargo-home-rust-beta-2026-09-27,sha
 # ============================================================
 # Stage 2: Builder
 # ============================================================
-FROM oven/bun:1.3.8-debian AS builder
+FROM oven/bun:1.4.4-debian AS builder
 
 # Bun's image includes a `node` fallback symlink to Bun. Next's build workers
 # require actual Node, including subprocesses that resolve it through PATH.

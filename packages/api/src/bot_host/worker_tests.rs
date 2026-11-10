@@ -3,9 +3,9 @@ use super::{
     history::{HISTORY_ENTRIES, HistoryError, reaction_turn, transcript},
     ledger::{self, ClaimRequest, enqueue_in},
     worker::{
-        Answer, CODE_TIMEOUT, Failure, answer_request, commit_reply_in, executor_token,
-        holds_lease_or_retry, memory_written, refuse_tool, reply_request, retries, room_of,
-        run_while_notifying, usable_decision_model,
+        AbortOnDrop, Answer, CODE_TIMEOUT, Failure, answer_request, commit_reply_in,
+        executor_token, holds_lease_or_retry, memory_written, refuse_tool, reply_request, retries,
+        room_of, run_while_notifying, usable_decision_model,
     },
 };
 use crate::{
@@ -700,6 +700,7 @@ fn only_a_spoken_answer_posts_a_reply() {
         completed: false,
         event_delivery: None,
         note: None,
+        tool_calls: Vec::new(),
     };
     assert!(answer_request(&turn, &silent).is_none());
     let mut spoken = Answer {
@@ -710,6 +711,7 @@ fn only_a_spoken_answer_posts_a_reply() {
         completed: false,
         event_delivery: None,
         note: None,
+        tool_calls: Vec::new(),
     };
     assert!(answer_request(&turn, &spoken).is_some());
     spoken.acknowledgement = true;
@@ -1001,8 +1003,12 @@ fn an_unavailable_decision_model_is_skipped_not_failed() {
     let covered = ProfileModelAccess {
         profile_models: 1,
         allowed_models: 1,
+        ..Default::default()
     };
-    assert_eq!(usable_decision_model(&covered, Some("bit"), "t1"), Some("bit"));
+    assert_eq!(
+        usable_decision_model(&covered, Some("bit"), "t1"),
+        Some("bit")
+    );
 }
 
 #[tokio::test]
@@ -1038,4 +1044,18 @@ async fn a_lease_check_error_fails_closed_after_retrying_and_a_held_lease_passes
         .await
         .unwrap();
     assert!(!holds_lease_or_retry(&db, &turn.id, "h1").await);
+}
+
+#[tokio::test]
+async fn dropping_the_heartbeat_guard_aborts_the_task() {
+    let task = tokio::spawn(std::future::pending::<()>());
+    let probe = task.abort_handle();
+    drop(AbortOnDrop(task));
+    for _ in 0..50 {
+        if probe.is_finished() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("the heartbeat task kept running after its guard was dropped");
 }

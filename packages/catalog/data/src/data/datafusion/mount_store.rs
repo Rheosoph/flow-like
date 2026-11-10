@@ -102,6 +102,7 @@ impl DeferredMount for ListingStoreMount {
         session.ctx.register_object_store(&url, object_store);
 
         let listing_options = ListingOptions::new(self.format.file_format())
+            .with_session_config_options(&session.ctx.copied_config())
             .with_file_extension(&self.file_extension);
 
         let config = ListingTableConfig::new(table_path)

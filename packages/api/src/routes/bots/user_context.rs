@@ -15,14 +15,14 @@ use flow_like_types::{
     bot_user_context::{UserContextAudience, UserContextField, UserContextRequest},
     create_id,
 };
-use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::Deserialize;
 use serde_json::json;
 use utoipa::IntoParams;
 
 use crate::{
     bot_caller::{self, Names},
-    entity::{bot, conversation, conversation_member},
+    entity::{bot, conversation, conversation_member, inbox_entry},
     error::ApiError,
     middleware::jwt::AppUser,
     routes::inbox::{
@@ -31,6 +31,37 @@ use crate::{
     },
     state::AppState,
 };
+
+const MAX_REQUESTS_PER_SUBJECT_HOUR: usize = 6;
+const REQUEST_WINDOW_MS: i64 = 3_600_000;
+
+/// The bot's own request cards for `subject_id` in the conversation during the last hour.
+pub(crate) async fn recent_requests<C: ConnectionTrait>(
+    db: &C,
+    bot_id: &str,
+    conversation_id: &str,
+    subject_id: &str,
+    now: i64,
+) -> Result<usize, sea_orm::DbErr> {
+    let since = chrono::DateTime::from_timestamp_millis(now - REQUEST_WINDOW_MS)
+        .unwrap_or_default()
+        .fixed_offset();
+    let rows = inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::InboxId.eq(bot_id))
+        .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
+        .filter(inbox_entry::Column::SenderId.eq(bot_id))
+        .filter(inbox_entry::Column::Kind.eq("MESSAGE"))
+        .filter(inbox_entry::Column::CreatedAt.gt(since))
+        .order_by_desc(inbox_entry::Column::CreatedAt)
+        .limit(200)
+        .all(db)
+        .await?;
+    Ok(rows
+        .iter()
+        .filter_map(|row| row.envelope["body"].get("user_context_request"))
+        .filter(|card| card["subject_id"].as_str() == Some(subject_id))
+        .count())
+}
 
 #[derive(Deserialize, IntoParams)]
 pub struct ContextQuery {
@@ -134,6 +165,19 @@ impl UserContextBackend for ServerUserContext {
             )));
         }
         let now = chrono::Utc::now().timestamp_millis();
+        let sent = recent_requests(
+            &self.state.db,
+            &self.bot_id,
+            &conversation.id,
+            &args.subject_id,
+            now,
+        )
+        .await?;
+        if sent >= MAX_REQUESTS_PER_SUBJECT_HOUR {
+            return Err(backend_error(ApiError::too_many_requests(format!(
+                "You already asked this person for context {sent} times in the last hour; wait before asking again"
+            ))));
+        }
         let id = create_id();
         let mut audience: Vec<_> = members
             .iter()
@@ -440,7 +484,11 @@ mod tests {
         assert!(authorized(&db, &owner, "bot_test", "room").await.is_err());
         db.execute_unprepared(r#"INSERT INTO public."ConversationMember" ("conversationId","principalId","principalKind","joinedAt","status") VALUES ('room','owner','USER','2023-01-01T00:00:00+00:00','ACTIVE')"#).await.unwrap();
         assert!(authorized(&db, &owner, "bot_test", "room").await.is_ok());
-        assert!(authorized(&db, &owner, "bot_test", "other-room").await.is_err());
+        assert!(
+            authorized(&db, &owner, "bot_test", "other-room")
+                .await
+                .is_err()
+        );
         let direct = AppUser::Bot(BotUser {
             bot_id: "bot_test".into(),
             turn_id: "direct:app".into(),

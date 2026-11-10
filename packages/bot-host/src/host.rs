@@ -33,8 +33,16 @@ pub struct TurnJob {
     pub prompt: String,
     /// A call listening cue, rendered without tools or new work.
     pub acknowledgement: bool,
-    /// The authenticated trigger shares temporary context, excluded from memory and checkpoints.
+    /// The turn answers an utterance in a live call: its reply is spoken, so it runs fast and short.
+    pub live_call: bool,
+    /// Holds the run's tool calls until the host's participation decision, when both run together.
+    pub tool_gate: Option<flow_like::flow::copilot::tool_gate::ToolGate>,
+    /// The authenticated trigger shares temporary context, excluded from checkpoints and from
+    /// the history memory assembles.
     pub ephemeral_user_context: bool,
+    /// Session snapshots of user context still usable here, for a turn whose history comes from
+    /// memory and so leaves them out.
+    pub shared_context: Option<String>,
     /// Routine owner notices are delivered by the host for this background event.
     pub suppress_owner_notifications: bool,
     pub history: Vec<UnifiedChatMessage>,
@@ -56,6 +64,8 @@ pub struct TurnJob {
     pub recovery: Option<Arc<dyn flow_like::flow::copilot::run_recovery::BotRunRecovery>>,
     /// The bot's notes in this conversation, when the host keeps them for it.
     pub notes: Option<flow_like::flow::copilot::bot_notes::NotesHandle>,
+    /// The turn's tool trail, set only in the owner's direct conversation with the bot.
+    pub trail: Option<flow_like::flow::copilot::ToolTrail>,
 }
 
 impl TurnJob {
@@ -87,6 +97,10 @@ pub enum RunError {
     },
     SessionChanged,
 }
+
+/// What a run, bounded by its deadline, ends with.
+pub type RunOutcome = Result<Result<String, RunError>, tokio::time::error::Elapsed>;
+pub type RunFuture<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = RunOutcome> + Send + 'a>>;
 
 #[async_trait]
 pub trait TurnRunner: Send + Sync + 'static {

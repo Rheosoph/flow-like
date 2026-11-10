@@ -392,10 +392,11 @@ async fn put_policy(
         chrono::Utc::now().timestamp(),
     )
     .map_err(invalid)?;
-    if policy.device_id != id || policy.policy_version > 10_000 {
-        return Err(ApiError::bad_request(
-            "Invalid management policy identity or exhausted history",
-        ));
+    if policy.device_id != id {
+        return Err(ApiError::bad_request("Invalid management policy identity"));
+    }
+    if policy.policy_version > MAX_POLICY_VERSIONS {
+        require_only_removal(&state.db, &id, &owner_key, &policy).await?;
     }
     persist_policy(
         &state.db,
@@ -408,6 +409,52 @@ async fn put_policy(
     )
     .await?;
     Ok(Json(policy_view(&state, &id).await?))
+}
+
+/// A device's access rules stop growing at this version.
+const MAX_POLICY_VERSIONS: u64 = 10_000;
+/// Rules that only take access away are still stored up to this version, so a full history
+/// never keeps an owner from revoking.
+const MAX_REVOKING_POLICY_VERSIONS: u64 = 11_000;
+
+/// Whether `next` gives nothing its predecessor did not: every grant is one of `previous`,
+/// unchanged.
+fn only_removes(previous: &ManagementPolicy, next: &ManagementPolicy) -> bool {
+    next.grants
+        .iter()
+        .all(|grant| previous.grants.contains(grant))
+}
+
+/// Past the history cap, the rules of device `id` may only shrink.
+async fn require_only_removal<C: ConnectionTrait>(
+    db: &C,
+    id: &str,
+    owner_key: &Ed25519PublicKey,
+    next: &ManagementPolicy,
+) -> Result<(), ApiError> {
+    let exhausted = || {
+        ApiError::bad_request(format!(
+            "Device {id} has used its {MAX_POLICY_VERSIONS} access rule versions; only rules that remove access are still accepted"
+        ))
+    };
+    if next.policy_version > MAX_REVOKING_POLICY_VERSIONS {
+        return Err(exhausted());
+    }
+    let head = db
+        .query_one_raw(sql(
+            r#"SELECT "policyJws" FROM "DeviceManagementPolicy" WHERE "deviceId"=$1 ORDER BY version DESC LIMIT 1"#,
+            [id.into()],
+        ))
+        .await?
+        .ok_or_else(exhausted)?;
+    let previous =
+        verify_historical_management_policy(&head.try_get::<String>("", "policyJws")?, owner_key)
+            .map_err(|_| exhausted())?;
+    if only_removes(&previous, next) {
+        Ok(())
+    } else {
+        Err(exhausted())
+    }
 }
 
 pub(super) async fn persist_policy(
@@ -568,6 +615,66 @@ fn current_grants(
             })
         })
         .collect()
+}
+
+pub(crate) const DEVICE_SHARED_FOR_DEPLOY: &str = "DEVICE_SHARED_FOR_DEPLOY";
+
+/// The newest access rules of device `$1` and its setup manifest, which names the key that
+/// signs them.
+const SHARING_RULES: &str = r#"SELECT p."policyJws",(SELECT e.manifest FROM "DeviceEnrollment" e WHERE e."deviceId"=$1) AS manifest FROM "DeviceManagementPolicy" p WHERE p."deviceId"=$1 ORDER BY p.version DESC LIMIT 1"#;
+
+/// Whether verified rules give anyone but `owner` an unexpired Deploy permission, whatever
+/// its scope.
+fn deploys_for_others(policy: &ManagementPolicy, owner: &str, now: i64) -> bool {
+    policy.grants.iter().any(|grant| {
+        grant.user_id != owner
+            && grant.expires_at > now
+            && grant.capabilities.contains(&ManagementCapability::Deploy)
+    })
+}
+
+/// Whether someone other than its owner may deploy to the device now. What a person deploys
+/// can run as the agent's own account, next to the key the device claims bot turns with, so
+/// such a device hosts no bots. Rules the hub cannot verify count as shared.
+pub(crate) async fn shared_for_deploy<C: ConnectionTrait>(
+    db: &C,
+    device_id: &str,
+    owner_id: &str,
+    now: i64,
+) -> Result<bool, ApiError> {
+    let Some(rules) = db
+        .query_one_raw(sql(SHARING_RULES, [device_id.into()]))
+        .await?
+    else {
+        return Ok(false);
+    };
+    let policy_jws: String = rules.try_get("", "policyJws")?;
+    let manifest = rules
+        .try_get::<Option<String>>("", "manifest")?
+        .unwrap_or_default();
+    let verified = serde_json::from_str::<RulesSigner>(&manifest)
+        .map_err(|error| error.to_string())
+        .and_then(|signer| {
+            match verify_management_policy(&policy_jws, &signer.owner_invitation_key, now) {
+                Ok(policy) => Ok(Some(policy)),
+                Err(ProtocolError::InvalidTime) => Ok(None),
+                Err(error) => Err(error.to_string()),
+            }
+        });
+    match verified {
+        Ok(Some(policy)) => {
+            Ok(policy.device_id != device_id || deploys_for_others(&policy, owner_id, now))
+        }
+        Ok(None) => Ok(false),
+        Err(reason) => {
+            tracing::warn!(
+                device_id,
+                %reason,
+                "Device access rules could not be verified; the device counts as shared for deploying"
+            );
+            Ok(true)
+        }
+    }
 }
 
 /// A missing device, an unrelated caller and ended access get one answer, so asking
@@ -777,6 +884,99 @@ mod tests {
             expires_at: now + 600,
         })
         .unwrap()
+    }
+
+    #[test]
+    fn only_someone_elses_unexpired_deploy_permission_shares_a_device_for_deploying() {
+        use ManagementCapability::{Deploy, Logs, Start, Status};
+        let now = chrono::Utc::now().timestamp();
+        let key = SigningKey::generate();
+        let rules = |grants: Vec<ManagementGrant>| ManagementPolicy {
+            version: 1,
+            device_id: "device".into(),
+            policy_version: 1,
+            previous_policy_digest: None,
+            grants,
+            issued_at: now,
+            expires_at: now + 600,
+        };
+        let project = || ManagementScope::Project {
+            project_id: "invoice-ai".into(),
+        };
+        let device = ManagementScope::Device;
+        for (grants, shared) in [
+            (vec![], false),
+            (
+                vec![grant(
+                    "watch",
+                    "reader",
+                    &key,
+                    device.clone(),
+                    &[Status, Logs, Start],
+                    now + 300,
+                )],
+                false,
+            ),
+            (
+                vec![grant("own", "owner", &key, device, &[Deploy], now + 300)],
+                false,
+            ),
+            (
+                vec![grant("lapsed", "reader", &key, project(), &[Deploy], now)],
+                false,
+            ),
+            (
+                vec![grant(
+                    "deploy",
+                    "reader",
+                    &key,
+                    project(),
+                    &[Status, Deploy],
+                    now + 300,
+                )],
+                true,
+            ),
+        ] {
+            assert_eq!(
+                deploys_for_others(&rules(grants.clone()), "owner", now),
+                shared,
+                "{grants:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn past_the_history_cap_rules_may_only_take_access_away() {
+        use ManagementCapability::{Deploy, Logs, Status};
+        let now = chrono::Utc::now().timestamp();
+        let key = SigningKey::generate();
+        let device = || ManagementScope::Device;
+        let reader = grant("reader", "reader", &key, device(), &[Status], now + 300);
+        let other = grant("other", "other", &key, device(), &[Logs], now + 300);
+        let rules = |grants: Vec<ManagementGrant>| ManagementPolicy {
+            version: 1,
+            device_id: "device".into(),
+            policy_version: 1,
+            previous_policy_digest: None,
+            grants,
+            issued_at: now,
+            expires_at: now + 600,
+        };
+        let previous = rules(vec![reader.clone(), other.clone()]);
+        for kept in [vec![], vec![other], vec![reader.clone()]] {
+            assert!(only_removes(&previous, &rules(kept.clone())), "{kept:?}");
+        }
+        let mut widened = reader.clone();
+        widened.capabilities.push(Deploy);
+        let mut extended = reader;
+        extended.expires_at += 1;
+        let newcomer = grant("new", "new", &key, device(), &[Status], now + 300);
+        for refused in [widened, extended, newcomer] {
+            assert!(
+                !only_removes(&previous, &rules(vec![refused.clone()])),
+                "{refused:?}"
+            );
+        }
     }
 
     #[test]

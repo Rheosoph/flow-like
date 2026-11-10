@@ -283,8 +283,11 @@ const backend = {
 			return fake.conversation;
 		},
 	},
+	bitState: { getProfileBits: async () => [] },
 	userState: {
 		getProfile: async () => null,
+		getSettingsProfile: async () => null,
+		getInfo: async () => null,
 		lookupUser: async (id: string) => users[id] ?? null,
 		lookupUsers: async (ids: string[]) =>
 			ids.map((id) => users[id]).filter(Boolean),
@@ -900,6 +903,31 @@ describe("message bodies", () => {
 		expect(panel.host.querySelector("[data-fl-chat-error]")).not.toBeNull();
 		expect(panel.text()).toContain("The language model didn't answer.");
 		await panel.unmount();
+	});
+
+	test("a bot without a language model offers the model picker to its owner only", async () => {
+		const reason =
+			"I can't answer yet: This profile has no language model yet.";
+		room("nm", [
+			entry(
+				"message",
+				"bot_scout",
+				{ text: reason, error: { code: "BOT_TURN_NO_MODEL" } },
+				0,
+			),
+		]);
+		const picker = "[data-fl-chat-error-model-setup]";
+
+		const visitor = await mountPanel("nm");
+		expect(visitor.text()).toContain(reason);
+		expect(visitor.host.querySelector(picker)).toBeNull();
+		await visitor.unmount();
+
+		const owner = await mountPanel("nm", "anna");
+		expect(owner.text()).toContain(reason);
+		expect(owner.host.querySelector(picker)).not.toBeNull();
+		expect(owner.text()).toContain("Choose a model");
+		await owner.unmount();
 	});
 
 	test("one speaker line per run; own messages carry no speaker line", async () => {

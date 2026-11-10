@@ -8,7 +8,7 @@
 # Raising the instance count requires provisioning Redis and switching the
 # fan-out mode in the same change; the root's invariant refuses one without
 # the other.
-FROM oven/bun:1.3.8-alpine
+FROM oven/bun:1.4.4-alpine
 
 COPY LICENSE /usr/share/licenses/flow-like/LICENSE
 

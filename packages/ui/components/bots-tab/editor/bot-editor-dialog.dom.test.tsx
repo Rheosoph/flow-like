@@ -237,6 +237,8 @@ function fakeBackend(
 			getSettingsProfile: async () => ({
 				hub_profile: { id: "profile_1", bits: [] },
 			}),
+			getProfile: () => new Promise(() => {}),
+			getInfo: () => new Promise(() => {}),
 		},
 		bitState: {
 			searchBits: async () => [],

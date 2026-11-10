@@ -210,11 +210,11 @@ async fn generate_authorized_image(
     if super::chat::hosted_worker::enabled() {
         return super::chat::hosted_worker::dispatch(
             state,
-            super::chat::hosted_worker::HostedAiJob {
-                operation_id: id,
-                request: super::chat::hosted_worker::HostedWork::Image(job),
-                deadline: chrono::Utc::now() + chrono::Duration::milliseconds(timeout),
-            },
+            super::chat::hosted_worker::HostedAiJob::new(
+                id,
+                super::chat::hosted_worker::HostedWork::Image(job),
+                chrono::Utc::now() + chrono::Duration::milliseconds(timeout),
+            ),
         )
         .await;
     }

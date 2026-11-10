@@ -904,3 +904,78 @@ async fn a_delivery_token_needs_a_live_bot_that_is_still_in_the_conversation() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn a_heartbeat_refreshes_only_the_tokens_that_are_due() {
+    use flow_like_types::device_bot::{DeviceHeartbeatRequest, REFRESHED_TOKEN_SECS};
+    crate::backend_jwt::init_for_tests();
+    let db = fleet().await;
+    let turn = claimed(&db, "bot_a").await;
+    let beat = |bot_token_expires_at: Option<i64>| DeviceHeartbeatRequest {
+        host_id: HOST.into(),
+        bot_token_expires_at,
+        executor_token_expires_at: None,
+    };
+    let later = chrono::Utc::now().timestamp() + 3_600;
+    let (bot_token, executor) = crate::devices::bots::refreshed(&db, &turn, &beat(Some(later)))
+        .await
+        .unwrap();
+    assert!(bot_token.is_none() && executor.is_none());
+    let (bot_token, executor) = crate::devices::bots::refreshed(&db, &turn, &beat(Some(0)))
+        .await
+        .unwrap();
+    assert!(executor.is_none());
+    let claims = crate::bot_permission::verify_bot_token(&bot_token.unwrap().token).unwrap();
+    assert_eq!(claims.exp - claims.iat, REFRESHED_TOKEN_SECS);
+}
+
+#[tokio::test]
+async fn only_queued_turns_of_bots_whose_device_is_gone_are_orphaned() {
+    use crate::devices::bots_removed::orphaned_in;
+    let db = fleet().await;
+    db.execute_unprepared(
+        r#"CREATE TABLE public."ManagedDevice" (
+            "id" TEXT PRIMARY KEY, "ownerId" TEXT NOT NULL, "status" TEXT NOT NULL)"#,
+    )
+    .await
+    .unwrap();
+    // bot_a runs on an active device of its owner, bot_b's device is revoked, and the device
+    // bot_c names belongs to someone else.
+    db.execute_unprepared(&format!(
+        r#"INSERT INTO public."ManagedDevice" ("id", "ownerId", "status") VALUES
+            ('{}', '{OWNER}', 'active'), ('{}', '{OWNER}', 'revoked'), ('{}', '{OWNER}', 'active')"#,
+        device_of("bot_a"),
+        device_of("bot_b"),
+        device_of("bot_c"),
+    ))
+    .await
+    .unwrap();
+    let listed = |mut turns: Vec<(String, String)>| {
+        turns.sort();
+        turns
+    };
+    assert_eq!(
+        listed(orphaned_in(&db, 10).await.unwrap()),
+        listed(vec![
+            (turn_id("bot_b", "m1"), OWNER.to_owned()),
+            (turn_id("bot_c", "m1"), OTHER_OWNER.to_owned()),
+        ])
+    );
+    assert_eq!(orphaned_in(&db, 1).await.unwrap().len(), 1);
+
+    claim_in(
+        &db,
+        &ClaimRequest {
+            host_id: "hub:device-removed".into(),
+            ..request("bot_b", OWNER)
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    delete_bot(&db, "bot_c").await;
+    assert!(
+        orphaned_in(&db, 10).await.unwrap().is_empty(),
+        "a claimed turn and a deleted bot's turn are no longer listed"
+    );
+}

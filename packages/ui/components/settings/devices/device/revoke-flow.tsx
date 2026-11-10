@@ -27,6 +27,7 @@ import {
 	usePolicy,
 	useResourceSummary,
 } from "../workspace";
+import { useBotsOnDevice } from "./bots-on-device";
 import { type DevicePage, sharedPeople } from "./use-device-page";
 
 export interface RevokeOptions {
@@ -172,20 +173,33 @@ function staysRow(
 	})} ${kept}`;
 }
 
+/** The bots that stop answering with the device; empty when none live on it. */
+function botsRow(t: DevicesT, locale: string, bots: readonly string[]): string {
+	if (!bots.length) return "";
+	return ` ${t(
+		"devices:device.revoke.rows.bots",
+		"Bots that run on it stop answering: {{bots}}. Each one says that its device was removed until you choose another place for it in its settings.",
+		{
+			bots: new Intl.ListFormat(locale, { type: "conjunction" }).format(bots),
+		},
+	)}`;
+}
+
 function useRevokeRows(
 	page: DevicePage,
 	running: readonly ServiceView[],
 	people: number | undefined,
+	bots: readonly string[],
 ): ConsequenceRows {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
 	const device = page.name;
 	return {
-		what: t(
+		what: `${t(
 			"device.revoke.rows.what",
 			"The hub refuses {{device}} from its next check-in. Nobody can manage it from Flow-Like again, you included. Revoking happens at the hub, so it doesn't need your device password and works even if the device is offline.",
 			{ device },
-		),
+		)}${botsRow(t, time.locale, bots)}`,
 		who: whoRow(t, device, people),
 		stays: staysRow(t, time.locale, running),
 		when: t(
@@ -261,7 +275,9 @@ export function useRevokeFlow(page: DevicePage): RevokeFlow {
 	});
 	const unshared = policy.data?.version === 0 ? 0 : undefined;
 	const people = sharedPeople(policy.policy, input.me) ?? unshared;
-	const rows = useRevokeRows(page, facts.running, people);
+	const hosted = useBotsOnDevice(page.deviceId).bots;
+	const bots = useMemo(() => hosted.map((bot) => bot.name ?? bot.id), [hosted]);
+	const rows = useRevokeRows(page, facts.running, people, bots);
 	const resultKey = actionResultKey("revoke_device", page.deviceId);
 	const { deviceId, name } = page;
 	return {

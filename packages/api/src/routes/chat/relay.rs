@@ -36,14 +36,22 @@ use std::convert::Infallible;
 
 const APP_ID_HEADER: &str = "x-flow-like-app-id";
 
+/// Output reserved for a request without an output limit.
+const ESTIMATED_OUTPUT_TOKENS: i64 = 4096;
+
 /// Bound the provider work before reserving money. Hidden conversation state and
 /// media inputs reserve the context ceiling because their tokens are not in the
 /// request text. Hosted provider tools require their own tariff before enabling.
+///
+/// A request without an output limit reaches the provider without one when
+/// `bills_overrun`, since its settlement charges the full cost; otherwise the
+/// reserved estimate becomes the limit.
 fn bound_hosted_request(
     body: &mut JsonValue,
     surface: ModelApiSurface,
     rate: &HostedRateSnapshot,
     provider: &HostedProvider,
+    bills_overrun: bool,
 ) -> Result<(i64, i64), ApiError> {
     if surface == ModelApiSurface::SystemOne {
         return bound_systemone_request(body, rate, provider);
@@ -89,7 +97,7 @@ fn bound_hosted_request(
             "Hosted AI supports one response and client-executed tools. Use your own provider for background generation or provider-billed tools.",
         ));
     }
-    let output = obj
+    let requested = obj
         .get("max_tokens")
         .or_else(|| obj.get("max_completion_tokens"))
         .or_else(|| obj.get("max_output_tokens"))
@@ -98,8 +106,9 @@ fn bound_hosted_request(
                 ApiError::bad_request("Output token limit must be a positive integer")
             })
         })
-        .transpose()?
-        .unwrap_or(4096)
+        .transpose()?;
+    let output = requested
+        .unwrap_or(ESTIMATED_OUTPUT_TOKENS)
         .min(rate.context_tokens.saturating_sub(1));
     if output <= 0 {
         return Err(ApiError::bad_request(
@@ -115,14 +124,16 @@ fn bound_hosted_request(
     ] {
         obj.remove(field);
     }
-    obj.insert(
-        match surface {
-            ModelApiSurface::Responses => "max_output_tokens",
-            _ => "max_completion_tokens",
-        }
-        .into(),
-        serde_json::json!(output),
-    );
+    if requested.is_some() || !bills_overrun {
+        obj.insert(
+            match surface {
+                ModelApiSurface::Responses => "max_output_tokens",
+                _ => "max_completion_tokens",
+            }
+            .into(),
+            serde_json::json!(output),
+        );
+    }
     if *provider == HostedProvider::OpenRouter && rate.provider_pricing_available {
         let routing = obj
             .entry("provider")
@@ -1435,8 +1446,13 @@ async fn relay_authorized_request(
     let user_sub = usage_context.user_id.clone();
     let (mut rate, _) = crate::bit_pricing::hosted_bit_rate(&bit);
     super::hosted_worker::apply_worker_tariff(&mut rate);
-    let (estimated_tokens, estimated_cost) =
-        bound_hosted_request(&mut upstream_body, surface, &rate, &hosted_provider)?;
+    let (estimated_tokens, estimated_cost) = bound_hosted_request(
+        &mut upstream_body,
+        surface,
+        &rate,
+        &hosted_provider,
+        matches!(caller, RelayCaller::Human(_)),
+    )?;
     let use_worker = super::hosted_worker::enabled();
     // Authenticate before reserving usage when sending directly. Queued work
     // obtains fresh credentials in the worker and rechecks the catalog there.
@@ -1492,9 +1508,9 @@ async fn relay_authorized_request(
     if use_worker {
         return super::hosted_worker::dispatch(
             state,
-            super::hosted_worker::HostedAiJob {
-                operation_id: id.to_owned(),
-                request: super::hosted_worker::HostedWork::Chat {
+            super::hosted_worker::HostedAiJob::new(
+                id.to_owned(),
+                super::hosted_worker::HostedWork::Chat {
                     bit_id: Some(bit.id.clone()),
                     body: upstream_body,
                     responses_api: surface == ModelApiSurface::Responses,
@@ -1504,8 +1520,8 @@ async fn relay_authorized_request(
                     model_id: upstream_model_id,
                     context: usage_context,
                 },
-                deadline: chrono::Utc::now() + chrono::Duration::milliseconds(rate.max_request_ms),
-            },
+                chrono::Utc::now() + chrono::Duration::milliseconds(rate.max_request_ms),
+            ),
         )
         .await;
     }
@@ -1824,6 +1840,7 @@ mod tests {
             ModelApiSurface::SystemOne,
             &rate,
             &HostedProvider::OpenRouter,
+            true,
         )
         .unwrap();
         assert_eq!(body, before);
@@ -1834,7 +1851,8 @@ mod tests {
                 &mut body,
                 ModelApiSurface::SystemOne,
                 &rate,
-                &HostedProvider::OpenAI
+                &HostedProvider::OpenAI,
+                true,
             )
             .is_err()
         );
@@ -2003,7 +2021,7 @@ mod tests {
                 "messages": [{"role": "user", "content": "Hello"}],
             });
             let (tokens, cost) =
-                bound_hosted_request(&mut body, surface, &rate, &HostedProvider::OpenRouter)
+                bound_hosted_request(&mut body, surface, &rate, &HostedProvider::OpenRouter, true)
                     .unwrap();
             assert!(tokens > 0);
             assert_eq!(cost, 0);
@@ -2024,6 +2042,7 @@ mod tests {
             ModelApiSurface::ChatCompletions,
             &rate,
             &HostedProvider::OpenRouter,
+            true,
         )
         .unwrap();
         assert_eq!(body["provider"]["max_price"]["prompt"], 0.0);
@@ -2040,6 +2059,7 @@ mod tests {
             ModelApiSurface::ChatCompletions,
             &test_rate(),
             &HostedProvider::OpenRouter,
+            true,
         )
         .unwrap();
         assert!(tokens > 512 && cost > 0);
@@ -2065,11 +2085,52 @@ mod tests {
                 ModelApiSurface::ChatCompletions,
                 &rate,
                 &HostedProvider::OpenRouter,
+                true,
             )
             .unwrap();
             assert_eq!(body["max_completion_tokens"], forwarded);
             assert!(body.get("max_tokens").is_none());
             assert!(tokens <= rate.context_tokens && cost > 0);
+        }
+    }
+
+    #[test]
+    fn missing_output_limit_reaches_the_provider_only_when_overrun_is_billed() {
+        let rate = test_rate();
+        for surface in [ModelApiSurface::ChatCompletions, ModelApiSurface::Responses] {
+            let request = serde_json::json!({
+                "model": "selected",
+                "messages": [{"role": "user", "content": "Hello"}],
+            });
+            let mut billed = request.clone();
+            let reservation = bound_hosted_request(
+                &mut billed,
+                surface,
+                &rate,
+                &HostedProvider::OpenRouter,
+                true,
+            )
+            .unwrap();
+            for field in ["max_tokens", "max_completion_tokens", "max_output_tokens"] {
+                assert!(billed.get(field).is_none(), "{field} in {billed}");
+            }
+
+            let mut capped = request;
+            let capped_reservation = bound_hosted_request(
+                &mut capped,
+                surface,
+                &rate,
+                &HostedProvider::OpenRouter,
+                false,
+            )
+            .unwrap();
+            let key = match surface {
+                ModelApiSurface::Responses => "max_output_tokens",
+                _ => "max_completion_tokens",
+            };
+            assert_eq!(capped[key], ESTIMATED_OUTPUT_TOKENS);
+            assert_eq!(reservation, capped_reservation);
+            assert!(reservation.0 > ESTIMATED_OUTPUT_TOKENS && reservation.1 > 0);
         }
     }
 
@@ -2090,7 +2151,8 @@ mod tests {
                     &mut body,
                     ModelApiSurface::Responses,
                     &test_rate(),
-                    &HostedProvider::OpenRouter
+                    &HostedProvider::OpenRouter,
+                    true,
                 )
                 .is_err()
             );

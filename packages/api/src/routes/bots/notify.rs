@@ -78,6 +78,7 @@ pub async fn message_owner(
     }
     let notice = notice_from(&request.text, request.title.as_deref())
         .map_err(|error| ApiError::bad_request(error.message))?;
+    let _limit = crate::bot_notify::bot_limit_guard("notify", &bot.id).await;
     let since = chrono::Utc::now().timestamp_millis() - TOOL_WINDOW_SECS * 1000;
     let sent = count_tool_messages(&state.db, &bot.id, since)
         .await
@@ -89,13 +90,18 @@ pub async fn message_owner(
             format!("Bot '{bot_id}' already sent {sent} messages in the last hour"),
         ));
     }
-    let receipt = ServerNotifier::new(
+    let notifier = ServerNotifier::new(
         &state,
         &bot.id,
         request
             .conversation_id
             .map(flow_like_bot_tools::TurnSite::Conversation),
-    )
+    );
+    let notifier = match &user {
+        AppUser::Bot(token) => notifier.with_turn(&token.turn_id),
+        _ => notifier,
+    };
+    let receipt = notifier
         .deliver(notice)
         .await
         .map_err(ApiError::internal_error)?;

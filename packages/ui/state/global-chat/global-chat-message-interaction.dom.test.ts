@@ -1,13 +1,14 @@
 // @vitest-environment happy-dom
 
 import "fake-indexeddb/auto";
-import { beforeEach, expect, test } from "vitest";
+import { beforeEach, describe, expect, test } from "vitest";
 import type { IMessage } from "../../components/interfaces/chat-default/chat-db";
 import {
 	type IChatMessageInteraction,
 	createMessageReference,
 } from "../../components/interfaces/chat-default/chat-message-interaction";
 import { IRole } from "../../lib/schema/llm/history";
+import type { IUserContextRequest } from "../backend-state/inbox-state";
 import { globalChatDb } from "./global-chat-db";
 import {
 	globalChatModelInput,
@@ -193,4 +194,110 @@ test("capacity queues preserve target snapshots and accepted state in order", as
 	}
 	expect(store.takeNextQueuedMessage("conversation")).toBeUndefined();
 	expect(useGlobalChatStore.getState().messages[0].reactions).toEqual([]);
+});
+
+describe("shared user context in model history", () => {
+	const request: IUserContextRequest = {
+		id: "ctx",
+		bot_id: "bot",
+		subject_id: "me",
+		conversation_id: "conversation",
+		purpose: "Weather",
+		fields: ["location"],
+		precision: "approximate",
+		audience: "direct",
+		audience_member_ids: ["bot", "me"],
+		created_at: 0,
+		expires_at: 300_000,
+	};
+	const response = (decision: "once" | "session" | "deny") => ({
+		request_id: "ctx",
+		bot_id: "bot",
+		subject_id: "me",
+		conversation_id: "conversation",
+		decision,
+		captured_at: 1_000_000,
+		expires_at: 1_300_000,
+		source: { session_id: "s", platform: "web" },
+		values: { location: { place: "Munich" } },
+		unavailable: {},
+	});
+	const cardMessage = (
+		decision: "once" | "session" | "deny",
+		revoked = false,
+	): IMessage => ({
+		...assistant(),
+		id: "card",
+		inner: { role: IRole.Assistant, content: "" },
+		userContext: {
+			request,
+			answer: decision,
+			response: response(decision),
+			...(revoked ? { revoked } : {}),
+		},
+	});
+	const derived: IMessage = {
+		...assistant(),
+		id: "derived",
+		inner: { role: IRole.Assistant, content: "You are near Munich." },
+		userContextDerived: true,
+		userContextDerivedFrom: "ctx",
+	};
+	const next: IMessage = {
+		...assistant(),
+		id: "next",
+		inner: { role: IRole.User, content: "And tomorrow?" },
+	};
+
+	test("a live session shows the snapshot and keeps the derived reply", () => {
+		const { history } = globalChatModelInput(
+			next,
+			[cardMessage("session"), derived],
+			1_000_000 + 5 * 60_000,
+		);
+		expect(history[0]).toEqual({
+			role: "Assistant",
+			content: "[You asked for user context (location).]",
+		});
+		expect(history[1].role).toBe("User");
+		expect(history[1].content).toContain(
+			"captured 5 min ago and usable here for about 25 more min",
+		);
+		expect(history[1].content).toContain('"place":"Munich"');
+		expect(history[2].content).toBe("You are near Munich.");
+	});
+
+	test("an ended session withholds values and the derived reply", () => {
+		const { history } = globalChatModelInput(
+			next,
+			[cardMessage("session"), derived],
+			1_000_000 + 31 * 60_000,
+		);
+		expect(history[1].content).toContain("for a session that has ended");
+		expect(history[1].content).not.toContain("Munich");
+		expect(history[2].content).toBe(
+			"[Your reply here used shared user context and is withheld now.]",
+		);
+	});
+
+	test("a revoked session is marked and a once answer is withheld", () => {
+		const revoked = globalChatModelInput(
+			next,
+			[cardMessage("session", true), derived],
+			1_000_001,
+		).history;
+		expect(revoked[1].content).toBe(
+			"[Shared user context (location) for a session, then revoked access. The values are withheld; do not use them.]",
+		);
+		expect(revoked[2].content).toContain("withheld");
+		const once = globalChatModelInput(
+			next,
+			[cardMessage("once"), derived],
+			1_000_001,
+		).history;
+		expect(once[1].content).toBe(
+			"[Shared user context (location) once. It was for that answer only and is withheld now; request it again if you need it.]",
+		);
+		expect(JSON.stringify(once)).not.toContain("Munich");
+	});
 });

@@ -20,6 +20,45 @@ use super::work_plan::WorkPlanState;
 
 const SNAPSHOT_VERSION: u32 = 1;
 pub(super) const MAX_RECOVERIES: u32 = 3;
+const WAITING_CODES: [&str; 2] = [
+    "bot_tool_waiting_for_approval",
+    "bot_talk_waiting_for_owner",
+];
+const NOT_STARTED_CODE: &str = "bot_tool_not_started";
+
+/// The pause code of a call that a host gate held back for the owner's answer.
+pub(super) fn waiting_code(output: &str) -> Option<&'static str> {
+    let value = serde_json::from_str::<Value>(output).ok()?;
+    let code = value.get("code")?.as_str()?;
+    WAITING_CODES.into_iter().find(|waiting| *waiting == code)
+}
+
+/// The pause code of a fresh tool output, only when it has the shape of a host gate's hold
+/// (`status: "waiting"`); a tool's own error that happens to carry the code does not pause.
+pub(super) fn gate_waiting_code(output: &str) -> Option<&'static str> {
+    let value = serde_json::from_str::<Value>(output).ok()?;
+    (value.get("status")?.as_str()? == "waiting")
+        .then(|| waiting_code(output))
+        .flatten()
+}
+
+/// The durable result of a paused call, written for the resumed run that reads it after the
+/// owner answered.
+pub(super) fn paused_output(code: &str) -> String {
+    serde_json::json!({
+        "status": "error", "code": code, "executed": false,
+        "message": "The host confirmed this call did not execute because it required approval. After the owner answers, reassess the current state and request the action under the current permission; do not repeat completed sibling actions.",
+    })
+    .to_string()
+}
+
+fn not_started_output() -> String {
+    serde_json::json!({
+        "status": "error", "code": NOT_STARTED_CODE, "executed": false,
+        "message": "This call did not start because an earlier call in its ordered group paused the turn for the owner's answer. Reassess the current state and request it again if it is still needed; do not repeat completed sibling actions.",
+    })
+    .to_string()
+}
 
 /// Storage is scoped to one claimed turn. Hosts must encrypt private state, validate ownership,
 /// and reject stale writers with the checkpoint revision and their current claim fence.
@@ -262,17 +301,7 @@ pub fn record_unexecuted_approval(
             Message::User { content } => content.iter().any(|item| match item {
                 UserContent::ToolResult(result) if result.id == call_id => {
                     result.content.iter().any(|item| match item {
-                        ToolResultContent::Text(text) => serde_json::from_str::<Value>(&text.text)
-                            .ok()
-                            .is_some_and(|value| {
-                                matches!(
-                                    value.get("code").and_then(Value::as_str),
-                                    Some(
-                                        "bot_tool_waiting_for_approval"
-                                            | "bot_talk_waiting_for_owner"
-                                    )
-                                )
-                            }),
+                        ToolResultContent::Text(text) => waiting_code(&text.text).is_some(),
                         _ => false,
                     })
                 }
@@ -294,10 +323,7 @@ pub fn record_unexecuted_approval(
         if call.output.is_some() {
             return Ok(None);
         }
-        call.output = Some(serde_json::json!({
-        "status": "error", "code": "bot_tool_waiting_for_approval", "executed": false,
-        "message": "The host confirmed this call did not execute because it required approval. After the owner answers, reassess the current state and request the action under the current permission; do not repeat completed sibling actions.",
-        }).to_string());
+        call.output = Some(paused_output(WAITING_CODES[0]));
         snapshot.promote_completed_batch()?;
     } else {
         return Ok(None);
@@ -407,6 +433,29 @@ fn validate_tool_pairs(history: &[Message], prompt: &Message) -> Result<()> {
     Ok(())
 }
 
+fn unrecorded_call<'a>(
+    snapshot: &'a mut RunSnapshot,
+    id: &str,
+    name: &str,
+) -> Result<&'a mut PendingCall> {
+    if snapshot.phase != RecoveryPhase::ToolsInFlight {
+        return Err(anyhow!(
+            "Cannot record a result outside its durable tool batch"
+        ));
+    }
+    let call = snapshot
+        .pending_calls
+        .iter_mut()
+        .find(|call| call.id == id && call.name == name)
+        .ok_or_else(|| anyhow!("Tool result for {name} ({id}) does not match its durable call"))?;
+    if call.output.is_some() {
+        return Err(anyhow!(
+            "Tool result for {name} ({id}) was already recorded"
+        ));
+    }
+    Ok(call)
+}
+
 pub(super) struct RecoverySession {
     store: Arc<dyn BotRunRecovery>,
     header: BotRunCheckpoint,
@@ -415,7 +464,7 @@ pub(super) struct RecoverySession {
 impl RecoverySession {
     pub async fn terminal_before_model(
         store: Arc<dyn BotRunRecovery>,
-        _original_request: &str,
+        partial_answer: Option<&str>,
     ) -> Result<Option<SavedAnswer>> {
         let (mut recovery, snapshot) = Self::load(store).await?;
         let Some(mut snapshot) = snapshot else {
@@ -456,7 +505,15 @@ impl RecoverySession {
                 ),
             ))
         } else if recovery.expired() {
-            Some((WorkStopReason::Budget, "The original execution deadline passed while this task was interrupted. I have not started more model or tool work.".into()))
+            Some((
+                WorkStopReason::Budget,
+                match partial_answer.map(str::trim).filter(|text| !text.is_empty()) {
+                    Some(text) => format!(
+                        "{text}\n\n(This answer was cut off at the execution deadline; I started no more model or tool work.)"
+                    ),
+                    None => "The original execution deadline passed while this task was interrupted. I have not started more model or tool work.".into(),
+                },
+            ))
         } else if snapshot.recoveries >= MAX_RECOVERIES && !snapshot.approval_resume {
             Some((WorkStopReason::Blocked, "This task reached its automatic recovery limit. I have not started another attempt.".into()))
         } else {
@@ -527,21 +584,7 @@ impl RecoverySession {
         stats: LLMUsageStats,
     ) -> Result<()> {
         let mut snapshot: RunSnapshot = serde_json::from_value(self.header.state.clone())?;
-        if snapshot.phase != RecoveryPhase::ToolsInFlight {
-            return Err(anyhow!(
-                "Cannot record a result outside its durable tool batch"
-            ));
-        }
-        let Some(call) = snapshot
-            .pending_calls
-            .iter_mut()
-            .find(|call| call.id == id && call.name == name)
-        else {
-            return Err(anyhow!("Tool result does not match its durable call"));
-        };
-        if call.output.is_some() {
-            return Err(anyhow!("Tool result was already recorded"));
-        }
+        let call = unrecorded_call(&mut snapshot, id, name)?;
         let discovered_apps = name == "list_apps"
             && serde_json::from_str::<Value>(&output)
                 .ok()
@@ -558,6 +601,19 @@ impl RecoverySession {
         snapshot.stats = stats;
         snapshot.local_app_discovery_returned |= discovered_apps;
         snapshot.empty_continuations = 0;
+        snapshot.promote_completed_batch()?;
+        self.save(snapshot).await
+    }
+
+    /// Calls queued behind a paused call never ran, so a resume may ask for them again.
+    pub async fn record_not_started(&mut self, calls: &[(String, String)]) -> Result<()> {
+        if calls.is_empty() {
+            return Ok(());
+        }
+        let mut snapshot: RunSnapshot = serde_json::from_value(self.header.state.clone())?;
+        for (id, name) in calls {
+            unrecorded_call(&mut snapshot, id, name)?.output = Some(not_started_output());
+        }
         snapshot.promote_completed_batch()?;
         self.save(snapshot).await
     }

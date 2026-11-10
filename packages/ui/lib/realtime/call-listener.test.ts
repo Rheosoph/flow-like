@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { startCallListener } from "./call-listener";
+import { VAD_WAIT_MS, startCallListener } from "./call-listener";
 
 function context() {
 	const source = { connect: vi.fn(), disconnect: vi.fn() };
@@ -72,7 +72,12 @@ describe("call microphone capture", () => {
 			now += 128;
 			audio.block(0);
 		}
-		expect(onPartial).toHaveBeenCalledOnce();
+		expect(onPartial).toHaveBeenCalledTimes(2);
+		expect(onPartial.mock.calls[1][0]).toMatchObject({
+			settled: true,
+			offsetMs: 0,
+			durationMs: onUtterance.mock.calls[0][0].durationMs,
+		});
 		expect(onUtterance).toHaveBeenCalledOnce();
 		expect(onUtterance.mock.calls[0][0]).toMatchObject({
 			durationMs: 1302,
@@ -223,5 +228,314 @@ describe("call microphone capture", () => {
 		expect(audio.source.disconnect).toHaveBeenCalledOnce();
 		expect(audio.sink.disconnect).toHaveBeenCalledOnce();
 		expect(audio.api.close).not.toHaveBeenCalled();
+	});
+
+	describe("barge-in", () => {
+		async function guardedListener() {
+			const audio = context();
+			let now = 10_000;
+			vi.spyOn(Date, "now").mockImplementation(() => now);
+			const onUtterance = vi.fn();
+			const onPartial = vi.fn();
+			const onBargeInStart = vi.fn();
+			const onBargeInProbe = vi.fn();
+			const listener = await startCallListener({} as MediaStream, onUtterance, {
+				context: audio.context,
+				guarded: true,
+				onPartial,
+				onBargeInStart,
+				onBargeInProbe,
+			});
+			const blocks = (count: number, level: number) => {
+				for (let index = 0; index < count; index++) {
+					now += 128;
+					audio.block(level);
+				}
+			};
+			return {
+				listener,
+				blocks,
+				onUtterance,
+				onPartial,
+				onBargeInStart,
+				onBargeInProbe,
+				advance: (ms: number) => {
+					now += ms;
+				},
+			};
+		}
+
+		test("ordinary speech and bot echo below the guard threshold are ignored", async () => {
+			const h = await guardedListener();
+			h.blocks(10, 0.03);
+			h.blocks(6, 0);
+			expect(h.onBargeInStart).not.toHaveBeenCalled();
+			expect(h.onUtterance).not.toHaveBeenCalled();
+			expect(h.onPartial).not.toHaveBeenCalled();
+		});
+
+		test("sustained loud audio starts a barge-in, probes once enough is captured and keeps the utterance when confirmed", async () => {
+			const h = await guardedListener();
+			h.blocks(2, 0.1);
+			h.blocks(1, 0);
+			expect(h.onBargeInStart).not.toHaveBeenCalled();
+			h.blocks(1, 0.1);
+			expect(h.onBargeInStart).toHaveBeenCalledOnce();
+			expect(h.onBargeInProbe).toHaveBeenCalledOnce();
+			const probe = h.onBargeInProbe.mock.calls[0][0];
+			expect(probe.durationMs).toBeGreaterThanOrEqual(500);
+			expect(probe.samples.length).toBe((probe.durationMs * 16_000) / 1000);
+			h.blocks(2, 0.1);
+			h.blocks(8, 0);
+			expect(h.onUtterance).not.toHaveBeenCalled();
+			h.listener.endBargeIn(true);
+			expect(h.onUtterance).toHaveBeenCalledOnce();
+			h.blocks(4, 0.03);
+			h.blocks(6, 0);
+			expect(h.onUtterance).toHaveBeenCalledTimes(2);
+			expect(h.onBargeInStart).toHaveBeenCalledOnce();
+		});
+
+		test("a rejected barge-in drops the audio and is not retried during the cooldown", async () => {
+			const h = await guardedListener();
+			h.blocks(8, 0.1);
+			expect(h.onBargeInStart).toHaveBeenCalledOnce();
+			h.listener.endBargeIn(false);
+			h.blocks(8, 0.1);
+			h.blocks(8, 0);
+			expect(h.onBargeInStart).toHaveBeenCalledOnce();
+			expect(h.onUtterance).not.toHaveBeenCalled();
+			h.advance(3000);
+			h.blocks(4, 0.1);
+			expect(h.onBargeInStart).toHaveBeenCalledTimes(2);
+		});
+
+		test("pausing ends a barge-in, so a muted person never interrupts", async () => {
+			const h = await guardedListener();
+			h.listener.setPaused(true);
+			h.blocks(10, 0.1);
+			expect(h.onBargeInStart).not.toHaveBeenCalled();
+			h.listener.setPaused(false);
+			h.blocks(4, 0.1);
+			expect(h.onBargeInStart).toHaveBeenCalledOnce();
+			h.listener.setPaused(true);
+			h.listener.endBargeIn(true);
+			h.blocks(8, 0);
+			expect(h.onUtterance).not.toHaveBeenCalled();
+		});
+
+		test("lifting the guard resumes normal capture", async () => {
+			const h = await guardedListener();
+			h.blocks(2, 0.03);
+			h.listener.setGuarded(false);
+			h.blocks(8, 0.03);
+			h.blocks(6, 0);
+			expect(h.onUtterance).toHaveBeenCalledOnce();
+		});
+	});
+});
+
+describe("call microphone capture with voice-activity and turn models", () => {
+	const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+	function models(
+		options: {
+			speech?: (level: number, index: number) => Promise<number | null>;
+			turn?: () => Promise<number | null>;
+			ready?: boolean;
+		} = {},
+	) {
+		let index = 0;
+		let level = 0;
+		const detector = {
+			ready: options.ready ?? true,
+			turnReady: true,
+			speech: vi.fn(() => {
+				const current = index++;
+				const heard = level;
+				return (
+					options.speech?.(heard, current) ??
+					Promise.resolve(heard > 0 ? 0.9 : 0.02)
+				);
+			}),
+			resetSpeech: vi.fn(),
+			turnComplete: vi.fn(options.turn ?? (() => Promise.resolve(0.9))),
+		};
+		return {
+			detector,
+			setLevel: (next: number) => {
+				level = next;
+			},
+		};
+	}
+
+	async function listen(
+		detector: ReturnType<typeof models>["detector"] | null,
+		extra: { guarded?: boolean } = {},
+	) {
+		const audio = context();
+		let now = 10_000;
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		const onUtterance = vi.fn();
+		const onBargeInStart = vi.fn();
+		const onPartial = vi.fn();
+		const listener = await startCallListener({} as MediaStream, onUtterance, {
+			context: audio.context,
+			detector,
+			onPartial,
+			onBargeInStart,
+			guarded: extra.guarded,
+		});
+		return {
+			listener,
+			onUtterance,
+			onBargeInStart,
+			onPartial,
+			push(level: number) {
+				now += 128;
+				audio.block(level);
+			},
+			async blocks(count: number, level: number, hear?: (n: number) => void) {
+				for (let i = 0; i < count; i++) {
+					now += 128;
+					hear?.(level);
+					audio.block(level);
+					await settle();
+				}
+			},
+		};
+	}
+
+	test("a short 'Ja' is kept when the models hear it, and ends as soon as the turn check says so", async () => {
+		const m = models();
+		const h = await listen(m.detector);
+		await h.blocks(2, 0.3, m.setLevel);
+		await h.blocks(2, 0, m.setLevel);
+		await settle();
+		expect(m.detector.turnComplete).toHaveBeenCalledOnce();
+		expect(h.onUtterance).toHaveBeenCalledOnce();
+		const [utterance] = h.onUtterance.mock.calls[0];
+		expect(utterance.turn).toMatchObject({ source: "model", probability: 0.9 });
+		expect(utterance.capturedAt).toBe(10_000);
+		expect(utterance.endOfSpeechAt).toBe(10_000 + 256);
+		const settled = h.onPartial.mock.calls
+			.map(([u]) => u)
+			.find((u) => u.settled);
+		expect(settled.durationMs).toBe(utterance.durationMs);
+		expect(settled.samples).toEqual(utterance.samples);
+	});
+
+	test("the same 'Ja' is dropped on the energy rule", async () => {
+		const h = await listen(null);
+		await h.blocks(2, 0.3);
+		await h.blocks(6, 0);
+		expect(h.onUtterance).not.toHaveBeenCalled();
+	});
+
+	test("an incomplete turn waits for the long silence", async () => {
+		const m = models({ turn: () => Promise.resolve(0.1) });
+		const h = await listen(m.detector);
+		await h.blocks(6, 0.3, m.setLevel);
+		await h.blocks(4, 0, m.setLevel);
+		expect(h.onUtterance).not.toHaveBeenCalled();
+		await h.blocks(7, 0, m.setLevel);
+		expect(h.onUtterance).not.toHaveBeenCalled();
+		await h.blocks(1, 0, m.setLevel);
+		expect(h.onUtterance).toHaveBeenCalledOnce();
+		expect(h.onUtterance.mock.calls[0][0].turn).toMatchObject({
+			source: "silence",
+			probability: 0.1,
+		});
+	});
+
+	test("blocks are handled in order while inference is delayed", async () => {
+		const resolvers: ((p: number) => void)[] = [];
+		const m = models({
+			speech: () => new Promise<number>((resolve) => resolvers.push(resolve)),
+		});
+		const h = await listen(m.detector);
+		await h.blocks(3, 0.3);
+		await h.blocks(3, 0);
+		expect(resolvers).toHaveLength(6);
+		expect(h.onPartial).not.toHaveBeenCalled();
+		expect(m.detector.turnComplete).not.toHaveBeenCalled();
+		[0.9, 0.9, 0.9, 0.02, 0.02, 0.02].forEach((p, i) => resolvers[i](p));
+		await settle();
+		expect(m.detector.turnComplete).toHaveBeenCalledOnce();
+		await settle();
+		expect(h.onUtterance).toHaveBeenCalledOnce();
+		const [utterance] = h.onUtterance.mock.calls[0];
+		expect(utterance.offsetMs).toBe(0);
+		expect(utterance.durationMs).toBe(384 + 150);
+		expect(utterance.capturedAt).toBe(10_000);
+	});
+
+	test("a dead worker never stalls capture, the energy rule takes over", async () => {
+		const m = models({ speech: () => new Promise<number | null>(() => {}) });
+		vi.useFakeTimers();
+		try {
+			const h = await listen(m.detector);
+			for (const level of [...Array(6).fill(0.1), ...Array(6).fill(0)]) {
+				h.push(level);
+				await vi.advanceTimersByTimeAsync(VAD_WAIT_MS);
+			}
+			expect(m.detector.speech).toHaveBeenCalledTimes(12);
+			expect(h.onUtterance).toHaveBeenCalledOnce();
+			expect(h.onUtterance.mock.calls[0][0].turn?.source).toBe("silence");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("a model that is not ready is not asked, and capture stays on energy", async () => {
+		const m = models({ ready: false });
+		const h = await listen(m.detector);
+		await h.blocks(6, 0.1);
+		await h.blocks(6, 0);
+		expect(m.detector.speech).not.toHaveBeenCalled();
+		expect(h.onUtterance).toHaveBeenCalledOnce();
+		expect(h.onUtterance.mock.calls[0][0].turn?.source).toBe("silence");
+	});
+
+	test("a model that says null for a block leaves that block to the energy rule", async () => {
+		const m = models({ speech: () => Promise.resolve(null) });
+		const h = await listen(m.detector);
+		await h.blocks(6, 0.1);
+		await h.blocks(6, 0);
+		expect(h.onUtterance).toHaveBeenCalledOnce();
+		expect(h.onUtterance.mock.calls[0][0].turn?.source).toBe("silence");
+	});
+
+	test("stopping resets the model's stream for this listener", async () => {
+		const m = models();
+		const h = await listen(m.detector);
+		h.listener.stop();
+		expect(m.detector.resetSpeech).toHaveBeenCalled();
+	});
+
+	describe("barge-in", () => {
+		test("loud audio the model does not call speech never interrupts", async () => {
+			const m = models({ speech: () => Promise.resolve(0.1) });
+			const h = await listen(m.detector, { guarded: true });
+			await h.blocks(12, 0.3);
+			expect(h.onBargeInStart).not.toHaveBeenCalled();
+		});
+
+		test("about 250 ms of loud speech interrupts at once", async () => {
+			const m = models({ speech: () => Promise.resolve(0.9) });
+			const h = await listen(m.detector, { guarded: true });
+			await h.blocks(1, 0.3);
+			expect(h.onBargeInStart).not.toHaveBeenCalled();
+			await h.blocks(1, 0.3);
+			expect(h.onBargeInStart).toHaveBeenCalledOnce();
+		});
+
+		test("without models the loud-only rule still needs 300 ms", async () => {
+			const h = await listen(null, { guarded: true });
+			await h.blocks(2, 0.3);
+			expect(h.onBargeInStart).not.toHaveBeenCalled();
+			await h.blocks(1, 0.3);
+			expect(h.onBargeInStart).toHaveBeenCalledOnce();
+		});
 	});
 });

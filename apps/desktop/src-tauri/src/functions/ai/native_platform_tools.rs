@@ -396,10 +396,9 @@ impl NativePlatformSession {
                 }
             }
             if !response.status().is_success() {
-                return Err(format!(
-                    "The hub returned HTTP {} for this tool request.",
-                    response.status().as_u16()
-                ));
+                let status = response.status().as_u16();
+                let body = refusal_body(response).await;
+                return Err(hub_refusal(status, &body));
             }
             self.assert_current_profile().await?;
             return Ok(response);
@@ -563,6 +562,49 @@ fn api_url(hub: &str, path: &str) -> Result<reqwest::Url, String> {
     Ok(url)
 }
 
+const REFUSAL_BODY_BYTES: usize = 4096;
+const REFUSAL_MESSAGE_CHARS: usize = 300;
+
+async fn refusal_body(mut response: reqwest::Response) -> Vec<u8> {
+    let mut body = Vec::new();
+    while body.len() < REFUSAL_BODY_BYTES {
+        match response.chunk().await {
+            Ok(Some(chunk)) => body.extend_from_slice(&chunk),
+            _ => break,
+        }
+    }
+    body.truncate(REFUSAL_BODY_BYTES);
+    body
+}
+
+/// The hub's refusal for the model: the status first, then the `code` and `message` of the API's
+/// `{"error": {...}}` body when it has them. The body itself is never kept or logged.
+pub(crate) fn hub_refusal(status: u16, body: &[u8]) -> String {
+    let base = format!("The hub returned HTTP {status} for this tool request.");
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        return base;
+    };
+    let error = value.get("error").unwrap_or(&value);
+    let text = |key: &str| {
+        error
+            .get(key)
+            .and_then(Value::as_str)
+            .map(|text| {
+                text.chars()
+                    .filter(|c| !c.is_control())
+                    .take(REFUSAL_MESSAGE_CHARS)
+                    .collect::<String>()
+            })
+            .filter(|text| !text.trim().is_empty())
+    };
+    match (text("code"), text("message")) {
+        (Some(code), Some(message)) => format!("{base} {code}: {message}"),
+        (Some(code), None) => format!("{base} {code}"),
+        (None, Some(message)) => format!("{base} {message}"),
+        (None, None) => base,
+    }
+}
+
 pub(crate) fn segment(value: &str) -> String {
     value
         .bytes()
@@ -680,6 +722,21 @@ mod tests {
         drop(admitted);
         assert!(!visible_to_run(Some(&run), &profile, "app-workspace"));
         assert!(visible_to_run(Some(&run), &profile, "app-profile"));
+    }
+
+    #[test]
+    fn a_hub_refusal_keeps_the_error_code_and_message() {
+        let body = br#"{"error":{"code":"MAIL_NO_ADDRESS","message":"The person has no email address"}}"#;
+        assert_eq!(
+            hub_refusal(400, body),
+            "The hub returned HTTP 400 for this tool request. MAIL_NO_ADDRESS: The person has no email address"
+        );
+        assert_eq!(
+            hub_refusal(404, b"<html>"),
+            "The hub returned HTTP 404 for this tool request."
+        );
+        let long = format!(r#"{{"error":{{"code":"X","message":"{}"}}}}"#, "a".repeat(900));
+        assert!(hub_refusal(400, long.as_bytes()).len() < 400);
     }
 
     #[test]

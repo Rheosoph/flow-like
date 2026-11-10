@@ -100,7 +100,12 @@ export function LocationStep({
 			)}
 			{removed.length > 0 && (
 				<BotNotice tone="warning">
-					{t("editor.location.turnedOff", { capabilities: labels(removed) })}
+					{t(
+						location === "device"
+							? "editor.location.turnedOffDevice"
+							: "editor.location.turnedOff",
+						{ capabilities: labels(removed) },
+					)}
 				</BotNotice>
 			)}
 			{restored.length > 0 && (

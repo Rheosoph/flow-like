@@ -1,5 +1,6 @@
 import { isTransportFailure } from "@flow-like/flow-like-ui/lib/api-error";
 import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
+import { STREAM_LINGER_MS } from "@flow-like/flow-like-ui/lib/execution/linger";
 import {
 	getExecutionRuntime,
 	releaseExecutionRuntime,
@@ -305,13 +306,17 @@ describe("web invoke deadline", () => {
 		expect(error).toBeUndefined();
 		expect(cb).toHaveBeenCalledTimes(3);
 		expect(seen.signal?.aborted).toBe(false);
+		// The reader stays on the stream until the server ends it.
+		seen.stream?.close();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(seen.cancelled).toBe(false);
 		expect(vi.getTimerCount()).toBe(0);
 		const steps = trace.finish()?.steps.map((step) => step.name);
 		expect(steps).toContain("invoke.until_run_initiated");
 		expect(steps).not.toContain("invoke.until_error");
 	});
 
-	test("a terminal event releases the reader while the server still holds the body open", async () => {
+	test("a terminal event settles the run while the reader stays on the body the server still holds open", async () => {
 		const seen = manualSseResponse();
 		const cb = vi.fn();
 		const outcome = outcomeOf(execute(new WebEventState({ auth }), cb));
@@ -324,8 +329,12 @@ describe("web invoke deadline", () => {
 		await vi.advanceTimersByTimeAsync(0);
 
 		expect((await outcome).error).toBeUndefined();
-		expect(seen.cancelled).toBe(true);
 		expect(cb).toHaveBeenCalledTimes(2);
+		// The server settles the run after `completed`; cancelling now could stop that work.
+		await vi.advanceTimersByTimeAsync(STREAM_LINGER_MS - 1);
+		expect(seen.cancelled).toBe(false);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(seen.cancelled).toBe(true);
 	});
 
 	test("a failure after the run id arrived is not reported as a dispatch failure", async () => {

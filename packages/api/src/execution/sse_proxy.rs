@@ -87,6 +87,77 @@ pub(crate) fn is_completed_event(envelope: &serde_json::Value) -> bool {
     envelope.get("event_type").and_then(|v| v.as_str()) == Some("completed")
 }
 
+/// The executor reports `completed` before it persists the run's logs and settles
+/// its quota, then keeps the stream open. A reader that stops there can cut the
+/// connection while that work runs, so it reads on until the stream ends, up to this.
+pub(crate) const EXECUTOR_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
+
+pub(crate) const STREAM_ENDED_WITHOUT_COMPLETION: &str =
+    "The executor stream ended before the run completed";
+
+/// The next item, giving up (as if the stream ended) once `deadline` has passed.
+pub(crate) async fn next_before<S: Stream + Unpin>(
+    stream: &mut S,
+    deadline: Option<flow_like_types::tokio::time::Instant>,
+) -> Option<S::Item> {
+    match deadline {
+        Some(deadline) => flow_like_types::tokio::time::timeout_at(deadline, stream.next())
+            .await
+            .unwrap_or(None),
+        None => stream.next().await,
+    }
+}
+
+async fn drain_executor_stream<S: Stream + Unpin>(stream: &mut S) {
+    let deadline = flow_like_types::tokio::time::Instant::now() + EXECUTOR_DRAIN_TIMEOUT;
+    while next_before(stream, Some(deadline)).await.is_some() {}
+}
+
+/// Whether the event can be `completed`, judged without parsing its JSON. Executors
+/// name the SSE event after its type, and the quoted word covers those that do not.
+fn may_be_completed_event(event_name: &str, data: &str) -> bool {
+    event_name == "completed" || data.contains("\"completed\"")
+}
+
+/// Starts the run's completion write when this event is the executor's `completed`
+/// and says whether it was.
+pub(crate) fn observe_completed(
+    completion: &mut CompletionWrites,
+    db: Option<&ExecutionAuditContext>,
+    run_id: &str,
+    event_name: &str,
+    data: &str,
+) -> bool {
+    if !may_be_completed_event(event_name, data) {
+        return false;
+    }
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) else {
+        return false;
+    };
+    if !is_completed_event(&parsed) {
+        return false;
+    }
+    if let Some(db) = db {
+        completion.start(db, run_id, &parsed);
+    }
+    true
+}
+
+/// A stream that ends cleanly without `completed` leaves the run non-terminal.
+/// A run that already finished is left as it is.
+pub(crate) async fn fail_run_on_missing_completion(
+    context: Option<&ExecutionAuditContext>,
+    run_id: &str,
+) {
+    tracing::warn!(run_id = %run_id, "Executor stream ended without a completed event");
+    if let Some(context) = context
+        && let Err(error) =
+            fail_run_on_stream_error(context, run_id, STREAM_ENDED_WITHOUT_COMPLETION).await
+    {
+        tracing::error!(run_id = %run_id, %error, "Failed to record the missing completion");
+    }
+}
+
 /// Post-run writes for `completed` events. Each runs on its own task, so the
 /// client receives `completed` without waiting for them and a dropped response
 /// body cannot cancel them. The proxy awaits them before its stream ends: on
@@ -255,11 +326,13 @@ pub(crate) fn stream_http_response(
         let mut output = Some(tx);
         let mut terminal = Some(terminal_tx);
         let mut has_result = false;
+        let mut completion = CompletionWrites::default();
         let final_event = loop {
             let next = flow_like_types::tokio::time::timeout_at(deadline, es.next()).await;
             let sse_event = match next {
                 Ok(Some(Ok(event))) => event,
                 Ok(None) => {
+                    fail_run_on_missing_completion(db.as_ref(), &run_id).await;
                     break public_http_error("Response stream ended before completion");
                 }
                 Ok(Some(Err(error))) => {
@@ -280,18 +353,25 @@ pub(crate) fn stream_http_response(
             };
             let event_type = parsed.get("event_type").and_then(|value| value.as_str());
             if event_type == Some("completed") {
-                let completed = parse_completed_payload(&parsed);
-                let successful = matches!(completed.status, RunStatus::Completed);
-                if let Some(db) = &db
-                    && let Err(error) = update_run_on_completed_event(db, &run_id, completed).await
-                {
-                    tracing::error!(run_id = %run_id, %error, "Failed to update HTTP run on completion");
+                let successful = matches!(
+                    parse_completed_payload(&parsed).status,
+                    RunStatus::Completed
+                );
+                if let Some(db) = &db {
+                    completion.start(db, &run_id, &parsed);
                 }
-                break if successful {
-                    public_http_event("done", serde_json::json!({}))
-                } else {
-                    public_http_error("Workflow execution failed")
-                };
+                finish_http_stream(
+                    &mut output,
+                    &mut terminal,
+                    if successful {
+                        public_http_event("done", serde_json::json!({}))
+                    } else {
+                        public_http_error("Workflow execution failed")
+                    },
+                );
+                drain_executor_stream(&mut es).await;
+                completion.finish().await;
+                return;
             }
             if event_type == Some("error") {
                 // Close the public response immediately, then drain the
@@ -373,8 +453,10 @@ fn create_sse_stream(
         let mut es = event_stream;
         let mut event_ordinal = 0_u64;
         let mut completion = CompletionWrites::default();
+        let mut drain_deadline = None;
+        let mut ended_cleanly = true;
 
-        while let Some(result) = es.next().await {
+        while let Some(result) = next_before(&mut es, drain_deadline).await {
             match result {
                 Ok(sse_event) => {
                     let ordinal = event_ordinal;
@@ -412,10 +494,16 @@ fn create_sse_stream(
                         }
                     }
 
-                    if let Some(db) = &db
-                        && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&sse_event.data)
-                    {
-                        completion.start(db, &run_id, &parsed);
+                    if observe_completed(
+                        &mut completion,
+                        db.as_ref(),
+                        &run_id,
+                        &sse_event.event,
+                        &sse_event.data,
+                    ) {
+                        drain_deadline = Some(
+                            flow_like_types::tokio::time::Instant::now() + EXECUTOR_DRAIN_TIMEOUT,
+                        );
                     }
 
                     let event = Event::default()
@@ -425,6 +513,7 @@ fn create_sse_stream(
                     yield Ok(event);
                 }
                 Err(err) => {
+                    ended_cleanly = false;
                     tracing::warn!(run_id = %run_id, error = %err, "SSE parse error");
                     // A transport failure says nothing about the worker outcome.
                     // Its authenticated terminal report owns the run status.
@@ -438,6 +527,10 @@ fn create_sse_stream(
             }
         }
 
+        if ended_cleanly && drain_deadline.is_none() {
+            fail_run_on_missing_completion(db.as_ref(), &run_id).await;
+            yield Ok(stream_failure_event(STREAM_ENDED_WITHOUT_COMPLETION.to_string()));
+        }
         completion.finish().await;
         tracing::debug!(run_id = %run_id, "SSE stream ended");
     };
@@ -536,62 +629,15 @@ pub async fn collect_generic_result(
     db: Option<ExecutionAuditContext>,
     timeout: Duration,
 ) -> Option<serde_json::Value> {
-    let byte_stream = response.bytes_stream();
-    let mut es = byte_stream.eventsource();
-
-    let collect = async {
-        let mut generic_result: Option<serde_json::Value> = None;
-        while let Some(result) = es.next().await {
-            let sse_event = match result {
-                Ok(evt) => evt,
-                Err(err) => {
-                    tracing::warn!(run_id = %run_id, error = %err, "SSE parse error while collecting result");
-                    break;
-                }
-            };
-
-            let parsed: serde_json::Value = match serde_json::from_str(&sse_event.data) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-
-            let event_type = parsed
-                .get("event_type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-
-            if event_type == "generic_result" && generic_result.is_none() {
-                generic_result = parsed.get("payload").cloned();
-            }
-
-            if event_type == "completed" {
-                if let Some(db) = &db
-                    && let Err(e) =
-                        update_run_on_completed_event(db, &run_id, parse_completed_payload(&parsed))
-                            .await
-                {
-                    tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
-                }
-                // `completed` is the terminator — we can stop reading.
-                break;
-            }
-        }
-        generic_result
-    };
-
-    match flow_like_types::tokio::time::timeout(timeout, collect).await {
-        Ok(result) => result,
-        Err(_) => {
-            tracing::warn!(run_id = %run_id, "Timed out collecting generic_result");
-            None
-        }
-    }
+    collect_generic_result_bytes(executor_response_bytes(response), run_id, db, timeout).await
 }
 
 /// ByteStream variant of `collect_generic_result` for the Lambda streaming
-/// path. Same semantics: drains the SSE stream until the first
-/// `generic_result` event (and `completed` for run bookkeeping), returns the
-/// payload, and gives up after `timeout`.
+/// path. Same semantics: reads the SSE stream up to `completed` for the first
+/// `generic_result` event and run bookkeeping, then on to the end of the stream
+/// (the executor persists its logs after `completed`), and returns the payload.
+/// Gives up on `completed` after `timeout`, and on the rest after
+/// [`EXECUTOR_DRAIN_TIMEOUT`].
 ///
 /// The Lambda `ByteStream` is already a `Stream<Item = Result<Bytes, _>>` —
 /// `eventsource-stream` parses it the same way as a reqwest response body.
@@ -601,17 +647,24 @@ pub async fn collect_generic_result_bytes(
     db: Option<ExecutionAuditContext>,
     timeout: Duration,
 ) -> Option<serde_json::Value> {
+    enum Ended {
+        Completed,
+        Closed,
+        Failed,
+    }
+
     let mut es = stream.eventsource();
+    let mut generic_result: Option<serde_json::Value> = None;
+    let mut completion = CompletionWrites::default();
 
     let collect = async {
-        let mut generic_result: Option<serde_json::Value> = None;
         while let Some(result) = es.next().await {
             let sse_event = match result {
                 Ok(evt) => evt,
                 Err(err) => {
-                    tracing::warn!(run_id = %run_id, error = %err, "Lambda SSE parse error while collecting result");
+                    tracing::warn!(run_id = %run_id, error = %err, "SSE parse error while collecting result");
                     record_executor_failure(db.as_ref(), &run_id, &err).await;
-                    break;
+                    return Ended::Failed;
                 }
             };
 
@@ -630,26 +683,27 @@ pub async fn collect_generic_result_bytes(
             }
 
             if event_type == "completed" {
-                if let Some(db) = &db
-                    && let Err(e) =
-                        update_run_on_completed_event(db, &run_id, parse_completed_payload(&parsed))
-                            .await
-                {
-                    tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
+                if let Some(db) = &db {
+                    completion.start(db, &run_id, &parsed);
                 }
-                break;
+                return Ended::Completed;
             }
         }
-        generic_result
+        Ended::Closed
     };
 
     match flow_like_types::tokio::time::timeout(timeout, collect).await {
-        Ok(result) => result,
+        Ok(Ended::Completed) => drain_executor_stream(&mut es).await,
+        Ok(Ended::Closed) => fail_run_on_missing_completion(db.as_ref(), &run_id).await,
+        Ok(Ended::Failed) => {}
         Err(_) => {
-            tracing::warn!(run_id = %run_id, "Timed out collecting generic_result from Lambda stream");
-            None
+            tracing::warn!(run_id = %run_id, "Timed out collecting generic_result");
+            completion.finish().await;
+            return None;
         }
     }
+    completion.finish().await;
+    generic_result
 }
 
 fn completion_update(
@@ -749,6 +803,19 @@ pub(crate) fn stream_failure_event(message: String) -> Event {
     Event::default().event("error").data(
         serde_json::to_string(&envelope)
             .unwrap_or_else(|_| r#"{"event_type":"error","payload":{}}"#.to_string()),
+    )
+}
+
+/// The executor's own first event, for a response that starts before the
+/// executor does. The executor's copy is dropped so clients see one.
+pub(crate) fn run_initiated_event(run_id: &str) -> Event {
+    let envelope = flow_like_types::intercom::InterComEvent::with_type(
+        "run_initiated",
+        serde_json::json!({ "run_id": run_id }),
+    );
+    Event::default().event("run_initiated").data(
+        serde_json::to_string(&envelope)
+            .unwrap_or_else(|_| r#"{"event_type":"run_initiated","payload":{}}"#.to_string()),
     )
 }
 
@@ -1195,6 +1262,69 @@ mod tests {
         )
         .await;
         assert_eq!(result, Some(serde_json::json!({"answer": 42})));
+    }
+
+    #[tokio::test]
+    async fn http_stream_answers_done_before_the_executor_closes_its_stream() {
+        let (close, closed) = tokio::sync::oneshot::channel::<()>();
+        let (drained, finished) = tokio::sync::oneshot::channel();
+        let bytes: ByteStream = Box::pin(async_stream::stream! {
+            yield Ok(executor_event("completed", serde_json::json!({"status": "completed"})));
+            closed.await.unwrap();
+            drained.send(()).unwrap();
+        });
+        let response = stream_http_response(
+            bytes,
+            "run-http-test".into(),
+            None,
+            Duration::from_secs(2),
+            std::convert::identity,
+        );
+        let mut events = response.into_body().into_data_stream().eventsource();
+        let done = tokio::time::timeout(Duration::from_secs(1), events.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(done.event, "done");
+        close.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), finished)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn buffered_result_is_returned_only_after_the_executor_closes_its_stream() {
+        let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = closed.clone();
+        let bytes: ByteStream = Box::pin(async_stream::stream! {
+            yield Ok(executor_event("generic_result", serde_json::json!({"answer": 42})));
+            yield Ok(executor_event("completed", serde_json::json!({"status": "completed"})));
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let result = collect_generic_result_bytes(
+            bytes,
+            "run-buffered-test".into(),
+            None,
+            Duration::from_secs(1),
+        )
+        .await;
+        assert_eq!(result, Some(serde_json::json!({"answer": 42})));
+        assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn only_events_that_can_be_completed_are_parsed() {
+        assert!(may_be_completed_event("completed", "{}"));
+        assert!(may_be_completed_event(
+            "message",
+            r#"{"event_type": "completed","payload":{}}"#
+        ));
+        assert!(!may_be_completed_event(
+            "log",
+            r#"{"event_type":"log","payload":{"message":"hi"}}"#
+        ));
     }
 
     fn page_action_context() -> PageActionSealingContext {

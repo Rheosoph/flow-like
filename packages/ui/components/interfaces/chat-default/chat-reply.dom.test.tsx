@@ -360,3 +360,25 @@ describe("quoted chat replies", () => {
 		).toBe(true);
 	});
 });
+
+describe("tap to dismiss the keyboard", () => {
+	const touch = async (target: Element | null) => {
+		await act(async () => {
+			target?.dispatchEvent(new Event("touchstart", { bubbles: true }));
+			await new Promise((resolve) => setTimeout(resolve, 80));
+		});
+	};
+
+	test("a tap on the composer keeps the field focused; a tap on the transcript dismisses it", async () => {
+		await render();
+		const field = document.createElement("textarea");
+		container.querySelector("[data-test-composer]")?.append(field);
+		field.focus();
+
+		await touch(container.querySelector("[data-test-composer]"));
+		expect(document.activeElement).toBe(field);
+
+		await touch(container.querySelector("[data-fl-chat-messages]"));
+		expect(document.activeElement).not.toBe(field);
+	});
+});

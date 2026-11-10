@@ -224,6 +224,8 @@ impl SessionCache for MemorySessions {
 pub enum ModelRole {
     Default,
     Fast,
+    /// Reads pages and images; the bot's vision model when it has one.
+    Vision,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -291,6 +293,12 @@ pub trait ToolEnv: Send + Sync {
     /// (feature `documents`) when the host supplies none.
     fn documents(&self) -> Option<Arc<dyn DocumentBackend>> {
         crate::documents::default_backend()
+    }
+
+    /// The decoder behind `barcode_read`; the catalog's (feature `barcodes`) when the host
+    /// supplies none.
+    fn barcodes(&self) -> Option<Arc<dyn crate::barcode::BarcodeReader>> {
+        crate::barcode::default_reader()
     }
 
     /// The code sandbox; the code-interpreter's (feature `code`) when the host supplies none.

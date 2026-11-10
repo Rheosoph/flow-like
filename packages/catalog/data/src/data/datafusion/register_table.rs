@@ -9,6 +9,8 @@ use flow_like::flow::{
 };
 #[cfg(feature = "execute")]
 use flow_like_storage::datafusion::common::TableReference;
+#[cfg(feature = "execute")]
+use flow_like_storage::datafusion::prelude::SessionContext;
 use flow_like_types::{async_trait, json::json};
 #[cfg(feature = "execute")]
 use std::sync::Arc;
@@ -37,12 +39,20 @@ impl DeferredMount for CsvTableMount {
         session: &CachedDataFusionSession,
         _context: &mut ExecutionContext,
     ) -> flow_like_types::Result<()> {
-        let _ = session
-            .ctx
-            .deregister_table(TableReference::bare(self.table_name.clone()));
-        self.table
-            .register_with_datafusion(&session.ctx, &self.table_name)
+        register_replacing(&session.ctx, &self.table, &self.table_name)
     }
+}
+
+// Registration parses the name (unquoted identifiers are lower-cased), so the
+// deregistration must parse it the same way or a mixed-case name is never found again.
+#[cfg(feature = "execute")]
+fn register_replacing(
+    ctx: &SessionContext,
+    table: &CSVTable,
+    table_name: &str,
+) -> flow_like_types::Result<()> {
+    let _ = ctx.deregister_table(TableReference::from(table_name));
+    table.register_with_datafusion(ctx, table_name)
 }
 
 #[crate::register_node]
@@ -140,5 +150,34 @@ impl NodeLogic for RegisterCSVTableNode {
         Err(flow_like_types::anyhow!(
             "Node execution is not enabled. Rebuild with the execute feature flag."
         ))
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+    use flow_like_types::tokio;
+
+    #[tokio::test]
+    async fn mixed_case_table_names_register_twice_and_stay_queryable() {
+        let table = CSVTable::new(
+            vec!["id".to_string(), "name".to_string()],
+            vec![vec![json!(1), json!("alice")], vec![json!(2), json!("bob")]],
+            None,
+        );
+        let ctx = SessionContext::new();
+
+        register_replacing(&ctx, &table, "Sales").unwrap();
+        register_replacing(&ctx, &table, "Sales").unwrap();
+
+        let batches = ctx
+            .sql("SELECT * FROM Sales")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+        assert_eq!(rows, 2);
     }
 }

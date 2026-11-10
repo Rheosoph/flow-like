@@ -19,9 +19,10 @@ use crate::{
     },
     state::AppState,
 };
+use flow_like::flow::copilot::ToolTrail;
 use flow_like_types::{
-    bot_turn::{INTERACTIVE_HOST_PREFIX, reply_message_id, turn_id},
-    inbox::{InboxEntryKind, plain_envelope},
+    bot_turn::{INTERACTIVE_HOST_PREFIX, TurnAudience, reply_message_id, turn_id},
+    inbox::{ConversationKind, InboxEntryKind, plain_envelope},
     tokio::{self, task::JoinHandle},
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
@@ -45,10 +46,49 @@ pub struct InteractiveRef {
 pub(crate) struct InteractiveTurn {
     pub turn: bot_turn::Model,
     pub host_id: String,
+    /// Set once [`Self::open_trail`] found the owner's direct conversation.
+    pub trail: Option<ToolTrail>,
+}
+
+/// Facts of the stored trigger entry an interactive run acts on, never taken from the client.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct TriggerFacts {
+    pub ephemeral_user_context: bool,
+    /// The trigger is a spoken `transcript`: the run is a turn of a live call.
+    pub live_call: bool,
 }
 
 impl InteractiveTurn {
-    pub(crate) async fn ephemeral_user_context(&self, state: &AppState) -> Result<bool, ApiError> {
+    /// The turn's tool trail when it answers the owner in their direct conversation: the bot's
+    /// earlier calls for the prompt, this turn's calls for the reply.
+    pub(crate) async fn open_trail(&mut self, state: &AppState) -> Option<ToolTrail> {
+        let turn = &self.turn;
+        if TurnAudience::parse(&turn.audience) != Some(TurnAudience::Owner)
+            || turn
+                .requester_id
+                .as_deref()
+                .is_some_and(|requester| requester != turn.owner_id)
+        {
+            return None;
+        }
+        let section = super::history::transcript(
+            &state.db,
+            &turn.bot_id,
+            &turn.conversation_id,
+            &turn.trigger_message_id,
+            ConversationKind::Direct,
+            &turn.owner_id,
+        )
+        .await
+        .ok()
+        .and_then(|transcript| transcript.trail);
+        let trail = ToolTrail::new(section);
+        self.trail = Some(trail.clone());
+        Some(trail)
+    }
+
+    /// What the turn's stored trigger entry says about the run answering it.
+    pub(crate) async fn trigger_facts(&self, state: &AppState) -> Result<TriggerFacts, ApiError> {
         use crate::entity::inbox_entry;
         let trigger = inbox_entry::Entity::find()
             .filter(inbox_entry::Column::InboxId.eq(&self.turn.bot_id))
@@ -56,11 +96,18 @@ impl InteractiveTurn {
             .filter(inbox_entry::Column::MessageId.eq(&self.turn.trigger_message_id))
             .one(&state.db)
             .await?;
-        Ok(trigger.is_some_and(|entry| {
-            entry.envelope.get("body").is_some_and(|body| {
-                flow_like_types::bot_user_context::response_for(body, &entry.sender_id, &self.turn.bot_id)
-            })
-        }))
+        Ok(
+            trigger.map_or_else(TriggerFacts::default, |entry| TriggerFacts {
+                ephemeral_user_context: entry.envelope.get("body").is_some_and(|body| {
+                    flow_like_types::bot_user_context::response_for(
+                        body,
+                        &entry.sender_id,
+                        &self.turn.bot_id,
+                    )
+                }),
+                live_call: InboxEntryKind::parse(&entry.kind) == Some(InboxEntryKind::Transcript),
+            }),
+        )
     }
 
     pub(crate) async fn find(
@@ -81,6 +128,7 @@ impl InteractiveTurn {
         Ok(turn.map(|turn| Self {
             turn,
             host_id: format!("{INTERACTIVE_HOST_PREFIX}{}", reference.client_run_id),
+            trail: None,
         }))
     }
 
@@ -113,6 +161,8 @@ impl InteractiveTurn {
         });
         if let Some(code) = error_code {
             body["error"] = json!({ "code": code });
+        } else if let Some(trail) = &self.trail {
+            trail.attach(&mut body);
         }
         SendEntryRequest {
             message_id: reply_message_id(&self.turn.bot_id, &self.turn.trigger_message_id),

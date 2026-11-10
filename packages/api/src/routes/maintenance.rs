@@ -361,6 +361,18 @@ async fn run_sweep(state: &AppState) -> Result<RunSweepMaintenanceResult, ApiErr
     {
         tracing::warn!(error = %error, "Device certificate reminder pass incomplete");
     }
+    match traced!(
+        "maintenance.device_schedule_notices",
+        crate::instances::schedule_notices::notify_unconfirmed(state)
+    )
+    .await
+    {
+        Ok(0) => {}
+        Ok(told) => tracing::info!(told, "People told about devices that stopped confirming"),
+        Err(error) => {
+            tracing::warn!(error = %error, "Silent device notice pass incomplete")
+        }
+    }
     traced!(
         "maintenance.execution_usage_rollup",
         crate::execution_usage_rollup::run_pass(state)

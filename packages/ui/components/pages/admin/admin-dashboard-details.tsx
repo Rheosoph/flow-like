@@ -1,6 +1,6 @@
 "use client";
 
-import { i18n as i18next, useTranslation } from "@flow-like/locales";
+import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	AlertTriangle,
@@ -69,6 +69,16 @@ import {
 } from "../../ui/select";
 import { Skeleton } from "../../ui/skeleton";
 import { UserProfileLink } from "../../ui/user-profile-link";
+import { BotActivitySection } from "./admin-bot-activity";
+import {
+	QueryErrorState,
+	chartTick,
+	formatCompactCount,
+	formatCost,
+	formatCount,
+	formatDuration,
+	formatPercent,
+} from "./admin-usage-shared";
 import { EnterpriseUsageBudgets } from "./enterprise-usage-budgets";
 
 const PERIODS: IUsageLimitPeriod[] = ["weekly", "monthly", "yearly"];
@@ -151,14 +161,6 @@ function emptyLimits(): IAppUsageLimits {
 	};
 }
 
-function formatCost(microDollars: number) {
-	return new Intl.NumberFormat(undefined, {
-		style: "currency",
-		currency: "USD",
-		maximumFractionDigits: 4,
-	}).format(microDollars / 1_000_000);
-}
-
 function formatDollars(value: number | null) {
 	if (value === null) return "n/a";
 	return new Intl.NumberFormat(undefined, {
@@ -166,34 +168,6 @@ function formatDollars(value: number | null) {
 		currency: "USD",
 		maximumFractionDigits: 4,
 	}).format(value);
-}
-
-function formatCount(value: number) {
-	return new Intl.NumberFormat().format(value);
-}
-
-function formatCompactCount(value: number) {
-	return new Intl.NumberFormat(undefined, {
-		notation: "compact",
-		maximumFractionDigits: 1,
-	}).format(value);
-}
-
-function formatDuration(ms: number | null) {
-	if (ms === null) return "n/a";
-	if (ms < 1000)
-		return i18next.t("valMs", "{{val}} ms", { val: Math.round(ms) });
-	return `${(ms / 1000).toFixed(1)} s`;
-}
-
-function formatPercent(value: number) {
-	if (!Number.isFinite(value)) return "0%";
-	return `${Math.round(value)}%`;
-}
-
-function chartTick(value: string | number) {
-	const numeric = Number(value);
-	return Number.isFinite(numeric) ? formatCompactCount(numeric) : String(value);
 }
 
 function currencyTick(value: string | number) {
@@ -244,28 +218,6 @@ function toTokenLimit(value: string) {
 	if (!Number.isFinite(parsed) || parsed < 0)
 		throw new Error("Limits must be non-negative numbers");
 	return Math.floor(parsed);
-}
-
-function QueryErrorState({
-	message,
-	onRetry,
-	retrying,
-}: { message: string; onRetry: () => void; retrying: boolean }) {
-	const { t } = useTranslation("admin");
-	return (
-		<div
-			role="alert"
-			className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/25 bg-destructive/5 p-4 text-sm"
-		>
-			<p className="text-destructive">{message}</p>
-			<Button variant="outline" size="sm" onClick={onRetry} disabled={retrying}>
-				<RefreshCw
-					className={`mr-2 size-3.5 ${retrying ? "animate-spin" : ""}`}
-				/>
-				{t("retry", "Retry")}
-			</Button>
-		</div>
-	);
 }
 
 function EmptyChart({ label }: { label: string }) {
@@ -1981,6 +1933,8 @@ export function UsageOverviewSection({
 				/>
 				<TopModelsChart overview={overview.data} loading={overview.isLoading} />
 			</div>
+
+			<BotActivitySection profile={profile} period={period} />
 
 			<div className="grid gap-4 xl:grid-cols-3">
 				<LimitUtilization

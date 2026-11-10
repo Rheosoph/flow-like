@@ -15,7 +15,7 @@ use super::{
     view::conversations_for,
     watched_inboxes,
 };
-use crate::entity::{bot, conversation, conversation_member, inbox_entry};
+use crate::entity::{bot, conversation, conversation_member, inbox_entry, json_types::StringList};
 use axum::http::StatusCode;
 use flow_like_types::{
     bot::BotLocation,
@@ -587,13 +587,13 @@ async fn the_owners_direct_chat_with_a_bot_follows_its_encryption() {
         .unwrap();
     assert!(!sync_own_bot_direct(&db, &bot).await.unwrap());
 
-    bot.capabilities = json!(["encryption"]);
+    bot.capabilities = StringList(vec!["encryption".into()]);
     assert!(sync_own_bot_direct(&db, &bot).await.unwrap());
     assert_eq!(encryption(chat.clone()).await, "E2E");
     assert_eq!(encryption(other.clone()).await, "PLAIN", "only this bot's chat");
     assert!(!sync_own_bot_direct(&db, &bot).await.unwrap());
 
-    bot.capabilities = json!([]);
+    bot.capabilities = StringList(Vec::new());
     assert!(sync_own_bot_direct(&db, &bot).await.unwrap());
     assert_eq!(encryption(chat).await, "PLAIN");
 }

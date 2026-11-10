@@ -50,6 +50,7 @@ import { registerChatActivitySurface } from "../../state/chat-activity-store";
 import { useExecutionEngine } from "../../state/execution-engine-context";
 import { getFrontendStateStore } from "../a2ui/frontend-state";
 import { buildWorkflowFrontendContext } from "../a2ui/workflow-payload";
+import { useStorageAttachSource } from "../storage/use-storage-attach-source";
 import type { ChatThinkingLevel } from "../thinking/thinking-options";
 import {
 	AlertDialog,
@@ -753,6 +754,11 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	const thinkingRef = useRef(thinking);
 	thinkingRef.current = thinking;
 	const model = useChatModel(appId, config, event.execution_mode);
+	const storageAttach = useStorageAttachSource(appId);
+	const attachSources = useMemo(
+		() => (storageAttach.source ? [storageAttach.source] : []),
+		[storageAttach.source],
+	);
 	const modelRef = useRef(model);
 	modelRef.current = model;
 	const activeInteractions = useSessionInteractions(sessionIdParameter);
@@ -2167,6 +2173,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 
 	return (
 		<>
+			{storageAttach.dialog}
 			<ChatSurface
 				chatRef={chatRef}
 				loading={!messagesLoaded}
@@ -2191,6 +2198,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				showAiDisclosure
 				thinking={thinking.picker}
 				model={model.picker}
+				attachSources={attachSources}
 			/>
 			<AlertDialog
 				open={showPrefilledConfirm}

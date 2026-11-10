@@ -16,8 +16,9 @@ use crate::execution::{ChannelJwtParams, sign_channel_responder};
 
 use super::{ChannelBackend, api_base_url, push_url, redact_provider_error};
 
-/// Per account, intermediate run wakeups go out at most once per window.
-const REALTIME_WINDOW: Duration = Duration::from_millis(500);
+/// Per account, intermediate run wakeups go out at most once per window; one arriving inside it
+/// is published when the window ends.
+const REALTIME_WINDOW: Duration = Duration::from_millis(250);
 /// How long a request waits for its wakeup; a slower publication finishes detached.
 const REALTIME_PUBLISH_WAIT: Duration = Duration::from_millis(250);
 const REALTIME_PUBLISH_TIMEOUT: Duration = Duration::from_secs(2);
@@ -27,6 +28,7 @@ const FAILURE_LOG_WINDOW: Duration = Duration::from_secs(1);
 #[derive(Default)]
 struct RealtimeAccount {
     published_at: Option<Instant>,
+    trailing_until: Option<Instant>,
 }
 
 type RealtimeAccountState = Arc<parking_lot::Mutex<RealtimeAccount>>;
@@ -269,7 +271,8 @@ impl ChannelIssuer {
         let account = self
             .realtime_accounts
             .get_with(scope.clone(), Default::default);
-        if !admit(&account, throttle, Instant::now()) {
+        let admission = admit(&account, throttle, Instant::now());
+        if admission == Admission::Covered {
             return;
         }
         let wakeup = RealtimeWakeup {
@@ -280,13 +283,32 @@ impl ChannelIssuer {
         let Ok(payload) = serde_json::to_vec(&wakeup) else {
             return;
         };
-        send_wakeup(
-            self.realtime_publication(scope, payload),
-            self.realtime_failures.clone(),
-            self.transport(),
-            publish_wait(throttle, self.on_lambda),
-        )
-        .await;
+        let publication = self.realtime_publication(scope, payload);
+        let failures = self.realtime_failures.clone();
+        let transport = self.transport();
+        let Admission::After(delay) = admission else {
+            send_wakeup(
+                publication,
+                failures,
+                transport,
+                publish_wait(throttle, self.on_lambda),
+            )
+            .await;
+            return;
+        };
+        let window_end = async move {
+            flow_like_types::tokio::time::sleep(delay).await;
+            claim_trailing(&account, Instant::now());
+        };
+        if self.on_lambda {
+            window_end.await;
+            send_wakeup(publication, failures, transport, publish_wait(false, true)).await;
+        } else {
+            spawn(async move {
+                window_end.await;
+                send_wakeup(publication, failures, transport, publish_wait(true, false)).await;
+            });
+        }
     }
 
     /// The provider call owns its inputs so it can outlive the request that started it.
@@ -547,10 +569,41 @@ fn realtime_scope(sub: &str) -> String {
     hash.finalize().to_hex().to_string()
 }
 
-/// Intermediate run batches share the account window and are dropped inside it; terminal and
-/// notification wakeups always go out.
-fn admit(account: &RealtimeAccountState, throttle: bool, now: Instant) -> bool {
-    !throttle || claim_window(&mut account.lock().published_at, now, REALTIME_WINDOW)
+#[derive(Debug, PartialEq, Eq)]
+enum Admission {
+    Now,
+    After(Duration),
+    Covered,
+}
+
+/// Intermediate run batches publish at once when the account window is open, otherwise once when
+/// it ends; a wakeup arriving while that trailing publish is pending is covered by it. Terminal
+/// and notification wakeups always go out at once.
+fn admit(account: &RealtimeAccountState, throttle: bool, now: Instant) -> Admission {
+    if !throttle {
+        return Admission::Now;
+    }
+    let mut account = account.lock();
+    if account.trailing_until.is_some_and(|until| now < until) {
+        return Admission::Covered;
+    }
+    let Some(published_at) = account.published_at else {
+        account.published_at = Some(now);
+        return Admission::Now;
+    };
+    let window_end = published_at + REALTIME_WINDOW;
+    if now >= window_end {
+        account.published_at = Some(now);
+        return Admission::Now;
+    }
+    account.trailing_until = Some(window_end);
+    Admission::After(window_end - now)
+}
+
+fn claim_trailing(account: &RealtimeAccountState, now: Instant) {
+    let mut account = account.lock();
+    account.published_at = Some(now);
+    account.trailing_until = None;
 }
 
 fn claim_window(slot: &mut Option<Instant>, now: Instant, window: Duration) -> bool {
@@ -637,13 +690,36 @@ mod tests {
     fn intermediate_wakeups_share_a_window_and_terminal_ones_never_wait() {
         let account = RealtimeAccountState::default();
         let start = Instant::now();
-        assert!(admit(&account, true, start));
-        assert!(!admit(&account, true, start + Duration::from_millis(100)));
-        assert!(admit(&account, false, start + Duration::from_millis(100)));
-        assert!(admit(&account, false, start + Duration::from_millis(101)));
-        assert!(!admit(&account, true, start + Duration::from_millis(499)));
-        assert!(admit(&account, true, start + REALTIME_WINDOW));
-        assert!(admit(&RealtimeAccountState::default(), true, start));
+        let ms = Duration::from_millis;
+        assert_eq!(admit(&account, true, start), Admission::Now);
+        assert_eq!(
+            admit(&account, true, start + ms(100)),
+            Admission::After(ms(150))
+        );
+        assert_eq!(admit(&account, false, start + ms(100)), Admission::Now);
+        assert_eq!(admit(&account, true, start + ms(200)), Admission::Covered);
+        claim_trailing(&account, start + REALTIME_WINDOW);
+        assert_eq!(
+            admit(&account, true, start + REALTIME_WINDOW + ms(10)),
+            Admission::After(ms(240))
+        );
+        assert_eq!(
+            admit(&RealtimeAccountState::default(), true, start),
+            Admission::Now
+        );
+    }
+
+    #[test]
+    fn a_wakeup_after_the_window_publishes_at_once_and_opens_a_new_one() {
+        let account = RealtimeAccountState::default();
+        let start = Instant::now();
+        assert_eq!(admit(&account, true, start), Admission::Now);
+        let later = start + REALTIME_WINDOW;
+        assert_eq!(admit(&account, true, later), Admission::Now);
+        assert_eq!(
+            admit(&account, true, later + Duration::from_millis(1)),
+            Admission::After(REALTIME_WINDOW - Duration::from_millis(1))
+        );
     }
 
     #[tokio::test]

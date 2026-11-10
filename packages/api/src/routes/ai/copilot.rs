@@ -953,17 +953,17 @@ pub(crate) async fn run_copilot(
         worker_usage.worker = true;
         return crate::routes::chat::hosted_worker::dispatch(
             state,
-            crate::routes::chat::hosted_worker::HostedAiJob {
-                operation_id: usage.operation_id.clone(),
-                deadline: usage.deadline,
-                request: crate::routes::chat::hosted_worker::HostedWork::Copilot {
+            crate::routes::chat::hosted_worker::HostedAiJob::new(
+                usage.operation_id.clone(),
+                crate::routes::chat::hosted_worker::HostedWork::Copilot {
                     payload: raw_payload,
                     sub,
                     token,
                     usage: worker_usage,
                     board_format: flow_like::flow::board::format::supported_version(),
                 },
-            },
+                usage.deadline,
+            ),
         )
         .await;
     }

@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use flow_like_model_provider::history::HistoryThinking;
+use flow_like_types::bot_message::WorkspaceHandle;
 use serde::Deserialize;
 
 use super::memory::AssistantMemory;
@@ -77,6 +78,10 @@ pub struct AttachmentManifestEntry {
     pub size: Option<u64>,
     #[serde(default)]
     pub url: Option<String>,
+    /// The handle a bot's file tools read this attachment with. The host answering the message
+    /// sets it for a file it serves; a client cannot send one.
+    #[serde(skip)]
+    pub handle: Option<WorkspaceHandle>,
 }
 
 /// Inputs for [`build_platform_context`]. Each host gathers these from its own environment (Tauri
@@ -502,6 +507,7 @@ pub fn attachments_section(entries: &[AttachmentManifestEntry]) -> String {
         "## FILES ATTACHED THIS TURN".to_string(),
         "These files belong to this message. You may inspect images directly. To hand files to an app chat, set `forward_files` to the exact relevant names, or `[]` for none; never forward unrelated files.".to_string(),
         "To load a GeoJSON file (FeatureCollection, Feature or Feature array) into an app's tables, call `data_studio_agent` with `forward_files` naming it and ask for `import_geojson`; no other attachment format can be imported.".to_string(),
+        "To read a document or scan yourself, pass its exact name to `file_extract_content` (full text), `file_summarize` (a summary towards a goal) or `file_extract` (data matching a schema).".to_string(),
     ];
     lines.extend(attachment_lines(entries));
     lines.join("\n")
@@ -1241,7 +1247,7 @@ mod tests {
             name: Some("sites.geojson".to_string()),
             mime_type: Some("application/geo+json".to_string()),
             size: Some(2048),
-            url: None,
+            ..Default::default()
         }]);
         assert!(section.contains("- sites.geojson (application/geo+json, 2.0 KB)"));
         assert!(section.contains("call `data_studio_agent` with `forward_files`"));

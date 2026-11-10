@@ -337,15 +337,13 @@ pub(crate) async fn build_flow_state(
     credentials: &flow_like::credentials::SharedCredentials,
     hub: Option<HubAccess>,
 ) -> Result<FlowLikeState, ExecutorError> {
-    let content_store = credentials
-        .to_store_type(StoreType::Content)
-        .await
-        .map_err(|e| ExecutorError::Storage(e.to_string()))?;
-
-    let log_store = credentials
-        .to_store_type(StoreType::Logs)
-        .await
-        .map_err(|e| ExecutorError::Storage(e.to_string()))?;
+    let (content_store, log_store, tmp_store) = tokio::join!(
+        credentials.to_store_type(StoreType::Content),
+        credentials.to_store_type(StoreType::Logs),
+        credentials.to_store_type(StoreType::Tmp),
+    );
+    let content_store = content_store.map_err(|e| ExecutorError::Storage(e.to_string()))?;
+    let log_store = log_store.map_err(|e| ExecutorError::Storage(e.to_string()))?;
 
     let mut flow_config = FlowLikeConfig::with_default_store(content_store);
     flow_config.stores.app_meta_store = None;
@@ -353,7 +351,7 @@ pub(crate) async fn build_flow_state(
 
     // Request-file offloads and `/tmp` uploads live under tmp/*, which the
     // app-scoped content credential does not necessarily cover.
-    match credentials.to_store_type(StoreType::Tmp).await {
+    match tmp_store {
         Ok(tmp_store) => flow_config.register_temporary_store(tmp_store),
         Err(e) => {
             tracing::error!(error = %e, "Failed to create scratch store - tmp/* paths will be unavailable");
@@ -585,12 +583,16 @@ enum StartAcknowledgement {
 /// its `NoUserAgent_HEADER` rule rejects UA-less requests before they reach
 /// the API.
 fn callback_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .user_agent(concat!("flow-like-executor/", env!("CARGO_PKG_VERSION")))
-        .build()
-        // Only TLS/resolver initialization can fail here, which is exactly
-        // where `reqwest::Client::new()` panics too.
-        .expect("failed to build callback HTTP client")
+    static CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(|| {
+        reqwest::Client::builder()
+            .user_agent(concat!("flow-like-executor/", env!("CARGO_PKG_VERSION")))
+            .connect_timeout(Duration::from_secs(5))
+            .build()
+            // Only TLS/resolver initialization can fail here, which is exactly
+            // where `reqwest::Client::new()` panics too.
+            .expect("failed to build callback HTTP client")
+    });
+    CLIENT.clone()
 }
 
 /// Execute a flow with batched callback reporting
@@ -680,6 +682,32 @@ pub(crate) fn parse_event(event_json: Option<&str>) -> Result<Option<Event>, Exe
         .transpose()
 }
 
+async fn load_request_wasm(
+    request: &ExecutionRequest,
+) -> Result<
+    (
+        Vec<Arc<dyn flow_like::flow::node::NodeLogic>>,
+        BTreeSet<String>,
+    ),
+    ExecutorError,
+> {
+    let Some(wasm_packages) = request.wasm_packages.as_ref().filter(|p| !p.is_empty()) else {
+        return Ok((Vec::new(), BTreeSet::new()));
+    };
+    let report = crate::wasm_loader::load_wasm_packages(
+        &request.app_id,
+        &request.board_id,
+        request.board_version,
+        wasm_packages,
+    )
+    .await?;
+    tracing::info!(
+        count = report.nodes.len(),
+        "Loaded WASM nodes for execution"
+    );
+    Ok((report.nodes, report.failed_package_ids))
+}
+
 async fn execute_inner(
     request: ExecutionRequest,
     config: ExecutorConfig,
@@ -696,7 +724,13 @@ async fn execute_inner(
         return Err(error);
     }
 
-    let event = parse_event(request.event_json.as_deref())?;
+    let event = match parse_event(request.event_json.as_deref()) {
+        Ok(event) => event,
+        Err(error) => {
+            report_unstarted_failure(&claims, &request, &config, &error).await;
+            return Err(error);
+        }
+    };
     let teams_callbacks = event
         .as_ref()
         .is_some_and(|event| event.event_type == "teams");
@@ -769,17 +803,44 @@ async fn execute_inner(
     };
 
     check_execution_deadline(&config)?;
-    // Build FlowLike state from the request credentials
-    let state = build_flow_state(
-        &request.credentials,
-        Some(HubAccess::for_run(
-            &claims,
-            &request.executor_jwt,
-            request.profile.as_ref(),
-        )),
-    )
-    .await?;
+    // State construction and WASM downloads do not depend on each other.
+    let (state, wasm_report) = tokio::join!(
+        build_flow_state(
+            &request.credentials,
+            Some(HubAccess::for_run(
+                &claims,
+                &request.executor_jwt,
+                request.profile.as_ref(),
+            )),
+        ),
+        load_request_wasm(&request),
+    );
+    let state = match state {
+        Ok(state) => state,
+        Err(error) => {
+            report_unstarted_failure(&claims, &request, &config, &error).await;
+            return Err(error);
+        }
+    };
     let execution_environment = state.execution_environment;
+    let state = Arc::new(state);
+    let (wasm_nodes, failed_wasm_package_ids) = match wasm_report {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            report_executor_rejection(
+                &state,
+                &request,
+                &claims,
+                &config,
+                queue_lease.as_ref(),
+                RejectionStage::Setup,
+                &error,
+            )
+            .await;
+            return Err(error);
+        }
+    };
+    state.node_registry.write().await.node_registry = request_registry(wasm_nodes);
 
     // Set up event channel for API callback batching
     let (event_tx, event_rx) = mpsc::unbounded_channel::<ExecutionEvent>();
@@ -810,39 +871,6 @@ async fn execute_inner(
         }
         result
     }));
-
-    let mut wasm_nodes = Vec::new();
-    let mut failed_wasm_package_ids = BTreeSet::new();
-
-    // Load WASM packages from presigned URLs if any are specified
-    if let Some(ref wasm_packages) = request.wasm_packages {
-        if !wasm_packages.is_empty() {
-            match crate::wasm_loader::load_wasm_packages(
-                &request.app_id,
-                &request.board_id,
-                request.board_version,
-                wasm_packages,
-            )
-            .await
-            {
-                Ok(report) => {
-                    tracing::info!(
-                        count = report.nodes.len(),
-                        "Loaded WASM nodes for execution"
-                    );
-                    failed_wasm_package_ids = report.failed_package_ids;
-                    wasm_nodes = report.nodes;
-                }
-                Err(e) => {
-                    return Err(e);
-                }
-            }
-        }
-    }
-
-    state.node_registry.write().await.node_registry = request_registry(wasm_nodes);
-
-    let state = Arc::new(state);
 
     check_execution_deadline(&config)?;
     let board_id = &request.board_id;
@@ -1100,7 +1128,23 @@ async fn execute_inner(
     // Execute with timeout while continuously renewing the independent Cosmos
     // ownership lease. Losing that lease cancels the run before another
     // delivery is allowed to take over.
-    let mut quota_lease = crate::quota::begin(&claims, &executor_jwt).await?;
+    let mut quota_lease = match crate::quota::begin(&claims, &executor_jwt).await {
+        Ok(lease) => lease,
+        Err(error) => {
+            channel.close().await;
+            report_executor_rejection(
+                &state,
+                &request,
+                &claims,
+                &config,
+                queue_lease.as_ref(),
+                RejectionStage::Setup,
+                &error,
+            )
+            .await;
+            return Err(error);
+        }
+    };
     if let (Some(lease), Some(token)) = (&mut quota_lease, &cancellation) {
         lease.watch_cancellation(token.clone());
     }
@@ -1115,20 +1159,22 @@ async fn execute_inner(
                 .execution_deadline()
                 .unwrap_or_else(|| tokio::time::Instant::now() + runtime_timeout)
                 .min(tokio::time::Instant::now() + runtime_timeout);
-            let mut execution = Box::pin(run.execute(state.clone()));
+            let mut execution = Box::pin(run.execute_deferred(state.clone()));
             tokio::select! {
-                result = &mut execution => Ok(result),
+                (meta, pending) = &mut execution => (Ok(meta), Some(pending)),
                 _ = tokio::time::sleep_until(deadline) => {
                     token.cancel();
                     // Let the run join its flush task and close resources before
                     // the runtime decides whether its cleanup grace is exhausted.
-                    Err(execution.await)
+                    let (meta, pending) = execution.await;
+                    (Err(meta), Some(pending))
                 }
             }
         } else {
-            tokio::time::timeout(runtime_timeout, run.execute(state.clone()))
-                .await
-                .map_err(|_| None)
+            match tokio::time::timeout(runtime_timeout, run.execute_deferred(state.clone())).await {
+                Ok((meta, pending)) => (Ok(meta), Some(pending)),
+                Err(_) => (Err(None), None),
+            }
         }
     });
     let mut lease_failure = None;
@@ -1180,13 +1226,17 @@ async fn execute_inner(
         }
     }
     if let Some(error) = lease_failure {
-        if cancellation.is_some() {
-            let _ = execution_future.as_mut().await;
-        }
+        let pending_logs = if cancellation.is_some() {
+            execution_future.as_mut().await.1
+        } else {
+            None
+        };
         drop(execution_future);
-        if let Some(lease) = &quota_lease {
-            lease.finish(lease.elapsed_ms(), "lease_lost").await?;
-        }
+        let lease_elapsed_ms = quota_lease.as_ref().map_or(0, |lease| lease.elapsed_ms());
+        tokio::join!(
+            persist_run_logs(pending_logs),
+            settle_quota_lease(quota_lease.as_ref(), lease_elapsed_ms, "lease_lost"),
+        );
         channel.close().await;
         callback_task.abort_and_join().await;
         drop(run);
@@ -1197,25 +1247,23 @@ async fn execute_inner(
         }
         return Err(error);
     }
-    let execution_result = execution_result.expect("execution result exists without lease failure");
+    let (execution_result, pending_logs) =
+        execution_result.expect("execution result exists without lease failure");
     drop(execution_future);
     let workflow_duration_ms = workflow_started
         .elapsed()
         .as_nanos()
         .div_ceil(1_000_000)
         .min(u64::MAX as u128) as u64;
-    if let Some(lease) = &quota_lease {
-        let status = if execution_result.is_err() {
-            "timeout".to_owned()
-        } else {
-            format!(
-                "{:?}",
-                ExecutionStatus::from_final_run_status(&run.get_status().await)
-            )
-            .to_lowercase()
-        };
-        lease.finish(workflow_duration_ms, &status).await?;
-    }
+    let quota_status = if execution_result.is_err() {
+        "timeout".to_owned()
+    } else {
+        format!(
+            "{:?}",
+            ExecutionStatus::from_final_run_status(&run.get_status().await)
+        )
+        .to_lowercase()
+    };
     channel.close().await;
 
     // Flush any remaining buffered intercom events
@@ -1293,96 +1341,112 @@ async fn execute_inner(
     drop(intercom_handler);
     drop(event_tx);
 
-    let callback_result = callback_task
-        .handle
-        .as_mut()
-        .expect("callback task exists")
-        .await;
-    callback_task.handle = None;
-    match callback_result {
-        Ok(Err(error)) if teams_callbacks && queue_lease.is_none() => {
-            report_teams_callback_failure(&claims, &executor_jwt, &config, &error).await;
-            return Err(error);
-        }
-        Ok(result) if queue_lease.is_some() => result?,
-        Ok(_) => {}
-        Err(error) if queue_lease.is_some() || teams_callbacks => {
-            let error = ExecutorError::Callback(format!("callback task failed: {error}"));
-            if queue_lease.is_none() {
+    let delivery = async {
+        let callback_result = callback_task
+            .handle
+            .as_mut()
+            .expect("callback task exists")
+            .await;
+        callback_task.handle = None;
+        match callback_result {
+            Ok(Err(error)) if teams_callbacks && queue_lease.is_none() => {
                 report_teams_callback_failure(&claims, &executor_jwt, &config, &error).await;
+                return Err(error);
             }
-            return Err(error);
+            Ok(result) if queue_lease.is_some() => result?,
+            Ok(_) => {}
+            Err(error) if queue_lease.is_some() || teams_callbacks => {
+                let error = ExecutorError::Callback(format!("callback task failed: {error}"));
+                if queue_lease.is_none() {
+                    report_teams_callback_failure(&claims, &executor_jwt, &config, &error).await;
+                }
+                return Err(error);
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "Callback task stopped unexpectedly");
+            }
         }
-        Err(error) => {
-            tracing::warn!(error = %error, "Callback task stopped unexpectedly");
-        }
-    }
-
-    // The last event upload may consume most of the previous lease window.
-    // Renew once immediately before the terminal conditional write so a slow
-    // callback cannot turn a successful workflow into an expired-owner race.
-    if let Some(lease) = queue_lease.as_ref() {
-        let renewal = send_progress(
-            &format!(
-                "{}/api/v1/execution/progress",
-                claims.callback_url.trim_end_matches('/')
-            ),
-            &executor_jwt,
-            &lease_progress_update(lease, config.strict_lease_duration_ms()),
-            &config,
-            &callback_client(),
-        )
-        .await?;
-        if !matches!(
-            interpret_start_acknowledgement(&renewal)?,
-            StartAcknowledgement::Execute
-        ) {
-            return Err(ExecutorError::Callback(
-                "execution lease was not renewed before terminal acknowledgement".to_string(),
-            ));
-        }
-    }
-
-    // Send final progress update
-    let progress_update = ProgressUpdateRequest {
-        progress: Some(100),
-        current_step: None,
-        status: Some(format!("{:?}", status).to_lowercase()),
-        output_len: None,
-        error: error.clone(),
-        job_id: queue_lease.as_ref().map(|lease| lease.job_id.clone()),
-        lease_token: queue_lease.as_ref().map(|lease| lease.token.clone()),
-        lease_duration_ms: None,
-        summary,
+        Ok::<(), ExecutorError>(())
     };
+    // A consumer reads the run's logs once it sees the terminal status and has no
+    // later signal to wait for, so they are written while the last events go out
+    // and before that status is reported.
+    let (delivered, ()) = tokio::join!(delivery, persist_run_logs(pending_logs));
 
-    let progress_url = format!(
-        "{}/api/v1/execution/progress",
-        claims.callback_url.trim_end_matches('/')
-    );
-    let http_client = callback_client();
-    let progress_result = send_progress(
-        &progress_url,
-        &executor_jwt,
-        &progress_update,
-        &config,
-        &http_client,
-    )
+    let terminal = async {
+        delivered?;
+
+        // The last event upload may consume most of the previous lease window.
+        // Renew once immediately before the terminal conditional write so a slow
+        // callback cannot turn a successful workflow into an expired-owner race.
+        if let Some(lease) = queue_lease.as_ref() {
+            let renewal = send_progress(
+                &format!(
+                    "{}/api/v1/execution/progress",
+                    claims.callback_url.trim_end_matches('/')
+                ),
+                &executor_jwt,
+                &lease_progress_update(lease, config.strict_lease_duration_ms()),
+                &config,
+                &callback_client(),
+            )
+            .await?;
+            if !matches!(
+                interpret_start_acknowledgement(&renewal)?,
+                StartAcknowledgement::Execute
+            ) {
+                return Err(ExecutorError::Callback(
+                    "execution lease was not renewed before terminal acknowledgement".to_string(),
+                ));
+            }
+        }
+
+        // Send final progress update
+        let progress_update = ProgressUpdateRequest {
+            progress: Some(100),
+            current_step: None,
+            status: Some(format!("{:?}", status).to_lowercase()),
+            output_len: None,
+            error: error.clone(),
+            job_id: queue_lease.as_ref().map(|lease| lease.job_id.clone()),
+            lease_token: queue_lease.as_ref().map(|lease| lease.token.clone()),
+            lease_duration_ms: None,
+            summary,
+        };
+
+        let progress_url = format!(
+            "{}/api/v1/execution/progress",
+            claims.callback_url.trim_end_matches('/')
+        );
+        let http_client = callback_client();
+        let progress_result = send_progress(
+            &progress_url,
+            &executor_jwt,
+            &progress_update,
+            &config,
+            &http_client,
+        )
+        .await;
+
+        if config.terminal_status_ack_required() {
+            let acknowledgement = progress_result?;
+            ensure_terminal_acknowledgement(&acknowledgement, &status)?;
+            if !acknowledgement.accepted {
+                tracing::info!(
+                    run_id = %claims.run_id,
+                    acknowledged_status = %acknowledgement.status,
+                    "terminal status was already persisted by an earlier delivery"
+                );
+            }
+        } else if let Err(error) = progress_result {
+            tracing::warn!(error = %error, "Failed to send final progress update");
+        }
+        Ok::<(), ExecutorError>(())
+    }
     .await;
 
-    if config.terminal_status_ack_required() {
-        let acknowledgement = progress_result?;
-        ensure_terminal_acknowledgement(&acknowledgement, &status)?;
-        if !acknowledgement.accepted {
-            tracing::info!(
-                run_id = %claims.run_id,
-                acknowledged_status = %acknowledgement.status,
-                "terminal status was already persisted by an earlier delivery"
-            );
-        }
-    } else if let Err(error) = progress_result {
-        tracing::warn!(error = %error, "Failed to send final progress update");
-    }
+    settle_quota_lease(quota_lease.as_ref(), workflow_duration_ms, &quota_status).await;
+    terminal?;
 
     Ok(ExecutionResult {
         run_id: claims.run_id,
@@ -1490,7 +1554,7 @@ fn event_callback_timeout(
 /// Validation, rendering, size and Teams refusals: repeating the batch cannot
 /// change them. Conflicts (a delivery still in flight), throttling and server
 /// errors are transient.
-fn is_teams_rejection(status: reqwest::StatusCode) -> bool {
+fn is_deterministic_refusal(status: reqwest::StatusCode) -> bool {
     status.is_client_error()
         && !matches!(
             status,
@@ -1559,6 +1623,43 @@ async fn report_teams_callback_failure(
     }
 }
 
+/// The run's outcome is already decided, so a failed log write is only logged.
+async fn persist_run_logs(pending_logs: Option<flow_like::flow::execution::PendingRunLogs>) {
+    let Some(pending) = pending_logs else {
+        return;
+    };
+    if let Err(error) = pending.persist().await {
+        tracing::error!(error = %error, "Failed to persist the final run logs");
+    }
+}
+
+/// The run's outcome is already decided, so a failed settlement is only logged.
+async fn settle_quota_lease(
+    quota_lease: Option<&crate::quota::RuntimeLease>,
+    duration_ms: u64,
+    status: &str,
+) {
+    let Some(lease) = quota_lease else {
+        return;
+    };
+    if let Err(error) = lease.finish(duration_ms, status).await {
+        tracing::error!(error = %error, status, "Failed to settle the runtime quota");
+    }
+}
+
+/// Marks a run that failed before any state existed to record it as failed;
+/// strict queue deliveries report through the broker instead.
+async fn report_unstarted_failure(
+    claims: &ExecutorClaims,
+    request: &ExecutionRequest,
+    config: &ExecutorConfig,
+    error: &ExecutorError,
+) {
+    if !config.terminal_status_ack_required() {
+        report_teams_callback_failure(claims, &request.executor_jwt, config, error).await;
+    }
+}
+
 struct EventsCallbackFailure {
     error: ExecutorError,
     /// The API refused the batch for a reason a repeat cannot change.
@@ -1582,44 +1683,69 @@ struct EventsCallback<'a> {
     queue_lease: Option<&'a QueueLeaseContext>,
     teams_callbacks: bool,
     channel: &'a RunChannel,
+    chunk_size: usize,
 }
 
+/// Events kept for retry while the callback is down; beyond this the oldest go.
+const MAX_RETAINED_EVENTS: usize = 10_000;
+
 impl EventsCallback<'_> {
+    /// Sends the queue oldest-first in chunks. In non-strict mode a failed chunk
+    /// and everything after it stays queued for the next flush, so assigned
+    /// sequence numbers never become a permanent gap.
     async fn flush(
         &self,
         batch: &mut Vec<ExecutionEvent>,
         failure_log: &str,
     ) -> Result<(), ExecutorError> {
-        if batch.is_empty() {
-            return Ok(());
+        while !batch.is_empty() {
+            let end = batch.len().min(self.chunk_size);
+            let sent = send_events_to_api(
+                &self.url,
+                self.jwt,
+                &batch[..end],
+                self.config,
+                &self.client,
+                self.queue_lease,
+                self.teams_callbacks,
+            )
+            .await;
+            match sent {
+                Ok(()) => {
+                    batch.drain(..end);
+                }
+                Err(failure) => {
+                    let handled = self.recover(failure, &batch[..end], failure_log).await;
+                    match handled {
+                        Ok(true) => {
+                            batch.drain(..end);
+                        }
+                        Ok(false) => {
+                            trim_retained(batch);
+                            return Ok(());
+                        }
+                        Err(error) => {
+                            batch.clear();
+                            return Err(error);
+                        }
+                    }
+                }
+            }
         }
-        let outcome = match send_events_to_api(
-            &self.url,
-            self.jwt,
-            batch,
-            self.config,
-            &self.client,
-            self.queue_lease,
-            self.teams_callbacks,
-        )
-        .await
-        {
-            Ok(()) => Ok(()),
-            Err(failure) => self.recover(failure, batch, failure_log).await,
-        };
-        batch.clear();
-        outcome
+        Ok(())
     }
 
     /// A refused Teams interaction ends without a response instead of failing
-    /// the run; any other failure is fatal in strict modes and logged otherwise.
+    /// the run; any other failure is fatal in strict modes. Otherwise a refused
+    /// batch is dropped (`Ok(true)`), since repeating it would block every later
+    /// event behind it, and a transient failure leaves the events queued (`Ok(false)`).
     async fn recover(
         &self,
         failure: EventsCallbackFailure,
         batch: &[ExecutionEvent],
         failure_log: &str,
-    ) -> Result<(), ExecutorError> {
-        if failure.rejected {
+    ) -> Result<bool, ExecutorError> {
+        if failure.rejected && self.teams_callbacks {
             if let Some(channel) = self.channel.get() {
                 let tickets = interaction_tickets(channel.as_ref(), batch);
                 if !tickets.is_empty() {
@@ -1631,15 +1757,55 @@ impl EventsCallback<'_> {
                         interactions = tickets.len(),
                         "Teams interaction delivery was refused; the interaction ends without a response"
                     );
-                    return Ok(());
+                    return Ok(true);
                 }
             }
         }
         if self.queue_lease.is_some() || self.teams_callbacks {
             return Err(failure.error);
         }
-        tracing::warn!(error = %failure.error, "{}", failure_log);
-        Ok(())
+        if failure.rejected {
+            tracing::error!(error = %failure.error, dropped = batch.len(), "{}", failure_log);
+            return Ok(true);
+        }
+        tracing::warn!(error = %failure.error, queued = batch.len(), "{}", failure_log);
+        Ok(false)
+    }
+}
+
+fn trim_retained(batch: &mut Vec<ExecutionEvent>) {
+    if batch.len() > MAX_RETAINED_EVENTS {
+        let dropped = batch.len() - MAX_RETAINED_EVENTS;
+        batch.drain(..dropped);
+        tracing::error!(
+            dropped,
+            "Events callback backlog full; dropped the oldest events"
+        );
+    }
+}
+
+/// Spaces flushes at least `interval` apart while sending the first event after
+/// an idle period immediately.
+struct FlushPacer {
+    interval: Duration,
+    last_flush: Option<tokio::time::Instant>,
+}
+
+impl FlushPacer {
+    fn new(interval: Duration) -> Self {
+        Self {
+            interval,
+            last_flush: None,
+        }
+    }
+
+    fn next_flush_at(&self) -> tokio::time::Instant {
+        self.last_flush
+            .map_or_else(tokio::time::Instant::now, |at| at + self.interval)
+    }
+
+    fn record_flush(&mut self) {
+        self.last_flush = Some(tokio::time::Instant::now());
     }
 }
 
@@ -1663,6 +1829,7 @@ async fn run_callback_batcher(
         queue_lease: queue_lease.as_ref(),
         teams_callbacks,
         channel: &run_channel,
+        chunk_size: config.max_batch_size.clamp(1, 1_000),
     };
     let mut batch = Vec::new();
     // Multiple producers can reserve an AtomicI32 value and reach the channel
@@ -1671,13 +1838,17 @@ async fn run_callback_batcher(
     // and avoiding the API's legacy read/max/write allocation path.
     let mut callback_next_sequence = 0_i32;
     let send_threshold = config.max_batch_size.clamp(1, 1_000);
-    let mut interval = tokio::time::interval(config.batch_interval());
+    let mut pacer = FlushPacer::new(config.batch_interval());
+    // While a failed backlog waits, only the paced timer retries it, so the size
+    // threshold cannot turn every new event into another retry round.
+    let mut backlogged = false;
 
     loop {
+        let flush_at = pacer.next_flush_at();
         tokio::select! {
-            _ = interval.tick() => {
-                callback.flush(&mut batch, "Failed to send events batch").await?;
-            }
+            // Queued events join the batch before the timer may flush it, so a
+            // burst that arrives together is delivered together.
+            biased;
             event = event_rx.recv() => {
                 match event {
                     Some(mut e) => {
@@ -1691,15 +1862,28 @@ async fn run_callback_batcher(
                         batch.push(e);
                         // Send each Teams card or reply immediately and alone among
                         // outbound events, keeping the API's delivery work bounded.
-                        if batch.len() >= send_threshold || outbound {
+                        // A steady stream keeps this branch ready, so a due retry of a
+                        // backlog is taken here instead of waiting for the timer.
+                        let retry_due = tokio::time::Instant::now() >= flush_at;
+                        if (batch.len() >= send_threshold && (!backlogged || retry_due)) || outbound {
                             callback.flush(&mut batch, "Failed to send events batch").await?;
+                            backlogged = !batch.is_empty();
+                            pacer.record_flush();
                         }
                     }
                     None => {
                         callback.flush(&mut batch, "Failed to send final events batch").await?;
+                        if !batch.is_empty() {
+                            tracing::error!(unsent = batch.len(), "Events callback still failing at run end; events were not delivered");
+                        }
                         return Ok(());
                     }
                 }
+            }
+            _ = tokio::time::sleep_until(flush_at), if !batch.is_empty() => {
+                callback.flush(&mut batch, "Failed to send events batch").await?;
+                backlogged = !batch.is_empty();
+                pacer.record_flush();
             }
         }
     }
@@ -1716,6 +1900,21 @@ fn event_type_to_string(event_type: &EventType) -> String {
         EventType::NodeEnd => "node_end".to_string(),
         EventType::Custom(s) => s.clone(),
     }
+}
+
+const EVENTS_RETRY_BASE_MS: u64 = 200;
+
+/// Exponential backoff from 200 ms, plus up to 50% jitter (`jitter_permille` in 0..=500).
+fn events_retry_delay(attempt: u32, jitter_permille: u64) -> Duration {
+    let base = EVENTS_RETRY_BASE_MS << attempt.min(6);
+    Duration::from_millis(base + base * jitter_permille.min(500) / 1000)
+}
+
+fn jitter_permille() -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.subsec_nanos());
+    u64::from(nanos) % 501
 }
 
 async fn send_events_to_api(
@@ -1759,10 +1958,15 @@ async fn send_events_to_api(
                     "HTTP {status}: {}",
                     body.chars().take(512).collect::<String>()
                 );
-                if teams_callbacks && is_teams_rejection(status) {
+                if is_deterministic_refusal(status) {
+                    let subject = if teams_callbacks {
+                        "Teams delivery callback"
+                    } else {
+                        "Events callback"
+                    };
                     return Err(EventsCallbackFailure {
                         error: ExecutorError::Callback(format!(
-                            "Teams delivery callback was rejected: {failure}"
+                            "{subject} was rejected: {failure}"
                         )),
                         rejected: true,
                     });
@@ -1779,7 +1983,7 @@ async fn send_events_to_api(
             let delay = if teams_callbacks {
                 within_run_deadline(config, teams_retry_delay(attempt, delay_hint))?
             } else {
-                Duration::from_millis(100 * (attempt as u64 + 1))
+                events_retry_delay(attempt, jitter_permille())
             };
             tokio::time::sleep(delay).await;
         }
@@ -2236,15 +2440,47 @@ mod callback_event_identity_tests {
         server.abort();
     }
 
+    #[tokio::test]
+    async fn a_refused_batch_is_dropped_after_one_attempt_so_later_events_still_go_out() {
+        let (claims, received, server) = callback_server(axum::http::StatusCode::BAD_REQUEST).await;
+        let (tx, rx) = mpsc::unbounded_channel();
+        for _ in 0..3 {
+            tx.send(event("run", 0)).unwrap();
+        }
+        drop(tx);
+        let mut config = ExecutorConfig::default();
+        config.callback_retries = 2;
+        config.max_batch_size = 1;
+        run_callback_batcher(
+            rx,
+            claims,
+            "token".into(),
+            config,
+            None,
+            false,
+            RunChannel::default(),
+        )
+        .await
+        .unwrap();
+        let sequences: Vec<i64> = received
+            .lock()
+            .await
+            .iter()
+            .map(|batch| batch["events"][0]["sequence"].as_i64().unwrap())
+            .collect();
+        assert_eq!(sequences, [0, 1, 2]);
+        server.abort();
+    }
+
     #[test]
     fn teams_deterministic_refusals_are_not_retried() {
         for status in [400, 401, 403, 404, 413, 422] {
-            assert!(is_teams_rejection(
+            assert!(is_deterministic_refusal(
                 reqwest::StatusCode::from_u16(status).unwrap()
             ));
         }
         for status in [408, 409, 429, 500, 502, 503, 504] {
-            assert!(!is_teams_rejection(
+            assert!(!is_deterministic_refusal(
                 reqwest::StatusCode::from_u16(status).unwrap()
             ));
         }
@@ -2255,6 +2491,57 @@ mod callback_event_identity_tests {
             teams_retry_delay(0, Some(Duration::from_secs(3600))),
             TEAMS_RETRY_DELAY_CAP
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pacer_flushes_the_first_event_after_idle_without_waiting() {
+        let interval = Duration::from_millis(250);
+        let mut pacer = FlushPacer::new(interval);
+        let started = tokio::time::Instant::now();
+        tokio::time::sleep_until(pacer.next_flush_at()).await;
+        assert_eq!(started.elapsed(), Duration::ZERO);
+
+        pacer.record_flush();
+        tokio::time::advance(interval * 4).await;
+        let idle_again = tokio::time::Instant::now();
+        tokio::time::sleep_until(pacer.next_flush_at()).await;
+        assert_eq!(idle_again.elapsed(), Duration::ZERO);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pacer_coalesces_a_burst_into_flushes_one_interval_apart() {
+        let interval = Duration::from_millis(250);
+        let mut pacer = FlushPacer::new(interval);
+        let mut flushes = Vec::new();
+        for _ in 0..4 {
+            // Events keep arriving every 10 ms; each flush waits for its slot.
+            tokio::time::advance(Duration::from_millis(10)).await;
+            tokio::time::sleep_until(pacer.next_flush_at()).await;
+            pacer.record_flush();
+            flushes.push(tokio::time::Instant::now());
+        }
+        assert!(flushes
+            .windows(2)
+            .all(|pair| pair[1].duration_since(pair[0]) >= interval));
+    }
+
+    #[test]
+    fn events_retry_backoff_is_exponential_with_bounded_jitter() {
+        assert_eq!(events_retry_delay(0, 0), Duration::from_millis(200));
+        assert_eq!(events_retry_delay(1, 0), Duration::from_millis(400));
+        assert_eq!(events_retry_delay(2, 0), Duration::from_millis(800));
+        assert_eq!(events_retry_delay(0, 500), Duration::from_millis(300));
+        assert_eq!(events_retry_delay(2, 10_000), Duration::from_millis(1200));
+    }
+
+    #[test]
+    fn retained_backlog_drops_the_oldest_events_beyond_the_cap() {
+        let mut batch: Vec<ExecutionEvent> = (0..MAX_RETAINED_EVENTS as i32 + 5)
+            .map(|sequence| event("run", sequence))
+            .collect();
+        trim_retained(&mut batch);
+        assert_eq!(batch.len(), MAX_RETAINED_EVENTS);
+        assert_eq!(batch[0].sequence, 5);
     }
 
     async fn run_teams_batch(

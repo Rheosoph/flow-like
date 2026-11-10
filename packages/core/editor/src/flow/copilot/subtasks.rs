@@ -75,7 +75,7 @@ const CHILD_EXCLUDED_CAPABILITIES: [BotCapability; 8] = [
 
 /// Tools a sub-task is refused by name, whatever its capabilities: they ask a person, park the
 /// turn, reach other bots, people or channels, or delegate again.
-const CHILD_REFUSED_TOOLS: [&str; 18] = [
+const CHILD_REFUSED_TOOLS: [&str; 19] = [
     "user_context_available",
     "user_context_request",
     "user_context_set_status",
@@ -91,6 +91,7 @@ const CHILD_REFUSED_TOOLS: [&str; 18] = [
     "schedule_task",
     "list_tasks",
     "cancel_task",
+    "update_task",
     "email_send",
     "email_reply",
     "navigate_view",
@@ -1895,8 +1896,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_drops_the_surface_owner_and_its_waiting_workers() {
-        let runner =
-            FakeRunner::new(|_| Behavior::Surface(Box::new(Behavior::UntilCancelled)));
+        let runner = FakeRunner::new(|_| Behavior::Surface(Box::new(Behavior::UntilCancelled)));
         let rig = rig_with(
             interactive_bot(),
             runner.clone(),
@@ -1935,8 +1935,9 @@ mod tests {
 
     #[tokio::test]
     async fn queued_surface_workers_use_the_remaining_turn_budget() {
-        let runner =
-            FakeRunner::new(|_| Behavior::Surface(Box::new(Behavior::Sleep(Duration::from_secs(10)))));
+        let runner = FakeRunner::new(|_| {
+            Behavior::Surface(Box::new(Behavior::Sleep(Duration::from_secs(10))))
+        });
         let rig = rig_with(
             interactive_bot(),
             runner.clone(),
@@ -1974,7 +1975,10 @@ mod tests {
         assert_eq!(time_until(180_000, 0), Duration::from_secs(180));
         assert_eq!(time_until(10, 50), Duration::ZERO);
         let runner = FakeRunner::replying("x");
-        let env = rig_env(runner, Some(chrono::Utc::now().timestamp_millis() + 180_000));
+        let env = rig_env(
+            runner,
+            Some(chrono::Utc::now().timestamp_millis() + 180_000),
+        );
         assert!(env.turn_budget <= Duration::from_secs(180));
         assert!(env.turn_budget > Duration::from_secs(170));
         let past = rig_env(

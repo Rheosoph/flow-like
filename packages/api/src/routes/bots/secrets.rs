@@ -30,7 +30,6 @@ use utoipa::ToSchema;
 
 const MAX_SECRETS_PER_BOT: u64 = 50;
 const VALUE_MAX_BYTES: usize = 16 * 1024;
-const SEALED_MAX_BYTES: usize = 32 * 1024;
 const DESCRIPTION_MAX_CHARS: usize = 2_000;
 const BOT_SECRET_LIMIT_REACHED: &str = "BOT_SECRET_LIMIT_REACHED";
 const BOT_SECRET_SEALED: &str = "BOT_SECRET_SEALED";
@@ -83,8 +82,8 @@ pub struct BotSecretList {
 pub struct UpsertBotSecretRequest {
     /// The secret, at most 16 KiB. Encrypted before it is stored and never returned.
     pub value: Option<String>,
-    /// An envelope sealed to the bot's key: an object with a numeric `v` and an `enc` naming
-    /// the encryption, at most 32 KiB.
+    /// Not available yet: no client seals to a bot's key and no host opens such a secret, so a
+    /// request with `sealed` is refused with 400.
     #[schema(value_type = Option<Object>)]
     pub sealed: Option<Value>,
     /// Omitted keeps the current description, `null` clears it. At most 2,000 characters.
@@ -300,39 +299,8 @@ fn secret_description(value: Option<String>) -> Result<Option<String>, ApiError>
     Ok(Some(value).filter(|value| !value.is_empty()))
 }
 
-fn sealed_envelope(name: &str, envelope: &Value) -> Result<String, ApiError> {
-    let Value::Object(fields) = envelope else {
-        return Err(ApiError::bad_request(format!(
-            "Sealed secret '{name}' must be a JSON object with 'v' and 'enc'"
-        )));
-    };
-    if !fields.get("v").is_some_and(Value::is_number) {
-        return Err(ApiError::bad_request(format!(
-            "Sealed secret '{name}' needs a numeric envelope version 'v'"
-        )));
-    }
-    if !fields
-        .get("enc")
-        .and_then(Value::as_str)
-        .is_some_and(|enc| !enc.is_empty() && enc != "none")
-    {
-        return Err(ApiError::bad_request(format!(
-            "Sealed secret '{name}' needs 'enc' naming the encryption it was sealed with"
-        )));
-    }
-    let text = serde_json::to_string(envelope).map_err(|error| {
-        ApiError::bad_request(format!("Sealed secret '{name}' is not JSON: {error}"))
-    })?;
-    if text.len() > SEALED_MAX_BYTES {
-        return Err(ApiError::bad_request(format!(
-            "Sealed secret '{name}' is {} bytes; at most {SEALED_MAX_BYTES} are allowed",
-            text.len()
-        )));
-    }
-    Ok(text)
-}
-
-/// What to store for one request: the server ciphertext of `value`, or the sealed envelope.
+/// What to store for one request: the server ciphertext of `value`. A sealed envelope is refused
+/// until a client can seal to the bot's key and a host can open it.
 fn stored_form(
     master: &[u8; 32],
     bot_id: &str,
@@ -351,10 +319,9 @@ fn stored_form(
             let ciphertext = secret_cipher::encrypt(master, bot_id, name, &value)?;
             Ok((BotSecretEncryption::Server, ciphertext))
         }
-        (None, Some(envelope)) => Ok((
-            BotSecretEncryption::Sealed,
-            sealed_envelope(name, &envelope)?,
-        )),
+        (None, Some(_)) => Err(ApiError::bad_request(format!(
+            "Sealed secrets are not available yet: secret '{name}' cannot be stored sealed; send 'value' instead"
+        ))),
         _ => Err(ApiError::bad_request(format!(
             "Send exactly one of 'value' or 'sealed' for secret '{name}'"
         ))),
@@ -398,7 +365,7 @@ pub async fn list_bot_secrets(
     request_body = UpsertBotSecretRequest,
     responses(
         (status = 200, description = "The secret was stored or replaced; its metadata, without the value", body = BotSecretInfo),
-        (status = 400, description = "The name, value, sealed envelope or description is invalid, or both or neither of value and sealed were sent"),
+        (status = 400, description = "The name, value or description is invalid, neither value nor sealed was sent, or sealed was sent (sealed secrets are not available yet)"),
         (status = 401, description = "Not signed in"),
         (status = 403, description = "Only people manage bots, not API keys or running flows"),
         (status = 404, description = "You have no bot with this id"),
@@ -608,15 +575,11 @@ mod tests {
             secret_cipher::decrypt(&KEY, "bot_a", "K", &stored).unwrap(),
             "sk-123"
         );
-
-        let (encryption, stored) =
-            stored_form(&KEY, "bot_a", "K", None, Some(sealed.clone())).unwrap();
-        assert_eq!(encryption, BotSecretEncryption::Sealed);
-        assert_eq!(serde_json::from_str::<Value>(&stored).unwrap(), sealed);
+        assert!(stored_form(&KEY, "bot_a", "K", None, Some(sealed)).is_err());
     }
 
     #[test]
-    fn values_and_envelopes_are_bounded() {
+    fn values_are_bounded() {
         let at_limit = "x".repeat(VALUE_MAX_BYTES);
         assert!(stored_form(&KEY, "bot_a", "K", Some(at_limit), None).is_ok());
         let error = stored_form(
@@ -628,23 +591,18 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.public_message().unwrap().contains("bytes"));
-
-        let huge = json!({ "v": 1, "enc": "hpke", "ct": "A".repeat(SEALED_MAX_BYTES) });
-        assert!(stored_form(&KEY, "bot_a", "K", None, Some(huge)).is_err());
     }
 
     #[test]
-    fn a_sealed_envelope_names_its_version_and_encryption() {
-        for bad in [
-            json!("ciphertext"),
-            json!({ "enc": "hpke" }),
-            json!({ "v": "1", "enc": "hpke" }),
-            json!({ "v": 1 }),
-            json!({ "v": 1, "enc": "" }),
-            json!({ "v": 1, "enc": "none", "body": {} }),
-        ] {
-            assert!(sealed_envelope("K", &bad).is_err(), "{bad}");
-        }
+    fn a_sealed_secret_is_refused_as_not_available() {
+        let sealed = json!({ "v": 1, "enc": "hpke-x25519-sha256-chacha20poly1305", "ct": "AAAA" });
+        let error = stored_form(&KEY, "bot_a", "K", None, Some(sealed)).unwrap_err();
+        assert!(
+            error
+                .public_message()
+                .unwrap()
+                .contains("not available yet")
+        );
     }
 
     #[test]

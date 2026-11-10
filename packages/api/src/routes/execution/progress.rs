@@ -301,9 +301,14 @@ pub async fn report_progress(
     };
 
     mirror_run_update_to_sql(&state, store.as_ref(), &updated).await?;
-    persist_run_summary(&state, &claims.run_id, &claims.app_id, &body.summary).await;
+    notify_realtime_run(&state, &claims, updated.status.is_terminal()).await;
 
-    if updated.status.is_terminal() {
+    let persist_summary =
+        persist_run_summary(&state, &claims.run_id, &claims.app_id, &body.summary);
+    let track_usage = async {
+        if !updated.status.is_terminal() {
+            return;
+        }
         let duration_us = match (updated.started_at, updated.completed_at) {
             (Some(start), Some(end)) => (end - start) * 1000,
             _ => 0,
@@ -329,9 +334,9 @@ pub async fn report_progress(
         {
             tracing::warn!(error=%e, "Failed to track execution usage");
         }
-    }
+    };
+    tokio::join!(persist_summary, track_usage);
 
-    notify_realtime_run(&state, &claims, updated.status.is_terminal()).await;
     Ok(Json(ProgressUpdateResponse {
         accepted: true,
         status: format!("{:?}", updated.status),

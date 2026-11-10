@@ -279,6 +279,13 @@ pub(super) async fn remove_in<C: ConnectionTrait>(
         .map(|principal| principal.id.clone())
         .collect();
     end_memberships(txn, &[conversation_id.to_string()], &departing_ids, now).await?;
+    let departing_bots: Vec<String> = departing
+        .iter()
+        .filter(|principal| principal.kind == PrincipalKind::Bot)
+        .map(|principal| principal.id.clone())
+        .collect();
+    crate::bot_host::ledger::cancel_left_room_in(txn, conversation_id, &departing_bots, now)
+        .await?;
     let everyone: Vec<Principal> = current.iter().map(Principal::from).collect();
     let first_seq = allocate_seqs(txn, conversation_id, departing.len()).await?;
     let copies = departing

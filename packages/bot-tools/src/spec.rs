@@ -47,6 +47,7 @@ pub fn specs() -> Vec<ToolSpec> {
     all.extend(crate::documents::specs());
     all.extend(crate::code::specs());
     all.extend(crate::image::specs());
+    all.extend(crate::barcode::specs());
     all.extend(crate::email::specs());
     all.extend(crate::notify::specs());
     all.extend(crate::people::specs());

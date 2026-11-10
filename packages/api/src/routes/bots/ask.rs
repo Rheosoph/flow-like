@@ -8,6 +8,7 @@ use super::{
     owned_bot,
 };
 use crate::{
+    entity::bot_turn,
     error::ApiError,
     middleware::jwt::{AppUser, ExecutorUser},
     state::AppState,
@@ -17,11 +18,16 @@ use axum::{
     extract::{Path, State},
 };
 use flow_like_types::inbox::{TRIGGER_TEXT_MAX_CHARS, TriggerBody, TriggerSource};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, PaginatorTrait, QueryFilter};
 use serde::Deserialize;
 use std::time::Duration;
 use utoipa::ToSchema;
 
 pub const MAX_ASK_WAIT_SECS: u64 = 100;
+pub(crate) const ASK_MAX_PER_WINDOW: u64 = 60;
+const ASK_WINDOW_SECS: i64 = 3_600;
+const ASK_ID_PREFIX: &str = "ask-";
+pub(crate) const BOT_ASK_RATE_LIMITED: &str = "BOT_ASK_RATE_LIMITED";
 const FROM_A_FLOW: &str = "From a flow";
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -50,7 +56,7 @@ pub(crate) fn ask_message_id(owner_id: &str, bot_id: &str, request_id: Option<&s
         None => uuid::Uuid::new_v4().to_string(),
     };
     let digest = blake3::hash(format!("{owner_id}\0{bot_id}\0{unique}").as_bytes()).to_hex();
-    format!("ask-{}", &digest[..32])
+    format!("{ASK_ID_PREFIX}{}", &digest[..32])
 }
 
 pub(crate) fn ask_trigger(message_id: &str, message: &str) -> Result<TriggerBody, ApiError> {
@@ -76,6 +82,24 @@ pub(crate) fn ask_trigger(message_id: &str, message: &str) -> Result<TriggerBody
     })
 }
 
+async fn ensure_ask_budget<C: ConnectionTrait>(db: &C, bot_id: &str) -> Result<(), ApiError> {
+    let since = chrono::Utc::now() - chrono::Duration::seconds(ASK_WINDOW_SECS);
+    let asked = bot_turn::Entity::find()
+        .filter(bot_turn::Column::BotId.eq(bot_id))
+        .filter(bot_turn::Column::TriggerMessageId.starts_with(ASK_ID_PREFIX))
+        .filter(bot_turn::Column::CreatedAt.gte(since.fixed_offset()))
+        .count(db)
+        .await?;
+    if asked >= ASK_MAX_PER_WINDOW {
+        return Err(ApiError::coded(
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            BOT_ASK_RATE_LIMITED,
+            format!("Bot '{bot_id}' was asked {asked} times in the last hour"),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) async fn ask_in(
     state: &AppState,
     owner_id: &str,
@@ -85,7 +109,11 @@ pub(crate) async fn ask_in(
     owned_bot(&state.db, owner_id, bot_id).await?;
     let message_id = ask_message_id(owner_id, bot_id, request.request_id.as_deref());
     let trigger = ask_trigger(&message_id, &request.message)?;
-    let turn = fire_trigger(state, owner_id, bot_id, &message_id, &trigger).await?;
+    let turn = {
+        let _limit = crate::bot_notify::bot_limit_guard("ask", bot_id).await;
+        ensure_ask_budget(&state.db, bot_id).await?;
+        fire_trigger(state, owner_id, bot_id, &message_id, &trigger).await?
+    };
     let wait = request.wait_seconds.min(MAX_ASK_WAIT_SECS);
     Ok(wait_for_turn(&state.db, owner_id, &turn, Duration::from_secs(wait)).await?)
 }
@@ -101,7 +129,8 @@ pub(crate) async fn ask_in(
         (status = 400, description = "The message is empty or too long"),
         (status = 401, description = "Not signed in"),
         (status = 404, description = "You have no bot with this id"),
-        (status = 409, description = "BOT_TURN_NOT_QUEUED or BOT_CONVERSATION_ENCRYPTED")
+        (status = 409, description = "BOT_TURN_NOT_QUEUED or BOT_CONVERSATION_ENCRYPTED"),
+        (status = 429, description = "BOT_ASK_RATE_LIMITED: the bot was asked 60 times in the last hour")
     ),
     security(("bearer_auth" = []))
 )]
@@ -141,7 +170,8 @@ pub(crate) fn run_owner(executor: &ExecutorUser) -> Result<&str, ApiError> {
     responses(
         (status = 200, description = "The turn the message queued, with the reply when waited for", body = FiredTurn),
         (status = 403, description = "The caller is not a run of this app that acts as a person, or SHADOW_SIDE_EFFECT_REFUSED"),
-        (status = 404, description = "The person has no bot with this id")
+        (status = 404, description = "The person has no bot with this id"),
+        (status = 429, description = "BOT_ASK_RATE_LIMITED: the bot was asked 60 times in the last hour")
     ),
     security(("executor_jwt" = []))
 )]

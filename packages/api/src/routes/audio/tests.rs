@@ -37,6 +37,7 @@ fn catalog_defaults_reach_upstream_and_durable_jobs_without_overriding_requests(
             text: "Hello".into(),
             voice: explicit.map(str::to_owned),
             format: Some("wav".into()),
+            stream: false,
         });
         payload.apply_catalog_defaults(&bit).unwrap();
         let job = HostedAudioJob {
@@ -133,6 +134,7 @@ fn catalog_character_limits_reject_long_input_without_truncating_unicode() {
         text: "é🙂".into(),
         voice: Some("thalia".into()),
         format: None,
+        stream: false,
     });
     payload.apply_catalog_defaults(&bit).unwrap();
     bit.parameters["max_input_characters"] = json!(1);
@@ -162,6 +164,7 @@ fn durable_audio_jobs_freeze_prices_and_old_jobs_retain_legacy_tariffs() {
             text: "é🙂".into(),
             voice: None,
             format: None,
+            stream: false,
         }),
         provider,
         pricing: AudioPricing::from_bit(&bit).unwrap(),
@@ -365,4 +368,67 @@ async fn accepted_audio_finishes_after_the_http_waiter_is_cancelled() {
         .await
         .unwrap()
         .unwrap();
+}
+
+fn speech_payload(stream: bool, format: Option<&str>) -> AudioPayload {
+    AudioPayload::Speech(HostedSpeechRequest {
+        bit_id: "official-audio".into(),
+        text: "Hello".into(),
+        voice: None,
+        format: format.map(str::to_owned),
+        stream,
+    })
+}
+
+#[test]
+fn streamed_speech_requires_pcm_and_a_pcm_capable_provider() {
+    let pricing = AudioPricing::Legacy;
+    for format in [None, Some("mp3"), Some("wav")] {
+        let error = speech_payload(true, format)
+            .reserved_cost(pricing)
+            .unwrap_err();
+        assert_eq!(error.status(), StatusCode::BAD_REQUEST, "{format:?}");
+    }
+    assert!(
+        speech_payload(true, Some("pcm"))
+            .reserved_cost(pricing)
+            .is_ok()
+    );
+    assert!(speech_payload(false, None).reserved_cost(pricing).is_ok());
+}
+
+#[test]
+fn providers_without_raw_pcm_answer_with_the_public_stream_code() {
+    let streamed = speech_payload(true, Some("pcm"));
+    let model = "openai/gpt-4o-mini-tts";
+    for provider in HostedAudioProvider::ALL {
+        let outcome = streamed.ensure_stream_supported(provider, model);
+        if provider.stream_pcm_sample_rate(model).is_some() {
+            assert!(outcome.is_ok(), "{provider:?}");
+        } else {
+            let error = outcome.unwrap_err();
+            assert_eq!(error.status(), StatusCode::BAD_REQUEST, "{provider:?}");
+            assert_eq!(error.public_code(), "SPEECH_STREAM_UNSUPPORTED");
+        }
+        assert!(
+            speech_payload(false, Some("pcm"))
+                .ensure_stream_supported(provider, model)
+                .is_ok()
+        );
+    }
+    assert_eq!(
+        streamed
+            .ensure_stream_supported(HostedAudioProvider::OpenRouter, "hexgrad/kokoro-82m")
+            .unwrap_err()
+            .public_code(),
+        "SPEECH_STREAM_UNSUPPORTED"
+    );
+    assert_eq!(
+        HostedAudioProvider::OpenAi.stream_pcm_sample_rate("tts-1"),
+        Some(24_000)
+    );
+    assert_eq!(
+        HostedAudioProvider::Groq.stream_pcm_sample_rate("any"),
+        None
+    );
 }

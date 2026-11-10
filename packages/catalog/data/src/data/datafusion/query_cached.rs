@@ -54,6 +54,7 @@ impl CachedSqlQueryNode {
 fn result_cache_key(
     node_id: &str,
     session: &DataFusionSession,
+    session_identity: &str,
     query: &str,
     query_params: &[(String, Value)],
 ) -> String {
@@ -61,6 +62,8 @@ fn result_cache_key(
     hasher.update(node_id.as_bytes());
     hasher.update(b"\n");
     hasher.update(session.cache_key.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(session_identity.as_bytes());
     hasher.update(b"\n");
     hasher.update(query.as_bytes());
     for (name, value) in query_params {
@@ -244,7 +247,11 @@ impl NodeLogic for CachedSqlQueryNode {
             namespace: namespace.trim().to_string(),
         };
         let node_id = context.node.meta.id.clone();
-        let key = result_cache_key(&node_id, &session, &query, &query_params);
+        let session_identity = match session.load_lazy(context).await {
+            Ok(loaded) => loaded.content_identity().await,
+            Err(_) => String::new(),
+        };
+        let key = result_cache_key(&node_id, &session, &session_identity, &query, &query_params);
 
         // The session is deliberately not loaded before this lookup: on a hit the
         // engine — and whatever mounting produced it — is bypassed entirely.
@@ -288,23 +295,28 @@ impl NodeLogic for CachedSqlQueryNode {
                 let batches = df.collect().await?;
                 let table = batches_to_csv_table(&batches)?;
 
-                // An oversized result fails loudly here (the cache caps value sizes)
-                // rather than silently running uncached every time — the fix is to
-                // shrink the result (LIMIT, projection) or persist it to app storage.
+                // The query already ran, so a refused store (for example a result above
+                // the cache's value cap) must not discard it; the warning tells the
+                // author to shrink the result (LIMIT, projection) to get caching back.
                 // Replays never change the cache, so they grade on their own result.
                 let replay = context
                     .execution_cache
                     .as_ref()
                     .is_some_and(|execution| execution.shadow);
-                if !replay {
-                    cache_set(
+                if !replay
+                    && let Err(err) = cache_set(
                         context,
                         &cache,
                         &key,
                         json!(table),
                         Some(ttl_seconds as u64),
                     )
-                    .await?;
+                    .await
+                {
+                    context.log_message(
+                        &format!("Result was not cached and is returned uncached: {err}"),
+                        LogLevel::Warn,
+                    );
                 }
 
                 (table, false)
@@ -351,23 +363,40 @@ mod tests {
         let same_query = "SELECT * FROM data";
         let none: &[(String, Value)] = &[];
         assert_ne!(
-            result_cache_key("node1", &session_a, same_query, none),
-            result_cache_key("node1", &session_b, same_query, none),
+            result_cache_key("node1", &session_a, "", same_query, none),
+            result_cache_key("node1", &session_b, "", same_query, none),
             "the same SQL against differently mounted sessions must not share a result"
         );
         assert_ne!(
-            result_cache_key("node1", &session_a, same_query, none),
-            result_cache_key("node2", &session_a, same_query, none),
+            result_cache_key("node1", &session_a, "", same_query, none),
+            result_cache_key("node2", &session_a, "", same_query, none),
             "two node placements with identical defaults must not share a result"
         );
         assert_ne!(
-            result_cache_key("node1", &session_a, "SELECT 1", none),
-            result_cache_key("node1", &session_a, "SELECT 2", none)
+            result_cache_key("node1", &session_a, "", "SELECT 1", none),
+            result_cache_key("node1", &session_a, "", "SELECT 2", none)
         );
         assert_eq!(
-            result_cache_key("node1", &session_a, same_query, none),
-            result_cache_key("node1", &session_a, same_query, none)
+            result_cache_key("node1", &session_a, "", same_query, none),
+            result_cache_key("node1", &session_a, "", same_query, none)
         );
+    }
+
+    #[test]
+    fn cache_keys_separate_what_the_session_holds() {
+        let session = DataFusionSession {
+            cache_key: "df_session_a".to_string(),
+        };
+        let none: &[(String, Value)] = &[];
+        let key = |identity: &str| result_cache_key("node1", &session, identity, "SELECT 1", none);
+
+        assert_ne!(
+            key("mount\ttable:data\tCSV 'a.csv'\n"),
+            key("mount\ttable:data\tCSV 'b.csv'\n"),
+            "the same session name with a different file mounted must not share a result"
+        );
+        assert_ne!(key("lance\tt\t1\n"), key("lance\tt\t2\n"));
+        assert_eq!(key("lance\tt\t1\n"), key("lance\tt\t1\n"));
     }
 
     #[test]
@@ -376,8 +405,9 @@ mod tests {
             cache_key: "df_session_a".to_string(),
         };
         let query = "SELECT * FROM users WHERE id = $id";
-        let key =
-            |value: Value| result_cache_key("node1", &session, query, &[("id".to_string(), value)]);
+        let key = |value: Value| {
+            result_cache_key("node1", &session, "", query, &[("id".to_string(), value)])
+        };
 
         assert_ne!(
             key(json!(1)),
@@ -389,13 +419,13 @@ mod tests {
         assert_ne!(key(json!(1)), key(json!("1")));
         assert_ne!(
             key(json!(1)),
-            result_cache_key("node1", &session, query, &[]),
+            result_cache_key("node1", &session, "", query, &[]),
             "an unbound run must not collide with a bound one"
         );
         // Same values, different placeholder names: still distinct statements.
         assert_ne!(
-            result_cache_key("node1", &session, query, &[("a".to_string(), json!(1))]),
-            result_cache_key("node1", &session, query, &[("b".to_string(), json!(1))])
+            result_cache_key("node1", &session, "", query, &[("a".to_string(), json!(1))]),
+            result_cache_key("node1", &session, "", query, &[("b".to_string(), json!(1))])
         );
     }
 

@@ -19,7 +19,7 @@
 # DSQL mirror with packages/api/scripts/make-prisma-mirror.sh --target dsql,
 # which swaps the provider and fails the build on anything DSQL cannot create.
 
-FROM oven/bun:1.3.8-alpine
+FROM oven/bun:1.4.4-alpine
 
 COPY LICENSE /usr/share/licenses/flow-like/LICENSE
 

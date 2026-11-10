@@ -255,6 +255,8 @@ pub(super) enum Mode {
     AskBot,
     /// Calls a connector tool that core marked as asking, through the turn's approval gate.
     AskConnector,
+    Panic,
+    SessionChanged,
 }
 
 pub(super) struct FakeRunner {
@@ -407,6 +409,8 @@ impl TurnRunner for FakeRunner {
                     _ => Ok("could not ask Flux".into()),
                 }
             }
+            Mode::Panic => panic!("the model run panicked"),
+            Mode::SessionChanged => Err(RunError::SessionChanged),
             Mode::Fail => Err(RunError::Failed {
                 code: "BOT_TURN_FAILED".into(),
                 message: "the model fell over".into(),
@@ -523,18 +527,18 @@ impl Fixture {
         kind: &str,
         body: Value,
     ) -> InboxEntry {
-        self.store
-            .send(
-                conversation,
-                sender,
-                serde_json::from_value(json!({
-                    "message_id": id,
-                    "kind": kind,
-                    "envelope": { "v": 1, "enc": "none", "body": body },
-                }))
-                .unwrap(),
-            )
-            .unwrap()
+        let request = serde_json::from_value(json!({
+            "message_id": id,
+            "kind": kind,
+            "envelope": { "v": 1, "enc": "none", "body": body },
+        }))
+        .unwrap();
+        if matches!(kind, "trigger" | "activity") {
+            self.store.send_internal(conversation, sender, request)
+        } else {
+            self.store.send(conversation, sender, request)
+        }
+        .unwrap()
     }
 
     fn say(&self, conversation: &str, id: &str, text: &str) -> InboxEntry {
@@ -1313,6 +1317,59 @@ async fn a_failed_turn_posts_the_reason_with_its_error_code() {
 }
 
 #[tokio::test]
+async fn a_panicking_turn_ends_as_failed_and_leaves_the_live_list() {
+    let mut f = Fixture::open();
+    *f.runner.mode.lock().unwrap() = Mode::Panic;
+    let bot = f.bot("Ada");
+    let chat = f.direct(&bot);
+    f.start();
+    f.say(&chat.id, "m1", "hello");
+    f.host.poke(Some(&chat.id));
+    until("the failed turn", || {
+        f.status_of(&bot.id, "m1") == Some(TurnStatus::Failed)
+    })
+    .await;
+    settle().await;
+    assert_eq!(f.runner.started(), 1);
+    assert!(f.messages_of(&chat.id, &bot.id).is_empty());
+}
+
+#[tokio::test]
+async fn a_turn_cancelled_by_a_session_change_runs_again_under_the_new_session() {
+    let mut f = Fixture::gated();
+    *f.runner.mode.lock().unwrap() = Mode::SessionChanged;
+    let bot = f.bot("Ada");
+    let chat = f.direct(&bot);
+    f.start();
+    f.say(&chat.id, "m1", "hello");
+    f.host.poke(Some(&chat.id));
+    until("the first run", || f.runner.started() == 1).await;
+    f.runner.gate.add_permits(1);
+    until("the rerun", || f.runner.started() == 2).await;
+    *f.runner.mode.lock().unwrap() = Mode::Reply;
+    f.runner.gate.add_permits(1);
+    until("the answer", || {
+        f.status_of(&bot.id, "m1") == Some(TurnStatus::Done)
+    })
+    .await;
+    assert_eq!(f.messages_of(&chat.id, &bot.id).len(), 1);
+}
+
+#[tokio::test]
+async fn a_cancelled_turn_is_remembered_in_the_store_not_only_in_memory() {
+    let mut f = Fixture::gated();
+    let bot = f.bot("Ada");
+    let chat = f.direct(&bot);
+    f.start();
+    f.say(&chat.id, "m1", "hello");
+    f.host.poke(Some(&chat.id));
+    until("the run", || f.runner.started() == 1).await;
+    let id = turn_id(&bot.id, "m1");
+    assert!(f.host.cancel(&id).await.unwrap());
+    assert!(f.store.run_cancelled(&bot.id, "m1").unwrap());
+}
+
+#[tokio::test]
 async fn an_empty_answer_counts_as_a_failure() {
     let mut f = Fixture::open();
     *f.runner.mode.lock().unwrap() = Mode::Blank;
@@ -1950,6 +2007,7 @@ async fn a_due_task_is_answered_once_and_a_week_of_missed_runs_fire_once() {
 mod interactive {
     use super::*;
     use crate::bot_host::{
+        hub::{HubFailure, TurnHub},
         interactive::{self, InteractiveArgs, InteractiveRun},
         rule::{Hold, waiting_held},
     };
@@ -2078,8 +2136,11 @@ mod interactive {
         marked(&f, &chat.id, "m1", "what day is it");
         let run = run_for(&f, &bot, &chat).await;
 
-        run.store_reply("first", None).await.unwrap();
-        run.store_reply("second", None).await.unwrap();
+        assert!(run.store_reply("first", None).await.unwrap());
+        assert!(
+            !run.store_reply("second", None).await.unwrap(),
+            "a host answered first"
+        );
 
         let replies = f.messages_of(&chat.id, &bot.id);
         assert_eq!(replies.len(), 1);
@@ -2096,8 +2157,8 @@ mod interactive {
         let group_run = run_for(&f, &bot, &group).await;
         assert!(direct_run.memory().await.is_none());
         assert!(group_run.memory().await.is_none());
-        assert!(direct_run.owner_direct().await);
-        assert!(!group_run.owner_direct().await);
+        assert_eq!(direct_run.legacy_memory_access().await, Some(false));
+        assert_eq!(group_run.legacy_memory_access().await, None);
     }
 
     #[tokio::test]
@@ -2109,6 +2170,136 @@ mod interactive {
         let run = run_for(&f, &bot, &chat).await;
         let source = run.memory().await.expect("a direct chat remembers");
         assert_eq!(source.trigger_seq, 1);
+    }
+
+    struct AccountTurnHub {
+        turn: flow_like_types::bot_turn::BotTurn,
+    }
+
+    #[async_trait]
+    impl TurnHub for AccountTurnHub {
+        fn supports_recovery(&self) -> bool {
+            true
+        }
+        async fn list(&self) -> Result<Vec<flow_like_types::bot_turn::BotTurn>, HubFailure> {
+            Ok(Vec::new())
+        }
+        async fn claim(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<flow_like_types::bot_turn::BotTurn, HubFailure> {
+            Ok(self.turn.clone())
+        }
+        async fn heartbeat(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<flow_like_types::bot_turn::BotTurn, HubFailure> {
+            Ok(self.turn.clone())
+        }
+        async fn entries(&self, _: &str, _: &str) -> Result<Vec<InboxEntry>, HubFailure> {
+            Ok(vec![InboxEntry {
+                id: "e1".into(),
+                message_id: self.turn.trigger_message_id.clone(),
+                conversation_id: self.turn.conversation_id.clone(),
+                sender_id: self.turn.owner_id.clone(),
+                kind: InboxEntryKind::Message,
+                envelope: flow_like_types::inbox::plain_envelope(json!({ "text": "hi" })),
+                created_at: Utc::now().fixed_offset(),
+                seq: Some(1),
+                cursor: String::new(),
+            }])
+        }
+        async fn send(&self, _: &str, _: &str, _: Value, _: &str, _: &str) -> Result<(), HubFailure> {
+            Ok(())
+        }
+        async fn desktop_bots(&self) -> Result<Vec<String>, HubFailure> {
+            Ok(Vec::new())
+        }
+        async fn report_host(&self, _: &str, _: &[String]) -> Result<Vec<String>, HubFailure> {
+            Ok(Vec::new())
+        }
+        async fn delete_host(&self, _: &str) -> Result<(), HubFailure> {
+            Ok(())
+        }
+        async fn cancel_turn(&self, _: &str, _: &str) -> Result<(), HubFailure> {
+            Ok(())
+        }
+        async fn read(
+            &self,
+            path: &str,
+            _: Vec<(&'static str, String)>,
+        ) -> Result<Value, HubFailure> {
+            let turn_path = format!(
+                "inbox/conversations/{}/turns/{}",
+                self.turn.conversation_id, self.turn.id
+            );
+            if path == turn_path {
+                Ok(serde_json::to_value(&self.turn).unwrap())
+            } else {
+                Err(HubFailure::answered(404, None, format!("unexpected read {path}")))
+            }
+        }
+        async fn write(
+            &self,
+            _: &str,
+            _: Vec<(&'static str, String)>,
+            _: Value,
+        ) -> Result<Value, HubFailure> {
+            Ok(json!({ "held": true }))
+        }
+    }
+
+    async fn account_recovery(kind: flow_like_types::bot_turn::TurnHostKind) -> bool {
+        let f = Fixture::open();
+        let bot_id = "bot_acc";
+        let now = Utc::now().to_rfc3339();
+        let turn = flow_like_types::bot_turn::BotTurn {
+            id: turn_id(bot_id, "m1"),
+            bot_id: bot_id.into(),
+            conversation_id: "conv_acc".into(),
+            trigger_message_id: "m1".into(),
+            host_kind: kind,
+            status: TurnStatus::Queued,
+            attempts: 0,
+            host_id: None,
+            lease_until: None,
+            reply_message_id: None,
+            error_code: None,
+            hops: 0,
+            owner_id: "owner".into(),
+            requester_id: Some("owner".into()),
+            requester_name: None,
+            audience: flow_like_types::bot_turn::TurnAudience::Owner,
+            created_at: now.clone(),
+            updated_at: now,
+            batched: Vec::new(),
+        };
+        let mut run = InteractiveRun::open(
+            Arc::new(Direct(f.store.clone())),
+            Some(Arc::new(AccountTurnHub { turn })),
+            bot_id,
+            InteractiveArgs {
+                conversation_id: "conv_acc".into(),
+                trigger_message_id: "m1".into(),
+                client_run_id: "run_1".into(),
+            },
+        )
+        .await
+        .expect("an account conversation opens");
+        run.recovery(None)
+            .await
+            .expect("the chat holds the turn")
+            .is_some()
+    }
+
+    #[tokio::test]
+    async fn only_a_desktop_turn_binds_the_chat_to_the_hubs_checkpoints() {
+        use flow_like_types::bot_turn::TurnHostKind;
+        assert!(account_recovery(TurnHostKind::Desktop).await);
+        assert!(!account_recovery(TurnHostKind::Server).await);
+        assert!(!account_recovery(TurnHostKind::Device).await);
     }
 
     #[tokio::test]

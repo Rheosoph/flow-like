@@ -3,7 +3,14 @@
 import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { PhoneIcon } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef } from "react";
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { useBotCallSpeech } from "../../hooks/use-bot-call-speech";
 import { useConversationActivity } from "../../hooks/use-conversation-activity";
@@ -13,12 +20,13 @@ import {
 	useConversationRoom,
 } from "../../hooks/use-conversation-room";
 import { useInboxEntries } from "../../hooks/use-inbox";
-import { useSpeechModel } from "../../hooks/use-speech-model";
+import { useSpeechModelState } from "../../hooks/use-speech-model";
 import { useBackend } from "../../state/backend-state";
 import { type IBot, LOCAL_OWNER_ID } from "../../state/backend-state/bot-state";
 import type { IConversation } from "../../state/backend-state/inbox-state";
 import { botConversation } from "../../state/global-chat/bot-history";
 import { Button } from "../ui/button";
+import { CallSpeechSetup } from "./call-speech-setup";
 import { ConversationActivityLine } from "./conversation-activity-line";
 import {
 	CallButton,
@@ -80,7 +88,9 @@ export function BotDirectCall({
 		[conversation.members],
 	);
 	const directory = useCrewDirectory(principals, { me, bots });
-	const stt = useSpeechModel(Boolean(bot && inbox));
+	const speech = useSpeechModelState(Boolean(bot && inbox), bot?.stt_model);
+	const stt = speech.choice;
+	const [setupOpen, setSetupOpen] = useState(false);
 	const listen = useMemo(
 		() => ({
 			stt,
@@ -147,9 +157,20 @@ export function BotDirectCall({
 		listenRequested.current = false;
 		call.setListening(true);
 	}, [call.joined, call.canListen, call.setListening]);
+	const needsSpeech = speech.settled && !stt;
 	const button =
 		bot && inbox ? (
-			call.available ? (
+			needsSpeech || setupOpen ? (
+				<CallSpeechSetup
+					bot={bot}
+					name={directory(bot.id).name}
+					speech={speech}
+					open={setupOpen}
+					onOpenChange={setSetupOpen}
+					canStart={call.available}
+					onStart={() => void start()}
+				/>
+			) : call.available ? (
 				<CallButton call={{ ...call, start }} />
 			) : (
 				<Button

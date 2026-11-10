@@ -378,8 +378,18 @@ fn parse_updated_at(value: &str) -> Result<i64> {
         })
 }
 
-fn restrictions_of(mask: Option<i64>, scopes: &str) -> BotRestrictions {
-    BotRestrictions::from_bits(mask, serde_json::from_str(scopes).unwrap_or_default())
+fn restrictions_of(
+    bot_id: &str,
+    app_id: &str,
+    mask: Option<i64>,
+    scopes: &str,
+) -> Result<BotRestrictions> {
+    let scopes = serde_json::from_str(scopes).map_err(|error| {
+        Error::invalid(format!(
+            "The stored scopes of bot '{bot_id}' for app '{app_id}' are unreadable ({error}); detach and attach the app again"
+        ))
+    })?;
+    Ok(BotRestrictions::from_bits(mask, scopes))
 }
 
 fn app_not_attached(bot_id: &str, app_id: &str) -> Error {
@@ -390,14 +400,16 @@ fn app_not_attached(bot_id: &str, app_id: &str) -> Error {
 }
 
 fn attached_restrictions(db: &Connection, bot_id: &str, app_id: &str) -> Result<BotRestrictions> {
-    db.prepare_cached(
-        "SELECT permission_mask, scopes FROM bot_apps WHERE bot_id = ?1 AND app_id = ?2",
-    )?
-    .query_row(params![bot_id, app_id], |row| {
-        Ok(restrictions_of(row.get(0)?, &row.get::<_, String>(1)?))
-    })
-    .optional()?
-    .ok_or_else(|| app_not_attached(bot_id, app_id))
+    let (mask, scopes): (Option<i64>, String) = db
+        .prepare_cached(
+            "SELECT permission_mask, scopes FROM bot_apps WHERE bot_id = ?1 AND app_id = ?2",
+        )?
+        .query_row(params![bot_id, app_id], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .optional()?
+        .ok_or_else(|| app_not_attached(bot_id, app_id))?;
+    restrictions_of(bot_id, app_id, mask, &scopes)
 }
 
 fn attached_apps(db: &Connection, bot_id: &str) -> Result<Vec<BotApp>> {
@@ -406,18 +418,24 @@ fn attached_apps(db: &Connection, bot_id: &str) -> Result<Vec<BotApp>> {
     )?;
     let apps = statement
         .query_map([bot_id], |row| {
-            Ok(BotApp {
-                app_id: row.get("app_id")?,
-                added_at: timestamp(row.get("added_at")?),
-                owner_role: Some(OWNER_ROLE.to_string()),
-                restrictions: restrictions_of(
-                    row.get("permission_mask")?,
-                    &row.get::<_, String>("scopes")?,
-                ),
-            })
+            Ok((
+                row.get::<_, String>("app_id")?,
+                row.get("added_at")?,
+                row.get::<_, Option<i64>>("permission_mask")?,
+                row.get::<_, String>("scopes")?,
+            ))
         })?
-        .collect::<rusqlite::Result<_>>()?;
-    Ok(apps)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    apps.into_iter()
+        .map(|(app_id, added_at, mask, scopes)| {
+            Ok(BotApp {
+                restrictions: restrictions_of(bot_id, &app_id, mask, &scopes)?,
+                app_id,
+                added_at: timestamp(added_at),
+                owner_role: Some(OWNER_ROLE.to_string()),
+            })
+        })
+        .collect()
 }
 
 fn secret_info(row: &Row<'_>) -> rusqlite::Result<BotSecretInfo> {

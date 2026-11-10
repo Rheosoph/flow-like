@@ -10,6 +10,7 @@ pub(crate) mod project;
 mod repository;
 mod resource_summary;
 pub(crate) mod routes;
+pub(crate) mod schedule_notices;
 pub(crate) mod schedules;
 
 pub(crate) use budget::{

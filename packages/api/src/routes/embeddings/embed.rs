@@ -383,11 +383,11 @@ async fn embed_authorized_text(
     if crate::routes::chat::hosted_worker::enabled() {
         return crate::routes::chat::hosted_worker::dispatch(
             state,
-            crate::routes::chat::hosted_worker::HostedAiJob {
-                operation_id: id,
-                request: crate::routes::chat::hosted_worker::HostedWork::Embedding(job),
-                deadline: chrono::Utc::now() + chrono::Duration::milliseconds(timeout as i64),
-            },
+            crate::routes::chat::hosted_worker::HostedAiJob::new(
+                id,
+                crate::routes::chat::hosted_worker::HostedWork::Embedding(job),
+                chrono::Utc::now() + chrono::Duration::milliseconds(timeout as i64),
+            ),
         )
         .await;
     }

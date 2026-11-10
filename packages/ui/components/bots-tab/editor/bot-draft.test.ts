@@ -10,6 +10,7 @@ import {
 	createEmptyBotDraft,
 	getBotDraftProblems,
 	hasFlowPilot,
+	heldUnavailableCapabilities,
 	normalizeBotModelPolicy,
 	setBotDraftCapability,
 	setBotDraftLocation,
@@ -103,6 +104,41 @@ describe("drafts", () => {
 		expect(back.removed).toEqual([]);
 		expect(back.restored).toEqual(["computer_use"]);
 		expect(back.remembered).toEqual([]);
+	});
+
+	test("moving to a device switches off what it can't serve yet", () => {
+		const draft = {
+			...createEmptyBotDraft(),
+			location: "desktop" as const,
+			capabilities: [
+				"internet",
+				"skills",
+				"command_line",
+			] as IBot["capabilities"],
+		};
+		const moved = setBotDraftLocation(draft, "device");
+		expect(moved.removed).toEqual(["skills"]);
+		expect(moved.draft.capabilities).toEqual(["internet", "command_line"]);
+		expect(setBotDraftCapability(moved.draft, "encryption", true)).toBe(
+			moved.draft,
+		);
+	});
+
+	test("a saved device bot that holds an unavailable capability drops it on the next save", () => {
+		const saved = bot({
+			location: "device",
+			device_id: "device-1",
+			capabilities: ["internet", "skills"] as IBot["capabilities"],
+		});
+		expect(heldUnavailableCapabilities(saved)).toEqual(["skills"]);
+		const draft = botDraftFromBot(saved);
+		expect(draft.capabilities).toEqual(["internet"]);
+		expect(
+			buildUpdateBotRequest(saved, { ...draft, name: "Renamed" }),
+		).toMatchObject({ name: "Renamed", capabilities: ["internet"] });
+		expect(buildUpdateBotRequest(saved, draft)).toEqual({
+			capabilities: ["internet"],
+		});
 	});
 
 	test("capabilities keep the wire order and respect the location", () => {

@@ -250,6 +250,11 @@ fn bot_name(name: &str) -> Result<String> {
     if chars > NAME_MAX_CHARS {
         return Err(too_long("name", NAME_MAX_CHARS, chars));
     }
+    if name.chars().any(char::is_control) {
+        return Err(Error::invalid(
+            "Bot name must not contain control characters or line breaks",
+        ));
+    }
     Ok(name.to_string())
 }
 

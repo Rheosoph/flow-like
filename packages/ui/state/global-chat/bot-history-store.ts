@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { compareInboxCursors } from "../../lib/inbox-cursor";
+import type { IBotNoteRef } from "../backend-state/bot-state";
 import type { TranscriptPage } from "./bot-history";
 
 /** Where the bot chat on screen sits in the bot's history. */
@@ -23,7 +24,13 @@ export interface NewTopicMark {
 interface BotHistoryState {
 	views: Record<string, BotHistoryView>;
 	topics: Record<string, NewTopicMark[]>;
+	/**
+	 * Notes of pushed bot replies by the message they answer. A reply the chat streamed stays on
+	 * screen under its own id, so its chip reads the note through the message it answered.
+	 */
+	replyNotes: Record<string, IBotNoteRef>;
 	noteTopic: (botId: string, mark: NewTopicMark) => void;
+	noteReply: (answeredId: string, note: IBotNoteRef) => void;
 	show: (botId: string, page: TranscriptPage, windowed: boolean) => void;
 	prepend: (botId: string, page: TranscriptPage) => void;
 	note: (botId: string, messageId: string, seq: number) => void;
@@ -33,6 +40,11 @@ interface BotHistoryState {
 export const useBotHistoryStore = create<BotHistoryState>((set) => ({
 	views: {},
 	topics: {},
+	replyNotes: {},
+	noteReply: (answeredId, note) =>
+		set((state) => ({
+			replyNotes: { ...state.replyNotes, [answeredId]: note },
+		})),
 	noteTopic: (botId, mark) =>
 		set((state) => ({
 			topics: {

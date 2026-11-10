@@ -116,6 +116,80 @@ describe("sanitizeCallPresence", () => {
 	});
 });
 
+describe("interrupt presence", () => {
+	const record = {
+		message_id: "msg_abc",
+		heard_chars: 10,
+		spoken_chars: 40,
+		at: 5,
+	};
+
+	test("keeps well-formed interrupt requests and reports", () => {
+		const value = sanitizeCallPresence({
+			...presence("c", "p"),
+			interruptBot: { botId: "bot:a", at: 7 },
+			interruptedSpeech: record,
+		});
+		expect(value?.interruptBot).toEqual({ botId: "bot:a", at: 7 });
+		expect(value?.interruptedSpeech).toEqual(record);
+	});
+
+	test("drops malformed or out-of-range values", () => {
+		for (const interruptBot of [
+			null,
+			"bot",
+			{ botId: "bad id", at: 1 },
+			{ botId: "bot", at: "1" },
+			{ botId: "bot", at: Number.NaN },
+			{ botId: "bot", at: 0 },
+		]) {
+			expect(
+				sanitizeCallPresence({ ...presence("c", "p"), interruptBot })
+					?.interruptBot,
+			).toBeUndefined();
+		}
+		for (const patch of [
+			{ message_id: "bad id" },
+			{ spoken_chars: 0, heard_chars: 0 },
+			{ heard_chars: 41 },
+			{ heard_chars: -1 },
+			{ spoken_chars: 64_001 },
+			{ heard_chars: 1.5 },
+			{ at: -1 },
+		]) {
+			expect(
+				sanitizeCallPresence({
+					...presence("c", "p"),
+					interruptedSpeech: { ...record, ...patch },
+				})?.interruptedSpeech,
+			).toBeUndefined();
+		}
+	});
+
+	test("reach derived participants", () => {
+		const live = deriveLiveCall(
+			states([
+				[
+					3,
+					{
+						sub: "me",
+						[CALL_FIELD]: {
+							...presence("c", "pm"),
+							interruptBot: { botId: "bot-1", at: 9 },
+						},
+					},
+				],
+			]),
+			3,
+			new Set(["me"]),
+		);
+		expect(live?.participants[0]?.interruptBot).toEqual({
+			botId: "bot-1",
+			at: 9,
+		});
+	});
+});
+
 describe("deriveLiveCall", () => {
 	const members = new Set(["anna", "paul", "me"]);
 

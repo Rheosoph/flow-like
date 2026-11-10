@@ -43,12 +43,14 @@ function PickerOption({
 	selected,
 	multiple,
 	disabled,
+	unavailable,
 	onPick,
 }: Readonly<{
 	row: PickerRow;
 	selected: boolean;
 	multiple: boolean;
 	disabled: boolean;
+	unavailable?: string;
 	onPick: (row: PickerRow) => void;
 }>) {
 	const { t } = useTranslation("bots");
@@ -57,7 +59,7 @@ function PickerOption({
 			<button
 				type="button"
 				aria-pressed={multiple ? selected : undefined}
-				disabled={disabled && !selected}
+				disabled={(disabled || Boolean(unavailable)) && !selected}
 				onClick={() => onPick(row)}
 				className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
 			>
@@ -67,9 +69,9 @@ function PickerOption({
 						<span className="truncate text-sm font-medium">{row.label}</span>
 						{row.bot?.local && <LocalBadge className="shrink-0" />}
 					</span>
-					{row.detail && (
+					{(unavailable ?? row.detail) && (
 						<span className="truncate text-xs text-muted-foreground">
-							{row.detail}
+							{unavailable ?? row.detail}
 						</span>
 					)}
 				</span>
@@ -106,6 +108,7 @@ function PickerGroup({
 	selected: ReadonlySet<string>;
 	multiple: boolean;
 	full: boolean;
+	unavailable?: (row: PickerRow) => string | undefined;
 	onPick: (row: PickerRow) => void;
 }>) {
 	if (rows.length === 0) return null;
@@ -122,6 +125,7 @@ function PickerGroup({
 						selected={option.selected.has(row.id)}
 						multiple={option.multiple}
 						disabled={option.full}
+						unavailable={option.unavailable?.(row)}
 						onPick={option.onPick}
 					/>
 				))}
@@ -188,6 +192,7 @@ export function PrincipalPicker({
 	multiple,
 	full = false,
 	serverRule,
+	unavailable,
 	onPick,
 }: Readonly<{
 	source: PickerSource;
@@ -204,6 +209,8 @@ export function PrincipalPicker({
 		memberIds?: readonly string[];
 		invitedIds?: readonly string[];
 	};
+	/** The reason a principal can't be picked right now; their row is shown but disabled. */
+	unavailable?: (principal: PickedPrincipal) => string | undefined;
 	onPick: (principal: PickedPrincipal) => void;
 }>) {
 	const { t } = useTranslation("bots");
@@ -361,6 +368,7 @@ export function PrincipalPicker({
 					selected={selected}
 					multiple={multiple}
 					full={full}
+					unavailable={unavailable}
 					onPick={onPick}
 				/>
 				<PickerGroup
@@ -369,6 +377,7 @@ export function PrincipalPicker({
 					selected={selected}
 					multiple={multiple}
 					full={full}
+					unavailable={unavailable}
 					onPick={onPick}
 				/>
 				<PickerGroup
@@ -377,6 +386,7 @@ export function PrincipalPicker({
 					selected={selected}
 					multiple={multiple}
 					full={full}
+					unavailable={unavailable}
 					onPick={onPick}
 				/>
 				{nothing && people && (

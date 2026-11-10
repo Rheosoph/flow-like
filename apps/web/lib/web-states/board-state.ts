@@ -777,6 +777,8 @@ export class WebBoardState implements IBoardState {
 					body,
 					cancelUrl: `${getApiBaseUrl()}/api/v1/execution/run/{runId}`,
 					timeoutMs: requestTimeoutMs(invokePath, "POST", body.length),
+					// The board reads the run's logs as soon as this settles.
+					awaitStreamClose: true,
 					realtime:
 						this.backend.auth?.isAuthenticated &&
 						this.backend.auth.user?.profile.sub

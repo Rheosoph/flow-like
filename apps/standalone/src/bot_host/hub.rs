@@ -104,6 +104,12 @@ impl TurnCreds {
         locked(&self.bot).expires_at
     }
 
+    /// The bot token outlived its expiry: heartbeats stopped renewing it, so the hub no longer
+    /// accepts this device for the turn (revoked, signed out) or cannot be reached.
+    pub fn session_lapsed(&self) -> bool {
+        self.bot_expires_at() <= unix_now()
+    }
+
     pub fn executor_expires_at(&self) -> Option<i64> {
         locked(&self.executor).as_ref().map(|t| t.expires_at)
     }
@@ -290,18 +296,21 @@ impl DeviceTurnHub {
         host_id: &str,
         code: &str,
         retry: bool,
-    ) -> Result<(), HubFailure> {
+    ) -> Result<bool, HubFailure> {
         let request = DeviceReleaseRequest {
             host_id: host_id.to_owned(),
             error_code: code.to_owned(),
             retry,
             usage: self.usage_of(turn_id),
         };
-        let _: Value = self
+        let answered: Value = self
             .device_post(&format!("turns/{turn_id}/release"), request)
             .await?;
         self.end_turn(turn_id);
-        Ok(())
+        Ok(answered
+            .get("requeued")
+            .and_then(Value::as_bool)
+            .unwrap_or(true))
     }
 
     /// Tells the hub this host is gone so the device's bots stop reading online.
@@ -472,12 +481,14 @@ impl TurnHub for DeviceTurnHub {
         Ok(beat.turn)
     }
 
-    async fn release(&self, turn_id: &str, host_id: &str, code: &str) -> Result<(), HubFailure> {
+    async fn release(&self, turn_id: &str, host_id: &str, code: &str) -> Result<bool, HubFailure> {
         self.give_up(turn_id, host_id, code, true).await
     }
 
     async fn abandon(&self, turn_id: &str, host_id: &str, code: &str) -> Result<(), HubFailure> {
-        self.give_up(turn_id, host_id, code, false).await
+        self.give_up(turn_id, host_id, code, false)
+            .await
+            .map(|_| ())
     }
 
     async fn silent(&self, turn_id: &str, host_id: &str) -> Result<(), HubFailure> {
@@ -680,6 +691,16 @@ impl TurnHub for DeviceTurnHub {
         body: Value,
     ) -> Result<Value, HubFailure> {
         self.bearer_call(Method::PUT, path, &query, Some(body))
+            .await
+    }
+
+    async fn patch(
+        &self,
+        path: &str,
+        query: Vec<(&'static str, String)>,
+        body: Value,
+    ) -> Result<Value, HubFailure> {
+        self.bearer_call(Method::PATCH, path, &query, Some(body))
             .await
     }
 
@@ -933,6 +954,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn release_reports_whether_the_hub_queued_the_turn_again() {
+        let api = FakeApi::answering([
+            (200, json!({ "turn": turn("bt_1"), "requeued": false })),
+            (200, json!({ "turn": turn("bt_2"), "requeued": true })),
+            (200, json!({ "turn": turn("bt_3") })),
+        ]);
+        let hub = hub(&api);
+        assert!(
+            !hub.release("bt_1", "device:dev1", "BOT_TURN_FAILED")
+                .await
+                .unwrap()
+        );
+        assert!(
+            hub.release("bt_2", "device:dev1", "BOT_TURN_FAILED")
+                .await
+                .unwrap()
+        );
+        assert!(
+            hub.release("bt_3", "device:dev1", "BOT_TURN_FAILED")
+                .await
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn the_session_lapses_once_the_bot_token_has_expired_unrenewed() {
+        let mut value = grant("bt_1");
+        value["bot_token"] = json!({ "token": "bot-1", "expires_at": unix_now() + 300 });
+        let grant: DeviceTurnGrant = serde_json::from_value(value).unwrap();
+        let creds = TurnCreds::new(&grant);
+        assert!(!creds.session_lapsed());
+        creds.refresh(&DeviceHeartbeatResponse {
+            turn: grant.turn.clone(),
+            bot_token: Some(DeviceToken {
+                token: "stale".into(),
+                expires_at: unix_now() - 1,
+            }),
+            executor_token: None,
+        });
+        assert!(creds.session_lapsed());
+    }
+
+    #[tokio::test]
     async fn every_call_that_ends_a_turn_echoes_the_usage_operation() {
         let ended = || json!({ "turn": turn("bt_1") });
         let card: flow_like_types::bot_message::ApprovalRequest = serde_json::from_value(json!({
@@ -963,7 +1027,10 @@ mod tests {
                 }
                 1 => hub.silent("bt_1", "device:dev1").await,
                 2 => hub.park("bt_1", "device:dev1", &card).await,
-                _ => hub.release("bt_1", "device:dev1", "BOT_TURN_FAILED").await,
+                _ => hub
+                    .release("bt_1", "device:dev1", "BOT_TURN_FAILED")
+                    .await
+                    .map(|_| ()),
             }
             .unwrap();
             let (_, path, body) = api.requests().remove(1);

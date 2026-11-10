@@ -4,6 +4,7 @@ import { useTranslation } from "@flow-like/locales";
 import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
 import type { IEventPayloadChat } from "../../../lib";
 import { createComposerActivity } from "../../../lib/composer-activity";
+import type { ComposerAttachSource } from "../../../state/composer-capture";
 import { VoiceMode } from "./VoiceMode";
 import { ChatAiDisclosure } from "./ai-disclosure";
 import { ChatPlaceholder } from "./chat-placeholder";
@@ -32,6 +33,7 @@ export interface ChatWelcomeComposer {
 	model?: ChatBoxModel;
 	actions?: ReactNode;
 	onDraftChange?: (content: string) => void;
+	attachSources?: readonly ComposerAttachSource[];
 }
 
 interface ChatWelcomeProps {
@@ -344,6 +346,7 @@ export function ChatWelcome({
 							thinking={composer.thinking}
 							model={composer.model}
 							actions={composer.actions}
+							attachSources={composer.attachSources}
 							onContentChange={handleContentChange}
 							fileUpload={config?.allow_file_upload ?? false}
 							audioInput={voiceEnabled}

@@ -893,6 +893,10 @@ function ownerSignature<T extends { device_id: string }>(
 }
 
 /** A `DeviceCrypto` whose vaults, signatures and sealed data only this fake and the fake hub read. */
+function noInboxCrypto(name: string): never {
+	throw new Error(`${name} is not part of the fake device workspace.`);
+}
+
 export function fakeDeviceCrypto(options: FakeCryptoOptions = {}): FakeCrypto {
 	const controllers: FakeController[] = [];
 	let loads = 0;
@@ -944,6 +948,10 @@ export function fakeDeviceCrypto(options: FakeCryptoOptions = {}): FakeCrypto {
 			loads += 1;
 		},
 		...authorityFunctions(),
+		inboxNewKey: () => noInboxCrypto("inboxNewKey"),
+		inboxPublicKey: () => noInboxCrypto("inboxPublicKey"),
+		inboxSeal: () => noInboxCrypto("inboxSeal"),
+		inboxOpen: () => noInboxCrypto("inboxOpen"),
 		unlockControllerVault: (deviceId, password, ciphertext) => {
 			const controller = createController(
 				openVault(ciphertext, "controller", deviceId, password),

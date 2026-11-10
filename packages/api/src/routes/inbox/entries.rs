@@ -1,7 +1,7 @@
 use super::{
     Event, INBOX_ENCRYPTION_MISMATCH, INBOX_ENVELOPES_MISMATCH, INBOX_HANDLE_NOT_ALLOWED,
-    INBOX_MESSAGE_ID_TAKEN,
-    acting_reader, active_members, active_membership, allocate_seqs, conversation_not_found,
+    INBOX_MESSAGE_ID_TAKEN, acting_reader, active_members, active_membership, allocate_seqs,
+    conversation_not_found,
     delivery::{
         Addressed, BotDelivery, BotRecipient, bot_recipients, deliver_to_bots, live_bots,
         reading_along, woken,
@@ -635,11 +635,22 @@ pub(super) async fn fan_out<C: ConnectionTrait>(
     )
     .await?;
     let derived_request =
-        super::user_context::derived(txn, conversation_id, sender, outgoing, &members).await?;
+        super::user_context::derived(txn, &conversation, sender, outgoing, &members).await?;
     if let Some(request_id) = &derived_request {
         for (_, envelope) in &mut envelopes {
             envelope["body"][flow_like_types::bot_user_context::DERIVED_FIELD] =
                 Value::String(request_id.clone());
+        }
+    }
+    if hops > 0 && outgoing.kind == InboxEntryKind::Message {
+        for (_, envelope) in &mut envelopes {
+            if let Some(ask) = envelope
+                .get_mut("body")
+                .and_then(|body| body.get_mut("ask"))
+                .and_then(Value::as_object_mut)
+            {
+                ask.insert("hops".to_owned(), Value::from(hops));
+            }
         }
     }
     super::requests::ensure_request_room(txn, &conversation, sender, outgoing.kind).await?;
@@ -732,7 +743,7 @@ async fn deliver<'e, C: ConnectionTrait>(
     outgoing: &Outgoing,
     hops: u32,
 ) -> Result<Vec<BotRecipient>, ApiError> {
-    if matches!(&outgoing.content, Content::Plain(envelope) if envelope["body"].get(flow_like_types::bot_user_context::REQUEST_FIELD).is_some())
+    if matches!(&outgoing.content, Content::Plain(envelope) if flow_like_types::bot_user_context::is_silent_body(&envelope["body"]))
     {
         return Ok(Vec::new());
     }
@@ -774,7 +785,20 @@ async fn deliver<'e, C: ConnectionTrait>(
             .recipients
             .retain(|recipient| recipient.bot_id == bot_id);
     }
-    let answers_an_approval = matches!(&outgoing.content, Content::Plain(envelope) if super::approvals::is_approval_response(envelope));
+    let answers_an_approval = match &outgoing.content {
+        Content::Plain(envelope) => {
+            super::approvals::answers_card(
+                txn,
+                event.conversation_id,
+                event.sender_id,
+                event.message_id,
+                bots.iter().any(|bot| bot.owner_id == event.sender_id),
+                envelope,
+            )
+            .await?
+        }
+        Content::Sealed(_) => false,
+    };
     if answers_an_approval {
         return Ok(Vec::new());
     }

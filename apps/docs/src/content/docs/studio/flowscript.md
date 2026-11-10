@@ -66,6 +66,12 @@ A top-level `const` whose initializer is a scalar literal infers its type (`stri
 `float`, `bool`); everything else keeps an explicit `: Type`. A secret variable renders its
 `@secret` decorator but never its value.
 
+The value types are `string`, `int`, `float`, `bool`, `Date`, `Path`, `bytes`, `any` and
+`geometry`; `Struct` is an untyped object, and any other capitalised name is an interface or a
+catalog struct. Arrays are `Type[]`, maps `Map<string, Type>` and sets `Set<Type>`. A type written
+the way another language spells it (`number`, `boolean`, `date`) or with a typo (`strng`) is an
+error that names the type to use, unless the document declares an interface by that name.
+
 ## Calling nodes
 
 Every catalog node has a **namespace** and an **alias**. A call is the qualified path followed by
@@ -106,6 +112,10 @@ if (values.get(0).success) { … }
 ```
 
 Numeric literal receivers need parentheses (`(5).abs()`), exactly as in JavaScript.
+
+Statements have no terminator, so a `(` or `[` that starts a line starts a new statement
+(`(first + last).trim()`, `[a, b].push(c)`); it never continues the line above. Keep a call's `(`
+and an index's `[` on the same line as the value they follow.
 
 ### Outputs
 
@@ -169,7 +179,7 @@ instead of guessing.
 | `-x` | `0 - x` |
 | `x += v`, `-=`, `*=`, `/=` | `x = x + v` |
 | `==`, `!=`, `<`, `<=`, `>`, `>=`, `&&`, `\|\|`, `!` | the comparison / boolean nodes |
-| `c ? a : b` | `types::select` |
+| `c ? a : b`, `c ? a : d ? b : e` | `types::select`, nested to the right |
 | `` `Topic ${label}` `` | `string::format` with one pin per placeholder |
 | `row.status = "done"` | `struct::set` on a mutable binding |
 | `let record = …` / `record.title = title` | `struct::set` chain, rebinding `record` |
@@ -196,6 +206,11 @@ for (const parallelForEach of control::parallelForEach({ array: userConfiguratio
     perpareNews({ source: parallelForEach.value })           // explicit handle form, still accepted
 }
 ```
+
+There is no `break`, `continue`, counting `for (init; condition; step)`, `for…in` or
+`try`/`catch`: a loop body runs for every item, so guard the statements to skip with `if` or put
+the exit condition into `while (…)`, and handle a failing node through its error arm (below).
+Block comments (`/* … */`) are not supported either; start each comment line with `//`.
 
 Nodes with several execution outputs open a block per arm; the arm labels are the node's exact
 execution pin names. A trailing comment on an `if` whose condition is itself a node call names the

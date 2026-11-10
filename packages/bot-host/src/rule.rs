@@ -99,9 +99,7 @@ fn messages(entries: &[InboxEntry]) -> Vec<Message<'_>> {
         })
         .filter(|message| !is_approval_entry(message))
         .filter(|message| {
-            message.entry.envelope["body"]
-                .get(flow_like_types::bot_user_context::REQUEST_FIELD)
-                .is_none()
+            !flow_like_types::bot_user_context::is_silent_body(&message.entry.envelope["body"])
         })
         .collect()
 }
@@ -151,6 +149,7 @@ pub fn parse_body(entry: &InboxEntry) -> Option<MessageBody> {
         return Some(MessageBody {
             text: spoken.render(),
             mentions: spoken.mentions,
+            interactive: spoken.interactive,
             ..MessageBody::default()
         });
     }
@@ -207,7 +206,7 @@ fn addressed(
     message: &Message,
     messages: &[Message],
 ) -> bool {
-    if kind == ConversationKind::Direct {
+    if kind == ConversationKind::Direct || message.entry.kind == InboxEntryKind::Trigger {
         return true;
     }
     let Some(body) = &message.body else {

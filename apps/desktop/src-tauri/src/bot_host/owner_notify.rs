@@ -77,6 +77,17 @@ pub(crate) struct DesktopOwnerNotifier {
     directory: Arc<dyn OwnerDirectory>,
     sink: Arc<dyn AlertSink>,
     log: Arc<SentLog>,
+    turn_id: Option<String>,
+}
+
+fn owner_message_id(turn_id: Option<&str>, text: &str) -> String {
+    match turn_id {
+        Some(turn_id) => {
+            let digest = blake3::hash(format!("{turn_id}\0{text}").as_bytes()).to_hex();
+            format!("mo-{}", &digest[..32])
+        }
+        None => format!("mo-{}", create_id()),
+    }
 }
 
 impl DesktopOwnerNotifier {
@@ -95,7 +106,15 @@ impl DesktopOwnerNotifier {
             directory,
             sink,
             log,
+            turn_id: None,
         }
+    }
+
+    /// Messages written during this turn get ids derived from it, so a rerun of the turn
+    /// finds the first entry instead of writing and alerting again.
+    pub(crate) fn in_turn(mut self, turn_id: &str) -> Self {
+        self.turn_id = Some(turn_id.to_owned());
+        self
     }
 }
 
@@ -118,7 +137,7 @@ impl OwnerNotifier for DesktopOwnerNotifier {
         };
         let text = notice.push_body();
         if let Some(bot) = self.directory.local_bot(&self.bot_id).await? {
-            let message_id = format!("mo-{}", create_id());
+            let message_id = owner_message_id(self.turn_id.as_deref(), &notice.message());
             let written = self
                 .directory
                 .post_local(
@@ -248,15 +267,22 @@ pub(crate) fn notifier_for(
     name: &str,
     site: Option<TurnSite>,
 ) -> Arc<dyn OwnerNotifier> {
+    notifier_for_turn(app, bot_id, name, site, None)
+}
+
+pub(crate) fn notifier_for_turn(
+    app: &AppHandle,
+    bot_id: &str,
+    name: &str,
+    site: Option<TurnSite>,
+    turn_id: Option<&str>,
+) -> Arc<dyn OwnerNotifier> {
     let live = Arc::new(Live(app.clone()));
-    Arc::new(DesktopOwnerNotifier::new(
-        bot_id,
-        name,
-        site,
-        live.clone(),
-        live,
-        LOG.clone(),
-    ))
+    let notifier = DesktopOwnerNotifier::new(bot_id, name, site, live.clone(), live, LOG.clone());
+    Arc::new(match turn_id {
+        Some(turn_id) => notifier.in_turn(turn_id),
+        None => notifier,
+    })
 }
 
 #[cfg(test)]
@@ -342,6 +368,21 @@ mod tests {
             fakes.clone(),
             Arc::default(),
         )
+    }
+
+    #[tokio::test]
+    async fn a_message_in_a_turn_gets_the_same_id_when_the_turn_runs_again() {
+        let fakes = Arc::new(Fakes::default());
+        *fakes.local.lock().unwrap() = Some(local_bot(json!({ "kind": "pip" })));
+        let first = notifier(&fakes).in_turn("turn_1");
+        let again = notifier(&fakes).in_turn("turn_1");
+        let other = notifier(&fakes).in_turn("turn_2");
+        let a = first.deliver(notice()).await.unwrap();
+        let b = again.deliver(notice()).await.unwrap();
+        let c = other.deliver(notice()).await.unwrap();
+        assert_eq!(a.id, b.id);
+        assert_ne!(a.id, c.id);
+        assert!(a.id.starts_with("mo-"));
     }
 
     #[tokio::test]

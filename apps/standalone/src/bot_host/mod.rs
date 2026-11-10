@@ -93,7 +93,12 @@ pub async fn run(
         FlowLikeConfig::new(),
         HTTPClient::new_without_refetch(),
     ));
-    let runner = Arc::new(DeviceRunner::new(state, base_url, machines(&state_dir)));
+    let runner = Arc::new(DeviceRunner::new(
+        state,
+        base_url,
+        machines(&state_dir),
+        &state_dir,
+    ));
     let host = AccountHost::new(
         hub.clone(),
         runner,

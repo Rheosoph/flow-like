@@ -752,6 +752,25 @@ eventsSimple onLoad() {
 		expect(uses[1]).toMatchObject({ kind: "invalid" });
 		expect(parseUseDeclarations("use string::*;")).toHaveLength(1);
 	});
+
+	test("parses a member renamed with `as` and rejects a malformed entry", () => {
+		const [renamed, plain, malformed] = parseUseDeclarations(
+			"use string::{ trim as tidy, toLower }\nuse array::{ push }\nuse map::{ set as }",
+		);
+		expect(renamed).toMatchObject({
+			kind: "members",
+			members: ["trim", "toLower"],
+			aliases: { trim: "tidy" },
+		});
+		expect(plain).toEqual({
+			path: ["array"],
+			start: plain.start,
+			end: plain.end,
+			kind: "members",
+			members: ["push"],
+		});
+		expect(malformed).toMatchObject({ kind: "invalid" });
+	});
 });
 
 describe("FlowScript completions", () => {
@@ -930,6 +949,19 @@ eventsGeneric onLoad(payload: Struct) {
 		expect(messages[1]).toContain(
 			"'nothing' is not a member of namespace 'string'",
 		);
+	});
+
+	test("calls a member under the name its `use` list renames it to", () => {
+		expect(
+			diagnosticMessages(
+				'use string::{ trim as tidy }\ntidy({ string: "x" })\n',
+			),
+		).toEqual([]);
+		const messages = diagnosticMessages(
+			'use string::{ trim as tidy }\ntrim({ string: "x" })\n',
+		);
+		expect(messages).toHaveLength(1);
+		expect(messages[0]).toContain("Unknown function 'trim'");
 	});
 
 	test("flags unknown qualified calls and suggests the right spelling", () => {

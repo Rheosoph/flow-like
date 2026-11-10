@@ -114,6 +114,8 @@ pub struct Hub {
     pub model_requests: Vec<Value>,
     pub model_in_flight: usize,
     pub model_dropped: usize,
+    /// What the device saved last for the turn; a fresh turn has none.
+    pub checkpoint: Option<Value>,
     manifest: Option<OnboardingManifest>,
     challenge: Option<EnrollmentChallenge>,
     receipt: Option<DeviceReceipt>,
@@ -424,6 +426,16 @@ fn device_session(
     headers: &HeaderMap,
     path: &str,
 ) -> std::result::Result<(), Response> {
+    device_request(hub, id, headers, "POST", path)
+}
+
+fn device_request(
+    hub: &mut Hub,
+    id: &str,
+    headers: &HeaderMap,
+    method: &str,
+    path: &str,
+) -> std::result::Result<(), Response> {
     let receipt = hub.receipt.clone().unwrap();
     if receipt.device_id != id {
         return Err(error(404, "DEVICE_NOT_FOUND", "unknown device"));
@@ -442,7 +454,7 @@ fn device_session(
         proof,
         &receipt.identity.auth_key,
         &DpopContext {
-            method: "POST",
+            method,
             url: &endpoint,
             access_token: Some(token),
             nonce: None,
@@ -456,6 +468,35 @@ fn device_session(
     }
     hub.dpop_verified += 1;
     Ok(())
+}
+
+/// The proof of a checkpoint call names the path without its query, as the hub checks it.
+async fn checkpoint_load(
+    State(hub): State<Shared>,
+    Path((id, turn)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    let mut hub = hub.lock().await;
+    let path = format!("/devices/{id}/bots/turns/{turn}/checkpoint");
+    if let Err(response) = device_request(&mut hub, &id, &headers, "GET", &path) {
+        return response;
+    }
+    Json(json!({"checkpoint": hub.checkpoint, "monitor_result": null})).into_response()
+}
+
+async fn checkpoint_save(
+    State(hub): State<Shared>,
+    Path((id, turn)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    let mut hub = hub.lock().await;
+    let path = format!("/devices/{id}/bots/turns/{turn}/checkpoint");
+    if let Err(response) = device_request(&mut hub, &id, &headers, "PUT", &path) {
+        return response;
+    }
+    hub.checkpoint = Some(body["checkpoint"].clone());
+    Json(json!({"saved": true})).into_response()
 }
 
 async fn poll(
@@ -845,6 +886,10 @@ pub fn router(hub: Shared) -> Router {
         .route("/devices/{id}/bots/poll", post(poll))
         .route("/devices/{id}/bots/turns/{turn}/claim", post(claim))
         .route("/devices/{id}/bots/turns/{turn}/heartbeat", post(heartbeat))
+        .route(
+            "/devices/{id}/bots/turns/{turn}/checkpoint",
+            get(checkpoint_load).put(checkpoint_save),
+        )
         .route("/devices/{id}/bots/turns/{turn}/reply", post(reply))
         .route("/devices/{id}/bots/turns/{turn}/silent", post(silent))
         .route("/devices/{id}/bots/turns/{turn}/park", post(park))
@@ -893,6 +938,7 @@ impl MockHub {
             model_requests: Vec::new(),
             model_in_flight: 0,
             model_dropped: 0,
+            checkpoint: None,
             manifest: None,
             challenge: None,
             receipt: None,
@@ -963,6 +1009,7 @@ impl TurnEvents for NoEvents {
 
 pub struct HostHandle {
     task: tokio::task::JoinHandle<()>,
+    _state: tempfile::TempDir,
 }
 
 impl Drop for HostHandle {
@@ -983,7 +1030,13 @@ pub fn start_host(session: Arc<DeviceSession>, machines: Option<Arc<dyn Machines
         flow_like::state::FlowLikeConfig::new(),
         flow_like::utils::http::HTTPClient::new_without_refetch(),
     ));
-    let runner = Arc::new(DeviceRunner::new(state, base_url, machines));
+    let state_dir = tempfile::tempdir().unwrap();
+    let runner = Arc::new(DeviceRunner::new(
+        state,
+        base_url,
+        machines,
+        state_dir.path(),
+    ));
     let mut config = AccountConfig::new(host_id);
     config.fire_tasks = false;
     config.heartbeat = Duration::from_millis(200);
@@ -997,6 +1050,7 @@ pub fn start_host(session: Arc<DeviceSession>, machines: Option<Arc<dyn Machines
     );
     HostHandle {
         task: tokio::spawn(host.run()),
+        _state: state_dir,
     }
 }
 

@@ -14,6 +14,7 @@ use flow_like_types::bot::BotCapability;
 use serde_json::{Value, json};
 
 use super::bot_notes::NotesHandle;
+use super::bot_trail::ToolTrail;
 use super::memory_tools::MemoryHandle;
 use super::platform::PLATFORM_TOOL_IMAGE_URLS_FIELD;
 
@@ -205,6 +206,7 @@ registered_tools!(
     "knowledge_drop",
     "file_summarize",
     "file_extract",
+    "file_extract_content",
     "pdf_render",
     "excel_inspect",
     "document_create",
@@ -221,6 +223,7 @@ registered_tools!(
     "schedule_task",
     "list_tasks",
     "cancel_task",
+    "update_task",
     "shell_run",
     "browser_open",
     "browser_snapshot",
@@ -236,6 +239,7 @@ registered_tools!(
     "email_send",
     "email_reply",
     "image_generate",
+    "barcode_read",
     "secret_list",
     "secret_request",
     "skill_load",
@@ -368,6 +372,7 @@ pub struct HostTools {
     code_languages: Vec<String>,
     memory: Option<MemoryHandle>,
     notes: Option<NotesHandle>,
+    trail: Option<ToolTrail>,
 }
 
 impl HostTools {
@@ -383,9 +388,7 @@ impl HostTools {
                 .into_iter()
                 .filter(|name| !LOCAL_MACHINE_TOOLS.contains(name))
                 .collect(),
-            code_languages: Vec::new(),
-            memory: None,
-            notes: None,
+            ..Self::default()
         }
     }
 
@@ -413,9 +416,7 @@ impl HostTools {
                 .into_iter()
                 .filter(|linked| names.iter().any(|name| name.as_ref() == *linked))
                 .collect(),
-            code_languages: Vec::new(),
-            memory: None,
-            notes: None,
+            ..Self::default()
         }
     }
 
@@ -438,6 +439,17 @@ impl HostTools {
 
     pub fn notes(&self) -> Option<&NotesHandle> {
         self.notes.as_ref()
+    }
+
+    /// Records the turn's tool calls for its reply and shows those of the bot's earlier replies.
+    /// Hosts pass it only for the owner's direct conversation with the bot.
+    pub fn with_trail(mut self, trail: ToolTrail) -> Self {
+        self.trail = Some(trail);
+        self
+    }
+
+    pub fn trail(&self) -> Option<&ToolTrail> {
+        self.trail.as_ref()
     }
 
     /// The languages `code_run` runs on this host (`ToolEnv::code_languages`). None: the host
@@ -464,7 +476,8 @@ impl HostTools {
             self.names
                 .remove(tools::user_context::USER_CONTEXT_AVAILABLE);
             self.names.remove(tools::user_context::USER_CONTEXT_REQUEST);
-            self.names.remove(tools::user_context::USER_CONTEXT_SET_STATUS);
+            self.names
+                .remove(tools::user_context::USER_CONTEXT_SET_STATUS);
         }
         self
     }

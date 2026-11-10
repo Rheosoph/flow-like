@@ -581,7 +581,7 @@ pub(crate) async fn apply_hosted_usage_settlement(
     if holds_settlement(&row, &settlement) {
         return Ok(());
     }
-    crate::quota::settle(
+    crate::quota::settle_hosted_ai(
         state,
         id,
         &revision,

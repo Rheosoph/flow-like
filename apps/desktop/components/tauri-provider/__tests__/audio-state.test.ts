@@ -5,11 +5,13 @@ const mocks = vi.hoisted(() => ({
 	invoke: vi.fn(),
 	post: vi.fn(),
 	postBlob: vi.fn(),
+	postStream: vi.fn(),
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("../../../lib/api", () => ({
 	post: mocks.post,
 	postBlob: mocks.postBlob,
+	postStream: mocks.postStream,
 }));
 
 import { AudioState } from "../audio-state";
@@ -102,5 +104,94 @@ describe("desktop speech routing", () => {
 			auth,
 		);
 		expect(mocks.invoke).not.toHaveBeenCalled();
+	});
+
+	describe("streamed speech", () => {
+		const streamResponse = (rate: string | null, parts: number[][]) =>
+			new Response(
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						for (const part of parts) controller.enqueue(new Uint8Array(part));
+						controller.close();
+					},
+				}),
+				{ headers: rate === null ? {} : { "x-audio-sample-rate": rate } },
+			);
+
+		test("requests raw PCM and iterates the body chunks", async () => {
+			mocks.postStream.mockResolvedValue(
+				streamResponse("24000", [[1, 2], [3]]),
+			);
+			const signal = new AbortController().signal;
+			const stream = await audio().speakStream(
+				{ bit_id: "tts", text: "Hello", voice: "nova", format: "mp3" },
+				{ signal },
+			);
+			expect(mocks.postStream).toHaveBeenCalledWith(
+				profile,
+				"audio/speech",
+				{
+					bit_id: "tts",
+					text: "Hello",
+					voice: "nova",
+					format: "pcm",
+					stream: true,
+				},
+				auth,
+				{ signal },
+			);
+			expect(stream.sampleRate).toBe(24000);
+			const received: number[][] = [];
+			for await (const chunk of stream.chunks) received.push([...chunk]);
+			expect(received).toEqual([[1, 2], [3]]);
+		});
+
+		test.each([null, "abc", "0", "-5", "24000.5"])(
+			"rejects a sample rate header of %s",
+			async (rate) => {
+				mocks.postStream.mockResolvedValue(streamResponse(rate, [[1]]));
+				await expect(
+					audio().speakStream({ bit_id: "tts", text: "Hello" }),
+				).rejects.toThrow("x-audio-sample-rate");
+			},
+		);
+
+		test("lets a failed request reject so callers fall back to speak", async () => {
+			mocks.postStream.mockRejectedValue(
+				new Error("SPEECH_STREAM_UNSUPPORTED"),
+			);
+			await expect(
+				audio().speakStream({ bit_id: "tts", text: "Hello" }),
+			).rejects.toThrow("SPEECH_STREAM_UNSUPPORTED");
+		});
+
+		test("never streams local voices", async () => {
+			await expect(
+				audio().speakStream({ bit_id: "local", text: "Hello", local: true }),
+			).rejects.toThrow("cannot be streamed");
+			expect(mocks.postStream).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("warm", () => {
+		test("loads only the local models", async () => {
+			await audio().warm({
+				stt: { bit_id: "stt-local", local: true },
+				tts: { bit_id: "tts-hosted", local: false },
+			});
+			expect(mocks.invoke).toHaveBeenCalledWith("speech_warm", {
+				sttBitId: "stt-local",
+				ttsBitId: null,
+			});
+		});
+
+		test("does nothing for hosted models and swallows failures", async () => {
+			await audio().warm({ tts: { bit_id: "tts", local: false } });
+			expect(mocks.invoke).not.toHaveBeenCalled();
+			mocks.invoke.mockRejectedValue(new Error("no model"));
+			await expect(
+				audio().warm({ stt: { bit_id: "stt", local: true } }),
+			).resolves.toBeUndefined();
+		});
 	});
 });

@@ -27,12 +27,34 @@ use flow_like_types::{
     inbox::InboxEntryKind,
 };
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    sync::{Arc, LazyLock},
+};
 
 #[cfg(test)]
 mod tests;
 
 const FAILURE_REPLY_PREFIX: &str = "rf-";
+const LANE_COUNT: usize = 64;
+
+static LANES: LazyLock<Vec<Arc<flow_like_types::tokio::sync::Mutex<()>>>> = LazyLock::new(|| {
+    (0..LANE_COUNT)
+        .map(|_| Arc::new(flow_like_types::tokio::sync::Mutex::new(())))
+        .collect()
+});
+
+/// Serializes check-then-act limits for one bot inside this process; held across the count and
+/// the write that the count guards.
+pub(crate) async fn bot_limit_guard(
+    domain: &str,
+    bot_id: &str,
+) -> flow_like_types::tokio::sync::OwnedMutexGuard<()> {
+    let digest = blake3::hash(format!("{domain}\0{bot_id}").as_bytes());
+    let lane = usize::from(digest.as_bytes()[0]) % LANE_COUNT;
+    LANES[lane].clone().lock_owned().await
+}
+
 const OWNER_MESSAGE_PREFIX: &str = "mo-";
 
 #[async_trait]
@@ -231,6 +253,7 @@ pub(crate) struct ServerNotifier {
     state: AppState,
     bot_id: String,
     site: Option<TurnSite>,
+    turn_id: Option<String>,
 }
 
 impl ServerNotifier {
@@ -239,7 +262,14 @@ impl ServerNotifier {
             state: state.clone(),
             bot_id: bot_id.to_string(),
             site,
+            turn_id: None,
         }
+    }
+
+    /// A message the turn repeats is the same message: same id, one post, one push.
+    pub(crate) fn with_turn(mut self, turn_id: &str) -> Self {
+        self.turn_id = Some(turn_id.to_string());
+        self
     }
 }
 
@@ -311,14 +341,38 @@ async fn in_owner_chat<C: ConnectionTrait>(
     }
 }
 
-/// Writes the message into the bot's direct chat with its owner and pushes it once, unless the
-/// turn runs in that chat or the owner reads it live. The chat is only the push when it is end-to-end encrypted.
+#[cfg(test)]
 pub(crate) async fn deliver_owner_message<C: ConnectionTrait>(
     db: &C,
     sink: &dyn NoticeSink,
     chat: &dyn OwnerChat,
     bot_id: &str,
     site: Option<&TurnSite>,
+    notice: OwnerNotice,
+) -> Result<NoticeReceipt> {
+    deliver_owner_message_in_turn(db, sink, chat, bot_id, site, None, notice).await
+}
+
+fn owner_message_id(turn_id: Option<&str>, text: &str) -> String {
+    match turn_id {
+        Some(turn_id) => {
+            let digest = blake3::hash(format!("{turn_id}\0{text}").as_bytes()).to_hex();
+            format!("{OWNER_MESSAGE_PREFIX}{}", &digest[..32])
+        }
+        None => format!("{OWNER_MESSAGE_PREFIX}{}", create_id()),
+    }
+}
+
+/// Writes the message into the bot's direct chat with its owner and pushes it once, unless the
+/// turn runs in that chat or the owner reads it live. The chat is only the push when it is end-to-end encrypted.
+/// Within one turn the same text is written and pushed once.
+pub(crate) async fn deliver_owner_message_in_turn<C: ConnectionTrait>(
+    db: &C,
+    sink: &dyn NoticeSink,
+    chat: &dyn OwnerChat,
+    bot_id: &str,
+    site: Option<&TurnSite>,
+    turn_id: Option<&str>,
     notice: OwnerNotice,
 ) -> Result<NoticeReceipt> {
     let bot = live_bot(db, bot_id)
@@ -330,8 +384,7 @@ pub(crate) async fn deliver_owner_message<C: ConnectionTrait>(
             ..Default::default()
         });
     }
-    let id = create_id();
-    let message_id = format!("{OWNER_MESSAGE_PREFIX}{id}");
+    let message_id = owner_message_id(turn_id, &notice.message());
     let conversation = open_conversation(db, &bot.owner_id, bot_id, "", now_millis())
         .await
         .map_err(|error| anyhow!("Opening the chat of bot '{bot_id}' failed: {error}"))?;
@@ -374,12 +427,13 @@ impl OwnerNotifier for ServerNotifier {
     }
 
     async fn deliver(&self, notice: OwnerNotice) -> Result<NoticeReceipt> {
-        deliver_owner_message(
+        deliver_owner_message_in_turn(
             &self.state.db,
             &StateSink(&self.state),
             &StateChat(&self.state),
             &self.bot_id,
             self.site.as_ref(),
+            self.turn_id.as_deref(),
             notice,
         )
         .await

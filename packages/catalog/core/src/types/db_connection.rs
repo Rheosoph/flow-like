@@ -183,6 +183,12 @@ impl CachedDB {
     pub async fn flushed_read(
         &self,
     ) -> flow_like_types::Result<RwLockReadGuard<'_, BufferedVectorStore<LanceDBVectorStore>>> {
+        {
+            let db = self.db.read().await;
+            if !db.is_dirty() && db.write_failure_report().is_none() {
+                return Ok(db);
+            }
+        }
         Ok(self.flushed_write().await?.downgrade())
     }
 
@@ -361,7 +367,7 @@ impl NodeDBConnection {
         if flush_writers {
             Self::flush_related_writers(context, db).await?;
         }
-        let store = db.db.write().await;
+        let store = db.db.read().await;
         let inner = store.inner();
         let selector = inner.selector();
         let mut generation = generation.wrapping_add(inner.mutation_generation());

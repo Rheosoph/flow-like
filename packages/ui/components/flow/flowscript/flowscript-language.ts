@@ -1266,13 +1266,30 @@ function braceDepthAt(masked: string, offset: number): number {
 export type UseDeclaration = { path: string[]; start: number; end: number } & (
 	| { kind: "namespace" }
 	| { kind: "glob" }
-	| { kind: "members"; members: string[] }
+	| {
+			kind: "members";
+			members: string[];
+			/** `use a::{ x as y }`: member name → the local name it is called by. */
+			aliases?: Record<string, string>;
+	  }
 	| { kind: "alias"; alias: string }
 	| { kind: "invalid"; error: string }
 );
 
+/** The bare name a call site writes for `member` of a `use a::{ … }` list. */
+export function useMemberLocalName(
+	use: { aliases?: Record<string, string> },
+	member: string,
+): string {
+	return use.aliases?.[member] ?? member;
+}
+
 const USE_TREE_RE = new RegExp(
 	`^(${IDENT_SRC}(?:\\s*::\\s*${IDENT_SRC})*)(?:\\s*::\\s*(?:(\\*)|\\{([^}]*)\\}))?(?:\\s+as\\s+(${IDENT_SRC}))?$`,
+);
+
+const USE_MEMBER_RE = new RegExp(
+	`^(${IDENT_SRC})(?:\\s+as\\s+(${IDENT_SRC}))?$`,
 );
 
 function parseUseTree(raw: string, start: number): UseDeclaration | null {
@@ -1308,21 +1325,29 @@ function parseUseTree(raw: string, start: number): UseDeclaration | null {
 				kind: "invalid",
 				error: "`as` cannot rename a member list.",
 			};
-		const members = m[3]
+		const written = m[3]
 			.split(",")
 			.map((member) => member.trim())
 			.filter(Boolean);
-		if (
-			members.length === 0 ||
-			members.some((member) => !IDENT_RE.test(member))
-		)
+		const entries = written.map((member) => USE_MEMBER_RE.exec(member));
+		if (written.length === 0 || entries.some((entry) => !entry))
 			return {
 				...span,
 				path,
 				kind: "invalid",
-				error: "`use` member list must name at least one identifier.",
+				error:
+					"`use` member list must name at least one member, each written `name` or `name as local`.",
 			};
-		return { ...span, path, kind: "members", members };
+		const members: string[] = [];
+		const aliases: Record<string, string> = {};
+		for (const entry of entries) {
+			if (!entry) continue;
+			members.push(entry[1]);
+			if (entry[2]) aliases[entry[1]] = entry[2];
+		}
+		return Object.keys(aliases).length > 0
+			? { ...span, path, kind: "members", members, aliases }
+			: { ...span, path, kind: "members", members };
 	}
 	if (m[4]) return { ...span, path, kind: "alias", alias: m[4] };
 	return { ...span, path, kind: "namespace" };
@@ -1411,7 +1436,7 @@ function buildUseScope(
 			case "members":
 				for (const member of use.members) {
 					const info = ns?.members.get(member);
-					if (info) open(member, info);
+					if (info) open(useMemberLocalName(use, member), info);
 				}
 				break;
 		}

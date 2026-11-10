@@ -65,13 +65,9 @@ function BotRow({
 	);
 }
 
-/** The person's bots that live on this device, with whether each one answers. */
-export function BotsOnDevice({ page }: Readonly<{ page: DevicePage }>) {
-	const { t } = useTranslation("devices");
-	const available = Boolean(useBackend().botState);
-	const [creating, setCreating] = useState(false);
+/** The person's bots that live on the device; none while the list is loading. */
+export function useBotsOnDevice(deviceId: string) {
 	const bots = useBots();
-	const reports = useBotPresence(available).data;
 	const here = useMemo(
 		() =>
 			(bots.data ?? []).filter(
@@ -79,10 +75,20 @@ export function BotsOnDevice({ page }: Readonly<{ page: DevicePage }>) {
 					!bot.local &&
 					!bot.system &&
 					bot.location === "device" &&
-					bot.device_id === page.deviceId,
+					bot.device_id === deviceId,
 			),
-		[bots.data, page.deviceId],
+		[bots.data, deviceId],
 	);
+	return { bots: here, loading: bots.isLoading };
+}
+
+/** The person's bots that live on this device, with whether each one answers. */
+export function BotsOnDevice({ page }: Readonly<{ page: DevicePage }>) {
+	const { t } = useTranslation("devices");
+	const available = Boolean(useBackend().botState);
+	const [creating, setCreating] = useState(false);
+	const { bots: here, loading } = useBotsOnDevice(page.deviceId);
+	const reports = useBotPresence(available).data;
 	if (!available) return null;
 	return (
 		<>
@@ -110,7 +116,7 @@ export function BotsOnDevice({ page }: Readonly<{ page: DevicePage }>) {
 					</ul>
 				) : (
 					<p className="text-ui text-muted-foreground">
-						{bots.isLoading
+						{loading
 							? t("device.bots.loading", "Loading bots…")
 							: t(
 									"device.bots.empty",

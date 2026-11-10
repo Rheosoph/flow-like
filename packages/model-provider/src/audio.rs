@@ -132,6 +132,8 @@ pub struct HostedSpeechRequest {
     pub voice: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stream: bool,
 }
 
 impl HostedSpeechRequest {
@@ -159,6 +161,10 @@ impl HostedSpeechRequest {
                 .as_deref()
                 .is_none_or(|format| SPEECH_FORMATS.contains(&format)),
             "Speech format must be one of mp3, wav, opus, aac, flac, or pcm"
+        );
+        ensure!(
+            !self.stream || self.format.as_deref() == Some("pcm"),
+            "Streamed speech requires the pcm format"
         );
         Ok(())
     }
@@ -270,6 +276,17 @@ impl HostedAudioProvider {
         match self {
             Self::Gemini => ("x-goog-api-key", key.to_owned()),
             _ => ("authorization", format!("Bearer {key}")),
+        }
+    }
+
+    /// Sample rate of the signed 16-bit little-endian mono PCM `model` returns as its raw response
+    /// body for `format: "pcm"`. `None`: the response cannot be passed through as PCM of a known
+    /// rate. OpenRouter serves speech models of several vendors, so only its OpenAI models count.
+    pub fn stream_pcm_sample_rate(self, model: &str) -> Option<u32> {
+        match self {
+            Self::OpenAi => Some(24_000),
+            Self::OpenRouter => model.starts_with("openai/").then_some(24_000),
+            Self::Groq | Self::Mistral | Self::Together | Self::Xai | Self::Gemini => None,
         }
     }
 

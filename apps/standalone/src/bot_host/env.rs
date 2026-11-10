@@ -6,12 +6,16 @@ use async_trait::async_trait;
 use flow_like::credentials::SharedCredentials;
 use flow_like_bot_tools::{
     AppTables, Attachment, BrowserBackend, ComputerBackend, Environment, FileData, FileEntry,
-    FileMeta, KnowledgeEmbedder, Limits, ModelRole, Scope, SecretInfo, SessionCache, ToolEnv,
+    FileMeta, KnowledgeEmbedder, Limits, ModelRole, Scope, SecretInfo, SessionCache, ShellBackend,
+    ToolEnv,
 };
 use flow_like_bot_tools_host::{AppAccess, HostEnv, SecretSource};
 use flow_like_model_provider::llm::ModelLogic;
 use flow_like_storage::{files::store::FlowLikeStore, lancedb::Connection};
-use flow_like_types::{Bytes, Result, anyhow, bot_message::WorkspaceHandle};
+use flow_like_types::{
+    Bytes, Result, anyhow,
+    bot_message::{CONVERSATION_FILE_APP_PREFIX, WorkspaceHandle},
+};
 use reqwest::Method;
 use serde_json::Value;
 use std::{collections::HashMap, sync::Arc};
@@ -95,7 +99,7 @@ impl AppAccess for PresignedAccess {
     async fn store(&self, app_id: &str) -> Result<FlowLikeStore> {
         if app_id.starts_with(flow_like_types::bot_message::CONVERSATION_FILE_APP_PREFIX) {
             return Err(anyhow!(
-                "Conversation files of '{app_id}' are not reachable from a device-hosted bot yet"
+                "Conversation files of '{app_id}' are read through the hub, not through presigned storage credentials"
             ));
         }
         self.credentials(app_id).await?.to_store(false).await
@@ -133,14 +137,153 @@ impl SecretSource for HubSecrets {
     }
 }
 
+const CONVERSATION_FILE_TIMEOUT_SECS: u64 = 120;
+
+fn conversation_file_route(conversation_id: &str, path: &str) -> Result<String> {
+    let file_id = path.split_once('.').map_or(path, |(id, _)| id);
+    let plain = |id: &str| {
+        !id.is_empty()
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    };
+    if !plain(file_id) || !plain(conversation_id) {
+        return Err(anyhow!(
+            "Conversation file '{path}' of conversation '{conversation_id}' has an unusable id"
+        ));
+    }
+    Ok(format!(
+        "inbox/conversations/{conversation_id}/files/{file_id}"
+    ))
+}
+
+/// Files people attach to a conversation: the hub signs a short-lived download link for the
+/// bot's runtime token, and only for the conversation that token was minted for.
+pub struct ConversationFiles {
+    hub: Arc<dyn flow_like_bot_host::hub::TurnHub>,
+    http: reqwest::Client,
+}
+
+struct ConversationDownload {
+    url: String,
+    bytes: u64,
+    mime: Option<String>,
+}
+
+impl ConversationFiles {
+    pub fn new(hub: Arc<dyn flow_like_bot_host::hub::TurnHub>) -> Self {
+        let http = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(
+                CONVERSATION_FILE_TIMEOUT_SECS,
+            ))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap_or_default();
+        Self { hub, http }
+    }
+
+    async fn download(
+        &self,
+        conversation_id: &str,
+        path: &str,
+    ) -> Result<Option<ConversationDownload>> {
+        let route = conversation_file_route(conversation_id, path)?;
+        let answer = match self.hub.read(&route, Vec::new()).await {
+            Ok(answer) => answer,
+            Err(failure) if failure.status == Some(404) => return Ok(None),
+            Err(failure) => {
+                return Err(anyhow!(
+                    "Conversation file '{path}' could not be read: {failure}"
+                ));
+            }
+        };
+        let url = answer["url"].as_str().ok_or_else(|| {
+            anyhow!("The hub sent no download link for conversation file '{path}'")
+        })?;
+        Ok(Some(ConversationDownload {
+            url: url.to_owned(),
+            bytes: answer["bytes"].as_u64().unwrap_or(0),
+            mime: answer["mime"].as_str().map(str::to_owned),
+        }))
+    }
+
+    async fn read(
+        &self,
+        conversation_id: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> Result<Option<FileData>> {
+        let Some(download) = self.download(conversation_id, path).await? else {
+            return Ok(None);
+        };
+        let limit = usize::try_from(max_bytes).unwrap_or(usize::MAX);
+        let mut response = self
+            .http
+            .get(&download.url)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|error| anyhow!("Conversation file '{path}' could not be fetched: {error}"))?;
+        let mut bytes = Vec::new();
+        while bytes.len() < limit {
+            let Some(chunk) = response.chunk().await? else {
+                break;
+            };
+            let room = limit - bytes.len();
+            bytes.extend_from_slice(&chunk[..chunk.len().min(room)]);
+        }
+        Ok(Some(FileData {
+            size: download.bytes.max(bytes.len() as u64),
+            bytes: Bytes::from(bytes),
+            mime: download.mime,
+            classification: None,
+        }))
+    }
+
+    async fn stat(&self, conversation_id: &str, path: &str) -> Result<Option<FileMeta>> {
+        Ok(self
+            .download(conversation_id, path)
+            .await?
+            .map(|download| FileMeta {
+                bytes: download.bytes,
+                mime: download.mime,
+            }))
+    }
+}
+
 pub struct DeviceToolEnv {
     inner: HostEnv,
     machine: MachineBackends,
+    shell: Option<Arc<dyn ShellBackend>>,
+    conversation_files: Option<ConversationFiles>,
 }
 
 impl DeviceToolEnv {
     pub fn new(inner: HostEnv, machine: MachineBackends) -> Self {
-        Self { inner, machine }
+        Self {
+            inner,
+            machine,
+            shell: None,
+            conversation_files: None,
+        }
+    }
+
+    pub fn with_shell(mut self, shell: Arc<dyn ShellBackend>) -> Self {
+        self.shell = Some(shell);
+        self
+    }
+
+    pub fn with_conversation_files(mut self, files: ConversationFiles) -> Self {
+        self.conversation_files = Some(files);
+        self
+    }
+
+    fn conversation_file<'a>(&self, app_id: &'a str) -> Option<(&ConversationFiles, &'a str)> {
+        let conversation_id = app_id.strip_prefix(CONVERSATION_FILE_APP_PREFIX)?;
+        self.conversation_files
+            .as_ref()
+            .map(|files| (files, conversation_id))
     }
 }
 
@@ -182,7 +325,9 @@ impl ToolEnv for DeviceToolEnv {
         self.inner.notifier()
     }
 
-    fn user_context(&self) -> Option<Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>> {
+    fn user_context(
+        &self,
+    ) -> Option<Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>> {
         self.inner.user_context()
     }
 
@@ -202,16 +347,26 @@ impl ToolEnv for DeviceToolEnv {
         self.machine.computer.clone()
     }
 
+    fn shell(&self) -> Option<Arc<dyn ShellBackend>> {
+        self.shell.clone()
+    }
+
     async fn read_file(
         &self,
         app_id: &str,
         path: &str,
         max_bytes: u64,
     ) -> Result<Option<FileData>> {
+        if let Some((files, conversation_id)) = self.conversation_file(app_id) {
+            return files.read(conversation_id, path, max_bytes).await;
+        }
         self.inner.read_file(app_id, path, max_bytes).await
     }
 
     async fn stat_file(&self, app_id: &str, path: &str) -> Result<Option<FileMeta>> {
+        if let Some((files, conversation_id)) = self.conversation_file(app_id) {
+            return files.stat(conversation_id, path).await;
+        }
         self.inner.stat_file(app_id, path).await
     }
 
@@ -284,5 +439,25 @@ impl Machines for crate::playground::MachineHost {
             browser: machine.browser,
             computer: machine.computer,
         }
+    }
+}
+
+#[cfg(test)]
+mod conversation_file_tests {
+    use super::conversation_file_route;
+
+    #[test]
+    fn a_file_id_that_is_not_a_plain_id_is_refused_before_any_call() {
+        assert_eq!(
+            conversation_file_route("conv-1", "f_9.pdf").unwrap(),
+            "inbox/conversations/conv-1/files/f_9"
+        );
+        for path in ["../secret.pdf", "a/b", "", ".pdf"] {
+            let error = conversation_file_route("conv-1", path)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("unusable id"), "{path}: {error}");
+        }
+        assert!(conversation_file_route("a/b", "f_9").is_err());
     }
 }

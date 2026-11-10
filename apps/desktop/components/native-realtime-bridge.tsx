@@ -11,6 +11,7 @@ import {
 	desktopConversationFeed,
 	onWatchedConversationsChange,
 } from "../lib/desktop-conversation-feed";
+import { pokeBotHost } from "../lib/bot-host-poke";
 import { localRegistries } from "../lib/local-bots/registry";
 import { watchNativeRealtime } from "../lib/native-realtime";
 import { TauriBackend } from "./tauri-provider";
@@ -104,6 +105,7 @@ export function NativeRealtimeBridge() {
 						);
 					const update = message.response.notifications;
 					if (!update || update.revision === revision) return;
+					pokeBotHost();
 					return queryClient
 						.invalidateQueries(
 							{

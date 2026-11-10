@@ -5,7 +5,7 @@ import {
 	historyMessageForModel,
 } from "../../components/interfaces/chat-default/chat-message-interaction";
 import { joinContentText } from "../../components/interfaces/chat-default/inline-segments";
-import { IRole } from "../../lib/schema/llm/history";
+import { userContextAwareHistory } from "../../lib/bot-user-context-history";
 import { globalChatDb } from "./global-chat-db";
 import { useGlobalChatStore } from "./global-chat-store";
 import { persistGlobalChatMessage } from "./global-chat-stream";
@@ -14,20 +14,11 @@ import { persistGlobalChatMessage } from "./global-chat-stream";
 export function globalChatModelInput(
 	message: IMessage,
 	history: readonly IMessage[],
+	now = Date.now(),
 ) {
 	return {
 		prompt: joinContentText(historyMessageForModel(message).content),
-		history: history
-			.filter((item) => !item.userContext && !item.userContextDerived)
-			.filter(
-				(item) =>
-					(!item.error && !item.notice) ||
-					Boolean(joinContentText(item.inner.content).trim()),
-			)
-			.map((item) => ({
-				role: item.inner.role === IRole.Assistant ? "Assistant" : "User",
-				content: joinContentText(historyMessageForModel(item).content),
-			})),
+		history: userContextAwareHistory(history, now),
 	};
 }
 

@@ -17,6 +17,8 @@ import {
 	deniedUserContext,
 	grantUserContextSession,
 	hasUserContextGrant,
+	liveUserContextSession,
+	revokeUserContextBody,
 	revokeUserContextSession,
 	setUserContextAccount,
 	trackUserContextCollection,
@@ -83,10 +85,12 @@ export function UserContextCard({
 		() =>
 			typeof document !== "undefined" && document.visibilityState === "visible",
 	);
+	const [revokedHere, setRevokedHere] = useState(false);
 	const [granted, setGranted] = useState(() => hasUserContextGrant(request));
 	const controller = useRef<AbortController | undefined>(undefined);
 	const attempted = useRef(false);
 	const answer = context.answer ?? sent;
+	const revoked = context.revoked || revokedHere;
 	const subjectId = conversation?.local
 		? "local"
 		: auth.isAuthenticated
@@ -102,6 +106,12 @@ export function UserContextCard({
 		JSON.stringify(members) ===
 			JSON.stringify([...request.audience_member_ids].sort());
 	const expired = clock >= request.expires_at;
+	const sessionLive = liveUserContextSession(
+		request,
+		context.response,
+		revoked,
+		clock,
+	);
 	const disabled =
 		busy || !mine || !audienceMatches || expired || Boolean(answer);
 	const authorization = JSON.stringify([
@@ -272,6 +282,37 @@ export function UserContextCard({
 	) => setInput((current) => ({ ...current, [key]: value }));
 	const selectClass = "h-9 w-full rounded-md border bg-background px-2 text-sm";
 	const field = (name: UserContextField) => request.fields.includes(name);
+	const answerLabel =
+		answer === "deny"
+			? t("context.declined", "Sharing declined")
+			: proposal
+				? t("context.statusApplied", "Status change applied")
+				: revoked && answer === "session"
+					? t("context.revoked", "Session access revoked")
+					: answer === "session"
+						? t("context.sessionShared", "Shared for this session")
+						: t("context.shared", "Context shared for this request");
+	const revoke = async () => {
+		revokeUserContextSession(request);
+		setGranted(false);
+		if (answer !== "session" || revoked) return;
+		setError(undefined);
+		try {
+			await send.mutateAsync({
+				conversationId: request.conversation_id,
+				request: {
+					message_id: `uctx_revoke_${request.id}`,
+					kind: "message",
+					envelope: { v: 1, enc: "none", body: revokeUserContextBody(request) },
+				},
+			});
+			setRevokedHere(true);
+		} catch {
+			setError(
+				t("context.revokeFailed", "Couldn't revoke session access. Try again."),
+			);
+		}
+	};
 	const tone = answer === "deny" ? "muted" : answer ? "good" : "warning";
 	return (
 		<RequestCard
@@ -374,8 +415,8 @@ export function UserContextCard({
 						</p>
 						<p>
 							{t(
-								"context.retention",
-								"This snapshot is current for up to five minutes and is used for this answer. Shared messages remain in this conversation.",
+								"context.onceRetention",
+								"Share once: the snapshot is current for up to five minutes and is used for the bot's next answer only. Shared messages remain in this conversation.",
 							)}
 						</p>
 						{answer && answer !== "deny" && unavailable.length > 0 && (
@@ -389,15 +430,7 @@ export function UserContextCard({
 								})}
 							</p>
 						)}
-						{answer && (
-							<output className="block">
-								{answer === "deny"
-									? t("context.declined", "Sharing declined")
-									: proposal
-										? t("context.statusApplied", "Status change applied")
-										: t("context.shared", "Context shared for this request")}
-							</output>
-						)}
+						{answer && <output className="block">{answerLabel}</output>}
 						{!answer && expired && (
 							<output className="block">
 								{t("context.expired", "This request has expired.")}
@@ -654,15 +687,20 @@ export function UserContextCard({
 					)}
 					{!proposal && (
 						<p className="text-xs text-muted-foreground">
-							{t(
-								"context.sessionHint",
-								"Session access lasts up to 30 minutes on this device, for this bot, purpose, fields and conversation. You can revoke it here.",
-							)}
+							{request.audience === "direct"
+								? t(
+										"context.sessionAccessDirect",
+										"Allow for this session: for up to 30 minutes the bot can keep using what you share in this conversation, and this device answers its new requests for these fields automatically. You can revoke it here at any time.",
+									)
+								: t(
+										"context.sessionAccessGroup",
+										"Allow for this session: for up to 30 minutes this device answers the bot's new requests for these fields in this group automatically. You can revoke it here at any time.",
+									)}
 						</p>
 					)}
 				</div>
 			)}
-			{((!answer && !expired && mine) || granted) && (
+			{((!answer && !expired && mine) || granted || (mine && sessionLive)) && (
 				<RequestCardFooter
 					start={
 						error ? (
@@ -712,15 +750,8 @@ export function UserContextCard({
 							)}
 						</>
 					)}
-					{granted && mine && (
-						<Button
-							variant="ghost"
-							size="sm"
-							onClick={() => {
-								revokeUserContextSession(request);
-								setGranted(false);
-							}}
-						>
+					{mine && (granted || sessionLive) && (
+						<Button variant="ghost" size="sm" onClick={() => void revoke()}>
 							{t("context.revoke", "Revoke session access")}
 						</Button>
 					)}

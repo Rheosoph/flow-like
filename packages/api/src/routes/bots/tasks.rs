@@ -373,7 +373,11 @@ pub async fn create_bot_task(
     Json(body): Json<CreateBotTaskRequest>,
 ) -> Result<(StatusCode, Json<BotTaskInfo>), ApiError> {
     let sub = crate::bot_caller::acting_owner_for(&state.db, &user, &bot_id).await?;
-    let creator = if matches!(user, AppUser::Bot(_)) { TaskCreator::Bot } else { TaskCreator::Owner };
+    let creator = if matches!(user, AppUser::Bot(_)) {
+        TaskCreator::Bot
+    } else {
+        TaskCreator::Owner
+    };
     let request = CreateBotTask {
         kind: Some(kind_of(&body)?),
         at: body.at,
@@ -422,7 +426,7 @@ pub async fn update_bot_task(
     Path((bot_id, task_id)): Path<(String, String)>,
     Json(body): Json<UpdateBotTaskRequest>,
 ) -> Result<Json<BotTaskInfo>, ApiError> {
-    let sub = user.sub()?;
+    let sub = crate::bot_caller::acting_owner_for(&state.db, &user, &bot_id).await?;
     let request = UpdateBotTask {
         at: body.at,
         cron: body.cron,
@@ -432,15 +436,28 @@ pub async fn update_bot_task(
         enabled: body.enabled,
         monitoring: body.monitoring,
     };
-    let row = update_in(
-        &state.db,
-        &sub,
-        &bot_id,
-        &task_id,
-        request,
-        Utc::now().fixed_offset(),
-    )
-    .await?;
+    let row = state
+        .transaction(|txn| {
+            let (sub, bot_id, task_id, request) = (
+                sub.clone(),
+                bot_id.clone(),
+                task_id.clone(),
+                request.clone(),
+            );
+            Box::pin(async move {
+                lock_bot(txn, &bot_id).await?;
+                update_in(
+                    txn,
+                    &sub,
+                    &bot_id,
+                    &task_id,
+                    request,
+                    Utc::now().fixed_offset(),
+                )
+                .await
+            })
+        })
+        .await?;
     task_schedules::sync(&state, &row).await;
     Ok(Json(row.into()))
 }
@@ -493,7 +510,7 @@ pub async fn fire_bot_task(
     Extension(user): Extension<AppUser>,
     Path((bot_id, task_id)): Path<(String, String)>,
 ) -> Result<Json<FireBotTaskResponse>, ApiError> {
-    let sub = user.sub()?;
+    let sub = crate::bot_caller::acting_owner_for(&state.db, &user, &bot_id).await?;
     let bot = owned_bot(&state.db, &sub, &bot_id).await?;
     let task = owned_task(&state.db, &sub, &bot_id, &task_id).await?;
     let due = firing::holds_capability(&bot)

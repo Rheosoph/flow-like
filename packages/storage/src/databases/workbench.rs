@@ -88,10 +88,54 @@ pub fn validate_workbench_sql(sql: &str) -> Result<()> {
     validate_readonly_sql(sql)
 }
 
+/// Lower-cased names of every table the statement reads, following saved views into the
+/// tables they read. `None` when the statement cannot be analysed, in which case callers
+/// must open everything. Over-approximates (schema qualifiers and CTE names are not
+/// resolved), which only costs an extra table open, never a missing one.
+fn referenced_table_names(
+    ctx: &SessionContext,
+    sql: &str,
+    views: &[WorkbenchView],
+) -> Option<HashSet<String>> {
+    let state = ctx.state();
+    let options = state.config().options();
+    let references = |text: &str| -> Option<Vec<String>> {
+        let statement = state
+            .sql_to_statement(text, &options.sql_parser.dialect)
+            .ok()?;
+        let tables = state.resolve_table_references(&statement).ok()?;
+        Some(
+            tables
+                .iter()
+                .map(|reference| reference.table().to_lowercase())
+                .collect(),
+        )
+    };
+
+    let views_by_name: HashMap<String, &WorkbenchView> = views
+        .iter()
+        .map(|view| (view.name.to_lowercase(), view))
+        .collect();
+    let mut wanted = HashSet::new();
+    let mut queue = references(sql)?;
+    while let Some(name) = queue.pop() {
+        if !wanted.insert(name.clone()) {
+            continue;
+        }
+        if let Some(view) = views_by_name.get(&name)
+            && let Some(nested) = references(&view.sql)
+        {
+            queue.extend(nested);
+        }
+    }
+    Some(wanted)
+}
+
 async fn build_context(
     connection: &Connection,
     surface: &WorkbenchSurface,
     views: &[WorkbenchView],
+    sql: &str,
     reader: &ColumnReader,
 ) -> Result<SessionContext> {
     let ctx = SessionContext::new_with_state(
@@ -107,8 +151,14 @@ async fn build_context(
                 .execute()
                 .await
                 .map_err(|e| anyhow!("Failed to list tables: {}", e))?;
+            let wanted = referenced_table_names(&ctx, sql, views);
             for name in names {
                 if is_reserved_table(&name) {
+                    continue;
+                }
+                if let Some(wanted) = &wanted
+                    && !wanted.contains(&name.to_lowercase())
+                {
                     continue;
                 }
                 let adapter = open_table_adapter(connection, &name, reader).await?;
@@ -288,7 +338,7 @@ pub async fn execute_readonly_sql(
     validate_readonly_sql(sql)?;
     let param_values = bind_params(params)?;
 
-    let ctx = build_context(connection, &surface, &views, reader).await?;
+    let ctx = build_context(connection, &surface, &views, sql, reader).await?;
     let df = plan_bounded(&ctx, sql, param_values, limit, &safety).await?;
     collect_bounded(df, limit, &safety).await
 }
@@ -387,6 +437,33 @@ mod tests {
         // `array_has($ids, id)` instead of an assembled `IN (…)`.
         assert!(bind_params(&serde_json::json!({ "a": [1, 2] })).is_ok());
         assert!(bind_params(&serde_json::json!({ "a": { "b": 1 } })).is_err());
+    }
+
+    #[test]
+    fn only_tables_the_statement_or_its_views_read_are_wanted() {
+        let ctx = SessionContext::new();
+        let views = vec![
+            WorkbenchView {
+                name: "Recent".to_string(),
+                sql: "SELECT * FROM orders WHERE id > 1".to_string(),
+            },
+            WorkbenchView {
+                name: "unused".to_string(),
+                sql: "SELECT * FROM audit".to_string(),
+            },
+        ];
+
+        let wanted = referenced_table_names(
+            &ctx,
+            "SELECT c.id FROM customers c JOIN recent r ON r.cid = c.id",
+            &views,
+        )
+        .unwrap();
+        assert!(wanted.contains("customers"));
+        assert!(wanted.contains("orders"));
+        assert!(!wanted.contains("audit"));
+
+        assert!(referenced_table_names(&ctx, "SELECT * FROM (", &views).is_none());
     }
 
     #[test]

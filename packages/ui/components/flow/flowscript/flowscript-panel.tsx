@@ -129,6 +129,8 @@ import {
 	type FlowScriptConflictLensLabels,
 	type FlowScriptConflictResolution,
 	type FlowScriptMergeConflict,
+	flowScriptConflictKey,
+	flowScriptConflictLine,
 	intersectRemoteTouched,
 	mergeFlowScript,
 	registerFlowScriptConflictLens,
@@ -1000,11 +1002,11 @@ export function FlowScriptPanel({
 				// are still the board's current text unless this merge re-conflicted
 				// the same unit — then the new entry wins.
 				setMergeConflicts((previous) => {
-					const replaced = new Set(
-						result.conflicts.map((conflict) => conflict.anchorId),
-					);
+					const replaced = new Set(result.conflicts.map(flowScriptConflictKey));
 					return [
-						...previous.filter((conflict) => !replaced.has(conflict.anchorId)),
+						...previous.filter(
+							(conflict) => !replaced.has(flowScriptConflictKey(conflict)),
+						),
 						...result.conflicts,
 					];
 				});
@@ -1954,9 +1956,7 @@ export function FlowScriptPanel({
 		>[0][number];
 		const decorations: ConflictDecoration[] = [];
 		for (const conflict of mergeConflicts) {
-			const line = conflict.anchorId
-				? anchorIndex.firstLineById.get(conflict.anchorId)
-				: 1;
+			const line = flowScriptConflictLine(conflict, anchorIndex);
 			if (!line || line > maxLine) continue;
 			decorations.push({
 				range: new monaco.Range(line, 1, line, 1),

@@ -149,6 +149,9 @@ const MESSAGES_API: ParamDialect = ParamDialect {
 
 const MIN_THINKING_BUDGET: u64 = 1024;
 
+/// The largest output any current Claude model accepts.
+const MAX_OUTPUT_TOKENS: u64 = 128_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClaudeFamily {
     Opus,
@@ -241,6 +244,22 @@ impl Claude {
         }
     }
 
+    /// Anthropic's published output ceiling. Later generations keep the newest one.
+    fn max_output_tokens(self) -> u64 {
+        use ClaudeFamily::*;
+        match (self.family, self.version) {
+            (Fable | Mythos, _) => MAX_OUTPUT_TOKENS,
+            (Opus | Sonnet, version) if version >= (4, 6) => MAX_OUTPUT_TOKENS,
+            (Haiku, version) if version >= (5, 0) => MAX_OUTPUT_TOKENS,
+            (Opus, version) if version >= (4, 5) => 64_000,
+            (Opus, version) if version >= (4, 0) => 32_000,
+            (Sonnet, version) if version >= (3, 7) => 64_000,
+            (Haiku, version) if version >= (4, 5) => 64_000,
+            (Sonnet | Haiku, version) if version >= (3, 5) => 8_192,
+            _ => 4_096,
+        }
+    }
+
     /// Non-default `temperature`/`top_p`/`top_k` return 400 on these models, thinking or not.
     fn rejects_sampling(self) -> bool {
         use ClaudeFamily::*;
@@ -329,21 +348,11 @@ fn messages_params(history: &History, claude: Option<Claude>) -> Value {
     params
 }
 
-/// Keeps Rig's known-model limits and its conservative fallback for other IDs.
-fn default_max_tokens(model: &str) -> u64 {
-    if ["claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6"]
-        .iter()
-        .any(|prefix| model.starts_with(prefix))
-    {
-        128_000
-    } else if ["claude-opus-4", "claude-sonnet-4", "claude-haiku-4-5"]
-        .iter()
-        .any(|prefix| model.starts_with(prefix))
-    {
-        64_000
-    } else {
-        2_048
-    }
+/// Anthropic requires `max_tokens`, so an unset budget sends the model's whole output ceiling.
+/// An endpoint serving a non-Claude ID with a lower ceiling rejects it; its provider then needs
+/// `max_tokens` in the request parameters.
+fn max_output_tokens(model: &str) -> u64 {
+    Claude::parse(model).map_or(MAX_OUTPUT_TOKENS, Claude::max_output_tokens)
 }
 
 fn thinking_type(request: &CompletionRequest) -> Option<&str> {
@@ -365,10 +374,9 @@ fn anthropic_request(
 /// Applies Anthropic's per-model limits to the final request, including the fields agents set
 /// on the builder (`tool_choice`, `temperature`) that the History mapping cannot see.
 fn enforce_model_constraints(model: &str, mut request: CompletionRequest) -> CompletionRequest {
-    // Rig's default constructor has no output limit for IDs outside its model table.
     let max_tokens = *request
         .max_tokens
-        .get_or_insert_with(|| default_max_tokens(model));
+        .get_or_insert_with(|| max_output_tokens(model));
     let Some(claude) = Claude::parse(model) else {
         return request;
     };
@@ -495,12 +503,23 @@ mod tests {
     }
 
     #[test]
-    fn missing_output_limits_cover_known_new_and_custom_model_ids() {
+    fn missing_output_limits_send_the_model_output_ceiling() {
         for (model, expected) in [
-            ("claude-sonnet-4-6", 64_000),
+            ("claude-opus-5-5", 128_000),
+            ("claude-sonnet-5-5", 128_000),
+            ("claude-haiku-5-5", 128_000),
+            ("claude-fable-5-1", 128_000),
+            ("claude-mythos-preview", 128_000),
+            ("claude-sonnet-4-6", 128_000),
             ("claude-opus-4-7", 128_000),
-            ("claude-opus-5-5", 2_048),
-            ("hosted-assistant-bit", 2_048),
+            ("claude-opus-4-5", 64_000),
+            ("claude-sonnet-4-5-20250929", 64_000),
+            ("anthropic.claude-haiku-4-5@20251001", 64_000),
+            ("claude-opus-4-1-20250805", 32_000),
+            ("claude-3-5-haiku-20241022", 8_192),
+            ("claude-3-opus-20240229", 4_096),
+            ("claude-opus-7", 128_000),
+            ("hosted-assistant-bit", 128_000),
         ] {
             let mut unbounded = request(json!({}));
             unbounded.max_tokens = None;
@@ -517,18 +536,18 @@ mod tests {
     }
 
     #[test]
-    fn thinking_budget_uses_the_fallback_output_limit() {
+    fn thinking_budget_fits_the_model_output_ceiling() {
         let mut unbounded = request(json!({
-            "thinking": {"type": "enabled", "budget_tokens": 16_384},
+            "thinking": {"type": "enabled", "budget_tokens": 100_000},
         }));
         unbounded.max_tokens = None;
 
-        let fixed = anthropic_request("claude-3-7-sonnet-latest", unbounded).unwrap();
+        let fixed = anthropic_request("claude-haiku-4-5", unbounded).unwrap();
 
-        assert_eq!(fixed.max_tokens, Some(2_048));
+        assert_eq!(fixed.max_tokens, Some(64_000));
         assert_eq!(
             fixed.additional_params.unwrap()["thinking"]["budget_tokens"],
-            2_047
+            63_999
         );
     }
 
@@ -815,7 +834,10 @@ mod tests {
 
                 let body: Value = serde_json::from_str(&server.await.unwrap()).unwrap();
                 assert_eq!(body["model"], model_id);
-                assert_eq!(body["max_tokens"], 2_048, "{model_id}, stream={streaming}");
+                assert_eq!(
+                    body["max_tokens"], 128_000,
+                    "{model_id}, stream={streaming}"
+                );
                 assert_eq!(body["stream"].as_bool().unwrap_or(false), streaming);
             }
         }

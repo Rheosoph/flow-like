@@ -32,6 +32,8 @@ pub mod bot_notify;
 #[cfg(feature = "bot-task")]
 pub mod bot_task;
 #[cfg(feature = "inbox")]
+pub mod bot_tool_trail;
+#[cfg(feature = "inbox")]
 pub mod bot_turn;
 #[cfg(feature = "inbox")]
 pub mod bot_user_context;

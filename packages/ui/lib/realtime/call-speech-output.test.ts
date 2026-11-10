@@ -28,7 +28,9 @@ class FakeBufferSource extends FakeNode {
 	starts = 0;
 	stops = 0;
 	startFailure: Error | null = null;
-	start() {
+	startArgs: unknown[][] = [];
+	start(...args: unknown[]) {
+		this.startArgs.push(args);
 		this.starts++;
 		if (this.startFailure) throw this.startFailure;
 	}
@@ -37,8 +39,18 @@ class FakeBufferSource extends FakeNode {
 	}
 }
 
+class FakeGain extends FakeNode {
+	targets: { value: number; at: number }[] = [];
+	gain = {
+		setTargetAtTime: (value: number, at: number) => {
+			this.targets.push({ value, at });
+		},
+	};
+}
+
 function harness() {
 	const input = new FakeNode();
+	const level = new FakeGain();
 	const outputTrack = {
 		stops: 0,
 		stop() {
@@ -57,10 +69,12 @@ function harness() {
 	const microphone = { getTracks: () => [micTrack] } as unknown as MediaStream;
 	const speakers = {};
 	const sources: FakeBufferSource[] = [];
-	const buffer = {} as AudioBuffer;
+	const pcmBuffers: Float32Array[] = [];
+	const buffer = { duration: 4 } as AudioBuffer;
 	const speaking: (string | null)[] = [];
 	const context = {
 		state: "running",
+		currentTime: 10,
 		destination: speakers,
 		decodeCalls: 0,
 		resumeCalls: 0,
@@ -68,6 +82,7 @@ function harness() {
 		resumeResult: () => Promise.resolve(),
 		startFailure: null as Error | null,
 		createMediaStreamDestination: () => destination,
+		createGain: () => level,
 		createMediaStreamSource: (stream: MediaStream) => {
 			expect(stream).toBe(microphone);
 			return input;
@@ -79,6 +94,14 @@ function harness() {
 		resume() {
 			this.resumeCalls++;
 			return this.resumeResult();
+		},
+		createBuffer(_channels: number, length: number, sampleRate: number) {
+			const samples = new Float32Array(length);
+			pcmBuffers.push(samples);
+			return {
+				duration: length / sampleRate,
+				getChannelData: () => samples,
+			} as unknown as AudioBuffer;
 		},
 		createBufferSource() {
 			const source = new FakeBufferSource();
@@ -97,9 +120,11 @@ function harness() {
 		output,
 		context,
 		input,
+		level,
 		destination,
 		speakers,
 		sources,
+		pcmBuffers,
 		outputTrack,
 		micTrack,
 		buffer,
@@ -110,7 +135,7 @@ function harness() {
 
 /** The fake decoder and resume operation settle entirely through microtasks. */
 async function settleAudio() {
-	for (let index = 0; index < 8; index++) await Promise.resolve();
+	for (let index = 0; index < 40; index++) await Promise.resolve();
 }
 
 describe("createCallSpeechOutput", () => {
@@ -122,7 +147,8 @@ describe("createCallSpeechOutput", () => {
 		await settleAudio();
 		const source = h.sources[0];
 		expect(source?.buffer).toBe(h.buffer);
-		expect(source?.connections).toEqual([h.destination, h.speakers]);
+		expect(source?.connections).toEqual([h.level]);
+		expect(h.level.connections).toEqual([h.destination, h.speakers]);
 		expect(source?.starts).toBe(1);
 		expect(h.speaking).toEqual(["bot-1"]);
 		source?.onended?.();
@@ -259,5 +285,242 @@ describe("createCallSpeechOutput", () => {
 			expect(h.speaking).toEqual([]);
 			h.output.dispose();
 		}
+	});
+
+	test("reports playback progress from the audio clock", async () => {
+		const h = harness();
+		expect(h.output.progress()).toBeNull();
+		const playing = h.output.play(h.blob, "bot-1");
+		await settleAudio();
+		h.context.currentTime = 11;
+		expect(h.output.progress()).toEqual({ elapsedMs: 1000, durationMs: 4000 });
+		h.context.currentTime = 30;
+		expect(h.output.progress()?.elapsedMs).toBe(4000);
+		h.output.stop();
+		await playing;
+		expect(h.output.progress()).toBeNull();
+		h.output.dispose();
+	});
+
+	test("ducking lowers and restores the shared output level", () => {
+		const h = harness();
+		h.output.duck(true);
+		h.output.duck(false);
+		expect(h.level.targets.map((target) => target.value)).toEqual([0.2, 1]);
+		h.output.dispose();
+		h.output.duck(true);
+		expect(h.level.targets).toHaveLength(2);
+		expect(h.level.disconnects).toBe(1);
+	});
+
+	test("pausing holds the position and resuming restarts from it", async () => {
+		const h = harness();
+		expect(h.output.pause()).toBe(false);
+		const playing = h.output.play(h.blob, "bot-1");
+		await settleAudio();
+		h.context.currentTime = 11;
+		expect(h.output.pause()).toBe(true);
+		expect(h.output.pause()).toBe(false);
+		expect(h.sources[0]?.stops).toBe(1);
+		expect(h.speaking).toEqual(["bot-1"]);
+		h.context.currentTime = 20;
+		expect(h.output.progress()).toEqual({ elapsedMs: 1000, durationMs: 4000 });
+		h.output.resume();
+		expect(h.sources).toHaveLength(2);
+		expect(h.sources[1]?.startArgs[0]).toEqual([20, 1]);
+		h.context.currentTime = 22;
+		expect(h.output.progress()).toEqual({ elapsedMs: 3000, durationMs: 4000 });
+		h.sources[1]?.onended?.();
+		await playing;
+		expect(h.speaking).toEqual(["bot-1", null]);
+		h.output.dispose();
+	});
+
+	test("stopping while paused ends the speech", async () => {
+		const h = harness();
+		const playing = h.output.play(h.blob, "bot-1");
+		await settleAudio();
+		h.output.pause();
+		h.output.stop();
+		await playing;
+		h.output.resume();
+		expect(h.sources).toHaveLength(1);
+		expect(h.speaking).toEqual(["bot-1", null]);
+		h.output.dispose();
+	});
+
+	function bytes(...values: number[]) {
+		return new Uint8Array(values);
+	}
+
+	test("streamed PCM keeps an odd trailing byte for the next chunk and plays gaplessly", async () => {
+		const h = harness();
+		const playing = h.output.playStream(
+			{
+				sampleRate: 1000,
+				chunks: (async function* () {
+					yield bytes(0x00, 0x40, 0x00);
+					yield bytes(0xc0);
+					yield bytes();
+					yield bytes(0x00, 0x20);
+				})(),
+			},
+			"bot-1",
+		);
+		await settleAudio();
+		expect(h.pcmBuffers.map((samples) => [...samples])).toEqual([
+			[0.5],
+			[-0.5],
+			[0.25],
+		]);
+		expect(h.sources).toHaveLength(3);
+		expect(h.speaking).toEqual(["bot-1"]);
+		expect(h.sources.map((source) => source.startArgs[0])).toEqual([
+			[10, 0],
+			[10.001, 0],
+			[10.002, 0],
+		]);
+		for (const source of h.sources) source.onended?.();
+		await playing;
+		expect(h.speaking).toEqual(["bot-1", null]);
+		h.output.dispose();
+	});
+
+	test("streamed speech starts once about 120 ms is buffered and follows late chunks", async () => {
+		const h = harness();
+		const gate = deferred<void>();
+		const playing = h.output.playStream(
+			{
+				sampleRate: 1000,
+				chunks: (async function* () {
+					yield new Uint8Array(100);
+					yield new Uint8Array(100);
+					await gate.promise;
+					yield new Uint8Array(40);
+				})(),
+			},
+			"bot-1",
+		);
+		await settleAudio();
+		expect(h.pcmBuffers).toHaveLength(2);
+		expect(h.sources).toHaveLength(0);
+		expect(h.speaking).toEqual([]);
+		expect(h.output.progress()).toBeNull();
+		gate.resolve();
+		await settleAudio();
+		expect(h.sources).toHaveLength(3);
+		expect(h.speaking).toEqual(["bot-1"]);
+		h.output.stop();
+		await playing;
+		h.output.dispose();
+	});
+
+	test("a stream that reaches 120 ms starts before it ends, and a late chunk is rebased after an underrun", async () => {
+		const h = harness();
+		const gate = deferred<void>();
+		const playing = h.output.playStream(
+			{
+				sampleRate: 1000,
+				chunks: (async function* () {
+					yield new Uint8Array(260);
+					await gate.promise;
+					yield new Uint8Array(20);
+				})(),
+			},
+			"bot-1",
+		);
+		await settleAudio();
+		expect(h.sources).toHaveLength(1);
+		expect(h.speaking).toEqual(["bot-1"]);
+		expect(h.output.progress()).toEqual({ elapsedMs: 0, durationMs: 130 });
+		h.context.currentTime = 11;
+		gate.resolve();
+		await settleAudio();
+		expect(h.sources[1]?.startArgs[0]).toEqual([11, 0]);
+		for (const source of [...h.sources]) source.onended?.();
+		await playing;
+		expect(h.speaking).toEqual(["bot-1", null]);
+		h.output.dispose();
+	});
+
+	test("pausing a stream keeps reading and resume schedules everything after the position", async () => {
+		const h = harness();
+		const gate = deferred<void>();
+		const playing = h.output.playStream(
+			{
+				sampleRate: 1000,
+				chunks: (async function* () {
+					yield new Uint8Array(400);
+					await gate.promise;
+					yield new Uint8Array(200);
+				})(),
+			},
+			"bot-1",
+		);
+		await settleAudio();
+		h.context.currentTime = 10.1;
+		expect(h.output.pause()).toBe(true);
+		gate.resolve();
+		await settleAudio();
+		expect(h.sources).toHaveLength(1);
+		expect(h.output.progress()?.durationMs).toBeCloseTo(300);
+		h.context.currentTime = 15;
+		h.output.resume();
+		expect(h.sources).toHaveLength(3);
+		expect(h.sources[1]?.startArgs[0]?.[0]).toBe(15);
+		expect(h.sources[1]?.startArgs[0]?.[1]).toBeCloseTo(0.1);
+		expect(h.sources[2]?.startArgs[0]?.[0]).toBeCloseTo(15.1);
+		for (const source of h.sources.slice(1)) source.onended?.();
+		await playing;
+		h.output.dispose();
+	});
+
+	test("stopping a stream ends it and releases the reader", async () => {
+		const h = harness();
+		let returned = 0;
+		const playing = h.output.playStream(
+			{
+				sampleRate: 1000,
+				chunks: {
+					[Symbol.asyncIterator]: () => ({
+						next: () => new Promise<IteratorResult<Uint8Array>>(() => {}),
+						return: async () => {
+							returned++;
+							return { done: true, value: undefined };
+						},
+					}),
+				},
+			},
+			"bot-1",
+		);
+		await settleAudio();
+		h.output.stop();
+		await playing;
+		expect(returned).toBe(1);
+		expect(h.speaking).toEqual([]);
+		h.output.dispose();
+	});
+
+	test("a failing stream rejects and clears the speaking state", async () => {
+		const h = harness();
+		const playing = h.output.playStream(
+			{
+				sampleRate: 1000,
+				chunks: (async function* () {
+					yield new Uint8Array(400);
+					throw new Error("connection lost");
+				})(),
+			},
+			"bot-1",
+		);
+		await expect(playing).rejects.toThrow("connection lost");
+		expect(h.speaking).toEqual(["bot-1", null]);
+		h.output.dispose();
+	});
+
+	test("the output exposes its cues for the local speakers", () => {
+		const h = harness();
+		expect(typeof h.output.cue.thinking.start).toBe("function");
+		h.output.dispose();
 	});
 });

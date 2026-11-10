@@ -74,7 +74,37 @@ fn plain_body(envelope: &Value) -> Option<&Value> {
     (envelope.get("enc").and_then(Value::as_str) == Some(PLAIN_ENCRYPTION))
         .then(|| envelope.get("body"))
         .flatten()
-        .filter(|body| !flow_like_types::bot_user_context::is_ephemeral_body(body))
+}
+
+fn is_context(envelope: &Value) -> bool {
+    plain_body(envelope).is_some_and(flow_like_types::bot_user_context::is_ephemeral_body)
+}
+
+/// A context message as a value-free note: what this history keeps is mined and summarized.
+fn context_item(
+    entry: &StoredEntry,
+    body: &Value,
+    bot_id: &str,
+    owner_id: Option<&str>,
+) -> Option<HistoryItem> {
+    use flow_like_types::bot_user_context::{ContextLine, context_note};
+    if entry.kind != InboxEntryKind::Message || is_tombstone(&entry.envelope) {
+        return None;
+    }
+    let ContextLine::Text(note) = context_note(&entry.sender_id, body, bot_id) else {
+        return None;
+    };
+    let mut item = HistoryItem::new(
+        entry.seq,
+        entry.message_id.clone(),
+        role_of(&entry.sender_id, bot_id, owner_id, None),
+        entry.created_at,
+        note,
+    );
+    if entry.sender_id != bot_id {
+        item.speaker = Some(Speaker::new(&entry.sender_id));
+    }
+    Some(item)
 }
 
 fn part_index(id: &str) -> u16 {
@@ -176,6 +206,9 @@ fn item_with_owner(
     owner_id: Option<&str>,
 ) -> Option<HistoryItem> {
     let body = plain_body(&entry.envelope)?;
+    if flow_like_types::bot_user_context::is_ephemeral_body(body) {
+        return context_item(entry, body, bot_id, owner_id);
+    }
     match entry.kind {
         InboxEntryKind::Message => {
             if is_tombstone(&entry.envelope) {
@@ -261,6 +294,16 @@ fn item_with_owner(
         }
         _ => None,
     }
+}
+
+/// Who may edit each message: context notes are never editable, so an edit can't restore a
+/// withheld reply.
+fn edit_senders(entries: &[StoredEntry]) -> HashMap<String, String> {
+    entries
+        .iter()
+        .filter(|entry| !is_context(&entry.envelope))
+        .map(|entry| (entry.message_id.clone(), entry.sender_id.clone()))
+        .collect()
 }
 
 /// Lets the newest edit of a message by its sender replace the message's text and parts.
@@ -349,11 +392,7 @@ impl<S: EntrySource> InboxReader<S> {
         }
         let edits = self.source.edits_after(first, EDIT_SCAN).await?;
         if !edits.is_empty() {
-            let senders = entries
-                .iter()
-                .map(|entry| (entry.message_id.clone(), entry.sender_id.clone()))
-                .collect();
-            apply_edits(&mut items, &edits, &senders);
+            apply_edits(&mut items, &edits, &edit_senders(entries));
         }
         Ok(items)
     }
@@ -569,23 +608,38 @@ mod email_trigger_tests {
     }
 
     #[test]
-    fn user_context_and_derived_answers_are_excluded_from_memory_input() {
+    fn user_context_and_derived_answers_reach_memory_only_as_value_free_notes() {
         let mut entry = trigger_entry("email");
         entry.kind = InboxEntryKind::Message;
-        for marker in [
-            "user_context_request",
-            "user_context_response",
-            "user_context_derived",
+        for (sender, marker) in [
+            ("owner", "user_context_request"),
+            ("owner", "user_context_response"),
+            ("owner", "user_context_derived"),
+            ("bot", "user_context_derived"),
         ] {
+            entry.sender_id = sender.into();
             entry.envelope = json!({"v":1,"enc":"none","body":{"text":"Sensitive location and a nearby recommendation",marker:"request1"}});
-            assert!(
-                item_of(&entry, "bot").is_none(),
-                "{marker} entered private memory"
-            );
-            assert!(
-                room_item_of(&entry, "bot", "owner").is_none(),
-                "{marker} entered group memory"
-            );
+            for item in [item_of(&entry, "bot"), room_item_of(&entry, "bot", "owner")]
+                .into_iter()
+                .flatten()
+            {
+                assert!(!item.text.contains("Sensitive"), "{marker} entered memory");
+            }
         }
+        assert_eq!(
+            item_of(&entry, "bot").unwrap().text,
+            "[Your reply here used shared user context and is withheld now.]"
+        );
+        let edit = StoredEntry {
+            seq: 4,
+            message_id: "e".into(),
+            sender_id: "bot".into(),
+            kind: InboxEntryKind::Edit,
+            envelope: json!({"v":1,"enc":"none","body":{"target":"t","text":"Sensitive edit"}}),
+            created_at: Utc::now(),
+        };
+        let mut items = vec![item_of(&entry, "bot").unwrap()];
+        apply_edits(&mut items, &[edit], &edit_senders(&[entry]));
+        assert!(!items[0].text.contains("Sensitive"));
     }
 }

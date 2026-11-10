@@ -85,6 +85,7 @@ fn interactive(turn: &bot_turn::Model) -> InteractiveTurn {
     InteractiveTurn {
         turn: turn.clone(),
         host_id: "interactive:run_1".into(),
+        trail: None,
     }
 }
 
@@ -260,4 +261,73 @@ async fn the_reply_id_is_the_hosts_so_a_repeat_returns_the_first_copy() {
     assert_eq!(stored.entry.id, repeat.entry.id);
     assert_eq!(repeat.entry.envelope["body"]["text"], json!("one"));
     let _ = ledger::LIST_LIMIT;
+}
+
+fn transcript_envelope() -> serde_json::Value {
+    flow_like_types::inbox::plain_envelope(json!({
+        "call": "call_1",
+        "text": "what is the weather",
+        "offset_ms": 0,
+        "duration_ms": 1800,
+        "mentions": ["bot_1"],
+        "interactive": { "client_run_id": "run_1" },
+    }))
+}
+
+async fn queue_transcript(db: &DatabaseConnection, mentioned: bool, now: DateTime<FixedOffset>) {
+    let mut recipient = recipient("bot_1", "user-a", BotLocation::Server);
+    recipient.interactive = is_interactive(&transcript_envelope());
+    recipient.mentioned = mentioned;
+    let mut delivery = delivery(ConversationKind::Direct, vec![recipient]);
+    delivery.kind = flow_like_types::inbox::InboxEntryKind::Transcript;
+    enqueue_in(db, &delivery, now).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_marked_transcript_is_held_for_the_chat_and_the_chats_reply_ends_the_turn() {
+    let request = |envelope| crate::routes::inbox::model::SendEntryRequest {
+        message_id: "m1".into(),
+        kind: flow_like_types::inbox::InboxEntryKind::Transcript,
+        envelope: Some(envelope),
+        envelopes: None,
+        turn: None,
+    };
+    let stored = validate_send(request(transcript_envelope())).expect("the mark is accepted");
+    assert!(matches!(
+        &stored.content,
+        crate::routes::inbox::entries::Content::Plain(envelope)
+            if envelope["body"]["interactive"]["client_run_id"] == json!("run_1")
+    ));
+
+    let db = database().await;
+    chat(&db).await;
+    queue_transcript(&db, true, at(100)).await;
+    let held = turn(&db).await;
+    assert_eq!(held.status, STORED_QUEUED);
+    assert_eq!(held.lease_until, Some(at(100 + INTERACTIVE_GRACE_SECS)));
+    assert_eq!(waiting(&db, at(101)).await, 0);
+
+    let chat_turn = interactive(&held);
+    let outgoing = validate_send(chat_turn.request("Sunny.", None)).unwrap();
+    let claim_row = TurnClaim {
+        id: held.id.clone(),
+        host_id: chat_turn.host_id.clone(),
+    };
+    reply_interactive_in(&db, "c1", "bot_1", &claim_row, &outgoing, at(130))
+        .await
+        .unwrap();
+    assert_eq!(turn(&db).await.status, STORED_DONE);
+    assert_eq!(waiting(&db, at(1_000)).await, 0);
+}
+
+#[tokio::test]
+async fn a_transcript_that_does_not_name_the_bot_queues_no_turn() {
+    let db = database().await;
+    chat(&db).await;
+    queue_transcript(&db, false, at(100)).await;
+    let queued = bot_turn::Entity::find_by_id(turn_id("bot_1", "m1"))
+        .one(&db)
+        .await
+        .unwrap();
+    assert!(queued.is_none());
 }

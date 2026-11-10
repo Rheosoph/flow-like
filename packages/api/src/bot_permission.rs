@@ -234,6 +234,7 @@ pub async fn bot_app_permission(
     app_id: &str,
     state: &AppState,
 ) -> Result<AppPermissionResponse, ApiError> {
+    crate::bot_caller::ensure_token_live(&state.db, bot).await?;
     Ok(bot_permission_with_grant(bot, app_id, state).await?.0)
 }
 

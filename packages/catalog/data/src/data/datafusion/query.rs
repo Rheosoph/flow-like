@@ -133,8 +133,7 @@ impl NodeLogic for SqlQueryNode {
         let df = params::bind(df, &query_params)?;
         let batches = df.collect().await?;
 
-        let csv_table = batches_to_csv_table(&batches)?;
-        let rows = batches_to_rows(&batches)?;
+        let (csv_table, rows) = batches_to_table_and_rows(&batches)?;
         let row_count = csv_table.row_count() as i64;
 
         context.set_pin_value("table", json!(csv_table)).await?;

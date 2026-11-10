@@ -10,7 +10,7 @@ use flow_like::flow::copilot::tool_grants::{
     GrantCheck, GrantStore, HeadlessAnswer, check_call, documents_expensive_granted,
     expensive_documents_request, headless_answer_with_inference, record_answer, take_once,
 };
-use flow_like::flow::copilot::tool_spec::resolve_tool_approval;
+use flow_like::flow::copilot::tool_spec::{ToolEffect, resolve_tool_approval, resolve_tool_effect};
 use flow_like::flow::copilot::{HostTools, find_bot_tool_spec, tool_outcome_output};
 use flow_like_bot_tools::MemorySessions;
 use flow_like_bot_tools_host::{
@@ -45,6 +45,7 @@ pub(crate) struct TurnModels {
     pub source: Arc<dyn ModelSource>,
     pub chat: Option<Bit>,
     pub embedding: Option<Bit>,
+    pub vision: Option<Bit>,
 }
 
 pub(crate) struct TurnDeps {
@@ -82,6 +83,7 @@ pub(crate) struct BotToolsHost {
     skill_jobs: Option<Arc<dyn super::skills::SkillJobs>>,
     mail: Option<Arc<dyn flow_like_bot_tools::email::MailBackend>>,
     images: Option<Arc<super::images::ImageBits>>,
+    apps: Option<Arc<super::apps::AppTools>>,
 }
 
 fn refusal(tool: &str, code: &str, message: &str) -> String {
@@ -152,6 +154,7 @@ impl BotToolsHost {
             skill_jobs: None,
             mail: None,
             images: None,
+            apps: None,
         }
     }
 
@@ -257,8 +260,21 @@ impl BotToolsHost {
         self
     }
 
+    /// Lets this turn use apps on the server; only a headless turn does, an open chat runs them
+    /// in its window.
+    pub(crate) fn with_apps(mut self, apps: Arc<super::apps::AppTools>) -> Self {
+        self.apps = Some(apps);
+        self
+    }
+
+    fn app_tools(&self, tool: &str) -> Option<&Arc<super::apps::AppTools>> {
+        self.apps
+            .as_ref()
+            .filter(|_| super::apps::is_app_tool(tool))
+    }
+
     pub(crate) fn handles(&self, tool: &str) -> bool {
-        is_bot_tool(tool) && self.deps.host_tools.runs(tool)
+        self.app_tools(tool).is_some() || (is_bot_tool(tool) && self.deps.host_tools.runs(tool))
     }
 
     async fn scope(&self) -> Result<&JobScope, String> {
@@ -273,6 +289,9 @@ impl BotToolsHost {
     }
 
     async fn run_allowing(&self, tool: &str, args: Value, expensive_documents: bool) -> String {
+        if let Some(apps) = self.app_tools(tool) {
+            return apps.run(tool, args).await;
+        }
         match route(tool, &args, self.deps.executor.is_some()) {
             None => refusal(
                 tool,
@@ -397,7 +416,11 @@ impl BotToolsHost {
             _ => expensive = self.expensive_documents_allowed(tool, &args).await,
         }
         drop(approval_check);
-        if flow_like_bot_tools::spec(tool).is_some_and(|spec| spec.mutating) {
+        if flow_like_bot_tools::spec(tool).is_some_and(|spec| spec.mutating)
+            || (self.app_tools(tool).is_some()
+                && find_bot_tool_spec(tool)
+                    .is_some_and(|spec| resolve_tool_effect(&spec, &args) != ToolEffect::ReadOnly))
+        {
             mutating.store(true, Ordering::SeqCst);
         }
         let output = self.run_allowing(tool, args.clone(), expensive).await;
@@ -521,6 +544,7 @@ impl BotToolsHost {
             models: JobModels {
                 chat: bit_json(&self.deps.models.chat),
                 embedding: bit_json(&self.deps.models.embedding),
+                vision: bit_json(&self.deps.models.vision),
                 image,
             },
             allow_expensive_documents: expensive_documents,

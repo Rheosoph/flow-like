@@ -12,7 +12,10 @@ import {
 } from "../interfaces/chat-default/chat-message-interaction";
 import { foldInboxEntries } from "./fold-entries";
 import { roomChatMessage } from "./room-message-body";
-import { userContextRequestOf } from "./user-context-entry";
+import {
+	userContextRequestOf,
+	userContextRevokeOf,
+} from "./user-context-entry";
 
 const request: IUserContextRequest = {
 	id: "context_1",
@@ -61,7 +64,11 @@ const reply = (sender = "person_1") =>
 				subject_id: "person_1",
 				conversation_id: "room_1",
 				decision: "once",
+				captured_at: 5000,
+				expires_at: 305000,
+				source: { session_id: "s", platform: "web" },
 				values: { location: { place: "Private place" } },
+				unavailable: {},
 			},
 		},
 		2,
@@ -118,7 +125,9 @@ describe("context transcript cards", () => {
 		expect(transcript.messages).toHaveLength(1);
 		expect(transcript.messages[0].userContext?.answer).toBe("once");
 		expect(transcript.messages[0].inner.content).toBe("");
-		expect(JSON.stringify(transcript)).not.toContain("Private place");
+		expect(transcript.messages[0].userContext?.response?.values).toEqual({
+			location: { place: "Private place" },
+		});
 		const room = foldInboxEntries([card(), reply()], "person_1")[0];
 		if (room.type !== "message") throw new Error("Expected a room message");
 		expect(roomChatMessage(room, "room_1").userContext).toEqual(
@@ -159,5 +168,63 @@ describe("context transcript cards", () => {
 			interaction: { type: "reply" as const, target: reference },
 		};
 		expect(historyMessageForModel(followup).content).toBe("Thanks");
+	});
+
+	test("session responses are kept and a later revoke marks the card", () => {
+		const response = (decision: string) =>
+			entry(
+				"uctx_reply_context_1",
+				"person_1",
+				{
+					text: "x",
+					user_context_response: {
+						request_id: request.id,
+						bot_id: "bot_1",
+						subject_id: "person_1",
+						conversation_id: "room_1",
+						decision,
+						captured_at: 5000,
+						expires_at: 305000,
+						source: { session_id: "s", platform: "web" },
+						values: { location: { place: "Munich" } },
+						unavailable: {},
+					},
+				},
+				2,
+			);
+		const revoke = (sender = "person_1") =>
+			entry(
+				"uctx_revoke_context_1",
+				sender,
+				{
+					text: "Context session access revoked.",
+					user_context_revoke: {
+						request_id: request.id,
+						bot_id: "bot_1",
+						subject_id: "person_1",
+						conversation_id: "room_1",
+						revoked_at: 9000,
+					},
+				},
+				3,
+			);
+		const first = (items: ReturnType<typeof foldInboxEntries>) =>
+			items[0].type === "message" ? items[0].userContext : undefined;
+		const live = foldInboxEntries([card(), response("session")], "person_1");
+		expect(first(live)?.response?.captured_at).toBe(5000);
+		expect(first(live)?.revoked).toBeUndefined();
+		const revoked = foldInboxEntries(
+			[card(), response("session"), revoke()],
+			"person_1",
+		);
+		expect(first(revoked)?.revoked).toBe(true);
+		expect(revoked).toHaveLength(1);
+		const once = foldInboxEntries(
+			[card(), response("once"), revoke()],
+			"person_1",
+		);
+		expect(first(once)?.revoked).toBeUndefined();
+		expect(userContextRevokeOf(revoke("person_2"))).toBeUndefined();
+		expect(userContextRevokeOf(revoke())?.revoked_at).toBe(9000);
 	});
 });

@@ -19,6 +19,7 @@ import {
 	type UserContextCardData,
 	userContextRequestOf,
 	userContextResponseOf,
+	userContextRevokeOf,
 } from "./user-context-entry";
 
 export interface ConversationReaction {
@@ -101,6 +102,7 @@ export interface ConversationMessage {
 	approval?: ConversationApproval;
 	userContext?: UserContextCardData;
 	userContextDerived?: boolean;
+	userContextDerivedFrom?: string;
 	note?: IBotNoteRef;
 	/** Recipients of the email this message was sent as. */
 	mailedTo?: string[];
@@ -441,6 +443,19 @@ export function foldInboxEntries(
 			continue;
 		}
 		if (entry.kind === "message") {
+			const contextRevoke = userContextRevokeOf(entry);
+			if (contextRevoke) {
+				for (const card of messages.values()) {
+					const context = card.userContext;
+					if (
+						context?.answer === "session" &&
+						context.request.bot_id === contextRevoke.bot_id &&
+						context.request.subject_id === contextRevoke.subject_id
+					)
+						context.revoked = true;
+				}
+				continue;
+			}
 			const contextResponse = userContextResponseOf(entry);
 			if (contextResponse) {
 				const card = messages.get(contextResponse.request_id);
@@ -448,8 +463,10 @@ export function foldInboxEntries(
 					card?.userContext?.request.subject_id ===
 						contextResponse.subject_id &&
 					card.userContext.request.bot_id === contextResponse.bot_id
-				)
+				) {
 					card.userContext.answer = contextResponse.decision;
+					card.userContext.response = contextResponse;
+				}
 				continue;
 			}
 			const response = approvalResponseOf(entry);
@@ -474,7 +491,11 @@ export function foldInboxEntries(
 				mentions: mentionsOf(entry),
 				...(contextRequest ? { userContext: { request: contextRequest } } : {}),
 				...(typeof plainBody(entry)?.user_context_derived === "string"
-					? { userContextDerived: true }
+					? {
+							userContextDerived: true,
+							userContextDerivedFrom: plainBody(entry)
+								?.user_context_derived as string,
+						}
 					: {}),
 				...(errorCodeOf(entry) ? { errorCode: errorCodeOf(entry) } : {}),
 				...(attachmentsOf(entry).length > 0

@@ -9,12 +9,14 @@ use std::{collections::BTreeMap, iter::Peekable, vec::IntoIter};
 /// How long a missing sequence of a running run may still arrive, measured from
 /// the event after it, which the same callback may have written. The executor
 /// sends a batch at most `EXECUTOR_CALLBACK_RETRIES` (3) more times, abandons each
-/// attempt after `EXECUTOR_CALLBACK_TIMEOUT_MS` (5 s) and pauses 100 ms × attempt
-/// in between, so its last attempt starts within 15.6 s of the first. The API can
-/// still be writing an abandoned attempt until `POST /execution/events` hits its
-/// 120 s deadline; the remaining 14.4 s cover clock skew between API instances.
-/// A longer callback timeout, more retries, or Teams delivery callbacks (130 s
-/// per attempt) let a write land after this window, behind consumers already past it.
+/// attempt after `EXECUTOR_CALLBACK_TIMEOUT_MS` (5 s) and pauses 200 ms × 2^attempt
+/// plus up to half of that in between, so its last attempt starts within 17.1 s of
+/// the first. The API can still be writing an abandoned attempt until
+/// `POST /execution/events` hits its 120 s deadline; the remaining 12.9 s cover
+/// clock skew between API instances. A longer callback timeout, more retries, a
+/// batch the executor requeues after all its attempts failed, or Teams delivery
+/// callbacks (130 s per attempt) let a write land after this window, behind
+/// consumers already past it.
 pub const UNSETTLED_GAP_MS: i64 = 150_000;
 
 /// How far a lagging index may trail a write that landed. A sequence it still
@@ -24,6 +26,10 @@ const INDEX_LAG_MS: i64 = 60_000;
 /// The sequences one page reads consistently to settle a gap: one DynamoDB
 /// BatchGetItem. A wider hole takes further polls until it lapses.
 const GAP_PROBE_SEQUENCES: i32 = 100;
+
+/// How far past its last indexed event a running run is read consistently, so a
+/// wakeup that beats the index still finds the batch that caused it.
+const TAIL_PROBE_SEQUENCES: i32 = 16;
 
 /// One executor callback at the default `EXECUTOR_MAX_BATCH_SIZE`. A terminal
 /// run is probed this far past its last event, so a batch the executor gave up
@@ -100,8 +106,11 @@ pub async fn replay_contiguous<R: ConsistentEventReads + ?Sized>(
     }
 
     let has_more = visible.peek().is_some() || more_indexed;
-    if has_more || !cursor.terminal {
-        return Ok(page.into_replay(has_more));
+    if has_more {
+        return Ok(page.into_replay(true));
+    }
+    if !cursor.terminal {
+        return page.probe_tail(reads, run_id).await;
     }
     page.confirm_end(reads, run_id).await
 }
@@ -251,6 +260,37 @@ impl Page {
         Ok(true)
     }
 
+    /// A wakeup can arrive before the index shows the write that caused it, so a
+    /// running page with room reads the next few sequences consistently and takes
+    /// the contiguous prefix that exists. A miss only ends the page.
+    async fn probe_tail<R: ConsistentEventReads + ?Sized>(
+        mut self,
+        reads: &R,
+        run_id: &str,
+    ) -> Result<EventReplay, StateStoreError> {
+        let room = self.limit.saturating_sub(self.events.len());
+        if room == 0 {
+            return Ok(self.into_replay(false));
+        }
+        let span = i32::try_from(room)
+            .unwrap_or(i32::MAX)
+            .min(TAIL_PROBE_SEQUENCES);
+        let window: Vec<i32> = (self.next..self.next.saturating_add(span)).collect();
+        let mut found = by_sequence(run_id, reads.read_sequences(run_id, &window).await?);
+        let mut appended = false;
+        for sequence in window {
+            match found.remove(&sequence) {
+                Some(event) => {
+                    self.push(event);
+                    appended = true;
+                }
+                None => break,
+            }
+        }
+        let has_more = appended && self.full();
+        Ok(self.into_replay(has_more))
+    }
+
     /// The terminal status landed after every event write, so a consistent miss
     /// is final, and the stream ended unless an event follows within one batch
     /// the executor may have dropped.
@@ -383,7 +423,7 @@ mod tests {
         let page = replay(&base, &[0, 3], cursor(-1, 10, false)).await;
         assert_eq!(sequences(&page), [0, 1, 2, 3]);
         assert!(!page.has_more);
-        assert_eq!(base.reads.lock().unwrap().as_slice(), [vec![1, 2]]);
+        assert_eq!(base.reads.lock().unwrap()[0], vec![1, 2]);
     }
 
     #[tokio::test]
@@ -409,7 +449,7 @@ mod tests {
         let page = replay(&base, &[0, 2], cursor(-1, 10, false)).await;
         assert_eq!(sequences(&page), [0, 2]);
         assert!(!page.has_more);
-        assert_eq!(base.reads.lock().unwrap().last().unwrap(), &vec![1]);
+        assert_eq!(base.reads.lock().unwrap()[0], vec![1]);
     }
 
     #[tokio::test]
@@ -419,10 +459,14 @@ mod tests {
         for sequence in [5_000, 5_001] {
             base.events.insert(sequence, event(sequence, lapsed));
         }
-        let page = replay(&base, &[0, 5_000, 5_001], cursor(-1, 10, false)).await;
+        let page = replay(&base, &[0, 5_000, 5_001], cursor(-1, 100, false)).await;
         assert_eq!(sequences(&page), [0, 5_000, 5_001]);
         assert!(!page.has_more);
-        assert!(base.reads.lock().unwrap().is_empty());
+        assert_eq!(
+            base.reads.lock().unwrap().as_slice(),
+            [(5_002..5_002 + TAIL_PROBE_SEQUENCES).collect::<Vec<_>>()],
+            "only the tail is read"
+        );
     }
 
     #[tokio::test]
@@ -496,12 +540,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_running_run_does_not_probe_past_its_last_indexed_event() {
-        let base = table(&[0, 1]);
-        let page = replay(&base, &[0], cursor(-1, 10, false)).await;
-        assert_eq!(sequences(&page), [0]);
+    async fn a_running_run_reads_past_a_lagging_index_for_its_tail() {
+        let base = table(&[0, 1, 2]);
+        let page = replay(&base, &[0], cursor(-1, 100, false)).await;
+        assert_eq!(sequences(&page), [0, 1, 2]);
         assert!(!page.has_more);
-        assert!(base.reads.lock().unwrap().is_empty());
+        assert_eq!(
+            base.reads.lock().unwrap().as_slice(),
+            [(1..1 + TAIL_PROBE_SEQUENCES).collect::<Vec<_>>()]
+        );
+
+        let page = replay(&base, &[], cursor(-1, 10, false)).await;
+        assert_eq!(sequences(&page), [0, 1, 2]);
+
+        let base = table(&[0, 2]);
+        let page = replay(&base, &[0], cursor(-1, 10, false)).await;
+        assert_eq!(sequences(&page), [0], "the prefix stops at the first miss");
+        assert!(!page.has_more);
+    }
+
+    #[tokio::test]
+    async fn the_tail_probe_respects_the_page_limit() {
+        let base = table(&[0, 1, 2, 3, 4]);
+        let page = replay(&base, &[0], cursor(-1, 3, false)).await;
+        assert_eq!(sequences(&page), [0, 1, 2]);
+        assert!(page.has_more);
+        assert_eq!(base.reads.lock().unwrap().as_slice(), [vec![1, 2]]);
+
+        let page = replay(&base, &[0, 1, 2], cursor(-1, 3, false)).await;
+        assert_eq!(sequences(&page), [0, 1, 2]);
+        assert!(!page.has_more);
+        assert_eq!(
+            base.reads.lock().unwrap().len(),
+            1,
+            "a full page is not probed"
+        );
     }
 
     #[tokio::test]
@@ -535,7 +608,6 @@ mod tests {
             .unwrap();
         assert_eq!(sequences(&page), [1, 3]);
         assert!(!page.has_more);
-        assert!(base.reads.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

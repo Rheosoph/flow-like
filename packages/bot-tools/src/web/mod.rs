@@ -24,7 +24,7 @@ use crate::layout::{WEB_DIR, sanitize_name};
 use crate::outcome::ToolOutput;
 use crate::secret_text::{Scrubber, fill_secrets, placeholder, secret_names};
 use crate::secrets::referenced_secrets;
-use crate::services::egress::resolve_public;
+use crate::services::egress::{Locality, resolve_public};
 use crate::spec::{Approval, ToolSpec, schema_of};
 
 #[cfg(test)]
@@ -39,6 +39,7 @@ const MAX_HEADERS: usize = 32;
 const MAX_RESPONSE_HEADER_BYTES: usize = 8 * 1024;
 const PREVIEW_BYTES: usize = 4 * 1024;
 const ASK_BODY_CHARS: usize = 300;
+const ASK_QUERY_CHARS: usize = 200;
 const TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_ACCEPT: &str = "application/json, application/xml;q=0.9, text/*;q=0.8, */*;q=0.5";
 const UNTRUSTED: &str =
@@ -60,6 +61,9 @@ pub struct WebRequestArgs {
     /// A text body (at most 1 MiB) with its Content-Type header; not together with `json`.
     #[serde(default)]
     pub body: Option<String>,
+    /// Set only after this tool told you the site's name resolves to a private network address and the owner agreed to reach it.
+    #[serde(default)]
+    pub allow_private: Option<bool>,
 }
 
 pub fn specs() -> Vec<ToolSpec> {
@@ -119,14 +123,22 @@ fn method_of(name: &str) -> ToolResult<Method> {
     }
 }
 
-/// The grants that cover one call: `web:<site>:read` or `web:<site>:write`, plus
+fn allows_private(args: &Value) -> bool {
+    args.get("allow_private")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// The grants that cover one call: `web:<site>:read` or `web:<site>:write` (`web:<site>:private:read`
+/// and `:write` when the call sets `allow_private`), plus
 /// `web:<site>:secret:<NAME>` for every secret it sends. `None` when the URL names no site.
 pub fn grant_scopes(args: &Value) -> Option<Vec<String>> {
     let url = Url::parse(args.get("url")?.as_str()?.trim()).ok()?;
     let site = site_of(&url)?;
     let method = method_name(args.get("method").and_then(Value::as_str));
     let class = if is_read(&method) { "read" } else { "write" };
-    let mut scopes = vec![format!("web:{site}:{class}")];
+    let private = if allows_private(args) { "private:" } else { "" };
+    let mut scopes = vec![format!("web:{site}:{private}{class}")];
     scopes.extend(
         referenced_secrets(args)
             .into_iter()
@@ -135,8 +147,17 @@ pub fn grant_scopes(args: &Value) -> Option<Vec<String>> {
     Some(scopes)
 }
 
-/// What the owner reads before a call: method, site and path, the secrets it sends and, for a
-/// write, the start of its body.
+fn query_text(url: &Url) -> String {
+    let Some(query) = url.query().filter(|query| !query.is_empty()) else {
+        return String::new();
+    };
+    let shown: String = query.chars().take(ASK_QUERY_CHARS).collect();
+    let cut = if shown.len() < query.len() { "…" } else { "" };
+    format!("?{shown}{cut}")
+}
+
+/// What the owner reads before a call: method, site, path and query, the secrets it sends and,
+/// for a write, the start of its body.
 pub fn ask_summary(args: &Value) -> String {
     let raw = args
         .get("url")
@@ -144,10 +165,11 @@ pub fn ask_summary(args: &Value) -> String {
         .unwrap_or_default()
         .trim();
     let method = method_name(args.get("method").and_then(Value::as_str));
-    let target = Url::parse(raw)
-        .ok()
-        .and_then(|url| site_of(&url).map(|site| format!("{site}{}", url.path())))
-        .unwrap_or_else(|| raw.split(['?', '#']).next().unwrap_or_default().to_string());
+    let parsed = Url::parse(raw).ok();
+    let target = parsed
+        .as_ref()
+        .and_then(|url| site_of(url).map(|site| format!("{site}{}{}", url.path(), query_text(url))))
+        .unwrap_or_else(|| raw.split('#').next().unwrap_or_default().to_string());
     let mut text = format!("The bot wants to send a {method} request to {target}");
     let secrets: Vec<String> = referenced_secrets(args).into_iter().collect();
     if !secrets.is_empty() {
@@ -155,6 +177,11 @@ pub fn ask_summary(args: &Value) -> String {
         text.push_str(&format!(" with your secret{plural} {}", secrets.join(", ")));
     }
     text.push('.');
+    if allows_private(args) {
+        text.push_str(
+            " The bot says this site is on a private network (your LAN or this device); approving lets it reach private addresses under this name.",
+        );
+    }
     if !is_read(&method) {
         let body = match (args.get("json"), args.get("body").and_then(Value::as_str)) {
             (Some(json), _) if !json.is_null() => json.to_string(),
@@ -616,6 +643,11 @@ async fn send(
     let reachable = resolve_public(filler.env.environment(), url.as_str())
         .await
         .map_err(ToolError::refused)?;
+    if reachable.locality == Locality::PrivateName && !args.allow_private.unwrap_or(false) {
+        return Err(ToolError::refused(format!(
+            "The name {site} resolves to a private network address. Ask the owner whether the bot may reach it; if they agree, repeat the call with allow_private: true"
+        )));
+    }
     let mut builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(TIMEOUT);

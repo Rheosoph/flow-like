@@ -184,16 +184,13 @@ mod tests {
     }
 }
 
-/// Transcribes one WAV utterance with an installed local STT bit; the loaded model stays cached
-/// between calls, one model at a time.
-#[tauri::command(async)]
-pub async fn speech_transcribe(
-    app_handle: tauri::AppHandle,
-    bit_id: String,
+async fn transcribe_wav(
+    app_handle: &tauri::AppHandle,
+    bit_id: &str,
     audio: Vec<u8>,
     language: Option<String>,
 ) -> Result<SpeechTranscription, TauriFunctionError> {
-    let model = cached_model(&app_handle, &bit_id).await?;
+    let model = cached_model(app_handle, bit_id).await?;
     let output = model
         .transcribe(LocalTranscriptionRequest {
             audio_bytes: audio,
@@ -206,4 +203,65 @@ pub async fn speech_transcribe(
     Ok(SpeechTranscription {
         text: output.text.trim().to_string(),
     })
+}
+
+fn text_header(request: &tauri::ipc::Request<'_>, name: &str) -> Option<String> {
+    request
+        .headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+/// Transcribes one WAV utterance with an installed local STT bit; the loaded model stays cached
+/// between calls, one model at a time.
+#[tauri::command(async)]
+pub async fn speech_transcribe(
+    app_handle: tauri::AppHandle,
+    bit_id: String,
+    audio: Vec<u8>,
+    language: Option<String>,
+) -> Result<SpeechTranscription, TauriFunctionError> {
+    transcribe_wav(&app_handle, &bit_id, audio, language).await
+}
+
+/// [`speech_transcribe`] with the WAV bytes as the raw request body, which skips the JSON number
+/// array. `x-bit-id` names the STT bit, the optional `x-language` the spoken language.
+#[tauri::command(async)]
+pub async fn speech_transcribe_raw(
+    app_handle: tauri::AppHandle,
+    request: tauri::ipc::Request<'_>,
+) -> Result<SpeechTranscription, TauriFunctionError> {
+    let tauri::ipc::InvokeBody::Raw(audio) = request.body() else {
+        return Err(
+            anyhow!("speech_transcribe_raw needs the WAV bytes as the raw request body").into(),
+        );
+    };
+    let bit_id = text_header(&request, "x-bit-id")
+        .ok_or_else(|| anyhow!("speech_transcribe_raw needs the x-bit-id header"))?;
+    let language = text_header(&request, "x-language");
+    transcribe_wav(&app_handle, &bit_id, audio.clone(), language).await
+}
+
+/// Loads the call's local speech models so the first utterance does not pay for it. A model that
+/// fails to load is logged; the call falls back at its first use.
+#[tauri::command(async)]
+pub async fn speech_warm(
+    app_handle: tauri::AppHandle,
+    stt_bit_id: Option<String>,
+    tts_bit_id: Option<String>,
+) -> Result<(), TauriFunctionError> {
+    if let Some(bit_id) = stt_bit_id.filter(|id| !id.trim().is_empty())
+        && let Err(error) = cached_model(&app_handle, &bit_id).await
+    {
+        tracing::warn!(%error, %bit_id, "Speech warm-up: the speech-to-text model did not load");
+    }
+    if let Some(bit_id) = tts_bit_id.filter(|id| !id.trim().is_empty())
+        && let Err(error) = cached_tts_model(&app_handle, &bit_id).await
+    {
+        tracing::warn!(%error, %bit_id, "Speech warm-up: the text-to-speech model did not load");
+    }
+    Ok(())
 }

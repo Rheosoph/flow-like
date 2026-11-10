@@ -4,6 +4,7 @@ pub mod a2ui;
 pub mod ai;
 pub mod app;
 pub mod automation_approval;
+pub mod barcode;
 pub mod bit;
 #[cfg(desktop)]
 pub mod browser_engine;

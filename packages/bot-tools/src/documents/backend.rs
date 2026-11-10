@@ -42,6 +42,13 @@ pub struct Extracted {
     pub warnings: Vec<String>,
 }
 
+/// A document the model read: pages without a usable text layer transcribed, images described.
+#[derive(Debug, Clone, Default)]
+pub struct ModelReading {
+    pub converted: Converted,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct RenderedPng {
     pub page: usize,
@@ -216,6 +223,20 @@ pub trait DocumentBackend: Send + Sync {
     ) -> Result<Extracted>;
 
     async fn convert(&self, bytes: Bytes, extension: Option<&str>) -> Result<Converted>;
+
+    /// [`Self::convert`] with the model as reader, like the AI Extract Document node: scanned
+    /// and photographed pages are transcribed and images described.
+    async fn read_with_model(
+        &self,
+        _model: Arc<dyn ModelLogic>,
+        _bytes: Bytes,
+        _extension: Option<&str>,
+        _source_path: &str,
+    ) -> Result<ModelReading> {
+        Err(flow_like_types::anyhow!(
+            "This host cannot read documents with a model"
+        ))
+    }
 
     /// Looks into a workbook; the answer is text for the model.
     async fn excel(&self, bytes: Bytes, request: ExcelRequest) -> Result<String>;

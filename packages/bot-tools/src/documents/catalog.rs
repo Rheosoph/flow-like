@@ -34,8 +34,8 @@ use flow_like_types::{Bytes, Result, anyhow};
 
 use super::backend::{
     BuiltDocument, ChartKind, DeckSlide, DocumentBackend, ExcelOperation, ExcelRequest, Extracted,
-    FillRows, FilledDocument, MarkdownDocument, ModelTokens, RenderedPng, SheetCell, SheetData,
-    SlideLayoutKind, Summary, SummaryRequest, TemplateFill,
+    FillRows, FilledDocument, MarkdownDocument, ModelReading, ModelTokens, RenderedPng, SheetCell,
+    SheetData, SlideLayoutKind, Summary, SummaryRequest, TemplateFill,
 };
 use crate::convert::{ConvertInput, Converted, DocumentConverter};
 
@@ -211,6 +211,17 @@ pub fn to_converted(document: &service::Document) -> Converted {
     Converted { text, page_starts }
 }
 
+async fn reader_for(model: Arc<dyn ModelLogic>) -> Result<service::ReaderClient> {
+    let model_name = model.default_model().await.unwrap_or_default();
+    service::build_llm_client(&ReaderModel {
+        model,
+        model_name,
+        thinking: HistoryThinking::Off,
+        config: LlmConfig::default(),
+    })
+    .await
+}
+
 #[async_trait]
 impl DocumentBackend for CatalogBackend {
     async fn summarize(
@@ -218,14 +229,7 @@ impl DocumentBackend for CatalogBackend {
         model: Arc<dyn ModelLogic>,
         request: SummaryRequest<'_>,
     ) -> Result<Summary> {
-        let model_name = model.default_model().await.unwrap_or_default();
-        let reader = service::build_llm_client(&ReaderModel {
-            model,
-            model_name,
-            thinking: HistoryThinking::Off,
-            config: LlmConfig::default(),
-        })
-        .await?;
+        let reader = reader_for(model).await?;
         let options = SummarizeOptions {
             goal: Some(request.goal.to_string()),
             language: request.language.map(str::to_string),
@@ -278,6 +282,28 @@ impl DocumentBackend for CatalogBackend {
     async fn convert(&self, bytes: Bytes, extension: Option<&str>) -> Result<Converted> {
         let document = service::convert(bytes, extension, &ConvertOptions::default(), None).await?;
         Ok(to_converted(&document))
+    }
+
+    async fn read_with_model(
+        &self,
+        model: Arc<dyn ModelLogic>,
+        bytes: Bytes,
+        extension: Option<&str>,
+        source_path: &str,
+    ) -> Result<ModelReading> {
+        let reader = reader_for(model).await?;
+        let options = ConvertOptions {
+            extract_images: true,
+            force_ocr: false,
+            source_path: Some(source_path.to_string()),
+        };
+        let document = service::convert(bytes, extension, &options, Some(&reader)).await?;
+        let mut warnings = reader.warnings.clone();
+        warnings.extend(reader.rejected_settings());
+        Ok(ModelReading {
+            converted: to_converted(&document),
+            warnings,
+        })
     }
 
     async fn excel(&self, bytes: Bytes, request: ExcelRequest) -> Result<String> {

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { AssistantSurfaceState } from "../state/assistant-surface";
 import type { IUserContextRequest } from "../state/backend-state/inbox-state";
 import {
+	SESSION_MS,
 	approximateUserLocation,
 	clearUserContextSessions,
 	collectUserContext,
@@ -11,6 +12,8 @@ import {
 	deniedUserContext,
 	grantUserContextSession,
 	hasUserContextGrant,
+	liveUserContextSession,
+	revokeUserContextBody,
 	revokeUserContextSession,
 	setUserContextAccount,
 } from "./bot-user-context";
@@ -316,7 +319,7 @@ describe("context collection", () => {
 });
 
 describe("session consent", () => {
-	test("grants bind bot, subject, audience, fields, precision and purpose", () => {
+	test("grants bind bot, subject, conversation and audience only", () => {
 		const original = request();
 		grantUserContextSession(original, defaultUserContextInput(), 1_000);
 		expect(hasUserContextGrant(original, 2_000)).toBe(true);
@@ -326,14 +329,86 @@ describe("session consent", () => {
 			{ conversation_id: "other" },
 			{ audience: "direct" as const },
 			{ audience_member_ids: ["bot_1", "person_1"] },
-			{ purpose: "Different purpose" },
-			{ fields: ["timezone" as const] },
-			{ precision: "precise" as const },
 		])
 			expect(hasUserContextGrant({ ...original, ...change }, 2_000)).toBe(
 				false,
 			);
 		expect(hasUserContextGrant(original, 1_801_000)).toBe(false);
+	});
+
+	test("a grant ignores purpose and covers any subset of its fields", () => {
+		grantUserContextSession(
+			request({ fields: ["location", "timezone"] }),
+			defaultUserContextInput(),
+			1_000,
+		);
+		expect(
+			hasUserContextGrant(
+				request({ purpose: "Something else", fields: ["timezone"] }),
+				2_000,
+			),
+		).toBe(true);
+		expect(hasUserContextGrant(request({ fields: ["locale"] }), 2_000)).toBe(
+			false,
+		);
+	});
+
+	test("precise requests need a precise grant", () => {
+		grantUserContextSession(request(), defaultUserContextInput(), 1_000);
+		expect(hasUserContextGrant(request({ precision: "precise" }), 2_000)).toBe(
+			false,
+		);
+		grantUserContextSession(
+			request({ precision: "precise" }),
+			defaultUserContextInput(),
+			3_000,
+		);
+		expect(hasUserContextGrant(request(), 4_000)).toBe(true);
+		expect(hasUserContextGrant(request({ precision: "precise" }), 4_000)).toBe(
+			true,
+		);
+	});
+
+	test("granting again unions fields, keeps precision and resets expiry", () => {
+		grantUserContextSession(
+			request({ precision: "precise" }),
+			defaultUserContextInput(),
+			1_000,
+		);
+		grantUserContextSession(
+			request({ fields: ["timezone"] }),
+			defaultUserContextInput(),
+			1_000_000,
+		);
+		const both = request({ fields: ["location", "timezone"] });
+		expect(hasUserContextGrant(both, 1_500_000)).toBe(true);
+		expect(
+			hasUserContextGrant(request({ precision: "precise" }), 1_500_000),
+		).toBe(true);
+		expect(hasUserContextGrant(both, 1_000_000 + SESSION_MS + 1)).toBe(false);
+	});
+
+	test("the revoke body names the request and the live session helper honours it", () => {
+		const value = request({ audience: "direct" });
+		expect(revokeUserContextBody(value).user_context_revoke).toMatchObject({
+			request_id: "context_1",
+			bot_id: "bot_1",
+			subject_id: "person_1",
+			conversation_id: "room_1",
+		});
+		const response = {
+			...deniedUserContext(value),
+			decision: "session" as const,
+		};
+		const at = response.captured_at;
+		expect(liveUserContextSession(value, response, false, at + 1)).toBe(true);
+		expect(liveUserContextSession(value, response, true, at + 1)).toBe(false);
+		expect(
+			liveUserContextSession(value, response, false, at + SESSION_MS),
+		).toBe(false);
+		expect(liveUserContextSession(request(), response, false, at + 1)).toBe(
+			false,
+		);
 	});
 
 	test("revocation and account switching clear earlier grants", () => {

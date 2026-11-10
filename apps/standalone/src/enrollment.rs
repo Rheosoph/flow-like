@@ -882,6 +882,21 @@ fn local_lease_expiry(response: &DeviceTokenResponse, requested_at: i64, now: i6
     Ok(requested_at + lifetime)
 }
 
+/// The endpoint path of a device API call and its query, when it has one. `endpoint_url`
+/// accepts no query, and a proof never covers one.
+fn split_query(path: &str) -> Result<(&str, Option<&str>)> {
+    let Some((path, query)) = path.split_once('?') else {
+        return Ok((path, None));
+    };
+    ensure!(
+        !query.is_empty()
+            && !query.contains(['#', '\\', ' '])
+            && !query.chars().any(char::is_control),
+        "Device API call to {path} has a query that is not a valid URL query"
+    );
+    Ok((path, Some(query)))
+}
+
 /// Session tokens stay in memory. Every request receives its own proof of possession.
 pub struct DeviceSession {
     client: Client,
@@ -1196,7 +1211,8 @@ impl DeviceSession {
     }
 
     /// One DPoP-authorized call to `path` below the API base; answers the status and the body
-    /// (at most `max_bytes`) of any response so a caller can map hub errors itself.
+    /// (at most `max_bytes`) of any response so a caller can map hub errors itself. A query
+    /// after `?` is sent but not signed: the proof names the endpoint without it.
     pub(crate) async fn api_call(
         &self,
         method: Method,
@@ -1204,15 +1220,20 @@ impl DeviceSession {
         body: Option<&serde_json::Value>,
         max_bytes: usize,
     ) -> Result<(u16, Vec<u8>)> {
+        let (path, query) = split_query(path)?;
         let endpoint = endpoint_url(&self.manifest.api_base_url, path)?;
         let (authorization, proof) = self.authorization(&method, &endpoint).await?;
         let mut authorization = reqwest::header::HeaderValue::from_str(&authorization)?;
         authorization.set_sensitive(true);
         let mut proof = reqwest::header::HeaderValue::from_str(&proof)?;
         proof.set_sensitive(true);
+        let url = match query {
+            Some(query) => format!("{endpoint}?{query}"),
+            None => endpoint,
+        };
         let mut request = self
             .client
-            .request(method, endpoint)
+            .request(method, url)
             .header("authorization", authorization)
             .header("dpop", proof);
         if let Some(body) = body {
@@ -1388,6 +1409,27 @@ fn record_presence(state_dir: &Path, status: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_call_path_keeps_its_query_out_of_the_signed_endpoint() {
+        let base = "https://hub.example/api/v1";
+        let checkpoint = "/devices/dev1/bots/turns/bt_1/checkpoint";
+        let call = format!("{checkpoint}?host_id=device%3Adev1&attempt=2");
+        let (path, query) = split_query(&call).unwrap();
+        assert_eq!(path, checkpoint);
+        assert_eq!(query, Some("host_id=device%3Adev1&attempt=2"));
+        assert_eq!(
+            endpoint_url(base, path).unwrap(),
+            format!("{base}{checkpoint}")
+        );
+        assert_eq!(split_query(checkpoint).unwrap(), (checkpoint, None));
+        for refused in ["", "a=1#fragment", "a=1 b", "a=1\nb", "a=\\b"] {
+            assert!(
+                split_query(&format!("{checkpoint}?{refused}")).is_err(),
+                "{refused:?}"
+            );
+        }
+    }
 
     #[tokio::test]
     #[cfg(any(target_os = "linux", target_os = "macos"))]

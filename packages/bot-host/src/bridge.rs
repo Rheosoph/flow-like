@@ -1,6 +1,7 @@
 //! The tool bridge of a headless turn that runs the bot-tools in this process: a call that asks
 //! the owner clears the turn's [`ApprovalGate`] (a standing grant, or the turn parks), a call that
-//! changes anything ends the turn's retries, and a stopped or parked turn reads as cancelled.
+//! changes anything ends the turn's retries, and a stopped turn reads as cancelled. A parked turn
+//! is not cancelled: calls already running finish, so their outcomes stay known.
 
 use crate::gate::ApprovalGate;
 use async_trait::async_trait;
@@ -84,9 +85,15 @@ impl PlatformToolBridge for ToolEnvBridge {
                 "This host does not run this tool while the bot answers on its own.",
             );
         }
-        if let Some(approval) =
-            find_bot_tool_spec(tool_name).map(|spec| resolve_tool_approval(&spec, &arguments))
-            && approval.kind != "none"
+        let Some(spec) = find_bot_tool_spec(tool_name) else {
+            return refusal(
+                tool_name,
+                "bot_tool_unknown",
+                "This tool has no spec on this host, so its approval cannot be checked and it is not run.",
+            );
+        };
+        let approval = resolve_tool_approval(&spec, &arguments);
+        if approval.kind != "none"
             && let Err(refused) = self
                 .gate
                 .clear(tool_name, &arguments, None, &approval.description)
@@ -101,6 +108,22 @@ impl PlatformToolBridge for ToolEnvBridge {
     }
 
     async fn is_cancelled(&self) -> bool {
-        self.stopped.load(Ordering::SeqCst) || self.gate.parked().is_some()
+        self.stopped.load(Ordering::SeqCst)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like::flow::copilot::linked_tool_names;
+
+    #[test]
+    fn every_linked_tool_has_a_spec_so_the_approval_check_never_skips() {
+        for name in linked_tool_names() {
+            assert!(
+                find_bot_tool_spec(name).is_some(),
+                "{name} is linked but has no core spec"
+            );
+        }
     }
 }

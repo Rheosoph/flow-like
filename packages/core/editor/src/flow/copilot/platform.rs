@@ -11,7 +11,7 @@
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
-    sync::{Arc, LazyLock},
+    sync::{Arc, LazyLock, Mutex},
     time::Duration,
 };
 
@@ -58,9 +58,10 @@ use super::tool_spec::{
     ARCHIVE_LOOKUP_TOOL, HTTP_REQUEST_TOOL, INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL,
     MEMORY_STORE_TOOL, OPEN_URL_TOOL, PlatformToolSpec, RESEARCH_AGENT_TOOL,
     data_studio_specialist_tool_specs, find_data_studio_tool_spec, find_global_tool_spec,
-    find_home_tool_spec, find_scout_tool_spec, global_assistant_tool_specs,
-    home_specialist_tool_specs, home_specialist_tool_specs_for_access, public_web_tool_specs,
-    research_agent_prompt, resolve_tool_effect, scout_specialist_tool_specs, spec_arg_str,
+    find_home_tool_spec, find_scout_tool_spec, flowpilot_file_tool_specs,
+    global_assistant_tool_specs, home_specialist_tool_specs, home_specialist_tool_specs_for_access,
+    public_web_tool_specs, research_agent_prompt, resolve_tool_effect, scout_specialist_tool_specs,
+    spec_arg_str,
 };
 use super::types::{ChatImage, ChatMessage, ChatRole, PlanStepStatus};
 use super::work_plan::{
@@ -795,6 +796,7 @@ pub struct PlatformCopilot {
     tool_rounds: Option<usize>,
     long_running: bool,
     recovery: Option<Arc<dyn BotRunRecovery>>,
+    max_completion_tokens: Option<u64>,
 }
 
 impl PlatformCopilot {
@@ -807,7 +809,14 @@ impl PlatformCopilot {
             tool_rounds: None,
             long_running: false,
             recovery: None,
+            max_completion_tokens: None,
         }
+    }
+
+    /// Bounds every model reply of the run, tool call arguments included.
+    pub fn with_max_completion_tokens(mut self, limit: u64) -> Self {
+        self.max_completion_tokens = Some(limit);
+        self
     }
 
     /// User-chosen thinking level, dropped for the rest of the run if the model rejects it.
@@ -924,7 +933,7 @@ impl PlatformCopilot {
     {
         if let Some(recovery) = &self.recovery
             && let Some(answer) =
-                RecoverySession::terminal_before_model(recovery.clone(), &user_prompt).await?
+                RecoverySession::terminal_before_model(recovery.clone(), None).await?
         {
             if let Some(callback) = &on_token {
                 callback(answer.output.clone());
@@ -999,11 +1008,11 @@ impl PlatformCopilot {
         } else {
             None
         };
-        let original_request = user_prompt.clone();
         let callback = on_token.map(Arc::new);
         let sink = callback
             .clone()
             .map(|callback| move |frame: String| callback(frame));
+        let partial_answer = Arc::new(Mutex::new(String::new()));
         let work = self.chat_with_client_inner(
             surface,
             system_prompt,
@@ -1016,6 +1025,7 @@ impl PlatformCopilot {
             bridge,
             memory,
             sink,
+            partial_answer.clone(),
         );
         let Some(deadline) = deadline else {
             return work.await;
@@ -1032,11 +1042,16 @@ impl PlatformCopilot {
                     .recovery
                     .as_ref()
                     .expect("a durable run supplied the deadline");
+                let partial = partial_answer.lock().unwrap().clone();
                 if let Some(answer) =
-                    RecoverySession::terminal_before_model(store.clone(), &original_request).await?
+                    RecoverySession::terminal_before_model(store.clone(), Some(&partial)).await?
                 {
                     if let Some(callback) = callback {
-                        callback(answer.output.clone());
+                        let unseen = answer
+                            .output
+                            .strip_prefix(partial.trim())
+                            .unwrap_or(&answer.output);
+                        callback(unseen.to_string());
                     }
                     if surface == PlatformSurface::Subtask
                         && let Some(reason) = answer.stop_reason
@@ -1070,6 +1085,7 @@ impl PlatformCopilot {
         bridge: Arc<dyn PlatformToolBridge>,
         memory: Option<Arc<AssistantMemory>>,
         on_token: Option<F>,
+        partial_answer: Arc<Mutex<String>>,
     ) -> Result<String>
     where
         F: Fn(String) + Send + Sync + 'static,
@@ -1106,9 +1122,12 @@ impl PlatformCopilot {
             .map(|spec| spec.to_tool_definition())
             .collect();
 
-        let agent = lenient_agent(completion_client, &model_name, thinking.clone())
-            .preamble(&system_prompt)
-            .build();
+        let mut agent = lenient_agent(completion_client, &model_name, thinking.clone())
+            .preamble(&system_prompt);
+        if let Some(limit) = self.max_completion_tokens {
+            agent = agent.max_tokens(limit);
+        }
+        let agent = agent.build();
 
         let mut prompt_contents = vec![UserContent::Text(rig::message::Text {
             text: user_prompt.clone(),
@@ -1196,7 +1215,7 @@ impl PlatformCopilot {
                 ));
             }
             if let Some(answer) =
-                RecoverySession::terminal_before_model(store.clone(), &user_prompt).await?
+                RecoverySession::terminal_before_model(store.clone(), None).await?
             {
                 if let Some(callback) = &on_token {
                     callback(answer.output.clone());
@@ -1491,6 +1510,7 @@ impl PlatformCopilot {
 
             let mut response_contents: Vec<AssistantContent> = Vec::new();
             let mut iteration_text = String::new();
+            partial_answer.lock().unwrap().clear();
             let mut current_reasoning = String::new();
             let mut reasoning_step_id: Option<String> = None;
             let mut flowscript_preview = FlowScriptToolCallPreviewTracker::default();
@@ -1522,6 +1542,13 @@ impl PlatformCopilot {
                 match content {
                     StreamedAssistantContent::Text(text) => {
                         iteration_text.push_str(&text.text);
+                        if !watches_room
+                            && !response_contents
+                                .iter()
+                                .any(|content| matches!(content, AssistantContent::ToolCall(_)))
+                        {
+                            partial_answer.lock().unwrap().push_str(&text.text);
+                        }
                         if !watches_room && let Some(ref callback) = on_token {
                             callback(text.text.clone());
                         }
@@ -1540,6 +1567,7 @@ impl PlatformCopilot {
                         {
                             callback(frame);
                         }
+                        partial_answer.lock().unwrap().clear();
                         response_contents.push(AssistantContent::ToolCall(tool_call));
                     }
                     StreamedAssistantContent::ToolCallDelta {
@@ -2010,6 +2038,8 @@ impl PlatformCopilot {
                         .collect();
                     async move {
                         let mut lane_results = Vec::with_capacity(calls.len());
+                        let mut calls = calls.into_iter();
+                        let mut paused = false;
                         for (
                             index,
                             id,
@@ -2018,7 +2048,7 @@ impl PlatformCopilot {
                             prepared,
                             round_has_related_editing_board_call,
                             round_has_related_widget_create_call,
-                        ) in calls
+                        ) in calls.by_ref()
                         {
                             let guarded = same_round_page_dependency_guard_result(
                                 &name,
@@ -2057,6 +2087,7 @@ impl PlatformCopilot {
                             if platform_tool_enters_private_context(&name) {
                                 web_research_session.close_public_web_phase();
                             }
+                            let waiting = super::run_recovery::gate_waiting_code(&output);
                             if let Some(recovery) = &recovery {
                                 recovery
                                     .lock()
@@ -2064,7 +2095,10 @@ impl PlatformCopilot {
                                     .record_result(
                                         &id,
                                         &name,
-                                        context::bounded_tool_output(&output, result_count),
+                                        waiting.map_or_else(
+                                            || context::bounded_tool_output(&output, result_count),
+                                            super::run_recovery::paused_output,
+                                        ),
                                         saved_plan.clone(),
                                         web_research_session.snapshot(),
                                         delegated_research_session.snapshot(),
@@ -2072,41 +2106,41 @@ impl PlatformCopilot {
                                     )
                                     .await?;
                             }
-                            let waiting =
-                                serde_json::from_str::<Value>(&output)
-                                    .ok()
-                                    .is_some_and(|result| {
-                                        matches!(
-                                            result.get("code").and_then(Value::as_str),
-                                            Some(
-                                                "bot_tool_waiting_for_approval"
-                                                    | "bot_talk_waiting_for_owner"
-                                            )
-                                        )
-                                    });
-                            if waiting {
-                                return Err(flow_like_types::anyhow!(
-                                    "Run waiting for owner approval"
-                                ));
+                            if waiting.is_some() {
+                                paused = true;
+                                break;
                             }
                             lane_results.push((index, (id, name, output, images)));
                         }
-                        Ok::<_, flow_like_types::Error>(lane_results)
+                        // A paused call holds back the rest of its ordered lane; those calls
+                        // never ran, so the batch still closes and a resume can request them.
+                        if paused && let Some(recovery) = &recovery {
+                            let queued: Vec<_> =
+                                calls.map(|(_, id, name, ..)| (id, name)).collect();
+                            recovery.lock().await.record_not_started(&queued).await?;
+                        }
+                        Ok::<_, flow_like_types::Error>((lane_results, paused))
                     }
                 })
                 .collect();
 
             // Reassemble in the model's declared call order: a tool result block must line up with
             // the tool_call ids of the assistant message that produced it, whatever order the lanes
-            // happened to finish in.
+            // happened to finish in. A paused lane lets the other lanes settle first, so their
+            // outcomes are recorded instead of becoming unknown.
             let mut ordered: Vec<Option<PlatformToolResult>> =
                 (0..tool_calls.len()).map(|_| None).collect();
-            for lane_results in
+            let mut paused = false;
+            for (lane_results, lane_paused) in
                 context::cancellable(&bridge, futures::future::try_join_all(lane_futures)).await??
             {
+                paused |= lane_paused;
                 for (index, result) in lane_results {
                     ordered[index] = Some(result);
                 }
+            }
+            if paused {
+                return Err(flow_like_types::anyhow!("Run waiting for owner approval"));
             }
             let tool_results: Vec<PlatformToolResult> = ordered.into_iter().flatten().collect();
             if long_running {
@@ -2197,11 +2231,13 @@ impl PlatformCopilot {
             // A specialist holds no public-web tools at all, so the citation and privacy-boundary
             // notices below describe a policy that cannot apply to it.
             let web_policy_applies = surface == PlatformSurface::Orchestrator;
-            let round_entered_private_context = round_entered_private_context && web_policy_applies;
+            let private_context_notice = (round_entered_private_context && web_policy_applies)
+                .then(|| private_context_notice(&advertised_tool_names))
+                .flatten();
             if tool_images.is_empty()
                 && !synthesis_next
                 && !web_research_round
-                && !round_entered_private_context
+                && private_context_notice.is_none()
             {
                 current_prompt = tool_result_message;
             } else {
@@ -2228,10 +2264,8 @@ impl PlatformCopilot {
                         "Host-verified web evidence state after this research round. Search snippets and archive candidates remain discovery-only; cite only successfully opened pages. Raw source IDs are internal and must not appear in the answer. Tools remain available for unresolved gaps. Exact currently citable URL allowlist:\n{citation_allowlist}"
                     )));
                 }
-                if round_entered_private_context {
-                    image_contents.push(UserContent::text(
-                        "App, memory, or interactive user data has entered the working context. Raw public-web tools are closed for this assistant run. You can still direct research_agent with a self-contained public question and relevant public context; keep secrets, credentials, private identifiers, and private app/file contents out of its brief. Direct http_request calls still require the existing execution approval controls and a user-authorized destination and purpose for any private data.",
-                    ));
+                if let Some(notice) = private_context_notice {
+                    image_contents.push(UserContent::text(notice));
                 }
                 if !tool_images.is_empty() {
                     image_contents.push(UserContent::text(
@@ -2428,7 +2462,9 @@ fn markdown_link_label(text: &str, url: Range<usize>) -> Option<(usize, &str)> {
 /// `research_agent` fallback as every other backend; this host executes it in a fresh local
 /// public-only model context. Raw search/open/archive schemas never enter the root context.
 fn platform_loop_tool_specs(memory_enabled: bool) -> Vec<PlatformToolSpec> {
-    global_assistant_tool_specs(memory_enabled)
+    let mut specs = global_assistant_tool_specs(memory_enabled);
+    specs.extend(flowpilot_file_tool_specs());
+    specs
 }
 
 const MAX_SEALED_RESEARCH_ROUNDS: usize = 6;
@@ -2693,6 +2729,29 @@ fn platform_tool_enters_private_context(name: &str) -> bool {
             name,
             "list_apps" | RESEARCH_AGENT_TOOL | UPDATE_WORK_PLAN_TOOL
         )
+}
+
+/// The privacy reminder after private data entered the root context, naming only tools the run
+/// holds. The root never holds raw public-web tools, so nothing here may read as closing the
+/// approval-gated direct request tools.
+fn private_context_notice(advertised: &HashSet<String>) -> Option<String> {
+    let offers = |name: &str| advertised.contains(name);
+    let mut lines = Vec::new();
+    if offers(RESEARCH_AGENT_TOOL) {
+        lines.push("Brief research_agent only with a self-contained public question and public context; keep secrets, credentials, private identifiers, and private app/file contents out of its brief.");
+    }
+    if offers(HTTP_REQUEST_TOOL) {
+        lines.push("Direct http_request calls stay available under the existing execution approval controls; send private data only to a destination and for a purpose the user authorized.");
+    }
+    if offers(flow_like_bot_tools::web::WEB_REQUEST) {
+        lines.push("web_request stays available for this whole run, whatever is in the context: your owner approves each new site, and approved sites run directly. Send private data only where your owner asked for it.");
+    }
+    (!lines.is_empty()).then(|| {
+        format!(
+            "App, memory, or interactive user data has entered the working context. {}",
+            lines.join(" ")
+        )
+    })
 }
 
 /// Existing apps are checked before either public research or direct API requests. The model
@@ -3510,6 +3569,10 @@ mod tests {
         assert!(!names.contains(&ARCHIVE_LOOKUP_TOOL));
         assert!(names.contains(&MEMORY_SEARCH_TOOL));
         assert!(names.contains(&super::super::tool_spec::HTTP_REQUEST_TOOL));
+        for tool in super::super::tool_spec::FLOWPILOT_FILE_TOOLS {
+            assert!(names.contains(&tool), "{tool}");
+            assert!(find_global_tool_spec(tool).is_some(), "{tool}");
+        }
     }
 
     #[tokio::test]
@@ -3739,6 +3802,31 @@ mod tests {
         ] {
             assert!(platform_tool_enters_private_context(name), "{name}");
         }
+    }
+
+    #[test]
+    fn private_context_notice_names_only_offered_tools_and_keeps_web_request_open() {
+        let offered = |names: &[&str]| -> HashSet<String> {
+            names.iter().map(|name| name.to_string()).collect()
+        };
+        assert_eq!(private_context_notice(&offered(&["memory_search"])), None);
+
+        let bot = private_context_notice(&offered(&[
+            RESEARCH_AGENT_TOOL,
+            flow_like_bot_tools::web::WEB_REQUEST,
+            MEMORY_SEARCH_TOOL,
+        ]))
+        .expect("a bot with research and web_request gets the reminder");
+        assert!(bot.contains("web_request stays available"), "{bot}");
+        assert!(bot.contains("research_agent"), "{bot}");
+        assert!(!bot.contains("http_request"), "{bot}");
+        assert!(!bot.to_lowercase().contains("closed"), "{bot}");
+
+        let flux = private_context_notice(&offered(&[RESEARCH_AGENT_TOOL, HTTP_REQUEST_TOOL]))
+            .expect("FlowPilot gets the reminder");
+        assert!(flux.contains("http_request"), "{flux}");
+        assert!(!flux.contains("web_request"), "{flux}");
+        assert!(!flux.to_lowercase().contains("closed"), "{flux}");
     }
 
     #[test]

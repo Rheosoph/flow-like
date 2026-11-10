@@ -1,8 +1,7 @@
 use super::{
     INBOX_DIRECT_FIXED, INBOX_ENCRYPTION_MISMATCH, INBOX_ENVELOPES_MISMATCH, INBOX_KEY_EXISTS,
-    INBOX_KEY_LIMIT,
-    INBOX_MEMBER_LIMIT, INBOX_MESSAGE_ID_TAKEN, INBOX_NOT_YOUR_MESSAGE, INBOX_REMOVE_NOT_ALLOWED,
-    INBOX_TARGET_NOT_FOUND, Reader, active_membership,
+    INBOX_KEY_LIMIT, INBOX_MEMBER_LIMIT, INBOX_MESSAGE_ID_TAKEN, INBOX_NOT_YOUR_MESSAGE,
+    INBOX_REMOVE_NOT_ALLOWED, INBOX_TARGET_NOT_FOUND, Reader, active_membership,
     conversations::{
         NewConversation, member_group, record_room_change, start_direct, start_group,
         validate_new_conversation,
@@ -44,7 +43,7 @@ use std::collections::BTreeMap;
 
 const INBOX_TABLES: [&str; 6] = [
     r#"CREATE TABLE public."User" (
-        "id" TEXT PRIMARY KEY, "name" TEXT, "username" TEXT, "preferredUsername" TEXT)"#,
+        "id" TEXT PRIMARY KEY, "name" TEXT, "email" TEXT, "username" TEXT, "preferredUsername" TEXT)"#,
     r#"CREATE TABLE public."Conversation" (
         "id" TEXT PRIMARY KEY, "kind" TEXT NOT NULL, "title" TEXT, "encryption" TEXT NOT NULL,
         "directKey" TEXT UNIQUE, "createdBy" TEXT NOT NULL, "lastActivityAt" TEXT NOT NULL,
@@ -1709,4 +1708,75 @@ async fn revoking_a_key_frees_its_slot_and_keeps_its_id_taken() {
             "{principal} {key_id}"
         );
     }
+}
+
+#[tokio::test]
+async fn only_the_owners_answer_to_a_card_stays_silent_to_the_bot() {
+    let db = super::fixture::database().await;
+    insert_bot(&db, "bot_1", "user-a", false).await;
+    team(&db).await;
+    let card = outgoing(
+        "card1",
+        InboxEntryKind::Message,
+        json!({
+            "text": "I need your approval: run it",
+            "approval": {
+                "id": "card1", "turn_id": "t1", "tool": "run", "summary": "run it",
+                "scope": "app:1", "args_hash": "h1"
+            }
+        }),
+    );
+    send_in(&db, "team", "bot_1", &card, at(1)).await.unwrap();
+    let answer = |message_id: &str| {
+        outgoing(
+            message_id,
+            InboxEntryKind::Message,
+            json!({
+                "text": "",
+                "reply_to": "card1",
+                "mentions": ["bot_1"],
+                "approval_response": { "approval_id": "card1", "decision": "once" }
+            }),
+        )
+    };
+    let right_id = flow_like_types::tool_grant::approval_response_message_id("card1");
+    let woke = |sent: &super::entries::Sent| {
+        sent.bots
+            .iter()
+            .any(|recipient| recipient.bot_id == "bot_1")
+    };
+    let owner = send_in(&db, "team", "user-a", &answer(&right_id), at(2))
+        .await
+        .unwrap();
+    assert!(
+        !woke(&owner),
+        "the owner's answer to the card wakes no turn"
+    );
+    let wrong_id = send_in(&db, "team", "user-a", &answer("not_the_answer_id"), at(3))
+        .await
+        .unwrap();
+    assert!(
+        woke(&wrong_id),
+        "an answer under another message id is a message"
+    );
+    let stranger = send_in(
+        &db,
+        "team",
+        "user-b",
+        &outgoing(
+            "stranger_answer",
+            InboxEntryKind::Message,
+            json!({
+                "text": "", "reply_to": "card1", "mentions": ["bot_1"],
+                "approval_response": { "approval_id": "card1", "decision": "once" }
+            }),
+        ),
+        at(4),
+    )
+    .await
+    .unwrap();
+    assert!(
+        woke(&stranger),
+        "a non-owner's approval_response is a message"
+    );
 }

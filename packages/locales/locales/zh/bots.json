@@ -1,5 +1,9 @@
 {
 	"capabilities": {
+		"barcodes": {
+			"description": "",
+			"label": ""
+		},
 		"browser_use": {
 			"description": "",
 			"label": ""
@@ -174,7 +178,13 @@
 		"manualAvailability": "",
 		"freeBusyHint": "",
 		"manageAvailability": "",
-		"applyStatus": ""
+		"applyStatus": "",
+		"sessionShared": "",
+		"revoked": "",
+		"sessionAccessDirect": "",
+		"sessionAccessGroup": "",
+		"onceRetention": "",
+		"revokeFailed": ""
 	},
 	"computer": {
 		"alt": "",
@@ -367,6 +377,9 @@
 				"full": "",
 				"unavailable": ""
 			},
+			"interrupt": "",
+			"interruptHint": "",
+			"interruptShort": "",
 			"join": "",
 			"leave": "",
 			"listen": "",
@@ -397,7 +410,23 @@
 			"screenLabel": "",
 			"cameraLabel": "",
 			"you": "",
-			"fullscreen": ""
+			"fullscreen": "",
+			"setup": {
+				"title": "",
+				"body": "",
+				"readyTitle": "",
+				"readyBody": "",
+				"unsupportedTitle": "",
+				"unsupportedBody": "",
+				"start": "",
+				"voice": "",
+				"choose": "",
+				"needed": "",
+				"optional": "",
+				"voiceHint": "",
+				"saveFailed": "",
+				"pinnedUnusable": ""
+			}
 		},
 		"cancel": "",
 		"composer": {
@@ -544,6 +573,14 @@
 			"create": "",
 			"createInvite": "",
 			"description": "",
+			"encryptionBotNoAbility": "",
+			"encryptionHint": "",
+			"encryptionKeyMissing": "",
+			"encryptionLabel": "",
+			"encryptionNoKey": "",
+			"encryptionNotAllowed": "",
+			"encryptionOnDevice": "",
+			"encryptionServerBot": "",
 			"failed": "",
 			"full_one": "",
 			"full_other": "",
@@ -826,6 +863,7 @@
 				"web": ""
 			},
 			"needsLocal": "",
+			"notOnDevice": "",
 			"profile": "",
 			"profileApps_one": "",
 			"profileApps_other": "",
@@ -873,7 +911,6 @@
 			"memoryHost": "",
 			"memoryHostHint": "",
 			"memoryModel": "",
-			"memoryNone": "",
 			"moveDown": "",
 			"moveUp": "",
 			"noModels": "",
@@ -883,7 +920,6 @@
 				"hostHint": "",
 				"image": "",
 				"imageHint": "",
-				"none": "",
 				"ownModel": "",
 				"ownModelHint": "",
 				"stt": "",
@@ -901,7 +937,12 @@
 			"searchModels": "",
 			"subtitle": "",
 			"title": "",
-			"unknownModel": ""
+			"unknownModel": "",
+			"yourModels": "",
+			"allModels": "",
+			"catalogNotice": "",
+			"catalogFailed": "",
+			"addAndUse": ""
 		},
 		"delete": {
 			"action": "",
@@ -958,7 +999,8 @@
 			"subtitle": "",
 			"title": "",
 			"turnedBackOn": "",
-			"turnedOff": ""
+			"turnedOff": "",
+			"turnedOffDevice": ""
 		},
 		"preview": {
 			"blank": "",

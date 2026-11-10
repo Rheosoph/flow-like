@@ -2,6 +2,7 @@ import { isChannelHandle } from "../channel/handle";
 import type { RealtimeRunSnapshot } from "../realtime/types";
 import type { IChannelHandle, IChannelPush } from "../schema/channel";
 import type { IIntercomEvent } from "../schema/events/intercom-event";
+import { closedWithin, lingerUntilClosed } from "./linger";
 import {
 	type ExecutionRealtimeClientFactory,
 	followRealtimeExecution,
@@ -389,6 +390,8 @@ export class ExecutionRuntime {
 		let lastError: string | undefined;
 		let hasError = false;
 		let deadline: ReturnType<typeof setTimeout> | undefined;
+		let streamClosed: Promise<void> | undefined;
+		const awaitStreamClose = run.request.awaitStreamClose === true;
 		const observe = (event: IIntercomEvent) => {
 			this.acceptEvent(run, event);
 			if (event.event_type === "error") {
@@ -538,13 +541,39 @@ export class ExecutionRuntime {
 							data.push(line.slice(5).replace(/^ /, ""));
 					}
 					if (data.length === 0 || data.join("\n") === "keep-alive") return;
-					let event: IIntercomEvent;
+					const text = data.join("\n");
+					let parsed: unknown;
 					try {
-						event = JSON.parse(data.join("\n"));
+						parsed = JSON.parse(text);
 					} catch {
-						throw new Error("The execution stream contained an invalid event.");
+						if (name !== "error")
+							throw new Error(
+								"The execution stream contained an invalid event.",
+							);
 					}
-					if (!event || typeof event.event_type !== "string")
+					const body = parsed as
+						| { event_type?: unknown; error?: unknown }
+						| null
+						| undefined;
+					let event: IIntercomEvent;
+					if (typeof body?.event_type === "string")
+						event = body as unknown as IIntercomEvent;
+					else if (name === "error" || typeof body?.error === "string") {
+						const message =
+							(typeof body?.error === "string" ? body.error : undefined) ??
+							messageText(parsed) ??
+							(parsed === undefined ? text : undefined) ??
+							"The workflow failed.";
+						event = {
+							event_id: "",
+							event_type: "error",
+							payload: { message },
+							timestamp: {
+								secs_since_epoch: Math.floor(Date.now() / 1_000),
+								nanos_since_epoch: 0,
+							},
+						};
+					} else
 						throw new Error("The execution stream contained an invalid event.");
 					if (!event.event_id)
 						event.event_id = `${run.task.taskId}:${run.task.events.length}`;
@@ -566,6 +595,7 @@ export class ExecutionRuntime {
 						frame(raw);
 					}
 				};
+				let lingering = false;
 				try {
 					while (true) {
 						const { value, done } = await reader.read();
@@ -575,12 +605,18 @@ export class ExecutionRuntime {
 						drain();
 						if (done || terminal) {
 							if (buffer.trim()) frame(buffer);
+							if (!done && terminal) {
+								lingering = true;
+								streamClosed = lingerUntilClosed(reader);
+							}
 							break;
 						}
 					}
 				} finally {
-					await reader.cancel().catch(() => undefined);
-					reader.releaseLock();
+					if (!lingering) {
+						await reader.cancel().catch(() => undefined);
+						reader.releaseLock();
+					}
 				}
 			}
 			if (run.cancelConfirmed) throw abortError();
@@ -658,6 +694,7 @@ export class ExecutionRuntime {
 				: { url: "", body: null };
 			this.retain(run);
 		}
+		if (awaitStreamClose && streamClosed) await closedWithin(streamClosed);
 		if (run.failure)
 			throw Object.assign(new Error(run.failure.message), run.failure);
 		return run.task.result;
@@ -674,6 +711,14 @@ export class ExecutionRuntime {
 	private acceptEvent(run: Run, event: IIntercomEvent) {
 		if (run.seen.has(event.event_id)) return;
 		run.seen.add(event.event_id);
+		if (
+			event.event_type === "run_initiated" &&
+			typeof event.payload?.run_id === "string"
+		) {
+			const key = `run_initiated:${event.payload.run_id}`;
+			if (run.seen.has(key)) return;
+			run.seen.add(key);
+		}
 		const offset = run.task.events.length;
 		run.task.events.push(event);
 		for (const handle of executionChannels(event.payload)) {

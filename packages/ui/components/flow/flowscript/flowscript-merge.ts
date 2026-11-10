@@ -32,6 +32,12 @@ const PREAMBLE_KEY = "";
 export interface FlowScriptMergeUnit {
 	/** Undefined for the leading preamble (use block + interfaces). */
 	anchorId?: string;
+	/**
+	 * Which of the lines carrying `anchorId` opens this unit, counted from 1. Only a
+	 * `@collapse` group repeats its anchor: the renderer writes one block per run of the
+	 * group's statements, each with the group's `//@l:`.
+	 */
+	occurrence: number;
 	/** 1-based line the unit starts on in its source text. */
 	startLine: number;
 	/** The unit's lines joined with `\n` (no trailing separator). */
@@ -44,6 +50,16 @@ export interface FlowScriptSegmentation {
 	duplicateAnchorId?: string;
 }
 
+const COLLAPSE_OPENER = /^\s*@collapse\(/;
+
+type UnitIdentity = { anchorId?: string; occurrence?: number };
+
+/** Map key of a unit; anchor ids never contain `#`. */
+function unitKey({ anchorId, occurrence = 1 }: UnitIdentity): string {
+	if (anchorId === undefined) return PREAMBLE_KEY;
+	return occurrence > 1 ? `${anchorId}#${occurrence}` : anchorId;
+}
+
 /**
  * Split a render into merge units per the line-ownership rule above.
  * Invariant: `units.map((u) => u.text).join("\n") === text`.
@@ -52,22 +68,28 @@ export function segmentFlowScriptUnits(text: string): FlowScriptSegmentation {
 	const lines = text.split("\n");
 	const index = parseFlowScriptAnchors(text);
 	const units: FlowScriptMergeUnit[] = [];
-	const seen = new Set<string>();
+	const seen = new Map<string, { count: number; group: boolean }>();
 	let duplicateAnchorId: string | undefined;
 
-	const anchorLines: { line: number; id: string }[] = [];
-	for (const anchor of index.anchors) {
-		anchorLines.push({ line: anchor.line, id: anchor.id });
-		if (seen.has(anchor.id) && duplicateAnchorId === undefined) {
-			duplicateAnchorId = anchor.id;
-		}
-		seen.add(anchor.id);
+	const anchorLines: { line: number; id: string; occurrence: number }[] = [];
+	for (const anchor of [...index.anchors].sort((a, b) => a.line - b.line)) {
+		const group =
+			anchor.kind === "layer" &&
+			COLLAPSE_OPENER.test(lines[anchor.line - 1] ?? "");
+		const earlier = seen.get(anchor.id);
+		if (earlier && !(earlier.group && group)) duplicateAnchorId ??= anchor.id;
+		const occurrence = (earlier?.count ?? 0) + 1;
+		seen.set(anchor.id, {
+			count: occurrence,
+			group: group && (earlier?.group ?? true),
+		});
+		anchorLines.push({ line: anchor.line, id: anchor.id, occurrence });
 	}
-	anchorLines.sort((a, b) => a.line - b.line);
 
 	const firstAnchorLine = anchorLines[0]?.line ?? lines.length + 1;
 	if (firstAnchorLine > 1) {
 		units.push({
+			occurrence: 1,
 			startLine: 1,
 			text: lines.slice(0, firstAnchorLine - 1).join("\n"),
 		});
@@ -77,6 +99,7 @@ export function segmentFlowScriptUnits(text: string): FlowScriptSegmentation {
 		const end = (anchorLines[i + 1]?.line ?? lines.length + 1) - 1;
 		units.push({
 			anchorId: anchorLines[i].id,
+			occurrence: anchorLines[i].occurrence,
 			startLine: start,
 			text: lines.slice(start - 1, end).join("\n"),
 		});
@@ -91,6 +114,8 @@ export type FlowScriptMergeConflictKind = "both-changed" | "remote-deleted";
 export interface FlowScriptMergeConflict {
 	/** Undefined = the preamble unit. */
 	anchorId?: string;
+	/** Which block of a repeated `@collapse` group anchor this is; 1 everywhere else. */
+	occurrence?: number;
 	kind: FlowScriptMergeConflictKind;
 	/** The user's version of the unit; "" when they deleted it. */
 	localBlock: string;
@@ -145,7 +170,7 @@ function unitMap(
 ): Map<string, FlowScriptMergeUnit> {
 	const map = new Map<string, FlowScriptMergeUnit>();
 	for (const unit of segmentation.units) {
-		map.set(unit.anchorId ?? PREAMBLE_KEY, unit);
+		map.set(unitKey(unit), unit);
 	}
 	return map;
 }
@@ -162,8 +187,10 @@ function unitMap(
  *   → kept after their local predecessor;
  * - unanchored lines the user added ride the unit above them.
  *
- * Fails (never merges) when any input anchors the same id twice — unit
- * keying would be ambiguous; the caller falls back to the explicit guard.
+ * Fails (never merges) when any input anchors the same node, variable or function
+ * twice — unit keying would be ambiguous; the caller falls back to the explicit
+ * guard. The blocks of one `@collapse` group share its anchor by design and are
+ * told apart by their order.
  */
 export function mergeFlowScript({
 	baseline,
@@ -190,9 +217,7 @@ export function mergeFlowScript({
 
 	const baseByKey = unitMap(segmented.baseline);
 	const localByKey = unitMap(segmented.local);
-	const freshKeys = new Set(
-		segmented.fresh.units.map((unit) => unit.anchorId ?? PREAMBLE_KEY),
-	);
+	const freshKeys = new Set(segmented.fresh.units.map(unitKey));
 
 	const stats: FlowScriptMergeStats = {
 		tookFresh: 0,
@@ -204,12 +229,12 @@ export function mergeFlowScript({
 	const merged: MergedEntry[] = [];
 
 	for (const freshUnit of segmented.fresh.units) {
-		const key = freshUnit.anchorId ?? PREAMBLE_KEY;
+		const key = unitKey(freshUnit);
 		const base = baseByKey.get(key);
 		const localUnit = localByKey.get(key);
 
 		if (!base) {
-			if (key !== PREAMBLE_KEY) remoteTouched.add(key);
+			if (freshUnit.anchorId) remoteTouched.add(freshUnit.anchorId);
 			if (!localUnit) {
 				merged.push({ key, text: freshUnit.text });
 				stats.freshAdded++;
@@ -222,6 +247,7 @@ export function mergeFlowScript({
 					text: localUnit.text,
 					conflict: {
 						anchorId: freshUnit.anchorId,
+						occurrence: freshUnit.occurrence,
 						kind: "both-changed",
 						localBlock: localUnit.text,
 						freshBlock: freshUnit.text,
@@ -233,7 +259,8 @@ export function mergeFlowScript({
 
 		const localChanged = !localUnit || localUnit.text !== base.text;
 		const freshChanged = freshUnit.text !== base.text;
-		if (freshChanged && key !== PREAMBLE_KEY) remoteTouched.add(key);
+		if (freshChanged && freshUnit.anchorId)
+			remoteTouched.add(freshUnit.anchorId);
 
 		if (!localChanged) {
 			merged.push({ key, text: freshUnit.text });
@@ -251,6 +278,7 @@ export function mergeFlowScript({
 				text: localUnit ? localUnit.text : freshUnit.text,
 				conflict: {
 					anchorId: freshUnit.anchorId,
+					occurrence: freshUnit.occurrence,
 					kind: "both-changed",
 					localBlock: localUnit?.text ?? "",
 					freshBlock: freshUnit.text,
@@ -268,7 +296,7 @@ export function mergeFlowScript({
 	) => {
 		let insertAt = 0;
 		for (let p = localIndex - 1; p >= 0; p--) {
-			const predecessorKey = segmented.local.units[p].anchorId ?? PREAMBLE_KEY;
+			const predecessorKey = unitKey(segmented.local.units[p]);
 			const at = merged.findIndex((m) => m.key === predecessorKey);
 			if (at >= 0) {
 				insertAt = at + 1;
@@ -280,17 +308,18 @@ export function mergeFlowScript({
 
 	for (let i = 0; i < segmented.local.units.length; i++) {
 		const localUnit = segmented.local.units[i];
-		const key = localUnit.anchorId ?? PREAMBLE_KEY;
+		const key = unitKey(localUnit);
 		if (freshKeys.has(key)) continue;
 		const base = baseByKey.get(key);
 		if (base) {
-			if (key !== PREAMBLE_KEY) remoteTouched.add(key);
+			if (localUnit.anchorId) remoteTouched.add(localUnit.anchorId);
 			if (localUnit.text === base.text) continue; // accept remote deletion
 			insertAfterLocalPredecessor(i, {
 				key,
 				text: localUnit.text,
 				conflict: {
 					anchorId: localUnit.anchorId,
+					occurrence: localUnit.occurrence,
 					kind: "remote-deleted",
 					localBlock: localUnit.text,
 					freshBlock: "",
@@ -335,15 +364,15 @@ export function resolveFlowScriptConflict(
 	text: string,
 	conflict: Pick<
 		FlowScriptMergeConflict,
-		"anchorId" | "localBlock" | "freshBlock"
+		"anchorId" | "occurrence" | "localBlock" | "freshBlock"
 	>,
 	resolution: FlowScriptConflictResolution,
 ): string {
 	const replacement =
 		resolution === "mine" ? conflict.localBlock : conflict.freshBlock;
 	const { units } = segmentFlowScriptUnits(text);
-	const key = conflict.anchorId ?? PREAMBLE_KEY;
-	const at = units.findIndex((unit) => (unit.anchorId ?? PREAMBLE_KEY) === key);
+	const key = unitKey(conflict);
+	const at = units.findIndex((unit) => unitKey(unit) === key);
 	if (at < 0) {
 		if (replacement === "") return text;
 		return text.length === 0 ? replacement : `${text}\n${replacement}`;
@@ -368,6 +397,30 @@ export function intersectRemoteTouched(
 
 /* ── Conflict CodeLens (Monaco adapter) ────────────────────────────────── */
 
+/** Identity of the unit a conflict belongs to, for telling conflicts apart. */
+export function flowScriptConflictKey(
+	conflict: Pick<FlowScriptMergeConflict, "anchorId" | "occurrence">,
+): string {
+	return unitKey(conflict);
+}
+
+/**
+ * 1-based line the conflicted unit currently starts on: the preamble's first line, or the
+ * matching anchor line. Undefined when the anchor is no longer in the buffer.
+ */
+export function flowScriptConflictLine(
+	conflict: Pick<FlowScriptMergeConflict, "anchorId" | "occurrence">,
+	anchorIndex: FlowScriptAnchorIndex,
+): number | undefined {
+	const { anchorId, occurrence = 1 } = conflict;
+	if (anchorId === undefined) return 1;
+	if (occurrence === 1) return anchorIndex.firstLineById.get(anchorId);
+	return anchorIndex.anchors
+		.filter((anchor) => anchor.id === anchorId)
+		.map((anchor) => anchor.line)
+		.sort((a, b) => a - b)[occurrence - 1];
+}
+
 export interface FlowScriptConflictLens {
 	/** 1-based line the lens pair renders above (the unit's anchor line). */
 	line: number;
@@ -382,13 +435,15 @@ export interface FlowScriptConflictLens {
  * still resolves it).
  */
 export function deriveFlowScriptConflictLenses(
-	conflicts: readonly Pick<FlowScriptMergeConflict, "anchorId">[],
+	conflicts: readonly Pick<
+		FlowScriptMergeConflict,
+		"anchorId" | "occurrence"
+	>[],
 	anchorIndex: FlowScriptAnchorIndex,
 ): FlowScriptConflictLens[] {
 	const lenses: FlowScriptConflictLens[] = [];
 	for (let i = 0; i < conflicts.length; i++) {
-		const anchorId = conflicts[i].anchorId;
-		const line = anchorId ? anchorIndex.firstLineById.get(anchorId) : 1;
+		const line = flowScriptConflictLine(conflicts[i], anchorIndex);
 		if (!line) continue;
 		lenses.push({ line, conflictIndex: i });
 	}

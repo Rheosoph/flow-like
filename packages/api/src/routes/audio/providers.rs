@@ -175,6 +175,62 @@ async fn send(
     })
 }
 
+pub(super) struct SpeechStream {
+    pub(super) response: reqwest::Response,
+    pub(super) request_id: Option<String>,
+}
+
+pub(super) async fn speak_stream(
+    connection: &Connection,
+    model: &str,
+    request: &HostedSpeechRequest,
+    timeout_ms: u64,
+    provider_request_started: &mut bool,
+) -> Result<SpeechStream, ApiError> {
+    let upstream = speech_request(connection.provider, model, request)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let client = client(timeout_ms)?;
+    let request = prepare(&client, connection, upstream, None)?;
+    *provider_request_started = true;
+    let response = client
+        .execute(request)
+        .await
+        .map_err(|_| ApiError::service_unavailable("Hosted audio provider request failed"))?;
+    if !response.status().is_success() {
+        return Err(ApiError::service_unavailable(
+            "Hosted audio provider rejected the request",
+        ));
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_AUDIO_BYTES as u64)
+    {
+        return Err(ApiError::service_unavailable(
+            "Hosted audio response exceeds its size limit",
+        ));
+    }
+    if response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.to_ascii_lowercase().contains("json"))
+    {
+        return Err(ApiError::service_unavailable(
+            "Hosted speech could not be read",
+        ));
+    }
+    let request_id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| value.len() <= 256)
+        .map(str::to_owned);
+    Ok(SpeechStream {
+        response,
+        request_id,
+    })
+}
+
 pub(super) async fn transcribe(
     connection: &Connection,
     model: &str,

@@ -5,7 +5,7 @@
 # against PostgreSQL or CockroachDB in the Kubernetes cluster.
 # =============================================================================
 
-FROM oven/bun:1.3.8-debian
+FROM oven/bun:1.4.4-debian
 
 COPY LICENSE /usr/share/licenses/flow-like/LICENSE
 

@@ -22,10 +22,10 @@ use crate::{
     execution::{
         DispatchRequest, DispatchTrigger, ExecutionJwtParams, PageExecutionJwtContext, TokenType,
         caller_dispatch_profile, format_run_version, is_jwt_configured, rejection,
-        resolve_wasm_packages, sign_execution_jwt, sign_execution_jwt_with_page_context,
+        sign_execution_jwt, sign_execution_jwt_with_page_context,
         state::{PostgresStateStore, RunStatus as StateRunStatus, UpdateRunInput},
         subject::account_user_id,
-        variant,
+        try_resolve_wasm_packages, variant,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -430,11 +430,12 @@ pub async fn invoke_event_async(
     let (credential_sub, credential_mode) =
         crate::bot_flow::credential_target(bot_run.as_ref(), &sub, get_credentials_access());
     let (wasm_packages, input_payload_key, credentials, (profile, custom_bit_owner)) = flow_like_types::tokio::join!(
-        resolve_wasm_packages(&state, &app_id),
+        try_resolve_wasm_packages(&state, &app_id),
         store_input_payload(&state, &app_id, &run_id, params.payload.as_ref()),
         state.scoped_credentials(&credential_sub, &app_id, credential_mode),
         caller_dispatch_profile(&state, &user, &sub, params.profile_id.as_deref(), &app_id),
     );
+    let wasm_packages = wasm_packages?;
     let wasm_authority_revision =
         flow_like_types::dispatch::wasm_package_set_revision(wasm_packages.as_ref());
     if resolved_page_trigger

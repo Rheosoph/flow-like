@@ -2649,3 +2649,350 @@ fn collapse_is_still_an_ordinary_identifier() {
         .expect("`collapse` without `@` is a plain name");
     assert_eq!(ast.events[0].body.stmts.len(), 2);
 }
+
+// ---- nesting budget: iterative chains and template literals -------------------------------
+
+/// Run `work` on a 2 MiB stack, the size of a server worker thread. An unbounded recursion aborts
+/// the whole test process here instead of hiding behind the main thread's larger stack.
+fn on_worker_stack<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(work)
+        .expect("spawn worker-sized thread")
+        .join()
+        .expect("the worker thread must not panic")
+}
+
+fn in_function(expr: &str) -> String {
+    format!("function calc(a: int, b: int) {{\n    const x = {expr}\n}}\n")
+}
+
+#[test]
+fn unbounded_chains_error_instead_of_overflowing() {
+    let cases: Vec<(&str, String)> = vec![
+        ("member chain", format!("a{}", ".b".repeat(20_000))),
+        ("method chain", format!("a{}", ".c()".repeat(5_000))),
+        ("index chain", format!("a{}", "[0]".repeat(5_000))),
+        ("operator chain", format!("a{}", " + b".repeat(100_000))),
+        ("ternary ladder", format!("{}2", "a ? 1 : ".repeat(5_000))),
+        (
+            "nested templates",
+            format!("{}a{}", "`${".repeat(5_000), "}`".repeat(5_000)),
+        ),
+    ];
+    for (case, expr) in cases {
+        let message = on_worker_stack(move || {
+            parse(&in_function(&expr))
+                .expect_err("an unbounded chain must be a parse error")
+                .message
+        });
+        assert!(
+            message.contains("too deep") || message.contains("nested more than"),
+            "{case}: {message}"
+        );
+    }
+}
+
+/// The longest chain of `step` after `head` that still parses.
+fn longest_accepted(head: &str, step: &str) -> String {
+    let mut accepted = head.to_string();
+    loop {
+        let longer = format!("{accepted}{step}");
+        if parse(&in_function(&longer)).is_err() {
+            return accepted;
+        }
+        accepted = longer;
+        assert!(accepted.len() < 100_000, "the chain is never rejected");
+    }
+}
+
+#[test]
+fn the_longest_accepted_chains_survive_a_render_round_trip() {
+    let chains = on_worker_stack(|| {
+        [
+            longest_accepted("a", " + b"),
+            longest_accepted("a", ".b"),
+            longest_accepted("a", ".c()"),
+            longest_accepted("a", "[0]"),
+        ]
+        .map(|expr| {
+            let text = in_function(&expr);
+            let rendered = render(&parse(&text).expect("accepted"), &RenderOptions::default());
+            let again = parse(&rendered).map(|ast| render(&ast, &RenderOptions::default()));
+            (expr.len(), rendered, again)
+        })
+    });
+    for (length, rendered, again) in chains {
+        assert!(length > 100, "a realistic chain must still parse: {length}");
+        assert_eq!(
+            again.as_ref(),
+            Ok(&rendered),
+            "a chain that parses must render to text that parses back"
+        );
+    }
+}
+
+#[test]
+fn sixteen_nested_templates_parse() {
+    let expr = format!("{}a{}", "`${".repeat(16), "}`".repeat(16));
+    on_worker_stack(move || parse(&in_function(&expr))).expect("modest nesting is allowed");
+}
+
+// ---- expression shape ----------------------------------------------------------------------
+
+/// `render(parse(text))` and the AST it parses back to, which must be the one it came from.
+fn reparsed(text: &str) -> String {
+    let ast = parse(text).expect("parse should succeed");
+    let rendered = render(&ast, &RenderOptions::default());
+    let again = parse(&rendered).expect("rendered text should parse");
+    assert_eq!(
+        format!("{:?}", ast.functions),
+        format!("{:?}", again.functions),
+        "rendering changed the meaning of:\n{text}\ninto:\n{rendered}"
+    );
+    rendered
+}
+
+#[test]
+fn a_parenthesised_base_keeps_its_parentheses_before_a_member_access() {
+    for (expr, expected) in [
+        ("(a + b).value", "(a + b).value"),
+        ("(a ? b : c).value", "(a ? b : c).value"),
+        ("(a + b)[\"row-id\"]", "(a + b)[\"row-id\"]"),
+        ("(a + b).first.second", "(a + b).first.second"),
+        ("(-a).value", "(0 - a).value"),
+        ("(a + b)[0]", "(a + b)[0]"),
+    ] {
+        let rendered = reparsed(&in_function(expr));
+        assert!(rendered.contains(expected), "{expr}: {rendered}");
+    }
+}
+
+#[test]
+fn a_bracket_that_starts_a_line_opens_a_new_statement() {
+    let text = "function calc(a: string, b: string, y: string[]) {\n    let x = y\n    (a + b).trim()\n    [a, b].push(a)\n    let first = y[0]\n    let called = a.trim()\n}\n";
+    let ast = parse(text).expect("parse should succeed");
+    let stmts = &ast.functions[0].body.stmts;
+    assert_eq!(stmts.len(), 5, "{stmts:?}");
+    assert!(matches!(
+        &stmts[0],
+        flow_like_ast::Stmt::LocalAlias { value: flow_like_ast::Expr::Ref(name), .. } if name == "y"
+    ));
+    assert!(matches!(&stmts[1], flow_like_ast::Stmt::Call { .. }));
+    assert!(matches!(&stmts[2], flow_like_ast::Stmt::Call { .. }));
+    assert!(matches!(
+        &stmts[3],
+        flow_like_ast::Stmt::LocalAlias {
+            value: flow_like_ast::Expr::Index { .. },
+            ..
+        }
+    ));
+    assert_idempotent(text, &RenderOptions::default());
+}
+
+#[test]
+fn nested_ternaries_associate_to_the_right() {
+    for (expr, expected) in [
+        ("a ? 1 : b ? 2 : 3", "a ? 1 : (b ? 2 : 3)"),
+        ("a ? b ? 1 : 2 : 3", "a ? (b ? 1 : 2) : 3"),
+        ("a ? 1 : b ? 2 : a ? 3 : 4", "a ? 1 : (b ? 2 : (a ? 3 : 4))"),
+    ] {
+        let rendered = reparsed(&in_function(expr));
+        assert!(rendered.contains(expected), "{expr}: {rendered}");
+    }
+}
+
+// ---- recursive interfaces ------------------------------------------------------------------
+
+/// Every `#/$defs/<name>` a schema refers to, whatever its depth.
+fn schema_refs(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            if let Some(reference) = fields.get("$ref").and_then(serde_json::Value::as_str) {
+                out.push(reference.trim_start_matches("#/$defs/").to_string());
+            }
+            fields.values().for_each(|field| schema_refs(field, out));
+        }
+        serde_json::Value::Array(items) => items.iter().for_each(|item| schema_refs(item, out)),
+        _ => {}
+    }
+}
+
+fn assert_every_ref_resolves(schema: &str) {
+    let value: serde_json::Value = serde_json::from_str(schema).expect("schema is JSON");
+    let mut refs = Vec::new();
+    schema_refs(&value, &mut refs);
+    assert!(
+        !refs.is_empty(),
+        "the schema should hold a reference: {schema}"
+    );
+    for name in refs {
+        assert!(
+            value.pointer(&format!("/$defs/{name}")).is_some(),
+            "`#/$defs/{name}` resolves to nothing in {schema}"
+        );
+    }
+}
+
+#[test]
+fn a_recursive_interface_defines_itself() {
+    let text =
+        "interface Tree {\n    value: int;\n    children: Tree[];\n}\n\nconst root: Tree = {}\n";
+    let ast = parse(text).expect("parse should succeed");
+    let schema = ast.variables[0].schema.clone().expect("interface schema");
+    assert_every_ref_resolves(&schema);
+
+    let interfaces = flow_like_ast::interfaces_for_variables(&ast.variables);
+    let names: Vec<&str> = interfaces.iter().map(|decl| decl.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["Tree"],
+        "the schema's own definition is the root interface, not a second one"
+    );
+    assert_idempotent(text, &RenderOptions::default());
+}
+
+#[test]
+fn mutually_recursive_interfaces_define_each_other() {
+    let text = "interface Folder {\n    name: string;\n    files: Document[];\n}\ninterface Document {\n    title: string;\n    parent?: Folder;\n}\n\nconst root: Folder = {}\nconst latest: Document = {}\n";
+    let ast = parse(text).expect("parse should succeed");
+    for variable in &ast.variables {
+        assert_every_ref_resolves(variable.schema.as_deref().expect("interface schema"));
+    }
+}
+
+// ---- unsupported JavaScript --------------------------------------------------------------
+
+fn error_in_event(body: &str) -> String {
+    parse(&format!("onStart() {{\n{body}\n}}\n"))
+        .expect_err("unsupported syntax must be rejected")
+        .message
+}
+
+#[test]
+fn unsupported_javascript_statements_say_what_to_write_instead() {
+    for (body, expected) in [
+        (
+            "    for (const item of items) {\n        break\n    }",
+            "`break` is not supported",
+        ),
+        (
+            "    for (const item of items) {\n        continue\n    }",
+            "`continue` is not supported",
+        ),
+        (
+            "    try {\n        http::fetch({ request: request })\n    } catch (error) {\n    }",
+            "`try`/`catch` is not supported",
+        ),
+        (
+            "    for (let i = 0; i < 3; i++) {\n    }",
+            "`for (init; condition; step)` loops are not supported",
+        ),
+        (
+            "    for (const key in items) {\n    }",
+            "`for…in` is not supported",
+        ),
+    ] {
+        let message = error_in_event(body);
+        assert!(message.contains(expected), "{body}\n{message}");
+    }
+}
+
+#[test]
+fn loop_keywords_stay_usable_as_names() {
+    let ast = parse(
+        "onStart() {\n    const try = fetch({ url: \"x\" })\n    try {\n        execSuccess: {\n        }\n    }\n    continue = 1\n    break({ message: \"x\" })\n}\n",
+    )
+    .expect("`try`, `continue` and `break` are ordinary identifiers in other positions");
+    assert_eq!(ast.events[0].body.stmts.len(), 4);
+}
+
+#[test]
+fn an_unnamed_function_return_type_names_the_expected_form() {
+    let err = parse("function double(n: int): int {\n    return n * 2\n}\n").unwrap_err();
+    assert!(
+        err.message.contains("named output pins") && err.message.contains("(out: Type)"),
+        "{}",
+        err.message
+    );
+}
+
+#[test]
+fn a_for_of_loop_accepts_let() {
+    let ast = parse(
+        "onStart() {\n    for (let item of items) {\n        log({ message: item })\n    }\n}\n",
+    )
+    .expect("`let` binds a loop item like `const`");
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "onStart() {\n    for (const item of items) {\n        log({ message: item })\n    }\n}\n"
+    );
+}
+
+// ---- misspelt value types ------------------------------------------------------------------
+
+#[test]
+fn a_foreign_or_misspelt_value_type_is_rejected_with_the_intended_one() {
+    for (declaration, written, intended) in [
+        ("let count: number = 1", "number", "`int` or `float`"),
+        ("let done: boolean = false", "boolean", "`bool`"),
+        ("let name: strng = \"x\"", "strng", "`string`"),
+        ("let ratio: flaot = 1.5", "flaot", "`float`"),
+        ("let created: date", "date", "`Date`"),
+        (
+            "let rows: list = []",
+            "list",
+            "the element type followed by `[]`",
+        ),
+        ("let names: Set<str> = []", "str", "`string`"),
+    ] {
+        let err = parse(&format!("{declaration}\n")).expect_err(declaration);
+        assert!(
+            err.message
+                .contains(&format!("unknown type `{written}`: use {intended}")),
+            "{declaration}: {}",
+            err.message
+        );
+        let column = declaration.find(&format!(" {written}")).map_or_else(
+            || declaration.find(written).expect("the name is in the text") + 1,
+            |at| at + 2,
+        );
+        assert_eq!((err.line, err.col), (1, column), "{declaration}");
+    }
+    let in_signature = parse("function scale(by: number): (out: float) {\n    return by\n}\n")
+        .expect_err("a parameter type is checked too");
+    assert_eq!((in_signature.line, in_signature.col), (1, 20));
+}
+
+#[test]
+fn struct_names_and_declared_interfaces_are_not_value_type_slips() {
+    parse("interface point {\n    x: int;\n}\n\nconst origin: point = {}\nconst history: History = {}\nconst region: point2d = {}\nconst model: Bit = {}\n")
+        .expect("a declared interface and undeclared struct names are types of their own");
+}
+
+#[test]
+fn a_block_comment_names_the_supported_comment_form() {
+    let err = parse("onStart() {\n    /* setup */\n    log({ message: \"x\" })\n}\n").unwrap_err();
+    assert!(
+        err.message.contains("block comments") && err.message.contains("`//`"),
+        "{}",
+        err.message
+    );
+    assert_eq!((err.line, err.col), (2, 5));
+    parse("onStart() {\n    log({ message: \"a /* b */ c\" })\n}\n")
+        .expect("the marker inside a string is text");
+}
+
+#[test]
+fn a_single_long_line_of_calls_parses_in_linear_time() {
+    let calls = "log({ message: xs[0] }) ".repeat(40_000);
+    let text = format!("onStart() {{\n{}{calls}\n}}\n", " ".repeat(4));
+    let started = std::time::Instant::now();
+    let ast = parse(&text).expect("many statements on one line are accepted");
+    assert_eq!(ast.events[0].body.stmts.len(), 40_000);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "parsing one long line took {:?}",
+        started.elapsed()
+    );
+}

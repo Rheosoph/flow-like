@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use crate::convert::DocumentConverter;
 use crate::env::{ModelRole, ToolEnv};
 use crate::error::{ToolError, ToolResult, code};
-use crate::files::{FileRef, ResolvedFile, file_text, handle_for, resolve};
+use crate::files::{FileRef, ResolvedFile, file_text, handle_for, page_end, resolve};
 use crate::layout::{EXTRACTIONS_DIR, NOTES_DIR, RENDERS_DIR, normalize_path, sanitize_name};
 use crate::outcome::{ToolImage, ToolOutput};
 use crate::spec::{Approval, ToolSpec, schema_of};
@@ -26,12 +26,13 @@ pub use author::{
 };
 pub use backend::{
     BuiltDocument, ChartKind, DeckChart, DeckSlide, DocumentBackend, ExcelOperation, ExcelRequest,
-    Extracted, FillRows, FilledDocument, MarkdownDocument, ModelTokens, RenderedPng, SheetCell,
-    SheetData, SlideLayoutKind, StyleQuery, Summary, SummaryRequest, TemplateFill,
+    Extracted, FillRows, FilledDocument, MarkdownDocument, ModelReading, ModelTokens, RenderedPng,
+    SheetCell, SheetData, SlideLayoutKind, StyleQuery, Summary, SummaryRequest, TemplateFill,
 };
 
 pub const FILE_SUMMARIZE: &str = "file_summarize";
 pub const FILE_EXTRACT: &str = "file_extract";
+pub const FILE_EXTRACT_CONTENT: &str = "file_extract_content";
 pub const PDF_RENDER: &str = "pdf_render";
 pub const EXCEL_INSPECT: &str = "excel_inspect";
 pub const DOCUMENT_CREATE: &str = "document_create";
@@ -70,6 +71,11 @@ pub struct FileExtractArgs {
     /// Also append the results as rows to this workspace table (each row gets a `_source` column).
     #[serde(default)]
     pub save_to_table: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FileExtractContentArgs {
+    pub file: FileRef,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -119,8 +125,13 @@ pub fn specs() -> Vec<ToolSpec> {
         ),
         spec(
             FILE_EXTRACT,
-            "Extract structured data from one or more documents according to a JSON Schema or an example value. Results are saved as JSON files in the workspace.",
+            "Extract structured data from one or more documents according to a JSON Schema or an example value. Scanned or photographed documents are read by the model first. Results are saved as JSON files in the workspace.",
             schema_of::<FileExtractArgs>(),
+        ),
+        spec(
+            FILE_EXTRACT_CONTENT,
+            "Extract a document's full content as markdown with the model reading it: scanned or photographed pages are transcribed and images and figures described. Works on PDFs, Office files and photos. Slower than file_read and spends model tokens, so use it when file_read returns little or no text. Long content comes back cut and is saved in full to the workspace for file_read.",
+            schema_of::<FileExtractContentArgs>(),
         ),
         spec(
             EXCEL_INSPECT,
@@ -188,6 +199,13 @@ fn stem_of(name: &str) -> String {
     sanitize_name(stem)
 }
 
+/// `<hash of the source>-<stem>`: two files with the same name in different places never share an
+/// output.
+fn output_stem(file: &ResolvedFile) -> String {
+    let hash = blake3::hash(file.source_key().as_bytes()).to_hex();
+    format!("{}-{}", &hash[..8], stem_of(&file.name))
+}
+
 fn needs_approval(env: &dyn ToolEnv, pages: Option<usize>, tokens: u64) -> ToolResult<()> {
     if env.allow_expensive_documents() {
         return Ok(());
@@ -232,6 +250,103 @@ fn tokens_to_usage(output: &mut ToolOutput, tokens: ModelTokens) {
     output.usage.model_out += tokens.output;
 }
 
+/// Pages and input tokens of letting the model read `file`.
+async fn model_read_estimate(
+    backend: &Arc<dyn DocumentBackend>,
+    file: &ResolvedFile,
+) -> ToolResult<(Option<usize>, u64)> {
+    if is_pdf(file) {
+        let pages = pdf_pages(backend, &file.bytes).await?;
+        Ok((Some(pages), pages as u64 * TOKENS_PER_PDF_PAGE))
+    } else {
+        Ok((None, file.bytes.len() as u64 / 4))
+    }
+}
+
+/// Pages of letting the model read `file`; asks for approval above the limits.
+async fn approve_model_read(
+    env: &dyn ToolEnv,
+    backend: &Arc<dyn DocumentBackend>,
+    file: &ResolvedFile,
+) -> ToolResult<Option<usize>> {
+    let (pages, tokens) = model_read_estimate(backend, file).await?;
+    needs_approval(env, pages, tokens)?;
+    Ok(pages)
+}
+
+fn reading_usage(input: u64, reading: &ModelReading) -> ModelTokens {
+    ModelTokens {
+        input,
+        output: reading.converted.text.len() as u64 / 4,
+    }
+}
+
+async fn read_with_model(
+    env: &dyn ToolEnv,
+    backend: &Arc<dyn DocumentBackend>,
+    file: &ResolvedFile,
+) -> ToolResult<ModelReading> {
+    let model = env.model(ModelRole::Vision).await?;
+    backend
+        .read_with_model(
+            model,
+            file.bytes.clone(),
+            extension_of(&file.name).as_deref(),
+            &file.path,
+        )
+        .await
+        .map_err(|error| {
+            ToolError::new(
+                code::UNSUPPORTED_FILE,
+                format!(
+                    "The model could not read '{}' ({}): {error:#}",
+                    file.name, file.mime
+                ),
+            )
+        })
+}
+
+pub async fn file_extract_content(
+    env: &dyn ToolEnv,
+    args: FileExtractContentArgs,
+) -> ToolResult<ToolOutput> {
+    let backend = backend_of(env)?;
+    let file = resolve(env, &args.file, env.limits().max_ingest_bytes).await?;
+    let (pages, estimate) = model_read_estimate(&backend, &file).await?;
+    needs_approval(env, pages, estimate)?;
+    let reading = read_with_model(env, &backend, &file).await?;
+    let text = reading.converted.text.trim();
+    if text.is_empty() {
+        return Err(ToolError::new(
+            code::UNSUPPORTED_FILE,
+            format!("The model found no content in '{}'", file.name),
+        ));
+    }
+    let budget = env.limits().inline_cap_bytes.saturating_sub(1024).max(256);
+    let cut = page_end(text, 0, budget);
+    let mut result = json!({
+        "file": file.name,
+        "pages": pages,
+        "content": &text[..cut],
+        "truncated": cut < text.len(),
+        "characters": text.chars().count(),
+    });
+    let mut output = ToolOutput::new(Value::Null).classified(file.classification);
+    if let Some(workspace) = env.scope().workspace.clone() {
+        let path = normalize_path(&format!("{EXTRACTIONS_DIR}/{}.md", output_stem(&file)))?;
+        let bytes = Bytes::from(text.to_string().into_bytes());
+        env.write_workspace(&path, bytes.clone(), "text/markdown")
+            .await?;
+        let handle = handle_for(&workspace, &path, &bytes, "text/markdown");
+        result["saved"] = json!(handle);
+        output = output.saved(handle);
+    }
+    output.result = result;
+    output.warnings.extend(reading.warnings.iter().cloned());
+    tokens_to_usage(&mut output, reading_usage(estimate, &reading));
+    Ok(crate::files::untrusted(output))
+}
+
 pub async fn file_summarize(env: &dyn ToolEnv, args: FileSummarizeArgs) -> ToolResult<ToolOutput> {
     let goal = args.goal.trim();
     if goal.is_empty() {
@@ -241,14 +356,8 @@ pub async fn file_summarize(env: &dyn ToolEnv, args: FileSummarizeArgs) -> ToolR
     }
     let backend = backend_of(env)?;
     let file = resolve(env, &args.file, env.limits().max_ingest_bytes).await?;
-    let (pages, tokens) = if is_pdf(&file) {
-        let pages = pdf_pages(&backend, &file.bytes).await?;
-        (Some(pages), pages as u64 * TOKENS_PER_PDF_PAGE)
-    } else {
-        (None, file.bytes.len() as u64 / 4)
-    };
-    needs_approval(env, pages, tokens)?;
-    let model = env.model(ModelRole::Default).await?;
+    let pages = approve_model_read(env, &backend, &file).await?;
+    let model = env.model(ModelRole::Vision).await?;
     let summary = backend
         .summarize(
             model,
@@ -274,7 +383,7 @@ pub async fn file_summarize(env: &dyn ToolEnv, args: FileSummarizeArgs) -> ToolR
     });
     let mut output = ToolOutput::new(Value::Null).classified(file.classification);
     if let Some(workspace) = env.scope().workspace.clone() {
-        let path = format!("{NOTES_DIR}/{}.summary.md", stem_of(&file.name));
+        let path = format!("{NOTES_DIR}/{}.summary.md", output_stem(&file));
         let bytes = Bytes::from(summary.markdown.clone().into_bytes());
         env.write_workspace(&path, bytes.clone(), "text/markdown")
             .await?;
@@ -291,7 +400,7 @@ pub async fn file_summarize(env: &dyn ToolEnv, args: FileSummarizeArgs) -> ToolR
         ));
     }
     tokens_to_usage(&mut output, summary.tokens);
-    Ok(output)
+    Ok(crate::files::untrusted(output))
 }
 
 fn schema_text(schema: &Value) -> ToolResult<String> {
@@ -328,22 +437,51 @@ pub async fn file_extract(env: &dyn ToolEnv, args: FileExtractArgs) -> ToolResul
     let backend = backend_of(env)?;
     let hint = args.hint.unwrap_or_default();
 
-    let mut texts = Vec::new();
+    let schema_tokens = schema.len() as u64 / 4;
+    let mut sources = Vec::new();
     let mut failed = Vec::new();
     let mut tokens = 0u64;
+    let mut pages: Option<usize> = None;
     for reference in &args.files {
-        match extraction_text(env, &backend, reference).await {
-            Ok((file, text)) => {
-                tokens += text.len() as u64 / 4 + schema.len() as u64 / 4;
-                texts.push((file, text));
+        match extraction_source(env, &backend, reference).await {
+            Ok(source) => {
+                tokens += schema_tokens;
+                match &source {
+                    Source::Text(_, text) => tokens += text.len() as u64 / 4,
+                    Source::NeedsModel(_, read_pages, read_tokens) => {
+                        tokens += read_tokens;
+                        if let Some(read_pages) = read_pages {
+                            *pages.get_or_insert(0) += read_pages;
+                        }
+                    }
+                }
+                sources.push(source);
             }
             Err(error) => failed.push(failure(reference, &error)),
         }
     }
-    needs_approval(env, None, tokens)?;
+    needs_approval(env, pages, tokens)?;
     let mut done = Vec::new();
     let mut output = ToolOutput::new(Value::Null);
     let workspace = env.scope().workspace.clone();
+    let mut texts = Vec::new();
+    for source in sources {
+        match source {
+            Source::Text(file, text) => texts.push((file, text)),
+            Source::NeedsModel(file, _, estimate) => {
+                if env.is_cancelled() {
+                    return Err(ToolError::new(code::CANCELLED, "The call was cancelled"));
+                }
+                match read_for_extraction(env, &backend, &file).await {
+                    Ok(reading) => {
+                        tokens_to_usage(&mut output, reading_usage(estimate, &reading));
+                        texts.push((file, reading.converted.text));
+                    }
+                    Err(error) => failed.push(failure_of(&file, &error)),
+                }
+            }
+        }
+    }
     for (file, text) in texts {
         if env.is_cancelled() {
             return Err(ToolError::new(code::CANCELLED, "The call was cancelled"));
@@ -365,7 +503,7 @@ pub async fn file_extract(env: &dyn ToolEnv, args: FileExtractArgs) -> ToolResul
         );
         let mut entry = json!({ "file": file.name, "value": extracted.value });
         if let Some(workspace) = &workspace {
-            let path = normalize_path(&format!("{EXTRACTIONS_DIR}/{}.json", stem_of(&file.name)))?;
+            let path = normalize_path(&format!("{EXTRACTIONS_DIR}/{}.json", output_stem(&file)))?;
             let bytes = Bytes::from(serde_json::to_vec_pretty(&extracted.value).map_err(|e| {
                 ToolError::new(code::FAILED, format!("Encoding the extraction failed: {e}"))
             })?);
@@ -402,7 +540,7 @@ pub async fn file_extract(env: &dyn ToolEnv, args: FileExtractArgs) -> ToolResul
         saved_table = json!({ "table": format!("ws.{table}"), "rows": count });
     }
     output.result = json!({ "results": done, "failed": failed, "saved_table": saved_table });
-    Ok(output)
+    Ok(crate::files::untrusted(output))
 }
 
 fn extraction_rows(done: &[Value]) -> Vec<Value> {
@@ -447,13 +585,14 @@ pub async fn excel_inspect(env: &dyn ToolEnv, args: ExcelInspectArgs) -> ToolRes
                 format!("Reading the workbook '{}' failed: {error:#}", file.name),
             )
         })?;
-    Ok(ToolOutput::new(json!({
+    let output = ToolOutput::new(json!({
         "file": file.name,
         "operation": format!("{operation:?}"),
         "sheet": args.sheet,
         "text": text,
     }))
-    .classified(file.classification))
+    .classified(file.classification);
+    Ok(crate::files::untrusted(output))
 }
 
 fn failure(reference: &FileRef, error: &ToolError) -> Value {
@@ -464,15 +603,26 @@ fn failure(reference: &FileRef, error: &ToolError) -> Value {
     })
 }
 
-async fn extraction_text(
+enum Source {
+    Text(ResolvedFile, String),
+    NeedsModel(ResolvedFile, Option<usize>, u64),
+}
+
+fn failure_of(file: &ResolvedFile, error: &ToolError) -> Value {
+    json!({ "file": file.name, "code": error.code, "error": error.message })
+}
+
+/// The file's text, or, when it has none, the estimate of letting the model read it. Nothing
+/// is read by the model here: the caller approves the whole call first.
+async fn extraction_source(
     env: &dyn ToolEnv,
     backend: &Arc<dyn DocumentBackend>,
     reference: &FileRef,
-) -> ToolResult<(ResolvedFile, String)> {
+) -> ToolResult<Source> {
     let file = resolve(env, reference, env.limits().max_ingest_bytes).await?;
-    let converted = match file_text(env, &file).await? {
-        Some(converted) => converted,
-        None => backend
+    let converted = match file_text(env, &file).await {
+        Ok(Some(converted)) => Ok(converted),
+        Ok(None) => backend
             .convert(file.bytes.clone(), extension_of(&file.name).as_deref())
             .await
             .map_err(|error| {
@@ -480,15 +630,36 @@ async fn extraction_text(
                     code::UNSUPPORTED_FILE,
                     format!("Reading '{}' ({}) failed: {error:#}", file.name, file.mime),
                 )
-            })?,
+            }),
+        Err(error) => Err(error),
     };
-    if converted.text.trim().is_empty() {
+    match converted {
+        Ok(converted) if !converted.text.trim().is_empty() => {
+            return Ok(Source::Text(file, converted.text));
+        }
+        Err(error) if error.code != code::UNSUPPORTED_FILE => return Err(error),
+        _ => {}
+    }
+    let (pages, tokens) = model_read_estimate(backend, &file).await?;
+    Ok(Source::NeedsModel(file, pages, tokens))
+}
+
+async fn read_for_extraction(
+    env: &dyn ToolEnv,
+    backend: &Arc<dyn DocumentBackend>,
+    file: &ResolvedFile,
+) -> ToolResult<ModelReading> {
+    let reading = read_with_model(env, backend, file).await?;
+    if reading.converted.text.trim().is_empty() {
         return Err(ToolError::new(
             code::UNSUPPORTED_FILE,
-            format!("'{}' has no text to extract from", file.name),
+            format!(
+                "'{}' has no text to extract from, even read by the model",
+                file.name
+            ),
         ));
     }
-    Ok((file, converted.text))
+    Ok(reading)
 }
 
 fn select_pages(requested: Option<Vec<usize>>, count: usize) -> ToolResult<Vec<usize>> {
@@ -533,7 +704,7 @@ pub async fn pdf_render(env: &dyn ToolEnv, args: PdfRenderArgs) -> ToolResult<To
     );
     let rendered = blocking(move || render_backend.render_pages(pdf, &wanted, max_pixels)).await?;
 
-    let stem = stem_of(&file.name);
+    let stem = output_stem(&file);
     let mut output = ToolOutput::new(Value::Null).classified(file.classification);
     let mut listed = Vec::new();
     for (position, page) in rendered.iter().enumerate() {

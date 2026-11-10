@@ -81,6 +81,35 @@ impl QuotaAmounts {
     }
 }
 
+/// What a settlement above the operation's admitted ceiling charges.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Overrun {
+    /// Platform deadline overruns are recorded internally, never silently charged
+    /// beyond the capacity authorized before execution.
+    Capped,
+    /// A hosted AI request without an output limit reserves only an estimate, so its
+    /// cost is charged in full. Instance billing grants keep their consented ceiling.
+    ChargeAiCost,
+}
+
+impl Overrun {
+    fn charged(
+        self,
+        actual: QuotaAmounts,
+        ceiling: QuotaAmounts,
+        execution_mode: &str,
+    ) -> QuotaAmounts {
+        let capped = actual.bounded(ceiling);
+        match self {
+            Self::ChargeAiCost if execution_mode != "instance_hosted_ai" => QuotaAmounts {
+                ai_cost_micros: actual.ai_cost_micros,
+                ..capped
+            },
+            _ => capped,
+        }
+    }
+}
+
 const RESOURCES: [&str; 4] = [
     "cloud_runtime_ms",
     "hosted_ai_cost_micros",
@@ -281,6 +310,19 @@ pub(crate) async fn running_assistant_funding(
                 && row.actor_id.as_deref() == Some(actor_id)
         })
         .map(|row| row.funding_class))
+}
+
+/// When an assistant operation that `actor_id` started ends (unix milliseconds) and whether it
+/// still runs; `None` for any other operation.
+pub(crate) async fn assistant_window<C: ConnectionTrait>(
+    db: &C,
+    operation_id: &str,
+    actor_id: &str,
+) -> Result<Option<(i64, bool)>, ApiError> {
+    Ok(operation(db, operation_id)
+        .await?
+        .filter(|row| row.kind == "assistant" && row.actor_id.as_deref() == Some(actor_id))
+        .map(|row| (row.deadline, row.status == "running")))
 }
 
 async fn find_active_period<C: ConnectionTrait>(
@@ -1055,6 +1097,7 @@ pub async fn finish_cloud(
         },
         true,
         json!({"status":status,"measuredRuntimeMs":runtime_ms,"workerOwnerId":attempt_id}),
+        Overrun::Capped,
     )
     .await
 }
@@ -1103,6 +1146,29 @@ pub async fn settle(
     .await
 }
 
+/// [`settle`] for a hosted AI request, whose provider cost is charged in full even
+/// above the reservation.
+pub async fn settle_hosted_ai(
+    state: &AppState,
+    operation_id: &str,
+    revision: &str,
+    actual: QuotaAmounts,
+    finalized: bool,
+    detail: Value,
+) -> Result<(), ApiError> {
+    settle_operation(
+        &state.db,
+        state.db_dialect,
+        operation_id,
+        revision,
+        actual,
+        finalized,
+        detail,
+        Overrun::ChargeAiCost,
+    )
+    .await
+}
+
 pub async fn settle_with_db(
     db: &DatabaseConnection,
     dialect: DbDialect,
@@ -1111,6 +1177,30 @@ pub async fn settle_with_db(
     actual: QuotaAmounts,
     finalized: bool,
     detail: Value,
+) -> Result<(), ApiError> {
+    settle_operation(
+        db,
+        dialect,
+        operation_id,
+        revision,
+        actual,
+        finalized,
+        detail,
+        Overrun::Capped,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn settle_operation(
+    db: &DatabaseConnection,
+    dialect: DbDialect,
+    operation_id: &str,
+    revision: &str,
+    actual: QuotaAmounts,
+    finalized: bool,
+    detail: Value,
+    overrun: Overrun,
 ) -> Result<(), ApiError> {
     if actual.values().iter().any(|v| *v < 0) {
         return Err(ApiError::bad_request("Usage cannot be negative"));
@@ -1127,6 +1217,7 @@ pub async fn settle_with_db(
         actual,
         finalized,
         detail,
+        overrun,
     )
     .await
 }
@@ -1143,6 +1234,7 @@ async fn settle_for_payer(
     actual: QuotaAmounts,
     finalized: bool,
     detail: Value,
+    overrun: Overrun,
 ) -> Result<(), ApiError> {
     let operation_id = operation_id.to_owned();
     let event_id = format!("{operation_id}:{revision}");
@@ -1160,9 +1252,7 @@ async fn settle_for_payer(
             let used_before = decode(&op.used)?;
             let reserved_before = decode(&op.reserved)?;
             let ceiling = decode(&op.ceiling)?;
-            // Platform deadline overruns are recorded internally, never silently
-            // charged beyond the capacity authorized before execution.
-            let used = actual.bounded(ceiling);
+            let used = overrun.charged(actual, ceiling, &op.execution_mode);
             // Ordinary reports are cumulative. Only an explicit internal adjustment
             // may reduce a prior debit; a delayed callback must never issue a refund.
             if detail.get("adjustment").and_then(Value::as_bool) != Some(true)
@@ -1480,6 +1570,39 @@ pub async fn flag_stale(db: &DatabaseConnection, limit: u64) -> Result<u64, ApiE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_hosted_ai_cost_is_charged_above_the_ceiling() {
+        let ceiling = QuotaAmounts {
+            runtime_ms: 1_000,
+            ai_cost_micros: 400,
+            ai_calls: 1,
+            cloud_starts: 0,
+        };
+        let actual = QuotaAmounts {
+            runtime_ms: 5_000,
+            ai_cost_micros: 1_700,
+            ai_calls: 2,
+            cloud_starts: 1,
+        };
+        assert_eq!(
+            Overrun::ChargeAiCost.charged(actual, ceiling, "hosted_ai"),
+            QuotaAmounts {
+                ai_cost_micros: 1_700,
+                ..ceiling
+            }
+        );
+        assert_eq!(
+            ceiling.remaining(Overrun::ChargeAiCost.charged(actual, ceiling, "hosted_ai")),
+            QuotaAmounts::default()
+        );
+        for (overrun, mode) in [
+            (Overrun::ChargeAiCost, "instance_hosted_ai"),
+            (Overrun::Capped, "hosted_ai"),
+        ] {
+            assert_eq!(overrun.charged(actual, ceiling, mode), ceiling, "{mode}");
+        }
+    }
 
     #[test]
     fn cloud_budgets_require_verified_matching_bot_attribution() {

@@ -9,7 +9,7 @@ import {
 
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
-import { FileCode2Icon, Loader2Icon, WorkflowIcon } from "lucide-react";
+import { FileCode2Icon, WorkflowIcon } from "lucide-react";
 import {
 	type ReactNode,
 	useCallback,
@@ -47,7 +47,9 @@ import {
 import { isTauri } from "../../lib/platform";
 import type { IEventPayloadChat } from "../../lib/schema/flow/event-payload-chat";
 import { captureWidgetSnapshots } from "../../lib/widget-snapshot";
+import type { ComposerAttachSource } from "../../state/composer-capture";
 import {
+	botHasInboxHistory,
 	desktopInteractiveArgs,
 	ensureBotTarget,
 	registerBotInbox,
@@ -56,6 +58,7 @@ import {
 } from "../../state/global-chat/bot-inbox";
 import {
 	ASSISTANT_BOT_ID,
+	conversationBotId,
 	currentConversationId,
 	desktopChatBotArgs,
 	isBotConversation,
@@ -115,6 +118,11 @@ import {
 import { runGlobalChatTool } from "../../state/global-chat/global-chat-tool-registry";
 import { webGlobalChatStart } from "../../state/global-chat/global-chat-web-transport";
 import { useFollowBotChat } from "../../state/global-chat/use-follow-bot-chat";
+import {
+	type VoiceSend,
+	registerVoiceTurnSender,
+	runVoiceTurn,
+} from "../../state/global-chat/voice-turn";
 import { BotFileAssets } from "../bots-tab/bot-file-assets";
 import { FlowScriptWorkspacePanel } from "../flowpilot/flowscript-workspace-panel";
 import {
@@ -128,6 +136,7 @@ import {
 } from "../interfaces/chat-default/attachment";
 import type {
 	IChatConcurrency,
+	IChatGroup,
 	IChatRef,
 } from "../interfaces/chat-default/chat";
 import {
@@ -141,6 +150,7 @@ import type {
 } from "../interfaces/chat-default/chatbox";
 import type { MessageInlineContent } from "../interfaces/chat-default/message";
 import { submitInteractionResponse } from "../interfaces/chat-default/respond-interaction";
+import { useStorageAttachSource } from "../storage/use-storage-attach-source";
 import {
 	agentThinkingOptions,
 	chatThinkingLevel,
@@ -151,6 +161,7 @@ import {
 import { useThinkingLabels } from "../thinking/thinking-picker";
 import { BotChatActions, BotSettingsDialog } from "./bot-chat-actions";
 import { BotWelcomeMark } from "./bot-chat-parts";
+import { BotReplyNote } from "./bot-reply-note";
 import { useChatActivityVisible } from "./chat-activity";
 import { InlineAppChatCard } from "./inline-app-chat-card";
 import { InlineAppPageCard } from "./inline-app-page-card";
@@ -164,6 +175,8 @@ import {
 	useGlobalChatBot,
 } from "./use-global-chat-bot";
 import { useGlobalChatRunWidgetAction } from "./use-global-widget-action";
+import { useOpenAppId } from "./use-open-app-id";
+import { usePageSnapshotSource } from "./use-page-snapshot-source";
 
 // The streaming engine (parse the FlowPilot protocol → message content + plan_steps → store) lives
 // in lib/global-chat-stream.ts, OUTSIDE this component, so a turn survives the page↔overlay morph
@@ -346,6 +359,22 @@ export function GlobalChatBody({
 	const chatBotNameRef = useRef(chatBot.name);
 	chatBotNameRef.current = chatBot.name;
 	const chatConfig = useBotChatConfig(chatBot);
+	const noteBotId = chatBot.bot?.id ?? chatBot.botId;
+	const botNotes = useMemo<IChatGroup | undefined>(
+		() =>
+			noteBotId
+				? {
+						renderMessageHeader: (message) => (
+							<BotReplyNote
+								message={message}
+								botId={noteBotId}
+								sessionId={activeConversationId}
+							/>
+						),
+					}
+				: undefined,
+		[noteBotId, activeConversationId],
+	);
 	const isStreaming = useGlobalChatStore((s) => s.isStreaming);
 	const conversationLoading = useGlobalChatStore((s) => s.conversationLoading);
 	const provider = useGlobalChatStore((s) => s.provider);
@@ -699,6 +728,7 @@ export function GlobalChatBody({
 			interaction?: IChatMessageInteraction,
 			previouslyAcceptedReaction = false,
 			preparation?: PreparingChatReply,
+			voice?: VoiceSend,
 		): Promise<IMessage | undefined> => {
 			let reactionAccepted = previouslyAcceptedReaction;
 			const acceptReaction = async (conversationId: string) => {
@@ -753,7 +783,8 @@ export function GlobalChatBody({
 				});
 			};
 			if (atCapacity()) {
-				if (trimmed || (filesAttached?.length ?? 0) > 0) await enqueue();
+				if (!voice && (trimmed || (filesAttached?.length ?? 0) > 0))
+					await enqueue();
 				return;
 			}
 			const agentSelection = Object.freeze({
@@ -826,7 +857,7 @@ export function GlobalChatBody({
 			// Attachment preparation is asynchronous, so re-check capacity: several sends can be
 			// preparing uploads at the same time.
 			if (atCapacity()) {
-				await enqueue();
+				if (!voice) await enqueue();
 				return;
 			}
 			// A real interaction on the full FlowPilot page starts a new visibility cycle. If the
@@ -844,6 +875,7 @@ export function GlobalChatBody({
 			);
 
 			const userMessage = makeGlobalChatMessage(IRole.User, trimmed, sessionId);
+			if (voice) userMessage.id = voice.messageId;
 			userMessage.files = attachments;
 			userMessage.interaction = interaction;
 			if (interaction?.type === "reaction") await acceptReaction(sessionId);
@@ -895,7 +927,7 @@ export function GlobalChatBody({
 						...(mainWidget ? [mainWidget.instance_id] : []),
 					]),
 				];
-				if (widgetIds.length) {
+				if (!voice && widgetIds.length) {
 					const snapshots = await captureWidgetSnapshots(widgetIds);
 					checkCurrent();
 					for (const dataUrl of snapshots) {
@@ -982,8 +1014,12 @@ export function GlobalChatBody({
 				sessionId,
 				{ id: userMessage.id, text: trimmed },
 				responseMessage.id,
+				voice?.transcript,
 			);
 			checkCurrent();
+			// Without its stored transcript the host could not tell the run is a live call; the
+			// call posts the utterance itself and a host answers it.
+			if (voice && !interactive) return;
 
 			// The stream is driven OUTSIDE this component (global-chat-stream.ts) so it keeps
 			// rendering + finalizing even if this surface unmounts mid-response (the page↔overlay
@@ -992,6 +1028,7 @@ export function GlobalChatBody({
 			setActiveRun(sessionId, responseMessage.id, turnSelection);
 			if (nativeRequest)
 				registerNativeActionRun(nativeRequest, responseMessage.id);
+			voice?.onRun(responseMessage.id);
 			await driveGlobalChatStream({
 				responseMessage,
 				agentSelection: turnSelection,
@@ -1118,6 +1155,30 @@ export function GlobalChatBody({
 		},
 		[appendMessage, backend, variant, getNativeScope, t],
 	);
+	useEffect(() => {
+		if (!dockBotId) return;
+		const canTake = () => {
+			const state = useGlobalChatStore.getState();
+			return (
+				conversationBotId(state.activeConversationId) === dockBotId &&
+				botHasInboxHistory(dockBotId) &&
+				!isGlobalChatAtRunCapacity(state, state.activeConversationId)
+			);
+		};
+		return registerVoiceTurnSender(dockBotId, (request) =>
+			runVoiceTurn(request, canTake, (voice) =>
+				sendPreparedMessage(
+					request.text,
+					undefined,
+					undefined,
+					undefined,
+					false,
+					undefined,
+					voice,
+				),
+			),
+		);
+	}, [dockBotId, sendPreparedMessage]);
 	const sendMessage = useCallback(
 		async (
 			content: string,
@@ -1615,6 +1676,17 @@ export function GlobalChatBody({
 		[chatBot, defaultModelLabel, openSettings],
 	);
 
+	const openAppId = useOpenAppId();
+	const storageAttach = useStorageAttachSource(openAppId);
+	const pageSnapshotSource = usePageSnapshotSource();
+	const attachSources = useMemo(
+		() =>
+			[storageAttach.source, pageSnapshotSource].filter(
+				(source): source is ComposerAttachSource => source !== undefined,
+			),
+		[storageAttach.source, pageSnapshotSource],
+	);
+
 	// A queued draft is about to send, so the welcome must not flash up under it.
 	const showWelcome =
 		messages.length === 0 &&
@@ -1758,36 +1830,16 @@ export function GlobalChatBody({
 								config={chatConfig}
 								thinking={thinkingPicker}
 								composerActions={composerActions}
+								attachSources={attachSources}
 								activeInteractions={activeInteractions}
 								onRespondToInteraction={handleRespondToInteraction}
 								onMessageUpdate={handleMessageUpdate}
 								onMessageReaction={handleMessageReaction}
 								showAiDisclosure
-								inlineContent={
-									preparingReplies.length > 0 ? (
-										<>
-											{inlineArtifacts}
-											{preparingReplies.map((reply) => (
-												<output
-													key={reply.runId}
-													data-chat-preparation
-													aria-live="polite"
-													className="flex items-center gap-2 rounded-2xl bg-muted/40 px-4 py-3 text-sm text-muted-foreground"
-												>
-													<Loader2Icon
-														aria-hidden
-														className="size-4 shrink-0 motion-safe:animate-spin"
-													/>
-													{preparingReplyText}
-												</output>
-											))}
-										</>
-									) : (
-										inlineArtifacts
-									)
-								}
+								inlineContent={inlineArtifacts}
 								messageInlineContent={inlineCards.byMessage}
 								inlinePrompt={promptSlot}
+								group={botNotes}
 							/>
 						</BotFileAssets>
 					</div>
@@ -1807,6 +1859,7 @@ export function GlobalChatBody({
 				open={settingsOpen}
 				onOpenChange={setSettingsOpen}
 			/>
+			{storageAttach.dialog}
 		</div>
 	);
 }

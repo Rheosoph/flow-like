@@ -1,5 +1,9 @@
 {
 	"capabilities": {
+		"barcodes": {
+			"description": "Reads QR codes and barcodes in photos, scans and screenshots",
+			"label": "Barcodes"
+		},
 		"browser_use": {
 			"description": "Drive a web browser on its desktop or device",
 			"label": "Browser"
@@ -174,7 +178,13 @@
 		"manualAvailability": "Enter availability for this answer",
 		"freeBusyHint": "Share busy time ranges from your linked calendars for up to the next 24 hours. Event details are not included.",
 		"manageAvailability": "Manage availability and calendars",
-		"applyStatus": "Apply status change"
+		"applyStatus": "Apply status change",
+		"sessionShared": "Shared for this session",
+		"revoked": "Session access revoked",
+		"sessionAccessDirect": "Allow for this session: for up to 30 minutes the bot can keep using what you share in this conversation, and this device answers its new requests for these fields automatically. You can revoke it here at any time.",
+		"sessionAccessGroup": "Allow for this session: for up to 30 minutes this device answers the bot's new requests for these fields in this group automatically. You can revoke it here at any time.",
+		"onceRetention": "Share once: the snapshot is current for up to five minutes and is used for the bot's next answer only. Shared messages remain in this conversation.",
+		"revokeFailed": "Couldn't revoke session access. Try again."
 	},
 	"computer": {
 		"alt": "What {{name}} sees right now",
@@ -395,6 +405,9 @@
 				"full": "This call is full.",
 				"unavailable": "No microphone was found, or another app is using it."
 			},
+			"interrupt": "Interrupt {{name}}",
+			"interruptHint": "Interrupt {{name}} (Esc)",
+			"interruptShort": "Interrupt",
 			"join": "Join",
 			"leave": "Leave call",
 			"listen": "Let bots listen",
@@ -425,7 +438,23 @@
 			"screenLabel": "{{name}}'s screen",
 			"cameraLabel": "{{name}}'s camera",
 			"you": "You",
-			"fullscreen": "Expand {{name}}"
+			"fullscreen": "Expand {{name}}",
+			"setup": {
+				"title": "Calls need speech recognition",
+				"body": "{{name}} hears you by turning your voice into text. Choose a speech-to-text model and you can call right away.",
+				"readyTitle": "Ready to call {{name}}",
+				"readyBody": "{{name}} can hear you now.",
+				"unsupportedTitle": "Calls aren't available here",
+				"unsupportedBody": "This app can't turn speech into text, so {{name}} couldn't hear you.",
+				"start": "Start the call",
+				"voice": "Voice",
+				"choose": "Choose a model",
+				"needed": "Needed",
+				"optional": "Optional",
+				"voiceHint": "Without one, {{name}} uses your default voice or answers in the chat.",
+				"saveFailed": "The model couldn't be saved",
+				"pinnedUnusable": "This model can't run in this app. Choose another one."
+			}
 		},
 		"cancel": "Cancel",
 		"composer": {
@@ -572,6 +601,14 @@
 			"create": "Create room",
 			"createInvite": "Create room and invite",
 			"description": "Bring people and your bots together in one conversation.",
+			"encryptionBotNoAbility": "Needs the end-to-end encryption ability",
+			"encryptionHint": "Messages are sealed on each device. Bots that run on the server can't take part, and files can't be attached yet.",
+			"encryptionKeyMissing": "A member has no encryption key yet, so nothing can be sealed to them.",
+			"encryptionLabel": "End-to-end encrypted",
+			"encryptionNoKey": "Has no encryption key yet; opening the app signed in publishes one",
+			"encryptionNotAllowed": "One of the members can't join an encrypted room. Another person's bot can only join a plain room.",
+			"encryptionOnDevice": "Lives on this device only",
+			"encryptionServerBot": "Runs on the server, which can't read an encrypted room",
 			"failed": "Couldn't create the room.",
 			"full_one": "A room holds up to {{count}} members.",
 			"full_other": "A room holds up to {{count}} members.",
@@ -854,6 +891,7 @@
 				"web": "Web"
 			},
 			"needsLocal": "Needs the desktop app or a device. Change where it runs to switch this on.",
+			"notOnDevice": "Not available on a device yet.",
 			"profile": "Profile",
 			"profileApps_one": "{{count}} app",
 			"profileApps_other": "{{count}} apps",
@@ -896,7 +934,6 @@
 			"memoryHost": "Let the host choose",
 			"memoryHostHint": "The app or server it runs on picks one",
 			"memoryModel": "Memory model",
-			"memoryNone": "Add an embedding model to your profile to choose one here.",
 			"moveDown": "Move down",
 			"moveUp": "Move up",
 			"noModels": "No matching models.",
@@ -906,7 +943,6 @@
 				"hostHint": "The app or server it runs on picks one",
 				"image": "Image generation",
 				"imageHint": "Draws the images it creates.",
-				"none": "Add a matching model to your profile to choose one here.",
 				"ownModel": "Use its own model",
 				"ownModelHint": "Sub-tasks run on the model it thinks with",
 				"stt": "Speech to text",
@@ -929,7 +965,12 @@
 			"searchModels": "Search models",
 			"subtitle": "Tell it how to work and pick the models it thinks with.",
 			"title": "Instructions and models",
-			"unknownModel": "Unknown model ({{id}})"
+			"unknownModel": "Unknown model ({{id}})",
+			"yourModels": "Your models",
+			"allModels": "All models",
+			"catalogNotice": "None of your models fit here yet. Pick one from the catalog and it is added to your models.",
+			"catalogFailed": "The model catalog couldn't be loaded.",
+			"addAndUse": "Add to your models and use"
 		},
 		"delete": {
 			"action": "Delete",
@@ -986,7 +1027,8 @@
 			"subtitle": "A bot lives on one host. Pick the one that has what it needs.",
 			"title": "Choose where it runs",
 			"turnedBackOn": "Switched back on because this host has a screen and shell: {{capabilities}}.",
-			"turnedOff": "Switched off because the cloud has no screen or shell: {{capabilities}}."
+			"turnedOff": "Switched off because the cloud has no screen or shell: {{capabilities}}.",
+			"turnedOffDevice": "Switched off because a device can't do these yet: {{capabilities}}."
 		},
 		"preview": {
 			"blank": "Blank",

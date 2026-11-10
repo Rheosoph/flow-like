@@ -295,7 +295,10 @@ impl NodeLogic for BatchInsertCSVLocalDatabaseNode {
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
         let database = database.load(context).await?;
         let delimiter: String = context.evaluate_pin("delimiter").await?;
-        let delimiter = delimiter.as_bytes()[0];
+        let delimiter = *delimiter
+            .as_bytes()
+            .first()
+            .ok_or_else(|| flow_like_types::anyhow!("CSV insert requires a non-empty delimiter"))?;
         let csv_path: FlowPath = context.evaluate_pin("csv").await?;
         let store = csv_path.to_runtime(context).await?;
         let location = store.path.clone();
@@ -345,9 +348,8 @@ impl NodeLogic for BatchInsertCSVLocalDatabaseNode {
                     });
             chunk.push(json_obj);
             if chunk.len() as u64 == chunk_size {
-                let insert = database
-                    .insert_from_with_receipt(context, chunk.to_owned())
-                    .await;
+                let full = std::mem::replace(&mut chunk, Vec::with_capacity(chunk_size as usize));
+                let insert = database.insert_from_with_receipt(context, full).await;
                 if let Ok(receipt) = &insert {
                     last_receipt = receipt.clone();
                 }
@@ -356,13 +358,12 @@ impl NodeLogic for BatchInsertCSVLocalDatabaseNode {
                         .log_message(&format!("Error inserting chunk: {:?}", e), LogLevel::Error);
                     errors.push(e.to_string());
                 }
-                chunk = Vec::with_capacity(chunk_size as usize);
             }
         }
 
         if !chunk.is_empty() {
             let insert = database
-                .insert_from_with_receipt(context, chunk.to_owned())
+                .insert_from_with_receipt(context, std::mem::take(&mut chunk))
                 .await;
             if let Ok(receipt) = &insert {
                 last_receipt = receipt.clone();

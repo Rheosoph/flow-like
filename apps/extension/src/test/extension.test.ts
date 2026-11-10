@@ -110,6 +110,14 @@ suite("Extension Test Suite", () => {
 		assert.doesNotMatch(invalid.message, /requires a string argument/);
 	});
 
+	test("the rendered `@parallel` line is a known decorator without an argument", () => {
+		assert.strictEqual(validateDecoratorArgument("parallel", undefined), undefined);
+		assert.match(
+			validateDecoratorArgument("parallel", "(4)")?.message ?? "",
+			/does not take an argument/,
+		);
+	});
+
 	test("cache decorator is not indexed as an event or function call", async () => {
 		const document = await flowDocument(`@cache({ namespace: "pricing" })
 function calculatePricing() {
@@ -294,6 +302,26 @@ eventsSimple onLoad() {
 			issues.map((issue) => issue.message),
 			[],
 		);
+	});
+
+	test("a member renamed in its `use` list is called by the new name only", async () => {
+		const registry = registryWithDeclarations();
+		const document = await flowDocument(`use string::{ trim as tidy }
+
+eventsSimple onLoad() {
+	const a = tidy({ string: "x" })
+	const b = trim({ string: "x" })
+}`);
+		const model = analyzeFlowDocument(document);
+		assert.deepStrictEqual(model.uses[0], {
+			...model.uses[0],
+			kind: "members",
+			members: ["trim"],
+			aliases: { trim: "tidy" },
+		});
+		const messages = unknownCallIssues(model, registry).map((issue) => issue.message);
+		assert.strictEqual(messages.length, 1);
+		assert.match(messages[0], /Unknown function 'trim'/);
 	});
 
 	test("flags unknown namespaces, members and methods with spelling hints", async () => {

@@ -217,10 +217,16 @@ async fn stored_completion_and_expired_runs_need_no_model() {
         .deadline
         .store(chrono::Utc::now().timestamp_millis() - 1, Ordering::Relaxed);
     let client = Client::new(Vec::new());
-    let answer = run_saved(&client, store.clone(), 128, "Inspect the app inventory.", None)
-        .await
-        .0
-        .unwrap();
+    let answer = run_saved(
+        &client,
+        store.clone(),
+        128,
+        "Inspect the app inventory.",
+        None,
+    )
+    .await
+    .0
+    .unwrap();
     assert!(answer.contains("execution deadline passed"));
     assert!(client.0.requests.lock().unwrap().is_empty());
     assert_eq!(
@@ -369,7 +375,7 @@ struct ApprovalBridge(Mutex<Option<String>>);
 impl PlatformToolBridge for ApprovalBridge {
     async fn call(&self, _: &str, _: Value) -> String {
         *self.0.lock().unwrap() = current_recovery_call_id();
-        json!({"status":"error", "code":"bot_tool_waiting_for_approval", "executed":false})
+        json!({"status":"waiting", "code":"bot_tool_waiting_for_approval", "executed":false})
             .to_string()
     }
 }
@@ -439,6 +445,118 @@ async fn repeated_manual_approvals_do_not_spend_the_crash_recovery_allowance() {
     );
 }
 
+#[derive(Default)]
+struct FirstSiteParksBridge {
+    started: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl PlatformToolBridge for FirstSiteParksBridge {
+    async fn call(&self, name: &str, arguments: Value) -> String {
+        if name == "list_apps" {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            self.started.lock().unwrap().push(name.into());
+            return json!({"status": "ok", "apps": [], "observation": "slow sibling"}).to_string();
+        }
+        let url = arguments["url"].as_str().unwrap_or_default().to_string();
+        self.started.lock().unwrap().push(url);
+        json!({"status": "waiting", "code": "bot_tool_waiting_for_approval", "message": "Call no further tools and write nothing more now."}).to_string()
+    }
+}
+
+#[tokio::test]
+async fn a_parked_call_closes_its_batch_so_the_approved_turn_resumes() {
+    let store = Arc::new(Store::default());
+    let fetch = |id: &str, url: &str| call(id, "web_request", json!({"method": "GET", "url": url}));
+    let client = Client::new(vec![
+        [
+            fetch("fetch-1", "https://a.example/feed"),
+            call("inventory", "list_apps", json!({})),
+            fetch("fetch-2", "https://b.example/feed"),
+            fetch("fetch-3", "https://c.example/feed"),
+        ]
+        .concat(),
+    ]);
+    let bridge = Arc::new(FirstSiteParksBridge::default());
+    let state = Arc::new(FlowLikeState::new(
+        FlowLikeConfig::new(),
+        HTTPClient::new_without_refetch(),
+    ));
+    let result = PlatformCopilot::new(state, None)
+        .with_tool_specs(vec![
+            find_global_tool_spec("list_apps").unwrap(),
+            crate::flow::copilot::find_bot_tool_spec("web_request").unwrap(),
+        ])
+        .with_tool_rounds(20)
+        .with_long_running()
+        .with_recovery(store.clone())
+        .chat_with_client(
+            PlatformSurface::Orchestrator,
+            "Help the owner.".into(),
+            "Fetch every feed once.".into(),
+            None,
+            Vec::new(),
+            "scripted".into(),
+            &client,
+            None,
+            bridge.clone(),
+            None,
+            None::<fn(String)>,
+        )
+        .await;
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("waiting for owner approval")
+    );
+    let mut started = bridge.started.lock().unwrap().clone();
+    started.sort();
+    assert_eq!(started, vec!["https://a.example/feed", "list_apps"]);
+
+    let checkpoint = store.saved.lock().unwrap().clone().unwrap();
+    assert_eq!(checkpoint.state["phase"], "ready");
+    let results = serde_json::to_string(&checkpoint.state["prompt"]).unwrap();
+    assert!(results.contains("slow sibling"), "{results}");
+    assert_eq!(
+        results.matches("bot_tool_not_started").count(),
+        2,
+        "{results}"
+    );
+    assert!(
+        results.contains("bot_tool_waiting_for_approval"),
+        "{results}"
+    );
+    assert!(!results.contains("Call no further tools"), "{results}");
+
+    let next = record_unexecuted_approval(&checkpoint, "fetch-1", "web_request")
+        .unwrap()
+        .unwrap();
+    assert_eq!(next.state["approval_resume"], true);
+    store.save(&next).await.unwrap();
+
+    let client = Client::new(vec![text("All three feeds are queued again.")]);
+    let (answer, bridge) = run_saved(
+        &client,
+        store.clone(),
+        20,
+        "Fetch every feed once.\nThe owner approved web_request.",
+        None,
+    )
+    .await;
+    assert_eq!(answer.unwrap(), "All three feeds are queued again.");
+    assert_eq!(bridge.calls.load(Ordering::Relaxed), 0);
+    let requests = client.0.requests.lock().unwrap();
+    assert_complete_tool_pairs(&requests[0]);
+    let restored = serde_json::to_string(&requests[0]).unwrap();
+    assert!(restored.contains("bot_tool_not_started"));
+    assert!(!restored.contains("outcomes are unknown"));
+    assert_eq!(
+        store.saved.lock().unwrap().as_ref().unwrap().state["recoveries"],
+        0
+    );
+}
+
 #[tokio::test]
 async fn durable_payload_strips_hidden_model_reasoning() {
     let store = Arc::new(Store::default());
@@ -492,4 +610,34 @@ fn web_provenance_and_spending_survive_snapshot_restore() {
     let mut invalid = snapshot;
     invalid["search_calls"] = json!(usize::MAX);
     assert!(WebResearchSession::restore(invalid).is_err());
+}
+
+#[test]
+fn only_a_gate_shaped_output_pauses_a_run() {
+    use crate::flow::copilot::run_recovery::gate_waiting_code;
+    let gate = json!({"status": "waiting", "code": "bot_tool_waiting_for_approval"}).to_string();
+    assert_eq!(
+        gate_waiting_code(&gate),
+        Some("bot_tool_waiting_for_approval")
+    );
+    let tool_error =
+        json!({"status": "error", "code": "bot_tool_waiting_for_approval"}).to_string();
+    assert_eq!(gate_waiting_code(&tool_error), None);
+}
+
+#[tokio::test]
+async fn the_deadline_keeps_the_text_streamed_so_far() {
+    let store = Arc::new(Store::default());
+    interrupted(store.clone(), true, 20).await;
+    store.fail_after.store(0, Ordering::Relaxed);
+    store
+        .deadline
+        .store(chrono::Utc::now().timestamp_millis() - 1, Ordering::Relaxed);
+    let answer = RecoverySession::terminal_before_model(store.clone(), Some("Half an answer"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(answer.output.starts_with("Half an answer"));
+    assert!(answer.output.contains("cut off at the execution deadline"));
+    assert_eq!(answer.stop_reason, Some(WorkStopReason::Budget));
 }

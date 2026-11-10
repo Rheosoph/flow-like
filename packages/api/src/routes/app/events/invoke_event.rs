@@ -25,15 +25,16 @@ use crate::{
     error::ApiError,
     execution::{
         ByteStream, CompletionWrites, DispatchError, DispatchRequest, DispatchTrigger,
-        ExecutionBackend, ExecutionJwtParams, PageActionSealingContext, PageExecutionJwtContext,
-        TokenType, caller_dispatch_profile, fail_run_on_stream_error, format_run_version,
-        is_jwt_configured, payload_storage, proxy_sse_response_with_page_actions, rejection,
-        resolve_wasm_packages, sign_execution_jwt, sign_execution_jwt_with_page_context,
-        sink_dispatch_profile,
+        EXECUTOR_DRAIN_TIMEOUT, ExecutionBackend, ExecutionJwtParams, PageActionSealingContext,
+        PageExecutionJwtContext, STREAM_ENDED_WITHOUT_COMPLETION, TokenType,
+        caller_dispatch_profile, fail_run_on_missing_completion, fail_run_on_stream_error,
+        format_run_version, is_jwt_configured, next_before, observe_completed, payload_storage,
+        proxy_sse_response_with_page_actions, rejection, run_initiated_event, sign_execution_jwt,
+        sign_execution_jwt_with_page_context, sink_dispatch_profile,
         state::{PostgresStateStore, RunStatus as StateRunStatus, UpdateRunInput},
         stream_failure_event,
         subject::account_user_id,
-        variant,
+        try_resolve_wasm_packages, variant,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -894,7 +895,7 @@ async fn invoke_event_impl(
     // only resolves the WASM package set.
     let remote = !query.local;
     let (wasm_packages, input_payload_key, credentials, (profile, custom_bit_owner)) = flow_like_types::tokio::join!(
-        resolve_wasm_packages(&state, &app_id).instrument(invoke_span!("invoke.wasm_packages")),
+        try_resolve_wasm_packages(&state, &app_id).instrument(invoke_span!("invoke.wasm_packages")),
         store_input_payload(
             &state,
             &app_id,
@@ -939,6 +940,7 @@ async fn invoke_event_impl(
         }
         .instrument(invoke_span!("invoke.profile")),
     );
+    let wasm_packages = wasm_packages?;
     let wasm_authority_revision =
         flow_like_types::dispatch::wasm_package_set_revision(wasm_packages.as_ref());
     if resolved_page_trigger
@@ -1339,12 +1341,12 @@ async fn invoke_event_impl(
     match backend {
         ExecutionBackend::LambdaStream => {
             // Use Lambda SDK streaming
-            let (_dispatch_response, byte_stream) = match state
+            let prepared = match state
                 .dispatcher
-                .dispatch_streaming_with_run(request, Some(record.clone()))
+                .prepare_streaming_with_run(request, Some(record.clone()))
                 .await
             {
-                Ok(response) => response,
+                Ok(prepared) => prepared,
                 Err(failure) => {
                     record_dispatch_failure(
                         &state,
@@ -1355,20 +1357,48 @@ async fn invoke_event_impl(
                         &failure.error,
                     )
                     .await;
-                    tracing::error!(error = %failure.error, "Failed to dispatch Lambda streaming job");
+                    tracing::error!(error = %failure.error, "Failed to prepare Lambda streaming job");
                     return Err(ApiError::from(failure.error));
                 }
             };
 
-            tracing::info!(run_id = %run_id, "Got Lambda response, starting stream proxy");
+            tracing::info!(run_id = %run_id, "Run admitted, starting stream before the executor answers");
 
-            Ok(proxy_lambda_sse_response(
-                byte_stream,
-                run_id,
-                Some(crate::audit::ExecutionAuditContext::from(&state)),
-                page_action_sealing,
+            let audit = crate::audit::ExecutionAuditContext::from(&state);
+            // Its own task, so a client that leaves during the cold start cannot
+            // skip the failure bookkeeping.
+            let invocation = flow_like_types::tokio::spawn({
+                let run_id = run_id.clone();
+                async move {
+                    match prepared.invoke().await {
+                        Ok((_dispatch_response, byte_stream)) => Ok(byte_stream),
+                        Err(failure) => {
+                            record_dispatch_failure(
+                                &state,
+                                &run_id,
+                                &app_id,
+                                record,
+                                failure.admitted,
+                                &failure.error,
+                            )
+                            .await;
+                            tracing::error!(error = %failure.error, "Failed to dispatch Lambda streaming job");
+                            Err(dispatch_failure_message(ApiError::from(failure.error)))
+                        }
+                    }
+                }
+            });
+            let start = async move {
+                invocation.await.unwrap_or_else(|error| {
+                    tracing::error!(%error, "Lambda streaming dispatch task stopped");
+                    Err("Failed to start the execution".to_string())
+                })
+            };
+
+            Ok(
+                proxy_deferred_lambda_sse_response(start, run_id, Some(audit), page_action_sealing)
+                    .into_response(),
             )
-            .into_response())
         }
         _ => {
             // Use HTTP SSE for all other backends (Http, etc.)
@@ -1459,7 +1489,22 @@ fn seal_lambda_page_actions(
     serde_json::to_string(&envelope).unwrap_or_else(|_| data.to_string())
 }
 
-/// Create an SSE stream from a Lambda ByteStream response
+/// The message an HTTP error response would have carried, for the error event of
+/// a stream that has already started.
+fn dispatch_failure_message(error: ApiError) -> String {
+    error
+        .public_message()
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            error
+                .status()
+                .canonical_reason()
+                .unwrap_or("Error")
+                .to_owned()
+        })
+}
+
+#[cfg(test)]
 fn proxy_lambda_sse_response(
     stream: ByteStream,
     run_id: String,
@@ -1468,17 +1513,59 @@ fn proxy_lambda_sse_response(
 ) -> axum::response::sse::Sse<
     impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>,
 > {
+    lambda_sse_response(
+        std::future::ready(Ok(stream)),
+        false,
+        run_id,
+        db,
+        page_actions,
+    )
+}
+
+/// The response starts with `run_initiated` while `start` still invokes the
+/// executor; a failed start becomes one error event and ends the stream.
+fn proxy_deferred_lambda_sse_response(
+    start: impl std::future::Future<Output = Result<ByteStream, String>> + Send + 'static,
+    run_id: String,
+    db: Option<crate::audit::ExecutionAuditContext>,
+    page_actions: Option<std::sync::Arc<PageActionSealingContext>>,
+) -> axum::response::sse::Sse<
+    impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>,
+> {
+    lambda_sse_response(start, true, run_id, db, page_actions)
+}
+
+/// Create an SSE stream from a Lambda ByteStream response
+fn lambda_sse_response(
+    start: impl std::future::Future<Output = Result<ByteStream, String>> + Send + 'static,
+    announce_run: bool,
+    run_id: String,
+    db: Option<crate::audit::ExecutionAuditContext>,
+    page_actions: Option<std::sync::Arc<PageActionSealingContext>>,
+) -> axum::response::sse::Sse<
+    impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>,
+> {
     use axum::response::sse::{Event, KeepAlive, Sse};
-    use futures::StreamExt;
     use std::time::Duration;
 
     let stream = async_stream::stream! {
-        let mut byte_stream = stream;
+        if announce_run {
+            yield Ok(run_initiated_event(&run_id));
+        }
+        let (mut byte_stream, started) = match start.await {
+            Ok(stream) => (stream, true),
+            Err(message) => {
+                yield Ok(stream_failure_event(message));
+                (Box::pin(futures::stream::empty()) as ByteStream, false)
+            }
+        };
         let mut buffer = Vec::new();
         let mut event_ordinal = 0_u64;
         let mut completion = CompletionWrites::default();
+        let mut drain_deadline = None;
+        let mut ended_cleanly = started;
 
-        while let Some(result) = byte_stream.next().await {
+        while let Some(result) = next_before(&mut byte_stream, drain_deadline).await {
             match result {
                 Ok(bytes) => {
                     // Append bytes to buffer
@@ -1486,18 +1573,29 @@ fn proxy_lambda_sse_response(
 
                     // Try to parse complete SSE events from buffer
                     while let Some(event) = extract_sse_event(&mut buffer) {
-                        if let Some(db) = &db
-                            && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&event.data)
-                        {
-                            completion.start(db, &run_id, &parsed);
+                        if observe_completed(
+                            &mut completion,
+                            db.as_ref(),
+                            &run_id,
+                            &event.event_type,
+                            &event.data,
+                        ) {
+                            drain_deadline = Some(
+                                flow_like_types::tokio::time::Instant::now()
+                                    + EXECUTOR_DRAIN_TIMEOUT,
+                            );
+                        }
+                        let ordinal = event_ordinal;
+                        event_ordinal = event_ordinal.saturating_add(1);
+                        if announce_run && event.event_type == "run_initiated" {
+                            continue;
                         }
                         let event_data = seal_lambda_page_actions(
                             &event.data,
                             &run_id,
-                            event_ordinal,
+                            ordinal,
                             page_actions.as_deref(),
                         );
-                        event_ordinal = event_ordinal.saturating_add(1);
 
                         let sse_event = Event::default()
                             .event(&event.event_type)
@@ -1506,6 +1604,7 @@ fn proxy_lambda_sse_response(
                     }
                 }
                 Err(e) => {
+                    ended_cleanly = false;
                     tracing::warn!(run_id = %run_id, error = %e, "Lambda stream error");
                     completion.finish().await;
                     if let Some(context) = &db
@@ -1518,6 +1617,10 @@ fn proxy_lambda_sse_response(
             }
         }
 
+        if ended_cleanly && drain_deadline.is_none() {
+            fail_run_on_missing_completion(db.as_ref(), &run_id).await;
+            yield Ok(stream_failure_event(STREAM_ENDED_WITHOUT_COMPLETION.to_string()));
+        }
         completion.finish().await;
         tracing::debug!(run_id = %run_id, "Lambda SSE stream ended");
     };
@@ -1994,7 +2097,7 @@ mod tests {
                 "recheck_fire_for(&state, sink, hosted_sink_use(&hosted.subject)).await?;",
                 "if query.isolated {",
                 "record_invocation_start(&state, &user, execution_audit, hosted_subject).await;",
-                "dispatch_streaming_with_run(",
+                "prepare_streaming_with_run(",
                 "dispatch_http_sse_with_run(",
             ],
         );
@@ -2437,5 +2540,75 @@ mod tests {
         .into_body();
         axum::body::to_bytes(body, 1024 * 1024).await.unwrap();
         assert_eq!(run_status(&context).await, RunStatus::Completed);
+    }
+
+    async fn body_text(body: axum::body::Body) -> String {
+        String::from_utf8(
+            axum::body::to_bytes(body, 1024 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap()
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn a_deferred_stream_starts_with_one_run_initiated_event() {
+        let frames = format!(
+            "event: run_initiated\ndata: {}\n\n{}",
+            serde_json::json!({"event_type": "run_initiated", "payload": {"run_id": "run-1"}}),
+            String::from_utf8_lossy(&completed_frame()),
+        );
+        let executor = futures::stream::iter([Ok::<_, DispatchError>(bytes::Bytes::from(frames))]);
+        let body = proxy_deferred_lambda_sse_response(
+            async move { Ok(Box::pin(executor) as ByteStream) },
+            "run-1".into(),
+            None,
+            None,
+        )
+        .into_response()
+        .into_body();
+        let text = body_text(body).await;
+        assert_eq!(text.matches("event: run_initiated").count(), 1, "{text}");
+        assert!(text.starts_with("event: run_initiated"), "{text}");
+        assert!(text.contains("\"run_id\":\"run-1\""), "{text}");
+        assert!(text.contains("\"completed\""), "{text}");
+        assert!(!text.contains("event: error"), "{text}");
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn a_failed_start_ends_the_stream_with_one_error_event() {
+        let body = proxy_deferred_lambda_sse_response(
+            async { Err("Quota exceeded".to_string()) },
+            "run-1".into(),
+            None,
+            None,
+        )
+        .into_response()
+        .into_body();
+        let text = body_text(body).await;
+        assert!(text.starts_with("event: run_initiated"), "{text}");
+        assert_eq!(text.matches("event: error").count(), 1, "{text}");
+        assert!(text.contains("\"event_type\":\"error\""), "{text}");
+        assert!(text.contains("Quota exceeded"), "{text}");
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn a_stream_that_ends_without_completed_fails_the_run() {
+        let context = completion_context().await;
+        let executor = futures::stream::iter([Ok::<_, DispatchError>(bytes::Bytes::from_static(
+            b"event: message\ndata: {\"event_type\":\"log\",\"payload\":{}}\n\n",
+        ))]);
+        let body = proxy_lambda_sse_response(
+            Box::pin(executor),
+            "run-1".into(),
+            Some(context.clone()),
+            None,
+        )
+        .into_response()
+        .into_body();
+        let text = body_text(body).await;
+        assert_eq!(text.matches("event: error").count(), 1, "{text}");
+        assert_eq!(run_status(&context).await, RunStatus::Failed);
     }
 }

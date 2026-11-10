@@ -4,6 +4,7 @@
 //! `todo/bots-capabilities/lanes/HOST-SERVER-TOOLS.md`.
 
 mod access;
+mod apps;
 mod configuration;
 pub(crate) mod connectors;
 mod crew;
@@ -80,7 +81,20 @@ pub(crate) async fn turn_host(
             .ok(),
         None => None,
     };
-    let source = std::sync::Arc::new(flow_like_bot_tools_host::StateModels {
+    let vision = match bot
+        .vision_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        Some(id) => profile
+            .find_bit(id, flow_like_state.http_client.clone())
+            .await
+            .map_err(|error| tracing::warn!(%error, id, "Bot tools: vision model not found"))
+            .ok(),
+        None => None,
+    };
+    let models = flow_like_bot_tools_host::StateModels {
         state: flow_like_state.clone(),
         chat: Some(chat.clone()),
         embedding: embedding.clone(),
@@ -90,12 +104,18 @@ pub(crate) async fn turn_host(
             run_id: Some(turn_id.to_string()),
             api_base_url: None,
         },
+    };
+    let vision_source = vision.clone().map(|bit| {
+        std::sync::Arc::new(models.answering_with(bit))
+            as std::sync::Arc<dyn flow_like_bot_tools_host::ModelSource>
     });
-    let notifier = std::sync::Arc::new(crate::bot_notify::ServerNotifier::new(
-        state,
-        &bot.bot_id,
-        site,
+    let source = std::sync::Arc::new(flow_like_bot_tools_host::VisionRouted::new(
+        std::sync::Arc::new(models),
+        vision_source,
     ));
+    let notifier = std::sync::Arc::new(
+        crate::bot_notify::ServerNotifier::new(state, &bot.bot_id, site).with_turn(turn_id),
+    );
     let scheduler = std::sync::Arc::new(schedule::ApiScheduler::new(state, owner, &bot.bot_id));
     let crew = (bot.toolset == flow_like::flow::copilot::BotToolset::FlowPilot).then(|| {
         std::sync::Arc::new(crew::ApiCrew::new(
@@ -129,6 +149,7 @@ pub(crate) async fn turn_host(
             source,
             chat: Some(chat.clone()),
             embedding,
+            vision,
         },
         executor: executor_for(state),
         grants,
@@ -175,6 +196,19 @@ pub(crate) async fn turn_host(
         flow_like_state.clone(),
         bot.image_model.clone(),
     )));
+    let host = if bot.tool_host == flow_like::flow::copilot::BotToolHost::Hosted {
+        host.with_apps(std::sync::Arc::new(apps::AppTools::new(
+            state,
+            BotUser {
+                bot_id: bot.bot_id.clone(),
+                turn_id: turn_id.to_string(),
+                conv_id: conv_id.map(str::to_string),
+            },
+            bot,
+        )))
+    } else {
+        host
+    };
     Some(std::sync::Arc::new(match crew {
         Some(crew) => host.with_crew(crew),
         None => host,

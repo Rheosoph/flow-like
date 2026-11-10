@@ -645,6 +645,8 @@ pub fn run() {
             }
         })
         .on_window_event(|window, event| {
+            #[cfg(desktop)]
+            tray::on_window_event(window, event);
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 execution_credentials::revoke_window(window.label());
                 realtime::close_window(window.label());
@@ -1166,6 +1168,7 @@ pub fn run() {
             functions::native_bot_input::native_bot_capabilities,
             functions::native_bot_input::native_bot_cancel_request,
             functions::native_bot_input::native_bot_activity_tokens,
+            functions::barcode::detect_barcodes,
             functions::native::native_clear_snapshot,
             functions::native::native_take_actions,
             functions::native::native_pending_actions,
@@ -1193,6 +1196,10 @@ pub fn run() {
             functions::storage_management::delete_local_storage_items,
             #[cfg(desktop)]
             tray::tray_update_state,
+            #[cfg(desktop)]
+            tray::get_keep_bots_running,
+            #[cfg(desktop)]
+            tray::set_keep_bots_running,
             #[cfg(not(desktop))]
             tray_update_state,
             functions::download::init::init_downloads,
@@ -1323,6 +1330,8 @@ pub fn run() {
             functions::bit::get_bit,
             functions::bit::is_bit_installed,
             functions::speech::speech_transcribe,
+            functions::speech::speech_transcribe_raw,
+            functions::speech::speech_warm,
             functions::speech::speech_synthesize,
             functions::bit::get_bit_size,
             functions::bit::get_pack_from_bit,
@@ -1549,6 +1558,7 @@ pub fn run() {
             functions::local_bots::history::local_inbox_import_history,
             functions::local_bots::history::local_inbox_write_segment,
             bot_host::commands::bot_host_turns,
+            bot_host::commands::bot_host_poke,
             bot_host::commands::bot_host_e2e_status,
             bot_host::commands::bot_host_e2e_rotate_key,
             functions::inbox_e2e::inbox_e2e_key,
@@ -1731,6 +1741,8 @@ pub fn run() {
         }
         #[cfg(desktop)]
         window_layout::on_event(_app, &_event);
+        #[cfg(target_os = "macos")]
+        tray::on_run_event(_app, &_event);
     });
 }
 
@@ -1757,10 +1769,7 @@ fn handle_instance(app: &AppHandle, args: Vec<String>, _cwd: String) {
     {
         let flowpilot_e2e_cli = args.iter().any(|arg| arg == "--flowpilot-e2e-cli");
         if !flowpilot_e2e_cli {
-            let _ = app
-                .get_webview_window("main")
-                .expect("no main window")
-                .set_focus();
+            tray::open_main_window(app);
         }
     }
 

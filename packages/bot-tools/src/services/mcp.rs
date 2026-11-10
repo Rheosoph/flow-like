@@ -28,15 +28,22 @@ pub struct McpOutcome {
     pub binaries: Vec<Binary>,
 }
 
+#[cfg(any(feature = "mcp", test))]
+const MAX_CONTENT_BLOCKS: usize = 64;
+#[cfg(any(feature = "mcp", test))]
+const MAX_RESULT_BYTES: usize = 8 * 1024 * 1024;
+
 /// blake3 of the schema's JSON, so a changed tool shows up as a changed hash.
 pub fn schema_hash(schema: &Value) -> String {
     blake3::hash(schema.to_string().as_bytes()).to_hex()[..16].to_string()
 }
 
+#[cfg(any(feature = "mcp", test))]
 fn flag(annotations: &Value, key: &str) -> Option<bool> {
     annotations.get(key).and_then(Value::as_bool)
 }
 
+#[cfg(any(feature = "mcp", test))]
 fn tool_of(value: &Value) -> Option<McpTool> {
     let name = value.get("name")?.as_str()?.to_string();
     let schema = value.get("inputSchema").cloned().unwrap_or(Value::Null);
@@ -58,15 +65,27 @@ fn tool_of(value: &Value) -> Option<McpTool> {
 }
 
 /// Text, saved binaries and the error flag of a `tools/call` result in its JSON form.
-fn outcome_of(result: &Value) -> McpOutcome {
-    let mut text = Vec::new();
-    let mut binaries = Vec::new();
-    for block in result
+#[cfg(any(feature = "mcp", test))]
+fn outcome_of(result: &Value) -> Result<McpOutcome, String> {
+    let blocks = result
         .get("content")
         .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
+        .map_or(&[][..], Vec::as_slice);
+    if blocks.len() > MAX_CONTENT_BLOCKS {
+        return Err(format!(
+            "The MCP result has {} content blocks, more than the {MAX_CONTENT_BLOCKS} this client takes; ask the tool for less",
+            blocks.len()
+        ));
+    }
+    let carried: usize = blocks.iter().map(block_bytes).sum();
+    if carried > MAX_RESULT_BYTES {
+        return Err(format!(
+            "The MCP result carries {carried} bytes, more than the {MAX_RESULT_BYTES} this client takes; ask the tool for less"
+        ));
+    }
+    let mut text = Vec::new();
+    let mut binaries = Vec::new();
+    for block in blocks {
         match block.get("type").and_then(Value::as_str) {
             Some("text") => {
                 if let Some(part) = block.get("text").and_then(Value::as_str) {
@@ -111,14 +130,32 @@ fn outcome_of(result: &Value) -> McpOutcome {
     {
         text.push(structured.to_string());
     }
-    McpOutcome {
+    Ok(McpOutcome {
         text: text.join("\n"),
         is_error: result
             .get("isError")
             .and_then(Value::as_bool)
             .unwrap_or(false),
         binaries,
-    }
+    })
+}
+
+/// The bytes a content block carries as sent, before anything is decoded.
+#[cfg(any(feature = "mcp", test))]
+fn block_bytes(block: &Value) -> usize {
+    let length = |value: Option<&Value>| value.and_then(Value::as_str).map_or(0, str::len);
+    length(block.get("text"))
+        + length(block.get("data"))
+        + length(
+            block
+                .get("resource")
+                .and_then(|resource| resource.get("text")),
+        )
+        + length(
+            block
+                .get("resource")
+                .and_then(|resource| resource.get("blob")),
+        )
 }
 
 #[cfg(feature = "mcp")]
@@ -224,7 +261,7 @@ mod client {
             .map_err(|error| format!("The MCP call failed: {error}"));
         let _ = session.cancel().await;
         let value = serde_json::to_value(result?).unwrap_or(Value::Null);
-        Ok(outcome_of(&value))
+        outcome_of(&value)
     }
 }
 
@@ -282,11 +319,28 @@ mod tests {
             ],
             "isError": true,
         });
-        let outcome = outcome_of(&result);
+        let outcome = outcome_of(&result).unwrap();
         assert!(outcome.is_error);
         assert_eq!(outcome.text, "first\ninside\n[resource https://x/y]");
         assert_eq!(outcome.binaries.len(), 1);
         assert_eq!(&outcome.binaries[0].data[..], b"hello");
+    }
+
+    #[test]
+    fn a_result_with_too_many_blocks_or_bytes_is_refused_before_decoding() {
+        let many: Vec<Value> = (0..=MAX_CONTENT_BLOCKS)
+            .map(|_| json!({ "type": "text", "text": "x" }))
+            .collect();
+        let error = outcome_of(&json!({ "content": many })).err().unwrap();
+        assert!(error.contains("content blocks"), "{error}");
+
+        let big = "A".repeat(MAX_RESULT_BYTES + 1);
+        let error = outcome_of(&json!({
+            "content": [{ "type": "image", "mimeType": "image/png", "data": big }],
+        }))
+        .err()
+        .unwrap();
+        assert!(error.contains("bytes"), "{error}");
     }
 
     #[test]

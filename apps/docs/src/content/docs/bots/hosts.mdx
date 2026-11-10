@@ -25,7 +25,7 @@ A single turn can run for up to 30 minutes.
 
 A desktop bot runs inside the Flow-Like desktop app on your computer.
 
-- **Answers while the app runs.** The app checks for new turns about every 30 seconds. Turns that arrive while it's closed wait, and expire after an hour.
+- **Answers while the app runs.** The app checks for new turns about every 30 seconds. Closing the window keeps the app running in the tray, so your bots keep answering (you can turn this off in **Settings > System**). Quitting the app, from the tray or the app menu, or shutting down the computer stops them, and turns that arrive meanwhile wait and expire after an hour. There is no start at login yet, so open the app again after a restart.
 - **Every model in your profile,** local models on your own hardware included.
 - **Every ability,** including the computer's screen, a real browser, the command line and end-to-end encryption.
 - **Phones count too.** The iOS and Android apps answer desktop bots while they're open. Phones have no command line, and iPhones can't run code yet.
@@ -51,7 +51,7 @@ Flux runs in the cloud, but its build tools need a desktop. While your desktop a
 
 | Situation | What happens |
 |---|---|
-| Desktop app closed, device agent stopped | New turns wait. A turn nobody picks up within an hour expires. |
+| Desktop app quit (not just its window closed), device agent stopped | New turns wait. A turn nobody picks up within an hour expires. |
 | A scheduled task came due while the host was away | It fires once when the host is back, not once per missed run. |
 | A turn waits for your approval | It holds without blocking the host and expires after 7 days. |
 

@@ -327,6 +327,83 @@ async fn only_the_bound_foreground_host_can_complete_the_interactive_reply() {
     complete_interactive_in(&db, &reply, "bot_1", "c1", "reply", at(3))
         .await
         .unwrap();
+    assert!(stored_checkpoint(&db, &foreground.turn_id).await.is_none());
+    let done = ledger::find(&db, &foreground.turn_id, None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(done.error_code, None);
+}
+
+#[tokio::test]
+async fn an_interactive_completion_needs_a_live_hold_and_a_live_bot() {
+    use crate::routes::inbox::{model::TurnClaim, turns::complete_interactive_in};
+    for (name, now, delete) in [
+        ("expired hold", at(10_000), false),
+        ("deleted bot", at(3), true),
+    ] {
+        let (db, running) = setup().await;
+        bot_turn::Entity::update_many()
+            .col_expr(
+                bot_turn::Column::Status,
+                Expr::value(flow_like_types::bot_turn::STORED_QUEUED),
+            )
+            .col_expr(bot_turn::Column::HostId, Expr::value(None::<String>))
+            .filter(bot_turn::Column::Id.eq(&running.turn_id))
+            .exec(&db)
+            .await
+            .unwrap();
+        if delete {
+            super::fixture::delete_bot(&db, "bot_1").await;
+        }
+        let reply = TurnClaim {
+            id: running.turn_id.clone(),
+            host_id: "interactive:first".into(),
+        };
+        assert!(
+            complete_interactive_in(&db, &reply, "bot_1", "c1", "reply", now)
+                .await
+                .is_err(),
+            "{name}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_completed_turn_clears_its_checkpoint_but_a_failure_report_keeps_it() {
+    use crate::routes::inbox::{model::TurnClaim, turns::complete_turn_in};
+    for (reply_id, kept) in [
+        ("reply".to_string(), false),
+        (
+            flow_like_types::bot_turn::failure_message_id("bot_1", "m1"),
+            true,
+        ),
+    ] {
+        let (db, claim) = setup().await;
+        save(&db, &claim, &snapshot(), 2).await.unwrap();
+        bot_turn::Entity::update_many()
+            .col_expr(
+                bot_turn::Column::ErrorCode,
+                Expr::value(ledger::ERROR_RESUMING),
+            )
+            .filter(bot_turn::Column::Id.eq(&claim.turn_id))
+            .exec(&db)
+            .await
+            .unwrap();
+        let host = TurnClaim {
+            id: claim.turn_id.clone(),
+            host_id: claim.host_id.clone(),
+        };
+        complete_turn_in(&db, &host, "bot_1", "c1", &reply_id, at(3))
+            .await
+            .unwrap();
+        assert_eq!(stored_checkpoint(&db, &claim.turn_id).await.is_some(), kept);
+        let done = ledger::find(&db, &claim.turn_id, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(done.error_code, None);
+    }
 }
 
 #[tokio::test]
@@ -444,17 +521,23 @@ async fn released_transient_failures_share_the_bounded_recovery_budget() {
     let (db, first) = setup().await;
     for failure in 1..=flow_like_types::bot_turn::MAX_ATTEMPTS {
         let now = at(2 + failure as i64);
-        assert!(
-            ledger::release_for_retry_in(
-                &db,
-                &first.turn_id,
-                &first.host_id,
-                now,
-                "TRANSIENT",
-                now
-            )
-            .await
-            .unwrap()
+        let released = ledger::release_for_retry_in(
+            &db,
+            &first.turn_id,
+            &first.host_id,
+            now,
+            "TRANSIENT",
+            now,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            released,
+            if failure == flow_like_types::bot_turn::MAX_ATTEMPTS {
+                ledger::RetryRelease::Spent
+            } else {
+                ledger::RetryRelease::Requeued
+            }
         );
         let turn = bot_turn::Entity::find_by_id(&first.turn_id)
             .one(&db)
@@ -466,7 +549,8 @@ async fn released_transient_failures_share_the_bounded_recovery_budget() {
             failure as i32
         );
         if failure == flow_like_types::bot_turn::MAX_ATTEMPTS {
-            assert_eq!(turn.status, STORED_FAILED);
+            assert_eq!(turn.status, flow_like_types::bot_turn::STORED_RUNNING);
+            assert_eq!(turn.host_id.as_deref(), Some(first.host_id.as_str()));
         } else {
             ledger::claim_in(
                 &db,
@@ -604,9 +688,15 @@ async fn a_retry_rebases_the_deadline_and_keeps_revision_and_state() {
     let (db, claim) = setup().await;
     save(&db, &claim, &snapshot(), 2).await.unwrap();
     assert!(
-        ledger::fail_held_in(&db, &claim.turn_id, &claim.host_id, "BOT_TURN_TIMEOUT", at(3))
-            .await
-            .unwrap()
+        ledger::fail_held_in(
+            &db,
+            &claim.turn_id,
+            &claim.host_id,
+            "BOT_TURN_TIMEOUT",
+            at(3)
+        )
+        .await
+        .unwrap()
     );
     let later = at(10_000);
     ledger::retry_in(&db, "user-a", "bot_1", &claim.turn_id, later)
@@ -646,16 +736,26 @@ async fn finished_turns_drop_their_checkpoint_but_failed_turns_keep_it_for_a_ret
     let (db, claim) = setup().await;
     save(&db, &claim, &snapshot(), 2).await.unwrap();
     assert!(
-        ledger::fail_held_in(&db, &claim.turn_id, &claim.host_id, "BOT_TURN_TIMEOUT", at(3))
-            .await
-            .unwrap()
+        ledger::fail_held_in(
+            &db,
+            &claim.turn_id,
+            &claim.host_id,
+            "BOT_TURN_TIMEOUT",
+            at(3)
+        )
+        .await
+        .unwrap()
     );
     assert!(stored_checkpoint(&db, &claim.turn_id).await.is_some());
     ledger::retry_in(&db, "user-a", "bot_1", &claim.turn_id, at(4))
         .await
         .unwrap()
         .unwrap();
-    assert!(ledger::take_in(&db, &claim.turn_id, "host-2", at(5)).await.unwrap());
+    assert!(
+        ledger::take_in(&db, &claim.turn_id, "host-2", at(5))
+            .await
+            .unwrap()
+    );
     assert!(
         ledger::complete_silent_in(&db, &claim.turn_id, "host-2", at(6))
             .await

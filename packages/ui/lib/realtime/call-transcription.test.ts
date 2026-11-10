@@ -71,7 +71,7 @@ test("previews update one draft while only the final result is delivered", async
 	expect(h.requests).toHaveLength(3);
 });
 
-test("a slow model skips superseded previews and handles final audio first", async () => {
+test("a slow model skips superseded previews and finals never wait for one", async () => {
 	const h = harness();
 	h.queue.partial(utterance(0, 1000));
 	h.queue.partial(utterance(0, 2000));
@@ -79,22 +79,111 @@ test("a slow model skips superseded previews and handles final audio first", asy
 	h.queue.final(utterance(0, 3500));
 	h.queue.partial(utterance(5000, 1000));
 	h.queue.partial(utterance(5000, 2000));
-	expect(h.requests).toHaveLength(1);
-	h.requests[0].result.resolve("old draft");
-	await settle();
-	expect(h.partials).toEqual([]);
 	expect(h.requests.map(({ utterance }) => utterance.durationMs)).toEqual([
 		1000, 3500,
 	]);
 	h.requests[1].result.resolve("First utterance.");
 	await settle();
+	expect(h.finals.map(({ text }) => text)).toEqual(["First utterance."]);
+	h.requests[0].result.resolve("old draft");
+	await settle();
+	expect(h.partials).toEqual([]);
 	expect(h.requests.map(({ utterance }) => utterance.durationMs)).toEqual([
 		1000, 3500, 2000,
 	]);
 	h.requests[2].result.resolve("Second utterance");
 	await settle();
 	expect(h.partials).toEqual(["Second utterance"]);
-	expect(h.finals.map(({ text }) => text)).toEqual(["First utterance."]);
+});
+
+test("finals run one at a time, in order, beside an in-flight preview", async () => {
+	const h = harness();
+	h.queue.partial(utterance(0, 1000));
+	h.queue.final(utterance(0, 1200));
+	h.queue.final(utterance(5000, 1200));
+	expect(h.requests.map(({ utterance }) => utterance.offsetMs)).toEqual([0, 0]);
+	h.requests[1].result.resolve("one");
+	await settle();
+	expect(h.requests.map(({ utterance }) => utterance.offsetMs)).toEqual([
+		0, 0, 5000,
+	]);
+	h.requests[2].result.resolve("two");
+	await settle();
+	expect(h.finals.map(({ text }) => text)).toEqual(["one", "two"]);
+});
+
+function settled(offsetMs: number, durationMs: number): Utterance {
+	return { ...utterance(offsetMs, durationMs), settled: true };
+}
+
+test("a final reuses the settled preview of the same audio, in flight or done", async () => {
+	for (const done of [false, true]) {
+		const h = harness();
+		h.queue.partial(settled(0, 2000));
+		if (done) {
+			h.requests[0].result.resolve("Hello there");
+			await settle();
+		}
+		const complete = utterance(0, 2000);
+		h.queue.final(complete);
+		await settle();
+		expect(h.requests).toHaveLength(1);
+		if (!done) h.requests[0].result.resolve("Hello there");
+		await settle();
+		expect(h.finals).toEqual([{ text: "Hello there", utterance: complete }]);
+	}
+});
+
+test("a settled preview is not reused once speech resumed, or after it failed", async () => {
+	const resumed = harness();
+	resumed.queue.partial(settled(0, 2000));
+	resumed.requests[0].result.resolve("Hello");
+	await settle();
+	resumed.queue.partial(utterance(0, 3000));
+	resumed.queue.final(utterance(0, 2500));
+	await settle();
+	expect(resumed.requests.map(({ utterance }) => utterance.durationMs)).toEqual(
+		[2000, 3000, 2500],
+	);
+
+	const failed = harness();
+	failed.queue.partial(settled(0, 2000));
+	failed.queue.final(utterance(0, 2000));
+	failed.requests[0].result.reject(new Error("model busy"));
+	await settle();
+	expect(failed.requests).toHaveLength(2);
+	failed.requests[1].result.resolve("Recovered");
+	await settle();
+	expect(failed.finals.map(({ text }) => text)).toEqual(["Recovered"]);
+	expect(failed.errors).toHaveLength(1);
+});
+
+test("a final whose settled preview has not started transcribes itself", async () => {
+	const h = harness();
+	h.queue.partial(utterance(0, 1000));
+	h.queue.partial(settled(0, 2000));
+	h.queue.final(utterance(0, 2000));
+	expect(h.requests.map(({ utterance }) => utterance.durationMs)).toEqual([
+		1000, 2000,
+	]);
+	h.requests[1].result.resolve("Done");
+	await settle();
+	expect(h.finals.map(({ text }) => text)).toEqual(["Done"]);
+	h.requests[0].result.resolve("old");
+	await settle();
+	expect(h.requests).toHaveLength(2);
+});
+
+test("a probe transcribes outside the lanes and is empty after close", async () => {
+	const h = harness();
+	h.queue.partial(utterance(0, 1000));
+	h.queue.final(utterance(0, 1200));
+	const probing = h.queue.probe(utterance(9000, 700));
+	expect(h.requests).toHaveLength(3);
+	h.requests[2].result.resolve("  stop  ");
+	expect(await probing).toBe("stop");
+	h.queue.close();
+	expect(await h.queue.probe(utterance(9000, 700))).toBe("");
 });
 
 test("an in-flight preview remains useful while a newer snapshot of the same utterance waits", async () => {
@@ -179,7 +268,7 @@ test("closing clears a visible draft and discards every late result and queued i
 		expect(h.partials).toEqual(["Draft", ""]);
 		expect(h.finals).toEqual([]);
 		expect(h.errors).toEqual([]);
-		expect(h.requests).toHaveLength(2);
+		expect(h.requests).toHaveLength(kind === "partial" ? 3 : 2);
 	}
 });
 

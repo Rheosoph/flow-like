@@ -139,7 +139,7 @@ fn the_owner_reads_method_site_path_secrets_and_the_start_of_a_write() {
     }));
     assert_eq!(
         read,
-        "The bot wants to send a GET request to api.github.com/repos/a/b/issues with your secret GITHUB_TOKEN."
+        "The bot wants to send a GET request to api.github.com/repos/a/b/issues?state=open with your secret GITHUB_TOKEN."
     );
     let write = ask_summary(&json!({
         "url": "https://hooks.example.com/notify",
@@ -148,6 +148,65 @@ fn the_owner_reads_method_site_path_secrets_and_the_start_of_a_write() {
     }));
     assert!(write.starts_with("The bot wants to send a POST request to hooks.example.com/notify."));
     assert!(write.contains(r#"Body: {"text":"deploy done"}"#), "{write}");
+}
+
+#[test]
+fn a_long_query_is_shortened_in_the_approval_and_the_fragment_is_dropped() {
+    let long = "x".repeat(500);
+    let text = ask_summary(&json!({ "url": format!("https://api.example.com/s?q={long}#frag") }));
+    assert!(text.contains("api.example.com/s?q=xxx"), "{text}");
+    assert!(text.contains('…') && !text.contains("#frag"), "{text}");
+    assert!(text.len() < 400, "{}", text.len());
+}
+
+#[test]
+fn an_ip_literal_and_localhost_keep_the_plain_scope() {
+    assert_eq!(
+        grant_scopes(&json!({ "url": "http://192.168.1.4/api" })),
+        Some(vec!["web:192.168.1.4:read".to_string()])
+    );
+    assert_eq!(
+        grant_scopes(&json!({ "url": "http://localhost/api" })),
+        Some(vec!["web:localhost:read".to_string()])
+    );
+}
+
+#[test]
+fn allow_private_selects_the_private_scope_and_the_summary_says_so() {
+    assert_eq!(
+        grant_scopes(&json!({ "url": "https://nas.example.com/x", "allow_private": true })),
+        Some(vec!["web:nas.example.com:private:read".to_string()])
+    );
+    assert_eq!(
+        grant_scopes(&json!({ "url": "https://nas.example.com/x", "allow_private": false })),
+        Some(vec!["web:nas.example.com:read".to_string()])
+    );
+    let text = ask_summary(&json!({ "url": "https://nas.example.com/x", "allow_private": true }));
+    assert!(text.contains("is on a private network"), "{text}");
+    let plain = ask_summary(&json!({ "url": "https://nas.example.com/x" }));
+    assert!(!plain.contains("private network"), "{plain}");
+}
+
+#[test]
+fn allow_private_is_in_the_schema_and_parses() {
+    let schema = schema_of::<WebRequestArgs>();
+    assert!(schema["properties"]["allow_private"].is_object());
+    let args: WebRequestArgs =
+        serde_json::from_value(json!({ "url": "https://a.example/", "allow_private": true }))
+            .unwrap();
+    assert_eq!(args.allow_private, Some(true));
+}
+
+#[tokio::test]
+async fn a_desktop_never_reaches_a_metadata_address() {
+    let env = FakeEnv::new().await;
+    let result = crate::run(
+        WEB_REQUEST,
+        json!({ "url": "http://169.254.169.254/latest/meta-data" }),
+        &env,
+    )
+    .await;
+    assert!(!result.is_ok());
 }
 
 #[tokio::test]

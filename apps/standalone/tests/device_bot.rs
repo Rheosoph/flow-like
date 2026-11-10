@@ -69,11 +69,13 @@ struct FakeBrowserMachines;
 
 #[test]
 fn configuration_tools_are_not_offered_without_a_device_configuration_backend() {
-    for room_turn in [false, true] {
-        let tools = bot_host::runner::host_tools(&MachineBackends::default(), room_turn);
-        for tool in ["bot_configuration", "bot_models", "bot_update_configuration"] {
-            assert!(!tools.runs(tool), "{tool}");
-        }
+    let tools = bot_host::runner::host_tools(&MachineBackends::default());
+    for tool in [
+        "bot_configuration",
+        "bot_models",
+        "bot_update_configuration",
+    ] {
+        assert!(!tools.runs(tool), "{tool}");
     }
 }
 
@@ -119,6 +121,7 @@ async fn a_queued_turn_is_answered_through_the_real_entry_point() {
         format!("POST {bots}/poll"),
         format!("POST {bots}/turns/{turn}/claim"),
         format!("GET /api/v1/inbox/conversations/{CONVERSATION_ID}/entries"),
+        format!("GET {bots}/turns/{turn}/checkpoint"),
         "POST /api/v1/chat/completions".to_owned(),
         format!("POST {bots}/turns/{turn}/reply"),
     ];
@@ -127,6 +130,10 @@ async fn a_queued_turn_is_answered_through_the_real_entry_point() {
         let at = position(&hub, step);
         assert!(at >= last, "{step} came out of order: {:#?}", hub.paths(""));
         last = at;
+    }
+    let load = &hub.requests[position(&hub, &format!("GET {bots}/turns/{turn}/checkpoint"))];
+    for fence in [format!("host_id=device%3A{device}"), "attempt=1".to_owned()] {
+        assert!(load.query.contains(&fence), "{fence}: {load:?}");
     }
     let reply_at = position(&hub, &format!("/turns/{turn}/reply"));
     let next_poll = hub.requests[reply_at..]

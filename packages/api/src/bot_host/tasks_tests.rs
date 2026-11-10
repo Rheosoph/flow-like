@@ -573,3 +573,21 @@ fn a_trigger_is_not_sendable_by_clients() {
     };
     assert!(crate::routes::inbox::entries::validate_send(request).is_err());
 }
+
+#[tokio::test]
+async fn tasks_of_bots_without_the_scheduling_capability_are_not_due() {
+    let db = database().await;
+    make_due(&db, TaskKind::Once, at(-60)).await;
+    assert_eq!(due_in(&db, now()).await.unwrap().len(), 1);
+    bot::ActiveModel {
+        id: Set(BOT.into()),
+        capabilities: Set(Vec::<String>::new().into()),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+    assert!(due_in(&db, now()).await.unwrap().is_empty());
+    allow_scheduling(&db, BOT).await;
+    assert_eq!(due_in(&db, now()).await.unwrap().len(), 1);
+}
