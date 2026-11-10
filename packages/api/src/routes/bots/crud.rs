@@ -172,7 +172,18 @@ async fn verify_device<C: ConnectionTrait>(
         ApiError::bad_request(format!(
             "Device '{device_id}' is not an active device of yours"
         ))
-    })
+    })?;
+    let now = chrono::Utc::now().timestamp();
+    if crate::devices::management::shared_for_deploy(db, device_id, owner_id, now).await? {
+        return Err(ApiError::coded(
+            StatusCode::CONFLICT,
+            crate::devices::management::DEVICE_SHARED_FOR_DEPLOY,
+            format!(
+                "Device '{device_id}' lets other people deploy to it, so it can't host a bot; end that access in the device's sharing settings or choose another place for the bot"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// The profile and device a bot points at must be the owner's.

@@ -1,12 +1,12 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { type IBit, IBitTypes } from "../../../../lib/schema/bit/bit";
 import type { BotLocation } from "../../../../state/backend-state/bot-state";
 import { isBotDecisionModel } from "./decision-model-options";
 import { BotModelPicker } from "./model-picker";
-import { useBotBitOptions } from "./use-bot-models";
+import { type ModelCatalogSpec, useBotBitOptions } from "./use-bot-models";
 
 const TYPES: readonly IBitTypes[] = [IBitTypes.SystemOne];
 
@@ -25,6 +25,10 @@ export function BotDecisionModelField({
 		[location],
 	);
 	const { options } = useBotBitOptions(TYPES, accepts);
+	const catalog = useMemo<ModelCatalogSpec>(
+		() => ({ types: TYPES, accepts }),
+		[accepts],
+	);
 	const label = t("editor.brain.decision", "Decision model (System One)");
 	return (
 		<div className="flex flex-col gap-1.5">
@@ -33,6 +37,7 @@ export function BotDecisionModelField({
 				label={label}
 				value={value}
 				options={options}
+				catalog={catalog}
 				fallback={{
 					label: t("editor.brain.decisionDisabled", "Disabled"),
 					hint: t(

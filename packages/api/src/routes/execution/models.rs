@@ -511,11 +511,7 @@ async fn queue(
     .await?;
     hosted_worker::dispatch(
         state.clone(),
-        HostedAiJob {
-            operation_id,
-            request: HostedWork::CustomBit(call),
-            deadline,
-        },
+        HostedAiJob::new(operation_id, HostedWork::CustomBit(call), deadline),
     )
     .await
 }

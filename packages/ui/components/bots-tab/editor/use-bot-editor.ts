@@ -25,6 +25,7 @@ import {
 	getBotDraftProblems,
 	hasFixedLocation,
 	hasFlowPilot,
+	heldUnavailableCapabilities,
 	keepOnThisComputer,
 	setBotDraftCapability,
 	setBotDraftLocation,
@@ -242,8 +243,14 @@ export function useBotEditor(
 	);
 	const [pendingAppIds, setPendingAppIds] = useState<string[]>([]);
 	const appAccess = useBotAppDraft(options.savedApps);
-	const [locationChange, setLocationChange] =
-		useState<BotLocationChange>(NO_LOCATION_CHANGE);
+	const [locationChange, setLocationChange] = useState<BotLocationChange>(() =>
+		original
+			? {
+					...NO_LOCATION_CHANGE,
+					removed: heldUnavailableCapabilities(original),
+				}
+			: NO_LOCATION_CHANGE,
+	);
 	const {
 		text,
 		choice,

@@ -10,6 +10,7 @@ pub mod event;
 pub mod gate;
 pub mod host;
 pub mod hub;
+pub mod latency;
 pub mod memory;
 pub mod notes;
 pub mod recovery;

@@ -5,6 +5,7 @@ use flow_like_types::tokio::time::sleep;
 use tauri::menu::{IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry};
+use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::functions::TauriFunctionError;
@@ -826,9 +827,10 @@ fn open_run(app_handle: &AppHandle, run_id: String) {
     });
 }
 
-fn open_main_window(app_handle: &AppHandle) {
+pub(crate) fn open_main_window(app_handle: &AppHandle) {
     if let Some(main) = app_handle.get_webview_window("main") {
         let _ = main.show();
+        let _ = main.unminimize();
         let _ = main.set_focus();
     }
 }
@@ -836,4 +838,154 @@ fn open_main_window(app_handle: &AppHandle) {
 fn open_route(app_handle: &AppHandle, route: &str) {
     open_main_window(app_handle);
     crate::utils::emit_to_ui(app_handle, "tray:navigate", route.to_string());
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseAction {
+    Hide,
+    Close,
+}
+
+fn close_action(keep_bots_running: bool, hosted_bots: usize, reachable: bool) -> CloseAction {
+    if reachable && keep_bots_running && hosted_bots > 0 {
+        CloseAction::Hide
+    } else {
+        CloseAction::Close
+    }
+}
+
+/// A hidden window is brought back from the Dock on macOS and from the tray icon elsewhere.
+fn reachable_when_hidden(app_handle: &AppHandle) -> bool {
+    cfg!(target_os = "macos") || app_handle.tray_by_id(TRAY_ID).is_some()
+}
+
+/// Own local bots plus the account bots this desktop last reported; a bot in both only
+/// raises the sum, which is enough for "at least one".
+async fn hosted_bot_count(app_handle: &AppHandle) -> usize {
+    let account = app_handle
+        .try_state::<crate::bot_host::AccountHost>()
+        .map_or(0, |host| host.hosted_bot_count());
+    account + local_bot_count(app_handle).await
+}
+
+async fn local_bot_count(app_handle: &AppHandle) -> usize {
+    let Some(bots) = app_handle.try_state::<crate::functions::local_bots::LocalBots>() else {
+        return 0;
+    };
+    match crate::functions::local_bots::on_store(&bots, |store| store.list_bots()).await {
+        Ok(list) => list.iter().filter(|bot| bot.system.is_none()).count(),
+        Err(error) => {
+            tracing::warn!(%error, "Keep-alive: counting the bots of this device failed");
+            0
+        }
+    }
+}
+
+/// Holds back the close of the main window; the window is then hidden or destroyed once the
+/// settings and the bot count are known.
+pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
+    let tauri::WindowEvent::CloseRequested { api, .. } = event else {
+        return;
+    };
+    if window.label() != "main" {
+        return;
+    }
+    api.prevent_close();
+    let window = window.clone();
+    tauri::async_runtime::spawn(async move {
+        let app = window.app_handle().clone();
+        let keep = match TauriSettingsState::construct(&app).await {
+            Ok(settings) => settings.lock().await.background.keep_bots_running,
+            Err(_) => false,
+        };
+        let hosted = if keep {
+            hosted_bot_count(&app).await
+        } else {
+            0
+        };
+        match close_action(keep, hosted, reachable_when_hidden(&app)) {
+            CloseAction::Hide => {
+                if let Err(error) = window.hide() {
+                    tracing::warn!(%error, "Keep-alive: hiding the main window failed; closing it");
+                    let _ = window.destroy();
+                    return;
+                }
+                announce_keep_alive(&app).await;
+            }
+            CloseAction::Close => {
+                let _ = window.destroy();
+            }
+        }
+    });
+}
+
+async fn announce_keep_alive(app_handle: &AppHandle) {
+    let Ok(settings) = TauriSettingsState::construct(app_handle).await else {
+        return;
+    };
+    {
+        let mut settings = settings.lock().await;
+        if settings.background.notice_shown {
+            return;
+        }
+        settings.background.notice_shown = true;
+        crate::settings::Settings::serialize(&mut settings);
+    }
+    let shown = app_handle
+        .notification()
+        .builder()
+        .title("Flow-Like is still running")
+        .body("Your bots keep answering. Quit Flow-Like from its tray icon to stop them.")
+        .show();
+    if let Err(error) = shown {
+        tracing::warn!(%error, "Keep-alive: the first-hide notice could not be shown");
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn on_run_event(app_handle: &AppHandle, event: &tauri::RunEvent) {
+    if let tauri::RunEvent::Reopen {
+        has_visible_windows: false,
+        ..
+    } = event
+    {
+        open_main_window(app_handle);
+    }
+}
+
+#[tauri::command(async)]
+pub async fn get_keep_bots_running(app_handle: AppHandle) -> Result<bool, TauriFunctionError> {
+    let settings = TauriSettingsState::construct(&app_handle)
+        .await
+        .map_err(|e| TauriFunctionError::new(&format!("Settings state not found: {e}")))?;
+    Ok(settings.lock().await.background.keep_bots_running)
+}
+
+#[tauri::command(async)]
+pub async fn set_keep_bots_running(
+    app_handle: AppHandle,
+    enabled: bool,
+) -> Result<bool, TauriFunctionError> {
+    let settings = TauriSettingsState::construct(&app_handle)
+        .await
+        .map_err(|e| TauriFunctionError::new(&format!("Settings state not found: {e}")))?;
+    let mut settings = settings.lock().await;
+    settings.background.keep_bots_running = enabled;
+    crate::settings::Settings::serialize(&mut settings);
+    Ok(enabled)
+}
+
+#[cfg(test)]
+mod keep_alive_tests {
+    use super::{CloseAction, close_action};
+
+    #[test]
+    fn hides_only_with_setting_bots_and_a_way_back() {
+        assert_eq!(close_action(true, 1, true), CloseAction::Hide);
+        assert_eq!(close_action(true, 3, true), CloseAction::Hide);
+        assert_eq!(close_action(false, 1, true), CloseAction::Close);
+        assert_eq!(close_action(true, 0, true), CloseAction::Close);
+        assert_eq!(close_action(true, 1, false), CloseAction::Close);
+        assert_eq!(close_action(false, 0, false), CloseAction::Close);
+    }
 }

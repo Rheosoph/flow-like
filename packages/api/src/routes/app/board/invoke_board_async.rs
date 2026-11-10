@@ -20,8 +20,8 @@ use crate::{
     error::ApiError,
     execution::{
         DispatchRequest, DispatchTrigger, ExecutionJwtParams, TokenType, caller_dispatch_profile,
-        format_run_version, is_jwt_configured, payload_storage, resolve_wasm_packages,
-        sign_execution_jwt,
+        format_run_version, is_jwt_configured, payload_storage, sign_execution_jwt,
+        try_resolve_wasm_packages,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -269,10 +269,11 @@ pub async fn invoke_board_async(
         tokio::join!(
             state.scoped_credentials(&credential_sub, &app_id, access),
             caller_dispatch_profile(&state, &user, &sub, params.profile_id.as_deref(), &app_id),
-            resolve_wasm_packages(&state, &app_id),
+            try_resolve_wasm_packages(&state, &app_id),
         )
     };
     let credentials = credentials_result?;
+    let wasm_packages = wasm_packages?;
 
     // Convert to SharedCredentials for runtime compatibility
     let shared_credentials = credentials.into_shared_credentials();

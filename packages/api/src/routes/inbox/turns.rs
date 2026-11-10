@@ -16,16 +16,16 @@ use crate::{
 };
 use axum::http::StatusCode;
 use chrono::{DateTime, FixedOffset};
-use flow_like_types::{bot::BotLocation, inbox::InboxEntryKind};
+use flow_like_types::{bot::BotLocation, bot_turn::failure_message_id, inbox::InboxEntryKind};
 use sea_orm::{ConnectionTrait, DatabaseTransaction, DbErr, EntityTrait, Statement};
 
 pub(crate) const TURN_RUNNING: &str = "RUNNING";
 pub(crate) const TURN_DONE: &str = "DONE";
 pub(crate) const TURN_QUEUED: &str = "QUEUED";
 
-const COMPLETE_INTERACTIVE_SQL: &str = r#"UPDATE "BotTurn" SET "status" = $1, "replyMessageId" = $2, "statusText" = NULL, "leaseUntil" = NULL, "updatedAt" = $3 WHERE "id" = $4 AND "botId" = $5 AND "conversationId" = $6 AND "status" = $7 AND ("hostId" IS NULL OR "hostId" = $8) RETURNING "hops""#;
+const COMPLETE_INTERACTIVE_SQL: &str = r#"UPDATE "BotTurn" SET "status" = $1, "replyMessageId" = $2, "statusText" = NULL, "errorCode" = NULL, "leaseUntil" = NULL, "updatedAt" = $3 WHERE "id" = $4 AND "botId" = $5 AND "conversationId" = $6 AND "status" = $7 AND ("hostId" IS NULL OR "hostId" = $8) AND "leaseUntil" > $3 AND "botId" IN (SELECT "id" FROM "Bot" WHERE "deletedAt" IS NULL) RETURNING "hops""#;
 
-const COMPLETE_TURN_SQL: &str = r#"UPDATE "BotTurn" SET "status" = $1, "replyMessageId" = $2, "statusText" = NULL, "leaseUntil" = NULL, "updatedAt" = $3 WHERE "id" = $4 AND "botId" = $5 AND "conversationId" = $6 AND "status" = $7 AND "hostId" = $8 AND "leaseUntil" > $9 RETURNING "hops""#;
+const COMPLETE_TURN_SQL: &str = r#"UPDATE "BotTurn" SET "status" = $1, "replyMessageId" = $2, "statusText" = NULL, "errorCode" = NULL, "leaseUntil" = NULL, "updatedAt" = $3 WHERE "id" = $4 AND "botId" = $5 AND "conversationId" = $6 AND "status" = $7 AND "hostId" = $8 AND "leaseUntil" > $9 RETURNING "hops""#;
 
 fn clipped(value: &str) -> String {
     value.chars().take(80).collect()
@@ -96,9 +96,29 @@ pub(crate) async fn complete_turn_in<C: ConnectionTrait>(
         ))
         .await?;
     match completed {
-        Some(row) => Ok(u32::try_from(row.try_get::<i32>("", "hops")?).unwrap_or(0)),
+        Some(row) => {
+            clear_checkpoint_of_answer(db, &claim.id, bot_id, reply_message_id).await?;
+            Ok(u32::try_from(row.try_get::<i32>("", "hops")?).unwrap_or(0))
+        }
         None => Err(why_not_claimed(db, claim, bot_id, conversation_id).await?),
     }
+}
+
+/// A completed turn keeps no checkpoint, except one a failure report completed: the owner retries
+/// that from it.
+async fn clear_checkpoint_of_answer<C: ConnectionTrait>(
+    db: &C,
+    turn_id: &str,
+    bot_id: &str,
+    reply_message_id: &str,
+) -> Result<(), DbErr> {
+    let Some(turn) = bot_turn::Entity::find_by_id(turn_id).one(db).await? else {
+        return Ok(());
+    };
+    if reply_message_id == failure_message_id(bot_id, &turn.trigger_message_id) {
+        return Ok(());
+    }
+    crate::bot_host::recovery::clear_finished_in(db, turn_id).await
 }
 
 /// Why the fenced completion matched no turn, without telling whether another bot's turn exists.
@@ -206,7 +226,10 @@ pub(crate) async fn complete_interactive_in<C: ConnectionTrait>(
         ))
         .await?;
     match completed {
-        Some(row) => Ok(u32::try_from(row.try_get::<i32>("", "hops")?).unwrap_or(0)),
+        Some(row) => {
+            clear_checkpoint_of_answer(db, &claim.id, bot_id, reply_message_id).await?;
+            Ok(u32::try_from(row.try_get::<i32>("", "hops")?).unwrap_or(0))
+        }
         None => Err(not_claimed(
             bot_id,
             claim,

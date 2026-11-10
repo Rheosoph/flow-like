@@ -1,5 +1,5 @@
 //! When the shared owner polls next: failure backoff, per-run retries, the polling mode
-//! without a live provider, and the chase after wakeups the server throttled away.
+//! without a live provider, and the chase after a wakeup that did not arrive.
 
 use super::{ConnectionState, PollFailure};
 use flow_like_types::{
@@ -24,7 +24,7 @@ const RECOVERY_RUNS: Duration = Duration::from_secs(5);
 const RECOVERY_NOTIFICATIONS: Duration = Duration::from_secs(30);
 const INTERVAL_RUNS: Duration = Duration::from_secs(2);
 const INTERVAL_NOTIFICATIONS: Duration = Duration::from_secs(30);
-/// The server drops run wakeups inside its 500 ms per-account window instead of delaying them.
+/// The server sends at most one run wakeup per 250 ms per account, and a wakeup can be lost in transit.
 const CHASE: Duration = Duration::from_millis(750);
 /// An API that does not hold polls answers well within this; one that holds them, never.
 const HELD: Duration = Duration::from_secs(1);
@@ -189,10 +189,20 @@ impl Pacing {
         elapsed: Duration,
         now: Instant,
     ) -> Option<Instant> {
-        if response.runs.iter().any(|run| run.has_more)
+        if response
+            .runs
+            .iter()
+            .any(|run| run.has_more && !run.events.is_empty())
             || response.conversations.iter().any(|update| update.has_more)
         {
             return None;
+        }
+        // A run that has more but delivered nothing waits on a sequence gap; polling at once cannot fill it.
+        if response.runs.iter().any(|run| run.has_more) {
+            return [Some(now + CHASE), self.retry_at(now)]
+                .into_iter()
+                .flatten()
+                .min();
         }
         let runs = !polled.runs.is_empty();
         let held = elapsed >= Duration::from_millis(timeout_ms(false, max_wait_ms) / 2).min(HELD);
@@ -436,6 +446,21 @@ mod tests {
                     now
                 )
                 .is_none()
+        );
+        let gap = RealtimePollResponse {
+            runs: vec![update("RUNNING", 0, true)],
+            ..Default::default()
+        };
+        assert_eq!(
+            pacing.due(
+                &polled(&["run"], false),
+                &gap,
+                false,
+                0,
+                Duration::ZERO,
+                now
+            ),
+            Some(now + CHASE)
         );
 
         assert_eq!(

@@ -9,7 +9,7 @@ use crate::execute::validate_executor_request_claims;
 use crate::jwt::verify_jwt_async;
 use crate::types::{ExecutionRequest, ExecutionStatus, RunSummary};
 use flow_like::flow::execution::rejection::RejectionStage;
-use flow_like::flow::execution::{InternalRun, LogLevel, RunPayload};
+use flow_like::flow::execution::{InternalRun, LogLevel, PendingRunLogs, RunPayload};
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::profile::Profile;
 use flow_like_types::intercom::{BufferedInterComHandler, InterComEvent};
@@ -123,6 +123,23 @@ fn fallback_error_message(error: &ExecutorError, is_page_execution: bool) -> Str
     }
 }
 
+async fn setup_rejection(
+    state: &Arc<flow_like::state::FlowLikeState>,
+    request: &ExecutionRequest,
+    run_id: &str,
+    error: ExecutorError,
+) -> StreamFailure {
+    let summary = crate::execute::record_executor_rejection(
+        state,
+        request,
+        run_id,
+        RejectionStage::Setup,
+        error.to_string(),
+    )
+    .await;
+    StreamFailure::rejected(error, RejectionStage::Setup, summary)
+}
+
 async fn send_fallback_failure(
     tx: &mpsc::Sender<StreamEvent>,
     run_id: &str,
@@ -137,7 +154,7 @@ async fn send_fallback_failure(
         "Streaming execution failed before the workflow could report a result"
     );
     let message = fallback_error_message(&failure.error, is_page_execution);
-    let _ = tx.try_send(error_event(&message));
+    send_bounded(tx, error_event(&message), run_id).await;
     let summary = RunSummary {
         log_level: Some(LogLevel::Fatal.to_u8()),
         ..failure.summary
@@ -155,7 +172,7 @@ async fn send_fallback_failure(
             serde_json::json!(stage.operation_id()),
         );
     }
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), tx.send(event)).await;
+    send_bounded(tx, event, run_id).await;
 }
 
 /// An execution that could not publish its normal terminal result. Recorded
@@ -281,8 +298,10 @@ async fn run_execution(
 
     let duration_ms = start.elapsed().as_millis() as u64;
 
+    // The stream must stay open until the post-completion work is done: a
+    // Lambda function is frozen once its response stream ends.
     match result {
-        Ok((status, summary, _output, error)) => {
+        Ok((status, summary, _output, error, post_completion)) => {
             config.record_completion(
                 match status {
                     ExecutionStatus::Completed => "completed",
@@ -291,17 +310,19 @@ async fn run_execution(
                 },
                 start.elapsed().as_secs_f64(),
             );
-            let _ = tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                tx.send(completed_event_with_error(
+            send_bounded(
+                &tx,
+                completed_event_with_error(
                     &run_id,
                     status,
                     duration_ms,
                     &summary,
                     error.as_deref(),
-                )),
+                ),
+                &run_id,
             )
             .await;
+            post_completion.finish(&run_id).await;
         }
         Err(failure) => {
             config.record_completion("error", start.elapsed().as_secs_f64());
@@ -330,49 +351,50 @@ async fn execute_inner(
         RunSummary,
         Option<serde_json::Value>,
         Option<String>,
+        PostCompletion,
     ),
     StreamFailure,
 > {
     let claims = verify_jwt_async(&request.executor_jwt).await?;
     let event = crate::execute::parse_event(request.event_json.as_deref())?;
-    let state = crate::execute::build_flow_state(
-        &request.credentials,
-        Some(crate::widgets::HubAccess::for_run(
-            &claims,
-            &request.executor_jwt,
-            request.profile.as_ref(),
-        )),
-    )
-    .await?;
+    // Independent of each other: the package downloads need nothing from the state.
+    let load_wasm = async {
+        match request.wasm_packages.as_ref() {
+            Some(wasm_packages) if !wasm_packages.is_empty() => {
+                crate::wasm_loader::load_wasm_packages(
+                    &request.app_id,
+                    &request.board_id,
+                    request.board_version,
+                    wasm_packages,
+                )
+                .await
+                .map(Some)
+            }
+            _ => Ok(None),
+        }
+    };
+    let (state, wasm_report) = tokio::try_join!(
+        crate::execute::build_flow_state(
+            &request.credentials,
+            Some(crate::widgets::HubAccess::for_run(
+                &claims,
+                &request.executor_jwt,
+                request.profile.as_ref(),
+            )),
+        ),
+        load_wasm
+    )?;
     let execution_environment = state.execution_environment;
 
     let mut wasm_nodes = Vec::new();
     let mut failed_wasm_package_ids = BTreeSet::new();
-
-    // Load WASM packages from presigned URLs if any are specified
-    if let Some(ref wasm_packages) = request.wasm_packages {
-        if !wasm_packages.is_empty() {
-            match crate::wasm_loader::load_wasm_packages(
-                &request.app_id,
-                &request.board_id,
-                request.board_version,
-                wasm_packages,
-            )
-            .await
-            {
-                Ok(report) => {
-                    tracing::info!(
-                        count = report.nodes.len(),
-                        "Loaded WASM nodes for streaming execution"
-                    );
-                    failed_wasm_package_ids = report.failed_package_ids;
-                    wasm_nodes = report.nodes;
-                }
-                Err(e) => {
-                    return Err(e.into());
-                }
-            }
-        }
+    if let Some(report) = wasm_report {
+        tracing::info!(
+            count = report.nodes.len(),
+            "Loaded WASM nodes for streaming execution"
+        );
+        failed_wasm_package_ids = report.failed_package_ids;
+        wasm_nodes = report.nodes;
     }
 
     state.node_registry.write().await.node_registry = crate::execute::request_registry(wasm_nodes);
@@ -516,16 +538,27 @@ async fn execute_inner(
 
     let context_token = Some(request.executor_jwt.clone());
 
-    let channel = crate::channel::build_run_channel(
+    let channel = match crate::channel::build_run_channel(
         request.channel.as_ref(),
         run_id,
         callback_url,
         context_token.as_deref(),
     )
     .await
-    .map_err(|e| ExecutorError::RunInit(e.to_string()))?;
+    {
+        Ok(channel) => channel,
+        Err(error) => {
+            return Err(setup_rejection(
+                &state,
+                request,
+                run_id,
+                ExecutorError::RunInit(error.to_string()),
+            )
+            .await);
+        }
+    };
 
-    let mut run = InternalRun::from_template(
+    let run = InternalRun::from_template(
         &request.app_id,
         template.clone(),
         event,
@@ -541,7 +574,15 @@ async fn execute_inner(
         Some(channel.clone()),
     )
     .await
-    .map_err(|e| ExecutorError::RunInit(e.to_string()))?;
+    .map_err(|e| ExecutorError::RunInit(e.to_string()));
+
+    let mut run = match run {
+        Ok(run) => run,
+        Err(error) => {
+            channel.close().await;
+            return Err(setup_rejection(&state, request, run_id, error).await);
+        }
+    };
 
     let payment_claims = verify_jwt_async(&request.executor_jwt).await?;
     if !request.shadow {
@@ -578,7 +619,13 @@ async fn execute_inner(
         channel.close().await;
         return Err(error.into());
     }
-    let mut quota_lease = crate::quota::begin(&quota_claims, &request.executor_jwt).await?;
+    let mut quota_lease = match crate::quota::begin(&quota_claims, &request.executor_jwt).await {
+        Ok(lease) => lease,
+        Err(error) => {
+            channel.close().await;
+            return Err(error.into());
+        }
+    };
     let cancellation = config.cancellation().unwrap_or_default();
     run.set_cancellation_token(cancellation.clone());
     run.set_cancellation_log(
@@ -597,38 +644,30 @@ async fn execute_inner(
         .unwrap_or_else(|| tokio::time::Instant::now() + runtime_timeout)
         .min(tokio::time::Instant::now() + runtime_timeout);
     let execution_result =
-        execute_until_deadline(run.execute(state.clone()), &cancellation, deadline).await;
+        execute_until_deadline(run.execute_deferred(state.clone()), &cancellation, deadline).await;
     let lease_duration_ms = quota_lease.as_ref().map(|lease| lease.elapsed_ms());
     // The run's last events (a chat's Push Response and chat_out) are still
-    // buffered; deliver them before anything below can return early.
+    // buffered; deliver them before the terminal event.
     flush_stream_tail(&intercom_handler).await;
-    if let (Some(lease), Some(duration_ms)) = (&quota_lease, lease_duration_ms) {
-        let status = if execution_result.is_err() {
-            "timeout".to_owned()
-        } else {
-            format!(
-                "{:?}",
-                ExecutionStatus::from_final_run_status(&run.get_status().await)
-            )
-            .to_lowercase()
-        };
-        if let Err(error) = lease.finish(duration_ms, &status).await {
-            channel.close().await;
-            let (Ok(log_meta) | Err(log_meta)) = &execution_result;
-            return Err(StreamFailure {
-                error,
-                rejection: None,
-                summary: log_meta.as_ref().map(RunSummary::from).unwrap_or_default(),
-            });
-        }
-    }
+    let final_status = ExecutionStatus::from_final_run_status(&run.get_status().await);
+    let settlement = quota_lease
+        .zip(lease_duration_ms)
+        .map(|(lease, duration_ms)| LeaseSettlement {
+            lease,
+            duration_ms,
+            status: if execution_result.is_err() {
+                "timeout".to_owned()
+            } else {
+                format!("{final_status:?}").to_lowercase()
+            },
+        });
     channel.close().await;
 
     match execution_result {
-        Ok(log_meta) => {
+        Ok((log_meta, pending_logs)) => {
             let summary = log_meta.as_ref().map(RunSummary::from).unwrap_or_default();
 
-            let status = ExecutionStatus::from_final_run_status(&run.get_status().await);
+            let status = final_status;
             let (event_type, message, error) = match &status {
                 ExecutionStatus::Completed => ("log", "Execution completed", None),
                 ExecutionStatus::Cancelled => (
@@ -647,15 +686,25 @@ async fn execute_inner(
                     ),
                 ),
             };
-            emit_event(tx, event_type, serde_json::json!({ "message": message }));
-            Ok((status, summary, None, error))
+            let payload = serde_json::json!({ "message": message });
+            if event_type == "error" {
+                send_bounded(tx, InterComEvent::with_type(event_type, payload), run_id).await;
+            } else {
+                emit_event(tx, event_type, payload);
+            }
+            Ok((
+                status,
+                summary,
+                None,
+                error,
+                PostCompletion {
+                    pending_logs,
+                    settlement,
+                },
+            ))
         }
-        Err(log_meta) => {
-            emit_event(
-                tx,
-                "error",
-                serde_json::json!({ "message": "Execution timeout" }),
-            );
+        Err((log_meta, pending_logs)) => {
+            send_bounded(tx, error_event("Execution timeout"), run_id).await;
             Ok((
                 ExecutionStatus::Failed,
                 RunSummary {
@@ -664,6 +713,10 @@ async fn execute_inner(
                 },
                 None,
                 Some("Execution timeout".to_string()),
+                PostCompletion {
+                    pending_logs,
+                    settlement,
+                },
             ))
         }
     }
@@ -671,6 +724,64 @@ async fn execute_inner(
 
 fn emit_event(tx: &mpsc::Sender<StreamEvent>, event_type: &str, payload: serde_json::Value) {
     let _ = tx.try_send(InterComEvent::with_type(event_type, payload));
+}
+
+/// Terminal and error events must not be lost to a momentarily full channel.
+async fn send_bounded(tx: &mpsc::Sender<StreamEvent>, event: StreamEvent, run_id: &str) {
+    let event_type = event.event_type.clone();
+    match tokio::time::timeout(STREAM_TAIL_TIMEOUT, tx.send(event)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(_)) => tracing::warn!(
+            run_id,
+            %event_type,
+            "Stream event not delivered: the client disconnected"
+        ),
+        Err(_) => tracing::error!(
+            run_id,
+            %event_type,
+            timeout_secs = STREAM_TAIL_TIMEOUT.as_secs(),
+            "Stream event not delivered: the client did not drain the stream in time"
+        ),
+    }
+}
+
+struct LeaseSettlement {
+    lease: crate::quota::RuntimeLease,
+    duration_ms: u64,
+    status: String,
+}
+
+/// Work that runs after `completed` was sent. It can no longer change the
+/// outcome the client saw, so failures are only logged.
+struct PostCompletion {
+    pending_logs: PendingRunLogs,
+    settlement: Option<LeaseSettlement>,
+}
+
+impl PostCompletion {
+    async fn finish(self, run_id: &str) {
+        let PostCompletion {
+            pending_logs,
+            settlement,
+        } = self;
+        let persist = async {
+            if let Err(error) = pending_logs.persist().await {
+                tracing::error!(run_id, %error, "Failed to persist run logs after completion");
+            }
+        };
+        let settle = async {
+            if let Some(settlement) = &settlement {
+                if let Err(error) = settlement
+                    .lease
+                    .finish(settlement.duration_ms, &settlement.status)
+                    .await
+                {
+                    tracing::error!(run_id, %error, "Failed to settle the runtime lease after completion");
+                }
+            }
+        };
+        tokio::join!(persist, settle);
+    }
 }
 
 #[cfg(test)]
@@ -733,6 +844,20 @@ mod tests {
         );
         assert_eq!(event.payload["logs"], 7);
         assert_eq!(event.payload["error_message"], "Execution timeout");
+    }
+
+    #[tokio::test]
+    async fn bounded_send_waits_for_a_full_channel_instead_of_dropping_the_event() {
+        let (tx, mut rx) = mpsc::channel::<StreamEvent>(1);
+        tx.try_send(error_event("first")).unwrap();
+        let sender = tokio::spawn({
+            let tx = tx.clone();
+            async move { send_bounded(&tx, error_event("second"), "run-1").await }
+        });
+        tokio::task::yield_now().await;
+        assert_eq!(rx.recv().await.unwrap().payload["message"], "first");
+        sender.await.unwrap();
+        assert_eq!(rx.recv().await.unwrap().payload["message"], "second");
     }
 
     #[tokio::test]

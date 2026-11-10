@@ -3,7 +3,7 @@ use flow_like::flow_like_storage::{
     databases::vector::lancedb::connect_lance, object_store::memory::InMemory,
 };
 use flow_like_bot_tools::{Status, ToolImage, ToolOutput};
-use flow_like_types::{create_id, tokio};
+use flow_like_types::{bot_restrictions::BotScopes, create_id, tokio};
 use serde_json::json;
 use std::sync::Mutex;
 
@@ -53,6 +53,7 @@ struct TestHost {
     stores: HashMap<String, FlowLikeStore>,
     connection: Connection,
     secrets: Mutex<HashMap<String, String>>,
+    attachments: Mutex<Vec<AttachmentManifestEntry>>,
     _dir: std::path::PathBuf,
 }
 
@@ -77,8 +78,27 @@ impl TestHost {
             stores,
             connection,
             secrets: Mutex::default(),
+            attachments: Mutex::default(),
             _dir: dir,
         })
+    }
+
+    /// Attaches a file kept on this device to the message being answered, as the chat does.
+    fn attach(&self, name: &str, mime: &str, content: &str) -> AttachmentManifestEntry {
+        let path = self._dir.join(name);
+        std::fs::write(&path, content).unwrap();
+        let entry = AttachmentManifestEntry {
+            name: Some(name.to_string()),
+            mime_type: Some(mime.to_string()),
+            size: Some(content.len() as u64),
+            url: Some(format!(
+                "asset://localhost/{}",
+                urlencoding::encode(path.to_str().unwrap())
+            )),
+            ..Default::default()
+        };
+        self.attachments.lock().unwrap().push(entry.clone());
+        entry
     }
 
     async fn put(&self, app_id: &str, path: &str, content: &str) {
@@ -139,6 +159,19 @@ impl ToolHost for TestHost {
                 description: None,
             })
             .collect())
+    }
+
+    async fn conversation_file(
+        &self,
+        conversation_id: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> Result<Option<FileData>> {
+        if conversation_id != CHAT_FILES {
+            return Ok(None);
+        }
+        let attachments = self.attachments.lock().unwrap().clone();
+        read_chat_file(&attachments, path, max_bytes).await.map(Some)
     }
 }
 
@@ -210,6 +243,37 @@ async fn files_of_local_and_account_apps_resolve_inside_the_scope_only() {
 
     let listed = call(&env, "file_list", json!({"app_id": ACCOUNT_APP})).await;
     assert_eq!(listed["files"][0]["path"], "notes/b.txt");
+}
+
+#[tokio::test]
+async fn a_file_attached_to_the_message_is_read_through_its_handle_while_it_is_answered() {
+    let host = TestHost::new().await;
+    let entry = host.attach("scan notes.txt", "text/plain", "Invoice 4711");
+    let handle = super::super::copilot::chat_file_handle(&entry).unwrap();
+    assert_eq!(handle.app_id, "conversation_chat");
+    let env = env_for(&host, &bot(&[BotCapability::Storage]));
+
+    let read = call(&env, "file_read", json!({ "file": handle })).await;
+    assert_eq!(read["status"], "ok", "{read}");
+    assert_eq!(read["text"], "Invoice 4711");
+
+    let saved = call(&env, "file_save", json!({ "file": handle })).await;
+    assert_eq!(saved["status"], "ok", "{saved}");
+    assert_eq!(
+        host.text(WORKSPACE, "bot/files/scan notes.txt").await.as_deref(),
+        Some("Invoice 4711")
+    );
+
+    host.attachments.lock().unwrap().clear();
+    let later = call(&env, "file_read", json!({ "file": handle })).await;
+    assert_eq!(later["status"], "error");
+    assert!(
+        later["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not attached to the message being answered"),
+        "{later}"
+    );
 }
 
 #[tokio::test]
@@ -420,4 +484,192 @@ async fn the_browser_and_the_computer_exist_only_where_the_machine_hands_them_ou
     for tool in ["browser_open", "computer_act", "computer_wait"] {
         assert_eq!(tools.runs(tool), desktop, "{tool}");
     }
+}
+
+fn only(permissions: &[BotPermission]) -> BotRestrictions {
+    BotRestrictions {
+        permissions: Some(permissions.to_vec()),
+        scopes: BotScopes::default(),
+    }
+}
+
+fn restricted_env(
+    host: &Arc<TestHost>,
+    bot: &BotRunContext,
+    room: Option<&BotRoomLimits>,
+    held: &[(&str, BotRestrictions)],
+) -> DesktopToolEnv {
+    let rights: RightsMap = [LOCAL_APP, ACCOUNT_APP, STRANGER]
+        .into_iter()
+        .map(|app| {
+            let restrictions = held
+                .iter()
+                .find(|(id, _)| *id == app)
+                .map(|(_, restrictions)| restrictions.clone())
+                .unwrap_or_default();
+            (app.to_string(), rights_of(app, &restrictions, room))
+        })
+        .collect();
+    DesktopToolEnv::new(
+        host.clone(),
+        scope_with(bot, Some(&rights)),
+        Arc::new(MemorySessions::default()),
+        CancellationToken::new(),
+        false,
+    )
+    .with_rights(Some(rights))
+}
+
+#[tokio::test]
+async fn a_bot_with_files_off_reads_no_files_of_that_app_but_keeps_its_tables() {
+    let host = TestHost::new().await;
+    host.put(LOCAL_APP, "a.txt", "secret").await;
+    host.put(ACCOUNT_APP, "a.txt", "open").await;
+    let granted = bot(&[
+        BotCapability::Storage,
+        BotCapability::DataStudio,
+        BotCapability::SelectedApps,
+    ]);
+    let env = restricted_env(
+        &host,
+        &granted,
+        None,
+        &[(LOCAL_APP, only(&[BotPermission::ReadDatabase]))],
+    );
+
+    assert!(env.read_file(LOCAL_APP, "a.txt", 100).await.is_err());
+    assert!(env.stat_file(LOCAL_APP, "a.txt").await.is_err());
+    assert!(env.list_files(LOCAL_APP, "", 10).await.is_err());
+    assert!(env.app_tables(LOCAL_APP).await.is_ok());
+    assert!(env.read_file(ACCOUNT_APP, "a.txt", 100).await.unwrap().is_some());
+    let refused = call(
+        &env,
+        "file_read",
+        json!({"file": format!("app:{LOCAL_APP}/a.txt")}),
+    )
+    .await;
+    assert_eq!(refused["status"], "error");
+}
+
+#[tokio::test]
+async fn a_bot_with_the_database_off_reaches_no_tables_of_that_app() {
+    let host = TestHost::new().await;
+    host.put(LOCAL_APP, "a.txt", "x").await;
+    let granted = bot(&[
+        BotCapability::Storage,
+        BotCapability::DataStudio,
+        BotCapability::SelectedApps,
+    ]);
+    let neither = only(&[BotPermission::ReadBoards]);
+    let env = restricted_env(&host, &granted, None, &[(LOCAL_APP, neither)]);
+    assert!(env.app_tables(LOCAL_APP).await.is_err());
+    assert!(env.read_file(LOCAL_APP, "a.txt", 100).await.is_err());
+    assert!(env.scope().grant(LOCAL_APP).is_none());
+    assert!(env.app_tables(ACCOUNT_APP).await.is_ok());
+
+    let mut no_tables = only(&[BotPermission::ReadFiles]);
+    no_tables.scopes.tables = Some(Vec::new());
+    let env = restricted_env(&host, &granted, None, &[(LOCAL_APP, no_tables)]);
+    assert!(env.app_tables(LOCAL_APP).await.is_err());
+    assert!(env.read_file(LOCAL_APP, "a.txt", 100).await.unwrap().is_some());
+}
+
+#[test]
+fn the_rooms_app_limit_and_mask_narrow_what_the_bot_holds() {
+    let open = BotRestrictions::default();
+    let apps_limit = BotRoomLimits {
+        apps: Some(vec![LOCAL_APP.to_string()]),
+        ..Default::default()
+    };
+    assert_eq!(
+        rights_of(LOCAL_APP, &open, Some(&apps_limit)),
+        AppRights {
+            files: true,
+            tables: true
+        }
+    );
+    assert_eq!(
+        rights_of(ACCOUNT_APP, &open, Some(&apps_limit)),
+        AppRights {
+            files: false,
+            tables: false
+        }
+    );
+    let mask_limit = BotRoomLimits {
+        mask: Some(BotPermission::ReadDatabase.bit()),
+        ..Default::default()
+    };
+    assert_eq!(
+        rights_of(LOCAL_APP, &open, Some(&mask_limit)),
+        AppRights {
+            files: false,
+            tables: true
+        }
+    );
+}
+
+#[test]
+fn the_scope_leaves_out_apps_without_rights_and_apps_the_resolver_did_not_name() {
+    let granted = bot(&[BotCapability::Storage, BotCapability::SelectedApps]);
+    let rights: RightsMap = [(
+        LOCAL_APP.to_string(),
+        AppRights {
+            files: false,
+            tables: false,
+        },
+    )]
+    .into();
+    assert!(scope_with(&granted, Some(&rights)).apps.is_empty());
+    assert_eq!(scope_with(&granted, None).apps.len(), 2);
+    assert!(scope_with(&granted, Some(&RightsMap::new())).apps.is_empty());
+}
+
+#[test]
+fn a_bot_held_on_this_device_is_not_offered_mail_or_people_tools() {
+    let tools = without_hub_tools(HostTools::linked());
+    for tool in ["email_send", "email_reply", "list_people", "message_person"] {
+        assert!(!tools.runs(tool), "{tool}");
+    }
+    assert!(tools.runs("file_read"));
+}
+
+#[test]
+fn resolved_rights_are_reused_inside_their_lifetime_and_the_cache_is_bounded() {
+    let cache = RightsCache::default();
+    let start = Instant::now();
+    assert!(cache.fresh("k", start).is_none());
+    let rights: RightsMap = [(
+        LOCAL_APP.to_string(),
+        AppRights {
+            files: true,
+            tables: false,
+        },
+    )]
+    .into();
+    cache.store("k".into(), rights.clone(), start);
+    assert_eq!(cache.fresh("k", start + Duration::from_secs(29)), Some(rights));
+    assert!(cache.fresh("k", start + RIGHTS_TTL).is_none());
+    assert!(cache.fresh("other", start).is_none());
+    for index in 0..(RIGHTS_CAPACITY * 2) {
+        cache.store(format!("bot-{index}"), RightsMap::new(), start);
+    }
+    assert!(cache.entries.lock().unwrap().len() <= RIGHTS_CAPACITY);
+}
+
+#[test]
+fn only_a_non_blank_vision_pin_is_resolved() {
+    let mut context = bot(&[]);
+    assert_eq!(pinned_vision(&context), None);
+    context.vision_model = Some("  ".into());
+    assert_eq!(pinned_vision(&context), None);
+    context.vision_model = Some(" vision-a ".into());
+    assert_eq!(pinned_vision(&context), Some("vision-a"));
+}
+
+#[tokio::test]
+async fn a_vision_read_falls_back_to_the_turn_model_when_the_host_has_no_vision_model() {
+    let host = TestHost::new().await;
+    let env = env_for(&host, &bot(&[]));
+    let error = env.model(ModelRole::Vision).await.err().unwrap();
+    assert_eq!(error.to_string(), "no model in tests");
 }

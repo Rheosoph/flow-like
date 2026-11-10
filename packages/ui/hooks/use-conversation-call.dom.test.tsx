@@ -19,9 +19,36 @@ const mocks = vi.hoisted(() => ({
 	setLocalStreams: vi.fn(),
 	setAllowedPeers: vi.fn(),
 	disposeEngine: vi.fn(),
+	warmAudio: vi.fn(async () => {}),
+	warmListening: vi.fn(async () => {}),
+	cancelRun: vi.fn(async () => true),
+	posted: vi.fn(),
+	firstText: vi.fn(),
+	storeListeners: new Set<() => void>(),
+	storeState: { runs: {} as Record<string, unknown> },
+}));
+vi.mock("../state/global-chat/global-chat-stream", () => ({
+	cancelGlobalChatRun: mocks.cancelRun,
+}));
+vi.mock("../state/global-chat/global-chat-store", () => ({
+	useGlobalChatStore: {
+		getState: () => mocks.storeState,
+		subscribe: (listener: () => void) => {
+			mocks.storeListeners.add(listener);
+			return () => mocks.storeListeners.delete(listener);
+		},
+	},
+}));
+vi.mock("../lib/realtime/call-latency", () => ({
+	callLatency: {
+		transcriptPosted: mocks.posted,
+		firstText: mocks.firstText,
+	},
 }));
 vi.mock("../state/backend-state", () => {
-	const backend = { audioState: { transcribe: mocks.transcribe } };
+	const backend = {
+		audioState: { transcribe: mocks.transcribe, warm: mocks.warmAudio },
+	};
 	return { useBackend: () => backend };
 });
 vi.mock("./use-inbox", () => ({
@@ -30,6 +57,7 @@ vi.mock("./use-inbox", () => ({
 }));
 vi.mock("../lib/realtime/call-listener", () => ({
 	startCallListener: mocks.startCallListener,
+	warmCallListening: mocks.warmListening,
 }));
 vi.mock("../lib/realtime/conversation-call", async (importOriginal) => ({
 	...(await importOriginal<
@@ -45,6 +73,10 @@ vi.mock("../lib/realtime/conversation-call", async (importOriginal) => ({
 }));
 
 import { useBackend } from "../state/backend-state";
+import {
+	type VoiceTurnSender,
+	registerVoiceTurnSender,
+} from "../state/global-chat/voice-turn";
 import {
 	type ConversationCallState,
 	useConversationCall,
@@ -91,6 +123,11 @@ class FakeAudioContext extends EventTarget {
 		this.state = "closed";
 	});
 	decodeAudioData = vi.fn(async () => ({}));
+	currentTime = 0;
+	createGain = vi.fn(() => ({
+		...node(),
+		gain: { setTargetAtTime: vi.fn() },
+	}));
 	createMediaStreamSource = vi.fn(() => node());
 	createMediaStreamDestination = vi.fn(() => ({
 		...node(),
@@ -155,6 +192,8 @@ let retireScope: () => void;
 let speechModel: { bitId: string; route: "remote" } | null;
 let listener: {
 	setPaused: ReturnType<typeof vi.fn>;
+	setGuarded: ReturnType<typeof vi.fn>;
+	endBargeIn: ReturnType<typeof vi.fn>;
 	stop: ReturnType<typeof vi.fn>;
 };
 
@@ -173,9 +212,16 @@ beforeEach(() => {
 		configurable: true,
 		value: { getUserMedia },
 	});
-	listener = { setPaused: vi.fn(), stop: vi.fn() };
+	listener = {
+		setPaused: vi.fn(),
+		setGuarded: vi.fn(),
+		endBargeIn: vi.fn(),
+		stop: vi.fn(),
+	};
 	mocks.startCallListener.mockResolvedValue(listener);
 	mocks.sendEntry.mockResolvedValue(undefined);
+	mocks.storeState.runs = {};
+	mocks.storeListeners.clear();
 });
 
 afterEach(async () => {
@@ -188,7 +234,7 @@ afterEach(async () => {
 	vi.unstubAllGlobals();
 });
 
-async function setup() {
+async function setup(target: IConversation = conversation) {
 	const presence = awareness();
 	const room: ConversationRoom = {
 		awareness: presence.api,
@@ -200,7 +246,7 @@ async function setup() {
 	};
 	function Probe() {
 		latest = useConversationCall(
-			conversation,
+			target,
 			"me",
 			room,
 			undefined,
@@ -221,8 +267,8 @@ async function setup() {
 	return presence;
 }
 
-async function joined() {
-	const presence = await setup();
+async function joined(target?: IConversation) {
+	const presence = await setup(target);
 	await act(async () => {
 		await latest.join();
 	});
@@ -536,7 +582,12 @@ describe("call transcription delivery", () => {
 	});
 
 	test("a stale capture startup cannot replace the current listener", async () => {
-		const oldListener = { setPaused: vi.fn(), stop: vi.fn() };
+		const oldListener = {
+			setPaused: vi.fn(),
+			setGuarded: vi.fn(),
+			endBargeIn: vi.fn(),
+			stop: vi.fn(),
+		};
 		let finish!: (value: typeof oldListener) => void;
 		mocks.startCallListener.mockImplementationOnce(
 			() =>
@@ -615,7 +666,8 @@ describe("conversation call bot audio", () => {
 		]);
 		const { playback, source } = await play();
 		expect(source.start).toHaveBeenCalledOnce();
-		expect(listener.setPaused).toHaveBeenLastCalledWith(true);
+		expect(listener.setGuarded).toHaveBeenLastCalledWith(true);
+		expect(listener.setPaused).not.toHaveBeenCalledWith(true);
 		expect(localCall(presence)).toMatchObject({
 			listening: true,
 			muted: false,
@@ -660,7 +712,7 @@ describe("conversation call bot audio", () => {
 			});
 			presence.changed();
 		});
-		expect(listener.setPaused).toHaveBeenLastCalledWith(true);
+		expect(listener.setGuarded).toHaveBeenLastCalledWith(true);
 		expect(microphone.track.enabled).toBe(true);
 		expect(localCall(presence)).toMatchObject({
 			listening: true,
@@ -735,5 +787,429 @@ describe("conversation call bot audio", () => {
 		expect(contexts[0].close).toHaveBeenCalledOnce();
 		expect(microphone.track.stop).toHaveBeenCalledOnce();
 		expect(mocks.setLocalStreams).not.toHaveBeenCalled();
+	});
+});
+
+describe("interrupting bot speech", () => {
+	const utterance = {
+		samples: new Float32Array(16_000).fill(0.1),
+		offsetMs: 0,
+		durationMs: 1000,
+	};
+	const heard = { message_id: "msg_bot", heard_chars: 12, spoken_chars: 80 };
+	const remote = {
+		id: "call-one",
+		joined: true,
+		muted: false,
+		peer: "remote-peer",
+		voiceBots: ["bot"],
+	};
+	const control = (echo: string | null = null, record = heard) => ({
+		interrupt: vi.fn(() => record),
+		echoText: vi.fn(() => echo),
+	});
+	const bodyOf = (index: number) =>
+		mocks.sendEntry.mock.calls[index][0].request.envelope.body;
+
+	async function bargeIn(text: string, echo: string | null) {
+		const presence = await joined();
+		await listen();
+		const speech = control(echo);
+		await act(async () => latest.registerSpeechControl(speech));
+		await play();
+		const capture = mocks.startCallListener.mock.calls[0][2];
+		await act(async () => capture.onBargeInStart());
+		mocks.transcribe.mockResolvedValueOnce({ text });
+		await act(async () =>
+			capture.onBargeInProbe({ ...utterance, durationMs: 700 }),
+		);
+		return { presence, speech };
+	}
+
+	async function say(text: string, offsetMs: number) {
+		mocks.transcribe.mockResolvedValueOnce({ text });
+		await act(async () =>
+			mocks.startCallListener.mock.calls[0][1]({ ...utterance, offsetMs }),
+		);
+	}
+
+	test("talking over a bot interrupts it, and the next transcript carries what was heard, once", async () => {
+		const { speech } = await bargeIn("wait, stop", "The plan has three steps");
+		expect(speech.interrupt).toHaveBeenCalledOnce();
+		expect(listener.endBargeIn).toHaveBeenCalledWith(true);
+		await say("Please stop", 0);
+		await say("And another thing", 5000);
+		expect(bodyOf(0).interrupted).toEqual(heard);
+		expect(bodyOf(1).interrupted).toBeUndefined();
+	});
+
+	test("an echo of the bot's own words restores the volume and interrupts nothing", async () => {
+		const { speech } = await bargeIn(
+			"the plan has three",
+			"The plan has three steps",
+		);
+		expect(speech.interrupt).not.toHaveBeenCalled();
+		expect(listener.endBargeIn).toHaveBeenCalledWith(false);
+		await say("Hello", 0);
+		expect(bodyOf(0).interrupted).toBeUndefined();
+	});
+
+	test("silence from the speech model rejects the barge-in", async () => {
+		const { speech } = await bargeIn("", "The plan");
+		expect(speech.interrupt).not.toHaveBeenCalled();
+		expect(listener.endBargeIn).toHaveBeenCalledWith(false);
+	});
+
+	test("an interrupt older than thirty seconds is not attached", async () => {
+		await joined();
+		await listen();
+		await act(async () => latest.registerSpeechControl(control()));
+		await act(async () => latest.interruptSpeech());
+		await act(async () => {
+			vi.advanceTimersByTime(31_000);
+		});
+		await say("Hello", 0);
+		expect(bodyOf(0).interrupted).toBeUndefined();
+	});
+
+	test("the escape hatch stops locally played speech through the control", async () => {
+		await joined();
+		const speech = control();
+		await act(async () => latest.registerSpeechControl(speech));
+		await act(async () => latest.interruptSpeech());
+		expect(speech.interrupt).toHaveBeenCalledOnce();
+	});
+
+	test("a participant whose device is not playing asks the playing device and attaches its report", async () => {
+		const presence = await joined();
+		await listen();
+		await act(async () => {
+			presence.states.set(2, {
+				sub: "other",
+				call: { ...remote, speakingBot: "bot" },
+			});
+			presence.changed();
+		});
+		expect(latest.speakingBot).toBe("bot");
+		await act(async () => latest.interruptSpeech());
+		const request = (
+			presence.states.get(1) as {
+				call: { interruptBot?: { botId: string; at: number } };
+			}
+		).call.interruptBot;
+		expect(request?.botId).toBe("bot");
+		await act(async () => {
+			presence.states.set(2, {
+				sub: "other",
+				call: {
+					...remote,
+					interruptedSpeech: { ...heard, at: (request?.at ?? 0) + 40 },
+				},
+			});
+			presence.changed();
+		});
+		await say("Stop please", 0);
+		expect(bodyOf(0).interrupted).toEqual(heard);
+	});
+
+	test("the playing device stops for a newer remote request, reports it once and ignores replays", async () => {
+		const presence = await joined();
+		const speech = control();
+		await act(async () => latest.registerSpeechControl(speech));
+		const asking = {
+			sub: "other",
+			call: { ...remote, interruptBot: { botId: "bot", at: 50 } },
+		};
+		await act(async () => {
+			presence.states.set(2, asking);
+			presence.changed();
+		});
+		expect(speech.interrupt).toHaveBeenCalledWith({ botId: "bot", since: 50 });
+		const report = (
+			presence.states.get(1) as {
+				call: { interruptedSpeech?: Record<string, unknown> };
+			}
+		).call.interruptedSpeech;
+		expect(report).toMatchObject(heard);
+		expect(typeof report?.at).toBe("number");
+		await act(async () => {
+			presence.states.set(2, { ...asking });
+			presence.changed();
+		});
+		expect(speech.interrupt).toHaveBeenCalledOnce();
+	});
+
+	test("a request for a bot this device does not voice is ignored when nothing plays", async () => {
+		const presence = await joined();
+		const speech = {
+			interrupt: vi.fn(() => null),
+			echoText: vi.fn(() => null),
+		};
+		await act(async () => latest.registerSpeechControl(speech));
+		await act(async () => {
+			presence.states.set(2, {
+				sub: "other",
+				call: { ...remote, interruptBot: { botId: "bot", at: 50 } },
+			});
+			presence.changed();
+		});
+		expect(
+			(presence.states.get(1) as { call: Record<string, unknown> }).call
+				.interruptedSpeech,
+		).toBeUndefined();
+	});
+});
+
+describe("streaming voice turns", () => {
+	const directConversation = {
+		id: "conversation",
+		kind: "direct",
+		members: [
+			{ kind: "user", principal_id: "me" },
+			{ kind: "bot", principal_id: "bot" },
+		],
+	} as unknown as IConversation;
+	const utterance = {
+		samples: new Float32Array(16_000).fill(0.1),
+		offsetMs: 0,
+		durationMs: 1000,
+	};
+	let unregister: (() => void) | undefined;
+	afterEach(() => unregister?.());
+
+	function reply() {
+		return {
+			update: vi.fn(),
+			flush: vi.fn(),
+			end: vi.fn(),
+			cancel: vi.fn(),
+		};
+	}
+
+	function control(streamed: ReturnType<typeof reply> | null) {
+		return {
+			interrupt: vi.fn(() => null),
+			echoText: vi.fn(() => null),
+			stream: vi.fn(() => streamed),
+			pause: vi.fn(() => true),
+			resume: vi.fn(),
+		};
+	}
+
+	function sender(runId = "run-1") {
+		const done = Promise.withResolvers<"completed" | "failed" | "cancelled">();
+		const send = vi.fn<VoiceTurnSender>(async () => ({
+			runId,
+			done: done.promise,
+		}));
+		unregister = registerVoiceTurnSender("bot", send);
+		return { send, done };
+	}
+
+	async function ready(speech: ReturnType<typeof control>) {
+		await joined(directConversation);
+		await act(async () => latest.registerSpeechControl(speech));
+		await act(async () => latest.setListening(true));
+	}
+
+	async function say(text: string, offsetMs = 0) {
+		mocks.transcribe.mockResolvedValueOnce({ text });
+		await act(async () =>
+			mocks.startCallListener.mock.calls[0][1]({ ...utterance, offsetMs }),
+		);
+	}
+
+	async function setRun(runId: string, text: string, tool = false) {
+		mocks.storeState.runs = {
+			[runId]: {
+				message: { inner: { content: text }, current_step_id: tool ? "s" : "" },
+			},
+		};
+		await act(async () => {
+			for (const listener of mocks.storeListeners) listener();
+		});
+	}
+
+	test("the dock takes the turn: no plain transcript, text streams into the reply, done ends it", async () => {
+		const streamed = reply();
+		const speech = control(streamed);
+		const { send, done } = sender();
+		await ready(speech);
+		await say("Bot, what is next?");
+		expect(send).toHaveBeenCalledWith({
+			messageId: "message-id",
+			text: "Bot, what is next?",
+			transcript: {
+				call: "call-one",
+				offset_ms: 0,
+				duration_ms: 1000,
+				mentions: ["bot"],
+			},
+		});
+		expect(speech.stream).toHaveBeenCalledWith("message-id", "bot");
+		expect(mocks.sendEntry).not.toHaveBeenCalled();
+		expect(mocks.posted).toHaveBeenCalledWith(
+			"message-id",
+			expect.objectContaining({ route: "stream" }),
+		);
+		await setRun("run-1", "Next up");
+		expect(streamed.update).toHaveBeenLastCalledWith("Next up");
+		expect(mocks.firstText).toHaveBeenCalledWith("message-id");
+		await setRun("run-1", "Next up is");
+		expect(streamed.update).toHaveBeenLastCalledWith("Next up is");
+		await setRun("run-1", "Next up is", true);
+		expect(streamed.flush).toHaveBeenCalledOnce();
+		await act(async () => done.resolve("completed"));
+		expect(streamed.end).toHaveBeenCalledWith("Next up is");
+		expect(streamed.cancel).not.toHaveBeenCalled();
+		expect(mocks.storeListeners.size).toBe(0);
+	});
+
+	test("a failed run cancels the spoken reply", async () => {
+		const streamed = reply();
+		const { done } = sender();
+		await ready(control(streamed));
+		await say("Hello");
+		await setRun("run-1", "Hel");
+		await act(async () => done.resolve("failed"));
+		expect(streamed.cancel).toHaveBeenCalledOnce();
+		expect(streamed.end).not.toHaveBeenCalled();
+		expect(mocks.storeListeners.size).toBe(0);
+	});
+
+	test("when the dock does not take the turn the plain transcript is posted", async () => {
+		const streamed = reply();
+		const speech = control(streamed);
+		const send = vi.fn<VoiceTurnSender>(async () => null);
+		unregister = registerVoiceTurnSender("bot", send);
+		await ready(speech);
+		await say("Hello");
+		expect(send).toHaveBeenCalledOnce();
+		expect(speech.stream).not.toHaveBeenCalled();
+		expect(mocks.sendEntry).toHaveBeenCalledOnce();
+		expect(mocks.sendEntry.mock.calls[0][0].request.kind).toBe("transcript");
+		expect(mocks.posted).toHaveBeenCalledWith(
+			"message-id",
+			expect.objectContaining({ route: "queued" }),
+		);
+	});
+
+	test("without a registered sender the call behaves as before", async () => {
+		const speech = control(reply());
+		await ready(speech);
+		await say("Hello");
+		expect(speech.stream).not.toHaveBeenCalled();
+		expect(mocks.sendEntry).toHaveBeenCalledOnce();
+	});
+
+	test("a sender that throws falls back to the plain transcript once", async () => {
+		unregister = registerVoiceTurnSender("bot", async () => {
+			throw new Error("boom");
+		});
+		await ready(control(reply()));
+		await say("Hello");
+		expect(mocks.sendEntry).toHaveBeenCalledOnce();
+	});
+
+	test("a group conversation never uses the dock", async () => {
+		const { send } = sender();
+		await joined();
+		await act(async () => latest.registerSpeechControl(control(reply())));
+		await act(async () => latest.setListening(true));
+		await say("Hello");
+		expect(send).not.toHaveBeenCalled();
+		expect(mocks.sendEntry).toHaveBeenCalledOnce();
+	});
+
+	test("a new utterance cancels the run that still generates", async () => {
+		const first = reply();
+		const second = reply();
+		const speech = control(first);
+		speech.stream.mockReturnValueOnce(first).mockReturnValueOnce(second);
+		const done = Promise.withResolvers<"completed" | "failed" | "cancelled">();
+		let count = 0;
+		unregister = registerVoiceTurnSender("bot", async () => ({
+			runId: `run-${++count}`,
+			done: done.promise,
+		}));
+		await ready(speech);
+		await say("One");
+		await say("Two", 3000);
+		expect(mocks.cancelRun).toHaveBeenCalledWith("run-1");
+		expect(first.cancel).toHaveBeenCalledOnce();
+		expect(speech.stream).toHaveBeenCalledTimes(2);
+		expect(second.cancel).not.toHaveBeenCalled();
+	});
+
+	test("barge-in pauses, a confirmed one interrupts and cancels the run", async () => {
+		const streamed = reply();
+		const speech = control(streamed);
+		sender();
+		await ready(speech);
+		await say("Hello");
+		const capture = mocks.startCallListener.mock.calls[0][2];
+		await act(async () => capture.onBargeInStart());
+		expect(speech.pause).toHaveBeenCalledOnce();
+		mocks.transcribe.mockResolvedValueOnce({ text: "wait, stop" });
+		await act(async () =>
+			capture.onBargeInProbe({ ...utterance, durationMs: 700 }),
+		);
+		expect(speech.interrupt).toHaveBeenCalledOnce();
+		expect(speech.resume).not.toHaveBeenCalled();
+		expect(mocks.cancelRun).toHaveBeenCalledWith("run-1");
+		expect(streamed.cancel).toHaveBeenCalledOnce();
+	});
+
+	test("a rejected barge-in resumes the paused reply and leaves the run alone", async () => {
+		const streamed = reply();
+		const speech = control(streamed);
+		sender();
+		await ready(speech);
+		await say("Hello");
+		const capture = mocks.startCallListener.mock.calls[0][2];
+		await act(async () => capture.onBargeInStart());
+		mocks.transcribe.mockResolvedValueOnce({ text: "" });
+		await act(async () =>
+			capture.onBargeInProbe({ ...utterance, durationMs: 700 }),
+		);
+		expect(speech.resume).toHaveBeenCalledOnce();
+		expect(speech.interrupt).not.toHaveBeenCalled();
+		expect(mocks.cancelRun).not.toHaveBeenCalled();
+		expect(streamed.cancel).not.toHaveBeenCalled();
+	});
+
+	test("the manual interrupt cancels an unfinished run", async () => {
+		const streamed = reply();
+		sender();
+		await ready(control(streamed));
+		await say("Hello");
+		await act(async () => latest.interruptSpeech());
+		expect(mocks.cancelRun).toHaveBeenCalledWith("run-1");
+		expect(streamed.cancel).toHaveBeenCalledOnce();
+	});
+
+	test("joining warms the listener and the speech model", async () => {
+		await joined();
+		expect(mocks.warmListening).toHaveBeenCalled();
+		expect(mocks.warmAudio).toHaveBeenCalledWith({
+			stt: { bit_id: "stt-model", local: false },
+		});
+	});
+
+	test("local speech models get the raw bytes instead of base64", async () => {
+		speechModel = { bitId: "local-stt", route: "local" } as never;
+		mocks.transcribe.mockResolvedValue({ text: "hi" });
+		await joined();
+		await listen();
+		await act(async () => {
+			mocks.startCallListener.mock.calls[0][1](utterance);
+		});
+		expect(mocks.transcribe).toHaveBeenCalledWith(
+			expect.objectContaining({
+				audio_base64: "",
+				audio_bytes: expect.any(Uint8Array),
+				local: true,
+			}),
+		);
 	});
 });

@@ -12,6 +12,29 @@ function stream(chunks: string[]) {
 }
 
 describe("hosted execution stream", () => {
+	it("resolves at the terminal event without cancelling a stream the server keeps open", async () => {
+		const encoder = new TextEncoder();
+		let cancelled = 0;
+		let controller!: ReadableStreamDefaultController<Uint8Array>;
+		const body = new ReadableStream<Uint8Array>({
+			start(value) {
+				controller = value;
+			},
+			cancel() {
+				cancelled++;
+			},
+		});
+		controller.enqueue(
+			encoder.encode(
+				'data: {"event_type":"completed","payload":{"status":"completed"}}\n\n',
+			),
+		);
+		await consumeHostedStream(body);
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		expect(cancelled).toBe(0);
+		controller.close();
+	});
+
 	it("preserves token whitespace and terminal-batch events across split CRLF frames", async () => {
 		const events: unknown[] = [];
 		let runId: string | undefined;

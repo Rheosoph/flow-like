@@ -68,6 +68,30 @@ impl ModelSelection {
     }
 }
 
+/// Model selection ended without a model the asking host can run. A retry changes nothing:
+/// the profile needs another language model, or the caller another pick.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoRunnableModel {
+    /// Nothing the profile offers is available on the host.
+    InProfile,
+    /// The model the caller named needs a local completion runtime the host lacks.
+    Named { model_id: String },
+}
+
+impl std::fmt::Display for NoRunnableModel {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InProfile => formatter.write_str("No available model found in this profile"),
+            Self::Named { model_id } => write!(
+                formatter,
+                "Model {model_id} requires a local completion runtime that this host cannot execute"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for NoRunnableModel {}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Hash, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ConnectionMode {
@@ -431,9 +455,10 @@ impl Profile {
                 tracing::debug!(bit_id = %bit.id, "Falling back from unavailable model");
                 selection.unavailable_model = Some(bit.id);
             } else if !selection.admits(&bit) {
-                return Err(anyhow!(
-                    "Model {model_id} requires a local completion runtime that this host cannot execute"
-                ));
+                return Err(NoRunnableModel::Named {
+                    model_id: model_id.to_string(),
+                }
+                .into());
             } else {
                 return Ok(bit);
             }
@@ -636,7 +661,7 @@ impl Profile {
                 return Ok(bit);
             }
         }
-        Err(anyhow!("No available model found in this profile"))
+        Err(NoRunnableModel::InProfile.into())
     }
 
     /// Looks up a user-owned custom bit carried on this profile by id. Resolves
@@ -935,7 +960,7 @@ impl Profile {
 
 #[cfg(test)]
 mod tests {
-    use super::{Profile, ProfileCustomBit, split_profile_bit_reference};
+    use super::{NoRunnableModel, Profile, ProfileCustomBit, split_profile_bit_reference};
     use crate::{
         bit::{
             Bit, BitModelClassification, BitModelPreference, BitTypes, LLMParameters, VLMParameters,
@@ -1410,6 +1435,12 @@ mod tests {
                 .to_string()
                 .contains("requires a local completion runtime")
         );
+        assert_eq!(
+            error.downcast_ref::<NoRunnableModel>(),
+            Some(&NoRunnableModel::Named {
+                model_id: "local-model".to_string()
+            })
+        );
 
         let selected = profile
             .resolve_completion_model(
@@ -1444,6 +1475,10 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "No available model found in this profile"
+        );
+        assert_eq!(
+            error.downcast_ref::<NoRunnableModel>(),
+            Some(&NoRunnableModel::InProfile)
         );
     }
 

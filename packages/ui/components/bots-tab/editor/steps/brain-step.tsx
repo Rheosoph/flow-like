@@ -15,7 +15,11 @@ import { Textarea } from "../../../ui/textarea";
 import { BotNotice, BotStepPanel } from "../bot-editor-parts";
 import { BotDecisionModelField } from "./decision-model-field";
 import { BotModelPicker } from "./model-picker";
-import { type BotModelOption, useBotModelOptions } from "./use-bot-models";
+import {
+	type BotModelOption,
+	LLM_CATALOG,
+	useBotModelOptions,
+} from "./use-bot-models";
 
 function moveItem<T>(items: readonly T[], from: number, to: number): T[] {
 	const next = [...items];
@@ -85,6 +89,7 @@ export function BrainStep({
 					label={t("editor.brain.primary")}
 					value={model.primary}
 					options={options}
+					catalog={LLM_CATALOG}
 					fallback={{
 						label: t("editor.brain.automatic"),
 						hint: t("editor.brain.automaticHint"),
@@ -156,6 +161,7 @@ function FallbackList({
 									})}
 									value={id}
 									options={options}
+									catalog={LLM_CATALOG}
 									exclude={taken}
 									onChange={(next) =>
 										setFallbacks(
@@ -209,6 +215,7 @@ function FallbackList({
 					label={t("editor.brain.addFallback")}
 					value={null}
 					options={options}
+					catalog={LLM_CATALOG}
 					exclude={taken}
 					onChange={(id) => id && setFallbacks([...fallbacks, id])}
 					trigger={

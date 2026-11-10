@@ -87,6 +87,7 @@ export interface IInboxMessageBody {
 	approval_response?: IInboxApprovalResponse;
 	user_context_request?: IUserContextRequest;
 	user_context_response?: IUserContextResponse;
+	user_context_revoke?: IUserContextRevoke;
 	/** The note a bot reply wrote or changed; the text is only the owner's to read. */
 	note?: IBotNoteRef;
 }
@@ -130,6 +131,14 @@ export interface IUserContextResponse {
 	source: { session_id: string; platform: string };
 	values: Partial<Record<UserContextField, Record<string, unknown>>>;
 	unavailable: Partial<Record<UserContextField, string>>;
+}
+
+export interface IUserContextRevoke {
+	request_id: string;
+	bot_id: string;
+	subject_id: string;
+	conversation_id: string;
+	revoked_at: number;
 }
 
 /** The card a bot posts when a turn needs its owner to allow a call; `scope` is comma-joined, empty when the call is never remembered. */

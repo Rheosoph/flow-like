@@ -87,9 +87,10 @@ async function writeSeeds(sub: string, seeds: string[]): Promise<void> {
 }
 
 /** One tab at a time makes a key, so two tabs never publish different keys for one browser. */
-function exclusive<T>(work: () => Promise<T>): Promise<T> {
+async function exclusive<T>(work: () => Promise<T>): Promise<T> {
 	const locks = globalThis.navigator?.locks;
-	return locks ? locks.request(LOCK, work) : work();
+	if (!locks) return work();
+	return await locks.request(LOCK, work);
 }
 
 /**

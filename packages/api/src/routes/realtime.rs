@@ -47,6 +47,7 @@ use flow_like_types::{
     },
     tokio::time::{Duration, Instant, sleep_until, timeout},
 };
+use futures_util::StreamExt;
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter,
     QuerySelect, QueryTrait,
@@ -59,6 +60,7 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
+const REPLAY_CONCURRENCY: usize = 8;
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
 const MAX_RUN_UPDATE_BYTES: usize = 256 * 1024;
 /// Run status text beyond this many encoded bytes is cut, so a long run error
@@ -351,11 +353,32 @@ async fn replay_runs<R: AppRoles>(
     }
     let event_limit = MAX_REALTIME_EVENTS / subscriptions.len();
     let mut budget = ResponseBudget::new(response, subscriptions.len());
-    for subscription in subscriptions {
-        let outcome = match store {
-            Some(store) => replay_run(store, readers, subscription, event_limit, &mut budget).await,
-            None => Err(REALTIME_ERROR_UNAVAILABLE),
-        };
+    let readers = flow_like_types::tokio::sync::Mutex::new(readers);
+    // Built before the stream: a closure inside the stream's type makes the handler's
+    // future fail the `Send` check ("FnOnce is not general enough").
+    let fetches: Vec<_> = subscriptions
+        .iter()
+        .map(|subscription| {
+            let readers = &readers;
+            async move {
+                match store {
+                    Some(store) => {
+                        fetch_run_replay(store, readers, subscription, event_limit).await
+                    }
+                    None => Err(REALTIME_ERROR_UNAVAILABLE),
+                }
+            }
+        })
+        .collect();
+    let fetched: Vec<_> = futures_util::stream::iter(fetches)
+        .buffered(REPLAY_CONCURRENCY)
+        .collect()
+        .await;
+    for (subscription, fetched) in subscriptions.iter().zip(fetched) {
+        let outcome = fetched.and_then(|(run, replay)| {
+            run_update(&run, subscription, replay, &mut budget)
+                .map_err(|error| unavailable(&run.id, error))
+        });
         match outcome {
             // Consumers rotate run order between requests. A deferred run's
             // cursor stays unchanged and its events remain replayable.
@@ -369,16 +392,16 @@ async fn replay_runs<R: AppRoles>(
     }
 }
 
-/// One run's update, or the subscription error code it reports instead. Missing
-/// and forbidden runs have the same public response.
-async fn replay_run<R: AppRoles>(
+/// One run and its stored replay page, or the subscription error code reported instead.
+/// Missing and forbidden runs have the same public response. The response budget is applied
+/// afterwards in subscription order.
+async fn fetch_run_replay<R: AppRoles>(
     store: &dyn ExecutionStateStore,
-    readers: &mut RunReaders<'_, R>,
+    readers: &flow_like_types::tokio::sync::Mutex<&mut RunReaders<'_, R>>,
     subscription: &RealtimeRunSubscription,
     event_limit: usize,
-    budget: &mut ResponseBudget,
-) -> Result<Option<RealtimeRunUpdate>, &'static str> {
-    if !readers.runs_allowed {
+) -> Result<(ExecutionRunRecord, EventReplay), &'static str> {
+    if !readers.lock().await.runs_allowed {
         return Err(REALTIME_ERROR_NOT_FOUND);
     }
     let run = match store.get_run(&subscription.run_id).await {
@@ -386,10 +409,12 @@ async fn replay_run<R: AppRoles>(
         Ok(None) | Err(StateStoreError::NotFound) => return Err(REALTIME_ERROR_NOT_FOUND),
         Err(error) => return Err(unavailable(&subscription.run_id, error)),
     };
-    match readers
-        .may_read(&run, subscription.poll_token.as_deref())
+    let readable = readers
+        .lock()
         .await
-    {
+        .may_read(&run, subscription.poll_token.as_deref())
+        .await;
+    match readable {
         Ok(true) => {}
         Ok(false) => return Err(REALTIME_ERROR_NOT_FOUND),
         Err(error) => return Err(unavailable(&run.id, error)),
@@ -403,7 +428,7 @@ async fn replay_run<R: AppRoles>(
         .replay_events(&run.id, cursor)
         .await
         .map_err(|error| unavailable(&run.id, error))?;
-    run_update(&run, subscription, replay, budget).map_err(|error| unavailable(&run.id, error))
+    Ok((run, replay))
 }
 
 /// New entries of each subscribed conversation, read like `GET /inbox/conversations/{id}/entries`

@@ -4,16 +4,17 @@
 
 use super::{
     backends::{BotRoutes, HubMail, HubNotifier, HubPeople, HubScheduler, HubUserContext},
-    env::{DeviceToolEnv, HubSecrets, MachineBackends, Machines, PresignedAccess},
+    env::{
+        ConversationFiles, DeviceToolEnv, HubSecrets, MachineBackends, Machines, PresignedAccess,
+    },
     hub::{DeviceRunSpec, TurnCreds},
 };
 use async_trait::async_trait;
 use flow_like::{
     bit::Bit,
-    copilot::flowpilot_thinking,
     flow::copilot::{
         BotRunContext, BotToolHost, BotToolset, ChatMessage, HostTools, PlatformContextInput,
-        bot_platform_context,
+        bot_platform_context, bot_thinking,
         memory_open::{MemoryModels, open_headless_memory},
         platform::{PlatformToolBridge, RoomUpdatesBridge},
         run_bot_chat_with_talk,
@@ -27,13 +28,14 @@ use flow_like_bot_host::{
     host::{RunError, TurnJob, TurnRunner},
     hub::TurnHub,
 };
-use flow_like_bot_tools::MemorySessions;
+use flow_like_bot_tools::{LocalShell, MemorySessions, SandboxBackend, code::CatalogSandbox};
 use flow_like_bot_tools_host::{HostEnv, JobApp, JobScope, StateModels};
 use flow_like_types::{
     bot::BotCapability, data_classification::DataClassification, device_bot::DeviceTurnGrant,
 };
 use std::{
     collections::HashMap,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
@@ -47,7 +49,8 @@ pub const CODE_SETUP: &str = "BOT_TURN_SETUP";
 
 const TOOLS_NEEDING_UNLINKED_SERVICES: [&str; 13] = [
     // Device runtime tokens have no endpoint for an approved settings change or for managing
-    // the owner's bots.
+    // the owner's bots, for skills and connectors (those routes take a signed-in person), and
+    // the claim carries no image model for image_generate.
     "bot_configuration",
     "bot_models",
     "bot_update_configuration",
@@ -65,7 +68,7 @@ const TOOLS_NEEDING_UNLINKED_SERVICES: [&str; 13] = [
 
 const IDLE_SESSION: Duration = Duration::from_secs(60 * 60);
 
-const OWNER_ONLY_PEOPLE_TOOLS: [&str; 2] = ["list_people", "message_person"];
+const SESSION_POLL: Duration = Duration::from_secs(15);
 
 struct RunControl {
     stopped: Arc<AtomicBool>,
@@ -76,6 +79,7 @@ pub struct DeviceRunner {
     state: Arc<FlowLikeState>,
     base_url: String,
     machines: Option<Arc<dyn Machines>>,
+    shell_root: PathBuf,
     running: Mutex<HashMap<String, Arc<RunControl>>>,
     sessions: Mutex<HashMap<String, (Arc<MemorySessions>, Instant)>>,
 }
@@ -184,19 +188,39 @@ fn profile_of(grant: &DeviceTurnGrant) -> Result<(Profile, Bit, Option<Bit>), Ru
     Ok((profile, completion, embedding))
 }
 
-pub fn host_tools(machine: &MachineBackends, room_turn: bool) -> HostTools {
-    let mut tools = HostTools::linked();
+fn code_languages() -> Vec<String> {
+    CatalogSandbox::shared()
+        .languages()
+        .into_iter()
+        .map(|language| language.id)
+        .collect()
+}
+
+/// One working directory per bot under the device's state directory; the workspace's files are
+/// mirrored into it for the run.
+fn shell_dir(state_dir: &Path, bot_id: &str) -> PathBuf {
+    let name: String = bot_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    state_dir.join("bot-shell").join(name)
+}
+
+pub fn host_tools(machine: &MachineBackends) -> HostTools {
+    let mut tools = HostTools::linked()
+        .with_code_languages(&code_languages())
+        .with_shell(true);
     if machine.browser.is_some() || machine.computer.is_some() {
         tools = tools.with_local_machine();
     }
-    let people: &[&str] = if room_turn {
-        &OWNER_ONLY_PEOPLE_TOOLS
-    } else {
-        &[]
-    };
     TOOLS_NEEDING_UNLINKED_SERVICES
         .iter()
-        .chain(people)
         .fold(tools, |tools, name| tools.without(name))
 }
 
@@ -280,6 +304,8 @@ fn context_of(grant: &DeviceTurnGrant, job: &TurnJob, tools: HostTools) -> BotRu
         skills_ranked: false,
         requester,
         acknowledgement: job.acknowledgement,
+        live_call: job.live_call,
+        tool_gate: job.tool_gate.clone(),
         ephemeral_user_context: job.ephemeral_user_context,
         suppress_owner_notifications: job.suppress_owner_notifications,
         permissions: Default::default(),
@@ -294,11 +320,13 @@ impl DeviceRunner {
         state: Arc<FlowLikeState>,
         base_url: String,
         machines: Option<Arc<dyn Machines>>,
+        state_dir: &Path,
     ) -> Self {
         Self {
             state,
             base_url,
             machines,
+            shell_root: state_dir.to_path_buf(),
             running: Mutex::default(),
             sessions: Mutex::default(),
         }
@@ -345,7 +373,13 @@ impl DeviceRunner {
             .bot
             .workspace_app_id
             .clone()
-            .or_else(|| grant.bot.capabilities.contains(&BotCapability::UserContext).then(String::new))
+            .or_else(|| {
+                grant
+                    .bot
+                    .capabilities
+                    .contains(&BotCapability::UserContext)
+                    .then(String::new)
+            })
             .ok_or_else(|| setup("The bot has no workspace app yet"))?;
         let models = Arc::new(StateModels {
             state: self.state.clone(),
@@ -369,6 +403,8 @@ impl DeviceRunner {
             bot_id: grant.bot.bot_id.clone(),
             conversation_id: Some(grant.conversation.id.clone()),
         };
+        let shell_dir = shell_dir(&self.shell_root, &grant.bot.bot_id);
+        let files_hub = routes.hub.clone();
         Ok(Arc::new(move |expensive_documents| {
             let env = HostEnv::new(&workspace, &scope, access.clone(), models.clone())
                 .with_expensive_documents(expensive_documents)
@@ -379,7 +415,11 @@ impl DeviceRunner {
                 .with_people(Arc::new(HubPeople(routes.clone())))
                 .with_user_context(Arc::new(HubUserContext(routes.clone())))
                 .with_mail(Arc::new(HubMail(routes.clone())));
-            Arc::new(DeviceToolEnv::new(env, machine.clone()))
+            Arc::new(
+                DeviceToolEnv::new(env, machine.clone())
+                    .with_shell(Arc::new(LocalShell::new(shell_dir.clone())))
+                    .with_conversation_files(ConversationFiles::new(files_hub.clone())),
+            )
         }))
     }
 
@@ -491,7 +531,10 @@ impl TurnRunner for DeviceRunner {
         let (profile, completion, embedding) = profile_of(grant)?;
         let profile = Arc::new(profile);
         let machine = self.machine_for(grant);
-        let tools = host_tools(&machine, grant.conversation.kind != "direct");
+        let mut tools = host_tools(&machine);
+        if let Some(trail) = &job.trail {
+            tools = tools.with_trail(trail.clone());
+        }
         let mut context = context_of(grant, &job, tools);
         let access = Arc::new(PresignedAccess::new(
             reqwest::Client::new(),
@@ -526,9 +569,18 @@ impl TurnRunner for DeviceRunner {
         let mut prompt = job.prompt.clone();
         let mut extra = String::new();
         if let Some(memory) = &memory {
-            history = memory.history();
-            prompt = memory.prompt().to_string();
+            if !job.ephemeral_user_context {
+                history = memory.history();
+                prompt = memory.prompt().to_string();
+            }
             extra = format!("\n\n{}", memory.context());
+            if let Some(shared) = job
+                .shared_context
+                .as_ref()
+                .filter(|_| !job.ephemeral_user_context)
+            {
+                extra.push_str(&format!("\n\n{shared}"));
+            }
         }
         let platform = bot_platform_context(
             &context,
@@ -561,16 +613,35 @@ impl TurnRunner for DeviceRunner {
             None,
             history,
             Some(grant.models.model_id.clone()),
-            Some(flowpilot_thinking(None)),
+            Some(bot_thinking(job.live_call)),
             token,
             bridge,
             None,
             None::<fn(String)>,
             None,
         );
-        let outcome = tokio::select! {
-            outcome = chat => Some(outcome),
-            () = control.wake.notified() => None,
+        tokio::pin!(chat);
+        let mut poll = tokio::time::interval(SESSION_POLL);
+        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let outcome = loop {
+            tokio::select! {
+                outcome = &mut chat => break Some(outcome),
+                () = control.wake.notified() => break None,
+                _ = poll.tick() => {
+                    if spec.creds.session_lapsed() {
+                        control.stopped.store(true, Ordering::SeqCst);
+                        self.untrack(&job.run_id);
+                        return Err(if mutating.load(Ordering::SeqCst) {
+                            RunError::Failed {
+                                code: CODE_RUN_FAILED.into(),
+                                message: "The device's session with the hub lapsed during the turn".into(),
+                            }
+                        } else {
+                            RunError::SessionChanged
+                        });
+                    }
+                }
+            }
         };
         self.untrack(&job.run_id);
         match outcome {
@@ -642,5 +713,38 @@ impl DeviceRunner {
             .with_write_flag(mutating.clone());
         context.host_tools = memory.host_tools(std::mem::take(&mut context.host_tools));
         Some(memory)
+    }
+}
+
+#[cfg(test)]
+mod tool_tests {
+    use super::*;
+
+    fn offered() -> Vec<&'static str> {
+        host_tools(&MachineBackends::default()).names().collect()
+    }
+
+    #[test]
+    fn people_tools_are_left_to_the_core_owner_filter() {
+        let names = offered();
+        assert!(names.contains(&"list_people"));
+        assert!(names.contains(&"message_person"));
+    }
+
+    #[test]
+    fn the_shell_is_offered_and_tools_without_a_device_route_are_not() {
+        let names = offered();
+        assert!(names.contains(&"shell_run"));
+        for removed in TOOLS_NEEDING_UNLINKED_SERVICES {
+            assert!(!names.contains(&removed), "{removed}");
+        }
+    }
+
+    #[test]
+    fn shell_directories_are_one_confined_name_per_bot() {
+        assert_eq!(
+            shell_dir(Path::new("/state"), "a/../b"),
+            Path::new("/state/bot-shell/a____b")
+        );
     }
 }

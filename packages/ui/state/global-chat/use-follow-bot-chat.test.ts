@@ -3,6 +3,7 @@ import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, test } from "vitest";
 import { IRole } from "../../lib/schema/llm/history";
 import type { IInboxEntry } from "../backend-state/inbox-state";
+import { useBotHistoryStore } from "./bot-history-store";
 import { botConversationId } from "./global-chat-bots";
 import type { IMessage } from "./global-chat-db";
 import {
@@ -62,7 +63,13 @@ describe("following a bot chat", () => {
 	});
 
 	test("the reply the host stores while the answer still streams is not shown twice", () => {
-		const answer = message("run_1", IRole.Assistant, 2);
+		const answer: IMessage = {
+			...message("run_1", IRole.Assistant, 2),
+			run_context: {
+				schema: "flowpilot.run-context/v1",
+				user_message_id: "m1",
+			},
+		};
 		useGlobalChatStore.getState().startRun({
 			runId: answer.id,
 			conversationId: SESSION,
@@ -83,5 +90,33 @@ describe("following a bot chat", () => {
 		followPushedEntries(BOT, SESSION, [storedReply("m1")]);
 
 		expect(shownIds()).toEqual(["m1", "reply_m1"]);
+	});
+
+	test("a stored reply's note is kept by the message it answers", () => {
+		const note = {
+			key: "learning-path",
+			version: 2,
+			title: "IT-Sicherheit",
+			status: "Karte 3 von 20",
+		};
+		const noted = (replyTo: string, sender: string): IInboxEntry => ({
+			...storedReply(replyTo),
+			message_id: `${sender}_${replyTo}`,
+			sender_id: sender,
+			envelope: {
+				v: 1,
+				enc: "none",
+				body: { text: "Karte 3", reply_to: replyTo, note },
+			},
+		});
+
+		followPushedEntries(BOT, SESSION, [
+			noted("m1", BOT),
+			noted("m2", "person"),
+		]);
+
+		const { replyNotes } = useBotHistoryStore.getState();
+		expect(replyNotes.m1).toEqual(note);
+		expect(replyNotes.m2).toBeUndefined();
 	});
 });

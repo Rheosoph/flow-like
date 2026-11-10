@@ -34,20 +34,47 @@ fn attachments_json(files: &[MailFile]) -> Value {
     )
 }
 
+/// The `CODE` the hub's error body carried, as `hub_refusal` puts it after the status sentence.
+fn hub_code(message: &str) -> Option<&str> {
+    let (_, rest) = message.split_once("for this tool request. ")?;
+    let code = rest.split(": ").next()?;
+    (!code.is_empty() && code.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_'))
+        .then_some(code)
+}
+
+fn code_failure(code: &str, lowered: &str) -> Option<&'static str> {
+    match code {
+        "MAIL_NO_ADDRESS" | "NO_ADDRESS" => Some(failure::NO_ADDRESS),
+        "MAIL_NO_THREAD" | "NO_THREAD" => Some(failure::NO_THREAD),
+        "MAIL_LIMIT" | "TOO_MANY_REQUESTS" | "RATE_LIMITED" => Some(failure::LIMIT),
+        "NOT_FOUND" if lowered.contains("thread") => Some(failure::NO_THREAD),
+        "NOT_FOUND" | "SERVICE_UNAVAILABLE" | "ERROR" => Some(failure::UNAVAILABLE),
+        "BAD_REQUEST" | "FORBIDDEN" if lowered.contains("address") => Some(failure::NO_ADDRESS),
+        "BAD_REQUEST" | "FORBIDDEN" => Some(failure::REFUSED),
+        _ => None,
+    }
+}
+
 pub(crate) fn failure_of(message: &str) -> MailFailure {
     let lowered = message.to_ascii_lowercase();
-    let code =
-        if lowered.contains("429") || lowered.contains("limit") || lowered.contains("too many") {
-            failure::LIMIT
-        } else if lowered.contains("404") || lowered.contains("no mail thread") {
-            failure::NO_THREAD
-        } else if lowered.contains("no email address") || lowered.contains("no address") {
-            failure::NO_ADDRESS
-        } else if lowered.contains("400") || lowered.contains("403") {
-            failure::REFUSED
-        } else {
-            failure::UNAVAILABLE
-        };
+    let code = hub_code(message)
+        .and_then(|code| code_failure(code, &lowered))
+        .unwrap_or_else(|| {
+            if lowered.contains("429")
+                || lowered.contains("limit")
+                || lowered.contains("too many")
+            {
+                failure::LIMIT
+            } else if lowered.contains("404") || lowered.contains("no mail thread") {
+                failure::NO_THREAD
+            } else if lowered.contains("no email address") || lowered.contains("no address") {
+                failure::NO_ADDRESS
+            } else if lowered.contains("400") || lowered.contains("403") {
+                failure::REFUSED
+            } else {
+                failure::UNAVAILABLE
+            }
+        });
     MailFailure::new(code, message)
 }
 
@@ -211,5 +238,31 @@ mod tests {
         assert_eq!(backend.send(mail()).await.unwrap_err().code, failure::LIMIT);
         assert_eq!(failure_of("No mail thread 'x'").code, failure::NO_THREAD);
         assert_eq!(failure_of("boom").code, failure::UNAVAILABLE);
+    }
+
+    #[test]
+    fn the_hubs_error_code_decides_before_the_wording() {
+        let hub = |status: u16, text: &str| {
+            format!("The hub returned HTTP {status} for this tool request. {text}")
+        };
+        let code = |status, text: &str| failure_of(&hub(status, text)).code;
+        assert_eq!(
+            code(400, "BAD_REQUEST: The recipient has no address on file"),
+            failure::NO_ADDRESS
+        );
+        assert_eq!(code(400, "BAD_REQUEST: Subject is empty"), failure::REFUSED);
+        assert_eq!(
+            code(404, "NOT_FOUND: No mail thread 'x'"),
+            failure::NO_THREAD
+        );
+        assert_eq!(
+            code(404, "NOT_FOUND: Bot not found"),
+            failure::UNAVAILABLE
+        );
+        assert_eq!(
+            code(429, "TOO_MANY_REQUESTS: Slow down"),
+            failure::LIMIT
+        );
+        assert_eq!(code(400, "MAIL_NO_ADDRESS: x"), failure::NO_ADDRESS);
     }
 }

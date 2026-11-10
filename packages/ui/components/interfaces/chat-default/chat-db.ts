@@ -2,6 +2,7 @@ import Dexie, { type EntityTable } from "dexie";
 import type { IChatMessageError } from "../../../lib/flowpilot/chat-error";
 import type { IHistoryMessage } from "../../../lib/schema/llm/history";
 import { installRuntimeHistoryGuard } from "../../../lib/service-runtime/history-guard";
+import type { IBotNoteRef } from "../../../state/backend-state/bot-state";
 import type { IAgentDebugReport } from "../../../state/global-chat/agent-debug-report";
 import type { ConversationNote } from "../../bots-tab/fold-entries";
 import type { UserContextCardData } from "../../bots-tab/user-context-entry";
@@ -274,8 +275,12 @@ export interface IMessage {
 	userContext?: UserContextCardData;
 	/** Visible in the transcript; excluded from later model input and automatic references. */
 	userContextDerived?: boolean;
+	/** Id of the context request whose values the derived reply used. */
+	userContextDerivedFrom?: string;
 	/** Set on a line between messages: the message renders as a pill, without actions. */
 	notice?: IMessageNotice;
+	/** The bot note this reply was written with, from the bot's inbox. */
+	note?: IBotNoteRef;
 	id: string;
 	/** Original response slot, shared by every message emitted in one run. */
 	stream_root_id?: string;

@@ -6,6 +6,7 @@ import {
 	type UseDeclaration,
 	calleeOf,
 	expandUsePath,
+	useMemberNamed,
 } from "./flowDocument";
 import type { NodeSignature, SignatureRegistry } from "./signatures";
 
@@ -455,10 +456,11 @@ export function openedMembers(name: string, ctx: ResolveContext): NodeSignature[
 		if (use.kind !== "glob" && use.kind !== "members") {
 			continue;
 		}
-		if (use.kind === "members" && !use.members.includes(name)) {
+		const member = use.kind === "members" ? useMemberNamed(use, name) : name;
+		if (!member) {
 			continue;
 		}
-		const sig = ctx.registry.member(expandUsePath(use.path, ctx.uses), name);
+		const sig = ctx.registry.member(expandUsePath(use.path, ctx.uses), member);
 		if (sig && !out.includes(sig)) {
 			out.push(sig);
 		}

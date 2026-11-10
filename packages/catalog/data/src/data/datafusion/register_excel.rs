@@ -63,7 +63,7 @@ async fn extract_and_register(
         // Retry-safe: a previous partially-failed run may already have registered
         // some of the workbook's tables.
         let _ = session.ctx.deregister_table(
-            flow_like_storage::datafusion::common::TableReference::bare(name.clone()),
+            flow_like_storage::datafusion::common::TableReference::from(name.as_str()),
         );
         table.register_with_datafusion(&session.ctx, &name)?;
         context.log_message(

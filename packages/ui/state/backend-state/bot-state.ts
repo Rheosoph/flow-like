@@ -17,6 +17,7 @@ export const BOT_CAPABILITIES = [
 	"data_studio",
 	"memory",
 	"documents",
+	"barcodes",
 	"data_connections",
 	"knowledge",
 	"connectors",
@@ -49,13 +50,33 @@ export const LOCAL_ONLY_BOT_CAPABILITIES: readonly BotCapability[] = [
 	"encryption",
 ];
 
+/** A managed device has no route or key vault for these yet. */
+export const DEVICE_UNAVAILABLE_BOT_CAPABILITIES: readonly BotCapability[] = [
+	"connectors",
+	"skills",
+	"image_generation",
+	"encryption",
+];
+
 export function isBotCapabilityAvailable(
 	capability: BotCapability,
 	location: BotLocation,
 ): boolean {
-	return (
-		location !== "server" || !LOCAL_ONLY_BOT_CAPABILITIES.includes(capability)
-	);
+	if (location === "server") {
+		return !LOCAL_ONLY_BOT_CAPABILITIES.includes(capability);
+	}
+	if (location === "device") {
+		return !DEVICE_UNAVAILABLE_BOT_CAPABILITIES.includes(capability);
+	}
+	return true;
+}
+
+export function botCapabilityUnavailableReason(
+	capability: BotCapability,
+	location: BotLocation,
+): "local" | "device" | null {
+	if (isBotCapabilityAvailable(capability, location)) return null;
+	return location === "device" ? "device" : "local";
 }
 
 export type BotSystemKey = "general" | "flux";

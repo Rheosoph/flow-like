@@ -12,7 +12,7 @@ use flow_like_bot_tools::{
 };
 use flow_like_types::{
     Result, anyhow,
-    bot_task::{BotTask, CreateBotTask},
+    bot_task::{BotTask, CreateBotTask, UpdateBotTask},
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -100,6 +100,23 @@ impl Scheduler for HubScheduler {
         .map_err(|error| anyhow!("The hub sent unusable tasks: {error}"))
     }
 
+    async fn update(&self, task_id: &str, request: UpdateBotTask) -> Result<Option<BotTask>> {
+        if !self.list().await?.iter().any(|task| task.id == task_id) {
+            return Ok(None);
+        }
+        let body = serde_json::to_value(&request)
+            .map_err(|error| anyhow!("The task change could not be sent: {error}"))?;
+        let updated = self
+            .0
+            .hub
+            .patch(&self.0.path(&format!("tasks/{task_id}")), Vec::new(), body)
+            .await
+            .map_err(|failure| anyhow!("Changing task '{task_id}' failed: {failure}"))?;
+        serde_json::from_value(updated)
+            .map(Some)
+            .map_err(|error| anyhow!("The hub sent an unusable task: {error}"))
+    }
+
     async fn cancel(&self, task_id: &str) -> Result<bool> {
         if !self.list().await?.iter().any(|task| task.id == task_id) {
             return Ok(false);
@@ -119,19 +136,43 @@ pub struct HubUserContext(pub BotRoutes);
 
 #[async_trait]
 impl flow_like_bot_tools::user_context::UserContextBackend for HubUserContext {
-    async fn available(&self) -> Result<flow_like_bot_tools::user_context::UserContextAvailability> {
-        let room = self.0.conversation_id.as_ref().ok_or_else(|| anyhow!("User context needs a conversation"))?;
-        let answer = self.0.hub.read(&self.0.path("user-context/available"), vec![("conversation_id".into(), room.clone())])
-            .await.map_err(|error| anyhow!("Could not list context participants: {error}"))?;
+    async fn available(
+        &self,
+    ) -> Result<flow_like_bot_tools::user_context::UserContextAvailability> {
+        let room = self
+            .0
+            .conversation_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("User context needs a conversation"))?;
+        let answer = self
+            .0
+            .hub
+            .read(
+                &self.0.path("user-context/available"),
+                vec![("conversation_id".into(), room.clone())],
+            )
+            .await
+            .map_err(|error| anyhow!("Could not list context participants: {error}"))?;
         Ok(serde_json::from_value(answer)?)
     }
 
-    async fn request(&self, args: flow_like_bot_tools::user_context::UserContextRequestArgs) -> Result<flow_like_bot_tools::user_context::UserContextRequestReceipt> {
-        let room = self.0.conversation_id.as_ref().ok_or_else(|| anyhow!("User context needs a conversation"))?;
+    async fn request(
+        &self,
+        args: flow_like_bot_tools::user_context::UserContextRequestArgs,
+    ) -> Result<flow_like_bot_tools::user_context::UserContextRequestReceipt> {
+        let room = self
+            .0
+            .conversation_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("User context needs a conversation"))?;
         let mut body = serde_json::to_value(args)?;
         body["conversation_id"] = json!(room);
-        let answer = self.0.hub.write(&self.0.path("user-context/request"), Vec::new(), body)
-            .await.map_err(|error| anyhow!("Could not request user context: {error}"))?;
+        let answer = self
+            .0
+            .hub
+            .write(&self.0.path("user-context/request"), Vec::new(), body)
+            .await
+            .map_err(|error| anyhow!("Could not request user context: {error}"))?;
         Ok(serde_json::from_value(answer)?)
     }
 }
@@ -404,6 +445,18 @@ mod tests {
                 .push(("POST".into(), path.into(), body));
             self.next()
         }
+        async fn patch(
+            &self,
+            path: &str,
+            _: Vec<(&'static str, String)>,
+            body: Value,
+        ) -> Result<Value, HubFailure> {
+            self.0
+                .lock()
+                .unwrap()
+                .push(("PATCH".into(), path.into(), body));
+            self.next()
+        }
     }
 
     fn routes(calls: &Arc<Calls>) -> BotRoutes {
@@ -418,18 +471,26 @@ mod tests {
     async fn context_requests_keep_the_turn_room_and_wait_for_the_person() {
         use flow_like_bot_tools::user_context::{UserContextBackend, UserContextRequestArgs};
         let calls = Calls::answering(vec![
-            Ok(json!({"participants":[{"id":"person","name":"Person"}],"fields":["location"],"device_support":"unknown_until_shared"})),
-            Ok(json!({"request_id":"request","conversation_id":"conv","subject_id":"person","expires_at":12345})),
+            Ok(
+                json!({"participants":[{"id":"person","name":"Person"}],"fields":["location"],"device_support":"unknown_until_shared"}),
+            ),
+            Ok(
+                json!({"request_id":"request","conversation_id":"conv","subject_id":"person","expires_at":12345}),
+            ),
         ]);
         let backend = HubUserContext(routes(&calls));
-        assert_eq!(backend.available().await.unwrap().participants[0].id, "person");
+        assert_eq!(
+            backend.available().await.unwrap().participants[0].id,
+            "person"
+        );
         let args: UserContextRequestArgs = serde_json::from_value(json!({
             "subject_id":"person", "fields":["location"], "purpose":"Find a nearby cafe",
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(backend.request(args).await.unwrap().request_id, "request");
         let calls = calls.0.lock().unwrap();
         assert_eq!(calls[0].1, "bots/bot1/user-context/available");
-        assert_eq!(calls[0].2, json!([["conversation_id","conv"]]));
+        assert_eq!(calls[0].2, json!([["conversation_id", "conv"]]));
         assert_eq!(calls[1].1, "bots/bot1/user-context/request");
         assert_eq!(calls[1].2["conversation_id"], "conv");
         assert_eq!(calls[1].2["precision"], "approximate");
@@ -482,6 +543,36 @@ mod tests {
             );
             assert_eq!(body["monitoring"], monitoring);
         }
+    }
+
+    #[tokio::test]
+    async fn a_task_change_is_a_patch_of_only_what_was_given() {
+        let task = json!({
+            "id":"task1", "bot_id":"bot1", "kind":"once", "instruction":"New",
+            "title":"Report", "enabled":false, "created_by":"bot",
+            "created_at":"2026-11-08T12:00:00Z"
+        });
+        let calls = Calls::answering(vec![Ok(json!({ "tasks": [task.clone()] })), Ok(task)]);
+        let changed = HubScheduler(routes(&calls))
+            .update(
+                "task1",
+                flow_like_types::bot_task::UpdateBotTask {
+                    instruction: Some("New".into()),
+                    enabled: Some(false),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .expect("the task exists");
+        assert!(!changed.enabled);
+        let calls = calls.0.lock().unwrap();
+        assert_eq!(
+            (calls[1].0.as_str(), calls[1].1.as_str()),
+            ("PATCH", "bots/bot1/tasks/task1")
+        );
+        assert_eq!(calls[1].2["instruction"], "New");
+        assert_eq!(calls[1].2["enabled"], false);
     }
 
     #[tokio::test]

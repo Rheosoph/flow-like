@@ -1518,34 +1518,49 @@ impl ExecutionStateStore for DynamoDbStateStore {
         query: EventQuery,
     ) -> Result<Vec<ExecutionEventRecord>, StateStoreError> {
         let min_seq = query.after_sequence.map(|s| s + 1).unwrap_or(0);
+        let wanted = query.limit.map(|limit| usize::try_from(limit).unwrap_or(0));
+        let mut items = Vec::new();
+        let mut start_key = None;
 
-        let mut q = self
-            .client
-            .query()
-            .table_name(&self.events_table)
-            .index_name(RUN_INDEX)
-            .key_condition_expression("runId = :run_id AND #seq >= :min_seq")
-            .expression_attribute_names("#seq", "sequence")
-            .expression_attribute_values(":run_id", AttributeValue::S(query.run_id.clone()))
-            .expression_attribute_values(":min_seq", AttributeValue::N(min_seq.to_string()))
-            .scan_index_forward(true);
+        loop {
+            let mut q = self
+                .client
+                .query()
+                .table_name(&self.events_table)
+                .index_name(RUN_INDEX)
+                .key_condition_expression("runId = :run_id AND #seq >= :min_seq")
+                .expression_attribute_names("#seq", "sequence")
+                .expression_attribute_values(":run_id", AttributeValue::S(query.run_id.clone()))
+                .expression_attribute_values(":min_seq", AttributeValue::N(min_seq.to_string()))
+                .scan_index_forward(true)
+                .set_exclusive_start_key(start_key.take());
 
-        if query.only_undelivered {
-            q = q
-                .filter_expression("delivered = :delivered")
-                .expression_attribute_values(":delivered", AttributeValue::Bool(false));
+            if query.only_undelivered {
+                q = q
+                    .filter_expression("delivered = :delivered")
+                    .expression_attribute_values(":delivered", AttributeValue::Bool(false));
+            }
+
+            if let Some(wanted) = wanted {
+                q = q.limit(i32::try_from(wanted.saturating_sub(items.len())).unwrap_or(i32::MAX));
+            }
+
+            let result = q
+                .send()
+                .await
+                .map_err(|e| StateStoreError::Database(e.to_string()))?;
+
+            items.extend(result.items.unwrap_or_default());
+            start_key = result.last_evaluated_key;
+            if start_key.is_none() || wanted.is_some_and(|wanted| items.len() >= wanted) {
+                break;
+            }
         }
 
-        if let Some(limit) = query.limit {
-            q = q.limit(limit);
+        if let Some(wanted) = wanted {
+            items.truncate(wanted);
         }
-
-        let result = q
-            .send()
-            .await
-            .map_err(|e| StateStoreError::Database(e.to_string()))?;
-
-        self.hydrate_events(result.items.unwrap_or_default()).await
+        self.hydrate_events(items).await
     }
 
     /// `RunIdIndex` is eventually consistent and fed from many partitions, and a

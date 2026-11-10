@@ -3,6 +3,7 @@
 //! reference for every source) and `knowledge` (on-demand RAG indexes in the workspace).
 //! Contract: `todo/bots-capabilities/lanes/BOT-TOOLS.md`.
 
+pub mod barcode;
 pub mod browser;
 pub mod code;
 pub mod computer;
@@ -48,6 +49,7 @@ use std::time::Instant;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+pub use barcode::BarcodeReader;
 pub use browser::{BrowserBackend, BrowserStep, PageState};
 pub use code::{LanguageSupport, RunRequest, RunResponse, RunStatus, SandboxBackend};
 pub use computer::{ComputerAction, ComputerBackend, Screen};
@@ -115,8 +117,12 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         knowledge::KNOWLEDGE_DROP => knowledge::knowledge_drop(env, parse_args(tool, args)?).await,
         documents::FILE_SUMMARIZE => documents::file_summarize(env, parse_args(tool, args)?).await,
         documents::FILE_EXTRACT => documents::file_extract(env, parse_args(tool, args)?).await,
+        documents::FILE_EXTRACT_CONTENT => {
+            documents::file_extract_content(env, parse_args(tool, args)?).await
+        }
         code::CODE_RUN => code::code_run(env, parse_args(tool, args)?).await,
         image::IMAGE_GENERATE => image::image_generate(env, parse_args(tool, args)?).await,
+        barcode::BARCODE_READ => barcode::barcode_read(env, parse_args(tool, args)?).await,
         notify::MESSAGE_OWNER => notify::message_owner(env, parse_args(tool, args)?).await,
         people::LIST_PEOPLE => people::list_people(env, parse_args(tool, args)?).await,
         people::MESSAGE_PERSON => people::message_person(env, parse_args(tool, args)?).await,
@@ -157,6 +163,7 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         schedule::SCHEDULE_TASK => schedule::schedule_task(env, parse_args(tool, args)?).await,
         schedule::LIST_TASKS => schedule::list_tasks(env, parse_args(tool, args)?).await,
         schedule::CANCEL_TASK => schedule::cancel_task(env, parse_args(tool, args)?).await,
+        schedule::UPDATE_TASK => schedule::update_task(env, parse_args(tool, args)?).await,
         skills::SKILL_LOAD => skills::skill_load(env, parse_args(tool, args)?).await,
         skills::SKILL_PROPOSE => skills::skill_propose(env, parse_args(tool, args)?).await,
         skills::SKILL_CALL => skills::skill_call(env, parse_args(tool, args)?).await,

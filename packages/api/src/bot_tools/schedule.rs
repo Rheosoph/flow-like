@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use flow_like_bot_tools::Scheduler;
 use flow_like_types::{
     Result, anyhow,
-    bot_task::{BotTask, CreateBotTask, TaskCreator, TaskKind},
+    bot_task::{BotTask, CreateBotTask, TaskCreator, TaskKind, UpdateBotTask},
 };
 
 pub(crate) struct ApiScheduler {
@@ -77,6 +77,40 @@ impl Scheduler for ApiScheduler {
             .await
             .map_err(|error| anyhow!("{error}"))?;
         Ok(rows.into_iter().map(to_task).collect())
+    }
+
+    async fn update(&self, task_id: &str, request: UpdateBotTask) -> Result<Option<BotTask>> {
+        let result = self
+            .state
+            .transaction(|txn| {
+                let (owner, bot, task, request) = (
+                    self.owner_id.clone(),
+                    self.bot_id.clone(),
+                    task_id.to_string(),
+                    request.clone(),
+                );
+                Box::pin(async move {
+                    lock_bot(txn, &bot).await?;
+                    tasks::update_in(
+                        txn,
+                        &owner,
+                        &bot,
+                        &task,
+                        request,
+                        chrono::Utc::now().fixed_offset(),
+                    )
+                    .await
+                })
+            })
+            .await;
+        match result {
+            Ok(row) => {
+                task_schedules::sync(&self.state, &row).await;
+                Ok(Some(to_task(row)))
+            }
+            Err(error) if error.status() == axum::http::StatusCode::NOT_FOUND => Ok(None),
+            Err(error) => Err(anyhow!("{error}")),
+        }
     }
 
     async fn cancel(&self, task_id: &str) -> Result<bool> {

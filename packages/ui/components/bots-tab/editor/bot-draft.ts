@@ -151,7 +151,18 @@ export function botDraftOnDevice(draft: BotDraft, deviceId?: string): BotDraft {
 	return { ...setBotDraftLocation(draft, "device").draft, deviceId };
 }
 
+/** What a saved bot holds that its host can't serve; a save drops it, as the server refuses it. */
+export function heldUnavailableCapabilities(bot: IBot): BotCapability[] {
+	if (hasFlowPilot(bot)) return [];
+	return orderBotCapabilities(
+		bot.capabilities.filter(
+			(capability) => !isBotCapabilityAvailable(capability, bot.location),
+		),
+	);
+}
+
 export function botDraftFromBot(bot: IBot): BotDraft {
+	const unavailable = heldUnavailableCapabilities(bot);
 	return {
 		presetId: bot.preset_id,
 		name: bot.name ?? "",
@@ -166,7 +177,11 @@ export function botDraftFromBot(bot: IBot): BotDraft {
 		visionModel: text(bot.vision_model),
 		subtaskModel: text(bot.subtask_model),
 		classification: normalizeBotClassification(bot.classification),
-		capabilities: orderBotCapabilities(bot.capabilities),
+		capabilities: orderBotCapabilities(
+			bot.capabilities.filter(
+				(capability) => !unavailable.includes(capability),
+			),
+		),
 		profileId: bot.profile_id,
 		location: bot.location,
 		deviceId: bot.device_id,

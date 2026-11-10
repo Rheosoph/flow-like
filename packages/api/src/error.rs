@@ -88,7 +88,7 @@ impl ApiError {
     };
 
     pub fn internal_error(err: flow_like_types::Error) -> Self {
-        Self::from_board_error(&err).unwrap_or_else(|| Self::internal(err.to_string()))
+        Self::from_caller_error(&err).unwrap_or_else(|| Self::internal(err.to_string()))
     }
 
     /// The client-safe message, for callers that need to record the same
@@ -147,6 +147,31 @@ impl ApiError {
                 ReportPolicy::Ignore,
             ))
         })
+    }
+
+    /// Model selection found nothing this server runs. Only another language model
+    /// resolves that, so the client gets the code it answers with a model picker.
+    fn from_model_selection_error(error: &flow_like_types::Error) -> Option<Self> {
+        use flow_like::profile::NoRunnableModel;
+        let message = match error.downcast_ref::<NoRunnableModel>()? {
+            NoRunnableModel::InProfile => {
+                "None of the language models in this profile can answer in the cloud right now. Add a hosted model to get an answer here."
+            }
+            NoRunnableModel::Named { .. } => {
+                "The selected model runs on your own devices, not in the cloud. Choose a hosted model to get an answer here."
+            }
+        };
+        tracing::warn!("No runnable model: {error:#}");
+        Some(Self::coded(
+            StatusCode::BAD_REQUEST,
+            crate::routes::ai::global_chat::PROFILE_MODEL_REQUIRED,
+            message,
+        ))
+    }
+
+    /// A core error that names what the caller has to change, as opposed to a fault.
+    fn from_caller_error(error: &flow_like_types::Error) -> Option<Self> {
+        Self::from_board_error(error).or_else(|| Self::from_model_selection_error(error))
     }
 
     fn new(
@@ -488,7 +513,7 @@ impl IntoResponse for ApiError {
 // Implement From for flow_like_types::Error
 impl From<flow_like_types::Error> for ApiError {
     fn from(err: flow_like_types::Error) -> Self {
-        if let Some(error) = Self::from_board_error(&err) {
+        if let Some(error) = Self::from_caller_error(&err) {
             return error;
         }
         tracing::error!("Internal error: {:?}", err);
@@ -802,5 +827,27 @@ mod tests {
         let unrelated = ApiError::from(flow_like_types::anyhow!("storage unavailable"));
         assert_eq!(unrelated.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(unrelated.report_policy, ReportPolicy::Report);
+    }
+
+    #[test]
+    fn a_profile_without_a_runnable_model_asks_for_one_instead_of_reporting_a_fault() {
+        use flow_like::profile::NoRunnableModel;
+
+        let named = NoRunnableModel::Named {
+            model_id: "local-model".to_string(),
+        };
+        for reason in [NoRunnableModel::InProfile, named] {
+            let selection =
+                || flow_like_types::Error::from(reason.clone()).context("resolving the chat model");
+            for error in [
+                ApiError::from(selection()),
+                ApiError::internal_error(selection()),
+            ] {
+                assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+                assert_eq!(error.public_code(), "PROFILE_MODEL_REQUIRED");
+                assert!(error.public_message().unwrap().contains("hosted model"));
+                assert_eq!(error.report_policy, ReportPolicy::Ignore);
+            }
+        }
     }
 }

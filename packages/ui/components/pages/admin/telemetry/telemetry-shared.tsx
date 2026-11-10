@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import { cn } from "../../../../lib/utils";
 import { Skeleton } from "../../../ui";
 
 export type TelemetryBucket = "minute" | "hour" | "day";
@@ -77,14 +78,26 @@ export function EmptyState({
 	);
 }
 
+export interface BarListRow {
+	key: string;
+	label: string;
+	count: number;
+	/** Shown instead of the raw count, e.g. a currency. */
+	value?: string;
+	/** A muted line under the bar. */
+	detail?: React.ReactNode;
+}
+
 export function BarList({
 	rows,
 	loading,
 	emptyMessage,
+	mono = true,
 }: {
-	rows: { key: string; label: string; count: number }[];
+	rows: BarListRow[];
 	loading?: boolean;
 	emptyMessage?: string;
+	mono?: boolean;
 }) {
 	const { t } = useTranslation("admin");
 	const max = Math.max(1, ...rows.map((r) => r.count));
@@ -110,22 +123,32 @@ export function BarList({
 	return (
 		<ul className="space-y-1.5">
 			{rows.map((r) => (
-				<li key={r.key} className="flex items-center gap-2 rounded px-1 py-0.5">
-					<span
-						className="w-40 truncate font-mono text-xs font-medium"
-						title={r.label}
-					>
-						{r.label}
-					</span>
-					<div className="relative h-2 flex-1 overflow-hidden rounded-full bg-muted">
-						<div
-							className="h-full rounded-full bg-primary/60"
-							style={{ width: `${(r.count / max) * 100}%` }}
-						/>
+				<li key={r.key} className="rounded px-1 py-0.5">
+					<div className="flex items-center gap-2">
+						<span
+							className={cn(
+								"w-40 truncate text-xs font-medium",
+								mono && "font-mono",
+							)}
+							title={r.label}
+						>
+							{r.label}
+						</span>
+						<div className="relative h-2 flex-1 overflow-hidden rounded-full bg-muted">
+							<div
+								className="h-full rounded-full bg-primary/60"
+								style={{ width: `${(r.count / max) * 100}%` }}
+							/>
+						</div>
+						<span className="min-w-14 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
+							{r.value ?? r.count.toLocaleString()}
+						</span>
 					</div>
-					<span className="w-14 text-right text-[11px] tabular-nums text-muted-foreground">
-						{r.count.toLocaleString()}
-					</span>
+					{r.detail ? (
+						<div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+							{r.detail}
+						</div>
+					) : null}
 				</li>
 			))}
 		</ul>

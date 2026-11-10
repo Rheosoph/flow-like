@@ -172,7 +172,7 @@ pub(super) async fn read(
             .await
         {
             Ok(value) => Some(value),
-            Err(error) if error == "The hub returned HTTP 404 for this tool request." => None,
+            Err(error) if error.starts_with("The hub returned HTTP 404 ") => None,
             Err(error) => return Err(error),
         }
     };

@@ -146,7 +146,7 @@ describe("FlowScript anchor parsing — committed fixtures", () => {
 			kind: "layer",
 			id: "olhizg2b8s6seeuntnn1ni4o",
 		});
-		expect(anchorAtLine(index, 225)).toMatchObject({
+		expect(anchorAtLine(index, 249)).toMatchObject({
 			kind: "node",
 			id: "cqrbjotyj6ppoatuxve6ewzl",
 		});

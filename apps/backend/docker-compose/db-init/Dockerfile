@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM oven/bun:1.3.8-debian
+FROM oven/bun:1.4.4-debian
 
 COPY LICENSE /usr/share/licenses/flow-like/LICENSE
 USER root

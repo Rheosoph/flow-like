@@ -1886,7 +1886,38 @@ pub fn find_global_tool_spec(name: &str) -> Option<PlatformToolSpec> {
     global_assistant_tool_specs(true)
         .into_iter()
         .chain(public_web_tool_specs())
+        .chain(flowpilot_file_tool_specs())
         .find(|spec| spec.name == name)
+}
+
+/// The bot document tools plain FlowPilot runs on the files attached to its chat.
+pub const FLOWPILOT_FILE_TOOLS: [&str; 3] =
+    ["file_summarize", "file_extract", "file_extract_content"];
+
+fn flowpilot_file_description(name: &str) -> &'static str {
+    match name {
+        "file_summarize" => {
+            "Summarize a file attached to this chat towards a goal, with key points citing pages. Pass the attachment's exact name as `file` and always pass the goal: the question the summary has to answer. Scanned PDFs and photos are read by the model."
+        }
+        "file_extract" => {
+            "Extract structured data from files attached to this chat according to a JSON Schema or an example value. Pass the attachments' exact names in `files`. Scanned or photographed documents are read by the model first. `save_to_table` is unavailable here."
+        }
+        _ => {
+            "Extract the full content of a file attached to this chat as markdown, with the model reading it: scanned or photographed pages are transcribed and images and figures described. Pass the attachment's exact name as `file`. Use it to read a non-image attachment; it spends model tokens. Long content comes back cut."
+        }
+    }
+}
+
+/// [`FLOWPILOT_FILE_TOOLS`] with descriptions that name chat attachments instead of a workspace.
+pub fn flowpilot_file_tool_specs() -> Vec<PlatformToolSpec> {
+    FLOWPILOT_FILE_TOOLS
+        .iter()
+        .filter_map(|name| super::capability_tools::bot_tool_spec(name))
+        .map(|spec| PlatformToolSpec {
+            description: flowpilot_file_description(spec.name),
+            ..spec
+        })
+        .collect()
 }
 
 /// Direct API access is an orchestrator action with approval, separate from public research.

@@ -854,21 +854,25 @@ struct Outgoing {
 }
 
 fn validate_send(request: SendEntryRequest) -> Result<Outgoing> {
+    validate_send_as(request, false)
+}
+
+fn validate_send_as(request: SendEntryRequest, internal: bool) -> Result<Outgoing> {
     if !is_valid_message_id(&request.message_id) {
         return Err(Error::invalid(format!(
             "message_id '{}' must be 1 to 64 characters of A-Z, a-z, 0-9, '_' and '-'",
             request.message_id.chars().take(80).collect::<String>()
         )));
     }
-    if !request.kind.client_sendable()
-        && !matches!(
-            request.kind,
-            InboxEntryKind::Trigger | InboxEntryKind::Activity
-        )
-    {
-        return Err(Error::invalid(
-            "Member entries are written when members join or leave",
-        ));
+    let internal_kind = matches!(
+        request.kind,
+        InboxEntryKind::Trigger | InboxEntryKind::Activity
+    );
+    if !request.kind.client_sendable() && !(internal && internal_kind) {
+        return Err(Error::invalid(format!(
+            "A {} entry is written by the runtime, not sent",
+            request.kind.as_str()
+        )));
     }
     if request.envelopes.is_some() {
         return Err(Error::account_required(
@@ -1433,6 +1437,18 @@ impl LocalBotStore {
         self.write(|tx, changes| send_in(tx, changes, conversation_id, sender_id, &outgoing))
     }
 
+    /// [`Self::send`] for the runtime's own writers: it also accepts `trigger` and `activity`
+    /// entries, which no client may send.
+    pub fn send_internal(
+        &self,
+        conversation_id: &str,
+        sender_id: &str,
+        request: SendEntryRequest,
+    ) -> Result<InboxEntry> {
+        let outgoing = validate_send_as(request, true)?;
+        self.write(|tx, changes| send_in(tx, changes, conversation_id, sender_id, &outgoing))
+    }
+
     /// Stores a message `bot_id` writes into the person's direct conversation with it, started
     /// when missing. `None` when `from_conversation` is that conversation: nothing is written.
     pub fn send_to_owner(
@@ -1460,6 +1476,7 @@ impl LocalBotStore {
         message_id: &str,
         body: &TriggerBody,
     ) -> Result<InboxEntry> {
+        TriggerBody::parse(&body.envelope()["body"]).map_err(Error::invalid)?;
         self.write(|tx, changes| write_trigger(tx, changes, bot_id, message_id, body))
     }
 
@@ -1473,12 +1490,15 @@ impl LocalBotStore {
         body: &ActivityBody,
         start: bool,
     ) -> Result<Option<InboxEntry>> {
-        let outgoing = validate_send(SendEntryRequest {
-            message_id: message_id.to_string(),
-            kind: InboxEntryKind::Activity,
-            envelope: Some(body.envelope()),
-            envelopes: None,
-        })?;
+        let outgoing = validate_send_as(
+            SendEntryRequest {
+                message_id: message_id.to_string(),
+                kind: InboxEntryKind::Activity,
+                envelope: Some(body.envelope()),
+                envelopes: None,
+            },
+            true,
+        )?;
         self.write(|tx, changes| {
             let conversation_id = if start {
                 open_direct(tx, bot_id, changes)?
@@ -1561,6 +1581,10 @@ impl LocalBotStore {
                     "Conversation '{conversation_id}' has events after {cursor} on this device, so it stays here; move them first"
                 )));
             }
+            tx.execute(
+                "DELETE FROM parked_turns WHERE conversation_id = ?1",
+                [conversation_id],
+            )?;
             if tx.execute("DELETE FROM conversations WHERE id = ?1", [conversation_id])? > 0 {
                 changes.conversation(conversation_id);
                 changes.files();

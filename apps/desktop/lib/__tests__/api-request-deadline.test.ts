@@ -439,9 +439,43 @@ describe("POST streams", () => {
 		seen.body?.enqueue(sseFrame({ event_type: "completed" }));
 		expect((await outcome).error).toBeUndefined();
 		expect(onMessage).toHaveBeenCalledTimes(3);
-		// The terminal event closes the connection.
-		expect(seen.signal?.aborted).toBe(true);
+		// The server settles the run after its terminal event, so the connection
+		// stays open until the server ends the stream.
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(seen.signal?.aborted).toBe(false);
+		seen.body?.close();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(seen.signal?.aborted).toBe(false);
 		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	test("a stream awaited to its close settles only when the server ends it", async () => {
+		const seen = manualStream();
+		let settled = false;
+		const outcome = outcomeOf(
+			streamFetcher(
+				profile,
+				"apps/app-1/board/board-1/invoke",
+				{ method: "POST", body: "{}" },
+				auth,
+				vi.fn(),
+				undefined,
+				true,
+			),
+		).finally(() => {
+			settled = true;
+		});
+
+		await vi.advanceTimersByTimeAsync(0);
+		seen.body?.enqueue(sseFrame({ event_type: "completed" }));
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(settled).toBe(false);
+
+		seen.body?.close();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(settled).toBe(true);
+		expect((await outcome).error).toBeUndefined();
+		expect(seen.signal?.aborted).toBe(false);
 	});
 
 	test("the caller's signal aborts the stream after its headers arrived", async () => {

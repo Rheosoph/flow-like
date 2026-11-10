@@ -6,7 +6,16 @@ interface Work<T> {
 	final: boolean;
 }
 
-/** Serializes speech model calls, keeping final utterances ahead of replaceable previews. */
+interface Settled {
+	offsetMs: number;
+	length: number;
+	text: Promise<string>;
+}
+
+/**
+ * Runs speech model calls in two independent lanes, one final and one replaceable preview at a time,
+ * so a final never waits behind a preview. A settled preview is reused by the final it predicted.
+ */
 export function createCallTranscription<T extends Utterance>({
 	transcribe,
 	onPartial,
@@ -24,12 +33,14 @@ export function createCallTranscription<T extends Utterance>({
 		Number.isSafeInteger(limit) && limit > 0 ? limit : MAX_QUEUED_UTTERANCES;
 	const finals: Work<T>[] = [];
 	let preview: Work<T> | null = null;
+	let settled: Settled | null = null;
 	let draft: { offsetMs: number; generation: number } | null = null;
 	let draftText = "";
 	let generation = 0;
 	let latestOffset = Number.NEGATIVE_INFINITY;
 	let finalOffset = Number.NEGATIVE_INFINITY;
-	let busy = false;
+	let finalBusy = false;
+	let previewBusy = false;
 	let closed = false;
 
 	const show = (text: string) => {
@@ -46,31 +57,71 @@ export function createCallTranscription<T extends Utterance>({
 		draft = null;
 		show("");
 	};
+	const sameUtterance = (memo: Settled | null, utterance: T): memo is Settled =>
+		memo?.offsetMs === utterance.offsetMs &&
+		memo.length === utterance.samples.length;
 
-	const drain = async () => {
-		if (busy || closed) return;
-		busy = true;
+	const textOf = async (work: Work<T>): Promise<string> => {
+		if (work.final && sameUtterance(settled, work.utterance)) {
+			const reused = settled;
+			try {
+				return (await reused.text).trim();
+			} catch {
+				// A failed preview must not fail the final; transcribe it again.
+			}
+		}
+		return (await transcribe(work.utterance)).trim();
+	};
+
+	const drainFinals = async () => {
+		if (finalBusy || closed) return;
+		finalBusy = true;
 		try {
 			while (!closed) {
-				const work = finals.shift() ?? preview;
+				const work = finals.shift();
 				if (!work) break;
-				if (preview === work) preview = null;
 				try {
-					const text = (await transcribe(work.utterance)).trim();
+					const text = await textOf(work);
 					if (closed) return;
-					if (work.final) {
-						if (text) await onFinal(text, work.utterance);
-					} else if (text && current(work)) {
-						show(text);
-					}
+					if (text) await onFinal(text, work.utterance);
 				} catch (error) {
-					if (!closed && (work.final || current(work))) onError(error);
+					if (!closed) onError(error);
 				} finally {
-					if (work.final) clear(work);
+					clear(work);
 				}
 			}
 		} finally {
-			busy = false;
+			finalBusy = false;
+		}
+	};
+
+	const drainPreviews = async () => {
+		if (previewBusy || closed) return;
+		previewBusy = true;
+		try {
+			while (!closed) {
+				const work = preview;
+				if (!work) break;
+				preview = null;
+				const request = transcribe(work.utterance).then((text) => text.trim());
+				if (work.utterance.settled) {
+					settled = {
+						offsetMs: work.utterance.offsetMs,
+						length: work.utterance.samples.length,
+						text: request,
+					};
+					request.catch(() => {});
+				}
+				try {
+					const text = await request;
+					if (closed) return;
+					if (text && current(work)) show(text);
+				} catch (error) {
+					if (!closed && current(work)) onError(error);
+				}
+			}
+		} finally {
+			previewBusy = false;
 		}
 	};
 
@@ -87,8 +138,10 @@ export function createCallTranscription<T extends Utterance>({
 				draft = { offsetMs: utterance.offsetMs, generation };
 				show("");
 			}
+			if (!utterance.settled && settled?.offsetMs === utterance.offsetMs)
+				settled = null;
 			preview = { utterance, generation, final: false };
-			void drain();
+			void drainPreviews();
 		},
 		final(utterance: T) {
 			if (closed || utterance.offsetMs <= finalOffset) return;
@@ -100,12 +153,18 @@ export function createCallTranscription<T extends Utterance>({
 				const dropped = finals.shift();
 				if (dropped) clear(dropped);
 			}
-			void drain();
+			void drainFinals();
+		},
+		/** Transcribes audio outside both lanes, for a one-off check such as confirming a barge-in. */
+		async probe(utterance: T): Promise<string> {
+			if (closed) return "";
+			return (await transcribe(utterance)).trim();
 		},
 		resetPartial() {
 			if (closed) return;
 			generation++;
 			preview = null;
+			settled = null;
 			draft = null;
 			show("");
 		},
@@ -114,6 +173,7 @@ export function createCallTranscription<T extends Utterance>({
 			closed = true;
 			finals.length = 0;
 			preview = null;
+			settled = null;
 			draft = null;
 			show("");
 		},

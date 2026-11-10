@@ -8,7 +8,7 @@ import {
 	type BotCapability,
 	type BotLocation,
 	FLOWPILOT_CAPABILITY,
-	isBotCapabilityAvailable,
+	botCapabilityUnavailableReason,
 } from "../../../../state/backend-state/bot-state";
 import { Label } from "../../../ui/label";
 import { Switch } from "../../../ui/switch";
@@ -208,7 +208,8 @@ export function BotCapabilityRow({
 	const copy = useBotCapabilityCopy()(capability);
 	const switchId = useId();
 	const Icon = BOT_CAPABILITY_ICONS[capability];
-	const available = isBotCapabilityAvailable(capability, location);
+	const unavailable = botCapabilityUnavailableReason(capability, location);
+	const available = unavailable === null;
 	return (
 		<div className="flex flex-col gap-3 px-4 py-3.5">
 			<div className="flex items-start gap-3">
@@ -233,7 +234,9 @@ export function BotCapabilityRow({
 						{copy.description}
 						{!available && (
 							<span className="mt-1 block text-warning">
-								{t("editor.abilities.needsLocal")}
+								{unavailable === "device"
+									? t("editor.abilities.notOnDevice")
+									: t("editor.abilities.needsLocal")}
 							</span>
 						)}
 					</p>

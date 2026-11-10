@@ -29,7 +29,10 @@ import {
 import type { JSX, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useHub } from "../../hooks/use-hub";
+import {
+	isBitInProfile,
+	useAddModelToProfile,
+} from "../../hooks/use-add-model-to-profile";
 import { useInvoke } from "../../hooks/use-invoke";
 import { isMlxModelBit } from "../../lib/bit/mlx-model-pack";
 import { type IBit, IBitTypes } from "../../lib/schema/bit/bit";
@@ -38,10 +41,6 @@ import type { ILlmParameters } from "../../lib/schema/bit/bit/llm-parameters";
 import { humanFileSize } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import { useDownloadManager } from "../../state/download-manager";
-import {
-	handleUpgradeRequiredError,
-	openUpgradeDialogIfEnabled,
-} from "../../state/upgrade-dialog-state";
 import type { ISettingsProfile } from "../../types";
 import { DeviceBitBadge } from "../settings/devices/models/use/device-model-badge";
 import { Avatar, AvatarFallback, AvatarImage } from "./avatar";
@@ -91,7 +90,6 @@ export function ModelCard({
 }: Readonly<ModelCardProps>) {
 	const { t } = useTranslation("common");
 	const backend = useBackend();
-	const { hub } = useHub(queryScope);
 	const download = useDownloadManager((s) => s.download);
 	const onProgress = useDownloadManager((s) => s.onProgress);
 	const isQueued = useDownloadManager((s) => s.isQueued);
@@ -171,14 +169,7 @@ export function ModelCard({
 		true,
 		queryScope,
 	);
-
-	const userInfo = useInvoke(
-		backend.userState.getInfo,
-		backend.userState,
-		[],
-		true,
-		queryScope,
-	);
+	const { gate, add: addToProfile } = useAddModelToProfile(queryScope);
 
 	// The backend-resolved pack size is authoritative: it accounts for artifacts
 	// the bit itself never names (inline MLX manifests, llama.cpp projectors).
@@ -193,23 +184,7 @@ export function ModelCard({
 		);
 	}, [bit, bitSize.data, bitSize.isSuccess]);
 
-	const tierInfo = useMemo(() => {
-		const params = bit.parameters as {
-			provider?: { params?: { tier?: string } };
-		};
-		const modelTier = params?.provider?.params?.tier;
-		if (!modelTier || !hub?.tiers) {
-			return { isRestricted: false, requiredTier: null };
-		}
-		const userTierKey = (userInfo.data?.tier ?? "FREE").toUpperCase();
-		const userTierConfig = hub.tiers[userTierKey];
-		if (!userTierConfig) {
-			return { isRestricted: true, requiredTier: modelTier };
-		}
-		const allowedModelTiers = userTierConfig.llm_tiers ?? [];
-		const isRestricted = !allowedModelTiers.includes(modelTier);
-		return { isRestricted, requiredTier: isRestricted ? modelTier : null };
-	}, [bit.parameters, hub?.tiers, userInfo.data?.tier]);
+	const tierInfo = useMemo(() => gate(bit), [gate, bit]);
 
 	const downloadBit = useCallback(
 		async (b: IBit) => {
@@ -260,38 +235,16 @@ export function ModelCard({
 	const toggleProfile = useCallback(async () => {
 		const profile = currentProfile.data;
 		if (!profile) return;
-		const bitIndex = profile.hub_profile.bits.findIndex(
-			(id) => id.split(":").pop() === bit.id,
-		);
+		if (!isBitInProfile(profile, bit.id)) {
+			if (await addToProfile(bit, downloadBit)) await onProfileChange?.();
+			return;
+		}
 		try {
-			if (bitIndex === -1) {
-				if (tierInfo.isRestricted) {
-					if (
-						!openUpgradeDialogIfEnabled({
-							reason: "model-tier",
-							requiredTier: tierInfo.requiredTier ?? undefined,
-						})
-					) {
-						toast.error(
-							t(
-								"thisModelRequiresTheRequiredtierPlan",
-								"This model requires the {{requiredTier}} plan.",
-								{ requiredTier: tierInfo.requiredTier },
-							),
-						);
-					}
-					return;
-				}
-				await downloadBit(bit);
-				await backend.bitState.addBit(bit, profile);
-			} else {
-				await backend.bitState.removeBit(bit, profile);
-			}
+			await backend.bitState.removeBit(bit, profile);
 			await refetchCurrentProfile();
 			await onProfileChange?.();
 		} catch (error) {
-			console.error("Failed to update profile models:", error);
-			if (handleUpgradeRequiredError(error, "model-tier")) return;
+			console.error(`Removing model ${bit.id} from the profile failed:`, error);
 			toast.error(
 				error instanceof Error
 					? error.message
@@ -301,10 +254,10 @@ export function ModelCard({
 	}, [
 		currentProfile.data,
 		bit,
+		addToProfile,
 		downloadBit,
 		backend.bitState,
 		refetchCurrentProfile,
-		tierInfo,
 		onProfileChange,
 		t,
 	]);
@@ -315,10 +268,7 @@ export function ModelCard({
 
 	if (bit.meta.en === undefined) return null;
 
-	const isInProfile =
-		(currentProfile.data?.hub_profile.bits || []).findIndex(
-			(id) => id.split(":").pop() === bit.id,
-		) > -1;
+	const isInProfile = isBitInProfile(currentProfile.data, bit.id);
 
 	const modality = getModelModality(bit);
 	const params = bit.parameters as ILlmParameters | IEmbeddingModelParameters;

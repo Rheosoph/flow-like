@@ -1,3 +1,4 @@
+import { lingerUntilClosed } from "@flow-like/flow-like-ui/lib/execution/linger";
 import type { IIntercomEvent } from "@flow-like/flow-like-ui/lib/schema/events/intercom-event";
 
 /** Preserve token whitespace and accept frames split anywhere across network chunks. */
@@ -47,6 +48,7 @@ export async function consumeHostedStream(
 					: (event.payload?.message ?? "The workflow failed.");
 		}
 	};
+	let lingering = false;
 	try {
 		while (true) {
 			const { value, done } = await reader.read();
@@ -59,7 +61,8 @@ export async function consumeHostedStream(
 				break;
 			}
 			if (terminal) {
-				await reader.cancel();
+				lingering = true;
+				lingerUntilClosed(reader);
 				break;
 			}
 		}
@@ -69,6 +72,6 @@ export async function consumeHostedStream(
 				"The connection ended before the workflow completed. Please try again.",
 			);
 	} finally {
-		reader.releaseLock();
+		if (!lingering) reader.releaseLock();
 	}
 }

@@ -376,7 +376,7 @@ async function sendWhileOpening(conversationId: string) {
 }
 
 describe("immediate reply feedback", () => {
-	test("acknowledges during setup and hands the same status text to the empty stream", async () => {
+	test("setup is busy with no block of its own, and the empty stream gets the status text", async () => {
 		let ready!: () => void;
 		harness.targetGate = new Promise<null>((resolve) => {
 			ready = () => resolve(null);
@@ -386,9 +386,7 @@ describe("immediate reply feedback", () => {
 		await act(async () => {
 			sending = harness.send?.("Hello");
 		});
-		expect(
-			host.querySelector("[data-chat-preparation]")?.textContent,
-		).toContain("Got it. I’m getting started.");
+		expect(host.textContent).not.toContain("getting started");
 		expect(harness.isStreamActive).toBe(true);
 		expect(harness.concurrency?.runs).toEqual([]);
 		expect(harness.bodies).toEqual([]);

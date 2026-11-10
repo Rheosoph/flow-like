@@ -1,9 +1,8 @@
 use crate::{
     compute_cost::{ComputeCostModel, compute_cost_micro_dollars, compute_cost_model},
     entity::{
-        app, app_usage_limit, embedding_usage_tracking, execution_usage_tracking,
-        llm_usage_tracking, meta, technical_user, usage_alert, usage_invocation,
-        usage_limit_audit_log, user,
+        app, app_usage_limit, embedding_usage_tracking, llm_usage_tracking, meta, technical_user,
+        usage_alert, usage_invocation, usage_limit_audit_log, user,
     },
     error::ApiError,
     middleware::jwt::AppUser,
@@ -31,6 +30,8 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use utoipa::{IntoParams, ToSchema};
+
+mod executions;
 
 #[derive(Clone, Debug, Deserialize, IntoParams)]
 pub struct UsageOverviewQuery {
@@ -128,12 +129,9 @@ impl PowerUserAggregate {
         self.ai_invocations + self.executions
     }
 
-    fn touch(&mut self, day: i64, last_seen: DateTime<FixedOffset>) {
+    fn touch(&mut self, day: i64, last_seen: Option<DateTime<FixedOffset>>) {
         self.active_days.insert(day);
-        self.last_seen = Some(match self.last_seen {
-            Some(current) => current.max(last_seen),
-            None => last_seen,
-        });
+        self.last_seen = self.last_seen.max(last_seen);
     }
 }
 
@@ -453,7 +451,7 @@ struct PeriodAiUsageRow {
     latency_count: i64,
 }
 
-#[derive(Debug, FromQueryResult)]
+#[derive(Debug)]
 struct PeriodExecutionUsageRow {
     bucket: i64,
     user_id: Option<String>,
@@ -490,7 +488,7 @@ struct RecentUsageRow {
     weekly_interactions: i64,
     price: i64,
     tokens: i64,
-    last_seen: DateTime<FixedOffset>,
+    last_seen: Option<DateTime<FixedOffset>>,
 }
 
 #[derive(Clone, Copy)]
@@ -568,7 +566,7 @@ impl PeriodUsage {
     }
 }
 
-fn to_count(value: i64) -> u64 {
+pub(super) fn to_count(value: i64) -> u64 {
     u64::try_from(value).unwrap_or(0)
 }
 
@@ -625,14 +623,6 @@ const EMBEDDING_COLUMNS: AiUsageColumns<embedding_usage_tracking::Column> = AiUs
     latency: embedding_usage_tracking::Column::Latency,
 };
 
-const EXECUTION_COLUMNS: UsageColumns<execution_usage_tracking::Column> = UsageColumns {
-    id: execution_usage_tracking::Column::Id,
-    created_at: execution_usage_tracking::Column::CreatedAt,
-    user_id: execution_usage_tracking::Column::UserId,
-    technical_user_id: execution_usage_tracking::Column::TechnicalUserId,
-    app_id: execution_usage_tracking::Column::AppId,
-};
-
 /// `CAST(COALESCE(SUM(<expr>), 0) AS BIGINT)`: `SUM` over a 64 bit column comes
 /// back as NUMERIC/DECIMAL, which does not decode into `i64`.
 fn sum_bigint(expr: SimpleExpr) -> SimpleExpr {
@@ -643,12 +633,6 @@ fn sum_bigint(expr: SimpleExpr) -> SimpleExpr {
         Expr::val(0i64),
     ]))
     .cast_as(Alias::new("BIGINT"))
-}
-
-fn zero_bigint() -> SimpleExpr {
-    use sea_orm::sea_query::ExprTrait;
-
-    Expr::val(0i64).cast_as(Alias::new("BIGINT"))
 }
 
 fn llm_tokens() -> SimpleExpr {
@@ -711,20 +695,6 @@ fn ai_period_select<E: EntityTrait>(
         .group_by(columns.model_id)
         .group_by(columns.provider)
         .group_by(columns.endpoint)
-}
-
-fn execution_period_select(
-    buckets: &Buckets,
-    started_at: DateTime<FixedOffset>,
-) -> Select<execution_usage_tracking::Entity> {
-    use sea_orm::sea_query::ExprTrait;
-
-    period_usage_select::<execution_usage_tracking::Entity>(EXECUTION_COLUMNS, buckets, started_at)
-        .expr_as(Expr::col(EXECUTION_COLUMNS.id).count(), "executions")
-        .expr_as(
-            sum_bigint(Expr::col(execution_usage_tracking::Column::Microseconds)),
-            "microseconds",
-        )
 }
 
 fn new_users_select(buckets: &Buckets, started_at: DateTime<FixedOffset>) -> Select<user::Entity> {
@@ -821,7 +791,14 @@ pub async fn overview(
         false,
     );
 
-    let (llm_rows, embedding_rows, execution_rows, new_user_rows) = flow_like_types::tokio::join!(
+    let windows = executions::Windows {
+        period: started_at,
+        monthly: starts.monthly,
+        weekly: starts.weekly,
+        daily: starts.daily,
+    };
+
+    let (llm_rows, embedding_rows, execution_days, new_user_rows) = flow_like_types::tokio::join!(
         ai_period_select::<llm_usage_tracking::Entity>(
             LLM_COLUMNS,
             llm_tokens(),
@@ -838,19 +815,18 @@ pub async fn overview(
         )
         .into_model::<PeriodAiUsageRow>()
         .all(&state.db),
-        execution_period_select(&trend_buckets, started_at)
-            .into_model::<PeriodExecutionUsageRow>()
-            .all(&state.db),
+        executions::load(&state.db, &windows, now),
         new_users_select(&trend_buckets, started_at)
             .into_model::<NewUserBucketRow>()
             .all(&state.db),
     );
     let llm_rows = llm_rows.map_err(db_error)?;
     let embedding_rows = embedding_rows.map_err(db_error)?;
-    let execution_rows = execution_rows.map_err(db_error)?;
+    let execution_days = execution_days.map_err(db_error)?;
     let new_user_rows = new_user_rows.map_err(db_error)?;
+    let execution_rows = executions::period_rows(&execution_days, &trend_buckets);
 
-    let (recent_llm_rows, recent_embedding_rows, recent_execution_rows, user_counts) = flow_like_types::tokio::join!(
+    let (recent_llm_rows, recent_embedding_rows, user_counts) = flow_like_types::tokio::join!(
         recent_usage_select::<llm_usage_tracking::Entity>(
             LLM_COLUMNS.usage,
             sum_bigint(Expr::col(LLM_COLUMNS.price)),
@@ -869,15 +845,6 @@ pub async fn overview(
         )
         .into_model::<RecentUsageRow>()
         .all(&state.db),
-        recent_usage_select::<execution_usage_tracking::Entity>(
-            EXECUTION_COLUMNS,
-            zero_bigint(),
-            zero_bigint(),
-            &recent_days,
-            &starts,
-        )
-        .into_model::<RecentUsageRow>()
-        .all(&state.db),
         user_counts_select(&starts)
             .into_model::<UserCountsRow>()
             .one(&state.db),
@@ -885,7 +852,7 @@ pub async fn overview(
     let recent = RecentUsage {
         llm: recent_llm_rows.map_err(db_error)?,
         embedding: recent_embedding_rows.map_err(db_error)?,
-        execution: recent_execution_rows.map_err(db_error)?,
+        execution: executions::recent_rows(&execution_days, &recent_days),
     };
     let user_counts = user_counts.map_err(db_error)?.unwrap_or_default();
 
@@ -999,12 +966,7 @@ pub async fn overview(
             let user_model = user_id.as_ref().and_then(|id| user_lookup.get(id));
             AdminUserUsage {
                 user_id,
-                display_name: user_model.and_then(|user| {
-                    user.name
-                        .clone()
-                        .or_else(|| user.preferred_username.clone())
-                        .or_else(|| user.username.clone())
-                }),
+                display_name: user_model.and_then(display_name),
                 email: user_model.and_then(|user| user.email.clone()),
                 totals: totals.into(),
             }
@@ -1029,12 +991,7 @@ pub async fn overview(
                     .and_then(|technical_user| technical_user.creator_user_id.clone()),
                 creator_membership_id: technical_user
                     .and_then(|technical_user| technical_user.creator_membership_id.clone()),
-                creator_display_name: creator.and_then(|user| {
-                    user.name
-                        .clone()
-                        .or_else(|| user.preferred_username.clone())
-                        .or_else(|| user.username.clone())
-                }),
+                creator_display_name: creator.and_then(display_name),
                 creator_email: creator.and_then(|user| user.email.clone()),
                 limits,
                 totals: totals.into(),
@@ -1561,7 +1518,14 @@ fn build_usage_trend(
         .collect()
 }
 
-fn trend_label(bucket: &str, monthly_buckets: bool) -> String {
+pub(super) fn display_name(user: &user::Model) -> Option<String> {
+    user.name
+        .clone()
+        .or_else(|| user.preferred_username.clone())
+        .or_else(|| user.username.clone())
+}
+
+pub(super) fn trend_label(bucket: &str, monthly_buckets: bool) -> String {
     if monthly_buckets {
         return bucket.to_string();
     }
@@ -1622,12 +1586,7 @@ fn build_power_users(
             let user_model = user_lookup.get(&user_id);
             AdminPowerUser {
                 user_id,
-                display_name: user_model.and_then(|user| {
-                    user.name
-                        .clone()
-                        .or_else(|| user.preferred_username.clone())
-                        .or_else(|| user.username.clone())
-                }),
+                display_name: user_model.and_then(display_name),
                 email: user_model.and_then(|user| user.email.clone()),
                 total_price: totals.total_price,
                 total_tokens: totals.total_tokens,
@@ -1641,7 +1600,7 @@ fn build_power_users(
         .collect()
 }
 
-async fn load_users(
+pub(super) async fn load_users(
     state: &AppState,
     user_ids: HashSet<String>,
 ) -> Result<HashMap<String, user::Model>, ApiError> {
@@ -1763,7 +1722,7 @@ async fn load_scoped_limits(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sea_orm::{DbBackend, QueryTrait};
+    use sea_orm::DbBackend;
 
     fn day(year: i32, month: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(year, month, day).expect("valid date")
@@ -1778,33 +1737,6 @@ mod tests {
             executions,
             microseconds: 0,
         }
-    }
-
-    /// See `utils::day_buckets`: the period rows must take their bucket from
-    /// the joined series, or DSQL sorts the whole window.
-    #[test]
-    fn period_rows_group_by_the_bucket_series_not_by_created_at() {
-        let buckets = Buckets::new(
-            DbBackend::Postgres,
-            day(2026, 9, 21),
-            day(2026, 10, 21),
-            false,
-        );
-        let started_at = day(2026, 9, 21)
-            .and_hms_opt(14, 0, 0)
-            .expect("valid time")
-            .and_utc()
-            .fixed_offset();
-        let sql = execution_period_select(&buckets, started_at)
-            .build(DbBackend::Postgres)
-            .to_string();
-
-        assert!(sql.contains(r#"AS "bucket_series" ON"#), "{sql}");
-        assert!(
-            sql.contains(r#"GROUP BY "bucket_series"."i", "ExecutionUsageTracking"."userId""#),
-            "{sql}"
-        );
-        assert!(!sql.contains("to_char"), "{sql}");
     }
 
     #[test]

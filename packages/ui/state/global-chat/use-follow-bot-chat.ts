@@ -1,7 +1,8 @@
-import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { invalidateBotConfiguration } from "../../hooks/use-bots";
+import { useEffect } from "react";
 import { plainBody } from "../../components/bots-tab/approval-entry";
+import { noteRefOf } from "../../components/bots-tab/bot-note-entry";
+import { invalidateBotConfiguration } from "../../hooks/use-bots";
 import { watchConversation } from "../../lib/realtime/conversation-feed";
 import type { IInboxEntry } from "../backend-state/inbox-state";
 import { pushedTranscript } from "./bot-history";
@@ -27,6 +28,11 @@ export function followPushedEntries(
 	const history = useBotHistoryStore.getState();
 	for (const [messageId, seq] of Object.entries(seqs)) {
 		history.note(botId, messageId, seq);
+	}
+	for (const entry of entries) {
+		const replyTo = plainBody(entry)?.reply_to;
+		const note = entry.sender_id === botId ? noteRefOf(entry) : undefined;
+		if (note && typeof replyTo === "string") history.noteReply(replyTo, note);
 	}
 	if (messages.length > 0) {
 		store.mergeConversationMessages(sessionId, messages);

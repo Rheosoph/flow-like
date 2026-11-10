@@ -294,7 +294,7 @@ async fn image_credentials_are_never_forwarded_on_redirect() {
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
         let mut buffer = [0; 4096];
-        socket.read(&mut buffer).await.unwrap();
+        assert!(socket.read(&mut buffer).await.unwrap() > 0);
         let response = format!(
             "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{address}/credential-leak\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         );
@@ -393,7 +393,7 @@ async fn provider_failures_keep_safe_status_and_category_without_retrying() {
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut received = [0; 4096];
-            socket.read(&mut received).await.unwrap();
+            assert!(socket.read(&mut received).await.unwrap() > 0);
             let body = r#"{"error":{"message":"private prompt and credential"}}"#;
             socket.write_all(format!(
                 "HTTP/1.1 {upstream} Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
@@ -439,7 +439,7 @@ async fn a_provider_timeout_has_a_distinct_error_and_no_request_details() {
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
         let mut buffer = [0; 4096];
-        socket.read(&mut buffer).await.unwrap();
+        assert!(socket.read(&mut buffer).await.unwrap() > 0);
         tokio::time::sleep(Duration::from_millis(200)).await;
     });
     let mut started = false;

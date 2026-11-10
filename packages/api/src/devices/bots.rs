@@ -40,8 +40,7 @@ use flow_like_types::{
         DeviceHeartbeatRequest, DeviceHeartbeatResponse, DeviceParkRequest, DevicePollRequest,
         DevicePollResponse, DeviceReleaseRequest, DeviceReplyRequest, DeviceReplyResponse,
         DeviceSilentRequest, DeviceTurnGrant, DeviceTurnState, DeviceWaitRequest,
-        DeviceWaitResponse, IDLE_POLL_MS, MAX_POLL_MS, MAX_REPLY_BYTES, REFRESHED_TOKEN_SECS,
-        TOKEN_REFRESH_SECS,
+        DeviceWaitResponse, IDLE_POLL_MS, MAX_POLL_MS, MAX_REPLY_BYTES, TOKEN_REFRESH_SECS,
     },
     inbox::{InboxEntryKind, is_valid_message_id},
 };
@@ -454,7 +453,8 @@ async fn give_up(state: &AppState, turn: &bot_turn::Model, host_id: &str, error:
     worker::finish(state, turn, host_id, Err(claim_failure(error)), false).await;
 }
 
-/// Fresh tokens for the ones that have less than [`TOKEN_REFRESH_SECS`] left.
+/// Fresh tokens for the ones the device reports with less than [`TOKEN_REFRESH_SECS`] left.
+/// Whatever it reports, a refreshed token ends with the hold of the turn's allowance.
 pub(crate) async fn refreshed<C: ConnectionTrait>(
     db: &C,
     turn: &bot_turn::Model,
@@ -466,60 +466,46 @@ pub(crate) async fn refreshed<C: ConnectionTrait>(
     ),
     ApiError,
 > {
-    let horizon = chrono::Utc::now().timestamp() + TOKEN_REFRESH_SECS;
-    let due = |expires_at: Option<i64>| expires_at.is_some_and(|at| at < horizon);
-    if bots_grant::has_finished_checkpoint(db, turn, &request.host_id).await? {
-        let bot_token = if due(request.bot_token_expires_at) {
-            Some(
-                bots_grant::bot_token(
-                    db,
-                    &turn.owner_id,
-                    &turn.bot_id,
-                    &turn.id,
-                    bots_grant::DELIVERY_TTL_SECS,
-                )
-                .await?,
-            )
-        } else {
-            None
-        };
-        // A completed checkpoint cannot acquire executor credentials through a heartbeat.
+    let now = chrono::Utc::now().timestamp();
+    let due = |expires_at: Option<i64>| expires_at.is_some_and(|at| at < now + TOKEN_REFRESH_SECS);
+    let (bot_due, executor_due) = (
+        due(request.bot_token_expires_at),
+        due(request.executor_token_expires_at),
+    );
+    if !bot_due && !executor_due {
+        return Ok((None, None));
+    }
+    let finished = bots_grant::has_finished_checkpoint(db, turn, &request.host_id).await?;
+    let ttl = if finished {
+        bots_grant::DELIVERY_TTL_SECS
+    } else {
+        bots_grant::refresh_ttl(bots_grant::hold_end(db, turn).await?, now)
+    };
+    let bot_token = if bot_due {
+        Some(bots_grant::bot_token(db, &turn.owner_id, &turn.bot_id, &turn.id, ttl).await?)
+    } else {
+        None
+    };
+    // A completed checkpoint cannot acquire executor credentials through a heartbeat.
+    if finished || !executor_due {
         return Ok((bot_token, None));
     }
-    let bot_token = if due(request.bot_token_expires_at) {
-        Some(
-            bots_grant::bot_token(
-                db,
-                &turn.owner_id,
-                &turn.bot_id,
-                &turn.id,
-                REFRESHED_TOKEN_SECS,
-            )
-            .await?,
-        )
-    } else {
-        None
-    };
-    let executor = if due(request.executor_token_expires_at) {
-        let workspace = live_workspace(db, &turn.owner_id, &turn.bot_id).await?;
-        let conversation = crate::entity::conversation::Entity::find_by_id(&turn.conversation_id)
-            .one(db)
-            .await?
-            .ok_or_else(|| ApiError::not_found("The turn's conversation is gone"))?;
-        let kind = flow_like_types::inbox::ConversationKind::parse(&conversation.kind)
-            .unwrap_or(flow_like_types::inbox::ConversationKind::Group);
-        Some(bots_grant::executor_token(
-            &turn.owner_id,
-            &turn.bot_id,
-            worker::room_of(kind, &turn.conversation_id),
-            &turn.id,
-            workspace.as_deref(),
-            REFRESHED_TOKEN_SECS,
-        )?)
-    } else {
-        None
-    };
-    Ok((bot_token, executor))
+    let workspace = live_workspace(db, &turn.owner_id, &turn.bot_id).await?;
+    let conversation = crate::entity::conversation::Entity::find_by_id(&turn.conversation_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::not_found("The turn's conversation is gone"))?;
+    let kind = flow_like_types::inbox::ConversationKind::parse(&conversation.kind)
+        .unwrap_or(flow_like_types::inbox::ConversationKind::Group);
+    let executor = bots_grant::executor_token(
+        &turn.owner_id,
+        &turn.bot_id,
+        worker::room_of(kind, &turn.conversation_id),
+        &turn.id,
+        workspace.as_deref(),
+        ttl,
+    )?;
+    Ok((bot_token, Some(executor)))
 }
 
 #[utoipa::path(
@@ -553,7 +539,8 @@ pub(crate) async fn heartbeat(
     )
     .await?;
     let host_id = host(body.host_id.clone())?;
-    held_turn(&state.db, &owner, &id, &turn_id).await?;
+    let held = held_turn(&state.db, &owner, &id, &turn_id).await?;
+    bots_grant::require_hold(&state.db, &held, &host_id).await?;
     let turn =
         ledger::heartbeat_in(&state.db, &turn_id, Some(&owner), &host_id, now_millis()).await?;
     let (bot_token, executor_token) = refreshed(&state.db, &turn, &body).await?;
@@ -719,7 +706,8 @@ fn valid_error_code(code: &str) -> bool {
             .all(|char| char.is_ascii_uppercase() || char.is_ascii_digit() || char == '_')
 }
 
-/// Gives the held turn up: queued again after a backoff, or `FAILED` with `error_code`.
+/// Gives the held turn up: queued again after a backoff, or `FAILED` with `error_code`. A retry
+/// whose budget is spent leaves the turn held, running, for the device to post its failure reply.
 pub(crate) async fn release_in<C: ConnectionTrait>(
     db: &C,
     owner: &str,
@@ -738,7 +726,7 @@ pub(crate) async fn release_in<C: ConnectionTrait>(
     let retry_at = request
         .retry
         .then(|| now + Duration::seconds(worker::backoff_secs(turn.attempts)));
-    let released = match retry_at {
+    let held = match retry_at {
         Some(retry_at) => {
             ledger::release_for_retry_in(
                 db,
@@ -749,12 +737,13 @@ pub(crate) async fn release_in<C: ConnectionTrait>(
                 now,
             )
             .await?
+                != ledger::RetryRelease::Lost
         }
         None => {
             ledger::fail_held_in(db, turn_id, &request.host_id, &request.error_code, now).await?
         }
     };
-    if !released {
+    if !held {
         return Err(lease_lost(&request.host_id, turn_id, "release it"));
     }
     let state = turn_state(db, owner, turn_id).await?;
@@ -764,18 +753,25 @@ pub(crate) async fn release_in<C: ConnectionTrait>(
     Ok((state, retry_at))
 }
 
+/// Whether a released turn is queued again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub(crate) struct DeviceReleaseResponse {
+    /// `false`: the retries are spent or the turn failed, and the device posts the failure reply.
+    pub requeued: bool,
+}
+
 #[utoipa::path(
     post,
     path = "/devices/{id}/bots/turns/{turn_id}/release",
     tag = "devices",
-    description = "A device gives a turn up: it is queued again after a backoff, or fails with the given code and posts nothing.",
+    description = "A device gives a turn up: it is queued again after a backoff (requeued true). With its retries spent the turn stays held and requeued is false: the device posts the failure reply. Without retry it fails with the given code and posts nothing.",
     params(
         ("id" = String, Path, description = "Device ID"),
         ("turn_id" = String, Path, description = "The claimed turn")
     ),
     request_body = Object,
     responses(
-        (status = 200, description = "The turn after the release", body = Object),
+        (status = 200, description = "Whether the turn is queued again", body = DeviceReleaseResponse),
         (status = 400, description = "host_id or error_code is invalid"),
         (status = 401, description = "The device session or request proof is invalid or revoked"),
         (status = 404, description = "No such turn for a bot bound to this device"),
@@ -787,7 +783,7 @@ pub(crate) async fn release(
     Path((id, turn_id)): Path<(String, String)>,
     headers: HeaderMap,
     Json(mut body): Json<DeviceReleaseRequest>,
-) -> Result<Json<DeviceTurnState>, ApiError> {
+) -> Result<Json<DeviceReleaseResponse>, ApiError> {
     let owner = owner_of(
         &state,
         &id,
@@ -810,7 +806,9 @@ pub(crate) async fn release(
     }
     bots_grant::settle(&state, &owner, body.usage.as_ref(), false).await;
     wake(&state, [owner]).await;
-    Ok(Json(ended))
+    Ok(Json(DeviceReleaseResponse {
+        requeued: ended.turn.status == flow_like_types::bot_turn::TurnStatus::Queued,
+    }))
 }
 
 /// The approval card of a parked turn names that turn, a tool and a valid card id.

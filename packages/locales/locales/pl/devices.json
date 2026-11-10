@@ -6067,6 +6067,7 @@
 				"when": ""
 			},
 			"rows": {
+				"bots": "",
 				"cloud": "",
 				"data": "",
 				"stays": "",

@@ -239,7 +239,13 @@ fn patched_capabilities(
     ))
 }
 
-fn location_refusal(location: BotLocation, capability: BotCapability) -> String {
+pub(super) fn location_refusal(location: BotLocation, capability: BotCapability) -> String {
+    if location == BotLocation::Device && capability.unavailable_on_device() {
+        return format!(
+            "A bot on a device can't hold '{}' yet; remove it or move the bot to a desktop",
+            capability.as_str()
+        );
+    }
     let why = if capability == BotCapability::Encryption {
         " (its key lives only on the host that runs it, and the server must never read encrypted chats)"
     } else {
@@ -286,6 +292,11 @@ fn bot_name(name: &str) -> Result<String, ApiError> {
     let name = name.trim();
     if name.is_empty() {
         return Err(ApiError::bad_request("Bot name must not be empty"));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(ApiError::bad_request(
+            "Bot name must not contain control characters or line breaks",
+        ));
     }
     let chars = name.chars().count();
     if chars > NAME_MAX_CHARS {
@@ -465,6 +476,15 @@ mod tests {
     }
 
     #[test]
+    fn bot_names_reject_control_characters_and_line_breaks() {
+        for name in ["Scout\nwrote:", "Sc\tout", "Scout\u{7}", "a\r\nb"] {
+            let error = bot_name(name).unwrap_err();
+            assert_eq!(error.status(), StatusCode::BAD_REQUEST, "{name:?}");
+        }
+        assert_eq!(bot_name("  Scout  ").unwrap(), "Scout");
+    }
+
+    #[test]
     fn a_new_bot_starts_with_only_what_it_asks_for() {
         let (preset, settings) = create(json!({
             "name": "  Scout  ",
@@ -538,18 +558,64 @@ mod tests {
             format!("{error:?}").contains("server must never read"),
             "{error:?}"
         );
-        for location in ["desktop", "device"] {
-            let bot = create(json!({
-                "name": "Vault",
+        let bot = create(json!({
+            "name": "Vault",
+            "appearance": { "kind": "pip" },
+            "capabilities": ["encryption"],
+            "location": "desktop",
+        }))
+        .unwrap()
+        .1;
+        assert!(bot.has(BotCapability::Encryption));
+    }
+
+    #[test]
+    fn a_device_refuses_the_capabilities_it_cannot_serve_yet_and_a_save_can_drop_them() {
+        for id in ["connectors", "skills", "image_generation", "encryption"] {
+            let error = create(json!({
+                "name": "Worker",
                 "appearance": { "kind": "pip" },
-                "capabilities": ["encryption"],
-                "location": location,
-                "device_id": (location == "device").then_some("device-1"),
+                "capabilities": [id],
+                "location": "device",
+                "device_id": "device-1",
             }))
-            .unwrap()
-            .1;
-            assert!(bot.has(BotCapability::Encryption), "{location}");
+            .unwrap_err();
+            assert_eq!(
+                code(&error),
+                (StatusCode::UNPROCESSABLE_ENTITY, BOT_CAPABILITY_LOCATION),
+                "{id}"
+            );
+            assert!(format!("{error:?}").contains("on a device"), "{id}");
         }
+        let desktop = create(json!({
+            "name": "Worker",
+            "appearance": { "kind": "pip" },
+            "capabilities": ["skills", "command_line"],
+            "location": "desktop",
+        }))
+        .unwrap()
+        .1;
+        let error = patch(
+            &desktop,
+            None,
+            json!({ "location": "device", "device_id": "device-1" }),
+        )
+        .unwrap_err();
+        assert_eq!(
+            code(&error),
+            (StatusCode::UNPROCESSABLE_ENTITY, BOT_CAPABILITY_LOCATION)
+        );
+        let moved = patch(
+            &desktop,
+            None,
+            json!({
+                "location": "device",
+                "device_id": "device-1",
+                "capabilities": ["command_line"],
+            }),
+        )
+        .unwrap();
+        assert_eq!(moved.location, BotLocation::Device);
     }
 
     #[test]
@@ -817,10 +883,7 @@ mod tests {
     fn tool_capabilities_are_accepted_on_every_location_and_kept_in_canonical_order() {
         let ids: Vec<&str> = vec![
             "delegation",
-            "image_generation",
-            "skills",
             "channels",
-            "connectors",
             "knowledge",
             "data_connections",
             "documents",

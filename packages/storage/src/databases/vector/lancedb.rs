@@ -274,6 +274,23 @@ pub struct LanceDBVectorStore {
     unmarkable_keys: HashMap<String, Option<(DataType, bool)>>,
     /// Whose column read restrictions apply to reads through this store.
     column_reader: ColumnReader,
+    /// Why the initial open failed for a reason other than a missing table.
+    open_error: Option<Arc<str>>,
+}
+
+async fn open_existing_table(
+    connection: &Connection,
+    table_name: &str,
+) -> std::result::Result<Option<Table>, lancedb::Error> {
+    match connection.open_table(table_name).execute().await {
+        Ok(table) => Ok(Some(table)),
+        Err(lancedb::Error::TableNotFound { .. }) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn open_failure(table_name: &str, error: &lancedb::Error) -> Arc<str> {
+    Arc::from(format!("Could not open table '{table_name}': {error}"))
 }
 
 impl Cacheable for LanceDBVectorStore {
@@ -331,10 +348,36 @@ impl LanceDBVectorStore {
         Ok(())
     }
 
+    /// The table handle, retrying the open once when the initial open failed for
+    /// a reason other than the table being absent.
+    async fn current_table(&self) -> Result<Option<Table>> {
+        if self.table.is_some() || self.open_error.is_none() {
+            return Ok(self.table.clone());
+        }
+        open_existing_table(&self.connection, &self.table_name)
+            .await
+            .map_err(|error| anyhow!("{}", open_failure(&self.table_name, &error)))
+    }
+
+    async fn require_table(&self) -> Result<Table> {
+        self.current_table()
+            .await?
+            .ok_or_else(|| anyhow!("Table not initialized"))
+    }
+
+    /// Adopt a table whose earlier open failed, so writers never create over it.
+    async fn heal_open_error(&mut self) -> Result<()> {
+        if let Some(table) = self.current_table().await? {
+            self.table = Some(table);
+            self.open_error = None;
+        }
+        Ok(())
+    }
+
     async fn readable_table(&self) -> Result<Option<Table>> {
         match &self.mutation_adapter {
             Some(adapter) => adapter.read_table().await,
-            None => Ok(self.table.clone()),
+            None => self.current_table().await,
         }
     }
 
@@ -390,7 +433,10 @@ impl LanceDBVectorStore {
         let connection = connect_lance(path.to_str().unwrap()).execute().await.ok();
         let connection: Connection = connection.ok_or(anyhow!("Error connecting to LanceDB"))?;
 
-        let table = connection.open_table(&table_name).execute().await.ok();
+        let (table, open_error) = match open_existing_table(&connection, &table_name).await {
+            Ok(table) => (table, None),
+            Err(error) => (None, Some(open_failure(&table_name, &error))),
+        };
 
         Ok(LanceDBVectorStore {
             connection,
@@ -402,6 +448,7 @@ impl LanceDBVectorStore {
             last_write_receipt: Default::default(),
             unmarkable_keys: Default::default(),
             column_reader: ColumnReader::default(),
+            open_error,
         })
     }
 
@@ -410,10 +457,13 @@ impl LanceDBVectorStore {
         // deriving the table URI. Never call it with invalid input; callers
         // that need a table will receive the existing "Table not initialized"
         // error instead of taking down the runtime with a dependency panic.
-        let table = if Self::validate_table_name(&table_name).is_ok() {
-            connection.open_table(&table_name).execute().await.ok()
+        let (table, open_error) = if Self::validate_table_name(&table_name).is_ok() {
+            match open_existing_table(&connection, &table_name).await {
+                Ok(table) => (table, None),
+                Err(error) => (None, Some(open_failure(&table_name, &error))),
+            }
         } else {
-            None
+            (None, None)
         };
 
         LanceDBVectorStore {
@@ -426,6 +476,7 @@ impl LanceDBVectorStore {
             last_write_receipt: Default::default(),
             unmarkable_keys: Default::default(),
             column_reader: ColumnReader::default(),
+            open_error,
         }
     }
 
@@ -448,6 +499,7 @@ impl LanceDBVectorStore {
             last_write_receipt: Default::default(),
             unmarkable_keys: Default::default(),
             column_reader: ColumnReader::default(),
+            open_error: None,
         })
     }
 
@@ -494,6 +546,7 @@ impl LanceDBVectorStore {
             last_write_receipt: Default::default(),
             unmarkable_keys: Default::default(),
             column_reader: ColumnReader::default(),
+            open_error: None,
         })
     }
 
@@ -653,6 +706,7 @@ impl LanceDBVectorStore {
             last_write_receipt: Default::default(),
             unmarkable_keys: Default::default(),
             column_reader: self.column_reader.clone(),
+            open_error: None,
         })
     }
 
@@ -816,6 +870,7 @@ impl LanceDBVectorStore {
             last_write_receipt: Default::default(),
             unmarkable_keys: Default::default(),
             column_reader: self.column_reader.clone(),
+            open_error: None,
         })
     }
 
@@ -866,6 +921,7 @@ impl LanceDBVectorStore {
         for field in schema.fields() {
             crate::geometry::validate_geometry_field(field)?;
         }
+        self.heal_open_error().await?;
         let existed = self.table.is_some();
         if existed && if_not_exists {
             let existing_schema = self
@@ -955,6 +1011,7 @@ impl LanceDBVectorStore {
             self.connection.drop_table(&self.table_name, &[]).await?;
         }
         self.table = None;
+        self.open_error = None;
         self.unmarkable_keys.clear();
         Ok(())
     }
@@ -979,7 +1036,7 @@ impl LanceDBVectorStore {
     ) -> Result<()> {
         self.ensure_unmanaged("table optimization")?;
         self.ensure_writable()?;
-        let table = self.table.clone().ok_or(anyhow!("Table not initialized"))?;
+        let table = self.require_table().await?;
         if keep_versions && let Some(wrapper) = table.dataset() {
             wrapper.ensure_mutable()?;
             wrapper.reload().await?;
@@ -1016,10 +1073,7 @@ impl LanceDBVectorStore {
     ) -> Result<AddColumnsResult> {
         self.ensure_unmanaged("schema changes")?;
         self.ensure_writable()?;
-        let table = self
-            .table
-            .clone()
-            .ok_or_else(|| anyhow!("Table not initialized"))?;
+        let table = self.require_table().await?;
         // The merged schema replaces the manifest's; a stale one would drop a newer key.
         table.checkout_latest().await?;
 
@@ -1068,10 +1122,7 @@ impl LanceDBVectorStore {
     pub async fn drop_columns(&self, column_names: &[&str]) -> Result<()> {
         self.ensure_unmanaged("schema changes")?;
         self.ensure_writable()?;
-        let table = self
-            .table
-            .clone()
-            .ok_or_else(|| anyhow!("Table not initialized"))?;
+        let table = self.require_table().await?;
 
         table.checkout_latest().await?;
         let hidden = self
@@ -1106,10 +1157,7 @@ impl LanceDBVectorStore {
     ) -> Result<AlterColumnsResult> {
         self.ensure_unmanaged("schema changes")?;
         self.ensure_writable()?;
-        let table = self
-            .table
-            .clone()
-            .ok_or_else(|| anyhow!("Table not initialized"))?;
+        let table = self.require_table().await?;
 
         // A change built on a stale schema would commit over, and drop, a newer key.
         table.checkout_latest().await?;
@@ -1184,10 +1232,7 @@ impl LanceDBVectorStore {
     pub async fn drop_index(&self, name: &str) -> Result<()> {
         self.ensure_unmanaged("index changes")?;
         self.ensure_writable()?;
-        let table = self
-            .table
-            .clone()
-            .ok_or_else(|| anyhow!("Table not initialized"))?;
+        let table = self.require_table().await?;
         table.drop_index(name).await?;
         Ok(())
     }
@@ -1305,7 +1350,7 @@ impl LanceDBVectorStore {
     pub async fn set_primary_key(&self, column: &str) -> Result<()> {
         self.ensure_unmanaged("schema changes")?;
         self.ensure_writable()?;
-        let table = self.table.clone().ok_or_else(|| {
+        let table = self.current_table().await?.ok_or_else(|| {
             anyhow!(
                 "Table '{}' does not exist; create it before setting its key",
                 self.table_name
@@ -1418,6 +1463,16 @@ impl LanceDBVectorStore {
         if !keys.is_empty() {
             return Ok(keys == [id_field]);
         }
+        if let Some(ruled_out) = self.unmarkable_keys.get(id_field) {
+            let held = table.schema().await?;
+            let held_signature = held
+                .field_with_name(id_field)
+                .ok()
+                .map(|field| (field.data_type().clone(), field.is_nullable()));
+            if *ruled_out == held_signature {
+                return Ok(false);
+            }
+        }
         // The handle may predate another writer's key or a change to the column.
         table.checkout_latest().await?;
         let schema = table.schema().await?;
@@ -1482,10 +1537,7 @@ impl LanceDBVectorStore {
 
     pub async fn raw(&self) -> Result<Table> {
         self.ensure_unmanaged("raw table access")?;
-        let table = self
-            .table
-            .clone()
-            .ok_or_else(|| anyhow!("Table not initialized"))?;
+        let table = self.require_table().await?;
         Ok(table)
     }
 
@@ -1515,6 +1567,7 @@ impl LanceDBVectorStore {
         crate::geometry::validate_batch(&batch)?;
         let items = vec![batch];
 
+        self.heal_open_error().await?;
         if self.table.is_none() {
             let builder = self
                 .connection
@@ -2401,6 +2454,7 @@ impl VectorStore for LanceDBVectorStore {
                 .await;
         }
         self.ensure_writable()?;
+        self.heal_open_error().await?;
         if self.table.is_none() {
             let reader = self.write_batch_reader(items.clone()).await?;
             let builder = self
@@ -2459,6 +2513,7 @@ impl VectorStore for LanceDBVectorStore {
                 .await;
         }
         self.ensure_writable()?;
+        self.heal_open_error().await?;
         if self.table.is_none() {
             let reader = self.write_batch_reader(items.clone()).await?;
             let builder = self
@@ -2510,7 +2565,7 @@ impl VectorStore for LanceDBVectorStore {
                 .await;
         }
         self.ensure_writable()?;
-        let table = self.table.clone().ok_or(anyhow!("Table not initialized"))?;
+        let table = self.require_table().await?;
         table.delete(filter).await?;
         return Ok(());
     }
@@ -2552,7 +2607,7 @@ impl VectorStore for LanceDBVectorStore {
     async fn index(&self, column: &str, index_type: Option<&str>) -> Result<()> {
         self.ensure_unmanaged("index changes")?;
         self.ensure_writable()?;
-        let table = self.table.clone().ok_or(anyhow!("Table not initialized"))?;
+        let table = self.require_table().await?;
         // Lance 13 adds an index of another kind next to the column's existing one.
         // Reusing its name replaces it, so a column keeps one index.
         let existing = table
@@ -2615,7 +2670,7 @@ impl VectorStore for LanceDBVectorStore {
             return self.delete("true").await;
         }
         self.ensure_writable()?;
-        let table = self.table.clone().ok_or(anyhow!("Table not initialized"))?;
+        let table = self.require_table().await?;
         table.delete("1=1").await?;
         Ok(())
     }
@@ -4810,6 +4865,42 @@ mod tests {
 
         std::fs::remove_dir_all(&test_path).unwrap();
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "probe for B19: partial-row upsert"]
+    async fn probe_partial_row_upsert_keeps_unsent_nullable_column() -> Result<()> {
+        use arrow_schema::{DataType, Field, Schema};
+
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+
+        let mut db = LanceDBVectorStore::new(PathBuf::from(&test_path), "t".to_string()).await?;
+        db.create_empty_table(
+            Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("a", DataType::Utf8, true),
+                Field::new("b", DataType::Utf8, true),
+                Field::new("c", DataType::Utf8, true),
+            ]),
+            false,
+        )
+        .await?;
+        db.insert(vec![json!({"id": 1, "a": "a1", "b": "b1", "c": "c1"})])
+            .await?;
+        db.upsert(
+            vec![json!({"id": 1, "a": "a2", "b": "b2"})],
+            "id".to_string(),
+        )
+        .await?;
+
+        let rows = db.list(None, 10, 0).await?;
+        std::fs::remove_dir_all(&test_path).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["a"], json!("a2"));
+        assert_eq!(rows[0]["c"], json!("c1"));
         Ok(())
     }
 

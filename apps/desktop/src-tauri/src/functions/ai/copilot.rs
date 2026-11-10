@@ -66,6 +66,18 @@ mod workflow_results;
 mod workflow_sdk;
 mod workflow_state;
 
+pub(crate) use attachments::{CHAT_FILES, chat_file_handle, read_chat_file};
+
+/// The Bits model of a FlowPilot model selection; `None` for an agent backend, whose ids are not
+/// Bits ids.
+pub(crate) fn bits_model_id(model_id: Option<String>) -> Option<String> {
+    let selection = backend_types::FlowPilotModelSelection::parse(model_id);
+    match selection.backend {
+        backend_types::FlowPilotChatBackend::Bits => selection.model_id,
+        backend_types::FlowPilotChatBackend::Agent(_) => None,
+    }
+}
+
 pub use workflow_benchmark::{
     __cmd__flowpilot_run_workflow_benchmark, __cmd__flowpilot_workflow_benchmark_cases,
     __cmd__flowpilot_workflow_benchmark_scorecards,

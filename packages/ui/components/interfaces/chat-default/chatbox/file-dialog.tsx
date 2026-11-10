@@ -82,18 +82,18 @@ export function FileManagerDialog({
 
 	const getFileTypeColor = (file: File) => {
 		if (file.type.startsWith("image/"))
-			return `bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-800`;
+			return "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-800";
 		if (file.type.startsWith("video/"))
-			return `bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-950 dark:text-violet-300 dark:border-violet-800`;
+			return "bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-950 dark:text-violet-300 dark:border-violet-800";
 		if (file.type.startsWith("audio/"))
-			return `bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800`;
+			return "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800";
 		if (
 			file.type.includes("zip") ||
 			file.type.includes("rar") ||
 			file.type.includes("tar")
 		)
-			return `bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-950 dark:text-orange-300 dark:border-orange-800`;
-		return `bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-950 dark:text-slate-300 dark:border-slate-800`;
+			return "bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-950 dark:text-orange-300 dark:border-orange-800";
+		return "bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-950 dark:text-slate-300 dark:border-slate-800";
 	};
 
 	// Build hierarchical file tree based on path prefixes
@@ -165,11 +165,11 @@ export function FileManagerDialog({
 				return a.name.localeCompare(b.name);
 			});
 
-			nodes.forEach((node) => {
+			for (const node of nodes) {
 				if (node.children) {
 					sortNodes(node.children);
 				}
-			});
+			}
 		};
 
 		if (root.children) {
@@ -217,7 +217,7 @@ export function FileManagerDialog({
 
 		setSelectedFiles((prev) => {
 			const next = new Set(prev);
-			indices.forEach((index) => next.add(index));
+			for (const index of indices) next.add(index);
 			return next;
 		});
 	};
@@ -236,14 +236,17 @@ export function FileManagerDialog({
 
 		setSelectedFiles((prev) => {
 			const next = new Set(prev);
-			indices.forEach((index) => next.delete(index));
+			for (const index of indices) next.delete(index);
 			return next;
 		});
 	};
 
 	const hasSelectedFilesInFolder = (node: FileNode): boolean => {
 		if (node.type === "file") {
-			return selectedFiles.has(node.originalIndex!);
+			return (
+				node.originalIndex !== undefined &&
+				selectedFiles.has(node.originalIndex)
+			);
 		}
 		return (
 			node.children?.some((child) => hasSelectedFilesInFolder(child)) || false
@@ -317,6 +320,7 @@ export function FileManagerDialog({
 							style={{ paddingLeft: `${depth * 20 + 12}px` }}
 						>
 							<button
+								type="button"
 								className="flex items-center gap-3 flex-1 min-w-0"
 								onClick={() => toggleFolder(node.path)}
 							>
@@ -398,9 +402,10 @@ export function FileManagerDialog({
 			);
 		}
 
-		// File node
-		const isSelected = selectedFiles.has(node.originalIndex!);
-		const FileIcon = getFileIcon(node.file!);
+		const { file, originalIndex } = node;
+		if (!file || originalIndex === undefined) return null;
+		const isSelected = selectedFiles.has(originalIndex);
+		const FileIcon = getFileIcon(file);
 
 		return (
 			<Card
@@ -411,15 +416,15 @@ export function FileManagerDialog({
 				<div className="flex items-center gap-4 p-3">
 					<Checkbox
 						checked={isSelected}
-						onCheckedChange={() => toggleFileSelection(node.originalIndex!)}
+						onCheckedChange={() => toggleFileSelection(originalIndex)}
 						className="shrink-0"
 					/>
 
 					{/* File Preview/Icon */}
-					{isImageFile(node.file!) ? (
+					{isImageFile(file) ? (
 						<div className="relative shrink-0">
 							<img
-								src={previewUrls.get(node.file!)}
+								src={previewUrls.get(file)}
 								alt={node.name}
 								className="w-12 h-12 object-cover rounded-lg border border-border shadow-sm"
 							/>
@@ -438,13 +443,13 @@ export function FileManagerDialog({
 						<div className="font-medium text-sm truncate">{node.name}</div>
 						<div className="flex items-center gap-2">
 							<span className="text-xs text-muted-foreground">
-								{humanFileSize(node.file!.size, true)}
+								{humanFileSize(file.size, true)}
 							</span>
 							<Badge
 								variant="outline"
-								className={`text-xs ${getFileTypeColor(node.file!)}`}
+								className={`text-xs ${getFileTypeColor(file)}`}
 							>
-								{node.file!.type.split("/")[0] || "file"}
+								{file.type.split("/")[0] || "file"}
 							</Badge>
 						</div>
 					</div>
@@ -453,7 +458,7 @@ export function FileManagerDialog({
 					<Button
 						variant="ghost"
 						size="sm"
-						onClick={() => onRemoveFile(node.originalIndex!)}
+						onClick={() => onRemoveFile(originalIndex)}
 						className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive transition-all duration-200 shrink-0"
 					>
 						<Trash2 className="w-4 h-4" />

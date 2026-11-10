@@ -22,6 +22,7 @@ import {
 } from "./global-chat-bots";
 import { globalChatDb } from "./global-chat-db";
 import { useGlobalChatStore } from "./global-chat-store";
+import type { VoiceTranscript } from "./voice-turn";
 
 let inbox: IInboxState | null = null;
 const targets = new Map<string, BotHistoryTarget>();
@@ -131,12 +132,17 @@ export async function sendInteractiveMessage(
 	conversationId: string,
 	message: { id: string; text: string },
 	clientRunId: string,
+	transcript?: VoiceTranscript,
 ): Promise<InteractiveRef | null> {
 	const target = await ensureBotTarget(conversationId);
 	const backend = inbox;
 	if (!target || !backend) return null;
 	try {
-		await sendInteractive(backend, target, { ...message, clientRunId });
+		await sendInteractive(backend, target, {
+			...message,
+			clientRunId,
+			transcript,
+		});
 		return {
 			conversationId: target.conversationId,
 			triggerMessageId: message.id,

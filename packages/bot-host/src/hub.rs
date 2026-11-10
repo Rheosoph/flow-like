@@ -158,8 +158,14 @@ pub trait TurnHub: Send + Sync + 'static {
         Ok(())
     }
     /// Gives a claimed turn back unanswered, failed with `code`, so the hub queues it again
-    /// with a backoff.
-    async fn release(&self, _turn_id: &str, _host_id: &str, _code: &str) -> Result<(), HubFailure> {
+    /// with a backoff. `true` when it is queued again; `false` when its retries are spent and the
+    /// host still holds it, so the host reports the failure.
+    async fn release(
+        &self,
+        _turn_id: &str,
+        _host_id: &str,
+        _code: &str,
+    ) -> Result<bool, HubFailure> {
         Err(HubFailure::offline("This hub cannot release turns"))
     }
     async fn heartbeat(&self, turn_id: &str, host_id: &str) -> Result<BotTurn, HubFailure>;

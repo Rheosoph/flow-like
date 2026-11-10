@@ -213,6 +213,22 @@ describe("a bot chat on its inbox history", () => {
 			},
 		});
 		expect(desktopInteractiveArgs(null)).toEqual({});
+
+		await sendInteractiveMessage(
+			"bot:bot_ada",
+			{ id: "msg_2", text: "Spoken" },
+			"run_2",
+			{ call: "c", offset_ms: 0, duration_ms: 500, mentions: [] },
+		);
+		expect(sent[1].kind).toBe("transcript");
+		expect(sent[1].envelope?.body).toEqual({
+			call: "c",
+			offset_ms: 0,
+			duration_ms: 500,
+			mentions: [],
+			text: "Spoken",
+			interactive: { client_run_id: "run_2" },
+		});
 		expect(webInteractiveBody(null)).toEqual({});
 	});
 

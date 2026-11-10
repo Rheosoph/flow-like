@@ -34,6 +34,43 @@ import VisionKit
             fail("unavailable", "Camera capture is unavailable in this app build.")
             return
         }
+        if options.operation == "live_text" {
+            guard DataScannerViewController.isSupported else {
+                fail("unavailable", "Live text is unavailable on this device. Attach a photo or document instead.")
+                return
+            }
+            guard DataScannerViewController.isAvailable else {
+                fail("unavailable", "Live text needs camera access. Allow camera access for Flow Like in Settings.")
+                return
+            }
+            let delegate = BotLiveTextDelegate(request: self)
+            let scanner = DataScannerViewController(
+                recognizedDataTypes: [.text(), .barcode()],
+                qualityLevel: .balanced,
+                recognizesMultipleItems: true,
+                isHighFrameRateTrackingEnabled: false,
+                isPinchToZoomEnabled: true,
+                isGuidanceEnabled: true,
+                isHighlightingEnabled: true
+            )
+            scanner.delegate = delegate
+            scanner.title = "Tap text or a code"
+            scanner.navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .cancel, primaryAction: UIAction { [weak self] _ in
+                self?.fail("cancelled", "Live text was cancelled.")
+            })
+            let navigation = UINavigationController(rootViewController: scanner)
+            navigation.isModalInPresentation = true
+            captureCleanup = { [scanner, navigation, delegate] in
+                _ = delegate
+                scanner.stopScanning()
+                navigation.dismiss(animated: true)
+            }
+            presenter.present(navigation, animated: true) { [weak self] in
+                do { try scanner.startScanning() }
+                catch { self?.fail("failed", "The camera could not start scanning text.") }
+            }
+            return
+        }
         let delegate = BotDocumentCaptureDelegate(request: self)
         let controller: UIViewController
         if options.operation == "photo" {
@@ -199,6 +236,28 @@ import VisionKit
 
     @objc private func cancel() { closed = true; stop(); onCancel?() }
     override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); closed = true; stop() }
+}
+
+@available(iOSApplicationExtension, unavailable)
+@MainActor private final class BotLiveTextDelegate: NSObject, DataScannerViewControllerDelegate {
+    private weak var request: NativeBotDeviceRequest?
+    init(request: NativeBotDeviceRequest) { self.request = request }
+
+    func dataScanner(_ dataScanner: DataScannerViewController, didTapOn item: RecognizedItem) {
+        let raw: String?
+        switch item {
+        case .text(let text): raw = text.transcript
+        case .barcode(let code): raw = code.payloadStringValue
+        @unknown default: raw = nil
+        }
+        let value = String((raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(8_000))
+        guard !value.isEmpty else { return }
+        request?.finish(["text": value])
+    }
+
+    func dataScanner(_ dataScanner: DataScannerViewController, becameUnavailableWithError error: DataScannerViewController.ScanningUnavailable) {
+        request?.fail("failed", "The camera stopped scanning text. Check camera access and try again.")
+    }
 }
 
 @available(iOSApplicationExtension, unavailable)

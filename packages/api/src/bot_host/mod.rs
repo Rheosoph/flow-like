@@ -155,6 +155,11 @@ pub async fn recover(state: &AppState) -> Result<Recovered, ApiError> {
             tracing::warn!(%error, "Bot turns handed off to a desktop were not taken back")
         }
     }
+    match crate::devices::bots_removed::fail_orphaned(state).await {
+        Ok(0) => {}
+        Ok(ended) => tracing::info!(turns = ended, "Bot turns of removed devices ended"),
+        Err(error) => tracing::warn!(%error, "Bot turns of removed devices were not ended"),
+    }
     if let Err(error) = talk::expire_asks(state, now).await {
         tracing::warn!(%error, "Bot talk: lapsed questions were not ended");
     }

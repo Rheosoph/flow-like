@@ -361,6 +361,84 @@ describe("FlowScript three-way merge", () => {
 	});
 });
 
+describe("a `@collapse` group written as several blocks", () => {
+	const GROUP_ID = "layergroup0000000001";
+	const opener = `    @collapse("Load") {   //@l:${GROUP_ID}`;
+	const GROUPED = [
+		`eventsGeneric main(payload: Struct) {   //@n:${MAIN_ID}`,
+		opener,
+		`        const x = now()   //@n:${X_ID}`,
+		"    }",
+		`    log({ msg: "between" })   //@n:${LOG_ID}`,
+		opener,
+		`        const y = add({ a: x, b: 1 })   //@n:${Y_ID}`,
+		"    }",
+		"}",
+		"",
+	].join("\n");
+	const secondOpenerLine = 6;
+
+	test("shares the group anchor without counting as a duplicate", () => {
+		const { units, duplicateAnchorId } = segmentFlowScriptUnits(GROUPED);
+		expect(duplicateAnchorId).toBeUndefined();
+		expect(
+			units
+				.filter((unit) => unit.anchorId === GROUP_ID)
+				.map((unit) => [unit.occurrence, unit.startLine]),
+		).toEqual([
+			[1, 2],
+			[2, secondOpenerLine],
+		]);
+		expect(units.map((unit) => unit.text).join("\n")).toBe(GROUPED);
+	});
+
+	test("merges edits on both sides of the repeated anchor", () => {
+		const local = editAnchoredLine(
+			GROUPED,
+			Y_ID,
+			`        const y = add({ a: x, b: 2 })   //@n:${Y_ID}`,
+		);
+		const fresh = editAnchoredLine(
+			GROUPED,
+			X_ID,
+			`        const x = today()   //@n:${X_ID}`,
+		);
+		const result = mergeOrThrow({ baseline: GROUPED, local, fresh });
+		expect(result.conflicts).toHaveLength(0);
+		expect(result.mergedText).toBe(
+			editAnchoredLine(local, X_ID, `        const x = today()   //@n:${X_ID}`),
+		);
+	});
+
+	test("resolves a conflict on the second block in place", () => {
+		const renameSecond = (text: string, name: string) => {
+			const lines = text.split("\n");
+			lines[secondOpenerLine - 1] = opener.replace("Load", name);
+			return lines.join("\n");
+		};
+		const local = renameSecond(GROUPED, "Mine");
+		const fresh = renameSecond(GROUPED, "Theirs");
+		const result = mergeOrThrow({ baseline: GROUPED, local, fresh });
+		expect(result.conflicts).toHaveLength(1);
+		const [conflict] = result.conflicts;
+		expect(conflict).toMatchObject({ anchorId: GROUP_ID, occurrence: 2 });
+		expect(
+			resolveFlowScriptConflict(result.mergedText, conflict, "theirs"),
+		).toBe(fresh);
+		expect(
+			deriveFlowScriptConflictLenses(
+				result.conflicts,
+				parseFlowScriptAnchors(result.mergedText),
+			),
+		).toEqual([{ line: secondOpenerLine, conflictIndex: 0 }]);
+	});
+
+	test("still refuses a function anchor reused on a group block", () => {
+		const reused = `function load() {   //@l:${GROUP_ID}\n${opener}\n    }\n}`;
+		expect(segmentFlowScriptUnits(reused).duplicateAnchorId).toBe(GROUP_ID);
+	});
+});
+
 describe("FlowScript conflict resolution", () => {
 	const local = editAnchoredLine(
 		BASE,

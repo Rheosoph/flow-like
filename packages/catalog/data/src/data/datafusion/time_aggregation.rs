@@ -9,6 +9,36 @@ use flow_like::flow::{
 };
 use flow_like_types::{async_trait, json::json};
 
+#[cfg(feature = "execute")]
+fn ensure_readonly_sql(sql: &str) -> flow_like_types::Result<()> {
+    flow_like_storage::databases::sql_guard::validate_readonly_sql(sql).map_err(|error| {
+        flow_like_types::anyhow!(
+            "The generated SQL must be a single read-only SELECT; check the table, column and filter pins: {error}"
+        )
+    })
+}
+
+/// The literal is rendered in UTC so it names the same instant as the returned epoch micros.
+fn timestamp_literal_and_micros(datetime_str: &str) -> flow_like_types::Result<(String, i64)> {
+    let dt = chrono::DateTime::parse_from_rfc3339(datetime_str)
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .or_else(|_| {
+            chrono::NaiveDateTime::parse_from_str(datetime_str, "%Y-%m-%dT%H:%M:%S")
+                .or_else(|_| {
+                    chrono::NaiveDateTime::parse_from_str(datetime_str, "%Y-%m-%d %H:%M:%S")
+                })
+                .map(|ndt| ndt.and_utc())
+        })
+        .map_err(|e| {
+            flow_like_types::anyhow!("Failed to parse datetime '{}': {}", datetime_str, e)
+        })?;
+
+    Ok((
+        format!("TIMESTAMP '{}'", dt.format("%Y-%m-%d %H:%M:%S%.6f")),
+        dt.timestamp_micros(),
+    ))
+}
+
 /// Time interval units for aggregation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeInterval {
@@ -39,6 +69,15 @@ impl TimeInterval {
             TimeInterval::Month => "1 month",
             TimeInterval::Quarter => "3 months",
             TimeInterval::Year => "1 year",
+        }
+    }
+
+    /// `date_bin` aligns bins to this origin. 1970-01-01 was a Thursday, so weekly bins
+    /// start from the first Monday instead, matching `date_trunc('week')`.
+    pub fn bin_origin(&self) -> &'static str {
+        match self {
+            TimeInterval::Week => "1970-01-05",
+            _ => "1970-01-01",
         }
     }
 
@@ -272,9 +311,10 @@ impl NodeLogic for TimeBinAggregationNode {
 
         // Build aggregation expressions
         let mut select_parts = vec![format!(
-            "date_bin(INTERVAL '{}', {}, TIMESTAMP '1970-01-01') as time_bucket",
+            "date_bin(INTERVAL '{}', {}, TIMESTAMP '{}') as time_bucket",
             interval.to_interval_string(),
-            timestamp_column
+            timestamp_column,
+            interval.bin_origin()
         )];
 
         // Add group by columns to select
@@ -326,6 +366,7 @@ impl NodeLogic for TimeBinAggregationNode {
             group_by_parts.join(", ")
         );
 
+        ensure_readonly_sql(&sql)?;
         context.set_pin_value("sql", json!(sql.clone())).await?;
 
         // Execute query
@@ -511,6 +552,7 @@ impl NodeLogic for DateTruncAggregationNode {
             precision_lower, timestamp_column, aggregation_sql, source_table, where_clause
         );
 
+        ensure_readonly_sql(&sql)?;
         context.set_pin_value("sql", json!(sql.clone())).await?;
 
         let df = cached_session.ctx.sql(&sql).await?;
@@ -742,6 +784,7 @@ impl NodeLogic for WindowAggregationNode {
             select_columns, window_expr, source_table, timestamp_column
         );
 
+        ensure_readonly_sql(&sql)?;
         context.set_pin_value("sql", json!(sql.clone())).await?;
 
         let df = cached_session.ctx.sql(&sql).await?;
@@ -823,23 +866,7 @@ impl NodeLogic for DateTimeToTimestampNode {
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let datetime_str: String = context.evaluate_pin("datetime").await?;
-
-        // Parse ISO 8601 datetime
-        let dt = chrono::DateTime::parse_from_rfc3339(&datetime_str)
-            .or_else(|_| {
-                // Try without timezone
-                chrono::NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%dT%H:%M:%S")
-                    .or_else(|_| {
-                        chrono::NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%d %H:%M:%S")
-                    })
-                    .map(|ndt| ndt.and_utc().fixed_offset())
-            })
-            .map_err(|e| {
-                flow_like_types::anyhow!("Failed to parse datetime '{}': {}", datetime_str, e)
-            })?;
-
-        let timestamp_literal = format!("TIMESTAMP '{}'", dt.format("%Y-%m-%d %H:%M:%S%.6f"));
-        let epoch_micros = dt.timestamp_micros();
+        let (timestamp_literal, epoch_micros) = timestamp_literal_and_micros(&datetime_str)?;
 
         context
             .set_pin_value("timestamp_literal", json!(timestamp_literal))
@@ -1201,5 +1228,63 @@ mod tests {
         assert!(input_pins.iter().any(|p| p.name == "start_time"));
         assert!(input_pins.iter().any(|p| p.name == "end_time"));
         assert!(output_pins.iter().any(|p| p.name == "where_clause"));
+    }
+}
+
+#[cfg(test)]
+mod conversion_tests {
+    use super::*;
+
+    #[test]
+    fn timestamp_literal_is_utc_and_matches_epoch_micros() {
+        let (literal, micros) = timestamp_literal_and_micros("2021-01-01T01:30:00+02:00").unwrap();
+        assert_eq!(literal, "TIMESTAMP '2020-12-31 23:30:00.000000'");
+        assert_eq!(micros, 1_609_457_400_000_000);
+
+        let (naive_literal, naive_micros) =
+            timestamp_literal_and_micros("2020-12-31 23:30:00").unwrap();
+        assert_eq!(naive_literal, literal);
+        assert_eq!(naive_micros, micros);
+    }
+
+    #[test]
+    fn weekly_bins_start_on_a_monday() {
+        assert_eq!(TimeInterval::Week.bin_origin(), "1970-01-05");
+        assert_eq!(TimeInterval::Day.bin_origin(), "1970-01-01");
+        assert_eq!(TimeInterval::Month.bin_origin(), "1970-01-01");
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod execute_tests {
+    use super::*;
+    use flow_like_storage::datafusion::prelude::SessionContext;
+    use flow_like_types::tokio;
+
+    #[tokio::test]
+    async fn week_bucket_matches_date_trunc_week() {
+        let ctx = SessionContext::new();
+        let sql = format!(
+            "SELECT date_bin(INTERVAL '{}', TIMESTAMP '2021-01-06 12:00:00', TIMESTAMP '{}') AS binned, \
+             date_trunc('week', TIMESTAMP '2021-01-06 12:00:00') AS truncated",
+            TimeInterval::Week.to_interval_string(),
+            TimeInterval::Week.bin_origin()
+        );
+        let batches = ctx.sql(&sql).await.unwrap().collect().await.unwrap();
+        let rows = batches_to_rows(&batches).unwrap();
+        assert_eq!(rows[0]["binned"], rows[0]["truncated"]);
+        assert!(
+            rows[0]["binned"]
+                .as_str()
+                .unwrap()
+                .starts_with("2021-01-04T00:00:00")
+        );
+    }
+
+    #[test]
+    fn generated_sql_must_be_a_single_select() {
+        assert!(ensure_readonly_sql("SELECT a FROM t WHERE x > 1").is_ok());
+        assert!(ensure_readonly_sql("SELECT a FROM t; DROP TABLE t").is_err());
+        assert!(ensure_readonly_sql("DELETE FROM t WHERE a > 1").is_err());
     }
 }

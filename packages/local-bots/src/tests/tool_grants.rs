@@ -273,7 +273,31 @@ fn clearing_a_conversation_hides_its_approval_cards_and_rejects_stale_answers() 
     assert!(
         f.store
             .resolve_parked(&bot.id, "bt_clear", &response)
-            .is_err()
+            .unwrap()
+            .is_none()
     );
     assert!(f.store.conversations().unwrap().is_empty());
+}
+
+#[test]
+fn deleting_or_forgetting_a_conversation_drops_its_parked_turns() {
+    let fixture = fixture();
+    let bot = fixture.bot("Scout");
+    let first = fixture.direct(&bot);
+    let second = fixture.group(&[&bot]);
+    fixture
+        .store
+        .park_turn("bt_1", &bot.id, &first.id, "m1", &card("bt_1"))
+        .unwrap();
+    fixture
+        .store
+        .park_turn("bt_2", &bot.id, &second.id, "m2", &card("bt_2"))
+        .unwrap();
+    assert_eq!(fixture.store.parked_turns().unwrap().len(), 2);
+    fixture.store.delete_conversation(&first.id).unwrap();
+    let left = fixture.store.parked_turns().unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].turn_id, "bt_2");
+    fixture.store.forget_conversation(&second.id, None).unwrap();
+    assert!(fixture.store.parked_turns().unwrap().is_empty());
 }

@@ -1,10 +1,12 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { XIcon } from "lucide-react";
-import { useId, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { LockIcon, XIcon } from "lucide-react";
+import { useCallback, useId, useMemo, useState } from "react";
 import { useCreateConversation } from "../../hooks/use-inbox";
 import { apiErrorMessage } from "../../lib/api-error";
+import { useBackend } from "../../state/backend-state";
 import {
 	type IBotRoomLimits,
 	MAX_CONVERSATION_MEMBERS,
@@ -20,6 +22,15 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
+import { Switch } from "../ui/switch";
+import {
+	KEY_LOOKUP_LIMIT,
+	canSealRooms,
+	encryptedRoomError,
+	keyedPrincipals,
+	roomSealBlock,
+	sealBlockText,
+} from "./new-room-encryption";
 import {
 	type PickedPrincipal,
 	type PickerSource,
@@ -40,14 +51,46 @@ function NewRoomForm({
 }>) {
 	const { t } = useTranslation("bots");
 	const titleId = useId();
+	const sealedId = useId();
 	const [title, setTitle] = useState("");
 	const [picked, setPicked] = useState<PickedPrincipal[]>([]);
 	const [settingUp, setSettingUp] = useState(false);
 	const [botLimits, setBotLimits] = useState<Record<string, IBotRoomLimits>>(
 		{},
 	);
+	const [sealed, setSealed] = useState(false);
+	const inbox = useBackend().inboxState;
+	const canSeal = canSealRooms(source.people, Boolean(inbox));
+	const encrypted = canSeal && sealed;
 	const ownBots = ownRoomBots(picked);
 	const create = useCreateConversation();
+	const botsById = useMemo(
+		() => new Map(source.bots.map((bot) => [bot.id, bot])),
+		[source.bots],
+	);
+	const keyIds = picked
+		.filter((principal) => principal.mode !== "invite")
+		.map((principal) => principal.id)
+		.slice(0, KEY_LOOKUP_LIMIT);
+	const keys = useQuery({
+		queryKey: ["new-room-keys", keyIds],
+		enabled: encrypted && keyIds.length > 0,
+		queryFn: async () => keyedPrincipals((await inbox?.getKeys(keyIds)) ?? []),
+	});
+	const sealBlock = useCallback(
+		(principal: PickedPrincipal) =>
+			encrypted ? roomSealBlock(principal, botsById, keys.data) : null,
+		[encrypted, botsById, keys.data],
+	);
+	const unavailable = useCallback(
+		(principal: PickedPrincipal) => {
+			const block = sealBlock(principal);
+			return block ? sealBlockText(block, t) : undefined;
+		},
+		[sealBlock, t],
+	);
+	const blocked = picked.filter((principal) => sealBlock(principal));
+	const failed = t("crew.newRoomDialog.failed", "Couldn't create the room.");
 	const selected = new Set(picked.map((principal) => principal.id));
 	// A chat on this device holds you and its bots only; the account can't reach them.
 	const invites = picked.filter(
@@ -67,7 +110,7 @@ function NewRoomForm({
 		);
 
 	const submit = async () => {
-		if (picked.length === 0 || mixesLocal) return;
+		if (picked.length === 0 || mixesLocal || blocked.length > 0) return;
 		if (ownBots.length > 0 && !settingUp) {
 			setSettingUp(true);
 			return;
@@ -76,6 +119,7 @@ function NewRoomForm({
 			kind: "group",
 			title: title.trim() || null,
 			members: picked.map((principal) => principal.id),
+			...(encrypted ? { encryption: "e2e" as const } : {}),
 			...(ownBots.length > 0
 				? { bot_limits: selectedBotLimits(picked, botLimits) }
 				: {}),
@@ -153,8 +197,47 @@ function NewRoomForm({
 							multiple
 							full={picked.length >= MAX_OTHERS}
 							serverRule={{}}
+							unavailable={encrypted ? unavailable : undefined}
 							onPick={toggle}
 						/>
+						{canSeal && (
+							<div className="flex items-start gap-3 rounded-lg border p-3">
+								<Switch
+									id={sealedId}
+									checked={sealed}
+									onCheckedChange={setSealed}
+									disabled={create.isPending}
+									className="mt-0.5"
+								/>
+								<div className="flex min-w-0 flex-col gap-0.5">
+									<Label htmlFor={sealedId} className="gap-1.5">
+										<LockIcon className="size-3.5" aria-hidden />
+										{t(
+											"crew.newRoomDialog.encryptionLabel",
+											"End-to-end encrypted",
+										)}
+									</Label>
+									<p className="text-xs text-muted-foreground">
+										{t(
+											"crew.newRoomDialog.encryptionHint",
+											"Messages are sealed on each device. Bots that run on the server can't take part, and files can't be attached yet.",
+										)}
+									</p>
+								</div>
+							</div>
+						)}
+						{blocked.length > 0 && (
+							<ul
+								aria-live="polite"
+								className="flex flex-col gap-0.5 text-xs text-destructive"
+							>
+								{blocked.map((principal) => (
+									<li key={principal.id}>
+										{principal.label}: {unavailable(principal)}
+									</li>
+								))}
+							</ul>
+						)}
 						{invites > 0 && (
 							<p className="text-xs text-muted-foreground">
 								{t(
@@ -188,10 +271,9 @@ function NewRoomForm({
 			</div>
 			{create.isError && (
 				<p role="alert" className="text-sm text-destructive">
-					{apiErrorMessage(
-						create.error,
-						t("crew.newRoomDialog.failed", "Couldn't create the room."),
-					)}
+					{encrypted
+						? encryptedRoomError(create.error, failed, t)
+						: apiErrorMessage(create.error, failed)}
 				</p>
 			)}
 			<DialogFooter>
@@ -207,7 +289,12 @@ function NewRoomForm({
 				</Button>
 				<Button
 					type="submit"
-					disabled={picked.length === 0 || mixesLocal || create.isPending}
+					disabled={
+						picked.length === 0 ||
+						mixesLocal ||
+						blocked.length > 0 ||
+						create.isPending
+					}
 				>
 					{ownBots.length > 0 && !settingUp
 						? t("roomLimits.setup.continue", "Continue to bot setup")

@@ -12,8 +12,9 @@ import {
 	Square,
 	X,
 } from "lucide-react";
-import { Suspense, lazy, useEffect, useState } from "react";
+import { type CSSProperties, Suspense, lazy, useEffect, useState } from "react";
 import { useClientRouter } from "../lib/client-navigation";
+import { cornerOverlayRef, useCornerOffset } from "../lib/corner-clearance";
 import type { ExecutionTask } from "../lib/execution/types";
 import type { IInteractionRequest } from "../lib/schema/interaction";
 import { cn } from "../lib/utils";
@@ -114,6 +115,7 @@ export function ExecutionActivityTray({
 	const [busy, setBusy] = useState<Set<string>>(new Set());
 	const [errors, setErrors] = useState<Record<string, string>>({});
 	const [now, setNow] = useState(Date.now);
+	const cornerOffset = useCornerOffset();
 	useEffect(() => {
 		if (!open) return;
 		setNow(Date.now());
@@ -293,7 +295,15 @@ export function ExecutionActivityTray({
 	};
 
 	return (
-		<div className="fixed bottom-[calc(5rem+var(--fl-safe-bottom,0px))] right-3 z-50 sm:bottom-[calc(1rem+var(--fl-safe-bottom,0px))] sm:right-4">
+		<div
+			ref={cornerOverlayRef}
+			className="fixed bottom-[max(calc(5rem+var(--fl-safe-bottom,0px)),var(--fl-corner-offset,0px))] right-3 z-50 transition-[bottom] duration-200 ease-out motion-reduce:transition-none sm:bottom-[max(calc(1rem+var(--fl-safe-bottom,0px)),var(--fl-corner-offset,0px))] sm:right-4"
+			style={
+				cornerOffset > 0
+					? ({ "--fl-corner-offset": `${cornerOffset}px` } as CSSProperties)
+					: undefined
+			}
+		>
 			<Popover
 				open={open}
 				onOpenChange={(next) => {

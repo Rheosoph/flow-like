@@ -50,7 +50,7 @@
 # under /app/prisma/schema is already the Postgres one.
 # =============================================================================
 
-FROM oven/bun:1.3.8-debian AS builder
+FROM oven/bun:1.4.4-debian AS builder
 
 # Prisma's schema engine is a native binary linked against OpenSSL 3; the debian
 # variant of the bun image is what packages/api's tooling and the Kubernetes
@@ -120,7 +120,7 @@ RUN chmod +x /usr/local/bin/make-prisma-mirror.sh /usr/local/bin/make-postgres-p
     && node_modules/@prisma/engines/schema-engine-* --version \
     && bun -e 'await import("/app/migrate.ts")'
 
-FROM oven/bun:1.3.8-debian AS runtime
+FROM oven/bun:1.4.4-debian AS runtime
 
 COPY LICENSE /usr/share/licenses/flow-like/LICENSE
 

@@ -45,6 +45,11 @@ export interface PreparedExecutionRequest {
 	credentials?: RequestCredentials;
 	/** Account bus used when dispatch returns a queued run receipt instead of SSE. */
 	realtime?: RealtimeConnectionSession;
+	/**
+	 * Settle only once the server has ended the stream. The server writes the run's logs after its
+	 * terminal event, so a caller that reads them next sets this; observers still see the end at once.
+	 */
+	awaitStreamClose?: boolean;
 }
 
 export type ExecutionTaskStatus =

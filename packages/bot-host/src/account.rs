@@ -1,9 +1,9 @@
 //! Runs the turns of the signed-in account's bots that live on this desktop (`location:
 //! desktop`). The hub queues a turn when a message wakes such a bot; this host lists them, claims
 //! one with a lease it keeps alive by heartbeat, runs it through the same native path as a local
-//! bot and answers as the bot with the turn it holds. The hub's inbox invalidations are not
-//! subscribed to natively; a poll every 30 s finds new turns, and [`AccountHost::poke`] brings a
-//! poll forward.
+//! bot and answers as the bot with the turn it holds. A poll every 30 s finds new turns, and
+//! [`AccountHost::poke`] brings a poll forward; the desktop pokes it when its realtime connection
+//! reports inbox activity, so a turn is claimed within moments instead of at the next poll.
 
 use crate::{
     authorization::{HubAuthority, RunnerInference},
@@ -11,30 +11,32 @@ use crate::{
     gate::ApprovalGate,
     host::{
         CODE_CANCELLED, CODE_MODEL, CODE_TIMEOUT, CODE_UNREADABLE, FINISHED_KEPT, HubToken,
-        MAX_FAILURE_DETAIL_CHARS, MAX_REPLY_CHARS, RunError, TurnEvents, TurnInfo, TurnJob,
-        TurnRunner, clipped, now, participation_request, reply_body,
+        MAX_FAILURE_DETAIL_CHARS, MAX_REPLY_CHARS, RunError, RunFuture, RunOutcome, TurnEvents,
+        TurnInfo, TurnJob, TurnRunner, clipped, now, participation_request, reply_body,
     },
     hub::{Claimed, HubFailure, HubGrants, TurnHub, TurnSession, WaitOutcome},
+    latency::{self, CallTrace},
     memory::{self, JobMemory},
     notes::{HubNotes, StatusTurn},
     room_updates::{HubRoomUpdates, RoomUpdateTracker},
     transcript,
 };
 use flow_like::flow::copilot::{
-    TurnRequester,
+    ToolTrail, TurnRequester,
     bot_notes::NotesHandle,
     bot_talk::AnsweredRound,
     decision::{self, Decision, DecisionParticipant},
     decision_event::{self, EventDecision},
     memory_open::follow_up,
+    tool_gate::{ToolGateOpener, tool_gate},
     tool_grants::{GrantStore, clear_tokens, resume_note},
 };
 use flow_like_local_bots::InboxEntry;
 use flow_like_types::{
     bot_message::{ApprovalRequest, MessageBody},
     bot_turn::{
-        BotTurn, DEFAULT_TURN_DEADLINE_SECS, TurnAudience, TurnStatus, failure_message_id,
-        reply_message_id,
+        BotTurn, DEFAULT_TURN_DEADLINE_SECS, LEASE_SECS, TurnAudience, TurnStatus,
+        failure_message_id, reply_message_id,
     },
     inbox::{ConversationKind, InboxEntryKind, plain_envelope},
 };
@@ -43,17 +45,23 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::{
         Arc, Mutex, MutexGuard, OnceLock, PoisonError,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
-use tokio::sync::{Notify, Semaphore, watch};
+use tokio::{
+    sync::{Notify, Semaphore, watch},
+    task::JoinHandle,
+};
 
 pub const CODE_LEASE_LOST: &str = "BOT_TURN_LEASE_LOST";
 pub const CODE_TAKEN: &str = "BOT_TURN_TAKEN";
 pub const CODE_HUB: &str = "BOT_TURN_HUB";
 pub const CODE_REPLY_REFUSED: &str = "BOT_TURN_REPLY_REFUSED";
 const CODE_SETUP: &str = "BOT_TURN_SETUP";
+const CODE_INTERNAL: &str = "BOT_TURN_INTERNAL";
+const CODE_HOST_STOPPED: &str = "BOT_TURN_HOST_STOPPED";
+const LEASE_GRACE: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone)]
 pub struct AccountConfig {
@@ -105,6 +113,7 @@ struct Live {
     cancel: Arc<watch::Sender<Option<Cancel>>>,
     posting: bool,
     notes: Option<NotesHandle>,
+    trail: Option<ToolTrail>,
 }
 
 #[derive(Default)]
@@ -154,6 +163,33 @@ impl End {
     }
 }
 
+/// Ends the turn's local entry and its heartbeat however the turn task leaves: a panic or an
+/// aborted task fails the turn here instead of keeping the lease alive.
+struct TurnGuard {
+    inner: Arc<Inner>,
+    key: Key,
+    beat: Option<JoinHandle<()>>,
+    armed: bool,
+}
+
+impl TurnGuard {
+    fn complete(mut self, end: End) {
+        self.armed = false;
+        self.inner.finish(&self.key, end);
+    }
+}
+
+impl Drop for TurnGuard {
+    fn drop(&mut self) {
+        if let Some(beat) = self.beat.take() {
+            beat.abort();
+        }
+        if self.armed {
+            self.inner.finish(&self.key, End::failed(CODE_INTERNAL));
+        }
+    }
+}
+
 fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
     state.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -177,6 +213,8 @@ struct Inner {
     slots: Arc<Semaphore>,
     state: Mutex<State>,
     wake: Notify,
+    claim_failures: AtomicU32,
+    hosted_bots: AtomicUsize,
     reporting: AtomicBool,
     e2e: OnceLock<Arc<E2eHost>>,
 }
@@ -203,6 +241,8 @@ impl AccountHost {
                 slots,
                 state: Mutex::default(),
                 wake: Notify::new(),
+                claim_failures: AtomicU32::new(0),
+                hosted_bots: AtomicUsize::new(0),
                 reporting: AtomicBool::new(false),
                 e2e: OnceLock::new(),
             }),
@@ -214,9 +254,12 @@ impl AccountHost {
         let _ = self.inner.e2e.set(e2e);
     }
 
-    /// Brings the next poll forward, e.g. on an inbox invalidation; nothing calls it until a
-    /// native realtime subscriber exists.
-    #[allow(dead_code)]
+    /// How many account bots the last successful presence report placed on this host.
+    pub fn hosted_bot_count(&self) -> usize {
+        self.inner.hosted_bots.load(Ordering::SeqCst)
+    }
+
+    /// Brings the next poll forward, e.g. on an inbox invalidation.
     pub fn poke(&self) {
         self.inner.wake.notify_one();
     }
@@ -251,6 +294,8 @@ impl AccountHost {
     /// Stops reporting this host's bots; call on sign-out and when the app exits.
     pub async fn withdraw(&self) {
         let inner = &self.inner;
+        inner.hosted_bots.store(0, Ordering::SeqCst);
+        inner.release_running().await;
         if inner.reporting.swap(false, Ordering::SeqCst)
             && let Err(failure) = inner.hub.delete_host(&inner.config.host_id).await
         {
@@ -269,17 +314,23 @@ impl AccountHost {
                 tracing::debug!(%failure, "Bot host: firing account tasks failed");
             }
             match inner.poll_once().await {
-                Ok(()) => failures = 0,
+                Ok(started) => {
+                    failures = 0;
+                    if started == 0 {
+                        inner.claim_failures.store(0, Ordering::SeqCst);
+                    }
+                }
                 Err(failure) => {
                     failures = failures.saturating_add(1);
                     tracing::debug!(%failure, failures, "Bot host: listing account turns failed");
                 }
             }
             let poll = inner.hub.next_poll().unwrap_or(inner.config.poll);
-            let delay = backoff(poll, inner.config.max_backoff, failures);
+            let streak = failures.saturating_add(inner.claim_failures.load(Ordering::SeqCst));
+            let delay = backoff(poll, inner.config.max_backoff, streak);
             tokio::select! {
                 _ = tokio::time::sleep(delay) => {}
-                _ = inner.wake.notified(), if failures == 0 => {}
+                _ = inner.wake.notified(), if streak == 0 => {}
             }
         }
     }
@@ -307,6 +358,7 @@ impl Inner {
             tracing::debug!(%failure, "Bot host: publishing encryption keys failed");
         }
         let bots = self.hub.reported_bots().await?;
+        self.hosted_bots.store(bots.len(), Ordering::SeqCst);
         if bots.is_empty() && !self.reporting.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -321,7 +373,7 @@ impl Inner {
         Ok(())
     }
 
-    async fn poll_once(self: &Arc<Self>) -> Result<(), HubFailure> {
+    async fn poll_once(self: &Arc<Self>) -> Result<usize, HubFailure> {
         let turns = self.hub.list().await?;
         let mut started = Vec::new();
         {
@@ -338,59 +390,76 @@ impl Inner {
                     cancel: Arc::new(cancel),
                     posting: false,
                     notes: None,
+                    trail: None,
                 };
                 started.push((live.info.clone(), key.clone(), turn.id, receiver));
                 state.live.insert(key, live);
             }
         }
+        let count = started.len();
         for (info, key, turn_id, receiver) in started {
             self.events.turn(&info);
             tokio::spawn(self.clone().run_turn(key, turn_id, receiver));
         }
-        Ok(())
+        Ok(count)
     }
 
     async fn run_turn(
         self: Arc<Self>,
         key: Key,
         listed_id: String,
-        mut cancel: watch::Receiver<Option<Cancel>>,
+        cancel: watch::Receiver<Option<Cancel>>,
     ) {
+        let mut guard = TurnGuard {
+            inner: self.clone(),
+            key: key.clone(),
+            beat: None,
+            armed: true,
+        };
+        let end = self.run_claimed(&key, listed_id, cancel, &mut guard).await;
+        let claimed = guard.beat.is_some();
+        guard.complete(end);
+        if claimed {
+            self.wake.notify_one();
+        }
+    }
+
+    async fn run_claimed(
+        self: &Arc<Self>,
+        key: &Key,
+        listed_id: String,
+        mut cancel: watch::Receiver<Option<Cancel>>,
+        guard: &mut TurnGuard,
+    ) -> End {
         let permit = tokio::select! {
             biased;
-            reason = cancelled(&mut cancel) => {
-                self.finish(&key, End::by(reason));
-                return;
-            }
+            reason = cancelled(&mut cancel) => return End::by(reason),
             permit = self.slots.clone().acquire_owned() => permit.ok(),
         };
         let Some(_permit) = permit else {
-            self.finish(&key, End::dropped(CODE_CANCELLED));
-            return;
+            return End::dropped(CODE_CANCELLED);
         };
         let claimed = match self.hub.claim_turn(&listed_id, &self.config.host_id).await {
-            Ok(claimed) => claimed,
-            Err(failure) if failure.taken() => {
-                self.finish(&key, End::dropped(CODE_TAKEN));
-                return;
+            Ok(claimed) => {
+                self.claim_failures.store(0, Ordering::SeqCst);
+                claimed
             }
+            Err(failure) if failure.taken() => return End::dropped(CODE_TAKEN),
             Err(failure) => {
                 tracing::debug!(%failure, "Bot host: claiming an account turn failed");
-                self.finish(&key, End::dropped(CODE_HUB));
-                self.wake.notify_one();
-                return;
+                self.claim_failures.fetch_add(1, Ordering::SeqCst);
+                return End::dropped(CODE_HUB);
             }
         };
         let Claimed {
             turn: lead,
             session,
         } = claimed;
-        let sender = self.start(&key, &lead);
-        let beat = tokio::spawn(self.clone().keep_lease(lead.id.clone(), sender));
-        let end = self.execute(&key, &lead, session, &mut cancel).await;
-        beat.abort();
-        self.finish(&key, end);
-        self.wake.notify_one();
+        let sender = self.start(key, &lead);
+        guard.beat = Some(tokio::spawn(
+            self.clone().keep_lease(lead.id.clone(), sender),
+        ));
+        self.execute(key, &lead, session, &mut cancel).await
     }
 
     async fn keep_lease(
@@ -398,17 +467,59 @@ impl Inner {
         turn_id: String,
         cancel: Arc<watch::Sender<Option<Cancel>>>,
     ) {
+        let limit = self.config.deadline + LEASE_GRACE;
+        let lease = Duration::from_secs(LEASE_SECS.unsigned_abs());
+        let started = Instant::now();
+        let mut renewed = started;
         loop {
             tokio::time::sleep(self.config.heartbeat).await;
+            if started.elapsed() > limit {
+                tracing::warn!(
+                    turn_id,
+                    "Bot host: a turn outlived its deadline; the lease is no longer renewed"
+                );
+                return;
+            }
             match self.hub.heartbeat(&turn_id, &self.config.host_id).await {
-                Ok(_) => {}
-                Err(failure) if failure.lease_lost() => {
+                Ok(_) => renewed = Instant::now(),
+                Err(failure) if failure.lease_lost() || failure.signed_out() || failure.taken() => {
                     cancel.send_replace(Some(Cancel::LeaseLost));
                     return;
                 }
                 Err(failure) => {
                     tracing::debug!(%failure, turn_id, "Bot host: a heartbeat failed");
+                    if renewed.elapsed() > lease {
+                        tracing::warn!(
+                            turn_id,
+                            "Bot host: no heartbeat reached the hub within the lease; stopping the turn"
+                        );
+                        cancel.send_replace(Some(Cancel::LeaseLost));
+                        return;
+                    }
                 }
+            }
+        }
+    }
+
+    /// Stops the turns this host runs and hands each back to the hub so another host or a later
+    /// start picks it up without waiting for the lease to run out.
+    async fn release_running(&self) {
+        let running: Vec<String> = lock(&self.state)
+            .live
+            .values()
+            .filter(|live| live.info.status == TurnStatus::Running && !live.posting)
+            .map(|live| {
+                live.cancel.send_replace(Some(Cancel::LeaseLost));
+                live.info.id.clone()
+            })
+            .collect();
+        for turn_id in running {
+            if let Err(failure) = self
+                .hub
+                .release(&turn_id, &self.config.host_id, CODE_HOST_STOPPED)
+                .await
+            {
+                tracing::debug!(%failure, turn_id, "Bot host: releasing a turn at shutdown failed");
             }
         }
     }
@@ -419,6 +530,23 @@ impl Inner {
         lead: &BotTurn,
         session: Option<TurnSession>,
         cancel: &mut watch::Receiver<Option<Cancel>>,
+    ) -> End {
+        let mut trace = CallTrace::new(CallTrace::queued_at(&lead.created_at));
+        trace.turn_id = lead.id.clone();
+        let end = self
+            .execute_traced(key, lead, session, cancel, &mut trace)
+            .await;
+        trace.log(&lead.bot_id, &format!("{:?}", end.status));
+        end
+    }
+
+    async fn execute_traced(
+        &self,
+        key: &Key,
+        lead: &BotTurn,
+        session: Option<TurnSession>,
+        cancel: &mut watch::Receiver<Option<Cancel>>,
+        trace: &mut CallTrace,
     ) -> End {
         let (bot_id, conversation_id) = key;
         let minted_by_hub = session.is_some();
@@ -434,7 +562,7 @@ impl Inner {
                     Err(failure) if failure.lease_lost() => return End::lease_lost(),
                     Err(failure) => {
                         tracing::debug!(%failure, "Bot host: the hub minted no bot token for the turn");
-                        return End::failed(CODE_HUB);
+                        return self.release_or_abandon(lead, CODE_HUB).await;
                     }
                 };
                 let hub = hub_token
@@ -449,7 +577,7 @@ impl Inner {
             Err(failure) if failure.lease_lost() => return End::lease_lost(),
             Err(failure) => {
                 tracing::debug!(%failure, "Bot host: reading a delayed answer's context failed");
-                return End::failed(CODE_HUB);
+                return self.release_or_abandon(lead, CODE_HUB).await;
             }
         };
         let continued = continuation.is_some();
@@ -466,7 +594,7 @@ impl Inner {
                 Err(failure) if failure.lease_lost() => return End::lease_lost(),
                 Err(failure) => {
                     tracing::debug!(%failure, "Bot host: reading an account conversation failed");
-                    return End::failed(CODE_HUB);
+                    return self.release_or_abandon(lead, CODE_HUB).await;
                 }
             }
         };
@@ -528,12 +656,34 @@ impl Inner {
             TurnAudience::Room => ConversationKind::Group,
             TurnAudience::Owner => ConversationKind::Direct,
         };
-        let names: HashMap<String, String> = lead
-            .requester_id
-            .iter()
-            .zip(lead.requester_name.iter())
-            .map(|(id, name)| (id.clone(), name.clone()))
+        let room = if kind == ConversationKind::Group && !continued {
+            hub.read(
+                &format!("inbox/conversations/{conversation_id}"),
+                vec![("as", bot_id.clone())],
+            )
+            .await
+            .ok()
+        } else {
+            None
+        };
+        let mut names: HashMap<String, String> = room
+            .as_ref()
+            .and_then(|room| room.get("members"))
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|member| {
+                let id = member.get("principal_id")?.as_str()?;
+                let name = member.get("name")?.as_str()?;
+                Some((id.to_owned(), name.to_owned()))
+            })
             .collect();
+        names.extend(
+            lead.requester_id
+                .iter()
+                .zip(lead.requester_name.iter())
+                .map(|(id, name)| (id.clone(), name.clone())),
+        );
         let reacting = entries.iter().any(|entry| {
             entry.message_id == lead.trigger_message_id && entry.kind == InboxEntryKind::Reaction
         });
@@ -598,7 +748,7 @@ impl Inner {
         // The exchange's memory would replace the reconstructed origin conversation and the
         // delayed-answer prompt. A continuation keeps that explicit transcript, even on old hubs
         // whose ask results have no round counter.
-        let memory = if sealed || continued || ephemeral_user_context {
+        let memory = if sealed || continued {
             None
         } else {
             memory::hub_source_for(
@@ -640,8 +790,7 @@ impl Inner {
         if reacting && no_prompt {
             return self.stay_silent(lead).await;
         }
-        let (runner, stop_id) = (self.runner.clone(), lead.id.clone());
-        let gate = ApprovalGate::new(grants.clone(), &lead.id, move || runner.cancel(&stop_id));
+        let gate = ApprovalGate::new(grants.clone(), &lead.id);
         let room_updates = (kind == ConversationKind::Group && !continued)
             .then(|| {
                 if reacting {
@@ -740,8 +889,24 @@ impl Inner {
             )
             .handle(transcript.topic_at)
         });
+        let owner_direct = audience == TurnAudience::Owner
+            && !minted_by_hub
+            && !continued
+            && !ephemeral_user_context
+            && lead
+                .requester_id
+                .as_deref()
+                .is_none_or(|requester| requester == lead.owner_id);
+        let trail = owner_direct.then(|| {
+            let upto = entries
+                .iter()
+                .position(|entry| entry.message_id == lead.trigger_message_id)
+                .map_or(entries.len(), |index| index + 1);
+            ToolTrail::new(transcript::tool_trail(bot_id, &entries[..upto]))
+        });
         if let Some(live) = lock(&self.state).live.get_mut(key) {
             live.notes = notes.clone();
+            live.trail = trail.clone();
         }
         let mut job = TurnJob {
             run_id: lead.id.clone(),
@@ -750,11 +915,15 @@ impl Inner {
             profile_id: None,
             prompt,
             acknowledgement: false,
+            live_call: false,
+            tool_gate: None,
             ephemeral_user_context,
+            shared_context: transcript::shared_context(&entries, &lead.trigger_message_id, bot_id),
             suppress_owner_notifications: false,
             history: transcript.history,
             room_updates,
             notes: notes.clone(),
+            trail,
             memory: memory.clone(),
             gate: gate.clone(),
             requester: Some(requester.clone()),
@@ -866,6 +1035,12 @@ impl Inner {
             delivery_state.and_then(|delivery| crate::event::attach_delivery(&mut job, delivery));
         // An explicit delegation already selected this bot to answer. Participation decisions
         // must not silently drop that answer or wait for the caller that is waiting on it.
+        trace.transcript = call_utterance;
+        job.live_call = call_utterance;
+        let deadline =
+            crate::recovery::remaining_deadline(job.recovery.as_ref(), self.config.deadline);
+        let mut parallel: Option<(ToolGateOpener, RunFuture<'_>)> = None;
+        let mut early: Option<RunOutcome> = None;
         if (kind == ConversationKind::Group || call_utterance)
             && event.is_none()
             && !continued
@@ -873,17 +1048,31 @@ impl Inner {
             && !resumed
             && !recovering
         {
+            if call_utterance && requester.addressed {
+                let (opener, tool_gate) = tool_gate();
+                job.tool_gate = Some(tool_gate);
+                trace.parallel = true;
+                trace.run_started();
+                parallel = Some((
+                    opener,
+                    Box::pin(tokio::time::timeout(deadline, self.runner.run(job.clone()))),
+                ));
+            }
+            trace.decision_started();
             let decide = async {
-                let room = hub
-                    .read(
-                        &format!("inbox/conversations/{conversation_id}"),
-                        vec![("as", bot_id.clone())],
-                    )
-                    .await
-                    .map_err(|error| RunError::Retry {
-                        code: CODE_HUB.into(),
-                        message: error.to_string(),
-                    })?;
+                let room = match room {
+                    Some(room) => room,
+                    None => hub
+                        .read(
+                            &format!("inbox/conversations/{conversation_id}"),
+                            vec![("as", bot_id.clone())],
+                        )
+                        .await
+                        .map_err(|error| RunError::Retry {
+                            code: CODE_HUB.into(),
+                            message: error.to_string(),
+                        })?,
+                };
                 let participants = room
                     .get("members")
                     .and_then(serde_json::Value::as_array)
@@ -920,11 +1109,49 @@ impl Inner {
                         })?;
                 self.runner.decide(&job, &request).await
             };
-            let decision = tokio::select! {
-                biased;
-                reason = cancelled(cancel) => return End::by(reason),
-                result = tokio::time::timeout(Duration::from_secs(decision::TIMEOUT_SECS), decide) => result,
+            let mut decide = Box::pin(tokio::time::timeout(
+                Duration::from_secs(decision::TIMEOUT_SECS),
+                decide,
+            ));
+            let decision = loop {
+                tokio::select! {
+                    biased;
+                    reason = cancelled(cancel) => {
+                        if parallel.is_some() {
+                            self.runner.cancel(&lead.id);
+                        }
+                        return End::by(reason);
+                    }
+                    result = &mut decide => break result,
+                    Some(outcome) = async {
+                        match parallel.as_mut() {
+                            Some((_, run)) if early.is_none() => Some(run.as_mut().await),
+                            _ => std::future::pending().await,
+                        }
+                    } => {
+                        trace.run_finished();
+                        early = Some(outcome);
+                    }
+                }
             };
+            drop(decide);
+            trace.decided(latency::decision_label(&decision));
+            let answers = matches!(&decision, Ok(Ok(Decision::AnswerNow)) | Err(_) | Ok(Err(_)))
+                && !matches!(&decision, Ok(Err(RunError::SessionChanged)));
+            match parallel.take() {
+                Some((opener, run)) if answers => {
+                    opener.open();
+                    parallel = Some((opener, run));
+                }
+                Some((opener, run)) => {
+                    opener.shut();
+                    drop(run);
+                    self.runner.cancel(&lead.id);
+                    job.tool_gate = None;
+                    early = None;
+                }
+                None => {}
+            }
             match decision {
                 Ok(Ok(Decision::NoAnswer)) => return self.stay_silent(lead).await,
                 Ok(Ok(Decision::WaitFor(participant))) => {
@@ -966,16 +1193,30 @@ impl Inner {
         }
         let acknowledgement = job.acknowledgement;
         let event_job = delivery_state.map(|_| job.clone());
-        let deadline =
-            crate::recovery::remaining_deadline(job.recovery.as_ref(), self.config.deadline);
         let approval_recovery = job.recovery.clone();
-        let outcome = tokio::select! {
-            biased;
-            reason = cancelled(cancel) => {
-                self.runner.cancel(&lead.id);
-                return End::by(reason);
+        let (_opener, mut run) = match parallel.take() {
+            Some((opener, run)) => (Some(opener), run),
+            None => {
+                trace.run_started();
+                let run: RunFuture<'_> =
+                    Box::pin(tokio::time::timeout(deadline, self.runner.run(job)));
+                (None, run)
             }
-            outcome = tokio::time::timeout(deadline, self.runner.run(job)) => outcome,
+        };
+        let outcome = match early {
+            Some(outcome) => outcome,
+            None => {
+                let outcome = tokio::select! {
+                    biased;
+                    reason = cancelled(cancel) => {
+                        self.runner.cancel(&lead.id);
+                        return End::by(reason);
+                    }
+                    outcome = &mut run => outcome,
+                };
+                trace.run_finished();
+                outcome
+            }
         };
         if let Some(card) = gate.parked() {
             if let Err(error) =
@@ -1146,7 +1387,8 @@ impl Inner {
         // Claim generations keep increasing across approvals and manual retries. The hub owns
         // the separate recovery budget and decides whether another retry is available.
         match self.hub.release(&lead.id, &self.config.host_id, code).await {
-            Ok(()) => return End::dropped(code),
+            Ok(true) => return End::dropped(code),
+            Ok(false) => {}
             Err(failure) if failure.lease_lost() => return End::lease_lost(),
             Err(failure) => {
                 tracing::warn!(%failure, turn_id = %lead.id, "Bot host: releasing a failed turn for retry failed");
@@ -1158,6 +1400,20 @@ impl Inner {
         );
         self.post(key, lead, hub, &text, Some(code), sealed, cancel)
             .await
+    }
+
+    /// A hub error before any tool ran: the turn goes back to the hub for another attempt; with
+    /// its retries spent or no release route it ends failed without a reply.
+    async fn release_or_abandon(&self, lead: &BotTurn, code: &'static str) -> End {
+        match self.hub.release(&lead.id, &self.config.host_id, code).await {
+            Ok(true) => End::dropped(code),
+            Ok(false) => self.abandon(lead, code).await,
+            Err(failure) if failure.lease_lost() => End::lease_lost(),
+            Err(failure) => {
+                tracing::debug!(%failure, turn_id = %lead.id, "Bot host: releasing a turn after a hub error failed");
+                self.abandon(lead, code).await
+            }
+        }
     }
 
     /// Ends a turn that can never run on this host failed, without a reply.
@@ -1183,7 +1439,7 @@ impl Inner {
             Err(failure) if failure.lease_lost() => End::lease_lost(),
             Err(failure) => {
                 tracing::warn!(%failure, "Bot host: the hub did not record a silent turn");
-                End::failed(CODE_HUB)
+                self.abandon(lead, CODE_HUB).await
             }
         }
     }
@@ -1309,7 +1565,7 @@ impl Inner {
         sealed: bool,
         cancel: &mut watch::Receiver<Option<Cancel>>,
     ) -> End {
-        let note;
+        let (note, trail);
         {
             let mut state = lock(&self.state);
             let Some(live) = state.live.get_mut(key) else {
@@ -1320,6 +1576,7 @@ impl Inner {
             }
             live.posting = true;
             note = live.notes.as_ref().and_then(NotesHandle::touched);
+            trail = live.trail.clone();
         }
         let message_id = if failure.is_some() {
             failure_message_id(&lead.bot_id, &lead.trigger_message_id)
@@ -1329,6 +1586,9 @@ impl Inner {
         let mut body = reply_body(&lead.trigger_message_id, lead.hops, text, failure);
         if failure.is_none() && !acknowledgement {
             crate::notes::attach_note(&mut body, note.as_ref());
+            if let Some(trail) = &trail {
+                trail.attach(&mut body);
+            }
         }
         if failure.is_none() && acknowledgement {
             body[decision::ACKNOWLEDGEMENT_FIELD] = json!(true);
@@ -1347,7 +1607,7 @@ impl Inner {
                 Ok(message) => message,
                 Err(failure) => {
                     tracing::warn!(code = failure.code, message = %failure.message, "Bot host: an encrypted reply could not be sealed");
-                    return End::failed(failure.code);
+                    return self.abandon(lead, failure.code).await;
                 }
             }
         } else {
@@ -1386,11 +1646,11 @@ impl Inner {
                 }
                 Err(failure) => {
                     tracing::warn!(%failure, "Bot host: the hub refused an account reply");
-                    return End::failed(CODE_REPLY_REFUSED);
+                    return self.abandon(lead, CODE_REPLY_REFUSED).await;
                 }
             }
         }
-        End::failed(CODE_REPLY_REFUSED)
+        self.abandon(lead, CODE_REPLY_REFUSED).await
     }
 
     async fn open_sealed(

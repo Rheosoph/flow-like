@@ -23,7 +23,7 @@ use flow_like_types::{
 };
 use sea_orm::{
     ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, QueryTrait,
-    sea_query::Expr,
+    sea_query::{Expr, ExprTrait},
 };
 
 pub(crate) const SCHEDULING_CAPABILITY: &str = "scheduling";
@@ -178,10 +178,17 @@ fn firing_bots() -> sea_orm::sea_query::SelectStatement {
         .column(bot::Column::Id)
         .filter(bot::Column::DeletedAt.is_null())
         .filter(bot::Column::Location.ne(BotLocation::Desktop.as_str().to_ascii_uppercase()))
+        .filter(
+            Expr::col(bot::Column::Capabilities)
+                .cast_as("text")
+                .like(format!("%\"{SCHEDULING_CAPABILITY}\"%")),
+        )
         .into_query()
 }
 
-/// Enabled tasks of the bots the server fires for whose next run has come.
+/// Enabled tasks of the bots the server fires for, holding the scheduling capability, whose next
+/// run has come. The capability is filtered in SQL so tasks of bots without it can't fill the
+/// batch.
 pub(crate) async fn due_in<C: ConnectionTrait>(
     db: &C,
     now: DateTime<FixedOffset>,

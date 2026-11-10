@@ -13,6 +13,8 @@ interface RemoteExecutionOptions {
 	body: unknown;
 	onEvent: (event: IIntercomEvent) => void;
 	onRunId?: (runId: string) => void;
+	/** Settle only once the server ended the stream, for a caller that reads the run's logs next. */
+	awaitStreamClose?: boolean;
 }
 
 const remoteRuns = new WeakMap<object, Map<string, () => Promise<void>>>();
@@ -86,6 +88,9 @@ export async function runNativeRemoteExecution(
 		}
 		options.onEvent(event);
 		completed ||= event.event_type === "completed";
+		// A finished run has nothing left to stop, and aborting would cut the stream the server is
+		// still settling the run on.
+		if (completed && runId && runs.get(runId) === cancel) runs.delete(runId);
 	};
 	try {
 		await streamFetcher<IIntercomEvent>(
@@ -152,6 +157,7 @@ export async function runNativeRemoteExecution(
 					onEvent: receive,
 				});
 			},
+			options.awaitStreamClose,
 		);
 	} catch (error) {
 		// A queued run rejects with its outcome after `completed`; like an SSE run, its events carry it.

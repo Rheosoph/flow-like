@@ -159,6 +159,8 @@ pub(super) async fn load_chat_bot<C: ConnectionTrait>(
             decision_model: settings.model.decision.clone(),
             decision_hosted_only: settings.location != flow_like_types::bot::BotLocation::Desktop,
             acknowledgement: false,
+            live_call: false,
+            tool_gate: None,
             ephemeral_user_context: false,
             suppress_owner_notifications: false,
             stt_model: settings.stt_model,

@@ -2,7 +2,7 @@ use super::{
     acting_reader,
     conversations::{NewConversation, start_group},
     entries::{SendAs, ensure_bot_sends_own_turn},
-    fixture::{at, bot_principal, database, delete_bot, insert_bot, user},
+    fixture::{at, bot_principal, database, delete_bot, insert_bot, running_turn, user},
     model::TurnClaim,
 };
 use crate::{
@@ -71,6 +71,7 @@ async fn team() -> DatabaseConnection {
     start_group(&db, "TEAM", "user-a", &plan, &others, at(0))
         .await
         .unwrap();
+    running_turn(&db, "bt_1", "bot_1", "TEAM", "host-1", at(1_000_000)).await;
     db
 }
 

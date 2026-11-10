@@ -34,6 +34,7 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
+import { useNativeComposerCapture } from "../hooks/use-native-composer-capture";
 import { createNativeAppIconPublisher } from "../lib/native-app-icons";
 import {
 	isNativeDeliveryRetryable,
@@ -60,6 +61,7 @@ import {
 	type NativeNotificationIconSource,
 	createNativeNotificationIconResolver,
 } from "../lib/native-notification-icons";
+import { readNativeSharedFiles } from "../lib/native-shared-files";
 import {
 	type NativeBotInput,
 	NativeBotInputDialog,
@@ -76,28 +78,6 @@ import {
 
 const FOCUS_REFRESH_MS = 60_000;
 const PERIODIC_REFRESH_MS = 10 * 60_000;
-
-async function readNativeBotFiles(paths: string[]): Promise<File[]> {
-	if (paths.length > 10) throw new Error("Share at most ten files at a time.");
-	const files: File[] = [];
-	let totalBytes = 0;
-	for (const path of paths) {
-		const file = await invoke<{
-			bytes: number[];
-			name: string;
-			mimeType?: string;
-		}>("native_read_shared_file", { path });
-		totalBytes += file.bytes.length;
-		if (totalBytes > 35 * 1024 * 1024)
-			throw new Error("Share at most 35 MiB of files at a time.");
-		files.push(
-			new File([new Uint8Array(file.bytes)], file.name, {
-				type: file.mimeType || "application/octet-stream",
-			}),
-		);
-	}
-	return files;
-}
 
 export function NativeIntegrationProvider() {
 	const queryClient = useQueryClient();
@@ -132,6 +112,7 @@ export function NativeIntegrationProvider() {
 	]);
 	const currentScope = useRef<string | undefined>(undefined);
 	currentScope.current = identityReady ? scope : undefined;
+	useNativeComposerCapture(identityReady ? scope : undefined);
 	const writes = useRef(Promise.resolve());
 	const automationRequests = useRef(new Map<string, NativePendingAction>());
 	const previousScope = useRef<string | undefined>(undefined);
@@ -504,7 +485,7 @@ export function NativeIntegrationProvider() {
 							});
 							return;
 						}
-						const files = await readNativeBotFiles(action.files ?? []);
+						const files = await readNativeSharedFiles(action.files ?? []);
 						if (!requestCurrent()) return;
 						const prompt = action.prompt || action.text || "";
 						if (!prompt && !files.length) return;
@@ -902,7 +883,7 @@ export function NativeIntegrationProvider() {
 				onClose={() => setBotInput(undefined)}
 				onSend={async (result) => {
 					const files = [
-						...(await readNativeBotFiles(result.files ?? [])),
+						...(await readNativeSharedFiles(result.files ?? [])),
 						...(result.attachments ?? []),
 					];
 					if (currentScope.current !== botInput.scope) return;

@@ -261,4 +261,39 @@ mod tests {
                 .is_err()
         );
     }
+
+    #[tokio::test]
+    async fn tokens_expire_after_the_grace_following_their_turn() {
+        use crate::bot_caller::{TOKEN_GRACE_SECONDS, ensure_token_live};
+        let db = fixture::database().await;
+        fixture::insert_bot(&db, "bot_a", "user-a", "DESKTOP").await;
+        fixture::running_turn(&db, "t-1", "bot_a", "room", "host", fixture::at(60)).await;
+        let token = BotUser {
+            bot_id: "bot_a".into(),
+            turn_id: "t-1".into(),
+            conv_id: None,
+        };
+        let set = |status: &'static str, age: i64| {
+            let db = db.clone();
+            async move {
+                let mut turn: bot_turn::ActiveModel = fixture::turn(&db, "t-1").await.into();
+                turn.status = Set(status.into());
+                let at = chrono::Utc::now() - chrono::Duration::seconds(age);
+                turn.updated_at = Set(at.fixed_offset());
+                turn.update(&db).await.unwrap();
+            }
+        };
+        set("RUNNING", 3600).await;
+        assert!(ensure_token_live(&db, &token).await.is_ok());
+        set("DONE", 60).await;
+        assert!(ensure_token_live(&db, &token).await.is_ok());
+        set("DONE", 600).await;
+        assert!(600 > TOKEN_GRACE_SECONDS);
+        assert!(ensure_token_live(&db, &token).await.is_err());
+        let direct = BotUser {
+            turn_id: "direct:x".into(),
+            ..token
+        };
+        assert!(ensure_token_live(&db, &direct).await.is_ok());
+    }
 }

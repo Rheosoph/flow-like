@@ -3,11 +3,15 @@
 //! never read from the token; it is resolved from the live bot row.
 
 use crate::{
-    entity::bot,
+    entity::{bot, bot_turn},
     error::ApiError,
     middleware::jwt::{AppUser, BotUser},
 };
+use flow_like_types::bot_turn::TurnStatus;
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
+
+/// Hosts finish memory, notes and delivery after the reply, so a token outlives its turn briefly.
+pub(crate) const TOKEN_GRACE_SECONDS: i64 = 300;
 
 /// What a route names that a bot token must match.
 #[derive(Debug, Default, Clone, Copy)]
@@ -65,6 +69,35 @@ pub(crate) fn check(bot: &BotUser, names: &Names<'_>) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// A turn token works while its turn is queued, running or waiting, and for a short grace after
+/// it ended. Direct app tokens name no turn row and are bounded by their own expiry.
+pub(crate) async fn ensure_token_live<C: ConnectionTrait>(
+    db: &C,
+    bot: &BotUser,
+) -> Result<(), ApiError> {
+    if bot.turn_id.starts_with("direct:") {
+        return Ok(());
+    }
+    let turn = bot_turn::Entity::find_by_id(bot.turn_id.as_str())
+        .filter(bot_turn::Column::BotId.eq(bot.bot_id.as_str()))
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::unauthorized("The bot token's turn no longer exists"))?;
+    let live = matches!(
+        TurnStatus::parse(&turn.status),
+        Some(TurnStatus::Queued | TurnStatus::Running | TurnStatus::Waiting)
+    );
+    let ended_for = chrono::Utc::now().timestamp() - turn.updated_at.timestamp();
+    if live || ended_for < TOKEN_GRACE_SECONDS {
+        Ok(())
+    } else {
+        Err(ApiError::unauthorized(format!(
+            "The bot token's turn '{}' ended more than {TOKEN_GRACE_SECONDS} seconds ago",
+            bot.turn_id
+        )))
+    }
+}
+
 pub(crate) async fn live_owner<C: ConnectionTrait>(
     db: &C,
     bot_id: &str,
@@ -100,6 +133,7 @@ pub(crate) async fn acting_owner<C: ConnectionTrait>(
     match user {
         AppUser::Bot(bot) => {
             check(bot, names)?;
+            ensure_token_live(db, bot).await?;
             live_owner(db, &bot.bot_id).await
         }
         _ => user.sub(),

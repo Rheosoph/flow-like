@@ -26,7 +26,7 @@ use crate::{
         ByteStream, CompletionWrites, DispatchRequest, DispatchTrigger, ExecutionBackend,
         ExecutionJwtParams, TokenType, caller_dispatch_profile, fail_run_on_stream_error,
         format_run_version, is_jwt_configured, payload_storage, proxy_sse_response,
-        resolve_wasm_packages, sign_execution_jwt, stream_failure_event,
+        sign_execution_jwt, stream_failure_event, try_resolve_wasm_packages,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -325,10 +325,11 @@ pub async fn invoke_board(
         tokio::join!(
             state.scoped_credentials(&credential_sub, &app_id, access),
             caller_dispatch_profile(&state, &user, &sub, params.profile_id.as_deref(), &app_id),
-            resolve_wasm_packages(&state, &app_id),
+            try_resolve_wasm_packages(&state, &app_id),
         )
     };
     let credentials = credentials_result?;
+    let wasm_packages = wasm_packages?;
 
     // Convert to SharedCredentials for runtime compatibility
     let shared_credentials = credentials.into_shared_credentials();

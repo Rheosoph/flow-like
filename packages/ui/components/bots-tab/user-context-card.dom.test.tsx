@@ -383,6 +383,13 @@ describe("participant context cards", () => {
 		expect(hasUserContextGrant(value)).toBe(true);
 		await click("Revoke session access");
 		expect(hasUserContextGrant(value)).toBe(false);
+		expect(state.send).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				request: expect.objectContaining({
+					message_id: `uctx_revoke_${value.id}`,
+				}),
+			}),
+		);
 		await show({ ...value, id: "context_2" });
 		await click("Allow for this session");
 		expect(hasUserContextGrant(value)).toBe(true);

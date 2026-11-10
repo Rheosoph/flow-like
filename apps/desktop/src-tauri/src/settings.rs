@@ -47,6 +47,24 @@ impl TelemetrySettings {
     }
 }
 
+/// Whether closing the main window hides it while this desktop hosts bots, and whether the
+/// person was told so once.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BackgroundSettings {
+    pub keep_bots_running: bool,
+    pub notice_shown: bool,
+}
+
+impl Default for BackgroundSettings {
+    fn default() -> Self {
+        Self {
+            keep_bots_running: true,
+            notice_shown: false,
+        }
+    }
+}
+
 // Mobile-only centralized, sandbox-safe roots (iOS + Android).
 #[cfg(target_os = "ios")]
 fn app_data_root() -> PathBuf {
@@ -251,6 +269,8 @@ pub struct Settings {
     pub log_retention: LogRetentionSettings,
     #[serde(default)]
     pub telemetry: TelemetrySettings,
+    #[serde(default)]
+    pub background: BackgroundSettings,
     pub profiles: HashMap<String, UserProfile>,
     /// User-wide library of custom model bits. Definitions (and their
     /// credentials) are configured once here; each profile activates the ones
@@ -328,6 +348,7 @@ impl Settings {
             user_dir,
             log_retention: LogRetentionSettings::default(),
             telemetry: TelemetrySettings::default(),
+            background: BackgroundSettings::default(),
             profiles: HashMap::new(),
             custom_bits: Vec::new(),
             created: SystemTime::now(),
@@ -360,6 +381,7 @@ impl Settings {
                 crash_reports: Some(false),
                 anon_id: None,
             },
+            background: BackgroundSettings::default(),
             profiles: HashMap::from([(profile.hub_profile.id.clone(), profile)]),
             custom_bits: Vec::new(),
             created: SystemTime::now(),
@@ -623,6 +645,7 @@ mod profile_selection_tests {
             user_dir: PathBuf::new(),
             log_retention: LogRetentionSettings::default(),
             telemetry: TelemetrySettings::default(),
+            background: BackgroundSettings::default(),
             profiles: HashMap::from([
                 ("foreground".into(), profile("foreground")),
                 ("background".into(), profile("background")),

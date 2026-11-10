@@ -9,7 +9,9 @@ use crate::{
 use flow_like::flow::copilot::{ChatMessage, ChatRole, ReactionNote};
 use flow_like_types::{
     bot_message::{MessageBody, MessagePart},
+    bot_tool_trail::{TrailEntry, TrailSection, trail_of},
     bot_turn::room_message,
+    bot_user_context::{ContextHistory, ContextLine},
     inbox::{
         ConversationKind, InboxEntryKind, PLAIN_ENCRYPTION, ReactionEvent, TranscriptBody,
         TriggerBody, body_target, is_tombstone, net_reactions,
@@ -22,6 +24,11 @@ use std::collections::HashMap;
 
 /// Entries of the bot's copy a turn reads, the answered message included.
 pub(crate) const HISTORY_ENTRIES: u64 = 32;
+/// Entries after the trigger read for revocations only.
+const LATER_ENTRIES: u64 = 16;
+/// The entry kinds that make up what the model reads; reactions, member and activity entries
+/// do not take a place in the window.
+const SPOKEN_KINDS: [&str; 5] = ["MESSAGE", "TRIGGER", "TRANSCRIPT", "EDIT", "TOPIC"];
 pub(crate) const MAX_PROMPT_CHARS: usize = 20_000;
 pub(crate) const MAX_HISTORY_MESSAGE_CHARS: usize = 8_000;
 
@@ -35,6 +42,8 @@ pub(crate) struct Transcript {
     pub addressed: bool,
     /// Epoch milliseconds of the latest "New topic" marker in the entries read, when there is one.
     pub topic_at: Option<i64>,
+    /// The tool calls of the bot's replies in the entries read, as the trail section shows them.
+    pub trail: Option<TrailSection>,
 }
 
 #[derive(Debug)]
@@ -61,6 +70,8 @@ struct Line {
     mentions: Vec<String>,
     reply_to: Option<String>,
     from_trigger: bool,
+    /// A context message shown as a value-free note: edits never restore its text.
+    withheld: bool,
 }
 
 /// Whether a line since the bot's own last line names the bot, replies to one of its lines, or
@@ -132,23 +143,97 @@ fn clipped(text: &str, max: usize) -> String {
     text.chars().take(max).collect()
 }
 
-fn lines_of(window: &[inbox_entry::Model]) -> Vec<Line> {
+fn readable(
+    window: &[inbox_entry::Model],
+) -> impl Iterator<Item = (&inbox_entry::Model, InboxEntryKind, &serde_json::Value)> {
+    window.iter().filter_map(|entry| {
+        let kind = InboxEntryKind::parse(&entry.kind)?;
+        let body = plain_body(&entry.envelope).filter(|_| !is_tombstone(&entry.envelope))?;
+        Some((entry, kind, body))
+    })
+}
+
+fn context_of(
+    window: &[inbox_entry::Model],
+    later: &[inbox_entry::Model],
+    bot_id: &str,
+) -> ContextHistory {
+    ContextHistory::with_later(
+        readable(window).map(|(entry, _, body)| (entry.sender_id.as_str(), body)),
+        readable(later).map(|(entry, _, body)| (entry.sender_id.as_str(), body)),
+        bot_id,
+        chrono::Utc::now().timestamp_millis(),
+    )
+}
+
+async fn recent_messages<C: ConnectionTrait>(
+    db: &C,
+    bot_id: &str,
+    conversation_id: &str,
+) -> Result<Vec<inbox_entry::Model>, DbErr> {
+    let mut window = inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::InboxId.eq(bot_id))
+        .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
+        .filter(inbox_entry::Column::Kind.eq("MESSAGE"))
+        .order_by_desc(inbox_entry::Column::Seq)
+        .order_by_desc(inbox_entry::Column::CreatedAt)
+        .order_by_desc(inbox_entry::Column::Id)
+        .limit(HISTORY_ENTRIES)
+        .all(db)
+        .await?;
+    window.reverse();
+    Ok(window)
+}
+
+/// The session snapshots still usable in the bot's copy of the conversation, for a turn whose
+/// history comes from memory and so leaves them out.
+pub(crate) async fn shared_context<C: ConnectionTrait>(
+    db: &C,
+    bot_id: &str,
+    conversation_id: &str,
+) -> Result<Option<String>, DbErr> {
+    let window = recent_messages(db, bot_id, conversation_id).await?;
+    Ok(context_of(&window, &[], bot_id).live_note())
+}
+
+/// The request id of the most recent session snapshot still live in the bot's copy of the
+/// conversation.
+pub(crate) async fn live_request_id<C: ConnectionTrait>(
+    db: &C,
+    bot_id: &str,
+    conversation_id: &str,
+) -> Result<Option<String>, DbErr> {
+    let window = recent_messages(db, bot_id, conversation_id).await?;
+    Ok(context_of(&window, &[], bot_id)
+        .live_request_id()
+        .map(str::to_owned))
+}
+
+fn lines_of(
+    window: &[inbox_entry::Model],
+    later: &[inbox_entry::Model],
+    bot_id: &str,
+) -> Vec<Line> {
+    let context = context_of(window, later, bot_id);
     let mut lines: Vec<Line> = Vec::new();
-    for entry in window {
-        let Some(kind) = InboxEntryKind::parse(&entry.kind) else {
-            continue;
+    for (entry, kind, body) in readable(window) {
+        let context = match context.line(&entry.sender_id, body) {
+            ContextLine::Hidden => continue,
+            ContextLine::Text(text) => Some(text),
+            ContextLine::Ordinary => None,
         };
-        if is_tombstone(&entry.envelope)
-            || flow_like_types::bot_user_context::is_ephemeral_body(&entry.envelope["body"])
-        {
-            continue;
-        }
-        let Some(body) = plain_body(&entry.envelope) else {
-            continue;
-        };
-        match kind {
-            InboxEntryKind::Topic => lines.clear(),
-            InboxEntryKind::Message => {
+        match (kind, context) {
+            (InboxEntryKind::Topic, _) => lines.clear(),
+            (InboxEntryKind::Message, Some(text)) => lines.push(Line {
+                message_id: entry.message_id.clone(),
+                sender_id: entry.sender_id.clone(),
+                text,
+                mentions: Vec::new(),
+                reply_to: None,
+                from_trigger: false,
+                withheld: true,
+            }),
+            (InboxEntryKind::Message, None) => {
                 if let Ok(parsed) = serde_json::from_value::<MessageBody>(body.clone())
                     && parsed.approval_response.is_none()
                 {
@@ -159,10 +244,11 @@ fn lines_of(window: &[inbox_entry::Model]) -> Vec<Line> {
                         mentions: parsed.mentions.clone(),
                         reply_to: parsed.reply_to.clone(),
                         from_trigger: false,
+                        withheld: false,
                     });
                 }
             }
-            InboxEntryKind::Trigger => {
+            (InboxEntryKind::Trigger, None) => {
                 if let Ok(parsed) = TriggerBody::parse(body) {
                     lines.push(Line {
                         message_id: entry.message_id.clone(),
@@ -171,11 +257,19 @@ fn lines_of(window: &[inbox_entry::Model]) -> Vec<Line> {
                         mentions: Vec::new(),
                         reply_to: None,
                         from_trigger: true,
+                        withheld: false,
                     });
                 }
             }
-            InboxEntryKind::Transcript => {
+            (InboxEntryKind::Transcript, None) => {
                 if let Ok(parsed) = TranscriptBody::parse(body) {
+                    if let Some(interrupted) = &parsed.interrupted
+                        && let Some(cut) = lines.iter_mut().find(|line| {
+                            line.message_id == interrupted.message_id && !line.withheld
+                        })
+                    {
+                        cut.text = interrupted.heard_part(&cut.text);
+                    }
                     lines.push(Line {
                         message_id: entry.message_id.clone(),
                         sender_id: entry.sender_id.clone(),
@@ -183,16 +277,19 @@ fn lines_of(window: &[inbox_entry::Model]) -> Vec<Line> {
                         mentions: parsed.mentions,
                         reply_to: None,
                         from_trigger: false,
+                        withheld: false,
                     });
                 }
             }
-            InboxEntryKind::Edit => {
+            (InboxEntryKind::Edit, None) => {
                 let target = body_target(&entry.envelope);
                 if let (Some(target), Ok(parsed)) =
                     (target, serde_json::from_value::<MessageBody>(body.clone()))
-                    && let Some(line) = lines
-                        .iter_mut()
-                        .find(|line| line.message_id == target && line.sender_id == entry.sender_id)
+                    && let Some(line) = lines.iter_mut().find(|line| {
+                        line.message_id == target
+                            && line.sender_id == entry.sender_id
+                            && !line.withheld
+                    })
                 {
                     line.text = render(&parsed);
                 }
@@ -222,11 +319,7 @@ pub(crate) async fn sender_names<C: ConnectionTrait>(
     }
     let people = user::Entity::find()
         .select_only()
-        .columns([
-            user::Column::Id,
-            user::Column::Name,
-            user::Column::Email,
-        ])
+        .columns([user::Column::Id, user::Column::Name, user::Column::Email])
         .filter(user::Column::Id.is_in(ids.iter().copied()))
         .into_tuple::<(String, Option<String>, Option<String>)>()
         .all(db)
@@ -282,12 +375,28 @@ pub(crate) async fn transcript<C: ConnectionTrait>(
         .one(db)
         .await?
         .ok_or(HistoryError::TriggerMissing)?;
-    let upto = match trigger.seq {
-        Some(seq) => inbox_entry::Column::Seq.lte(seq),
-        None => inbox_entry::Column::CreatedAt.lte(trigger.created_at),
+    let (upto, after) = match trigger.seq {
+        Some(seq) => (
+            inbox_entry::Column::Seq.lte(seq),
+            inbox_entry::Column::Seq.gt(seq),
+        ),
+        None => (
+            inbox_entry::Column::CreatedAt.lte(trigger.created_at),
+            inbox_entry::Column::CreatedAt.gt(trigger.created_at),
+        ),
     };
+    let later = own(inbox_entry::Entity::find())
+        .filter(after)
+        .filter(inbox_entry::Column::Kind.eq("MESSAGE"))
+        .order_by_asc(inbox_entry::Column::Seq)
+        .order_by_asc(inbox_entry::Column::CreatedAt)
+        .order_by_asc(inbox_entry::Column::Id)
+        .limit(LATER_ENTRIES)
+        .all(db)
+        .await?;
     let mut window = own(inbox_entry::Entity::find())
         .filter(upto)
+        .filter(inbox_entry::Column::Kind.is_in(SPOKEN_KINDS))
         .order_by_desc(inbox_entry::Column::Seq)
         .order_by_desc(inbox_entry::Column::CreatedAt)
         .order_by_desc(inbox_entry::Column::Id)
@@ -295,13 +404,16 @@ pub(crate) async fn transcript<C: ConnectionTrait>(
         .all(db)
         .await?;
     window.reverse();
-    let lines = lines_of(&window);
+    let mut lines = lines_of(&window, &later, bot_id);
     let context_prompt = flow_like_types::bot_user_context::response_prompt(
         &trigger.envelope["body"],
         bot_id,
         &trigger.sender_id,
         chrono::Utc::now().timestamp_millis(),
     );
+    if context_prompt.is_some() {
+        lines.retain(|line| line.message_id != trigger_message_id);
+    }
     let answered = if let Some(prompt) = context_prompt.as_ref() {
         Line {
             message_id: trigger.message_id.clone(),
@@ -310,6 +422,7 @@ pub(crate) async fn transcript<C: ConnectionTrait>(
             mentions: vec![bot_id.to_owned()],
             reply_to: None,
             from_trigger: false,
+            withheld: false,
         }
     } else {
         match lines.last() {
@@ -354,7 +467,23 @@ pub(crate) async fn transcript<C: ConnectionTrait>(
             || kind != ConversationKind::Group
             || addressed_to(&lines, bot_id),
         topic_at: topic_at_of(&window),
+        trail: tool_trail(bot_id, &window),
     })
+}
+
+/// The trail section of `bot_id`'s replies among `window` (oldest first).
+fn tool_trail(bot_id: &str, window: &[inbox_entry::Model]) -> Option<TrailSection> {
+    trail_of(
+        bot_id,
+        window.iter().filter_map(|entry| {
+            Some(TrailEntry {
+                message_id: &entry.message_id,
+                sender_id: &entry.sender_id,
+                kind: InboxEntryKind::parse(&entry.kind)?,
+                envelope: &entry.envelope,
+            })
+        }),
+    )
 }
 
 /// Recent context for a continuation whose trigger lives in another conversation. Activity does
@@ -373,13 +502,7 @@ pub(crate) async fn recent_history<C: ConnectionTrait>(
         let batch = inbox_entry::Entity::find()
             .filter(inbox_entry::Column::InboxId.eq(bot_id))
             .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
-            .filter(inbox_entry::Column::Kind.is_in([
-                "MESSAGE",
-                "TRIGGER",
-                "TRANSCRIPT",
-                "EDIT",
-                "TOPIC",
-            ]))
+            .filter(inbox_entry::Column::Kind.is_in(SPOKEN_KINDS))
             .order_by_desc(inbox_entry::Column::Seq)
             .order_by_desc(inbox_entry::Column::CreatedAt)
             .order_by_desc(inbox_entry::Column::Id)
@@ -395,7 +518,7 @@ pub(crate) async fn recent_history<C: ConnectionTrait>(
         });
         window.extend(batch);
         window.reverse();
-        lines = lines_of(&window);
+        lines = lines_of(&window, &[], bot_id);
         window.reverse();
         if lines.len() >= HISTORY_ENTRIES as usize || exhausted || topic {
             break;
@@ -482,6 +605,7 @@ pub(crate) async fn reaction_turn<C: ConnectionTrait>(
     let mut window = inbox_entry::Entity::find()
         .filter(inbox_entry::Column::InboxId.eq(bot_id))
         .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
+        .filter(inbox_entry::Column::Kind.is_in(SPOKEN_KINDS.into_iter().chain(["REACTION"])))
         .order_by_desc(inbox_entry::Column::Seq)
         .order_by_desc(inbox_entry::Column::CreatedAt)
         .order_by_desc(inbox_entry::Column::Id)
@@ -489,7 +613,7 @@ pub(crate) async fn reaction_turn<C: ConnectionTrait>(
         .all(db)
         .await?;
     window.reverse();
-    let lines = lines_of(&window);
+    let lines = lines_of(&window, &[], bot_id);
     let events: Vec<ReactionEvent> = window.iter().filter_map(reaction_of).collect();
     let in_place: Vec<ReactionEvent> = net_reactions(&events)
         .into_iter()
@@ -574,6 +698,7 @@ pub(crate) async fn reaction_turn<C: ConnectionTrait>(
             history,
             addressed,
             topic_at: topic_at_of(&window),
+            trail: None,
         },
         reactions,
     })
@@ -632,7 +757,7 @@ mod tests {
             gone,
             entry("m4", "message", "user-a", json!({ "text": "last" })),
         ];
-        let lines = lines_of(&window);
+        let lines = lines_of(&window, &[], "bot_a");
         let texts: Vec<_> = lines.iter().map(|line| line.text.as_str()).collect();
         assert_eq!(texts, ["first, fixed", "answer", "last"]);
     }
@@ -646,6 +771,7 @@ mod tests {
             mentions: mentions.iter().map(|m| m.to_string()).collect(),
             reply_to: reply_to.map(str::to_string),
             from_trigger: false,
+            withheld: false,
         };
         let quiet = [
             line("m1", "user-a", &[], None),
@@ -686,7 +812,7 @@ mod tests {
             ),
             sealed,
         ];
-        let lines = lines_of(&window);
+        let lines = lines_of(&window, &[], "bot_a");
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].text, "mine");
     }
@@ -704,5 +830,101 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(render(&body), "see\n[UI: a chart]\n[file: r.pdf]");
+    }
+
+    #[test]
+    fn a_transcript_that_spoke_over_a_reply_cuts_it_at_the_heard_share() {
+        let spoken = |extra: serde_json::Value| {
+            let mut body =
+                json!({ "call": "c_1", "text": "stop", "offset_ms": 0, "duration_ms": 1 });
+            body.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            body
+        };
+        let window = vec![
+            entry(
+                "m1",
+                "message",
+                "bot_a",
+                json!({ "text": "The weather is sunny today and tomorrow." }),
+            ),
+            entry(
+                "m2",
+                "message",
+                "bot_a",
+                json!({ "text": "Untouched reply." }),
+            ),
+            entry(
+                "t1",
+                "transcript",
+                "user-a",
+                spoken(
+                    json!({ "interrupted": { "message_id": "m1", "heard_chars": 10, "spoken_chars": 40 } }),
+                ),
+            ),
+            entry(
+                "t2",
+                "transcript",
+                "user-a",
+                spoken(
+                    json!({ "interrupted": { "message_id": "gone", "heard_chars": 1, "spoken_chars": 4 } }),
+                ),
+            ),
+        ];
+        let lines = lines_of(&window, &[], "bot_a");
+        assert!(lines[0].text.starts_with("The…") || lines[0].text.starts_with("The"));
+        assert!(lines[0].text.contains("cut off"));
+        assert!(!lines[0].text.contains("sunny"));
+        assert_eq!(lines[1].text, "Untouched reply.");
+        assert_eq!(lines.len(), 4);
+    }
+
+    #[test]
+    fn a_revocation_after_the_trigger_withholds_the_session_snapshot() {
+        use flow_like_types::bot_user_context::{
+            REQUEST_FIELD, RESPONSE_FIELD, REVOKE_FIELD, UserContextAudience, UserContextField,
+            UserContextPrecision, UserContextRequest, UserContextRequestArgs,
+        };
+        let now = chrono::Utc::now().timestamp_millis();
+        let request = UserContextRequest::new(
+            "ctx1".into(),
+            "bot_a".into(),
+            "c1".into(),
+            UserContextRequestArgs {
+                subject_id: "user-a".into(),
+                fields: vec![UserContextField::Timezone],
+                purpose: "Arrange a time".into(),
+                precision: UserContextPrecision::Approximate,
+                status_change: None,
+            },
+            UserContextAudience::Direct,
+            vec!["bot_a".into(), "user-a".into()],
+            now,
+        );
+        let answer = json!({"text":"Shared.","reply_to":"ctx1","mentions":["bot_a"],RESPONSE_FIELD:{
+            "request_id":"ctx1","bot_id":"bot_a","subject_id":"user-a","conversation_id":"c1",
+            "decision":"session","captured_at":now,"expires_at":now+300_000,
+            "source":{"session_id":"s1","platform":"web"},
+            "values":{"timezone":{"name":"Europe/Berlin"}},"unavailable":{}}});
+        let window = vec![
+            entry("ctx1", "message", "bot_a", json!({REQUEST_FIELD: request})),
+            entry("ans", "message", "user-a", answer),
+            entry("m1", "message", "user-a", json!({"text":"when?"})),
+        ];
+        let revoke = entry(
+            "rev",
+            "message",
+            "user-a",
+            json!({"text":"Revoked.",REVOKE_FIELD:{
+                "request_id":"ctx1","bot_id":"bot_a","subject_id":"user-a",
+                "conversation_id":"c1","revoked_at":now}}),
+        );
+        assert!(context_of(&window, &[], "bot_a").live_note().is_some());
+        assert!(
+            context_of(&window, &[revoke], "bot_a")
+                .live_note()
+                .is_none()
+        );
     }
 }

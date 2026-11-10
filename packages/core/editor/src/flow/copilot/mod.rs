@@ -12,6 +12,7 @@ pub mod benchmark_cases;
 pub mod bot_notes;
 pub mod bot_run;
 pub mod bot_talk;
+pub mod bot_trail;
 mod capability_tools;
 mod configuration_models;
 mod context;
@@ -42,6 +43,7 @@ pub mod stream;
 mod subtasks;
 mod tool_arguments;
 pub mod tool_authorization;
+pub mod tool_gate;
 pub mod tool_grants;
 #[cfg(test)]
 mod tool_schema_tests;
@@ -66,8 +68,8 @@ pub use benchmark_cases::workflow_benchmark_cases;
 pub use bot_run::{
     BotRunContext, BotToolHost, BotToolset, EffectivePermissions, FLUX_BOT_ID, FLUX_BOT_NAME,
     GENERAL_BOT_DESCRIPTION, GENERAL_BOT_ID, GENERAL_BOT_NAME, ReactionNote, SILENT_REPLY,
-    TurnRequester, bot_persona_section, bot_platform_context, bot_system_prompt,
-    find_bot_tool_spec, resolve_bot_model, resolve_host_completion_model, run_bot_chat,
+    TurnRequester, bot_model_preference, bot_persona_section, bot_platform_context,
+    bot_system_prompt, bot_thinking, find_bot_tool_spec, resolve_bot_model, resolve_host_completion_model, resolve_host_completion_model_preferring, run_bot_chat,
     run_bot_chat_with_talk, runnable_completion_model,
 };
 pub use capability_tools::{HostTools, bot_tool_spec, linked_tool_names, tool_outcome_output};
@@ -115,6 +117,7 @@ pub use manifest::{
     default_flowscript_module_templates,
 };
 pub use bot_notes::{NotesHandle, NotesStore, notes_tool_specs};
+pub use bot_trail::ToolTrail;
 pub use memory_tools::{HeadlessMemory, MemoryHandle, MemoryTurnSource, memory_tool_specs};
 pub use provider::{CatalogProvider, node_to_metadata, pin_to_metadata};
 /// Re-export of the rig tool trait so non-rig adapter crates can bound on it (e.g. to derive

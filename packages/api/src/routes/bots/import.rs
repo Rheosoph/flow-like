@@ -294,11 +294,7 @@ fn location_issues(fields: &CreateBotRequest) -> Vec<ImportIssue> {
             ImportIssue::new(
                 ImportIssuePart::Capability,
                 BOT_CAPABILITY_LOCATION,
-                format!(
-                    "A bot on the {} can't hold '{}'; move it to a desktop or device first",
-                    location.as_str(),
-                    capability.as_str()
-                ),
+                validation::location_refusal(location, capability),
                 Some(capability.as_str()),
             )
         })

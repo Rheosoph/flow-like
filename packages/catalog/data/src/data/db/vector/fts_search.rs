@@ -115,19 +115,12 @@ impl NodeLogic for FTSLocalDatabaseNode {
         } else {
             Some(&filter)
         };
-        let limit: i64 = context.evaluate_pin("limit").await?;
-        let offset: i64 = context.evaluate_pin("offset").await?;
+        let limit = super::non_negative("limit", context.evaluate_pin("limit").await?)?;
+        let offset = super::non_negative("offset", context.evaluate_pin("offset").await?)?;
         let cached_db = database.load(context).await?;
         let database = cached_db.flushed_read().await?;
         let results = database
-            .fts_search(
-                &search,
-                filter,
-                None,
-                fields,
-                limit as usize,
-                offset as usize,
-            )
+            .fts_search(&search, filter, None, fields, limit, offset)
             .await?;
         context.set_pin_value("values", json!(results)).await?;
         context.activate_exec_pin("exec_out").await?;

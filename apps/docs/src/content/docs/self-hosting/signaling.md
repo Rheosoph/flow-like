@@ -192,7 +192,7 @@ does not provide durable collaboration history.
 
 ## Run and test locally
 
-Install Bun 1.2 or newer. Redis 7 or a compatible service is needed only for
+Install Bun 1.4.4 or newer. Redis 7 or a compatible service is needed only for
 Redis fanout. From the repository root:
 
 ```sh

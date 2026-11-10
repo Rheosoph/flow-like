@@ -9,7 +9,8 @@
 //!   without a webview leaves the registry the moment it finishes, so a late window reads the
 //!   reply from the inbox instead.
 //! - IPC: `bot-host://turn` carries a [`TurnInfo`] whenever a turn changes state; the commands
-//!   `bot_host_turns` and `bot_host_cancel_turn` inspect and cancel.
+//!   `bot_host_turns` and `bot_host_cancel_turn` inspect and cancel; `bot_host_poke` brings the
+//!   account host's poll forward when the realtime connection reports inbox activity.
 //! - Mobile: the host lives in the app process. While the OS suspends the app no turn runs and
 //!   the bot is offline; the startup scan answers what waited, once the app runs again.
 
@@ -52,7 +53,7 @@ mod tests;
 pub use account::AccountHost;
 pub(crate) use gate::ApprovalGate;
 pub use host::BotHost;
-pub(crate) use owner_notify::notifier_for;
+pub(crate) use owner_notify::{notifier_for, notifier_for_turn};
 
 use account::AccountConfig;
 use host::{HostConfig, TurnEvents, TurnInfo};

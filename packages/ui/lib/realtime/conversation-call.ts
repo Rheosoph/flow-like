@@ -12,6 +12,22 @@ export const CALL_FIELD = "call";
 const CALL_ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/;
 const PEER_ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/;
 
+/** A participant's request to stop a bot that another device is speaking. */
+export interface InterruptRequest {
+	botId: string;
+	at: number;
+}
+
+/** What the device playing a bot's voice reports after cutting it off. */
+export interface InterruptedSpeechRecord {
+	message_id: string;
+	heard_chars: number;
+	spoken_chars: number;
+	at: number;
+}
+
+export const MAX_SPOKEN_CHARS = 64_000;
+
 export interface CallPresence {
 	id: string;
 	joined: boolean;
@@ -22,6 +38,8 @@ export interface CallPresence {
 	screen?: string;
 	voiceBots?: readonly string[];
 	speakingBot?: string;
+	interruptBot?: InterruptRequest;
+	interruptedSpeech?: InterruptedSpeechRecord;
 }
 
 export interface CallParticipant {
@@ -35,6 +53,8 @@ export interface CallParticipant {
 	screen?: string;
 	voiceBots?: readonly string[];
 	speakingBot?: string;
+	interruptBot?: InterruptRequest;
+	interruptedSpeech?: InterruptedSpeechRecord;
 }
 
 export interface LiveCall {
@@ -48,6 +68,43 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function streamId(value: unknown): value is string {
 	return typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+}
+
+function timestamp(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function sanitizeInterruptBot(value: unknown): InterruptRequest | undefined {
+	if (!isRecord(value)) return undefined;
+	const { botId, at } = value;
+	return typeof botId === "string" &&
+		/^[A-Za-z0-9:_-]{1,160}$/.test(botId) &&
+		timestamp(at)
+		? { botId, at }
+		: undefined;
+}
+
+function sanitizeInterruptedSpeech(
+	value: unknown,
+): InterruptedSpeechRecord | undefined {
+	if (!isRecord(value)) return undefined;
+	const { message_id, heard_chars, spoken_chars, at } = value;
+	return typeof message_id === "string" &&
+		CALL_ID_PATTERN.test(message_id) &&
+		Number.isSafeInteger(heard_chars) &&
+		Number.isSafeInteger(spoken_chars) &&
+		(spoken_chars as number) > 0 &&
+		(spoken_chars as number) <= MAX_SPOKEN_CHARS &&
+		(heard_chars as number) >= 0 &&
+		(heard_chars as number) <= (spoken_chars as number) &&
+		timestamp(at)
+		? {
+				message_id,
+				heard_chars: heard_chars as number,
+				spoken_chars: spoken_chars as number,
+				at,
+			}
+		: undefined;
 }
 
 export function sanitizeCallPresence(value: unknown): CallPresence | null {
@@ -67,6 +124,8 @@ export function sanitizeCallPresence(value: unknown): CallPresence | null {
 				.slice(0, 64)
 				.sort()
 		: [];
+	const interruptBot = sanitizeInterruptBot(value.interruptBot);
+	const interruptedSpeech = sanitizeInterruptedSpeech(value.interruptedSpeech);
 	return {
 		id,
 		joined: joined === true,
@@ -80,6 +139,8 @@ export function sanitizeCallPresence(value: unknown): CallPresence | null {
 		voiceBots.includes(value.speakingBot)
 			? { speakingBot: value.speakingBot }
 			: {}),
+		...(interruptBot ? { interruptBot } : {}),
+		...(interruptedSpeech ? { interruptedSpeech } : {}),
 	};
 }
 
@@ -111,6 +172,8 @@ function candidatesOf(
 			screen: presence.screen,
 			voiceBots: presence.voiceBots,
 			speakingBot: presence.speakingBot,
+			interruptBot: presence.interruptBot,
+			interruptedSpeech: presence.interruptedSpeech,
 		});
 	}
 	return found.sort((a, b) => a.clientId - b.clientId);

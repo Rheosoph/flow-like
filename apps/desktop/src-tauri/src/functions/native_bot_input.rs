@@ -16,7 +16,7 @@ fn validate(request_id: &str, options: &Value) -> Result<(), String> {
         .unwrap_or("");
     if !matches!(
         operation,
-        "capabilities" | "voice" | "document" | "photo" | "summarize" | "extract"
+        "capabilities" | "voice" | "document" | "photo" | "live_text" | "summarize" | "extract"
     ) || options.to_string().len() > 128 * 1024
     {
         return Err("invalid_input: Invalid native bot operation".into());
@@ -232,6 +232,8 @@ mod tests {
     fn bounds_native_input_and_requires_workspace() {
         assert!(validate("a", &json!({"operation":"capabilities"})).is_ok());
         assert!(validate("a", &json!({"operation":"voice"})).is_err());
+        assert!(validate("a", &json!({"operation":"live_text","scope":"workspace"})).is_ok());
+        assert!(validate("a", &json!({"operation":"live_text"})).is_err());
         assert!(
             validate(
                 "a",

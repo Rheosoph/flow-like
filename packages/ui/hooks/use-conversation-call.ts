@@ -1,10 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { joinContentText } from "../components/interfaces/chat-default/inline-segments";
+import {
+	type InterruptedSpeech,
+	type StreamedReply,
+	isBotEcho,
+} from "../lib/realtime/bot-call-speech";
+import { callLatency } from "../lib/realtime/call-latency";
 import {
 	type CallListener,
 	startCallListener,
 } from "../lib/realtime/call-listener";
+import { warmCallListening } from "../lib/realtime/call-listener";
 import {
 	END_SILENCE_MS,
 	type SttChoice,
@@ -12,7 +20,11 @@ import {
 	bytesToBase64,
 	encodeWav,
 } from "../lib/realtime/call-listening";
-import { createCallSpeechOutput } from "../lib/realtime/call-speech-output";
+import {
+	type CallSpeechOutput,
+	type SpeechProgress,
+	createCallSpeechOutput,
+} from "../lib/realtime/call-speech-output";
 import { createCallTranscription } from "../lib/realtime/call-transcription";
 import {
 	type CallMediaError,
@@ -23,6 +35,8 @@ import {
 import {
 	CALL_FIELD,
 	type CallEngine,
+	type InterruptRequest,
+	type InterruptedSpeechRecord,
 	type LiveCall,
 	type RemoteStreams,
 	botVoiceSource,
@@ -37,6 +51,16 @@ import {
 import { useBackend } from "../state/backend-state";
 import type { IAudioState } from "../state/backend-state/audio-state";
 import type { IConversation } from "../state/backend-state/inbox-state";
+import { useGlobalChatStore } from "../state/global-chat/global-chat-store";
+import { cancelGlobalChatRun } from "../state/global-chat/global-chat-stream";
+import {
+	type VoiceReplyFollow,
+	type VoiceRunSource,
+	type VoiceTranscript,
+	type VoiceTurnRequest,
+	followVoiceReply,
+	voiceTurnSender,
+} from "../state/global-chat/voice-turn";
 import type { ConversationRoom, RoomAwareness } from "./use-conversation-room";
 import { newInboxMessageId, useSendInboxEntry } from "./use-inbox";
 import { useIncomingCallJoin } from "./use-incoming-call-join";
@@ -55,12 +79,33 @@ export interface CallParticipantView {
 	listening: boolean;
 }
 
+/** What the bot speech scheduler offers the call: cutting a reply off, and what is being said. */
+export interface BotSpeechControl {
+	interrupt: (filter?: {
+		botId?: string;
+		since?: number;
+	}) => InterruptedSpeech | null;
+	echoText: (botId: string) => string | null;
+	/** Speaks a reply while it streams in; null when this device has no voice for the bot. */
+	stream?: (transcriptId: string, botId: string) => StreamedReply | null;
+	/** Holds the playing reply in place; false when nothing was playing. */
+	pause?: () => boolean;
+	resume?: () => void;
+}
+
 /** What letting bots listen needs: the speaker's STT bit and the bots a spoken name can wake. */
 export interface CallListenOptions {
 	stt: SttChoice | null;
 	hasBots: boolean;
 	/** The bot ids a spoken text names. */
 	mentionsIn: (text: string) => string[];
+}
+
+interface VoiceRun {
+	runId: string;
+	transcriptId: string;
+	finished: boolean;
+	follow: VoiceReplyFollow | null;
 }
 
 interface SpokenUtterance extends Utterance {
@@ -111,6 +156,13 @@ export interface ConversationCallState {
 	canSpeakForBot: (botId: string) => boolean;
 	playBotSpeech: (blob: Blob, botId: string) => Promise<void>;
 	stopBotSpeech: () => void;
+	/** The bot whose voice is playing in the call, on this device or another. */
+	speakingBot: string | null;
+	/** Stops the speaking bot, wherever its voice plays; what was heard rides on your next transcript. */
+	interruptSpeech: () => void;
+	registerSpeechControl: (control: BotSpeechControl | null) => void;
+	speechOutput: () => CallSpeechOutput | null;
+	speechProgress: () => SpeechProgress | null;
 	error: CallError | null;
 	cameraOn: boolean;
 	screenSharing: boolean;
@@ -125,6 +177,9 @@ export interface ConversationCallState {
 
 const SPEAKING_POLL_MS = 150;
 const BOT_ECHO_TAIL_MS = 350;
+const INTERRUPT_CARRY_MS = 30_000;
+const BARGE_HOLD_MS = 5000;
+const MAX_TIMINGS = 16;
 const NO_SPEAKERS: ReadonlySet<string> = new Set();
 const NO_STARTS: ReadonlyMap<string, number> = new Map();
 const NO_STREAMS: RemoteStreams = new Map();
@@ -166,9 +221,20 @@ interface Session {
 	listening: boolean;
 	botSpeaking: boolean;
 	botEchoTimer: ReturnType<typeof setTimeout> | null;
+	guardBot: string | null;
+	bargeHold: number;
+	bargeToken: number;
+	speechControl: BotSpeechControl | null;
+	interruptBot: InterruptRequest | undefined;
+	interruptedSpeech: InterruptedSpeechRecord | undefined;
+	pendingInterrupt: { record: InterruptedSpeech; at: number } | null;
+	awaitingInterrupt: { at: number } | null;
+	handledInterrupts: Map<number, number>;
 	voiceBots: readonly string[];
 	speakingBot: string | null;
-	speechOutput: ReturnType<typeof createCallSpeechOutput> | null;
+	speechOutput: CallSpeechOutput | null;
+	voiceRun: VoiceRun | null;
+	bargePaused: boolean;
 	listener: CallListener | null;
 	listeningGeneration: number;
 	transcripts: ReturnType<
@@ -247,7 +313,33 @@ function stopListening(session: Session) {
 	session.listener = null;
 }
 
+function cancelVoiceRun(session: Session): Promise<void> {
+	const run = session.voiceRun;
+	session.voiceRun = null;
+	if (!run || run.finished) return Promise.resolve();
+	run.finished = true;
+	run.follow?.cancel();
+	return cancelGlobalChatRun(run.runId).then(
+		() => {},
+		() => {},
+	);
+}
+
+const voiceRunSource = (runId: string): VoiceRunSource => ({
+	subscribe: (listener) => useGlobalChatStore.subscribe(listener),
+	read: () => {
+		const message = useGlobalChatStore.getState().runs[runId]?.message;
+		return message
+			? {
+					text: joinContentText(message.inner.content),
+					toolRunning: Boolean(message.current_step_id),
+				}
+			: null;
+	},
+});
+
 function releaseSession(session: Session) {
+	void cancelVoiceRun(session);
 	if (session.contextChanged)
 		session.context?.removeEventListener("statechange", session.contextChanged);
 	if (session.botEchoTimer !== null) clearTimeout(session.botEchoTimer);
@@ -260,6 +352,28 @@ function releaseSession(session: Session) {
 	dropMeter(session.localMeter);
 	for (const track of session.stream.getTracks()) track.stop();
 	void session.context?.close().catch(() => {});
+}
+
+function holdingBargeIn(session: Session): boolean {
+	return Date.now() < session.bargeHold;
+}
+
+function guardWhileBotSpeaks(session: Session, bot: string) {
+	session.guardBot = bot;
+	if (session.botEchoTimer !== null) clearTimeout(session.botEchoTimer);
+	session.botEchoTimer = null;
+	if (!session.botSpeaking) {
+		session.botSpeaking = true;
+		session.transcripts?.resetPartial();
+	}
+	if (!holdingBargeIn(session)) session.listener?.setGuarded(true);
+}
+
+/** What the guarded bot is saying, to tell its echo from a person talking over it. */
+function guardedSpeech(session: Session) {
+	return session.guardBot
+		? (session.speechControl?.echoText(session.guardBot) ?? "")
+		: "";
 }
 
 function othersIn(session: Session): number {
@@ -289,6 +403,8 @@ function publish(session: Session) {
 		listening: session.listening,
 		voiceBots: session.voiceBots,
 		speakingBot: session.speakingBot,
+		interruptBot: session.interruptBot,
+		interruptedSpeech: session.interruptedSpeech,
 		camera: session.video?.state.camera?.id,
 		screen: session.video?.state.screen?.id,
 	});
@@ -343,6 +459,7 @@ export function useConversationCall(
 	const joining = useRef(false);
 
 	const sessionRef = useRef<Session | null>(null);
+	const pendingControl = useRef<BotSpeechControl | null>(null);
 	const engineRef = useRef<CallEngine | null>(null);
 	const updateCallRef = useRef<(() => void) | null>(null);
 	const roomRef = useRef<ConversationRoom | undefined>(room);
@@ -357,35 +474,133 @@ export function useConversationCall(
 			.filter((member) => member.kind === "bot")
 			.map((member) => member.principal_id),
 	);
+	const directBotRef = useRef<string | null>(null);
+	directBotRef.current =
+		conversation.kind === "direct" && botsRef.current.size === 1
+			? ([...botsRef.current][0] ?? null)
+			: null;
 	const startTimesRef = useRef(startTimes);
 	startTimesRef.current = startTimes;
 
-	const refreshSpeechPause = useCallback(
-		(session: Session, current: LiveCall | null) => {
-			const speaking =
-				Boolean(session.speakingBot) ||
-				(current?.callId === session.callId &&
-					current.participants.some(
+	const remoteSpeakingBot = useCallback(
+		(session: Session, current: LiveCall | null): string | null =>
+			(current?.callId === session.callId
+				? current.participants.find(
 						(p) =>
 							!p.local && p.speakingBot && botsRef.current.has(p.speakingBot),
-					));
-			if (speaking) {
-				if (session.botEchoTimer !== null) clearTimeout(session.botEchoTimer);
-				session.botEchoTimer = null;
-				session.botSpeaking = true;
-				session.transcripts?.resetPartial();
-				session.listener?.setPaused(true);
+					)?.speakingBot
+				: null) ?? null,
+		[],
+	);
+
+	const refreshSpeechPause = useCallback(
+		(session: Session, current: LiveCall | null) => {
+			const bot = session.speakingBot ?? remoteSpeakingBot(session, current);
+			if (bot) {
+				guardWhileBotSpeaks(session, bot);
 			} else if (session.botSpeaking && session.botEchoTimer === null) {
+				session.bargeToken++;
+				session.speechOutput?.duck(false);
+				if (session.bargeHold) {
+					session.bargeHold = 0;
+					session.botSpeaking = false;
+					session.guardBot = null;
+					session.listener?.setGuarded(false);
+					return;
+				}
 				// Allow playback already buffered by WebRTC to finish before listening again.
+				session.listener?.setPaused(true);
 				session.botEchoTimer = setTimeout(() => {
 					session.botEchoTimer = null;
 					if (sessionRef.current !== session) return;
 					session.botSpeaking = false;
+					session.guardBot = null;
+					session.listener?.setGuarded(false);
 					session.listener?.setPaused(session.muted);
 				}, BOT_ECHO_TAIL_MS);
 			}
 		},
+		[remoteSpeakingBot],
+	);
+
+	const claimRemoteInterrupt = useCallback(
+		(session: Session, current: LiveCall | null) => {
+			const awaiting = session.awaitingInterrupt;
+			if (!awaiting || current?.callId !== session.callId) return;
+			const report = current.participants.find(
+				(p) => !p.local && (p.interruptedSpeech?.at ?? 0) >= awaiting.at,
+			)?.interruptedSpeech;
+			if (!report) return;
+			session.awaitingInterrupt = null;
+			session.pendingInterrupt = {
+				record: {
+					message_id: report.message_id,
+					heard_chars: report.heard_chars,
+					spoken_chars: report.spoken_chars,
+				},
+				at: Date.now(),
+			};
+		},
 		[],
+	);
+
+	const serveInterrupts = useCallback(
+		(session: Session, current: LiveCall | null) => {
+			if (current?.callId !== session.callId) return;
+			for (const p of current.participants) {
+				const request = p.interruptBot;
+				if (
+					p.local ||
+					!request ||
+					!botsRef.current.has(request.botId) ||
+					(session.handledInterrupts.get(p.clientId) ?? 0) >= request.at
+				)
+					continue;
+				session.handledInterrupts.set(p.clientId, request.at);
+				const record = session.speechControl?.interrupt({
+					botId: request.botId,
+					since: request.at,
+				});
+				if (!record) continue;
+				session.interruptedSpeech = { ...record, at: Date.now() };
+				publish(session);
+			}
+		},
+		[],
+	);
+
+	const interruptSession = useCallback(
+		(session: Session) => {
+			const record = session.speechControl?.interrupt();
+			if (record) session.pendingInterrupt = { record, at: Date.now() };
+			session.speechOutput?.duck(false);
+			const remoteBot = remoteSpeakingBot(session, liveRef.current);
+			if (!remoteBot) return;
+			const at = Date.now();
+			session.interruptBot = { botId: remoteBot, at };
+			session.awaitingInterrupt = { at };
+			publish(session);
+		},
+		[remoteSpeakingBot],
+	);
+
+	const takeInterrupt = useCallback(
+		(session: Session): InterruptedSpeech | undefined => {
+			claimRemoteInterrupt(
+				session,
+				deriveLiveCall(
+					session.awareness.getStates(),
+					session.awareness.clientID,
+					session.members,
+				),
+			);
+			const pending = session.pendingInterrupt;
+			session.pendingInterrupt = null;
+			return pending && Date.now() - pending.at <= INTERRUPT_CARRY_MS
+				? pending.record
+				: undefined;
+		},
+		[claimRemoteInterrupt],
 	);
 
 	useEffect(() => {
@@ -406,7 +621,11 @@ export function useConversationCall(
 				awareness.clientID,
 				peopleRef.current,
 			);
-			if (sessionRef.current) refreshSpeechPause(sessionRef.current, next);
+			if (sessionRef.current) {
+				refreshSpeechPause(sessionRef.current, next);
+				serveInterrupts(sessionRef.current, next);
+				claimRemoteInterrupt(sessionRef.current, next);
+			}
 			engine.setAllowedPeers(
 				new Set(peerSubs(next?.participants ?? []).keys()),
 			);
@@ -432,7 +651,7 @@ export function useConversationCall(
 			if (engineRef.current === engine) engineRef.current = null;
 			if (updateCallRef.current === update) updateCallRef.current = null;
 		};
-	}, [room, refreshSpeechPause]);
+	}, [room, refreshSpeechPause, serveInterrupts, claimRemoteInterrupt]);
 
 	useEffect(() => {
 		if (sessionRef.current) sessionRef.current.members = people;
@@ -625,14 +844,26 @@ export function useConversationCall(
 				listening: false,
 				botSpeaking: false,
 				botEchoTimer: null,
+				guardBot: null,
+				bargeHold: 0,
+				bargeToken: 0,
+				speechControl: null,
+				interruptBot: undefined,
+				interruptedSpeech: undefined,
+				pendingInterrupt: null,
+				awaitingInterrupt: null,
+				handledInterrupts: new Map(),
 				voiceBots: [],
 				speakingBot: null,
 				speechOutput: null,
+				voiceRun: null,
+				bargePaused: false,
 				listener: null,
 				listeningGeneration: 0,
 				transcripts: null,
 				video: null,
 			};
+			session.speechControl = pendingControl.current;
 			if (context && optionsRef.current?.persistCallEvents !== false) {
 				try {
 					session.speechOutput = createCallSpeechOutput(
@@ -746,9 +977,13 @@ export function useConversationCall(
 		for (const track of session.stream.getAudioTracks()) {
 			track.enabled = !session.muted;
 		}
-		session.listener?.setPaused(session.muted || session.botSpeaking);
-		if (session.muted || session.botSpeaking)
-			session.transcripts?.resetPartial();
+		const tail = session.botEchoTimer !== null;
+		session.listener?.setPaused(session.muted || tail);
+		if (session.muted) {
+			session.bargeToken++;
+			session.speechOutput?.duck(false);
+		}
+		if (session.muted || tail) session.transcripts?.resetPartial();
 		publish(session);
 	}, []);
 
@@ -792,6 +1027,84 @@ export function useConversationCall(
 		sessionRef.current?.speechOutput?.stop();
 	}, []);
 
+	const interruptSpeech = useCallback(() => {
+		const session = sessionRef.current;
+		if (!session) return;
+		interruptSession(session);
+		void cancelVoiceRun(session);
+	}, [interruptSession]);
+
+	const registerSpeechControl = useCallback(
+		(control: BotSpeechControl | null) => {
+			const session = sessionRef.current;
+			if (session) session.speechControl = control;
+			pendingControl.current = control;
+		},
+		[],
+	);
+
+	const speechOutput = useCallback(
+		() => sessionRef.current?.speechOutput ?? null,
+		[],
+	);
+
+	const speechProgress = useCallback(
+		() => sessionRef.current?.speechOutput?.progress() ?? null,
+		[],
+	);
+
+	const startVoiceTurn = useCallback(
+		async (
+			session: Session,
+			request: VoiceTurnRequest,
+		): Promise<{ start: (transcriptId: string) => void } | null> => {
+			const botId = directBotRef.current;
+			const sender = botId ? voiceTurnSender(botId) : null;
+			const stream = session.speechControl?.stream;
+			if (!botId || !sender || !stream) return null;
+			try {
+				await cancelVoiceRun(session);
+				const handle = await sender(request);
+				if (!handle) return null;
+				const run: VoiceRun = {
+					runId: handle.runId,
+					transcriptId: request.messageId,
+					finished: false,
+					follow: null,
+				};
+				void handle.done.then(
+					() => {
+						run.finished = true;
+					},
+					() => {
+						run.finished = true;
+					},
+				);
+				if (sessionRef.current !== session) {
+					void cancelGlobalChatRun(handle.runId).catch(() => {});
+					return { start: () => {} };
+				}
+				session.voiceRun = run;
+				return {
+					start: (transcriptId) => {
+						if (session.voiceRun !== run) return;
+						const reply = stream(transcriptId, botId) ?? null;
+						run.follow = followVoiceReply(
+							reply,
+							voiceRunSource(run.runId),
+							handle.done,
+							() => callLatency.firstText(transcriptId),
+						);
+					},
+				};
+			} catch (cause) {
+				console.warn("Starting the voice turn failed", cause);
+				return null;
+			}
+		},
+		[],
+	);
+
 	const setListening = useCallback(
 		(on: boolean) => {
 			const session = sessionRef.current;
@@ -818,18 +1131,29 @@ export function useConversationCall(
 				session.listening &&
 				session.listeningGeneration === generation &&
 				optionsRef.current?.persistCallEvents !== false;
+			const timings = new Map<string, { startAt: number; doneAt: number }>();
 			const transcripts = createCallTranscription<SpokenUtterance>({
 				transcribe: async (utterance) => {
 					const { listen: currentListen, audio: currentAudio } =
 						listenRef.current;
 					const currentStt = currentListen?.stt;
 					if (!isCurrent() || !currentStt || !currentAudio) return "";
+					const startAt = Date.now();
+					const wav = encodeWav(utterance.samples);
+					const local = currentStt.route === "local";
 					const result = await currentAudio.transcribe({
 						bit_id: currentStt.bitId,
-						audio_base64: bytesToBase64(encodeWav(utterance.samples)),
+						audio_base64: local ? "" : bytesToBase64(wav),
+						...(local ? { audio_bytes: wav } : {}),
 						mime: "audio/wav",
-						local: currentStt.route === "local",
+						local,
 					});
+					timings.set(`${utterance.offsetMs}:${utterance.samples.length}`, {
+						startAt,
+						doneAt: Date.now(),
+					});
+					if (timings.size > MAX_TIMINGS)
+						timings.delete(timings.keys().next().value as string);
 					return result.text.trim();
 				},
 				onPartial: (text) => {
@@ -839,24 +1163,48 @@ export function useConversationCall(
 					if (!isCurrent()) return;
 					const origin =
 						startTimesRef.current.get(session.callId) ?? session.joinedAt;
+					const messageId = newInboxMessageId();
+					const postedAt = Date.now();
+					const timing = timings.get(
+						`${utterance.offsetMs}:${utterance.samples.length}`,
+					);
+					const interrupted = takeInterrupt(session);
+					const transcript: VoiceTranscript = {
+						call: session.callId,
+						offset_ms: Math.max(0, Math.round(utterance.spokenAt - origin)),
+						duration_ms: utterance.durationMs,
+						mentions: listenRef.current.listen?.mentionsIn(text) ?? [],
+						...(interrupted ? { interrupted } : {}),
+					};
+					const streamed = await startVoiceTurn(session, {
+						messageId,
+						text,
+						transcript,
+					});
+					callLatency.transcriptPosted(messageId, {
+						speechEndAt:
+							utterance.endOfSpeechAt ??
+							utterance.spokenAt + utterance.durationMs,
+						sttStartAt: timing?.startAt ?? postedAt,
+						sttDoneAt: timing?.doneAt ?? postedAt,
+						postedAt,
+						route: streamed ? "stream" : "queued",
+						turnWaitMs: utterance.turn?.waitedMs,
+						turnSource: utterance.turn?.source,
+					});
+					if (streamed) {
+						streamed.start(messageId);
+						return;
+					}
 					await sendEntry({
 						conversationId: session.conversationId,
 						request: {
-							message_id: newInboxMessageId(),
+							message_id: messageId,
 							kind: "transcript",
 							envelope: {
 								v: 1,
 								enc: "none",
-								body: {
-									call: session.callId,
-									text,
-									offset_ms: Math.max(
-										0,
-										Math.round(utterance.spokenAt - origin),
-									),
-									duration_ms: utterance.durationMs,
-									mentions: listenRef.current.listen?.mentionsIn(text) ?? [],
-								},
+								body: { ...transcript, text },
 							},
 						},
 					});
@@ -880,17 +1228,49 @@ export function useConversationCall(
 					utterance.capturedAt ??
 					Date.now() - (final ? END_SILENCE_MS : 0) - utterance.durationMs,
 			});
+			const heardInProbe = async (probe: Utterance) => {
+				try {
+					return await transcripts.probe(captured(probe, false));
+				} catch (cause) {
+					console.warn("Checking a barge-in failed", cause);
+					return "";
+				}
+			};
+			const confirmBargeIn = async (probe: Utterance, token: number) => {
+				const text = await heardInProbe(probe);
+				if (!isCurrent() || session.bargeToken !== token || session.muted)
+					return;
+				const confirmed =
+					text !== "" && !isBotEcho(text, guardedSpeech(session));
+				if (confirmed) {
+					session.bargeHold = Date.now() + BARGE_HOLD_MS;
+					interruptSession(session);
+					void cancelVoiceRun(session);
+				} else if (session.bargePaused) session.speechControl?.resume?.();
+				else session.speechOutput?.duck(false);
+				session.bargePaused = false;
+				session.listener?.endBargeIn(confirmed);
+			};
 			startCallListener(
 				session.stream,
 				(utterance) => transcripts.final(captured(utterance, true)),
 				{
 					context: session.context ?? undefined,
-					paused: session.muted || session.botSpeaking,
+					paused: session.muted || session.botEchoTimer !== null,
+					guarded: session.botSpeaking && !holdingBargeIn(session),
 					onPartial: (utterance) => {
-						if (isCurrent() && !session.muted && !session.botSpeaking)
+						if (isCurrent() && !session.muted)
 							transcripts.partial(captured(utterance, false));
 					},
 					onReset: () => transcripts.resetPartial(),
+					onBargeInStart: () => {
+						if (!isCurrent()) return;
+						session.bargeToken++;
+						session.bargePaused = session.speechControl?.pause?.() ?? false;
+						if (!session.bargePaused) session.speechOutput?.duck(true);
+					},
+					onBargeInProbe: (probe) =>
+						void confirmBargeIn(probe, session.bargeToken),
 				},
 			)
 				.then((listener) => {
@@ -898,7 +1278,8 @@ export function useConversationCall(
 						listener.stop();
 						return;
 					}
-					listener.setPaused(session.muted || session.botSpeaking);
+					listener.setGuarded(session.botSpeaking && !holdingBargeIn(session));
+					listener.setPaused(session.muted || session.botEchoTimer !== null);
 					session.listener = listener;
 				})
 				.catch((cause) => {
@@ -911,7 +1292,15 @@ export function useConversationCall(
 					publish(session);
 				});
 		},
-		[sendEntry],
+		[sendEntry, interruptSession, takeInterrupt, startVoiceTurn],
+	);
+
+	const speakingBot = useMemo(
+		() =>
+			live?.participants.find(
+				(p) => p.speakingBot && botsRef.current.has(p.speakingBot),
+			)?.speakingBot ?? null,
+		[live],
 	);
 
 	const view = useMemo<LiveCallView | null>(
@@ -969,6 +1358,19 @@ export function useConversationCall(
 		return result;
 	}, [joined, me, video, live, remote]);
 
+	const sttBitId = listen?.stt?.bitId;
+	const sttRoute = listen?.stt?.route;
+	useEffect(() => {
+		if (!joined) return;
+		void warmCallListening().catch(() => {});
+	}, [joined]);
+	useEffect(() => {
+		if (!joined || !sttBitId) return;
+		void listenRef.current.audio
+			?.warm?.({ stt: { bit_id: sttBitId, local: sttRoute === "local" } })
+			?.catch(() => {});
+	}, [joined, sttBitId, sttRoute]);
+
 	const listeningNow =
 		view?.participants.find((p) => p.sub === me)?.listening ?? false;
 
@@ -992,6 +1394,11 @@ export function useConversationCall(
 			canSpeakForBot,
 			playBotSpeech,
 			stopBotSpeech,
+			speakingBot,
+			interruptSpeech,
+			registerSpeechControl,
+			speechOutput,
+			speechProgress,
 			error,
 			cameraOn: video.camera !== null,
 			screenSharing: video.screen !== null,
@@ -1025,6 +1432,11 @@ export function useConversationCall(
 			canSpeakForBot,
 			playBotSpeech,
 			stopBotSpeech,
+			speakingBot,
+			interruptSpeech,
+			registerSpeechControl,
+			speechOutput,
+			speechProgress,
 			error,
 			video,
 			videos,

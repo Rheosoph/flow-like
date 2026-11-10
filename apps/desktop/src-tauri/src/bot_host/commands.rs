@@ -14,6 +14,13 @@ pub fn bot_host_turns(host: State<'_, BotHost>, account: State<'_, AccountHost>)
     turns
 }
 
+/// Brings the account host's next poll forward, e.g. when the realtime connection reports new
+/// inbox activity; nothing happens before the host runs.
+#[tauri::command]
+pub fn bot_host_poke(account: State<'_, AccountHost>) {
+    account.poke();
+}
+
 /// Cancels a turn without a reply; false when it already finished or is posting its reply. An
 /// account turn is cancelled at the hub (`POST /bots/{bot}/turns/{turn}/cancel`).
 #[tauri::command]

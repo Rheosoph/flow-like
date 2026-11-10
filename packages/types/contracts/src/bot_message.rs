@@ -371,7 +371,7 @@ fn chars(value: &str) -> usize {
 }
 
 /// 1 to `max` characters, none of them whitespace or control characters.
-fn is_name(value: &str, max: usize) -> bool {
+pub(crate) fn is_name(value: &str, max: usize) -> bool {
     (1..=max).contains(&chars(value))
         && !value
             .chars()

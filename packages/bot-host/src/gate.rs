@@ -1,6 +1,7 @@
 //! The approval gate of a headless bot turn: a call that asks the owner runs under a standing
 //! grant, a one-time answer or an inferred owner instruction. Otherwise it parks behind a card.
-//! Tools consult it where an open chat would show a prompt; once it parks, it stops the run.
+//! Tools consult it where an open chat would show a prompt. Once it parks, every later call that
+//! asks waits too, and the run pauses after its current tool batch has settled.
 
 use flow_like::flow::copilot::bot_talk::{CrewMember, HeadlessPermission};
 use flow_like::flow::copilot::tool_authorization::AuthorizationInference;
@@ -33,7 +34,6 @@ pub struct ApprovalGate {
     inference: Mutex<Option<Arc<dyn AuthorizationInference>>>,
     refused: Mutex<HashSet<String>>,
     approval_lock: tokio::sync::Mutex<()>,
-    stop: Box<dyn Fn() + Send + Sync>,
 }
 
 struct ParkedCall {
@@ -53,12 +53,13 @@ fn result(tool: &str, code: &str, message: &str) -> Value {
     json!({ "status": "error", "tool": tool, "code": code, "retryable": false, "message": message })
 }
 
+/// The run pauses only on this gate shape (`status: "waiting"`), the same one the server gate uses.
+fn waiting(tool: &str, message: &str) -> Value {
+    json!({ "status": "waiting", "tool": tool, "code": CODE_WAITING, "retryable": false, "message": message })
+}
+
 impl ApprovalGate {
-    pub fn new(
-        grants: Arc<dyn GrantStore>,
-        turn_id: &str,
-        stop: impl Fn() + Send + Sync + 'static,
-    ) -> Arc<Self> {
+    pub fn new(grants: Arc<dyn GrantStore>, turn_id: &str) -> Arc<Self> {
         Arc::new(Self {
             grants,
             turn_id: turn_id.to_string(),
@@ -66,7 +67,6 @@ impl ApprovalGate {
             inference: Mutex::new(None),
             refused: Mutex::new(HashSet::new()),
             approval_lock: tokio::sync::Mutex::new(()),
-            stop: Box::new(stop),
         })
     }
 
@@ -118,10 +118,8 @@ impl ApprovalGate {
                 recovery_call_id: flow_like::flow::copilot::run_recovery::current_recovery_call_id(
                 ),
             });
-        (self.stop)();
-        result(
+        waiting(
             tool,
-            CODE_WAITING,
             "Your owner was asked to approve this call. This turn pauses and continues after their answer. Call no further tools and write nothing more now.",
         )
     }
@@ -137,11 +135,7 @@ impl ApprovalGate {
         // A consumed denial must be recorded before another call can check its token.
         let _approval = self.approval_lock.lock().await;
         if self.parked().is_some() {
-            return Err(result(
-                tool,
-                CODE_WAITING,
-                "This turn is waiting for an approval.",
-            ));
+            return Err(waiting(tool, "This turn is waiting for an approval."));
         }
         if self
             .refused
@@ -350,7 +344,7 @@ mod tests {
             "email_reply",
             format!("{DENY_PREFIX}{}", args_hash("email_reply", &args)),
         )])));
-        let gate = ApprovalGate::new(grants.clone(), "turn", || {});
+        let gate = ApprovalGate::new(grants.clone(), "turn");
         let inference = Arc::new(Allow::default());
         gate.set_inference(Some(inference.clone()));
         let (first, second) = tokio::join!(
@@ -367,7 +361,7 @@ mod tests {
     #[tokio::test]
     async fn inference_runs_a_call_without_creating_a_card_or_grant() {
         let grants = Arc::new(Grants(Mutex::new(Vec::new())));
-        let gate = ApprovalGate::new(grants.clone(), "turn", || panic!("must not park"));
+        let gate = ApprovalGate::new(grants.clone(), "turn");
         let inference = Arc::new(Allow::default());
         gate.set_inference(Some(inference.clone()));
         gate.clear(
@@ -397,7 +391,7 @@ mod tests {
         };
         let args = json!({"bot":"b"});
         let grants = Arc::new(Grants(Mutex::new(Vec::new())));
-        let gate = ApprovalGate::new(grants.clone(), "turn", || panic!("must not park"));
+        let gate = ApprovalGate::new(grants.clone(), "turn");
         let inference = Arc::new(Allow::default());
         gate.set_inference(Some(inference.clone()));
         assert!(matches!(
@@ -422,5 +416,6 @@ mod tests {
             HeadlessPermission::Denied
         ));
         assert_eq!(inference.0.load(Ordering::SeqCst), 1);
+        assert!(gate.parked().is_none());
     }
 }

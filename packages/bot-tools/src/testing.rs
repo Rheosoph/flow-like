@@ -58,6 +58,7 @@ pub struct FakeEnv {
     pub scheduler: Mutex<Option<Arc<dyn crate::schedule::Scheduler>>>,
     pub skills: Mutex<Option<Arc<dyn crate::skills::SkillHost>>>,
     pub images: Mutex<Result<Arc<dyn crate::image::ImageBackend>, crate::image::ImageUnavailable>>,
+    pub barcodes: Mutex<Option<Arc<dyn crate::barcode::BarcodeReader>>>,
     app_dbs: Mutex<
         HashMap<
             String,
@@ -116,6 +117,7 @@ impl FakeEnv {
             scheduler: Mutex::new(None),
             skills: Mutex::new(None),
             images: Mutex::new(Err(crate::image::ImageUnavailable::NoModel)),
+            barcodes: Mutex::new(None),
             app_dbs: Mutex::default(),
             expensive_ok: AtomicBool::new(false),
             writable: AtomicBool::new(true),
@@ -299,6 +301,10 @@ impl ToolEnv for FakeEnv {
     ) -> std::result::Result<Arc<dyn crate::image::ImageBackend>, crate::image::ImageUnavailable>
     {
         self.images.lock().expect("images").clone()
+    }
+
+    fn barcodes(&self) -> Option<Arc<dyn crate::barcode::BarcodeReader>> {
+        self.barcodes.lock().expect("barcodes").clone()
     }
 
     fn connectors(&self) -> Option<Arc<dyn crate::services::ConnectorSource>> {
@@ -564,6 +570,7 @@ pub struct FakeBackend {
     pub failed_pages: Mutex<Vec<u32>>,
     pub excel_requests: Mutex<Vec<String>>,
     pub created: Mutex<Vec<String>>,
+    pub readings: Mutex<Vec<String>>,
 }
 
 impl FakeBackend {
@@ -571,8 +578,12 @@ impl FakeBackend {
         self.goals.lock().expect("goals").len()
             + self.extractions.lock().expect("extractions").len()
             + self.rendered.lock().expect("rendered").len()
+            + self.readings.lock().expect("readings").len()
     }
 }
+
+/// Bytes containing it convert to no text, like a scan without a text layer.
+pub const SCANNED: &str = "SCANNED";
 
 fn pages_in(bytes: &[u8]) -> usize {
     let text = String::from_utf8_lossy(bytes);
@@ -637,9 +648,30 @@ impl DocumentBackend for FakeBackend {
     }
 
     async fn convert(&self, bytes: Bytes, _extension: Option<&str>) -> Result<Converted> {
-        Ok(Converted::plain(
-            String::from_utf8_lossy(&bytes).into_owned(),
-        ))
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        Ok(Converted::plain(if text.contains(SCANNED) {
+            String::new()
+        } else {
+            text
+        }))
+    }
+
+    async fn read_with_model(
+        &self,
+        _model: Arc<dyn ModelLogic>,
+        bytes: Bytes,
+        _extension: Option<&str>,
+        source_path: &str,
+    ) -> Result<crate::documents::ModelReading> {
+        self.readings
+            .lock()
+            .expect("readings")
+            .push(source_path.to_string());
+        let text = String::from_utf8_lossy(&bytes).replace(SCANNED, "");
+        Ok(crate::documents::ModelReading {
+            converted: Converted::plain(format!("Transcribed {}", text.trim())),
+            warnings: vec!["read by the model".to_string()],
+        })
     }
 
     async fn excel(&self, _bytes: Bytes, request: ExcelRequest) -> Result<String> {

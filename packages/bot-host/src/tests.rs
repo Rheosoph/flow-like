@@ -46,6 +46,8 @@ struct DeviceHub {
     checkpoint_calls: Mutex<Vec<(String, String, String, u32)>>,
     checkpoint_lease_lost: bool,
     release_refused: bool,
+    release_spent: bool,
+    heartbeat_signed_out: bool,
     cancel_refused: bool,
     room: bool,
     origin_room: bool,
@@ -195,6 +197,9 @@ impl TurnHub for DeviceHub {
         {
             return Err(HubFailure::answered(409, Some(CODE_LEASE_LOST), "taken"));
         }
+        if self.heartbeat_signed_out {
+            return Err(HubFailure::answered(401, None, "signed out"));
+        }
         Ok(turn(turn_id))
     }
 
@@ -308,7 +313,7 @@ impl TurnHub for DeviceHub {
         Ok(())
     }
 
-    async fn release(&self, _: &str, _: &str, code: &str) -> Result<(), HubFailure> {
+    async fn release(&self, _: &str, _: &str, code: &str) -> Result<bool, HubFailure> {
         self.record(Call::Release(code.to_owned()));
         if self.release_refused {
             return Err(HubFailure::answered(
@@ -317,7 +322,7 @@ impl TurnHub for DeviceHub {
                 "The recovery budget is exhausted",
             ));
         }
-        Ok(())
+        Ok(!self.release_spent)
     }
 
     async fn abandon(&self, _: &str, _: &str, code: &str) -> Result<(), HubFailure> {
@@ -450,6 +455,7 @@ enum Mode {
     Retry,
     Park,
     Hang,
+    Panic,
 }
 
 struct Runner {
@@ -500,6 +506,7 @@ impl TurnRunner for Runner {
                 std::future::pending::<()>().await;
                 Ok(String::new())
             }
+            Mode::Panic => panic!("the runner panicked"),
         }
     }
 
@@ -744,16 +751,31 @@ async fn a_delayed_answer_reads_and_posts_only_in_its_tokens_origin_scope() {
 
 #[tokio::test]
 async fn an_unavailable_origin_does_not_run_the_delayed_answer_as_an_exchange_message() {
-    let mut hub = delayed_answer_hub(2, false);
-    Arc::get_mut(&mut hub).unwrap().origin_unavailable = true;
-    let f = Fixture::with_hub(Mode::Reply("should not run"), hub, config());
-    f.until("the failed read", |f| {
-        f.status() == Some(TurnStatus::Failed)
-    })
-    .await;
+    for retries_spent in [false, true] {
+        let mut hub = delayed_answer_hub(2, false);
+        let fixture_hub = Arc::get_mut(&mut hub).unwrap();
+        fixture_hub.origin_unavailable = true;
+        fixture_hub.release_spent = retries_spent;
+        let f = Fixture::with_hub(Mode::Reply("should not run"), hub, config());
+        let ended = if retries_spent {
+            TurnStatus::Failed
+        } else {
+            TurnStatus::Cancelled
+        };
+        f.until("the failed read", |f| f.status() == Some(ended))
+            .await;
 
-    assert!(f.runner.jobs.lock().unwrap().is_empty());
-    assert!(!f.hub.has(|call| matches!(call, Call::Send(_))));
+        assert!(
+            f.hub
+                .has(|call| *call == Call::Release(crate::account::CODE_HUB.into()))
+        );
+        assert_eq!(
+            f.hub.has(|call| matches!(call, Call::Abandon(_))),
+            retries_spent
+        );
+        assert!(f.runner.jobs.lock().unwrap().is_empty());
+        assert!(!f.hub.has(|call| matches!(call, Call::Send(_))));
+    }
 }
 
 #[tokio::test]
@@ -911,6 +933,58 @@ async fn a_lost_lease_stops_the_run_and_posts_nothing() {
 }
 
 #[tokio::test]
+async fn a_signed_out_heartbeat_stops_the_run() {
+    let hub = Arc::new(DeviceHub {
+        heartbeat_signed_out: true,
+        ..Default::default()
+    });
+    *hub.entries.lock().unwrap() = vec![plain("hi")];
+    let f = Fixture::with_hub(Mode::Hang, hub, config());
+    f.until("the run stops", |f| {
+        f.status() == Some(TurnStatus::Cancelled)
+    })
+    .await;
+    assert_eq!(f.runner.cancelled.lock().unwrap().as_slice(), ["bt_1"]);
+}
+
+#[tokio::test]
+async fn a_panicking_turn_ends_failed_and_stops_its_heartbeat() {
+    let f = Fixture::start(Mode::Panic, vec![plain("hi")]);
+    f.until("the turn ends", |f| f.status() == Some(TurnStatus::Failed))
+        .await;
+    let beats = || {
+        f.hub
+            .calls()
+            .iter()
+            .filter(|c| **c == Call::Heartbeat)
+            .count()
+    };
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    let settled = beats();
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    assert_eq!(beats(), settled);
+    assert!(!f.hub.has(|call| matches!(call, Call::Send(_))));
+}
+
+#[test]
+fn a_trigger_addresses_a_bot_in_a_group() {
+    use flow_like_types::inbox::ConversationKind;
+    let mut trigger = entry(plain_envelope(json!({
+        "source": "schedule", "ref_id": "task", "title": "Daily", "text": "Check the report",
+    })));
+    trigger.kind = InboxEntryKind::Trigger;
+    trigger.sender_id = "system".into();
+    let found = crate::rule::waiting(
+        ConversationKind::Group,
+        "bot",
+        &[trigger.clone()],
+        trigger.created_at,
+        true,
+    );
+    assert!(found.is_some_and(|waiting| waiting.addressed));
+}
+
+#[tokio::test]
 async fn an_approval_parks_the_turn_instead_of_answering() {
     let f = Fixture::start(Mode::Park, vec![plain("summarize the report")]);
     f.until("the park", |f| {
@@ -963,6 +1037,21 @@ async fn an_exhausted_hub_recovery_budget_reports_the_failure() {
         message["envelope"]["body"]["error"]["code"],
         "BOT_TURN_FAILED"
     );
+}
+
+#[tokio::test]
+async fn spent_release_retries_report_the_failure() {
+    let hub = Arc::new(DeviceHub {
+        release_spent: true,
+        ..Default::default()
+    });
+    *hub.entries.lock().unwrap() = vec![plain("hi")];
+    let f = Fixture::with_hub(Mode::Retry, hub, config());
+    f.until("the report", |f| {
+        f.hub.has(|call| matches!(call, Call::Send(_)))
+    })
+    .await;
+    assert!(f.hub.has(|call| matches!(call, Call::Release(_))));
 }
 
 #[tokio::test]

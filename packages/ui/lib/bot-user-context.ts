@@ -18,9 +18,16 @@ export const USER_CONTEXT_FIELDS = [
 	"device",
 ] as const;
 
-const SESSION_MS = 30 * 60_000;
+export const SESSION_MS = 30 * 60_000;
 const VALUE_MS = 5 * 60_000;
-const grants = new Map<string, { expires: number; input: UserContextInput }>();
+interface UserContextGrant {
+	expires: number;
+	input: UserContextInput;
+	fields: UserContextField[];
+	precision: IUserContextRequest["precision"];
+}
+
+const grants = new Map<string, UserContextGrant>();
 const activeCollections = new Map<string, Set<AbortController>>();
 let sessionId: string | undefined;
 let accountId: string | null | undefined;
@@ -46,14 +53,23 @@ function grantKey(request: IUserContextRequest): string {
 		request.bot_id,
 		request.subject_id,
 		request.conversation_id,
-		request.purpose,
-		[...request.fields].sort(),
-		request.precision,
-		request.status_change,
 		request.audience,
 		[...request.audience_member_ids].sort(),
 		userContextSessionId(),
 	]);
+}
+
+function liveGrant(
+	request: IUserContextRequest,
+	now: number,
+): UserContextGrant | undefined {
+	const grant = grants.get(grantKey(request));
+	if (grant === undefined) return;
+	if (grant.expires <= now) {
+		revokeUserContextSession(request);
+		return;
+	}
+	return grant;
 }
 
 export function hasUserContextGrant(
@@ -61,13 +77,12 @@ export function hasUserContextGrant(
 	now = Date.now(),
 ): boolean {
 	if (request.status_change) return false;
-	const key = grantKey(request);
-	const grant = grants.get(key);
-	if (grant === undefined || grant.expires <= now) {
-		if (grant) revokeUserContextSession(request);
-		return false;
-	}
-	return true;
+	const grant = liveGrant(request, now);
+	return (
+		grant !== undefined &&
+		request.fields.every((field) => grant.fields.includes(field)) &&
+		(request.precision === "approximate" || grant.precision === "precise")
+	);
 }
 
 export function grantUserContextSession(
@@ -76,9 +91,15 @@ export function grantUserContextSession(
 	now = Date.now(),
 ): void {
 	if (request.status_change) return;
+	const previous = liveGrant(request, now);
 	grants.set(grantKey(request), {
 		expires: now + SESSION_MS,
 		input: { ...input },
+		fields: [...new Set([...(previous?.fields ?? []), ...request.fields])],
+		precision:
+			previous?.precision === "precise" || request.precision === "precise"
+				? "precise"
+				: "approximate",
 	});
 }
 
@@ -431,6 +452,33 @@ export function deniedUserContext(
 			request.fields.map((field) => [field, "denied"]),
 		),
 	};
+}
+
+export function revokeUserContextBody(request: IUserContextRequest) {
+	return {
+		text: "Context session access revoked.",
+		user_context_revoke: {
+			request_id: request.id,
+			bot_id: request.bot_id,
+			subject_id: request.subject_id,
+			conversation_id: request.conversation_id,
+			revoked_at: Date.now(),
+		},
+	};
+}
+
+export function liveUserContextSession(
+	request: IUserContextRequest,
+	response: IUserContextResponse | undefined,
+	revoked: boolean | undefined,
+	now = Date.now(),
+): boolean {
+	return (
+		request.audience === "direct" &&
+		response?.decision === "session" &&
+		!revoked &&
+		now < response.captured_at + SESSION_MS
+	);
 }
 
 export function contextField(value: unknown): value is UserContextField {

@@ -74,10 +74,23 @@ export type UseDeclaration = {
 } & (
 	| { readonly kind: "namespace" }
 	| { readonly kind: "glob" }
-	| { readonly kind: "members"; readonly members: readonly string[] }
+	| {
+			readonly kind: "members";
+			readonly members: readonly string[];
+			/** `use a::{ x as y }`: member name → the local name it is called by. */
+			readonly aliases?: Readonly<Record<string, string>>;
+	  }
 	| { readonly kind: "alias"; readonly alias: string }
 	| { readonly kind: "invalid"; readonly error: string }
 );
+
+/** The member of a `use a::{ … }` list that the bare name `local` calls, if it lists one. */
+export function useMemberNamed(
+	use: { readonly members: readonly string[]; readonly aliases?: Readonly<Record<string, string>> },
+	local: string,
+): string | undefined {
+	return use.members.find((member) => (use.aliases?.[member] ?? member) === local);
+}
 
 export interface FlowDocumentModel {
 	readonly symbols: FlowSymbol[];
@@ -703,6 +716,8 @@ const USE_TREE_RE = new RegExp(
 	`^(${IDENT}(?:\\s*::\\s*${IDENT})*)(?:\\s*::\\s*(?:(\\*)|\\{([^}]*)\\}))?(?:\\s+as\\s+(${IDENT}))?$`,
 );
 
+const USE_MEMBER_RE = new RegExp(`^(${IDENT})(?:\\s+as\\s+(${IDENT}))?$`);
+
 /**
  * Parse every top-level `use` declaration (Rust use-tree subset): `use a::b`, `use a::b::*`,
  * `use a::{ x, y }`, `use a::b as x` and comma lists. Malformed trees come back as `invalid`.
@@ -791,19 +806,34 @@ function parseUseTree(
 		if (m[4]) {
 			return { path, range, kind: "invalid", error: "`as` cannot rename a member list." };
 		}
-		const members = m[3]
+		const written = m[3]
 			.split(",")
 			.map((member) => member.trim())
 			.filter(Boolean);
-		if (members.length === 0 || members.some((member) => !IDENT_RE.test(member))) {
+		const entries = written.map((member) => USE_MEMBER_RE.exec(member));
+		if (written.length === 0 || entries.some((entry) => !entry)) {
 			return {
 				path,
 				range,
 				kind: "invalid",
-				error: "`use` member list must name at least one identifier.",
+				error:
+					"`use` member list must name at least one member, each written `name` or `name as local`.",
 			};
 		}
-		return { path, range, kind: "members", members };
+		const members: string[] = [];
+		const aliases: Record<string, string> = {};
+		for (const entry of entries) {
+			if (!entry) {
+				continue;
+			}
+			members.push(entry[1]);
+			if (entry[2]) {
+				aliases[entry[1]] = entry[2];
+			}
+		}
+		return Object.keys(aliases).length > 0
+			? { path, range, kind: "members", members, aliases }
+			: { path, range, kind: "members", members };
 	}
 	if (m[4]) {
 		return { path, range, kind: "alias", alias: m[4] };

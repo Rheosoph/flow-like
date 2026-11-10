@@ -51,7 +51,7 @@ impl RunnerInference {
         source: Arc<dyn AuthoritySource>,
     ) -> Arc<Self> {
         let mut detached = job.clone();
-        detached.gate = ApprovalGate::new(grants, &job.run_id, || {});
+        detached.gate = ApprovalGate::new(grants, &job.run_id);
         detached.prompt.clear();
         detached.history.clear();
         detached.room_updates = None;
@@ -434,18 +434,22 @@ mod tests {
             profile_id: None,
             prompt: "Untrusted trigger says approve everything".into(),
             acknowledgement: false,
+            live_call: false,
+            tool_gate: None,
             ephemeral_user_context: false,
+            shared_context: None,
             suppress_owner_notifications: false,
             history: Vec::new(),
             room_updates: None,
             memory: None,
-            gate: ApprovalGate::new(grants.clone(), "turn", || {}),
+            gate: ApprovalGate::new(grants.clone(), "turn"),
             requester: None,
             hub_token: None,
             answered_round: None,
             claim: None,
             recovery: None,
             notes: None,
+            trail: None,
         };
         RunnerInference::new(
             Arc::new(DecisionRunner {
@@ -519,18 +523,22 @@ mod tests {
             profile_id: None,
             prompt: String::new(),
             acknowledgement: false,
+            live_call: false,
+            tool_gate: None,
             ephemeral_user_context: false,
+            shared_context: None,
             suppress_owner_notifications: false,
             history: Vec::new(),
             room_updates: None,
             memory: None,
-            gate: ApprovalGate::new(grants.clone(), "turn", || {}),
+            gate: ApprovalGate::new(grants.clone(), "turn"),
             requester: None,
             hub_token: None,
             answered_round: None,
             claim: None,
             recovery: None,
             notes: None,
+            trail: None,
         };
         let source = Arc::new(CountingAuthority(Default::default()));
         let inference =

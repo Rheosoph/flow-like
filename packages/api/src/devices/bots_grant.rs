@@ -7,12 +7,12 @@
 use crate::{
     bot_host::{
         history,
-        ledger::Claimed,
+        ledger::{BOT_TURN_LEASE_LOST, Claimed},
         recovery,
         worker::{self, MAX_TURN_RUNTIME_MS},
     },
     bot_permission::{SignedBotToken, sign_bot_token},
-    entity::{bot, conversation},
+    entity::{bot, bot_turn, conversation},
     error::ApiError,
     routes::{
         ai::{
@@ -38,14 +38,14 @@ use flow_like::{
     state::FlowLikeState,
 };
 use flow_like_types::{
-    bot_turn::TurnAudience,
+    bot_turn::{STORED_RUNNING, TurnAudience},
     device_bot::{
         DeviceBotSpec, DeviceConversation, DeviceModels, DeviceRequester, DeviceToken,
-        DeviceTurnGrant, DeviceUsageGrant, DeviceUsageReport,
+        DeviceTurnGrant, DeviceUsageGrant, DeviceUsageReport, REFRESHED_TOKEN_SECS,
     },
     inbox::{ConversationEncryption, ConversationKind},
 };
-use sea_orm::{ConnectionTrait, EntityTrait};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, sea_query::Expr};
 use std::sync::Arc;
 
 pub(crate) const BOT_TURN_ENCRYPTED: &str = worker::CODE_ENCRYPTED;
@@ -54,6 +54,56 @@ pub(crate) const BOT_DEVICE_MODEL_NOT_HOSTED: &str = "BOT_DEVICE_MODEL_NOT_HOSTE
 pub(crate) const MODEL_NOT_HOSTED_TEXT: &str =
     "This bot's model can't run on a device; pick a hosted model in its settings.";
 pub(crate) const DELIVERY_TTL_SECS: i64 = 60;
+/// Posted after "I can't answer yet: " when the bot's device is shared for deploying.
+pub(crate) const DEVICE_SHARED_TEXT: &str = "the device I run on lets other people deploy to it. My owner can end that access in the device's sharing settings or choose another place for me to run.";
+/// How long past the end of its allowance a device may keep a turn to hand its answer in.
+pub(crate) const HOLD_GRACE_SECS: i64 = 120;
+
+/// The unix second after which a device may no longer keep the turn alive: the end of the
+/// allowance recorded for its claim, plus the time to hand the answer in. `None` when the hub
+/// recorded no allowance for the turn. An allowance that cannot be found has ended.
+pub(crate) async fn hold_end<C: ConnectionTrait>(
+    db: &C,
+    turn: &bot_turn::Model,
+) -> Result<Option<i64>, ApiError> {
+    let Some(operation_id) = turn.operation_id.as_deref() else {
+        return Ok(None);
+    };
+    let window = crate::quota::assistant_window(db, operation_id, &turn.owner_id).await?;
+    Ok(Some(window.map_or(0, |(deadline_ms, _)| {
+        deadline_ms / 1_000 + HOLD_GRACE_SECS
+    })))
+}
+
+/// Refuses to keep a turn alive past the end of its allowance. A turn whose answer is saved
+/// stays: only publishing it is left.
+pub(crate) async fn require_hold<C: ConnectionTrait>(
+    db: &C,
+    turn: &bot_turn::Model,
+    host_id: &str,
+) -> Result<(), ApiError> {
+    let Some(end) = hold_end(db, turn).await? else {
+        return Ok(());
+    };
+    if chrono::Utc::now().timestamp() <= end || has_finished_checkpoint(db, turn, host_id).await? {
+        return Ok(());
+    }
+    Err(ApiError::coded(
+        StatusCode::CONFLICT,
+        BOT_TURN_LEASE_LOST,
+        format!(
+            "Turn '{}' ran past the end of its allowance; host '{host_id}' can't keep it",
+            turn.id
+        ),
+    ))
+}
+
+/// How long a token refreshed for a running turn lives: never past the end of its hold.
+pub(crate) fn refresh_ttl(hold_end: Option<i64>, now: i64) -> i64 {
+    hold_end.map_or(REFRESHED_TOKEN_SECS, |end| {
+        (end - now).clamp(DELIVERY_TTL_SECS, REFRESHED_TOKEN_SECS)
+    })
+}
 
 pub(crate) async fn has_finished_checkpoint<C: ConnectionTrait>(
     db: &C,
@@ -433,6 +483,79 @@ pub(crate) fn is_end_to_end(conversation: &conversation::Model) -> bool {
     ConversationEncryption::parse(&conversation.encryption) == Some(ConversationEncryption::E2e)
 }
 
+/// The model allowance a claim runs on.
+struct Allowance {
+    operation_id: String,
+    deadline: chrono::DateTime<chrono::Utc>,
+    /// Set when this claim reserved it.
+    reserved: Option<AssistantUsage>,
+}
+
+/// A turn keeps the allowance recorded for it for as long as that allowance runs, so claiming
+/// it again neither reserves twice nor moves the end of the run. Otherwise a new one is
+/// reserved and recorded on the turn, which the device must still hold.
+async fn turn_allowance(
+    state: &AppState,
+    turn: &bot_turn::Model,
+    host_id: &str,
+    resolved: &Resolved,
+    room: Option<&str>,
+) -> Result<Allowance, ApiError> {
+    let owner = turn.owner_id.as_str();
+    if let Some(operation_id) = turn.operation_id.as_deref()
+        && let Some((deadline_ms, true)) =
+            crate::quota::assistant_window(&state.db, operation_id, owner).await?
+        && let Some(deadline) = chrono::DateTime::from_timestamp_millis(deadline_ms)
+        && deadline > chrono::Utc::now()
+    {
+        return Ok(Allowance {
+            operation_id: operation_id.to_owned(),
+            deadline,
+            reserved: None,
+        });
+    }
+    let usage = reserve(
+        state,
+        owner,
+        resolved,
+        &crate::middleware::jwt::BotUser {
+            bot_id: turn.bot_id.clone(),
+            turn_id: turn.id.clone(),
+            conv_id: room.map(ToOwned::to_owned),
+        },
+    )
+    .await?;
+    let recorded = bot_turn::Entity::update_many()
+        .col_expr(
+            bot_turn::Column::OperationId,
+            Expr::value(usage.operation_id.clone()),
+        )
+        .filter(bot_turn::Column::Id.eq(turn.id.as_str()))
+        .filter(bot_turn::Column::HostId.eq(host_id))
+        .filter(bot_turn::Column::Status.eq(STORED_RUNNING))
+        .exec(&state.db)
+        .await;
+    match recorded {
+        Ok(updated) if updated.rows_affected == 1 => Ok(Allowance {
+            operation_id: usage.operation_id.clone(),
+            deadline: usage.deadline,
+            reserved: Some(usage),
+        }),
+        outcome => {
+            settle_assistant_usage(state, &usage, 0, false).await.ok();
+            outcome?;
+            Err(ApiError::coded(
+                StatusCode::CONFLICT,
+                BOT_TURN_LEASE_LOST,
+                format!(
+                    "Host '{host_id}' no longer holds turn '{}'; its allowance was released",
+                    turn.id
+                ),
+            ))
+        }
+    }
+}
+
 /// The grant of a claimed device turn. The model allowance is reserved last, and released
 /// as a failed settlement when the tokens can't be signed.
 pub(crate) async fn build(
@@ -448,6 +571,21 @@ pub(crate) async fn build(
         .await?
         .filter(|row| row.deleted_at.is_none())
         .ok_or_else(|| ApiError::not_found(format!("Bot '{}' was deleted", turn.bot_id)))?;
+    if let Some(device_id) = row.device_id.as_deref()
+        && crate::devices::management::shared_for_deploy(
+            &state.db,
+            device_id,
+            owner,
+            chrono::Utc::now().timestamp(),
+        )
+        .await?
+    {
+        return Err(ApiError::coded(
+            StatusCode::CONFLICT,
+            crate::devices::management::DEVICE_SHARED_FOR_DEPLOY,
+            DEVICE_SHARED_TEXT,
+        ));
+    }
     if let Some(delivery) =
         completed_delivery_in(&state.db, claimed, host_id, &row, conversation).await?
     {
@@ -463,17 +601,7 @@ pub(crate) async fn build(
     let resolved = resolve_models(state, owner, &bot, &profile, &access, &fls).await?;
     let requester = requester_of(state, turn, kind, conversation.title.as_deref()).await?;
     let workspace = bot.context.workspace_app_id.clone();
-    let usage = reserve(
-        state,
-        owner,
-        &resolved,
-        &crate::middleware::jwt::BotUser {
-            bot_id: turn.bot_id.clone(),
-            turn_id: turn.id.clone(),
-            conv_id: room.map(ToOwned::to_owned),
-        },
-    )
-    .await?;
+    let usage = turn_allowance(state, turn, host_id, &resolved, room).await?;
     let ttl = ((usage.deadline - chrono::Utc::now()).num_seconds()).clamp(60, 86_400);
     let tokens = async {
         Ok::<_, ApiError>((
@@ -492,7 +620,9 @@ pub(crate) async fn build(
     let (bot_token, executor_token) = match tokens {
         Ok(tokens) => tokens,
         Err(error) => {
-            settle_assistant_usage(state, &usage, 0, false).await.ok();
+            if let Some(reserved) = &usage.reserved {
+                settle_assistant_usage(state, reserved, 0, false).await.ok();
+            }
             return Err(error);
         }
     };
@@ -604,5 +734,24 @@ mod decision_tests {
             usable["parameters"]["provider"]["provider_name"],
             "hosted:typesafe"
         );
+    }
+}
+
+#[cfg(test)]
+mod hold_tests {
+    use super::*;
+
+    #[test]
+    fn a_refreshed_token_ends_with_the_hold_of_its_turn() {
+        let now = 1_790_000_000;
+        for (hold_end, ttl) in [
+            (None, REFRESHED_TOKEN_SECS),
+            (Some(now + 3_600), REFRESHED_TOKEN_SECS),
+            (Some(now + 400), 400),
+            (Some(now + 5), DELIVERY_TTL_SECS),
+            (Some(now - 500), DELIVERY_TTL_SECS),
+        ] {
+            assert_eq!(refresh_ttl(hold_end, now), ttl, "{hold_end:?}");
+        }
     }
 }

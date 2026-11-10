@@ -39,6 +39,8 @@ pub enum BotCapability {
     Memory,
     /// Reads, summarizes and extracts files; creates Word, Excel, PowerPoint and PDF.
     Documents,
+    /// Reads QR codes and barcodes in images.
+    Barcodes,
     /// Connects to external databases like Postgres, MySQL or ODBC.
     DataConnections,
     /// Builds searchable indexes over files.
@@ -68,7 +70,7 @@ pub enum BotCapability {
 
 impl BotCapability {
     /// Every capability, in the order the settings list them.
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 27] = [
         Self::Internet,
         Self::WebRequests,
         Self::ProfileApps,
@@ -83,6 +85,7 @@ impl BotCapability {
         Self::DataStudio,
         Self::Memory,
         Self::Documents,
+        Self::Barcodes,
         Self::DataConnections,
         Self::Knowledge,
         Self::Connectors,
@@ -113,6 +116,7 @@ impl BotCapability {
             Self::DataStudio => "data_studio",
             Self::Memory => "memory",
             Self::Documents => "documents",
+            Self::Barcodes => "barcodes",
             Self::DataConnections => "data_connections",
             Self::Knowledge => "knowledge",
             Self::Connectors => "connectors",
@@ -142,6 +146,15 @@ impl BotCapability {
         matches!(
             self,
             Self::ComputerUse | Self::BrowserUse | Self::CommandLine | Self::Encryption
+        )
+    }
+
+    /// A managed device can't serve it yet: its hub has no route a bot token may use for it, or
+    /// (encryption) no key vault. Desktop and server are unaffected.
+    pub fn unavailable_on_device(self) -> bool {
+        matches!(
+            self,
+            Self::Connectors | Self::Skills | Self::ImageGeneration | Self::Encryption
         )
     }
 
@@ -186,7 +199,11 @@ impl BotLocation {
 
     /// Whether a bot running here may hold `capability`.
     pub fn allows(self, capability: BotCapability) -> bool {
-        self != Self::Server || !capability.requires_local_host()
+        match self {
+            Self::Server => !capability.requires_local_host(),
+            Self::Desktop => true,
+            Self::Device => !capability.unavailable_on_device(),
+        }
     }
 
     /// Whether the owner's desktop answers the bot's turns while it is online: a server bot that
@@ -276,6 +293,7 @@ mod tests {
                 "data_studio",
                 "memory",
                 "documents",
+                "barcodes",
                 "data_connections",
                 "knowledge",
                 "connectors",
@@ -341,10 +359,31 @@ mod tests {
         assert!(!BotLocation::Server.allows(BotCapability::CommandLine));
         assert!(!BotLocation::Server.allows(BotCapability::Encryption));
         assert!(BotLocation::Desktop.allows(BotCapability::Encryption));
-        assert!(BotLocation::Device.allows(BotCapability::Encryption));
+        assert!(!BotLocation::Device.allows(BotCapability::Encryption));
         assert!(BotLocation::Server.allows(BotCapability::Internet));
         assert!(BotLocation::Desktop.allows(BotCapability::ComputerUse));
         assert!(BotLocation::Device.allows(BotCapability::BrowserUse));
+    }
+
+    #[test]
+    fn a_device_refuses_what_it_cannot_serve_yet() {
+        let refused: Vec<BotCapability> = BotCapability::ALL
+            .into_iter()
+            .filter(|capability| !BotLocation::Device.allows(*capability))
+            .collect();
+        assert_eq!(
+            refused,
+            [
+                BotCapability::Connectors,
+                BotCapability::Skills,
+                BotCapability::ImageGeneration,
+                BotCapability::Encryption
+            ]
+        );
+        assert!(BotLocation::Device.allows(BotCapability::CommandLine));
+        assert!(BotLocation::Desktop.allows(BotCapability::Skills));
+        assert!(BotLocation::Server.allows(BotCapability::Skills));
+        assert!(BotCapability::Encryption.requires_local_host());
     }
 
     #[test]
@@ -414,6 +453,7 @@ mod tests {
     fn tool_capabilities_are_switchable_everywhere_and_round_trip() {
         let added = [
             (BotCapability::Documents, "documents"),
+            (BotCapability::Barcodes, "barcodes"),
             (BotCapability::DataConnections, "data_connections"),
             (BotCapability::Knowledge, "knowledge"),
             (BotCapability::Connectors, "connectors"),
@@ -427,7 +467,8 @@ mod tests {
             assert!(!capability.is_fixed(), "{id}");
             assert!(!capability.requires_local_host(), "{id}");
             for location in BotLocation::ALL {
-                assert!(location.allows(capability), "{id} {location:?}");
+                let held = location != BotLocation::Device || !capability.unavailable_on_device();
+                assert_eq!(location.allows(capability), held, "{id} {location:?}");
             }
             assert_eq!(serde_json::to_value(capability).unwrap(), json!(id));
             assert_eq!(

@@ -164,6 +164,12 @@ The default `trusted_process` execution profile assumes trusted workloads on a
 dedicated account. It provides no workload isolation. A project that can run
 native code can act with that process's host permissions.
 
+The device key also answers for the bots that run on the device. A device
+whose access rules let another person deploy to it therefore hosts no bots.
+The hub refuses to place a bot on it, and a bot already there tells whoever
+writes to it why it cannot answer until that access ends or the bot moves to
+another host.
+
 The optional `linux_sandbox` profile adds host-enforced controls when the target
 provides the required Linux facilities, delegated resource controls, and disk
 quotas. It is unavailable on macOS. A requested sandbox must pass its checks;

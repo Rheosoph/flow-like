@@ -38,11 +38,12 @@ pub fn schema_from_interface_with_defs(
     interface: &InterfaceDecl,
     interfaces: &[InterfaceDecl],
 ) -> Option<String> {
+    // A reference back to `interface` itself (directly or through another interface) is written
+    // `#/$defs/<its name>` like any other, so a recursive interface is listed in its own `$defs`.
     let mut refs = BTreeSet::new();
     for field in &interface.fields {
         collect_type_refs(&field.ty, &mut refs);
     }
-    refs.remove(&interface.name);
 
     let mut schema = interface_schema_value(interface, false)?;
     let known: HashMap<&str, &InterfaceDecl> = interfaces
@@ -62,7 +63,6 @@ pub fn schema_from_interface_with_defs(
         for field in &decl.fields {
             collect_type_refs(&field.ty, &mut refs);
         }
-        refs.remove(&interface.name);
         let def = interface_schema_value(decl, false)?;
         defs.insert(name, def);
     }
@@ -170,11 +170,12 @@ pub fn apply_interface_schemas(ast: &mut crate::model::BoardAst) {
 fn interfaces_from_schema(schema: &str, name_hint: &str) -> Option<Vec<InterfaceDecl>> {
     let value: Value = serde_json::from_str(schema).ok()?;
     let defs = value.get("$defs").and_then(Value::as_object);
+    let own_definition = defs.and_then(|defs| own_definition_name(&value, defs));
     let mut decls = Vec::new();
 
     if let Some(defs) = defs {
         for (name, def) in defs {
-            if is_object_schema(def) {
+            if Some(name.as_str()) != own_definition && is_object_schema(def) {
                 decls.push(interface_from_object_schema(name, def, defs)?);
             }
         }
@@ -183,15 +184,29 @@ fn interfaces_from_schema(schema: &str, name_hint: &str) -> Option<Vec<Interface
     if !is_object_schema(&value) {
         return None;
     }
-    let root_name = value
-        .get("title")
-        .and_then(Value::as_str)
+    let root_name = own_definition
+        .or_else(|| value.get("title").and_then(Value::as_str))
         .map(str::to_string)
         .unwrap_or_else(|| name_hint.to_string());
     let mut root = interface_from_object_schema(&root_name, &value, defs.unwrap_or(&Map::new()))?;
     root.schema = normalize_schema(schema);
     decls.push(root);
     Some(decls)
+}
+
+/// The `$defs` entry that repeats `root` itself: how a recursive schema refers back to its own top
+/// level. Fields reference that entry by name, so the root interface has to carry the same name.
+fn own_definition_name<'a>(root: &Value, defs: &'a Map<String, Value>) -> Option<&'a str> {
+    let body = |schema: &Value| {
+        let mut fields = schema.as_object()?.clone();
+        fields.remove("$defs");
+        fields.remove("title");
+        Some(fields)
+    };
+    let root = body(root)?;
+    defs.iter()
+        .find(|(_, definition)| body(definition).as_ref() == Some(&root))
+        .map(|(name, _)| name.as_str())
 }
 
 fn is_object_schema(value: &Value) -> bool {

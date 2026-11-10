@@ -4,6 +4,10 @@ import {
 	BOARD_FORMAT_HEADER,
 	CURRENT_BOARD_FORMAT_VERSION,
 } from "@flow-like/flow-like-ui/lib/board-format";
+import {
+	closedWithin,
+	lingerUntilClosed,
+} from "@flow-like/flow-like-ui/lib/execution/linger";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { type EventSourceMessage, createEventSource } from "eventsource-client";
 import type { AuthContextProps } from "react-oidc-context";
@@ -213,7 +217,8 @@ function parseSSEBuffer(buffer: string): {
 
 /**
  * Stream fetcher using raw fetch for POST requests (more reliable with Tauri)
- * and eventsource-client for GET requests.
+ * and eventsource-client for GET requests. With `awaitStreamClose` a POST stream
+ * settles only once the server ended it, which is when the run's logs can be read.
  */
 export async function streamFetcher<T>(
 	profile: IProfile,
@@ -222,6 +227,7 @@ export async function streamFetcher<T>(
 	auth?: AuthContextProps,
 	onMessage?: (data: T) => void,
 	onJsonResponse?: (data: unknown) => Promise<void>,
+	awaitStreamClose = false,
 ): Promise<void> {
 	const method = methodOf(options);
 	const scopedAuth = authForHub(profile, auth);
@@ -252,6 +258,7 @@ export async function streamFetcher<T>(
 			scopedAuth,
 			onMessage,
 			onJsonResponse,
+			awaitStreamClose,
 		);
 		return;
 	}
@@ -296,6 +303,7 @@ async function streamFetcherRaw<T>(
 	auth: AuthContextProps | undefined,
 	onMessage?: (data: T) => void,
 	onJsonResponse?: (data: unknown) => Promise<void>,
+	awaitStreamClose = false,
 ): Promise<void> {
 	const abortController = new AbortController();
 	// The caller's signal cancels the stream for its whole life, not only until
@@ -367,7 +375,7 @@ async function streamFetcherRaw<T>(
 			redactApiPathSecrets(url),
 		);
 
-		await readSSEStream(response.body, abortController, onMessage);
+		await readSSEStream(response.body, onMessage, awaitStreamClose);
 	} finally {
 		upstream?.removeEventListener("abort", forwardAbort);
 	}
@@ -401,12 +409,13 @@ async function readStreamReceipt(
 
 async function readSSEStream<T>(
 	body: ReadableStream<Uint8Array>,
-	abortController: AbortController,
 	onMessage?: (data: T) => void,
+	awaitStreamClose = false,
 ): Promise<void> {
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = "";
+	let lingering = false;
 
 	try {
 		while (true) {
@@ -440,16 +449,19 @@ async function readSSEStream<T>(
 				}
 			}
 			if (terminal) {
-				// Use AbortController to cleanly terminate the stream
-				abortController.abort();
+				lingering = true;
+				const closed = lingerUntilClosed(reader);
+				if (awaitStreamClose) await closedWithin(closed);
 				return;
 			}
 		}
 	} finally {
-		try {
-			reader.releaseLock();
-		} catch {
-			// Ignore errors when releasing lock - stream may already be closed
+		if (!lingering) {
+			try {
+				reader.releaseLock();
+			} catch {
+				// Ignore errors when releasing lock - stream may already be closed
+			}
 		}
 	}
 }
@@ -830,6 +842,54 @@ export async function postBlob(
 				return response.blob();
 			},
 			{ timeoutMs: requestTimeoutMs(cleanApiPath(path), "POST", body.length) },
+		);
+	} catch (error) {
+		if (error instanceof ApiResponseError) throw error;
+		throw requestFailure(error, route);
+	}
+}
+
+/** POST JSON and return the response once its headers arrive; the caller reads the body. */
+export async function postStream(
+	profile: IProfile,
+	path: string,
+	data: unknown,
+	auth?: AuthContextProps,
+	options?: { signal?: AbortSignal },
+): Promise<Response> {
+	const scopedAuth = authForHub(profile, auth);
+	const route = normalizeApiPath("POST", path);
+	const body = JSON.stringify(data);
+	const controller = new AbortController();
+	const caller = options?.signal;
+	if (caller?.aborted) controller.abort();
+	caller?.addEventListener("abort", () => controller.abort(), { once: true });
+	try {
+		return await withRequestDeadline<Response>(
+			route,
+			async (deadline) => {
+				const response = await withHubAuth(profile, scopedAuth, (token) =>
+					tauriFetch(constructUrl(profile, path), {
+						method: "POST",
+						body,
+						headers: hubAuthHeaders(
+							{
+								"Content-Type": "application/json",
+								[BOARD_FORMAT_HEADER]: String(CURRENT_BOARD_FORMAT_VERSION),
+							},
+							token,
+						),
+						connectTimeout: DEFAULT_CONNECT_TIMEOUT_MS,
+						signal: deadline.signal,
+					}),
+				);
+				if (!response.ok) {
+					throw apiResponseError(response, await response.text(), path);
+				}
+				deadline.release();
+				return response;
+			},
+			{ timeoutMs: STREAM_HEADER_TIMEOUT_MS, controller },
 		);
 	} catch (error) {
 		if (error instanceof ApiResponseError) throw error;

@@ -13,12 +13,13 @@ runs:
   using: 'composite'
   steps:
     - name: Cleanup environment
+      # apt-get fails on a name the runner image no longer knows, so only installed packages are named.
       run: |
-        sudo apt-get remove -y '^dotnet-.*'
-        sudo apt-get remove -y 'php.*'
-        sudo apt-get remove -y '^mongodb-.*'
-        sudo apt-get remove -y '^mysql-.*'
-        sudo apt-get remove -y azure-cli firefox powershell mono-devel libgl1-mesa-dri
+        unwanted=$(dpkg-query -W -f='${binary:Package}\n' \
+          | grep -E '^dotnet-|php|^mongodb-|^mysql-|^(azure-cli|firefox|powershell|mono-devel|libgl1-mesa-dri)(:|$)' || true)
+        if [ -n "$unwanted" ]; then
+          sudo apt-get remove -y $unwanted
+        fi
         sudo apt-get autoremove -y
         sudo apt-get clean
         sudo rm -rf /usr/share/dotnet/

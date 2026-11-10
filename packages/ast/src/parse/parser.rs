@@ -21,6 +21,7 @@ pub fn parse(src: &str) -> Result<BoardAst, ParseError> {
         toks: tokens,
         pos: 0,
         depth: 0,
+        type_sites: Vec::new(),
     };
     parser.board()
 }
@@ -133,6 +134,75 @@ struct Parser<'a> {
     toks: Vec<Token>,
     pos: usize,
     depth: usize,
+    /// Every name written in a value-type position, with its line and column.
+    type_sites: Vec<(String, usize, usize)>,
+}
+
+/// The value types, as FlowScript spells them.
+const VALUE_TYPES: &[&str] = &[
+    "string", "int", "float", "bool", "bytes", "any", "exec", "geometry",
+];
+
+/// What other languages call a FlowScript type, and what to write instead.
+const FOREIGN_TYPE_NAMES: &[(&[&str], &str)] = &[
+    (&["number"], "`int` or `float`"),
+    (&["integer", "long"], "`int`"),
+    (&["double", "decimal"], "`float`"),
+    (&["boolean"], "`bool`"),
+    (&["str", "text"], "`string`"),
+    (&["byte", "binary", "buffer"], "`bytes`"),
+    (&["date", "datetime", "timestamp"], "`Date`"),
+    (&["path", "file"], "`Path`"),
+    (&["struct", "object", "json", "dict"], "`Struct`"),
+    (
+        &["array", "list"],
+        "the element type followed by `[]`, such as `string[]`",
+    ),
+    (&["map"], "`Map<string, Type>`"),
+    (&["set"], "`Set<Type>`"),
+];
+
+/// What the author most likely meant by `name` in a type position when it is neither a value
+/// type nor shaped like a struct name. Value types are lower case and struct names (interfaces,
+/// catalog schema titles) are capitalised, so only a lower-case name can be a slip.
+fn intended_value_type(name: &str) -> Option<String> {
+    if !name.starts_with(char::is_lowercase) || VALUE_TYPES.contains(&name) {
+        return None;
+    }
+    if let Some((_, intended)) = FOREIGN_TYPE_NAMES
+        .iter()
+        .find(|(names, _)| names.contains(&name))
+    {
+        return Some((*intended).to_string());
+    }
+    // One slip always counts; two only in a longer name that still starts the same way, so an
+    // undeclared struct called `point` is not taken for `int`.
+    VALUE_TYPES
+        .iter()
+        .map(|candidate| (edit_distance(name, candidate), candidate))
+        .filter(|(distance, candidate)| {
+            *distance == 1
+                || (*distance == 2
+                    && candidate.len() > 4
+                    && name.chars().next() == candidate.chars().next())
+        })
+        .min_by_key(|(distance, _)| *distance)
+        .map(|(_, candidate)| format!("`{candidate}`"))
+}
+
+fn edit_distance(left: &str, right: &str) -> usize {
+    let right: Vec<char> = right.chars().collect();
+    let mut row: Vec<usize> = (0..=right.len()).collect();
+    for (i, a) in left.chars().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, b) in right.iter().enumerate() {
+            let substituted = diagonal + usize::from(a != *b);
+            diagonal = row[j + 1];
+            row[j + 1] = substituted.min(row[j] + 1).min(diagonal + 1);
+        }
+    }
+    row[right.len()]
 }
 
 /// A parsed `@decorator`, optionally carrying a string or the structured `@cache` settings.
@@ -268,12 +338,27 @@ impl Parser<'_> {
     /// renderer-emitted form is correctly treated as trailing. Do not "simplify" this to a column
     /// or token-index check.
     fn comment_starts_its_line(&self) -> bool {
-        if !matches!(self.cur(), Tok::Comment(_)) {
-            return false;
-        }
-        let byte = self.cur_token().byte;
-        let line_start = self.src[..byte].rfind('\n').map_or(0, |i| i + 1);
-        self.src[line_start..byte].trim().is_empty()
+        matches!(self.cur(), Tok::Comment(_)) && self.token_starts_its_line()
+    }
+
+    /// True when the cursor token is the first non-whitespace on its source line.
+    ///
+    /// Walks back over the blanks before the token only, never over the line: an expression asks
+    /// this at every `(` and `[`, and a document may be one very long line.
+    fn token_starts_its_line(&self) -> bool {
+        self.src.as_bytes()[..self.cur_token().byte]
+            .iter()
+            .rev()
+            .find(|byte| !matches!(byte, b' ' | b'\t' | b'\r'))
+            .is_none_or(|byte| *byte == b'\n')
+    }
+
+    /// Whether the `(` or `[` at the cursor continues the expression before it. The renderer
+    /// writes one statement per line with no terminator, so an opening bracket that starts a line
+    /// opens a new statement (`(a + b).trim()`, `[1, 2].push(3)`); gluing it to the previous
+    /// line would turn `let x = y` into the call `y(a + b)`.
+    fn bracket_continues_expression(&self) -> bool {
+        !self.token_starts_its_line()
     }
 
     /// Consume a trailing non-anchor comment on `line` (a branch arm label) if present.
@@ -737,6 +822,7 @@ impl Parser<'_> {
                 }
             }
         }
+        self.reject_misspelt_value_types(&ast)?;
         apply_interface_schemas(&mut ast);
         Ok(ast)
     }
@@ -911,7 +997,12 @@ impl Parser<'_> {
         let params = self.params(&Tok::RParen)?;
         self.expect(&Tok::RParen)?;
         let returns = if self.eat(&Tok::Colon) {
-            self.expect(&Tok::LParen)?;
+            if !matches!(self.cur(), Tok::LParen) {
+                return Err(self.err(format!(
+                    "a function's return values are named output pins: write `function {name}(…): (out: Type)`"
+                )));
+            }
+            self.bump(); // (
             let returns = self.params(&Tok::RParen)?;
             self.expect(&Tok::RParen)?;
             returns
@@ -1136,8 +1227,37 @@ impl Parser<'_> {
         Ok(Some(kind))
     }
 
+    /// A type name in a value-type position, remembered so a misspelling can be reported once
+    /// every interface of the document is known.
+    fn type_name(&mut self) -> Result<String, ParseError> {
+        let token = self.cur_token().clone();
+        let name = self.ident()?;
+        self.type_sites.push((name.clone(), token.line, token.col));
+        Ok(name)
+    }
+
+    /// Everything that is not a value type is a struct, so a value type written the way another
+    /// language spells it (`number`, `boolean`, `date`) or with a typo (`strng`) used to become an
+    /// untyped struct without a word. A name the document declares as an interface is that
+    /// interface, whatever it looks like.
+    fn reject_misspelt_value_types(&self, ast: &BoardAst) -> Result<(), ParseError> {
+        for (name, line, col) in &self.type_sites {
+            if ast.interfaces.iter().any(|decl| decl.name == *name) {
+                continue;
+            }
+            if let Some(intended) = intended_value_type(name) {
+                return Err(ParseError::new(
+                    format!("unknown type `{name}`: use {intended}"),
+                    *line,
+                    *col,
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn type_ref(&mut self) -> Result<TypeRef, ParseError> {
-        let base = self.ident()?;
+        let base = self.type_name()?;
         if matches!(base.as_str(), "Map" | "Set") && self.eat(&Tok::Op("<".to_string())) {
             if base == "Map" {
                 if self.ident()? != "string" {
@@ -1146,7 +1266,7 @@ impl Parser<'_> {
                 self.expect(&Tok::Comma)?;
             }
             // Containers hold one flow value; nested containers are not a Variable ValueType.
-            let inner = self.ident()?;
+            let inner = self.type_name()?;
             let kind = if inner == "geometry" {
                 self.geometry_kind()?
             } else {
@@ -1340,6 +1460,14 @@ impl Parser<'_> {
             Tok::Ident(kw) if kw == "if" => self.branch_stmt(),
             Tok::Ident(kw) if kw == "for" => self.for_stmt(),
             Tok::Ident(kw) if kw == "while" => self.while_stmt(),
+            Tok::Ident(kw) if matches!(kw.as_str(), "break" | "continue") && self.stands_alone() => {
+                Err(self.err(format!(
+                    "`{kw}` is not supported: a loop body runs for every item — guard the statements to skip with `if`, or move the exit condition into `while (…)`"
+                )))
+            }
+            Tok::Ident(kw) if kw == "try" && self.opens_plain_block() => Err(self.err(
+                "`try`/`catch` is not supported: a node that can fail has an error output — bind the call and handle both outcomes, e.g. `const response = http::fetch(…)` followed by `response { execSuccess: { … } execError: { … } }`",
+            )),
             Tok::Ident(_) => self.ident_stmt(),
             // A method call whose receiver is a literal starts the line with that literal:
             // `"payload".sha256()`. The renderer emits exactly this for an impure method-form node
@@ -1590,6 +1718,32 @@ impl Parser<'_> {
         matches!(self.toks.get(i).map(|t| &t.tok), Some(Tok::Ident(_)))
             && matches!(self.toks.get(i + 1).map(|t| &t.tok), Some(Tok::Colon))
             && matches!(self.toks.get(i + 2).map(|t| &t.tok), Some(Tok::LBrace))
+    }
+
+    /// True when the identifier at the cursor is a whole statement by itself: nothing follows that
+    /// would make it a call, an assignment, a path or a branch binding.
+    fn stands_alone(&self) -> bool {
+        !matches!(
+            self.toks.get(self.pos + 1).map(|t| &t.tok),
+            Some(
+                Tok::LParen
+                    | Tok::LBrace
+                    | Tok::LBracket
+                    | Tok::Dot
+                    | Tok::PathSep
+                    | Tok::Assign
+                    | Tok::CompoundAssign(_)
+            )
+        )
+    }
+
+    /// True when the identifier at the cursor is followed by a `{ … }` of statements rather than a
+    /// branch-arm map (`label: { … }`).
+    fn opens_plain_block(&self) -> bool {
+        matches!(
+            self.toks.get(self.pos + 1).map(|t| &t.tok),
+            Some(Tok::LBrace)
+        ) && !self.brace_opens_branch_arms(self.pos + 1)
     }
 
     /// A statement beginning with an identifier: an assignment, a call, or an N-way branch.
@@ -1895,10 +2049,12 @@ impl Parser<'_> {
     fn for_stmt_with(&mut self, head_kind: ForHead) -> Result<Stmt, ParseError> {
         self.bump(); // for
         self.expect(&Tok::LParen)?;
-        if !self.is_ident("const") {
-            return Err(self.err("expected `const` in for-of loop"));
+        if !self.is_ident("const") && !self.is_ident("let") {
+            return Err(self.err(
+                "expected `const` in for-of loop: write `for (const item of items)` or `for (const [index, item] of items)`",
+            ));
         }
-        self.bump(); // const
+        self.bump(); // const | let
         let (index, name) = if self.eat(&Tok::LBracket) {
             let index = self.ident()?;
             self.expect(&Tok::Comma)?;
@@ -1909,7 +2065,15 @@ impl Parser<'_> {
             (None, self.ident()?)
         };
         if !self.is_ident("of") {
-            return Err(self.err("expected `of` in for-of loop"));
+            return Err(self.err(match self.cur() {
+                Tok::Assign => {
+                    "counting `for (init; condition; step)` loops are not supported: iterate with `for (const item of items)` or `for (const [index, item] of items)`, or loop with `while (condition)`"
+                }
+                Tok::Ident(word) if word == "in" => {
+                    "`for…in` is not supported: iterate the values with `for (const item of items)`"
+                }
+                _ => "expected `of` in for-of loop",
+            }));
         }
         self.bump(); // of
         let head = self.expr()?;
@@ -1993,9 +2157,11 @@ impl Parser<'_> {
         let cond = self.binary()?;
         if matches!(self.cur(), Tok::Question) {
             self.bump();
-            let then = self.binary()?;
+            // Both branches are full expressions, so `a ? 1 : b ? 2 : 3` nests to the right as in
+            // JavaScript. `expr()` charges the nesting budget, which bounds a long ladder.
+            let then = self.expr()?;
             self.expect(&Tok::Colon)?;
-            let otherwise = self.binary()?;
+            let otherwise = self.expr()?;
             return Ok(Expr::Ternary {
                 cond: Box::new(cond),
                 then: Box::new(then),
@@ -2014,6 +2180,17 @@ impl Parser<'_> {
     }
 
     fn binary_precedence(&mut self, minimum: u8) -> Result<Expr, ParseError> {
+        let depth = self.depth;
+        let result = self.binary_chain(minimum);
+        self.depth = depth;
+        result
+    }
+
+    /// One precedence level. Every operator folded here adds a level to the left-deep tree, so it
+    /// stays charged against the nesting budget until the chain ends: `a + b + c + …` is as deep
+    /// as `(((a + b) + c) + …)`, which is how it renders, and everything that later walks the tree
+    /// recurses that deep.
+    fn binary_chain(&mut self, minimum: u8) -> Result<Expr, ParseError> {
         let mut lhs = self.unary()?;
         while let Tok::Op(op) = self.cur().clone() {
             let Some(precedence) = binary_operator_precedence(&op) else {
@@ -2034,9 +2211,7 @@ impl Parser<'_> {
             } else {
                 precedence + 1
             };
-            let rhs = self.binary_precedence(next_minimum);
-            self.depth -= 1;
-            let rhs = rhs?;
+            let rhs = self.binary_precedence(next_minimum)?;
             lhs = Expr::Binary {
                 op,
                 lhs: Box::new(lhs),
@@ -2085,14 +2260,36 @@ impl Parser<'_> {
     }
 
     fn postfix(&mut self) -> Result<Expr, ParseError> {
+        let depth = self.depth;
+        let result = self.postfix_chain();
+        self.depth = depth;
+        result
+    }
+
+    /// `primary` followed by any number of `.member`, `.method(…)` and `[index]` steps. Each step
+    /// nests the expression one level deeper, so it is charged against the nesting budget like a
+    /// binary operator (see `binary_chain`).
+    fn postfix_chain(&mut self) -> Result<Expr, ParseError> {
         let mut expr = self.primary()?;
         loop {
+            let continues = match self.cur() {
+                Tok::Dot => true,
+                Tok::LBracket => self.bracket_continues_expression(),
+                _ => false,
+            };
+            if !continues {
+                break;
+            }
+            if self.depth >= MAX_NESTING_DEPTH {
+                return Err(self.err("expression nesting too deep"));
+            }
+            self.depth += 1;
             match self.cur() {
                 Tok::Dot => {
                     self.bump();
                     let name = self.ident()?;
                     // `receiver.method(...)` — the member is a call, not an access.
-                    if matches!(self.cur(), Tok::LParen) {
+                    if matches!(self.cur(), Tok::LParen) && self.bracket_continues_expression() {
                         expr = self.call_tail(name, Vec::new(), Some(Box::new(expr)))?;
                         continue;
                     }
@@ -2169,7 +2366,9 @@ impl Parser<'_> {
                     self.bump();
                     if matches!(self.cur(), Tok::PathSep) {
                         self.path_call(name, &start)
-                    } else if matches!(self.cur(), Tok::LParen) {
+                    } else if matches!(self.cur(), Tok::LParen)
+                        && self.bracket_continues_expression()
+                    {
                         self.call_tail(name, Vec::new(), None)
                     } else {
                         Ok(Expr::Ref(name))
@@ -2210,6 +2409,7 @@ impl Parser<'_> {
             toks: lex(src)?,
             pos: 0,
             depth: self.depth,
+            type_sites: Vec::new(),
         };
         let expr = inner.expr()?;
         if !inner.at_eof() {

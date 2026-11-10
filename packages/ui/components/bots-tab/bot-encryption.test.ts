@@ -17,9 +17,9 @@ describe("encryption on the Details tab", () => {
 		).toBe(false);
 	});
 
-	test("a server bot can't hold the capability, a desktop or device bot can", () => {
+	test("only a desktop bot can hold the capability, a server or device bot cannot", () => {
 		expect(isBotCapabilityAvailable("encryption", "server")).toBe(false);
 		expect(isBotCapabilityAvailable("encryption", "desktop")).toBe(true);
-		expect(isBotCapabilityAvailable("encryption", "device")).toBe(true);
+		expect(isBotCapabilityAvailable("encryption", "device")).toBe(false);
 	});
 });

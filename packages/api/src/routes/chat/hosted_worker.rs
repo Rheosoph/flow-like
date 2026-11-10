@@ -31,7 +31,6 @@ use std::{
 };
 
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-const POLL_MS: u64 = 500;
 /// Evidence for an invocation lands within minutes; until then recovery retries quickly.
 const FRESH_RECOVERY_WINDOW_SECS: i64 = 3_600;
 /// Older rows that still hold `pending`/`unknown_usage` rarely change on replay
@@ -43,6 +42,88 @@ pub(crate) struct HostedAiJob {
     pub operation_id: String,
     pub request: HostedWork,
     pub deadline: DateTime<Utc>,
+    #[serde(default)]
+    pub pace: JobPace,
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+/// How eagerly a job's result is flushed by the worker and polled by the HTTP reader.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum JobPace {
+    #[default]
+    Standard,
+    Fast,
+}
+
+impl JobPace {
+    fn flush_interval(self) -> Duration {
+        match self {
+            Self::Fast => Duration::from_millis(120),
+            Self::Standard => Duration::from_millis(500),
+        }
+    }
+}
+
+/// Wait between polls, given the time since the reader last saw progress (a new head or chunk).
+fn poll_delay(pace: JobPace, since_progress: Duration) -> Duration {
+    let millis = match pace {
+        JobPace::Fast => match since_progress.as_millis() {
+            0..3_000 => 40,
+            3_000..15_000 => 100,
+            _ => 250,
+        },
+        JobPace::Standard => match since_progress.as_millis() {
+            0..2_000 => 100,
+            _ => 500,
+        },
+    };
+    Duration::from_millis(millis)
+}
+
+impl HostedAiJob {
+    /// Audio jobs are `Fast`; use `with_pace` for other latency-sensitive jobs.
+    pub(crate) fn new(operation_id: String, request: HostedWork, deadline: DateTime<Utc>) -> Self {
+        let pace = if matches!(request, HostedWork::Audio(_)) {
+            JobPace::Fast
+        } else {
+            JobPace::Standard
+        };
+        Self {
+            operation_id,
+            request,
+            deadline,
+            pace,
+            created_at: Some(Utc::now()),
+        }
+    }
+
+    pub(crate) fn with_pace(mut self, pace: JobPace) -> Self {
+        self.pace = pace;
+        self
+    }
+}
+
+struct ReadLatency {
+    id: String,
+    pace: JobPace,
+    started: Instant,
+    first_head_ms: u64,
+    first_chunk_ms: Option<u64>,
+}
+
+impl Drop for ReadLatency {
+    fn drop(&mut self) {
+        tracing::info!(
+            target: "hosted_job_latency",
+            operation_id = %self.id,
+            pace = ?self.pace,
+            first_head_ms = self.first_head_ms,
+            first_chunk_ms = ?self.first_chunk_ms,
+            total_ms = self.started.elapsed().as_millis() as u64,
+            "Hosted AI response read"
+        );
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -400,6 +481,10 @@ fn worker_event(id: &str, token: &str) -> serde_json::Value {
 }
 
 #[cfg(feature = "lambda")]
+static LAMBDA_CLIENT: flow_like_types::tokio::sync::OnceCell<aws_sdk_lambda::Client> =
+    flow_like_types::tokio::sync::OnceCell::const_new();
+
+#[cfg(feature = "lambda")]
 async fn invoke(state: &AppState, id: &str) -> Result<(), ApiError> {
     let token = state.maintenance_token.as_deref().ok_or_else(|| {
         ApiError::service_unavailable("Hosted AI worker authentication is not configured")
@@ -410,8 +495,13 @@ async fn invoke(state: &AppState, id: &str) -> Result<(), ApiError> {
             ApiError::service_unavailable("Hosted AI worker function is not configured")
         })?;
     let event = worker_event(id, token);
-    let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-    let response = aws_sdk_lambda::Client::new(&config)
+    let client = LAMBDA_CLIENT
+        .get_or_init(|| async {
+            let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
+            aws_sdk_lambda::Client::new(&config)
+        })
+        .await;
+    let response = client
         .invoke()
         .function_name(function)
         .invocation_type(aws_sdk_lambda::types::InvocationType::Event)
@@ -440,13 +530,13 @@ async fn invoke(_state: &AppState, _id: &str) -> Result<(), ApiError> {
 /// job carries only the turn's id, and a request already stored for it is kept: the worker's
 /// claim on the ledger decides which invocation runs it.
 pub(crate) async fn enqueue_bot_turn(state: &AppState, turn_id: &str) -> Result<(), ApiError> {
-    let job = HostedAiJob {
-        operation_id: turn_id.to_string(),
-        deadline: Utc::now() + chrono::Duration::minutes(15),
-        request: HostedWork::BotTurn {
+    let job = HostedAiJob::new(
+        turn_id.to_string(),
+        HostedWork::BotTurn {
             turn_id: turn_id.to_string(),
         },
-    };
+        Utc::now() + chrono::Duration::minutes(15),
+    );
     let data = Bytes::from(serde_json::to_vec(&job)?);
     let stored = state
         .meta_bucket
@@ -484,17 +574,30 @@ pub(crate) async fn dispatch(state: AppState, job: HostedAiJob) -> Result<Respon
         )
         .await?;
     invoke(&state, &job.operation_id).await?;
-    read_response(state.meta_bucket.clone(), job.operation_id, job.deadline).await
+    read_response(
+        state.meta_bucket.clone(),
+        job.operation_id,
+        job.deadline,
+        job.pace,
+    )
+    .await
 }
 
 async fn read_response(
     bucket: Arc<FlowLikeStore>,
     id: String,
     deadline: DateTime<Utc>,
+    pace: JobPace,
 ) -> Result<Response, ApiError> {
     let reader_deadline = deadline + chrono::Duration::seconds(30);
+    let waited = Instant::now();
     let head = loop {
         if let Some(head) = read_stored_json::<StreamHead>(&bucket, &id, "head.json").await? {
+            tracing::debug!(
+                operation_id = %id,
+                first_head_ms = waited.elapsed().as_millis() as u64,
+                "Hosted AI first head.json read"
+            );
             break head;
         }
         if Utc::now() >= reader_deadline {
@@ -502,8 +605,16 @@ async fn read_response(
                 "Hosted AI is still being reconciled. Check your usage before retrying.",
             ));
         }
-        flow_like_types::tokio::time::sleep(Duration::from_millis(POLL_MS)).await;
+        flow_like_types::tokio::time::sleep(poll_delay(pace, waited.elapsed())).await;
     };
+    let mut latency = ReadLatency {
+        id: id.clone(),
+        pace,
+        started: waited,
+        first_head_ms: waited.elapsed().as_millis() as u64,
+        first_chunk_ms: None,
+    };
+    let mut last_progress = Instant::now();
     let status = StatusCode::from_u16(head.status).unwrap_or(StatusCode::BAD_GATEWAY);
     let content_type = head.content_type.clone();
     let retry_after = head.retry_after.clone();
@@ -518,7 +629,13 @@ async fn read_response(
                     Ok::<_, ApiError>(bucket.as_generic().get(&path).await?.bytes().await?)
                 }.await;
                 match chunk {
-                    Ok(chunk) => yield Ok::<Bytes, std::io::Error>(chunk),
+                    Ok(chunk) => {
+                        last_progress = Instant::now();
+                        if latency.first_chunk_ms.is_none() {
+                            latency.first_chunk_ms = Some(latency.started.elapsed().as_millis() as u64);
+                        }
+                        yield Ok::<Bytes, std::io::Error>(chunk)
+                    }
                     Err(error) => { yield Err(std::io::Error::other(error.to_string())); return; }
                 }
                 next += 1;
@@ -531,9 +648,14 @@ async fn read_response(
                 yield Err(std::io::Error::other("Hosted AI worker deadline exceeded; usage remains reserved"));
                 break;
             }
-            flow_like_types::tokio::time::sleep(Duration::from_millis(POLL_MS)).await;
+            flow_like_types::tokio::time::sleep(poll_delay(pace, last_progress.elapsed())).await;
             match read_stored_json::<StreamHead>(&bucket, &id, "head.json").await {
-                Ok(Some(updated)) => head = updated,
+                Ok(Some(updated)) => {
+                    if updated.chunks != head.chunks || updated.done != head.done {
+                        last_progress = Instant::now();
+                    }
+                    head = updated;
+                }
                 Ok(None) => {},
                 Err(error) => { yield Err(std::io::Error::other(error.to_string())); break; }
             }
@@ -675,10 +797,22 @@ pub(crate) async fn work(
             .await?;
     }
     let started = Instant::now();
+    let dispatch_ms = job
+        .created_at
+        .map(|created| (Utc::now() - created).num_milliseconds());
     // Model preparation can fail while resolving credentials, before any
     // inference request. Finalize those failures without retaining provider spend.
     let mut provider_request_started = initial_request_started(&job.request);
     let outcome = execute(&state, &job, &mut provider_request_started).await;
+    tracing::info!(
+        target: "hosted_job_latency",
+        operation_id = %id,
+        pace = ?job.pace,
+        dispatch_ms = ?dispatch_ms,
+        execute_ms = started.elapsed().as_millis() as u64,
+        ok = outcome.is_ok(),
+        "Hosted AI job executed"
+    );
     if let Err(error) = outcome {
         // After dispatch, a failed worker may have incurred provider spend.
         if let HostedWork::GlobalAssistant { usage, .. } | HostedWork::Copilot { usage, .. } =
@@ -900,7 +1034,7 @@ async fn execute(
     let mut upstream = response.into_body().into_data_stream();
     let mut buffer = Vec::new();
     let mut total = 0usize;
-    let mut flush_tick = flow_like_types::tokio::time::interval(Duration::from_millis(POLL_MS));
+    let mut flush_tick = flow_like_types::tokio::time::interval(job.pace.flush_interval());
     flush_tick.set_missed_tick_behavior(flow_like_types::tokio::time::MissedTickBehavior::Delay);
     flush_tick.tick().await;
     loop {
@@ -913,6 +1047,9 @@ async fn execute(
                     return Err(ApiError::bad_request("Hosted AI response exceeded the size limit"));
                 }
                 buffer.extend_from_slice(&chunk);
+                if head.chunks == 0 {
+                    flush(state, &job.operation_id, &mut head, &mut buffer).await?;
+                }
             },
             _ = flush_tick.tick(), if !buffer.is_empty() => {
                 flush(state, &job.operation_id, &mut head, &mut buffer).await?;
@@ -947,13 +1084,16 @@ mod tests {
                 "provider": {"provider_name":"hosted:openrouter", "model_id":"openai/audio"},
             }))
             .unwrap();
-            let job = HostedAiJob {
-                operation_id: "expired-audio".into(),
-                request: HostedWork::Audio(audio),
-                deadline: Utc::now() - chrono::Duration::seconds(1),
-            };
+            let job = HostedAiJob::new(
+                "expired-audio".into(),
+                HostedWork::Audio(audio),
+                Utc::now() - chrono::Duration::seconds(1),
+            );
+            assert_eq!(job.pace, JobPace::Fast);
             let restored: HostedAiJob =
                 serde_json::from_slice(&serde_json::to_vec(&job).unwrap()).unwrap();
+            assert_eq!(restored.pace, JobPace::Fast);
+            assert!(restored.created_at.is_some());
             assert!(!initial_request_started(&restored.request));
             assert!(remaining_request_ms(&restored).is_err());
             assert_eq!(
@@ -980,13 +1120,49 @@ mod tests {
                 "rate":crate::bit_pricing::hosted_image_rate(&bit).unwrap(),
             }))
             .unwrap();
-        let job = HostedAiJob {
-            operation_id: "expired-image".into(),
-            request: HostedWork::Image(image),
-            deadline: Utc::now() - chrono::Duration::seconds(1),
-        };
+        let job = HostedAiJob::new(
+            "expired-image".into(),
+            HostedWork::Image(image),
+            Utc::now() - chrono::Duration::seconds(1),
+        );
+        assert_eq!(job.pace, JobPace::Standard);
         assert!(!initial_request_started(&job.request));
         assert!(remaining_request_ms(&job).is_err());
+    }
+
+    #[test]
+    fn stored_jobs_without_pace_or_created_at_stay_standard() {
+        let stored = serde_json::json!({
+            "operation_id": "old-job",
+            "request": {"BotTurn": {"turn_id": "turn-1"}},
+            "deadline": "2026-01-01T00:00:00Z",
+        });
+        let job: HostedAiJob = serde_json::from_value(stored).unwrap();
+        assert_eq!(job.pace, JobPace::Standard);
+        assert!(job.created_at.is_none());
+        let live = job.with_pace(JobPace::Fast);
+        let restored: HostedAiJob =
+            serde_json::from_value(serde_json::to_value(live).unwrap()).unwrap();
+        assert_eq!(restored.pace, JobPace::Fast);
+    }
+
+    #[test]
+    fn poll_delay_tightens_with_pace_and_backs_off_without_progress() {
+        let after = |pace, ms| poll_delay(pace, Duration::from_millis(ms)).as_millis();
+        assert_eq!(after(JobPace::Fast, 0), 40);
+        assert_eq!(after(JobPace::Fast, 2_999), 40);
+        assert_eq!(after(JobPace::Fast, 3_000), 100);
+        assert_eq!(after(JobPace::Fast, 14_999), 100);
+        assert_eq!(after(JobPace::Fast, 15_000), 250);
+        assert_eq!(after(JobPace::Standard, 0), 100);
+        assert_eq!(after(JobPace::Standard, 1_999), 100);
+        assert_eq!(after(JobPace::Standard, 2_000), 500);
+        assert_eq!(after(JobPace::Standard, 60_000), 500);
+        assert_eq!(JobPace::Fast.flush_interval(), Duration::from_millis(120));
+        assert_eq!(
+            JobPace::Standard.flush_interval(),
+            Duration::from_millis(500)
+        );
     }
 
     #[tokio::test]
@@ -1008,10 +1184,14 @@ mod tests {
                 retain_failure(&bucket, id, error, provider_request_started)
                     .await
                     .unwrap();
-                let response =
-                    read_response(bucket, id.into(), Utc::now() + chrono::Duration::seconds(5))
-                        .await
-                        .unwrap();
+                let response = read_response(
+                    bucket,
+                    id.into(),
+                    Utc::now() + chrono::Duration::seconds(5),
+                    JobPace::Standard,
+                )
+                .await
+                .unwrap();
                 assert_eq!(response.status(), status);
                 assert_eq!(response.headers()["content-type"], "application/json");
                 let body = axum::body::to_bytes(response.into_body(), MAX_RESPONSE_BYTES)
@@ -1064,9 +1244,14 @@ mod tests {
         )
         .await
         .unwrap();
-        let response = read_response(bucket, id.into(), Utc::now() + chrono::Duration::seconds(5))
-            .await
-            .unwrap();
+        let response = read_response(
+            bucket,
+            id.into(),
+            Utc::now() + chrono::Duration::seconds(5),
+            JobPace::Standard,
+        )
+        .await
+        .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()["content-type"], "text/event-stream");
         assert_eq!(response.headers()["retry-after"], "30");
@@ -1117,10 +1302,14 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            let response =
-                read_response(bucket, id.into(), Utc::now() + chrono::Duration::seconds(5))
-                    .await
-                    .unwrap();
+            let response = read_response(
+                bucket,
+                id.into(),
+                Utc::now() + chrono::Duration::seconds(5),
+                JobPace::Standard,
+            )
+            .await
+            .unwrap();
             assert_eq!(response.status().as_u16(), status);
             assert_eq!(response.headers()["content-type"], "application/json");
             assert_eq!(response.headers()["x-flow-like-operation-id"], id);

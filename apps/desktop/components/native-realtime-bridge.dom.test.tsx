@@ -19,6 +19,7 @@ const state = vi.hoisted(() => ({
 	close: vi.fn(),
 	invalidateQueries: vi.fn().mockResolvedValue(undefined),
 	incomingCall: vi.fn(() => null),
+	poke: vi.fn(),
 }));
 
 vi.mock("./tauri-provider", () => ({
@@ -40,6 +41,7 @@ vi.mock("@tanstack/react-query", () => ({
 	useQueryClient: () => ({ invalidateQueries: state.invalidateQueries }),
 }));
 vi.mock("../lib/native-realtime", () => ({ watchNativeRealtime: state.watch }));
+vi.mock("../lib/bot-host-poke", () => ({ pokeBotHost: state.poke }));
 vi.mock("@flow-like/flow-like-ui/components/incoming-call-provider", () => ({
 	IncomingCallProvider: state.incomingCall,
 }));
@@ -56,6 +58,7 @@ beforeEach(() => {
 	state.watch.mockReset().mockReturnValue(state.close);
 	state.close.mockReset();
 	state.incomingCall.mockClear();
+	state.poke.mockClear();
 	state.invalidateQueries.mockReset().mockResolvedValue(undefined);
 	host = document.createElement("div");
 	document.body.append(host);
@@ -131,6 +134,20 @@ describe("native realtime shell bridge", () => {
 			predicate({ queryKey: ["home", "hub", "profile", "subject", "apps"] }),
 		).toBe(false);
 		expect(predicate({ queryKey: ["getApps"] })).toBe(false);
+	});
+
+	it("wakes the account bot host once per new inbox revision", async () => {
+		await act(async () => root.render(<NativeRealtimeBridge />));
+		const { onMessage } = state.watch.mock.calls[0][0];
+		onMessage({ type: "update", response: { runs: [], errors: [] } });
+		expect(state.poke).not.toHaveBeenCalled();
+		const message = {
+			type: "update",
+			response: { notifications: { revision: "turn-queued" } },
+		};
+		await onMessage(message);
+		await onMessage(message);
+		expect(state.poke).toHaveBeenCalledOnce();
 	});
 
 	it("keeps a failed invalidation eligible for native redelivery", async () => {

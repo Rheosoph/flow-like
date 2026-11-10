@@ -288,22 +288,198 @@ fn every_bot_message_of_a_context_turn_is_derived() {
     let bot = enabled_bot(&f, "Guide");
     let room = f.direct(&bot);
     let request = make_request(&room, &bot, "ctx9");
-    f.send(&room.id, &bot.id, &request.id, "message", json!({REQUEST_FIELD:request}))
-        .unwrap();
-    f.send(&room.id, "local", &request.response_message_id(), "message", response_body(&request))
-        .unwrap();
+    f.send(
+        &room.id,
+        &bot.id,
+        &request.id,
+        "message",
+        json!({REQUEST_FIELD:request}),
+    )
+    .unwrap();
+    f.send(
+        &room.id,
+        "local",
+        &request.response_message_id(),
+        "message",
+        response_body(&request),
+    )
+    .unwrap();
     let first = f
-        .send(&room.id, &bot.id, "plain1", "message", json!({"text":"One moment."}))
+        .send(
+            &room.id,
+            &bot.id,
+            "plain1",
+            "message",
+            json!({"text":"One moment."}),
+        )
         .unwrap();
     let second = f
-        .send(&room.id, &bot.id, "plain2", "message", json!({"text":"Done."}))
+        .send(
+            &room.id,
+            &bot.id,
+            "plain2",
+            "message",
+            json!({"text":"Done."}),
+        )
         .unwrap();
     assert_eq!(first.envelope["body"][DERIVED_FIELD], request.id);
     assert_eq!(second.envelope["body"][DERIVED_FIELD], request.id);
-    f.send(&room.id, "local", "human1", "message", json!({"text":"Thanks"}))
-        .unwrap();
+    f.send(
+        &room.id,
+        "local",
+        "human1",
+        "message",
+        json!({"text":"Thanks"}),
+    )
+    .unwrap();
     let later = f
-        .send(&room.id, &bot.id, "plain3", "message", json!({"text":"Welcome."}))
+        .send(
+            &room.id,
+            &bot.id,
+            "plain3",
+            "message",
+            json!({"text":"Welcome."}),
+        )
         .unwrap();
     assert!(later.envelope["body"].get(DERIVED_FIELD).is_none());
+}
+
+#[test]
+fn only_the_person_revokes_session_access_and_only_with_its_text() {
+    let f = fixture();
+    let bot = enabled_bot(&f, "Guide");
+    let room = f.direct(&bot);
+    let request = make_request(&room, &bot, "ctx_revoke");
+    f.send(
+        &room.id,
+        &bot.id,
+        &request.id,
+        "message",
+        json!({REQUEST_FIELD:request}),
+    )
+    .unwrap();
+    let mut shared = response_body(&request);
+    shared[RESPONSE_FIELD]["decision"] = json!("session");
+    f.send(
+        &room.id,
+        "local",
+        &request.response_message_id(),
+        "message",
+        shared,
+    )
+    .unwrap();
+    let revoke = json!({"text":"Context session access revoked.",REVOKE_FIELD:{
+        "request_id":request.id,"bot_id":bot.id,"subject_id":"local",
+        "conversation_id":room.id,"revoked_at":chrono::Utc::now().timestamp_millis()
+    }});
+    let id = revoke_message_id(&request.id);
+    assert!(
+        f.send(&room.id, &bot.id, &id, "message", revoke.clone())
+            .is_err()
+    );
+    let mut addressed = revoke.clone();
+    addressed["reply_to"] = json!(request.id);
+    assert!(
+        f.send(&room.id, "local", &id, "message", addressed)
+            .is_err()
+    );
+    let sent = f.send(&room.id, "local", &id, "message", revoke).unwrap();
+    assert!(sent.envelope["body"].get(DERIVED_FIELD).is_none());
+}
+
+fn share_session(f: &Fixture, room: &Conversation, bot: &Bot, id: &str) -> UserContextRequest {
+    let request = make_request(room, bot, id);
+    f.send(
+        &room.id,
+        &bot.id,
+        &request.id,
+        "message",
+        json!({REQUEST_FIELD:request}),
+    )
+    .unwrap();
+    let mut shared = response_body(&request);
+    shared[RESPONSE_FIELD]["decision"] = json!("session");
+    f.send(
+        &room.id,
+        "local",
+        &request.response_message_id(),
+        "message",
+        shared,
+    )
+    .unwrap();
+    f.send(
+        &room.id,
+        "local",
+        &format!("human_{id}"),
+        "message",
+        json!({"text":"Thanks"}),
+    )
+    .unwrap();
+    request
+}
+
+#[test]
+fn a_later_reply_in_a_live_direct_session_is_derived() {
+    let f = fixture();
+    let bot = enabled_bot(&f, "Guide");
+    let room = f.direct(&bot);
+    let request = share_session(&f, &room, &bot, "ctx_live");
+    let reply = f
+        .send(
+            &room.id,
+            &bot.id,
+            "later1",
+            "message",
+            json!({"text":"Berlin it is."}),
+        )
+        .unwrap();
+    assert_eq!(reply.envelope["body"][DERIVED_FIELD], request.id);
+}
+
+#[test]
+fn a_reply_after_a_revocation_is_not_derived() {
+    let f = fixture();
+    let bot = enabled_bot(&f, "Guide");
+    let room = f.direct(&bot);
+    let request = share_session(&f, &room, &bot, "ctx_gone");
+    let revoke = json!({"text":"Context session access revoked.",REVOKE_FIELD:{
+        "request_id":request.id,"bot_id":bot.id,"subject_id":"local",
+        "conversation_id":room.id,"revoked_at":chrono::Utc::now().timestamp_millis()
+    }});
+    f.send(
+        &room.id,
+        "local",
+        &revoke_message_id(&request.id),
+        "message",
+        revoke,
+    )
+    .unwrap();
+    let reply = f
+        .send(
+            &room.id,
+            &bot.id,
+            "later2",
+            "message",
+            json!({"text":"Noted."}),
+        )
+        .unwrap();
+    assert!(reply.envelope["body"].get(DERIVED_FIELD).is_none());
+}
+
+#[test]
+fn a_later_reply_in_a_group_is_not_derived() {
+    let f = fixture();
+    let bot = enabled_bot(&f, "Guide");
+    let room = f.group(&[&bot]);
+    share_session(&f, &room, &bot, "ctx_group");
+    let reply = f
+        .send(
+            &room.id,
+            &bot.id,
+            "later3",
+            "message",
+            json!({"text":"Hello all."}),
+        )
+        .unwrap();
+    assert!(reply.envelope["body"].get(DERIVED_FIELD).is_none());
 }

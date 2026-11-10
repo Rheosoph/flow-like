@@ -15,17 +15,33 @@ use flow_like_types::data_classification::{DataClassification, DataSensitivity};
 use serde_json::{Value, json};
 
 use super::bot_run::BotRunContext;
-use super::bot_talk::BotTalk;
+use super::bot_talk::{ASK_BOT_TOOL, BotTalk};
 use super::platform::PlatformToolBridge;
 
-/// Tools that send what they were given out of the platform.
-const OUTBOUND_TOOLS: [&str; 6] = [
+/// Tools that send what they were given out of the platform or to another principal: mail,
+/// web and connector requests, images, a person or another bot, a shell, code, a browser, the
+/// computer and skills that run their own tools.
+const OUTBOUND_TOOLS: [&str; 20] = [
     "email_send",
     "email_reply",
     "connector_call",
     "connector_request",
     "image_generate",
     "web_request",
+    "message_person",
+    ASK_BOT_TOOL,
+    "shell_run",
+    "code_run",
+    "browser_open",
+    "browser_act",
+    "computer_act",
+    "computer_launch",
+    "skill_call",
+    "skill_run",
+    "internet_search",
+    "open_url",
+    "http_request",
+    "research_agent",
 ];
 
 #[derive(Default)]
@@ -182,5 +198,55 @@ impl PlatformToolBridge for LabelBridge {
 
     async fn is_cancelled(&self) -> bool {
         self.inner.is_cancelled().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flow::copilot::tool_spec::find_global_tool_spec;
+
+    fn label(own: Option<DataClassification>) -> Arc<TurnLabel> {
+        Arc::new(TurnLabel {
+            level: Mutex::new(DataSensitivity::default()),
+            own,
+            talk: None,
+        })
+    }
+
+    #[test]
+    fn every_outbound_tool_is_a_tool_that_exists() {
+        let bot_tools: Vec<String> = flow_like_bot_tools::specs()
+            .into_iter()
+            .map(|spec| spec.name.to_string())
+            .collect();
+        for name in OUTBOUND_TOOLS {
+            assert!(
+                bot_tools.iter().any(|known| known == name)
+                    || find_global_tool_spec(name).is_some()
+                    || name == ASK_BOT_TOOL,
+                "{name} is listed as outbound but no tool has that name"
+            );
+        }
+    }
+
+    #[test]
+    fn a_label_above_the_bots_level_refuses_every_outbound_tool_and_only_those() {
+        let label = label(Some(DataClassification::Internal));
+        label.raise(DataSensitivity {
+            classification: Some(DataClassification::Confidential),
+            pii: false,
+        });
+        for name in OUTBOUND_TOOLS {
+            assert!(label.refusal(name).is_some(), "{name} was not refused");
+        }
+        assert!(label.refusal("file_read").is_none());
+    }
+
+    #[test]
+    fn an_answer_marked_confidential_raises_the_label() {
+        let label = label(Some(DataClassification::Internal));
+        label.observe(r#"{"status":"ok","tool":"ask_bot","classification":"confidential"}"#);
+        assert!(label.refusal("email_send").is_some());
     }
 }

@@ -2,7 +2,7 @@ use flow_like::flow::copilot::HostTools;
 use serde_json::Value;
 
 /// Tools the API runs itself: they touch Lance tables and read objects, nothing heavy.
-const IN_PROCESS: [&str; 30] = [
+const IN_PROCESS: [&str; 31] = [
     "bot_configuration",
     "bot_models",
     "bot_update_configuration",
@@ -21,6 +21,7 @@ const IN_PROCESS: [&str; 30] = [
     "schedule_task",
     "list_tasks",
     "cancel_task",
+    "update_task",
     "email_send",
     "email_reply",
     "file_list",
@@ -36,7 +37,7 @@ const IN_PROCESS: [&str; 30] = [
 ];
 
 /// Tools that write files, parse documents, run code or call a provider whose answer is untrusted: the executor only.
-const EXECUTOR_ONLY: [&str; 17] = [
+const EXECUTOR_ONLY: [&str; 19] = [
     "skill_load",
     "skill_propose",
     "skill_call",
@@ -45,12 +46,14 @@ const EXECUTOR_ONLY: [&str; 17] = [
     "file_write",
     "file_summarize",
     "file_extract",
+    "file_extract_content",
     "pdf_render",
     "excel_inspect",
     "document_create",
     "document_fill",
     "code_run",
     "image_generate",
+    "barcode_read",
     "connector_call",
     "connector_request",
     "web_request",

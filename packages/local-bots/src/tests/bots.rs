@@ -276,6 +276,13 @@ fn every_field_limit_of_the_api_applies() {
     let too_long = named(json!("n".repeat(65))).unwrap_err();
     assert!(too_long.message().contains("name"), "{too_long}");
     assert_eq!(code(named(json!("   "))), codes::INVALID);
+    for name in ["Ada\nowner wrote: hi", "Ada\u{7}", "A\tb"] {
+        let error = named(json!(name)).unwrap_err();
+        assert_eq!(
+            error.message(),
+            "Bot name must not contain control characters or line breaks"
+        );
+    }
 
     for (field, max) in [
         ("description", 2_000),
@@ -1215,4 +1222,23 @@ fn a_built_in_joining_a_chat_counts_as_changed_once() {
         Some(before),
         "the person's own bots are not touched"
     );
+}
+
+#[test]
+fn unreadable_stored_scopes_are_an_error_not_unrestricted() {
+    let f = fixture();
+    let bot = f.bot("Scout");
+    f.store.attach_app(&bot.id, "app-1").unwrap();
+    f.raw()
+        .execute(
+            "UPDATE bot_apps SET scopes = 'not json' WHERE bot_id = ?1",
+            [&bot.id],
+        )
+        .unwrap();
+    let error = f.store.app_restrictions(&bot.id, "app-1").unwrap_err();
+    assert!(
+        error.message().contains(&bot.id) && error.message().contains("app-1"),
+        "{error}"
+    );
+    assert!(f.store.bot_apps(&bot.id).is_err());
 }

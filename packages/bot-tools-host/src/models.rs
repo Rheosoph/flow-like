@@ -61,3 +61,105 @@ impl ModelSource for StateModels {
         Ok(Some(Arc::new(embedder)))
     }
 }
+
+impl StateModels {
+    /// The same state, token and usage with `chat` as the chat model and no embedder.
+    pub fn answering_with(&self, chat: Bit) -> StateModels {
+        StateModels {
+            state: self.state.clone(),
+            chat: Some(chat),
+            embedding: None,
+            token: self.token.clone(),
+            usage: self.usage.clone(),
+        }
+    }
+}
+
+/// Sends [`ModelRole::Vision`] to the bot's vision model and every other role to `base`. A
+/// vision model that cannot be built leaves the read to `base`.
+pub struct VisionRouted {
+    base: Arc<dyn ModelSource>,
+    vision: Option<Arc<dyn ModelSource>>,
+}
+
+impl VisionRouted {
+    pub fn new(base: Arc<dyn ModelSource>, vision: Option<Arc<dyn ModelSource>>) -> Self {
+        Self { base, vision }
+    }
+}
+
+#[async_trait]
+impl ModelSource for VisionRouted {
+    async fn model(&self, role: ModelRole) -> Result<Arc<dyn ModelLogic>> {
+        if role == ModelRole::Vision
+            && let Some(vision) = &self.vision
+            && let Ok(model) = vision.model(ModelRole::Default).await
+        {
+            return Ok(model);
+        }
+        self.base.model(role).await
+    }
+
+    async fn embedder(&self) -> Result<Option<Arc<dyn KnowledgeEmbedder>>> {
+        self.base.embedder().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::*;
+
+    struct Recording {
+        name: &'static str,
+        calls: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl ModelSource for Recording {
+        async fn model(&self, role: ModelRole) -> Result<Arc<dyn ModelLogic>> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("{}:{role:?}", self.name));
+            Err(anyhow!("{}", self.name))
+        }
+
+        async fn embedder(&self) -> Result<Option<Arc<dyn KnowledgeEmbedder>>> {
+            Ok(None)
+        }
+    }
+
+    fn routed(vision: bool) -> (VisionRouted, Arc<Mutex<Vec<String>>>) {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let source = |name| {
+            Arc::new(Recording {
+                name,
+                calls: calls.clone(),
+            }) as Arc<dyn ModelSource>
+        };
+        (
+            VisionRouted::new(source("base"), vision.then(|| source("vision"))),
+            calls,
+        )
+    }
+
+    #[tokio::test]
+    async fn a_vision_read_asks_the_vision_model_first_and_falls_back_to_the_base() {
+        let (models, calls) = routed(true);
+        let error = models.model(ModelRole::Vision).await.err().unwrap();
+        assert_eq!(error.to_string(), "base");
+        assert_eq!(*calls.lock().unwrap(), ["vision:Default", "base:Vision"]);
+    }
+
+    #[tokio::test]
+    async fn other_roles_and_a_bot_without_a_vision_model_use_the_base() {
+        let (models, calls) = routed(true);
+        let _ = models.model(ModelRole::Default).await;
+        let (plain, plain_calls) = routed(false);
+        let _ = plain.model(ModelRole::Vision).await;
+        assert_eq!(*calls.lock().unwrap(), ["base:Default"]);
+        assert_eq!(*plain_calls.lock().unwrap(), ["base:Vision"]);
+    }
+}

@@ -36,7 +36,7 @@
 # modes and would silently skip certificate checks on them). Verification uses
 # the system CA store, so ca-certificates is installed here.
 
-FROM oven/bun:1.3.8-alpine
+FROM oven/bun:1.4.4-alpine
 
 COPY LICENSE /usr/share/licenses/flow-like/LICENSE
 

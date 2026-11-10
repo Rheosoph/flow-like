@@ -243,6 +243,80 @@ mod tests {
         }
     }
 
+    struct FailFirstLogic {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl NodeLogic for FailFirstLogic {
+        fn get_node(&self) -> Node {
+            Node::new("flaky", "Flaky", "Fails once", "Tests")
+        }
+
+        async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call == 0 {
+                return Err(flow_like_types::anyhow!("first call fails"));
+            }
+            Ok(())
+        }
+    }
+
+    struct CountingLogic {
+        runs: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl NodeLogic for CountingLogic {
+        fn get_node(&self) -> Node {
+            Node::new("counter", "Counter", "Counts runs", "Tests")
+        }
+
+        async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn error_handler_does_not_fire_after_a_later_successful_run() {
+        let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut flaky = Node::new("flaky", "Flaky", "Fails once", "Tests");
+        flaky.add_output_pin(
+            "auto_handle_error",
+            "On Error",
+            "On Error",
+            VariableType::Execution,
+        );
+        flaky.add_output_pin(
+            "auto_handle_error_string",
+            "Error",
+            "Error",
+            VariableType::String,
+        );
+        let flaky = internal_node_with_logic(
+            flaky,
+            Arc::new(FailFirstLogic {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            }),
+        );
+        let mut handler = Node::new("handler", "Handler", "Handler", "Tests");
+        handler.add_input_pin("exec_in", "Run", "Run", VariableType::Execution);
+        let handler =
+            internal_node_with_logic(handler, Arc::new(CountingLogic { runs: runs.clone() }));
+        connect(&flaky, "auto_handle_error", &handler, "exec_in").await;
+        let nodes = [flaky.clone(), handler];
+
+        for _ in 0..2 {
+            let mut context = test_context(&flaky, &nodes).await;
+            InternalNode::trigger(&mut context, &mut None, true)
+                .await
+                .expect("the failure is handled and the retry succeeds");
+        }
+
+        assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
     #[tokio::test]
     async fn immutable_name_cache_handles_duplicate_names_and_misses() {
         let mut node = Node::new("target", "Target", "Target", "Tests");
@@ -496,6 +570,19 @@ async fn run_node_logic_only(
 
     ctx.set_state(NodeState::Running).await;
     let node = ctx.node.clone();
+
+    // A previous failure activated this pin; it must not leak into a later successful run.
+    // Looked up directly: most nodes have no such pin, and a failed lookup allocates an error.
+    if let Some(&offset) = node
+        .lookup
+        .by_name
+        .get("auto_handle_error")
+        .and_then(|offsets| offsets.first())
+    {
+        let _ = ctx
+            .deactivate_exec_pin_ref(&node.pins[offset as usize])
+            .await;
+    }
 
     if recursion_guard.is_none() {
         *recursion_guard = Some(AHashSet::new());
@@ -983,6 +1070,7 @@ impl InternalNode {
                 .saturating_add(additional_active_outputs.len()),
         );
 
+        let mut group_order: Vec<usize> = Vec::with_capacity(groups.len());
         let mut visited_pins: AHashSet<usize> = AHashSet::with_capacity(64);
         let mut stack: Vec<Weak<InternalPin>> = Vec::with_capacity(64);
 
@@ -1005,6 +1093,7 @@ impl InternalNode {
                     if let Some(parent) = node_w.upgrade() {
                         let nkey = ptr_key(&parent);
                         let entry = groups.entry(nkey).or_insert_with(|| {
+                            group_order.push(nkey);
                             (
                                 parent.clone(),
                                 Vec::with_capacity(2),
@@ -1025,7 +1114,10 @@ impl InternalNode {
 
         // materialize
         let mut out = Vec::with_capacity(groups.len());
-        for (_, (node, pins, _seen)) in groups {
+        for nkey in group_order {
+            let Some((node, pins, _seen)) = groups.remove(&nkey) else {
+                continue;
+            };
             out.push(ExecutionTarget {
                 node,
                 through_pins: pins,

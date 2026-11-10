@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use flow_like_bot_tools::Scheduler;
 use flow_like_types::{
     Result, anyhow,
-    bot_task::{BotTask, CreateBotTask, TaskCreator},
+    bot_task::{BotTask, CreateBotTask, TaskCreator, UpdateBotTask},
 };
 use reqwest::Method;
 use serde_json::{Value, json};
@@ -59,6 +59,17 @@ impl Scheduler for LocalScheduler {
     async fn list(&self) -> Result<Vec<BotTask>> {
         let bot_id = self.bot_id.clone();
         self.on_store(move |store| store.tasks(&bot_id)).await
+    }
+
+    async fn update(&self, task_id: &str, request: UpdateBotTask) -> Result<Option<BotTask>> {
+        let (bot_id, task_id) = (self.bot_id.clone(), task_id.to_string());
+        self.on_store(move |store| {
+            if !store.tasks(&bot_id)?.iter().any(|task| task.id == task_id) {
+                return Ok(None);
+            }
+            store.update_task(&bot_id, &task_id, request).map(Some)
+        })
+        .await
     }
 
     async fn cancel(&self, task_id: &str) -> Result<bool> {
@@ -121,6 +132,27 @@ impl Scheduler for AccountScheduler {
                 .unwrap_or(Value::Array(Vec::new())),
         )
         .map_err(|error| anyhow!("The hub sent unusable tasks: {error}"))
+    }
+
+    async fn update(&self, task_id: &str, request: UpdateBotTask) -> Result<Option<BotTask>> {
+        if !self.list().await?.iter().any(|task| task.id == task_id) {
+            return Ok(None);
+        }
+        let path = format!(
+            "{}/{}",
+            self.base(),
+            super::super::native_platform_tools::segment(task_id)
+        );
+        let body = serde_json::to_value(&request)
+            .map_err(|error| anyhow!("The task change could not be sent: {error}"))?;
+        let updated = self
+            .api
+            .request(Method::PATCH, &path, Some(&body))
+            .await
+            .map_err(|error| anyhow!(error))?;
+        serde_json::from_value(updated)
+            .map(Some)
+            .map_err(|error| anyhow!("The hub sent an unusable task: {error}"))
     }
 
     async fn cancel(&self, task_id: &str) -> Result<bool> {

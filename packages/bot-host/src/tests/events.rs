@@ -87,7 +87,7 @@ impl TurnRunner for EventRunner {
                 );
                 Ok(String::new())
             }
-            Mode::Hang => unreachable!(),
+            Mode::Hang | Mode::Panic => unreachable!(),
         }
     }
 

@@ -64,6 +64,8 @@ pub struct NativeRunOptions {
     pub bot_memory: Option<flow_like::flow::copilot::MemoryTurnSource>,
     /// The bot's notes in this turn's inbox conversation; never set for sealed conversations.
     pub notes: Option<flow_like::flow::copilot::bot_notes::NotesHandle>,
+    /// The turn's tool trail; set only in the owner's direct conversation with the bot.
+    pub trail: Option<flow_like::flow::copilot::ToolTrail>,
     /// Shared or unreadable interactive conversation metadata forbids legacy memory writes.
     pub legacy_memory_read_only: bool,
     /// An interactive inbox run's explicit owner-memory permission. Missing metadata denies
@@ -78,8 +80,14 @@ pub struct NativeRunOptions {
     pub requester: Option<flow_like::flow::copilot::TurnRequester>,
     /// A brief call listening cue, rendered without tools.
     pub acknowledgement: bool,
+    /// The turn answers an utterance in a live call: a fast model, no thinking, a short spoken reply.
+    pub live_call: bool,
+    /// Holds a bot turn's tool calls until the host's participation decision lets it act.
+    pub tool_gate: Option<flow_like::flow::copilot::tool_gate::ToolGate>,
     /// Set from the authenticated inbox trigger, never from model arguments.
     pub ephemeral_user_context: bool,
+    /// Session snapshots of user context for a turn whose history comes from memory.
+    pub shared_context: Option<String>,
     /// The host owns event delivery, including owner notifications.
     pub suppress_owner_notifications: bool,
     /// The question whose late answer woke a headless bot turn: the turn's follow-ups to that

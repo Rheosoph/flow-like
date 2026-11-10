@@ -432,12 +432,16 @@ impl ServerTalkHost {
         self.parked
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .as_ref().map(|(card, _)| card.clone())
+            .as_ref()
+            .map(|(card, _)| card.clone())
     }
 
     pub(crate) fn parked_recovery_call_id(&self) -> Option<String> {
-        self.parked.lock().unwrap_or_else(|p| p.into_inner())
-            .as_ref().and_then(|(_, call_id)| call_id.clone())
+        self.parked
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .and_then(|(_, call_id)| call_id.clone())
     }
 
     fn remember<T>(&self, change: impl FnOnce(&mut Asked) -> T) -> T {
@@ -576,8 +580,15 @@ impl BotTalkHost for ServerTalkHost {
         let (verdict, card) =
             headless_verdict(&store, &held.turn.id, caller, callee, question).await;
         if let Some(card) = card {
-            self.parked.lock().unwrap_or_else(|p| p.into_inner())
-                .get_or_insert_with(|| (card, flow_like::flow::copilot::run_recovery::current_recovery_call_id()));
+            self.parked
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .get_or_insert_with(|| {
+                    (
+                        card,
+                        flow_like::flow::copilot::run_recovery::current_recovery_call_id(),
+                    )
+                });
         }
         verdict
     }
@@ -700,8 +711,8 @@ impl ServerTalkHost {
         }
         match callee.location {
             BotLocation::Server => {
-                let wait = Duration::from_secs(u64::from(WAIT_SECS));
-                let _ = tokio::time::timeout(wait, super::run_hosted(&self.state, &tid)).await;
+                let (state, run_id) = (self.state.clone(), tid.clone());
+                tokio::spawn(async move { super::run_hosted(&state, &run_id).await });
             }
             _ if callee.presence == BotPresence::Offline => {
                 let seen = last_seen(&self.state.db, &self.owner_id, &callee.id, now_millis())
@@ -924,6 +935,7 @@ pub(crate) async fn ask_result_transcript<C: ConnectionTrait>(
         history,
         addressed: true,
         topic_at: None,
+        trail: None,
     })
 }
 

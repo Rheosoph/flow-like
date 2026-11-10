@@ -788,10 +788,42 @@ pub(crate) struct FlushResult {
     pub meta: Option<LogMeta>,
 }
 
+/// The final log write of a finished run, split off so callers can report the
+/// run before the table, summary sidecar and index entry are persisted.
+#[must_use = "dropping PendingRunLogs discards the final run logs"]
+pub struct PendingRunLogs {
+    prepared: Option<PreparedFlush>,
+    run: Arc<Mutex<Run>>,
+}
+
+impl PendingRunLogs {
+    pub async fn persist(self) -> flow_like_types::Result<()> {
+        let Some(prepared) = self.prepared else {
+            return Ok(());
+        };
+        let result = prepared.write().await?;
+        if result.created_table {
+            match lock_with_timeout(self.run.as_ref(), "run_finalize_mark").await {
+                Ok(mut run) => {
+                    run.log_initialized = true;
+                }
+                Err(err) => {
+                    eprintln!("[Error] {}", err);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(feature = "flow-runtime")]
 impl PreparedFlush {
     const MAX_RETRIES: u32 = 3;
     const INITIAL_BACKOFF_MS: u64 = 100;
+
+    fn meta(&self) -> Option<LogMeta> {
+        self.meta.clone()
+    }
 
     pub async fn write(self) -> flow_like_types::Result<FlushResult> {
         let mut last_err = None;
@@ -804,31 +836,7 @@ impl PreparedFlush {
 
             match self.try_write().await {
                 Ok(result) => {
-                    if let (Some(meta), Some(summary), Some(store)) =
-                        (&self.meta, &self.summary, &self.log_store)
-                        && let Err(error) = log_summary::write_run_summary(
-                            store,
-                            &meta.app_id,
-                            &meta.board_id,
-                            &meta.run_id,
-                            summary,
-                        )
-                        .await
-                    {
-                        tracing::warn!(run_id = %meta.run_id, error = %error, "Failed to write run log summary sidecar");
-                    }
-                    // The log table is already written: an index failure must
-                    // not drop the meta callers report the run with, nor retry.
-                    if let Some(meta) = &self.meta
-                        && let Err(error) = run_index::record_run(
-                            meta,
-                            self.log_store.as_ref(),
-                            self.run_index.as_ref(),
-                        )
-                        .await
-                    {
-                        tracing::error!(run_id = %meta.run_id, error = %error, "Failed to record run in run index");
-                    }
+                    futures::join!(self.write_summary_sidecar(), self.record_in_index());
                     return Ok(result);
                 }
                 Err(err) => {
@@ -844,6 +852,33 @@ impl PreparedFlush {
         }
 
         Err(last_err.unwrap())
+    }
+
+    async fn write_summary_sidecar(&self) {
+        if let (Some(meta), Some(summary), Some(store)) =
+            (&self.meta, &self.summary, &self.log_store)
+            && let Err(error) = log_summary::write_run_summary(
+                store,
+                &meta.app_id,
+                &meta.board_id,
+                &meta.run_id,
+                summary,
+            )
+            .await
+        {
+            tracing::warn!(run_id = %meta.run_id, error = %error, "Failed to write run log summary sidecar");
+        }
+    }
+
+    // The log table is already written: an index failure must
+    // not drop the meta callers report the run with, nor retry.
+    async fn record_in_index(&self) {
+        if let Some(meta) = &self.meta
+            && let Err(error) =
+                run_index::record_run(meta, self.log_store.as_ref(), self.run_index.as_ref()).await
+        {
+            tracing::error!(run_id = %meta.run_id, error = %error, "Failed to record run in run index");
+        }
     }
 
     fn make_iter(&self) -> Box<dyn RecordBatchReader + Send> {
@@ -893,14 +928,16 @@ impl PreparedFlush {
     ) -> flow_like_types::Result<(flow_like_storage::lancedb::Table, bool)> {
         let db = (self.db_fn)(self.base_path.clone()).execute().await?;
 
-        // Fast path: table already exists, just append
-        match db.open_table(&self.run_id).execute().await {
-            Ok(table) => {
-                self.try_add(&table).await?;
-                return Ok((table, false));
-            }
-            Err(open_err) => {
-                tracing::debug!(run_id = %self.run_id, error = %open_err, "open_table failed, will create");
+        // A fresh run has no table yet, so the open probe would only fail.
+        if self.log_initialized {
+            match db.open_table(&self.run_id).execute().await {
+                Ok(table) => {
+                    self.try_add(&table).await?;
+                    return Ok((table, false));
+                }
+                Err(open_err) => {
+                    tracing::debug!(run_id = %self.run_id, error = %open_err, "open_table failed, will create");
+                }
             }
         }
 
@@ -931,6 +968,10 @@ impl PreparedFlush {
 
 #[cfg(not(feature = "flow-runtime"))]
 impl PreparedFlush {
+    fn meta(&self) -> Option<LogMeta> {
+        None
+    }
+
     pub async fn write(self) -> flow_like_types::Result<FlushResult> {
         Ok(FlushResult {
             created_table: false,
@@ -1942,6 +1983,20 @@ impl InternalRun {
     }
 
     pub async fn execute(&mut self, handler: Arc<FlowLikeState>) -> Option<LogMeta> {
+        let (meta, pending) = self.execute_deferred(handler).await;
+        match pending.persist().await {
+            Ok(()) => meta,
+            Err(err) => {
+                eprintln!("[Error] flushing logs (final): {:?}", err);
+                None
+            }
+        }
+    }
+
+    pub async fn execute_deferred(
+        &mut self,
+        handler: Arc<FlowLikeState>,
+    ) -> (Option<LogMeta>, PendingRunLogs) {
         let resources = self.meta.resources.clone();
         let mut resource_guard = resources::AbortResourcesOnDrop::new(&resources);
         let start = Instant::now();
@@ -1989,6 +2044,21 @@ impl InternalRun {
             if new_stack_hash == stack_hash {
                 errored = true;
                 tracing::warn!("Execution stopped because the stack did not change");
+                match lock_with_timeout(self.run.as_ref(), "run_stack_unchanged").await {
+                    Ok(mut run) => {
+                        let mut trace = Trace::new("system");
+                        trace.logs.push(LogMessage::new(
+                            "Execution stopped because the same nodes were scheduled again without progress",
+                            LogLevel::Error,
+                            None,
+                        ));
+                        trace.finish();
+                        run.push_trace(trace);
+                    }
+                    Err(err) => {
+                        eprintln!("[Error] {}", err);
+                    }
+                }
                 break;
             }
             stack_hash = new_stack_hash;
@@ -2023,7 +2093,7 @@ impl InternalRun {
         resources.shutdown().await;
         resource_guard.disarm();
 
-        let meta = {
+        let deferred = {
             let prepared: Option<PreparedFlush> =
                 match lock_with_timeout(self.run.as_ref(), "run_finalize").await {
                     Ok(mut run) => {
@@ -2066,34 +2136,19 @@ impl InternalRun {
                     }
                 };
 
-            if let Some(prepared) = prepared {
-                match prepared.write().await {
-                    Ok(result) => {
-                        if result.created_table {
-                            match lock_with_timeout(self.run.as_ref(), "run_finalize_mark").await {
-                                Ok(mut run) => {
-                                    run.log_initialized = true;
-                                }
-                                Err(err) => {
-                                    eprintln!("[Error] {}", err);
-                                }
-                            }
-                        }
-                        result.meta
-                    }
-                    Err(err) => {
-                        eprintln!("[Error] flushing logs (final): {:?}", err);
-                        None
-                    }
-                }
-            } else {
-                None
-            }
+            let meta = prepared.as_ref().and_then(PreparedFlush::meta);
+            (
+                meta,
+                PendingRunLogs {
+                    prepared,
+                    run: self.run.clone(),
+                },
+            )
         };
 
         tracing::debug!(elapsed = ?start.elapsed(), "InternalRun::execute completed");
 
-        meta
+        deferred
     }
 
     pub async fn debug_step(&mut self, handler: Arc<FlowLikeState>) -> bool {
@@ -2309,7 +2364,23 @@ async fn step_core(
     {
         let calls_before = target.node.exec_calls.fetch_add(1, Ordering::Relaxed);
         if calls_before >= concurrency_limit {
-            return Err(anyhow!("Concurrency limit reached"));
+            has_node_errors.store(true, Ordering::Relaxed);
+            let node_id = target.node.node_id();
+            let mut log = LogMessage::new(
+                &format!(
+                    "Concurrency limit of {} executions reached for node '{}' [{}]; stopping to break a possible infinite loop",
+                    concurrency_limit,
+                    target.node.node_name(),
+                    node_id
+                ),
+                LogLevel::Error,
+                None,
+            );
+            log.node_id = Some(node_id.to_string());
+            let mut trace = Trace::new(node_id);
+            trace.logs.push(log);
+            trace.finish();
+            return Ok((Vec::new(), vec![trace]));
         }
     }
 
@@ -3762,6 +3833,77 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn loop_guard_fails_the_run_with_an_error_log() {
+            let logic = logic(false, None);
+            let state = state_with_node_logics(vec![logic.clone()]).await;
+            let mut board = Board::new_detached(Some("loop-guard".into()), Path::default());
+            let pin_id = |node: &Node, name: &str| {
+                node.pins
+                    .values()
+                    .find(|pin| pin.name == name)
+                    .unwrap()
+                    .id
+                    .clone()
+            };
+            let mut first = logic.get_node();
+            first.id = "loop-first".into();
+            first.set_start(true);
+            let mut second = logic.get_node();
+            second.id = "loop-second".into();
+            let first_out = pin_id(&first, "exec_out");
+            let first_in = pin_id(&first, "exec_in");
+            let second_out = pin_id(&second, "exec_out");
+            let second_in = pin_id(&second, "exec_in");
+            board.nodes.insert(first.id.clone(), first);
+            board.nodes.insert(second.id.clone(), second);
+            connect_pins(
+                &mut board,
+                "loop-first",
+                &first_out,
+                "loop-second",
+                &second_in,
+            )
+            .unwrap();
+            connect_pins(
+                &mut board,
+                "loop-second",
+                &second_out,
+                "loop-first",
+                &first_in,
+            )
+            .unwrap();
+            let mut run = InternalRun::new(
+                "test-app",
+                Arc::new(board),
+                None,
+                &state,
+                &Profile::default(),
+                &RunPayload {
+                    id: "loop-first".into(),
+                    payload: None,
+                    runtime_variables: None,
+                    filter_secrets: Some(true),
+                },
+                false,
+                test_intercom_callback(),
+                None,
+                None,
+                std::collections::HashMap::new(),
+            )
+            .await
+            .unwrap();
+            run.concurrency_limit = 3;
+
+            run.execute(state).await;
+
+            assert!(matches!(run.get_status().await, RunStatus::Failed));
+            let traces = run.get_traces().await;
+            assert!(traces.iter().flat_map(|trace| &trace.logs).any(|log| {
+                log.log_level == LogLevel::Error && log.message.contains("Concurrency limit of 3")
+            }));
+        }
+
+        #[tokio::test]
         async fn failure_closes_resources() {
             let logic = logic(true, None);
             let (mut run, state) = make_run(logic.clone(), false).await;
@@ -4194,6 +4336,40 @@ mod tests {
             assert_eq!(table.count_rows(None).await.unwrap(), 2);
             let dataset = table.dataset().unwrap().get().await.unwrap();
             assert!(Arc::ptr_eq(&dataset.session(), &state.lance_session));
+        }
+
+        #[tokio::test]
+        async fn execute_deferred_returns_the_meta_before_the_log_table_exists() {
+            let (state, mut run) = run_with_log_db(Arc::new(AtomicUsize::new(0))).await;
+            run.run
+                .lock()
+                .await
+                .push_node_log("node", None, "deferred", LogLevel::Info);
+
+            let (meta, pending) = run.execute_deferred(state).await;
+
+            assert!(meta.is_some());
+            assert!(run.run.lock().await.log_table.get().is_none());
+            assert!(!run.run.lock().await.log_initialized);
+
+            pending.persist().await.expect("persist final logs");
+
+            assert!(run.run.lock().await.log_initialized);
+            assert_eq!(cached_table(&run).await.count_rows(None).await.unwrap(), 1);
+        }
+
+        #[tokio::test]
+        async fn execute_still_returns_the_meta_with_the_table_written() {
+            let (state, mut run) = run_with_log_db(Arc::new(AtomicUsize::new(0))).await;
+            run.run
+                .lock()
+                .await
+                .push_node_log("node", None, "immediate", LogLevel::Info);
+
+            let meta = run.execute(state).await;
+
+            assert!(meta.is_some());
+            assert_eq!(cached_table(&run).await.count_rows(None).await.unwrap(), 1);
         }
 
         #[tokio::test]

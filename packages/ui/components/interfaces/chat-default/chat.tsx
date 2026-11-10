@@ -13,8 +13,10 @@ import {
 	useState,
 } from "react";
 import type { IEventPayloadChat } from "../../../lib";
+import { cornerObstacleRef } from "../../../lib/corner-clearance";
 import type { IInteractionRequest } from "../../../lib/schema/interaction";
 import { cn } from "../../../lib/utils";
+import type { ComposerAttachSource } from "../../../state/composer-capture";
 import { ConversationNotePill } from "../../bots-tab/conversation-note";
 import type { Mentionable } from "../../bots-tab/mentions";
 import { VoiceMode } from "./VoiceMode";
@@ -122,6 +124,25 @@ function sameStringArray(
 		(left !== undefined &&
 			left.length === right.length &&
 			left.every((value, index) => value === right[index]))
+	);
+}
+
+const COMPOSER_SELECTOR =
+	"[data-fl-chat-composer], [data-fl-chat-composer-dock]";
+
+/** The tools the last visible user message ran with, or the configured defaults before one exists. */
+function resolveActiveTools(
+	messages: readonly IMessage[],
+	tools: readonly string[] | null | undefined,
+	defaultTools: string[] | null | undefined,
+): string[] {
+	const lastUserMessage = messages.findLast(
+		(message) => message.inner.role === "user" && isVisibleChatMessage(message),
+	);
+	if (!lastUserMessage) return defaultTools ?? [];
+	const available = tools ?? [];
+	return (lastUserMessage.tools ?? []).filter((tool) =>
+		available.includes(tool),
 	);
 }
 
@@ -238,6 +259,8 @@ export interface IChatProps {
 	thinking?: ChatBoxThinking;
 	model?: ChatBoxModel;
 	composerActions?: React.ReactNode;
+	/** This chat's own "+" sources, e.g. its app storage. Keep the array stable between renders. */
+	attachSources?: readonly ComposerAttachSource[];
 }
 
 export interface IChatRef {
@@ -276,6 +299,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			thinking,
 			model,
 			composerActions,
+			attachSources,
 			group,
 		},
 		ref,
@@ -288,7 +312,9 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		const [hasInitiallyScrolled, setHasInitiallyScrolled] = useState(false);
 		const chatBox = useRef<ChatBoxRef>(null);
 		const isScrollingProgrammatically = useRef(false);
-		const [defaultActiveTools, setDefaultActiveTools] = useState<string[]>();
+		const [defaultActiveTools, setDefaultActiveTools] = useState(() =>
+			resolveActiveTools(messages, config?.tools, config?.default_tools),
+		);
 		const [isSending, setIsSending] = useState(false);
 		const [replyTarget, setReplyTarget] =
 			useState<IChatMessageReference | null>(null);
@@ -519,24 +545,12 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			}
 		}, [messages]);
 
-		// Update active tools based on last user message and available tools
 		useEffect(() => {
-			const lastUserMessage = messages
-				.slice()
-				.reverse()
-				.find((msg) => msg.inner.role === "user" && isVisibleChatMessage(msg));
-
-			let nextActiveTools: string[];
-			if (lastUserMessage) {
-				const availableTools = config?.tools ?? [];
-				const lastActiveTools = lastUserMessage.tools ?? [];
-				nextActiveTools = lastActiveTools.filter((tool) =>
-					availableTools.includes(tool),
-				);
-			} else {
-				nextActiveTools = config?.default_tools ?? [];
-			}
-
+			const nextActiveTools = resolveActiveTools(
+				messages,
+				config?.tools,
+				config?.default_tools,
+			);
 			// `config` is often assembled by a parent render. Avoid setting a freshly-created but
 			// semantically identical array on every pass, which otherwise causes an update-depth
 			// loop when `config.tools`/`default_tools` are inline arrays.
@@ -725,14 +739,16 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			};
 		}, [scrollMessagesToEnd]);
 
-		// Dismiss keyboard when tapping outside inputs on iOS
+		// Dismiss the keyboard when tapping outside inputs on iOS. The composer's own controls
+		// (Send above all) keep it: blurring mid-tap shifts the composer and the tap misses.
 		useEffect(() => {
 			const onTouchStart = (e: TouchEvent) => {
 				const active = document.activeElement as HTMLElement | null;
 				if (!active) return;
 				const tag = active.tagName;
 				if (tag === "INPUT" || tag === "TEXTAREA") {
-					const target = e.target as Node | null;
+					const target = e.target as Element | null;
+					if (target?.closest?.(COMPOSER_SELECTOR)) return;
 					if (target && active && !active.contains(target)) {
 						setTimeout(() => {
 							try {
@@ -821,7 +837,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								ref={scrollContainerRef}
 								onScroll={handleScroll}
 								className={cn(
-									"flex-1 overflow-y-auto overscroll-contain p-4 pb-2 flex flex-col items-center grow max-h-full",
+									"flex-1 overflow-y-auto overscroll-contain p-4 pb-[calc(0.5rem+var(--fl-corner-overlay-reserve,0px))] flex flex-col items-center grow max-h-full",
 									group?.layout === "room" ? "gap-1" : "space-y-8",
 								)}
 								data-fl-chat-messages
@@ -1052,6 +1068,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 
 							{/* ChatBox */}
 							<div
+								ref={cornerObstacleRef}
 								className="mx-auto w-full space-y-2 px-3"
 								data-fl-chat-composer-dock
 								style={{
@@ -1067,57 +1084,56 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 										onCancel={() => setReplyTarget(null)}
 									/>
 								)}
-								{defaultActiveTools && (
-									<ChatBox
-										mentionables={group?.mentionables}
-										placeholder={group?.placeholder}
-										ref={chatBox}
-										availableTools={config?.tools ?? []}
-										defaultActiveTools={defaultActiveTools}
-										onSendMessage={handleComposerSend}
-										onContentChange={onDraftChange}
-										thinking={thinking}
-										model={model}
-										actions={composerActions}
-										fileUpload={config?.allow_file_upload ?? false}
-										audioInput={voiceEnabled}
-										voiceMode={voiceConfig.mode === "stt" ? "stt" : "record"}
-										voiceInvoke={voiceConfig.invoke}
-										voiceMaxDuration={voiceConfig.maxDuration}
-										// With concurrency the composer never locks: a send starts another
-										// turn or queues. Without it, a live stream still blocks as before.
-										sendDisabled={
-											group?.composerDisabled ||
-											(concurrency ? false : isSending || isStreamActive)
-										}
-										sendHint={
-											concurrency?.atCapacity
-												? i18next.t("queueThisMessage", "Queue this message")
-												: concurrency && concurrency.runs.length > 0
-													? i18next.t(
-															"startAnotherResponse",
-															"Start another response",
-														)
-													: undefined
-										}
-										onSteer={
-											!replyTarget && concurrency && concurrency.runs.length > 0
-												? concurrency.onSteer
+								<ChatBox
+									mentionables={group?.mentionables}
+									placeholder={group?.placeholder}
+									ref={chatBox}
+									availableTools={config?.tools ?? []}
+									defaultActiveTools={defaultActiveTools}
+									onSendMessage={handleComposerSend}
+									onContentChange={onDraftChange}
+									thinking={thinking}
+									model={model}
+									actions={composerActions}
+									attachSources={attachSources}
+									fileUpload={config?.allow_file_upload ?? false}
+									audioInput={voiceEnabled}
+									voiceMode={voiceConfig.mode === "stt" ? "stt" : "record"}
+									voiceInvoke={voiceConfig.invoke}
+									voiceMaxDuration={voiceConfig.maxDuration}
+									// With concurrency the composer never locks: a send starts another
+									// turn or queues. Without it, a live stream still blocks as before.
+									sendDisabled={
+										group?.composerDisabled ||
+										(concurrency ? false : isSending || isStreamActive)
+									}
+									sendHint={
+										concurrency?.atCapacity
+											? i18next.t("queueThisMessage", "Queue this message")
+											: concurrency && concurrency.runs.length > 0
+												? i18next.t(
+														"startAnotherResponse",
+														"Start another response",
+													)
 												: undefined
-										}
-										stop={runStop}
-										renderRunStatus={renderRunStatus}
-										onInterrupt={playback.stop}
-										onVoiceModeToggle={
-											voiceEnabled && voiceConfig.invoke === "auto"
-												? () => {
-														playback.stop();
-														setVoiceModeOpen(true);
-													}
-												: undefined
-										}
-									/>
-								)}
+									}
+									onSteer={
+										!replyTarget && concurrency && concurrency.runs.length > 0
+											? concurrency.onSteer
+											: undefined
+									}
+									stop={runStop}
+									renderRunStatus={renderRunStatus}
+									onInterrupt={playback.stop}
+									onVoiceModeToggle={
+										voiceEnabled && voiceConfig.invoke === "auto"
+											? () => {
+													playback.stop();
+													setVoiceModeOpen(true);
+												}
+											: undefined
+									}
+								/>
 								{showAiDisclosure && (
 									<ChatAiDisclosure text={config.ai_disclosure} />
 								)}

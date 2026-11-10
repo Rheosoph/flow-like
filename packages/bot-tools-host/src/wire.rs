@@ -82,6 +82,9 @@ pub struct JobModels {
     pub chat: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding: Option<Value>,
+    /// The Bit the bot pins to read pages and images; `None` reads with `chat`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<Value>,
     /// The image model of an `image_generate` job, with the provider key the API opened for
     /// this one job.
     #[serde(default, skip_serializing_if = "Option::is_none")]

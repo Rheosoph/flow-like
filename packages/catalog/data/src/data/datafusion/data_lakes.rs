@@ -779,6 +779,7 @@ impl NodeLogic for RegisterHivePartitionedParquetNode {
 
         let parquet_format = ParquetFormat::default();
         let listing_options = ListingOptions::new(Arc::new(parquet_format))
+            .with_session_config_options(&cached_session.ctx.copied_config())
             .with_file_extension(".parquet")
             .with_table_partition_cols(vec![])
             .with_collect_stat(true);
@@ -923,6 +924,7 @@ impl NodeLogic for RegisterPartitionedJsonNode {
 
         let json_format = JsonFormat::default();
         let listing_options = ListingOptions::new(Arc::new(json_format))
+            .with_session_config_options(&cached_session.ctx.copied_config())
             .with_file_extension(&file_extension)
             .with_collect_stat(true);
 

@@ -1,5 +1,9 @@
 {
 	"capabilities": {
+		"barcodes": {
+			"description": "Liest QR-Codes und Barcodes auf Fotos, Scans und Screenshots",
+			"label": "Barcodes"
+		},
 		"browser_use": {
 			"description": "Einen Webbrowser auf seinem Desktop oder Gerät steuern",
 			"label": "Browser"
@@ -174,7 +178,13 @@
 		"manualAvailability": "Verfügbarkeit für diese Antwort eingeben",
 		"freeBusyHint": "Teile belegte Zeiträume aus deinen verknüpften Kalendern für bis zu 24 Stunden. Termindetails werden nicht geteilt.",
 		"manageAvailability": "Verfügbarkeit und Kalender verwalten",
-		"applyStatus": "Statusänderung anwenden"
+		"applyStatus": "Statusänderung anwenden",
+		"sessionShared": "",
+		"revoked": "",
+		"sessionAccessDirect": "",
+		"sessionAccessGroup": "",
+		"onceRetention": "",
+		"revokeFailed": ""
 	},
 	"computer": {
 		"alt": "",
@@ -395,6 +405,9 @@
 				"full": "",
 				"unavailable": ""
 			},
+			"interrupt": "{{name}} unterbrechen",
+			"interruptHint": "{{name}} unterbrechen (Esc)",
+			"interruptShort": "Unterbrechen",
 			"join": "",
 			"leave": "",
 			"listen": "",
@@ -425,7 +438,23 @@
 			"screenLabel": "",
 			"cameraLabel": "",
 			"you": "",
-			"fullscreen": ""
+			"fullscreen": "",
+			"setup": {
+				"title": "",
+				"body": "",
+				"readyTitle": "",
+				"readyBody": "",
+				"unsupportedTitle": "",
+				"unsupportedBody": "",
+				"start": "",
+				"voice": "",
+				"choose": "",
+				"needed": "",
+				"optional": "",
+				"voiceHint": "",
+				"saveFailed": "",
+				"pinnedUnusable": ""
+			}
 		},
 		"cancel": "Abbrechen",
 		"composer": {
@@ -572,6 +601,14 @@
 			"create": "Raum erstellen",
 			"createInvite": "",
 			"description": "Bring Menschen und deine Bots in einer Unterhaltung zusammen.",
+			"encryptionBotNoAbility": "",
+			"encryptionHint": "",
+			"encryptionKeyMissing": "",
+			"encryptionLabel": "",
+			"encryptionNoKey": "",
+			"encryptionNotAllowed": "",
+			"encryptionOnDevice": "",
+			"encryptionServerBot": "",
 			"failed": "Der Raum konnte nicht erstellt werden.",
 			"full_one": "Ein Raum fasst bis zu {{count}} Mitglied.",
 			"full_other": "Ein Raum fasst bis zu {{count}} Mitglieder.",
@@ -854,6 +891,7 @@
 				"web": "Web"
 			},
 			"needsLocal": "Braucht die Desktop-App oder ein Gerät. Ändere, wo er läuft, um das einzuschalten.",
+			"notOnDevice": "",
 			"profile": "Profil",
 			"profileApps_one": "{{count}} App",
 			"profileApps_other": "{{count}} Apps",
@@ -896,7 +934,6 @@
 			"memoryHost": "Den Host wählen lassen",
 			"memoryHostHint": "Die App oder der Server, auf dem er läuft, wählt eines aus",
 			"memoryModel": "Gedächtnismodell",
-			"memoryNone": "Füge deinem Profil ein Embedding-Modell hinzu, um hier eines zu wählen.",
 			"moveDown": "Nach unten verschieben",
 			"moveUp": "Nach oben verschieben",
 			"noModels": "Keine passenden Modelle.",
@@ -906,7 +943,6 @@
 				"hostHint": "",
 				"image": "",
 				"imageHint": "",
-				"none": "",
 				"ownModel": "",
 				"ownModelHint": "",
 				"stt": "",
@@ -929,7 +965,12 @@
 			"decision": "",
 			"decisionDisabled": "",
 			"decisionDisabledHint": "",
-			"decisionHosted": ""
+			"decisionHosted": "",
+			"yourModels": "",
+			"allModels": "",
+			"catalogNotice": "",
+			"catalogFailed": "",
+			"addAndUse": ""
 		},
 		"delete": {
 			"action": "Löschen",
@@ -986,7 +1027,8 @@
 			"subtitle": "Ein Bot lebt auf genau einem Host. Wähle den, der alles bietet, was er braucht.",
 			"title": "Wähle, wo er läuft",
 			"turnedBackOn": "Wieder eingeschaltet, weil dieser Host einen Bildschirm und eine Shell hat: {{capabilities}}.",
-			"turnedOff": "Ausgeschaltet, weil die Cloud keinen Bildschirm und keine Shell hat: {{capabilities}}."
+			"turnedOff": "Ausgeschaltet, weil die Cloud keinen Bildschirm und keine Shell hat: {{capabilities}}.",
+			"turnedOffDevice": ""
 		},
 		"preview": {
 			"blank": "Ohne Vorlage",

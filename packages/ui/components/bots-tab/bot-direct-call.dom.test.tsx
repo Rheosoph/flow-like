@@ -14,9 +14,16 @@ const mocks = vi.hoisted(() => ({
 	useConversationCall: vi.fn(),
 	useConversationActivity: vi.fn(),
 	useBotCallSpeech: vi.fn(),
-	useSpeechModel: vi.fn(),
+	useSpeechModelState: vi.fn(),
 	call: {} as ConversationCallState,
 }));
+
+const READY_SPEECH = {
+	choice: { bitId: "stt", route: "remote" },
+	settled: true,
+	unsupported: false,
+	pinnedUnusable: false,
+};
 
 vi.mock("../../state/backend-state", () => ({
 	useBackend: () => ({
@@ -43,7 +50,23 @@ vi.mock("../../hooks/use-bot-call-speech", () => ({
 	useBotCallSpeech: mocks.useBotCallSpeech,
 }));
 vi.mock("../../hooks/use-speech-model", () => ({
-	useSpeechModel: mocks.useSpeechModel,
+	useSpeechModelState: mocks.useSpeechModelState,
+}));
+vi.mock("./call-speech-setup", () => ({
+	CallSpeechSetup: ({
+		open,
+		onOpenChange,
+	}: {
+		open: boolean;
+		onOpenChange: (open: boolean) => void;
+	}) => (
+		<button
+			type="button"
+			data-open={open}
+			aria-label="Set up calls"
+			onClick={() => onOpenChange(true)}
+		/>
+	),
 }));
 vi.mock("./use-crew-directory", () => ({
 	useCrewDirectory: () => (id: string) => ({
@@ -86,7 +109,7 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.botConversation.mockResolvedValue(conversation.id);
 	mocks.getConversation.mockResolvedValue(conversation);
-	mocks.useSpeechModel.mockReturnValue({ bitId: "stt", route: "remote" });
+	mocks.useSpeechModelState.mockReturnValue(READY_SPEECH);
 	mocks.useConversationActivity.mockReturnValue({
 		bots: [],
 		typing: [],
@@ -119,6 +142,11 @@ beforeEach(() => {
 		canSpeakForBot: vi.fn(() => true),
 		playBotSpeech: vi.fn(),
 		stopBotSpeech: vi.fn(),
+		speakingBot: null,
+		interruptSpeech: vi.fn(),
+		registerSpeechControl: vi.fn(),
+		speechOutput: vi.fn(() => null),
+		speechProgress: vi.fn(() => null),
 		error: null,
 		cameraOn: false,
 		screenSharing: false,
@@ -301,6 +329,56 @@ test("a failed conversation lookup can be retried from the call control", async 
 	await act(async () => button("Retry call setup").click());
 	await render();
 	expect(mocks.getConversation).toHaveBeenCalledTimes(2);
+	expect(button("Start a call").disabled).toBe(false);
+});
+
+test("the call transcribes with the bot's own speech model", async () => {
+	await render({ ...bot, stt_model: "hub:whisper" });
+	expect(mocks.useSpeechModelState).toHaveBeenLastCalledWith(
+		true,
+		"hub:whisper",
+	);
+});
+
+test("without a speech model the call control offers setup instead of a call", async () => {
+	mocks.useSpeechModelState.mockReturnValue({
+		...READY_SPEECH,
+		choice: null,
+	});
+	await render();
+	await render();
+	expect(
+		[...host.querySelectorAll("button")].some(
+			(node) => node.getAttribute("aria-label") === "Start a call",
+		),
+	).toBe(false);
+	const setup = button("Set up calls");
+	await act(async () => setup.click());
+	expect(button("Set up calls").dataset.open).toBe("true");
+	expect(mocks.call.start).not.toHaveBeenCalled();
+});
+
+test("the setup stays open after a speech model resolves so the call can start from it", async () => {
+	mocks.useSpeechModelState.mockReturnValue({
+		...READY_SPEECH,
+		choice: null,
+	});
+	await render();
+	await render();
+	await act(async () => button("Set up calls").click());
+	mocks.useSpeechModelState.mockReturnValue(READY_SPEECH);
+	await render();
+	expect(button("Set up calls").dataset.open).toBe("true");
+});
+
+test("a speech model that is still loading leaves the call button as it was", async () => {
+	mocks.useSpeechModelState.mockReturnValue({
+		...READY_SPEECH,
+		choice: null,
+		settled: false,
+	});
+	await render();
+	await render();
 	expect(button("Start a call").disabled).toBe(false);
 });
 

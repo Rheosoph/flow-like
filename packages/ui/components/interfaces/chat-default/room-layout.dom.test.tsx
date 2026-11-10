@@ -76,6 +76,8 @@ describe("the room layout", () => {
 		const bubble = container.querySelector('[data-fl-chat-message="user"]');
 		expect(bubble?.className).toContain("bg-muted");
 		expect(bubble?.className).toContain("max-w-[85%]");
+		expect(bubble?.className.split(" ")).toContain("w-fit");
+		expect(bubble?.className.split(" ")).not.toContain("flex-1");
 		expect(bubble?.className).toContain("rounded-2xl");
 		expect(bubble?.className).not.toContain("border-l-2");
 		expect(container.textContent).not.toContain("Asked");

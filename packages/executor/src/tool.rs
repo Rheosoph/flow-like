@@ -16,16 +16,16 @@ use flow_like::credentials::{SharedCredentials, StoreType};
 use flow_like::flow::execution::ExecutionEnvironment;
 use flow_like::flow_like_model_provider::provider::ModelProviderConfiguration;
 use flow_like::models::llm::ModelUsageContext;
+use flow_like::profile::Profile;
 use flow_like::state::{FlowLikeConfig, FlowLikeState};
 use flow_like::utils::http::HTTPClient;
-use flow_like::profile::Profile;
 use flow_like_bot_tools::image::{
     hosted_access, CatalogImages, ImageBackend, ImageBudget, ImageUnavailable,
 };
 use flow_like_bot_tools::{run, MemorySessions};
 use flow_like_bot_tools_host::{
-    job_hash, outcome_output, AppAccess, HostEnv, ImageSource, JobModels, StateModels, ToolJob, ToolJobEnvelope,
-    ToolReply,
+    job_hash, outcome_output, AppAccess, HostEnv, ImageSource, JobModels, ModelSource, StateModels,
+    ToolJob, ToolJobEnvelope, ToolReply, VisionRouted,
 };
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::lancedb::Connection;
@@ -187,9 +187,14 @@ fn models(
     claims: &ExecutorClaims,
     token: &str,
     state: Arc<FlowLikeState>,
-) -> StateModels {
-    let JobModels { chat, embedding, .. } = job.models.clone();
-    StateModels {
+) -> VisionRouted {
+    let JobModels {
+        chat,
+        embedding,
+        vision,
+        ..
+    } = job.models.clone();
+    let base = StateModels {
         state,
         chat: bit_of(&chat),
         embedding: bit_of(&embedding),
@@ -199,7 +204,10 @@ fn models(
             run_id: Some(job.turn_id.clone()),
             api_base_url: flow_like::hub::hub_origin(&claims.callback_url, true),
         },
-    }
+    };
+    let vision =
+        bit_of(&vision).map(|bit| Arc::new(base.answering_with(bit)) as Arc<dyn ModelSource>);
+    VisionRouted::new(Arc::new(base), vision)
 }
 
 /// The image model of an `image_generate` job: the Bit the API opened for this job, called from
@@ -234,9 +242,7 @@ fn job_images(
 
 #[async_trait]
 impl ImageSource for JobImages {
-    async fn images(
-        &self,
-    ) -> Result<Arc<dyn ImageBackend>, ImageUnavailable> {
+    async fn images(&self) -> Result<Arc<dyn ImageBackend>, ImageUnavailable> {
         let bit: Bit = serde_json::from_value(self.bit.clone())
             .map_err(|_| ImageUnavailable::Unusable("the job's image model is malformed".into()))?;
         let hosted = hosted_access(&self.state, Some(self.token.clone()), Some(&self.usage));
