@@ -276,6 +276,14 @@ pub trait TurnHub: Send + Sync + 'static {
     ) -> Result<bool, HubFailure> {
         Ok(false)
     }
+    /// Reports that the bot used these standing grants so their expiry moves forward.
+    async fn touch_tool_keys(
+        &self,
+        _bot_id: &str,
+        _keys: &[(String, String)],
+    ) -> Result<(), HubFailure> {
+        Ok(())
+    }
     /// Parks the turn this host holds behind an approval card the hub posts as the bot.
     async fn park(
         &self,
@@ -478,6 +486,17 @@ impl GrantStore for HubGrants {
     async fn delete(&self, tool: &str, scope: &str) -> flow_like_types::Result<bool> {
         self.hub
             .delete_tool_key(&self.bot_id, tool, scope)
+            .await
+            .map_err(failed)
+    }
+
+    async fn touch(&self, keys: &[GrantKey]) -> flow_like_types::Result<()> {
+        let keys: Vec<(String, String)> = keys
+            .iter()
+            .map(|key| (key.tool.clone(), key.scope.clone()))
+            .collect();
+        self.hub
+            .touch_tool_keys(&self.bot_id, &keys)
             .await
             .map_err(failed)
     }

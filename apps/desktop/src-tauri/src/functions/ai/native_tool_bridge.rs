@@ -88,6 +88,8 @@ pub struct NativeRunOptions {
     pub tool_gate: Option<flow_like::flow::copilot::tool_gate::ToolGate>,
     /// Set from the authenticated inbox trigger, never from model arguments.
     pub ephemeral_user_context: bool,
+    /// What the turn's history puts into its turn label before the first tool call.
+    pub seed_taint: flow_like_types::data_classification::DataSensitivity,
     /// Session snapshots of user context for a turn whose history comes from memory.
     pub shared_context: Option<String>,
     /// The host owns event delivery, including owner notifications.

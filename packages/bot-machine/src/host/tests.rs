@@ -126,6 +126,7 @@ impl ComputerBackend for FakeScreen {
             height: 4,
             focused: true,
             minimized: false,
+            onscreen: true,
         }])
     }
     async fn window(&self, window: &str, op: WindowOp, bounds: WindowBounds) -> Result<String> {

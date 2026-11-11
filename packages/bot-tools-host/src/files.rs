@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use flow_like_bot_tools::FileData;
+use flow_like_bot_tools::{FileData, FileLink};
 use flow_like_storage::Path;
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::object_store::ObjectStoreExt;
@@ -30,6 +30,12 @@ pub trait ConversationFiles: Send + Sync {
         path: &str,
         max_bytes: u64,
     ) -> Result<Option<FileData>>;
+
+    /// A download link for the file; `None` when there is no such file or this source can't
+    /// give one.
+    async fn file_link(&self, _conversation_id: &str, _path: &str) -> Result<Option<FileLink>> {
+        Ok(None)
+    }
 }
 
 /// The object's size and at most its first `max_bytes`; `None` when the store has no such object.
@@ -95,6 +101,13 @@ impl ConversationFiles for LinkedFiles {
             size,
             mime: file.mime.clone().filter(|mime| !mime.is_empty()),
             classification: None,
+        }))
+    }
+
+    async fn file_link(&self, conversation_id: &str, path: &str) -> Result<Option<FileLink>> {
+        Ok(self.file(conversation_id, path).map(|file| FileLink {
+            url: file.url.clone(),
+            expires_at_ms: None,
         }))
     }
 }

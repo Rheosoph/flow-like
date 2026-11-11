@@ -10,7 +10,7 @@ use flow_like_local_bots::InboxEntry;
 use flow_like_types::{
     bot_message::{MessageBody, MessagePart},
     bot_tool_trail::{TrailEntry, TrailSection, trail_of},
-    bot_turn::room_message,
+    bot_turn::{clip_keeping_tail, room_message},
     bot_user_context::{ContextHistory, ContextLine},
     inbox::{
         ConversationKind, InboxEntryKind, InterruptedSpeech, ReactionEvent, TranscriptBody,
@@ -53,6 +53,8 @@ struct Line {
     message_id: String,
     sender_id: String,
     text: String,
+    /// How many characters at the end of `text` are file and UI notes, which a cut keeps whole.
+    keep: usize,
     mentions: Vec<String>,
     reply_to: Option<String>,
     /// A scheduled or webhook trigger: it always addresses the bot.
@@ -77,8 +79,11 @@ fn addressed_to(lines: &[Line], bot_id: &str) -> bool {
     })
 }
 
-fn render(body: &MessageBody) -> String {
+/// The message's text with a line for each UI block and file it carries, and how many characters
+/// at its end those lines take.
+fn render(body: &MessageBody) -> (String, usize) {
     let mut text = body.text.clone();
+    let written = text.chars().count();
     for part in &body.parts {
         let note = match part {
             MessagePart::Ui(ui) => ui
@@ -101,7 +106,8 @@ fn render(body: &MessageBody) -> String {
         }
         text.push_str(&note.line());
     }
-    text
+    let keep = text.chars().count() - written;
+    (text, keep)
 }
 
 fn body_of(entry: &InboxEntry) -> Option<MessageBody> {
@@ -171,6 +177,7 @@ fn lines_of(entries: &[InboxEntry], later: &[InboxEntry], bot_id: &str) -> Vec<L
                 message_id: entry.message_id.clone(),
                 sender_id: entry.sender_id.clone(),
                 text,
+                keep: 0,
                 mentions: Vec::new(),
                 reply_to: None,
                 from_trigger: false,
@@ -180,10 +187,12 @@ fn lines_of(entries: &[InboxEntry], later: &[InboxEntry], bot_id: &str) -> Vec<L
                 if let Some(body) = body_of(entry)
                     && body.approval_response.is_none()
                 {
+                    let (text, keep) = render(&body);
                     lines.push(Line {
                         message_id: entry.message_id.clone(),
                         sender_id: entry.sender_id.clone(),
-                        text: render(&body),
+                        text,
+                        keep,
                         mentions: body.mentions.clone(),
                         reply_to: body.reply_to.clone(),
                         from_trigger: entry.kind == InboxEntryKind::Trigger,
@@ -198,6 +207,7 @@ fn lines_of(entries: &[InboxEntry], later: &[InboxEntry], bot_id: &str) -> Vec<L
                         message_id: entry.message_id.clone(),
                         sender_id: entry.sender_id.clone(),
                         text: spoken.render(),
+                        keep: 0,
                         mentions: spoken.mentions,
                         reply_to: None,
                         from_trigger: false,
@@ -213,7 +223,7 @@ fn lines_of(entries: &[InboxEntry], later: &[InboxEntry], bot_id: &str) -> Vec<L
                             && !line.withheld
                     })
                 {
-                    line.text = render(&body);
+                    (line.text, line.keep) = render(&body);
                 }
             }
             _ => {}
@@ -225,6 +235,7 @@ fn lines_of(entries: &[InboxEntry], later: &[InboxEntry], bot_id: &str) -> Vec<L
             .find(|line| line.message_id == cut.message_id && !line.withheld)
         {
             line.text = cut.heard_part(&line.text);
+            line.keep = 0;
         }
     }
     lines
@@ -281,7 +292,7 @@ pub fn transcript(
         let name = names.get(&line.sender_id).unwrap_or(&line.sender_id);
         room_message(name, line.sender_id == owner_id, &line.text)
     };
-    let prompt = clipped(&spoken(answered), MAX_PROMPT_CHARS);
+    let prompt = clip_keeping_tail(&spoken(answered), answered.keep, MAX_PROMPT_CHARS);
     let history = lines[..lines.len() - 1]
         .iter()
         .map(|line| UnifiedChatMessage {
@@ -290,7 +301,7 @@ pub fn transcript(
             } else {
                 ChatRole::User
             },
-            content: clipped(&spoken(line), MAX_HISTORY_MESSAGE_CHARS),
+            content: clip_keeping_tail(&spoken(line), line.keep, MAX_HISTORY_MESSAGE_CHARS),
             images: None,
         })
         .collect();
@@ -347,7 +358,7 @@ pub fn render_history(
                 } else {
                     ChatRole::User
                 },
-                content: clipped(&content, MAX_HISTORY_MESSAGE_CHARS),
+                content: clip_keeping_tail(&content, line.keep, MAX_HISTORY_MESSAGE_CHARS),
                 images: None,
             }
         })
@@ -440,7 +451,7 @@ pub fn reaction_turn(
         } else {
             ChatRole::User
         },
-        content: clipped(&spoken(line), MAX_HISTORY_MESSAGE_CHARS),
+        content: clip_keeping_tail(&spoken(line), line.keep, MAX_HISTORY_MESSAGE_CHARS),
         images: None,
     };
     let reaction_text = reactions
@@ -455,14 +466,21 @@ pub fn reaction_turn(
         .join("\n");
     let (prompt, history, reactions) = match lines.split_last() {
         Some((last, earlier)) if fresh > 0 => {
-            let prompt = if reaction_text.is_empty() {
-                spoken(last)
+            let room = if reaction_text.is_empty() {
+                MAX_PROMPT_CHARS
             } else {
-                format!("{}\n\n{reaction_text}", spoken(last))
+                MAX_PROMPT_CHARS.saturating_sub(reaction_text.chars().count() + 2)
+            };
+            let said = clip_keeping_tail(&spoken(last), last.keep, room);
+            let said_chars = said.chars().count();
+            let prompt = if reaction_text.is_empty() {
+                said
+            } else {
+                format!("{said}\n\n{reaction_text}")
             };
             let kept = if addressed { Vec::new() } else { reactions };
             (
-                clipped(&prompt, MAX_PROMPT_CHARS),
+                clipped(&prompt, MAX_PROMPT_CHARS.max(said_chars)),
                 earlier.iter().map(as_history).collect(),
                 kept,
             )
@@ -717,8 +735,7 @@ mod tests {
                 "other-bot",
                 &[card.clone()],
                 card.created_at,
-                false
-            )
+                false, false)
             .is_none()
         );
         let answer = entry(
@@ -733,7 +750,7 @@ mod tests {
                 "bot",
                 &[answer.clone()],
                 answer.created_at,
-                false
+                false, false
             )
             .is_some()
         );
@@ -743,7 +760,7 @@ mod tests {
                 "other-bot",
                 &[answer.clone()],
                 answer.created_at,
-                false
+                false, false
             )
             .is_none()
         );
@@ -759,7 +776,7 @@ mod tests {
                 "other-bot",
                 &[reply.clone()],
                 reply.created_at,
-                false
+                false, false
             )
             .is_none()
         );
@@ -793,6 +810,34 @@ mod tests {
 
         let history = render_history("other", ConversationKind::Group, &entries, &names, "owner", 8);
         assert!(history[0].content.contains(&note), "{}", history[0].content);
+    }
+
+    #[test]
+    fn a_long_message_is_cut_before_its_links_not_through_them() {
+        let link = |n: usize| {
+            format!(
+                "https://vault.s3.amazonaws.com/offers/{n}.pdf?X-Amz-Signature={}",
+                "s".repeat(1_400)
+            )
+        };
+        let parts: Vec<Value> = (1..=6)
+            .map(|n| json!({ "kind": "attachment", "id": format!("a{n}"), "name": format!("{n}.pdf"), "url": link(n) }))
+            .collect();
+        let entries = vec![
+            entry(
+                "made",
+                "maker",
+                InboxEntryKind::Message,
+                json!({ "text": "x".repeat(9_000), "parts": parts }),
+            ),
+            entry("later", "owner", InboxEntryKind::Message, json!({ "text": "thanks" })),
+        ];
+        let history = render_history("reader", ConversationKind::Group, &entries, &HashMap::new(), "owner", 8);
+        let content = &history[0].content;
+        for n in 1..=6 {
+            assert!(content.contains(&format!("[file: {n}.pdf (link: {})]", link(n))), "link {n} was cut");
+        }
+        assert!(content.starts_with(&room_message("maker", false, "xxx")));
     }
 
     #[test]

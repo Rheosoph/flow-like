@@ -352,6 +352,7 @@ fn a_reply_answers_the_trigger_one_hop_further_and_a_failure_names_its_code() {
         requester_id: Some("user-a".into()),
         audience: "OWNER".into(),
         status_text: None,
+        unprompted: None,
         created_at: at(0),
         updated_at: at(0),
     };
@@ -689,6 +690,7 @@ fn only_a_spoken_answer_posts_a_reply() {
         requester_id: None,
         audience: "ROOM".into(),
         status_text: None,
+        unprompted: None,
         created_at: now_millis(),
         updated_at: now_millis(),
     };
@@ -702,6 +704,7 @@ fn only_a_spoken_answer_posts_a_reply() {
         note: None,
         tool_calls: Vec::new(),
         files: Vec::new(),
+        taint: Default::default(),
     };
     assert!(answer_request(&turn, &silent).is_none());
     let mut spoken = Answer {
@@ -714,6 +717,7 @@ fn only_a_spoken_answer_posts_a_reply() {
         note: None,
         tool_calls: Vec::new(),
         files: Vec::new(),
+        taint: Default::default(),
     };
     assert!(answer_request(&turn, &spoken).is_some());
     spoken.acknowledgement = true;

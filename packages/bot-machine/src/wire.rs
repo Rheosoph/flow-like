@@ -38,6 +38,7 @@ const KNOWN_CODES: &[&str] = &[
     code::NOT_SUPPORTED,
     code::NO_DISPLAY,
     code::DISPLAY_BUSY,
+    code::PERMISSION_MISSING,
     code::STALE_PAGE,
     code::NOT_FOUND,
     code::INVALID_ARGS,

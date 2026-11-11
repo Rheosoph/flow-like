@@ -74,7 +74,6 @@ pub mod permission;
 pub mod publication;
 pub mod push_notifications;
 pub mod quota;
-pub mod scoped_usage;
 #[cfg(test)]
 mod quota_integration_tests;
 pub mod quota_payloads;
@@ -82,6 +81,7 @@ pub mod quota_warnings;
 pub mod realtime_ice;
 pub(crate) mod rolling_usage;
 mod runtime_config;
+pub mod scoped_usage;
 pub mod state;
 pub mod storage_accounting;
 pub mod storage_config;

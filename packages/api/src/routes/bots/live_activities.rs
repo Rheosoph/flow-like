@@ -453,6 +453,7 @@ mod tests {
             requester_id: Set(None),
             audience: Set("OWNER".into()),
             status_text: Set(None),
+            unprompted: Set(None),
             created_at: Set(time),
             updated_at: Set(time),
         }

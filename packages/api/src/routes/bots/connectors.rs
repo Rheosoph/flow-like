@@ -22,6 +22,7 @@ use axum::{
     http::StatusCode,
 };
 use chrono::Utc;
+use flow_like_bot_tools::services::ConnectorEntry;
 use flow_like_bot_tools_host::{JobConnector, JobScope, ToolJob};
 use flow_like_types::bot_connector::{
     BotConnector, BotConnectorList, ConnectorAuth, ConnectorKind, ConnectorPolicy,
@@ -173,7 +174,7 @@ async fn secret_exists<C: ConnectionTrait>(
     tag = "Bots",
     params(("bot_id" = String, Path, description = "Your bot's id")),
     responses(
-        (status = 200, description = "The MCP servers and accounts attached to your bot, with their policies and tool lists; never a sign-in", body = BotConnectorListSchema),
+        (status = 200, description = "The MCP servers and accounts attached to your bot, with their policies and tool lists; never a sign-in. The bot's own runtime token may read them.", body = BotConnectorListSchema),
         (status = 401, description = "Not signed in"),
         (status = 404, description = "You have no bot with this id")
     ),
@@ -185,7 +186,7 @@ pub async fn list_bot_connectors(
     Extension(user): Extension<AppUser>,
     Path(bot_id): Path<String>,
 ) -> Result<Json<BotConnectorList>, ApiError> {
-    let sub = user.sub()?;
+    let sub = crate::bot_caller::acting_owner_for(&state.db, &user, &bot_id).await?;
     owned_bot(&state.db, &sub, &bot_id).await?;
     let connectors = crate::bot_tools::connectors::rows_of(&state, &bot_id)
         .await?
@@ -193,6 +194,95 @@ pub async fn list_bot_connectors(
         .filter_map(to_contract)
         .collect();
     Ok(Json(BotConnectorList { connectors }))
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ConnectorEntries {
+    /// The connectors as a bot run resolves them: rule, kind, endpoint and the hosts an account's token may reach.
+    #[schema(value_type = Vec<Object>)]
+    pub entries: Vec<ConnectorEntry>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ConnectorCredential {
+    /// The `Authorization` header value for one call; absent when the connector needs no sign-in.
+    pub authorization: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/bots/{bot_id}/connectors/entries",
+    tag = "Bots",
+    description = "The bot's connectors as a bot run resolves them, for a host that calls the servers itself. Needs the bot's own runtime token.",
+    params(("bot_id" = String, Path, description = "The bot's id")),
+    responses(
+        (status = 200, description = "Rule, kind, endpoint and token hosts per connector; never a sign-in", body = ConnectorEntries),
+        (status = 401, description = "Not a runtime token of this bot, or its turn ended"),
+        (status = 404, description = "No such bot")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(name = "GET /bots/{bot_id}/connectors/entries", skip(state, user))]
+pub async fn list_bot_connector_entries(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(bot_id): Path<String>,
+) -> Result<Json<ConnectorEntries>, ApiError> {
+    runtime_owner(&state, &user, &bot_id).await?;
+    let entries = crate::bot_tools::connectors::rows_of(&state, &bot_id)
+        .await?
+        .iter()
+        .filter_map(|row| entry_of(&state, row))
+        .collect();
+    Ok(Json(ConnectorEntries { entries }))
+}
+
+async fn runtime_owner(state: &AppState, user: &AppUser, bot_id: &str) -> Result<String, ApiError> {
+    if !matches!(user, AppUser::Bot(_)) {
+        return Err(ApiError::forbidden(
+            "Only the bot's own runtime token receives connector sign-ins",
+        ));
+    }
+    let owner = crate::bot_caller::acting_owner_for(&state.db, user, bot_id).await?;
+    owned_bot(&state.db, &owner, bot_id).await?;
+    Ok(owner)
+}
+
+#[utoipa::path(
+    post,
+    path = "/bots/{bot_id}/connectors/{connector_id}/credential",
+    tag = "Bots",
+    description = "The sign-in for one call of a connector, resolved now: an account's access token (refreshed here, never its refresh token) or the bot's secret. Needs the bot's own runtime token and only works while its turn runs.",
+    params(
+        ("bot_id" = String, Path, description = "The bot's id"),
+        ("connector_id" = String, Path, description = "The connector's id")
+    ),
+    responses(
+        (status = 200, description = "The Authorization header value for this call", body = ConnectorCredential),
+        (status = 401, description = "Not a runtime token of this bot, or its turn ended"),
+        (status = 403, description = "The caller is not the bot's runtime token"),
+        (status = 404, description = "The bot has no such connector"),
+        (status = 409, description = "BOT_CONNECTOR_NO_SIGN_IN: the secret or account is missing or must be reconnected")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(
+    name = "POST /bots/{bot_id}/connectors/{connector_id}/credential",
+    skip(state, user)
+)]
+pub async fn bot_connector_credential(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path((bot_id, connector_id)): Path<(String, String)>,
+) -> Result<Json<ConnectorCredential>, ApiError> {
+    let owner = runtime_owner(&state, &user, &bot_id).await?;
+    let row = owned_connector(&state.db, &owner, &bot_id, &connector_id).await?;
+    let authorization = authorization_of(&state, &owner, &row)
+        .await
+        .map_err(|message| {
+            ApiError::coded(StatusCode::CONFLICT, "BOT_CONNECTOR_NO_SIGN_IN", message)
+        })?;
+    Ok(Json(ConnectorCredential { authorization }))
 }
 
 #[derive(Clone)]

@@ -35,3 +35,19 @@ export function directAttachmentOf(
 	}
 	return undefined;
 }
+
+/**
+ * Every stored part as the chat renders it, a conversation file included: its `storage://` url
+ * names the conversation, and the chat signs it through the inbox when it is shown.
+ */
+export function storedAttachmentOf(
+	part: IInboxAttachmentPart,
+): IAttachment | undefined {
+	if (!isConversationFilePart(part)) return directAttachmentOf(part);
+	return {
+		url: workspaceFileUrl(part.handle),
+		name: part.name,
+		type: part.handle.mime,
+		size: part.handle.bytes,
+	};
+}

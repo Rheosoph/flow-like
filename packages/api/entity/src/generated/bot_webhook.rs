@@ -15,6 +15,8 @@ pub struct Model {
     pub name: String,
     #[sea_orm(column_name = "secretHash", column_type = "Text")]
     pub secret_hash: String,
+    #[sea_orm(column_name = "secretCiphertext", column_type = "Text", nullable)]
+    pub secret_ciphertext: Option<String>,
     #[sea_orm(column_type = "Text")]
     pub instruction: String,
     pub enabled: bool,

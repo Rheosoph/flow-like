@@ -149,13 +149,11 @@ impl BotCapability {
         )
     }
 
-    /// A managed device can't serve it yet: its hub has no route a bot token may use for it, or
-    /// (encryption) no key vault. Desktop and server are unaffected.
+    /// A managed device can't serve it yet: end-to-end encryption needs a key vault on the
+    /// device, key routes for a bot token and sealed replies and checkpoints. Desktop and
+    /// server are unaffected.
     pub fn unavailable_on_device(self) -> bool {
-        matches!(
-            self,
-            Self::Connectors | Self::Skills | Self::ImageGeneration | Self::Encryption
-        )
+        matches!(self, Self::Encryption)
     }
 
     /// Can't be switched on or off: a bot gets it only by being Flux or a duplicate of a bot that

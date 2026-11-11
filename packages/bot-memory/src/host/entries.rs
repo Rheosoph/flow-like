@@ -243,7 +243,11 @@ fn item_with_owner(
         }
         InboxEntryKind::Trigger => {
             let trigger = TriggerBody::parse(body).ok()?;
-            let role = if trigger.source == TriggerSource::Email {
+            let from_owner = trigger
+                .payload
+                .as_ref()
+                .is_some_and(|payload| payload["owner"] == true);
+            let role = if trigger.source == TriggerSource::Email && !from_owner {
                 Role::External
             } else {
                 role_of(&entry.sender_id, bot_id, owner_id, None)

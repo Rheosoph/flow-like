@@ -615,7 +615,7 @@ describe("the import of the IndexedDB chat", () => {
 		).toBeDefined();
 	});
 
-	test("a bot reply carries its link and workspace attachments as files", async () => {
+	test("stored attachments of both sides come back as files, conversation files included", async () => {
 		const handle = {
 			app_id: "app1",
 			path: "bot/files/a b.pdf",
@@ -667,7 +667,9 @@ describe("the import of the IndexedDB chat", () => {
 			},
 		} as unknown as IInboxState;
 		const page = await loadLatest(inbox, target, "bot:bot_ada", 50);
-		expect(page.messages[0].files).toEqual([]);
+		expect(page.messages[0].files).toEqual([
+			{ url: "https://a.test/u.pdf", name: "u.pdf" },
+		]);
 		expect(page.messages[1].files).toEqual([
 			{
 				url: "storage://apps/app1/app/bot/files/a%20b.pdf",
@@ -676,6 +678,12 @@ describe("the import of the IndexedDB chat", () => {
 				size: 5,
 			},
 			{ url: "https://a.test/l.pdf", name: "l.pdf", type: "application/pdf" },
+			{
+				url: "storage://apps/conversation_c1/app/bot/files/a%20b.pdf",
+				name: "c.pdf",
+				type: "application/pdf",
+				size: 5,
+			},
 		]);
 	});
 });

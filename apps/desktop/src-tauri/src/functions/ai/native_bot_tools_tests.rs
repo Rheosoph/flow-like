@@ -246,6 +246,26 @@ async fn files_of_local_and_account_apps_resolve_inside_the_scope_only() {
 }
 
 #[tokio::test]
+async fn a_bot_reads_conversation_files_of_the_turns_conversation_only() {
+    let host = TestHost::new().await;
+    let env = env_for(&host, &bot(&[BotCapability::Storage]))
+        .with_turn_conversation(Some("room-1".into()));
+
+    assert!(env.read_file("conversation_room-1", "f1.pdf", 10).await.is_ok());
+    assert!(env.stat_file("conversation_room-1", "f1.pdf").await.is_ok());
+    assert!(env.file_link("conversation_room-1", "f1.pdf").await.is_ok());
+    assert!(env.read_file("conversation_chat", "x.txt", 10).await.is_ok());
+    for refused in [
+        env.read_file("conversation_room-2", "f1.pdf", 10).await.map(drop),
+        env.stat_file("conversation_room-2", "f1.pdf").await.map(drop),
+        env.file_link("conversation_room-2", "f1.pdf").await.map(drop),
+    ] {
+        let message = refused.unwrap_err().to_string();
+        assert!(message.contains("room-2"), "{message}");
+    }
+}
+
+#[tokio::test]
 async fn a_file_attached_to_the_message_is_read_through_its_handle_while_it_is_answered() {
     let host = TestHost::new().await;
     let entry = host.attach("scan notes.txt", "text/plain", "Invoice 4711");

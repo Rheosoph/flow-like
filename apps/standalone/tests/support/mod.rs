@@ -256,6 +256,7 @@ fn grant_of(state: &Hub) -> DeviceTurnGrant {
             fallbacks: Vec::new(),
             embedding: None,
             embedding_model_id: None,
+            image: None,
         },
         bot_token: DeviceToken {
             token: BOT_TOKEN.into(),

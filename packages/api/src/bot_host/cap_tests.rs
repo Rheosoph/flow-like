@@ -273,3 +273,25 @@ async fn reading_along_over_the_requesters_limit_stops_quietly_while_a_mention_i
     assert_eq!(enqueue_in(&db, &named, now).await.unwrap(), 0);
     assert!(notice("c-named").await.unwrap().is_some());
 }
+
+#[tokio::test]
+async fn read_along_and_reaction_turns_do_not_use_up_a_requesters_limit() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", "SERVER").await;
+    super::fixture::conversation(&db, "c1", "GROUP", "PLAIN", &["user-a", "user-c", "bot_1"]).await;
+    let now = at(100_000);
+    for index in 0..super::cap::REQUESTER_DAILY_TURNS + 3 {
+        let mut chatter = room_request("user-c", &format!("c-{index}"), ConversationKind::Group);
+        chatter.recipients[0].mentioned = false;
+        chatter.recipients[0].read_along = true;
+        assert_eq!(enqueue_in(&db, &chatter, now).await.unwrap(), 1);
+    }
+    assert_eq!(
+        turn_of(&db, "c-0").await.unprompted,
+        Some(true),
+        "read-along turns are marked"
+    );
+    let named = room_request("user-c", "c-named", ConversationKind::Group);
+    assert_eq!(enqueue_in(&db, &named, now).await.unwrap(), 1);
+    assert_eq!(turn_of(&db, "c-named").await.unprompted, None);
+}

@@ -241,6 +241,7 @@ impl TurnRunner for NativeRunner {
             live_call: job.live_call,
             tool_gate: job.tool_gate.clone(),
             ephemeral_user_context: job.ephemeral_user_context,
+            seed_taint: job.seed_taint,
             shared_context: job.shared_context.clone(),
             suppress_owner_notifications: job.suppress_owner_notifications,
             answered_round: job.answered_round.clone(),

@@ -22,8 +22,8 @@ use crate::secret_text::{Scrubber, fill_secrets};
 use crate::spec::{Approval, ToolSpec, schema_of};
 
 pub use backend::{
-    ComputerAction, ComputerBackend, PointerButton, Screen, ScrollDirection, WindowBounds,
-    WindowOp, WindowSummary, not_supported,
+    ComputerAction, ComputerBackend, DisplaySummary, PointerButton, Screen, ScrollDirection,
+    WindowBounds, WindowOp, WindowSummary, not_supported,
 };
 
 pub const COMPUTER_SCREENSHOT: &str = "computer_screenshot";
@@ -46,10 +46,18 @@ pub struct ComputerScreenshotArgs {
     /// and computer_act coordinates are pixels of it. Omit for the whole screen.
     #[serde(default)]
     pub window: Option<String>,
+    /// A display index from the 'displays' list of an earlier screenshot. Omit for the primary
+    /// display. Ignored when 'window' is set.
+    #[serde(default)]
+    pub display: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct ComputerWindowsArgs {}
+pub struct ComputerWindowsArgs {
+    /// Also list windows on other Spaces or hidden. Default false.
+    #[serde(default)]
+    pub include_offscreen: bool,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ComputerWindowArgs {
@@ -132,7 +140,7 @@ pub fn specs() -> Vec<ToolSpec> {
     vec![
         computer(
             COMPUTER_SCREENSHOT,
-            "Look at the computer's screen, or one window of it with 'window'. Coordinates for computer_act are pixels of this picture.",
+            "Look at the computer's screen (the primary display, or another with 'display'; the result lists the displays), or one window of it with 'window'. Coordinates for computer_act are pixels of this picture. Fails naming the missing permission (screen_recording) when macOS has not granted it.",
             Approval::Ask,
             false,
             schema_of::<ComputerScreenshotArgs>(),
@@ -153,14 +161,14 @@ pub fn specs() -> Vec<ToolSpec> {
         ),
         computer(
             COMPUTER_WINDOWS,
-            "List the windows open on the computer: id, title, application, position, size and whether each is focused or minimized.",
+            "List the windows open on the computer: id, title, application, position, size and whether each is focused, minimized or onscreen. Windows on other Spaces and helper windows are left out unless 'include_offscreen' is true. Fails naming the missing permission (accessibility) when macOS has not granted it.",
             Approval::None,
             false,
             schema_of::<ComputerWindowsArgs>(),
         ),
         computer(
             COMPUTER_WINDOW,
-            "Focus, close, minimize, maximize, move or resize one window. The owner approves unless they gave you the session.",
+            "Focus, close, minimize, maximize, move or resize one window; focusing a window on another Space switches to it. The owner approves unless they gave you the session.",
             Approval::Ask,
             true,
             schema_of::<ComputerWindowArgs>(),
@@ -224,18 +232,32 @@ pub async fn computer_screenshot(
             backend.screenshot_window(window).await,
             "Screenshot of the window",
         ),
-        None => (backend.screenshot().await, "Screenshot of the computer"),
+        None => (
+            backend.screenshot_display(args.display).await,
+            "Screenshot of the computer",
+        ),
     };
     let screen = screen.map_err(ToolError::from)?;
     let size = size_json(&screen);
-    Ok(screen_output(screen, label, json!({ "screen": size })))
+    let mut result = json!({ "screen": size });
+    if window.is_none() {
+        let displays = backend.displays().await.unwrap_or_default();
+        if displays.len() > 1 {
+            result["displays"] = json!(displays);
+            result["display"] = json!(args.display);
+        }
+    }
+    Ok(screen_output(screen, label, result))
 }
 
 pub async fn computer_windows(
     env: &dyn ToolEnv,
-    _args: ComputerWindowsArgs,
+    args: ComputerWindowsArgs,
 ) -> ToolResult<ToolOutput> {
-    let windows = backend_of(env)?.windows().await.map_err(ToolError::from)?;
+    let windows = backend_of(env)?
+        .windows_listed(args.include_offscreen)
+        .await
+        .map_err(ToolError::from)?;
     Ok(ToolOutput::new(
         json!({ "count": windows.len(), "windows": windows }),
     ))

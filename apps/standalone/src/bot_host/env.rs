@@ -9,7 +9,14 @@ use flow_like_bot_tools::{
     FileMeta, KnowledgeEmbedder, Limits, ModelRole, Scope, SecretInfo, SessionCache, ShellBackend,
     ToolEnv,
 };
-use flow_like_bot_tools_host::{AppAccess, HostEnv, SecretSource};
+use flow_like::{
+    bit::Bit, flow::execution::ExecutionEnvironment, models::llm::ModelUsageContext,
+    profile::Profile, state::FlowLikeState,
+};
+use flow_like_bot_tools::image::{
+    CatalogImages, ImageBackend, ImageBudget, ImageUnavailable, hosted_access,
+};
+use flow_like_bot_tools_host::{AppAccess, HostEnv, ImageSource, SecretSource};
 use flow_like_model_provider::llm::ModelLogic;
 use flow_like_storage::{files::store::FlowLikeStore, lancedb::Connection};
 use flow_like_types::{
@@ -39,6 +46,34 @@ pub trait Machines: Send + Sync + 'static {
         browser_use: bool,
         computer_use: bool,
     ) -> MachineBackends;
+}
+
+/// The bot's hosted image model, called through the hub's proxy with the turn's executor token.
+/// One per turn, so the turn's image allowance holds across tool calls.
+pub struct HubImages {
+    pub state: Arc<FlowLikeState>,
+    pub profile: Arc<Profile>,
+    pub bit: Bit,
+    pub creds: Arc<TurnCreds>,
+    pub usage: ModelUsageContext,
+    pub budget: Arc<ImageBudget>,
+}
+
+#[async_trait]
+impl ImageSource for HubImages {
+    async fn images(&self) -> std::result::Result<Arc<dyn ImageBackend>, ImageUnavailable> {
+        let hosted = hosted_access(&self.state, self.creds.executor_token(), Some(&self.usage));
+        let images = CatalogImages::resolve(
+            self.bit.clone(),
+            &self.profile,
+            &self.state,
+            ExecutionEnvironment::Desktop,
+            Some(hosted),
+            self.budget.clone(),
+        )
+        .await?;
+        Ok(Arc::new(images))
+    }
 }
 
 /// Presigned credentials per app, fetched with the turn's bot token.
@@ -162,6 +197,16 @@ fn conversation_file_route(conversation_id: &str, path: &str) -> Result<String> 
 pub struct ConversationFiles {
     hub: Arc<dyn flow_like_bot_host::hub::TurnHub>,
     http: reqwest::Client,
+    conversation: String,
+}
+
+fn ensure_turn_conversation(turn_conversation: &str, requested: &str) -> Result<()> {
+    if turn_conversation == requested {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "Conversation '{requested}' is not this turn's conversation; a bot reads the files of the conversation it answers in"
+    ))
 }
 
 struct ConversationDownload {
@@ -171,7 +216,7 @@ struct ConversationDownload {
 }
 
 impl ConversationFiles {
-    pub fn new(hub: Arc<dyn flow_like_bot_host::hub::TurnHub>) -> Self {
+    pub fn new(hub: Arc<dyn flow_like_bot_host::hub::TurnHub>, conversation: &str) -> Self {
         let http = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(
@@ -180,7 +225,11 @@ impl ConversationFiles {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap_or_default();
-        Self { hub, http }
+        Self {
+            hub,
+            http,
+            conversation: conversation.to_string(),
+        }
     }
 
     async fn download(
@@ -188,6 +237,7 @@ impl ConversationFiles {
         conversation_id: &str,
         path: &str,
     ) -> Result<Option<ConversationDownload>> {
+        ensure_turn_conversation(&self.conversation, conversation_id)?;
         let route = conversation_file_route(conversation_id, path)?;
         let answer = match self.hub.read(&route, Vec::new()).await {
             Ok(answer) => answer,
@@ -459,5 +509,17 @@ mod conversation_file_tests {
             assert!(error.contains("unusable id"), "{path}: {error}");
         }
         assert!(conversation_file_route("a/b", "f_9").is_err());
+    }
+}
+
+#[cfg(test)]
+mod conversation_scope_tests {
+    use super::ensure_turn_conversation;
+
+    #[test]
+    fn only_the_turns_conversation_is_readable() {
+        assert!(ensure_turn_conversation("room-1", "room-1").is_ok());
+        let refused = ensure_turn_conversation("room-1", "room-2").unwrap_err();
+        assert!(refused.to_string().contains("room-2"));
     }
 }

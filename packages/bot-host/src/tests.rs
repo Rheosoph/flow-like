@@ -413,7 +413,7 @@ fn a_local_call_transcript_wakes_the_direct_bot_or_the_named_group_bot() {
     use flow_like_types::inbox::ConversationKind;
     let check = |kind, mentions: &[&str], bot| {
         let line = spoken(mentions);
-        crate::rule::waiting(kind, bot, &[line.clone()], line.created_at, false)
+        crate::rule::waiting(kind, bot, &[line.clone()], line.created_at, false, false)
     };
     assert!(
         check(ConversationKind::Direct, &[], "bot")
@@ -430,6 +430,36 @@ fn a_local_call_transcript_wakes_the_direct_bot_or_the_named_group_bot() {
 }
 
 #[test]
+fn a_group_call_transcript_wakes_only_a_bot_with_a_decision_model_to_read_along() {
+    use flow_like_types::inbox::ConversationKind;
+    let line = spoken(&[]);
+    let wake = |bot, has_decision_model| {
+        crate::rule::waiting(
+            ConversationKind::Group,
+            bot,
+            &[line.clone()],
+            line.created_at,
+            false,
+            has_decision_model,
+        )
+    };
+    assert!(wake("bot", false).is_none());
+    assert!(!wake("bot", true).unwrap().addressed);
+    assert!(
+        crate::rule::waiting(
+            ConversationKind::Group,
+            "bot",
+            &[line.clone()],
+            line.created_at,
+            true,
+            true,
+        )
+        .is_none(),
+        "a bot limited to mentions never reads along"
+    );
+}
+
+#[test]
 fn an_answered_local_call_transcript_does_not_start_another_turn() {
     let line = spoken(&["bot"]);
     let mut answer = plain("Here is the plan.");
@@ -443,7 +473,7 @@ fn an_answered_local_call_transcript_does_not_start_another_turn() {
             "bot",
             &[answer, line],
             at,
-            false,
+            false, false,
         )
         .is_none()
     );
@@ -979,7 +1009,7 @@ fn a_trigger_addresses_a_bot_in_a_group() {
         "bot",
         &[trigger.clone()],
         trigger.created_at,
-        true,
+        true, false,
     );
     assert!(found.is_some_and(|waiting| waiting.addressed));
 }

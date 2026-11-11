@@ -28,6 +28,17 @@ pub enum Decision {
     WaitFor(String),
 }
 
+impl Decision {
+    /// A text turn that a mention or reply addressed is always answered; `no_answer` only applies
+    /// to a turn that reads along.
+    pub fn answering_addressed(self, addressed: bool, live_call: bool) -> Self {
+        match self {
+            Self::NoAnswer if addressed && !live_call => Self::AnswerNow,
+            other => other,
+        }
+    }
+}
+
 /// A current room member, supplied by the host rather than inferred from message text.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecisionParticipant {
@@ -124,6 +135,26 @@ pub fn excerpt(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_answer_only_silences_a_text_turn_nobody_addressed() {
+        assert_eq!(
+            Decision::NoAnswer.answering_addressed(true, false),
+            Decision::AnswerNow
+        );
+        assert_eq!(
+            Decision::NoAnswer.answering_addressed(false, false),
+            Decision::NoAnswer
+        );
+        assert_eq!(
+            Decision::NoAnswer.answering_addressed(true, true),
+            Decision::NoAnswer
+        );
+        assert_eq!(
+            Decision::Acknowledge.answering_addressed(true, false),
+            Decision::Acknowledge
+        );
+    }
 
     fn request_for_room() -> SystemOneRequest {
         request(

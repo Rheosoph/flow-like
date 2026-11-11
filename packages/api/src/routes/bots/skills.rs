@@ -244,7 +244,9 @@ pub(crate) fn origin_of(source: Option<&str>, status: Option<&str>) -> Result<Or
     let status = match status.map(str::trim).filter(|status| !status.is_empty()) {
         None => SkillStatus::Active,
         Some(text) => SkillStatus::parse(text).ok_or_else(|| {
-            bad_request(format!("A skill status is active, pending or disabled; got '{text}'"))
+            bad_request(format!(
+                "A skill status is active, pending or disabled; got '{text}'"
+            ))
         })?,
     };
     Ok(Origin { source, status })
@@ -303,7 +305,9 @@ pub(crate) async fn create_in<C: ConnectionTrait>(
             return Err(ApiError::coded(
                 StatusCode::CONFLICT,
                 SKILL_LIMIT_REACHED,
-                format!("Bot '{bot_id}' already has {MAX_PENDING_PROPOSALS} skills waiting for approval"),
+                format!(
+                    "Bot '{bot_id}' already has {MAX_PENDING_PROPOSALS} skills waiting for approval"
+                ),
             ));
         }
     }
@@ -538,7 +542,10 @@ pub async fn propose_bot_skill(
     ),
     security(("bearer_auth" = []))
 )]
-#[tracing::instrument(name = "PATCH /bots/{bot_id}/skills/{skill_id}", skip(state, user, body))]
+#[tracing::instrument(
+    name = "PATCH /bots/{bot_id}/skills/{skill_id}",
+    skip(state, user, body)
+)]
 pub async fn update_bot_skill(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -587,8 +594,8 @@ pub async fn delete_bot_skill(
     let sub = user.sub()?;
     let row = delete_in(&state.db, &sub, &bot_id, &skill_id).await?;
     skill_jobs::remove_references(&state, &sub, &bot_id, &row.name).await;
-    if let Some(package_id) = SkillSource::parse(&row.source)
-        .and_then(|source| source.package_id().map(str::to_string))
+    if let Some(package_id) =
+        SkillSource::parse(&row.source).and_then(|source| source.package_id().map(str::to_string))
     {
         let workspace_id = workspace::ensure(&state, &sub, &bot_id).await?.app_id;
         release_package_pin_in(&state.db, &bot_id, &workspace_id, &package_id).await?;
@@ -632,7 +639,10 @@ async fn move_to(
     ),
     security(("bearer_auth" = []))
 )]
-#[tracing::instrument(name = "POST /bots/{bot_id}/skills/{skill_id}/approve", skip(state, user))]
+#[tracing::instrument(
+    name = "POST /bots/{bot_id}/skills/{skill_id}/approve",
+    skip(state, user)
+)]
 pub async fn approve_bot_skill(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -656,7 +666,10 @@ pub async fn approve_bot_skill(
     ),
     security(("bearer_auth" = []))
 )]
-#[tracing::instrument(name = "POST /bots/{bot_id}/skills/{skill_id}/disable", skip(state, user))]
+#[tracing::instrument(
+    name = "POST /bots/{bot_id}/skills/{skill_id}/disable",
+    skip(state, user)
+)]
 pub async fn disable_bot_skill(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -702,7 +715,10 @@ pub async fn import_bot_skill(
         return Err(ApiError::coded(
             StatusCode::PAYLOAD_TOO_LARGE,
             SKILL_IMPORT_REFUSED,
-            format!("A skill zip has at most {MAX_ZIP_BYTES} bytes; this one has {}", zip.len()),
+            format!(
+                "A skill zip has at most {MAX_ZIP_BYTES} bytes; this one has {}",
+                zip.len()
+            ),
         ));
     }
     let workspace = workspace::ensure(&state, &sub, &bot_id).await?.app_id;
@@ -789,13 +805,20 @@ pub(crate) async fn install_package_in<C: ConnectionTrait>(
         .await?
         .ok_or_else(|| ApiError::not_found("Package not found"))?;
     crate::package_license::ensure_holds(db, owner_id, &package).await?;
-    let version = request.version.clone().unwrap_or_else(|| package.version.clone());
+    let version = request
+        .version
+        .clone()
+        .unwrap_or_else(|| package.version.clone());
     let row = wasm_package_version::Entity::find()
         .filter(wasm_package_version::Column::PackageId.eq(&package.id))
         .filter(wasm_package_version::Column::Version.eq(&version))
         .one(db)
         .await?
-        .ok_or_else(|| ApiError::not_found(format!("Version '{version}' of the package is not published")))?;
+        .ok_or_else(|| {
+            ApiError::not_found(format!(
+                "Version '{version}' of the package is not published"
+            ))
+        })?;
     if row.status != crate::entity::sea_orm_active_enums::WasmPackageStatus::Active {
         return Err(ApiError::bad_request(format!(
             "Version '{version}' of '{}' has not been approved by the registry yet",
@@ -983,12 +1006,23 @@ pub async fn install_bot_skill_package(
     let workspace_id = workspace::ensure(&state, &sub, &bot_id).await?.app_id;
     let rows = state
         .transaction(|txn| {
-            let (sub, bot_id, workspace_id, body) =
-                (sub.clone(), bot_id.clone(), workspace_id.clone(), body.clone_request());
+            let (sub, bot_id, workspace_id, body) = (
+                sub.clone(),
+                bot_id.clone(),
+                workspace_id.clone(),
+                body.clone_request(),
+            );
             Box::pin(async move {
                 lock_bot(txn, &bot_id).await?;
-                install_package_in(txn, &sub, &bot_id, &workspace_id, &body, Utc::now().fixed_offset())
-                    .await
+                install_package_in(
+                    txn,
+                    &sub,
+                    &bot_id,
+                    &workspace_id,
+                    &body,
+                    Utc::now().fixed_offset(),
+                )
+                .await
             })
         })
         .await?;
@@ -1016,9 +1050,15 @@ mod tests {
     #[test]
     fn a_create_request_names_an_owner_import_or_proposed_origin_never_a_package() {
         let owner = origin_of(None, None).unwrap();
-        assert_eq!((owner.source, owner.status), (SkillSource::Owner, SkillStatus::Active));
+        assert_eq!(
+            (owner.source, owner.status),
+            (SkillSource::Owner, SkillStatus::Active)
+        );
         let moved = origin_of(Some("bot_proposed"), Some("PENDING")).unwrap();
-        assert_eq!((moved.source, moved.status), (SkillSource::BotProposed, SkillStatus::Pending));
+        assert_eq!(
+            (moved.source, moved.status),
+            (SkillSource::BotProposed, SkillStatus::Pending)
+        );
         assert!(origin_of(Some("package:evil@1.0.0"), None).is_err());
         assert!(origin_of(Some("nonsense"), None).is_err());
         assert!(origin_of(None, Some("live")).is_err());

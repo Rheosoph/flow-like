@@ -109,8 +109,15 @@ async fn mail_is_written_into_the_owners_direct_conversation_with_the_bot() {
     let db = setup().await;
     let first = mail_conversation(&db, &thread(&db).await).await;
     let second = mail_conversation(&db, &thread(&db).await).await;
-    assert_eq!(first, second, "every thread shares the one direct conversation");
-    assert!(is_owner_direct(&db, &first, "user-a", "bot_m").await.unwrap());
+    assert_eq!(
+        first, second,
+        "every thread shares the one direct conversation"
+    );
+    assert!(
+        is_owner_direct(&db, &first, "user-a", "bot_m")
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]
@@ -127,7 +134,11 @@ async fn an_encrypted_direct_conversation_sends_the_threads_mail_to_its_own_grou
     .unwrap();
     let id = thread(&db).await;
     assert_eq!(mail_conversation(&db, &id).await, id);
-    assert_eq!(mail_conversation(&db, &id).await, id, "the group is started once");
+    assert_eq!(
+        mail_conversation(&db, &id).await,
+        id,
+        "the group is started once"
+    );
     let room = conversation::Entity::find_by_id(id.as_str())
         .one(&db)
         .await

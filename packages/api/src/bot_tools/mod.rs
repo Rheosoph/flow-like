@@ -148,6 +148,7 @@ pub(crate) async fn turn_host(
             state.clone(),
             principal,
             &workspace,
+            context_conversation,
         )),
         models: TurnModels {
             source,
@@ -203,6 +204,7 @@ pub(crate) async fn turn_host(
     .with_files(std::sync::Arc::new(turn_files::ApiTurnFiles::new(
         state,
         &bot.bot_id,
+        context_conversation,
         attached,
     )));
     let host = if bot.tool_host == flow_like::flow::copilot::BotToolHost::Hosted {

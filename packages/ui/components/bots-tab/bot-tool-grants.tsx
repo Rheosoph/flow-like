@@ -56,8 +56,21 @@ export function BotToolGrants({
 								key={`${grant.tool}\u0000${grant.scope}`}
 								className="flex items-center gap-2.5 rounded-lg bg-muted/60 py-1.5 pr-1.5 pl-3"
 							>
-								<span className="min-w-0 flex-1 text-sm font-medium wrap-break-word">
-									{label}
+								<span className="flex min-w-0 flex-1 flex-col">
+									<span className="text-sm font-medium wrap-break-word">
+										{label}
+									</span>
+									{grant.expires_at && (
+										<span className="text-xs text-muted-foreground">
+											{t(
+												"panel.grants.expires",
+												"Lapses on {{date}} if unused",
+												{
+													date: new Date(grant.expires_at).toLocaleDateString(),
+												},
+											)}
+										</span>
+									)}
 								</span>
 								<Button
 									type="button"

@@ -42,8 +42,9 @@ use url::Url;
 use super::image_view::{IMAGE_VIEW_TOOL, run_image_view};
 use super::memory::AssistantMemory;
 use super::public_web::{
-    MAX_OPEN_URL_CALLS_PER_ROUND, WebResearchSession, normalize_public_discovery_url,
-    open_url_round_error, parse_public_url, public_url_spans, run_archive_lookup_for_session,
+    MAX_OPEN_URL_CALLS_PER_ROUND, WebResearchSession, comparable_url,
+    normalize_public_discovery_url, open_url_round_error, public_url_spans,
+    run_archive_lookup_for_session,
     run_open_url_for_session, run_open_url_with_reader, source_id_for_url,
 };
 pub use super::public_web::{PageReader, ReaderPage};
@@ -1603,7 +1604,7 @@ impl PlatformCopilot {
                 match content {
                     StreamedAssistantContent::Text(text) => {
                         iteration_text.push_str(&text.text);
-                        if !watches_room
+                        if !holds_drafts
                             && !response_contents
                                 .iter()
                                 .any(|content| matches!(content, AssistantContent::ToolCall(_)))
@@ -1756,6 +1757,7 @@ impl PlatformCopilot {
                     {
                         callback(draft_replaced_frame());
                     }
+                    partial_answer.lock().unwrap().clear();
                     continue;
                 }
             }
@@ -2544,19 +2546,21 @@ fn strip_unverified_citations(text: &str, opened_urls: &[String]) -> (String, Ve
         let Ok(url) = Url::parse(raw) else {
             continue;
         };
-        let normalized = parse_public_url(raw)
-            .map(|url| url.to_string())
-            .unwrap_or_else(|_| url.to_string());
+        let normalized = comparable_url(raw).unwrap_or_else(|| url.to_string());
         if opened.contains(normalized.as_str()) {
             continue;
         }
         let site = url.host_str().unwrap_or("unknown site");
         let (start, end, replacement) = match markdown_link_label(text, span.clone()) {
-            Some((label_start, label)) if label_start >= cursor => (
-                label_start,
-                span.end + 1,
-                format!("{label} (unverified source: {site})"),
-            ),
+            Some((label_start, label)) if label_start >= cursor => {
+                let image = label_start > cursor && text[..label_start].ends_with('!');
+                let kind = if image { "image" } else { "source" };
+                (
+                    label_start - usize::from(image),
+                    span.end + 1,
+                    format!("{label} (unverified {kind}: {site})"),
+                )
+            }
             _ => (span.start, span.end, format!("{site} (unverified source)")),
         };
         rewritten.push_str(&text[cursor..start]);
@@ -3080,7 +3084,10 @@ async fn run_sealed_research_agent(
         if tool_calls.is_empty() || concluding {
             if !round_text.trim().is_empty() {
                 let opened_urls = web_session.opened_urls();
-                let (findings, unverified) = strip_unverified_citations(&round_text, &opened_urls);
+                // An image an opened page showed is no page itself, yet its link is as verified.
+                let mut verified = opened_urls.clone();
+                verified.extend(web_session.page_image_urls());
+                let (findings, unverified) = strip_unverified_citations(&round_text, &verified);
                 if !unverified.is_empty() {
                     tracing::warn!(
                         unverified = ?unverified,
@@ -4421,6 +4428,26 @@ mod tests {
         assert!(flux.contains("http_request"), "{flux}");
         assert!(!flux.contains("web_request"), "{flux}");
         assert!(!flux.to_lowercase().contains("closed"), "{flux}");
+    }
+
+    #[test]
+    fn images_an_opened_page_showed_stay_in_the_findings_and_invented_ones_do_not() {
+        let shown = "https://cdn.example/front.jpg?sig=abc";
+        let verified = [
+            comparable_url("https://news.example/story").unwrap(),
+            comparable_url(shown).unwrap(),
+        ];
+        let text = format!(
+            "The car ![front view]({shown}) and ![made up](https://cdn.example/other.jpg), per [the story](https://news.example/story)."
+        );
+        let (rewritten, removed) = strip_unverified_citations(&text, &verified);
+        assert_eq!(
+            rewritten,
+            format!(
+                "The car ![front view]({shown}) and made up (unverified image: cdn.example), per [the story](https://news.example/story)."
+            )
+        );
+        assert_eq!(removed, ["https://cdn.example/other.jpg"]);
     }
 
     #[test]

@@ -677,6 +677,52 @@ interface HandleNodesChangeParams {
 	applyNodeChanges: (changes: any[], nodes: any[]) => any[];
 }
 
+export interface UnconfirmedMove {
+	position: { x: number; y: number };
+	/** The save that carries this position; a later move of the same node replaces it. */
+	save: number;
+}
+
+/**
+ * Board nodes parsed from a revision that may predate the user's latest moves. Nodes being
+ * dragged and nodes whose move is still saving keep their local position, so a save that
+ * lands in between does not snap them back.
+ */
+export function keepUnconfirmedPositions<
+	T extends {
+		id: string;
+		position: { x: number; y: number };
+		dragging?: boolean;
+	},
+>(
+	parsed: T[],
+	current: readonly T[],
+	unconfirmed: ReadonlyMap<string, UnconfirmedMove>,
+): T[] {
+	const local = new Map<string, { x: number; y: number }>();
+	const dragging = new Set<string>();
+	for (const node of current)
+		if (node.dragging) {
+			local.set(node.id, node.position);
+			dragging.add(node.id);
+		}
+	for (const [id, move] of unconfirmed)
+		if (!local.has(id)) local.set(id, move.position);
+	if (!local.size) return parsed;
+	return parsed.map((node) => {
+		const position = local.get(node.id);
+		if (!position) return node;
+		const kept = dragging.has(node.id);
+		if (
+			position.x === node.position.x &&
+			position.y === node.position.y &&
+			!!node.dragging === kept
+		)
+			return node;
+		return { ...node, position, dragging: kept || undefined };
+	});
+}
+
 export function handleNodesChange({
 	changes,
 	currentNodes,

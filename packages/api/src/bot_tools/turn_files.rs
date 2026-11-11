@@ -9,13 +9,13 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use flow_like::flow::copilot::TURN_FILES;
-use flow_like_bot_tools::FileData;
+use flow_like_bot_tools::{FileData, FileLink};
 use flow_like_bot_tools_host::{ConversationFiles, JobFile, read_object};
 use flow_like_storage::Path as ObjectPath;
 use flow_like_types::bot_message::CONVERSATION_FILE_APP_PREFIX;
 use flow_like_types::{Result, anyhow};
 
-use super::host::TurnFiles;
+use super::{access::turn_may_read_conversation, host::TurnFiles};
 use crate::{routes::inbox::files::bot_readable_key, state::AppState};
 
 /// Longer than the executor's longest tool call, so a link never lapses during its job.
@@ -32,6 +32,8 @@ pub(crate) struct ApiTurnFiles {
     state: AppState,
     /// Whose conversation memberships decide what is readable: the bot of the turn.
     principal: String,
+    /// The only conversation whose files the turn reads.
+    conversation: Option<String>,
     /// By attachment name, as the turn's handles name them.
     attached: BTreeMap<String, AttachedFile>,
 }
@@ -40,11 +42,13 @@ impl ApiTurnFiles {
     pub(crate) fn new(
         state: &AppState,
         principal: &str,
+        conversation: Option<&str>,
         attached: BTreeMap<String, AttachedFile>,
     ) -> Self {
         Self {
             state: state.clone(),
             principal: principal.to_string(),
+            conversation: conversation.map(str::to_string),
             attached,
         }
     }
@@ -54,6 +58,9 @@ impl ApiTurnFiles {
     async fn located(&self, conversation_id: &str, path: &str) -> Result<Option<AttachedFile>> {
         if conversation_id == TURN_FILES {
             return Ok(self.attached.get(path).cloned());
+        }
+        if !turn_may_read_conversation(self.conversation.as_deref(), conversation_id) {
+            return Ok(None);
         }
         match bot_readable_key(&self.state.db, conversation_id, &self.principal, path).await {
             Ok(key) => Ok(Some(AttachedFile {
@@ -96,6 +103,19 @@ impl ConversationFiles for ApiTurnFiles {
             mime: file.mime,
             classification: None,
         }))
+    }
+
+    async fn file_link(&self, conversation_id: &str, path: &str) -> Result<Option<FileLink>> {
+        let Some(file) = self.located(conversation_id, path).await? else {
+            return Ok(None);
+        };
+        let store = self
+            .state
+            .master_credentials()
+            .await?
+            .to_store(false)
+            .await?;
+        FileLink::signed(&store, &file.key).await
     }
 }
 

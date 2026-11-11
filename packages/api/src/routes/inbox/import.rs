@@ -367,8 +367,13 @@ fn checked_body(
     kind: InboxEntryKind,
     envelope: &Value,
 ) -> Result<super::entries::Links, ApiError> {
-    if envelope.get("body").is_some_and(flow_like_types::bot_user_context::is_ephemeral_body) {
-        return Err(ApiError::bad_request("Live user context requests and snapshots cannot be imported"));
+    if envelope
+        .get("body")
+        .is_some_and(flow_like_types::bot_user_context::is_ephemeral_body)
+    {
+        return Err(ApiError::bad_request(
+            "Live user context requests and snapshots cannot be imported",
+        ));
     }
     match check_envelope(envelope) {
         Ok(EnvelopeKind::Plain) => {}

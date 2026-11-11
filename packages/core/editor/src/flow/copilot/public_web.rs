@@ -25,6 +25,14 @@ use url::{Host, Url};
 use super::tool_spec::{ARCHIVE_LOOKUP_TOOL, INTERNET_SEARCH_TOOL, OPEN_URL_TOOL};
 
 const MAX_URL_BYTES: usize = 4_096;
+/// Content images one page conversion keeps; a page past this is a gallery or a catalogue grid.
+const MAX_PAGE_IMAGES: usize = 40;
+const MAX_IMAGE_URL_CHARS: usize = 600;
+const MAX_IMAGE_LABEL_CHARS: usize = 160;
+/// An image that declares a side below this many pixels is an icon, a spacer or a tracking pixel.
+const MIN_IMAGE_SIDE: u32 = 50;
+/// Image links a session remembers; a turn that saw more keeps the first.
+const MAX_SESSION_IMAGE_URLS: usize = 4_096;
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 const DEFAULT_MAX_CHARS: usize = 20_000;
 const MAX_OUTPUT_CHARS: usize = 100_000;
@@ -95,6 +103,9 @@ pub struct WebResearchSession {
     open_url_budget: Mutex<OpenUrlSessionBudget>,
     /// Converted pages of this turn, so paging and `find` on an opened page fetch nothing.
     pages: Mutex<PageCache>,
+    /// The images the opened pages showed, as [`comparable_url`] gives them. A synthesis may
+    /// carry these links although they are no opened page. Like the pages, they are not saved.
+    page_images: Mutex<HashSet<String>>,
 }
 
 /// The turn's opened pages by requested and final URL, oldest dropped first.
@@ -205,6 +216,7 @@ impl WebResearchSession {
             archive_calls: AtomicUsize::new(saved.archive_calls),
             open_url_budget: Mutex::new(saved.open_url_budget),
             pages: Mutex::default(),
+            page_images: Mutex::default(),
         })
     }
 
@@ -386,12 +398,42 @@ impl WebResearchSession {
     }
 
     fn cache_page(&self, page: LoadedPage) -> Arc<LoadedPage> {
+        self.remember_page_images(&page);
         let page = Arc::new(page);
         self.pages
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(page.clone());
         page
+    }
+
+    fn remember_page_images(&self, page: &LoadedPage) {
+        let mut images = self
+            .page_images
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let texts = [Some(&page.text), page.full_text.as_ref()];
+        for url in texts
+            .into_iter()
+            .flatten()
+            .flat_map(|text| markdown_image_urls(text))
+            .filter_map(comparable_url)
+        {
+            if images.len() >= MAX_SESSION_IMAGE_URLS {
+                return;
+            }
+            images.insert(url);
+        }
+    }
+
+    /// The image links the pages opened in this session showed, in [`comparable_url`] form.
+    pub fn page_image_urls(&self) -> Vec<String> {
+        self.page_images
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .cloned()
+            .collect()
     }
 
     fn mark_opened_url(&self, raw: &str) {
@@ -2444,35 +2486,151 @@ fn classify_content_type(value: &str) -> Option<TextKind> {
     }
 }
 
-/// Markdown without what a reader cannot use: active regions, page chrome, media, and link
-/// targets. A link keeps its text only, since a URL inside page content is never authorized to be
-/// opened and on news pages those targets outweigh the article.
-fn markdown_converter() -> HtmlToMarkdown {
+/// A content image of a page: what it shows, and its absolute link.
+struct PageImage {
+    label: String,
+    url: String,
+}
+
+fn usable_image_source(value: String) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty() && !value.starts_with("data:")).then(|| value.to_string())
+}
+
+/// Where an `img` element loads its picture from: its own source, else the one a lazy loader
+/// swaps in, else the widest candidate of its source set.
+fn image_source(attribute: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    ["src", "data-src", "data-lazy-src", "data-original"]
+        .iter()
+        .find_map(|name| attribute(name).and_then(usable_image_source))
+        .or_else(|| {
+            ["srcset", "data-srcset"].iter().find_map(|name| {
+                let candidates = attribute(name)?;
+                let widest = candidates.split(", ").last()?.split_whitespace().next()?;
+                usable_image_source(widest.to_string())
+            })
+        })
+}
+
+fn image_label(text: &str) -> String {
+    let text = remove_control_characters(collapse_whitespace(text)).replace(['[', ']'], "");
+    text.chars().take(MAX_IMAGE_LABEL_CHARS).collect()
+}
+
+/// The content image an `img` element shows, or `None` for an icon, a spacer, a tracking pixel,
+/// inline data or a vector graphic.
+fn page_image(attribute: &dyn Fn(&str) -> Option<String>, base: Option<&Url>) -> Option<PageImage> {
+    let declared_side = |name: &&str| {
+        attribute(name)?
+            .trim()
+            .trim_end_matches("px")
+            .parse::<u32>()
+            .ok()
+    };
+    if ["width", "height"]
+        .iter()
+        .filter_map(declared_side)
+        .any(|side| side < MIN_IMAGE_SIDE)
+    {
+        return None;
+    }
+    let source = image_source(attribute)?;
+    let url = match base {
+        Some(base) => base.join(&source).ok()?,
+        None => Url::parse(&source).ok()?,
+    };
+    let path = url.path().to_ascii_lowercase();
+    if !matches!(url.scheme(), "http" | "https") || path.ends_with(".svg") || path.ends_with(".ico")
+    {
+        return None;
+    }
+    let url = url.as_str().replace('(', "%28").replace(')', "%29");
+    if url.len() > MAX_IMAGE_URL_CHARS {
+        return None;
+    }
+    let label = ["alt", "title"]
+        .iter()
+        .filter_map(|name| attribute(name))
+        .map(|text| image_label(&text))
+        .find(|label| !label.is_empty())
+        .unwrap_or_else(|| "image".to_string());
+    Some(PageImage { label, url })
+}
+
+/// Markdown without what a reader cannot use: active regions, page chrome, video and audio, and
+/// link targets. A link keeps its text only, since a URL inside page content is never authorized
+/// to be opened and on news pages those targets outweigh the article. A content image stays as
+/// `![what it shows](link)`, its link resolved against `base`, so a reader can hand it on and a
+/// model can look at it; each image once, and no more than [`MAX_PAGE_IMAGES`] of a page.
+fn markdown_converter(base: Option<Url>) -> HtmlToMarkdown {
+    let kept: Mutex<HashSet<String>> = Mutex::default();
     HtmlToMarkdownBuilder::new()
         .skip_tags(vec![
             "head", "script", "style", "noscript", "iframe", "svg", "canvas", "template", "form",
-            "button", "nav", "footer", "img", "picture", "source", "video", "audio", "object",
-            "embed",
+            "button", "nav", "footer", "source", "video", "audio", "object", "embed",
         ])
         .add_handler(vec!["a"], |handlers: &dyn Handlers, element: Element| {
             Some(handlers.walk_children(element.node))
         })
+        .add_handler(vec!["img"], move |_: &dyn Handlers, element: Element| {
+            let attribute = |name: &str| {
+                element
+                    .attrs
+                    .iter()
+                    .find(|attribute| &*attribute.name.local == name)
+                    .map(|attribute| attribute.value.to_string())
+            };
+            let image = page_image(&attribute, base.as_ref())?;
+            let mut kept = kept.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            (kept.len() < MAX_PAGE_IMAGES && kept.insert(image.url.clone()))
+                .then(|| format!(" ![{}]({}) ", image.label, image.url).into())
+        })
         .build()
 }
 
-fn html_to_markdown(html: &str) -> Result<String, FetchFailure> {
-    markdown_converter().convert(html).map_err(|error| {
-        FetchFailure::new(
-            "conversion_failed",
-            format!("Could not convert the HTML page to safe text: {error}"),
-        )
-    })
+fn html_to_markdown(html: &str, base: Option<&Url>) -> Result<String, FetchFailure> {
+    markdown_converter(base.cloned())
+        .convert(html)
+        .map_err(|error| {
+            FetchFailure::new(
+                "conversion_failed",
+                format!("Could not convert the HTML page to safe text: {error}"),
+            )
+        })
+}
+
+/// The targets of the markdown images in `text`.
+fn markdown_image_urls(text: &str) -> Vec<&str> {
+    let mut urls = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("![") {
+        rest = &rest[start + 2..];
+        let Some(close) = rest.find(']') else {
+            break;
+        };
+        let Some(target) = rest[close + 1..].strip_prefix('(') else {
+            continue;
+        };
+        let end = target
+            .find(|character: char| character == ')' || character.is_whitespace())
+            .unwrap_or(target.len());
+        if end > 0 {
+            urls.push(&target[..end]);
+        }
+    }
+    urls
+}
+
+/// The form a link is compared in when a synthesis is checked against what a session saw.
+pub(super) fn comparable_url(raw: &str) -> Option<String> {
+    let url = Url::parse(raw).ok()?;
+    Some(parse_public_url(raw).map_or_else(|_| url.to_string(), |public| public.to_string()))
 }
 
 /// The article of an HTML page with the whole page behind it, or the whole page alone when it
 /// has no article worth the name (a listing, a table of figures, an app shell).
 fn convert_html(html: &str, url: &Url) -> Result<Converted, FetchFailure> {
-    let full = html_to_markdown(html)?;
+    let full = html_to_markdown(html, Some(url))?;
     // The extractor walks an arbitrary document; a page that trips it is read whole instead.
     let article = std::panic::catch_unwind(|| extract_article(html, url))
         .ok()
@@ -2502,7 +2660,7 @@ fn extract_article(html: &str, url: &Url) -> Option<Converted> {
         return None;
     }
     let article = readability.parse().ok()?;
-    let body = html_to_markdown(&article.content).ok()?;
+    let body = html_to_markdown(&article.content, Some(url)).ok()?;
     if non_whitespace_chars(&body) < MIN_ARTICLE_NON_WHITESPACE_CHARS {
         return None;
     }
@@ -2598,7 +2756,7 @@ fn html_title(text: &str) -> Option<String> {
     let open = lower.find("<title")?;
     let open_end = open + lower[open..].find('>')? + 1;
     let close = open_end + lower[open_end..].find("</title>")?;
-    html_to_markdown(&text[open_end..close]).ok()
+    html_to_markdown(&text[open_end..close], None).ok()
 }
 
 /// The `title:` of a YAML front matter block, else the first level-one heading.
@@ -3417,7 +3575,7 @@ mod tests {
         let html = r#"<html><head><title>Official &amp; Current</title><script>steal()</script></head>
             <body><nav>Noise</nav><h1>Result</h1><p>Supported <a href="https://example.com/source">fact</a>.</p>
             <form>Ignore me</form><footer>More noise</footer></body></html>"#;
-        let markdown = html_to_markdown(html).unwrap();
+        let markdown = html_to_markdown(html, None).unwrap();
         assert!(markdown.contains("# Result"));
         assert!(markdown.contains("Supported fact."));
         assert!(!markdown.contains("example.com/source"));
@@ -3845,6 +4003,89 @@ mod tests {
 
     fn whole_page() -> PageRequest {
         PageRequest::parse(&json!({})).unwrap()
+    }
+
+    #[test]
+    fn content_images_survive_conversion_and_page_chrome_images_do_not() {
+        let base = Url::parse("https://news.example/cars/story").unwrap();
+        let html = r#"<html><body><article>
+            <p>The new model <img src="/media/ix3 (front).jpg?w=1200" alt="  The iX3 [front]
+                view "> was shown.</p>
+            <figure><picture><source srcset="/media/plant.webp">
+                <img data-src="https://cdn.example/plant.jpg" src="data:image/gif;base64,R0lGOD"
+                    title="Plant in Debrecen"></picture></figure>
+            <img src="/pixel.gif" width="1" height="1">
+            <img src="/icons/logo.svg" alt="Logo">
+            <img src="/media/ix3 (front).jpg?w=1200" alt="the same picture again">
+            <img srcset="/media/small.jpg 320w, /media/large.jpg 1280w">
+            <img src="mailto:press@news.example" alt="Mail">
+            <img alt="No source">
+            </article></body></html>"#;
+        let markdown = html_to_markdown(html, Some(&base)).unwrap();
+        let front = "https://news.example/media/ix3%20%28front%29.jpg?w=1200";
+        assert!(
+            markdown.contains(&format!("![The iX3 front view]({front})")),
+            "{markdown}"
+        );
+        assert!(markdown.contains("![Plant in Debrecen](https://cdn.example/plant.jpg)"));
+        assert!(markdown.contains("![image](https://news.example/media/large.jpg)"));
+        assert_eq!(
+            markdown_image_urls(&markdown),
+            [
+                front,
+                "https://cdn.example/plant.jpg",
+                "https://news.example/media/large.jpg"
+            ],
+            "{markdown}"
+        );
+        assert!(markdown.contains("The new model") && markdown.contains("was shown."));
+
+        let relative = html_to_markdown(r#"<p><img src="/a.jpg" alt="A"></p>"#, None).unwrap();
+        assert!(markdown_image_urls(&relative).is_empty(), "{relative}");
+    }
+
+    #[test]
+    fn a_page_keeps_a_bounded_number_of_images() {
+        let base = Url::parse("https://shop.example/catalogue").unwrap();
+        let grid: String = (0..MAX_PAGE_IMAGES + 25)
+            .map(|index| format!(r#"<li><img src="/p/{index}.jpg" alt="Product {index}"></li>"#))
+            .collect();
+        let markdown = html_to_markdown(&format!("<ul>{grid}</ul>"), Some(&base)).unwrap();
+        assert_eq!(markdown_image_urls(&markdown).len(), MAX_PAGE_IMAGES);
+        let long = format!(
+            r#"<img src="/p.jpg?token={}" alt="Too long a link">"#,
+            "x".repeat(MAX_IMAGE_URL_CHARS)
+        );
+        let markdown = html_to_markdown(&long, Some(&base)).unwrap();
+        assert!(markdown_image_urls(&markdown).is_empty());
+    }
+
+    #[test]
+    fn markdown_image_targets_are_found_without_their_titles_or_outer_links() {
+        let text = "Intro ![one](https://a.example/1.png) and [![two](https://a.example/2.png \"Two\")](https://a.example/page) then [a link](https://a.example/other) and ![broken] (x).";
+        assert_eq!(
+            markdown_image_urls(text),
+            ["https://a.example/1.png", "https://a.example/2.png"]
+        );
+    }
+
+    #[test]
+    fn a_session_remembers_the_images_its_opened_pages_showed() {
+        let session = WebResearchSession::default();
+        let signed = "https://cdn.example/hero.jpg?sig=abc";
+        session.cache_page(test_page(
+            "https://news.example/story",
+            &format!("# Story\n\n![Hero]({signed})\n\nText."),
+            Some("Whole page ![Chart](https://cdn.example/chart.png) and more."),
+        ));
+        let images = session.page_image_urls();
+        assert_eq!(images.len(), 2);
+        for url in [signed, "https://cdn.example/chart.png"] {
+            assert!(images.contains(&comparable_url(url).unwrap()), "{url}");
+        }
+        assert!(session.opened_urls().is_empty());
+        let restored = WebResearchSession::restore(session.snapshot()).unwrap();
+        assert!(restored.page_image_urls().is_empty());
     }
 
     #[test]

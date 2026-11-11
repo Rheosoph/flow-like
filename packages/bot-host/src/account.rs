@@ -922,6 +922,11 @@ impl Inner {
             live_call: false,
             tool_gate: None,
             ephemeral_user_context,
+            seed_taint: flow_like::flow::copilot::TurnReads {
+                personal_context: ephemeral_user_context,
+                ..crate::taint::reads_of(&entries, bot_id, &Default::default())
+            }
+            .seed(),
             shared_context: transcript::shared_context(&entries, &lead.trigger_message_id, bot_id),
             suppress_owner_notifications: false,
             history: transcript.history,
@@ -1140,6 +1145,9 @@ impl Inner {
                 }
             };
             drop(decide);
+            let decision = decision.map(|result| {
+                result.map(|choice| choice.answering_addressed(requester.addressed, call_utterance))
+            });
             trace.decided(latency::decision_label(&decision));
             let answers = matches!(&decision, Ok(Ok(Decision::AnswerNow)) | Err(_) | Ok(Err(_)))
                 && !matches!(&decision, Ok(Err(RunError::SessionChanged)));

@@ -129,6 +129,14 @@ pub(super) async fn load_chat_bot<C: ConnectionTrait>(
     } else {
         Vec::new()
     };
+    let owner_mail_addresses = if settings.has(BotCapability::Email) {
+        crate::mail_ingress::owner_addresses::account_address(db, &row)
+            .await?
+            .into_iter()
+            .collect()
+    } else {
+        Vec::new()
+    };
     let general = system == Some(BotSystemKind::General);
     let text = |value: Option<String>| {
         value
@@ -152,6 +160,7 @@ pub(super) async fn load_chat_bot<C: ConnectionTrait>(
             instructions: text(settings.instructions),
             capabilities: settings.capabilities,
             classification: settings.classification,
+            owner_mail_addresses,
             selected_app_ids,
             profile_app_ids,
             workspace_app_id: None,

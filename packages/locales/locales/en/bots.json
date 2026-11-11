@@ -1460,6 +1460,7 @@
 			"waiting": "Waiting for the host to make the key."
 		},
 		"grants": {
+			"expires": "Lapses on {{date}} if unused",
 			"none": "Nothing yet. {{name}} asks you before it acts, and you can tell it to stop asking.",
 			"revoke": "Stop allowing: {{action}}",
 			"title": "Allowed actions"
@@ -1603,7 +1604,7 @@
 			"responseHint": "Without wait, the request returns 202 with the turn state. Add ?wait=30 to the URL, or &wait=30 if it already has a query, to wait up to 30 seconds for a reply.",
 			"rotate": "Rotate the secret of {{name}}",
 			"secret": "Secret",
-			"signingHint": "Use the signing key as text to sign the exact request body with HMAC-SHA256. Send the lowercase hex digest in X-Flow-Like-Signature: sha256=<hex>. No secret header or URL parameter is needed when signing.",
+			"signingHint": "Use the signing key (the same value as the secret) as text. For each call send X-Flow-Like-Timestamp (Unix seconds, within 5 minutes of now), X-Flow-Like-Delivery (a unique id per delivery) and X-Flow-Like-Signature: sha256=<hex>, the lowercase hex HMAC-SHA256 of \"<timestamp>.<delivery id>.<raw body>\". Each delivery id is accepted once. No secret header or URL parameter is needed when signing.",
 			"signingKey": "Signing key (HMAC-SHA256)",
 			"title": "Webhooks",
 			"url": "URL",

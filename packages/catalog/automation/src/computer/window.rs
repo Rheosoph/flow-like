@@ -20,6 +20,12 @@ pub struct WindowInfo {
     pub height: u32,
     pub is_focused: bool,
     pub is_minimized: bool,
+    #[serde(default = "window_onscreen_default")]
+    pub is_onscreen: bool,
+}
+
+fn window_onscreen_default() -> bool {
+    true
 }
 
 #[crate::register_node]
@@ -320,6 +326,7 @@ impl NodeLogic for FindWindowByTitleNode {
                     height: w.height().unwrap_or(0),
                     is_focused: w.is_focused().unwrap_or(false),
                     is_minimized: w.is_minimized().unwrap_or(false),
+                    is_onscreen: super::native::window_info(&w).is_onscreen,
                 };
 
                 context.set_pin_value("window", json!(info)).await?;
@@ -998,6 +1005,7 @@ mod tests {
             height: 600,
             is_focused: focused,
             is_minimized: false,
+            is_onscreen: true,
         }
     }
 

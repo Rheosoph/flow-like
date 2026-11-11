@@ -76,12 +76,22 @@ pub trait GrantStore: Send + Sync {
     /// Removes a pair; true when it existed.
     async fn delete(&self, tool: &str, scope: &str) -> flow_like_types::Result<bool>;
 
+    /// Records that the bot just relied on these standing grants, which moves their expiry
+    /// forward. It never creates a grant and never revives one that lapsed or was revoked.
+    async fn touch(&self, _keys: &[GrantKey]) -> flow_like_types::Result<()> {
+        Ok(())
+    }
+
     async fn has(&self, tool: &str, scope: &str) -> flow_like_types::Result<bool> {
-        Ok(self
+        let held = self
             .list()
             .await?
             .iter()
-            .any(|key| key.tool == tool && key.scope == scope))
+            .any(|key| key.tool == tool && key.scope == scope);
+        if held {
+            let _ = self.touch(&[GrantKey::new(tool, scope)]).await;
+        }
+        Ok(held)
     }
 }
 
@@ -237,7 +247,19 @@ pub async fn check_call(
             keys.iter()
                 .any(|key| key.tool == tool && key.scope == scope)
         };
-        if held(SCOPE_ALL) || scopes.iter().all(|scope| held(scope)) {
+        let used: Option<Vec<&str>> = if held(SCOPE_ALL) {
+            Some(vec![SCOPE_ALL])
+        } else if scopes.iter().all(|scope| held(scope)) {
+            Some(scopes.iter().map(String::as_str).collect())
+        } else {
+            None
+        };
+        if let Some(used) = used {
+            let used: Vec<GrantKey> = used
+                .into_iter()
+                .map(|scope| GrantKey::new(tool, scope))
+                .collect();
+            let _ = store.touch(&used).await;
             return Ok(GrantCheck::Granted);
         }
     }

@@ -7,7 +7,7 @@ import {
 } from "../../components/bots-tab/fold-entries";
 import { triggerModelText } from "../../components/bots-tab/note-facts";
 import type { IMessage } from "../../components/interfaces/chat-default/chat-db";
-import { directAttachmentOf } from "../../lib/inbox-attachment-part";
+import { storedAttachmentOf } from "../../lib/inbox-attachment-part";
 import { compareInboxCursors } from "../../lib/inbox-cursor";
 import { IRole } from "../../lib/schema/llm/history";
 import type {
@@ -236,13 +236,10 @@ function messageOf(
 			role: item.senderId === botId ? IRole.Assistant : IRole.User,
 			content: approval || item.userContext || error ? "" : item.content.text,
 		},
-		files:
-			item.senderId === botId
-				? (item.attachments ?? []).flatMap((part) => {
-						const attachment = directAttachmentOf(part);
-						return attachment ? [attachment] : [];
-					})
-				: [],
+		files: (item.attachments ?? []).flatMap((part) => {
+			const attachment = storedAttachmentOf(part);
+			return attachment ? [attachment] : [];
+		}),
 		tools: [],
 		actions: [],
 		timestamp: item.time,

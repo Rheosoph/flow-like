@@ -3,9 +3,13 @@
 //! core bot run. Models are reached through the hub with the turn's executor token.
 
 use super::{
-    backends::{BotRoutes, HubMail, HubNotifier, HubPeople, HubScheduler, HubUserContext},
+    backends::{
+        BotRoutes, HubConnectors, HubMail, HubNotifier, HubPeople, HubScheduler, HubSkills,
+        HubUserContext,
+    },
     env::{
-        ConversationFiles, DeviceToolEnv, HubSecrets, MachineBackends, Machines, PresignedAccess,
+        ConversationFiles, DeviceToolEnv, HubImages, HubSecrets, MachineBackends, Machines,
+        PresignedAccess,
     },
     hub::{DeviceRunSpec, TurnCreds},
 };
@@ -47,10 +51,9 @@ use tokio::sync::Notify;
 pub const CODE_RUN_FAILED: &str = "BOT_TURN_FAILED";
 pub const CODE_SETUP: &str = "BOT_TURN_SETUP";
 
-const TOOLS_NEEDING_UNLINKED_SERVICES: [&str; 13] = [
+const TOOLS_NEEDING_UNLINKED_SERVICES: [&str; 7] = [
     // Device runtime tokens have no endpoint for an approved settings change or for managing
-    // the owner's bots, for skills and connectors (those routes take a signed-in person), and
-    // the claim carries no image model for image_generate.
+    // the owner's bots.
     "bot_configuration",
     "bot_models",
     "bot_update_configuration",
@@ -58,11 +61,9 @@ const TOOLS_NEEDING_UNLINKED_SERVICES: [&str; 13] = [
     "get_bot",
     "create_bot",
     "update_bot",
-    "connector_tools",
-    "connector_call",
-    "connector_request",
-    "image_generate",
 ];
+
+const IMAGE_GENERATE: &str = "image_generate";
 
 const IDLE_SESSION: Duration = Duration::from_secs(60 * 60);
 
@@ -306,6 +307,7 @@ fn context_of(grant: &DeviceTurnGrant, job: &TurnJob, tools: HostTools) -> BotRu
         spoken_drafts: false,
         tool_gate: job.tool_gate.clone(),
         ephemeral_user_context: job.ephemeral_user_context,
+        seed_taint: job.seed_taint,
         suppress_owner_notifications: job.suppress_owner_notifications,
         permissions: Default::default(),
         connectors: spec.connectors.clone(),
@@ -366,6 +368,7 @@ impl DeviceRunner {
         access: Arc<PresignedAccess>,
         completion: &Bit,
         embedding: &Option<Bit>,
+        profile: &Arc<Profile>,
         machine: MachineBackends,
     ) -> Result<EnvFactory, RunError> {
         let workspace = grant
@@ -402,10 +405,28 @@ impl DeviceRunner {
             bot_id: grant.bot.bot_id.clone(),
             conversation_id: Some(grant.conversation.id.clone()),
         };
+        let images = grant
+            .models
+            .image
+            .as_ref()
+            .map(|bit| bit_of(bit, "image"))
+            .transpose()?
+            .map(|bit| {
+                Arc::new(HubImages {
+                    state: self.state.clone(),
+                    profile: profile.clone(),
+                    bit,
+                    creds: creds.clone(),
+                    usage: models.usage.clone(),
+                    budget: Arc::default(),
+                })
+            });
+        let connectors = Arc::new(HubConnectors::new(routes.clone()));
         let shell_dir = shell_dir(&self.shell_root, &grant.bot.bot_id);
         let files_hub = routes.hub.clone();
+        let files_conversation = grant.conversation.id.clone();
         Ok(Arc::new(move |expensive_documents| {
-            let env = HostEnv::new(&workspace, &scope, access.clone(), models.clone())
+            let mut env = HostEnv::new(&workspace, &scope, access.clone(), models.clone())
                 .with_expensive_documents(expensive_documents)
                 .with_secrets(secrets.clone())
                 .with_sessions(sessions.clone())
@@ -414,11 +435,18 @@ impl DeviceRunner {
                 .with_people(Arc::new(HubPeople(routes.clone())))
                 .with_skills(Arc::new(HubSkills(routes.clone())))
                 .with_user_context(Arc::new(HubUserContext(routes.clone())))
-                .with_mail(Arc::new(HubMail(routes.clone())));
+                .with_mail(Arc::new(HubMail(routes.clone())))
+                .with_connectors(connectors.clone());
+            if let Some(images) = &images {
+                env = env.with_images(images.clone());
+            }
             Arc::new(
                 DeviceToolEnv::new(env, machine.clone())
                     .with_shell(Arc::new(LocalShell::new(shell_dir.clone())))
-                    .with_conversation_files(ConversationFiles::new(files_hub.clone())),
+                    .with_conversation_files(ConversationFiles::new(
+                        files_hub.clone(),
+                        &files_conversation,
+                    )),
             )
         }))
     }
@@ -532,6 +560,9 @@ impl TurnRunner for DeviceRunner {
         let profile = Arc::new(profile);
         let machine = self.machine_for(grant);
         let mut tools = host_tools(&machine);
+        if grant.models.image.is_none() {
+            tools = tools.without(IMAGE_GENERATE);
+        }
         if let Some(trail) = &job.trail {
             tools = tools.with_trail(trail.clone());
         }
@@ -551,6 +582,7 @@ impl TurnRunner for DeviceRunner {
             access.clone(),
             &completion,
             &embedding,
+            &profile,
             machine,
         )?;
         let mutating = Arc::new(AtomicBool::new(false));

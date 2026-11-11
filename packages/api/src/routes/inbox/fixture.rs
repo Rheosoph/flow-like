@@ -26,7 +26,7 @@ pub(crate) const BOT_TURN_TABLE: &str = r#"CREATE TABLE public."BotTurn" (
         "hostKind" TEXT NOT NULL, "status" TEXT NOT NULL, "attempts" INTEGER NOT NULL,
         "hostId" TEXT, "leaseUntil" TEXT, "operationId" TEXT, "replyMessageId" TEXT,
         "errorCode" TEXT, "hops" INTEGER NOT NULL, "requesterId" TEXT,
-        "audience" TEXT NOT NULL DEFAULT 'OWNER', "statusText" TEXT, "createdAt" TEXT NOT NULL,
+        "audience" TEXT NOT NULL DEFAULT 'OWNER', "statusText" TEXT, "unprompted" BOOLEAN, "createdAt" TEXT NOT NULL,
         "updatedAt" TEXT NOT NULL, UNIQUE ("botId", "triggerMessageId"))"#;
 
 const TABLES: [&str; 8] = [
@@ -230,6 +230,7 @@ pub(crate) async fn running_turn(
         requester_id: Set(None),
         audience: Set("OWNER".into()),
         status_text: Set(None),
+        unprompted: Set(None),
         created_at: Set(at(0)),
         updated_at: Set(at(0)),
     }

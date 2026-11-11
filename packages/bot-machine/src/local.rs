@@ -2,7 +2,7 @@
 //! backends.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -13,12 +13,13 @@ use flow_like_bot_tools::browser::{
     SnapshotView, no_owner_browser,
 };
 use flow_like_bot_tools::computer::{
-    ComputerAction, ComputerBackend, PointerButton, Screen, ScrollDirection, WindowBounds,
-    WindowOp, WindowSummary,
+    ComputerAction, ComputerBackend, DisplaySummary, PointerButton, Screen, ScrollDirection,
+    WindowBounds, WindowOp, WindowSummary,
 };
+use flow_like_bot_tools::error::{ToolError, code};
 use flow_like_catalog_automation::bot_driver::{
     BotBrowser, BotBrowserOptions, BotComputer, BotInput, BotPointerButton, BotScroll,
-    BotScrollDirection, BotStep, BotWindowOp,
+    BotScrollDirection, BotStep, BotWindowOp, MissingPermission,
 };
 use flow_like_catalog_automation::computer::window::WindowInfo;
 use flow_like_types::interaction_observation::InteractionObservation;
@@ -468,10 +469,20 @@ impl BrowserBackend for LocalBrowser {
     }
 }
 
-#[derive(Default)]
 pub struct LocalComputer {
     inner: BotComputer,
     last_used: Mutex<Option<Instant>>,
+    display: AtomicI64,
+}
+
+impl Default for LocalComputer {
+    fn default() -> Self {
+        Self {
+            inner: BotComputer::new(),
+            last_used: Mutex::new(None),
+            display: AtomicI64::new(-1),
+        }
+    }
 }
 
 impl LocalComputer {
@@ -511,6 +522,18 @@ fn summary(window: WindowInfo) -> WindowSummary {
         height: window.height,
         focused: window.is_focused,
         minimized: window.is_minimized,
+        onscreen: window.is_onscreen,
+    }
+}
+
+fn typed(error: flow_like_types::Error) -> flow_like_types::Error {
+    match error.downcast_ref::<MissingPermission>() {
+        Some(missing) => flow_like_types::Error::new(
+            ToolError::new(code::PERMISSION_MISSING, missing.message.clone()).with_details(
+                serde_json::json!({ "permission": missing.permission, "restart_required": missing.restart }),
+            ),
+        ),
+        None => error,
     }
 }
 
@@ -524,7 +547,50 @@ fn screen(shot: flow_like_catalog_automation::bot_driver::BotScreen) -> Screen {
 impl ComputerBackend for LocalComputer {
     async fn screenshot(&self) -> Result<Screen> {
         self.touch();
-        Ok(screen(self.inner.screenshot().await?))
+        let display = self.display.load(Ordering::Acquire);
+        Ok(screen(
+            self.inner
+                .screenshot_display(display)
+                .await
+                .map_err(typed)?,
+        ))
+    }
+
+    async fn screenshot_display(&self, display: Option<u32>) -> Result<Screen> {
+        self.touch();
+        let index = display.map_or(-1, i64::from);
+        let shot = self.inner.screenshot_display(index).await.map_err(typed)?;
+        self.display.store(index, Ordering::Release);
+        Ok(screen(shot))
+    }
+
+    async fn displays(&self) -> Result<Vec<DisplaySummary>> {
+        Ok(self
+            .inner
+            .displays()
+            .await?
+            .into_iter()
+            .map(|display| DisplaySummary {
+                index: display.index,
+                x: display.x,
+                y: display.y,
+                width: display.width,
+                height: display.height,
+                primary: display.primary,
+            })
+            .collect())
+    }
+
+    async fn windows_listed(&self, include_offscreen: bool) -> Result<Vec<WindowSummary>> {
+        self.touch();
+        Ok(self
+            .inner
+            .listed_windows(include_offscreen)
+            .await
+            .map_err(typed)?
+            .into_iter()
+            .map(summary)
+            .collect())
     }
 
     async fn act(&self, action: &ComputerAction) -> Result<String> {
@@ -546,12 +612,20 @@ impl ComputerBackend for LocalComputer {
                 ticks,
             } => self.inner.scroll(*x, *y, direction(*toward), *ticks).await,
         };
-        done.map_err(|error| anyhow!("{error:#}"))
+        done.map_err(|error| match typed(error) {
+            error if error.downcast_ref::<ToolError>().is_some() => error,
+            error => anyhow!("{error:#}"),
+        })
     }
 
     async fn screenshot_window(&self, window: &str) -> Result<Screen> {
         self.touch();
-        Ok(screen(self.inner.screenshot_window(window).await?))
+        Ok(screen(
+            self.inner
+                .screenshot_window(window)
+                .await
+                .map_err(typed)?,
+        ))
     }
 
     async fn windows(&self) -> Result<Vec<WindowSummary>> {
@@ -577,6 +651,7 @@ impl ComputerBackend for LocalComputer {
                 bounds.height,
             )
             .await
+            .map_err(typed)
     }
 
     async fn launch(&self, program: &str, args: &[String]) -> Result<String> {

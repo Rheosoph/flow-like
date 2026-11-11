@@ -95,6 +95,8 @@ mod marks_tests;
 #[cfg(test)]
 mod presence_tests;
 #[cfg(test)]
+mod reply_files_tests;
+#[cfg(test)]
 mod requests_tests;
 #[cfg(test)]
 mod tests;

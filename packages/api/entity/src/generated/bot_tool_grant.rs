@@ -25,6 +25,8 @@ pub struct Model {
     pub granted_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "grantedBy", column_type = "Text")]
     pub granted_by: String,
+    #[sea_orm(column_name = "expiresAt", nullable)]
+    pub expires_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(
         belongs_to,
         from = "bot_id",

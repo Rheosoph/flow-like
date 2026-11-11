@@ -19,6 +19,7 @@ pub(crate) mod notes;
 pub(crate) mod recovery;
 mod reply_stream;
 mod room_updates;
+pub(crate) mod taint;
 pub(crate) mod talk;
 pub(crate) mod task_schedules;
 pub(crate) mod tasks;
@@ -168,6 +169,7 @@ pub async fn recover(state: &AppState) -> Result<Recovered, ApiError> {
         Ok(expired) if expired != approvals::Expired::default() => tracing::info!(
             turns = expired.turns,
             tokens = expired.tokens,
+            grants = expired.grants,
             "Bot turn approvals expired"
         ),
         Ok(_) => {}

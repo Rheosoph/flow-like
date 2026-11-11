@@ -672,6 +672,7 @@ pub async fn global_chat_native(
     let call_timing = Arc::new(CallTiming::default());
     let tool_gate = options.tool_gate.take();
     let ephemeral_user_context = options.ephemeral_user_context;
+    let seed_taint = options.seed_taint;
     let shared_context = options.shared_context.take();
     let suppress_owner_notifications = options.suppress_owner_notifications;
     let legacy_memory_allowed = allows_legacy_owner_memory(
@@ -816,6 +817,7 @@ pub async fn global_chat_native(
         std::sync::Arc::make_mut(&mut bot.context).live_call = live_call;
         std::sync::Arc::make_mut(&mut bot.context).tool_gate = tool_gate;
         std::sync::Arc::make_mut(&mut bot.context).ephemeral_user_context = ephemeral_user_context;
+        std::sync::Arc::make_mut(&mut bot.context).seed_taint = seed_taint;
         std::sync::Arc::make_mut(&mut bot.context).suppress_owner_notifications =
             suppress_owner_notifications;
     }

@@ -893,7 +893,10 @@ impl ServerPlatformBridge {
             && !self.read_only
             && (flow_like_bot_tools::configuration::is_settings_tool(tool_name)
                 || flow_like_bot_tools::user_context::is_user_context_tool(tool_name))
-            && self.bot_tools.as_ref().is_some_and(|host| host.handles(tool_name))
+            && self
+                .bot_tools
+                .as_ref()
+                .is_some_and(|host| host.handles(tool_name))
         {
             return find_bot_tool_spec(tool_name);
         }
@@ -1260,7 +1263,8 @@ impl PlatformToolBridge for ServerPlatformBridge {
                 .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string());
         }
 
-        if (self.bot || flow_like_bot_tools::configuration::is_settings_tool(tool_name)
+        if (self.bot
+            || flow_like_bot_tools::configuration::is_settings_tool(tool_name)
             || flow_like_bot_tools::user_context::is_user_context_tool(tool_name))
             && let Some(bot_tools) = self
                 .bot_tools
@@ -2067,7 +2071,9 @@ pub(crate) async fn run_global_chat(
                 token.clone(),
                 crate::routes::bots::tool_grants::rows_for_owner(&state, &bot.context.bot_id, &sub),
                 None,
-                interactive_turn.as_ref().map(|turn| turn.turn.conversation_id.as_str()),
+                interactive_turn
+                    .as_ref()
+                    .map(|turn| turn.turn.conversation_id.as_str()),
                 Some(flow_like_bot_tools::TurnSite::OwnerLive),
                 attached_files,
             )

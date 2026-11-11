@@ -25,7 +25,7 @@ pub use backend::{
 #[cfg(feature = "image")]
 pub use catalog::{CatalogImages, hosted_access};
 #[cfg(feature = "image-resolve")]
-pub use resolve::resolve_bit;
+pub use resolve::{is_hosted_image_bit, resolve_bit};
 
 pub const IMAGE_GENERATE: &str = "image_generate";
 

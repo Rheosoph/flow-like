@@ -10,7 +10,7 @@ use flow_like::flow::copilot::{ChatMessage, ChatRole, ReactionNote};
 use flow_like_types::{
     bot_message::{MessageBody, MessagePart},
     bot_tool_trail::{TrailEntry, TrailSection, trail_of},
-    bot_turn::room_message,
+    bot_turn::{clip_keeping_tail, room_message},
     bot_user_context::{ContextHistory, ContextLine},
     inbox::{
         ConversationKind, InboxEntryKind, PLAIN_ENCRYPTION, ReactionEvent, TranscriptBody,
@@ -44,6 +44,8 @@ pub(crate) struct Transcript {
     pub topic_at: Option<i64>,
     /// The tool calls of the bot's replies in the entries read, as the trail section shows them.
     pub trail: Option<TrailSection>,
+    /// What the entries read put into the turn's taint.
+    pub reads: flow_like::flow::copilot::TurnReads,
 }
 
 #[derive(Debug)]
@@ -67,6 +69,8 @@ struct Line {
     message_id: String,
     sender_id: String,
     text: String,
+    /// How many characters at the end of `text` are file and UI notes, which a cut keeps whole.
+    keep: usize,
     mentions: Vec<String>,
     reply_to: Option<String>,
     from_trigger: bool,
@@ -100,7 +104,13 @@ pub(super) fn plain_body(envelope: &serde_json::Value) -> Option<&serde_json::Va
 
 /// The message's text with a line for each UI block and file it carries.
 pub(super) fn render(body: &MessageBody) -> String {
+    rendered(body).0
+}
+
+/// [`render`], and how many characters at its end the UI and file lines take.
+fn rendered(body: &MessageBody) -> (String, usize) {
     let mut text = body.text.clone();
+    let written = text.chars().count();
     for part in &body.parts {
         let note = match part {
             MessagePart::Ui(ui) => ui
@@ -123,7 +133,8 @@ pub(super) fn render(body: &MessageBody) -> String {
         }
         text.push_str(&note.line());
     }
-    text
+    let keep = text.chars().count() - written;
+    (text, keep)
 }
 
 /// When the latest "New topic" marker among `window` was written.
@@ -228,6 +239,7 @@ fn lines_of(
                 message_id: entry.message_id.clone(),
                 sender_id: entry.sender_id.clone(),
                 text,
+                keep: 0,
                 mentions: Vec::new(),
                 reply_to: None,
                 from_trigger: false,
@@ -237,10 +249,12 @@ fn lines_of(
                 if let Ok(parsed) = serde_json::from_value::<MessageBody>(body.clone())
                     && parsed.approval_response.is_none()
                 {
+                    let (text, keep) = rendered(&parsed);
                     lines.push(Line {
                         message_id: entry.message_id.clone(),
                         sender_id: entry.sender_id.clone(),
-                        text: render(&parsed),
+                        text,
+                        keep,
                         mentions: parsed.mentions.clone(),
                         reply_to: parsed.reply_to.clone(),
                         from_trigger: false,
@@ -254,6 +268,7 @@ fn lines_of(
                         message_id: entry.message_id.clone(),
                         sender_id: entry.sender_id.clone(),
                         text: parsed.render(),
+                        keep: 0,
                         mentions: Vec::new(),
                         reply_to: None,
                         from_trigger: true,
@@ -269,11 +284,13 @@ fn lines_of(
                         })
                     {
                         cut.text = interrupted.heard_part(&cut.text);
+                        cut.keep = 0;
                     }
                     lines.push(Line {
                         message_id: entry.message_id.clone(),
                         sender_id: entry.sender_id.clone(),
                         text: parsed.render(),
+                        keep: 0,
                         mentions: parsed.mentions,
                         reply_to: None,
                         from_trigger: false,
@@ -291,7 +308,7 @@ fn lines_of(
                             && !line.withheld
                     })
                 {
-                    line.text = render(&parsed);
+                    (line.text, line.keep) = rendered(&parsed);
                 }
             }
             _ => {}
@@ -420,6 +437,7 @@ pub(crate) async fn transcript<C: ConnectionTrait>(
             message_id: trigger.message_id.clone(),
             sender_id: trigger.sender_id.clone(),
             text: prompt.clone(),
+            keep: 0,
             mentions: vec![bot_id.to_owned()],
             reply_to: None,
             from_trigger: false,
@@ -454,7 +472,7 @@ pub(crate) async fn transcript<C: ConnectionTrait>(
             } else {
                 ChatRole::User
             },
-            content: clipped(&spoken(line), MAX_HISTORY_MESSAGE_CHARS),
+            content: clip_keeping_tail(&spoken(line), line.keep, MAX_HISTORY_MESSAGE_CHARS),
             images: None,
         })
         .collect();
@@ -462,13 +480,14 @@ pub(crate) async fn transcript<C: ConnectionTrait>(
         history.pop();
     }
     Ok(Transcript {
-        prompt: clipped(&spoken(&answered), MAX_PROMPT_CHARS),
+        prompt: clip_keeping_tail(&spoken(&answered), answered.keep, MAX_PROMPT_CHARS),
         history,
         addressed: context_prompt.is_some()
             || kind != ConversationKind::Group
             || addressed_to(&lines, bot_id),
         topic_at: topic_at_of(&window),
         trail: tool_trail(bot_id, &window),
+        reads: super::taint::reads_of(db, &window, bot_id).await?,
     })
 }
 
@@ -549,7 +568,7 @@ pub(crate) async fn recent_history<C: ConnectionTrait>(
                 } else {
                     ChatRole::User
                 },
-                content: clipped(&text, MAX_HISTORY_MESSAGE_CHARS),
+                content: clip_keeping_tail(&text, line.keep, MAX_HISTORY_MESSAGE_CHARS),
                 images: None,
             }
         })
@@ -670,17 +689,20 @@ pub(crate) async fn reaction_turn<C: ConnectionTrait>(
         } else {
             ChatRole::User
         },
-        content: clipped(&spoken(line), MAX_HISTORY_MESSAGE_CHARS),
+        content: clip_keeping_tail(&spoken(line), line.keep, MAX_HISTORY_MESSAGE_CHARS),
         images: None,
     };
     let (prompt, history, reactions) = match lines.split_last() {
         Some((last, earlier)) if fresh > 0 => {
             let prompt = if reaction_text.is_empty() {
-                clipped(&spoken(last), MAX_PROMPT_CHARS)
+                clip_keeping_tail(&spoken(last), last.keep, MAX_PROMPT_CHARS)
             } else {
+                let room = MAX_PROMPT_CHARS.saturating_sub(reaction_text.chars().count() + 2);
+                let said = clip_keeping_tail(&spoken(last), last.keep, room);
+                let said_chars = said.chars().count();
                 clipped(
-                    &format!("{}\n\n{reaction_text}", spoken(last)),
-                    MAX_PROMPT_CHARS,
+                    &format!("{said}\n\n{reaction_text}"),
+                    MAX_PROMPT_CHARS.max(said_chars),
                 )
             };
             let kept = if addressed { Vec::new() } else { reactions };
@@ -700,6 +722,7 @@ pub(crate) async fn reaction_turn<C: ConnectionTrait>(
             addressed,
             topic_at: topic_at_of(&window),
             trail: None,
+            reads: super::taint::reads_of(db, &window, bot_id).await?,
         },
         reactions,
     })
@@ -756,6 +779,7 @@ mod tests {
             message_id: id.into(),
             sender_id: sender.into(),
             text: String::new(),
+            keep: 0,
             mentions: mentions.iter().map(|m| m.to_string()).collect(),
             reply_to: reply_to.map(str::to_string),
             from_trigger: false,

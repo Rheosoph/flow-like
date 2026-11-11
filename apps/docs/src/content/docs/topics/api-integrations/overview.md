@@ -248,7 +248,7 @@ curl --fail-with-body "$WEBHOOK_URL" \
   --data-raw '{"type":"order.created","order_id":"order_123"}'
 ```
 
-The request returns `202` with the queued turn. The bot receives the payload
+The request returns `202` with the queued turn. A webhook takes at most 30 calls a minute, counted across all API servers. The bot receives the payload
 along with your webhook instruction, and its reply appears in your conversation
 with the bot. JSON bodies stay structured; text bodies are passed as text. A
 request body can contain up to 256 KiB.
@@ -278,10 +278,36 @@ header, or `&wait=30` when the URL already contains `secret`. A reply available
 within that window returns `200`; otherwise the request returns `202` and the
 latest turn state. Check its `status` for completion or failure.
 
-If your sender supports HMAC, use the optional signing key as a UTF-8 string to
-compute HMAC-SHA256 over the exact request body. Send the hexadecimal result as
-`X-Flow-Like-Signature: sha256=<hex>`. This is another authentication method;
-you only need one of the secret header, secret URL, bearer token, or signature.
+If your sender can sign requests, use the signing key (the same value as the
+secret) as a UTF-8 string. For each delivery pick a unique id and send:
+
+- `X-Flow-Like-Timestamp`: the current Unix time in seconds. The server accepts
+  it within five minutes of its own clock.
+- `X-Flow-Like-Delivery`: the delivery id, up to 128 letters, digits, `-`, `_`,
+  `.` or `:`. Each id is accepted once; a repeat returns `409`.
+- `X-Flow-Like-Signature: sha256=<hex>`: the lowercase hexadecimal
+  HMAC-SHA256 of the string `<timestamp>.<delivery id>.<raw body>`.
+
+```bash
+TS=$(date +%s)
+ID=$(uuidgen)
+BODY='{"type":"order.created","order_id":"order_123"}'
+SIG=$(printf '%s.%s.%s' "$TS" "$ID" "$BODY" \
+  | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -hex | sed 's/^.* //')
+
+curl --fail-with-body "$WEBHOOK_URL" \
+  -H "X-Flow-Like-Timestamp: $TS" \
+  -H "X-Flow-Like-Delivery: $ID" \
+  -H "X-Flow-Like-Signature: sha256=$SIG" \
+  -H 'Content-Type: application/json' \
+  --data-raw "$BODY"
+```
+
+Signing is another authentication method; you only need one of the secret
+header, secret URL, bearer token, or signed headers. Webhooks created before
+signatures covered a timestamp keep accepting the old form (HMAC of the body
+alone, keyed by the blake3 hex hash of the secret) until you rotate the
+secret.
 
 ## Files, email, and MCP
 

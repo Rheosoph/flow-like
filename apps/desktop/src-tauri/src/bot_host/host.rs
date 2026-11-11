@@ -448,6 +448,7 @@ impl Inner {
                     trigger.created_at - Age::seconds(1),
                     hold,
                     false,
+                    bot.model.decision.is_some(),
                 )
                 .filter(|waiting| waiting.message_id == trigger.message_id)
             };
@@ -497,6 +498,7 @@ impl Inner {
             not_before,
             Some(hold),
             mentioned_only || waiting_pending,
+            bot.model.decision.is_some(),
         );
         let resumed = decision_state
             .as_ref()
@@ -931,6 +933,17 @@ impl Inner {
             live.trail = trail.clone();
             live.reply_files = reply_files.clone();
         }
+        let mut sender_labels = HashMap::new();
+        for sender in flow_like_bot_host::taint::bot_senders(&oldest_first, bot_id) {
+            if let Ok(Some(found)) = self.store.bot(&sender).await {
+                sender_labels.insert(sender, found.classification);
+            }
+        }
+        let seed_taint = flow_like::flow::copilot::TurnReads {
+            personal_context: ephemeral_user_context,
+            ..flow_like_bot_host::taint::reads_of(&oldest_first, bot_id, &sender_labels)
+        }
+        .seed();
         let mut job = TurnJob {
             run_id: run_id.clone(),
             bot_id: bot_id.clone(),
@@ -941,6 +954,7 @@ impl Inner {
             live_call: false,
             tool_gate: None,
             ephemeral_user_context,
+            seed_taint,
             shared_context: transcript::shared_context(
                 &oldest_first,
                 &waiting.message_id,
@@ -1115,6 +1129,11 @@ impl Inner {
                     }
                 };
                 drop(decide);
+                let decision = decision.map(|result| {
+                    result.map(|choice| {
+                        choice.answering_addressed(transcript.addressed, call_utterance)
+                    })
+                });
                 trace.decided(latency::decision_label(&decision));
                 let answers = matches!(
                     &decision,

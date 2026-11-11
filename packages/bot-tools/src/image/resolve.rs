@@ -8,6 +8,15 @@ use super::ImageUnavailable;
 
 const DEFAULT_SCAN_LIMIT: usize = 12;
 
+/// Whether the Bit is a hosted image generation model: the API's proxy runs it, so a host
+/// holding only a run token can use it.
+pub fn is_hosted_image_bit(bit: &Bit) -> bool {
+    is_image_capable(bit)
+        && bit.parameters["provider"]["provider_name"]
+            .as_str()
+            .is_some_and(flow_like_model_provider::provider::is_hosted_provider_name)
+}
+
 fn is_image_capable(bit: &Bit) -> bool {
     matches!(bit.bit_type, BitTypes::ImageGeneration)
 }

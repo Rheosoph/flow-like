@@ -137,7 +137,11 @@ fn event_summary(event: &Event) -> Value {
         "headless" => summary["consumer_tool"] = json!(CALL_APP_EVENT),
         _ => summary["interface_error"] = json!("page_target_missing"),
     }
-    if let Some(route) = event.route.as_deref().filter(|route| !route.trim().is_empty()) {
+    if let Some(route) = event
+        .route
+        .as_deref()
+        .filter(|route| !route.trim().is_empty())
+    {
         summary["route"] = json!(route);
     }
     summary
@@ -218,7 +222,10 @@ struct RunFold {
 
 impl RunFold {
     fn push(&mut self, envelope: Value) {
-        let event_type = envelope["event_type"].as_str().unwrap_or_default().to_string();
+        let event_type = envelope["event_type"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
         let payload = &envelope["payload"];
         match event_type.as_str() {
             "run_initiated" if self.run_id.is_none() => {
@@ -226,7 +233,12 @@ impl RunFold {
             }
             "generic_result" if self.result.is_none() => self.result = Some(payload.clone()),
             "completed" | "execution_completed" => {
-                self.terminal = Some(payload["status"].as_str().unwrap_or("completed").to_string());
+                self.terminal = Some(
+                    payload["status"]
+                        .as_str()
+                        .unwrap_or("completed")
+                        .to_string(),
+                );
             }
             "error" => self.error = Some(payload.clone()),
             _ => {}
@@ -385,7 +397,9 @@ impl AppTools {
             .await
             .map_err(failed)?;
         if !permission.has_permission(RolePermissions::ListEvents) {
-            return Err(format!("This bot may not list the events of app '{app_id}'."));
+            return Err(format!(
+                "This bot may not list the events of app '{app_id}'."
+            ));
         }
         let can_read = permission.has_permission(RolePermissions::ReadEvents);
         Ok(get_events_for_app(&self.state.db, app_id)
@@ -409,7 +423,9 @@ impl AppTools {
         if !permission.has_permission(RolePermissions::ReadEvents)
             && !permission.has_permission(RolePermissions::ExecuteEvents)
         {
-            return Err(format!("This bot may not use the events of app '{app_id}'."));
+            return Err(format!(
+                "This bot may not use the events of app '{app_id}'."
+            ));
         }
         get_event_from_db_opt(&self.state.db, event_id, app_id)
             .await
@@ -432,7 +448,9 @@ impl AppTools {
 
     async fn list_apps(&self, args: &Value) -> ToolResult {
         let query = text(args, "query").map(str::to_lowercase);
-        let candidates: Vec<String> = super::scope::candidate_apps(&self.bot).into_iter().collect();
+        let candidates: Vec<String> = super::scope::candidate_apps(&self.bot)
+            .into_iter()
+            .collect();
         let metas = self.metas(&candidates).await?;
         let meta_of = |app_id: &str| {
             metas
@@ -446,7 +464,8 @@ impl AppTools {
                 (
                     app_id.clone(),
                     meta.map_or_else(|| app_id.clone(), |meta| meta.name.clone()),
-                    meta.and_then(|meta| meta.description.clone()).unwrap_or_default(),
+                    meta.and_then(|meta| meta.description.clone())
+                        .unwrap_or_default(),
                 )
             })
             .filter(|(app_id, name, description)| {
@@ -577,7 +596,9 @@ impl AppTools {
         let event_id = required(args, "event_id")?;
         let event = self.event(app_id, event_id).await?;
         if !event.active {
-            return Err(format!("Event '{event_id}' in app '{app_id}' is not active."));
+            return Err(format!(
+                "Event '{event_id}' in app '{app_id}' is not active."
+            ));
         }
         if event.event_type == "simple_chat" {
             return Err(format!(
@@ -793,7 +814,10 @@ mod tests {
         for index in 0..MAX_LOG_EVENTS + 5 {
             fold.push(envelope("log", json!({ "n": index })));
         }
-        fold.push(envelope("log", json!({ "blob": "x".repeat(MAX_LOG_EVENT_BYTES) })));
+        fold.push(envelope(
+            "log",
+            json!({ "blob": "x".repeat(MAX_LOG_EVENT_BYTES) }),
+        ));
         fold.push(envelope("generic_result", json!({ "cards": 3 })));
         fold.push(envelope("completed", json!({ "status": "completed" })));
         assert!(fold.finished());
@@ -844,7 +868,10 @@ mod tests {
         let chat = event_summary(&event("simple_chat", None));
         assert_eq!(chat["consumer_tool"], "call_app_chat");
         let page = event_summary(&event("page", Some("home")));
-        assert_eq!((&page["kind"], &page["page_id"]), (&json!("page"), &json!("home")));
+        assert_eq!(
+            (&page["kind"], &page["page_id"]),
+            (&json!("page"), &json!("home"))
+        );
         let broken = event_summary(&event("page", None));
         assert_eq!(broken["interface_error"], "page_target_missing");
         assert!(broken.get("consumer_tool").is_none());

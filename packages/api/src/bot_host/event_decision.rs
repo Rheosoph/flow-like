@@ -100,6 +100,9 @@ async fn owner_authenticated<C: ConnectionTrait>(
     if trigger.source != TriggerSource::Email || payload["authenticated"] != true {
         return false;
     }
+    if payload["owner"] == true {
+        return true;
+    }
     let owner = match user::Entity::find_by_id(&turn.owner_id).one(db).await {
         Ok(Some(row)) => row.email,
         _ => None,

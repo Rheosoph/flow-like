@@ -57,6 +57,46 @@ fn is_outbound(tool_name: &str, args: &Value) -> bool {
                 .is_some_and(|url| !url.trim().is_empty()))
 }
 
+/// Mail and webhook content comes from outside the platform. The classification scale has no
+/// level above `public` for it, so it marks the turn as having read outside content without
+/// raising the level.
+pub const EXTERNAL_CONTENT: DataSensitivity = DataSensitivity {
+    classification: Some(DataClassification::Public),
+    pii: false,
+};
+
+/// What a turn has read before its first tool call, as its host knows it.
+#[derive(Debug, Clone, Default)]
+pub struct TurnReads {
+    /// The labels of the bots whose messages are in the history.
+    pub bot_senders: Vec<DataSensitivity>,
+    /// The taint recorded on messages the bot or other bots wrote earlier.
+    pub recorded: DataSensitivity,
+    /// A mail or webhook trigger is in the history.
+    pub external_trigger: bool,
+    /// A person's context snapshot is in the turn.
+    pub personal_context: bool,
+}
+
+impl TurnReads {
+    /// The label a turn starts with: the strictest of what it reads.
+    pub fn seed(&self) -> DataSensitivity {
+        let external = if self.external_trigger {
+            EXTERNAL_CONTENT
+        } else {
+            DataSensitivity::default()
+        };
+        let personal = DataSensitivity {
+            classification: None,
+            pii: self.personal_context,
+        };
+        DataSensitivity::combined(self.bot_senders.iter().copied())
+            .combine(self.recorded)
+            .combine(external)
+            .combine(personal)
+    }
+}
+
 #[derive(Default)]
 struct ComputeCells {
     child_ms: AtomicU64,
@@ -109,11 +149,13 @@ pub(super) struct TurnLabel {
 
 impl TurnLabel {
     pub(super) fn new(bot: &BotRunContext, talk: Option<Arc<BotTalk>>) -> Arc<Self> {
-        Arc::new(Self {
+        let label = Arc::new(Self {
             level: Mutex::new(DataSensitivity::default()),
             own: bot.classification.classification,
             talk,
-        })
+        });
+        label.raise(bot.seed_taint);
+        label
     }
 
     pub(super) fn get(&self) -> DataSensitivity {
@@ -275,6 +317,57 @@ mod tests {
             assert!(label.refusal(name, &json!({ "file": "bot/a.pdf" })).is_none());
             assert!(label.refusal(name, &json!({ "url": " " })).is_none());
         }
+    }
+
+    #[test]
+    fn a_turn_starts_at_the_strictest_of_what_it_reads() {
+        let mut bot = BotRunContext::general();
+        bot.seed_taint = TurnReads {
+            bot_senders: vec![
+                DataSensitivity {
+                    classification: Some(DataClassification::Internal),
+                    pii: false,
+                },
+                DataSensitivity {
+                    classification: Some(DataClassification::Confidential),
+                    pii: false,
+                },
+            ],
+            recorded: DataSensitivity {
+                classification: Some(DataClassification::Internal),
+                pii: true,
+            },
+            external_trigger: true,
+            personal_context: false,
+        }
+        .seed();
+        let label = TurnLabel::new(&bot, None);
+        assert_eq!(
+            label.get(),
+            DataSensitivity {
+                classification: Some(DataClassification::Confidential),
+                pii: true,
+            }
+        );
+        assert!(label.refusal("email_send", &json!({})).is_some());
+        assert!(TurnLabel::new(&BotRunContext::general(), None).get().is_empty());
+    }
+
+    #[test]
+    fn mail_and_personal_context_seed_without_raising_the_level() {
+        let external = TurnReads {
+            external_trigger: true,
+            ..Default::default()
+        }
+        .seed();
+        assert_eq!(external, EXTERNAL_CONTENT);
+        let personal = TurnReads {
+            personal_context: true,
+            ..Default::default()
+        }
+        .seed();
+        assert!(personal.pii && personal.classification.is_none());
+        assert!(TurnReads::default().seed().is_empty());
     }
 
     #[test]

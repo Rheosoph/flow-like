@@ -157,6 +157,14 @@ pub trait HostStore: Send + Sync + 'static {
     ) -> Result<bool, String> {
         Ok(false)
     }
+    /// Reports that the bot used these standing grants so their expiry moves forward.
+    async fn touch_tool_keys(
+        &self,
+        _bot_id: &str,
+        _keys: &[(String, String)],
+    ) -> Result<(), String> {
+        Ok(())
+    }
     /// Posts the approval card as the bot and parks the turn behind it.
     async fn park(
         &self,
@@ -473,6 +481,16 @@ impl HostStore for AppStore {
             .await
     }
 
+    async fn touch_tool_keys(
+        &self,
+        bot_id: &str,
+        keys: &[(String, String)],
+    ) -> Result<(), String> {
+        let (id, keys) = (bot_id.to_owned(), keys.to_vec());
+        self.with(move |store| store.touch_tool_keys(&id, &keys))
+            .await
+    }
+
     async fn approval_card(&self, approval_id: &str) -> Result<Option<ApprovalRequest>, String> {
         let id = approval_id.to_owned();
         self.with(move |store| store.approval_card(&id)).await
@@ -562,6 +580,17 @@ impl flow_like::flow::copilot::tool_grants::GrantStore for StoreGrants {
     async fn delete(&self, tool: &str, scope: &str) -> flow_like_types::Result<bool> {
         self.store
             .delete_tool_key(&self.bot_id, tool, scope)
+            .await
+            .map_err(flow_like_types::Error::msg)
+    }
+
+    async fn touch(&self, keys: &[GrantKey]) -> flow_like_types::Result<()> {
+        let keys: Vec<(String, String)> = keys
+            .iter()
+            .map(|key| (key.tool.clone(), key.scope.clone()))
+            .collect();
+        self.store
+            .touch_tool_keys(&self.bot_id, &keys)
             .await
             .map_err(flow_like_types::Error::msg)
     }

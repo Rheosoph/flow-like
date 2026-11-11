@@ -83,7 +83,7 @@ async fn fleet() -> DatabaseConnection {
         r#"CREATE TABLE public."BotToolGrant" (
             "id" TEXT PRIMARY KEY, "botId" TEXT NOT NULL, "ownerId" TEXT NOT NULL,
             "tool" TEXT NOT NULL, "scope" TEXT NOT NULL, "grantedAt" TEXT NOT NULL,
-            "grantedBy" TEXT NOT NULL, UNIQUE ("botId", "tool", "scope"))"#,
+            "grantedBy" TEXT NOT NULL, "expiresAt" TEXT, UNIQUE ("botId", "tool", "scope"))"#,
     )
     .await
     .unwrap();

@@ -492,6 +492,39 @@ impl ConversationFiles for Shared {
             }
         }))
     }
+
+    async fn file_link(
+        &self,
+        _conversation_id: &str,
+        path: &str,
+    ) -> Result<Option<flow_like_bot_tools::FileLink>> {
+        Ok(self
+            .0
+            .contains_key(path)
+            .then(|| flow_like_bot_tools::FileLink {
+                url: format!("https://files.example.com/chat/{path}?sig=1"),
+                expires_at_ms: None,
+            }))
+    }
+}
+
+#[tokio::test]
+async fn a_turn_file_gets_its_link_from_the_hosts_source() {
+    let (env, _) = env(false, vec![]).await;
+    let env = env.with_conversation_files(Arc::new(Shared(
+        [("notes.txt", "from the chat")].into_iter().collect(),
+    )));
+    let linked = call(
+        &env,
+        "file_link",
+        json!({ "file": conversation_handle(TURN, "notes.txt") }),
+    )
+    .await;
+    assert!(linked.is_ok(), "{:?}", linked.error);
+    assert_eq!(
+        linked.result["url"],
+        "https://files.example.com/chat/notes.txt?sig=1"
+    );
 }
 
 fn conversation_handle(conversation_id: &str, path: &str) -> Value {

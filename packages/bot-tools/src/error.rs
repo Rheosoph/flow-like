@@ -32,6 +32,7 @@ pub mod code {
     pub const NO_DISPLAY: &str = "no_display";
     pub const DISPLAY_BUSY: &str = "display_busy";
     pub const STALE_PAGE: &str = "stale_page";
+    pub const PERMISSION_MISSING: &str = "permission_missing";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

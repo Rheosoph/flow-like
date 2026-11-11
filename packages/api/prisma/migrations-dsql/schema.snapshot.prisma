@@ -1755,6 +1755,9 @@ model BotToolGrant {
   grantedAt DateTime @default(now()) @db.Timestamptz(3)
   /// The person who granted it.
   grantedBy String
+  /// The grant lapses here unless a use moves it forward (90 days after the last use). Null only
+  /// on rows older than the expiry; the maintenance sweep stamps them.
+  expiresAt DateTime? @db.Timestamptz(3)
 
   @@unique([botId, tool, scope])
 }
@@ -1828,6 +1831,8 @@ model BotTurn {
   audience         String       @default("OWNER")
   /// The running turn's live status line, at most 120 characters; cleared when it stops running.
   statusText       String?
+  /// True for a turn the bot only read along with or got a reaction for; null on turns from before the column existed. The requester daily cap skips these.
+  unprompted       Boolean?
   createdAt        DateTime     @default(now()) @db.Timestamptz(3)
   updatedAt        DateTime     @updatedAt @db.Timestamptz(3)
 
@@ -1894,6 +1899,10 @@ model BotWebhook {
   name         String
   /// blake3 of the secret, lowercase hex.
   secretHash   String
+  /// The secret itself, encrypted like a bot secret (`v1:` + base64); it keys the HMAC
+  /// signature. Null on hooks created before signing used the real secret: they verify
+  /// signatures keyed by `secretHash` until the owner rotates.
+  secretCiphertext String?
   /// What the bot should do with a call.
   instruction  String    @default("")
   enabled      Boolean   @default(true)

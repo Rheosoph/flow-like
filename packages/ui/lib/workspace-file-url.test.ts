@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { IInboxAttachmentPart } from "../state/backend-state/inbox-state";
-import { directAttachmentOf } from "./inbox-attachment-part";
+import { conversationOfApp } from "./conversation-files";
+import {
+	directAttachmentOf,
+	storedAttachmentOf,
+} from "./inbox-attachment-part";
 import { parseWorkspaceFileUrl, workspaceFileUrl } from "./workspace-file-url";
 
 const handle = (app_id: string, path: string) => ({
@@ -63,6 +67,22 @@ describe("directAttachmentOf", () => {
 			type: "application/pdf",
 			size: 10,
 		});
+	});
+
+	test("a stored conversation file gets a url the chat signs through the inbox", () => {
+		expect(
+			storedAttachmentOf(part({ handle: handle("conversation_c1", "f1.pdf") })),
+		).toEqual({
+			url: "storage://apps/conversation_c1/app/f1.pdf",
+			name: "x.pdf",
+			type: "application/pdf",
+			size: 10,
+		});
+		expect(conversationOfApp("conversation_c1")).toBe("c1");
+		expect(conversationOfApp("app1")).toBeUndefined();
+		expect(storedAttachmentOf(part({ url: "https://a.test/x.pdf" }))?.url).toBe(
+			"https://a.test/x.pdf",
+		);
 	});
 
 	test("conversation files and non-http links are left to the caller", () => {

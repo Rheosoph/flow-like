@@ -12,7 +12,6 @@ use super::{
     model::SendEntryRequest,
     now_millis,
 };
-use std::sync::Arc;
 use crate::{
     capacity,
     entity::{app, bot, conversation, conversation_member},
@@ -27,14 +26,15 @@ use flow_like_types::{
     bot_message::{MAX_CONVERSATION_FILE_BYTES, WorkspaceHandle},
     inbox::{ConversationEncryption, InboxEntryKind, PLAIN_ENCRYPTION},
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect};
 use serde_json::{Value, json};
+use std::sync::Arc;
 
 /// One workspace attachment of the reply: where it sits in `body.parts`.
-struct Shared {
-    index: usize,
-    name: String,
-    handle: WorkspaceHandle,
+pub(super) struct Shared {
+    pub(super) index: usize,
+    pub(super) name: String,
+    pub(super) handle: WorkspaceHandle,
 }
 
 /// Copies the workspace attachments of `bot_id`'s reply into `conversation_id` when other
@@ -114,7 +114,7 @@ async fn adopt_envelope(
     }
 }
 
-fn workspace_attachments(body: &Value) -> Vec<Shared> {
+pub(super) fn workspace_attachments(body: &Value) -> Vec<Shared> {
     let Some(parts) = body.get("parts").and_then(Value::as_array) else {
         return Vec::new();
     };
@@ -141,10 +141,10 @@ async fn copy_into(
     bot_id: &str,
     body: &mut Value,
 ) -> Result<bool, ApiError> {
-    let Some((owner, workspace)) = bot_workspace(state, bot_id).await? else {
+    let Some((owner, workspace)) = bot_workspace(&state.db, bot_id).await? else {
         return Ok(false);
     };
-    if !read_by_others(state, conversation_id, bot_id, &owner).await? {
+    if !read_by_others(&state.db, conversation_id, bot_id, &owner).await? {
         return Ok(false);
     }
     let store = state.master_credentials().await?.to_store(false).await?;
@@ -155,7 +155,12 @@ async fn copy_into(
     }
     let mut copied = linked > 0;
     for file in shared {
-        match copy_one(state, &store, conversation_id, bot_id, &owner, &file).await {
+        let copy = async {
+            let bytes = i64::try_from(file.handle.bytes).unwrap_or(i64::MAX);
+            capacity::check_storage_write(state, "", &owner, bytes).await?;
+            copy_in(&state.db, &store, conversation_id, bot_id, &file).await
+        };
+        match copy.await {
             Ok(copy) => {
                 body["parts"][file.index]["handle"] = json!(copy);
                 copied = true;
@@ -173,15 +178,15 @@ async fn copy_into(
 }
 
 /// The bot's owner and workspace app.
-async fn bot_workspace(
-    state: &AppState,
+async fn bot_workspace<C: ConnectionTrait>(
+    db: &C,
     bot_id: &str,
 ) -> Result<Option<(String, String)>, ApiError> {
     let Some(owner) = bot::Entity::find_by_id(bot_id)
         .select_only()
         .column(bot::Column::OwnerId)
         .into_tuple::<String>()
-        .one(&state.db)
+        .one(db)
         .await?
     else {
         return Ok(None);
@@ -191,14 +196,14 @@ async fn bot_workspace(
         .column(app::Column::Id)
         .filter(app::Column::BotId.eq(bot_id))
         .into_tuple::<String>()
-        .one(&state.db)
+        .one(db)
         .await?;
     Ok(workspace.map(|workspace| (owner, workspace)))
 }
 
 /// Whether the conversation is plain and has an active member other than the bot and its owner.
-async fn read_by_others(
-    state: &AppState,
+pub(super) async fn read_by_others<C: ConnectionTrait>(
+    db: &C,
     conversation_id: &str,
     bot_id: &str,
     owner: &str,
@@ -207,7 +212,7 @@ async fn read_by_others(
         .select_only()
         .column(conversation::Column::Encryption)
         .into_tuple::<String>()
-        .one(&state.db)
+        .one(db)
         .await?
         .and_then(|encryption| ConversationEncryption::parse(&encryption))
         == Some(ConversationEncryption::Plain);
@@ -221,24 +226,26 @@ async fn read_by_others(
         .filter(active_member())
         .filter(conversation_member::Column::PrincipalId.is_not_in([bot_id, owner]))
         .into_tuple::<String>()
-        .one(&state.db)
+        .one(db)
         .await?;
     Ok(others.is_some())
 }
 
-async fn copy_one(
-    state: &AppState,
+/// Copies one workspace file into the conversation as a ready file `bot_id` uploaded.
+pub(super) async fn copy_in<C: ConnectionTrait>(
+    db: &C,
     store: &FlowLikeStore,
     conversation_id: &str,
     bot_id: &str,
-    owner: &str,
     file: &Shared,
 ) -> Result<WorkspaceHandle, ApiError> {
     let generic = store.as_generic();
     let from = store
         .construct_upload(&file.handle.app_id, &file.handle.path)
         .await
-        .map_err(|error| ApiError::internal(format!("workspace path '{}': {error}", file.handle.path)))?;
+        .map_err(|error| {
+            ApiError::internal(format!("workspace path '{}': {error}", file.handle.path))
+        })?;
     let size = generic
         .head(&from)
         .await
@@ -250,20 +257,18 @@ async fn copy_one(
             file.handle.path
         )));
     }
-    capacity::check_storage_write(state, "", owner, i64::try_from(size).unwrap_or(i64::MAX))
-        .await?;
     let request = MintFileRequest {
         name: file.name.clone(),
         mime: Some(file.handle.mime.clone()),
         bytes: size,
     };
-    let minted = mint_in(&state.db, conversation_id, bot_id, &request, now_millis()).await?;
+    let minted = mint_in(db, conversation_id, bot_id, &request, now_millis()).await?;
     let to = ObjectPath::from(object_key(conversation_id, &stored_file_name(&minted)));
     generic
         .copy(&from, &to)
         .await
         .map_err(|error| ApiError::internal(format!("copy '{}': {error}", file.handle.path)))?;
-    let ready = complete_in(&state.db, generic.as_ref(), conversation_id, bot_id, &minted.id).await?;
+    let ready = complete_in(db, generic.as_ref(), conversation_id, bot_id, &minted.id).await?;
     Ok(WorkspaceHandle {
         app_id: ready.app_id,
         path: ready.path,

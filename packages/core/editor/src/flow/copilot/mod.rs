@@ -162,7 +162,7 @@ pub use tools::{
     render_flowscript_candidate_regression, render_flowscript_modular_partial_result,
     run_declaration_queries, tool_definition_parts,
 };
-pub use turn_label::TurnCompute;
+pub use turn_label::{EXTERNAL_CONTENT, TurnCompute, TurnReads};
 pub use typed_ir_parse::parse_typed_ir_arguments;
 pub use types::{
     AgentType, BoardCommand, ChatImage, ChatMessage, ChatRole, Connection, CopilotResponse, Edge,

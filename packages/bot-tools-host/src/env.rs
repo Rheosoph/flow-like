@@ -434,6 +434,14 @@ impl ToolEnv for HostEnv {
     }
 
     async fn file_link(&self, app_id: &str, path: &str) -> Result<Option<FileLink>> {
+        if let Some(conversation_id) = conversation_of_app(app_id)
+            && let Some(files) = self
+                .conversation_files
+                .as_ref()
+                .filter(|files| files.serves(conversation_id))
+        {
+            return files.file_link(conversation_id, path).await;
+        }
         let (store, base) = self.base(app_id).await?;
         FileLink::signed(&store, &join_object_path(&base, path)).await
     }

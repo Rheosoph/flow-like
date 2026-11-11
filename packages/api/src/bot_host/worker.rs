@@ -44,8 +44,7 @@ use chrono::{DateTime, Duration as ChronoDuration, FixedOffset};
 use flow_like::{
     flow::copilot::{
         BotToolHost, BotToolset, HeadlessMemory, NotesHandle, PlatformContextInput, ReplyFiles,
-        ToolTrail,
-        bot_platform_context,
+        ToolTrail, bot_platform_context,
         bot_talk::{AnsweredRound, BotPresence, BotTalk},
         decision_event::{self, EventDecision},
         find_bot_tool_spec,
@@ -584,6 +583,9 @@ pub(crate) fn answer_request(turn: &bot_turn::Model, answer: &Answer) -> Option<
         {
             envelope["body"][decision_event::REPLY_DELIVERY_FIELD] = json!("respond");
         }
+        if let Some(envelope) = request.envelope.as_mut() {
+            super::taint::attach(&mut envelope["body"], &answer.taint);
+        }
         if let Some(note) = &answer.note
             && let Some(envelope) = request.envelope.as_mut()
         {
@@ -629,6 +631,8 @@ pub(crate) struct Answer {
     pub(crate) tool_calls: Vec<flow_like_types::bot_tool_trail::ToolCall>,
     /// The files the bot attached to its reply with `file_attach`.
     pub(crate) files: Vec<flow_like_types::bot_reply_files::ReplyFile>,
+    /// The taint the turn ended with; the reply records it for the turns that read it.
+    pub(crate) taint: flow_like_types::data_classification::DataSensitivity,
 }
 
 type DecisionResult = Option<Result<flow_like::flow::copilot::decision::Decision, ApiError>>;
@@ -666,6 +670,7 @@ fn silent_answer(completed: bool) -> Answer {
         note: None,
         tool_calls: Vec::new(),
         files: Vec::new(),
+        taint: Default::default(),
     }
 }
 
@@ -934,6 +939,7 @@ async fn attempt_with(
             note: None,
             tool_calls: Vec::new(),
             files: Vec::new(),
+            taint: Default::default(),
         });
     }
     let reacting = trigger_kind == Some(InboxEntryKind::Reaction);
@@ -985,6 +991,7 @@ async fn attempt_with(
             note: None,
             tool_calls: Vec::new(),
             files: Vec::new(),
+            taint: Default::default(),
         });
     }
     let mut chat_conversation = turn.conversation_id.clone();
@@ -1126,6 +1133,7 @@ async fn attempt_with(
                 note: None,
                 tool_calls: Vec::new(),
                 files: Vec::new(),
+                taint: Default::default(),
             });
         }
     }
@@ -1139,6 +1147,11 @@ async fn attempt_with(
         BotToolset::FlowPilot => BotToolHost::CoreOnly,
     };
     bot.context.ephemeral_user_context = ephemeral_user_context;
+    bot.context.seed_taint = flow_like::flow::copilot::TurnReads {
+        personal_context: ephemeral_user_context,
+        ..transcript.reads.clone()
+    }
+    .seed();
     bot.context.recovery = (!ephemeral_user_context).then(|| {
         (recovery.clone() as Arc<dyn flow_like::flow::copilot::run_recovery::BotRunRecovery>).into()
     });
@@ -1197,6 +1210,7 @@ async fn attempt_with(
                         note: None,
                         tool_calls: Vec::new(),
                         files: Vec::new(),
+                        taint: Default::default(),
                     });
                 }
                 Ok(choice) => {
@@ -1597,6 +1611,7 @@ async fn attempt_with(
         None => BotTalk::for_run(talk_host.clone(), &bot.context, BotLocation::Server),
     };
     let talk = Arc::new(talk.with_answered(answered_round.as_ref()));
+    let run_taint = talk.clone();
     let acknowledgement = bot.context.acknowledgement;
     let sub_task_compute = bot.context.compute.clone();
     let reply_stream = streams_reply
@@ -1742,6 +1757,7 @@ async fn attempt_with(
                 note: None,
                 tool_calls: Vec::new(),
                 files: Vec::new(),
+                taint: Default::default(),
             })
         }
         Ok(Ok(text))
@@ -1824,7 +1840,11 @@ async fn attempt_with(
                 event_delivery,
                 note: notes.touched(),
                 tool_calls: trail.as_ref().map(ToolTrail::calls).unwrap_or_default(),
-                files: reply_files.as_ref().map(ReplyFiles::files).unwrap_or_default(),
+                files: reply_files
+                    .as_ref()
+                    .map(ReplyFiles::files)
+                    .unwrap_or_default(),
+                taint: run_taint.taint(),
             })
         }
     };
@@ -2308,6 +2328,35 @@ async fn run_claimed(state: &AppState, host_id: &str, claimed: Claimed) {
 /// Claims `turn_id`, runs it and then every turn that queued behind it for the same bot and
 /// conversation. Returns how many turns it ran.
 pub(crate) async fn drive(state: &AppState, host_id: &str, turn_id: &str) -> u32 {
+    drive_within(state, host_id, turn_id, None).await
+}
+
+/// Lambda's hard maximum; the hosted worker's configured timeout can only be shorter.
+const HOSTED_INVOCATION_SECS: u64 = 900;
+/// Remaining invocation time below which a queued turn is handed to a fresh invocation.
+const HOSTED_CHAIN_RESERVE: Duration = Duration::from_secs(300);
+
+fn hosted_invocation_budget() -> Duration {
+    let secs = std::env::var("FLOWLIKE_HOSTED_WORKER_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(HOSTED_INVOCATION_SECS);
+    Duration::from_secs(secs)
+}
+
+fn chain_has_room(elapsed: Duration, budget: Duration) -> bool {
+    budget.saturating_sub(elapsed) > HOSTED_CHAIN_RESERVE
+}
+
+/// [`drive`] that stops chaining once `invocation` (start, budget) can't cover another turn and
+/// enqueues the next one for a fresh hosted invocation instead.
+async fn drive_within(
+    state: &AppState,
+    host_id: &str,
+    turn_id: &str,
+    invocation: Option<(Instant, Duration)>,
+) -> u32 {
     let mut next = turn_id.to_string();
     let mut ran = 0;
     loop {
@@ -2344,15 +2393,27 @@ pub(crate) async fn drive(state: &AppState, host_id: &str, turn_id: &str) -> u32
         )
         .await
         {
-            Ok(Some(head)) => next = head.id,
+            Ok(Some(head)) => {
+                if let Some((started, budget)) = invocation
+                    && !chain_has_room(started.elapsed(), budget)
+                {
+                    if let Err(error) = hosted_worker::enqueue_bot_turn(state, &head.id).await {
+                        tracing::warn!(%error, turn_id = %head.id, "Bot turn: handoff to a fresh invocation failed; recovery redispatches it");
+                    }
+                    return ran;
+                }
+                next = head.id
+            }
             _ => return ran,
         }
     }
 }
 
-/// The hosted worker's entry: one invocation drives one turn and what queued behind it.
+/// The hosted worker's entry: one invocation drives one turn and what queued behind it, within
+/// the invocation's time.
 pub(crate) async fn run_hosted(state: &AppState, turn_id: &str) {
-    drive(state, &host_id(), turn_id).await;
+    let invocation = (Instant::now(), hosted_invocation_budget());
+    drive_within(state, &host_id(), turn_id, Some(invocation)).await;
 }
 
 /// One pass: starts a task for each turn waiting for the server while there are free slots.
@@ -2454,6 +2515,14 @@ mod tests {
     #[test]
     fn no_retry_once_a_tool_with_side_effects_was_requested() {
         assert!(!retries(&failure(true), 1, true));
+    }
+
+    #[test]
+    fn a_hosted_invocation_chains_only_while_its_time_can_cover_another_turn() {
+        let budget = Duration::from_secs(HOSTED_INVOCATION_SECS);
+        assert!(chain_has_room(Duration::ZERO, budget));
+        assert!(!chain_has_room(budget - HOSTED_CHAIN_RESERVE, budget));
+        assert!(!chain_has_room(budget, budget));
     }
 
     #[test]

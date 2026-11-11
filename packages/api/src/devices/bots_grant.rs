@@ -37,6 +37,7 @@ use flow_like::{
     flow_like_model_provider::provider::is_hosted_provider_name, profile::Profile,
     state::FlowLikeState,
 };
+use flow_like_bot_tools::image::{is_hosted_image_bit, resolve_bit as resolve_image_bit};
 use flow_like_types::{
     bot_turn::{STORED_RUNNING, TurnAudience},
     device_bot::{
@@ -200,6 +201,7 @@ pub(crate) async fn completed_delivery_in<C: ConnectionTrait>(
             fallbacks: Vec::new(),
             embedding: None,
             embedding_model_id: None,
+            image: None,
             decision: None,
         },
         bot_token,
@@ -249,6 +251,33 @@ async fn embedding_bit(
         return Err(unrunnable(&format!("memory model '{id}'")));
     }
     Ok(Some(bit))
+}
+
+/// An image model the device cannot reach through the hub's proxy leaves the bot without one.
+async fn image_bit(
+    profile: &Profile,
+    fls: &Arc<FlowLikeState>,
+    id: &str,
+) -> Option<serde_json::Value> {
+    let bit = match resolve_image_bit(profile, fls, Some(id)).await {
+        Ok(bit) => bit,
+        Err(error) => {
+            tracing::warn!(
+                bit_id = id,
+                ?error,
+                "Device bot image model unavailable; the bot has no image_generate"
+            );
+            return None;
+        }
+    };
+    if !is_hosted_image_bit(&bit) {
+        tracing::warn!(
+            bit_id = id,
+            "Device bot image model is not a hosted image model; the bot has no image_generate"
+        );
+        return None;
+    }
+    serde_json::to_value(&bit).ok()
 }
 
 /// An optional classifier becoming unavailable must not disable the bot's primary model.
@@ -336,6 +365,10 @@ async fn resolve_models(
         Some(id) => decision_bit(profile, id, fls.http_client.clone()).await,
         None => None,
     };
+    let image = match bot.context.image_model.as_deref() {
+        Some(id) => image_bit(profile, fls, id).await,
+        None => None,
+    };
     let funding = worker::funding_class(true, embedding.as_ref().map(|_| true));
     Ok(Resolved {
         provider_name: provider.provider_name.clone(),
@@ -346,6 +379,7 @@ async fn resolve_models(
             fallbacks,
             embedding: embedding.as_ref().map(serde_json::to_value).transpose()?,
             embedding_model_id: memory_model,
+            image,
             decision,
         },
     })

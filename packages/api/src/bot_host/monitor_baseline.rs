@@ -43,8 +43,12 @@ fn call_failed(call: &serde_json::Value) -> bool {
         return false;
     };
     matches!(parsed["status"].as_str(), Some("error" | "failed"))
-        || parsed["errors"].as_array().is_some_and(|errors| !errors.is_empty())
-        || parsed["error"].as_str().is_some_and(|error| !error.is_empty())
+        || parsed["errors"]
+            .as_array()
+            .is_some_and(|errors| !errors.is_empty())
+        || parsed["error"]
+            .as_str()
+            .is_some_and(|error| !error.is_empty())
 }
 
 /// Encrypted triggers cannot prove their schedule identity here, and encrypted checkpoints

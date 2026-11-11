@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use flow_like::credentials::{SharedCredentials, StoreType};
-use flow_like::flow::copilot::EffectivePermissions;
+use flow_like::flow::copilot::{EffectivePermissions, TURN_FILES};
 use flow_like_bot_tools_host::AppAccess;
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::lancedb::Connection;
@@ -76,6 +76,16 @@ pub(crate) struct ApiAccess {
     state: AppState,
     who: Who,
     workspace: String,
+    turn_conversation: Option<String>,
+}
+
+/// A bot reads the files of its turn's conversation only. `chat` names the turn's own
+/// attachments and is served from the turn, not from a conversation.
+pub(crate) fn turn_may_read_conversation(
+    turn_conversation: Option<&str>,
+    conversation_id: &str,
+) -> bool {
+    conversation_id == TURN_FILES || turn_conversation == Some(conversation_id)
 }
 
 enum Who {
@@ -89,14 +99,21 @@ impl ApiAccess {
             state,
             who: Who::Owner(owner.to_string()),
             workspace: workspace.to_string(),
+            turn_conversation: None,
         }
     }
 
-    pub(crate) fn for_bot(state: AppState, bot: BotUser, workspace: &str) -> Self {
+    pub(crate) fn for_bot(
+        state: AppState,
+        bot: BotUser,
+        workspace: &str,
+        turn_conversation: Option<&str>,
+    ) -> Self {
         Self {
             state,
             who: Who::Bot(bot),
             workspace: workspace.to_string(),
+            turn_conversation: turn_conversation.map(str::to_string),
         }
     }
 
@@ -104,6 +121,13 @@ impl ApiAccess {
     /// the conversation. Room limits that narrow the bot's apps do not apply: the person shared
     /// the file in this room.
     async fn conversation_store(&self, conversation_id: &str) -> Result<FlowLikeStore> {
+        if matches!(self.who, Who::Bot(_))
+            && !turn_may_read_conversation(self.turn_conversation.as_deref(), conversation_id)
+        {
+            return Err(flow_like_types::anyhow!(
+                "Conversation '{conversation_id}' is not this turn's conversation; a bot reads the files of the conversation it answers in"
+            ));
+        }
         let principal = match &self.who {
             Who::Owner(owner) => owner.as_str(),
             Who::Bot(bot) => bot.bot_id.as_str(),
@@ -170,6 +194,15 @@ mod tests {
             mode,
             CredentialsAccess::EditAppContent | CredentialsAccess::EditAppDb
         )
+    }
+
+    #[test]
+    fn a_turn_reads_its_own_conversation_and_the_turn_files_only() {
+        assert!(turn_may_read_conversation(Some("room-1"), "room-1"));
+        assert!(turn_may_read_conversation(Some("room-1"), TURN_FILES));
+        assert!(turn_may_read_conversation(None, TURN_FILES));
+        assert!(!turn_may_read_conversation(Some("room-1"), "room-2"));
+        assert!(!turn_may_read_conversation(None, "room-1"));
     }
 
     #[test]

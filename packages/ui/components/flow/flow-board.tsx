@@ -78,6 +78,7 @@ import {
 	useCallback,
 	useEffect,
 	useMemo,
+	useReducer,
 	useRef,
 	useState,
 } from "react";
@@ -251,7 +252,9 @@ import {
 	handleNodesChange,
 	handlePlaceNode,
 	handlePlacePlaceholder,
+	keepUnconfirmedPositions,
 	removeFunctionReferenceCommandForEdge,
+	type UnconfirmedMove,
 } from "../../lib/flow-board-helpers";
 import {
 	duplicateSelectionCommand,
@@ -894,6 +897,12 @@ function FlowBoardContent({
 	const [droppedPin, setDroppedPin] = useState<IPin | undefined>(undefined);
 	const [clickPosition, setClickPosition] = useState({ x: 0, y: 0 });
 	const deletingNodesRef = useRef<Set<string>>(new Set());
+	const unconfirmedMoves = useRef(new Map<string, UnconfirmedMove>());
+	const moveSaves = useRef(0);
+	const [movesRolledBack, rollBackMoves] = useReducer(
+		(count: number) => count + 1,
+		0,
+	);
 	const mousePositionRef = useRef({ x: 0, y: 0 });
 	const [pinCache, setPinCache] = useState<
 		Map<string, [IPin, INode | ILayer, boolean]>
@@ -3541,6 +3550,7 @@ function FlowBoardContent({
 		[runDialogNodeId, executeBoardRemote],
 	);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Parses on board and view changes only, never on its own node output; `movesRolledBack` re-parses after a failed move save.
 	useEffect(() => {
 		if (!board.data) return;
 		boardRef.current = board.data;
@@ -3571,7 +3581,9 @@ function FlowBoardContent({
 			parseCallbacks.openCommentInCode,
 		);
 
-		setNodes(parsed.nodes);
+		setNodes(
+			keepUnconfirmedPositions(parsed.nodes, nodes, unconfirmedMoves.current),
+		);
 		setEdges(parsed.edges);
 		setPinCache(parsed.cache);
 		setPreparedBoardKey(boardLoadKey);
@@ -3585,6 +3597,7 @@ function FlowBoardContent({
 		catalogLookup,
 		selectorDataVersion,
 		boardLoadKey,
+		movesRolledBack,
 	]);
 
 	// Apply remote execution presence indicators to nodes
@@ -4181,7 +4194,9 @@ function FlowBoardContent({
 				})),
 				...(commentDrag ? followAnchor(commentDrag, nodes) : []),
 			];
+			const save = ++moveSaves.current;
 			for (const { id, x, y } of moved) {
+				unconfirmedMoves.current.set(id, { position: { x, y }, save });
 				commands.push(
 					moveNodeCommand({
 						node_id: id,
@@ -4190,7 +4205,20 @@ function FlowBoardContent({
 					}),
 				);
 			}
-			await executeCommands(commands);
+			let saved = false;
+			try {
+				await executeCommands(commands);
+				saved = true;
+			} finally {
+				let latest = false;
+				for (const { id } of moved)
+					if (unconfirmedMoves.current.get(id)?.save === save) {
+						unconfirmedMoves.current.delete(id);
+						latest = true;
+					}
+				// The failed batch already refetched the board; parse it again without these moves.
+				if (!saved && latest) rollBackMoves();
+			}
 		},
 		[boardId, executeCommands, currentLayer, version, endDrag, helperLines],
 	);

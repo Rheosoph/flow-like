@@ -14,6 +14,13 @@ export function isConversationFileHandle(
 	return handle.app_id.startsWith(CONVERSATION_FILE_APP_PREFIX);
 }
 
+/** The conversation a handle's `app_id` names, when it is a conversation file's. */
+export function conversationOfApp(appId: string): string | undefined {
+	return appId.startsWith(CONVERSATION_FILE_APP_PREFIX)
+		? appId.slice(CONVERSATION_FILE_APP_PREFIX.length) || undefined
+		: undefined;
+}
+
 /** The id of a conversation file: its handle's path without the extension. */
 export function conversationFileId(path: string): string {
 	const dot = path.indexOf(".");

@@ -7,7 +7,7 @@ import CapabilityExplorer from "../../../components/bots/CapabilityExplorer";
 
 A bot's abilities decide which tools its model may use. **Every ability starts switched off.** A bot with none can still talk, ask you questions, keep notes for a long task, read its own settings and look at images behind links it was given, but it can't reach anything else outside the conversation.
 
-Every bot can look at the image behind a link it received in the current turn, for example a page preview that an app or MCP server returned, or a link you sent. The link goes to the model and nothing is saved. A link the bot wrote itself is refused, so instructions hidden in a document or web page can't use this to send data to another site.
+Every bot can look at the image behind a link it received in the current turn, for example a page preview that an app or MCP server returned, a picture from a web page its research read, or a link you sent. The link goes to the model and nothing is saved. A link the bot wrote itself is refused, so instructions hidden in a document or web page can't use this to send data to another site.
 
 <CapabilityExplorer client:visible />
 
@@ -15,7 +15,7 @@ Every bot can look at the image behind a link it received in the current turn, f
 
 The two web abilities protect against different risks:
 
-- **Internet** hands research to a separate, sealed researcher. It searches and reads public pages but gets only the question, never the bot's memory, files or secrets. Instructions hidden in a web page can't use the bot's other tools.
+- **Internet** hands research to a separate, sealed researcher. It searches and reads public pages but gets only the question, never the bot's memory, files or secrets. Instructions hidden in a web page can't use the bot's other tools. The researcher's findings keep the links of the pictures on the pages it read, so the bot can look at them.
 - **Web requests** let the bot call APIs and fetch URLs itself, such as RSS feeds, JSON endpoints or webhooks of other services. It asks before each new site, approves reading and writing separately, and asks again for each secret it wants to send there. Secrets travel over https only and are scrubbed from responses.
 
 Give a news-digest bot **Internet**. Give a bot that reads a feed from a URL in its instructions, or posts to an API on a schedule, **Web requests**.

@@ -201,6 +201,12 @@ pub(crate) async fn execute(
         auto_approved,
     )
     .with_rights(Some(rights))
+    .with_turn_conversation(
+        options
+            .inbox_conversation_id
+            .clone()
+            .or_else(|| context.and_then(|context| context.conversation_id.clone())),
+    )
     .with_configuration(Arc::new(
         super::bot_tools::configuration::DesktopConfiguration::new(app, runtime.clone(), host.clone()),
     ))
@@ -562,6 +568,7 @@ pub(crate) struct DesktopToolEnv {
     crew: Option<Arc<dyn flow_like_bot_tools::crew::CrewBackend>>,
     images: Option<Arc<super::bot_tools::images::DesktopImages>>,
     connectors: Option<Arc<dyn flow_like_bot_tools::services::ConnectorSource>>,
+    turn_conversation: Option<String>,
 }
 
 /// One working directory per bot next to the project directory, on local and account bots alike:
@@ -621,7 +628,25 @@ impl DesktopToolEnv {
             crew: None,
             images: None,
             connectors: None,
+            turn_conversation: None,
         }
+    }
+
+    /// The conversation the turn answers in: the only one whose files the bot reads.
+    pub(crate) fn with_turn_conversation(mut self, conversation_id: Option<String>) -> Self {
+        self.turn_conversation = conversation_id;
+        self
+    }
+
+    fn ensure_turn_conversation(&self, conversation_id: &str) -> Result<()> {
+        if conversation_id == CHAT_FILES
+            || self.turn_conversation.as_deref() == Some(conversation_id)
+        {
+            return Ok(());
+        }
+        Err(anyhow!(
+            "Conversation '{conversation_id}' is not this turn's conversation; a bot reads the files of the conversation it answers in"
+        ))
     }
 
     /// Per-app files and tables rights; without them every app in the scope is read as granted.
@@ -778,6 +803,7 @@ impl ToolEnv for DesktopToolEnv {
         max_bytes: u64,
     ) -> Result<Option<FileData>> {
         if let Some(conversation_id) = conversation_of_app(app_id) {
+            self.ensure_turn_conversation(conversation_id)?;
             return self
                 .host
                 .conversation_file(conversation_id, path, max_bytes)
@@ -807,6 +833,7 @@ impl ToolEnv for DesktopToolEnv {
 
     async fn stat_file(&self, app_id: &str, path: &str) -> Result<Option<FileMeta>> {
         if let Some(conversation_id) = conversation_of_app(app_id) {
+            self.ensure_turn_conversation(conversation_id)?;
             return Ok(self
                 .host
                 .conversation_file(conversation_id, path, 0)
@@ -867,6 +894,7 @@ impl ToolEnv for DesktopToolEnv {
 
     async fn file_link(&self, app_id: &str, path: &str) -> Result<Option<FileLink>> {
         if let Some(conversation_id) = conversation_of_app(app_id) {
+            self.ensure_turn_conversation(conversation_id)?;
             return self
                 .host
                 .conversation_file_link(conversation_id, path)
