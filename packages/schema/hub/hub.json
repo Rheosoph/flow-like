@@ -1,1476 +1,1878 @@
 {
-	"$schema": "https://json-schema.org/draft/2020-12/schema",
-	"title": "Hub",
-	"type": "object",
-	"properties": {
-		"name": {
-			"type": "string"
-		},
-		"description": {
-			"type": "string"
-		},
-		"thumbnail": {
-			"type": ["string", "null"]
-		},
-		"icon": {
-			"type": ["string", "null"]
-		},
-		"authentication": {
-			"anyOf": [
-				{
-					"$ref": "#/$defs/Authentication"
-				},
-				{
-					"type": "null"
-				}
-			]
-		},
-		"features": {
-			"$ref": "#/$defs/Features"
-		},
-		"hubs": {
-			"type": "array",
-			"items": {
-				"type": "string"
-			}
-		},
-		"provider": {
-			"type": ["string", "null"]
-		},
-		"domain": {
-			"type": "string"
-		},
-		"secure": {
-			"type": "boolean",
-			"default": true
-		},
-		"region": {
-			"type": ["string", "null"]
-		},
-		"terms_of_service": {
-			"type": "string"
-		},
-		"signaling": {
-			"type": ["array", "null"],
-			"items": {
-				"type": "string"
-			}
-		},
-		"realtime": {
-			"description": "Realtime transport configuration. Signaling remains configured separately.",
-			"$ref": "#/$defs/RealtimeConfig",
-			"default": {
-				"ice": null
-			}
-		},
-		"standalone": {
-			"$ref": "#/$defs/StandaloneConfig",
-			"default": {
-				"enabled": false,
-				"max_devices_per_user": 100,
-				"max_pending_enrollments_per_user": 10,
-				"enrollment_ttl_seconds": 86400,
-				"api_base_url": null,
-				"release_trust": null,
-				"telemetry_tiers": {}
-			}
-		},
-		"cdn": {
-			"type": ["string", "null"]
-		},
-		"app": {
-			"type": ["string", "null"]
-		},
-		"web": {
-			"type": ["string", "null"]
-		},
-		"mail": {
-			"anyOf": [
-				{
-					"$ref": "#/$defs/MailConfig"
-				},
-				{
-					"type": "null"
-				}
-			]
-		},
-		"alerting": {
-			"anyOf": [
-				{
-					"$ref": "#/$defs/AlertingConfig"
-				},
-				{
-					"type": "null"
-				}
-			]
-		},
-		"legal_notice": {
-			"type": "string"
-		},
-		"privacy_policy": {
-			"type": "string"
-		},
-		"contact": {
-			"$ref": "#/$defs/Contact"
-		},
-		"max_users_prototype": {
-			"type": ["integer", "null"],
-			"format": "int32"
-		},
-		"default_user_plan": {
-			"type": ["string", "null"]
-		},
-		"environment": {
-			"$ref": "#/$defs/Environment"
-		},
-		"tiers": {
-			"type": "object",
-			"additionalProperties": {
-				"$ref": "#/$defs/UserTier"
-			}
-		},
-		"lookup": {
-			"$ref": "#/$defs/Lookup",
-			"default": {
-				"email": false,
-				"name": true,
-				"username": false,
-				"preferred_username": true,
-				"avatar": true,
-				"additional_information": true,
-				"description": true,
-				"created_at": true
-			}
-		},
-		"oauth_providers": {
-			"description": "OAuth provider configurations",
-			"type": "object",
-			"additionalProperties": {
-				"$ref": "#/$defs/OAuthProviderConfig"
-			},
-			"default": {}
-		},
-		"supported_sinks": {
-			"description": "Supported server-side event sinks (e.g., discord, telegram, cron, http)\nIf None, defaults to basic sinks like http, webhook, cron",
-			"anyOf": [
-				{
-					"$ref": "#/$defs/SupportedSinks"
-				},
-				{
-					"type": "null"
-				}
-			],
-			"default": null
-		},
-		"wasm_registry_config": {
-			"description": "WASM registry configuration",
-			"$ref": "#/$defs/WasmRegistryConfig",
-			"default": {
-				"on_member_leave": "stale"
-			}
-		},
-		"audit": {
-			"description": "Audit trail configuration",
-			"$ref": "#/$defs/AuditConfig",
-			"default": {
-				"enabled": true,
-				"level": "standard",
-				"log_ip": false,
-				"trusted_proxy_hops": null,
-				"require_signing": false,
-				"log_executions": false,
-				"retention": {
-					"evidence_hot_days": 396,
-					"archive_years_after_year_end": 3,
-					"activity_days": 90,
-					"high_risk_activity_days": 183,
-					"ip_days": 7,
-					"details_days": null,
-					"seal_after_records": 500,
-					"seal_after_seconds": 300,
-					"max_records_per_seal": 1000,
-					"epoch_interval_seconds": 300,
-					"pending_alert_seconds": 900,
-					"archive_grace_days": 3
-				}
-			}
-		},
-		"push_notifications": {
-			"description": "Push notification provider configuration",
-			"$ref": "#/$defs/PushNotificationsConfig",
-			"default": {
-				"enabled": false,
-				"allow_mobile": true,
-				"allow_desktop": false,
-				"provider": null,
-				"channel_id": null,
-				"fcm": null,
-				"aws_sns": null,
-				"azure_notification_hubs": null
-			}
-		},
-		"forking": {
-			"description": "Fork-an-app feature configuration",
-			"$ref": "#/$defs/ForkingConfig",
-			"default": {
-				"enabled": true,
-				"max_size_bytes": 1073741824,
-				"max_file_count": 10000,
-				"allow_unauthenticated_to_offline": false
-			}
-		},
-		"payments": {
-			"$ref": "#/$defs/PaymentsConfig",
-			"default": {
-				"onboarding_enabled": false,
-				"marketplace_enabled": false,
-				"node_payments_enabled": false,
-				"servicing_enabled": false,
-				"livemode": false,
-				"live_approved": false,
-				"platform_account_id": null,
-				"countries": ["DE"],
-				"seller_allowlist": [],
-				"currencies": ["eur"],
-				"node_payment_methods": ["card", "link"],
-				"marketplace_payment_methods": ["card", "link"],
-				"node_method_configuration": null,
-				"marketplace_method_configuration": null,
-				"node_fee_bps": 100,
-				"marketplace_fee_bps": 1000,
-				"marketplace_fee_basis": "gross",
-				"marketplace_min_amount": 300,
-				"max_payment_amount": 100000,
-				"new_seller_daily_cap": 200000,
-				"node_tax_mode": "unconfigured",
-				"marketplace_tax_mode": "unconfigured",
-				"owner_terms_version": null,
-				"seller_terms_version": null,
-				"purchase_terms_version": null,
-				"withdrawal_days": 14,
-				"purchase_waiver_version": null,
-				"product_tax_code": null,
-				"frontend_url": null,
-				"legacy_checkout_until": null,
-				"legal_texts": []
-			}
-		}
-	},
-	"required": [
-		"name",
-		"description",
-		"features",
-		"hubs",
-		"domain",
-		"terms_of_service",
-		"legal_notice",
-		"privacy_policy",
-		"contact",
-		"environment",
-		"tiers"
-	],
-	"$defs": {
-		"Authentication": {
-			"type": "object",
-			"properties": {
-				"variant": {
-					"type": "string"
-				},
-				"openid": {
-					"anyOf": [
-						{
-							"$ref": "#/$defs/OpenIdConfig"
-						},
-						{
-							"type": "null"
-						}
-					]
-				},
-				"oauth2": {
-					"anyOf": [
-						{
-							"$ref": "#/$defs/OAuth2Config"
-						},
-						{
-							"type": "null"
-						}
-					]
-				}
-			},
-			"required": ["variant"]
-		},
-		"OpenIdConfig": {
-			"type": "object",
-			"properties": {
-				"issuer": {
-					"type": ["string", "null"]
-				},
-				"authority": {
-					"type": ["string", "null"]
-				},
-				"client_id": {
-					"type": ["string", "null"]
-				},
-				"audience": {
-					"type": ["string", "null"]
-				},
-				"redirect_uri": {
-					"type": ["string", "null"]
-				},
-				"post_logout_redirect_uri": {
-					"type": ["string", "null"]
-				},
-				"response_type": {
-					"type": ["string", "null"]
-				},
-				"scope": {
-					"type": ["string", "null"]
-				},
-				"discovery_url": {
-					"type": ["string", "null"]
-				},
-				"user_info_url": {
-					"type": ["string", "null"]
-				},
-				"jwks_url": {
-					"type": "string"
-				},
-				"proxy": {
-					"anyOf": [
-						{
-							"$ref": "#/$defs/OpenIdProxy"
-						},
-						{
-							"type": "null"
-						}
-					]
-				},
-				"cognito": {
-					"anyOf": [
-						{
-							"$ref": "#/$defs/CognitoConfig"
-						},
-						{
-							"type": "null"
-						}
-					]
-				}
-			},
-			"required": ["jwks_url"]
-		},
-		"OpenIdProxy": {
-			"type": "object",
-			"properties": {
-				"enabled": {
-					"type": "boolean"
-				},
-				"authorize": {
-					"type": ["string", "null"]
-				},
-				"token": {
-					"type": ["string", "null"]
-				},
-				"userinfo": {
-					"type": ["string", "null"]
-				},
-				"revoke": {
-					"type": ["string", "null"]
-				}
-			},
-			"required": ["enabled"]
-		},
-		"CognitoConfig": {
-			"type": "object",
-			"properties": {
-				"user_pool_id": {
-					"type": "string"
-				}
-			},
-			"required": ["user_pool_id"]
-		},
-		"OAuth2Config": {
-			"type": "object",
-			"properties": {
-				"authorization_endpoint": {
-					"type": "string"
-				},
-				"token_endpoint": {
-					"type": "string"
-				},
-				"client_id": {
-					"type": "string"
-				}
-			},
-			"required": ["authorization_endpoint", "token_endpoint", "client_id"]
-		},
-		"Features": {
-			"type": "object",
-			"properties": {
-				"model_hosting": {
-					"type": "boolean"
-				},
-				"flow_hosting": {
-					"type": "boolean"
-				},
-				"governance": {
-					"type": "boolean"
-				},
-				"ai_act": {
-					"type": "boolean"
-				},
-				"unauthorized_read": {
-					"type": "boolean"
-				},
-				"admin_interface": {
-					"type": "boolean"
-				},
-				"premium": {
-					"type": "boolean"
-				},
-				"wasm_registry": {
-					"type": "boolean",
-					"default": false
-				},
-				"wasm_server_compilation": {
-					"type": "boolean",
-					"default": false
-				},
-				"app_package_linking": {
-					"type": "boolean",
-					"default": false
-				},
-				"wasm_package_user_management": {
-					"type": "boolean",
-					"default": false
-				}
-			},
-			"required": [
-				"model_hosting",
-				"flow_hosting",
-				"governance",
-				"ai_act",
-				"unauthorized_read",
-				"admin_interface",
-				"premium"
-			]
-		},
-		"RealtimeConfig": {
-			"type": "object",
-			"properties": {
-				"ice": {
-					"description": "Omit this field to retain the WebRTC library's built-in ICE defaults.",
-					"anyOf": [
-						{
-							"$ref": "#/$defs/RealtimeIceConfig"
-						},
-						{
-							"type": "null"
-						}
-					]
-				}
-			}
-		},
-		"RealtimeIceConfig": {
-			"description": "Selects the service that issues short-lived STUN and TURN configuration for\nrealtime clients. Provider secrets are resolved by the API from references\nin the secret store and never belong in the hub JSON itself.",
-			"oneOf": [
-				{
-					"type": "object",
-					"properties": {
-						"provider": {
-							"type": "string",
-							"const": "cloudflare"
-						},
-						"turn_key_id_secret_ref": {
-							"description": "Secret-store reference containing the Cloudflare TURN key identifier.",
-							"type": "string"
-						},
-						"turn_key_api_token_secret_ref": {
-							"description": "Secret-store reference containing the bearer key returned with the TURN key.",
-							"type": "string"
-						},
-						"ttl_seconds": {
-							"description": "Lifetime of each client credential. Cloudflare accepts at most 48 hours.",
-							"type": "integer",
-							"format": "uint32",
-							"maximum": 172800,
-							"minimum": 300,
-							"default": 14400
-						}
-					},
-					"required": [
-						"provider",
-						"turn_key_id_secret_ref",
-						"turn_key_api_token_secret_ref"
-					]
-				}
-			]
-		},
-		"StandaloneConfig": {
-			"description": "Device enrollment limits. Enabling enrollment requires the device registry migration.",
-			"type": "object",
-			"properties": {
-				"enabled": {
-					"type": "boolean",
-					"default": false
-				},
-				"max_devices_per_user": {
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0,
-					"default": 100
-				},
-				"max_pending_enrollments_per_user": {
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0,
-					"default": 10
-				},
-				"enrollment_ttl_seconds": {
-					"type": "integer",
-					"format": "uint64",
-					"minimum": 0,
-					"default": 86400
-				},
-				"api_base_url": {
-					"description": "Canonical public API base, including `/api/v1`. Defaults to the hub origin.",
-					"type": ["string", "null"],
-					"default": null
-				},
-				"release_trust": {
-					"description": "Release authority is configured independently of downloaded release manifests.",
-					"anyOf": [
-						{
-							"$ref": "#/$defs/StandaloneReleaseConfig"
-						},
-						{
-							"type": "null"
-						}
-					],
-					"default": null
-				},
-				"telemetry_tiers": {
-					"description": "Encrypted retained telemetry limits per account tier. Missing tiers cannot store history.",
-					"type": "object",
-					"additionalProperties": {
-						"$ref": "#/$defs/StandaloneTelemetryLimit"
-					},
-					"default": {}
-				}
-			}
-		},
-		"StandaloneReleaseConfig": {
-			"type": "object",
-			"properties": {
-				"manifest_url": {
-					"type": "string"
-				},
-				"public_keys": {
-					"description": "Canonical base64url Ed25519 public keys, 32 bytes each.",
-					"type": "array",
-					"items": {
-						"type": "string"
-					}
-				},
-				"minimum_sequence": {
-					"type": "integer",
-					"format": "uint64",
-					"minimum": 0,
-					"default": 0
-				}
-			},
-			"required": ["manifest_url", "public_keys"]
-		},
-		"StandaloneTelemetryLimit": {
-			"type": "object",
-			"properties": {
-				"max_bytes": {
-					"type": "integer",
-					"format": "uint64",
-					"minimum": 0,
-					"default": 0
-				},
-				"retention_seconds": {
-					"type": "integer",
-					"format": "uint64",
-					"minimum": 0,
-					"default": 0
-				}
-			}
-		},
-		"MailConfig": {
-			"type": "object",
-			"properties": {
-				"provider": {
-					"$ref": "#/$defs/MailProviderType"
-				},
-				"from_email": {
-					"type": "string"
-				},
-				"from_name": {
-					"type": "string"
-				},
-				"smtp": {
-					"anyOf": [
-						{
-							"$ref": "#/$defs/SmtpSettings"
-						},
-						{
-							"type": "null"
-						}
-					]
-				},
-				"sendgrid": {
-					"anyOf": [
-						{
-							"$ref": "#/$defs/SendgridSettings"
-						},
-						{
-							"type": "null"
-						}
-					]
-				}
-			},
-			"required": ["provider", "from_email", "from_name"]
-		},
-		"MailProviderType": {
-			"type": "string",
-			"enum": ["ses", "sendgrid", "smtp", "azure_communication_services"]
-		},
-		"SmtpSettings": {
-			"type": "object",
-			"properties": {
-				"host_env": {
-					"type": "string"
-				},
-				"port_env": {
-					"type": "string"
-				},
-				"username_env": {
-					"type": "string"
-				},
-				"password_env": {
-					"type": "string"
-				}
-			},
-			"required": ["host_env", "port_env", "username_env", "password_env"]
-		},
-		"SendgridSettings": {
-			"type": "object",
-			"properties": {
-				"api_key_env": {
-					"type": "string"
-				}
-			},
-			"required": ["api_key_env"]
-		},
-		"AlertingConfig": {
-			"type": "object",
-			"properties": {
-				"mail": {
-					"type": "string"
-				}
-			},
-			"required": ["mail"]
-		},
-		"Contact": {
-			"type": "object",
-			"properties": {
-				"name": {
-					"type": "string"
-				},
-				"email": {
-					"type": "string"
-				},
-				"url": {
-					"type": "string"
-				}
-			},
-			"required": ["name", "email", "url"]
-		},
-		"Environment": {
-			"type": "string",
-			"enum": ["Development", "Production", "Staging"]
-		},
-		"UserTier": {
-			"type": "object",
-			"properties": {
-				"max_non_visible_projects": {
-					"type": "integer",
-					"format": "int32"
-				},
-				"max_remote_executions": {
-					"type": "integer",
-					"format": "int32"
-				},
-				"execution_tier": {
-					"type": "string"
-				},
-				"max_total_size": {
-					"type": "integer",
-					"format": "int64"
-				},
-				"max_llm_cost": {
-					"type": "integer",
-					"format": "int32"
-				},
-				"max_llm_calls": {
-					"type": ["integer", "null"],
-					"format": "int32"
-				},
-				"llm_tiers": {
-					"type": "array",
-					"items": {
-						"type": "string"
-					}
-				},
-				"product_id": {
-					"type": ["string", "null"]
-				},
-				"max_runtime_ms": {
-					"type": "integer",
-					"format": "int64",
-					"default": -1
-				},
-				"max_ai_cost_micros": {
-					"type": "integer",
-					"format": "int64",
-					"default": -1
-				},
-				"max_concurrent_executions": {
-					"type": "integer",
-					"format": "int32",
-					"default": -1
-				}
-			},
-			"required": [
-				"max_non_visible_projects",
-				"max_remote_executions",
-				"execution_tier",
-				"max_total_size",
-				"max_llm_cost",
-				"llm_tiers"
-			]
-		},
-		"Lookup": {
-			"type": "object",
-			"properties": {
-				"email": {
-					"type": "boolean"
-				},
-				"name": {
-					"type": "boolean"
-				},
-				"username": {
-					"type": "boolean"
-				},
-				"preferred_username": {
-					"type": "boolean"
-				},
-				"avatar": {
-					"type": "boolean"
-				},
-				"additional_information": {
-					"type": "boolean"
-				},
-				"description": {
-					"type": "boolean"
-				},
-				"created_at": {
-					"type": "boolean"
-				}
-			},
-			"required": [
-				"email",
-				"name",
-				"username",
-				"preferred_username",
-				"avatar",
-				"additional_information",
-				"description",
-				"created_at"
-			]
-		},
-		"OAuthProviderConfig": {
-			"description": "OAuth provider configuration from the config file.\nThis is used to configure OAuth providers centrally.\nThe client_secret is resolved from environment variables at build time for providers that need it.",
-			"type": "object",
-			"properties": {
-				"name": {
-					"description": "Display name shown to users",
-					"type": "string"
-				},
-				"client_id": {
-					"description": "The client ID (public, not secret)",
-					"type": "string",
-					"default": ""
-				},
-				"client_secret_env": {
-					"description": "Environment variable name containing the client secret (resolved at build time)\nIf null, no secret is needed (PKCE-based flow)",
-					"type": ["string", "null"]
-				},
-				"client_secret": {
-					"description": "The resolved client secret (populated at build time from the env var)",
-					"type": ["string", "null"],
-					"default": null
-				},
-				"auth_url": {
-					"description": "OAuth authorization endpoint URL",
-					"type": "string"
-				},
-				"token_url": {
-					"description": "OAuth token endpoint URL",
-					"type": "string"
-				},
-				"scopes": {
-					"description": "Base OAuth scopes (node-specific scopes will be added by the frontend)",
-					"type": "array",
-					"items": {
-						"type": "string"
-					},
-					"default": []
-				},
-				"pkce_required": {
-					"description": "Whether PKCE is required",
-					"type": "boolean",
-					"default": false
-				},
-				"requires_secret_proxy": {
-					"description": "Whether this provider requires the secret proxy for token exchange\nIf true, token exchange requests go through the API server which adds the secret",
-					"type": "boolean",
-					"default": false
-				},
-				"revoke_url": {
-					"description": "Optional: URL for token revocation",
-					"type": ["string", "null"]
-				},
-				"userinfo_url": {
-					"description": "Optional: URL for user info endpoint",
-					"type": ["string", "null"]
-				},
-				"device_auth_url": {
-					"description": "Optional: Device authorization URL for device flow",
-					"type": ["string", "null"]
-				},
-				"use_device_flow": {
-					"description": "Whether to use device flow",
-					"type": "boolean",
-					"default": false
-				},
-				"use_implicit_flow": {
-					"type": "boolean",
-					"default": false
-				},
-				"audience": {
-					"description": "Optional: Audience claim for token validation",
-					"type": ["string", "null"]
-				},
-				"api_hosts": {
-					"description": "Hosts a bot's connector may send this provider's token to (exact names or `*.suffix`).\nEmpty uses the built-in list for the provider id.",
-					"type": "array",
-					"items": {
-						"type": "string"
-					},
-					"default": []
-				},
-				"mcp_url": {
-					"description": "Optional: the provider's MCP endpoint, which may receive the provider's token.",
-					"type": ["string", "null"]
-				}
-			},
-			"required": ["name", "auth_url", "token_url"]
-		},
-		"SupportedSinks": {
-			"description": "Configuration for supported server-side event sinks.\nWhen a hub is deployed, only sinks listed here will be available for server-side execution.\nDesktop availability is defined by each sink type.",
-			"type": "object",
-			"properties": {
-				"http": {
-					"description": "HTTP/REST API endpoint sink",
-					"type": "boolean",
-					"default": false
-				},
-				"webhook": {
-					"description": "Incoming webhook from external service",
-					"type": "boolean",
-					"default": false
-				},
-				"cron": {
-					"description": "Cron scheduled trigger",
-					"type": "boolean",
-					"default": false
-				},
-				"mqtt": {
-					"description": "MQTT message broker",
-					"type": "boolean",
-					"default": false
-				},
-				"github": {
-					"description": "GitHub repository webhook",
-					"type": "boolean",
-					"default": false
-				},
-				"rss": {
-					"description": "RSS feed polling",
-					"type": "boolean",
-					"default": false
-				},
-				"discord": {
-					"description": "Discord bot integration",
-					"type": "boolean",
-					"default": false
-				},
-				"slack": {
-					"description": "Slack bot integration",
-					"type": "boolean",
-					"default": false
-				},
-				"telegram": {
-					"description": "Telegram bot integration",
-					"type": "boolean",
-					"default": false
-				},
-				"email": {
-					"description": "Email/IMAP polling",
-					"type": "boolean",
-					"default": false
-				},
-				"inbound_email": {
-					"description": "Email received at an address issued by the server",
-					"type": "boolean",
-					"default": false
-				},
-				"teams": {
-					"description": "Microsoft Teams bot webhook",
-					"type": "boolean",
-					"default": false
-				}
-			}
-		},
-		"WasmRegistryConfig": {
-			"type": "object",
-			"properties": {
-				"on_member_leave": {
-					"description": "What happens to app packages when the member who added them leaves the app",
-					"$ref": "#/$defs/MemberLeavePolicy",
-					"default": "stale"
-				}
-			}
-		},
-		"MemberLeavePolicy": {
-			"oneOf": [
-				{
-					"description": "Remove packages added by the departing member from the app",
-					"type": "string",
-					"const": "remove"
-				},
-				{
-					"description": "Mark packages as stale — frozen version, no updates, cannot be placed on new boards",
-					"type": "string",
-					"const": "stale"
-				}
-			]
-		},
-		"AuditConfig": {
-			"type": "object",
-			"properties": {
-				"enabled": {
-					"description": "Master switch. When false, no audit entries are recorded.",
-					"type": "boolean",
-					"default": true
-				},
-				"level": {
-					"description": "Which action families are recorded. Defaults to `standard`.",
-					"$ref": "#/$defs/AuditLevel",
-					"default": "standard"
-				},
-				"log_ip": {
-					"description": "Whether to capture client IP addresses in audit entries (GDPR consideration)",
-					"type": "boolean",
-					"default": false
-				},
-				"trusted_proxy_hops": {
-					"description": "Reverse proxies under the deployment's control that append to\n`X-Forwarded-For`. The recorded client IP is taken that many entries from\nthe right, which a client cannot forge. Unset records the leftmost entry,\nwhich the client chooses.",
-					"type": ["integer", "null"],
-					"format": "uint32",
-					"minimum": 0,
-					"default": null
-				},
-				"require_signing": {
-					"description": "Refuse to run without keys: the API without an entry key, the audit worker\nwithout an audit signing key.",
-					"type": "boolean",
-					"default": false
-				},
-				"log_executions": {
-					"description": "Record execution lifecycle transitions at any level.\nThe `verbose` level records them regardless of this switch.",
-					"type": "boolean",
-					"default": false
-				},
-				"retention": {
-					"description": "How long each part of the trail is kept, and when the audit worker seals.",
-					"$ref": "#/$defs/AuditRetention",
-					"default": {
-						"evidence_hot_days": 396,
-						"archive_years_after_year_end": 3,
-						"activity_days": 90,
-						"high_risk_activity_days": 183,
-						"ip_days": 7,
-						"details_days": null,
-						"seal_after_records": 500,
-						"seal_after_seconds": 300,
-						"max_records_per_seal": 1000,
-						"epoch_interval_seconds": 300,
-						"pending_alert_seconds": 900,
-						"archive_grace_days": 3
-					}
-				}
-			}
-		},
-		"AuditRetention": {
-			"description": "Retention, sealing and signing cadence. Evidence is pruned only once its month is\narchived to the audit bucket, so a deployment without `AUDIT_BUCKET` keeps every\nevidence record; activity records are deleted after their window.",
-			"type": "object",
-			"properties": {
-				"evidence_hot_days": {
-					"description": "Days security and content records stay in the database after their month\ncloses. Older months are read from the monthly archive.",
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0,
-					"default": 396
-				},
-				"archive_years_after_year_end": {
-					"description": "Informational horizon written into archive manifests: the end of this many\ncalendar years after the month. The bucket's retention lock enforces it.",
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0,
-					"default": 3
-				},
-				"activity_days": {
-					"description": "Days records of verbose-only actions stay in the database. They are never\narchived.",
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0,
-					"default": 90
-				},
-				"high_risk_activity_days": {
-					"description": "Minimum days for execution records of apps assessed as high-risk AI systems\n(EU AI Act art. 19 and 26(6)).",
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0,
-					"default": 183
-				},
-				"ip_days": {
-					"description": "Days a recorded client IP is kept before it is removed from its record.",
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0,
-					"default": 7
-				},
-				"details_days": {
-					"description": "Days record details are kept. Unset keeps them as long as the record.",
-					"type": ["integer", "null"],
-					"format": "uint32",
-					"minimum": 0,
-					"default": null
-				},
-				"seal_after_records": {
-					"description": "Seal a chain once this many records are pending.",
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0,
-					"default": 500
-				},
-				"seal_after_seconds": {
-					"description": "Seal a chain once its oldest pending record is this old.",
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0,
-					"default": 300
-				},
-				"max_records_per_seal": {
-					"description": "Largest seal the worker writes in one transaction.",
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0,
-					"default": 1000
-				},
-				"epoch_interval_seconds": {
-					"description": "Sign an epoch once the oldest unanchored seal is this old, or earlier when 2,000\nseals wait. Each epoch is one request to the key service, so this sets its cost:\n300 s means at most 12 routine signatures an hour.",
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0,
-					"default": 300
-				},
-				"pending_alert_seconds": {
-					"description": "Log an alert when the oldest pending record is older than this.",
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0,
-					"default": 900
-				},
-				"archive_grace_days": {
-					"description": "Days after a month closes before it is archived.",
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0,
-					"default": 3
-				}
-			}
-		},
-		"AuditLevel": {
-			"description": "How much of the mutation surface the audit trail records. Each level includes\neverything below it. Execution lifecycle records additionally follow\n`AuditConfig::log_executions`.",
-			"oneOf": [
-				{
-					"description": "Identity, access, credentials, publication, deletions and platform administration.",
-					"type": "string",
-					"const": "minimal"
-				},
-				{
-					"description": "Minimal plus content changes: boards, events, pages, widgets, files, tables, settings.",
-					"type": "string",
-					"const": "standard"
-				},
-				{
-					"description": "Standard plus every request attempt and outcome, editor commands, graph row\nwrites, file read grants and execution lifecycle records.",
-					"type": "string",
-					"const": "verbose"
-				}
-			]
-		},
-		"PushNotificationsConfig": {
-			"type": "object",
-			"properties": {
-				"enabled": {
-					"type": "boolean",
-					"default": false
-				},
-				"allow_mobile": {
-					"type": "boolean",
-					"default": true
-				},
-				"allow_desktop": {
-					"type": "boolean",
-					"default": false
-				},
-				"provider": {
-					"anyOf": [
-						{
-							"$ref": "#/$defs/PushNotificationProviderType"
-						},
-						{
-							"type": "null"
-						}
-					]
-				},
-				"channel_id": {
-					"type": ["string", "null"]
-				},
-				"fcm": {
-					"anyOf": [
-						{
-							"$ref": "#/$defs/FcmPushNotificationsConfig"
-						},
-						{
-							"type": "null"
-						}
-					]
-				},
-				"aws_sns": {
-					"anyOf": [
-						{
-							"$ref": "#/$defs/AwsSnsPushNotificationsConfig"
-						},
-						{
-							"type": "null"
-						}
-					]
-				},
-				"azure_notification_hubs": {
-					"anyOf": [
-						{
-							"$ref": "#/$defs/AzureNotificationHubsPushNotificationsConfig"
-						},
-						{
-							"type": "null"
-						}
-					]
-				}
-			}
-		},
-		"PushNotificationProviderType": {
-			"type": "string",
-			"enum": ["fcm", "aws_sns", "azure_notification_hubs"]
-		},
-		"FcmPushNotificationsConfig": {
-			"type": "object",
-			"properties": {
-				"project_id": {
-					"type": "string"
-				},
-				"service_account_json_env": {
-					"type": "string"
-				}
-			},
-			"required": ["project_id", "service_account_json_env"]
-		},
-		"AwsSnsPushNotificationsConfig": {
-			"type": "object",
-			"properties": {
-				"android_platform_application_arn_env": {
-					"type": "string"
-				},
-				"ios_platform_application_arn_env": {
-					"type": "string"
-				},
-				"region_env": {
-					"type": ["string", "null"]
-				}
-			},
-			"required": [
-				"android_platform_application_arn_env",
-				"ios_platform_application_arn_env"
-			]
-		},
-		"AzureNotificationHubsPushNotificationsConfig": {
-			"type": "object",
-			"properties": {
-				"namespace": {
-					"type": "string"
-				},
-				"hub_name": {
-					"type": "string"
-				},
-				"sas_key_name_env": {
-					"type": "string"
-				},
-				"sas_key_value_env": {
-					"type": "string"
-				}
-			},
-			"required": [
-				"namespace",
-				"hub_name",
-				"sas_key_name_env",
-				"sas_key_value_env"
-			]
-		},
-		"ForkingConfig": {
-			"description": "Fork-an-app feature config. Controls quotas and the unauthenticated-fork\npath. Defaults are conservative: feature on, 1 GB / 10k file cap, no\nanonymous forking.",
-			"type": "object",
-			"properties": {
-				"enabled": {
-					"description": "Global kill switch — when false, every fork endpoint refuses",
-					"type": "boolean",
-					"default": true
-				},
-				"max_size_bytes": {
-					"description": "Hard cap on the total bytes copied in a single fork",
-					"type": "integer",
-					"format": "uint64",
-					"minimum": 0,
-					"default": 1073741824
-				},
-				"max_file_count": {
-					"description": "Hard cap on the number of objects copied in a single fork",
-					"type": "integer",
-					"format": "uint64",
-					"minimum": 0,
-					"default": 10000
-				},
-				"allow_unauthenticated_to_offline": {
-					"description": "Whether anonymous (unauthenticated) callers may fork a public+free app\nto an offline (desktop) destination",
-					"type": "boolean",
-					"default": false
-				}
-			}
-		},
-		"PaymentsConfig": {
-			"type": "object",
-			"properties": {
-				"onboarding_enabled": {
-					"type": "boolean",
-					"default": false
-				},
-				"marketplace_enabled": {
-					"type": "boolean",
-					"default": false
-				},
-				"node_payments_enabled": {
-					"type": "boolean",
-					"default": false
-				},
-				"servicing_enabled": {
-					"type": "boolean",
-					"default": false
-				},
-				"livemode": {
-					"type": "boolean",
-					"default": false
-				},
-				"live_approved": {
-					"type": "boolean",
-					"default": false
-				},
-				"platform_account_id": {
-					"type": ["string", "null"],
-					"default": null
-				},
-				"countries": {
-					"type": "array",
-					"items": {
-						"type": "string"
-					},
-					"default": ["DE"]
-				},
-				"seller_allowlist": {
-					"type": "array",
-					"items": {
-						"type": "string"
-					},
-					"default": []
-				},
-				"currencies": {
-					"type": "array",
-					"items": {
-						"type": "string"
-					},
-					"default": ["eur"]
-				},
-				"node_payment_methods": {
-					"type": "array",
-					"items": {
-						"type": "string"
-					},
-					"default": ["card", "link"]
-				},
-				"marketplace_payment_methods": {
-					"type": "array",
-					"items": {
-						"type": "string"
-					},
-					"default": ["card", "link"]
-				},
-				"node_method_configuration": {
-					"type": ["string", "null"],
-					"default": null
-				},
-				"marketplace_method_configuration": {
-					"type": ["string", "null"],
-					"default": null
-				},
-				"node_fee_bps": {
-					"type": "integer",
-					"format": "uint16",
-					"minimum": 0,
-					"maximum": 65535,
-					"default": 100
-				},
-				"marketplace_fee_bps": {
-					"type": "integer",
-					"format": "uint16",
-					"minimum": 0,
-					"maximum": 65535,
-					"default": 1000
-				},
-				"marketplace_fee_basis": {
-					"$ref": "#/$defs/PaymentFeeBasis",
-					"default": "gross"
-				},
-				"marketplace_min_amount": {
-					"type": "integer",
-					"format": "int64",
-					"default": 300
-				},
-				"max_payment_amount": {
-					"type": "integer",
-					"format": "int64",
-					"default": 100000
-				},
-				"new_seller_daily_cap": {
-					"type": "integer",
-					"format": "int64",
-					"default": 200000
-				},
-				"node_tax_mode": {
-					"$ref": "#/$defs/PaymentTaxMode",
-					"default": "unconfigured"
-				},
-				"marketplace_tax_mode": {
-					"$ref": "#/$defs/PaymentTaxMode",
-					"default": "unconfigured"
-				},
-				"owner_terms_version": {
-					"type": ["string", "null"],
-					"default": null
-				},
-				"seller_terms_version": {
-					"type": ["string", "null"],
-					"default": null
-				},
-				"purchase_terms_version": {
-					"type": ["string", "null"],
-					"default": null
-				},
-				"withdrawal_days": {
-					"type": "integer",
-					"format": "uint16",
-					"minimum": 0,
-					"maximum": 65535,
-					"default": 14
-				},
-				"purchase_waiver_version": {
-					"type": ["string", "null"],
-					"default": null
-				},
-				"product_tax_code": {
-					"type": ["string", "null"],
-					"default": null
-				},
-				"frontend_url": {
-					"type": ["string", "null"],
-					"default": null
-				},
-				"legacy_checkout_until": {
-					"type": ["integer", "null"],
-					"format": "int64",
-					"default": null
-				},
-				"legal_texts": {
-					"type": "array",
-					"items": {
-						"$ref": "#/$defs/PaymentLegalText"
-					},
-					"default": []
-				}
-			}
-		},
-		"PaymentFeeBasis": {
-			"type": "string",
-			"enum": ["gross", "net_of_tax"]
-		},
-		"PaymentTaxMode": {
-			"type": "string",
-			"enum": ["unconfigured", "seller_supplier", "platform_supplier"]
-		},
-		"PaymentLegalText": {
-			"type": "object",
-			"properties": {
-				"kind": {
-					"type": "string"
-				},
-				"version": {
-					"type": "string"
-				},
-				"locale": {
-					"type": "string"
-				},
-				"text": {
-					"type": "string"
-				},
-				"url": {
-					"type": ["string", "null"]
-				},
-				"hash": {
-					"type": ["string", "null"]
-				}
-			},
-			"required": ["kind", "version", "locale"]
-		}
-	}
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Hub",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "thumbnail": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "icon": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "authentication": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Authentication"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "features": {
+      "$ref": "#/$defs/Features"
+    },
+    "hubs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "provider": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "domain": {
+      "type": "string"
+    },
+    "secure": {
+      "type": "boolean",
+      "default": true
+    },
+    "region": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "terms_of_service": {
+      "type": "string"
+    },
+    "signaling": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "realtime": {
+      "description": "Realtime transport configuration. Signaling remains configured separately.",
+      "$ref": "#/$defs/RealtimeConfig",
+      "default": {
+        "ice": null
+      }
+    },
+    "standalone": {
+      "$ref": "#/$defs/StandaloneConfig",
+      "default": {
+        "enabled": false,
+        "max_devices_per_user": 100,
+        "max_pending_enrollments_per_user": 10,
+        "enrollment_ttl_seconds": 86400,
+        "api_base_url": null,
+        "release_trust": null,
+        "telemetry_tiers": {}
+      }
+    },
+    "cdn": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "app": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "web": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "mail": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MailConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "alerting": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AlertingConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "legal_notice": {
+      "type": "string"
+    },
+    "privacy_policy": {
+      "type": "string"
+    },
+    "contact": {
+      "$ref": "#/$defs/Contact"
+    },
+    "max_users_prototype": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int32"
+    },
+    "default_user_plan": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "environment": {
+      "$ref": "#/$defs/Environment"
+    },
+    "tiers": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/UserTier"
+      }
+    },
+    "lookup": {
+      "$ref": "#/$defs/Lookup",
+      "default": {
+        "email": false,
+        "name": true,
+        "username": false,
+        "preferred_username": true,
+        "avatar": true,
+        "additional_information": true,
+        "description": true,
+        "created_at": true
+      }
+    },
+    "oauth_providers": {
+      "description": "OAuth provider configurations",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/OAuthProviderConfig"
+      },
+      "default": {}
+    },
+    "supported_sinks": {
+      "description": "Supported server-side event sinks (e.g., discord, telegram, cron, http)\nIf None, defaults to basic sinks like http, webhook, cron",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SupportedSinks"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "wasm_registry_config": {
+      "description": "WASM registry configuration",
+      "$ref": "#/$defs/WasmRegistryConfig",
+      "default": {
+        "on_member_leave": "stale"
+      }
+    },
+    "audit": {
+      "description": "Audit trail configuration",
+      "$ref": "#/$defs/AuditConfig",
+      "default": {
+        "enabled": true,
+        "level": "standard",
+        "log_ip": false,
+        "trusted_proxy_hops": null,
+        "require_signing": false,
+        "log_executions": false,
+        "retention": {
+          "evidence_hot_days": 396,
+          "archive_years_after_year_end": 3,
+          "activity_days": 90,
+          "high_risk_activity_days": 183,
+          "ip_days": 7,
+          "details_days": null,
+          "seal_after_records": 500,
+          "seal_after_seconds": 300,
+          "max_records_per_seal": 1000,
+          "epoch_interval_seconds": 300,
+          "pending_alert_seconds": 900,
+          "archive_grace_days": 3
+        }
+      }
+    },
+    "payments": {
+      "$ref": "#/$defs/PaymentsConfig",
+      "default": {
+        "onboarding_enabled": false,
+        "marketplace_enabled": false,
+        "node_payments_enabled": false,
+        "servicing_enabled": false,
+        "livemode": false,
+        "live_approved": false,
+        "platform_account_id": null,
+        "countries": [
+          "DE"
+        ],
+        "seller_allowlist": [],
+        "currencies": [
+          "eur"
+        ],
+        "node_payment_methods": [
+          "card",
+          "link"
+        ],
+        "marketplace_payment_methods": [
+          "card",
+          "link"
+        ],
+        "node_method_configuration": null,
+        "marketplace_method_configuration": null,
+        "node_fee_bps": 100,
+        "marketplace_fee_bps": 1000,
+        "marketplace_fee_basis": "gross",
+        "marketplace_min_amount": 300,
+        "max_payment_amount": 100000,
+        "new_seller_daily_cap": 200000,
+        "node_tax_mode": "unconfigured",
+        "marketplace_tax_mode": "unconfigured",
+        "owner_terms_version": null,
+        "seller_terms_version": null,
+        "purchase_terms_version": null,
+        "withdrawal_days": 14,
+        "purchase_waiver_version": null,
+        "product_tax_code": null,
+        "frontend_url": null,
+        "legacy_checkout_until": null,
+        "legal_texts": []
+      }
+    },
+    "push_notifications": {
+      "description": "Push notification provider configuration",
+      "$ref": "#/$defs/PushNotificationsConfig",
+      "default": {
+        "enabled": false,
+        "allow_mobile": true,
+        "allow_desktop": false,
+        "provider": null,
+        "channel_id": null,
+        "fcm": null,
+        "aws_sns": null,
+        "azure_notification_hubs": null
+      }
+    },
+    "forking": {
+      "description": "Fork-an-app feature configuration",
+      "$ref": "#/$defs/ForkingConfig",
+      "default": {
+        "enabled": true,
+        "max_size_bytes": 1073741824,
+        "max_file_count": 10000,
+        "allow_unauthenticated_to_offline": false
+      }
+    },
+    "conversion": {
+      "description": "Upgrade / conversion experience configuration",
+      "$ref": "#/$defs/ConversionConfig",
+      "default": {
+        "enabled": true,
+        "mode": "consumer",
+        "headline": null,
+        "subheadline": null,
+        "contact": null,
+        "contact_message": null,
+        "tier_display": {}
+      }
+    },
+    "widget_storage": {
+      "description": "Where apps' Flow-Like storage files are served. A widget can only be\ngranted `{origin}{path_prefix}{appId}/` on these origins, never the\nwhole origin.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/HubWidgetStorage"
+      }
+    }
+  },
+  "required": [
+    "name",
+    "description",
+    "features",
+    "hubs",
+    "domain",
+    "terms_of_service",
+    "legal_notice",
+    "privacy_policy",
+    "contact",
+    "environment",
+    "tiers"
+  ],
+  "$defs": {
+    "Authentication": {
+      "type": "object",
+      "properties": {
+        "variant": {
+          "type": "string"
+        },
+        "openid": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenIdConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "oauth2": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OAuth2Config"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "variant"
+      ]
+    },
+    "OpenIdConfig": {
+      "type": "object",
+      "properties": {
+        "issuer": {
+          "description": "Exact token issuer (`iss`) accepted by the API. When omitted for an\nexisting deployment, `authority` remains the compatibility fallback.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "authority": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "audience": {
+          "description": "Exact token audience accepted by the API. Defaults to `client_id`,\nwhich is the correct target for OIDC ID tokens and Cognito tokens.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "redirect_uri": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "post_logout_redirect_uri": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "response_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "discovery_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "user_info_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "jwks_url": {
+          "type": "string"
+        },
+        "proxy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenIdProxy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cognito": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CognitoConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "jwks_url"
+      ]
+    },
+    "OpenIdProxy": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "authorize": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "token": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "userinfo": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revoke": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "enabled"
+      ]
+    },
+    "CognitoConfig": {
+      "type": "object",
+      "properties": {
+        "user_pool_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "user_pool_id"
+      ]
+    },
+    "OAuth2Config": {
+      "type": "object",
+      "properties": {
+        "authorization_endpoint": {
+          "type": "string"
+        },
+        "token_endpoint": {
+          "type": "string"
+        },
+        "client_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "authorization_endpoint",
+        "token_endpoint",
+        "client_id"
+      ]
+    },
+    "Features": {
+      "type": "object",
+      "properties": {
+        "model_hosting": {
+          "type": "boolean"
+        },
+        "flow_hosting": {
+          "type": "boolean"
+        },
+        "governance": {
+          "type": "boolean"
+        },
+        "ai_act": {
+          "type": "boolean"
+        },
+        "unauthorized_read": {
+          "type": "boolean"
+        },
+        "admin_interface": {
+          "type": "boolean"
+        },
+        "premium": {
+          "type": "boolean"
+        },
+        "wasm_registry": {
+          "type": "boolean",
+          "default": false
+        },
+        "wasm_server_compilation": {
+          "type": "boolean",
+          "default": false
+        },
+        "app_package_linking": {
+          "type": "boolean",
+          "default": false
+        },
+        "wasm_package_user_management": {
+          "type": "boolean",
+          "default": false
+        },
+        "telemetry": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "model_hosting",
+        "flow_hosting",
+        "governance",
+        "ai_act",
+        "unauthorized_read",
+        "admin_interface",
+        "premium"
+      ]
+    },
+    "RealtimeConfig": {
+      "type": "object",
+      "properties": {
+        "ice": {
+          "description": "Omit this field to retain the WebRTC library's built-in ICE defaults.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RealtimeIceConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "RealtimeIceConfig": {
+      "description": "Selects the service that issues short-lived STUN and TURN configuration for\nrealtime clients. Provider secrets are resolved by the API from references\nin the secret store and never belong in the hub JSON itself.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "turn_key_id_secret_ref": {
+              "description": "Secret-store reference containing the Cloudflare TURN key identifier.",
+              "type": "string"
+            },
+            "turn_key_api_token_secret_ref": {
+              "description": "Secret-store reference containing the bearer key returned with the TURN key.",
+              "type": "string"
+            },
+            "ttl_seconds": {
+              "description": "Lifetime of each client credential. Cloudflare accepts at most 48 hours.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 300,
+              "maximum": 172800,
+              "default": 14400
+            },
+            "provider": {
+              "type": "string",
+              "const": "cloudflare"
+            }
+          },
+          "required": [
+            "provider",
+            "turn_key_id_secret_ref",
+            "turn_key_api_token_secret_ref"
+          ]
+        }
+      ]
+    },
+    "StandaloneConfig": {
+      "description": "Device enrollment limits. Enabling enrollment requires the device registry migration.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "max_devices_per_user": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 100
+        },
+        "max_pending_enrollments_per_user": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 10
+        },
+        "enrollment_ttl_seconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 86400
+        },
+        "api_base_url": {
+          "description": "Canonical public API base, including `/api/v1`. Defaults to the hub origin.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "release_trust": {
+          "description": "Release authority is configured independently of downloaded release manifests.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StandaloneReleaseConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "telemetry_tiers": {
+          "description": "Encrypted retained telemetry limits per account tier. Missing tiers cannot store history.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/StandaloneTelemetryLimit"
+          },
+          "default": {}
+        }
+      }
+    },
+    "StandaloneReleaseConfig": {
+      "type": "object",
+      "properties": {
+        "manifest_url": {
+          "type": "string"
+        },
+        "public_keys": {
+          "description": "Canonical base64url Ed25519 public keys, 32 bytes each.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "minimum_sequence": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 0
+        }
+      },
+      "required": [
+        "manifest_url",
+        "public_keys"
+      ]
+    },
+    "StandaloneTelemetryLimit": {
+      "type": "object",
+      "properties": {
+        "max_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 0
+        },
+        "retention_seconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 0
+        }
+      }
+    },
+    "MailConfig": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/MailProviderType"
+        },
+        "from_email": {
+          "type": "string"
+        },
+        "from_name": {
+          "type": "string"
+        },
+        "smtp": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SmtpSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sendgrid": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SendgridSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "provider",
+        "from_email",
+        "from_name"
+      ]
+    },
+    "MailProviderType": {
+      "type": "string",
+      "enum": [
+        "ses",
+        "sendgrid",
+        "smtp",
+        "azure_communication_services"
+      ]
+    },
+    "SmtpSettings": {
+      "type": "object",
+      "properties": {
+        "host_env": {
+          "type": "string"
+        },
+        "port_env": {
+          "type": "string"
+        },
+        "username_env": {
+          "type": "string"
+        },
+        "password_env": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host_env",
+        "port_env",
+        "username_env",
+        "password_env"
+      ]
+    },
+    "SendgridSettings": {
+      "type": "object",
+      "properties": {
+        "api_key_env": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "api_key_env"
+      ]
+    },
+    "AlertingConfig": {
+      "type": "object",
+      "properties": {
+        "mail": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mail"
+      ]
+    },
+    "Contact": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "email",
+        "url"
+      ]
+    },
+    "Environment": {
+      "type": "string",
+      "enum": [
+        "Development",
+        "Production",
+        "Staging"
+      ]
+    },
+    "UserTier": {
+      "type": "object",
+      "properties": {
+        "max_non_visible_projects": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "max_remote_executions": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "max_runtime_ms": {
+          "description": "Monthly cloud workflow runtime in milliseconds; negative means unlimited.",
+          "type": "integer",
+          "format": "int64",
+          "default": -1
+        },
+        "max_concurrent_executions": {
+          "type": "integer",
+          "format": "int32",
+          "default": -1
+        },
+        "max_ai_cost_micros": {
+          "description": "Monthly hosted AI allowance in EUR millionths, including serving costs.",
+          "type": "integer",
+          "format": "int64",
+          "default": -1
+        },
+        "execution_tier": {
+          "type": "string"
+        },
+        "max_total_size": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "max_llm_cost": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "max_llm_calls": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "llm_tiers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "product_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "max_non_visible_projects",
+        "max_remote_executions",
+        "execution_tier",
+        "max_total_size",
+        "max_llm_cost",
+        "llm_tiers"
+      ]
+    },
+    "Lookup": {
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "boolean"
+        },
+        "username": {
+          "type": "boolean"
+        },
+        "preferred_username": {
+          "type": "boolean",
+          "default": false
+        },
+        "avatar": {
+          "type": "boolean"
+        },
+        "additional_information": {
+          "type": "boolean"
+        },
+        "description": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "email",
+        "name",
+        "username",
+        "avatar",
+        "additional_information",
+        "description",
+        "created_at"
+      ]
+    },
+    "OAuthProviderConfig": {
+      "description": "OAuth provider configuration from the config file.\nThis is used to configure OAuth providers centrally.\nThe client_secret is resolved from environment variables at build time for providers that need it.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Display name shown to users",
+          "type": "string"
+        },
+        "client_id": {
+          "description": "The client ID (public, not secret)",
+          "type": "string",
+          "default": ""
+        },
+        "client_secret_env": {
+          "description": "Environment variable name containing the client secret (resolved at build time)\nIf null, no secret is needed (PKCE-based flow)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_secret": {
+          "description": "The resolved client secret (populated at build time from the env var)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "auth_url": {
+          "description": "OAuth authorization endpoint URL",
+          "type": "string"
+        },
+        "token_url": {
+          "description": "OAuth token endpoint URL",
+          "type": "string"
+        },
+        "scopes": {
+          "description": "Base OAuth scopes (node-specific scopes will be added by the frontend)",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "pkce_required": {
+          "description": "Whether PKCE is required",
+          "type": "boolean",
+          "default": false
+        },
+        "requires_secret_proxy": {
+          "description": "Whether this provider requires the secret proxy for token exchange\nIf true, token exchange requests go through the API server which adds the secret",
+          "type": "boolean",
+          "default": false
+        },
+        "revoke_url": {
+          "description": "Optional: URL for token revocation",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "userinfo_url": {
+          "description": "Optional: URL for user info endpoint",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "device_auth_url": {
+          "description": "Optional: Device authorization URL for device flow",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "use_device_flow": {
+          "description": "Whether to use device flow",
+          "type": "boolean",
+          "default": false
+        },
+        "use_implicit_flow": {
+          "type": "boolean",
+          "default": false
+        },
+        "audience": {
+          "description": "Optional: Audience claim for token validation",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "api_hosts": {
+          "description": "Hosts a bot's connector may send this provider's token to (exact names or `*.suffix`).\nEmpty uses the built-in list for the provider id.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "mcp_url": {
+          "description": "Optional: the provider's MCP endpoint, which may receive the provider's token.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name",
+        "auth_url",
+        "token_url"
+      ]
+    },
+    "SupportedSinks": {
+      "description": "Configuration for supported server-side event sinks.\nWhen a hub is deployed, only sinks listed here will be available for server-side execution.\nDesktop availability is defined by each sink type.",
+      "type": "object",
+      "properties": {
+        "http": {
+          "description": "HTTP/REST API endpoint sink",
+          "type": "boolean",
+          "default": false
+        },
+        "webhook": {
+          "description": "Incoming webhook from external service",
+          "type": "boolean",
+          "default": false
+        },
+        "cron": {
+          "description": "Cron scheduled trigger",
+          "type": "boolean",
+          "default": false
+        },
+        "mqtt": {
+          "description": "MQTT message broker",
+          "type": "boolean",
+          "default": false
+        },
+        "github": {
+          "description": "GitHub repository webhook",
+          "type": "boolean",
+          "default": false
+        },
+        "rss": {
+          "description": "RSS feed polling",
+          "type": "boolean",
+          "default": false
+        },
+        "discord": {
+          "description": "Discord bot integration",
+          "type": "boolean",
+          "default": false
+        },
+        "slack": {
+          "description": "Slack bot integration",
+          "type": "boolean",
+          "default": false
+        },
+        "telegram": {
+          "description": "Telegram bot integration",
+          "type": "boolean",
+          "default": false
+        },
+        "email": {
+          "description": "Email/IMAP polling",
+          "type": "boolean",
+          "default": false
+        },
+        "inbound_email": {
+          "description": "Email received at an address issued by the server",
+          "type": "boolean",
+          "default": false
+        },
+        "teams": {
+          "description": "Microsoft Teams bot webhook",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "WasmRegistryConfig": {
+      "type": "object",
+      "properties": {
+        "on_member_leave": {
+          "description": "What happens to app packages when the member who added them leaves the app",
+          "$ref": "#/$defs/MemberLeavePolicy",
+          "default": "stale"
+        }
+      }
+    },
+    "MemberLeavePolicy": {
+      "oneOf": [
+        {
+          "description": "Remove packages added by the departing member from the app",
+          "type": "string",
+          "const": "remove"
+        },
+        {
+          "description": "Mark packages as stale — frozen version, no updates, cannot be placed on new boards",
+          "type": "string",
+          "const": "stale"
+        }
+      ]
+    },
+    "AuditConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Master switch. When false, no audit entries are recorded.",
+          "type": "boolean",
+          "default": true
+        },
+        "level": {
+          "description": "Which action families are recorded. Defaults to `standard`.",
+          "$ref": "#/$defs/AuditLevel",
+          "default": "standard"
+        },
+        "log_ip": {
+          "description": "Whether to capture client IP addresses in audit entries (GDPR consideration)",
+          "type": "boolean",
+          "default": false
+        },
+        "trusted_proxy_hops": {
+          "description": "Reverse proxies under the deployment's control that append to\n`X-Forwarded-For`. The recorded client IP is taken that many entries from\nthe right, which a client cannot forge. Unset records the leftmost entry,\nwhich the client chooses.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "default": null
+        },
+        "require_signing": {
+          "description": "Refuse to run without keys: the API without an entry key, the audit worker\nwithout an audit signing key.",
+          "type": "boolean",
+          "default": false
+        },
+        "log_executions": {
+          "description": "Record execution lifecycle transitions at any level.\nThe `verbose` level records them regardless of this switch.",
+          "type": "boolean",
+          "default": false
+        },
+        "retention": {
+          "description": "How long each part of the trail is kept, and when the audit worker seals.",
+          "$ref": "#/$defs/AuditRetention",
+          "default": {
+            "evidence_hot_days": 396,
+            "archive_years_after_year_end": 3,
+            "activity_days": 90,
+            "high_risk_activity_days": 183,
+            "ip_days": 7,
+            "details_days": null,
+            "seal_after_records": 500,
+            "seal_after_seconds": 300,
+            "max_records_per_seal": 1000,
+            "epoch_interval_seconds": 300,
+            "pending_alert_seconds": 900,
+            "archive_grace_days": 3
+          }
+        }
+      }
+    },
+    "AuditLevel": {
+      "description": "How much of the mutation surface the audit trail records. Each level includes\neverything below it. Execution lifecycle records additionally follow\n`AuditConfig::log_executions`.",
+      "oneOf": [
+        {
+          "description": "Identity, access, credentials, publication, deletions and platform administration.",
+          "type": "string",
+          "const": "minimal"
+        },
+        {
+          "description": "Minimal plus content changes: boards, events, pages, widgets, files, tables, settings.",
+          "type": "string",
+          "const": "standard"
+        },
+        {
+          "description": "Standard plus every request attempt and outcome, editor commands, graph row\nwrites, file read grants and execution lifecycle records.",
+          "type": "string",
+          "const": "verbose"
+        }
+      ]
+    },
+    "AuditRetention": {
+      "description": "Retention, sealing and signing cadence. Evidence is pruned only once its month is\narchived to the audit bucket, so a deployment without `AUDIT_BUCKET` keeps every\nevidence record; activity records are deleted after their window.",
+      "type": "object",
+      "properties": {
+        "evidence_hot_days": {
+          "description": "Days security and content records stay in the database after their month\ncloses. Older months are read from the monthly archive.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 396
+        },
+        "archive_years_after_year_end": {
+          "description": "Informational horizon written into archive manifests: the end of this many\ncalendar years after the month. The bucket's retention lock enforces it.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 3
+        },
+        "activity_days": {
+          "description": "Days records of verbose-only actions stay in the database. They are never\narchived.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 90
+        },
+        "high_risk_activity_days": {
+          "description": "Minimum days for execution records of apps assessed as high-risk AI systems\n(EU AI Act art. 19 and 26(6)).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 183
+        },
+        "ip_days": {
+          "description": "Days a recorded client IP is kept before it is removed from its record.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 7
+        },
+        "details_days": {
+          "description": "Days record details are kept. Unset keeps them as long as the record.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "default": null
+        },
+        "seal_after_records": {
+          "description": "Seal a chain once this many records are pending.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 500
+        },
+        "seal_after_seconds": {
+          "description": "Seal a chain once its oldest pending record is this old.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 300
+        },
+        "max_records_per_seal": {
+          "description": "Largest seal the worker writes in one transaction.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 1000
+        },
+        "epoch_interval_seconds": {
+          "description": "Sign an epoch once the oldest unanchored seal is this old, or earlier when 20,000\nseals wait. Each epoch is one request to the key service, so this sets its cost:\n300 s means at most 12 routine signatures an hour.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 300
+        },
+        "pending_alert_seconds": {
+          "description": "Log an alert when the oldest pending record is older than this.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 900
+        },
+        "archive_grace_days": {
+          "description": "Days after a month closes before it is archived.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 3
+        }
+      }
+    },
+    "PaymentsConfig": {
+      "type": "object",
+      "properties": {
+        "onboarding_enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "marketplace_enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "node_payments_enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "servicing_enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "livemode": {
+          "type": "boolean",
+          "default": false
+        },
+        "live_approved": {
+          "type": "boolean",
+          "default": false
+        },
+        "platform_account_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "countries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "DE"
+          ]
+        },
+        "seller_allowlist": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "currencies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "eur"
+          ]
+        },
+        "node_payment_methods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "card",
+            "link"
+          ]
+        },
+        "marketplace_payment_methods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "card",
+            "link"
+          ]
+        },
+        "node_method_configuration": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "marketplace_method_configuration": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "node_fee_bps": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "default": 100
+        },
+        "marketplace_fee_bps": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "default": 1000
+        },
+        "marketplace_fee_basis": {
+          "$ref": "#/$defs/PaymentFeeBasis",
+          "default": "gross"
+        },
+        "marketplace_min_amount": {
+          "type": "integer",
+          "format": "int64",
+          "default": 300
+        },
+        "max_payment_amount": {
+          "type": "integer",
+          "format": "int64",
+          "default": 100000
+        },
+        "new_seller_daily_cap": {
+          "type": "integer",
+          "format": "int64",
+          "default": 200000
+        },
+        "node_tax_mode": {
+          "$ref": "#/$defs/PaymentTaxMode",
+          "default": "unconfigured"
+        },
+        "marketplace_tax_mode": {
+          "$ref": "#/$defs/PaymentTaxMode",
+          "default": "unconfigured"
+        },
+        "owner_terms_version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "seller_terms_version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "purchase_terms_version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "withdrawal_days": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "default": 14
+        },
+        "purchase_waiver_version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "product_tax_code": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "frontend_url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "legacy_checkout_until": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "default": null
+        },
+        "legal_texts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PaymentLegalText"
+          },
+          "default": []
+        }
+      }
+    },
+    "PaymentFeeBasis": {
+      "type": "string",
+      "enum": [
+        "gross",
+        "net_of_tax"
+      ]
+    },
+    "PaymentTaxMode": {
+      "type": "string",
+      "enum": [
+        "unconfigured",
+        "seller_supplier",
+        "platform_supplier"
+      ]
+    },
+    "PaymentLegalText": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "locale": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "version",
+        "locale"
+      ]
+    },
+    "PushNotificationsConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_mobile": {
+          "type": "boolean",
+          "default": true
+        },
+        "allow_desktop": {
+          "type": "boolean",
+          "default": false
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PushNotificationProviderType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "channel_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fcm": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FcmPushNotificationsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "aws_sns": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AwsSnsPushNotificationsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "azure_notification_hubs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AzureNotificationHubsPushNotificationsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "PushNotificationProviderType": {
+      "type": "string",
+      "enum": [
+        "fcm",
+        "aws_sns",
+        "azure_notification_hubs"
+      ]
+    },
+    "FcmPushNotificationsConfig": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string"
+        },
+        "service_account_json_env": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_id",
+        "service_account_json_env"
+      ]
+    },
+    "AwsSnsPushNotificationsConfig": {
+      "type": "object",
+      "properties": {
+        "android_platform_application_arn_env": {
+          "type": "string"
+        },
+        "ios_platform_application_arn_env": {
+          "type": "string"
+        },
+        "region_env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "android_platform_application_arn_env",
+        "ios_platform_application_arn_env"
+      ]
+    },
+    "AzureNotificationHubsPushNotificationsConfig": {
+      "type": "object",
+      "properties": {
+        "namespace": {
+          "type": "string"
+        },
+        "hub_name": {
+          "type": "string"
+        },
+        "sas_key_name_env": {
+          "type": "string"
+        },
+        "sas_key_value_env": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "namespace",
+        "hub_name",
+        "sas_key_name_env",
+        "sas_key_value_env"
+      ]
+    },
+    "ForkingConfig": {
+      "description": "Fork-an-app feature config. Controls quotas and the unauthenticated-fork\npath. Defaults are conservative: feature on, 1 GB / 10k file cap, no\nanonymous forking.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Global kill switch — when false, every fork endpoint refuses",
+          "type": "boolean",
+          "default": true
+        },
+        "max_size_bytes": {
+          "description": "Hard cap on the total bytes copied in a single fork",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 1073741824
+        },
+        "max_file_count": {
+          "description": "Hard cap on the number of objects copied in a single fork",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 10000
+        },
+        "allow_unauthenticated_to_offline": {
+          "description": "Whether anonymous (unauthenticated) callers may fork a public+free app\nto an offline (desktop) destination",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "ConversionConfig": {
+      "description": "Upgrade / conversion experience configuration",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "When false, plan-limit errors surface as plain messages without the\nupgrade dialog",
+          "type": "boolean",
+          "default": true
+        },
+        "mode": {
+          "$ref": "#/$defs/ConversionMode",
+          "default": "consumer"
+        },
+        "headline": {
+          "description": "Headline override for the upgrade dialog",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subheadline": {
+          "description": "Supporting line under the headline",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contact": {
+          "description": "Contact used in enterprise mode and for the enterprise tier CTA;\nfalls back to the hub contact when unset",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Contact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contact_message": {
+          "description": "Custom message shown on the enterprise contact card",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tier_display": {
+          "description": "Per-tier marketing metadata keyed by tier id (FREE, PREMIUM, ...)",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/TierDisplay"
+          },
+          "default": {}
+        }
+      }
+    },
+    "ConversionMode": {
+      "description": "Decides what users see when they hit a plan limit: a self-service upgrade\nflow (consumer) or a \"contact us\" card (enterprise deployments).",
+      "type": "string",
+      "enum": [
+        "consumer",
+        "enterprise"
+      ]
+    },
+    "TierDisplay": {
+      "description": "Marketing metadata for a tier, keyed by tier id in `ConversionConfig`.",
+      "type": "object",
+      "properties": {
+        "monthly_price_cents": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "annual_price_cents": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "currency": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "display_name": {
+          "description": "Name shown instead of the raw tier key (e.g. \"Starter\" for FREE)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tagline": {
+          "description": "One-line value proposition under the tier name",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "features": {
+          "description": "Curated feature bullets shown in addition to the derived limit facts",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "highlight": {
+          "description": "Marks the recommended tier — gets the \"Most popular\" treatment",
+          "type": "boolean",
+          "default": false
+        },
+        "badge": {
+          "description": "Badge text overriding the default highlight label",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "HubWidgetStorage": {
+      "type": "object",
+      "properties": {
+        "origin": {
+          "description": "`scheme://host` the content bucket is served from",
+          "type": "string"
+        },
+        "path_prefix": {
+          "description": "Path before the app id, starting and ending with `/`",
+          "type": "string"
+        }
+      },
+      "required": [
+        "origin",
+        "path_prefix"
+      ]
+    }
+  }
 }

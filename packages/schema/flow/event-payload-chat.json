@@ -1,123 +1,237 @@
 {
-	"$schema": "https://json-schema.org/draft/2020-12/schema",
-	"title": "ChatEventParameters",
-	"type": "object",
-	"properties": {
-		"history_elements": {
-			"type": ["integer", "null"],
-			"format": "uint32",
-			"minimum": 0
-		},
-		"allow_file_upload": {
-			"type": ["boolean", "null"]
-		},
-		"allow_model_selection": {
-			"description": "Show the chat model picker. Defaults to enabled.",
-			"type": ["boolean", "null"]
-		},
-		"require_vlm": {
-			"description": "Limit the chat model picker to models that accept images. Defaults to disabled.",
-			"type": ["boolean", "null"]
-		},
-		"allow_voice_input": {
-			"type": ["boolean", "null"]
-		},
-		"allow_voice_output": {
-			"type": ["boolean", "null"]
-		},
-		"allow_voice_mode": {
-			"type": ["boolean", "null"]
-		},
-		"voice": {
-			"anyOf": [
-				{
-					"$ref": "#/$defs/ChatVoiceParameters"
-				},
-				{
-					"type": "null"
-				}
-			]
-		},
-		"tools": {
-			"type": ["array", "null"],
-			"items": {
-				"type": "string"
-			}
-		},
-		"default_tools": {
-			"type": ["array", "null"],
-			"items": {
-				"type": "string"
-			}
-		},
-		"example_messages": {
-			"type": ["array", "null"],
-			"items": {
-				"type": "string"
-			}
-		},
-		"attach_widget_snapshots": {
-			"description": "Attach PNG snapshots of the latest assistant message's embedded widgets\nto the outgoing user turn so vision-capable models see the rendered UI.\nDefaults to enabled.",
-			"type": ["boolean", "null"]
-		},
-		"custom_css": {
-			"description": "Custom CSS scoped to the chat interface.",
-			"type": ["string", "null"]
-		},
-		"background_image": {
-			"description": "Background image URL or app storage path for the chat interface.",
-			"type": ["string", "null"]
-		},
-		"color_scheme": {
-			"description": "Preferred chat color scheme: \"system\" | \"light\" | \"dark\".",
-			"type": ["string", "null"]
-		},
-		"ai_disclosure": {
-			"description": "User-facing disclosure that the conversation is with an AI.",
-			"type": ["string", "null"]
-		}
-	},
-	"$defs": {
-		"ChatVoiceParameters": {
-			"type": "object",
-			"properties": {
-				"mode": {
-					"description": "Capture mode: \"disabled\" | \"stt\" (frontend transcript) | \"record\" (audio).",
-					"type": ["string", "null"]
-				},
-				"invoke": {
-					"description": "Invoke mode: \"manual\" | \"hold\" | \"auto\".",
-					"type": ["string", "null"]
-				},
-				"variant": {
-					"description": "Visual style: \"conservative\" | \"waveform\" | \"orb\" | \"vortex\" | \"shader\".",
-					"type": ["string", "null"]
-				},
-				"size": {
-					"description": "Element size: \"sm\" | \"md\" | \"lg\".",
-					"type": ["string", "null"]
-				},
-				"color": {
-					"description": "Base accent color (CSS color string).",
-					"type": ["string", "null"]
-				},
-				"recording_color": {
-					"description": "Accent color while recording (CSS color string).",
-					"type": ["string", "null"]
-				},
-				"playback": {
-					"description": "Answer playback: \"text\" | \"audio\" | \"both\".",
-					"type": ["string", "null"]
-				},
-				"max_duration": {
-					"type": ["integer", "null"],
-					"format": "uint32",
-					"minimum": 0
-				},
-				"auto_stop": {
-					"type": ["boolean", "null"]
-				}
-			}
-		}
-	}
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChatEventParameters",
+  "type": "object",
+  "properties": {
+    "history_elements": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "allow_file_upload": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "allow_voice_input": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "allow_voice_output": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "allow_voice_mode": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "voice": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ChatVoiceParameters"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "tools": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "default_tools": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "example_messages": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "attach_widget_snapshots": {
+      "description": "Attach PNG snapshots of the latest assistant message's embedded widgets\nto the outgoing user turn so vision-capable models see the rendered UI.\nDefaults to enabled.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "custom_css": {
+      "description": "Custom CSS scoped to the chat interface.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "background_image": {
+      "description": "Background image URL or app storage path for the chat interface.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "placeholder_visual": {
+      "description": "Mark shown on the empty chat: \"none\" | \"planet\" | \"bubble\" | \"image\".\nDefaults to \"planet\".",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "placeholder_bubble_state": {
+      "description": "Which orb state the bubble placeholder rests in:\n\"idle\" | \"ready\" | \"thinking\" | \"working\".",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "placeholder_image": {
+      "description": "Image URL or app storage path for the \"image\" placeholder.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "placeholder_typing_motion": {
+      "description": "Let the placeholder mark react while the user types: it leans toward the\ncomposer and stirs in proportion to how fast they write. Applies to the\n\"planet\" and \"bubble\" marks. Defaults to disabled.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "color_scheme": {
+      "description": "Preferred chat color scheme: \"system\" | \"light\" | \"dark\".",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ai_disclosure": {
+      "description": "User-facing disclosure that the conversation is with an AI.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "allow_model_selection": {
+      "description": "Show the model picker in the composer. Defaults to enabled.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "require_vlm": {
+      "description": "Offer only vision language models in the model picker. Defaults to disabled.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "allow_thinking_selection": {
+      "description": "Show the thinking picker in the composer. Defaults to enabled.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "default_thinking": {
+      "description": "Thinking level a new chat starts with: \"off\" | \"low\" | \"mid\" | \"high\".\nDefaults to \"low\", the same level the Chat Event applies when none is sent.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "$defs": {
+    "ChatVoiceParameters": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "description": "Capture mode: \"disabled\" | \"stt\" (frontend transcript) | \"record\" (audio).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "invoke": {
+          "description": "Invoke mode: \"manual\" | \"hold\" | \"auto\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "variant": {
+          "description": "Visual style: \"conservative\" | \"waveform\" | \"orb\" | \"vortex\" | \"shader\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size": {
+          "description": "Element size: \"sm\" | \"md\" | \"lg\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "color": {
+          "description": "Base accent color (CSS color string).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recording_color": {
+          "description": "Accent color while recording (CSS color string).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "playback": {
+          "description": "Answer playback: \"text\" | \"audio\" | \"both\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_duration": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "auto_stop": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    }
+  }
 }

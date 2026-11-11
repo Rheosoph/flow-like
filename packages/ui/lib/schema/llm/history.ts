@@ -1,132 +1,163 @@
 export interface IHistory {
-	frequency_penalty?: number | null;
-	max_completion_tokens?: number | null;
-	messages: IHistoryMessage[];
-	model: string;
-	n?: number | null;
-	presence_penalty?: number | null;
-	response_format?: any;
-	seed?: number | null;
-	stop?: string[] | null;
-	stream?: boolean | null;
-	stream_options?: null | IStreamOptions;
-	temperature?: number | null;
-	tool_choice?: null | IToolChoice;
-	tools?: ITool[] | null;
-	top_p?: number | null;
-	user?: null | string;
-	[property: string]: any;
+    frequency_penalty?:     number | null;
+    max_completion_tokens?: number | null;
+    messages:               IMessageElement[];
+    model:                  string;
+    n?:                     number | null;
+    presence_penalty?:      number | null;
+    preset?:                null | string;
+    response_format?:       any;
+    seed?:                  number | null;
+    stop?:                  string[] | null;
+    stream?:                boolean | null;
+    stream_options?:        null | IStreamOptionsObject;
+    temperature?:           number | null;
+    thinking?:              IThinkingEnum | null;
+    tool_choice?:           null | IToolChoiceObject;
+    tools?:                 IToolElement[] | null;
+    top_p?:                 number | null;
+    usage?:                 null | IUsageObject;
+    user?:                  null | string;
+    [property: string]: any;
 }
 
-export interface IHistoryMessage {
-	content: IContent[] | string;
-	name?: null | string;
-	role: IRole;
-	tool_call_id?: null | string;
-	tool_calls?: IToolCall[] | null;
-	[property: string]: any;
+export interface IMessageElement {
+    annotations?:  IAnnotationElement[] | null;
+    content:       IContentElement[] | string;
+    name?:         null | string;
+    role:          IRole;
+    tool_call_id?: null | string;
+    tool_calls?:   IToolCallElement[] | null;
+    [property: string]: any;
 }
 
-export interface IContent {
-	text?: string;
-	type: IContentType;
-	image_url?: IImageURL;
-	audio_url?: string;
-	video_url?: string;
-	document_url?: string;
-	media_type?: string;
-	additional_params?: unknown;
-	[property: string]: any;
+export interface IAnnotationElement {
+    type:          string;
+    url_citation?: null | IURLCitationObject;
+    [property: string]: any;
+}
+
+export interface IURLCitationObject {
+    content?:    null | string;
+    end_index:   number;
+    start_index: number;
+    title:       string;
+    url:         string;
+    [property: string]: any;
+}
+
+export interface IContentElement {
+    text?:              string;
+    type:               IContentType;
+    image_url?:         IImageURL;
+    additional_params?: any;
+    audio_url?:         string;
+    media_type?:        null | string;
+    video_url?:         string;
+    document_url?:      string;
+    [property: string]: any;
 }
 
 export interface IImageURL {
-	detail?: null | string;
-	media_type?: string;
-	additional_params?: unknown;
-	url: string;
-	[property: string]: any;
+    additional_params?: any;
+    detail?:            null | string;
+    media_type?:        null | string;
+    url:                string;
+    [property: string]: any;
 }
 
 export enum IContentType {
-	IImageURL = "image_url",
-	AudioURL = "audio_url",
-	VideoURL = "video_url",
-	DocumentURL = "document_url",
-	Text = "text",
+    AudioURL = "audio_url",
+    DocumentURL = "document_url",
+    IImageURL = "image_url",
+    Text = "text",
+    VideoURL = "video_url",
 }
 
 export enum IRole {
-	Assistant = "assistant",
-	Function = "function",
-	System = "system",
-	ITool = "tool",
-	User = "user",
+    Assistant = "assistant",
+    Function = "function",
+    System = "system",
+    Tool = "tool",
+    User = "user",
 }
 
-export interface IToolCall {
-	function: IToolCallFunction;
-	id: string;
-	type: string;
-	[property: string]: any;
+export interface IToolCallElement {
+    function: IToolCallFunction;
+    id:       string;
+    type:     string;
+    [property: string]: any;
 }
 
 export interface IToolCallFunction {
-	arguments?: null | string;
-	name?: null | string;
-	[property: string]: any;
+    arguments: string;
+    name:      string;
+    [property: string]: any;
 }
 
-export interface IStreamOptions {
-	include_usage: boolean;
-	[property: string]: any;
+export interface IStreamOptionsObject {
+    include_usage: boolean;
+    [property: string]: any;
 }
 
-export interface IToolChoice {
-	function: IHistoryFunction;
-	type: IToolType;
-	[property: string]: any;
+export enum IThinkingEnum {
+    High = "high",
+    Low = "low",
+    Mid = "mid",
+    Off = "off",
 }
 
-export interface IHistoryFunction {
-	description?: null | string;
-	name: string;
-	parameters: IHistoryFunctionParameters;
-	[property: string]: any;
+export interface IToolChoiceObject {
+    function: IToolChoiceFunction;
+    type:     IToolChoiceType;
+    [property: string]: any;
 }
 
-export interface IHistoryFunctionParameters {
-	properties?: { [key: string]: IHistoryJSONSchemaDefine } | null;
-	required?: string[] | null;
-	type: IHistoryJSONSchemaType;
-	[property: string]: any;
+export interface IToolChoiceFunction {
+    description?: null | string;
+    name:         string;
+    parameters:   IParameters;
+    [property: string]: any;
 }
 
-export interface IHistoryJSONSchemaDefine {
-	default?: unknown;
-	description?: null | string;
-	enum_values?: string[] | null;
-	items?: null | IHistoryJSONSchemaDefine;
-	properties?: { [key: string]: IHistoryJSONSchemaDefine } | null;
-	required?: string[] | null;
-	type?: IHistoryJSONSchemaType | null;
-	[property: string]: any;
+export interface IParameters {
+    properties?: { [key: string]: IPropertyValue } | null;
+    required?:   string[] | null;
+    type:        ITypeEnum;
+    [property: string]: any;
 }
 
-export enum IHistoryJSONSchemaType {
-	Array = "array",
-	Boolean = "boolean",
-	Null = "null",
-	Number = "number",
-	Object = "object",
-	String = "string",
+export interface IPropertyValue {
+    default?:     any;
+    description?: null | string;
+    enum?:        string[] | null;
+    items?:       null | IPropertyValue;
+    properties?:  { [key: string]: IPropertyValue } | null;
+    required?:    string[] | null;
+    type?:        ITypeEnum | null;
+    [property: string]: any;
 }
 
-export enum IToolType {
-	Function = "function",
+export enum ITypeEnum {
+    Array = "array",
+    Boolean = "boolean",
+    Null = "null",
+    Number = "number",
+    Object = "object",
+    String = "string",
 }
 
-export interface ITool {
-	function: IHistoryFunction;
-	type: IToolType;
-	[property: string]: any;
+export enum IToolChoiceType {
+    Function = "function",
+}
+
+export interface IToolElement {
+    function: IToolChoiceFunction;
+    type:     IToolChoiceType;
+    [property: string]: any;
+}
+
+export interface IUsageObject {
+    include: boolean;
+    [property: string]: any;
 }

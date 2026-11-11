@@ -1,161 +1,136 @@
-import type { INodePermission } from "../../board";
-
 export interface IGeneric {
-	command_type: ICommandType;
-	comment?: IComment;
-	old_comment?: null | IComment;
-	node?: INode;
-	new_comments?: IComment[];
-	new_nodes?: INode[];
-	offset?: number[];
-	original_comments?: IComment[];
-	original_nodes?: INode[];
-	from_coordinates?: number[] | null;
-	node_id?: string;
-	to_coordinates?: number[];
-	connected_nodes?: INode[];
-	old_node?: null | INode;
-	from_node?: string;
-	from_pin?: string;
-	to_node?: string;
-	to_pin?: string;
-	old_pin?: null | IPin;
-	pin?: IPin;
-	variable?: IVariable;
-	old_variable?: null | IVariable;
-	[property: string]: any;
+    command_type:       ICommandType;
+    comment?:           IComment;
+    old_comment?:       null | IComment;
+    node?:              INode;
+    new_comments?:      IComment[];
+    new_nodes?:         INode[];
+    offset?:            number[];
+    original_comments?: IComment[];
+    original_nodes?:    INode[];
+    from_coordinates?:  number[] | null;
+    node_id?:           string;
+    to_coordinates?:    number[];
+    connected_nodes?:   INode[];
+    old_node?:          null | INode;
+    from_node?:         string;
+    from_pin?:          string;
+    to_node?:           string;
+    to_pin?:            string;
+    old_pin?:           null | IPin;
+    pin?:               IPin;
+    variable?:          IVariable;
+    old_variable?:      null | IVariable;
+    [property: string]: any;
 }
 
 export enum ICommandType {
-	AddNode = "AddNode",
-	ConnectPin = "ConnectPin",
-	CopyPaste = "CopyPaste",
-	DisconnectPin = "DisconnectPin",
-	MoveNode = "MoveNode",
-	RemoveComment = "RemoveComment",
-	RemoveNode = "RemoveNode",
-	RemoveVariable = "RemoveVariable",
-	UpdateNode = "UpdateNode",
-	UpsertComment = "UpsertComment",
-	UpsertPin = "UpsertPin",
-	UpsertVariable = "UpsertVariable",
+    AddNode = "AddNode",
+    ConnectPin = "ConnectPin",
+    CopyPaste = "CopyPaste",
+    DisconnectPin = "DisconnectPin",
+    MoveNode = "MoveNode",
+    RemoveComment = "RemoveComment",
+    RemoveNode = "RemoveNode",
+    RemoveVariable = "RemoveVariable",
+    UpdateNode = "UpdateNode",
+    UpsertComment = "UpsertComment",
+    UpsertPin = "UpsertPin",
+    UpsertVariable = "UpsertVariable",
 }
 
 export interface IComment {
-	author?: null | string;
-	comment_type: ICommentType;
-	content: string;
-	coordinates: number[];
-	id: string;
-	timestamp: ISystemTime;
-	/** Board node this comment is attached to (presentation only — may dangle if the node is deleted; missing node = unanchored). */
-	node_id?: null | string;
-	[property: string]: any;
+    author?:      null | string;
+    comment_type: ICommentType;
+    content:      string;
+    coordinates:  number[];
+    id:           string;
+    timestamp:    ISystemTime;
+    [property: string]: any;
 }
 
 export enum ICommentType {
-	Image = "Image",
-	Text = "Text",
-	Video = "Video",
+    Image = "Image",
+    Text = "Text",
+    Video = "Video",
 }
 
 export interface ISystemTime {
-	nanos_since_epoch: number;
-	secs_since_epoch: number;
-	[property: string]: any;
+    nanos_since_epoch: number;
+    secs_since_epoch:  number;
+    [property: string]: any;
 }
 
 export interface INode {
-	category: string;
-	comment?: null | string;
-	coordinates?: number[] | null;
-	description: string;
-	docs?: null | string;
-	error?: null | string;
-	friendly_name: string;
-	icon?: null | string;
-	id: string;
-	long_running?: boolean | null;
-	name: string;
-	pins: { [key: string]: IPin };
-	scores?: null | INodeScores;
-	start?: boolean | null;
-	/** Schema version for node migration. When catalog version > placed version, pins are synced. */
-	version?: number | null;
-	/** WASM metadata for external nodes. Undefined for built-in catalog nodes. */
-	wasm?: INodeWasm | null;
-	/** FlowScript namespace path (`string`, `http`, `utils.markdown`). Presentation only. */
-	namespace?: null | string;
-	/** FlowScript member name inside `namespace` (`trim`, `fetch`). Presentation only. */
-	alias?: null | string;
-	/** Data input pin that receives the value in method form; `""` = static only. */
-	receiver?: null | string;
-	/** Editor-only: unconnected data pins are hidden behind the node latch. */
-	pins_collapsed?: boolean | null;
-	/** The editor generated this reroute and may replace it during automatic layout. */
-	auto_reroute?: boolean | null;
-	/** FlowScript names for this node's values, keyed by output pin name; `""` is the node's own binding. Presentation only. */
-	code_names?: { [key: string]: string } | null;
-	[property: string]: any;
-}
-
-export interface INodeWasm {
-	package_id: string;
-	permissions: INodePermission[];
+    category:      string;
+    comment?:      null | string;
+    coordinates?:  number[] | null;
+    description:   string;
+    docs?:         null | string;
+    error?:        null | string;
+    friendly_name: string;
+    icon?:         null | string;
+    id:            string;
+    long_running?: boolean | null;
+    name:          string;
+    pins:          { [key: string]: IPin };
+    scores?:       null | INodeScores;
+    start?:        boolean | null;
+    [property: string]: any;
 }
 
 export interface IPin {
-	connected_to: string[];
-	data_type: IVariableType;
-	default_value?: number[] | null;
-	depends_on: string[];
-	description: string;
-	friendly_name: string;
-	id: string;
-	index: number;
-	name: string;
-	options?: null | IPinOptions;
-	pin_type: IPinType;
-	schema?: null | string;
-	valid_values?: string[] | null;
-	value_type: IValueType;
-	[property: string]: any;
+    connected_to:   string[];
+    data_type:      IVariableType;
+    default_value?: number[] | null;
+    depends_on:     string[];
+    description:    string;
+    friendly_name:  string;
+    id:             string;
+    index:          number;
+    name:           string;
+    options?:       null | IPinOptions;
+    pin_type:       IPinType;
+    schema?:        null | string;
+    valid_values?:  string[] | null;
+    value_type:     IValueType;
+    [property: string]: any;
 }
 
 export enum IVariableType {
-	Boolean = "Boolean",
-	Byte = "Byte",
-	Date = "Date",
-	Execution = "Execution",
-	Float = "Float",
-	IGeneric = "Generic",
-	Integer = "Integer",
-	PathBuf = "PathBuf",
-	String = "String",
-	Struct = "Struct",
-	Geometry = "Geometry",
+    Boolean = "Boolean",
+    Byte = "Byte",
+    Date = "Date",
+    Execution = "Execution",
+    Float = "Float",
+    IGeneric = "Generic",
+    Geometry = "Geometry",
+    Integer = "Integer",
+    PathBuf = "PathBuf",
+    String = "String",
+    Struct = "Struct",
 }
 
 export interface IPinOptions {
-	enforce_generic_value_type?: boolean | null;
-	enforce_schema?: boolean | null;
-	optional?: boolean | null;
-	range?: number[] | null;
-	step?: number | null;
-	valid_values?: string[] | null;
-	[property: string]: any;
+    enforce_generic_value_type?: boolean | null;
+    enforce_schema?:             boolean | null;
+    optional?:                   boolean | null;
+    range?:                      number[] | null;
+    step?:                       number | null;
+    valid_values?:               string[] | null;
+    [property: string]: any;
 }
 
 export enum IPinType {
-	Input = "Input",
-	Output = "Output",
+    Input = "Input",
+    Output = "Output",
 }
 
 export enum IValueType {
-	Array = "Array",
-	HashMap = "HashMap",
-	HashSet = "HashSet",
-	Normal = "Normal",
+    Array = "Array",
+    HashMap = "HashMap",
+    HashSet = "HashSet",
+    Normal = "Normal",
 }
 
 /**
@@ -168,26 +143,23 @@ export enum IValueType {
  * and regulations
  */
 export interface INodeScores {
-	governance: number;
-	performance: number;
-	privacy: number;
-	security: number;
-	reliability: number;
-	cost: number;
-	[property: string]: any;
+    governance:  number;
+    performance: number;
+    privacy:     number;
+    security:    number;
+    [property: string]: any;
 }
 
 export interface IVariable {
-	category?: null | string;
-	data_type: IVariableType;
-	default_value?: number[] | null;
-	description?: null | string;
-	editable: boolean;
-	exposed: boolean;
-	id: string;
-	name: string;
-	schema?: null | string;
-	secret: boolean;
-	value_type: IValueType;
-	[property: string]: any;
+    category?:      null | string;
+    data_type:      IVariableType;
+    default_value?: number[] | null;
+    description?:   null | string;
+    editable:       boolean;
+    exposed:        boolean;
+    id:             string;
+    name:           string;
+    secret:         boolean;
+    value_type:     IValueType;
+    [property: string]: any;
 }

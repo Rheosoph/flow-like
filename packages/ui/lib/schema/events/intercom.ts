@@ -1,13 +1,13 @@
 export interface IIntercom {
-	event_id: string;
-	event_type: string;
-	payload: any;
-	timestamp: ISystemTime;
-	[property: string]: any;
+    event_id:   string;
+    event_type: string;
+    payload:    any;
+    timestamp:  ISystemTime;
+    [property: string]: any;
 }
 
 export interface ISystemTime {
-	nanos_since_epoch: number;
-	secs_since_epoch: number;
-	[property: string]: any;
+    nanos_since_epoch: number;
+    secs_since_epoch:  number;
+    [property: string]: any;
 }

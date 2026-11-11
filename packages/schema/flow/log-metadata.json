@@ -1,98 +1,111 @@
 {
-	"$schema": "https://json-schema.org/draft/2020-12/schema",
-	"title": "LogMeta",
-	"type": "object",
-	"properties": {
-		"app_id": {
-			"type": "string"
-		},
-		"run_id": {
-			"type": "string"
-		},
-		"board_id": {
-			"type": "string"
-		},
-		"start": {
-			"type": "integer",
-			"format": "uint64",
-			"minimum": 0
-		},
-		"end": {
-			"type": "integer",
-			"format": "uint64",
-			"minimum": 0
-		},
-		"log_level": {
-			"type": "integer",
-			"format": "uint8",
-			"minimum": 0,
-			"maximum": 255
-		},
-		"version": {
-			"type": "string"
-		},
-		"nodes": {
-			"type": ["array", "null"],
-			"items": {
-				"type": "array",
-				"prefixItems": [
-					{
-						"type": "string"
-					},
-					{
-						"type": "integer",
-						"format": "uint8",
-						"minimum": 0,
-						"maximum": 255
-					}
-				],
-				"minItems": 2,
-				"maxItems": 2
-			}
-		},
-		"logs": {
-			"type": ["integer", "null"],
-			"format": "uint64",
-			"minimum": 0
-		},
-		"node_id": {
-			"type": "string"
-		},
-		"event_version": {
-			"type": ["string", "null"]
-		},
-		"event_id": {
-			"type": "string"
-		},
-		"payload": {
-			"type": "array",
-			"items": {
-				"type": "integer",
-				"format": "uint8",
-				"minimum": 0,
-				"maximum": 255
-			}
-		},
-		"error_message": {
-			"description": "Why the run failed when its logs cannot say: a rejected trigger, a\ncrashed executor, a run the sweeper timed out.",
-			"type": ["string", "null"]
-		},
-		"is_remote": {
-			"description": "Runtime-only field - not stored, set based on fetch source",
-			"type": "boolean",
-			"default": false
-		}
-	},
-	"required": [
-		"app_id",
-		"run_id",
-		"board_id",
-		"start",
-		"end",
-		"log_level",
-		"version",
-		"node_id",
-		"event_id",
-		"payload"
-	]
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LogMeta",
+  "description": "One summary row per run, kept in the host's [`RunIndex`]. `payload` is the\nrecorded event input; listings return it empty and readers fetch the\nsidecar written by [`run_index::write_run_payload`].",
+  "type": "object",
+  "properties": {
+    "app_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "board_id": {
+      "type": "string"
+    },
+    "start": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "end": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "log_level": {
+      "type": "integer",
+      "format": "uint8",
+      "minimum": 0,
+      "maximum": 255
+    },
+    "version": {
+      "type": "string"
+    },
+    "nodes": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "array",
+        "prefixItems": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
+          }
+        ],
+        "minItems": 2,
+        "maxItems": 2
+      }
+    },
+    "logs": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "node_id": {
+      "type": "string"
+    },
+    "event_version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "event_id": {
+      "type": "string"
+    },
+    "payload": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "minimum": 0,
+        "maximum": 255
+      }
+    },
+    "error_message": {
+      "description": "Why the run failed when its logs cannot say: a rejected trigger, a\ncrashed executor, a run the sweeper timed out.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "is_remote": {
+      "description": "Runtime-only field - not stored, set based on fetch source",
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "app_id",
+    "run_id",
+    "board_id",
+    "start",
+    "end",
+    "log_level",
+    "version",
+    "node_id",
+    "event_id",
+    "payload"
+  ]
 }
