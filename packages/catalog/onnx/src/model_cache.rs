@@ -866,9 +866,8 @@ async fn upload_model_file(
     let mut upload = MultipartAbortGuard::new(upload);
 
     loop {
-        let mut chunk = vec![0u8; MODEL_UPLOAD_CHUNK_BYTES];
-        let read = match input.read(&mut chunk).await {
-            Ok(read) => read,
+        let chunk = match read_upload_part(&mut input).await {
+            Ok(chunk) => chunk,
             Err(error) => {
                 let abort_error = upload.abort().await;
                 return Err(upload_error_with_cleanup(
@@ -878,10 +877,9 @@ async fn upload_model_file(
                 ));
             }
         };
-        if read == 0 {
+        if chunk.is_empty() {
             break;
         }
-        chunk.truncate(read);
         if let Err(error) = upload.upload_mut().put_part(PutPayload::from(chunk)).await {
             let abort_error = upload.abort().await;
             return Err(upload_error_with_cleanup(
@@ -906,6 +904,20 @@ async fn upload_model_file(
             ))
         }
     }
+}
+
+/// Reads one whole upload part. A single tokio `File::read` returns at most 2 MiB, and S3
+/// rejects a multipart upload whose non-final parts are under 5 MiB.
+#[cfg(feature = "execute")]
+async fn read_upload_part(
+    input: &mut (impl flow_like_types::tokio::io::AsyncRead + Unpin),
+) -> std::io::Result<Vec<u8>> {
+    let mut part = Vec::with_capacity(MODEL_UPLOAD_CHUNK_BYTES);
+    input
+        .take(MODEL_UPLOAD_CHUNK_BYTES as u64)
+        .read_to_end(&mut part)
+        .await?;
+    Ok(part)
 }
 
 #[cfg(feature = "execute")]
@@ -1477,6 +1489,23 @@ mod tests {
                 .await
                 .unwrap();
             assert!(store.head(&model_cache_etag_path(&untagged)).await.is_err());
+        }
+
+        #[tokio::test]
+        async fn upload_parts_fill_past_the_tokio_file_read_cap() {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let source = temp_dir.path().join("model.onnx");
+            std::fs::write(&source, vec![7u8; MODEL_UPLOAD_CHUNK_BYTES + 4099]).unwrap();
+            let mut input = flow_like_types::tokio::fs::File::open(&source)
+                .await
+                .unwrap();
+
+            assert_eq!(
+                read_upload_part(&mut input).await.unwrap().len(),
+                MODEL_UPLOAD_CHUNK_BYTES
+            );
+            assert_eq!(read_upload_part(&mut input).await.unwrap().len(), 4099);
+            assert!(read_upload_part(&mut input).await.unwrap().is_empty());
         }
 
         #[tokio::test]

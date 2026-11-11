@@ -233,6 +233,8 @@ mod tests {
             created_by: "BOT".into(),
             created_at: now,
             updated_at: now,
+            conversation_id: None,
+            requested_by: None,
         }
     }
 

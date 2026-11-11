@@ -7,7 +7,7 @@ mod chat;
 mod data;
 mod mcp;
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     Extension, Json,
@@ -22,6 +22,7 @@ use futures::StreamExt;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{Map, Value, json};
 
+use super::host::TurnFiles;
 use crate::{
     entity::{app, meta},
     error::ApiError,
@@ -87,6 +88,8 @@ pub(crate) struct AppTools {
     state: AppState,
     principal: BotUser,
     bot: BotRunContext,
+    /// The files attached to the message the turn answers, which an app chat may be handed.
+    files: Option<Arc<dyn TurnFiles>>,
 }
 
 fn text<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
@@ -365,7 +368,13 @@ impl AppTools {
             state: state.clone(),
             principal,
             bot: bot.clone(),
+            files: None,
         }
+    }
+
+    pub(crate) fn with_files(mut self, files: Arc<dyn TurnFiles>) -> Self {
+        self.files = Some(files);
+        self
     }
 
     fn user(&self) -> AppUser {

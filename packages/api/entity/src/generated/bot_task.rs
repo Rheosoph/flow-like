@@ -38,6 +38,10 @@ pub struct Model {
     pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
     pub updated_at: DateTimeWithTimeZone,
+    #[sea_orm(column_name = "conversationId", column_type = "Text", nullable)]
+    pub conversation_id: Option<String>,
+    #[sea_orm(column_name = "requestedBy", column_type = "Text", nullable)]
+    pub requested_by: Option<String>,
     #[sea_orm(
         belongs_to,
         from = "bot_id",

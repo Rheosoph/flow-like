@@ -1,5 +1,7 @@
 //! The desktop's `Scheduler`: a local bot's tasks live in the local store, an account bot's in the
-//! hub, which fires them (a desktop bot's through its desktop host).
+//! hub, which fires them (a desktop bot's through its desktop host). A task fires in the group or
+//! chat of the turn that scheduled it: the local store takes the turn's group, the hub reads the
+//! conversation and the person who asked from the turn it keeps.
 
 use std::sync::Arc;
 
@@ -26,9 +28,18 @@ pub(crate) trait TaskApi: Send + Sync {
     ) -> std::result::Result<Value, String>;
 }
 
+/// The turn a scheduler serves: the hub's id of an account bot's turn and the conversation it
+/// runs in.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TaskTurn {
+    pub turn_id: Option<String>,
+    pub conversation_id: Option<String>,
+}
+
 struct LocalScheduler {
     app: AppHandle,
     bot_id: String,
+    conversation_id: Option<String>,
 }
 
 impl LocalScheduler {
@@ -51,9 +62,16 @@ impl LocalScheduler {
 #[async_trait]
 impl Scheduler for LocalScheduler {
     async fn create(&self, request: CreateBotTask) -> Result<BotTask> {
-        let bot_id = self.bot_id.clone();
-        self.on_store(move |store| store.create_task(&bot_id, request, TaskCreator::Bot))
-            .await
+        let (bot_id, conversation_id) = (self.bot_id.clone(), self.conversation_id.clone());
+        self.on_store(move |store| {
+            store.create_task_in(
+                &bot_id,
+                request,
+                TaskCreator::Bot,
+                conversation_id.as_deref(),
+            )
+        })
+        .await
     }
 
     async fn list(&self) -> Result<Vec<BotTask>> {
@@ -87,6 +105,7 @@ impl Scheduler for LocalScheduler {
 struct AccountScheduler {
     api: Arc<dyn TaskApi>,
     bot_id: String,
+    turn_id: Option<String>,
 }
 
 impl AccountScheduler {
@@ -109,6 +128,7 @@ impl Scheduler for AccountScheduler {
             "instruction": request.instruction,
             "title": request.title,
             "monitoring": request.monitoring,
+            "turn_id": self.turn_id,
         });
         let created = self
             .api
@@ -172,11 +192,13 @@ impl Scheduler for AccountScheduler {
     }
 }
 
-/// The scheduler for `bot_id`: the local store's when this device holds the bot, else the hub's.
+/// The scheduler for `bot_id` in `turn`: the local store's when this device holds the bot, else
+/// the hub's.
 pub(crate) async fn scheduler_for(
     app: &AppHandle,
     bot_id: &str,
     api: Arc<dyn TaskApi>,
+    turn: TaskTurn,
 ) -> Arc<dyn Scheduler> {
     let local = match app.try_state::<LocalBots>() {
         Some(bots) => {
@@ -193,11 +215,13 @@ pub(crate) async fn scheduler_for(
         Arc::new(LocalScheduler {
             app: app.clone(),
             bot_id: bot_id.to_string(),
+            conversation_id: turn.conversation_id,
         })
     } else {
         Arc::new(AccountScheduler {
             api,
             bot_id: bot_id.to_string(),
+            turn_id: turn.turn_id,
         })
     }
 }

@@ -66,7 +66,8 @@ pub(crate) use sse_proxy::{
     wants_http_event_stream,
 };
 pub use sse_proxy::{
-    collect_generic_result, collect_generic_result_bytes, proxy_sse_response,
+    MissingResult, collect_generic_result, collect_generic_result_bytes,
+    collect_generic_result_outcome, proxy_sse_response,
     proxy_sse_response_with_page_actions, update_run_on_completion,
 };
 pub use state::{

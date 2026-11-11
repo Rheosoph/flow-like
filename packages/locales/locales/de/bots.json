@@ -1584,7 +1584,10 @@
 			"tz": "",
 			"monitoring": "Nur relevante Änderungen melden",
 			"monitoringHint": "Nutzt nach jeder Prüfung das Entscheidungsmodell des Bots. Für Erinnerungen und regelmäßige Berichte ausgeschaltet lassen.",
-			"monitoringLabel": "Beobachtung"
+			"monitoringLabel": "Beobachtung",
+			"placeDirect": "In einem Chat mit jemand anderem",
+			"placeGroup": "In {{name}}",
+			"placeUnnamedGroup": "In einem Gruppenchat"
 		},
 		"waitingForYou": "",
 		"webhooks": {

@@ -1,15 +1,19 @@
 use super::{
-    fixture::{at, database as inbox_database, insert_bot},
+    fixture::{assert_code, at, database as inbox_database, insert_bot},
     tasks::{Fired, due_in, fire_locked_in, schedule_of},
 };
 use crate::{
-    entity::{bot, bot_task, bot_turn, inbox_entry},
+    entity::{bot, bot_task, bot_turn, conversation_member, inbox_entry},
     routes::{
         bots::tasks::{
-            BotTaskInfo, CreateBotTaskRequest, UpdateBotTaskRequest, create_in, delete_in, list_in,
-            update_in,
+            BotTaskConversation, BotTaskInfo, CreateBotTaskRequest, TASK_CONVERSATION_ENCRYPTED,
+            TaskOrigin, UpdateBotTaskRequest, create_in, delete_in, infos_of, list_in,
+            origin_of_turn, update_in,
         },
-        inbox::triggers::{trigger_conversation, write_trigger_in},
+        inbox::{
+            fixture::{bot_principal, group, running_turn, user},
+            triggers::{trigger_conversation, write_trigger_in},
+        },
     },
 };
 use chrono::{DateTime, Duration, FixedOffset, Utc};
@@ -18,7 +22,7 @@ use flow_like_types::{
         CreateBotTask, MAX_TASKS_PER_BOT, TaskCreator, TaskKind, UpdateBotTask, fire_message_id,
     },
     bot_turn::{STORED_QUEUED, turn_id},
-    inbox::{InboxEntryKind, TriggerBody, TriggerSource},
+    inbox::{ConversationEncryption, InboxEntryKind, TriggerBody, TriggerSource},
 };
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
@@ -72,7 +76,7 @@ fn request(kind: TaskKind) -> CreateBotTask {
 }
 
 async fn make(db: &DatabaseConnection, kind: TaskKind) -> bot_task::Model {
-    create_in(db, OWNER, BOT, request(kind), TaskCreator::Owner, now())
+    create_in(db, OWNER, BOT, request(kind), TaskCreator::Owner, None, now())
         .await
         .unwrap()
 }
@@ -157,12 +161,15 @@ async fn monitoring_opt_in_roundtrips_and_fires_as_trusted_schedule_metadata() {
             ..request(TaskKind::Cron)
         },
         TaskCreator::Owner,
+        None,
         now(),
     )
     .await
     .unwrap();
     assert_eq!(task.monitoring, Some(true));
-    assert!(BotTaskInfo::from(list_in(&db, OWNER, BOT).await.unwrap().remove(0)).monitoring);
+    assert!(
+        BotTaskInfo::of(list_in(&db, OWNER, BOT).await.unwrap().remove(0), None).monitoring
+    );
     let renamed = update_in(
         &db,
         OWNER,
@@ -177,7 +184,7 @@ async fn monitoring_opt_in_roundtrips_and_fires_as_trusted_schedule_metadata() {
     .await
     .unwrap();
     assert_eq!(renamed.monitoring, Some(true));
-    assert!(BotTaskInfo::from(reload(&db, &task.id).await).monitoring);
+    assert!(BotTaskInfo::of(reload(&db, &task.id).await, None).monitoring);
     assert!(matches!(
         fire(&db, &renamed, renamed.next_run_at.unwrap()).await,
         Fired::Sent(..)
@@ -203,7 +210,7 @@ async fn monitoring_opt_in_roundtrips_and_fires_as_trusted_schedule_metadata() {
     .await
     .unwrap();
     assert_eq!(regular.monitoring, Some(false));
-    assert!(!BotTaskInfo::from(reload(&db, &task.id).await).monitoring);
+    assert!(!BotTaskInfo::of(reload(&db, &task.id).await, None).monitoring);
     assert!(matches!(
         fire(&db, &regular, regular.next_run_at.unwrap()).await,
         Fired::Sent(..)
@@ -234,7 +241,7 @@ async fn legacy_null_monitoring_is_a_regular_reminder_and_new_rows_default_false
     .await
     .unwrap();
     assert_eq!(reload(&db, &legacy.id).await.monitoring, None);
-    assert!(!BotTaskInfo::from(legacy.clone()).monitoring);
+    assert!(!BotTaskInfo::of(legacy.clone(), None).monitoring);
     assert!(matches!(fire(&db, &legacy, now()).await, Fired::Sent(..)));
     assert_eq!(triggers(&db).await[0].envelope["body"]["monitoring"], false);
 }
@@ -406,6 +413,7 @@ async fn paused_tasks_and_tasks_of_desktop_or_deleted_bots_do_not_fire_on_the_se
         "bot_d",
         request(TaskKind::Once),
         TaskCreator::Owner,
+        None,
         now(),
     )
     .await
@@ -433,6 +441,7 @@ async fn a_bot_keeps_at_most_fifty_tasks_and_needs_the_capability() {
         BOT,
         request(TaskKind::Once),
         TaskCreator::Bot,
+        None,
         now(),
     )
     .await
@@ -450,6 +459,7 @@ async fn a_bot_keeps_at_most_fifty_tasks_and_needs_the_capability() {
         "bot_plain",
         request(TaskKind::Once),
         TaskCreator::Owner,
+        None,
         now(),
     )
     .await
@@ -484,7 +494,7 @@ async fn schedules_are_validated_when_saved() {
             ..request(TaskKind::Once)
         },
     ] {
-        let error = create_in(&db, OWNER, BOT, bad.clone(), TaskCreator::Owner, now())
+        let error = create_in(&db, OWNER, BOT, bad.clone(), TaskCreator::Owner, None, now())
             .await
             .unwrap_err();
         assert_eq!(
@@ -590,4 +600,169 @@ async fn tasks_of_bots_without_the_scheduling_capability_are_not_due() {
     assert!(due_in(&db, now()).await.unwrap().is_empty());
     allow_scheduling(&db, BOT).await;
     assert_eq!(due_in(&db, now()).await.unwrap().len(), 1);
+}
+
+const MEMBER: &str = "user-b";
+const MEMBER_BOT: &str = "bot_b";
+
+/// `team`: the owner, a member, the owner's bot and the member's bot, which reads along.
+async fn team(db: &DatabaseConnection, encryption: ConversationEncryption) {
+    insert_bot(db, MEMBER_BOT, MEMBER, "SERVER").await;
+    let others = [user(MEMBER), bot_principal(BOT), bot_principal(MEMBER_BOT)];
+    group(db, "team", OWNER, &others, encryption).await;
+}
+
+/// A turn of the owner's bot in `conversation_id` that `requester` woke.
+async fn asked_in(db: &DatabaseConnection, turn: &str, conversation_id: &str, requester: &str) {
+    running_turn(db, turn, BOT, conversation_id, "host", at(600)).await;
+    bot_turn::ActiveModel {
+        id: Set(turn.into()),
+        requester_id: Set(Some(requester.into())),
+        ..Default::default()
+    }
+    .update(db)
+    .await
+    .unwrap();
+}
+
+/// A due once task the member asked the owner's bot for in `team`.
+async fn group_task(db: &DatabaseConnection) -> bot_task::Model {
+    team(db, ConversationEncryption::Plain).await;
+    asked_in(db, "turn-team", "team", MEMBER).await;
+    let origin = origin_of_turn(db, OWNER, BOT, "turn-team")
+        .await
+        .unwrap()
+        .expect("a task asked for in a group fires there");
+    let task = create_in(
+        db,
+        OWNER,
+        BOT,
+        request(TaskKind::Once),
+        TaskCreator::Bot,
+        Some(&origin),
+        now(),
+    )
+    .await
+    .unwrap();
+    bot_task::ActiveModel {
+        id: Set(task.id),
+        next_run_at: Set(Some(at(-60))),
+        ..Default::default()
+    }
+    .update(db)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_task_asked_for_in_a_group_fires_there_as_the_member_and_wakes_only_its_bot() {
+    let db = database().await;
+    let task = group_task(&db).await;
+    assert_eq!(task.conversation_id.as_deref(), Some("team"));
+    assert_eq!(task.requested_by.as_deref(), Some(MEMBER));
+    let infos = infos_of(&db, list_in(&db, OWNER, BOT).await.unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        infos[0].conversation,
+        Some(BotTaskConversation {
+            id: "team".into(),
+            kind: "group".into(),
+            title: Some("team".into()),
+        })
+    );
+
+    let Fired::Sent(_, bots) = fire_locked_in(&db, "team", &task, now()).await.unwrap() else {
+        panic!("the task fires in its group");
+    };
+    let woken: Vec<&str> = bots.iter().map(|bot| bot.bot_id.as_str()).collect();
+    assert_eq!(woken, [BOT]);
+    let entries = triggers(&db).await;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].conversation_id, "team");
+    assert_eq!(entries[0].sender_id, MEMBER);
+    let body = TriggerBody::parse(&entries[0].envelope["body"]).unwrap();
+    assert_eq!(body.bot_id.as_deref(), Some(BOT));
+    let turn = bot_turn::Entity::find()
+        .filter(bot_turn::Column::BotId.eq(BOT))
+        .filter(bot_turn::Column::TriggerMessageId.eq(entries[0].message_id.as_str()))
+        .one(&db)
+        .await
+        .unwrap()
+        .expect("a turn for the trigger");
+    assert_eq!(turn.requester_id.as_deref(), Some(MEMBER));
+}
+
+#[tokio::test]
+async fn a_group_task_pauses_once_the_member_who_asked_left() {
+    let db = database().await;
+    let task = group_task(&db).await;
+    conversation_member::ActiveModel {
+        conversation_id: Set("team".into()),
+        principal_id: Set(MEMBER.into()),
+        left_at: Set(Some(at(1))),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+    assert!(matches!(
+        fire_locked_in(&db, "team", &task, now()).await.unwrap(),
+        Fired::Paused
+    ));
+    let paused = reload(&db, &task.id).await;
+    assert!(!paused.enabled);
+    assert!(paused.last_run_at.is_none());
+    assert!(triggers(&db).await.is_empty());
+    assert!(due_in(&db, now()).await.unwrap().is_empty());
+    assert!(matches!(
+        fire_locked_in(&db, "team", &task, now()).await.unwrap(),
+        Fired::Lost
+    ));
+}
+
+#[tokio::test]
+async fn turns_in_the_owner_chat_or_woken_by_a_bot_keep_tasks_in_the_owner_chat() {
+    let db = database().await;
+    team(&db, ConversationEncryption::Plain).await;
+    let direct = trigger_conversation(&db, OWNER, BOT, now())
+        .await
+        .unwrap()
+        .expect("plain conversation");
+    asked_in(&db, "turn-direct", &direct, OWNER).await;
+    asked_in(&db, "turn-bot", "team", MEMBER_BOT).await;
+    asked_in(&db, "turn-owner", "team", OWNER).await;
+    for turn in ["turn-direct", "turn-bot", "turn-unknown"] {
+        assert_eq!(
+            origin_of_turn(&db, OWNER, BOT, turn).await.unwrap(),
+            None,
+            "{turn}"
+        );
+    }
+    assert_eq!(
+        origin_of_turn(&db, MEMBER, BOT, "turn-owner").await.unwrap(),
+        None
+    );
+    assert_eq!(
+        origin_of_turn(&db, OWNER, BOT, "turn-owner").await.unwrap(),
+        Some(TaskOrigin {
+            conversation_id: "team".into(),
+            requested_by: OWNER.into(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn an_encrypted_group_refuses_a_task_that_could_never_fire() {
+    let db = database().await;
+    team(&db, ConversationEncryption::E2e).await;
+    asked_in(&db, "turn-sealed", "team", MEMBER).await;
+    let error = origin_of_turn(&db, OWNER, BOT, "turn-sealed")
+        .await
+        .unwrap_err();
+    assert_code(
+        &error,
+        axum::http::StatusCode::CONFLICT,
+        TASK_CONVERSATION_ENCRYPTED,
+    );
 }

@@ -315,28 +315,32 @@ impl AppTools {
                     Json(AddToDBPayload { items }),
                 )
                 .await
-                .map_err(failed)?;
+                .map_err(failed)?
+                .0;
                 Ok(json!({ "status": "ok", "table_name": table, "inserted": inserted }))
             }
             TableChange::Delete(payload) => {
                 let filter = payload.query.clone();
                 delete_from_table(state, user, path(), scope(), selector(), Json(payload))
                     .await
-                    .map_err(failed)?;
+                    .map_err(failed)?
+                    .0;
                 Ok(json!({ "status": "ok", "table_name": table, "filter": filter }))
             }
             TableChange::Update(payload) => {
                 let filter = payload.filter.clone();
                 update_table(state, user, path(), scope(), selector(), Json(payload))
                     .await
-                    .map_err(failed)?;
+                    .map_err(failed)?
+                    .0;
                 Ok(json!({ "status": "ok", "table_name": table, "filter": filter }))
             }
             TableChange::BuildIndex(payload) => {
                 let column = payload.column.clone();
                 build_index(state, user, path(), scope(), selector(), Json(payload))
                     .await
-                    .map_err(failed)?;
+                    .map_err(failed)?
+                    .0;
                 Ok(json!({ "status": "ok", "table_name": table, "column": column }))
             }
             TableChange::DropIndex(index_name) => {
@@ -348,20 +352,23 @@ impl AppTools {
                     selector(),
                 )
                 .await
-                .map_err(failed)?;
+                .map_err(failed)?
+                .0;
                 Ok(json!({ "status": "ok", "table_name": table, "index_name": index_name }))
             }
             TableChange::Optimize(payload) => {
                 optimize_table(state, user, path(), scope(), selector(), Json(payload))
                     .await
-                    .map_err(failed)?;
+                    .map_err(failed)?
+                    .0;
                 Ok(done())
             }
             TableChange::AddColumn(payload) => {
                 let column = payload.name.clone();
                 add_column(state, user, path(), scope(), selector(), Json(payload))
                     .await
-                    .map_err(failed)?;
+                    .map_err(failed)?
+                    .0;
                 Ok(json!({ "status": "ok", "table_name": table, "column": column }))
             }
             TableChange::DropColumns(columns) => {
@@ -376,14 +383,16 @@ impl AppTools {
                     }),
                 )
                 .await
-                .map_err(failed)?;
+                .map_err(failed)?
+                .0;
                 Ok(json!({ "status": "ok", "table_name": table, "columns": columns }))
             }
             TableChange::AlterColumn(payload) => {
                 let column = payload.column.clone();
                 alter_column(state, user, path(), scope(), selector(), Json(payload))
                     .await
-                    .map_err(failed)?;
+                    .map_err(failed)?
+                    .0;
                 Ok(json!({ "status": "ok", "table_name": table, "column": column }))
             }
             TableChange::SetColumnMetadata(column, payload) => {

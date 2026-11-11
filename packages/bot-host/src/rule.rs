@@ -206,12 +206,15 @@ fn addressed(
     message: &Message,
     messages: &[Message],
 ) -> bool {
-    if kind == ConversationKind::Direct || message.entry.kind == InboxEntryKind::Trigger {
+    if kind == ConversationKind::Direct {
         return true;
     }
     let Some(body) = &message.body else {
         return false;
     };
+    if message.entry.kind == InboxEntryKind::Trigger {
+        return body.mentions.is_empty() || body.mentions.iter().any(|mention| mention == bot_id);
+    }
     body.mentions.iter().any(|mention| mention == bot_id)
         || body.reply_to.as_deref().is_some_and(|target| {
             messages.iter().any(|candidate| {

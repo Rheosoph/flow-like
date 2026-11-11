@@ -1066,14 +1066,13 @@ pub(crate) mod postgres {
     const TABLES: &str = r#"
         CREATE TABLE "User" ("id" TEXT PRIMARY KEY);
         CREATE TABLE "App" ("id" TEXT PRIMARY KEY);
-        CREATE TABLE "TechnicalUser" ("id" TEXT PRIMARY KEY);
         CREATE TABLE "ExecutionUsageTracking" (
             "id" TEXT PRIMARY KEY, "instance" TEXT, "boardId" TEXT NOT NULL,
             "nodeId" TEXT NOT NULL, "version" TEXT NOT NULL,
             "microseconds" BIGINT NOT NULL, "status" TEXT NOT NULL,
             "userId" TEXT REFERENCES "User"("id") ON DELETE SET NULL,
             "appId" TEXT REFERENCES "App"("id") ON DELETE CASCADE,
-            "technicalUserId" TEXT REFERENCES "TechnicalUser"("id") ON DELETE SET NULL,
+            "technicalUserId" TEXT,
             "createdAt" TIMESTAMPTZ(3) NOT NULL, "updatedAt" TIMESTAMPTZ(3) NOT NULL
         );
         CREATE INDEX "ExecutionUsageTracking_createdAt_idx" ON "ExecutionUsageTracking"("createdAt");

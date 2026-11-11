@@ -354,6 +354,8 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     // Standing grants lapse 90 days after their last use; existing ones start a full term now.
     "ALTER TABLE tool_grants ADD COLUMN expires_at INTEGER;
     UPDATE tool_grants SET expires_at = (CAST(strftime('%s', 'now') AS INTEGER) + 90 * 86400) * 1000000;",
+    // A task scheduled in a group fires there; NULL fires in the person's chat with the bot.
+    "ALTER TABLE tasks ADD COLUMN conversation_id TEXT;",
 ];
 
 pub(crate) fn open(path: &Path) -> Result<Connection> {

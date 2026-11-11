@@ -37,16 +37,6 @@ pub struct Model {
         on_delete = "Cascade"
     )]
     pub app: BelongsTo<super::app::Entity>,
-    #[sea_orm(has_many)]
-    pub embedding_usage_trackings: HasMany<super::embedding_usage_tracking::Entity>,
-    #[sea_orm(has_many)]
-    pub execution_runs: HasMany<super::execution_run::Entity>,
-    #[sea_orm(has_many)]
-    pub execution_usage_dailies: HasMany<super::execution_usage_daily::Entity>,
-    #[sea_orm(has_many)]
-    pub execution_usage_trackings: HasMany<super::execution_usage_tracking::Entity>,
-    #[sea_orm(has_many)]
-    pub llm_usage_trackings: HasMany<super::llm_usage_tracking::Entity>,
     #[sea_orm(
         belongs_to,
         from = "creator_membership_id",

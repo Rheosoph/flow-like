@@ -94,7 +94,7 @@ pub enum TalkGate {
 const UNCLASSIFIED: DataClassification = DataClassification::Internal;
 
 /// The level a bot or answer carries into the exchange: its own, or [`UNCLASSIFIED`].
-fn effective_level(label: &DataSensitivity) -> DataClassification {
+pub(super) fn effective_level(label: &DataSensitivity) -> DataClassification {
     label.classification.unwrap_or(UNCLASSIFIED)
 }
 

@@ -190,12 +190,6 @@ model TechnicalUser {
   creatorMembership   Membership? @relation("TechnicalUserCreatorMembership", fields: [creatorMembershipId], references: [id], onDelete: Cascade)
   creatorMembershipId String?
 
-  llmUsage            LLMUsageTracking[]
-  embeddingUsage      EmbeddingUsageTracking[]
-  executionUsage      ExecutionUsageTracking[]
-  executionUsageDaily ExecutionUsageDaily[]
-  executionRuns       ExecutionRun[]
-
   validUntil DateTime? @db.Timestamptz(3)
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)

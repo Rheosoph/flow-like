@@ -647,8 +647,42 @@ pub async fn collect_generic_result_bytes(
     db: Option<ExecutionAuditContext>,
     timeout: Duration,
 ) -> Option<serde_json::Value> {
+    collect_generic_result_outcome(stream, run_id, db, timeout)
+        .await
+        .ok()
+}
+
+/// Why an executor stream gave no `generic_result`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingResult {
+    /// The run was still going when the wait ran out.
+    TimedOut,
+    /// The run failed, logged an error, or its stream broke off.
+    RunFailed,
+    /// The run finished cleanly without reaching a node that returns a result.
+    NoResult,
+}
+
+fn missing_result_for(completed: &CompletedPayload) -> MissingResult {
+    if completed.status == RunStatus::Completed
+        && completed.log_level < flow_like::flow::execution::LogLevel::Error as i32
+    {
+        MissingResult::NoResult
+    } else {
+        MissingResult::RunFailed
+    }
+}
+
+/// [`collect_generic_result_bytes`] that says why a result is missing, so a
+/// caller can tell a failed run from one that is still running.
+pub async fn collect_generic_result_outcome(
+    stream: ByteStream,
+    run_id: String,
+    db: Option<ExecutionAuditContext>,
+    timeout: Duration,
+) -> Result<serde_json::Value, MissingResult> {
     enum Ended {
-        Completed,
+        Completed(MissingResult),
         Closed,
         Failed,
     }
@@ -686,24 +720,30 @@ pub async fn collect_generic_result_bytes(
                 if let Some(db) = &db {
                     completion.start(db, &run_id, &parsed);
                 }
-                return Ended::Completed;
+                return Ended::Completed(missing_result_for(&parse_completed_payload(&parsed)));
             }
         }
         Ended::Closed
     };
 
-    match flow_like_types::tokio::time::timeout(timeout, collect).await {
-        Ok(Ended::Completed) => drain_executor_stream(&mut es).await,
-        Ok(Ended::Closed) => fail_run_on_missing_completion(db.as_ref(), &run_id).await,
-        Ok(Ended::Failed) => {}
+    let missing = match flow_like_types::tokio::time::timeout(timeout, collect).await {
+        Ok(Ended::Completed(missing)) => {
+            drain_executor_stream(&mut es).await;
+            missing
+        }
+        Ok(Ended::Closed) => {
+            fail_run_on_missing_completion(db.as_ref(), &run_id).await;
+            MissingResult::RunFailed
+        }
+        Ok(Ended::Failed) => MissingResult::RunFailed,
         Err(_) => {
             tracing::warn!(run_id = %run_id, "Timed out collecting generic_result");
             completion.finish().await;
-            return None;
+            return Err(MissingResult::TimedOut);
         }
-    }
+    };
     completion.finish().await;
-    generic_result
+    generic_result.ok_or(missing)
 }
 
 fn completion_update(
@@ -1312,6 +1352,55 @@ mod tests {
         .await;
         assert_eq!(result, Some(serde_json::json!({"answer": 42})));
         assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    async fn outcome_of(events: Vec<bytes::Bytes>) -> Result<serde_json::Value, MissingResult> {
+        let bytes: ByteStream = Box::pin(futures_util::stream::iter(events.into_iter().map(Ok)));
+        collect_generic_result_outcome(
+            bytes,
+            "run-outcome-test".into(),
+            None,
+            Duration::from_secs(1),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_run_that_ends_without_a_result_says_why_instead_of_timing_out() {
+        let completed = |status: &str, log_level: i32| {
+            vec![executor_event(
+                "completed",
+                serde_json::json!({"status": status, "log_level": log_level}),
+            )]
+        };
+        assert_eq!(
+            outcome_of(completed("failed", 3)).await,
+            Err(MissingResult::RunFailed)
+        );
+        assert_eq!(
+            outcome_of(completed("completed", 3)).await,
+            Err(MissingResult::RunFailed)
+        );
+        assert_eq!(
+            outcome_of(completed("completed", 1)).await,
+            Err(MissingResult::NoResult)
+        );
+        assert_eq!(outcome_of(Vec::new()).await, Err(MissingResult::RunFailed));
+    }
+
+    #[tokio::test]
+    async fn a_run_still_going_at_the_deadline_times_out() {
+        let bytes: ByteStream = Box::pin(futures_util::stream::pending());
+        assert_eq!(
+            collect_generic_result_outcome(
+                bytes,
+                "run-outcome-test".into(),
+                None,
+                Duration::from_millis(10),
+            )
+            .await,
+            Err(MissingResult::TimedOut)
+        );
     }
 
     #[test]

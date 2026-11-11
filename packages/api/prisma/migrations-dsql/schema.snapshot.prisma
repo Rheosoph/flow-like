@@ -584,12 +584,6 @@ model TechnicalUser {
   creatorMembership   Membership? @relation("TechnicalUserCreatorMembership", fields: [creatorMembershipId], references: [id], onDelete: Cascade)
   creatorMembershipId String?
 
-  llmUsage            LLMUsageTracking[]
-  embeddingUsage      EmbeddingUsageTracking[]
-  executionUsage      ExecutionUsageTracking[]
-  executionUsageDaily ExecutionUsageDaily[]
-  executionRuns       ExecutionRun[]
-
   validUntil DateTime? @db.Timestamptz(3)
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
@@ -1914,7 +1908,8 @@ model BotWebhook {
 
 /// A task a bot runs for its owner at a time: once (`runAt`) or on a cron schedule in a time
 /// zone. A maintenance sweep claims due tasks with a compare-and-set on `nextRunAt` and writes a
-/// `trigger` entry (source `schedule`) into the bot's conversation with its owner.
+/// `trigger` entry (source `schedule`) into the bot's conversation with its owner, or into
+/// `conversationId` as `requestedBy` when the task was scheduled in another conversation.
 model BotTask {
   id          String    @id
   botId       String
@@ -1936,6 +1931,10 @@ model BotTask {
   createdBy   String
   createdAt   DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+  /// The group or chat the task was scheduled in; NULL fires in the owner's chat with the bot.
+  conversationId String?
+  /// The person whose request scheduled the task; its trigger is sent as them.
+  requestedBy    String?
 
   @@index([botId])
   @@index([enabled, nextRunAt])
@@ -5125,7 +5124,6 @@ model LLMUsageTracking {
   userId String?
 
   technicalUserId String?
-  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   app   App?    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String?
@@ -5164,7 +5162,6 @@ model EmbeddingUsageTracking {
   appId String?
 
   technicalUserId String?
-  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   price BigInt
 
@@ -5200,7 +5197,6 @@ model ExecutionUsageTracking {
   appId String?
 
   technicalUserId String?
-  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -5230,7 +5226,6 @@ model ExecutionUsageDaily {
   userId String?
 
   technicalUserId String?
-  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   app   App?    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String?
@@ -5432,8 +5427,10 @@ model ExecutionRun {
   app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String
 
+  /// The technical actor that started the run: an API key (`TechnicalUser.id`) or a bot
+  /// (`Bot.id`). No foreign key, because a bot is not a `TechnicalUser`; the usage tables'
+  /// `technicalUserId` copies it and has none either.
   technicalUserId String?
-  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   /// If the run was triggered through an app connection: the chain of apps
   /// that led to this run (first = original caller), stored as a JSON string

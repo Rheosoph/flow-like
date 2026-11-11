@@ -1,29 +1,35 @@
 //! Scheduled tasks of local bots. A due task is claimed with a compare-and-set on `next_run_at`
 //! in the transaction that writes its `trigger` entry, so a run is written once however many
 //! ticks race for it; a run missed while the app was closed fires once at the next tick and the
-//! task's next run is the first one after that.
+//! task's next run is the first one after that. A task the bot scheduled in a group fires there,
+//! naming the bot so only it wakes, and is paused once the bot left the group.
 
 use crate::{
     LOCAL_OWNER_ID, LocalBotStore,
     bots::{bot_exists, bot_not_found},
     error::{Error, Result},
-    inbox::write_trigger,
+    inbox::{in_group, write_group_trigger, write_trigger},
     store::{now_micros, timestamp},
 };
 use chrono::{DateTime, TimeZone, Utc};
 use flow_like_types::{
     bot_task::{
-        self as contract, BotTask, CreateBotTask, MAX_TASKS_PER_BOT, TaskCreator, TaskKind,
-        TaskSchedule, UpdateBotTask, fire_message_id,
+        self as contract, BotTask, CreateBotTask, MAX_TASKS_PER_BOT, TaskConversation,
+        TaskCreator, TaskKind, TaskSchedule, UpdateBotTask, fire_message_id,
     },
     create_id,
-    inbox::{TRIGGER_TEXT_MAX_CHARS, TRIGGER_TITLE_MAX_CHARS, TriggerBody, TriggerSource},
+    inbox::{
+        ConversationKind, TRIGGER_TEXT_MAX_CHARS, TRIGGER_TITLE_MAX_CHARS, TriggerBody,
+        TriggerSource,
+    },
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 const SCHEDULING_CAPABILITY: &str = "scheduling";
-const COLUMNS: &str = "id, bot_id, kind, run_at, cron, timezone, instruction, title, next_run_at,
-    last_run_at, enabled, created_by, created_at, monitoring";
+const COLUMNS: &str = "t.id, t.bot_id, t.kind, t.run_at, t.cron, t.timezone, t.instruction,
+    t.title, t.next_run_at, t.last_run_at, t.enabled, t.created_by, t.created_at, t.monitoring,
+    t.conversation_id, c.kind, c.title";
+const TASKS: &str = "tasks t LEFT JOIN conversations c ON c.id = t.conversation_id";
 
 struct Stored {
     task: BotTask,
@@ -33,12 +39,31 @@ fn instant(micros: i64) -> DateTime<Utc> {
     Utc.timestamp_micros(micros).single().unwrap_or_default()
 }
 
+/// The group a task fires in. A group that is gone still shows, without a name, so the task
+/// never reads as one of the person's chat with the bot.
+fn conversation_of(row: &Row<'_>) -> rusqlite::Result<Option<TaskConversation>> {
+    let Some(id) = row.get::<_, Option<String>>(14)? else {
+        return Ok(None);
+    };
+    let kind: Option<String> = row.get(15)?;
+    let title: Option<String> = row.get(16)?;
+    Ok(Some(TaskConversation {
+        id,
+        kind: kind
+            .as_deref()
+            .and_then(ConversationKind::parse)
+            .unwrap_or(ConversationKind::Group),
+        title: title.filter(|title| !title.trim().is_empty()),
+    }))
+}
+
 fn read_task(row: &Row<'_>) -> rusqlite::Result<Stored> {
     let rfc = |micros: Option<i64>| micros.map(|micros| timestamp(micros).to_rfc3339());
     let kind: String = row.get(2)?;
     let created_by: String = row.get(11)?;
     Ok(Stored {
         task: BotTask {
+            conversation: conversation_of(row)?,
             id: row.get(0)?,
             bot_id: row.get(1)?,
             owner_id: LOCAL_OWNER_ID.to_string(),
@@ -101,7 +126,7 @@ fn require_scheduling(db: &Connection, bot_id: &str) -> Result<()> {
 
 fn find(db: &Connection, bot_id: &str, task_id: &str) -> Result<BotTask> {
     db.prepare_cached(&format!(
-        "SELECT {COLUMNS} FROM tasks WHERE id = ?1 AND bot_id = ?2"
+        "SELECT {COLUMNS} FROM {TASKS} WHERE t.id = ?1 AND t.bot_id = ?2"
     ))?
     .query_row(params![task_id, bot_id], read_task)
     .optional()?
@@ -128,7 +153,7 @@ fn trigger_for(task: &BotTask) -> TriggerBody {
             .collect(),
         payload: None,
         payload_handle: None,
-        bot_id: None,
+        bot_id: task.conversation.as_ref().map(|_| task.bot_id.clone()),
     }
 }
 
@@ -154,6 +179,17 @@ fn claim(db: &Connection, task: &BotTask, due: i64, now: i64) -> Result<bool> {
     Ok(claimed == 1)
 }
 
+/// Pauses the task instead of running it, once. `false` when its next run is no longer `due`.
+fn pause(db: &Connection, task: &BotTask, due: i64, now: i64) -> Result<bool> {
+    let paused = db
+        .prepare_cached(
+            "UPDATE tasks SET enabled = 0, updated_at = ?1
+             WHERE id = ?2 AND enabled = 1 AND next_run_at = ?3",
+        )?
+        .execute(params![now, task.id, due])?;
+    Ok(paused == 1)
+}
+
 impl LocalBotStore {
     /// The bot's tasks, soonest first.
     pub fn tasks(&self, bot_id: &str) -> Result<Vec<BotTask>> {
@@ -162,8 +198,8 @@ impl LocalBotStore {
                 return Err(bot_not_found(bot_id));
             }
             let mut statement = db.prepare_cached(&format!(
-                "SELECT {COLUMNS} FROM tasks WHERE bot_id = ?1
-                 ORDER BY next_run_at IS NULL, next_run_at, created_at, id"
+                "SELECT {COLUMNS} FROM {TASKS} WHERE t.bot_id = ?1
+                 ORDER BY t.next_run_at IS NULL, t.next_run_at, t.created_at, t.id"
             ))?;
             let rows = statement
                 .query_map([bot_id], read_task)?
@@ -172,14 +208,31 @@ impl LocalBotStore {
         })
     }
 
+    /// Saves a task that fires in the person's chat with the bot.
     pub fn create_task(
         &self,
         bot_id: &str,
         request: CreateBotTask,
         created_by: TaskCreator,
     ) -> Result<BotTask> {
+        self.create_task_in(bot_id, request, created_by, None)
+    }
+
+    /// Saves a task. With `conversation_id`, the conversation of the turn that asked for it, a
+    /// group the bot is in, the task fires there; otherwise in the person's chat with the bot.
+    pub fn create_task_in(
+        &self,
+        bot_id: &str,
+        request: CreateBotTask,
+        created_by: TaskCreator,
+        conversation_id: Option<&str>,
+    ) -> Result<BotTask> {
         self.write(|tx, _changes| {
             require_scheduling(tx, bot_id)?;
+            let group = match conversation_id {
+                Some(id) if in_group(tx, id, bot_id)? => Some(id),
+                _ => None,
+            };
             let now = now_micros();
             let kind = request
                 .kind
@@ -209,8 +262,9 @@ impl LocalBotStore {
             let (run_at, cron, timezone) = parts_of(&schedule);
             tx.execute(
                 "INSERT INTO tasks (id, bot_id, kind, run_at, cron, timezone, instruction, title,
-                     next_run_at, last_run_at, enabled, created_by, created_at, updated_at, monitoring)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, ?11, ?12, ?12, ?13)",
+                     next_run_at, last_run_at, enabled, created_by, created_at, updated_at, monitoring,
+                     conversation_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, ?11, ?12, ?12, ?13, ?14)",
                 params![
                     id,
                     bot_id,
@@ -226,7 +280,8 @@ impl LocalBotStore {
                     i64::from(request.enabled.unwrap_or(true)),
                     created_by.stored(),
                     now,
-                    i64::from(request.monitoring)
+                    i64::from(request.monitoring),
+                    group
                 ],
             )?;
             find(tx, bot_id, &id)
@@ -304,14 +359,15 @@ impl LocalBotStore {
     }
 
     /// Fires every enabled task whose next run has come at `now` (epoch microseconds), writing
-    /// one trigger entry each in the person's conversation with its bot. Returns the tasks this
-    /// call fired. Safe to call from any number of ticks at once.
+    /// one trigger entry each in the person's conversation with its bot or in the group the task
+    /// was scheduled in. A task whose bot left that group is paused instead. Returns the tasks
+    /// this call fired. Safe to call from any number of ticks at once.
     pub fn fire_due_tasks(&self, now: i64) -> Result<Vec<BotTask>> {
         self.write(|tx, changes| {
             let due: Vec<(BotTask, i64)> = {
                 let mut statement = tx.prepare_cached(&format!(
-                    "SELECT {COLUMNS} FROM tasks WHERE enabled = 1 AND next_run_at <= ?1
-                     ORDER BY next_run_at, id"
+                    "SELECT {COLUMNS} FROM {TASKS} WHERE t.enabled = 1 AND t.next_run_at <= ?1
+                     ORDER BY t.next_run_at, t.id"
                 ))?;
                 statement
                     .query_map([now], read_task)?
@@ -325,11 +381,35 @@ impl LocalBotStore {
             };
             let mut fired = Vec::new();
             for (task, due) in due {
-                if !holds_capability(tx, &task.bot_id)? || !claim(tx, &task, due, now)? {
+                if !holds_capability(tx, &task.bot_id)? {
+                    continue;
+                }
+                if let Some(group) = &task.conversation
+                    && !in_group(tx, &group.id, &task.bot_id)?
+                {
+                    pause(tx, &task, due, now)?;
+                    continue;
+                }
+                if !claim(tx, &task, due, now)? {
                     continue;
                 }
                 let message_id = fire_message_id(&task.id, instant(due));
-                write_trigger(tx, changes, &task.bot_id, &message_id, &trigger_for(&task))?;
+                let body = trigger_for(&task);
+                match &task.conversation {
+                    Some(group) => {
+                        write_group_trigger(
+                            tx,
+                            changes,
+                            &group.id,
+                            &task.bot_id,
+                            &message_id,
+                            &body,
+                        )?;
+                    }
+                    None => {
+                        write_trigger(tx, changes, &task.bot_id, &message_id, &body)?;
+                    }
+                }
                 fired.push(find(tx, &task.bot_id, &task.id)?);
             }
             Ok(fired)

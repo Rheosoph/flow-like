@@ -2873,7 +2873,7 @@ mod tests {
     use flow_like_storage::{
         Path,
         files::store::FlowLikeStore,
-        object_store::{ObjectStore, PutPayload, memory::InMemory},
+        object_store::{PutPayload, memory::InMemory},
     };
     use flow_like_types::{Cacheable, Value, async_trait, json::json};
     use std::sync::Arc;

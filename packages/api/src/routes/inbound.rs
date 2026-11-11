@@ -55,7 +55,8 @@ use crate::{
     error::ApiError,
     execution::{
         ByteStream, DispatchRequest, DispatchTrigger, ExecutionBackend, ExecutionJwtError,
-        ExecutionJwtParams, TokenType, collect_generic_result_bytes, executor_response_bytes,
+        ExecutionJwtParams, MissingResult, TokenType, collect_generic_result_outcome,
+        executor_response_bytes,
         is_jwt_configured, rejection, resolve_wasm_packages, sign_execution_jwt,
         sign_unattended_execution_jwt, stream_http_response,
         variant::{self, ResolvedTarget, STABLE_VARIANT, SplitKey, dispatch_event_json},
@@ -2862,11 +2863,30 @@ async fn collect_inbound_result(
     run_id: String,
     db: crate::audit::ExecutionAuditContext,
 ) -> Result<Value, ApiError> {
-    collect_generic_result_bytes(bytes, run_id, Some(db), INBOUND_RESULT_TIMEOUT)
+    collect_generic_result_outcome(bytes, run_id.clone(), Some(db), INBOUND_RESULT_TIMEOUT)
         .await
-        .ok_or_else(|| {
+        .map_err(|missing| missing_result_error(&run_id, missing))
+}
+
+fn missing_result_error(run_id: &str, missing: MissingResult) -> ApiError {
+    match missing {
+        MissingResult::TimedOut => {
             ApiError::gateway_timeout("flow did not return a result within the allotted time")
-        })
+        }
+        MissingResult::RunFailed => ApiError::bad_gateway(format!(
+            "flow run {run_id} failed before it returned a result; the run's logs hold the error"
+        )),
+        MissingResult::NoResult => ApiError::bad_gateway(format!(
+            "flow run {run_id} finished without returning a result"
+        )),
+    }
+}
+
+fn mcp_error_text(error: &ApiError) -> String {
+    match error.public_message() {
+        Some(message) => format!("{error}: {message}"),
+        None => error.to_string(),
+    }
 }
 
 async fn dispatch_event_stream(
@@ -4000,7 +4020,7 @@ async fn mcp_tool_call_response(
             "jsonrpc": "2.0",
             "id": id,
             "result": {
-                "content": [{"type": "text", "text": err.to_string()}],
+                "content": [{"type": "text", "text": mcp_error_text(&err)}],
                 "isError": true
             }
         }))),
@@ -4722,11 +4742,23 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        PROXY_EVENT_AUTHORIZATION_HEADER, ProxyCallerContext, canonical_auth_kind, client_metadata,
-        inbound_base_path, is_asymmetric_jwt_algorithm, jwk_matches_oauth_header, jwks_object_path,
-        mcp_resource_url, parse_query_single, registration_auth_headers,
-        rest_args_from_body_and_query, rest_stream_result, with_inbound_openapi_server,
+        MissingResult, PROXY_EVENT_AUTHORIZATION_HEADER, ProxyCallerContext, canonical_auth_kind,
+        client_metadata, inbound_base_path, is_asymmetric_jwt_algorithm, jwk_matches_oauth_header,
+        jwks_object_path, mcp_error_text, mcp_resource_url, missing_result_error,
+        parse_query_single, registration_auth_headers, rest_args_from_body_and_query,
+        rest_stream_result, with_inbound_openapi_server,
     };
+
+    #[test]
+    fn mcp_tool_errors_name_a_failed_run_instead_of_a_gateway_timeout() {
+        let failed = mcp_error_text(&missing_result_error("run-1", MissingResult::RunFailed));
+        assert!(failed.starts_with("502 Bad Gateway"), "{failed}");
+        assert!(failed.contains("flow run run-1 failed"), "{failed}");
+
+        let timed_out = mcp_error_text(&missing_result_error("run-1", MissingResult::TimedOut));
+        assert!(timed_out.starts_with("504 Gateway Timeout"), "{timed_out}");
+        assert!(timed_out.contains("allotted time"), "{timed_out}");
+    }
 
     #[test]
     fn streamed_rest_result_matches_buffered_response_envelopes() {

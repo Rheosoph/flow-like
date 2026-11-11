@@ -1,8 +1,11 @@
 //! The server's `Scheduler`: a bot's tasks in the `BotTask` table, kept through the same
-//! functions the owner's endpoints use, so caps and schedule rules are the API's.
+//! functions the owner's endpoints use, so caps and schedule rules are the API's. A task the bot
+//! schedules fires in the group or chat of the turn that asked for it, read from the turn the
+//! server keeps, never from the tool's arguments.
 
 use crate::{
     bot_host::task_schedules,
+    entity::bot_task,
     routes::{
         bots::{lock_bot, tasks},
         inbox::now_millis,
@@ -13,26 +16,29 @@ use async_trait::async_trait;
 use flow_like_bot_tools::Scheduler;
 use flow_like_types::{
     Result, anyhow,
-    bot_task::{BotTask, CreateBotTask, TaskCreator, TaskKind, UpdateBotTask},
+    bot_task::{BotTask, CreateBotTask, TaskConversation, TaskCreator, TaskKind, UpdateBotTask},
 };
+use sea_orm::ConnectionTrait;
 
 pub(crate) struct ApiScheduler {
     state: AppState,
     owner_id: String,
     bot_id: String,
+    turn_id: String,
 }
 
 impl ApiScheduler {
-    pub(crate) fn new(state: &AppState, owner_id: &str, bot_id: &str) -> Self {
+    pub(crate) fn new(state: &AppState, owner_id: &str, bot_id: &str, turn_id: &str) -> Self {
         Self {
             state: state.clone(),
             owner_id: owner_id.to_string(),
             bot_id: bot_id.to_string(),
+            turn_id: turn_id.to_string(),
         }
     }
 }
 
-pub(crate) fn to_task(row: crate::entity::bot_task::Model) -> BotTask {
+pub(crate) fn to_task(row: bot_task::Model, conversation: Option<TaskConversation>) -> BotTask {
     BotTask {
         kind: TaskKind::parse(&row.kind).unwrap_or(TaskKind::Once),
         created_by: TaskCreator::parse(&row.created_by).unwrap_or(TaskCreator::Owner),
@@ -49,7 +55,28 @@ pub(crate) fn to_task(row: crate::entity::bot_task::Model) -> BotTask {
         enabled: row.enabled,
         monitoring: row.monitoring.unwrap_or(false),
         created_at: row.created_at.to_rfc3339(),
+        conversation,
     }
+}
+
+async fn tasks_of<C: ConnectionTrait>(db: &C, rows: Vec<bot_task::Model>) -> Result<Vec<BotTask>> {
+    let known = tasks::conversations_of(db, &rows)
+        .await
+        .map_err(|error| anyhow!("{error}"))?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let conversation = tasks::conversation_of(&row, &known);
+            to_task(row, conversation)
+        })
+        .collect())
+}
+
+async fn task_of<C: ConnectionTrait>(db: &C, row: bot_task::Model) -> Result<BotTask> {
+    tasks_of(db, vec![row])
+        .await?
+        .pop()
+        .ok_or_else(|| anyhow!("A saved task could not be read back"))
 }
 
 #[async_trait]
@@ -58,25 +85,38 @@ impl Scheduler for ApiScheduler {
         let row = self
             .state
             .transaction(|txn| {
-                let (owner, bot, request) =
-                    (self.owner_id.clone(), self.bot_id.clone(), request.clone());
+                let (owner, bot, turn, request) = (
+                    self.owner_id.clone(),
+                    self.bot_id.clone(),
+                    self.turn_id.clone(),
+                    request.clone(),
+                );
                 Box::pin(async move {
                     lock_bot(txn, &bot).await?;
-                    tasks::create_in(txn, &owner, &bot, request, TaskCreator::Bot, now_millis())
-                        .await
+                    let origin = tasks::origin_of_turn(txn, &owner, &bot, &turn).await?;
+                    tasks::create_in(
+                        txn,
+                        &owner,
+                        &bot,
+                        request,
+                        TaskCreator::Bot,
+                        origin.as_ref(),
+                        now_millis(),
+                    )
+                    .await
                 })
             })
             .await
             .map_err(|error| anyhow!("{error}"))?;
         task_schedules::sync(&self.state, &row).await;
-        Ok(to_task(row))
+        task_of(&self.state.db, row).await
     }
 
     async fn list(&self) -> Result<Vec<BotTask>> {
         let rows = tasks::list_in(&self.state.db, &self.owner_id, &self.bot_id)
             .await
             .map_err(|error| anyhow!("{error}"))?;
-        Ok(rows.into_iter().map(to_task).collect())
+        tasks_of(&self.state.db, rows).await
     }
 
     async fn update(&self, task_id: &str, request: UpdateBotTask) -> Result<Option<BotTask>> {
@@ -106,7 +146,7 @@ impl Scheduler for ApiScheduler {
         match result {
             Ok(row) => {
                 task_schedules::sync(&self.state, &row).await;
-                Ok(Some(to_task(row)))
+                task_of(&self.state.db, row).await.map(Some)
             }
             Err(error) if error.status() == axum::http::StatusCode::NOT_FOUND => Ok(None),
             Err(error) => Err(anyhow!("{error}")),

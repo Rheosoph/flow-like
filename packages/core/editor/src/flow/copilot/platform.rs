@@ -835,6 +835,15 @@ pub struct PlatformCopilot {
     max_completion_tokens: Option<u64>,
     web_access: WebAccess,
     turn_label: Option<Arc<TurnLabel>>,
+    conversation_scope: Option<String>,
+}
+
+/// What the resolved model adds to a run beside its client.
+#[derive(Default)]
+struct ModelContext {
+    /// The request body that switches thinking off, for the run's checkpoints.
+    checkpoint_thinking: Option<Value>,
+    window_tokens: Option<u32>,
 }
 
 impl PlatformCopilot {
@@ -851,7 +860,15 @@ impl PlatformCopilot {
             max_completion_tokens: None,
             web_access: WebAccess::default(),
             turn_label: None,
+            conversation_scope: None,
         }
+    }
+
+    /// Names the conversation this run answers, unique in this process. Its next run then starts
+    /// from this run's summary of the older messages instead of summarizing them again.
+    pub(super) fn with_conversation_scope(mut self, scope: Option<String>) -> Self {
+        self.conversation_scope = scope;
+        self
     }
 
     /// The owner's own search and page readers for this run's research.
@@ -919,6 +936,7 @@ impl PlatformCopilot {
         String,
         Box<dyn CompletionClientDyn + Send + Sync + 'a>,
         Option<Value>,
+        ModelContext,
     )> {
         let bit = if let Some(profile) = &self.profile {
             let preference = BitModelPreference {
@@ -968,8 +986,21 @@ impl PlatformCopilot {
         let thinking = self
             .thinking
             .and_then(|thinking| thinking_params(model.as_ref(), &default_model, thinking));
+        let model_context = ModelContext {
+            checkpoint_thinking: thinking_params(
+                model.as_ref(),
+                &default_model,
+                HistoryThinking::Off,
+            ),
+            window_tokens: bit.try_to_context_length(),
+        };
         let provider = model.provider().await?;
-        Ok((default_model, provider.into_client(), thinking))
+        Ok((
+            default_model,
+            provider.into_client(),
+            thinking,
+            model_context,
+        ))
     }
 
     /// Run the platform assistant loop for a profile model, dispatching platform tools through the
@@ -1012,8 +1043,9 @@ impl PlatformCopilot {
             }
             return Ok(answer.output);
         }
-        let (model_name, completion_client, thinking) = self.resolve_model(model_id, token).await?;
-        self.chat_with_client(
+        let (model_name, completion_client, thinking, model_context) =
+            self.resolve_model(model_id, token).await?;
+        self.chat_with_model(
             surface,
             system_prompt,
             user_prompt,
@@ -1022,6 +1054,7 @@ impl PlatformCopilot {
             model_name,
             completion_client.as_ref(),
             thinking,
+            model_context,
             bridge,
             memory,
             on_token,
@@ -1029,6 +1062,7 @@ impl PlatformCopilot {
         .await
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     async fn chat_with_client<F>(
         &self,
@@ -1040,6 +1074,42 @@ impl PlatformCopilot {
         model_name: String,
         completion_client: &(dyn CompletionClientDyn + Send + Sync),
         thinking: Option<Value>,
+        bridge: Arc<dyn PlatformToolBridge>,
+        memory: Option<Arc<AssistantMemory>>,
+        on_token: Option<F>,
+    ) -> Result<String>
+    where
+        F: Fn(String) + Send + Sync + 'static,
+    {
+        self.chat_with_model(
+            surface,
+            system_prompt,
+            user_prompt,
+            current_images,
+            history,
+            model_name,
+            completion_client,
+            thinking,
+            ModelContext::default(),
+            bridge,
+            memory,
+            on_token,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn chat_with_model<F>(
+        &self,
+        surface: PlatformSurface,
+        system_prompt: String,
+        user_prompt: String,
+        current_images: Option<Vec<ChatImage>>,
+        history: Vec<ChatMessage>,
+        model_name: String,
+        completion_client: &(dyn CompletionClientDyn + Send + Sync),
+        thinking: Option<Value>,
+        model_context: ModelContext,
         bridge: Arc<dyn PlatformToolBridge>,
         memory: Option<Arc<AssistantMemory>>,
         on_token: Option<F>,
@@ -1085,6 +1155,7 @@ impl PlatformCopilot {
             model_name,
             completion_client,
             thinking,
+            model_context,
             bridge,
             memory,
             sink,
@@ -1145,6 +1216,7 @@ impl PlatformCopilot {
         model_name: String,
         completion_client: &(dyn CompletionClientDyn + Send + Sync),
         thinking: Option<Value>,
+        model_context: ModelContext,
         bridge: Arc<dyn PlatformToolBridge>,
         memory: Option<Arc<AssistantMemory>>,
         on_token: Option<F>,
@@ -1279,6 +1351,7 @@ impl PlatformCopilot {
         let mut recovery = None;
         let mut recovery_deadline = None;
         let mut recovery_notice = None;
+        let mut resumed = false;
         if let Some(store) = &self.recovery {
             if !long_running {
                 return Err(flow_like_types::anyhow!(
@@ -1304,6 +1377,7 @@ impl PlatformCopilot {
             }
             let (session, saved) = RecoverySession::load(store.clone()).await?;
             if let Some(saved) = saved {
+                resumed = true;
                 let current_host_context =
                     (saved.original_request != user_prompt).then(|| user_prompt.clone());
                 user_prompt = saved.original_request;
@@ -1369,6 +1443,16 @@ impl PlatformCopilot {
             recovery_deadline = Some(session.deadline_at_ms());
             recovery = Some(Arc::new(tokio::sync::Mutex::new(session)));
         }
+        // A resumed run's history is its saved working context, not the conversation as passed.
+        let mut compaction = context::Compaction::open(
+            context::ContextBudget::for_window(model_context.window_tokens),
+            model_context.checkpoint_thinking,
+            self.turn_label.clone(),
+            self.conversation_scope
+                .clone()
+                .filter(|_| long_running && !resumed),
+            &mut current_history,
+        );
 
         macro_rules! snapshot {
             ($phase:expr, $pending:expr, $answer:expr) => {
@@ -1456,7 +1540,22 @@ impl PlatformCopilot {
             }
             if long_running {
                 context::prune_images(&mut current_history, &current_prompt, &reference_images);
-                if let Some(prefix_len) = context::compact_prefix_len(&current_history) {
+                let facts = context::TurnFacts {
+                    request: &user_prompt,
+                    steering: &user_steering,
+                    references: &reference_images,
+                };
+                compaction
+                    .collect(&mut current_history, &facts, &mut session_stats)
+                    .await;
+                // The checkpoint is written beside the turn. Only a history that is still at the
+                // hard limit after its stale tool results were shortened holds the request back.
+                if compaction.start(
+                    completion_client,
+                    &model_name,
+                    &mut current_history,
+                    || work_plan.context(),
+                ) {
                     if let Some(callback) = &on_token {
                         callback(plan_step_frame(
                             format!("checkpoint_{iteration}"),
@@ -1465,29 +1564,21 @@ impl PlatformCopilot {
                             "think",
                         ));
                     }
-                    let plan = work_plan.context();
-                    let summary = context::summarize(
-                        completion_client,
-                        &model_name,
-                        &current_history[..prefix_len],
-                        plan.as_deref(),
+                    let preserved = context::cancellable(
                         &bridge,
-                        &mut session_stats,
+                        compaction.wait(&mut current_history, &facts, &mut session_stats),
                     )
-                    .await;
-                    if bridge.is_cancelled().await {
-                        return Err(flow_like_types::anyhow!("Run cancelled"));
-                    }
+                    .await?;
                     if let Some(callback) = &on_token {
                         callback(plan_step_frame(
                             format!("checkpoint_{iteration}"),
-                            if summary.is_ok() {
+                            if preserved.is_ok() {
                                 "Progress preserved"
                             } else {
                                 "Could not preserve progress"
                             }
                             .into(),
-                            if summary.is_ok() {
+                            if preserved.is_ok() {
                                 PlanStepStatus::Completed
                             } else {
                                 PlanStepStatus::Failed
@@ -1495,30 +1586,16 @@ impl PlatformCopilot {
                             "think",
                         ));
                     }
-                    match summary {
-                        Ok(summary) => {
-                            current_history.drain(..prefix_len);
-                            current_history.insert(
-                                0,
-                                context::checkpoint_message(
-                                    &user_prompt,
-                                    &user_steering,
-                                    &summary,
-                                    &reference_images,
-                                ),
-                            );
+                    if let Err(error) = preserved {
+                        tracing::warn!("Long-running bot checkpoint failed: {error:#}");
+                        let notice = "\n\nI stopped because I could not preserve the working context for the next steps. The task is unfinished; actions already completed have not been repeated.";
+                        full_response.push_str(notice);
+                        if let Some(callback) = &on_token {
+                            callback(notice.into());
                         }
-                        Err(error) => {
-                            tracing::warn!("Long-running bot checkpoint failed: {error:#}");
-                            let notice = "\n\nI stopped because I could not preserve the working context for the next steps. The task is unfinished; actions already completed have not been repeated.";
-                            full_response.push_str(notice);
-                            if let Some(callback) = &on_token {
-                                callback(notice.into());
-                            }
-                            answer_closed = true;
-                            stop_reason = Some(WorkStopReason::Blocked);
-                            break;
-                        }
+                        answer_closed = true;
+                        stop_reason = Some(WorkStopReason::Blocked);
+                        break;
                     }
                 }
             }

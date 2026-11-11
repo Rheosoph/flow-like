@@ -1482,6 +1482,7 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         crate::routes::bots::skills::UpdateBotSkillRequest,
         crate::routes::bots::skills::ImportBotSkillRequest,
         crate::routes::bots::skills::InstallBotSkillPackageRequest,
+        crate::routes::bots::tasks::BotTaskConversation,
         crate::routes::bots::tasks::BotTaskInfo,
         crate::routes::bots::tasks::BotTaskList,
         crate::routes::bots::tasks::CreateBotTaskRequest,

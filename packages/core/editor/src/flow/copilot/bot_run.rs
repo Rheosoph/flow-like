@@ -458,6 +458,9 @@ pub struct BotRunContext {
     pub compute: TurnCompute,
     /// Durable state bound by the host to this turn and its current claim.
     pub recovery: Option<super::run_recovery::RecoveryHandle>,
+    /// The conversation the turn answers, unique on this host. The conversation's next turn then
+    /// reuses this turn's summary of its older messages. `None` summarizes anew each turn.
+    pub conversation_key: Option<String>,
 }
 
 impl BotRunContext {
@@ -1741,7 +1744,7 @@ const CAPABILITY_TOOL_LINES: [(BotCapability, &str, &str); 16] = [
     (
         BotCapability::Scheduling,
         "Scheduling",
-        "schedule work for yourself; when a task fires you get its instruction as a message from your owner and answer in their chat. Proactively schedule a one-time follow-up when an ongoing topic has a useful next action at a known future time, such as checking an expected reply or revisiting a deadline. Respect your owner's reminder preferences and check `list_tasks` for an existing follow-up before creating one. Prefer `schedule_task` with `at` or `in_minutes`; use `cron` only for an established recurring need. Resolve relative dates from the current time and use your owner's time zone for clock times; if a clock time's zone is unknown, clarify it before scheduling. Put the topic, relevant context, memory pointers and next action in the instruction so you can resume later. Keep `monitoring` false for reminders; use true for checks that should stay quiet when nothing changed. Tell your owner what you scheduled and when only after the tool succeeds",
+        "schedule work for yourself; a task fires in the conversation you scheduled it in, where you get its instruction as a message from whoever asked for it and answer there. In a group everyone reads the instruction, so keep your owner's private details out of it. Proactively schedule a one-time follow-up when an ongoing topic has a useful next action at a known future time, such as checking an expected reply or revisiting a deadline. Respect your owner's reminder preferences and check `list_tasks` for an existing follow-up before creating one. Prefer `schedule_task` with `at` or `in_minutes`; use `cron` only for an established recurring need. Resolve relative dates from the current time and use your owner's time zone for clock times; if a clock time's zone is unknown, clarify it before scheduling. Put the topic, relevant context, memory pointers and next action in the instruction so you can resume later. Keep `monitoring` false for reminders; use true for checks that should stay quiet when nothing changed. Say what you scheduled and when only after the tool succeeds",
     ),
     (
         BotCapability::PushNotifications,
@@ -2611,13 +2614,20 @@ where
     if let Some(gate) = &turn_bot.tool_gate {
         bridge = Arc::new(super::tool_gate::GatedBridge::new(gate.clone(), bridge));
     }
+    // A person's temporary context must not outlive its turn in a kept summary.
+    let conversation_scope = turn_bot
+        .conversation_key
+        .as_ref()
+        .filter(|_| !turn_bot.ephemeral_user_context)
+        .map(|key| format!("{profile_id}\n{}\n{key}", turn_bot.bot_id));
     let mut copilot = PlatformCopilot::new(state, profile)
         .with_long_running()
         .with_thinking(thinking)
         .with_tool_specs(turn.tool_specs)
         .with_tool_rounds(turn.tool_rounds)
         .with_web_access(web_access)
-        .with_turn_label(label);
+        .with_turn_label(label)
+        .with_conversation_scope(conversation_scope);
     if let Some(recovery) = &turn_bot.recovery {
         copilot = copilot.with_recovery(recovery.as_store());
     }
