@@ -60,11 +60,21 @@ pub struct FileSummarizeArgs {
     pub key_points: Option<usize>,
 }
 
+/// The typed form of `file_extract`'s `schema`. A bare JSON value has no `type`, which providers
+/// with typed tool schemas reject; one that keeps a single type keeps the first.
+fn extraction_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": ["object", "array", "string"],
+        "items": { "type": ["object", "string", "number", "boolean", "null"] }
+    })
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct FileExtractArgs {
     /// The files to extract from; each gets one result.
     pub files: Vec<FileRef>,
     /// A JSON Schema, or an example JSON value, describing what to extract.
+    #[schemars(schema_with = "extraction_schema")]
     pub schema: Value,
     #[serde(default)]
     pub hint: Option<String>,

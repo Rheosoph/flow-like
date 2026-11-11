@@ -411,6 +411,8 @@ pub(super) fn desktop_bot(
         spoken_drafts: false,
         tool_gate: None,
         ephemeral_user_context: false,
+        owner_mail_addresses: Vec::new(),
+        seed_taint: Default::default(),
         suppress_owner_notifications: false,
         stt_model: record.stt_model,
         tts_model: record.tts_model,

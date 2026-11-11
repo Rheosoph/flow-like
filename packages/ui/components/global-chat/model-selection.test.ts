@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { resolveModelSelection, selectedModelLabel } from "./model-selection";
+import {
+	assistantSelection,
+	resolveModelSelection,
+	selectedModelLabel,
+} from "./model-selection";
 
 const fallbackModels = [{ id: "default" }];
 const liveModels = [{ id: "gpt-5.6-terra" }, { id: "gpt-5.6-sol" }];
@@ -47,6 +51,27 @@ describe("resolveModelSelection", () => {
 				canReplaceInvalidSelection: true,
 			}),
 		).toBe("gpt-5.6-terra");
+	});
+});
+
+describe("assistantSelection", () => {
+	const picker = {
+		provider: "codex",
+		selectedModelId: "gpt-5.6-sol",
+		reasoningEffort: "high",
+	} as const;
+
+	test("runs assistants on the profile model the bot turn names", () => {
+		expect(assistantSelection(picker, "bit-haiku")).toEqual({
+			provider: "bits",
+			selectedModelId: "bit-haiku",
+			reasoningEffort: "high",
+		});
+	});
+
+	test("keeps the run's own selection outside a bot turn", () => {
+		expect(assistantSelection(picker)).toBe(picker);
+		expect(assistantSelection(picker, "")).toBe(picker);
 	});
 });
 

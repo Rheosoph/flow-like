@@ -482,12 +482,14 @@ impl WebResearchSession {
         urls
     }
 
-    /// Adopt the pages another session successfully opened, so this session may cite them. A sealed
-    /// researcher runs in its own session for isolation, but its findings land in this context, and
-    /// an answer that cannot cite the pages behind it is worse than useless. Only the opened set
-    /// crosses: the other session's authorization set stays its own, so this session gains no power
-    /// to open anything new.
+    /// Adopt the pages another session successfully opened, so this session may cite them and
+    /// read them itself. A researcher runs in its own session, but its findings land in this
+    /// context, and an answer that cannot cite the pages behind it is worse than useless. Only
+    /// the opened set crosses: the rest of the other session's authorization set stays its own.
     pub fn adopt_opened_urls(&self, urls: &[String]) {
+        for url in urls {
+            self.authorize_url(url);
+        }
         let mut opened = self
             .opened_urls
             .lock()
@@ -2517,37 +2519,41 @@ fn image_label(text: &str) -> String {
     text.chars().take(MAX_IMAGE_LABEL_CHARS).collect()
 }
 
+/// Whether an `img` element declares a side too short for a content image.
+fn declares_tiny_side(attribute: &dyn Fn(&str) -> Option<String>) -> bool {
+    ["width", "height"]
+        .iter()
+        .filter_map(|name| {
+            attribute(name)?
+                .trim()
+                .trim_end_matches("px")
+                .parse::<u32>()
+                .ok()
+        })
+        .any(|side| side < MIN_IMAGE_SIDE)
+}
+
+/// The absolute link of a raster image source, written so that it ends no markdown target early.
+fn image_url(source: &str, base: Option<&Url>) -> Option<String> {
+    let url = match base {
+        Some(base) => base.join(source).ok()?,
+        None => Url::parse(source).ok()?,
+    };
+    let path = url.path().to_ascii_lowercase();
+    let raster = matches!(url.scheme(), "http" | "https")
+        && !path.ends_with(".svg")
+        && !path.ends_with(".ico");
+    let url = url.as_str().replace('(', "%28").replace(')', "%29");
+    (raster && url.len() <= MAX_IMAGE_URL_CHARS).then_some(url)
+}
+
 /// The content image an `img` element shows, or `None` for an icon, a spacer, a tracking pixel,
 /// inline data or a vector graphic.
 fn page_image(attribute: &dyn Fn(&str) -> Option<String>, base: Option<&Url>) -> Option<PageImage> {
-    let declared_side = |name: &&str| {
-        attribute(name)?
-            .trim()
-            .trim_end_matches("px")
-            .parse::<u32>()
-            .ok()
-    };
-    if ["width", "height"]
-        .iter()
-        .filter_map(declared_side)
-        .any(|side| side < MIN_IMAGE_SIDE)
-    {
+    if declares_tiny_side(attribute) {
         return None;
     }
-    let source = image_source(attribute)?;
-    let url = match base {
-        Some(base) => base.join(&source).ok()?,
-        None => Url::parse(&source).ok()?,
-    };
-    let path = url.path().to_ascii_lowercase();
-    if !matches!(url.scheme(), "http" | "https") || path.ends_with(".svg") || path.ends_with(".ico")
-    {
-        return None;
-    }
-    let url = url.as_str().replace('(', "%28").replace(')', "%29");
-    if url.len() > MAX_IMAGE_URL_CHARS {
-        return None;
-    }
+    let url = image_url(&image_source(attribute)?, base)?;
     let label = ["alt", "title"]
         .iter()
         .filter_map(|name| attribute(name))

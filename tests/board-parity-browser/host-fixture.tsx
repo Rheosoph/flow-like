@@ -509,9 +509,20 @@ function Host() {
 						pin.name = pin.pin_type === "Input" ? "route_in" : "route_out";
 						pin.data_type = "Generic" as typeof pin.data_type;
 					}
+					// The nodes the board's placement chords look up by name.
+					const chordNodes = [
+						["control_branch", "Branch"],
+						["control_for_each", "For Each"],
+					].map(([name, friendly_name]) => ({
+						...structuredClone(template),
+						id: `${name}-template`,
+						name,
+						friendly_name,
+					}));
 					return [
 						...catalog,
 						reroute,
+						...chordNodes,
 						...(dropFixture() ? dropTemplates() : []),
 					];
 				},

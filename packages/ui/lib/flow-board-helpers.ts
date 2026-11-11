@@ -1,4 +1,5 @@
 import { createId } from "@paralleldrive/cuid2";
+import type { Connection, Edge } from "@xyflow/react";
 import {
 	addNodeCommand,
 	connectPinsCommand,
@@ -10,8 +11,15 @@ import {
 	upsertLayerCommand,
 } from ".";
 import { buildConnectionCommands } from "./board-canvas/connection-commands";
-import { doPinsMatch, isOpenObjectSchema } from "./flow-board-utils";
-import type { IGenericCommand } from "./schema/flow/board/commands/generic-command";
+import {
+	doPinsMatch,
+	isOpenObjectSchema,
+	pendingEdge,
+} from "./flow-board-utils";
+import {
+	ICommandType,
+	type IGenericCommand,
+} from "./schema/flow/board/commands/generic-command";
 import { ILayerType } from "./schema/flow/board/commands/upsert-layer";
 import type { INode } from "./schema/flow/node";
 import type { IPin } from "./schema/flow/pin";
@@ -675,6 +683,111 @@ interface HandleNodesChangeParams {
 	deletingNodesRef: React.MutableRefObject<Set<string>>;
 	executeCommands: (commands: any[]) => Promise<any>;
 	applyNodeChanges: (changes: any[], nodes: any[]) => any[];
+}
+
+interface Wire {
+	id: string;
+	sourceHandle?: string | null;
+	targetHandle?: string | null;
+}
+
+/** A dropped connection whose save is in flight. */
+export interface PendingEdgeEdit<T extends Wire = Wire> {
+	/** The wire to draw until the saved board carries it. */
+	add?: T;
+	/** Keys of the wires it moves, replaces or removes, hidden until then. */
+	remove: ReadonlySet<string>;
+	/** Saved; held only until the parsed board shows the result. */
+	settled?: boolean;
+}
+
+/** Identifies a wire by its two pins; a layer boundary can list them in either order. */
+export function wireKey(wire: Omit<Wire, "id">): string {
+	return [wire.sourceHandle ?? "", wire.targetHandle ?? ""]
+		.sort()
+		.join("\u0000");
+}
+
+/** Draws connections that are still saving, so a dropped wire never waits for the backend. */
+export function withPendingEdges<T extends Wire>(
+	edges: T[],
+	pending: readonly PendingEdgeEdit<T>[],
+): T[] {
+	if (!pending.length) return edges;
+	const added = new Map<string, T>();
+	const removed = new Set<string>();
+	for (const edit of pending) {
+		for (const key of edit.remove) {
+			removed.add(key);
+			added.delete(key);
+		}
+		if (!edit.add) continue;
+		const key = wireKey(edit.add);
+		added.set(key, edit.add);
+		removed.delete(key);
+	}
+	const kept = edges.filter((edge) => !removed.has(wireKey(edge)));
+	for (const edge of kept) added.delete(wireKey(edge));
+	return kept.length === edges.length && !added.size
+		? edges
+		: [...kept, ...added.values()];
+}
+
+/** Whether the parsed board already shows an edit, so nothing is left to hold. */
+export function edgeEditApplied<T extends Wire>(
+	edit: PendingEdgeEdit<T>,
+	edges: readonly T[],
+): boolean {
+	const keys = new Set(edges.map(wireKey));
+	return (
+		(!edit.add || keys.has(wireKey(edit.add))) &&
+		[...edit.remove].every((key) => !keys.has(key))
+	);
+}
+
+/**
+ * What a dropped connection changes on the canvas before its save lands: the new wire,
+ * and the wires it moves or displaces. No connection means the old wire is removed.
+ */
+export function pendingEdgeEdit({
+	connection,
+	oldEdge,
+	boardNodes,
+	pinCache,
+	refs,
+	pathType,
+}: {
+	connection?: Connection;
+	oldEdge?: Edge;
+	boardNodes: Record<string, INode>;
+	pinCache: Map<string, [IPin, INode | ILayer, boolean]>;
+	refs: Record<string, string>;
+	pathType?: string;
+}): PendingEdgeEdit<Edge> | undefined {
+	const commands = connection
+		? buildConnectionCommands({
+				connection,
+				oldEdge,
+				boardNodes,
+				pinCache,
+				refs,
+			})
+		: [];
+	// A stale or unchanged drop saves nothing, so it shows nothing.
+	if (connection && !commands?.length) return undefined;
+	const remove = new Set<string>();
+	if (oldEdge) remove.add(wireKey(oldEdge));
+	for (const command of commands ?? [])
+		if (command.command_type === ICommandType.DisconnectPin)
+			remove.add(
+				wireKey({
+					sourceHandle: command.from_pin,
+					targetHandle: command.to_pin,
+				}),
+			);
+	const add = connection && pendingEdge(connection, pinCache, pathType);
+	if (add) remove.delete(wireKey(add));
+	return add || remove.size ? { add, remove } : undefined;
 }
 
 export interface UnconfirmedMove {

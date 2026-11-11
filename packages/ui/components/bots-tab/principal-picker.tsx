@@ -22,6 +22,11 @@ import type {
 } from "../../state/backend-state/inbox-state";
 import { IdentityAvatar } from "../identity/identity-avatar";
 import { LocalBadge } from "./bot-labels";
+import {
+	NO_HIDDEN_BOTS,
+	botVisibilityKey,
+	shownBots,
+} from "./bot-visibility-model";
 import { isSelfPrincipal, matchesSearch } from "./crew-model";
 import type { CrewDirectory } from "./use-crew-directory";
 
@@ -176,6 +181,8 @@ function useDebounced(value: string, delayMs: number) {
 export interface PickerSource {
 	me?: string | null;
 	bots: readonly IBot[];
+	/** Visibility keys of the bots the current profile hides; they are not offered. */
+	hiddenBots?: ReadonlySet<string>;
 	recentPeopleIds: readonly string[];
 	directory: CrewDirectory;
 	/** People need an account; without one only your bots on this computer can be picked. */
@@ -216,6 +223,7 @@ export function PrincipalPicker({
 	const { t } = useTranslation("bots");
 	const botLabels = useBotLabels();
 	const { me, bots, recentPeopleIds, directory, people } = source;
+	const hiddenBots = source.hiddenBots ?? NO_HIDDEN_BOTS;
 	const [query, setQuery] = useState("");
 	const ruled = Boolean(serverRule) && people;
 	const search = useProjectUserSearch(undefined, query, people);
@@ -233,7 +241,13 @@ export function PrincipalPicker({
 	const ruledRows = useMemo<PickerRow[]>(
 		() =>
 			(invitable.data ?? [])
-				.filter((entry) => entry.state !== "member")
+				.filter((entry) => {
+					const own = ownBots.get(entry.principal_id);
+					return (
+						entry.state !== "member" &&
+						!(own && hiddenBots.has(botVisibilityKey(own)))
+					);
+				})
 				.map((entry) => {
 					const own = ownBots.get(entry.principal_id);
 					const looked = lookups.get(entry.principal_id) ?? null;
@@ -256,12 +270,21 @@ export function PrincipalPicker({
 						mode: entry.mode,
 					};
 				}),
-		[invitable.data, ownBots, lookups, botLabels, lookupName, unknown, t],
+		[
+			invitable.data,
+			ownBots,
+			hiddenBots,
+			lookups,
+			botLabels,
+			lookupName,
+			unknown,
+			t,
+		],
 	);
 
 	const botRows = useMemo<PickerRow[]>(
 		() =>
-			(ruled ? bots.filter((bot) => bot.local) : bots)
+			shownBots(ruled ? bots.filter((bot) => bot.local) : bots, hiddenBots)
 				.map((bot) => {
 					const labels = botLabels(bot);
 					return {
@@ -273,7 +296,7 @@ export function PrincipalPicker({
 					};
 				})
 				.filter((row) => matchesSearch(query, [row.label, row.detail])),
-		[bots, botLabels, query, ruled],
+		[bots, hiddenBots, botLabels, query, ruled],
 	);
 
 	const peopleRows = useMemo<PickerRow[]>(() => {

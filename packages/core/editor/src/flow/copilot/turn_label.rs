@@ -21,7 +21,7 @@ use super::platform::PlatformToolBridge;
 /// Tools that send what they were given out of the platform or to another principal: mail,
 /// web and connector requests, images, a person or another bot, a shell, code, a browser, the
 /// computer and skills that run their own tools.
-const OUTBOUND_TOOLS: [&str; 20] = [
+const OUTBOUND_TOOLS: [&str; 21] = [
     "email_send",
     "email_reply",
     "connector_call",
@@ -40,6 +40,7 @@ const OUTBOUND_TOOLS: [&str; 20] = [
     "skill_run",
     "internet_search",
     "open_url",
+    "archive_lookup",
     "http_request",
     "research_agent",
 ];

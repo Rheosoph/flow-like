@@ -569,6 +569,12 @@ mod email_trigger_tests {
             item_of(&trigger_entry("schedule"), "bot").unwrap().role,
             Role::User
         );
+        let mut owner_mail = trigger_entry("email");
+        owner_mail.envelope["body"]["payload"] = json!({"owner": true});
+        assert_eq!(item_of(&owner_mail, "bot").unwrap().role, Role::User);
+        let mut spoofed = trigger_entry("email");
+        spoofed.envelope["body"]["payload"] = json!({"owner": "true"});
+        assert_eq!(item_of(&spoofed, "bot").unwrap().role, Role::External);
     }
 
     #[test]

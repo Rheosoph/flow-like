@@ -44,8 +44,7 @@ use super::memory::AssistantMemory;
 use super::public_web::{
     MAX_OPEN_URL_CALLS_PER_ROUND, WebResearchSession, comparable_url,
     normalize_public_discovery_url, open_url_round_error, public_url_spans,
-    run_archive_lookup_for_session,
-    run_open_url_for_session, run_open_url_with_reader, source_id_for_url,
+    run_archive_lookup_for_session, run_open_url_with_reader, source_id_for_url,
 };
 pub use super::public_web::{PageReader, ReaderPage};
 use super::run_recovery::{
@@ -67,6 +66,7 @@ use super::tool_spec::{
     public_web_tool_specs, research_agent_prompt, resolve_tool_effect, scout_specialist_tool_specs,
     spec_arg_str,
 };
+use super::turn_label::TurnLabel;
 use super::types::{ChatImage, ChatMessage, ChatRole, PlanStepStatus};
 use super::work_plan::{
     UPDATE_WORK_PLAN_TOOL, WORK_PLAN_PROMPT, WorkPlanState, update_work_plan_tool_spec,
@@ -252,7 +252,7 @@ fn split_platform_tool_output(output: String) -> (String, Vec<PlatformToolImageU
 
 /// Tools this loop runs itself, so no host bridge needs an implementation of them.
 pub fn runs_in_tool_loop(name: &str) -> bool {
-    matches!(name, RESEARCH_AGENT_TOOL | IMAGE_VIEW_TOOL)
+    matches!(name, RESEARCH_AGENT_TOOL | IMAGE_VIEW_TOOL) || is_public_web_tool(name)
 }
 
 /// The line that introduces the images `tools` returned in one round.
@@ -834,6 +834,7 @@ pub struct PlatformCopilot {
     recovery: Option<Arc<dyn BotRunRecovery>>,
     max_completion_tokens: Option<u64>,
     web_access: WebAccess,
+    turn_label: Option<Arc<TurnLabel>>,
 }
 
 impl PlatformCopilot {
@@ -849,12 +850,20 @@ impl PlatformCopilot {
             recovery: None,
             max_completion_tokens: None,
             web_access: WebAccess::default(),
+            turn_label: None,
         }
     }
 
     /// The owner's own search and page readers for this run's research.
     pub fn with_web_access(mut self, web_access: WebAccess) -> Self {
         self.web_access = web_access;
+        self
+    }
+
+    /// The turn's data label. The host bridge checks it for the tools it runs; the loop checks
+    /// it here for the outbound tools it runs itself.
+    pub(super) fn with_turn_label(mut self, label: Arc<TurnLabel>) -> Self {
+        self.turn_label = Some(label);
         self
     }
 
@@ -944,6 +953,7 @@ impl PlatformCopilot {
                         params: None,
                     },
                     model_classification: Default::default(),
+                    data_classification: None,
                 })
                 .unwrap(),
                 ..Default::default()
@@ -1240,9 +1250,11 @@ impl PlatformCopilot {
         // agent's own model usage alongside any stats reported by apps it called.
         let mut session_stats = LLMUsageStats::default();
         let mut current_prompt = prompt_message;
+        // The run's own searches and page reads, when its toolset holds the public-web tools.
         let mut web_research_session = Arc::new(WebResearchSession::new(&user_prompt));
-        // Research calls share spend and source provenance while the root's own web phase can
-        // close after private tools. Only the caller's explicit public brief reaches the child.
+        let mut seen_searches = HashSet::new();
+        // Research calls share spend and source provenance among themselves. Only the caller's
+        // explicit brief reaches the researcher.
         let mut delegated_research_session = Arc::new(WebResearchSession::new(&user_prompt));
         // A run without an app inventory has no local apps to check before research.
         let mut local_app_discovery_returned = !advertised_tool_names.contains("list_apps");
@@ -1903,6 +1915,7 @@ impl PlatformCopilot {
 
             let plan_revision = work_plan.revision();
             let mut prepared_arguments = Vec::with_capacity(tool_calls.len());
+            let mut round_page_opens = 0;
             for (tool_index, tool_call) in tool_calls.iter().enumerate() {
                 let tool_name = tool_call.function.name.as_str();
                 if !advertised_tool_names.contains(tool_name) {
@@ -1916,13 +1929,14 @@ impl PlatformCopilot {
                     .to_string()));
                     continue;
                 }
-                if is_public_web_tool(tool_name)
-                    && let Some(error) = web_research_session.public_web_phase_error(tool_name)
+                if runs_in_tool_loop(tool_name)
+                    && let Some(label) = &self.turn_label
+                    && let Some(refusal) = label.refusal(tool_name, &tool_call.function.arguments)
                 {
-                    prepared_arguments.push(Err(error.to_string()));
+                    prepared_arguments.push(Err(refusal));
                     continue;
                 }
-                if tool_name == HTTP_REQUEST_TOOL
+                if (tool_name == HTTP_REQUEST_TOOL || is_public_web_tool(tool_name))
                     && let Some(refusal) =
                         local_app_discovery_gate_error(tool_name, local_app_discovery_returned)
                 {
@@ -1933,8 +1947,12 @@ impl PlatformCopilot {
                     UPDATE_WORK_PLAN_TOOL if long_running => {
                         let revision = work_plan.revision();
                         let result = work_plan.apply(tool_call.function.arguments.clone());
-                        if work_plan.revision() != revision && let Some(callback) = &on_token {
-                            for frame in work_plan.progress_frames() { callback(frame); }
+                        if work_plan.revision() != revision
+                            && let Some(callback) = &on_token
+                        {
+                            for frame in work_plan.progress_frames() {
+                                callback(frame);
+                            }
                         }
                         Err(result)
                     }
@@ -1951,7 +1969,8 @@ impl PlatformCopilot {
                                 "code": "invalid_research_brief",
                                 "retryable": true,
                                 "message": error,
-                            }).to_string()
+                            })
+                            .to_string()
                         } else {
                             let brief = brief.expect("the research brief was validated above");
                             let timeout_secs = find_global_tool_spec(RESEARCH_AGENT_TOOL)
@@ -1962,24 +1981,27 @@ impl PlatformCopilot {
                             let time_budget = research_time_budget(timeout_secs, recovery_deadline);
                             let progress = SealedResearchProgress {
                                 parent_request_id: &frame_ids[tool_index],
-                                on_token: on_token.as_ref().map(|callback| {
-                                    callback as &(dyn Fn(String) + Send + Sync)
-                                }),
+                                on_token: on_token
+                                    .as_ref()
+                                    .map(|callback| callback as &(dyn Fn(String) + Send + Sync)),
                             };
                             progress.lifecycle("started", "progress");
-                            let outcome = context::cancellable(&bridge, tokio::time::timeout(
-                                time_budget + RESEARCH_TURN_RESERVE,
-                                run_sealed_research_agent(
-                                    completion_client,
-                                    &model_name,
-                                    thinking.clone(),
-                                    &brief,
-                                    &delegated_research_session,
-                                    &self.web_access,
-                                    time_budget,
-                                    &progress,
+                            let outcome = context::cancellable(
+                                &bridge,
+                                tokio::time::timeout(
+                                    time_budget + RESEARCH_TURN_RESERVE,
+                                    run_sealed_research_agent(
+                                        completion_client,
+                                        &model_name,
+                                        thinking.clone(),
+                                        &brief,
+                                        &delegated_research_session,
+                                        &self.web_access,
+                                        time_budget,
+                                        &progress,
+                                    ),
                                 ),
-                            ))
+                            )
                             .await?;
                             progress.lifecycle(
                                 "finished",
@@ -1992,16 +2014,13 @@ impl PlatformCopilot {
                             match outcome {
                                 Ok(Ok(outcome)) => {
                                     for call in &outcome.stats.calls {
-                                        session_stats.accumulate(
-                                            &call.usage,
-                                            Some(call.model.as_str()),
-                                        );
+                                        session_stats
+                                            .accumulate(&call.usage, Some(call.model.as_str()));
                                     }
                                     // The researcher's verified pages become citable here: its
                                     // findings are about to enter this context, and a synthesis
                                     // that may cite nothing behind them is worse than no research.
-                                    web_research_session
-                                        .adopt_opened_urls(&outcome.opened_urls);
+                                    web_research_session.adopt_opened_urls(&outcome.opened_urls);
                                     research_findings = Some(outcome.findings.clone());
                                     let mut result = json!({
                                         "status": if outcome.incomplete.is_some() { "partial" } else { "ok" },
@@ -2011,12 +2030,16 @@ impl PlatformCopilot {
                                     });
                                     if let Some(reason) = outcome.incomplete {
                                         result["incomplete"] = json!(reason);
-                                        result["note"] = json!("The researcher returned page excerpts instead of a write-up. Answer from them as evidence, check them against the question yourself, and say what stays unverified.");
+                                        result["note"] = json!(
+                                            "The researcher returned page excerpts instead of a write-up. Answer from them as evidence, check them against the question yourself, and say what stays unverified."
+                                        );
                                     }
                                     if outcome.unverified_links_removed > 0 {
                                         result["unverified_links_removed"] =
                                             json!(outcome.unverified_links_removed);
-                                        result["note"] = json!("Links to pages the researcher could not open were reduced to their site name and marked 'unverified source'. Treat those as leads, never as evidence, and never rebuild their URLs.");
+                                        result["note"] = json!(
+                                            "Links to pages the researcher could not open were reduced to their site name and marked 'unverified source'. Treat those as leads, never as evidence, and never rebuild their URLs."
+                                        );
                                     }
                                     result.to_string()
                                 }
@@ -2049,14 +2072,14 @@ impl PlatformCopilot {
                         // A prepared error is an already-computed tool result in this loop.
                         Err(output)
                     }
-                    INTERNET_SEARCH_TOOL | OPEN_URL_TOOL | ARCHIVE_LOOKUP_TOOL => Err(json!({
-                        "status": "error",
-                        "tool": tool_name,
-                        "code": "raw_public_web_tool_unavailable",
-                        "retryable": false,
-                        "message": "Raw public-web tools are unavailable to the root assistant; direct research_agent with a self-contained question and relevant public context."
-                    })
-                    .to_string()),
+                    INTERNET_SEARCH_TOOL | OPEN_URL_TOOL | ARCHIVE_LOOKUP_TOOL => plan_web_call(
+                        tool_name,
+                        tool_call.function.arguments.clone(),
+                        &web_research_session,
+                        &mut seen_searches,
+                        &mut round_page_opens,
+                    )
+                    .into_prepared(),
                     IMAGE_VIEW_TOOL => {
                         let messages: Vec<&rig::message::Message> = current_history
                             .iter()
@@ -2111,6 +2134,7 @@ impl PlatformCopilot {
                     let memory = memory.clone();
                     let web_research_session = web_research_session.clone();
                     let delegated_research_session = delegated_research_session.clone();
+                    let web_access = self.web_access.clone();
                     let recovery = recovery.clone();
                     let saved_plan = work_plan.snapshot();
                     let saved_stats = session_stats.clone();
@@ -2186,6 +2210,7 @@ impl PlatformCopilot {
                                                 &bridge,
                                                 memory.as_ref(),
                                                 &web_research_session,
+                                                &web_access,
                                             ),
                                         )
                                         .await
@@ -2194,9 +2219,6 @@ impl PlatformCopilot {
                                 }
                             };
                             let (output, images) = split_platform_tool_output(output);
-                            if platform_tool_enters_private_context(&name) {
-                                web_research_session.close_public_web_phase();
-                            }
                             let waiting = super::run_recovery::gate_waiting_code(&output);
                             if let Some(recovery) = &recovery {
                                 recovery
@@ -2265,8 +2287,7 @@ impl PlatformCopilot {
                 }
             }
 
-            // All calls in one model-authored batch may complete. Private tools close the root's
-            // raw web phase. Further delegated research receives only an explicit public brief.
+            // All calls in one model-authored batch may complete.
             if tool_results.iter().any(|(_id, name, output, _images)| {
                 name == "list_apps" && returned_app_inventory_result(output)
             }) {
@@ -2275,10 +2296,6 @@ impl PlatformCopilot {
             let round_entered_private_context = tool_calls
                 .iter()
                 .any(|tool_call| platform_tool_enters_private_context(&tool_call.function.name));
-            if round_entered_private_context {
-                web_research_session.close_public_web_phase();
-            }
-
             for (i, (_id, name, output, _images)) in tool_results.iter().enumerate() {
                 if let (Some(callback), Some(frame_id)) = (&on_token, frame_ids.get(i)) {
                     let terminal_status = tool_result_terminal_status(output);
@@ -2652,6 +2669,18 @@ struct SealedResearchProgress<'a> {
     on_token: Option<&'a (dyn Fn(String) + Send + Sync)>,
 }
 
+impl PlannedResearchCall {
+    /// The arguments to run the call with, or the refusal that answers it.
+    fn into_prepared(self) -> std::result::Result<Value, String> {
+        match self {
+            Self::Search(arguments) | Self::Open(arguments) | Self::Archive(arguments) => {
+                Ok(arguments)
+            }
+            Self::Refused(refusal) => Err(refusal.to_string()),
+        }
+    }
+}
+
 impl SealedResearchProgress<'_> {
     fn emit(&self, frame: String, lifecycle: Option<(&str, &str)>) {
         let Some(callback) = self.on_token else {
@@ -2738,32 +2767,51 @@ fn plan_research_round(
     tool_calls
         .iter()
         .map(|call| {
-            let name = call.function.name.as_str();
-            let arguments = call.function.arguments.clone();
-            match name {
-                INTERNET_SEARCH_TOOL => plan_search(arguments, web_session, seen_searches),
-                OPEN_URL_TOOL => {
-                    opens += 1;
-                    plan_open(arguments, web_session, opens > MAX_OPEN_URL_CALLS_PER_ROUND)
-                }
-                ARCHIVE_LOOKUP_TOOL if web_session.reserve_archive_call() => {
-                    PlannedResearchCall::Archive(arguments)
-                }
-                ARCHIVE_LOOKUP_TOOL => PlannedResearchCall::Refused(research_refusal(
-                    name,
-                    "archive_session_call_budget_exceeded",
-                    false,
-                    "This turn ran an unusually large number of archive lookups and was stopped.",
-                )),
-                _ => PlannedResearchCall::Refused(research_refusal(
-                    name,
-                    "sealed_research_tool_not_allowed",
-                    false,
-                    "The researcher holds internet_search, open_url and archive_lookup only.",
-                )),
-            }
+            plan_web_call(
+                &call.function.name,
+                call.function.arguments.clone(),
+                web_session,
+                seen_searches,
+                &mut opens,
+            )
         })
         .collect()
+}
+
+/// Reserves one public-web call. `round_opens` counts the pages this round already asked for.
+fn plan_web_call(
+    name: &str,
+    arguments: Value,
+    web_session: &WebResearchSession,
+    seen_searches: &mut HashSet<String>,
+    round_opens: &mut usize,
+) -> PlannedResearchCall {
+    match name {
+        INTERNET_SEARCH_TOOL => plan_search(arguments, web_session, seen_searches),
+        OPEN_URL_TOOL => {
+            *round_opens += 1;
+            plan_open(
+                arguments,
+                web_session,
+                *round_opens > MAX_OPEN_URL_CALLS_PER_ROUND,
+            )
+        }
+        ARCHIVE_LOOKUP_TOOL if web_session.reserve_archive_call() => {
+            PlannedResearchCall::Archive(arguments)
+        }
+        ARCHIVE_LOOKUP_TOOL => PlannedResearchCall::Refused(research_refusal(
+            name,
+            "archive_session_call_budget_exceeded",
+            false,
+            "This turn ran an unusually large number of archive lookups and was stopped.",
+        )),
+        _ => PlannedResearchCall::Refused(research_refusal(
+            name,
+            "sealed_research_tool_not_allowed",
+            false,
+            "The researcher holds internet_search, open_url and archive_lookup only.",
+        )),
+    }
 }
 
 /// A repeat still counts against the runaway guard: a model stuck on one query is that case.
@@ -3229,8 +3277,8 @@ fn is_public_web_tool(name: &str) -> bool {
     )
 }
 
-/// Root-context tools whose results can contain private/user-controlled data. The root has no raw
-/// web tools; app inventory is for routing and must stay out of its public research briefs.
+/// Root-context tools whose results can contain private/user-controlled data. App inventory is
+/// for routing and must stay out of public research briefs and search queries.
 fn platform_tool_enters_private_context(name: &str) -> bool {
     !is_public_web_tool(name)
         && !matches!(
@@ -3240,11 +3288,13 @@ fn platform_tool_enters_private_context(name: &str) -> bool {
 }
 
 /// The privacy reminder after private data entered the root context, naming only tools the run
-/// holds. The root never holds raw public-web tools, so nothing here may read as closing the
-/// approval-gated direct request tools.
+/// holds. Every tool it names stays open, so nothing here may read as closing one.
 fn private_context_notice(advertised: &HashSet<String>) -> Option<String> {
     let offers = |name: &str| advertised.contains(name);
     let mut lines = Vec::new();
+    if offers(INTERNET_SEARCH_TOOL) {
+        lines.push("Your web tools stay available. A search query goes to a search service: keep secrets, credentials, private identifiers, and private app/file contents out of it.");
+    }
     if offers(RESEARCH_AGENT_TOOL) {
         lines.push("Brief research_agent only with a self-contained public question and public context; keep secrets, credentials, private identifiers, and private app/file contents out of its brief.");
     }
@@ -3303,21 +3353,24 @@ async fn execute_platform_tool(
     bridge: &Arc<dyn PlatformToolBridge>,
     memory: Option<&Arc<AssistantMemory>>,
     web_research_session: &WebResearchSession,
+    web_access: &WebAccess,
 ) -> String {
     match name {
         MEMORY_STORE_TOOL | MEMORY_SEARCH_TOOL => {
             run_memory_tool(name, &arguments, memory.map(Arc::as_ref)).await
         }
         INTERNET_SEARCH_TOOL => {
-            if let Some(error) = web_research_session.public_web_phase_error(name) {
-                return error.to_string();
-            }
-            let mut result = run_internet_search(&arguments).await;
+            let mut result = research_search(web_access, &arguments).await;
             web_research_session.register_and_decorate_tool_result(name, &mut result);
             serde_json::to_string(&result).unwrap_or_else(|_| "{\"status\":\"error\"}".to_string())
         }
         OPEN_URL_TOOL => {
-            let mut result = run_open_url_for_session(&arguments, web_research_session).await;
+            let mut result = run_open_url_with_reader(
+                &arguments,
+                web_research_session,
+                web_access.reader.as_deref(),
+            )
+            .await;
             web_research_session.register_and_decorate_tool_result(name, &mut result);
             serde_json::to_string(&result).unwrap_or_else(|_| "{\"status\":\"error\"}".to_string())
         }
@@ -4195,6 +4248,7 @@ mod tests {
             &bridge,
             None,
             &WebResearchSession::default(),
+            &WebAccess::default(),
         ).await;
         assert_eq!(
             serde_json::from_str::<Value>(&result).unwrap()["status"],
@@ -4422,6 +4476,14 @@ mod tests {
         assert!(bot.contains("research_agent"), "{bot}");
         assert!(!bot.contains("http_request"), "{bot}");
         assert!(!bot.to_lowercase().contains("closed"), "{bot}");
+
+        let searching = private_context_notice(&offered(&[INTERNET_SEARCH_TOOL]))
+            .expect("a bot that searches itself gets the reminder");
+        assert!(
+            searching.contains("web tools stay available"),
+            "{searching}"
+        );
+        assert!(!searching.to_lowercase().contains("closed"), "{searching}");
 
         let flux = private_context_notice(&offered(&[RESEARCH_AGENT_TOOL, HTTP_REQUEST_TOOL]))
             .expect("FlowPilot gets the reminder");

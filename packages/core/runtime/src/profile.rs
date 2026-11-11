@@ -135,6 +135,33 @@ impl ProfileApp {
     }
 }
 
+const MAX_HIDDEN_BOTS: usize = 500;
+const MAX_HIDDEN_BOT_ID_LEN: usize = 200;
+
+/// The bot ids a profile hides, trimmed and without repeats, in the order given.
+pub fn normalize_hidden_bots(ids: Vec<String>) -> Result<Vec<String>, String> {
+    let mut seen = HashSet::new();
+    let mut hidden = Vec::with_capacity(ids.len());
+    for id in ids {
+        let id = id.trim();
+        if id.is_empty() || id.len() > MAX_HIDDEN_BOT_ID_LEN {
+            return Err(format!(
+                "A hidden bot id must have 1 to {MAX_HIDDEN_BOT_ID_LEN} characters"
+            ));
+        }
+        if seen.insert(id.to_string()) {
+            hidden.push(id.to_string());
+        }
+    }
+    if hidden.len() > MAX_HIDDEN_BOTS {
+        return Err(format!(
+            "A profile can hide at most {MAX_HIDDEN_BOTS} bots, got {}",
+            hidden.len()
+        ));
+    }
+    Ok(hidden)
+}
+
 fn default_secure() -> bool {
     true
 }
@@ -205,6 +232,11 @@ pub struct Profile {
     pub apps: Option<Vec<ProfileApp>>,
     #[serde(default)]
     pub shortcuts: Option<Vec<ProfileShortcut>>,
+    /// Bots this profile leaves out of its crew, pickers and Home. A custom bot goes by its id,
+    /// a built-in one by its system key, so the choice holds for its account and device rows.
+    /// Hiding is a view filter: the bot keeps running and stays reachable through its chats.
+    #[serde(default)]
+    pub hidden_bots: Vec<String>,
     #[serde(default)]
     pub home_layout: Option<Value>,
     #[serde(default)]
@@ -246,6 +278,7 @@ impl Default for Profile {
             tags: vec![],
             apps: Some(vec![]),
             shortcuts: Some(vec![]),
+            hidden_bots: vec![],
             home_layout: None,
             home_default_id: None,
             theme: None,
@@ -979,6 +1012,7 @@ mod tests {
             parameters: flow_like_types::json::to_value(LLMParameters {
                 context_length: 20_000,
                 model_classification: BitModelClassification::default(),
+                data_classification: None,
                 provider: ModelProvider {
                     api_surface: None,
                     provider_name: provider_name.to_string(),
@@ -1307,6 +1341,30 @@ mod tests {
     }
 
     #[test]
+    fn hidden_bots_are_trimmed_deduplicated_and_bounded() {
+        let hidden = super::normalize_hidden_bots(vec![
+            " bot-a ".to_string(),
+            "general".to_string(),
+            "bot-a".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(hidden, vec!["bot-a", "general"]);
+
+        assert!(super::normalize_hidden_bots(vec!["  ".to_string()]).is_err());
+        assert!(super::normalize_hidden_bots(vec!["x".repeat(201)]).is_err());
+        let too_many = (0..501).map(|index| format!("bot-{index}")).collect();
+        assert!(super::normalize_hidden_bots(too_many).is_err());
+    }
+
+    #[test]
+    fn profiles_saved_before_hidden_bots_load_with_none_hidden() {
+        let mut saved = flow_like_types::json::to_value(Profile::default()).unwrap();
+        saved.as_object_mut().unwrap().remove("hidden_bots");
+        let profile: Profile = flow_like_types::json::from_value(saved).unwrap();
+        assert!(profile.hidden_bots.is_empty());
+    }
+
+    #[test]
     fn split_profile_bit_reference_handles_hub_urls() {
         assert_eq!(
             split_profile_bit_reference("https://api.flow-like.com:s14lujkm2gut2mwg0zo3imxv"),
@@ -1597,6 +1655,7 @@ mod tests {
                 parameters: flow_like_types::json::to_value(VLMParameters {
                     context_length: 20000,
                     model_classification: BitModelClassification::default(),
+                    data_classification: None,
                     provider: ModelProvider {
                         api_surface: None,
                         provider_name: provider_name.to_string(),

@@ -277,6 +277,7 @@ fn profile_model_to_core(model: profile::Model) -> Profile {
         shortcuts: model
             .shortcuts
             .and_then(|value| serde_json::from_value(value).ok()),
+        hidden_bots: model.hidden_bots.unwrap_or_default().into(),
         theme: model.theme,
         home_layout: model.home_layout,
         home_default_id: model.home_default_id,
@@ -751,6 +752,8 @@ pub(crate) struct ServerPlatformBridge {
     bot: bool,
     /// The bot tools this server runs for the turn (in the API or on the executor).
     bot_tools: Option<Arc<crate::bot_tools::BotToolsHost>>,
+    /// The model the browser starts this turn's assistants on; `None` leaves its own selection.
+    assistant_model: Option<String>,
 }
 
 impl ServerPlatformBridge {
@@ -766,6 +769,7 @@ impl ServerPlatformBridge {
             read_only: false,
             bot: false,
             bot_tools: None,
+            assistant_model: None,
         }
     }
 
@@ -793,6 +797,7 @@ impl ServerPlatformBridge {
             read_only: false,
             bot: false,
             bot_tools: None,
+            assistant_model: None,
         }
     }
 
@@ -801,6 +806,11 @@ impl ServerPlatformBridge {
         bot_tools: Option<Arc<crate::bot_tools::BotToolsHost>>,
     ) -> Self {
         self.bot_tools = bot_tools;
+        self
+    }
+
+    pub(crate) fn with_assistant_model(mut self, model_id: String) -> Self {
+        self.assistant_model = Some(model_id);
         self
     }
 
@@ -1132,6 +1142,37 @@ mod specialist_tool_spec_tests {
     }
 
     #[flow_like_types::tokio::test]
+    async fn a_bot_turn_names_its_assistant_model_in_tool_requests() {
+        for assistant_model in [Some("small"), None] {
+            let channel = flow_like_types::channel::InProcessChannel::register(
+                flow_like_types::channel::new_request_id(),
+                Duration::from_secs(30),
+            )
+            .await;
+            let (frames, mut received) = mpsc::unbounded_channel();
+            let mut bridge = ServerPlatformBridge::orchestrator(channel.clone(), frames);
+            if let Some(model_id) = assistant_model {
+                bridge = bridge.with_assistant_model(model_id.to_string());
+            }
+            let pending = async move { bridge.call("list_apps", json!({})).await };
+            let call = flow_like_types::tokio::spawn(pending);
+            let frame =
+                flow_like_types::tokio::time::timeout(Duration::from_secs(1), received.recv())
+                    .await
+                    .expect("the tool request must reach the stream");
+            let Some(GlobalChatFrame::ToolRequest(request)) = frame else {
+                panic!("expected a tool request frame");
+            };
+            assert_eq!(
+                request["context"]["assistantModelId"].as_str(),
+                assistant_model
+            );
+            call.abort();
+            channel.close().await;
+        }
+    }
+
+    #[flow_like_types::tokio::test]
     async fn home_read_only_bridge_rejects_apply_without_emitting_a_request() {
         let channel = flow_like_types::channel::InProcessChannel::register(
             "home-read-only-bridge-test",
@@ -1298,13 +1339,16 @@ impl PlatformToolBridge for ServerPlatformBridge {
             }
         };
 
-        let request = json!({
+        let mut request = json!({
             "requestId": ticket.request_id,
             "toolName": tool_name,
             "arguments": arguments,
             "approval": approval,
             "channel": ticket.handle,
         });
+        if let Some(model_id) = &self.assistant_model {
+            request["context"] = json!({ "assistantModelId": model_id });
+        }
 
         if self
             .frames
@@ -2083,7 +2127,18 @@ pub(crate) async fn run_global_chat(
             } else {
                 ServerPlatformBridge::orchestrator(channel.clone(), frames_tx.clone())
             };
-            bridge.with_bot_tools(bot_tools)
+            let assistant_model = crate::routes::bots::runtime::server_assistant_model(
+                &state,
+                &sub,
+                &flow_like_state,
+                &profile,
+                bot.context.subtask_model.as_deref(),
+                &selected_model.id,
+            )
+            .await;
+            bridge
+                .with_bot_tools(bot_tools)
+                .with_assistant_model(assistant_model)
         }
         _ => ServerPlatformBridge::orchestrator(channel.clone(), frames_tx.clone()),
     });

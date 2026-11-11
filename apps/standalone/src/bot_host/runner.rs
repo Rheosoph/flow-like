@@ -308,6 +308,7 @@ fn context_of(grant: &DeviceTurnGrant, job: &TurnJob, tools: HostTools) -> BotRu
         tool_gate: job.tool_gate.clone(),
         ephemeral_user_context: job.ephemeral_user_context,
         seed_taint: job.seed_taint,
+        owner_mail_addresses: Vec::new(),
         suppress_owner_notifications: job.suppress_owner_notifications,
         permissions: Default::default(),
         connectors: spec.connectors.clone(),

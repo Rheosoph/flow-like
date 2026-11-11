@@ -126,6 +126,7 @@ impl NodeLogic for BuildDeepseekNode {
         let params_obj = VLMParameters {
             context_length: 20000,
             model_classification: BitModelClassification::default(),
+            data_classification: None,
             provider: flow_like_model_provider::provider::ModelProvider {
                 api_surface: None,
                 provider_name: "custom:deepseek".into(),

@@ -328,16 +328,25 @@ export interface CallPeerLike {
 		newTrack: MediaStreamTrack | null,
 		stream: MediaStream,
 	): void;
-	on(event: "stream" | "close", listener: (stream?: MediaStream) => void): void;
+	on(
+		event: "stream" | "close" | "connect",
+		listener: (stream?: MediaStream) => void,
+	): void;
 	off(
-		event: "stream" | "close",
+		event: "stream" | "close" | "connect",
 		listener: (stream?: MediaStream) => void,
 	): void;
 }
 
+/** A y-webrtc connection to one peer of the room. */
+export interface CallConnLike {
+	peer?: unknown;
+	connected?: boolean;
+}
+
 export interface CallProviderLike {
 	room?: {
-		webrtcConns: Map<string, { peer?: unknown }>;
+		webrtcConns: Map<string, CallConnLike>;
 	} | null;
 	on(event: "peers", listener: (change: unknown) => void): void;
 	off(event: "peers", listener: (change: unknown) => void): void;
@@ -371,6 +380,23 @@ interface Tracked {
 	remote: Map<MediaStream, () => void>;
 	onStream: (stream?: MediaStream) => void;
 	onClose: () => void;
+	onConnect: () => void;
+}
+
+/**
+ * y-webrtc settles two simultaneous first offers by comparing tokens taken from
+ * each machine's clock, and keeps comparing on every later offer. A connected
+ * peer has one side that offers, so nothing is left to settle; between machines
+ * whose clocks differ the comparison drops every renegotiation, and two people
+ * show in the call without hearing each other. An offer without a token is
+ * never dropped, by this client or an older one.
+ */
+function retireGlareToken(conn: CallConnLike) {
+	Object.defineProperty(conn, "glareToken", {
+		configurable: true,
+		get: () => undefined,
+		set: () => {},
+	});
 }
 
 /** Reattaches all active streams when ICE credentials replace a peer connection. */
@@ -447,6 +473,7 @@ export function createCallEngine(provider: CallProviderLike): CallEngine {
 	const detach = (peer: CallPeerLike, entry: Tracked) => {
 		peer.off("stream", entry.onStream);
 		peer.off("close", entry.onClose);
+		peer.off("connect", entry.onConnect);
 		for (const cleanup of entry.remote.values()) cleanup();
 		entry.remote.clear();
 		for (const stream of entry.local) {
@@ -457,7 +484,7 @@ export function createCallEngine(provider: CallProviderLike): CallEngine {
 		entry.local.clear();
 		tracked.delete(peer);
 	};
-	const track = (peerId: string, peer: CallPeerLike) => {
+	const track = (peerId: string, peer: CallPeerLike, conn: CallConnLike) => {
 		const existing = tracked.get(peer);
 		if (existing) {
 			swap(peer, existing);
@@ -497,10 +524,13 @@ export function createCallEngine(provider: CallProviderLike): CallEngine {
 				detach(peer, entry);
 				emit();
 			},
+			onConnect: () => retireGlareToken(conn),
 		};
 		tracked.set(peer, entry);
 		peer.on("stream", entry.onStream);
 		peer.on("close", entry.onClose);
+		if (conn.connected) retireGlareToken(conn);
+		else peer.on("connect", entry.onConnect);
 		swap(peer, entry);
 	};
 	const sync = () => {
@@ -513,7 +543,7 @@ export function createCallEngine(provider: CallProviderLike): CallEngine {
 			}
 		}
 		for (const [id, conn] of conns ?? [])
-			if (isPeerLike(conn.peer)) track(id, conn.peer);
+			if (isPeerLike(conn.peer)) track(id, conn.peer, conn);
 	};
 	const setLocalStreams = (streams: readonly MediaStream[]) => {
 		if (disposed) return;

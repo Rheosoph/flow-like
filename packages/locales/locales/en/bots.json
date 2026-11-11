@@ -61,7 +61,7 @@
 			"label": "Image generation"
 		},
 		"internet": {
-			"description": "Search the web and read pages through a separate researcher",
+			"description": "Searches the web and reads public pages",
 			"label": "Internet"
 		},
 		"knowledge": {
@@ -754,6 +754,16 @@
 		"unknownMember": "Someone",
 		"unread_one": "{{count}} unread",
 		"unread_other": "{{count}} unread",
+		"visibility": {
+			"description": "Choose the bots this profile shows. A hidden bot keeps working and stays in its rooms.",
+			"descriptionNamed": "Choose the bots “{{profile}}” shows. A hidden bot keeps working and stays in its rooms.",
+			"failed": "Couldn't change which bots this profile shows.",
+			"hidden": "Hidden in this profile",
+			"hiddenCount_one": "{{count}} hidden in this profile",
+			"hiddenCount_other": "{{count}} hidden in this profile",
+			"shown": "Shown in this profile",
+			"title": "Bots in this profile"
+		},
 		"you": "You",
 		"youObject": "you",
 		"yourCrew": "Your crew",
@@ -944,11 +954,11 @@
 				"image": "Image generation",
 				"imageHint": "Draws the images it creates.",
 				"ownModel": "Use its own model",
-				"ownModelHint": "Sub-tasks run on the model it thinks with",
+				"ownModelHint": "Sub-tasks and assistants run on the model it thinks with",
 				"stt": "Speech to text",
 				"sttHint": "Transcribes the voice messages and calls it hears.",
 				"subtask": "Sub-tasks",
-				"subtaskHint": "Runs the parallel parts of a big job; a smaller, faster model keeps them cheap. Used only where the host can run it.",
+				"subtaskHint": "Runs the parallel parts of a big job and the assistants that build workflows, pages and data; a smaller, faster model keeps them cheap. Used only where the host can run it.",
 				"title": "Pinned models",
 				"tts": "Text to speech",
 				"ttsHint": "Speaks its replies aloud.",

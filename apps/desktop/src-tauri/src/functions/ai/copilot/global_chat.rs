@@ -860,6 +860,20 @@ pub async fn global_chat_native(
         ),
         _ => None,
     };
+    // Its assistants run on the bot's sub-task model when this desktop can run it, else on that
+    // model.
+    let assistant_model = match (&bot, &profile) {
+        (Some(bot), Some(profile)) => {
+            flow_like::flow::copilot::resolve_subtask_model(
+                &model_state,
+                Some(profile.as_ref()),
+                bot.context.subtask_model.as_deref(),
+                bot_model.as_deref(),
+            )
+            .await
+        }
+        _ => None,
+    };
     let mut history = history.unwrap_or_default();
     let mut user_prompt = user_prompt;
     let mut user_context = user_context;
@@ -1072,6 +1086,7 @@ pub async fn global_chat_native(
             model_id: bot_model
                 .clone()
                 .or_else(|| model_selection.model_id.clone()),
+            assistant_model_id: assistant_model.clone(),
             embedding_model_id: bot
                 .context
                 .embedding_model

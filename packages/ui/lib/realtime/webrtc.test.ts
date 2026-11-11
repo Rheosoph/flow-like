@@ -1,6 +1,10 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, jest, spyOn, test } from "bun:test";
 import type { IRealtimeIceServer } from "./types";
-import { applyRealtimeIceServers, peerOptsForIceServers } from "./webrtc";
+import {
+	applyRealtimeIceServers,
+	createAuthFailureGate,
+	peerOptsForIceServers,
+} from "./webrtc";
 
 const initialIceServers: IRealtimeIceServer[] = [
 	{ urls: ["stun:stun.cloudflare.com:3478"] },
@@ -135,5 +139,79 @@ describe("realtime ICE configuration", () => {
 		expect(applyRealtimeIceServers(provider, undefined)).toBe(true);
 		expect(provider.peerOpts).toEqual({});
 		expect(destroyCalls).toBe(1);
+	});
+});
+
+describe("credential refresh after a refused signaling socket", () => {
+	afterEach(() => {
+		jest.useRealTimers();
+	});
+
+	/** A refused socket reconnects about every 2.5 s. */
+	function refusedFor(ms: number, gate: { signal(): void }): void {
+		for (let elapsed = 0; elapsed < ms; elapsed += 2_500) {
+			gate.signal();
+			jest.advanceTimersByTime(2_500);
+		}
+	}
+
+	test("the first refusal refreshes at once and repeats wait longer each time", () => {
+		jest.useFakeTimers();
+		let refreshes = 0;
+		const gate = createAuthFailureGate(() => refreshes++);
+
+		gate.signal();
+		expect(refreshes).toBe(1);
+		for (let attempt = 0; attempt < 500; attempt++) gate.signal();
+		expect(refreshes).toBe(1);
+		jest.advanceTimersByTime(1_999);
+		expect(refreshes).toBe(1);
+		jest.advanceTimersByTime(1);
+		expect(refreshes).toBe(2);
+		gate.signal();
+		jest.advanceTimersByTime(3_999);
+		expect(refreshes).toBe(2);
+		jest.advanceTimersByTime(1);
+		expect(refreshes).toBe(3);
+	});
+
+	test("a server that keeps refusing is asked about once a minute", () => {
+		jest.useFakeTimers();
+		let refreshes = 0;
+		const gate = createAuthFailureGate(() => refreshes++);
+
+		refusedFor(10 * 60_000, gate);
+		expect(refreshes).toBeLessThanOrEqual(16);
+		const settled = refreshes;
+		refusedFor(10 * 60_000, gate);
+		expect(refreshes - settled).toBeLessThanOrEqual(10);
+		expect(refreshes - settled).toBeGreaterThanOrEqual(9);
+	});
+
+	test("a refusal after a quiet stretch refreshes at once again", () => {
+		jest.useFakeTimers();
+		let refreshes = 0;
+		const gate = createAuthFailureGate(() => refreshes++);
+
+		refusedFor(5 * 60_000, gate);
+		jest.advanceTimersByTime(60 * 60_000);
+		const before = refreshes;
+		gate.signal();
+		expect(refreshes).toBe(before + 1);
+		gate.signal();
+		jest.advanceTimersByTime(2_000);
+		expect(refreshes).toBe(before + 2);
+	});
+
+	test("a disposed gate keeps a waiting refresh from firing", () => {
+		jest.useFakeTimers();
+		let refreshes = 0;
+		const gate = createAuthFailureGate(() => refreshes++);
+
+		gate.signal();
+		gate.signal();
+		gate.dispose();
+		jest.advanceTimersByTime(60_000);
+		expect(refreshes).toBe(1);
 	});
 });

@@ -1,5 +1,20 @@
+import type { GlobalChatAgentSelection } from "../../state/global-chat/global-chat-store";
+
 export interface SelectableModel {
 	id: string;
+}
+
+/**
+ * The selection a run's nested assistants use: the profile model its bot turn names, else the
+ * run's own.
+ */
+export function assistantSelection(
+	selection: GlobalChatAgentSelection,
+	assistantModelId?: string,
+): GlobalChatAgentSelection {
+	return assistantModelId
+		? { ...selection, provider: "bits", selectedModelId: assistantModelId }
+		: selection;
 }
 
 interface ResolveModelSelectionOptions<TModel extends SelectableModel> {

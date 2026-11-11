@@ -192,6 +192,18 @@ const users: Record<string, IUserLookup> = {
 	anna: { id: "anna", name: "Anna Weber", created_at: "" },
 };
 
+const profile = {
+	id: "profile_1",
+	name: "Work",
+	bits: [],
+	hidden_bots: [] as string[],
+};
+const updateProfileHiddenBots = mock(
+	async (_profile: unknown, hiddenBots: string[]) => {
+		profile.hidden_bots = hiddenBots;
+	},
+);
+
 const backend = {
 	botState: { listBots: async () => bots },
 	appState: { getApps: async () => [] },
@@ -201,6 +213,8 @@ const backend = {
 	userState: {
 		getInfo: async () => ({ id: "me", name: "Felix Schultz" }),
 		getProfile: async () => null,
+		getSettingsProfile: async () => ({ hub_profile: { ...profile } }),
+		updateProfileHiddenBots,
 		lookupUser: async (id: string) => users[id] ?? null,
 		lookupUsers: async (ids: string[]) =>
 			ids.map((id) => users[id]).filter(Boolean),
@@ -603,5 +617,40 @@ describe("BotsView", () => {
 		);
 		expect(activeConversation()).toBe("bot:bot_scout_copy");
 		expect(dockTitle()).toBe("Scout copy");
+	});
+
+	test("the profile hides a bot from the crew and shows it again, a built-in one by its system key", async () => {
+		const assistantCard = () => buttonContaining("Assistant", "Built in");
+		const hiddenHint = () => buttonContaining("hidden in this profile");
+		const dialog = () =>
+			window.document.body.querySelector("[role='dialog']") as unknown as
+				| HTMLElement
+				| null;
+		const assistantSwitch = () =>
+			Array.from(dialog()?.querySelectorAll("li") ?? [])
+				.find((row) => row.textContent?.startsWith("Assistant"))
+				?.querySelector<HTMLButtonElement>("[role='switch']");
+		expect(assistantCard()).toBeDefined();
+		expect(hiddenHint()).toBeUndefined();
+
+		await click(
+			container.querySelector<HTMLButtonElement>(
+				"button[aria-label='Bots in this profile']",
+			),
+		);
+		expect(dialog()?.textContent).toContain("“Work”");
+		expect(assistantSwitch()?.getAttribute("aria-checked")).toBe("true");
+
+		await click(assistantSwitch());
+		expect(updateProfileHiddenBots.mock.calls.at(-1)?.[1]).toEqual(["general"]);
+		expect(assistantSwitch()?.getAttribute("aria-checked")).toBe("false");
+		expect(assistantCard()).toBeUndefined();
+		expect(hiddenHint()?.textContent).toContain("1 hidden in this profile");
+		expect(buttonContaining("Flux", "Built in")).toBeDefined();
+
+		await click(assistantSwitch());
+		expect(updateProfileHiddenBots.mock.calls.at(-1)?.[1]).toEqual([]);
+		expect(assistantCard()).toBeDefined();
+		expect(hiddenHint()).toBeUndefined();
 	});
 });

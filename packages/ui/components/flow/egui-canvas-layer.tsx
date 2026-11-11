@@ -62,7 +62,10 @@ import {
 import type { WritableSignalStore } from "../../lib/realtime/presence-signals-store";
 import { useBoardRuntime, useReactFlow, useStoreApi } from "./board-runtime";
 import type { FlowCanvasProps } from "./flow-board";
-import { NATIVE_NODE_PLANE_Z } from "./standalone-board-host";
+import {
+	NATIVE_EDGE_PLANE_Z,
+	NATIVE_NODE_PLANE_Z,
+} from "./standalone-board-host";
 
 export interface EguiCanvasLayerProps {
 	scene: Scene;
@@ -107,6 +110,8 @@ interface PointerDrag {
 	tracePin?: SceneEndpoint;
 	/** The wire under a press; a click on it focuses the path it lies on. */
 	traceEdge?: string;
+	/** The wire under a Shift-press; a click adds it to the selection. */
+	addEdge?: string;
 }
 
 /** A preview card's pin and its `[x, y, width, height]` on the canvas. */
@@ -441,8 +446,8 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 			delete pinHint.dataset.pinId;
 			return visible;
 		};
-		const showPinFeedback = (candidate: PinStart, target: Element | null) => {
-			const { pin } = candidate;
+		/** Sets the cursor on the element under the pointer until the next feedback change. */
+		const claimCursor = (target: Element | null, cursor: string) => {
 			const element =
 				target instanceof HTMLElement || target instanceof SVGElement
 					? target
@@ -451,7 +456,11 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				clearPinFeedback();
 				claimedCursor = { element, previous: element.style.cursor };
 			}
-			element.style.cursor = pinCursor(candidate);
+			element.style.cursor = cursor;
+		};
+		const showPinFeedback = (candidate: PinStart, target: Element | null) => {
+			const { pin } = candidate;
+			claimCursor(target, pinCursor(candidate));
 			const [x, y, zoom] = store.getState().transform;
 			const px = x + pin.x * zoom;
 			const py = y + pin.y * zoom;
@@ -562,6 +571,18 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				flow.getInternalNode(wrapper.dataset.id ?? "")?.internals.z ??
 				Number(getComputedStyle(wrapper).zIndex);
 			return nativeZ > domZ ? node : undefined;
+		};
+		/** A native wire that a press at this point would reach: on open canvas or above a DOM node. */
+		const wireAt = (point: Point, element: Element | null) => {
+			const wrapper = element?.closest<HTMLElement>(".react-flow__node");
+			if (wrapper) {
+				const z =
+					flow.getInternalNode(wrapper.dataset.id ?? "")?.internals.z ??
+					Number(getComputedStyle(wrapper).zIndex);
+				if (!(z < NATIVE_EDGE_PLANE_Z)) return undefined;
+			}
+			const edge = hitRef.current.edgeAt(point, flow.getViewport().zoom);
+			return edge && !edge.dom ? edge : undefined;
 		};
 		const isPinExposed = (pin: WorldPin) => {
 			const bounds = root.getBoundingClientRect();
@@ -866,9 +887,12 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				if (candidate) showPinFeedback(candidate, top);
 				else clearPinFeedback();
 				traceHover(tracePinAt(point, zoom, top));
+				const wire =
+					!candidate && !hit && !isDomControl(top) && wireAt(point, top);
+				if (wire && top !== pane) claimCursor(top, "pointer");
 				pane.style.cursor = candidate
 					? pinCursor(candidate)
-					: hitRef.current.nodeAt(point)
+					: wire || hitRef.current.nodeAt(point)
 						? "pointer"
 						: "grab";
 				setOverlay(
@@ -1384,6 +1408,9 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				!isControl(event.target) &&
 				!(event.target instanceof Element && event.target.closest(".nokey"));
 			if (!selection && !selectionGroup && !nativeSurface(event)) return;
+			// The box belongs to one Shift-drag; any other press ends it, as on React Flow.
+			if (!selectionGroup && store.getState().nodesSelectionActive)
+				store.setState({ nodesSelectionActive: false });
 			clearPinFeedback();
 			setOverlay({});
 			if (drag && drag.id !== event.pointerId) {
@@ -1410,6 +1437,9 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				base.mode = "selection";
 				base.selectionMode = bp.selectionMode ?? "box";
 				base.lasso = [point];
+				base.primaryId = targetNode(event, point)?.id;
+				if (!base.primaryId)
+					base.addEdge = hitRef.current.edgeAt(point, zoom)?.id;
 			} else if (
 				selectionGroup &&
 				event.button === 0 &&
@@ -1669,30 +1699,40 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				);
 				return;
 			}
-			const commitScope = currentProps().scopeKey;
+			const dropped = currentProps();
+			const commitScope = dropped.scopeKey;
+			const oldEdgeId =
+				action.kind === "disconnect" ? action.edgeId : action.oldEdgeId;
+			const old = oldEdgeId
+				? dropped.edges?.find((edge) => edge.id === oldEdgeId)
+				: undefined;
+			if (oldEdgeId && !old) {
+				setAnnouncement("Connection cancelled.");
+				return;
+			}
+			// The wire shows from the drop on; the host validates the old one when it saves.
+			const shown = dropped.onNativePendingEdge?.(
+				action.kind === "connect" ? action.connection : undefined,
+				old,
+			);
 			enqueueSave(async () => {
-				const bp = currentProps();
-				if (disposed || bp.scopeKey !== commitScope) return;
-				const oldEdgeId =
-					action.kind === "disconnect" ? action.edgeId : action.oldEdgeId;
-				const old = oldEdgeId
-					? bp.edges?.find((edge) => edge.id === oldEdgeId)
-					: undefined;
-				if (oldEdgeId && !old) {
-					setAnnouncement(
-						`The wire ${oldEdgeId} changed before it could be saved. Try again.`,
-					);
-					return;
+				let saved = false;
+				try {
+					const bp = currentProps();
+					if (disposed || bp.scopeKey !== commitScope) return;
+					if (action.kind === "connect")
+						await bp.onNativeConnection(action.connection, old);
+					else if (old) await bp.onNativeDisconnect(old);
+					saved = true;
+					if (!disposed && commitScope === currentProps().scopeKey)
+						setAnnouncement(
+							action.kind === "connect"
+								? "Connection saved."
+								: "Connection removed.",
+						);
+				} finally {
+					shown?.(saved);
 				}
-				if (action.kind === "connect")
-					await bp.onNativeConnection(action.connection, old);
-				else if (old) await bp.onNativeDisconnect(old);
-				if (!disposed && commitScope === currentProps().scopeKey)
-					setAnnouncement(
-						action.kind === "connect"
-							? "Connection saved."
-							: "Connection removed.",
-					);
 			});
 		};
 		/** Editors inside a node keep their own pointer handling but select the node, as on React Flow. */
@@ -1784,6 +1824,15 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 					moved.find((node) => node.id === completed.primaryId) ?? moved[0],
 					moved,
 				);
+			} else if (completed.mode === "selection" && clicked) {
+				// A Shift-click adds the node or wire under it; on open canvas it clears.
+				if (completed.primaryId) selected(new Set([completed.primaryId]), true);
+				else if (completed.addEdge)
+					currentProps().onEdgesChange?.([
+						{ id: completed.addEdge, type: "select", selected: true },
+					]);
+				else selected(new Set(), event.metaKey || event.ctrlKey);
+				lassoRef.current?.setAttribute("points", "");
 			} else if (completed.mode === "selection" && pointer) {
 				selected(
 					new Set(
@@ -1925,9 +1974,17 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				cancelled();
 				traceFocus();
 				consume(event);
-			} else if (event.key === "Escape" && focusAnchor) {
+			} else if (event.key === "Escape") {
+				const bp = currentProps();
+				const selection =
+					store.getState().elementsSelectable &&
+					(bp.nodes?.some((node) => node.selected) ||
+						bp.edges?.some((edge) => edge.selected));
+				if (selection) selected(new Set(), false);
+				if (store.getState().nodesSelectionActive)
+					store.setState({ nodesSelectionActive: false });
+				if (focusAnchor || selection) consume(event);
 				traceFocus();
-				consume(event);
 			}
 			if (event.code === "Space") {
 				space = true;

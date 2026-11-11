@@ -798,6 +798,7 @@ mod tests {
             parameters: flow_like_types::json::to_value(LLMParameters {
                 context_length: 20_000,
                 model_classification: BitModelClassification::default(),
+                data_classification: None,
                 provider: ModelProvider {
                     api_surface,
                     provider_name: provider_name.to_string(),
@@ -1694,6 +1695,7 @@ mod tests {
                 parameters: flow_like_types::json::to_value(LLMParameters {
                     context_length: 200_000,
                     model_classification: BitModelClassification::default(),
+                    data_classification: None,
                     provider: ModelProvider {
                         api_surface: Some(ModelApiSurface::ChatCompletions),
                         provider_name: provider_name.to_string(),

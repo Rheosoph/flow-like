@@ -209,12 +209,19 @@ async fn a_grant_is_the_owners_alone_idempotent_and_listed_without_tokens() {
     let db = grants_db().await;
     insert_bot(&db, BOT, OWNER, "SERVER").await;
     insert_bot(&db, "bot_other", "user-b", "SERVER").await;
-    let first = grant_in(&db, OWNER, BOT, &key("code_run", "host:a.com"), at(5))
+    let granted = now_millis();
+    let first = grant_in(&db, OWNER, BOT, &key("code_run", "host:a.com"), granted)
         .await
         .unwrap();
-    let again = grant_in(&db, OWNER, BOT, &key("code_run", "host:a.com"), at(900))
-        .await
-        .unwrap();
+    let again = grant_in(
+        &db,
+        OWNER,
+        BOT,
+        &key("code_run", "host:a.com"),
+        granted + Duration::seconds(895),
+    )
+    .await
+    .unwrap();
     assert_eq!(first, again);
     rows(&db).put("code_run", "once:abc").await.unwrap();
     assert_eq!(list_grants(&db, OWNER, BOT, false).await.unwrap().len(), 1);
@@ -277,7 +284,7 @@ async fn a_grant_covers_exactly_its_scope_for_the_core_lookup() {
         OWNER,
         BOT,
         &key("knowledge_drop", "table:notes"),
-        at(1),
+        now_millis(),
     )
     .await
     .unwrap();
@@ -630,7 +637,8 @@ async fn a_grant_lapses_after_ninety_days_unused_and_a_use_slides_it_once_a_day(
     let granted = expiry(&db).await.unwrap();
     assert!(granted > now_millis() + Duration::days(89));
 
-    let used = || check_call(&store, "knowledge_drop", &drop_args(), None);
+    let args = drop_args();
+    let used = || check_call(&store, "knowledge_drop", &args, None);
     assert_eq!(used().await.unwrap(), GrantCheck::Granted);
     assert_eq!(expiry(&db).await, Some(granted), "a use within a day waits");
 

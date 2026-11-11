@@ -186,6 +186,7 @@ pub(crate) async fn turn_host(
         ),
     ))
     .with_scheduler(scheduler)
+    .with_mail(std::sync::Arc::new(email::ApiMail::new(state, &bot.bot_id)))
     .with_skills(std::sync::Arc::new(skills::ApiSkills::new(
         state,
         owner,

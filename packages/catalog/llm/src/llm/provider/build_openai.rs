@@ -186,6 +186,7 @@ impl NodeLogic for BuildOpenAiNode {
         let params = VLMParameters {
             context_length: 20000,
             model_classification: BitModelClassification::default(),
+            data_classification: None,
             provider: flow_like_model_provider::provider::ModelProvider {
                 api_surface: Some(api_surface),
                 provider_name: "custom:openai".into(),

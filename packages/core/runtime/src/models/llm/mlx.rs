@@ -1137,6 +1137,7 @@ mod apple {
                     params: None,
                 },
                 model_classification: crate::bit::BitModelClassification::default(),
+                data_classification: None,
             };
             let bit = Bit {
                 bit_type: BitTypes::Llm,

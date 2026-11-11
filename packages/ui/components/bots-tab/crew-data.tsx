@@ -20,16 +20,20 @@ import {
 } from "../../state/global-chat/global-chat-store";
 import { restoreGlobalChatConversation } from "../../state/global-chat/global-chat-stream";
 import { useGlobalChatBot } from "../global-chat/use-global-chat-bot";
+import { NO_HIDDEN_BOTS } from "./bot-visibility-model";
 import { type CrewMode, recentPeopleIds, selectNeedsYou } from "./crew-model";
 import { useCrewLocalPrincipals } from "./local-principals";
 import type { NeedsYouItem } from "./needs-you-section";
 import type { PickerSource } from "./principal-picker";
+import { useHiddenBots } from "./use-bot-visibility";
 import type { CrewDirectory } from "./use-crew-directory";
 
 export interface CrewData {
 	me: string | null;
 	mode: CrewMode;
 	bots?: IBot[];
+	/** Visibility keys of the bots the current profile hides; `bots` still holds them for the chats that name them. */
+	hiddenBots: ReadonlySet<string>;
 	botsLoading: boolean;
 	botsFailed: boolean;
 	retryBots: () => void;
@@ -48,6 +52,7 @@ const noop = () => undefined;
 const GUEST_CREW: CrewData = {
 	me: null,
 	mode: "guest",
+	hiddenBots: NO_HIDDEN_BOTS,
 	botsLoading: false,
 	botsFailed: false,
 	retryBots: noop,
@@ -80,6 +85,7 @@ function ConnectedCrewData({
 }>) {
 	const bots = useBots();
 	useBotAvatarSync(mode === "account" ? bots.data : undefined);
+	const hiddenBots = useHiddenBots().keys;
 	const conversations = useConversations();
 	const list = conversations.data ?? NO_CONVERSATIONS;
 	const resolveLocal = useCrewLocalPrincipals(bots.data, list);
@@ -89,6 +95,7 @@ function ConnectedCrewData({
 				me,
 				mode,
 				bots: bots.data,
+				hiddenBots,
 				botsLoading: bots.isPending && bots.fetchStatus !== "idle",
 				botsFailed: bots.isError && !bots.data,
 				retryBots: () => void bots.refetch(),
@@ -224,10 +231,13 @@ export function useBotIds(bots: readonly IBot[] | undefined) {
 
 /** What the new room and new message pickers offer: your bots, recent people and the directory. */
 export function useCrewPickerSource(
-	data: Pick<CrewData, "me" | "mode" | "bots" | "conversations">,
+	data: Pick<
+		CrewData,
+		"me" | "mode" | "bots" | "hiddenBots" | "conversations"
+	>,
 	directory: CrewDirectory,
 ): PickerSource {
-	const { me, mode, bots, conversations } = data;
+	const { me, mode, bots, hiddenBots, conversations } = data;
 	const recent = useMemo(
 		() => recentPeopleIds(conversations, me),
 		[conversations, me],
@@ -236,10 +246,11 @@ export function useCrewPickerSource(
 		() => ({
 			me,
 			bots: bots ?? NO_BOTS,
+			hiddenBots,
 			recentPeopleIds: recent,
 			directory,
 			people: mode === "account",
 		}),
-		[bots, directory, me, mode, recent],
+		[bots, directory, hiddenBots, me, mode, recent],
 	);
 }

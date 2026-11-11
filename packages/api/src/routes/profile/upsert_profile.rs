@@ -50,6 +50,8 @@ pub struct ProfileBody {
     pub apps: Option<Vec<ProfileApp>>,
     #[schema(value_type = Option<Vec<Object>>)]
     pub shortcuts: Option<Vec<ProfileShortcut>>,
+    /// Bots this profile hides: a custom bot's ID or a built-in bot's system key. Omit to keep the list.
+    pub hidden_bots: Option<Vec<String>>,
     #[serde(
         default,
         deserialize_with = "super::deserialize_nullable",
@@ -125,6 +127,7 @@ pub async fn upsert_profile(
         normalize_image_extension(extension)?;
     }
     super::validate_home_patch(&profile_body.home_layout, &profile_body.home_default_id)?;
+    profile_body.hidden_bots = super::validate_hidden_bots(profile_body.hidden_bots.take())?;
     if profile_id.trim().is_empty() {
         return Err(ApiError::bad_request("Profile ID is required"));
     }
@@ -207,6 +210,9 @@ pub async fn upsert_profile(
             let shortcuts: Vec<Value> = shortcuts.iter().map(to_value).collect::<Result<_, _>>()?;
             let shortcuts: Value = Value::Array(shortcuts);
             active_model.shortcuts = Set(Some(shortcuts));
+        }
+        if let Some(hidden_bots) = profile_body.hidden_bots {
+            active_model.hidden_bots = Set(Some(hidden_bots.into()));
         }
         if let Some(settings) = profile_body.settings {
             let settings = to_value(&settings)?;
@@ -343,6 +349,7 @@ pub async fn upsert_profile(
         bit_ids,
         apps,
         shortcuts,
+        hidden_bots,
         home_layout,
         home_default_id,
         hub,
@@ -389,6 +396,7 @@ pub async fn upsert_profile(
             bit_ids: Set(bit_ids.clone().map(Into::into)),
             apps: Set(apps.clone()),
             shortcuts: Set(shortcuts.clone()),
+            hidden_bots: Set(hidden_bots.clone().map(Into::into)),
             home_layout: Set(home_layout.clone().flatten()),
             home_default_id: Set(home_default_id.clone().flatten()),
             settings: Set(settings.clone()),

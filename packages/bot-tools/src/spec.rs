@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
@@ -39,7 +41,15 @@ pub fn schema_of<T: JsonSchema>() -> Value {
     schema
 }
 
+/// Every tool's spec, built once. Generating all argument schemas again for each lookup made a
+/// bot's tool list cost one full pass per tool.
+static SPECS: LazyLock<Vec<ToolSpec>> = LazyLock::new(build_specs);
+
 pub fn specs() -> Vec<ToolSpec> {
+    SPECS.clone()
+}
+
+fn build_specs() -> Vec<ToolSpec> {
     let mut all = crate::files::specs();
     all.extend(crate::configuration::specs());
     all.extend(crate::crew::specs());
@@ -66,5 +76,5 @@ pub fn specs() -> Vec<ToolSpec> {
 }
 
 pub fn spec(name: &str) -> Option<ToolSpec> {
-    specs().into_iter().find(|spec| spec.name == name)
+    SPECS.iter().find(|spec| spec.name == name).cloned()
 }

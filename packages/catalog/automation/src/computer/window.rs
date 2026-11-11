@@ -47,7 +47,7 @@ impl NodeLogic for ListWindowsNode {
             "Lists all visible windows on the desktop",
             "Automation/Computer/Window",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.set_flowscript_name("computer", "listWindows");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -137,7 +137,7 @@ impl NodeLogic for GetActiveWindowNode {
             "Gets the focused window of another application (Flow-Like's own windows are skipped), falling back to the front-most visible window",
             "Automation/Computer/Window",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.set_flowscript_name("computer", "getActiveWindow");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -241,7 +241,7 @@ impl NodeLogic for FindWindowByTitleNode {
             "Finds a window by its title (partial match supported)",
             "Automation/Computer/Window",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.set_flowscript_name("computer", "findWindowByTitle");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -655,7 +655,7 @@ impl NodeLogic for FocusWindowNode {
             "Brings a window to the front and gives it focus",
             "Automation/Computer/Window",
         );
-        node.set_version(2);
+        node.set_version(3);
         node.set_flowscript_name("computer", "focusWindow");
         node.add_icon("/flow/icons/computer.svg");
 

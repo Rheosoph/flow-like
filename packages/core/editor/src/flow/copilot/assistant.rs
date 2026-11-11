@@ -938,7 +938,7 @@ mod tests {
         assert!(prompt.contains("local research candidates were tried in best-fit order"));
         assert!(prompt.contains("no useful, nonredundant candidate remained"));
         assert!(prompt.contains("A declined local call is a stop"));
-        assert!(prompt.contains("extract only safe public factual subquestions"));
+        assert!(prompt.contains("Supply a complete public question and relevant public context"));
         assert!(prompt.contains("Default to DIRECT"));
         assert!(prompt.contains("ordinary one-call, one-app, or simple two-app task"));
         assert!(prompt.contains("at least three distinct apps/interfaces"));

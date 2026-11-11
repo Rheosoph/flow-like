@@ -1771,9 +1771,7 @@ The researcher receives your brief and public-web tools, without automatic acces
 memory, files, or apps. Keep secrets, credentials, private identifiers, and private app/file contents
 out of the brief. Review its findings and call again with a refined question when evidence is missing
 or the first search misunderstood the task. Calls share the turn's research budget. Preserve verified
-citations, dates, and remaining gaps when answering. When pictures matter (what something looks
-like, a chart, a map), ask for them in the question: the findings then carry the image links of the
-pages read as `![what it shows](image-link)`."#,
+citations, dates, and remaining gaps when answering."#,
             schema: || {
                 json!({
                     "type": "object",
@@ -1977,16 +1975,14 @@ pub fn http_request_tool_spec() -> PlatformToolSpec {
 /// through the frontend bridge to `backend.graphState`; `app_id`/`overlay_id` are injected from the
 /// current Data Studio page context but may be overridden per call to reach another app. Shared by
 /// every desktop SDK/MCP provider so all backends advertise identical tools.
-/// The public-web research tools. Owned by exactly ONE scope: `CopilotScope::Research`.
+/// The public-web research tools, held by the researcher (`CopilotScope::Research`) and by a bot
+/// with the `internet` capability, which searches and reads pages in its own context.
 ///
-/// They deliberately do not appear in [`global_assistant_tool_specs`]. Reading untrusted pages and
-/// holding private app data in the same context is the shape that prompt-injection exfiltration
-/// needs, so the orchestrator delegates to `research_agent` instead of browsing itself. The
-/// researcher has no app, database, storage or memory tools. The orchestrator's separate HTTP
-/// requests use execution approval. Provenance and spend share the turn's `WebResearchSession`.
-///
-/// The rig/Bits orchestrator executes the same directed brief in a fresh local research loop; raw
-/// public-web schemas still never enter its root context.
+/// They do not appear in [`global_assistant_tool_specs`]: FlowPilot's orchestrator delegates to
+/// `research_agent` instead of browsing itself, and its separate HTTP requests use execution
+/// approval. Whoever holds the tools, `open_url` and `archive_lookup` accept only links the
+/// turn's `WebResearchSession` saw in the user's text or in a search or archive result, so text
+/// on a page cannot name a new destination.
 pub fn public_web_tool_specs() -> Vec<PlatformToolSpec> {
     vec![
         PlatformToolSpec {

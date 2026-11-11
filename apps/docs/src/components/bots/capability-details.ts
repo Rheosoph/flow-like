@@ -22,8 +22,8 @@ export const CAPABILITY_DETAILS: Readonly<
 	Record<BotCapability, CapabilityDetail>
 > = {
 	internet: {
-		tools: ["research_agent"],
-		note: "A separate, sealed researcher searches and reads public pages. It only gets the question, never the bot's memory, files or secrets, so instructions hidden in a page can't reach them.",
+		tools: ["internet_search", "open_url", "archive_lookup", "research_agent"],
+		note: "The bot searches and reads public pages itself. It opens only links from a search result or from your message, never one it wrote or found inside a page. For a job with many sources it can hand the question to a separate researcher.",
 	},
 	web_requests: {
 		tools: ["web_request"],

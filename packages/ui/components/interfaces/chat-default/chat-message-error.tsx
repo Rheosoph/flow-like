@@ -199,12 +199,33 @@ function useErrorDetails(error: IChatMessageError, title: string) {
 	return { meta, clipboardText, hasDetails };
 }
 
+/** A turn the user stopped themselves: nothing broke, so a quiet note under the answer. */
+function StoppedNote({ error }: { readonly error: IChatMessageError }) {
+	return (
+		<p
+			className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground/80"
+			data-fl-chat-error={error.kind}
+			title={error.message}
+		>
+			<StopIcon className="size-3.5 shrink-0" />
+			{error.title}
+		</p>
+	);
+}
+
 /**
  * A failed assistant turn, rendered as a card instead of an apology sentence in the answer: what
  * broke, in one line the user can act on, with the raw failure kept one click away. Where only
  * another model helps, the model picker takes the place of the button.
  */
 export function ChatMessageError({
+	error,
+}: { readonly error: IChatMessageError }) {
+	if (error.kind === "cancelled") return <StoppedNote error={error} />;
+	return <ChatMessageErrorCard error={error} />;
+}
+
+function ChatMessageErrorCard({
 	error,
 }: { readonly error: IChatMessageError }) {
 	const { t } = useTranslation("chat");

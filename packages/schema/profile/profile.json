@@ -63,6 +63,14 @@
 			},
 			"default": null
 		},
+		"hidden_bots": {
+			"description": "Bots this profile leaves out of its crew, pickers and Home. A custom bot goes by its id,\na built-in one by its system key, so the choice holds for its account and device rows.\nHiding is a view filter: the bot keeps running and stays reachable through its chats.",
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"default": []
+		},
 		"home_layout": {
 			"default": null
 		},

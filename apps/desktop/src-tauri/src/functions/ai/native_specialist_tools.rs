@@ -336,6 +336,11 @@ async fn run_specialist_with_selection(
         None
     };
     let app_id = context.app_id.clone();
+    let model_id = context
+        .bot
+        .as_ref()
+        .and_then(|bot| bot.assistant_model_id.clone())
+        .or(options.model_id);
     let raw = if scope == CopilotScope::Research {
         // Model framing follows the complete brief; source_user_prompt remains host identity.
         instruction.clone()
@@ -383,7 +388,7 @@ async fn run_specialist_with_selection(
         instruction,
         None,
         None,
-        options.model_id,
+        model_id,
         options.reasoning_effort,
         token,
         None,

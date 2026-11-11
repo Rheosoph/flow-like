@@ -14,8 +14,8 @@ use crate::{
 use chrono::{DateTime, Duration, FixedOffset};
 use flow_like_types::bot_turn::rate_limit_message_id;
 use sea_orm::{
-    ActiveEnum, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, PaginatorTrait,
-    QueryFilter, sea_query::OnConflict,
+    ActiveEnum, ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait, EntityTrait,
+    PaginatorTrait, QueryFilter, sea_query::OnConflict,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -150,9 +150,9 @@ async fn requester_turns<C: ConnectionTrait>(
         .filter(bot_turn::Column::BotId.eq(bot_id))
         .filter(bot_turn::Column::RequesterId.eq(requester_id))
         .filter(
-            bot_turn::Column::Unprompted
-                .is_null()
-                .or(bot_turn::Column::Unprompted.eq(false)),
+            Condition::any()
+                .add(bot_turn::Column::Unprompted.is_null())
+                .add(bot_turn::Column::Unprompted.eq(false)),
         )
         .filter(bot_turn::Column::CreatedAt.gt(now - Duration::hours(WINDOW_HOURS)))
         .count(db)

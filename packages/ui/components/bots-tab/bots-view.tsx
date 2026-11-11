@@ -2,6 +2,7 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { EyeOffIcon } from "lucide-react";
 import {
 	type ReactNode,
 	useCallback,
@@ -24,6 +25,8 @@ import { homeGreetingName } from "../home/home-greeting";
 import { Button } from "../ui/button";
 import type { BotPanelActions } from "./bot-details";
 import type { BotPanelTab } from "./bot-panel-tabs";
+import { BotVisibilityDialog } from "./bot-visibility-dialog";
+import { shownBots } from "./bot-visibility-model";
 import {
 	type CrewData,
 	CrewDataScope,
@@ -40,6 +43,7 @@ import {
 	type CrewMember,
 	NewBotTile,
 	useCrewMembers,
+	useShownCrew,
 } from "./crew-grid";
 import { CrewHeader } from "./crew-header";
 import {
@@ -212,8 +216,12 @@ function CrewLayout(data: Readonly<CrewData>) {
 	const [newRoomOpen, setNewRoomOpen] = useState(false);
 	const [newMessageOpen, setNewMessageOpen] = useState(false);
 	const [starredOpen, setStarredOpen] = useState(false);
+	const [visibilityOpen, setVisibilityOpen] = useState(false);
 
-	const crew = useCrewMembers(bots);
+	const allCrew = useCrewMembers(bots);
+	const crew = useShownCrew(allCrew, data.hiddenBots);
+	const hiddenCount = allCrew.length - crew.length;
+	const showVisibility = useCallback(() => setVisibilityOpen(true), []);
 	const presence = useBotPresence(hasBotsHostedElsewhere(bots)).data;
 	const myBotIds = useBotIds(bots);
 	const localBots = useMemo(
@@ -345,7 +353,7 @@ function CrewLayout(data: Readonly<CrewData>) {
 	if (mode === "account") {
 		summary = crewSummaryLine((key, options) => t(key, options), {
 			needs: needs.length,
-			bots: bots ? bots.length : null,
+			bots: bots ? shownBots(bots, data.hiddenBots).length : null,
 		});
 	} else if (mode === "local") {
 		summary = t(
@@ -444,6 +452,7 @@ function CrewLayout(data: Readonly<CrewData>) {
 						onSearchChange={setSearch}
 						onNewBot={hasCrew && bots ? openNewBot : undefined}
 						onShowChat={dockOpen ? undefined : showDockChat}
+						onManageVisibility={hasCrew && bots ? showVisibility : undefined}
 					/>
 					{canMove && localBots.length > 0 && (
 						<LocalBotsBanner
@@ -480,6 +489,24 @@ function CrewLayout(data: Readonly<CrewData>) {
 					{(!query || visibleCrew.length > 0) && (
 						<CrewSection
 							title={t("crew.yourCrew", "Your crew")}
+							actions={
+								hiddenCount > 0 && (
+									<Button
+										type="button"
+										variant="ghost"
+										size="sm"
+										className="text-muted-foreground"
+										onClick={showVisibility}
+									>
+										<EyeOffIcon aria-hidden />
+										{t(
+											"crew.visibility.hiddenCount",
+											"{{count}} hidden in this profile",
+											{ count: hiddenCount },
+										)}
+									</Button>
+								)
+							}
 							aside={
 								bots && (
 									<span className="text-[13px] font-normal text-muted-foreground">
@@ -573,6 +600,12 @@ function CrewLayout(data: Readonly<CrewData>) {
 				onSaved={selectSaved}
 				onDuplicated={selectMoved}
 			/>
+			{hasCrew && visibilityOpen && (
+				<BotVisibilityDialog
+					members={allCrew}
+					onOpenChange={setVisibilityOpen}
+				/>
+			)}
 			{hasCrew && (
 				<>
 					<NewRoomDialog

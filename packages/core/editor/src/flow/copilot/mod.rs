@@ -141,6 +141,7 @@ pub use session::{
     WorkflowToolObservation, WorkflowToolPreflightDecision, WorkflowValidationState,
     WorkflowValidationStatus, workflow_strategy_fingerprint, workflow_tool_result_succeeded,
 };
+pub use subtasks::resolve_subtask_model;
 pub use tools::{
     CatalogTool, CheckFlowScriptTool, CommitFlowScriptTool, DatabaseContextTool,
     EditFlowScriptArgs, EmitCommandsArgs, ExecuteEventArgs, ExecuteEventTool, ExecuteNodeArgs,
@@ -3024,6 +3025,7 @@ impl Copilot {
                         params: None,
                     },
                     model_classification: Default::default(),
+                    data_classification: None,
                 })
                 .unwrap(),
                 ..Default::default()

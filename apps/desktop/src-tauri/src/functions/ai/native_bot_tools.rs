@@ -70,6 +70,9 @@ pub(crate) struct BotToolRuntime {
     pub(crate) profile: Option<Arc<Profile>>,
     pub(crate) token: Option<String>,
     pub(crate) model_id: Option<String>,
+    /// The model this turn's assistants run on: the bot's sub-task model, else its own. `None`
+    /// leaves the chat's selection.
+    pub(crate) assistant_model_id: Option<String>,
     pub(crate) embedding_model_id: Option<String>,
     pub(crate) run_id: Option<String>,
     /// The bot turn this run answers; an account bot reads its secrets for it.

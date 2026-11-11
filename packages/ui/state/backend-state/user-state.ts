@@ -387,6 +387,11 @@ export interface IUserState {
 		profile: ISettingsProfile,
 		shortcuts: IProfileShortcut[],
 	): Promise<void>;
+	/** Replaces the bots the profile hides; see `IProfile.hidden_bots` for what an entry names. */
+	updateProfileHiddenBots(
+		profile: ISettingsProfile,
+		hiddenBots: string[],
+	): Promise<void>;
 	getInfo(): Promise<IUserInfo>;
 	createPAT(
 		name: string,

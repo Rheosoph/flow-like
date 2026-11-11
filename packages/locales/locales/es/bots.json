@@ -736,6 +736,17 @@
 		"unread_many": "",
 		"unread_one": "",
 		"unread_other": "",
+		"visibility": {
+			"description": "",
+			"descriptionNamed": "",
+			"failed": "",
+			"hidden": "",
+			"hiddenCount_many": "",
+			"hiddenCount_one": "",
+			"hiddenCount_other": "",
+			"shown": "",
+			"title": ""
+		},
 		"you": "",
 		"youObject": "",
 		"yourCrew": "",

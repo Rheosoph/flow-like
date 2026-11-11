@@ -5029,6 +5029,8 @@ model Profile {
   bitIds        Json?
   hub           String
   hubs          Json?
+  // Bots the profile hides from its crew: a custom bot's ID or a built-in bot's system key.
+  hiddenBots    Json?
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)

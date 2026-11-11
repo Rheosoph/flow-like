@@ -7,6 +7,7 @@ const STATE_SYMBOL = Symbol.for(
 
 type TokenRegistration = {
 	token: string;
+	room: string;
 	references: number;
 	onAuthFailure?: () => void;
 };
@@ -37,6 +38,34 @@ function normalizeWebSocketUrl(value: string | URL): string {
 		throw new Error("Realtime signaling endpoints must use ws:// or wss://");
 	}
 	return parsed.href;
+}
+
+/**
+ * y-webrtc sends every room's subscriptions and announcements over every
+ * signaling socket of the page. The server binds a socket to one room and
+ * closes it for any other, so a socket carries its own room only. Returns the
+ * frame to send, or null to drop it.
+ */
+export function scopeSignalingFrame<T>(data: T, room: string): T | string | null {
+	if (typeof data !== "string") return data;
+	let message: unknown;
+	try {
+		message = JSON.parse(data);
+	} catch {
+		return data;
+	}
+	if (typeof message !== "object" || message === null) return data;
+	const { type, topic, topics } = message as Record<string, unknown>;
+	if (type === "publish") return topic === room ? data : null;
+	if (
+		(type !== "subscribe" && type !== "unsubscribe") ||
+		!Array.isArray(topics) ||
+		topics.every((name) => name === room)
+	)
+		return data;
+	return topics.includes(room)
+		? JSON.stringify({ ...message, topics: [room] })
+		: null;
 }
 
 function installAuthenticatedWebSocket(): AuthenticatedWebSocketState {
@@ -77,6 +106,11 @@ function installAuthenticatedWebSocket(): AuthenticatedWebSocketState {
 				],
 				target,
 			) as WebSocket;
+			const send = socket.send.bind(socket);
+			socket.send = (data) => {
+				const frame = scopeSignalingFrame(data, registration.room);
+				if (frame !== null) send(frame);
+			};
 			// A close with code 1008 (server-side token expiry/policy) or a close
 			// before the socket ever opened (rejected upgrade) signals a stale
 			// credential; the registered handler can rotate it before the provider's
@@ -140,6 +174,7 @@ export async function scopedSignalingUrl(
 
 function registerToken(
 	url: string,
+	room: string,
 	token: string,
 	onAuthFailure?: () => void,
 ): () => void {
@@ -152,7 +187,7 @@ function registerToken(
 			"A realtime signaling scope already has another credential",
 		);
 	}
-	const registration = current ?? { token, references: 0 };
+	const registration = current ?? { token, room, references: 0 };
 	if (onAuthFailure) registration.onAuthFailure = onAuthFailure;
 	registration.references++;
 	state.registrations.set(key, registration);
@@ -251,7 +286,7 @@ export async function prepareAuthenticatedSignaling(
 	const releases: Array<() => void> = [];
 	try {
 		for (const url of signaling) {
-			releases.push(registerToken(url, token, onAuthFailure));
+			releases.push(registerToken(url, room, token, onAuthFailure));
 		}
 	} catch (error) {
 		for (const release of releases) release();

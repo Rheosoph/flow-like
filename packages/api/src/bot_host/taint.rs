@@ -221,12 +221,20 @@ mod tests {
         insert_bot(&db, "bot_2", "user-a", "SERVER").await;
         classify(&db, "bot_1", sender).await;
         classify(&db, "bot_2", receiver).await;
-        conversation(&db, "c1", "GROUP", "none", &["user-a", "bot_1", "bot_2"]).await;
+        conversation(&db, "c1", "GROUP", "PLAIN", &["user-a", "bot_1", "bot_2"]).await;
         let mut body = json!({ "text": "@bot_2 what do you think?", "mentions": ["bot_2"], "hops": 1 });
         if let Some(taint) = taint {
             body[TAINT_FIELD] = json!({ "classification": taint });
         }
         message(&db, "c1", "m1", "bot_1", 1, body, &["user-a", "bot_1", "bot_2"]).await;
+        crate::entity::conversation::ActiveModel {
+            id: Set("c1".into()),
+            last_seq: Set(Some(1)),
+            ..Default::default()
+        }
+        .update(&db)
+        .await
+        .unwrap();
         let mut woken = recipient("bot_2", "user-a", BotLocation::Server);
         woken.mentioned = true;
         woken.hops = 1;
@@ -300,7 +308,7 @@ mod tests {
         insert_bot(&db, "bot_1", "user-a", "SERVER").await;
         insert_bot(&db, "bot_2", "user-a", "SERVER").await;
         classify(&db, "bot_1", "internal").await;
-        conversation(&db, "c1", "GROUP", "none", &["user-a", "bot_1", "bot_2"]).await;
+        conversation(&db, "c1", "GROUP", "PLAIN", &["user-a", "bot_1", "bot_2"]).await;
         message(
             &db,
             "c1",

@@ -196,6 +196,7 @@ pub fn hosted_bit() -> Value {
         parameters: serde_json::to_value(LLMParameters {
             context_length: 20_000,
             model_classification: BitModelClassification::default(),
+            data_classification: None,
             provider: ModelProvider {
                 api_surface: None,
                 provider_name: "hosted:openrouter".into(),

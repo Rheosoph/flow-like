@@ -12,7 +12,7 @@ export const FLOW_KEY_OPT_OUT_CLASS = "nokey";
  * The `nokey` marker only reaches React Flow's own `useKeyPress` — the board
  * additionally installs document-level keydown handlers (delete-selection on
  * Backspace/Delete, board undo/redo on ⌘Z/⌘⇧Z/⌘Y, node placement on ⌘B/⌘F/⌘P/⌘S,
- * search on ⌘F/⌘⇧F, pages on ⌘⇧P) that check only INPUT/TEXTAREA/contenteditable
+ * search on ⌘⇧F, pages on ⌘⇧P) that check only INPUT/TEXTAREA/contenteditable
  * targets. Monaco's Chromium EditContext host is none of those, so those handlers
  * fire — and some preventDefault — while the caret sits in an editor.
  *

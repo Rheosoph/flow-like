@@ -398,7 +398,7 @@ function InviteSection({
 				),
 			);
 	return (
-		<section className="flex min-h-0 flex-col gap-3">
+		<section className="flex flex-col gap-3">
 			<h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
 				{t("roomMembers.invite", "Bring someone in")}
 			</h3>

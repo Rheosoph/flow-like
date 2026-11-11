@@ -34265,7 +34265,7 @@ eventsSimple() {
         // whole batch is rejected and the only way to author this is string concatenation.
         let result = reconcile_text_with_catalog(
             &empty_board(),
-            r#"function load(orgId: string): (rows: struct) {
+            r#"function load(orgId: string): (rows: Struct) {
     const result = dfSqlQuery({ query: "SELECT * FROM users WHERE org = $org_id", paramOrgId: orgId })
     return result.rows
 }
@@ -34289,7 +34289,7 @@ eventsSimple() {
     fn sql_numbered_placeholder_pin_is_predicted() {
         let result = reconcile_text_with_catalog(
             &empty_board(),
-            r#"function load(): (rows: struct) {
+            r#"function load(): (rows: Struct) {
     const result = dfSqlQuery({ query: "SELECT * FROM users WHERE id = $1", param1: 7 })
     return result.rows
 }
@@ -34306,7 +34306,7 @@ eventsSimple() {
         // it here is the whole reason prediction is driven by the literal.
         let result = reconcile_text_with_catalog(
             &empty_board(),
-            r#"function load(): (rows: struct) {
+            r#"function load(): (rows: Struct) {
     const result = dfSqlQuery({ query: "SELECT * FROM users WHERE org = $org_id", paramTeamId: "x" })
     return result.rows
 }
@@ -34330,7 +34330,7 @@ eventsSimple() {
         // mints, turning a check-time typo into an apply-time rollback.
         let result = reconcile_text_with_catalog(
             &empty_board(),
-            r#"function load(): (rows: struct) {
+            r#"function load(): (rows: Struct) {
     const result = dfSqlQuery({ query: "SELECT * FROM t WHERE price = '$5.00'", param5: 1 })
     return result.rows
 }
@@ -34367,7 +34367,7 @@ eventsSimple() {
         // though apply resolves it fine once `on_update` has run.
         let result = reconcile_text_with_catalog(
             &empty_board(),
-            r#"function render(title: string): (element: struct) {
+            r#"function render(title: string): (element: Struct) {
     const instance = a2uiInstantiateWidget({ widgetSelector: "Article", instanceId: "a1", dynPathTitle: title, dynPropTone: "muted", dynCustDensity: "compact", dynInHeading: title })
     return instance.elementRef
 }
@@ -34392,7 +34392,7 @@ eventsSimple() {
         // node must still be caught at check time.
         let result = reconcile_text_with_catalog(
             &empty_board(),
-            r#"function render(): (element: struct) {
+            r#"function render(): (element: Struct) {
     const instance = a2uiInstantiateWidget({ widgetSelector: "Article", instanceId: "a1", widgetSelektor: "typo" })
     return instance.elementRef
 }
@@ -34496,7 +34496,7 @@ eventsSimple() {
             let result = reconcile_text_with_catalog(
                 &empty_board(),
                 &format!(
-                    r#"function patch(element: struct): (done: bool) {{
+                    r#"function patch(element: Struct): (done: bool) {{
     {display}({{ elementRef: element, {binding}: "hello" }})
     return true
 }}

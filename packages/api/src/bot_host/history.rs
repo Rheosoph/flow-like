@@ -63,6 +63,12 @@ impl From<DbErr> for HistoryError {
     }
 }
 
+impl From<ApiError> for HistoryError {
+    fn from(error: ApiError) -> Self {
+        Self::Db(error)
+    }
+}
+
 /// One message as the model reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Line {

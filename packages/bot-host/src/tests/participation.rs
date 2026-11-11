@@ -228,8 +228,12 @@ async fn mismatched_ask_metadata_does_not_bypass_group_classification() {
 
     assert_eq!(status, TurnStatus::Done);
     assert_eq!(runner.classified.load(Ordering::SeqCst), 1);
-    assert_eq!(runner.ran.load(Ordering::SeqCst), 0);
-    assert!(hub.has(|call| *call == Call::Silent));
+    assert_eq!(
+        runner.ran.load(Ordering::SeqCst),
+        1,
+        "the message mentions the bot, so no_answer does not silence it"
+    );
+    assert!(!hub.has(|call| *call == Call::Silent));
 }
 
 #[tokio::test]

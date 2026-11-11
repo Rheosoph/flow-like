@@ -130,6 +130,44 @@ export function applyRealtimeIceServers(
 	return true;
 }
 
+const AUTH_REFRESH_MIN_MS = 2_000;
+const AUTH_REFRESH_MAX_MS = 60_000;
+const AUTH_REFRESH_RESET_MS = 2 * AUTH_REFRESH_MAX_MS;
+
+/**
+ * A refused signaling socket reconnects every few seconds for as long as the
+ * room is open. The first refusal asks for a fresh credential at once; repeats
+ * wait twice as long each time, so a server that keeps refusing is not
+ * answered with one access request per reconnect.
+ */
+export function createAuthFailureGate(notify: () => void) {
+	let delay = 0;
+	let notifiedAt = Number.NEGATIVE_INFINITY;
+	let timer: ReturnType<typeof setTimeout> | null = null;
+	const fire = () => {
+		timer = null;
+		notifiedAt = Date.now();
+		delay = Math.min(
+			Math.max(delay * 2, AUTH_REFRESH_MIN_MS),
+			AUTH_REFRESH_MAX_MS,
+		);
+		notify();
+	};
+	return {
+		signal() {
+			if (timer !== null) return;
+			const sinceLast = Date.now() - notifiedAt;
+			if (sinceLast > AUTH_REFRESH_RESET_MS) delay = 0;
+			if (sinceLast >= delay) fire();
+			else timer = setTimeout(fire, delay - sinceLast);
+		},
+		dispose() {
+			if (timer !== null) clearTimeout(timer);
+			timer = null;
+		},
+	};
+}
+
 export interface RealtimeSession {
 	doc: Y.Doc;
 	provider: any; // WebrtcProvider, typed as any to avoid direct dependency types here
@@ -288,14 +326,22 @@ export async function createRealtimeSession(args: {
 				"No signaling servers are configured for this deployment; refusing to send the realtime credential to the public fallback host",
 			);
 		}
-		authenticatedSignaling = await prepareAuthenticatedSignaling(
+		const authFailures = createAuthFailureGate(() => {
+			for (const listener of authFailureListeners) listener();
+		});
+		const signaling = await prepareAuthenticatedSignaling(
 			configuredSignaling,
 			room,
 			access.jwt,
-			() => {
-				for (const listener of authFailureListeners) listener();
-			},
+			authFailures.signal,
 		);
+		authenticatedSignaling = {
+			...signaling,
+			dispose: () => {
+				authFailures.dispose();
+				signaling.dispose();
+			},
+		};
 	} else {
 		// Legacy unauthenticated path: no credential to protect, fallback allowed.
 		if (!configuredSignaling) {
