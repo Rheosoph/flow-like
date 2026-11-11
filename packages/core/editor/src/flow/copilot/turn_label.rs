@@ -15,7 +15,7 @@ use flow_like_types::data_classification::{DataClassification, DataSensitivity};
 use serde_json::{Value, json};
 
 use super::bot_run::BotRunContext;
-use super::bot_talk::{ASK_BOT_TOOL, BotTalk};
+use super::bot_talk::{ASK_BOT_TOOL, BotTalk, effective_level};
 use super::platform::PlatformToolBridge;
 
 /// Tools that send what they were given out of the platform or to another principal: mail,
@@ -144,7 +144,7 @@ impl TurnCompute {
 
 pub(super) struct TurnLabel {
     level: Mutex<DataSensitivity>,
-    own: Option<DataClassification>,
+    own: DataClassification,
     talk: Option<Arc<BotTalk>>,
 }
 
@@ -152,7 +152,7 @@ impl TurnLabel {
     pub(super) fn new(bot: &BotRunContext, talk: Option<Arc<BotTalk>>) -> Arc<Self> {
         let label = Arc::new(Self {
             level: Mutex::new(DataSensitivity::default()),
-            own: bot.classification.classification,
+            own: effective_level(&bot.classification),
             talk,
         });
         label.raise(bot.seed_taint);
@@ -204,7 +204,7 @@ impl TurnLabel {
             return None;
         }
         let seen = self.get().classification?;
-        if seen <= self.own.unwrap_or(DataClassification::Public) {
+        if seen <= self.own {
             return None;
         }
         Some(
@@ -262,12 +262,24 @@ mod tests {
     use super::*;
     use crate::flow::copilot::tool_spec::find_global_tool_spec;
 
-    fn label(own: Option<DataClassification>) -> Arc<TurnLabel> {
+    fn label(own: DataClassification) -> Arc<TurnLabel> {
         Arc::new(TurnLabel {
             level: Mutex::new(DataSensitivity::default()),
             own,
             talk: None,
         })
+    }
+
+    #[test]
+    fn an_unclassified_bot_counts_as_internal_like_the_answers_it_reads() {
+        let label = TurnLabel::new(&BotRunContext::general(), None);
+        label.observe(r#"{"status":"ok","tool":"ask_bot","classification":"internal"}"#);
+        assert!(label.refusal("internet_search", &json!({})).is_none());
+        label.raise(DataSensitivity {
+            classification: Some(DataClassification::Confidential),
+            pii: false,
+        });
+        assert!(label.refusal("internet_search", &json!({})).is_some());
     }
 
     #[test]
@@ -288,7 +300,7 @@ mod tests {
 
     #[test]
     fn a_label_above_the_bots_level_refuses_every_outbound_tool_and_only_those() {
-        let label = label(Some(DataClassification::Internal));
+        let label = label(DataClassification::Internal);
         label.raise(DataSensitivity {
             classification: Some(DataClassification::Confidential),
             pii: false,
@@ -304,7 +316,7 @@ mod tests {
 
     #[test]
     fn a_download_or_a_linked_attachment_is_outbound_and_a_local_file_is_not() {
-        let label = label(Some(DataClassification::Internal));
+        let label = label(DataClassification::Internal);
         label.raise(DataSensitivity {
             classification: Some(DataClassification::Confidential),
             pii: false,
@@ -373,7 +385,7 @@ mod tests {
 
     #[test]
     fn an_answer_marked_confidential_raises_the_label() {
-        let label = label(Some(DataClassification::Internal));
+        let label = label(DataClassification::Internal);
         label.observe(r#"{"status":"ok","tool":"ask_bot","classification":"confidential"}"#);
         assert!(label.refusal("email_send", &json!({})).is_some());
     }

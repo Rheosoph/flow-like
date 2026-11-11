@@ -749,27 +749,72 @@ pub(crate) fn write_trigger(
     message_id: &str,
     body: &TriggerBody,
 ) -> Result<InboxEntry> {
-    if !is_valid_message_id(message_id) {
-        return Err(Error::invalid(format!(
-            "message_id '{}' must be 1 to 64 characters of A-Z, a-z, 0-9, '_' and '-'",
-            message_id.chars().take(80).collect::<String>()
-        )));
-    }
+    check_trigger_id(message_id)?;
     let conversation_id = open_direct(tx, bot_id, changes)?;
-    if let Some(existing) = entry_by_message_id(tx, message_id)? {
-        return repeated(existing, &conversation_id, LOCAL_OWNER_ID);
+    insert_trigger(tx, changes, &conversation_id, message_id, body)
+}
+
+/// The trigger entry of `body` in `conversation_id`, a group the person and `bot_id` are both
+/// still in, inside the caller's transaction. `None` when the group is gone or either left it.
+pub(crate) fn write_group_trigger(
+    tx: &Connection,
+    changes: &mut Changes,
+    conversation_id: &str,
+    bot_id: &str,
+    message_id: &str,
+    body: &TriggerBody,
+) -> Result<Option<InboxEntry>> {
+    check_trigger_id(message_id)?;
+    if !in_group(tx, conversation_id, bot_id)? {
+        return Ok(None);
     }
-    let at = next_event_time(tx, &conversation_id)?;
+    insert_trigger(tx, changes, conversation_id, message_id, body).map(Some)
+}
+
+/// Whether `conversation_id` is a group the person and `bot_id` are both still in.
+pub(crate) fn in_group(db: &Connection, conversation_id: &str, bot_id: &str) -> Result<bool> {
+    let kind: Option<String> = db
+        .prepare_cached("SELECT kind FROM conversations WHERE id = ?1")?
+        .query_row([conversation_id], |row| row.get(0))
+        .optional()?;
+    if kind.as_deref().and_then(ConversationKind::parse) != Some(ConversationKind::Group) {
+        return Ok(false);
+    }
+    Ok(membership(db, conversation_id, bot_id)?.is_some()
+        && membership(db, conversation_id, LOCAL_OWNER_ID)?.is_some())
+}
+
+fn check_trigger_id(message_id: &str) -> Result<()> {
+    if is_valid_message_id(message_id) {
+        return Ok(());
+    }
+    Err(Error::invalid(format!(
+        "message_id '{}' must be 1 to 64 characters of A-Z, a-z, 0-9, '_' and '-'",
+        message_id.chars().take(80).collect::<String>()
+    )))
+}
+
+fn insert_trigger(
+    tx: &Connection,
+    changes: &mut Changes,
+    conversation_id: &str,
+    message_id: &str,
+    body: &TriggerBody,
+) -> Result<InboxEntry> {
+    if let Some(existing) = entry_by_message_id(tx, message_id)? {
+        return repeated(existing, conversation_id, LOCAL_OWNER_ID);
+    }
+    let at = next_event_time(tx, conversation_id)?;
     let entry = insert_event(
         tx,
-        &conversation_id,
+        conversation_id,
         message_id,
         LOCAL_OWNER_ID,
         InboxEntryKind::Trigger,
         body.envelope(),
         at,
     )?;
-    changes.conversation(&conversation_id);
+    changes.conversation(conversation_id);
     Ok(entry)
 }
 

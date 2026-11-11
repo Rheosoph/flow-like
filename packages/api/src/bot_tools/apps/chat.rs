@@ -429,7 +429,8 @@ impl AppTools {
             return Ok(Vec::new());
         }
         let files = self.files.as_ref().ok_or_else(|| {
-            "forward_files is not available on this host. Call again with forward_files [].".to_string()
+            "forward_files is not available on this host. Call again with forward_files []."
+                .to_string()
         })?;
         let mut attachments = Vec::with_capacity(names.len());
         for name in names {
@@ -558,7 +559,10 @@ mod tests {
             json!([{ "role": "user", "content": "hi" }])
         );
         assert_eq!(payload["attachments"], json!([file]));
-        assert_eq!(chat_payload("c1", "hi", Vec::new())["attachments"], json!([]));
+        assert_eq!(
+            chat_payload("c1", "hi", Vec::new())["attachments"],
+            json!([])
+        );
     }
 
     #[test]

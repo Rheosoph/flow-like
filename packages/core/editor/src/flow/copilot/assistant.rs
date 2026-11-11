@@ -250,8 +250,7 @@ After the local-first check, use your built-in web search and page fetch for mis
 
 Record the exact URL and retrieval date for every fact that gets persisted. Preserve disagreements, single-source limits, and what could not be established. Never promote a search snippet or unsupported claim into verified fact, and never fabricate coordinates, figures, or sources."#;
 
-const SEALED_ROUTING_INTRO: &str =
-    "## EXISTING APPS, EVENTS, DATA, AND PUBLIC RESEARCH
+const SEALED_ROUTING_INTRO: &str = "## EXISTING APPS, EVENTS, DATA, AND PUBLIC RESEARCH
 
 Local apps are the first choice, including installed research/search apps.";
 

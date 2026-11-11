@@ -25,7 +25,7 @@ mod tests;
 
 pub(crate) use access::{ApiAccess, owner_credentials};
 pub(crate) use executor::{DispatcherExecutor, ToolExecutor};
-pub(crate) use host::{AppDirectory, BotToolsHost, TurnDeps, TurnModels};
+pub(crate) use host::{BotToolsHost, TurnDeps, TurnModels};
 pub(crate) use turn_files::AttachedFile;
 
 use flow_like::flow::copilot::HostTools;
@@ -120,7 +120,12 @@ pub(crate) async fn turn_host(
     let notifier = std::sync::Arc::new(
         crate::bot_notify::ServerNotifier::new(state, &bot.bot_id, site).with_turn(turn_id),
     );
-    let scheduler = std::sync::Arc::new(schedule::ApiScheduler::new(state, owner, &bot.bot_id));
+    let scheduler = std::sync::Arc::new(schedule::ApiScheduler::new(
+        state,
+        owner,
+        &bot.bot_id,
+        turn_id,
+    ));
     let crew = (bot.toolset == flow_like::flow::copilot::BotToolset::FlowPilot).then(|| {
         std::sync::Arc::new(crew::ApiCrew::new(
             state,

@@ -40,14 +40,6 @@ pub struct Model {
     pub app: BelongsTo<Option<super::app::Entity>>,
     #[sea_orm(
         belongs_to,
-        from = "technical_user_id",
-        to = "id",
-        on_update = "Cascade",
-        on_delete = "SetNull"
-    )]
-    pub technical_user: BelongsTo<Option<super::technical_user::Entity>>,
-    #[sea_orm(
-        belongs_to,
         from = "user_id",
         to = "id",
         on_update = "Cascade",

@@ -322,7 +322,8 @@ model BotWebhook {
 
 /// A task a bot runs for its owner at a time: once (`runAt`) or on a cron schedule in a time
 /// zone. A maintenance sweep claims due tasks with a compare-and-set on `nextRunAt` and writes a
-/// `trigger` entry (source `schedule`) into the bot's conversation with its owner.
+/// `trigger` entry (source `schedule`) into the bot's conversation with its owner, or into
+/// `conversationId` as `requestedBy` when the task was scheduled in another conversation.
 model BotTask {
   id          String    @id
   botId       String
@@ -344,6 +345,10 @@ model BotTask {
   createdBy   String
   createdAt   DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+  /// The group or chat the task was scheduled in; NULL fires in the owner's chat with the bot.
+  conversationId String?
+  /// The person whose request scheduled the task; its trigger is sent as them.
+  requestedBy    String?
 
   @@index([botId])
   @@index([enabled, nextRunAt])

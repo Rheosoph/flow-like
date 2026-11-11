@@ -1587,7 +1587,10 @@
 			"tz": "",
 			"monitoring": "",
 			"monitoringHint": "",
-			"monitoringLabel": ""
+			"monitoringLabel": "",
+			"placeDirect": "",
+			"placeGroup": "",
+			"placeUnnamedGroup": ""
 		},
 		"waitingForYou": "",
 		"webhooks": {

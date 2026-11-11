@@ -189,8 +189,20 @@ pub(crate) async fn execute(
         runtime.clone(),
         options.attachments.clone(),
     ));
-    let scheduler =
-        super::bot_tools::schedule::scheduler_for(app, &runtime.context.bot_id, host.clone()).await;
+    let turn_conversation = options
+        .inbox_conversation_id
+        .clone()
+        .or_else(|| context.and_then(|context| context.conversation_id.clone()));
+    let scheduler = super::bot_tools::schedule::scheduler_for(
+        app,
+        &runtime.context.bot_id,
+        host.clone(),
+        super::bot_tools::schedule::TaskTurn {
+            turn_id: runtime.turn_id.clone(),
+            conversation_id: turn_conversation.clone(),
+        },
+    )
+    .await;
     let rights = host
         .app_rights(options.inbox_conversation_id.as_deref())
         .await;
@@ -204,12 +216,7 @@ pub(crate) async fn execute(
         auto_approved,
     )
     .with_rights(Some(rights))
-    .with_turn_conversation(
-        options
-            .inbox_conversation_id
-            .clone()
-            .or_else(|| context.and_then(|context| context.conversation_id.clone())),
-    )
+    .with_turn_conversation(turn_conversation)
     .with_configuration(Arc::new(
         super::bot_tools::configuration::DesktopConfiguration::new(app, runtime.clone(), host.clone()),
     ))

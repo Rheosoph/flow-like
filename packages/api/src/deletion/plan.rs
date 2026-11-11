@@ -872,8 +872,6 @@ mod tests {
             ("EventSetup", "Event"),
             ("EventAlias", "Event"),
             ("EventSink", "Event"),
-            ("ExecutionRun", "TechnicalUser"),
-            ("LLMUsageTracking", "TechnicalUser"),
         ] {
             assert_before(&plan, child, parent);
         }
@@ -913,15 +911,6 @@ mod tests {
         let auth = drain_index(&plan, "EventRemoteAuth");
         assert!(
             registration < auth_null && auth_null < auth,
-            "{}",
-            render(&plan)
-        );
-
-        let runs = drain_index(&plan, "ExecutionRun");
-        let run_null = null_out_index(&plan, "ExecutionRun", "technicalUserId");
-        let technical_user = drain_index(&plan, "TechnicalUser");
-        assert!(
-            runs < run_null && run_null < technical_user,
             "{}",
             render(&plan)
         );

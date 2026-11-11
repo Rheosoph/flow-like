@@ -1,7 +1,8 @@
 //! The `schedule` tools of the `scheduling` capability: a bot schedules work for itself, once
 //! ("remind me tomorrow at 9", "check the report in 2 hours") or on a cron schedule in a time
-//! zone. A task that fires wakes the bot with its instruction and the answer lands in the chat
-//! with its owner. The host keeps the tasks behind [`Scheduler`].
+//! zone. A task that fires wakes the bot with its instruction in the conversation it was
+//! scheduled in: the owner's chat, or the group or chat where someone else asked for it. The host
+//! keeps the tasks behind [`Scheduler`] and decides where a task fires, never the tool's arguments.
 
 use std::sync::Arc;
 
@@ -117,7 +118,7 @@ pub fn specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: SCHEDULE_TASK,
-            description: "Schedule work for yourself. Proactively set a one-time follow-up when an ongoing topic has a useful next action at a known future time, such as checking an expected reply or revisiting a deadline. Check `list_tasks` first to avoid duplicates and respect the owner's reminder preferences. Give exactly one of `at` (an RFC 3339 time with offset, resolved in the owner's time zone), `in_minutes` (relative, for \"in 2 hours\") or `cron` (recurring, with `tz`). Prefer `at` or `in_minutes` for follow-ups; use `cron` only for an established recurring need. When it fires you get the instruction as a message from the owner and answer in their chat. Include enough context to resume and confirm a reminder only after it is saved. A recurring task runs at most every 5 minutes; a bot keeps at most 50 tasks.",
+            description: "Schedule work for yourself. Proactively set a one-time follow-up when an ongoing topic has a useful next action at a known future time, such as checking an expected reply or revisiting a deadline. Check `list_tasks` first to avoid duplicates and respect the owner's reminder preferences. Give exactly one of `at` (an RFC 3339 time with offset, resolved in the owner's time zone), `in_minutes` (relative, for \"in 2 hours\") or `cron` (recurring, with `tz`). Prefer `at` or `in_minutes` for follow-ups; use `cron` only for an established recurring need. It fires in this conversation: you get the instruction as a message from the person who asked and answer there. In a group everyone reads the instruction, so keep your owner's private details out of it. Include enough context to resume and confirm a reminder only after it is saved. A recurring task runs at most every 5 minutes; a bot keeps at most 50 tasks.",
             capability: Some(CAPABILITY),
             module: "schedule",
             approval: Approval::None,
@@ -127,7 +128,7 @@ pub fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: LIST_TASKS,
-            description: "List your scheduled tasks with their next run time, soonest first.",
+            description: "List your scheduled tasks with their next run time, soonest first. A task with a `conversation` fires in that group or chat; the others fire in your owner's chat.",
             capability: Some(CAPABILITY),
             module: "schedule",
             approval: Approval::None,
@@ -396,6 +397,7 @@ mod tests {
                 monitoring: request.monitoring,
                 created_by: TaskCreator::Bot,
                 created_at: Utc::now().to_rfc3339(),
+                conversation: None,
             };
             self.tasks.lock().unwrap().push(task.clone());
             Ok(task)

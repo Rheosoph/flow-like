@@ -167,6 +167,23 @@ describe("BotTasksView", () => {
 		expect(deleted.map((item) => item.id)).toEqual(["t1"]);
 	});
 
+	test("a task scheduled in a group or someone else's chat says where it fires", async () => {
+		await show([
+			task({}),
+			task({
+				id: "t2",
+				conversation: { id: "c1", kind: "group", title: "Team" },
+			}),
+			task({ id: "t3", conversation: { id: "c2", kind: "group" } }),
+			task({ id: "t4", conversation: { id: "c3", kind: "direct" } }),
+		]);
+		const rows = [...container.querySelectorAll('[data-slot="bot-task"]')];
+		expect(rows[0]?.textContent).not.toMatch(/In (Team|a )/);
+		expect(rows[1]?.textContent).toContain("In Team · ");
+		expect(rows[2]?.textContent).toContain("In a group chat · ");
+		expect(rows[3]?.textContent).toContain("In a chat with someone else · ");
+	});
+
 	test("the form stays disabled until a once task has an instruction and a time", async () => {
 		await show([]);
 		expect(container.textContent).toContain("No tasks yet");

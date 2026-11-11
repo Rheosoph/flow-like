@@ -1585,7 +1585,10 @@
 			"tz": "Time zone",
 			"monitoring": "Only report meaningful changes",
 			"monitoringHint": "Uses the bot's decision model after each check. Leave off for reminders and regular reports.",
-			"monitoringLabel": "Monitoring"
+			"monitoringLabel": "Monitoring",
+			"placeDirect": "In a chat with someone else",
+			"placeGroup": "In {{name}}",
+			"placeUnnamedGroup": "In a group chat"
 		},
 		"waitingForYou": "Waiting for you",
 		"webhooks": {

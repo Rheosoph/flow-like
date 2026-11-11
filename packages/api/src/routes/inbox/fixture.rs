@@ -120,6 +120,25 @@ pub(crate) fn bot_principal(id: &str) -> Principal {
     }
 }
 
+/// A group `id`, titled after its id, that `creator` started with `others`.
+pub(crate) async fn group(
+    db: &DatabaseConnection,
+    id: &str,
+    creator: &str,
+    others: &[Principal],
+    encryption: flow_like_types::inbox::ConversationEncryption,
+) {
+    let plan = super::conversations::NewConversation {
+        kind: flow_like_types::inbox::ConversationKind::Group,
+        title: Some(id.into()),
+        members: Vec::new(),
+        encryption,
+    };
+    super::conversations::start_group(db, id, creator, &plan, others, at(0))
+        .await
+        .unwrap();
+}
+
 pub(crate) fn assert_code(error: &ApiError, status: StatusCode, code: &str) {
     assert_eq!(
         (error.status(), error.public_code()),

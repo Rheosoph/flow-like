@@ -1036,6 +1036,31 @@ fn a_trigger_addresses_a_bot_in_a_group() {
     assert!(found.is_some_and(|waiting| waiting.addressed));
 }
 
+#[test]
+fn a_trigger_naming_a_bot_addresses_only_that_bot_in_a_group() {
+    use flow_like_types::inbox::ConversationKind;
+    let mut trigger = entry(plain_envelope(json!({
+        "source": "schedule", "ref_id": "task", "title": "Daily", "text": "Remind the team",
+        "bot_id": "bot",
+    })));
+    trigger.kind = InboxEntryKind::Trigger;
+    trigger.sender_id = flow_like_local_bots::LOCAL_OWNER_ID.into();
+    let waiting = |bot_id: &str, mentioned_only: bool| {
+        crate::rule::waiting(
+            ConversationKind::Group,
+            bot_id,
+            &[trigger.clone()],
+            trigger.created_at,
+            mentioned_only,
+            false,
+        )
+    };
+    for mentioned_only in [true, false] {
+        assert!(waiting("bot", mentioned_only).is_some_and(|waiting| waiting.addressed));
+        assert!(waiting("other", mentioned_only).is_none());
+    }
+}
+
 #[tokio::test]
 async fn an_approval_parks_the_turn_instead_of_answering() {
     let f = Fixture::start(Mode::Park, vec![plain("summarize the report")]);

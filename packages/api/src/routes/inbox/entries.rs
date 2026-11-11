@@ -805,6 +805,9 @@ async fn deliver<'e, C: ConnectionTrait>(
             .recipients
             .retain(|recipient| recipient.bot_id == bot_id);
     }
+    if event.kind == InboxEntryKind::Trigger && !outgoing.links.mentions.is_empty() {
+        delivery.recipients.retain(|recipient| recipient.mentioned);
+    }
     let answers_an_approval = match &outgoing.content {
         Content::Plain(envelope) => {
             super::approvals::answers_card(

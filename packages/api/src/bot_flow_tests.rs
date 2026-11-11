@@ -213,3 +213,51 @@ fn the_bot_mcp_door_runs_as_the_bot_and_never_as_the_owner() {
             .contains("person_user_id()")
     );
 }
+
+fn references_technical_user<E: sea_orm::EntityTrait>() -> bool {
+    use sea_orm::{Iterable, RelationTrait, sea_query::TableRef};
+    <E::Relation as Iterable>::iter().any(|relation| {
+        matches!(&relation.def().to_tbl, TableRef::Table(name, _) if name.1.inner() == "TechnicalUser")
+    })
+}
+
+/// A bot's run records the bot id as `technicalUserId`, and a bot has no `TechnicalUser` row:
+/// a foreign key there refuses every run a bot starts (`23503`, surfaced as `DATABASE_ERROR`).
+#[test]
+fn technical_user_id_holds_bot_ids_without_a_foreign_key() {
+    use crate::entity::{
+        embedding_usage_tracking, execution_run, execution_usage_daily, execution_usage_tracking,
+        llm_usage_tracking,
+    };
+    for (table, references) in [
+        (
+            "ExecutionRun",
+            references_technical_user::<execution_run::Entity>(),
+        ),
+        (
+            "ExecutionUsageTracking",
+            references_technical_user::<execution_usage_tracking::Entity>(),
+        ),
+        (
+            "ExecutionUsageDaily",
+            references_technical_user::<execution_usage_daily::Entity>(),
+        ),
+        (
+            "LLMUsageTracking",
+            references_technical_user::<llm_usage_tracking::Entity>(),
+        ),
+        (
+            "EmbeddingUsageTracking",
+            references_technical_user::<embedding_usage_tracking::Entity>(),
+        ),
+    ] {
+        assert!(
+            !references,
+            "{table}.technicalUserId references TechnicalUser"
+        );
+    }
+    assert!(
+        !include_str!("../prisma/schema/user.prisma").contains("fields: [technicalUserId]"),
+        "a Prisma relation on technicalUserId"
+    );
+}

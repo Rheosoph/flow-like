@@ -767,6 +767,16 @@ export interface IBotTask {
 	enabled: boolean;
 	created_by: "bot" | "owner";
 	created_at: string;
+	/** The group or chat the task fires in; none fires in the owner's chat with the bot. */
+	conversation?: IBotTaskConversation | null;
+}
+
+/** Where a task scheduled outside the owner's chat fires. */
+export interface IBotTaskConversation {
+	id: string;
+	kind: "group" | "direct";
+	/** The group's name, when it has one. */
+	title?: string | null;
 }
 
 export interface ICreateBotTaskRequest {

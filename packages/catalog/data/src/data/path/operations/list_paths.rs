@@ -5,8 +5,33 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
+use flow_like_storage::{
+    Path,
+    object_store::{ObjectMeta, ObjectStore},
+};
 use flow_like_types::{Error, async_trait, json::json};
 use futures::StreamExt;
+
+/// The files under `prefix`. The ETag files FlowPath keeps beside cached copies are not listed.
+async fn list_files(
+    store: &dyn ObjectStore,
+    prefix: &Path,
+    recursive: bool,
+) -> flow_like_types::Result<Vec<ObjectMeta>> {
+    let mut objects = if recursive {
+        store
+            .list(Some(prefix))
+            .map(|r| r.map_err(Error::from))
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        store.list_with_delimiter(Some(prefix)).await?.objects
+    };
+    objects.retain(|object| !is_etag_sidecar(&object.location));
+    Ok(objects)
+}
 
 #[crate::register_node]
 #[derive(Default)]
@@ -71,23 +96,10 @@ impl NodeLogic for ListPathsNode {
 
         let path = original_path.to_runtime(context).await?;
         let store = path.store.as_generic();
-
-        let file_objects = if recursive {
-            store
-                .list(Some(&path.path))
-                .map(|r| r.map_err(Error::from))
-                .collect::<Vec<_>>()
-                .await
-                .into_iter()
-                .collect::<Result<Vec<_>, _>>()?
-        } else {
-            let files = store.list_with_delimiter(Some(&path.path)).await?;
-            files.objects
-        };
+        let file_objects = list_files(store.as_ref(), &path.path, recursive).await?;
 
         let paths = file_objects
             .iter()
-            .filter(|object| !is_etag_sidecar(&object.location))
             .map(|p| {
                 let mut new_path = original_path.clone();
                 new_path.path = p.location.as_ref().to_string();

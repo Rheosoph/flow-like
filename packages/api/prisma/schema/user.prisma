@@ -193,7 +193,6 @@ model LLMUsageTracking {
   userId String?
 
   technicalUserId String?
-  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   app   App?    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String?
@@ -232,7 +231,6 @@ model EmbeddingUsageTracking {
   appId String?
 
   technicalUserId String?
-  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   price BigInt
 
@@ -268,7 +266,6 @@ model ExecutionUsageTracking {
   appId String?
 
   technicalUserId String?
-  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -298,7 +295,6 @@ model ExecutionUsageDaily {
   userId String?
 
   technicalUserId String?
-  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   app   App?    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String?
@@ -500,8 +496,10 @@ model ExecutionRun {
   app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String
 
+  /// The technical actor that started the run: an API key (`TechnicalUser.id`) or a bot
+  /// (`Bot.id`). No foreign key, because a bot is not a `TechnicalUser`; the usage tables'
+  /// `technicalUserId` copies it and has none either.
   technicalUserId String?
-  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   /// If the run was triggered through an app connection: the chain of apps
   /// that led to this run (first = original caller), stored as a JSON string

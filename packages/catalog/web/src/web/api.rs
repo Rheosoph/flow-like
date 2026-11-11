@@ -1,8 +1,7 @@
 use flow_like::flow::execution::context::ExecutionContext;
 pub use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like_catalog_core::FlowPath;
-use flow_like_storage::object_store::ObjectStoreExt;
-use flow_like_storage::object_store::PutPayload;
+use flow_like_storage::object_store::{MultipartUpload, ObjectStoreExt, WriteMultipart};
 use flow_like_types::{Value, json::Map, reqwest};
 use futures::StreamExt;
 use schemars::JsonSchema;
@@ -436,36 +435,50 @@ impl HttpRequest {
         let response = request.send().await?;
         let limit = response_limit();
         check_response_size(response.content_length(), limit)?;
-        let mut stream = response.bytes_stream();
         let rt = path.to_runtime(context).await?;
-        let store = rt.store.as_generic();
-        let mut writer = store.put_multipart(&rt.path).await?;
-
-        let transfer = within_deadline(deadline, async {
-            let mut received = 0u64;
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk?;
-                if limit.is_some() {
-                    received = received
-                        .checked_add(chunk.len() as u64)
-                        .ok_or_else(|| flow_like_types::anyhow!("HTTP response size overflow"))?;
-                    check_response_size(Some(received), limit)?;
-                }
-                writer.put_part(PutPayload::from_bytes(chunk)).await?;
-            }
-            writer.complete().await?;
-            Ok::<_, flow_like_types::Error>(())
-        })
-        .await;
-        match transfer {
-            Ok(()) => (),
-            Err(error) => {
-                let _ = writer.abort().await;
-                return Err(error);
-            }
-        }
-        Ok(())
+        let upload = rt.store.as_generic().put_multipart(&rt.path).await?;
+        stream_into_upload(response.bytes_stream(), upload, limit, deadline)
+            .await
+            .map_err(|error| {
+                flow_like_types::anyhow!("HTTP download to '{}' failed: {error}", rt.path)
+            })
     }
+}
+
+const DOWNLOAD_PARTS_IN_FLIGHT: usize = 4;
+
+/// Writes a response body into `upload` in `WriteMultipart`'s 5 MiB parts: S3
+/// rejects a completed upload whose non-final parts are smaller than that.
+async fn stream_into_upload(
+    stream: impl futures::Stream<Item = reqwest::Result<flow_like_types::Bytes>>,
+    upload: Box<dyn MultipartUpload>,
+    limit: Option<usize>,
+    deadline: Option<flow_like_types::tokio::time::Instant>,
+) -> flow_like_types::Result<()> {
+    let mut stream = std::pin::pin!(stream);
+    let mut writer = WriteMultipart::new(upload);
+    let transfer = within_deadline(deadline, async {
+        let mut received = 0u64;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            if limit.is_some() {
+                received = received
+                    .checked_add(chunk.len() as u64)
+                    .ok_or_else(|| flow_like_types::anyhow!("HTTP response size overflow"))?;
+                check_response_size(Some(received), limit)?;
+            }
+            writer.wait_for_capacity(DOWNLOAD_PARTS_IN_FLIGHT).await?;
+            writer.put(chunk);
+        }
+        Ok::<_, flow_like_types::Error>(())
+    })
+    .await;
+    if let Err(error) = transfer {
+        let _ = writer.abort().await;
+        return Err(error);
+    }
+    writer.finish().await?;
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
@@ -681,6 +694,74 @@ mod security_tests {
             .await
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod download_tests {
+    use super::*;
+    use flow_like_storage::object_store::{self, PutPayload, PutResult, UploadPart};
+    use flow_like_types::{Bytes, tokio};
+
+    const S3_MIN_PART_BYTES: usize = 5 * 1024 * 1024;
+
+    /// Completes like S3: every part but the last must hold at least 5 MiB.
+    #[derive(Debug, Default)]
+    struct S3PartRules {
+        parts: Arc<std::sync::Mutex<Vec<Bytes>>>,
+    }
+
+    #[flow_like_types::async_trait]
+    impl MultipartUpload for S3PartRules {
+        fn put_part(&mut self, data: PutPayload) -> UploadPart {
+            self.parts.lock().unwrap().push(data.into());
+            Box::pin(async { Ok(()) })
+        }
+
+        async fn complete(&mut self) -> object_store::Result<PutResult> {
+            let parts = self.parts.lock().unwrap();
+            let leading = &parts[..parts.len().saturating_sub(1)];
+            if let Some(part) = leading.iter().find(|part| part.len() < S3_MIN_PART_BYTES) {
+                return Err(object_store::Error::Generic {
+                    store: "S3",
+                    source: format!("EntityTooSmall: {} byte part", part.len()).into(),
+                });
+            }
+            Ok(PutResult {
+                e_tag: None,
+                version: None,
+            })
+        }
+
+        async fn abort(&mut self) -> object_store::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn small_response_chunks_upload_as_s3_sized_parts() {
+        let body: Vec<u8> = (0..2 * S3_MIN_PART_BYTES + 4099)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        let chunks: Vec<_> = body
+            .chunks(8192)
+            .map(|chunk| Ok::<_, std::io::Error>(Bytes::copy_from_slice(chunk)))
+            .collect();
+        let response: reqwest::Response =
+            http::Response::new(reqwest::Body::wrap_stream(futures::stream::iter(chunks))).into();
+        let upload = S3PartRules::default();
+        let parts = upload.parts.clone();
+
+        stream_into_upload(response.bytes_stream(), Box::new(upload), None, None)
+            .await
+            .unwrap();
+
+        let parts = parts.lock().unwrap();
+        assert_eq!(
+            parts.iter().map(Bytes::len).collect::<Vec<_>>(),
+            [S3_MIN_PART_BYTES, S3_MIN_PART_BYTES, 4099]
+        );
+        assert_eq!(parts.concat(), body);
     }
 }
 
