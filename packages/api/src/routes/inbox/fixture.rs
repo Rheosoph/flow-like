@@ -20,6 +20,15 @@ use sea_orm::{
 };
 use serde_json::{Value, json};
 
+pub(crate) const BOT_TURN_TABLE: &str = r#"CREATE TABLE public."BotTurn" (
+        "id" TEXT PRIMARY KEY, "botId" TEXT NOT NULL, "ownerId" TEXT NOT NULL,
+        "conversationId" TEXT NOT NULL, "triggerMessageId" TEXT NOT NULL,
+        "hostKind" TEXT NOT NULL, "status" TEXT NOT NULL, "attempts" INTEGER NOT NULL,
+        "hostId" TEXT, "leaseUntil" TEXT, "operationId" TEXT, "replyMessageId" TEXT,
+        "errorCode" TEXT, "hops" INTEGER NOT NULL, "requesterId" TEXT,
+        "audience" TEXT NOT NULL DEFAULT 'OWNER', "statusText" TEXT, "createdAt" TEXT NOT NULL,
+        "updatedAt" TEXT NOT NULL, UNIQUE ("botId", "triggerMessageId"))"#;
+
 const TABLES: [&str; 8] = [
     r#"CREATE TABLE public."Conversation" (
         "id" TEXT PRIMARY KEY, "kind" TEXT NOT NULL, "title" TEXT, "encryption" TEXT NOT NULL,
@@ -40,14 +49,7 @@ const TABLES: [&str; 8] = [
     r#"CREATE TABLE public."App" ("id" TEXT PRIMARY KEY, "botId" TEXT UNIQUE)"#,
     r#"CREATE TABLE public."User" (
         "id" TEXT PRIMARY KEY, "name" TEXT, "email" TEXT, "username" TEXT, "preferredUsername" TEXT, "additionalInformation" TEXT, "updatedAt" TEXT)"#,
-    r#"CREATE TABLE public."BotTurn" (
-        "id" TEXT PRIMARY KEY, "botId" TEXT NOT NULL, "ownerId" TEXT NOT NULL,
-        "conversationId" TEXT NOT NULL, "triggerMessageId" TEXT NOT NULL,
-        "hostKind" TEXT NOT NULL, "status" TEXT NOT NULL, "attempts" INTEGER NOT NULL,
-        "hostId" TEXT, "leaseUntil" TEXT, "operationId" TEXT, "replyMessageId" TEXT,
-        "errorCode" TEXT, "hops" INTEGER NOT NULL, "requesterId" TEXT,
-        "audience" TEXT NOT NULL DEFAULT 'OWNER', "statusText" TEXT, "createdAt" TEXT NOT NULL,
-        "updatedAt" TEXT NOT NULL, UNIQUE ("botId", "triggerMessageId"))"#,
+    BOT_TURN_TABLE,
     r#"CREATE TABLE public."ConversationSegment" (
         "id" TEXT PRIMARY KEY, "conversationId" TEXT NOT NULL, "authorId" TEXT NOT NULL,
         "level" INTEGER NOT NULL, "seqFrom" INTEGER NOT NULL, "seqTo" INTEGER NOT NULL,

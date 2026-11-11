@@ -58,7 +58,11 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "../../ui/tooltip";
-import { type ProcessedAttachment, getDisplayFileName } from "./attachment";
+import {
+	type ProcessedAttachment,
+	attachmentKey,
+	getDisplayFileName,
+} from "./attachment";
 
 type SortKey = "name" | "type" | "size";
 type FilterKey = ProcessedAttachment["type"] | "all";
@@ -205,8 +209,17 @@ export function FileDialog({
 	const [sortBy, setSortBy] = useState<SortKey>("name");
 	const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
 	const [filterType, setFilterType] = useState<FilterKey>("all");
-	const [selectedFile, setSelectedFile] = useState<ProcessedAttachment | null>(
+	const [pickedFile, setSelectedFile] = useState<ProcessedAttachment | null>(
 		initialSelectedFile ?? null,
+	);
+	const selectedFile = useMemo(
+		() =>
+			pickedFile
+				? (files.find(
+						(file) => attachmentKey(file) === attachmentKey(pickedFile),
+					) ?? pickedFile)
+				: null,
+		[files, pickedFile],
 	);
 	const [isPreviewMaximized, setIsPreviewMaximized] = useState(false);
 	const isMobile = useIsMobile();
@@ -280,7 +293,11 @@ export function FileDialog({
 	const handleFileSelect = useCallback(
 		(file: ProcessedAttachment) => {
 			if (canPreview(file)) {
-				setSelectedFile(selectedFile?.url === file.url ? null : file);
+				setSelectedFile(
+					selectedFile && attachmentKey(selectedFile) === attachmentKey(file)
+						? null
+						: file,
+				);
 			} else {
 				handleFileClick(file);
 			}
@@ -587,7 +604,7 @@ export function FileDialog({
 							{isMobile && selectedFile && (
 								<div className="min-h-0 flex-1 overflow-hidden bg-muted/20">
 									<FileDialogPreview
-										key={selectedFile.url}
+										key={attachmentKey(selectedFile)}
 										file={selectedFile}
 									/>
 								</div>
@@ -639,7 +656,7 @@ export function FileDialog({
 											</div>
 											<div className="flex-1 min-h-0 overflow-hidden">
 												<FileDialogPreview
-													key={selectedFile.url}
+													key={attachmentKey(selectedFile)}
 													file={selectedFile}
 												/>
 											</div>
@@ -702,7 +719,10 @@ function FileList({
 					grid={viewMode === "grid"}
 					key={index}
 					file={file}
-					isSelected={selectedFile?.url === file.url}
+					isSelected={
+						selectedFile !== null &&
+						attachmentKey(selectedFile) === attachmentKey(file)
+					}
 					onSelect={onFileSelect}
 					handleFileClick={handleFileClick}
 					canPreview={canPreview}

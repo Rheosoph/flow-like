@@ -66,6 +66,8 @@ pub struct TurnJob {
     pub notes: Option<flow_like::flow::copilot::bot_notes::NotesHandle>,
     /// The turn's tool trail, set only in the owner's direct conversation with the bot.
     pub trail: Option<flow_like::flow::copilot::ToolTrail>,
+    /// The files the bot attaches to its reply, for a host that posts them with it.
+    pub reply_files: Option<flow_like::flow::copilot::ReplyFiles>,
 }
 
 impl TurnJob {

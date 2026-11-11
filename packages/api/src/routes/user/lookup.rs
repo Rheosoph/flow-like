@@ -10,8 +10,9 @@ use crate::{
             EXACT_MATCH_BONUS, MAX_SEARCH_LEN, PREFIX_MATCH_BONUS, RankableUser,
             SUBSTRING_MATCH_BONUS, SearchTerm, TOKEN_MATCH_PENALTY, WEIGHT_EMAIL, WEIGHT_ID,
             WEIGHT_NAME, WEIGHT_PREFERRED_USERNAME, WEIGHT_USERNAME, WORD_PREFIX_MATCH_BONUS,
-            escape_like_pattern, is_exact_identifier_match, is_idp_handle, normalize_search_query,
-            score_candidate,
+            escape_like_pattern, is_email_like, is_exact_identifier_match, is_idp_handle,
+            normalize_search_query, public_display_name, public_handle, score_candidate,
+            shared_email,
         },
         sign_avatar,
     },
@@ -133,29 +134,34 @@ impl UserLookupResponse {
         .current(chrono::Utc::now().timestamp_millis())
         .without_calendar_schedule();
         // Rows provisioned before display names were derived — and every row
-        // `ensure_user_exists` creates — carry no name, and with `lookup.email` off
+        // `ensure_user_exists` creates — carry no name, and with the address hidden
         // there is then nothing left to render but the raw id. `derive_display_name`
         // already treats the email local part as the last rung of that ladder, so
         // reuse it here instead of showing a uuid where a person belongs. The domain
-        // never leaves the server, so this stays inside the `email` opt-out.
+        // never leaves the server. The handle stays its own field, so it is not a
+        // rung here.
         let name = lookup
             .name
-            .then(|| {
-                crate::bot_host::history::public_person_name(
-                    user.name.as_deref(),
-                    user.email.as_deref(),
-                )
-            })
+            .then(|| public_display_name(user.name.as_deref(), None, user.email.as_deref()))
             .flatten();
+        // Sign-ins that map the address into the handle, and directories whose login
+        // name is the address, must not share it through a field the person did not
+        // choose to share it in.
+        let preferred_username = lookup
+            .preferred_username
+            .then(|| user.preferred_username.as_deref().and_then(public_handle))
+            .flatten();
+        let username = lookup
+            .username
+            .then_some(user.username)
+            .flatten()
+            .filter(|username| !is_email_like(username));
 
         UserLookupResponse {
             id: user.id,
-            email: lookup.email.then_some(user.email).flatten(),
-            username: lookup.username.then_some(user.username).flatten(),
-            preferred_username: lookup
-                .preferred_username
-                .then_some(user.preferred_username)
-                .flatten(),
+            email: shared_email(lookup, user.share_email, user.email),
+            username,
+            preferred_username,
             name,
             avatar_url: lookup.avatar.then_some(avatar_url).flatten(),
             additional_information: lookup
@@ -415,30 +421,57 @@ fn exact_identity_score(value: &str) -> SimpleExpr {
         .into()
 }
 
-/// The columns a human search term can legitimately land in. `username` is the
-/// pool-internal handle, but a pasted one still has to resolve.
-fn any_column_contains(pattern: &str) -> Condition {
-    Condition::any()
-        .add(ilike_contains(user::Column::Name, pattern))
-        .add(ilike_contains(user::Column::PreferredUsername, pattern))
-        .add(ilike_contains(user::Column::Email, pattern))
-        .add(ilike_contains(user::Column::Username, pattern))
+/// A name or handle that holds an address is shown as something else, so a part of
+/// that address must not find it either.
+fn shown_text_contains(column: user::Column, pattern: &str) -> Condition {
+    Condition::all()
+        .add(ilike_contains(column, pattern))
+        .add(Expr::col(column).not_like("%@%"))
+}
+
+/// The address a result shows, as [`shared_email`] decides it: every member's where
+/// the hub shows them, otherwise only those whose owner shares it. A hidden address
+/// reads as NULL, so no part of it finds or ranks its account.
+fn shown_email(lookup: &Lookup) -> SimpleExpr {
+    let email = Expr::col(user::Column::Email);
+    if lookup.email {
+        return email.into();
+    }
+    Expr::case(user::Column::ShareEmail.eq(true), email).into()
+}
+
+/// The columns a typed term may be found in: what a result shows. An address or
+/// login name that is hidden only resolves when it is pasted whole, through
+/// `exact_identity_condition` — a substring match on it would let anyone list the
+/// accounts behind a mail domain.
+fn any_column_contains(pattern: &str, lookup: &Lookup) -> Condition {
+    use sea_orm::sea_query::extension::postgres::PgExpr;
+    let mut condition = Condition::any()
+        .add(shown_text_contains(user::Column::Name, pattern))
+        .add(shown_text_contains(
+            user::Column::PreferredUsername,
+            pattern,
+        ))
+        .add(shown_email(lookup).ilike(pattern));
+    if lookup.username {
+        condition = condition.add(ilike_contains(user::Column::Username, pattern));
+    }
+    condition
 }
 
 /// Every token has to land somewhere, but not all of them in the same column.
 /// Matching the phrase as one contiguous string is what made "Felix Schultz" miss
-/// `name = 'Schultz, Felix'` and `email = 'felix.schultz@…'` — the two places a
-/// directory most often keeps a person.
-fn search_condition(term: &SearchTerm) -> Condition {
+/// `name = 'Schultz, Felix'`.
+fn search_condition(term: &SearchTerm, lookup: &Lookup) -> Condition {
     let patterns = term.token_patterns();
     if patterns.is_empty() {
-        return any_column_contains(&term.like_pattern());
+        return any_column_contains(&term.like_pattern(), lookup);
     }
 
     patterns
         .iter()
         .fold(Condition::all(), |condition, pattern| {
-            condition.add(any_column_contains(pattern))
+            condition.add(any_column_contains(pattern, lookup))
         })
 }
 
@@ -456,46 +489,99 @@ fn word_prefix_pattern(value: &str) -> String {
     escaped
 }
 
-fn best_field_score(needle: &str) -> SimpleExpr {
+/// What a result is ranked on, with the weights. A hidden address or login name
+/// ranks nothing, or the order of the results would say whose it is.
+fn ranked_fields(lookup: &Lookup) -> Vec<(SimpleExpr, i32)> {
+    let column = |column: user::Column| -> SimpleExpr { Expr::col(column).into() };
+    let mut fields = vec![
+        (column(user::Column::Name), WEIGHT_NAME),
+        (
+            column(user::Column::PreferredUsername),
+            WEIGHT_PREFERRED_USERNAME,
+        ),
+        (shown_email(lookup), WEIGHT_EMAIL),
+        (column(user::Column::Id), WEIGHT_ID),
+    ];
+    if lookup.username {
+        fields.push((column(user::Column::Username), WEIGHT_USERNAME));
+    }
+    fields
+}
+
+/// The Rust side of [`ranked_fields`].
+fn ranked_candidate<'a>(candidate: &'a user::Model, lookup: &Lookup) -> RankableUser<'a> {
+    let email_shown = lookup.email || candidate.share_email == Some(true);
+    RankableUser {
+        id: &candidate.id,
+        name: candidate.name.as_deref(),
+        preferred_username: candidate.preferred_username.as_deref(),
+        username: candidate.username.as_deref().filter(|_| lookup.username),
+        email: candidate.email.as_deref().filter(|_| email_shown),
+        has_avatar: candidate.avatar.is_some(),
+    }
+}
+
+/// Every identifier a pasted term may equal, whether a result shows it or not.
+fn identifiers(candidate: &user::Model) -> RankableUser<'_> {
+    RankableUser {
+        id: &candidate.id,
+        email: candidate.email.as_deref(),
+        username: candidate.username.as_deref(),
+        preferred_username: candidate.preferred_username.as_deref(),
+        ..Default::default()
+    }
+}
+
+fn best_field_score(needle: &str, lookup: &Lookup) -> SimpleExpr {
+    use sea_orm::sea_query::extension::postgres::PgExpr;
     let escaped = escape_like_pattern(needle);
     let prefix = format!("{escaped}%");
     let substring = format!("%{escaped}%");
     let word_prefix = word_prefix_pattern(needle);
-    let fields = [
-        (user::Column::Name, WEIGHT_NAME),
-        (user::Column::PreferredUsername, WEIGHT_PREFERRED_USERNAME),
-        (user::Column::Email, WEIGHT_EMAIL),
-        (user::Column::Id, WEIGHT_ID),
-        (user::Column::Username, WEIGHT_USERNAME),
-    ];
 
     Func::cust(Alias::new("GREATEST"))
-        .args(fields.map(|(column, weight)| -> SimpleExpr {
-            Expr::case(ilike_eq(column, needle), EXACT_MATCH_BONUS + weight)
-                .case(ilike_contains(column, &prefix), PREFIX_MATCH_BONUS + weight)
-                .case(
-                    Expr::col(column).binary(PgBinOper::RegexCaseInsensitive, word_prefix.clone()),
-                    WORD_PREFIX_MATCH_BONUS + weight,
-                )
-                .case(
-                    ilike_contains(column, &substring),
-                    SUBSTRING_MATCH_BONUS + weight,
-                )
-                .finally(0)
-                .into()
-        }))
+        .args(
+            ranked_fields(lookup)
+                .into_iter()
+                .map(|(field, weight)| -> SimpleExpr {
+                    Expr::case(
+                        field.clone().ilike(escaped.as_str()),
+                        EXACT_MATCH_BONUS + weight,
+                    )
+                    .case(
+                        field.clone().ilike(prefix.as_str()),
+                        PREFIX_MATCH_BONUS + weight,
+                    )
+                    .case(
+                        field
+                            .clone()
+                            .binary(PgBinOper::RegexCaseInsensitive, word_prefix.clone()),
+                        WORD_PREFIX_MATCH_BONUS + weight,
+                    )
+                    .case(
+                        field.ilike(substring.as_str()),
+                        SUBSTRING_MATCH_BONUS + weight,
+                    )
+                    .finally(0)
+                    .into()
+                }),
+        )
         .into()
 }
 
 /// Mirrors `score_candidate` before LIMIT. Fetching a wider unordered pool still
 /// loses exact names and strong prefixes once enough weaker rows match.
-fn candidate_score(term: &SearchTerm) -> SimpleExpr {
-    let phrase = best_field_score(&term.lower);
+fn candidate_score(term: &SearchTerm, lookup: &Lookup) -> SimpleExpr {
+    let phrase = best_field_score(&term.lower, lookup);
     let best = if term.tokens.is_empty() {
         phrase
     } else {
         let weakest: SimpleExpr = Func::cust(Alias::new("LEAST"))
-            .args(term.tokens.iter().map(|token| best_field_score(token)))
+            .args(
+                term.tokens
+                    .iter()
+                    .map(|token| best_field_score(token, lookup)),
+            )
             .into();
         Func::cust(Alias::new("GREATEST"))
             .args([phrase, weakest.sub(TOKEN_MATCH_PENALTY)])
@@ -510,11 +596,12 @@ fn candidate_score(term: &SearchTerm) -> SimpleExpr {
 fn ranked_candidates(
     query: sea_orm::Select<user::Entity>,
     term: &SearchTerm,
+    lookup: &Lookup,
     limit: u64,
 ) -> sea_orm::Select<user::Entity> {
     query
         .order_by(exact_identity_score(&term.lower), Order::Desc)
-        .order_by(candidate_score(term), Order::Desc)
+        .order_by(candidate_score(term, lookup), Order::Desc)
         .order_by_asc(user::Column::Id)
         .limit(limit)
 }
@@ -524,7 +611,7 @@ fn ranked_candidates(
     path = "/user/search/{query}",
     tag = "user",
     params(
-        ("query" = String, Path, description = "Name, handle, email or user ID to search for"),
+        ("query" = String, Path, description = "Name or handle to search for, or a complete email address or user ID. Part of an address only finds people who show their email."),
         UserSearchQuery
     ),
     responses(
@@ -586,7 +673,7 @@ pub async fn user_search(
         ),
     );
     let exact_query = match &term {
-        Some(term) => ranked_candidates(exact_query, term, limit),
+        Some(term) => ranked_candidates(exact_query, term, &lookup_config, limit),
         None => exact_query
             .order_by(exact_identity_score(trimmed), Order::Desc)
             .order_by_asc(user::Column::Id)
@@ -594,8 +681,9 @@ pub async fn user_search(
     };
     let fuzzy_query = term.as_ref().map(|term| {
         ranked_candidates(
-            scoped(user::Entity::find().filter(search_condition(term))),
+            scoped(user::Entity::find().filter(search_condition(term, &lookup_config))),
             term,
+            &lookup_config,
             limit,
         )
     });
@@ -639,16 +727,9 @@ pub async fn user_search(
         let mut ranked = candidates
             .into_iter()
             .map(|candidate| {
-                let rankable = RankableUser {
-                    id: &candidate.id,
-                    name: candidate.name.as_deref(),
-                    preferred_username: candidate.preferred_username.as_deref(),
-                    username: candidate.username.as_deref(),
-                    email: candidate.email.as_deref(),
-                    has_avatar: candidate.avatar.is_some(),
-                };
-                let score = score_candidate(&rankable, term);
-                let exact_identifier = is_exact_identifier_match(&rankable, &term.lower);
+                let score = score_candidate(&ranked_candidate(&candidate, &lookup_config), term);
+                let exact_identifier =
+                    is_exact_identifier_match(&identifiers(&candidate), &term.lower);
                 ((exact_identifier, score), candidate)
             })
             .collect::<Vec<_>>();
@@ -672,16 +753,7 @@ pub async fn user_search(
     // one round trip per result.
     let normalized_lower = trimmed.to_lowercase();
     let responses = futures::future::join_all(candidates.into_iter().map(|candidate| {
-        let exact_match = is_exact_identifier_match(
-            &RankableUser {
-                id: &candidate.id,
-                email: candidate.email.as_deref(),
-                username: candidate.username.as_deref(),
-                preferred_username: candidate.preferred_username.as_deref(),
-                ..Default::default()
-            },
-            &normalized_lower,
-        );
+        let exact_match = is_exact_identifier_match(&identifiers(&candidate), &normalized_lower);
         let lookup_config = lookup_config.clone();
         let state = &state;
         async move {
@@ -700,24 +772,132 @@ mod tests {
     use super::*;
     use sea_orm::DbBackend;
 
-    fn fuzzy_sql(query: &str) -> String {
+    /// A hub that shows every member's address and login name.
+    fn identifiers_shown() -> Lookup {
+        Lookup {
+            email: true,
+            username: true,
+            ..Lookup::default()
+        }
+    }
+
+    /// The WHERE clause of a fuzzy search. The select list names every column, so
+    /// only the condition says which ones a term is looked for in.
+    fn fuzzy_sql(query: &str, lookup: &Lookup) -> String {
         let term = SearchTerm::parse(query).unwrap();
-        user::Entity::find()
-            .filter(search_condition(&term))
+        let sql = user::Entity::find()
+            .filter(search_condition(&term, lookup))
             .build(DbBackend::Postgres)
-            .to_string()
+            .to_string();
+        let (_, condition) = sql.split_once(" WHERE ").expect("a filtered query");
+        condition.to_string()
     }
 
     #[test]
-    fn a_single_token_matches_the_phrase_across_every_column() {
-        let sql = fuzzy_sql("felix");
+    fn a_single_token_matches_the_phrase_across_every_shown_column() {
+        let sql = fuzzy_sql("felix", &identifiers_shown());
         assert_eq!(sql.matches("ILIKE").count(), 4);
         assert_eq!(sql.matches("'%felix%'").count(), 4);
     }
 
+    /// True when `sql` compares the address, and only ever as
+    /// `CASE WHEN "shareEmail" … THEN "email" END`: behind its owner's choice.
+    fn address_only_when_shared(sql: &str) -> bool {
+        let mentions = sql.match_indices(r#""email""#).collect::<Vec<_>>();
+        !mentions.is_empty()
+            && mentions.into_iter().all(|(at, _)| {
+                let before = sql[..at].trim_end_matches(|c: char| c == '(' || c.is_whitespace());
+                before.ends_with("THEN")
+                    && before
+                        .rfind("CASE WHEN")
+                        .is_some_and(|case| before[case..].contains(r#""shareEmail""#))
+            })
+    }
+
+    #[test]
+    fn a_hidden_address_or_login_name_is_not_found_by_a_part_of_it() {
+        let hidden = Lookup::default();
+        assert!(!hidden.email && !hidden.username);
+        for query in ["felix", "gmail.com", "felix.schultz@corp.de"] {
+            let sql = fuzzy_sql(query, &hidden);
+            assert!(address_only_when_shared(&sql), "{query}: {sql}");
+            assert!(!sql.contains(r#""username""#), "{query}: {sql}");
+        }
+
+        // An address kept in the name or the handle is not shown, so it is not
+        // searched: both columns only match values without an `@`.
+        let sql = fuzzy_sql("gmail", &hidden);
+        assert_eq!(sql.matches("ILIKE").count(), 3);
+        assert_eq!(sql.matches("NOT LIKE '%@%'").count(), 2);
+        assert!(sql.contains(r#""name" NOT LIKE '%@%'"#), "{sql}");
+        assert!(
+            sql.contains(r#""preferredUsername" NOT LIKE '%@%'"#),
+            "{sql}"
+        );
+
+        let hub_wide = Lookup {
+            email: true,
+            ..Lookup::default()
+        };
+        let sql = fuzzy_sql("gmail", &hub_wide);
+        assert!(sql.contains(r#""email" ILIKE '%gmail%'"#), "{sql}");
+        assert!(!sql.contains("shareEmail"), "{sql}");
+        assert!(!sql.contains(r#""username""#), "{sql}");
+    }
+
+    #[test]
+    fn a_hidden_address_or_login_name_does_not_rank_a_result() {
+        let term = SearchTerm::parse("felix").unwrap();
+        let score = |lookup: &Lookup| {
+            user::Entity::find()
+                .select_only()
+                .expr(candidate_score(&term, lookup))
+                .build(DbBackend::Postgres)
+                .to_string()
+        };
+        let hidden = score(&Lookup::default());
+        assert!(address_only_when_shared(&hidden), "{hidden}");
+        assert!(!hidden.contains(r#""username""#), "{hidden}");
+        assert!(hidden.contains(r#""name""#), "{hidden}");
+        assert!(hidden.contains(r#""id""#), "{hidden}");
+        let shown = score(&identifiers_shown());
+        assert!(shown.contains(r#""email""#), "{shown}");
+        assert!(!shown.contains("shareEmail"), "{shown}");
+        assert!(shown.contains(r#""username""#), "{shown}");
+
+        let row = user::Model {
+            name: Some("Someone".into()),
+            preferred_username: None,
+            email: Some("felix@example.com".into()),
+            username: Some("felix".into()),
+            ..account_row()
+        };
+        for not_shared in [None, Some(false)] {
+            let row = user::Model {
+                share_email: not_shared,
+                ..row.clone()
+            };
+            assert_eq!(
+                score_candidate(&ranked_candidate(&row, &Lookup::default()), &term),
+                0
+            );
+        }
+        let shared = user::Model {
+            share_email: Some(true),
+            ..row.clone()
+        };
+        assert!(score_candidate(&ranked_candidate(&shared, &Lookup::default()), &term) > 0);
+        assert!(score_candidate(&ranked_candidate(&row, &identifiers_shown()), &term) > 0);
+        // A pasted address still resolves the account it belongs to.
+        assert!(is_exact_identifier_match(
+            &identifiers(&row),
+            "felix@example.com"
+        ));
+    }
+
     #[test]
     fn every_token_gets_its_own_column_group() {
-        let sql = fuzzy_sql("Felix Schultz");
+        let sql = fuzzy_sql("Felix Schultz", &identifiers_shown());
         // Each token is ORed across the columns, and the groups are ANDed — a row
         // has to carry both halves, but not in the same column.
         assert_eq!(sql.matches("'%felix%'").count(), 4);
@@ -727,7 +907,7 @@ mod tests {
 
     #[test]
     fn a_typed_address_keeps_its_domain_whole() {
-        let sql = fuzzy_sql("felix.schultz@corp.de");
+        let sql = fuzzy_sql("felix.schultz@corp.de", &identifiers_shown());
         assert_eq!(sql.matches("'%corp.de%'").count(), 4);
         // A bare `de` token would match most of the directory.
         assert!(!sql.contains("'%de%'"));
@@ -736,7 +916,10 @@ mod tests {
     #[test]
     fn an_executor_search_is_scoped_before_the_candidate_cap() {
         let sql = user::Entity::find()
-            .filter(search_condition(&SearchTerm::parse("felix").unwrap()))
+            .filter(search_condition(
+                &SearchTerm::parse("felix").unwrap(),
+                &Lookup::default(),
+            ))
             .filter(membership_scope("app-1"))
             .limit(200)
             .build(DbBackend::Postgres)
@@ -783,19 +966,80 @@ mod tests {
             dev_mode: true,
             status: UserStatus::Active,
             tier: crate::entity::sea_orm_active_enums::UserTier::Pro,
+            share_email: None,
         }
     }
 
-    fn projected(lookup: &Lookup) -> serde_json::Map<String, Value> {
-        let response = UserLookupResponse::project(
-            account_row(),
-            lookup,
-            Some("https://signed.example/avatar".into()),
-        );
+    fn projected_row(row: user::Model, lookup: &Lookup) -> serde_json::Map<String, Value> {
+        let response =
+            UserLookupResponse::project(row, lookup, Some("https://signed.example/avatar".into()));
         match serde_json::to_value(response).unwrap() {
             Value::Object(fields) => fields,
             other => panic!("a lookup response is an object, got {other}"),
         }
+    }
+
+    fn projected(lookup: &Lookup) -> serde_json::Map<String, Value> {
+        projected_row(account_row(), lookup)
+    }
+
+    #[test]
+    fn an_address_is_shown_only_when_the_person_or_the_hub_shares_it() {
+        let hidden = Lookup::default();
+        assert_eq!(projected(&hidden)["email"], Value::Null);
+
+        let with_sharing = |share_email: bool| user::Model {
+            share_email: Some(share_email),
+            ..account_row()
+        };
+        let shared = projected_row(with_sharing(true), &hidden);
+        assert_eq!(shared["email"], "person@example.com");
+        // The choice itself is not part of the profile other people read.
+        assert!(!shared.contains_key("share_email"));
+        assert_eq!(
+            projected_row(with_sharing(false), &hidden)["email"],
+            Value::Null
+        );
+
+        let hub_wide = Lookup {
+            email: true,
+            ..Lookup::default()
+        };
+        assert_eq!(
+            projected_row(with_sharing(false), &hub_wide)["email"],
+            "person@example.com"
+        );
+    }
+
+    #[test]
+    fn an_address_kept_as_name_handle_or_login_name_is_never_shown() {
+        let address = "felix.schultz@example.com";
+        // What a sign-in that maps the address into the handle left behind.
+        let row = user::Model {
+            email: Some(address.into()),
+            preferred_username: Some(address.into()),
+            name: Some(address.into()),
+            username: Some("google_110293847561029384756".into()),
+            ..account_row()
+        };
+        let wire = projected_row(row.clone(), &Lookup::default());
+        assert_eq!(wire["name"], "Felix Schultz");
+        assert_eq!(wire["preferred_username"], Value::Null);
+        assert_eq!(wire["email"], Value::Null);
+        assert!(!Value::Object(wire).to_string().contains("example.com"));
+
+        let login_is_address = user::Model {
+            username: Some(address.into()),
+            ..row
+        };
+        let login_names_shown = Lookup {
+            username: true,
+            ..Lookup::default()
+        };
+        let wire = projected_row(login_is_address, &login_names_shown);
+        assert_eq!(wire["username"], Value::Null);
+        assert!(!Value::Object(wire).to_string().contains("example.com"));
+        assert_eq!(projected(&login_names_shown)["username"], "person");
     }
 
     #[test]
@@ -850,19 +1094,30 @@ mod tests {
     fn availability_is_public_but_calendar_handles_and_preferences_stay_private() {
         let mut row = account_row();
         let until = chrono::Utc::now().timestamp_millis() + 60_000;
-        row.additional_information = Some(serde_json::json!({"team":"ops","_flow_like_availability":{
-            "status_override":{"status":"focus","source":"manual","until":until},
-            "calendar_links":[{"id":"link","provider_id":"google","label":"Work","connection_handle":"fl_oauth_private"}],
-            "preferences":{"allow_mentions":false,"allow_calls":true}
-        }}));
+        row.additional_information = Some(
+            serde_json::json!({"team":"ops","_flow_like_availability":{
+                "status_override":{"status":"focus","source":"manual","until":until},
+                "calendar_links":[{"id":"link","provider_id":"google","label":"Work","connection_handle":"fl_oauth_private"}],
+                "preferences":{"allow_mentions":false,"allow_calls":true}
+            }}),
+        );
         let response = UserLookupResponse::project(
             row,
-            &Lookup { additional_information: true, ..Lookup::default() },
+            &Lookup {
+                additional_information: true,
+                ..Lookup::default()
+            },
             None,
         );
         let value = serde_json::to_value(response).unwrap();
-        assert_eq!(value["availability"], serde_json::json!({"status":"focus","source":"manual","until":until}));
-        assert_eq!(value["additional_information"], serde_json::json!({"team":"ops"}));
+        assert_eq!(
+            value["availability"],
+            serde_json::json!({"status":"focus","source":"manual","until":until})
+        );
+        assert_eq!(
+            value["additional_information"],
+            serde_json::json!({"team":"ops"})
+        );
         assert!(!value.to_string().contains("fl_oauth_private"));
         assert!(!value.to_string().contains("allow_mentions"));
     }
@@ -1027,9 +1282,11 @@ mod tests {
     #[test]
     fn ranking_precedes_the_limit_with_a_stable_tie_breaker() {
         let term = SearchTerm::parse("Felix Schultz").unwrap();
+        let lookup = Lookup::default();
         let sql = ranked_candidates(
-            user::Entity::find().filter(search_condition(&term)),
+            user::Entity::find().filter(search_condition(&term, &lookup)),
             &term,
+            &lookup,
             10,
         )
         .build(DbBackend::Postgres)
@@ -1054,12 +1311,14 @@ mod tests {
     #[test]
     fn invitation_exclusions_are_inside_the_ranked_query() {
         let term = SearchTerm::parse("felix").unwrap();
+        let lookup = Lookup::default();
         let sql = ranked_candidates(
             user::Entity::find()
-                .filter(search_condition(&term))
+                .filter(search_condition(&term, &lookup))
                 .filter(invitation_candidates("target", "caller"))
                 .filter(user::Column::Status.ne(UserStatus::Banned)),
             &term,
+            &lookup,
             10,
         )
         .build(DbBackend::Postgres)
@@ -1083,7 +1342,8 @@ mod tests {
             r#"
             CREATE TABLE public."User" (
                 id text PRIMARY KEY, name text, email text, username text,
-                "preferredUsername" text, avatar text, status text NOT NULL
+                "preferredUsername" text, avatar text, status text NOT NULL,
+                "shareEmail" boolean
             );
             CREATE TABLE public."Membership" ("userId" text NOT NULL, "appId" text NOT NULL);
             CREATE TABLE public."Invitation" ("userId" text NOT NULL, "appId" text NOT NULL);
@@ -1110,13 +1370,15 @@ mod tests {
         .await
         .unwrap();
 
+        let lookup = Lookup::default();
         let term = SearchTerm::parse("felix").unwrap();
         let ids = ranked_candidates(
             user::Entity::find()
-                .filter(search_condition(&term))
+                .filter(search_condition(&term, &lookup))
                 .filter(invitation_candidates("target", "caller"))
                 .filter(user::Column::Status.ne(UserStatus::Banned)),
             &term,
+            &lookup,
             3,
         )
         .select_only()
@@ -1135,6 +1397,7 @@ mod tests {
                     .add(ilike_eq(user::Column::Name, &identifier.raw)),
             ),
             &identifier,
+            &lookup,
             1,
         )
         .select_only()
@@ -1147,8 +1410,9 @@ mod tests {
 
         let literal = SearchTerm::parse("A+B.[100%]").unwrap();
         let ids = ranked_candidates(
-            user::Entity::find().filter(search_condition(&literal)),
+            user::Entity::find().filter(search_condition(&literal, &lookup)),
             &literal,
+            &lookup,
             10,
         )
         .select_only()
@@ -1169,12 +1433,12 @@ mod tests {
         ] {
             let term = SearchTerm::parse(query).unwrap();
             let scores = user::Entity::find()
-                .filter(search_condition(&term))
+                .filter(search_condition(&term, &lookup))
                 .filter(user::Column::Id.is_in(["exact", "prefix", "word"]))
                 .select_only()
                 .column(user::Column::Id)
                 .column(user::Column::Name)
-                .expr(candidate_score(&term))
+                .expr(candidate_score(&term, &lookup))
                 .into_tuple::<(String, String, i32)>()
                 .all(&txn)
                 .await

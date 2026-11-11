@@ -18,11 +18,15 @@ struct RecordingSink {
 
 #[async_trait]
 impl NoticeSink for RecordingSink {
+    /// Idempotent by id, as the production dispatch is.
     async fn send(&self, id: &str, input: DispatchNotificationInput) -> Result<()> {
-        self.sent
-            .lock()
-            .unwrap()
-            .push((id.to_string(), input.clone()));
+        {
+            let mut sent = self.sent.lock().unwrap();
+            if sent.iter().any(|(sent_id, _)| sent_id == id) {
+                return Ok(());
+            }
+            sent.push((id.to_string(), input.clone()));
+        }
         let db = self.db.lock().unwrap().clone().expect("db");
         notification::ActiveModel {
             id: Set(id.to_string()),
@@ -139,7 +143,7 @@ async fn responding_to_a_background_event_keeps_its_reply_without_an_owner_push(
         turn(&db, "t1", "TRIGGER", 0).await;
         inbox_entry::ActiveModel {
             id: Set("reply-entry".into()),
-            inbox_id: Set("user-a".into()),
+            inbox_id: Set("bot_1".into()),
             conversation_id: Set("c1".into()),
             message_id: Set("re-1".into()),
             sender_id: Set("bot_1".into()),

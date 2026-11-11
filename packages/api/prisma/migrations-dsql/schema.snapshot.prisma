@@ -4948,6 +4948,9 @@ model User {
   tutorialCompleted    Boolean @default(false)
   devMode              Boolean @default(false)
 
+  // Other people see `email` only once its owner turned this on. Null is off.
+  shareEmail Boolean? @default(false)
+
   memberships                 Membership[]
   profiles                    Profile[]
   personalAccessToken         PAT[]

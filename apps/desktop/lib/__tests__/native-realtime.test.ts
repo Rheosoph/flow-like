@@ -124,6 +124,31 @@ describe("native realtime subscriptions", () => {
 		expect(acknowledgments()).toHaveLength(0);
 	});
 
+	test("hands over a reply while a batch is in flight and never acknowledges it", async () => {
+		vi.useFakeTimers();
+		invoke.mockResolvedValue(undefined);
+		const input = options();
+		input.onMessage.mockImplementationOnce(() => new Promise<void>(() => {}));
+		const close = watchNativeRealtime(input);
+		channels[0].onmessage(update);
+		await vi.advanceTimersByTimeAsync(0);
+		const reply = {
+			type: "reply",
+			reply: { conversation_id: "c-1", message_id: "re-1", text: "Hello" },
+		};
+		input.onMessage.mockImplementationOnce(() => {
+			throw new Error("Consumer failed");
+		});
+		channels[0].onmessage(reply);
+		channels[0].onmessage(reply);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(input.onMessage.mock.calls.slice(1)).toEqual([[reply], [reply]]);
+		expect(acknowledgments()).toHaveLength(0);
+		close();
+		channels[0].onmessage(reply);
+		expect(input.onMessage).toHaveBeenCalledTimes(3);
+	});
+
 	test("supplies expected identity and stops accepting callbacks after cleanup", async () => {
 		invoke.mockResolvedValue(undefined);
 		const input = options();

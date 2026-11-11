@@ -14,9 +14,10 @@ use flow_like::flow::copilot::tool_spec::{ToolEffect, resolve_tool_approval, res
 use flow_like::flow::copilot::{HostTools, find_bot_tool_spec, tool_outcome_output};
 use flow_like_bot_tools::MemorySessions;
 use flow_like_bot_tools_host::{
-    AppAccess, HostEnv, JobConnector, JobModels, JobScope, JobSecrets, ModelSource, SecretSource,
-    ToolJob,
+    AppAccess, ConversationFiles, HostEnv, JobConnector, JobFile, JobModels, JobScope, JobSecrets,
+    ModelSource, SecretSource, ToolJob,
 };
+use flow_like_types::bot_message::CONVERSATION_FILE_APP_PREFIX;
 use flow_like_types::tokio::sync::OnceCell;
 use flow_like_types::{bot_message::ApprovalRequest, tool_grant::ApprovalDecision};
 use serde_json::{Value, json};
@@ -29,8 +30,50 @@ use super::{
 };
 
 const MAX_EXECUTOR_JOBS_PER_TURN: usize = 30;
+const MAX_JOB_FILES: usize = 16;
 const IMAGE_TOOL: &str = "image_generate";
 const EXECUTOR_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// The conversation files a turn's tools may read: here through [`ConversationFiles`], on the
+/// executor through a link signed for one job.
+#[async_trait]
+pub(crate) trait TurnFiles: ConversationFiles {
+    /// The file with its read link; `None` when the turn has no such file.
+    async fn link(
+        &self,
+        conversation_id: &str,
+        path: &str,
+    ) -> flow_like_types::Result<Option<JobFile>>;
+}
+
+/// The conversation files `args` name by handle, as `(conversation id, path)`.
+fn conversation_handles(args: &Value) -> Vec<(String, String)> {
+    fn collect(value: &Value, found: &mut Vec<(String, String)>) {
+        match value {
+            Value::Object(fields) => {
+                let conversation_id = fields
+                    .get("app_id")
+                    .and_then(Value::as_str)
+                    .and_then(|app_id| app_id.strip_prefix(CONVERSATION_FILE_APP_PREFIX));
+                let path = fields.get("path").and_then(Value::as_str);
+                if let (Some(conversation_id), Some(path), true) =
+                    (conversation_id, path, fields.contains_key("sha256"))
+                {
+                    let handle = (conversation_id.to_string(), path.to_string());
+                    if !found.contains(&handle) {
+                        found.push(handle);
+                    }
+                }
+                fields.values().for_each(|value| collect(value, found));
+            }
+            Value::Array(items) => items.iter().for_each(|item| collect(item, found)),
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    collect(args, &mut found);
+    found
+}
 
 /// What the owner holds, resolved when the first tool runs: which apps the bot reaches with
 /// which rights, and a credential scoped to each of them for the executor.
@@ -84,6 +127,7 @@ pub(crate) struct BotToolsHost {
     mail: Option<Arc<dyn flow_like_bot_tools::email::MailBackend>>,
     images: Option<Arc<super::images::ImageBits>>,
     apps: Option<Arc<super::apps::AppTools>>,
+    files: Option<Arc<dyn TurnFiles>>,
 }
 
 fn refusal(tool: &str, code: &str, message: &str) -> String {
@@ -155,7 +199,30 @@ impl BotToolsHost {
             mail: None,
             images: None,
             apps: None,
+            files: None,
         }
+    }
+
+    pub(crate) fn with_files(mut self, files: Arc<dyn TurnFiles>) -> Self {
+        self.files = Some(files);
+        self
+    }
+
+    /// A read link for each conversation file the call names; the executor holds no store for
+    /// them. A file the turn may not read gets none, and the tool reports it as missing.
+    async fn job_files(&self, args: &Value) -> Result<Vec<JobFile>, String> {
+        let Some(files) = &self.files else {
+            return Ok(Vec::new());
+        };
+        let mut linked = Vec::new();
+        for (conversation_id, path) in conversation_handles(args).into_iter().take(MAX_JOB_FILES) {
+            let link = files
+                .link(&conversation_id, &path)
+                .await
+                .map_err(|error| format!("Cannot prepare file '{path}' for the tool: {error}"))?;
+            linked.extend(link);
+        }
+        Ok(linked)
     }
 
     pub(crate) fn set_inference(&self, inference: Arc<dyn AuthorizationInference>) {
@@ -275,6 +342,12 @@ impl BotToolsHost {
 
     pub(crate) fn handles(&self, tool: &str) -> bool {
         self.app_tools(tool).is_some() || (is_bot_tool(tool) && self.deps.host_tools.runs(tool))
+    }
+
+    /// A secret of the turn's bot for an integration the platform runs for it, such as its
+    /// owner's web research key. A secret the server cannot open reads as absent.
+    pub(crate) async fn secret(&self, name: &str) -> Option<String> {
+        self.deps.secrets.secret(name).await.ok().flatten()
     }
 
     async fn scope(&self) -> Result<&JobScope, String> {
@@ -492,7 +565,14 @@ impl BotToolsHost {
         if let Some(mail) = &self.mail {
             env = env.with_mail(mail.clone());
         }
-        tool_outcome_output(&flow_like_bot_tools::run(tool, args, &env).await)
+        if let Some(files) = &self.files {
+            env = env.with_conversation_files(files.clone());
+        }
+        let outcome = flow_like_bot_tools::run(tool, args, &env).await;
+        if let Some(error) = &outcome.error {
+            tracing::info!(tool, turn_id = %self.deps.turn_id, code = error.code, "[bot_tools] tool call failed");
+        }
+        tool_outcome_output(&outcome)
     }
 
     async fn build_job(
@@ -520,6 +600,7 @@ impl BotToolsHost {
             _ => None,
         };
         let args_for_connectors = args.clone();
+        let files = self.job_files(&args).await?;
         let mut secrets = BTreeMap::new();
         for name in flow_like_bot_tools::secrets::referenced_secrets(&args) {
             let value = self
@@ -551,6 +632,7 @@ impl BotToolsHost {
             secrets: JobSecrets(secrets),
             connectors: self.job_connectors(tool, &args_for_connectors).await?,
             skill_call: self.skill_job(tool, &args_for_connectors).await?,
+            files,
         };
         serde_json::to_string(&job).map_err(|error| format!("Cannot encode the tool job: {error}"))
     }

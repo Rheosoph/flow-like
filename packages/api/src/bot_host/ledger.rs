@@ -1364,7 +1364,10 @@ pub(crate) async fn hand_back_in<C: ConnectionTrait>(
     let sealed = conversation::Entity::find()
         .select_only()
         .column(conversation::Column::Id)
-        .filter(conversation::Column::Encryption.eq(ConversationEncryption::E2e.as_str()))
+        .filter(
+            conversation::Column::Encryption
+                .eq(ConversationEncryption::E2e.as_str().to_ascii_uppercase()),
+        )
         .into_query();
     let unclaimed: Vec<String> = bot_turn::Entity::find()
         .select_only()

@@ -123,7 +123,7 @@ impl JsonSchema for FileRef {
 
     fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
         json_schema!({
-            "description": "A file: a workspace path ('bot/notes/a.md'), another app's storage path ('app:<app_id>/<path>' or {app_id, path}), a message attachment ('#12.a1') or a handle {app_id, path, bytes, sha256, mime}.",
+            "description": "A file: a workspace path ('bot/notes/a.md'), another app's storage path ('app:<app_id>/<path>' or {app_id, path}) or a handle {app_id, path, bytes, sha256, mime}. A message attachment is read by the handle shown with it as `file = {…}`.",
             "oneOf": [
                 { "type": "string" },
                 {
@@ -292,6 +292,67 @@ pub async fn resolve(
     }
 }
 
+/// Where a reference points, after the access checks a read makes; nothing is read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Located {
+    pub app_id: String,
+    pub path: String,
+    pub name: String,
+}
+
+impl Located {
+    fn new(app_id: &str, path: &str, name: &str) -> Self {
+        Self {
+            app_id: app_id.to_string(),
+            path: path.to_string(),
+            name: name.to_string(),
+        }
+    }
+}
+
+pub async fn locate(env: &dyn ToolEnv, reference: &FileRef) -> ToolResult<Located> {
+    match reference {
+        FileRef::Workspace(path) => {
+            let workspace = workspace_of(env, "read workspace files")?;
+            Ok(Located::new(&workspace, path, file_name(path)))
+        }
+        FileRef::App { app_id, path } => {
+            require_storage_read(env, app_id)?;
+            Ok(Located::new(app_id, path, file_name(path)))
+        }
+        FileRef::Handle(handle) => {
+            if !env.handle_granted(handle) {
+                require_storage_read(env, &handle.app_id)?;
+            }
+            Ok(Located::new(
+                &handle.app_id,
+                &handle.path,
+                file_name(&handle.path),
+            ))
+        }
+        FileRef::Attachment { seq, part } => {
+            let attachment = message_attachment(env, *seq, part).await?;
+            Ok(Located::new(
+                &attachment.handle.app_id,
+                &attachment.handle.path,
+                &attachment.name,
+            ))
+        }
+    }
+}
+
+async fn message_attachment(
+    env: &dyn ToolEnv,
+    seq: u64,
+    part: &str,
+) -> ToolResult<crate::env::Attachment> {
+    env.message_attachment(seq, part).await?.ok_or_else(|| {
+        ToolError::not_found(format!(
+            "'#{seq}.{part}' cannot be read here. Pass the attachment's handle instead: the `file = {{…}}` value shown with it"
+        ))
+    })
+}
+
 async fn resolve_handle(
     env: &dyn ToolEnv,
     handle: &WorkspaceHandle,
@@ -319,9 +380,7 @@ async fn resolve_attachment(
     part: &str,
     max_bytes: u64,
 ) -> ToolResult<ResolvedFile> {
-    let attachment = env.message_attachment(seq, part).await?.ok_or_else(|| {
-        ToolError::not_found(format!("Message #{seq} has no attachment '{part}'"))
-    })?;
+    let attachment = message_attachment(env, seq, part).await?;
     let source = &attachment.handle;
     let workspace = env.scope().workspace.clone();
     let Some(workspace) = workspace else {

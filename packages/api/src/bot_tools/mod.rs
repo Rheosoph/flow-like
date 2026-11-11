@@ -18,6 +18,7 @@ mod schedule;
 mod scope;
 mod secrets;
 pub(crate) mod skills;
+mod turn_files;
 
 #[cfg(test)]
 mod tests;
@@ -25,6 +26,7 @@ mod tests;
 pub(crate) use access::{ApiAccess, owner_credentials};
 pub(crate) use executor::{DispatcherExecutor, ToolExecutor};
 pub(crate) use host::{AppDirectory, BotToolsHost, TurnDeps, TurnModels};
+pub(crate) use turn_files::AttachedFile;
 
 use flow_like::flow::copilot::HostTools;
 
@@ -44,6 +46,7 @@ pub(crate) fn executor_for(state: &AppState) -> Option<std::sync::Arc<dyn ToolEx
 }
 
 /// The bot tools of one turn, including configuration tools before a workspace exists.
+/// `attached` holds the files of the message being answered, by attachment name.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn turn_host(
     state: &AppState,
@@ -58,6 +61,7 @@ pub(crate) async fn turn_host(
     conv_id: Option<&str>,
     context_conversation: Option<&str>,
     site: Option<flow_like_bot_tools::TurnSite>,
+    attached: std::collections::BTreeMap<String, AttachedFile>,
 ) -> Option<std::sync::Arc<BotToolsHost>> {
     let workspace = bot.workspace_app_id.clone().unwrap_or_default();
     let principal = BotUser {
@@ -195,6 +199,11 @@ pub(crate) async fn turn_host(
         std::sync::Arc::new(profile.clone()),
         flow_like_state.clone(),
         bot.image_model.clone(),
+    )))
+    .with_files(std::sync::Arc::new(turn_files::ApiTurnFiles::new(
+        state,
+        &bot.bot_id,
+        attached,
     )));
     let host = if bot.tool_host == flow_like::flow::copilot::BotToolHost::Hosted {
         host.with_apps(std::sync::Arc::new(apps::AppTools::new(

@@ -9175,9 +9175,28 @@ dependencies = [
  "cssparser 0.37.0",
  "foldhash 0.2.0",
  "html5ever 0.39.0",
+ "nom 8.0.0",
  "precomputed-hash",
  "selectors 0.38.0",
  "tendril 0.5.0",
+]
+
+[[package]]
+name = "dom_smoothie"
+version = "0.18.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1afbed996f0bcb119c068504c7c504d625700d58c8bd862d6f66abd7ae7d3859"
+dependencies = [
+ "dom_query",
+ "flagset",
+ "foldhash 0.2.0",
+ "gjson",
+ "html-escape",
+ "once_cell",
+ "phf 0.13.1",
+ "tendril 0.5.0",
+ "thiserror 2.0.18",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -12111,6 +12130,7 @@ dependencies = [
  "async-trait",
  "blake3",
  "chrono",
+ "dom_smoothie",
  "flow-like-ast",
  "flow-like-bot-memory",
  "flow-like-bot-tools",
@@ -14351,6 +14371,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "gjson"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43503cc176394dd30a6525f5f36e838339b8b5619be33ed9a7783841580a97b6"
+
+[[package]]
 name = "gl"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15634,6 +15660,12 @@ dependencies = [
  "markup5ever_rcdom",
  "phf 0.13.1",
 ]
+
+[[package]]
+name = "html-escape"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9356095b4b41197bba32173600e1582792cda618f65d12f68e2e77d273413c5"
 
 [[package]]
 name = "html5ever"

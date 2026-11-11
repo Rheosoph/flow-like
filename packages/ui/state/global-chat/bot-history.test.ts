@@ -614,4 +614,68 @@ describe("the import of the IndexedDB chat", () => {
 			await globalChatDb.markers.get(`bot-chat-imported:${BOT}`),
 		).toBeDefined();
 	});
+
+	test("a bot reply carries its link and workspace attachments as files", async () => {
+		const handle = {
+			app_id: "app1",
+			path: "bot/files/a b.pdf",
+			bytes: 5,
+			sha256: "s",
+			mime: "application/pdf",
+		};
+		const withParts = (seq: number, sender: string, parts: unknown[]) =>
+			entry(seq, sender, "see", {
+				envelope: { v: 1, enc: "none", body: { text: "see", parts } },
+			});
+		const entries = [
+			withParts(1, "user_1", [
+				{
+					kind: "attachment",
+					id: "a1",
+					name: "u.pdf",
+					url: "https://a.test/u.pdf",
+				},
+			]),
+			withParts(2, BOT, [
+				{ kind: "attachment", id: "a1", name: "a b.pdf", handle },
+				{
+					kind: "attachment",
+					id: "a2",
+					name: "l.pdf",
+					url: "https://a.test/l.pdf",
+					mime: "application/pdf",
+				},
+				{
+					kind: "attachment",
+					id: "a3",
+					name: "c.pdf",
+					handle: { ...handle, app_id: "conversation_c1" },
+				},
+			]),
+		];
+		const inbox = {
+			async listEntries() {
+				return {
+					entries,
+					next_before: null,
+					next_to_seq: null,
+					next_from_seq: null,
+				};
+			},
+			async listSegments() {
+				return { segments: [] as IConversationSegment[], next_after: null };
+			},
+		} as unknown as IInboxState;
+		const page = await loadLatest(inbox, target, "bot:bot_ada", 50);
+		expect(page.messages[0].files).toEqual([]);
+		expect(page.messages[1].files).toEqual([
+			{
+				url: "storage://apps/app1/app/bot/files/a%20b.pdf",
+				name: "a b.pdf",
+				type: "application/pdf",
+				size: 5,
+			},
+			{ url: "https://a.test/l.pdf", name: "l.pdf", type: "application/pdf" },
+		]);
+	});
 });

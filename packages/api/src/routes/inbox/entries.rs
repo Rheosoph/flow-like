@@ -1223,6 +1223,9 @@ pub async fn send_entry(
         }
         SendAs::Bot { bot_id, claim } if is_interactive_host(&claim.host_id) => {
             let bot = owned_bot(&state.db, &sub, &bot_id).await?;
+            let outgoing =
+                super::reply_files::adopted(&state, &conversation_id, &bot.id, outgoing.clone())
+                    .await?;
             let sent =
                 send_as_interactive(&state, &conversation_id, &bot.id, &claim, &outgoing).await;
             (bot.id, sent)
@@ -1232,6 +1235,9 @@ pub async fn send_entry(
             let sent = match answer_origin(&state.db, &bot.id, &claim, &outgoing).await? {
                 Some((turn, origin)) => {
                     destination = origin.clone();
+                    let outgoing =
+                        super::reply_files::adopted(&state, &origin, &bot.id, outgoing.clone())
+                            .await?;
                     super::exchange::reply_in_origin(
                         &state,
                         &turn,
@@ -1241,7 +1247,16 @@ pub async fn send_entry(
                     )
                     .await
                 }
-                _ => send_as_bot(&state, &conversation_id, &bot.id, &claim, &outgoing).await,
+                _ => {
+                    let outgoing = super::reply_files::adopted(
+                        &state,
+                        &conversation_id,
+                        &bot.id,
+                        outgoing.clone(),
+                    )
+                    .await?;
+                    send_as_bot(&state, &conversation_id, &bot.id, &claim, &outgoing).await
+                }
             };
             (bot.id, sent)
         }

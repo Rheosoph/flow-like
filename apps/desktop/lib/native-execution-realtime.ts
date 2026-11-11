@@ -62,6 +62,7 @@ export function followNativeExecution(
 						finish(new ExecutionDetachedError(options.run.run_id));
 					return;
 				}
+				if (message.type === "reply") return;
 				const failure = message.response.errors.find(
 					(error) => error.run_id === options.run.run_id,
 				);

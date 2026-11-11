@@ -642,7 +642,11 @@ pub struct ContextHistory {
     live: BTreeMap<String, UserContextResponse>,
     revoked: BTreeSet<String>,
     status_changes: BTreeSet<String>,
+    replies: Vec<(String, String)>,
 }
+
+const LIVE_REPLIES: usize = 8;
+const LIVE_REPLY_CHARS: usize = 2_000;
 
 impl ContextHistory {
     /// `entries` are `(sender_id, body)` pairs, oldest first.
@@ -699,6 +703,14 @@ impl ContextHistory {
                 }
             } else if own::<UserContextRevoke>(body, bot_id, sender).is_some() {
                 history.revoke(&mut sessions, sender);
+            } else if sender == bot_id
+                && let Some(request_id) = body.get(DERIVED_FIELD).and_then(Value::as_str)
+                && let Some(text) = body.get("text").and_then(Value::as_str)
+                && history.live.contains_key(request_id)
+            {
+                history
+                    .replies
+                    .push((request_id.to_owned(), text.to_owned()));
             }
         }
         history
@@ -720,8 +732,8 @@ impl ContextHistory {
             .map(|response| response.request_id.as_str())
     }
 
-    /// The live session snapshots as a system section, for turns whose history leaves the
-    /// values out.
+    /// The live session snapshots, and the bot's own replies that used them, as a system section
+    /// for turns whose history leaves both out.
     pub fn live_note(&self) -> Option<String> {
         if self.live.is_empty() {
             return None;
@@ -731,10 +743,24 @@ impl ContextHistory {
             .values()
             .map(|response| self.snapshot_line(response))
             .collect();
-        Some(format!(
+        let mut note = format!(
             "## SHARED USER CONTEXT\nThe person allowed session access to their context in this conversation. Use these snapshots instead of asking again:\n{}",
             lines.join("\n")
-        ))
+        );
+        let replies: Vec<&str> = self
+            .replies
+            .iter()
+            .filter(|(request_id, _)| self.live.contains_key(request_id))
+            .map(|(_, text)| text.as_str())
+            .collect();
+        if !replies.is_empty() {
+            note.push_str("\nYour own replies during this session, withheld from the history above (oldest first):");
+            for reply in &replies[replies.len().saturating_sub(LIVE_REPLIES)..] {
+                note.push_str("\n- ");
+                note.push_str(&reply_excerpt(reply));
+            }
+        }
+        Some(note)
     }
 
     pub fn line(&self, sender_id: &str, body: &Value) -> ContextLine {
@@ -818,6 +844,14 @@ pub fn context_note(sender_id: &str, body: &Value, bot_id: &str) -> ContextLine 
             "[Your reply here used shared user context and is withheld now.]".into(),
         ),
         Some(_) => ContextLine::Hidden,
+    }
+}
+
+fn reply_excerpt(text: &str) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    match flat.char_indices().nth(LIVE_REPLY_CHARS) {
+        Some((cut, _)) => format!("{}…", &flat[..cut]),
+        None => flat,
     }
 }
 
@@ -1238,6 +1272,15 @@ mod tests {
         assert!(text(&live[1]).contains("about 18 more min"));
         assert!(text(&live[1]).contains("52.52"));
         assert_eq!(live[2], ContextLine::Ordinary);
+        let note = ContextHistory::new(
+            window.iter().map(|(sender, body)| (*sender, body)),
+            "bot",
+            now,
+        )
+        .live_note()
+        .unwrap();
+        assert!(note.contains("52.52"));
+        assert!(note.ends_with("\n- You are near Berlin."));
 
         let ended = lines(&window, 1_001_000 + SESSION_MS);
         assert!(text(&ended[1]).contains("session that has ended"));
@@ -1290,6 +1333,7 @@ mod tests {
         );
         let note = history.live_note().unwrap();
         assert_eq!(note.matches("52.52").count(), 1);
+        assert!(!note.contains("Berlin"));
 
         window[3].0 = "owner";
         assert!(text(&lines(&window, 1_003_000)[1]).contains("52.52"));

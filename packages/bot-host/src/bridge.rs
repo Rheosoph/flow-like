@@ -110,6 +110,10 @@ impl PlatformToolBridge for ToolEnvBridge {
     async fn is_cancelled(&self) -> bool {
         self.stopped.load(Ordering::SeqCst)
     }
+
+    async fn bot_secret(&self, name: &str) -> Option<String> {
+        (self.env)(false).secret(name).await.ok().flatten()
+    }
 }
 
 #[cfg(test)]

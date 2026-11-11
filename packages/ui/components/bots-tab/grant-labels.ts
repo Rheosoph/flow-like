@@ -86,6 +86,13 @@ export function useGrantLabel(scopes: readonly string[] = []) {
 					domain: after(scope, "email:"),
 				});
 			}
+			if (scope.startsWith("owner_browser:")) {
+				return t(
+					"grants.ownerBrowser",
+					"Open sites on {{site}} in your own browser",
+					{ site: after(scope, "owner_browser:") },
+				);
+			}
 			if (scope.startsWith("browser:")) {
 				return t("grants.browser", "Open sites on {{site}}", {
 					site: after(scope, "browser:"),

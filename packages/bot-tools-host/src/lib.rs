@@ -3,14 +3,16 @@
 //! `todo/bots-capabilities/lanes/HOST-SERVER-TOOLS.md`.
 
 mod env;
+mod files;
 mod models;
 mod wire;
 
 pub use env::{AppAccess, HostEnv, ImageSource, SecretSource};
+pub use files::{ConversationFiles, LinkedFiles, read_object};
 pub use models::{ModelSource, StateModels, VisionRouted};
 pub use wire::{
-    IMAGES_FIELD, JobApp, JobConnector, JobImage, JobModels, JobScope, JobSecrets, SkillCallJob,
-    ToolJob, ToolJobEnvelope, ToolReply, connector_source, job_hash, outcome_output,
+    IMAGES_FIELD, JobApp, JobConnector, JobFile, JobImage, JobModels, JobScope, JobSecrets,
+    SkillCallJob, ToolJob, ToolJobEnvelope, ToolReply, connector_source, job_hash, outcome_output,
 };
 
 #[cfg(test)]

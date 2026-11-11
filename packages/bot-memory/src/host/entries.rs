@@ -145,7 +145,7 @@ fn message_text(body: &MessageBody) -> String {
             if !text.is_empty() {
                 text.push('\n');
             }
-            text.push_str(&format!("[file: {}]", file.name));
+            text.push_str(&file.note());
         }
     }
     text
@@ -564,6 +564,26 @@ mod email_trigger_tests {
         assert_eq!(
             item_of(&trigger_entry("schedule"), "bot").unwrap().role,
             Role::User
+        );
+    }
+
+    #[test]
+    fn a_conversation_file_in_history_keeps_the_handle_its_tools_read() {
+        let mut entry = trigger_entry("schedule");
+        entry.kind = InboxEntryKind::Message;
+        let sha = "a".repeat(64);
+        entry.envelope = json!({"v": 1, "enc": "none", "body": {"text": "Our logo", "parts": [{
+            "kind": "attachment", "id": "a1", "name": "logo.png",
+            "handle": {"app_id": "conversation_c1", "path": "f1.png", "bytes": 3, "sha256": sha, "mime": "image/png"}
+        }]}});
+        let text = item_of(&entry, "bot").unwrap().text;
+        assert!(
+            text.starts_with("Our logo\n[file: logo.png (image/png, 3 bytes)"),
+            "{text}"
+        );
+        assert!(
+            text.contains(r#"file = {"app_id":"conversation_c1","path":"f1.png""#),
+            "{text}"
         );
     }
 

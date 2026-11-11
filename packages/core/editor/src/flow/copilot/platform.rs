@@ -39,19 +39,22 @@ use rig::{
 use serde_json::{Value, json};
 use url::Url;
 
+use super::image_view::{IMAGE_VIEW_TOOL, run_image_view};
 use super::memory::AssistantMemory;
 use super::public_web::{
-    WebResearchSession, normalize_public_discovery_url, parse_public_url, public_url_spans,
-    run_archive_lookup_for_session, run_open_url_for_session, source_id_for_url,
+    MAX_OPEN_URL_CALLS_PER_ROUND, WebResearchSession, normalize_public_discovery_url,
+    open_url_round_error, parse_public_url, public_url_spans, run_archive_lookup_for_session,
+    run_open_url_for_session, run_open_url_with_reader, source_id_for_url,
 };
+pub use super::public_web::{PageReader, ReaderPage};
 use super::run_recovery::{
     BotRunRecovery, PendingCall, RecoveryPhase, RecoverySession, RunSnapshot, SavedAnswer,
     image_fingerprints,
 };
 use super::stream::{
     FlowScriptToolCallPreviewTracker, detailed_tool_end_frame, detailed_tool_start_frame,
-    plan_step_frame, safe_tool_activity_result_preview, tool_result_stream_status,
-    tool_result_summary, tool_result_terminal_status, usage_stat_frame,
+    draft_replaced_frame, plan_step_frame, safe_tool_activity_result_preview,
+    tool_result_stream_status, tool_result_summary, tool_result_terminal_status, usage_stat_frame,
 };
 use super::subtasks::{REQUEST_ID_ARGUMENT, SPAWN_SUBTASKS_TOOL};
 use super::tool_spec::{
@@ -85,7 +88,7 @@ const MAX_ROOM_REFRESHES: usize = 3;
 const MAX_SEARCH_QUERY_CHARS: usize = 512;
 const MAX_SEARCH_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_SEARCH_TITLE_CHARS: usize = 300;
-const MAX_SEARCH_SNIPPET_CHARS: usize = 1_200;
+const MAX_SEARCH_SNIPPET_CHARS: usize = 600;
 const MAX_CONCURRENT_SEARCH_CALLS: usize = 8;
 const MAX_PLATFORM_TOOL_IMAGE_REFS: usize = 12;
 const MAX_PLATFORM_TOOL_INLINE_IMAGE_BYTES: usize = 8 * 1024 * 1024;
@@ -246,6 +249,25 @@ fn split_platform_tool_output(output: String) -> (String, Vec<PlatformToolImageU
     (clean, images)
 }
 
+/// Tools this loop runs itself, so no host bridge needs an implementation of them.
+pub fn runs_in_tool_loop(name: &str) -> bool {
+    matches!(name, RESEARCH_AGENT_TOOL | IMAGE_VIEW_TOOL)
+}
+
+/// The line that introduces the images `tools` returned in one round.
+fn tool_images_note(tools: &[&str]) -> String {
+    if tools
+        .iter()
+        .all(|name| matches!(*name, "open_app_page" | "interact_app_page"))
+    {
+        return "Rendered app page capture(s) from the preceding page tool result (open_app_page / interact_app_page), ordered top-to-bottom. Inspect all images before answering about the page's content.".to_string();
+    }
+    format!(
+        "Images from the preceding tool result(s) of {}, in the order the results list them. Inspect every image before answering about what it shows.",
+        tools.join(", ")
+    )
+}
+
 fn parse_image_media_type(value: &str) -> Option<ImageMediaType> {
     match value.to_lowercase().as_str() {
         "image/jpeg" | "jpeg" | "jpg" => Some(ImageMediaType::JPEG),
@@ -395,6 +417,14 @@ pub trait PlatformToolBridge: Send + Sync {
     async fn is_cancelled(&self) -> bool {
         false
     }
+
+    /// A secret the bot's owner stored for it, read by name for an integration the platform
+    /// itself runs for the bot and that sends the value to that integration's own vendor only
+    /// (see [`super::web_providers`]). The value never enters a tool result or the model's
+    /// context. `None` where the host keeps no secrets or the bot has none of that name.
+    async fn bot_secret(&self, _name: &str) -> Option<String> {
+        None
+    }
 }
 
 /// A host's cursor over the room events a running bot has not seen yet.
@@ -441,6 +471,10 @@ impl PlatformToolBridge for RoomUpdatesBridge {
 
     async fn is_cancelled(&self) -> bool {
         self.inner.is_cancelled().await
+    }
+
+    async fn bot_secret(&self, name: &str) -> Option<String> {
+        self.inner.bot_secret(name).await
     }
 }
 
@@ -795,8 +829,10 @@ pub struct PlatformCopilot {
     tool_specs: Option<Vec<PlatformToolSpec>>,
     tool_rounds: Option<usize>,
     long_running: bool,
+    spoken_drafts: bool,
     recovery: Option<Arc<dyn BotRunRecovery>>,
     max_completion_tokens: Option<u64>,
+    web_access: WebAccess,
 }
 
 impl PlatformCopilot {
@@ -808,9 +844,17 @@ impl PlatformCopilot {
             tool_specs: None,
             tool_rounds: None,
             long_running: false,
+            spoken_drafts: false,
             recovery: None,
             max_completion_tokens: None,
+            web_access: WebAccess::default(),
         }
+    }
+
+    /// The owner's own search and page readers for this run's research.
+    pub fn with_web_access(mut self, web_access: WebAccess) -> Self {
+        self.web_access = web_access;
+        self
     }
 
     /// Bounds every model reply of the run, tool call arguments included.
@@ -841,6 +885,14 @@ impl PlatformCopilot {
     /// Keep a working plan and compact older evidence during extended bot turns.
     pub fn with_long_running(mut self) -> Self {
         self.long_running = true;
+        self
+    }
+
+    /// The reply is spoken while it is written. A room turn then hands its text to `on_token` as
+    /// it comes instead of holding it until the room is checked, and a round the check replaces
+    /// sends a [`draft_replaced_frame`].
+    pub fn with_spoken_drafts(mut self) -> Self {
+        self.spoken_drafts = true;
         self
     }
 
@@ -1194,12 +1246,18 @@ impl PlatformCopilot {
         // A run without an app inventory has no local apps to check before research.
         let mut local_app_discovery_returned = !advertised_tool_names.contains("list_apps");
         let watches_room = bridge.watches_room();
+        // A room turn keeps its text until the room is checked, unless the reply is spoken.
+        let holds_drafts = watches_room && !self.spoken_drafts;
         let mut room_refreshes_remaining = MAX_ROOM_REFRESHES;
         let mut iteration = 0;
         let mut model_calls_reserved = 0;
         let mut work_plan = WorkPlanState::default();
         let mut user_steering = Vec::new();
         let mut empty_continuations = 0usize;
+        let mut empty_replies = 0usize;
+        // The latest findings a researcher returned in this turn. They stand in for the answer
+        // when the model, having read them, writes nothing.
+        let mut research_findings: Option<String> = None;
         let mut progress_seen = HashSet::new();
         let mut stop_reason = None;
         let mut model_failed = false;
@@ -1487,7 +1545,10 @@ impl PlatformCopilot {
             if long_running && let Some(plan) = work_plan.context() {
                 merge_room_note_into_prompt(&mut request_prompt, &mut request_history, plan);
             }
-            let recover_model_failure = long_running && work_plan.revision() > 0;
+            // With a plan or research findings in hand, a provider failure ends the turn with a
+            // handoff instead of an error that discards them.
+            let recover_model_failure =
+                (long_running && work_plan.revision() > 0) || research_findings.is_some();
             let request =
                 context::cancellable(&bridge, agent.completion(request_prompt, request_history))
                     .await?;
@@ -1549,7 +1610,7 @@ impl PlatformCopilot {
                         {
                             partial_answer.lock().unwrap().push_str(&text.text);
                         }
-                        if !watches_room && let Some(ref callback) = on_token {
+                        if !holds_drafts && let Some(ref callback) = on_token {
                             callback(text.text.clone());
                         }
                         response_contents.push(AssistantContent::Text(text));
@@ -1688,6 +1749,13 @@ impl PlatformCopilot {
                 )? {
                     // The draft and its proposed tools have not been published or executed.
                     // Reuse this tool round with current context, preserving completed work.
+                    // Only a spoken draft was already heard, and its sink learns it is replaced.
+                    if !holds_drafts
+                        && !iteration_text.is_empty()
+                        && let Some(callback) = &on_token
+                    {
+                        callback(draft_replaced_frame());
+                    }
                     continue;
                 }
             }
@@ -1712,7 +1780,7 @@ impl PlatformCopilot {
                 } else {
                     full_response.push_str(&iteration_text);
                 }
-                if watches_room
+                if holds_drafts
                     && !iteration_text.is_empty()
                     && let Some(callback) = &on_token
                 {
@@ -1751,6 +1819,21 @@ impl PlatformCopilot {
                     stop_reason = Some(WorkStopReason::Blocked);
                     break;
                 }
+                // An empty reply after tool work is a model hiccup, not an answer: ask again
+                // before the turn's work is thrown away. In a room, saying nothing before any
+                // tool ran can be the reply.
+                if !round_produced_text
+                    && empty_replies < MAX_EMPTY_REPLY_RETRIES
+                    && (iteration > 0 || !watches_room)
+                {
+                    empty_replies += 1;
+                    merge_room_note_into_prompt(
+                        &mut current_prompt,
+                        &mut current_history,
+                        EMPTY_REPLY_NUDGE.into(),
+                    );
+                    continue;
+                }
                 answer_closed |= round_produced_text;
                 break;
             }
@@ -1760,7 +1843,7 @@ impl PlatformCopilot {
             if !tools_enabled {
                 if round_produced_text {
                     answer_closed = true;
-                } else {
+                } else if research_findings.is_none() {
                     if !full_response.is_empty() && !full_response.ends_with('\n') {
                         full_response.push_str("\n\n");
                     }
@@ -1872,6 +1955,9 @@ impl PlatformCopilot {
                             let timeout_secs = find_global_tool_spec(RESEARCH_AGENT_TOOL)
                                 .map(|spec| spec.timeout_secs)
                                 .unwrap_or(900);
+                            // Research ends itself inside this budget and keeps time for the
+                            // answer; the timeout around it only catches a run that hangs.
+                            let time_budget = research_time_budget(timeout_secs, recovery_deadline);
                             let progress = SealedResearchProgress {
                                 parent_request_id: &frame_ids[tool_index],
                                 on_token: on_token.as_ref().map(|callback| {
@@ -1880,13 +1966,15 @@ impl PlatformCopilot {
                             };
                             progress.lifecycle("started", "progress");
                             let outcome = context::cancellable(&bridge, tokio::time::timeout(
-                                Duration::from_secs(timeout_secs),
+                                time_budget + RESEARCH_TURN_RESERVE,
                                 run_sealed_research_agent(
                                     completion_client,
                                     &model_name,
                                     thinking.clone(),
                                     &brief,
                                     &delegated_research_session,
+                                    &self.web_access,
+                                    time_budget,
                                     &progress,
                                 ),
                             ))
@@ -1912,12 +2000,17 @@ impl PlatformCopilot {
                                     // that may cite nothing behind them is worse than no research.
                                     web_research_session
                                         .adopt_opened_urls(&outcome.opened_urls);
+                                    research_findings = Some(outcome.findings.clone());
                                     let mut result = json!({
-                                        "status": "ok",
+                                        "status": if outcome.incomplete.is_some() { "partial" } else { "ok" },
                                         "directed_by_assistant": true,
                                         "findings": outcome.findings,
                                         "citable_urls": outcome.opened_urls,
                                     });
+                                    if let Some(reason) = outcome.incomplete {
+                                        result["incomplete"] = json!(reason);
+                                        result["note"] = json!("The researcher returned page excerpts instead of a write-up. Answer from them as evidence, check them against the question yourself, and say what stays unverified.");
+                                    }
                                     if outcome.unverified_links_removed > 0 {
                                         result["unverified_links_removed"] =
                                             json!(outcome.unverified_links_removed);
@@ -1962,6 +2055,21 @@ impl PlatformCopilot {
                         "message": "Raw public-web tools are unavailable to the root assistant; direct research_agent with a self-contained question and relevant public context."
                     })
                     .to_string()),
+                    IMAGE_VIEW_TOOL => {
+                        let messages: Vec<&rig::message::Message> = current_history
+                            .iter()
+                            .chain(std::iter::once(&current_prompt))
+                            .collect();
+                        Err(context::cancellable(
+                            &bridge,
+                            run_image_view(
+                                &tool_call.function.arguments,
+                                &messages,
+                                self.state.execution_environment,
+                            ),
+                        )
+                        .await?)
+                    }
                     SPAWN_SUBTASKS_TOOL => Ok(with_request_id(
                         tool_call.function.arguments.clone(),
                         &frame_ids[tool_index],
@@ -2198,7 +2306,8 @@ impl PlatformCopilot {
 
             let mut tool_result_contents: Vec<UserContent> = Vec::new();
             let mut tool_images: Vec<&PlatformToolImageUrl> = Vec::new();
-            for (tool_id, _name, tool_output, images) in &tool_results {
+            let mut image_tools: Vec<&str> = Vec::new();
+            for (tool_id, name, tool_output, images) in &tool_results {
                 tool_result_contents.push(UserContent::ToolResult(RigToolResult {
                     id: tool_id.clone(),
                     call_id: None,
@@ -2208,6 +2317,9 @@ impl PlatformCopilot {
                         tool_output.clone()
                     })),
                 }));
+                if !images.is_empty() && !image_tools.contains(&name.as_str()) {
+                    image_tools.push(name);
+                }
                 tool_images.extend(images);
             }
             let combined = if tool_result_contents.len() == 1 {
@@ -2268,9 +2380,7 @@ impl PlatformCopilot {
                     image_contents.push(UserContent::text(notice));
                 }
                 if !tool_images.is_empty() {
-                    image_contents.push(UserContent::text(
-                        "Rendered app page capture(s) from the preceding page tool result (open_app_page / interact_app_page), ordered top-to-bottom. Inspect all images before answering about the page's content.",
-                    ));
+                    image_contents.push(UserContent::text(tool_images_note(&image_tools)));
                 }
                 image_contents.extend(tool_images.into_iter().filter_map(|image| {
                     let data = image
@@ -2301,11 +2411,16 @@ impl PlatformCopilot {
         }
 
         if model_failed {
-            let notice = "The model could not complete the next step, so this task is unfinished. Work already performed has not been repeated. The last recorded progress below can be used to continue.";
-            full_response = notice.into();
+            let mut notice = "The model could not complete the next step, so this task is unfinished. Work already performed has not been repeated. The last recorded progress below can be used to continue.".to_string();
+            if let Some(findings) = research_findings.take() {
+                notice.push_str(&format!(
+                    "\n\nThe researcher's findings as they came back:\n\n{findings}"
+                ));
+            }
             if let Some(callback) = &on_token {
                 callback(format!("\n\n{notice}"));
             }
+            full_response = notice;
             answer_closed = true;
             stop_reason = Some(WorkStopReason::Blocked);
         }
@@ -2342,14 +2457,21 @@ impl PlatformCopilot {
         // rather than substituted so the text the user already watched stream is preserved.
         if !answer_closed {
             let had_narration = !full_response.trim().is_empty();
-            let fallback = surface.unclosed_answer_notice(had_narration);
+            // Findings the turn already paid for beat a notice that it produced nothing.
+            let fallback = match research_findings.take() {
+                Some(findings) => format!(
+                    "{}I could not write my own summary of this research, so here are the researcher's findings as they came back:\n\n{findings}",
+                    if had_narration { "\n\n" } else { "" }
+                ),
+                None => surface.unclosed_answer_notice(had_narration).to_string(),
+            };
             if let Some(callback) = &on_token {
-                callback(fallback.to_string());
+                callback(fallback.clone());
             }
             if had_narration {
-                full_response.push_str(fallback);
+                full_response.push_str(&fallback);
             } else {
-                full_response = fallback.to_string();
+                full_response = fallback;
             }
         }
 
@@ -2467,16 +2589,56 @@ fn platform_loop_tool_specs(memory_enabled: bool) -> Vec<PlatformToolSpec> {
     specs
 }
 
-const MAX_SEALED_RESEARCH_ROUNDS: usize = 6;
+/// Rounds in a row without one usable tool result before the researcher is told to conclude.
+const MAX_FRUITLESS_RESEARCH_ROUNDS: usize = 3;
+/// Empty model replies answered with a nudge before a run settles for what it already has.
+const MAX_EMPTY_REPLY_RETRIES: usize = 2;
+/// Time kept back from a research run for writing up what was found.
+const RESEARCH_SYNTHESIS_RESERVE: Duration = Duration::from_secs(120);
+/// Time of the turn kept back for the bot's own answer after its research returns.
+const RESEARCH_TURN_RESERVE: Duration = Duration::from_secs(60);
+/// Researcher context size from which page text of older rounds is cleared.
+const RESEARCH_CONTEXT_CHARS: usize = 200_000;
+/// Latest tool rounds whose results always stay whole.
+const RESEARCH_KEEP_ROUNDS: usize = 2;
+const CLEARED_PAGE_HEAD_CHARS: usize = 500;
+const EVIDENCE_EXCERPT_CHARS: usize = 2_500;
+const MAX_EVIDENCE_PAGES: usize = 12;
+const EMPTY_REPLY_NUDGE: &str = "Your last reply was empty. Continue from the results above: call the next tool you need, or write your answer now. Do not repeat calls that already completed.";
 
-/// What a completed sealed research run hands back to the root loop. `opened_urls` are the pages
-/// the researcher actually fetched; the root adopts them so its synthesis may cite the sources its
+/// What a sealed research run hands back to the root loop. `opened_urls` are the pages the
+/// researcher actually fetched; the root adopts them so its synthesis may cite the sources its
 /// own findings rest on.
 struct SealedResearchOutcome {
     findings: String,
     stats: LLMUsageStats,
     opened_urls: Vec<String>,
     unverified_links_removed: usize,
+    /// Why `findings` are page excerpts rather than a written synthesis, when they are.
+    incomplete: Option<&'static str>,
+}
+
+/// A page the researcher opened, kept so a run whose model never writes up still returns evidence.
+struct EvidencePage {
+    title: String,
+    url: String,
+    excerpt: String,
+}
+
+/// What a host adds to a bot's research: its owner's own search key and other ways to read a
+/// page the plain request cannot.
+#[derive(Clone, Default)]
+pub struct WebAccess {
+    pub search: Option<Arc<dyn SearchProvider>>,
+    pub reader: Option<Arc<dyn PageReader>>,
+}
+
+/// A search backend used in place of the built-in one.
+#[async_trait]
+pub trait SearchProvider: Send + Sync {
+    /// The result in `internet_search`'s shape, or `None` when nothing is configured or the
+    /// configured provider failed, so the built-in search answers.
+    async fn search(&self, request: &SearchRequest) -> Option<Value>;
 }
 
 /// Public tool activity uses the same nested stream envelope as host-managed specialists.
@@ -2532,15 +2694,279 @@ impl SealedResearchProgress<'_> {
     }
 }
 
+/// How long one research call may run: its own limit, shortened so a durable turn keeps
+/// [`RESEARCH_TURN_RESERVE`] of its deadline for the answer.
+fn research_time_budget(timeout_secs: u64, turn_deadline_at_ms: Option<i64>) -> Duration {
+    let limit = Duration::from_secs(timeout_secs);
+    let Some(deadline) = turn_deadline_at_ms else {
+        return limit;
+    };
+    let left = deadline.saturating_sub(chrono::Utc::now().timestamp_millis());
+    limit.min(Duration::from_millis(left.max(0) as u64).saturating_sub(RESEARCH_TURN_RESERVE))
+}
+
+/// One planned tool call of a research round: what to run, or the refusal it gets instead.
+enum PlannedResearchCall {
+    Search(Value),
+    Open(Value),
+    Archive(Value),
+    Refused(Value),
+}
+
+fn research_refusal(tool: &str, code: &str, retryable: bool, error: &str) -> Value {
+    json!({
+        "status": "error",
+        "tool": tool,
+        "code": code,
+        "retryable": retryable,
+        "error": error,
+    })
+}
+
+/// Reserves each call of a round in the model's order. Repeats of a search and pages beyond one
+/// round's share are answered without touching the network.
+fn plan_research_round(
+    tool_calls: &[rig::message::ToolCall],
+    web_session: &WebResearchSession,
+    seen_searches: &mut HashSet<String>,
+) -> Vec<PlannedResearchCall> {
+    let mut opens = 0;
+    tool_calls
+        .iter()
+        .map(|call| {
+            let name = call.function.name.as_str();
+            let arguments = call.function.arguments.clone();
+            match name {
+                INTERNET_SEARCH_TOOL => plan_search(arguments, web_session, seen_searches),
+                OPEN_URL_TOOL => {
+                    opens += 1;
+                    plan_open(arguments, web_session, opens > MAX_OPEN_URL_CALLS_PER_ROUND)
+                }
+                ARCHIVE_LOOKUP_TOOL if web_session.reserve_archive_call() => {
+                    PlannedResearchCall::Archive(arguments)
+                }
+                ARCHIVE_LOOKUP_TOOL => PlannedResearchCall::Refused(research_refusal(
+                    name,
+                    "archive_session_call_budget_exceeded",
+                    false,
+                    "This turn ran an unusually large number of archive lookups and was stopped.",
+                )),
+                _ => PlannedResearchCall::Refused(research_refusal(
+                    name,
+                    "sealed_research_tool_not_allowed",
+                    false,
+                    "The researcher holds internet_search, open_url and archive_lookup only.",
+                )),
+            }
+        })
+        .collect()
+}
+
+/// A repeat still counts against the runaway guard: a model stuck on one query is that case.
+fn plan_search(
+    arguments: Value,
+    web_session: &WebResearchSession,
+    seen_searches: &mut HashSet<String>,
+) -> PlannedResearchCall {
+    if !web_session.reserve_search_call() {
+        return PlannedResearchCall::Refused(research_refusal(
+            INTERNET_SEARCH_TOOL,
+            "search_session_call_budget_exceeded",
+            false,
+            "This turn ran an unusually large number of searches and was stopped. Answer from the evidence already collected.",
+        ));
+    }
+    if !seen_searches.insert(arguments.to_string()) {
+        return PlannedResearchCall::Refused(research_refusal(
+            INTERNET_SEARCH_TOOL,
+            "duplicate_search",
+            false,
+            "This exact search already ran in this research. Change the query, category, language or time_range instead of repeating it.",
+        ));
+    }
+    PlannedResearchCall::Search(arguments)
+}
+
+fn plan_open(
+    arguments: Value,
+    web_session: &WebResearchSession,
+    beyond_round: bool,
+) -> PlannedResearchCall {
+    let prepared = if beyond_round {
+        Err(open_url_round_error())
+    } else {
+        web_session.prepare_open_url_call(arguments)
+    };
+    match prepared {
+        Ok(arguments) => PlannedResearchCall::Open(arguments),
+        Err(output) => PlannedResearchCall::Refused(serde_json::from_str(&output).unwrap_or_else(
+            |_| json!({ "status": "error", "tool": OPEN_URL_TOOL, "error": output }),
+        )),
+    }
+}
+
+/// The owner's own search provider when one is configured, else the built-in search.
+async fn research_search(web_access: &WebAccess, arguments: &Value) -> Value {
+    let request = match SearchRequest::parse(arguments) {
+        Ok(request) => request,
+        Err(refusal) => return refusal,
+    };
+    if let Some(provider) = &web_access.search
+        && let Some(result) = provider.search(&request).await
+    {
+        return result;
+    }
+    built_in_search(request).await
+}
+
+/// Whether a tool result gave the researcher something to work with.
+fn research_result_is_useful(tool: &str, result: &Value) -> bool {
+    result.get("status").and_then(Value::as_str) == Some("ok")
+        && (tool != INTERNET_SEARCH_TOOL
+            || result
+                .get("results")
+                .and_then(Value::as_array)
+                .is_some_and(|results| !results.is_empty()))
+}
+
+fn evidence_page(result: &Value) -> Option<EvidencePage> {
+    if result.get("status").and_then(Value::as_str) != Some("ok")
+        || result.get("citation_eligible").and_then(Value::as_bool) != Some(true)
+    {
+        return None;
+    }
+    Some(EvidencePage {
+        title: result
+            .pointer("/source/title")
+            .and_then(Value::as_str)
+            .unwrap_or("Untitled page")
+            .replace(['[', ']'], ""),
+        url: result.get("url")?.as_str()?.to_string(),
+        excerpt: result
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .chars()
+            .take(EVIDENCE_EXCERPT_CHARS)
+            .collect(),
+    })
+}
+
+/// What a run returns when its model never wrote up: the newest pages it opened, as excerpts the
+/// caller can still answer from. Without a single opened page there is nothing to hand back.
+fn unfinished_research(
+    evidence: Vec<EvidencePage>,
+    stats: LLMUsageStats,
+    web_session: &WebResearchSession,
+    reason: &'static str,
+) -> Result<SealedResearchOutcome> {
+    if evidence.is_empty() {
+        return Err(flow_like_types::anyhow!(
+            "The sealed researcher ended without findings: {reason}"
+        ));
+    }
+    let skipped = evidence.len().saturating_sub(MAX_EVIDENCE_PAGES);
+    let mut findings = format!(
+        "The researcher opened {} page(s) but did not write up its findings ({reason}). Excerpts of the newest pages follow as untrusted evidence; nothing here is a checked conclusion.",
+        evidence.len()
+    );
+    for page in evidence.iter().skip(skipped) {
+        findings.push_str(&format!(
+            "\n\n### [{}]({})\n{}",
+            page.title, page.url, page.excerpt
+        ));
+    }
+    Ok(SealedResearchOutcome {
+        findings,
+        stats,
+        opened_urls: web_session.opened_urls(),
+        unverified_links_removed: 0,
+        incomplete: Some(reason),
+    })
+}
+
+/// A tool result of an older round without its bulk: a page keeps its head and its `find`
+/// excerpts, a search keeps titles, URLs and dates.
+fn cleared_research_result(output: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<Value>(output) else {
+        return output.chars().take(CLEARED_PAGE_HEAD_CHARS).collect();
+    };
+    if value.get("context_cleared").is_some() {
+        return output.to_string();
+    }
+    if let Some(content) = value.get("content").and_then(Value::as_str)
+        && content.chars().count() > CLEARED_PAGE_HEAD_CHARS
+    {
+        let head: String = content.chars().take(CLEARED_PAGE_HEAD_CHARS).collect();
+        value["content"] = json!(format!(
+            "{head}\n\n[The rest of this page was cleared from your context. Your notes hold what mattered; open the URL again, with find or offset, for an exact passage.]"
+        ));
+    }
+    if let Some(results) = value.get_mut("results").and_then(Value::as_array_mut) {
+        for result in results {
+            if let Some(row) = result.as_object_mut() {
+                row.retain(|key, _| matches!(key.as_str(), "title" | "url" | "publishedDate"));
+            }
+        }
+    }
+    value["context_cleared"] = json!(true);
+    value.to_string()
+}
+
+/// Keeps a long research run inside the model's context: once the transcript is large, tool
+/// results older than the latest rounds lose their page text and snippets.
+fn clear_old_research_results(history: &mut [rig::message::Message]) {
+    if history.iter().map(context::text_size).sum::<usize>() < RESEARCH_CONTEXT_CHARS {
+        return;
+    }
+    let result_rounds: Vec<usize> = history
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| match message {
+            rig::message::Message::User { content }
+                if content
+                    .iter()
+                    .any(|item| matches!(item, UserContent::ToolResult(_))) =>
+            {
+                Some(index)
+            }
+            _ => None,
+        })
+        .collect();
+    let older = result_rounds.len().saturating_sub(RESEARCH_KEEP_ROUNDS);
+    for &index in &result_rounds[..older] {
+        let rig::message::Message::User { content } = &mut history[index] else {
+            continue;
+        };
+        for item in content.iter_mut() {
+            let UserContent::ToolResult(result) = item else {
+                continue;
+            };
+            for part in result.content.iter_mut() {
+                if let ToolResultContent::Text(text) = part {
+                    text.text = cleared_research_result(&text.text);
+                }
+            }
+        }
+    }
+}
+
 /// Run public research using the caller's explicit brief and public-web tools. The child receives
 /// no automatic history, memory, attachments, or app results. Follow-up calls share the turn's
-/// research allowance and URL provenance, but each gets a fresh model transcript for its brief.
+/// runaway guards and URL provenance, but each gets a fresh model transcript for its brief.
+///
+/// A run has no round or page limit. It ends when the model writes its findings, when
+/// `time_budget` is nearly spent, or after several rounds in a row that found nothing. A run
+/// whose model never writes up still returns the pages it opened.
+#[allow(clippy::too_many_arguments)]
 async fn run_sealed_research_agent(
     completion_client: &(dyn CompletionClientDyn + Send + Sync),
     model_name: &str,
     thinking: Option<Value>,
     research_brief: &str,
     web_session: &WebResearchSession,
+    web_access: &WebAccess,
+    time_budget: Duration,
     progress: &SealedResearchProgress<'_>,
 ) -> Result<SealedResearchOutcome> {
     let research_date = format!(
@@ -2555,48 +2981,94 @@ async fn run_sealed_research_agent(
         .into_iter()
         .map(|spec| spec.to_tool_definition())
         .collect();
+    let started = tokio::time::Instant::now();
+    let hard_stop = started + time_budget;
+    let closing_at = started
+        + time_budget
+            .saturating_sub(RESEARCH_SYNTHESIS_RESERVE)
+            .max(time_budget / 2);
     let mut history = Vec::new();
     let mut current_prompt = rig::message::Message::User {
         content: OneOrMany::one(UserContent::text(research_brief.to_string())),
     };
     let mut research_stats = LLMUsageStats::default();
+    let mut evidence: Vec<EvidencePage> = Vec::new();
+    let mut seen_searches = HashSet::new();
+    let mut concluding = false;
+    let mut empty_replies = 0;
+    let mut fruitless_rounds = 0;
+    let mut round = 0usize;
 
-    for iteration in 0..=MAX_SEALED_RESEARCH_ROUNDS {
-        let tools_for_round = if iteration < MAX_SEALED_RESEARCH_ROUNDS {
-            tools.clone()
-        } else {
-            Vec::new()
-        };
-        let request = agent
-            .completion(current_prompt.clone(), history.clone())
-            .await
-            .map_err(|error| flow_like_types::anyhow!("Sealed research completion error: {error}"))?
-            .tools(tools_for_round);
-        let mut stream = request
-            .stream()
-            .await
-            .map_err(|error| flow_like_types::anyhow!("Sealed research stream error: {error}"))?;
-        let mut response_contents = Vec::new();
-        let mut round_text = String::new();
-        while let Some(item) = stream.next().await {
-            match item.map_err(|error| {
-                flow_like_types::anyhow!("Sealed research stream error: {error}")
-            })? {
-                StreamedAssistantContent::Text(text) => {
-                    round_text.push_str(&text.text);
-                    response_contents.push(AssistantContent::Text(text));
-                }
-                StreamedAssistantContent::ToolCall { tool_call, .. } => {
-                    response_contents.push(AssistantContent::ToolCall(tool_call));
-                }
-                StreamedAssistantContent::Final(response) => {
-                    if let Some(usage) = response.token_usage() {
-                        research_stats.accumulate(&Usage::from_rig(usage), Some(model_name));
-                    }
-                }
-                _ => {}
-            }
+    loop {
+        if !concluding && tokio::time::Instant::now() >= closing_at {
+            concluding = true;
+            merge_room_note_into_prompt(
+                &mut current_prompt,
+                &mut history,
+                "The time for this research is nearly used up and the tools are closed. Write your findings now from the evidence above, and say plainly what you could not establish.".into(),
+            );
         }
+        clear_old_research_results(&mut history);
+        let tools_for_round = if concluding {
+            Vec::new()
+        } else {
+            tools.clone()
+        };
+        let reply = tokio::time::timeout_at(hard_stop, async {
+            let request = agent
+                .completion(current_prompt.clone(), history.clone())
+                .await
+                .map_err(|error| {
+                    flow_like_types::anyhow!("Sealed research completion error: {error}")
+                })?
+                .tools(tools_for_round);
+            let mut stream = request.stream().await.map_err(|error| {
+                flow_like_types::anyhow!("Sealed research stream error: {error}")
+            })?;
+            let mut contents = Vec::new();
+            let mut text = String::new();
+            while let Some(item) = stream.next().await {
+                match item.map_err(|error| {
+                    flow_like_types::anyhow!("Sealed research stream error: {error}")
+                })? {
+                    StreamedAssistantContent::Text(chunk) => {
+                        text.push_str(&chunk.text);
+                        contents.push(AssistantContent::Text(chunk));
+                    }
+                    StreamedAssistantContent::ToolCall { tool_call, .. } => {
+                        contents.push(AssistantContent::ToolCall(tool_call));
+                    }
+                    StreamedAssistantContent::Final(response) => {
+                        if let Some(usage) = response.token_usage() {
+                            research_stats.accumulate(&Usage::from_rig(usage), Some(model_name));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok::<_, flow_like_types::Error>((contents, text))
+        })
+        .await;
+        let (response_contents, round_text) = match reply {
+            Ok(Ok(reply)) => reply,
+            Ok(Err(error)) => {
+                tracing::warn!("Sealed research model round failed: {error:#}");
+                return unfinished_research(
+                    evidence,
+                    research_stats,
+                    web_session,
+                    "its model failed before the write-up",
+                );
+            }
+            Err(_) => {
+                return unfinished_research(
+                    evidence,
+                    research_stats,
+                    web_session,
+                    "its time ran out before the write-up",
+                );
+            }
+        };
 
         let tool_calls: Vec<_> = response_contents
             .iter()
@@ -2605,32 +3077,41 @@ async fn run_sealed_research_agent(
                 _ => None,
             })
             .collect();
-        if tool_calls.is_empty() {
-            if round_text.trim().is_empty() {
-                return Err(flow_like_types::anyhow!(
-                    "The sealed researcher returned no synthesis"
-                ));
+        if tool_calls.is_empty() || concluding {
+            if !round_text.trim().is_empty() {
+                let opened_urls = web_session.opened_urls();
+                let (findings, unverified) = strip_unverified_citations(&round_text, &opened_urls);
+                if !unverified.is_empty() {
+                    tracing::warn!(
+                        unverified = ?unverified,
+                        opened = ?opened_urls,
+                        "Sealed research linked URLs it did not open; the links were reduced to plain text"
+                    );
+                }
+                return Ok(SealedResearchOutcome {
+                    findings,
+                    stats: research_stats,
+                    opened_urls,
+                    unverified_links_removed: unverified.len(),
+                    incomplete: None,
+                });
             }
-            let opened_urls = web_session.opened_urls();
-            let (findings, unverified) = strip_unverified_citations(&round_text, &opened_urls);
-            if !unverified.is_empty() {
-                tracing::warn!(
-                    unverified = ?unverified,
-                    opened = ?opened_urls,
-                    "Sealed research linked URLs it did not open; the links were reduced to plain text"
-                );
+            if empty_replies < MAX_EMPTY_REPLY_RETRIES {
+                empty_replies += 1;
+                let nudge = if concluding {
+                    "The tools are closed for this research. Write your findings now from the evidence above."
+                } else {
+                    EMPTY_REPLY_NUDGE
+                };
+                merge_room_note_into_prompt(&mut current_prompt, &mut history, nudge.into());
+                continue;
             }
-            return Ok(SealedResearchOutcome {
-                findings,
-                stats: research_stats,
-                opened_urls,
-                unverified_links_removed: unverified.len(),
-            });
-        }
-        if iteration == MAX_SEALED_RESEARCH_ROUNDS {
-            return Err(flow_like_types::anyhow!(
-                "The sealed researcher exhausted its tool budget without a synthesis"
-            ));
+            return unfinished_research(
+                evidence,
+                research_stats,
+                web_session,
+                "its model returned no text",
+            );
         }
 
         // Preserve a valid alternating transcript: the research brief and every later
@@ -2648,70 +3129,90 @@ async fn run_sealed_research_agent(
             }),
         });
 
-        let mut results = Vec::with_capacity(tool_calls.len());
-        for (call_index, call) in tool_calls.into_iter().enumerate() {
-            let name = call.function.name.as_str();
-            let arguments = call.function.arguments;
-            let frame_id = if call.id.is_empty() {
-                format!("research_{iteration}_{call_index}")
-            } else {
-                call.id.clone()
-            };
-            progress.tool_start(&frame_id, name, &arguments);
-            let mut value = match name {
-                INTERNET_SEARCH_TOOL => {
-                    if web_session.reserve_search_call() {
-                        run_internet_search(&arguments).await
-                    } else {
-                        json!({
-                            "status": "error",
-                            "tool": name,
-                            "code": "search_session_call_budget_exceeded",
-                            "retryable": false,
-                        })
-                    }
+        let frame_ids: Vec<String> = tool_calls
+            .iter()
+            .enumerate()
+            .map(|(call_index, call)| {
+                if call.id.is_empty() {
+                    format!("research_{round}_{call_index}")
+                } else {
+                    call.id.clone()
                 }
-                OPEN_URL_TOOL => match web_session.prepare_open_url_call(arguments) {
-                    Ok(arguments) => run_open_url_for_session(&arguments, web_session).await,
-                    Err(output) => serde_json::from_str(&output).unwrap_or_else(
-                        |_| json!({ "status": "error", "tool": name, "error": output }),
-                    ),
-                },
-                ARCHIVE_LOOKUP_TOOL => {
-                    if web_session.reserve_archive_call() {
-                        run_archive_lookup_for_session(&arguments, web_session).await
-                    } else {
-                        json!({
-                            "status": "error",
-                            "tool": name,
-                            "code": "archive_session_call_budget_exceeded",
-                            "retryable": false,
-                        })
-                    }
-                }
-                _ => json!({
-                    "status": "error",
-                    "tool": name,
-                    "code": "sealed_research_tool_not_allowed",
-                }),
-            };
-            web_session.register_and_decorate_tool_result(name, &mut value);
-            progress.tool_end(&frame_id, name, &value);
-            results.push(UserContent::ToolResult(RigToolResult {
-                id: call.id,
-                call_id: None,
-                content: OneOrMany::one(ToolResultContent::text(value.to_string())),
-            }));
+            })
+            .collect();
+        for (call, frame_id) in tool_calls.iter().zip(&frame_ids) {
+            progress.tool_start(frame_id, &call.function.name, &call.function.arguments);
         }
+        let planned = plan_research_round(&tool_calls, web_session, &mut seen_searches);
+        // Built before they are awaited together, so no borrowing closure ends up in the future.
+        let mut pending = Vec::with_capacity(planned.len());
+        for ((plan, call), frame_id) in planned.into_iter().zip(&tool_calls).zip(&frame_ids) {
+            pending.push(async move {
+                let name = call.function.name.as_str();
+                let value = match plan {
+                    PlannedResearchCall::Search(arguments) => {
+                        research_search(web_access, &arguments).await
+                    }
+                    PlannedResearchCall::Open(arguments) => {
+                        run_open_url_with_reader(
+                            &arguments,
+                            web_session,
+                            web_access.reader.as_deref(),
+                        )
+                        .await
+                    }
+                    PlannedResearchCall::Archive(arguments) => {
+                        run_archive_lookup_for_session(&arguments, web_session).await
+                    }
+                    PlannedResearchCall::Refused(value) => value,
+                };
+                web_session.register_tool_result(name, &value);
+                progress.tool_end(frame_id, name, &value);
+                value
+            });
+        }
+        let values = futures::future::join_all(pending).await;
+
+        let useful = tool_calls
+            .iter()
+            .zip(&values)
+            .any(|(call, value)| research_result_is_useful(&call.function.name, value));
+        fruitless_rounds = if useful { 0 } else { fruitless_rounds + 1 };
+        for page in tool_calls
+            .iter()
+            .zip(&values)
+            .filter(|(call, _)| call.function.name == OPEN_URL_TOOL)
+            .filter_map(|(_, value)| evidence_page(value))
+        {
+            // A page read again, in another window or with `find`, counts once.
+            evidence.retain(|known| known.url != page.url);
+            evidence.push(page);
+        }
+        let results: Vec<UserContent> = tool_calls
+            .into_iter()
+            .zip(values)
+            .map(|(call, value)| {
+                UserContent::ToolResult(RigToolResult {
+                    id: call.id,
+                    call_id: None,
+                    content: OneOrMany::one(ToolResultContent::text(value.to_string())),
+                })
+            })
+            .collect();
         current_prompt = rig::message::Message::User {
             content: OneOrMany::many(results)
                 .unwrap_or_else(|_| OneOrMany::one(UserContent::text(""))),
         };
+        if fruitless_rounds >= MAX_FRUITLESS_RESEARCH_ROUNDS {
+            concluding = true;
+            merge_room_note_into_prompt(
+                &mut current_prompt,
+                &mut history,
+                "Several rounds in a row returned nothing usable, so the tools are closed. Write your findings now from the evidence above, and say plainly what you could not establish.".into(),
+            );
+        }
+        round += 1;
     }
-
-    Err(flow_like_types::anyhow!(
-        "The sealed researcher ended unexpectedly"
-    ))
 }
 
 fn is_public_web_tool(name: &str) -> bool {
@@ -2859,84 +3360,140 @@ pub async fn run_memory_tool(
     }
 }
 
-/// Run the shared `internet_search` tool (SearXNG) server-side. Async counterpart of the desktop's
-/// blocking version, so both hosts share one implementation: the server FlowPilot bridge awaits it
-/// directly and the desktop delegates to it via `block_on`.
-pub async fn run_internet_search(args: &Value) -> Value {
-    let query = spec_arg_str(args, "query", "query").trim().to_string();
-    if query.is_empty() {
-        return json!({
-            "status": "error",
-            "tool": "internet_search",
-            "error": "internet_search requires a non-empty query."
-        });
-    }
-    if query.chars().count() > MAX_SEARCH_QUERY_CHARS {
-        return json!({
-            "status": "error",
-            "tool": "internet_search",
-            "code": "query_too_long",
-            "error": format!("Search queries are limited to {MAX_SEARCH_QUERY_CHARS} characters. Split the research question into focused subqueries."),
-        });
-    }
-    if query.chars().any(is_unsafe_search_character) {
-        return json!({
-            "status": "error",
-            "tool": INTERNET_SEARCH_TOOL,
-            "code": "invalid_query",
-            "error": "Search queries may not contain control or bidirectional-formatting characters.",
-        });
-    }
-    if search_query_contains_likely_secret(&query) {
-        return json!({
-            "status": "error",
-            "tool": INTERNET_SEARCH_TOOL,
-            "code": "sensitive_query_not_allowed",
-            "error": "The search query appears to contain a credential, access token, private key, or secret value and was not sent.",
-        });
-    }
+/// One checked `internet_search` call, whichever backend answers it. Nothing leaves the host
+/// before a query passed these checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchRequest {
+    pub query: String,
+    /// A language code such as `de-DE`, or `auto` to read it off the query.
+    pub language: String,
+    /// `day`, `week`, `month`, `year`, or empty for no limit.
+    pub time_range: String,
+    /// `general`, `news` or `science`.
+    pub category: String,
+    pub page: u64,
+    pub limit: usize,
+}
 
-    let language = {
-        let language = spec_arg_str(args, "language", "language").trim();
-        if language.is_empty() {
-            "en-US".to_string()
-        } else {
-            language.to_string()
+impl SearchRequest {
+    /// The request, or the refusal the model reads instead of results.
+    pub fn parse(args: &Value) -> std::result::Result<Self, Value> {
+        let refusal = |code: &str, error: String| {
+            json!({
+                "status": "error",
+                "tool": INTERNET_SEARCH_TOOL,
+                "code": code,
+                "error": error,
+            })
+        };
+        let query = spec_arg_str(args, "query", "query").trim().to_string();
+        if query.is_empty() {
+            return Err(refusal(
+                "invalid_query",
+                "internet_search requires a non-empty query.".into(),
+            ));
         }
-    };
-    if language.len() > 32
-        || !language
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '-')
-    {
-        return json!({
-            "status": "error",
-            "tool": "internet_search",
-            "code": "invalid_language",
-            "error": "language must be a short SearXNG language code such as en-US.",
-        });
+        if query.chars().count() > MAX_SEARCH_QUERY_CHARS {
+            return Err(refusal(
+                "query_too_long",
+                format!(
+                    "Search queries are limited to {MAX_SEARCH_QUERY_CHARS} characters. Split the research question into focused subqueries."
+                ),
+            ));
+        }
+        if query.chars().any(is_unsafe_search_character) {
+            return Err(refusal(
+                "invalid_query",
+                "Search queries may not contain control or bidirectional-formatting characters."
+                    .into(),
+            ));
+        }
+        if search_query_contains_likely_secret(&query) {
+            return Err(refusal(
+                "sensitive_query_not_allowed",
+                "The search query appears to contain a credential, access token, private key, or secret value and was not sent.".into(),
+            ));
+        }
+
+        // `auto` lets the search service read the language off the query; a fixed English
+        // default returned nothing useful for queries written in another language.
+        let language = match spec_arg_str(args, "language", "language").trim() {
+            "" => "auto".to_string(),
+            language => language.to_string(),
+        };
+        if language.len() > 32
+            || !language
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        {
+            return Err(refusal(
+                "invalid_language",
+                "language must be a short language code such as en-US or de-DE, or auto.".into(),
+            ));
+        }
+        let category = match spec_arg_str(args, "category", "category")
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "" | "general" => "general",
+            "news" => "news",
+            "science" => "science",
+            _ => {
+                return Err(refusal(
+                    "invalid_category",
+                    "category must be one of general, news, or science.".into(),
+                ));
+            }
+        }
+        .to_string();
+        let time_range = spec_arg_str(args, "time_range", "timeRange")
+            .trim()
+            .to_ascii_lowercase();
+        if !matches!(time_range.as_str(), "" | "day" | "week" | "month" | "year") {
+            return Err(refusal(
+                "invalid_time_range",
+                "time_range must be one of day, week, month, or year.".into(),
+            ));
+        }
+        Ok(Self {
+            query,
+            language,
+            time_range,
+            category,
+            page: args
+                .get("page")
+                .and_then(Value::as_u64)
+                .unwrap_or(1)
+                .clamp(1, 100),
+            limit: args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(8)
+                .clamp(1, 20) as usize,
+        })
     }
-    let time_range = spec_arg_str(args, "time_range", "timeRange")
-        .trim()
-        .to_ascii_lowercase();
-    if !time_range.is_empty() && !matches!(time_range.as_str(), "day" | "week" | "month" | "year") {
-        return json!({
-            "status": "error",
-            "tool": "internet_search",
-            "code": "invalid_time_range",
-            "error": "time_range must be one of day, week, month, or year.",
-        });
+}
+
+/// Run the shared `internet_search` tool on the built-in search service. Async counterpart of
+/// the desktop's blocking version, so both hosts share one implementation: the server FlowPilot
+/// bridge awaits it directly and the desktop delegates to it via `block_on`.
+pub async fn run_internet_search(args: &Value) -> Value {
+    match SearchRequest::parse(args) {
+        Ok(request) => built_in_search(request).await,
+        Err(refusal) => refusal,
     }
-    let page = args
-        .get("page")
-        .and_then(Value::as_u64)
-        .unwrap_or(1)
-        .clamp(1, 100);
-    let limit = args
-        .get("limit")
-        .and_then(Value::as_u64)
-        .unwrap_or(8)
-        .clamp(1, 20) as usize;
+}
+
+async fn built_in_search(request: SearchRequest) -> Value {
+    let SearchRequest {
+        query,
+        language,
+        time_range,
+        category,
+        page,
+        limit,
+    } = request;
 
     let _search_permit = match tokio::time::timeout(
         Duration::from_secs(5),
@@ -2990,6 +3547,9 @@ pub async fn run_internet_search(args: &Value) -> Value {
     ];
     if !time_range.is_empty() {
         query_params.push(("time_range", time_range.clone()));
+    }
+    if category != "general" {
+        query_params.push(("categories", category.clone()));
     }
     let response = match client
         .get("https://search.flow-like.com/search")
@@ -3108,15 +3668,22 @@ pub async fn run_internet_search(args: &Value) -> Value {
         "tool": "internet_search",
         "query": query,
         "language": language,
-        "time_range": if time_range.is_empty() { Value::Null } else { Value::String(time_range) },
+        "category": category,
         "page": page,
         "searched_at": chrono::Utc::now().to_rfc3339(),
         "results": results,
-        "suggestions": suggestions,
-        "corrections": corrections,
         "citation_eligible": false,
         "untrusted_content": true,
     });
+    if !time_range.is_empty() {
+        output["time_range"] = json!(time_range);
+    }
+    if !suggestions.is_empty() {
+        output["suggestions"] = json!(suggestions);
+    }
+    if !corrections.is_empty() {
+        output["corrections"] = json!(corrections);
+    }
     attach_search_engine_failures(&mut output, &payload);
     output
 }
@@ -3210,32 +3777,59 @@ fn compact_search_result(result: &Value) -> Option<Value> {
         .get("content")
         .and_then(Value::as_str)
         .map(|value| sanitize_search_text(value, MAX_SEARCH_SNIPPET_CHARS));
-    let published_date = object
-        .get("publishedDate")
-        .or_else(|| object.get("published_date"))
-        .and_then(Value::as_str)
-        .map(|value| sanitize_search_text(value, 64));
-    let engine = object
-        .get("engine")
-        .and_then(Value::as_str)
-        .map(|value| sanitize_search_text(value, 80));
-    let category = object
-        .get("category")
-        .and_then(Value::as_str)
-        .map(|value| sanitize_search_text(value, 80));
-    let score = object.get("score").and_then(Value::as_f64);
-    Some(json!({
+    Some(search_result_row(
+        source_id,
+        title,
+        url,
+        domain,
+        content,
+        search_result_date(object),
+    ))
+}
+
+/// When a result was published, as the engine states it. News engines often leave
+/// `publishedDate` empty and put the age elsewhere: `pubdate` ("4 days ago"), or `metadata`
+/// together with the outlet ("6 days ago | TheStreet").
+fn search_result_date(result: &serde_json::Map<String, Value>) -> Option<String> {
+    let text = |name: &str| {
+        result
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let news = text("category") == Some("news");
+    text("publishedDate")
+        .or_else(|| text("published_date"))
+        .or_else(|| text("pubdate"))
+        .or_else(|| text("metadata").filter(|_| news))
+        .map(|value| sanitize_search_text(value, 64))
+}
+
+/// One search result as the model reads it, whatever backend found it. A snippet or date the
+/// backend did not give is left out instead of sent as null.
+pub(super) fn search_result_row(
+    source_id: String,
+    title: String,
+    url: String,
+    domain: Option<String>,
+    content: Option<String>,
+    published_date: Option<String>,
+) -> Value {
+    let mut row = json!({
         "source_id": source_id,
         "title": title,
         "url": url,
         "domain": domain,
-        "content": content,
-        "publishedDate": published_date,
-        "engine": engine,
-        "category": category,
-        "score": score,
         "citation_eligible": false,
-    }))
+    });
+    if let Some(content) = content.filter(|content| !content.is_empty()) {
+        row["content"] = json!(content);
+    }
+    if let Some(published_date) = published_date.filter(|date| !date.is_empty()) {
+        row["publishedDate"] = json!(published_date);
+    }
+    row
 }
 
 fn normalized_search_result_url(raw: &str) -> Option<String> {
@@ -3254,7 +3848,7 @@ fn compact_search_strings(value: Option<&Value>, limit: usize, max_chars: usize)
         .collect()
 }
 
-fn sanitize_search_text(value: &str, max_chars: usize) -> String {
+pub(super) fn sanitize_search_text(value: &str, max_chars: usize) -> String {
     let sanitized: String = value
         .chars()
         .filter(|character| {
@@ -3946,6 +4540,36 @@ mod tests {
         );
         assert_eq!(result["url"], "https://flow-like.com/docs");
         assert_eq!(result["citation_eligible"], false);
+        assert!(result.get("publishedDate").is_none());
+    }
+
+    #[test]
+    fn a_news_result_keeps_the_age_its_engine_reports() {
+        let row = |fields: Value| {
+            let mut result = json!({ "title": "BMW", "url": "https://example.com/bmw" });
+            result
+                .as_object_mut()
+                .unwrap()
+                .extend(fields.as_object().unwrap().clone());
+            compact_search_result(&result).unwrap()
+        };
+        assert_eq!(
+            row(json!({ "publishedDate": "2026-11-04T00:00:00", "pubdate": "7 days ago" }))["publishedDate"],
+            "2026-11-04T00:00:00"
+        );
+        assert_eq!(
+            row(json!({ "publishedDate": null, "pubdate": "4 days ago" }))["publishedDate"],
+            "4 days ago"
+        );
+        assert_eq!(
+            row(json!({ "category": "news", "metadata": "6 days ago | TheStreet" }))["publishedDate"],
+            "6 days ago | TheStreet"
+        );
+        assert!(
+            row(json!({ "category": "general", "metadata": "1.2k stars" }))
+                .get("publishedDate")
+                .is_none()
+        );
     }
 
     #[test]

@@ -1227,6 +1227,13 @@ impl PlatformToolBridge for ServerPlatformBridge {
         self.channel.is_cancelled().await
     }
 
+    async fn bot_secret(&self, name: &str) -> Option<String> {
+        if !self.bot {
+            return None;
+        }
+        self.bot_tools.as_ref()?.secret(name).await
+    }
+
     async fn call(&self, tool_name: &str, arguments: Value) -> String {
         let Some(spec) = self.tool_spec(tool_name) else {
             return json!({
@@ -1726,6 +1733,10 @@ pub(crate) async fn run_global_chat(
         {
             bot.context.host_tools = std::mem::take(&mut bot.context.host_tools).with_trail(trail);
         }
+        if !bot.context.ephemeral_user_context {
+            bot.context.host_tools = std::mem::take(&mut bot.context.host_tools)
+                .with_reply_files(interactive.reply_files.clone());
+        }
     }
     if let Some(bot) = &mut bot {
         bot.context.host_tools = std::mem::take(&mut bot.context.host_tools)
@@ -1979,7 +1990,18 @@ pub(crate) async fn run_global_chat(
         _ => None,
     };
 
-    let attachments_manifest = payload.attachments_manifest.clone().unwrap_or_default();
+    let trigger_files = match &interactive_turn {
+        Some(interactive) => interactive.trigger_files(&state).await?,
+        None => Vec::new(),
+    };
+    let attachments_manifest = flow_like::flow::copilot::with_stored_files(
+        payload.attachments_manifest.as_deref().unwrap_or_default(),
+        &trigger_files,
+    );
+    let (attachments_manifest, attached_files) = match &bot {
+        Some(_) => attachments::with_turn_files(&state, &sub, attachments_manifest).await,
+        None => (attachments_manifest, Default::default()),
+    };
     let context_input = PlatformContextInput {
         user_context: payload.user_context.as_deref(),
         active_profile: Some((profile.name.as_str(), profile.id.as_str())),
@@ -2047,6 +2069,7 @@ pub(crate) async fn run_global_chat(
                 None,
                 interactive_turn.as_ref().map(|turn| turn.turn.conversation_id.as_str()),
                 Some(flow_like_bot_tools::TurnSite::OwnerLive),
+                attached_files,
             )
             .await;
             let bridge = if bot.context.toolset == BotToolset::Capabilities {

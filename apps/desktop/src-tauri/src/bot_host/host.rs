@@ -16,7 +16,7 @@ use super::{
 use flow_like_bot_host::latency::{self, CallTrace};
 use chrono::{Duration as Age, Utc};
 use flow_like::flow::copilot::{
-    ToolTrail,
+    ReplyFiles, ToolTrail,
     decision::{self, Decision, DecisionParticipant},
     bot_notes::NotesHandle,
     decision_event::{self, EventDecision},
@@ -76,6 +76,7 @@ struct Live {
     posting: bool,
     notes: Option<NotesHandle>,
     trail: Option<ToolTrail>,
+    reply_files: Option<ReplyFiles>,
 }
 
 #[derive(Default)]
@@ -662,6 +663,7 @@ impl Inner {
                     posting: false,
                     notes: None,
                     trail: None,
+                    reply_files: None,
                 };
                 retarget(&mut live, bot_id, &waiting);
                 publish = Some(live.info.clone());
@@ -923,9 +925,11 @@ impl Inner {
                     .map_or(oldest_first.len(), |index| index + 1);
                 ToolTrail::new(transcript::tool_trail(bot_id, &oldest_first[..upto]))
             });
+        let reply_files = (!ephemeral_user_context).then(ReplyFiles::new);
         if let Some(live) = lock(&self.state).live.get_mut(key) {
             live.notes = notes.clone();
             live.trail = trail.clone();
+            live.reply_files = reply_files.clone();
         }
         let mut job = TurnJob {
             run_id: run_id.clone(),
@@ -954,6 +958,7 @@ impl Inner {
             recovery,
             notes,
             trail,
+            reply_files,
         };
         if bot.model.decision.is_some() {
             let authority = Arc::new(super::authorization::LocalAuthority::new(
@@ -1511,7 +1516,7 @@ impl Inner {
         acknowledgement: bool,
         cancel: &mut watch::Receiver<Option<Cancel>>,
     ) -> End {
-        let (note, trail);
+        let (note, trail, files);
         {
             let mut state = lock(&self.state);
             let Some(live) = state.live.get_mut(key) else {
@@ -1523,6 +1528,7 @@ impl Inner {
             live.posting = true;
             note = live.notes.as_ref().and_then(NotesHandle::touched);
             trail = live.trail.clone();
+            files = live.reply_files.clone();
         }
         let (bot_id, conversation_id) = key;
         let message_id = if error_code.is_some() {
@@ -1542,6 +1548,9 @@ impl Inner {
             && let Some(envelope) = request.envelope.as_mut()
         {
             flow_like_bot_host::notes::attach_note(&mut envelope["body"], note.as_ref());
+            if let Some(files) = &files {
+                files.attach(&mut envelope["body"]);
+            }
             if let Some(trail) = &trail {
                 trail.attach(&mut envelope["body"]);
             }

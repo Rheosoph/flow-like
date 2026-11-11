@@ -24,8 +24,8 @@ use flow_like_bot_tools::image::{
 };
 use flow_like_bot_tools::{run, MemorySessions};
 use flow_like_bot_tools_host::{
-    job_hash, outcome_output, AppAccess, HostEnv, ImageSource, JobModels, ModelSource, StateModels,
-    ToolJob, ToolJobEnvelope, ToolReply, VisionRouted,
+    job_hash, outcome_output, AppAccess, HostEnv, ImageSource, JobModels, LinkedFiles, ModelSource,
+    StateModels, ToolJob, ToolJobEnvelope, ToolReply, VisionRouted,
 };
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::lancedb::Connection;
@@ -312,7 +312,8 @@ pub(crate) async fn run_job(
         .with_sessions(Arc::new(MemorySessions::default()))
         .with_expensive_documents(job.allow_expensive_documents)
         .with_secrets(Arc::new(job.secrets.clone()))
-        .with_connectors(flow_like_bot_tools_host::connector_source(&job.connectors));
+        .with_connectors(flow_like_bot_tools_host::connector_source(&job.connectors))
+        .with_conversation_files(Arc::new(LinkedFiles::new(job.files.clone())));
     if let Some(images) = images {
         env = env.with_images(Arc::new(images));
     }
@@ -328,6 +329,9 @@ pub(crate) async fn run_job(
                 format!("{} timed out", job.tool),
             )
         })?;
+    if let Some(error) = &outcome.error {
+        tracing::info!(tool = %job.tool, turn_id = %job.turn_id, code = error.code, "[bot_tools] tool call failed");
+    }
     Ok(ToolReply {
         output: outcome_output(&outcome),
         cpu_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
@@ -382,6 +386,7 @@ mod tests {
             secrets: Default::default(),
             connectors: Vec::new(),
             skill_call: None,
+            files: Vec::new(),
         }
     }
 

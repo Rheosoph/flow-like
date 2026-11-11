@@ -6,12 +6,13 @@ use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use flow_like_bot_host::hub::TurnHub;
 use flow_like_bot_tools::{
-    Contact, Delivery, NoticeReceipt, OwnerNotice, OwnerNotifier, PeopleBackend, PersonMessage,
+    Contact, Delivery, SkillHost, NoticeReceipt, OwnerNotice, OwnerNotifier, PeopleBackend, PersonMessage,
     Scheduler,
     email::{MailBackend, MailFailure, MailFile, OutgoingMail, ReplyMail, SentMail, failure},
 };
 use flow_like_types::{
     Result, anyhow,
+    bot_skill::{BotSkill, CreateBotSkill, SkillSource, SkillStatus},
     bot_task::{BotTask, CreateBotTask, UpdateBotTask},
 };
 use serde_json::{Value, json};
@@ -127,6 +128,60 @@ impl Scheduler for HubScheduler {
             .await
             .map(|_| true)
             .map_err(|failure| anyhow!("Cancelling task '{task_id}' failed: {failure}"))
+    }
+}
+
+pub struct HubSkills(pub BotRoutes);
+
+fn skill_of(bot_id: &str, found: &Value) -> BotSkill {
+    let text = |key: &str| found[key].as_str().unwrap_or_default().to_string();
+    BotSkill {
+        id: text("id"),
+        bot_id: bot_id.to_string(),
+        name: text("name"),
+        description: text("description"),
+        body: text("body"),
+        source: SkillSource::parse(found["source"].as_str().unwrap_or_default())
+            .unwrap_or(SkillSource::Import),
+        status: SkillStatus::parse(found["status"].as_str().unwrap_or_default())
+            .unwrap_or(SkillStatus::Disabled),
+        tools: serde_json::from_value(found["tools"].clone()).unwrap_or_default(),
+        updated_at: text("updated_at"),
+    }
+}
+
+#[async_trait]
+impl SkillHost for HubSkills {
+    async fn get(&self, name: &str) -> Result<Option<BotSkill>> {
+        let listed = self
+            .0
+            .hub
+            .read(&self.0.path("skills"), Vec::new())
+            .await
+            .map_err(|failure| anyhow!("Listing the skills failed: {failure}"))?;
+        let skills = listed
+            .get("skills")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("The hub sent unusable skills"))?;
+        Ok(skills
+            .iter()
+            .find(|skill| skill["name"] == name)
+            .map(|found| skill_of(&self.0.bot_id, found)))
+    }
+
+    async fn propose(&self, request: CreateBotSkill) -> Result<BotSkill> {
+        let body = json!({
+            "name": request.name,
+            "description": request.description,
+            "body": request.body,
+        });
+        let created = self
+            .0
+            .hub
+            .write(&self.0.path("skills/propose"), Vec::new(), body)
+            .await
+            .map_err(|failure| anyhow!("Proposing the skill '{}' failed: {failure}", request.name))?;
+        Ok(skill_of(&self.0.bot_id, &created))
     }
 }
 

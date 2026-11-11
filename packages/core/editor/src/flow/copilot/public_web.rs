@@ -5,7 +5,7 @@
 //! is evidence for the model, never instructions.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet, VecDeque},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     ops::Range,
     sync::{
@@ -16,9 +16,10 @@ use std::{
 };
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use dom_smoothie::{Config as ReadabilityConfig, Readability};
 use flow_like_types::{egress, reqwest, tokio};
-use htmd::HtmlToMarkdownBuilder;
-use serde_json::{Value, json};
+use htmd::{Element, HtmlToMarkdown, HtmlToMarkdownBuilder, element_handler::Handlers};
+use serde_json::{Map, Value, json};
 use url::{Host, Url};
 
 use super::tool_spec::{ARCHIVE_LOOKUP_TOOL, INTERNET_SEARCH_TOOL, OPEN_URL_TOOL};
@@ -26,24 +27,31 @@ use super::tool_spec::{ARCHIVE_LOOKUP_TOOL, INTERNET_SEARCH_TOOL, OPEN_URL_TOOL}
 const MAX_URL_BYTES: usize = 4_096;
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 const DEFAULT_MAX_CHARS: usize = 20_000;
-const MAX_OUTPUT_CHARS: usize = 40_000;
+const MAX_OUTPUT_CHARS: usize = 100_000;
 const MAX_FIND_QUERY_CHARS: usize = 256;
 const MAX_FIND_MATCHES: usize = 8;
 const FIND_CONTEXT_CHARS: usize = 180;
 const MIN_EVIDENCE_NON_WHITESPACE_CHARS: usize = 12;
+/// Below this an extracted article is a teaser or a cookie notice, and the whole page is returned.
+const MIN_ARTICLE_NON_WHITESPACE_CHARS: usize = 300;
+const MAX_READABILITY_ELEMENTS: usize = 60_000;
 const MAX_REDIRECTS: usize = 5;
 const MAX_CONCURRENT_OPEN_URL_CALLS: usize = 4;
 const MAX_CONCURRENT_ARCHIVE_LOOKUPS: usize = 2;
 const MAX_CONCURRENT_HTML_CONVERSIONS: usize = 4;
-const MAX_OPEN_URL_CALLS_PER_ROUND: usize = 4;
-const MAX_OPEN_URL_CALLS_PER_SESSION: usize = 10;
-const MAX_OPEN_URL_CHARS_PER_ROUND: usize = 60_000;
-const MAX_OPEN_URL_CHARS_PER_SESSION: usize = 120_000;
-/// Session-wide caps. On the tool-driven path these are shared across every agent researching
-/// within one turn (see [`WebResearchSession`]); the rig loop in `platform.rs` applies the same
-/// numbers to its own per-run counters, so they are declared once here.
-pub(crate) const MAX_SEARCH_CALLS_PER_SESSION: usize = 12;
-pub(crate) const MAX_ARCHIVE_CALLS_PER_SESSION: usize = 4;
+/// Pages one model round may open; the rest are asked for again in the next round, so a single
+/// reply cannot fill the context with page text.
+pub(crate) const MAX_OPEN_URL_CALLS_PER_ROUND: usize = 8;
+/// Runaway guards shared by every agent researching within one turn (see [`WebResearchSession`]).
+/// They sit far above what research needs: a run ends at its deadline, not at these.
+const MAX_OPEN_URL_CALLS_PER_SESSION: usize = 512;
+pub(crate) const MAX_SEARCH_CALLS_PER_SESSION: usize = 256;
+pub(crate) const MAX_ARCHIVE_CALLS_PER_SESSION: usize = 64;
+/// URLs one turn's ledger holds; it is saved with every checkpoint of a durable run. Half of it
+/// covers every result of the searches the runaway guard allows.
+const MAX_SESSION_URLS: usize = 16_384;
+const MAX_CACHED_PAGES: usize = 64;
+const MAX_CACHED_PAGE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ARCHIVE_RESPONSE_BYTES: usize = 64 * 1024;
 const WAYBACK_HOST: &str = "web.archive.org";
 const WAYBACK_AVAILABILITY_ENDPOINT: &str = "https://archive.org/wayback/available";
@@ -85,6 +93,41 @@ pub struct WebResearchSession {
     search_calls: AtomicUsize,
     archive_calls: AtomicUsize,
     open_url_budget: Mutex<OpenUrlSessionBudget>,
+    /// Converted pages of this turn, so paging and `find` on an opened page fetch nothing.
+    pages: Mutex<PageCache>,
+}
+
+/// The turn's opened pages by requested and final URL, oldest dropped first.
+#[derive(Debug, Default)]
+struct PageCache {
+    pages: HashMap<String, Arc<LoadedPage>>,
+    order: VecDeque<Arc<LoadedPage>>,
+    bytes: usize,
+}
+
+impl PageCache {
+    fn get(&self, url: &str) -> Option<Arc<LoadedPage>> {
+        self.pages.get(url).cloned()
+    }
+
+    fn insert(&mut self, page: Arc<LoadedPage>) {
+        let size = page.cached_bytes();
+        if size > MAX_CACHED_PAGE_BYTES {
+            return;
+        }
+        while self.order.len() >= MAX_CACHED_PAGES || self.bytes + size > MAX_CACHED_PAGE_BYTES {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            self.bytes -= oldest.cached_bytes();
+            self.pages.retain(|_, cached| !Arc::ptr_eq(cached, &oldest));
+        }
+        self.bytes += size;
+        self.pages.insert(page.requested_url.clone(), page.clone());
+        self.pages
+            .insert(page.final_url.as_str().to_string(), page.clone());
+        self.order.push_back(page);
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -134,13 +177,10 @@ impl WebResearchSession {
         if saved.search_calls > MAX_SEARCH_CALLS_PER_SESSION
             || saved.archive_calls > MAX_ARCHIVE_CALLS_PER_SESSION
             || saved.open_url_budget.session_calls > MAX_OPEN_URL_CALLS_PER_SESSION
-            || saved.open_url_budget.session_chars_reserved > MAX_OPEN_URL_CHARS_PER_SESSION
             || saved.open_url_budget.round_calls > MAX_OPEN_URL_CALLS_PER_ROUND
-            || saved.open_url_budget.round_chars_reserved > MAX_OPEN_URL_CHARS_PER_ROUND
             || saved.open_url_budget.round_call_limit > MAX_OPEN_URL_CALLS_PER_ROUND
-            || saved.open_url_budget.round_char_limit > MAX_OPEN_URL_CHARS_PER_ROUND
             || saved.authorized_urls.len() + saved.opened_urls.len() + saved.non_citable_urls.len()
-                > 2_048
+                > MAX_SESSION_URLS
             || saved
                 .authorized_urls
                 .iter()
@@ -164,6 +204,7 @@ impl WebResearchSession {
             search_calls: AtomicUsize::new(saved.search_calls),
             archive_calls: AtomicUsize::new(saved.archive_calls),
             open_url_budget: Mutex::new(saved.open_url_budget),
+            pages: Mutex::default(),
         })
     }
 
@@ -327,10 +368,30 @@ impl WebResearchSession {
         let Ok(url) = parse_public_url(raw) else {
             return;
         };
-        self.authorized_urls
+        let mut authorized = self
+            .authorized_urls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if authorized.len() < MAX_SESSION_URLS / 2 {
+            authorized.insert(url.as_str().to_string());
+        }
+    }
+
+    fn cached_page(&self, raw: &str) -> Option<Arc<LoadedPage>> {
+        let url = parse_public_url(raw).ok()?;
+        self.pages
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(url.as_str().to_string());
+            .get(url.as_str())
+    }
+
+    fn cache_page(&self, page: LoadedPage) -> Arc<LoadedPage> {
+        let page = Arc::new(page);
+        self.pages
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(page.clone());
+        page
     }
 
     fn mark_opened_url(&self, raw: &str) {
@@ -523,133 +584,85 @@ fn trim_user_url_candidate(mut candidate: &str) -> &str {
     }
 }
 
-/// Conservative model-context and network budget shared by one assistant run. Callers reset the
-/// round counters for each model response while the session counters survive follow-up rounds.
+/// Page opens of one assistant run: a runaway guard for the session and a per-round count for
+/// hosts that see whole model rounds. The character fields are no longer enforced; they stay so a
+/// checkpoint written before they were dropped still loads.
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OpenUrlSessionBudget {
     session_calls: usize,
+    #[serde(default)]
     session_chars_reserved: usize,
     round_calls: usize,
+    #[serde(default)]
     round_chars_reserved: usize,
     round_call_limit: usize,
+    #[serde(default)]
     round_char_limit: usize,
 }
 
 impl OpenUrlSessionBudget {
     pub(crate) fn begin_round(&mut self, planned_open_url_calls: usize) {
         self.round_calls = 0;
-        self.round_chars_reserved = 0;
         self.round_call_limit = planned_open_url_calls
             .min(MAX_OPEN_URL_CALLS_PER_ROUND)
             .min(MAX_OPEN_URL_CALLS_PER_SESSION.saturating_sub(self.session_calls));
-        self.round_char_limit = MAX_OPEN_URL_CHARS_PER_ROUND
-            .min(MAX_OPEN_URL_CHARS_PER_SESSION.saturating_sub(self.session_chars_reserved));
     }
 
-    /// Preserve non-web arguments and reserve a bounded slice of this round/session for open_url.
-    /// The reservation uses requested maxima, so even fully parallel calls cannot overfill the
-    /// next model turn if every page reaches its output limit.
+    /// Counts one `open_url` of a batched round and bounds the text it may return; other tools
+    /// pass through untouched.
     pub(crate) fn prepare_call(
         &mut self,
         tool_name: &str,
-        mut arguments: Value,
+        arguments: Value,
     ) -> Result<Value, String> {
         if tool_name != OPEN_URL_TOOL {
             return Ok(arguments);
         }
-
-        if self.session_calls >= MAX_OPEN_URL_CALLS_PER_SESSION {
-            return Err(open_url_budget_error(
-                "open_url_session_call_budget_exceeded",
-                "This assistant run has reached its safe open_url call budget. Use the evidence already collected, or let the user continue research in a new turn.",
-                false,
-            ));
+        if self.session_calls < MAX_OPEN_URL_CALLS_PER_SESSION
+            && self.round_calls >= self.round_call_limit
+        {
+            return Err(open_url_round_error());
         }
-        if self.round_calls >= self.round_call_limit {
-            return Err(open_url_budget_error(
-                "open_url_round_call_budget_exceeded",
-                "This tool round has reached its safe open_url call budget. Digest the current pages before deciding whether another research round is needed.",
-                true,
-            ));
-        }
-
-        let round_chars_remaining = self
-            .round_char_limit
-            .saturating_sub(self.round_chars_reserved);
-        let session_chars_remaining =
-            MAX_OPEN_URL_CHARS_PER_SESSION.saturating_sub(self.session_chars_reserved);
-        let remaining_slots = self.round_call_limit.saturating_sub(self.round_calls);
-        let fair_share = round_chars_remaining
-            .min(session_chars_remaining)
-            .checked_div(remaining_slots)
-            .unwrap_or(0)
-            .min(MAX_OUTPUT_CHARS);
-        if fair_share < 1_000 {
-            return Err(open_url_budget_error(
-                "open_url_output_budget_exceeded",
-                "This assistant run has reached its safe fetched-text budget. Use the evidence already collected, or let the user continue research in a new turn.",
-                false,
-            ));
-        }
-
-        let requested = arguments
-            .get("max_chars")
-            .or_else(|| arguments.get("maxChars"))
-            .and_then(Value::as_u64)
-            .unwrap_or(DEFAULT_MAX_CHARS as u64)
-            .clamp(1_000, MAX_OUTPUT_CHARS as u64) as usize;
-        let reserved = requested.min(fair_share);
-        if let Some(object) = arguments.as_object_mut() {
-            object.insert("max_chars".to_string(), json!(reserved));
-        }
+        let arguments = self.prepare_unbatched_call(arguments)?;
         self.round_calls += 1;
-        self.session_calls += 1;
-        self.round_chars_reserved += reserved;
-        self.session_chars_reserved += reserved;
         Ok(arguments)
     }
 
-    /// Apply the same session-wide cap when a provider SDK invokes handlers without exposing model
-    /// round boundaries to the host. Reserving an equal share for each remaining call keeps one
-    /// early page from consuming the entire research allowance.
+    /// Counts one `open_url` where the host sees single calls, not model rounds.
     pub fn prepare_unbatched_call(&mut self, mut arguments: Value) -> Result<Value, String> {
         if self.session_calls >= MAX_OPEN_URL_CALLS_PER_SESSION {
             return Err(open_url_budget_error(
                 "open_url_session_call_budget_exceeded",
-                "This assistant run has reached its safe open_url call budget. Use the evidence already collected, or let the user continue research in a new turn.",
+                "This assistant run opened an unusually large number of pages and was stopped. Answer from the evidence already collected.",
                 false,
             ));
         }
-        let remaining_calls = MAX_OPEN_URL_CALLS_PER_SESSION - self.session_calls;
-        let remaining_chars =
-            MAX_OPEN_URL_CHARS_PER_SESSION.saturating_sub(self.session_chars_reserved);
-        let fair_share = remaining_chars
-            .checked_div(remaining_calls)
-            .unwrap_or(0)
-            .min(MAX_OUTPUT_CHARS);
-        if fair_share < 1_000 {
-            return Err(open_url_budget_error(
-                "open_url_output_budget_exceeded",
-                "This assistant run has reached its safe fetched-text budget. Use the evidence already collected, or let the user continue research in a new turn.",
-                false,
-            ));
-        }
-
-        let requested = arguments
-            .get("max_chars")
-            .or_else(|| arguments.get("maxChars"))
-            .and_then(Value::as_u64)
-            .unwrap_or(DEFAULT_MAX_CHARS as u64)
-            .clamp(1_000, MAX_OUTPUT_CHARS as u64) as usize;
-        let reserved = requested.min(fair_share);
+        let max_chars = requested_max_chars(&arguments);
         if let Some(object) = arguments.as_object_mut() {
-            object.insert("max_chars".to_string(), json!(reserved));
+            object.insert("max_chars".to_string(), json!(max_chars));
         }
         self.session_calls += 1;
-        self.session_chars_reserved += reserved;
         Ok(arguments)
     }
+}
+
+fn requested_max_chars(arguments: &Value) -> usize {
+    arguments
+        .get("max_chars")
+        .or_else(|| arguments.get("maxChars"))
+        .and_then(Value::as_u64)
+        .unwrap_or(DEFAULT_MAX_CHARS as u64)
+        .clamp(1_000, MAX_OUTPUT_CHARS as u64) as usize
+}
+
+/// The refusal for a page beyond [`MAX_OPEN_URL_CALLS_PER_ROUND`] in one model round.
+pub(crate) fn open_url_round_error() -> String {
+    open_url_budget_error(
+        "open_url_round_call_budget_exceeded",
+        "Too many pages for one round. Read the pages that opened, then ask for the rest in your next round.",
+        true,
+    )
 }
 
 fn open_url_budget_error(code: &'static str, message: &'static str, retryable: bool) -> String {
@@ -716,6 +729,34 @@ impl FetchFailure {
         self
     }
 
+    /// Whether a reader service or a browser can get past this failure: the site refused this
+    /// client, rendered nothing without JavaScript, or sent a format only a reader parses. Never
+    /// for a URL this host refused to request.
+    fn reader_may_help(&self) -> bool {
+        match self.code {
+            "http_error" => self
+                .http_status
+                .is_some_and(|status| matches!(status, 401 | 403 | 406 | 429 | 451 | 500..=599)),
+            "insufficient_text_content"
+            | "unsupported_content_type"
+            | "unsupported_content_encoding"
+            | "attachment_not_allowed"
+            | "request_timeout"
+            | "request_failed"
+            | "body_read_failed"
+            | "timeout" => true,
+            _ => false,
+        }
+    }
+
+    fn with_reader_error(mut self, error: &str) -> Self {
+        self.recovery_hints.push(format!(
+            "A page reader was tried as well and failed: {}",
+            error.chars().take(300).collect::<String>()
+        ));
+        self
+    }
+
     fn as_json(&self) -> Value {
         self.as_json_for(OPEN_URL_TOOL)
     }
@@ -734,19 +775,33 @@ impl FetchFailure {
     }
 }
 
+/// A fetched page after conversion, before an output window is cut from it.
 #[derive(Debug)]
-struct FetchSuccess {
+pub(crate) struct LoadedPage {
     requested_url: String,
     final_url: Url,
     content_type: String,
-    text: String,
     format: &'static str,
     bytes_read: usize,
-    truncated: bool,
+    body_truncated: bool,
     redirects: Vec<Value>,
     title: String,
-    find: Option<Value>,
     markdown_source: Option<Url>,
+    /// What a read returns: the article when one was found, else the whole page.
+    text: String,
+    /// The whole converted page when `text` is only its article.
+    full_text: Option<String>,
+    published: Option<String>,
+    byline: Option<String>,
+    site_name: Option<String>,
+    /// The reader that fetched the page when the plain request could not.
+    reader: Option<&'static str>,
+}
+
+impl LoadedPage {
+    fn cached_bytes(&self) -> usize {
+        self.text.len() + self.full_text.as_ref().map_or(0, String::len)
+    }
 }
 
 /// One validated response body after following every redirect hop.
@@ -759,31 +814,47 @@ struct FetchedBody {
     redirects: Vec<Value>,
 }
 
-/// The evidence text taken from a page, possibly from its declared markdown rendering.
-struct ReadableText {
+/// The text taken from a response body: its article when one was found, and what was read about it.
+#[derive(Default)]
+struct Converted {
     text: String,
-    kind: TextKind,
-    content_type: String,
-    bytes_read: usize,
-    truncated: bool,
-    markdown_source: Option<Url>,
+    full_text: Option<String>,
+    title: Option<String>,
+    published: Option<String>,
+    byline: Option<String>,
+    site_name: Option<String>,
 }
 
-/// Open one public textual URL without exposing a general-purpose network client to the model.
-pub(crate) async fn run_open_url(args: &Value) -> Value {
-    let raw_url = args.get("url").and_then(Value::as_str).unwrap_or("");
-    let max_chars = args
-        .get("max_chars")
-        .or_else(|| args.get("maxChars"))
-        .and_then(Value::as_u64)
-        .unwrap_or(DEFAULT_MAX_CHARS as u64)
-        .clamp(1_000, MAX_OUTPUT_CHARS as u64) as usize;
-    let find = match parse_find_query(args.get("find")) {
-        Ok(find) => find,
-        Err(error) => return error.as_json(),
-    };
+/// The slice of a page one `open_url` call asks for.
+struct PageRequest {
+    max_chars: usize,
+    offset: usize,
+    find: Option<String>,
+    full_page: bool,
+}
 
-    match tokio::time::timeout(OPERATION_TIMEOUT, async {
+impl PageRequest {
+    fn parse(args: &Value) -> Result<Self, FetchFailure> {
+        Ok(Self {
+            max_chars: requested_max_chars(args),
+            offset: args
+                .get("offset")
+                .and_then(Value::as_u64)
+                .and_then(|offset| usize::try_from(offset).ok())
+                .unwrap_or(0),
+            find: parse_find_query(args.get("find"))?,
+            full_page: args
+                .get("full_page")
+                .or_else(|| args.get("fullPage"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        })
+    }
+}
+
+/// Fetch and convert one public textual URL within the reader's concurrency and time bounds.
+async fn load_page(raw_url: &str) -> Result<LoadedPage, FetchFailure> {
+    tokio::time::timeout(OPERATION_TIMEOUT, async {
         let _permit = OPEN_URL_CONCURRENCY.acquire().await.map_err(|_| {
             FetchFailure::new(
                 "concurrency_unavailable",
@@ -791,32 +862,127 @@ pub(crate) async fn run_open_url(args: &Value) -> Value {
             )
             .retryable()
         })?;
-        fetch_public_text(raw_url, max_chars, find.as_deref()).await
+        fetch_public_page(raw_url).await
     })
     .await
-    {
-        Ok(Ok(result)) => success_json(result),
-        Ok(Err(error)) => error.as_json(),
-        Err(_) => FetchFailure::new(
+    .unwrap_or_else(|_| {
+        Err(FetchFailure::new(
             "timeout",
             "Opening the URL exceeded the 30 second safety deadline.",
         )
-        .retryable()
-        .as_json(),
-    }
+        .retryable())
+    })
 }
 
-/// Session-gated counterpart used by FlowPilot tool adapters. The unrestricted function above is
-/// retained for focused tests and trusted host callers; model-authored calls must use this path.
+/// Open one public textual URL the session's ledger authorizes, without exposing a
+/// general-purpose network client to the model.
 pub async fn run_open_url_for_session(args: &Value, session: &WebResearchSession) -> Value {
+    run_open_url_with_reader(args, session, None).await
+}
+
+/// [`run_open_url_for_session`] with a reader to try when the plain request is refused or the
+/// page comes back without readable text.
+pub async fn run_open_url_with_reader(
+    args: &Value,
+    session: &WebResearchSession,
+    reader: Option<&dyn PageReader>,
+) -> Value {
     if let Some(error) = session.public_web_phase_error(OPEN_URL_TOOL) {
         return error;
     }
     if let Err(error) = session.validate_open_call(args) {
         return error.as_json();
     }
+    let request = match PageRequest::parse(args) {
+        Ok(request) => request,
+        Err(error) => return error.as_json(),
+    };
     let requested_url = args.get("url").and_then(Value::as_str).unwrap_or("");
-    apply_session_citation_policy(run_open_url(args).await, session, requested_url)
+    let page = match session.cached_page(requested_url) {
+        Some(page) => page,
+        None => match load_page_or_read(requested_url, reader).await {
+            Ok(page) => session.cache_page(page),
+            Err(error) => return error.as_json(),
+        },
+    };
+    apply_session_citation_policy(page_json(&page, &request), session, requested_url)
+}
+
+/// What a [`PageReader`] returns for one URL.
+#[derive(Debug, Clone, Default)]
+pub struct ReaderPage {
+    /// The reader's short name for the result and the logs, e.g. `firecrawl`.
+    pub reader: &'static str,
+    /// The page as markdown or plain text.
+    pub text: String,
+    pub title: Option<String>,
+    /// Where the reader ended up after redirects, when it says so.
+    pub final_url: Option<String>,
+    pub published: Option<String>,
+}
+
+/// Another way to read a public page: a hosted reader API or a browser. Tried only after the
+/// plain request failed in a way a different client can get past.
+#[async_trait::async_trait]
+pub trait PageReader: Send + Sync {
+    /// The page, or why the readers that tried could not read it (shown to the model). `None`
+    /// when no reader is set up, so the original failure stands as it is.
+    async fn read(&self, url: &Url) -> Option<Result<ReaderPage, String>>;
+}
+
+async fn load_page_or_read(
+    raw_url: &str,
+    reader: Option<&dyn PageReader>,
+) -> Result<LoadedPage, FetchFailure> {
+    let failure = match load_page(raw_url).await {
+        Ok(page) => return Ok(page),
+        Err(failure) => failure,
+    };
+    let (Some(reader), true) = (reader, failure.reader_may_help()) else {
+        return Err(failure);
+    };
+    let requested = parse_public_url(raw_url)?;
+    match reader.read(&requested).await {
+        Some(Ok(read)) => page_from_reader(requested, read).map_err(|_| failure),
+        Some(Err(error)) => Err(failure.with_reader_error(&error)),
+        None => Err(failure),
+    }
+}
+
+fn page_from_reader(requested: Url, read: ReaderPage) -> Result<LoadedPage, FetchFailure> {
+    let reader = read.reader;
+    let text = remove_control_characters(read.text);
+    ensure_sufficient_evidence_text(&text, &requested)?;
+    // A reader may only report the page it was sent to or a public page it was redirected to.
+    let final_url = read
+        .final_url
+        .as_deref()
+        .and_then(|url| parse_public_url(url).ok())
+        .unwrap_or_else(|| requested.clone());
+    let title = read
+        .title
+        .or_else(|| markdown_title(&text))
+        .map(|title| remove_control_characters(collapse_whitespace(&title)))
+        .filter(|title| !title.is_empty())
+        .map(truncate_title)
+        .unwrap_or_else(|| final_url.host_str().unwrap_or("Web source").to_string());
+    Ok(LoadedPage {
+        requested_url: requested.as_str().to_string(),
+        final_url,
+        content_type: "text/markdown".to_string(),
+        format: "markdown",
+        bytes_read: text.len(),
+        body_truncated: false,
+        redirects: Vec::new(),
+        title,
+        markdown_source: None,
+        text,
+        full_text: None,
+        published: read.published,
+        byline: None,
+        site_name: None,
+        reader: Some(reader),
+    })
 }
 
 fn apply_session_citation_policy(
@@ -1723,56 +1889,61 @@ async fn fetch_public_body(start: Url, accept: &str) -> Result<FetchedBody, Fetc
     unreachable!("redirect loop either returns a response or a redirect-limit error")
 }
 
-async fn fetch_public_text(
-    raw_url: &str,
-    max_chars: usize,
-    find: Option<&str>,
-) -> Result<FetchSuccess, FetchFailure> {
+async fn fetch_public_page(raw_url: &str) -> Result<LoadedPage, FetchFailure> {
     let requested = parse_public_url(raw_url)?;
     let requested_url = requested.as_str().to_string();
     let page = fetch_public_body(requested, PAGE_ACCEPT).await?;
     let decoded = String::from_utf8_lossy(&page.body).into_owned();
-    let title = page_title(&decoded, &page.final_url, page.kind);
-    let markdown_alternate = match page.kind {
+    let document_title = page_title(&decoded, &page.final_url, page.kind);
+    let alternate = match page.kind {
         TextKind::Html => fetch_markdown_alternate(&decoded, &page.final_url).await,
         TextKind::Markdown | TextKind::Text => None,
     };
-    let readable = match markdown_alternate {
-        Some(readable) => readable,
-        None => ReadableText {
-            text: readable_text(decoded, page.kind, &page.final_url).await?,
-            kind: page.kind,
-            content_type: page.content_type,
-            bytes_read: page.body.len(),
-            truncated: page.truncated,
-            markdown_source: None,
-        },
+    let (body, converted) = match alternate {
+        Some(alternate) => alternate,
+        None => {
+            let converted = convert_body(decoded, page.kind, &page.final_url).await?;
+            (
+                FetchedBody {
+                    final_url: page.final_url.clone(),
+                    content_type: page.content_type,
+                    kind: page.kind,
+                    body: page.body,
+                    truncated: page.truncated,
+                    redirects: Vec::new(),
+                },
+                converted,
+            )
+        }
     };
-    let find = find.map(|query| find_matches(&readable.text, query, readable.truncated));
-    let (text, output_truncated) = truncate_chars(readable.text, max_chars);
+    let markdown_source = (body.final_url != page.final_url).then_some(body.final_url);
 
-    Ok(FetchSuccess {
+    Ok(LoadedPage {
         requested_url,
         final_url: page.final_url,
-        content_type: readable.content_type,
-        text,
-        format: match readable.kind {
+        content_type: body.content_type,
+        format: match body.kind {
             TextKind::Html | TextKind::Markdown => "markdown",
             TextKind::Text => "text",
         },
-        bytes_read: readable.bytes_read,
-        truncated: readable.truncated || output_truncated,
+        bytes_read: body.body.len(),
+        body_truncated: body.truncated,
         redirects: page.redirects,
-        title,
-        find,
-        markdown_source: readable.markdown_source,
+        title: converted.title.unwrap_or(document_title),
+        markdown_source,
+        text: converted.text,
+        full_text: converted.full_text,
+        published: converted.published,
+        byline: converted.byline,
+        site_name: converted.site_name,
+        reader: None,
     })
 }
 
 /// Read the markdown rendering a page declares through `<link rel="alternate"
 /// type="text/markdown">` on its own origin. It is the same content without navigation chrome or a
 /// JavaScript shell; any failure falls back to converting the HTML page.
-async fn fetch_markdown_alternate(html: &str, page_url: &Url) -> Option<ReadableText> {
+async fn fetch_markdown_alternate(html: &str, page_url: &Url) -> Option<(FetchedBody, Converted)> {
     let alternate = markdown_alternate_url(html, page_url)?;
     let fetched = tokio::time::timeout(
         MARKDOWN_ALTERNATE_TIMEOUT,
@@ -1785,17 +1956,10 @@ async fn fetch_markdown_alternate(html: &str, page_url: &Url) -> Option<Readable
         return None;
     }
     let decoded = String::from_utf8_lossy(&fetched.body).into_owned();
-    let text = readable_text(decoded, fetched.kind, &fetched.final_url)
+    let converted = convert_body(decoded, fetched.kind, &fetched.final_url)
         .await
         .ok()?;
-    Some(ReadableText {
-        text,
-        kind: TextKind::Markdown,
-        content_type: fetched.content_type,
-        bytes_read: fetched.body.len(),
-        truncated: fetched.truncated,
-        markdown_source: Some(fetched.final_url),
-    })
+    Some((fetched, converted))
 }
 
 fn markdown_alternate_url(html: &str, page_url: &Url) -> Option<Url> {
@@ -1849,80 +2013,181 @@ fn html_attribute<'a>(tag: &'a str, name: &'a str) -> Option<&'a str> {
     None
 }
 
-async fn readable_text(decoded: String, kind: TextKind, url: &Url) -> Result<String, FetchFailure> {
-    let converted = match kind {
-        TextKind::Html => {
-            let conversion_permit = tokio::time::timeout(
-                DNS_TIMEOUT,
-                HTML_CONVERSION_CONCURRENCY.clone().acquire_owned(),
-            )
-            .await
-            .map_err(|_| {
-                FetchFailure::new(
-                    "conversion_busy",
-                    "The bounded HTML conversion pool is busy.",
-                )
-                .retryable()
-                .at(url)
-            })?
-            .map_err(|_| {
-                FetchFailure::new(
-                    "conversion_unavailable",
-                    "The bounded HTML conversion pool is unavailable.",
-                )
-                .retryable()
-                .at(url)
-            })?;
-            tokio::task::spawn_blocking(move || {
-                // Keep the permit inside the blocking task. If the outer request times out,
-                // the non-cancellable conversion still occupies its slot until it truly ends.
-                let _conversion_permit = conversion_permit;
-                html_to_markdown(&decoded)
-            })
-            .await
-            .map_err(|_| {
-                FetchFailure::new(
-                    "conversion_failed",
-                    "The isolated HTML conversion task did not complete.",
-                )
-                .at(url)
-            })?
-            .map_err(|error| error.at(url))?
-        }
-        TextKind::Markdown | TextKind::Text => decoded,
+async fn convert_body(
+    decoded: String,
+    kind: TextKind,
+    url: &Url,
+) -> Result<Converted, FetchFailure> {
+    let mut converted = match kind {
+        TextKind::Html => convert_html_off_thread(decoded, url).await?,
+        TextKind::Markdown | TextKind::Text => Converted {
+            text: decoded,
+            ..Converted::default()
+        },
     };
-    let converted = remove_control_characters(converted);
-    ensure_sufficient_evidence_text(&converted, url)?;
+    converted.text = remove_control_characters(converted.text);
+    converted.full_text = converted.full_text.map(remove_control_characters);
+    ensure_sufficient_evidence_text(&converted.text, url)?;
     Ok(converted)
 }
 
-fn success_json(result: FetchSuccess) -> Value {
-    let final_url = result.final_url.as_str().to_string();
-    let source_id = source_id_for_url(&final_url);
-    let citation_markdown = markdown_citation(&result.title, &final_url);
-    json!({
+/// Converts an HTML page on the blocking pool, a bounded number at a time.
+async fn convert_html_off_thread(html: String, url: &Url) -> Result<Converted, FetchFailure> {
+    let pool_failure = |code: &'static str, message: &'static str| {
+        FetchFailure::new(code, message).retryable().at(url)
+    };
+    let conversion_permit = tokio::time::timeout(
+        DNS_TIMEOUT,
+        HTML_CONVERSION_CONCURRENCY.clone().acquire_owned(),
+    )
+    .await
+    .map_err(|_| {
+        pool_failure(
+            "conversion_busy",
+            "The bounded HTML conversion pool is busy.",
+        )
+    })?
+    .map_err(|_| {
+        pool_failure(
+            "conversion_unavailable",
+            "The bounded HTML conversion pool is unavailable.",
+        )
+    })?;
+    let page_url = url.clone();
+    tokio::task::spawn_blocking(move || {
+        // Keep the permit inside the blocking task. If the outer request times out, the
+        // non-cancellable conversion still occupies its slot until it truly ends.
+        let _conversion_permit = conversion_permit;
+        convert_html(&html, &page_url)
+    })
+    .await
+    .map_err(|_| {
+        FetchFailure::new(
+            "conversion_failed",
+            "The isolated HTML conversion task did not complete.",
+        )
+        .at(url)
+    })?
+    .map_err(|error| error.at(url))
+}
+
+/// The page as a research result: one window of its text, where the window sits, and what the
+/// model needs to cite it. Fields without a value are left out.
+fn page_json(page: &LoadedPage, request: &PageRequest) -> Value {
+    let shown = match (&page.full_text, request.full_page) {
+        (Some(full), true) => full.as_str(),
+        _ => page.text.as_str(),
+    };
+    let window = char_window(shown, request.offset, request.max_chars);
+    let hidden_page_chars = page
+        .full_text
+        .as_ref()
+        .filter(|_| !request.full_page)
+        .map(|full| full.chars().count());
+
+    let mut result = json!({
         "status": "ok",
         "tool": OPEN_URL_TOOL,
-        "requested_url": result.requested_url,
-        "url": final_url,
+        "requested_url": page.requested_url,
+        "url": page.final_url.as_str(),
         "citation_eligible": true,
-        "source": {
-            "source_id": source_id,
-            "title": result.title,
-            "url": result.final_url.as_str(),
-            "content_type": result.content_type,
-            "citation_markdown": citation_markdown,
-            "citation_eligible": true,
-        },
-        "format": result.format,
-        "markdown_source": result.markdown_source.map(String::from),
-        "content": result.text,
-        "bytes_read": result.bytes_read,
-        "truncated": result.truncated,
-        "redirects": result.redirects,
-        "find": result.find,
+        "source": page_source(page),
+        "format": page.format,
+        "extraction": if hidden_page_chars.is_some() { "main_content" } else { "full_page" },
+        "content": window.text,
+        "offset": window.start,
+        "total_chars": window.total,
+        "bytes_read": page.bytes_read,
+        "truncated": page.body_truncated || window.next.is_some(),
         "untrusted_content": true,
-    })
+    });
+    let optional = [
+        ("full_page_chars", hidden_page_chars.map(Value::from)),
+        ("next_offset", window.next.map(Value::from)),
+        ("reader", page.reader.map(Value::from)),
+        ("find", page_find(page, request)),
+    ];
+    for (name, value) in optional.into_iter().chain(page_fetch_facts(page)) {
+        if let Some(value) = value {
+            result[name] = value;
+        }
+    }
+    result
+}
+
+/// Matches of the request's `find` text in the whole page, whichever window is shown.
+fn page_find(page: &LoadedPage, request: &PageRequest) -> Option<Value> {
+    let query = request.find.as_deref()?;
+    let searched = page.full_text.as_deref().unwrap_or(&page.text);
+    Some(find_matches(searched, query, page.body_truncated))
+}
+
+/// How the page was reached, where that differs from one plain request for it.
+fn page_fetch_facts(page: &LoadedPage) -> [(&str, Option<Value>); 2] {
+    [
+        (
+            "markdown_source",
+            page.markdown_source.as_ref().map(|url| json!(url.as_str())),
+        ),
+        (
+            "redirects",
+            (!page.redirects.is_empty()).then(|| json!(page.redirects)),
+        ),
+    ]
+}
+
+/// What identifies a page as a source: how to cite it and what it states about itself.
+fn page_source(page: &LoadedPage) -> Value {
+    let url = page.final_url.as_str();
+    let mut source = Map::new();
+    source.insert("source_id".into(), json!(source_id_for_url(url)));
+    source.insert("title".into(), json!(page.title));
+    source.insert("url".into(), json!(url));
+    source.insert("content_type".into(), json!(page.content_type));
+    source.insert(
+        "citation_markdown".into(),
+        json!(markdown_citation(&page.title, url)),
+    );
+    source.insert("citation_eligible".into(), json!(true));
+    for (name, value) in [
+        ("published", &page.published),
+        ("byline", &page.byline),
+        ("site_name", &page.site_name),
+    ] {
+        if let Some(value) = value {
+            source.insert(name.into(), json!(value));
+        }
+    }
+    Value::Object(source)
+}
+
+/// `max_chars` characters of `text` from character `offset`, with where to read on.
+struct CharWindow {
+    text: String,
+    start: usize,
+    total: usize,
+    next: Option<usize>,
+}
+
+fn char_window(text: &str, offset: usize, max_chars: usize) -> CharWindow {
+    let total = text.chars().count();
+    let start = offset.min(total);
+    let start_byte = char_boundary_after(text, 0, start);
+    let end_byte = char_boundary_after(text, start_byte, max_chars);
+    let end = start + text[start_byte..end_byte].chars().count();
+    let mut shown = text[start_byte..end_byte].to_string();
+    let next = (end < total).then_some(end);
+    if let Some(next) = next {
+        shown.push_str(&format!(
+            "\n\n[Showing characters {start}-{end} of {total}. Call open_url again with offset {next} to read on, or use find.]"
+        ));
+    }
+    CharWindow {
+        text: shown,
+        start,
+        total,
+        next,
+    }
 }
 
 pub(super) fn parse_public_url(raw: &str) -> Result<Url, FetchFailure> {
@@ -2179,14 +2444,24 @@ fn classify_content_type(value: &str) -> Option<TextKind> {
     }
 }
 
-fn html_to_markdown(html: &str) -> Result<String, FetchFailure> {
-    let converter = HtmlToMarkdownBuilder::new()
+/// Markdown without what a reader cannot use: active regions, page chrome, media, and link
+/// targets. A link keeps its text only, since a URL inside page content is never authorized to be
+/// opened and on news pages those targets outweigh the article.
+fn markdown_converter() -> HtmlToMarkdown {
+    HtmlToMarkdownBuilder::new()
         .skip_tags(vec![
             "head", "script", "style", "noscript", "iframe", "svg", "canvas", "template", "form",
-            "button", "nav", "footer",
+            "button", "nav", "footer", "img", "picture", "source", "video", "audio", "object",
+            "embed",
         ])
-        .build();
-    converter.convert(html).map_err(|error| {
+        .add_handler(vec!["a"], |handlers: &dyn Handlers, element: Element| {
+            Some(handlers.walk_children(element.node))
+        })
+        .build()
+}
+
+fn html_to_markdown(html: &str) -> Result<String, FetchFailure> {
+    markdown_converter().convert(html).map_err(|error| {
         FetchFailure::new(
             "conversion_failed",
             format!("Could not convert the HTML page to safe text: {error}"),
@@ -2194,12 +2469,103 @@ fn html_to_markdown(html: &str) -> Result<String, FetchFailure> {
     })
 }
 
-fn ensure_sufficient_evidence_text(value: &str, url: &Url) -> Result<(), FetchFailure> {
-    let evidence_chars = value
+/// The article of an HTML page with the whole page behind it, or the whole page alone when it
+/// has no article worth the name (a listing, a table of figures, an app shell).
+fn convert_html(html: &str, url: &Url) -> Result<Converted, FetchFailure> {
+    let full = html_to_markdown(html)?;
+    // The extractor walks an arbitrary document; a page that trips it is read whole instead.
+    let article = std::panic::catch_unwind(|| extract_article(html, url))
+        .ok()
+        .flatten();
+    Ok(match article {
+        Some(article) => Converted {
+            full_text: (non_whitespace_chars(&full) > non_whitespace_chars(&article.text))
+                .then_some(full),
+            ..article
+        },
+        None => Converted {
+            text: full,
+            ..Converted::default()
+        },
+    })
+}
+
+/// Mozilla Readability's pick of the main content, headed by its title and what the page states
+/// about author and date.
+fn extract_article(html: &str, url: &Url) -> Option<Converted> {
+    let config = ReadabilityConfig {
+        max_elements_to_parse: MAX_READABILITY_ELEMENTS,
+        ..ReadabilityConfig::default()
+    };
+    let mut readability = Readability::new(html, Some(url.as_str()), Some(config)).ok()?;
+    if !readability.is_probably_readable() {
+        return None;
+    }
+    let article = readability.parse().ok()?;
+    let body = html_to_markdown(&article.content).ok()?;
+    if non_whitespace_chars(&body) < MIN_ARTICLE_NON_WHITESPACE_CHARS {
+        return None;
+    }
+    let clean = |value: Option<String>| {
+        value
+            .map(|value| remove_control_characters(collapse_whitespace(&value)))
+            .filter(|value| !value.is_empty())
+            .map(truncate_title)
+    };
+    // A title without a space is a slug or an id some pages put in their metadata.
+    let title = clean(Some(article.title)).filter(|title| title.contains(' '));
+    let mut article = Converted {
+        text: String::new(),
+        full_text: None,
+        title,
+        published: clean(article.published_time),
+        byline: clean(article.byline),
+        site_name: clean(article.site_name),
+    };
+    article.text = format!("{}{}", article_heading(&article), body.trim());
+    Some(article)
+}
+
+/// The lines above an article's body: its title, then who wrote it, when and where.
+fn article_heading(article: &Converted) -> String {
+    let facts: Vec<String> = [
+        article.byline.as_ref().map(|byline| format!("By {byline}")),
+        article
+            .published
+            .as_ref()
+            .map(|published| format!("Published {published}")),
+        article.site_name.clone(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let mut heading = article
+        .title
+        .as_ref()
+        .map(|title| format!("# {title}\n\n"))
+        .unwrap_or_default();
+    if !facts.is_empty() {
+        heading.push_str(&format!("{}\n\n", facts.join(" | ")));
+    }
+    heading
+}
+
+fn non_whitespace_chars(value: &str) -> usize {
+    value
         .chars()
         .filter(|character| !character.is_whitespace())
-        .count();
-    if evidence_chars >= MIN_EVIDENCE_NON_WHITESPACE_CHARS {
+        .count()
+}
+
+fn truncate_title(title: String) -> String {
+    match title.char_indices().nth(200) {
+        Some((end, _)) => title[..end].to_string(),
+        None => title,
+    }
+}
+
+fn ensure_sufficient_evidence_text(value: &str, url: &Url) -> Result<(), FetchFailure> {
+    if non_whitespace_chars(value) >= MIN_EVIDENCE_NON_WHITESPACE_CHARS {
         return Ok(());
     }
     Err(FetchFailure::new(
@@ -2223,7 +2589,7 @@ fn page_title(text: &str, url: &Url, kind: TextKind) -> String {
     title
         .map(|title| remove_control_characters(collapse_whitespace(&title)))
         .filter(|title| !title.is_empty())
-        .map(|title| truncate_chars(title, 200).0)
+        .map(truncate_title)
         .unwrap_or_else(|| url.host_str().unwrap_or("Web source").to_string())
 }
 
@@ -2424,15 +2790,6 @@ fn find_matches(value: &str, query: &str, source_body_truncated: bool) -> Value 
         "source_body_truncated": source_body_truncated,
         "matches": matches,
     })
-}
-
-fn truncate_chars(mut value: String, max_chars: usize) -> (String, bool) {
-    let Some((byte_index, _)) = value.char_indices().nth(max_chars) else {
-        return (value, false);
-    };
-    value.truncate(byte_index);
-    value.push_str("\n\n[Content truncated by open_url]");
-    (value, true)
 }
 
 pub fn source_id_for_url(url: &str) -> String {
@@ -2814,52 +3171,29 @@ mod tests {
     }
 
     #[test]
-    fn session_budget_caps_parallel_calls_and_aggregate_text() {
+    fn page_opens_are_paced_per_round_and_stopped_only_by_the_runaway_guard() {
         let mut budget = OpenUrlSessionBudget::default();
-        budget.begin_round(5);
-
-        for _ in 0..4 {
+        budget.begin_round(MAX_OPEN_URL_CALLS_PER_ROUND + 1);
+        for _ in 0..MAX_OPEN_URL_CALLS_PER_ROUND {
             let prepared = budget
                 .prepare_call(
                     OPEN_URL_TOOL,
-                    json!({ "url": "https://example.com", "max_chars": 40_000 }),
+                    json!({ "url": "https://example.com", "max_chars": 900_000 }),
                 )
                 .unwrap();
-            assert_eq!(prepared["max_chars"], 15_000);
+            assert_eq!(prepared["max_chars"], MAX_OUTPUT_CHARS);
         }
         let round_error = budget
-            .prepare_call(OPEN_URL_TOOL, json!({ "url": "https://example.com/fifth" }))
+            .prepare_call(OPEN_URL_TOOL, json!({ "url": "https://example.com/next" }))
             .unwrap_err();
         assert!(round_error.contains("open_url_round_call_budget_exceeded"));
+        assert!(round_error.contains("\"retryable\":true"));
 
-        budget.begin_round(4);
-        for _ in 0..4 {
-            let prepared = budget
-                .prepare_call(
-                    OPEN_URL_TOOL,
-                    json!({ "url": "https://example.com", "max_chars": 10_000 }),
-                )
-                .unwrap();
-            assert_eq!(prepared["max_chars"], 10_000);
-        }
-
-        budget.begin_round(4);
-        for _ in 0..2 {
-            let prepared = budget
-                .prepare_call(
-                    OPEN_URL_TOOL,
-                    json!({ "url": "https://example.com", "max_chars": 40_000 }),
-                )
-                .unwrap();
-            assert_eq!(prepared["max_chars"], 10_000);
-        }
-        let session_error = budget
-            .prepare_call(
-                OPEN_URL_TOOL,
-                json!({ "url": "https://example.com/eleventh" }),
-            )
-            .unwrap_err();
-        assert!(session_error.contains("open_url_session_call_budget_exceeded"));
+        budget.begin_round(1);
+        let prepared = budget
+            .prepare_call(OPEN_URL_TOOL, json!({ "url": "https://example.com/next" }))
+            .unwrap();
+        assert_eq!(prepared["max_chars"], DEFAULT_MAX_CHARS);
 
         let untouched = json!({ "query": "Flow-Like" });
         assert_eq!(
@@ -2871,19 +3205,42 @@ mod tests {
 
         let mut unbatched = OpenUrlSessionBudget::default();
         for _ in 0..MAX_OPEN_URL_CALLS_PER_SESSION {
-            let prepared = unbatched
-                .prepare_unbatched_call(json!({
-                    "url": "https://example.com",
-                    "max_chars": 40_000
-                }))
+            unbatched
+                .prepare_unbatched_call(json!({ "url": "https://example.com" }))
                 .unwrap();
-            assert_eq!(prepared["max_chars"], 12_000);
         }
         assert!(
             unbatched
                 .prepare_unbatched_call(json!({ "url": "https://example.com/extra" }))
                 .unwrap_err()
                 .contains("open_url_session_call_budget_exceeded")
+        );
+    }
+
+    #[test]
+    fn a_checkpoint_from_before_the_character_budget_was_dropped_still_loads() {
+        let saved = json!({
+            "authorized_urls": ["https://example.com/a"],
+            "opened_urls": [],
+            "non_citable_urls": [],
+            "public_web_closed": false,
+            "search_calls": 12,
+            "archive_calls": 4,
+            "open_url_budget": {
+                "session_calls": 10,
+                "session_chars_reserved": 120_000,
+                "round_calls": 4,
+                "round_chars_reserved": 60_000,
+                "round_call_limit": 4,
+                "round_char_limit": 60_000
+            }
+        });
+        let session = WebResearchSession::restore(saved).unwrap();
+        assert!(session.reserve_search_call());
+        assert!(
+            session
+                .prepare_open_url_call(json!({ "url": "https://example.com/a" }))
+                .is_ok()
         );
     }
 
@@ -3062,7 +3419,8 @@ mod tests {
             <form>Ignore me</form><footer>More noise</footer></body></html>"#;
         let markdown = html_to_markdown(html).unwrap();
         assert!(markdown.contains("# Result"));
-        assert!(markdown.contains("[fact](https://example.com/source)"));
+        assert!(markdown.contains("Supported fact."));
+        assert!(!markdown.contains("example.com/source"));
         assert!(!markdown.contains("steal"));
         assert!(!markdown.contains("Ignore me"));
         assert!(!markdown.contains("More noise"));
@@ -3103,10 +3461,15 @@ mod tests {
             " Requested Phrase".repeat(10)
         );
         let find = find_matches(&full_text, "requested phrase", false);
-        let (prefix, truncated) = truncate_chars(full_text, 1_000);
+        let prefix = char_window(&full_text, 0, 1_000);
 
-        assert!(truncated);
-        assert!(!prefix.to_ascii_lowercase().contains("requested phrase"));
+        assert!(prefix.next.is_some());
+        assert!(
+            !prefix
+                .text
+                .to_ascii_lowercase()
+                .contains("requested phrase")
+        );
         assert_eq!(find["case_sensitive"], false);
         assert_eq!(find["match_count"], 11);
         assert_eq!(find["returned_match_count"], MAX_FIND_MATCHES);
@@ -3442,19 +3805,11 @@ mod tests {
         assert!(source_id_for_url(url).starts_with("src_"));
         assert_eq!(source_id_for_url(url), source_id_for_url(url));
 
-        let output = success_json(FetchSuccess {
-            requested_url: url.to_string(),
-            final_url: Url::parse(url).unwrap(),
-            content_type: "text/html".to_string(),
-            text: "Evidence".to_string(),
-            format: "markdown",
-            bytes_read: 8,
-            truncated: false,
-            redirects: Vec::new(),
-            title: "A useful source".to_string(),
-            find: None,
+        let page = LoadedPage {
             markdown_source: Some(Url::parse("https://example.com/research.md").unwrap()),
-        });
+            ..test_page(url, "Evidence", None)
+        };
+        let output = page_json(&page, &whole_page());
         assert_eq!(output["tool"], OPEN_URL_TOOL);
         assert_eq!(output["untrusted_content"], true);
         assert_eq!(output["source"]["url"], url);
@@ -3464,16 +3819,194 @@ mod tests {
             output["source"]["citation_markdown"],
             "[A useful source](https://example.com/research?q=a)"
         );
+        assert_eq!(output["extraction"], "full_page");
+        assert!(output.get("find").is_none() && output.get("redirects").is_none());
+    }
+
+    fn test_page(url: &str, text: &str, full_text: Option<&str>) -> LoadedPage {
+        LoadedPage {
+            requested_url: url.to_string(),
+            final_url: Url::parse(url).unwrap(),
+            content_type: "text/html".to_string(),
+            format: "markdown",
+            bytes_read: text.len(),
+            body_truncated: false,
+            redirects: Vec::new(),
+            title: "A useful source".to_string(),
+            markdown_source: None,
+            text: text.to_string(),
+            full_text: full_text.map(str::to_string),
+            published: None,
+            byline: None,
+            site_name: None,
+            reader: None,
+        }
+    }
+
+    fn whole_page() -> PageRequest {
+        PageRequest::parse(&json!({})).unwrap()
     }
 
     #[test]
-    fn output_truncation_is_unicode_safe() {
-        let (value, truncated) = truncate_chars("aé🙂z".to_string(), 3);
-        assert!(truncated);
-        assert!(value.starts_with("aé🙂"));
+    fn output_windows_are_unicode_safe_and_say_where_to_read_on() {
+        let window = char_window("aé🙂z", 0, 3);
+        assert!(
+            window
+                .text
+                .starts_with("aé🙂\n\n[Showing characters 0-3 of 4.")
+        );
+        assert_eq!((window.start, window.total, window.next), (0, 4, Some(3)));
+        let rest = char_window("aé🙂z", 3, 3);
+        assert_eq!((rest.text.as_str(), rest.next), ("z", None));
+        let past_the_end = char_window("aé🙂z", 9, 3);
+        assert_eq!((past_the_end.text.as_str(), past_the_end.start), ("", 4));
         assert_eq!(
             remove_control_characters("left\u{202e}right\u{200b}".to_string()),
             "leftright"
         );
+    }
+
+    #[test]
+    fn a_page_is_read_in_windows_and_its_article_hides_the_rest_until_asked() {
+        let url = "https://example.com/story";
+        let full = format!(
+            "Menu Menu Menu\n\n{}\n\nRelated: figure 4711",
+            "x".repeat(3_000)
+        );
+        let page = test_page(url, &"x".repeat(3_000), Some(&full));
+
+        let first = page_json(
+            &page,
+            &PageRequest::parse(&json!({"max_chars": 1_000})).unwrap(),
+        );
+        assert_eq!(first["extraction"], "main_content");
+        assert_eq!(first["full_page_chars"], full.chars().count());
+        assert_eq!(
+            (&first["offset"], &first["next_offset"]),
+            (&json!(0), &json!(1_000))
+        );
+        assert_eq!(first["total_chars"], 3_000);
+        assert_eq!(first["truncated"], true);
+
+        let last = page_json(
+            &page,
+            &PageRequest::parse(&json!({"max_chars": 1_000, "offset": 2_000})).unwrap(),
+        );
+        assert_eq!(last["content"], "x".repeat(1_000));
+        assert!(last.get("next_offset").is_none());
+        assert_eq!(last["truncated"], false);
+
+        let found = page_json(
+            &page,
+            &PageRequest::parse(&json!({"find": "figure 4711"})).unwrap(),
+        );
+        assert_eq!(found["find"]["match_count"], 1, "find reads the whole page");
+        assert!(!found["content"].as_str().unwrap().contains("4711"));
+
+        let whole = page_json(
+            &page,
+            &PageRequest::parse(&json!({"full_page": true, "max_chars": 100_000})).unwrap(),
+        );
+        assert_eq!(whole["extraction"], "full_page");
+        assert!(whole["content"].as_str().unwrap().ends_with("figure 4711"));
+    }
+
+    #[test]
+    fn opened_pages_are_cached_per_turn_and_the_oldest_leave_first() {
+        let session = WebResearchSession::new("");
+        let first = session.cache_page(test_page("https://example.com/0", "zero", None));
+        assert!(Arc::ptr_eq(
+            &session.cached_page("https://example.com/0").unwrap(),
+            &first
+        ));
+        for index in 1..=MAX_CACHED_PAGES {
+            session.cache_page(test_page(
+                &format!("https://example.com/{index}"),
+                "page",
+                None,
+            ));
+        }
+        assert!(session.cached_page("https://example.com/0").is_none());
+        assert!(session.cached_page("https://example.com/1").is_some());
+    }
+
+    #[test]
+    fn an_article_is_extracted_with_its_date_and_the_page_stays_behind_it() {
+        let paragraph = "The carmaker cut its margin forecast for the second time this year, citing restructuring costs and weaker demand in China. ";
+        let html = format!(
+            r#"<html><head><title>Carmaker cuts outlook | Example News</title>
+            <meta property="article:published_time" content="2026-11-04T11:58:19Z">
+            <meta name="author" content="Jo Writer"></head>
+            <body><div class="menu"><a href="/a">Home</a> <a href="/b">Business</a> <a href="/c">Sport</a></div>
+            <article><h1>Carmaker cuts outlook</h1>{}</article>
+            <div class="related"><a href="/x">Ten cars you will not believe exist, with a long teaser to follow</a></div>
+            </body></html>"#,
+            format!("<p>{paragraph}</p>").repeat(8)
+        );
+        let converted =
+            convert_html(&html, &Url::parse("https://example.com/story").unwrap()).unwrap();
+        assert!(converted.text.contains("margin forecast"));
+        assert!(!converted.text.contains("Ten cars"));
+        assert_eq!(converted.published.as_deref(), Some("2026-11-04T11:58:19Z"));
+        assert!(converted.text.contains("Published 2026-11-04T11:58:19Z"));
+        let full = converted.full_text.expect("the whole page stays readable");
+        assert!(full.contains("Ten cars") && full.contains("Business"));
+
+        let listing = "<html><body><ul><li><a href='/1'>One</a></li><li><a href='/2'>Two</a></li></ul><p>Short.</p></body></html>";
+        let whole = convert_html(listing, &Url::parse("https://example.com/").unwrap()).unwrap();
+        assert!(whole.full_text.is_none() && whole.text.contains("One"));
+    }
+
+    #[test]
+    fn a_reader_is_tried_only_for_failures_another_client_can_get_past() {
+        let failure = |code: &'static str, status: Option<u16>| {
+            let failure = FetchFailure::new(code, "x");
+            match status {
+                Some(status) => failure.with_status(status),
+                None => failure,
+            }
+        };
+        for (code, status) in [
+            ("http_error", Some(403)),
+            ("http_error", Some(401)),
+            ("http_error", Some(503)),
+            ("insufficient_text_content", None),
+            ("unsupported_content_type", None),
+            ("timeout", None),
+        ] {
+            assert!(failure(code, status).reader_may_help(), "{code} {status:?}");
+        }
+        for (code, status) in [
+            ("http_error", Some(404)),
+            ("http_error", Some(410)),
+            ("url_not_authorized", None),
+            ("invalid_url", None),
+            ("blocked_address", None),
+            ("redirect_blocked", None),
+        ] {
+            assert!(
+                !failure(code, status).reader_may_help(),
+                "{code} {status:?}"
+            );
+        }
+
+        let requested = Url::parse("https://example.com/blocked").unwrap();
+        let page = page_from_reader(
+            requested.clone(),
+            ReaderPage {
+                reader: "firecrawl",
+                text: "# Read elsewhere\n\nThe page text as the reader returned it.".into(),
+                final_url: Some("http://127.0.0.1/internal".into()),
+                ..ReaderPage::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            page.final_url, requested,
+            "a reader cannot name a private page"
+        );
+        assert_eq!(page.title, "Read elsewhere");
+        assert_eq!(page_json(&page, &whole_page())["reader"], "firecrawl");
+        assert!(page_from_reader(requested, ReaderPage::default()).is_err());
     }
 }

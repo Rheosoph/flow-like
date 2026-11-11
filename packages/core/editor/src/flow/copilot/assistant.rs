@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use flow_like_model_provider::history::HistoryThinking;
-use flow_like_types::bot_message::WorkspaceHandle;
+use flow_like_types::bot_message::{AttachmentPart, WorkspaceHandle};
 use serde::Deserialize;
 
 use super::memory::AssistantMemory;
@@ -82,6 +82,53 @@ pub struct AttachmentManifestEntry {
     /// sets it for a file it serves; a client cannot send one.
     #[serde(skip)]
     pub handle: Option<WorkspaceHandle>,
+}
+
+/// The conversation id in the handle of an attachment the run serves from the chat's upload. It
+/// names no stored conversation, so the handle works only while the run answers the message.
+pub const TURN_FILES: &str = "chat";
+
+impl AttachmentManifestEntry {
+    /// Whether the handle works only while the run answers this message.
+    pub fn is_turn_file(&self) -> bool {
+        self.handle
+            .as_ref()
+            .and_then(WorkspaceHandle::conversation_id)
+            == Some(TURN_FILES)
+    }
+}
+
+/// The attachments with the files the stored message carries: a listed file takes the stored
+/// handle of the same name, and a stored file nobody listed is added.
+pub fn with_stored_files(
+    entries: &[AttachmentManifestEntry],
+    stored: &[AttachmentPart],
+) -> Vec<AttachmentManifestEntry> {
+    let mut unused: Vec<&AttachmentPart> =
+        stored.iter().filter(|part| part.handle.is_some()).collect();
+    let mut merged: Vec<AttachmentManifestEntry> = entries
+        .iter()
+        .map(|entry| {
+            let index = unused
+                .iter()
+                .position(|part| entry.name.as_deref() == Some(part.name.as_str()));
+            match index {
+                Some(index) => AttachmentManifestEntry {
+                    handle: unused.remove(index).handle.clone(),
+                    ..entry.clone()
+                },
+                None => entry.clone(),
+            }
+        })
+        .collect();
+    merged.extend(unused.into_iter().map(|part| AttachmentManifestEntry {
+        name: Some(part.name.clone()),
+        mime_type: part.handle.as_ref().map(|handle| handle.mime.clone()),
+        size: part.handle.as_ref().map(|handle| handle.bytes),
+        url: None,
+        handle: part.handle.clone(),
+    }));
+    merged
 }
 
 /// Inputs for [`build_platform_context`]. Each host gathers these from its own environment (Tauri

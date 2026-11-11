@@ -3,7 +3,7 @@
 use copilot_sdk::{AttachmentType, UserMessageAttachment};
 use flow_like::copilot::ChatImage;
 use flow_like::flow::copilot::AttachmentManifestEntry;
-use flow_like_bot_tools::FileData;
+use flow_like_bot_tools::{FileData, FileLink};
 use flow_like_types::bot_message::WorkspaceHandle;
 use flow_like_types::images::{
     PORTABLE_INLINE_IMAGE_BYTES, PORTABLE_INLINE_IMAGES_BYTES, fit_image_within,
@@ -124,7 +124,10 @@ fn local_asset_path(url: &str) -> Option<PathBuf> {
 
 /// A chat attachment's bytes and full size, from a local asset URL or an http(s) link. The bytes
 /// stay empty when the file is larger than `max_bytes`, so the caller can name its size.
-pub(crate) async fn read_chat_attachment(url: &str, max_bytes: u64) -> Result<(Vec<u8>, u64), String> {
+pub(crate) async fn read_chat_attachment(
+    url: &str,
+    max_bytes: u64,
+) -> Result<(Vec<u8>, u64), String> {
     if let Some(path) = local_asset_path(url) {
         let size = tokio::fs::metadata(&path)
             .await
@@ -170,7 +173,7 @@ pub(crate) async fn read_chat_attachment(url: &str, max_bytes: u64) -> Result<(V
 
 /// The conversation id in the handle of a file attached to the message being answered. It names
 /// no stored conversation: the run serves these files from the chat's upload.
-pub(crate) const CHAT_FILES: &str = "chat";
+pub(crate) const CHAT_FILES: &str = flow_like::flow::copilot::TURN_FILES;
 
 /// The handle a file tool reads `entry` with.
 pub(crate) fn chat_file_handle(entry: &AttachmentManifestEntry) -> Option<WorkspaceHandle> {
@@ -184,8 +187,8 @@ pub(crate) fn chat_file_handle(entry: &AttachmentManifestEntry) -> Option<Worksp
     ))
 }
 
-/// The attachments, each with its handle when it has a link to read and a name no other
-/// attachment shares.
+/// The attachments, each with its handle: the stored file's when the message carries one, else a
+/// handle for this turn when it has a link to read and a name no other attachment shares.
 pub(super) fn with_chat_file_handles(
     attachments: &[AttachmentManifestEntry],
 ) -> Vec<AttachmentManifestEntry> {
@@ -198,13 +201,27 @@ pub(super) fn with_chat_file_handles(
                 .count()
                 == 1;
             AttachmentManifestEntry {
-                handle: (unique && entry.url.is_some())
-                    .then(|| chat_file_handle(entry))
-                    .flatten(),
+                handle: entry.handle.clone().or_else(|| {
+                    (unique && entry.url.is_some())
+                        .then(|| chat_file_handle(entry))
+                        .flatten()
+                }),
                 ..entry.clone()
             }
         })
         .collect()
+}
+
+/// A download link to an attachment of this turn: its upload's web address, when it has one.
+pub(crate) fn chat_file_link(
+    attachments: &[AttachmentManifestEntry],
+    path: &str,
+) -> Option<FileLink> {
+    attachments
+        .iter()
+        .find(|entry| entry.name.as_deref() == Some(path))
+        .and_then(|entry| entry.url.as_deref())
+        .and_then(FileLink::web)
 }
 
 /// The file a [`chat_file_handle`] names, read from the chat's upload.

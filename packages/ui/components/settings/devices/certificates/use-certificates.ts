@@ -27,6 +27,7 @@ import {
 	replaceCertificateAuthority,
 } from "../../../../lib/device-management/storage";
 import type { DeviceCrypto } from "../../../../lib/device-management/types";
+import { ownNameFromClaims } from "../../../../lib/user-display";
 import { identityName } from "../access/person-name";
 import { useAreaTime } from "../primitives/area-context";
 import { useDeviceWorkspace } from "../workspace/device-workspace-provider";
@@ -340,9 +341,5 @@ export function usePerson(userId: string | undefined): Person {
 
 /** The signed-in person's name as the host's sign-in knows it. */
 export function useSignedInName(): string | undefined {
-	const profile = useContext(AuthContext)?.user?.profile;
-	if (!profile) return undefined;
-	return [profile.name, profile.preferred_username, profile.email].find(
-		Boolean,
-	);
+	return ownNameFromClaims(useContext(AuthContext)?.user?.profile);
 }

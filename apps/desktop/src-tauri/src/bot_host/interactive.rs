@@ -90,9 +90,10 @@ use super::{
     memory::{hub_source_for, source_for},
     store::HostStore,
 };
-use flow_like::flow::copilot::{MemoryTurnSource, ToolTrail};
+use flow_like::flow::copilot::{MemoryTurnSource, ReplyFiles, ToolTrail};
 use flow_like_local_bots::{InboxEntry, SendEntryRequest};
 use flow_like_types::{
+    bot_message::AttachmentPart,
     bot_turn::{INTERACTIVE_HOST_PREFIX, reply_message_id, turn_id},
     inbox::{InboxEntryKind, plain_envelope},
 };
@@ -140,6 +141,7 @@ pub struct InteractiveRun {
     encryption: Option<Arc<super::e2e::E2eHost>>,
     notes: Option<flow_like::flow::copilot::bot_notes::NotesHandle>,
     trail: Option<ToolTrail>,
+    reply_files: ReplyFiles,
 }
 
 impl InteractiveRun {
@@ -166,6 +168,7 @@ impl InteractiveRun {
             encryption: None,
             notes: None,
             trail: None,
+            reply_files: ReplyFiles::new(),
         })
     }
 
@@ -202,6 +205,21 @@ impl InteractiveRun {
                 })
             }),
         )
+    }
+
+    /// The files the stored trigger carries that were uploaded to this conversation.
+    pub async fn trigger_files(&self) -> Vec<AttachmentPart> {
+        let Ok(entries) = self.entries().await else {
+            return Vec::new();
+        };
+        trigger_of(entries, &self.args.trigger_message_id)
+            .and_then(|entry| super::rule::parse_body(&entry))
+            .map(|body| {
+                body.conversation_attachments(&self.args.conversation_id)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Whether the stored trigger is a spoken transcript: the run is a turn of a live call.
@@ -306,6 +324,11 @@ impl InteractiveRun {
         ));
         self.trail = Some(trail.clone());
         Some(trail)
+    }
+
+    /// The files the run attaches to its reply.
+    pub fn reply_files(&self) -> ReplyFiles {
+        self.reply_files.clone()
     }
 
     pub fn host_id(&self) -> String {
@@ -502,6 +525,7 @@ impl InteractiveRun {
         if let Some(notes) = &self.notes {
             flow_like_bot_host::notes::attach_note(&mut body, notes.touched().as_ref());
         }
+        self.reply_files.attach(&mut body);
         if let Some(trail) = &self.trail {
             trail.attach(&mut body);
         }

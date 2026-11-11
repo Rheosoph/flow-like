@@ -129,6 +129,7 @@ export async function followRealtimeExecution(options: {
 						);
 					return;
 				}
+				if (update.type === "reply") return;
 				const error = update.snapshot.errors.find(
 					(item) => item.run_id === runId,
 				);

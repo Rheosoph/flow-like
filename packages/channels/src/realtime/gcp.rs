@@ -1,11 +1,11 @@
-use super::{MAX_WAKE_BYTES, ready, valid_wakeup};
+use super::{Inbox, MAX_WAKE_BYTES};
 use crate::gcp::{
     auth::FirebaseAuth, database_root, json_url, path_segments, redirect_policy, validate_key,
 };
 use flow_like_types::{Result, anyhow, bail};
 use futures_util::StreamExt;
 use std::time::Duration;
-use tokio::sync::{Notify, watch};
+use tokio::sync::watch;
 
 /// A bounded SSE decoder. The provider stores one wakeup value at this exact path.
 #[derive(Default)]
@@ -49,14 +49,16 @@ impl Decoder {
     }
 }
 
-fn wakeup(kind: &str, text: &str) -> bool {
+/// The value a write to the watched node itself stored; `None` for every other event.
+fn written(kind: &str, text: &str) -> Option<Vec<u8>> {
     if !matches!(kind, "put" | "patch") {
-        return false;
+        return None;
     }
-    let Ok(event) = serde_json::from_str::<serde_json::Value>(text) else {
-        return false;
-    };
-    event["path"] == "/" && serde_json::to_vec(&event["data"]).is_ok_and(|data| valid_wakeup(&data))
+    let event = serde_json::from_str::<serde_json::Value>(text).ok()?;
+    if event["path"] != "/" {
+        return None;
+    }
+    serde_json::to_vec(&event["data"]).ok()
 }
 
 pub(super) async fn listen(
@@ -64,7 +66,7 @@ pub(super) async fn listen(
     api_key: &str,
     custom_token: &str,
     path: &str,
-    wake: &Notify,
+    inbox: &Inbox,
     healthy: &watch::Sender<bool>,
 ) -> Result<()> {
     let root = database_root(database_url)?;
@@ -107,7 +109,7 @@ pub(super) async fn listen(
     }
     let mut stream = response.bytes_stream();
     let mut decoder = Decoder::default();
-    ready(healthy, wake);
+    inbox.ready(healthy);
     loop {
         let chunk = tokio::time::timeout(Duration::from_secs(90), stream.next())
             .await
@@ -118,8 +120,8 @@ pub(super) async fn listen(
             if matches!(kind.as_str(), "cancel" | "auth_revoked") {
                 bail!("Realtime Firebase stream was revoked");
             }
-            if wakeup(&kind, &data) {
-                wake.notify_one();
+            if let Some(payload) = written(&kind, &data) {
+                inbox.receive(&payload);
             }
         }
     }
@@ -129,6 +131,10 @@ pub(super) async fn listen(
 mod tests {
     use super::*;
     use crate::gcp::allows_redirect;
+
+    fn wakeup(kind: &str, text: &str) -> bool {
+        written(kind, text).is_some_and(|payload| crate::realtime::valid_wakeup(&payload))
+    }
 
     #[test]
     fn fragmented_frames_reassemble_and_ignore_other_paths() {

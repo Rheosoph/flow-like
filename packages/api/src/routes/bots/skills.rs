@@ -411,7 +411,7 @@ pub(crate) async fn delete_in<C: ConnectionTrait>(
     tag = "Bots",
     params(("bot_id" = String, Path, description = "Your bot's id")),
     responses(
-        (status = 200, description = "The bot's skills with their status, by name.", body = BotSkillList),
+        (status = 200, description = "The bot's skills with their status, by name. The bot's own runtime token may read them.", body = BotSkillList),
         (status = 401, description = "Not signed in"),
         (status = 404, description = "You have no bot with this id")
     ),
@@ -423,7 +423,7 @@ pub async fn list_bot_skills(
     Extension(user): Extension<AppUser>,
     Path(bot_id): Path<String>,
 ) -> Result<Json<BotSkillList>, ApiError> {
-    let sub = user.sub()?;
+    let sub = crate::bot_caller::acting_owner_for(&state.db, &user, &bot_id).await?;
     let skills = list_in(&state.db, &sub, &bot_id)
         .await?
         .into_iter()
@@ -500,7 +500,7 @@ pub async fn propose_bot_skill(
     Path(bot_id): Path<String>,
     Json(body): Json<CreateBotSkillRequest>,
 ) -> Result<(StatusCode, Json<BotSkillInfo>), ApiError> {
-    let sub = user.sub()?;
+    let sub = crate::bot_caller::acting_owner_for(&state.db, &user, &bot_id).await?;
     let request = CreateBotSkill {
         name: body.name,
         description: body.description,

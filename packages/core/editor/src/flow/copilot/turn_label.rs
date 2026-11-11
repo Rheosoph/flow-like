@@ -44,6 +44,19 @@ const OUTBOUND_TOOLS: [&str; 20] = [
     "research_agent",
 ];
 
+/// Tools that send something out only when a call sets `url`: a download names its address to
+/// that host, and a linked attachment makes every reader's app load it.
+const OUTBOUND_WITH_URL: [&str; 2] = ["file_save", "file_attach"];
+
+fn is_outbound(tool_name: &str, args: &Value) -> bool {
+    OUTBOUND_TOOLS.contains(&tool_name)
+        || (OUTBOUND_WITH_URL.contains(&tool_name)
+            && args
+                .get("url")
+                .and_then(Value::as_str)
+                .is_some_and(|url| !url.trim().is_empty()))
+}
+
 #[derive(Default)]
 struct ComputeCells {
     child_ms: AtomicU64,
@@ -143,8 +156,8 @@ impl TurnLabel {
     }
 
     /// The refusal for an outbound call once the turn handled data above the bot's own level.
-    pub(super) fn refusal(&self, tool_name: &str) -> Option<String> {
-        if !OUTBOUND_TOOLS.contains(&tool_name) {
+    pub(super) fn refusal(&self, tool_name: &str, args: &Value) -> Option<String> {
+        if !is_outbound(tool_name, args) {
             return None;
         }
         let seen = self.get().classification?;
@@ -176,7 +189,7 @@ pub(super) struct LabelBridge {
 #[async_trait]
 impl PlatformToolBridge for LabelBridge {
     async fn call(&self, tool_name: &str, arguments: Value) -> String {
-        if let Some(refusal) = self.label.refusal(tool_name) {
+        if let Some(refusal) = self.label.refusal(tool_name, &arguments) {
             return refusal;
         }
         let output = self.inner.call(tool_name, arguments).await;
@@ -238,15 +251,36 @@ mod tests {
             pii: false,
         });
         for name in OUTBOUND_TOOLS {
-            assert!(label.refusal(name).is_some(), "{name} was not refused");
+            assert!(
+                label.refusal(name, &json!({})).is_some(),
+                "{name} was not refused"
+            );
         }
-        assert!(label.refusal("file_read").is_none());
+        assert!(label.refusal("file_read", &json!({})).is_none());
+    }
+
+    #[test]
+    fn a_download_or_a_linked_attachment_is_outbound_and_a_local_file_is_not() {
+        let label = label(Some(DataClassification::Internal));
+        label.raise(DataSensitivity {
+            classification: Some(DataClassification::Confidential),
+            pii: false,
+        });
+        for name in OUTBOUND_WITH_URL {
+            assert!(
+                label
+                    .refusal(name, &json!({ "url": "https://h/a.pdf" }))
+                    .is_some()
+            );
+            assert!(label.refusal(name, &json!({ "file": "bot/a.pdf" })).is_none());
+            assert!(label.refusal(name, &json!({ "url": " " })).is_none());
+        }
     }
 
     #[test]
     fn an_answer_marked_confidential_raises_the_label() {
         let label = label(Some(DataClassification::Internal));
         label.observe(r#"{"status":"ok","tool":"ask_bot","classification":"confidential"}"#);
-        assert!(label.refusal("email_send").is_some());
+        assert!(label.refusal("email_send", &json!({})).is_some());
     }
 }

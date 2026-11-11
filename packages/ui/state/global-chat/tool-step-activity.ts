@@ -153,6 +153,118 @@ function firstText(records: Record<string, unknown>[], keys: string[]) {
 	return undefined;
 }
 
+const RESOURCE_ID = /^[\w-]{1,128}$/;
+const APP_REFERENCE_KEYS = new Set([
+	"app_name",
+	"appName",
+	"event_name",
+	"eventName",
+]);
+
+function firstId(records: Record<string, unknown>[], keys: string[]) {
+	for (const record of records) {
+		for (const key of keys) {
+			const value = record[key];
+			if (typeof value === "string" && RESOURCE_ID.test(value)) return value;
+		}
+	}
+	return undefined;
+}
+
+type AppActivity = NonNullable<IToolActivityDetail["app"]>;
+
+function appActivity(
+	context: Record<string, unknown>[],
+	results: Record<string, unknown>[],
+	previous?: AppActivity,
+): AppActivity | undefined {
+	const records = [...context, ...results];
+	const id = firstId(records, ["app_id", "appId"]) ?? previous?.id;
+	if (!id) return undefined;
+	const fields = {
+		name: firstText(context, ["app_name", "appName"]),
+		eventId: firstId(records, ["event_id", "eventId"]),
+		eventName: firstText(context, ["event_name", "eventName"]),
+		eventType: firstText(results, ["event_type"]),
+		mcpTool: firstText(records, ["mcp_tool"]),
+		runStatus: firstText(results, ["run_status"]),
+	};
+	return {
+		...(previous?.id === id ? previous : {}),
+		id,
+		...Object.fromEntries(
+			Object.entries(fields).filter(([, value]) => value !== undefined),
+		),
+	};
+}
+
+const RUN_STATUS_LABELS: Record<string, string> = {
+	failed: "Run failed",
+	failure: "Run failed",
+	error: "Run failed",
+	cancelled: "Run cancelled",
+	canceled: "Run cancelled",
+	stopped: "Run stopped",
+	interrupted: "Run interrupted",
+	timeout: "Run didn't finish in time",
+	interaction_unavailable: "Run needed input it couldn't get",
+	started: "Run started",
+};
+
+const SUCCEEDED = /^(?:ok|done|completed|success|succeeded)$/i;
+
+function errorText(value: unknown): string | undefined {
+	const record = asRecord(value);
+	return record
+		? (toolActivityText(record.message) ?? toolActivityText(record.error))
+		: toolActivityText(value);
+}
+
+function mcpErrorText(results: Record<string, unknown>[]) {
+	for (const result of results) {
+		const inner = asRecord(result.result);
+		if (inner?.isError !== true || !Array.isArray(inner.content)) continue;
+		for (const block of inner.content) {
+			const text = toolActivityText(asRecord(block)?.text);
+			if (text) return text;
+		}
+	}
+	return undefined;
+}
+
+/** A failed app call names the run's state and the reason a person can act on. */
+function appOutcome(
+	results: Record<string, unknown>[],
+	runStatus: string | undefined,
+): string | undefined {
+	const status = firstText(results, ["status"]);
+	const run = runStatus?.toLowerCase();
+	if (run === "started") return RUN_STATUS_LABELS.started;
+	if ((!status || SUCCEEDED.test(status)) && (!run || SUCCEEDED.test(run)))
+		return undefined;
+	const label =
+		run && !SUCCEEDED.test(run)
+			? (RUN_STATUS_LABELS[run] ?? `Run ${run.replace(/_/g, " ")}`)
+			: undefined;
+	// With a run status, `error` is guidance for the model; the run's own error is the reason.
+	const reason =
+		results.map((result) => errorText(result.run_error)).find(Boolean) ??
+		mcpErrorText(results) ??
+		(run ? undefined : firstText(results, ["error", "message"]));
+	return [label, reason].filter(Boolean).join(" · ") || "Failed";
+}
+
+const BARE_FAILURE = /^(?:error|failed|failure)$/i;
+
+/** Why a failed call failed, as its result states it. */
+function failureReason(results: Record<string, unknown>[]) {
+	return results
+		.map(
+			(result) => errorText(result.error) ?? toolActivityText(result.message),
+		)
+		.find(Boolean);
+}
+
 function collectSources(records: Record<string, unknown>[]) {
 	type Source = NonNullable<IToolActivityDetail["sources"]>[number];
 	const sources = new Map<string, Source>();
@@ -291,7 +403,12 @@ export function buildToolActivity(
 			])
 		: [];
 	const query = queries[0];
-	const targetKeys =
+	const app = appActivity(context, results, previous?.app);
+	const appRunOutcome =
+		app && key.startsWith("call_app_")
+			? appOutcome(results, app.runStatus)
+			: undefined;
+	const allTargetKeys =
 		category === "files"
 			? ["path", "file_path", "filePath", "filename", "prefix"]
 			: category === "database"
@@ -304,15 +421,7 @@ export function buildToolActivity(
 						"appName",
 					]
 				: category === "apps"
-					? [
-							"app_name",
-							"appName",
-							"name",
-							"event_name",
-							"eventName",
-							"app_id",
-							"appId",
-						]
+					? ["app_name", "appName", "name", "event_name", "eventName"]
 					: category === "workflow"
 						? [
 								"board_name",
@@ -324,6 +433,10 @@ export function buildToolActivity(
 								"appName",
 							]
 						: [];
+	// The app reference shows the app and its event; repeating their names as text adds nothing.
+	const targetKeys = app
+		? allTargetKeys.filter((key) => !APP_REFERENCE_KEYS.has(key))
+		: allTargetKeys;
 	const target = firstText(context, targetKeys);
 	const rawMethod =
 		key === "http_request"
@@ -388,11 +501,16 @@ export function buildToolActivity(
 	const appsOutcome = appInventory
 		? `${appInventory.returned} app${appInventory.returned === 1 ? "" : "s"} found${appInventory.complete === false ? " · Partial inventory" : ""}`
 		: undefined;
+	// A summary that only repeats the status says nothing; the result's own message does.
+	const failure =
+		usefulSummary && BARE_FAILURE.test(usefulSummary)
+			? failureReason(results)
+			: undefined;
 	const outcome = httpStatus
 		? usefulSummary && !usefulSummary.includes(`HTTP ${httpStatus}`)
 			? `HTTP ${httpStatus} · ${usefulSummary}`
 			: `HTTP ${httpStatus}`
-		: (appsOutcome ?? usefulSummary);
+		: (appsOutcome ?? appRunOutcome ?? failure ?? usefulSummary);
 	const terminal =
 		key === "shell_run" ? terminalActivity(args, results, previous) : undefined;
 	const exchange =
@@ -407,6 +525,7 @@ export function buildToolActivity(
 		kind: "tool_activity",
 		category,
 		label,
+		...(app ? { app } : {}),
 		...(target ? { target } : {}),
 		...(query ? { query } : {}),
 		...(queries.length ? { queries } : {}),

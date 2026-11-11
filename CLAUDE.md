@@ -37,6 +37,24 @@ cargo check
 cargo test -p <package-name>
 ```
 
+### Shared cargo queue
+Many agent sessions build this repo at the same time, so compiling cargo commands go through one
+machine-wide queue ([tools/cargo-queue/cargo_queue.py](tools/cargo-queue/cargo_queue.py)). It runs
+one job at a time. A request identical to a queued job, or to a running job with no Rust source
+change since it started, joins that job and gets its output.
+
+- In Claude sessions a SessionStart hook puts the queue's `cargo` shim first on PATH, so run
+  `cargo check -p <pkg>` as usual. Codex and other agents run `tools/cargo-queue/bin/cargo` in
+  place of `cargo`.
+- Queued: `check`, `build`, `test`, `clippy`, `doc`, `bench`, `fix`, `clean` and the
+  `check-*`/`test-*`/`clippy-*`/`build-*` aliases. `fmt`, `metadata`, `run` and the rest run
+  directly.
+- Run cargo in the foreground. Do not background it, poll with `until ! pgrep cargo` loops, kill
+  cargo processes, or build into a private `CARGO_TARGET_DIR`.
+- The job id is printed first. If the command times out, the job keeps its place for 2 minutes:
+  reattach with `cargo queue wait <id>`. `cargo queue` lists running and queued jobs, and
+  `cargo queue cancel <id>` drops one.
+
 ### Frontend (Bun + Biome)
 ```bash
 # Lint / format

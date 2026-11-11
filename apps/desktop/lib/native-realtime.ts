@@ -1,6 +1,7 @@
 import type {
 	RealtimePollRequest,
 	RealtimePollResponse,
+	RealtimeReply,
 } from "@flow-like/flow-like-ui/lib/realtime/types";
 import { Channel, invoke } from "@tauri-apps/api/core";
 
@@ -16,6 +17,7 @@ export type NativeRealtimeMessage =
 				| "signed_out"
 				| "closed";
 	  }
+	| { type: "reply"; reply: RealtimeReply }
 	| { type: "update"; delivery_id: string; response: RealtimePollResponse };
 
 interface NativeRealtimeOptions {
@@ -46,7 +48,7 @@ export function watchNativeRealtime(
 		);
 	};
 	const state = (
-		message: Extract<NativeRealtimeMessage, { type: "state" }>,
+		message: Extract<NativeRealtimeMessage, { type: "state" | "reply" }>,
 	) => {
 		if (closed) return;
 		try {
@@ -57,7 +59,7 @@ export function watchNativeRealtime(
 	};
 	events.onmessage = (message) => {
 		if (closed) return;
-		if (message.type === "state") {
+		if (message.type === "state" || message.type === "reply") {
 			state(message);
 			return;
 		}

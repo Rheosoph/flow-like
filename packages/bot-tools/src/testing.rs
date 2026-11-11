@@ -20,12 +20,14 @@ use crate::documents::{
 };
 use crate::embed::KnowledgeEmbedder;
 use crate::env::{
-    Access, AppGrant, AppTables, Attachment, Environment, FileData, FileEntry, FileMeta, Limits,
-    MemorySessions, ModelRole, Scope, SessionCache, ToolEnv,
+    Access, AppGrant, AppTables, Attachment, Environment, FileData, FileEntry, FileLink, FileMeta,
+    Limits, MemorySessions, ModelRole, Scope, SessionCache, ToolEnv,
 };
 
 pub const WORKSPACE: &str = "ws-bot";
 pub const OTHER_APP: &str = "app-other";
+/// 2026-01-01T00:00:00Z, when every link the fake signs expires.
+pub const LINK_EXPIRES_AT_MS: i64 = 1_767_225_600_000;
 
 type Files = BTreeMap<(String, String), (Bytes, String, Option<DataClassification>)>;
 
@@ -71,6 +73,8 @@ pub struct FakeEnv {
     >,
     pub expensive_ok: AtomicBool,
     pub writable: AtomicBool,
+    /// Whether the host signs download links, as `https://files.test/<app>/<path>`.
+    pub signs_links: AtomicBool,
     connection: flow_like_storage::lancedb::Connection,
     _dir: TempDir,
 }
@@ -121,6 +125,7 @@ impl FakeEnv {
             app_dbs: Mutex::default(),
             expensive_ok: AtomicBool::new(false),
             writable: AtomicBool::new(true),
+            signs_links: AtomicBool::new(false),
             connection,
             _dir: dir,
         }
@@ -388,6 +393,13 @@ impl ToolEnv for FakeEnv {
             .expect("attachments")
             .get(&(seq, part.to_string()))
             .cloned())
+    }
+
+    async fn file_link(&self, app_id: &str, path: &str) -> Result<Option<FileLink>> {
+        Ok(self.signs_links.load(Ordering::SeqCst).then(|| FileLink {
+            url: format!("https://files.test/{app_id}/{path}"),
+            expires_at_ms: Some(LINK_EXPIRES_AT_MS),
+        }))
     }
 
     fn handle_granted(&self, handle: &WorkspaceHandle) -> bool {
@@ -682,7 +694,10 @@ impl DocumentBackend for FakeBackend {
         Ok("sheet text".to_string())
     }
 
-    fn create_pdf(&self, request: crate::documents::MarkdownDocument) -> Result<crate::documents::BuiltDocument> {
+    fn create_pdf(
+        &self,
+        request: crate::documents::MarkdownDocument,
+    ) -> Result<crate::documents::BuiltDocument> {
         self.created.lock().expect("created").push(format!(
             "pdf|{}|{}|{:?}",
             request.markdown,
@@ -696,11 +711,15 @@ impl DocumentBackend for FakeBackend {
         })
     }
 
-    fn create_docx(&self, request: crate::documents::MarkdownDocument) -> Result<crate::documents::BuiltDocument> {
-        self.created
-            .lock()
-            .expect("created")
-            .push(format!("docx|{}|{}", request.markdown, request.images.len()));
+    fn create_docx(
+        &self,
+        request: crate::documents::MarkdownDocument,
+    ) -> Result<crate::documents::BuiltDocument> {
+        self.created.lock().expect("created").push(format!(
+            "docx|{}|{}",
+            request.markdown,
+            request.images.len()
+        ));
         Ok(crate::documents::BuiltDocument {
             bytes: Bytes::from(format!("DOCX:{}", request.markdown)),
             count: None,
@@ -725,12 +744,24 @@ impl DocumentBackend for FakeBackend {
         })
     }
 
-    fn create_xlsx(&self, sheets: Vec<crate::documents::SheetData>) -> Result<crate::documents::BuiltDocument> {
+    fn create_xlsx(
+        &self,
+        sheets: Vec<crate::documents::SheetData>,
+    ) -> Result<crate::documents::BuiltDocument> {
         self.created.lock().expect("created").push(format!(
             "xlsx|{}",
             sheets
                 .iter()
-                .map(|s| format!("{}:{}:{:?}", s.name, s.rows.len(), s.rows.iter().flatten().filter(|c| matches!(c, crate::documents::SheetCell::Formula(_))).count()))
+                .map(|s| format!(
+                    "{}:{}:{:?}",
+                    s.name,
+                    s.rows.len(),
+                    s.rows
+                        .iter()
+                        .flatten()
+                        .filter(|c| matches!(c, crate::documents::SheetCell::Formula(_)))
+                        .count()
+                ))
                 .collect::<Vec<_>>()
                 .join(",")
         ));
@@ -760,7 +791,8 @@ impl DocumentBackend for FakeBackend {
             .chain(fill.images.iter().map(|(name, _)| name.clone()))
             .chain(fill.tables.iter().map(|(name, _)| name.clone()))
             .collect();
-        let (missing, filled): (Vec<_>, Vec<_>) = names.into_iter().partition(|n| n.starts_with("ghost"));
+        let (missing, filled): (Vec<_>, Vec<_>) =
+            names.into_iter().partition(|n| n.starts_with("ghost"));
         self.created
             .lock()
             .expect("created")

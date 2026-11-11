@@ -516,8 +516,13 @@ async fn released_user_name(
             .await
             .ok()
             .flatten()
-            .and_then(|user| user.name.or(user.preferred_username).or(user.username))
-            .filter(|name| !name.trim().is_empty()),
+            .and_then(|user| {
+                crate::routes::user::identity::public_display_name(
+                    user.name.as_deref(),
+                    user.preferred_username.as_deref(),
+                    user.email.as_deref(),
+                )
+            }),
         None => None,
     };
     name.unwrap_or_else(|| match denial {

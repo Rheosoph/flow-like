@@ -58,8 +58,6 @@ const TOOLS_NEEDING_UNLINKED_SERVICES: [&str; 13] = [
     "get_bot",
     "create_bot",
     "update_bot",
-    "skill_load",
-    "skill_propose",
     "connector_tools",
     "connector_call",
     "connector_request",
@@ -305,6 +303,7 @@ fn context_of(grant: &DeviceTurnGrant, job: &TurnJob, tools: HostTools) -> BotRu
         requester,
         acknowledgement: job.acknowledgement,
         live_call: job.live_call,
+        spoken_drafts: false,
         tool_gate: job.tool_gate.clone(),
         ephemeral_user_context: job.ephemeral_user_context,
         suppress_owner_notifications: job.suppress_owner_notifications,
@@ -413,6 +412,7 @@ impl DeviceRunner {
                 .with_notifier(Arc::new(HubNotifier(routes.clone())))
                 .with_scheduler(Arc::new(HubScheduler(routes.clone())))
                 .with_people(Arc::new(HubPeople(routes.clone())))
+                .with_skills(Arc::new(HubSkills(routes.clone())))
                 .with_user_context(Arc::new(HubUserContext(routes.clone())))
                 .with_mail(Arc::new(HubMail(routes.clone())));
             Arc::new(
@@ -534,6 +534,9 @@ impl TurnRunner for DeviceRunner {
         let mut tools = host_tools(&machine);
         if let Some(trail) = &job.trail {
             tools = tools.with_trail(trail.clone());
+        }
+        if let Some(files) = &job.reply_files {
+            tools = tools.with_reply_files(files.clone());
         }
         let mut context = context_of(grant, &job, tools);
         let access = Arc::new(PresignedAccess::new(

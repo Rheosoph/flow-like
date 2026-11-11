@@ -766,6 +766,36 @@ mod tests {
     }
 
     #[test]
+    fn another_bots_linked_file_reaches_the_room_with_its_whole_link() {
+        let link = "https://vault.s3.eu-central-1.amazonaws.com/offers/Offer.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc123";
+        let entries = vec![entry(
+            "made",
+            "maker",
+            InboxEntryKind::Message,
+            json!({
+                "text": "The offer is ready.",
+                "parts": [{ "kind": "attachment", "id": "a1", "name": "Offer.pdf", "url": link, "mime": "application/pdf" }]
+            }),
+        )];
+        let names = HashMap::from([("maker".to_string(), "Maker".to_string())]);
+        let note = format!("[file: Offer.pdf (link: {link})]");
+
+        let turn = transcript(
+            "reader",
+            ConversationKind::Group,
+            "made",
+            &entries,
+            &names,
+            "owner",
+        )
+        .unwrap();
+        assert!(turn.prompt.contains(&note), "{}", turn.prompt);
+
+        let history = render_history("other", ConversationKind::Group, &entries, &names, "owner", 8);
+        assert!(history[0].content.contains(&note), "{}", history[0].content);
+    }
+
+    #[test]
     fn rendered_history_applies_topics_edits_and_tombstones_before_its_limit() {
         let mut deleted = entry(
             "deleted",

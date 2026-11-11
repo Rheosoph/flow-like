@@ -1,8 +1,8 @@
-//! Clients post channel input to the API, which relays it to the configured waiter.
-//! Older direct provider handles can use the same endpoint as their HTTP fallback.
+//! A client that cannot reach its provider posts channel input to the API, which relays it to
+//! the configured waiter. This is the fallback of every provider handle.
 //!
 //! The API forwards with its own provider credentials, so it enforces what the provider rules
-//! enforced on direct clients: the channel deadline and the provider's message size.
+//! enforce on direct clients: the channel deadline and the provider's message size.
 
 use std::sync::Arc;
 

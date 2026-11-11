@@ -585,6 +585,7 @@ pub async fn refresh_bot_connector(
             authorization,
         }],
         skill_call: None,
+        files: Vec::new(),
     };
     let principal = BotUser {
         bot_id: bot_id.clone(),

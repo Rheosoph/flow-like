@@ -6,6 +6,7 @@ import type {
 	RealtimeMessage,
 	RealtimePollResponse,
 	RealtimePort,
+	RealtimeReply,
 } from "./types";
 
 const clients: RealtimeClient[] = [];
@@ -72,7 +73,12 @@ function worker(
 	intercept?: (message: RealtimeMessage, deliver: () => void) => void,
 ) {
 	runtimes.push(runtime);
-	const instances: { onerror: (() => void) | null }[] = [];
+	const instances: {
+		onerror: (() => void) | null;
+		port: {
+			onmessage: ((message: MessageEvent<RealtimeMessage>) => void) | null;
+		};
+	}[] = [];
 	vi.stubGlobal(
 		"SharedWorker",
 		class {
@@ -445,5 +451,37 @@ describe("browser realtime connection", () => {
 		client.setSubscriptions({ notifications: true, runs: [] });
 		await vi.advanceTimersByTimeAsync(15_001);
 		expect(attempts).toBe(2);
+	});
+
+	test("a reply reaches listeners and is never acknowledged", async () => {
+		const fetcher = vi.fn(hold);
+		vi.stubGlobal("fetch", replayOnly(fetcher));
+		const runtime = new RealtimeRuntime({ fetch: replayOnly(fetcher) });
+		const received = vi.spyOn(runtime, "receive");
+		const instances = worker(runtime);
+		const client = await connect();
+		const listener = vi.fn();
+		client.subscribe(listener);
+		await vi.advanceTimersByTimeAsync(1);
+		const reply: RealtimeReply = {
+			protocol_version: 1,
+			kind: "reply",
+			conversation_id: "c1",
+			message_id: "re-1",
+			reply_to: "m1",
+			sender_id: "bot",
+			offset: 0,
+			text: "Hello",
+			state: "writing",
+		};
+		const before = received.mock.calls.length;
+		instances[0].port.onmessage?.({
+			data: { type: "reply", reply },
+		} as MessageEvent<RealtimeMessage>);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(listener).toHaveBeenCalledWith({ type: "reply", reply });
+		expect(
+			received.mock.calls.slice(before).map(([, command]) => command.type),
+		).not.toContain("accepted");
 	});
 });

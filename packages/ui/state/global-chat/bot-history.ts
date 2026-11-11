@@ -7,10 +7,12 @@ import {
 } from "../../components/bots-tab/fold-entries";
 import { triggerModelText } from "../../components/bots-tab/note-facts";
 import type { IMessage } from "../../components/interfaces/chat-default/chat-db";
+import { directAttachmentOf } from "../../lib/inbox-attachment-part";
 import { compareInboxCursors } from "../../lib/inbox-cursor";
 import { IRole } from "../../lib/schema/llm/history";
 import type {
 	IConversationSegment,
+	IInboxAttachmentPart,
 	IInboxEntry,
 	IInboxImportEntry,
 	IInboxPlainEnvelope,
@@ -78,11 +80,16 @@ export function forgetBotConversation(botId?: string) {
 export function interactiveEnvelope(
 	text: string,
 	clientRunId: string,
+	parts: readonly IInboxAttachmentPart[] = [],
 ): IInboxPlainEnvelope {
 	return {
 		v: 1,
 		enc: "none",
-		body: { text, interactive: { client_run_id: clientRunId } },
+		body: {
+			text,
+			interactive: { client_run_id: clientRunId },
+			...(parts.length > 0 ? { parts: [...parts] } : {}),
+		},
 	};
 }
 
@@ -114,6 +121,8 @@ export function sendInteractive(
 		text: string;
 		clientRunId: string;
 		transcript?: VoiceTranscript;
+		/** Files already uploaded into the conversation; a spoken line carries none. */
+		parts?: readonly IInboxAttachmentPart[];
 	},
 ): Promise<IInboxEntry> {
 	return inbox.sendEntry(target.conversationId, {
@@ -125,7 +134,7 @@ export function sendInteractive(
 					message.clientRunId,
 					message.transcript,
 				)
-			: interactiveEnvelope(message.text, message.clientRunId),
+			: interactiveEnvelope(message.text, message.clientRunId, message.parts),
 	});
 }
 
@@ -227,7 +236,13 @@ function messageOf(
 			role: item.senderId === botId ? IRole.Assistant : IRole.User,
 			content: approval || item.userContext || error ? "" : item.content.text,
 		},
-		files: [],
+		files:
+			item.senderId === botId
+				? (item.attachments ?? []).flatMap((part) => {
+						const attachment = directAttachmentOf(part);
+						return attachment ? [attachment] : [];
+					})
+				: [],
 		tools: [],
 		actions: [],
 		timestamp: item.time,

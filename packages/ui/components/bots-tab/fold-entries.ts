@@ -1,4 +1,5 @@
 import { compareInboxCursors } from "../../hooks/use-inbox";
+import { isHttpUrl } from "../../lib/inbox-attachment-part";
 import { isRecord } from "../../lib/response-shape";
 import type { IBotNoteRef } from "../../state/backend-state/bot-state";
 import type {
@@ -57,8 +58,8 @@ function attachmentsOf(entry: IInboxEntry): IInboxAttachmentPart[] {
 			isRecord(part) &&
 			part.kind === "attachment" &&
 			typeof part.name === "string" &&
-			isRecord(part.handle) &&
-			typeof part.handle.path === "string",
+			((isRecord(part.handle) && typeof part.handle.path === "string") ||
+				isHttpUrl(part.url)),
 	);
 }
 

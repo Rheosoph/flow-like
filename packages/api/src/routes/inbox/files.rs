@@ -310,7 +310,7 @@ pub(crate) async fn complete_in<C: ConnectionTrait>(
     Ok(ready_of(&ready.update(db).await?))
 }
 
-async fn hash_object(
+pub(super) async fn hash_object(
     store: &dyn ObjectStore,
     location: &ObjectPath,
 ) -> Result<String, object_store::Error> {

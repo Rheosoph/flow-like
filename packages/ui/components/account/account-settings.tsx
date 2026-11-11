@@ -17,9 +17,13 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
+import { apiErrorMessage } from "../../lib/api-error";
 import { userAvatarUrl, userInitials } from "../../lib/user-display";
 import { useBackend } from "../../state/backend-state";
-import type { IUserInfo } from "../../state/backend-state/user-state";
+import type {
+	IUserInfo,
+	IUserUpdate,
+} from "../../state/backend-state/user-state";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { Badge } from "../ui/badge";
@@ -35,7 +39,6 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Skeleton } from "../ui/skeleton";
 import { Textarea } from "../ui/textarea";
-import { AvailabilitySettings } from "./availability-settings";
 import {
 	accountDraft,
 	accountError,
@@ -43,16 +46,16 @@ import {
 	invalidateAccountIdentity,
 	mergeAccountDraft,
 } from "./account-model";
+import { AvailabilitySettings } from "./availability-settings";
+import { EmailVisibility } from "./email-visibility";
 
 export interface ProfileActions {
 	updateEmail?: () => Promise<void>;
-	handleAttributeUpdate?: (attribute: string, value: string) => Promise<void>;
 	changePassword?: () => Promise<void>;
 	viewBilling?: () => Promise<void>;
 	previewProfile?: () => Promise<void>;
 	viewSubscription?: () => Promise<void>;
 	providerManaged?: boolean;
-	credentialsReady?: boolean;
 }
 
 export function ProfilePage({ actions = {} }: { actions?: ProfileActions }) {
@@ -88,7 +91,6 @@ export function ProfilePage({ actions = {} }: { actions?: ProfileActions }) {
 
 	const saved = accountDraft(info.data);
 	const hasChanges = accountHasChanges(draft, saved);
-	const canEditUsername = Boolean(actions.handleAttributeUpdate);
 
 	async function save(event: React.FormEvent) {
 		event.preventDefault();
@@ -107,7 +109,7 @@ export function ProfilePage({ actions = {} }: { actions?: ProfileActions }) {
 			);
 			return;
 		}
-		if (canEditUsername && next.username !== saved.username && !next.username) {
+		if (next.username !== saved.username && !next.username) {
 			setError(
 				t(
 					"accountUsernameRequired",
@@ -119,32 +121,21 @@ export function ProfilePage({ actions = {} }: { actions?: ProfileActions }) {
 		busy.current = true;
 		setPending("profile");
 		setError("");
-		let usernameSaved = false;
-		let profileSaved = false;
 		try {
-			if (actions.handleAttributeUpdate && next.username !== saved.username) {
-				await actions.handleAttributeUpdate(
-					"preferred_username",
-					next.username,
-				);
-				usernameSaved = true;
-			}
-			if (next.name !== saved.name || next.description !== saved.description) {
-				await backend.userState.updateUser({
-					name: next.name,
-					description: next.description,
-				});
-				profileSaved = true;
-			}
+			const changes: IUserUpdate = {};
+			if (next.name !== saved.name) changes.name = next.name;
+			if (next.description !== saved.description)
+				changes.description = next.description;
+			if (next.username !== saved.username)
+				changes.preferred_username = next.username;
+			await backend.userState.updateUser(changes);
 			const infoKey = [backend.userState.getInfo.name];
-			// Both writes completed. Keep the confirmed values if refreshing fails.
+			// Keep the confirmed values if refreshing fails.
 			client.setQueryData<IUserInfo>(infoKey, {
 				...info.data,
 				name: next.name,
 				description: next.description,
-				preferred_username: canEditUsername
-					? next.username
-					: info.data.preferred_username,
+				preferred_username: next.username,
 			});
 			await invalidateAccountIdentity(client);
 			const refreshed = client.getQueryData<IUserInfo>(infoKey);
@@ -153,21 +144,17 @@ export function ProfilePage({ actions = {} }: { actions?: ProfileActions }) {
 			setDraft(confirmed);
 			toast.success(t("accountProfileSaved", "Profile saved."));
 		} catch (cause) {
-			if (usernameSaved || profileSaved)
-				await invalidateAccountIdentity(client);
 			setError(
-				usernameSaved
-					? t(
-							"accountPartialSave",
-							"Your username changed, but your other profile changes could not be saved. Your draft is still here. Try saving again.",
-						)
-					: accountError(
-							cause,
-							t(
-								"accountSaveFailed",
-								"Your profile could not be saved. Your changes are still here. Try again.",
-							),
+				apiErrorMessage(
+					cause,
+					accountError(
+						cause,
+						t(
+							"accountSaveFailed",
+							"Your profile could not be saved. Your changes are still here. Try again.",
 						),
+					),
+				),
 			);
 		} finally {
 			busy.current = false;
@@ -401,8 +388,7 @@ export function ProfilePage({ actions = {} }: { actions?: ProfileActions }) {
 										id="account-username"
 										name="username"
 										autoComplete="username"
-										maxLength={128}
-										readOnly={!canEditUsername}
+										maxLength={30}
 										disabled={Boolean(pending)}
 										aria-describedby="account-username-help"
 										value={draft.username}
@@ -417,20 +403,10 @@ export function ProfilePage({ actions = {} }: { actions?: ProfileActions }) {
 										id="account-username-help"
 										className="text-xs text-muted-foreground"
 									>
-										{canEditUsername
-											? t(
-													"accountUsernameHelp",
-													"Your username appears alongside your display name.",
-												)
-											: actions.credentialsReady === false
-												? t(
-														"accountSignInLoading",
-														"Loading your sign-in options...",
-													)
-												: t(
-														"accountUsernameManaged",
-														"Your sign-in provider manages this username.",
-													)}
+										{t(
+											"accountUsernameRules",
+											"People find and mention you by your username: 3 to 30 letters, digits, dots, hyphens or underscores.",
+										)}
 									</p>
 								</div>
 								<div className="space-y-2">
@@ -541,6 +517,7 @@ export function ProfilePage({ actions = {} }: { actions?: ProfileActions }) {
 									</Button>
 								)}
 							</div>
+							<EmailVisibility info={info.data} disabled={Boolean(pending)} />
 							<div className="flex flex-col gap-3 pt-4 sm:flex-row sm:items-center sm:justify-between">
 								<div className="space-y-1">
 									<p className="flex items-center gap-2 text-sm font-medium">

@@ -415,6 +415,64 @@ try {
 		await historyUndo();
 		assert.deepEqual((await snapshot()).board.nodes, before.board.nodes);
 	});
+	await test("new wires dropped inside a comment or on a node body open the palette", async () => {
+		const comment = await node("background").boundingBox();
+		assert.ok(comment);
+		const nativeBody = await header("native");
+		const from = await pin("integer-a", "out");
+		for (const to of [
+			{
+				x: comment.x + comment.width * 0.9,
+				y: comment.y + comment.height * 0.85,
+			},
+			{ x: nativeBody.x, y: nativeBody.y + 22 },
+		]) {
+			await drag(from, to);
+			await palette().waitFor();
+			await page.keyboard.press("Escape");
+			await palette().waitFor({ state: "hidden" });
+			await page.mouse.move(700, 470);
+			await settle();
+		}
+	});
+	await test("a connection drawn while the previous one saves is saved too", async () => {
+		const pairs = [
+			[await pin("integer-a", "out"), await pin("integer-b", "in")],
+			[await pin("string-b", "out"), await pin("native", "in")],
+		];
+		await page.mouse.move(700, 470);
+		await settle();
+		await api("setDelay", 600);
+		for (const [from, to] of pairs) await drag(from, to);
+		await page.waitForFunction(
+			() =>
+				window.__boardHost
+					.snapshot()
+					.transactions.filter(
+						(t) =>
+							t.finished &&
+							t.commands.some((c) => c.command_type === "ConnectPin"),
+					).length === 2,
+			undefined,
+			{ timeout: 10000 },
+		);
+	});
+	await test("clicks on a pin, its label and its inline editor select the node", async () => {
+		const input = await pin("integer-a", "in");
+		for (const at of [input, { x: input.x + 25, y: input.y }]) {
+			await page.mouse.click(at.x, at.y);
+			await settle();
+			assert.deepEqual(await selected(), ["integer-a"]);
+			await page.mouse.click(700, 470);
+			await settle();
+			assert.deepEqual(await selected(), []);
+		}
+		const editor = await pin("string-c", "in");
+		await page.mouse.click(editor.x + 18, editor.y);
+		await settle();
+		assert.deepEqual(await selected(), ["string-c"]);
+		await page.keyboard.press("Escape");
+	});
 	await test("comment drag carries enclosed nodes and Alt-drag moves only the comment", async () => {
 		const before = await snapshot();
 		const box = await node("background").boundingBox();

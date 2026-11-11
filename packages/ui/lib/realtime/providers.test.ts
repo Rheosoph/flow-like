@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
 	awsRealtimeWebsocketUrl,
 	openRealtimeProvider,
+	parseRealtimeReply,
 	parseRealtimeWakeup,
 } from "./providers";
 import type { RealtimeTransport } from "./types";
@@ -40,6 +41,18 @@ const wakeup = {
 	protocol_version: 1,
 	kind: "invalidate",
 	nonce: "n1",
+} as const;
+
+const reply = {
+	protocol_version: 1,
+	kind: "reply",
+	conversation_id: "c1",
+	message_id: "re-1",
+	reply_to: "m1",
+	sender_id: "bot",
+	offset: 0,
+	text: "Hello",
+	state: "writing",
 } as const;
 
 beforeEach(() => {
@@ -87,6 +100,92 @@ describe("receive-only provider adapters", () => {
 		expect(
 			parseRealtimeWakeup(`${JSON.stringify(wakeup)}${" ".repeat(4096)}`),
 		).toBeUndefined();
+	});
+
+	test("parses a reply from a string or an object and keeps only known fields", () => {
+		expect(parseRealtimeReply(JSON.stringify(reply))).toEqual(reply);
+		expect(parseRealtimeReply({ ...reply, extra: { a: 1 } })).toEqual(reply);
+		expect(
+			Object.keys(parseRealtimeReply({ ...reply, extra: 1 }) ?? {}),
+		).toEqual(Object.keys(reply));
+		expect(parseRealtimeReply({ ...reply, text: "" })).toEqual({
+			...reply,
+			text: "",
+		});
+	});
+
+	test.each([
+		["version", { protocol_version: 2 }],
+		["kind", { kind: "invalidate" }],
+		["empty conversation id", { conversation_id: "" }],
+		["empty message id", { message_id: "" }],
+		["long reply_to", { reply_to: "a".repeat(257) }],
+		["control character", { sender_id: "bot\u0007" }],
+		["negative offset", { offset: -1 }],
+		["fractional offset", { offset: 1.5 }],
+		["non-string text", { text: 5 }],
+		["unknown state", { state: "typing" }],
+		["long text", { text: "x".repeat(4097) }],
+	])("rejects a reply with an invalid %s", (_name, patch) => {
+		expect(parseRealtimeReply({ ...reply, ...patch })).toBeUndefined();
+	});
+
+	test("rejects a reply string over 4096 bytes or that is not JSON", () => {
+		expect(
+			parseRealtimeReply(JSON.stringify({ ...reply, text: "あ".repeat(1400) })),
+		).toBeUndefined();
+		expect(parseRealtimeReply("{nope")).toBeUndefined();
+		expect(parseRealtimeReply(null)).toBeUndefined();
+		expect(parseRealtimeReply([reply])).toBeUndefined();
+	});
+
+	test("a wake-up parser rejects a reply", () => {
+		expect(parseRealtimeWakeup(reply)).toBeUndefined();
+	});
+
+	test("AWS delivers replies and wake-ups, and ignores replies without a callback", async () => {
+		const open = async (events: ReturnType<typeof callbacks> | object) => {
+			const known = Socket.sockets.length;
+			const pending = openRealtimeProvider(
+				awsGrant,
+				events as Parameters<typeof openRealtimeProvider>[1],
+				signal(),
+			);
+			await vi.waitFor(() =>
+				expect(Socket.sockets.length).toBeGreaterThan(known),
+			);
+			const socket = Socket.sockets.at(-1) as Socket;
+			socket.dispatchEvent(new Event("open"));
+			socket.message(Uint8Array.of(0x20, 2, 0, 0).buffer);
+			socket.message(Uint8Array.of(0x90, 3, 0, 1, 0).buffer);
+			await pending;
+			const topic = new TextEncoder().encode(awsGrant.topic);
+			return (payload: unknown) => {
+				const data = new TextEncoder().encode(JSON.stringify(payload));
+				const remaining = topic.length + data.length + 2;
+				socket.message(
+					Uint8Array.from([
+						0x30,
+						(remaining & 0x7f) | 0x80,
+						remaining >> 7,
+						0,
+						topic.length,
+						...topic,
+						...data,
+					]).buffer,
+				);
+			};
+		};
+		const events = { ...callbacks(), reply: vi.fn() };
+		const publish = await open(events);
+		publish(reply);
+		publish(wakeup);
+		expect(events.reply).toHaveBeenCalledExactlyOnceWith(reply);
+		expect(events.wakeup).toHaveBeenCalledExactlyOnceWith(wakeup);
+		const bare = callbacks();
+		const publishBare = await open(bare);
+		expect(() => publishBare(reply)).not.toThrow();
+		expect(bare.wakeup).not.toHaveBeenCalled();
 	});
 
 	test("Azure pings idle connections and recovers when server liveness disappears", async () => {

@@ -10,6 +10,7 @@ use super::{
     kick,
     ledger::{self, ClaimRequest, Claimed},
     recover,
+    reply_stream::ReplyStream,
 };
 use crate::{
     db::{DbDialect, RetryPolicy, retry_transaction},
@@ -42,7 +43,8 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Duration as ChronoDuration, FixedOffset};
 use flow_like::{
     flow::copilot::{
-        BotToolHost, BotToolset, HeadlessMemory, NotesHandle, PlatformContextInput, ToolTrail,
+        BotToolHost, BotToolset, HeadlessMemory, NotesHandle, PlatformContextInput, ReplyFiles,
+        ToolTrail,
         bot_platform_context,
         bot_talk::{AnsweredRound, BotPresence, BotTalk},
         decision_event::{self, EventDecision},
@@ -392,6 +394,10 @@ impl PlatformToolBridge for HeadlessBridge {
     async fn is_cancelled(&self) -> bool {
         !holds_lease_or_retry(&self.state.db, &self.turn_id, &self.host_id).await
     }
+
+    async fn bot_secret(&self, name: &str) -> Option<String> {
+        self.bot_tools.as_ref()?.secret(name).await
+    }
 }
 
 pub(super) fn usable_decision_model<'a>(
@@ -584,6 +590,10 @@ pub(crate) fn answer_request(turn: &bot_turn::Model, answer: &Answer) -> Option<
             envelope["body"]["note"] = json!(note);
         }
         if let Some(envelope) = request.envelope.as_mut() {
+            flow_like_types::bot_reply_files::attach_reply_files(
+                &mut envelope["body"],
+                &answer.files,
+            );
             flow_like_types::bot_tool_trail::attach_tool_parts(
                 &mut envelope["body"],
                 &answer.tool_calls,
@@ -617,6 +627,8 @@ pub(crate) struct Answer {
     pub(crate) note: Option<flow_like_types::bot_notes::NoteRef>,
     /// The turn's tool calls, kept on the reply in the owner's direct conversation.
     pub(crate) tool_calls: Vec<flow_like_types::bot_tool_trail::ToolCall>,
+    /// The files the bot attached to its reply with `file_attach`.
+    pub(crate) files: Vec<flow_like_types::bot_reply_files::ReplyFile>,
 }
 
 type DecisionResult = Option<Result<flow_like::flow::copilot::decision::Decision, ApiError>>;
@@ -653,6 +665,7 @@ fn silent_answer(completed: bool) -> Answer {
         event_delivery: None,
         note: None,
         tool_calls: Vec::new(),
+        files: Vec::new(),
     }
 }
 
@@ -920,6 +933,7 @@ async fn attempt_with(
             event_delivery: None,
             note: None,
             tool_calls: Vec::new(),
+            files: Vec::new(),
         });
     }
     let reacting = trigger_kind == Some(InboxEntryKind::Reaction);
@@ -970,6 +984,7 @@ async fn attempt_with(
             event_delivery: None,
             note: None,
             tool_calls: Vec::new(),
+            files: Vec::new(),
         });
     }
     let mut chat_conversation = turn.conversation_id.clone();
@@ -1110,6 +1125,7 @@ async fn attempt_with(
                 event_delivery,
                 note: None,
                 tool_calls: Vec::new(),
+                files: Vec::new(),
             });
         }
     }
@@ -1180,6 +1196,7 @@ async fn attempt_with(
                         event_delivery: Some(EventDecision::Ignore),
                         note: None,
                         tool_calls: Vec::new(),
+                        files: Vec::new(),
                     });
                 }
                 Ok(choice) => {
@@ -1442,6 +1459,11 @@ async fn attempt_with(
         bot.context.host_tools =
             std::mem::take(&mut bot.context.host_tools).with_trail(trail.clone());
     }
+    let reply_files = (!ephemeral_user_context).then(ReplyFiles::new);
+    if let Some(files) = &reply_files {
+        bot.context.host_tools =
+            std::mem::take(&mut bot.context.host_tools).with_reply_files(files.clone());
+    }
     let room_memory = kind == ConversationKind::Group;
     let owner_memory_allowed =
         super::memory::memory_policy(&state.db, &chat_conversation, owner, &turn.bot_id)
@@ -1534,6 +1556,7 @@ async fn attempt_with(
         Some(flow_like_bot_tools::TurnSite::Conversation(
             chat_conversation.clone(),
         )),
+        Default::default(),
     )
     .await;
     if let Some(bot_tools) = &bot_tools
@@ -1562,6 +1585,8 @@ async fn attempt_with(
         },
         ancestors,
     ));
+    // A call hears the reply while it is written when the turn answers in its own conversation.
+    let streams_reply = live_call && answered_round.is_none() && asker.is_none();
     let talk = match asker {
         Some(asked_by) => BotTalk::resumed(
             talk_host.clone(),
@@ -1574,6 +1599,11 @@ async fn attempt_with(
     let talk = Arc::new(talk.with_answered(answered_round.as_ref()));
     let acknowledgement = bot.context.acknowledgement;
     let sub_task_compute = bot.context.compute.clone();
+    let reply_stream = streams_reply
+        .then(|| ReplyStream::open(state, turn, bot.context.tool_gate.clone()))
+        .flatten();
+    let reply_sink = reply_stream.as_ref().map(ReplyStream::sink);
+    bot.context.spoken_drafts = reply_stream.is_some();
     let chat = run_bot_chat_with_talk(
         flow_like_state,
         Some(profile),
@@ -1587,7 +1617,7 @@ async fn attempt_with(
         token,
         bridge,
         memory,
-        None::<fn(String)>,
+        reply_sink.map(|sink| move |chunk: String| sink.push(&chunk)),
         Some(talk),
     );
     let chat = tokio::time::timeout(Duration::from_millis(remaining as u64), chat);
@@ -1628,6 +1658,9 @@ async fn attempt_with(
         }
         _ => chat.await,
     };
+    if let (Some(stream), Ok(Ok(_))) = (&reply_stream, &outcome) {
+        stream.pause();
+    }
     trace
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1689,7 +1722,7 @@ async fn attempt_with(
     if failed_execution {
         event_delivery = None;
     }
-    match outcome {
+    let answer = match outcome {
         Err(_) => Err(Failure::timeout()),
         Ok(Err(error)) => Err(Failure::model(&error)),
         Ok(Ok(text))
@@ -1708,6 +1741,7 @@ async fn attempt_with(
                 event_delivery: None,
                 note: None,
                 tool_calls: Vec::new(),
+                files: Vec::new(),
             })
         }
         Ok(Ok(text))
@@ -1790,9 +1824,16 @@ async fn attempt_with(
                 event_delivery,
                 note: notes.touched(),
                 tool_calls: trail.as_ref().map(ToolTrail::calls).unwrap_or_default(),
+                files: reply_files.as_ref().map(ReplyFiles::files).unwrap_or_default(),
             })
         }
+    };
+    if let Some(stream) = reply_stream {
+        stream
+            .finish(matches!(&answer, Ok(answer) if !answer.silent))
+            .await;
     }
+    answer
 }
 
 /// The embedding model a remembering bot's memories were stored with, when the bot names none of
@@ -1953,7 +1994,7 @@ pub(crate) async fn post_reply(
     state: &AppState,
     turn: &bot_turn::Model,
     host_id: &str,
-    request: SendEntryRequest,
+    mut request: SendEntryRequest,
     failure_code: Option<&'static str>,
     resumed: bool,
 ) -> Result<(), ApiError> {
@@ -1961,6 +2002,13 @@ pub(crate) async fn post_reply(
         return post_reply_in_origin(state, turn, host_id, &answered.origin_conversation, request)
             .await;
     }
+    crate::routes::inbox::reply_files::adopt(
+        state,
+        &turn.conversation_id,
+        &turn.bot_id,
+        &mut request,
+    )
+    .await;
     let sent = commit_reply(
         &state.db,
         state.db_dialect,
@@ -1993,8 +2041,15 @@ async fn post_reply_in_origin(
     turn: &bot_turn::Model,
     host_id: &str,
     origin_conversation: &str,
-    request: SendEntryRequest,
+    mut request: SendEntryRequest,
 ) -> Result<(), ApiError> {
+    crate::routes::inbox::reply_files::adopt(
+        state,
+        origin_conversation,
+        &turn.bot_id,
+        &mut request,
+    )
+    .await;
     let outgoing = validate_send(request)?;
     crate::routes::inbox::exchange::reply_in_origin(
         state,

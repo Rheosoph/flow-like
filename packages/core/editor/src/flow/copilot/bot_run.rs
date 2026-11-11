@@ -33,14 +33,16 @@ use super::assistant::{
     global_assistant_system_prompt_for,
 };
 use super::bot_notes::{self, NotesBridge, NotesHandle, notes_tool_specs};
+use super::bot_reply_files::{ReplyFiles, ReplyFilesBridge, file_attach_spec};
 use super::bot_talk::{BotTalk, BotTalkBridge, ask_bot_tool_spec};
 use super::bot_trail::{ToolTrail, TrailBridge};
 use super::capability_tools::{
     HostTools, bot_tool_spec, is_secret_tool, linked_tool_names, tool_capability, uses_secrets,
 };
+use super::image_view::{IMAGE_VIEW_TOOL, image_view_tool_spec};
 use super::memory::{AssistantMemory, MemoryScope};
 use super::memory_tools::{MemoryBridge, memory_tool_specs};
-use super::platform::{PlatformCopilot, PlatformSurface, PlatformToolBridge};
+use super::platform::{PlatformCopilot, PlatformSurface, PlatformToolBridge, WebAccess};
 use super::subtasks::{
     ModelSubtaskRunner, SPAWN_SUBTASKS_TOOL, SubtaskEnv, ability_line as subtasks_ability_line,
     attach as attach_subtasks, offered_to as offers_subtasks, spawn_subtasks_tool_spec,
@@ -53,6 +55,7 @@ use super::tool_spec::{
 };
 use super::turn_label::{TurnCompute, TurnLabel};
 use super::types::{ChatImage, ChatMessage};
+use super::web_providers::BotWebProviders;
 use super::work_plan::BOT_TOOL_ROUNDS;
 use crate::a2ui::authoring::chat_ui_prompt_section;
 use crate::bit::{Bit, BitModelPreference, BitTypes};
@@ -118,11 +121,12 @@ const ATTACHMENT_TOOLS: [&str; 10] = [
     flow_like_bot_tools::files::FILE_SAVE,
 ];
 /// Tools core runs itself on every host.
-const CORE_TOOLS: [&str; 4] = [
+const CORE_TOOLS: [&str; 5] = [
     RESEARCH_AGENT_TOOL,
     MEMORY_STORE_TOOL,
     MEMORY_SEARCH_TOOL,
     SPAWN_SUBTASKS_TOOL,
+    IMAGE_VIEW_TOOL,
 ];
 /// App tools a server worker runs itself, as the bot.
 const HOSTED_APP_TOOLS: [&str; 5] = [
@@ -408,6 +412,9 @@ pub struct BotRunContext {
     pub acknowledgement: bool,
     /// The turn answers an utterance in a live call: its reply is spoken aloud.
     pub live_call: bool,
+    /// The host speaks the reply while it is written: a room turn hands its text on before the
+    /// room is checked and marks a draft the check replaced.
+    pub spoken_drafts: bool,
     /// Holds the turn's tool calls until the host's participation decision lets it act.
     pub tool_gate: Option<super::tool_gate::ToolGate>,
     /// This turn consumes a person's temporary context. Its input and answer must not become memory.
@@ -652,6 +659,7 @@ impl BotRunContext {
         }
         specs.extend(capability_specs);
         specs.extend(self.memory_engine_tool_specs());
+        specs.push(image_view_tool_spec());
         specs.retain(|spec| !self.denies_tool(spec.name));
         specs
     }
@@ -1330,6 +1338,7 @@ pub fn find_bot_tool_spec(tool_name: &str) -> Option<PlatformToolSpec> {
         GRAPH_QUERY_TOOL => find_data_studio_tool_spec(tool_name),
         STORAGE_TOOL => find_workflow_context_tool_spec(tool_name),
         "get_app_detail" => find_scout_tool_spec(tool_name),
+        IMAGE_VIEW_TOOL => Some(image_view_tool_spec()),
         "ask_user" | RESEARCH_AGENT_TOOL | MEMORY_STORE_TOOL | MEMORY_SEARCH_TOOL => {
             find_global_tool_spec(tool_name)
         }
@@ -1670,7 +1679,7 @@ const CAPABILITY_TOOL_LINES: [(BotCapability, &str, &str); 16] = [
     (
         BotCapability::Storage,
         "Files",
-        "read and write files; reads reach the apps you may use, writes and saves go to your workspace only. Large results are saved to your workspace and come back as a handle you can reuse",
+        "read and write files; reads reach the apps you may use, writes and saves go to your workspace only. Large results are saved to your workspace and come back as a handle you can reuse. file_save also downloads a file from a URL, such as a signed link an app returned",
     ),
     (
         BotCapability::Knowledge,
@@ -2006,16 +2015,34 @@ fn bot_attachments_section(bot: &BotRunContext, entries: &[AttachmentManifestEnt
         .map(|tool| format!("`{tool}`"))
         .collect();
     let readable = !tools.is_empty() && entries.iter().any(|entry| entry.handle.is_some());
+    let handled = || entries.iter().filter(|entry| entry.handle.is_some());
+    let mixed = handled().any(AttachmentManifestEntry::is_turn_file)
+        && handled().any(|entry| !entry.is_turn_file());
     if readable {
+        let save = if offered.contains(&flow_like_bot_tools::files::FILE_SAVE) {
+            "; `file_save` keeps a copy in your workspace"
+        } else {
+            ""
+        };
+        let lifetime = if mixed {
+            format!(
+                "A value marked {TURN_ONLY} works only while you answer this message{save}; the others keep working in later messages."
+            )
+        } else if handled().any(AttachmentManifestEntry::is_turn_file) {
+            format!("The value works only while you answer this message{save}.")
+        } else {
+            "The values keep working in later messages.".to_string()
+        };
         lines.push(format!(
-            "To open a file yourself, pass its `file` value below, exactly as written, to a tool that takes a file, such as {}. The value works only while you answer this message{}.",
+            "To open a file yourself, pass its `file` value below, exactly as written, to a tool that takes a file, such as {}. {lifetime}",
             tools.join(", "),
-            if offered.contains(&flow_like_bot_tools::files::FILE_SAVE) {
-                "; `file_save` keeps a copy in your workspace"
-            } else {
-                ""
-            }
         ));
+        if offered.contains(&flow_like_bot_tools::files::FILE_LINK) {
+            lines.push(format!(
+                "When another service has to fetch a file itself, such as a connector or MCP tool that asks for a file URL, or a web request, pass its `file` value to `{}` and hand over the download link it returns.",
+                flow_like_bot_tools::files::FILE_LINK
+            ));
+        }
     }
     lines.extend(
         entries
@@ -2024,8 +2051,13 @@ fn bot_attachments_section(bot: &BotRunContext, entries: &[AttachmentManifestEnt
             .map(
                 |(entry, line)| match entry.handle.as_ref().filter(|_| readable) {
                     Some(handle) => format!(
-                        "{line}; file = {}",
-                        serde_json::to_string(handle).unwrap_or_default()
+                        "{line}; file = {}{}",
+                        serde_json::to_string(handle).unwrap_or_default(),
+                        if mixed && entry.is_turn_file() {
+                            format!(" {TURN_ONLY}")
+                        } else {
+                            String::new()
+                        }
                     ),
                     None => line,
                 },
@@ -2033,6 +2065,8 @@ fn bot_attachments_section(bot: &BotRunContext, entries: &[AttachmentManifestEnt
     );
     lines.join("\n")
 }
+
+const TURN_ONLY: &str = "(this message only)";
 
 fn bot_data_studio_section(bot: &BotRunContext, context: &GlobalDataStudioContext) -> String {
     let app_id = context.app_id.trim();
@@ -2196,6 +2230,24 @@ async fn attach_notes(
         notes.clone(),
         bot_id.to_string(),
         label,
+        turn.bridge.clone(),
+    ));
+}
+
+/// Offers `file_attach`, answered in core, collecting into the host's `files`.
+fn offer_reply_files(
+    turn: &mut BotTurn,
+    files: &ReplyFiles,
+    bot: &BotRunContext,
+    label: Arc<TurnLabel>,
+    frames: Option<Arc<dyn Fn(String) + Send + Sync>>,
+) {
+    turn.tool_specs.push(file_attach_spec());
+    turn.bridge = Arc::new(ReplyFilesBridge::new(
+        files.clone(),
+        bot.workspace_app_id.clone(),
+        label,
+        frames,
         turn.bridge.clone(),
     ));
 }
@@ -2457,9 +2509,20 @@ where
             .and_then(|recovery| recovery.as_store().deadline_at_ms()),
     );
     let turn_bot = bot.clone();
+    // Read through the host's own bridge: the wrappers added below pass tool calls on, not
+    // the bot's secrets.
+    let web_access = match turn_bot.web_research() {
+        WebResearchCapability::Disabled => WebAccess::default(),
+        _ => BotWebProviders::access(bridge.clone()),
+    };
     let mut turn = prepare_bot_turn(bot, &context, memory.is_some(), bridge, talk.as_ref()).await;
     if let Some(notes) = turn_bot.host_tools.notes() {
         attach_notes(&mut turn, notes, &turn_bot.bot_id, label.clone()).await;
+    }
+    if let Some(files) = turn_bot.host_tools.reply_files()
+        && turn_bot.toolset == BotToolset::Capabilities
+    {
+        offer_reply_files(&mut turn, files, &turn_bot, label.clone(), on_token.clone());
     }
     if let Some(section) = turn_bot.host_tools.trail().and_then(ToolTrail::section) {
         label.raise(section.seen);
@@ -2488,12 +2551,16 @@ where
         .with_long_running()
         .with_thinking(thinking)
         .with_tool_specs(turn.tool_specs)
-        .with_tool_rounds(turn.tool_rounds);
+        .with_tool_rounds(turn.tool_rounds)
+        .with_web_access(web_access);
     if let Some(recovery) = &turn_bot.recovery {
         copilot = copilot.with_recovery(recovery.as_store());
     }
     if turn_bot.live_call {
         copilot = copilot.with_max_completion_tokens(LIVE_CALL_MAX_COMPLETION_TOKENS);
+    }
+    if turn_bot.spoken_drafts {
+        copilot = copilot.with_spoken_drafts();
     }
     copilot
         .chat(
@@ -2672,11 +2739,42 @@ mod tests {
         }
     }
 
+    /// The tools `bot` is offered besides `image_view`, which every bot of the capability
+    /// toolset has (see `every_capability_bot_can_view_images_on_every_host`).
     fn names(bot: &BotRunContext, memory: bool) -> Vec<&'static str> {
         bot.tool_specs(memory)
             .iter()
             .map(|spec| spec.name)
+            .filter(|name| *name != IMAGE_VIEW_TOOL)
             .collect()
+    }
+
+    #[test]
+    fn every_capability_bot_can_view_images_on_every_host() {
+        let offers = |bot: &BotRunContext| {
+            bot.tool_specs(false)
+                .iter()
+                .any(|spec| spec.name == IMAGE_VIEW_TOOL)
+        };
+        for capabilities in [&[][..], &BotCapability::ALL[..]] {
+            for tool_host in [
+                BotToolHost::Chat,
+                BotToolHost::Native,
+                BotToolHost::CoreOnly,
+                BotToolHost::Hosted,
+            ] {
+                let mut any = bot(capabilities);
+                any.toolset = BotToolset::Capabilities;
+                any.tool_host = tool_host;
+                assert!(offers(&any), "{tool_host:?} {capabilities:?}");
+                assert!(find_bot_tool_spec(IMAGE_VIEW_TOOL).is_some());
+                any.permissions.denied_tools.insert(IMAGE_VIEW_TOOL.into());
+                assert!(!offers(&any), "the owner can switch it off");
+            }
+        }
+        let mut flux = bot(&[]);
+        flux.toolset = BotToolset::FlowPilot;
+        assert!(!offers(&flux), "the FlowPilot toolset stays FlowPilot's");
     }
 
     fn code(refusal: &str) -> String {
@@ -3540,6 +3638,8 @@ mod tests {
         let filer = section(&hosted(&[BotCapability::Storage], HostTools::linked()));
         assert!(filer.contains("such as `file_read`, `file_save`. "));
         assert!(filer.contains("- scan.pdf (application/pdf, 2.0 KB); file = {"));
+        assert!(filer.contains("pass its `file` value to `file_link`"));
+        assert!(!reader.contains("(this message only)"));
         assert!(reader.contains("\n- notes.txt"));
         assert!(!reader.contains("- notes.txt; file ="));
 
@@ -3547,6 +3647,80 @@ mod tests {
         assert!(talker.contains("- scan.pdf (application/pdf, 2.0 KB)"));
         assert!(!talker.contains("file ="));
         assert!(!talker.contains("To open a file yourself"));
+        assert!(!talker.contains("file_link"));
+    }
+
+    #[test]
+    fn stored_attachments_keep_working_and_per_turn_ones_are_marked_beside_them() {
+        let stored = flow_like_types::bot_message::WorkspaceHandle::conversation_file(
+            "c1",
+            "f1.png",
+            3,
+            &"a".repeat(64),
+            "image/png",
+        );
+        let parts = [flow_like_types::bot_message::AttachmentPart::stored(
+            "a1".into(),
+            "logo.png".into(),
+            stored.clone(),
+        )];
+        let listed = [
+            AttachmentManifestEntry {
+                name: Some("logo.png".into()),
+                url: Some("asset://localhost/tmp/logo.png".into()),
+                ..Default::default()
+            },
+            AttachmentManifestEntry {
+                name: Some("huge.mov".into()),
+                handle: Some(
+                    flow_like_types::bot_message::WorkspaceHandle::conversation_file(
+                        crate::flow::copilot::TURN_FILES,
+                        "huge.mov",
+                        9,
+                        "",
+                        "video/quicktime",
+                    ),
+                ),
+                ..Default::default()
+            },
+        ];
+        let merged = crate::flow::copilot::with_stored_files(&listed, &parts);
+        assert_eq!(merged[0].handle.as_ref(), Some(&stored));
+        assert_eq!(
+            merged[0].url.as_deref(),
+            Some("asset://localhost/tmp/logo.png")
+        );
+        assert!(merged[1].is_turn_file());
+
+        let bot = hosted(&[BotCapability::Storage], HostTools::linked());
+        let render = |attachments: &[AttachmentManifestEntry]| {
+            bot_platform_context(
+                &bot,
+                PlatformContextInput {
+                    attachments,
+                    ..Default::default()
+                },
+            )
+        };
+        let both = render(&merged);
+        assert!(both.contains("the others keep working in later messages"));
+        assert!(both.contains("\"path\":\"huge.mov\",\"bytes\":9,\"sha256\":\"\",\"mime\":\"video/quicktime\"} (this message only)"));
+        let logo = both
+            .lines()
+            .find(|line| line.starts_with("- logo.png"))
+            .expect("logo line");
+        assert!(logo.contains("\"app_id\":\"conversation_c1\",\"path\":\"f1.png\""));
+        assert!(!logo.ends_with("(this message only)"));
+
+        let only_stored = render(&merged[..1]);
+        assert!(only_stored.contains("The values keep working in later messages."));
+        assert!(!only_stored.contains("(this message only)"));
+
+        let unlisted = crate::flow::copilot::with_stored_files(&[], &parts);
+        assert_eq!(unlisted.len(), 1);
+        assert_eq!(unlisted[0].name.as_deref(), Some("logo.png"));
+        assert_eq!(unlisted[0].mime_type.as_deref(), Some("image/png"));
+        assert_eq!(unlisted[0].size, Some(3));
     }
 
     #[test]

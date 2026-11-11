@@ -17,6 +17,7 @@ pub(crate) mod memory;
 mod monitor_baseline;
 pub(crate) mod notes;
 pub(crate) mod recovery;
+mod reply_stream;
 mod room_updates;
 pub(crate) mod talk;
 pub(crate) mod task_schedules;

@@ -1226,3 +1226,157 @@ test("the latency trace tells the stream route from the queued one and times the
 	expect(lines[1]).toMatchObject({ route: "queued", firstTextMs: undefined });
 	h.controller.dispose();
 });
+
+const FIRST = "First sentence is here.";
+
+test("a pushed stream is refused for a message already seen or a transcript that is not this call's", async () => {
+	const old = reply("r1", 2, FIRST);
+	const history = harness([transcript, old]);
+	history.controller.update(snapshot([transcript, old]));
+	expect(
+		history.controller.stream("spoken", "bot", { messageId: "r1" }),
+	).toBeNull();
+
+	const stored = streamHarness();
+	expect(
+		stored.controller.stream("elsewhere", "bot", { messageId: "r9" }),
+	).toBeNull();
+	expect(
+		stored.controller.stream("spoken", "bot", { messageId: "r9" }),
+	).not.toBeNull();
+
+	const first = streamHarness();
+	first.controller.update(snapshot([transcript, reply("r1", 2, FIRST)]));
+	await settle();
+	expect(
+		first.controller.stream("spoken", "bot", { messageId: "r1" }),
+	).toBeNull();
+	for (const h of [history, stored, first]) h.controller.dispose();
+});
+
+test("a pushed stream speaks as text grows and the stored entry is not spoken again", async () => {
+	const h = streamHarness();
+	const stream = h.controller.stream("spoken", "bot", { messageId: "r1" });
+	stream?.update(`${FIRST} Second sentence follows. Tail`);
+	await settle();
+	expect(h.spoken).toEqual([FIRST, "Second sentence follows."]);
+	stream?.end();
+	await settle();
+	const entries = [
+		transcript,
+		reply("r1", 2, `${FIRST} Second sentence follows. Tail`),
+	];
+	h.controller.update(snapshot(entries));
+	await settle();
+	h.controller.update(snapshot(entries));
+	await settle();
+	expect(h.spoken).toEqual([FIRST, "Second sentence follows.", "Tail"]);
+	expect(h.played).toEqual(h.spoken);
+	h.controller.dispose();
+});
+
+test("a stored entry that arrives first speaks once and a later pushed stream is refused", async () => {
+	const h = streamHarness();
+	h.controller.update(snapshot([transcript, reply("r1", 2, "stored answer")]));
+	await settle();
+	expect(h.controller.stream("spoken", "bot", { messageId: "r1" })).toBeNull();
+	await settle();
+	expect(h.spoken).toEqual(["stored answer"]);
+	h.controller.dispose();
+});
+
+test("an open pushed stream ends when its stored entry arrives and does not hold the queue", async () => {
+	const second = entry(
+		"spoken2",
+		3,
+		"transcript",
+		{ call: "call", text: "Again", offset_ms: 0 },
+		"person",
+	);
+	const h = streamHarness();
+	h.controller.update(snapshot([transcript, second]));
+	const stream = h.controller.stream("spoken", "bot", { messageId: "r1" });
+	stream?.update(`${FIRST} Tail`);
+	await settle();
+	const entries = [
+		transcript,
+		reply("r1", 2, `${FIRST} Tail`),
+		second,
+		entry("r2", 4, "message", { text: "next answer", reply_to: "spoken2" }),
+	];
+	h.controller.update(snapshot(entries));
+	await settle();
+	expect(h.played).toEqual([FIRST, "Tail", "next answer"]);
+	h.controller.dispose();
+});
+
+test("the election delay applies to a pushed stream but not to a dock stream", async () => {
+	const pushed = streamHarness({ electionDelayMs: 40 });
+	pushed.controller
+		.stream("spoken", "bot", { messageId: "r1" })
+		?.update(`${FIRST} Tail`);
+	await settle();
+	expect(pushed.spoken).toEqual([]);
+	await new Promise((resolve) => setTimeout(resolve, 80));
+	await settle();
+	expect(pushed.spoken).toEqual([FIRST]);
+
+	const dock = streamHarness({ electionDelayMs: 40 });
+	dock.controller.stream("spoken", "bot")?.update(`${FIRST} Tail`);
+	await settle();
+	expect(dock.spoken).toEqual([FIRST]);
+	pushed.controller.dispose();
+	dock.controller.dispose();
+});
+
+test("interrupting a pushed stream that ended reports the pushed message id", async () => {
+	const playing = deferred<void>();
+	const h = streamHarness({
+		play: () => playing.promise,
+		progress: () => ({ elapsedMs: 500, durationMs: 1000 }),
+	});
+	h.controller.stream("spoken", "bot", { messageId: "r1" })?.end(FIRST);
+	await settle();
+	const chars = Array.from(FIRST).length;
+	expect(h.controller.interrupt()).toEqual({
+		message_id: "r1",
+		heard_chars: Math.floor(chars / 2),
+		spoken_chars: chars,
+	});
+	playing.resolve();
+	await settle();
+	h.controller.dispose();
+});
+
+test("a pushed stream dropped after audio began lets the stored reply speak whole", async () => {
+	const playing = deferred<void>();
+	const h = streamHarness({ play: () => playing.promise });
+	const stream = h.controller.stream("spoken", "bot", { messageId: "r1" });
+	stream?.update(`${FIRST} Second sentence follows. Tail`);
+	await settle();
+	expect(h.controller.playingText("bot")).toBe(FIRST);
+	stream?.cancel();
+	expect(
+		h.controller.stream("spoken", "bot", { messageId: "r1" }),
+	).not.toBeNull();
+	h.controller.dispose();
+
+	const retried = streamHarness({ play: () => playing.promise });
+	const dropped = retried.controller.stream("spoken", "bot", {
+		messageId: "r1",
+	});
+	dropped?.update(`${FIRST} Second sentence follows. Tail`);
+	await settle();
+	dropped?.cancel();
+	retried.controller.update(
+		snapshot([transcript, reply("r1", 2, "The whole answer.")]),
+	);
+	playing.resolve();
+	await settle();
+	expect(retried.spoken).toEqual([
+		FIRST,
+		"Second sentence follows.",
+		"The whole answer.",
+	]);
+	retried.controller.dispose();
+});

@@ -1,14 +1,14 @@
-use super::{ready, valid_wakeup};
+use super::Inbox;
 use flow_like_types::{Result, anyhow, bail};
 use futures_util::StreamExt;
 use std::time::Duration;
-use tokio::sync::{Notify, watch};
+use tokio::sync::watch;
 
 pub(super) async fn listen(
     url: &str,
     subject: &str,
     token: &str,
-    wake: &Notify,
+    inbox: &Inbox,
     healthy: &watch::Sender<bool>,
 ) -> Result<()> {
     if subject.is_empty()
@@ -65,15 +65,15 @@ pub(super) async fn listen(
         .await
         .map_err(|_| anyhow!("Realtime NATS subscription timed out"))?
         .map_err(|_| anyhow!("Realtime NATS subscription failed"))?;
-    ready(healthy, wake);
+    inbox.ready(healthy);
     let mut check = tokio::time::interval(Duration::from_secs(1));
     loop {
         tokio::select! {
             _ = lost.changed() => bail!("Realtime NATS connection interrupted"),
             message = subscription.next() => {
                 let message = message.ok_or_else(|| anyhow!("Realtime NATS subscription closed"))?;
-                if message.subject.as_str() == subject && valid_wakeup(&message.payload) {
-                    wake.notify_one();
+                if message.subject.as_str() == subject {
+                    inbox.receive(&message.payload);
                 }
             }
             _ = check.tick() => {

@@ -31,11 +31,15 @@ import type {
 
 export interface IUserUpdate {
 	name?: string;
+	/** The username other people find and mention the account by. */
+	preferred_username?: string;
 	description?: string;
 	avatar_extension?: string;
 	accepted_terms_version?: string;
 	tutorial_completed?: boolean;
 	dev_mode?: boolean;
+	/** Show the account's email address to other people. */
+	share_email?: boolean;
 }
 
 /**
@@ -161,6 +165,8 @@ export interface IUserInfo {
 	accepted_terms_version?: string;
 	tutorial_completed?: boolean;
 	dev_mode?: boolean;
+	/** Other people see `email`. Unset means off: it is hidden until turned on. */
+	share_email?: boolean | null;
 
 	status?: string;
 	tier?: string;

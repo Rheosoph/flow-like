@@ -2710,7 +2710,7 @@ mod tests {
             )
             .granting(&[("bot_scout", "bot_ledger"), ("bot_ledger", "bot_digest")]),
         );
-        let talk = talk(&host, false);
+        let talk = talk(&host, false).with_gate(|_, _, _| TalkGate::Allow);
 
         for _ in 0..MAX_EXCHANGE_ROUNDS {
             let answered = parsed(&talk.ask(&question("Pass it on?"), owner.as_ref()).await);

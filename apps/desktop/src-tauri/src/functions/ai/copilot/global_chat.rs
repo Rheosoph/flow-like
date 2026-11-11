@@ -427,11 +427,13 @@ pub async fn global_chat(
     let mut bot_memory = None;
     let mut notes = None;
     let mut trail = None;
+    let mut reply_files = None;
     let mut recovery = None;
     let mut inbox_conversation_id = None;
     let mut ephemeral_user_context = false;
     let mut live_call = false;
     let mut shared_context = None;
+    let mut trigger_files = Vec::new();
     let mut legacy_memory_read_only = interactive.is_some();
     let mut legacy_memory_allowed = interactive.as_ref().map(|_| false);
     let bot_turn_id = interactive
@@ -447,6 +449,7 @@ pub async fn global_chat(
         inbox_conversation_id = Some(run.conversation_id().to_owned());
         ephemeral_user_context = run.ephemeral_user_context().await?;
         live_call = run.live_call().await?;
+        trigger_files = run.trigger_files().await;
         let access = run.legacy_memory_access().await;
         legacy_memory_allowed = Some(access.is_some());
         legacy_memory_read_only = access.unwrap_or(true);
@@ -464,6 +467,7 @@ pub async fn global_chat(
                 .await?;
             notes = run.notes().await;
             trail = run.trail().await;
+            reply_files = Some(run.reply_files());
         }
         let hold = run.hold();
         finish = Some(crate::bot_host::interactive::Finish {
@@ -473,6 +477,14 @@ pub async fn global_chat(
             hold,
         });
     }
+    let attachments_manifest = if trigger_files.is_empty() {
+        attachments_manifest
+    } else {
+        Some(flow_like::flow::copilot::with_stored_files(
+            attachments_manifest.as_deref().unwrap_or_default(),
+            &trigger_files,
+        ))
+    };
     let result = global_chat_native(
         app_handle,
         Some(webview.label().to_owned()),
@@ -503,6 +515,7 @@ pub async fn global_chat(
             bot_memory,
             notes,
             trail,
+            reply_files,
             ephemeral_user_context,
             live_call,
             shared_context,
@@ -646,6 +659,7 @@ pub async fn global_chat_native(
     let bot_memory = options.bot_memory.take();
     let notes = options.notes.take();
     let trail = options.trail.take();
+    let reply_files = options.reply_files.take();
     let recovery = options.recovery.take();
     let room_updates = options.room_updates.take();
     let requester = options.requester.take();
@@ -793,6 +807,9 @@ pub async fn global_chat_native(
         }
         if let Some(trail) = trail {
             context.host_tools = std::mem::take(&mut context.host_tools).with_trail(trail);
+        }
+        if let Some(files) = reply_files {
+            context.host_tools = std::mem::take(&mut context.host_tools).with_reply_files(files);
         }
         std::sync::Arc::make_mut(&mut bot.context).recovery = recovery.map(Into::into);
         std::sync::Arc::make_mut(&mut bot.context).acknowledgement = acknowledgement;

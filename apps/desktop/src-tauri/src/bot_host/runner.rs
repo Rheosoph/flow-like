@@ -233,6 +233,7 @@ impl TurnRunner for NativeRunner {
             bot_memory: job.memory.map(|memory| memory.0),
             notes: job.notes.clone().filter(|_| !job.acknowledgement),
             trail: job.trail.clone().filter(|_| !job.acknowledgement),
+            reply_files: job.reply_files.clone().filter(|_| !job.acknowledgement),
             room_updates: job.room_updates.clone(),
             approval_gate: Some(job.gate.clone()),
             requester: job.requester.clone(),

@@ -119,9 +119,9 @@ pub(crate) fn window_ms() -> i64 {
 }
 
 pub async fn message_owner(env: &dyn ToolEnv, args: MessageOwnerArgs) -> ToolResult<ToolOutput> {
-    let notifier: Arc<dyn OwnerNotifier> = env.notifier().ok_or_else(|| {
-        ToolError::new(code::FAILED, "This host cannot message the owner")
-    })?;
+    let notifier: Arc<dyn OwnerNotifier> = env
+        .notifier()
+        .ok_or_else(|| ToolError::new(code::FAILED, "This host cannot message the owner"))?;
     let notice = notice_from(&args.text, args.title.as_deref())?;
     let since = chrono::Utc::now().timestamp_millis() - window_ms();
     let sent = notifier.sent_since(since).await?;
@@ -246,7 +246,11 @@ mod tests {
         assert_eq!(outcome.status, crate::Status::Error);
         let error = outcome.error.expect("refused");
         assert_eq!(error.code, code::ALREADY_HERE);
-        assert!(error.message.contains("just answer here"), "{}", error.message);
+        assert!(
+            error.message.contains("just answer here"),
+            "{}",
+            error.message
+        );
         assert!(notifier.delivered.lock().unwrap().is_empty());
     }
 

@@ -223,15 +223,15 @@ describe("tool activity context", () => {
 		expect(
 			buildToolActivity("list_apps", { arguments: { query: "weather" } }).query,
 		).toBe("weather");
-		expect(
-			buildToolActivity("call_app_event", {
-				arguments: {
-					app_name: "Weather",
-					app_id: "app-1",
-					instruction: "a long private instruction",
-				},
-			}).target,
-		).toBe("Weather");
+		const appCall = buildToolActivity("call_app_event", {
+			arguments: {
+				app_name: "Weather",
+				app_id: "app-1",
+				instruction: "a long private instruction",
+			},
+		});
+		expect(appCall.app).toEqual({ id: "app-1", name: "Weather" });
+		expect(appCall.target).toBeUndefined();
 		expect(
 			buildToolActivity("storage_tool", {
 				arguments: {
@@ -259,6 +259,101 @@ describe("tool activity context", () => {
 			label: "List rows",
 			target: "Orders",
 		});
+	});
+
+	test("references the app and its action instead of the raw app id", () => {
+		const started = buildToolActivity("call_app_event", {
+			arguments_preview: JSON.stringify({
+				app_id: "h1yd0s1b54ee74y0qyphmmff",
+				event_id: "evt_deck",
+				payload: { customer: "private customer brief" },
+			}),
+		});
+		expect(started).toEqual({
+			kind: "tool_activity",
+			category: "apps",
+			label: "Running an app action",
+			app: { id: "h1yd0s1b54ee74y0qyphmmff", eventId: "evt_deck" },
+		});
+		const finished = buildToolActivity(
+			"call_app_event",
+			{
+				result_summary: "ok",
+				result_preview: JSON.stringify({
+					status: "ok",
+					run_status: "Completed",
+					app_id: "h1yd0s1b54ee74y0qyphmmff",
+					event_id: "evt_deck",
+					event_type: "api",
+				}),
+			},
+			started,
+		);
+		expect(finished.app).toEqual({
+			id: "h1yd0s1b54ee74y0qyphmmff",
+			eventId: "evt_deck",
+			eventType: "api",
+			runStatus: "Completed",
+		});
+		expect(finished.outcome).toBeUndefined();
+		expect(JSON.stringify(finished)).not.toContain("private");
+	});
+
+	test("explains a failed app run with its status and the run's own error", () => {
+		const call = { arguments: { app_id: "app-1", event_id: "evt-1" } };
+		const failed = (result: Record<string, unknown>) =>
+			buildToolActivity("call_app_event", {
+				...call,
+				result_summary: "error",
+				result_preview: JSON.stringify(result),
+			}).outcome;
+		expect(
+			failed({
+				status: "error",
+				run_status: "Failed",
+				error:
+					"Workflow execution ended with status 'Failed'. Inspect its run and logs before retrying actions.",
+			}),
+		).toBe("Run failed");
+		expect(
+			failed({
+				status: "error",
+				run_status: "failed",
+				run_error: { message: "Template 'Rheosoph deck' not found" },
+			}),
+		).toBe("Run failed · Template 'Rheosoph deck' not found");
+		expect(
+			failed({
+				status: "error",
+				error: "Event 'evt-1' is a chat interface. Use call_app_chat instead.",
+			}),
+		).toBe("Event 'evt-1' is a chat interface. Use call_app_chat instead.");
+		expect(
+			failed({
+				status: "error",
+				mcp_tool: "render_slides",
+				result: {
+					isError: true,
+					content: [{ type: "text", text: "Slide limit exceeded" }],
+				},
+			}),
+		).toBe("Slide limit exceeded");
+		expect(failed({ status: "error" })).toBe("Failed");
+		expect(failed({ status: "timeout", run_status: "timeout" })).toBe(
+			"Run didn't finish in time",
+		);
+	});
+
+	test("keeps the MCP tool an app call ran", () => {
+		expect(
+			buildToolActivity("call_app_event", {
+				arguments: {
+					app_id: "app-1",
+					event_id: "mcp-1",
+					mcp_tool: "search_docs",
+				},
+			}).app,
+		).toEqual({ id: "app-1", eventId: "mcp-1", mcpTool: "search_docs" });
 	});
 
 	test("reads HTTP results inside MCP text envelopes", () => {
@@ -304,6 +399,41 @@ describe("tool activity context", () => {
 			"https://example.com/request",
 			"https://example.com/response",
 		]);
+	});
+
+	test("a failed call shows the result's reason instead of the bare status", () => {
+		const failed = (result: Record<string, unknown>) =>
+			buildToolActivity("file_save", {
+				status: "error",
+				result_summary: "error",
+				result_preview: JSON.stringify({
+					status: "error",
+					tool: "file_save",
+					...result,
+				}),
+			}).outcome;
+		expect(
+			failed({
+				error: {
+					code: "not_found",
+					message: "No file 'logo.png' in app 'ws-bot'",
+				},
+			}),
+		).toBe("No file 'logo.png' in app 'ws-bot'");
+		expect(
+			failed({
+				code: "bot_tool_needs_executor",
+				message: "No executor is configured.",
+			}),
+		).toBe("No executor is configured.");
+		expect(failed({})).toBe("error");
+		expect(
+			buildToolActivity("file_save", {
+				status: "error",
+				result_summary: "error · 2 error(s)",
+				result_preview: JSON.stringify({ message: "not shown" }),
+			}).outcome,
+		).toBe("error · 2 error(s)");
 	});
 
 	test("reports app inventory counts and partial coverage from the real result shape", () => {

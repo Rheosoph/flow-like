@@ -89,9 +89,40 @@ export function isPrivateRelayEmail(email?: string | null): boolean {
 	);
 }
 
+/**
+ * True for a bare address such as `felix@example.com`. Sign-ins that map the
+ * address into the handle used to make it the display name too, so neither is
+ * shown as stored: an address reaches other people only in `email`, which the hub
+ * fills when its owner shares it. Kept in lockstep with `is_email_like` in
+ * packages/api/src/routes/user/identity.rs.
+ */
+export function isEmailLike(value?: string | null): boolean {
+	const trimmed = value?.trim();
+	if (!trimmed || /\s/.test(trimmed)) return false;
+	const at = trimmed.lastIndexOf("@");
+	if (at <= 0) return false;
+	const domain = trimmed.slice(at + 1);
+	return (
+		domain.includes(".") && !domain.startsWith(".") && !domain.endsWith(".")
+	);
+}
+
 function clean(value?: string | null): string | undefined {
 	const collapsed = value?.replace(/\s+/g, " ").trim();
 	return collapsed ? collapsed : undefined;
+}
+
+function publicHandle(value?: string | null): string | undefined {
+	const handle = clean(value);
+	return handle && !isIdpHandle(handle) && !isEmailLike(handle)
+		? handle
+		: undefined;
+}
+
+/** A name with an address in its place reads as the name its local part spells. */
+function publicName(value?: string | null): string | undefined {
+	const name = clean(value);
+	return isEmailLike(name) ? humanizeEmailLocalPart(name) : name;
 }
 
 /** `felix.schultz@example.com` → `Felix Schultz`. */
@@ -112,14 +143,13 @@ export function humanizeEmailLocalPart(
 	return words.length > 0 ? clean(words.join(" ")) : undefined;
 }
 
-/** The handle to render as `@handle`, or undefined when we only have an internal one. */
+/**
+ * The handle to render as `@handle`, or undefined when we only have an internal
+ * one or an address.
+ */
 export function userHandle(user?: UserDisplayLike | null): string | undefined {
 	if (!user) return undefined;
-	const preferred = clean(user.preferred_username);
-	if (preferred && !isIdpHandle(preferred)) return preferred;
-	const username = clean(user.username);
-	if (username && !isIdpHandle(username)) return username;
-	return undefined;
+	return publicHandle(user.preferred_username) ?? publicHandle(user.username);
 }
 
 /**
@@ -132,12 +162,122 @@ export function userDisplayName(
 ): string {
 	if (!user) return fallback;
 	return (
-		clean(user.name) ??
+		publicName(user.name) ??
 		userHandle(user) ??
 		humanizeEmailLocalPart(user.email) ??
 		clean(user.email) ??
 		fallback
 	);
+}
+
+/**
+ * ASCII spellings of lowercase letters outside ASCII. Kept in lockstep with
+ * `ascii_letters` in packages/api/src/routes/user/identity.rs.
+ */
+const ASCII_LETTERS: Readonly<Record<string, string>> = {
+	ä: "ae",
+	æ: "ae",
+	ö: "oe",
+	œ: "oe",
+	ü: "ue",
+	ß: "ss",
+	þ: "th",
+	...Object.fromEntries([..."àáâãåāăą"].map((c) => [c, "a"])),
+	...Object.fromEntries([..."çćč"].map((c) => [c, "c"])),
+	...Object.fromEntries([..."ďđð"].map((c) => [c, "d"])),
+	...Object.fromEntries([..."èéêëēėęě"].map((c) => [c, "e"])),
+	ğ: "g",
+	...Object.fromEntries([..."ìíîïīįı"].map((c) => [c, "i"])),
+	ł: "l",
+	...Object.fromEntries([..."ñńň"].map((c) => [c, "n"])),
+	...Object.fromEntries([..."òóôõōőø"].map((c) => [c, "o"])),
+	ř: "r",
+	...Object.fromEntries([..."śšşș"].map((c) => [c, "s"])),
+	...Object.fromEntries([..."ťţț"].map((c) => [c, "t"])),
+	...Object.fromEntries([..."ùúûūůűų"].map((c) => [c, "u"])),
+	...Object.fromEntries([..."ýÿ"].map((c) => [c, "y"])),
+	...Object.fromEntries([..."źżž"].map((c) => [c, "z"])),
+};
+
+/** Apostrophes, as in `O'Neil`, and combining accents only join the letters around them. */
+function isElided(character: string): boolean {
+	const code = character.codePointAt(0) ?? 0;
+	return "'’‘`´".includes(character) || (code >= 0x300 && code <= 0x36f);
+}
+
+const HANDLE_MIN_LENGTH = 3;
+/** Room for the `-9999` that tells a derived username apart from a taken one. */
+const DERIVED_HANDLE_MAX_LENGTH = 25;
+
+/**
+ * A username spelled from free text, as the hub derives one: lowercase ASCII words
+ * joined by `-`, so `Jürgen O'Neil` → `juergen-oneil`. Mirrors `handle_slug` in
+ * identity.rs; the hub decides what is valid and free.
+ */
+export function handleSlug(value?: string | null): string | undefined {
+	const words: string[] = [];
+	let word = "";
+	for (const character of (value ?? "").toLowerCase()) {
+		if (/^[a-z0-9]$/.test(character)) {
+			word += character;
+		} else if (!isElided(character)) {
+			const ascii = ASCII_LETTERS[character];
+			if (ascii) {
+				word += ascii;
+			} else if (word) {
+				words.push(word);
+				word = "";
+			}
+		}
+	}
+	if (word) words.push(word);
+
+	let slug = "";
+	for (const next of words) {
+		const separator = slug ? 1 : 0;
+		if (slug.length + separator + next.length > DERIVED_HANDLE_MAX_LENGTH) {
+			if (!slug) slug = next.slice(0, DERIVED_HANDLE_MAX_LENGTH);
+			break;
+		}
+		slug += separator ? `-${next}` : next;
+	}
+	return slug.length >= HANDLE_MIN_LENGTH &&
+		/[a-z]/.test(slug) &&
+		!isIdpHandle(slug)
+		? slug
+		: undefined;
+}
+
+/**
+ * How the signed-in user is named to other people, from their own sign-in claims:
+ * a comment author, a meeting guest. Unlike `userDisplayName` it has no address
+ * rung, so a claim set that only carries the address yields `undefined`.
+ */
+export function publicNameFromClaims(
+	claims?: Pick<
+		UserDisplayLike,
+		"name" | "preferred_username" | "email"
+	> | null,
+): string | undefined {
+	if (!claims) return undefined;
+	return (
+		publicName(claims.name) ??
+		publicHandle(claims.preferred_username) ??
+		humanizeEmailLocalPart(claims.email)
+	);
+}
+
+/**
+ * How the signed-in user is named on their own screen: as other people see them,
+ * else by their own address, which only they read there.
+ */
+export function ownNameFromClaims(
+	claims?: Pick<
+		UserDisplayLike,
+		"name" | "preferred_username" | "email"
+	> | null,
+): string | undefined {
+	return publicNameFromClaims(claims) ?? clean(claims?.email);
 }
 
 /**

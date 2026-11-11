@@ -644,6 +644,27 @@ pub struct AuthorInfo {
     pub role: Option<String>,
 }
 
+impl AuthorInfo {
+    /// An author as other people may see them: `username` is the handle the
+    /// directory shows, never the login name, and neither field is an address.
+    fn public(
+        user_id: String,
+        preferred_username: Option<&str>,
+        name: Option<&str>,
+        avatar: Option<String>,
+        role: Option<String>,
+    ) -> Self {
+        use crate::routes::user::identity::{public_display_name, public_handle};
+        Self {
+            user_id,
+            username: preferred_username.and_then(public_handle),
+            name: public_display_name(name, None, None),
+            avatar,
+            role,
+        }
+    }
+}
+
 /// Extended package summary with additional metadata for UI
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PackageDetails {
@@ -1462,7 +1483,7 @@ impl ServerRegistry {
             .select_only()
             .column(wasm_package_author::Column::UserId)
             .column(wasm_package_author::Column::Role)
-            .column(user::Column::Username)
+            .column(user::Column::PreferredUsername)
             .column(user::Column::Name)
             .column(user::Column::Avatar)
             .join(
@@ -1482,12 +1503,8 @@ impl ServerRegistry {
 
         Ok(rows
             .into_iter()
-            .map(|(user_id, role, username, name, avatar)| AuthorInfo {
-                user_id,
-                username,
-                name,
-                avatar,
-                role,
+            .map(|(user_id, role, handle, name, avatar)| {
+                AuthorInfo::public(user_id, handle.as_deref(), name.as_deref(), avatar, role)
             })
             .collect())
     }
@@ -1498,12 +1515,14 @@ impl ServerRegistry {
     ) -> flow_like_types::Result<Option<AuthorInfo>> {
         let user_info = user::Entity::find_by_id(user_id).one(&self.db).await?;
 
-        Ok(user_info.map(|user_info| AuthorInfo {
-            user_id: user_id.to_string(),
-            username: user_info.username,
-            name: user_info.name,
-            avatar: user_info.avatar,
-            role: None,
+        Ok(user_info.map(|user_info| {
+            AuthorInfo::public(
+                user_id.to_string(),
+                user_info.preferred_username.as_deref(),
+                user_info.name.as_deref(),
+                user_info.avatar,
+                None,
+            )
         }))
     }
 
@@ -2973,13 +2992,13 @@ impl ServerRegistry {
         };
         author_model.insert(&self.db).await?;
 
-        Ok(AuthorInfo {
-            user_id: user_id.to_string(),
-            username: user_record.username,
-            name: user_record.name,
-            avatar: user_record.avatar,
+        Ok(AuthorInfo::public(
+            user_id.to_string(),
+            user_record.preferred_username.as_deref(),
+            user_record.name.as_deref(),
+            user_record.avatar,
             role,
-        })
+        ))
     }
 
     /// Remove an author from a package
@@ -3308,7 +3327,9 @@ mod tests {
             instructions: Some("1. Fill".into()),
             tools: vec!["fill_form".into()],
         };
-        let stored = super::stored_skills_json(&[entry.clone()]).unwrap().unwrap();
+        let stored = super::stored_skills_json(&[entry.clone()])
+            .unwrap()
+            .unwrap();
         let back: Vec<PackageSkillEntry> = serde_json::from_value(stored).unwrap();
         assert_eq!(back, vec![entry]);
     }

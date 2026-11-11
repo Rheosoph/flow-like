@@ -561,9 +561,12 @@ export class ConnectionGesture {
 				return { kind: "noop" };
 			return { kind: "connect", connection, oldEdgeId: oldEdge?.id };
 		}
-		if (resolved.invalid || index.blockedAt(point)) return { kind: "cancel" };
-		return oldEdge
-			? { kind: "disconnect", edgeId: oldEdge.id }
-			: { kind: "palette", pin: resolved.anchor };
+		if (resolved.invalid) return { kind: "cancel" };
+		// A new wire opens the palette anywhere, as on React Flow. A moved wire end only
+		// disconnects on open canvas; node bodies, comments and media keep it.
+		if (!oldEdge) return { kind: "palette", pin: resolved.anchor };
+		return index.blockedAt(point)
+			? { kind: "cancel" }
+			: { kind: "disconnect", edgeId: oldEdge.id };
 	}
 }

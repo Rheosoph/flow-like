@@ -164,7 +164,8 @@ export function grantScopes(
 			return single(connectionScope(args));
 		case "browser_open": {
 			const site = siteOf(argument(args, "url", "url"));
-			return single(site ? `browser:${site}` : undefined);
+			const prefix = args.browser === "owner" ? "owner_browser" : "browser";
+			return single(site ? `${prefix}:${site}` : undefined);
 		}
 		case "computer_screenshot":
 		case "computer_act":

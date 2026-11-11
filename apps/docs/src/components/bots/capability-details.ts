@@ -82,7 +82,8 @@ export const CAPABILITY_DETAILS: Readonly<
 	},
 	storage: {
 		tools: ["file_list", "file_read", "file_save", "file_write"],
-		note: "Files in the bot's own workspace, stored like app storage.",
+		asks: "Before file_save downloads from a new site.",
+		note: "Files in the bot's own workspace, stored like app storage. file_save can also download a link, such as a signed download link an app returned; that counts as outbound. Every chat that can show files also gets file_attach, which attaches a file or a link to the reply so it shows as a file in the chat; it needs no capability, and a link attachment counts as outbound.",
 	},
 	data_studio: {
 		tools: ["database_tool"],

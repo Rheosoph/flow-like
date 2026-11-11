@@ -701,6 +701,7 @@ fn only_a_spoken_answer_posts_a_reply() {
         event_delivery: None,
         note: None,
         tool_calls: Vec::new(),
+        files: Vec::new(),
     };
     assert!(answer_request(&turn, &silent).is_none());
     let mut spoken = Answer {
@@ -712,6 +713,7 @@ fn only_a_spoken_answer_posts_a_reply() {
         event_delivery: None,
         note: None,
         tool_calls: Vec::new(),
+        files: Vec::new(),
     };
     assert!(answer_request(&turn, &spoken).is_some());
     spoken.acknowledgement = true;

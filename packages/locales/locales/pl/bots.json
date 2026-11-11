@@ -1137,6 +1137,7 @@
 		"event": "",
 		"host": "",
 		"other": "",
+		"ownerBrowser": "",
 		"page": "",
 		"person": "",
 		"personUnknown": "",

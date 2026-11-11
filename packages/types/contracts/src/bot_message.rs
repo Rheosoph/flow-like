@@ -23,6 +23,8 @@ pub const MAX_SUMMARY_CHARS: usize = 500;
 pub const MAX_FILE_NAME_CHARS: usize = 255;
 /// A workspace path has at most this many characters.
 pub const MAX_PATH_CHARS: usize = 1_024;
+/// An attachment's link has at most this many bytes; signed links run to about 2,000.
+pub const MAX_LINK_CHARS: usize = 4_096;
 /// An error code or a MIME type has at most this many characters.
 pub const MAX_CODE_CHARS: usize = 64;
 /// At most this many bots wait on one question's chain.
@@ -262,29 +264,114 @@ pub struct UiPart {
     pub handle: Option<WorkspaceHandle>,
 }
 
-/// A file from the sending bot's workspace, or a conversation file any member sent.
+/// A file from the sending bot's workspace, a conversation file any member sent, or a link to a
+/// file stored elsewhere. Exactly one of `handle` and `url`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AttachmentPart {
     /// `a1`, `a2` …
     pub id: String,
     /// The file name shown.
     pub name: String,
-    pub handle: WorkspaceHandle,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handle: Option<WorkspaceHandle>,
+    /// An http(s) link to the file, such as a signed download link; it works only until it
+    /// expires.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// The linked file's `type/subtype`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
 }
 
 impl AttachmentPart {
+    pub fn stored(id: String, name: String, handle: WorkspaceHandle) -> Self {
+        Self {
+            id,
+            name,
+            handle: Some(handle),
+            url: None,
+            mime: None,
+        }
+    }
+
+    pub fn linked(id: String, name: String, url: String, mime: Option<String>) -> Self {
+        Self {
+            id,
+            name,
+            handle: None,
+            url: Some(url),
+            mime,
+        }
+    }
+
     /// The line a model reads for the file. A conversation file carries its whole handle, which
     /// the file tools take as the `file` argument.
     pub fn note(&self) -> String {
-        if !self.handle.is_conversation_file() {
+        let Some(handle) = &self.handle else {
+            let url = self.url.as_deref().unwrap_or_default();
+            return format!("[file: {} (link: {url})]", self.name);
+        };
+        if !handle.is_conversation_file() {
             return format!("[file: {}]", self.name);
         }
-        let handle = serde_json::to_string(&self.handle).unwrap_or_default();
+        let json = serde_json::to_string(handle).unwrap_or_default();
         format!(
-            "[file: {} ({}, {} bytes); read it with the file tools, file = {handle}]",
-            self.name, self.handle.mime, self.handle.bytes
+            "[file: {} ({}, {} bytes); read it with the file tools, file = {json}]",
+            self.name, handle.mime, handle.bytes
         )
     }
+
+    fn check(&self, field: &str) -> Result<(), BodyError> {
+        if !(1..=MAX_FILE_NAME_CHARS).contains(&chars(&self.name))
+            || self.name.chars().any(char::is_control)
+        {
+            return refuse(format!(
+                "{field}.name must be 1 to {MAX_FILE_NAME_CHARS} characters"
+            ));
+        }
+        match (&self.handle, &self.url) {
+            (Some(_), None) => {
+                if self.mime.is_some() {
+                    return refuse(format!(
+                        "{field}.mime belongs to a linked file; a stored file keeps its type in handle.mime"
+                    ));
+                }
+                Ok(())
+            }
+            (None, Some(url)) => {
+                if !is_file_link(url) {
+                    return refuse(format!(
+                        "{field}.url must be an http(s) address with a host and no user name or password, at most {MAX_LINK_CHARS} characters"
+                    ));
+                }
+                match &self.mime {
+                    Some(mime) if !is_mime(mime) => {
+                        refuse(format!("{field}.mime '{}' is not type/subtype", clipped(mime)))
+                    }
+                    _ => Ok(()),
+                }
+            }
+            _ => refuse(format!(
+                "{field} needs exactly one of handle (a stored file) and url (a link)"
+            )),
+        }
+    }
+}
+
+/// Whether `url` can be an attachment's link: http(s), a host, no credentials, no whitespace.
+pub fn is_file_link(url: &str) -> bool {
+    let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    url.len() <= MAX_LINK_CHARS
+        && !authority.is_empty()
+        && !authority.starts_with(':')
+        && !authority.contains('@')
+        && !url.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
 /// A file in a bot's workspace app, for content too large for the envelope.
@@ -498,6 +585,25 @@ impl MessageBody {
         self.parts.iter().filter_map(MessagePart::handle)
     }
 
+    /// The attachments that carry a file uploaded to `conversation_id`.
+    pub fn conversation_attachments<'a>(
+        &'a self,
+        conversation_id: &'a str,
+    ) -> impl Iterator<Item = &'a AttachmentPart> + 'a {
+        self.parts.iter().filter_map(move |part| match part {
+            MessagePart::Attachment(file)
+                if file
+                    .handle
+                    .as_ref()
+                    .and_then(WorkspaceHandle::conversation_id)
+                    == Some(conversation_id) =>
+            {
+                Some(file)
+            }
+            _ => None,
+        })
+    }
+
     /// The conversation files the parts point to.
     pub fn conversation_files(&self) -> impl Iterator<Item = ConversationFileRef<'_>> {
         self.handles().filter_map(|handle| {
@@ -546,7 +652,7 @@ impl MessagePart {
         match self {
             Self::Tool(part) => part.handle.as_ref(),
             Self::Ui(part) => part.handle.as_ref(),
-            Self::Attachment(part) => Some(&part.handle),
+            Self::Attachment(part) => part.handle.as_ref(),
         }
     }
 
@@ -578,15 +684,7 @@ impl MessagePart {
                     ));
                 }
             }
-            Self::Attachment(part) => {
-                if !(1..=MAX_FILE_NAME_CHARS).contains(&chars(&part.name))
-                    || part.name.chars().any(char::is_control)
-                {
-                    return refuse(format!(
-                        "{field}.name must be 1 to {MAX_FILE_NAME_CHARS} characters"
-                    ));
-                }
-            }
+            Self::Attachment(part) => part.check(field)?,
         }
         match self.handle() {
             Some(handle) => {

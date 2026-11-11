@@ -4,6 +4,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
+    routes::user::identity::{public_display_name, shared_email},
     state::AppState,
 };
 use axum::{
@@ -20,14 +21,14 @@ type CreatorRow = (
     Option<String>,
     Option<String>,
     Option<String>,
-    Option<String>,
+    Option<bool>,
 );
 
 struct CreatorProfile {
     name: Option<String>,
     preferred_username: Option<String>,
-    username: Option<String>,
     email: Option<String>,
+    share_email: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, ToSchema)]
@@ -113,8 +114,8 @@ pub async fn get_api_keys(
                     user_entity::Column::Id,
                     user_entity::Column::Name,
                     user_entity::Column::PreferredUsername,
-                    user_entity::Column::Username,
                     user_entity::Column::Email,
+                    user_entity::Column::ShareEmail,
                 ])
                 .into_tuple::<CreatorRow>()
                 .all(&state.db)
@@ -129,14 +130,14 @@ pub async fn get_api_keys(
 
     let creators: std::collections::HashMap<String, CreatorProfile> = creator_rows
         .into_iter()
-        .map(|(id, name, preferred_username, username, email)| {
+        .map(|(id, name, preferred_username, email, share_email)| {
             (
                 id,
                 CreatorProfile {
                     name,
                     preferred_username,
-                    username,
                     email,
+                    share_email,
                 },
             )
         })
@@ -148,31 +149,17 @@ pub async fn get_api_keys(
             let role = tu.role_id.as_ref().and_then(|id| roles.get(id));
             let creator = tu.creator_user_id.as_ref().and_then(|id| creators.get(id));
             let creator_display_name = creator.and_then(|user| {
-                if lookup_config.name
-                    && let Some(name) = user.name.clone()
-                {
-                    return Some(name);
-                }
-
-                if lookup_config.preferred_username
-                    && let Some(preferred_username) = user.preferred_username.clone()
-                {
-                    return Some(preferred_username);
-                }
-
-                if lookup_config.username
-                    && let Some(username) = user.username.clone()
-                {
-                    return Some(username);
-                }
-
-                None
+                public_display_name(
+                    user.name.as_deref().filter(|_| lookup_config.name),
+                    user.preferred_username
+                        .as_deref()
+                        .filter(|_| lookup_config.preferred_username),
+                    user.email.as_deref().filter(|_| lookup_config.name),
+                )
             });
-            let creator_email = if lookup_config.email {
-                creator.and_then(|user| user.email.clone())
-            } else {
-                None
-            };
+            let creator_email = creator.and_then(|user| {
+                shared_email(&lookup_config, user.share_email, user.email.clone())
+            });
             ApiKeyInfo {
                 id: tu.id,
                 name: tu.name,

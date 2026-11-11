@@ -15,6 +15,8 @@ import {
 	speechCharacterLimit,
 } from "../lib/realtime/bot-call-speech";
 import type { CallSpeechOutput } from "../lib/realtime/call-speech-output";
+import { followPushedReplies } from "../lib/realtime/pushed-reply-speech";
+import { watchReplyStreams } from "../lib/realtime/reply-streams";
 import { asArray } from "../lib/response-shape";
 import { type IBit, IBitTypes } from "../lib/schema/bit/bit";
 import { useBackend } from "../state/backend-state";
@@ -181,7 +183,6 @@ export function useBotCallSpeech({
 		[callId, call.setBotVoiceCapabilities],
 	);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: changing conversations must cancel the previous call's queue
 	useEffect(() => {
 		const audio = backend.audioState;
 		if (!callId || !historyReady || !audio) return;
@@ -239,6 +240,13 @@ export function useBotCallSpeech({
 				);
 			},
 		});
+		const pushed = followPushedReplies({
+			stream: (transcriptId, botId, options) =>
+				controller.stream(transcriptId, botId, options),
+		});
+		const unwatch = watchReplyStreams(conversation.id, (reply) =>
+			pushed.apply(reply),
+		);
 		scheduler.current = controller;
 		latest.current.call.registerSpeechControl?.({
 			interrupt: (filter) => controller.interrupt(filter),
@@ -251,6 +259,8 @@ export function useBotCallSpeech({
 		});
 		return () => {
 			latest.current.call.registerSpeechControl?.(null);
+			unwatch();
+			pushed.dispose();
 			controller.dispose();
 			if (scheduler.current === controller) scheduler.current = null;
 		};

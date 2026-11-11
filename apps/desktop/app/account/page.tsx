@@ -3,7 +3,7 @@
 import { Button, useBackend, useHub } from "@flow-like/flow-like-ui";
 import { useTranslation } from "@flow-like/locales";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { updatePassword, updateUserAttributes } from "aws-amplify/auth";
+import { updatePassword } from "aws-amplify/auth";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useAuth } from "react-oidc-context";
@@ -43,20 +43,12 @@ export default function AccountPage() {
 
 	const premium = hub.hub?.features?.premium ?? false;
 	const actions: ProfileActions = {
-		credentialsReady: ready,
 		providerManaged: ready && (!poolId || federated),
 		updateEmail: canManageCredentials
 			? async () => setEmailOpen(true)
 			: undefined,
 		changePassword: canManageCredentials
 			? async () => setPasswordOpen(true)
-			: undefined,
-		handleAttributeUpdate: canManageCredentials
-			? async (attribute, value) => {
-					await updateUserAttributes({
-						userAttributes: { [attribute]: value },
-					});
-				}
 			: undefined,
 		previewProfile: sub
 			? async () => router.push(`/profile?sub=${encodeURIComponent(sub)}`)

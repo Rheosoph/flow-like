@@ -14,6 +14,7 @@ use flow_like_types::bot::BotCapability;
 use serde_json::{Value, json};
 
 use super::bot_notes::NotesHandle;
+use super::bot_reply_files::ReplyFiles;
 use super::bot_trail::ToolTrail;
 use super::memory_tools::MemoryHandle;
 use super::platform::PLATFORM_TOOL_IMAGE_URLS_FIELD;
@@ -138,6 +139,9 @@ fn ask_message(tool: &str, args: &Value) -> String {
     if tool == tools::web::WEB_REQUEST {
         return tools::web::ask_summary(args);
     }
+    if let Some(message) = tools::browser::ask_message(tool, args) {
+        return message;
+    }
     let target = ["index", "path", "name", "url"]
         .iter()
         .find_map(|key| args.get(key).and_then(Value::as_str))
@@ -199,6 +203,7 @@ registered_tools!(
     "file_read",
     "file_save",
     "file_write",
+    "file_link",
     "knowledge_create",
     "knowledge_add",
     "knowledge_search",
@@ -373,6 +378,7 @@ pub struct HostTools {
     memory: Option<MemoryHandle>,
     notes: Option<NotesHandle>,
     trail: Option<ToolTrail>,
+    reply_files: Option<ReplyFiles>,
 }
 
 impl HostTools {
@@ -450,6 +456,17 @@ impl HostTools {
 
     pub fn trail(&self) -> Option<&ToolTrail> {
         self.trail.as_ref()
+    }
+
+    /// Collects the files the bot attaches with `file_attach`; offered only when a host passes
+    /// it, and that host puts them on the stored reply.
+    pub fn with_reply_files(mut self, files: ReplyFiles) -> Self {
+        self.reply_files = Some(files);
+        self
+    }
+
+    pub fn reply_files(&self) -> Option<&ReplyFiles> {
+        self.reply_files.as_ref()
     }
 
     /// The languages `code_run` runs on this host (`ToolEnv::code_languages`). None: the host
@@ -599,6 +616,22 @@ mod tests {
     }
 
     #[test]
+    fn opening_a_page_in_the_owners_browser_says_so_when_it_asks() {
+        let spec = bot_tool_spec("browser_open").expect("browser_open");
+        let ToolApprovalSpec::Mutating { message, .. } = spec.approval else {
+            panic!("browser_open must ask");
+        };
+        assert_eq!(
+            message(&json!({ "url": "https://shop.example/" })),
+            "The bot wants to run browser_open 'https://shop.example/'."
+        );
+        assert_eq!(
+            message(&json!({ "url": "https://shop.example/", "browser": "owner" })),
+            "The bot wants to open 'https://shop.example/' in your own browser, where you are signed in."
+        );
+    }
+
+    #[test]
     fn web_requests_ask_with_the_site_and_need_their_own_capability() {
         assert_eq!(
             tool_capability("web_request"),
@@ -610,7 +643,7 @@ mod tests {
         };
         assert_eq!(
             message(&json!({ "url": "https://www.cisa.gov/feeds/kev.xml?x=1" })),
-            "The bot wants to send a GET request to www.cisa.gov/feeds/kev.xml."
+            "The bot wants to send a GET request to www.cisa.gov/feeds/kev.xml?x=1."
         );
     }
 

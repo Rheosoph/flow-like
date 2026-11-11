@@ -13,6 +13,9 @@ type ToolId =
 	| "connector_call"
 	| "image_generate"
 	| "file_save"
+	| "file_save_url"
+	| "file_attach"
+	| "file_attach_link"
 	| "memory_save";
 
 const TOOLS: readonly { id: ToolId; label: string; outbound: boolean }[] = [
@@ -21,6 +24,21 @@ const TOOLS: readonly { id: ToolId; label: string; outbound: boolean }[] = [
 	{ id: "connector_call", label: "Call a connected service", outbound: true },
 	{ id: "image_generate", label: "Generate an image", outbound: true },
 	{ id: "file_save", label: "Save a file in its workspace", outbound: false },
+	{
+		id: "file_save_url",
+		label: "Download a link into its workspace",
+		outbound: true,
+	},
+	{
+		id: "file_attach",
+		label: "Attach a stored file to the reply",
+		outbound: false,
+	},
+	{
+		id: "file_attach_link",
+		label: "Attach a link to the reply",
+		outbound: true,
+	},
 	{ id: "memory_save", label: "Remember a fact", outbound: false },
 ];
 

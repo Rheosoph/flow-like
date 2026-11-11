@@ -96,9 +96,10 @@ selects the database-backed polling transport instead.
 
 ### Test the channel transport
 
-Browsers no longer publish to the broker: replies, steering and cancellation go
-to the API, which forwards them onto NATS. To test the broker side, make
-`nats-server` available on `PATH` and run from the repository root:
+Browsers send replies and steering to the broker and use the API, which forwards
+them onto NATS, when that fails. A cancellation goes through the API first,
+because the API also stops the run. To test the broker side, make `nats-server`
+available on `PATH` and run from the repository root:
 
 ```bash
 NATS_SERVER_BIN="$(command -v nats-server)" cargo test -p flow-like-channels \

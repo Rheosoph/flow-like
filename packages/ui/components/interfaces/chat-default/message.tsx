@@ -60,6 +60,7 @@ import { AttachmentStrip } from "./attachment-strip";
 import type { IAttachment, IMessage } from "./chat-db";
 import { ChatMessageError } from "./chat-message-error";
 import { useProcessedAttachments } from "./hooks/use-processed-attachments";
+import { useResolvedAttachments } from "./hooks/use-resolved-attachments";
 import {
 	type InlineAnchoredContent,
 	buildInlineSegments,
@@ -603,8 +604,8 @@ export const MessageComponent = memo(
 			};
 		}, [message.inner.content, message.files, isUser]);
 
-		const processedAttachments = useProcessedAttachments(
-			messageContent.attachments,
+		const processedAttachments = useResolvedAttachments(
+			useProcessedAttachments(messageContent.attachments),
 		);
 
 		// A long paste should not push the answer off screen. The cap is measured
@@ -631,6 +632,7 @@ export const MessageComponent = memo(
 		}, [isUser]);
 
 		const handleFileClick = useCallback((file: ProcessedAttachment) => {
+			if (file.access) return;
 			// A cited page is a destination, not a file — downloading its markup is
 			// never what the external-link affordance promised.
 			if (file.type === "website") {

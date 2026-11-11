@@ -10,6 +10,7 @@ pub mod behavioral_evaluation;
 pub mod behavioral_state;
 pub mod benchmark_cases;
 pub mod bot_notes;
+pub mod bot_reply_files;
 pub mod bot_run;
 pub mod bot_talk;
 pub mod bot_trail;
@@ -25,6 +26,7 @@ mod draft_test;
 pub mod evaluation;
 mod executability;
 pub mod http_request;
+pub mod image_view;
 pub mod ir;
 pub mod ir_tools;
 pub mod manifest;
@@ -53,14 +55,15 @@ mod turn_label;
 mod typed_ir_parse;
 mod types;
 mod validation;
+pub mod web_providers;
 mod work_plan;
 
 pub use assistant::{
     AttachmentManifestEntry, GlobalDataStudioContext, GlobalOpenBoardContext, PlatformContextInput,
-    PlatformSpecialist, WebResearchCapability, build_platform_context, data_studio_section,
-    global_assistant_system_prompt, global_assistant_system_prompt_for, open_board_section,
-    run_ontology_query_chat, run_platform_chat, run_specialist_chat,
-    run_specialist_chat_with_access,
+    PlatformSpecialist, TURN_FILES, WebResearchCapability, build_platform_context,
+    data_studio_section, global_assistant_system_prompt, global_assistant_system_prompt_for,
+    open_board_section, run_ontology_query_chat, run_platform_chat, run_specialist_chat,
+    run_specialist_chat_with_access, with_stored_files,
 };
 pub use behavioral_evaluation::*;
 pub use behavioral_state::*;
@@ -117,6 +120,7 @@ pub use manifest::{
     default_flowscript_module_templates,
 };
 pub use bot_notes::{NotesHandle, NotesStore, notes_tool_specs};
+pub use bot_reply_files::ReplyFiles;
 pub use bot_trail::ToolTrail;
 pub use memory_tools::{HeadlessMemory, MemoryHandle, MemoryTurnSource, memory_tool_specs};
 pub use provider::{CatalogProvider, node_to_metadata, pin_to_metadata};

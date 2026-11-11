@@ -54,9 +54,7 @@ impl DocumentFormat {
     fn mime(self) -> &'static str {
         match self {
             Self::Pdf => "application/pdf",
-            Self::Docx => {
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            }
+            Self::Docx => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             Self::Pptx => {
                 "application/vnd.openxmlformats-officedocument.presentationml.presentation"
             }
@@ -196,12 +194,9 @@ fn too_many(what: &str, count: usize, max: usize) -> ToolError {
 }
 
 fn require<'a, T>(value: &'a Option<T>, field: &str, format: DocumentFormat) -> ToolResult<&'a T> {
-    value.as_ref().ok_or_else(|| {
-        ToolError::invalid(format!(
-            "A {} needs '{field}'",
-            format.extension()
-        ))
-    })
+    value
+        .as_ref()
+        .ok_or_else(|| ToolError::invalid(format!("A {} needs '{field}'", format.extension())))
 }
 
 pub fn export_stem(name: &str, extension: &str) -> ToolResult<String> {
@@ -239,7 +234,9 @@ pub async fn unique_export_path(
     }
     Err(ToolError::new(
         code::ALREADY_HERE,
-        format!("bot/exports/ already holds {MAX_UNIQUE_NAMES} files named '{stem}'; pick another name"),
+        format!(
+            "bot/exports/ already holds {MAX_UNIQUE_NAMES} files named '{stem}'; pick another name"
+        ),
     ))
 }
 
@@ -271,7 +268,10 @@ async fn markdown_images(
     let mut images = BTreeMap::new();
     for url in urls {
         if let Some(rest) = url.strip_prefix("data:") {
-            match rest.split_once(";base64,").map(|(_, data)| STANDARD.decode(data.trim())) {
+            match rest
+                .split_once(";base64,")
+                .map(|(_, data)| STANDARD.decode(data.trim()))
+            {
                 Some(Ok(bytes)) => {
                     images.insert(url, Bytes::from(bytes));
                 }
@@ -333,7 +333,9 @@ fn cell_of(value: &Value) -> ToolResult<SheetCell> {
         Value::Null => SheetCell::Empty,
         Value::Bool(flag) => SheetCell::Bool(*flag),
         Value::Number(number) => SheetCell::Number(number.as_f64().ok_or_else(|| {
-            ToolError::invalid(format!("The number {number} does not fit a spreadsheet cell"))
+            ToolError::invalid(format!(
+                "The number {number} does not fit a spreadsheet cell"
+            ))
         })?),
         Value::String(text) => match text.strip_prefix('=') {
             Some(formula) if !formula.trim().is_empty() => {
@@ -382,20 +384,20 @@ fn sheets_of(sheets: &[SheetArgs]) -> ToolResult<Vec<SheetData>> {
         .collect()
 }
 
-async fn slide_of(
-    env: &dyn ToolEnv,
-    position: usize,
-    slide: &SlideArgs,
-) -> ToolResult<DeckSlide> {
+async fn slide_of(env: &dyn ToolEnv, position: usize, slide: &SlideArgs) -> ToolResult<DeckSlide> {
     let number = position + 1;
-    let layout = slide.layout.unwrap_or(match (&slide.image, &slide.table, &slide.chart) {
-        (Some(_), _, _) => SlideLayoutKind::Image,
-        (_, Some(_), _) => SlideLayoutKind::Table,
-        (_, _, Some(_)) => SlideLayoutKind::Chart,
-        _ => SlideLayoutKind::Bullets,
-    });
+    let layout = slide
+        .layout
+        .unwrap_or(match (&slide.image, &slide.table, &slide.chart) {
+            (Some(_), _, _) => SlideLayoutKind::Image,
+            (_, Some(_), _) => SlideLayoutKind::Table,
+            (_, _, Some(_)) => SlideLayoutKind::Chart,
+            _ => SlideLayoutKind::Bullets,
+        });
     let missing = |what: &str| {
-        ToolError::invalid(format!("Slide {number} has layout {layout:?} but no {what}"))
+        ToolError::invalid(format!(
+            "Slide {number} has layout {layout:?} but no {what}"
+        ))
     };
     let mut image = None;
     if layout == SlideLayoutKind::Image || slide.image.is_some() {
@@ -433,11 +435,9 @@ async fn slide_of(
                     MAX_CHART_POINTS,
                 ));
             }
-            if let Some(series) = chart
-                .series
-                .iter()
-                .find(|s| s.values.len() != chart.categories.len() || s.values.iter().any(|v| !v.is_finite()))
-            {
+            if let Some(series) = chart.series.iter().find(|s| {
+                s.values.len() != chart.categories.len() || s.values.iter().any(|v| !v.is_finite())
+            }) {
                 return Err(ToolError::invalid(format!(
                     "Series '{}' on slide {number} needs one finite value per category ({})",
                     series.name,
@@ -480,7 +480,10 @@ async fn save_new(
     if bytes.len() as u64 > max {
         return Err(ToolError::new(
             code::TOO_LARGE,
-            format!("The file is {} bytes; the limit for a written file is {max}", bytes.len()),
+            format!(
+                "The file is {} bytes; the limit for a written file is {max}",
+                bytes.len()
+            ),
         ));
     }
     let path = unique_export_path(env, workspace, stem, format_extension).await?;
@@ -506,9 +509,10 @@ async fn preview(
                 });
             }
         }
-        Err(error) => output
-            .warnings
-            .push(format!("The page 1 preview could not be rendered: {}", error.message)),
+        Err(error) => output.warnings.push(format!(
+            "The page 1 preview could not be rendered: {}",
+            error.message
+        )),
     }
 }
 
@@ -562,7 +566,11 @@ async fn build(
             for (position, slide) in slides.iter().enumerate() {
                 deck.push(slide_of(env, position, slide).await?);
             }
-            let (title, author, backend) = (nonempty(&args.title), nonempty(&args.author), backend.clone());
+            let (title, author, backend) = (
+                nonempty(&args.title),
+                nonempty(&args.author),
+                backend.clone(),
+            );
             blocking(move || backend.create_pptx(title, author, deck)).await
         }
         DocumentFormat::Xlsx => {
@@ -586,7 +594,15 @@ pub async fn document_create(
     let mut warnings = Vec::new();
     let built = build(env, &backend, &args, &mut warnings).await?;
     warnings.extend(built.warnings);
-    let handle = save_new(env, &workspace, &stem, format.extension(), format.mime(), built.bytes.clone()).await?;
+    let handle = save_new(
+        env,
+        &workspace,
+        &stem,
+        format.extension(),
+        format.mime(),
+        built.bytes.clone(),
+    )
+    .await?;
 
     let mut result = json!({ "format": format.extension(), "handle": handle });
     if let Some(count) = built.count {
@@ -665,12 +681,14 @@ pub async fn document_fill(env: &dyn ToolEnv, args: DocumentFillArgs) -> ToolRes
     }
 
     let (worker, bytes) = (backend.clone(), template.bytes.clone());
-    let filled = blocking(move || worker.fill_template(bytes, fill)).await.map_err(|error| {
-        ToolError::new(
-            code::UNSUPPORTED_FILE,
-            format!("Filling '{}' failed: {}", template.name, error.message),
-        )
-    })?;
+    let filled = blocking(move || worker.fill_template(bytes, fill))
+        .await
+        .map_err(|error| {
+            ToolError::new(
+                code::UNSUPPORTED_FILE,
+                format!("Filling '{}' failed: {}", template.name, error.message),
+            )
+        })?;
     if filled.filled.is_empty() {
         return Err(ToolError::invalid(format!(
             "Nothing in '{}' matched {}; no file was written. Placeholders are written {{{{name}}}} in the document",
@@ -685,7 +703,15 @@ pub async fn document_fill(env: &dyn ToolEnv, args: DocumentFillArgs) -> ToolRes
         None => format!("{}-filled", stem_of(&template.name)),
     };
     let mime = guess_mime(&format!("x.{extension}"));
-    let handle = save_new(env, &workspace, &stem, extension, &mime, filled.bytes.clone()).await?;
+    let handle = save_new(
+        env,
+        &workspace,
+        &stem,
+        extension,
+        &mime,
+        filled.bytes.clone(),
+    )
+    .await?;
     let mut output = ToolOutput::new(json!({
         "format": extension,
         "handle": handle,

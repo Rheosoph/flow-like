@@ -58,18 +58,29 @@ impl GuardedBrowser {
     fn fresh_look_needed(&self) -> Result<()> {
         self.channel.takeover.require_fresh(true).map_err(failure)
     }
+
+    async fn opened(
+        &self,
+        opening: impl Future<Output = Result<PageState>> + Send,
+    ) -> Result<PageState> {
+        let generation = self.channel.takeover.generation();
+        self.guard()?;
+        let page = opening.await?;
+        if self.channel.takeover.observed(true, generation) {
+            self.channel.takeover.take_note();
+        }
+        Ok(page)
+    }
 }
 
 #[async_trait]
 impl BrowserBackend for GuardedBrowser {
     async fn open(&self, url: &str) -> Result<PageState> {
-        let generation = self.channel.takeover.generation();
-        self.guard()?;
-        let page = self.inner.open(url).await?;
-        if self.channel.takeover.observed(true, generation) {
-            self.channel.takeover.take_note();
-        }
-        Ok(page)
+        self.opened(self.inner.open(url)).await
+    }
+
+    async fn open_in_owner_browser(&self, url: &str) -> Result<PageState> {
+        self.opened(self.inner.open_in_owner_browser(url)).await
     }
 
     async fn snapshot(&self, request: SnapshotRequest) -> Result<SnapshotView> {

@@ -421,6 +421,7 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         crate::routes::admin::deletions::get_deletion_job,
         crate::routes::admin::deletions::retry_deletion_job,
         crate::routes::admin::deletions::run_deletion_queue,
+        crate::routes::admin::users::repair_identities::repair,
         crate::routes::admin::governance::list_scores::list_scores,
         crate::routes::admin::governance::get_scores_summary::get_scores_summary,
         crate::routes::admin::governance::get_app_scores::get_app_scores,
@@ -1029,6 +1030,8 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         crate::routes::app::cache::DeleteNamespaceResponse,
         crate::routes::app::flowpilot_builds::WriteAppBuildRequest,
         crate::routes::admin::cache::SweepCacheResponse,
+        crate::routes::admin::users::repair_identities::RepairIdentitiesPage,
+        crate::routes::user::handle::IdentityRepairReport,
         // Backing service status schemas
         crate::routes::admin::resources::AdminResourcesResponse,
         crate::routes::admin::resources::ResourceStatus,

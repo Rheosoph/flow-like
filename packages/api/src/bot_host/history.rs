@@ -300,32 +300,33 @@ fn lines_of(
     lines
 }
 
-/// The name every member of a conversation may see: the sanitized display name, else the
-/// humanized email local part, never a username.
-pub(crate) fn public_person_name(name: Option<&str>, email: Option<&str>) -> Option<String> {
-    use crate::routes::user::identity::{humanize_email_local_part, sanitize_display_name};
-    name.and_then(sanitize_display_name)
-        .or_else(|| email.and_then(humanize_email_local_part))
-}
-
-/// Display names of people and bots, so the model can tell people apart.
+/// Display names of people and bots, so the model can tell people apart. A person is named
+/// as every member of a conversation may see them: never by login name or address.
 pub(crate) async fn sender_names<C: ConnectionTrait>(
     db: &C,
     ids: &[&str],
 ) -> Result<HashMap<String, String>, DbErr> {
+    use crate::routes::user::identity::public_display_name;
     let mut names = HashMap::new();
     if ids.is_empty() {
         return Ok(names);
     }
     let people = user::Entity::find()
         .select_only()
-        .columns([user::Column::Id, user::Column::Name, user::Column::Email])
+        .columns([
+            user::Column::Id,
+            user::Column::Name,
+            user::Column::PreferredUsername,
+            user::Column::Email,
+        ])
         .filter(user::Column::Id.is_in(ids.iter().copied()))
-        .into_tuple::<(String, Option<String>, Option<String>)>()
+        .into_tuple::<(String, Option<String>, Option<String>, Option<String>)>()
         .all(db)
         .await?;
-    for (id, name, email) in people {
-        if let Some(name) = public_person_name(name.as_deref(), email.as_deref()) {
+    for (id, name, handle, email) in people {
+        if let Some(name) =
+            public_display_name(name.as_deref(), handle.as_deref(), email.as_deref())
+        {
             names.insert(id, name);
         }
     }
@@ -724,19 +725,6 @@ mod tests {
             seq: None,
             cleared: Some(false),
         }
-    }
-
-    #[test]
-    fn public_names_never_fall_back_to_usernames() {
-        assert_eq!(
-            public_person_name(Some("  Ada   Lovelace "), Some("x@example.com")).as_deref(),
-            Some("Ada Lovelace")
-        );
-        assert_eq!(
-            public_person_name(None, Some("grace.hopper@example.com")).as_deref(),
-            Some("Grace Hopper")
-        );
-        assert_eq!(public_person_name(Some("  "), None), None);
     }
 
     #[test]

@@ -198,8 +198,13 @@ async fn join(
     let name = user::Entity::find_by_id(&sub)
         .one(&state.db)
         .await?
-        .and_then(|u| u.name)
-        .filter(|name| !name.trim().is_empty())
+        .and_then(|u| {
+            crate::routes::user::identity::public_display_name(
+                u.name.as_deref(),
+                u.preferred_username.as_deref(),
+                u.email.as_deref(),
+            )
+        })
         .unwrap_or_else(|| "Member".to_string());
     let name: String = name.chars().filter(|c| !c.is_control()).take(80).collect();
     let joined = state

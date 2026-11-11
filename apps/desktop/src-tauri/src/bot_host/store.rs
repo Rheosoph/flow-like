@@ -15,6 +15,8 @@ use flow_like_types::{
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 
+mod room_files;
+
 pub const WINDOW: u64 = 100;
 
 #[async_trait]
@@ -423,8 +425,10 @@ impl HostStore for AppStore {
         &self,
         conversation_id: &str,
         sender_id: &str,
-        request: SendEntryRequest,
+        mut request: SendEntryRequest,
     ) -> Result<InboxEntry, String> {
+        self.share_room_files(conversation_id, sender_id, &mut request)
+            .await;
         let (conversation, sender) = (conversation_id.to_owned(), sender_id.to_owned());
         self.with(move |store| store.send(&conversation, &sender, request))
             .await

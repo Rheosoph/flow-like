@@ -706,10 +706,9 @@ async fn real_broker_realtime_receiver_is_read_only_and_account_scoped() {
     let wake = Arc::new(Notify::new());
     let (healthy, mut ready) = watch::channel(false);
     let notifications = Arc::clone(&wake);
-    let listener =
-        tokio::spawn(
-            async move { crate::realtime::listen(&transport, notifications, healthy).await },
-        );
+    let listener = tokio::spawn(async move {
+        crate::realtime::listen(&transport, notifications, healthy, None).await
+    });
     tokio::time::timeout(Duration::from_secs(5), async {
         while !*ready.borrow() {
             ready.changed().await.unwrap();

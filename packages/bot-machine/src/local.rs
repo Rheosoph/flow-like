@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use flow_like_bot_tools::browser::{
     BrowserBackend, BrowserScreen, BrowserStep, Download, PageState, ScrollTo, SnapshotRequest,
-    SnapshotView,
+    SnapshotView, no_owner_browser,
 };
 use flow_like_bot_tools::computer::{
     ComputerAction, ComputerBackend, PointerButton, Screen, ScrollDirection, WindowBounds,
@@ -43,20 +43,31 @@ pub fn bot_dir(data_dir: &Path, bot_id: &str) -> PathBuf {
     data_dir.join("bots").join(safe)
 }
 
+/// Where the bot's own Chrome shows up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Surface {
+    /// Nowhere: Chrome runs headless.
+    Hidden,
+    /// As a window on the bot's virtual display, which the computer view shows whole.
+    VirtualDisplay,
+    /// As a window on the owner's screen (the desktop app), where the owner's own browser is
+    /// at hand too.
+    OwnerScreen,
+}
+
 pub struct LocalPlayground {
     root: PathBuf,
-    headless: bool,
+    surface: Surface,
     browsers: DashMap<String, Arc<LocalBrowser>>,
     computer: Arc<LocalComputer>,
     computer_used: AtomicBool,
 }
 
 impl LocalPlayground {
-    /// `headless: false` runs Chrome on the process's display so a viewer of that display sees it.
-    pub fn new(data_dir: &Path, bot_id: &str, headless: bool) -> Arc<Self> {
+    pub fn new(data_dir: &Path, bot_id: &str, surface: Surface) -> Arc<Self> {
         Arc::new(Self {
             root: bot_dir(data_dir, bot_id),
-            headless,
+            surface,
             browsers: DashMap::new(),
             computer: Arc::new(LocalComputer::default()),
             computer_used: AtomicBool::new(false),
@@ -113,7 +124,7 @@ impl Playground for LocalPlayground {
         let key = conversation.unwrap_or("").to_string();
         self.browsers
             .entry(key)
-            .or_insert_with(|| Arc::new(LocalBrowser::new(&self.root, self.headless)))
+            .or_insert_with(|| Arc::new(LocalBrowser::new(&self.root, self.surface)))
             .clone()
     }
 
@@ -123,7 +134,8 @@ impl Playground for LocalPlayground {
     }
 
     async fn capture(&self) -> Result<Option<Shot>> {
-        let screen_visible = !self.headless && self.computer_used.load(Ordering::Acquire);
+        let screen_visible =
+            self.surface == Surface::VirtualDisplay && self.computer_used.load(Ordering::Acquire);
         if screen_visible && !self.running_browsers().is_empty() {
             return Ok(self.screen_shot().await);
         }
@@ -222,24 +234,40 @@ fn bot_input(event: &InputEvent, width: u32, height: u32) -> Result<BotInput> {
     })
 }
 
-/// One browser per bot and conversation. Every bot has its own profile folder, so it never
-/// sees the owner's cookies, logins or history; its own logins survive between sessions.
+type BrowserSlot = tokio::sync::Mutex<Option<Arc<BotBrowser>>>;
+
+/// One browser per bot and conversation. Every bot has its own profile folder, so its own
+/// Chrome never sees the owner's cookies, logins or history; its own logins survive between
+/// sessions. On the owner's screen a session can also move into a tab of the owner's browser,
+/// which the tools open only with the owner's approval.
 pub struct LocalBrowser {
     profile_dir: PathBuf,
     download_dir: PathBuf,
-    headless: bool,
-    browser: tokio::sync::Mutex<Option<Arc<BotBrowser>>>,
+    surface: Surface,
+    own: BrowserSlot,
+    owner_tab: BrowserSlot,
+    in_owner_browser: AtomicBool,
     last_used: Mutex<Instant>,
 }
 
 impl LocalBrowser {
-    fn new(root: &Path, headless: bool) -> Self {
+    fn new(root: &Path, surface: Surface) -> Self {
         Self {
             profile_dir: root.join("browser-profile"),
             download_dir: root.join("browser-downloads"),
-            headless,
-            browser: tokio::sync::Mutex::new(None),
+            surface,
+            own: tokio::sync::Mutex::new(None),
+            owner_tab: tokio::sync::Mutex::new(None),
+            in_owner_browser: AtomicBool::new(false),
             last_used: Mutex::new(Instant::now()),
+        }
+    }
+
+    fn slot(&self) -> &BrowserSlot {
+        if self.in_owner_browser.load(Ordering::Acquire) {
+            &self.owner_tab
+        } else {
+            &self.own
         }
     }
 
@@ -256,11 +284,11 @@ impl LocalBrowser {
     }
 
     async fn running(&self) -> Option<Arc<BotBrowser>> {
-        self.browser.lock().await.clone().filter(|b| b.is_alive())
+        self.slot().lock().await.clone().filter(|b| b.is_alive())
     }
 
     async fn launched(&self) -> Result<Arc<BotBrowser>> {
-        let mut slot = self.browser.lock().await;
+        let mut slot = self.own.lock().await;
         if let Some(browser) = slot.clone().filter(|b| b.is_alive()) {
             return Ok(browser);
         }
@@ -268,12 +296,27 @@ impl LocalBrowser {
             BotBrowser::launch(BotBrowserOptions {
                 profile_dir: self.profile_dir.clone(),
                 download_dir: self.download_dir.clone(),
-                headless: self.headless,
+                headless: self.surface == Surface::Hidden,
             })
             .await?,
         );
         *slot = Some(browser.clone());
         Ok(browser)
+    }
+
+    async fn attached(&self) -> Result<Arc<BotBrowser>> {
+        let mut slot = self.owner_tab.lock().await;
+        if let Some(browser) = slot.clone().filter(|b| b.is_alive()) {
+            return Ok(browser);
+        }
+        let browser = Arc::new(BotBrowser::attach_owner().await?);
+        *slot = Some(browser.clone());
+        Ok(browser)
+    }
+
+    async fn opened(browser: &BotBrowser, url: &str) -> Result<PageState> {
+        let (url, title) = browser.goto(url).await?;
+        Ok(PageState { url, title })
     }
 
     async fn needed(&self) -> Result<Arc<BotBrowser>> {
@@ -289,9 +332,12 @@ impl LocalBrowser {
     }
 
     async fn end(&self) {
-        if let Some(browser) = self.browser.lock().await.take() {
-            browser.close().await;
+        for slot in [&self.own, &self.owner_tab] {
+            if let Some(browser) = slot.lock().await.take() {
+                browser.close().await;
+            }
         }
+        self.in_owner_browser.store(false, Ordering::Release);
     }
 }
 
@@ -333,8 +379,21 @@ impl BrowserBackend for LocalBrowser {
     async fn open(&self, url: &str) -> Result<PageState> {
         self.touch();
         let browser = self.launched().await?;
-        browser.goto(url).await?;
-        Self::page(&browser).await
+        let page = Self::opened(&browser, url).await?;
+        self.in_owner_browser.store(false, Ordering::Release);
+        Ok(page)
+    }
+
+    async fn open_in_owner_browser(&self, url: &str) -> Result<PageState> {
+        if self.surface != Surface::OwnerScreen {
+            return Err(no_owner_browser());
+        }
+        self.touch();
+        let browser = self.attached().await?;
+        self.touch();
+        let page = Self::opened(&browser, url).await?;
+        self.in_owner_browser.store(true, Ordering::Release);
+        Ok(page)
     }
 
     async fn snapshot(&self, request: SnapshotRequest) -> Result<SnapshotView> {

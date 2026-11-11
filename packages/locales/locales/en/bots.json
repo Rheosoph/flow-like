@@ -1139,6 +1139,7 @@
 		"event": "Run event {{id}} of app {{app}}",
 		"host": "Run code that reaches {{host}}",
 		"other": "{{tool}}: {{scope}}",
+		"ownerBrowser": "Open sites on {{site}} in your own browser",
 		"page": "Use page {{id}} of app {{app}}",
 		"person": "Message {{name}}",
 		"personUnknown": "Message a person you chat with",

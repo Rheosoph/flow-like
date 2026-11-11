@@ -599,3 +599,116 @@ async fn initial_model_failures_and_cancellation_remain_errors() {
 
 #[path = "platform_recovery_tests.rs"]
 mod recovery;
+
+struct LinkBridge {
+    link: String,
+}
+
+#[async_trait]
+impl PlatformToolBridge for LinkBridge {
+    async fn call(&self, name: &str, _: Value) -> String {
+        assert_eq!(name, "list_apps", "image_view must execute in core");
+        json!({ "status": "ok", "apps": [], "preview": { "page": 1, "url": self.link } })
+            .to_string()
+    }
+}
+
+async fn serve_png() -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut request = [0u8; 2048];
+            let _ = socket.read(&mut request).await;
+            let body = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+            let _ = socket.write_all(head.as_bytes()).await;
+            let _ = socket.write_all(body).await;
+        }
+    });
+    format!("http://{address}/tmp/page-1.png?X-Amz-Signature=abc")
+}
+
+async fn run_image_view_turn(client: &Client, link: String) -> Result<String> {
+    let state = Arc::new(FlowLikeState::new(
+        FlowLikeConfig::new(),
+        HTTPClient::new_without_refetch(),
+    ));
+    PlatformCopilot::new(state, None)
+        .with_tool_specs(vec![
+            find_global_tool_spec("list_apps").unwrap(),
+            super::super::image_view::image_view_tool_spec(),
+        ])
+        .with_tool_rounds(6)
+        .chat_with_client(
+            PlatformSurface::Orchestrator,
+            "Help the owner.".into(),
+            "Look at the first page.".into(),
+            None,
+            Vec::new(),
+            "scripted".into(),
+            client,
+            None,
+            Arc::new(LinkBridge { link }),
+            None,
+            None::<fn(String)>,
+        )
+        .await
+}
+
+fn image_links(request: &CompletionRequest) -> Vec<String> {
+    request
+        .chat_history
+        .iter()
+        .filter_map(|message| match message {
+            rig::message::Message::User { content } => Some(content.iter()),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|part| match part {
+            UserContent::Image(Image {
+                data: DocumentSourceKind::Url(url),
+                ..
+            }) => Some(url.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_link_a_tool_returned_reaches_the_next_model_call_as_an_image() {
+    let link = serve_png().await;
+    let client = Client::new(vec![
+        call("list", "list_apps", json!({})),
+        call("view", IMAGE_VIEW_TOOL, json!({ "urls": [link] })),
+        text("Page one shows a chart."),
+    ]);
+    let answer = run_image_view_turn(&client, link.clone()).await.unwrap();
+    assert!(answer.contains("Page one shows a chart."));
+    let requests = client.0.requests.lock().unwrap();
+    assert!(image_links(&requests[1]).is_empty());
+    assert_eq!(image_links(&requests[2]), [link]);
+    let viewed = serde_json::to_string(&requests[2]).unwrap();
+    assert!(viewed.contains("preceding tool result(s) of image_view"));
+    assert!(!viewed.contains(PLATFORM_TOOL_IMAGE_URLS_FIELD));
+}
+
+#[tokio::test]
+async fn a_link_the_model_made_up_is_refused_and_never_attached() {
+    let link = serve_png().await;
+    let invented = link.replace("page-1", "page-2");
+    let client = Client::new(vec![
+        call("list", "list_apps", json!({})),
+        call("view", IMAGE_VIEW_TOOL, json!({ "urls": [invented] })),
+        text("I could not view it."),
+    ]);
+    run_image_view_turn(&client, link).await.unwrap();
+    let requests = client.0.requests.lock().unwrap();
+    assert!(image_links(&requests[2]).is_empty());
+    let refused = serde_json::to_string(&requests[2]).unwrap();
+    assert!(refused.contains("no_viewable_image"));
+}

@@ -1411,6 +1411,17 @@ mod tests {
                 user_prompt: child.user_prompt.clone(),
                 tool_rounds: child.tool_rounds,
             });
+            // A surface worker counts as running once it holds the shared surface.
+            let mut behavior = (self.behavior)(&child.user_prompt);
+            let surface_tool = ["browser_snapshot", "computer_windows"]
+                .into_iter()
+                .find(|tool| child.tool_specs.iter().any(|spec| spec.name == *tool))
+                .unwrap_or("browser_snapshot");
+            while let Behavior::Surface(next) = behavior {
+                let output = child.bridge.call(surface_tool, json!({})).await;
+                locked(&self.calls).push((surface_tool.to_string(), output));
+                behavior = *next;
+            }
             let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
             struct Running<'a>(&'a AtomicU64);
             impl Drop for Running<'_> {
@@ -1421,11 +1432,6 @@ mod tests {
             let _running = Running(&self.running);
             self.peak.fetch_max(now, Ordering::SeqCst);
             self.started.notify_one();
-            let mut behavior = (self.behavior)(&child.user_prompt);
-            while let Behavior::Surface(next) = behavior {
-                child.bridge.call("browser_snapshot", json!({})).await;
-                behavior = *next;
-            }
             let result = match behavior {
                 Behavior::Reply(text) => Ok(text),
                 Behavior::Fail => Err(flow_like_types::anyhow!("model unavailable")),
@@ -1783,6 +1789,7 @@ mod tests {
         let mut bot = parent_bot();
         bot.capabilities
             .extend([BotCapability::BrowserUse, BotCapability::ComputerUse]);
+        bot.host_tools = HostTools::linked().with_local_machine();
         bot
     }
 
@@ -1808,6 +1815,9 @@ mod tests {
             for task in result["results"].as_array().unwrap() {
                 assert_eq!(task["status"], "done", "{task}");
             }
+        }
+        for (tool, output) in locked(&runner.calls).iter() {
+            assert!(output.contains(r#""status":"ok""#), "{tool}: {output}");
         }
         assert_eq!(runner.peak.load(Ordering::SeqCst), 1);
         assert_eq!(locked(&runner.seen).len(), 3);
@@ -1875,7 +1885,7 @@ mod tests {
             let call = rig.bridge.call("computer_windows", json!({}));
             tokio::pin!(call);
             assert!(futures::poll!(&mut call).is_pending());
-            assert!(locked(&rig.parent.calls).is_empty());
+            assert_eq!(*locked(&rig.parent.calls), ["browser_snapshot"]);
             release.notify_one();
             call.await;
             assert_eq!(runner.running.load(Ordering::SeqCst), 0);
@@ -1891,7 +1901,10 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(*locked(&rig.parent.calls), ["computer_windows"]);
+        assert_eq!(
+            *locked(&rig.parent.calls),
+            ["browser_snapshot", "computer_windows"]
+        );
     }
 
     #[tokio::test]

@@ -180,7 +180,7 @@ export function UserInviteSearchResults({
 					<p>
 						{t(
 							"searchDirectoryHint",
-							"Enter at least 2 characters to search for anyone by name, handle, email or user ID.",
+							"Enter at least 2 characters to search by name or handle, or paste a full email address or user ID.",
 						)}
 					</p>
 				)}

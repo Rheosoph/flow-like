@@ -152,6 +152,10 @@ pub fn routes() -> Router<AppState> {
         .route("/sinks/{jti}", delete(sinks::revoke_sink::revoke_sink))
         // User management routes
         .route("/users", get(users::list_users::list_users))
+        .route(
+            "/users/repair-identities",
+            post(users::repair_identities::repair),
+        )
         .route("/users/{user_id}", patch(users::update_user::update_user))
         // Usage reporting and limits
         .route("/usage/overview", get(usage::overview))

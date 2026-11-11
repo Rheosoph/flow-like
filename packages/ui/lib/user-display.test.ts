@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
+	handleSlug,
 	humanizeEmailLocalPart,
+	isEmailLike,
 	isIdpHandle,
 	isPrivateRelayEmail,
 	looksLikeAccountId,
 	looksLikeBotSub,
 	looksLikeUserColumnName,
+	ownNameFromClaims,
+	publicNameFromClaims,
 	userAvatarUrl,
 	userDisplayName,
 	userHandle,
@@ -84,6 +88,122 @@ describe("userHandle", () => {
 		expect(
 			userHandle({ username: "google_110293847561029384756" }),
 		).toBeUndefined();
+	});
+});
+
+// A sign-in that maps the address into the handle stored it as the name too.
+describe("an address in the name or the handle", () => {
+	const address = "felix.schultz@example.com";
+
+	test("is recognized, and readable text is not", () => {
+		expect(isEmailLike(address)).toBe(true);
+		expect(isEmailLike("  Felix@Example.COM ")).toBe(true);
+		for (const readable of [
+			"@felix",
+			"felix@",
+			"felix@localhost",
+			"Felix @ Work",
+			"felix",
+			"",
+			undefined,
+		]) {
+			expect(isEmailLike(readable)).toBe(false);
+		}
+	});
+
+	test("is never the handle", () => {
+		expect(userHandle({ preferred_username: address })).toBeUndefined();
+		expect(userHandle({ username: address })).toBeUndefined();
+		expect(userHandle({ preferred_username: address, username: "felix" })).toBe(
+			"felix",
+		);
+	});
+
+	test("reads as a name instead of being shown", () => {
+		const stored = { name: address, preferred_username: address };
+		expect(userDisplayName(stored)).toBe("Felix Schultz");
+		expect(userSecondaryLabel(stored)).toBeUndefined();
+		expect(userInitials(stored)).toBe("FS");
+		expect(userDisplayName({ preferred_username: address }, "Someone")).toBe(
+			"Someone",
+		);
+	});
+
+	test("still shows beneath the name once its owner shares it", () => {
+		expect(
+			userSecondaryLabel({
+				name: address,
+				preferred_username: address,
+				email: address,
+			}),
+		).toBe(address);
+	});
+});
+
+// Mirrors `a_username_is_spelled_in_lowercase_ascii_words` in identity.rs.
+describe("handleSlug", () => {
+	test("spells a username in lowercase ASCII words", () => {
+		for (const [text, slug] of [
+			["Felix Schultz", "felix-schultz"],
+			["felix.schultz", "felix-schultz"],
+			["Jürgen Groß", "juergen-gross"],
+			["Øyvind Ærø", "oyvind-aero"],
+			["José María", "jose-maria"],
+			["José María", "jose-maria"],
+			["O'Neil", "oneil"],
+			["  Anna -- Lena  ", "anna-lena"],
+			["fschultz88", "fschultz88"],
+			[
+				"Maximilian Alexander von Hohenberg-Lichtenstein",
+				"maximilian-alexander-von",
+			],
+		]) {
+			expect(handleSlug(text)).toBe(slug);
+		}
+		expect(handleSlug("a".repeat(80))).toHaveLength(25);
+	});
+
+	test("spells nothing without a recognizable name", () => {
+		for (const text of [
+			"李雷",
+			"Al",
+			"12345678",
+			"--",
+			"",
+			"9f8e7d6c5b4a3f2e1d0c9b8a7f6e",
+			undefined,
+		]) {
+			expect(handleSlug(text)).toBeUndefined();
+		}
+	});
+});
+
+describe("naming the signed-in user from their own claims", () => {
+	const address = "felix.schultz@example.com";
+	const googleSub = "110293847561029384756";
+	const relay = "kj2h3g4jh2g@privaterelay.appleid.com";
+
+	// A sign-in may map the handle to the address or to the provider's id.
+	test("never names them to others by address or provider id", () => {
+		expect(
+			publicNameFromClaims({ name: "Felix", preferred_username: address }),
+		).toBe("Felix");
+		for (const preferred_username of [address, googleSub]) {
+			expect(publicNameFromClaims({ preferred_username, email: address })).toBe(
+				"Felix Schultz",
+			);
+			expect(publicNameFromClaims({ preferred_username })).toBeUndefined();
+		}
+		expect(publicNameFromClaims({ email: relay })).toBeUndefined();
+		expect(publicNameFromClaims(undefined)).toBeUndefined();
+	});
+
+	test("shows their own address only on their own screen", () => {
+		expect(ownNameFromClaims({ name: "Felix", email: address })).toBe("Felix");
+		expect(
+			ownNameFromClaims({ preferred_username: googleSub, email: relay }),
+		).toBe(relay);
+		expect(ownNameFromClaims(null)).toBeUndefined();
 	});
 });
 

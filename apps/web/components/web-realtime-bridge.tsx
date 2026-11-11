@@ -9,6 +9,7 @@ import {
 	clearRealtimeStatus,
 	recordRealtimeUpdate,
 } from "@flow-like/flow-like-ui/lib/realtime/realtime-status";
+import { deliverRealtimeReply } from "@flow-like/flow-like-ui/lib/realtime/reply-streams";
 import {
 	type BrowserRealtimeClient,
 	getRealtimeClient,
@@ -117,6 +118,10 @@ export function WebRealtimeBridge({ enabled }: { enabled: boolean }) {
 			const owned = client;
 			unsubscribe = client.subscribe(async (update) => {
 				if (!currentAccount()) return;
+				if (update.type === "reply") {
+					deliverRealtimeReply(update.reply);
+					return;
+				}
 				if (update.type !== "snapshot") {
 					recordRealtimeUpdate(owned.mode, update);
 					return;

@@ -41,8 +41,9 @@ pub struct RealtimeConnectRequest {
     pub transport: RealtimeTransportPreference,
 }
 
-/// Receive-only credentials for one account's invalidations. Event data and
-/// authorization still come from the authenticated replay endpoint.
+/// Receive-only credentials for one account's wakeups and the replies written for it
+/// ([`RealtimeReply`]). Stored data and authorization still come from the authenticated replay
+/// endpoint.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RealtimeTransport {
@@ -120,6 +121,103 @@ impl RealtimeWakeup {
             && self.nonce.len() <= 128
             && !self.nonce.chars().any(char::is_control)
     }
+}
+
+pub const REALTIME_KIND_REPLY: &str = "reply";
+
+/// How far a reply that is still being written has come.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RealtimeReplyState {
+    /// More text follows.
+    Writing,
+    /// The bot is busy without writing, for example while a tool runs.
+    Working,
+    /// The text is complete; the stored message follows through the replay.
+    Done,
+    /// The reply is not posted; what a device has not shown or spoken of it is discarded.
+    Dropped,
+}
+
+impl RealtimeReplyState {
+    /// Whether no further message of the reply follows.
+    pub fn is_final(self) -> bool {
+        matches!(self, Self::Done | Self::Dropped)
+    }
+}
+
+/// A bot's reply while its host writes it, for the devices of the people in the conversation.
+/// It shortens the wait and decides nothing: the stored message still arrives through the
+/// authenticated replay and replaces it, and a device that misses these messages loses only the
+/// head start. Unlike a [`RealtimeWakeup`] it carries conversation content, so a host sends it
+/// only to accounts that also receive the stored message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RealtimeReply {
+    pub protocol_version: u8,
+    /// Always [`REALTIME_KIND_REPLY`].
+    pub kind: String,
+    pub conversation_id: String,
+    /// The id the stored message will have.
+    pub message_id: String,
+    /// The message this reply answers.
+    pub reply_to: String,
+    /// The bot that writes the reply.
+    pub sender_id: String,
+    /// Where `text` starts in the reply, in UTF-16 code units.
+    pub offset: u32,
+    /// The reply from `offset` to its current end. Normally the whole reply so far, so that any
+    /// one message makes up for the ones lost before it.
+    pub text: String,
+    pub state: RealtimeReplyState,
+}
+
+/// Bytes of reply text a message is first tried with; escaping can still push it over the limit.
+const REPLY_TEXT_BYTES: usize = 3_072;
+
+impl RealtimeReply {
+    pub fn is_valid(&self) -> bool {
+        let identifies = |value: &String| {
+            !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+        };
+        self.protocol_version == REALTIME_PROTOCOL_VERSION
+            && self.kind == REALTIME_KIND_REPLY
+            && [
+                &self.conversation_id,
+                &self.message_id,
+                &self.reply_to,
+                &self.sender_id,
+            ]
+            .into_iter()
+            .all(identifies)
+    }
+
+    /// Encodes the reply with as much of the end of `text` as [`MAX_REALTIME_WAKEUP_BYTES`]
+    /// allows: all of it while it fits, otherwise a tail that starts on a character boundary.
+    /// `None` when the identifiers alone are too large.
+    pub fn encode_fitting(mut self, text: &str) -> Option<Vec<u8>> {
+        let mut budget = REPLY_TEXT_BYTES;
+        loop {
+            let start = tail_start(text, budget);
+            self.offset = u32::try_from(text[..start].encode_utf16().count()).ok()?;
+            self.text = text[start..].to_owned();
+            let encoded = serde_json::to_vec(&self).ok()?;
+            if encoded.len() <= MAX_REALTIME_WAKEUP_BYTES {
+                return Some(encoded);
+            }
+            if budget == 0 {
+                return None;
+            }
+            budget /= 2;
+        }
+    }
+}
+
+fn tail_start(text: &str, budget: usize) -> usize {
+    let mut start = text.len().saturating_sub(budget);
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    start
 }
 
 fn initial_sequence() -> i32 {
@@ -455,6 +553,123 @@ mod tests {
             }))
             .is_err()
         );
+    }
+
+    fn reply(state: RealtimeReplyState) -> RealtimeReply {
+        RealtimeReply {
+            protocol_version: REALTIME_PROTOCOL_VERSION,
+            kind: REALTIME_KIND_REPLY.into(),
+            conversation_id: "c-a".into(),
+            message_id: "re-1".into(),
+            reply_to: "m-1".into(),
+            sender_id: "bot-1".into(),
+            offset: 0,
+            text: String::new(),
+            state,
+        }
+    }
+
+    #[test]
+    fn replies_name_their_conversation_message_and_writer() {
+        let writing = reply(RealtimeReplyState::Writing);
+        assert!(writing.is_valid());
+        for invalid in [
+            RealtimeReply {
+                protocol_version: 2,
+                ..writing.clone()
+            },
+            RealtimeReply {
+                kind: "invalidate".into(),
+                ..writing.clone()
+            },
+            RealtimeReply {
+                conversation_id: String::new(),
+                ..writing.clone()
+            },
+            RealtimeReply {
+                message_id: "x".repeat(257),
+                ..writing.clone()
+            },
+            RealtimeReply {
+                reply_to: "m\n1".into(),
+                ..writing.clone()
+            },
+            RealtimeReply {
+                sender_id: String::new(),
+                ..writing.clone()
+            },
+        ] {
+            assert!(!invalid.is_valid(), "{invalid:?}");
+        }
+    }
+
+    #[test]
+    fn replies_and_wakeups_are_never_mistaken_for_each_other() {
+        let encoded = reply(RealtimeReplyState::Working)
+            .encode_fitting("Let me check.")
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(value["kind"], "reply");
+        assert_eq!(value["state"], "working");
+        assert_eq!(value["offset"], 0);
+        assert_eq!(value["text"], "Let me check.");
+        assert!(serde_json::from_slice::<RealtimeWakeup>(&encoded).is_err());
+        assert!(
+            serde_json::from_value::<RealtimeReply>(json!({
+                "protocol_version": 1, "kind": "invalidate", "nonce": "n"
+            }))
+            .is_err()
+        );
+        let mut later = value.clone();
+        later["added_later"] = json!(true);
+        assert!(
+            serde_json::from_value::<RealtimeReply>(later)
+                .unwrap()
+                .is_valid()
+        );
+        let mut unknown = value;
+        unknown["state"] = json!("paused");
+        assert!(serde_json::from_value::<RealtimeReply>(unknown).is_err());
+    }
+
+    #[test]
+    fn a_reply_carries_its_whole_text_while_that_fits_and_its_tail_after() {
+        let short = "Grüße 👋 an alle.";
+        let encoded = reply(RealtimeReplyState::Done)
+            .encode_fitting(short)
+            .unwrap();
+        let decoded: RealtimeReply = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!((decoded.offset, decoded.text.as_str()), (0, short));
+
+        let long = "Ein längerer Satz mit Umlauten und 👋. ".repeat(200);
+        let encoded = reply(RealtimeReplyState::Writing)
+            .encode_fitting(&long)
+            .unwrap();
+        assert!(encoded.len() <= MAX_REALTIME_WAKEUP_BYTES);
+        let decoded: RealtimeReply = serde_json::from_slice(&encoded).unwrap();
+        assert!(decoded.offset > 0 && decoded.text.len() > 2_000);
+        let units: Vec<u16> = long.encode_utf16().collect();
+        assert_eq!(
+            String::from_utf16(&units[decoded.offset as usize..]).unwrap(),
+            decoded.text
+        );
+    }
+
+    #[test]
+    fn text_that_grows_when_escaped_still_fits_one_message() {
+        let quotes = "\"\n".repeat(4_000);
+        let encoded = reply(RealtimeReplyState::Writing)
+            .encode_fitting(&quotes)
+            .unwrap();
+        assert!(encoded.len() <= MAX_REALTIME_WAKEUP_BYTES);
+        let decoded: RealtimeReply = serde_json::from_slice(&encoded).unwrap();
+        assert!(!decoded.text.is_empty() && quotes.ends_with(&decoded.text));
+
+        let oversized = RealtimeReply {
+            conversation_id: "c".repeat(MAX_REALTIME_WAKEUP_BYTES),
+            ..reply(RealtimeReplyState::Writing)
+        };
+        assert!(oversized.encode_fitting("text").is_none());
     }
 
     #[test]

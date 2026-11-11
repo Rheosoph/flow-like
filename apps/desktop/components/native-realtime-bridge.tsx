@@ -3,15 +3,16 @@
 import { useBackend, useBackendReady } from "@flow-like/flow-like-ui";
 import { IncomingCallProvider } from "@flow-like/flow-like-ui/components/incoming-call-provider";
 import { unwatchedInboxPredicate } from "@flow-like/flow-like-ui/hooks/use-inbox";
+import { deliverRealtimeReply } from "@flow-like/flow-like-ui/lib/realtime/reply-streams";
 import type { RealtimeConversationSubscription } from "@flow-like/flow-like-ui/lib/realtime/types";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { useAuth } from "react-oidc-context";
+import { pokeBotHost } from "../lib/bot-host-poke";
 import {
 	desktopConversationFeed,
 	onWatchedConversationsChange,
 } from "../lib/desktop-conversation-feed";
-import { pokeBotHost } from "../lib/bot-host-poke";
 import { localRegistries } from "../lib/local-bots/registry";
 import { watchNativeRealtime } from "../lib/native-realtime";
 import { TauriBackend } from "./tauri-provider";
@@ -83,6 +84,7 @@ export function NativeRealtimeBridge() {
 		const unwatched = unwatchedInboxPredicate((id, as) =>
 			desktopConversationFeed.isWatched(id, as),
 		);
+		const localId = (accountId: string) => localIds.get(accountId) ?? accountId;
 		const open = (conversations: RealtimeConversationSubscription[]) => {
 			stopWatching?.();
 			stopWatching = watchNativeRealtime({
@@ -96,10 +98,17 @@ export function NativeRealtimeBridge() {
 					timeout_ms: 20_000,
 				},
 				onMessage: (message) => {
+					if (message.type === "reply") {
+						deliverRealtimeReply(
+							message.reply,
+							localId(message.reply.conversation_id),
+						);
+						return;
+					}
 					if (message.type !== "update") return;
 					for (const item of message.response.conversations ?? [])
 						desktopConversationFeed.deliver(
-							localIds.get(item.conversation_id) ?? item.conversation_id,
+							localId(item.conversation_id),
 							item.entries,
 							{ as: item.as },
 						);

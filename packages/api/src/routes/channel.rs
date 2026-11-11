@@ -584,12 +584,12 @@ async fn inbound(
     Ok(PushResponse::accepted())
 }
 
-/// Refresh the client's API endpoint within the original channel deadline.
+/// Refresh the client's transport credentials within the original channel deadline.
 #[utoipa::path(
     get,
     path = "/channels/{channel_id}/grant",
     tag = "channels",
-    description = "Return an HTTP API push handle (`side=client`) with the original responder capability and deadline. Its signed transport claim routes pushes to the existing waiter. Client credentials cannot request executor grants.",
+    description = "Refresh the client handle (`side=client`): fresh credentials for the channel's transport within the original deadline, with the push endpoint as fallback. Client credentials cannot request executor grants.",
     params(
         ("channel_id" = String, Path, description = "Channel (run) id"),
         GrantQuery,

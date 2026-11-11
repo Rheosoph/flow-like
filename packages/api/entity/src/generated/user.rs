@@ -73,6 +73,8 @@ pub struct Model {
     pub status: crate::sea_orm_active_enums::UserStatus,
     #[sea_orm(column_type = "Text")]
     pub tier: crate::sea_orm_active_enums::UserTier,
+    #[sea_orm(column_name = "shareEmail", nullable, default_value = false)]
+    pub share_email: Option<bool>,
     #[sea_orm(has_many)]
     pub bots: HasMany<super::bot::Entity>,
     #[sea_orm(has_many)]
