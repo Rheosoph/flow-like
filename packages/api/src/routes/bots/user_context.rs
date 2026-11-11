@@ -460,6 +460,15 @@ mod tests {
     async fn request_routes_bind_bot_tokens_to_their_bot_and_conversation() {
         let db = crate::routes::inbox::fixture::database().await;
         crate::routes::inbox::fixture::insert_bot(&db, "bot_test", "owner", "DESKTOP").await;
+        crate::routes::inbox::fixture::running_turn(
+            &db,
+            "turn_test",
+            "bot_test",
+            "room",
+            "host",
+            crate::routes::inbox::fixture::at(60),
+        )
+        .await;
         let token = AppUser::Bot(BotUser {
             bot_id: "bot_test".into(),
             turn_id: "turn_test".into(),

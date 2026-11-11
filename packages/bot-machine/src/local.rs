@@ -2,7 +2,7 @@
 //! backends.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -10,15 +10,16 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use flow_like_bot_tools::browser::{
     BrowserBackend, BrowserScreen, BrowserStep, Download, PageState, ScrollTo, SnapshotRequest,
-    SnapshotView,
+    SnapshotView, no_owner_browser,
 };
 use flow_like_bot_tools::computer::{
-    ComputerAction, ComputerBackend, PointerButton, Screen, ScrollDirection, WindowBounds,
-    WindowOp, WindowSummary,
+    ComputerAction, ComputerBackend, DisplaySummary, PointerButton, Screen, ScrollDirection,
+    WindowBounds, WindowOp, WindowSummary,
 };
+use flow_like_bot_tools::error::{ToolError, code};
 use flow_like_catalog_automation::bot_driver::{
     BotBrowser, BotBrowserOptions, BotComputer, BotInput, BotPointerButton, BotScroll,
-    BotScrollDirection, BotStep, BotWindowOp,
+    BotScrollDirection, BotStep, BotWindowOp, MissingPermission,
 };
 use flow_like_catalog_automation::computer::window::WindowInfo;
 use flow_like_types::interaction_observation::InteractionObservation;
@@ -43,20 +44,31 @@ pub fn bot_dir(data_dir: &Path, bot_id: &str) -> PathBuf {
     data_dir.join("bots").join(safe)
 }
 
+/// Where the bot's own Chrome shows up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Surface {
+    /// Nowhere: Chrome runs headless.
+    Hidden,
+    /// As a window on the bot's virtual display, which the computer view shows whole.
+    VirtualDisplay,
+    /// As a window on the owner's screen (the desktop app), where the owner's own browser is
+    /// at hand too.
+    OwnerScreen,
+}
+
 pub struct LocalPlayground {
     root: PathBuf,
-    headless: bool,
+    surface: Surface,
     browsers: DashMap<String, Arc<LocalBrowser>>,
     computer: Arc<LocalComputer>,
     computer_used: AtomicBool,
 }
 
 impl LocalPlayground {
-    /// `headless: false` runs Chrome on the process's display so a viewer of that display sees it.
-    pub fn new(data_dir: &Path, bot_id: &str, headless: bool) -> Arc<Self> {
+    pub fn new(data_dir: &Path, bot_id: &str, surface: Surface) -> Arc<Self> {
         Arc::new(Self {
             root: bot_dir(data_dir, bot_id),
-            headless,
+            surface,
             browsers: DashMap::new(),
             computer: Arc::new(LocalComputer::default()),
             computer_used: AtomicBool::new(false),
@@ -113,7 +125,7 @@ impl Playground for LocalPlayground {
         let key = conversation.unwrap_or("").to_string();
         self.browsers
             .entry(key)
-            .or_insert_with(|| Arc::new(LocalBrowser::new(&self.root, self.headless)))
+            .or_insert_with(|| Arc::new(LocalBrowser::new(&self.root, self.surface)))
             .clone()
     }
 
@@ -123,7 +135,8 @@ impl Playground for LocalPlayground {
     }
 
     async fn capture(&self) -> Result<Option<Shot>> {
-        let screen_visible = !self.headless && self.computer_used.load(Ordering::Acquire);
+        let screen_visible =
+            self.surface == Surface::VirtualDisplay && self.computer_used.load(Ordering::Acquire);
         if screen_visible && !self.running_browsers().is_empty() {
             return Ok(self.screen_shot().await);
         }
@@ -222,24 +235,40 @@ fn bot_input(event: &InputEvent, width: u32, height: u32) -> Result<BotInput> {
     })
 }
 
-/// One browser per bot and conversation. Every bot has its own profile folder, so it never
-/// sees the owner's cookies, logins or history; its own logins survive between sessions.
+type BrowserSlot = tokio::sync::Mutex<Option<Arc<BotBrowser>>>;
+
+/// One browser per bot and conversation. Every bot has its own profile folder, so its own
+/// Chrome never sees the owner's cookies, logins or history; its own logins survive between
+/// sessions. On the owner's screen a session can also move into a tab of the owner's browser,
+/// which the tools open only with the owner's approval.
 pub struct LocalBrowser {
     profile_dir: PathBuf,
     download_dir: PathBuf,
-    headless: bool,
-    browser: tokio::sync::Mutex<Option<Arc<BotBrowser>>>,
+    surface: Surface,
+    own: BrowserSlot,
+    owner_tab: BrowserSlot,
+    in_owner_browser: AtomicBool,
     last_used: Mutex<Instant>,
 }
 
 impl LocalBrowser {
-    fn new(root: &Path, headless: bool) -> Self {
+    fn new(root: &Path, surface: Surface) -> Self {
         Self {
             profile_dir: root.join("browser-profile"),
             download_dir: root.join("browser-downloads"),
-            headless,
-            browser: tokio::sync::Mutex::new(None),
+            surface,
+            own: tokio::sync::Mutex::new(None),
+            owner_tab: tokio::sync::Mutex::new(None),
+            in_owner_browser: AtomicBool::new(false),
             last_used: Mutex::new(Instant::now()),
+        }
+    }
+
+    fn slot(&self) -> &BrowserSlot {
+        if self.in_owner_browser.load(Ordering::Acquire) {
+            &self.owner_tab
+        } else {
+            &self.own
         }
     }
 
@@ -256,11 +285,11 @@ impl LocalBrowser {
     }
 
     async fn running(&self) -> Option<Arc<BotBrowser>> {
-        self.browser.lock().await.clone().filter(|b| b.is_alive())
+        self.slot().lock().await.clone().filter(|b| b.is_alive())
     }
 
     async fn launched(&self) -> Result<Arc<BotBrowser>> {
-        let mut slot = self.browser.lock().await;
+        let mut slot = self.own.lock().await;
         if let Some(browser) = slot.clone().filter(|b| b.is_alive()) {
             return Ok(browser);
         }
@@ -268,12 +297,27 @@ impl LocalBrowser {
             BotBrowser::launch(BotBrowserOptions {
                 profile_dir: self.profile_dir.clone(),
                 download_dir: self.download_dir.clone(),
-                headless: self.headless,
+                headless: self.surface == Surface::Hidden,
             })
             .await?,
         );
         *slot = Some(browser.clone());
         Ok(browser)
+    }
+
+    async fn attached(&self) -> Result<Arc<BotBrowser>> {
+        let mut slot = self.owner_tab.lock().await;
+        if let Some(browser) = slot.clone().filter(|b| b.is_alive()) {
+            return Ok(browser);
+        }
+        let browser = Arc::new(BotBrowser::attach_owner().await?);
+        *slot = Some(browser.clone());
+        Ok(browser)
+    }
+
+    async fn opened(browser: &BotBrowser, url: &str) -> Result<PageState> {
+        let (url, title) = browser.goto(url).await?;
+        Ok(PageState { url, title })
     }
 
     async fn needed(&self) -> Result<Arc<BotBrowser>> {
@@ -289,9 +333,12 @@ impl LocalBrowser {
     }
 
     async fn end(&self) {
-        if let Some(browser) = self.browser.lock().await.take() {
-            browser.close().await;
+        for slot in [&self.own, &self.owner_tab] {
+            if let Some(browser) = slot.lock().await.take() {
+                browser.close().await;
+            }
         }
+        self.in_owner_browser.store(false, Ordering::Release);
     }
 }
 
@@ -333,8 +380,21 @@ impl BrowserBackend for LocalBrowser {
     async fn open(&self, url: &str) -> Result<PageState> {
         self.touch();
         let browser = self.launched().await?;
-        browser.goto(url).await?;
-        Self::page(&browser).await
+        let page = Self::opened(&browser, url).await?;
+        self.in_owner_browser.store(false, Ordering::Release);
+        Ok(page)
+    }
+
+    async fn open_in_owner_browser(&self, url: &str) -> Result<PageState> {
+        if self.surface != Surface::OwnerScreen {
+            return Err(no_owner_browser());
+        }
+        self.touch();
+        let browser = self.attached().await?;
+        self.touch();
+        let page = Self::opened(&browser, url).await?;
+        self.in_owner_browser.store(true, Ordering::Release);
+        Ok(page)
     }
 
     async fn snapshot(&self, request: SnapshotRequest) -> Result<SnapshotView> {
@@ -409,10 +469,20 @@ impl BrowserBackend for LocalBrowser {
     }
 }
 
-#[derive(Default)]
 pub struct LocalComputer {
     inner: BotComputer,
     last_used: Mutex<Option<Instant>>,
+    display: AtomicI64,
+}
+
+impl Default for LocalComputer {
+    fn default() -> Self {
+        Self {
+            inner: BotComputer::new(),
+            last_used: Mutex::new(None),
+            display: AtomicI64::new(-1),
+        }
+    }
 }
 
 impl LocalComputer {
@@ -452,6 +522,18 @@ fn summary(window: WindowInfo) -> WindowSummary {
         height: window.height,
         focused: window.is_focused,
         minimized: window.is_minimized,
+        onscreen: window.is_onscreen,
+    }
+}
+
+fn typed(error: flow_like_types::Error) -> flow_like_types::Error {
+    match error.downcast_ref::<MissingPermission>() {
+        Some(missing) => flow_like_types::Error::new(
+            ToolError::new(code::PERMISSION_MISSING, missing.message.clone()).with_details(
+                serde_json::json!({ "permission": missing.permission, "restart_required": missing.restart }),
+            ),
+        ),
+        None => error,
     }
 }
 
@@ -465,7 +547,50 @@ fn screen(shot: flow_like_catalog_automation::bot_driver::BotScreen) -> Screen {
 impl ComputerBackend for LocalComputer {
     async fn screenshot(&self) -> Result<Screen> {
         self.touch();
-        Ok(screen(self.inner.screenshot().await?))
+        let display = self.display.load(Ordering::Acquire);
+        Ok(screen(
+            self.inner
+                .screenshot_display(display)
+                .await
+                .map_err(typed)?,
+        ))
+    }
+
+    async fn screenshot_display(&self, display: Option<u32>) -> Result<Screen> {
+        self.touch();
+        let index = display.map_or(-1, i64::from);
+        let shot = self.inner.screenshot_display(index).await.map_err(typed)?;
+        self.display.store(index, Ordering::Release);
+        Ok(screen(shot))
+    }
+
+    async fn displays(&self) -> Result<Vec<DisplaySummary>> {
+        Ok(self
+            .inner
+            .displays()
+            .await?
+            .into_iter()
+            .map(|display| DisplaySummary {
+                index: display.index,
+                x: display.x,
+                y: display.y,
+                width: display.width,
+                height: display.height,
+                primary: display.primary,
+            })
+            .collect())
+    }
+
+    async fn windows_listed(&self, include_offscreen: bool) -> Result<Vec<WindowSummary>> {
+        self.touch();
+        Ok(self
+            .inner
+            .listed_windows(include_offscreen)
+            .await
+            .map_err(typed)?
+            .into_iter()
+            .map(summary)
+            .collect())
     }
 
     async fn act(&self, action: &ComputerAction) -> Result<String> {
@@ -487,12 +612,20 @@ impl ComputerBackend for LocalComputer {
                 ticks,
             } => self.inner.scroll(*x, *y, direction(*toward), *ticks).await,
         };
-        done.map_err(|error| anyhow!("{error:#}"))
+        done.map_err(|error| match typed(error) {
+            error if error.downcast_ref::<ToolError>().is_some() => error,
+            error => anyhow!("{error:#}"),
+        })
     }
 
     async fn screenshot_window(&self, window: &str) -> Result<Screen> {
         self.touch();
-        Ok(screen(self.inner.screenshot_window(window).await?))
+        Ok(screen(
+            self.inner
+                .screenshot_window(window)
+                .await
+                .map_err(typed)?,
+        ))
     }
 
     async fn windows(&self) -> Result<Vec<WindowSummary>> {
@@ -518,6 +651,7 @@ impl ComputerBackend for LocalComputer {
                 bounds.height,
             )
             .await
+            .map_err(typed)
     }
 
     async fn launch(&self, program: &str, args: &[String]) -> Result<String> {

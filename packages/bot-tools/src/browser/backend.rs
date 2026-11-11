@@ -2,6 +2,8 @@ use async_trait::async_trait;
 use flow_like_types::interaction_observation::InteractionObservation;
 use flow_like_types::{Bytes, Result};
 
+use crate::error::{ToolError, code};
+
 #[derive(Debug, Clone)]
 pub struct BrowserScreen {
     pub png: Vec<u8>,
@@ -65,11 +67,26 @@ pub struct Download {
     pub bytes: Bytes,
 }
 
+/// What a host answers that has no browser of the owner's at hand.
+pub fn no_owner_browser() -> flow_like_types::Error {
+    flow_like_types::Error::new(ToolError::new(
+        code::NOT_SUPPORTED,
+        "Only a bot hosted in the desktop app can use the owner's browser; open the page in your own browser",
+    ))
+}
+
 /// A browser the host drives for one bot and conversation. The first `open` starts it; `close`
 /// (or the host's idle timeout) ends it. Element references come from the latest `snapshot`.
 #[async_trait]
 pub trait BrowserBackend: Send + Sync {
     async fn open(&self, url: &str) -> Result<PageState>;
+
+    /// Opens `url` in a tab of the browser the owner uses every day, with the owner's logins.
+    /// The session then reads and acts there until the next `open` or `close`. A failed call
+    /// leaves the session where it was. Only a host on the owner's own computer has one.
+    async fn open_in_owner_browser(&self, _url: &str) -> Result<PageState> {
+        Err(no_owner_browser())
+    }
 
     async fn snapshot(&self, request: SnapshotRequest) -> Result<SnapshotView>;
 

@@ -192,13 +192,18 @@ export class InboxEndToEnd {
 		this.opened.set(entryId, body);
 	}
 
-	/** `request` as the conversation takes it: sealed to every member's keys when encrypted. */
+	/**
+	 * `request` as the conversation takes it: sealed to every member's keys when encrypted. A
+	 * call entry says only that a call started or ended and the server rings people from it, so
+	 * it stays plain, like the joins and renames the server writes there.
+	 */
 	async prepare(
 		conversationId: string,
 		request: ISendInboxEntryRequest,
 		fresh = false,
 	): Promise<ISendInboxEntryRequest> {
 		if (!request.envelope || request.envelopes) return request;
+		if (request.kind === "call") return request;
 		const conversation = await this.conversation(conversationId, fresh);
 		if (conversation.encryption !== "e2e") return request;
 		const sub = this.reader();

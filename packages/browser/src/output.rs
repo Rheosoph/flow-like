@@ -68,7 +68,17 @@ impl Drop for IoGuard {
 impl Page {
     pub async fn screenshot(&self, options: ScreenshotOptions) -> crate::Result<Vec<u8>> {
         let main = self.main_frame();
-        self.run_op(main.id(), OpSpec::READ, |_| self.capture_in(options))
+        self.run_op(main.id(), OpSpec::READ, |_| self.capture_in(options, true))
+            .await?
+            .read()
+    }
+
+    /// A screenshot that leaves the tab and its window where they are. Activating a tab raises
+    /// its window over whatever the person at the computer is using; Chrome renders a page for
+    /// a capture even while another tab or window covers it.
+    pub async fn screenshot_in_place(&self, options: ScreenshotOptions) -> crate::Result<Vec<u8>> {
+        let main = self.main_frame();
+        self.run_op(main.id(), OpSpec::READ, |_| self.capture_in(options, false))
             .await?
             .read()
     }
@@ -98,8 +108,14 @@ impl Page {
             .map(drop)
     }
 
-    async fn capture_in(&self, options: ScreenshotOptions) -> crate::Result<Vec<u8>> {
-        self.activate_for_capture().await?;
+    async fn capture_in(
+        &self,
+        options: ScreenshotOptions,
+        activate: bool,
+    ) -> crate::Result<Vec<u8>> {
+        if activate {
+            self.activate_for_capture().await?;
+        }
         let mut params = json!({
             "format": "png",
             "captureBeyondViewport": options.capture_beyond_viewport,
@@ -310,6 +326,28 @@ mod tests {
         assert_eq!(activation.session, None);
         assert_eq!(activation.params, json!({"targetId": "T1"}));
         assert!(position("Target.activateTarget") < position("Page.captureScreenshot"));
+    }
+
+    #[tokio::test]
+    async fn a_headful_screenshot_in_place_never_activates_its_tab() {
+        let harness = PageHarness::new().await;
+        harness.control.set_auto_reply(capture_reply);
+        let page = headful_page(&harness);
+        let png = page
+            .screenshot_in_place(ScreenshotOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(png, b"png");
+        let seen = harness.control.commands_seen();
+        assert!(
+            seen.iter()
+                .any(|command| command.method == "Page.captureScreenshot")
+        );
+        assert!(
+            !seen
+                .iter()
+                .any(|command| command.method == "Target.activateTarget")
+        );
     }
 
     #[tokio::test(start_paused = true)]

@@ -63,6 +63,7 @@ import {
 } from "@flow-like/flow-like-ui";
 import { AccountMenu } from "@flow-like/flow-like-ui/components/account/account-menu";
 import { AccountMenuProvider } from "@flow-like/flow-like-ui/components/account/account-menu-context";
+import { UsernamePrompt } from "@flow-like/flow-like-ui/components/account/username-prompt";
 import { BOTS_ROUTE } from "@flow-like/flow-like-ui/components/bots-tab/dock-selection";
 import { BotsNavAvatar } from "@flow-like/flow-like-ui/components/global-chat/bots-nav-avatar";
 import { BotsNavBadge } from "@flow-like/flow-like-ui/components/global-chat/bots-nav-badge";
@@ -220,6 +221,7 @@ export function AppSidebar({
 		<AccountMenuProvider value={NavUser}>
 			<SidebarProvider defaultOpen={defaultOpen} enableShortcut={!chromeless}>
 				<GlobalChrome chromeless={chromeless} />
+				<UsernamePrompt />
 				<main className="w-full h-vvh flex flex-col overflow-hidden pt-safe">
 					<MobileHeaderProvider>
 						<MobileHeader showSidebarTrigger={false} />

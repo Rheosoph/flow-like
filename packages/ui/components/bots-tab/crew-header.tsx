@@ -1,7 +1,13 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { BotIcon, MessageSquareIcon, PlusIcon, SearchIcon } from "lucide-react";
+import {
+	BotIcon,
+	EyeIcon,
+	MessageSquareIcon,
+	PlusIcon,
+	SearchIcon,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "../ui/button";
 import { BlockedPrincipalsButton } from "./blocked-principals";
@@ -35,7 +41,10 @@ function useGreeting(name?: string) {
 		: t("crew.greeting.eveningAnonymous", "Good evening");
 }
 
-/** `onNewBot` is left out while bots can't be created; `onShowChat` only while the dock is closed. */
+/**
+ * `onNewBot` is left out while bots can't be created; `onShowChat` only while the dock is closed;
+ * `onManageVisibility` where no profile can hide bots.
+ */
 export function CrewHeader({
 	name,
 	summary,
@@ -43,6 +52,7 @@ export function CrewHeader({
 	onSearchChange,
 	onNewBot,
 	onShowChat,
+	onManageVisibility,
 	canManageBlocks = false,
 }: Readonly<{
 	name?: string;
@@ -51,6 +61,7 @@ export function CrewHeader({
 	onSearchChange: (value: string) => void;
 	onNewBot?: () => void;
 	onShowChat?: () => void;
+	onManageVisibility?: () => void;
 	canManageBlocks?: boolean;
 }>) {
 	const { t } = useTranslation("bots");
@@ -71,6 +82,19 @@ export function CrewHeader({
 			</div>
 			<div className="flex flex-wrap items-center gap-2 @max-[520px]/crew:w-full @max-[520px]/crew:flex-nowrap">
 				{canManageBlocks && <BlockedPrincipalsButton />}
+				{onManageVisibility && (
+					<Button
+						type="button"
+						variant="outline"
+						size="icon"
+						className="size-10 shrink-0 rounded-[10px]"
+						onClick={onManageVisibility}
+						aria-label={t("crew.visibility.title", "Bots in this profile")}
+						title={t("crew.visibility.title", "Bots in this profile")}
+					>
+						<EyeIcon aria-hidden />
+					</Button>
+				)}
 				{onShowChat && (
 					<Button
 						type="button"

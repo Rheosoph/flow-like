@@ -66,6 +66,8 @@ pub struct NativeRunOptions {
     pub notes: Option<flow_like::flow::copilot::bot_notes::NotesHandle>,
     /// The turn's tool trail; set only in the owner's direct conversation with the bot.
     pub trail: Option<flow_like::flow::copilot::ToolTrail>,
+    /// Collects the files the bot attaches to its reply; set by hosts that store the reply.
+    pub reply_files: Option<flow_like::flow::copilot::ReplyFiles>,
     /// Shared or unreadable interactive conversation metadata forbids legacy memory writes.
     pub legacy_memory_read_only: bool,
     /// An interactive inbox run's explicit owner-memory permission. Missing metadata denies
@@ -86,6 +88,8 @@ pub struct NativeRunOptions {
     pub tool_gate: Option<flow_like::flow::copilot::tool_gate::ToolGate>,
     /// Set from the authenticated inbox trigger, never from model arguments.
     pub ephemeral_user_context: bool,
+    /// What the turn's history puts into its turn label before the first tool call.
+    pub seed_taint: flow_like_types::data_classification::DataSensitivity,
     /// Session snapshots of user context for a turn whose history comes from memory.
     pub shared_context: Option<String>,
     /// The host owns event delivery, including owner notifications.

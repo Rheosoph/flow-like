@@ -33,6 +33,7 @@ import {
 	applyStreamEvent,
 	createStreamAccumulator,
 	orderedSteps,
+	readReplyAttachment,
 } from "./copilot-stream-steps";
 import {
 	addressedNow,
@@ -644,6 +645,10 @@ export async function driveGlobalChatStream({
 		}
 		for (const event of debugStream.push(chunk)) {
 			applyStreamEvent(acc, event);
+			if (event.type === "reply_attachment") {
+				const attachment = readReplyAttachment(event.data);
+				if (attachment) store.getState().addSubAttachments(runId, [attachment]);
+			}
 		}
 		syncMessage();
 	};

@@ -31,6 +31,7 @@ import {
 import { useInboxBlocks } from "../../hooks/use-inbox-blocks";
 import { useSpeechModel } from "../../hooks/use-speech-model";
 import { LocalPrincipalsProvider } from "../../hooks/use-user-lookup";
+import { offersCalls } from "../../lib/realtime/call-listening";
 import { useBackend } from "../../state/backend-state";
 import { type IBot, LOCAL_OWNER_ID } from "../../state/backend-state/bot-state";
 import type {
@@ -425,7 +426,9 @@ function ConversationView({
 			),
 		[items],
 	);
-	const speechModel = useSpeechModel(room !== undefined);
+	const encrypted = conversation.encryption === "e2e";
+	const speechModel = useSpeechModel(room !== undefined, encrypted);
+	const callsOffered = offersCalls(encrypted, speechModel);
 	const listenBots = useMemo(
 		() =>
 			conversation.members
@@ -462,11 +465,11 @@ function ConversationView({
 	const joinCall = call.join;
 	const threadCall = useMemo(
 		() => ({
-			liveCallId: call.live?.callId ?? null,
+			liveCallId: callsOffered ? (call.live?.callId ?? null) : null,
 			joined: call.joined,
 			onJoin: () => void joinCall(),
 		}),
-		[call.live?.callId, call.joined, joinCall],
+		[callsOffered, call.live?.callId, call.joined, joinCall],
 	);
 
 	const mentionables = useMemo(
@@ -574,7 +577,6 @@ function ConversationView({
 		setDeleteTarget(null);
 	}, [deleteTarget, failed, sendPlain]);
 
-	const encrypted = conversation.encryption === "e2e";
 	const thread: ThreadContext = {
 		conversation,
 		me,
@@ -620,7 +622,9 @@ function ConversationView({
 							defaultTitle={text.title({ ...conversation, title: null })}
 							onShowStarred={() => setStarsOpen(true)}
 						/>
-						{call.available && !blocked && <CallButton call={call} />}
+						{call.available && !blocked && callsOffered && (
+							<CallButton call={call} />
+						)}
 						{!conversation.local && !blocked && me && meetingClient && (
 							<ConnectedRoomMeetings
 								conversationId={conversation.id}
@@ -651,7 +655,9 @@ function ConversationView({
 				}
 				onClose={onClose}
 			/>
-			<ConversationCallBar call={call} me={me} directory={directory} />
+			{(callsOffered || call.joined) && (
+				<ConversationCallBar call={call} me={me} directory={directory} />
+			)}
 			<PinnedMessagesBar
 				conversationId={conversation.id}
 				pins={threadMarks.pins}

@@ -95,6 +95,7 @@ async fn database() -> DatabaseConnection {
         .iter()
         .chain(&super::marks::TEST_TABLES)
         .chain(&super::blocks::TEST_TABLES)
+        .chain([&super::fixture::BOT_TURN_TABLE])
     {
         db.execute_unprepared(statement).await.unwrap();
     }

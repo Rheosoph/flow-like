@@ -19,6 +19,8 @@
 //! | `message_person` | `person:<id>` |
 //! | `data_sources` attach | `connection:<kind>:<host>:<port>:<database>` |
 //! | `web_request` | `web:<site>:read` or `web:<site>:write`, plus `web:<site>:secret:<NAME>` per secret sent |
+//! | `file_save` with `url` | `web:<site>:read` |
+//! | `browser_open` | `browser:<site>`; in the owner's own browser `owner_browser:<site>` |
 //! | `http_request`, `forecast_tool`, `flowpilot_board_review`, `app_build`, `apply_home_layout`, `bot_update_configuration`, `create_bot`, `update_bot` | none: asked every time |
 //! | every other tool that asks | `*` |
 //!
@@ -74,12 +76,22 @@ pub trait GrantStore: Send + Sync {
     /// Removes a pair; true when it existed.
     async fn delete(&self, tool: &str, scope: &str) -> flow_like_types::Result<bool>;
 
+    /// Records that the bot just relied on these standing grants, which moves their expiry
+    /// forward. It never creates a grant and never revives one that lapsed or was revoked.
+    async fn touch(&self, _keys: &[GrantKey]) -> flow_like_types::Result<()> {
+        Ok(())
+    }
+
     async fn has(&self, tool: &str, scope: &str) -> flow_like_types::Result<bool> {
-        Ok(self
+        let held = self
             .list()
             .await?
             .iter()
-            .any(|key| key.tool == tool && key.scope == scope))
+            .any(|key| key.tool == tool && key.scope == scope);
+        if held {
+            let _ = self.touch(&[GrantKey::new(tool, scope)]).await;
+        }
+        Ok(held)
     }
 }
 
@@ -176,7 +188,7 @@ pub fn grant_scopes(tool: &str, args: &Value, context_app: Option<&str>) -> Opti
         }
         "browser_open" => one(clean(arg(args, "url", "url"))
             .and_then(|url| tools::browser::site_of(&url))
-            .map(|site| format!("browser:{site}"))),
+            .map(|site| format!("{}:{site}", tools::browser::grant_prefix(args)))),
         "computer_screenshot" | "computer_act" | "computer_window" => {
             Some(vec!["computer:session".to_string()])
         }
@@ -187,6 +199,8 @@ pub fn grant_scopes(tool: &str, args: &Value, context_app: Option<&str>) -> Opti
         "message_person" => flow_like_bot_tools::people::grant_scopes(args),
         "shell_run" => one(flow_like_bot_tools::shell::grant_scope(args).and_then(|s| clean(&s))),
         "web_request" => flow_like_bot_tools::web::grant_scopes(args)
+            .and_then(|scopes| scopes.iter().map(|scope| clean(scope)).collect()),
+        "file_save" => super::tool_spec::download_grant_scopes(args)
             .and_then(|scopes| scopes.iter().map(|scope| clean(scope)).collect()),
         _ => Some(vec![SCOPE_ALL.to_string()]),
     }
@@ -233,7 +247,19 @@ pub async fn check_call(
             keys.iter()
                 .any(|key| key.tool == tool && key.scope == scope)
         };
-        if held(SCOPE_ALL) || scopes.iter().all(|scope| held(scope)) {
+        let used: Option<Vec<&str>> = if held(SCOPE_ALL) {
+            Some(vec![SCOPE_ALL])
+        } else if scopes.iter().all(|scope| held(scope)) {
+            Some(scopes.iter().map(String::as_str).collect())
+        } else {
+            None
+        };
+        if let Some(used) = used {
+            let used: Vec<GrantKey> = used
+                .into_iter()
+                .map(|scope| GrantKey::new(tool, scope))
+                .collect();
+            let _ = store.touch(&used).await;
             return Ok(GrantCheck::Granted);
         }
     }
@@ -892,6 +918,22 @@ mod tests {
             grant_scopes(
                 "browser_open",
                 &json!({"url": "https://www.Shop.example/cart?x=1"}),
+                None
+            ),
+            Some(vec!["browser:shop.example".into()])
+        );
+        assert_eq!(
+            grant_scopes(
+                "browser_open",
+                &json!({"url": "https://www.Shop.example/cart", "browser": "owner"}),
+                None
+            ),
+            Some(vec!["owner_browser:shop.example".into()])
+        );
+        assert_eq!(
+            grant_scopes(
+                "browser_open",
+                &json!({"url": "https://shop.example/", "browser": "own"}),
                 None
             ),
             Some(vec!["browser:shop.example".into()])

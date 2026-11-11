@@ -157,6 +157,7 @@ mod envelope {
             "file_read",
             "file_save",
             "file_write",
+            "file_link",
             "knowledge_create",
             "knowledge_add",
             "knowledge_search",
@@ -547,6 +548,62 @@ mod files {
             err_code(&call(&env, "file_read", json!({ "file": "#x.a1" })).await),
             "invalid_args"
         );
+    }
+
+    #[tokio::test]
+    async fn a_link_names_the_file_and_when_it_expires() {
+        let env = FakeEnv::new().await;
+        env.signs_links.store(true, Ordering::SeqCst);
+        env.put(WORKSPACE, "bot/files/logo.png", b"png", "image/png");
+        let linked = call(&env, "file_link", json!({ "file": "bot/files/logo.png" })).await;
+        let result = &ok(&linked).result;
+        assert_eq!(
+            result["url"],
+            format!("https://files.test/{WORKSPACE}/bot/files/logo.png")
+        );
+        assert_eq!(result["name"], "logo.png");
+        assert_eq!(result["mime"], "image/png");
+        assert_eq!(result["bytes"], 3);
+        assert_eq!(result["expires_at"], "2026-01-01T00:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn a_link_follows_the_read_rules_and_says_when_none_can_be_made() {
+        let env = FakeEnv::new().await;
+        env.put(OTHER_APP, "docs/plan.md", b"plan", "text/markdown");
+        let other = call(
+            &env,
+            "file_link",
+            json!({ "file": format!("app:{OTHER_APP}/docs/plan.md") }),
+        )
+        .await;
+        assert_eq!(err_code(&other), "scope_refused");
+
+        let handle = handle_for("conversation_c1", "f1.png", b"png", "image/png");
+        env.put("conversation_c1", "f1.png", b"png", "image/png");
+        env.granted.lock().expect("granted").push(handle.clone());
+        let unsigned = call(&env, "file_link", json!({ "file": handle })).await;
+        assert_eq!(err_code(&unsigned), "not_supported");
+
+        env.signs_links.store(true, Ordering::SeqCst);
+        let signed = call(&env, "file_link", json!({ "file": handle })).await;
+        assert_eq!(
+            ok(&signed).result["url"],
+            "https://files.test/conversation_c1/f1.png"
+        );
+        assert_eq!(
+            err_code(&call(&env, "file_link", json!({ "file": "bot/missing.txt" })).await),
+            "not_found"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_attachment_number_no_host_serves_points_at_the_handle() {
+        let env = FakeEnv::new().await;
+        let missing = call(&env, "file_save", json!({ "file": "#17.a1" })).await;
+        assert_eq!(err_code(&missing), "not_found");
+        let message = &missing.error.as_ref().expect("error").message;
+        assert!(message.contains("file = {"), "{message}");
     }
 
     #[tokio::test]

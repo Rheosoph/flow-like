@@ -18,6 +18,10 @@ pub const ONCE_PREFIX: &str = "once:";
 pub const DENY_PREFIX: &str = "deny:";
 /// Hours a one-time token or refusal lives when no resumed run consumes it.
 pub const TOKEN_TTL_HOURS: i64 = 24;
+/// Days a standing grant lasts after its last use before it lapses.
+pub const GRANT_TTL_DAYS: i64 = 90;
+/// A use moves the expiry forward at most this often, in hours.
+pub const GRANT_SLIDE_HOURS: i64 = 24;
 /// Days a turn waits for its owner's answer before it is cancelled.
 pub const APPROVAL_WAIT_DAYS: i64 = 7;
 /// The `error_code` of a turn cancelled because nobody answered.
@@ -44,6 +48,9 @@ pub struct ToolGrant {
     pub granted_at: String,
     /// The person who granted it.
     pub granted_by: String,
+    /// RFC 3339: when the grant lapses unless the bot uses it first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
 }
 
 /// The grants of one bot.

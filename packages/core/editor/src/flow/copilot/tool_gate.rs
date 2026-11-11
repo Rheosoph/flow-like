@@ -128,9 +128,7 @@ mod tests {
         let (opener, gate) = tool_gate();
         let inner = Arc::new(Counting::default());
         let bridge = GatedBridge::new(gate, inner.clone());
-        let call = tokio::spawn(async move {
-            bridge.call("web_search", Value::Null).await
-        });
+        let call = tokio::spawn(async move { bridge.call("web_search", Value::Null).await });
         tokio::task::yield_now().await;
         assert_eq!(inner.0.load(Ordering::SeqCst), 0);
         opener.open();

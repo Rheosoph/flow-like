@@ -163,6 +163,9 @@ pub struct DeviceModels {
     pub embedding: Option<Value>,
     #[serde(default)]
     pub embedding_model_id: Option<String>,
+    /// The hosted image generation Bit behind the bot's `image_generate`, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<Value>,
     /// The hosted System One Bit used for the bot's response decisions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision: Option<Value>,

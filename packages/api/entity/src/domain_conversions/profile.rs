@@ -17,6 +17,7 @@ impl From<template_profile::Model> for Profile {
                 .apps
                 .and_then(|apps| serde_json::from_value(apps).ok()),
             shortcuts: Some(vec![]),
+            hidden_bots: vec![],
             secure: model.secure,
             bits: model.bit_ids.unwrap_or_default().into_inner(),
             custom_bits: vec![],

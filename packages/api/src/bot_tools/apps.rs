@@ -1,6 +1,11 @@
-//! App tools of a headless server turn: the bot lists the apps it may use, reads their
-//! interfaces and tables and runs their headless Events. Every call goes through the route
-//! handlers as the bot, so the bot's own rights, quotas and run records apply.
+//! App tools of a headless server turn (room and inbox turns): the bot lists the apps it may
+//! use, reads their interfaces, runs their Events, chats and MCP tools, reads their tables and
+//! ontologies and changes its workspace's tables. Every call goes through the route handlers as
+//! the bot, so the bot's own rights, quotas and run records apply.
+
+mod chat;
+mod data;
+mod mcp;
 
 use std::time::Duration;
 
@@ -44,14 +49,18 @@ const LIST_APPS: &str = "list_apps";
 const DESCRIBE_APP_INTERFACE: &str = "describe_app_interface";
 const GET_APP_DETAIL: &str = "get_app_detail";
 const CALL_APP_EVENT: &str = "call_app_event";
+const CALL_APP_CHAT: &str = "call_app_chat";
 const DATABASE_TOOL: &str = "database_tool";
+const GRAPH_QUERY_TOOL: &str = "graph_query_tool";
 
-const APP_TOOLS: [&str; 5] = [
+const APP_TOOLS: [&str; 7] = [
     LIST_APPS,
     DESCRIBE_APP_INTERFACE,
     GET_APP_DETAIL,
     CALL_APP_EVENT,
+    CALL_APP_CHAT,
     DATABASE_TOOL,
+    GRAPH_QUERY_TOOL,
 ];
 
 const MAX_LISTED_APPS: usize = 250;
@@ -137,7 +146,11 @@ fn event_summary(event: &Event) -> Value {
         "headless" => summary["consumer_tool"] = json!(CALL_APP_EVENT),
         _ => summary["interface_error"] = json!("page_target_missing"),
     }
-    if let Some(route) = event.route.as_deref().filter(|route| !route.trim().is_empty()) {
+    if let Some(route) = event
+        .route
+        .as_deref()
+        .filter(|route| !route.trim().is_empty())
+    {
         summary["route"] = json!(route);
     }
     summary
@@ -218,7 +231,10 @@ struct RunFold {
 
 impl RunFold {
     fn push(&mut self, envelope: Value) {
-        let event_type = envelope["event_type"].as_str().unwrap_or_default().to_string();
+        let event_type = envelope["event_type"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
         let payload = &envelope["payload"];
         match event_type.as_str() {
             "run_initiated" if self.run_id.is_none() => {
@@ -226,7 +242,12 @@ impl RunFold {
             }
             "generic_result" if self.result.is_none() => self.result = Some(payload.clone()),
             "completed" | "execution_completed" => {
-                self.terminal = Some(payload["status"].as_str().unwrap_or("completed").to_string());
+                self.terminal = Some(
+                    payload["status"]
+                        .as_str()
+                        .unwrap_or("completed")
+                        .to_string(),
+                );
             }
             "error" => self.error = Some(payload.clone()),
             _ => {}
@@ -358,7 +379,9 @@ impl AppTools {
             DESCRIBE_APP_INTERFACE => self.describe_app_interface(&args).await,
             GET_APP_DETAIL => self.get_app_detail(&args).await,
             CALL_APP_EVENT => self.call_app_event(&args).await,
+            CALL_APP_CHAT => self.call_app_chat(&args).await,
             DATABASE_TOOL => self.database(&args).await,
+            GRAPH_QUERY_TOOL => self.graph_query(&args).await,
             _ => Err("This host does not run this tool.".to_string()),
         };
         match result {
@@ -385,7 +408,9 @@ impl AppTools {
             .await
             .map_err(failed)?;
         if !permission.has_permission(RolePermissions::ListEvents) {
-            return Err(format!("This bot may not list the events of app '{app_id}'."));
+            return Err(format!(
+                "This bot may not list the events of app '{app_id}'."
+            ));
         }
         let can_read = permission.has_permission(RolePermissions::ReadEvents);
         Ok(get_events_for_app(&self.state.db, app_id)
@@ -409,7 +434,9 @@ impl AppTools {
         if !permission.has_permission(RolePermissions::ReadEvents)
             && !permission.has_permission(RolePermissions::ExecuteEvents)
         {
-            return Err(format!("This bot may not use the events of app '{app_id}'."));
+            return Err(format!(
+                "This bot may not use the events of app '{app_id}'."
+            ));
         }
         get_event_from_db_opt(&self.state.db, event_id, app_id)
             .await
@@ -432,7 +459,9 @@ impl AppTools {
 
     async fn list_apps(&self, args: &Value) -> ToolResult {
         let query = text(args, "query").map(str::to_lowercase);
-        let candidates: Vec<String> = super::scope::candidate_apps(&self.bot).into_iter().collect();
+        let candidates: Vec<String> = super::scope::candidate_apps(&self.bot)
+            .into_iter()
+            .collect();
         let metas = self.metas(&candidates).await?;
         let meta_of = |app_id: &str| {
             metas
@@ -446,7 +475,8 @@ impl AppTools {
                 (
                     app_id.clone(),
                     meta.map_or_else(|| app_id.clone(), |meta| meta.name.clone()),
-                    meta.and_then(|meta| meta.description.clone()).unwrap_or_default(),
+                    meta.and_then(|meta| meta.description.clone())
+                        .unwrap_or_default(),
                 )
             })
             .filter(|(app_id, name, description)| {
@@ -528,9 +558,13 @@ impl AppTools {
             "config": event_config(&event),
         });
         if is_mcp(&event) {
-            described["status"] = json!("partial");
-            described["interface_error"] =
-                json!("MCP tools of an app can't be listed while the bot answers on its own.");
+            match self.mcp_tools(app_id, &event).await {
+                Ok(mcp) => described["mcp"] = mcp,
+                Err(error) => {
+                    described["status"] = json!("partial");
+                    described["interface_error"] = json!(error);
+                }
+            }
         }
         Ok(described)
     }
@@ -577,17 +611,17 @@ impl AppTools {
         let event_id = required(args, "event_id")?;
         let event = self.event(app_id, event_id).await?;
         if !event.active {
-            return Err(format!("Event '{event_id}' in app '{app_id}' is not active."));
+            return Err(format!(
+                "Event '{event_id}' in app '{app_id}' is not active."
+            ));
         }
         if event.event_type == "simple_chat" {
             return Err(format!(
-                "Event '{event_id}' is a chat interface, which this host can't call while the bot answers on its own."
+                "Event '{event_id}' is a chat interface. Use call_app_chat instead."
             ));
         }
         if is_mcp(&event) {
-            return Err(format!(
-                "Event '{event_id}' is an MCP interface, which this host can't call while the bot answers on its own."
-            ));
+            return self.call_mcp_tool(app_id, &event, args).await;
         }
         if text(args, "mcp_tool").is_some() {
             return Err(format!(
@@ -750,8 +784,11 @@ impl AppTools {
                 }
                 Ok(answer)
             }
+            other if self.bot.workspace_app_id.as_deref() == Some(app_id) => {
+                self.change_workspace_table(app_id, other, args).await
+            }
             other => Err(format!(
-                "Operation '{other}' is not available while the bot answers on its own; use list_tables, describe_table or query."
+                "Operation '{other}' changes data, which a bot does only in its workspace's tables; change an app's data through its Events."
             )),
         }
     }
@@ -793,7 +830,10 @@ mod tests {
         for index in 0..MAX_LOG_EVENTS + 5 {
             fold.push(envelope("log", json!({ "n": index })));
         }
-        fold.push(envelope("log", json!({ "blob": "x".repeat(MAX_LOG_EVENT_BYTES) })));
+        fold.push(envelope(
+            "log",
+            json!({ "blob": "x".repeat(MAX_LOG_EVENT_BYTES) }),
+        ));
         fold.push(envelope("generic_result", json!({ "cards": 3 })));
         fold.push(envelope("completed", json!({ "status": "completed" })));
         assert!(fold.finished());
@@ -844,7 +884,10 @@ mod tests {
         let chat = event_summary(&event("simple_chat", None));
         assert_eq!(chat["consumer_tool"], "call_app_chat");
         let page = event_summary(&event("page", Some("home")));
-        assert_eq!((&page["kind"], &page["page_id"]), (&json!("page"), &json!("home")));
+        assert_eq!(
+            (&page["kind"], &page["page_id"]),
+            (&json!("page"), &json!("home"))
+        );
         let broken = event_summary(&event("page", None));
         assert_eq!(broken["interface_error"], "page_target_missing");
         assert!(broken.get("consumer_tool").is_none());

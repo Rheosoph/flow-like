@@ -19,10 +19,11 @@ use super::provider::CatalogProvider;
 use super::tool_spec::{
     PlatformToolSpec, bot_workspace_database_tool_spec, cross_board_source_tool_specs,
     data_studio_database_tool_spec, data_studio_specialist_tool_specs, data_studio_tool_specs,
-    global_assistant_tool_specs, home_specialist_tool_specs, home_specialist_tool_specs_for_access,
-    http_request_tool_spec, interact_app_page_tool_spec, public_web_tool_specs,
-    runtime_execution_tool_specs, scoped_call_app_chat_spec, scout_specialist_tool_specs,
-    scout_tool_specs, workflow_context_tool_specs, workspace_research_tool_specs,
+    flowpilot_file_tool_specs, global_assistant_tool_specs, home_specialist_tool_specs,
+    home_specialist_tool_specs_for_access, http_request_tool_spec, interact_app_page_tool_spec,
+    public_web_tool_specs, runtime_execution_tool_specs, scoped_call_app_chat_spec,
+    scout_specialist_tool_specs, scout_tool_specs, workflow_context_tool_specs,
+    workspace_research_tool_specs,
 };
 use super::tools::{
     CatalogTool, CheckFlowScriptTool, CommitFlowScriptTool, DatabaseContextTool, ExecuteEventTool,
@@ -222,6 +223,7 @@ fn spec_builder_definitions() -> Vec<(&'static str, Vec<ToolDefinition>)> {
         scoped_call_app_chat_spec(),
         interact_app_page_tool_spec(),
         cross_board_source_tool_specs(),
+        flowpilot_file_tool_specs(),
     ]
 }
 

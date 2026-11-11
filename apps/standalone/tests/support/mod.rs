@@ -196,6 +196,7 @@ pub fn hosted_bit() -> Value {
         parameters: serde_json::to_value(LLMParameters {
             context_length: 20_000,
             model_classification: BitModelClassification::default(),
+            data_classification: None,
             provider: ModelProvider {
                 api_surface: None,
                 provider_name: "hosted:openrouter".into(),
@@ -256,6 +257,7 @@ fn grant_of(state: &Hub) -> DeviceTurnGrant {
             fallbacks: Vec::new(),
             embedding: None,
             embedding_model_id: None,
+            image: None,
         },
         bot_token: DeviceToken {
             token: BOT_TOKEN.into(),

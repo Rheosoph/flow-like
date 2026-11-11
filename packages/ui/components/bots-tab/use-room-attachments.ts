@@ -4,6 +4,10 @@ import { useQueries } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { inboxKeys } from "../../hooks/use-inbox";
 import { conversationFileId } from "../../lib/conversation-files";
+import {
+	directAttachmentOf,
+	isConversationFilePart,
+} from "../../lib/inbox-attachment-part";
 import { useBackend } from "../../state/backend-state";
 import type { IInboxAttachmentPart } from "../../state/backend-state/inbox-state";
 import type { IAttachment } from "../interfaces/chat-default/chat-db";
@@ -34,15 +38,15 @@ export function useRoomAttachments(
 				...inboxKeys.all,
 				"file",
 				conversationId,
-				conversationFileId(part.handle.path),
+				conversationFileId(part.handle?.path ?? part.id),
 				"me",
 			],
 			queryFn: () =>
 				(state as NonNullable<typeof state>).conversationFileDownload(
 					conversationId,
-					part.handle,
+					part.handle as NonNullable<typeof part.handle>,
 				),
-			enabled: Boolean(state),
+			enabled: Boolean(state) && isConversationFilePart(part),
 			staleTime: 4 * 60_000,
 		})),
 	});
@@ -52,9 +56,14 @@ export function useRoomAttachments(
 		const byMessage = new Map<string, IAttachment[]>();
 		parts.forEach(({ messageId, part }, index) => {
 			const url = urls[index];
-			if (url) {
+			const attachment = isConversationFilePart(part)
+				? url
+					? conversationAttachmentOf(part, url)
+					: undefined
+				: directAttachmentOf(part);
+			if (attachment) {
 				const list = byMessage.get(messageId) ?? [];
-				list.push(attachmentOf(part, url));
+				list.push(attachment);
 				byMessage.set(messageId, list);
 			}
 		});
@@ -62,7 +71,12 @@ export function useRoomAttachments(
 	}, [parts, urlKey]);
 }
 
-function attachmentOf(part: IInboxAttachmentPart, url: string): IAttachment {
+function conversationAttachmentOf(
+	part: IInboxAttachmentPart & {
+		handle: NonNullable<IInboxAttachmentPart["handle"]>;
+	},
+	url: string,
+): IAttachment {
 	return {
 		url,
 		name: part.name,

@@ -41,6 +41,7 @@ import {
 	userDisplayName,
 	userInitials,
 } from "@flow-like/flow-like-ui";
+import { UserIdentityRepair } from "@flow-like/flow-like-ui/components/pages/admin/user-identity-repair";
 import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import { useTranslation } from "@flow-like/locales";
 import { useDebounce } from "@uidotdev/usehooks";
@@ -449,10 +450,13 @@ export default function AdminUsersPage() {
 								)}
 							</p>
 						</div>
-						<Button onClick={handleRefresh} variant="outline" size="sm">
-							<RefreshCw className="h-4 w-4 mr-2" />
-							{t("refresh", "Refresh")}
-						</Button>
+						<div className="flex items-center gap-2">
+							<UserIdentityRepair profile={profile.data} />
+							<Button onClick={handleRefresh} variant="outline" size="sm">
+								<RefreshCw className="h-4 w-4 mr-2" />
+								{t("refresh", "Refresh")}
+							</Button>
+						</div>
 					</div>
 
 					<div className="grid gap-4 sm:grid-cols-3">

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     entity::user,
@@ -6,7 +6,10 @@ use crate::{
     execution::subject::account_user_id,
     middleware::jwt::{AppUser, ExecutorUse},
     routes::profile::create_default::create_default_profile,
-    routes::user::identity::{derive_display_name, derive_public_handle, sanitize_display_name},
+    routes::user::handle::{handle_for, is_unique_violation, usable_handle},
+    routes::user::identity::{
+        derive_display_name, derive_public_handle, is_email_like, sanitize_display_name,
+    },
     routes::user::lookup::UserLookupResponse,
     routes::user::sign_avatar,
     state::AppState,
@@ -68,8 +71,9 @@ pub async fn user_info(
     let username = identity_info
         .as_ref()
         .and_then(|info| info.username.clone());
-    // Only a handle the provider actually gave us — never its pool-internal one.
-    let preferred_username = identity_info.as_ref().and_then(derive_public_handle);
+    // Only a handle the provider actually gave us — never its pool-internal one or an
+    // address. It only seeds an account that has no usable username.
+    let signed_in_handle = identity_info.as_ref().and_then(derive_public_handle);
     let display_name = identity_info.as_ref().and_then(derive_display_name);
     let user_info = user::Entity::find_by_id(&sub).one(&state.db).await?;
     if let Some(mut user_info) = user_info {
@@ -94,18 +98,45 @@ pub async fn user_info(
 
         // Backfills users provisioned before display names were derived, and users
         // created by `ensure_user_exists`, which has no claims to work from. A name
-        // the user set themselves via `PUT /user/info` is never overwritten.
-        if let Some(display_name) = &display_name
-            && user_info
-                .name
-                .as_deref()
-                .and_then(sanitize_display_name)
-                .is_none()
-        {
+        // the user set themselves via `PUT /user/info` is never overwritten. An
+        // address is not such a name: sign-ins that map it into the handle used to
+        // get it as their name, so it is replaced, or dropped when no claim names
+        // the person.
+        let stored_name = user_info.name.as_deref().and_then(sanitize_display_name);
+        let needs_name = match &stored_name {
+            None => display_name.is_some(),
+            Some(name) => identity_info.is_some() && is_email_like(name),
+        };
+        if needs_name {
             let mut tmp_updated_user: user::ActiveModel =
                 updated_user.unwrap_or(user_info.clone().into());
-            tmp_updated_user.name = sea_orm::ActiveValue::Set(Some(display_name.clone()));
+            tmp_updated_user.name = sea_orm::ActiveValue::Set(display_name.clone());
             updated_user = Some(tmp_updated_user);
+        }
+
+        // The username is the account's own: the provider never overwrites one other
+        // people may see, and only fills in for an address, an account id or nothing.
+        if identity_info.is_some() && !usable_handle(user_info.preferred_username.as_deref()) {
+            let name = if needs_name {
+                display_name.as_deref()
+            } else {
+                stored_name.as_deref()
+            };
+            let handle = handle_for(
+                &state.db,
+                &sub,
+                signed_in_handle.as_deref(),
+                name,
+                email.as_deref().or(user_info.email.as_deref()),
+                &HashSet::new(),
+            )
+            .await?;
+            if handle != user_info.preferred_username {
+                let mut tmp_updated_user: user::ActiveModel =
+                    updated_user.unwrap_or(user_info.clone().into());
+                tmp_updated_user.preferred_username = sea_orm::ActiveValue::Set(handle);
+                updated_user = Some(tmp_updated_user);
+            }
         }
 
         if identity_info.is_some() && user_info.tracking_id.is_none() {
@@ -113,24 +144,6 @@ pub async fn user_info(
             let mut tmp_updated_user: user::ActiveModel =
                 updated_user.unwrap_or(user_info.clone().into());
             tmp_updated_user.tracking_id = sea_orm::ActiveValue::Set(Some(tracking_id));
-            updated_user = Some(tmp_updated_user);
-        }
-
-        if let Some(preferred_username) = &preferred_username
-            && user_info.preferred_username != Some(preferred_username.clone())
-            && should_update(
-                &state,
-                &sub,
-                &username,
-                "preferred_username",
-                &user_info.preferred_username,
-            )
-            .await
-        {
-            let mut tmp_updated_user: user::ActiveModel =
-                updated_user.unwrap_or(user_info.clone().into());
-            tmp_updated_user.preferred_username =
-                sea_orm::ActiveValue::Set(Some(preferred_username.clone()));
             updated_user = Some(tmp_updated_user);
         }
 
@@ -148,8 +161,9 @@ pub async fn user_info(
             user_info.avatar = Some(signed_avatar_url);
         }
 
-        user_info.additional_information =
-            flow_like_types::user_availability::public_information(user_info.additional_information);
+        user_info.additional_information = flow_like_types::user_availability::public_information(
+            user_info.additional_information,
+        );
         return Ok(Json(user_info));
     }
 
@@ -157,22 +171,43 @@ pub async fn user_info(
         return Err(ApiError::NOT_FOUND);
     }
 
-    let user = user::ActiveModel {
+    let handle = handle_for(
+        &state.db,
+        &sub,
+        signed_in_handle.as_deref(),
+        display_name.as_deref(),
+        email.as_deref(),
+        &HashSet::new(),
+    )
+    .await?;
+    let mut user = user::ActiveModel {
         id: sea_orm::ActiveValue::Set(sub.clone()),
         tracking_id: sea_orm::ActiveValue::Set(Some(create_id())),
         email: sea_orm::ActiveValue::Set(email.clone()),
         stripe_id: sea_orm::ActiveValue::Set(None),
         username: sea_orm::ActiveValue::Set(username),
-        preferred_username: sea_orm::ActiveValue::Set(preferred_username),
+        preferred_username: sea_orm::ActiveValue::Set(handle.clone()),
         name: sea_orm::ActiveValue::Set(display_name),
         created_at: sea_orm::ActiveValue::Set(chrono::Utc::now().fixed_offset()),
         updated_at: sea_orm::ActiveValue::Set(chrono::Utc::now().fixed_offset()),
         ..Default::default()
     };
 
-    let mut new_user = user::Entity::insert(user)
+    let mut new_user = match user::Entity::insert(user.clone())
         .exec_with_returning(&state.db)
-        .await?;
+        .await
+    {
+        Ok(new_user) => new_user,
+        // Another account took the username between the check and the insert; the
+        // account starts without one and is asked to choose.
+        Err(err) if handle.is_some() && is_unique_violation(&err) => {
+            user.preferred_username = sea_orm::ActiveValue::Set(None);
+            user::Entity::insert(user)
+                .exec_with_returning(&state.db)
+                .await?
+        }
+        Err(err) => return Err(err.into()),
+    };
 
     // Create default profile for new user
     if let Err(e) = create_default_profile(&state, &sub).await {

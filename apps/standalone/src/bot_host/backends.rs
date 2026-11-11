@@ -5,13 +5,17 @@
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use flow_like_bot_host::hub::TurnHub;
+use flow_like_bot_tools::services::{
+    CallAudit, CallBudget, ConnectorEntry, ConnectorSource, Credential,
+};
 use flow_like_bot_tools::{
-    Contact, Delivery, NoticeReceipt, OwnerNotice, OwnerNotifier, PeopleBackend, PersonMessage,
+    Contact, Delivery, SkillHost, NoticeReceipt, OwnerNotice, OwnerNotifier, PeopleBackend, PersonMessage,
     Scheduler,
     email::{MailBackend, MailFailure, MailFile, OutgoingMail, ReplyMail, SentMail, failure},
 };
 use flow_like_types::{
     Result, anyhow,
+    bot_skill::{BotSkill, CreateBotSkill, SkillSource, SkillStatus},
     bot_task::{BotTask, CreateBotTask, UpdateBotTask},
 };
 use serde_json::{Value, json};
@@ -127,6 +131,128 @@ impl Scheduler for HubScheduler {
             .await
             .map(|_| true)
             .map_err(|failure| anyhow!("Cancelling task '{task_id}' failed: {failure}"))
+    }
+}
+
+pub struct HubSkills(pub BotRoutes);
+
+fn skill_of(bot_id: &str, found: &Value) -> BotSkill {
+    let text = |key: &str| found[key].as_str().unwrap_or_default().to_string();
+    BotSkill {
+        id: text("id"),
+        bot_id: bot_id.to_string(),
+        name: text("name"),
+        description: text("description"),
+        body: text("body"),
+        source: SkillSource::parse(found["source"].as_str().unwrap_or_default())
+            .unwrap_or(SkillSource::Import),
+        status: SkillStatus::parse(found["status"].as_str().unwrap_or_default())
+            .unwrap_or(SkillStatus::Disabled),
+        tools: serde_json::from_value(found["tools"].clone()).unwrap_or_default(),
+        updated_at: text("updated_at"),
+    }
+}
+
+#[async_trait]
+impl SkillHost for HubSkills {
+    async fn get(&self, name: &str) -> Result<Option<BotSkill>> {
+        let listed = self
+            .0
+            .hub
+            .read(&self.0.path("skills"), Vec::new())
+            .await
+            .map_err(|failure| anyhow!("Listing the skills failed: {failure}"))?;
+        let skills = listed
+            .get("skills")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("The hub sent unusable skills"))?;
+        Ok(skills
+            .iter()
+            .find(|skill| skill["name"] == name)
+            .map(|found| skill_of(&self.0.bot_id, found)))
+    }
+
+    async fn propose(&self, request: CreateBotSkill) -> Result<BotSkill> {
+        let body = json!({
+            "name": request.name,
+            "description": request.description,
+            "body": request.body,
+        });
+        let created = self
+            .0
+            .hub
+            .write(&self.0.path("skills/propose"), Vec::new(), body)
+            .await
+            .map_err(|failure| anyhow!("Proposing the skill '{}' failed: {failure}", request.name))?;
+        Ok(skill_of(&self.0.bot_id, &created))
+    }
+}
+
+/// The bot's connectors: the hub lists them and signs each call, this device makes the calls.
+/// The hub hands out an access token or the opened secret for one call, never a refresh token.
+pub struct HubConnectors {
+    routes: BotRoutes,
+    budget: CallBudget,
+}
+
+impl HubConnectors {
+    pub fn new(routes: BotRoutes) -> Self {
+        Self {
+            routes,
+            budget: CallBudget::default(),
+        }
+    }
+}
+
+#[async_trait]
+impl ConnectorSource for HubConnectors {
+    async fn entries(&self) -> Result<Vec<ConnectorEntry>> {
+        let listed = self
+            .routes
+            .hub
+            .read(&self.routes.path("connectors/entries"), Vec::new())
+            .await
+            .map_err(|failure| anyhow!("Listing the connectors failed: {failure}"))?;
+        serde_json::from_value(
+            listed
+                .get("entries")
+                .cloned()
+                .unwrap_or(Value::Array(Vec::new())),
+        )
+        .map_err(|error| anyhow!("The hub sent unusable connectors: {error}"))
+    }
+
+    async fn credential(&self, connector_id: &str) -> Result<Credential> {
+        let answer = self
+            .routes
+            .hub
+            .write(
+                &self.routes.path(&format!("connectors/{connector_id}/credential")),
+                Vec::new(),
+                json!({}),
+            )
+            .await
+            .map_err(|failure| {
+                anyhow!("The sign-in for connector '{connector_id}' failed: {failure}")
+            })?;
+        Ok(answer["authorization"]
+            .as_str()
+            .map_or_else(Credential::none, Credential::authorization))
+    }
+
+    fn budget(&self) -> &CallBudget {
+        &self.budget
+    }
+
+    fn audit(&self, entry: &CallAudit) {
+        tracing::info!(
+            bot_id = %self.routes.bot_id,
+            connector = %entry.connector_id,
+            operation = %entry.operation,
+            effect = entry.effect,
+            ok = entry.ok,
+            "[bot_host] connector call"
+        );
     }
 }
 
@@ -600,6 +726,51 @@ mod tests {
             .unwrap();
         assert_eq!(people.len(), 1);
         assert_eq!(calls.0.lock().unwrap()[0].2, json!([["q", "a b"]]));
+    }
+
+    #[tokio::test]
+    async fn skills_are_read_from_the_bots_list_and_proposals_go_to_propose() {
+        let skill = json!({
+            "id": "s1", "name": "invoices", "description": "d", "body": "b",
+            "source": "import", "status": "active", "tools": [], "updated_at": "t"
+        });
+        let calls = Calls::answering(vec![
+            Ok(json!({ "skills": [skill.clone()] })),
+            Ok(skill),
+        ]);
+        let skills = HubSkills(routes(&calls));
+        let found = skills.get("invoices").await.unwrap().expect("listed");
+        assert_eq!(found.status, SkillStatus::Active);
+        let proposed = skills
+            .propose(CreateBotSkill {
+                name: "invoices".into(),
+                description: "d".into(),
+                body: "b".into(),
+                tools: Vec::new(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(proposed.name, "invoices");
+        let calls = calls.0.lock().unwrap();
+        assert_eq!(calls[0].1, "bots/bot1/skills");
+        assert_eq!(calls[1].1, "bots/bot1/skills/propose");
+    }
+
+    #[tokio::test]
+    async fn a_connector_sign_in_comes_from_the_hub_per_call() {
+        let calls = Calls::answering(vec![
+            Ok(json!({ "authorization": "Bearer abc" })),
+            Ok(json!({ "authorization": null })),
+        ]);
+        let connectors = HubConnectors::new(routes(&calls));
+        let signed = connectors.credential("c1").await.unwrap();
+        assert_eq!(signed.header(), Some("Bearer abc"));
+        assert_eq!(connectors.credential("c2").await.unwrap().header(), None);
+        let calls = calls.0.lock().unwrap();
+        assert_eq!(
+            (calls[0].0.as_str(), calls[0].1.as_str()),
+            ("POST", "bots/bot1/connectors/c1/credential")
+        );
     }
 
     #[test]

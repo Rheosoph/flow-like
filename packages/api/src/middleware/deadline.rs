@@ -161,6 +161,12 @@ const RULES: &[Rule] = &[
     rule(M::POST, "/api/v1/execution/apps/{app_id}/bots/ask", Data),
     rule(M::POST, "/api/v1/bots/hooks/{hook_id}", Data),
     rule(M::POST, "/api/v1/bots/{bot_id}/ask", Data),
+    // A device bot's app call runs the app's Event, chat or MCP tool to the end.
+    rule(
+        M::POST,
+        "/api/v1/bots/{bot_id}/turns/{turn_id}/app-tools/{tool}",
+        Dispatch,
+    ),
     rule(
         M::POST,
         "/api/v1/devices/{id}/bots/turns/{turn_id}/wait",
@@ -1092,6 +1098,12 @@ mod tests {
         ),
         ("POST", "/api/v1/bots/hooks/{hook_id}", Data, None),
         ("POST", "/api/v1/bots/{bot_id}/ask", Data, None),
+        (
+            "POST",
+            "/api/v1/bots/{bot_id}/turns/{turn_id}/app-tools/{tool}",
+            Dispatch,
+            None,
+        ),
         (
             "POST",
             "/api/v1/devices/{id}/bots/turns/{turn_id}/claim",

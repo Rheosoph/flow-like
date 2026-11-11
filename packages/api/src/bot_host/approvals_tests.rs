@@ -1,7 +1,7 @@
 use super::{
     approvals::{
         BOT_APPROVAL_UNKNOWN, BOT_TURN_NOT_WAITING, Expired, GrantRows, answer_in, cancel_in,
-        expire_in, grant_in, list_grants, park_in, revoke_in,
+        expire_in, grant_in, list_grants, park_in, revoke_in, sweep_grants,
     },
     fixture::{
         assert_code, at, conversation, database, delivery, insert_bot, participant_wait, recipient,
@@ -53,7 +53,7 @@ async fn grants_db() -> DatabaseConnection {
         r#"CREATE TABLE public."BotToolGrant" (
             "id" TEXT PRIMARY KEY, "botId" TEXT NOT NULL, "ownerId" TEXT NOT NULL,
             "tool" TEXT NOT NULL, "scope" TEXT NOT NULL, "grantedAt" TEXT NOT NULL,
-            "grantedBy" TEXT NOT NULL, UNIQUE ("botId", "tool", "scope"))"#,
+            "grantedBy" TEXT NOT NULL, "expiresAt" TEXT, UNIQUE ("botId", "tool", "scope"))"#,
     )
     .await
     .unwrap();
@@ -209,12 +209,19 @@ async fn a_grant_is_the_owners_alone_idempotent_and_listed_without_tokens() {
     let db = grants_db().await;
     insert_bot(&db, BOT, OWNER, "SERVER").await;
     insert_bot(&db, "bot_other", "user-b", "SERVER").await;
-    let first = grant_in(&db, OWNER, BOT, &key("code_run", "host:a.com"), at(5))
+    let granted = now_millis();
+    let first = grant_in(&db, OWNER, BOT, &key("code_run", "host:a.com"), granted)
         .await
         .unwrap();
-    let again = grant_in(&db, OWNER, BOT, &key("code_run", "host:a.com"), at(900))
-        .await
-        .unwrap();
+    let again = grant_in(
+        &db,
+        OWNER,
+        BOT,
+        &key("code_run", "host:a.com"),
+        granted + Duration::seconds(895),
+    )
+    .await
+    .unwrap();
     assert_eq!(first, again);
     rows(&db).put("code_run", "once:abc").await.unwrap();
     assert_eq!(list_grants(&db, OWNER, BOT, false).await.unwrap().len(), 1);
@@ -277,7 +284,7 @@ async fn a_grant_covers_exactly_its_scope_for_the_core_lookup() {
         OWNER,
         BOT,
         &key("knowledge_drop", "table:notes"),
-        at(1),
+        now_millis(),
     )
     .await
     .unwrap();
@@ -604,6 +611,95 @@ async fn answer_tokens_older_than_a_day_are_ignored_and_swept() {
     );
 }
 
+async fn set_expiry(db: &DatabaseConnection, at: Option<DateTime<FixedOffset>>) {
+    bot_tool_grant::Entity::update_many()
+        .col_expr(bot_tool_grant::Column::ExpiresAt, Expr::value(at))
+        .exec(db)
+        .await
+        .unwrap();
+}
+
+async fn expiry(db: &DatabaseConnection) -> Option<DateTime<FixedOffset>> {
+    bot_tool_grant::Entity::find()
+        .one(db)
+        .await
+        .unwrap()
+        .unwrap()
+        .expires_at
+}
+
+#[tokio::test]
+async fn a_grant_lapses_after_ninety_days_unused_and_a_use_slides_it_once_a_day() {
+    let db = grants_db().await;
+    insert_bot(&db, BOT, OWNER, "SERVER").await;
+    let store = rows(&db);
+    store.put("knowledge_drop", "table:notes").await.unwrap();
+    let granted = expiry(&db).await.unwrap();
+    assert!(granted > now_millis() + Duration::days(89));
+
+    let args = drop_args();
+    let used = || check_call(&store, "knowledge_drop", &args, None);
+    assert_eq!(used().await.unwrap(), GrantCheck::Granted);
+    assert_eq!(expiry(&db).await, Some(granted), "a use within a day waits");
+
+    set_expiry(&db, Some(now_millis() + Duration::days(60))).await;
+    assert_eq!(used().await.unwrap(), GrantCheck::Granted);
+    assert!(expiry(&db).await.unwrap() > now_millis() + Duration::days(89));
+
+    let lapsed = now_millis() - Duration::minutes(1);
+    set_expiry(&db, Some(lapsed)).await;
+    assert_eq!(used().await.unwrap(), GrantCheck::Missing);
+    assert!(store.list().await.unwrap().is_empty());
+    assert!(
+        list_grants(&db, OWNER, BOT, true).await.unwrap().is_empty(),
+        "the owner's list leaves lapsed grants out"
+    );
+    store
+        .touch(&[flow_like::flow::copilot::tool_grants::GrantKey::new(
+            "knowledge_drop",
+            "table:notes",
+        )])
+        .await
+        .unwrap();
+    assert_eq!(
+        expiry(&db).await,
+        Some(lapsed),
+        "a use never revives a grant"
+    );
+
+    assert_eq!(sweep_grants(&db, now_millis()).await.unwrap(), 1);
+    assert_eq!(bot_tool_grant::Entity::find().count(&db).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn granting_again_renews_a_lapsed_grant_and_the_sweep_stamps_old_rows() {
+    let db = grants_db().await;
+    insert_bot(&db, BOT, OWNER, "SERVER").await;
+    let store = rows(&db);
+    store.put("knowledge_drop", "table:notes").await.unwrap();
+    set_expiry(&db, Some(now_millis() - Duration::days(1))).await;
+    let renewed = grant_in(
+        &db,
+        OWNER,
+        BOT,
+        &key("knowledge_drop", "table:notes"),
+        now_millis(),
+    )
+    .await
+    .unwrap();
+    assert!(renewed.expires_at.is_some());
+    assert_eq!(store.list().await.unwrap().len(), 1);
+
+    set_expiry(&db, None).await;
+    assert_eq!(
+        store.list().await.unwrap().len(),
+        1,
+        "an unstamped row is live"
+    );
+    assert_eq!(sweep_grants(&db, now_millis()).await.unwrap(), 0);
+    assert!(expiry(&db).await.unwrap() > now_millis() + Duration::days(89));
+}
+
 #[tokio::test]
 async fn the_parked_card_names_who_woke_the_turn() {
     let (db, mut turn) = running().await;
@@ -650,12 +746,18 @@ async fn an_approval_answered_after_the_deadline_rebases_it_without_touching_the
     super::recovery::ensure_metadata(&db, &turn).await.unwrap();
     bot_turn_checkpoint::Entity::update_many()
         .col_expr(bot_turn_checkpoint::Column::Revision, Expr::value(4))
-        .col_expr(bot_turn_checkpoint::Column::StartedAtMs, Expr::value(started))
+        .col_expr(
+            bot_turn_checkpoint::Column::StartedAtMs,
+            Expr::value(started),
+        )
         .col_expr(
             bot_turn_checkpoint::Column::DeadlineAtMs,
             Expr::value(started + 1_800_000),
         )
-        .col_expr(bot_turn_checkpoint::Column::State, Expr::value(state.clone()))
+        .col_expr(
+            bot_turn_checkpoint::Column::State,
+            Expr::value(state.clone()),
+        )
         .filter(bot_turn_checkpoint::Column::TurnId.eq(&turn.id))
         .exec(&db)
         .await

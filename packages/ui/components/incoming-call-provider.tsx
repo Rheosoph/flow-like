@@ -6,8 +6,10 @@ import { PhoneIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useConversationRoom } from "../hooks/use-conversation-room";
+import { useSpeechModel } from "../hooks/use-speech-model";
 import { useUserAvailability } from "../hooks/use-user-availability";
 import { shouldPresentUserNotification } from "../lib/availability-notifications";
+import { offersCalls } from "../lib/realtime/call-listening";
 import { deriveLiveCall } from "../lib/realtime/conversation-call";
 import { watchConversation } from "../lib/realtime/conversation-feed";
 import {
@@ -139,6 +141,18 @@ interface CheckCallProps {
 	ignore: (callId: string) => void;
 }
 
+interface CheckedCall {
+	conversation: IConversation;
+	sender: string;
+}
+
+/** The checked call, unless its conversation is end-to-end encrypted and speech would leave this device. */
+function useOfferedCall<T extends CheckedCall>(checked: T | null | undefined) {
+	const encrypted = checked?.conversation.encryption === "e2e";
+	const speech = useSpeechModel(encrypted, true);
+	return offersCalls(encrypted, speech) ? checked : null;
+}
+
 function CheckIncomingCall({
 	notice,
 	scope,
@@ -181,6 +195,7 @@ function CheckIncomingCall({
 		refetchIntervalInBackground: true,
 		retry: false,
 	});
+	const offered = useOfferedCall(checked.data);
 	useEffect(() => {
 		if (checked.data === null) ignore(notice.callId);
 	}, [checked.data, notice.callId, ignore]);
@@ -193,11 +208,11 @@ function CheckIncomingCall({
 			},
 		);
 	}, [checked.data, notice.conversationId, notice.callId, dismiss]);
-	return checked.data && !checked.isError ? (
+	return offered && !checked.isError ? (
 		<LiveIncomingCall
 			{...{ notice, scope, userId, resolve, ignore }}
-			conversation={checked.data.conversation}
-			sender={checked.data.sender}
+			conversation={offered.conversation}
+			sender={offered.sender}
 		/>
 	) : null;
 }

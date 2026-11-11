@@ -303,6 +303,10 @@ async fn only_the_bound_foreground_host_can_complete_the_interactive_reply() {
         )
         .col_expr(bot_turn::Column::Attempts, Expr::value(0))
         .col_expr(bot_turn::Column::HostId, Expr::value(None::<String>))
+        .col_expr(
+            bot_turn::Column::HostKind,
+            Expr::value(flow_like_types::bot_turn::STORED_DESKTOP),
+        )
         .filter(bot_turn::Column::Id.eq(&running.turn_id))
         .exec(&db)
         .await
@@ -457,11 +461,16 @@ async fn manual_retry_keeps_claim_generations_unique_and_resets_only_failure_bud
         .await
         .is_err()
     );
+    let retried = at(4).timestamp_millis();
     assert_eq!(
         recovery::load_in(&db, &Claim { attempt: 2, ..old }, at(6))
             .await
             .unwrap(),
-        Some(snapshot())
+        Some(BotRunCheckpoint {
+            started_at_ms: retried,
+            deadline_at_ms: retried + super::worker::MAX_TURN_RUNTIME_MS,
+            ..snapshot()
+        })
     );
 }
 

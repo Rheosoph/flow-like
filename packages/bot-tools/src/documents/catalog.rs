@@ -2,26 +2,26 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use flow_like_catalog_data::data::excel::workbook::{XlsxCell, XlsxSheet, build_workbook};
 use flow_like_catalog_data::data::excel::inspect::{
     StyleFilter, find_styled_cells, inspect_range, load_sheet, sheet_view, table_candidates,
     value_index, workbook_overview,
 };
 use flow_like_catalog_data::data::excel::sheet_compressor::EncodeOptions;
 use flow_like_catalog_data::data::excel::table_detect::ExtractConfig;
+use flow_like_catalog_data::data::excel::workbook::{XlsxCell, XlsxSheet, build_workbook};
+use flow_like_catalog_llm::llm::llm_extractor::{
+    ExtractOptions, extract_with_model, prepare_schema,
+};
+use flow_like_catalog_media_document::document::service::chart::{SHEET_NAME, WorkbookCell};
 use flow_like_catalog_media_document::document::service::docx::{DocxOptions, docx_from_markdown};
 use flow_like_catalog_media_document::document::service::fill::{
     FillInput, TableRows, TemplateKind, fill_template,
 };
 use flow_like_catalog_media_document::document::service::pdf::{PdfOptions, pdf_from_markdown};
-use flow_like_catalog_media_document::document::service::chart::{SHEET_NAME, WorkbookCell};
 use flow_like_catalog_media_document::document::service::pptx::{
     ChartKind as DeckChartKind, DeckOptions, Slide, SlideChart, SlideLayout, pptx_from_slides,
 };
 use flow_like_catalog_media_document::document::service::{Built, Images};
-use flow_like_catalog_llm::llm::llm_extractor::{
-    ExtractOptions, extract_with_model, prepare_schema,
-};
 use flow_like_catalog_media_image::image::pdf::{
     PageBackground, RenderOptions, page_count, render_pages,
 };
@@ -351,7 +351,8 @@ impl DocumentBackend for CatalogBackend {
                 workbook: Some(chart_workbook),
             },
             &slides,
-        ).map(built)
+        )
+        .map(built)
     }
 
     fn create_xlsx(&self, sheets: Vec<SheetData>) -> Result<BuiltDocument> {
@@ -452,7 +453,9 @@ mod tests {
     use crate::documents::{ChartKind, DeckChart, DeckSlide, SlideLayoutKind};
 
     fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-        haystack.windows(needle.len()).any(|window| window == needle)
+        haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
     }
 
     #[test]
@@ -490,8 +493,9 @@ mod tests {
         let workbook = &files["ppt/embeddings/Microsoft_Excel_Sheet1.xlsx"];
         assert!(workbook.starts_with(b"PK"));
         assert!(contains(workbook, b"xl/workbook.xml"));
-        let book = flow_like_catalog_data::data::excel::inspect::workbook_overview(workbook.clone())
-            .expect("readable workbook");
+        let book =
+            flow_like_catalog_data::data::excel::inspect::workbook_overview(workbook.clone())
+                .expect("readable workbook");
         assert_eq!(book.sheets[0].name, "Sheet1");
     }
 }

@@ -40,6 +40,8 @@ pub struct TurnJob {
     /// The authenticated trigger shares temporary context, excluded from checkpoints and from
     /// the history memory assembles.
     pub ephemeral_user_context: bool,
+    /// What the turn's history puts into its turn label before the first tool call.
+    pub seed_taint: flow_like_types::data_classification::DataSensitivity,
     /// Session snapshots of user context still usable here, for a turn whose history comes from
     /// memory and so leaves them out.
     pub shared_context: Option<String>,
@@ -66,6 +68,8 @@ pub struct TurnJob {
     pub notes: Option<flow_like::flow::copilot::bot_notes::NotesHandle>,
     /// The turn's tool trail, set only in the owner's direct conversation with the bot.
     pub trail: Option<flow_like::flow::copilot::ToolTrail>,
+    /// The files the bot attaches to its reply, for a host that posts them with it.
+    pub reply_files: Option<flow_like::flow::copilot::ReplyFiles>,
 }
 
 impl TurnJob {

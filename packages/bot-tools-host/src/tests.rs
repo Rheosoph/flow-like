@@ -460,3 +460,275 @@ async fn job_secrets_travel_in_the_job_open_in_the_env_and_never_print() {
     let text = listed.result.to_string();
     assert!(text.contains("PG_SALES") && !text.contains("pa55word"));
 }
+
+const TURN: &str = "chat";
+
+/// Files of the conversation `TURN`, as a host's own source serves them.
+struct Shared(HashMap<&'static str, &'static str>);
+
+#[async_trait]
+impl ConversationFiles for Shared {
+    fn serves(&self, conversation_id: &str) -> bool {
+        conversation_id == TURN
+    }
+
+    async fn read(
+        &self,
+        _conversation_id: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> Result<Option<flow_like_bot_tools::FileData>> {
+        Ok(self.0.get(path).map(|text| {
+            let fits = text.len() as u64 <= max_bytes;
+            flow_like_bot_tools::FileData {
+                bytes: if fits {
+                    text.as_bytes().to_vec().into()
+                } else {
+                    Default::default()
+                },
+                size: text.len() as u64,
+                mime: Some("text/plain".to_string()),
+                classification: None,
+            }
+        }))
+    }
+
+    async fn file_link(
+        &self,
+        _conversation_id: &str,
+        path: &str,
+    ) -> Result<Option<flow_like_bot_tools::FileLink>> {
+        Ok(self
+            .0
+            .contains_key(path)
+            .then(|| flow_like_bot_tools::FileLink {
+                url: format!("https://files.example.com/chat/{path}?sig=1"),
+                expires_at_ms: None,
+            }))
+    }
+}
+
+#[tokio::test]
+async fn a_turn_file_gets_its_link_from_the_hosts_source() {
+    let (env, _) = env(false, vec![]).await;
+    let env = env.with_conversation_files(Arc::new(Shared(
+        [("notes.txt", "from the chat")].into_iter().collect(),
+    )));
+    let linked = call(
+        &env,
+        "file_link",
+        json!({ "file": conversation_handle(TURN, "notes.txt") }),
+    )
+    .await;
+    assert!(linked.is_ok(), "{:?}", linked.error);
+    assert_eq!(
+        linked.result["url"],
+        "https://files.example.com/chat/notes.txt?sig=1"
+    );
+}
+
+fn conversation_handle(conversation_id: &str, path: &str) -> Value {
+    json!({
+        "app_id": format!("conversation_{conversation_id}"),
+        "path": path,
+        "bytes": 0,
+        "sha256": "",
+        "mime": "text/plain",
+    })
+}
+
+#[tokio::test]
+async fn a_conversation_file_comes_from_the_hosts_source_when_it_serves_the_conversation() {
+    let (env, _) = env(false, vec![]).await;
+    let env = env.with_conversation_files(Arc::new(Shared(
+        [("notes.txt", "from the chat")].into_iter().collect(),
+    )));
+
+    let saved = call(
+        &env,
+        "file_save",
+        json!({ "file": conversation_handle(TURN, "notes.txt") }),
+    )
+    .await;
+    assert!(saved.is_ok(), "{:?}", saved.error);
+    assert_eq!(saved.result["handle"]["app_id"], WORKSPACE);
+    assert_eq!(saved.result["handle"]["path"], "bot/files/notes.txt");
+    let copy = call(&env, "file_read", json!({ "file": "bot/files/notes.txt" })).await;
+    assert_eq!(copy.result["text"], "from the chat");
+
+    let missing = call(
+        &env,
+        "file_save",
+        json!({ "file": conversation_handle(TURN, "other.txt") }),
+    )
+    .await;
+    assert_eq!(
+        missing.error.expect("a missing file fails").code,
+        flow_like_bot_tools::error::code::NOT_FOUND
+    );
+
+    let unserved = call(
+        &env,
+        "file_save",
+        json!({ "file": conversation_handle("room1", "notes.txt") }),
+    )
+    .await;
+    let unserved = unserved
+        .error
+        .expect("the app store has no such conversation");
+    assert!(
+        unserved.message.contains("conversation_room1"),
+        "{unserved:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_conversation_file_over_the_read_limit_is_refused_by_its_size() {
+    let (env, _) = env(false, vec![]).await;
+    let env = env
+        .with_limits(flow_like_bot_tools::Limits {
+            max_read_bytes: 4,
+            ..Default::default()
+        })
+        .with_conversation_files(Arc::new(Shared(
+            [("notes.txt", "from the chat")].into_iter().collect(),
+        )));
+    let refused = call(
+        &env,
+        "file_save",
+        json!({ "file": conversation_handle(TURN, "notes.txt") }),
+    )
+    .await;
+    let refused = refused.error.expect("a file over the limit fails");
+    assert_eq!(refused.code, flow_like_bot_tools::error::code::TOO_LARGE);
+    assert!(refused.message.contains("13 bytes"), "{refused:?}");
+}
+
+/// Answers every request on a local port: `/ok` with `hello`, `/denied` with 403, anything else
+/// with 404. Returns the port.
+async fn file_server() -> u16 {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let port = listener.local_addr().expect("address").port();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    match stream.read(&mut buffer).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(read) => request.extend_from_slice(&buffer[..read]),
+                    }
+                }
+                let request = String::from_utf8_lossy(&request).to_string();
+                let (status, body) = if request.starts_with("GET /ok?") {
+                    ("200 OK", "hello")
+                } else if request.starts_with("GET /denied?") {
+                    ("403 Forbidden", "")
+                } else {
+                    ("404 Not Found", "")
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+    port
+}
+
+#[tokio::test]
+async fn a_jobs_conversation_files_are_read_through_their_signed_links() {
+    let port = file_server().await;
+    let file = |path: &str, route: &str| JobFile {
+        app_id: "conversation_room1".to_string(),
+        path: path.to_string(),
+        url: format!("http://127.0.0.1:{port}/{route}?X-Amz-Signature=s3cret"),
+        mime: Some("text/plain".to_string()),
+    };
+    let files = LinkedFiles::new(vec![
+        file("f1.txt", "ok"),
+        file("f2.txt", "gone"),
+        file("f3.txt", "denied"),
+    ]);
+    assert!(files.serves("room1") && files.serves("chat"));
+
+    let read = files.read("room1", "f1.txt", 1024).await.unwrap().unwrap();
+    assert_eq!(read.bytes.as_ref(), b"hello");
+    assert_eq!(read.size, 5);
+    assert_eq!(read.mime.as_deref(), Some("text/plain"));
+
+    let too_large = files.read("room1", "f1.txt", 4).await.unwrap().unwrap();
+    assert!(too_large.bytes.is_empty());
+    assert_eq!(too_large.size, 5);
+
+    assert!(files.read("room1", "f2.txt", 1024).await.unwrap().is_none());
+    assert!(
+        files
+            .read("room1", "unlisted.txt", 1024)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(files.read("room2", "f1.txt", 1024).await.unwrap().is_none());
+
+    let denied = files
+        .read("room1", "f3.txt", 1024)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        denied.contains("f3.txt") && denied.contains("HTTP 403"),
+        "{denied}"
+    );
+    assert!(
+        !denied.contains("s3cret") && !denied.contains("127.0.0.1"),
+        "{denied}"
+    );
+
+    let printed = format!("{:?}", file("f1.txt", "ok"));
+    assert!(
+        printed.contains("f1.txt") && !printed.contains("s3cret"),
+        "{printed}"
+    );
+}
+
+#[tokio::test]
+async fn an_executor_job_saves_a_linked_conversation_file_into_the_workspace() {
+    let port = file_server().await;
+    let job_files = vec![JobFile {
+        app_id: "conversation_room1".to_string(),
+        path: "f1.txt".to_string(),
+        url: format!("http://127.0.0.1:{port}/ok?X-Amz-Signature=s3cret"),
+        mime: None,
+    }];
+    let (env, _) = env(false, vec![]).await;
+    let env = env.with_conversation_files(Arc::new(LinkedFiles::new(job_files)));
+
+    let saved = call(
+        &env,
+        "file_save",
+        json!({ "file": conversation_handle("room1", "f1.txt") }),
+    )
+    .await;
+    assert!(saved.is_ok(), "{:?}", saved.error);
+    let copy = call(&env, "file_read", json!({ "file": "bot/files/f1.txt" })).await;
+    assert_eq!(copy.result["text"], "hello");
+
+    let unlinked = call(
+        &env,
+        "file_save",
+        json!({ "file": conversation_handle("room1", "f9.txt") }),
+    )
+    .await;
+    assert_eq!(
+        unlinked.error.expect("a file without a link fails").code,
+        flow_like_bot_tools::error::code::NOT_FOUND
+    );
+}

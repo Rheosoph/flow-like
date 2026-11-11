@@ -114,6 +114,10 @@ impl PlatformToolBridge for DesktopPlatformBridge {
         self.cancellation.is_cancelled() || self.bridge.channel().is_cancelled().await
     }
 
+    async fn bot_secret(&self, name: &str) -> Option<String> {
+        self.bridge.bot_secret(name).await
+    }
+
     async fn call(&self, tool_name: &str, arguments: serde_json::Value) -> String {
         use crate::functions::ai::copilot_sdk_tools::approval_from_spec;
         use flow_like::flow::copilot::tool_spec::{HTTP_REQUEST_TOOL, missing_required_args};

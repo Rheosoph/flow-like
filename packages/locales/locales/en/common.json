@@ -1803,6 +1803,8 @@
 	"modelActions": "Model actions",
 	"modelCategory": "Model Category",
 	"modelClassification": "Model Classification",
+	"modelDataClassification": "Most sensitive data it may process",
+	"modelDataClassificationHint": "A tag for now. It does not change which model is used.",
 	"modelExploreOperateAndShareProjectData": "Model, explore, operate, and share project data",
 	"modelId": "Model ID",
 	"modelIdentity": "Model Identity",

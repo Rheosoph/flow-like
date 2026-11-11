@@ -12,6 +12,7 @@ export type OnlineProfile = {
 	theme?: any;
 	home_layout?: IHomeLayout | null;
 	home_default_id?: string | null;
+	hidden_bots?: string[] | null;
 	bit_ids?: string[];
 	apps?: IProfile["apps"];
 	shortcuts?: Array<{
@@ -44,6 +45,7 @@ export const toLocalProfile = (onlineProfile: OnlineProfile) => ({
 		theme: onlineProfile.theme ?? null,
 		home_layout: onlineProfile.home_layout ?? null,
 		home_default_id: onlineProfile.home_default_id ?? null,
+		hidden_bots: onlineProfile.hidden_bots ?? [],
 		bits: onlineProfile.bit_ids ?? [],
 		apps: onlineProfile.apps ?? [],
 		shortcuts: onlineProfile.shortcuts ?? [],
@@ -131,6 +133,10 @@ export function mergeRemoteProfileMetadata(
 			: {}),
 		...(Object.hasOwn(remote, "home_default_id")
 			? { home_default_id: remote.home_default_id ?? null }
+			: {}),
+		// The same rule keeps the bots hidden here when the hub does not store them.
+		...(Object.hasOwn(remote, "hidden_bots")
+			? { hidden_bots: remote.hidden_bots ?? [] }
 			: {}),
 		bits: remote.bit_ids ?? [],
 		apps: [

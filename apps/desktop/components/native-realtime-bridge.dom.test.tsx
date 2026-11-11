@@ -20,6 +20,10 @@ const state = vi.hoisted(() => ({
 	invalidateQueries: vi.fn().mockResolvedValue(undefined),
 	incomingCall: vi.fn(() => null),
 	poke: vi.fn(),
+	deliverReply: vi.fn(),
+}));
+vi.mock("@flow-like/flow-like-ui/lib/realtime/reply-streams", () => ({
+	deliverRealtimeReply: state.deliverReply,
 }));
 
 vi.mock("./tauri-provider", () => ({
@@ -59,6 +63,7 @@ beforeEach(() => {
 	state.close.mockReset();
 	state.incomingCall.mockClear();
 	state.poke.mockClear();
+	state.deliverReply.mockClear();
 	state.invalidateQueries.mockReset().mockResolvedValue(undefined);
 	host = document.createElement("div");
 	document.body.append(host);
@@ -99,6 +104,25 @@ describe("native realtime shell bridge", () => {
 			}),
 			undefined,
 		);
+	});
+
+	it("hands a reply to the reply store without touching the inbox", async () => {
+		await act(async () => root.render(<NativeRealtimeBridge />));
+		const { onMessage } = state.watch.mock.calls[0][0];
+		const reply = {
+			protocol_version: 1,
+			kind: "reply",
+			conversation_id: "remote-1",
+			message_id: "re-1",
+			reply_to: "m1",
+			sender_id: "bot",
+			offset: 0,
+			text: "Hi",
+			state: "writing",
+		};
+		await onMessage({ type: "reply", reply });
+		expect(state.deliverReply).toHaveBeenCalledWith(reply, "remote-1");
+		expect(state.invalidateQueries).not.toHaveBeenCalled();
 	});
 
 	it("refreshes inbox queries once per revision and ignores run-only updates", async () => {

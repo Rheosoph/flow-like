@@ -32,8 +32,9 @@ use flow_like_types::{
     create_id,
     inbox::direct_pair_key,
     tool_grant::{
-        APPROVAL_WAIT_DAYS, ApprovalAnswer, DENY_PREFIX, ERROR_APPROVAL_EXPIRED, ONCE_PREFIX,
-        TOKEN_TTL_HOURS, ToolGrant, ToolGrantKey, check_key, is_token_scope,
+        APPROVAL_WAIT_DAYS, ApprovalAnswer, DENY_PREFIX, ERROR_APPROVAL_EXPIRED, GRANT_SLIDE_HOURS,
+        GRANT_TTL_DAYS, ONCE_PREFIX, TOKEN_TTL_HOURS, ToolGrant, ToolGrantKey, check_key,
+        is_token_scope,
     },
 };
 use sea_orm::{
@@ -52,13 +53,58 @@ fn token_cutoff(now: DateTime<FixedOffset>) -> DateTime<FixedOffset> {
     now - Duration::hours(TOKEN_TTL_HOURS)
 }
 
+fn grant_expiry(now: DateTime<FixedOffset>) -> DateTime<FixedOffset> {
+    now + Duration::days(GRANT_TTL_DAYS)
+}
+
+fn slide_threshold(now: DateTime<FixedOffset>) -> DateTime<FixedOffset> {
+    grant_expiry(now) - Duration::hours(GRANT_SLIDE_HOURS)
+}
+
+fn live(row: &bot_tool_grant::Model, now: DateTime<FixedOffset>) -> bool {
+    row.expires_at.is_none_or(|expires_at| expires_at > now)
+}
+
 fn grant_of(row: bot_tool_grant::Model) -> ToolGrant {
     ToolGrant {
         tool: row.tool,
         scope: row.scope,
         granted_at: row.granted_at.to_rfc3339(),
         granted_by: row.granted_by,
+        expires_at: row.expires_at.map(|expires_at| expires_at.to_rfc3339()),
     }
+}
+
+/// Moves the expiry of the grants a bot just used forward, at most once a day each. A grant that
+/// is gone or already lapsed stays so: a use never brings one back.
+pub(crate) async fn touch_in<C: ConnectionTrait>(
+    db: &C,
+    bot_id: &str,
+    keys: &[(String, String)],
+    now: DateTime<FixedOffset>,
+) -> Result<(), sea_orm::DbErr> {
+    for (tool, scope) in keys {
+        bot_tool_grant::Entity::update_many()
+            .col_expr(
+                bot_tool_grant::Column::ExpiresAt,
+                Expr::value(grant_expiry(now)),
+            )
+            .filter(bot_tool_grant::Column::BotId.eq(bot_id))
+            .filter(bot_tool_grant::Column::Tool.eq(tool.as_str()))
+            .filter(bot_tool_grant::Column::Scope.eq(scope.as_str()))
+            .filter(
+                Condition::any()
+                    .add(bot_tool_grant::Column::ExpiresAt.is_null())
+                    .add(
+                        Condition::all()
+                            .add(bot_tool_grant::Column::ExpiresAt.gt(now))
+                            .add(bot_tool_grant::Column::ExpiresAt.lt(slide_threshold(now))),
+                    ),
+            )
+            .exec(db)
+            .await?;
+    }
+    Ok(())
 }
 
 /// One bot's grants and answer tokens in the account database. `D` is a connection, a
@@ -86,16 +132,27 @@ where
     C: ConnectionTrait + Send + Sync,
 {
     async fn list(&self) -> flow_like_types::Result<Vec<GrantKey>> {
-        let cutoff = token_cutoff(now_millis());
+        let now = now_millis();
+        let cutoff = token_cutoff(now);
         let rows = bot_tool_grant::Entity::find()
             .filter(bot_tool_grant::Column::BotId.eq(self.bot_id.as_str()))
             .all(&*self.db)
             .await?;
         Ok(rows
             .into_iter()
+            .filter(|row| live(row, now))
             .filter(|row| !is_token_scope(&row.scope) || row.granted_at >= cutoff)
             .map(|row| GrantKey::new(row.tool, row.scope))
             .collect())
+    }
+
+    async fn touch(&self, keys: &[GrantKey]) -> flow_like_types::Result<()> {
+        let keys: Vec<(String, String)> = keys
+            .iter()
+            .map(|key| (key.tool.clone(), key.scope.clone()))
+            .collect();
+        touch_in(&*self.db, &self.bot_id, &keys, now_millis()).await?;
+        Ok(())
     }
 
     async fn put(&self, tool: &str, scope: &str) -> flow_like_types::Result<()> {
@@ -140,12 +197,19 @@ pub(crate) async fn put_in<C: ConnectionTrait>(
         .one(db)
         .await?;
     if let Some(existing) = existing {
-        if is_token_scope(scope) && existing.granted_at < token_cutoff(now) {
+        let stale_token = is_token_scope(scope) && existing.granted_at < token_cutoff(now);
+        if stale_token || !live(&existing, now) {
             bot_tool_grant::Entity::update_many()
                 .col_expr(bot_tool_grant::Column::GrantedAt, Expr::value(now))
+                .col_expr(
+                    bot_tool_grant::Column::ExpiresAt,
+                    Expr::value(grant_expiry(now)),
+                )
                 .filter(bot_tool_grant::Column::Id.eq(existing.id))
                 .exec(db)
                 .await?;
+        } else {
+            touch_in(db, bot_id, &[(tool.to_string(), scope.to_string())], now).await?;
         }
         return Ok(());
     }
@@ -157,6 +221,7 @@ pub(crate) async fn put_in<C: ConnectionTrait>(
         scope: Set(scope.to_string()),
         granted_at: Set(now),
         granted_by: Set(owner_id.to_string()),
+        expires_at: Set(Some(grant_expiry(now))),
     })
     .on_conflict(
         OnConflict::columns([
@@ -195,6 +260,7 @@ pub(crate) async fn list_grants<C: ConnectionTrait>(
     with_tokens: bool,
 ) -> Result<Vec<ToolGrant>, ApiError> {
     owned_bot(db, owner_id, bot_id).await?;
+    let now = now_millis();
     let rows = bot_tool_grant::Entity::find()
         .filter(bot_tool_grant::Column::BotId.eq(bot_id))
         .filter(bot_tool_grant::Column::OwnerId.eq(owner_id))
@@ -204,6 +270,7 @@ pub(crate) async fn list_grants<C: ConnectionTrait>(
         .await?;
     Ok(rows
         .into_iter()
+        .filter(|row| live(row, now))
         .filter(|row| with_tokens || !is_token_scope(&row.scope))
         .map(grant_of)
         .collect())
@@ -710,10 +777,11 @@ async fn expire_one(state: &AppState, turn: &bot_turn::Model, now: DateTime<Fixe
 pub struct Expired {
     pub turns: u64,
     pub tokens: u64,
+    pub grants: u64,
 }
 
 /// Cancels turns that waited longer than [`APPROVAL_WAIT_DAYS`], with a notice from the bot, and
-/// drops answer tokens older than [`TOKEN_TTL_HOURS`].
+/// drops answer tokens older than [`TOKEN_TTL_HOURS`] and standing grants past their expiry.
 pub(crate) async fn expire(
     state: &AppState,
     now: DateTime<FixedOffset>,
@@ -740,5 +808,31 @@ pub(crate) async fn expire(
         .exec(&state.db)
         .await?
         .rows_affected;
-    Ok(Expired { turns, tokens })
+    let grants = sweep_grants(&state.db, now).await?;
+    Ok(Expired {
+        turns,
+        tokens,
+        grants,
+    })
+}
+
+/// Deletes the grants that lapsed and stamps the ones that predate the expiry with a full term.
+pub(crate) async fn sweep_grants<C: ConnectionTrait>(
+    db: &C,
+    now: DateTime<FixedOffset>,
+) -> Result<u64, sea_orm::DbErr> {
+    let lapsed = bot_tool_grant::Entity::delete_many()
+        .filter(bot_tool_grant::Column::ExpiresAt.lte(now))
+        .exec(db)
+        .await?
+        .rows_affected;
+    bot_tool_grant::Entity::update_many()
+        .col_expr(
+            bot_tool_grant::Column::ExpiresAt,
+            Expr::value(grant_expiry(now)),
+        )
+        .filter(bot_tool_grant::Column::ExpiresAt.is_null())
+        .exec(db)
+        .await?;
+    Ok(lapsed)
 }

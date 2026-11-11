@@ -14,7 +14,7 @@ use crate::display::{DisplayKind, DisplayPolicy, Facts, resolve_display};
 use crate::frames::{Frame, FrameKind, FrameStream};
 use crate::guard::{BotChannel, GuardedBrowser, GuardedComputer, NoDisplay};
 use crate::input::InputEvent;
-use crate::local::LocalPlayground;
+use crate::local::{LocalPlayground, Surface};
 use crate::playground::Playground;
 use crate::rpc::RemotePlayground;
 use crate::worker::ProcessSpawner;
@@ -25,7 +25,8 @@ const SWEEP_EVERY: Duration = Duration::from_secs(30);
 /// Where the bots' browsers and computers run.
 #[derive(Clone, Debug)]
 pub enum Mode {
-    /// In this process, on the logged-in screen (the desktop app).
+    /// In this process, on the logged-in screen (the desktop app): the bot's Chrome is a
+    /// window the owner sees.
     InProcess,
     /// One worker process per bot, started from `program` as `<program> playground-worker …`
     /// (a device agent).
@@ -65,7 +66,7 @@ impl MachineHost {
     pub fn new(data_dir: PathBuf, mode: Mode) -> Self {
         match mode {
             Mode::InProcess => Self::build(true, DisplayKind::Session, move |bot| {
-                LocalPlayground::new(&data_dir, bot, true) as Arc<dyn Playground>
+                LocalPlayground::new(&data_dir, bot, Surface::OwnerScreen) as Arc<dyn Playground>
             }),
             Mode::Worker { program } => {
                 let display = resolve_display(DisplayPolicy::from_env(), Facts::detect());

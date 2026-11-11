@@ -997,6 +997,31 @@ pub async fn profile_update_shortcuts(
     Ok(())
 }
 
+/// Replaces the bots a profile hides; the revision bump sends the list to the hub on the next sync.
+#[instrument(skip_all)]
+#[tauri::command(async)]
+pub async fn profile_update_hidden_bots(
+    app_handle: AppHandle,
+    profile_id: String,
+    hidden_bots: Vec<String>,
+) -> Result<Vec<String>, TauriFunctionError> {
+    let hidden_bots = flow_like::profile::normalize_hidden_bots(hidden_bots)
+        .map_err(|message| TauriFunctionError::new(&message))?;
+    let settings = TauriSettingsState::construct(&app_handle).await?;
+    let mut settings = settings.lock().await;
+    let profile = settings
+        .profiles
+        .get_mut(&profile_id)
+        .ok_or(anyhow::anyhow!("Profile not found"))?;
+
+    if profile.hub_profile.hidden_bots != hidden_bots {
+        profile.hub_profile.hidden_bots = hidden_bots.clone();
+        profile.advance_revision(None);
+        settings.try_serialize()?;
+    }
+    Ok(hidden_bots)
+}
+
 #[instrument(skip_all)]
 #[tauri::command(async)]
 pub async fn profile_update_home_layout(

@@ -34,7 +34,7 @@ pub struct FactsQuery {
     pub include_superseded: Option<bool>,
 }
 
-async fn admin_for(
+pub(crate) async fn admin_for(
     state: &AppState,
     sub: &str,
     bot_id: &str,

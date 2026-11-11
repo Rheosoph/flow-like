@@ -3,7 +3,7 @@
 
 #![cfg(target_os = "linux")]
 
-use flow_like_bot_machine::{LocalPlayground, Playground, VirtualDisplay};
+use flow_like_bot_machine::{LocalPlayground, Playground, Surface, VirtualDisplay};
 use flow_like_bot_tools::computer::ComputerBackend;
 
 #[tokio::test]
@@ -19,7 +19,7 @@ async fn a_bot_sees_its_own_virtual_display() {
     }
     unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
 
-    let playground = LocalPlayground::new(dir.path(), "smoke-bot", false);
+    let playground = LocalPlayground::new(dir.path(), "smoke-bot", Surface::VirtualDisplay);
     let computer = playground.computer();
     let screen = computer.screenshot().await.expect("screenshot of :N");
     assert_eq!((screen.width, screen.height), (1280, 800));

@@ -22,6 +22,7 @@ import {
 import { cn, humanFileSize } from "../../../lib/utils";
 import {
 	type ProcessedAttachment,
+	attachmentKey,
 	getAttachmentHost,
 	splitFileName,
 } from "./attachment";
@@ -224,7 +225,7 @@ function MediaMosaic({
 		>
 			{files.map((file, index) => (
 				<MediaTile
-					key={file.url}
+					key={attachmentKey(file)}
 					file={file}
 					onActivate={onActivate}
 					overflowCount={
@@ -359,8 +360,13 @@ function FileChip({
 		<button
 			type="button"
 			onClick={() => onOpen(file)}
+			disabled={Boolean(file.access)}
 			title={file.previewText || file.displayName}
-			className="group flex h-9 max-w-full items-center gap-2 rounded-[10px] border bg-card pl-1.5 pr-2 text-left text-[13px] outline-none transition-colors hover:border-muted-foreground/50 hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-primary/50"
+			className={cn(
+				"group flex h-9 max-w-full items-center gap-2 rounded-[10px] border bg-card pl-1.5 pr-2 text-left text-[13px] outline-none transition-colors hover:border-muted-foreground/50 hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-primary/50",
+				file.access && "opacity-60 hover:border-border hover:bg-card",
+				file.access === "unavailable" && "line-through",
+			)}
 		>
 			<TypeMark file={file} />
 			<TruncatedName displayName={file.displayName} />
@@ -425,7 +431,7 @@ function AttachmentManifest({
 			<span className="flex shrink-0">
 				{files.slice(0, 3).map((file, index) => (
 					<span
-						key={file.url}
+						key={attachmentKey(file)}
 						className={cn(
 							"grid size-7 place-items-center overflow-hidden rounded-md border-2 border-card bg-muted text-[8px] font-semibold uppercase text-muted-foreground",
 							index > 0 && "-ml-2.5",
@@ -579,14 +585,22 @@ export function AttachmentStrip({
 	}
 	for (const file of audio) {
 		sections.push(
-			<AudioAttachment key={file.url} file={file} onOpen={onFileClick} />,
+			<AudioAttachment
+				key={attachmentKey(file)}
+				file={file}
+				onOpen={onFileClick}
+			/>,
 		);
 	}
 	if (shownChips.length > 0) {
 		sections.push(
 			<div key="chips" className="flex flex-wrap gap-1.5">
 				{shownChips.map((file) => (
-					<FileChip key={file.url} file={file} onOpen={onFileClick} />
+					<FileChip
+						key={attachmentKey(file)}
+						file={file}
+						onOpen={onFileClick}
+					/>
 				))}
 				{chipOverflow > 0 && (
 					<button

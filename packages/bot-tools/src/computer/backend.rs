@@ -40,6 +40,23 @@ pub struct WindowSummary {
     pub height: u32,
     pub focused: bool,
     pub minimized: bool,
+    /// False for a window on another Space or hidden; computer_window focus then switches to it.
+    #[serde(default = "on_screen_default")]
+    pub onscreen: bool,
+}
+
+fn on_screen_default() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DisplaySummary {
+    pub index: u32,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub primary: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -126,6 +143,24 @@ pub trait ComputerBackend: Send + Sync {
 
     async fn windows(&self) -> Result<Vec<WindowSummary>> {
         Err(not_supported("list its windows"))
+    }
+
+    /// `windows`, without windows on other Spaces unless `include_offscreen`.
+    async fn windows_listed(&self, _include_offscreen: bool) -> Result<Vec<WindowSummary>> {
+        self.windows().await
+    }
+
+    /// The whole screen, or display `display` of `displays`; `None` is the primary display.
+    /// `act` coordinates are pixels of it until the next screenshot.
+    async fn screenshot_display(&self, display: Option<u32>) -> Result<Screen> {
+        match display {
+            None => self.screenshot().await,
+            Some(_) => Err(not_supported("capture a specific display")),
+        }
+    }
+
+    async fn displays(&self) -> Result<Vec<DisplaySummary>> {
+        Ok(Vec::new())
     }
 
     async fn window(&self, _window: &str, _op: WindowOp, _bounds: WindowBounds) -> Result<String> {

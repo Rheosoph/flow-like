@@ -478,10 +478,16 @@ export function isLocalSttBit(bit: IBit): boolean {
 /**
  * Which speech-to-text bit of the profile transcribes the speaker: on desktop an installed local
  * model first, then a model supported by the hosted audio gateway; null when the profile has neither.
+ * `localOnly` leaves the hosted gateway out: it would hear what an end-to-end encrypted
+ * conversation keeps from the server.
  */
 export function resolveSttChoice(
 	bits: readonly IBit[],
-	options: { desktop: boolean; installed: ReadonlySet<string> },
+	options: {
+		desktop: boolean;
+		installed: ReadonlySet<string>;
+		localOnly?: boolean;
+	},
 ): SttChoice | null {
 	const stt = bits.filter((bit) => bit.type === IBitTypes.Stt);
 	if (options.desktop) {
@@ -495,8 +501,21 @@ export function resolveSttChoice(
 			};
 		}
 	}
+	if (options.localOnly) return null;
 	const remote = stt.find((bit) => isHostedAudioProvider(providerName(bit)));
 	return remote ? { bitId: remote.id, route: "remote" } : null;
+}
+
+/**
+ * Whether this device offers calls in a conversation. An end-to-end encrypted one does only
+ * with a speech model on the device: hosted speech runs behind the server, which must not hear
+ * what it can't read.
+ */
+export function offersCalls(
+	encrypted: boolean,
+	speech: SttChoice | null,
+): boolean {
+	return !encrypted || speech?.route === "local";
 }
 
 /** One request at a time; once more than `limit` wait, the oldest are dropped. */

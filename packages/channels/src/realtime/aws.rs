@@ -1,11 +1,11 @@
-use super::{MAX_WAKE_BYTES, ready, valid_wakeup};
+use super::{Inbox, MAX_WAKE_BYTES};
 use crate::aws::presign::{Presigner, mqtt_wss_url};
 use flow_like_types::{Result, anyhow, bail, channel::AwsTemporaryCredentials};
 use rumqttc::{
     AsyncClient, Event, MqttOptions, Packet, QoS, SubscribeReasonCode, TlsConfiguration, Transport,
 };
 use std::time::{Duration, SystemTime};
-use tokio::sync::{Notify, watch};
+use tokio::sync::watch;
 
 pub(super) async fn listen(
     endpoint: &str,
@@ -13,7 +13,7 @@ pub(super) async fn listen(
     client_id: &str,
     topic: &str,
     credentials: &AwsTemporaryCredentials,
-    wake: &Notify,
+    inbox: &Inbox,
     healthy: &watch::Sender<bool>,
 ) -> Result<()> {
     crate::aws::validate_topic(topic)?;
@@ -55,12 +55,10 @@ pub(super) async fn listen(
                     bail!("Realtime AWS subscription was denied");
                 }
                 subscribed = true;
-                ready(healthy, wake);
+                inbox.ready(healthy);
             }
-            Event::Incoming(Packet::Publish(message))
-                if message.topic == topic && valid_wakeup(&message.payload) =>
-            {
-                wake.notify_one();
+            Event::Incoming(Packet::Publish(message)) if message.topic == topic => {
+                inbox.receive(&message.payload);
             }
             _ => {}
         }

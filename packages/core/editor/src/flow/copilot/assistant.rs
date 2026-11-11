@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use flow_like_model_provider::history::HistoryThinking;
-use flow_like_types::bot_message::WorkspaceHandle;
+use flow_like_types::bot_message::{AttachmentPart, WorkspaceHandle};
 use serde::Deserialize;
 
 use super::memory::AssistantMemory;
@@ -82,6 +82,53 @@ pub struct AttachmentManifestEntry {
     /// sets it for a file it serves; a client cannot send one.
     #[serde(skip)]
     pub handle: Option<WorkspaceHandle>,
+}
+
+/// The conversation id in the handle of an attachment the run serves from the chat's upload. It
+/// names no stored conversation, so the handle works only while the run answers the message.
+pub const TURN_FILES: &str = "chat";
+
+impl AttachmentManifestEntry {
+    /// Whether the handle works only while the run answers this message.
+    pub fn is_turn_file(&self) -> bool {
+        self.handle
+            .as_ref()
+            .and_then(WorkspaceHandle::conversation_id)
+            == Some(TURN_FILES)
+    }
+}
+
+/// The attachments with the files the stored message carries: a listed file takes the stored
+/// handle of the same name, and a stored file nobody listed is added.
+pub fn with_stored_files(
+    entries: &[AttachmentManifestEntry],
+    stored: &[AttachmentPart],
+) -> Vec<AttachmentManifestEntry> {
+    let mut unused: Vec<&AttachmentPart> =
+        stored.iter().filter(|part| part.handle.is_some()).collect();
+    let mut merged: Vec<AttachmentManifestEntry> = entries
+        .iter()
+        .map(|entry| {
+            let index = unused
+                .iter()
+                .position(|part| entry.name.as_deref() == Some(part.name.as_str()));
+            match index {
+                Some(index) => AttachmentManifestEntry {
+                    handle: unused.remove(index).handle.clone(),
+                    ..entry.clone()
+                },
+                None => entry.clone(),
+            }
+        })
+        .collect();
+    merged.extend(unused.into_iter().map(|part| AttachmentManifestEntry {
+        name: Some(part.name.clone()),
+        mime_type: part.handle.as_ref().map(|handle| handle.mime.clone()),
+        size: part.handle.as_ref().map(|handle| handle.bytes),
+        url: None,
+        handle: part.handle.clone(),
+    }));
+    merged
 }
 
 /// Inputs for [`build_platform_context`]. Each host gathers these from its own environment (Tauri
@@ -189,19 +236,13 @@ use super::app_build_prompt::{APP_BUILD_PIPELINE, BUILD_BRIEF_PLAYBOOK, BUILD_PL
 
 const DELEGATED_WEB_PLAYBOOK: &str = r#"## PUBLIC-WEB FALLBACK
 
-You direct the researcher through `research_agent` with a self-contained `question` and optional public `context`. Resolve references from the conversation before calling: a follow-up about square grids after discussing H3 must explicitly name H3 and the comparison. Include the user's constraints and the evidence needed. The researcher receives your brief without the full conversation, memory, files, or app results. Keep private content out of the brief. Follow the routing rules above.
+Direct the researcher through `research_agent` with a self-contained `question` and optional public `context`. Resolve references first: a follow-up about square grids after discussing H3 must explicitly name H3 and the comparison. The researcher receives your brief without the conversation, memory, files, or app results. Keep private content out of the brief.
 
-Review the findings against the user's actual question. If a relevant point is missing or the researcher misunderstood, call `research_agent` again with a corrected question, relevant public findings, and the remaining evidence gap. Research calls share the turn's search and page budget.
+Check the findings against the user's actual question. If a point is missing or the researcher misunderstood, call `research_agent` again with a corrected question, the relevant findings, and the remaining gap.
 
-Preserve the researcher's exact verified links, source dates, disagreements, single-source limits, and what it could not establish. Never promote a search snippet or unsupported claim into verified fact."#;
+Keep its verified links, dates, disagreements, single-source limits and gaps. Never promote a search snippet or unsupported claim into verified fact."#;
 
-const INLINE_WEB_PLAYBOOK: &str = r#"## PUBLIC-WEB FALLBACK
-
-You direct the researcher through `research_agent` with a self-contained `question` and optional public `context`. Resolve references from the conversation before calling: a follow-up about square grids after discussing H3 must explicitly name H3 and the comparison. Include the user's constraints and the evidence needed. The researcher receives your brief without the full conversation, memory, files, or app results. Keep private content out of the brief. Follow the routing rules above.
-
-Review the findings against the user's actual question. If a relevant point is missing or the researcher misunderstood, call `research_agent` again with a corrected question, relevant public findings, and the remaining evidence gap. Research calls share the turn's search and page budget.
-
-Preserve its verified links, source dates, conflicts, single-source limits, and what could not be established. Never promote a search snippet or unsupported claim into verified fact."#;
+const INLINE_WEB_PLAYBOOK: &str = DELEGATED_WEB_PLAYBOOK;
 
 const NATIVE_WEB_PLAYBOOK: &str = r#"## PUBLIC WEB RESEARCH
 
@@ -212,9 +253,9 @@ Record the exact URL and retrieval date for every fact that gets persisted. Pres
 const SEALED_ROUTING_INTRO: &str =
     "## EXISTING APPS, EVENTS, DATA, AND PUBLIC RESEARCH
 
-Local apps are the first choice, including installed research/search apps. Check app capabilities before public research or HTTP fallback.";
+Local apps are the first choice, including installed research/search apps.";
 
-const SEALED_PUBLIC_WEB_ROUTE: &str = "4. Call `research_agent` only after `list_apps` returns: no suitable app/interface exists, or local research candidates were tried in best-fit order with no usable answer and no useful, nonredundant candidate remained. Partial listings (`complete: false`, truncation, event-read errors) do not prove absence. A declined local call is a stop. Research may share a wave with independent calls. Supply a complete public question and relevant public context, resolving references to earlier conversation. Never include app records, file contents, credentials, secrets, personal data, or private identifiers. Keep private-data synthesis in the parent assistant. You may refine the brief and research again within the shared budget.";
+const SEALED_PUBLIC_WEB_ROUTE: &str = "4. Call `research_agent` only after `list_apps` returns: no suitable app/interface exists, or local research candidates were tried in best-fit order with no usable answer and no useful, nonredundant candidate remained. Partial listings (`complete: false`, truncation, event-read errors) do not prove absence. A declined local call is a stop. Research may share a wave with independent calls. Keep private-data synthesis in the parent assistant.";
 
 const NATIVE_ROUTING_INTRO: &str = SEALED_ROUTING_INTRO;
 
@@ -891,7 +932,7 @@ mod tests {
         assert!(prompt.contains("local research candidates were tried in best-fit order"));
         assert!(prompt.contains("no useful, nonredundant candidate remained"));
         assert!(prompt.contains("A declined local call is a stop"));
-        assert!(prompt.contains("extract only safe public factual subquestions"));
+        assert!(prompt.contains("Keep private-data synthesis in the parent assistant"));
         assert!(prompt.contains("Default to DIRECT"));
         assert!(prompt.contains("ordinary one-call, one-app, or simple two-app task"));
         assert!(prompt.contains("at least three distinct apps/interfaces"));

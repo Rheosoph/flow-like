@@ -943,7 +943,16 @@ pub(crate) async fn reply(
     let host_id = host(body.host_id.clone())?;
     let turn = held_turn(&state.db, &owner, &id, &turn_id).await?;
     let usage = body.usage.clone();
-    let (request, failure) = checked_reply(&turn, body)?;
+    let (mut request, failure) = checked_reply(&turn, body)?;
+    if failure.is_none() {
+        crate::routes::inbox::reply_files::adopt(
+            &state,
+            &turn.conversation_id,
+            &turn.bot_id,
+            &mut request,
+        )
+        .await;
+    }
     let message_id = request.message_id.clone();
     let sent = worker::commit_reply(
         &state.db,

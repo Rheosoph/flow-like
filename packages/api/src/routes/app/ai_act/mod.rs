@@ -15,6 +15,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
+    routes::user::identity::{public_display_name, public_handle},
     state::AppState,
 };
 use axum::{
@@ -53,7 +54,8 @@ fn ensure_feature(state: &AppState) -> Result<(), ApiError> {
 }
 
 /// Resolve a human display name + email for a platform user id (best effort).
-/// Prefers the profile name, then the username, then the preferred username.
+/// The address is the accountable owner's contact on the compliance record, which
+/// only that owner and the hub's publishing admins read.
 pub(crate) async fn load_user_identity(
     state: &AppState,
     user_id: &str,
@@ -64,9 +66,11 @@ pub(crate) async fn load_user_identity(
         .ok()
         .flatten()?;
     let non_empty = |value: Option<String>| value.filter(|s| !s.trim().is_empty());
-    let name = non_empty(user.name)
-        .or_else(|| non_empty(user.username))
-        .or_else(|| non_empty(user.preferred_username));
+    let name = public_display_name(
+        user.name.as_deref(),
+        user.preferred_username.as_deref(),
+        user.email.as_deref(),
+    );
     Some((name, non_empty(user.email)))
 }
 
@@ -94,14 +98,16 @@ pub(crate) async fn load_user_contact(
         .ok()
         .flatten()?;
     let non_empty = |value: Option<String>| value.filter(|s| !s.trim().is_empty());
-    let name = non_empty(user.name.clone())
-        .or_else(|| non_empty(user.username.clone()))
-        .or_else(|| non_empty(user.preferred_username.clone()));
+    let name = public_display_name(
+        user.name.as_deref(),
+        user.preferred_username.as_deref(),
+        user.email.as_deref(),
+    );
     Some(ResponsiblePerson {
         user_id: user.id,
         name,
         email: non_empty(user.email),
-        username: non_empty(user.username).or_else(|| non_empty(user.preferred_username)),
+        username: user.preferred_username.as_deref().and_then(public_handle),
         avatar: non_empty(user.avatar),
         description: non_empty(user.description),
     })

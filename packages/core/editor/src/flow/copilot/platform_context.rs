@@ -94,7 +94,7 @@ pub(super) fn prune_images(
     }
 }
 
-fn text_size(message: &rig::message::Message) -> usize {
+pub(super) fn text_size(message: &rig::message::Message) -> usize {
     let value = match message {
         rig::message::Message::User { content } => content
             .iter()

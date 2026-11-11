@@ -181,6 +181,9 @@ async function mount(
 		inboxState: { listConversations },
 		userState: {
 			getProfile: async () => null,
+			getSettingsProfile: async () => ({
+				hub_profile: { id: "profile_1", bits: [] },
+			}),
 			getInfo: async () => ({ id: "me", name: "Felix Schultz" }),
 			lookupUser: async () => null,
 			lookupUsers: async () => [],

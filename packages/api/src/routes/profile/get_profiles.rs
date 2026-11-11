@@ -29,6 +29,8 @@ pub struct ProfileResponse {
     pub apps: Option<serde_json::Value>,
     #[schema(value_type = Option<Object>)]
     pub shortcuts: Option<serde_json::Value>,
+    /// Bots this profile hides: a custom bot's ID or a built-in bot's system key.
+    pub hidden_bots: Vec<String>,
     #[schema(value_type = Option<Object>)]
     pub home_layout: Option<serde_json::Value>,
     pub home_default_id: Option<String>,
@@ -128,6 +130,7 @@ pub async fn get_profiles(
             bit_ids: p.bit_ids.map(Into::into),
             apps: p.apps,
             shortcuts: p.shortcuts,
+            hidden_bots: p.hidden_bots.map(Into::into).unwrap_or_default(),
             home_layout: p.home_layout,
             home_default_id: p.home_default_id,
             settings: p.settings,

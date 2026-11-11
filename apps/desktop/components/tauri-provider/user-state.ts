@@ -894,6 +894,21 @@ export class UserState implements IUserState {
 		);
 	}
 
+	async updateProfileHiddenBots(
+		profile: ISettingsProfile,
+		hiddenBots: string[],
+	): Promise<void> {
+		const profileId = profile.hub_profile.id;
+		if (!profileId) {
+			throw new Error("Profile ID is required");
+		}
+		// The revision bump makes the profile sync upload the list; signed out it stays on this device.
+		profile.hub_profile.hidden_bots = await invoke<string[]>(
+			"profile_update_hidden_bots",
+			{ profileId, hiddenBots },
+		);
+	}
+
 	async createPAT(
 		name: string,
 		validUntil?: Date,

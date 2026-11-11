@@ -1,9 +1,9 @@
-use super::{MAX_WAKE_BYTES, ready, valid_wakeup};
+use super::{Inbox, MAX_WAKE_BYTES};
 use flow_like_types::{Result, anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use std::time::Duration;
-use tokio::sync::{Notify, watch};
+use tokio::sync::watch;
 use tokio_tungstenite::{
     connect_async_tls_with_config,
     tungstenite::{ClientRequestBuilder, Message, protocol::WebSocketConfig},
@@ -11,9 +11,10 @@ use tokio_tungstenite::{
 
 const SUBPROTOCOL: &str = "json.webpubsub.azure.v1";
 
-pub(super) fn wakeup(frame: &Value, group: &str) -> bool {
+/// What a message frame of the granted group carries; `None` for every other frame.
+fn frame_payload(frame: &Value, group: &str) -> Option<Vec<u8>> {
     if frame["type"] != "message" {
-        return false;
+        return None;
     }
     // REST sends use the server envelope without a group field. Client-origin
     // group frames must match the only group granted to this connection.
@@ -23,21 +24,19 @@ pub(super) fn wakeup(frame: &Value, group: &str) -> bool {
         _ => false,
     };
     if !source {
-        return false;
+        return None;
     }
     match frame["dataType"].as_str() {
-        Some("text") => frame["data"]
-            .as_str()
-            .is_some_and(|text| valid_wakeup(text.as_bytes())),
-        Some("json") => serde_json::to_vec(&frame["data"]).is_ok_and(|data| valid_wakeup(&data)),
-        _ => false,
+        Some("text") => frame["data"].as_str().map(|text| text.as_bytes().to_vec()),
+        Some("json") => serde_json::to_vec(&frame["data"]).ok(),
+        _ => None,
     }
 }
 
 pub(super) async fn listen(
     url: &str,
     group: &str,
-    wake: &Notify,
+    inbox: &Inbox,
     healthy: &watch::Sender<bool>,
 ) -> Result<()> {
     let mut parsed = reqwest::Url::parse(url).map_err(|_| anyhow!("Invalid realtime Azure URL"))?;
@@ -118,10 +117,10 @@ pub(super) async fn listen(
                     Message::Text(text) => {
                         let frame: Value = serde_json::from_str(&text).map_err(|_| anyhow!("Invalid realtime Azure frame"))?;
                         if frame["type"] == "system" && frame["event"] == "connected" {
-                            if !joined { joined = true; ready(healthy, wake); }
+                            if !joined { joined = true; inbox.ready(healthy); }
                         } else if frame["type"] == "system" && frame["event"] == "disconnected" {
                             bail!("Realtime Azure disconnected");
-                        } else if wakeup(&frame, group) { wake.notify_one(); }
+                        } else if let Some(payload) = frame_payload(&frame, group) { inbox.receive(&payload); }
                     }
                     Message::Ping(payload) => { socket.send(Message::Pong(payload)).await.map_err(|_| anyhow!("Realtime Azure pong failed"))?; }
                     Message::Close(_) => bail!("Realtime Azure connection closed"),
@@ -136,6 +135,10 @@ pub(super) async fn listen(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn wakeup(frame: &Value, group: &str) -> bool {
+        frame_payload(frame, group).is_some_and(|payload| crate::realtime::valid_wakeup(&payload))
+    }
 
     #[test]
     fn only_the_granted_group_can_wake_replay() {

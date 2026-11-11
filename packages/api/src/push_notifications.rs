@@ -74,7 +74,9 @@ pub struct DispatchNotificationInput {
 
 impl DispatchNotificationInput {
     /// Approval and review cards are addressed to the person, so they pass Focus like mentions.
-    pub(crate) fn focus_priority(&self) -> flow_like_types::user_availability::NotificationPriority {
+    pub(crate) fn focus_priority(
+        &self,
+    ) -> flow_like_types::user_availability::NotificationPriority {
         use flow_like_types::user_availability::NotificationPriority;
         let addressed = self
             .bot_context

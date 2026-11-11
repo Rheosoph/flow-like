@@ -9,7 +9,7 @@ use flow_like_types::{Result, anyhow};
 use tokio::process::{Child, Command};
 
 use crate::display::{DisplayKind, VirtualDisplay};
-use crate::local::{LocalPlayground, bot_dir};
+use crate::local::{LocalPlayground, Surface, bot_dir};
 use crate::rpc::{Spawner, Transport, serve};
 
 pub const WORKER_SUBCOMMAND: &str = "playground-worker";
@@ -45,7 +45,12 @@ impl WorkerArgs {
 
 /// Serves the bot's playground on stdin/stdout until the agent closes the pipe.
 pub async fn run_worker(args: WorkerArgs) -> Result<()> {
-    let playground = LocalPlayground::new(&args.data_dir, &args.bot, !args.headful);
+    let surface = if args.headful {
+        Surface::VirtualDisplay
+    } else {
+        Surface::Hidden
+    };
+    let playground = LocalPlayground::new(&args.data_dir, &args.bot, surface);
     serve(tokio::io::stdin(), tokio::io::stdout(), playground).await;
     Ok(())
 }

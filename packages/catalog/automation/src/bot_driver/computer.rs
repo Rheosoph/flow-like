@@ -12,13 +12,15 @@ use flow_like_types::interaction_observation::{
 use flow_like_types::tokio_util::sync::CancellationToken;
 use image::{DynamicImage, ImageFormat};
 
+use super::permission;
+use crate::capabilities::AutomationCapability;
 use crate::computer::keyboard::{ChordModifier, parse_key_chord};
 use crate::computer::native::input::{DesktopInput, observed_cursor_position};
 use crate::computer::native::{self, gestures};
 use crate::computer::window::WindowInfo;
 use crate::types::screen_frame::{
-    ModelImageBudget, ScreenFrame, capture_display, fit_image_for_model, monitor_frame,
-    select_monitor,
+    ModelImageBudget, ScreenFrame, capture_display, display_frames, fit_image_for_model,
+    monitor_frame, select_monitor,
 };
 
 const CLICK_DELAY_MS: u64 = 80;
@@ -143,8 +145,10 @@ impl CapturedDesktop {
     }
 
     fn validate_current(&self) -> flow_like_types::Result<()> {
-        let display = match self.surface {
-            CapturedSurface::Display(_) => Some(current_display_frame()?),
+        let display = match &self.surface {
+            CapturedSurface::Display(expected) => Some(current_display_frame(
+                expected.display_index.map_or(PRIMARY_DISPLAY, i64::from),
+            )?),
             CapturedSurface::Window(_) => None,
         };
         self.validate(display.as_ref(), native::windows().ok().as_deref())
@@ -166,9 +170,9 @@ pub(super) fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn current_display_frame() -> flow_like_types::Result<ScreenFrame> {
+fn current_display_frame(display: i64) -> flow_like_types::Result<ScreenFrame> {
     let monitors = xcap::Monitor::all()?;
-    let (index, monitor) = select_monitor(&monitors, PRIMARY_DISPLAY)?;
+    let (index, monitor) = select_monitor(&monitors, display)?;
     monitor_frame(monitor, Some(index as u32))
 }
 
@@ -276,6 +280,16 @@ impl Default for BotComputer {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BotDisplay {
+    pub index: u32,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub primary: bool,
+}
+
 fn modifier_names(modifiers: &[ChordModifier]) -> String {
     modifiers
         .iter()
@@ -291,7 +305,29 @@ fn modifier_names(modifiers: &[ChordModifier]) -> String {
 
 impl BotComputer {
     pub fn new() -> Self {
+        permission::note_start();
         Self::default()
+    }
+
+    pub async fn displays(&self) -> flow_like_types::Result<Vec<BotDisplay>> {
+        tokio::task::spawn_blocking(|| {
+            let primary = select_monitor(&xcap::Monitor::all()?, PRIMARY_DISPLAY)?.0;
+            display_frames().map(|frames| {
+                frames
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, frame)| BotDisplay {
+                        index: index as u32,
+                        x: frame.x,
+                        y: frame.y,
+                        width: frame.width,
+                        height: frame.height,
+                        primary: index == primary,
+                    })
+                    .collect()
+            })
+        })
+        .await?
     }
 
     pub fn stop(&self) {
@@ -301,8 +337,13 @@ impl BotComputer {
     }
 
     pub async fn screenshot(&self) -> flow_like_types::Result<BotScreen> {
+        self.screenshot_display(PRIMARY_DISPLAY).await
+    }
+
+    /// `display` is an index from `displays`, or -1 for the primary display.
+    pub async fn screenshot_display(&self, display: i64) -> flow_like_types::Result<BotScreen> {
         let _operation = self.operation.lock().await;
-        let (screen, captured) = self.capture().await?;
+        let (screen, captured) = self.capture(display).await?;
         *self.captured.lock().unwrap_or_else(|e| e.into_inner()) = Some(captured);
         Ok(screen)
     }
@@ -311,21 +352,22 @@ impl BotComputer {
     /// `screenshot` untouched.
     pub async fn view(&self) -> flow_like_types::Result<BotScreen> {
         let _operation = self.operation.lock().await;
-        Ok(self.capture().await?.0)
+        Ok(self.capture(PRIMARY_DISPLAY).await?.0)
     }
 
-    async fn capture(&self) -> flow_like_types::Result<(BotScreen, CapturedDesktop)> {
+    async fn capture(&self, display: i64) -> flow_like_types::Result<(BotScreen, CapturedDesktop)> {
+        permission::require(AutomationCapability::ScreenCapture).await?;
         let ((image, original), before, windows, pointer, display_after, at_ms) =
-            tokio::task::spawn_blocking(|| {
+            tokio::task::spawn_blocking(move || {
                 let before = native::windows().ok();
                 let at_ms = now_ms();
-                let captured = capture_display(PRIMARY_DISPLAY)?;
+                let captured = capture_display(display)?;
                 Ok::<_, flow_like_types::Error>((
                     captured,
                     before,
                     native::windows().ok(),
                     observed_cursor_position(),
-                    current_display_frame().ok(),
+                    current_display_frame(display).ok(),
                     at_ms,
                 ))
             })
@@ -468,8 +510,19 @@ impl BotComputer {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        let mut input = DesktopInput::new(self.active.clone(), Some(cancellation.clone())).await?;
-        tokio::task::spawn_blocking(move || job(&mut input, Some(&cancellation))).await?
+        permission::require(AutomationCapability::Accessibility).await?;
+        let mut input = DesktopInput::new(self.active.clone(), Some(cancellation.clone()))
+            .await
+            .map_err(permission::explain_input_failure)?;
+        tokio::task::spawn_blocking(move || job(&mut input, Some(&cancellation)))
+            .await?
+            .map_err(|error| {
+                if error.to_string().starts_with("Failed to") {
+                    permission::explain_input_failure(error)
+                } else {
+                    error
+                }
+            })
     }
 
     pub async fn click(
@@ -606,6 +659,7 @@ mod tests {
             height: 800,
             is_focused: true,
             is_minimized: false,
+            is_onscreen: true,
         }
     }
 

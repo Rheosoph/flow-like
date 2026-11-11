@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 use super::bot_run::{BotRunContext, BotToolBridge, BotToolHost, BotToolset, bot_system_prompt};
 use super::bot_talk::ASK_BOT_TOOL;
 use super::platform::{
-    IncompleteWork, PlatformCopilot, PlatformSurface, PlatformToolBridge, WorkStopReason,
+    IncompleteWork, PlatformCopilot, PlatformSurface, PlatformToolBridge, WebAccess, WorkStopReason,
 };
 use super::tool_spec::{
     MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL, PlatformToolSpec, ToolApprovalSpec,
@@ -158,6 +158,8 @@ pub struct ChildTurn {
     pub tool_rounds: usize,
     pub bridge: Arc<dyn PlatformToolBridge>,
     pub on_token: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    /// The parent turn's data label, for the outbound tools the child's loop runs itself.
+    pub label: Arc<TurnLabel>,
 }
 
 /// Runs a child's turn and returns its final text.
@@ -175,6 +177,7 @@ pub struct ModelSubtaskRunner {
     pub subtask_model: Option<String>,
     pub thinking: Option<HistoryThinking>,
     pub token: Option<String>,
+    web_access: WebAccess,
     chosen: tokio::sync::OnceCell<Option<String>>,
 }
 
@@ -207,30 +210,49 @@ impl ModelSubtaskRunner {
             subtask_model,
             thinking,
             token,
+            web_access: WebAccess::default(),
             chosen: Default::default(),
         }
     }
 
+    /// The owner's own search and page readers, for children that research.
+    pub fn with_web_access(mut self, web_access: WebAccess) -> Self {
+        self.web_access = web_access;
+        self
+    }
+
     async fn model(&self) -> Option<String> {
         self.chosen
-            .get_or_init(|| async {
-                let runnable = match (&self.subtask_model, &self.profile) {
-                    (Some(model), Some(profile)) => {
-                        super::bot_run::runnable_completion_model(&self.state, profile, model)
-                            .await
-                            .is_some()
-                    }
-                    _ => false,
-                };
-                child_model(
+            .get_or_init(|| {
+                resolve_subtask_model(
+                    &self.state,
+                    self.profile.as_deref(),
                     self.subtask_model.as_deref(),
-                    runnable,
                     self.model_id.as_deref(),
                 )
             })
             .await
             .clone()
     }
+}
+
+/// The model a bot's sub-tasks and assistants run on: its sub-task model when this host can run
+/// it, else the turn's own.
+pub async fn resolve_subtask_model(
+    state: &Arc<FlowLikeState>,
+    profile: Option<&Profile>,
+    subtask_model: Option<&str>,
+    turn_model: Option<&str>,
+) -> Option<String> {
+    let runnable = match (subtask_model, profile) {
+        (Some(model), Some(profile)) => {
+            super::bot_run::runnable_completion_model(state, profile, model)
+                .await
+                .is_some()
+        }
+        _ => false,
+    };
+    child_model(subtask_model, runnable, turn_model)
 }
 
 #[async_trait]
@@ -240,7 +262,9 @@ impl SubtaskRunner for ModelSubtaskRunner {
         let copilot = PlatformCopilot::new(self.state.clone(), self.profile.clone())
             .with_thinking(self.thinking)
             .with_tool_specs(child.tool_specs)
-            .with_tool_rounds(child.tool_rounds);
+            .with_tool_rounds(child.tool_rounds)
+            .with_web_access(self.web_access.clone())
+            .with_turn_label(child.label);
         // Output-schema repair is a single tool-free completion.
         let copilot = if child.tool_rounds > 0 {
             copilot.with_long_running()
@@ -1142,6 +1166,7 @@ impl SubtaskBridge {
             tool_rounds: CHILD_ROUNDS,
             bridge: guard.clone(),
             on_token: Some(sink.clone()),
+            label: self.env.label.clone(),
         };
         let text = match self.limited(limit, self.env.runner.run(first)).await {
             Limited::Finished(Ok(text)) => text,
@@ -1171,6 +1196,7 @@ impl SubtaskBridge {
             tool_rounds: 0,
             bridge: guard,
             on_token: Some(sink),
+            label: self.env.label.clone(),
         };
         let repaired = match self.limited(left, self.env.runner.run(repair)).await {
             Limited::Finished(Ok(text)) => text,
@@ -1411,6 +1437,17 @@ mod tests {
                 user_prompt: child.user_prompt.clone(),
                 tool_rounds: child.tool_rounds,
             });
+            // A surface worker counts as running once it holds the shared surface.
+            let mut behavior = (self.behavior)(&child.user_prompt);
+            let surface_tool = ["browser_snapshot", "computer_windows"]
+                .into_iter()
+                .find(|tool| child.tool_specs.iter().any(|spec| spec.name == *tool))
+                .unwrap_or("browser_snapshot");
+            while let Behavior::Surface(next) = behavior {
+                let output = child.bridge.call(surface_tool, json!({})).await;
+                locked(&self.calls).push((surface_tool.to_string(), output));
+                behavior = *next;
+            }
             let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
             struct Running<'a>(&'a AtomicU64);
             impl Drop for Running<'_> {
@@ -1421,11 +1458,6 @@ mod tests {
             let _running = Running(&self.running);
             self.peak.fetch_max(now, Ordering::SeqCst);
             self.started.notify_one();
-            let mut behavior = (self.behavior)(&child.user_prompt);
-            while let Behavior::Surface(next) = behavior {
-                child.bridge.call("browser_snapshot", json!({})).await;
-                behavior = *next;
-            }
             let result = match behavior {
                 Behavior::Reply(text) => Ok(text),
                 Behavior::Fail => Err(flow_like_types::anyhow!("model unavailable")),
@@ -1783,6 +1815,7 @@ mod tests {
         let mut bot = parent_bot();
         bot.capabilities
             .extend([BotCapability::BrowserUse, BotCapability::ComputerUse]);
+        bot.host_tools = HostTools::linked().with_local_machine();
         bot
     }
 
@@ -1808,6 +1841,9 @@ mod tests {
             for task in result["results"].as_array().unwrap() {
                 assert_eq!(task["status"], "done", "{task}");
             }
+        }
+        for (tool, output) in locked(&runner.calls).iter() {
+            assert!(output.contains(r#""status":"ok""#), "{tool}: {output}");
         }
         assert_eq!(runner.peak.load(Ordering::SeqCst), 1);
         assert_eq!(locked(&runner.seen).len(), 3);
@@ -1875,7 +1911,7 @@ mod tests {
             let call = rig.bridge.call("computer_windows", json!({}));
             tokio::pin!(call);
             assert!(futures::poll!(&mut call).is_pending());
-            assert!(locked(&rig.parent.calls).is_empty());
+            assert_eq!(*locked(&rig.parent.calls), ["browser_snapshot"]);
             release.notify_one();
             call.await;
             assert_eq!(runner.running.load(Ordering::SeqCst), 0);
@@ -1891,7 +1927,10 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(*locked(&rig.parent.calls), ["computer_windows"]);
+        assert_eq!(
+            *locked(&rig.parent.calls),
+            ["browser_snapshot", "computer_windows"]
+        );
     }
 
     #[tokio::test]
@@ -1942,7 +1981,7 @@ mod tests {
             interactive_bot(),
             runner.clone(),
             ParentBridge::new(),
-            Duration::from_millis(250),
+            Duration::from_secs(1),
             CHILD_TIME_LIMIT,
         );
         let result = spawn(&rig, tasks(2)).await;

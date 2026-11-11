@@ -15,6 +15,8 @@ use flow_like_types::{
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 
+mod room_files;
+
 pub const WINDOW: u64 = 100;
 
 #[async_trait]
@@ -154,6 +156,14 @@ pub trait HostStore: Send + Sync + 'static {
         _scope: &str,
     ) -> Result<bool, String> {
         Ok(false)
+    }
+    /// Reports that the bot used these standing grants so their expiry moves forward.
+    async fn touch_tool_keys(
+        &self,
+        _bot_id: &str,
+        _keys: &[(String, String)],
+    ) -> Result<(), String> {
+        Ok(())
     }
     /// Posts the approval card as the bot and parks the turn behind it.
     async fn park(
@@ -423,8 +433,10 @@ impl HostStore for AppStore {
         &self,
         conversation_id: &str,
         sender_id: &str,
-        request: SendEntryRequest,
+        mut request: SendEntryRequest,
     ) -> Result<InboxEntry, String> {
+        self.share_room_files(conversation_id, sender_id, &mut request)
+            .await;
         let (conversation, sender) = (conversation_id.to_owned(), sender_id.to_owned());
         self.with(move |store| store.send(&conversation, &sender, request))
             .await
@@ -466,6 +478,16 @@ impl HostStore for AppStore {
     async fn delete_tool_key(&self, bot_id: &str, tool: &str, scope: &str) -> Result<bool, String> {
         let (id, tool, scope) = (bot_id.to_owned(), tool.to_owned(), scope.to_owned());
         self.with(move |store| store.delete_tool_key(&id, &tool, &scope))
+            .await
+    }
+
+    async fn touch_tool_keys(
+        &self,
+        bot_id: &str,
+        keys: &[(String, String)],
+    ) -> Result<(), String> {
+        let (id, keys) = (bot_id.to_owned(), keys.to_vec());
+        self.with(move |store| store.touch_tool_keys(&id, &keys))
             .await
     }
 
@@ -558,6 +580,17 @@ impl flow_like::flow::copilot::tool_grants::GrantStore for StoreGrants {
     async fn delete(&self, tool: &str, scope: &str) -> flow_like_types::Result<bool> {
         self.store
             .delete_tool_key(&self.bot_id, tool, scope)
+            .await
+            .map_err(flow_like_types::Error::msg)
+    }
+
+    async fn touch(&self, keys: &[GrantKey]) -> flow_like_types::Result<()> {
+        let keys: Vec<(String, String)> = keys
+            .iter()
+            .map(|key| (key.tool.clone(), key.scope.clone()))
+            .collect();
+        self.store
+            .touch_tool_keys(&self.bot_id, &keys)
             .await
             .map_err(flow_like_types::Error::msg)
     }

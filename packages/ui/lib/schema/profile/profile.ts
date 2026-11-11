@@ -22,6 +22,12 @@ export interface IProfile {
 	name: string;
 	settings?: ISettings;
 	shortcuts?: IProfileShortcut[] | null;
+	/**
+	 * Bots this profile leaves out of its crew, pickers and Home. A custom bot goes by its id,
+	 * a built-in one by its system key, so the choice holds for its account and device rows.
+	 * Hiding is a view filter: the bot keeps running and stays reachable through its chats.
+	 */
+	hidden_bots?: string[];
 	home_layout?: IHomeLayout | null;
 	home_default_id?: string | null;
 	tags?: string[];

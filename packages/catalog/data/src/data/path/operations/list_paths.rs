@@ -1,4 +1,4 @@
-use crate::data::path::FlowPath;
+use crate::data::path::{FlowPath, is_etag_sidecar};
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -87,6 +87,7 @@ impl NodeLogic for ListPathsNode {
 
         let paths = file_objects
             .iter()
+            .filter(|object| !is_etag_sidecar(&object.location))
             .map(|p| {
                 let mut new_path = original_path.clone();
                 new_path.path = p.location.as_ref().to_string();

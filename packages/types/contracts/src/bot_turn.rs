@@ -270,6 +270,27 @@ pub fn room_message(name: &str, is_owner: bool, text: &str) -> String {
     }
 }
 
+/// The start of a message a cut always keeps, so the speaker line survives notes that fill the
+/// whole budget.
+const MIN_CLIPPED_HEAD_CHARS: usize = 200;
+
+/// `text` cut to `max` characters, taking the cut from before its last `keep` characters: the
+/// file and UI notes a rendered message ends with stay whole, since a cut link no longer opens.
+/// When the notes alone exceed `max`, they and the first [`MIN_CLIPPED_HEAD_CHARS`] are kept.
+pub fn clip_keeping_tail(text: &str, keep: usize, max: usize) -> String {
+    let total = text.chars().count();
+    if total <= max {
+        return text.to_string();
+    }
+    let keep = keep.min(total);
+    let floor = if keep == 0 { 0 } else { MIN_CLIPPED_HEAD_CHARS };
+    let head = (total - keep).min(max.saturating_sub(keep).max(floor));
+    text.chars()
+        .take(head)
+        .chain(text.chars().skip(total - keep))
+        .collect()
+}
+
 /// A turn as hosts and watchers read it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BotTurn {
@@ -319,6 +340,11 @@ pub struct BotTurnList {
     pub turns: Vec<BotTurn>,
 }
 
+/// The message id of the bot's notice that a bot's message did not wake it.
+pub fn classification_refused_message_id(bot_id: &str, trigger_message_id: &str) -> String {
+    digest("cg-", bot_id, trigger_message_id)
+}
+
 fn digest(prefix: &str, bot_id: &str, trigger_message_id: &str) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"flow-like.bot-turn/v1\0");
@@ -352,6 +378,21 @@ pub fn rate_limit_message_id(bot_id: &str, trigger_message_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cut_message_keeps_its_notes_whole() {
+        let notes = "\n[file: a.pdf (link: https://h/a.pdf?sig=1)]";
+        let text = format!("{}{notes}", "x".repeat(1_000));
+        let keep = notes.chars().count();
+        assert_eq!(clip_keeping_tail(&text, keep, 2_000), text);
+        let cut = clip_keeping_tail(&text, keep, 500);
+        assert_eq!(cut.chars().count(), 500);
+        assert!(cut.ends_with(notes));
+        assert!(cut.starts_with("xxx"));
+        let crowded = clip_keeping_tail(&text, keep, 10);
+        assert_eq!(crowded, format!("{}{notes}", "x".repeat(MIN_CLIPPED_HEAD_CHARS)));
+        assert_eq!(clip_keeping_tail(&text, 0, 5), "xxxxx");
+    }
 
     #[test]
     fn checkpoint_bounds_preserve_expired_results_without_renewing_budgets() {

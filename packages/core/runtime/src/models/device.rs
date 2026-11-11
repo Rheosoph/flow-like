@@ -477,6 +477,7 @@ pub(crate) mod testing {
             parameters: json::to_value(LLMParameters {
                 context_length: 32_000,
                 model_classification: BitModelClassification::default(),
+                data_classification: None,
                 provider: device_provider(device_id, "qwen3-8b"),
             })
             .unwrap(),

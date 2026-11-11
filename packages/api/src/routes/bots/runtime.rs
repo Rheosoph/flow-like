@@ -129,6 +129,14 @@ pub(super) async fn load_chat_bot<C: ConnectionTrait>(
     } else {
         Vec::new()
     };
+    let owner_mail_addresses = if settings.has(BotCapability::Email) {
+        crate::mail_ingress::owner_addresses::account_address(db, &row)
+            .await?
+            .into_iter()
+            .collect()
+    } else {
+        Vec::new()
+    };
     let general = system == Some(BotSystemKind::General);
     let text = |value: Option<String>| {
         value
@@ -152,6 +160,7 @@ pub(super) async fn load_chat_bot<C: ConnectionTrait>(
             instructions: text(settings.instructions),
             capabilities: settings.capabilities,
             classification: settings.classification,
+            owner_mail_addresses,
             selected_app_ids,
             profile_app_ids,
             workspace_app_id: None,
@@ -160,6 +169,7 @@ pub(super) async fn load_chat_bot<C: ConnectionTrait>(
             decision_hosted_only: settings.location != flow_like_types::bot::BotLocation::Desktop,
             acknowledgement: false,
             live_call: false,
+            spoken_drafts: false,
             tool_gate: None,
             ephemeral_user_context: false,
             suppress_owner_notifications: false,
@@ -177,6 +187,7 @@ pub(super) async fn load_chat_bot<C: ConnectionTrait>(
             connectors,
             compute: Default::default(),
             recovery: None,
+            seed_taint: Default::default(),
         },
         model: settings.model,
     }))
@@ -288,6 +299,25 @@ pub(crate) async fn server_bot_model(
     policy: &BotModelPolicy,
 ) -> Option<String> {
     bot_model_where(state, owner_id, flow_like_state, profile, policy, false).await
+}
+
+/// The model the assistants of a bot's turn run on: its sub-task model when the caller can run
+/// it here, else the turn's own.
+pub(crate) async fn server_assistant_model(
+    state: &AppState,
+    owner_id: &str,
+    flow_like_state: &Arc<FlowLikeState>,
+    profile: &Profile,
+    subtask_model: Option<&str>,
+    turn_model: &str,
+) -> String {
+    let policy = BotModelPolicy {
+        primary: subtask_model.map(str::to_string),
+        ..Default::default()
+    };
+    server_bot_model(state, owner_id, flow_like_state, profile, &policy)
+        .await
+        .unwrap_or_else(|| turn_model.to_string())
 }
 
 /// [`server_bot_model`] for a model that leaves the server: only hosted models qualify, since a

@@ -182,3 +182,34 @@ fn the_routes_that_borrow_the_owner_stay_closed_to_bots() {
         assert!(!source.contains("run_user_id()"), "{name}");
     }
 }
+
+#[test]
+fn the_bot_mcp_door_runs_as_the_bot_and_never_as_the_owner() {
+    let source = include_str!("routes/inbound.rs");
+    let production = source.split("#[cfg(test)]").next().unwrap();
+    let door = production
+        .split_once("pub(crate) async fn dispatch_bot_mcp_operation(")
+        .unwrap()
+        .1
+        .split_once("\nasync fn dispatch_mcp_operation(")
+        .unwrap()
+        .0;
+    assert!(door.contains("BotFlowRun::admit_event("), "admits");
+    assert!(door.contains("false)"), "no page trigger");
+    assert!(!door.contains("member:"), "no person identity");
+    let stream = production
+        .split_once("\nasync fn dispatch_event_stream(")
+        .unwrap()
+        .1;
+    assert!(stream.contains("credential_target("), "credentials");
+    assert!(stream.contains("bind_executor("), "binds");
+    assert!(stream.contains("caller.borrows_from_sink(&sink)"), "sink");
+    assert!(!production.contains("person_user_id()"), "owner borrow");
+    assert!(
+        !include_str!("bot_tools/apps/mcp.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap()
+            .contains("person_user_id()")
+    );
+}

@@ -50,11 +50,8 @@ export const LOCAL_ONLY_BOT_CAPABILITIES: readonly BotCapability[] = [
 	"encryption",
 ];
 
-/** A managed device has no route or key vault for these yet. */
+/** A managed device has no key vault, key routes or sealed replies for end-to-end encryption yet. */
 export const DEVICE_UNAVAILABLE_BOT_CAPABILITIES: readonly BotCapability[] = [
-	"connectors",
-	"skills",
-	"image_generation",
 	"encryption",
 ];
 
@@ -392,6 +389,8 @@ export interface IBotToolGrant {
 	scope: string;
 	granted_at: string;
 	granted_by: string;
+	/** When the grant lapses unless the bot uses it first (90 days after its last use). */
+	expires_at?: string | null;
 }
 
 export type BotTurnStatus =

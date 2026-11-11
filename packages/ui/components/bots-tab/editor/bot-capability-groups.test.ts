@@ -73,13 +73,8 @@ describe("capability list", () => {
 		}
 	});
 
-	test("a device can't hold connectors, skills, image generation or encryption, and says why", () => {
-		expect([...DEVICE_UNAVAILABLE_BOT_CAPABILITIES]).toEqual([
-			"connectors",
-			"skills",
-			"image_generation",
-			"encryption",
-		]);
+	test("a device can't hold encryption, and says why", () => {
+		expect([...DEVICE_UNAVAILABLE_BOT_CAPABILITIES]).toEqual(["encryption"]);
 		for (const capability of DEVICE_UNAVAILABLE_BOT_CAPABILITIES) {
 			expect(botCapabilityUnavailableReason(capability, "device")).toBe(
 				"device",

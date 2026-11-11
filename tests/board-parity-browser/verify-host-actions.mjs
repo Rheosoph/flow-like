@@ -97,6 +97,28 @@ async function pin(id, direction) {
 	assert.ok(box);
 	return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 }
+const position = async (id) =>
+	(await snapshot()).nodes.find((n) => n.id === id).position;
+const rounded = ({ x, y }) => `${Math.round(x)},${Math.round(y)}`;
+/** Every distinct position a node renders at over `ms`, sampled faster than a frame. */
+const positionsDuring = (id, ms) =>
+	page.evaluate(
+		({ id, ms }) =>
+			new Promise((resolve) => {
+				const seen = new Set();
+				const timer = setInterval(() => {
+					const n = window.__boardHost
+						.snapshot()
+						.nodes.find((n) => n.id === id);
+					seen.add(`${Math.round(n.position.x)},${Math.round(n.position.y)}`);
+				}, 10);
+				setTimeout(() => {
+					clearInterval(timer);
+					resolve([...seen]);
+				}, ms);
+			}),
+		{ id, ms },
+	);
 async function historyUndo() {
 	const n = (await snapshot()).transactions.length;
 	await page.keyboard.press("ControlOrMeta+z");
@@ -213,16 +235,155 @@ try {
 		assert.equal((await snapshot()).board.id, "host-parity-next");
 		assert.equal((await snapshot()).transactions.length, 0);
 	});
-	await test("Find shortcut opens search without placing a node", async () => {
-		await clickNode("native");
-		const before = await snapshot();
-		await page.keyboard.press("ControlOrMeta+f");
-		await page.getByRole("dialog").waitFor();
-		assert.equal(
-			(await snapshot()).transactions.length,
-			before.transactions.length,
+	await test("the For Each and Branch chords place their node under the pointer", async () => {
+		const box = await page.locator(".react-flow").boundingBox();
+		assert.ok(box);
+		for (const [key, name, at] of [
+			["f", "control_for_each", { x: 640, y: 820 }],
+			["b", "control_branch", { x: 900, y: 860 }],
+		]) {
+			const before = await snapshot();
+			const point = { x: box.x + 20 + at.x, y: box.y + 20 + at.y };
+			await page.mouse.click(point.x, point.y);
+			await page.keyboard.press(`ControlOrMeta+${key}`);
+			await page.waitForFunction((count) => {
+				const t = window.__boardHost.snapshot().transactions;
+				return t.length > count && t.at(-1).finished;
+			}, before.transactions.length);
+			await settle();
+			const after = await snapshot();
+			const placed = Object.values(after.board.nodes).filter(
+				(n) => !before.board.nodes[n.id],
+			);
+			assert.deepEqual(
+				placed.map((n) => n.name),
+				[name],
+			);
+			assert.deepEqual(placed[0].coordinates.slice(0, 2), [at.x, at.y]);
+			assert.equal(await page.getByRole("dialog").count(), 0);
+		}
+	});
+	await test("Shift-click adds to the selection and never clears it", async () => {
+		const shiftClick = async (at) => {
+			await page.keyboard.down("Shift");
+			await page.mouse.click(at.x, at.y);
+			await page.keyboard.up("Shift");
+			await settle();
+		};
+		await clickNode("integer-a");
+		await shiftClick(await header("integer-b"));
+		assert.deepEqual((await selected()).sort(), ["integer-a", "integer-b"]);
+		await shiftClick(await header("integer-b"));
+		assert.deepEqual((await selected()).sort(), ["integer-a", "integer-b"]);
+		const a = await pin("string-a", "out");
+		const b = await pin("string-b", "in");
+		await shiftClick({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+		const state = await snapshot();
+		assert.deepEqual(
+			state.edges.filter((e) => e.selected).map((e) => e.id),
+			["string-a.out-string-b.in"],
 		);
+		assert.deepEqual((await selected()).sort(), ["integer-a", "integer-b"]);
+		assert.equal(state.transactions.length, 0);
+	});
+	await test("the selection box ends with the next press and Escape clears the selection", async () => {
+		const box = await page.locator(".react-flow").boundingBox();
+		assert.ok(box);
+		const at = (x, y) => ({ x: box.x + 20 + x, y: box.y + 20 + y });
+		const group = page.locator(".react-flow__nodesselection-rect");
+		await page.keyboard.down("Shift");
+		await drag(at(60, 255), at(660, 370));
+		await page.keyboard.up("Shift");
+		assert.deepEqual((await selected()).sort(), ["integer-a", "integer-b"]);
+		assert.equal(await group.count(), 1);
+		const empty = at(640, 820);
+		await page.mouse.click(empty.x, empty.y);
+		await settle();
+		assert.deepEqual(await selected(), []);
+		await clickNode("exec-a");
+		await clickNode("exec-b", true);
+		assert.deepEqual((await selected()).sort(), ["exec-a", "exec-b"]);
+		assert.equal(await group.count(), 0);
 		await page.keyboard.press("Escape");
+		await settle();
+		assert.deepEqual(await selected(), []);
+		assert.equal((await snapshot()).transactions.length, 0);
+	});
+	await test("Select All selects every node on the board and no page text", async () => {
+		const box = await page.locator(".react-flow").boundingBox();
+		assert.ok(box);
+		const empty = { x: box.x + 660, y: box.y + 840 };
+		const everything = (await snapshot()).nodes.map((n) => n.id).sort();
+		await page.mouse.click(empty.x, empty.y);
+		await page.keyboard.press("ControlOrMeta+a");
+		await settle();
+		const state = await snapshot();
+		assert.deepEqual((await selected()).sort(), everything);
+		assert.equal(
+			state.edges.some((e) => e.selected),
+			false,
+		);
+		assert.equal(await page.evaluate(() => String(getSelection())), "");
+		await page.keyboard.press("Escape");
+		await settle();
+		assert.deepEqual(await selected(), []);
+		// With nothing focused, the board under the pointer still owns the chord,
+		// and Escape then clears what it selected.
+		await page.evaluate(() => document.activeElement?.blur());
+		await page.mouse.move(empty.x + 5, empty.y + 5);
+		await page.keyboard.press("ControlOrMeta+a");
+		await settle();
+		assert.deepEqual((await selected()).sort(), everything);
+		await page.keyboard.press("Escape");
+		await settle();
+		assert.deepEqual(await selected(), []);
+		// A focused board button does not keep the chord from the board either.
+		await page.locator(".react-flow__controls-zoomin").click();
+		await page.mouse.move(empty.x + 5, empty.y + 5);
+		await page.keyboard.press("ControlOrMeta+a");
+		await settle();
+		assert.deepEqual((await selected()).sort(), everything);
+		// A text field keeps it for its own text.
+		await page.mouse.click(empty.x, empty.y);
+		await page.mouse.click(empty.x, empty.y, { button: "right" });
+		await palette().fill("abc");
+		await page.keyboard.press("ControlOrMeta+a");
+		await settle();
+		assert.deepEqual(await selected(), []);
+		await page.keyboard.press("Escape");
+		assert.equal((await snapshot()).transactions.length, 0);
+	});
+	await test("a paste right after a pan lands under the pointer", async () => {
+		await clickNode("integer-b");
+		await page.keyboard.press("ControlOrMeta+c");
+		await settle();
+		const before = await snapshot();
+		const box = await page.locator(".react-flow").boundingBox();
+		assert.ok(box);
+		const from = { x: box.x + 660, y: box.y + 840 };
+		const to = { x: from.x - 200, y: from.y - 100 };
+		await drag(from, to);
+		await page.keyboard.press("ControlOrMeta+v");
+		await page.waitForFunction(
+			(count) =>
+				Object.keys(window.__boardHost.snapshot().board.nodes).length > count,
+			Object.keys(before.board.nodes).length,
+		);
+		const after = await snapshot();
+		const pasted = Object.values(after.board.nodes).find(
+			(n) => !before.board.nodes[n.id],
+		);
+		const pointer = {
+			x: (to.x - box.x - after.viewport.x) / after.viewport.zoom,
+			y: (to.y - box.y - after.viewport.y) / after.viewport.zoom,
+		};
+		assert.ok(
+			Math.hypot(
+				pasted.coordinates[0] - pointer.x,
+				pasted.coordinates[1] - pointer.y,
+			) < 150,
+			`pasted at ${pasted.coordinates}, pointer at ${pointer.x},${pointer.y}`,
+		);
 	});
 	await test("native node context menu opens and dismissal does not edit the graph", async () => {
 		const p = await header("native");
@@ -414,6 +575,182 @@ try {
 		await page.locator("[data-board-canvas-input]").focus();
 		await historyUndo();
 		assert.deepEqual((await snapshot()).board.nodes, before.board.nodes);
+	});
+	await test("new wires dropped inside a comment or on a node body open the palette", async () => {
+		const comment = await node("background").boundingBox();
+		assert.ok(comment);
+		const nativeBody = await header("native");
+		const from = await pin("integer-a", "out");
+		for (const to of [
+			{
+				x: comment.x + comment.width * 0.9,
+				y: comment.y + comment.height * 0.85,
+			},
+			{ x: nativeBody.x, y: nativeBody.y + 22 },
+		]) {
+			await drag(from, to);
+			await palette().waitFor();
+			await page.keyboard.press("Escape");
+			await palette().waitFor({ state: "hidden" });
+			await page.mouse.move(700, 470);
+			await settle();
+		}
+	});
+	await test("a connection drawn while the previous one saves is saved too", async () => {
+		const pairs = [
+			[await pin("integer-a", "out"), await pin("integer-b", "in")],
+			[await pin("string-b", "out"), await pin("native", "in")],
+		];
+		await page.mouse.move(700, 470);
+		await settle();
+		await api("setDelay", 600);
+		for (const [from, to] of pairs) await drag(from, to);
+		await page.waitForFunction(
+			() =>
+				window.__boardHost
+					.snapshot()
+					.transactions.filter(
+						(t) =>
+							t.finished &&
+							t.commands.some((c) => c.command_type === "ConnectPin"),
+					).length === 2,
+			undefined,
+			{ timeout: 10000 },
+		);
+	});
+	await test("a dropped wire shows at once and stays while its save is in flight", async () => {
+		const from = await pin("integer-a", "out");
+		const to = await pin("integer-b", "in");
+		await api("setDelay", 600);
+		await page.mouse.move(from.x, from.y);
+		await page.mouse.down();
+		await page.mouse.move(to.x, to.y, { steps: 12 });
+		// Every frame from the drop until well after the save: is the wire drawn?
+		const watch = page.evaluate(
+			() =>
+				new Promise((resolve) => {
+					const start = performance.now();
+					const shown = () =>
+						window.__boardHost
+							.snapshot()
+							.edges.filter(
+								(e) =>
+									e.sourceHandle === "integer-a.out" &&
+									e.targetHandle === "integer-b.in",
+							).length;
+					let first;
+					const counts = new Set();
+					const timer = setInterval(() => {
+						const count = shown();
+						if (count && first === undefined) first = performance.now() - start;
+						if (first !== undefined) counts.add(count);
+					}, 5);
+					setTimeout(() => {
+						clearInterval(timer);
+						resolve({ first, counts: [...counts] });
+					}, 1600);
+				}),
+		);
+		await page.mouse.up();
+		await page.waitForTimeout(150);
+		const during = await snapshot();
+		assert.equal(during.transactions.length, 1);
+		assert.equal(during.transactions[0].finished, undefined);
+		const seen = await watch;
+		assert.ok(seen.first < 150, `wire first drawn after ${seen.first} ms`);
+		assert.deepEqual(seen.counts, [1]);
+		const after = await snapshot();
+		assert.ok(after.transactions[0].finished);
+		assert.ok(
+			after.board.nodes["integer-a"].pins[
+				"integer-a.out"
+			].connected_to.includes("integer-b.in"),
+		);
+		await historyUndo();
+		assert.equal(
+			(await snapshot()).edges.some((e) => e.sourceHandle === "integer-a.out"),
+			false,
+		);
+	});
+	await test("a rejected connection takes back the wire it showed", async () => {
+		const from = await pin("integer-a", "out");
+		const to = await pin("integer-b", "in");
+		const before = await snapshot();
+		await api("setDelay", 300);
+		await api("rejectNext");
+		errors.length = 0;
+		await drag(from, to);
+		const drawn = () =>
+			page.evaluate(() =>
+				window.__boardHost
+					.snapshot()
+					.edges.some((e) => e.sourceHandle === "integer-a.out"),
+			);
+		assert.equal(await drawn(), true);
+		await page.waitForFunction(
+			() =>
+				!window.__boardHost
+					.snapshot()
+					.edges.some((e) => e.sourceHandle === "integer-a.out"),
+		);
+		await settle();
+		const after = await snapshot();
+		assert.deepEqual(after.board.nodes, before.board.nodes);
+		assert.equal(after.edges.length, before.edges.length);
+		// The wire can be drawn again once the failure has cleared.
+		await api("setDelay", 0);
+		await drag(await pin("integer-a", "out"), await pin("integer-b", "in"));
+		await page.waitForFunction(() =>
+			window.__boardHost
+				.snapshot()
+				.board.nodes["integer-a"].pins["integer-a.out"].connected_to.includes(
+					"integer-b.in",
+				),
+		);
+		errors.length = 0;
+	});
+	await test("moves saved behind an earlier save never snap back", async () => {
+		await api("setDelay", 600);
+		const a = await header("integer-a");
+		const b = await header("integer-b");
+		await drag(a, { x: a.x, y: a.y + 60 });
+		await drag(b, { x: b.x, y: b.y + 60 });
+		const moved = rounded(await position("integer-b"));
+		assert.deepEqual(await positionsDuring("integer-b", 1800), [moved]);
+		const saved = (await snapshot()).board.nodes["integer-b"].coordinates;
+		assert.equal(`${Math.round(saved[0])},${Math.round(saved[1])}`, moved);
+	});
+	await test("a rejected move returns the node to its saved position", async () => {
+		const before = rounded(await position("integer-a"));
+		await api("setDelay", 300);
+		await api("rejectNext");
+		const a = await header("integer-a");
+		await drag(a, { x: a.x, y: a.y + 60 });
+		assert.notEqual(rounded(await position("integer-a")), before);
+		await page.waitForFunction((before) => {
+			const n = window.__boardHost
+				.snapshot()
+				.nodes.find((n) => n.id === "integer-a");
+			return (
+				`${Math.round(n.position.x)},${Math.round(n.position.y)}` === before
+			);
+		}, before);
+	});
+	await test("clicks on a pin, its label and its inline editor select the node", async () => {
+		const input = await pin("integer-a", "in");
+		for (const at of [input, { x: input.x + 25, y: input.y }]) {
+			await page.mouse.click(at.x, at.y);
+			await settle();
+			assert.deepEqual(await selected(), ["integer-a"]);
+			await page.mouse.click(700, 470);
+			await settle();
+			assert.deepEqual(await selected(), []);
+		}
+		const editor = await pin("string-c", "in");
+		await page.mouse.click(editor.x + 18, editor.y);
+		await settle();
+		assert.deepEqual(await selected(), ["string-c"]);
+		await page.keyboard.press("Escape");
 	});
 	await test("comment drag carries enclosed nodes and Alt-drag moves only the comment", async () => {
 		const before = await snapshot();

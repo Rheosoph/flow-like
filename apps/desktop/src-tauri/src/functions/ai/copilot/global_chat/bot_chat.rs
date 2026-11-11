@@ -408,8 +408,11 @@ pub(super) fn desktop_bot(
         decision_hosted_only: record.location != BotLocation::Desktop,
         acknowledgement: false,
         live_call: false,
+        spoken_drafts: false,
         tool_gate: None,
         ephemeral_user_context: false,
+        owner_mail_addresses: Vec::new(),
+        seed_taint: Default::default(),
         suppress_owner_notifications: false,
         stt_model: record.stt_model,
         tts_model: record.tts_model,
@@ -1016,6 +1019,10 @@ impl PlatformToolBridge for BotDesktopBridge {
     async fn is_cancelled(&self) -> bool {
         self.0.is_cancelled().await
     }
+
+    async fn bot_secret(&self, name: &str) -> Option<String> {
+        self.0.bot_secret(name).await
+    }
 }
 
 #[cfg(test)]
@@ -1357,7 +1364,10 @@ mod tests {
             assert!(chat.contains(&chat_only));
             assert!(!headless.contains(&chat_only), "{chat_only}");
         }
-        for tool_name in &headless {
+        for tool_name in headless
+            .iter()
+            .filter(|name| !flow_like::flow::copilot::platform::runs_in_tool_loop(name))
+        {
             assert!(
                 crate::functions::ai::native_tool_bridge::supports(
                     tool_name,
@@ -1399,8 +1409,10 @@ mod tests {
                 "{builds} missing from {offered:?}"
             );
         }
-        let core_runs = flow_like::flow::copilot::tool_spec::RESEARCH_AGENT_TOOL;
-        for tool_name in offered.iter().filter(|name| **name != core_runs) {
+        for tool_name in offered
+            .iter()
+            .filter(|name| !flow_like::flow::copilot::platform::runs_in_tool_loop(name))
+        {
             assert!(
                 crate::functions::ai::native_tool_bridge::supports(tool_name, &json!({})),
                 "{tool_name} has no native implementation"

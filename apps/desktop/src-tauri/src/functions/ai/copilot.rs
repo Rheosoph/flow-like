@@ -66,7 +66,7 @@ mod workflow_results;
 mod workflow_sdk;
 mod workflow_state;
 
-pub(crate) use attachments::{CHAT_FILES, chat_file_handle, read_chat_file};
+pub(crate) use attachments::{CHAT_FILES, chat_file_handle, chat_file_link, read_chat_file};
 
 /// The Bits model of a FlowPilot model selection; `None` for an agent backend, whose ids are not
 /// Bits ids.

@@ -63,7 +63,15 @@ export interface ProcessedAttachment {
 	previewText?: string;
 	size?: number | null;
 	anchor?: string;
+	/** The `storage://` url `url` was signed from; the stable identity of the file. */
+	sourceUrl?: string;
+	/** Set while a stored file has no signed link yet, or when it cannot be signed. */
+	access?: "pending" | "unavailable";
 }
+
+export const attachmentKey = (
+	file: Pick<ProcessedAttachment, "url" | "sourceUrl">,
+) => file.sourceUrl ?? file.url;
 
 export function getDisplayFileName(name: string) {
 	let decoded = name;

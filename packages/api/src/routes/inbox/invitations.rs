@@ -21,7 +21,7 @@ use crate::{
     entity::{bot, conversation, conversation_member, membership, user},
     error::ApiError,
     middleware::jwt::AppUser,
-    routes::bots::owned_bot,
+    routes::{bots::owned_bot, user::identity::public_display_name},
     state::AppState,
 };
 use axum::{
@@ -799,20 +799,25 @@ pub(crate) async fn invitable<C: ConnectionTrait>(
         .column(user::Column::Id)
         .column(user::Column::Name)
         .column(user::Column::PreferredUsername)
-        .column(user::Column::Username)
         .filter(user::Column::Id.in_subquery(co_members(caller)));
     if let Some(needle) = needle {
+        // Only what an entry shows is searched: never the login name, and never an
+        // address kept in the name or the handle.
+        let shown = |column: user::Column| {
+            Condition::all()
+                .add(column.contains(needle))
+                .add(column.not_like("%@%"))
+        };
         people = people.filter(
             Condition::any()
-                .add(user::Column::Name.contains(needle))
-                .add(user::Column::Username.contains(needle))
-                .add(user::Column::PreferredUsername.contains(needle)),
+                .add(shown(user::Column::Name))
+                .add(shown(user::Column::PreferredUsername)),
         );
     }
     let people = people
         .order_by_asc(user::Column::Name)
         .limit(INVITABLE_PAGE)
-        .into_tuple::<(String, Option<String>, Option<String>, Option<String>)>()
+        .into_tuple::<(String, Option<String>, Option<String>)>()
         .all(db)
         .await?;
     let mut entries: Vec<InvitableEntry> = own
@@ -821,8 +826,8 @@ pub(crate) async fn invitable<C: ConnectionTrait>(
         .chain(
             people
                 .into_iter()
-                .map(|(id, name, preferred, username)| InvitableEntry {
-                    name: name.or(preferred).or(username),
+                .map(|(id, name, preferred)| InvitableEntry {
+                    name: public_display_name(name.as_deref(), preferred.as_deref(), None),
                     principal_id: id,
                     kind: "user".into(),
                     description: None,
@@ -899,13 +904,14 @@ async fn display_name(state: &AppState, user_id: &str) -> String {
         .select_only()
         .column(user::Column::Name)
         .column(user::Column::PreferredUsername)
-        .column(user::Column::Username)
-        .into_tuple::<(Option<String>, Option<String>, Option<String>)>()
+        .into_tuple::<(Option<String>, Option<String>)>()
         .one(&state.db)
         .await
         .ok()
         .flatten()
-        .and_then(|(name, preferred, username)| name.or(preferred).or(username))
+        .and_then(|(name, preferred)| {
+            public_display_name(name.as_deref(), preferred.as_deref(), None)
+        })
         .unwrap_or_else(|| "Someone".to_string())
 }
 

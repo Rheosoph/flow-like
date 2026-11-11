@@ -7,17 +7,97 @@
 //! storage, and inlines it, fitted to the provider's limits, for any other provider. Links are
 //! never logged: a signed link is a credential.
 
+use std::collections::BTreeMap;
+
 use flow_like::copilot::ChatImage;
+use flow_like::flow::copilot::{AttachmentManifestEntry, TURN_FILES};
 use flow_like::flow_like_model_provider::egress::ProviderEgress;
+use flow_like_storage::Path as ObjectPath;
+use flow_like_types::bot_message::WorkspaceHandle;
 use flow_like_types::reqwest::Url;
 
 use crate::{
+    bot_tools::AttachedFile,
     credentials::storage_path_segment,
     media_links::{StorageScope, route},
     state::AppState,
 };
 
 const MAX_ATTACHMENT_URLS: usize = 8;
+
+/// Gives a bot's file tools a handle for each attachment the server can read while the bot
+/// answers: one whose name no other attachment shares and whose link is the caller's own upload.
+/// A handle an entry already has stays. Returns the attachments and the uploads by attachment
+/// name, as the new handles name them.
+pub(super) async fn with_turn_files(
+    state: &AppState,
+    sub: &str,
+    mut manifest: Vec<AttachmentManifestEntry>,
+) -> (Vec<AttachmentManifestEntry>, BTreeMap<String, AttachedFile>) {
+    let own = match manifest.iter().any(lacks_handle) {
+        true => own_uploads(state, sub).await,
+        false => None,
+    };
+    let files = match own {
+        Some(own) => attach_own_uploads(&own, sub, &mut manifest),
+        None => BTreeMap::new(),
+    };
+    (manifest, files)
+}
+
+fn lacks_handle(entry: &AttachmentManifestEntry) -> bool {
+    entry.handle.is_none() && entry.url.is_some()
+}
+
+fn attach_own_uploads(
+    own: &StorageScope,
+    sub: &str,
+    manifest: &mut [AttachmentManifestEntry],
+) -> BTreeMap<String, AttachedFile> {
+    let names: Vec<Option<String>> = manifest.iter().map(|entry| entry.name.clone()).collect();
+    let shared = |name: &str| {
+        names
+            .iter()
+            .filter(|other| other.as_deref() == Some(name))
+            .count()
+            > 1
+    };
+    let mut files = BTreeMap::new();
+    for entry in manifest.iter_mut().filter(|entry| lacks_handle(entry)) {
+        let Some(name) = entry
+            .name
+            .clone()
+            .filter(|name| !name.is_empty() && !shared(name))
+        else {
+            continue;
+        };
+        let Some(key) = entry
+            .url
+            .as_deref()
+            .and_then(|url| upload_key(own, sub, url))
+        else {
+            continue;
+        };
+        let mime = entry.mime_type.clone().filter(|mime| !mime.is_empty());
+        entry.handle = Some(WorkspaceHandle::conversation_file(
+            TURN_FILES,
+            &name,
+            entry.size.unwrap_or_default(),
+            "",
+            mime.as_deref().unwrap_or_default(),
+        ));
+        files.insert(name, AttachedFile { key, mime });
+    }
+    files
+}
+
+/// The object a link into the caller's uploads names.
+fn upload_key(own: &StorageScope, sub: &str, url: &str) -> Option<ObjectPath> {
+    let url = Url::parse(url).ok()?;
+    let object = ObjectPath::from_url_path(own.key(&url)?).ok()?;
+    let prefix = ObjectPath::from(upload_prefix(sub));
+    Some(prefix.parts().chain(object.parts()).collect())
+}
 
 /// The attachment links the model may receive, in request order.
 pub(super) async fn resolve_attachment_images(
@@ -145,6 +225,69 @@ mod tests {
         };
         assert!(own.contains(&sign(sub).await));
         assert!(!own.contains(&sign("someone-else").await));
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn only_the_callers_uniquely_named_uploads_get_a_turn_handle() {
+        let sub = "auth0|me";
+        let store = s3_store("http://rustfs:9000");
+        let own = StorageScope::signed_by(&store, &upload_prefix(sub))
+            .await
+            .unwrap()
+            .unwrap();
+        let key = |owner: &str, file: &str| {
+            Path::from(format!("{}2026/11/11/{file}", upload_prefix(owner)))
+        };
+        let link = |owner: &'static str, file: &'static str| {
+            let store = &store;
+            async move {
+                let path = key(owner, file);
+                let signed = store.sign("GET", &path, Duration::from_secs(600)).await;
+                Some(signed.unwrap().to_string())
+            }
+        };
+        let entry = |name: &str, url: Option<String>| AttachmentManifestEntry {
+            name: Some(name.to_string()),
+            mime_type: Some("application/pdf".to_string()),
+            size: Some(7),
+            url,
+            handle: None,
+        };
+        let stored = WorkspaceHandle::conversation_file("room1", "f9.pdf", 7, "", "");
+        let mut manifest = vec![
+            entry("scan.pdf", link(sub, "a1.pdf").await),
+            entry("theirs.pdf", link("someone-else", "b2.pdf").await),
+            entry(
+                "public.pdf",
+                Some("https://files.example.com/public.pdf".into()),
+            ),
+            entry("local.pdf", None),
+            entry("twice.pdf", link(sub, "c3.pdf").await),
+            entry("twice.pdf", link(sub, "d4.pdf").await),
+            AttachmentManifestEntry {
+                handle: Some(stored.clone()),
+                ..entry("stored.pdf", link(sub, "e5.pdf").await)
+            },
+        ];
+
+        let files = attach_own_uploads(&own, sub, &mut manifest);
+
+        assert_eq!(files.keys().collect::<Vec<_>>(), ["scan.pdf"]);
+        assert_eq!(files["scan.pdf"].key, key(sub, "a1.pdf"));
+        assert_eq!(files["scan.pdf"].mime.as_deref(), Some("application/pdf"));
+        assert_eq!(
+            manifest[0].handle,
+            Some(WorkspaceHandle::conversation_file(
+                TURN_FILES,
+                "scan.pdf",
+                7,
+                "",
+                "application/pdf"
+            ))
+        );
+        assert!(manifest[0].is_turn_file());
+        assert!(manifest[1..6].iter().all(|entry| entry.handle.is_none()));
+        assert_eq!(manifest[6].handle, Some(stored));
     }
 
     #[test]

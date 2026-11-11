@@ -15,6 +15,9 @@ use wasm_bindgen::prelude::*;
 const PULSE_DURATION_MS: f64 = 1_200.0;
 const PULSE_FRAME_INTERVAL: Duration = Duration::from_millis(42);
 const MAX_PULSE_EDGES: usize = 32;
+/// Selected nodes drawn in full at any zoom. The host keeps a larger selection native
+/// (`WARM_EDITOR_LIMIT` in `dom-visibility.ts`), and that one follows the board's detail.
+const LEGIBLE_SELECTION_LIMIT: usize = 256;
 /// About 30 frames a second while a visible node runs or finishes.
 const STATUS_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 /// Tailwind's violet-500 in sRGB, for hosts that send no header style.
@@ -612,6 +615,12 @@ fn paint_nodes(
     text_settled: bool,
 ) -> NodeCounts {
     let mut counts = NodeCounts::default();
+    let legible_selection = nodes
+        .iter()
+        .filter(|node| node.selected)
+        .take(LEGIBLE_SELECTION_LIMIT + 1)
+        .count()
+        <= LEGIBLE_SELECTION_LIMIT;
     for (node, text) in nodes.iter().zip(texts) {
         let node_status = status.get(&node.id);
         let ripple = status.ripple(&node.id, aura.now);
@@ -624,7 +633,11 @@ fn paint_nodes(
             continue;
         };
         // Keep selected content legible when the host is not rendering a DOM editor.
-        let node_detail = if node.selected { Detail::Full } else { detail };
+        let node_detail = if node.selected && legible_selection {
+            Detail::Full
+        } else {
+            detail
+        };
         if let Some(node_status) = node_status {
             counts.statuses += 1;
             aura.halos(node, rect, node_status);

@@ -128,6 +128,17 @@ export interface IToolActivityDetail {
 	};
 	/** An `ask_bot` call: shown as the exchange card between the two bots. */
 	exchange?: BotExchangeView;
+	/** The app a tool acted on: rendered as an app reference, never as its raw id. */
+	app?: {
+		id: string;
+		/** The name the model passed, shown until the app's metadata loads. */
+		name?: string;
+		eventId?: string;
+		eventName?: string;
+		eventType?: string;
+		mcpTool?: string;
+		runStatus?: string;
+	};
 	target?: string;
 	query?: string;
 	/** All queries issued by this tool call, retained across progress updates. */

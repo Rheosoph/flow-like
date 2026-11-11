@@ -277,6 +277,7 @@ fn profile_model_to_core(model: profile::Model) -> Profile {
         shortcuts: model
             .shortcuts
             .and_then(|value| serde_json::from_value(value).ok()),
+        hidden_bots: model.hidden_bots.unwrap_or_default().into(),
         theme: model.theme,
         home_layout: model.home_layout,
         home_default_id: model.home_default_id,
@@ -751,6 +752,8 @@ pub(crate) struct ServerPlatformBridge {
     bot: bool,
     /// The bot tools this server runs for the turn (in the API or on the executor).
     bot_tools: Option<Arc<crate::bot_tools::BotToolsHost>>,
+    /// The model the browser starts this turn's assistants on; `None` leaves its own selection.
+    assistant_model: Option<String>,
 }
 
 impl ServerPlatformBridge {
@@ -766,6 +769,7 @@ impl ServerPlatformBridge {
             read_only: false,
             bot: false,
             bot_tools: None,
+            assistant_model: None,
         }
     }
 
@@ -793,6 +797,7 @@ impl ServerPlatformBridge {
             read_only: false,
             bot: false,
             bot_tools: None,
+            assistant_model: None,
         }
     }
 
@@ -801,6 +806,11 @@ impl ServerPlatformBridge {
         bot_tools: Option<Arc<crate::bot_tools::BotToolsHost>>,
     ) -> Self {
         self.bot_tools = bot_tools;
+        self
+    }
+
+    pub(crate) fn with_assistant_model(mut self, model_id: String) -> Self {
+        self.assistant_model = Some(model_id);
         self
     }
 
@@ -893,7 +903,10 @@ impl ServerPlatformBridge {
             && !self.read_only
             && (flow_like_bot_tools::configuration::is_settings_tool(tool_name)
                 || flow_like_bot_tools::user_context::is_user_context_tool(tool_name))
-            && self.bot_tools.as_ref().is_some_and(|host| host.handles(tool_name))
+            && self
+                .bot_tools
+                .as_ref()
+                .is_some_and(|host| host.handles(tool_name))
         {
             return find_bot_tool_spec(tool_name);
         }
@@ -1129,6 +1142,37 @@ mod specialist_tool_spec_tests {
     }
 
     #[flow_like_types::tokio::test]
+    async fn a_bot_turn_names_its_assistant_model_in_tool_requests() {
+        for assistant_model in [Some("small"), None] {
+            let channel = flow_like_types::channel::InProcessChannel::register(
+                flow_like_types::channel::new_request_id(),
+                Duration::from_secs(30),
+            )
+            .await;
+            let (frames, mut received) = mpsc::unbounded_channel();
+            let mut bridge = ServerPlatformBridge::orchestrator(channel.clone(), frames);
+            if let Some(model_id) = assistant_model {
+                bridge = bridge.with_assistant_model(model_id.to_string());
+            }
+            let pending = async move { bridge.call("list_apps", json!({})).await };
+            let call = flow_like_types::tokio::spawn(pending);
+            let frame =
+                flow_like_types::tokio::time::timeout(Duration::from_secs(1), received.recv())
+                    .await
+                    .expect("the tool request must reach the stream");
+            let Some(GlobalChatFrame::ToolRequest(request)) = frame else {
+                panic!("expected a tool request frame");
+            };
+            assert_eq!(
+                request["context"]["assistantModelId"].as_str(),
+                assistant_model
+            );
+            call.abort();
+            channel.close().await;
+        }
+    }
+
+    #[flow_like_types::tokio::test]
     async fn home_read_only_bridge_rejects_apply_without_emitting_a_request() {
         let channel = flow_like_types::channel::InProcessChannel::register(
             "home-read-only-bridge-test",
@@ -1227,6 +1271,13 @@ impl PlatformToolBridge for ServerPlatformBridge {
         self.channel.is_cancelled().await
     }
 
+    async fn bot_secret(&self, name: &str) -> Option<String> {
+        if !self.bot {
+            return None;
+        }
+        self.bot_tools.as_ref()?.secret(name).await
+    }
+
     async fn call(&self, tool_name: &str, arguments: Value) -> String {
         let Some(spec) = self.tool_spec(tool_name) else {
             return json!({
@@ -1253,7 +1304,8 @@ impl PlatformToolBridge for ServerPlatformBridge {
                 .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string());
         }
 
-        if (self.bot || flow_like_bot_tools::configuration::is_settings_tool(tool_name)
+        if (self.bot
+            || flow_like_bot_tools::configuration::is_settings_tool(tool_name)
             || flow_like_bot_tools::user_context::is_user_context_tool(tool_name))
             && let Some(bot_tools) = self
                 .bot_tools
@@ -1287,13 +1339,16 @@ impl PlatformToolBridge for ServerPlatformBridge {
             }
         };
 
-        let request = json!({
+        let mut request = json!({
             "requestId": ticket.request_id,
             "toolName": tool_name,
             "arguments": arguments,
             "approval": approval,
             "channel": ticket.handle,
         });
+        if let Some(model_id) = &self.assistant_model {
+            request["context"] = json!({ "assistantModelId": model_id });
+        }
 
         if self
             .frames
@@ -1726,6 +1781,10 @@ pub(crate) async fn run_global_chat(
         {
             bot.context.host_tools = std::mem::take(&mut bot.context.host_tools).with_trail(trail);
         }
+        if !bot.context.ephemeral_user_context {
+            bot.context.host_tools = std::mem::take(&mut bot.context.host_tools)
+                .with_reply_files(interactive.reply_files.clone());
+        }
     }
     if let Some(bot) = &mut bot {
         bot.context.host_tools = std::mem::take(&mut bot.context.host_tools)
@@ -1979,7 +2038,18 @@ pub(crate) async fn run_global_chat(
         _ => None,
     };
 
-    let attachments_manifest = payload.attachments_manifest.clone().unwrap_or_default();
+    let trigger_files = match &interactive_turn {
+        Some(interactive) => interactive.trigger_files(&state).await?,
+        None => Vec::new(),
+    };
+    let attachments_manifest = flow_like::flow::copilot::with_stored_files(
+        payload.attachments_manifest.as_deref().unwrap_or_default(),
+        &trigger_files,
+    );
+    let (attachments_manifest, attached_files) = match &bot {
+        Some(_) => attachments::with_turn_files(&state, &sub, attachments_manifest).await,
+        None => (attachments_manifest, Default::default()),
+    };
     let context_input = PlatformContextInput {
         user_context: payload.user_context.as_deref(),
         active_profile: Some((profile.name.as_str(), profile.id.as_str())),
@@ -2045,8 +2115,11 @@ pub(crate) async fn run_global_chat(
                 token.clone(),
                 crate::routes::bots::tool_grants::rows_for_owner(&state, &bot.context.bot_id, &sub),
                 None,
-                interactive_turn.as_ref().map(|turn| turn.turn.conversation_id.as_str()),
+                interactive_turn
+                    .as_ref()
+                    .map(|turn| turn.turn.conversation_id.as_str()),
                 Some(flow_like_bot_tools::TurnSite::OwnerLive),
+                attached_files,
             )
             .await;
             let bridge = if bot.context.toolset == BotToolset::Capabilities {
@@ -2054,7 +2127,18 @@ pub(crate) async fn run_global_chat(
             } else {
                 ServerPlatformBridge::orchestrator(channel.clone(), frames_tx.clone())
             };
-            bridge.with_bot_tools(bot_tools)
+            let assistant_model = crate::routes::bots::runtime::server_assistant_model(
+                &state,
+                &sub,
+                &flow_like_state,
+                &profile,
+                bot.context.subtask_model.as_deref(),
+                &selected_model.id,
+            )
+            .await;
+            bridge
+                .with_bot_tools(bot_tools)
+                .with_assistant_model(assistant_model)
         }
         _ => ServerPlatformBridge::orchestrator(channel.clone(), frames_tx.clone()),
     });

@@ -86,6 +86,7 @@ fn interactive(turn: &bot_turn::Model) -> InteractiveTurn {
         turn: turn.clone(),
         host_id: "interactive:run_1".into(),
         trail: None,
+        reply_files: flow_like::flow::copilot::ReplyFiles::new(),
     }
 }
 

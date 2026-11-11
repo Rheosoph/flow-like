@@ -844,3 +844,43 @@ describe("transcript entries", () => {
 		expect(blocks.filter((b) => b.type === "group")).toHaveLength(2);
 	});
 });
+
+describe("attachment parts", () => {
+	test("keeps stored and linked parts and drops unusable ones", () => {
+		const handle = {
+			app_id: "app1",
+			path: "bot/x.pdf",
+			bytes: 1,
+			sha256: "s",
+			mime: "application/pdf",
+		};
+		const [folded] = messages(
+			foldInboxEntries(
+				[
+					entry(
+						"message",
+						"bot",
+						{
+							text: "here",
+							parts: [
+								{ kind: "attachment", id: "a1", name: "x.pdf", handle },
+								{
+									kind: "attachment",
+									id: "a2",
+									name: "y.pdf",
+									url: "https://a.test/y.pdf",
+									mime: "application/pdf",
+								},
+								{ kind: "attachment", id: "a3", name: "z.pdf", url: "ftp://z" },
+								{ kind: "attachment", id: "a4", name: "w.pdf" },
+							],
+						},
+						0,
+					),
+				],
+				"me",
+			),
+		);
+		expect(folded.attachments?.map((part) => part.id)).toEqual(["a1", "a2"]);
+	});
+});

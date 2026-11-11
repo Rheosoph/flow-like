@@ -185,6 +185,7 @@ pub struct NativeWindow {
     focused: bool,
     minimized: bool,
     onscreen: bool,
+    transparent: bool,
 }
 
 impl NativeWindow {
@@ -243,6 +244,7 @@ impl NativeWindow {
                 ),
                 focused: false,
                 minimized: false,
+                transparent: dictionary_number(entry.0, "kCGWindowAlpha") == Some(0),
                 onscreen: dictionary_value(entry.0, "kCGWindowIsOnscreen").is_some_and(
                     |value| unsafe {
                         CFGetTypeID(value) == CFBooleanGetTypeID() && CFBooleanGetValue(value)
@@ -298,6 +300,24 @@ impl NativeWindow {
     pub fn is_onscreen(&self) -> bool {
         self.onscreen
     }
+    /// Helper surfaces that are not windows a person sees: invisible, tiny, nameless, or owned
+    /// by system UI processes.
+    pub fn is_ghost(&self) -> bool {
+        const SYSTEM_OWNERS: &[&str] = &[
+            "Window Server",
+            "Dock",
+            "SystemUIServer",
+            "Control Center",
+            "Notification Center",
+            "loginwindow",
+            "TextInputMenuAgent",
+        ];
+        self.transparent
+            || self.bounds.2 < 2.0
+            || self.bounds.3 < 2.0
+            || (self.app_name.is_empty() && self.cg_title.as_deref().is_none_or(str::is_empty))
+            || SYSTEM_OWNERS.contains(&self.app_name.as_str())
+    }
     pub fn current_monitor(&self) -> Result<xcap::Monitor> {
         let mut best = None;
         let mut overlap = -1.0f64;
@@ -333,6 +353,44 @@ fn perform(e: Ref, action: &str) -> Result<()> {
     }
     Ok(())
 }
+#[link(name = "AppKit", kind = "framework")]
+unsafe extern "C" {}
+
+/// Brings the owning app forward, which makes macOS switch to the Space of its windows.
+fn activate_app(pid: u32) {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send, rc::Retained};
+    let app: Option<Retained<AnyObject>> = unsafe {
+        msg_send![class!(NSRunningApplication), runningApplicationWithProcessIdentifier: pid as i32]
+    };
+    if let Some(app) = app {
+        // NSApplicationActivateAllWindows | NSApplicationActivateIgnoringOtherApps
+        let _: bool = unsafe { msg_send![&*app, activateWithOptions: 3usize] };
+    }
+}
+
+fn window_element_across_spaces(w: &NativeWindow) -> Result<(Owned, Owned)> {
+    let first = match window_element(w) {
+        Ok(found) => return Ok(found),
+        Err(error) => error,
+    };
+    if w.onscreen {
+        return Err(first);
+    }
+    activate_app(w.pid);
+    for _ in 0..8 {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        if let Ok(found) = window_element(w) {
+            return Ok(found);
+        }
+    }
+    Err(anyhow!(
+        "Window {} of '{}' is on another Space or hidden and macOS does not expose it to Flow Like from here ({first}). Ask the owner to switch to that Space (Mission Control or Control+Arrow), or work with a window on the current Space.",
+        w.id,
+        w.app_name
+    ))
+}
+
 fn window_element(w: &NativeWindow) -> Result<(Owned, Owned)> {
     if !unsafe { AXIsProcessTrusted() } {
         return Err(anyhow!("Accessibility permission is required"));
@@ -547,7 +605,11 @@ pub fn operate_window(
     operation: &str,
     bounds: Option<(i32, i32, i32, i32)>,
 ) -> Result<()> {
-    let (app, window) = window_element(w)?;
+    let (app, window) = if operation == "focus" {
+        window_element_across_spaces(w)?
+    } else {
+        window_element(w)?
+    };
     match operation {
         "focus" => {
             set(app.0, "AXFrontmost", unsafe { kCFBooleanTrue })?;

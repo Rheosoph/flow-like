@@ -875,6 +875,11 @@ impl FrontendToolBridge {
             .map(|runtime| runtime.context.as_ref())
     }
 
+    /// A secret of the bot this bridge runs, read on this device and never sent to the frontend.
+    pub(super) async fn bot_secret(&self, name: &str) -> Option<String> {
+        super::native_bot_tools::bot_secret(&self.app_handle, self.context.as_ref(), name).await
+    }
+
     /// The run's channel: steering text and cancel pushes land here as well.
     pub fn channel(&self) -> &Arc<InProcessChannel> {
         &self.channel

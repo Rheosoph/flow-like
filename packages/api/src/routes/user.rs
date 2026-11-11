@@ -79,13 +79,14 @@ pub async fn sign_avatar(
     Ok(url.to_string())
 }
 
-pub mod billing;
 pub mod availability;
+pub mod billing;
 pub mod bits;
 pub mod bootstrap;
 pub mod contacts;
 pub mod get_invites;
 pub mod groups;
+pub mod handle;
 pub mod identity;
 pub mod info;
 pub mod lookup;
@@ -121,7 +122,9 @@ pub fn routes() -> Router<AppState> {
         .route("/info", get(user_info).put(upsert_info::upsert_info))
         .route(
             "/availability",
-            get(availability::get).put(availability::set).delete(availability::clear),
+            get(availability::get)
+                .put(availability::set)
+                .delete(availability::clear),
         )
         .route(
             "/availability/calendars",

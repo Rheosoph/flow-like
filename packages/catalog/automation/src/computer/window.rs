@@ -20,6 +20,12 @@ pub struct WindowInfo {
     pub height: u32,
     pub is_focused: bool,
     pub is_minimized: bool,
+    #[serde(default = "window_onscreen_default")]
+    pub is_onscreen: bool,
+}
+
+fn window_onscreen_default() -> bool {
+    true
 }
 
 #[crate::register_node]
@@ -41,7 +47,7 @@ impl NodeLogic for ListWindowsNode {
             "Lists all visible windows on the desktop",
             "Automation/Computer/Window",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.set_flowscript_name("computer", "listWindows");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -131,7 +137,7 @@ impl NodeLogic for GetActiveWindowNode {
             "Gets the focused window of another application (Flow-Like's own windows are skipped), falling back to the front-most visible window",
             "Automation/Computer/Window",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.set_flowscript_name("computer", "getActiveWindow");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -235,7 +241,7 @@ impl NodeLogic for FindWindowByTitleNode {
             "Finds a window by its title (partial match supported)",
             "Automation/Computer/Window",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.set_flowscript_name("computer", "findWindowByTitle");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -320,6 +326,7 @@ impl NodeLogic for FindWindowByTitleNode {
                     height: w.height().unwrap_or(0),
                     is_focused: w.is_focused().unwrap_or(false),
                     is_minimized: w.is_minimized().unwrap_or(false),
+                    is_onscreen: super::native::window_info(&w).is_onscreen,
                 };
 
                 context.set_pin_value("window", json!(info)).await?;
@@ -648,7 +655,7 @@ impl NodeLogic for FocusWindowNode {
             "Brings a window to the front and gives it focus",
             "Automation/Computer/Window",
         );
-        node.set_version(2);
+        node.set_version(3);
         node.set_flowscript_name("computer", "focusWindow");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -998,6 +1005,7 @@ mod tests {
             height: 600,
             is_focused: focused,
             is_minimized: false,
+            is_onscreen: true,
         }
     }
 

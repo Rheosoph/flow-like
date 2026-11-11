@@ -49,6 +49,7 @@ impl ComputerBackend for FakeScreen {
             height: 300,
             focused: true,
             minimized: false,
+            onscreen: true,
         }])
     }
 

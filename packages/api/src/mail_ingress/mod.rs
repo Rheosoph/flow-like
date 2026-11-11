@@ -5,6 +5,7 @@ pub mod bot_address;
 #[cfg(test)]
 mod bot_tests;
 pub(crate) mod limits;
+pub(crate) mod owner_addresses;
 mod payload;
 
 pub(crate) use payload::is_automated;

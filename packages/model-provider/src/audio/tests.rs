@@ -289,8 +289,33 @@ fn transcription_responses_parse_per_provider() {
 }
 
 #[test]
-fn transcription_errors_cover_empty_and_malformed_bodies() {
-    assert!(parse(OpenAi, json!({"text":"  "})).is_err());
+fn transcription_without_speech_is_an_empty_transcript() {
+    let silent = parse(
+        OpenRouter,
+        json!({"text":"  ","usage":{"seconds":1.5,"cost":0.0003}}),
+    )
+    .unwrap();
+    assert_eq!(silent.transcription.text, "");
+    assert_eq!(silent.billed_seconds, Some(1.5));
+    assert_eq!(silent.provider_cost_usd, Some(0.0003));
+    assert_eq!(
+        parse(OpenAi, json!({"text":""}))
+            .unwrap()
+            .transcription
+            .text,
+        ""
+    );
+    let gemini = parse(
+        Gemini,
+        json!({"candidates":[{"content":{"parts":[{"text":""}]}}]}),
+    )
+    .unwrap();
+    assert_eq!(gemini.transcription.text, "");
+}
+
+#[test]
+fn transcription_errors_cover_missing_text_and_malformed_bodies() {
+    assert!(parse(OpenAi, json!({"text":null})).is_err());
     assert!(parse(OpenAi, json!({"other":1})).is_err());
     assert!(parse(Gemini, json!({"candidates":[]})).is_err());
     assert!(parse(OpenRouter, json!({"choices":[]})).is_err());

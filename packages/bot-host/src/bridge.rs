@@ -3,10 +3,10 @@
 //! changes anything ends the turn's retries, and a stopped turn reads as cancelled. A parked turn
 //! is not cancelled: calls already running finish, so their outcomes stay known.
 
-use crate::gate::ApprovalGate;
+use crate::{gate::ApprovalGate, hub::TurnHub};
 use async_trait::async_trait;
 use flow_like::flow::copilot::{
-    HostTools, find_bot_tool_spec,
+    BotToolHost, HostTools, find_bot_tool_spec,
     platform::PlatformToolBridge,
     tool_outcome_output,
     tool_spec::{MEMORY_STORE_TOOL, ToolEffect, resolve_tool_approval},
@@ -30,11 +30,23 @@ pub struct ToolEnvBridge {
     gate: Arc<ApprovalGate>,
     mutating: Arc<AtomicBool>,
     stopped: Arc<AtomicBool>,
+    hub_apps: Option<HubApps>,
+}
+
+/// Where a turn's hosted app tools run: the hub, as the bot.
+struct HubApps {
+    hub: Arc<dyn TurnHub>,
+    bot_id: String,
+    turn_id: String,
 }
 
 fn refusal(tool: &str, code: &str, message: &str) -> String {
     json!({ "status": "error", "tool": tool, "code": code, "retryable": false, "message": message })
         .to_string()
+}
+
+fn is_hosted_app_tool(tool: &str) -> bool {
+    BotToolHost::Hosted.runs(tool) && !BotToolHost::CoreOnly.runs(tool)
 }
 
 fn changes_something(tool: &str) -> bool {
@@ -57,6 +69,31 @@ impl ToolEnvBridge {
             gate,
             mutating,
             stopped,
+            hub_apps: None,
+        }
+    }
+
+    pub fn with_hub_apps(mut self, hub: Arc<dyn TurnHub>, bot_id: &str, turn_id: &str) -> Self {
+        self.hub_apps = Some(HubApps {
+            hub,
+            bot_id: bot_id.to_owned(),
+            turn_id: turn_id.to_owned(),
+        });
+        self
+    }
+
+    async fn run_on_hub(&self, apps: &HubApps, tool: &str, args: Value) -> String {
+        match apps
+            .hub
+            .app_tool(&apps.bot_id, &apps.turn_id, tool, args)
+            .await
+        {
+            Ok(output) => output,
+            Err(failure) => refusal(
+                tool,
+                "bot_tool_hub_failed",
+                &format!("The hub could not run '{tool}' for this turn: {failure}"),
+            ),
         }
     }
 
@@ -75,7 +112,11 @@ impl ToolEnvBridge {
 #[async_trait]
 impl PlatformToolBridge for ToolEnvBridge {
     async fn call(&self, tool_name: &str, arguments: Value) -> String {
-        if !self.host_tools.runs(tool_name) {
+        let hub_app = self
+            .hub_apps
+            .as_ref()
+            .filter(|_| is_hosted_app_tool(tool_name));
+        if hub_app.is_none() && !self.host_tools.runs(tool_name) {
             if changes_something(tool_name) {
                 self.mutating.store(true, Ordering::SeqCst);
             }
@@ -101,6 +142,12 @@ impl PlatformToolBridge for ToolEnvBridge {
         {
             return refused.to_string();
         }
+        if let Some(apps) = hub_app {
+            if changes_something(tool_name) {
+                self.mutating.store(true, Ordering::SeqCst);
+            }
+            return self.run_on_hub(apps, tool_name, arguments).await;
+        }
         if flow_like_bot_tools::spec(tool_name).is_some_and(|spec| spec.mutating) {
             self.mutating.store(true, Ordering::SeqCst);
         }
@@ -109,6 +156,10 @@ impl PlatformToolBridge for ToolEnvBridge {
 
     async fn is_cancelled(&self) -> bool {
         self.stopped.load(Ordering::SeqCst)
+    }
+
+    async fn bot_secret(&self, name: &str) -> Option<String> {
+        (self.env)(false).secret(name).await.ok().flatten()
     }
 }
 

@@ -55,7 +55,7 @@ The limits that stop bots from looping are described under [Triggers](/bots/trig
 
 ## Calls and meetings
 
-- **Calls.** Start an audio call in any room. Up to 8 signed-in members join a peer-to-peer call; bots don't join calls.
+- **Calls.** Start an audio call in any room. Up to 8 signed-in members join a peer-to-peer call; bots don't join calls. In an end-to-end encrypted room, an app offers the call only when a speech-to-text model is installed on that device; see [Safety and permissions](/bots/safety/#end-to-end-encryption).
 - **Meetings.** Schedule a meeting for a room. Members can join, and guests with an invitation link wait until the host admits them.
 
 ## Talking to people

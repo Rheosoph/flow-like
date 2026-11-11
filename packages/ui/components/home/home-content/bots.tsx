@@ -27,6 +27,7 @@ import {
 	type CrewMember,
 	NewBotTile,
 	useCrewMembers,
+	useShownCrew,
 } from "../../bots-tab/crew-grid";
 import {
 	crewPrincipalIds,
@@ -225,14 +226,18 @@ function BotChat({
 	const openDock = useOpenDock();
 	const setDraft = useGlobalChatStore((state) => state.setDraft);
 	const statusText = useBotStatusText();
-	const crew = useCrewMembers(data.bots);
+	const allCrew = useCrewMembers(data.bots);
+	const crew = useShownCrew(allCrew, data.hiddenBots);
 	const hero = textConfig(widget.config, "mode", "hero") !== "bar";
 	const showCrew = widget.config.crew !== false;
 	const [pickedKey, setPickedKey] = useState<string | null>(null);
 	const [value, setValue] = useState("");
+	// A bot the widget names stays its bot even while the profile hides it.
+	const configured = textConfig(widget.config, "botId");
 	const member =
 		crew.find((item) => item.key === pickedKey) ??
-		homeCrewMember(crew, textConfig(widget.config, "botId"));
+		homeCrewMember(configured ? allCrew : crew, configured) ??
+		homeCrewMember(allCrew, configured);
 	const status = member ? statusText(member.system, member.location) : null;
 	const waiting = data.botsLoading;
 	const canSend = !editing && !waiting && Boolean(member) && !!value.trim();
@@ -378,7 +383,7 @@ function BotCrew({
 }: Readonly<{ data: CrewData } & HomeContentProps>) {
 	const { t } = useTranslation("bots");
 	const openDock = useOpenDock();
-	const crew = useCrewMembers(data.bots);
+	const crew = useShownCrew(useCrewMembers(data.bots), data.hiddenBots);
 	const presence = useBotPresence(hasBotsHostedElsewhere(data.bots)).data;
 	const [creating, setCreating] = useState(false);
 	const canCreate = widget.config.newBot !== false && data.mode !== "guest";
@@ -673,8 +678,11 @@ function BotSelect({
 	className?: string;
 }>) {
 	const crew = useCrewMembers(data.bots);
+	const shown = useShownCrew(crew, data.hiddenBots);
 	const selected = homeCrewMember(crew, value);
 	const current = selected ? homeBotValue(selected) : value;
+	const options =
+		selected && !shown.includes(selected) ? [selected, ...shown] : shown;
 	return (
 		<select
 			id={id}
@@ -682,7 +690,7 @@ function BotSelect({
 			onChange={(event) => onChange(event.target.value)}
 			className={className}
 		>
-			{crew.map((member) => (
+			{options.map((member) => (
 				<option key={member.key} value={homeBotValue(member)}>
 					{member.name}
 				</option>

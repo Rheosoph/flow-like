@@ -46,6 +46,7 @@ import {
 } from "../../lib/native-action-result";
 import { isTauri } from "../../lib/platform";
 import type { IEventPayloadChat } from "../../lib/schema/flow/event-payload-chat";
+import { publicNameFromClaims } from "../../lib/user-display";
 import { captureWidgetSnapshots } from "../../lib/widget-snapshot";
 import type { ComposerAttachSource } from "../../state/composer-capture";
 import {
@@ -957,10 +958,7 @@ export function GlobalChatBody({
 				void persistGlobalChatSession(sessionId, sessionTitle);
 			}
 			const authUser = authRef.current?.user;
-			const userContext =
-				authUser?.profile?.name ??
-				authUser?.profile?.preferred_username ??
-				authUser?.profile?.email;
+			const userContext = publicNameFromClaims(authUser?.profile);
 			// Forward the open board (if any) so the assistant knows what "this workflow /
 			// these nodes" refers to and routes board questions to flowpilot_board without
 			// asking which app/board. Read imperatively at send time — the live surface is the
@@ -1015,6 +1013,7 @@ export function GlobalChatBody({
 				{ id: userMessage.id, text: trimmed },
 				responseMessage.id,
 				voice?.transcript,
+				allFiles,
 			);
 			checkCurrent();
 			// Without its stored transcript the host could not tell the run is a live call; the

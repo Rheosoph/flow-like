@@ -21,7 +21,7 @@ use super::platform::PlatformToolBridge;
 /// Tools that send what they were given out of the platform or to another principal: mail,
 /// web and connector requests, images, a person or another bot, a shell, code, a browser, the
 /// computer and skills that run their own tools.
-const OUTBOUND_TOOLS: [&str; 20] = [
+const OUTBOUND_TOOLS: [&str; 21] = [
     "email_send",
     "email_reply",
     "connector_call",
@@ -40,9 +40,63 @@ const OUTBOUND_TOOLS: [&str; 20] = [
     "skill_run",
     "internet_search",
     "open_url",
+    "archive_lookup",
     "http_request",
     "research_agent",
 ];
+
+/// Tools that send something out only when a call sets `url`: a download names its address to
+/// that host, and a linked attachment makes every reader's app load it.
+const OUTBOUND_WITH_URL: [&str; 2] = ["file_save", "file_attach"];
+
+fn is_outbound(tool_name: &str, args: &Value) -> bool {
+    OUTBOUND_TOOLS.contains(&tool_name)
+        || (OUTBOUND_WITH_URL.contains(&tool_name)
+            && args
+                .get("url")
+                .and_then(Value::as_str)
+                .is_some_and(|url| !url.trim().is_empty()))
+}
+
+/// Mail and webhook content comes from outside the platform. The classification scale has no
+/// level above `public` for it, so it marks the turn as having read outside content without
+/// raising the level.
+pub const EXTERNAL_CONTENT: DataSensitivity = DataSensitivity {
+    classification: Some(DataClassification::Public),
+    pii: false,
+};
+
+/// What a turn has read before its first tool call, as its host knows it.
+#[derive(Debug, Clone, Default)]
+pub struct TurnReads {
+    /// The labels of the bots whose messages are in the history.
+    pub bot_senders: Vec<DataSensitivity>,
+    /// The taint recorded on messages the bot or other bots wrote earlier.
+    pub recorded: DataSensitivity,
+    /// A mail or webhook trigger is in the history.
+    pub external_trigger: bool,
+    /// A person's context snapshot is in the turn.
+    pub personal_context: bool,
+}
+
+impl TurnReads {
+    /// The label a turn starts with: the strictest of what it reads.
+    pub fn seed(&self) -> DataSensitivity {
+        let external = if self.external_trigger {
+            EXTERNAL_CONTENT
+        } else {
+            DataSensitivity::default()
+        };
+        let personal = DataSensitivity {
+            classification: None,
+            pii: self.personal_context,
+        };
+        DataSensitivity::combined(self.bot_senders.iter().copied())
+            .combine(self.recorded)
+            .combine(external)
+            .combine(personal)
+    }
+}
 
 #[derive(Default)]
 struct ComputeCells {
@@ -96,11 +150,13 @@ pub(super) struct TurnLabel {
 
 impl TurnLabel {
     pub(super) fn new(bot: &BotRunContext, talk: Option<Arc<BotTalk>>) -> Arc<Self> {
-        Arc::new(Self {
+        let label = Arc::new(Self {
             level: Mutex::new(DataSensitivity::default()),
             own: bot.classification.classification,
             talk,
-        })
+        });
+        label.raise(bot.seed_taint);
+        label
     }
 
     pub(super) fn get(&self) -> DataSensitivity {
@@ -143,8 +199,8 @@ impl TurnLabel {
     }
 
     /// The refusal for an outbound call once the turn handled data above the bot's own level.
-    pub(super) fn refusal(&self, tool_name: &str) -> Option<String> {
-        if !OUTBOUND_TOOLS.contains(&tool_name) {
+    pub(super) fn refusal(&self, tool_name: &str, args: &Value) -> Option<String> {
+        if !is_outbound(tool_name, args) {
             return None;
         }
         let seen = self.get().classification?;
@@ -176,7 +232,7 @@ pub(super) struct LabelBridge {
 #[async_trait]
 impl PlatformToolBridge for LabelBridge {
     async fn call(&self, tool_name: &str, arguments: Value) -> String {
-        if let Some(refusal) = self.label.refusal(tool_name) {
+        if let Some(refusal) = self.label.refusal(tool_name, &arguments) {
             return refusal;
         }
         let output = self.inner.call(tool_name, arguments).await;
@@ -238,15 +294,87 @@ mod tests {
             pii: false,
         });
         for name in OUTBOUND_TOOLS {
-            assert!(label.refusal(name).is_some(), "{name} was not refused");
+            assert!(
+                label.refusal(name, &json!({})).is_some(),
+                "{name} was not refused"
+            );
         }
-        assert!(label.refusal("file_read").is_none());
+        assert!(label.refusal("file_read", &json!({})).is_none());
+    }
+
+    #[test]
+    fn a_download_or_a_linked_attachment_is_outbound_and_a_local_file_is_not() {
+        let label = label(Some(DataClassification::Internal));
+        label.raise(DataSensitivity {
+            classification: Some(DataClassification::Confidential),
+            pii: false,
+        });
+        for name in OUTBOUND_WITH_URL {
+            assert!(
+                label
+                    .refusal(name, &json!({ "url": "https://h/a.pdf" }))
+                    .is_some()
+            );
+            assert!(label.refusal(name, &json!({ "file": "bot/a.pdf" })).is_none());
+            assert!(label.refusal(name, &json!({ "url": " " })).is_none());
+        }
+    }
+
+    #[test]
+    fn a_turn_starts_at_the_strictest_of_what_it_reads() {
+        let mut bot = BotRunContext::general();
+        bot.seed_taint = TurnReads {
+            bot_senders: vec![
+                DataSensitivity {
+                    classification: Some(DataClassification::Internal),
+                    pii: false,
+                },
+                DataSensitivity {
+                    classification: Some(DataClassification::Confidential),
+                    pii: false,
+                },
+            ],
+            recorded: DataSensitivity {
+                classification: Some(DataClassification::Internal),
+                pii: true,
+            },
+            external_trigger: true,
+            personal_context: false,
+        }
+        .seed();
+        let label = TurnLabel::new(&bot, None);
+        assert_eq!(
+            label.get(),
+            DataSensitivity {
+                classification: Some(DataClassification::Confidential),
+                pii: true,
+            }
+        );
+        assert!(label.refusal("email_send", &json!({})).is_some());
+        assert!(TurnLabel::new(&BotRunContext::general(), None).get().is_empty());
+    }
+
+    #[test]
+    fn mail_and_personal_context_seed_without_raising_the_level() {
+        let external = TurnReads {
+            external_trigger: true,
+            ..Default::default()
+        }
+        .seed();
+        assert_eq!(external, EXTERNAL_CONTENT);
+        let personal = TurnReads {
+            personal_context: true,
+            ..Default::default()
+        }
+        .seed();
+        assert!(personal.pii && personal.classification.is_none());
+        assert!(TurnReads::default().seed().is_empty());
     }
 
     #[test]
     fn an_answer_marked_confidential_raises_the_label() {
         let label = label(Some(DataClassification::Internal));
         label.observe(r#"{"status":"ok","tool":"ask_bot","classification":"confidential"}"#);
-        assert!(label.refusal("email_send").is_some());
+        assert!(label.refusal("email_send", &json!({})).is_some());
     }
 }

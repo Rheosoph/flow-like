@@ -2,8 +2,9 @@ use super::{
     AUTH_CHECK, PollFailure, Session, lock,
     pacing::{BACKOFF_CAP, backoff, jitter},
 };
+use flow_like_channels::realtime::ReplySink;
 use flow_like_types::realtime::{
-    RealtimeConnectRequest, RealtimeConnectResponse, RealtimeTransport,
+    RealtimeConnectRequest, RealtimeConnectResponse, RealtimeReply, RealtimeTransport,
 };
 use std::{
     sync::{
@@ -40,6 +41,10 @@ impl ProviderConnection {
         let wake = Arc::new(Notify::new());
         let (sender, healthy) = watch::channel(false);
         let notifications = Arc::clone(&wake);
+        let replies: ReplySink = {
+            let session = Arc::clone(&session);
+            Arc::new(move |reply: RealtimeReply| super::deliver_reply(&session, &reply))
+        };
         let task = tokio::spawn(async move {
             let work = run(
                 &client,
@@ -48,6 +53,7 @@ impl ProviderConnection {
                 sender.clone(),
                 &max_wait,
                 &reconnect,
+                &replies,
             );
             tokio::pin!(work);
             loop {
@@ -207,11 +213,16 @@ async fn listen(
     transport: &RealtimeTransport,
     wake: &Arc<Notify>,
     healthy: &watch::Sender<bool>,
+    replies: &ReplySink,
     renew: Instant,
 ) -> (bool, Option<Duration>) {
     let mut up = healthy.subscribe();
-    let listener =
-        flow_like_channels::realtime::listen(transport, Arc::clone(wake), healthy.clone());
+    let listener = flow_like_channels::realtime::listen(
+        transport,
+        Arc::clone(wake),
+        healthy.clone(),
+        Some(Arc::clone(replies)),
+    );
     tokio::pin!(listener);
     let deadline = tokio::time::sleep_until(renew.into());
     tokio::pin!(deadline);
@@ -238,6 +249,7 @@ async fn serve(
     wake: &Arc<Notify>,
     healthy: &watch::Sender<bool>,
     reconnect: &Mutex<Reconnect>,
+    replies: &ReplySink,
 ) -> Duration {
     let remaining = expires.saturating_duration_since(Instant::now());
     let Some(transport) = secure_transport(hub, transport) else {
@@ -255,7 +267,7 @@ async fn serve(
         + remaining
             .saturating_sub(RENEWAL_MARGIN)
             .max(Duration::from_secs(1));
-    let (renewed, uptime) = listen(&transport, wake, healthy, renew).await;
+    let (renewed, uptime) = listen(&transport, wake, healthy, replies, renew).await;
     healthy.send_replace(false);
     lock(reconnect).ended(renewed, uptime).unwrap_or_default()
 }
@@ -267,6 +279,7 @@ async fn run(
     healthy: watch::Sender<bool>,
     max_wait: &AtomicU64,
     reconnect: &Mutex<Reconnect>,
+    replies: &ReplySink,
 ) {
     loop {
         healthy.send_replace(false);
@@ -282,7 +295,16 @@ async fn run(
             Ok((grant, expires)) => {
                 max_wait.store(grant.max_poll_wait_ms, Ordering::Relaxed);
                 let hub = &session.binding.hub;
-                serve(hub, grant.transport, expires, &wake, &healthy, reconnect).await
+                serve(
+                    hub,
+                    grant.transport,
+                    expires,
+                    &wake,
+                    &healthy,
+                    reconnect,
+                    replies,
+                )
+                .await
             }
             // A rejected token is the HTTP owner's to resolve; until it does, back off like
             // any blocked grant rather than leaving a dead provider in place.

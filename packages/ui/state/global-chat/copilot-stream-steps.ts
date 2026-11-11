@@ -1,5 +1,6 @@
 import type { CopilotStreamEvent } from "../../components/flowpilot/copilot-stream-parser";
 import type {
+	IAttachment,
 	IChatUsageStat,
 	IPlanStep,
 	PlanStepStatus,
@@ -241,6 +242,24 @@ function toolActivityDetail(name: string, data: unknown, existing?: IPlanStep) {
 			? { ...previous, label: getToolActivityLabel(name) }
 			: previous,
 	);
+}
+
+/** Narrow a `<reply_attachment>` payload to a chip; frames without a usable url are dropped. */
+export function readReplyAttachment(data: unknown): IAttachment | null {
+	if (!data || typeof data !== "object") return null;
+	const record = data as Record<string, unknown>;
+	const url = typeof record.url === "string" ? record.url.trim() : "";
+	if (!/^(https?|storage):\/\//i.test(url)) return null;
+	return {
+		url,
+		...(typeof record.name === "string" && record.name
+			? { name: record.name }
+			: {}),
+		...(typeof record.mime === "string" && record.mime
+			? { type: record.mime }
+			: {}),
+		...(typeof record.bytes === "number" ? { size: record.bytes } : {}),
+	};
 }
 
 export function applyStreamEvent(

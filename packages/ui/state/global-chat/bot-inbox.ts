@@ -1,6 +1,14 @@
 import { joinContentText } from "../../components/interfaces/chat-default/inline-segments";
+import {
+	attachmentParts,
+	conversationFileTooLarge,
+	inBatches,
+} from "../../lib/conversation-files";
 import { IRole } from "../../lib/schema/llm/history";
-import type { IInboxState } from "../backend-state/inbox-state";
+import type {
+	IInboxAttachmentPart,
+	IInboxState,
+} from "../backend-state/inbox-state";
 import {
 	type BotHistoryTarget,
 	type LegacyMessage,
@@ -124,24 +132,58 @@ export interface InteractiveRef {
 }
 
 /**
+ * The files uploaded into the bot's conversation, as the message's attachment parts: they stay with
+ * the message for the bot's later turns, its download links and the person's other devices. A file
+ * too large to store, and every file when an upload is refused (an end-to-end encrypted chat takes
+ * none), is read from this turn's upload only.
+ */
+async function storedParts(
+	backend: IInboxState,
+	conversationId: string,
+	files: readonly File[],
+): Promise<IInboxAttachmentPart[]> {
+	const storable = files.filter((file) => !conversationFileTooLarge(file));
+	if (storable.length === 0) return [];
+	try {
+		return attachmentParts(
+			await inBatches(storable, (file) =>
+				backend.uploadConversationFile(conversationId, file),
+			),
+		);
+	} catch (error) {
+		console.warn(
+			"[BotChat] The attachments are kept for this turn only:",
+			error,
+		);
+		return [];
+	}
+}
+
+/**
  * Writes the user's message to the bot's inbox with the interactive mark, before the run starts, so
- * the turn exists and no host answers it too. Null where the chat has no inbox history or the write
- * failed; the run then goes on without storing anything.
+ * the turn exists and no host answers it too. Its files are uploaded into the conversation first.
+ * Null where the chat has no inbox history or the write failed; the run then goes on without
+ * storing anything.
  */
 export async function sendInteractiveMessage(
 	conversationId: string,
 	message: { id: string; text: string },
 	clientRunId: string,
 	transcript?: VoiceTranscript,
+	files: readonly File[] = [],
 ): Promise<InteractiveRef | null> {
 	const target = await ensureBotTarget(conversationId);
 	const backend = inbox;
 	if (!target || !backend) return null;
 	try {
+		const parts = transcript
+			? []
+			: await storedParts(backend, target.conversationId, files);
 		await sendInteractive(backend, target, {
 			...message,
 			clientRunId,
 			transcript,
+			parts,
 		});
 		return {
 			conversationId: target.conversationId,

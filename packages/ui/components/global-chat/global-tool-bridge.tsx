@@ -262,6 +262,7 @@ import {
 	isReturnedAppInventory,
 	sealedResearchRefusal,
 } from "./local-app-discovery";
+import { assistantSelection } from "./model-selection";
 import { readFlowScriptSource } from "./read-flowscript-source";
 import { researchAgentPrompt } from "./research-brief";
 import {
@@ -402,6 +403,11 @@ export interface FrontendToolRequest {
 		 */
 		runId?: string;
 		run_id?: string;
+		/**
+		 * The model the owning bot turn names for its assistants: the bot's sub-task model, else
+		 * the turn's own. Absent outside a bot turn, where the chat's selection applies.
+		 */
+		assistantModelId?: string;
 	};
 }
 
@@ -702,7 +708,10 @@ export interface RunScope {
 			appId?: string;
 		} | null,
 	): void;
-	/** The provider/model/effort pinned by this run, for nested specialists. */
+	/**
+	 * The provider/model/effort nested specialists run on: the model the owning bot turn names,
+	 * else this run's own selection.
+	 */
 	turnSelection(): GlobalChatAgentSelection;
 }
 
@@ -729,7 +738,10 @@ function setSolveRoutingState(
 	}
 }
 
-function createRunScope(runId: string | undefined): RunScope {
+function createRunScope(
+	runId: string | undefined,
+	assistantModelId?: string,
+): RunScope {
 	const store = () => useGlobalChatStore.getState();
 	const live = () => (runId ? Boolean(store().runs[runId]) : false);
 	const guard = (write: (id: string) => void) => {
@@ -768,7 +780,8 @@ function createRunScope(runId: string | undefined): RunScope {
 				guard((id) => store().setPendingComponentsDraft(id, requestId, draft));
 			else store().setPendingComponentsDraft(runId, requestId, null);
 		},
-		turnSelection: () => getGlobalChatTurnSelection(runId),
+		turnSelection: () =>
+			assistantSelection(getGlobalChatTurnSelection(runId), assistantModelId),
 	};
 }
 
@@ -5244,7 +5257,7 @@ export function GlobalToolBridge() {
 								.map((node) => node.id),
 						);
 
-						// Run the board copilot as a sub-agent, using the global chat's selected model.
+						// Run the board copilot as a sub-agent, on the model this run's assistants use.
 						const turnSelection = scope.turnSelection();
 						const owningUserPrompt = sourceUserPrompt(request);
 						const owningConversationId = conversationScopeId(request);
@@ -7008,7 +7021,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 					);
 					if (alreadyCreated) return alreadyCreated;
 
-					// Run the widget copilot as a sub-agent, using the global chat's selected model.
+					// Run the widget copilot as a sub-agent, on the model this run's assistants use.
 					const turnSelection = scope.turnSelection();
 					const owningUserPrompt = sourceUserPrompt(request);
 					const owningConversationId = conversationScopeId(request);
@@ -8373,7 +8386,10 @@ Completion contract: build complete helper logic first and add the Event entry l
 			}
 			// Resolved once, here, and threaded down: every store write this tool performs is
 			// addressed to the run that asked for it.
-			const scope = createRunScope(ownerMessageId);
+			const scope = createRunScope(
+				ownerMessageId,
+				request.context?.assistantModelId,
+			);
 			if (request.toolName === "flowpilot_board") {
 				const appId =
 					argString(request.arguments, "app_id") ||

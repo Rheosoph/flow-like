@@ -13,6 +13,7 @@ import {
 	type RealtimeConnectionSession,
 	type RealtimeProviderStage,
 	type RealtimeProviderStatus,
+	type RealtimeReply,
 	type RealtimeTransport,
 } from "./types";
 
@@ -212,6 +213,7 @@ export class RealtimeProviderSession {
 			fetch: Fetch;
 			changed(): void;
 			wakeup(): void;
+			reply?(reply: RealtimeReply): void;
 			open?: RealtimeProviderOpener;
 			status?(status: RealtimeProviderStatus): void;
 		},
@@ -432,6 +434,9 @@ export class RealtimeProviderSession {
 							if (this.nonces.size > 256)
 								this.nonces.delete(this.nonces.values().next().value as string);
 							this.options.wakeup();
+						},
+						reply: (reply) => {
+							if (current()) this.options.reply?.(reply);
 						},
 						disconnected: (reason) => {
 							this.failed(

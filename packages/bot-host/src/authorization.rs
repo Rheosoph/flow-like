@@ -437,6 +437,7 @@ mod tests {
             live_call: false,
             tool_gate: None,
             ephemeral_user_context: false,
+            seed_taint: Default::default(),
             shared_context: None,
             suppress_owner_notifications: false,
             history: Vec::new(),
@@ -450,6 +451,7 @@ mod tests {
             recovery: None,
             notes: None,
             trail: None,
+            reply_files: None,
         };
         RunnerInference::new(
             Arc::new(DecisionRunner {
@@ -526,6 +528,7 @@ mod tests {
             live_call: false,
             tool_gate: None,
             ephemeral_user_context: false,
+            seed_taint: Default::default(),
             shared_context: None,
             suppress_owner_notifications: false,
             history: Vec::new(),
@@ -539,6 +542,7 @@ mod tests {
             recovery: None,
             notes: None,
             trail: None,
+            reply_files: None,
         };
         let source = Arc::new(CountingAuthority(Default::default()));
         let inference =

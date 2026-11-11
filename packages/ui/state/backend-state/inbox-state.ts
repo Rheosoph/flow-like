@@ -52,7 +52,12 @@ export interface IInboxAttachmentPart {
 	/** `a1`, `a2` ... numbered in order within the message. */
 	id: string;
 	name: string;
-	handle: IInboxFileHandle;
+	/** A stored file; absent on a linked file. */
+	handle?: IInboxFileHandle;
+	/** A linked file: http(s), may expire. */
+	url?: string;
+	/** The type of a linked file. */
+	mime?: string;
 }
 
 /** A finished conversation file upload: its `handle` goes into an attachment part. */

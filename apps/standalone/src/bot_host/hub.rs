@@ -30,6 +30,8 @@ use std::{
 };
 
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+/// The hub waits up to 570 s for an app's run to end before it answers an app tool call.
+const APP_TOOL_TIMEOUT: Duration = Duration::from_secs(630);
 const MIN_POLL_MS: u64 = 500;
 
 #[async_trait]
@@ -233,6 +235,19 @@ impl DeviceTurnHub {
         query: &[(&str, String)],
         body: Option<Value>,
     ) -> Result<Value, HubFailure> {
+        self.bearer_call_within(method, path, query, body, None)
+            .await
+    }
+
+    /// `timeout` replaces the client's default for a call the hub answers only once a run ends.
+    async fn bearer_call_within(
+        &self,
+        method: Method,
+        path: &str,
+        query: &[(&str, String)],
+        body: Option<Value>,
+        timeout: Option<Duration>,
+    ) -> Result<Value, HubFailure> {
         let Some(creds) = &self.bearer else {
             return Err(HubFailure::answered(
                 401,
@@ -252,6 +267,9 @@ impl DeviceTurnHub {
             .bearer_auth(creds.bot_token());
         if let Some(body) = &body {
             request = request.json(body);
+        }
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
         }
         let response = request
             .send()
@@ -664,6 +682,24 @@ impl TurnHub for DeviceTurnHub {
             )
             .await?;
         Ok(removed.get("deleted").and_then(Value::as_bool) == Some(true))
+    }
+
+    async fn app_tool(
+        &self,
+        bot_id: &str,
+        turn_id: &str,
+        tool: &str,
+        args: Value,
+    ) -> Result<String, HubFailure> {
+        self.bearer_call_within(
+            Method::POST,
+            &format!("bots/{bot_id}/turns/{turn_id}/app-tools/{tool}"),
+            &[("host_id", self.shared.host_id.clone())],
+            Some(args),
+            Some(APP_TOOL_TIMEOUT),
+        )
+        .await
+        .map(|result| result.to_string())
     }
 
     async fn read(

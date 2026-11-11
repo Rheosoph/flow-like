@@ -228,6 +228,7 @@ fn queued_row(
         requester_id: Set(Some(waking.requester_id.clone())),
         audience: Set(waking.audience.stored().to_string()),
         status_text: Set(None),
+        unprompted: Set(recipient.unprompted().then_some(true)),
         created_at: Set(now),
         updated_at: Set(now),
     }
@@ -282,6 +283,26 @@ pub(crate) async fn enqueue_in<C: ConnectionTrait>(
     }
     let waking = super::cap::admit(db, waking, now).await?;
     let waking = waking_of(db, delivery, waking).await?;
+    let entry = waking.first().map(|first| {
+        (
+            first.recipient.trigger_message_id.clone(),
+            first.recipient.conversation_id.clone(),
+        )
+    });
+    let waking = match entry {
+        Some((message_id, conversation_id)) => {
+            super::taint::admit_mentions(
+                db,
+                &delivery.sender_id,
+                &message_id,
+                &conversation_id,
+                waking,
+                now,
+            )
+            .await?
+        }
+        None => waking,
+    };
     let waking = super::cap::admit_requesters(db, waking, now).await?;
     if waking.is_empty() {
         return Ok(0);
@@ -1364,7 +1385,10 @@ pub(crate) async fn hand_back_in<C: ConnectionTrait>(
     let sealed = conversation::Entity::find()
         .select_only()
         .column(conversation::Column::Id)
-        .filter(conversation::Column::Encryption.eq(ConversationEncryption::E2e.as_str()))
+        .filter(
+            conversation::Column::Encryption
+                .eq(ConversationEncryption::E2e.as_str().to_ascii_uppercase()),
+        )
         .into_query();
     let unclaimed: Vec<String> = bot_turn::Entity::find()
         .select_only()

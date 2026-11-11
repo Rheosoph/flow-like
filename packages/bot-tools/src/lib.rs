@@ -58,8 +58,8 @@ pub use data_backend::{DataBackend, NetworkTable, SourceTable};
 pub use documents::DocumentBackend;
 pub use embed::{KnowledgeEmbedder, ModelEmbedder};
 pub use env::{
-    Access, AppGrant, AppTables, Attachment, Environment, FileData, FileEntry, FileMeta, Limits,
-    MemorySessions, ModelRole, Progress, Scope, SessionCache, ToolEnv,
+    Access, AppGrant, AppTables, Attachment, Environment, FileData, FileEntry, FileLink, FileMeta,
+    Limits, MemorySessions, ModelRole, Progress, Scope, SessionCache, ToolEnv,
 };
 pub use error::{ToolError, ToolResult};
 pub use files::FileRef;
@@ -106,6 +106,7 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         files::FILE_READ => files::file_read(env, parse_args(tool, args)?).await,
         files::FILE_SAVE => files::file_save(env, parse_args(tool, args)?).await,
         files::FILE_WRITE => files::file_write(env, parse_args(tool, args)?).await,
+        files::FILE_LINK => files::file_link(env, parse_args(tool, args)?).await,
         knowledge::KNOWLEDGE_CREATE => {
             knowledge::knowledge_create(env, parse_args(tool, args)?).await
         }

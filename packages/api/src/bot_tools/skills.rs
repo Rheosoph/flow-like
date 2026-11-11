@@ -217,6 +217,7 @@ async fn run_import_job(
         secrets: Default::default(),
         connectors: Vec::new(),
         skill_call: None,
+        files: Vec::new(),
     };
     let job = serde_json::to_string(&job)
         .map_err(|error| ApiError::internal(format!("Encoding the import job failed: {error}")))?;

@@ -61,7 +61,7 @@
 			"label": ""
 		},
 		"internet": {
-			"description": "Im Web suchen und Seiten lesen, über einen separaten Rechercheur",
+			"description": "Sucht im Web und liest öffentliche Seiten",
 			"label": "Internet"
 		},
 		"knowledge": {
@@ -754,6 +754,16 @@
 		"unknownMember": "Jemand",
 		"unread_one": "{{count}} ungelesen",
 		"unread_other": "{{count}} ungelesen",
+		"visibility": {
+			"description": "Wähle, welche Bots dieses Profil zeigt. Ein ausgeblendeter Bot arbeitet weiter und bleibt in seinen Räumen.",
+			"descriptionNamed": "Wähle, welche Bots „{{profile}}“ zeigt. Ein ausgeblendeter Bot arbeitet weiter und bleibt in seinen Räumen.",
+			"failed": "Die Bots dieses Profils konnten nicht ein- oder ausgeblendet werden.",
+			"hidden": "In diesem Profil ausgeblendet",
+			"hiddenCount_one": "{{count}} in diesem Profil ausgeblendet",
+			"hiddenCount_other": "{{count}} in diesem Profil ausgeblendet",
+			"shown": "In diesem Profil sichtbar",
+			"title": "Bots in diesem Profil"
+		},
 		"you": "Du",
 		"youObject": "dich",
 		"yourCrew": "Deine Crew",
@@ -1139,6 +1149,7 @@
 		"event": "",
 		"host": "",
 		"other": "",
+		"ownerBrowser": "",
 		"page": "",
 		"person": "",
 		"personUnknown": "",

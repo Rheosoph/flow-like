@@ -21,6 +21,7 @@ use crate::{
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
+    http::StatusCode,
 };
 use flow_like::flow::copilot::tool_grants::GrantStore;
 use flow_like_types::{
@@ -30,6 +31,8 @@ use flow_like_types::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::{IntoParams, ToSchema};
+
+const MAX_TOUCHED_GRANTS: usize = 50;
 
 /// One standing approval.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
@@ -42,6 +45,9 @@ pub struct BotToolGrant {
     pub granted_at: String,
     /// The person who granted it.
     pub granted_by: String,
+    /// When the grant lapses: 90 days after the bot last used it. Each use moves it forward,
+    /// at most once a day; a lapsed grant is ignored and removed.
+    pub expires_at: Option<String>,
 }
 
 impl From<flow_like_types::tool_grant::ToolGrant> for BotToolGrant {
@@ -51,6 +57,7 @@ impl From<flow_like_types::tool_grant::ToolGrant> for BotToolGrant {
             scope: grant.scope,
             granted_at: grant.granted_at,
             granted_by: grant.granted_by,
+            expires_at: grant.expires_at,
         }
     }
 }
@@ -77,6 +84,13 @@ impl From<BotToolGrantKey> for ToolGrantKey {
             scope: key.scope,
         }
     }
+}
+
+/// The grants a host's bot just used.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, ToSchema)]
+pub struct BotToolGrantTouch {
+    /// At most 50 grants; ones the bot doesn't hold (or that lapsed) are ignored.
+    pub grants: Vec<BotToolGrantKey>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
@@ -108,7 +122,7 @@ pub struct GrantsQuery {
     tag = "Bots",
     params(("bot_id" = String, Path, description = "Your bot's id"), GrantsQuery),
     responses(
-        (status = 200, description = "What the bot may run without asking you again, oldest first.", body = BotToolGrantList),
+        (status = 200, description = "What the bot may run without asking you again, oldest first. Each grant carries `expires_at`: it lapses 90 days after the bot last used it, and lapsed grants are left out.", body = BotToolGrantList),
         (status = 401, description = "Not signed in"),
         (status = 404, description = "You have no bot with this id")
     ),
@@ -151,16 +165,61 @@ pub async fn put_tool_grant(
 ) -> Result<Json<BotToolGrant>, ApiError> {
     let sub = user.sub()?;
     let key = ToolGrantKey::from(body);
-    let grant = approvals::grant_in(&state.db, &sub, &bot_id, &key, now_millis()).await?;
-    audit!(
-        state,
-        user,
-        "bot.tool_grant.put",
-        "Bot",
-        bot_id,
-        serde_json::json!({ "tool": key.tool, "scope": key.scope })
-    );
+    let now = now_millis();
+    let held = approvals::list_grants(&state.db, &sub, &bot_id, true)
+        .await?
+        .iter()
+        .any(|grant| grant.tool == key.tool && grant.scope == key.scope);
+    let grant = approvals::grant_in(&state.db, &sub, &bot_id, &key, now).await?;
+    if !held {
+        audit!(
+            state,
+            user,
+            "bot.tool_grant.put",
+            "Bot",
+            bot_id,
+            serde_json::json!({ "tool": key.tool, "scope": key.scope })
+        );
+    }
     Ok(Json(grant.into()))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/bots/{bot_id}/tool-grants",
+    tag = "Bots",
+    params(("bot_id" = String, Path, description = "Your bot's id")),
+    request_body = BotToolGrantTouch,
+    responses(
+        (status = 204, description = "A host reports that the bot used these standing grants: their expiry moves 90 days past now, at most once a day each. Grants that don't exist or already lapsed stay as they are."),
+        (status = 400, description = "More than 50 grants"),
+        (status = 401, description = "Not signed in"),
+        (status = 404, description = "You have no bot with this id")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(name = "PATCH /bots/{bot_id}/tool-grants", skip(state, user, body))]
+pub async fn touch_tool_grants(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(bot_id): Path<String>,
+    Json(body): Json<BotToolGrantTouch>,
+) -> Result<StatusCode, ApiError> {
+    let sub = user.sub()?;
+    if body.grants.len() > MAX_TOUCHED_GRANTS {
+        return Err(ApiError::bad_request(format!(
+            "At most {MAX_TOUCHED_GRANTS} grants per call; this one has {}",
+            body.grants.len()
+        )));
+    }
+    owned_bot(&state.db, &sub, &bot_id).await?;
+    let keys: Vec<(String, String)> = body
+        .grants
+        .into_iter()
+        .map(|key| (key.tool, key.scope))
+        .collect();
+    approvals::touch_in(&state.db, &bot_id, &keys, now_millis()).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[utoipa::path(

@@ -22,8 +22,8 @@ export const CAPABILITY_DETAILS: Readonly<
 	Record<BotCapability, CapabilityDetail>
 > = {
 	internet: {
-		tools: ["research_agent"],
-		note: "A separate, sealed researcher searches and reads public pages. It only gets the question, never the bot's memory, files or secrets, so instructions hidden in a page can't reach them.",
+		tools: ["internet_search", "open_url", "archive_lookup", "research_agent"],
+		note: "The bot searches and reads public pages itself. It opens only links from a search result or from your message, never one it wrote or found inside a page. For a job with many sources it can hand the question to a separate researcher.",
 	},
 	web_requests: {
 		tools: ["web_request"],
@@ -82,7 +82,8 @@ export const CAPABILITY_DETAILS: Readonly<
 	},
 	storage: {
 		tools: ["file_list", "file_read", "file_save", "file_write"],
-		note: "Files in the bot's own workspace, stored like app storage.",
+		asks: "Before file_save downloads from a new site.",
+		note: "Files in the bot's own workspace, stored like app storage. file_save can also download a link, such as a signed download link an app returned; that counts as outbound. Every chat that can show files also gets file_attach, which attaches a file or a link to the reply so it shows as a file in the chat; it needs no capability, and a link attachment counts as outbound.",
 	},
 	data_studio: {
 		tools: ["database_tool"],

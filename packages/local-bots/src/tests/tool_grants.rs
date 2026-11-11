@@ -301,3 +301,63 @@ fn deleting_or_forgetting_a_conversation_drops_its_parked_turns() {
     fixture.store.forget_conversation(&second.id, None).unwrap();
     assert!(fixture.store.parked_turns().unwrap().is_empty());
 }
+
+fn set_expiry(fixture: &super::Fixture, bot_id: &str, expires_at: Option<i64>) {
+    fixture
+        .store
+        .write(|tx, _| {
+            tx.execute(
+                "UPDATE tool_grants SET expires_at = ?1 WHERE bot_id = ?2",
+                params![expires_at, bot_id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+fn expiry(fixture: &super::Fixture, bot_id: &str) -> Option<i64> {
+    fixture
+        .store
+        .read(|db| {
+            Ok(db.query_row(
+                "SELECT expires_at FROM tool_grants WHERE bot_id = ?1",
+                [bot_id],
+                |row| row.get(0),
+            )?)
+        })
+        .unwrap()
+}
+
+#[test]
+fn a_grant_lapses_after_ninety_days_unused_and_a_use_slides_it_once_a_day() {
+    const DAY: i64 = 86_400_000_000;
+    let fixture = fixture();
+    let bot = fixture.bot("Scout");
+    let grant = key("code_run", "host:example.com");
+    let used = [("code_run".to_string(), "host:example.com".to_string())];
+    fixture.store.grant_tool(&bot.id, &grant).unwrap();
+    let granted = expiry(&fixture, &bot.id).unwrap();
+    let now = crate::store::now_micros();
+    assert!(granted > now + 89 * DAY);
+    let listed = fixture.store.tool_grants(&bot.id).unwrap();
+    assert!(listed[0].expires_at.is_some());
+
+    fixture.store.touch_tool_keys(&bot.id, &used).unwrap();
+    assert_eq!(expiry(&fixture, &bot.id), Some(granted), "within a day");
+
+    set_expiry(&fixture, &bot.id, Some(now + 60 * DAY));
+    fixture.store.touch_tool_keys(&bot.id, &used).unwrap();
+    assert!(expiry(&fixture, &bot.id).unwrap() > now + 89 * DAY);
+
+    set_expiry(&fixture, &bot.id, Some(now - DAY));
+    assert!(fixture.store.tool_grants(&bot.id).unwrap().is_empty());
+    assert!(fixture.store.tool_keys(&bot.id).unwrap().is_empty());
+    assert_eq!(
+        fixture.store.delete_tool_key(&bot.id, "code_run", "host:example.com").unwrap(),
+        false,
+        "the lapsed row was swept"
+    );
+    fixture.store.touch_tool_keys(&bot.id, &used).unwrap();
+    fixture.store.grant_tool(&bot.id, &grant).unwrap();
+    assert!(!fixture.store.tool_grants(&bot.id).unwrap().is_empty());
+}

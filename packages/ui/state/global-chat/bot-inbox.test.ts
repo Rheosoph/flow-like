@@ -3,6 +3,7 @@ import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { IRole } from "../../lib/schema/llm/history";
 import type {
+	IConversationFileReady,
 	IInboxEntry,
 	IInboxImportEntry,
 	IInboxState,
@@ -49,10 +50,11 @@ function inboxEntry(seq: number, sender: string, text: string): IInboxEntry {
 	};
 }
 
-function backend(options: { failing?: boolean } = {}) {
+function backend(options: { failing?: boolean; refusesFiles?: boolean } = {}) {
 	const stored = new Map<string, IInboxEntry>();
 	const imported = new Map<string, IInboxImportEntry>();
 	const sent: ISendInboxEntryRequest[] = [];
+	const uploads: string[] = [];
 	for (const [seq, sender, text] of [
 		[1, "user_1", "Earlier question"],
 		[2, "bot_ada", "Earlier answer"],
@@ -102,8 +104,33 @@ function backend(options: { failing?: boolean } = {}) {
 		async listSegments() {
 			return { segments: [], next_after: null };
 		},
+		async uploadConversationFile(
+			conversationId: string,
+			file: File,
+		): Promise<IConversationFileReady> {
+			if (options.refusesFiles) {
+				throw new Error("ATTACHMENTS_ENCRYPTED_UNSUPPORTED");
+			}
+			uploads.push(`${conversationId}:${file.name}`);
+			const fileId = `f${uploads.length}`;
+			return {
+				file_id: fileId,
+				name: file.name,
+				app_id: `conversation_${conversationId}`,
+				path: `${fileId}.png`,
+				bytes: file.size,
+				sha256: "a".repeat(64),
+				mime: file.type,
+			};
+		},
 	};
-	return { inbox: inbox as unknown as IInboxState, sent, imported, stored };
+	return {
+		inbox: inbox as unknown as IInboxState,
+		sent,
+		imported,
+		stored,
+		uploads,
+	};
 }
 
 beforeEach(async () => {
@@ -230,6 +257,64 @@ describe("a bot chat on its inbox history", () => {
 			interactive: { client_run_id: "run_2" },
 		});
 		expect(webInteractiveBody(null)).toEqual({});
+	});
+
+	test("files go into the conversation first and travel with the message as attachments", async () => {
+		const { inbox, sent, uploads } = backend();
+		registerBotInbox(inbox);
+		await switchGlobalChatBot("bot_ada");
+		const logo = new File(["png"], "logo.png", { type: "image/png" });
+		const huge = new File(["x"], "huge.mov", { type: "video/quicktime" });
+		Object.defineProperty(huge, "size", { value: 64 * 1024 * 1024 });
+
+		await sendInteractiveMessage(
+			"bot:bot_ada",
+			{ id: "m", text: "Our logo" },
+			"r",
+			undefined,
+			[logo, huge],
+		);
+
+		expect(uploads).toEqual(["conv_ada:logo.png"]);
+		expect(sent[0].envelope?.body).toEqual({
+			text: "Our logo",
+			interactive: { client_run_id: "r" },
+			parts: [
+				{
+					kind: "attachment",
+					id: "a1",
+					name: "logo.png",
+					handle: {
+						app_id: "conversation_conv_ada",
+						path: "f1.png",
+						bytes: 3,
+						sha256: "a".repeat(64),
+						mime: "image/png",
+					},
+				},
+			],
+		});
+	});
+
+	test("a refused upload still sends the message, its files kept for the turn only", async () => {
+		const { inbox, sent } = backend({ refusesFiles: true });
+		registerBotInbox(inbox);
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		const logo = new File(["png"], "logo.png", { type: "image/png" });
+
+		expect(
+			await sendInteractiveMessage(
+				"bot:bot_ada",
+				{ id: "m", text: "x" },
+				"r",
+				undefined,
+				[logo],
+			),
+		).toMatchObject({ triggerMessageId: "m" });
+		expect(sent[0].envelope?.body).toEqual({
+			text: "x",
+			interactive: { client_run_id: "r" },
+		});
 	});
 
 	test("a chat whose inbox nothing resolved yet resolves it before sending", async () => {

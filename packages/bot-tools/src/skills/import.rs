@@ -71,7 +71,9 @@ fn skill_root(names: &[String]) -> Result<String, String> {
             "The zip has no SKILL.md at its top level or in its single top-level folder",
         )),
         [root] => Ok((*root).to_string()),
-        _ => Err(refuse("The zip holds more than one skill; import one at a time")),
+        _ => Err(refuse(
+            "The zip holds more than one skill; import one at a time",
+        )),
     }
 }
 
@@ -101,8 +103,7 @@ pub fn unpack(zip_bytes: &[u8]) -> Result<Unpacked, String> {
             .map_err(|error| refuse(format!("Zip entry {index} has an unreadable name: {error}")))?
             .into_owned();
         let name = raw.replace('\\', "/");
-        if name.starts_with('/') || name.split('/').any(|part| part == "..") || name.contains(':')
-        {
+        if name.starts_with('/') || name.split('/').any(|part| part == "..") || name.contains(':') {
             return Err(refuse(format!(
                 "The zip entry '{raw}' leaves the skill folder"
             )));
@@ -215,7 +216,10 @@ pub async fn run_import(env: &dyn ToolEnv, args: SkillImportArgs) -> ToolResult<
     if data.size > MAX_ZIP_BYTES {
         return Err(ToolError::new(
             code::TOO_LARGE,
-            format!("The zip has {} bytes; skills are at most {MAX_ZIP_BYTES}", data.size),
+            format!(
+                "The zip has {} bytes; skills are at most {MAX_ZIP_BYTES}",
+                data.size
+            ),
         ));
     }
     let unpacked = unpack(&data.bytes).map_err(ToolError::invalid)?;
@@ -234,9 +238,9 @@ pub async fn run_import(env: &dyn ToolEnv, args: SkillImportArgs) -> ToolResult<
         files: written,
         skipped: unpacked.skipped,
     };
-    Ok(ToolOutput::new(
-        serde_json::to_value(&imported).map_err(|error| ToolError::new(code::FAILED, error.to_string()))?,
-    ))
+    Ok(ToolOutput::new(serde_json::to_value(&imported).map_err(
+        |error| ToolError::new(code::FAILED, error.to_string()),
+    )?))
 }
 
 fn flow_like_bot_mime(path: &str) -> String {

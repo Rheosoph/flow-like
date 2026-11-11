@@ -68,6 +68,7 @@ interface LiveReply {
 	cueOn: boolean;
 	timer: unknown;
 	messageId?: string;
+	pushed?: boolean;
 	stored?: Reply;
 }
 
@@ -384,6 +385,7 @@ export function createBotCallSpeech({
 	let finishDelay: (() => void) | null = null;
 	const streamed = new Map<string, LiveReply>();
 	const lives = new Set<LiveReply>();
+	let callTranscripts = new Set<string>();
 	const streamFailed = new Set<string>();
 
 	const currentMessage = (reply: Reply): ConversationMessage | undefined =>
@@ -580,7 +582,7 @@ export function createBotCallSpeech({
 			};
 			current = state;
 			try {
-				if (!reply.live) await electionDelay(reply);
+				if (!reply.live || reply.live.pushed) await electionDelay(reply);
 				if (!valid(reply)) {
 					trace.notVoiced(reply.id, "dropped");
 					continue;
@@ -658,6 +660,7 @@ export function createBotCallSpeech({
 		transcriptId: string,
 		botId: string,
 		voice: BotSpeechVoice,
+		messageId?: string,
 	) => {
 		const key = `${transcriptId}\u0000${botId}`;
 		const reply: Reply = {
@@ -685,6 +688,7 @@ export function createBotCallSpeech({
 			audioStarted: false,
 			cueOn: false,
 			timer: null,
+			...(messageId !== undefined ? { messageId, pushed: true } : {}),
 		};
 		reply.live = live;
 		streamed.set(key, live);
@@ -736,10 +740,10 @@ export function createBotCallSpeech({
 			source.ended = true;
 			wakeSource(source);
 			trace.notVoiced(live.reply.id, "cancelled");
-			if (!live.audioStarted) {
-				streamed.delete(live.key);
-				if (live.stored) queue.push(live.stored);
-			}
+			const unheard = !live.audioStarted;
+			// A pushed reply that was dropped may be written again; its stored message is then spoken whole.
+			if (unheard || live.pushed) streamed.delete(live.key);
+			if (unheard && live.stored) queue.push(live.stored);
 			void drain();
 		},
 	});
@@ -755,6 +759,7 @@ export function createBotCallSpeech({
 					.filter((item) => item.type === "transcript" && item.call === callId)
 					.map((item) => item.id),
 			);
+			callTranscripts = transcripts;
 			const cursors = new Map(
 				next.entries.map((entry) => [entry.message_id, entry.cursor]),
 			);
@@ -817,6 +822,7 @@ export function createBotCallSpeech({
 				if (live) {
 					live.messageId ??= item.id;
 					live.stored = stored;
+					if (live.pushed && live.state === "open") handleOf(live).end();
 					continue;
 				}
 				if (transcript) trace.replySeen(transcript, item.id);
@@ -829,11 +835,21 @@ export function createBotCallSpeech({
 			void drain();
 		},
 		/** Speaks a reply as its text grows; null when the bot has no voice on this device. */
-		stream(transcriptId: string, botId: string): StreamedReply | null {
+		stream(
+			transcriptId: string,
+			botId: string,
+			options: { messageId?: string } = {},
+		): StreamedReply | null {
 			const voice = snapshot.voices.get(botId);
 			if (closed || !voice || !canSpeak(botId)) return null;
 			if (streamed.has(`${transcriptId}\u0000${botId}`)) return null;
-			return handleOf(openStream(transcriptId, botId, voice));
+			const { messageId } = options;
+			if (
+				messageId !== undefined &&
+				(seen.has(messageId) || !callTranscripts.has(transcriptId))
+			)
+				return null;
+			return handleOf(openStream(transcriptId, botId, voice, messageId));
 		},
 		/** The text of the chunk being played, for telling the bot's own voice from a person. */
 		playingText(botId?: string): string | null {

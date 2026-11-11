@@ -78,6 +78,7 @@ import {
 	useCallback,
 	useEffect,
 	useMemo,
+	useReducer,
 	useRef,
 	useState,
 } from "react";
@@ -245,13 +246,19 @@ import {
 	computeFlowLayoutDetailed,
 } from "../../lib/flow-auto-layout";
 import {
+	type PendingEdgeEdit,
+	edgeEditApplied,
 	getFunctionReferenceNodeIdsFromEdge,
 	handleConnection,
 	handleEdgesChange,
 	handleNodesChange,
 	handlePlaceNode,
 	handlePlacePlaceholder,
+	keepUnconfirmedPositions,
+	pendingEdgeEdit,
 	removeFunctionReferenceCommandForEdge,
+	type UnconfirmedMove,
+	withPendingEdges,
 } from "../../lib/flow-board-helpers";
 import {
 	duplicateSelectionCommand,
@@ -438,6 +445,14 @@ export interface FlowCanvasProps {
 	onConnectEnd: ReactFlowProps["onConnectEnd"];
 	onNativeConnection: (connection: Connection, oldEdge?: Edge) => Promise<void>;
 	onNativeDisconnect: (edge: Edge) => Promise<void>;
+	/**
+	 * Shows a dropped connection (or, without one, the removal of `oldEdge`) before its
+	 * save lands. The returned function ends that once the save has settled.
+	 */
+	onNativePendingEdge?: (
+		connection: Connection | undefined,
+		oldEdge?: Edge,
+	) => ((saved: boolean) => void) | undefined;
 	onNativeCancelDrag?: (restore: boolean) => void;
 	scopeKey: string;
 	onScreenshot: () => void | Promise<void>;
@@ -894,6 +909,19 @@ function FlowBoardContent({
 	const [droppedPin, setDroppedPin] = useState<IPin | undefined>(undefined);
 	const [clickPosition, setClickPosition] = useState({ x: 0, y: 0 });
 	const deletingNodesRef = useRef<Set<string>>(new Set());
+	const pendingEdgeEdits = useRef<PendingEdgeEdit<Edge>[]>([]);
+	const [pendingEdgeRevision, showPendingEdges] = useReducer(
+		(count: number) => count + 1,
+		0,
+	);
+	const edgesRef = useRef<Edge[]>(edges);
+	edgesRef.current = edges;
+	const unconfirmedMoves = useRef(new Map<string, UnconfirmedMove>());
+	const moveSaves = useRef(0);
+	const [movesRolledBack, rollBackMoves] = useReducer(
+		(count: number) => count + 1,
+		0,
+	);
 	const mousePositionRef = useRef({ x: 0, y: 0 });
 	const [pinCache, setPinCache] = useState<
 		Map<string, [IPin, INode | ILayer, boolean]>
@@ -3385,12 +3413,16 @@ function FlowBoardContent({
 	}, [handleDrop]);
 
 	useEffect(() => {
-		const handler = (event: MouseEvent) => {
+		// Pointer events in capture: a canvas drag consumes its pointer, which suppresses
+		// mousemove, and a paste or shortcut right after it must land under the pointer.
+		const handler = (event: PointerEvent) => {
 			mousePositionRef.current = { x: event.clientX, y: event.clientY };
 		};
-		document.addEventListener("mousemove", handler);
+		window.addEventListener("pointermove", handler, true);
+		window.addEventListener("pointerup", handler, true);
 		return () => {
-			document.removeEventListener("mousemove", handler);
+			window.removeEventListener("pointermove", handler, true);
+			window.removeEventListener("pointerup", handler, true);
 		};
 	}, []);
 
@@ -3541,6 +3573,7 @@ function FlowBoardContent({
 		[runDialogNodeId, executeBoardRemote],
 	);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Parses on board and view changes only, never on its own node output; `movesRolledBack` re-parses after a failed move save.
 	useEffect(() => {
 		if (!board.data) return;
 		boardRef.current = board.data;
@@ -3571,7 +3604,9 @@ function FlowBoardContent({
 			parseCallbacks.openCommentInCode,
 		);
 
-		setNodes(parsed.nodes);
+		setNodes(
+			keepUnconfirmedPositions(parsed.nodes, nodes, unconfirmedMoves.current),
+		);
 		setEdges(parsed.edges);
 		setPinCache(parsed.cache);
 		setPreparedBoardKey(boardLoadKey);
@@ -3585,6 +3620,7 @@ function FlowBoardContent({
 		catalogLookup,
 		selectorDataVersion,
 		boardLoadKey,
+		movesRolledBack,
 	]);
 
 	// Apply remote execution presence indicators to nodes
@@ -3739,6 +3775,52 @@ function FlowBoardContent({
 		},
 		[version, board.data, pinCache, executeCommands],
 	);
+
+	const onNativePendingEdge = useCallback(
+		(connection: Connection | undefined, oldEdge?: Edge) => {
+			if (version !== undefined || !board.data) return undefined;
+			const edit = pendingEdgeEdit({
+				connection,
+				oldEdge,
+				boardNodes: board.data.nodes,
+				pinCache,
+				refs: board.data.refs ?? {},
+				pathType: connectionMode,
+			});
+			if (!edit) return undefined;
+			pendingEdgeEdits.current = [...pendingEdgeEdits.current, edit];
+			showPendingEdges();
+			const drop = () => {
+				if (!pendingEdgeEdits.current.includes(edit)) return;
+				pendingEdgeEdits.current = pendingEdgeEdits.current.filter(
+					(entry) => entry !== edit,
+				);
+				showPendingEdges();
+			};
+			return (saved: boolean) => {
+				// A failed save shows the board as it was. A saved wire is held until
+				// the parsed board carries it, or the wire would blink between the two.
+				if (!saved || edgeEditApplied(edit, edgesRef.current)) return drop();
+				edit.settled = true;
+				setTimeout(drop, 1000);
+			};
+		},
+		[version, board.data, pinCache, connectionMode],
+	);
+	useEffect(() => {
+		const held = pendingEdgeEdits.current.filter(
+			(edit) => !edit.settled || !edgeEditApplied(edit, edges),
+		);
+		if (held.length === pendingEdgeEdits.current.length) return;
+		pendingEdgeEdits.current = held;
+		showPendingEdges();
+	}, [edges]);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: A wire dropped in one view is not drawn in the next.
+	useEffect(() => {
+		if (!pendingEdgeEdits.current.length) return;
+		pendingEdgeEdits.current = [];
+		showPendingEdges();
+	}, [boardId, currentLayer, version]);
 
 	const onConnect = useCallback(
 		(params: any) =>
@@ -4181,7 +4263,9 @@ function FlowBoardContent({
 				})),
 				...(commentDrag ? followAnchor(commentDrag, nodes) : []),
 			];
+			const save = ++moveSaves.current;
 			for (const { id, x, y } of moved) {
+				unconfirmedMoves.current.set(id, { position: { x, y }, save });
 				commands.push(
 					moveNodeCommand({
 						node_id: id,
@@ -4190,7 +4274,23 @@ function FlowBoardContent({
 					}),
 				);
 			}
-			await executeCommands(commands);
+			let saved = false;
+			try {
+				await executeCommands(commands);
+				saved = true;
+			} catch (error) {
+				// executeCommands already reported it; neither canvas awaits this handler.
+				console.error("Could not save the node movement", error);
+			} finally {
+				let latest = false;
+				for (const { id } of moved)
+					if (unconfirmedMoves.current.get(id)?.save === save) {
+						unconfirmedMoves.current.delete(id);
+						latest = true;
+					}
+				// The failed batch already refetched the board; parse it again without these moves.
+				if (!saved && latest) rollBackMoves();
+			}
 		},
 		[boardId, executeCommands, currentLayer, version, endDrag, helperLines],
 	);
@@ -4479,17 +4579,22 @@ function FlowBoardContent({
 		});
 	}, [nodes, grouping.previewMemberIds, highlightedNodeIds]);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `pendingEdgeRevision` stands for the edits held in the ref.
+	const shownEdges = useMemo(
+		() => withPendingEdges<Edge>(edges, pendingEdgeEdits.current),
+		[edges, pendingEdgeRevision],
+	);
 	const previewEdges = useMemo(
 		() =>
 			grouping.previewMemberIds.size
-				? edges.map((edge) =>
+				? shownEdges.map((edge) =>
 						grouping.previewMemberIds.has(edge.source) ||
 						grouping.previewMemberIds.has(edge.target)
 							? { ...edge, className: cn(edge.className, "opacity-10") }
 							: edge,
 					)
-				: edges,
-		[edges, grouping.previewMemberIds],
+				: shownEdges,
+		[shownEdges, grouping.previewMemberIds],
 	);
 	const groupOverlay = grouping.open ? (
 		<GroupSuggestionsOverlay
@@ -4945,11 +5050,11 @@ function FlowBoardContent({
 				run: () => surfaceActions.toggleSidebar("search"),
 			},
 			{
+				// No chord: ⌘F places a For Each node, like ⌘B places a Branch.
 				id: "search-dialog",
 				surface: "palette",
 				title: t("findOnBoard", "Find on board"),
 				icon: SearchIcon,
-				shortcut: "mod+f",
 				run: () => setSearchOpen(true),
 			},
 			{
@@ -6190,6 +6295,7 @@ function FlowBoardContent({
 										isValidConnection={isValidConnectionCB}
 										onNativeConnection={onNativeConnection}
 										onNativeDisconnect={onNativeDisconnect}
+										onNativePendingEdge={onNativePendingEdge}
 										onNativeCancelDrag={onNativeCancelDrag}
 										scopeKey={`${appId}:${boardId}:${currentLayer ?? "root"}:${version?.join(".") ?? "latest"}`}
 										onConnect={onConnect}
@@ -6239,6 +6345,8 @@ function FlowBoardContent({
 										/>
 									)}
 									<DragOverlay
+										// The chip flies back for 500 ms after a drop; it must not swallow the next press.
+										className="pointer-events-none"
 										dropAnimation={{
 											duration: 500,
 											easing: "cubic-bezier(0.18, 0.67, 0.6, 1.22)",

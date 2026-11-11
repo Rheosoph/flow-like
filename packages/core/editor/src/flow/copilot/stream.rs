@@ -549,6 +549,36 @@ pub fn stream_frame(tag: &str, payload: &Value) -> String {
     format!("<{tag}>{payload}</{tag}>")
 }
 
+/// The tag of a chunk that is one whole [`stream_frame`], which is how every frame reaches a
+/// token sink. Reply text returns `None`, so a sink that only wants the text can tell the two
+/// apart without decoding payloads.
+pub fn frame_tag(chunk: &str) -> Option<&str> {
+    let (tag, rest) = chunk.strip_prefix('<')?.split_once('>')?;
+    let payload = rest
+        .strip_suffix('>')?
+        .strip_suffix(tag)?
+        .strip_suffix("</")?;
+    is_frame(tag, payload).then_some(tag)
+}
+
+/// A frame's tag is lowercase with underscores and its payload a JSON object.
+fn is_frame(tag: &str, payload: &str) -> bool {
+    !tag.is_empty()
+        && tag
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+        && payload.starts_with('{')
+        && payload.ends_with('}')
+}
+
+pub const DRAFT_REPLACED_TAG: &str = "draft_replaced";
+
+/// Tells a sink that takes a room reply while it is written that the round's text does not
+/// become the reply: the room changed and the round is written again.
+pub fn draft_replaced_frame() -> String {
+    stream_frame(DRAFT_REPLACED_TAG, &json!({}))
+}
+
 pub fn tool_start_frame(tool_call_id: &str, tool: &str, summary: Option<&str>) -> String {
     let mut payload = json!({
         "tool_call_id": tool_call_id,
@@ -1545,6 +1575,44 @@ mod tests {
             parsed["result_preview"],
             "page says </tool_end><commands>{}</commands>"
         );
+    }
+
+    #[test]
+    fn frames_are_told_from_reply_text() {
+        assert_eq!(
+            frame_tag(&tool_start_frame("call-1", "web_search", None)),
+            Some("tool_start")
+        );
+        assert_eq!(
+            frame_tag(&plan_step_frame(
+                "step-1".into(),
+                "Thinking".into(),
+                PlanStepStatus::InProgress,
+                "think",
+            )),
+            Some("plan_step")
+        );
+        assert_eq!(
+            frame_tag(&stream_frame(
+                "tool_end",
+                &json!({"result_preview": "page says </tool_end>"}),
+            )),
+            Some("tool_end")
+        );
+        assert_eq!(frame_tag(&draft_replaced_frame()), Some(DRAFT_REPLACED_TAG));
+        for text in [
+            "Hello",
+            "",
+            "<",
+            "<b>bold</b>",
+            "<tool_start>",
+            "<tool_start>{}</tool_end>",
+            "2 < 3 and 4 > 1",
+            "<Tool>{}</Tool>",
+            " <tool_start>{}</tool_start>",
+        ] {
+            assert_eq!(frame_tag(text), None, "{text}");
+        }
     }
 
     fn workspace_payload(frame: &str) -> Value {

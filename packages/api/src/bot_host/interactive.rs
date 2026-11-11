@@ -19,8 +19,9 @@ use crate::{
     },
     state::AppState,
 };
-use flow_like::flow::copilot::ToolTrail;
+use flow_like::flow::copilot::{ReplyFiles, ToolTrail};
 use flow_like_types::{
+    bot_message::{AttachmentPart, MessageBody},
     bot_turn::{INTERACTIVE_HOST_PREFIX, TurnAudience, reply_message_id, turn_id},
     inbox::{ConversationKind, InboxEntryKind, plain_envelope},
     tokio::{self, task::JoinHandle},
@@ -48,6 +49,8 @@ pub(crate) struct InteractiveTurn {
     pub host_id: String,
     /// Set once [`Self::open_trail`] found the owner's direct conversation.
     pub trail: Option<ToolTrail>,
+    /// The files the run attaches to its reply.
+    pub reply_files: ReplyFiles,
 }
 
 /// Facts of the stored trigger entry an interactive run acts on, never taken from the client.
@@ -87,15 +90,40 @@ impl InteractiveTurn {
         Some(trail)
     }
 
-    /// What the turn's stored trigger entry says about the run answering it.
-    pub(crate) async fn trigger_facts(&self, state: &AppState) -> Result<TriggerFacts, ApiError> {
+    async fn trigger_entry(
+        &self,
+        state: &AppState,
+    ) -> Result<Option<crate::entity::inbox_entry::Model>, ApiError> {
         use crate::entity::inbox_entry;
-        let trigger = inbox_entry::Entity::find()
+        Ok(inbox_entry::Entity::find()
             .filter(inbox_entry::Column::InboxId.eq(&self.turn.bot_id))
             .filter(inbox_entry::Column::ConversationId.eq(&self.turn.conversation_id))
             .filter(inbox_entry::Column::MessageId.eq(&self.turn.trigger_message_id))
             .one(&state.db)
-            .await?;
+            .await?)
+    }
+
+    /// The files the stored trigger carries that were uploaded to the turn's conversation.
+    pub(crate) async fn trigger_files(
+        &self,
+        state: &AppState,
+    ) -> Result<Vec<AttachmentPart>, ApiError> {
+        let trigger = self.trigger_entry(state).await?;
+        Ok(trigger
+            .as_ref()
+            .and_then(|entry| super::history::plain_body(&entry.envelope))
+            .and_then(|body| MessageBody::parse(body).ok())
+            .map(|body| {
+                body.conversation_attachments(&self.turn.conversation_id)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// What the turn's stored trigger entry says about the run answering it.
+    pub(crate) async fn trigger_facts(&self, state: &AppState) -> Result<TriggerFacts, ApiError> {
+        let trigger = self.trigger_entry(state).await?;
         Ok(
             trigger.map_or_else(TriggerFacts::default, |entry| TriggerFacts {
                 ephemeral_user_context: entry.envelope.get("body").is_some_and(|body| {
@@ -129,6 +157,7 @@ impl InteractiveTurn {
             turn,
             host_id: format!("{INTERACTIVE_HOST_PREFIX}{}", reference.client_run_id),
             trail: None,
+            reply_files: ReplyFiles::new(),
         }))
     }
 
@@ -161,8 +190,11 @@ impl InteractiveTurn {
         });
         if let Some(code) = error_code {
             body["error"] = json!({ "code": code });
-        } else if let Some(trail) = &self.trail {
-            trail.attach(&mut body);
+        } else {
+            self.reply_files.attach(&mut body);
+            if let Some(trail) = &self.trail {
+                trail.attach(&mut body);
+            }
         }
         SendEntryRequest {
             message_id: reply_message_id(&self.turn.bot_id, &self.turn.trigger_message_id),
@@ -181,7 +213,15 @@ impl InteractiveTurn {
         text: &str,
         error_code: Option<&str>,
     ) -> Result<Option<Sent>, ApiError> {
-        let outgoing = Arc::new(validate_send(self.request(text, error_code))?);
+        let mut request = self.request(text, error_code);
+        crate::routes::inbox::reply_files::adopt(
+            state,
+            &self.turn.conversation_id,
+            &self.turn.bot_id,
+            &mut request,
+        )
+        .await;
+        let outgoing = Arc::new(validate_send(request)?);
         let claim = TurnClaim {
             id: self.turn.id.clone(),
             host_id: self.host_id.clone(),

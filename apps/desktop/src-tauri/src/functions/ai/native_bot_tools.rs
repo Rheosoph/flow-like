@@ -31,9 +31,9 @@ use flow_like::{
     state::FlowLikeState,
 };
 use flow_like_bot_tools::{
-    AppGrant, AppTables, Attachment, Environment, FileData, FileEntry, FileMeta, KnowledgeEmbedder,
-    Limits, LocalShell, MemorySessions, ModelEmbedder, ModelRole, Scope, SecretInfo, ShellBackend,
-    ToolEnv, ToolOutcome, env::Access, files::guess_mime,
+    AppGrant, AppTables, Attachment, Environment, FileData, FileEntry, FileLink, FileMeta,
+    KnowledgeEmbedder, Limits, LocalShell, MemorySessions, ModelEmbedder, ModelRole, Scope,
+    SecretInfo, ShellBackend, ToolEnv, ToolOutcome, env::Access, files::guess_mime,
 };
 use flow_like_types::{
     Bytes, Result, anyhow,
@@ -51,7 +51,7 @@ use tauri::{AppHandle, Manager};
 
 use super::{
     bot_tools::LocalMachine,
-    copilot::{CHAT_FILES, read_chat_file},
+    copilot::{CHAT_FILES, chat_file_link, read_chat_file},
     frontend_tool_bridge::FrontendToolContext,
     native_platform_tools::{NativePlatformSession, segment},
 };
@@ -70,6 +70,9 @@ pub(crate) struct BotToolRuntime {
     pub(crate) profile: Option<Arc<Profile>>,
     pub(crate) token: Option<String>,
     pub(crate) model_id: Option<String>,
+    /// The model this turn's assistants run on: the bot's sub-task model, else its own. `None`
+    /// leaves the chat's selection.
+    pub(crate) assistant_model_id: Option<String>,
     pub(crate) embedding_model_id: Option<String>,
     pub(crate) run_id: Option<String>,
     /// The bot turn this run answers; an account bot reads its secrets for it.
@@ -139,6 +142,23 @@ fn turn_site(
     conversation_id.map(flow_like_bot_tools::TurnSite::Conversation)
 }
 
+/// A secret of the bot this turn runs, for an integration the platform runs for it, such as its
+/// owner's web research key. `None` outside a bot's turn and for a secret this device cannot open.
+pub(crate) async fn bot_secret(
+    app: &AppHandle,
+    context: Option<&FrontendToolContext>,
+    name: &str,
+) -> Option<String> {
+    let runtime = context.and_then(|context| context.bot.clone())?;
+    let session = NativePlatformSession::new(app, context).await.ok()?;
+    session.assert_current_profile().await.ok()?;
+    let attachments = super::native_tool_bridge::run_options(context)
+        .attachments
+        .clone();
+    let host = LiveHost::new(session, runtime, attachments);
+    ToolHost::secret(&host, name).await.ok().flatten()
+}
+
 pub(crate) async fn execute(
     app: &AppHandle,
     context: Option<&FrontendToolContext>,
@@ -184,6 +204,12 @@ pub(crate) async fn execute(
         auto_approved,
     )
     .with_rights(Some(rights))
+    .with_turn_conversation(
+        options
+            .inbox_conversation_id
+            .clone()
+            .or_else(|| context.and_then(|context| context.conversation_id.clone())),
+    )
     .with_configuration(Arc::new(
         super::bot_tools::configuration::DesktopConfiguration::new(app, runtime.clone(), host.clone()),
     ))
@@ -514,6 +540,15 @@ pub(crate) trait ToolHost: Send + Sync {
     ) -> Result<Option<FileData>> {
         Ok(None)
     }
+
+    /// A download link to a conversation file; `None` when it is kept only on this device.
+    async fn conversation_file_link(
+        &self,
+        _conversation_id: &str,
+        _path: &str,
+    ) -> Result<Option<FileLink>> {
+        Ok(None)
+    }
 }
 
 pub(crate) struct DesktopToolEnv {
@@ -536,6 +571,7 @@ pub(crate) struct DesktopToolEnv {
     crew: Option<Arc<dyn flow_like_bot_tools::crew::CrewBackend>>,
     images: Option<Arc<super::bot_tools::images::DesktopImages>>,
     connectors: Option<Arc<dyn flow_like_bot_tools::services::ConnectorSource>>,
+    turn_conversation: Option<String>,
 }
 
 /// One working directory per bot next to the project directory, on local and account bots alike:
@@ -595,7 +631,25 @@ impl DesktopToolEnv {
             crew: None,
             images: None,
             connectors: None,
+            turn_conversation: None,
         }
+    }
+
+    /// The conversation the turn answers in: the only one whose files the bot reads.
+    pub(crate) fn with_turn_conversation(mut self, conversation_id: Option<String>) -> Self {
+        self.turn_conversation = conversation_id;
+        self
+    }
+
+    fn ensure_turn_conversation(&self, conversation_id: &str) -> Result<()> {
+        if conversation_id == CHAT_FILES
+            || self.turn_conversation.as_deref() == Some(conversation_id)
+        {
+            return Ok(());
+        }
+        Err(anyhow!(
+            "Conversation '{conversation_id}' is not this turn's conversation; a bot reads the files of the conversation it answers in"
+        ))
     }
 
     /// Per-app files and tables rights; without them every app in the scope is read as granted.
@@ -752,6 +806,7 @@ impl ToolEnv for DesktopToolEnv {
         max_bytes: u64,
     ) -> Result<Option<FileData>> {
         if let Some(conversation_id) = conversation_of_app(app_id) {
+            self.ensure_turn_conversation(conversation_id)?;
             return self
                 .host
                 .conversation_file(conversation_id, path, max_bytes)
@@ -781,6 +836,7 @@ impl ToolEnv for DesktopToolEnv {
 
     async fn stat_file(&self, app_id: &str, path: &str) -> Result<Option<FileMeta>> {
         if let Some(conversation_id) = conversation_of_app(app_id) {
+            self.ensure_turn_conversation(conversation_id)?;
             return Ok(self
                 .host
                 .conversation_file(conversation_id, path, 0)
@@ -837,6 +893,19 @@ impl ToolEnv for DesktopToolEnv {
 
     async fn message_attachment(&self, _seq: u64, _part: &str) -> Result<Option<Attachment>> {
         Ok(None)
+    }
+
+    async fn file_link(&self, app_id: &str, path: &str) -> Result<Option<FileLink>> {
+        if let Some(conversation_id) = conversation_of_app(app_id) {
+            self.ensure_turn_conversation(conversation_id)?;
+            return self
+                .host
+                .conversation_file_link(conversation_id, path)
+                .await;
+        }
+        self.require_files(app_id)?;
+        let (store, location) = self.locate(app_id, path).await?;
+        FileLink::signed(&store, &location).await
     }
 
     fn handle_granted(&self, handle: &WorkspaceHandle) -> bool {
@@ -1325,12 +1394,11 @@ impl ToolHost for LiveHost {
                 .await
                 .map(Some);
         }
-        let bot_id = self.runtime.context.bot_id.clone();
         if let Some(bots) = self.session.app_handle.try_state::<LocalBots>() {
             let (conversation, file, reader) = (
                 conversation_id.to_string(),
                 path.to_string(),
-                bot_id.clone(),
+                self.runtime.context.bot_id.clone(),
             );
             let local = crate::functions::local_bots::on_store(&bots, move |store| {
                 store.read_conversation_file(&conversation, &reader, &file)
@@ -1349,25 +1417,8 @@ impl ToolHost for LiveHost {
                 }));
             }
         }
-        let file_id = path.split_once('.').map_or(path, |(id, _)| id);
-        let download = self
-            .session
-            .request(
-                Method::GET,
-                &format!(
-                    "inbox/conversations/{}/files/{}?as={}",
-                    segment(conversation_id),
-                    segment(file_id),
-                    segment(&bot_id)
-                ),
-                None,
-            )
-            .await
-            .map_err(|error| anyhow!("Conversation file '{path}': {error}"))?;
-        let url = download["url"].as_str().ok_or_else(|| {
-            anyhow!("The hub sent no download link for conversation file '{path}'")
-        })?;
-        let (bytes, size) = download_head(url, max_bytes)
+        let (url, download) = self.hub_file_download(conversation_id, path).await?;
+        let (bytes, size) = download_head(&url, max_bytes)
             .await
             .map_err(|error| anyhow!("Conversation file '{path}': {error}"))?;
         Ok(Some(FileData {
@@ -1375,6 +1426,27 @@ impl ToolHost for LiveHost {
             size,
             mime: download["mime"].as_str().map(str::to_string),
             classification: None,
+        }))
+    }
+
+    async fn conversation_file_link(
+        &self,
+        conversation_id: &str,
+        path: &str,
+    ) -> Result<Option<FileLink>> {
+        if conversation_id == CHAT_FILES {
+            return Ok(chat_file_link(&self.attachments, path));
+        }
+        if self.is_local_conversation(conversation_id).await {
+            return Ok(None);
+        }
+        let (url, download) = self.hub_file_download(conversation_id, path).await?;
+        Ok(Some(FileLink {
+            url,
+            expires_at_ms: download["expires_at"]
+                .as_str()
+                .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+                .map(|at| at.timestamp_millis()),
         }))
     }
 
@@ -1442,6 +1514,50 @@ impl ToolHost for LiveHost {
 }
 
 impl LiveHost {
+    /// The hub's short-lived download of a conversation file, read as this run's bot: its `url`,
+    /// `expires_at` and `mime`.
+    async fn hub_file_download(
+        &self,
+        conversation_id: &str,
+        path: &str,
+    ) -> Result<(String, Value)> {
+        let file_id = path.split_once('.').map_or(path, |(id, _)| id);
+        let download = self
+            .session
+            .request(
+                Method::GET,
+                &format!(
+                    "inbox/conversations/{}/files/{}?as={}",
+                    segment(conversation_id),
+                    segment(file_id),
+                    segment(&self.runtime.context.bot_id)
+                ),
+                None,
+            )
+            .await
+            .map_err(|error| anyhow!("Conversation file '{path}': {error}"))?;
+        let url = download["url"]
+            .as_str()
+            .ok_or_else(|| anyhow!("The hub sent no download link for conversation file '{path}'"))?
+            .to_string();
+        Ok((url, download))
+    }
+
+    /// Whether the conversation lives in this device's bot store rather than on the hub.
+    async fn is_local_conversation(&self, conversation_id: &str) -> bool {
+        let Some(bots) = self.session.app_handle.try_state::<LocalBots>() else {
+            return false;
+        };
+        let conversation = conversation_id.to_string();
+        matches!(
+            crate::functions::local_bots::on_store(&bots, move |store| {
+                store.conversation(&conversation)
+            })
+            .await,
+            Ok(Some(_))
+        )
+    }
+
     /// This device's bot store when the bot is a local one; `None` for an account bot.
     async fn local_bots(&self) -> Result<Option<tauri::State<'_, LocalBots>>> {
         let Some(bots) = self.session.app_handle.try_state::<LocalBots>() else {

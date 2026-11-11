@@ -90,6 +90,10 @@ impl BotFlowRun {
         &self.bot.bot_id
     }
 
+    pub(crate) fn user(&self) -> AppUser {
+        AppUser::Bot(self.bot.clone())
+    }
+
     pub(crate) fn owner_id(&self) -> &str {
         &self.grant.owner_id
     }

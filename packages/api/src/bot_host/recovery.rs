@@ -125,10 +125,10 @@ impl Claim {
             held.add(bot_turn::Column::Status.eq(STORED_QUEUED))
                 .add(bot_turn::Column::HostKind.eq(TurnHostKind::Desktop.stored()))
                 .add(
-                Condition::any()
-                    .add(bot_turn::Column::HostId.is_null())
-                    .add(bot_turn::Column::HostId.eq(&self.host_id)),
-            )
+                    Condition::any()
+                        .add(bot_turn::Column::HostId.is_null())
+                        .add(bot_turn::Column::HostId.eq(&self.host_id)),
+                )
         } else {
             held.add(bot_turn::Column::Status.eq(STORED_RUNNING))
                 .add(bot_turn::Column::HostId.eq(&self.host_id))
@@ -373,7 +373,10 @@ pub(crate) async fn rebase_deadline_in<C: ConnectionTrait>(
 ) -> Result<(), sea_orm::DbErr> {
     let started = now.timestamp_millis();
     bot_turn_checkpoint::Entity::update_many()
-        .col_expr(bot_turn_checkpoint::Column::StartedAtMs, Expr::value(started))
+        .col_expr(
+            bot_turn_checkpoint::Column::StartedAtMs,
+            Expr::value(started),
+        )
         .col_expr(
             bot_turn_checkpoint::Column::DeadlineAtMs,
             Expr::value(started.saturating_add(super::worker::MAX_TURN_RUNTIME_MS)),

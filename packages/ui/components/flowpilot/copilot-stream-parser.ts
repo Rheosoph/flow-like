@@ -21,7 +21,8 @@ export type CopilotStreamEventType =
 	| "components"
 	| "canvas_settings"
 	| "usage_stat"
-	| "ui_draft";
+	| "ui_draft"
+	| "reply_attachment";
 
 export interface CopilotStreamEvent {
 	type: CopilotStreamEventType;
@@ -45,6 +46,7 @@ const TAG_TYPES: CopilotStreamEventType[] = [
 	"canvas_settings",
 	"usage_stat",
 	"ui_draft",
+	"reply_attachment",
 ];
 const OPEN_TAGS = TAG_TYPES.map((type) => ({ type, tag: `<${type}>` }));
 

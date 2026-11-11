@@ -662,6 +662,7 @@ pub fn parse_transcription_response(
 ) -> Result<ParsedTranscription> {
     let value: Value = serde_json::from_slice(body)
         .with_context(|| format!("{} transcription returned invalid JSON", provider.label()))?;
+    // Audio without speech comes back as blank text; only a missing text field is a failure.
     let text = match provider {
         HostedAudioProvider::Gemini => gemini_text(&value),
         _ => ["text", "transcript", "transcription"]
@@ -670,7 +671,6 @@ pub fn parse_transcription_response(
             .map(str::to_owned),
     }
     .map(|text| text.trim().to_owned())
-    .filter(|text| !text.is_empty())
     .with_context(|| format!("{} transcription contained no text", provider.label()))?;
     let billed_seconds = non_negative(value.get("duration"))
         .or_else(|| non_negative(value.pointer("/usage/seconds")));

@@ -14,6 +14,7 @@ use crate::{
     db::coordination::coordinate,
     entity::{conversation, conversation_member, user},
     error::ApiError,
+    routes::user::identity::public_display_name,
     state::AppState,
 };
 use chrono::{DateTime, FixedOffset};
@@ -50,24 +51,19 @@ pub(crate) async fn person_names<C: ConnectionTrait>(
     if ids.is_empty() {
         return Ok(HashMap::new());
     }
-    let rows: Vec<(String, Option<String>, Option<String>, Option<String>)> = user::Entity::find()
+    let rows: Vec<(String, Option<String>, Option<String>)> = user::Entity::find()
         .select_only()
         .column(user::Column::Id)
         .column(user::Column::Name)
         .column(user::Column::PreferredUsername)
-        .column(user::Column::Username)
         .filter(user::Column::Id.is_in(ids.iter().map(String::as_str)))
         .into_tuple()
         .all(db)
         .await?;
     let mut names: HashMap<String, String> = rows
         .into_iter()
-        .map(|(id, name, preferred, username)| {
-            let name = [name, preferred, username]
-                .into_iter()
-                .flatten()
-                .map(|name| name.trim().to_string())
-                .find(|name| !name.is_empty())
+        .map(|(id, name, preferred)| {
+            let name = public_display_name(name.as_deref(), preferred.as_deref(), None)
                 .unwrap_or_else(|| UNNAMED.to_string());
             (id, name)
         })

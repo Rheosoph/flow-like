@@ -46,11 +46,16 @@ import {
 	type ILlmParameters,
 	IModelApiSurface,
 } from "../../../lib/schema/bit/bit/llm-parameters";
+import {
+	type DataClassification,
+	parseDataClassification,
+} from "../../../lib/data-classification";
 import { humanFileSize } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
 import { useDownloadManager } from "../../../state/download-manager";
 import { BitEditorDialog } from "../../bits/bit-editor-dialog";
 import {
+	DataClassificationSelect,
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
@@ -764,6 +769,9 @@ function AddCustomModelWizard({
 	const [classification, setClassification] = useState<Record<string, number>>(
 		defaultClassification,
 	);
+	const [dataClassification, setDataClassification] = useState<
+		DataClassification | undefined
+	>(undefined);
 	const [hfReference, setHfReference] = useState("");
 	const [hfImport, setHfImport] = useState<HuggingFaceModelImport | null>(null);
 	const [hfImportError, setHfImportError] = useState<string | null>(null);
@@ -816,6 +824,7 @@ function AddCustomModelWizard({
 			setIcon("");
 			setTags("");
 			setClassification(defaultClassification());
+			setDataClassification(undefined);
 			setHfReference("");
 			setHfImport(null);
 			setHfImportError(null);
@@ -881,6 +890,9 @@ function AddCustomModelWizard({
 			...defaultClassification(),
 			...(params?.model_classification ?? {}),
 		});
+		setDataClassification(
+			parseDataClassification(params?.data_classification ?? undefined),
+		);
 		setHfReference(existingBit.repository ?? "");
 		setHfImport(null);
 		setHfImportError(null);
@@ -920,6 +932,7 @@ function AddCustomModelWizard({
 			setFieldValues(seeded);
 			setRequestParamsText("");
 			setIsVision(false);
+			setDataClassification(undefined);
 			setClassification({
 				...defaultClassification(),
 				...(def?.key === "microsoft-copilot" ? { function_calling: 0 } : {}),
@@ -1521,6 +1534,9 @@ function AddCustomModelWizard({
 					...(isSystemOneModel
 						? {}
 						: { model_classification: { ...classification } }),
+					...(dataClassification
+						? { data_classification: dataClassification }
+						: {}),
 					...(mlxManifest ? { huggingface: mlxManifest } : {}),
 				},
 				download_link: isHf && !isMlx ? hfDownload.trim() : null,
@@ -1561,6 +1577,7 @@ function AddCustomModelWizard({
 						...mappedParameters,
 						context_length: Number.parseInt(contextLength, 10),
 						model_classification: { ...classification },
+						data_classification: dataClassification,
 						huggingface: mlxManifest,
 						provider: {
 							...mappedParameters.provider,
@@ -1643,6 +1660,7 @@ function AddCustomModelWizard({
 		isVision,
 		contextLength,
 		classification,
+		dataClassification,
 		isSystemOneModel,
 		hfDownload,
 		hfFileName,
@@ -1912,6 +1930,8 @@ function AddCustomModelWizard({
 								onChange={(key, value) =>
 									setClassification((prev) => ({ ...prev, [key]: value }))
 								}
+								dataClassification={dataClassification}
+								onDataClassificationChange={setDataClassification}
 							/>
 						)}
 					</div>
@@ -3075,11 +3095,16 @@ function MetadataSection({
 function CharacteristicsSection({
 	classification,
 	onChange,
+	dataClassification,
+	onDataClassificationChange,
 }: Readonly<{
 	classification: Record<string, number>;
 	onChange: (key: string, value: number) => void;
+	dataClassification: DataClassification | undefined;
+	onDataClassificationChange: (next: DataClassification | undefined) => void;
 }>) {
 	const { t } = useTranslation("settings");
+	const { t: tCommon } = useTranslation("common");
 	const [open, setOpen] = useState(false);
 	return (
 		<Collapsible open={open} onOpenChange={setOpen}>
@@ -3099,6 +3124,25 @@ function CharacteristicsSection({
 				</button>
 			</CollapsibleTrigger>
 			<CollapsibleContent>
+				<div className="space-y-1.5 pt-4">
+					<span className="text-xs text-muted-foreground">
+						{tCommon(
+							"modelDataClassification",
+							"Most sensitive data it may process",
+						)}
+					</span>
+					<DataClassificationSelect
+						value={dataClassification}
+						onChange={onDataClassificationChange}
+						className="w-full"
+					/>
+					<p className="text-xs text-muted-foreground/70">
+						{tCommon(
+							"modelDataClassificationHint",
+							"A tag for now. It does not change which model is used.",
+						)}
+					</p>
+				</div>
 				<div className="grid grid-cols-1 gap-x-6 gap-y-4 pt-4 sm:grid-cols-2">
 					{CLASSIFICATION_TRAITS.map((trait) => {
 						const value = classification[trait.key] ?? 0.5;

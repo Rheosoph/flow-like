@@ -155,6 +155,14 @@ struct BotCounts {
     new_bots: i64,
 }
 
+#[derive(Debug, FromQueryResult)]
+struct BotNameRow {
+    id: String,
+    name: Option<String>,
+    owner_id: String,
+    deleted_at: Option<DateTime<FixedOffset>>,
+}
+
 #[derive(Clone, Debug, Default)]
 struct Tally {
     turns: u64,
@@ -289,22 +297,17 @@ async fn bot_names(state: &AppState, bot_ids: HashSet<String>) -> Result<BotName
             owners: HashMap::new(),
         });
     }
-    let rows: Vec<(
-        String,
-        Option<String>,
-        String,
-        Option<DateTime<FixedOffset>>,
-    )> = bot::Entity::find()
+    let rows = bot::Entity::find()
         .select_only()
-        .column(bot::Column::Id)
-        .column(bot::Column::Name)
-        .column(bot::Column::OwnerId)
-        .column(bot::Column::DeletedAt)
+        .column_as(bot::Column::Id, "id")
+        .column_as(bot::Column::Name, "name")
+        .column_as(bot::Column::OwnerId, "owner_id")
+        .column_as(bot::Column::DeletedAt, "deleted_at")
         .filter(bot::Column::Id.is_in(bot_ids))
-        .into_tuple()
+        .into_model::<BotNameRow>()
         .all(&state.db)
         .await?;
-    let owner_ids = rows.iter().map(|(_, _, owner, _)| owner.clone()).collect();
+    let owner_ids = rows.iter().map(|row| row.owner_id.clone()).collect();
     let owners = load_users(state, owner_ids)
         .await?
         .into_iter()
@@ -312,7 +315,10 @@ async fn bot_names(state: &AppState, bot_ids: HashSet<String>) -> Result<BotName
         .collect();
     let names = rows
         .into_iter()
-        .map(|(id, name, owner, deleted_at)| (id, (name, owner, deleted_at.is_some())))
+        .map(|row| {
+            let deleted = row.deleted_at.is_some();
+            (row.id, (row.name, row.owner_id, deleted))
+        })
         .collect();
     Ok(BotNames { names, owners })
 }

@@ -1,13 +1,20 @@
-// Remote replies use the API push capability. The API forwards to the execution's
-// scoped transport, so a client never holds provider write credentials.
+// Client half of Channels: deliver a reply / cancel / steer to the waiter behind a run through the
+// transport its handle names, falling back to the API push endpoint when the transport fails.
 
 import type {
 	IChannelClientDescriptor,
 	IChannelHandle,
 	IChannelPush,
 } from "../schema/channel";
+import { pushAwsMqtt } from "./aws-mqtt";
+import {
+	pushAzureWebPubSub,
+	resetAzureWebPubSubConnections,
+} from "./azure-web-pubsub";
+import { pushFirebaseRtdb, resetFirebaseSessions } from "./gcp-firebase-rtdb";
 import { isScopedHttpChannel, pushHttp } from "./http";
 import { pushInProcess } from "./in-process";
+import { pushNats, resetNatsConnections } from "./nats";
 import { type ChannelPushOptions, errorMessage } from "./util";
 
 export { isChannelHandle } from "./handle";
@@ -23,18 +30,28 @@ function deliver(
 			return pushHttp(descriptor, push, options);
 		case "in_process":
 			return pushInProcess(push);
+		case "aws_mqtt":
+			return pushAwsMqtt(descriptor, push, options);
+		case "azure_web_pubsub":
+			return pushAzureWebPubSub(descriptor, push, options);
+		case "gcp_firebase_rtdb":
+			return pushFirebaseRtdb(descriptor, push, options);
+		case "nats":
+			return pushNats(descriptor, push, options);
 		default:
 			return Promise.reject(
 				new Error(
-					`Channel '${push.channel_id}' names the '${(descriptor as { type?: unknown }).type}' transport without an API push capability.`,
+					`Unknown channel transport '${(descriptor as { type?: unknown }).type}' for channel '${push.channel_id}'.`,
 				),
 			);
 	}
 }
 
 /**
- * Provider handles from older APIs carry the API capability as their fallback; it is the
- * only path a reply takes, so replying needs no frontend provider connection.
+ * Deliver one push through `handle.transport`; on any transport error retry once through
+ * `handle.fallback` (the API push endpoint) when the handle carries one. A cancel on a provider
+ * handle goes through the API first and falls back to the provider. The delivery id is shared
+ * by both attempts so the executor can drop a duplicate.
  */
 export async function rawPushChannel(
 	handle: IChannelHandle,
@@ -49,13 +66,31 @@ export async function rawPushChannel(
 		!isScopedHttpChannel(handle.transport)
 			? { ...options, deliveryId: options.deliveryId ?? crypto.randomUUID() }
 			: options;
-	if (
+	const fallbackFirst =
+		push.kind === "cancel" &&
 		handle.transport.type !== "http" &&
 		handle.transport.type !== "in_process" &&
-		handle.fallback?.type === "http"
-	) {
-		// A failed API push remains retryable through the same authority.
-		return pushHttp(handle.fallback, body, deliveryOptions);
+		handle.fallback?.type === "http";
+	if (fallbackFirst && handle.fallback) {
+		// The API push endpoint also stops the run server-side; a cancel sent straight to the
+		// provider would not.
+		try {
+			await deliver(handle.fallback, body, deliveryOptions);
+		} catch (api) {
+			if (options.signal?.aborted) throw api;
+			console.warn(
+				`[channel] ${handle.fallback.type} cancel for channel '${handle.channel_id}' failed, trying ${handle.transport.type}: ${errorMessage(api)}`,
+			);
+			try {
+				await deliver(handle.transport, body, deliveryOptions);
+			} catch (provider) {
+				throw new Error(
+					`${errorMessage(provider)} (after ${handle.fallback.type} failed: ${errorMessage(api)})`,
+					{ cause: provider },
+				);
+			}
+		}
+		return;
 	}
 	try {
 		await deliver(handle.transport, body, deliveryOptions);
@@ -78,4 +113,11 @@ export async function rawPushChannel(
 			);
 		}
 	}
+}
+
+/** Drop cached transport sessions when the execution runtime retires. */
+export function resetChannelClientCaches(): void {
+	resetAzureWebPubSubConnections();
+	resetFirebaseSessions();
+	resetNatsConnections();
 }

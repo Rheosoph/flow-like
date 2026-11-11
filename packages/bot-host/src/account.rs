@@ -22,7 +22,7 @@ use crate::{
     transcript,
 };
 use flow_like::flow::copilot::{
-    ToolTrail, TurnRequester,
+    ReplyFiles, ToolTrail, TurnRequester,
     bot_notes::NotesHandle,
     bot_talk::AnsweredRound,
     decision::{self, Decision, DecisionParticipant},
@@ -114,6 +114,7 @@ struct Live {
     posting: bool,
     notes: Option<NotesHandle>,
     trail: Option<ToolTrail>,
+    reply_files: Option<ReplyFiles>,
 }
 
 #[derive(Default)]
@@ -391,6 +392,7 @@ impl Inner {
                     posting: false,
                     notes: None,
                     trail: None,
+                    reply_files: None,
                 };
                 started.push((live.info.clone(), key.clone(), turn.id, receiver));
                 state.live.insert(key, live);
@@ -904,9 +906,11 @@ impl Inner {
                 .map_or(entries.len(), |index| index + 1);
             ToolTrail::new(transcript::tool_trail(bot_id, &entries[..upto]))
         });
+        let reply_files = (!ephemeral_user_context).then(ReplyFiles::new);
         if let Some(live) = lock(&self.state).live.get_mut(key) {
             live.notes = notes.clone();
             live.trail = trail.clone();
+            live.reply_files = reply_files.clone();
         }
         let mut job = TurnJob {
             run_id: lead.id.clone(),
@@ -918,12 +922,18 @@ impl Inner {
             live_call: false,
             tool_gate: None,
             ephemeral_user_context,
+            seed_taint: flow_like::flow::copilot::TurnReads {
+                personal_context: ephemeral_user_context,
+                ..crate::taint::reads_of(&entries, bot_id, &Default::default())
+            }
+            .seed(),
             shared_context: transcript::shared_context(&entries, &lead.trigger_message_id, bot_id),
             suppress_owner_notifications: false,
             history: transcript.history,
             room_updates,
             notes: notes.clone(),
             trail,
+            reply_files,
             memory: memory.clone(),
             gate: gate.clone(),
             requester: Some(requester.clone()),
@@ -1135,6 +1145,9 @@ impl Inner {
                 }
             };
             drop(decide);
+            let decision = decision.map(|result| {
+                result.map(|choice| choice.answering_addressed(requester.addressed, call_utterance))
+            });
             trace.decided(latency::decision_label(&decision));
             let answers = matches!(&decision, Ok(Ok(Decision::AnswerNow)) | Err(_) | Ok(Err(_)))
                 && !matches!(&decision, Ok(Err(RunError::SessionChanged)));
@@ -1565,7 +1578,7 @@ impl Inner {
         sealed: bool,
         cancel: &mut watch::Receiver<Option<Cancel>>,
     ) -> End {
-        let (note, trail);
+        let (note, trail, files);
         {
             let mut state = lock(&self.state);
             let Some(live) = state.live.get_mut(key) else {
@@ -1577,6 +1590,7 @@ impl Inner {
             live.posting = true;
             note = live.notes.as_ref().and_then(NotesHandle::touched);
             trail = live.trail.clone();
+            files = live.reply_files.clone();
         }
         let message_id = if failure.is_some() {
             failure_message_id(&lead.bot_id, &lead.trigger_message_id)
@@ -1586,6 +1600,9 @@ impl Inner {
         let mut body = reply_body(&lead.trigger_message_id, lead.hops, text, failure);
         if failure.is_none() && !acknowledgement {
             crate::notes::attach_note(&mut body, note.as_ref());
+            if let Some(files) = &files {
+                files.attach(&mut body);
+            }
             if let Some(trail) = &trail {
                 trail.attach(&mut body);
             }

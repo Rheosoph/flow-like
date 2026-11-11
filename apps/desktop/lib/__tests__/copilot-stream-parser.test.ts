@@ -111,4 +111,17 @@ describe("copilot stream parser", () => {
 		expect(detail).toContain("earlier progress truncated");
 		expect(detail.endsWith("latest")).toBe(true);
 	});
+
+	test("parses a reply_attachment frame split across chunks", () => {
+		const parser = createCopilotStreamParser();
+		const frame =
+			'<reply_attachment>{"name":"x.pdf","url":"https://a.test/x.pdf"}</reply_attachment>';
+		expect(parser.push(frame.slice(0, 20))).toEqual([]);
+		const events = parser.push(`${frame.slice(20)} done`);
+		expect(events[0]).toMatchObject({
+			type: "reply_attachment",
+			data: { name: "x.pdf", url: "https://a.test/x.pdf" },
+		});
+		expect(events[1]).toEqual({ type: "text", text: " done" });
+	});
 });

@@ -135,6 +135,31 @@ pub struct ToolJob {
     /// The active skill owned by the bot, plus its pinned package when it ships tools.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_call: Option<SkillCallJob>,
+    /// The conversation files the call's arguments name. They live outside every app, so the
+    /// API signs a read link for each instead of scoping a credential.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<JobFile>,
+}
+
+/// One conversation file of a signed job and the link that reads it. The link is a credential
+/// and is never printed.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JobFile {
+    /// `conversation_<id>`, as the handle names it.
+    pub app_id: String,
+    pub path: String,
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+}
+
+impl std::fmt::Debug for JobFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JobFile")
+            .field("app_id", &self.app_id)
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -132,6 +132,27 @@ export function useKeyboardShortcuts({
 				return;
 			}
 
+			// Place For Each
+			if (
+				(event.metaKey || event.ctrlKey) &&
+				event.key === "f" &&
+				!event.shiftKey
+			) {
+				event.preventDefault();
+				event.stopPropagation();
+				if (typeof version !== "undefined") {
+					toastError("Cannot change old version", <XIcon />);
+					return;
+				}
+				const node = catalog.data?.find(
+					(node) => node.name === "control_for_each",
+				);
+				if (!node) return;
+				await placeNodeShortcut(node);
+				await invalidateBoard();
+				return;
+			}
+
 			// Place Log Info
 			if (
 				(event.metaKey || event.ctrlKey) &&

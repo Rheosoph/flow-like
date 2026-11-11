@@ -260,6 +260,10 @@ export class RealtimePortClient implements RealtimeClient {
 			this.notify(message);
 			return;
 		}
+		if (message.type === "reply") {
+			this.notify(message);
+			return;
+		}
 		if (message.type === "provider") {
 			this.provider = message.status;
 			this.notify(message);

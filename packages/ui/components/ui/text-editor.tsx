@@ -23,6 +23,7 @@ import {
 	PLATE_JSON_PREFIX,
 	parsePlateDocument,
 } from "../../lib/plate-document";
+import { publicNameFromClaims } from "../../lib/user-display";
 import { AIUsageAppContext } from "../editor/ai-usage-context";
 import { BaseEditorKit } from "../editor/editor-base-kit";
 import { FootnoteScope } from "../editor/footnote-context";
@@ -678,7 +679,7 @@ export const TextEditor = memo(function TextEditor({
 			(profile?.sub
 				? {
 						id: profile.sub,
-						name: profile.name ?? profile.preferred_username ?? profile.sub,
+						name: publicNameFromClaims(profile) ?? profile.sub,
 						avatarUrl: profile.picture,
 					}
 				: undefined),

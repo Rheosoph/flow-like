@@ -801,6 +801,10 @@ export class RealtimeRuntime {
 					}
 				}, 100);
 			},
+			reply: (reply) => {
+				for (const port of [...scope.ports])
+					this.send(port, { type: "reply", reply });
+			},
 			status: (status) => {
 				scope.providerStatus = status;
 				for (const port of scope.ports)

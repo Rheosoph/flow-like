@@ -519,16 +519,15 @@ async fn a_configuration_patch_keeps_model_fields_changed_since_approval() {
     assert_eq!(current.model.primary.as_deref(), Some("chat-approved"));
     assert_eq!(current.model.fallbacks, ["fallback-newer"]);
     assert_eq!(current.model.decision.as_deref(), Some("decision-newer"));
-    assert_eq!(current.instructions.as_deref(), Some("Keep this instruction."));
+    assert_eq!(
+        current.instructions.as_deref(),
+        Some("Keep this instruction.")
+    );
 
-    let cleared = super::configuration::patch_in(
-        &db,
-        "owner",
-        &row.id,
-        json!({"model": {"decision": null}}),
-    )
-    .await
-    .unwrap();
+    let cleared =
+        super::configuration::patch_in(&db, "owner", &row.id, json!({"model": {"decision": null}}))
+            .await
+            .unwrap();
     let cleared = BotSettings::from_row(&cleared.bot);
     assert_eq!(cleared.model.primary, current.model.primary);
     assert_eq!(cleared.model.fallbacks, current.model.fallbacks);
@@ -539,20 +538,19 @@ async fn a_configuration_patch_keeps_model_fields_changed_since_approval() {
 async fn configuration_patches_cannot_change_ownership_or_another_owners_bot() {
     let db = database().await;
     let row = custom_bot(&db, "owner", "Scout", at(0)).await;
-    for changes in [json!({"owner_id": "intruder"}), json!({"location": "server"})] {
+    for changes in [
+        json!({"owner_id": "intruder"}),
+        json!({"location": "server"}),
+    ] {
         let error = super::configuration::patch_in(&db, "owner", &row.id, changes)
             .await
             .unwrap_err();
         assert_eq!(error.status(), StatusCode::BAD_REQUEST);
     }
-    let error = super::configuration::patch_in(
-        &db,
-        "intruder",
-        &row.id,
-        json!({"name": "Changed"}),
-    )
-    .await
-    .unwrap_err();
+    let error =
+        super::configuration::patch_in(&db, "intruder", &row.id, json!({"name": "Changed"}))
+            .await
+            .unwrap_err();
     assert_eq!(error.status(), StatusCode::NOT_FOUND);
     let stored = owned_bot(&db, "owner", &row.id).await.unwrap();
     assert_eq!(stored.name.as_deref(), Some("Scout"));

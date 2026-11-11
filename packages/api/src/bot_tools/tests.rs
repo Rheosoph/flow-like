@@ -10,7 +10,7 @@ use flow_like::flow::copilot::tool_grants::{GrantKey, GrantStore};
 use flow_like::flow_like_model_provider::llm::ModelLogic;
 use flow_like_bot_tools::{KnowledgeEmbedder, ModelRole};
 use flow_like_bot_tools_host::{
-    AppAccess, JobApp, JobScope, JobSecrets, ModelSource, ToolJob, ToolReply, job_hash,
+    AppAccess, JobApp, JobFile, JobScope, JobSecrets, ModelSource, ToolJob, ToolReply, job_hash,
 };
 use flow_like_storage::databases::vector::lancedb::connect_lance;
 use flow_like_storage::files::store::FlowLikeStore;
@@ -217,8 +217,18 @@ async fn host_with_grants(
     host_tools: HostTools,
     grants: Arc<MemoryGrants>,
 ) -> Arc<BotToolsHost> {
+    Arc::new(BotToolsHost::new(
+        turn_deps(executor, host_tools, grants).await,
+    ))
+}
+
+async fn turn_deps(
+    executor: Option<Arc<FakeExecutor>>,
+    host_tools: HostTools,
+    grants: Arc<MemoryGrants>,
+) -> TurnDeps {
     let access = Arc::new(Access::new(&[WORKSPACE, DOCS]).await);
-    Arc::new(BotToolsHost::new(TurnDeps {
+    TurnDeps {
         owner: OWNER.into(),
         bot: bot_user(),
         turn_id: TURN.into(),
@@ -241,7 +251,7 @@ async fn host_with_grants(
                 .collect(),
         )),
         connectors: None,
-    }))
+    }
 }
 
 fn parse(output: &str) -> Value {
@@ -1387,4 +1397,155 @@ async fn without_an_executor_image_generate_is_refused_plainly() {
     let host = image_host(None, Some(image_bits(Some("my-image")))).await;
     let output = parse(&host.run("image_generate", json!({ "prompt": "a" })).await);
     assert_eq!(output["code"], "bot_tool_needs_executor");
+}
+
+/// One turn's conversation files: `notes.txt` attached to the message being answered and
+/// `f1.pdf` in the room `room1`. The store behind `broken.pdf` is down.
+struct Files;
+
+#[async_trait]
+impl flow_like_bot_tools_host::ConversationFiles for Files {
+    fn serves(&self, conversation_id: &str) -> bool {
+        conversation_id == "chat"
+    }
+
+    async fn read(
+        &self,
+        _conversation_id: &str,
+        path: &str,
+        _max_bytes: u64,
+    ) -> flow_like_types::Result<Option<flow_like_bot_tools::FileData>> {
+        Ok(
+            (path == "notes.txt").then(|| flow_like_bot_tools::FileData {
+                bytes: "from the chat".into(),
+                size: 13,
+                mime: Some("text/plain".into()),
+                classification: None,
+            }),
+        )
+    }
+}
+
+#[async_trait]
+impl super::host::TurnFiles for Files {
+    async fn link(
+        &self,
+        conversation_id: &str,
+        path: &str,
+    ) -> flow_like_types::Result<Option<JobFile>> {
+        match (conversation_id, path) {
+            ("chat", "notes.txt") | ("room1", "f1.pdf") => Ok(Some(JobFile {
+                app_id: format!("conversation_{conversation_id}"),
+                path: path.into(),
+                url: format!("https://store.example/{path}?X-Amz-Signature=s3cret"),
+                mime: None,
+            })),
+            ("room1", "broken.pdf") => Err(flow_like_types::anyhow!("the store is down")),
+            _ => Ok(None),
+        }
+    }
+}
+
+async fn files_host(executor: Arc<FakeExecutor>) -> BotToolsHost {
+    let deps = turn_deps(
+        Some(executor),
+        routing::host_tools(true, &[]),
+        Arc::new(MemoryGrants::default()),
+    )
+    .await;
+    BotToolsHost::new(deps).with_files(Arc::new(Files))
+}
+
+fn conversation_handle(conversation_id: &str, path: &str) -> Value {
+    json!({
+        "app_id": format!("conversation_{conversation_id}"),
+        "path": path,
+        "bytes": 13,
+        "sha256": "",
+        "mime": "text/plain",
+    })
+}
+
+fn linked(job: &str) -> Vec<(String, String)> {
+    let job: ToolJob = serde_json::from_str(job).unwrap();
+    job.files
+        .into_iter()
+        .map(|file| (file.app_id, file.path))
+        .collect()
+}
+
+#[flow_like_types::tokio::test]
+async fn an_executor_job_carries_a_read_link_for_each_conversation_file_it_names() {
+    let executor = Arc::new(FakeExecutor::default());
+    let host = files_host(executor.clone()).await;
+
+    let saved = host
+        .run(
+            "file_save",
+            json!({ "file": conversation_handle("chat", "notes.txt") }),
+        )
+        .await;
+    assert_eq!(parse(&saved)["ran_on"], "executor");
+    host.run(
+        "knowledge_add",
+        json!({ "index": "docs", "files": [
+            conversation_handle("room1", "f1.pdf"),
+            conversation_handle("room1", "f1.pdf"),
+            conversation_handle("room1", "f7.pdf"),
+            { "app_id": "conversation_room1", "path": "f1.pdf" },
+        ] }),
+    )
+    .await;
+    host.run("file_write", json!({ "path": "bot/a.md", "content": "x" }))
+        .await;
+
+    let jobs = executor.jobs.lock().unwrap();
+    assert_eq!(
+        linked(&jobs[0].3),
+        [("conversation_chat".to_string(), "notes.txt".to_string())]
+    );
+    assert!(jobs[0].3.contains("X-Amz-Signature=s3cret"));
+    assert_eq!(
+        linked(&jobs[1].3),
+        [("conversation_room1".to_string(), "f1.pdf".to_string())]
+    );
+    assert!(linked(&jobs[2].3).is_empty());
+}
+
+#[flow_like_types::tokio::test]
+async fn a_conversation_file_that_cannot_be_linked_fails_the_job_before_the_executor() {
+    let executor = Arc::new(FakeExecutor::default());
+    let host = files_host(executor.clone()).await;
+    let output = parse(
+        &host
+            .run(
+                "file_save",
+                json!({ "file": conversation_handle("room1", "broken.pdf") }),
+            )
+            .await,
+    );
+    assert_eq!(output["code"], "bot_tool_job_failed");
+    let message = output["message"].as_str().unwrap();
+    assert!(
+        message.contains("broken.pdf") && message.contains("the store is down"),
+        "{message}"
+    );
+    assert!(executor.jobs.lock().unwrap().is_empty());
+}
+
+#[flow_like_types::tokio::test]
+async fn a_file_attached_to_the_message_is_read_in_the_api() {
+    let executor = Arc::new(FakeExecutor::default());
+    let host = files_host(executor.clone()).await;
+    let read = parse(
+        &host
+            .run(
+                "file_read",
+                json!({ "file": conversation_handle("chat", "notes.txt") }),
+            )
+            .await,
+    );
+    assert_eq!(read["status"], "ok", "{read}");
+    assert_eq!(read["text"], "from the chat");
+    assert!(executor.jobs.lock().unwrap().is_empty());
 }

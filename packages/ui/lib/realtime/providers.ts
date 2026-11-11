@@ -7,6 +7,8 @@ import {
 } from "../channel/aws-sigv4";
 import type {
 	RealtimeProviderStage,
+	RealtimeReply,
+	RealtimeReplyState,
 	RealtimeTransport,
 	RealtimeWakeup,
 } from "./types";
@@ -16,6 +18,7 @@ const NATS_CONNECT_TIMEOUT_MS = 10_000;
 const NATS_FLUSH_TIMEOUT_MS = 10_000;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+const CONTROL_CHARACTER = /\p{Cc}/u;
 
 export class RealtimeProviderProtocolError extends Error {}
 
@@ -25,6 +28,7 @@ export interface RealtimeProviderConnection {
 
 export interface RealtimeProviderCallbacks {
 	wakeup(wakeup: RealtimeWakeup): void;
+	reply?(reply: RealtimeReply): void;
 	disconnected(reason?: string): void;
 }
 
@@ -68,10 +72,29 @@ function validUrl(value: string, protocols: string[]): URL {
 	return url;
 }
 
-/** Provider messages can only invalidate a snapshot; the API authenticates the replay. */
-export function parseRealtimeWakeup(
-	input: unknown,
-): RealtimeWakeup | undefined {
+const WAKEUP_KEYS = ["protocol_version", "kind", "nonce"];
+const REPLY_STATES: readonly unknown[] = [
+	"writing",
+	"working",
+	"done",
+	"dropped",
+];
+
+type ReplyFields = Partial<Record<keyof RealtimeReply, unknown>>;
+
+const wakeupNonce = (nonce: unknown): nonce is string =>
+	typeof nonce === "string" &&
+	nonce !== "" &&
+	encoder.encode(nonce).byteLength <= 128 &&
+	!CONTROL_CHARACTER.test(nonce);
+
+const replyId = (value: unknown): value is string =>
+	typeof value === "string" &&
+	value.length > 0 &&
+	value.length <= 256 &&
+	!CONTROL_CHARACTER.test(value);
+
+function decodeMessage(input: unknown) {
 	let value = input;
 	if (typeof value === "string") {
 		if (encoder.encode(value).byteLength > 4096) return;
@@ -82,28 +105,76 @@ export function parseRealtimeWakeup(
 		}
 	}
 	if (!value || typeof value !== "object" || Array.isArray(value)) return;
-	if (
-		Object.keys(value).some(
-			(key) => !["protocol_version", "kind", "nonce"].includes(key),
-		)
-	)
-		return;
-	const wakeup = value as Partial<RealtimeWakeup>;
-	if (
-		wakeup.protocol_version !== 1 ||
-		wakeup.kind !== "invalidate" ||
-		typeof wakeup.nonce !== "string" ||
-		!wakeup.nonce ||
-		encoder.encode(wakeup.nonce).byteLength > 128 ||
-		/\p{Cc}/u.test(wakeup.nonce)
-	)
-		return;
-	return { protocol_version: 1, kind: "invalidate", nonce: wakeup.nonce };
+	return value;
 }
 
-function wake(callbacks: RealtimeProviderCallbacks, value: unknown): void {
-	const message = parseRealtimeWakeup(value);
-	if (message) callbacks.wakeup(message);
+function wakeupFrom(value: object) {
+	if (Object.keys(value).some((key) => !WAKEUP_KEYS.includes(key))) return;
+	const { protocol_version, kind, nonce } = value as Partial<RealtimeWakeup>;
+	if (protocol_version !== 1 || kind !== "invalidate") return;
+	if (!wakeupNonce(nonce)) return;
+	const wakeup: RealtimeWakeup = {
+		protocol_version: 1,
+		kind: "invalidate",
+		nonce,
+	};
+	return wakeup;
+}
+
+function replyIds(fields: ReplyFields) {
+	const { conversation_id, message_id, reply_to, sender_id } = fields;
+	if (!replyId(conversation_id) || !replyId(message_id)) return;
+	if (!replyId(reply_to) || !replyId(sender_id)) return;
+	return { conversation_id, message_id, reply_to, sender_id };
+}
+
+function replyBody(fields: ReplyFields) {
+	const { offset, text, state } = fields;
+	if (typeof offset !== "number" || !Number.isSafeInteger(offset)) return;
+	if (offset < 0 || typeof text !== "string" || text.length > 4096) return;
+	if (!REPLY_STATES.includes(state)) return;
+	return { offset, text, state: state as RealtimeReplyState };
+}
+
+function replyFrom(value: object) {
+	const fields = value as ReplyFields;
+	if (fields.protocol_version !== 1 || fields.kind !== "reply") return;
+	const ids = replyIds(fields);
+	const body = replyBody(fields);
+	if (!ids || !body) return;
+	const reply: RealtimeReply = {
+		protocol_version: 1,
+		kind: "reply",
+		...ids,
+		...body,
+	};
+	return reply;
+}
+
+function receive(callbacks: RealtimeProviderCallbacks, input: unknown) {
+	const value = decodeMessage(input);
+	if (!value) return;
+	const wakeup = wakeupFrom(value);
+	if (wakeup) {
+		callbacks.wakeup(wakeup);
+		return;
+	}
+	const reply = replyFrom(value);
+	if (reply) callbacks.reply?.(reply);
+}
+
+/** A wake-up only invalidates a snapshot; the API authenticates the replay. */
+export function parseRealtimeWakeup(
+	input: unknown,
+): RealtimeWakeup | undefined {
+	const value = decodeMessage(input);
+	return value && wakeupFrom(value);
+}
+
+/** A reply only shortens the wait; the stored message from the replay replaces it. */
+export function parseRealtimeReply(input: unknown): RealtimeReply | undefined {
+	const value = decodeMessage(input);
+	return value && replyFrom(value);
 }
 
 interface SocketHandlers {
@@ -231,7 +302,7 @@ function azure(
 					((message.from === "server" && message.group === undefined) ||
 						(message.from === "group" && message.group === transport.group))
 				)
-					wake(callbacks, message.data);
+					receive(callbacks, message.data);
 			},
 			tick(socket) {
 				if (Date.now() - lastReceived >= 60_000)
@@ -420,7 +491,10 @@ async function aws(
 							decoder.decode(payload.slice(2, topicLength + 2)) ===
 							transport.topic
 						)
-							wake(callbacks, decoder.decode(payload.slice(topicLength + 2)));
+							receive(
+								callbacks,
+								decoder.decode(payload.slice(topicLength + 2)),
+							);
 					} else if (type === 0xd0) pingOutstanding = false;
 				}
 			},
@@ -520,7 +594,7 @@ async function nats(
 				callbacks.disconnected();
 				return;
 			}
-			wake(callbacks, decoder.decode(message.data));
+			receive(callbacks, decoder.decode(message.data));
 		},
 	});
 	try {
@@ -638,7 +712,7 @@ async function firebase(
 							.map((line) => line.slice(5).trim())
 							.join("\n");
 						const event = JSON.parse(raw);
-						wake(callbacks, event.data);
+						receive(callbacks, event.data);
 					}
 				}
 			} catch {

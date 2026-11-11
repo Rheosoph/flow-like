@@ -2,6 +2,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use flow_like_browser::attach::{
+    AttachEndpoint, default_profile_dir, read_devtools_active_port, resolve_endpoint,
+};
 use flow_like_browser::launch::{BrowserKind, LaunchOptions, default_cache_dir};
 use flow_like_browser::script::ScriptArg;
 use flow_like_browser::{Browser, Element, Page};
@@ -19,6 +22,10 @@ const WINDOW: (u32, u32) = (1280, 900);
 const PAGE_LOAD: Duration = Duration::from_secs(30);
 const LAUNCH: Duration = Duration::from_secs(30);
 const SCROLL_PAGE_FRACTION: f64 = 0.8;
+const OWNER_BROWSERS: [BrowserKind; 2] = [BrowserKind::Chrome, BrowserKind::Edge];
+const OWNER_BROWSER_OFF: &str = "Remote debugging is off in the owner's browser. The owner opens chrome://inspect/#remote-debugging in Chrome (edge://inspect/#remote-debugging in Edge), switches on 'Allow remote debugging for this browser instance' and leaves the browser open. Then call browser_open again.";
+const OWNER_TAB_CLOSED: &str =
+    "The bot's tab in the owner's browser was closed; call browser_open to open the page again";
 
 // Read labels, never the active element's value or text content. Cross-origin frames remain
 // represented by their iframe element because their inner geometry cannot be read here.
@@ -155,6 +162,32 @@ fn normalized_point(point: (f64, f64), stamp: &ViewStamp) -> Option<InteractionP
         .then_some(InteractionPoint { x, y })
 }
 
+/// A window on a high-density screen is captured in device pixels. The bot gets the page in
+/// CSS pixels, the size of a headless capture, so a screenshot weighs the same on every screen.
+async fn at_page_scale(
+    png: Vec<u8>,
+    size: (u32, u32),
+    page_width: u32,
+) -> flow_like_types::Result<(Vec<u8>, (u32, u32))> {
+    if page_width == 0 || size.0 <= page_width {
+        return Ok((png, size));
+    }
+    let ratio = f64::from(page_width) / f64::from(size.0);
+    let height = ((f64::from(size.1) * ratio).round() as u32).max(1);
+    tokio::task::spawn_blocking(move || {
+        let image = image::load_from_memory_with_format(&png, image::ImageFormat::Png)?;
+        let mut scaled = Vec::new();
+        image
+            .resize_exact(page_width, height, image::imageops::FilterType::Triangle)
+            .write_to(
+                &mut std::io::Cursor::new(&mut scaled),
+                image::ImageFormat::Png,
+            )?;
+        Ok((scaled, (page_width, height)))
+    })
+    .await?
+}
+
 pub struct BotBrowserOptions {
     pub profile_dir: PathBuf,
     pub download_dir: PathBuf,
@@ -204,7 +237,8 @@ pub enum BotStep {
     },
 }
 
-/// A Chrome of its own (separate profile) driven through the nodes' CDP engine.
+/// A Chrome of its own (separate profile), or one tab in the browser the owner already runs,
+/// driven through the nodes' CDP engine.
 pub struct BotBrowser {
     browser: Browser,
     slot: Arc<BrowserSlot>,
@@ -212,6 +246,20 @@ pub struct BotBrowser {
     feedback: tokio::sync::Mutex<Feedback>,
     downloads_since: std::sync::atomic::AtomicU64,
     policy: NavigationPolicy,
+}
+
+/// Where remote debugging is switched on in one of the owner's everyday browsers.
+async fn owner_endpoint() -> flow_like_types::Result<AttachEndpoint> {
+    for kind in OWNER_BROWSERS {
+        let enabled = match default_profile_dir(kind) {
+            Some(dir) => read_devtools_active_port(&dir)?.is_some(),
+            None => false,
+        };
+        if enabled {
+            return Ok(resolve_endpoint("", kind).await?);
+        }
+    }
+    Err(flow_like_types::anyhow!(OWNER_BROWSER_OFF))
 }
 
 impl BotBrowser {
@@ -236,21 +284,55 @@ impl BotBrowser {
         browser
             .set_download_directory(&options.download_dir)
             .await?;
-        let page = browser.new_page().await?;
+        // The tab Chrome started with: a visible window shows the bot's page alone.
+        let page = match browser.pages().into_iter().next() {
+            Some(first) => browser.page(&first.target_id).await?,
+            None => browser.new_page().await?,
+        };
+        Ok(Self::driving(browser, page))
+    }
+
+    /// A tab of the bot's own in the owner's everyday Chrome or Edge, with the owner's logins.
+    /// The browser asks the owner to allow the connection; this waits for that answer.
+    pub async fn attach_owner() -> flow_like_types::Result<Self> {
+        let endpoint = owner_endpoint().await?;
+        Self::attach(endpoint).await.map_err(|error| {
+            flow_like_types::anyhow!("Could not connect to the owner's browser: {error:#}")
+        })
+    }
+
+    /// A new tab in a browser somebody else started. Its other tabs are never touched.
+    pub async fn attach(endpoint: AttachEndpoint) -> flow_like_types::Result<Self> {
+        let browser = Browser::attach(endpoint).await?;
+        browser.settings().set_page_load_timeout(PAGE_LOAD);
+        match browser.new_page().await {
+            Ok(page) => Ok(Self::driving(browser, page)),
+            Err(error) => {
+                browser.shutdown().await;
+                Err(error.into())
+            }
+        }
+    }
+
+    fn driving(browser: Browser, page: Page) -> Self {
         let since = browser.downloads().cursor();
-        Ok(Self {
+        Self {
             browser,
             slot: Arc::new(BrowserSlot::default()),
             page: tokio::sync::Mutex::new(page),
             feedback: tokio::sync::Mutex::new(Feedback::default()),
             downloads_since: since.into(),
             policy: NavigationPolicy::plan_default(),
-        })
+        }
     }
 
     async fn context(&self) -> flow_like_types::Result<PageContext> {
         let mut page = self.page.lock().await;
         if page.is_closed() {
+            // Every other tab of a browser the bot did not start belongs to its owner.
+            if !self.browser.is_owned() {
+                return Err(flow_like_types::anyhow!(OWNER_TAB_CLOSED));
+            }
             let next = self
                 .browser
                 .pages()
@@ -265,6 +347,30 @@ impl BotBrowser {
             self.slot.clone(),
             Vec::new(),
         ))
+    }
+
+    async fn reopen_closed_tab(&self) -> flow_like_types::Result<()> {
+        let mut page = self.page.lock().await;
+        if page.is_closed() && !self.browser.is_owned() {
+            *page = self.browser.new_page().await?;
+        }
+        Ok(())
+    }
+
+    async fn close_own_tabs(&self) {
+        let own = self.page.lock().await.target_id().clone();
+        let opened: Vec<_> = self
+            .browser
+            .pages()
+            .into_iter()
+            .filter(|page| page.opener_id.as_ref() == Some(&own))
+            .map(|page| page.target_id)
+            .collect();
+        for target in opened.into_iter().chain([own]) {
+            if let Err(error) = self.browser.close_page(&target).await {
+                tracing::debug!(%target, %error, "closing the bot's tab in the owner's browser failed");
+            }
+        }
     }
 
     pub fn is_alive(&self) -> bool {
@@ -289,6 +395,7 @@ impl BotBrowser {
 
     async fn goto_inner(&self, url: &str) -> flow_like_types::Result<(String, String)> {
         let target = self.policy.check_blocking_metadata(url).await?;
+        self.reopen_closed_tab().await?;
         let ctx = self.context().await?;
         ctx.page.goto(target.as_str()).await?;
         let landed = ctx.page.url().await?;
@@ -520,7 +627,7 @@ impl BotBrowser {
         let ctx = self.context().await?;
         for attempt in 0..2 {
             let before = Self::probe_view(&ctx).await.ok();
-            let png = ctx.page.screenshot(Default::default()).await?;
+            let png = ctx.page.screenshot_in_place(Default::default()).await?;
             let after = Self::probe_view(&ctx).await.ok();
             let dimensions = image::ImageReader::with_format(
                 std::io::Cursor::new(&png),
@@ -537,6 +644,7 @@ impl BotBrowser {
                 && before.stamp == after.stamp
                 && before.focus == after.focus
             {
+                let (png, dimensions) = at_page_scale(png, dimensions, after.stamp.width).await?;
                 let mut observation = Self::observed(after, &mut feedback);
                 observation.width = dimensions.0;
                 observation.height = dimensions.1;
@@ -586,7 +694,12 @@ impl BotBrowser {
         Ok(found)
     }
 
+    /// Ends the bot's Chrome. In the owner's browser only the bot's tab and the tabs it opened
+    /// are closed, then the connection.
     pub async fn close(&self) {
+        if !self.browser.is_owned() {
+            self.close_own_tabs().await;
+        }
         self.browser.shutdown().await;
     }
 
@@ -858,6 +971,130 @@ mod tests {
         assert!(observation.pointer.is_none());
         assert_eq!(browser.location().await.unwrap().1, "Unclicked");
         browser.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    #[ignore = "launches a real Chrome window; run with --ignored"]
+    async fn a_visible_browser_shows_one_tab_and_shoots_it_in_page_pixels() {
+        let port = serve("<html><head><title>Shop</title></head><body>Open</body></html>").await;
+        let dir = std::env::temp_dir().join(format!("bot-browser-visible-{port}"));
+        let browser = BotBrowser::launch(BotBrowserOptions {
+            profile_dir: dir.join("profile"),
+            download_dir: dir.join("downloads"),
+            headless: false,
+        })
+        .await
+        .expect("Chrome starts");
+        browser
+            .goto(&format!("http://127.0.0.1:{port}/"))
+            .await
+            .unwrap();
+        assert_eq!(browser.browser.pages().len(), 1);
+        let (png, shot) = browser.screenshot_with_observation().await.unwrap();
+        let page = browser.observation().await.unwrap();
+        assert_eq!(png_size(&png), (shot.width, shot.height));
+        assert_eq!(shot.width, page.width);
+        assert!(shot.height.abs_diff(page.height) <= 1, "{shot:?} {page:?}");
+        browser.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn png_size(png: &[u8]) -> (u32, u32) {
+        image::ImageReader::with_format(std::io::Cursor::new(png), image::ImageFormat::Png)
+            .into_dimensions()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_capture_in_device_pixels_shrinks_to_the_page_width() {
+        let mut dense = Vec::new();
+        image::DynamicImage::ImageRgb8(image::RgbImage::new(200, 101))
+            .write_to(
+                &mut std::io::Cursor::new(&mut dense),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        let (scaled, size) = at_page_scale(dense.clone(), (200, 101), 100).await.unwrap();
+        assert_eq!(size, (100, 51));
+        assert_eq!(png_size(&scaled), size);
+        for page_width in [0, 200, 400] {
+            let (same, size) = at_page_scale(dense.clone(), (200, 101), page_width)
+                .await
+                .unwrap();
+            assert_eq!(size, (200, 101), "{page_width}");
+            assert_eq!(same, dense, "{page_width}");
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "launches a real Chrome; run with --ignored"]
+    async fn an_attached_session_keeps_to_its_own_tab() {
+        let port = serve(
+            "<html><head><title>Shop</title></head><body>\
+             <button onclick=\"document.title='clicked'\">Go</button></body></html>",
+        )
+        .await;
+        let url = format!("http://127.0.0.1:{port}/");
+        let dir = std::env::temp_dir().join(format!("bot-browser-attached-{port}"));
+        let owner = Browser::launch(LaunchOptions {
+            kind: BrowserKind::Chrome,
+            executable: None,
+            headless: true,
+            window_size: WINDOW,
+            user_agent: None,
+            user_data_dir: Some(dir.join("owner")),
+            proxy: None,
+            locale: None,
+            ignore_https_errors: false,
+            cache_dir: default_cache_dir(),
+            page_load_timeout: PAGE_LOAD,
+            launch_timeout: LAUNCH,
+        })
+        .await
+        .expect("the owner's Chrome starts");
+        let targets = |browser: &Browser| -> Vec<String> {
+            browser
+                .pages()
+                .into_iter()
+                .map(|page| page.target_id.to_string())
+                .collect()
+        };
+        let owner_tabs = targets(&owner);
+        let endpoint = resolve_endpoint(owner.debugger_address().unwrap(), BrowserKind::Chrome)
+            .await
+            .unwrap();
+
+        let bot = BotBrowser::attach(endpoint)
+            .await
+            .expect("the bot attaches");
+        bot.goto(&url).await.unwrap();
+        let snapshot = bot.snapshot(true, 5000).await.unwrap();
+        bot.act(BotStep::Click {
+            reference: ref_of(&snapshot.text, "button \"Go\""),
+        })
+        .await
+        .unwrap();
+        assert_eq!(bot.location().await.unwrap().1, "clicked");
+        assert!(bot.screenshot().await.unwrap().starts_with(b"\x89PNG"));
+
+        let bot_tab = bot.page.lock().await.target_id().clone();
+        owner.close_page(&bot_tab).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let error = bot
+            .snapshot(true, 5000)
+            .await
+            .err()
+            .expect("no tab to read");
+        assert!(error.to_string().contains("was closed"), "{error}");
+        assert_eq!(bot.goto(&url).await.unwrap().1, "Shop");
+        assert_eq!(targets(&owner).len(), owner_tabs.len() + 1);
+
+        bot.close().await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(owner.is_alive());
+        assert_eq!(targets(&owner), owner_tabs);
+        owner.shutdown().await;
         let _ = std::fs::remove_dir_all(dir);
     }
 

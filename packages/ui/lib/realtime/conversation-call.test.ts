@@ -469,15 +469,21 @@ class FakePeer implements CallPeerLike {
 	removeStream(stream: MediaStream) {
 		this.removed.push(stream);
 	}
-	on(event: "stream" | "close", listener: (s?: MediaStream) => void) {
+	on(
+		event: "stream" | "close" | "connect",
+		listener: (s?: MediaStream) => void,
+	) {
 		const set = this.handlers.get(event) ?? new Set();
 		set.add(listener);
 		this.handlers.set(event, set);
 	}
-	off(event: "stream" | "close", listener: (s?: MediaStream) => void) {
+	off(
+		event: "stream" | "close" | "connect",
+		listener: (s?: MediaStream) => void,
+	) {
 		this.handlers.get(event)?.delete(listener);
 	}
-	emit(event: "stream" | "close", stream?: MediaStream) {
+	emit(event: "stream" | "close" | "connect", stream?: MediaStream) {
 		for (const l of [...(this.handlers.get(event) ?? [])]) l(stream);
 	}
 	listeners(event: string) {
@@ -485,8 +491,14 @@ class FakePeer implements CallPeerLike {
 	}
 }
 
+interface FakeConn {
+	peer?: unknown;
+	connected?: boolean;
+	glareToken?: number;
+}
+
 class FakeProvider {
-	room = { webrtcConns: new Map<string, { peer?: unknown }>() };
+	room = { webrtcConns: new Map<string, FakeConn>() };
 	private peersListeners = new Set<(change: unknown) => void>();
 	on(_: "peers", l: (change: unknown) => void) {
 		this.peersListeners.add(l);
@@ -599,6 +611,36 @@ describe("createCallEngine", () => {
 		expect(provider.listenerCount).toBe(0);
 		expect(peer.listeners("stream")).toBe(0);
 		expect(peer.listeners("close")).toBe(0);
+		expect(peer.listeners("connect")).toBe(0);
+	});
+
+	test("a peer keeps its glare token for the first handshake and loses it once connected", () => {
+		const provider = new FakeProvider();
+		const engine = createCallEngine(provider);
+		const peer = provider.connect("a");
+		const conn = provider.room.webrtcConns.get("a") as FakeConn;
+		conn.glareToken = 1_731_312_000_000.5;
+		provider.fire();
+		expect(conn.glareToken).toBe(1_731_312_000_000.5);
+
+		conn.connected = true;
+		peer.emit("connect");
+		expect(conn.glareToken).toBeUndefined();
+		conn.glareToken = 1_731_312_003_000.5;
+		expect(conn.glareToken).toBeUndefined();
+		expect(JSON.parse(JSON.stringify({ token: conn.glareToken }))).toEqual({});
+		engine.dispose();
+	});
+
+	test("a peer that was connected before the call engine carries no glare token", () => {
+		const provider = new FakeProvider();
+		provider.connect("a");
+		const conn = provider.room.webrtcConns.get("a") as FakeConn;
+		conn.connected = true;
+		conn.glareToken = 1_731_312_000_000.5;
+		const engine = createCallEngine(provider);
+		expect(conn.glareToken).toBeUndefined();
+		engine.dispose();
 	});
 });
 

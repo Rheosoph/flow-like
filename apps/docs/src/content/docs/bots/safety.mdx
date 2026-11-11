@@ -83,7 +83,8 @@ Bots on the desktop app or a device can switch on **End-to-end encryption**. You
 Because the server can't read encrypted conversations:
 
 - Cloud bots can't hold the ability or answer in encrypted conversations.
-- Encrypted chats have no file attachments or calls, and encrypted rooms have no invite links and no room memory.
+- Encrypted chats have no file attachments, and encrypted rooms have no invite links and no room memory.
+- Calls in an encrypted chat need a speech-to-text model installed on your device. Hosted speech models run behind the server, so an app without its own model shows no call there, and bots speak only with a voice installed on the device. What is said is sealed like a message. The server only learns that a call started and ended, so it can ring the others.
 - Secrets sealed for a bot's host can't be used by turns that run in the cloud.
 
 ## Limits that keep costs in check

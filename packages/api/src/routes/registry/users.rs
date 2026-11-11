@@ -4,6 +4,7 @@ use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::permission::wasm_package_permission::WasmPackagePermission;
 use crate::push_notifications::{DispatchNotificationInput, dispatch_notification};
+use crate::routes::user::identity::{public_display_name, public_handle};
 use crate::routes::user::sign_avatar;
 use crate::state::AppState;
 use axum::extract::{Path, State};
@@ -87,8 +88,13 @@ async fn build_user_response(
     PackageUserResponse {
         id: pu.id,
         user_id: pu.user_id,
-        username: u.as_ref().and_then(|u| u.username.clone()),
-        name: u.as_ref().and_then(|u| u.name.clone()),
+        username: u
+            .as_ref()
+            .and_then(|u| u.preferred_username.as_deref())
+            .and_then(public_handle),
+        name: u
+            .as_ref()
+            .and_then(|u| public_display_name(u.name.as_deref(), None, u.email.as_deref())),
         avatar,
         permission: pu.permission,
         granted_at: pu.granted_at.to_utc(),

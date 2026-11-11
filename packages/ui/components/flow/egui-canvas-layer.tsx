@@ -62,7 +62,10 @@ import {
 import type { WritableSignalStore } from "../../lib/realtime/presence-signals-store";
 import { useBoardRuntime, useReactFlow, useStoreApi } from "./board-runtime";
 import type { FlowCanvasProps } from "./flow-board";
-import { NATIVE_NODE_PLANE_Z } from "./standalone-board-host";
+import {
+	NATIVE_EDGE_PLANE_Z,
+	NATIVE_NODE_PLANE_Z,
+} from "./standalone-board-host";
 
 export interface EguiCanvasLayerProps {
 	scene: Scene;
@@ -107,6 +110,8 @@ interface PointerDrag {
 	tracePin?: SceneEndpoint;
 	/** The wire under a press; a click on it focuses the path it lies on. */
 	traceEdge?: string;
+	/** The wire under a Shift-press; a click adds it to the selection. */
+	addEdge?: string;
 }
 
 /** A preview card's pin and its `[x, y, width, height]` on the canvas. */
@@ -441,8 +446,8 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 			delete pinHint.dataset.pinId;
 			return visible;
 		};
-		const showPinFeedback = (candidate: PinStart, target: Element | null) => {
-			const { pin } = candidate;
+		/** Sets the cursor on the element under the pointer until the next feedback change. */
+		const claimCursor = (target: Element | null, cursor: string) => {
 			const element =
 				target instanceof HTMLElement || target instanceof SVGElement
 					? target
@@ -451,7 +456,11 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				clearPinFeedback();
 				claimedCursor = { element, previous: element.style.cursor };
 			}
-			element.style.cursor = pinCursor(candidate);
+			element.style.cursor = cursor;
+		};
+		const showPinFeedback = (candidate: PinStart, target: Element | null) => {
+			const { pin } = candidate;
+			claimCursor(target, pinCursor(candidate));
 			const [x, y, zoom] = store.getState().transform;
 			const px = x + pin.x * zoom;
 			const py = y + pin.y * zoom;
@@ -481,7 +490,8 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 		let disposed = false;
 		let cancelStartupWait: (() => void) | undefined;
 		let ready = false;
-		let busy = false;
+		let savesDone: Promise<void> = Promise.resolve();
+		let queuedSaves = 0;
 		let pointer: Point | undefined;
 		let lastPointerEvent: PointerEvent | undefined;
 		let drag: PointerDrag | undefined;
@@ -561,6 +571,18 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				flow.getInternalNode(wrapper.dataset.id ?? "")?.internals.z ??
 				Number(getComputedStyle(wrapper).zIndex);
 			return nativeZ > domZ ? node : undefined;
+		};
+		/** A native wire that a press at this point would reach: on open canvas or above a DOM node. */
+		const wireAt = (point: Point, element: Element | null) => {
+			const wrapper = element?.closest<HTMLElement>(".react-flow__node");
+			if (wrapper) {
+				const z =
+					flow.getInternalNode(wrapper.dataset.id ?? "")?.internals.z ??
+					Number(getComputedStyle(wrapper).zIndex);
+				if (!(z < NATIVE_EDGE_PLANE_Z)) return undefined;
+			}
+			const edge = hitRef.current.edgeAt(point, flow.getViewport().zoom);
+			return edge && !edge.dom ? edge : undefined;
 		};
 		const isPinExposed = (pin: WorldPin) => {
 			const bounds = root.getBoundingClientRect();
@@ -865,9 +887,12 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				if (candidate) showPinFeedback(candidate, top);
 				else clearPinFeedback();
 				traceHover(tracePinAt(point, zoom, top));
+				const wire =
+					!candidate && !hit && !isDomControl(top) && wireAt(point, top);
+				if (wire && top !== pane) claimCursor(top, "pointer");
 				pane.style.cursor = candidate
 					? pinCursor(candidate)
-					: hitRef.current.nodeAt(point)
+					: wire || hitRef.current.nodeAt(point)
 						? "pointer"
 						: "grab";
 				setOverlay(
@@ -1146,7 +1171,7 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 			const state = store.getState();
 			if (
 				connecting &&
-				(busy || !currentProps().nodesInteractive || !state.nodesConnectable)
+				(!currentProps().nodesInteractive || !state.nodesConnectable)
 			)
 				return;
 			const above = nativeAboveElement(point, target);
@@ -1319,7 +1344,6 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 		const down = (event: PointerEvent) => {
 			if (
 				ready &&
-				!busy &&
 				event.pointerType === "touch" &&
 				!isDomControl(event.target) &&
 				(pinch || nativeSurface(event))
@@ -1384,10 +1408,9 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				!isControl(event.target) &&
 				!(event.target instanceof Element && event.target.closest(".nokey"));
 			if (!selection && !selectionGroup && !nativeSurface(event)) return;
-			if (busy) {
-				consume(event);
-				return;
-			}
+			// The box belongs to one Shift-drag; any other press ends it, as on React Flow.
+			if (!selectionGroup && store.getState().nodesSelectionActive)
+				store.setState({ nodesSelectionActive: false });
 			clearPinFeedback();
 			setOverlay({});
 			if (drag && drag.id !== event.pointerId) {
@@ -1414,6 +1437,9 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				base.mode = "selection";
 				base.selectionMode = bp.selectionMode ?? "box";
 				base.lasso = [point];
+				base.primaryId = targetNode(event, point)?.id;
+				if (!base.primaryId)
+					base.addEdge = hitRef.current.edgeAt(point, zoom)?.id;
 			} else if (
 				selectionGroup &&
 				event.button === 0 &&
@@ -1580,7 +1606,70 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 			if (drag?.mode === "pan") moveDrag(event);
 			schedule();
 		};
-		const commitConnection = async (event: PointerEvent) => {
+		/** Saves run in drop order; gestures stay live while earlier saves are in flight. */
+		const enqueueSave = (save: () => Promise<void>) => {
+			queuedSaves++;
+			setPending(true);
+			savesDone = savesDone.then(async () => {
+				try {
+					await save();
+				} catch (error) {
+					if (!disposed)
+						setAnnouncement(
+							error instanceof Error
+								? error.message
+								: "The connection could not be saved.",
+						);
+				} finally {
+					// Let the confirmed board revision reach React before the next save reads it.
+					await new Promise((resolve) => requestAnimationFrame(resolve));
+					queuedSaves--;
+					if (!queuedSaves && !disposed) setPending(false);
+				}
+			});
+		};
+		const openPalette = (event: PointerEvent, pin: WorldPin, at: Point) => {
+			const fromNode = flow.getInternalNode(pin.nodeId);
+			if (!fromNode) return;
+			const reference = pin.kind === "reference";
+			const output = pin.direction === "output";
+			const fromPosition = reference
+				? output
+					? Position.Bottom
+					: Position.Top
+				: output
+					? Position.Right
+					: Position.Left;
+			const toPosition = reference
+				? output
+					? Position.Top
+					: Position.Bottom
+				: output
+					? Position.Left
+					: Position.Right;
+			currentProps().onConnectEnd?.(event, {
+				isValid: false,
+				from: { x: pin.x, y: pin.y },
+				fromHandle: {
+					id: pin.id,
+					nodeId: pin.nodeId,
+					type: output ? "source" : "target",
+					position: fromPosition,
+					x: pin.x,
+					y: pin.y,
+					width: 1,
+					height: 1,
+				},
+				fromPosition,
+				fromNode,
+				to: at,
+				toHandle: null,
+				toPosition,
+				toNode: null,
+				pointer: at,
+			});
+		};
+		const commitConnection = (event: PointerEvent) => {
 			if (!connection || !pointer) return;
 			if (
 				!currentProps().nodesInteractive ||
@@ -1589,98 +1678,73 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				cancel(true);
 				return;
 			}
+			const at = world(pointer);
 			const action = connection.drop(
 				hitRef.current,
-				world(pointer),
+				at,
 				flow.getViewport().zoom,
 				validate,
 			);
 			connection = undefined;
 			setOverlay({});
-			const bp = currentProps();
-			const commitScope = bp.scopeKey;
-			try {
-				if (action.kind === "connect" || action.kind === "disconnect") {
-					const old =
-						action.kind === "disconnect"
-							? bp.edges?.find((edge) => edge.id === action.edgeId)
-							: action.oldEdgeId
-								? bp.edges?.find((edge) => edge.id === action.oldEdgeId)
-								: undefined;
-					if ((action.kind === "disconnect" || action.oldEdgeId) && !old)
-						return;
-					busy = true;
-					setPending(true);
+			if (action.kind === "palette") {
+				openPalette(event, action.pin, at);
+				return;
+			}
+			if (action.kind !== "connect" && action.kind !== "disconnect") {
+				setAnnouncement(
+					action.kind === "noop"
+						? "Connection unchanged."
+						: "Connection cancelled.",
+				);
+				return;
+			}
+			const dropped = currentProps();
+			const commitScope = dropped.scopeKey;
+			const oldEdgeId =
+				action.kind === "disconnect" ? action.edgeId : action.oldEdgeId;
+			const old = oldEdgeId
+				? dropped.edges?.find((edge) => edge.id === oldEdgeId)
+				: undefined;
+			if (oldEdgeId && !old) {
+				setAnnouncement("Connection cancelled.");
+				return;
+			}
+			// The wire shows from the drop on; the host validates the old one when it saves.
+			const shown = dropped.onNativePendingEdge?.(
+				action.kind === "connect" ? action.connection : undefined,
+				old,
+			);
+			enqueueSave(async () => {
+				let saved = false;
+				try {
+					const bp = currentProps();
+					if (disposed || bp.scopeKey !== commitScope) return;
 					if (action.kind === "connect")
 						await bp.onNativeConnection(action.connection, old);
 					else if (old) await bp.onNativeDisconnect(old);
+					saved = true;
 					if (!disposed && commitScope === currentProps().scopeKey)
 						setAnnouncement(
 							action.kind === "connect"
 								? "Connection saved."
 								: "Connection removed.",
 						);
-				} else if (action.kind === "palette") {
-					const pin = action.pin;
-					const fromNode = flow.getInternalNode(pin.nodeId);
-					if (!fromNode) return;
-					const fromPosition =
-						pin.kind === "reference"
-							? pin.direction === "output"
-								? Position.Bottom
-								: Position.Top
-							: pin.direction === "output"
-								? Position.Right
-								: Position.Left;
-					const toPosition =
-						pin.kind === "reference"
-							? pin.direction === "output"
-								? Position.Top
-								: Position.Bottom
-							: pin.direction === "output"
-								? Position.Left
-								: Position.Right;
-					bp.onConnectEnd?.(event, {
-						isValid: false,
-						from: { x: pin.x, y: pin.y },
-						fromHandle: {
-							id: pin.id,
-							nodeId: pin.nodeId,
-							type: pin.direction === "output" ? "source" : "target",
-							position: fromPosition,
-							x: pin.x,
-							y: pin.y,
-							width: 1,
-							height: 1,
-						},
-						fromPosition,
-						fromNode,
-						to: world(pointer),
-						toHandle: null,
-						toPosition,
-						toNode: null,
-						pointer: world(pointer),
-					});
-				} else
-					setAnnouncement(
-						action.kind === "noop"
-							? "Connection unchanged."
-							: "Connection cancelled.",
-					);
-			} catch (error) {
-				if (!disposed)
-					setAnnouncement(
-						error instanceof Error
-							? error.message
-							: "The connection could not be saved.",
-					);
-			} finally {
-				// Let the confirmed board revision reach React before accepting another commit.
-				requestAnimationFrame(() => {
-					busy = false;
-					if (!disposed) setPending(false);
-				});
-			}
+				} finally {
+					shown?.(saved);
+				}
+			});
+		};
+		/** Editors inside a node keep their own pointer handling but select the node, as on React Flow. */
+		const selectControlNode = (event: MouseEvent) => {
+			if (event.button !== 0 || !isControl(event.target)) return;
+			const id =
+				event.target instanceof Element
+					? event.target.closest<HTMLElement>(".react-flow__node")?.dataset.id
+					: undefined;
+			const node = id && currentProps().nodes?.find((n) => n.id === id);
+			if (node && !node.selected)
+				selected(new Set([node.id]), event.metaKey || event.ctrlKey);
 		};
 		const up = (event: PointerEvent) => {
 			if (event.pointerType === "touch" && touches.has(event.pointerId)) {
@@ -1732,6 +1796,10 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 					connection = undefined;
 					setOverlay({});
 					if (reconnect) selected(new Set(), false, reconnect.edgeId);
+					else if (
+						!currentProps().nodes?.find((n) => n.id === anchor.nodeId)?.selected
+					)
+						selected(new Set([anchor.nodeId]), event.metaKey || event.ctrlKey);
 					inspected = reconnect
 						? { edgeId: reconnect.edgeId }
 						: { pin: anchor };
@@ -1756,6 +1824,15 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 					moved.find((node) => node.id === completed.primaryId) ?? moved[0],
 					moved,
 				);
+			} else if (completed.mode === "selection" && clicked) {
+				// A Shift-click adds the node or wire under it; on open canvas it clears.
+				if (completed.primaryId) selected(new Set([completed.primaryId]), true);
+				else if (completed.addEdge)
+					currentProps().onEdgesChange?.([
+						{ id: completed.addEdge, type: "select", selected: true },
+					]);
+				else selected(new Set(), event.metaKey || event.ctrlKey);
+				lassoRef.current?.setAttribute("points", "");
 			} else if (completed.mode === "selection" && pointer) {
 				selected(
 					new Set(
@@ -1816,16 +1893,18 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 			setAnnouncement("Gesture cancelled.");
 		};
 		const click = (event: MouseEvent) => {
-			if (suppressClick) {
-				suppressClick = false;
-				if (isDomControl(event.target)) return;
-				if (
-					!isControl(event.target) ||
-					(event.target instanceof Element &&
-						event.target.closest(".react-flow__handle"))
-				)
-					consume(event);
+			if (!suppressClick) {
+				if (ready) selectControlNode(event);
+				return;
 			}
+			suppressClick = false;
+			if (isDomControl(event.target)) return;
+			if (
+				!isControl(event.target) ||
+				(event.target instanceof Element &&
+					event.target.closest(".react-flow__handle"))
+			)
+				consume(event);
 		};
 		const doubleClick = (event: MouseEvent) => {
 			if (!ready || !nativeSurface(event)) return;
@@ -1884,7 +1963,41 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 					}, 0);
 			}
 		};
+		/** Ctrl/Cmd+A on the board, or with nothing focused while the pointer rests on it. */
+		const ownsSelectAll = (event: KeyboardEvent) => {
+			if (
+				!(event.metaKey || event.ctrlKey) ||
+				event.shiftKey ||
+				event.altKey ||
+				event.key.toLowerCase() !== "a" ||
+				!ready ||
+				drag ||
+				connection ||
+				pinch ||
+				!store.getState().elementsSelectable
+			)
+				return false;
+			const focus = document.activeElement;
+			if (focus && focus !== document.body ? !root.contains(focus) : !pointer)
+				return false;
+			return !(
+				event.target instanceof Element &&
+				event.target.closest(
+					"input, textarea, select, [contenteditable]:not([contenteditable='false']), .nokey",
+				)
+			);
+		};
 		const keyDown = (event: KeyboardEvent) => {
+			if (ownsSelectAll(event)) {
+				consume(event);
+				// Escape and the arrow keys then act on the selection, whatever held focus.
+				inputRef.current?.focus({ preventScroll: true });
+				selected(
+					new Set((currentProps().nodes ?? []).map((node) => node.id)),
+					false,
+				);
+				return;
+			}
 			if (!root.contains(document.activeElement) || isControl(event.target))
 				return;
 			if ((connection || drag || pinch) && event.key.startsWith("Arrow")) {
@@ -1895,9 +2008,17 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				cancelled();
 				traceFocus();
 				consume(event);
-			} else if (event.key === "Escape" && focusAnchor) {
+			} else if (event.key === "Escape") {
+				const bp = currentProps();
+				const selection =
+					store.getState().elementsSelectable &&
+					(bp.nodes?.some((node) => node.selected) ||
+						bp.edges?.some((edge) => edge.selected));
+				if (selection) selected(new Set(), false);
+				if (store.getState().nodesSelectionActive)
+					store.setState({ nodesSelectionActive: false });
+				if (focusAnchor || selection) consume(event);
 				traceFocus();
-				consume(event);
 			}
 			if (event.code === "Space") {
 				space = true;

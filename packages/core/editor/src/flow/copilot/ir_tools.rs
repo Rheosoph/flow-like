@@ -13050,10 +13050,10 @@ eventsSimple() { notify::send({ message: "customer message" }) }
         format!(
             r#"const APPROVER_EMAIL: string = "example@example.com"
 
-function sendFinal(mail: object, draft: object) {{
+function sendFinal(mail: Struct, draft: Struct) {{
     smtpEmailSend({{ to: mail.requesterEmail, body: draft.text, ticketId: mail.ticketId, draftVersion: draft.draftVersion }})
 }}
-function processOneMail(mail: object) {{
+function processOneMail(mail: Struct) {{
     const draft = aiModelGenerate()
     smtpEmailSend({{ to: APPROVER_EMAIL, body: draft.text, ticketId: mail.ticketId, draftVersion: draft.draftVersion }})
     if ({sender_check}mail.reviewerApprovalDecision == "approved" && mail.ticketId == draft.ticketId && mail.draftVersion == draft.draftVersion) {{
@@ -13088,10 +13088,10 @@ eventsSimple() {{
 
     #[test]
     fn function_layered_approval_with_reviewer_passed_as_argument_produces_no_false_notes() {
-        let source = r#"function sendFinal(mail: object, draft: object) {
+        let source = r#"function sendFinal(mail: Struct, draft: Struct) {
     smtpEmailSend({ to: mail.requesterEmail, body: draft.text, ticketId: mail.ticketId, draftVersion: draft.draftVersion })
 }
-function processOneMail(mail: object, approver: string) {
+function processOneMail(mail: Struct, approver: string) {
     const draft = aiModelGenerate()
     smtpEmailSend({ to: approver, body: draft.text, ticketId: mail.ticketId, draftVersion: draft.draftVersion })
     if (mail.incomingSender == approver && mail.reviewerApprovalDecision == "approved" && mail.ticketId == draft.ticketId && mail.draftVersion == draft.draftVersion) {

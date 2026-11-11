@@ -52,6 +52,8 @@ pub struct Model {
     pub bit_ids: Option<crate::json_types::StringList>,
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub hubs: Option<crate::json_types::StringList>,
+    #[sea_orm(column_name = "hiddenBots", column_type = "JsonBinary", nullable)]
+    pub hidden_bots: Option<crate::json_types::StringList>,
     #[sea_orm(
         belongs_to,
         from = "user_id",

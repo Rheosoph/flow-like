@@ -1,3 +1,4 @@
+mod download;
 mod reference;
 
 use flow_like_types::Bytes;
@@ -14,14 +15,15 @@ use crate::outcome::ToolOutput;
 use crate::spec::{Approval, ToolSpec, schema_of};
 
 pub use reference::{
-    FileRef, ResolvedFile, guess_mime, handle_for, markdown_url, require_storage_read, resolve,
-    sha256_hex, workspace_of,
+    FileRef, Located, ResolvedFile, guess_mime, handle_for, locate, markdown_url,
+    require_storage_read, resolve, sha256_hex, workspace_of,
 };
 
 pub const FILE_LIST: &str = "file_list";
 pub const FILE_READ: &str = "file_read";
 pub const FILE_SAVE: &str = "file_save";
 pub const FILE_WRITE: &str = "file_write";
+pub const FILE_LINK: &str = "file_link";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct FileListArgs {
@@ -48,8 +50,18 @@ pub struct FileReadArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct FileSaveArgs {
+pub struct FileLinkArgs {
     pub file: FileRef,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FileSaveArgs {
+    /// The file to copy: a workspace path, another app's path or a handle, such as an attachment's `file` value. Give this or `url`.
+    #[serde(default)]
+    pub file: Option<FileRef>,
+    /// An http(s) address to download, e.g. a signed download link an app or connector returned. Your owner approves each new site first. Give this or `file`.
+    #[serde(default)]
+    pub url: Option<String>,
     /// Where to put the copy in the workspace; `bot/files/<name>` when omitted.
     #[serde(default)]
     pub path: Option<String>,
@@ -70,6 +82,12 @@ pub struct FileWriteArgs {
     pub app_id: Option<String>,
 }
 
+const SAVE_DESCRIPTION: &str = "Copy a file into the bot's workspace and return its handle: from any file source (`file`) or by downloading an http(s) link (`url`, e.g. a signed download link; your owner approves each new site, redirects are not followed). Share it in chat using [filename](markdown_url) with the returned markdown_url.";
+
+const LINK_DESCRIPTION: &str = "Get a temporary https download link for a file: an attachment (its `file` value), a workspace file, another app's file or a handle. Use it when another service has to fetch the file itself, such as a connector or MCP tool argument that asks for a file URL, or a web request. Whoever holds the link can download the file until it expires, so pass it only to the service that needs the file. Get a new link when one has expired. To show a file in this chat, use its markdown_url instead.";
+
+const NO_LINK: &str = "is kept where this host cannot sign download links, such as only on this device. Tell the person the service needs a file link; they can share the file from a place that gives one";
+
 pub fn specs() -> Vec<ToolSpec> {
     let spec = |name, description, mutating, input_schema| ToolSpec {
         name,
@@ -81,6 +99,13 @@ pub fn specs() -> Vec<ToolSpec> {
         mutating,
         input_schema,
     };
+    let mut save = spec(
+        FILE_SAVE,
+        SAVE_DESCRIPTION,
+        true,
+        schema_of::<FileSaveArgs>(),
+    );
+    save.approval_args = &["url"];
     vec![
         spec(
             FILE_LIST,
@@ -90,15 +115,16 @@ pub fn specs() -> Vec<ToolSpec> {
         ),
         spec(
             FILE_READ,
-            "Read a file as text (documents are converted; long text is paged with offset). Binary files return a handle instead. A file can be a workspace path, another app's path, a message attachment like '#12.a1' or a handle. Use the returned markdown_url, when present, as the destination in [filename](markdown_url) or ![description](markdown_url) to share the file in chat.",
+            "Read a file as text (documents are converted; long text is paged with offset). Binary files return a handle instead. A file can be a workspace path, another app's path ('app:<app_id>/<path>') or a handle, such as the `file` value shown with a message attachment. Use the returned markdown_url, when present, as the destination in [filename](markdown_url) or ![description](markdown_url) to share the file in chat.",
             false,
             schema_of::<FileReadArgs>(),
         ),
+        save,
         spec(
-            FILE_SAVE,
-            "Copy a file from any source into the bot's workspace and return its handle. Share it in chat using [filename](markdown_url) with the returned markdown_url.",
-            true,
-            schema_of::<FileSaveArgs>(),
+            FILE_LINK,
+            LINK_DESCRIPTION,
+            false,
+            schema_of::<FileLinkArgs>(),
         ),
         spec(
             FILE_WRITE,
@@ -242,8 +268,17 @@ pub async fn file_read(env: &dyn ToolEnv, args: FileReadArgs) -> ToolResult<Tool
 }
 
 pub async fn file_save(env: &dyn ToolEnv, args: FileSaveArgs) -> ToolResult<ToolOutput> {
+    let file_ref = match (&args.file, args.url.as_deref()) {
+        (Some(file), None) => file,
+        (None, Some(url)) => return download::save_from_url(env, url, args.path.as_deref()).await,
+        _ => {
+            return Err(ToolError::invalid(
+                "Give exactly one of `file` (a file to copy) or `url` (an http(s) address to download)",
+            ));
+        }
+    };
     let workspace = workspace_of(env, "save files")?;
-    let file = resolve(env, &args.file, env.limits().max_read_bytes).await?;
+    let file = resolve(env, file_ref, env.limits().max_read_bytes).await?;
     let path = match args.path.as_deref() {
         Some(path) => normalize_path(path)?,
         None => format!("{FILES_DIR}/{}", crate::layout::sanitize_name(&file.name)),
@@ -258,6 +293,31 @@ pub async fn file_save(env: &dyn ToolEnv, args: FileSaveArgs) -> ToolResult<Tool
             .saved(handle)
             .classified(file.classification),
     )
+}
+
+pub async fn file_link(env: &dyn ToolEnv, args: FileLinkArgs) -> ToolResult<ToolOutput> {
+    let located = locate(env, &args.file).await?;
+    let label = args.file.label();
+    let file = env
+        .read_file(&located.app_id, &located.path, 0)
+        .await?
+        .ok_or_else(|| ToolError::not_found(format!("No file '{label}'")))?;
+    let link = env
+        .file_link(&located.app_id, &located.path)
+        .await?
+        .ok_or_else(|| ToolError::new(code::NOT_SUPPORTED, format!("'{label}' {NO_LINK}")))?;
+    let expires_at = link
+        .expires_at_ms
+        .and_then(chrono::DateTime::from_timestamp_millis)
+        .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    Ok(ToolOutput::new(json!({
+        "url": link.url,
+        "name": located.name,
+        "mime": file.mime.unwrap_or_else(|| guess_mime(&located.path)),
+        "bytes": file.size,
+        "expires_at": expires_at,
+    }))
+    .classified(file.classification))
 }
 
 pub async fn file_write(env: &dyn ToolEnv, args: FileWriteArgs) -> ToolResult<ToolOutput> {

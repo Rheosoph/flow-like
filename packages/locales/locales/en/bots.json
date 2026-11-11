@@ -61,7 +61,7 @@
 			"label": "Image generation"
 		},
 		"internet": {
-			"description": "Search the web and read pages through a separate researcher",
+			"description": "Searches the web and reads public pages",
 			"label": "Internet"
 		},
 		"knowledge": {
@@ -754,6 +754,16 @@
 		"unknownMember": "Someone",
 		"unread_one": "{{count}} unread",
 		"unread_other": "{{count}} unread",
+		"visibility": {
+			"description": "Choose the bots this profile shows. A hidden bot keeps working and stays in its rooms.",
+			"descriptionNamed": "Choose the bots “{{profile}}” shows. A hidden bot keeps working and stays in its rooms.",
+			"failed": "Couldn't change which bots this profile shows.",
+			"hidden": "Hidden in this profile",
+			"hiddenCount_one": "{{count}} hidden in this profile",
+			"hiddenCount_other": "{{count}} hidden in this profile",
+			"shown": "Shown in this profile",
+			"title": "Bots in this profile"
+		},
 		"you": "You",
 		"youObject": "you",
 		"yourCrew": "Your crew",
@@ -944,11 +954,11 @@
 				"image": "Image generation",
 				"imageHint": "Draws the images it creates.",
 				"ownModel": "Use its own model",
-				"ownModelHint": "Sub-tasks run on the model it thinks with",
+				"ownModelHint": "Sub-tasks and assistants run on the model it thinks with",
 				"stt": "Speech to text",
 				"sttHint": "Transcribes the voice messages and calls it hears.",
 				"subtask": "Sub-tasks",
-				"subtaskHint": "Runs the parallel parts of a big job; a smaller, faster model keeps them cheap. Used only where the host can run it.",
+				"subtaskHint": "Runs the parallel parts of a big job and the assistants that build workflows, pages and data; a smaller, faster model keeps them cheap. Used only where the host can run it.",
 				"title": "Pinned models",
 				"tts": "Text to speech",
 				"ttsHint": "Speaks its replies aloud.",
@@ -1139,6 +1149,7 @@
 		"event": "Run event {{id}} of app {{app}}",
 		"host": "Run code that reaches {{host}}",
 		"other": "{{tool}}: {{scope}}",
+		"ownerBrowser": "Open sites on {{site}} in your own browser",
 		"page": "Use page {{id}} of app {{app}}",
 		"person": "Message {{name}}",
 		"personUnknown": "Message a person you chat with",
@@ -1459,6 +1470,7 @@
 			"waiting": "Waiting for the host to make the key."
 		},
 		"grants": {
+			"expires": "Lapses on {{date}} if unused",
 			"none": "Nothing yet. {{name}} asks you before it acts, and you can tell it to stop asking.",
 			"revoke": "Stop allowing: {{action}}",
 			"title": "Allowed actions"
@@ -1602,7 +1614,7 @@
 			"responseHint": "Without wait, the request returns 202 with the turn state. Add ?wait=30 to the URL, or &wait=30 if it already has a query, to wait up to 30 seconds for a reply.",
 			"rotate": "Rotate the secret of {{name}}",
 			"secret": "Secret",
-			"signingHint": "Use the signing key as text to sign the exact request body with HMAC-SHA256. Send the lowercase hex digest in X-Flow-Like-Signature: sha256=<hex>. No secret header or URL parameter is needed when signing.",
+			"signingHint": "Use the signing key (the same value as the secret) as text. For each call send X-Flow-Like-Timestamp (Unix seconds, within 5 minutes of now), X-Flow-Like-Delivery (a unique id per delivery) and X-Flow-Like-Signature: sha256=<hex>, the lowercase hex HMAC-SHA256 of \"<timestamp>.<delivery id>.<raw body>\". Each delivery id is accepted once. No secret header or URL parameter is needed when signing.",
 			"signingKey": "Signing key (HMAC-SHA256)",
 			"title": "Webhooks",
 			"url": "URL",
