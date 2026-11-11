@@ -1,5 +1,5 @@
 export enum IReleaseType {
-    Major = "Major",
-    Minor = "Minor",
-    Patch = "Patch",
+	Major = "Major",
+	Minor = "Minor",
+	Patch = "Patch",
 }

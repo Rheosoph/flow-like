@@ -1,8 +1,8 @@
 export enum IProvider {
-    Anthropic = "Anthropic",
-    AzureOpenAI = "AzureOpenAI",
-    Bedrock = "Bedrock",
-    Local = "Local",
-    Mlx = "MLX",
-    OpenAI = "OpenAI",
+	Anthropic = "Anthropic",
+	AzureOpenAI = "AzureOpenAI",
+	Bedrock = "Bedrock",
+	Local = "Local",
+	MLX = "MLX",
+	OpenAI = "OpenAI",
 }

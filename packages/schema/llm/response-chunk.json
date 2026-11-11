@@ -1,552 +1,407 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ResponseChunk",
-  "type": "object",
-  "properties": {
-    "id": {
-      "type": "string"
-    },
-    "choices": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/ResponseChunkChoice"
-      }
-    },
-    "created": {
-      "type": [
-        "integer",
-        "null"
-      ],
-      "format": "uint64",
-      "minimum": 0
-    },
-    "model": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "service_tier": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "system_fingerprint": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "usage": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/Usage"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "x_prefill_progress": {
-      "type": [
-        "number",
-        "null"
-      ],
-      "format": "float"
-    }
-  },
-  "required": [
-    "id",
-    "choices"
-  ],
-  "$defs": {
-    "ResponseChunkChoice": {
-      "type": "object",
-      "properties": {
-        "index": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "delta": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Delta"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "finish_reason": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "logprobs": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/LogProbs"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "index"
-      ]
-    },
-    "Delta": {
-      "type": "object",
-      "properties": {
-        "role": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "content": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "content_parts": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/Content"
-          }
-        },
-        "tool_calls": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/DeltaFunctionCall"
-          }
-        },
-        "refusal": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "reasoning": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      }
-    },
-    "Content": {
-      "anyOf": [
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "$ref": "#/$defs/ContentType"
-            },
-            "text": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "text"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "$ref": "#/$defs/ContentType"
-            },
-            "image_url": {
-              "$ref": "#/$defs/ImageUrl"
-            }
-          },
-          "required": [
-            "type",
-            "image_url"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "$ref": "#/$defs/ContentType"
-            },
-            "audio_url": {
-              "type": "string"
-            },
-            "media_type": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "additional_params": true
-          },
-          "required": [
-            "type",
-            "audio_url"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "$ref": "#/$defs/ContentType"
-            },
-            "video_url": {
-              "type": "string"
-            },
-            "media_type": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "additional_params": true
-          },
-          "required": [
-            "type",
-            "video_url"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "$ref": "#/$defs/ContentType"
-            },
-            "document_url": {
-              "type": "string"
-            },
-            "media_type": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "additional_params": true
-          },
-          "required": [
-            "type",
-            "document_url"
-          ]
-        }
-      ]
-    },
-    "ContentType": {
-      "type": "string",
-      "enum": [
-        "text",
-        "image_url",
-        "audio_url",
-        "video_url",
-        "document_url"
-      ]
-    },
-    "ImageUrl": {
-      "type": "object",
-      "properties": {
-        "url": {
-          "type": "string"
-        },
-        "detail": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "media_type": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "additional_params": true
-      },
-      "required": [
-        "url"
-      ]
-    },
-    "DeltaFunctionCall": {
-      "type": "object",
-      "properties": {
-        "index": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32"
-        },
-        "id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "type": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "function": {
-          "$ref": "#/$defs/DeltaResponseFunction"
-        }
-      },
-      "required": [
-        "function"
-      ]
-    },
-    "DeltaResponseFunction": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "arguments": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      }
-    },
-    "LogProbs": {
-      "type": "object",
-      "properties": {
-        "content": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/TokenLogProbs"
-          }
-        },
-        "refusal": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/TokenLogProbs"
-          }
-        }
-      }
-    },
-    "TokenLogProbs": {
-      "type": "object",
-      "properties": {
-        "token": {
-          "type": "string"
-        },
-        "logprob": {
-          "type": "number",
-          "format": "double"
-        },
-        "bytes": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0,
-            "maximum": 255
-          }
-        },
-        "top_logprobs": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/TopLogProbs"
-          }
-        }
-      },
-      "required": [
-        "token",
-        "logprob"
-      ]
-    },
-    "TopLogProbs": {
-      "type": "object",
-      "properties": {
-        "token": {
-          "type": "string"
-        },
-        "logprob": {
-          "type": "number",
-          "format": "double"
-        },
-        "bytes": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0,
-            "maximum": 255
-          }
-        }
-      },
-      "required": [
-        "token",
-        "logprob"
-      ]
-    },
-    "Usage": {
-      "type": "object",
-      "properties": {
-        "completion_tokens": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "prompt_tokens": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "total_tokens": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "cost": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "prompt_tokens_details": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PromptTokenDetails"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "completion_tokens_details": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CompletionTokenDetails"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "upstream_inference_cost": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CostDetails"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "completion_tokens",
-        "prompt_tokens",
-        "total_tokens"
-      ]
-    },
-    "PromptTokenDetails": {
-      "type": "object",
-      "properties": {
-        "cached_tokens": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
-        },
-        "audio_tokens": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
-        }
-      }
-    },
-    "CompletionTokenDetails": {
-      "type": "object",
-      "properties": {
-        "accepted_prediction_tokens": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
-        },
-        "audio_tokens": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
-        },
-        "reasoning_tokens": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
-        },
-        "rejected_prediction_tokens": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
-        }
-      }
-    },
-    "CostDetails": {
-      "type": "object",
-      "properties": {
-        "upstream_inference_cost": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
-        }
-      }
-    }
-  }
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "ResponseChunk",
+	"type": "object",
+	"properties": {
+		"id": {
+			"type": "string"
+		},
+		"choices": {
+			"type": "array",
+			"items": {
+				"$ref": "#/$defs/ResponseChunkChoice"
+			}
+		},
+		"created": {
+			"type": ["integer", "null"],
+			"format": "uint64",
+			"minimum": 0
+		},
+		"model": {
+			"type": ["string", "null"]
+		},
+		"service_tier": {
+			"type": ["string", "null"]
+		},
+		"system_fingerprint": {
+			"type": ["string", "null"]
+		},
+		"usage": {
+			"anyOf": [
+				{
+					"$ref": "#/$defs/Usage"
+				},
+				{
+					"type": "null"
+				}
+			]
+		},
+		"x_prefill_progress": {
+			"type": ["number", "null"],
+			"format": "float"
+		}
+	},
+	"required": ["id", "choices"],
+	"$defs": {
+		"ResponseChunkChoice": {
+			"type": "object",
+			"properties": {
+				"index": {
+					"type": "integer",
+					"format": "int32"
+				},
+				"delta": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/Delta"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"finish_reason": {
+					"type": ["string", "null"]
+				},
+				"logprobs": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/LogProbs"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": ["index"]
+		},
+		"Delta": {
+			"type": "object",
+			"properties": {
+				"role": {
+					"type": ["string", "null"]
+				},
+				"content": {
+					"type": ["string", "null"]
+				},
+				"content_parts": {
+					"type": ["array", "null"],
+					"items": {
+						"$ref": "#/$defs/Content"
+					}
+				},
+				"tool_calls": {
+					"type": ["array", "null"],
+					"items": {
+						"$ref": "#/$defs/DeltaFunctionCall"
+					}
+				},
+				"refusal": {
+					"type": ["string", "null"]
+				},
+				"reasoning": {
+					"type": ["string", "null"]
+				}
+			}
+		},
+		"Content": {
+			"anyOf": [
+				{
+					"type": "object",
+					"properties": {
+						"type": {
+							"$ref": "#/$defs/ContentType"
+						},
+						"text": {
+							"type": "string"
+						}
+					},
+					"required": ["type", "text"]
+				},
+				{
+					"type": "object",
+					"properties": {
+						"type": {
+							"$ref": "#/$defs/ContentType"
+						},
+						"image_url": {
+							"$ref": "#/$defs/ImageUrl"
+						}
+					},
+					"required": ["type", "image_url"]
+				},
+				{
+					"type": "object",
+					"properties": {
+						"type": {
+							"$ref": "#/$defs/ContentType"
+						},
+						"audio_url": {
+							"type": "string"
+						},
+						"media_type": {
+							"type": ["string", "null"]
+						},
+						"additional_params": true
+					},
+					"required": ["type", "audio_url"]
+				},
+				{
+					"type": "object",
+					"properties": {
+						"type": {
+							"$ref": "#/$defs/ContentType"
+						},
+						"video_url": {
+							"type": "string"
+						},
+						"media_type": {
+							"type": ["string", "null"]
+						},
+						"additional_params": true
+					},
+					"required": ["type", "video_url"]
+				},
+				{
+					"type": "object",
+					"properties": {
+						"type": {
+							"$ref": "#/$defs/ContentType"
+						},
+						"document_url": {
+							"type": "string"
+						},
+						"media_type": {
+							"type": ["string", "null"]
+						},
+						"additional_params": true
+					},
+					"required": ["type", "document_url"]
+				}
+			]
+		},
+		"ContentType": {
+			"type": "string",
+			"enum": ["text", "image_url", "audio_url", "video_url", "document_url"]
+		},
+		"ImageUrl": {
+			"type": "object",
+			"properties": {
+				"url": {
+					"type": "string"
+				},
+				"detail": {
+					"type": ["string", "null"]
+				},
+				"media_type": {
+					"type": ["string", "null"]
+				},
+				"additional_params": true
+			},
+			"required": ["url"]
+		},
+		"DeltaFunctionCall": {
+			"type": "object",
+			"properties": {
+				"index": {
+					"type": ["integer", "null"],
+					"format": "int32"
+				},
+				"id": {
+					"type": ["string", "null"]
+				},
+				"type": {
+					"type": ["string", "null"]
+				},
+				"function": {
+					"$ref": "#/$defs/DeltaResponseFunction"
+				}
+			},
+			"required": ["function"]
+		},
+		"DeltaResponseFunction": {
+			"type": "object",
+			"properties": {
+				"name": {
+					"type": ["string", "null"]
+				},
+				"arguments": {
+					"type": ["string", "null"]
+				}
+			}
+		},
+		"LogProbs": {
+			"type": "object",
+			"properties": {
+				"content": {
+					"type": ["array", "null"],
+					"items": {
+						"$ref": "#/$defs/TokenLogProbs"
+					}
+				},
+				"refusal": {
+					"type": ["array", "null"],
+					"items": {
+						"$ref": "#/$defs/TokenLogProbs"
+					}
+				}
+			}
+		},
+		"TokenLogProbs": {
+			"type": "object",
+			"properties": {
+				"token": {
+					"type": "string"
+				},
+				"logprob": {
+					"type": "number",
+					"format": "double"
+				},
+				"bytes": {
+					"type": ["array", "null"],
+					"items": {
+						"type": "integer",
+						"format": "uint8",
+						"minimum": 0,
+						"maximum": 255
+					}
+				},
+				"top_logprobs": {
+					"type": ["array", "null"],
+					"items": {
+						"$ref": "#/$defs/TopLogProbs"
+					}
+				}
+			},
+			"required": ["token", "logprob"]
+		},
+		"TopLogProbs": {
+			"type": "object",
+			"properties": {
+				"token": {
+					"type": "string"
+				},
+				"logprob": {
+					"type": "number",
+					"format": "double"
+				},
+				"bytes": {
+					"type": ["array", "null"],
+					"items": {
+						"type": "integer",
+						"format": "uint8",
+						"minimum": 0,
+						"maximum": 255
+					}
+				}
+			},
+			"required": ["token", "logprob"]
+		},
+		"Usage": {
+			"type": "object",
+			"properties": {
+				"completion_tokens": {
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0
+				},
+				"prompt_tokens": {
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0
+				},
+				"total_tokens": {
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0
+				},
+				"cost": {
+					"type": ["number", "null"],
+					"format": "double"
+				},
+				"prompt_tokens_details": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/PromptTokenDetails"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"completion_tokens_details": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/CompletionTokenDetails"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"upstream_inference_cost": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/CostDetails"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": ["completion_tokens", "prompt_tokens", "total_tokens"]
+		},
+		"PromptTokenDetails": {
+			"type": "object",
+			"properties": {
+				"cached_tokens": {
+					"type": ["integer", "null"],
+					"format": "uint32",
+					"minimum": 0
+				},
+				"audio_tokens": {
+					"type": ["integer", "null"],
+					"format": "uint32",
+					"minimum": 0
+				}
+			}
+		},
+		"CompletionTokenDetails": {
+			"type": "object",
+			"properties": {
+				"accepted_prediction_tokens": {
+					"type": ["integer", "null"],
+					"format": "uint32",
+					"minimum": 0
+				},
+				"audio_tokens": {
+					"type": ["integer", "null"],
+					"format": "uint32",
+					"minimum": 0
+				},
+				"reasoning_tokens": {
+					"type": ["integer", "null"],
+					"format": "uint32",
+					"minimum": 0
+				},
+				"rejected_prediction_tokens": {
+					"type": ["integer", "null"],
+					"format": "uint32",
+					"minimum": 0
+				}
+			}
+		},
+		"CostDetails": {
+			"type": "object",
+			"properties": {
+				"upstream_inference_cost": {
+					"type": ["integer", "null"],
+					"format": "uint32",
+					"minimum": 0
+				}
+			}
+		}
+	}
 }

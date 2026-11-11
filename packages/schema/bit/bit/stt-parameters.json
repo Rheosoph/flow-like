@@ -1,179 +1,147 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "SttModelParameters",
-  "type": "object",
-  "properties": {
-    "model_type": {
-      "$ref": "#/$defs/SttModelType",
-      "default": "WhisperLargeV3Turbo"
-    },
-    "provider": {
-      "$ref": "#/$defs/ModelProvider",
-      "default": {
-        "provider_name": "local:any-speech-to-text",
-        "model_id": null,
-        "version": null,
-        "params": null
-      }
-    },
-    "default_language": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "default": null
-    },
-    "languages": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "default": []
-    },
-    "runtime": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/SttRuntimePreference"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": "Auto"
-    },
-    "dtype": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/SttDTypePreference"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": "Auto"
-    },
-    "assets": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/SttAssetRef"
-      },
-      "default": []
-    }
-  },
-  "$defs": {
-    "SttModelType": {
-      "type": "string",
-      "enum": [
-        "WhisperTiny",
-        "WhisperTinyEn",
-        "WhisperBase",
-        "WhisperBaseEn",
-        "WhisperSmall",
-        "WhisperSmallEn",
-        "WhisperMedium",
-        "WhisperMediumEn",
-        "WhisperLargeV3",
-        "WhisperLargeV3Turbo",
-        "DistilWhisperMediumEn",
-        "DistilWhisperLargeV2",
-        "DistilWhisperLargeV3",
-        "OlmoAsrTinyEn",
-        "OlmoAsrBaseEn",
-        "OlmoAsrSmallEn",
-        "OlmoAsrMediumEn",
-        "OlmoAsrLargeEn",
-        "OlmoAsrLargeEnV2",
-        "Qwen3Asr17B",
-        "MoonshineBaseEn"
-      ]
-    },
-    "ModelProvider": {
-      "type": "object",
-      "properties": {
-        "provider_name": {
-          "type": "string"
-        },
-        "model_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "version": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "api_surface": {
-          "description": "API surface the upstream model speaks. `None` keeps the provider's\nhistorical chat default. SystemOne Bits always use the decision API.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ModelApiSurface"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "params": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        }
-      },
-      "required": [
-        "provider_name"
-      ]
-    },
-    "ModelApiSurface": {
-      "description": "Which HTTP API surface a model speaks.\n\nProviders historically expose the OpenAI-compatible `chat/completions`\nshape. Newer OpenAI-family models are only reachable through the Responses\nAPI (`/responses`), which uses a different request and event schema. A Bit\ndeclares the surface so the client builds the matching Rig client and the\nFlow-Like proxy relays to the matching upstream endpoint. SystemOne Bits\nselect the native decision surface through their Bit type.",
-      "type": "string",
-      "enum": [
-        "ChatCompletions",
-        "Responses",
-        "SystemOne"
-      ]
-    },
-    "SttRuntimePreference": {
-      "type": "string",
-      "enum": [
-        "Auto",
-        "Cpu",
-        "Metal",
-        "Cuda",
-        "Accelerate"
-      ]
-    },
-    "SttDTypePreference": {
-      "type": "string",
-      "enum": [
-        "Auto",
-        "F32",
-        "F16",
-        "BF16"
-      ]
-    },
-    "SttAssetRef": {
-      "type": "object",
-      "properties": {
-        "bit": {
-          "type": "string"
-        },
-        "relative_path": {
-          "type": "string"
-        },
-        "required": {
-          "type": "boolean",
-          "default": true
-        }
-      },
-      "required": [
-        "bit",
-        "relative_path"
-      ]
-    }
-  }
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "SttModelParameters",
+	"type": "object",
+	"properties": {
+		"model_type": {
+			"$ref": "#/$defs/SttModelType",
+			"default": "WhisperLargeV3Turbo"
+		},
+		"provider": {
+			"$ref": "#/$defs/ModelProvider",
+			"default": {
+				"provider_name": "local:any-speech-to-text",
+				"model_id": null,
+				"version": null,
+				"params": null
+			}
+		},
+		"default_language": {
+			"type": ["string", "null"],
+			"default": null
+		},
+		"languages": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"default": []
+		},
+		"runtime": {
+			"anyOf": [
+				{
+					"$ref": "#/$defs/SttRuntimePreference"
+				},
+				{
+					"type": "null"
+				}
+			],
+			"default": "Auto"
+		},
+		"dtype": {
+			"anyOf": [
+				{
+					"$ref": "#/$defs/SttDTypePreference"
+				},
+				{
+					"type": "null"
+				}
+			],
+			"default": "Auto"
+		},
+		"assets": {
+			"type": "array",
+			"items": {
+				"$ref": "#/$defs/SttAssetRef"
+			},
+			"default": []
+		}
+	},
+	"$defs": {
+		"SttModelType": {
+			"type": "string",
+			"enum": [
+				"WhisperTiny",
+				"WhisperTinyEn",
+				"WhisperBase",
+				"WhisperBaseEn",
+				"WhisperSmall",
+				"WhisperSmallEn",
+				"WhisperMedium",
+				"WhisperMediumEn",
+				"WhisperLargeV3",
+				"WhisperLargeV3Turbo",
+				"DistilWhisperMediumEn",
+				"DistilWhisperLargeV2",
+				"DistilWhisperLargeV3",
+				"OlmoAsrTinyEn",
+				"OlmoAsrBaseEn",
+				"OlmoAsrSmallEn",
+				"OlmoAsrMediumEn",
+				"OlmoAsrLargeEn",
+				"OlmoAsrLargeEnV2",
+				"Qwen3Asr17B",
+				"MoonshineBaseEn"
+			]
+		},
+		"ModelProvider": {
+			"type": "object",
+			"properties": {
+				"provider_name": {
+					"type": "string"
+				},
+				"model_id": {
+					"type": ["string", "null"]
+				},
+				"version": {
+					"type": ["string", "null"]
+				},
+				"api_surface": {
+					"description": "API surface the upstream model speaks. `None` keeps the provider's\nhistorical chat default. SystemOne Bits always use the decision API.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/ModelApiSurface"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"params": {
+					"type": ["object", "null"],
+					"additionalProperties": true
+				}
+			},
+			"required": ["provider_name"]
+		},
+		"ModelApiSurface": {
+			"description": "Which HTTP API surface a model speaks.\n\nProviders historically expose the OpenAI-compatible `chat/completions`\nshape. Newer OpenAI-family models are only reachable through the Responses\nAPI (`/responses`), which uses a different request and event schema. A Bit\ndeclares the surface so the client builds the matching Rig client and the\nFlow-Like proxy relays to the matching upstream endpoint. SystemOne Bits\nselect the native decision surface through their Bit type.",
+			"type": "string",
+			"enum": ["ChatCompletions", "Responses", "SystemOne"]
+		},
+		"SttRuntimePreference": {
+			"type": "string",
+			"enum": ["Auto", "Cpu", "Metal", "Cuda", "Accelerate"]
+		},
+		"SttDTypePreference": {
+			"type": "string",
+			"enum": ["Auto", "F32", "F16", "BF16"]
+		},
+		"SttAssetRef": {
+			"type": "object",
+			"properties": {
+				"bit": {
+					"type": "string"
+				},
+				"relative_path": {
+					"type": "string"
+				},
+				"required": {
+					"type": "boolean",
+					"default": true
+				}
+			},
+			"required": ["bit", "relative_path"]
+		}
+	}
 }

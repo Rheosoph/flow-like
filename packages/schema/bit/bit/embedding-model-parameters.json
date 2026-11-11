@@ -1,233 +1,196 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "EmbeddingModelProvider",
-  "type": "object",
-  "properties": {
-    "languages": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "vector_length": {
-      "type": "integer",
-      "format": "uint32",
-      "minimum": 0
-    },
-    "input_length": {
-      "type": "integer",
-      "format": "uint32",
-      "minimum": 0
-    },
-    "prefix": {
-      "$ref": "#/$defs/Prefix"
-    },
-    "pooling": {
-      "$ref": "#/$defs/Pooling"
-    },
-    "provider": {
-      "$ref": "#/$defs/ModelProvider"
-    },
-    "remote": {
-      "description": "Remote execution configuration (for API proxy mode)",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/RemoteExecutionConfig"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    }
-  },
-  "required": [
-    "languages",
-    "vector_length",
-    "input_length",
-    "prefix",
-    "pooling",
-    "provider"
-  ],
-  "$defs": {
-    "Prefix": {
-      "type": "object",
-      "properties": {
-        "query": {
-          "type": "string"
-        },
-        "paragraph": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "query",
-        "paragraph"
-      ]
-    },
-    "Pooling": {
-      "type": "string",
-      "enum": [
-        "CLS",
-        "Mean",
-        "None"
-      ]
-    },
-    "ModelProvider": {
-      "type": "object",
-      "properties": {
-        "provider_name": {
-          "type": "string"
-        },
-        "model_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "version": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "api_surface": {
-          "description": "API surface the upstream model speaks. `None` keeps the provider's\nhistorical chat default. SystemOne Bits always use the decision API.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ModelApiSurface"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "params": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        }
-      },
-      "required": [
-        "provider_name"
-      ]
-    },
-    "ModelApiSurface": {
-      "description": "Which HTTP API surface a model speaks.\n\nProviders historically expose the OpenAI-compatible `chat/completions`\nshape. Newer OpenAI-family models are only reachable through the Responses\nAPI (`/responses`), which uses a different request and event schema. A Bit\ndeclares the surface so the client builds the matching Rig client and the\nFlow-Like proxy relays to the matching upstream endpoint. SystemOne Bits\nselect the native decision surface through their Bit type.",
-      "type": "string",
-      "enum": [
-        "ChatCompletions",
-        "Responses",
-        "SystemOne"
-      ]
-    },
-    "RemoteExecutionConfig": {
-      "description": "Configuration for remote execution via API proxy",
-      "type": "object",
-      "properties": {
-        "endpoint": {
-          "description": "Legacy endpoint URL retained for reading old Bits. Hosted execution\nresolves endpoints from server secrets instead of using this URL.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "endpoint_secret_name": {
-          "description": "Optional server secret containing the base endpoint. Supported by\nInternal, AzureOpenAI, HuggingfaceEndpoint and OpenAICompatible.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "secret_name": {
-          "description": "Optional API key secret override. Each provider has its own default.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "implementation": {
-          "description": "Which remote provider implementation to use",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RemoteEmbeddingProvider"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "model_id": {
-          "description": "Deployed model ID for the upstream provider (e.g., Internal gateway model name)",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "supports_dimensions": {
-          "description": "Whether OpenRouter accepts a requested output dimension count. Set false\nfor fixed-width models. When absent, the Bit's vector length is requested.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      }
-    },
-    "RemoteEmbeddingProvider": {
-      "description": "Remote embedding provider implementation",
-      "oneOf": [
-        {
-          "description": "Internal OpenAI-compatible embedding gateway.",
-          "type": "string",
-          "const": "Internal"
-        },
-        {
-          "description": "Cloudflare Workers AI through its OpenAI-compatible embeddings API.",
-          "type": "string",
-          "const": "CloudflareWorkersAI"
-        },
-        {
-          "description": "OpenAI's hosted embeddings API.",
-          "type": "string",
-          "const": "OpenAI"
-        },
-        {
-          "description": "OpenRouter's hosted text and multimodal embeddings API.",
-          "type": "string",
-          "const": "OpenRouter"
-        },
-        {
-          "description": "Azure OpenAI v1 API; model_id names the deployment.",
-          "type": "string",
-          "const": "AzureOpenAI"
-        },
-        {
-          "description": "A Hugging Face Text Embeddings Inference endpoint.",
-          "type": "string",
-          "const": "HuggingfaceEndpoint"
-        },
-        {
-          "description": "An operator-configured service with an OpenAI-compatible embeddings API.",
-          "type": "string",
-          "const": "OpenAICompatible"
-        },
-        {
-          "description": "Cohere's hosted v2 embeddings API.",
-          "type": "string",
-          "const": "Cohere"
-        },
-        {
-          "description": "Voyage AI's hosted embeddings API.",
-          "type": "string",
-          "const": "VoyageAI"
-        }
-      ]
-    }
-  }
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "EmbeddingModelProvider",
+	"type": "object",
+	"properties": {
+		"languages": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			}
+		},
+		"vector_length": {
+			"type": "integer",
+			"format": "uint32",
+			"minimum": 0
+		},
+		"input_length": {
+			"type": "integer",
+			"format": "uint32",
+			"minimum": 0
+		},
+		"prefix": {
+			"$ref": "#/$defs/Prefix"
+		},
+		"pooling": {
+			"$ref": "#/$defs/Pooling"
+		},
+		"provider": {
+			"$ref": "#/$defs/ModelProvider"
+		},
+		"remote": {
+			"description": "Remote execution configuration (for API proxy mode)",
+			"anyOf": [
+				{
+					"$ref": "#/$defs/RemoteExecutionConfig"
+				},
+				{
+					"type": "null"
+				}
+			],
+			"default": null
+		}
+	},
+	"required": [
+		"languages",
+		"vector_length",
+		"input_length",
+		"prefix",
+		"pooling",
+		"provider"
+	],
+	"$defs": {
+		"Prefix": {
+			"type": "object",
+			"properties": {
+				"query": {
+					"type": "string"
+				},
+				"paragraph": {
+					"type": "string"
+				}
+			},
+			"required": ["query", "paragraph"]
+		},
+		"Pooling": {
+			"type": "string",
+			"enum": ["CLS", "Mean", "None"]
+		},
+		"ModelProvider": {
+			"type": "object",
+			"properties": {
+				"provider_name": {
+					"type": "string"
+				},
+				"model_id": {
+					"type": ["string", "null"]
+				},
+				"version": {
+					"type": ["string", "null"]
+				},
+				"api_surface": {
+					"description": "API surface the upstream model speaks. `None` keeps the provider's\nhistorical chat default. SystemOne Bits always use the decision API.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/ModelApiSurface"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"params": {
+					"type": ["object", "null"],
+					"additionalProperties": true
+				}
+			},
+			"required": ["provider_name"]
+		},
+		"ModelApiSurface": {
+			"description": "Which HTTP API surface a model speaks.\n\nProviders historically expose the OpenAI-compatible `chat/completions`\nshape. Newer OpenAI-family models are only reachable through the Responses\nAPI (`/responses`), which uses a different request and event schema. A Bit\ndeclares the surface so the client builds the matching Rig client and the\nFlow-Like proxy relays to the matching upstream endpoint. SystemOne Bits\nselect the native decision surface through their Bit type.",
+			"type": "string",
+			"enum": ["ChatCompletions", "Responses", "SystemOne"]
+		},
+		"RemoteExecutionConfig": {
+			"description": "Configuration for remote execution via API proxy",
+			"type": "object",
+			"properties": {
+				"endpoint": {
+					"description": "Legacy endpoint URL retained for reading old Bits. Hosted execution\nresolves endpoints from server secrets instead of using this URL.",
+					"type": ["string", "null"],
+					"default": null
+				},
+				"endpoint_secret_name": {
+					"description": "Optional server secret containing the base endpoint. Supported by\nInternal, AzureOpenAI, HuggingfaceEndpoint and OpenAICompatible.",
+					"type": ["string", "null"]
+				},
+				"secret_name": {
+					"description": "Optional API key secret override. Each provider has its own default.",
+					"type": ["string", "null"],
+					"default": null
+				},
+				"implementation": {
+					"description": "Which remote provider implementation to use",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/RemoteEmbeddingProvider"
+						},
+						{
+							"type": "null"
+						}
+					],
+					"default": null
+				},
+				"model_id": {
+					"description": "Deployed model ID for the upstream provider (e.g., Internal gateway model name)",
+					"type": ["string", "null"],
+					"default": null
+				},
+				"supports_dimensions": {
+					"description": "Whether OpenRouter accepts a requested output dimension count. Set false\nfor fixed-width models. When absent, the Bit's vector length is requested.",
+					"type": ["boolean", "null"]
+				}
+			}
+		},
+		"RemoteEmbeddingProvider": {
+			"description": "Remote embedding provider implementation",
+			"oneOf": [
+				{
+					"description": "Internal OpenAI-compatible embedding gateway.",
+					"type": "string",
+					"const": "Internal"
+				},
+				{
+					"description": "Cloudflare Workers AI through its OpenAI-compatible embeddings API.",
+					"type": "string",
+					"const": "CloudflareWorkersAI"
+				},
+				{
+					"description": "OpenAI's hosted embeddings API.",
+					"type": "string",
+					"const": "OpenAI"
+				},
+				{
+					"description": "OpenRouter's hosted text and multimodal embeddings API.",
+					"type": "string",
+					"const": "OpenRouter"
+				},
+				{
+					"description": "Azure OpenAI v1 API; model_id names the deployment.",
+					"type": "string",
+					"const": "AzureOpenAI"
+				},
+				{
+					"description": "A Hugging Face Text Embeddings Inference endpoint.",
+					"type": "string",
+					"const": "HuggingfaceEndpoint"
+				},
+				{
+					"description": "An operator-configured service with an OpenAI-compatible embeddings API.",
+					"type": "string",
+					"const": "OpenAICompatible"
+				},
+				{
+					"description": "Cohere's hosted v2 embeddings API.",
+					"type": "string",
+					"const": "Cohere"
+				},
+				{
+					"description": "Voyage AI's hosted embeddings API.",
+					"type": "string",
+					"const": "VoyageAI"
+				}
+			]
+		}
+	}
 }

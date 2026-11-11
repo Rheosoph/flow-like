@@ -1,200 +1,183 @@
 export interface IEvent {
-    active:         boolean;
-    board_id:       string;
-    board_version?: any[] | null;
-    canary?:        null | ICanaryObject;
-    config:         number[];
-    /**
-     * Process-mining case-key mappings: business key name → dot-path into
-     * the invocation payload (e.g. `order_id` → `order.id`). Extracted on
-     * every run so cases group by business object automatically.
-     */
-    correlation_mappings?: { [key: string]: string } | null;
-    created_at:            ICreatedAt;
-    default_page_id?:      null | string;
-    description:           string;
-    event_type:            string;
-    event_version:         any[];
-    /**
-     * Where this event runs (Local/offline vs Remote/server). Inherited from
-     * the board's `execution_mode` when that mode is not Hybrid.
-     */
-    execution_mode?: string;
-    /**
-     * Whether the event is publicly reachable or only callable by connected
-     * apps via the app-connection proxy. Only meaningful for REST/MCP events.
-     */
-    exposure?: string;
-    id:        string;
-    /**
-     * Input pins copied from the node (populated at upsert time)
-     */
-    inputs?: IInputElement[];
-    /**
-     * Whether this is the default event/route for the app (shown at "/")
-     */
-    is_default?: boolean;
-    name:        string;
-    node_id:     string;
-    notes?:      INotesClass | null;
-    priority:    number;
-    /**
-     * URL route path that maps to this event (e.g., "/", "/dashboard")
-     */
-    route?:     null | string;
-    updated_at: ICreatedAt;
-    variables:  { [key: string]: IVariableValue };
-    /**
-     * Canary/shadow targets. Read through [`Event::variant_set`]: when this
-     * is empty a legacy `canary` still counts as a single ILive variant.
-     */
-    variants?: IVariantElement[];
-    [property: string]: any;
+	active: boolean;
+	board_id: string;
+	board_version?: number[] | null;
+	canary?: null | ICanaryEvent;
+	/**
+	 * Canary/shadow targets. Read through the core `variant_set()`: when this is
+	 * empty a legacy `canary` still counts as a single Live variant.
+	 */
+	variants?: IEventVariant[];
+	config: number[];
+	created_at: ISystemTime;
+	description: string;
+	/** A2UI: default page to render for this event (page-target events). */
+	default_page_id?: string | null;
+	/** URL route path that maps to this event (for example, "/" or "/dashboard"). */
+	route?: string | null;
+	/** Whether this event is the app's default event/route. */
+	is_default?: boolean;
+	event_type: string;
+	event_version: number[];
+	/**
+	 * Where this event runs. Events are always exactly one of Local or Remote
+	 * (never Hybrid). Defaults to "Local" when unset for backward compatibility.
+	 */
+	execution_mode?: IEventExecutionMode;
+	/**
+	 * Public HTTP surface for `rest`/`mcp` events. `PUBLIC` (default) serves the
+	 * event on its own inbound router with the configured auth; `INTERNAL`
+	 * restricts it to connected apps via the app-connection proxy.
+	 */
+	exposure?: IEventExposure;
+	/**
+	 * Process-mining case-key mappings: business key name → dot-path into the
+	 * invocation payload (e.g. { order_id: "order.id" }). Extracted on every
+	 * run so process cases group by business object automatically.
+	 */
+	correlation_mappings?: { [key: string]: string } | null;
+	id: string;
+	/** Input pins copied from the node */
+	inputs?: IEventInput[];
+	name: string;
+	node_id: string;
+	notes?: IReleaseNotes | null;
+	priority: number;
+	updated_at: ISystemTime;
+	variables: { [key: string]: IVariable };
+	[property: string]: any;
 }
 
-export interface ICanaryObject {
-    board_id:       string;
-    board_version?: any[] | null;
-    created_at:     ICreatedAt;
-    node_id:        string;
-    updated_at:     ICreatedAt;
-    variables:      { [key: string]: IVariableValue };
-    weight:         number;
-    [property: string]: any;
+export enum IEventExecutionMode {
+	Local = "Local",
+	Remote = "Remote",
 }
 
-export interface ICreatedAt {
-    nanos_since_epoch: number;
-    secs_since_epoch:  number;
-    [property: string]: any;
+export enum IEventExposure {
+	Public = "PUBLIC",
+	Internal = "INTERNAL",
 }
 
-export interface IVariableValue {
-    category?:      null | string;
-    data_type:      IDataType;
-    default_value?: number[] | null;
-    description?:   null | string;
-    editable:       boolean;
-    exposed:        boolean;
-    hash?:          number | null;
-    id:             string;
-    name:           string;
-    /**
-     * If true, this variable is configured per-user at runtime (stored locally, not in flow)
-     */
-    runtime_configured?: boolean;
-    schema?:             null | string;
-    secret:              boolean;
-    value_type:          IValueType;
-    [property: string]: any;
+/** Simplified input pin metadata for events */
+export interface IEventInput {
+	id: string;
+	name: string;
+	friendly_name: string;
+	description: string;
+	data_type: string;
+	value_type: string;
+	schema?: string | null;
+	default_value?: number[] | null;
+	index: number;
+	optional?: boolean;
+	/** The pin is marked sensitive: its default is never copied here. */
+	sensitive?: boolean;
+	valid_values?: string[] | null;
+	/** `[min, max]`. */
+	range?: [number, number] | null;
+	step?: number | null;
+	/**
+	 * A sensitive pin's default exists but is withheld; an optional input left
+	 * out still runs with it.
+	 */
+	default_omitted?: boolean;
+	/**
+	 * Version of the rule that built this input; 0 or absent for inputs stored
+	 * before it, whose description and schema may still be board ref keys.
+	 */
+	inputs_format?: number;
 }
 
-export enum IDataType {
-    Boolean = "Boolean",
-    Byte = "Byte",
-    Date = "Date",
-    Execution = "Execution",
-    Float = "Float",
-    Generic = "Generic",
-    Geometry = "Geometry",
-    Integer = "Integer",
-    PathBuf = "PathBuf",
-    String = "String",
-    Struct = "Struct",
-}
-
-export enum IValueType {
-    Array = "Array",
-    HashMap = "HashMap",
-    HashSet = "HashSet",
-    Normal = "Normal",
-}
-
-/**
- * Simplified input pin metadata for events (used when board can't be fetched)
- */
-export interface IInputElement {
-    data_type: string;
-    /**
-     * A sensitive pin's default exists but is withheld; an optional input left out still runs
-     * with it.
-     */
-    default_omitted?: boolean;
-    default_value?:   number[] | null;
-    description:      string;
-    friendly_name:    string;
-    id:               string;
-    index:            number;
-    /**
-     * The [`EVENT_INPUTS_FORMAT`] this input was built with; 0 for inputs stored before it.
-     */
-    inputs_format?: number;
-    name:           string;
-    optional?:      boolean;
-    range?:         any[] | null;
-    schema?:        null | string;
-    /**
-     * The pin is marked sensitive: its default is never copied here.
-     */
-    sensitive?:    boolean;
-    step?:         number | null;
-    valid_values?: string[] | null;
-    value_type:    string;
-    [property: string]: any;
-}
-
-export interface INotesClass {
-    NOTES?: string;
-    URL?:   string;
-}
-
-/**
- * An alternate dispatch target for an event: a canary (`Live`) or shadow
- * deployment of another board/version/node. Read through
- * [`Event::variant_set`], which falls back to the legacy `canary` field.
- */
-export interface IVariantElement {
-    board_id: string;
-    /**
-     * `None` floats on latest (the etag is bound at dispatch); the `u32::MAX`
-     * sentinel is reserved and refused at upsert.
-     */
-    board_version?: any[] | null;
-    created_at:     ICreatedAt;
-    /**
-     * Page-event variants only: repoints what a matched route renders.
-     */
-    default_page_id?: null | string;
-    mode:             IMode;
-    /**
-     * Unique per event, `[a-z0-9-]`; "canary" is the conventional name.
-     */
-    name:       string;
-    node_id:    string;
-    updated_at: ICreatedAt;
-    /**
-     * Merged over the event's variables per key, variant wins.
-     */
-    variables: { [key: string]: IVariableValue };
-    [property: string]: any;
+export interface ICanaryEvent {
+	board_id: string;
+	board_version?: number[] | null;
+	created_at: ISystemTime;
+	node_id: string;
+	updated_at: ISystemTime;
+	variables: { [key: string]: IVariable };
+	weight: number;
+	[property: string]: any;
 }
 
 /**
  * How a variant handles its share of traffic: `Live` replaces the primary
  * target for `weight` of triggers, `Shadow` additionally runs the variant for
  * `sample_rate` of triggers and discards the result.
+ *
+ * Serde externally-tagged enum: exactly one of `Live` / `Shadow` is set.
  */
-export interface IMode {
-    Live?:   ILive;
-    Shadow?: IShadow;
+export type IEventVariantMode =
+	| { Live: { weight: number } }
+	| { Shadow: { sample_rate: number } };
+
+/**
+ * An alternate dispatch target for an event: a canary (`Live`) or shadow
+ * deployment of another board/version/node. Read through the core
+ * `variant_set()`, which falls back to the legacy `canary` field.
+ */
+export interface IEventVariant {
+	/** Unique per event, `[a-z0-9-]`; "canary" is the conventional name. */
+	name: string;
+	board_id: string;
+	/**
+	 * `null` floats on latest (the etag is bound at dispatch); the u32::MAX
+	 * sentinel is reserved and refused at upsert.
+	 */
+	board_version?: number[] | null;
+	node_id: string;
+	/** Merged over the event's variables per key, variant wins. */
+	variables: { [key: string]: IVariable };
+	/** Page-event variants only: repoints what a matched route renders. */
+	default_page_id?: string | null;
+	mode: IEventVariantMode;
+	created_at: ISystemTime;
+	updated_at: ISystemTime;
 }
 
-export interface ILive {
-    weight: number;
-    [property: string]: any;
+export interface ISystemTime {
+	nanos_since_epoch: number;
+	secs_since_epoch: number;
+	[property: string]: any;
 }
 
-export interface IShadow {
-    sample_rate: number;
-    [property: string]: any;
+export interface IVariable {
+	category?: null | string;
+	data_type: IVariableType;
+	default_value?: number[] | null;
+	description?: null | string;
+	editable: boolean;
+	exposed: boolean;
+	hash?: number | null;
+	id: string;
+	name: string;
+	schema?: null | string;
+	secret: boolean;
+	value_type: IValueType;
+	[property: string]: any;
+}
+
+export enum IVariableType {
+	Boolean = "Boolean",
+	Byte = "Byte",
+	Date = "Date",
+	Execution = "Execution",
+	Float = "Float",
+	Generic = "Generic",
+	Integer = "Integer",
+	PathBuf = "PathBuf",
+	String = "String",
+	Struct = "Struct",
+	Geometry = "Geometry",
+}
+
+export enum IValueType {
+	Array = "Array",
+	HashMap = "HashMap",
+	HashSet = "HashSet",
+	Normal = "Normal",
+}
+
+export interface IReleaseNotes {
+	NOTES?: string;
+	URL?: string;
 }
