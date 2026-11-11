@@ -120,7 +120,9 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
 		body: body === undefined ? undefined : JSON.stringify(body),
 	});
 	if (!response.ok)
-		throw new Error(`${path} answered ${response.status}: ${await response.text()}`);
+		throw new Error(
+			`${path} answered ${response.status}: ${await response.text()}`,
+		);
 	return response.json() as Promise<T>;
 }
 

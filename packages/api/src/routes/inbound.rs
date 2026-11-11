@@ -43,6 +43,7 @@ use sea_orm::{ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, json};
 
 use crate::{
+    bot_flow::{BotFlowRun, bind_executor, credential_target},
     correlation::CorrelationContext,
     credentials::validate_path_component,
     entity::{
@@ -60,7 +61,7 @@ use crate::{
         variant::{self, ResolvedTarget, STABLE_VARIANT, SplitKey, dispatch_event_json},
         wants_http_event_stream,
     },
-    middleware::jwt::{AppUser, ConnectedAppUser, OpenIDUser},
+    middleware::jwt::{AppUser, BotUser, ConnectedAppUser, OpenIDUser},
     permission::role_permission::RolePermissions,
     routes::{
         app::events::{
@@ -103,6 +104,10 @@ pub(crate) struct ProxyCallerContext {
     /// passed through, member or not. None of them sends OAuth sign-ins here, so
     /// the run uses the sign-ins saved with the event.
     pub member: Option<MemberExecutionIdentity>,
+    /// A bot that called through [`dispatch_bot_mcp_operation`]. The run is paid by its owner
+    /// but carries the bot: its credentials, its technical user and an executor token bound to
+    /// it. It borrows nothing from the event's sink and never takes a person's profile.
+    bot: Option<std::sync::Arc<BotFlowRun>>,
 }
 
 #[derive(Clone)]
@@ -138,6 +143,7 @@ impl ProxyCallerContext {
             correlation: app.correlation.clone(),
             user_context: Some(user_context),
             member: app.person().map(MemberExecutionIdentity::person),
+            bot: None,
         }
     }
 
@@ -151,7 +157,13 @@ impl ProxyCallerContext {
     }
 
     fn uses_sink_credentials(&self) -> bool {
-        self.member.is_none()
+        self.member.is_none() && self.bot.is_none()
+    }
+
+    /// A bot's run takes neither the sink's run-as user nor the sign-ins saved with the event:
+    /// those belong to a person the bot may not act as.
+    fn borrows_from_sink(&self, sink: &event_sink::Model) -> bool {
+        self.bot.is_none() && self.sink_use().borrows_from(sink)
     }
 
     /// A public call that neither signed in nor came through an app connection. A sign-in saved
@@ -165,7 +177,7 @@ impl ProxyCallerContext {
     /// pause, and takes only the sign-ins saved with it; any other run uses the sink's run-as
     /// user, and either stops it.
     fn sink_use(&self) -> SinkUse {
-        if self.member.is_some() {
+        if self.member.is_some() || self.bot.is_some() {
             SinkUse::Person
         } else {
             SinkUse::RunAs
@@ -173,7 +185,7 @@ impl ProxyCallerContext {
     }
 
     fn dispatch_trigger(&self) -> DispatchTrigger {
-        if self.member.is_some() {
+        if self.member.is_some() || self.bot.is_some() {
             DispatchTrigger::User
         } else {
             DispatchTrigger::System
@@ -183,7 +195,7 @@ impl ProxyCallerContext {
     /// The run's executor token. A run no person called is marked unattended, so the apps it
     /// calls through connections never take the event's run-as user for a person.
     fn sign_executor_jwt(&self, params: ExecutionJwtParams) -> Result<String, ExecutionJwtError> {
-        if self.member.is_some() {
+        if self.member.is_some() || self.bot.is_some() {
             sign_execution_jwt(params)
         } else {
             sign_unattended_execution_jwt(params)
@@ -200,6 +212,13 @@ impl ProxyCallerContext {
                 Some(member.user_id.clone()),
                 member.user_id.clone(),
                 member.technical_user_id.clone(),
+            );
+        }
+        if let Some(bot) = &self.bot {
+            return (
+                Some(bot.owner_id().to_owned()),
+                bot.owner_id().to_owned(),
+                Some(bot.bot_id().to_owned()),
             );
         }
         let subject = sink_user_id.clone().unwrap_or(fallback_subject);
@@ -1340,6 +1359,52 @@ pub(crate) async fn dispatch_member_mcp_operation(
     member: MemberExecutionIdentity,
     user_context: UserExecutionContext,
 ) -> Result<Value, ApiError> {
+    let client = json!({
+        "protocol": "mcp",
+        "proxy": {"via": "app_member", "sub": member.user_id},
+    });
+    let caller = ProxyCallerContext {
+        member: Some(member),
+        user_context: Some(user_context),
+        ..Default::default()
+    };
+    dispatch_mcp_operation(state, event_row, method, params, client, &caller).await
+}
+
+/// A bot's MCP operation. The bot must hold ExecuteEvents in the app and may run the event;
+/// the owner pays, the run is recorded and credentialed as the bot.
+pub(crate) async fn dispatch_bot_mcp_operation(
+    state: &AppState,
+    event_row: &event::Model,
+    method: &str,
+    params: Value,
+    bot: BotUser,
+) -> Result<Value, ApiError> {
+    let user = AppUser::Bot(bot);
+    let permission = user.app_permission_fresh(&event_row.app_id, state).await?;
+    let run = BotFlowRun::admit_event(&user, &event_row.app_id, state, &event_row.id, false)
+        .await?
+        .ok_or_else(|| ApiError::forbidden("Only a bot may use the bot MCP operation"))?;
+    let client = json!({
+        "protocol": "mcp",
+        "proxy": {"via": "app_bot", "sub": run.bot_id()},
+    });
+    let caller = ProxyCallerContext {
+        user_context: Some(permission.to_user_context()),
+        bot: Some(std::sync::Arc::new(run)),
+        ..Default::default()
+    };
+    dispatch_mcp_operation(state, event_row, method, params, client, &caller).await
+}
+
+async fn dispatch_mcp_operation(
+    state: &AppState,
+    event_row: &event::Model,
+    method: &str,
+    params: Value,
+    client: Value,
+    caller: &ProxyCallerContext,
+) -> Result<Value, ApiError> {
     if !event_row.active || event_row.event_type != "mcp" {
         return Err(ApiError::not_found("MCP event not found or inactive"));
     }
@@ -1357,15 +1422,6 @@ pub(crate) async fn dispatch_member_mcp_operation(
         .await?
         .ok_or_else(|| ApiError::not_found("No MCP registration found"))?;
     let config = registration.extras_json.unwrap_or_else(|| json!({}));
-    let client = json!({
-        "protocol": "mcp",
-        "proxy": {"via": "app_member", "sub": member.user_id},
-    });
-    let caller = ProxyCallerContext {
-        member: Some(member),
-        user_context: Some(user_context),
-        ..Default::default()
-    };
     let response = dispatch_mcp_json_rpc(
         state,
         event_row,
@@ -1373,7 +1429,7 @@ pub(crate) async fn dispatch_member_mcp_operation(
         &config,
         &json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}),
         &client,
-        &caller,
+        caller,
     )
     .await?;
     member_mcp_result(response)
@@ -2871,7 +2927,7 @@ async fn dispatch_event_stream(
     // its grants and profile, a person's run only the sign-ins saved with the event. A person's
     // run that borrows nothing keeps no sink.
     let (mut sink, board_etag) = match sink {
-        Some(sink) if caller.sink_use().borrows_from(&sink) => {
+        Some(sink) if caller.borrows_from_sink(&sink) => {
             let PinnedFire { sink, board_etag } =
                 pin_fire_for(state, sink, target, caller.sink_use()).await?;
             (Some(sink), board_etag)
@@ -2879,12 +2935,13 @@ async fn dispatch_event_stream(
         _ => (None, None),
     };
 
+    let (credential_subject, credentials_access) = credential_target(
+        caller.bot.as_deref(),
+        &executor_subject,
+        crate::credentials::CredentialsAccess::ServerExecute,
+    );
     let credentials = state
-        .scoped_credentials(
-            &executor_subject,
-            &event_row.app_id,
-            crate::credentials::CredentialsAccess::ServerExecute,
-        )
+        .scoped_credentials(&credential_subject, &event_row.app_id, credentials_access)
         .await?;
     let shared_credentials = credentials.into_shared_credentials();
     let credentials_json = serde_json::to_string(&shared_credentials).map_err(ApiError::from)?;
@@ -2934,6 +2991,7 @@ async fn dispatch_event_stream(
             shadow: None,
         })
         .map_err(|error| ApiError::internal_error(flow_like_types::anyhow!(error)))?;
+    let executor_jwt = bind_executor(caller.bot.as_deref(), executor_jwt)?;
 
     let input_payload_len = payload
         .as_ref()
@@ -2967,8 +3025,19 @@ async fn dispatch_event_stream(
         // passed through; member operations carry the same identity and app
         // role as direct event invocation.
         user_context: caller.user_context.clone(),
-        profile: match (&caller.member, sink.as_ref()) {
-            (Some(member), _) => {
+        profile: match (caller.bot.as_deref(), &caller.member, sink.as_ref()) {
+            (Some(bot), _, _) => {
+                crate::execution::caller_dispatch_profile(
+                    state,
+                    &bot.user(),
+                    bot.owner_id(),
+                    None,
+                    &event_row.app_id,
+                )
+                .await
+                .0
+            }
+            (None, Some(member), _) => {
                 crate::execution::fetch_profile_for_dispatch(
                     state,
                     &member.user_id,
@@ -2977,12 +3046,12 @@ async fn dispatch_event_stream(
                 )
                 .await
             }
-            (None, Some(sink)) => {
+            (None, None, Some(sink)) => {
                 crate::execution::sink_dispatch_profile(state, sink, actor_user_id.as_deref()).await
             }
-            (None, None) => None,
+            (None, None, None) => None,
         },
-        custom_bit_owner: actor_user_id.clone(),
+        custom_bit_owner: actor_user_id.clone().filter(|_| caller.bot.is_none()),
         wasm_packages,
         channel: None,
         trigger: caller.dispatch_trigger(),
@@ -5417,12 +5486,12 @@ mod tests {
         dispatches_in_order(&[
             "!caller.sink_use().admits(sink)",
             "resolve_sink_run_as(state, sink)",
-            "Some(sink) if caller.sink_use().borrows_from(&sink) => {",
+            "Some(sink) if caller.borrows_from_sink(&sink) => {",
             "pin_fire_for(state, sink, target, caller.sink_use()).await?",
             "_ => (None, None),",
             "run_oauth_tokens(state, sink.as_mut(), caller.sink_use(), None)",
-            "(Some(member), _) => {",
-            "(None, Some(sink)) => {",
+            "(None, Some(member), _) => {",
+            "(None, None, Some(sink)) => {",
             "sink_dispatch_profile(",
             "insert_run_with_caller_apps(",
         ]);

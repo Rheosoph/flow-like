@@ -309,6 +309,50 @@ try {
 		assert.deepEqual(await selected(), []);
 		assert.equal((await snapshot()).transactions.length, 0);
 	});
+	await test("Select All selects every node on the board and no page text", async () => {
+		const box = await page.locator(".react-flow").boundingBox();
+		assert.ok(box);
+		const empty = { x: box.x + 660, y: box.y + 840 };
+		const everything = (await snapshot()).nodes.map((n) => n.id).sort();
+		await page.mouse.click(empty.x, empty.y);
+		await page.keyboard.press("ControlOrMeta+a");
+		await settle();
+		const state = await snapshot();
+		assert.deepEqual((await selected()).sort(), everything);
+		assert.equal(
+			state.edges.some((e) => e.selected),
+			false,
+		);
+		assert.equal(await page.evaluate(() => String(getSelection())), "");
+		await page.keyboard.press("Escape");
+		await settle();
+		assert.deepEqual(await selected(), []);
+		// With nothing focused, the board under the pointer still owns the chord,
+		// and Escape then clears what it selected.
+		await page.evaluate(() => document.activeElement?.blur());
+		await page.mouse.move(empty.x + 5, empty.y + 5);
+		await page.keyboard.press("ControlOrMeta+a");
+		await settle();
+		assert.deepEqual((await selected()).sort(), everything);
+		await page.keyboard.press("Escape");
+		await settle();
+		assert.deepEqual(await selected(), []);
+		// A focused board button does not keep the chord from the board either.
+		await page.locator(".react-flow__controls-zoomin").click();
+		await page.mouse.move(empty.x + 5, empty.y + 5);
+		await page.keyboard.press("ControlOrMeta+a");
+		await settle();
+		assert.deepEqual((await selected()).sort(), everything);
+		// A text field keeps it for its own text.
+		await page.mouse.click(empty.x, empty.y);
+		await page.mouse.click(empty.x, empty.y, { button: "right" });
+		await palette().fill("abc");
+		await page.keyboard.press("ControlOrMeta+a");
+		await settle();
+		assert.deepEqual(await selected(), []);
+		await page.keyboard.press("Escape");
+		assert.equal((await snapshot()).transactions.length, 0);
+	});
 	await test("a paste right after a pan lands under the pointer", async () => {
 		await clickNode("integer-b");
 		await page.keyboard.press("ControlOrMeta+c");

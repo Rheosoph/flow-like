@@ -623,9 +623,9 @@ describe("BotsView", () => {
 		const assistantCard = () => buttonContaining("Assistant", "Built in");
 		const hiddenHint = () => buttonContaining("hidden in this profile");
 		const dialog = () =>
-			window.document.body.querySelector("[role='dialog']") as unknown as
-				| HTMLElement
-				| null;
+			window.document.body.querySelector(
+				"[role='dialog']",
+			) as unknown as HTMLElement | null;
 		const assistantSwitch = () =>
 			Array.from(dialog()?.querySelectorAll("li") ?? [])
 				.find((row) => row.textContent?.startsWith("Assistant"))

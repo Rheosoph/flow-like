@@ -1,11 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import {
-	createHash,
-	generateKeyPairSync,
-	randomUUID,
-	sign,
-} from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -13,6 +8,9 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer";
 
+// Calls between people in a room, in real Chrome profiles over the real signaling server:
+// each person is a separate profile, so presence and audio only arrive over the network.
+// Needs bun (signaling) and Chrome; ROOM_CALL_TEST_VERBOSE=1 prints the pages' consoles.
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const port = Number(process.env.ROOM_CALL_TEST_PORT ?? 4401);
 const apiPort = port + 1;
@@ -61,7 +59,12 @@ function roomToken(sub, conversation) {
 	return `${signed}.${signature.toString("base64url")}`;
 }
 
-const inbox = { entries: [], notifications: [], sequence: 0, accessRequests: 0 };
+const inbox = {
+	entries: [],
+	notifications: [],
+	sequence: 0,
+	accessRequests: 0,
+};
 function sendEntry(conversation, sender, entry) {
 	const repeat = inbox.entries.find(
 		(sent) => sent.message_id === entry.message_id,
@@ -192,7 +195,8 @@ const vite = start("vite", process.execPath, [
 async function reachable(url, child, name) {
 	const deadline = Date.now() + 30_000;
 	while (true) {
-		if (child.exitCode !== null) throw new Error(`${name} exited: ${logs[name]}`);
+		if (child.exitCode !== null)
+			throw new Error(`${name} exited: ${logs[name]}`);
 		try {
 			if ((await fetch(url)).ok) return;
 		} catch {}
@@ -294,7 +298,11 @@ const policyCloses = async (page) =>
 try {
 	await Promise.all([
 		reachable(origin, vite, "vite"),
-		reachable(`http://127.0.0.1:${signalingPort}/health`, signaling, "signaling"),
+		reachable(
+			`http://127.0.0.1:${signalingPort}/health`,
+			signaling,
+			"signaling",
+		),
 	]);
 	browser = await puppeteer.launch({
 		headless: true,
@@ -359,10 +367,11 @@ try {
 	);
 
 	// A call must ring people who are elsewhere: in their bot's chat, or in no chat at all.
+	// Their clocks differ from the caller's, as clocks on two machines do.
 	await bob.close();
 	await carol.close();
 	const bobElsewhere = await open("bob", "bot-chat-bob", 3_000);
-	const carolElsewhere = await open("carol");
+	const carolElsewhere = await open("carol", undefined, -3_000);
 	await waitFor(
 		bobElsewhere,
 		() => window.roomCallTest.snapshot().rooms["bot-chat-bob"]?.up === true,
@@ -398,7 +407,8 @@ try {
 	await hearing(alice, "carol");
 	await hearing(bobElsewhere, "alice");
 	await hearing(carolElsewhere, "bob");
-	report.ringing = "bob (in his bot's chat) and carol (no chat open) were rung and joined";
+	report.ringing =
+		"bob (in his bot's chat) and carol (no chat open) were rung and joined";
 
 	for (const [person, page] of [
 		["alice", alice],
@@ -423,7 +433,10 @@ try {
 	console.error(errors);
 	for (const [person, page] of pages) {
 		if (page.isClosed()) continue;
-		console.error(person, JSON.stringify(await snapshot(page).catch(() => null)));
+		console.error(
+			person,
+			JSON.stringify(await snapshot(page).catch(() => null)),
+		);
 		await page
 			.screenshot({ path: resolve(output, `failure-${person}.png`) })
 			.catch(() => {});

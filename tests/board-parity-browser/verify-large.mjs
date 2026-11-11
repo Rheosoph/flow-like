@@ -245,6 +245,34 @@ try {
 				renderer,
 				"Renderer remains active after zoom, pan and runtime updates",
 			);
+			if (renderer === "egui") {
+				// A selection of the whole board must not mount 10,000 DOM editors.
+				await page.mouse.move(810, 600);
+				await page.keyboard.press("ControlOrMeta+a");
+				await page.waitForFunction(
+					() => window.__boardParity.snapshot().selected.length > 9000,
+				);
+				await page.waitForTimeout(500);
+				const all = await page.evaluate(() => {
+					const state = window.__boardParity.snapshot();
+					return {
+						selected: state.selected.length,
+						presentation: state.presentation,
+						text: String(getSelection()),
+					};
+				});
+				assert.equal(all.selected, all.presentation.nodes);
+				assert.ok(
+					all.presentation.nativeNodes > 9000,
+					"Select All keeps the board on the native canvas",
+				);
+				assert.equal(all.text, "", "Select All selects no page text");
+				await page.keyboard.press("Escape");
+				await page.waitForFunction(
+					() => window.__boardParity.snapshot().selected.length === 0,
+				);
+				await page.mouse.move(20, 20);
+			}
 			let previous = after;
 			for (const next of testToggles
 				? [renderer === "egui" ? "react-flow" : "egui", renderer]

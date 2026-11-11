@@ -314,6 +314,17 @@ pub trait TurnHub: Send + Sync + 'static {
     ) -> Result<Option<AskResult>, HubFailure> {
         Ok(None)
     }
+    /// Runs one hosted app tool of a turn this host holds on the hub, as the bot; the answer is
+    /// the JSON text the model reads.
+    async fn app_tool(
+        &self,
+        _bot_id: &str,
+        _turn_id: &str,
+        _tool: &str,
+        _args: Value,
+    ) -> Result<String, HubFailure> {
+        Err(HubFailure::offline("This hub runs no app tools for a turn"))
+    }
     /// A GET with the signed-in session: how an account bot's memory reads its conversation and
     /// summaries by position.
     async fn read(

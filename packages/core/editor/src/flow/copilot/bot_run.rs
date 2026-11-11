@@ -133,12 +133,14 @@ const CORE_TOOLS: [&str; 8] = [
     IMAGE_VIEW_TOOL,
 ];
 /// App tools a server worker runs itself, as the bot.
-const HOSTED_APP_TOOLS: [&str; 5] = [
+const HOSTED_APP_TOOLS: [&str; 7] = [
     "list_apps",
     "describe_app_interface",
     "get_app_detail",
     "call_app_event",
+    "call_app_chat",
     DATABASE_TOOL,
+    GRAPH_QUERY_TOOL,
 ];
 
 const BOT_DATABASE_DESCRIPTION: &str = r#"Read the tables of an app you may use: list_tables, describe_table (include_sample=false for schema only), or a read-only query. Pass the app_id. Change an app's data through its Events instead."#;
@@ -157,8 +159,8 @@ pub enum BotToolHost {
     /// No one is watching and the host has no native app, data or file tools (a managed device,
     /// or a server worker running Flux): only the tools core runs itself, web research and memory.
     CoreOnly,
-    /// No one is watching; a server worker lists the bot's apps, runs their headless Events and
-    /// reads their tables as the bot. Tables are read-only, the workspace's too.
+    /// No one is watching; a server worker uses the bot's apps as the bot: their Events, chats,
+    /// MCP tools, tables and ontologies, and changes the tables of the bot's workspace.
     Hosted,
 }
 
@@ -173,11 +175,6 @@ impl BotToolHost {
                 CORE_TOOLS.contains(&tool_name) || HOSTED_APP_TOOLS.contains(&tool_name)
             }
         }
-    }
-
-    /// Whether the bot may create and change tables in its workspace on this host.
-    fn writes_workspace_tables(self) -> bool {
-        self != Self::Hosted
     }
 }
 
@@ -702,7 +699,7 @@ impl BotRunContext {
     /// With a workspace the bot may change its own tables, so it sees every operation; without
     /// one it only reads.
     fn database_tool_spec(&self) -> Option<PlatformToolSpec> {
-        if self.workspace_app_id.is_some() && self.tool_host.writes_workspace_tables() {
+        if self.workspace_app_id.is_some() {
             return Some(bot_workspace_database_tool_spec());
         }
         find_workflow_context_tool_spec(DATABASE_TOOL).map(|spec| PlatformToolSpec {
@@ -893,9 +890,7 @@ impl BotRunContext {
     ) -> Option<String> {
         let operation = spec_arg_str(arguments, "operation", "operation").trim();
         let allowed: &[&str] = match tool_name {
-            DATABASE_TOOL if in_workspace && self.tool_host.writes_workspace_tables() => {
-                READ_WRITE_DATABASE_OPERATIONS
-            }
+            DATABASE_TOOL if in_workspace => READ_WRITE_DATABASE_OPERATIONS,
             DATABASE_TOOL => READ_ONLY_DATABASE_OPERATIONS,
             GRAPH_QUERY_TOOL => &GRAPH_QUERY_OPERATIONS,
             STORAGE_TOOL => &STORAGE_READ_OPERATIONS,
@@ -1650,8 +1645,7 @@ fn ability_lines(bot: &BotRunContext, offered: &[&str]) -> Vec<String> {
                 ""
             },
             match bot.workspace_app_id.as_deref() {
-                Some(app_id) if bot.tool_host.writes_workspace_tables() => format!(" Your own tables live in your workspace app (app_id: {app_id}); there you may also create and change tables without asking; dropping a table asks your owner first."),
-                Some(app_id) => format!(" Your own tables live in your workspace app (app_id: {app_id}); in this run you can read them but not change them."),
+                Some(app_id) => format!(" Your own tables live in your workspace app (app_id: {app_id}); there you may also create and change tables without asking; dropping a table asks your owner first."),
                 None => String::new(),
             }
         ));
@@ -5228,10 +5222,11 @@ mod tests {
         assert!(!prompt.contains("`database_tool`"));
     }
 
-    /// A server worker uses the bot's apps and reads their tables, the workspace's included, but
-    /// offers nothing it can't run: app chats, ontologies, files and table changes.
+    /// A server worker (room and inbox turns) uses the bot's apps like the open chat does: their
+    /// Events, chats, tables and ontologies, and changes the workspace's tables. Only what needs
+    /// a person at the chat stays out.
     #[test]
-    fn a_hosted_turn_uses_apps_and_reads_tables_only() {
+    fn a_hosted_turn_uses_apps_like_the_chat() {
         let mut hosted = bot(&BotCapability::ALL);
         hosted.workspace_app_id = Some("app-workspace".into());
         hosted.tool_host = BotToolHost::Hosted;
@@ -5246,18 +5241,26 @@ mod tests {
                 "describe_app_interface",
                 "get_app_detail",
                 "call_app_event",
+                "call_app_chat",
                 DATABASE_TOOL,
+                GRAPH_QUERY_TOOL,
                 MEMORY_STORE_TOOL,
                 MEMORY_SEARCH_TOOL,
                 SPAWN_SUBTASKS_TOOL,
             ]
         );
         let prompt = bot_system_prompt(&hosted);
-        assert!(prompt.contains("`list_apps`") && prompt.contains("`call_app_event`"));
+        for named in [
+            "`list_apps`",
+            "`call_app_event`",
+            "`call_app_chat`",
+            "`graph_query_tool`",
+        ] {
+            assert!(prompt.contains(named), "{named}");
+        }
         assert!(!prompt.contains("apps (not available in this run)"));
         assert!(!prompt.contains("Data Studio (not available in this run)"));
-        assert!(!prompt.contains("`graph_query_tool`") && !prompt.contains("`call_app_chat`"));
-        assert!(prompt.contains("you can read them but not change them"));
+        assert!(prompt.contains("create and change tables without asking"));
 
         let read = hosted.prepare_tool_call(DATABASE_TOOL, json!({ "operation": "list_tables" }));
         assert_eq!(read.unwrap()["app_id"], "app-workspace");
@@ -5265,8 +5268,8 @@ mod tests {
             DATABASE_TOOL,
             json!({ "operation": "create_table", "table_name": "cards" }),
         );
-        assert_eq!(code(&write.unwrap_err()), "bot_operation_not_allowed");
-        for unavailable in ["call_app_chat", GRAPH_QUERY_TOOL, STORAGE_TOOL, "ask_user"] {
+        assert_eq!(write.unwrap()["app_id"], "app-workspace");
+        for unavailable in [STORAGE_TOOL, "ask_user", "open_app_page", "open_app_chat"] {
             assert_eq!(
                 code(
                     &hosted

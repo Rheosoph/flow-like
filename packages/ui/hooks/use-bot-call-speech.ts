@@ -90,6 +90,8 @@ export function useBotCallSpeech({
 	const { t } = useTranslation("bots");
 	const callId = call.joined ? call.live?.callId : undefined;
 	const desktop = backend.capabilities?.().canExecuteLocally ?? false;
+	// A hosted voice is sent the bot's reply, so an encrypted conversation speaks only with voices on this device.
+	const localOnly = conversation.encryption === "e2e";
 	const pins = useMemo(
 		() =>
 			conversation.members
@@ -103,7 +105,7 @@ export function useBotCallSpeech({
 	);
 	const modelPins = [...new Set(pins.flatMap(({ pin }) => (pin ? [pin] : [])))];
 	const defaultVoice = useQuery({
-		queryKey: ["call-bot-voice-default", desktop],
+		queryKey: ["call-bot-voice-default", desktop, localOnly],
 		enabled: Boolean(
 			callId &&
 				backend.audioState &&
@@ -119,6 +121,7 @@ export function useBotCallSpeech({
 						return voiceOf(bit, true);
 				}
 			}
+			if (localOnly) return null;
 			const hosted = bits.find((bit) =>
 				isHostedAudioProvider(bit.parameters?.provider?.provider_name),
 			);
@@ -129,7 +132,7 @@ export function useBotCallSpeech({
 	});
 	const queries = useQueries({
 		queries: modelPins.map((pin) => ({
-			queryKey: ["call-bot-voice", pin, desktop],
+			queryKey: ["call-bot-voice", pin, desktop, localOnly],
 			enabled: Boolean(callId && pin && backend.audioState),
 			queryFn: async (): Promise<BotSpeechVoice | null> => {
 				if (!pin) return null;
@@ -137,7 +140,8 @@ export function useBotCallSpeech({
 				const bit = await backend.bitState.getBit(reference.id, reference.hub);
 				if (bit.type !== IBitTypes.Tts) return null;
 				const provider = bit.parameters?.provider?.provider_name;
-				if (isHostedAudioProvider(provider)) return voiceOf(bit, false);
+				if (isHostedAudioProvider(provider))
+					return localOnly ? null : voiceOf(bit, false);
 				if (
 					desktop &&
 					localVoice(bit) &&

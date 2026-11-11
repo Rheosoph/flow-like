@@ -4,7 +4,7 @@
 //! `todo/bots-capabilities/lanes/HOST-SERVER-TOOLS.md`.
 
 mod access;
-mod apps;
+pub(crate) mod apps;
 mod configuration;
 pub(crate) mod connectors;
 mod crew;

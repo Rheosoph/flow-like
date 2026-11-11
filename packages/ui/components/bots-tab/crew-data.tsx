@@ -231,10 +231,7 @@ export function useBotIds(bots: readonly IBot[] | undefined) {
 
 /** What the new room and new message pickers offer: your bots, recent people and the directory. */
 export function useCrewPickerSource(
-	data: Pick<
-		CrewData,
-		"me" | "mode" | "bots" | "hiddenBots" | "conversations"
-	>,
+	data: Pick<CrewData, "me" | "mode" | "bots" | "hiddenBots" | "conversations">,
 	directory: CrewDirectory,
 ): PickerSource {
 	const { me, mode, bots, hiddenBots, conversations } = data;

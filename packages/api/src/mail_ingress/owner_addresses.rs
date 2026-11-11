@@ -1,7 +1,12 @@
 //! The mail addresses that count as a bot's owner: their account address, always, and the ones
 //! they stated to the bot, which the bot's memory holds as profile facts about the user.
 
-use crate::{entity::{bot, user}, error::ApiError, routes::bots::memory::admin_for, state::AppState};
+use crate::{
+    entity::{bot, user},
+    error::ApiError,
+    routes::bots::memory::admin_for,
+    state::AppState,
+};
 use flow_like_bot_memory::{
     facts::{Fact, FactKind},
     model::FactSource,
@@ -89,7 +94,11 @@ pub(crate) fn from_addresses(email: &InboundEmail) -> Option<Vec<String>> {
 /// SPF or DKIM authenticated the From domain itself, so the verdict already covers alignment.
 /// The bot's memory is read only for a mail that passed DMARC from an address the account
 /// doesn't explain.
-pub(crate) async fn sent_by_owner(state: &AppState, row: &bot::Model, email: &InboundEmail) -> bool {
+pub(crate) async fn sent_by_owner(
+    state: &AppState,
+    row: &bot::Model,
+    email: &InboundEmail,
+) -> bool {
     if !dmarc_passed(email.authentication.as_ref()) {
         return false;
     }

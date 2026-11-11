@@ -16,6 +16,7 @@ import {
 	createSerialQueue,
 	createUtteranceSegmenter,
 	encodeWav,
+	offersCalls,
 	resample,
 	resolveSttChoice,
 	rms,
@@ -324,6 +325,36 @@ describe("resolveSttChoice", () => {
 			}),
 		).toBeNull();
 		expect(resolveSttChoice([], { desktop: true, installed: none })).toBeNull();
+	});
+
+	test("local only never falls back to the hosted gateway", () => {
+		expect(
+			resolveSttChoice([hosted, local], {
+				desktop: true,
+				installed: new Set(["whisper"]),
+				localOnly: true,
+			}),
+		).toEqual({ bitId: "hub.example:whisper", route: "local" });
+		for (const desktop of [true, false]) {
+			expect(
+				resolveSttChoice([local, hosted], {
+					desktop,
+					installed: desktop ? none : new Set(["whisper"]),
+					localOnly: true,
+				}),
+			).toBeNull();
+		}
+	});
+
+	test("an encrypted conversation offers calls only with a speech model on the device", () => {
+		const onDevice = { bitId: "hub.example:whisper", route: "local" } as const;
+		const hostedChoice = { bitId: "or-whisper", route: "remote" } as const;
+		for (const speech of [onDevice, hostedChoice, null]) {
+			expect(offersCalls(false, speech)).toBe(true);
+		}
+		expect(offersCalls(true, onDevice)).toBe(true);
+		expect(offersCalls(true, hostedChoice)).toBe(false);
+		expect(offersCalls(true, null)).toBe(false);
 	});
 
 	test("skips custom keys, legacy aliases and unsupported hosted providers", () => {

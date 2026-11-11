@@ -271,10 +271,11 @@ fn context_of(grant: &DeviceTurnGrant, job: &TurnJob, tools: HostTools) -> BotRu
             .clone()
             .or_else(|| from_hub.requester_name.clone());
     }
+    let toolset = BotToolset::of(&spec.capabilities);
     BotRunContext {
         bot_id: spec.bot_id.clone(),
         system: spec.system,
-        toolset: BotToolset::of(&spec.capabilities),
+        toolset,
         name: spec.name.clone(),
         description: spec.description.clone(),
         instructions: spec.instructions.clone(),
@@ -297,7 +298,10 @@ fn context_of(grant: &DeviceTurnGrant, job: &TurnJob, tools: HostTools) -> BotRu
         image_model: spec.image_model.clone(),
         vision_model: spec.vision_model.clone(),
         subtask_model: spec.subtask_model.clone(),
-        tool_host: BotToolHost::CoreOnly,
+        tool_host: match toolset {
+            BotToolset::Capabilities => BotToolHost::Hosted,
+            BotToolset::FlowPilot => BotToolHost::CoreOnly,
+        },
         host_tools: tools,
         skills: spec.skills.clone(),
         skills_ranked: false,
@@ -635,7 +639,8 @@ impl TurnRunner for DeviceRunner {
             job.gate.clone(),
             mutating.clone(),
             control.stopped.clone(),
-        ));
+        )
+        .with_hub_apps(spec.bot_hub.clone(), &job.bot_id, &job.run_id));
         let bridge: Arc<dyn PlatformToolBridge> = match &job.room_updates {
             Some(updates) => Arc::new(RoomUpdatesBridge::new(bridge, updates.clone())),
             None => bridge,

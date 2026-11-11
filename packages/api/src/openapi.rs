@@ -286,6 +286,7 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         crate::routes::bots::turns::claim_turn,
         crate::routes::bots::checkpoint::load,
         crate::routes::bots::authorization::context,
+        crate::routes::bots::app_tools::run_app_tool,
         crate::routes::bots::checkpoint::save,
         crate::routes::bots::turns::heartbeat_turn,
         crate::routes::bots::turns::set_turn_status,

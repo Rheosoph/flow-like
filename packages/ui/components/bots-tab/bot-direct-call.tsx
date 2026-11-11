@@ -21,6 +21,7 @@ import {
 } from "../../hooks/use-conversation-room";
 import { useInboxEntries } from "../../hooks/use-inbox";
 import { useSpeechModelState } from "../../hooks/use-speech-model";
+import { offersCalls } from "../../lib/realtime/call-listening";
 import { useBackend } from "../../state/backend-state";
 import { type IBot, LOCAL_OWNER_ID } from "../../state/backend-state/bot-state";
 import type { IConversation } from "../../state/backend-state/inbox-state";
@@ -88,8 +89,17 @@ export function BotDirectCall({
 		[conversation.members],
 	);
 	const directory = useCrewDirectory(principals, { me, bots });
-	const speech = useSpeechModelState(Boolean(bot && inbox), bot?.stt_model);
+	// The bot's own chat is encrypted exactly when the bot holds the ability, known before the chat loads.
+	const encrypted =
+		conversation.encryption === "e2e" ||
+		Boolean(bot?.capabilities?.includes("encryption"));
+	const speech = useSpeechModelState(
+		Boolean(bot && inbox),
+		bot?.stt_model,
+		encrypted,
+	);
 	const stt = speech.choice;
+	const callsOffered = offersCalls(encrypted, stt);
 	const [setupOpen, setSetupOpen] = useState(false);
 	const listen = useMemo(
 		() => ({
@@ -159,7 +169,7 @@ export function BotDirectCall({
 	}, [call.joined, call.canListen, call.setListening]);
 	const needsSpeech = speech.settled && !stt;
 	const button =
-		bot && inbox ? (
+		bot && inbox && callsOffered ? (
 			needsSpeech || setupOpen ? (
 				<CallSpeechSetup
 					bot={bot}
@@ -194,9 +204,10 @@ export function BotDirectCall({
 				</Button>
 			)
 		) : null;
+	const barShown = Boolean(call.live) && (callsOffered || call.joined);
 	return children({
 		button,
-		bar: call.live ? (
+		bar: barShown ? (
 			<>
 				<ConversationCallBar
 					call={{ ...call, join, leave }}

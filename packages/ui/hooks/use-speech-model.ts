@@ -27,10 +27,13 @@ export interface SpeechModelState {
 /**
  * The speech-to-text bit that transcribes this person: `pinned` (a bot's own model) when this
  * client can run it, else an installed local model on desktop, else a hosted one from the profile.
+ * With `localOnly` only a model on this device counts, pinned or not: an end-to-end encrypted
+ * conversation is never sent to hosted speech.
  */
 export function useSpeechModelState(
 	enabled = true,
 	pinned?: string | null,
+	localOnly = false,
 ): SpeechModelState {
 	const backend = useBackend();
 	const active = enabled && backend.audioState !== undefined;
@@ -66,7 +69,7 @@ export function useSpeechModelState(
 		},
 	});
 	const pin = useQuery({
-		queryKey: ["speech-model-pin", pinned, desktop],
+		queryKey: ["speech-model-pin", pinned, desktop, localOnly],
 		enabled: active && Boolean(pinned),
 		queryFn: async (): Promise<SttChoice | null> => {
 			const reference = speechBitReference(pinned as string);
@@ -79,6 +82,7 @@ export function useSpeechModelState(
 			return resolveSttChoice([bit], {
 				desktop,
 				installed: local ? new Set([bit.id]) : NO_IDS,
+				localOnly,
 			});
 		},
 		retry: false,
@@ -90,9 +94,10 @@ export function useSpeechModelState(
 					resolveSttChoice(sttBits, {
 						desktop,
 						installed: installed.data ?? NO_IDS,
+						localOnly,
 					}))
 				: null,
-		[backend.audioState, pin.data, sttBits, desktop, installed.data],
+		[backend.audioState, pin.data, sttBits, desktop, installed.data, localOnly],
 	);
 	const settled =
 		!backend.audioState ||
@@ -110,6 +115,9 @@ export function useSpeechModelState(
 }
 
 /** The speech-to-text choice alone; null while loading or when there is none. */
-export function useSpeechModel(enabled = true): SttChoice | null {
-	return useSpeechModelState(enabled).choice;
+export function useSpeechModel(
+	enabled = true,
+	localOnly = false,
+): SttChoice | null {
+	return useSpeechModelState(enabled, undefined, localOnly).choice;
 }

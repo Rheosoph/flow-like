@@ -24,6 +24,8 @@ const mocks = vi.hoisted(() => ({
 	availability: undefined as
 		| import("../lib/availability").UserAvailability
 		| undefined,
+	speech: null as import("../lib/realtime/call-listening").SttChoice | null,
+	speechAsked: vi.fn(),
 	feed: undefined as undefined | ((entries: readonly IInboxEntry[]) => void),
 }));
 vi.mock("@flow-like/locales", () => ({
@@ -35,6 +37,12 @@ vi.mock("@flow-like/locales", () => ({
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
 vi.mock("../hooks/use-user-availability", () => ({
 	useUserAvailability: () => ({ data: mocks.availability, isPending: false }),
+}));
+vi.mock("../hooks/use-speech-model", () => ({
+	useSpeechModel: (enabled: boolean, localOnly: boolean) => {
+		mocks.speechAsked(enabled, localOnly);
+		return enabled ? mocks.speech : null;
+	},
 }));
 vi.mock("../state/backend-state", () => {
 	const backend = {
@@ -136,6 +144,7 @@ beforeEach(() => {
 	mocks.listeners.clear();
 	mocks.roomAvailable = true;
 	mocks.availability = undefined;
+	mocks.speech = null;
 	mocks.states.set(2, {
 		sub: "anna",
 		call: { id: "call_1", joined: true, peer: "anna_peer" },
@@ -328,6 +337,24 @@ describe("incoming calls across the app", () => {
 			expect(document.querySelector('[role="alertdialog"]')).toBeNull();
 		},
 	);
+
+	test("an encrypted conversation rings only where speech stays on this device", async () => {
+		conversation.encryption = "e2e";
+		mocks.speech = { bitId: "or-whisper", route: "remote" };
+		await render();
+		expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+		expect(mocks.speechAsked).toHaveBeenLastCalledWith(true, true);
+
+		mocks.speech = { bitId: "hub.example:whisper", route: "local" };
+		await render();
+		expect(document.querySelector('[role="alertdialog"]')).not.toBeNull();
+	});
+
+	test("a readable conversation rings without asking for a speech model", async () => {
+		await render();
+		expect(document.querySelector('[role="alertdialog"]')).not.toBeNull();
+		expect(mocks.speechAsked).not.toHaveBeenCalledWith(true, expect.anything());
+	});
 
 	test("waits for matching live presence and ignores a call joined in another tab", async () => {
 		mocks.states.clear();

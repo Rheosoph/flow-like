@@ -80,9 +80,9 @@ describe("directAttachmentOf", () => {
 		});
 		expect(conversationOfApp("conversation_c1")).toBe("c1");
 		expect(conversationOfApp("app1")).toBeUndefined();
-		expect(storedAttachmentOf(part({ url: "https://a.test/x.pdf" }))?.url).toBe(
-			"https://a.test/x.pdf",
-		);
+		expect(
+			storedAttachmentOf(part({ url: "https://a.test/x.pdf" })),
+		).toMatchObject({ url: "https://a.test/x.pdf" });
 	});
 
 	test("conversation files and non-http links are left to the caller", () => {

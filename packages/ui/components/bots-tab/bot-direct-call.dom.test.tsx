@@ -337,7 +337,46 @@ test("the call transcribes with the bot's own speech model", async () => {
 	expect(mocks.useSpeechModelState).toHaveBeenLastCalledWith(
 		true,
 		"hub:whisper",
+		false,
 	);
+});
+
+test("an encrypted bot's chat offers no call while speech would leave this device", async () => {
+	const encryptedBot = { ...bot, capabilities: ["encryption"] } as IBot;
+	mocks.getConversation.mockResolvedValue({
+		...conversation,
+		encryption: "e2e",
+	});
+	mocks.call.live = { callId: "call-1", startedAt: null, participants: [] };
+	for (const choice of [READY_SPEECH.choice, null]) {
+		mocks.useSpeechModelState.mockReturnValue({ ...READY_SPEECH, choice });
+		await render(encryptedBot);
+		await render(encryptedBot);
+		expect(host.querySelectorAll("button")).toHaveLength(0);
+		expect(
+			host.querySelector('[data-slot="conversation-call-bar"]'),
+		).toBeNull();
+	}
+	expect(mocks.useSpeechModelState).toHaveBeenLastCalledWith(
+		true,
+		undefined,
+		true,
+	);
+});
+
+test("an encrypted bot's chat offers the call with a speech model on this device", async () => {
+	const encryptedBot = { ...bot, capabilities: ["encryption"] } as IBot;
+	mocks.getConversation.mockResolvedValue({
+		...conversation,
+		encryption: "e2e",
+	});
+	mocks.useSpeechModelState.mockReturnValue({
+		...READY_SPEECH,
+		choice: { bitId: "hub:whisper", route: "local" },
+	});
+	await render(encryptedBot);
+	await render(encryptedBot);
+	expect(button("Start a call").disabled).toBe(false);
 });
 
 test("without a speech model the call control offers setup instead of a call", async () => {

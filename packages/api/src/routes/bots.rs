@@ -10,6 +10,7 @@ use axum::{
 };
 use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseTransaction, DbErr, EntityTrait, QueryFilter};
 
+pub mod app_tools;
 pub mod apps;
 pub mod ask;
 pub(crate) mod authorization;
@@ -67,6 +68,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/{bot_id}/turns/{turn_id}/authorization-context",
             get(authorization::context),
+        )
+        .route(
+            "/{bot_id}/turns/{turn_id}/app-tools/{tool}",
+            post(app_tools::run_app_tool),
         )
         .route(
             "/{bot_id}/user-context/available",

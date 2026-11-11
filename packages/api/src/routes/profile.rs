@@ -190,7 +190,10 @@ mod home_tests {
     #[test]
     fn hidden_bots_stay_untouched_when_omitted_and_are_normalized_when_sent() {
         let omitted: ProfileBody = serde_json::from_value(json!({"name":"Renamed"})).unwrap();
-        assert_eq!(super::validate_hidden_bots(omitted.hidden_bots).unwrap(), None);
+        assert_eq!(
+            super::validate_hidden_bots(omitted.hidden_bots).unwrap(),
+            None
+        );
         let old_client: SyncProfileRequest =
             serde_json::from_value(json!({"id":"id","name":"Name"})).unwrap();
         assert_eq!(old_client.hidden_bots, None);

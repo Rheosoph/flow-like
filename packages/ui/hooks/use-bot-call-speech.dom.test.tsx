@@ -74,6 +74,7 @@ async function fixture(
 		profileBits?: IBit[] | Promise<IBit[]>;
 		installed?: boolean;
 		warmFails?: boolean;
+		encrypted?: boolean;
 	} = {},
 ) {
 	const requests: unknown[] = [];
@@ -146,7 +147,9 @@ async function fixture(
 	};
 	function Harness() {
 		useBotCallSpeech({
-			conversation,
+			conversation: options.encrypted
+				? { ...conversation, encryption: "e2e" }
+				: conversation,
 			entries,
 			items: foldInboxEntries(entries),
 			historyReady: true,
@@ -384,6 +387,50 @@ test("uninstalled local defaults fall back to hosted speech and absent voices le
 				});
 		} finally {
 			await f.dispose();
+		}
+	}
+});
+
+test("an encrypted conversation speaks only with a voice on this device", async () => {
+	const profileBits = [
+		profileVoice("local-voice", "local:any-tts"),
+		profileVoice("hosted-voice", "hosted:openrouter"),
+	];
+	const onDevice = await fixture(true, undefined, undefined, undefined, {
+		pin: null,
+		profileBits,
+		encrypted: true,
+	});
+	try {
+		await onDevice.join();
+		await onDevice.add("answer", 3);
+		await waitForVoice();
+		expect(onDevice.requests).toEqual([
+			expect.objectContaining({ bit_id: "hub:local-voice", local: true }),
+		]);
+	} finally {
+		await onDevice.dispose();
+	}
+	for (const options of [
+		{ pin: null, profileBits, installed: false },
+		{ profileBits },
+	]) {
+		const hostedOnly = await fixture(
+			true,
+			"hosted:openrouter",
+			undefined,
+			undefined,
+			{ ...options, encrypted: true },
+		);
+		try {
+			await hostedOnly.join();
+			await hostedOnly.add("answer", 3);
+			await waitForVoice();
+			expect(hostedOnly.capabilities).toEqual([]);
+			expect(hostedOnly.requests).toEqual([]);
+			expect(hostedOnly.warmups).toEqual([]);
+		} finally {
+			await hostedOnly.dispose();
 		}
 	}
 });

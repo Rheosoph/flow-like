@@ -21,6 +21,7 @@ use tokio::sync::Semaphore;
 const HOST: &str = "device:test";
 
 mod checkpoint_encryption;
+mod hub_app_tools;
 mod events;
 mod participation;
 mod recovery;
@@ -44,6 +45,8 @@ struct DeviceHub {
     trigger_reads: Mutex<Vec<Vec<(&'static str, String)>>>,
     checkpoint: Mutex<Option<flow_like_types::bot_turn::BotRunCheckpoint>>,
     checkpoint_calls: Mutex<Vec<(String, String, String, u32)>>,
+    app_tool_calls: Mutex<Vec<(String, String, String, Value)>>,
+    app_tool_failure: bool,
     checkpoint_lease_lost: bool,
     release_refused: bool,
     release_spent: bool,
@@ -340,6 +343,25 @@ impl TurnHub for DeviceHub {
 
     async fn delete_host(&self, _: &str) -> Result<(), HubFailure> {
         Ok(())
+    }
+
+    async fn app_tool(
+        &self,
+        bot: &str,
+        turn: &str,
+        tool: &str,
+        args: Value,
+    ) -> Result<String, HubFailure> {
+        if self.app_tool_failure {
+            return Err(HubFailure::answered(409, Some(CODE_LEASE_LOST), "lost"));
+        }
+        self.app_tool_calls.lock().unwrap().push((
+            bot.to_owned(),
+            turn.to_owned(),
+            tool.to_owned(),
+            args,
+        ));
+        Ok(json!({ "status": "ok", "tool": tool }).to_string())
     }
 
     async fn cancel_turn(&self, _: &str, _: &str) -> Result<(), HubFailure> {

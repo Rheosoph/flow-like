@@ -128,7 +128,7 @@ function fakeInbox(initial: "plain" | "e2e"): FakeInbox {
 		listEntries: async () => ({ entries, next_before: null }),
 		sendEntry: async (_: string, request: ISendInboxEntryRequest) => {
 			const sealed = Boolean(request.envelopes);
-			if (sealed !== (encryption === "e2e")) {
+			if (sealed !== (encryption === "e2e" && request.kind !== "call")) {
 				throw Object.assign(new Error("mismatch"), {
 					code: "INBOX_ENCRYPTION_MISMATCH",
 				});
@@ -203,6 +203,41 @@ describe("withEndToEnd", () => {
 		expect(fake.registered).toEqual(["k-device"]);
 		expect(calls.filter((call) => call.startsWith("key"))).toHaveLength(1);
 		expect(calls.some((call) => call.startsWith("open"))).toBe(false);
+	});
+
+	test("a call entry stays plain in an encrypted conversation and what was said is sealed", async () => {
+		const fake = fakeInbox("e2e");
+		const calls: string[] = [];
+		const inbox = withEndToEnd(fake.inbox, fakeCrypto(calls), () => ME);
+		const started: ISendInboxEntryRequest = {
+			message_id: "call_1",
+			kind: "call",
+			envelope: { v: 1, enc: "none", body: { op: "started" } },
+		};
+		const entry = await inbox.sendEntry("conv", started);
+		expect(fake.sent[0]).toEqual(started);
+		expect(entry.envelope).toEqual({
+			v: 1,
+			enc: "none",
+			body: { op: "started" },
+		});
+		expect(calls).toEqual([]);
+
+		await inbox.sendEntry("conv", {
+			message_id: "t_1",
+			kind: "transcript",
+			envelope: {
+				v: 1,
+				enc: "none",
+				body: { call: "call_1", text: "hello", offset_ms: 0, duration_ms: 900 },
+			},
+		});
+		expect(fake.sent[1]?.kind).toBe("transcript");
+		expect(fake.sent[1]?.envelope).toBeUndefined();
+		expect(Object.keys(fake.sent[1]?.envelopes ?? {}).sort()).toEqual([
+			BOT,
+			ME,
+		]);
 	});
 
 	test("a member without a key stops the send and is named", async () => {

@@ -661,7 +661,11 @@ async fn a_grant_lapses_after_ninety_days_unused_and_a_use_slides_it_once_a_day(
         )])
         .await
         .unwrap();
-    assert_eq!(expiry(&db).await, Some(lapsed), "a use never revives a grant");
+    assert_eq!(
+        expiry(&db).await,
+        Some(lapsed),
+        "a use never revives a grant"
+    );
 
     assert_eq!(sweep_grants(&db, now_millis()).await.unwrap(), 1);
     assert_eq!(bot_tool_grant::Entity::find().count(&db).await.unwrap(), 0);
@@ -674,14 +678,24 @@ async fn granting_again_renews_a_lapsed_grant_and_the_sweep_stamps_old_rows() {
     let store = rows(&db);
     store.put("knowledge_drop", "table:notes").await.unwrap();
     set_expiry(&db, Some(now_millis() - Duration::days(1))).await;
-    let renewed = grant_in(&db, OWNER, BOT, &key("knowledge_drop", "table:notes"), now_millis())
-        .await
-        .unwrap();
+    let renewed = grant_in(
+        &db,
+        OWNER,
+        BOT,
+        &key("knowledge_drop", "table:notes"),
+        now_millis(),
+    )
+    .await
+    .unwrap();
     assert!(renewed.expires_at.is_some());
     assert_eq!(store.list().await.unwrap().len(), 1);
 
     set_expiry(&db, None).await;
-    assert_eq!(store.list().await.unwrap().len(), 1, "an unstamped row is live");
+    assert_eq!(
+        store.list().await.unwrap().len(),
+        1,
+        "an unstamped row is live"
+    );
     assert_eq!(sweep_grants(&db, now_millis()).await.unwrap(), 0);
     assert!(expiry(&db).await.unwrap() > now_millis() + Duration::days(89));
 }

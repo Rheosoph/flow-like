@@ -216,7 +216,7 @@ async function show(conversation = room(), me = "me", newRoom = false) {
 					? createElement(NewRoomDialog, {
 							open: true,
 							onOpenChange: () => {},
-							source: {} as never,
+							source: { bots: [] } as never,
 							onCreated: () => {},
 						})
 					: createElement(Harness, { conversation, me }),

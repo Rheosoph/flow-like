@@ -1,6 +1,11 @@
-//! App tools of a headless server turn: the bot lists the apps it may use, reads their
-//! interfaces and tables and runs their headless Events. Every call goes through the route
-//! handlers as the bot, so the bot's own rights, quotas and run records apply.
+//! App tools of a headless server turn (room and inbox turns): the bot lists the apps it may
+//! use, reads their interfaces, runs their Events, chats and MCP tools, reads their tables and
+//! ontologies and changes its workspace's tables. Every call goes through the route handlers as
+//! the bot, so the bot's own rights, quotas and run records apply.
+
+mod chat;
+mod data;
+mod mcp;
 
 use std::time::Duration;
 
@@ -44,14 +49,18 @@ const LIST_APPS: &str = "list_apps";
 const DESCRIBE_APP_INTERFACE: &str = "describe_app_interface";
 const GET_APP_DETAIL: &str = "get_app_detail";
 const CALL_APP_EVENT: &str = "call_app_event";
+const CALL_APP_CHAT: &str = "call_app_chat";
 const DATABASE_TOOL: &str = "database_tool";
+const GRAPH_QUERY_TOOL: &str = "graph_query_tool";
 
-const APP_TOOLS: [&str; 5] = [
+const APP_TOOLS: [&str; 7] = [
     LIST_APPS,
     DESCRIBE_APP_INTERFACE,
     GET_APP_DETAIL,
     CALL_APP_EVENT,
+    CALL_APP_CHAT,
     DATABASE_TOOL,
+    GRAPH_QUERY_TOOL,
 ];
 
 const MAX_LISTED_APPS: usize = 250;
@@ -370,7 +379,9 @@ impl AppTools {
             DESCRIBE_APP_INTERFACE => self.describe_app_interface(&args).await,
             GET_APP_DETAIL => self.get_app_detail(&args).await,
             CALL_APP_EVENT => self.call_app_event(&args).await,
+            CALL_APP_CHAT => self.call_app_chat(&args).await,
             DATABASE_TOOL => self.database(&args).await,
+            GRAPH_QUERY_TOOL => self.graph_query(&args).await,
             _ => Err("This host does not run this tool.".to_string()),
         };
         match result {
@@ -547,9 +558,13 @@ impl AppTools {
             "config": event_config(&event),
         });
         if is_mcp(&event) {
-            described["status"] = json!("partial");
-            described["interface_error"] =
-                json!("MCP tools of an app can't be listed while the bot answers on its own.");
+            match self.mcp_tools(app_id, &event).await {
+                Ok(mcp) => described["mcp"] = mcp,
+                Err(error) => {
+                    described["status"] = json!("partial");
+                    described["interface_error"] = json!(error);
+                }
+            }
         }
         Ok(described)
     }
@@ -602,13 +617,11 @@ impl AppTools {
         }
         if event.event_type == "simple_chat" {
             return Err(format!(
-                "Event '{event_id}' is a chat interface, which this host can't call while the bot answers on its own."
+                "Event '{event_id}' is a chat interface. Use call_app_chat instead."
             ));
         }
         if is_mcp(&event) {
-            return Err(format!(
-                "Event '{event_id}' is an MCP interface, which this host can't call while the bot answers on its own."
-            ));
+            return self.call_mcp_tool(app_id, &event, args).await;
         }
         if text(args, "mcp_tool").is_some() {
             return Err(format!(
@@ -771,8 +784,11 @@ impl AppTools {
                 }
                 Ok(answer)
             }
+            other if self.bot.workspace_app_id.as_deref() == Some(app_id) => {
+                self.change_workspace_table(app_id, other, args).await
+            }
             other => Err(format!(
-                "Operation '{other}' is not available while the bot answers on its own; use list_tables, describe_table or query."
+                "Operation '{other}' changes data, which a bot does only in its workspace's tables; change an app's data through its Events."
             )),
         }
     }

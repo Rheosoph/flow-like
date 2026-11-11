@@ -19,6 +19,15 @@ use flow_like_types::{
 };
 use std::{path::PathBuf, sync::Arc};
 
+/// Extension of the file FlowPath keeps beside a cached copy to remember its ETag.
+const ETAG_SIDECAR_EXTENSION: &str = "s3flowEtag";
+
+/// Whether `path` is the ETag file FlowPath keeps beside a cached copy. It is none of the
+/// user's files, so a listing leaves it out.
+pub fn is_etag_sidecar(path: &Path) -> bool {
+    path.extension() == Some(ETAG_SIDECAR_EXTENSION)
+}
+
 fn path_without_final_extension(path: &str, extension: &str) -> String {
     if extension.is_empty() {
         return path.to_string();
@@ -213,7 +222,7 @@ impl FlowPath {
     }
 
     fn get_etag_path(&self, base_path: &str) -> Path {
-        normalize_object_path(&format!("{base_path}.s3flowEtag"))
+        normalize_object_path(&format!("{base_path}.{ETAG_SIDECAR_EXTENSION}"))
     }
 
     pub async fn set_extension(
@@ -719,6 +728,16 @@ mod tests {
             assert_eq!(cached_etag, original_etag);
             assert!(path.is_cache_dirty(&mut context).await.unwrap());
         }
+    }
+
+    #[test]
+    fn only_the_etag_file_beside_a_cached_copy_is_a_sidecar() {
+        let file = Path::from("upload/report.pdf");
+        let etag = flow_path(file.as_ref()).get_etag_path("upload/report");
+
+        assert!(is_etag_sidecar(&etag));
+        assert!(!is_etag_sidecar(&file));
+        assert!(!is_etag_sidecar(&Path::from("upload/s3flowEtag")));
     }
 
     #[test]

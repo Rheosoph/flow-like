@@ -40,33 +40,49 @@ function normalizeWebSocketUrl(value: string | URL): string {
 	return parsed.href;
 }
 
+interface SignalingMessage {
+	type?: unknown;
+	topic?: unknown;
+	topics?: unknown;
+}
+
+const parseSignalingMessage = (data: unknown): SignalingMessage | null => {
+	if (typeof data !== "string") return null;
+	try {
+		const message: unknown = JSON.parse(data);
+		return typeof message === "object"
+			? (message as SignalingMessage | null)
+			: null;
+	} catch {
+		return null;
+	}
+};
+
+const subscriptionTopics = (message: SignalingMessage): unknown[] | null => {
+	const changes =
+		message.type === "subscribe" || message.type === "unsubscribe";
+	return changes && Array.isArray(message.topics) ? message.topics : null;
+};
+
 /**
  * y-webrtc sends every room's subscriptions and announcements over every
  * signaling socket of the page. The server binds a socket to one room and
  * closes it for any other, so a socket carries its own room only. Returns the
  * frame to send, or null to drop it.
  */
-export function scopeSignalingFrame<T>(data: T, room: string): T | string | null {
-	if (typeof data !== "string") return data;
-	let message: unknown;
-	try {
-		message = JSON.parse(data);
-	} catch {
-		return data;
-	}
-	if (typeof message !== "object" || message === null) return data;
-	const { type, topic, topics } = message as Record<string, unknown>;
-	if (type === "publish") return topic === room ? data : null;
-	if (
-		(type !== "subscribe" && type !== "unsubscribe") ||
-		!Array.isArray(topics) ||
-		topics.every((name) => name === room)
-	)
-		return data;
+export const scopeSignalingFrame = <T>(
+	data: T,
+	room: string,
+): T | string | null => {
+	const message = parseSignalingMessage(data);
+	if (!message) return data;
+	if (message.type === "publish") return message.topic === room ? data : null;
+	const topics = subscriptionTopics(message);
+	if (!topics || topics.every((name) => name === room)) return data;
 	return topics.includes(room)
 		? JSON.stringify({ ...message, topics: [room] })
 		: null;
-}
+};
 
 function installAuthenticatedWebSocket(): AuthenticatedWebSocketState {
 	const global = holder();

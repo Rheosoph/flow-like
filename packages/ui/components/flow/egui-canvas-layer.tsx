@@ -1963,7 +1963,41 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 					}, 0);
 			}
 		};
+		/** Ctrl/Cmd+A on the board, or with nothing focused while the pointer rests on it. */
+		const ownsSelectAll = (event: KeyboardEvent) => {
+			if (
+				!(event.metaKey || event.ctrlKey) ||
+				event.shiftKey ||
+				event.altKey ||
+				event.key.toLowerCase() !== "a" ||
+				!ready ||
+				drag ||
+				connection ||
+				pinch ||
+				!store.getState().elementsSelectable
+			)
+				return false;
+			const focus = document.activeElement;
+			if (focus && focus !== document.body ? !root.contains(focus) : !pointer)
+				return false;
+			return !(
+				event.target instanceof Element &&
+				event.target.closest(
+					"input, textarea, select, [contenteditable]:not([contenteditable='false']), .nokey",
+				)
+			);
+		};
 		const keyDown = (event: KeyboardEvent) => {
+			if (ownsSelectAll(event)) {
+				consume(event);
+				// Escape and the arrow keys then act on the selection, whatever held focus.
+				inputRef.current?.focus({ preventScroll: true });
+				selected(
+					new Set((currentProps().nodes ?? []).map((node) => node.id)),
+					false,
+				);
+				return;
+			}
 			if (!root.contains(document.activeElement) || isControl(event.target))
 				return;
 			if ((connection || drag || pinch) && event.key.startsWith("Arrow")) {

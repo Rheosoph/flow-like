@@ -222,11 +222,21 @@ mod tests {
         classify(&db, "bot_1", sender).await;
         classify(&db, "bot_2", receiver).await;
         conversation(&db, "c1", "GROUP", "PLAIN", &["user-a", "bot_1", "bot_2"]).await;
-        let mut body = json!({ "text": "@bot_2 what do you think?", "mentions": ["bot_2"], "hops": 1 });
+        let mut body =
+            json!({ "text": "@bot_2 what do you think?", "mentions": ["bot_2"], "hops": 1 });
         if let Some(taint) = taint {
             body[TAINT_FIELD] = json!({ "classification": taint });
         }
-        message(&db, "c1", "m1", "bot_1", 1, body, &["user-a", "bot_1", "bot_2"]).await;
+        message(
+            &db,
+            "c1",
+            "m1",
+            "bot_1",
+            1,
+            body,
+            &["user-a", "bot_1", "bot_2"],
+        )
+        .await;
         crate::entity::conversation::ActiveModel {
             id: Set("c1".into()),
             last_seq: Set(Some(1)),
@@ -319,7 +329,16 @@ mod tests {
             &["bot_2"],
         )
         .await;
-        message(&db, "c1", "m2", "user-a", 2, json!({ "text": "and?" }), &["bot_2"]).await;
+        message(
+            &db,
+            "c1",
+            "m2",
+            "user-a",
+            2,
+            json!({ "text": "and?" }),
+            &["bot_2"],
+        )
+        .await;
         let window = inbox_entry::Entity::find()
             .filter(inbox_entry::Column::InboxId.eq("bot_2"))
             .all(&db)
