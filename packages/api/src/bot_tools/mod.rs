@@ -130,6 +130,9 @@ pub(crate) async fn turn_host(
             flow_like_state.clone(),
         )) as std::sync::Arc<dyn flow_like_bot_tools::crew::CrewBackend>
     });
+    let files: std::sync::Arc<dyn host::TurnFiles> = std::sync::Arc::new(
+        turn_files::ApiTurnFiles::new(state, &bot.bot_id, context_conversation, attached),
+    );
     let host = BotToolsHost::new(TurnDeps {
         owner: owner.to_string(),
         bot: principal.clone(),
@@ -202,22 +205,20 @@ pub(crate) async fn turn_host(
         flow_like_state.clone(),
         bot.image_model.clone(),
     )))
-    .with_files(std::sync::Arc::new(turn_files::ApiTurnFiles::new(
-        state,
-        &bot.bot_id,
-        context_conversation,
-        attached,
-    )));
+    .with_files(files.clone());
     let host = if bot.tool_host == flow_like::flow::copilot::BotToolHost::Hosted {
-        host.with_apps(std::sync::Arc::new(apps::AppTools::new(
-            state,
-            BotUser {
-                bot_id: bot.bot_id.clone(),
-                turn_id: turn_id.to_string(),
-                conv_id: conv_id.map(str::to_string),
-            },
-            bot,
-        )))
+        host.with_apps(std::sync::Arc::new(
+            apps::AppTools::new(
+                state,
+                BotUser {
+                    bot_id: bot.bot_id.clone(),
+                    turn_id: turn_id.to_string(),
+                    conv_id: conv_id.map(str::to_string),
+                },
+                bot,
+            )
+            .with_files(files),
+        ))
     } else {
         host
     };
