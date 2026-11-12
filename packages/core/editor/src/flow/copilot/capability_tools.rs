@@ -379,6 +379,7 @@ pub struct HostTools {
     notes: Option<NotesHandle>,
     trail: Option<ToolTrail>,
     reply_files: Option<ReplyFiles>,
+    conversation_key: Option<String>,
 }
 
 impl HostTools {
@@ -467,6 +468,18 @@ impl HostTools {
 
     pub fn reply_files(&self) -> Option<&ReplyFiles> {
         self.reply_files.as_ref()
+    }
+
+    /// Names the conversation the turn answers, unique on this host. The conversation's next
+    /// turn then starts from this turn's summary of its older messages instead of summarizing
+    /// them again. Hosts pass it only when the turn's history is that conversation's own.
+    pub fn with_conversation_key(mut self, key: String) -> Self {
+        self.conversation_key = Some(key);
+        self
+    }
+
+    pub fn conversation_key(&self) -> Option<&String> {
+        self.conversation_key.as_ref()
     }
 
     /// The languages `code_run` runs on this host (`ToolEnv::code_languages`). None: the host

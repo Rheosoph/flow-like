@@ -1775,6 +1775,8 @@ pub(crate) async fn run_global_chat(
         let facts = interactive.trigger_facts(&state).await?;
         bot.context.ephemeral_user_context = facts.ephemeral_user_context;
         bot.context.live_call = facts.live_call;
+        bot.context.host_tools = std::mem::take(&mut bot.context.host_tools)
+            .with_conversation_key(interactive.turn.conversation_id.clone());
         live_call = facts.live_call;
         if !bot.context.ephemeral_user_context
             && let Some(trail) = interactive.open_trail(&state).await

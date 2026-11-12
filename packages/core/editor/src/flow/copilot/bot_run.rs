@@ -458,9 +458,6 @@ pub struct BotRunContext {
     pub compute: TurnCompute,
     /// Durable state bound by the host to this turn and its current claim.
     pub recovery: Option<super::run_recovery::RecoveryHandle>,
-    /// The conversation the turn answers, unique on this host. The conversation's next turn then
-    /// reuses this turn's summary of its older messages. `None` summarizes anew each turn.
-    pub conversation_key: Option<String>,
 }
 
 impl BotRunContext {
@@ -2616,8 +2613,8 @@ where
     }
     // A person's temporary context must not outlive its turn in a kept summary.
     let conversation_scope = turn_bot
-        .conversation_key
-        .as_ref()
+        .host_tools
+        .conversation_key()
         .filter(|_| !turn_bot.ephemeral_user_context)
         .map(|key| format!("{profile_id}\n{}\n{key}", turn_bot.bot_id));
     let mut copilot = PlatformCopilot::new(state, profile)

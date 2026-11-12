@@ -1550,12 +1550,9 @@ impl PlatformCopilot {
                     .await;
                 // The checkpoint is written beside the turn. Only a history that is still at the
                 // hard limit after its stale tool results were shortened holds the request back.
-                if compaction.start(
-                    completion_client,
-                    &model_name,
-                    &mut current_history,
-                    || work_plan.context(),
-                ) {
+                if compaction.start(completion_client, &model_name, &mut current_history, || {
+                    work_plan.context()
+                }) {
                     if let Some(callback) = &on_token {
                         callback(plan_step_frame(
                             format!("checkpoint_{iteration}"),

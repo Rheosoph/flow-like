@@ -695,6 +695,10 @@ pub async fn global_chat_native(
     options.attachments = attachments_manifest.clone().unwrap_or_default();
     let conversation_id = options.conversation_id.clone();
     let has_inbox_conversation = options.inbox_conversation_id.is_some();
+    let conversation_key = options
+        .inbox_conversation_id
+        .clone()
+        .or_else(|| conversation_id.clone());
     let run_id = Some(run_id.unwrap_or_else(flow_like_types::create_id));
     let _native_run = crate::functions::ai::native_tool_bridge::claim_run(
         &app_handle,
@@ -811,6 +815,9 @@ pub async fn global_chat_native(
         }
         if let Some(files) = reply_files {
             context.host_tools = std::mem::take(&mut context.host_tools).with_reply_files(files);
+        }
+        if let Some(key) = conversation_key {
+            context.host_tools = std::mem::take(&mut context.host_tools).with_conversation_key(key);
         }
         std::sync::Arc::make_mut(&mut bot.context).recovery = recovery.map(Into::into);
         std::sync::Arc::make_mut(&mut bot.context).acknowledgement = acknowledgement;

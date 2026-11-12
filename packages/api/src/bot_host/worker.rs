@@ -1468,6 +1468,11 @@ async fn attempt_with(
         && requester.as_ref().is_some_and(|requester| {
             requester.audience == TurnAudience::Owner && requester.requester_id == owner
         });
+    // An ask or a continuation runs on a reconstructed exchange, not the conversation's history.
+    if answered_round.is_none() && asker.is_none() {
+        bot.context.host_tools = std::mem::take(&mut bot.context.host_tools)
+            .with_conversation_key(chat_conversation.clone());
+    }
     let trail = owner_direct.then(|| ToolTrail::new(transcript.trail.clone()));
     if let Some(trail) = &trail {
         bot.context.host_tools =

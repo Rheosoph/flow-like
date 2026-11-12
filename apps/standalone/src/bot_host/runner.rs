@@ -574,6 +574,7 @@ impl TurnRunner for DeviceRunner {
         if let Some(files) = &job.reply_files {
             tools = tools.with_reply_files(files.clone());
         }
+        tools = tools.with_conversation_key(grant.conversation.id.clone());
         let mut context = context_of(grant, &job, tools);
         let access = Arc::new(PresignedAccess::new(
             reqwest::Client::new(),
