@@ -112,12 +112,12 @@ describe("drafts", () => {
 			location: "desktop" as const,
 			capabilities: [
 				"internet",
-				"skills",
+				"encryption",
 				"command_line",
 			] as IBot["capabilities"],
 		};
 		const moved = setBotDraftLocation(draft, "device");
-		expect(moved.removed).toEqual(["skills"]);
+		expect(moved.removed).toEqual(["encryption"]);
 		expect(moved.draft.capabilities).toEqual(["internet", "command_line"]);
 		expect(setBotDraftCapability(moved.draft, "encryption", true)).toBe(
 			moved.draft,
@@ -128,9 +128,9 @@ describe("drafts", () => {
 		const saved = bot({
 			location: "device",
 			device_id: "device-1",
-			capabilities: ["internet", "skills"] as IBot["capabilities"],
+			capabilities: ["internet", "encryption"] as IBot["capabilities"],
 		});
-		expect(heldUnavailableCapabilities(saved)).toEqual(["skills"]);
+		expect(heldUnavailableCapabilities(saved)).toEqual(["encryption"]);
 		const draft = botDraftFromBot(saved);
 		expect(draft.capabilities).toEqual(["internet"]);
 		expect(

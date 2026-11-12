@@ -399,21 +399,6 @@ impl PlatformToolBridge for HeadlessBridge {
     }
 }
 
-pub(super) fn usable_decision_model<'a>(
-    access: &crate::routes::ai::global_chat::ProfileModelAccess,
-    bit_id: Option<&'a str>,
-    turn_id: &str,
-) -> Option<&'a str> {
-    let bit_id = bit_id?;
-    match access.rejection(Some(bit_id)) {
-        Some(rejection) => {
-            tracing::warn!(%rejection, turn_id, "Bot participation decision unavailable; using normal response handling");
-            None
-        }
-        None => Some(bit_id),
-    }
-}
-
 const LEASE_CHECK_RETRIES: u32 = 2;
 const LEASE_CHECK_BACKOFF: Duration = Duration::from_millis(150);
 
@@ -759,9 +744,12 @@ async fn apply_decision(
     decision: DecisionResult,
 ) -> Result<Verdict, Failure> {
     use flow_like::flow::copilot::decision::Decision;
+    let Some(decision) = settled_decision(decision, &turn.id) else {
+        return Ok(Verdict::Proceed);
+    };
     match decision {
-        Some(Ok(Decision::NoAnswer)) => Ok(Verdict::Done(silent_answer(false))),
-        Some(Ok(Decision::WaitFor(participant))) => {
+        Decision::NoAnswer => Ok(Verdict::Done(silent_answer(false))),
+        Decision::WaitFor(participant) => {
             // In a direct call, keeping quiet already waits for the only other
             // participant. Their next utterance gets its own decision.
             if kind == ConversationKind::Direct {
@@ -776,15 +764,30 @@ async fn apply_decision(
                 ParkOutcome::AlreadyAnswered | ParkOutcome::Unavailable => Ok(Verdict::Proceed),
             }
         }
-        Some(Ok(Decision::Acknowledge)) => Ok(Verdict::Acknowledge),
-        Some(Ok(Decision::AnswerNow)) => Ok(Verdict::Proceed),
+        Decision::Acknowledge => Ok(Verdict::Acknowledge),
+        Decision::AnswerNow => Ok(Verdict::Proceed),
+    }
+}
+
+/// What the decision model said. A call that failed or timed out says nothing, so the turn goes
+/// on as it would without a decision model: only the hosted proxy knows whether it can run the
+/// bot's System One Bit, and an unavailable one must never fail the turn.
+pub(super) fn settled_decision(
+    decision: DecisionResult,
+    turn_id: &str,
+) -> Option<flow_like::flow::copilot::decision::Decision> {
+    match decision {
+        Some(Ok(decision)) => Some(decision),
         Some(Err(error)) => {
-            tracing::warn!(%error, turn_id = %turn.id, "Bot participation decision failed; using normal response handling");
-            Ok(Verdict::Proceed)
+            tracing::warn!(%error, turn_id, "Bot participation decision failed; using normal response handling");
+            None
         }
         None => {
-            tracing::warn!(turn_id = %turn.id, "Bot participation decision timed out; using normal response handling");
-            Ok(Verdict::Proceed)
+            tracing::warn!(
+                turn_id,
+                "Bot participation decision timed out; using normal response handling"
+            );
+            None
         }
     }
 }
@@ -1071,11 +1074,6 @@ async fn attempt_with(
                         .model_policy
                         .get("decision")
                         .and_then(serde_json::Value::as_str)
-                    && let Some(bit_id) = {
-                        let (_, access) =
-                            load_profile(state, owner, row.profile_id.as_deref()).await?;
-                        usable_decision_model(&access, Some(bit_id), &turn.id)
-                    }
                 {
                     let history: Vec<_> = transcript.history.iter().rev().take(12).rev().map(|message| json!({"role":message.role,"text":flow_like::flow::copilot::decision::excerpt(&message.content, 1_000)})).collect();
                     let previous = super::event_decision::previous_result(state, turn).await;
@@ -1186,44 +1184,39 @@ async fn attempt_with(
         && saved_delivery.is_none()
         && !resumed
     {
-        if let Some(rejection) = access.rejection(Some(bit_id)) {
-            tracing::warn!(%rejection, turn_id = %turn.id, "Bot event decision unavailable; processing normally");
-        } else {
-            let classified =
-                super::event_decision::classify(state, turn, bit_id, event, &event_context, None)
-                    .await;
-            let classified = match classified {
-                Ok(choice) => {
-                    Ok(super::event_decision::guard_ignore(&state.db, turn, event, choice).await)
-                }
-                Err(error) => Err(error),
-            };
-            match classified {
-                Ok(Some(EventDecision::Ignore)) => {
-                    return Ok(Answer {
-                        acknowledgement: false,
-                        text: String::new(),
-                        resumed: false,
-                        silent: true,
-                        completed: false,
-                        event_delivery: Some(EventDecision::Ignore),
-                        note: None,
-                        tool_calls: Vec::new(),
-                        files: Vec::new(),
-                        taint: Default::default(),
-                    });
-                }
-                Ok(choice) => {
-                    event_delivery = match choice {
-                        Some(choice) => {
-                            Some(super::event_decision::limit_notify(&state.db, turn, choice).await)
-                        }
-                        None => None,
+        let classified =
+            super::event_decision::classify(state, turn, bit_id, event, &event_context, None).await;
+        let classified = match classified {
+            Ok(choice) => {
+                Ok(super::event_decision::guard_ignore(&state.db, turn, event, choice).await)
+            }
+            Err(error) => Err(error),
+        };
+        match classified {
+            Ok(Some(EventDecision::Ignore)) => {
+                return Ok(Answer {
+                    acknowledgement: false,
+                    text: String::new(),
+                    resumed: false,
+                    silent: true,
+                    completed: false,
+                    event_delivery: Some(EventDecision::Ignore),
+                    note: None,
+                    tool_calls: Vec::new(),
+                    files: Vec::new(),
+                    taint: Default::default(),
+                });
+            }
+            Ok(choice) => {
+                event_delivery = match choice {
+                    Some(choice) => {
+                        Some(super::event_decision::limit_notify(&state.db, turn, choice).await)
                     }
+                    None => None,
                 }
-                Err(error) => {
-                    tracing::warn!(%error, turn_id = %turn.id, "Bot event decision failed; processing normally")
-                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, turn_id = %turn.id, "Bot event decision failed; processing normally")
             }
         }
         let instruction = if decision_event::monitoring(event) {
@@ -1276,8 +1269,7 @@ async fn attempt_with(
                 && answered_round.is_none()
                 && asker.is_none()
                 && !resumed
-                && let Some(bit_id) =
-                    usable_decision_model(&access, bot.model.decision.as_deref(), &turn.id)
+                && let Some(bit_id) = decision_bit.as_deref()
             {
                 use flow_like::flow::copilot::decision::TIMEOUT_SECS;
                 if decides_in_parallel(live_call, kind, addressed, true) {
@@ -1579,7 +1571,7 @@ async fn attempt_with(
     )
     .await;
     if let Some(bot_tools) = &bot_tools
-        && let Some(model) = usable_decision_model(&access, bot.model.decision.as_deref(), &turn.id)
+        && let Some(model) = decision_bit.as_deref()
     {
         bot_tools.set_inference(Arc::new(super::authorization::ServerInference::new(
             state, turn, model,
@@ -1795,9 +1787,7 @@ async fn attempt_with(
                     super::event_decision::limit_notify(&state.db, turn, EventDecision::Notify)
                         .await,
                 );
-                if let Some(bit_id) =
-                    usable_decision_model(&access, decision_bit.as_deref(), &turn.id)
-                {
+                if let Some(bit_id) = decision_bit.as_deref() {
                     match super::event_decision::classify(
                         state,
                         turn,

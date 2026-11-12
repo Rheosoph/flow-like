@@ -75,28 +75,51 @@ impl Scheduler for LocalScheduler {
     }
 
     async fn list(&self) -> Result<Vec<BotTask>> {
-        let bot_id = self.bot_id.clone();
-        self.on_store(move |store| store.tasks(&bot_id)).await
+        let (bot_id, conversation_id) = (self.bot_id.clone(), self.conversation_id.clone());
+        self.on_store(move |store| store.tasks_in_turn(&bot_id, conversation_id.as_deref()))
+            .await
     }
 
     async fn update(&self, task_id: &str, request: UpdateBotTask) -> Result<Option<BotTask>> {
-        let (bot_id, task_id) = (self.bot_id.clone(), task_id.to_string());
+        let (bot_id, task_id, conversation_id) = (
+            self.bot_id.clone(),
+            task_id.to_string(),
+            self.conversation_id.clone(),
+        );
         self.on_store(move |store| {
-            if !store.tasks(&bot_id)?.iter().any(|task| task.id == task_id) {
+            let scope = conversation_id.as_deref();
+            if !store
+                .tasks_in_turn(&bot_id, scope)?
+                .iter()
+                .any(|task| task.id == task_id)
+            {
                 return Ok(None);
             }
-            store.update_task(&bot_id, &task_id, request).map(Some)
+            store
+                .update_task_in_turn(&bot_id, &task_id, request, scope)
+                .map(Some)
         })
         .await
     }
 
     async fn cancel(&self, task_id: &str) -> Result<bool> {
-        let (bot_id, task_id) = (self.bot_id.clone(), task_id.to_string());
+        let (bot_id, task_id, conversation_id) = (
+            self.bot_id.clone(),
+            task_id.to_string(),
+            self.conversation_id.clone(),
+        );
         self.on_store(move |store| {
-            if !store.tasks(&bot_id)?.iter().any(|task| task.id == task_id) {
+            let scope = conversation_id.as_deref();
+            if !store
+                .tasks_in_turn(&bot_id, scope)?
+                .iter()
+                .any(|task| task.id == task_id)
+            {
                 return Ok(false);
             }
-            store.delete_task(&bot_id, &task_id).map(|()| true)
+            store
+                .delete_task_in_turn(&bot_id, &task_id, scope)
+                .map(|()| true)
         })
         .await
     }
@@ -114,6 +137,18 @@ impl AccountScheduler {
             "bots/{}/tasks",
             super::super::native_platform_tools::segment(&self.bot_id)
         )
+    }
+}
+
+impl AccountScheduler {
+    fn turn_path(&self, path: String) -> String {
+        match &self.turn_id {
+            Some(turn_id) => format!(
+                "{path}?turn_id={}",
+                super::super::native_platform_tools::segment(turn_id)
+            ),
+            None => path,
+        }
     }
 }
 
@@ -142,7 +177,7 @@ impl Scheduler for AccountScheduler {
     async fn list(&self) -> Result<Vec<BotTask>> {
         let listed = self
             .api
-            .request(Method::GET, &self.base(), None)
+            .request(Method::GET, &self.turn_path(self.base()), None)
             .await
             .map_err(|error| anyhow!(error))?;
         serde_json::from_value(
@@ -163,8 +198,9 @@ impl Scheduler for AccountScheduler {
             self.base(),
             super::super::native_platform_tools::segment(task_id)
         );
-        let body = serde_json::to_value(&request)
+        let mut body = serde_json::to_value(&request)
             .map_err(|error| anyhow!("The task change could not be sent: {error}"))?;
+        body["turn_id"] = json!(self.turn_id);
         let updated = self
             .api
             .request(Method::PATCH, &path, Some(&body))
@@ -185,7 +221,7 @@ impl Scheduler for AccountScheduler {
             super::super::native_platform_tools::segment(task_id)
         );
         self.api
-            .request(Method::DELETE, &path, None)
+            .request(Method::DELETE, &self.turn_path(path), None)
             .await
             .map(|_| true)
             .map_err(|error| anyhow!(error))
@@ -223,5 +259,68 @@ pub(crate) async fn scheduler_for(
             bot_id: bot_id.to_string(),
             turn_id: turn.turn_id,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    struct Recorder(Mutex<Vec<(Method, String, Value)>>);
+
+    #[async_trait]
+    impl TaskApi for Recorder {
+        async fn request(
+            &self,
+            method: Method,
+            path: &str,
+            body: Option<&Value>,
+        ) -> std::result::Result<Value, String> {
+            self.0
+                .lock()
+                .unwrap()
+                .push((method, path.to_string(), body.cloned().unwrap_or(Value::Null)));
+            let task = json!({
+                "id": "task1", "bot_id": "bot1", "kind": "once", "instruction": "x",
+                "title": "t", "enabled": true, "created_by": "bot",
+                "created_at": "2026-11-08T12:00:00Z"
+            });
+            Ok(json!({ "tasks": [task.clone()], "id": "task1", "bot_id": "bot1", "kind": "once",
+                "instruction": "x", "title": "t", "enabled": true, "created_by": "bot",
+                "created_at": "2026-11-08T12:00:00Z" }))
+        }
+    }
+
+    #[tokio::test]
+    async fn an_account_scheduler_names_its_turn_on_every_task_call() {
+        let recorder = Arc::new(Recorder(Mutex::new(Vec::new())));
+        let scheduler = AccountScheduler {
+            api: recorder.clone(),
+            bot_id: "bot1".into(),
+            turn_id: Some("turn 1".into()),
+        };
+        scheduler.list().await.unwrap();
+        scheduler
+            .update("task1", UpdateBotTask::default())
+            .await
+            .unwrap();
+        scheduler.cancel("task1").await.unwrap();
+        let calls = recorder.0.lock().unwrap();
+        let sent: Vec<(&str, &str)> = calls
+            .iter()
+            .map(|(method, path, _)| (method.as_str(), path.as_str()))
+            .collect();
+        assert_eq!(
+            sent,
+            [
+                ("GET", "bots/bot1/tasks?turn_id=turn%201"),
+                ("GET", "bots/bot1/tasks?turn_id=turn%201"),
+                ("PATCH", "bots/bot1/tasks/task1"),
+                ("GET", "bots/bot1/tasks?turn_id=turn%201"),
+                ("DELETE", "bots/bot1/tasks/task1?turn_id=turn%201"),
+            ]
+        );
+        assert_eq!(calls[2].2["turn_id"], "turn 1");
     }
 }

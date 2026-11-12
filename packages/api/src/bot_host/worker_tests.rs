@@ -5,7 +5,7 @@ use super::{
     worker::{
         AbortOnDrop, Answer, CODE_TIMEOUT, Failure, answer_request, commit_reply_in,
         executor_token, holds_lease_or_retry, memory_written, refuse_tool, reply_request, retries,
-        room_of, run_while_notifying, usable_decision_model,
+        room_of, run_while_notifying, settled_decision,
     },
 };
 use crate::{
@@ -1002,18 +1002,13 @@ async fn several_reactions_in_a_row_make_one_turn_that_names_each() {
 
 #[test]
 fn an_unavailable_decision_model_is_skipped_not_failed() {
-    use crate::routes::ai::global_chat::ProfileModelAccess;
-    let none = ProfileModelAccess::default();
-    assert_eq!(usable_decision_model(&none, Some("bit"), "t1"), None);
-    assert_eq!(usable_decision_model(&none, None, "t1"), None);
-    let covered = ProfileModelAccess {
-        profile_models: 1,
-        allowed_models: 1,
-        ..Default::default()
-    };
+    use flow_like::flow::copilot::decision::Decision;
+    let refused = crate::error::ApiError::internal("The decision model request failed");
+    assert_eq!(settled_decision(Some(Err(refused)), "t1"), None);
+    assert_eq!(settled_decision(None, "t1"), None);
     assert_eq!(
-        usable_decision_model(&covered, Some("bit"), "t1"),
-        Some("bit")
+        settled_decision(Some(Ok(Decision::AnswerNow)), "t1"),
+        Some(Decision::AnswerNow)
     );
 }
 

@@ -1,11 +1,20 @@
+use super::board_cleanup::{
+    BoardCleanupSteps, clean_up_board, delete_page_folder, delete_page_rows, events_of_board,
+};
 use crate::{
-    audit_branch, ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    audit_branch, ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::app::events::delete_event::remove_event,
+    state::{AppState, BoardMutationGuard},
 };
 use axum::{
     Extension, Json,
     extract::{Path, State},
 };
+use flow_like::{app::App, state::FlowLikeState};
+use flow_like_types::anyhow;
 
 #[utoipa::path(
     delete,
@@ -20,6 +29,7 @@ use axum::{
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
         (status = 404, description = "Board not found"),
+        (status = 500, description = "A clean-up step failed (code BOARD_CLEANUP_FAILED). The board is still in place and the message names the step and id; retrying the identical request resumes the clean-up."),
         (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
     )
 )]
@@ -41,7 +51,7 @@ pub async fn delete_board(
             crate::credentials::CredentialsAccess::EditApp,
         )
         .await?;
-    app.delete_board(&board_id).await?;
+    remove_board_and_dependants(&state, &mut app, &app_id, &board_id, &mutation_guard).await?;
     // A re-created board id must not inherit the deleted board's prerun manifests.
     let manifest_prefix = format!("{app_id}:{board_id}:");
     let _ = state
@@ -58,4 +68,56 @@ pub async fn delete_board(
 
     audit_branch!(state, user, app_id, "board.delete", "Board", board_id);
     Ok(Json(()))
+}
+
+struct RouteCleanup<'a> {
+    state: &'a AppState,
+    app: &'a mut App,
+    app_id: &'a str,
+    board_id: &'a str,
+}
+
+impl BoardCleanupSteps for RouteCleanup<'_> {
+    async fn remove_event(&mut self, event_id: &str) -> Result<(), ApiError> {
+        remove_event(self.state, self.app, event_id).await
+    }
+
+    async fn remove_pages(&mut self) -> Result<(), ApiError> {
+        let flow_state = self
+            .app
+            .app_state
+            .clone()
+            .ok_or_else(|| ApiError::internal_error(anyhow!("App state not found")))?;
+        let store = FlowLikeState::project_meta_store(&flow_state)
+            .await?
+            .as_generic();
+        delete_page_folder(store.as_ref(), self.app_id, self.board_id).await?;
+        delete_page_rows(
+            &self.state.db,
+            self.state.db_dialect,
+            self.app_id,
+            self.board_id,
+        )
+        .await
+    }
+}
+
+async fn remove_board_and_dependants(
+    state: &AppState,
+    app: &mut App,
+    app_id: &str,
+    board_id: &str,
+    mutation_guard: &BoardMutationGuard,
+) -> Result<(), ApiError> {
+    let event_ids = events_of_board(&state.db, app_id, board_id).await?;
+    let mut steps = RouteCleanup {
+        state,
+        app,
+        app_id,
+        board_id,
+    };
+    clean_up_board(&mut steps, board_id, &event_ids).await?;
+    mutation_guard.ensure_held()?;
+    app.delete_board(board_id).await?;
+    Ok(())
 }

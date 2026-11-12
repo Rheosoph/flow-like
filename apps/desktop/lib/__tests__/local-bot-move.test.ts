@@ -98,6 +98,7 @@ beforeEach(() => {
 		local_bots_get: ({ botId }) => localBot(String(botId), "Ada"),
 		local_bots_check_move: () => REPORT,
 		local_bots_move: () => MOVED,
+		local_inbox_conversations: () => [],
 	};
 	mocks.invoke.mockImplementation(
 		async (command: string, args: Record<string, unknown> = {}) => {
@@ -252,6 +253,68 @@ describe("moving a bot", () => {
 
 		expect(moved.warnings).toBe(3);
 		expect(moved.bot).toEqual(MOVED.bot);
+	});
+
+	describe("moving the pins and stars of a bot's chats", () => {
+		function markedChat() {
+			commands.local_inbox_conversations = () => [
+				{
+					id: "c-direct",
+					members: [{ principal_id: "bot_a" }],
+					pinned_at: "2026-11-01T09:00:00Z",
+				},
+				{ id: "c-other", members: [{ principal_id: "bot_z" }], pinned_at: "x" },
+			];
+			commands.local_inbox_pins = ({ conversationId }) =>
+				conversationId === "c-direct"
+					? [{ message_id: "m3" }, { message_id: "m1" }]
+					: [];
+			commands.local_inbox_stars = () => ({
+				stars: [{ message_id: "m2" }, { message_id: "m1" }],
+				next_before: null,
+			});
+		}
+
+		test("re-key to the account's conversation, oldest first, the chat pin last", async () => {
+			markedChat();
+			const moved = await new LocalBotMover(backend()).move("bot_a");
+
+			expect(moved.warnings).toBe(0);
+			const base = "inbox/conversations/chat_existing";
+			expect(hubWrites().map(([, path, body]) => [path, body])).toEqual([
+				[`${base}/pins/m1`, {}],
+				[`${base}/pins/m3`, {}],
+				[`${base}/stars/m1`, {}],
+				[`${base}/stars/m2`, {}],
+				[`${base}/pin`, { pinned: true }],
+			]);
+		});
+
+		test("a refused write is counted and tried again by the next move", async () => {
+			markedChat();
+			mocks.put.mockRejectedValueOnce(new Error("offline"));
+			vi.spyOn(console, "warn").mockImplementation(() => {});
+			const mover = new LocalBotMover(backend());
+
+			expect((await mover.move("bot_a")).warnings).toBe(1);
+			commands.local_inbox_conversations = () => [];
+			mocks.put.mockClear();
+			expect((await mover.move("bot_a")).warnings).toBe(0);
+			expect(mocks.put.mock.calls.map(([, path]) => path)).toEqual([
+				"inbox/conversations/chat_existing/pins/m1",
+			]);
+		});
+
+		test("an unreadable local store stops the move before anything moves", async () => {
+			reject("local_inbox_conversations", "store locked");
+			await expect(new LocalBotMover(backend()).move("bot_a")).rejects.toThrow(
+				"Could not read the pins and stars of bot bot_a",
+			);
+			expect(mocks.invoke).not.toHaveBeenCalledWith(
+				"local_bots_move",
+				expect.anything(),
+			);
+		});
 	});
 
 	test("needs an account", async () => {

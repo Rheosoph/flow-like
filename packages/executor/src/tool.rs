@@ -16,16 +16,20 @@ use flow_like::credentials::{SharedCredentials, StoreType};
 use flow_like::flow::execution::ExecutionEnvironment;
 use flow_like::flow_like_model_provider::provider::ModelProviderConfiguration;
 use flow_like::models::llm::ModelUsageContext;
+#[cfg(feature = "bot-tools-heavy")]
 use flow_like::profile::Profile;
 use flow_like::state::{FlowLikeConfig, FlowLikeState};
 use flow_like::utils::http::HTTPClient;
+#[cfg(feature = "bot-tools-heavy")]
 use flow_like_bot_tools::image::{
     hosted_access, CatalogImages, ImageBackend, ImageBudget, ImageUnavailable,
 };
 use flow_like_bot_tools::{run, MemorySessions};
+#[cfg(feature = "bot-tools-heavy")]
+use flow_like_bot_tools_host::ImageSource;
 use flow_like_bot_tools_host::{
-    job_hash, outcome_output, AppAccess, HostEnv, ImageSource, JobModels, LinkedFiles, ModelSource,
-    StateModels, ToolJob, ToolJobEnvelope, ToolReply, VisionRouted,
+    job_hash, outcome_output, AppAccess, HostEnv, JobModels, LinkedFiles, ModelSource, StateModels,
+    ToolJob, ToolJobEnvelope, ToolReply, VisionRouted,
 };
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::lancedb::Connection;
@@ -212,6 +216,7 @@ fn models(
 
 /// The image model of an `image_generate` job: the Bit the API opened for this job, called from
 /// here through the server's guarded client.
+#[cfg(feature = "bot-tools-heavy")]
 struct JobImages {
     bit: serde_json::Value,
     left: u32,
@@ -220,6 +225,7 @@ struct JobImages {
     usage: ModelUsageContext,
 }
 
+#[cfg(feature = "bot-tools-heavy")]
 fn job_images(
     job: &ToolJob,
     claims: &ExecutorClaims,
@@ -240,6 +246,7 @@ fn job_images(
     })
 }
 
+#[cfg(feature = "bot-tools-heavy")]
 #[async_trait]
 impl ImageSource for JobImages {
     async fn images(&self) -> Result<Arc<dyn ImageBackend>, ImageUnavailable> {
@@ -276,6 +283,7 @@ pub(crate) async fn run_job(
             .map_err(|error| forbidden(error.to_string()))?,
     )
     .await?;
+    #[cfg(feature = "bot-tools-heavy")]
     let images = job_images(&job, claims, &envelope.executor_jwt, &state);
     let skills = if matches!(
         job.tool.as_str(),
@@ -314,6 +322,7 @@ pub(crate) async fn run_job(
         .with_secrets(Arc::new(job.secrets.clone()))
         .with_connectors(flow_like_bot_tools_host::connector_source(&job.connectors))
         .with_conversation_files(Arc::new(LinkedFiles::new(job.files.clone())));
+    #[cfg(feature = "bot-tools-heavy")]
     if let Some(images) = images {
         env = env.with_images(Arc::new(images));
     }

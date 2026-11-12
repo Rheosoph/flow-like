@@ -262,7 +262,7 @@ import {
 	isReturnedAppInventory,
 	sealedResearchRefusal,
 } from "./local-app-discovery";
-import { assistantSelection } from "./model-selection";
+import { assistantSelection, withAssistantModel } from "./model-selection";
 import { readFlowScriptSource } from "./read-flowscript-source";
 import { researchAgentPrompt } from "./research-brief";
 import {
@@ -8556,6 +8556,12 @@ Completion contract: build complete helper logic first and add the Event entry l
 			if (timeoutId !== undefined) clearTimeout(timeoutId);
 
 			response = { ...response, requestId: request.requestId };
+			if (isCancellableNestedCopilotTool(request.toolName)) {
+				response = {
+					...response,
+					result: withAssistantModel(response.result, scope.turnSelection()),
+				};
+			}
 			if (
 				request.toolName === "list_apps" &&
 				!requestExecutionFenceRef.current.isInvalidated(executionLease) &&

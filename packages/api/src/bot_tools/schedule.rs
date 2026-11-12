@@ -38,6 +38,14 @@ impl ApiScheduler {
     }
 }
 
+impl ApiScheduler {
+    async fn scope(&self) -> Result<Option<tasks::TaskOrigin>> {
+        tasks::scope_of_turn(&self.state.db, &self.owner_id, &self.bot_id, &self.turn_id)
+            .await
+            .map_err(|error| anyhow!("{error}"))
+    }
+}
+
 pub(crate) fn to_task(row: bot_task::Model, conversation: Option<TaskConversation>) -> BotTask {
     BotTask {
         kind: TaskKind::parse(&row.kind).unwrap_or(TaskKind::Once),
@@ -113,31 +121,36 @@ impl Scheduler for ApiScheduler {
     }
 
     async fn list(&self) -> Result<Vec<BotTask>> {
-        let rows = tasks::list_in(&self.state.db, &self.owner_id, &self.bot_id)
-            .await
-            .map_err(|error| anyhow!("{error}"))?;
+        let scope = self.scope().await?;
+        let rows =
+            tasks::list_scoped_in(&self.state.db, &self.owner_id, &self.bot_id, scope.as_ref())
+                .await
+                .map_err(|error| anyhow!("{error}"))?;
         tasks_of(&self.state.db, rows).await
     }
 
     async fn update(&self, task_id: &str, request: UpdateBotTask) -> Result<Option<BotTask>> {
+        let scope = self.scope().await?;
         let result = self
             .state
             .transaction(|txn| {
-                let (owner, bot, task, request) = (
+                let (owner, bot, task, request, scope) = (
                     self.owner_id.clone(),
                     self.bot_id.clone(),
                     task_id.to_string(),
                     request.clone(),
+                    scope.clone(),
                 );
                 Box::pin(async move {
                     lock_bot(txn, &bot).await?;
-                    tasks::update_in(
+                    tasks::update_scoped_in(
                         txn,
                         &owner,
                         &bot,
                         &task,
                         request,
                         chrono::Utc::now().fixed_offset(),
+                        scope.as_ref(),
                     )
                     .await
                 })
@@ -154,7 +167,16 @@ impl Scheduler for ApiScheduler {
     }
 
     async fn cancel(&self, task_id: &str) -> Result<bool> {
-        match tasks::delete_in(&self.state.db, &self.owner_id, &self.bot_id, task_id).await {
+        let scope = self.scope().await?;
+        let deleted = tasks::delete_scoped_in(
+            &self.state.db,
+            &self.owner_id,
+            &self.bot_id,
+            task_id,
+            scope.as_ref(),
+        )
+        .await;
+        match deleted {
             Ok(()) => {
                 task_schedules::remove(&self.state, task_id).await;
                 Ok(true)

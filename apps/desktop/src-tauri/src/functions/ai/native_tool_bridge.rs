@@ -421,6 +421,10 @@ pub(crate) fn auto_mode_announcement(id: &str, webview: &str) -> Option<Value> {
     })
 }
 
+pub(crate) fn run_model_announcement(run_id: &str, model_id: &str) -> Value {
+    serde_json::json!({ "type":"native_run_model", "run_id":run_id, "model_id":model_id })
+}
+
 #[derive(serde::Serialize)]
 pub struct NativeAutoModeUpdate {
     applied: bool,
@@ -844,6 +848,14 @@ mod tests {
         first.await.unwrap();
         second.await.unwrap();
         assert_eq!(execution_profile_id(), None);
+    }
+
+    #[test]
+    fn the_run_model_frame_names_the_run_and_the_bit() {
+        assert_eq!(
+            run_model_announcement("run-1", "bit-1"),
+            serde_json::json!({ "type":"native_run_model", "run_id":"run-1", "model_id":"bit-1" })
+        );
     }
 
     #[test]

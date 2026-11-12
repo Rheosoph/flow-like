@@ -2803,11 +2803,11 @@ impl ServerRegistry {
                     update_model.wasm_path = Set(latest.wasm_path.clone());
                     update_model.wasm_hash = Set(latest.wasm_hash.clone());
                     update_model.wasm_size = Set(latest.wasm_size);
-                    update_model.nodes = Set(latest.nodes.clone());
-                    if let Some(permissions) =
-                        permissions_with_node_capabilities(&pkg.permissions, &latest.nodes)
-                    {
-                        update_model.permissions = Set(permissions);
+                    if let Some((nodes, permissions)) = approved_node_catalog(&pkg.permissions, latest) {
+                        update_model.nodes = Set(nodes);
+                        if let Some(permissions) = permissions {
+                            update_model.permissions = Set(permissions);
+                        }
                     }
                     update_model.widgets = Set(latest.widgets.clone());
                     update_model.widget_bundle_hash = Set(latest.widget_bundle_hash.clone());
@@ -3090,6 +3090,23 @@ pub(crate) fn permissions_with_node_capabilities(
     serde_json::to_value(authored.with_node_capabilities(&nodes)).ok()
 }
 
+/// The node list and permissions an approval may copy onto the package row.
+/// Only a version whose compile succeeded has real nodes; any other version
+/// carries the empty placeholder from publish, so the package keeps its
+/// previous catalog until the compile callback delivers the new one.
+pub(crate) fn approved_node_catalog(
+    stored_permissions: &serde_json::Value,
+    version: &wasm_package_version::Model,
+) -> Option<(serde_json::Value, Option<serde_json::Value>)> {
+    if version.compilation_status != WasmCompilationStatus::Compiled {
+        return None;
+    }
+    Some((
+        version.nodes.clone(),
+        permissions_with_node_capabilities(stored_permissions, &version.nodes),
+    ))
+}
+
 /// Derive the listing capability tags from a stored `permissions` blob.
 ///
 /// The publish flow writes the authored manifest to the permissions column and
@@ -3316,6 +3333,36 @@ impl PackageWidgetSource for ServerRegistry {
 
 #[cfg(test)]
 mod tests {
+    fn version_with(status: &str, nodes: serde_json::Value) -> wasm_package_version::Model {
+        serde_json::from_value(serde_json::json!({
+            "id": "version", "package_id": "com.example.typst", "version": "0.4.0",
+            "wasm_path": "node.wasm", "wasm_hash": "hash", "wasm_size": 8,
+            "yanked": false, "published_at": "2026-01-01T00:00:00Z", "duplicate_flagged": false,
+            "nodes": nodes, "widgets": [], "status": "PendingReview", "compilation_status": status,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn approving_an_uncompiled_version_never_copies_its_empty_node_list() {
+        let stored = serde_json::json!({});
+        for status in ["Pending", "LocalOnly"] {
+            let version = version_with(status, serde_json::json!([]));
+            assert!(
+                super::approved_node_catalog(&stored, &version).is_none(),
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn approving_a_compiled_version_copies_its_nodes() {
+        let nodes = serde_json::json!([]);
+        let version = version_with("Compiled", nodes.clone());
+        let (copied, _) = super::approved_node_catalog(&serde_json::json!({}), &version).unwrap();
+        assert_eq!(copied, nodes);
+    }
+
     #[test]
     fn a_version_without_skills_stores_null_and_one_with_skills_keeps_them() {
         use flow_like_wasm_schema::manifest::PackageSkillEntry;

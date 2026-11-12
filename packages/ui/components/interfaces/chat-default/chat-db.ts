@@ -227,7 +227,11 @@ export interface IChatRunContext {
 	provider?: string;
 	/** Raw picker model id. */
 	model_id?: string;
-	/** The prefixed id actually handed to the backend. */
+	/**
+	 * The Bit the host reported running the turn on (the bot's own model, not the picker's), set at
+	 * the start of the run. Without a report (agent CLIs, older hosts) it is the id the picker handed
+	 * the backend.
+	 */
 	effective_model_id?: string;
 	reasoning_effort?: string;
 	auto_mode?: boolean;

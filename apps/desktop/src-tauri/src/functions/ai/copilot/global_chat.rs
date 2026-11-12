@@ -867,6 +867,12 @@ pub async fn global_chat_native(
         ),
         _ => None,
     };
+    if let (Some(model_id), Some(id)) = (bot_model.as_deref(), run_id.as_deref()) {
+        let _ = channel.send(
+            crate::functions::ai::native_tool_bridge::run_model_announcement(id, model_id)
+                .to_string(),
+        );
+    }
     // Its assistants run on the bot's sub-task model when this desktop can run it, else on that
     // model.
     let assistant_model = match (&bot, &profile) {

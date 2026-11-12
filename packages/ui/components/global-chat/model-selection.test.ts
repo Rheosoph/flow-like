@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import type { GlobalChatAgentSelection } from "../../state/global-chat/global-chat-store";
 import {
 	assistantSelection,
 	resolveModelSelection,
 	selectedModelLabel,
+	withAssistantModel,
 } from "./model-selection";
 
 const fallbackModels = [{ id: "default" }];
@@ -93,5 +95,33 @@ describe("selectedModelLabel", () => {
 		expect(selectedModelLabel(models, "")).toBeNull();
 		expect(selectedModelLabel(models, "bit-retired")).toBeNull();
 		expect(selectedModelLabel([], "bit-sonnet")).toBeNull();
+	});
+});
+
+describe("withAssistantModel", () => {
+	const bits: GlobalChatAgentSelection = {
+		provider: "bits",
+		selectedModelId: "bit-1",
+		reasoningEffort: "",
+	};
+
+	test("an error result names the model the assistant ran on", () => {
+		expect(
+			withAssistantModel({ status: "error", message: "boom" }, bits),
+		).toEqual({ status: "error", message: "boom", model_id: "bit-1" });
+		expect(
+			withAssistantModel(
+				{ status: "error" },
+				{ ...bits, provider: "codex", selectedModelId: "gpt" },
+			),
+		).toEqual({ status: "error", model_id: "codex:gpt" });
+	});
+
+	test("successful and foreign results stay unchanged", () => {
+		const ok = { status: "ok" };
+		expect(withAssistantModel(ok, bits)).toBe(ok);
+		expect(withAssistantModel(undefined, bits)).toBeUndefined();
+		const named = { status: "error", model_id: "kept" };
+		expect(withAssistantModel(named, bits)).toBe(named);
 	});
 });

@@ -17,7 +17,7 @@ use crate::{
 };
 use axum::{
     Extension, Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
 };
 use chrono::{DateTime, FixedOffset, Utc};
@@ -191,6 +191,44 @@ pub(crate) async fn origin_of_turn<C: ConnectionTrait>(
     bot_id: &str,
     turn_id: &str,
 ) -> Result<Option<TaskOrigin>, ApiError> {
+    let Some((origin, conversation)) = located_origin(db, owner_id, bot_id, turn_id).await? else {
+        return Ok(None);
+    };
+    if ConversationEncryption::parse(&conversation.encryption)
+        != Some(ConversationEncryption::Plain)
+    {
+        return Err(ApiError::coded(
+            StatusCode::CONFLICT,
+            TASK_CONVERSATION_ENCRYPTED,
+            format!(
+                "Conversation '{}' is end-to-end encrypted, so a task scheduled there could never fire: the server can't post into it",
+                conversation.id
+            ),
+        ));
+    }
+    Ok(Some(origin))
+}
+
+/// The tasks a bot's tool may see and change in `turn_id`: those of the turn's group or chat, as
+/// [`origin_of_turn`] finds it, but without refusing an encrypted conversation. `None` is the
+/// owner's own chat, where every task of the bot is in reach.
+pub(crate) async fn scope_of_turn<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    bot_id: &str,
+    turn_id: &str,
+) -> Result<Option<TaskOrigin>, ApiError> {
+    Ok(located_origin(db, owner_id, bot_id, turn_id)
+        .await?
+        .map(|(origin, _)| origin))
+}
+
+async fn located_origin<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    bot_id: &str,
+    turn_id: &str,
+) -> Result<Option<(TaskOrigin, conversation::Model)>, ApiError> {
     let Some(turn) = bot_turn::Entity::find_by_id(turn_id)
         .filter(bot_turn::Column::BotId.eq(bot_id))
         .filter(bot_turn::Column::OwnerId.eq(owner_id))
@@ -213,21 +251,11 @@ pub(crate) async fn origin_of_turn<C: ConnectionTrait>(
     if bot::Entity::find_by_id(&requester).one(db).await?.is_some() {
         return Ok(None);
     }
-    if ConversationEncryption::parse(&conversation.encryption) != Some(ConversationEncryption::Plain)
-    {
-        return Err(ApiError::coded(
-            StatusCode::CONFLICT,
-            TASK_CONVERSATION_ENCRYPTED,
-            format!(
-                "Conversation '{}' is end-to-end encrypted, so a task scheduled there could never fire: the server can't post into it",
-                conversation.id
-            ),
-        ));
-    }
-    Ok(Some(TaskOrigin {
-        conversation_id: conversation.id,
+    let origin = TaskOrigin {
+        conversation_id: conversation.id.clone(),
         requested_by: requester,
-    }))
+    };
+    Ok(Some((origin, conversation)))
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -270,6 +298,37 @@ pub struct UpdateBotTaskRequest {
     pub title: Option<String>,
     /// Pausing keeps the task; resuming computes its next run from now.
     pub enabled: Option<bool>,
+    /// The bot's turn that asks for the change, sent by the device running that turn. The change
+    /// then reaches only the tasks of that turn's group or chat. A bot's own token always uses its
+    /// turn.
+    #[serde(default)]
+    pub turn_id: Option<String>,
+}
+
+/// The bot's turn a listing or deletion is made for; see [`UpdateBotTaskRequest::turn_id`].
+#[derive(Debug, Default, Deserialize, ToSchema, utoipa::IntoParams)]
+pub struct TaskTurnQuery {
+    #[serde(default)]
+    pub turn_id: Option<String>,
+}
+
+/// What a call may reach: a bot's token is held to its own turn, the owner's session to the turn
+/// it names, and a call without a turn reaches every task of the bot.
+async fn scope_of_call<C: ConnectionTrait>(
+    db: &C,
+    user: &AppUser,
+    owner_id: &str,
+    bot_id: &str,
+    named_turn: Option<&str>,
+) -> Result<Option<TaskOrigin>, ApiError> {
+    let turn_id = match user {
+        AppUser::Bot(bot) => Some(bot.turn_id.as_str()),
+        _ => named_turn,
+    };
+    match turn_id {
+        Some(turn_id) => scope_of_turn(db, owner_id, bot_id, turn_id).await,
+        None => Ok(None),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -309,9 +368,22 @@ pub(crate) async fn list_in<C: ConnectionTrait>(
     owner_id: &str,
     bot_id: &str,
 ) -> Result<Vec<bot_task::Model>, ApiError> {
+    list_scoped_in(db, owner_id, bot_id, None).await
+}
+
+/// The bot's tasks, or with a `scope` only those that fire in the scope's conversation.
+pub(crate) async fn list_scoped_in<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    bot_id: &str,
+    scope: Option<&TaskOrigin>,
+) -> Result<Vec<bot_task::Model>, ApiError> {
     owned_bot(db, owner_id, bot_id).await?;
-    Ok(bot_task::Entity::find()
-        .filter(bot_task::Column::BotId.eq(bot_id))
+    let mut query = bot_task::Entity::find().filter(bot_task::Column::BotId.eq(bot_id));
+    if let Some(scope) = scope {
+        query = query.filter(bot_task::Column::ConversationId.eq(scope.conversation_id.as_str()));
+    }
+    Ok(query
         .order_by_asc(bot_task::Column::NextRunAt)
         .order_by_asc(bot_task::Column::CreatedAt)
         .order_by_asc(bot_task::Column::Id)
@@ -325,12 +397,35 @@ async fn owned_task<C: ConnectionTrait>(
     bot_id: &str,
     task_id: &str,
 ) -> Result<bot_task::Model, ApiError> {
+    owned_task_scoped(db, owner_id, bot_id, task_id, None).await
+}
+
+/// With a `scope`, a task outside the scope's conversation, or one another member asked for, is
+/// not found, exactly like a task that does not exist. The bot's owner may change any task of the
+/// conversation.
+async fn owned_task_scoped<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    bot_id: &str,
+    task_id: &str,
+    scope: Option<&TaskOrigin>,
+) -> Result<bot_task::Model, ApiError> {
     owned_bot(db, owner_id, bot_id).await?;
     bot_task::Entity::find_by_id(task_id)
         .filter(bot_task::Column::BotId.eq(bot_id))
         .one(db)
         .await?
+        .filter(|row| within_scope(row, owner_id, scope))
         .ok_or_else(|| ApiError::not_found(format!("Task '{task_id}' not found")))
+}
+
+fn within_scope(row: &bot_task::Model, owner_id: &str, scope: Option<&TaskOrigin>) -> bool {
+    let Some(scope) = scope else {
+        return true;
+    };
+    row.conversation_id.as_deref() == Some(scope.conversation_id.as_str())
+        && (scope.requested_by == owner_id
+            || row.requested_by.as_deref() == Some(scope.requested_by.as_str()))
 }
 
 /// Inserts the task once the bot is the caller's, holds the capability and has room, and the
@@ -416,7 +511,19 @@ pub(crate) async fn update_in<C: ConnectionTrait>(
     request: UpdateBotTask,
     now: DateTime<FixedOffset>,
 ) -> Result<bot_task::Model, ApiError> {
-    let row = owned_task(db, owner_id, bot_id, task_id).await?;
+    update_scoped_in(db, owner_id, bot_id, task_id, request, now, None).await
+}
+
+pub(crate) async fn update_scoped_in<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    bot_id: &str,
+    task_id: &str,
+    request: UpdateBotTask,
+    now: DateTime<FixedOffset>,
+    scope: Option<&TaskOrigin>,
+) -> Result<bot_task::Model, ApiError> {
+    let row = owned_task_scoped(db, owner_id, bot_id, task_id, scope).await?;
     let kind = TaskKind::parse(&row.kind).unwrap_or(TaskKind::Once);
     let moves = request.at.is_some() || request.cron.is_some() || request.tz.is_some();
     let resumes = request.enabled == Some(true) && !row.enabled;
@@ -467,7 +574,17 @@ pub(crate) async fn delete_in<C: ConnectionTrait>(
     bot_id: &str,
     task_id: &str,
 ) -> Result<(), ApiError> {
-    owned_task(db, owner_id, bot_id, task_id).await?;
+    delete_scoped_in(db, owner_id, bot_id, task_id, None).await
+}
+
+pub(crate) async fn delete_scoped_in<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    bot_id: &str,
+    task_id: &str,
+    scope: Option<&TaskOrigin>,
+) -> Result<(), ApiError> {
+    owned_task_scoped(db, owner_id, bot_id, task_id, scope).await?;
     bot_task::Entity::delete_many()
         .filter(bot_task::Column::Id.eq(task_id))
         .filter(bot_task::Column::BotId.eq(bot_id))
@@ -485,9 +602,12 @@ fn kind_of(request: &CreateBotTaskRequest) -> Result<TaskKind, ApiError> {
     get,
     path = "/bots/{bot_id}/tasks",
     tag = "Bots",
-    params(("bot_id" = String, Path, description = "Your bot's id")),
+    params(
+        ("bot_id" = String, Path, description = "Your bot's id"),
+        TaskTurnQuery
+    ),
     responses(
-        (status = 200, description = "The bot's scheduled tasks, soonest first.", body = BotTaskList),
+        (status = 200, description = "The bot's scheduled tasks, soonest first. With a bot's own token, or a `turn_id` of a turn in a group or someone else's chat, only the tasks of that conversation.", body = BotTaskList),
         (status = 401, description = "Not signed in"),
         (status = 404, description = "You have no bot with this id")
     ),
@@ -498,9 +618,11 @@ pub async fn list_bot_tasks(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(bot_id): Path<String>,
+    Query(turn): Query<TaskTurnQuery>,
 ) -> Result<Json<BotTaskList>, ApiError> {
     let sub = crate::bot_caller::acting_owner_for(&state.db, &user, &bot_id).await?;
-    let rows = list_in(&state.db, &sub, &bot_id).await?;
+    let scope = scope_of_call(&state.db, &user, &sub, &bot_id, turn.turn_id.as_deref()).await?;
+    let rows = list_scoped_in(&state.db, &sub, &bot_id, scope.as_ref()).await?;
     let tasks = infos_of(&state.db, rows).await?;
     Ok(Json(BotTaskList { tasks }))
 }
@@ -591,6 +713,7 @@ pub async fn update_bot_task(
     Json(body): Json<UpdateBotTaskRequest>,
 ) -> Result<Json<BotTaskInfo>, ApiError> {
     let sub = crate::bot_caller::acting_owner_for(&state.db, &user, &bot_id).await?;
+    let scope = scope_of_call(&state.db, &user, &sub, &bot_id, body.turn_id.as_deref()).await?;
     let request = UpdateBotTask {
         at: body.at,
         cron: body.cron,
@@ -602,21 +725,23 @@ pub async fn update_bot_task(
     };
     let row = state
         .transaction(|txn| {
-            let (sub, bot_id, task_id, request) = (
+            let (sub, bot_id, task_id, request, scope) = (
                 sub.clone(),
                 bot_id.clone(),
                 task_id.clone(),
                 request.clone(),
+                scope.clone(),
             );
             Box::pin(async move {
                 lock_bot(txn, &bot_id).await?;
-                update_in(
+                update_scoped_in(
                     txn,
                     &sub,
                     &bot_id,
                     &task_id,
                     request,
                     Utc::now().fixed_offset(),
+                    scope.as_ref(),
                 )
                 .await
             })
@@ -632,7 +757,8 @@ pub async fn update_bot_task(
     tag = "Bots",
     params(
         ("bot_id" = String, Path, description = "Your bot's id"),
-        ("task_id" = String, Path, description = "The task's id")
+        ("task_id" = String, Path, description = "The task's id"),
+        TaskTurnQuery
     ),
     responses(
         (status = 204, description = "The task is gone and never fires"),
@@ -646,9 +772,11 @@ pub async fn delete_bot_task(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((bot_id, task_id)): Path<(String, String)>,
+    Query(turn): Query<TaskTurnQuery>,
 ) -> Result<StatusCode, ApiError> {
     let sub = crate::bot_caller::acting_owner_for(&state.db, &user, &bot_id).await?;
-    delete_in(&state.db, &sub, &bot_id, &task_id).await?;
+    let scope = scope_of_call(&state.db, &user, &sub, &bot_id, turn.turn_id.as_deref()).await?;
+    delete_scoped_in(&state.db, &sub, &bot_id, &task_id, scope.as_ref()).await?;
     task_schedules::remove(&state, &task_id).await;
     Ok(StatusCode::NO_CONTENT)
 }

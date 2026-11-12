@@ -571,6 +571,7 @@ impl Fixture {
             &self.newest(&conversation.id),
             far_past(),
             false,
+            false,
         )
     }
 
@@ -593,6 +594,7 @@ impl Fixture {
             &self.newest(&conversation.id),
             far_past(),
             true,
+            false,
         )
     }
 
@@ -859,7 +861,10 @@ fn topics_tombstones_edits_and_old_messages_are_no_trigger() {
     f.say(&chat.id, "m3", "late");
     let entries = f.newest(&chat.id);
     let tomorrow = (Utc::now() + Age::days(1)).fixed_offset();
-    assert_eq!(waiting(chat.kind, &bot.id, &entries, tomorrow, false), None);
+    assert_eq!(
+        waiting(chat.kind, &bot.id, &entries, tomorrow, false, false),
+        None
+    );
     assert_eq!(chat.kind, ConversationKind::Direct);
 }
 
@@ -2042,6 +2047,7 @@ mod interactive {
             &f.newest(&conversation.id),
             far_past(),
             Some(hold),
+            false,
             false,
         )
     }

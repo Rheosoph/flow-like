@@ -7,8 +7,8 @@ use crate::{
     routes::{
         bots::tasks::{
             BotTaskConversation, BotTaskInfo, CreateBotTaskRequest, TASK_CONVERSATION_ENCRYPTED,
-            TaskOrigin, UpdateBotTaskRequest, create_in, delete_in, infos_of, list_in,
-            origin_of_turn, update_in,
+            TaskOrigin, UpdateBotTaskRequest, create_in, delete_in, delete_scoped_in, infos_of,
+            list_in, list_scoped_in, origin_of_turn, scope_of_turn, update_in, update_scoped_in,
         },
         inbox::{
             fixture::{bot_principal, group, running_turn, user},
@@ -764,5 +764,143 @@ async fn an_encrypted_group_refuses_a_task_that_could_never_fire() {
         &error,
         axum::http::StatusCode::CONFLICT,
         TASK_CONVERSATION_ENCRYPTED,
+    );
+}
+
+async fn ask_in_team(db: &DatabaseConnection, turn: &str, requester: &str) -> TaskOrigin {
+    asked_in(db, turn, "team", requester).await;
+    let origin = origin_of_turn(db, OWNER, BOT, turn)
+        .await
+        .unwrap()
+        .expect("a turn in a group has an origin");
+    create_in(
+        db,
+        OWNER,
+        BOT,
+        request(TaskKind::Once),
+        TaskCreator::Bot,
+        Some(&origin),
+        now(),
+    )
+    .await
+    .unwrap();
+    origin
+}
+
+async fn retitle(
+    db: &DatabaseConnection,
+    task_id: &str,
+    scope: Option<&TaskOrigin>,
+) -> Result<bot_task::Model, crate::error::ApiError> {
+    update_scoped_in(
+        db,
+        OWNER,
+        BOT,
+        task_id,
+        UpdateBotTask {
+            title: Some("Changed".into()),
+            ..Default::default()
+        },
+        now(),
+        scope,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_room_turn_lists_only_the_tasks_of_that_room() {
+    let db = database().await;
+    let private = make(&db, TaskKind::Cron).await;
+    let room_task = group_task(&db).await;
+    let scope = scope_of_turn(&db, OWNER, BOT, "turn-team").await.unwrap();
+    let listed = list_scoped_in(&db, OWNER, BOT, scope.as_ref()).await.unwrap();
+    assert_eq!(
+        listed.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+        [room_task.id.as_str()]
+    );
+    assert_eq!(list_in(&db, OWNER, BOT).await.unwrap().len(), 2);
+    assert!(listed.iter().all(|row| row.id != private.id));
+}
+
+#[tokio::test]
+async fn a_room_turn_cannot_change_or_cancel_a_private_task() {
+    let db = database().await;
+    let private = make(&db, TaskKind::Cron).await;
+    group_task(&db).await;
+    let scope = scope_of_turn(&db, OWNER, BOT, "turn-team").await.unwrap();
+    assert!(scope.is_some());
+    let missing = retitle(&db, "task_missing", scope.as_ref())
+        .await
+        .unwrap_err();
+    let hidden = retitle(&db, &private.id, scope.as_ref()).await.unwrap_err();
+    assert_eq!(hidden.status(), axum::http::StatusCode::NOT_FOUND);
+    assert_eq!(
+        hidden.to_string().replace(&private.id, "X"),
+        missing.to_string().replace("task_missing", "X")
+    );
+    let cancelled = delete_scoped_in(&db, OWNER, BOT, &private.id, scope.as_ref())
+        .await
+        .unwrap_err();
+    assert_eq!(cancelled.status(), axum::http::StatusCode::NOT_FOUND);
+    assert_eq!(reload(&db, &private.id).await.title, private.title);
+}
+
+#[tokio::test]
+async fn a_member_cannot_change_another_members_room_task_but_the_owner_can() {
+    let db = database().await;
+    let members = group_task(&db).await;
+    let owners_scope = ask_in_team(&db, "turn-owner-team", OWNER).await;
+    let members_scope = scope_of_turn(&db, OWNER, BOT, "turn-team").await.unwrap();
+    let owners_task = list_scoped_in(&db, OWNER, BOT, Some(&owners_scope))
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|row| row.requested_by.as_deref() == Some(OWNER))
+        .unwrap();
+
+    let refused = retitle(&db, &owners_task.id, members_scope.as_ref())
+        .await
+        .unwrap_err();
+    assert_eq!(refused.status(), axum::http::StatusCode::NOT_FOUND);
+    let refused = delete_scoped_in(&db, OWNER, BOT, &owners_task.id, members_scope.as_ref())
+        .await
+        .unwrap_err();
+    assert_eq!(refused.status(), axum::http::StatusCode::NOT_FOUND);
+    assert!(retitle(&db, &members.id, members_scope.as_ref()).await.is_ok());
+
+    assert!(retitle(&db, &members.id, Some(&owners_scope)).await.is_ok());
+    delete_scoped_in(&db, OWNER, BOT, &members.id, Some(&owners_scope))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn the_owners_direct_chat_and_encrypted_rooms_are_scoped_correctly() {
+    let db = database().await;
+    let private = make(&db, TaskKind::Cron).await;
+    group_task(&db).await;
+    let direct = trigger_conversation(&db, OWNER, BOT, now())
+        .await
+        .unwrap()
+        .expect("plain conversation");
+    asked_in(&db, "turn-direct", &direct, OWNER).await;
+    let scope = scope_of_turn(&db, OWNER, BOT, "turn-direct").await.unwrap();
+    assert_eq!(scope, None);
+    assert_eq!(list_scoped_in(&db, OWNER, BOT, None).await.unwrap().len(), 2);
+    assert!(retitle(&db, &private.id, scope.as_ref()).await.is_ok());
+
+    let sealed = database().await;
+    team(&sealed, ConversationEncryption::E2e).await;
+    asked_in(&sealed, "turn-sealed", "team", MEMBER).await;
+    make(&sealed, TaskKind::Cron).await;
+    let scope = scope_of_turn(&sealed, OWNER, BOT, "turn-sealed")
+        .await
+        .unwrap();
+    assert!(scope.is_some());
+    assert!(
+        list_scoped_in(&sealed, OWNER, BOT, scope.as_ref())
+            .await
+            .unwrap()
+            .is_empty()
     );
 }

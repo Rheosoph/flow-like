@@ -1,6 +1,7 @@
 pub mod callback;
 pub mod dispatch;
 pub mod jwt;
+pub mod pending;
 
 pub use dispatch::{
     CompilationBackend, CompilationDispatchConfig, CompilationDispatchError,

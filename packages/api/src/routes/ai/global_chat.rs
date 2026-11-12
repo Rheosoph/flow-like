@@ -1235,6 +1235,23 @@ mod specialist_tool_spec_tests {
     }
 }
 
+fn run_event_payload(run_id: &str, channel: &impl serde::Serialize, model_id: &str) -> Value {
+    json!({ "runId": run_id, "channel": channel, "modelId": model_id })
+}
+
+#[cfg(test)]
+mod run_event_tests {
+    use super::*;
+
+    #[test]
+    fn the_run_event_names_the_model_the_server_resolved() {
+        let payload = run_event_payload("run-1", &json!({ "id": "c" }), "bit-7");
+        assert_eq!(payload["modelId"], "bit-7");
+        assert_eq!(payload["runId"], "run-1");
+        assert_eq!(payload["channel"], json!({ "id": "c" }));
+    }
+}
+
 fn tool_error(tool_name: &str, error: &str) -> String {
     json!({ "status": "error", "tool": tool_name, "error": error }).to_string()
 }
@@ -2305,7 +2322,7 @@ pub(crate) async fn run_global_chat(
         yield Ok::<Event, Infallible>(
             Event::default()
                 .event("run")
-                .data(json!({ "runId": run_id, "channel": channel.handle() }).to_string()),
+                .data(run_event_payload(&run_id, &channel.handle(), &selected_model.id).to_string()),
         );
 
         let mut frame_stream_open = true;

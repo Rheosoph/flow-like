@@ -17,6 +17,8 @@
 		"icons:lint": "bun scripts/sync-node-icons.ts --check",
 		"icons:sync": "bun scripts/sync-node-icons.ts",
 		"test:e2e:package-security": "bun test tests/package-manager-security.e2e.test.ts",
+		"test:ui": "node packages/ui/scripts/run-tests.mjs",
+		"lint:ui:changed": "node scripts/biome-changed.mjs packages/ui",
 		"build:device-crypto": "node packages/device-crypto/build-web.mjs",
 		"build:board-canvas": "node packages/board-canvas/build-web.mjs",
 		"preview:board:build": "node packages/board-canvas/build-web.mjs --dev && vite build --config tests/board-canvas-browser/vite.config.ts",

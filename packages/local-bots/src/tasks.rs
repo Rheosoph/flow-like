@@ -134,6 +134,36 @@ fn find(db: &Connection, bot_id: &str, task_id: &str) -> Result<BotTask> {
     .ok_or_else(|| task_not_found(task_id))
 }
 
+/// The group a turn in `conversation_id` limits a bot's task tools to. Any group counts, also
+/// one the bot has left; only a turn in the person's own chat with the bot reaches every task.
+fn scope_group(db: &Connection, conversation_id: Option<&str>) -> Result<Option<String>> {
+    let Some(id) = conversation_id else {
+        return Ok(None);
+    };
+    let kind: Option<String> = db
+        .prepare_cached("SELECT kind FROM conversations WHERE id = ?1")?
+        .query_row([id], |row| row.get(0))
+        .optional()?;
+    let is_group = kind.as_deref().and_then(ConversationKind::parse) == Some(ConversationKind::Group);
+    Ok(is_group.then(|| id.to_string()))
+}
+
+/// A task outside the group answers like a task that does not exist.
+fn find_in_scope(
+    db: &Connection,
+    bot_id: &str,
+    task_id: &str,
+    group: Option<&str>,
+) -> Result<BotTask> {
+    let task = find(db, bot_id, task_id)?;
+    match group {
+        Some(group) if task.conversation.as_ref().map(|c| c.id.as_str()) != Some(group) => {
+            Err(task_not_found(task_id))
+        }
+        _ => Ok(task),
+    }
+}
+
 fn micros_of(text: &str) -> Option<i64> {
     DateTime::parse_from_rfc3339(text)
         .ok()
@@ -193,16 +223,28 @@ fn pause(db: &Connection, task: &BotTask, due: i64, now: i64) -> Result<bool> {
 impl LocalBotStore {
     /// The bot's tasks, soonest first.
     pub fn tasks(&self, bot_id: &str) -> Result<Vec<BotTask>> {
+        self.tasks_in_turn(bot_id, None)
+    }
+
+    /// The tasks a bot's tool sees in a turn in `conversation_id`: those of that group when it is
+    /// a group, all of the bot's tasks in the person's own chat.
+    pub fn tasks_in_turn(
+        &self,
+        bot_id: &str,
+        conversation_id: Option<&str>,
+    ) -> Result<Vec<BotTask>> {
         self.read(|db| {
             if !bot_exists(db, bot_id)? {
                 return Err(bot_not_found(bot_id));
             }
+            let group = scope_group(db, conversation_id)?;
             let mut statement = db.prepare_cached(&format!(
                 "SELECT {COLUMNS} FROM {TASKS} WHERE t.bot_id = ?1
+                 AND (?2 IS NULL OR t.conversation_id = ?2)
                  ORDER BY t.next_run_at IS NULL, t.next_run_at, t.created_at, t.id"
             ))?;
             let rows = statement
-                .query_map([bot_id], read_task)?
+                .query_map(params![bot_id, group], read_task)?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows.into_iter().map(|stored| stored.task).collect())
         })
@@ -294,8 +336,21 @@ impl LocalBotStore {
         task_id: &str,
         request: UpdateBotTask,
     ) -> Result<BotTask> {
+        self.update_task_in_turn(bot_id, task_id, request, None)
+    }
+
+    /// Like [`Self::update_task`] for a bot's tool in a turn in `conversation_id`: a task outside
+    /// that group is not found.
+    pub fn update_task_in_turn(
+        &self,
+        bot_id: &str,
+        task_id: &str,
+        request: UpdateBotTask,
+        conversation_id: Option<&str>,
+    ) -> Result<BotTask> {
         self.write(|tx, _changes| {
-            let task = find(tx, bot_id, task_id)?;
+            let group = scope_group(tx, conversation_id)?;
+            let task = find_in_scope(tx, bot_id, task_id, group.as_deref())?;
             let now = now_micros();
             let moves = request.at.is_some() || request.cron.is_some() || request.tz.is_some();
             let resumes = request.enabled == Some(true) && !task.enabled;
@@ -351,8 +406,19 @@ impl LocalBotStore {
     }
 
     pub fn delete_task(&self, bot_id: &str, task_id: &str) -> Result<()> {
+        self.delete_task_in_turn(bot_id, task_id, None)
+    }
+
+    /// Like [`Self::delete_task`] for a bot's tool in a turn in `conversation_id`.
+    pub fn delete_task_in_turn(
+        &self,
+        bot_id: &str,
+        task_id: &str,
+        conversation_id: Option<&str>,
+    ) -> Result<()> {
         self.write(|tx, _changes| {
-            find(tx, bot_id, task_id)?;
+            let group = scope_group(tx, conversation_id)?;
+            find_in_scope(tx, bot_id, task_id, group.as_deref())?;
             tx.execute("DELETE FROM tasks WHERE id = ?1", [task_id])?;
             Ok(())
         })
