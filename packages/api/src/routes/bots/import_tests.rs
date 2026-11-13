@@ -56,9 +56,9 @@ async fn database() -> DatabaseConnection {
             "id" TEXT NOT NULL, "userId" TEXT NOT NULL, "deletedAt" TEXT,
             PRIMARY KEY ("id", "userId"))"#,
         r#"CREATE TABLE public."ManagedDevice" (
-            "id" TEXT PRIMARY KEY, "ownerId" TEXT NOT NULL, "status" TEXT NOT NULL)"#,
+            "id" TEXT PRIMARY KEY, "ownerId" TEXT NOT NULL, "status" TEXT NOT NULL, "botDocker" JSON)"#,
         r#"CREATE TABLE public."User" ("id" TEXT PRIMARY KEY, "tier" TEXT NOT NULL)"#,
-        r#"CREATE TABLE public."App" ("id" TEXT PRIMARY KEY, "botId" TEXT UNIQUE)"#,
+        r#"CREATE TABLE public."App" ("id" TEXT PRIMARY KEY, "botId" TEXT UNIQUE, "refuseBots" BOOLEAN)"#,
     ] {
         db.execute_unprepared(statement).await.unwrap();
     }
@@ -137,6 +137,39 @@ fn issue(
     ref_id: Option<&str>,
 ) -> (ImportIssuePart, String, Option<String>) {
     (part, code.to_string(), ref_id.map(str::to_string))
+}
+
+#[tokio::test]
+async fn docker_imports_require_a_current_positive_device_report() {
+    let db = database().await;
+    seed_account(&db).await;
+    let request = request(
+        LOCAL_ID,
+        json!({
+            "location":"device", "device_id":"device-1", "execution_mode":"docker"
+        }),
+    );
+    assert_eq!(
+        issues(review(&db, "owner", &request).await.unwrap()),
+        [issue(
+            ImportIssuePart::Device,
+            "BOT_DOCKER_UNAVAILABLE",
+            Some("device-1")
+        )],
+    );
+    let refused = import(&db, &request).await.unwrap_err();
+    assert_eq!(refused.public_code(), "BOT_DOCKER_UNAVAILABLE");
+    db.execute_raw(sea_orm::Statement::from_sql_and_values(
+        sea_orm::DatabaseBackend::Sqlite,
+        r#"UPDATE public."ManagedDevice" SET "botDocker" = ? WHERE id = 'device-1'"#,
+        [json!({"installed":true,"available":true,"seen_at":chrono::Utc::now().timestamp_millis()}).into()],
+    )).await.unwrap();
+    let (Imported::Created(imported) | Imported::Existing(imported)) =
+        import(&db, &request).await.unwrap();
+    assert_eq!(
+        BotSettings::from_row(&imported).execution_mode,
+        flow_like_types::bot::BotExecutionMode::Docker,
+    );
 }
 
 fn code(error: &ApiError) -> (StatusCode, &str) {

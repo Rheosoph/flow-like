@@ -48,6 +48,43 @@ function texts(items: ConversationItem[]): string[] {
 }
 
 describe("foldInboxEntries", () => {
+	test("preserves bot usage metadata from reloaded replies and drops malformed records", () => {
+		const usage = {
+			step_name: "Assistant",
+			stats: {
+				usage: {
+					prompt_tokens: 100,
+					completion_tokens: 10,
+					total_tokens: 110,
+					prompt_tokens_details: { cached_tokens: 70, cache_write_tokens: 0 },
+				},
+				context: {
+					estimated_tokens: 100,
+					context_window: 1_000,
+					reserved_output_tokens: 100,
+				},
+				compactions: [
+					{
+						kind: "turn",
+						trigger: "hard",
+						status: "failed",
+						before_tokens: 100,
+						duration_ms: 200,
+					},
+				],
+			},
+		};
+		const reply = entry(
+			"message",
+			"bot_1",
+			{ text: "Done", usage_stats: [usage, null, { stats: { usage: "bad" } }] },
+			0,
+		);
+		expect(messages(foldInboxEntries([reply], "me"))[0].usageStats).toEqual([
+			usage,
+		]);
+	});
+
 	test("orders newest-first pages chronologically and drops duplicate copies", () => {
 		const first = entry("message", "anna", { text: "one" }, 0, "a");
 		const second = entry("message", "me", { text: "two" }, 1, "b");
@@ -571,6 +608,7 @@ describe("approval cards", () => {
 			tool: "shell_run",
 			summary: "Run git status",
 			scopes: ["command:git", "command:sh"],
+			postedAt: BASE,
 		});
 		expect(texts([card])).toEqual(["Run git status"]);
 	});
@@ -677,6 +715,176 @@ describe("approval cards", () => {
 			const card = secretCard(secret);
 			expect(card).toBeDefined();
 			expect(card?.secret).toBeUndefined();
+		});
+	});
+
+	describe("room invitations", () => {
+		const inviteCard = (invite: unknown) =>
+			messages(
+				foldInboxEntries([
+					entry(
+						"message",
+						"bot_a",
+						{
+							text: "x",
+							approval: { ...approval, tool: "room_invite", scope: "", invite },
+						},
+						0,
+						"ap-1",
+					),
+				]),
+			)[0].approval;
+
+		test("the person and the reason ride along on the card", () => {
+			expect(
+				inviteCard({ person: "ana.lima", reason: "Owns the sheet" })?.invite,
+			).toEqual({ person: "ana.lima", reason: "Owns the sheet" });
+		});
+
+		test.each([
+			["an empty person", { person: "", reason: "x" }],
+			["a missing reason", { person: "ana" }],
+			["a non-object", "ana"],
+		])("%s is treated as no invitation", (_, invite) => {
+			const card = inviteCard(invite);
+			expect(card).toBeDefined();
+			expect(card?.invite).toBeUndefined();
+		});
+	});
+
+	describe("batch cards", () => {
+		const read = (hash: string, page: number, extra = {}) => ({
+			args_hash: hash,
+			tool: "web_request",
+			summary: `The bot wants to send a GET request to cisa.gov/alerts?p=${page}.`,
+			scope: "web:cisa.gov:read",
+			...extra,
+		});
+		const batch = {
+			...approval,
+			id: "ap-b",
+			tool: "approval_batch",
+			summary: "The bot wants to make 4 calls",
+			scope: "",
+			args_hash: "hb",
+			items: [
+				read("h1", 1),
+				read("h2", 2, { calls: 2, after_web_content: true }),
+				{ args_hash: "h3", tool: "shell_run", summary: "Run git", scope: "" },
+				{ tool: "broken" },
+				read("h1", 9),
+			],
+		};
+		const cardOf = (...extra: IInboxEntry[]) =>
+			messages(
+				foldInboxEntries([
+					entry("message", "bot_a", { text: "x", approval: batch }, 0, "ap-b"),
+					...extra,
+				]),
+			)[0];
+
+		test("carries its well-formed items once each, with counts and flags", () => {
+			expect(cardOf().approval?.items).toEqual([
+				{
+					argsHash: "h1",
+					tool: "web_request",
+					summary: read("h1", 1).summary,
+					scopes: ["web:cisa.gov:read"],
+					calls: 1,
+					afterWebContent: false,
+				},
+				{
+					argsHash: "h2",
+					tool: "web_request",
+					summary: read("h2", 2).summary,
+					scopes: ["web:cisa.gov:read"],
+					calls: 2,
+					afterWebContent: true,
+				},
+				{
+					argsHash: "h3",
+					tool: "shell_run",
+					summary: "Run git",
+					scopes: [],
+					calls: 1,
+					afterWebContent: false,
+				},
+			]);
+		});
+
+		test("an answer with items records each differing call", () => {
+			const answered = cardOf(
+				entry(
+					"message",
+					"me",
+					{
+						approval_response: {
+							approval_id: "ap-b",
+							decision: "once",
+							items: [
+								{ args_hash: "h3", decision: "deny" },
+								{ args_hash: "h1", decision: "sometimes" },
+							],
+						},
+					},
+					1,
+					"ar-b",
+				),
+			);
+			expect(answered.approval?.answer).toBe("once");
+			expect(answered.approval?.itemAnswers).toEqual({ h3: "deny" });
+		});
+
+		test("a card with one item reads as that call, like a card from before batches", () => {
+			const [card] = messages(
+				foldInboxEntries([
+					entry(
+						"message",
+						"bot_a",
+						{ text: "x", approval: { ...batch, items: [read("h2", 2)] } },
+						0,
+						"ap-b",
+					),
+				]),
+			);
+			expect(card.approval).toMatchObject({
+				tool: "web_request",
+				summary: read("h2", 2).summary,
+				scopes: ["web:cisa.gov:read"],
+			});
+			expect(card.approval?.items).toBeUndefined();
+		});
+
+		test("a flagged single call keeps its flag", () => {
+			const [card] = messages(
+				foldInboxEntries([
+					entry(
+						"message",
+						"bot_a",
+						{
+							text: "x",
+							approval: { ...approval, after_web_content: true },
+						},
+						0,
+						"ap-1",
+					),
+				]),
+			);
+			expect(card.approval?.afterWebContent).toBe(true);
+		});
+
+		test("the bot's cancel notice for the turn closes the card", () => {
+			const cancel = (sender: string) =>
+				entry(
+					"message",
+					sender,
+					{ text: "You cancelled this task." },
+					1,
+					"cancel-turn_1",
+				);
+			expect(cardOf(cancel("bot_a")).approval?.cancelled).toBe(true);
+			expect(cardOf(cancel("anna")).approval?.cancelled).toBeUndefined();
+			expect(cardOf().approval?.cancelled).toBeUndefined();
 		});
 	});
 });

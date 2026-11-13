@@ -136,17 +136,26 @@ function replyBody(fields: ReplyFields) {
 	return { offset, text, state: state as RealtimeReplyState };
 }
 
+/** A rewritten reply names its draft; the first draft leaves it out. */
+function replyDraft({ draft = 0 }: ReplyFields) {
+	if (typeof draft !== "number" || !Number.isSafeInteger(draft) || draft < 0)
+		return;
+	return draft > 0 ? { draft } : {};
+}
+
 function replyFrom(value: object) {
 	const fields = value as ReplyFields;
 	if (fields.protocol_version !== 1 || fields.kind !== "reply") return;
 	const ids = replyIds(fields);
 	const body = replyBody(fields);
-	if (!ids || !body) return;
+	const draft = replyDraft(fields);
+	if (!ids || !body || !draft) return;
 	const reply: RealtimeReply = {
 		protocol_version: 1,
 		kind: "reply",
 		...ids,
 		...body,
+		...draft,
 	};
 	return reply;
 }
@@ -613,6 +622,98 @@ async function nats(
 	return { close };
 }
 
+const firebasePath = (path?: string): path is string =>
+	!!path &&
+	!path.split("/").some((segment) => segment === ".." || segment === ".");
+
+function firebaseNodeUrl(database: URL, path: string, idToken: string) {
+	const url = new URL(database);
+	url.pathname = `${path.replace(/^\/+|\/+$/g, "")}.json`;
+	url.searchParams.set("auth", idToken);
+	return url;
+}
+
+async function firebaseSubscribe(url: URL, signal: AbortSignal) {
+	const response = await fetch(url, {
+		headers: { Accept: "text/event-stream" },
+		signal,
+		credentials: "omit",
+	});
+	if (!response.ok || !response.body) {
+		await response.body?.cancel();
+		throw new Error("Firebase realtime subscription failed");
+	}
+	return response.body.getReader();
+}
+
+/** The event name and data of one server-sent event. */
+function firebaseEvent(frame: string) {
+	const lines = frame.split(/\r?\n/);
+	const name = lines
+		.find((line) => line.startsWith("event:"))
+		?.slice(6)
+		.trim();
+	const raw = lines
+		.filter((line) => line.startsWith("data:"))
+		.map((line) => line.slice(5).trim())
+		.join("\n");
+	return { name, raw };
+}
+
+/** Hands on the value of every write to the node; rejects when the stream ends. */
+async function firebaseWrites(
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+	written: (data: unknown) => void,
+	received?: () => void,
+) {
+	const streamDecoder = new TextDecoder();
+	let buffer = "";
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) throw new Error("Firebase realtime stream ended");
+			received?.();
+			if (value.byteLength > MAX_FRAME_BYTES)
+				throw new Error("Firebase realtime frame too large");
+			buffer += streamDecoder.decode(value, { stream: true });
+			if (encoder.encode(buffer).byteLength > MAX_FRAME_BYTES)
+				throw new Error("Firebase realtime frame too large");
+			for (;;) {
+				const separator = /\r?\n\r?\n/.exec(buffer);
+				if (!separator) break;
+				const { name, raw } = firebaseEvent(buffer.slice(0, separator.index));
+				buffer = buffer.slice(separator.index + separator[0].length);
+				if (name === "cancel" || name === "auth_revoked")
+					throw new Error("Firebase realtime access ended");
+				if (name === "put" || name === "patch") written(JSON.parse(raw).data);
+			}
+		}
+	} finally {
+		await reader.cancel().catch(() => {});
+		reader.releaseLock();
+	}
+}
+
+/**
+ * Replies have a node of their own beside the wake-ups, so they never hide one. Best effort: a
+ * refused read (rules that predate the node) or an ended stream waits for the next connection,
+ * and the wake-ups go on.
+ */
+function firebaseReplies(
+	url: URL,
+	callbacks: RealtimeProviderCallbacks,
+	signal: AbortSignal,
+) {
+	void firebaseSubscribe(url, signal)
+		.then((replies) =>
+			firebaseWrites(replies, (data) => {
+				const reply = parseRealtimeReply(data);
+				if (reply) callbacks.reply?.(reply);
+			}),
+		)
+		.catch(() => {});
+}
+
 async function firebase(
 	transport: Extract<RealtimeTransport, { type: "gcp_firebase_rtdb" }>,
 	callbacks: RealtimeProviderCallbacks,
@@ -622,10 +723,7 @@ async function firebase(
 	if (
 		url.search ||
 		(url.pathname !== "/" && url.pathname !== "") ||
-		!transport.path ||
-		transport.path
-			.split("/")
-			.some((segment) => segment === ".." || segment === ".")
+		!firebasePath(transport.path)
 	)
 		throw new Error("Invalid Firebase realtime path");
 	const controller = new AbortController();
@@ -669,62 +767,26 @@ async function firebase(
 		const auth = await boundedJson(exchange);
 		if (typeof auth.idToken !== "string" || !auth.idToken)
 			throw new Error("Firebase returned no identity token");
-		url.pathname = `${transport.path.replace(/^\/+|\/+$/g, "")}.json`;
-		url.searchParams.set("auth", auth.idToken);
-		const response = await fetch(url, {
-			headers: { Accept: "text/event-stream" },
-			signal: controller.signal,
-			credentials: "omit",
-		});
-		if (!response.ok || !response.body) {
-			await response.body?.cancel();
-			throw new Error("Firebase realtime subscription failed");
-		}
-		const reader = response.body.getReader();
-		void (async () => {
-			const streamDecoder = new TextDecoder();
-			let buffer = "";
-			try {
-				for (;;) {
-					const { done, value } = await reader.read();
-					if (done) throw new Error("Firebase realtime stream ended");
-					resetIdle();
-					if (value.byteLength > MAX_FRAME_BYTES)
-						throw new Error("Firebase realtime frame too large");
-					buffer += streamDecoder.decode(value, { stream: true });
-					if (encoder.encode(buffer).byteLength > MAX_FRAME_BYTES)
-						throw new Error("Firebase realtime frame too large");
-					for (;;) {
-						const separator = /\r?\n\r?\n/.exec(buffer);
-						if (!separator) break;
-						const frame = buffer.slice(0, separator.index);
-						buffer = buffer.slice(separator.index + separator[0].length);
-						const lines = frame.split(/\r?\n/);
-						const name = lines
-							.find((line) => line.startsWith("event:"))
-							?.slice(6)
-							.trim();
-						if (name === "cancel" || name === "auth_revoked")
-							throw new Error("Firebase realtime access ended");
-						if (name !== "put" && name !== "patch") continue;
-						const raw = lines
-							.filter((line) => line.startsWith("data:"))
-							.map((line) => line.slice(5).trim())
-							.join("\n");
-						const event = JSON.parse(raw);
-						receive(callbacks, event.data);
-					}
-				}
-			} catch {
-				if (!closed) {
-					close();
-					callbacks.disconnected();
-				}
-			} finally {
-				await reader.cancel().catch(() => {});
-				reader.releaseLock();
+		const wakeups = await firebaseSubscribe(
+			firebaseNodeUrl(url, transport.path, auth.idToken),
+			controller.signal,
+		);
+		void firebaseWrites(
+			wakeups,
+			(data) => receive(callbacks, data),
+			resetIdle,
+		).catch(() => {
+			if (!closed) {
+				close();
+				callbacks.disconnected();
 			}
-		})();
+		});
+		if (callbacks.reply && firebasePath(transport.reply_path))
+			firebaseReplies(
+				firebaseNodeUrl(url, transport.reply_path, auth.idToken),
+				callbacks,
+				controller.signal,
+			);
 		return { close };
 	} catch (error) {
 		close();

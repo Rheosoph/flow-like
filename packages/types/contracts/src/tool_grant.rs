@@ -26,6 +26,8 @@ pub const GRANT_SLIDE_HOURS: i64 = 24;
 pub const APPROVAL_WAIT_DAYS: i64 = 7;
 /// The `error_code` of a turn cancelled because nobody answered.
 pub const ERROR_APPROVAL_EXPIRED: &str = "BOT_APPROVAL_EXPIRED";
+/// The `error_code` of an answer naming an item that is not on its card, or one item twice.
+pub const ERROR_APPROVAL_ITEM_UNKNOWN: &str = "BOT_APPROVAL_ITEM_UNKNOWN";
 
 /// Longest tool name or scope.
 pub const MAX_KEY_CHARS: usize = 256;
@@ -92,7 +94,11 @@ impl ApprovalDecision {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ApprovalAnswer {
     pub approval_id: String,
+    /// The answer to every item not listed in `items`; the whole answer to a card for one call.
     pub decision: ApprovalDecision,
+    /// The items of a batch card answered differently from `decision`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<crate::bot_message::ItemDecision>,
 }
 
 /// Why a grant key was refused. Answer tokens (`once:…`, `deny:…`) pass: a host stores them for
@@ -201,6 +207,20 @@ pub fn approval_message_id(turn_id: &str, args_hash: &str) -> String {
 /// The message id of the owner's answer to an approval card.
 pub fn approval_response_message_id(approval_id: &str) -> String {
     digest("ar-", &[approval_id])
+}
+
+/// The `args_hash` of a batch card: its items' hashes in any order, so parking the same calls
+/// again names the same card.
+pub fn batch_args_hash<'a>(hashes: impl IntoIterator<Item = &'a str>) -> String {
+    let mut sorted: Vec<&str> = hashes.into_iter().collect();
+    sorted.sort_unstable();
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"flow-like.approval-batch/v1\0");
+    for hash in sorted {
+        hasher.update(&(hash.len() as u64).to_be_bytes());
+        hasher.update(hash.as_bytes());
+    }
+    hasher.finalize().to_hex().as_str()[..32].to_string()
 }
 
 #[cfg(test)]

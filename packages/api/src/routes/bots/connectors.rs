@@ -25,7 +25,7 @@ use chrono::Utc;
 use flow_like_bot_tools::services::ConnectorEntry;
 use flow_like_bot_tools_host::{JobConnector, JobScope, ToolJob};
 use flow_like_types::bot_connector::{
-    BotConnector, BotConnectorList, ConnectorAuth, ConnectorKind, ConnectorPolicy,
+    BotConnector, BotConnectorList, CallPolicy, ConnectorAuth, ConnectorKind, ConnectorPolicy,
     ConnectorToolInfo, CreateBotConnector, MAX_CONNECTORS_PER_BOT, MAX_SCOPES, MAX_TOOLS_SNAPSHOT,
     MAX_URL_CHARS, UpdateBotConnector, validate_label, validate_tool_policies,
 };
@@ -38,6 +38,7 @@ use serde::Serialize;
 use utoipa::ToSchema;
 
 const LIMIT_REACHED: &str = "BOT_CONNECTOR_LIMIT_REACHED";
+const SWITCHED_OFF: &str = "BOT_CONNECTOR_SWITCHED_OFF";
 const HANDLE_PREFIX: &str = "fl_oauth_";
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(90);
 
@@ -260,7 +261,7 @@ async fn runtime_owner(state: &AppState, user: &AppUser, bot_id: &str) -> Result
     responses(
         (status = 200, description = "The Authorization header value for this call", body = ConnectorCredential),
         (status = 401, description = "Not a runtime token of this bot, or its turn ended"),
-        (status = 403, description = "The caller is not the bot's runtime token"),
+        (status = 403, description = "The caller is not the bot's runtime token; or BOT_CONNECTOR_SWITCHED_OFF: the owner set every call of this connector to never"),
         (status = 404, description = "The bot has no such connector"),
         (status = 409, description = "BOT_CONNECTOR_NO_SIGN_IN: the secret or account is missing or must be reconnected")
     ),
@@ -277,12 +278,51 @@ pub async fn bot_connector_credential(
 ) -> Result<Json<ConnectorCredential>, ApiError> {
     let owner = runtime_owner(&state, &user, &bot_id).await?;
     let row = owned_connector(&state.db, &owner, &bot_id, &connector_id).await?;
+    refuse_switched_off(&row)?;
     let authorization = authorization_of(&state, &owner, &row)
         .await
         .map_err(|message| {
             ApiError::coded(StatusCode::CONFLICT, "BOT_CONNECTOR_NO_SIGN_IN", message)
         })?;
     Ok(Json(ConnectorCredential { authorization }))
+}
+
+/// Refuses the sign-in of a connector on which core would refuse every call: the owner set the
+/// default and every tool (MCP) or both reads and writes (account) to `never`. A connector with
+/// any call left that runs or asks keeps its sign-in.
+pub(crate) fn refuse_switched_off(row: &bot_connector::Model) -> Result<(), ApiError> {
+    let connector = to_contract(row).ok_or_else(|| {
+        ApiError::internal(format!(
+            "Connector '{}' was stored with an unknown kind or policy",
+            row.id
+        ))
+    })?;
+    let rule = connector.rule();
+    let off = match connector.kind {
+        ConnectorKind::Mcp => {
+            connector.default_policy == ConnectorPolicy::Never
+                && rule
+                    .tools
+                    .iter()
+                    .map(|tool| tool.name.as_str())
+                    .chain(rule.tool_policies.keys().map(String::as_str))
+                    .all(|name| rule.call_policy(name) == CallPolicy::Never)
+        }
+        ConnectorKind::Oauth => ["GET", "POST"]
+            .into_iter()
+            .all(|method| rule.request_call_policy(method) == CallPolicy::Never),
+    };
+    if off {
+        return Err(ApiError::coded(
+            StatusCode::FORBIDDEN,
+            SWITCHED_OFF,
+            format!(
+                "The owner set every call of '{}' to never, so the bot gets no sign-in for it",
+                connector.label
+            ),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone)]

@@ -334,7 +334,9 @@ fn an_approval_answer_rebases_the_deadline_and_keeps_revision_and_state() {
         requester_name: None,
         room: None,
         secret: None,
+        invite: None,
         configuration_changes: None,
+        items: Vec::new(),
     };
     f.store
         .park_turn(&turn, &bot.id, &room.id, "task", &card)
@@ -342,6 +344,7 @@ fn an_approval_answer_rebases_the_deadline_and_keeps_revision_and_state() {
     let response = ApprovalResponse {
         approval_id: card.id.clone(),
         decision: ApprovalDecision::Once,
+        items: Vec::new(),
     };
     f.store.resolve_parked(&bot.id, &turn, &response).unwrap();
     let rebased = f

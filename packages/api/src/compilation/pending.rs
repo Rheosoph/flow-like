@@ -30,7 +30,10 @@ pub fn retry_pending_after(
     (retry_at > now).then_some(retry_at)
 }
 
-pub fn still_pending_message(version: &wasm_package_version::Model, retry_at: DateTime<Utc>) -> String {
+pub fn still_pending_message(
+    version: &wasm_package_version::Model,
+    retry_at: DateTime<Utc>,
+) -> String {
     format!(
         "Version {} of package {} is PENDING: its compile job was dispatched at {} and may still be running. Retry after {}.",
         version.version,
@@ -62,8 +65,14 @@ mod tests {
     #[test]
     fn a_pending_version_older_than_the_signed_url_is_dispatched_again() {
         let version = pending("2026-11-10T18:00:00Z", None);
-        assert_eq!(retry_pending_after(&version, at("2026-11-10T21:00:00Z")), None);
-        assert_eq!(retry_pending_after(&version, at("2026-11-10T19:00:00Z")), None);
+        assert_eq!(
+            retry_pending_after(&version, at("2026-11-10T21:00:00Z")),
+            None
+        );
+        assert_eq!(
+            retry_pending_after(&version, at("2026-11-10T19:00:00Z")),
+            None
+        );
     }
 
     #[test]

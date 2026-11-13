@@ -73,18 +73,17 @@ describe("capability list", () => {
 		}
 	});
 
-	test("a device can't hold encryption, and says why", () => {
-		expect([...DEVICE_UNAVAILABLE_BOT_CAPABILITIES]).toEqual(["encryption"]);
-		for (const capability of DEVICE_UNAVAILABLE_BOT_CAPABILITIES) {
-			expect(botCapabilityUnavailableReason(capability, "device")).toBe(
-				"device",
-			);
-			expect(botCapabilityUnavailableReason(capability, "desktop")).toBeNull();
+	test("a device holds every capability, encryption included", () => {
+		expect([...DEVICE_UNAVAILABLE_BOT_CAPABILITIES]).toEqual([]);
+		for (const capability of BOT_CAPABILITIES) {
+			expect(isBotCapabilityAvailable(capability, "device")).toBe(true);
+			expect(botCapabilityUnavailableReason(capability, "device")).toBeNull();
 		}
-		expect(botCapabilityUnavailableReason("command_line", "device")).toBeNull();
+		expect(botCapabilityUnavailableReason("encryption", "server")).toBe(
+			"local",
+		);
 		expect(botCapabilityUnavailableReason("command_line", "server")).toBe(
 			"local",
 		);
-		expect(bots.editor.abilities.notOnDevice).toBeTruthy();
 	});
 });

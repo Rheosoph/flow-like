@@ -219,6 +219,10 @@ pub struct App {
     #[serde(default)]
     pub bot_id: Option<String>,
 
+    /// The owner refuses bots here; every host answers a bot's access with `APP_REFUSES_BOTS`.
+    #[serde(default)]
+    pub refuse_bots: bool,
+
     #[serde(skip)]
     pub app_state: Option<Arc<FlowLikeState>>,
 }
@@ -258,6 +262,7 @@ impl Clone for App {
             forked_from: self.forked_from.clone(),
             forked_at: self.forked_at,
             bot_id: self.bot_id.clone(),
+            refuse_bots: self.refuse_bots,
         }
     }
 }
@@ -308,6 +313,7 @@ impl App {
             forked_from: None,
             forked_at: None,
             bot_id: None,
+            refuse_bots: false,
             app_state: Some(app_state.clone()),
         };
 
@@ -1452,6 +1458,7 @@ mod tests {
             forked_from: None,
             forked_at: None,
             bot_id: Some("bot_workspace".to_string()),
+            refuse_bots: true,
         };
 
         let mut buf = Vec::new();
@@ -1460,6 +1467,7 @@ mod tests {
 
         assert_eq!(app.id, deser.id);
         assert_eq!(app.bot_id, deser.bot_id);
+        assert!(deser.refuse_bots);
     }
 
     /// The `frontend` slot shipped for a long time without ever surviving a

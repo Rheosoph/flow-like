@@ -35,6 +35,7 @@ pub(crate) const BACKGROUND_INTERACTION_UNAVAILABLE: &str = "background_interact
 
 #[derive(Clone, Default)]
 pub struct NativeRunOptions {
+    pub usage: flow_like::flow::copilot::bot_usage::BotUsage,
     pub recovery: Option<Arc<dyn flow_like::flow::copilot::run_recovery::BotRunRecovery>>,
     /// A native background host can select a profile without changing the active window.
     /// Foreground commands leave this unset and capture the active profile once.
@@ -100,6 +101,8 @@ pub struct NativeRunOptions {
     /// The bot turn an interactive chat answers; a headless turn's comes from its gate. An
     /// account bot's tools read its secrets for this turn.
     pub bot_turn_id: Option<String>,
+    /// A headless live-call turn's reply as the model writes it, for the call on this computer.
+    pub reply_stream: Option<flow_like::flow::copilot::reply_stream::ReplySink>,
 }
 
 impl NativeRunOptions {

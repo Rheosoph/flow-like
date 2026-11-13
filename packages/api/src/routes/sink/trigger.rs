@@ -1757,6 +1757,9 @@ async fn trigger_event_dispatch(
             if let crate::execution::DispatchError::Quota(error) = e {
                 return Err(error.into());
             }
+            if matches!(e, crate::execution::DispatchError::LocalOnly(_)) {
+                return Err(e.into());
+            }
             Ok(TriggerResponse {
                 triggered: false,
                 run_id: Some(run_id),
@@ -1782,6 +1785,7 @@ async fn trigger_event_dispatch(
         (status = 403, description = "SINK_RUN_AS_REFUSED: the event is paused because the user it runs as may no longer run it, or its project is not active"),
         (status = 404, description = "Route not found"),
         (status = 409, description = "OAUTH_RECONNECT_REQUIRED: a sign-in saved with the event must be connected again before it can run"),
+        (status = 422, description = "LOCAL_EXECUTION_REQUIRED: the flow runs only on your own device, so a server will not run it"),
         (status = 500, description = "Internal server error"),
         (status = 503, description = "SINK_RUN_AS_UNAVAILABLE: the user the event runs as cannot be checked right now, or changed while the request was handled; retry later")
     )

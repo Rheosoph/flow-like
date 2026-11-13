@@ -202,33 +202,19 @@ function messageOf(
 			? botTurnError(item.errorCode, item.content.text, {
 					title: "",
 					ownBot: true,
+					botId,
 				})
 			: undefined;
 	return {
 		...(error ? { error } : {}),
+		...(item.usageStats?.length ? { usage_stats: item.usageStats } : {}),
 		...(item.userContext ? { userContext: item.userContext } : {}),
 		...(item.userContextDerived ? { userContextDerived: true } : {}),
 		...(item.userContextDerivedFrom
 			? { userContextDerivedFrom: item.userContextDerivedFrom }
 			: {}),
 		...(item.note ? { note: item.note } : {}),
-		...(approval
-			? {
-					approval: {
-						id: approval.id,
-						botId: item.senderId,
-						turnId: approval.turnId,
-						tool: approval.tool,
-						summary: approval.summary,
-						scopes: approval.scopes,
-						requesterName: approval.requesterName,
-						room: approval.room,
-						configurationChanges: approval.configurationChanges,
-						...(approval.secret ? { secret: approval.secret } : {}),
-						answer: approval.answer,
-					},
-				}
-			: {}),
+		...(approval ? { approval: { ...approval, botId: item.senderId } } : {}),
 		id: item.id,
 		appId: GLOBAL_CHAT_APP_ID,
 		sessionId,

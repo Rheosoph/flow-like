@@ -516,6 +516,32 @@ describe("hosted embedding validation", () => {
 			}),
 		).toBeNull();
 	});
+	test("Cloudflare EmbeddingGemma 2 validates its dimension choices and context limit", () => {
+		const remote = {
+			implementation: "CloudflareWorkersAI",
+			model_id: "@cf/google/embeddinggemma-2",
+		};
+		const pricing = { input_micro_usd_per_million_tokens: 1700 };
+		for (const vector_length of [128, 256, 512, 768])
+			expect(
+				embedding({ remote, pricing, vector_length, input_length: 8192 }),
+			).toBeNull();
+		for (const vector_length of [127, 384, 769, 1024])
+			expect(embedding({ remote, pricing, vector_length })).toContain(
+				"128, 256, 512, 768 vector dimensions",
+			);
+		expect(
+			embedding({ remote, pricing, vector_length: 768, input_length: 8193 }),
+		).toContain("at most 8192 input tokens");
+		expect(
+			embedding({
+				remote: { ...remote, model_id: "another-model" },
+				pricing,
+				vector_length: 1024,
+				input_length: 16384,
+			}),
+		).toBeNull();
+	});
 	test("Cloudflare BGE requires mean pooling to prevent mixing CLS and mean vectors", () => {
 		const pricing = { input_micro_usd_per_million_tokens: 0 };
 		const bge = { ...remote, model_id: "@cf/baai/bge-large-en-v1.5" };

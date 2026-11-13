@@ -3357,7 +3357,7 @@ mod tests {
 
     #[test]
     fn approving_a_compiled_version_copies_its_nodes() {
-        let nodes = serde_json::json!([]);
+        let nodes = serde_json::json!([{ "name": "typst_compile" }]);
         let version = version_with("Compiled", nodes.clone());
         let (copied, _) = super::approved_node_catalog(&serde_json::json!({}), &version).unwrap();
         assert_eq!(copied, nodes);

@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useCallback, useState } from "react";
+import { useBotSecretSealing } from "../../hooks/use-bot-secret-sealing";
 import { Button, Checkbox, useBackend, useInvoke } from "../../index";
 import {
 	type AskUserForm,
@@ -26,6 +27,7 @@ import {
 	useGlobalChatStore,
 } from "../../state/global-chat/global-chat-store";
 import { restoreGlobalChatConversation } from "../../state/global-chat/global-chat-stream";
+import { WebContentNotice } from "../bots-tab/approval-batch";
 import {
 	BotConfigurationChanges,
 	useBotSettingsApprovalText,
@@ -239,6 +241,7 @@ function InlineSecretPrompt({
 }: Readonly<{ prompt: GlobalToolPrompt; secret: GlobalToolSecret }>) {
 	const { t } = useTranslation(["chat", "bots"]);
 	const asking = useGlobalChatBot(prompt.conversationId);
+	const sealing = useBotSecretSealing(asking.botId);
 	return (
 		<motion.div
 			initial={{ opacity: 0, y: 8, scale: 0.98 }}
@@ -276,8 +279,9 @@ function InlineSecretPrompt({
 				<SecretRequestForm
 					secret={secret}
 					botName={asking.name}
-					onSave={async (value) => {
-						await secret.store(value);
+					sealing={sealing}
+					onSave={async (value, sealed) => {
+						await secret.store(value, sealed);
 						prompt.respond({ approved: true, remember: false });
 					}}
 					onDecline={() => prompt.respond({ approved: false, remember: false })}
@@ -297,7 +301,8 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 	const isConfiguration =
 		isApproval && requiresFreshToolApproval(prompt.toolName);
 	const settingsText = useBotSettingsApprovalText(prompt.toolName);
-	const rememberable = !isConfiguration && prompt.rememberable !== false;
+	const rememberable =
+		!isConfiguration && !prompt.asksAgain && prompt.rememberable !== false;
 	const tone: RequestTone = isApproval ? "warning" : "primary";
 
 	const canSend = isAskUserFormComplete(ask, drafts);
@@ -357,7 +362,13 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 							: t("needsAnAnswer", "Needs an answer")
 					}`}
 					title={title}
-					description={isConfiguration ? settingsText.hint : undefined}
+					description={
+						isConfiguration ? (
+							settingsText.hint
+						) : isApproval && prompt.asksAgain ? (
+							<WebContentNotice className="mt-0" />
+						) : undefined
+					}
 					className={hasBody ? undefined : "pb-4"}
 				/>
 				{hasBody && (
@@ -381,7 +392,10 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 							/>
 						)}
 						{isApproval && prompt.configurationChanges && (
-							<BotConfigurationChanges changes={prompt.configurationChanges} />
+							<BotConfigurationChanges
+								changes={prompt.configurationChanges}
+								tool={prompt.toolName}
+							/>
 						)}
 					</RequestCardBody>
 				)}

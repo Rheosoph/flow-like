@@ -332,6 +332,73 @@ describe("standing approvals belong to the run that asks", () => {
 		expect(saved).toHaveLength(1);
 	});
 
+	test("a call asked again after web content skips the standing grant and the session's answer", async () => {
+		const putToolGrant = vi.fn(async () => ({}));
+		useBackendStore.getState().setBackend({
+			userState: { getProfile: async () => ({ id: "profile-1" }) },
+			boardState: {},
+			botState: {
+				listToolGrants: async () => [
+					{ tool: "call_app_event", scope: "app:app_atlas" },
+				],
+				putToolGrant,
+			},
+		} as never);
+		const covered = await ask(appEventCall(RUNS.scout.runId));
+		expect(covered.prompt).toBeNull();
+		expect(covered.answered()?.approved).toBe(true);
+
+		const askedAgain = (): FrontendToolRequest => {
+			const request = appEventCall(RUNS.scout.runId);
+			return {
+				...request,
+				approval: {
+					...(request.approval as NonNullable<FrontendToolRequest["approval"]>),
+					asksAgain: "web_content",
+				},
+			};
+		};
+		const first = await ask(askedAgain());
+		expect(first.prompt).toMatchObject({
+			asksAgain: "web_content",
+			rememberable: false,
+		});
+		expect((await first.answer(true, true))?.approved).toBe(true);
+		expect(putToolGrant).not.toHaveBeenCalled();
+
+		const again = await ask({
+			...askedAgain(),
+			approval: {
+				kind: "execute",
+				sessionKey: "call_app_event",
+				asks_again: "web_content",
+			},
+		});
+		expect(again.prompt).not.toBeNull();
+		expect((await again.answer(false))?.approved).toBe(false);
+	});
+
+	test("a bot's auto mode does not waive a call asked again after web content", async () => {
+		useGlobalChatStore.getState().setAutoMode(true, "bot:bot_scout");
+		const waived = await ask(appEventCall(RUNS.scout.runId));
+		expect(waived.prompt).toBeNull();
+		expect(waived.answered()?.approved).toBe(true);
+
+		const request = appEventCall(RUNS.scout.runId);
+		const askedAgain = await ask({
+			...request,
+			approval: {
+				...(request.approval as NonNullable<FrontendToolRequest["approval"]>),
+				asks_again: "web_content",
+			},
+		});
+		expect(askedAgain.prompt).toMatchObject({
+			asksAgain: "web_content",
+			rememberable: false,
+		});
+		expect((await askedAgain.answer(false))?.approved).toBe(false);
+	});
+
 	test("auto mode switched on in Flux leaves bots asking", async () => {
 		useGlobalChatStore.getState().setAutoMode(true);
 		const flux = await ask(appEventCall(RUNS.flux.runId));

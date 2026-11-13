@@ -5,10 +5,10 @@
 //! naming the bot so only it wakes, and is paused once the bot left the group.
 
 use crate::{
-    LOCAL_OWNER_ID, LocalBotStore,
+    InboxEntry, LOCAL_OWNER_ID, LocalBotStore,
     bots::{bot_exists, bot_not_found},
     error::{Error, Result},
-    inbox::{in_group, write_group_trigger, write_trigger},
+    inbox::{existing_direct, in_group, message_with_changes, write_group_trigger, write_trigger},
     store::{now_micros, timestamp},
 };
 use chrono::{DateTime, TimeZone, Utc};
@@ -17,10 +17,11 @@ use flow_like_types::{
         self as contract, BotTask, CreateBotTask, MAX_TASKS_PER_BOT, TaskConversation,
         TaskCreator, TaskKind, TaskSchedule, UpdateBotTask, fire_message_id,
     },
+    bot_turn::turn_id,
     create_id,
     inbox::{
-        ConversationKind, TRIGGER_TEXT_MAX_CHARS, TRIGGER_TITLE_MAX_CHARS, TriggerBody,
-        TriggerSource,
+        ConversationKind, InboxEntryKind, TRIGGER_TEXT_MAX_CHARS, TRIGGER_TITLE_MAX_CHARS,
+        TriggerBody, TriggerSource,
     },
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -124,14 +125,18 @@ fn require_scheduling(db: &Connection, bot_id: &str) -> Result<()> {
     )))
 }
 
+fn lookup(db: &Connection, bot_id: &str, task_id: &str) -> Result<Option<BotTask>> {
+    Ok(db
+        .prepare_cached(&format!(
+            "SELECT {COLUMNS} FROM {TASKS} WHERE t.id = ?1 AND t.bot_id = ?2"
+        ))?
+        .query_row(params![task_id, bot_id], read_task)
+        .optional()?
+        .map(|stored| stored.task))
+}
+
 fn find(db: &Connection, bot_id: &str, task_id: &str) -> Result<BotTask> {
-    db.prepare_cached(&format!(
-        "SELECT {COLUMNS} FROM {TASKS} WHERE t.id = ?1 AND t.bot_id = ?2"
-    ))?
-    .query_row(params![task_id, bot_id], read_task)
-    .optional()?
-    .map(|stored| stored.task)
-    .ok_or_else(|| task_not_found(task_id))
+    lookup(db, bot_id, task_id)?.ok_or_else(|| task_not_found(task_id))
 }
 
 /// The group a turn in `conversation_id` limits a bot's task tools to. Any group counts, also
@@ -220,6 +225,121 @@ fn pause(db: &Connection, task: &BotTask, due: i64, now: i64) -> Result<bool> {
     Ok(paused == 1)
 }
 
+/// The turn a bot's task tool runs in: its conversation, and its id, which the host derives from
+/// the bot and the message that started the turn (`bot_turn::turn_id`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ToolTurn<'a> {
+    pub conversation_id: Option<&'a str>,
+    pub turn_id: Option<&'a str>,
+}
+
+/// The person's message that asked the bot for a task, in their own chat with the bot.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskRequest {
+    pub conversation_id: String,
+    pub message_id: String,
+    /// The message and the person's edits and deletion of it, oldest first, as they are now.
+    pub entries: Vec<InboxEntry>,
+}
+
+/// What a task's runs may act on: an instruction the person wrote in the app, or the message in
+/// which they asked the bot for the task. Tasks from before this was recorded have neither.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskAuthority {
+    pub task: BotTask,
+    pub owner_written: bool,
+    pub request: Option<TaskRequest>,
+}
+
+/// Who writes a task's instruction: the person in the app, or the bot in a turn.
+#[derive(Debug, Clone, Copy)]
+enum Writer<'a> {
+    Owner,
+    Bot(ToolTurn<'a>),
+}
+
+/// A writer with what it proves: the bot carries the person's message that started its turn,
+/// when the person prompted it in their own chat with the bot.
+enum Author {
+    Owner,
+    Bot(Option<(String, String)>),
+}
+
+impl Writer<'_> {
+    fn author(self, db: &Connection, bot_id: &str) -> Result<Author> {
+        Ok(match self {
+            Self::Owner => Author::Owner,
+            Self::Bot(turn) => Author::Bot(owner_request(db, bot_id, turn)?),
+        })
+    }
+}
+
+impl Author {
+    /// Whether a change gives the task this author's authority: the person sending an
+    /// instruction, or the bot changing it.
+    fn rewrites(&self, sent: Option<&str>, before: &str, after: &str) -> bool {
+        match self {
+            Self::Owner => sent.is_some(),
+            Self::Bot(_) => before != after,
+        }
+    }
+
+    fn mark(&self, db: &Connection, task_id: &str) -> Result<()> {
+        let (written, request) = match self {
+            Self::Owner => (true, None),
+            Self::Bot(request) => (false, request.as_ref()),
+        };
+        db.execute(
+            "UPDATE tasks SET owner_written = ?1, request_conversation_id = ?2,
+                 request_message_id = ?3 WHERE id = ?4",
+            params![
+                i64::from(written),
+                request.map(|(conversation, _)| conversation),
+                request.map(|(_, message)| message),
+                task_id
+            ],
+        )?;
+        Ok(())
+    }
+}
+
+/// The person's message that started `turn`, when it is a turn of `bot_id` in the person's own
+/// chat with it that a message or call line of theirs started. Triggers of task runs, mail and
+/// webhooks are never the person's message.
+fn owner_request(
+    db: &Connection,
+    bot_id: &str,
+    turn: ToolTurn,
+) -> Result<Option<(String, String)>> {
+    let (Some(conversation_id), Some(turn)) = (turn.conversation_id, turn.turn_id) else {
+        return Ok(None);
+    };
+    if existing_direct(db, bot_id)?.as_deref() != Some(conversation_id) {
+        return Ok(None);
+    }
+    let mut statement = db.prepare_cached(
+        "SELECT message_id FROM entries
+         WHERE conversation_id = ?1 AND sender_id = ?2 AND kind IN (?3, ?4)
+         ORDER BY seq DESC, created_at DESC",
+    )?;
+    let messages = statement.query_map(
+        params![
+            conversation_id,
+            LOCAL_OWNER_ID,
+            InboxEntryKind::Message.as_str(),
+            InboxEntryKind::Transcript.as_str()
+        ],
+        |row| row.get::<_, String>(0),
+    )?;
+    for message in messages {
+        let message = message?;
+        if turn_id(bot_id, &message) == turn {
+            return Ok(Some((conversation_id.to_string(), message)));
+        }
+    }
+    Ok(None)
+}
+
 impl LocalBotStore {
     /// The bot's tasks, soonest first.
     pub fn tasks(&self, bot_id: &str) -> Result<Vec<BotTask>> {
@@ -262,6 +382,7 @@ impl LocalBotStore {
 
     /// Saves a task. With `conversation_id`, the conversation of the turn that asked for it, a
     /// group the bot is in, the task fires there; otherwise in the person's chat with the bot.
+    /// A task the person creates carries their authority; one a bot creates here carries none.
     pub fn create_task_in(
         &self,
         bot_id: &str,
@@ -269,6 +390,39 @@ impl LocalBotStore {
         created_by: TaskCreator,
         conversation_id: Option<&str>,
     ) -> Result<BotTask> {
+        let writer = match created_by {
+            TaskCreator::Owner => Writer::Owner,
+            TaskCreator::Bot => Writer::Bot(ToolTurn {
+                conversation_id,
+                turn_id: None,
+            }),
+        };
+        self.create(bot_id, request, writer, conversation_id)
+    }
+
+    /// Saves a task the bot schedules in `turn`. It fires in the turn's group, if it runs in one,
+    /// and keeps the person's message that started the turn when they prompted it in their own
+    /// chat with the bot; the task's runs act on that message, read again then.
+    pub fn create_bot_task(
+        &self,
+        bot_id: &str,
+        request: CreateBotTask,
+        turn: ToolTurn,
+    ) -> Result<BotTask> {
+        self.create(bot_id, request, Writer::Bot(turn), turn.conversation_id)
+    }
+
+    fn create(
+        &self,
+        bot_id: &str,
+        request: CreateBotTask,
+        writer: Writer,
+        conversation_id: Option<&str>,
+    ) -> Result<BotTask> {
+        let created_by = match writer {
+            Writer::Owner => TaskCreator::Owner,
+            Writer::Bot(_) => TaskCreator::Bot,
+        };
         self.write(|tx, _changes| {
             require_scheduling(tx, bot_id)?;
             let group = match conversation_id {
@@ -326,26 +480,62 @@ impl LocalBotStore {
                     group
                 ],
             )?;
+            writer.author(tx, bot_id)?.mark(tx, &id)?;
             find(tx, bot_id, &id)
         })
     }
 
+    /// The person's change to a task, from the app.
     pub fn update_task(
         &self,
         bot_id: &str,
         task_id: &str,
         request: UpdateBotTask,
     ) -> Result<BotTask> {
-        self.update_task_in_turn(bot_id, task_id, request, None)
+        self.update(bot_id, task_id, request, Writer::Owner, None)
     }
 
     /// Like [`Self::update_task`] for a bot's tool in a turn in `conversation_id`: a task outside
-    /// that group is not found.
+    /// that group is not found, and a rewritten instruction loses its authority.
     pub fn update_task_in_turn(
         &self,
         bot_id: &str,
         task_id: &str,
         request: UpdateBotTask,
+        conversation_id: Option<&str>,
+    ) -> Result<BotTask> {
+        let turn = ToolTurn {
+            conversation_id,
+            turn_id: None,
+        };
+        self.update_bot_task(bot_id, task_id, request, turn)
+    }
+
+    /// A bot's change to a task in `turn`. Rewriting the instruction moves the task's authority to
+    /// the person's message that started the turn, when they prompted it in their own chat with
+    /// the bot, and drops it otherwise.
+    pub fn update_bot_task(
+        &self,
+        bot_id: &str,
+        task_id: &str,
+        request: UpdateBotTask,
+        turn: ToolTurn,
+    ) -> Result<BotTask> {
+        self.update(
+            bot_id,
+            task_id,
+            request,
+            Writer::Bot(turn),
+            turn.conversation_id,
+        )
+    }
+
+    fn update(
+        &self,
+        bot_id: &str,
+        task_id: &str,
+        request: UpdateBotTask,
+        writer: Writer,
         conversation_id: Option<&str>,
     ) -> Result<BotTask> {
         self.write(|tx, _changes| {
@@ -392,6 +582,14 @@ impl LocalBotStore {
                     request.instruction.as_deref().unwrap_or(&task.instruction),
                 )
                 .map_err(Error::invalid)?;
+                let author = writer.author(tx, bot_id)?;
+                if author.rewrites(
+                    request.instruction.as_deref(),
+                    &task.instruction,
+                    &instruction,
+                ) {
+                    author.mark(tx, task_id)?;
+                }
                 tx.execute(
                     "UPDATE tasks SET title = ?1, instruction = ?2 WHERE id = ?3",
                     params![title, instruction, task_id],
@@ -402,6 +600,35 @@ impl LocalBotStore {
                 params![now, task_id],
             )?;
             find(tx, bot_id, task_id)
+        })
+    }
+
+    /// What task `task_id`'s runs may act on, read now; `None` once the task is gone.
+    pub fn task_authority(&self, bot_id: &str, task_id: &str) -> Result<Option<TaskAuthority>> {
+        self.read(|db| {
+            let Some(task) = lookup(db, bot_id, task_id)? else {
+                return Ok(None);
+            };
+            let (owner_written, conversation_id, message_id): (i64, Option<String>, Option<String>) =
+                db.query_row(
+                    "SELECT owner_written, request_conversation_id, request_message_id
+                     FROM tasks WHERE id = ?1",
+                    [task_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?;
+            let request = match (conversation_id, message_id) {
+                (Some(conversation_id), Some(message_id)) => Some(TaskRequest {
+                    entries: message_with_changes(db, &conversation_id, &message_id)?,
+                    conversation_id,
+                    message_id,
+                }),
+                _ => None,
+            };
+            Ok(Some(TaskAuthority {
+                task,
+                owner_written: owner_written != 0,
+                request,
+            }))
         })
     }
 

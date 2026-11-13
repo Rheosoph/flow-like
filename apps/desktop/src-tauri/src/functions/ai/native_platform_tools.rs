@@ -473,10 +473,8 @@ impl NativePlatformSession {
             return Ok(None);
         }
         if !response.status().is_success() {
-            return Err(format!(
-                "The hub returned HTTP {} for this bot request.",
-                response.status().as_u16()
-            ));
+            let status = response.status().as_u16();
+            return Err(hub_refusal(status, &refusal_body(response).await));
         }
         let bytes = response
             .bytes()

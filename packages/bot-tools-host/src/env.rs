@@ -84,6 +84,7 @@ pub struct HostEnv {
     object_writes: bool,
     notifier: Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>>,
     people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
+    rooms: Option<Arc<dyn flow_like_bot_tools::RoomInvites>>,
     user_context: Option<Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>>,
     configuration: Option<Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>>,
     crew: Option<Arc<dyn flow_like_bot_tools::crew::CrewBackend>>,
@@ -127,6 +128,7 @@ impl HostEnv {
             object_writes: true,
             notifier: None,
             people: None,
+            rooms: None,
             user_context: None,
             configuration: None,
             crew: None,
@@ -200,6 +202,11 @@ impl HostEnv {
 
     pub fn with_people(mut self, people: Arc<dyn flow_like_bot_tools::PeopleBackend>) -> Self {
         self.people = Some(people);
+        self
+    }
+
+    pub fn with_rooms(mut self, rooms: Arc<dyn flow_like_bot_tools::RoomInvites>) -> Self {
+        self.rooms = Some(rooms);
         self
     }
 
@@ -331,6 +338,10 @@ impl ToolEnv for HostEnv {
 
     fn people(&self) -> Option<Arc<dyn flow_like_bot_tools::PeopleBackend>> {
         self.people.clone()
+    }
+
+    fn rooms(&self) -> Option<Arc<dyn flow_like_bot_tools::RoomInvites>> {
+        self.rooms.clone()
     }
 
     fn user_context(

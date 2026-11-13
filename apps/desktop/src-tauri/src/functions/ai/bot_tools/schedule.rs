@@ -7,9 +7,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use flow_like_bot_tools::Scheduler;
+use flow_like_local_bots::ToolTurn;
 use flow_like_types::{
     Result, anyhow,
-    bot_task::{BotTask, CreateBotTask, TaskCreator, UpdateBotTask},
+    bot_task::{BotTask, CreateBotTask, UpdateBotTask},
 };
 use reqwest::Method;
 use serde_json::{Value, json};
@@ -40,6 +41,7 @@ struct LocalScheduler {
     app: AppHandle,
     bot_id: String,
     conversation_id: Option<String>,
+    turn_id: Option<String>,
 }
 
 impl LocalScheduler {
@@ -62,14 +64,17 @@ impl LocalScheduler {
 #[async_trait]
 impl Scheduler for LocalScheduler {
     async fn create(&self, request: CreateBotTask) -> Result<BotTask> {
-        let (bot_id, conversation_id) = (self.bot_id.clone(), self.conversation_id.clone());
+        let (bot_id, conversation_id, turn_id) = (
+            self.bot_id.clone(),
+            self.conversation_id.clone(),
+            self.turn_id.clone(),
+        );
         self.on_store(move |store| {
-            store.create_task_in(
-                &bot_id,
-                request,
-                TaskCreator::Bot,
-                conversation_id.as_deref(),
-            )
+            let turn = ToolTurn {
+                conversation_id: conversation_id.as_deref(),
+                turn_id: turn_id.as_deref(),
+            };
+            store.create_bot_task(&bot_id, request, turn)
         })
         .await
     }
@@ -81,10 +86,11 @@ impl Scheduler for LocalScheduler {
     }
 
     async fn update(&self, task_id: &str, request: UpdateBotTask) -> Result<Option<BotTask>> {
-        let (bot_id, task_id, conversation_id) = (
+        let (bot_id, task_id, conversation_id, turn_id) = (
             self.bot_id.clone(),
             task_id.to_string(),
             self.conversation_id.clone(),
+            self.turn_id.clone(),
         );
         self.on_store(move |store| {
             let scope = conversation_id.as_deref();
@@ -95,8 +101,12 @@ impl Scheduler for LocalScheduler {
             {
                 return Ok(None);
             }
+            let turn = ToolTurn {
+                conversation_id: scope,
+                turn_id: turn_id.as_deref(),
+            };
             store
-                .update_task_in_turn(&bot_id, &task_id, request, scope)
+                .update_bot_task(&bot_id, &task_id, request, turn)
                 .map(Some)
         })
         .await
@@ -141,6 +151,12 @@ impl AccountScheduler {
 }
 
 impl AccountScheduler {
+    /// The turn a write names. A write always names one, empty when the hub doesn't know the
+    /// turn: a write without it is the owner's own, and the owner's instruction is authority.
+    fn written_in(&self) -> &str {
+        self.turn_id.as_deref().unwrap_or_default()
+    }
+
     fn turn_path(&self, path: String) -> String {
         match &self.turn_id {
             Some(turn_id) => format!(
@@ -163,7 +179,7 @@ impl Scheduler for AccountScheduler {
             "instruction": request.instruction,
             "title": request.title,
             "monitoring": request.monitoring,
-            "turn_id": self.turn_id,
+            "turn_id": self.written_in(),
         });
         let created = self
             .api
@@ -200,7 +216,7 @@ impl Scheduler for AccountScheduler {
         );
         let mut body = serde_json::to_value(&request)
             .map_err(|error| anyhow!("The task change could not be sent: {error}"))?;
-        body["turn_id"] = json!(self.turn_id);
+        body["turn_id"] = json!(self.written_in());
         let updated = self
             .api
             .request(Method::PATCH, &path, Some(&body))
@@ -252,6 +268,7 @@ pub(crate) async fn scheduler_for(
             app: app.clone(),
             bot_id: bot_id.to_string(),
             conversation_id: turn.conversation_id,
+            turn_id: turn.turn_id,
         })
     } else {
         Arc::new(AccountScheduler {
@@ -322,5 +339,35 @@ mod tests {
             ]
         );
         assert_eq!(calls[2].2["turn_id"], "turn 1");
+    }
+
+    #[tokio::test]
+    async fn a_bots_write_without_a_known_turn_never_passes_as_the_owners() {
+        let recorder = Arc::new(Recorder(Mutex::new(Vec::new())));
+        let scheduler = AccountScheduler {
+            api: recorder.clone(),
+            bot_id: "bot1".into(),
+            turn_id: None,
+        };
+        scheduler
+            .create(CreateBotTask {
+                kind: Some(flow_like_types::bot_task::TaskKind::Once),
+                instruction: "Mail the summary".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        scheduler
+            .update("task1", UpdateBotTask::default())
+            .await
+            .unwrap();
+        let calls = recorder.0.lock().unwrap();
+        let writes: Vec<&Value> = calls
+            .iter()
+            .filter(|(method, _, _)| *method != Method::GET)
+            .map(|(_, _, body)| body)
+            .collect();
+        assert_eq!(writes.len(), 2);
+        assert!(writes.iter().all(|body| body["turn_id"] == ""));
     }
 }

@@ -4,17 +4,17 @@
 
 use async_trait::async_trait;
 use flow_like::credentials::SharedCredentials;
-use flow_like_bot_tools::{
-    AppTables, Attachment, BrowserBackend, ComputerBackend, Environment, FileData, FileEntry,
-    FileMeta, KnowledgeEmbedder, Limits, ModelRole, Scope, SecretInfo, SessionCache, ShellBackend,
-    ToolEnv,
-};
 use flow_like::{
     bit::Bit, flow::execution::ExecutionEnvironment, models::llm::ModelUsageContext,
     profile::Profile, state::FlowLikeState,
 };
 use flow_like_bot_tools::image::{
     CatalogImages, ImageBackend, ImageBudget, ImageUnavailable, hosted_access,
+};
+use flow_like_bot_tools::{
+    AppTables, Attachment, BrowserBackend, ComputerBackend, Environment, FileData, FileEntry,
+    FileMeta, KnowledgeEmbedder, Limits, ModelRole, Scope, SecretInfo, SessionCache, ShellBackend,
+    ToolEnv,
 };
 use flow_like_bot_tools_host::{AppAccess, HostEnv, ImageSource, SecretSource};
 use flow_like_model_provider::llm::ModelLogic;
@@ -28,7 +28,10 @@ use serde_json::Value;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 
-use super::hub::TurnCreds;
+use super::{
+    backends::{HubImageSignIn, image_bit_for_call},
+    hub::TurnCreds,
+};
 
 /// The browser and screen a device gives one bot.
 #[derive(Clone, Default)]
@@ -48,8 +51,9 @@ pub trait Machines: Send + Sync + 'static {
     ) -> MachineBackends;
 }
 
-/// The bot's hosted image model, called through the hub's proxy with the turn's executor token.
-/// One per turn, so the turn's image allowance holds across tool calls.
+/// The bot's image model: a hosted one through the hub's proxy with the turn's executor token,
+/// an own-key one with the sign-in the hub hands out per call. One per turn, so the turn's
+/// image allowance holds across tool calls.
 pub struct HubImages {
     pub state: Arc<FlowLikeState>,
     pub profile: Arc<Profile>,
@@ -57,14 +61,16 @@ pub struct HubImages {
     pub creds: Arc<TurnCreds>,
     pub usage: ModelUsageContext,
     pub budget: Arc<ImageBudget>,
+    pub sign_in: HubImageSignIn,
 }
 
 #[async_trait]
 impl ImageSource for HubImages {
     async fn images(&self) -> std::result::Result<Arc<dyn ImageBackend>, ImageUnavailable> {
+        let bit = image_bit_for_call(&self.bit, &self.sign_in).await?;
         let hosted = hosted_access(&self.state, self.creds.executor_token(), Some(&self.usage));
         let images = CatalogImages::resolve(
-            self.bit.clone(),
+            bit,
             &self.profile,
             &self.state,
             ExecutionEnvironment::Desktop,
@@ -150,21 +156,23 @@ impl AppAccess for PresignedAccess {
 /// people list names, so the model sees no secret names on a device.
 pub struct HubSecrets {
     pub hub: Arc<dyn flow_like_bot_host::hub::TurnHub>,
+    pub bot_id: String,
     pub turn_id: String,
+    /// Opens a secret sealed to the bot's own key; without it a sealed secret is refused.
+    pub e2e: Option<Arc<flow_like_bot_host::e2e::E2eHost>>,
 }
 
 #[async_trait]
 impl SecretSource for HubSecrets {
     async fn secret(&self, name: &str) -> Result<Option<String>> {
-        let path = format!("bots/turns/{}/secrets/{name}", self.turn_id);
-        match self.hub.write(&path, Vec::new(), Value::Null).await {
-            Ok(value) => Ok(value
-                .get("value")
-                .and_then(Value::as_str)
-                .map(str::to_owned)),
-            Err(failure) if failure.status == Some(404) => Ok(None),
-            Err(failure) => Err(anyhow!("Reading secret '{name}' failed: {failure}")),
-        }
+        flow_like_bot_host::secrets::read_turn_secret(
+            self.hub.as_ref(),
+            self.e2e.as_deref(),
+            &self.bot_id,
+            &self.turn_id,
+            name,
+        )
+        .await
     }
 
     async fn list(&self) -> Result<Vec<SecretInfo>> {
@@ -383,6 +391,10 @@ impl ToolEnv for DeviceToolEnv {
 
     fn people(&self) -> Option<Arc<dyn flow_like_bot_tools::PeopleBackend>> {
         self.inner.people()
+    }
+
+    fn rooms(&self) -> Option<Arc<dyn flow_like_bot_tools::RoomInvites>> {
+        self.inner.rooms()
     }
 
     fn allow_expensive_documents(&self) -> bool {

@@ -148,6 +148,9 @@ export class EmptyAppState implements IAppState {
 	changeAppForkPolicy(appId: string, policy: IForkPolicy): Promise<void> {
 		throw new Error("Method not implemented.");
 	}
+	changeAppBotAccess(appId: string, refuseBots: boolean): Promise<void> {
+		throw new Error("Method not implemented.");
+	}
 	getForkPreview(
 		appId: string,
 		target: IForkPreviewTarget,

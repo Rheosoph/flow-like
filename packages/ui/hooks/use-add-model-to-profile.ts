@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import type { IBit } from "../lib/schema/bit/bit";
 import type { IHub } from "../lib/schema/hub/hub";
 import { useBackend } from "../state/backend-state";
+import type { IUserState } from "../state/backend-state/user-state";
 import { useDownloadManager } from "../state/download-manager";
 import {
 	handleUpgradeRequiredError,
@@ -52,13 +53,27 @@ export function isBitInProfile(
 	);
 }
 
+/** The profile a model is added to: the named one when it exists, else the active one. */
+async function targetProfile(
+	userState: Pick<IUserState, "getAllSettingsProfiles">,
+	active: ISettingsProfile,
+	profileId: string | undefined,
+): Promise<ISettingsProfile> {
+	if (!profileId || profileId === active.hub_profile.id) return active;
+	const all = await userState.getAllSettingsProfiles();
+	return all.find((profile) => profile.hub_profile.id === profileId) ?? active;
+}
+
 /**
  * Adds models to the active profile the way the model catalog does: a model above the person's
  * plan opens the upgrade dialog, a model with files downloads first. `add` resolves false when the
  * model was not added; it reports why itself. `allows` checks the plan alone, so a picker can use
  * the model at once and leave `add` to finish in the background.
  */
-export function useAddModelToProfile(queryScope: string[] = []) {
+export function useAddModelToProfile(
+	queryScope: string[] = [],
+	profileId?: string,
+) {
 	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
@@ -119,8 +134,9 @@ export function useAddModelToProfile(queryScope: string[] = []) {
 			bit: IBit,
 			fetch: (bit: IBit) => Promise<unknown> = fetchFiles,
 		): Promise<boolean> => {
-			const current = profile.data;
-			if (!current) return false;
+			const active = profile.data;
+			if (!active) return false;
+			const current = await targetProfile(backend.userState, active, profileId);
 			if (isBitInProfile(current, bit.id)) return true;
 			if (!allows(bit)) return false;
 			try {
@@ -147,6 +163,7 @@ export function useAddModelToProfile(queryScope: string[] = []) {
 		},
 		[
 			profile.data,
+			profileId,
 			allows,
 			fetchFiles,
 			backend.bitState,

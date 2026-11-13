@@ -7,6 +7,7 @@ import type {
 } from "../../components/interfaces/chat-default/chat-db";
 import { processChatEvents } from "../../components/interfaces/chat-default/event-processor";
 import { Response } from "../../lib/llm/response";
+import { readUsageStat } from "../../lib/llm/usage";
 import { IRole } from "../../lib/schema/llm/history";
 import { createAgentDebugStreamRecorder } from "./agent-debug-report";
 import {
@@ -87,7 +88,22 @@ export function createNativeStreamPresentation(runId: string) {
 				specialists.set(frame.requestId, specialist);
 			}
 			for (const event of specialist.parser.push(frame.frame)) {
-				if (event.type !== "text") applyStreamEvent(specialist.acc, event);
+				if (event.type === "usage_stat") {
+					const stat = readUsageStat(event.data);
+					if (stat)
+						applyStreamEvent(specialist.acc, {
+							...event,
+							data: {
+								...stat,
+								source_id: `native:${typeof frame.usageId === "string" ? frame.usageId : frame.requestId}`,
+								step_name:
+									stat.step_name === "Assistant"
+										? "Delegated model work"
+										: stat.step_name,
+							},
+						});
+				} else if (event.type !== "text")
+					applyStreamEvent(specialist.acc, event);
 			}
 			if (frame.stage === "finished") {
 				for (const [id, step] of specialist.acc.steps) {

@@ -16,6 +16,7 @@ use crate::{
     },
     hub::{Claimed, HubFailure, HubGrants, TurnHub, TurnSession, WaitOutcome},
     latency::{self, CallTrace},
+    live_reply,
     memory::{self, JobMemory},
     notes::{HubNotes, StatusTurn},
     room_updates::{HubRoomUpdates, RoomUpdateTracker},
@@ -109,6 +110,7 @@ enum Cancel {
 }
 
 struct Live {
+    usage: flow_like::flow::copilot::bot_usage::BotUsage,
     info: TurnInfo,
     cancel: Arc<watch::Sender<Option<Cancel>>>,
     posting: bool,
@@ -387,6 +389,7 @@ impl Inner {
                 }
                 let (cancel, receiver) = watch::channel(None);
                 let live = Live {
+                    usage: Default::default(),
                     info: info_of(&turn, TurnStatus::Queued),
                     cancel: Arc::new(cancel),
                     posting: false,
@@ -772,10 +775,6 @@ impl Inner {
         let no_prompt = transcript.prompt.is_empty();
         let note = resume_note(grants.as_ref()).await;
         let resumed = note.is_some();
-        let prompt = match note {
-            Some(note) => format!("{}\n\n{note}", transcript.prompt),
-            None => transcript.prompt,
-        };
         let requester = TurnRequester {
             requester_id: lead
                 .requester_id
@@ -859,6 +858,7 @@ impl Inner {
             None
         };
         let recovering = checkpoint.is_some();
+        let prompt = crate::recovery::resumed_prompt(transcript.prompt, note, checkpoint.as_ref());
         let saved_delivery = match checkpoint
             .as_ref()
             .map(decision_event::saved_delivery)
@@ -907,12 +907,15 @@ impl Inner {
             ToolTrail::new(transcript::tool_trail(bot_id, &entries[..upto]))
         });
         let reply_files = (!ephemeral_user_context).then(ReplyFiles::new);
+        let usage = flow_like::flow::copilot::bot_usage::BotUsage::default();
         if let Some(live) = lock(&self.state).live.get_mut(key) {
             live.notes = notes.clone();
             live.trail = trail.clone();
             live.reply_files = reply_files.clone();
+            live.usage = usage.clone();
         }
         let mut job = TurnJob {
+            usage,
             run_id: lead.id.clone(),
             bot_id: bot_id.clone(),
             conversation_id: chat_conversation,
@@ -941,6 +944,7 @@ impl Inner {
             answered_round,
             claim,
             recovery,
+            reply_stream: None,
         };
         gate.set_inference(Some(RunnerInference::new(
             self.runner.clone(),
@@ -1051,6 +1055,7 @@ impl Inner {
             crate::recovery::remaining_deadline(job.recovery.as_ref(), self.config.deadline);
         let mut parallel: Option<(ToolGateOpener, RunFuture<'_>)> = None;
         let mut early: Option<RunOutcome> = None;
+        let mut reply = None;
         if (kind == ConversationKind::Group || call_utterance)
             && event.is_none()
             && !continued
@@ -1063,6 +1068,7 @@ impl Inner {
                 job.tool_gate = Some(tool_gate);
                 trace.parallel = true;
                 trace.run_started();
+                reply = live_reply::open(self.events.as_ref(), &mut job, &lead.trigger_message_id);
                 parallel = Some((
                     opener,
                     Box::pin(tokio::time::timeout(deadline, self.runner.run(job.clone()))),
@@ -1211,6 +1217,7 @@ impl Inner {
             Some((opener, run)) => (Some(opener), run),
             None => {
                 trace.run_started();
+                reply = live_reply::open(self.events.as_ref(), &mut job, &lead.trigger_message_id);
                 let run: RunFuture<'_> =
                     Box::pin(tokio::time::timeout(deadline, self.runner.run(job)));
                 (None, run)
@@ -1231,10 +1238,10 @@ impl Inner {
                 outcome
             }
         };
+        live_reply::pause(reply.as_ref(), &outcome);
         if let Some(card) = gate.parked() {
             if let Err(error) =
-                crate::recovery::preserve_unexecuted_approval(approval_recovery.as_ref(), &gate)
-                    .await
+                crate::recovery::preserve_held_batch(approval_recovery.as_ref(), &gate).await
             {
                 return self
                     .retry_or_fail(
@@ -1353,6 +1360,8 @@ impl Inner {
                         cancel,
                     )
                     .await;
+                let posted = end.status == TurnStatus::Done && end.reply.is_some();
+                live_reply::finish(reply.take(), posted).await;
                 if end.status == TurnStatus::Done {
                     clear_tokens(grants.as_ref(), &seen).await;
                 }
@@ -1543,7 +1552,7 @@ impl Inner {
                 tracing::warn!(%failure, "Bot host: the hub did not park an account turn");
                 let text = format!(
                     "I needed your approval to run {} but could not ask you: {}",
-                    card.tool,
+                    crate::gate::card_tools(card),
                     clipped(&failure.message, MAX_FAILURE_DETAIL_CHARS)
                 );
                 self.post(key, lead, hub, &text, Some(CODE_SETUP), sealed, cancel)
@@ -1578,7 +1587,7 @@ impl Inner {
         sealed: bool,
         cancel: &mut watch::Receiver<Option<Cancel>>,
     ) -> End {
-        let (note, trail, files);
+        let (note, trail, files, usage);
         {
             let mut state = lock(&self.state);
             let Some(live) = state.live.get_mut(key) else {
@@ -1591,6 +1600,7 @@ impl Inner {
             note = live.notes.as_ref().and_then(NotesHandle::touched);
             trail = live.trail.clone();
             files = live.reply_files.clone();
+            usage = live.usage.clone();
         }
         let message_id = if failure.is_some() {
             failure_message_id(&lead.bot_id, &lead.trigger_message_id)
@@ -1619,8 +1629,9 @@ impl Inner {
                 body.remove("reply_to");
             }
         }
+        usage.attach(&mut body);
         let message = if sealed {
-            match self.sealed_message(lead, &message_id, &body).await {
+            match self.sealed_message(lead, &message_id, &body, failure).await {
                 Ok(message) => message,
                 Err(failure) => {
                     tracing::warn!(code = failure.code, message = %failure.message, "Bot host: an encrypted reply could not be sealed");
@@ -1685,11 +1696,14 @@ impl Inner {
         e2e.open_entries(bot_id, trigger_message_id, entries).await
     }
 
+    /// The sealed send of `body`. A failure report names its code beside the envelopes, because
+    /// the hub records why the turn failed and can't read the sealed body.
     async fn sealed_message(
         &self,
         lead: &BotTurn,
         message_id: &str,
         body: &serde_json::Value,
+        failure: Option<&str>,
     ) -> Result<serde_json::Value, e2e::E2eFailure> {
         let Some(e2e) = self.e2e.get() else {
             return Err(e2e::E2eFailure {
@@ -1700,11 +1714,15 @@ impl Inner {
         let envelopes = e2e
             .seal(&lead.bot_id, &lead.conversation_id, message_id, body)
             .await?;
-        Ok(json!({
+        let mut message = json!({
             "message_id": message_id,
             "kind": "message",
             "envelopes": envelopes,
-        }))
+        });
+        if let Some(code) = failure {
+            message["failure_code"] = json!(code);
+        }
+        Ok(message)
     }
 
     fn start(&self, key: &Key, lead: &BotTurn) -> Arc<watch::Sender<Option<Cancel>>> {

@@ -541,7 +541,45 @@ pub fn capture_monitor(monitor: &xcap::Monitor) -> flow_like_types::Result<image
             }
         }
     }
+    #[cfg(target_os = "macos")]
+    match capture_with_screen_capture_kit(monitor) {
+        Ok(image) => return Ok(image),
+        Err(error) => note_screen_capture_kit_fallback(&error),
+    }
     Ok(monitor.capture_image()?)
+}
+
+/// Captures through ScreenCaptureKit at the pixel size the display geometry promises, so a later
+/// fallback to CGWindowList keeps the same frame. Without Screen Recording it is not tried: it
+/// would fail where CGWindowList still returns the wallpaper callers got before.
+#[cfg(all(feature = "execute", target_os = "macos"))]
+pub(crate) fn capture_with_screen_capture_kit(
+    monitor: &xcap::Monitor,
+) -> flow_like_types::Result<image::RgbaImage> {
+    use crate::capabilities::{AutomationCapability, CapabilityState, capability_status};
+    if capability_status(AutomationCapability::ScreenCapture).state != CapabilityState::Granted {
+        return Err(flow_like_types::anyhow!(
+            "Screen Recording is not granted to this process"
+        ));
+    }
+    let (width, height) = crate::types::screen_frame::monitor_pixel_size(monitor)?;
+    crate::computer::native::screen_capture_macos::capture_display(monitor.id()?, width, height)
+}
+
+#[cfg(all(feature = "execute", target_os = "macos"))]
+fn note_screen_capture_kit_fallback(error: &flow_like_types::Error) {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        tracing::debug!(
+            "ScreenCaptureKit capture failed, using CGWindowList: {}",
+            error
+        );
+    } else {
+        tracing::warn!(
+            "ScreenCaptureKit capture failed, using CGWindowList: {}",
+            error
+        );
+    }
 }
 
 #[cfg(feature = "execute")]

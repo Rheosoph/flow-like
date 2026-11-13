@@ -2,12 +2,13 @@
 
 use super::store::HostStore;
 use async_trait::async_trait;
-use flow_like::flow::copilot::tool_authorization::execution_request;
-use flow_like_bot_host::authorization::{AuthoritySource, owner_messages};
+use flow_like::flow::copilot::tool_authorization::{
+    execution_request, owner_task_instruction, requested_task_instruction,
+};
+use flow_like_bot_host::authorization::{AuthoritySource, owner_message, owner_messages};
 use flow_like_local_bots::{Conversation, LOCAL_OWNER_ID};
 use flow_like_types::{
     Result, anyhow,
-    bot_task::TaskCreator,
     inbox::{ConversationKind, PrincipalKind, TriggerBody, TriggerSource},
 };
 use serde_json::{Value, json};
@@ -74,8 +75,9 @@ impl LocalAuthority {
         Ok(rooms)
     }
 
-    /// Only a task the owner created carries owner instructions; a bot-created task's text
-    /// came from a model and stays evidence.
+    /// A task the owner wrote in the app carries their instruction. A task the bot scheduled
+    /// carries the owner's message that asked for it, read now with its edits and deletion; the
+    /// bot's own wording stays evidence. Older tasks and tasks asked for elsewhere carry nothing.
     async fn configured_trigger_instruction(&self) -> Result<Option<Value>> {
         let Some(trigger) = self
             .trigger
@@ -84,16 +86,27 @@ impl LocalAuthority {
         else {
             return Ok(None);
         };
-        let task = self
+        let Some(authority) = self
             .store
-            .task(&self.bot_id, &trigger.ref_id)
+            .task_authority(&self.bot_id, &trigger.ref_id)
             .await
-            .map_err(|error| anyhow!(error))?;
-        Ok(task
-            .filter(|task| task.created_by == TaskCreator::Owner)
-            .map(|task| {
-                json!({"id": task.id, "source": "schedule", "instruction": task.instruction})
-            }))
+            .map_err(|error| anyhow!(error))?
+        else {
+            return Ok(None);
+        };
+        let task = authority.task;
+        if authority.owner_written {
+            return Ok(Some(owner_task_instruction(&task.id, &task.instruction)));
+        }
+        Ok(authority.request.and_then(|request| {
+            owner_message(
+                &request.entries,
+                LOCAL_OWNER_ID,
+                &request.conversation_id,
+                &request.message_id,
+            )
+            .map(|message| requested_task_instruction(&task.id, &task.instruction, message))
+        }))
     }
 }
 

@@ -107,7 +107,8 @@ export interface ICompletionTokenDetails {
 }
 
 export interface IPromptTokenDetails {
-	audio_tokens: number;
-	cached_tokens: number;
+	audio_tokens?: number | null;
+	cached_tokens?: number | null;
+	cache_write_tokens?: number | null;
 	[property: string]: any;
 }

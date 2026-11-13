@@ -40,9 +40,20 @@ pub(crate) enum OpenTarget {
 ))]
 #[derive(Clone)]
 pub(crate) struct PlaygroundTarget {
-    pub host: crate::playground::MachineHost,
+    pub host: PlaygroundHost,
     pub bot_id: String,
     pub observations: bool,
+}
+
+#[cfg(all(
+    feature = "playground",
+    any(target_os = "macos", windows, target_os = "linux")
+))]
+#[derive(Clone)]
+pub(crate) enum PlaygroundHost {
+    Native(crate::playground::MachineHost),
+    #[cfg(feature = "bot-host")]
+    Container,
 }
 
 fn require_playground_owner(authority: &Authority) -> Result<()> {
@@ -55,6 +66,23 @@ fn require_playground_owner(authority: &Authority) -> Result<()> {
 ))]
 fn playground(authority: &Authority, bot_id: &str, observations: bool) -> Result<OpenTarget> {
     require_playground_owner(authority)?;
+    #[cfg(feature = "bot-host")]
+    match crate::bot_host::container::cached_execution_mode(bot_id) {
+        Some(flow_like_types::bot::BotExecutionMode::Docker) => {
+            return Ok(OpenTarget::BotPlayground(PlaygroundTarget {
+                host: PlaygroundHost::Container,
+                bot_id: bot_id.to_owned(),
+                observations,
+            }));
+        }
+        Some(flow_like_types::bot::BotExecutionMode::Native) => {}
+        None => {
+            return Err(refusal(
+                RejectionCode::Unsupported,
+                "This bot has no active assignment on this device yet",
+            ));
+        }
+    }
     let host = crate::playground::shared_machine_host().ok_or_else(|| {
         refusal(
             RejectionCode::Unsupported,
@@ -62,7 +90,7 @@ fn playground(authority: &Authority, bot_id: &str, observations: bool) -> Result
         )
     })?;
     Ok(OpenTarget::BotPlayground(PlaygroundTarget {
-        host,
+        host: PlaygroundHost::Native(host),
         bot_id: bot_id.to_owned(),
         observations,
     }))

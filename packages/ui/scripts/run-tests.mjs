@@ -13,14 +13,19 @@ const EXCLUDED = new Map([]);
 const SKIPPED_DIRS = new Set(["node_modules", ".next", "dist", "out"]);
 const TEST_FILE = /\.test\.tsx?$/;
 const VITEST_IMPORT = /from\s+["']vitest["']/;
-const jobs = Number(process.env.UI_TEST_JOBS) || Math.min(8, availableParallelism());
+const jobs =
+	Number(process.env.UI_TEST_JOBS) || Math.min(8, availableParallelism());
 const FILE_TIMEOUT_MS = 180_000;
-const only =process.argv.slice(2);
+// The first test of a heavy file pays for transforming its module graph: over vitest's 5 s
+// default on a loaded machine or a small CI runner.
+const VITEST_TEST_TIMEOUT_MS = 60_000;
+const only = process.argv.slice(2);
 
 function collect(dir, found = []) {
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
 		if (entry.isDirectory()) {
-			if (!SKIPPED_DIRS.has(entry.name)) collect(path.join(dir, entry.name), found);
+			if (!SKIPPED_DIRS.has(entry.name))
+				collect(path.join(dir, entry.name), found);
 		} else if (TEST_FILE.test(entry.name)) {
 			found.push(path.relative(uiRoot, path.join(dir, entry.name)));
 		}
@@ -35,7 +40,11 @@ function run(command, args, cwd, label, timeoutMs = 0) {
 		const child = spawn(command, args, { cwd, env: process.env });
 		const timer = timeoutMs
 			? setTimeout(() => {
-					chunks.push(Buffer.from(`\nkilled after ${timeoutMs / 1000}s without finishing\n`));
+					chunks.push(
+						Buffer.from(
+							`\nkilled after ${timeoutMs / 1000}s without finishing\n`,
+						),
+					);
 					child.kill("SIGKILL");
 				}, timeoutMs)
 			: undefined;
@@ -44,7 +53,12 @@ function run(command, args, cwd, label, timeoutMs = 0) {
 		child.stderr.on("data", (data) => chunks.push(data));
 		child.on("error", (error) => {
 			chunks.push(Buffer.from(String(error)));
-			resolve({ label, code: 1, output: Buffer.concat(chunks).toString(), ms: 0 });
+			resolve({
+				label,
+				code: 1,
+				output: Buffer.concat(chunks).toString(),
+				ms: 0,
+			});
 		});
 		child.on("close", (code) =>
 			resolve({
@@ -60,23 +74,31 @@ function run(command, args, cwd, label, timeoutMs = 0) {
 async function pool(items, worker) {
 	const results = [];
 	let next = 0;
-	const lanes = Array.from({ length: Math.min(jobs, items.length) }, async () => {
-		while (next < items.length) {
-			results.push(await worker(items[next++]));
-		}
-	});
+	const lanes = Array.from(
+		{ length: Math.min(jobs, items.length) },
+		async () => {
+			while (next < items.length) {
+				results.push(await worker(items[next++]));
+			}
+		},
+	);
 	await Promise.all(lanes);
 	return results;
 }
 
 function summarize(output) {
-	const lines = output.split("\n").filter((line) => /^\s*(\d+ (pass|fail)|Tests\s|Test Files\s)/.test(line));
+	const lines = output
+		.split("\n")
+		.filter((line) => /^\s*(\d+ (pass|fail)|Tests\s|Test Files\s)/.test(line));
 	return lines.join(" | ");
 }
 
 const all = collect(uiRoot)
 	.filter((file) => !EXCLUDED.has(file))
-	.filter((file) => only.length === 0 || only.some((prefix) => file.startsWith(prefix)))
+	.filter(
+		(file) =>
+			only.length === 0 || only.some((prefix) => file.startsWith(prefix)),
+	)
 	.sort();
 const vitestFiles = [];
 const bunFiles = [];
@@ -95,14 +117,23 @@ const started = Date.now();
 
 function report(result) {
 	const state = result.code === 0 ? "ok  " : "FAIL";
-	console.log(`${state} ${result.label} (${(result.ms / 1000).toFixed(1)}s) ${summarize(result.output)}`);
+	console.log(
+		`${state} ${result.label} (${(result.ms / 1000).toFixed(1)}s) ${summarize(result.output)}`,
+	);
 	if (result.code !== 0) failures.push(result);
 }
 
 const bunResults = await pool(bunFiles, (file) =>
-	run("bun", ["test", "--timeout", "30000", `./${file}`], uiRoot, file, FILE_TIMEOUT_MS),
+	run(
+		"bun",
+		["test", "--timeout", "30000", `./${file}`],
+		uiRoot,
+		file,
+		FILE_TIMEOUT_MS,
+	),
 );
-for (const result of bunResults.sort((a, b) => a.label.localeCompare(b.label))) report(result);
+for (const result of bunResults.sort((a, b) => a.label.localeCompare(b.label)))
+	report(result);
 
 if (vitestFiles.length > 0) {
 	const args = [
@@ -110,15 +141,21 @@ if (vitestFiles.length > 0) {
 		"run",
 		"--environment",
 		"happy-dom",
+		"--dir",
+		"packages/ui",
 		"--maxWorkers",
 		String(Math.max(1, Math.min(4, jobs))),
+		"--testTimeout",
+		String(VITEST_TEST_TIMEOUT_MS),
 		...vitestFiles.map((file) => `packages/ui/${file}`),
 	];
 	report(await run("bunx", args, repoRoot, "vitest"));
 }
 
 for (const failure of failures) {
-	console.log(`\n===== ${failure.label} =====\n${failure.output.split("\n").slice(-80).join("\n")}`);
+	console.log(
+		`\n===== ${failure.label} =====\n${failure.output.split("\n").slice(-80).join("\n")}`,
+	);
 }
 console.log(
 	`\nui tests finished in ${((Date.now() - started) / 1000).toFixed(0)}s, ${failures.length} failing group(s)${failures.length ? `: ${failures.map((failure) => failure.label).join(", ")}` : ""}`,

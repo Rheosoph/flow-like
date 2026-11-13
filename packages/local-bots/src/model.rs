@@ -4,7 +4,7 @@
 
 use chrono::{DateTime, FixedOffset};
 use flow_like_types::{
-    bot::{BotCapability, BotLocation, BotModelPolicy, BotSystemKind},
+    bot::{BotCapability, BotExecutionMode, BotLocation, BotModelPolicy, BotSystemKind},
     bot_restrictions::BotRestrictions,
     data_classification::DataSensitivity,
     inbox::{ConversationEncryption, ConversationKind, InboxEntryKind, PrincipalKind},
@@ -102,6 +102,8 @@ pub struct CreateBotRequest {
     pub profile_id: Option<String>,
     /// Omitted means `desktop`, the only location a bot without an account has.
     pub location: Option<BotLocation>,
+    /// Local bots accept native execution only.
+    pub execution_mode: Option<BotExecutionMode>,
     pub device_id: Option<String>,
 }
 
@@ -133,6 +135,7 @@ pub struct UpdateBotRequest {
     #[serde(default, deserialize_with = "nullable")]
     pub profile_id: Option<Option<String>>,
     pub location: Option<BotLocation>,
+    pub execution_mode: Option<BotExecutionMode>,
     #[serde(default, deserialize_with = "nullable")]
     pub device_id: Option<Option<String>>,
 }

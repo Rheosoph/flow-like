@@ -11,6 +11,7 @@ import { act, createElement } from "react";
 import type {
 	BotApprovalDecision,
 	IBot,
+	IBotApprovalItemDecision,
 	IBotToolGrant,
 } from "../../state/backend-state/bot-state";
 import {
@@ -39,6 +40,8 @@ const { BotToolGrants } = await import("./bot-tool-grants");
 const { NeedsYouSection } = await import("./needs-you-section");
 
 const answers: Array<[string, string, string, BotApprovalDecision]> = [];
+const answerItems: Array<IBotApprovalItemDecision[] | undefined> = [];
+let refusal: { code: string; message: string } | undefined;
 const events: string[] = [];
 const secrets: Array<[string, string, { value: string; description: string }]> =
 	[];
@@ -54,10 +57,13 @@ const botState = {
 		turnId: string,
 		approvalId: string,
 		decision: BotApprovalDecision,
+		items?: IBotApprovalItemDecision[],
 	) => {
 		if (failAnswer) throw new Error("offline");
+		if (refusal) throw Object.assign(new Error(refusal.message), refusal);
 		events.push("answer");
 		answers.push([botId, turnId, approvalId, decision]);
+		answerItems.push(items);
 	},
 	upsertBotSecret: async (
 		botId: string,
@@ -141,6 +147,8 @@ afterAll(async () => {
 beforeEach(async () => {
 	await act(async () => root.render(null));
 	answers.length = 0;
+	answerItems.length = 0;
+	refusal = undefined;
 	events.length = 0;
 	secrets.length = 0;
 	failSecret = false;
@@ -161,6 +169,51 @@ async function type(input: HTMLInputElement, value: string) {
 	});
 	await settle();
 }
+
+describe("ApprovalCard room invitation", () => {
+	const inviteCard = (id = "ap-i") =>
+		createElement(ApprovalCard, {
+			key: id,
+			approval: {
+				id,
+				turnId: "turn_i",
+				tool: "room_invite",
+				summary: "The bot wants to invite ana@example.org to this group chat.",
+				scopes: [],
+				room: "Launch crew",
+				invite: {
+					person: "ana@example.org",
+					reason: "She owns the budget sheet we are discussing.",
+				},
+			} as never,
+			botId: "bot_a",
+			botName: "Scout",
+			readOnly: false,
+		});
+
+	test("names the person, the room and why, and offers Invite or Deny only", async () => {
+		await show(inviteCard());
+		const text = container.textContent ?? "";
+		expect(text).toContain("Scout wants to invite ana@example.org");
+		expect(text).toContain("She owns the budget sheet we are discussing.");
+		expect(text).toContain("Launch crew");
+		expect(button("Invite")).toBeDefined();
+		expect(button("Deny")).toBeDefined();
+		expect(button("Always allow")).toBeUndefined();
+		expect(button("Allow once")).toBeUndefined();
+	});
+
+	test("Invite answers once and Deny answers deny", async () => {
+		await show(inviteCard());
+		await click(button("Invite"));
+		await show(inviteCard("ap-i2"));
+		await click(button("Deny"));
+		expect(answers).toEqual([
+			["bot_a", "turn_i", "ap-i", "once"],
+			["bot_a", "turn_i", "ap-i2", "deny"],
+		]);
+	});
+});
 
 describe("ApprovalCard secret request", () => {
 	const secretCard = (replace?: boolean) =>
@@ -380,6 +433,518 @@ describe("ApprovalCard", () => {
 	});
 });
 
+const DAY = 24 * 60 * 60 * 1000;
+
+function radioGroup(label: string): HTMLElement | undefined {
+	return [...container.querySelectorAll("[role='radiogroup']")].find(
+		(group) => group.getAttribute("aria-label") === label,
+	) as HTMLElement | undefined;
+}
+
+function radio(group: string, value: BotApprovalDecision) {
+	return radioGroup(group)?.querySelector(`[role='radio'][value='${value}']`) as
+		| HTMLButtonElement
+		| undefined;
+}
+
+const footerButtons = () =>
+	[...(container.querySelector("footer")?.querySelectorAll("button") ?? [])]
+		.map((element) => element.textContent?.trim())
+		.filter(Boolean);
+
+/** The eyebrow: an `output`, so a screen reader hears the answer. */
+const status = () =>
+	container.querySelector("header output[aria-live='polite']");
+const statusText = () => status()?.textContent ?? undefined;
+
+describe("ApprovalCard for one call", () => {
+	const card = (overrides: Record<string, unknown> = {}) =>
+		createElement(ApprovalCard, {
+			approval: { ...approval, postedAt: Date.now(), ...overrides } as never,
+			botId: "bot_a",
+			botName: "Scout",
+			readOnly: false,
+		});
+
+	test("looks as before batches: no list, the three answers", async () => {
+		await show(card());
+		expect(
+			container.querySelector("[data-slot='approval-batch-list']"),
+		).toBeNull();
+		expect(container.querySelector("section")?.getAttribute("aria-label")).toBe(
+			"Approval request",
+		);
+		expect(footerButtons()).toEqual(["Deny", "Allow once", "Always allow"]);
+		expect(container.textContent).not.toContain("Asked again");
+	});
+
+	test("asked again after web content: says why and offers no Always allow", async () => {
+		await show(
+			card({
+				tool: "web_request",
+				summary: "The bot wants to send a GET request to cisa.gov/alerts.",
+				scopes: ["web:cisa.gov:read"],
+				afterWebContent: true,
+			}),
+		);
+		const text = container.textContent ?? "";
+		expect(text).toContain("Read from cisa.gov");
+		expect(text).toContain("Asked again");
+		expect(text).toContain("Asked again because this turn read web pages.");
+		expect(footerButtons()).toEqual(["Deny", "Allow once"]);
+	});
+
+	test("unanswered for more than seven days it reads as expired, without buttons", async () => {
+		await show(card({ postedAt: Date.now() - 8 * DAY }));
+		expect(
+			container.querySelector("[data-slot='approval-closure']")?.textContent,
+		).toBe("Expired");
+		expect(container.textContent).toContain(
+			"Nobody answered within 7 days, so Scout stopped.",
+		);
+		expect(container.querySelectorAll("button")).toHaveLength(0);
+	});
+
+	test("a refusal as expired turns it into the expired card", async () => {
+		refusal = { code: "BOT_APPROVAL_EXPIRED", message: "expired" };
+		await show(card());
+		await click(button("Allow once"));
+		expect(
+			container.querySelector("[data-slot='approval-closure']")?.textContent,
+		).toBe("Expired");
+		expect(container.querySelector("[role='alert']")).toBeNull();
+	});
+
+	test("answered on another device: says so and keeps the buttons disabled", async () => {
+		refusal = {
+			code: "BOT_TURN_NOT_WAITING",
+			message: "[BOT_TURN_NOT_WAITING] Turn is queued",
+		};
+		await show(card());
+		await click(button("Allow once"));
+		expect(container.textContent).toContain("Answered on another device");
+		expect(container.querySelector("[role='alert']")).toBeNull();
+		expect(button("Allow once")?.disabled).toBe(true);
+		expect(button("Deny")?.disabled).toBe(true);
+	});
+
+	test("a cancelled task closes the card", async () => {
+		await show(card({ cancelled: true }));
+		expect(
+			container.querySelector("[data-slot='approval-closure']")?.textContent,
+		).toBe("Task cancelled");
+		expect(container.querySelectorAll("button")).toHaveLength(0);
+	});
+});
+
+describe("ApprovalCard with a batch of calls", () => {
+	const read = (
+		hash: string,
+		page: number,
+		extra: Record<string, unknown> = {},
+	) => ({
+		argsHash: hash,
+		tool: "web_request",
+		summary: `The bot wants to send a GET request to cisa.gov/alerts?p=${page}.`,
+		scopes: ["web:cisa.gov:read"],
+		calls: 1,
+		afterWebContent: false,
+		...extra,
+	});
+	const mail = {
+		argsHash: "m1",
+		tool: "email_send",
+		summary: "The bot wants to send the weekly digest to team@acme.com.",
+		scopes: ["email:acme.com"],
+		calls: 1,
+		afterWebContent: false,
+	};
+	const secretItem = {
+		argsHash: "s1",
+		tool: "secret_request",
+		summary: "Ask for API_TOKEN",
+		scopes: [],
+		calls: 1,
+		afterWebContent: false,
+		secret: { name: "API_TOKEN", description: "For the weather API" },
+	};
+	const batch = (items: unknown[], extra: Record<string, unknown> = {}) => ({
+		id: "ap-b",
+		turnId: "turn_b",
+		tool: "approval_batch",
+		summary: "The bot wants to make some calls",
+		scopes: [],
+		items,
+		postedAt: Date.now(),
+		...extra,
+	});
+	const three = (extra: Record<string, unknown> = {}) =>
+		batch([read("h1", 1), read("h2", 2), mail], extra);
+	const thirty = () =>
+		batch([
+			...Array.from({ length: 12 }, (_, page) => read(`c${page}`, page)),
+			...Array.from({ length: 3 }, (_, page) =>
+				read(`n${page}`, page, {
+					summary: `The bot wants to send a GET request to nvd.nist.gov/vuln?p=${page}.`,
+					scopes: ["web:nvd.nist.gov:read"],
+					calls: 3,
+				}),
+			),
+			read("g1", 0, {
+				summary:
+					"The bot wants to send a POST request to api.github.com/gists.",
+				scopes: ["web:api.github.com:write"],
+				afterWebContent: true,
+			}),
+			{
+				argsHash: "x1",
+				tool: "shell_run",
+				summary: "Run curl",
+				scopes: ["command:curl"],
+				calls: 4,
+				afterWebContent: false,
+			},
+			mail,
+			{
+				...mail,
+				argsHash: "m2",
+				summary: "Send the alert digest to ops@acme.com",
+			},
+			{
+				argsHash: "b1",
+				tool: "browser_open",
+				summary: "Open news.ycombinator.com",
+				scopes: ["browser:news.ycombinator.com"],
+				calls: 1,
+				afterWebContent: false,
+			},
+			read("f1", 0, {
+				tool: "file_save",
+				summary: "Save example.org/report.pdf",
+				scopes: ["web:example.org:read"],
+			}),
+		]);
+	const card = (value: unknown) =>
+		createElement(ApprovalCard, {
+			approval: value as never,
+			botId: "bot_a",
+			botName: "Scout",
+			readOnly: false,
+		});
+	const groups = () =>
+		[...container.querySelectorAll("[data-slot='approval-group']")].map(
+			(group) => group.textContent ?? "",
+		);
+	const callRows = () =>
+		container.querySelectorAll("[data-slot='approval-group'] li");
+	const cisa = "Answer for 2 calls to Read from cisa.gov";
+	const acme = "Answer for 1 call to Send email to acme.com";
+	const second = "Answer for Send a GET request to cisa.gov/alerts?p=2";
+
+	test("three calls: one card, grouped by tool and site, every call on its own line", async () => {
+		await show(card(three()));
+		expect(container.querySelector("section")?.getAttribute("aria-label")).toBe(
+			"Approval request, 3 calls",
+		);
+		expect(statusText()).toBe("Approval request · 3 calls");
+		expect(container.querySelector("header h3")?.textContent).toBe(
+			"Scout wants to make 3 calls",
+		);
+		const [web, email] = groups();
+		expect(groups()).toHaveLength(2);
+		expect(web).toContain("web_request");
+		expect(web).toContain("Read from cisa.gov");
+		expect(web).toContain("2 calls");
+		expect(web).toContain("GET /alerts?p=1");
+		expect(web).not.toContain("The bot wants to");
+		expect(email).toContain("Send email to acme.com");
+		expect(email).toContain("1 call");
+		expect(email).toContain("Send the weekly digest to team@acme.com");
+		expect(callRows()).toHaveLength(3);
+		expect(footerButtons()).toEqual([
+			"Choose per call",
+			"Deny all",
+			"Allow all once",
+			"Always allow all",
+		]);
+		expect(button("Show all 3 calls")).toBeUndefined();
+	});
+
+	test("a group's calls read by what tells them apart; the whole line stays their name", async () => {
+		await show(card(thirty()));
+		await click(button("Show all 30 calls in 7 groups"));
+		const rows = [
+			...container.querySelectorAll("[data-slot='approval-group'] li button"),
+		].slice(0, 12);
+		expect(rows.map((row) => row.textContent)).toEqual(
+			Array.from({ length: 12 }, (_, page) => `GET /alerts?p=${page}`),
+		);
+		expect(rows[3]?.getAttribute("aria-label")).toBe(
+			"Send a GET request to cisa.gov/alerts?p=3",
+		);
+		expect(rows[3]?.getAttribute("title")).toBe(
+			"Send a GET request to cisa.gov/alerts?p=3",
+		);
+		const lastPart = rows[3]?.lastElementChild;
+		expect(lastPart?.textContent).toBe("?p=3");
+		expect(lastPart?.className).not.toContain("truncate");
+	});
+
+	test("a call's line opens its full summary", async () => {
+		await show(card(three()));
+		const line = button("Send a GET request to cisa.gov/alerts?p=1");
+		expect(line?.textContent).toBe("GET /alerts?p=1");
+		expect(line?.getAttribute("aria-expanded")).toBe("false");
+		await click(line);
+		expect(line?.getAttribute("aria-expanded")).toBe("true");
+		expect(container.textContent).toContain(
+			"The bot wants to send a GET request to cisa.gov/alerts?p=1.",
+		);
+	});
+
+	test.each([
+		["Always allow all", "always", "Always allowed · 3 calls"],
+		["Allow all once", "once", "Allowed once · 3 calls"],
+		["Deny all", "deny", "Denied · 3 calls"],
+	] as const)(
+		"%s answers every call with one decision",
+		async (label, decision, shown) => {
+			await show(card(three()));
+			await click(button(label));
+			expect(answers).toEqual([["bot_a", "turn_b", "ap-b", decision]]);
+			expect(answerItems).toEqual([undefined]);
+			expect(statusText()).toBe(shown);
+			expect(window.document.activeElement).toBe(status() as never);
+			expect(button("Allow all once")).toBeUndefined();
+		},
+	);
+
+	test("thirty calls show four groups until asked, then every call in a capped list", async () => {
+		await show(card(thirty()));
+		expect(statusText()).toBe("Approval request · 30 calls");
+		expect(groups()).toHaveLength(4);
+		expect(callRows()).toHaveLength(0);
+		expect(groups()[0]).toContain("12 calls");
+		expect(groups()[1]).toContain("9 calls");
+		const toggle = button("Show all 30 calls in 7 groups");
+		expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+		const frame = () =>
+			container.querySelector("[data-slot='approval-batch-frame']");
+		expect(toggle?.getAttribute("aria-controls")).toBe(frame()?.id ?? "");
+		expect(frame()?.className).not.toContain("overflow-y-auto");
+		await click(toggle);
+		expect(groups()).toHaveLength(7);
+		expect(callRows()).toHaveLength(21);
+		expect(button("Show fewer")?.getAttribute("aria-expanded")).toBe("true");
+		expect(frame()?.className).toContain("overflow-y-auto");
+		await click(button("Show fewer"));
+		expect(groups()).toHaveLength(4);
+	});
+
+	test("more than five calls in at most four groups: Show all opens their calls", async () => {
+		await show(
+			card(
+				batch([
+					...Array.from({ length: 6 }, (_, page) => read(`c${page}`, page)),
+				]),
+			),
+		);
+		expect(groups()).toHaveLength(1);
+		expect(callRows()).toHaveLength(0);
+		await click(button("Show all 6 calls"));
+		expect(callRows()).toHaveLength(6);
+	});
+
+	test("per call: one choice per group and per call, a tally, and only the differing calls are sent", async () => {
+		await show(card(three()));
+		await click(button("Choose per call"));
+		expect(container.querySelectorAll("[role='radiogroup']")).toHaveLength(4);
+		expect(window.document.activeElement?.getAttribute("role")).toBe("radio");
+		expect(container.textContent).toContain("3 allowed · 0 denied");
+		await click(radio(second, "deny"));
+		expect(radio(cisa, "once")?.getAttribute("aria-checked")).toBe("false");
+		expect(radio(cisa, "deny")?.getAttribute("aria-checked")).toBe("false");
+		expect(groups()[0]).toContain("Mixed");
+		await click(radio(acme, "always"));
+		expect(container.textContent).toContain("2 allowed · 1 denied");
+		await click(button("Send answers"));
+		expect(answers).toEqual([["bot_a", "turn_b", "ap-b", "once"]]);
+		expect(answerItems).toEqual([
+			[
+				{ args_hash: "h2", decision: "deny" },
+				{ args_hash: "m1", decision: "always" },
+			],
+		]);
+		expect(statusText()).toBe("2 allowed, 1 denied");
+	});
+
+	test("a group's choice sets all its calls, and Back returns to the shortcuts", async () => {
+		await show(card(three()));
+		await click(button("Choose per call"));
+		await click(radio(cisa, "deny"));
+		expect(radio(second, "deny")?.getAttribute("aria-checked")).toBe("true");
+		expect(groups()[0]).not.toContain("Mixed");
+		expect(container.textContent).toContain("1 allowed · 2 denied");
+		await click(button("Back"));
+		expect(container.querySelectorAll("[role='radiogroup']")).toHaveLength(0);
+		expect(window.document.activeElement).toBe(
+			button("Choose per call") as never,
+		);
+	});
+
+	test("a call asked again after web content: notice, badge, and no Always anywhere", async () => {
+		await show(
+			card(
+				batch([
+					read("h1", 1, { afterWebContent: true }),
+					read("h2", 2, { afterWebContent: true }),
+					mail,
+				]),
+			),
+		);
+		expect(container.textContent).toContain(
+			"Asked again because this turn read web pages.",
+		);
+		expect(groups()[0]).toContain("Asked again");
+		expect(groups()[1]).not.toContain("Asked again");
+		expect(footerButtons()).toEqual([
+			"Choose per call",
+			"Deny all",
+			"Allow all once",
+		]);
+		await click(button("Choose per call"));
+		const always = radio(cisa, "always");
+		expect(always?.disabled).toBe(true);
+		const reason = window.document.getElementById(
+			always?.getAttribute("aria-describedby") ?? "",
+		);
+		expect(reason?.textContent).toBe(
+			"Can't be remembered after the turn read web pages",
+		);
+		expect(radio(acme, "always")?.disabled).toBe(false);
+	});
+
+	test("a secret row holds the shortcuts until it is saved or declined", async () => {
+		await show(card(batch([read("h1", 1), secretItem])));
+		expect(container.textContent).toContain("API_TOKEN");
+		expect(container.textContent).toContain("Needs a secret");
+		expect(container.textContent).toContain("Save or decline the secret first");
+		expect(button("Allow all once")?.disabled).toBe(true);
+		await type(
+			container.querySelector("input[type='password']") as never,
+			"s3cret",
+		);
+		await click(button("Save secret"));
+		expect(secrets).toEqual([
+			[
+				"bot_a",
+				"API_TOKEN",
+				{ value: "s3cret", description: "For the weather API" },
+			],
+		]);
+		expect(answers).toEqual([]);
+		expect(container.textContent).toContain("Secret saved");
+		expect(button("Allow all once")?.disabled).toBe(false);
+		await click(button("Allow all once"));
+		expect(answers).toEqual([["bot_a", "turn_b", "ap-b", "once"]]);
+		expect(answerItems).toEqual([undefined]);
+	});
+
+	test("Deny all needs no secret first: it denies every call, the secret's too", async () => {
+		await show(card(batch([read("h1", 1), secretItem])));
+		expect(button("Allow all once")?.disabled).toBe(true);
+		expect(button("Deny all")?.disabled).toBe(false);
+		await click(button("Deny all"));
+		expect(secrets).toEqual([]);
+		expect(answers).toEqual([["bot_a", "turn_b", "ap-b", "deny"]]);
+		expect(answerItems).toEqual([undefined]);
+		expect(statusText()).toBe("Denied · 2 calls");
+	});
+
+	test("Deny all after a saved secret still denies every call", async () => {
+		await show(card(batch([read("h1", 1), secretItem])));
+		await type(
+			container.querySelector("input[type='password']") as never,
+			"s3cret",
+		);
+		await click(button("Save secret"));
+		await click(button("Deny all"));
+		expect(answers).toEqual([["bot_a", "turn_b", "ap-b", "deny"]]);
+		expect(answerItems).toEqual([undefined]);
+	});
+
+	test("a declined secret is denied while the rest is allowed", async () => {
+		await show(card(batch([read("h1", 1), secretItem])));
+		await click(button("Decline"));
+		expect(secrets).toEqual([]);
+		expect(container.textContent).toContain("Declined");
+		await click(button("Allow all once"));
+		expect(answerItems).toEqual([[{ args_hash: "s1", decision: "deny" }]]);
+	});
+
+	test("answered alike: one line, and the calls open with their answers", async () => {
+		await show(card(three({ answer: "once" })));
+		expect(statusText()).toBe("Allowed once · 3 calls");
+		expect(
+			container.querySelector("[data-slot='approval-batch-list']"),
+		).toBeNull();
+		const toggle = button("Show calls");
+		expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+		await click(toggle);
+		expect(callRows()).toHaveLength(3);
+		expect(
+			(container.textContent ?? "").split("Allowed once").length - 1,
+		).toBeGreaterThanOrEqual(4);
+		expect(button("Allow all once")).toBeUndefined();
+	});
+
+	test("answered call by call: the tally, and each call's own answer", async () => {
+		await show(card(three({ answer: "once", itemAnswers: { h2: "deny" } })));
+		expect(statusText()).toBe("2 allowed, 1 denied");
+		await click(button("Show calls"));
+		const [web] = groups();
+		expect(web).toContain("Allowed once");
+		expect(web).toContain("Denied");
+	});
+
+	test("unanswered for more than seven days: expired, without answers", async () => {
+		await show(card(three({ postedAt: Date.now() - 8 * DAY })));
+		expect(statusText()).toBe("Expired");
+		expect(container.textContent).toContain(
+			"Nobody answered within 7 days, so Scout stopped.",
+		);
+		expect(button("Allow all once")).toBeUndefined();
+		expect(button("Choose per call")).toBeUndefined();
+	});
+
+	test("refused as expired: the card turns expired", async () => {
+		refusal = {
+			code: "BOT_APPROVAL_EXPIRED",
+			message: "[BOT_APPROVAL_EXPIRED] This approval has expired",
+		};
+		await show(card(three()));
+		await click(button("Allow all once"));
+		expect(statusText()).toBe("Expired");
+		expect(button("Allow all once")).toBeUndefined();
+	});
+
+	test("answered on another device: says so with the buttons disabled", async () => {
+		refusal = { code: "BOT_TURN_NOT_WAITING", message: "not waiting" };
+		await show(card(three()));
+		await click(button("Allow all once"));
+		expect(container.textContent).toContain("Answered on another device");
+		expect(button("Allow all once")?.disabled).toBe(true);
+		expect(button("Deny all")?.disabled).toBe(true);
+		expect(container.querySelector("[role='alert']")).toBeNull();
+	});
+
+	test("a cancelled task closes the card", async () => {
+		await show(card(three({ cancelled: true })));
+		expect(statusText()).toBe("Task cancelled");
+		expect(footerButtons()).toEqual([]);
+	});
+});
+
 describe("BotToolGrants", () => {
 	const bot = { id: "bot_a", name: "Scout" } as unknown as IBot;
 	const grant = (tool: string, scope: string): IBotToolGrant => ({
@@ -431,6 +996,61 @@ describe("BotToolGrants", () => {
 });
 
 describe("NeedsYouSection", () => {
+	const needs = (approval: Record<string, unknown>) => ({
+		id: "c1",
+		kind: "direct",
+		title: null,
+		members: [],
+		unread_count: 0,
+		last_activity_at: "2026-11-03T10:00:00Z",
+		last_entry: {
+			id: "e1",
+			message_id: "ap-1",
+			conversation_id: "c1",
+			sender_id: "bot_a",
+			kind: "message",
+			created_at: "2026-11-03T10:00:00Z",
+			cursor: "1:e1",
+			envelope: { v: 1, enc: "none", body: { text: "", approval } },
+		},
+	});
+	const section = (conversation: unknown) =>
+		createElement(NeedsYouSection, {
+			items: [{ type: "conversation", conversation }] as never,
+			directory: (() => ({ name: "Scout", isBot: true })) as never,
+			text: {
+				title: () => "Scout",
+				entryText: () => "Scout wants to make 3 calls",
+				activity: () => "10:00",
+			} as never,
+			onOpenConversation: () => undefined,
+			onOpenAssistant: () => undefined,
+		});
+
+	test("a batch says how many calls wait", async () => {
+		const item = (hash: string, calls?: number) => ({
+			args_hash: hash,
+			tool: "web_request",
+			summary: "x",
+			scope: "web:cisa.gov:read",
+			...(calls ? { calls } : {}),
+		});
+		await show(
+			section(
+				needs({
+					id: "ap-1",
+					turn_id: "t1",
+					tool: "approval_batch",
+					summary: "x",
+					scope: "",
+					args_hash: "hb",
+					items: [item("h1"), item("h2", 2)],
+				}),
+			),
+		);
+		expect(container.textContent).toContain("3 calls wait for you · 10:00");
+	});
+
 	test("an unanswered card says it is waiting for you", async () => {
 		const conversation = {
 			id: "c1",
@@ -495,7 +1115,7 @@ describe("the approval card in the bot's chat transcript", () => {
 		sender_id: sender,
 		kind: "message" as const,
 		envelope: { v: 1 as const, enc: "none" as const, body },
-		created_at: new Date(Date.UTC(2026, 10, 3, 10, seq)).toISOString(),
+		created_at: new Date(Date.now() - (60 - seq) * 60_000).toISOString(),
 		cursor: `${seq}:e${seq}`,
 		seq,
 	});
@@ -543,6 +1163,41 @@ describe("the approval card in the bot's chat transcript", () => {
 		expect(answers).toEqual([["bot_a", "turn_1", "ap-1", "once"]]);
 		expect(container.textContent).toContain("Allowed once");
 		expect(invalidated).toContainEqual({ queryKey: ["inbox"] });
+	});
+
+	test("a batch card with a single item renders as the card for one call", async () => {
+		const one = entry(3, "bot_a", "ap-2", {
+			text: "x",
+			approval: {
+				id: "ap-2",
+				turn_id: "turn_2",
+				tool: "approval_batch",
+				summary: "The bot wants to make 1 call",
+				scope: "",
+				args_hash: "hb",
+				items: [
+					{
+						args_hash: "h1",
+						tool: "shell_run",
+						summary: "Run git",
+						scope: "command:git",
+					},
+				],
+			},
+		});
+		const approval = transcriptOf([one], "bot_a", "bot:bot_a").messages[0]
+			.approval;
+		await show(
+			createElement(ChatApprovalCard, { approval: approval as never }),
+		);
+		expect(container.textContent).toContain("Scout wants to run git");
+		expect(container.textContent).toContain("Run `git` on the command line");
+		expect(
+			container.querySelector("[data-slot='approval-batch-list']"),
+		).toBeNull();
+		await click(button("Always allow"));
+		expect(answers).toEqual([["bot_a", "turn_2", "ap-2", "always"]]);
+		expect(answerItems).toEqual([undefined]);
 	});
 
 	test("after a reload the answered card shows the decision without buttons", async () => {

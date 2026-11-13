@@ -850,6 +850,7 @@ mod tests {
                 height: 300,
                 is_focused: true,
                 is_minimized: false,
+                is_onscreen: true,
             }),
             element_native_ids: vec![Some("window-1/button".into())],
         }

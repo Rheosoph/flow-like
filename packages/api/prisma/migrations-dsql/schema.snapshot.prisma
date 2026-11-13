@@ -458,6 +458,9 @@ model App {
   /// Set on a bot's workspace: the bot's id, kept as a free-form string like `forkedFrom`.
   /// One workspace per bot; apps lists hide workspaces with `"botId" IS NULL`.
   botId        String?   @unique
+  /// The owner refuses bots in this app: every bot's access answers `APP_REFUSES_BOTS`.
+  /// NULL or false lets bots use it, bounded by their owners' roles.
+  refuseBots   Boolean?
 
   technicalUsers TechnicalUser[]
   botApps        BotApp[]
@@ -1610,6 +1613,8 @@ model Bot {
   profileId       String?
   /// SERVER | DESKTOP | DEVICE
   location        String                @default("SERVER")
+  /// NATIVE | DOCKER; null on older bots means NATIVE.
+  executionMode   String?
   deviceId        String?
   apps            BotApp[]
   secrets         BotSecret[]
@@ -1935,6 +1940,12 @@ model BotTask {
   conversationId String?
   /// The person whose request scheduled the task; its trigger is sent as them.
   requestedBy    String?
+  /// The owner wrote the instruction themselves, not through a bot's turn. NULL on rows from
+  /// before this was recorded, which authorize nothing.
+  ownerWritten          Boolean?
+  /// The owner's chat with the bot and the message in it that asked the bot for the task.
+  requestConversationId String?
+  requestMessageId      String?
 
   @@index([botId])
   @@index([enabled, nextRunAt])
@@ -2251,6 +2262,8 @@ model ManagedDevice {
   displayName  String?
   /// When the device's bot host last polled the hub (unix ms); written at most once a minute.
   botHostSeenAt BigInt?
+  /// Authenticated agent report: installed, available, reason and seen_at (unix ms).
+  botDocker Json?
 
   @@index([ownerId, status])
 }

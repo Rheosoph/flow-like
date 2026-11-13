@@ -1,13 +1,13 @@
 //! The tool bridge of a headless turn that runs the bot-tools in this process: a call that asks
-//! the owner clears the turn's [`ApprovalGate`] (a standing grant, or the turn parks), a call that
-//! changes anything ends the turn's retries, and a stopped turn reads as cancelled. A parked turn
-//! is not cancelled: calls already running finish, so their outcomes stay known.
+//! the owner clears the turn's [`ApprovalGate`] (a standing grant, or it joins the turn's card),
+//! a call that changes anything ends the turn's retries, and a stopped turn reads as cancelled. A
+//! parked turn is not cancelled: calls already running finish, so their outcomes stay known.
 
 use crate::{gate::ApprovalGate, hub::TurnHub};
 use async_trait::async_trait;
 use flow_like::flow::copilot::{
     BotToolHost, HostTools, find_bot_tool_spec,
-    platform::PlatformToolBridge,
+    platform::{Clearance, PlatformToolBridge},
     tool_outcome_output,
     tool_spec::{MEMORY_STORE_TOOL, ToolEffect, resolve_tool_approval},
 };
@@ -152,6 +152,23 @@ impl PlatformToolBridge for ToolEnvBridge {
             self.mutating.store(true, Ordering::SeqCst);
         }
         self.run_allowed(tool_name, arguments).await
+    }
+
+    /// The gate's answer under the rule [`Self::call`] applies; a call this host refuses before
+    /// any approval needs no question.
+    async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
+        let runs_here = (self.hub_apps.is_some() && is_hosted_app_tool(tool_name))
+            || self.host_tools.runs(tool_name);
+        let Some(spec) = find_bot_tool_spec(tool_name).filter(|_| runs_here) else {
+            return Clearance::Clear;
+        };
+        let approval = resolve_tool_approval(&spec, arguments);
+        if approval.kind == "none" {
+            return Clearance::Clear;
+        }
+        self.gate
+            .clearance(tool_name, arguments, None, &approval.description)
+            .await
     }
 
     async fn is_cancelled(&self) -> bool {

@@ -24,17 +24,17 @@ use crate::{
 use async_trait::async_trait;
 use axum::http::StatusCode;
 use chrono::{DateTime, Duration, FixedOffset};
-use flow_like::flow::copilot::tool_grants::{GrantKey, GrantStore, record_card_answer};
+use flow_like::flow::copilot::tool_grants::{GrantKey, GrantStore, record_batch_answer};
 use flow_like_types::{
-    bot_message::{ApprovalRequest, ApprovalResponse},
+    bot_message::ApprovalRequest,
     bot_notify::{chat_link, group_key},
     bot_turn::{STORED_CANCELLED, STORED_QUEUED, STORED_RUNNING, STORED_WAITING},
     create_id,
     inbox::direct_pair_key,
     tool_grant::{
-        APPROVAL_WAIT_DAYS, ApprovalAnswer, DENY_PREFIX, ERROR_APPROVAL_EXPIRED, GRANT_SLIDE_HOURS,
-        GRANT_TTL_DAYS, ONCE_PREFIX, TOKEN_TTL_HOURS, ToolGrant, ToolGrantKey, check_key,
-        is_token_scope,
+        APPROVAL_WAIT_DAYS, ApprovalAnswer, DENY_PREFIX, ERROR_APPROVAL_EXPIRED,
+        ERROR_APPROVAL_ITEM_UNKNOWN, GRANT_SLIDE_HOURS, GRANT_TTL_DAYS, ONCE_PREFIX,
+        TOKEN_TTL_HOURS, ToolGrant, ToolGrantKey, check_key, is_token_scope,
     },
 };
 use sea_orm::{
@@ -453,6 +453,9 @@ async fn notify_owner(state: &AppState, turn: &bot_turn::Model, card: &ApprovalR
         .as_ref()
         .map_or_else(now_millis, |entry| entry.created_at)
         + Duration::days(APPROVAL_WAIT_DAYS);
+    // A secret, a batch, a call asked again after web content or several identical calls need
+    // the card itself; only a plain card for one call can be answered from the lock screen.
+    let review_only = card.secret.is_some() || !card.items.is_empty();
     let sent = dispatch_notification_idempotent(
         state,
         &format!("botapproval_{}", card.id),
@@ -460,9 +463,9 @@ async fn notify_owner(state: &AppState, turn: &bot_turn::Model, card: &ApprovalR
             notification_priority: Default::default(),
             bot_context: Some(flow_like_types::bot_notify::BotNotificationContext {
                 bot_id: turn.bot_id.clone(),
-                review_only: card.secret.is_some(),
+                review_only,
                 turn_id: Some(turn.id.clone()),
-                approval_id: card.secret.is_none().then(|| card.id.clone()),
+                approval_id: (!review_only).then(|| card.id.clone()),
                 conversation_id: entry.as_ref().map(|entry| entry.conversation_id.clone()),
                 conversation_encryption: Some("plain".into()),
                 message_id: Some(card.id.clone()),
@@ -558,21 +561,19 @@ pub(crate) async fn answer_in<C: ConnectionTrait + Send + Sync>(
         .await?
         .filter(|card| card.turn_id == turn.id)
         .ok_or_else(|| unknown_approval(turn_id, &answer.approval_id))?;
+    card.decisions(answer.decision, &answer.items)
+        .map_err(|message| {
+            ApiError::coded(
+                StatusCode::BAD_REQUEST,
+                ERROR_APPROVAL_ITEM_UNKNOWN,
+                message,
+            )
+        })?;
     let store = GrantRows::new(txn, bot_id, owner_id);
-    record_card_answer(&store, &card, answer.decision)
+    let response = record_batch_answer(&store, &card, answer)
         .await
         .map_err(|error| ApiError::internal(error.to_string()))?;
-    let sent = post_answer_in(
-        txn,
-        conversation,
-        owner_id,
-        &ApprovalResponse {
-            approval_id: answer.approval_id.clone(),
-            decision: answer.decision,
-        },
-        now,
-    )
-    .await?;
+    let sent = post_answer_in(txn, conversation, owner_id, &response, now).await?;
     let queued = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_QUEUED))
         .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))

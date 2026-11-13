@@ -19,6 +19,7 @@ import { mergeChatWidgets } from "../../components/interfaces/chat-default/event
 import { joinContentText } from "../../components/interfaces/chat-default/inline-segments";
 import type { AskUserChoice, AskUserForm } from "../../lib/ask-user";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../lib/flowpilot-debug";
+import { mergeUsageStats } from "../../lib/llm/usage";
 import type { NativeActionRequest } from "../../lib/native-action-result";
 import type { IInteractionRequest } from "../../lib/schema/interaction";
 import {
@@ -333,6 +334,8 @@ export interface GlobalToolPrompt {
 	rememberable?: boolean;
 	/** The app a remembered approval is limited to; unset when it covers the tool in every app. */
 	rememberAppId?: string;
+	/** The turn read web pages first, so a standing grant for this call was set aside. */
+	asksAgain?: "web_content";
 	/** Complete proposed settings, retained separately from the approval summary. */
 	configurationChanges?: Record<string, unknown>;
 	/** Present only when `kind === "ask"`: drives freeform vs. single/multiple choice rendering. */
@@ -350,7 +353,8 @@ export interface GlobalToolSecret {
 	name: string;
 	description: string;
 	replace?: boolean;
-	store: (value: string) => Promise<void>;
+	/** `sealed`: seal the value on this device to the bot's own key before it is stored. */
+	store: (value: string, sealed?: boolean) => Promise<void>;
 }
 
 export interface PendingComponentsEntry {
@@ -629,8 +633,6 @@ interface GlobalChatState {
 	rebindBotChat: (fromBotId: string, toBotId: string) => Promise<void>;
 }
 
-const usageSignature = (stat: IChatUsageStat) => JSON.stringify(stat);
-
 /**
  * Re-fold a run's nested-agent buffers into its rendered bubble. Every sub-* write goes through
  * this so nested activity shows up immediately — the run's own channel is silent while a sub-agent
@@ -642,14 +644,7 @@ function foldSubBuffers(run: GlobalChatRun): GlobalChatRun {
 	const ownSteps = (message.plan_steps ?? []).filter(
 		(step) => !step.id.startsWith(SUB_STEP_PREFIX),
 	);
-	const usage = [...(message.usage_stats ?? [])];
-	const known = new Set(usage.map(usageSignature));
-	for (const stat of run.subUsageStats) {
-		const signature = usageSignature(stat);
-		if (known.has(signature)) continue;
-		known.add(signature);
-		usage.push(stat);
-	}
+	const usage = mergeUsageStats(message.usage_stats ?? [], run.subUsageStats);
 	return {
 		...run,
 		message: {
@@ -1312,17 +1307,15 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 		set((state) =>
 			patchRun(state, runId, (run) => {
 				if (stats.length === 0) return run;
-				const seen = new Set(run.subUsageStats.map(usageSignature));
-				const fresh = stats.filter((stat) => {
-					const signature = usageSignature(stat);
-					if (seen.has(signature)) return false;
-					seen.add(signature);
-					return true;
-				});
-				if (fresh.length === 0) return run;
+				const merged = mergeUsageStats(run.subUsageStats, stats);
+				if (
+					merged.length === run.subUsageStats.length &&
+					merged.every((stat, index) => stat === run.subUsageStats[index])
+				)
+					return run;
 				return foldSubBuffers({
 					...run,
-					subUsageStats: [...run.subUsageStats, ...fresh],
+					subUsageStats: merged,
 				});
 			}),
 		),

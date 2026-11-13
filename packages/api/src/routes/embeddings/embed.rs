@@ -438,9 +438,19 @@ fn embedding_provider_reservation_units(
     input_bytes: i64,
     item_count: usize,
 ) -> i64 {
-    if config.implementation == Some(RemoteEmbeddingProvider::OpenRouter)
-        && config.model_id.as_deref().map(str::trim) == Some("google/gemini-embedding-2")
-    {
+    if matches!(
+        (
+            config.implementation,
+            config.model_id.as_deref().map(str::trim)
+        ),
+        (
+            Some(RemoteEmbeddingProvider::OpenRouter),
+            Some("google/gemini-embedding-2")
+        ) | (
+            Some(RemoteEmbeddingProvider::CloudflareWorkersAI),
+            Some("@cf/google/embeddinggemma-2")
+        )
+    ) {
         // The model's token limit covers all modalities. Encoded file bytes are
         // not tokens; reserve each item's full context at the maximum input rate.
         return 8192_i64.saturating_mul(item_count as i64);
@@ -573,18 +583,29 @@ mod byte_meter_tests {
     }
 
     #[test]
-    fn openrouter_reserves_model_context_instead_of_encoded_file_bytes() {
-        let config = RemoteExecutionConfig {
-            implementation: Some(RemoteEmbeddingProvider::OpenRouter),
-            model_id: Some("google/gemini-embedding-2".into()),
-            ..Default::default()
-        };
+    fn multimodal_providers_reserve_model_context_instead_of_encoded_file_bytes() {
         let mut rate = token_rate();
         rate.context_tokens = 512;
-        assert_eq!(
-            embedding_provider_reservation_units(&config, &rate, 100_000_000, 2),
-            16_384
-        );
+        for (implementation, model) in [
+            (
+                RemoteEmbeddingProvider::OpenRouter,
+                "google/gemini-embedding-2",
+            ),
+            (
+                RemoteEmbeddingProvider::CloudflareWorkersAI,
+                "@cf/google/embeddinggemma-2",
+            ),
+        ] {
+            let config = RemoteExecutionConfig {
+                implementation: Some(implementation),
+                model_id: Some(format!(" {model} ")),
+                ..Default::default()
+            };
+            assert_eq!(
+                embedding_provider_reservation_units(&config, &rate, 100_000_000, 2),
+                16_384
+            );
+        }
     }
 
     #[test]

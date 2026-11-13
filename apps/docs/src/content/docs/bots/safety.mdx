@@ -28,6 +28,12 @@ These restrictions apply in every chat, your own included. In a room, the [room 
 
 <AccessCalculator client:visible />
 
+### Apps that don't allow bots
+
+An app's owner can keep every bot out: turn off **Allow bots** in the app's settings, next to visibility and forking. From the next request on, every bot is refused there, including bots already attached to the app and bots that reach it through their owner's profile. The bot gets the reason as a sentence it can pass on ("The app 'CRM' does not allow bots; ask its owner"), and the bot editor marks such apps so you can't attach them. Members keep their own access. Turn the switch back on and bots work there again with the rights they had.
+
+On the server this is checked on every request a bot makes. For bots running in the desktop app, the desktop applies the setting it synced with the app (for an app that lives only on your computer, the setting you chose there); a credential the server already handed a bot stays valid until it expires.
+
 ## Approvals
 
 Tools with consequences stop and ask before they run: sending mail to a new domain, calling a new website, running a program on the command line, opening a site in the browser, taking the screen, messaging a person, running a skill's code and changing the bot's own settings. Each ability on the [Capabilities](/bots/capabilities/) page says when it asks.

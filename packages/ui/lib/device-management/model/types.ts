@@ -155,6 +155,13 @@ export interface DeviceRow extends DeviceStatus {
 	revoked_at?: number | null;
 	/** Epoch milliseconds of the last poll of this device's bot host. */
 	bot_host_seen_at?: number | null;
+	/** Docker readiness measured on this device by its agent. */
+	bot_docker?: {
+		installed: boolean;
+		available: boolean;
+		reason?: string | null;
+		seen_at: number;
+	} | null;
 	cloud_approvals?: {
 		resource_grants: number;
 		billing_grants: number;

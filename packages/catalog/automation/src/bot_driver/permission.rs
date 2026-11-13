@@ -25,6 +25,7 @@ impl fmt::Display for MissingPermission {
 
 impl std::error::Error for MissingPermission {}
 
+#[cfg(any(target_os = "macos", test))]
 fn pane(capability: AutomationCapability) -> (&'static str, &'static str) {
     match capability {
         AutomationCapability::ScreenCapture => ("screen_recording", "Screen & System Audio Recording"),
@@ -32,6 +33,7 @@ fn pane(capability: AutomationCapability) -> (&'static str, &'static str) {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn denied(capability: AutomationCapability) -> MissingPermission {
     let (permission, label) = pane(capability);
     MissingPermission {
@@ -48,6 +50,7 @@ fn denied(capability: AutomationCapability) -> MissingPermission {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 pub fn restart_required(capability: AutomationCapability) -> MissingPermission {
     let (permission, label) = pane(capability);
     MissingPermission {

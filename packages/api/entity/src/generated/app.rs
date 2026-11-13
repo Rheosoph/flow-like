@@ -60,6 +60,8 @@ pub struct Model {
     pub app_type: Option<crate::sea_orm_active_enums::AppType>,
     #[sea_orm(column_name = "botId", column_type = "Text", nullable, unique)]
     pub bot_id: Option<String>,
+    #[sea_orm(column_name = "refuseBots", nullable)]
+    pub refuse_bots: Option<bool>,
     #[sea_orm(has_many)]
     pub ai_act_assessments: HasMany<super::ai_act_assessment::Entity>,
     #[sea_orm(has_many)]

@@ -1,4 +1,5 @@
 pub mod change_appearance;
+pub mod change_bot_access;
 pub mod change_forking;
 pub mod change_legal;
 pub mod change_visibility;

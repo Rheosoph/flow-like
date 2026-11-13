@@ -28,6 +28,12 @@ async function mountWhere(bot: ReturnType<typeof botOf>, seen?: number) {
 }
 
 describe("Where it runs", () => {
+	test("a Docker bot identifies its container host", async () => {
+		const text = await mountWhere(
+			botOf("b", { device_id: "dev_a", execution_mode: "docker" }),
+		);
+		expect(text).toContain("Docker on Berlin box");
+	});
 	test("a device bot names its device and the host state", async () => {
 		const text = await mountWhere(
 			botOf("b", { device_id: "dev_a" }),

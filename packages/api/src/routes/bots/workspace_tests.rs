@@ -73,7 +73,7 @@ fn fixture_table(source: &TableCreateStatement) -> TableCreateStatement {
     table
 }
 
-async fn database() -> DatabaseConnection {
+pub(super) async fn database() -> DatabaseConnection {
     let mut options = ConnectOptions::new("sqlite::memory:");
     options.max_connections(1);
     let db = Database::connect(options).await.unwrap();
@@ -104,7 +104,7 @@ async fn database() -> DatabaseConnection {
     db
 }
 
-fn at(seconds: i64) -> DateTime<FixedOffset> {
+pub(super) fn at(seconds: i64) -> DateTime<FixedOffset> {
     DateTime::from_timestamp(1_800_000_000 + seconds, 0)
         .unwrap()
         .fixed_offset()
@@ -129,7 +129,7 @@ async fn insert_bot(
         .unwrap()
 }
 
-async fn scout(db: &DatabaseConnection, owner_id: &str) -> bot::Model {
+pub(super) async fn scout(db: &DatabaseConnection, owner_id: &str) -> bot::Model {
     insert_bot(db, owner_id, None, |_| {}).await
 }
 
@@ -510,7 +510,7 @@ async fn no_bot_is_attached_to_a_workspace() {
     assert_eq!(attached, ["app-crm"]);
 }
 
-fn import_request(app_ids: &[&str]) -> ImportBotRequest {
+pub(super) fn import_request(app_ids: &[&str]) -> ImportBotRequest {
     serde_json::from_value(json!({
         "local_id": "bot_on_the_desktop",
         "name": "Mover",
@@ -715,11 +715,13 @@ fn every_sharing_path_refuses_a_workspace_before_it_writes() {
 
 #[test]
 fn deleting_a_bot_queues_its_workspace_inside_its_transaction_and_runs_a_pass_after() {
-    let delete = body(include_str!("crud.rs"), "pub async fn delete_bot(");
-    let opened = position(delete, ".transaction(", "delete_bot");
-    let queued = position(delete, "workspace::queue_deletion(txn", "delete_bot");
-    let committed = position(delete, "    .await?;\n", "delete_bot");
-    let ran = position(delete, "workspace::delete_queued(&state", "delete_bot");
+    let handler = body(include_str!("crud.rs"), "pub async fn delete_bot(");
+    position(handler, "delete_owned(&state, &sub, &bot_id)", "delete_bot");
+    let delete = body(include_str!("crud.rs"), "pub(crate) async fn delete_owned(");
+    let opened = position(delete, ".transaction(", "delete_owned");
+    let queued = position(delete, "workspace::queue_deletion(txn", "delete_owned");
+    let committed = position(delete, "    .await?;\n", "delete_owned");
+    let ran = position(delete, "workspace::delete_queued(state", "delete_owned");
     assert!(opened < queued && queued < committed && committed < ran);
 }
 

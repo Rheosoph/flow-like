@@ -43,6 +43,10 @@ import { getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { IAppVisibility } from "@flow-like/flow-like-ui/lib/schema/app/app";
+import {
+	type IBotApprovalItemDecision,
+	approvalAnswerBody,
+} from "@flow-like/flow-like-ui/state/backend-state/bot-state";
 import { invoke } from "@tauri-apps/api/core";
 import { del, get, patch, post, put } from "../../lib/api";
 import { appsDB } from "../../lib/apps-db";
@@ -69,6 +73,7 @@ import { LocalBotMover } from "../../lib/local-bots/move";
 import { idsOf, localRegistries } from "../../lib/local-bots/registry";
 import { localSkills } from "../../lib/local-bots/skills";
 import { BotTurnHost } from "../../lib/local-bots/turns";
+import { offerStartAtLogin } from "../../lib/start-at-login";
 import type { TauriBackend } from "../tauri-provider";
 
 function noteRoute(botId: string, conversationId: string, key: string): string {
@@ -646,9 +651,13 @@ export class BotState implements IBotState {
 	): Promise<IBotTask> {
 		const account = await this.accountFor(botId);
 		if (!account) {
-			return this.here(botId, () => localTasks.create(botId, request));
+			const task = await this.here(botId, () =>
+				localTasks.create(botId, request),
+			);
+			offerStartAtLogin(async () => true);
+			return task;
 		}
-		return expectTask(
+		const task = expectTask(
 			await post<IBotTask>(
 				account.profile,
 				`${botPath(account.id)}/tasks`,
@@ -656,6 +665,10 @@ export class BotState implements IBotState {
 				account.auth,
 			),
 		);
+		offerStartAtLogin(
+			async () => (await this.getBot(botId)).location === "desktop",
+		);
+		return task;
 	}
 
 	async updateTask(
@@ -1019,17 +1032,24 @@ export class BotState implements IBotState {
 		turnId: string,
 		approvalId: string,
 		decision: BotApprovalDecision,
+		items?: readonly IBotApprovalItemDecision[],
 	): Promise<void> {
 		const account = await this.accountFor(botId);
 		if (!account) {
 			return this.here(botId, () =>
-				localToolGrants.answerApproval(botId, turnId, approvalId, decision),
+				localToolGrants.answerApproval(
+					botId,
+					turnId,
+					approvalId,
+					decision,
+					items,
+				),
 			);
 		}
 		await post<unknown>(
 			account.profile,
 			`${botPath(account.id)}/turns/${encodeURIComponent(turnId)}/approval`,
-			{ approval_id: approvalId, decision },
+			approvalAnswerBody(approvalId, decision, items),
 			account.auth,
 		);
 	}

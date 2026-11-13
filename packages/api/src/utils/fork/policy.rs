@@ -228,6 +228,7 @@ mod tests {
             forked_from: None,
             app_type: None,
             bot_id: None,
+            refuse_bots: None,
         }
     }
 

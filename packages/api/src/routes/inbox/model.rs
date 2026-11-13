@@ -430,4 +430,10 @@ pub struct KeyOwnerQuery {
 pub struct KeysQuery {
     /// Up to 50 comma-separated user subs or bot ids.
     pub principals: Option<String>,
+    /// Required for a bot's runtime token: the conversation whose members it seals a reply to.
+    /// Every principal must be an active member of it, the bot included.
+    pub conversation_id: Option<String>,
+    /// With a bot's runtime token: that bot.
+    #[serde(rename = "as")]
+    pub as_bot: Option<String>,
 }

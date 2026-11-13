@@ -2918,13 +2918,14 @@ mod tests {
 
     #[flow_like_types::tokio::test]
     async fn chained_bot_group_limits_intersect_the_connection_role() {
-        use crate::entity::{bot, bot_app, conversation_member};
+        use crate::entity::{app, bot, bot_app, conversation_member};
         use sea_orm::{
             ActiveModelTrait, ActiveValue::Set, ConnectionTrait, Schema, sea_query::Table,
         };
         let db = connected_apps().await;
         let schema = Schema::new(db.get_database_backend());
         for source in [
+            schema.create_table_from_entity(app::Entity),
             schema.create_table_from_entity(bot::Entity),
             schema.create_table_from_entity(bot_app::Entity),
             schema.create_table_from_entity(conversation_member::Entity),

@@ -1,11 +1,11 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useQuery } from "@tanstack/react-query";
 import { LockIcon, XIcon } from "lucide-react";
-import { useCallback, useId, useMemo, useState } from "react";
+import { useCallback, useId, useState } from "react";
 import { useCreateConversation } from "../../hooks/use-inbox";
 import { apiErrorMessage } from "../../lib/api-error";
+import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import {
 	type IBotRoomLimits,
@@ -24,12 +24,10 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Switch } from "../ui/switch";
 import {
-	KEY_LOOKUP_LIMIT,
 	canSealRooms,
 	encryptedRoomError,
-	keyedPrincipals,
-	roomSealBlock,
 	sealBlockText,
+	useRoomSealing,
 } from "./new-room-encryption";
 import {
 	type PickedPrincipal,
@@ -39,6 +37,67 @@ import {
 import { RoomBotSetup, ownRoomBots, selectedBotLimits } from "./room-bot-setup";
 
 const MAX_OTHERS = MAX_CONVERSATION_MEMBERS - 1;
+
+/** Who an end-to-end encrypted room can't take yet, and why; `urgent` once encryption is on. */
+export function SealingState({
+	blocked,
+	reason,
+	checking,
+	failed,
+	urgent,
+}: Readonly<{
+	blocked: readonly PickedPrincipal[];
+	reason: (principal: PickedPrincipal) => string | undefined;
+	checking: boolean;
+	failed: boolean;
+	urgent: boolean;
+}>) {
+	const { t } = useTranslation("bots");
+	if (failed) {
+		return (
+			<p role="alert" className="text-xs text-destructive">
+				{t(
+					"crew.newRoomDialog.encryptionCheckFailed",
+					"Couldn't check who has an encryption key. Try again.",
+				)}
+			</p>
+		);
+	}
+	if (checking) {
+		return urgent ? (
+			<p className="text-xs text-muted-foreground">
+				{t(
+					"crew.newRoomDialog.encryptionChecking",
+					"Checking everyone's encryption keys…",
+				)}
+			</p>
+		) : null;
+	}
+	if (blocked.length === 0) return null;
+	return (
+		<div
+			aria-live="polite"
+			className={cn(
+				"flex flex-col gap-0.5 text-xs",
+				urgent ? "text-destructive" : "text-muted-foreground",
+			)}
+		>
+			<p>
+				{t(
+					"crew.newRoomDialog.encryptionWaitsFor",
+					"Possible once everyone can be sealed to:",
+				)}
+			</p>
+			<ul className="flex flex-col gap-0.5">
+				{blocked.map((principal) => (
+					<li key={principal.id}>
+						{principal.label}: {reason(principal)}
+					</li>
+				))}
+			</ul>
+		</div>
+	);
+}
 
 function NewRoomForm({
 	source,
@@ -64,32 +123,19 @@ function NewRoomForm({
 	const encrypted = canSeal && sealed;
 	const ownBots = ownRoomBots(picked);
 	const create = useCreateConversation();
-	const botsById = useMemo(
-		() => new Map(source.bots.map((bot) => [bot.id, bot])),
-		[source.bots],
-	);
-	const keyIds = picked
-		.filter((principal) => principal.mode !== "invite")
-		.map((principal) => principal.id)
-		.slice(0, KEY_LOOKUP_LIMIT);
-	const keys = useQuery({
-		queryKey: ["new-room-keys", keyIds],
-		enabled: encrypted && keyIds.length > 0,
-		queryFn: async () => keyedPrincipals((await inbox?.getKeys(keyIds)) ?? []),
-	});
-	const sealBlock = useCallback(
-		(principal: PickedPrincipal) =>
-			encrypted ? roomSealBlock(principal, botsById, keys.data) : null,
-		[encrypted, botsById, keys.data],
-	);
-	const unavailable = useCallback(
+	const sealing = useRoomSealing(picked, source.bots, canSeal);
+	const { blockOf } = sealing;
+	const reason = useCallback(
 		(principal: PickedPrincipal) => {
-			const block = sealBlock(principal);
+			const block = blockOf(principal);
 			return block ? sealBlockText(block, t) : undefined;
 		},
-		[sealBlock, t],
+		[blockOf, t],
 	);
-	const blocked = picked.filter((principal) => sealBlock(principal));
+	const blocked = canSeal
+		? picked.filter((principal) => blockOf(principal))
+		: [];
+	const sealable = blocked.length === 0 && !sealing.checking && !sealing.failed;
 	const failed = t("crew.newRoomDialog.failed", "Couldn't create the room.");
 	const selected = new Set(picked.map((principal) => principal.id));
 	// A chat on this device holds you and its bots only; the account can't reach them.
@@ -110,7 +156,7 @@ function NewRoomForm({
 		);
 
 	const submit = async () => {
-		if (picked.length === 0 || mixesLocal || blocked.length > 0) return;
+		if (picked.length === 0 || mixesLocal || (encrypted && !sealable)) return;
 		if (ownBots.length > 0 && !settingUp) {
 			setSettingUp(true);
 			return;
@@ -197,7 +243,7 @@ function NewRoomForm({
 							multiple
 							full={picked.length >= MAX_OTHERS}
 							serverRule={{}}
-							unavailable={encrypted ? unavailable : undefined}
+							unavailable={encrypted ? reason : undefined}
 							onPick={toggle}
 						/>
 						{canSeal && (
@@ -206,7 +252,7 @@ function NewRoomForm({
 									id={sealedId}
 									checked={sealed}
 									onCheckedChange={setSealed}
-									disabled={create.isPending}
+									disabled={create.isPending || (!sealed && !sealable)}
 									className="mt-0.5"
 								/>
 								<div className="flex min-w-0 flex-col gap-0.5">
@@ -219,24 +265,19 @@ function NewRoomForm({
 									</Label>
 									<p className="text-xs text-muted-foreground">
 										{t(
-											"crew.newRoomDialog.encryptionHint",
-											"Messages are sealed on each device. Bots that run on the server can't take part, and files can't be attached yet.",
+											"crew.newRoomDialog.encryptionMeaning",
+											"Only the members' devices can read it, the server can't: attachments and cards the server posts are limited, and each person reads only what is sent after they join on a device that has published its key.",
 										)}
 									</p>
+									<SealingState
+										blocked={blocked}
+										reason={reason}
+										checking={sealing.checking}
+										failed={sealing.failed}
+										urgent={encrypted}
+									/>
 								</div>
 							</div>
-						)}
-						{blocked.length > 0 && (
-							<ul
-								aria-live="polite"
-								className="flex flex-col gap-0.5 text-xs text-destructive"
-							>
-								{blocked.map((principal) => (
-									<li key={principal.id}>
-										{principal.label}: {unavailable(principal)}
-									</li>
-								))}
-							</ul>
 						)}
 						{invites > 0 && (
 							<p className="text-xs text-muted-foreground">
@@ -292,7 +333,7 @@ function NewRoomForm({
 					disabled={
 						picked.length === 0 ||
 						mixesLocal ||
-						blocked.length > 0 ||
+						(encrypted && !sealable) ||
 						create.isPending
 					}
 				>

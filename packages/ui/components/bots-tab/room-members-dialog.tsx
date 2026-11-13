@@ -2,13 +2,14 @@
 
 import { useTranslation } from "@flow-like/locales";
 import {
+	LockIcon,
 	LogOutIcon,
 	SlidersHorizontalIcon,
 	UserMinusIcon,
 	UsersIcon,
 	XIcon,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useBots } from "../../hooks/use-bots";
 import {
@@ -45,6 +46,8 @@ import {
 import { BotUsageButton } from "./bot-usage";
 import { isSelfPrincipal } from "./crew-model";
 import { LeaveRoomDialog } from "./leave-room-dialog";
+import { SealingState } from "./new-room-dialog";
+import { sealBlockText, useRoomSealing } from "./new-room-encryption";
 import { PrincipalBlockButton } from "./principal-block-action";
 import {
 	type PickedPrincipal,
@@ -286,9 +289,11 @@ function PendingList({
 			</h3>
 			<ul className="flex flex-col">
 				{pending.map((member) => {
+					const inviter = member.invited_by ?? "";
 					const mayCancel =
-						isSelfPrincipal(member.invited_by ?? "", me) ||
-						isSelfPrincipal(conversation.created_by, me);
+						isSelfPrincipal(inviter, me) ||
+						isSelfPrincipal(conversation.created_by, me) ||
+						(!!inviter && isSelfPrincipal(directory(inviter).ownerId, me));
 					return (
 						<PersonRow
 							key={member.principal_id}
@@ -361,6 +366,21 @@ function InviteSection({
 	);
 	const ownBots = ownRoomBots(picked);
 	const selected = new Set(picked.map((principal) => principal.id));
+	const encrypted = conversation.encryption === "e2e";
+	const sealing = useRoomSealing(picked, source.bots, encrypted);
+	const { blockOf } = sealing;
+	const reason = useCallback(
+		(principal: PickedPrincipal) => {
+			const block = blockOf(principal);
+			return block ? sealBlockText(block, t) : undefined;
+		},
+		[blockOf, t],
+	);
+	const blocked = encrypted
+		? picked.filter((principal) => blockOf(principal))
+		: [];
+	const unsealable =
+		encrypted && (blocked.length > 0 || sealing.checking || sealing.failed);
 	const toggle = (principal: PickedPrincipal) =>
 		setPicked((list) =>
 			list.some((item) => item.id === principal.id)
@@ -402,6 +422,15 @@ function InviteSection({
 			<h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
 				{t("roomMembers.invite", "Bring someone in")}
 			</h3>
+			{encrypted && (
+				<p className="flex gap-1.5 text-xs text-muted-foreground">
+					<LockIcon className="mt-0.5 size-3 shrink-0" aria-hidden />
+					{t(
+						"roomMembers.encryptedInvite",
+						"This room is end-to-end encrypted. Whoever you bring in needs an encryption key first, and reads only what is sent after they join, never the earlier messages.",
+					)}
+				</p>
+			)}
 			{settingUp ? (
 				<RoomBotSetup
 					bots={ownBots}
@@ -425,7 +454,17 @@ function InviteSection({
 							(member) => member.principal_id,
 						),
 					}}
+					unavailable={encrypted ? reason : undefined}
 					onPick={toggle}
+				/>
+			)}
+			{encrypted && (
+				<SealingState
+					blocked={blocked}
+					reason={reason}
+					checking={sealing.checking}
+					failed={sealing.failed}
+					urgent
 				/>
 			)}
 			<div className="flex flex-wrap justify-end gap-2">
@@ -441,7 +480,7 @@ function InviteSection({
 				)}
 				<Button
 					type="button"
-					disabled={picked.length === 0 || invite.isPending}
+					disabled={picked.length === 0 || unsealable || invite.isPending}
 					onClick={() =>
 						ownBots.length > 0 && !settingUp ? setSettingUp(true) : void send()
 					}

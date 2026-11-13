@@ -6,15 +6,15 @@ use flow_like::{
     profile::Profile,
     state::FlowLikeState,
 };
-use flow_like_bot_tools::crew::CrewBackend;
-use flow_like_types::{Result, anyhow};
+use flow_like_bot_tools::crew::{CrewApp, CrewBackend};
+use flow_like_types::{Result, anyhow, bot_restrictions::BotRestrictions};
 use serde_json::{Value, json};
 
 use crate::{
     audit::{AuditRecordInput, record_entry},
     routes::bots::{
-        apps::{attach_owned, attached_apps, detach_owned},
-        crud::{create_owned, owner_bots, update_owned},
+        apps::{attach_owned, attached_apps, detach_owned, restrict_owned},
+        crud::{create_owned, delete_owned, owner_bots, update_owned},
         model::{Bot, CreateBotRequest, UpdateBotRequest},
         owned_bot,
     },
@@ -22,7 +22,8 @@ use crate::{
 };
 
 /// Flux's management of its owner's bots. The host fixes the owner and the Flux bot that acts
-/// before the model can call a crew tool.
+/// before the model can call a crew tool. Every change runs the function the Bots tab's route
+/// runs.
 pub(crate) struct ApiCrew {
     state: AppState,
     owner_id: String,
@@ -56,11 +57,14 @@ impl ApiCrew {
         Ok(())
     }
 
-    async fn app_ids(&self, bot_id: &str) -> Result<Vec<String>> {
+    async fn apps(&self, bot_id: &str) -> Result<Vec<CrewApp>> {
         Ok(attached_apps(&self.state.db, &self.owner_id, bot_id)
             .await?
             .into_iter()
-            .map(|app| app.app_id)
+            .map(|app| CrewApp {
+                app_id: app.app_id,
+                restrictions: app.restrictions,
+            })
             .collect())
     }
 
@@ -111,11 +115,11 @@ impl CrewBackend for ApiCrew {
             .collect()
     }
 
-    async fn bot(&self, bot_id: &str) -> Result<(Value, Vec<String>)> {
+    async fn bot(&self, bot_id: &str) -> Result<(Value, Vec<CrewApp>)> {
         let row = owned_bot(&self.state.db, &self.owner_id, bot_id)
             .await
             .map_err(|error| anyhow!("{error}"))?;
-        let apps = self.app_ids(bot_id).await?;
+        let apps = self.apps(bot_id).await?;
         Ok((serde_json::to_value(Bot::from(row))?, apps))
     }
 
@@ -167,5 +171,41 @@ impl CrewBackend for ApiCrew {
         };
         self.move_apps(bot_id, attach, detach).await?;
         Ok(serde_json::to_value(Bot::from(row))?)
+    }
+
+    async fn restrict(
+        &self,
+        bot_id: &str,
+        app_id: &str,
+        restrictions: &BotRestrictions,
+    ) -> Result<()> {
+        restrict_owned(&self.state, &self.owner_id, bot_id, app_id, restrictions)
+            .await
+            .map_err(|error| anyhow!("{error}"))?;
+        self.audit("bot.app.restrict", bot_id, json!({ "app_id": app_id }))
+            .await;
+        Ok(())
+    }
+
+    async fn delete(&self, bot_id: &str) -> Result<()> {
+        delete_owned(&self.state, &self.owner_id, bot_id)
+            .await
+            .map_err(|error| anyhow!("{error}"))?;
+        self.audit("bot.delete", bot_id, json!({})).await;
+        Ok(())
+    }
+
+    async fn devices(&self) -> Result<Vec<Value>> {
+        let context = crate::devices::context(&self.state);
+        if crate::devices::enabled(&context).is_err() {
+            return Ok(Vec::new());
+        }
+        let devices = crate::devices::view::list(&context, &self.owner_id)
+            .await
+            .map_err(|error| anyhow!("Listing your devices failed: {error}"))?;
+        devices
+            .into_iter()
+            .map(|device| Ok(serde_json::to_value(device)?))
+            .collect()
     }
 }

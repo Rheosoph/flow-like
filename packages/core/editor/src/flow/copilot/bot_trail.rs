@@ -12,7 +12,7 @@ use flow_like_types::bot_tool_trail::{ToolCall, TrailSection, attach_tool_parts}
 use serde_json::Value;
 
 use super::bot_notes::{NOTES_CLOSE_TOOL, NOTES_READ_TOOL, NOTES_WRITE_TOOL};
-use super::platform::PlatformToolBridge;
+use super::platform::{Clearance, PlatformToolBridge};
 use super::tool_spec::{MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL};
 
 /// Calls a reply never keeps: notes and memory hold their results in their own stores, user
@@ -139,6 +139,10 @@ impl PlatformToolBridge for TrailBridge {
             },
         );
         output
+    }
+
+    async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
+        self.inner.clearance(tool_name, arguments).await
     }
 
     fn supports_tool(&self, tool_name: &str) -> bool {

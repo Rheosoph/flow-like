@@ -8,6 +8,14 @@ use serde::{Deserialize, Serialize};
 pub const MAX_SCOPE_ENTRIES: usize = 200;
 pub const MAX_SCOPE_ENTRY_LEN: usize = 512;
 
+/// The refusal a bot gets in an app whose owner set it to refuse bots, on every host.
+pub const APP_REFUSES_BOTS: &str = "APP_REFUSES_BOTS";
+
+/// [`APP_REFUSES_BOTS`] as a sentence the bot can pass on to its owner.
+pub fn app_refuses_bots_message(app_name: &str) -> String {
+    format!("The app '{app_name}' does not allow bots; ask its owner.")
+}
+
 const OWNER: i64 = 1 << 0;
 const ADMIN: i64 = 1 << 1;
 const READ_ROLES: i64 = 1 << 3;

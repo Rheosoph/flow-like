@@ -159,4 +159,41 @@ describe("tool grants and approvals of an account bot", () => {
 		);
 		expect(mocks.invoke).not.toHaveBeenCalled();
 	});
+
+	test("a batch answer carries the calls whose answer differs", async () => {
+		const state = await signedIn();
+		await state.answerApproval("bot_a", "turn_1", "ap-b", "once", [
+			{ args_hash: "h2", decision: "deny" },
+		]);
+		expect(mocks.post).toHaveBeenCalledWith(
+			profile,
+			"bots/bot_a/turns/turn_1/approval",
+			{
+				approval_id: "ap-b",
+				decision: "once",
+				items: [{ args_hash: "h2", decision: "deny" }],
+			},
+			auth,
+		);
+	});
+});
+
+describe("a batch answer of a local bot", () => {
+	test("hands the differing calls to the local store", async () => {
+		localStore({ local_bot_answer_approval: () => null });
+		await new BotState({ profile } as unknown as TauriBackend).answerApproval(
+			"bot_l",
+			"turn_1",
+			"ap-b",
+			"always",
+			[{ args_hash: "h2", decision: "once" }],
+		);
+		expect(mocks.invoke).toHaveBeenCalledWith("local_bot_answer_approval", {
+			botId: "bot_l",
+			turnId: "turn_1",
+			approvalId: "ap-b",
+			decision: "always",
+			items: [{ args_hash: "h2", decision: "once" }],
+		});
+	});
 });

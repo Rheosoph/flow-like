@@ -5,6 +5,7 @@ mod archive_payload;
 pub(crate) mod archives;
 pub(crate) mod bots;
 pub(crate) mod bots_grant;
+pub(crate) mod bots_keys;
 pub(crate) mod bots_removed;
 pub(crate) mod certificates;
 pub(crate) mod fleet;

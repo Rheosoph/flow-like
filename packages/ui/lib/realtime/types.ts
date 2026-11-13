@@ -184,6 +184,8 @@ export type RealtimeTransport =
 			project_id: string;
 			custom_token: string;
 			path: string;
+			/** Sibling of `path` carrying replies; absent when the server publishes none there. */
+			reply_path?: string;
 	  };
 
 export interface RealtimeConnectResponse {
@@ -224,6 +226,11 @@ export interface RealtimeReply {
 	/** The reply from `offset` to its current end; normally the whole reply so far. */
 	text: string;
 	state: RealtimeReplyState;
+	/**
+	 * How often the bot began the reply again because the conversation moved on; missing means 0.
+	 * A later draft replaces an earlier one from its start; messages of an earlier one are late.
+	 */
+	draft?: number;
 }
 
 export interface RealtimeActivity {

@@ -13,23 +13,27 @@ use super::{
     store::{HostStore, StoreGrants},
     transcript::{self, Unreadable},
 };
-use flow_like_bot_host::latency::{self, CallTrace};
 use chrono::{Duration as Age, Utc};
 use flow_like::flow::copilot::{
     ReplyFiles, ToolTrail,
-    decision::{self, Decision, DecisionParticipant},
     bot_notes::NotesHandle,
+    decision::{self, Decision, DecisionParticipant},
     decision_event::{self, EventDecision},
     memory_open::follow_up,
     platform::RoomUpdates,
     tool_gate::{ToolGateOpener, tool_gate},
     tool_grants::{GrantStore, clear_tokens, resume_note},
 };
+use flow_like_bot_host::{
+    latency::{self, CallTrace},
+    live_reply,
+};
 use flow_like_local_bots::{Bot, Conversation, InboxEntry, LOCAL_OWNER_ID, SendEntryRequest};
 use flow_like_types::{
     bot::BotSystemKind,
     bot_turn::{
-        DEFAULT_TURN_DEADLINE_SECS, TurnAudience, TurnStatus, failure_message_id, reply_message_id, turn_id,
+        DEFAULT_TURN_DEADLINE_SECS, TurnAudience, TurnStatus, failure_message_id, reply_message_id,
+        turn_id,
     },
     inbox::{ConversationKind, InboxEntryKind, PrincipalKind, plain_envelope},
 };
@@ -69,6 +73,7 @@ enum Cancel {
 }
 
 struct Live {
+    usage: flow_like::flow::copilot::bot_usage::BotUsage,
     info: TurnInfo,
     trigger_seq: Option<i64>,
     cancel: watch::Sender<Option<Cancel>>,
@@ -666,6 +671,7 @@ impl Inner {
                     notes: None,
                     trail: None,
                     reply_files: None,
+                    usage: Default::default(),
                 };
                 retarget(&mut live, bot_id, &waiting);
                 publish = Some(live.info.clone());
@@ -831,12 +837,8 @@ impl Inner {
         let note = resume_note(grants.as_ref()).await;
         let resumed = note.is_some();
         let waiting = Waiting {
-            proactive: waiting.proactive || note.is_some(),
+            proactive: waiting.proactive || resumed,
             ..waiting
-        };
-        let prompt = match note {
-            Some(note) => format!("{}\n\n{note}", transcript.prompt),
-            None => transcript.prompt,
         };
         let gate = ApprovalGate::new(grants.clone(), &run_id);
         let room_updates = (conversation.kind == ConversationKind::Group)
@@ -883,6 +885,11 @@ impl Inner {
             None
         };
         let recovering = checkpoint.is_some();
+        let prompt = flow_like_bot_host::recovery::resumed_prompt(
+            transcript.prompt,
+            note,
+            checkpoint.as_ref(),
+        );
         let saved_delivery = match checkpoint
             .as_ref()
             .map(decision_event::saved_delivery)
@@ -919,19 +926,20 @@ impl Inner {
             && oldest_first.iter().any(|entry| {
                 entry.message_id == waiting.message_id && entry.sender_id == LOCAL_OWNER_ID
             });
-        let trail = owner_direct
-            .then(|| {
-                let upto = oldest_first
-                    .iter()
-                    .position(|entry| entry.message_id == waiting.message_id)
-                    .map_or(oldest_first.len(), |index| index + 1);
-                ToolTrail::new(transcript::tool_trail(bot_id, &oldest_first[..upto]))
-            });
+        let trail = owner_direct.then(|| {
+            let upto = oldest_first
+                .iter()
+                .position(|entry| entry.message_id == waiting.message_id)
+                .map_or(oldest_first.len(), |index| index + 1);
+            ToolTrail::new(transcript::tool_trail(bot_id, &oldest_first[..upto]))
+        });
         let reply_files = (!ephemeral_user_context).then(ReplyFiles::new);
+        let usage = flow_like::flow::copilot::bot_usage::BotUsage::default();
         if let Some(live) = lock(&self.state).live.get_mut(key) {
             live.notes = notes.clone();
             live.trail = trail.clone();
             live.reply_files = reply_files.clone();
+            live.usage = usage.clone();
         }
         let mut sender_labels = HashMap::new();
         for sender in flow_like_bot_host::taint::bot_senders(&oldest_first, bot_id) {
@@ -945,6 +953,7 @@ impl Inner {
         }
         .seed();
         let mut job = TurnJob {
+            usage,
             run_id: run_id.clone(),
             bot_id: bot_id.clone(),
             conversation_id: conversation_id.clone(),
@@ -955,11 +964,7 @@ impl Inner {
             tool_gate: None,
             ephemeral_user_context,
             seed_taint,
-            shared_context: transcript::shared_context(
-                &oldest_first,
-                &waiting.message_id,
-                bot_id,
-            ),
+            shared_context: transcript::shared_context(&oldest_first, &waiting.message_id, bot_id),
             suppress_owner_notifications: false,
             history: transcript.history,
             memory: memory.clone(),
@@ -973,6 +978,7 @@ impl Inner {
             notes,
             trail,
             reply_files,
+            reply_stream: None,
         };
         if bot.model.decision.is_some() {
             let authority = Arc::new(super::authorization::LocalAuthority::new(
@@ -981,12 +987,14 @@ impl Inner {
                 conversation_id,
                 flow_like_bot_host::event::trigger(&oldest_first, &waiting.message_id),
             ));
-            gate.set_inference(Some(flow_like_bot_host::authorization::RunnerInference::new(
-                self.runner.clone(),
-                &job,
-                grants.clone(),
-                authority,
-            )));
+            gate.set_inference(Some(
+                flow_like_bot_host::authorization::RunnerInference::new(
+                    self.runner.clone(),
+                    &job,
+                    grants.clone(),
+                    authority,
+                ),
+            ));
         }
         let call_utterance = oldest_first.iter().any(|entry| {
             entry.message_id == waiting.message_id && entry.kind == InboxEntryKind::Transcript
@@ -1070,6 +1078,7 @@ impl Inner {
         );
         let mut parallel: Option<(ToolGateOpener, RunFuture<'_>)> = None;
         let mut early: Option<RunOutcome> = None;
+        let mut reply = None;
         if (conversation.kind == ConversationKind::Group || call_utterance)
             && event.is_none()
             && bot.model.decision.is_some()
@@ -1097,6 +1106,7 @@ impl Inner {
                     job.tool_gate = Some(tool_gate);
                     trace.parallel = true;
                     trace.run_started();
+                    reply = live_reply::open(self.events.as_ref(), &mut job, &waiting.message_id);
                     parallel = Some((
                         opener,
                         Box::pin(tokio::time::timeout(deadline, self.runner.run(job.clone()))),
@@ -1135,10 +1145,9 @@ impl Inner {
                     })
                 });
                 trace.decided(latency::decision_label(&decision));
-                let answers = matches!(
-                    &decision,
-                    Ok(Ok(Decision::AnswerNow)) | Err(_) | Ok(Err(_))
-                ) && !matches!(&decision, Ok(Err(RunError::SessionChanged)));
+                let answers =
+                    matches!(&decision, Ok(Ok(Decision::AnswerNow)) | Err(_) | Ok(Err(_)))
+                        && !matches!(&decision, Ok(Err(RunError::SessionChanged)));
                 match parallel.take() {
                     Some((opener, run)) if answers => {
                         opener.open();
@@ -1234,6 +1243,7 @@ impl Inner {
             Some((opener, run)) => (Some(opener), run),
             None => {
                 trace.run_started();
+                reply = live_reply::open(self.events.as_ref(), &mut job, &waiting.message_id);
                 let run: RunFuture<'_> =
                     Box::pin(tokio::time::timeout(deadline, self.runner.run(job)));
                 (None, run)
@@ -1254,12 +1264,11 @@ impl Inner {
                 outcome
             }
         };
+        live_reply::pause(reply.as_ref(), &outcome);
         if let Some(card) = gate.parked() {
-            if let Err(error) = flow_like_bot_host::recovery::preserve_unexecuted_approval(
-                approval_recovery.as_ref(),
-                &gate,
-            )
-            .await
+            if let Err(error) =
+                flow_like_bot_host::recovery::preserve_held_batch(approval_recovery.as_ref(), &gate)
+                    .await
             {
                 return self
                     .fail(
@@ -1367,6 +1376,8 @@ impl Inner {
                         cancel,
                     )
                     .await;
+                let posted = end.status == TurnStatus::Done && end.reply.is_some();
+                live_reply::finish(reply.take(), posted).await;
                 if end.status == TurnStatus::Done {
                     clear_tokens(grants.as_ref(), &seen).await;
                 }
@@ -1432,7 +1443,7 @@ impl Inner {
                 tracing::warn!(%error, bot_id, "Bot host: parking a turn failed");
                 let text = format!(
                     "I needed your approval to run {} but could not ask you: {}",
-                    card.tool,
+                    super::gate::card_tools(card),
                     clipped(&error, MAX_FAILURE_DETAIL_CHARS)
                 );
                 self.post(key, waiting, &text, Some(CODE_SETUP), cancel)
@@ -1535,7 +1546,7 @@ impl Inner {
         acknowledgement: bool,
         cancel: &mut watch::Receiver<Option<Cancel>>,
     ) -> End {
-        let (note, trail, files);
+        let (note, trail, files, usage);
         {
             let mut state = lock(&self.state);
             let Some(live) = state.live.get_mut(key) else {
@@ -1548,6 +1559,7 @@ impl Inner {
             note = live.notes.as_ref().and_then(NotesHandle::touched);
             trail = live.trail.clone();
             files = live.reply_files.clone();
+            usage = live.usage.clone();
         }
         let (bot_id, conversation_id) = key;
         let message_id = if error_code.is_some() {
@@ -1573,6 +1585,9 @@ impl Inner {
             if let Some(trail) = &trail {
                 trail.attach(&mut envelope["body"]);
             }
+        }
+        if let Some(envelope) = request.envelope.as_mut() {
+            usage.attach(&mut envelope["body"]);
         }
         match self.store.send(conversation_id, bot_id, request).await {
             Ok(_) => {

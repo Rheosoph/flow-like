@@ -980,6 +980,7 @@ pub fn approval_from_spec(spec: &PlatformToolSpec, args: &Value) -> FrontendTool
         title: resolved.title,
         description: resolved.description,
         session_key: resolved.session_key,
+        asks_again: None,
     }
 }
 

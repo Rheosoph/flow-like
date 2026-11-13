@@ -142,11 +142,13 @@ async fn download_bytes(
     let status = response.status();
     if !status.is_success() {
         let message = format!("signed {purpose} GET returned {status}");
-        return Err(if refusal_is_final && is_permanent_download_status(status) {
-            CompilerError::DownloadRejected(message)
-        } else {
-            CompilerError::Download(message)
-        });
+        return Err(
+            if refusal_is_final && is_permanent_download_status(status) {
+                CompilerError::DownloadRejected(message)
+            } else {
+                CompilerError::Download(message)
+            },
+        );
     }
 
     if response

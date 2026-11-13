@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use flow_like_model_provider::embedding::EmbeddingModelLogic;
@@ -86,8 +87,15 @@ impl ModelLlm {
         history
     }
 
-    async fn ask(&self, history: &History) -> Result<String> {
+    async fn ask(&self, history: &History, task: LlmTask) -> Result<String> {
+        let started = Instant::now();
         let response = self.model.invoke(history, None).await?;
+        crate::telemetry::record_model_usage(
+            task,
+            response.model.as_deref().unwrap_or(&self.model_name),
+            &response.usage,
+            started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+        );
         response
             .last_message()
             .and_then(|message| message.content.clone())
@@ -100,14 +108,14 @@ impl ModelLlm {
 impl MemoryLlm for ModelLlm {
     async fn complete(&self, request: LlmRequest) -> Result<String> {
         if request.json_schema.is_some() {
-            match self.ask(&self.history(&request, true)).await {
+            match self.ask(&self.history(&request, true), request.task).await {
                 Ok(answer) => return Ok(answer),
                 Err(error) => tracing::debug!(
                     "The memory model refused a structured answer; asking for plain JSON: {error:#}"
                 ),
             }
         }
-        self.ask(&self.history(&request, false)).await
+        self.ask(&self.history(&request, false), request.task).await
     }
 }
 
@@ -134,12 +142,30 @@ impl MemoryLlm for DecisionLlm {
     }
 
     async fn classify_fact(&self, request: &SystemOneRequest) -> Result<Option<SystemOneResponse>> {
+        let started = Instant::now();
         let response = flow_like_types::tokio::time::timeout(
             std::time::Duration::from_secs(15),
             self.decision.invoke(request),
         )
         .await
         .map_err(|_| anyhow!("The memory decision model timed out"))??;
+        if let Some(usage) = &response.usage {
+            crate::telemetry::record_model_usage(
+                LlmTask::FactUpdate,
+                &response.model,
+                &flow_like_model_provider::response::Usage {
+                    prompt_tokens: usage.input_tokens.min(u64::from(u32::MAX)) as u32,
+                    completion_tokens: usage.output_tokens.min(u64::from(u32::MAX)) as u32,
+                    total_tokens: usage
+                        .input_tokens
+                        .saturating_add(usage.output_tokens)
+                        .min(u64::from(u32::MAX)) as u32,
+                    cost: usage.extra.get("cost").and_then(serde_json::Value::as_f64),
+                    ..Default::default()
+                },
+                started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+            );
+        }
         response.validate_for(request)?;
         Ok(Some(response))
     }

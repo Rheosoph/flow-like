@@ -1,7 +1,7 @@
 //! Runs a turn through the same native path as background actions: no window, bot tools of this
 //! desktop only, and every question or approval answered "unavailable".
 
-use super::host::{RunError, TurnJob, TurnRunner};
+use super::host::{RunError, TurnJob, TurnRunner, failure_code};
 use crate::{
     functions::ai::{
         copilot::{cancel_copilot_chat, global_chat_native},
@@ -211,6 +211,7 @@ impl TurnRunner for NativeRunner {
                 flow_like::flow::copilot::run_recovery::finished_reply(&checkpoint)
                     .map_err(|error| setup(error.to_string()))?
         {
+            job.usage.restore(&checkpoint);
             if identity
                 .auth
                 .as_ref()
@@ -225,6 +226,7 @@ impl TurnRunner for NativeRunner {
             .ok_or_else(|| setup("Flow Like is still starting."))?;
         let profile_id = identity.profile_id.clone();
         let options = NativeRunOptions {
+            usage: job.usage.clone(),
             recovery: job.recovery.clone(),
             profile_id: Some(profile_id.clone()),
             expected_identity: Some(identity.clone()),
@@ -245,6 +247,7 @@ impl TurnRunner for NativeRunner {
             shared_context: job.shared_context.clone(),
             suppress_owner_notifications: job.suppress_owner_notifications,
             answered_round: job.answered_round.clone(),
+            reply_stream: job.reply_stream.clone(),
             interaction_mode: NativeInteractionMode::Unavailable,
             ..Default::default()
         };
@@ -280,7 +283,8 @@ impl TurnRunner for NativeRunner {
             tokio::select! {
                 result = &mut run => {
                     return result.map(|response| response.message).map_err(|message| {
-                        RunError::Failed { code: CODE_RUN_FAILED.into(), message }
+                        let code = failure_code(CODE_RUN_FAILED, &message).into();
+                        RunError::Failed { code, message }
                     });
                 }
                 _ = poll.tick() => {

@@ -645,9 +645,43 @@ fn the_scope_leaves_out_apps_without_rights_and_apps_the_resolver_did_not_name()
 }
 
 #[test]
-fn a_bot_held_on_this_device_is_not_offered_mail_or_people_tools() {
+fn an_app_that_refuses_bots_leaves_the_scope_and_refuses_calls_with_a_sentence() {
+    let granted = bot(&[BotCapability::Storage, BotCapability::SelectedApps]);
+    let candidates = [LOCAL_APP.to_string(), ACCOUNT_APP.to_string()];
+    let refusing: BTreeMap<String, String> = [(LOCAL_APP.to_string(), "CRM".to_string())].into();
+
+    let open = admitted_rights(&candidates, &HashMap::new(), None, &BTreeMap::new());
+    assert_eq!(scope_with(&granted, Some(&open)).apps.len(), 2);
+    let admitted = admitted_rights(&candidates, &HashMap::new(), None, &refusing);
+    let reached: Vec<String> = scope_with(&granted, Some(&admitted))
+        .apps
+        .into_iter()
+        .map(|grant| grant.app_id)
+        .collect();
+    assert_eq!(reached, [ACCOUNT_APP]);
+
+    let refusal = app_refusal("call_app_event", LOCAL_APP, &refusing).unwrap();
+    assert_eq!(
+        (&refusal["status"], &refusal["code"], &refusal["retryable"]),
+        (&json!("error"), &json!(APP_REFUSES_BOTS), &json!(false))
+    );
+    assert_eq!(
+        refusal["message"],
+        "The app 'CRM' does not allow bots; ask its owner."
+    );
+    assert!(app_refusal("call_app_event", ACCOUNT_APP, &refusing).is_none());
+}
+
+#[test]
+fn a_bot_held_on_this_device_is_not_offered_mail_people_or_room_tools() {
     let tools = without_hub_tools(HostTools::linked());
-    for tool in ["email_send", "email_reply", "list_people", "message_person"] {
+    for tool in [
+        "email_send",
+        "email_reply",
+        "list_people",
+        "message_person",
+        "room_invite",
+    ] {
         assert!(!tools.runs(tool), "{tool}");
     }
     assert!(tools.runs("file_read"));

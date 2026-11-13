@@ -28,6 +28,7 @@ pub mod layout;
 pub mod notify;
 pub mod outcome;
 pub mod people;
+pub mod rooms;
 pub mod schedule;
 pub mod secret_text;
 pub mod secrets;
@@ -66,6 +67,7 @@ pub use files::FileRef;
 pub use notify::{NoticeReceipt, OwnerNotice, OwnerNotifier, TurnSite};
 pub use outcome::{Status, ToolImage, ToolOutcome, ToolOutput, Usage};
 pub use people::{Contact, Delivery, PeopleBackend, PersonMessage};
+pub use rooms::{InviteOutcome, InviteTarget, RoomInvites};
 pub use schedule::Scheduler;
 pub use secrets::SecretInfo;
 pub use shell::{LocalShell, ShellBackend, ShellRequest, ShellResponse};
@@ -102,6 +104,8 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         crew::GET_BOT => crew::get_bot(env, parse_args(tool, args)?).await,
         crew::CREATE_BOT => crew::create_bot(env, args).await,
         crew::UPDATE_BOT => crew::update_bot(env, parse_args(tool, args)?).await,
+        crew::DELETE_BOT => crew::delete_bot(env, parse_args(tool, args)?).await,
+        crew::LIST_BOT_DEVICES => crew::list_bot_devices(env, parse_args(tool, args)?).await,
         files::FILE_LIST => files::file_list(env, parse_args(tool, args)?).await,
         files::FILE_READ => files::file_read(env, parse_args(tool, args)?).await,
         files::FILE_SAVE => files::file_save(env, parse_args(tool, args)?).await,
@@ -127,6 +131,7 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         notify::MESSAGE_OWNER => notify::message_owner(env, parse_args(tool, args)?).await,
         people::LIST_PEOPLE => people::list_people(env, parse_args(tool, args)?).await,
         people::MESSAGE_PERSON => people::message_person(env, parse_args(tool, args)?).await,
+        rooms::ROOM_INVITE => rooms::room_invite(env, parse_args(tool, args)?).await,
         user_context::USER_CONTEXT_AVAILABLE => {
             user_context::user_context_available(env, parse_args(tool, args)?).await
         }

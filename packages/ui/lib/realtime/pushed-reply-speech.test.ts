@@ -61,12 +61,14 @@ function pushed(
 	text: string,
 	state: ReplyStream["state"],
 	messageId = "re-1",
+	draft = 0,
 ): ReplyStream {
 	return {
 		conversationId: "room",
 		messageId,
 		replyTo: "spoken",
 		senderId: "bot",
+		draft,
 		text,
 		state,
 	};
@@ -94,6 +96,37 @@ test("a dropped stream cancels its handle without handing it more text", () => {
 	s.follower.apply(pushed("Hello there", "dropped"));
 	expect(s.calls).toEqual(["update:Hello", "cancel"]);
 	expect(s.clock.pending.size).toBe(0);
+});
+
+test("a rewrite opens a new speech stream after its draft was dropped", () => {
+	const s = setup();
+	s.follower.apply(pushed("Hello", "writing"));
+	s.follower.apply(pushed("Hello", "dropped"));
+	s.follower.apply(pushed("Anna", "writing", "re-1", 1));
+	s.follower.apply(pushed("Anna said it.", "done", "re-1", 1));
+	expect(s.opened).toEqual([
+		["spoken", "bot", { messageId: "re-1" }],
+		["spoken", "bot", { messageId: "re-1" }],
+	]);
+	expect(s.calls).toEqual([
+		"update:Hello",
+		"cancel",
+		"update:Anna",
+		"update:Anna said it.",
+		"end",
+	]);
+	expect(s.clock.pending.size).toBe(0);
+});
+
+test("a finished draft and the ones before it are not followed again", () => {
+	const s = setup();
+	s.follower.apply(pushed("Hello", "dropped"));
+	s.follower.apply(pushed("Anna", "writing", "re-1", 2));
+	s.follower.apply(pushed("Anna", "dropped", "re-1", 2));
+	s.follower.apply(pushed("Anna again", "writing", "re-1", 2));
+	s.follower.apply(pushed("Late", "writing", "re-1", 1));
+	expect(s.opened).toHaveLength(1);
+	expect(s.calls).toEqual(["update:Anna", "cancel"]);
 });
 
 test("opening is retried until the stream returns a handle", () => {

@@ -87,6 +87,44 @@ pub(crate) async fn events_of_board(
     Ok(ids)
 }
 
+pub(crate) const BOARD_HAS_ONTOLOGY_ACTIONS: &str = "BOARD_HAS_ONTOLOGY_ACTIONS";
+
+/// The ontology action events among `event_ids`. Data Studio manages them and the generic event
+/// endpoints never touch them, so a board that still runs one cannot be deleted.
+pub(crate) async fn ontology_action_events(
+    db: &DatabaseConnection,
+    app_id: &str,
+    event_ids: &[String],
+) -> Result<Vec<String>, ApiError> {
+    if event_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids: Vec<String> = event::Entity::find()
+        .select_only()
+        .column(event::Column::Id)
+        .filter(event::Column::AppId.eq(app_id))
+        .filter(event::Column::Id.is_in(event_ids.iter().map(String::as_str)))
+        .filter(event::Column::EventType.eq("ontology_action"))
+        .into_tuple()
+        .all(db)
+        .await?;
+    Ok(ids)
+}
+
+pub(crate) fn refuse_ontology_actions(board_id: &str, managed: &[String]) -> Result<(), ApiError> {
+    if managed.is_empty() {
+        return Ok(());
+    }
+    Err(ApiError::coded(
+        StatusCode::CONFLICT,
+        BOARD_HAS_ONTOLOGY_ACTIONS,
+        format!(
+            "Board {board_id} was not deleted: it still runs the ontology action events {}. Remove those actions in Data Studio first.",
+            managed.join(", ")
+        ),
+    ))
+}
+
 /// Page payloads live in `apps/{app_id}/_{board_id}/`. A missing folder is a board without pages.
 pub(crate) async fn delete_page_folder(
     store: &dyn ObjectStore,
@@ -250,6 +288,32 @@ mod tests {
             sorted(&db, "other").await,
             vec!["other-board".to_string(), "serves-foreign-page".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn a_board_that_runs_an_ontology_action_is_not_deleted() {
+        let db = database().await;
+        let mut action = core_event("action", BOARD, None);
+        action.event_type = "ontology_action".to_string();
+        for event in [action, core_event("webhook", BOARD, None)] {
+            insert_event(&db, &event).await;
+        }
+        let ids = sorted(&db, BOARD).await;
+        assert_eq!(ids, vec!["action".to_string(), "webhook".to_string()]);
+
+        let managed = ontology_action_events(&db, APP, &ids).await.unwrap();
+        assert_eq!(managed, vec!["action".to_string()]);
+        let refused = refuse_ontology_actions(BOARD, &managed).unwrap_err();
+        assert_eq!(refused.public_code(), BOARD_HAS_ONTOLOGY_ACTIONS);
+        assert!(refused.public_message().unwrap().contains("action"));
+
+        assert!(
+            ontology_action_events(&db, "elsewhere", &ids)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(refuse_ontology_actions(BOARD, &[]).is_ok());
     }
 
     #[tokio::test]

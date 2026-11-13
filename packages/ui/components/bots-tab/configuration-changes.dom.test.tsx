@@ -174,6 +174,20 @@ describe("BotConfigurationChanges", () => {
 		expect(text).not.toContain("[object Object]");
 	});
 
+	test("shows a data classification change field by field", async () => {
+		await show({
+			classification: { classification: "confidential", pii: true },
+		});
+		const text = readableProposal().textContent ?? "";
+		expect(text).toContain("Data classification");
+		expect(text).toContain("Sensitivity");
+		expect(text).toContain("Handles personal data");
+		await show({ classification: { classification: null } });
+		const cleared = readableProposal().textContent ?? "";
+		expect(cleared).toContain("Not classified");
+		expect(cleared).not.toContain("Personal data");
+	});
+
 	test("identifies an empty proposal", async () => {
 		await show({});
 		expect(readableProposal().textContent).toContain("No settings to change");

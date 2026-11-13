@@ -370,6 +370,28 @@ fn profile_apps_needs_a_profile() {
 }
 
 #[test]
+fn local_bots_refuse_docker_instead_of_silently_running_natively() {
+    let f = fixture();
+    assert_eq!(
+        code(create_with("execution_mode", json!("docker"))),
+        codes::BOT_EXECUTION_MODE_LOCATION,
+    );
+    assert!(create_with("execution_mode", json!("native")).is_ok());
+    let bot = f.bot("Local");
+    let refused = f.store.patch_bot(
+        &bot.id,
+        json!({"execution_mode":"docker", "name":"Must not be saved"}),
+    );
+    assert_eq!(code(refused), codes::BOT_EXECUTION_MODE_LOCATION);
+    assert_eq!(f.store.get_bot(&bot.id).unwrap(), Some(bot.clone()));
+    assert!(
+        f.store
+            .patch_bot(&bot.id, json!({"execution_mode":"native"}))
+            .is_ok()
+    );
+}
+
+#[test]
 fn a_bot_without_an_account_stays_on_the_desktop() {
     let f = fixture();
     for location in ["server", "device"] {

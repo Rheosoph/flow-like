@@ -5,7 +5,7 @@ use crate::{
 use chrono::{DateTime, FixedOffset};
 use flow_like_types::{
     Value,
-    bot::{BotCapability, BotLocation, BotModelPolicy, BotSystemKind},
+    bot::{BotCapability, BotExecutionMode, BotLocation, BotModelPolicy, BotSystemKind},
     data_classification::{DataClassification, DataSensitivity},
 };
 use sea_orm::ActiveValue::Set;
@@ -61,6 +61,9 @@ pub struct Bot {
     /// Where the bot runs: `server`, `desktop` or `device`.
     #[schema(value_type = String, example = "server")]
     pub location: BotLocation,
+    /// Required process boundary; Docker is supported on managed devices.
+    #[schema(value_type = String)]
+    pub execution_mode: BotExecutionMode,
     /// The managed device a `device` bot runs on.
     pub device_id: Option<String>,
     /// The `local_id` the bot was moved from a device with (`POST /bots/import`); null for bots
@@ -123,6 +126,8 @@ pub struct CreateBotRequest {
     /// `server` (default), `desktop` or `device`.
     #[schema(value_type = Option<String>, example = "server")]
     pub location: Option<BotLocation>,
+    #[schema(value_type = Option<String>)]
+    pub execution_mode: Option<BotExecutionMode>,
     /// One of your active managed devices; required for `device` bots.
     pub device_id: Option<String>,
 }
@@ -178,6 +183,8 @@ pub struct UpdateBotRequest {
     pub profile_id: Option<Option<String>>,
     #[schema(value_type = Option<String>, example = "desktop")]
     pub location: Option<BotLocation>,
+    #[schema(value_type = Option<String>)]
+    pub execution_mode: Option<BotExecutionMode>,
     #[serde(default, deserialize_with = "deserialize_nullable")]
     #[schema(value_type = Option<String>)]
     pub device_id: Option<Option<String>>,
@@ -201,6 +208,7 @@ pub(crate) struct BotSettings {
     pub capabilities: Vec<BotCapability>,
     pub profile_id: Option<String>,
     pub location: BotLocation,
+    pub execution_mode: BotExecutionMode,
     pub device_id: Option<String>,
 }
 
@@ -231,6 +239,7 @@ impl BotSettings {
             ),
             profile_id: row.profile_id.clone(),
             location: BotLocation::parse(&row.location).unwrap_or_default(),
+            execution_mode: stored_execution_mode(row),
             device_id: row.device_id.clone(),
         }
     }
@@ -260,6 +269,7 @@ impl BotSettings {
             ("capabilities", self.capabilities != next.capabilities),
             ("profile_id", self.profile_id != next.profile_id),
             ("location", self.location != next.location),
+            ("execution_mode", self.execution_mode != next.execution_mode),
             ("device_id", self.device_id != next.device_id),
         ]
         .into_iter()
@@ -287,6 +297,7 @@ impl BotSettings {
         row.capabilities = Set(capability_list(&self.capabilities));
         row.profile_id = Set(self.profile_id.clone());
         row.location = Set(location_column(self.location));
+        row.execution_mode = Set(Some(self.execution_mode.as_str().to_ascii_uppercase()));
         row.device_id = Set(self.device_id.clone());
         Ok(())
     }
@@ -313,6 +324,7 @@ impl From<bot::Model> for Bot {
             capabilities: settings.capabilities,
             profile_id: settings.profile_id,
             location: settings.location,
+            execution_mode: settings.execution_mode,
             device_id: settings.device_id,
             import_key: row.import_key,
             id: row.id,
@@ -357,4 +369,13 @@ pub(crate) fn hands_off_to_desktop(row: &bot::Model) -> bool {
 
 pub(super) fn location_column(location: BotLocation) -> String {
     location.as_str().to_ascii_uppercase()
+}
+
+/// A missing old value is native. An unknown value must never permit native tools.
+pub(crate) fn stored_execution_mode(row: &bot::Model) -> BotExecutionMode {
+    row.execution_mode
+        .as_deref()
+        .map_or(BotExecutionMode::Native, |mode| {
+            BotExecutionMode::parse(mode).unwrap_or(BotExecutionMode::Docker)
+        })
 }

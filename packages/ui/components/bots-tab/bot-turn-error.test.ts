@@ -21,6 +21,16 @@ describe("the card of a turn a bot could not answer", () => {
 		expect(error.code).toBe("BOT_TURN_NO_MODEL");
 	});
 
+	test("the card names the bot, so the pick goes to the profile that bot reads", () => {
+		const error = botTurnError("BOT_TURN_NO_MODEL", TEXT, {
+			title: "",
+			ownBot: true,
+			botId: "bot_1",
+		});
+
+		expect(error.action).toMatchObject({ kind: "add-model", botId: "bot_1" });
+	});
+
 	test("someone else's bot only says why: their profile is not the one to fix", () => {
 		const error = botTurnError("BOT_TURN_NO_MODEL", TEXT, {
 			title: "Couldn't answer",

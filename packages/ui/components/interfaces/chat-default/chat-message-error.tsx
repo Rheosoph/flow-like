@@ -16,7 +16,7 @@ import TerminalIcon from "lucide-react/dist/esm/icons/terminal.js";
 import TriangleAlert from "lucide-react/dist/esm/icons/triangle-alert.js";
 import WifiOffIcon from "lucide-react/dist/esm/icons/wifi-off.js";
 import { useRouter } from "next/navigation";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useContext, useMemo, useState } from "react";
 import type {
 	ChatErrorKind,
 	IChatErrorAction,
@@ -31,6 +31,7 @@ import {
 	CollapsibleTrigger,
 } from "../../ui/collapsible";
 import { ChatErrorModelSetup } from "./chat-error-model-setup";
+import { ChatErrorRecoveryContext } from "./chat-error-recovery";
 
 /**
  * How loud the card is. A failure the user caused (stopped the run, hit a limit) or can fix in two
@@ -220,14 +221,22 @@ function StoppedNote({ error }: { readonly error: IChatMessageError }) {
  */
 export function ChatMessageError({
 	error,
-}: { readonly error: IChatMessageError }) {
+	messageId,
+}: { readonly error: IChatMessageError; readonly messageId?: string }) {
 	if (error.kind === "cancelled") return <StoppedNote error={error} />;
-	return <ChatMessageErrorCard error={error} />;
+	return <ChatMessageErrorCard error={error} messageId={messageId} />;
 }
 
 function ChatMessageErrorCard({
 	error,
-}: { readonly error: IChatMessageError }) {
+	messageId,
+}: { readonly error: IChatMessageError; readonly messageId?: string }) {
+	const recovery = useContext(ChatErrorRecoveryContext);
+	const onModelAdded = useMemo(
+		() =>
+			recovery && messageId ? () => recovery.resend(messageId) : undefined,
+		[recovery, messageId],
+	);
 	const { t } = useTranslation("chat");
 	const [detailsOpen, setDetailsOpen] = useState(false);
 
@@ -264,7 +273,11 @@ function ChatMessageErrorCard({
 						{error.message}
 					</p>
 					{picker && (
-						<ChatErrorModelSetup hostedOnly={picker.hostedOnly === true} />
+						<ChatErrorModelSetup
+							hostedOnly={picker.hostedOnly === true}
+							botId={picker.botId}
+							onModelAdded={onModelAdded}
+						/>
 					)}
 					<div className="flex flex-wrap items-center gap-1 pt-1.5">
 						{button && (

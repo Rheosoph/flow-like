@@ -15,6 +15,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use chrono::Utc;
+use flow_like_types::inbox::direct_pair_key;
 use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, EntityTrait, FromQueryResult, PaginatorTrait,
     QueryFilter, QueryOrder, QuerySelect, Statement,
@@ -156,41 +157,92 @@ async fn budget_view(
 async fn bot_view(state: &AppState, bot: bot::Model) -> Result<UsageBudgetView, ApiError> {
     let mut view = budget_view(state, BudgetScope::bot(&bot.id), bot.name).await?;
     view.archived = bot.deleted_at.is_some();
+    for room in budget_rooms(&state.db, &bot.owner_id, &bot.id).await? {
+        let mut group_view =
+            budget_view(state, BudgetScope::bot_group(&bot.id, &room.id), room.name).await?;
+        group_view.archived = view.archived || room.gone;
+        view.groups.push(group_view);
+    }
+    Ok(view)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct BudgetRoom {
+    id: String,
+    name: Option<String>,
+    gone: bool,
+}
+
+/// The conversations where the bot has a budget of its own: groups and other people's direct
+/// chats with it. Its owner's own chat counts only toward the bot's overall budget.
+async fn budget_rooms<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    bot_id: &str,
+) -> Result<Vec<BudgetRoom>, ApiError> {
     // Retain attribution after the bot leaves a group. Membership also exposes a new,
     // unused group so its owner can set a budget before the first model call.
     let memberships = conversation_member::Entity::find()
-        .filter(conversation_member::Column::PrincipalId.eq(&bot.id))
-        .all(&state.db)
+        .filter(conversation_member::Column::PrincipalId.eq(bot_id))
+        .all(db)
         .await?;
     let mut groups: BTreeSet<String> = memberships
         .into_iter()
         .map(|row| row.conversation_id)
         .collect();
-    for row in state.db.query_all_raw(Statement::from_sql_and_values(
-        state.db.get_database_backend(),
+    for row in db.query_all_raw(Statement::from_sql_and_values(
+        db.get_database_backend(),
         r#"SELECT DISTINCT "groupId" FROM "UsageBudgetPeriod" WHERE scope='bot_group' AND "subjectId"=$1"#,
-        vec![bot.id.clone().into()],
+        vec![bot_id.into()],
     )).await? {
         if let Some(id) = row.try_get::<Option<String>>("", "groupId")? { groups.insert(id); }
     }
-    for group in groups {
-        let conversation = conversation::Entity::find_by_id(&group)
-            .one(&state.db)
-            .await?;
-        if conversation.as_ref().is_some_and(|row| row.kind != "GROUP") {
+    let mut rooms = Vec::with_capacity(groups.len());
+    for id in groups {
+        let conversation = conversation::Entity::find_by_id(&id).one(db).await?;
+        if conversation
+            .as_ref()
+            .is_some_and(|row| is_owner_chat(row, owner_id, bot_id))
+        {
             continue;
         }
-        let archived = view.archived || conversation.is_none();
-        let mut group_view = budget_view(
-            state,
-            BudgetScope::bot_group(&bot.id, &group),
-            conversation.and_then(|row| row.title),
-        )
-        .await?;
-        group_view.archived = archived;
-        view.groups.push(group_view);
+        let name = match &conversation {
+            Some(row) => room_name(db, row, bot_id).await?,
+            None => None,
+        };
+        rooms.push(BudgetRoom {
+            id,
+            name,
+            gone: conversation.is_none(),
+        });
     }
-    Ok(view)
+    Ok(rooms)
+}
+
+fn is_owner_chat(conversation: &conversation::Model, owner_id: &str, bot_id: &str) -> bool {
+    conversation.direct_key.as_deref() == Some(direct_pair_key(owner_id, bot_id).as_str())
+}
+
+/// A direct chat has no title; it is named after the person the bot talks to there.
+async fn room_name<C: ConnectionTrait>(
+    db: &C,
+    conversation: &conversation::Model,
+    bot_id: &str,
+) -> Result<Option<String>, ApiError> {
+    if conversation.title.is_some() || conversation.kind != "DIRECT" {
+        return Ok(conversation.title.clone());
+    }
+    let Some(other) = conversation_member::Entity::find()
+        .filter(conversation_member::Column::ConversationId.eq(&conversation.id))
+        .filter(conversation_member::Column::PrincipalId.ne(bot_id))
+        .one(db)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let mut names =
+        crate::bot_host::history::sender_names(db, &[other.principal_id.as_str()]).await?;
+    Ok(names.remove(&other.principal_id))
 }
 
 async fn existing_bot<C: ConnectionTrait>(db: &C, bot_id: &str) -> Result<bot::Model, ApiError> {
@@ -208,8 +260,8 @@ async fn room_access<C: ConnectionTrait>(
     group_id: &str,
     write: bool,
 ) -> Result<(), ApiError> {
-    require_group(db, group_id).await?;
     let bot = existing_bot(db, bot_id).await?;
+    require_budget_room(db, &bot, group_id).await?;
     if write || bot.owner_id == actor {
         super::bots::owned_bot(db, actor, bot_id).await?;
         // Owners can still review their bot's history after leaving a room.
@@ -224,11 +276,15 @@ async fn room_access<C: ConnectionTrait>(
     Ok(())
 }
 
-async fn require_group<C: ConnectionTrait>(db: &C, group_id: &str) -> Result<(), ApiError> {
+async fn require_budget_room<C: ConnectionTrait>(
+    db: &C,
+    bot: &bot::Model,
+    group_id: &str,
+) -> Result<(), ApiError> {
     conversation::Entity::find_by_id(group_id)
-        .filter(conversation::Column::Kind.eq("GROUP"))
         .one(db)
         .await?
+        .filter(|row| !is_owner_chat(row, &bot.owner_id, &bot.id))
         .ok_or(ApiError::NOT_FOUND)?;
     Ok(())
 }
@@ -379,8 +435,8 @@ pub async fn put_admin_room(
 ) -> Result<Json<UsageBudgetView>, ApiError> {
     user.check_global_permission(&state, GlobalPermission::Admin)
         .await?;
-    existing_bot(&state.db, &bot_id).await?;
-    require_group(&state.db, &group_id).await?;
+    let bot = existing_bot(&state.db, &bot_id).await?;
+    require_budget_room(&state.db, &bot, &group_id).await?;
     conversation_member::Entity::find_by_id((group_id.clone(), bot_id.clone()))
         .one(&state.db)
         .await?
@@ -526,18 +582,68 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn direct_chats_cannot_receive_a_separate_group_budget() {
+    async fn another_persons_direct_chat_has_a_budget_and_the_owners_own_chat_does_not() {
+        use crate::routes::inbox::conversations::start_direct;
+        use flow_like_types::inbox::ConversationEncryption;
         let db = fixture::database().await;
         fixture::insert_bot(&db, "bot_a", "owner", "SERVER").await;
-        membership(&db, "bot_a", "ACTIVE").await;
-        db.execute_unprepared(r#"UPDATE "Conversation" SET kind='DIRECT' WHERE id='room'"#)
+        let bot = fixture::bot_principal("bot_a");
+        let plain = ConversationEncryption::Plain;
+        let own = start_direct(&db, "owner", &bot, plain, fixture::at(0))
+            .await
+            .unwrap();
+        let guest = start_direct(&db, "guest", &bot, plain, fixture::at(0))
             .await
             .unwrap();
         assert!(
-            room_access(&db, "owner", "bot_a", "room", true)
+            room_access(&db, "owner", "bot_a", &own, true)
                 .await
                 .is_err()
         );
+        assert!(
+            room_access(&db, "owner", "bot_a", &guest, true)
+                .await
+                .is_ok()
+        );
+        assert!(
+            room_access(&db, "guest", "bot_a", &guest, false)
+                .await
+                .is_ok()
+        );
+        assert!(
+            room_access(&db, "guest", "bot_a", &guest, true)
+                .await
+                .is_err()
+        );
+
+        db.execute_unprepared(
+            r#"CREATE TABLE "UsageBudgetPeriod" ("id" TEXT PRIMARY KEY, "scope" TEXT NOT NULL,
+            "subjectId" TEXT NOT NULL, "groupId" TEXT, "periodStart" INTEGER)"#,
+        )
+        .await
+        .unwrap();
+        for statement in [
+            r#"INSERT INTO "UsageBudgetPeriod" VALUES ('p1','bot_group','bot_a','gone-room',0)"#,
+            r#"INSERT INTO "User" ("id","name") VALUES ('guest','Gina')"#,
+        ] {
+            db.execute_unprepared(statement).await.unwrap();
+        }
+        let mut rooms = budget_rooms(&db, "owner", "bot_a").await.unwrap();
+        rooms.sort_by(|a, b| a.id.cmp(&b.id));
+        let mut expected = vec![
+            BudgetRoom {
+                id: guest,
+                name: Some("Gina".into()),
+                gone: false,
+            },
+            BudgetRoom {
+                id: "gone-room".into(),
+                name: None,
+                gone: true,
+            },
+        ];
+        expected.sort_by(|a, b| a.id.cmp(&b.id));
+        assert_eq!(rooms, expected);
     }
 
     #[tokio::test]

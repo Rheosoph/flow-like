@@ -47,13 +47,15 @@ impl TelemetrySettings {
     }
 }
 
-/// Whether closing the main window hides it while this desktop hosts bots, and whether the
-/// person was told so once.
+/// Whether closing the main window hides it while this desktop hosts bots, whether the person
+/// was told so once, and whether starting at login was offered once. Whether the app starts at
+/// login is the operating system's state, never stored here.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default, rename_all = "camelCase")]
 pub struct BackgroundSettings {
     pub keep_bots_running: bool,
     pub notice_shown: bool,
+    pub start_at_login_offered: bool,
 }
 
 impl Default for BackgroundSettings {
@@ -61,6 +63,7 @@ impl Default for BackgroundSettings {
         Self {
             keep_bots_running: true,
             notice_shown: false,
+            start_at_login_offered: false,
         }
     }
 }

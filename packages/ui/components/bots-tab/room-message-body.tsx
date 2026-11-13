@@ -36,6 +36,7 @@ export function roomChatMessage(
 		? botTurnError(message.errorCode, text, {
 				title: options.errorTitle ?? "Couldn't answer",
 				ownBot: options.ownBot ?? false,
+				botId: message.senderId,
 			})
 		: undefined;
 	const mine = message.reactions.filter((r) => r.mine).map((r) => r.emoji);
@@ -80,6 +81,7 @@ export function roomChatMessage(
 						: ""),
 		},
 		...(error ? { error } : {}),
+		...(message.usageStats?.length ? { usage_stats: message.usageStats } : {}),
 		...(message.userContext ? { userContext: message.userContext } : {}),
 		...(message.userContextDerived ? { userContextDerived: true } : {}),
 		...(message.userContextDerivedFrom

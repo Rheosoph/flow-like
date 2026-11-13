@@ -114,6 +114,14 @@ describe("receive-only provider adapters", () => {
 		});
 	});
 
+	test("keeps the draft of a rewritten reply and leaves out the first", () => {
+		expect(parseRealtimeReply({ ...reply, draft: 2 })).toEqual({
+			...reply,
+			draft: 2,
+		});
+		expect(parseRealtimeReply({ ...reply, draft: 0 })).toEqual(reply);
+	});
+
 	test.each([
 		["version", { protocol_version: 2 }],
 		["kind", { kind: "invalidate" }],
@@ -126,6 +134,9 @@ describe("receive-only provider adapters", () => {
 		["non-string text", { text: 5 }],
 		["unknown state", { state: "typing" }],
 		["long text", { text: "x".repeat(4097) }],
+		["negative draft", { draft: -1 }],
+		["fractional draft", { draft: 1.5 }],
+		["non-number draft", { draft: "1" }],
 	])("rejects a reply with an invalid %s", (_name, patch) => {
 		expect(parseRealtimeReply({ ...reply, ...patch })).toBeUndefined();
 	});
@@ -449,6 +460,123 @@ describe("receive-only provider adapters", () => {
 		expect(events.disconnected).toHaveBeenCalledTimes(1);
 		connection.close();
 	});
+
+	const firebaseGrant: Extract<
+		RealtimeTransport,
+		{ type: "gcp_firebase_rtdb" }
+	> = {
+		type: "gcp_firebase_rtdb",
+		database_url: "https://project.firebaseio.com",
+		api_key: "api",
+		project_id: "project",
+		custom_token: "read-grant",
+		path: "/realtime/account/wake",
+		reply_path: "/realtime/account/reply",
+	};
+
+	const eventStream = () => {
+		let controller!: ReadableStreamDefaultController<Uint8Array>;
+		const response = new Response(
+			new ReadableStream<Uint8Array>({
+				start(started) {
+					controller = started;
+				},
+			}),
+		);
+		const put = (data: unknown) =>
+			controller.enqueue(
+				new TextEncoder().encode(
+					`event: put\ndata: ${JSON.stringify({ path: "/", data })}\n\n`,
+				),
+			);
+		return { response, put, end: () => controller.close() };
+	};
+
+	test("Firebase reads replies from their own node, apart from the wake-ups", async () => {
+		const wake = eventStream();
+		const replies = eventStream();
+		const fetcher = vi
+			.fn()
+			.mockResolvedValueOnce(Response.json({ idToken: "read-token" }))
+			.mockResolvedValueOnce(wake.response)
+			.mockResolvedValueOnce(replies.response);
+		vi.stubGlobal("fetch", fetcher);
+		const events = { ...callbacks(), reply: vi.fn() };
+		const connection = await openRealtimeProvider(
+			firebaseGrant,
+			events,
+			signal(),
+		);
+		expect(fetcher.mock.calls.slice(1).map(([url]) => String(url))).toEqual([
+			"https://project.firebaseio.com/realtime/account/wake.json?auth=read-token",
+			"https://project.firebaseio.com/realtime/account/reply.json?auth=read-token",
+		]);
+		replies.put(null);
+		replies.put(wakeup);
+		replies.put({ ...reply, draft: 1 });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(events.wakeup).not.toHaveBeenCalled();
+		expect(events.reply).toHaveBeenCalledExactlyOnceWith(
+			parseRealtimeReply({ ...reply, draft: 1 }),
+		);
+		replies.end();
+		await vi.advanceTimersByTimeAsync(0);
+		wake.put(wakeup);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(events.wakeup).toHaveBeenCalledExactlyOnceWith(wakeup);
+		expect(events.disconnected).not.toHaveBeenCalled();
+		connection.close();
+	});
+
+	test("Firebase keeps its wake-ups when rules that predate the reply node refuse it", async () => {
+		const wake = eventStream();
+		const fetcher = vi
+			.fn()
+			.mockResolvedValueOnce(Response.json({ idToken: "read-token" }))
+			.mockResolvedValueOnce(wake.response)
+			.mockResolvedValueOnce(
+				new Response("Permission denied", { status: 401 }),
+			);
+		vi.stubGlobal("fetch", fetcher);
+		const events = { ...callbacks(), reply: vi.fn() };
+		const connection = await openRealtimeProvider(
+			firebaseGrant,
+			events,
+			signal(),
+		);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(fetcher).toHaveBeenCalledTimes(3);
+		wake.put(wakeup);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(events.wakeup).toHaveBeenCalledExactlyOnceWith(wakeup);
+		expect(events.disconnected).not.toHaveBeenCalled();
+		connection.close();
+	});
+
+	test.each([
+		["a server that names no reply node", { reply_path: undefined }, true],
+		["a reply node that leaves its database", { reply_path: "/a/../b" }, true],
+		["a caller that takes no replies", {}, false],
+	])(
+		"Firebase opens only the wake-up node for %s",
+		async (_name, patch, withReplies) => {
+			const fetcher = vi
+				.fn()
+				.mockResolvedValueOnce(Response.json({ idToken: "read-token" }))
+				.mockResolvedValueOnce(eventStream().response);
+			vi.stubGlobal("fetch", fetcher);
+			const events = withReplies
+				? { ...callbacks(), reply: vi.fn() }
+				: callbacks();
+			const connection = await openRealtimeProvider(
+				{ ...firebaseGrant, ...patch },
+				events,
+				signal(),
+			);
+			expect(fetcher).toHaveBeenCalledTimes(2);
+			connection.close();
+		},
+	);
 
 	test("AWS signs with the server clock when the local clock is skewed", async () => {
 		const events = callbacks();

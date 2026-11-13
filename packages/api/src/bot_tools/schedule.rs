@@ -1,10 +1,14 @@
 //! The server's `Scheduler`: a bot's tasks in the `BotTask` table, kept through the same
 //! functions the owner's endpoints use, so caps and schedule rules are the API's. A task the bot
 //! schedules fires in the group or chat of the turn that asked for it, read from the turn the
-//! server keeps, never from the tool's arguments.
+//! server keeps, never from the tool's arguments; the owner's message that asked for it, which
+//! its runs act on, comes from that turn the same way.
 
 use crate::{
-    bot_host::task_schedules,
+    bot_host::{
+        task_authority::{TaskEdit, author_of_turn},
+        task_schedules,
+    },
     entity::bot_task,
     routes::{
         bots::{lock_bot, tasks},
@@ -39,7 +43,7 @@ impl ApiScheduler {
 }
 
 impl ApiScheduler {
-    async fn scope(&self) -> Result<Option<tasks::TaskOrigin>> {
+    async fn scope(&self) -> Result<tasks::TaskScope> {
         tasks::scope_of_turn(&self.state.db, &self.owner_id, &self.bot_id, &self.turn_id)
             .await
             .map_err(|error| anyhow!("{error}"))
@@ -102,12 +106,13 @@ impl Scheduler for ApiScheduler {
                 Box::pin(async move {
                     lock_bot(txn, &bot).await?;
                     let origin = tasks::origin_of_turn(txn, &owner, &bot, &turn).await?;
+                    let author = author_of_turn(txn, &owner, &bot, Some(turn.as_str())).await?;
                     tasks::create_in(
                         txn,
                         &owner,
                         &bot,
                         request,
-                        TaskCreator::Bot,
+                        author,
                         origin.as_ref(),
                         now_millis(),
                     )
@@ -122,10 +127,9 @@ impl Scheduler for ApiScheduler {
 
     async fn list(&self) -> Result<Vec<BotTask>> {
         let scope = self.scope().await?;
-        let rows =
-            tasks::list_scoped_in(&self.state.db, &self.owner_id, &self.bot_id, scope.as_ref())
-                .await
-                .map_err(|error| anyhow!("{error}"))?;
+        let rows = tasks::list_scoped_in(&self.state.db, &self.owner_id, &self.bot_id, &scope)
+            .await
+            .map_err(|error| anyhow!("{error}"))?;
         tasks_of(&self.state.db, rows).await
     }
 
@@ -134,23 +138,28 @@ impl Scheduler for ApiScheduler {
         let result = self
             .state
             .transaction(|txn| {
-                let (owner, bot, task, request, scope) = (
+                let (owner, bot, task, request, scope, turn) = (
                     self.owner_id.clone(),
                     self.bot_id.clone(),
                     task_id.to_string(),
                     request.clone(),
                     scope.clone(),
+                    self.turn_id.clone(),
                 );
                 Box::pin(async move {
                     lock_bot(txn, &bot).await?;
+                    let edit = TaskEdit {
+                        change: request,
+                        author: author_of_turn(txn, &owner, &bot, Some(turn.as_str())).await?,
+                    };
                     tasks::update_scoped_in(
                         txn,
                         &owner,
                         &bot,
                         &task,
-                        request,
+                        edit,
                         chrono::Utc::now().fixed_offset(),
-                        scope.as_ref(),
+                        &scope,
                     )
                     .await
                 })
@@ -173,7 +182,7 @@ impl Scheduler for ApiScheduler {
             &self.owner_id,
             &self.bot_id,
             task_id,
-            scope.as_ref(),
+            &scope,
         )
         .await;
         match deleted {

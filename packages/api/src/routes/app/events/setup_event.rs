@@ -198,6 +198,7 @@ pub struct SetupEventResponse {
         (status = 403, description = "Forbidden, or RUN_AS_NOT_ALLOWED: the caller may not trigger events, so cannot run the primary setup"),
         (status = 404, description = "Not found"),
         (status = 409, description = "Setup already running"),
+        (status = 422, description = "LOCAL_EXECUTION_REQUIRED: the flow runs only on your own device, so a server will not run it"),
         (status = 503, description = "The caller's permission to trigger events cannot be checked right now"),
     ),
     security(("bearer_auth" = []), ("api_key" = []), ("pat" = []))

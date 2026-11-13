@@ -247,7 +247,12 @@ fn item_with_owner(
                 .payload
                 .as_ref()
                 .is_some_and(|payload| payload["owner"] == true);
-            let role = if trigger.source == TriggerSource::Email && !from_owner {
+            let outside = match trigger.source {
+                TriggerSource::Email => !from_owner,
+                TriggerSource::Webhook => true,
+                TriggerSource::Schedule | TriggerSource::Event => false,
+            };
+            let role = if outside {
                 Role::External
             } else {
                 role_of(&entry.sender_id, bot_id, owner_id, None)
@@ -560,15 +565,24 @@ mod email_trigger_tests {
     }
 
     #[test]
-    fn mail_triggers_are_external_and_other_triggers_stay_the_owners() {
-        assert_eq!(
-            item_of(&trigger_entry("email"), "bot").unwrap().role,
-            Role::External
-        );
-        assert_eq!(
-            item_of(&trigger_entry("schedule"), "bot").unwrap().role,
-            Role::User
-        );
+    fn mail_and_webhook_triggers_are_external_and_the_owners_triggers_stay_the_owners() {
+        for outside in ["email", "webhook"] {
+            assert_eq!(
+                item_of(&trigger_entry(outside), "bot").unwrap().role,
+                Role::External,
+                "{outside}"
+            );
+        }
+        let mut claimed = trigger_entry("webhook");
+        claimed.envelope["body"]["payload"] = json!({"owner": true});
+        assert_eq!(item_of(&claimed, "bot").unwrap().role, Role::External);
+        for own in ["schedule", "event"] {
+            assert_eq!(
+                item_of(&trigger_entry(own), "bot").unwrap().role,
+                Role::User,
+                "{own}"
+            );
+        }
         let mut owner_mail = trigger_entry("email");
         owner_mail.envelope["body"]["payload"] = json!({"owner": true});
         assert_eq!(item_of(&owner_mail, "bot").unwrap().role, Role::User);

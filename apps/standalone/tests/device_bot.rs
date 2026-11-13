@@ -4,19 +4,22 @@ use async_trait::async_trait;
 use flow_like_bot_tools::browser::{
     BrowserBackend, BrowserStep, Download, PageState, SnapshotRequest, SnapshotView,
 };
+use flow_like_device_crypto::inbox::{InboxKeyVault, InboxKeyring, Scope};
 use flow_like_standalone::bot_host::{
     self,
     env::{MachineBackends, Machines},
+    hub::DeviceTurnHub,
 };
 use flow_like_types::{
     bot::BotCapability,
-    bot_turn::{reply_message_id, turn_id},
+    bot_turn::{BotRunCheckpoint, reply_message_id, turn_id},
     device_bot::{DeviceParkRequest, DeviceReleaseRequest, DeviceReplyRequest},
 };
 use serde_json::json;
 use std::{collections::VecDeque, sync::Arc, time::Duration};
 use support::*;
 use tokio_util::sync::CancellationToken;
+use zeroize::Zeroizing;
 
 const WAIT: Duration = Duration::from_secs(90);
 
@@ -234,10 +237,10 @@ async fn a_lost_lease_stops_the_run_and_posts_nothing() {
 }
 
 #[tokio::test]
-async fn a_sealed_conversation_is_refused_without_further_calls() {
+async fn a_sealed_conversation_without_a_published_key_is_refused_without_further_calls() {
     let _serial = serial().await;
     let mock = MockHub::start(Scenario {
-        claim: Claim::Refuse(409, "BOT_TURN_ENCRYPTED"),
+        claim: Claim::Refuse(409, "BOT_DEVICE_E2E_KEY_MISSING"),
         ..Scenario::default()
     })
     .await;
@@ -269,6 +272,149 @@ async fn a_sealed_conversation_is_refused_without_further_calls() {
             hub.paths("")
         );
     }
+}
+
+#[derive(Default)]
+struct MemVault(std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>);
+
+impl InboxKeyVault for MemVault {
+    fn load(&self, owner: &str) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .get(owner)
+            .cloned()
+            .map(Zeroizing::new))
+    }
+
+    fn store(&self, owner: &str, secret: &[u8]) -> Result<(), String> {
+        self.0.lock().unwrap().insert(owner.into(), secret.to_vec());
+        Ok(())
+    }
+
+    fn remove(&self, owner: &str) -> Result<(), String> {
+        self.0.lock().unwrap().remove(owner);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn an_encrypted_chat_is_opened_on_the_device_and_answered_sealed_to_every_owner_device() {
+    let _serial = serial().await;
+    let (laptop, phone) = (
+        InboxKeyring::new(Arc::new(MemVault::default())),
+        InboxKeyring::new(Arc::new(MemVault::default())),
+    );
+    let owner_keys = vec![
+        laptop.ensure(OWNER_ID).unwrap().0,
+        phone.ensure(OWNER_ID).unwrap().0,
+    ];
+    let mock = MockHub::start(Scenario {
+        capabilities: vec![BotCapability::Encryption],
+        owner_keys: Some(owner_keys),
+        prompt: "The vault code is 7391, please confirm it".into(),
+        model: scripted([Step::Text("Confirmed, the code ends in 91".into())]),
+        ..Scenario::default()
+    })
+    .await;
+    let state_dir = tempfile::tempdir().unwrap();
+    let cancel = CancellationToken::new();
+    let host = tokio::spawn(bot_host::run(
+        state_dir.path().to_owned(),
+        mock.session.clone(),
+        cancel.clone(),
+    ));
+    mock.wait("the sealed reply", WAIT, |hub| {
+        hub.state == TurnState::Replied
+    })
+    .await;
+    cancel.cancel();
+    host.await.unwrap().unwrap();
+
+    let hub = mock.hub.lock().await;
+    let published = hub.calls("/bots/inbox-keys");
+    assert_eq!(published.len(), 1);
+    assert!(published[0].authorization.starts_with("DPoP "));
+    assert_eq!(published[0].body["principal_id"], BOT_ID);
+    assert!(
+        hub.model_requests[0].to_string().contains("7391"),
+        "the device opened the sealed message for its model"
+    );
+
+    let reply: DeviceReplyRequest =
+        serde_json::from_value(hub.calls("/reply")[0].body.clone()).unwrap();
+    assert!(reply.envelope.is_null());
+    let envelopes = reply.envelopes.unwrap();
+    assert_eq!(
+        envelopes.keys().map(String::as_str).collect::<Vec<_>>(),
+        [BOT_ID, OWNER_ID]
+    );
+    let owners = &envelopes[OWNER_ID];
+    assert_eq!(owners["keys"].as_array().unwrap().len(), 2);
+    let scope = Scope {
+        conversation_id: CONVERSATION_ID,
+        message_id: &reply.message_id,
+        sender_id: BOT_ID,
+    };
+    for ring in [&laptop, &phone] {
+        let opened: serde_json::Value =
+            serde_json::from_slice(&ring.open(OWNER_ID, &scope, owners).unwrap()).unwrap();
+        assert_eq!(opened["text"], "Confirmed, the code ends in 91");
+    }
+
+    for read in hub.calls("/inbox/keys") {
+        assert_eq!(read.authorization, format!("Bearer {BOT_TOKEN}"));
+        for part in [
+            format!("as={BOT_ID}"),
+            format!("conversation_id={CONVERSATION_ID}"),
+        ] {
+            assert!(read.query.contains(&part), "{read:?}");
+        }
+    }
+    assert!(!hub.calls("/inbox/keys").is_empty());
+
+    let vault = bot_host::e2e::DeviceKeyVault::open(state_dir.path()).unwrap();
+    let stored: serde_json::Value =
+        serde_json::from_slice(&vault.load(BOT_ID).unwrap().unwrap()).unwrap();
+    let seed = stored["keys"][0]["seed"].as_str().unwrap();
+    for rec in &hub.requests {
+        let seen = format!("{} {} {}", rec.path, rec.query, rec.body);
+        assert!(
+            !seen.contains(seed),
+            "the bot's private key left the device: {seen}"
+        );
+        if !rec.path.ends_with("/chat/completions") {
+            for plain in ["7391", "ends in 91"] {
+                assert!(!seen.contains(plain), "the hub read '{plain}': {seen}");
+            }
+        }
+    }
+
+    let saved: Vec<&Rec> = hub
+        .requests
+        .iter()
+        .filter(|rec| rec.method == "PUT" && rec.path.ends_with("/checkpoint"))
+        .collect();
+    assert!(!saved.is_empty(), "the turn saved checkpoints");
+    for rec in &saved {
+        assert_eq!(
+            rec.body["checkpoint"]["state"]["sealed_checkpoint"], 1,
+            "{rec:?}"
+        );
+    }
+    let last: BotRunCheckpoint =
+        serde_json::from_value(saved.last().unwrap().body["checkpoint"].clone()).unwrap();
+    let restarted = bot_host::e2e::host(
+        state_dir.path(),
+        &DeviceTurnHub::new(mock.session.clone(), "device:restarted".into()),
+    )
+    .unwrap();
+    let opened = restarted
+        .open_checkpoint(BOT_ID, CONVERSATION_ID, &turn_id(BOT_ID, TRIGGER_ID), &last)
+        .await
+        .unwrap();
+    assert_eq!(opened.revision, last.revision);
 }
 
 #[tokio::test]

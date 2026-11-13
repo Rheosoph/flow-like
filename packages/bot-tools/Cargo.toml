@@ -23,7 +23,7 @@ documents = [
     "flow-like-catalog-media-document/execute",
 ]
 barcodes = ["dep:flow-like-catalog-media-image"]
-image-resolve = ["dep:flow-like-runtime"]
+image-resolve = ["dep:flow-like-runtime", "flow-like-runtime/model"]
 image = [
     "image-resolve",
     "dep:flow-like-catalog-media-image",

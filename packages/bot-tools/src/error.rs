@@ -33,6 +33,10 @@ pub mod code {
     pub const DISPLAY_BUSY: &str = "display_busy";
     pub const STALE_PAGE: &str = "stale_page";
     pub const PERMISSION_MISSING: &str = "permission_missing";
+    /// A secret sealed to the bot's own key, asked for on a host that holds no key at all.
+    pub const SECRET_SEALED: &str = "secret_sealed";
+    /// A sealed secret none of this host's keys opens; the owner has to enter it again.
+    pub const SECRET_REENTER: &str = "secret_reenter";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

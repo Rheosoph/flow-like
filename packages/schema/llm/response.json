@@ -433,6 +433,12 @@
 					"type": ["integer", "null"],
 					"format": "uint32",
 					"minimum": 0
+				},
+				"cache_write_tokens": {
+					"description": "Input tokens written to the provider cache, already included in prompt_tokens.",
+					"type": ["integer", "null"],
+					"format": "uint32",
+					"minimum": 0
 				}
 			}
 		},

@@ -9,6 +9,9 @@
 //!   ChaCha20-Poly1305) of the plaintext to one key;
 //! - keys `{v, enc, ct, keys: [{key_id, enc_key, ck}]}`: the plaintext under a one-time content
 //!   key (ChaCha20-Poly1305, zero nonce), and that key HPKE-sealed to each of the recipient's keys.
+//!
+//! A bot secret the owner seals to the bot's keys uses the keys shape under its own labels, bound
+//! to the bot and the secret's name instead of a message.
 
 use crate::{CryptoError, Result};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -41,6 +44,8 @@ pub const MAX_RETAINED_KEYS: usize = 8;
 pub const MAX_ENVELOPE_KEYS: usize = 20;
 const CONTEXT_LABEL: &str = "flow-like-inbox-envelope-v1";
 const BODY_LABEL: &str = "flow-like-inbox-body-v1";
+const SECRET_KEY_LABEL: &str = "flow-like-bot-secret-key-v1";
+const SECRET_BODY_LABEL: &str = "flow-like-bot-secret-v1";
 const MAX_STORED_BYTES: usize = 16 * 1024;
 
 fn suite() -> HpkeConfig {
@@ -82,6 +87,49 @@ fn body_context(scope: &Scope, recipient_id: &str) -> Vec<u8> {
     ])
     .to_string()
     .into_bytes()
+}
+
+/// What binds a sealed bot secret: the bot that may open it and the name it is stored under.
+#[derive(Debug, Clone, Copy)]
+pub struct SecretScope<'a> {
+    pub bot_id: &'a str,
+    pub name: &'a str,
+}
+
+/// What the wrapped keys and the body of a keys-form envelope are bound to.
+#[derive(Clone, Copy)]
+enum Binding<'a> {
+    Message {
+        scope: &'a Scope<'a>,
+        recipient_id: &'a str,
+    },
+    Secret(&'a SecretScope<'a>),
+}
+
+impl Binding<'_> {
+    fn key_info(&self, key_id: &str) -> Vec<u8> {
+        match self {
+            Self::Message {
+                scope,
+                recipient_id,
+            } => context(scope, recipient_id, key_id),
+            Self::Secret(secret) => json!([SECRET_KEY_LABEL, secret.bot_id, secret.name, key_id])
+                .to_string()
+                .into_bytes(),
+        }
+    }
+
+    fn body_aad(&self) -> Vec<u8> {
+        match self {
+            Self::Message {
+                scope,
+                recipient_id,
+            } => body_context(scope, recipient_id),
+            Self::Secret(secret) => json!([SECRET_BODY_LABEL, secret.bot_id, secret.name])
+                .to_string()
+                .into_bytes(),
+        }
+    }
 }
 
 /// A member's published key, to seal to.
@@ -147,12 +195,25 @@ pub fn seal(scope: &Scope, recipient: &Recipient, plaintext: &[u8]) -> Result<Va
 
 /// One envelope for `member` that each of their keys opens.
 pub fn seal_member(scope: &Scope, member: &Member, plaintext: &[u8]) -> Result<Value> {
-    if member.keys.is_empty() {
+    let binding = Binding::Message {
+        scope,
+        recipient_id: &member.principal_id,
+    };
+    seal_keys(binding, &member.keys, plaintext)
+}
+
+/// A bot secret sealed to the bot's published `keys`; it opens only for `scope`'s bot and name.
+pub fn seal_secret(scope: &SecretScope, keys: &[RecipientKey], value: &[u8]) -> Result<Value> {
+    seal_keys(Binding::Secret(scope), keys, value)
+}
+
+fn seal_keys(binding: Binding, keys: &[RecipientKey], plaintext: &[u8]) -> Result<Value> {
+    if keys.is_empty() {
         return Err(CryptoError::InvalidInput(
             "a member needs a published key to seal to",
         ));
     }
-    if member.keys.len() > MAX_ENVELOPE_KEYS {
+    if keys.len() > MAX_ENVELOPE_KEYS {
         return Err(CryptoError::InvalidInput(
             "a member has more keys than one envelope holds",
         ));
@@ -164,13 +225,12 @@ pub fn seal_member(scope: &Scope, member: &Member, plaintext: &[u8]) -> Result<V
             &Nonce::default(),
             Payload {
                 msg: plaintext,
-                aad: &body_context(scope, &member.principal_id),
+                aad: &binding.body_aad(),
             },
         )
         .map_err(|_| CryptoError::Operation("sealing an inbox envelope failed"))?;
     let mut seen = BTreeSet::new();
-    let keys = member
-        .keys
+    let keys = keys
         .iter()
         .map(|key| {
             if !seen.insert(key.key_id.as_str()) {
@@ -178,7 +238,7 @@ pub fn seal_member(scope: &Scope, member: &Member, plaintext: &[u8]) -> Result<V
                     "a key appears twice among a member's keys",
                 ));
             }
-            let info = context(scope, &member.principal_id, &key.key_id);
+            let info = binding.key_info(&key.key_id);
             let wrapped = hpke_seal(&key.public_key, &info, content_key.as_slice())?;
             Ok(json!({
                 "key_id": key.key_id,
@@ -275,6 +335,19 @@ pub fn open(
     recipient_id: &str,
     envelope: &Value,
 ) -> Result<Zeroizing<Vec<u8>>> {
+    let binding = Binding::Message {
+        scope,
+        recipient_id,
+    };
+    open_single(seed, key_id, binding, envelope)
+}
+
+fn open_single(
+    seed: &[u8; 32],
+    key_id: &str,
+    binding: Binding,
+    envelope: &Value,
+) -> Result<Zeroizing<Vec<u8>>> {
     if envelope_key_id(envelope) != Some(key_id) {
         return Err(CryptoError::InvalidInput(
             "the envelope is not sealed to this key",
@@ -284,22 +357,21 @@ pub fn open(
         kem_output: field(envelope, "enc_key")?.into(),
         ciphertext: field(envelope, "ct")?.into(),
     };
-    hpke_open(seed, &sealed, &context(scope, recipient_id, key_id))
+    hpke_open(seed, &sealed, &binding.key_info(key_id))
 }
 
 fn open_wrapped(
     seed: &[u8; 32],
     key_id: &str,
     wrapped: &Value,
-    scope: &Scope,
-    recipient_id: &str,
+    binding: Binding,
     envelope: &Value,
 ) -> Result<Zeroizing<Vec<u8>>> {
     let sealed = HpkeCiphertext {
         kem_output: field(wrapped, "enc_key")?.into(),
         ciphertext: field(wrapped, "ck")?.into(),
     };
-    let content_key = hpke_open(seed, &sealed, &context(scope, recipient_id, key_id))?;
+    let content_key = hpke_open(seed, &sealed, &binding.key_info(key_id))?;
     let content_key: &[u8; 32] = content_key
         .as_slice()
         .try_into()
@@ -309,7 +381,7 @@ fn open_wrapped(
             &Nonce::default(),
             Payload {
                 msg: &field(envelope, "ct")?,
-                aad: &body_context(scope, recipient_id),
+                aad: &binding.body_aad(),
             },
         )
         .map(Zeroizing::new)
@@ -358,16 +430,32 @@ impl InboxSecret {
         &self.public
     }
 
-    fn open(&self, scope: &Scope, recipient_id: &str, envelope: &Value) -> Option<Result<Zeroizing<Vec<u8>>>> {
+    fn open(&self, binding: Binding, envelope: &Value) -> Option<Result<Zeroizing<Vec<u8>>>> {
         let key_id = self.public.key_id.as_str();
         if envelope_key_id(envelope) == Some(key_id) {
-            return Some(open(&self.seed, key_id, scope, recipient_id, envelope));
+            return Some(open_single(&self.seed, key_id, binding, envelope));
         }
         wrapped_keys(envelope)
             .into_iter()
             .find(|(id, _)| *id == key_id)
-            .map(|(_, wrapped)| open_wrapped(&self.seed, key_id, wrapped, scope, recipient_id, envelope))
+            .map(|(_, wrapped)| open_wrapped(&self.seed, key_id, wrapped, binding, envelope))
     }
+}
+
+fn open_bound(
+    secrets: &[InboxSecret],
+    binding: Binding,
+    envelope: &Value,
+) -> Result<Zeroizing<Vec<u8>>> {
+    if envelope_key_ids(envelope).is_empty() {
+        return Err(CryptoError::InvalidInput("not a sealed inbox envelope"));
+    }
+    secrets
+        .iter()
+        .find_map(|secret| secret.open(binding, envelope))
+        .unwrap_or(Err(CryptoError::InvalidInput(
+            "this host holds no key for the envelope",
+        )))
 }
 
 /// Opens `envelope` sent to `recipient_id` with whichever of `secrets` it names.
@@ -377,15 +465,20 @@ pub fn open_with(
     recipient_id: &str,
     envelope: &Value,
 ) -> Result<Zeroizing<Vec<u8>>> {
-    if envelope_key_ids(envelope).is_empty() {
-        return Err(CryptoError::InvalidInput("not a sealed inbox envelope"));
-    }
-    secrets
-        .iter()
-        .find_map(|secret| secret.open(scope, recipient_id, envelope))
-        .unwrap_or(Err(CryptoError::InvalidInput(
-            "this host holds no key for the envelope",
-        )))
+    let binding = Binding::Message {
+        scope,
+        recipient_id,
+    };
+    open_bound(secrets, binding, envelope)
+}
+
+/// Opens a bot secret sealed for `scope` with whichever of `secrets` it names.
+pub fn open_secret_with(
+    secrets: &[InboxSecret],
+    scope: &SecretScope,
+    envelope: &Value,
+) -> Result<Zeroizing<Vec<u8>>> {
+    open_bound(secrets, Binding::Secret(scope), envelope)
 }
 
 fn public_of(seed: &[u8; 32]) -> [u8; 32] {
@@ -557,6 +650,11 @@ impl InboxKeyring {
         envelope: &Value,
     ) -> Result<Zeroizing<Vec<u8>>> {
         open_with(&self.secrets(owner)?, scope, owner, envelope)
+    }
+
+    /// Opens a secret the owner sealed to `scope.bot_id`'s keys.
+    pub fn open_secret(&self, scope: &SecretScope, envelope: &Value) -> Result<Zeroizing<Vec<u8>>> {
+        open_secret_with(&self.secrets(scope.bot_id)?, scope, envelope)
     }
 
     /// Deletes every key of `owner`; nothing sealed to them opens afterwards.
@@ -832,6 +930,62 @@ mod tests {
         let mut wrapped: Vec<_> = envelope["keys"][0].as_object().unwrap().keys().cloned().collect();
         wrapped.sort();
         assert_eq!(wrapped, ["ck", "enc_key", "key_id"]);
+    }
+
+    fn recipient_keys(keys: &[&PublicInboxKey]) -> Vec<RecipientKey> {
+        member("unused", keys).keys
+    }
+
+    const SECRET: SecretScope<'static> = SecretScope {
+        bot_id: "bot_a",
+        name: "API_KEY",
+    };
+
+    #[test]
+    fn a_sealed_secret_opens_only_for_its_bot_and_name() {
+        let (_, ring) = keyring();
+        let (key, _) = ring.ensure("bot_a").unwrap();
+        let envelope = seal_secret(&SECRET, &recipient_keys(&[&key]), b"sk-123").unwrap();
+        assert!(!envelope.to_string().contains("sk-123"));
+        assert_eq!(&**ring.open_secret(&SECRET, &envelope).unwrap(), b"sk-123");
+        for other in [
+            SecretScope {
+                name: "OTHER_KEY",
+                ..SECRET
+            },
+            SecretScope {
+                bot_id: "bot_b",
+                ..SECRET
+            },
+        ] {
+            let secrets = ring.secrets("bot_a").unwrap();
+            assert!(open_secret_with(&secrets, &other, &envelope).is_err());
+        }
+        let mut names: Vec<_> = envelope.as_object().unwrap().keys().cloned().collect();
+        names.sort();
+        assert_eq!(names, ["ct", "enc", "keys", "v"]);
+    }
+
+    #[test]
+    fn a_secret_and_a_message_never_open_as_each_other() {
+        let (_, ring) = keyring();
+        let (key, _) = ring.ensure("bot_a").unwrap();
+        let secret = seal_secret(&SECRET, &recipient_keys(&[&key]), b"x").unwrap();
+        let message = seal_member(&scope(), &member("bot_a", &[&key]), b"x").unwrap();
+        assert!(ring.open("bot_a", &scope(), &secret).is_err());
+        assert!(ring.open_secret(&SECRET, &message).is_err());
+    }
+
+    #[test]
+    fn a_secret_for_keys_this_host_lacks_does_not_open() {
+        let (_, here) = keyring();
+        let (_, elsewhere) = keyring();
+        here.ensure("bot_a").unwrap();
+        let (other_key, _) = elsewhere.ensure("bot_a").unwrap();
+        let envelope = seal_secret(&SECRET, &recipient_keys(&[&other_key]), b"x").unwrap();
+        assert!(here.open_secret(&SECRET, &envelope).is_err());
+        assert_eq!(&**elsewhere.open_secret(&SECRET, &envelope).unwrap(), b"x");
+        assert!(seal_secret(&SECRET, &[], b"x").is_err());
     }
 
     #[test]

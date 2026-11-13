@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import AdmZip from "adm-zip";
+import { parse } from "yaml";
 import { standalonePackageFixture } from "../../../.github/scripts/tests/fixtures/standalone-package";
 import {
 	MAX_RELEASE_LIFETIME_S,
@@ -144,6 +145,28 @@ describe("verified standalone release packages", () => {
 		expect(archive.readAsText("compose.yaml")).toContain(
 			`@sha256:${"a".repeat(64)}`,
 		);
+		const agent = parse(archive.readAsText("compose.yaml")).services.agent;
+		expect(agent.shm_size).toBe("1gb");
+		expect(agent.environment).toEqual({
+			HOME: "/package/state",
+			FLOW_LIKE_PLAYGROUND: "virtual",
+		});
+		expect(agent.cap_drop).toEqual(["ALL"]);
+		expect(agent.security_opt).toEqual([
+			"no-new-privileges:true",
+			"seccomp=./chrome-seccomp.json",
+		]);
+		const seccomp = JSON.parse(archive.readAsText("chrome-seccomp.json"));
+		expect(seccomp.defaultAction).toBe("SCMP_ACT_ERRNO");
+		expect(
+			seccomp.syscalls.some(
+				(rule: { names: string[]; action: string }) =>
+					rule.action === "SCMP_ACT_ALLOW" &&
+					["chroot", "clone", "clone3", "unshare"].every((name) =>
+						rule.names.includes(name),
+					),
+			),
+		).toBe(true);
 		expect(archive.readAsText(".gitignore")).toBe("*\n!.gitignore\n");
 		expect(archive.readAsText("state/agent.env")).toContain(
 			"FLOW_LIKE_DEVICE_ISOLATION_POLICY=compatible",

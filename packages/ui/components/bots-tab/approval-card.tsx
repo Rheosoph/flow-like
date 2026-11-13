@@ -5,17 +5,15 @@ import {
 	BanIcon,
 	CheckCheckIcon,
 	CheckIcon,
+	CircleSlashIcon,
 	KeyRoundIcon,
 	ShieldQuestionIcon,
 	SlidersHorizontalIcon,
+	TimerOffIcon,
+	UserPlusIcon,
 } from "lucide-react";
-import { useState } from "react";
-import {
-	useAnswerBotApproval,
-	useBot,
-	useBotLabels,
-	useUpsertBotSecret,
-} from "../../hooks/use-bots";
+import { useBotSecretSealing } from "../../hooks/use-bot-secret-sealing";
+import { useBot, useBotLabels, useUpsertBotSecret } from "../../hooks/use-bots";
 import { requiresFreshToolApproval } from "../../lib/frontend-tool-approval-scope";
 import { BotAvatar } from "../bots/bot-avatar";
 import type { BotAppearance } from "../bots/types";
@@ -30,6 +28,15 @@ import {
 	requestButtonClass,
 } from "../interfaces/chat-default/request-card";
 import { Button } from "../ui/button";
+import { type ApprovalClosure, useApprovalAnswer } from "./approval-answer";
+import {
+	ApprovalBatchCard,
+	RequesterLine,
+	ToolChip,
+	WebContentNotice,
+	useDecisionText,
+} from "./approval-batch";
+import { callPhrase, isBatch } from "./approval-batch-model";
 import type { ApprovalDecision } from "./approval-entry";
 import {
 	BotConfigurationChanges,
@@ -37,122 +44,120 @@ import {
 } from "./configuration-changes";
 import type { ConversationApproval } from "./fold-entries";
 import { useGrantLabel } from "./grant-labels";
+import { InviteRequestDetails } from "./invite-request";
 import { SecretRequestForm } from "./secret-request-form";
 
-/** The summary as the end of "{{name}} wants to …"; core phrases them as "The bot wants to …". */
-function lowerFirst(summary: string): string {
-	const text = summary
-		.trim()
-		.replace(/^the bot wants to\s+/i, "")
-		.replace(/[.!]+$/, "");
-	return /^[A-Z][a-z]/.test(text)
-		? text.charAt(0).toLowerCase() + text.slice(1)
-		: text;
-}
-
-function useDecisionText() {
-	const { t } = useTranslation("bots");
-	return (decision: ApprovalDecision, secret?: boolean): string => {
-		if (secret)
-			return decision === "deny"
-				? t("crew.approval.secret.declined", "Declined")
-				: t("crew.approval.secret.saved", "Secret saved");
-		return {
-			once: t("crew.approval.answeredOnce", "Allowed once"),
-			always: t("crew.approval.answeredAlways", "Always allowed"),
-			deny: t("crew.approval.answeredDeny", "Denied"),
-		}[decision];
-	};
-}
-
-function decisionTone(decision: ApprovalDecision | undefined): RequestTone {
+const decisionTone = (
+	decision: ApprovalDecision | undefined,
+	closure: ApprovalClosure | undefined,
+): RequestTone => {
+	if (closure) return "muted";
 	if (!decision) return "warning";
 	return decision === "deny" ? "critical" : "good";
-}
+};
 
-function decisionIcon(decision: ApprovalDecision | undefined, secret: boolean) {
+function decisionIcon(
+	decision: ApprovalDecision | undefined,
+	closure: ApprovalClosure | undefined,
+	secret: boolean,
+) {
+	if (closure) return closure === "expired" ? TimerOffIcon : CircleSlashIcon;
 	if (!decision) return secret ? KeyRoundIcon : ShieldQuestionIcon;
 	return decision === "deny" ? BanIcon : CheckIcon;
 }
 
-/** A bot's request to run a call, with Allow once / Always allow / Deny, or the owner's answer. */
-export function ApprovalCard({
-	approval,
-	botId,
-	botName,
-	botAppearance,
-	readOnly,
-}: Readonly<{
+/**
+ * Below 24rem the three answers no longer fit one row: the buttons wrap, and Always allow takes the
+ * second row. Wider footers are unchanged.
+ */
+const NARROW_FOOTER =
+	"@container @max-sm:[&>div:first-child:empty]:hidden @max-sm:[&>div:last-child]:w-full @max-sm:[&>div:last-child]:flex-wrap @max-sm:[&>div:last-child]:justify-end";
+
+interface ApprovalCardProps {
 	approval: ConversationApproval;
 	botId: string;
 	botName: string;
 	/** The asking bot's look; without it the card shows a shield instead of its face. */
 	botAppearance?: Partial<BotAppearance>;
 	readOnly: boolean;
-}>) {
+}
+
+/**
+ * A bot's request to run a call, with Allow once / Always allow / Deny, or the owner's answer. A
+ * batch of calls from one model round is one card with the same shell.
+ */
+export function ApprovalCard(props: Readonly<ApprovalCardProps>) {
+	return isBatch(props.approval) ? (
+		<ApprovalBatchCard {...props} />
+	) : (
+		<SingleApprovalCard {...props} />
+	);
+}
+
+function SingleApprovalCard({
+	approval,
+	botId,
+	botName,
+	botAppearance,
+	readOnly,
+}: Readonly<ApprovalCardProps>) {
 	const { t } = useTranslation("bots");
 	const grantLabel = useGrantLabel(approval.scopes);
 	const decisionText = useDecisionText();
-	const {
-		mutate,
-		mutateAsync: answerAsync,
-		isPending,
-		isError,
-		variables,
-	} = useAnswerBotApproval();
+	const state = useApprovalAnswer(approval, botId);
 	const upsertSecret = useUpsertBotSecret();
-	const [sent, setSent] = useState<ApprovalDecision>();
-	const decision = approval.answer ?? sent;
+	const decision = state.answer;
+	const closure = state.closure;
+	const waiting = !decision && !closure;
 	const isConfiguration = requiresFreshToolApproval(approval.tool);
 	const settingsText = useBotSettingsApprovalText(approval.tool);
-	const rememberable = !isConfiguration && approval.scopes.length > 0;
-	const tone = decisionTone(decision);
-	const disabled = readOnly || isPending;
+	const flagged = approval.afterWebContent === true;
+	const rememberable =
+		!isConfiguration && !flagged && approval.scopes.length > 0;
+	const tone = decisionTone(decision, closure);
+	const disabled = readOnly || state.pending || state.elsewhere;
+	const target = approval.scopes
+		.map((scope) => grantLabel(approval.tool, scope))
+		.join(", ");
 
-	const answer = (next: ApprovalDecision) =>
-		mutate(
-			{
-				botId,
-				turnId: approval.turnId,
-				approvalId: approval.id,
-				decision: next,
-			},
-			{ onSuccess: () => setSent(next) },
-		);
+	const answer = (next: ApprovalDecision) => state.send(next);
 
 	const secret = approval.secret;
+	const invite = approval.invite;
+	const waitingIcon = isConfiguration
+		? SlidersHorizontalIcon
+		: invite
+			? UserPlusIcon
+			: undefined;
 	const icon =
-		!decision && isConfiguration
-			? SlidersHorizontalIcon
-			: decisionIcon(decision, !!secret);
+		waiting && waitingIcon
+			? waitingIcon
+			: decisionIcon(decision, closure, !!secret);
 
-	const saveSecret = async (value: string) => {
+	const sealing = useBotSecretSealing(secret && waiting ? botId : null);
+	const saveSecret = async (value: string, sealed: boolean) => {
 		if (!secret) return;
 		await upsertSecret.mutateAsync({
 			botId,
 			name: secret.name,
 			request: { value, description: secret.description },
+			sealed,
 		});
-		await answerAsync({
-			botId,
-			turnId: approval.turnId,
-			approvalId: approval.id,
-			decision: "once",
-		});
-		setSent("once");
+		await state.sendAsync("once");
 	};
+	const closed = !waiting;
 	return (
 		<RequestCard
 			data-slot="approval-card"
 			aria-label={t("crew.approval.label", "Approval request")}
 			tone={tone}
-			live={!decision}
+			live={waiting}
 			className="max-w-prose"
 		>
 			<RequestCardHeader
 				dense
 				tone={tone}
-				live={!decision}
+				live={waiting}
 				mark={
 					<RequestMark icon={icon} tone={tone}>
 						{botAppearance && (
@@ -166,7 +171,13 @@ export function ApprovalCard({
 					</RequestMark>
 				}
 				eyebrow={
-					decision ? (
+					closure ? (
+						<span data-slot="approval-closure">
+							{closure === "expired"
+								? t("crew.approval.expired", "Expired")
+								: t("crew.approval.cancelled", "Task cancelled")}
+						</span>
+					) : decision ? (
 						<span data-slot="approval-answer">
 							{isConfiguration
 								? decision === "deny"
@@ -178,7 +189,7 @@ export function ApprovalCard({
 						t("crew.approval.label", "Approval request")
 					)
 				}
-				className={decision ? "pb-3.5" : undefined}
+				className={closed ? "pb-3.5" : undefined}
 				title={
 					secret
 						? t("crew.approval.secret.title", "{{name}} needs a secret", {
@@ -186,75 +197,91 @@ export function ApprovalCard({
 							})
 						: isConfiguration
 							? settingsText.requestTitle(botName)
-							: t("crew.approval.title", "{{name}} wants to {{summary}}", {
-									name: botName,
-									summary: lowerFirst(approval.summary || approval.tool),
-								})
+							: invite
+								? t(
+										"crew.approval.invite.title",
+										"{{name}} wants to invite {{person}}",
+										{ name: botName, person: invite.person },
+									)
+								: t("crew.approval.title", "{{name}} wants to {{summary}}", {
+										name: botName,
+										summary: callPhrase(approval.summary || approval.tool),
+									})
 				}
 				description={
 					<>
-						{isConfiguration && !decision && <p>{settingsText.hint}</p>}
-						{!secret && !isConfiguration && (
+						{isConfiguration && waiting && <p>{settingsText.hint}</p>}
+						{!secret && !isConfiguration && !invite && (
 							<p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
-								<code className="rounded-md border border-border/60 bg-muted/60 px-1.5 py-0.5 font-mono text-[11px] text-foreground/80">
-									{approval.tool}
-								</code>
+								<ToolChip tool={approval.tool} />
 								<span>
-									{rememberable
-										? approval.scopes
-												.map((scope) => grantLabel(approval.tool, scope))
-												.join(", ")
+									{approval.scopes.length > 0
+										? target
 										: t("crew.approval.askEveryTime", "Always asks first")}
 								</span>
 							</p>
 						)}
-						{approval.requesterName && (
-							<p data-slot="approval-requester" className="mt-1 text-xs">
-								{approval.room
-									? t(
-											"crew.approval.triggeredByInRoom",
-											"Triggered by {{name}} in {{room}}",
-											{ name: approval.requesterName, room: approval.room },
-										)
-									: t("crew.approval.triggeredBy", "Triggered by {{name}}", {
-											name: approval.requesterName,
-										})}
+						<RequesterLine approval={approval} />
+						{flagged && waiting && <WebContentNotice />}
+						{closure === "expired" && (
+							<p className="mt-1 text-xs">
+								{t(
+									"crew.approval.expiredHint",
+									"Nobody answered within 7 days, so {{name}} stopped.",
+									{ name: botName },
+								)}
 							</p>
 						)}
 					</>
 				}
 			/>
-			{approval.configurationChanges && (
-				<RequestCardBody className="max-h-[min(32rem,60vh)] overflow-y-auto overscroll-contain px-3.5 py-2.5">
-					<BotConfigurationChanges changes={approval.configurationChanges} />
+			{invite && (
+				<RequestCardBody dense>
+					<InviteRequestDetails invite={invite} room={approval.room} />
 				</RequestCardBody>
 			)}
-			{!decision && secret && (
+			{approval.configurationChanges && (
+				<RequestCardBody className="max-h-[min(32rem,60vh)] overflow-y-auto overscroll-contain px-3.5 py-2.5">
+					<BotConfigurationChanges
+						changes={approval.configurationChanges}
+						tool={approval.tool}
+					/>
+				</RequestCardBody>
+			)}
+			{waiting && secret && (
 				<SecretRequestForm
 					secret={secret}
 					botName={botName}
-					disabled={readOnly || isPending}
+					disabled={disabled}
+					sealing={sealing}
 					onSave={saveSecret}
 					onDecline={() => answer("deny")}
 				/>
 			)}
-			{!decision && !secret && (
+			{waiting && !secret && (
 				<RequestCardFooter
 					className={
 						isConfiguration
 							? "px-3.5 py-2.5 [&>div:last-child]:max-w-full [&>div:last-child]:flex-wrap [&>div:last-child]:justify-end"
-							: "px-3.5 py-2.5"
+							: `px-3.5 py-2.5 ${NARROW_FOOTER}`
 					}
 					start={
-						isError &&
-						!isPending &&
-						variables && (
-							<p role="alert" className="text-xs text-destructive">
+						state.elsewhere ? (
+							<p className="text-xs text-muted-foreground">
 								{t(
-									"crew.approval.failed",
-									"Couldn't send your answer. Try again.",
+									"crew.approval.answeredElsewhere",
+									"Answered on another device",
 								)}
 							</p>
+						) : (
+							state.failed && (
+								<p role="alert" className="text-xs text-destructive">
+									{t(
+										"crew.approval.failed",
+										"Couldn't send your answer. Try again.",
+									)}
+								</p>
+							)
 						)
 					}
 				>
@@ -279,16 +306,18 @@ export function ApprovalCard({
 						disabled={disabled}
 						onClick={() => answer("once")}
 					>
-						<CheckIcon aria-hidden />
+						{invite ? <UserPlusIcon aria-hidden /> : <CheckIcon aria-hidden />}
 						{isConfiguration
 							? settingsText.approve
-							: t("crew.approval.once", "Allow once")}
+							: invite
+								? t("crew.approval.invite.allow", "Invite")
+								: t("crew.approval.once", "Allow once")}
 					</Button>
 					{rememberable && (
 						<Button
 							type="button"
 							size="sm"
-							className={requestButtonClass}
+							className={`${requestButtonClass} @max-sm:basis-full`}
 							disabled={disabled}
 							onClick={() => answer("always")}
 						>

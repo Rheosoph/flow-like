@@ -43,9 +43,11 @@ async fn database() -> DatabaseConnection {
         }
         db.execute(&table).await.unwrap();
     }
-    db.execute_unprepared(r#"CREATE TABLE public."App" ("id" TEXT PRIMARY KEY, "botId" TEXT)"#)
-        .await
-        .unwrap();
+    db.execute_unprepared(
+        r#"CREATE TABLE public."App" ("id" TEXT PRIMARY KEY, "botId" TEXT, "refuseBots" BOOLEAN)"#,
+    )
+    .await
+    .unwrap();
     db.execute_unprepared(
         r#"CREATE TABLE public."ConversationMember" (
             "conversationId" TEXT NOT NULL, "principalId" TEXT NOT NULL,
@@ -284,6 +286,44 @@ async fn a_profile_app_opens_while_the_bot_holds_profile_apps() {
 }
 
 #[tokio::test]
+async fn an_app_that_refuses_bots_closes_its_profile_door_too() {
+    let db = profile_world().await;
+    scope_bot(&db, &["profile_apps"], Some("profile-1")).await;
+    let source = Schema::new(db.get_database_backend())
+        .create_table_from_entity(crate::entity::meta::Entity);
+    let mut meta = Table::create();
+    meta.table(source.get_table_name().unwrap().clone());
+    for column in source.get_columns() {
+        meta.col(column.clone());
+    }
+    db.execute(&meta).await.unwrap();
+    db.execute_unprepared(
+        r#"INSERT INTO public."App" ("id", "refuseBots") VALUES ('app-1', TRUE)"#,
+    )
+    .await
+    .unwrap();
+
+    let refused = bits(&db, &bot_user(None)).await.unwrap_err();
+    assert_eq!(
+        (refused.status(), refused.public_code()),
+        (
+            StatusCode::FORBIDDEN,
+            flow_like_types::bot_restrictions::APP_REFUSES_BOTS
+        )
+    );
+    assert_eq!(
+        refused.public_message(),
+        Some("The app 'app-1' does not allow bots; ask its owner."),
+        "an app without a name is named by its id"
+    );
+
+    db.execute_unprepared(r#"UPDATE public."App" SET "refuseBots" = FALSE WHERE "id" = 'app-1'"#)
+        .await
+        .unwrap();
+    assert_eq!(bits(&db, &bot_user(None)).await.unwrap(), edit_bits());
+}
+
+#[tokio::test]
 async fn only_the_owners_live_profile_opens_its_apps() {
     let db = profile_world().await;
     owner_role(&db, OWNER, "app-2", edit_bits()).await;
@@ -400,11 +440,15 @@ async fn unreadable_scopes_fail_closed() {
 }
 
 async fn turn(db: &DatabaseConnection, id: &str, owner: &str, audience: &str) {
+    turn_in(db, id, owner, audience, ROOM).await;
+}
+
+async fn turn_in(db: &DatabaseConnection, id: &str, owner: &str, audience: &str, conv: &str) {
     db.execute_unprepared(&format!(
         r#"INSERT INTO public."BotTurn"
         ("id","botId","ownerId","conversationId","triggerMessageId","hostKind","status","attempts",
          "hops","audience","createdAt","updatedAt")
-        VALUES ('{id}','{BOT}','{owner}','{ROOM}','m-{id}','SERVER','RUNNING',0,0,'{audience}',
+        VALUES ('{id}','{BOT}','{owner}','{conv}','m-{id}','SERVER','RUNNING',0,0,'{audience}',
         '2023-11-14T00:00:00+00:00','2023-11-14T00:00:00+00:00')"#
     ))
     .await
@@ -414,7 +458,9 @@ async fn turn(db: &DatabaseConnection, id: &str, owner: &str, audience: &str) {
 #[tokio::test]
 async fn the_runtime_token_binds_the_owners_own_turn_and_pins_a_room() {
     let db = world(edit_bits(), None).await;
-    turn(&db, "t-owner", OWNER, "OWNER").await;
+    token_origin(&db, "owner-direct", "DIRECT", OWNER).await;
+    token_origin(&db, ROOM, "GROUP", "member").await;
+    turn_in(&db, "t-owner", OWNER, "OWNER", "owner-direct").await;
     turn(&db, "t-room", OWNER, "ROOM").await;
     turn(&db, "t-foreign", "someone-else", "OWNER").await;
 
@@ -573,7 +619,16 @@ async fn a_late_answer_runtime_token_never_widens_an_unverified_origin() {
     let db = world(edit_bits(), None).await;
     token_origin(&db, "foreign-direct", "DIRECT", "someone-else").await;
     token_origin(&db, "unknown-kind", "UNKNOWN", OWNER).await;
-    for origin in ["missing-origin", "foreign-direct", "unknown-kind"] {
+    late_answer_turn(&db, "late-foreign-direct", "foreign-direct").await;
+    let foreign = bot_user_for_turn(&db, OWNER, BOT, "late-foreign-direct")
+        .await
+        .unwrap();
+    assert_eq!(
+        foreign.conv_id.as_deref(),
+        Some("foreign-direct"),
+        "a late answer keeps the limits of someone else's direct chat"
+    );
+    for origin in ["missing-origin", "unknown-kind"] {
         let id = format!("late-{origin}");
         late_answer_turn(&db, &id, origin).await;
         assert_eq!(
@@ -590,6 +645,91 @@ async fn a_late_answer_runtime_token_never_widens_an_unverified_origin() {
         .await
         .unwrap();
     assert_eq!(bot.conv_id.as_deref(), Some(ROOM));
+}
+
+async fn set_limits(db: &DatabaseConnection, conv: &str, limits: serde_json::Value) {
+    conversation_member::Entity::update_many()
+        .col_expr(
+            conversation_member::Column::Limits,
+            sea_orm::sea_query::Expr::value(limits),
+        )
+        .filter(conversation_member::Column::ConversationId.eq(conv))
+        .filter(conversation_member::Column::PrincipalId.eq(BOT))
+        .exec(db)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_device_turn_in_someone_elses_direct_chat_is_pinned_to_its_limits() {
+    crate::backend_jwt::init_for_tests();
+    let db = world(edit_bits(), None).await;
+    owner_role(&db, OWNER, "app-2", edit_bits()).await;
+    attach(&db, "app-2", None, "{}").await;
+    token_origin(&db, "owner-direct", "DIRECT", OWNER).await;
+    token_origin(&db, "guest-direct", "DIRECT", "guest").await;
+    set_limits(&db, "guest-direct", serde_json::json!({ "apps": [APP] })).await;
+    set_limits(&db, "owner-direct", serde_json::json!({ "apps": [APP] })).await;
+    turn_in(&db, "t-owner", OWNER, "OWNER", "owner-direct").await;
+    turn_in(&db, "t-guest", OWNER, "OWNER", "guest-direct").await;
+
+    for (turn_id, scope) in [("t-owner", None), ("t-guest", Some("guest-direct"))] {
+        let signed = crate::devices::bots_grant::bot_token(&db, OWNER, BOT, turn_id, 600)
+            .await
+            .unwrap();
+        let claims = verify_bot_token(&signed.token).unwrap();
+        assert_eq!(claims.conv_id.as_deref(), scope, "bot token of {turn_id}");
+        let row = bot_turn::Entity::find_by_id(turn_id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            crate::routes::bots::runtime_token::turn_scope(&db, &row)
+                .await
+                .unwrap()
+                .as_deref(),
+            scope,
+            "executor token scope of {turn_id}"
+        );
+    }
+
+    let owner = bot_user_for_turn(&db, OWNER, BOT, "t-owner").await.unwrap();
+    for app_id in [APP, "app-2"] {
+        assert_eq!(
+            bot_grant_in(&db, &owner, app_id)
+                .await
+                .unwrap()
+                .permissions
+                .bits(),
+            edit_bits(),
+            "the owner's own chat is never narrowed by its member row ({app_id})"
+        );
+    }
+    let guest = bot_user_for_turn(&db, OWNER, BOT, "t-guest").await.unwrap();
+    assert_eq!(bits(&db, &guest).await.unwrap(), edit_bits());
+    assert_eq!(
+        bot_grant_in(&db, &guest, "app-2")
+            .await
+            .unwrap_err()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+
+    db.execute_unprepared(
+        r#"UPDATE public."ConversationMember" SET "limits" = NULL WHERE "conversationId" = 'guest-direct'"#,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        bot_grant_in(&db, &guest, "app-2")
+            .await
+            .unwrap()
+            .permissions
+            .bits(),
+        edit_bits(),
+        "a direct chat accepted without limits keeps the bot's own rights"
+    );
 }
 
 #[test]

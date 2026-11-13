@@ -65,7 +65,7 @@ impl NoticeSink for Pushes {
 async fn setup() -> DatabaseConnection {
     let db = database().await;
     db.execute_unprepared(&format!(
-        r#"INSERT INTO public."User" ("id", "name", "username") VALUES
+        r#"INSERT INTO public."User" ("id", "name", "preferredUsername") VALUES
         ('{OWNER}', 'Olga', NULL), ('{ANNA}', 'Anna', NULL), ('{BEN}', 'Ben', NULL),
         ('{DORA}', NULL, 'dora')"#
     ))

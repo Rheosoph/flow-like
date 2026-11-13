@@ -54,7 +54,7 @@ The option is disabled until the device reports that Docker is installed, its Li
 
 The device agent needs access to the host's local Docker service. The standard containerized agent setup does not provide that access; install the agent directly on the host to manage per-bot containers.
 
-Each container keeps that bot's data in its own volume. The host filesystem, Docker socket and device credentials are not mounted into it. App permissions and tool approvals still apply. Containers have outbound network access, including to services reachable from the device. For a self-hosted hub, configure the agent with an address reachable from Docker; a localhost address points to the container itself.
+Each container keeps that bot's data in its own volume. The host filesystem, Docker socket and device credentials are not mounted into it. The bot and its browser share a limit of two CPU cores, 4 GiB of memory and 512 processes. App permissions and tool approvals still apply. Containers have outbound network access, including to services reachable from the device. For a self-hosted hub, configure the agent with an address reachable from Docker; a localhost address points to the container itself.
 
 Docker hosting is currently available for device bots; desktop bots continue to run inside Studio.
 

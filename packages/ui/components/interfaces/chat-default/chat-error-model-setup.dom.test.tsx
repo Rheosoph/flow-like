@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
 	gate: vi.fn(),
 	allows: vi.fn(),
 	add: vi.fn(),
+	hookProfile: vi.fn(),
+	bot: vi.fn(),
 }));
 
 vi.mock("../../bots-tab/editor/steps/use-bot-models", () => ({
@@ -20,11 +22,17 @@ vi.mock("../../bots-tab/editor/steps/use-bot-models", () => ({
 	useCatalogModelOptions: mocks.catalog,
 }));
 vi.mock("../../../hooks/use-add-model-to-profile", () => ({
-	useAddModelToProfile: () => ({
-		gate: mocks.gate,
-		allows: mocks.allows,
-		add: mocks.add,
-	}),
+	useAddModelToProfile: (_scope: unknown, profileId?: string) => {
+		mocks.hookProfile(profileId);
+		return {
+			gate: mocks.gate,
+			allows: mocks.allows,
+			add: mocks.add,
+		};
+	},
+}));
+vi.mock("../../../hooks/use-bots", () => ({
+	useBot: (id: string) => ({ data: mocks.bot(id) }),
 }));
 vi.mock("../../../state/backend-state", () => ({
 	useBackend: () => ({
@@ -42,6 +50,7 @@ vi.mock("@flow-like/locales", () => ({
 	}),
 }));
 
+import { ChatErrorRecoveryContext } from "./chat-error-recovery";
 import { ChatMessageError } from "./chat-message-error";
 
 function model(id: string, name: string, provider: string, tier?: string) {
@@ -226,4 +235,71 @@ test("any other failure keeps its single button and has no picker", async () => 
 test("a card without a title of its own gets the default one", async () => {
 	await mount({ ...CLOUD, title: "" });
 	expect(host.textContent).toContain("Couldn't answer");
+});
+
+async function mountWithRecovery(resend: (id: string) => void, error = CLOUD) {
+	await act(async () => {
+		root.render(
+			<ChatErrorRecoveryContext.Provider value={{ resend }}>
+				<ChatMessageError error={error} messageId="answer_1" />
+			</ChatErrorRecoveryContext.Provider>,
+		);
+	});
+}
+
+test("the pick sends the failed message again once it is in the profile", async () => {
+	const resend = vi.fn();
+	await mountWithRecovery(resend);
+	await pickFromCatalog("Hosted Sonnet");
+	expect(resend).not.toHaveBeenCalled();
+
+	await act(async () => settleAdd(true));
+	expect(resend).toHaveBeenCalledExactlyOnceWith("answer_1");
+	expect(host.textContent).toContain("Sending your message again.");
+});
+
+test("a pick that could not be added sends nothing, and a second pick does not send twice", async () => {
+	const resend = vi.fn();
+	await mountWithRecovery(resend);
+	await pickFromCatalog("Hosted Sonnet");
+	await act(async () => settleAdd(false));
+	expect(resend).not.toHaveBeenCalled();
+
+	await pickFromCatalog("Hosted Sonnet");
+	await act(async () => settleAdd(true));
+	await pickFromCatalog("Hosted Sonnet");
+	await act(async () => settleAdd(true));
+	expect(resend).toHaveBeenCalledTimes(1);
+});
+
+test("a model the profile already holds is sent at once when picked from its list", async () => {
+	mocks.profile.mockReturnValue({ options: [HOSTED], isLoading: false });
+	const resend = vi.fn();
+	await mountWithRecovery(resend);
+	await pickFromCatalog("Hosted Sonnet");
+	expect(resend).toHaveBeenCalledExactlyOnceWith("answer_1");
+	expect(mocks.add).not.toHaveBeenCalled();
+});
+
+test("a bot pinned to another profile gets the pick in that profile, even if the active one holds it", async () => {
+	mocks.bot.mockReturnValue({ profile_id: "profile_b" });
+	mocks.profile.mockReturnValue({ options: [HOSTED], isLoading: false });
+	const resend = vi.fn();
+	await mountWithRecovery(resend, {
+		...CLOUD,
+		action: {
+			kind: "add-model",
+			label: "Choose a model",
+			hostedOnly: true,
+			botId: "bot_1",
+		},
+	});
+	expect(mocks.bot).toHaveBeenCalledWith("bot_1");
+	expect(mocks.hookProfile).toHaveBeenLastCalledWith("profile_b");
+
+	await pickFromCatalog("Hosted Sonnet");
+	expect(mocks.add).toHaveBeenCalledExactlyOnceWith(HOSTED.bit);
+	expect(resend).not.toHaveBeenCalled();
+	await act(async () => settleAdd(true));
+	expect(resend).toHaveBeenCalledExactlyOnceWith("answer_1");
 });

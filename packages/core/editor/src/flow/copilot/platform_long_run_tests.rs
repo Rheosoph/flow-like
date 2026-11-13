@@ -281,6 +281,10 @@ async fn extended_bot_turns_execute_more_than_twelve_rounds_and_reserve_synthesi
     let requests = client.0.requests.lock().unwrap();
     assert_eq!(requests.len(), 17);
     assert!(
+        requests.iter().all(|request| request.max_tokens.is_none()),
+        "the context reserve must not cap normal output generation"
+    );
+    assert!(
         requests[0]
             .tools
             .iter()
@@ -406,6 +410,69 @@ async fn compaction_preserves_tool_pairs_original_request_steering_and_recent_im
     assert!(last.contains("Keep the report in German."));
     assert!(last.contains("untrusted_historical_checkpoint"));
     assert!(last.contains("workspace/report.txt"));
+}
+
+#[tokio::test]
+async fn final_usage_frame_reports_context_and_compaction_without_provider_usage() {
+    let mut rounds: Vec<_> = (0..10)
+        .map(|index| call(&format!("call-{index}"), "list_apps", json!({})))
+        .collect();
+    rounds.push(text("Verified every page."));
+    let client = Client::new(rounds);
+    let bridge = Arc::new(Bridge {
+        calls: AtomicUsize::new(0),
+        cancellation_checks: AtomicUsize::new(0),
+        cancelled: client.0.cancelled.clone(),
+        large_results: true,
+        steering: Mutex::new(Vec::new()),
+    });
+    let frames = Arc::new(Mutex::new(Vec::<String>::new()));
+    let sink = frames.clone();
+    PlatformCopilot::new(
+        Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        )),
+        None,
+    )
+    .with_tool_specs(vec![find_global_tool_spec("list_apps").unwrap()])
+    .with_tool_rounds(20)
+    .with_long_running()
+    .chat_with_client(
+        PlatformSurface::Orchestrator,
+        "Help the owner.".into(),
+        "Inspect every page.".into(),
+        None,
+        Vec::new(),
+        "scripted".into(),
+        &client,
+        None,
+        bridge,
+        None,
+        Some(move |frame: String| sink.lock().unwrap().push(frame)),
+    )
+    .await
+    .unwrap();
+    let frames = frames.lock().unwrap();
+    let usages: Vec<_> = frames
+        .iter()
+        .filter_map(|frame| {
+            frame
+                .strip_prefix("<usage_stat>")
+                .and_then(|body| body.strip_suffix("</usage_stat>"))
+        })
+        .map(|body| serde_json::from_str::<Value>(body).unwrap())
+        .collect();
+    assert_eq!(usages.len(), 1, "cumulative stats are emitted only once");
+    let stats: LLMUsageStats = serde_json::from_value(usages[0]["stats"].clone()).unwrap();
+    assert!(stats.context.unwrap().estimated_tokens > 0);
+    assert!(stats.usage.prompt_tokens_details.is_none());
+    assert!(stats.compactions.iter().any(|event| {
+        event.status == "completed"
+            && event
+                .after_tokens
+                .is_some_and(|after| after < event.before_tokens)
+    }));
 }
 
 fn large_rounds(count: usize) -> Vec<Vec<RawStreamingChoice<()>>> {

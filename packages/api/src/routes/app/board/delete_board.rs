@@ -1,5 +1,6 @@
 use super::board_cleanup::{
     BoardCleanupSteps, clean_up_board, delete_page_folder, delete_page_rows, events_of_board,
+    ontology_action_events, refuse_ontology_actions,
 };
 use crate::{
     audit_branch, ensure_permission,
@@ -27,8 +28,9 @@ use flow_like_types::anyhow;
     responses(
         (status = 200, description = "Board deleted"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden"),
+        (status = 403, description = "Forbidden. Deleting a board that still has events also needs the permission to write events."),
         (status = 404, description = "Board not found"),
+        (status = 409, description = "The board still runs ontology actions (code BOARD_HAS_ONTOLOGY_ACTIONS). Remove those actions in Data Studio first; nothing was deleted."),
         (status = 500, description = "A clean-up step failed (code BOARD_CLEANUP_FAILED). The board is still in place and the message names the step and id; retrying the identical request resumes the clean-up."),
         (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
     )
@@ -51,7 +53,16 @@ pub async fn delete_board(
             crate::credentials::CredentialsAccess::EditApp,
         )
         .await?;
-    remove_board_and_dependants(&state, &mut app, &app_id, &board_id, &mutation_guard).await?;
+    let may_delete_events = permission.has_permission(RolePermissions::WriteEvents);
+    remove_board_and_dependants(
+        &state,
+        &mut app,
+        &app_id,
+        &board_id,
+        &mutation_guard,
+        may_delete_events,
+    )
+    .await?;
     // A re-created board id must not inherit the deleted board's prerun manifests.
     let manifest_prefix = format!("{app_id}:{board_id}:");
     let _ = state
@@ -108,8 +119,17 @@ async fn remove_board_and_dependants(
     app_id: &str,
     board_id: &str,
     mutation_guard: &BoardMutationGuard,
+    may_delete_events: bool,
 ) -> Result<(), ApiError> {
     let event_ids = events_of_board(&state.db, app_id, board_id).await?;
+    if !event_ids.is_empty() && !may_delete_events {
+        return Err(ApiError::forbidden(format!(
+            "Deleting board {board_id} also deletes its {} events, which needs the permission to write events",
+            event_ids.len()
+        )));
+    }
+    let managed = ontology_action_events(&state.db, app_id, &event_ids).await?;
+    refuse_ontology_actions(board_id, &managed)?;
     let mut steps = RouteCleanup {
         state,
         app,

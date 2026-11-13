@@ -1066,6 +1066,33 @@ pub fn inbox_seal(
     sealed().map_err(error)
 }
 
+#[derive(Deserialize)]
+struct BotSecretScope {
+    bot_id: String,
+    name: String,
+}
+
+/// A bot secret's `value` sealed to the bot's published `keys`, bound to its bot id and name.
+#[wasm_bindgen(js_name = inboxSealSecret)]
+pub fn inbox_seal_secret(
+    scope: JsValue,
+    keys: JsValue,
+    value: &str,
+) -> std::result::Result<JsValue, JsValue> {
+    let sealed = || -> Result<JsValue> {
+        let scope: BotSecretScope = decode(scope)?;
+        let keys: Vec<crate::inbox::RecipientKey> = decode(keys)?;
+        let scope = crate::inbox::SecretScope {
+            bot_id: &scope.bot_id,
+            name: &scope.name,
+        };
+        let envelope =
+            crate::inbox::seal_secret(&scope, &keys, value.as_bytes()).map_err(error_any)?;
+        encode(&envelope)
+    };
+    sealed().map_err(error)
+}
+
 /// The bodies of `entries` sent to `principal_id`, opened with `seeds`; `null` where an entry is
 /// sealed to none of them.
 #[wasm_bindgen(js_name = inboxOpen)]
@@ -1098,6 +1125,38 @@ pub fn inbox_open(
         encode(&bodies)
     };
     opened().map_err(error)
+}
+
+/// `file` sealed for `conversation_id` under a fresh key: `{ key, ciphertext }`. The key belongs
+/// in the sealed message, the ciphertext is what the conversation file upload carries.
+#[wasm_bindgen(js_name = inboxSealFile)]
+pub fn inbox_seal_file(
+    conversation_id: &str,
+    file: Vec<u8>,
+) -> std::result::Result<JsValue, JsValue> {
+    let file = Zeroizing::new(file);
+    let sealed = crate::inbox_file::seal_file(conversation_id, &file).map_err(error)?;
+    let result = js_sys::Object::new();
+    let set = |name: &str, value: &JsValue| {
+        js_sys::Reflect::set(&result, &JsValue::from_str(name), value)
+    };
+    set("key", &JsValue::from_str(&sealed.key))?;
+    set(
+        "ciphertext",
+        &js_sys::Uint8Array::from(sealed.ciphertext.as_slice()).into(),
+    )?;
+    Ok(result.into())
+}
+
+/// The file a sealed conversation file holds, opened with the key from its sealed message.
+#[wasm_bindgen(js_name = inboxOpenFile)]
+pub fn inbox_open_file(
+    conversation_id: &str,
+    key: String,
+    ciphertext: Vec<u8>,
+) -> std::result::Result<Vec<u8>, JsValue> {
+    let key = Zeroizing::new(key);
+    crate::inbox_file::open_file(conversation_id, &key, &ciphertext).map_err(error)
 }
 
 #[cfg(test)]

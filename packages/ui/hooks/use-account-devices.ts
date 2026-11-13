@@ -6,7 +6,7 @@ import { useBackend } from "../state/backend-state";
 import { useInvoke } from "./use-invoke";
 
 /** The signed-in account's devices as the hub lists them; shared by everything in the bots UI that names a device. */
-export function useAccountDevices(enabled = true) {
+export function useAccountDevices(enabled = true, refresh = false) {
 	const backend = useBackend();
 	const settings = useInvoke(
 		backend.userState.getSettingsProfile,
@@ -22,10 +22,13 @@ export function useAccountDevices(enabled = true) {
 		},
 		enabled: enabled && !!profile,
 		staleTime: 30_000,
+		refetchInterval: refresh ? 30_000 : false,
 	});
 	return {
 		devices: devices.data,
 		isLoading: settings.isLoading || devices.isLoading,
 		isError: devices.isError,
+		refetch: devices.refetch,
+		isFetching: devices.isFetching,
 	};
 }

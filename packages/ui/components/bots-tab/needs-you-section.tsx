@@ -15,7 +15,7 @@ import type { BotAppearance } from "../bots/types";
 import { IdentityAvatar } from "../identity/identity-avatar";
 import { IdentityHoverCard } from "../identity/identity-hover-card";
 import { Button } from "../ui/button";
-import { isApprovalCard } from "./approval-entry";
+import { waitingCallsOf } from "./approval-entry";
 import { CrewSection, StatusDot } from "./crew-section";
 import { RoomLimitsDialog } from "./room-limits-dialog";
 import type { ConversationText } from "./use-conversation-text";
@@ -303,6 +303,7 @@ export function NeedsYouSection({
 						conversation.last_entry?.created_at ??
 							conversation.last_activity_at,
 					);
+					const waitingCalls = waitingCallsOf(conversation.last_entry);
 					return (
 						<NeedsYouCard
 							key={conversation.id}
@@ -319,14 +320,27 @@ export function NeedsYouSection({
 							}
 							title={text.entryText(conversation.last_entry)}
 							meta={
-								isApprovalCard(conversation.last_entry)
-									? t("crew.needs.approvalMeta", "Waiting for you · {{time}}", {
-											time: when,
-										})
-									: t("crew.needs.meta", "{{count}} new · {{time}}", {
-											count: conversation.unread_count,
-											time: when,
-										})
+								waitingCalls > 1
+									? t(
+											"crew.needs.approvalBatchMeta",
+											"{{count}} calls wait for you · {{time}}",
+											{
+												count: waitingCalls,
+												time: when,
+												defaultValue_one:
+													"{{count}} call waits for you · {{time}}",
+											},
+										)
+									: waitingCalls === 1
+										? t(
+												"crew.needs.approvalMeta",
+												"Waiting for you · {{time}}",
+												{ time: when },
+											)
+										: t("crew.needs.meta", "{{count}} new · {{time}}", {
+												count: conversation.unread_count,
+												time: when,
+											})
 							}
 							onOpen={() => onOpenConversation(conversation.id)}
 						/>

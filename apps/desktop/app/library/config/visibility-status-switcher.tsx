@@ -11,6 +11,7 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { BotAccessCard } from "@flow-like/flow-like-ui/components/settings/bot-access/bot-access-card";
 import { AllowForkingCard } from "@flow-like/flow-like-ui/components/settings/forking/allow-forking-card";
 import { AppAiActWizard } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-ai-act-wizard";
 import {
@@ -103,6 +104,11 @@ export function AppAccessSection({
 					onChanged={refreshApp}
 				/>
 			)}
+			<BotAccessCard
+				localApp={localApp}
+				canEdit={canEdit}
+				onChanged={refreshApp}
+			/>
 			<ForkAppButton localApp={localApp} appName={appName} />
 		</>
 	);

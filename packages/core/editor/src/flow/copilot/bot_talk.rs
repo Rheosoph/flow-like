@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::bot_run::{BotRunContext, FLUX_BOT_NAME, GENERAL_BOT_NAME};
-use super::platform::PlatformToolBridge;
+use super::platform::{Clearance, PlatformToolBridge};
 use super::tool_spec::{PlatformToolSpec, ToolApprovalSpec, spec_arg_str};
 
 pub const ASK_BOT_TOOL: &str = "ask_bot";
@@ -1251,6 +1251,13 @@ impl PlatformToolBridge for BotTalkBridge {
             return self.talk.ask(&arguments, self.inner.as_ref()).await;
         }
         self.inner.call(tool_name, arguments).await
+    }
+
+    async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
+        if tool_name == ASK_BOT_TOOL {
+            return Clearance::Clear;
+        }
+        self.inner.clearance(tool_name, arguments).await
     }
 
     async fn drain_steering(&self) -> Vec<String> {

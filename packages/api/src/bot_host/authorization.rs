@@ -15,6 +15,7 @@ use flow_like_types::{
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde_json::{Value, json};
 
+use super::task_authority::{Configured, configured_for_task};
 use crate::{
     entity::{bot, bot_turn, bot_webhook, conversation, inbox_entry},
     error::ApiError,
@@ -23,24 +24,26 @@ use crate::{
 
 const OWNER_WINDOW: u64 = 100;
 
+/// `entries` in their order as inbox events, without the copies an import cleared.
+pub(super) fn inbox_events(entries: &[inbox_entry::Model]) -> impl Iterator<Item = InboxEvent<'_>> {
+    entries
+        .iter()
+        .filter(|entry| entry.cleared != Some(true))
+        .filter_map(|entry| {
+            Some(InboxEvent {
+                kind: InboxEntryKind::parse(&entry.kind)?,
+                sender_id: &entry.sender_id,
+                message_id: &entry.message_id,
+                conversation_id: &entry.conversation_id,
+                envelope: &entry.envelope,
+                seq: entry.seq,
+                created_at: entry.created_at.to_rfc3339(),
+            })
+        })
+}
+
 fn owner_messages(entries: &[inbox_entry::Model], owner: &str) -> Vec<Value> {
-    tool_authorization::owner_messages(
-        entries
-            .iter()
-            .filter(|entry| entry.cleared != Some(true))
-            .filter_map(|entry| {
-                Some(InboxEvent {
-                    kind: InboxEntryKind::parse(&entry.kind)?,
-                    sender_id: &entry.sender_id,
-                    message_id: &entry.message_id,
-                    conversation_id: &entry.conversation_id,
-                    envelope: &entry.envelope,
-                    seq: entry.seq,
-                    created_at: entry.created_at.to_rfc3339(),
-                })
-            }),
-        owner,
-    )
+    tool_authorization::owner_messages(inbox_events(entries), owner)
 }
 
 fn owner_refusals(entries: &[inbox_entry::Model], turn: &bot_turn::Model) -> Vec<Value> {
@@ -166,23 +169,32 @@ async fn trigger_of<C: ConnectionTrait>(
         .and_then(|entry| TriggerBody::parse(entry.envelope.get("body")?).ok()))
 }
 
-/// Only a saved webhook instruction has owner-only creation and update routes. Task creator
-/// labels written before bot tokens were told apart do not prove authorship, and mail text
-/// is external content.
+/// A saved webhook instruction has owner-only creation and update routes. A task's authority is
+/// recorded on the task (see `task_authority`); its creator label proves nothing, since rows
+/// written before bot tokens were told apart carry it wrongly. Mail text is external content.
 async fn configured_trigger_instruction<C: ConnectionTrait>(
     db: &C,
     turn: &bot_turn::Model,
     trigger: Option<&TriggerBody>,
-) -> Result<Option<Value>, ApiError> {
-    let Some(trigger) = trigger.filter(|trigger| trigger.source == TriggerSource::Webhook) else {
-        return Ok(None);
+) -> Result<Configured, ApiError> {
+    let Some(trigger) = trigger else {
+        return Ok(Configured::default());
     };
-    Ok(bot_webhook::Entity::find_by_id(&trigger.ref_id)
-        .filter(bot_webhook::Column::BotId.eq(&turn.bot_id))
-        .filter(bot_webhook::Column::Enabled.eq(true))
-        .one(db)
-        .await?
-        .map(|hook| json!({"id": hook.id, "source": "webhook", "instruction": hook.instruction})))
+    match trigger.source {
+        TriggerSource::Schedule => configured_for_task(db, turn, &trigger.ref_id).await,
+        TriggerSource::Webhook => Ok(Configured {
+            instruction: bot_webhook::Entity::find_by_id(&trigger.ref_id)
+                .filter(bot_webhook::Column::BotId.eq(&turn.bot_id))
+                .filter(bot_webhook::Column::Enabled.eq(true))
+                .one(db)
+                .await?
+                .map(|hook| {
+                    json!({"id": hook.id, "source": "webhook", "instruction": hook.instruction})
+                }),
+            unreadable: None,
+        }),
+        _ => Ok(Configured::default()),
+    }
 }
 
 /// Refreshes consultation independently of the execution transcript, which stops at its trigger.
@@ -210,14 +222,19 @@ pub(crate) async fn context<C: ConnectionTrait>(
         refusals.extend(owner_refusals(&entries, turn));
     }
     let trigger = trigger_of(db, turn).await?;
+    let configured = configured_trigger_instruction(db, turn, trigger.as_ref()).await?;
+    if let Some(room) = configured.unreadable
+        && !unreadable.contains(&room)
+    {
+        unreadable.push(room);
+    }
     Ok(json!({
         "bot": {"id": bot.id, "instructions": bot.instructions, "updated_at": bot.updated_at},
         "owner_messages": messages,
         "owner_refusals": refusals,
         "owner_history_truncated": truncated,
         "unreadable_conversation_ids": unreadable,
-        "configured_trigger_instruction":
-            configured_trigger_instruction(db, turn, trigger.as_ref()).await?,
+        "configured_trigger_instruction": configured.instruction,
         "execution_request": trigger.as_ref().map(tool_authorization::execution_request),
         "turn": {
             "id": turn.id,

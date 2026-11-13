@@ -37,7 +37,10 @@ use flow_like::{
     flow_like_model_provider::provider::is_hosted_provider_name, profile::Profile,
     state::FlowLikeState,
 };
-use flow_like_bot_tools::image::{is_hosted_image_bit, resolve_bit as resolve_image_bit};
+use flow_like_bot_tools::image::{
+    is_hosted_image_bit, is_local_image_bit, is_own_key_image_bit,
+    resolve_bit as resolve_image_bit, take_provider_params,
+};
 use flow_like_types::{
     bot_turn::{STORED_RUNNING, TurnAudience},
     device_bot::{
@@ -48,8 +51,6 @@ use flow_like_types::{
 };
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, sea_query::Expr};
 use std::sync::Arc;
-
-pub(crate) const BOT_TURN_ENCRYPTED: &str = worker::CODE_ENCRYPTED;
 
 pub(crate) const BOT_DEVICE_MODEL_NOT_HOSTED: &str = "BOT_DEVICE_MODEL_NOT_HOSTED";
 pub(crate) const MODEL_NOT_HOSTED_TEXT: &str =
@@ -123,6 +124,8 @@ pub(crate) async fn has_finished_checkpoint<C: ConnectionTrait>(
     )
     .await?;
     match checkpoint {
+        // The hub can't read a sealed checkpoint, so its turn counts as still running.
+        Some(checkpoint) if checkpoint.state.get("sealed_checkpoint").is_some() => Ok(false),
         Some(checkpoint) => flow_like::flow::copilot::run_recovery::finished_reply(&checkpoint)
             .map(|answer| answer.is_some())
             .map_err(ApiError::internal_error),
@@ -165,6 +168,7 @@ pub(crate) async fn completed_delivery_in<C: ConnectionTrait>(
         },
         bot: DeviceBotSpec {
             bot_id: turn.bot_id.clone(),
+            execution_mode: crate::routes::bots::model::stored_execution_mode(row),
             system: None,
             name: row.name.clone().unwrap_or_else(|| "Bot".into()),
             description: None,
@@ -203,6 +207,7 @@ pub(crate) async fn completed_delivery_in<C: ConnectionTrait>(
             embedding_model_id: None,
             image: None,
             decision: None,
+            vision: None,
         },
         bot_token,
         executor_token: None,
@@ -230,6 +235,26 @@ async fn hosted_bit(
     is_hosted_provider_name(&provider.provider_name).then_some(bit)
 }
 
+/// The bot's vision model when it is a hosted model that reads images. A device turn whose
+/// model cannot see images has them described by it.
+async fn vision_bit(
+    fls: &Arc<FlowLikeState>,
+    profile: &Profile,
+    id: &str,
+) -> Option<serde_json::Value> {
+    let Some(bit) = hosted_bit(fls, profile, id)
+        .await
+        .filter(flow_like::bit::Bit::is_multimodal)
+    else {
+        tracing::warn!(
+            bit_id = id,
+            "Device bot vision model is not a hosted vision model; its turns' images go to the turn's model unread"
+        );
+        return None;
+    };
+    serde_json::to_value(&bit).ok()
+}
+
 async fn embedding_bit(
     fls: &Arc<FlowLikeState>,
     profile: &Profile,
@@ -253,7 +278,7 @@ async fn embedding_bit(
     Ok(Some(bit))
 }
 
-/// An image model the device cannot reach through the hub's proxy leaves the bot without one.
+/// The bot's image model as a device may hold it.
 async fn image_bit(
     profile: &Profile,
     fls: &Arc<FlowLikeState>,
@@ -270,11 +295,23 @@ async fn image_bit(
             return None;
         }
     };
-    if !is_hosted_image_bit(&bit) {
+    let held = device_image(bit);
+    if held.is_none() {
         tracing::warn!(
             bit_id = id,
-            "Device bot image model is not a hosted image model; the bot has no image_generate"
+            "Device bot image model is not an image generation model; the bot has no image_generate"
         );
+    }
+    held
+}
+
+/// A hosted model goes as it is. An own-key or local model goes without its provider `params`:
+/// the device asks the hub for an own-key model's sign-in per call, and refuses a local model
+/// with a sentence the bot can pass on.
+pub(crate) fn device_image(mut bit: flow_like::bit::Bit) -> Option<serde_json::Value> {
+    if is_own_key_image_bit(&bit) || is_local_image_bit(&bit) {
+        take_provider_params(&mut bit);
+    } else if !is_hosted_image_bit(&bit) {
         return None;
     }
     serde_json::to_value(&bit).ok()
@@ -369,6 +406,10 @@ async fn resolve_models(
         Some(id) => image_bit(profile, fls, id).await,
         None => None,
     };
+    let vision = match bot.context.vision_model.as_deref().map(str::trim) {
+        Some(id) if !id.is_empty() => vision_bit(fls, profile, id).await,
+        _ => None,
+    };
     let funding = worker::funding_class(true, embedding.as_ref().map(|_| true));
     Ok(Resolved {
         provider_name: provider.provider_name.clone(),
@@ -381,14 +422,16 @@ async fn resolve_models(
             embedding_model_id: memory_model,
             image,
             decision,
+            vision,
         },
     })
 }
 
-fn bot_spec(bot: ChatBot) -> DeviceBotSpec {
+fn bot_spec(bot: ChatBot, execution_mode: flow_like_types::bot::BotExecutionMode) -> DeviceBotSpec {
     let context = bot.context;
     DeviceBotSpec {
         bot_id: context.bot_id,
+        execution_mode,
         system: context.system,
         name: context.name,
         description: context.description,
@@ -626,7 +669,8 @@ pub(crate) async fn build(
         return Ok(delivery);
     }
     let kind = ConversationKind::parse(&conversation.kind).unwrap_or(ConversationKind::Group);
-    let room = crate::bot_host::worker::room_of(kind, &turn.conversation_id);
+    let scope = crate::routes::bots::runtime_token::turn_scope(&state.db, turn).await?;
+    let room = scope.as_deref();
     let (profile, access) = worker::load_profile(state, owner, row.profile_id.as_deref()).await?;
     let bot = chat_bot(state, owner, Some(turn.bot_id.as_str()), &profile)
         .await?
@@ -670,7 +714,7 @@ pub(crate) async fn build(
             kind: kind.as_str().to_string(),
             title: conversation.title.clone(),
         },
-        bot: bot_spec(bot),
+        bot: bot_spec(bot, crate::routes::bots::model::stored_execution_mode(&row)),
         requester: Some(requester),
         models: resolved.models,
         bot_token,
@@ -787,5 +831,45 @@ mod hold_tests {
         ] {
             assert_eq!(refresh_ttl(hold_end, now), ttl, "{hold_end:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+    use flow_like::bit::{Bit, BitTypes};
+    use serde_json::json;
+
+    fn image(bit_type: BitTypes, provider_name: &str) -> Bit {
+        Bit {
+            id: provider_name.into(),
+            bit_type,
+            parameters: json!({ "provider": {
+                "provider_name": provider_name, "model_id": "m",
+                "params": { "api_key": "owner-key" },
+            }}),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn no_image_model_reaches_a_device_with_the_owners_key() {
+        let hosted = device_image(image(BitTypes::ImageGeneration, "hosted:openrouter")).unwrap();
+        assert_eq!(
+            hosted["parameters"]["provider"]["params"]["api_key"],
+            "owner-key"
+        );
+        for provider in [
+            "openai",
+            flow_like::flow_like_model_provider::stablediffusion::PROVIDER_NAME,
+        ] {
+            let held = device_image(image(BitTypes::ImageGeneration, provider)).unwrap();
+            assert_eq!(held["parameters"]["provider"]["provider_name"], provider);
+            assert!(
+                held["parameters"]["provider"].get("params").is_none(),
+                "{provider}"
+            );
+        }
+        assert!(device_image(image(BitTypes::Llm, "openai")).is_none());
     }
 }

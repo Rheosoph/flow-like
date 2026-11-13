@@ -44,6 +44,7 @@ pub use model::{
 pub use room_decisions::{RoomDecisionState, RoomWaitOutcome};
 pub use skills::SkillOrigin;
 pub use store::{ChangeNotifier, KeyError, LocalBotStore, SecretKeyProvider};
+pub use tasks::{TaskAuthority, TaskRequest, ToolTurn};
 pub use tool_grants::ParkedTurn;
 pub use transfer::{
     AccountHub, BotMover, HubBody, HubCall, HubError, HubMethod, MoveError, MoveIssue,

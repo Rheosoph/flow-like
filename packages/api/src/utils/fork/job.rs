@@ -656,6 +656,7 @@ fn hidden_app_shell(
         created_at: Set(now),
         updated_at: Set(now),
         bot_id: Set(None),
+        refuse_bots: Set(None),
     }
 }
 

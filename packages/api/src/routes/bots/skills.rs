@@ -31,6 +31,7 @@ use utoipa::ToSchema;
 
 pub(crate) const SKILL_PACKAGE_UNCOVERED: &str = "BOT_SKILL_PACKAGE_UNCOVERED";
 pub(crate) const SKILL_PACKAGE_EMPTY: &str = "BOT_SKILL_PACKAGE_HAS_NO_SKILLS";
+pub(crate) const SKILL_PACKAGE_UNAVAILABLE: &str = "BOT_SKILL_PACKAGE_UNAVAILABLE";
 
 pub(crate) const SKILLS_CAPABILITY: &str = "skills";
 pub(crate) const SKILL_CAPABILITY_OFF: &str = "BOT_SKILL_CAPABILITY_OFF";
@@ -1041,6 +1042,105 @@ impl InstallBotSkillPackageRequest {
             version: self.version.clone(),
         }
     }
+}
+
+/// The package one skill's tools run in, for a host that runs them itself.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BotSkillPackage {
+    pub package_id: String,
+    /// The version the bot's workspace pins.
+    pub version: String,
+    /// A short-lived download link of the package's portable WASM.
+    pub wasm_url: String,
+    /// blake3 of the WASM bytes, hex.
+    pub wasm_hash: String,
+    /// The manifest's permissions: memory and time tiers, capabilities, allowed hosts.
+    #[schema(value_type = Option<Object>)]
+    pub permissions: Option<serde_json::Value>,
+}
+
+/// The bot's active package skill `skill_id` and the package it names. A skill that is not
+/// active reads as missing; an instruction skill has no package.
+pub(crate) async fn package_skill_in<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    bot_id: &str,
+    skill_id: &str,
+) -> Result<(BotSkill, String), ApiError> {
+    refuse_without_capability(&owned_bot(db, owner_id, bot_id).await?)?;
+    let skill = to_skill(owned_skill(db, owner_id, bot_id, skill_id).await?);
+    if skill.status != SkillStatus::Active {
+        return Err(ApiError::not_found(format!(
+            "Skill '{skill_id}' is not active"
+        )));
+    }
+    let package_id = skill
+        .source
+        .package_id()
+        .map(str::to_string)
+        .ok_or_else(|| {
+            ApiError::bad_request(format!("Skill '{}' ships no package tools", skill.name))
+        })?;
+    Ok((skill, package_id))
+}
+
+#[utoipa::path(
+    get,
+    path = "/bots/{bot_id}/skills/{skill_id}/package",
+    tag = "Bots",
+    description = "The package an active skill's tools run in, for a device that runs them in its own sandbox: the version the bot's workspace pins and a short-lived download of its WASM. Needs the bot's own runtime token and only works while its turn runs.",
+    params(
+        ("bot_id" = String, Path, description = "The bot's id"),
+        ("skill_id" = String, Path, description = "The skill's id")
+    ),
+    responses(
+        (status = 200, description = "The package version, its download link and permissions", body = BotSkillPackage),
+        (status = 400, description = "The skill ships no package tools"),
+        (status = 401, description = "Not a runtime token of this bot, or its turn ended"),
+        (status = 403, description = "The caller is not the bot's runtime token, or BOT_SKILL_CAPABILITY_OFF"),
+        (status = 404, description = "The bot has no such active skill, or no workspace"),
+        (status = 409, description = "BOT_SKILL_PACKAGE_UNAVAILABLE: the workspace does not pin a usable version of the package")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(
+    name = "GET /bots/{bot_id}/skills/{skill_id}/package",
+    skip(state, user)
+)]
+pub async fn bot_skill_package(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path((bot_id, skill_id)): Path<(String, String)>,
+) -> Result<Json<BotSkillPackage>, ApiError> {
+    if !matches!(user, AppUser::Bot(_)) {
+        return Err(ApiError::forbidden(
+            "Only the bot's own runtime token downloads its skill packages",
+        ));
+    }
+    let owner = crate::bot_caller::acting_owner_for(&state.db, &user, &bot_id).await?;
+    let (skill, package_id) = package_skill_in(&state.db, &owner, &bot_id, &skill_id).await?;
+    let workspace = workspace::live_workspace(&state.db, &owner, &bot_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("Bot '{bot_id}' has no workspace")))?;
+    let package = skill_jobs::pinned_package(&state, &workspace, &package_id)
+        .await
+        .map_err(|message| {
+            ApiError::coded(StatusCode::CONFLICT, SKILL_PACKAGE_UNAVAILABLE, message)
+        })?;
+    tracing::info!(
+        bot_id = %bot_id,
+        skill = %skill.name,
+        package_id = %package_id,
+        version = %package.version,
+        "[skills] signed a skill package download for the bot's device turn"
+    );
+    Ok(Json(BotSkillPackage {
+        package_id,
+        version: package.version,
+        wasm_url: package.wasm_url,
+        wasm_hash: package.wasm_hash,
+        permissions: package.permissions,
+    }))
 }
 
 #[cfg(test)]

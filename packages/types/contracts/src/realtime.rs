@@ -71,6 +71,10 @@ pub enum RealtimeTransport {
         project_id: String,
         custom_token: String,
         path: String,
+        /// Sibling of `path` that carries [`RealtimeReply`] messages, so they never overwrite a
+        /// wakeup. Absent when the server publishes none there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reply_path: Option<String>,
     },
 }
 
@@ -169,6 +173,15 @@ pub struct RealtimeReply {
     /// one message makes up for the ones lost before it.
     pub text: String,
     pub state: RealtimeReplyState,
+    /// Counts how often the bot began its reply again because the conversation moved on while
+    /// it wrote. A later draft replaces what a device holds of an earlier one from its start,
+    /// and messages of an earlier draft are ignored once a later one arrived.
+    #[serde(default, skip_serializing_if = "is_first_draft")]
+    pub draft: u32,
+}
+
+fn is_first_draft(draft: &u32) -> bool {
+    *draft == 0
 }
 
 /// Bytes of reply text a message is first tried with; escaping can still push it over the limit.
@@ -566,7 +579,40 @@ mod tests {
             offset: 0,
             text: String::new(),
             state,
+            draft: 0,
         }
+    }
+
+    #[test]
+    fn only_a_rewritten_reply_names_its_draft() {
+        let first: serde_json::Value = serde_json::from_slice(
+            &reply(RealtimeReplyState::Writing)
+                .encode_fitting("Sure")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(first.get("draft").is_none());
+        assert_eq!(
+            serde_json::from_value::<RealtimeReply>(first)
+                .unwrap()
+                .draft,
+            0
+        );
+        let rewrite = RealtimeReply {
+            draft: 2,
+            ..reply(RealtimeReplyState::Writing)
+        };
+        let encoded: serde_json::Value =
+            serde_json::from_slice(&rewrite.clone().encode_fitting("Anna said it").unwrap())
+                .unwrap();
+        assert_eq!(encoded["draft"], 2);
+        assert_eq!(
+            serde_json::from_value::<RealtimeReply>(encoded).unwrap(),
+            RealtimeReply {
+                text: "Anna said it".into(),
+                ..rewrite
+            }
+        );
     }
 
     #[test]

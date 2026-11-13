@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 use flow_like_channels::ChannelForwarder;
 use flow_like_channels::gcp::{
     AccessTokenProvider, EXECUTOR_UID, FirebaseRtdbForwarder, MAX_CUSTOM_TOKEN_TTL_SECS,
-    client_claims, custom_token, executor_claims, inbound_path, inbox_path,
+    REALTIME_REPLY_NODE, REALTIME_WAKE_NODE, client_claims, custom_token, executor_claims,
+    inbound_path, inbox_path, realtime_path,
 };
 use flow_like_secrets::{ExposeSecret, SecretRef, SecretStore};
 use flow_like_types::channel::{ChannelClientDescriptor, ChannelExecutorGrant, now_unix};
@@ -82,13 +83,18 @@ impl GcpChannelRuntime {
                 api_key: self.config.api_key.clone(),
                 project_id: self.config.project_id.clone(),
                 custom_token: self.token(&format!("realtime-{scope}"), claims, ttl_secs)?,
-                path: format!("/realtime/{scope}/wake"),
+                path: realtime_path(scope, REALTIME_WAKE_NODE),
+                reply_path: Some(realtime_path(scope, REALTIME_REPLY_NODE)),
             },
         )
     }
 
     pub async fn publish_realtime(&self, scope: &str, payload: &[u8]) -> Result<()> {
         self.forwarder.publish_realtime(scope, payload).await
+    }
+
+    pub async fn publish_realtime_reply(&self, scope: &str, payload: &[u8]) -> Result<()> {
+        self.forwarder.publish_realtime_reply(scope, payload).await
     }
 
     pub async fn from_env(secrets: &SecretStore) -> Result<Self> {

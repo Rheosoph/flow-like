@@ -370,10 +370,19 @@ pub async fn local_bots_delete(
     state: State<'_, LocalBots>,
     bot_id: String,
 ) -> Result<(), CommandError> {
-    let host = workspace::DesktopWorkspaces::new(&app_handle);
-    Ok(state
+    delete_local_bot(&app_handle, &state, &bot_id).await
+}
+
+/// What the Bots tab's delete runs on this device; Flux's `delete_bot` runs it too.
+pub(crate) async fn delete_local_bot(
+    app_handle: &AppHandle,
+    bots: &LocalBots,
+    bot_id: &str,
+) -> Result<(), CommandError> {
+    let host = workspace::DesktopWorkspaces::new(app_handle);
+    Ok(bots
         .store()?
-        .delete_bot_with_workspace(&host, &bot_id)
+        .delete_bot_with_workspace(&host, bot_id)
         .await?)
 }
 
@@ -397,10 +406,22 @@ pub async fn local_bots_apps(
 
 #[tauri::command]
 pub async fn local_bots_attach_app(
+    app_handle: AppHandle,
     state: State<'_, LocalBots>,
     bot_id: String,
     app_id: String,
 ) -> Result<(), CommandError> {
+    if let Some(refusal) = crate::functions::ai::native_bot_tools::attach_refusal(
+        &app_handle,
+        std::slice::from_ref(&app_id),
+    )
+    .await
+    {
+        return Err(CommandError::new(
+            flow_like_types::bot_restrictions::APP_REFUSES_BOTS,
+            refusal,
+        ));
+    }
     with_store(state, move |store| store.attach_app(&bot_id, &app_id)).await
 }
 

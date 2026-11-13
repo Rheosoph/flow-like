@@ -951,7 +951,10 @@ export function fakeDeviceCrypto(options: FakeCryptoOptions = {}): FakeCrypto {
 		inboxNewKey: () => noInboxCrypto("inboxNewKey"),
 		inboxPublicKey: () => noInboxCrypto("inboxPublicKey"),
 		inboxSeal: () => noInboxCrypto("inboxSeal"),
+		inboxSealSecret: () => noInboxCrypto("inboxSealSecret"),
 		inboxOpen: () => noInboxCrypto("inboxOpen"),
+		inboxSealFile: () => noInboxCrypto("inboxSealFile"),
+		inboxOpenFile: () => noInboxCrypto("inboxOpenFile"),
 		unlockControllerVault: (deviceId, password, ciphertext) => {
 			const controller = createController(
 				openVault(ciphertext, "controller", deviceId, password),

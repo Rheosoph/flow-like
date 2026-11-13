@@ -960,7 +960,7 @@ async fn checked_envelopes<C: ConnectionTrait>(
     let encryption = ConversationEncryption::parse(&conversation.encryption)
         .unwrap_or(ConversationEncryption::E2e);
     ensure_call_form(&members, outgoing)?;
-    let stripped = room_content(&conversation, &members, sender, outgoing);
+    let stripped = room_content(txn, &members, sender, outgoing).await?;
     let envelopes = envelopes_for(
         outgoing.kind,
         stripped.as_ref().unwrap_or(&outgoing.content),
@@ -1001,40 +1001,48 @@ fn ensure_call_form(
     }
 }
 
-/// What a bot's message looks like in a room with other people: its tool parts cut down to a
-/// name and a summary, so its owner's arguments and results stay out of the members' copies.
-fn room_content(
-    conversation: &conversation::Model,
+/// What a bot's message looks like where a person other than its owner reads it (a room with
+/// other people, someone else's direct chat with the bot): its tool parts cut down to a name and
+/// a summary, so its owner's arguments and results stay out of their copies.
+async fn room_content<C: ConnectionTrait>(
+    txn: &C,
     members: &[conversation_member::Model],
     sender: &str,
     outgoing: &Outgoing,
-) -> Option<Content> {
+) -> Result<Option<Content>, DbErr> {
     use flow_like_types::inbox::PrincipalKind;
     let Content::Plain(envelope) = &outgoing.content else {
-        return None;
+        return Ok(None);
     };
-    let is_room = ConversationKind::parse(&conversation.kind) == Some(ConversationKind::Group)
-        && members
-            .iter()
-            .filter(|member| {
-                PrincipalKind::parse(&member.principal_kind) == Some(PrincipalKind::User)
-            })
-            .count()
-            > 1;
     let from_bot = members.iter().any(|member| {
         member.principal_id == sender
             && PrincipalKind::parse(&member.principal_kind) == Some(PrincipalKind::Bot)
     });
-    if !is_room
-        || !from_bot
+    if !from_bot
         || !matches!(
             outgoing.kind,
             InboxEntryKind::Message | InboxEntryKind::Edit
         )
     {
-        return None;
+        return Ok(None);
     }
-    flow_like_types::bot_message::without_tool_details(envelope).map(Content::Plain)
+    let people: Vec<&str> = members
+        .iter()
+        .filter(|member| PrincipalKind::parse(&member.principal_kind) == Some(PrincipalKind::User))
+        .map(|member| member.principal_id.as_str())
+        .collect();
+    let read_by_others = match people.as_slice() {
+        [] => false,
+        [person] => bot::Entity::find_by_id(sender)
+            .one(txn)
+            .await?
+            .is_none_or(|row| row.owner_id != *person),
+        _ => true,
+    };
+    if !read_by_others {
+        return Ok(None);
+    }
+    Ok(flow_like_types::bot_message::without_tool_details(envelope).map(Content::Plain))
 }
 
 /// Messages move the conversation up the list; reactions, edits, deletions and topics don't.

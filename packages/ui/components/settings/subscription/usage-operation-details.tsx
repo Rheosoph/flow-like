@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { ArrowUpRight } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "react-oidc-context";
@@ -27,6 +28,12 @@ function money(value: number | null | undefined, currency: string) {
 			}).format(value / 1_000_000);
 }
 
+function tokenCount(value: unknown): number | null {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0
+		? value
+		: null;
+}
+
 function DetailRow({ label, value }: { label: string; value: string }) {
 	return (
 		<div className="flex items-start justify-between gap-5 py-2.5">
@@ -45,6 +52,7 @@ export function UsageOperationDetails({
 	appName?: string;
 	modelName?: string;
 }) {
+	const { t } = useTranslation("chat");
 	const backend = useBackend();
 	const auth = useAuth();
 	const [open, setOpen] = useState(false);
@@ -57,6 +65,20 @@ export function UsageOperationDetails({
 	);
 	const detail = isRecord(query.data) ? query.data : undefined;
 	const byteMetered = detail?.meteringBasis === "input_bytes";
+	const cacheRead = tokenCount(detail?.cacheReadTokens);
+	const cacheWrite = tokenCount(detail?.cacheWriteTokens);
+	const inputTokens = tokenCount(detail?.inputTokens);
+	const cacheShare =
+		cacheRead !== null &&
+		inputTokens !== null &&
+		inputTokens > 0 &&
+		cacheRead <= inputTokens
+			? Math.round((cacheRead / inputTokens) * 100)
+			: null;
+	const showCache =
+		!byteMetered &&
+		(detail?.kind === "llm" || cacheRead !== null || cacheWrite !== null);
+	const unreported = t("usageEfficiency.notReported", "Not reported");
 	return (
 		<Sheet open={open} onOpenChange={setOpen}>
 			<SheetTrigger asChild>
@@ -177,6 +199,69 @@ export function UsageOperationDetails({
 												}
 											/>
 										</dl>
+										{showCache && (
+											<div className="mt-4 rounded-lg border bg-muted/20 px-3 py-1">
+												<dl className="divide-y text-sm">
+													<DetailRow
+														label={t(
+															"usageEfficiency.cacheRead",
+															"Read from cache",
+														)}
+														value={
+															cacheRead === null
+																? unreported
+																: cacheRead.toLocaleString()
+														}
+													/>
+													<DetailRow
+														label={t(
+															"usageEfficiency.cacheWrite",
+															"Written to cache",
+														)}
+														value={
+															cacheWrite === null
+																? unreported
+																: cacheWrite.toLocaleString()
+														}
+													/>
+													<DetailRow
+														label={t(
+															"usageEfficiency.cachedInput",
+															"Cached input",
+														)}
+														value={
+															cacheShare === null
+																? unreported
+																: `${cacheShare}%`
+														}
+													/>
+												</dl>
+												{cacheShare !== null && (
+													<div
+														role="meter"
+														aria-label={t(
+															"usageEfficiency.cachedInput",
+															"Cached input",
+														)}
+														aria-valuemin={0}
+														aria-valuemax={100}
+														aria-valuenow={cacheShare}
+														className="mb-2 h-1.5 overflow-hidden rounded-full bg-muted"
+													>
+														<div
+															className="h-full rounded-full bg-emerald-500"
+															style={{ width: `${cacheShare}%` }}
+														/>
+													</div>
+												)}
+												<p className="pb-2 text-xs leading-relaxed text-muted-foreground">
+													{t(
+														"usageEfficiency.includedInput",
+														"Cache reads and writes are already included in input tokens. Unreported counts remain unknown.",
+													)}
+												</p>
+											</div>
+										)}
 										{byteMetered && (
 											<p className="mt-2 text-xs leading-relaxed text-muted-foreground">
 												This embedding operation is metered by input bytes. The

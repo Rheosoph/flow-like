@@ -117,6 +117,7 @@ pub(super) fn approval(
         title: resolved.title,
         description,
         session_key: format!("{}:{}", resolved.session_key, job.token.claim_id),
+        asks_again: None,
     }))
 }
 

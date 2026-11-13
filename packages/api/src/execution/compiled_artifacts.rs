@@ -83,14 +83,22 @@ pub struct LocalOnlyBoard {
     pub nodes: Vec<String>,
 }
 
-impl std::fmt::Display for LocalOnlyBoard {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Board \"{}\" can't run on the server because these nodes only run in the Flow-Like desktop app: {}",
-            self.board_name,
+impl LocalOnlyBoard {
+    pub fn message(&self, event_name: Option<&str>) -> String {
+        let subject = match event_name {
+            Some(event) => format!("Event \"{event}\" (board \"{}\")", self.board_name),
+            None => format!("Board \"{}\"", self.board_name),
+        };
+        format!(
+            "{subject} runs only on your own device, not on a server, because these nodes need your device: {}",
             self.nodes.join(", ")
         )
+    }
+}
+
+impl std::fmt::Display for LocalOnlyBoard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message(None))
     }
 }
 

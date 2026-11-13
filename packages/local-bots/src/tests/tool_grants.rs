@@ -25,7 +25,9 @@ fn card(turn_id: &str) -> ApprovalRequest {
         requester_name: None,
         room: None,
         secret: None,
+        invite: None,
         configuration_changes: None,
+        items: Vec::new(),
     }
 }
 
@@ -182,6 +184,7 @@ fn parking_posts_one_card_and_answering_releases_the_turn_without_waking_the_bot
     let wrong = ApprovalResponse {
         approval_id: "ap-other".into(),
         decision: ApprovalDecision::Once,
+        items: Vec::new(),
     };
     assert_eq!(
         fixture
@@ -193,6 +196,7 @@ fn parking_posts_one_card_and_answering_releases_the_turn_without_waking_the_bot
     let right = ApprovalResponse {
         approval_id: card.id.clone(),
         decision: ApprovalDecision::Once,
+        items: Vec::new(),
     };
     let released = fixture
         .store
@@ -269,6 +273,7 @@ fn clearing_a_conversation_hides_its_approval_cards_and_rejects_stale_answers() 
     let response = ApprovalResponse {
         approval_id: card.id,
         decision: ApprovalDecision::Once,
+        items: Vec::new(),
     };
     assert!(
         f.store

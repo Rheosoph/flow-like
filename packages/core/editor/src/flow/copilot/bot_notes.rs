@@ -15,7 +15,7 @@ use flow_like_types::data_classification::DataSensitivity;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::platform::PlatformToolBridge;
+use super::platform::{Clearance, PlatformToolBridge};
 use super::tool_spec::{PlatformToolSpec, ToolApprovalSpec};
 use super::turn_label::TurnLabel;
 
@@ -533,6 +533,13 @@ impl PlatformToolBridge for NotesBridge {
             NOTES_CLOSE_TOOL => self.close(arguments).await,
             _ => self.inner.call(tool_name, arguments).await,
         }
+    }
+
+    async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
+        if NOTES_TOOLS.contains(&tool_name) {
+            return Clearance::Clear;
+        }
+        self.inner.clearance(tool_name, arguments).await
     }
 
     fn supports_tool(&self, tool_name: &str) -> bool {

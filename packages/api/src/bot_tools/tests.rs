@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use flow_like::flow::copilot::HostTools;
-use flow_like::flow::copilot::platform::PlatformToolBridge;
-use flow_like::flow::copilot::tool_grants::{GrantKey, GrantStore};
+use flow_like::flow::copilot::platform::{Clearance, PlatformToolBridge};
+use flow_like::flow::copilot::tool_grants::{GrantKey, GrantStore, grant_scopes};
 use flow_like::flow_like_model_provider::llm::ModelLogic;
 use flow_like_bot_tools::{KnowledgeEmbedder, ModelRole};
 use flow_like_bot_tools_host::{
@@ -814,8 +814,6 @@ async fn a_headless_turn_parks_a_call_that_asks_and_runs_the_rest() {
         assert_eq!((card.tool.as_str(), card.scope.as_str()), (tool, scope));
         assert_eq!(card.turn_id, TURN);
         assert!(!mutating.load(Ordering::SeqCst));
-        let after = parse(&host.run_unattended(&mutating, "file_list", json!({})).await);
-        assert_eq!(after["code"], "bot_tool_waiting_for_approval");
     }
     assert!(executor.jobs.lock().unwrap().is_empty());
 
@@ -847,6 +845,106 @@ async fn a_headless_turn_parks_a_call_that_asks_and_runs_the_rest() {
     assert_eq!(written["status"], "ok");
     assert!(mutating.load(Ordering::SeqCst));
     assert!(host.parked().is_none());
+}
+
+async fn executor_host(grants: Arc<MemoryGrants>) -> Arc<BotToolsHost> {
+    host_with_grants(
+        Some(Arc::new(FakeExecutor::default())),
+        routing::host_tools(true, &["python".to_string()]),
+        grants,
+    )
+    .await
+}
+
+#[flow_like_types::tokio::test]
+async fn a_non_asking_call_still_runs_after_a_park() {
+    let host = executor_host(Arc::default()).await;
+    let mutating = AtomicBool::new(false);
+    let drop = asking_args("knowledge_drop");
+    let waiting = parse(&host.run_unattended(&mutating, "knowledge_drop", drop).await);
+    assert_eq!(waiting["status"], "waiting");
+    let listed = parse(&host.run_unattended(&mutating, "file_list", json!({})).await);
+    assert_eq!(listed["status"], "ok", "{listed}");
+    assert_eq!(host.parked().unwrap().tool, "knowledge_drop");
+}
+
+#[flow_like_types::tokio::test]
+async fn a_later_asking_call_joins_the_batch() {
+    let grants = Arc::new(MemoryGrants::default());
+    grants.put("code_run", "host:example.com").await.unwrap();
+    let host = executor_host(grants).await;
+    let mutating = AtomicBool::new(false);
+    let drop = asking_args("knowledge_drop");
+    let waiting = parse(&host.run_unattended(&mutating, "knowledge_drop", drop).await);
+    assert_eq!(waiting["status"], "waiting");
+    assert!(!mutating.load(Ordering::SeqCst));
+    let ran = parse(
+        &host
+            .run_unattended(&mutating, "code_run", asking_args("code_run"))
+            .await,
+    );
+    assert_eq!(ran["ran_on"], "executor");
+    let after_the_granted_call = mutating.load(Ordering::SeqCst);
+    let other = json!({ "index": "birds" });
+    let again = parse(
+        &host
+            .run_unattended(&mutating, "knowledge_drop", other)
+            .await,
+    );
+    assert_eq!(again["status"], "waiting");
+    let held = host
+        .clearance("knowledge_drop", &json!({ "index": "fish" }))
+        .await;
+    assert_eq!(held, Clearance::Asks);
+    let card = host.parked().unwrap();
+    assert_eq!(card.tool, flow_like_types::bot_message::APPROVAL_BATCH_TOOL);
+    let scopes: Vec<&str> = card.items.iter().map(|item| item.scope.as_str()).collect();
+    assert_eq!(scopes, vec!["table:pets", "table:birds", "table:fish"]);
+    assert_eq!(mutating.load(Ordering::SeqCst), after_the_granted_call);
+}
+
+#[flow_like_types::tokio::test]
+async fn a_granted_web_request_parks_with_a_flagged_item_after_web_content() {
+    use flow_like::flow::copilot::run_recovery::{CallScope, scope_call};
+    let feed = json!({ "method": "GET", "url": "https://cisa.gov/kev.json" });
+    let site = grant_scopes("web_request", &feed, None).unwrap().remove(0);
+    let grants = Arc::new(MemoryGrants::default());
+    grants.put("web_request", &site).await.unwrap();
+    let host = executor_host(grants).await;
+    let mutating = AtomicBool::new(false);
+    assert!(host.covers("web_request", &feed).await);
+    let ran = parse(
+        &host
+            .run_unattended(&mutating, "web_request", feed.clone())
+            .await,
+    );
+    assert_eq!(ran["ran_on"], "executor");
+
+    let marked = || CallScope {
+        id: "fetch-1".into(),
+        round_web_content: true,
+        held_replay: false,
+    };
+    assert!(!scope_call(marked(), host.covers("web_request", &feed)).await);
+    let waiting = parse(
+        &scope_call(
+            marked(),
+            host.run_unattended(&mutating, "web_request", feed.clone()),
+        )
+        .await,
+    );
+    assert_eq!(waiting["status"], "waiting");
+    let card = host.parked().unwrap();
+    assert_eq!(
+        (card.tool.as_str(), card.scope.as_str()),
+        ("web_request", "")
+    );
+    assert!(card.items[0].after_web_content);
+    assert_eq!(card.items[0].scope, site);
+    assert_eq!(
+        host.batch().held_calls(),
+        vec![("fetch-1".to_string(), "web_request".to_string())]
+    );
 }
 
 #[flow_like_types::tokio::test]
@@ -1047,6 +1145,15 @@ fn frame(frame: GlobalChatFrame) -> Value {
     }
 }
 
+/// The next request the bridge sent to the browser. A call that never asks fails here instead
+/// of hanging the suite.
+async fn asked(received: &mut mpsc::UnboundedReceiver<GlobalChatFrame>) -> Value {
+    let next = flow_like_types::tokio::time::timeout(Duration::from_secs(10), received.recv())
+        .await
+        .expect("the bridge asks the browser within 10 s");
+    frame(next.expect("the bridge is still connected"))
+}
+
 async fn reply(channel: &Arc<InProcessChannel>, request: &Value, value: Value) {
     channel
         .push(ChannelPush {
@@ -1088,7 +1195,7 @@ async fn the_bridge_runs_bot_tools_on_the_server_and_other_tools_in_the_browser(
                 .await
         })
     };
-    let request = frame(received.recv().await.unwrap());
+    let request = asked(&mut received).await;
     assert_eq!(request["toolName"], "database_tool");
     assert!(request.get("approvalOnly").is_none());
     reply(
@@ -1113,7 +1220,7 @@ async fn an_approval_gated_bot_tool_asks_the_browser_for_consent_only() {
                 .await
         })
     };
-    let request = frame(received.recv().await.unwrap());
+    let request = asked(&mut received).await;
     assert_eq!(request["toolName"], "knowledge_drop");
     assert_eq!(request["approvalOnly"], true);
     assert_eq!(request["approval"]["kind"], "mutating");
@@ -1143,7 +1250,7 @@ async fn every_configuration_change_requires_fresh_browser_approval() {
             let (bridge, args) = (bridge.clone(), args.clone());
             flow_like_types::tokio::spawn(async move { bridge.call(tool, args).await })
         };
-        let request = frame(received.recv().await.unwrap());
+        let request = asked(&mut received).await;
         assert_eq!(request["toolName"], tool);
         assert_eq!(request["approvalOnly"], true);
         assert_eq!(request["arguments"], args);
@@ -1194,7 +1301,7 @@ async fn flux_runs_configuration_on_the_server_and_keeps_its_authoring_bridge() 
                 .await
         })
     };
-    let request = frame(received.recv().await.unwrap());
+    let request = asked(&mut received).await;
     assert_eq!(request["approvalOnly"], true);
     reply(
         &channel,
@@ -1212,7 +1319,7 @@ async fn flux_runs_configuration_on_the_server_and_keeps_its_authoring_bridge() 
         let bridge = bridge.clone();
         flow_like_types::tokio::spawn(async move { bridge.call("list_apps", json!({})).await })
     };
-    let request = frame(received.recv().await.unwrap());
+    let request = asked(&mut received).await;
     assert_eq!(request["toolName"], "list_apps");
     assert!(request.get("approvalOnly").is_none());
     reply(
@@ -1257,7 +1364,7 @@ async fn a_declined_or_unacknowledged_approval_runs_nothing() {
                     .await
             })
         };
-        let request = frame(received.recv().await.unwrap());
+        let request = asked(&mut received).await;
         assert_eq!(request["approvalOnly"], true);
         let mut answer = answer;
         answer["requestId"] = request["requestId"].clone();

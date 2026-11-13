@@ -11,6 +11,8 @@
 //! - IPC: `bot-host://turn` carries a [`TurnInfo`] whenever a turn changes state; the commands
 //!   `bot_host_turns` and `bot_host_cancel_turn` inspect and cancel; `bot_host_poke` brings the
 //!   account host's poll forward when the realtime connection reports inbox activity.
+//!   `bot-host://reply` carries a live-call reply while either host writes it, in the shape of
+//!   the server's realtime reply ([`flow_like_bot_host::live_reply`]).
 //! - Mobile: the host lives in the app process. While the OS suspends the app no turn runs and
 //!   the bot is offline; the startup scan answers what waited, once the app runs again.
 
@@ -56,11 +58,14 @@ pub use host::BotHost;
 pub(crate) use owner_notify::{notifier_for, notifier_for_turn};
 
 use account::AccountConfig;
+use flow_like_bot_host::live_reply::ReplyOutlet;
+use flow_like_types::realtime::RealtimeReply;
 use host::{HostConfig, TurnEvents, TurnInfo};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 
 const TURN_EVENT: &str = "bot-host://turn";
+const REPLY_EVENT: &str = "bot-host://reply";
 
 struct UiEvents(AppHandle, notify::Seen);
 
@@ -73,6 +78,19 @@ impl TurnEvents for UiEvents {
         if self.1.first(alert) {
             crate::utils::emit_to_ui(&self.0, notify::NOTIFICATION_EVENT, notify::batch(alert));
         }
+    }
+
+    fn replies(&self) -> Option<Arc<dyn ReplyOutlet>> {
+        Some(Arc::new(UiReplies(self.0.clone())))
+    }
+}
+
+/// A live-call reply this desktop answers, for the call in its windows; it stays on this computer.
+struct UiReplies(AppHandle);
+
+impl ReplyOutlet for UiReplies {
+    fn reply(&self, reply: RealtimeReply) {
+        crate::utils::emit_to_ui(&self.0, REPLY_EVENT, reply);
     }
 }
 

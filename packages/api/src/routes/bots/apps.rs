@@ -188,6 +188,7 @@ pub(super) async fn attach_in<C: ConnectionTrait>(
     owned_bot(txn, owner_id, bot_id).await?;
     require_membership(txn, owner_id, app_id).await?;
     refuse_workspaces(txn, [app_id]).await?;
+    crate::bot_app_gate::ensure_admits_bots(txn, app_id).await?;
     let attached = bot_app::Entity::find_by_id((bot_id.to_string(), app_id.to_string()))
         .one(txn)
         .await?
@@ -293,7 +294,7 @@ pub async fn list_bot_apps(
     responses(
         (status = 204, description = "The bot may use the app with your role there; attaching twice changes nothing"),
         (status = 401, description = "Not signed in"),
-        (status = 403, description = "You are not a member of the app, or the caller is not a person"),
+        (status = 403, description = "You are not a member of the app, or the caller is not a person; APP_REFUSES_BOTS: the app's owner does not allow bots in it"),
         (status = 404, description = "You have no bot with this id"),
         (status = 409, description = "BOT_APP_LIMIT_REACHED: the bot already uses 200 apps; BOT_WORKSPACE_LOCKED: the app is a bot's workspace (a bot always reaches its own)")
     ),
@@ -400,6 +401,20 @@ pub(super) async fn store_restrictions<C: ConnectionTrait>(
     Ok(())
 }
 
+/// Sets what the owner's bot may do in an app it uses, never beyond the owner's role there.
+pub(crate) async fn restrict_owned(
+    state: &AppState,
+    owner_id: &str,
+    bot_id: &str,
+    app_id: &str,
+    restrictions: &BotRestrictions,
+) -> Result<(), ApiError> {
+    restrictions.validate().map_err(ApiError::bad_request)?;
+    owned_bot(&state.db, owner_id, bot_id).await?;
+    refuse_beyond_owner_role(state, owner_id, app_id, restrictions).await?;
+    store_restrictions(&state.db, owner_id, bot_id, app_id, restrictions).await
+}
+
 async fn attached_row<C: ConnectionTrait>(
     db: &C,
     bot_id: &str,
@@ -471,10 +486,7 @@ pub async fn set_bot_app_restrictions(
     Json(restrictions): Json<BotRestrictions>,
 ) -> Result<Json<BotRestrictions>, ApiError> {
     let sub = user.sub()?;
-    restrictions.validate().map_err(ApiError::bad_request)?;
-    owned_bot(&state.db, &sub, &bot_id).await?;
-    refuse_beyond_owner_role(&state, &sub, &app_id, &restrictions).await?;
-    store_restrictions(&state.db, &sub, &bot_id, &app_id, &restrictions).await?;
+    restrict_owned(&state, &sub, &bot_id, &app_id, &restrictions).await?;
     audit_branch!(state, user, app_id, "bot.app.restrict", "Bot", bot_id);
     Ok(Json(restrictions))
 }

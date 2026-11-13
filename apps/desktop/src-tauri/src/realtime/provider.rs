@@ -352,6 +352,7 @@ mod tests {
             project_id: "project".into(),
             custom_token: "token".into(),
             path: "realtime/account".into(),
+            reply_path: None,
         }
     }
 

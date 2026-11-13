@@ -109,6 +109,58 @@ describe("reply streams", () => {
 		expect(last()).toMatchObject({ text: "Second", state: "writing" });
 	});
 
+	test("a rewrite ends the draft held and starts at once from its own beginning", () => {
+		const { seen } = watch();
+		deliverRealtimeReply(message({ text: "Sure, the answer" }), "c1", 1_000);
+		deliverRealtimeReply(message({ state: "dropped" }), "c1", 1_100);
+		deliverRealtimeReply(
+			message({ text: "Anna said it.", draft: 1 }),
+			"c1",
+			1_200,
+		);
+		deliverRealtimeReply(
+			message({ text: "Anna said it.", state: "done", draft: 1 }),
+			"c1",
+			1_300,
+		);
+		expect(seen.map((reply) => [reply.draft, reply.text, reply.state])).toEqual(
+			[
+				[0, "Sure, the answer", "writing"],
+				[0, "Sure, the answer", "dropped"],
+				[1, "Anna said it.", "writing"],
+				[1, "Anna said it.", "done"],
+			],
+		);
+	});
+
+	test("a rewrite whose drop was lost still ends the draft held first", () => {
+		const { seen } = watch();
+		deliverRealtimeReply(message({ text: "Sure, the answer" }));
+		deliverRealtimeReply(message({ offset: 4, text: "Anna", draft: 1 }));
+		deliverRealtimeReply(message({ text: "Anna said it.", draft: 2 }));
+		expect(seen.map((reply) => [reply.draft, reply.text, reply.state])).toEqual(
+			[
+				[0, "Sure, the answer", "writing"],
+				[0, "Sure, the answer", "dropped"],
+				[2, "Anna said it.", "writing"],
+			],
+		);
+	});
+
+	test("messages of a replaced draft stay ignored after the restart window", () => {
+		const { seen } = watch();
+		deliverRealtimeReply(message({ text: "Sure" }), "c1", 1_000);
+		deliverRealtimeReply(message({ text: "Anna", draft: 1 }), "c1", 1_100);
+		deliverRealtimeReply(message({ text: "Sure, the" }), "c1", 12_000);
+		deliverRealtimeReply(message({ state: "dropped" }), "c1", 12_100);
+		expect(seen.at(-1)).toMatchObject({
+			draft: 1,
+			text: "Anna",
+			state: "writing",
+		});
+		expect(seen).toHaveLength(3);
+	});
+
 	test("only the watched conversation is told, under the id this device uses", () => {
 		const other = watch("c2");
 		const local = watch("local-1");

@@ -181,6 +181,12 @@ export interface IAppState {
 	 */
 	changeAppForkPolicy(appId: string, policy: IForkPolicy): Promise<void>;
 	/**
+	 * Decide whether bots may use the app; the current value is `IApp.refuse_bots`.
+	 * Owner-only on the backend (PATCH /apps/{app_id}/settings/bots); a local app
+	 * stores it in its manifest.
+	 */
+	changeAppBotAccess(appId: string, refuseBots: boolean): Promise<void>;
+	/**
 	 * Pre-fork dry run — returns size totals, remote-token requirements, and
 	 * the permission verdict. Safe to call as a probe before committing to a
 	 * full fork. (GET /apps/{app_id}/fork/preview)

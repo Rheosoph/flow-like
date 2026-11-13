@@ -60,6 +60,7 @@ async fn insert_bot(db: &DatabaseConnection, id: &str, owner_id: &str, deleted: 
         capabilities: Set(Default::default()),
         profile_id: Set(None),
         location: Set("DESKTOP".into()),
+        execution_mode: Set(None),
         device_id: Set(None),
         created_at: Set(at(0)),
         updated_at: Set(at(0)),
