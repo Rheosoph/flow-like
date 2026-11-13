@@ -25,6 +25,10 @@ on:
       - 'packages/vendor/dust-dds/**'
   workflow_dispatch:
 
+concurrency:
+  group: industrial-protocols-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 

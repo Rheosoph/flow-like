@@ -1,36 +1,19 @@
 name: "Rust Feature Boundaries"
 
 on:
-  pull_request:
-    branches:
-      - dev
-  push:
-    branches:
-      - dev
+  workflow_call:
   workflow_dispatch:
 
 concurrency:
-  group: rust-feature-boundaries-${{ github.ref }}
+  group: rust-feature-boundaries-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  changes:
-    name: Detect Rust boundary changes
-    runs-on: ubuntu-latest
-    outputs:
-      rust: ${{ steps.changes.outputs.rust }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: ./.github/actions/detect-changes
-        id: changes
-
   dependency-boundaries:
     name: Check dependency and feature assertions
-    needs: changes
-    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -117,8 +100,7 @@ jobs:
 
   lightweight-boundaries:
     name: Compile lightweight Rust boundaries
-    needs: [changes, dependency-boundaries]
-    if: needs.changes.outputs.rust == 'true'
+    needs: dependency-boundaries
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -155,8 +137,7 @@ jobs:
 
   catalog-boundaries:
     name: Compile catalog Rust boundaries
-    needs: [changes, dependency-boundaries]
-    if: needs.changes.outputs.rust == 'true'
+    needs: dependency-boundaries
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -174,22 +155,3 @@ jobs:
           catalog-portable
           catalog-portable-execute
           catalog-server
-
-  feature-boundaries:
-    name: Check isolated Rust features
-    needs: [changes, dependency-boundaries, lightweight-boundaries, catalog-boundaries]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check feature boundary results
-        env:
-          CHANGES_RESULT: ${{ needs.changes.result }}
-          JOB_RESULTS: ${{ join(needs.*.result, ' ') }}
-        run: |
-          test "$CHANGES_RESULT" = success
-          for result in $JOB_RESULTS; do
-            case "$result" in
-              success|skipped) ;;
-              *) exit 1 ;;
-            esac
-          done

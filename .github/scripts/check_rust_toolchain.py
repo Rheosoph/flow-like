@@ -12,6 +12,7 @@ import tomllib
 
 
 SETUP_ACTION = "./.github/actions/setup-rust"
+ENVIRONMENT_ACTION = "./.github/actions/setup-environment"
 CENTRALIZED_CI = (
     ".github/actions/setup-environment/action.yml",
     ".github/workflows/clippy.yml",
@@ -161,7 +162,7 @@ def check_repository(root):
             uses = re.findall(r"^\s*-?\s*uses:\s*[\"']?([^\s\"'#]+)", text, re.MULTILINE)
             if relative.startswith(".github/") and any("rust-toolchain@" in action for action in uses):
                 errors.append(f"{relative}: use {SETUP_ACTION} to read the root compiler pin")
-            if relative in CENTRALIZED_CI and SETUP_ACTION not in uses:
+            if relative in CENTRALIZED_CI and SETUP_ACTION not in uses and ENVIRONMENT_ACTION not in uses:
                 errors.append(f"{relative}: missing {SETUP_ACTION}")
             if any("rust-toolchain@" in action for action in uses):
                 pins = re.findall(r"^\s*toolchain:\s*[\"']?([^\s\"'#]+)", text, re.MULTILINE)

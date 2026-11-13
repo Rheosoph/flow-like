@@ -15,6 +15,19 @@ outputs:
     description: Whether the browser crate, the automation nodes, a local crate they depend on or the toolchain changed
     value: ${{ steps.changes.outputs.browser }}
 
+  ui:
+    description: Whether the shared UI package, its locales, the docs corpus or the frontend dependencies changed
+    value: ${{ steps.changes.outputs.ui }}
+  azure_migrations:
+    description: Whether Azure migrations, Prisma inputs or their package dependencies changed
+    value: ${{ steps.changes.outputs.azure_migrations }}
+  compiler:
+    description: Whether compiler configuration, build manifests or reproducibility checks changed
+    value: ${{ steps.changes.outputs.compiler }}
+  containers:
+    description: Whether container images or their validation inputs changed
+    value: ${{ steps.changes.outputs.containers }}
+
 runs:
   using: composite
   steps:

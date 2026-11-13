@@ -1,79 +1,50 @@
 name: "Lint & Format"
 
 on:
-  pull_request:
-    branches:
-      - dev
-  push:
-    branches:
-      - dev
+  workflow_call:
+    inputs:
+      rust:
+        type: boolean
+        required: true
+      dsql:
+        type: boolean
+        required: true
 
 concurrency:
-  group: lint-format-${{ github.ref }}
+  group: lint-format-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  changes:
-    name: Detect lint changes
-    runs-on: ubuntu-latest
-    outputs:
-      rust: ${{ steps.changes.outputs.rust }}
-      dsql: ${{ steps.changes.outputs.dsql }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: ./.github/actions/detect-changes
-        id: changes
-
   clippy:
-    name: Clippy
-    needs: changes
-    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true')
+    name: Rust lint and format
+    if: inputs.rust
     runs-on: ubuntu-latest
     steps:
-      - name: Check change detection
-        env:
-          CHANGES_RESULT: ${{ needs.changes.result }}
-        run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: ./.github/actions/setup-environment
+        id: setup
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           cache-key: clippy-check
 
+      - name: Check Formatting
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: cargo fmt --check
+
       - name: Run Clippy
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         # Preserve full-workspace CI coverage after introducing developer-focused
         # default members for local bare Cargo commands.
         run: cargo clippy --locked --workspace -- -D clippy::correctness -D clippy::suspicious -D unused_mut
 
-  fmt:
-    name: Format
-    needs: changes
-    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check change detection
-        env:
-          CHANGES_RESULT: ${{ needs.changes.result }}
-        run: test "$CHANGES_RESULT" = success
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: ./.github/actions/setup-rust
-
-      - name: Check Formatting
-        run: cargo fmt --check
-
   dsql-migrations:
     name: DSQL migrations lint
-    needs: changes
-    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.dsql == 'true')
+    if: inputs.dsql
     runs-on: ubuntu-latest
     steps:
-      - name: Check change detection
-        env:
-          CHANGES_RESULT: ${{ needs.changes.result }}
-        run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@v4
         with:
