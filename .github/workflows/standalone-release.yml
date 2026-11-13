@@ -125,7 +125,7 @@ jobs:
           bun-version: 1.4.4
       - name: Build embedded frontend
         env:
-          NODE_OPTIONS: --max-old-space-size=4096
+          NODE_OPTIONS: --max-old-space-size=8192
         run: |
           bun install --frozen-lockfile
           bun test ./.github/scripts/tests/standalone-package.test.ts
