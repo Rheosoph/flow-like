@@ -54,7 +54,22 @@ def read_frame(stream, deadline, keepalive=None):
     return frame
 
 
-def exercise_worker(process, startup_timeout=60, shutdown_timeout=35, keepalive_interval=5):
+def wait_for_exit(process, timeout, expected, context):
+    try:
+        result = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        raise TimeoutError(f"Worker did not stop {context}") from error
+    if result != expected:
+        raise RuntimeError(f"Worker exited with status {result}; expected {expected}")
+    return result
+
+
+def exercise_worker(process, startup_timeout=60, shutdown_timeout=35, keepalive_interval=5,
+                    parent_loss="eof", init_timeout=40):
+    if parent_loss == "unconfigured":
+        return wait_for_exit(process, init_timeout, 1, "without its initial configuration")
+    if parent_loss not in {"eof", "silent"}:
+        raise ValueError("Unknown parent-loss scenario")
     write_frame(process.stdin, {
         "kind": "init", "base_url": "https://worker-smoke.invalid/api/v1",
         "device_id": DEVICE, "bot_id": BOT, "keys": None,
@@ -86,14 +101,13 @@ def exercise_worker(process, startup_timeout=60, shutdown_timeout=35, keepalive_
             "kind": "reply", "id": frame["id"], "status": 200,
             "body": base64.b64encode(body).decode(),
         })
-    # EOF exercises parent loss rather than the cooperative Shutdown message.
-    process.stdin.close()
-    try:
-        result = process.wait(timeout=shutdown_timeout)
-    except subprocess.TimeoutExpired as error:
-        raise TimeoutError("Worker did not stop after its parent pipe closed") from error
-    if result != 0:
-        raise RuntimeError(f"Worker exited with status {result}")
+    # Silence keeps the pipe open and requires the worker's parent watchdog to stop it.
+    if parent_loss == "eof":
+        process.stdin.close()
+        context = "after its parent pipe closed"
+    else:
+        context = "after its parent stopped sending frames"
+    return wait_for_exit(process, shutdown_timeout, 0, context)
 
 
 def create_arguments(image, platform, profile, name, volume):
@@ -122,6 +136,11 @@ def smoke(image, platform, profile):
         raise ValueError("Smoke test requires the exact published image digest")
     profile = profile.resolve(strict=True)
     docker("pull", "--platform", platform, image, timeout=600)
+    for parent_loss in ["eof", "silent", "unconfigured"]:
+        smoke_worker(image, platform, profile, parent_loss)
+
+
+def smoke_worker(image, platform, profile, parent_loss):
     name = "flow-like-worker-smoke-" + uuid.uuid4().hex
     volume = name + "-data"
     process = None
@@ -130,7 +149,7 @@ def smoke(image, platform, profile):
     try:
         docker("volume", "create", "--label=io.flow-like.ci-worker-smoke=true", volume)
         volume_created = True
-        # Keep the exited container until inspection confirms EOF stopped the worker itself.
+        # Keep the exited container until inspection confirms the worker itself stopped.
         docker(*create_arguments(image, platform, profile, name, volume))
         created = True
         with tempfile.TemporaryFile() as stderr:
@@ -139,10 +158,10 @@ def smoke(image, platform, profile):
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, bufsize=0,
             )
             try:
-                exercise_worker(process)
+                result = exercise_worker(process, parent_loss=parent_loss)
                 state = json.loads(docker("inspect", "--format", "{{json .State}}", name).stdout)
-                if state.get("Status") != "exited" or state.get("ExitCode") != 0:
-                    raise RuntimeError("Container remained alive or failed after parent EOF")
+                if state.get("Status") != "exited" or state.get("ExitCode") != result:
+                    raise RuntimeError(f"Container remained alive or failed during {parent_loss}")
             except Exception:
                 stderr.seek(0, os.SEEK_END)
                 stderr.seek(max(0, stderr.tell() - 8192))
@@ -164,7 +183,7 @@ def smoke(image, platform, profile):
                 docker("container", "rm", "--force", name, check=created)
             finally:
                 docker("volume", "rm", volume, check=volume_created)
-    print(f"Worker startup, scoped poll, and parent-EOF shutdown passed for {platform}")
+    print(f"Worker {parent_loss} shutdown passed for {platform}")
 
 
 if __name__ == "__main__":

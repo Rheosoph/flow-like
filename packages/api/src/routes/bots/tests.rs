@@ -1440,14 +1440,25 @@ async fn running_turns_must_stop_before_execution_mode_changes() {
         .insert(&db)
         .await
         .unwrap();
-    db.execute_unprepared(r#"CREATE TABLE public."BotTurn" ("botId" TEXT, status TEXT)"#)
+    db.execute_unprepared(crate::routes::inbox::fixture::BOT_TURN_TABLE)
         .await
         .unwrap();
-    db.execute_raw(sea_orm::Statement::from_sql_and_values(
-        sea_orm::DatabaseBackend::Sqlite,
-        r#"INSERT INTO public."BotTurn" ("botId", status) VALUES (?, 'RUNNING')"#,
-        [bot.id.clone().into()],
-    ))
+    crate::entity::bot_turn::ActiveModel {
+        id: Set("turn-mode-change".into()),
+        bot_id: Set(bot.id.clone()),
+        owner_id: Set("owner".into()),
+        conversation_id: Set("conversation".into()),
+        trigger_message_id: Set("trigger".into()),
+        host_kind: Set("DEVICE".into()),
+        status: Set("RUNNING".into()),
+        attempts: Set(1),
+        hops: Set(0),
+        audience: Set("OWNER".into()),
+        created_at: Set(at(0)),
+        updated_at: Set(at(0)),
+        ..Default::default()
+    }
+    .insert(&db)
     .await
     .unwrap();
     for sql in [
@@ -1468,7 +1479,7 @@ async fn running_turns_must_stop_before_execution_mode_changes() {
     let error = patch_in(&db, "owner", &bot.id, request.clone())
         .await
         .unwrap_err();
-    assert_eq!(error.public_code(), "BOT_EXECUTION_MODE_BUSY");
+    assert_eq!(error.public_code(), "BOT_EXECUTION_MODE_BUSY", "{error:?}");
     assert_eq!(
         BotSettings::from_row(&owned_bot(&db, "owner", &bot.id).await.unwrap()).execution_mode,
         BotExecutionMode::Native

@@ -58,14 +58,15 @@ export function useSpeechModelState(
 		[desktop, sttBits],
 	);
 	const installed = useQuery({
-		queryKey: ["speech-model-installed", localBits.map((bit) => bit.id)],
+		// The old key persisted Sets as {}, so use a new key for the ID arrays.
+		queryKey: ["speech-model-installed", "v2", localBits.map((bit) => bit.id)],
 		enabled: active && localBits.length > 0,
 		queryFn: async () => {
-			const ids = new Set<string>();
+			const ids: string[] = [];
 			for (const bit of localBits) {
-				if (await backend.bitState.isBitInstalled(bit)) ids.add(bit.id);
+				if (await backend.bitState.isBitInstalled(bit)) ids.push(bit.id);
 			}
-			return ids as ReadonlySet<string>;
+			return ids;
 		},
 	});
 	const pin = useQuery({
@@ -93,7 +94,7 @@ export function useSpeechModelState(
 				? (pin.data ??
 					resolveSttChoice(sttBits, {
 						desktop,
-						installed: installed.data ?? NO_IDS,
+						installed: new Set(installed.data ?? []),
 						localOnly,
 					}))
 				: null,

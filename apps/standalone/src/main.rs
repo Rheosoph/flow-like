@@ -291,7 +291,18 @@ async fn main() -> Result<()> {
     }
     if matches!(cli.command, Commands::BotContainerWorker) {
         #[cfg(all(feature = "runtime", feature = "bot-host"))]
-        return flow_like_standalone::bot_host::container_child::run().await;
+        {
+            let status = match flow_like_standalone::bot_host::container_child::run().await {
+                Ok(()) => 0,
+                Err(error) => {
+                    tracing::error!("The bot container worker failed: {error:#}");
+                    1
+                }
+            };
+            // Bounded worker cleanup has finished. Tokio cannot cancel its blocking stdin read,
+            // so runtime teardown could otherwise wait forever on a silent parent pipe.
+            std::process::exit(status);
+        }
         #[cfg(not(all(feature = "runtime", feature = "bot-host")))]
         anyhow::bail!("This binary has no bot container worker");
     }

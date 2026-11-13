@@ -198,7 +198,7 @@ impl ImageDetour {
         let mut granted = 0;
         let _ = self
             .remaining
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                 granted = left.min(wanted);
                 Some(left - granted)
             });

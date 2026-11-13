@@ -19,16 +19,19 @@ IMAGE = "ghcr.io/example/agent@sha256:" + "a" * 64
 PROFILE = SCRIPT.parents[2] / "apps/standalone/packaging/chrome-seccomp.json"
 
 WORKER = r'''
-import base64, json, os, struct, sys, time
+import base64, json, os, select, struct, sys, time
 def read():
     header = sys.stdin.buffer.read(4)
     assert len(header) == 4
     size, = struct.unpack(">I", header)
     return json.loads(sys.stdin.buffer.read(size))
+mode = sys.argv[1]
+if mode == "unconfigured":
+    assert not select.select([sys.stdin], [], [], 0.1)[0]
+    sys.exit(1)
 init = read()
 assert init == {"kind": "init", "base_url": "https://worker-smoke.invalid/api/v1",
                 "device_id": "release-smoke-device", "bot_id": "release-smoke-bot", "keys": None}
-mode = sys.argv[1]
 if mode == "early_exit":
     sys.exit(0)
 for id in [1, 2]:
@@ -50,6 +53,9 @@ for id in [1, 2]:
         reply = read()
     assert (reply["kind"], reply["id"], reply["status"]) == ("reply", id, 200)
     assert json.loads(base64.b64decode(reply["body"])) == {"bots": [], "turns": [], "next_poll_ms": 500}
+if mode == "silent_parent":
+    assert not select.select([sys.stdin], [], [], 0.1)[0]
+    sys.exit(0)
 assert sys.stdin.buffer.read() == b""
 if mode == "hang_on_eof":
     time.sleep(60)
@@ -105,6 +111,34 @@ class WorkerSmokeTests(unittest.TestCase):
         with self.assertRaisesRegex(TimeoutError, "did not stop"):
             smoke.exercise_worker(self.worker("hang_on_eof"), startup_timeout=5, shutdown_timeout=0.1)
 
+    def test_silent_parent_leaves_stdin_open_and_stops_keepalives(self):
+        process = self.worker("silent_parent")
+        smoke.exercise_worker(process, startup_timeout=5, shutdown_timeout=5,
+                              keepalive_interval=0.03, parent_loss="silent")
+        self.assertEqual(process.returncode, 0, process.stderr.read())
+        self.assertFalse(process.stdin.closed)
+
+    def test_silent_parent_detects_a_worker_stuck_reading_open_stdin(self):
+        process = self.worker()
+        with self.assertRaisesRegex(TimeoutError, "parent stopped sending"):
+            smoke.exercise_worker(process, startup_timeout=5, shutdown_timeout=0.1,
+                                  parent_loss="silent")
+        self.assertFalse(process.stdin.closed)
+
+    def test_missing_init_keeps_stdin_open_without_writing_and_requires_failure(self):
+        process = self.worker("unconfigured")
+        with patch.object(smoke, "write_frame") as write:
+            self.assertEqual(smoke.exercise_worker(process, parent_loss="unconfigured",
+                                                  init_timeout=5), 1)
+            write.assert_not_called()
+        self.assertFalse(process.stdin.closed)
+
+    def test_missing_init_detects_a_worker_stuck_reading_open_stdin(self):
+        process = self.worker()
+        with self.assertRaisesRegex(TimeoutError, "without its initial configuration"):
+            smoke.exercise_worker(process, parent_loss="unconfigured", init_timeout=0.1)
+        self.assertFalse(process.stdin.closed)
+
     def test_invalid_lengths_are_rejected_without_reading_or_allocating_the_body(self):
         for length in [0, smoke.MAX_FRAME + 1, 2**32 - 1]:
             with self.subTest(length=length):
@@ -127,7 +161,7 @@ class WorkerSmokeTests(unittest.TestCase):
     def test_complete_smoke_uses_restrictions_and_removes_only_its_resources(self):
         calls, process, docker = self.docker_run()
         with docker, patch.object(smoke.subprocess, "Popen", return_value=process):
-            smoke.smoke(IMAGE, "linux/arm64", PROFILE)
+            smoke.smoke_worker(IMAGE, "linux/arm64", PROFILE, "eof")
         create = next(call for call in calls if call[0] == "create")
         for flag in ["--network=none", "--log-driver=none", "--read-only", "--cap-drop=ALL",
                      "--security-opt=no-new-privileges", "--user=65532:65532", "--shm-size=1g"]:
@@ -145,7 +179,7 @@ class WorkerSmokeTests(unittest.TestCase):
         calls, process, docker = self.docker_run("wrong_path")
         with docker, patch.object(smoke.subprocess, "Popen", return_value=process):
             with self.assertRaisesRegex(RuntimeError, "scoped poll"):
-                smoke.smoke(IMAGE, "linux/amd64", PROFILE)
+                smoke.smoke_worker(IMAGE, "linux/amd64", PROFILE, "eof")
         self.assertIsNotNone(process.returncode)
         self.assertEqual([call[:2] for call in calls[-2:]], [("container", "rm"), ("volume", "rm")])
 
@@ -153,7 +187,22 @@ class WorkerSmokeTests(unittest.TestCase):
         calls, process, docker = self.docker_run(state={"Status": "running", "ExitCode": 0})
         with docker, patch.object(smoke.subprocess, "Popen", return_value=process):
             with self.assertRaisesRegex(RuntimeError, "remained alive"):
-                smoke.smoke(IMAGE, "linux/amd64", PROFILE)
+                smoke.smoke_worker(IMAGE, "linux/amd64", PROFILE, "eof")
+        self.assertEqual([call[:2] for call in calls[-2:]], [("container", "rm"), ("volume", "rm")])
+
+    def test_each_image_runs_all_parent_loss_scenarios_after_one_pinned_pull(self):
+        with patch.object(smoke, "docker") as docker, patch.object(smoke, "smoke_worker") as worker:
+            smoke.smoke(IMAGE, "linux/amd64", PROFILE)
+        docker.assert_called_once_with("pull", "--platform", "linux/amd64", IMAGE, timeout=600)
+        self.assertEqual([call.args for call in worker.call_args_list], [
+            (IMAGE, "linux/amd64", PROFILE.resolve(), mode) for mode in ["eof", "silent", "unconfigured"]
+        ])
+
+    def test_unconfigured_exit_is_confirmed_on_the_container_and_then_cleaned_up(self):
+        calls, process, docker = self.docker_run("unconfigured", {"Status": "exited", "ExitCode": 1})
+        with docker, patch.object(smoke.subprocess, "Popen", return_value=process):
+            smoke.smoke_worker(IMAGE, "linux/amd64", PROFILE, "unconfigured")
+        self.assertTrue(any(call[0] == "inspect" for call in calls))
         self.assertEqual([call[:2] for call in calls[-2:]], [("container", "rm"), ("volume", "rm")])
 
     def test_mutable_image_tags_are_refused_before_docker_is_called(self):
