@@ -235,7 +235,8 @@ fn get_credentials_access() -> crate::credentials::CredentialsAccess {
         (status = 200, description = "Async invocation result", body = InvokeEventAsyncResponse),
         (status = 400, description = "Bad request"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden")
+        (status = 403, description = "Forbidden"),
+        (status = 422, description = "LOCAL_EXECUTION_REQUIRED: the flow runs only on your own device, so a server will not run it")
     ),
     security(
         ("bearer_auth" = []),

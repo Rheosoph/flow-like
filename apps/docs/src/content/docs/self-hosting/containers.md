@@ -3,11 +3,14 @@ title: Container releases
 description: Build backend images, select release digests and configure them at startup
 ---
 
-The [Backend containers workflow](https://github.com/Rheosoph/flow-like/blob/dev/.github/workflows/containers.yml)
-builds images from one source commit, checks each image before publishing it to
-GitHub Container Registry (GHCR), assembles a manifest of immutable digests, and
-then publishes one multi-architecture index per self-hosted repository together
-with an immutable build tag and guarded channel tags such as `dev` and `latest`.
+The [CI workflow](https://github.com/Rheosoph/flow-like/blob/dev/.github/workflows/ci.yml)
+selects container releases and runs their compiler checks once. It calls the
+[Backend containers workflow](https://github.com/Rheosoph/flow-like/blob/dev/.github/workflows/containers.yml)
+to build images from one source commit and check each image before publishing it
+to GitHub Container Registry (GHCR). That workflow assembles a manifest of
+immutable digests and publishes one multi-architecture index per self-hosted
+repository with an immutable build tag and guarded channel tags such as `dev`
+and `latest`.
 Follow a channel tag for development hosts; pin a digest or build tag for
 production and retain it with the deployment configuration.
 
@@ -15,21 +18,22 @@ production and retain it with the deployment configuration.
 
 Repository names follow `ghcr.io/<owner>/flow-like-<target>-<workload>`; the owner
 is the lowercased GitHub repository owner. Forks publish to their own namespace.
-The checked-in matrix contains 58 platform builds for 42 image repositories:
+The checked-in matrix contains 64 platform builds for 47 image repositories:
 
 | Target | Workloads | Platform |
 | --- | --- | --- |
-| AWS | API, compiler, file-tracker, media-transformer, event-bridge, maintenance, signaling, migration | ARM64 |
-| AWS | executor, executor-async | AMD64 |
+| AWS | API, audit-worker, compiler, executor, executor-lambda-async, file-tracker, mail-ingress, media-transformer, event-bridge, maintenance, signaling, migration | ARM64 |
+| AWS | executor-async | AMD64 |
 | AWS | api-ecs | AMD64 and ARM64 |
-| GCP | API, queue-worker, executor, signaling, migration, scheduler, maintenance | AMD64 |
-| Azure | API, queue-worker, executor, maintenance, scheduler, migration, signaling, otel-collector | AMD64 |
-| Docker Compose | API, runtime, compiler, execution-manager, sink-services, signaling, db-init, object-store-init, web | AMD64 and ARM64 |
+| GCP | API, audit-worker, queue-worker, executor, signaling, migration, scheduler, maintenance | AMD64 |
+| Azure | API, audit-worker, queue-worker, executor, maintenance, scheduler, migration, signaling, otel-collector | AMD64 |
+| Docker Compose | API, audit-worker, runtime, compiler, execution-manager, sink-services, signaling, db-init, object-store-init, web | AMD64 and ARM64 |
 | Kubernetes | API, executor, execution-manager, sink-trigger, migration, web | AMD64 and ARM64 |
 
 Workload names in image repositories are lowercase. Kubernetes also uses the
-Compose runtime, compiler, signaling and object-store initializer images. The
-workflow leaves PostgreSQL, Redis, RustFS and monitoring tools as upstream images.
+Compose runtime, compiler, signaling, audit worker and object-store initializer
+images. The workflow leaves PostgreSQL, Redis, RustFS and monitoring tools as
+upstream images.
 See [the target matrix](https://github.com/Rheosoph/flow-like/blob/dev/.github/scripts/container_images.py)
 for exact Dockerfile paths and platforms.
 
@@ -42,9 +46,9 @@ receives the matching platform. Cloud repositories stay single-image manifests
 because Lambda rejects an index. The AWS ECS API never runs on Lambda, so its two
 records become an index as well. See [Tags and visibility](#tags-and-visibility).
 
-The fifteen self-hosted packages are public: anyone can pull them without a
-registry login. Cloud packages (AWS, GCP, Azure) stay private to the owner
-organization. Nothing in the repository changes visibility; it is a package
+Public self-hosted packages can be pulled without a registry login.
+Cloud packages (AWS, GCP, Azure) stay private to the owner organization.
+Nothing in the repository changes visibility; it is a package
 setting in the GitHub UI, and forks publish private packages by default.
 
 ## Build locally
@@ -297,13 +301,13 @@ The build job also pushes a per-architecture tag,
 single-platform image. Those remain available for a platform-specific pull, but
 the references above are the ones to consume.
 
-For the fifteen self-hosted repositories the digest and every tag name a
+For the sixteen self-hosted repositories the digest and every tag name a
 multi-architecture index containing the AMD64 and ARM64 images built from that
 commit. The workflow requests the index annotations
 `org.opencontainers.image.revision`, `org.opencontainers.image.source` and
 `org.opencontainers.image.version`; an OCI index keeps them, while a Docker
 manifest list (produced when the pushed images use Docker media types) cannot
-carry annotations. Apart from the ECS API, the twenty-six cloud repositories are
+carry annotations. Apart from the ECS API, the thirty other cloud repositories are
 single-platform: the tags point at the image manifest itself, never at an index,
 because Lambda requires a single-image manifest. The workflow asserts this after every copy.
 The image config labels carry the revision and source for both kinds and are the
@@ -358,18 +362,23 @@ organization packages. It authenticates with `GITHUB_TOKEN` after image checks
 pass. Existing GHCR packages must also grant this source repository Actions
 write access. It does not need deployment-cloud credentials or a custom registry token.
 Protect `dev`, `main`, `alpha`, `v*` and `beta-v*` because pushes to them publish
-images and move channel tags.
+images and move channel tags. On `dev`, CI publishes only when container build
+or validation inputs change. Pushes to `main`, `alpha` and release tags always
+select publication. Pull requests validate images without publishing them.
 
-1. Push the reviewed source commit or tag, or select **Actions > Backend
-   containers > Run workflow** when a manual release is needed. A manual run
-   from `dev`, `main` or `alpha` moves that branch's channel tag.
-2. Select `aws`, `gcp`, `azure`, `docker-compose`, `kubernetes`, `self-hosted` or
-   `all`. `kubernetes` includes its shared Compose helpers; `self-hosted` selects
-   all fifteen self-hosted repositories on both architectures.
-3. After the complete set succeeds, the `manifest` job uploads
-   `container-images-<commit>-<run>-<attempt>`. Its `container-images.json` maps
+1. Push the reviewed source commit or tag, or select **Actions > CI > Run
+   workflow** for a manual release. Set `scope` to `containers`; the default
+   `checks` scope runs tests without publishing. A manual container run from
+   `dev`, `main` or `alpha` moves that branch's channel tag.
+2. For a manual run, set `cloud` to `aws`, `gcp`, `azure`, `docker-compose`,
+   `kubernetes`, `self-hosted` or `all`. `kubernetes` includes its shared Compose
+   helpers; `self-hosted` selects all sixteen self-hosted repositories on both
+   architectures. Automatic releases select `all`.
+3. After all builds succeed, the `manifest` job validates the complete digest
+   set and uploads `container-images-<commit>-<run>-<attempt>`.
+   Its `container-images.json` maps
    workloads and platforms to single-platform digest references.
-4. The `index` job then creates the per-repository index or manifest copy, applies
+4. The same job then creates the per-repository index or manifest copy, applies
    the build tag and the guarded channel tags, and uploads
    `container-indexes-<commit>-<run>-<attempt>`. Its `container-indexes.json`
    lists, per repository, the `kind` (`index` or `manifest`), the digest to pin,
@@ -377,9 +386,10 @@ images and move channel tags.
 5. Set package visibility and consumer read access explicitly.
 
 Records bind the Dockerfile and relevant config/CA identity. The `manifest` job
-rejects missing, duplicate, wrong-platform and mixed-build records, and the
-`index` job re-validates the manifest before touching the registry. A failed
-matrix can leave individually checked images in GHCR without a complete manifest
+rejects missing, duplicate, wrong-platform and mixed-build records before
+registry authentication. Its publication step re-validates the manifest before
+changing release references. A failed matrix can leave individually checked
+images in GHCR without a complete manifest
 and without channel tags. Use **Re-run all jobs** so every record comes from one
 attempt. Pin digests for deployments; save both manifests before their 90-day
 artifact retention expires.
@@ -420,7 +430,7 @@ when building it so an attestation image index does not replace the image manife
 
 ## Publication checks and their limits
 
-Each job builds once and loads the result locally. The
+Each image is built once and loaded locally. The
 [filesystem helper](https://github.com/Rheosoph/flow-like/blob/dev/.github/scripts/container_publication.py)
 checks platform, the included root license and common credential paths without
 starting the container. Pinned Trivy `v0.69.3` scans image files, configuration
@@ -460,12 +470,18 @@ Reproduce failures in a trusted environment and handle raw reports as sensitive.
 
 ## Cache and build capacity
 
-The workflow uses native runners, at most sixteen parallel jobs, and two Cargo
-compilation jobs per runner. ARM64 runner access is required. Measure peak memory,
-disk and build time before raising those limits.
+The publication matrix uses native runners and permits at most eight build jobs
+at once. Fifteen helper-image builds share two jobs, one per architecture, and
+run sequentially. Rust and web images retain separate jobs, so the full set of
+64 images uses 51 build jobs. Each helper image keeps its own scans and digest
+record; any failed helper prevents publication of the complete release.
 
-Each image has a separate GitHub Actions layer-cache scope. Builder layers copy
-the source checkout, so do not export them to a public registry build-cache
+Rust builds use at most two Cargo compilation jobs per runner; AWS API and audit
+worker builds use one. ARM64 runner access is required. Measure peak memory,
+disk and build time before raising these limits.
+
+Images eligible for layer caching have separate GitHub Actions cache scopes.
+Builder layers copy the source checkout, so do not export them to a public registry build-cache
 package. Actions caches are also available to eligible PR workflows; credentials
 and private dependency source do not belong there.
 

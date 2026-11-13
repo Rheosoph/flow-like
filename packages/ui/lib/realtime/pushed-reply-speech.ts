@@ -25,7 +25,8 @@ export function followPushedReplies({
 }): { apply(reply: ReplyStream): void; dispose(): void } {
 	const handles = new Map<string, StreamedReply>();
 	const stalls = new Map<string, unknown>();
-	const finished = new Set<string>();
+	/** The last draft of each reply that needs nothing more; a later draft is its rewrite. */
+	const finished = new Map<string, number>();
 
 	const disarm = (id: string) => {
 		const timer = stalls.get(id);
@@ -33,16 +34,18 @@ export function followPushedReplies({
 		timers.clear(timer);
 		stalls.delete(id);
 	};
-	const finish = (id: string) => {
+	const finish = ({ messageId: id, draft }: ReplyStream) => {
 		disarm(id);
 		handles.delete(id);
 		finished.delete(id);
-		finished.add(id);
+		finished.set(id, draft);
 		if (finished.size > MAX_FINISHED) {
-			const oldest = finished.values().next().value;
+			const oldest = finished.keys().next().value;
 			if (oldest !== undefined) finished.delete(oldest);
 		}
 	};
+	const over = (reply: ReplyStream) =>
+		(finished.get(reply.messageId) ?? -1) >= reply.draft;
 
 	/** A speech stream for a reply that has none yet; none while this device cannot voice it. */
 	const open = (reply: ReplyStream) => {
@@ -53,38 +56,39 @@ export function followPushedReplies({
 			: null;
 		if (handle) handles.set(id, handle);
 		// Nothing opens after the end: the stored message is spoken the usual way.
-		else if (reply.state === "done" || reply.state === "dropped") finish(id);
+		else if (reply.state === "done" || reply.state === "dropped") finish(reply);
 		return handle ?? undefined;
 	};
-	const watch = (id: string, handle: StreamedReply) => {
+	const watch = (reply: ReplyStream, handle: StreamedReply) => {
+		const id = reply.messageId;
 		disarm(id);
 		stalls.set(
 			id,
 			timers.set(() => {
 				stalls.delete(id);
 				handle.end();
-				finish(id);
+				finish(reply);
 			}, stallMs),
 		);
 	};
 
 	return {
+		/** Takes the replies of the store in order; it ends a draft before it hands over the rewrite. */
 		apply(reply) {
-			const id = reply.messageId;
-			if (finished.has(id)) return;
-			const handle = handles.get(id) ?? open(reply);
+			if (over(reply)) return;
+			const handle = handles.get(reply.messageId) ?? open(reply);
 			if (!handle) return;
 			if (reply.state === "dropped") {
 				handle.cancel();
-				return finish(id);
+				return finish(reply);
 			}
 			handle.update(reply.text);
 			if (reply.state === "done") {
 				handle.end();
-				return finish(id);
+				return finish(reply);
 			}
 			if (reply.state === "working") handle.flush();
-			watch(id, handle);
+			watch(reply, handle);
 		},
 		dispose() {
 			for (const timer of stalls.values()) timers.clear(timer);

@@ -7,6 +7,7 @@ import type {
 	BotCapability,
 	BotLocation,
 } from "../../../state/backend-state/bot-state";
+import { APP_REFUSES_BOTS, refusesBots } from "./app-options";
 import type { BotDraftProblem, BotPresetTexts } from "./bot-draft";
 import { BOT_SERVER_LIMIT_REACHED, serverLimitFact } from "./bot-limits";
 import type { BotPreset } from "./bot-presets";
@@ -72,6 +73,11 @@ export function useBotProblemMessage() {
 				t("editor.problems.lookInvalid", { items: items.join(", ") }),
 			profile_required: () => t("editor.problems.profileRequired"),
 			device_required: () => t("editor.problems.deviceRequired"),
+			docker_requires_device: () =>
+				t(
+					"editor.problems.dockerRequiresDevice",
+					"Choose a managed device for Docker hosting, or explicitly switch back to running directly on the host.",
+				),
 		};
 		return (problem: BotDraftProblem): string =>
 			(messages[problem.code] as (problem: BotDraftProblem) => string)(problem);
@@ -112,10 +118,13 @@ export function useBotErrorMessage() {
 			BOT_CAPABILITIES_FIXED: () => t("editor.errors.fluxCapabilities"),
 			BOT_SECRET_LIMIT_REACHED: () => t("editor.errors.secretLimit"),
 			BOT_APP_LIMIT_REACHED: () => t("editor.errors.appLimit"),
+			[APP_REFUSES_BOTS]: (serverMessage) =>
+				serverMessage || t("editor.errors.appRefusesBots"),
 		};
 		return (error: unknown, fallback: string): string => {
 			const refusal = error instanceof ApiResponseError ? error : undefined;
-			const code = refusal?.code;
+			const code =
+				refusal?.code ?? (refusesBots(error) ? APP_REFUSES_BOTS : undefined);
 			return code && Object.hasOwn(messages, code)
 				? messages[code](refusal?.serverMessage ?? "")
 				: apiErrorMessage(error, fallback);

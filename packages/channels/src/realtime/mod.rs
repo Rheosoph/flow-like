@@ -60,7 +60,14 @@ impl Inbox {
     fn receive(&self, payload: &[u8]) {
         if valid_wakeup(payload) {
             self.wake.notify_one();
-        } else if let Some(replies) = &self.replies
+        } else {
+            self.reply(payload);
+        }
+    }
+
+    /// For a source that carries replies only: nothing that arrives there starts a replay.
+    fn reply(&self, payload: &[u8]) {
+        if let Some(replies) = &self.replies
             && let Some(reply) = valid_reply(payload)
         {
             replies(reply);
@@ -109,13 +116,7 @@ pub async fn listen(
             azure::listen(url, group, &inbox, &healthy).await
         }
         #[cfg(feature = "gcp")]
-        RealtimeTransport::GcpFirebaseRtdb {
-            database_url,
-            api_key,
-            custom_token,
-            path,
-            ..
-        } => gcp::listen(database_url, api_key, custom_token, path, &inbox, &healthy).await,
+        RealtimeTransport::GcpFirebaseRtdb { .. } => gcp::listen(transport, &inbox, &healthy).await,
         #[cfg(feature = "nats")]
         RealtimeTransport::Nats {
             url,
@@ -185,6 +186,24 @@ mod tests {
             futures_util::FutureExt::now_or_never(woken).is_none(),
             "a reply must not start a replay"
         );
+    }
+
+    #[test]
+    fn a_reply_only_source_never_wakes_the_replay() {
+        let received = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = received.clone();
+        let inbox = Inbox {
+            wake: Arc::new(Notify::new()),
+            replies: Some(Arc::new(move |reply: RealtimeReply| {
+                sink.lock().unwrap().push(reply.text)
+            })),
+        };
+        inbox.reply(br#"{"protocol_version":1,"kind":"invalidate","nonce":"n1"}"#);
+        inbox.reply(b"null");
+        inbox.reply(&serde_json::to_vec(&reply("Hello")).unwrap());
+        assert_eq!(*received.lock().unwrap(), ["Hello"]);
+        let woken = std::pin::pin!(inbox.wake.notified());
+        assert!(futures_util::FutureExt::now_or_never(woken).is_none());
     }
 
     #[test]

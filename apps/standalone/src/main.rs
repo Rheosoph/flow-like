@@ -171,6 +171,9 @@ REST, MCP and daemon placements currently support one replica."#)]
         #[arg(long)]
         headful: bool,
     },
+    /// Runs one bot inside the container selected by its enrolled device.
+    #[command(hide = true)]
+    BotContainerWorker,
     #[command(hide = true)]
     RunPlacement {
         placement: String,
@@ -286,6 +289,12 @@ async fn main() -> Result<()> {
     if let Commands::ModelWorker { engine } = &cli.command {
         return run_model_worker(*engine).await;
     }
+    if matches!(cli.command, Commands::BotContainerWorker) {
+        #[cfg(all(feature = "runtime", feature = "bot-host"))]
+        return flow_like_standalone::bot_host::container_child::run().await;
+        #[cfg(not(all(feature = "runtime", feature = "bot-host")))]
+        anyhow::bail!("This binary has no bot container worker");
+    }
     if let Commands::PlaygroundWorker {
         bot,
         data_dir,
@@ -293,8 +302,7 @@ async fn main() -> Result<()> {
         headful,
     } = cli.command
     {
-        return flow_like_standalone::playground::run_worker(bot, data_dir, display, headful)
-            .await;
+        return flow_like_standalone::playground::run_worker(bot, data_dir, display, headful).await;
     }
     if matches!(cli.command, Commands::ReleaseInfo) {
         println!(
@@ -842,6 +850,7 @@ async fn main() -> Result<()> {
         Commands::RunPlacement { .. }
         | Commands::ModelWorker { .. }
         | Commands::PlaygroundWorker { .. }
+        | Commands::BotContainerWorker
         | Commands::ReleaseInfo
         | Commands::CheckUpdate
         | Commands::Update

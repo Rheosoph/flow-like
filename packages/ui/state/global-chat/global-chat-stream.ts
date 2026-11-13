@@ -458,7 +458,29 @@ interface DriveOptions {
 	 * desktop (Tauri Channel — see {@link tauriStart}) and browser (HTTP+SSE — see
 	 * `global-chat-web-transport.ts`) transports; everything else in the engine is shared.
 	 */
-	start: (onChunk: (chunk: string) => void) => Promise<unknown>;
+	start: (
+		onChunk: (chunk: string) => void,
+		onModel?: (modelId: string) => void,
+	) => Promise<unknown>;
+}
+
+export function readNativeRunModel(
+	chunk: string,
+	runId: unknown,
+): string | undefined | null {
+	if (!chunk.startsWith("{")) return null;
+	let frame: Record<string, unknown>;
+	try {
+		frame = JSON.parse(chunk);
+	} catch {
+		return null;
+	}
+	if (!frame || frame.type !== "native_run_model" || frame.run_id !== runId) {
+		return null;
+	}
+	return typeof frame.model_id === "string" && frame.model_id.trim()
+		? frame.model_id
+		: undefined;
 }
 
 /**
@@ -471,7 +493,10 @@ export function tauriStart(
 	args: Record<string, unknown>,
 	beforeInvoke?: () => void,
 ) {
-	return async (onChunk: (chunk: string) => void) => {
+	return async (
+		onChunk: (chunk: string) => void,
+		onModel?: (modelId: string) => void,
+	) => {
 		// Tauri is imported lazily (mirrors use-copilot-sdk) so this module also loads on the web,
 		// where the caller uses `webGlobalChatStart` instead and never reaches this path.
 		const { Channel, invoke } = await import("@tauri-apps/api/core");
@@ -503,6 +528,11 @@ export function tauriStart(
 					})
 				: undefined;
 		channel.onmessage = (chunk) => {
+			const model = readNativeRunModel(chunk, args.runId);
+			if (model !== null) {
+				if (model) onModel?.(model);
+				return;
+			}
 			if (!autoControl?.accept(chunk)) onChunk(chunk);
 		};
 		try {
@@ -653,9 +683,19 @@ export async function driveGlobalChatStream({
 		syncMessage();
 	};
 
+	const onModel = (modelId: string) => {
+		responseMessage.run_context = {
+			...responseMessage.run_context,
+			schema: RUN_CONTEXT_SCHEMA,
+			provider: "bits",
+			effective_model_id: modelId,
+		};
+		syncMessage();
+	};
+
 	let invokeResult: unknown;
 	try {
-		invokeResult = await start(onChunk);
+		invokeResult = await start(onChunk, onModel);
 	} catch (error) {
 		const normalizedProvider = normalizeAIProvider(turnSelection.provider);
 		if (isAgentBackendProvider(normalizedProvider)) {

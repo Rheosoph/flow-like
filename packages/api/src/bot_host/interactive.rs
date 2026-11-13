@@ -45,6 +45,7 @@ pub struct InteractiveRef {
 /// The queued turn an interactive chat answers, once checked against the caller and the bot.
 #[derive(Debug, Clone)]
 pub(crate) struct InteractiveTurn {
+    pub usage: flow_like::flow::copilot::bot_usage::BotUsage,
     pub turn: bot_turn::Model,
     pub host_id: String,
     /// Set once [`Self::open_trail`] found the owner's direct conversation.
@@ -154,6 +155,7 @@ impl InteractiveTurn {
                     && turn.conversation_id == reference.conversation_id
             });
         Ok(turn.map(|turn| Self {
+            usage: Default::default(),
             turn,
             host_id: format!("{INTERACTIVE_HOST_PREFIX}{}", reference.client_run_id),
             trail: None,
@@ -196,6 +198,7 @@ impl InteractiveTurn {
                 trail.attach(&mut body);
             }
         }
+        self.usage.attach(&mut body);
         SendEntryRequest {
             message_id: reply_message_id(&self.turn.bot_id, &self.turn.trigger_message_id),
             kind: InboxEntryKind::Message,

@@ -30,6 +30,48 @@ const BOT = "bot_ada";
 const CONVERSATION = "conv_1";
 const target = { botId: BOT, conversationId: CONVERSATION };
 
+test("saved and pushed bot replies retain cache and compaction measurements", () => {
+	const usage = {
+		step_name: "Assistant",
+		stats: {
+			usage: {
+				prompt_tokens: 100,
+				completion_tokens: 10,
+				total_tokens: 110,
+				prompt_tokens_details: { cached_tokens: 80, cache_write_tokens: 0 },
+			},
+			context: {
+				estimated_tokens: 100,
+				context_window: 1_000,
+				reserved_output_tokens: 100,
+			},
+			compactions: [
+				{
+					kind: "turn",
+					trigger: "soft",
+					status: "completed",
+					before_tokens: 400,
+					after_tokens: 100,
+					duration_ms: 200,
+				},
+			],
+		},
+	};
+	const reply = entry(2, BOT, "Done", {
+		envelope: {
+			v: 1,
+			enc: "none",
+			body: { text: "Done", usage_stats: [usage] },
+		},
+	});
+	expect(
+		transcriptOf([reply], BOT, "bot:bot_ada").messages[0].usage_stats,
+	).toEqual([usage]);
+	expect(
+		pushedTranscript([reply], BOT, "bot:bot_ada", []).messages[0].usage_stats,
+	).toEqual([usage]);
+});
+
 function entry(
 	seq: number,
 	sender: string,

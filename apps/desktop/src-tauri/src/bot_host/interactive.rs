@@ -135,6 +135,7 @@ enum Home {
 /// An interactive run's way to the bot's inbox: the local store for a conversation on this
 /// computer, the hub for an account conversation.
 pub struct InteractiveRun {
+    pub usage: flow_like::flow::copilot::bot_usage::BotUsage,
     bot_id: String,
     args: InteractiveArgs,
     home: Home,
@@ -162,6 +163,7 @@ impl InteractiveRun {
             Home::Account(hub?)
         };
         Some(Self {
+            usage: Default::default(),
             bot_id: bot_id.to_owned(),
             args,
             home,
@@ -520,6 +522,7 @@ impl InteractiveRun {
         });
         if let Some(code) = error_code {
             body["error"] = json!({ "code": code });
+            self.usage.attach(&mut body);
             return body;
         }
         if let Some(notes) = &self.notes {
@@ -529,6 +532,7 @@ impl InteractiveRun {
         if let Some(trail) = &self.trail {
             trail.attach(&mut body);
         }
+        self.usage.attach(&mut body);
         body
     }
 

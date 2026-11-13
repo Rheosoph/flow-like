@@ -37,6 +37,7 @@ mod routes;
 pub mod alerting;
 pub mod audit;
 mod bit_pricing;
+pub(crate) mod bot_app_gate;
 pub(crate) mod bot_caller;
 pub(crate) mod bot_flow;
 pub mod bot_host;

@@ -1,10 +1,14 @@
 //! The server's `Scheduler`: a bot's tasks in the `BotTask` table, kept through the same
 //! functions the owner's endpoints use, so caps and schedule rules are the API's. A task the bot
 //! schedules fires in the group or chat of the turn that asked for it, read from the turn the
-//! server keeps, never from the tool's arguments.
+//! server keeps, never from the tool's arguments; the owner's message that asked for it, which
+//! its runs act on, comes from that turn the same way.
 
 use crate::{
-    bot_host::task_schedules,
+    bot_host::{
+        task_authority::{TaskEdit, author_of_turn},
+        task_schedules,
+    },
     entity::bot_task,
     routes::{
         bots::{lock_bot, tasks},
@@ -35,6 +39,14 @@ impl ApiScheduler {
             bot_id: bot_id.to_string(),
             turn_id: turn_id.to_string(),
         }
+    }
+}
+
+impl ApiScheduler {
+    async fn scope(&self) -> Result<tasks::TaskScope> {
+        tasks::scope_of_turn(&self.state.db, &self.owner_id, &self.bot_id, &self.turn_id)
+            .await
+            .map_err(|error| anyhow!("{error}"))
     }
 }
 
@@ -94,12 +106,13 @@ impl Scheduler for ApiScheduler {
                 Box::pin(async move {
                     lock_bot(txn, &bot).await?;
                     let origin = tasks::origin_of_turn(txn, &owner, &bot, &turn).await?;
+                    let author = author_of_turn(txn, &owner, &bot, Some(turn.as_str())).await?;
                     tasks::create_in(
                         txn,
                         &owner,
                         &bot,
                         request,
-                        TaskCreator::Bot,
+                        author,
                         origin.as_ref(),
                         now_millis(),
                     )
@@ -113,31 +126,40 @@ impl Scheduler for ApiScheduler {
     }
 
     async fn list(&self) -> Result<Vec<BotTask>> {
-        let rows = tasks::list_in(&self.state.db, &self.owner_id, &self.bot_id)
+        let scope = self.scope().await?;
+        let rows = tasks::list_scoped_in(&self.state.db, &self.owner_id, &self.bot_id, &scope)
             .await
             .map_err(|error| anyhow!("{error}"))?;
         tasks_of(&self.state.db, rows).await
     }
 
     async fn update(&self, task_id: &str, request: UpdateBotTask) -> Result<Option<BotTask>> {
+        let scope = self.scope().await?;
         let result = self
             .state
             .transaction(|txn| {
-                let (owner, bot, task, request) = (
+                let (owner, bot, task, request, scope, turn) = (
                     self.owner_id.clone(),
                     self.bot_id.clone(),
                     task_id.to_string(),
                     request.clone(),
+                    scope.clone(),
+                    self.turn_id.clone(),
                 );
                 Box::pin(async move {
                     lock_bot(txn, &bot).await?;
-                    tasks::update_in(
+                    let edit = TaskEdit {
+                        change: request,
+                        author: author_of_turn(txn, &owner, &bot, Some(turn.as_str())).await?,
+                    };
+                    tasks::update_scoped_in(
                         txn,
                         &owner,
                         &bot,
                         &task,
-                        request,
+                        edit,
                         chrono::Utc::now().fixed_offset(),
+                        &scope,
                     )
                     .await
                 })
@@ -154,7 +176,16 @@ impl Scheduler for ApiScheduler {
     }
 
     async fn cancel(&self, task_id: &str) -> Result<bool> {
-        match tasks::delete_in(&self.state.db, &self.owner_id, &self.bot_id, task_id).await {
+        let scope = self.scope().await?;
+        let deleted = tasks::delete_scoped_in(
+            &self.state.db,
+            &self.owner_id,
+            &self.bot_id,
+            task_id,
+            &scope,
+        )
+        .await;
+        match deleted {
             Ok(()) => {
                 task_schedules::remove(&self.state, task_id).await;
                 Ok(true)

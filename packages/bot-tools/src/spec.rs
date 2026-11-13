@@ -61,6 +61,7 @@ fn build_specs() -> Vec<ToolSpec> {
     all.extend(crate::email::specs());
     all.extend(crate::notify::specs());
     all.extend(crate::people::specs());
+    all.extend(crate::rooms::specs());
     all.extend(crate::user_context::specs());
     all.extend(crate::schedule::specs());
     all.extend(crate::skills::specs());

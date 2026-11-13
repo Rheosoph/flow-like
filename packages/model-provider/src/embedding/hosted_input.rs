@@ -19,6 +19,19 @@ pub fn supports_internal_multimodal(provider: &EmbeddingModelProvider) -> bool {
 }
 
 pub const OPENROUTER_MULTIMODAL_MODEL: &str = "google/gemini-embedding-2";
+pub const CLOUDFLARE_MULTIMODAL_MODEL: &str = "@cf/google/embeddinggemma-2";
+
+pub fn supports_cloudflare_multimodal(provider: &EmbeddingModelProvider) -> bool {
+    provider.remote.as_ref().is_some_and(|remote| {
+        remote.implementation == Some(RemoteEmbeddingProvider::CloudflareWorkersAI)
+            && remote
+                .model_id
+                .as_deref()
+                .filter(|model| !model.trim().is_empty())
+                .or(provider.provider.model_id.as_deref())
+                .is_some_and(|model| model.trim() == CLOUDFLARE_MULTIMODAL_MODEL)
+    })
+}
 
 pub fn supports_openrouter_multimodal(provider: &EmbeddingModelProvider) -> bool {
     provider.remote.as_ref().is_some_and(|remote| {
@@ -33,7 +46,9 @@ pub fn supports_openrouter_multimodal(provider: &EmbeddingModelProvider) -> bool
 }
 
 pub fn supports_hosted_multimodal(provider: &EmbeddingModelProvider) -> bool {
-    supports_internal_multimodal(provider) || supports_openrouter_multimodal(provider)
+    supports_internal_multimodal(provider)
+        || supports_openrouter_multimodal(provider)
+        || supports_cloudflare_multimodal(provider)
 }
 
 /// Ordered parts of one input produce one vector. Repeated media parts remain distinct.

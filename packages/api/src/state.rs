@@ -11,7 +11,8 @@ use flow_like::hub::{Environment, Hub};
 use flow_like::state::{FlowLikeState, FlowNodeRegistryInner};
 use flow_like::utils::compression::ConditionalRead;
 use flow_like_secrets::{
-    EnvProviderConfig, ExposeSecret, ProviderConfig, SecretRef, SecretStore, SecretStoreConfig,
+    EnvProviderConfig, ExposeSecret, ProviderConfig, SecretError, SecretRef, SecretStore,
+    SecretStoreConfig,
 };
 use flow_like_types::bail;
 use flow_like_types::dispatch::WasmPackageRef;
@@ -847,17 +848,12 @@ async fn load_service_secrets(secrets: &SecretStore) -> ServiceSecrets {
     }
 
     let encryption_key = {
-        let key_material = secrets
+        let lookup = secrets
             .get_secret_string(&SecretRef::new("SINK_TOKEN_ENCRYPTION_KEY"))
             .await
-            .map(|s| s.expose_secret().to_string())
-            .unwrap_or_else(|_| {
-                tracing::warn!(
-                    "SINK_TOKEN_ENCRYPTION_KEY not set - using insecure development key. \
-                    Set SINK_TOKEN_ENCRYPTION_KEY in production!"
-                );
-                "flow-like-dev-encryption-key-DO-NOT-USE-IN-PRODUCTION".to_string()
-            });
+            .map(|s| s.expose_secret().to_string());
+        let key_material = encryption_key_material(lookup, cfg!(debug_assertions))
+            .unwrap_or_else(|error| panic!("{error}"));
         *blake3::hash(key_material.as_bytes()).as_bytes()
     };
 
@@ -865,6 +861,32 @@ async fn load_service_secrets(secrets: &SecretStore) -> ServiceSecrets {
         sink_secret,
         maintenance_token,
         encryption_key,
+    }
+}
+
+const DEVELOPMENT_ENCRYPTION_KEY: &str = "flow-like-dev-encryption-key-DO-NOT-USE-IN-PRODUCTION";
+
+/// The material the token encryption key is derived from. Bot secrets, webhook secrets, OAuth
+/// grants and push tokens are sealed with it, so only a debug build may use the development key,
+/// and only when the secret is absent: a lookup that failed never falls back.
+fn encryption_key_material(
+    lookup: Result<String, SecretError>,
+    allow_development_key: bool,
+) -> Result<String, String> {
+    match lookup {
+        Ok(material) if !material.trim().is_empty() => Ok(material),
+        Ok(_) => Err(
+            "SINK_TOKEN_ENCRYPTION_KEY is empty; the API does not start without this key".into(),
+        ),
+        Err(error) if allow_development_key && error.is_not_found() => {
+            tracing::warn!(
+                "SINK_TOKEN_ENCRYPTION_KEY not set - this debug build uses the insecure development key"
+            );
+            Ok(DEVELOPMENT_ENCRYPTION_KEY.to_string())
+        }
+        Err(error) => Err(format!(
+            "SINK_TOKEN_ENCRYPTION_KEY could not be loaded ({error}); the API does not start without this key"
+        )),
     }
 }
 
@@ -2616,6 +2638,34 @@ mod tests {
                 flow_like::flow_like_storage::Path::from("apps").join("app-1"),
             ),
         ))
+    }
+
+    #[test]
+    fn the_encryption_key_never_falls_back_after_a_failed_lookup() {
+        use super::{DEVELOPMENT_ENCRYPTION_KEY, encryption_key_material};
+        use flow_like_secrets::{SecretError, SecretProviderKind};
+
+        let throttled = || {
+            Err(SecretError::provider_failure(
+                SecretProviderKind::AwsParameterStore,
+                "ThrottlingException",
+            ))
+        };
+        let absent = || Err(SecretError::SecretNotFound(SecretProviderKind::Env));
+
+        for allow_development_key in [false, true] {
+            assert!(encryption_key_material(throttled(), allow_development_key).is_err());
+            assert!(encryption_key_material(Ok("  ".into()), allow_development_key).is_err());
+            assert_eq!(
+                encryption_key_material(Ok("configured".into()), allow_development_key).as_deref(),
+                Ok("configured")
+            );
+        }
+        assert!(encryption_key_material(absent(), false).is_err());
+        assert_eq!(
+            encryption_key_material(absent(), true).as_deref(),
+            Ok(DEVELOPMENT_ENCRYPTION_KEY)
+        );
     }
 
     #[test]

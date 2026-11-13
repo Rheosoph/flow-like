@@ -23,6 +23,8 @@ model Bot {
   profileId       String?
   /// SERVER | DESKTOP | DEVICE
   location        String                @default("SERVER")
+  /// NATIVE | DOCKER; null on older bots means NATIVE.
+  executionMode   String?
   deviceId        String?
   apps            BotApp[]
   secrets         BotSecret[]
@@ -349,6 +351,12 @@ model BotTask {
   conversationId String?
   /// The person whose request scheduled the task; its trigger is sent as them.
   requestedBy    String?
+  /// The owner wrote the instruction themselves, not through a bot's turn. NULL on rows from
+  /// before this was recorded, which authorize nothing.
+  ownerWritten          Boolean?
+  /// The owner's chat with the bot and the message in it that asked the bot for the task.
+  requestConversationId String?
+  requestMessageId      String?
 
   @@index([botId])
   @@index([enabled, nextRunAt])

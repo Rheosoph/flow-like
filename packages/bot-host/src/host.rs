@@ -19,6 +19,8 @@ pub const CODE_SESSION_CHANGED: &str = "BOT_TURN_SESSION_CHANGED";
 pub const CODE_CANCELLED: &str = "BOT_TURN_CANCELLED";
 pub const CODE_REPLY_REFUSED: &str = "BOT_TURN_REPLY_REFUSED";
 pub const CODE_SETUP: &str = "BOT_TURN_SETUP";
+pub const CODE_NO_MODEL: &str = "BOT_TURN_NO_MODEL";
+pub const NO_DESKTOP_MODEL_TEXT: &str = "no language model it can use runs on this desktop";
 
 pub const MAX_REPLY_CHARS: usize = 48_000;
 pub const MAX_FAILURE_DETAIL_CHARS: usize = 500;
@@ -26,6 +28,8 @@ pub const FINISHED_KEPT: usize = 50;
 
 #[derive(Debug, Clone)]
 pub struct TurnJob {
+    /// Final model usage snapshots retained by the host with the reply.
+    pub usage: flow_like::flow::copilot::bot_usage::BotUsage,
     pub run_id: String,
     pub bot_id: String,
     pub conversation_id: String,
@@ -70,6 +74,9 @@ pub struct TurnJob {
     pub trail: Option<flow_like::flow::copilot::ToolTrail>,
     /// The files the bot attaches to its reply, for a host that posts them with it.
     pub reply_files: Option<flow_like::flow::copilot::ReplyFiles>,
+    /// Takes the reply while the model writes it, for a live call on this computer
+    /// ([`crate::live_reply`]); a runner given one hands text on as it comes.
+    pub reply_stream: Option<flow_like::flow::copilot::reply_stream::ReplySink>,
 }
 
 impl TurnJob {
@@ -102,9 +109,25 @@ pub enum RunError {
     SessionChanged,
 }
 
+/// Whether a run's failure says the profile has no language model the host can run.
+pub fn names_missing_model(message: &str) -> bool {
+    let in_profile = flow_like::profile::NoRunnableModel::InProfile.to_string();
+    message.contains(&in_profile) || message.contains(NO_DESKTOP_MODEL_TEXT)
+}
+
+/// The code a failed run is reported with: `BOT_TURN_NO_MODEL` when no model could run it.
+pub fn failure_code<'a>(default: &'a str, message: &str) -> &'a str {
+    if names_missing_model(message) {
+        CODE_NO_MODEL
+    } else {
+        default
+    }
+}
+
 /// What a run, bounded by its deadline, ends with.
 pub type RunOutcome = Result<Result<String, RunError>, tokio::time::error::Elapsed>;
-pub type RunFuture<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = RunOutcome> + Send + 'a>>;
+pub type RunFuture<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = RunOutcome> + Send + 'a>>;
 
 #[async_trait]
 pub trait TurnRunner: Send + Sync + 'static {
@@ -189,6 +212,12 @@ pub trait TurnEvents: Send + Sync + 'static {
 
     /// A reply the person did not ask for was posted; show it as a notification.
     fn alert(&self, _alert: &Alert) {}
+
+    /// Where a live-call reply goes while it is written, for a host whose caller is on this
+    /// computer; `None` streams nothing.
+    fn replies(&self) -> Option<Arc<dyn crate::live_reply::ReplyOutlet>> {
+        None
+    }
 }
 
 /// A turn as `bot-host://turn` and `bot_host_turns` show it.

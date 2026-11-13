@@ -460,6 +460,7 @@ pub async fn extract_with_model(
             model: options.model_label.clone().unwrap_or_default(),
             usage: attempt_usage.clone(),
             duration_ms: Some(attempt_start.elapsed().as_millis() as u64),
+            purpose: None,
         });
 
         let mut submitted: Option<Value> = None;
@@ -535,6 +536,7 @@ pub async fn extract_with_model(
                     duration_ms: Some(start.elapsed().as_millis() as u64),
                     iterations: Some(attempt),
                     calls,
+                    ..Default::default()
                 };
                 return Ok(Extraction { value, stats });
             }

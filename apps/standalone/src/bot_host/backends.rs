@@ -4,22 +4,29 @@
 
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD};
+use flow_like::{bit::Bit, models::llm::ModelUsageContext, state::FlowLikeState};
 use flow_like_bot_host::hub::TurnHub;
+use flow_like_bot_tools::image::{
+    ImageUnavailable, is_local_image_bit, is_own_key_image_bit, with_provider_params,
+};
 use flow_like_bot_tools::services::{
     CallAudit, CallBudget, ConnectorEntry, ConnectorSource, Credential,
 };
 use flow_like_bot_tools::{
-    Contact, Delivery, SkillHost, NoticeReceipt, OwnerNotice, OwnerNotifier, PeopleBackend, PersonMessage,
-    Scheduler,
+    Contact, Delivery, NoticeReceipt, OwnerNotice, OwnerNotifier, PeopleBackend, PersonMessage,
+    Scheduler, SkillHost, SkillToolSpec,
     email::{MailBackend, MailFailure, MailFile, OutgoingMail, ReplyMail, SentMail, failure},
 };
+use flow_like_bot_tools_host::AppAccess;
 use flow_like_types::{
     Result, anyhow,
     bot_skill::{BotSkill, CreateBotSkill, SkillSource, SkillStatus},
     bot_task::{BotTask, CreateBotTask, UpdateBotTask},
 };
+use flow_like_wasm::{HeadlessRun, PackagePermissions, WasmCapabilities, WasmNodeLogic};
+use serde::Deserialize;
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 /// The turn's bot-token hub and the bot it acts as.
 #[derive(Clone)]
@@ -183,8 +190,349 @@ impl SkillHost for HubSkills {
             .hub
             .write(&self.0.path("skills/propose"), Vec::new(), body)
             .await
-            .map_err(|failure| anyhow!("Proposing the skill '{}' failed: {failure}", request.name))?;
+            .map_err(|failure| {
+                anyhow!("Proposing the skill '{}' failed: {failure}", request.name)
+            })?;
         Ok(skill_of(&self.0.bot_id, &created))
+    }
+}
+
+/// The sign-in of the bot's own-key image model: the hub hands out the model's provider
+/// `params` for one call while the turn runs; they stay in memory for that call.
+pub struct HubImageSignIn(pub BotRoutes);
+
+impl HubImageSignIn {
+    async fn params(&self) -> Result<Value> {
+        let answer = self
+            .0
+            .hub
+            .write(
+                &self.0.path("image-model/credential"),
+                Vec::new(),
+                json!({}),
+            )
+            .await
+            .map_err(|failure| {
+                anyhow!("The sign-in for the bot's image model failed: {failure}")
+            })?;
+        answer
+            .get("params")
+            .filter(|params| params.is_object())
+            .cloned()
+            .ok_or_else(|| anyhow!("The hub sent no sign-in for the bot's image model"))
+    }
+}
+
+/// The image Bit one `image_generate` call runs with on this device: a hosted model as the
+/// claim holds it, an own-key model with its sign-in from the hub, never a local model.
+pub async fn image_bit_for_call(
+    bit: &Bit,
+    sign_in: &HubImageSignIn,
+) -> std::result::Result<Bit, ImageUnavailable> {
+    if is_local_image_bit(bit) {
+        return Err(ImageUnavailable::Unusable(format!(
+            "'{}' is a local stable-diffusion model that runs on its owner's desktop, and a bot on a device runs no local image models. The owner can pick a hosted image model, or one signed in with their own key, in the bot's settings",
+            bit.id
+        )));
+    }
+    if !is_own_key_image_bit(bit) {
+        return Ok(bit.clone());
+    }
+    let params = sign_in
+        .params()
+        .await
+        .map_err(|error| ImageUnavailable::Unusable(format!("{error:#}")))?;
+    Ok(with_provider_params(bit.clone(), params))
+}
+
+const MAX_PACKAGE_BYTES: usize = 128 * 1024 * 1024;
+
+/// What a package skill's tool runs with on this device: the bot's workspace as its storage and
+/// the turn's executor token for models.
+pub struct PackageRun {
+    pub state: Arc<FlowLikeState>,
+    /// The turn's executor token as of the call; the hub renews it while the turn runs.
+    pub token: Arc<dyn Fn() -> Option<String> + Send + Sync>,
+    pub workspace: String,
+    pub access: Arc<dyn AppAccess>,
+    pub turn_id: String,
+    pub owner_id: String,
+    pub usage: ModelUsageContext,
+}
+
+/// The package one skill names, as the hub signs it for this turn.
+#[derive(Debug, Deserialize)]
+struct SkillPackage {
+    package_id: String,
+    version: String,
+    wasm_url: String,
+    wasm_hash: String,
+    #[serde(default)]
+    permissions: Option<Value>,
+}
+
+/// The bot's skills with their package tools run on this device. The hub names the version the
+/// bot's workspace pins and signs a download of its portable WASM; the bytes must match the
+/// hub's hash, and every tool runs in the sandbox this device runs flow packages in, with the
+/// manifest's permissions. A tool that reaches the network or writes asks the owner first, as
+/// on the desktop.
+pub struct DeviceSkills {
+    hub: HubSkills,
+    run: PackageRun,
+    http: reqwest::Client,
+    loaded: tokio::sync::Mutex<HashMap<String, Arc<Vec<WasmNodeLogic>>>>,
+}
+
+impl DeviceSkills {
+    pub fn new(hub: HubSkills, run: PackageRun) -> Self {
+        let http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(120))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap_or_default();
+        Self {
+            hub,
+            run,
+            http,
+            loaded: tokio::sync::Mutex::default(),
+        }
+    }
+
+    async fn nodes(&self, skill: &BotSkill) -> Result<Arc<Vec<WasmNodeLogic>>> {
+        if skill.id.is_empty()
+            || !skill
+                .id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(anyhow!("Skill '{}' has an unusable id", skill.name));
+        }
+        let mut loaded = self.loaded.lock().await;
+        if let Some(nodes) = loaded.get(&skill.id) {
+            return Ok(nodes.clone());
+        }
+        let routes = &self.hub.0;
+        let answer = routes
+            .hub
+            .read(
+                &routes.path(&format!("skills/{}/package", skill.id)),
+                Vec::new(),
+            )
+            .await
+            .map_err(|failure| {
+                anyhow!(
+                    "The package of skill '{}' is unavailable: {failure}",
+                    skill.name
+                )
+            })?;
+        let package: SkillPackage = serde_json::from_value(answer)
+            .map_err(|error| anyhow!("The hub sent an unusable skill package: {error}"))?;
+        let bytes = self.download(&package).await?;
+        let nodes = Arc::new(package_nodes(&package, &bytes).await?);
+        tracing::info!(
+            bot_id = %routes.bot_id,
+            skill = %skill.name,
+            package_id = %package.package_id,
+            version = %package.version,
+            "[bot_host] loaded a skill package"
+        );
+        loaded.insert(skill.id.clone(), nodes.clone());
+        Ok(nodes)
+    }
+
+    async fn download(&self, package: &SkillPackage) -> Result<Vec<u8>> {
+        let label = format!("'{}' v{}", package.package_id, package.version);
+        let failed = |error: reqwest::Error| anyhow!("Downloading package {label} failed: {error}");
+        let mut response = self
+            .http
+            .get(&package.wasm_url)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|error| failed(error.without_url()))?;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|error| failed(error.without_url()))?
+        {
+            if bytes.len() + chunk.len() > MAX_PACKAGE_BYTES {
+                return Err(anyhow!(
+                    "Package {label} is larger than {MAX_PACKAGE_BYTES} bytes"
+                ));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let actual = blake3::hash(&bytes).to_hex();
+        if !actual.as_str().eq_ignore_ascii_case(&package.wasm_hash) {
+            return Err(anyhow!(
+                "Package {label} does not match the hash the hub named ({} instead of {})",
+                actual,
+                package.wasm_hash
+            ));
+        }
+        Ok(bytes)
+    }
+}
+
+async fn tool_node<'a>(
+    nodes: &'a [WasmNodeLogic],
+    skill: &BotSkill,
+    tool: &str,
+) -> Result<Option<&'a WasmNodeLogic>> {
+    if !skill.tools.iter().any(|known| known == tool) {
+        return Ok(None);
+    }
+    for node in nodes {
+        let entry = node
+            .tool_entry()
+            .await
+            .map_err(|error| anyhow!("{error}"))?;
+        if entry.name == tool {
+            return Ok(Some(node));
+        }
+    }
+    Ok(None)
+}
+
+/// The package's nodes in this device's package sandbox.
+async fn package_nodes(package: &SkillPackage, bytes: &[u8]) -> Result<Vec<WasmNodeLogic>> {
+    let permissions: PackagePermissions = match &package.permissions {
+        Some(value) => serde_json::from_value(value.clone()).map_err(|error| {
+            anyhow!(
+                "Package '{}' v{} has unreadable permissions: {error}",
+                package.package_id,
+                package.version
+            )
+        })?,
+        None => PackagePermissions::default(),
+    };
+    let security = crate::dependencies::package_security(&permissions)?;
+    let engine = skill_engine()?;
+    let (loaded, definitions) =
+        crate::dependencies::package_definitions(&engine, bytes, &security).await?;
+    Ok(definitions
+        .into_iter()
+        .map(|definition| {
+            crate::dependencies::package_node(
+                &loaded,
+                &engine,
+                &security,
+                definition,
+                &package.package_id,
+            )
+        })
+        .collect())
+}
+
+fn skill_engine() -> Result<Arc<flow_like_wasm::WasmEngine>> {
+    static ENGINE: std::sync::Mutex<Option<Arc<flow_like_wasm::WasmEngine>>> =
+        std::sync::Mutex::new(None);
+    let mut engine = ENGINE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(engine) = engine.as_ref() {
+        return Ok(engine.clone());
+    }
+    let made = crate::dependencies::package_engine()?;
+    *engine = Some(made.clone());
+    Ok(made)
+}
+
+/// Whether a node reaches the network or writes: those tools ask the owner first.
+fn gating(capabilities: WasmCapabilities) -> (bool, bool) {
+    (
+        capabilities.intersects(WasmCapabilities::NETWORK_ALL),
+        capabilities.intersects(
+            WasmCapabilities::STORAGE_WRITE
+                | WasmCapabilities::STORAGE_DELETE
+                | WasmCapabilities::DATABASE_WRITE
+                | WasmCapabilities::HTTP_WRITE,
+        ),
+    )
+}
+
+fn has_storage(capabilities: WasmCapabilities) -> bool {
+    capabilities.intersects(
+        WasmCapabilities::STORAGE_READ
+            | WasmCapabilities::STORAGE_WRITE
+            | WasmCapabilities::STORAGE_DELETE,
+    )
+}
+
+#[async_trait]
+impl SkillHost for DeviceSkills {
+    async fn get(&self, name: &str) -> Result<Option<BotSkill>> {
+        self.hub.get(name).await
+    }
+
+    async fn propose(&self, request: CreateBotSkill) -> Result<BotSkill> {
+        self.hub.propose(request).await
+    }
+
+    async fn tool_specs(&self, skill: &BotSkill) -> Result<Vec<SkillToolSpec>> {
+        if skill.source.package_id().is_none() {
+            return Ok(Vec::new());
+        }
+        let nodes = self.nodes(skill).await?;
+        let mut specs = Vec::new();
+        for node in nodes.iter() {
+            let entry = node
+                .tool_entry()
+                .await
+                .map_err(|error| anyhow!("{error}"))?;
+            if !skill.tools.contains(&entry.name) {
+                continue;
+            }
+            let info = flow_like_wasm::skill_call::tool_info(&entry);
+            let (network, writes) = gating(node.security().capabilities);
+            specs.push(SkillToolSpec {
+                name: info.name,
+                description: info.description,
+                input_schema: info.input_schema,
+                network,
+                writes,
+            });
+        }
+        Ok(specs)
+    }
+
+    async fn call(&self, skill: &BotSkill, tool: &str, arguments: Value) -> Result<Value> {
+        if self.run.workspace.is_empty() {
+            return Err(anyhow!("The bot has no workspace for '{tool}' to use"));
+        }
+        let nodes = self.nodes(skill).await?;
+        let node = tool_node(&nodes, skill, tool)
+            .await?
+            .ok_or_else(|| anyhow!("The package has no tool '{tool}'"))?;
+        let workspace_store = if has_storage(node.security().capabilities) {
+            Some(
+                self.run
+                    .access
+                    .store(&self.run.workspace)
+                    .await
+                    .map_err(|error| {
+                        anyhow!("The bot's workspace is unavailable to '{tool}': {error}")
+                    })?,
+            )
+        } else {
+            None
+        };
+        node.run_headless(
+            HeadlessRun {
+                app_state: self.run.state.clone(),
+                token: (self.run.token)(),
+                workspace: self.run.workspace.clone(),
+                workspace_store,
+                turn_id: self.run.turn_id.clone(),
+                user_id: self.run.owner_id.clone(),
+                usage: Some(self.run.usage.clone()),
+            },
+            &arguments,
+        )
+        .await
+        .map_err(|error| anyhow!(error))
     }
 }
 
@@ -227,7 +575,9 @@ impl ConnectorSource for HubConnectors {
             .routes
             .hub
             .write(
-                &self.routes.path(&format!("connectors/{connector_id}/credential")),
+                &self
+                    .routes
+                    .path(&format!("connectors/{connector_id}/credential")),
                 Vec::new(),
                 json!({}),
             )
@@ -259,6 +609,37 @@ impl ConnectorSource for HubConnectors {
 pub struct HubPeople(pub BotRoutes);
 
 pub struct HubUserContext(pub BotRoutes);
+
+/// `room_invite` through the hub, into the conversation the turn runs in.
+pub struct HubRooms(pub BotRoutes);
+
+#[async_trait]
+impl flow_like_bot_tools::RoomInvites for HubRooms {
+    async fn invite(
+        &self,
+        person: &flow_like_bot_tools::InviteTarget,
+    ) -> Result<flow_like_bot_tools::InviteOutcome> {
+        let room = self
+            .0
+            .conversation_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("Inviting people needs the group chat the turn runs in"))?;
+        let path = self.0.path(&format!("rooms/{room}/invitations"));
+        match self
+            .0
+            .hub
+            .write(&path, Vec::new(), json!({ "person": person.value() }))
+            .await
+        {
+            Ok(reply) => flow_like_bot_tools::rooms::hub_reply(&reply),
+            Err(failure) => failure
+                .code
+                .as_deref()
+                .and_then(|code| flow_like_bot_tools::rooms::hub_refusal(code, &failure.message))
+                .ok_or_else(|| anyhow!("Inviting '{}' failed: {failure}", person.value())),
+        }
+    }
+}
 
 #[async_trait]
 impl flow_like_bot_tools::user_context::UserContextBackend for HubUserContext {
@@ -734,10 +1115,7 @@ mod tests {
             "id": "s1", "name": "invoices", "description": "d", "body": "b",
             "source": "import", "status": "active", "tools": [], "updated_at": "t"
         });
-        let calls = Calls::answering(vec![
-            Ok(json!({ "skills": [skill.clone()] })),
-            Ok(skill),
-        ]);
+        let calls = Calls::answering(vec![Ok(json!({ "skills": [skill.clone()] })), Ok(skill)]);
         let skills = HubSkills(routes(&calls));
         let found = skills.get("invoices").await.unwrap().expect("listed");
         assert_eq!(found.status, SkillStatus::Active);
@@ -771,6 +1149,235 @@ mod tests {
             (calls[0].0.as_str(), calls[0].1.as_str()),
             ("POST", "bots/bot1/connectors/c1/credential")
         );
+    }
+
+    fn skill_module() -> Vec<u8> {
+        let pin = |name: &str, pin_type: &str| {
+            json!({
+                "name": name, "friendly_name": name, "description": "",
+                "pin_type": pin_type, "data_type": "String",
+            })
+        };
+        let node = |name: &str, permissions: Value| {
+            json!({
+                "name": name, "friendly_name": name, "description": "A test tool",
+                "category": "Tests", "permissions": permissions,
+                "pins": [pin("text", "Input"), pin("echo", "Output")],
+            })
+        };
+        let definitions = json!([
+            node("skill_echo", json!([])),
+            node("skill_fetch", json!(["network:http"])),
+            node("skill_hidden", json!([])),
+        ])
+        .to_string();
+        let result = json!({ "outputs": { "echo": "hi" } }).to_string();
+        let escape = |text: &str| {
+            text.bytes()
+                .map(|byte| format!("\\{byte:02x}"))
+                .collect::<String>()
+        };
+        let at: u64 = 8192;
+        wat::parse_str(format!(
+            r#"(module
+            (memory (export "memory") 1)
+            (data (i32.const 0) "{}")
+            (data (i32.const {at}) "{}")
+            (func (export "get_nodes") (result i64) i64.const {})
+            (func (export "run") (param i32 i32) (result i64) i64.const {}))"#,
+            escape(&definitions),
+            escape(&result),
+            definitions.len(),
+            (at << 32) | result.len() as u64,
+        ))
+        .unwrap()
+    }
+
+    struct NoStorage;
+
+    #[async_trait]
+    impl AppAccess for NoStorage {
+        async fn store(
+            &self,
+            app_id: &str,
+        ) -> Result<flow_like_storage::files::store::FlowLikeStore> {
+            Err(anyhow!("No storage for '{app_id}' in this test"))
+        }
+
+        async fn connection(&self, app_id: &str) -> Result<flow_like_storage::lancedb::Connection> {
+            Err(anyhow!("No database for '{app_id}' in this test"))
+        }
+    }
+
+    async fn serve(bytes: Vec<u8>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/package.wasm",
+            axum::routing::get(move || {
+                let bytes = bytes.clone();
+                async move { bytes }
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{address}/package.wasm")
+    }
+
+    fn package_skill() -> BotSkill {
+        skill_of(
+            "bot1",
+            &json!({
+                "id": "s1", "name": "tools", "description": "d", "body": "b",
+                "source": "package:acme.tools@1.0.0", "status": "active",
+                "tools": ["skill_echo", "skill_fetch"], "updated_at": "t"
+            }),
+        )
+    }
+
+    async fn device_skills(calls: &Arc<Calls>, root: &std::path::Path) -> DeviceSkills {
+        let state = crate::runtime::offline_state(root, None).await.unwrap();
+        DeviceSkills::new(
+            HubSkills(routes(calls)),
+            PackageRun {
+                state,
+                token: Arc::new(|| None),
+                workspace: "ws".into(),
+                access: Arc::new(NoStorage),
+                turn_id: "turn".into(),
+                owner_id: "owner".into(),
+                usage: ModelUsageContext {
+                    app_id: Some("ws".into()),
+                    run_id: Some("turn".into()),
+                    api_base_url: None,
+                },
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn package_skill_tools_run_in_the_device_sandbox_from_the_hubs_signed_package() {
+        let bytes = skill_module();
+        let url = serve(bytes.clone()).await;
+        let calls = Calls::answering(vec![Ok(json!({
+            "package_id": "acme.tools", "version": "1.0.0", "wasm_url": url,
+            "wasm_hash": blake3::hash(&bytes).to_hex().to_string(),
+            "permissions": { "memory": "light" },
+        }))]);
+        let root = tempfile::tempdir().unwrap();
+        let skills = device_skills(&calls, root.path()).await;
+        let skill = package_skill();
+        let specs = skills.tool_specs(&skill).await.unwrap();
+        let gated: Vec<(&str, bool, bool)> = specs
+            .iter()
+            .map(|spec| (spec.name.as_str(), spec.network, spec.writes))
+            .collect();
+        assert_eq!(
+            gated,
+            [("skill_echo", false, false), ("skill_fetch", true, true)]
+        );
+        let output = skills
+            .call(&skill, "skill_echo", json!({ "text": "hello" }))
+            .await
+            .unwrap();
+        assert_eq!(output["echo"], "hi");
+        let hidden = skills
+            .call(&skill, "skill_hidden", json!({}))
+            .await
+            .unwrap_err();
+        assert!(hidden.to_string().contains("no tool 'skill_hidden'"));
+        let calls = calls.0.lock().unwrap();
+        assert_eq!(calls.len(), 1, "one package fetch per turn");
+        assert_eq!(calls[0].1, "bots/bot1/skills/s1/package");
+    }
+
+    #[tokio::test]
+    async fn a_package_that_differs_from_the_hubs_hash_never_loads() {
+        let url = serve(skill_module()).await;
+        let calls = Calls::answering(vec![Ok(json!({
+            "package_id": "acme.tools", "version": "1.0.0", "wasm_url": url,
+            "wasm_hash": "0".repeat(64),
+        }))]);
+        let root = tempfile::tempdir().unwrap();
+        let skills = device_skills(&calls, root.path()).await;
+        let error = skills
+            .tool_specs(&package_skill())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("does not match the hash"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn an_instruction_skill_needs_no_package() {
+        let calls = Calls::answering(Vec::new());
+        let root = tempfile::tempdir().unwrap();
+        let skills = device_skills(&calls, root.path()).await;
+        let mut skill = package_skill();
+        skill.source = SkillSource::Import;
+        assert!(skills.tool_specs(&skill).await.unwrap().is_empty());
+        assert!(calls.0.lock().unwrap().is_empty());
+    }
+
+    fn image_bit(provider_name: &str) -> Bit {
+        Bit {
+            id: "img".into(),
+            bit_type: flow_like::bit::BitTypes::ImageGeneration,
+            parameters: json!({ "provider": { "provider_name": provider_name, "model_id": "m" } }),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn an_own_key_image_model_gets_its_sign_in_from_the_hub_per_call() {
+        let calls = Calls::answering(vec![
+            Ok(json!({ "bit_id": "img", "params": { "api_key": "k1" } })),
+            Ok(json!({ "bit_id": "img", "params": { "api_key": "k2" } })),
+        ]);
+        let sign_in = HubImageSignIn(routes(&calls));
+        let held = image_bit("openai");
+        for key in ["k1", "k2"] {
+            let signed = image_bit_for_call(&held, &sign_in).await.unwrap();
+            assert_eq!(signed.parameters["provider"]["params"]["api_key"], key);
+        }
+        assert!(held.parameters["provider"].get("params").is_none());
+        let calls = calls.0.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(
+            (calls[0].0.as_str(), calls[0].1.as_str()),
+            ("POST", "bots/bot1/image-model/credential")
+        );
+    }
+
+    #[tokio::test]
+    async fn hosted_models_need_no_sign_in_and_local_models_are_refused_with_a_reason() {
+        let calls = Calls::answering(Vec::new());
+        let sign_in = HubImageSignIn(routes(&calls));
+        let hosted = image_bit("hosted:openrouter");
+        assert_eq!(
+            image_bit_for_call(&hosted, &sign_in).await.unwrap().id,
+            "img"
+        );
+        let local = image_bit(flow_like::flow_like_model_provider::stablediffusion::PROVIDER_NAME);
+        let ImageUnavailable::Unusable(why) =
+            image_bit_for_call(&local, &sign_in).await.unwrap_err()
+        else {
+            panic!("a local model is unusable on a device");
+        };
+        assert!(why.contains("runs no local image models"), "{why}");
+        assert!(calls.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_refused_sign_in_makes_the_image_model_unusable() {
+        let calls = Calls::answering(vec![Err(HubFailure::answered(
+            403,
+            None,
+            "not on a device",
+        ))]);
+        let refused = image_bit_for_call(&image_bit("openai"), &HubImageSignIn(routes(&calls)))
+            .await
+            .unwrap_err();
+        assert!(matches!(refused, ImageUnavailable::Unusable(_)));
     }
 
     #[test]

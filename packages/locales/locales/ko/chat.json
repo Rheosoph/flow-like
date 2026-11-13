@@ -140,6 +140,7 @@
 	"modelSetupChooseAnother": "",
 	"modelSetupLabel": "",
 	"modelSetupReady": "",
+	"modelSetupResending": "",
 	"modelsUsed": "사용된 모델",
 	"modelUsage": "모델 사용량",
 	"needsAnAnswer": "답변 필요",

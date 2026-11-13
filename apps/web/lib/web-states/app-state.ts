@@ -400,6 +400,14 @@ export class WebAppState implements IAppState {
 		);
 	}
 
+	async changeAppBotAccess(appId: string, refuseBots: boolean): Promise<void> {
+		await apiPatch(
+			`apps/${appId}/settings/bots`,
+			{ refuse_bots: refuseBots },
+			this.backend.auth,
+		);
+	}
+
 	async getForkPreview(
 		appId: string,
 		target: IForkPreviewTarget,

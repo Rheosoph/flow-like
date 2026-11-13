@@ -93,6 +93,7 @@ export function BotModelPicker({
 	exclude = [],
 	trigger,
 	onAddSettled,
+	profileId,
 }: Readonly<{
 	value: string | null;
 	/** The profile's models that fit. */
@@ -109,6 +110,8 @@ export function BotModelPicker({
 	trigger?: ReactNode;
 	/** A catalog pick finished being added to the profile, or failed to be. */
 	onAddSettled?: (id: string, added: boolean) => void;
+	/** Adds picks to this profile instead of the active one, models it already holds included. */
+	profileId?: string;
 }>) {
 	const { t } = useTranslation("bots");
 	const [open, setOpen] = useState(false);
@@ -126,7 +129,7 @@ export function BotModelPicker({
 		setOpen(false);
 	};
 	return (
-		<Popover open={open} onOpenChange={setOpen}>
+		<Popover open={open} onOpenChange={setOpen} modal>
 			<PopoverTrigger asChild>
 				{trigger ?? (
 					<BotModelField
@@ -142,6 +145,7 @@ export function BotModelPicker({
 			<PopoverContent
 				ref={contentRef}
 				align="start"
+				collisionPadding={8}
 				className="w-[min(26rem,calc(100vw-2rem))] overflow-hidden p-0"
 				onOpenAutoFocus={(event) => {
 					event.preventDefault();
@@ -156,6 +160,7 @@ export function BotModelPicker({
 						label={label}
 						fallback={fallback}
 						exclude={exclude}
+						profileId={profileId}
 						onChoose={choose}
 					/>
 				)}
@@ -171,6 +176,7 @@ function ModelPickerPanel({
 	label,
 	fallback,
 	exclude,
+	profileId,
 	onChoose,
 }: Readonly<{
 	value: string | null;
@@ -179,6 +185,7 @@ function ModelPickerPanel({
 	label: string;
 	fallback?: BotPickerDefault;
 	exclude: readonly string[];
+	profileId?: string;
 	/** `added` settles once a catalog pick is in the profile, or could not be put there. */
 	onChoose: (option: BotModelOption | null, added?: Promise<boolean>) => void;
 }>) {
@@ -189,7 +196,7 @@ function ModelPickerPanel({
 	const hasMine = options.length > 0;
 	const tab: PickerTab = chosenTab ?? (hasMine ? "mine" : "all");
 	const all = useCatalogModelOptions(catalog, tab === "all");
-	const { allows, add } = useAddModelToProfile();
+	const { allows, add } = useAddModelToProfile(undefined, profileId);
 	const mine = useMemo(
 		() => new Set(options.map((option) => option.id)),
 		[options],
@@ -205,12 +212,12 @@ function ModelPickerPanel({
 		[tab, options, all.options, mine, value, exclude, query],
 	);
 	const pick = (option: BotModelOption) => {
-		if (mine.has(option.id)) onChoose(option);
+		if (mine.has(option.id) && !profileId) onChoose(option);
 		else if (allows(option.bit)) onChoose(option, add(option.bit));
 	};
 	const loadingCatalog = tab === "all" && all.isLoading;
 	return (
-		<div className="flex max-h-[min(32rem,70vh)] flex-col">
+		<div className="flex max-h-[min(32rem,var(--radix-popover-content-available-height,70vh))] flex-col">
 			<div className="flex flex-col gap-2 border-b p-3">
 				<div className="flex min-h-8 items-center justify-between gap-2">
 					<p id={headingId} className="truncate text-sm font-medium">
@@ -258,39 +265,41 @@ function ModelPickerPanel({
 					)}
 				</p>
 			)}
-			<fieldset
-				aria-labelledby={headingId}
-				aria-busy={loadingCatalog || undefined}
-				className="m-0 min-h-0 flex-1 space-y-0.5 overflow-y-auto border-0 p-1.5"
-			>
-				{fallback && !query && (
-					<FallbackChoice
-						fallback={fallback}
-						selected={value === null}
-						onSelect={() => onChoose(null)}
-					/>
-				)}
-				{visible.map((option) => (
-					<ModelChoice
-						key={option.id}
-						option={option}
-						selected={option.id === value}
-						inProfile={mine.has(option.id)}
-						onSelect={() => pick(option)}
-					/>
-				))}
-				{loadingCatalog && <ModelChoiceSkeletons />}
-				{!loadingCatalog && visible.length === 0 && (
-					<p className="px-2 py-4 text-center text-xs text-muted-foreground">
-						{tab === "all" && all.isError
-							? t(
-									"editor.brain.catalogFailed",
-									"The model catalog couldn't be loaded.",
-								)
-							: t("editor.brain.noModels")}
-					</p>
-				)}
-			</fieldset>
+			<div className="min-h-0 flex-1 overflow-y-auto">
+				<fieldset
+					aria-labelledby={headingId}
+					aria-busy={loadingCatalog || undefined}
+					className="m-0 min-w-0 space-y-0.5 border-0 p-1.5"
+				>
+					{fallback && !query && (
+						<FallbackChoice
+							fallback={fallback}
+							selected={value === null}
+							onSelect={() => onChoose(null)}
+						/>
+					)}
+					{visible.map((option) => (
+						<ModelChoice
+							key={option.id}
+							option={option}
+							selected={option.id === value}
+							inProfile={mine.has(option.id)}
+							onSelect={() => pick(option)}
+						/>
+					))}
+					{loadingCatalog && <ModelChoiceSkeletons />}
+					{!loadingCatalog && visible.length === 0 && (
+						<p className="px-2 py-4 text-center text-xs text-muted-foreground">
+							{tab === "all" && all.isError
+								? t(
+										"editor.brain.catalogFailed",
+										"The model catalog couldn't be loaded.",
+									)
+								: t("editor.brain.noModels")}
+						</p>
+					)}
+				</fieldset>
+			</div>
 		</div>
 	);
 }

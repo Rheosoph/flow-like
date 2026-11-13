@@ -22,6 +22,11 @@ import type { Mentionable } from "../../bots-tab/mentions";
 import { VoiceMode } from "./VoiceMode";
 import { ChatAiDisclosure } from "./ai-disclosure";
 import type { IMessage } from "./chat-db";
+import {
+	type ChatErrorRecovery,
+	ChatErrorRecoveryContext,
+} from "./chat-error-recovery";
+import { askToResend } from "./chat-error-resend";
 import { ChatFollowUpProvider } from "./chat-follow-up";
 import {
 	type IChatMessageInteraction,
@@ -668,6 +673,27 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			[onSendMessage, scrollToBottom],
 		);
 
+		const chatItemsRef = useRef(chatItems);
+		chatItemsRef.current = chatItems;
+		const resentAnswers = useRef(new Set<string>());
+		const errorRecovery = useMemo<ChatErrorRecovery>(
+			() => ({
+				resend: (answerId) => {
+					if (resentAnswers.current.has(answerId)) return;
+					const ask = askToResend(
+						chatItemsRef.current.map((item) => item.data as IMessage),
+						answerId,
+					);
+					if (!ask) return;
+					resentAnswers.current.add(answerId);
+					void handleSendMessage(ask).catch(() =>
+						resentAnswers.current.delete(answerId),
+					);
+				},
+			}),
+			[handleSendMessage],
+		);
+
 		const handleReply = useCallback(
 			(message: IMessage, selectedText?: string) => {
 				if (interactionDisabled || message.inner.role !== "assistant") return;
@@ -811,7 +837,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			[handleSendMessage, scrollToBottom],
 		);
 
-		return (
+		const surface = (
 			<ChatFollowUpProvider send={followUpBlocked ? null : sendFollowUp}>
 				<MainWidgetPane
 					mainWidget={mainWidget}
@@ -1154,6 +1180,11 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 					</main>
 				</MainWidgetPane>
 			</ChatFollowUpProvider>
+		);
+		return (
+			<ChatErrorRecoveryContext.Provider value={errorRecovery}>
+				{surface}
+			</ChatErrorRecoveryContext.Provider>
 		);
 	},
 );

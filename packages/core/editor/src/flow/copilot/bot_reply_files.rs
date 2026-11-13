@@ -16,7 +16,7 @@ use flow_like_types::bot_reply_files::{MAX_REPLY_FILES, ReplyFile, attach_reply_
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::platform::PlatformToolBridge;
+use super::platform::{Clearance, PlatformToolBridge};
 use super::stream::stream_frame;
 use super::tool_spec::{PlatformToolSpec, ToolApprovalSpec};
 use super::turn_label::TurnLabel;
@@ -258,6 +258,13 @@ impl PlatformToolBridge for ReplyFilesBridge {
             return self.attach(arguments).await;
         }
         self.inner.call(tool_name, arguments).await
+    }
+
+    async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
+        if tool_name == FILE_ATTACH_TOOL {
+            return Clearance::Clear;
+        }
+        self.inner.clearance(tool_name, arguments).await
     }
 
     fn supports_tool(&self, tool_name: &str) -> bool {

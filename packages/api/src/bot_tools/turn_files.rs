@@ -16,7 +16,10 @@ use flow_like_types::bot_message::CONVERSATION_FILE_APP_PREFIX;
 use flow_like_types::{Result, anyhow};
 
 use super::{access::turn_may_read_conversation, host::TurnFiles};
-use crate::{routes::inbox::files::bot_readable_key, state::AppState};
+use crate::{
+    routes::inbox::files::{INBOX_FILE_SEALED, bot_readable_key},
+    state::AppState,
+};
 
 /// Longer than the executor's longest tool call, so a link never lapses during its job.
 const LINK_TTL: Duration = Duration::from_secs(10 * 60);
@@ -67,6 +70,12 @@ impl ApiTurnFiles {
                 key: ObjectPath::from(key),
                 mime: None,
             })),
+            Err(error) if error.public_code() == INBOX_FILE_SEALED => Err(anyhow!(
+                "{}",
+                error
+                    .public_message()
+                    .map_or_else(|| error.to_string(), str::to_owned)
+            )),
             Err(error) if error.status().is_client_error() => Ok(None),
             Err(error) => Err(anyhow!(
                 "Looking up file '{path}' of conversation '{conversation_id}' failed: {error}"

@@ -6,9 +6,10 @@
 //! hub, and the turn gets no hub memory.
 
 use crate::hub::{HubFailure, TurnHub};
+use flow_like_bot_tools::{ToolError, error::code};
 use flow_like_device_crypto::inbox::{
     ALGORITHM, InboxKeyVault, InboxKeyring, MAX_ENVELOPE_KEYS, Member, PublicInboxKey, Recipient,
-    RecipientKey, Scope, seal_all,
+    RecipientKey, Scope, SecretScope, envelope_key_ids, open_secret_with, seal_all,
 };
 use flow_like_local_bots::InboxEntry;
 use flow_like_types::bot_turn::BotRunCheckpoint;
@@ -52,6 +53,22 @@ pub struct E2eStatus {
     pub host_id: String,
 }
 
+/// A sealed secret this host cannot open; the bot passes the request on to its owner.
+pub fn reenter_secret(name: &str, holds_key: bool) -> ToolError {
+    let why = if holds_key {
+        "does not open with this bot's key here: it was sealed for another bot or under another name"
+    } else {
+        "is sealed to keys of this bot that this host does not hold, so the bot's key changed or the bot moved since it was stored"
+    };
+    ToolError::new(
+        code::SECRET_REENTER,
+        format!(
+            "The secret '{name}' {why}. Ask the owner to enter '{name}' again: call secret_request with replace set to true."
+        ),
+    )
+    .with_details(json!({ "name": name }))
+}
+
 pub fn is_sealed(entry: &InboxEntry) -> bool {
     matches!(check_envelope(&entry.envelope), Ok(EnvelopeKind::Sealed))
 }
@@ -60,6 +77,7 @@ pub struct E2eHost {
     hub: Arc<dyn TurnHub>,
     keyring: InboxKeyring,
     host_id: String,
+    location: &'static str,
     enabled: Mutex<Option<HashSet<String>>>,
     published: Mutex<HashSet<(String, String)>>,
 }
@@ -74,9 +92,17 @@ impl E2eHost {
             hub,
             keyring: InboxKeyring::new(vault),
             host_id,
+            location: "desktop",
             enabled: Mutex::new(None),
             published: Mutex::default(),
         }
+    }
+
+    /// Holds the keys of the bots whose `location` is `location` (`desktop` by default) among
+    /// those the hub lists.
+    pub fn at_location(mut self, location: &'static str) -> Self {
+        self.location = location;
+        self
     }
 
     async fn encryption_bots(&self) -> Result<HashSet<String>, HubFailure> {
@@ -86,7 +112,7 @@ impl E2eHost {
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .filter(|bot| bot.get("location").and_then(Value::as_str) == Some("desktop"))
+            .filter(|bot| bot.get("location").and_then(Value::as_str) == Some(self.location))
             .filter(|bot| {
                 bot.get("capabilities")
                     .and_then(Value::as_array)
@@ -355,6 +381,33 @@ impl E2eHost {
         Ok(opened)
     }
 
+    /// A secret the owner sealed to this bot's keys, opened with the keys this host holds. When
+    /// none of them opens it the owner has to enter it again: `secret_reenter`.
+    pub fn open_secret(
+        &self,
+        bot_id: &str,
+        name: &str,
+        envelope: &Value,
+    ) -> Result<String, ToolError> {
+        let held = self.keyring.secrets(bot_id).map_err(|error| {
+            ToolError::new(
+                code::FAILED,
+                format!(
+                    "The bot's keys on this host could not be read to open secret '{name}': {error}"
+                ),
+            )
+        })?;
+        let named = envelope_key_ids(envelope);
+        let holds_key = held
+            .iter()
+            .any(|secret| named.contains(&secret.public().key_id.as_str()));
+        let scope = SecretScope { bot_id, name };
+        open_secret_with(&held, &scope, envelope)
+            .ok()
+            .and_then(|plaintext| String::from_utf8(plaintext.to_vec()).ok())
+            .ok_or_else(|| reenter_secret(name, holds_key))
+    }
+
     /// Every active member with the keys of all their devices, newest last.
     async fn recipients(
         &self,
@@ -391,7 +444,14 @@ impl E2eHost {
         }
         let listed = self
             .hub
-            .read("inbox/keys", vec![("principals", members.join(","))])
+            .read(
+                "inbox/keys",
+                vec![
+                    ("principals", members.join(",")),
+                    ("as", bot_id.to_owned()),
+                    ("conversation_id", conversation_id.to_owned()),
+                ],
+            )
             .await
             .map_err(hub)?;
         let mut keys: HashMap<&str, Vec<RecipientKey>> = HashMap::new();

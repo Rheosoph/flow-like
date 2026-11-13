@@ -25,6 +25,8 @@ mod linux;
 use linux as platform;
 #[cfg(target_os = "macos")]
 mod ocr_macos;
+#[cfg(target_os = "macos")]
+pub(crate) mod screen_capture_macos;
 #[cfg(any(target_os = "linux", test))]
 pub(crate) mod ocr_tesseract;
 #[cfg(target_os = "windows")]

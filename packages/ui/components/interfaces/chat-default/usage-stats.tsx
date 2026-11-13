@@ -20,6 +20,7 @@ import {
 } from "react";
 import { useModelNames } from "../../../hooks/use-model-names";
 import { modelLabel } from "../../../lib/bit/model-display-name";
+import { readUsageStat } from "../../../lib/llm/usage";
 import { cn } from "../../../lib/utils";
 import { Badge } from "../../ui/badge";
 import { Separator } from "../../ui/separator";
@@ -37,6 +38,8 @@ import {
 	TooltipTrigger,
 } from "../../ui/tooltip";
 import type { IChatUsageStat, IModelCallEntry } from "./chat-db";
+import { usageEfficiency } from "./usage-efficiency";
+import { UsageEfficiencyPanel } from "./usage-efficiency-panel";
 
 // --- Formatting helpers ---
 
@@ -477,11 +480,25 @@ function StepDetail({
 }
 
 function ModelCallRow({ call }: { call: IModelCallEntry }) {
+	const { t } = useTranslation("chat");
 	const intensity = getTokenIntensity(call.usage.total_tokens);
+	const purpose =
+		call.purpose === "context_compaction"
+			? t("usageEfficiency.checkpoint", "Context summary")
+			: call.purpose?.startsWith("memory_")
+				? t("usageEfficiency.memoryWork", "Memory work")
+				: call.purpose === "vision"
+					? t("usageEfficiency.visionWork", "Image analysis")
+					: null;
 
 	return (
 		<div className="flex items-center justify-between text-xs py-0.5 gap-2">
-			<ModelBadge model={call.model || "unknown"} />
+			<div className="min-w-0 space-y-1">
+				<ModelBadge model={call.model || "unknown"} />
+				{purpose && (
+					<div className="text-[10px] text-muted-foreground">{purpose}</div>
+				)}
+			</div>
 			<div className="flex items-center gap-2 text-muted-foreground shrink-0">
 				<span
 					className={cn("tabular-nums font-medium", intensityColor(intensity))}
@@ -587,13 +604,23 @@ function ModelBreakdownSection({
 // --- Main component ---
 
 export function UsageStats({
-	stats,
+	stats: rawStats,
 	className,
 }: { stats: IChatUsageStat[]; className?: string }) {
 	const { t } = useTranslation("chat");
 	const [sheetOpen, setSheetOpen] = useState(false);
+	const stats = useMemo(
+		() =>
+			rawStats
+				.map(readUsageStat)
+				.filter((stat): stat is IChatUsageStat => stat !== null),
+		[rawStats],
+	);
 
 	const aggregated = useMemo(() => aggregateStats(stats), [stats]);
+	const efficiency = useMemo(() => usageEfficiency(stats), [stats]);
+	const compactionCount =
+		efficiency.compactions.length + efficiency.compactionsOmitted;
 	const modelNames = useModelNames(
 		useMemo(() => Array.from(aggregated.byModel.keys()), [aggregated.byModel]),
 	);
@@ -617,7 +644,7 @@ export function UsageStats({
 							type="button"
 							onClick={handleClick}
 							className={cn(
-								"inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors py-1 px-2.5 rounded-lg hover:bg-muted/50 border border-transparent hover:border-border/50",
+								"inline-flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors py-1 px-2.5 rounded-lg hover:bg-muted/50 border border-transparent hover:border-border/50",
 								className,
 							)}
 						>
@@ -644,6 +671,34 @@ export function UsageStats({
 									<span className="opacity-30">·</span>
 									<span className="tabular-nums">
 										{formatCost(aggregated.totalCost)}
+									</span>
+								</>
+							)}
+							{efficiency.cacheShare !== null && (
+								<>
+									<span aria-hidden="true" className="opacity-30">
+										·
+									</span>
+									<span className="tabular-nums text-emerald-700 dark:text-emerald-400">
+										{t("usageEfficiency.cachedBadge", "{{percent}} cached", {
+											percent: `${Math.round(efficiency.cacheShare * 100)}%`,
+										})}
+										{efficiency.partialReads &&
+											` (${t("usageEfficiency.partial", "partial")})`}
+									</span>
+								</>
+							)}
+							{compactionCount > 0 && (
+								<>
+									<span aria-hidden="true" className="opacity-30">
+										·
+									</span>
+									<span>
+										{t(
+											"usageEfficiency.compactionBadge",
+											"{{count}} compactions",
+											{ count: compactionCount },
+										)}
 									</span>
 								</>
 							)}
@@ -801,6 +856,10 @@ export function UsageStats({
 								<div className="text-lg font-semibold">{stats.length}</div>
 							</div>
 						</div>
+
+						<Separator />
+
+						<UsageEfficiencyPanel data={efficiency} />
 
 						<Separator />
 

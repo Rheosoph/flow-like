@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use flow_like_types::tokio::sync::watch;
 use serde_json::Value;
 
-use super::platform::PlatformToolBridge;
+use super::platform::{Clearance, PlatformToolBridge};
 
 const HELD_BACK: &str = "{\"error\":\"turn_not_answering\",\"retryable\":false,\"message\":\"This turn stopped before the tool ran; nothing was run.\"}";
 
@@ -84,6 +84,13 @@ impl PlatformToolBridge for GatedBridge {
             return HELD_BACK.to_string();
         }
         self.inner.call(tool_name, arguments).await
+    }
+
+    async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
+        if !self.gate.passes().await {
+            return Clearance::Refused(HELD_BACK.to_string());
+        }
+        self.inner.clearance(tool_name, arguments).await
     }
 
     fn supports_tool(&self, tool_name: &str) -> bool {

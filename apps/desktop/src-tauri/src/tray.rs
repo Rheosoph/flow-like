@@ -953,11 +953,20 @@ pub fn on_run_event(app_handle: &AppHandle, event: &tauri::RunEvent) {
     }
 }
 
+async fn settings_state(
+    app_handle: &AppHandle,
+) -> Result<
+    std::sync::Arc<flow_like_types::sync::Mutex<crate::settings::Settings>>,
+    TauriFunctionError,
+> {
+    TauriSettingsState::construct(app_handle)
+        .await
+        .map_err(|e| TauriFunctionError::new(&format!("Settings state not found: {e}")))
+}
+
 #[tauri::command(async)]
 pub async fn get_keep_bots_running(app_handle: AppHandle) -> Result<bool, TauriFunctionError> {
-    let settings = TauriSettingsState::construct(&app_handle)
-        .await
-        .map_err(|e| TauriFunctionError::new(&format!("Settings state not found: {e}")))?;
+    let settings = settings_state(&app_handle).await?;
     Ok(settings.lock().await.background.keep_bots_running)
 }
 
@@ -966,13 +975,134 @@ pub async fn set_keep_bots_running(
     app_handle: AppHandle,
     enabled: bool,
 ) -> Result<bool, TauriFunctionError> {
-    let settings = TauriSettingsState::construct(&app_handle)
-        .await
-        .map_err(|e| TauriFunctionError::new(&format!("Settings state not found: {e}")))?;
+    let settings = settings_state(&app_handle).await?;
     let mut settings = settings.lock().await;
     settings.background.keep_bots_running = enabled;
     crate::settings::Settings::serialize(&mut settings);
     Ok(enabled)
+}
+
+/// The argument a start at login carries: the app comes up in the tray, without its window.
+const HIDDEN_ARG: &str = "--hidden";
+const FLOWPILOT_E2E_CLI_ARG: &str = "--flowpilot-e2e-cli";
+
+/// A LaunchAgent on macOS, the `Run` key on Windows, an XDG autostart entry on Linux.
+pub(crate) fn autostart_plugin() -> tauri::plugin::TauriPlugin<Wry> {
+    tauri_plugin_autostart::Builder::new()
+        .arg(HIDDEN_ARG)
+        .build()
+}
+
+fn launched_hidden<S: AsRef<std::ffi::OsStr>>(mut args: impl Iterator<Item = S>) -> bool {
+    args.any(|arg| arg.as_ref() == HIDDEN_ARG)
+}
+
+fn hide_main_window(windows: &mut [tauri::utils::config::WindowConfig]) {
+    for window in windows.iter_mut().filter(|window| window.label == "main") {
+        window.visible = false;
+        window.focus = false;
+    }
+}
+
+/// A start at login creates the main window hidden, so no window flashes up at login.
+pub(crate) fn prepare_start(mut context: tauri::Context<Wry>) -> tauri::Context<Wry> {
+    if launched_hidden(std::env::args_os()) {
+        hide_main_window(&mut context.config_mut().app.windows);
+    }
+    context
+}
+
+/// Outside macOS a hidden window comes back only through the tray icon; without one it shows.
+pub(crate) fn reveal_unreachable_hidden_start(app_handle: &AppHandle) {
+    if launched_hidden(std::env::args_os()) && !reachable_when_hidden(app_handle) {
+        tracing::warn!("Started hidden without a tray icon; showing the main window");
+        open_main_window(app_handle);
+    }
+}
+
+/// Opening the app while it runs shows its window, unless the second start is itself a start at
+/// login or the FlowPilot E2E runner.
+pub(crate) fn second_start_shows_window(args: &[String]) -> bool {
+    !launched_hidden(args.iter()) && !args.iter().any(|arg| arg == FLOWPILOT_E2E_CLI_ARG)
+}
+
+/// Drops the start-at-login argument so a restart the person asked for comes back with its window.
+pub(crate) fn without_hidden_start(args: &mut Vec<std::ffi::OsString>) -> bool {
+    let before = args.len();
+    args.retain(|arg| arg != HIDDEN_ARG);
+    args.len() != before
+}
+
+fn start_at_login_offer_due(offered: bool, enabled: bool) -> bool {
+    !offered && !enabled
+}
+
+fn autostart(
+    app_handle: &AppHandle,
+) -> Result<tauri::State<'_, tauri_plugin_autostart::AutoLaunchManager>, TauriFunctionError> {
+    app_handle
+        .try_state::<tauri_plugin_autostart::AutoLaunchManager>()
+        .ok_or_else(|| {
+            TauriFunctionError::new(
+                "Start at login is unavailable: the autostart plugin did not start",
+            )
+        })
+}
+
+/// Read from the operating system each time: the person can remove the login item there.
+fn start_at_login(app_handle: &AppHandle) -> Result<bool, TauriFunctionError> {
+    autostart(app_handle)?.is_enabled().map_err(|error| {
+        TauriFunctionError::new(&format!(
+            "Reading whether Flow-Like starts at login failed: {error}"
+        ))
+    })
+}
+
+/// Records that the person saw the offer or decided themselves; answers whether that had happened.
+async fn note_start_at_login_offered(app_handle: &AppHandle) -> Result<bool, TauriFunctionError> {
+    let settings = settings_state(app_handle).await?;
+    let mut settings = settings.lock().await;
+    let offered = settings.background.start_at_login_offered;
+    if !offered {
+        settings.background.start_at_login_offered = true;
+        crate::settings::Settings::serialize(&mut settings);
+    }
+    Ok(offered)
+}
+
+#[tauri::command(async)]
+pub async fn get_start_at_login(app_handle: AppHandle) -> Result<bool, TauriFunctionError> {
+    start_at_login(&app_handle)
+}
+
+/// Turns the login item on or off and answers the operating system's state afterwards.
+#[tauri::command(async)]
+pub async fn set_start_at_login(
+    app_handle: AppHandle,
+    enabled: bool,
+) -> Result<bool, TauriFunctionError> {
+    let autostart = autostart(&app_handle)?;
+    let changed = if enabled {
+        autostart.enable()
+    } else {
+        autostart.disable()
+    };
+    changed.map_err(|error| {
+        TauriFunctionError::new(&format!(
+            "Setting start at login to {enabled} failed: {error}"
+        ))
+    })?;
+    note_start_at_login_offered(&app_handle).await?;
+    start_at_login(&app_handle)
+}
+
+/// True once: the first time a bot on this computer gets a task while the app does not start at
+/// login. Every later call answers false.
+#[tauri::command(async)]
+pub async fn claim_start_at_login_offer(app_handle: AppHandle) -> Result<bool, TauriFunctionError> {
+    let enabled = start_at_login(&app_handle)?;
+    let offered = note_start_at_login_offered(&app_handle).await?;
+    Ok(start_at_login_offer_due(offered, enabled))
 }
 
 #[cfg(test)]
@@ -987,5 +1117,109 @@ mod keep_alive_tests {
         assert_eq!(close_action(true, 0, true), CloseAction::Close);
         assert_eq!(close_action(true, 1, false), CloseAction::Close);
         assert_eq!(close_action(false, 0, false), CloseAction::Close);
+    }
+}
+
+#[cfg(test)]
+mod start_at_login_tests {
+    use super::{
+        hide_main_window, launched_hidden, second_start_shows_window, start_at_login_offer_due,
+        without_hidden_start,
+    };
+    use crate::settings::BackgroundSettings;
+    use std::ffi::OsString;
+    use tauri::utils::config::WindowConfig;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|arg| arg.to_string()).collect()
+    }
+
+    #[test]
+    fn only_the_hidden_argument_starts_hidden() {
+        assert!(launched_hidden(
+            args(&["/Applications/Flow Like.app", "--hidden"]).iter()
+        ));
+        assert!(!launched_hidden(
+            args(&["/Applications/Flow Like.app"]).iter()
+        ));
+        assert!(!launched_hidden(
+            args(&["flow-like", "--hidden-thing", "hidden"]).iter()
+        ));
+    }
+
+    #[test]
+    fn a_hidden_start_creates_only_the_main_window_hidden_and_unfocused() {
+        let mut windows = vec![
+            WindowConfig {
+                label: "main".into(),
+                ..Default::default()
+            },
+            WindowConfig {
+                label: "window-1".into(),
+                ..Default::default()
+            },
+        ];
+        hide_main_window(&mut windows);
+        assert!(!windows[0].visible);
+        assert!(!windows[0].focus);
+        assert!(windows[1].visible);
+        assert!(windows[1].focus);
+    }
+
+    #[test]
+    fn a_second_start_shows_the_window_unless_it_is_hidden_or_the_e2e_runner() {
+        assert!(second_start_shows_window(&args(&["flow-like"])));
+        assert!(second_start_shows_window(&args(&[
+            "flow-like",
+            "flow-like://open"
+        ])));
+        assert!(!second_start_shows_window(&args(&[
+            "flow-like",
+            "--hidden"
+        ])));
+        assert!(!second_start_shows_window(&args(&[
+            "flow-like",
+            "--flowpilot-e2e-cli"
+        ])));
+    }
+
+    #[test]
+    fn a_requested_restart_drops_only_the_hidden_argument() {
+        let mut restart: Vec<OsString> = vec!["flow-like".into(), "--hidden".into(), "x".into()];
+        assert!(without_hidden_start(&mut restart));
+        assert_eq!(
+            restart,
+            vec![OsString::from("flow-like"), OsString::from("x")]
+        );
+        assert!(!without_hidden_start(&mut restart));
+        assert_eq!(restart.len(), 2);
+    }
+
+    #[test]
+    fn the_offer_is_due_once_and_never_while_already_starting_at_login() {
+        assert!(start_at_login_offer_due(false, false));
+        assert!(!start_at_login_offer_due(true, false));
+        assert!(!start_at_login_offer_due(false, true));
+        assert!(!start_at_login_offer_due(true, true));
+    }
+
+    #[test]
+    fn the_offered_flag_survives_a_round_trip_and_older_files_read_as_not_offered() {
+        let older: BackgroundSettings =
+            serde_json::from_str(r#"{"keepBotsRunning":false,"noticeShown":true}"#).unwrap();
+        assert!(!older.keep_bots_running);
+        assert!(older.notice_shown);
+        assert!(!older.start_at_login_offered);
+
+        let offered = BackgroundSettings {
+            start_at_login_offered: true,
+            ..BackgroundSettings::default()
+        };
+        let json = serde_json::to_value(&offered).unwrap();
+        assert_eq!(json["startAtLoginOffered"], true);
+        let back: BackgroundSettings = serde_json::from_value(json).unwrap();
+        assert!(back.start_at_login_offered);
+        assert!(back.keep_bots_running);
+        assert!(!back.notice_shown);
     }
 }

@@ -16,6 +16,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SELF_HOSTED_CLOUDS = ("docker-compose", "kubernetes")
 KUBERNETES_SHARED_WORKLOADS = {"runtime", "compiler", "signaling", "object-store-init", "audit-worker"}
 API_WORKLOADS = {"api", "api-ecs"}
+HELPER_WORKLOADS = {"signaling", "migration", "otel-collector", "db-init", "object-store-init"}
 CHANNEL_BRANCHES = ("dev", "main", "alpha")
 SEMVER = re.compile(
     r"(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\.(?P<patch>0|[1-9][0-9]*)"
@@ -123,6 +124,22 @@ def matrix(cloud):
             return entry["workload"] in KUBERNETES_SHARED_WORKLOADS
         return cloud == entry["cloud"]
     return {"include": [dict(entry) for entry in TARGETS if selected(entry)]}
+
+
+def build_matrix(cloud):
+    """Keep expensive builds isolated and share a runner for each helper architecture."""
+    entries = matrix(cloud)["include"]
+    jobs = [entry for entry in entries if entry["workload"] not in HELPER_WORKLOADS]
+    for platform in sorted({entry["platform"] for entry in entries if entry["workload"] in HELPER_WORKLOADS}):
+        helpers = [entry for entry in entries if entry["platform"] == platform and entry["workload"] in HELPER_WORKLOADS]
+        jobs.append({
+            "id": f"helpers-{platform.split('/')[1]}",
+            "workload": "helpers",
+            "platform": platform,
+            "runner": helpers[0]["runner"],
+            "targets": [entry["id"] for entry in helpers],
+        })
+    return {"include": jobs}
 
 
 def build_identity(owner, source_sha, run_id, run_attempt):
@@ -602,6 +619,8 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     matrix_parser = commands.add_parser("matrix", help="print the GitHub Actions build matrix")
     matrix_parser.add_argument("--cloud", choices=CLOUDS, default="all")
+    build_matrix_parser = commands.add_parser("build-matrix", help="group helper images into sequential build jobs")
+    build_matrix_parser.add_argument("--cloud", choices=CLOUDS, default="all")
     record_parser = commands.add_parser("record", help="record one successfully pushed image digest")
     record_parser.add_argument("--target", choices=sorted(TARGET_BY_ID), required=True)
     record_parser.add_argument("--digest", required=True)
@@ -629,6 +648,8 @@ def main(argv=None):
     try:
         if args.command == "matrix":
             result = matrix(args.cloud)
+        elif args.command == "build-matrix":
+            result = build_matrix(args.cloud)
         elif args.command == "record":
             result = record(args.target, args.owner, args.source_sha, args.digest, args.run_id, args.run_attempt)
         elif args.command == "manifest":

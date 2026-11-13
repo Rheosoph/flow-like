@@ -15,6 +15,13 @@ import {
 	speechChunks,
 } from "./bot-call-speech";
 import { createCallLatencyTrace } from "./call-latency";
+import { followPushedReplies } from "./pushed-reply-speech";
+import {
+	deliverRealtimeReply,
+	resetReplyStreams,
+	watchReplyStreams,
+} from "./reply-streams";
+import type { RealtimeReplyState } from "./types";
 
 const voice: BotSpeechVoice = { bitId: "voice", local: false };
 function entry(
@@ -1379,4 +1386,143 @@ test("a pushed stream dropped after audio began lets the stored reply speak whol
 		"The whole answer.",
 	]);
 	retried.controller.dispose();
+});
+
+const REWRITE = "Anna already said it. She is right.";
+
+/** Pushed replies through the store and the follower into a call whose first piece plays until `gate`. */
+function pushedCall() {
+	resetReplyStreams();
+	const gate = deferred<void>();
+	const played: string[] = [];
+	const h = streamHarness({
+		play: async (blob) => {
+			played.push(await blob.text());
+			if (played.length === 1) await gate.promise;
+		},
+	});
+	const follower = followPushedReplies({
+		stream: (transcriptId, botId, options) =>
+			h.controller.stream(transcriptId, botId, options),
+	});
+	const unwatch = watchReplyStreams("room", (reply) => follower.apply(reply));
+	return {
+		...h,
+		played,
+		gate,
+		push(text: string, state: RealtimeReplyState = "writing", draft = 0) {
+			deliverRealtimeReply({
+				protocol_version: 1,
+				kind: "reply",
+				conversation_id: "room",
+				message_id: "r1",
+				reply_to: "spoken",
+				sender_id: "bot",
+				offset: 0,
+				text,
+				state,
+				...(draft > 0 ? { draft } : {}),
+			});
+		},
+		stored(text: string) {
+			h.controller.update(snapshot([transcript, reply("r1", 2, text)]));
+		},
+		dispose() {
+			unwatch();
+			follower.dispose();
+			h.controller.dispose();
+		},
+	};
+}
+
+test("a rewrite stops the replaced draft after the piece that plays and speaks once as it is written", async () => {
+	const call = pushedCall();
+	call.push(`${FIRST} Second sentence follows. Tail`);
+	await settle();
+	expect(call.controller.playingText("bot")).toBe(FIRST);
+	call.push("", "dropped");
+	call.push("Anna already said it. She", "writing", 1);
+	await settle();
+	call.gate.resolve();
+	await settle();
+	expect(call.played).toEqual([FIRST, "Anna already said it."]);
+	call.push(REWRITE, "done", 1);
+	await settle();
+	call.stored(REWRITE);
+	await settle();
+	expect(call.played).toEqual([
+		FIRST,
+		"Anna already said it.",
+		"She is right.",
+	]);
+	call.dispose();
+});
+
+test("the stored reply arriving during or after a rewrite is not spoken again", async () => {
+	const during = pushedCall();
+	during.push(`${FIRST} Second sentence follows. Tail`);
+	await settle();
+	during.push("Anna already said it. She is right", "writing", 1);
+	during.gate.resolve();
+	await settle();
+	during.stored(REWRITE);
+	await settle();
+	during.push(REWRITE, "done", 1);
+	during.stored(REWRITE);
+	await settle();
+	expect(during.played).toEqual([
+		FIRST,
+		"Anna already said it.",
+		"She is right",
+	]);
+	during.dispose();
+
+	const after = pushedCall();
+	after.push(`${FIRST} Tail`);
+	await settle();
+	after.push("", "dropped");
+	after.push(REWRITE, "done", 1);
+	after.gate.resolve();
+	await settle();
+	after.stored(REWRITE);
+	await settle();
+	after.stored(REWRITE);
+	await settle();
+	expect(after.played).toEqual([
+		FIRST,
+		"Anna already said it.",
+		"She is right.",
+	]);
+	after.dispose();
+});
+
+test("a rewrite that is dropped leaves the stored reply to be spoken whole", async () => {
+	const heard = pushedCall();
+	heard.push(`${FIRST} Second sentence follows. Tail`);
+	await settle();
+	heard.push("", "dropped");
+	heard.push("Anna already said it. She", "writing", 1);
+	heard.gate.resolve();
+	await settle();
+	heard.push("", "dropped", 1);
+	heard.stored("The whole answer.");
+	await settle();
+	expect(heard.played).toEqual([
+		FIRST,
+		"Anna already said it.",
+		"The whole answer.",
+	]);
+	heard.dispose();
+
+	const unheard = pushedCall();
+	unheard.push(`${FIRST} Tail`);
+	await settle();
+	unheard.push("Anna already said it. She", "writing", 1);
+	unheard.push("", "dropped", 1);
+	unheard.gate.resolve();
+	await settle();
+	unheard.stored("The whole answer.");
+	await settle();
+	expect(unheard.played).toEqual([FIRST, "The whole answer."]);
+	unheard.dispose();
 });

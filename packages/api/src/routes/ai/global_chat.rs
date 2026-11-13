@@ -49,6 +49,7 @@ use flow_like::bit::BitTypes;
 use flow_like::copilot::{ChatImage, CopilotScope, UnifiedCopilotResponse, flowpilot_thinking};
 use flow_like::flow::copilot::memory::{AssistantMemory, MemoryEntry, MemoryScope, MemoryStatus};
 use flow_like::flow::copilot::platform::{PlatformToolBridge, run_internet_search};
+use flow_like::flow::copilot::tool_grants::{ASKS_AGAIN_WEB_CONTENT, grant_set_aside};
 use flow_like::flow::copilot::tool_spec::{
     HTTP_REQUEST_TOOL, INTERNET_SEARCH_TOOL, PlatformToolSpec, ResolvedToolApproval,
     find_data_studio_tool_spec, find_global_tool_spec, find_home_tool_spec_for_access,
@@ -838,6 +839,10 @@ impl ServerPlatformBridge {
                 tracing::warn!(%error, tool_name, "[global_chat] failed to register approval request");
                 tool_error(tool_name, "Failed to register the approval request.")
             })?;
+        let mut approval = json!(approval);
+        if grant_set_aside(tool_name, arguments) {
+            approval["asks_again"] = json!(ASKS_AGAIN_WEB_CONTENT);
+        }
         let request = json!({
             "requestId": ticket.request_id,
             "toolName": tool_name,
@@ -1235,6 +1240,23 @@ mod specialist_tool_spec_tests {
     }
 }
 
+fn run_event_payload(run_id: &str, channel: &impl serde::Serialize, model_id: &str) -> Value {
+    json!({ "runId": run_id, "channel": channel, "modelId": model_id })
+}
+
+#[cfg(test)]
+mod run_event_tests {
+    use super::*;
+
+    #[test]
+    fn the_run_event_names_the_model_the_server_resolved() {
+        let payload = run_event_payload("run-1", &json!({ "id": "c" }), "bit-7");
+        assert_eq!(payload["modelId"], "bit-7");
+        assert_eq!(payload["runId"], "run-1");
+        assert_eq!(payload["channel"], json!({ "id": "c" }));
+    }
+}
+
 fn tool_error(tool_name: &str, error: &str) -> String {
     json!({ "status": "error", "tool": tool_name, "error": error }).to_string()
 }
@@ -1312,6 +1334,9 @@ impl PlatformToolBridge for ServerPlatformBridge {
                 .as_ref()
                 .filter(|host| host.handles(tool_name))
         {
+            if let Some(refused) = bot_tools.crew_refusal(tool_name, &arguments).await {
+                return refused;
+            }
             let approval = resolve_tool_approval(&spec, &arguments);
             if approval.kind != "none" && !bot_tools.covers(tool_name, &arguments).await {
                 match self
@@ -1775,6 +1800,8 @@ pub(crate) async fn run_global_chat(
         let facts = interactive.trigger_facts(&state).await?;
         bot.context.ephemeral_user_context = facts.ephemeral_user_context;
         bot.context.live_call = facts.live_call;
+        bot.context.host_tools = std::mem::take(&mut bot.context.host_tools)
+            .with_conversation_key(interactive.turn.conversation_id.clone());
         live_call = facts.live_call;
         if !bot.context.ephemeral_user_context
             && let Some(trail) = interactive.open_trail(&state).await
@@ -1860,17 +1887,19 @@ pub(crate) async fn run_global_chat(
     };
     payload.model_id = Some(selected_model.id.clone());
     raw_payload["model_id"] = json!(selected_model.id);
+    let interactive_scope = match &interactive_turn {
+        Some(interactive) => {
+            crate::routes::bots::runtime_token::turn_scope(&state.db, &interactive.turn).await?
+        }
+        None => None,
+    };
     let metered_bot = bot.as_ref().map(|bot| crate::middleware::jwt::BotUser {
         bot_id: bot.context.bot_id.clone(),
         turn_id: interactive_turn
             .as_ref()
             .map(|interactive| interactive.turn.id.clone())
             .unwrap_or_else(flow_like_types::create_id),
-        conv_id: interactive_turn.as_ref().and_then(|interactive| {
-            (flow_like_types::bot_turn::TurnAudience::parse(&interactive.turn.audience)
-                == Some(flow_like_types::bot_turn::TurnAudience::Room))
-            .then(|| interactive.turn.conversation_id.clone())
-        }),
+        conv_id: interactive_scope,
     });
     let model_token = match &metered_bot {
         Some(bot) => Some(
@@ -2146,7 +2175,11 @@ pub(crate) async fn run_global_chat(
     let token_frames = frames_tx.clone();
     let first_token_ms = Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
     let first_token_at = first_token_ms.clone();
+    let bot_usage = interactive_turn.as_ref().map(|turn| turn.usage.clone());
     let on_token = move |chunk: String| {
+        if let Some(usage) = &bot_usage {
+            usage.observe(&chunk);
+        }
         let _ = first_token_at.compare_exchange(
             u64::MAX,
             request_started.elapsed().as_millis() as u64,
@@ -2303,7 +2336,7 @@ pub(crate) async fn run_global_chat(
         yield Ok::<Event, Infallible>(
             Event::default()
                 .event("run")
-                .data(json!({ "runId": run_id, "channel": channel.handle() }).to_string()),
+                .data(run_event_payload(&run_id, &channel.handle(), &selected_model.id).to_string()),
         );
 
         let mut frame_stream_open = true;

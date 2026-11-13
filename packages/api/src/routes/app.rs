@@ -99,6 +99,10 @@ pub fn routes() -> Router<AppState> {
             patch(internal::change_forking::change_forking)
                 .get(internal::change_forking::get_forking),
         )
+        .route(
+            "/{app_id}/settings/bots",
+            patch(internal::change_bot_access::change_bot_access),
+        )
         .route("/{app_id}/fork", post(fork::online_fork::online_fork))
         .route(
             "/{app_id}/notifications/create",

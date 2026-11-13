@@ -239,6 +239,15 @@
 	"board2": "Tablero",
 	"boardNotFound": "¡TABLERO NO ENCONTRADO!",
 	"boardVersion": "Versión del tablero",
+	"botAccess": {
+		"allow": "",
+		"allowed": "",
+		"description": "",
+		"ownerOnly": "",
+		"refused": "",
+		"saveFailed": "",
+		"title": ""
+	},
 	"bothJoinColumnsLiveInThisTablePickALinkTableForManytomany": "",
 	"bothUseTheSameRandomInstallIdItIsDeletedOnceBothSwitchesAreOffAndAFreshOneIsCreatedIfYouTurnEitherBackOn": "Ambos usan el mismo ID de instalación aleatorio. Se elimina cuando ambos interruptores están desactivados, y se crea uno nuevo si activas cualquiera de los dos de nuevo.",
 	"branding": "Identidad de marca",

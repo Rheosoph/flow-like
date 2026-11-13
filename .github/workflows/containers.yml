@@ -1,36 +1,11 @@
 name: Backend containers
 
 on:
-  push:
-    branches: [dev, main, alpha]
-    tags: ['v*', 'beta-v*']
-  pull_request:
-    paths:
-      - '.github/workflows/containers.yml'
-      - '.github/workflows/compiler-reproducibility.yml'
-      - '.github/actions/setup-rust/**'
-      - '.github/scripts/**'
-      - '.dockerignore'
-      - 'LICENSE'
-      - 'flow-like.config.json'
-      # The images compile the Rust workspace and install the Bun workspace, so a
-      # crate graph or lockfile edit can break a build that touches no Dockerfile.
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'rust-toolchain.toml'
-      - 'bun.lock'
-      - 'bunfig.toml'
-      - 'package.json'
-      - 'packages/**'
-      - 'apps/backend/**'
-      - 'apps/web/**'
-      - 'apps/website/src/content/legal/payments/**'
-  workflow_dispatch:
+  workflow_call:
     inputs:
       cloud:
         description: Image set to publish (APIs support runtime configuration)
-        type: choice
-        options: [all, aws, gcp, azure, docker-compose, kubernetes, self-hosted]
+        type: string
         default: all
 
 permissions:
@@ -46,13 +21,13 @@ env:
   DOCKER_BUILD_RECORD_UPLOAD: 'false'
 
 jobs:
-  compiler-checks:
-    uses: ./.github/workflows/compiler-reproducibility.yml
-
   validate:
     name: Validate container publication contracts
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    outputs:
+      images: ${{ steps.matrix.outputs.images }}
+      owner: ${{ steps.matrix.outputs.owner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
         with:
@@ -95,17 +70,30 @@ jobs:
           python3 .github/scripts/container_publication.py check-config --path apps/backend/docker-compose/flow-like.config.example.json
           python3 .github/scripts/container_publication.py check-config --path apps/backend/kubernetes/flow-like.config.example.json
 
+      - name: Restrict publication to release branches and tags
+        if: github.event_name != 'pull_request'
+        env:
+          SOURCE_REF: ${{ github.ref }}
+        run: |
+          case "$SOURCE_REF" in
+            refs/heads/dev|refs/heads/main|refs/heads/alpha|refs/tags/v*|refs/tags/beta-v*) ;;
+            *) echo 'Publication requires dev, main, alpha, a v* tag, or a beta-v* tag.' >&2; exit 1 ;;
+          esac
+      - name: Generate native-platform build batches
+        id: matrix
+        env:
+          CLOUD: ${{ inputs.cloud }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          echo "images=$(python3 .github/scripts/container_images.py build-matrix --cloud "$CLOUD")" >> "$GITHUB_OUTPUT"
+          echo "owner=${OWNER,,}" >> "$GITHUB_OUTPUT"
+
   native-deps:
-    name: Native dependencies (${{ matrix.recipe.name }}, ${{ matrix.platform }})
+    name: Native dependencies (${{ matrix.platform }})
     needs: validate
     strategy:
       fail-fast: false
       matrix:
-        recipe:
-          - name: Compose runtime
-            dockerfile: apps/backend/docker-compose/runtime/Dockerfile
-          - name: Kubernetes executor
-            dockerfile: apps/backend/kubernetes/executor/Dockerfile
         platform: [linux/amd64, linux/arm64]
         include:
           - platform: linux/amd64
@@ -113,39 +101,57 @@ jobs:
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-      - name: Compile and run native dependency checks
+      - name: Compile and run Compose native dependency checks
+        id: compose
+        continue-on-error: true
         env:
-          DOCKERFILE: ${{ matrix.recipe.dockerfile }}
           PLATFORM: ${{ matrix.platform }}
-        run: bash .github/scripts/check-container-native-deps.sh "$DOCKERFILE" "$PLATFORM"
+        run: bash .github/scripts/check-container-native-deps.sh apps/backend/docker-compose/runtime/Dockerfile "$PLATFORM"
+      - name: Compile and run Kubernetes native dependency checks
+        id: kubernetes
+        continue-on-error: true
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: bash .github/scripts/check-container-native-deps.sh apps/backend/kubernetes/executor/Dockerfile "$PLATFORM"
+      - name: Require both native dependency checks to pass
+        if: always()
+        env:
+          COMPOSE: ${{ steps.compose.outcome }}
+          KUBERNETES: ${{ steps.kubernetes.outcome }}
+        run: test "$COMPOSE" = success && test "$KUBERNETES" = success
 
   signaling-image:
-    name: Signaling image starts (${{ matrix.cloud }})
+    name: Signaling images start
     needs: validate
-    strategy:
-      fail-fast: false
-      matrix:
-        cloud: [docker-compose, gcp, azure]
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
         with:
           persist-credentials: false
       # Publication builds skip pull requests, so this is the only PR gate that
       # proves the recipe ships every module server.ts imports.
-      - name: Build the signaling image
-        env:
-          RECIPE: apps/backend/${{ matrix.cloud }}/signaling/Dockerfile
-        run: DOCKER_BUILDKIT=1 docker build --file "$RECIPE" --tag "signaling-smoke:${GITHUB_SHA}" .
-      - name: Start the image and require readiness
-        run: bash apps/backend/signaling/tests/image-smoke.sh "signaling-smoke:${GITHUB_SHA}"
+      - name: Build each signaling image and require readiness
+        run: |
+          failed=0
+          for cloud in docker-compose gcp azure; do
+            echo "::group::${cloud} signaling image"
+            tag="signaling-smoke:${GITHUB_SHA}-${cloud}"
+            if DOCKER_BUILDKIT=1 docker build --file "apps/backend/${cloud}/signaling/Dockerfile" --tag "$tag" .; then
+              bash apps/backend/signaling/tests/image-smoke.sh "$tag" || failed=1
+            else
+              failed=1
+            fi
+            docker image rm "$tag" >/dev/null 2>&1 || true
+            echo "::endgroup::"
+          done
+          exit "$failed"
 
   web-image:
     name: Web images export browser runtimes
@@ -179,53 +185,24 @@ jobs:
               || { echo "${recipe} omitted a required browser runtime from its static export." >&2; exit 1; }
           done
 
-  matrix:
-    name: Select release images
-    needs: [native-deps, signaling-image, compiler-checks]
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      images: ${{ steps.matrix.outputs.images }}
-      owner: ${{ steps.matrix.outputs.owner }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
-        with:
-          persist-credentials: false
-      - name: Restrict publication to release branches and tags
-        env:
-          SOURCE_REF: ${{ github.ref }}
-        run: |
-          case "$SOURCE_REF" in
-            refs/heads/dev|refs/heads/main|refs/heads/alpha|refs/tags/v*|refs/tags/beta-v*) ;;
-            *) echo 'Publication requires dev, main, alpha, a v* tag, or a beta-v* tag.' >&2; exit 1 ;;
-          esac
-      - name: Generate native-platform matrix
-        id: matrix
-        env:
-          CLOUD: ${{ inputs.cloud || 'all' }}
-          OWNER: ${{ github.repository_owner }}
-        run: |
-          echo "images=$(python3 .github/scripts/container_images.py matrix --cloud "$CLOUD")" >> "$GITHUB_OUTPUT"
-          echo "owner=${OWNER,,}" >> "$GITHUB_OUTPUT"
-
   build:
     name: ${{ matrix.id }} (${{ matrix.platform }})
-    needs: matrix
+    needs: [validate, native-deps, signaling-image]
+    if: github.event_name != 'pull_request'
     permissions:
       contents: read
       packages: write
     strategy:
       fail-fast: false
-      max-parallel: 16
-      matrix: ${{ fromJSON(needs.matrix.outputs.images) }}
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.validate.outputs.images) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
     env:
-      OWNER: ${{ needs.matrix.outputs.owner }}
+      OWNER: ${{ needs.validate.outputs.owner }}
       TARGET: ${{ matrix.id }}
       PLATFORM: ${{ matrix.platform }}
-      IMAGE_REPOSITORY: ghcr.io/${{ needs.matrix.outputs.owner }}/${{ matrix.image_suffix }}
+      IMAGE_REPOSITORY: ghcr.io/${{ needs.validate.outputs.owner }}/${{ matrix.image_suffix }}
       TRIVY_IMAGE_SRC: docker
       TRIVY_IMAGE_CONFIG_SCANNERS: secret
     steps:
@@ -233,6 +210,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Name this build
+        if: matrix.workload != 'helpers'
         id: image
         run: |
           arch="${PLATFORM#linux/}"
@@ -254,7 +232,7 @@ jobs:
       # Opt in only after budgeting storage and reviewing Cargo Git sources.
       # Layer cache alone does not preserve RUN --mount=type=cache contents.
       - name: Restore Cargo cache mounts (optional)
-        if: vars.CONTAINER_CARGO_CACHE == 'true' && !contains(fromJSON('["signaling","migration","otel-collector","db-init","object-store-init","web"]'), matrix.workload)
+        if: vars.CONTAINER_CARGO_CACHE == 'true' && !contains(fromJSON('["helpers","web"]'), matrix.workload)
         id: cargo-cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -263,7 +241,7 @@ jobs:
           restore-keys: |
             container-cargo-v1-${{ matrix.id }}-${{ hashFiles(matrix.dockerfile, 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}-
       - name: Restore and later extract BuildKit cache mounts (optional)
-        if: vars.CONTAINER_CARGO_CACHE == 'true' && !contains(fromJSON('["signaling","migration","otel-collector","db-init","object-store-init","web"]'), matrix.workload)
+        if: vars.CONTAINER_CARGO_CACHE == 'true' && !contains(fromJSON('["helpers","web"]'), matrix.workload)
         uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
         with:
           builder: ${{ steps.buildx.outputs.name }}
@@ -273,6 +251,7 @@ jobs:
           skip-extraction: ${{ steps.cargo-cache.outputs.cache-hit }}
 
       - name: Build once into the local image store
+        if: matrix.workload != 'helpers'
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: ${{ matrix.context }}
@@ -298,12 +277,8 @@ jobs:
           # Never publish builder/source layers to a GHCR :buildcache package.
           cache-from: ${{ matrix.layer_cache && format('type=gha,scope=container-v1-{0}', matrix.id) || '' }}
           cache-to: ${{ matrix.layer_cache && format('type=gha,scope=container-v1-{0},mode=max', matrix.id) || '' }}
-      - name: Start the signaling image and require readiness
-        if: matrix.workload == 'signaling'
-        env:
-          IMAGE: ${{ steps.image.outputs.ref }}
-        run: bash apps/backend/signaling/tests/image-smoke.sh "$IMAGE" "$PLATFORM"
       - name: Inspect final filesystem and extract compiled text for scanning
+        if: matrix.workload != 'helpers'
         env:
           IMAGE: ${{ steps.image.outputs.ref }}
         run: |
@@ -311,6 +286,7 @@ jobs:
             --image "$IMAGE" --platform "$PLATFORM" \
             --output-dir "$RUNNER_TEMP/container-binary-strings"
       - name: Scan image files, environment, and history for secrets
+        if: matrix.workload != 'helpers'
         id: image-secrets
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
         with:
@@ -328,6 +304,7 @@ jobs:
           python3 .github/scripts/container_publication.py report-secrets \
             --path "$RUNNER_TEMP/container-image-secrets.json"
       - name: Scan printable text from compiled binaries for secrets
+        if: matrix.workload != 'helpers'
         id: binary-secrets
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
         with:
@@ -345,12 +322,14 @@ jobs:
           python3 .github/scripts/container_publication.py report-secrets \
             --path "$RUNNER_TEMP/container-binary-secrets.json" --compiled-text
       - name: Authenticate after publication checks pass
+        if: matrix.workload != 'helpers'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Push the scanned image and record its registry digest
+        if: matrix.workload != 'helpers'
         env:
           IMAGE: ${{ steps.image.outputs.ref }}
         run: |
@@ -366,23 +345,46 @@ jobs:
             --target "$TARGET" --owner "$OWNER" --source-sha "$GITHUB_SHA" \
             --digest "$digest" --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" --output "records/${TARGET}.json"
+      - name: Expose the GitHub cache runtime to sequential helper builds
+        if: matrix.workload == 'helpers'
+        uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4
+      - name: Install the pinned secret scanner for helper images
+        if: matrix.workload == 'helpers'
+        uses: aquasecurity/setup-trivy@e6c2c5e321ed9123bda567646e2f96565e34abe1 # v0.2.4
+        with:
+          version: v0.69.3
+          cache: 'false'
+      - name: Build, scan, and publish helper images sequentially
+        if: matrix.workload == 'helpers'
+        timeout-minutes: 120
+        env:
+          BATCH_TARGETS: ${{ toJSON(matrix.targets) }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/container_build_batch.py --records-dir "$RUNNER_TEMP/container-records"
       - name: Upload digest record only
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: container-record-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.id }}
-          path: records/*.json
+          path: ${{ matrix.workload == 'helpers' && format('{0}/container-records/*.json', runner.temp) || 'records/*.json' }}
           if-no-files-found: error
           retention-days: 30
 
   manifest:
-    name: Assemble complete digest manifest
-    needs: [matrix, build]
+    name: Validate and publish complete release manifests
+    needs: [validate, build]
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
         with:
           persist-credentials: false
+          # The mutable-tag guard checks whether an existing tag's commit is an ancestor.
+          fetch-depth: 0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: container-record-${{ github.run_id }}-${{ github.run_attempt }}-*
@@ -390,7 +392,7 @@ jobs:
       - name: Validate and merge every required digest
         env:
           CLOUD: ${{ inputs.cloud || 'all' }}
-          OWNER: ${{ needs.matrix.outputs.owner }}
+          OWNER: ${{ needs.validate.outputs.owner }}
         run: |
           python3 .github/scripts/container_images.py manifest \
             --cloud "$CLOUD" --owner "$OWNER" --source-sha "$GITHUB_SHA" \
@@ -403,26 +405,6 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  index:
-    name: Publish release references and channel tags
-    needs: [matrix, manifest]
-    if: github.event_name != 'pull_request'
-    permissions:
-      contents: read
-      packages: write
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
-        with:
-          persist-credentials: false
-          # The mutable-tag guard checks whether an existing tag's commit is an ancestor.
-          fetch-depth: 0
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: container-images-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: manifest
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
@@ -437,14 +419,14 @@ jobs:
           # The immutable sha-<sha>-run-<run>-<attempt> tag always applies; channel
           # tags only move forward and skips are recorded instead of failing.
           python3 .github/scripts/container_images.py publish \
-            --manifest manifest/container-images.json --ref "$SOURCE_REF" \
+            --manifest container-images.json --ref "$SOURCE_REF" \
             --source-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" --github-repository "$GITHUB_REPOSITORY" \
             --output container-indexes.json
       - name: Validate the published index manifest
         run: |
           python3 .github/scripts/container_images.py indexes \
-            --manifest manifest/container-images.json --path container-indexes.json
+            --manifest container-images.json --path container-indexes.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: container-indexes-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}

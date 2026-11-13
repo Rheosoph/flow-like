@@ -66,6 +66,24 @@ test("fixed endpoints omit endpoint overrides and external routes show input pri
 	expect(render("Internal")).not.toContain("Hosted embedding pricing");
 });
 
+test("Cloudflare EmbeddingGemma 2 shows multimodal capabilities and vector configuration", () => {
+	const markup = render("CloudflareWorkersAI", "@cf/google/embeddinggemma-2");
+	expect(markup).toContain("text, images, audio and video");
+	expect(markup).toContain("128, 256, 512 or 768 vector dimensions");
+	expect(markup).toContain("at most 8192 tokens");
+	expect(markup).toContain("default is 768");
+	expect(markup).toContain("task: search result | query: ");
+	expect(markup).toContain("title: none | text: ");
+	expect(markup).toContain("including the trailing spaces");
+	expect(markup).not.toContain("100 inputs per request");
+	expect(render("CloudflareWorkersAI", "another-model")).not.toContain(
+		"EmbeddingGemma 2 accepts",
+	);
+	expect(render("Internal", "@cf/google/embeddinggemma-2")).not.toContain(
+		"EmbeddingGemma 2 accepts",
+	);
+});
+
 test("OpenRouter exposes its default key and Gemini multimodal configuration", () => {
 	const markup = render("OpenRouter", "google/gemini-embedding-2");
 	expect(markup).toContain('placeholder="google/gemini-embedding-2"');

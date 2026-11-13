@@ -8,8 +8,9 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 
 use super::{
     hosted_input::{
-        HostedEmbeddingInput, HostedEmbeddingPart, HostedEmbeddingStructuredInput,
-        OPENROUTER_MULTIMODAL_MODEL, supports_hosted_multimodal, supports_openrouter_multimodal,
+        CLOUDFLARE_MULTIMODAL_MODEL, HostedEmbeddingInput, HostedEmbeddingPart,
+        HostedEmbeddingStructuredInput, OPENROUTER_MULTIMODAL_MODEL,
+        supports_cloudflare_multimodal, supports_hosted_multimodal, supports_openrouter_multimodal,
     },
     interface::{
         AudioInput, EmbeddingBatch, EmbeddingDescriptor, EmbeddingError, EmbeddingInput,
@@ -21,6 +22,7 @@ use super::{
 
 pub const INTERNAL_MULTIMODAL_ADAPTER: &str = "internal_multimodal";
 pub const OPENROUTER_MULTIMODAL_ADAPTER: &str = "openrouter_multimodal";
+pub const CLOUDFLARE_MULTIMODAL_ADAPTER: &str = "cloudflare_multimodal";
 
 pub struct ProxyMultimodalEmbeddingModel {
     proxy: ProxyEmbeddingModel,
@@ -34,23 +36,28 @@ impl ProxyMultimodalEmbeddingModel {
             "The hosted embedding model does not support multimodal inputs"
         );
         let openrouter = supports_openrouter_multimodal(&proxy.provider);
+        let cloudflare = supports_cloudflare_multimodal(&proxy.provider);
         let dimensions = proxy.provider.vector_length as usize;
         ensure!(
             if openrouter {
                 (128..=3072).contains(&dimensions)
+            } else if cloudflare {
+                [128, 256, 512, 768].contains(&dimensions)
             } else {
                 dimensions == 768
             },
             "Configured dimensions are not supported by the hosted embedding model"
         );
-        if openrouter {
+        if openrouter || cloudflare {
             ensure!(
                 (1..=8192).contains(&proxy.provider.input_length),
-                "Gemini Embedding 2 supports up to 8192 input tokens"
+                "The hosted embedding model supports up to 8192 input tokens"
             );
         }
         let adapter = if openrouter {
             OPENROUTER_MULTIMODAL_ADAPTER
+        } else if cloudflare {
+            CLOUDFLARE_MULTIMODAL_ADAPTER
         } else {
             INTERNAL_MULTIMODAL_ADAPTER
         };
@@ -87,6 +94,8 @@ impl ProxyMultimodalEmbeddingModel {
             space: EmbeddingSpace {
                 id: if openrouter {
                     format!("openrouter:{OPENROUTER_MULTIMODAL_MODEL}:{dimensions}")
+                } else if cloudflare {
+                    format!("cloudflare:{CLOUDFLARE_MULTIMODAL_MODEL}:{dimensions}")
                 } else {
                     "internal:embeddinggemma-2:768".into()
                 },
@@ -98,8 +107,16 @@ impl ProxyMultimodalEmbeddingModel {
             supported_dimensions: vec![dimensions],
             limits: EmbeddingLimits {
                 max_tokens: 8192,
-                max_images_per_item: Some(if openrouter { 6 } else { 1 }),
-                max_audio_duration_ms: Some(if openrouter { 180_000 } else { 327_000 }),
+                max_images_per_item: if cloudflare {
+                    None
+                } else {
+                    Some(if openrouter { 6 } else { 1 })
+                },
+                max_audio_duration_ms: if cloudflare {
+                    None
+                } else {
+                    Some(if openrouter { 180_000 } else { 327_000 })
+                },
                 max_video_duration_ms: openrouter.then_some(120_000),
                 max_file_pages: openrouter.then_some(6),
                 ..Default::default()
@@ -121,10 +138,12 @@ impl ProxyMultimodalEmbeddingModel {
                 .iter()
                 .all(|part| matches!(part, EmbeddingPart::Text(_)))
         });
-        // OpenRouter's prompt total includes media tokens; it is not a text-token count.
+        // These providers include media in their prompt total, so only label text-only usage.
         if response.usage_available
             && !response.usage_estimated
-            && (!supports_openrouter_multimodal(&self.proxy.provider) || text_only)
+            && (!(supports_openrouter_multimodal(&self.proxy.provider)
+                || supports_cloudflare_multimodal(&self.proxy.provider))
+                || text_only)
         {
             batch.usage.text_tokens = u64::try_from(response.usage.prompt_tokens).ok();
         }
@@ -144,6 +163,7 @@ impl EmbeddingModel for ProxyMultimodalEmbeddingModel {
 
     fn requires_typed_media_sources(&self) -> bool {
         supports_openrouter_multimodal(&self.proxy.provider)
+            || supports_cloudflare_multimodal(&self.proxy.provider)
     }
 
     async fn embed(&self, request: EmbeddingRequest) -> Result<EmbeddingBatch, EmbeddingError> {
@@ -152,7 +172,9 @@ impl EmbeddingModel for ProxyMultimodalEmbeddingModel {
             .items
             .iter()
             .map(|input| {
-                if supports_openrouter_multimodal(&self.proxy.provider) {
+                if supports_cloudflare_multimodal(&self.proxy.provider) {
+                    cloudflare_content_input(input)
+                } else if supports_openrouter_multimodal(&self.proxy.provider) {
                     hosted_content_input(input)
                 } else {
                     hosted_input(input)
@@ -274,6 +296,25 @@ fn hosted_input(input: &EmbeddingInput) -> Result<HostedEmbeddingInput, Embeddin
             video,
         },
     ))
+}
+
+fn cloudflare_content_input(
+    input: &EmbeddingInput,
+) -> Result<HostedEmbeddingInput, EmbeddingError> {
+    for part in &input.parts {
+        match part {
+            EmbeddingPart::File(_) => {
+                return Err(EmbeddingError::UnsupportedModality(EmbeddingModality::File));
+            }
+            EmbeddingPart::EncodedMedia { source, .. } if !source.starts_with("data:") => {
+                return Err(EmbeddingError::InvalidInput(
+                    "Cloudflare media embeddings require base64 data URLs; read the media file before embedding".into(),
+                ));
+            }
+            _ => {}
+        }
+    }
+    hosted_content_input(input)
 }
 
 fn hosted_content_input(input: &EmbeddingInput) -> Result<HostedEmbeddingInput, EmbeddingError> {
@@ -417,6 +458,140 @@ mod tests {
         remote.implementation = Some(crate::provider::RemoteEmbeddingProvider::OpenRouter);
         remote.model_id = Some(OPENROUTER_MULTIMODAL_MODEL.into());
         proxy
+    }
+
+    fn cloudflare_proxy() -> ProxyEmbeddingModel {
+        let mut proxy = proxy();
+        proxy.provider.vector_length = 256;
+        let remote = proxy.provider.remote.as_mut().unwrap();
+        remote.implementation = Some(crate::provider::RemoteEmbeddingProvider::CloudflareWorkersAI);
+        remote.model_id = Some(CLOUDFLARE_MULTIMODAL_MODEL.into());
+        proxy
+    }
+
+    #[test]
+    fn cloudflare_uses_a_distinct_space_and_only_documented_dimensions() {
+        for dimensions in [128, 256, 512, 768] {
+            let mut proxy = cloudflare_proxy();
+            proxy.provider.vector_length = dimensions;
+            let model = ProxyMultimodalEmbeddingModel::new(proxy).unwrap();
+            assert!(model.requires_typed_media_sources());
+            assert_eq!(model.descriptor.adapter, CLOUDFLARE_MULTIMODAL_ADAPTER);
+            assert_eq!(model.descriptor.space.dimensions, dimensions as usize);
+            assert_eq!(
+                model.descriptor.supported_dimensions,
+                vec![dimensions as usize]
+            );
+            assert_eq!(model.descriptor.limits.max_tokens, 8192);
+            assert_eq!(
+                model.descriptor.space.id,
+                format!("cloudflare:{CLOUDFLARE_MULTIMODAL_MODEL}:{dimensions}")
+            );
+            assert_eq!(
+                model.descriptor.modalities,
+                vec![
+                    EmbeddingModality::Text,
+                    EmbeddingModality::Image,
+                    EmbeddingModality::Audio,
+                    EmbeddingModality::Video
+                ]
+            );
+        }
+        for dimensions in [0, 127, 384, 769, 1536] {
+            let mut proxy = cloudflare_proxy();
+            proxy.provider.vector_length = dimensions;
+            assert!(ProxyMultimodalEmbeddingModel::new(proxy).is_err());
+        }
+        for tokens in [0, 8193] {
+            let mut proxy = cloudflare_proxy();
+            proxy.provider.input_length = tokens;
+            assert!(ProxyMultimodalEmbeddingModel::new(proxy).is_err());
+        }
+        let mut old_model = cloudflare_proxy();
+        old_model.provider.remote.as_mut().unwrap().model_id =
+            Some("@cf/google/embeddinggemma-300m".into());
+        assert!(ProxyMultimodalEmbeddingModel::new(old_model).is_err());
+        for missing_model in [None, Some("  ".into())] {
+            let mut legacy = cloudflare_proxy();
+            legacy.provider.remote.as_mut().unwrap().model_id = missing_model;
+            legacy.provider.provider.model_id = Some(CLOUDFLARE_MULTIMODAL_MODEL.into());
+            assert!(ProxyMultimodalEmbeddingModel::new(legacy).is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn cloudflare_preserves_content_order_and_rejects_media_urls_before_dispatch() {
+        let model = ProxyMultimodalEmbeddingModel::new(cloudflare_proxy()).unwrap();
+        let input = EmbeddingInput {
+            title: None,
+            parts: vec![
+                EmbeddingPart::Text("Compare ".into()),
+                EmbeddingPart::EncodedMedia {
+                    modality: EmbeddingModality::Image,
+                    source: "data:image/png;base64,AAAA".into(),
+                },
+                EmbeddingPart::Text(" with ".into()),
+                EmbeddingPart::EncodedMedia {
+                    modality: EmbeddingModality::Video,
+                    source: "data:video/mp4;base64,BBBB".into(),
+                },
+                EmbeddingPart::Audio(AudioInput {
+                    samples: Arc::from([0.25, -0.25]),
+                    sample_rate: 16_000,
+                    channels: 1,
+                }),
+            ],
+        };
+        let request = model
+            .proxy
+            .build_hosted_request(&[cloudflare_content_input(&input).unwrap()], "document")
+            .await
+            .unwrap();
+        assert_eq!(request.headers()["authorization"], "Bearer token");
+        assert_eq!(request.headers()["x-flow-like-run-id"], "run");
+        let body: serde_json::Value =
+            serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
+        let parts = body["input"][0]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 5);
+        assert_eq!(parts[1]["source"], "data:image/png;base64,AAAA");
+        assert_eq!(parts[2]["text"], " with ");
+        assert_eq!(parts[3]["source"], "data:video/mp4;base64,BBBB");
+        assert!(
+            parts[4]["source"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:audio/wav;base64,")
+        );
+        for modality in [
+            EmbeddingModality::Image,
+            EmbeddingModality::Audio,
+            EmbeddingModality::Video,
+        ] {
+            let mut request = EmbeddingRequest::texts(["query".into()], EmbeddingPurpose::Query);
+            request.items[0].parts = vec![EmbeddingPart::EncodedMedia {
+                modality,
+                source: "https://example.test/media".into(),
+            }];
+            assert!(matches!(
+                model.embed(request).await,
+                Err(EmbeddingError::InvalidInput(_))
+            ));
+        }
+        let mut request = EmbeddingRequest::texts(["query".into()], EmbeddingPurpose::Query);
+        request.items[0] = input;
+        let response = serde_json::from_value(serde_json::json!({
+            "embeddings": [vec![0.0; 256]], "model": "gemma-bit", "usage_available": true,
+            "usage_estimated": false, "usage": {"prompt_tokens": 300, "total_tokens": 300}
+        }))
+        .unwrap();
+        assert_eq!(
+            model
+                .finish_response(&request, response)
+                .unwrap()
+                .usage
+                .text_tokens,
+            None
+        );
     }
 
     #[tokio::test]

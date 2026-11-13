@@ -46,9 +46,10 @@ const TABLES: [&str; 8] = [
         "messageId" TEXT NOT NULL, "senderId" TEXT NOT NULL, "kind" TEXT NOT NULL,
         "envelope" TEXT NOT NULL, "createdAt" TEXT NOT NULL, "seq" INTEGER, "cleared" BOOLEAN,
         UNIQUE ("inboxId", "messageId"), UNIQUE ("inboxId", "conversationId", "seq"))"#,
-    r#"CREATE TABLE public."App" ("id" TEXT PRIMARY KEY, "botId" TEXT UNIQUE)"#,
+    r#"CREATE TABLE public."App" ("id" TEXT PRIMARY KEY, "botId" TEXT UNIQUE, "refuseBots" BOOLEAN)"#,
     r#"CREATE TABLE public."User" (
-        "id" TEXT PRIMARY KEY, "name" TEXT, "email" TEXT, "username" TEXT, "preferredUsername" TEXT, "additionalInformation" TEXT, "updatedAt" TEXT)"#,
+        "id" TEXT PRIMARY KEY, "name" TEXT, "email" TEXT, "username" TEXT, "preferredUsername" TEXT, "additionalInformation" TEXT, "updatedAt" TEXT,
+        "tier" TEXT NOT NULL DEFAULT 'FREE')"#,
     BOT_TURN_TABLE,
     r#"CREATE TABLE public."ConversationSegment" (
         "id" TEXT PRIMARY KEY, "conversationId" TEXT NOT NULL, "authorId" TEXT NOT NULL,
@@ -170,6 +171,7 @@ pub(crate) async fn insert_bot(db: &DatabaseConnection, id: &str, owner_id: &str
         capabilities: Set(Default::default()),
         profile_id: Set(None),
         location: Set(location.into()),
+        execution_mode: Set(None),
         device_id: Set((location == "DEVICE").then(|| format!("device-of-{id}"))),
         created_at: Set(at(0)),
         updated_at: Set(at(0)),

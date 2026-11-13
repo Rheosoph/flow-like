@@ -39,6 +39,8 @@ export interface IChatErrorAction {
 	href?: string;
 	/** With `add-model`: the answer runs in the cloud, so models on the person's devices don't help. */
 	hostedOnly?: boolean;
+	/** With `add-model`: the bot whose own profile the pick goes to; unset means the active one. */
+	botId?: string;
 }
 
 /**

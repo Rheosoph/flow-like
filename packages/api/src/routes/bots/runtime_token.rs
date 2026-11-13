@@ -1,5 +1,6 @@
 //! A desktop host signs in as the owner and obtains a token for its bot. A supplied turn pins
-//! its group. Direct app tokens carry no group and cannot access inbox conversations.
+//! its conversation unless that is the owner's own direct chat with the bot. Direct app tokens
+//! carry no conversation and cannot access inbox conversations.
 
 use super::owned_bot;
 use crate::{
@@ -13,10 +14,7 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use flow_like_types::{
-    bot_turn::{TurnAudience, TurnStatus},
-    inbox::ConversationKind,
-};
+use flow_like_types::{bot_turn::TurnStatus, inbox::ConversationKind};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -36,8 +34,7 @@ pub struct BotRuntimeToken {
 }
 
 /// The identity a token for `turn_id` carries: the turn must be the bot's and the caller's.
-/// A room turn pins the room so its invitation limits apply. Late answers retain the original
-/// conversation's scope rather than the exchange that delivered the answer.
+/// Every turn outside the owner's own direct chat pins its conversation (see [`turn_scope`]).
 pub(crate) async fn bot_user_for_turn<C: ConnectionTrait>(
     db: &C,
     owner_id: &str,
@@ -51,36 +48,43 @@ pub(crate) async fn bot_user_for_turn<C: ConnectionTrait>(
         .one(db)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("Turn '{turn_id}' not found")))?;
-    let origin = crate::bot_host::talk::turn_origin_conversation(db, &turn).await?;
-    let conv_id = if origin == turn.conversation_id {
-        (TurnAudience::parse(&turn.audience) == Some(TurnAudience::Room))
-            .then_some(turn.conversation_id)
-    } else {
-        let kind = conversation::Entity::find_by_id(&origin)
-            .one(db)
-            .await?
-            .and_then(|row| ConversationKind::parse(&row.kind))
-            .ok_or_else(|| ApiError::forbidden("The original conversation is unavailable"))?;
-        match kind {
-            ConversationKind::Group => {
-                crate::bot_permission::room_limits(db, bot_id, &origin).await?;
-                Some(origin)
-            }
-            ConversationKind::Direct => {
-                if !crate::bot_host::memory::is_owner_direct(db, &origin, owner_id, bot_id).await? {
-                    return Err(ApiError::forbidden(
-                        "The original conversation is not the bot's active conversation with its owner",
-                    ));
-                }
-                None
-            }
-        }
-    };
+    let conv_id = turn_scope(db, &turn).await?;
     Ok(BotUser {
         bot_id: bot_id.to_string(),
         turn_id: turn.id,
         conv_id,
     })
+}
+
+/// The conversation whose member-row limits apply to `turn`: `None` only in the owner's own
+/// direct chat with the bot, so rooms and other people's direct chats with it keep the limits
+/// its owner set on accepting them. A late answer keeps the scope of the conversation it was
+/// asked from, which must still exist and hold the bot.
+pub(crate) async fn turn_scope<C: ConnectionTrait>(
+    db: &C,
+    turn: &bot_turn::Model,
+) -> Result<Option<String>, ApiError> {
+    let origin = crate::bot_host::talk::turn_origin_conversation(db, turn).await?;
+    let late = origin != turn.conversation_id;
+    if late {
+        conversation::Entity::find_by_id(&origin)
+            .one(db)
+            .await?
+            .and_then(|row| ConversationKind::parse(&row.kind))
+            .ok_or_else(|| {
+                ApiError::forbidden(format!(
+                    "The original conversation '{origin}' of turn '{}' is unavailable",
+                    turn.id
+                ))
+            })?;
+    }
+    let scope =
+        crate::bot_permission::limited_conversation(db, &origin, &turn.owner_id, &turn.bot_id)
+            .await?;
+    if late && let Some(room) = &scope {
+        crate::bot_permission::room_limits(db, &turn.bot_id, room).await?;
+    }
+    Ok(scope)
 }
 
 /// Tokens that outlive a request are only for turns a host still works on.

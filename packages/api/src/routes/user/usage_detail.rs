@@ -43,6 +43,7 @@ pub async fn get_operation_detail(
             .min(i128::from(i64::MAX)) as i64
     });
     let raw_usage = detail.and_then(|detail| detail.get("providerUsage"));
+    let (cache_read_tokens, cache_write_tokens) = cache_counts(raw_usage);
     let provider_reported_cost = raw_usage.is_some_and(|usage| {
         ["cost", "total_cost", "cost_micro_dollars", "cost_micros"]
             .iter()
@@ -57,6 +58,8 @@ pub async fn get_operation_detail(
         "status": status,
         "inputTokens": invocation.as_ref().map(|row| row.input_tokens),
         "outputTokens": invocation.as_ref().map(|row| row.output_tokens),
+        "cacheReadTokens": cache_read_tokens,
+        "cacheWriteTokens": cache_write_tokens,
         "embeddingTokens": invocation.as_ref().map(|row| row.embedding_tokens),
         "tokenCountEstimated": raw_usage.and_then(|usage| usage.get("tokenCountEstimated")).and_then(Value::as_bool).unwrap_or(false),
         "meteringBasis": raw_usage.and_then(|usage| usage.get("meteringBasis")),
@@ -74,4 +77,77 @@ pub async fn get_operation_detail(
         "usage": serde_json::from_str::<Value>(&operation.try_get::<String>("", "used")?)?,
         "reserved": serde_json::from_str::<Value>(&operation.try_get::<String>("", "reserved")?)?,
     })))
+}
+
+/// Extract only the provider's numeric counters. Missing fields stay unknown; a reported zero
+/// is useful evidence and must not disappear. These are subsets of input, not additional usage.
+fn cache_counts(usage: Option<&Value>) -> (Option<u64>, Option<u64>) {
+    let Some(usage) = usage else {
+        return (None, None);
+    };
+    let count = |paths: &[&str]| {
+        paths
+            .iter()
+            .find_map(|path| usage.pointer(path).and_then(Value::as_u64))
+    };
+    (
+        count(&[
+            "/prompt_tokens_details/cached_tokens",
+            "/input_tokens_details/cached_tokens",
+            "/cache_read_input_tokens",
+            "/prompt_cache_hit_tokens",
+            "/cachedContentTokenCount",
+        ]),
+        count(&[
+            "/prompt_tokens_details/cache_write_tokens",
+            "/input_tokens_details/cache_write_tokens",
+            "/cache_creation_input_tokens",
+        ]),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cache_details_preserve_reported_zero_and_never_expose_provider_payloads() {
+        assert_eq!(cache_counts(None), (None, None));
+        assert_eq!(
+            cache_counts(Some(&json!({"prompt_tokens": 123}))),
+            (None, None)
+        );
+        assert_eq!(
+            cache_counts(Some(&json!({"prompt_tokens_details": {
+            "cached_tokens": 0, "cache_write_tokens": 500
+        }, "private": "ignored"}))),
+            (Some(0), Some(500))
+        );
+        assert_eq!(
+            cache_counts(Some(
+                &json!({"input_tokens_details": {"cached_tokens": 80}})
+            )),
+            (Some(80), None)
+        );
+        assert_eq!(
+            cache_counts(Some(
+                &json!({"cache_read_input_tokens": 40, "cache_creation_input_tokens": 60})
+            )),
+            (Some(40), Some(60))
+        );
+        assert_eq!(
+            cache_counts(Some(&json!({"prompt_cache_hit_tokens": 70}))),
+            (Some(70), None)
+        );
+        assert_eq!(
+            cache_counts(Some(&json!({"cachedContentTokenCount": 90}))),
+            (Some(90), None)
+        );
+        assert_eq!(
+            cache_counts(Some(
+                &json!({"prompt_tokens_details": {"cached_tokens": -1, "cache_write_tokens": "100"}})
+            )),
+            (None, None)
+        );
+    }
 }

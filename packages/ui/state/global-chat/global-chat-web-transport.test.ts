@@ -19,6 +19,7 @@ vi.mock("../../lib/channel", () => ({
 import {
 	type WebToolRequest,
 	dispatchSpecialistToolRequest,
+	webGlobalChatStart,
 } from "./global-chat-web-transport";
 
 function toolRequest(parentRequestId?: string) {
@@ -203,5 +204,41 @@ describe("dispatchSpecialistToolRequest", () => {
 			}),
 			expect.anything(),
 		);
+	});
+});
+
+describe("webGlobalChatStart model report", () => {
+	const channel = {
+		channel_id: "run-channel",
+		request_id: "run-1",
+		expires_at: 4_000_000_000,
+		transport: { type: "in_process" },
+	};
+
+	async function runWith(runFrame: Record<string, unknown>) {
+		const body = [
+			`event: run\ndata: ${JSON.stringify(runFrame)}\n\n`,
+			`event: final\ndata: ${JSON.stringify({ message: "ok" })}\n\n`,
+		].join("");
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(body, { status: 200 })),
+		);
+		const reported: string[] = [];
+		await webGlobalChatStart({ baseUrl: "https://api.test", body: {} })(
+			() => undefined,
+			(modelId) => reported.push(modelId),
+		);
+		return reported;
+	}
+
+	it("reports the model id of the run frame", async () => {
+		expect(
+			await runWith({ runId: "run-1", channel, modelId: "bit-7" }),
+		).toEqual(["bit-7"]);
+	});
+
+	it("reports nothing for a run frame from an older server", async () => {
+		expect(await runWith({ runId: "run-1", channel })).toEqual([]);
 	});
 });

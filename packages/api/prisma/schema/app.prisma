@@ -64,6 +64,9 @@ model App {
   /// Set on a bot's workspace: the bot's id, kept as a free-form string like `forkedFrom`.
   /// One workspace per bot; apps lists hide workspaces with `"botId" IS NULL`.
   botId        String?   @unique
+  /// The owner refuses bots in this app: every bot's access answers `APP_REFUSES_BOTS`.
+  /// NULL or false lets bots use it, bounded by their owners' roles.
+  refuseBots   Boolean?
 
   technicalUsers TechnicalUser[]
   botApps        BotApp[]

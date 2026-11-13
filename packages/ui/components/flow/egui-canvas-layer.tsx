@@ -794,7 +794,12 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				drag.nodes.some((node) => !store.getState().nodeLookup.has(node.id))
 			) {
 				cancel(true);
-				setAnnouncement("Drag cancelled because a selected item was removed.");
+				setAnnouncement(
+					translate.current(
+						"canvasDragCancelledItemRemoved",
+						"Drag cancelled because a selected item was removed.",
+					),
+				);
 				return;
 			}
 			const point = world(pointer);
@@ -820,7 +825,12 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				);
 				if (!resolved) {
 					cancel(false);
-					setAnnouncement("Connection cancelled because its endpoint changed.");
+					setAnnouncement(
+						translate.current(
+							"canvasConnectionCancelledEndpoint",
+							"Connection cancelled because its endpoint changed.",
+						),
+					);
 					return;
 				}
 				const { anchor, target, invalid } = resolved;
@@ -1618,7 +1628,10 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 						setAnnouncement(
 							error instanceof Error
 								? error.message
-								: "The connection could not be saved.",
+								: translate.current(
+										"canvasConnectionSaveFailed",
+										"The connection could not be saved.",
+									),
 						);
 				} finally {
 					// Let the confirmed board revision reach React before the next save reads it.
@@ -1694,8 +1707,14 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 			if (action.kind !== "connect" && action.kind !== "disconnect") {
 				setAnnouncement(
 					action.kind === "noop"
-						? "Connection unchanged."
-						: "Connection cancelled.",
+						? translate.current(
+								"canvasConnectionUnchanged",
+								"Connection unchanged.",
+							)
+						: translate.current(
+								"canvasConnectionCancelled",
+								"Connection cancelled.",
+							),
 				);
 				return;
 			}
@@ -1707,7 +1726,12 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				? dropped.edges?.find((edge) => edge.id === oldEdgeId)
 				: undefined;
 			if (oldEdgeId && !old) {
-				setAnnouncement("Connection cancelled.");
+				setAnnouncement(
+					translate.current(
+						"canvasConnectionCancelled",
+						"Connection cancelled.",
+					),
+				);
 				return;
 			}
 			// The wire shows from the drop on; the host validates the old one when it saves.
@@ -1727,8 +1751,14 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 					if (!disposed && commitScope === currentProps().scopeKey)
 						setAnnouncement(
 							action.kind === "connect"
-								? "Connection saved."
-								: "Connection removed.",
+								? translate.current(
+										"canvasConnectionSaved",
+										"Connection saved.",
+									)
+								: translate.current(
+										"canvasConnectionRemoved",
+										"Connection removed.",
+									),
 						);
 				} finally {
 					shown?.(saved);
@@ -1890,7 +1920,9 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 		};
 		const cancelled = () => {
 			cancel(true);
-			setAnnouncement("Gesture cancelled.");
+			setAnnouncement(
+				translate.current("canvasGestureCancelled", "Gesture cancelled."),
+			);
 		};
 		const click = (event: MouseEvent) => {
 			if (!suppressClick) {
@@ -2211,7 +2243,10 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 			aria-label={
 				props.interactive === false
 					? undefined
-					: "Workflow canvas. Drag from a pin to connect. Drag a wire near either endpoint to reconnect it. Shift-drag selects. Escape cancels."
+					: t(
+							"canvasLabel",
+							"Workflow canvas. Drag from a pin to connect. Drag a wire near either endpoint to reconnect it. Shift-drag selects. Escape cancels.",
+						)
 			}
 			style={{
 				position: "absolute",
@@ -2260,7 +2295,9 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 							: "sr-only"
 					}
 				>
-					{pending ? "Saving connection…" : announcement}
+					{pending
+						? t("canvasSavingConnection", "Saving connection…")
+						: announcement}
 				</output>
 			)}
 		</div>

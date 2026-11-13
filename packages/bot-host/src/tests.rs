@@ -20,11 +20,15 @@ use tokio::sync::Semaphore;
 
 const HOST: &str = "device:test";
 
+mod approval_batch;
 mod checkpoint_encryption;
 mod hub_app_tools;
 mod events;
+mod live_reply;
+mod no_model;
 mod participation;
 mod recovery;
+mod sealed_secrets;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Call {
@@ -69,6 +73,8 @@ struct DeviceHub {
     attempts: Mutex<u32>,
     wait_outcome: Option<crate::hub::WaitOutcome>,
     grants: Mutex<Vec<(String, String)>>,
+    writes: Mutex<std::collections::HashMap<String, Result<Value, HubFailure>>>,
+    cards: Mutex<Vec<ApprovalRequest>>,
 }
 
 impl DeviceHub {
@@ -231,6 +237,20 @@ impl TurnHub for DeviceHub {
         Ok(self.asked.lock().unwrap().clone())
     }
 
+    async fn write(
+        &self,
+        path: &str,
+        _: Vec<(&'static str, String)>,
+        _: Value,
+    ) -> Result<Value, HubFailure> {
+        self.writes
+            .lock()
+            .unwrap()
+            .get(path)
+            .cloned()
+            .unwrap_or_else(|| Err(HubFailure::answered(404, None, "nothing at this path")))
+    }
+
     async fn read(
         &self,
         path: &str,
@@ -313,6 +333,7 @@ impl TurnHub for DeviceHub {
 
     async fn park(&self, _: &str, _: &str, card: &ApprovalRequest) -> Result<(), HubFailure> {
         self.record(Call::Park(card.tool.clone()));
+        self.cards.lock().unwrap().push(card.clone());
         Ok(())
     }
 

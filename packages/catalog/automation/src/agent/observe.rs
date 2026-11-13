@@ -556,6 +556,7 @@ mod tests {
                 height: 100,
                 is_focused: true,
                 is_minimized: false,
+                is_onscreen: true,
             }),
             element_text,
             source: "window \"Document\" on display 0".into(),

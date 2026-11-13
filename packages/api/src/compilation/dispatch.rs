@@ -882,7 +882,7 @@ pub struct DispatchParams {
 }
 
 const WASM_COMPILED_PATH: &str = "wasm-compiled";
-const URL_TTL_SECS: u64 = 3600;
+pub(crate) const URL_TTL_SECS: u64 = 3600;
 
 pub async fn build_compilation_job(
     sub: String,

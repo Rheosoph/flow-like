@@ -21,6 +21,7 @@ mod reply_stream;
 mod room_updates;
 pub(crate) mod taint;
 pub(crate) mod talk;
+pub(crate) mod task_authority;
 pub(crate) mod task_schedules;
 pub(crate) mod tasks;
 pub(crate) mod worker;
@@ -33,6 +34,8 @@ mod cancel_tests;
 mod cap_tests;
 #[cfg(all(test, feature = "db-chaos"))]
 mod chaos_tests;
+#[cfg(test)]
+mod device_e2e_tests;
 #[cfg(test)]
 mod device_tests;
 #[cfg(test)]
@@ -47,6 +50,8 @@ mod memory_tests;
 mod recovery_tests;
 #[cfg(test)]
 mod talk_tests;
+#[cfg(test)]
+mod task_authority_tests;
 #[cfg(test)]
 mod tasks_tests;
 #[cfg(test)]

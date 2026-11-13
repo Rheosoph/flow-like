@@ -42,7 +42,28 @@ const richMessage = (): IMessage => ({
 		{
 			step_name: "llm",
 			stats: {
-				usage: { completion_tokens: 1, prompt_tokens: 2, total_tokens: 3 },
+				usage: {
+					completion_tokens: 1,
+					prompt_tokens: 2,
+					total_tokens: 3,
+					prompt_tokens_details: { cached_tokens: 1, cache_write_tokens: 0 },
+				},
+				context: {
+					estimated_tokens: 2,
+					measured_tokens: 2,
+					context_window: 8_000,
+					reserved_output_tokens: 1_000,
+				},
+				compactions: [
+					{
+						kind: "turn",
+						trigger: "soft",
+						status: "completed",
+						before_tokens: 1_000,
+						after_tokens: 200,
+						duration_ms: 350,
+					},
+				],
 				calls: [
 					{
 						model: "m",

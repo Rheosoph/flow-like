@@ -791,6 +791,10 @@ pub fn run() {
             {
                 eprintln!("Failed to register updater plugin: {}", e);
             }
+            #[cfg(desktop)]
+            if let Err(error) = app.handle().plugin(tray::autostart_plugin()) {
+                tracing::warn!(%error, "Start at login is unavailable: the autostart plugin failed");
+            }
 
             // Initialize EventBus and register as managed state
             let (event_bus, mut event_receiver) = EventBus::new(app.app_handle().clone());
@@ -952,6 +956,7 @@ pub fn run() {
                 } else {
                     tray::spawn_tray_refresh(relay_handle.clone());
                 }
+                tray::reveal_unreachable_hidden_start(&relay_handle);
             }
 
             #[cfg(any(target_os = "linux", windows))]
@@ -1200,6 +1205,12 @@ pub fn run() {
             tray::get_keep_bots_running,
             #[cfg(desktop)]
             tray::set_keep_bots_running,
+            #[cfg(desktop)]
+            tray::get_start_at_login,
+            #[cfg(desktop)]
+            tray::set_start_at_login,
+            #[cfg(desktop)]
+            tray::claim_start_at_login_offer,
             #[cfg(not(desktop))]
             tray_update_state,
             functions::download::init::init_downloads,
@@ -1564,6 +1575,7 @@ pub fn run() {
             bot_host::commands::bot_host_e2e_rotate_key,
             functions::inbox_e2e::inbox_e2e_key,
             functions::inbox_e2e::inbox_e2e_seal,
+            functions::inbox_e2e::inbox_e2e_seal_secret,
             functions::inbox_e2e::inbox_e2e_open,
             bot_host::commands::bot_host_cancel_turn,
             bot_host::grant_commands::local_bot_tool_grants,
@@ -1718,6 +1730,9 @@ pub fn run() {
         }
     }
 
+    #[cfg(desktop)]
+    let context = tray::prepare_start(context);
+
     let app = frontend_assets::register(builder, &context)
         .build(context)
         .expect("error while building tauri application");
@@ -1767,11 +1782,8 @@ pub(crate) fn application_context() -> tauri::Context<tauri::Wry> {
 
 fn handle_instance(app: &AppHandle, args: Vec<String>, _cwd: String) {
     #[cfg(desktop)]
-    {
-        let flowpilot_e2e_cli = args.iter().any(|arg| arg == "--flowpilot-e2e-cli");
-        if !flowpilot_e2e_cli {
-            tray::open_main_window(app);
-        }
+    if tray::second_start_shows_window(&args) {
+        tray::open_main_window(app);
     }
 
     println!(
@@ -1783,6 +1795,11 @@ fn handle_instance(app: &AppHandle, args: Vec<String>, _cwd: String) {
 #[cfg(desktop)]
 #[tauri::command]
 fn restart_app(app_handle: AppHandle) {
+    let mut env = app_handle.env();
+    if tray::without_hidden_start(&mut env.args_os) {
+        app_handle.cleanup_before_exit();
+        tauri::process::restart(&env);
+    }
     app_handle.restart();
 }
 

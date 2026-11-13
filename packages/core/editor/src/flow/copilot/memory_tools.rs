@@ -12,11 +12,13 @@ use flow_like_bot_memory::host::{
     MemorySession, MemoryToolbox, PreparedTurn, SegmentSink, TurnRequest,
 };
 use flow_like_bot_memory::model::{Role, Seq};
+use flow_like_bot_memory::telemetry::UsageDelivery;
 use flow_like_bot_memory::tools::{HistoryReader, tool_definitions};
+use flow_like_model_provider::response::LLMUsageStats;
 use flow_like_types::Value;
 use serde_json::json;
 
-use super::platform::PlatformToolBridge;
+use super::platform::{Clearance, PlatformToolBridge};
 use super::tool_spec::{PlatformToolSpec, ToolApprovalSpec};
 use super::types::{ChatMessage, ChatRole};
 
@@ -24,15 +26,35 @@ const TOOL_TIMEOUT_SECS: u64 = 60;
 
 /// The memory tools a host runs for one turn, as [`super::HostTools`] carries them.
 #[derive(Clone)]
-pub struct MemoryHandle(pub(crate) Arc<MemoryToolbox>);
+pub struct MemoryHandle {
+    toolbox: Arc<MemoryToolbox>,
+    usage: Option<UsageDelivery>,
+}
 
 impl MemoryHandle {
     pub fn new(toolbox: Arc<MemoryToolbox>) -> Self {
-        Self(toolbox)
+        Self {
+            toolbox,
+            usage: None,
+        }
     }
 
     pub fn toolbox(&self) -> &Arc<MemoryToolbox> {
-        &self.0
+        &self.toolbox
+    }
+
+    fn with_usage(self, usage: UsageDelivery) -> Self {
+        Self {
+            usage: Some(usage),
+            ..self
+        }
+    }
+
+    /// Claims the preparation and previous background work once for the turn's usage frame.
+    pub fn take_usage(&self) -> LLMUsageStats {
+        self.usage
+            .as_ref()
+            .map_or_else(LLMUsageStats::default, UsageDelivery::take)
     }
 }
 
@@ -44,7 +66,7 @@ impl fmt::Debug for MemoryHandle {
 
 impl PartialEq for MemoryHandle {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
+        Arc::ptr_eq(&self.toolbox, &other.toolbox)
     }
 }
 
@@ -111,6 +133,13 @@ impl PlatformToolBridge for MemoryBridge {
         }
         self.toolbox.note_foreign_call();
         self.inner.call(tool_name, arguments).await
+    }
+
+    async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
+        if MemoryToolbox::handles(tool_name) {
+            return Clearance::Clear;
+        }
+        self.inner.clearance(tool_name, arguments).await
     }
 
     async fn drain_steering(&self) -> Vec<String> {
@@ -242,7 +271,10 @@ impl HeadlessMemory {
 
     /// `base` with this turn's memory tools attached.
     pub fn host_tools(&self, base: super::HostTools) -> super::HostTools {
-        base.with_memory(MemoryHandle::new(self.toolbox.clone()))
+        base.with_memory(
+            MemoryHandle::new(self.toolbox.clone())
+                .with_usage(self.prepared.usage_delivery.clone()),
+        )
     }
 
     pub fn toolbox(&self) -> &Arc<MemoryToolbox> {

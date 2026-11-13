@@ -55,6 +55,12 @@ pub struct CompactionState {
     /// Last successful expiry cleanup, embedding and index maintenance for this conversation.
     #[serde(default)]
     pub last_maintenance_at: Option<DateTime<Utc>>,
+    /// Unreported background usage, stored with the conversation for the next turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_usage: Option<serde_json::Value>,
+    /// Recent usage batch ids make retries idempotent even after another turn collected them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub usage_batches: Vec<String>,
     #[serde(default)]
     pub lease: Option<Lease>,
     /// Bumped before forgetting or resetting, so an older save cannot recreate removed facts.

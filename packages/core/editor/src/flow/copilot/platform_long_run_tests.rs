@@ -29,6 +29,7 @@ struct ScriptedModel {
     cancel_stream: bool,
     cancel_checkpoint: bool,
     fail_checkpoint: bool,
+    stall_checkpoint: bool,
     fail_stream_at: Option<usize>,
     fail_chunk_at: Option<usize>,
 }
@@ -83,6 +84,11 @@ impl CompletionModel for ScriptedModel {
                 futures::stream::pending(),
             )));
         }
+        if checkpoint && self.stall_checkpoint {
+            return Ok(StreamingCompletionResponse::stream(Box::pin(
+                futures::stream::pending(),
+            )));
+        }
         let mut chunks = if checkpoint {
             if self.fail_checkpoint {
                 Vec::new()
@@ -116,6 +122,7 @@ impl Client {
             cancel_stream: false,
             cancel_checkpoint: false,
             fail_checkpoint: false,
+            stall_checkpoint: false,
             fail_stream_at: None,
             fail_chunk_at: None,
         })
@@ -205,6 +212,27 @@ async fn run_with_images(
     surface: PlatformSurface,
     images: Option<Vec<ChatImage>>,
 ) -> (Result<String>, Arc<Bridge>) {
+    run_conversation(
+        client,
+        rounds,
+        large_results,
+        surface,
+        images,
+        Vec::new(),
+        None,
+    )
+    .await
+}
+
+async fn run_conversation(
+    client: &Client,
+    rounds: usize,
+    large_results: bool,
+    surface: PlatformSurface,
+    images: Option<Vec<ChatImage>>,
+    history: Vec<ChatMessage>,
+    scope: Option<&str>,
+) -> (Result<String>, Arc<Bridge>) {
     let state = Arc::new(FlowLikeState::new(
         FlowLikeConfig::new(),
         HTTPClient::new_without_refetch(),
@@ -220,12 +248,13 @@ async fn run_with_images(
         .with_tool_specs(vec![find_global_tool_spec("list_apps").unwrap()])
         .with_tool_rounds(rounds)
         .with_long_running()
+        .with_conversation_scope(scope.map(str::to_owned))
         .chat_with_client(
             surface,
             "Help the owner.".into(),
             "Inspect every page and save the report.".into(),
             images,
-            Vec::new(),
+            history,
             "scripted".into(),
             client,
             None,
@@ -251,6 +280,10 @@ async fn extended_bot_turns_execute_more_than_twelve_rounds_and_reserve_synthesi
     assert_eq!(bridge.calls.load(Ordering::Relaxed), 16);
     let requests = client.0.requests.lock().unwrap();
     assert_eq!(requests.len(), 17);
+    assert!(
+        requests.iter().all(|request| request.max_tokens.is_none()),
+        "the context reserve must not cap normal output generation"
+    );
     assert!(
         requests[0]
             .tools
@@ -380,30 +413,228 @@ async fn compaction_preserves_tool_pairs_original_request_steering_and_recent_im
 }
 
 #[tokio::test]
-async fn failed_compaction_stops_without_replaying_completed_actions() {
-    let rounds = (0..10)
+async fn final_usage_frame_reports_context_and_compaction_without_provider_usage() {
+    let mut rounds: Vec<_> = (0..10)
         .map(|index| call(&format!("call-{index}"), "list_apps", json!({})))
         .collect();
-    let mut client = Client::new(rounds);
+    rounds.push(text("Verified every page."));
+    let client = Client::new(rounds);
+    let bridge = Arc::new(Bridge {
+        calls: AtomicUsize::new(0),
+        cancellation_checks: AtomicUsize::new(0),
+        cancelled: client.0.cancelled.clone(),
+        large_results: true,
+        steering: Mutex::new(Vec::new()),
+    });
+    let frames = Arc::new(Mutex::new(Vec::<String>::new()));
+    let sink = frames.clone();
+    PlatformCopilot::new(
+        Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        )),
+        None,
+    )
+    .with_tool_specs(vec![find_global_tool_spec("list_apps").unwrap()])
+    .with_tool_rounds(20)
+    .with_long_running()
+    .chat_with_client(
+        PlatformSurface::Orchestrator,
+        "Help the owner.".into(),
+        "Inspect every page.".into(),
+        None,
+        Vec::new(),
+        "scripted".into(),
+        &client,
+        None,
+        bridge,
+        None,
+        Some(move |frame: String| sink.lock().unwrap().push(frame)),
+    )
+    .await
+    .unwrap();
+    let frames = frames.lock().unwrap();
+    let usages: Vec<_> = frames
+        .iter()
+        .filter_map(|frame| {
+            frame
+                .strip_prefix("<usage_stat>")
+                .and_then(|body| body.strip_suffix("</usage_stat>"))
+        })
+        .map(|body| serde_json::from_str::<Value>(body).unwrap())
+        .collect();
+    assert_eq!(usages.len(), 1, "cumulative stats are emitted only once");
+    let stats: LLMUsageStats = serde_json::from_value(usages[0]["stats"].clone()).unwrap();
+    assert!(stats.context.unwrap().estimated_tokens > 0);
+    assert!(stats.usage.prompt_tokens_details.is_none());
+    assert!(stats.compactions.iter().any(|event| {
+        event.status == "completed"
+            && event
+                .after_tokens
+                .is_some_and(|after| after < event.before_tokens)
+    }));
+}
+
+fn large_rounds(count: usize) -> Vec<Vec<RawStreamingChoice<()>>> {
+    let mut rounds: Vec<_> = (0..count)
+        .map(|index| call(&format!("call-{index}"), "list_apps", json!({})))
+        .collect();
+    rounds.push(text("Verified every page."));
+    rounds
+}
+
+/// `count` messages of about 6,000 characters each, the person and the bot in turn.
+fn long_talk(count: usize) -> Vec<ChatMessage> {
+    (0..count)
+        .map(|index| ChatMessage {
+            role: if index % 2 == 0 {
+                ChatRole::User
+            } else {
+                ChatRole::Assistant
+            },
+            content: format!("message-{index} {}", "detail ".repeat(850)),
+            images: None,
+        })
+        .collect()
+}
+
+fn exchange(reply: &str) -> [ChatMessage; 2] {
+    [
+        ChatMessage {
+            role: ChatRole::User,
+            content: "Inspect every page and save the report.".into(),
+            images: None,
+        },
+        ChatMessage {
+            role: ChatRole::Assistant,
+            content: reply.into(),
+            images: None,
+        },
+    ]
+}
+
+async fn converse(client: &Client, talk: &[ChatMessage], scope: &str) -> String {
+    let surface = PlatformSurface::Orchestrator;
+    run_conversation(client, 4, false, surface, None, talk.to_vec(), Some(scope))
+        .await
+        .0
+        .unwrap()
+}
+
+fn reply_request(client: &Client) -> String {
+    let requests = client.0.requests.lock().unwrap();
+    let reply = requests
+        .iter()
+        .find(|request| !is_checkpoint(request))
+        .expect("the turn asked the model for a reply");
+    serde_json::to_string(reply).unwrap()
+}
+
+fn checkpoints(client: &Client) -> usize {
+    let requests = client.0.requests.lock().unwrap();
+    requests
+        .iter()
+        .filter(|request| is_checkpoint(request))
+        .count()
+}
+
+#[tokio::test]
+async fn a_checkpoint_that_never_arrives_does_not_hold_the_turn_back() {
+    let mut client = Client::new(large_rounds(12));
+    client.0.stall_checkpoint = true;
+    let (answer, bridge) = tokio::time::timeout(Duration::from_secs(5), run(&client, 20, true))
+        .await
+        .expect("the turn waited for its checkpoint");
+    assert!(answer.unwrap().contains("Verified every page."));
+    assert_eq!(bridge.calls.load(Ordering::Relaxed), 12);
+    let requests = client.0.requests.lock().unwrap();
+    assert!(requests.iter().any(is_checkpoint));
+    for request in requests.iter().filter(|request| !is_checkpoint(request)) {
+        assert_complete_tool_pairs(request);
+    }
+    let last = serde_json::to_string(requests.last().unwrap()).unwrap();
+    assert!(last.contains("Older tool result shortened"));
+    assert!(!last.contains("untrusted_historical_checkpoint"));
+}
+
+#[tokio::test]
+async fn a_failed_checkpoint_stops_the_turn_only_when_nothing_else_frees_context() {
+    let mut client = Client::new(large_rounds(12));
     client.0.fail_checkpoint = true;
     let (answer, bridge) = run(&client, 20, true).await;
+    assert!(answer.unwrap().contains("Verified every page."));
+    assert_eq!(bridge.calls.load(Ordering::Relaxed), 12);
+
+    let mut client = Client::new(vec![call("call-0", "list_apps", json!({}))]);
+    client.0.fail_checkpoint = true;
+    let surface = PlatformSurface::Orchestrator;
+    let (answer, bridge) =
+        run_conversation(&client, 20, false, surface, None, long_talk(34), None).await;
     assert!(answer.unwrap().contains("task is unfinished"));
-    assert!(bridge.calls.load(Ordering::Relaxed) < 10);
+    assert_eq!(bridge.calls.load(Ordering::Relaxed), 0);
     assert!(is_checkpoint(
         client.0.requests.lock().unwrap().last().unwrap()
     ));
 }
 
 #[tokio::test]
-async fn failed_compaction_leaves_recorded_artifacts_and_remaining_work_in_saved_reply() {
+async fn a_stop_at_the_hard_limit_leaves_recorded_artifacts_and_remaining_work_in_saved_reply() {
     let mut rounds = vec![call("plan", UPDATE_WORK_PLAN_TOOL, plan(0, "active"))];
-    rounds.extend((0..10).map(|index| call(&format!("call-{index}"), "list_apps", json!({}))));
+    rounds.extend((0..10).map(|index| {
+        let mut round = text(&"Inspecting pages. ".repeat(1_500));
+        round.extend(call(&format!("call-{index}"), "list_apps", json!({})));
+        round
+    }));
     let mut client = Client::new(rounds);
     client.0.fail_checkpoint = true;
-    let answer = run(&client, 20, true).await.0.unwrap();
+    let answer = run(&client, 20, false).await.0.unwrap();
     assert!(answer.contains("task is unfinished"));
     assert!(answer.contains("Report path: workspace/report.txt"));
     assert!(answer.contains("Unfinished: Inspect pages and verify the report"));
+}
+
+#[tokio::test]
+async fn the_next_turn_starts_from_the_summary_the_previous_turn_began() {
+    let scope = "summary-reuse";
+    let mut talk = long_talk(14);
+    let first = Client::new(vec![text("First answer.")]);
+    assert_eq!(converse(&first, &talk, scope).await, "First answer.");
+    assert!(
+        reply_request(&first).contains("message-0 "),
+        "the reply waited for the summary"
+    );
+
+    talk.extend(exchange("First answer."));
+    let second = Client::new(vec![text("Second answer.")]);
+    converse(&second, &talk, scope).await;
+    let request = reply_request(&second);
+    assert!(request.contains("Earlier part of this conversation, summarized"));
+    assert!(request.contains("workspace/report.txt"));
+    assert!(!request.contains("message-0 "));
+    assert!(
+        request.contains("message-13 "),
+        "recent messages stay word for word"
+    );
+    assert!(request.contains("First answer."));
+
+    talk.extend(exchange("Second answer."));
+    let third = Client::new(vec![text("Third answer.")]);
+    converse(&third, &talk, scope).await;
+    let request = reply_request(&third);
+    assert!(request.contains("Earlier part of this conversation, summarized"));
+    assert!(request.contains("Second answer."));
+    assert_eq!(
+        checkpoints(&first) + checkpoints(&second) + checkpoints(&third),
+        1,
+        "a later turn summarized the conversation again"
+    );
+
+    talk[10].content = "message-10 was edited".into();
+    let fourth = Client::new(vec![text("Fourth answer.")]);
+    converse(&fourth, &talk, scope).await;
+    let request = reply_request(&fourth);
+    assert!(!request.contains("Earlier part of this conversation, summarized"));
+    assert!(request.contains("message-10 was edited"));
 }
 
 #[tokio::test]

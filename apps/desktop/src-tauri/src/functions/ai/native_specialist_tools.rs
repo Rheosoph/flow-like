@@ -117,6 +117,7 @@ pub(super) fn approval(
         title: resolved.title,
         description,
         session_key: format!("{}:{}", resolved.session_key, job.token.claim_id),
+        asks_again: None,
     }))
 }
 
@@ -374,6 +375,7 @@ async fn run_specialist_with_selection(
         }
         Ok(())
     });
+    let assistant_model = model_id.clone();
     let response = copilot::copilot_chat_native(
         session.app_handle.clone(),
         None,
@@ -401,7 +403,8 @@ async fn run_specialist_with_selection(
         Some(raw),
         channel,
     )
-    .await;
+    .await
+    .map_err(|error| name_assistant_model(error, assistant_model.as_deref()));
     emit_lifecycle(
         "finished",
         if response.is_ok() { "ok" } else { "error" },
@@ -410,6 +413,13 @@ async fn run_specialist_with_selection(
     let response = response?;
     session.assert_current_profile().await?;
     Ok(response)
+}
+
+fn name_assistant_model(error: String, model_id: Option<&str>) -> String {
+    match model_id.map(str::trim).filter(|id| !id.is_empty()) {
+        Some(id) => format!("{error} (assistant model: {id})"),
+        None => error,
+    }
 }
 
 async fn target_lock(key: String) -> OwnedMutexGuard<()> {
@@ -482,4 +492,19 @@ pub(crate) fn contract_fingerprint(namespace: &str, value: &Value) -> String {
 
 pub(crate) fn contract_key_order(left: &str, right: &str) -> std::cmp::Ordering {
     home::compare_keys(left, right)
+}
+
+#[cfg(test)]
+mod assistant_model_tests {
+    use super::name_assistant_model;
+
+    #[test]
+    fn a_failed_assistant_names_its_model() {
+        assert_eq!(
+            name_assistant_model("rate limited".into(), Some("bit-3")),
+            "rate limited (assistant model: bit-3)"
+        );
+        assert_eq!(name_assistant_model("rate limited".into(), None), "rate limited");
+        assert_eq!(name_assistant_model("rate limited".into(), Some(" ")), "rate limited");
+    }
 }

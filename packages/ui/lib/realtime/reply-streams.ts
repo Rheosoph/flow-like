@@ -7,6 +7,8 @@ export interface ReplyStream {
 	readonly messageId: string;
 	readonly replyTo: string;
 	readonly senderId: string;
+	/** How often the reply was begun again; `text` belongs to this draft alone. */
+	readonly draft: number;
 	readonly text: string;
 	readonly state: RealtimeReplyState;
 }
@@ -30,6 +32,8 @@ const listeners = new Map<string, Set<ReplyStreamListener>>();
 const settled = (state: RealtimeReplyState) =>
 	state === "done" || state === "dropped";
 
+const draftOf = (reply: RealtimeReply) => reply.draft ?? 0;
+
 function prune(now: number) {
 	for (const [id, held] of streams) {
 		const limit = settled(held.stream.state) ? SETTLED_MS : IDLE_MS;
@@ -45,13 +49,16 @@ function hold(id: string, held: Held) {
 	streams.set(id, held);
 }
 
-/** A posted reply is over, and a dropped one stays dropped for messages that were only late. */
-function closed(held: Held | undefined, now: number) {
+/**
+ * A posted reply is over, a replaced draft is not continued, and a dropped one stays dropped for
+ * messages that were only late. A later draft is the rewrite and always gets through.
+ */
+function closed(held: Held | undefined, reply: RealtimeReply, now: number) {
 	if (!held) return false;
-	if (held.stream.state === "done") return true;
-	return (
-		held.stream.state === "dropped" && now - held.touched < RESTART_AFTER_MS
-	);
+	const { stream } = held;
+	if (stream.state === "done" || draftOf(reply) < stream.draft) return true;
+	if (draftOf(reply) > stream.draft) return false;
+	return stream.state === "dropped" && now - held.touched < RESTART_AFTER_MS;
 }
 
 /** The text after a message, or undefined when the message is older or starts past what is held. */
@@ -69,6 +76,7 @@ function started(reply: RealtimeReply, conversationId: string) {
 		messageId: reply.message_id,
 		replyTo: reply.reply_to,
 		senderId: reply.sender_id,
+		draft: draftOf(reply),
 		text: reply.text,
 		state: reply.state,
 	};
@@ -119,14 +127,21 @@ export function deliverRealtimeReply(
 ) {
 	prune(now);
 	const held = streams.get(reply.message_id);
-	if (closed(held, now)) return;
-	const previous =
-		held && !settled(held.stream.state) ? held.stream : undefined;
+	if (closed(held, reply, now)) return;
+	let previous = held && !settled(held.stream.state) ? held.stream : undefined;
+	if (previous && previous.draft !== draftOf(reply)) {
+		// The rewrite ends the draft this device holds, even when the message that dropped it was lost.
+		keep({ ...previous, state: "dropped" }, now);
+		previous = undefined;
+	}
 	const stream = previous
 		? advanced(previous, reply)
 		: started(reply, conversationId);
-	if (!stream) return;
-	hold(reply.message_id, { stream, touched: now });
+	if (stream) keep(stream, now);
+}
+
+function keep(stream: ReplyStream, now: number) {
+	hold(stream.messageId, { stream, touched: now });
 	tell(stream);
 }
 

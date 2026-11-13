@@ -3,8 +3,9 @@
 import { useTranslation } from "@flow-like/locales";
 import CheckIcon from "lucide-react/dist/esm/icons/circle-check.js";
 import LoaderIcon from "lucide-react/dist/esm/icons/loader-circle.js";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useAddModelToProfile } from "../../../hooks/use-add-model-to-profile";
+import { useBot } from "../../../hooks/use-bots";
 import {
 	type LocalModelHostCapabilities,
 	isCloudRunnableLlmModel,
@@ -55,15 +56,46 @@ function setupState(pick: ModelPick | null, usable: number): SetupState {
  * after a model fits, since only the answering host knows what it can run.
  */
 export function ChatErrorModelSetup({
-	hostedOnly,
-}: Readonly<{
+	botId,
+	...props
+}: Readonly<ModelSetupProps & { botId?: string }>) {
+	if (botId) return <BotProfileModelSetup botId={botId} {...props} />;
+	return <ModelSetup {...props} />;
+}
+
+function BotProfileModelSetup({
+	botId,
+	...props
+}: Readonly<ModelSetupProps & { botId: string }>) {
+	const profileId = useBot(botId).data?.profile_id ?? undefined;
+	return <ModelSetup {...props} profileId={profileId} />;
+}
+
+interface ModelSetupProps {
 	/** The answer runs in the cloud, so models on the person's devices are left out. */
 	hostedOnly: boolean;
-}>) {
+	/** Called once, with the first pick that is in the profile; the message can go out again. */
+	onModelAdded?: (id: string) => void;
+}
+
+function ModelSetup({
+	hostedOnly,
+	onModelAdded,
+	profileId,
+}: Readonly<ModelSetupProps & { profileId?: string }>) {
 	const { t } = useTranslation("chat");
 	const host = useHostCapabilities();
-	const { gate } = useAddModelToProfile();
+	const { gate } = useAddModelToProfile(undefined, profileId);
 	const [pick, setPick] = useState<ModelPick | null>(null);
+	const announced = useRef(false);
+	const announce = useCallback(
+		(id: string) => {
+			if (announced.current) return;
+			announced.current = true;
+			onModelAdded?.(id);
+		},
+		[onModelAdded],
+	);
 
 	const usable = useCallback(
 		(bit: IBit) => {
@@ -88,15 +120,20 @@ export function ChatErrorModelSetup({
 	}, [options]);
 
 	const choose = (id: string | null) => {
-		const state = id && inProfile.has(id) ? "added" : "adding";
+		const state = id && inProfile.has(id) && !profileId ? "added" : "adding";
 		setPick(id ? { id, state } : null);
+		if (id && state === "added") announce(id);
 	};
-	const settle = useCallback((id: string, added: boolean) => {
-		setPick((current) => {
-			if (current?.id !== id) return current;
-			return added ? { id, state: "added" } : null;
-		});
-	}, []);
+	const settle = useCallback(
+		(id: string, added: boolean) => {
+			setPick((current) => {
+				if (current?.id !== id) return current;
+				return added ? { id, state: "added" } : null;
+			});
+			if (added) announce(id);
+		},
+		[announce],
+	);
 
 	const state = setupState(pick, options.length);
 	const placeholder =
@@ -118,6 +155,7 @@ export function ChatErrorModelSetup({
 					placeholder={placeholder}
 					onChange={choose}
 					onAddSettled={settle}
+					profileId={profileId}
 				/>
 			</div>
 			{state === "adding" && (
@@ -132,10 +170,15 @@ export function ChatErrorModelSetup({
 						className="mt-px size-3.5 shrink-0 text-good"
 						aria-hidden
 					/>
-					{t(
-						"modelSetupReady",
-						"Your profile has a language model now. Send your message again.",
-					)}
+					{onModelAdded
+						? t(
+								"modelSetupResending",
+								"Your profile has a language model now. Sending your message again.",
+							)
+						: t(
+								"modelSetupReady",
+								"Your profile has a language model now. Send your message again.",
+							)}
 				</p>
 			)}
 		</div>

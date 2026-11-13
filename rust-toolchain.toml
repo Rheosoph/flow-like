@@ -5,4 +5,5 @@
 # python3 .github/scripts/check_rust_toolchain.py
 channel = "beta-2026-09-27"
 profile = "minimal"
-components = ["rustfmt", "clippy"]
+# Supplies libLLVM at the path used by this beta's rust-objcopy on macOS.
+components = ["rustfmt", "clippy", "llvm-tools"]

@@ -8,6 +8,7 @@ const NOT_GRANTABLE: ReadonlySet<string> = new Set([
 	"bot_update_configuration",
 	"create_bot",
 	"update_bot",
+	"delete_bot",
 	"http_request",
 	"forecast_tool",
 	"flowpilot_board_review",

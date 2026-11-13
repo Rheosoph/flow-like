@@ -1,5 +1,11 @@
+import type { IChatUsageStat } from "../../lib/llm/usage";
 import type { IRealtimeAccess } from "../../lib/realtime/types";
-import type { IBotNoteRef, IBotScopes } from "./bot-state";
+import type {
+	BotApprovalDecision,
+	IBotApprovalItemDecision,
+	IBotNoteRef,
+	IBotScopes,
+} from "./bot-state";
 
 export type ConversationKind = "direct" | "group";
 export type ConversationEncryption = "plain" | "e2e";
@@ -58,6 +64,22 @@ export interface IInboxAttachmentPart {
 	url?: string;
 	/** The type of a linked file. */
 	mime?: string;
+	/**
+	 * A file of an end-to-end encrypted conversation: `handle` names its ciphertext, this says how
+	 * to open it. It exists only inside the sealed message.
+	 */
+	sealed?: IInboxSealedFile;
+}
+
+export interface IInboxSealedFile {
+	/** `xchacha20poly1305-stream-64k-v1`. */
+	alg: string;
+	/** The file's key, base64url. */
+	key: string;
+	/** The file's own type; `handle.mime` is the ciphertext's. */
+	mime: string;
+	/** The file's own size; `handle.bytes` is the ciphertext's. */
+	bytes: number;
 }
 
 /** A finished conversation file upload: its `handle` goes into an attachment part. */
@@ -81,6 +103,7 @@ export const MAX_CONVERSATION_FILE_BYTES = 35 * 1024 * 1024;
 
 export interface IInboxMessageBody {
 	text: string;
+	usage_stats?: IChatUsageStat[];
 	reply_to?: string;
 	/** Attachments, numbered `a1`, `a2` ... in order. */
 	parts?: IInboxAttachmentPart[];
@@ -159,7 +182,32 @@ export interface IInboxApproval {
 	room?: string;
 	/** Set on a `secret_request` card: the owner types the value instead of allowing a call. */
 	secret?: IInboxApprovalSecret;
+	/** Set on a `room_invite` card: who the bot wants to bring into the room, and why. */
+	invite?: IInboxApprovalInvite;
 	configuration_changes?: Record<string, unknown>;
+	/** A standing grant was set aside because the turn read web pages first. */
+	after_web_content?: boolean;
+	/** Two or more calls of one model round; the top-level fields then describe the batch. */
+	items?: IInboxApprovalItem[];
+}
+
+/** One call of a batch card; `scope` is comma-joined, empty when the call is never remembered. */
+export interface IInboxApprovalItem {
+	args_hash: string;
+	tool: string;
+	summary: string;
+	scope: string;
+	/** Identical calls the item stands for; 1 when absent. */
+	calls?: number;
+	after_web_content?: boolean;
+	secret?: IInboxApprovalSecret;
+	invite?: IInboxApprovalInvite;
+}
+
+/** The exact username or email address the bot was given, and its reason. */
+export interface IInboxApprovalInvite {
+	person: string;
+	reason: string;
 }
 
 export interface IInboxApprovalSecret {
@@ -168,9 +216,11 @@ export interface IInboxApprovalSecret {
 	replace?: boolean;
 }
 
+/** `decision` covers every item that `items` does not list. */
 export interface IInboxApprovalResponse {
 	approval_id: string;
-	decision: "once" | "always" | "deny";
+	decision: BotApprovalDecision;
+	items?: IBotApprovalItemDecision[];
 }
 
 export interface IInboxReactionBody {
@@ -656,6 +706,15 @@ export interface IInboxState {
 	registerKey(request: IRegisterInboxKeyRequest): Promise<IInboxKey>;
 	/** Retires a key; pass one of your bots' ids to retire that bot's key. */
 	revokeKey(keyId: string, principalId?: string): Promise<void>;
+	/**
+	 * A secret's value sealed on this device to the bot's published keys, ready for
+	 * `upsertBotSecret`'s `sealed`; only the bot's host opens it. Set where this app can seal.
+	 */
+	sealBotSecret?(
+		botId: string,
+		name: string,
+		value: string,
+	): Promise<IInboxSealedEnvelope>;
 	/** Unfinished bot turns in an account conversation, oldest first; local conversations have none. */
 	listConversationTurns?(conversationId: string): Promise<IConversationTurn[]>;
 	/** Signaling credentials for the conversation's peer room; account conversations only. */

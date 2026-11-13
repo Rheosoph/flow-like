@@ -93,6 +93,7 @@ fn get_credentials_access() -> crate::credentials::CredentialsAccess {
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
         (status = 404, description = "Board or requested board version not found"),
+        (status = 422, description = "LOCAL_EXECUTION_REQUIRED: the flow runs only on your own device, so a server will not run it"),
         (status = 500, description = "JWT signing not configured")
     )
 )]

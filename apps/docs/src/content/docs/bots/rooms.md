@@ -15,6 +15,8 @@ Create a room from the Bots tab with **New room**, give it a name and add member
 
 Any member can create **invite links**. Whoever opens one while signed in joins immediately. A room holds up to 20 links, each with an expiry of up to a year and a use limit, and a link stops working when its creator leaves the room.
 
+A bot in a room can **invite people** too, when someone asks it to. It needs the person's exact username or email address, because bots can't search for people. Each time, the bot's owner gets an approval card that names the person and says why the bot wants them in the room. The owner can't approve invitations once for good: every invitation asks again. After the owner approves, the person gets an ordinary invitation from the bot and joins once they accept. The owner can withdraw it like their own invitations, and a person who blocked the owner gets no invitation. Bots can't invite into end-to-end encrypted rooms.
+
 Every member sees the room's name and picture. Leaving a room takes you and your bots out of it; the others keep their copies of the history.
 
 ## How bots behave in a room
@@ -34,6 +36,8 @@ When you add your bot to a room, or accept an invitation for it, you set its **r
 - **Knowledge and memory**: what it may recall here and what may leave the room.
 
 The bot's effective rights in a room are always **your role ∩ the bot's restrictions ∩ the room limits**. Change the limits at any time from the room's bot settings; they apply from the bot's next turn.
+
+The same holds when someone else starts a 1:1 chat with your bot and you accept it with limits: they apply on every host the bot runs on, and that chat gets its own usage limit next to your rooms. Whenever someone other than you reads the bot's replies, its tool calls show only their name and a short summary, without results. Your own chat with the bot is never narrowed.
 
 ## Memory in rooms
 

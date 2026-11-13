@@ -57,6 +57,7 @@ pub struct FakeEnv {
     pub secrets: Mutex<HashMap<String, String>>,
     pub notifier: Mutex<Option<Arc<dyn crate::notify::OwnerNotifier>>>,
     pub people: Mutex<Option<Arc<dyn crate::people::PeopleBackend>>>,
+    pub rooms: Mutex<Option<Arc<dyn crate::rooms::RoomInvites>>>,
     pub scheduler: Mutex<Option<Arc<dyn crate::schedule::Scheduler>>>,
     pub skills: Mutex<Option<Arc<dyn crate::skills::SkillHost>>>,
     pub images: Mutex<Result<Arc<dyn crate::image::ImageBackend>, crate::image::ImageUnavailable>>,
@@ -118,6 +119,7 @@ impl FakeEnv {
             secrets: Mutex::default(),
             notifier: Mutex::new(None),
             people: Mutex::new(None),
+            rooms: Mutex::new(None),
             scheduler: Mutex::new(None),
             skills: Mutex::new(None),
             images: Mutex::new(Err(crate::image::ImageUnavailable::NoModel)),
@@ -284,6 +286,10 @@ impl ToolEnv for FakeEnv {
 
     fn people(&self) -> Option<Arc<dyn crate::people::PeopleBackend>> {
         self.people.lock().expect("people").clone()
+    }
+
+    fn rooms(&self) -> Option<Arc<dyn crate::rooms::RoomInvites>> {
+        self.rooms.lock().expect("rooms").clone()
     }
 
     fn sandbox(&self) -> Option<Arc<dyn SandboxBackend>> {

@@ -149,17 +149,36 @@ impl BotCapability {
         )
     }
 
-    /// A managed device can't serve it yet: end-to-end encryption needs a key vault on the
-    /// device, key routes for a bot token and sealed replies and checkpoints. Desktop and
-    /// server are unaffected.
-    pub fn unavailable_on_device(self) -> bool {
-        matches!(self, Self::Encryption)
-    }
-
     /// Can't be switched on or off: a bot gets it only by being Flux or a duplicate of a bot that
     /// holds it, and a bot that holds it keeps the capabilities it has.
     pub fn is_fixed(self) -> bool {
         matches!(self, Self::Flowpilot)
+    }
+}
+
+/// The process boundary the owner requires for a bot's tools.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BotExecutionMode {
+    #[default]
+    Native,
+    Docker,
+}
+
+impl BotExecutionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Docker => "docker",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "native" => Some(Self::Native),
+            "docker" => Some(Self::Docker),
+            _ => None,
+        }
     }
 }
 
@@ -199,8 +218,7 @@ impl BotLocation {
     pub fn allows(self, capability: BotCapability) -> bool {
         match self {
             Self::Server => !capability.requires_local_host(),
-            Self::Desktop => true,
-            Self::Device => !capability.unavailable_on_device(),
+            Self::Desktop | Self::Device => true,
         }
     }
 
@@ -357,27 +375,19 @@ mod tests {
         assert!(!BotLocation::Server.allows(BotCapability::CommandLine));
         assert!(!BotLocation::Server.allows(BotCapability::Encryption));
         assert!(BotLocation::Desktop.allows(BotCapability::Encryption));
-        assert!(!BotLocation::Device.allows(BotCapability::Encryption));
+        assert!(BotLocation::Device.allows(BotCapability::Encryption));
         assert!(BotLocation::Server.allows(BotCapability::Internet));
         assert!(BotLocation::Desktop.allows(BotCapability::ComputerUse));
         assert!(BotLocation::Device.allows(BotCapability::BrowserUse));
     }
 
     #[test]
-    fn a_device_refuses_what_it_cannot_serve_yet() {
+    fn a_device_serves_every_capability() {
         let refused: Vec<BotCapability> = BotCapability::ALL
             .into_iter()
             .filter(|capability| !BotLocation::Device.allows(*capability))
             .collect();
-        assert_eq!(
-            refused,
-            [
-                BotCapability::Connectors,
-                BotCapability::Skills,
-                BotCapability::ImageGeneration,
-                BotCapability::Encryption
-            ]
-        );
+        assert_eq!(refused, []);
         assert!(BotLocation::Device.allows(BotCapability::CommandLine));
         assert!(BotLocation::Desktop.allows(BotCapability::Skills));
         assert!(BotLocation::Server.allows(BotCapability::Skills));
@@ -465,8 +475,7 @@ mod tests {
             assert!(!capability.is_fixed(), "{id}");
             assert!(!capability.requires_local_host(), "{id}");
             for location in BotLocation::ALL {
-                let held = location != BotLocation::Device || !capability.unavailable_on_device();
-                assert_eq!(location.allows(capability), held, "{id} {location:?}");
+                assert!(location.allows(capability), "{id} {location:?}");
             }
             assert_eq!(serde_json::to_value(capability).unwrap(), json!(id));
             assert_eq!(

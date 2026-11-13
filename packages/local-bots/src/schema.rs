@@ -356,6 +356,11 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     UPDATE tool_grants SET expires_at = (CAST(strftime('%s', 'now') AS INTEGER) + 90 * 86400) * 1000000;",
     // A task scheduled in a group fires there; NULL fires in the person's chat with the bot.
     "ALTER TABLE tasks ADD COLUMN conversation_id TEXT;",
+    // A task's runs act on its instruction only when the person wrote it in the app, or through
+    // the person's message that asked the bot for it. Existing tasks authorize nothing.
+    "ALTER TABLE tasks ADD COLUMN owner_written INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE tasks ADD COLUMN request_conversation_id TEXT;
+    ALTER TABLE tasks ADD COLUMN request_message_id TEXT;",
 ];
 
 pub(crate) fn open(path: &Path) -> Result<Connection> {

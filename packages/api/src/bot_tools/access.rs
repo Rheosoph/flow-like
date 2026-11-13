@@ -139,6 +139,16 @@ impl ApiAccess {
                     "'{principal}' is not an active member of conversation '{conversation_id}': {error}"
                 )
             })?;
+        crate::routes::inbox::files::ensure_server_readable(&self.state.db, conversation_id)
+            .await
+            .map_err(|error| {
+                flow_like_types::anyhow!(
+                    "{}",
+                    error
+                        .public_message()
+                        .map_or_else(|| error.to_string(), str::to_owned)
+                )
+            })?;
         let master = self.state.master_credentials().await?;
         master.to_store(false).await
     }

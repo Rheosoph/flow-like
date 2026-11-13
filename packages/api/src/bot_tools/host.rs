@@ -5,10 +5,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use flow_like::bit::Bit;
+use flow_like::flow::copilot::platform::Clearance;
 use flow_like::flow::copilot::tool_authorization::AuthorizationInference;
 use flow_like::flow::copilot::tool_grants::{
-    GrantCheck, GrantStore, HeadlessAnswer, check_call, documents_expensive_granted,
-    expensive_documents_request, headless_answer_with_inference, record_answer, take_once,
+    GrantCheck, GrantStore, HeadlessAnswer, ParkedBatch, check_call, documents_expensive_granted,
+    expensive_documents_request, record_answer, take_once,
 };
 use flow_like::flow::copilot::tool_spec::{ToolEffect, resolve_tool_approval, resolve_tool_effect};
 use flow_like::flow::copilot::{HostTools, find_bot_tool_spec, tool_outcome_output};
@@ -113,11 +114,12 @@ pub(crate) struct BotToolsHost {
     scope: OnceCell<JobScope>,
     sessions: Arc<MemorySessions>,
     executor_jobs: AtomicUsize,
-    parked: Mutex<Option<(ApprovalRequest, Option<String>)>>,
+    batch: Arc<ParkedBatch>,
     inference: Mutex<Option<Arc<dyn AuthorizationInference>>>,
     approval_check: flow_like_types::tokio::sync::Mutex<()>,
     notifier: Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>>,
     people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
+    rooms: Option<Arc<dyn flow_like_bot_tools::RoomInvites>>,
     user_context: Option<Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>>,
     configuration: Option<Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>>,
     crew: Option<Arc<dyn flow_like_bot_tools::crew::CrewBackend>>,
@@ -181,15 +183,16 @@ fn bit_json(bit: &Option<Bit>) -> Option<Value> {
 impl BotToolsHost {
     pub(crate) fn new(deps: TurnDeps) -> Self {
         Self {
+            batch: Arc::new(ParkedBatch::new(&deps.turn_id)),
             deps,
             scope: OnceCell::new(),
             sessions: Arc::new(MemorySessions::default()),
             executor_jobs: AtomicUsize::new(0),
-            parked: Mutex::new(None),
             inference: Mutex::new(None),
             approval_check: flow_like_types::tokio::sync::Mutex::new(()),
             notifier: None,
             people: None,
+            rooms: None,
             user_context: None,
             configuration: None,
             crew: None,
@@ -327,6 +330,12 @@ impl BotToolsHost {
         self
     }
 
+    /// Lets `room_invite` invite into the group chat this turn runs in.
+    pub(crate) fn with_rooms(mut self, rooms: Arc<dyn flow_like_bot_tools::RoomInvites>) -> Self {
+        self.rooms = Some(rooms);
+        self
+    }
+
     /// Lets this turn use apps on the server; only a headless turn does, an open chat runs them
     /// in its window.
     pub(crate) fn with_apps(mut self, apps: Arc<super::apps::AppTools>) -> Self {
@@ -385,48 +394,32 @@ impl BotToolsHost {
             .is_ok_and(GrantCheck::runs)
     }
 
-    /// Stores the owner's "don't ask again" for this call.
+    /// Stores the owner's "don't ask again" for this call. The open chat runs the call itself
+    /// right after, so the one-time token the answer writes for a resumed run is spent here: left
+    /// behind, it would let the same call through once more without asking, also for a call
+    /// that is never remembered.
     pub(crate) async fn remember(&self, tool: &str, args: &Value) {
-        let stored = record_answer(
-            self.deps.grants.as_ref(),
-            tool,
-            args,
-            None,
-            ApprovalDecision::Always,
-        )
-        .await;
+        let grants = self.deps.grants.as_ref();
+        let stored = record_answer(grants, tool, args, None, ApprovalDecision::Always).await;
         if let Err(error) = stored {
             tracing::warn!(%error, tool, "[bot_tools] the owner's standing approval was not stored");
         }
+        if let Err(error) = take_once(grants, tool, args).await {
+            tracing::warn!(%error, tool, "[bot_tools] the one-time approval of a call the chat runs itself was not cleared");
+        }
     }
 
-    /// The approval card of the call that parked this turn, once there is one.
+    /// The approval card of this attempt's calls that wait for the owner, once there is one.
     pub(crate) fn parked(&self) -> Option<ApprovalRequest> {
-        self.parked
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .as_ref()
-            .map(|(card, _)| card.clone())
+        self.batch.card()
     }
 
-    pub(crate) fn parked_recovery_call_id(&self) -> Option<String> {
-        self.parked
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .as_ref()
-            .and_then(|(_, call_id)| call_id.clone())
+    /// The attempt's approval batch; the turn's talk host adds its asks to the same card.
+    pub(crate) fn batch(&self) -> &Arc<ParkedBatch> {
+        &self.batch
     }
 
-    fn park(&self, tool: &str, card: ApprovalRequest) -> String {
-        self.parked
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get_or_insert_with(|| {
-                (
-                    card,
-                    flow_like::flow::copilot::run_recovery::current_recovery_call_id(),
-                )
-            });
+    fn waiting(tool: &str) -> String {
         json!({
             "status": "waiting",
             "tool": tool,
@@ -435,6 +428,61 @@ impl BotToolsHost {
             "message": "Your owner was asked to approve this call. This turn pauses and continues after their answer. Call no further tools and write nothing more now."
         })
         .to_string()
+    }
+
+    fn inference(&self) -> Option<Arc<dyn AuthorizationInference>> {
+        self.inference
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// The refusal of a Flux call on the owner's bots that its target rules out, found before
+    /// the owner is asked: deleting a built-in bot or moving one where it can't keep its
+    /// capabilities.
+    pub(crate) async fn crew_refusal(&self, tool: &str, args: &Value) -> Option<String> {
+        if !flow_like_bot_tools::crew::reads_target_first(tool, args) {
+            return None;
+        }
+        let crew = self.crew.as_ref()?;
+        flow_like_bot_tools::crew::precheck(crew.as_ref(), tool, args)
+            .await
+            .err()
+            .map(|error| refusal(tool, error.code, &error.message))
+    }
+
+    /// The gate's verdict on a call held back in a parked round, without running it: a call
+    /// that asks joins the card, a refusal becomes its result.
+    pub(crate) async fn clearance(&self, tool: &str, args: &Value) -> Clearance {
+        if let Some(refused) = self.crew_refusal(tool, args).await {
+            return Clearance::Refused(refused);
+        }
+        let Some(approval) = find_bot_tool_spec(tool)
+            .map(|spec| resolve_tool_approval(&spec, args))
+            .filter(|approval| approval.kind != "none")
+        else {
+            return Clearance::Clear;
+        };
+        let _approval_check = self.approval_check.lock().await;
+        let inference = self.inference();
+        match self
+            .batch
+            .clearance(
+                self.deps.grants.as_ref(),
+                tool,
+                args,
+                None,
+                &approval.description,
+                inference.as_deref(),
+            )
+            .await
+        {
+            HeadlessAnswer::Run => Clearance::Clear,
+            HeadlessAnswer::Refuse(message) => {
+                Clearance::Refused(refusal(tool, "bot_tool_refused_by_owner", &message))
+            }
+            HeadlessAnswer::Park(_) => Clearance::Asks,
+        }
     }
 
     async fn expensive_documents_allowed(&self, tool: &str, args: &Value) -> bool {
@@ -448,42 +496,40 @@ impl BotToolsHost {
     }
 
     /// The headless path: nobody can approve right now, so a call that asks runs under a standing
-    /// grant (or the owner's one-time answer) and otherwise parks the turn behind an approval
-    /// card. A tool that changes anything ends the turn's retries.
+    /// grant (or the owner's one-time answer) and otherwise joins the attempt's approval card.
+    /// Calls that ask nothing keep running after a park. A tool that changes anything ends the
+    /// turn's retries.
     pub(crate) async fn run_unattended(
         &self,
         mutating: &AtomicBool,
         tool: &str,
         args: Value,
     ) -> String {
-        let approval_check = self.approval_check.lock().await;
-        if self.parked().is_some() {
-            return self.park_notice(tool);
+        if let Some(refused) = self.crew_refusal(tool, &args).await {
+            return refused;
         }
+        let approval_check = self.approval_check.lock().await;
         let mut expensive = false;
         match find_bot_tool_spec(tool).map(|spec| resolve_tool_approval(&spec, &args)) {
             Some(approval) if approval.kind != "none" => {
-                let inference = self
-                    .inference
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .clone();
-                match headless_answer_with_inference(
-                    self.deps.grants.as_ref(),
-                    &self.deps.turn_id,
-                    tool,
-                    &args,
-                    None,
-                    &approval.description,
-                    inference.as_deref(),
-                )
-                .await
+                let inference = self.inference();
+                match self
+                    .batch
+                    .answer(
+                        self.deps.grants.as_ref(),
+                        tool,
+                        &args,
+                        None,
+                        &approval.description,
+                        inference.as_deref(),
+                    )
+                    .await
                 {
                     HeadlessAnswer::Run => {}
                     HeadlessAnswer::Refuse(message) => {
                         return refusal(tool, "bot_tool_refused_by_owner", &message);
                     }
-                    HeadlessAnswer::Park(card) => return self.park(tool, card),
+                    HeadlessAnswer::Park(_) => return Self::waiting(tool),
                 }
             }
             _ => expensive = self.expensive_documents_allowed(tool, &args).await,
@@ -504,13 +550,10 @@ impl BotToolsHost {
                 &args,
                 &cost_message(&output),
             );
-            return self.park(tool, card);
+            self.batch.park(card, false);
+            return Self::waiting(tool);
         }
         output
-    }
-
-    fn park_notice(&self, tool: &str) -> String {
-        self.park(tool, self.parked().expect("a parked turn has a card"))
     }
 
     async fn run_in_process(&self, tool: &str, args: Value, expensive_documents: bool) -> String {
@@ -523,6 +566,7 @@ impl BotToolsHost {
         };
         let scope = if flow_like_bot_tools::configuration::is_settings_tool(tool)
             || flow_like_bot_tools::user_context::is_user_context_tool(tool)
+            || tool == flow_like_bot_tools::rooms::ROOM_INVITE
         {
             &empty_scope
         } else {
@@ -558,6 +602,9 @@ impl BotToolsHost {
         }
         if let Some(people) = &self.people {
             env = env.with_people(people.clone());
+        }
+        if let Some(rooms) = &self.rooms {
+            env = env.with_rooms(rooms.clone());
         }
         if let Some(scheduler) = &self.scheduler {
             env = env.with_scheduler(scheduler.clone());

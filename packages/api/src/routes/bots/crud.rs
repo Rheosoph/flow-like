@@ -10,7 +10,7 @@ use super::{
 use crate::{
     audit, capacity,
     db::coordination::coordinate,
-    entity::{bit, bot, bot_app, bot_secret, profile},
+    entity::{bit, bot, bot_app, bot_secret, bot_turn, profile},
     error::ApiError,
     middleware::jwt::AppUser,
     routes::{inbox, user::ensure_user_exists},
@@ -21,7 +21,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use flow_like_types::bot::{BotCapability, BotLocation, BotSystemKind};
+use flow_like_types::bot::{BotCapability, BotExecutionMode, BotLocation, BotSystemKind};
 use sea_orm::{
     ActiveEnum, ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait,
     DatabaseTransaction, DbErr, EntityTrait, PaginatorTrait, QueryFilter, QuerySelect, Statement,
@@ -132,6 +132,8 @@ fn device_changed(before: Option<&BotSettings>, after: &BotSettings) -> bool {
     before.is_none_or(|before| {
         before.device_id != after.device_id
             || (before.location != BotLocation::Device && after.location == BotLocation::Device)
+            || (before.execution_mode != after.execution_mode
+                && after.execution_mode == BotExecutionMode::Docker)
     })
 }
 
@@ -186,6 +188,57 @@ async fn verify_device<C: ConnectionTrait>(
     Ok(())
 }
 
+const DOCKER_STATUS_FRESH_MS: i64 = 180_000;
+const DOCKER_STATUS_FUTURE_MS: i64 = 30_000;
+
+fn new_docker_assignment(before: Option<&BotSettings>, after: &BotSettings) -> bool {
+    after.execution_mode == BotExecutionMode::Docker
+        && before.is_none_or(|before| {
+            before.execution_mode != BotExecutionMode::Docker
+                || before.device_id != after.device_id
+                || before.location != after.location
+        })
+}
+
+/// Readiness is advisory for running bots, but required before a new isolated assignment.
+pub(super) fn docker_status_ready(report: Option<&serde_json::Value>, now_ms: i64) -> bool {
+    let Some(report) = report else {
+        return false;
+    };
+    report.get("installed").and_then(serde_json::Value::as_bool) == Some(true)
+        && report.get("available").and_then(serde_json::Value::as_bool) == Some(true)
+        && report
+            .get("seen_at")
+            .and_then(serde_json::Value::as_i64)
+            .is_some_and(|seen| {
+                let age = now_ms.saturating_sub(seen);
+                (-DOCKER_STATUS_FUTURE_MS..=DOCKER_STATUS_FRESH_MS).contains(&age)
+            })
+}
+
+pub(super) async fn verify_docker_ready<C: ConnectionTrait>(
+    db: &C,
+    owner: &str,
+    device: &str,
+) -> Result<(), ApiError> {
+    let row = db.query_one_raw(Statement::from_sql_and_values(db.get_database_backend(),
+        r#"SELECT "botDocker" FROM "ManagedDevice" WHERE id = $1 AND "ownerId" = $2 AND status = 'active'"#,
+        [device.into(), owner.into()],
+    )).await?;
+    let report = row
+        .map(|row| row.try_get::<Option<serde_json::Value>>("", "botDocker"))
+        .transpose()?
+        .flatten();
+    if !docker_status_ready(report.as_ref(), chrono::Utc::now().timestamp_millis()) {
+        return Err(ApiError::coded(
+            StatusCode::CONFLICT,
+            "BOT_DOCKER_UNAVAILABLE",
+            "The selected device has not recently reported Docker ready. Start Docker on that device, update its agent if needed, and try again",
+        ));
+    }
+    Ok(())
+}
+
 /// The profile and device a bot points at must be the owner's.
 async fn verify_references<C: ConnectionTrait>(
     db: &C,
@@ -207,6 +260,11 @@ async fn verify_references<C: ConnectionTrait>(
         && device_changed(before, after)
     {
         verify_device(db, owner_id, device_id).await?;
+    }
+    if let Some(device_id) = after.device_id.as_deref()
+        && new_docker_assignment(before, after)
+    {
+        verify_docker_ready(db, owner_id, device_id).await?;
     }
     Ok(())
 }
@@ -326,6 +384,20 @@ pub(crate) async fn patch_in<C: ConnectionTrait>(
             changed: Vec::new(),
         });
     }
+    if before.execution_mode != after.execution_mode
+        && bot_turn::Entity::find()
+            .filter(bot_turn::Column::BotId.eq(bot_id))
+            .filter(bot_turn::Column::Status.eq("RUNNING"))
+            .count(db)
+            .await?
+            > 0
+    {
+        return Err(ApiError::coded(
+            StatusCode::CONFLICT,
+            "BOT_EXECUTION_MODE_BUSY",
+            "Stop the bot's running turn before changing its execution mode",
+        ));
+    }
     verify_references(db, owner_id, Some(&before), &after).await?;
     if system.is_none()
         && before.location != BotLocation::Server
@@ -339,6 +411,49 @@ pub(crate) async fn patch_in<C: ConnectionTrait>(
         inbox::conversations::sync_own_bot_direct(db, &bot).await?;
     }
     Ok(Patched { bot, changed })
+}
+
+/// The owner's bot unless it is built in: Assistant and Flux can't be deleted.
+pub(crate) async fn deletable_bot<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    bot_id: &str,
+) -> Result<bot::Model, ApiError> {
+    let current = owned_bot(db, owner_id, bot_id).await?;
+    if let Some(key) = current.system_key.as_deref() {
+        return Err(ApiError::coded(
+            StatusCode::CONFLICT,
+            BOT_SYSTEM_UNDELETABLE,
+            format!("The built-in bot '{key}' can't be deleted"),
+        ));
+    }
+    Ok(current)
+}
+
+/// Deletes the owner's bot as `DELETE /bots/{bot_id}` does: its attachments, secrets and
+/// workspace go, and it leaves its conversations.
+pub(crate) async fn delete_owned(
+    state: &AppState,
+    owner_id: &str,
+    bot_id: &str,
+) -> Result<(), ApiError> {
+    deletable_bot(&state.db, owner_id, bot_id).await?;
+    let (first, workspace_deletion) = state
+        .transaction(|txn| {
+            let (owner_id, bot_id) = (owner_id.to_string(), bot_id.to_string());
+            Box::pin(async move {
+                soft_delete(txn, &owner_id, &bot_id).await?;
+                let workspace_deletion = workspace::queue_deletion(txn, &owner_id, &bot_id).await?;
+                let first = inbox::retirement::retire_next(txn, &owner_id, &bot_id).await?;
+                Ok::<_, ApiError>((first, workspace_deletion))
+            })
+        })
+        .await?;
+    inbox::retirement::finish_retirement(state, owner_id, bot_id, first).await;
+    if let Some(queued) = workspace_deletion {
+        workspace::delete_queued(state, &queued).await;
+    }
+    Ok(())
 }
 
 /// Marks the bot deleted and drops its app attachments and secrets with it.
@@ -433,6 +548,9 @@ pub(crate) async fn update_owned(
                 if body.location == Some(BotLocation::Server) {
                     coordinate(txn, "bot-owner", &[&owner_id]).await?;
                 }
+                if body.execution_mode.is_some() {
+                    coordinate(txn, "bot-turn-owner", &[&owner_id]).await?;
+                }
                 lock_bot(txn, &bot_id).await?;
                 patch_in(txn, &owner_id, &bot_id, body).await
             })
@@ -441,7 +559,7 @@ pub(crate) async fn update_owned(
     if patched.changed.contains(&"location") {
         crate::bot_host::task_schedules::sync_bot(state, bot_id).await;
     }
-    if patched.changed.contains(&"capabilities") {
+    if patched.changed.contains(&"capabilities") || patched.changed.contains(&"execution_mode") {
         inbox::wake(state, [owner_id.to_string()]).await;
     }
     Ok(patched)
@@ -568,29 +686,7 @@ pub async fn delete_bot(
     Path(bot_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let sub = user.sub()?;
-    let current = owned_bot(&state.db, &sub, &bot_id).await?;
-    if let Some(key) = current.system_key.as_deref() {
-        return Err(ApiError::coded(
-            StatusCode::CONFLICT,
-            BOT_SYSTEM_UNDELETABLE,
-            format!("The built-in bot '{key}' can't be deleted"),
-        ));
-    }
-    let (first, workspace_deletion) = state
-        .transaction(|txn| {
-            let (sub, bot_id) = (sub.clone(), bot_id.clone());
-            Box::pin(async move {
-                soft_delete(txn, &sub, &bot_id).await?;
-                let workspace_deletion = workspace::queue_deletion(txn, &sub, &bot_id).await?;
-                let first = inbox::retirement::retire_next(txn, &sub, &bot_id).await?;
-                Ok::<_, ApiError>((first, workspace_deletion))
-            })
-        })
-        .await?;
-    inbox::retirement::finish_retirement(&state, &sub, &bot_id, first).await;
-    if let Some(queued) = workspace_deletion {
-        workspace::delete_queued(&state, &queued).await;
-    }
+    delete_owned(&state, &sub, &bot_id).await?;
     audit!(state, user, "bot.delete", "Bot", bot_id);
     Ok(StatusCode::NO_CONTENT)
 }

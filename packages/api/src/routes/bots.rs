@@ -21,6 +21,7 @@ pub mod configuration;
 pub mod connectors;
 pub mod crud;
 pub mod fire;
+pub mod image_credential;
 pub mod import;
 pub mod live_activities;
 pub mod mail;
@@ -32,6 +33,7 @@ pub mod people;
 pub mod permissions;
 pub mod presence;
 mod provision;
+pub mod rooms;
 pub(crate) mod runtime;
 pub mod runtime_token;
 mod secret_cipher;
@@ -46,6 +48,8 @@ mod validation;
 pub mod webhooks;
 pub mod workspace;
 
+#[cfg(test)]
+mod app_gate_tests;
 #[cfg(test)]
 mod connectors_tests;
 #[cfg(test)]
@@ -124,6 +128,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/turns/{turn_id}/secrets/{name}",
             post(secrets::read_turn_secret),
+        )
+        .route(
+            "/turns/{turn_id}/secrets/{name}/sealed",
+            post(secrets::read_turn_sealed_secret),
         )
         .route(
             "/{bot_id}",
@@ -220,6 +228,14 @@ pub fn routes() -> Router<AppState> {
             post(skills::disable_bot_skill),
         )
         .route(
+            "/{bot_id}/skills/{skill_id}/package",
+            get(skills::bot_skill_package),
+        )
+        .route(
+            "/{bot_id}/image-model/credential",
+            post(image_credential::bot_image_credential),
+        )
+        .route(
             "/{bot_id}/webhooks",
             get(webhooks::list_bot_webhooks).post(webhooks::create_bot_webhook),
         )
@@ -290,6 +306,10 @@ pub fn routes() -> Router<AppState> {
         .route("/{bot_id}/notify", post(notify::message_owner))
         .route("/{bot_id}/people", get(people::list_bot_people))
         .route("/{bot_id}/people/message", post(people::message_person))
+        .route(
+            "/{bot_id}/rooms/{conversation_id}/invitations",
+            post(rooms::invite_person),
+        )
         .route("/{bot_id}/apps", get(apps::list_bot_apps))
         .route(
             "/{bot_id}/apps/{app_id}",

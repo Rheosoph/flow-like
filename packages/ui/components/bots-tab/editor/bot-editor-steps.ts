@@ -40,6 +40,7 @@ export function getBotProblemStep(
 		case "profile_required":
 			return "abilities";
 		case "device_required":
+		case "docker_requires_device":
 			return "location";
 		case "instructions_too_long":
 			return "brain";

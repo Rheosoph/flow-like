@@ -51,6 +51,7 @@ pub(crate) mod wait_schema {
         super::recovery::list,
         super::management::my_access,
         super::bots::poll,
+        super::bots_keys::publish_key,
         super::bots::claim,
         super::bots::checkpoint_load,
         super::bots::checkpoint_save,

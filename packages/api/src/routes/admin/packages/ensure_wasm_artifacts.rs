@@ -2,6 +2,7 @@
 
 use crate::audit;
 use crate::compilation::dispatch::compiled_artifact_paths;
+use crate::compilation::pending::retry_pending_after;
 use crate::entity::sea_orm_active_enums::{WasmCompilationStatus, WasmPackageStatus};
 use crate::entity::{wasm_package, wasm_package_version};
 use crate::error::ApiError;
@@ -168,7 +169,9 @@ pub async fn ensure_wasm_artifacts(
             continue;
         }
 
-        if version_record.compilation_status == WasmCompilationStatus::Pending {
+        if version_record.compilation_status == WasmCompilationStatus::Pending
+            && retry_pending_after(&version_record, chrono::Utc::now()).is_some()
+        {
             already_pending += 1;
             continue;
         }

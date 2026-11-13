@@ -402,7 +402,11 @@ export async function click(el: Element): Promise<void> {
 	await act(async () => {
 		const view = el.ownerDocument.defaultView as unknown as typeof globalThis;
 		el.dispatchEvent(
-			new view.PointerEvent("pointerdown", { bubbles: true, button: 0 }),
+			new view.PointerEvent("pointerdown", {
+				bubbles: true,
+				button: 0,
+				isPrimary: true,
+			}),
 		);
 		el.dispatchEvent(
 			new view.MouseEvent("mousedown", { bubbles: true, button: 0 }),
@@ -413,11 +417,15 @@ export async function click(el: Element): Promise<void> {
 		el.dispatchEvent(
 			new view.MouseEvent("mouseup", { bubbles: true, button: 0 }),
 		);
-		if (el instanceof view.HTMLElement) el.click();
-		else
-			el.dispatchEvent(
-				new view.MouseEvent("click", { bubbles: true, button: 0 }),
-			);
+		el.dispatchEvent(
+			new view.PointerEvent("click", {
+				bubbles: true,
+				cancelable: true,
+				composed: true,
+				button: 0,
+				detail: 1,
+			}),
+		);
 	});
 }
 

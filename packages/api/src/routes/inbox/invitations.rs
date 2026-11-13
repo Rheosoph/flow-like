@@ -523,8 +523,8 @@ pub(crate) async fn decline_in<C: ConnectionTrait>(
     Ok(member.invited_by.into_iter().collect())
 }
 
-/// Withdraws an invitation (pending or declined): the person who sent it or the conversation's
-/// creator may. Returns the people to wake.
+/// Withdraws an invitation (pending or declined): the person who sent it, the owner of the bot
+/// that sent it, or the conversation's creator may. Returns the people to wake.
 pub(crate) async fn cancel_in<C: ConnectionTrait>(
     txn: &C,
     conversation_id: &str,
@@ -550,11 +550,18 @@ pub(crate) async fn cancel_in<C: ConnectionTrait>(
         .one(txn)
         .await?
         .map(|row| row.created_by);
-    if member.invited_by.as_deref() != Some(caller) && creator.as_deref() != Some(caller) {
+    let sent_by_my_bot = match member.invited_by.as_deref() {
+        Some(inviter) if inviter != caller => owned_bot(txn, caller, inviter).await.is_ok(),
+        _ => false,
+    };
+    if member.invited_by.as_deref() != Some(caller)
+        && creator.as_deref() != Some(caller)
+        && !sent_by_my_bot
+    {
         return Err(ApiError::coded(
             StatusCode::FORBIDDEN,
             INBOX_INVITE_NOT_ALLOWED,
-            "You can withdraw invitations you sent, or any invitation in a group you started",
+            "You can withdraw invitations you or your bots sent, or any invitation in a group you started",
         ));
     }
     conversation_member::Entity::delete_many()
@@ -899,7 +906,19 @@ async fn member_states<C: ConnectionTrait>(
         .collect())
 }
 
-async fn display_name(state: &AppState, user_id: &str) -> String {
+/// Who an invitation names as its sender: a person's public name, or a bot with its owner.
+async fn display_name(state: &AppState, principal_id: &str) -> String {
+    match bot::Entity::find_by_id(principal_id).one(&state.db).await {
+        Ok(Some(row)) => format!(
+            "{} ({}'s bot)",
+            crate::bot_notify::display_name(&row),
+            person_name(state, &row.owner_id).await
+        ),
+        _ => person_name(state, principal_id).await,
+    }
+}
+
+async fn person_name(state: &AppState, user_id: &str) -> String {
     user::Entity::find_by_id(user_id)
         .select_only()
         .column(user::Column::Name)

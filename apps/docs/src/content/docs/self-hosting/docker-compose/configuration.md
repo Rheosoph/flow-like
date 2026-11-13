@@ -515,11 +515,21 @@ complete `/v1/embeddings` URL. Azure also accepts a resource base URL and uses
 Azure, Hugging Face, or a compatible service. The legacy `remote.endpoint` URL
 does not select the destination.
 
-For EmbeddingGemma 2, set `remote.implementation` to `Internal` and
+For EmbeddingGemma 2 on the Internal gateway, set `remote.implementation` to `Internal` and
 `remote.model_id` to `embeddinggemma-2`. The `/embeddings/embed` API accepts text
 strings, structured image/audio/video inputs, combined multimodal inputs, and
 mixed batches for this model. Media fields contain URLs or base64 strings; the
 API forwards them to the gateway without downloading them.
+
+For EmbeddingGemma 2 on Cloudflare, set `remote.implementation` to
+`CloudflareWorkersAI` and `remote.model_id` to `@cf/google/embeddinggemma-2`.
+Configure `HOSTED_CLOUDFLARE_API_TOKEN` and `HOSTED_CLOUDFLARE_ACCOUNT_ID` on
+the API. Set `input_length` to 8192 and `vector_length` to 128, 256, 512, or
+768. Text and ordered image/audio/video parts are sent through Cloudflare's
+native `/ai/run/@cf/google/embeddinggemma-2` endpoint. Media must be inline;
+use base64 data URLs to retain the MIME type. The API rejects remote URLs
+and PDF inputs and limits inline media to 100 MiB per file and 256 MiB per
+batch before base64 encoding. The provider enforces the shared token limit.
 
 For Gemini Embedding 2 on OpenRouter, set `remote.implementation` to `OpenRouter`
 and `remote.model_id` to `google/gemini-embedding-2`. The API uses
@@ -527,7 +537,7 @@ and `remote.model_id` to `google/gemini-embedding-2`. The API uses
 embedding destination. This model supports text, images, audio, video, and PDF
 files. An input with `type: "content"` and ordered `parts` produces one combined
 vector, including repeated image parts. Existing structured image/audio/video
-and `multimodal` inputs remain accepted. Other hosted providers retain their
+and `multimodal` inputs remain accepted. The remaining hosted providers retain their
 text input contract. See [embedding models](/topics/genai/models/#embedding-models)
 for source formats, media limits, and workflow nodes, and the
 [Node.js](/dev/sdks/nodejs/#embeddings) or [Python](/dev/sdks/python/#embeddings)

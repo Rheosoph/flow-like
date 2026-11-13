@@ -428,6 +428,7 @@ pub async fn global_chat(
     let mut notes = None;
     let mut trail = None;
     let mut reply_files = None;
+    let mut usage = flow_like::flow::copilot::bot_usage::BotUsage::default();
     let mut recovery = None;
     let mut inbox_conversation_id = None;
     let mut ephemeral_user_context = false;
@@ -469,6 +470,7 @@ pub async fn global_chat(
             trail = run.trail().await;
             reply_files = Some(run.reply_files());
         }
+        usage = run.usage.clone();
         let hold = run.hold();
         finish = Some(crate::bot_host::interactive::Finish {
             memory: bot_memory.clone(),
@@ -505,6 +507,7 @@ pub async fn global_chat(
         run_id,
         channel,
         crate::functions::ai::native_tool_bridge::NativeRunOptions {
+            usage,
             model_id,
             reasoning_effort,
             conversation_id,
@@ -607,7 +610,11 @@ impl CallTiming {
             let value = value.load(std::sync::atomic::Ordering::Relaxed);
             (value != UNSET_MS).then_some(value)
         };
-        let model = self.model.lock().map(|label| label.clone()).unwrap_or_default();
+        let model = self
+            .model
+            .lock()
+            .map(|label| label.clone())
+            .unwrap_or_default();
         tracing::info!(
             target: "bot_call_latency",
             route = "interactive",
@@ -654,15 +661,20 @@ pub async fn global_chat_native(
 ) -> Result<UnifiedCopilotResponse, String> {
     // Keep model selection, memory and delegated tools on the profile that owns this run.
     let mut options = options;
+    let usage = options.usage.clone();
     let nested_talk = options.bot_talk.take();
     let answered_round = options.answered_round.take();
     let bot_memory = options.bot_memory.take();
     let notes = options.notes.take();
     let trail = options.trail.take();
     let reply_files = options.reply_files.take();
-    let recovery = options.recovery.take();
+    let recovery = options
+        .recovery
+        .take()
+        .map(|recovery| usage.with_recovery(recovery));
     let room_updates = options.room_updates.take();
     let requester = options.requester.take();
+    let reply_stream = options.reply_stream.take();
     let acknowledgement = options.acknowledgement;
     let live_call = options.live_call;
     let call_started = std::time::Instant::now();
@@ -695,6 +707,10 @@ pub async fn global_chat_native(
     options.attachments = attachments_manifest.clone().unwrap_or_default();
     let conversation_id = options.conversation_id.clone();
     let has_inbox_conversation = options.inbox_conversation_id.is_some();
+    let conversation_key = options
+        .inbox_conversation_id
+        .clone()
+        .or_else(|| conversation_id.clone());
     let run_id = Some(run_id.unwrap_or_else(flow_like_types::create_id));
     let _native_run = crate::functions::ai::native_tool_bridge::claim_run(
         &app_handle,
@@ -749,6 +765,7 @@ pub async fn global_chat_native(
         && let Some(message) = flow_like::flow::copilot::run_recovery::finished_reply(&checkpoint)
             .map_err(|error| error.to_string())?
     {
+        usage.restore(&checkpoint);
         if identity
             .as_ref()
             .and_then(|identity| identity.auth.as_ref())
@@ -801,8 +818,8 @@ pub async fn global_chat_native(
     let model_state = Arc::new(model_state);
     if let Some(bot) = bot.as_mut() {
         let context = std::sync::Arc::make_mut(&mut bot.context);
-        context.host_tools = std::mem::take(&mut context.host_tools)
-            .with_user_context(has_inbox_conversation);
+        context.host_tools =
+            std::mem::take(&mut context.host_tools).with_user_context(has_inbox_conversation);
         if let Some(notes) = notes {
             context.host_tools = std::mem::take(&mut context.host_tools).with_notes(notes);
         }
@@ -812,9 +829,13 @@ pub async fn global_chat_native(
         if let Some(files) = reply_files {
             context.host_tools = std::mem::take(&mut context.host_tools).with_reply_files(files);
         }
+        if let Some(key) = conversation_key {
+            context.host_tools = std::mem::take(&mut context.host_tools).with_conversation_key(key);
+        }
         std::sync::Arc::make_mut(&mut bot.context).recovery = recovery.map(Into::into);
         std::sync::Arc::make_mut(&mut bot.context).acknowledgement = acknowledgement;
         std::sync::Arc::make_mut(&mut bot.context).live_call = live_call;
+        std::sync::Arc::make_mut(&mut bot.context).spoken_drafts = reply_stream.is_some();
         std::sync::Arc::make_mut(&mut bot.context).tool_gate = tool_gate;
         std::sync::Arc::make_mut(&mut bot.context).ephemeral_user_context = ephemeral_user_context;
         std::sync::Arc::make_mut(&mut bot.context).seed_taint = seed_taint;
@@ -860,6 +881,12 @@ pub async fn global_chat_native(
         ),
         _ => None,
     };
+    if let (Some(model_id), Some(id)) = (bot_model.as_deref(), run_id.as_deref()) {
+        let _ = channel.send(
+            crate::functions::ai::native_tool_bridge::run_model_announcement(id, model_id)
+                .to_string(),
+        );
+    }
     // Its assistants run on the bot's sub-task model when this desktop can run it, else on that
     // model.
     let assistant_model = match (&bot, &profile) {
@@ -918,7 +945,13 @@ pub async fn global_chat_native(
             Some(memory.context().to_string()),
             shared_context.filter(|_| !ephemeral_user_context),
         ];
-        user_context = Some(sections.into_iter().flatten().collect::<Vec<_>>().join("\n\n"));
+        user_context = Some(
+            sections
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        );
     }
     let attachments_manifest = attachments_manifest.unwrap_or_default();
     let context = match &bot {
@@ -1065,6 +1098,17 @@ pub async fn global_chat_native(
         Some(run) => global_chat_run_channel(run.clone()),
         None => channel,
     };
+    let sink = Channel::new(move |body: InvokeResponseBody| {
+        let chunk = match &body {
+            InvokeResponseBody::Json(json) => serde_json::from_str::<String>(json).ok(),
+            InvokeResponseBody::Raw(bytes) => String::from_utf8(bytes.clone()).ok(),
+        };
+        if let Some(chunk) = chunk {
+            usage.observe(&chunk);
+            sink.send(chunk)?;
+        }
+        Ok(())
+    });
     crate::functions::ai::native_tool_bridge::set_run_stream(
         run_id.as_deref().expect("native run id"),
         sink.clone(),
@@ -1254,6 +1298,9 @@ pub async fn global_chat_native(
                 let token_timing = call_timing.clone();
                 let on_token = move |token: String| {
                     token_timing.first_token(call_started);
+                    if let Some(reply) = &reply_stream {
+                        reply.push(&token);
+                    }
                     let _ = sink.send(token);
                 };
 

@@ -5,6 +5,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { IDataSensitivity } from "../../../lib/data-classification";
 import type {
 	BotCapability,
+	BotExecutionMode,
 	BotLocation,
 	IBot,
 	IBotApp,
@@ -88,6 +89,7 @@ export interface BotEditor {
 	setModelPin: (pin: BotModelPin, bitId: string | null) => void;
 	setLocation: (location: BotLocation) => void;
 	setDeviceId: (deviceId: string) => void;
+	setExecutionMode: (executionMode: BotExecutionMode) => void;
 	setClassification: (classification: IDataSensitivity) => void;
 }
 
@@ -372,6 +374,7 @@ export function useBotEditor(
 			setLocationChange(change);
 		},
 		setDeviceId: (deviceId) => update({ deviceId }),
+		setExecutionMode: (executionMode) => update({ executionMode }),
 		setClassification: (classification) => update({ classification }),
 	};
 }

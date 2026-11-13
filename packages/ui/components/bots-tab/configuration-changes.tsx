@@ -9,20 +9,38 @@ import {
 	CodeIcon,
 	CpuIcon,
 	FileTextIcon,
+	HardDriveIcon,
 	type LucideIcon,
 	MapPinIcon,
+	ShieldCheckIcon,
+	ShieldIcon,
 	SlidersHorizontalIcon,
 	SmileIcon,
 	SparklesIcon,
 	UnlinkIcon,
 } from "lucide-react";
-import { useId, useState } from "react";
+import { type ReactNode, useId, useState } from "react";
+import { useAccountDevices } from "../../hooks/use-account-devices";
 import { useBotLabels, useBots } from "../../hooks/use-bots";
+import { parseDataClassification } from "../../lib/data-classification";
 import { cn } from "../../lib/utils";
-import type { BotCapability } from "../../state/backend-state/bot-state";
+import {
+	BOT_LOCATIONS,
+	type BotCapability,
+	type BotLocation,
+	type BotPermission,
+	type BotRestrictionPreset,
+} from "../../state/backend-state/bot-state";
 import { BotAvatar } from "../bots/bot-avatar";
+import { DataClassificationBadge } from "../ui/data-classification";
+import {
+	useAppNames,
+	usePermissionLabels,
+	usePresetLabels,
+} from "./bot-app-restrictions";
 import { useBotCapabilityLabel } from "./bot-labels";
 import { BOT_CAPABILITY_ICONS } from "./editor/bot-capability-groups";
+import { useBotLocationCopy } from "./editor/bot-editor-copy";
 
 const FIELDS: Record<string, { label: string; icon: LucideIcon }> = {
 	name: { label: "Name", icon: BotIcon },
@@ -37,18 +55,49 @@ const FIELDS: Record<string, { label: string; icon: LucideIcon }> = {
 	vision_model: { label: "Vision model", icon: CpuIcon },
 	subtask_model: { label: "Subtask model", icon: CpuIcon },
 	look: { label: "Look", icon: SmileIcon },
+	classification: { label: "Data classification", icon: ShieldIcon },
 	location: { label: "Runs on", icon: MapPinIcon },
+	execution_mode: { label: "Execution environment", icon: ShieldCheckIcon },
+	device_id: { label: "Device", icon: HardDriveIcon },
 	app_ids: { label: "Apps", icon: AppWindowIcon },
+	app_restrictions: {
+		label: "What it may do in each app",
+		icon: ShieldCheckIcon,
+	},
 };
 
 export type BotSettingsTool =
 	| "bot_update_configuration"
 	| "create_bot"
-	| "update_bot";
+	| "update_bot"
+	| "delete_bot";
 
-/** Titles and answers for approving a bot's settings change: its own, a new bot, or another bot. */
+/**
+ * Titles and answers for approving a bot's settings change (its own, a new bot, or another bot)
+ * or the deletion of another bot.
+ */
 export function useBotSettingsApprovalText(tool: string | undefined) {
 	const { t } = useTranslation("bots");
+	if (tool === "delete_bot")
+		return {
+			title: t("crew.approval.deleteBot.title", "Delete a bot"),
+			requestTitle: (name: string) =>
+				t(
+					"crew.approval.deleteBot.requestTitle",
+					"{{name}} wants to delete a bot",
+					{
+						name,
+					},
+				),
+			hint: t(
+				"crew.approval.deleteBot.hint",
+				"The bot below is deleted for good with its settings, app access, secrets and workspace files and tables; its past messages stay.",
+			),
+			approve: t("crew.approval.deleteBot.approve", "Delete bot"),
+			reject: t("crew.approval.deleteBot.reject", "Keep bot"),
+			approved: t("crew.approval.deleteBot.approved", "Deletion approved"),
+			rejected: t("crew.approval.deleteBot.rejected", "Deletion rejected"),
+		};
 	if (tool === "create_bot")
 		return {
 			title: t("crew.approval.createBot.title", "Create a bot"),
@@ -355,8 +404,181 @@ function ProposedModels({ value }: { value: Record<string, unknown> }) {
 	);
 }
 
+const SCOPE_LISTS = ["tables", "events", "boards"] as const;
+
+function ProposedClassification({ value }: { value: Record<string, unknown> }) {
+	const { t } = useTranslation("bots");
+	const level =
+		typeof value.classification === "string"
+			? parseDataClassification(value.classification)
+			: undefined;
+	return (
+		<dl className="space-y-2.5">
+			{"classification" in value && (
+				<div className="space-y-1">
+					<dt className="text-xs text-muted-foreground">
+						{t("crew.approval.classification.level", "Sensitivity")}
+					</dt>
+					<dd>
+						{level ? (
+							<DataClassificationBadge classification={level} />
+						) : (
+							<ClearedValue
+								label={t(
+									"crew.approval.classification.unset",
+									"Not classified",
+								)}
+							/>
+						)}
+					</dd>
+				</div>
+			)}
+			{"pii" in value && (
+				<div className="space-y-1">
+					<dt className="text-xs text-muted-foreground">
+						{t("crew.approval.classification.pii", "Personal data")}
+					</dt>
+					<dd className="text-sm">
+						{value.pii === true
+							? t(
+									"crew.approval.classification.piiYes",
+									"Handles personal data",
+								)
+							: t("crew.approval.classification.piiNo", "No personal data")}
+					</dd>
+				</div>
+			)}
+		</dl>
+	);
+}
+
+function ProposedLocation({ location }: { location: BotLocation }) {
+	const copy = useBotLocationCopy()(location);
+	return (
+		<div className="min-w-0 space-y-0.5">
+			<p className="text-sm font-medium">{copy.label}</p>
+			<p className="text-xs text-muted-foreground">{copy.description}</p>
+		</div>
+	);
+}
+
+/** A device by its name, as the device picker of the Bots tab shows it. */
+function ProposedDevice({ deviceId }: { deviceId: string }) {
+	const devices = useAccountDevices().devices ?? [];
+	let device: (typeof devices)[number] | undefined;
+	for (const candidate of devices)
+		if (candidate.device_id === deviceId) device = candidate;
+	return (
+		<span className="text-sm [overflow-wrap:anywhere]">
+			{device?.display_name || device?.name || deviceId}
+		</span>
+	);
+}
+
+/** The preset, the listed permissions, or the whole role of the owner an entry leaves the bot. */
+const restrictionRole = (
+	entry: Record<string, unknown>,
+	presets: ReturnType<typeof usePresetLabels>,
+	permissions: ReturnType<typeof usePermissionLabels>,
+) => {
+	if (typeof entry.preset === "string")
+		return presets[entry.preset as BotRestrictionPreset] ?? entry.preset;
+	if (!Array.isArray(entry.permissions)) return presets.full;
+	const label = (id: unknown) => permissions[id as BotPermission] ?? String(id);
+	return entry.permissions.map(label).join(", ");
+};
+
+/** The folders, the read-only switch and the allow-lists of one entry. */
+function RestrictionScopes({ entry }: { entry: Record<string, unknown> }) {
+	const { t } = useTranslation("bots");
+	const listLabels = {
+		tables: t("restrictions.groups.tables", "Tables"),
+		events: t("restrictions.groups.events", "Events"),
+		boards: t("restrictions.groups.boards", "Boards"),
+	};
+	const listed = (values: unknown[]) =>
+		values.length
+			? values.map(String).join(", ")
+			: t("crew.approval.configuration.emptyList", "Empty list");
+	const lines = SCOPE_LISTS.filter((list) => Array.isArray(entry[list]));
+	return (
+		<>
+			{Array.isArray(entry.folders) && entry.folders.length > 0 && (
+				<p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+					{t("restrictions.foldersOnly", "Only these folders")}:{" "}
+					{listed(entry.folders)}
+				</p>
+			)}
+			{entry.files_read_only === true && (
+				<p className="text-xs text-muted-foreground">
+					{t("restrictions.readOnlyFiles", "Never change files")}
+				</p>
+			)}
+			{lines.map((list) => (
+				<p
+					key={list}
+					className="text-xs text-muted-foreground [overflow-wrap:anywhere]"
+				>
+					{t("restrictions.limitedTo", "Only these {{what}}", {
+						what: listLabels[list].toLocaleLowerCase(),
+					})}
+					: {listed(entry[list] as unknown[])}
+				</p>
+			))}
+		</>
+	);
+}
+
+/** Each app by name with the preset or permissions and the scopes the bot gets there. */
+function ProposedRestrictions({ entries }: { entries: unknown[] }) {
+	const names = useAppNames();
+	const presets = usePresetLabels();
+	const permissions = usePermissionLabels();
+	return (
+		<ul className="space-y-3">
+			{entries.filter(isRecord).map((entry, index) => {
+				const appId = String(entry.app_id ?? "");
+				return (
+					<li
+						// biome-ignore lint/suspicious/noArrayIndexKey: keep the order of the immutable proposal
+						key={`${appId}-${index}`}
+						className="min-w-0 space-y-1"
+						data-app={appId}
+					>
+						<p className="truncate text-sm font-medium">
+							{names.get(appId) || appId}
+						</p>
+						<p className="text-xs [overflow-wrap:anywhere]">
+							{restrictionRole(entry, presets, permissions)}
+						</p>
+						<RestrictionScopes entry={entry} />
+					</li>
+				);
+			})}
+		</ul>
+	);
+}
+
+function isBotLocation(value: unknown): value is BotLocation {
+	return BOT_LOCATIONS.includes(value as BotLocation);
+}
+
+/** Crew fields with a view of their own; each returns `null` for a value it can't show. */
+const CREW_FIELD_VIEWS: Record<string, (value: unknown) => ReactNode> = {
+	classification: (value) =>
+		isRecord(value) ? <ProposedClassification value={value} /> : null,
+	location: (value) =>
+		isBotLocation(value) ? <ProposedLocation location={value} /> : null,
+	device_id: (value) =>
+		typeof value === "string" ? <ProposedDevice deviceId={value} /> : null,
+	app_restrictions: (value) =>
+		Array.isArray(value) ? <ProposedRestrictions entries={value} /> : null,
+};
+
 function ChangeValue({ field, value }: { field: string; value: unknown }) {
 	const { t } = useTranslation("bots");
+	const view = CREW_FIELD_VIEWS[field]?.(value);
+	if (view) return view;
 	if (
 		field === "capabilities" &&
 		Array.isArray(value) &&
@@ -377,14 +599,24 @@ function ChangeValue({ field, value }: { field: string; value: unknown }) {
 	return <ProposedValue value={value} />;
 }
 
-/** Review the exact proposed settings; approvals do not carry a snapshot of previous values. */
+/**
+ * Review the exact proposed settings; approvals do not carry a snapshot of previous values. A
+ * `delete_bot` approval shows only the bot it deletes.
+ */
 export function BotConfigurationChanges({
 	changes,
-}: { changes: Record<string, unknown> }) {
+	tool,
+}: { changes: Record<string, unknown>; tool?: string }) {
 	const { t } = useTranslation("bots");
 	const titleId = useId();
 	const { bot_id: target, ...settings } = changes;
 	const entries = Object.entries(settings);
+	if (tool === "delete_bot" && typeof target === "string")
+		return (
+			<section className="min-w-0" data-slot="bot-deletion">
+				<TargetBot botId={target} />
+			</section>
+		);
 	return (
 		<section
 			className="min-w-0 space-y-3"

@@ -239,6 +239,15 @@
 	"board2": "Board",
 	"boardNotFound": "BOARD NOT FOUND!",
 	"boardVersion": "Board version",
+	"botAccess": {
+		"allow": "Allow bots",
+		"allowed": "Members' bots may use this app within their owners' roles.",
+		"description": "Members can give their bots access to this app. A bot never holds more than its owner's role here. Turn bots off and every bot is refused, including bots that already use the app.",
+		"ownerOnly": "Only the app owner can change this.",
+		"refused": "No bot may use this app. Bots that try are told to ask you.",
+		"saveFailed": "Couldn't change whether bots may use this app: {{message}}",
+		"title": "Bots"
+	},
 	"bothJoinColumnsLiveInThisTablePickALinkTableForManytomany": "Both join columns live in this table. Pick a link table for many-to-many.",
 	"bothUseTheSameRandomInstallIdItIsDeletedOnceBothSwitchesAreOffAndAFreshOneIsCreatedIfYouTurnEitherBackOn": "Both use the same random install id. It is deleted once both switches are off, and a fresh one is created if you turn either back on.",
 	"branding": "Branding",

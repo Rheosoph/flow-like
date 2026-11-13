@@ -1,8 +1,4 @@
 import {
-	isHostedAudio,
-	validateHostedAudioParameters,
-} from "../../lib/bit/hosted-audio";
-import {
 	supportsCustomRequestParams,
 	validateCustomRequestParams,
 } from "../../lib/bit/custom-request-params";
@@ -11,6 +7,10 @@ import {
 	externalModelProviders,
 } from "../../lib/bit/external-model-providers";
 import { validateForecastingBit } from "../../lib/bit/forecasting-model";
+import {
+	isHostedAudio,
+	validateHostedAudioParameters,
+} from "../../lib/bit/hosted-audio";
 import {
 	isHostedImageGeneration,
 	validateHostedImageParameters,
@@ -159,6 +159,14 @@ export function validateHostedEmbeddingParameters(
 	)
 		return "Cloudflare BGE Large requires mean pooling. Re-embed existing CLS data before switching its provider.";
 	let dimensions: number[] | undefined;
+	if (
+		remote.implementation === "CloudflareWorkersAI" &&
+		model === "@cf/google/embeddinggemma-2"
+	) {
+		dimensions = [128, 256, 512, 768];
+		if (Number(params.input_length) > 8192)
+			return `${model} supports at most 8192 input tokens.`;
+	}
 	if (remote.implementation === "Cohere") {
 		if (model === "embed-v4.0") dimensions = [256, 512, 1024, 1536];
 		if (["embed-v5.0-fast", "embed-v5.0-pro"].includes(model))

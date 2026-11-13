@@ -188,9 +188,22 @@ pub(crate) async fn room_limits<C: ConnectionTrait>(
     }
 }
 
-/// bot live and attached (or the app in its profile) → owner's live role → expand → strip
-/// `BOT_NEVER` → bot row mask → room limits → resource scopes. Any missing link answers with a
-/// refusal.
+/// The conversation whose member-row limits narrow a turn of `bot_id` there: every conversation
+/// except its owner's own direct chat with it, decided by the conversation's active members.
+pub(crate) async fn limited_conversation<C: ConnectionTrait>(
+    db: &C,
+    conversation_id: &str,
+    owner_id: &str,
+    bot_id: &str,
+) -> Result<Option<String>, ApiError> {
+    let owner_direct =
+        crate::bot_host::memory::is_owner_direct(db, conversation_id, owner_id, bot_id).await?;
+    Ok((!owner_direct).then(|| conversation_id.to_owned()))
+}
+
+/// bot live and attached (or the app in its profile) → owner's live role → the app admits bots
+/// → expand → strip `BOT_NEVER` → bot row mask → room limits → resource scopes. Any missing link
+/// answers with a refusal.
 pub async fn bot_grant_in<C: ConnectionTrait>(
     db: &C,
     bot: &BotUser,
@@ -205,6 +218,7 @@ pub async fn bot_grant_in<C: ConnectionTrait>(
     let owner_role = member_role(db, &row.owner_id, app_id)
         .await?
         .ok_or_else(|| refusal("The bot's owner has no access to this app"))?;
+    crate::bot_app_gate::ensure_admits_bots(db, app_id).await?;
     let room = match bot.conv_id.as_deref() {
         Some(conv_id) => Some(room_limits(db, &bot.bot_id, conv_id).await?),
         None => None,

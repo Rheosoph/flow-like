@@ -48,6 +48,7 @@ pub(crate) const INBOX_FILE_NOT_FOUND: &str = "INBOX_FILE_NOT_FOUND";
 pub(crate) const INBOX_FILE_TOO_LARGE: &str = "INBOX_FILE_TOO_LARGE";
 pub(crate) const INBOX_FILE_NOT_READY: &str = "INBOX_FILE_NOT_READY";
 pub(crate) const INBOX_FILE_TAKEN: &str = "INBOX_FILE_TAKEN";
+pub(crate) const INBOX_FILE_SEALED: &str = "INBOX_FILE_SEALED";
 
 pub(crate) const FILE_PENDING: &str = "PENDING";
 pub(crate) const FILE_READY: &str = "READY";
@@ -446,7 +447,31 @@ pub(crate) async fn ensure_member<C: ConnectionTrait>(
         .map(|_| ())
 }
 
-/// The object a bot's tools read: the file's key, after the bot's membership is checked.
+/// Fails with [`INBOX_FILE_SEALED`], in words a bot can pass on, for an end-to-end encrypted
+/// conversation: its files are ciphertext whose keys only the members' devices hold, so nothing
+/// that runs on the server reads them.
+pub(crate) async fn ensure_server_readable<C: ConnectionTrait>(
+    db: &C,
+    conversation_id: &str,
+) -> Result<(), ApiError> {
+    let encryption = conversation::Entity::find_by_id(conversation_id)
+        .one(db)
+        .await?
+        .and_then(|row| ConversationEncryption::parse(&row.encryption));
+    if encryption == Some(ConversationEncryption::Plain) {
+        return Ok(());
+    }
+    Err(ApiError::coded(
+        StatusCode::CONFLICT,
+        INBOX_FILE_SEALED,
+        format!(
+            "The files of the end-to-end encrypted conversation '{conversation_id}' open only on the members' devices, which hold their keys, so tools that run on the server can't read them. Ask the person to open the file in the app, or to send it in a conversation that isn't encrypted if a server tool should read it."
+        ),
+    ))
+}
+
+/// The object a bot's tools read on the server: the file's key, after the bot's membership is
+/// checked. A file of an end-to-end encrypted conversation is never read there.
 pub(crate) async fn bot_readable_key<C: ConnectionTrait>(
     db: &C,
     conversation_id: &str,
@@ -454,6 +479,7 @@ pub(crate) async fn bot_readable_key<C: ConnectionTrait>(
     path: &str,
 ) -> Result<String, ApiError> {
     active_membership(db, conversation_id, principal).await?;
+    ensure_server_readable(db, conversation_id).await?;
     let file_id = path.split_once('.').map_or(path, |(id, _)| id);
     let file = conversation_file::Entity::find_by_id(file_id)
         .filter(conversation_file::Column::ConversationId.eq(conversation_id))

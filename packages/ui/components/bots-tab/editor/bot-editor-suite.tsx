@@ -261,10 +261,12 @@ function LocationView({ editor }: StepViewProps) {
 			location={editor.draft.location}
 			localOnly={editor.localOnly}
 			deviceId={editor.draft.deviceId}
+			executionMode={editor.draft.executionMode}
 			removed={editor.removedCapabilities}
 			restored={editor.restoredCapabilities}
 			onLocationChange={editor.setLocation}
 			onDeviceChange={editor.setDeviceId}
+			onExecutionModeChange={editor.setExecutionMode}
 		/>
 	);
 }

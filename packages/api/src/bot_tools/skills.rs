@@ -55,19 +55,28 @@ impl SkillJobs for ApiSkillJobs {
                 package: None,
             });
         };
-        let mut packages =
-            crate::execution::wasm_resolve::resolve_wasm_packages(&self.state, &self.workspace)
-                .await
-                .unwrap_or_default();
-        let package = packages.remove(&package_id).ok_or_else(|| {
-            format!("The package '{package_id}' is not available for this bot's workspace")
-        })?;
+        let package = pinned_package(&self.state, &self.workspace, &package_id).await?;
         Ok(SkillCallJob {
             skill,
             package_id,
             package: Some(package),
         })
     }
+}
+
+/// The version of `package_id` the bot's workspace pins, with fresh download links.
+pub(crate) async fn pinned_package(
+    state: &AppState,
+    workspace: &str,
+    package_id: &str,
+) -> std::result::Result<flow_like_types::dispatch::WasmPackageRef, String> {
+    crate::execution::wasm_resolve::resolve_wasm_packages(state, workspace)
+        .await
+        .unwrap_or_default()
+        .remove(package_id)
+        .ok_or_else(|| {
+            format!("The package '{package_id}' is not available for this bot's workspace")
+        })
 }
 
 const IMPORT_TIMEOUT: Duration = Duration::from_secs(90);

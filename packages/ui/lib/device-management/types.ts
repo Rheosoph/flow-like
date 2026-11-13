@@ -308,6 +308,12 @@ export interface DeviceCrypto {
 		}[],
 		body: unknown,
 	): Record<string, unknown>;
+	/** A bot secret's value sealed to the bot's published keys, bound to its bot id and name. */
+	inboxSealSecret(
+		scope: { bot_id: string; name: string },
+		keys: { key_id: string; public_key: string }[],
+		value: string,
+	): unknown;
 	/** Opened bodies, `null` where none of `seeds` opens an entry. */
 	inboxOpen(
 		seeds: string[],
@@ -319,6 +325,17 @@ export interface DeviceCrypto {
 			envelope: unknown;
 		}[],
 	): unknown[];
+	/** `file` sealed for the conversation under a fresh key, base64url. */
+	inboxSealFile(
+		conversationId: string,
+		file: Uint8Array,
+	): { key: string; ciphertext: Uint8Array<ArrayBuffer> };
+	/** A sealed conversation file opened with the key from its message. */
+	inboxOpenFile(
+		conversationId: string,
+		key: string,
+		ciphertext: Uint8Array,
+	): Uint8Array<ArrayBuffer>;
 	rewrapControllerVaults(
 		deviceId: string,
 		currentPassword: Uint8Array,

@@ -850,6 +850,45 @@ mod tests {
 
     #[cfg(feature = "remote-ml")]
     #[tokio::test]
+    async fn cloudflare_gemma2_uses_multimodal_proxy_with_configured_dimensions() {
+        let mut bit = embedding_bit("Hosted");
+        bit.parameters["remote"]["implementation"] = json::json!("CloudflareWorkersAI");
+        bit.parameters["remote"]["model_id"] = json::json!("@cf/google/embeddinggemma-2");
+        bit.parameters["vector_length"] = json::json!(256);
+        bit.parameters["input_length"] = json::json!(8192);
+        let model = EmbeddingFactory::new()
+            .build(
+                &bit,
+                Arc::new(memory_state()),
+                Some("user-token".into()),
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(model.supports_encoded_media());
+        assert!(model.requires_typed_media_sources());
+        assert_eq!(model.descriptor().adapter, "cloudflare_multimodal");
+        assert_eq!(model.descriptor().supported_dimensions, vec![256]);
+        assert_eq!(
+            model.descriptor().space.id,
+            "cloudflare:@cf/google/embeddinggemma-2:256"
+        );
+        assert!(
+            model
+                .descriptor()
+                .modalities
+                .contains(&EmbeddingModality::Video)
+        );
+        assert!(
+            !model
+                .descriptor()
+                .modalities
+                .contains(&EmbeddingModality::File)
+        );
+    }
+
+    #[cfg(feature = "remote-ml")]
+    #[tokio::test]
     async fn versioned_recipe_uses_proxy_and_its_text_contract_on_object_storage() {
         let bit = with_embedding_recipe(embedding_bit("Local"));
         let state = Arc::new(memory_state());

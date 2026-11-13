@@ -662,7 +662,8 @@ describe("FlowPilot workspace content collection", () => {
 		);
 		expect(response.status).toBe("ok");
 		const found = (response.hits as Record<string, unknown>[]).find(
-			(hit) => hit.title === "Pages > Page, Event, and Route",
+			(hit) =>
+				hit.title === "Page runtime and state API > Page, Event, and Route",
 		);
 		if (!found)
 			throw new Error("Expected the bundled Page, Event, and Route section");

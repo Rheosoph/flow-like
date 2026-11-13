@@ -14,15 +14,17 @@ use crate::{
 };
 use axum::http::StatusCode;
 use chrono::{DateTime, Duration, FixedOffset};
-use flow_like::flow::copilot::tool_grants::{GrantCheck, GrantStore, approval_request, check_call};
+use flow_like::flow::copilot::tool_grants::{
+    GrantCheck, GrantStore, ParkedBatch, approval_request, check_call,
+};
 use flow_like_types::{
     bot::BotLocation,
-    bot_message::ApprovalRequest,
+    bot_message::{ApprovalRequest, ItemDecision},
     bot_turn::{STORED_CANCELLED, STORED_QUEUED, STORED_WAITING, TurnHostKind, turn_id},
     inbox::{ConversationKind, direct_pair_key},
     tool_grant::{
-        APPROVAL_WAIT_DAYS, ApprovalAnswer, ApprovalDecision, ERROR_APPROVAL_EXPIRED, ToolGrantKey,
-        args_hash,
+        APPROVAL_WAIT_DAYS, ApprovalAnswer, ApprovalDecision, ERROR_APPROVAL_EXPIRED,
+        ERROR_APPROVAL_ITEM_UNKNOWN, ToolGrantKey, args_hash,
     },
 };
 use sea_orm::{
@@ -126,6 +128,7 @@ fn answer(card: &ApprovalRequest, decision: ApprovalDecision) -> ApprovalAnswer 
     ApprovalAnswer {
         approval_id: card.id.clone(),
         decision,
+        items: Vec::new(),
     }
 }
 
@@ -448,6 +451,7 @@ async fn an_answer_needs_the_waiting_turn_its_card_and_its_owner() {
     let wrong = ApprovalAnswer {
         approval_id: "ap-other".into(),
         decision: ApprovalDecision::Always,
+        items: Vec::new(),
     };
     let refused = answer_in(&db, OWNER, BOT, &turn.id, &wrong, "c1", now_millis())
         .await
@@ -777,4 +781,119 @@ async fn an_approval_answered_after_the_deadline_rebases_it_without_touching_the
         row.started_at_ms + super::worker::MAX_TURN_RUNTIME_MS
     );
     assert_eq!((row.revision, row.state), (4, state));
+}
+
+const DROPPED: [&str; 3] = ["notes", "pets", "birds"];
+
+fn drop_of(index: &str) -> Value {
+    json!({ "index": index })
+}
+
+fn item(index: &str, decision: ApprovalDecision) -> ItemDecision {
+    ItemDecision {
+        args_hash: args_hash("knowledge_drop", &drop_of(index)),
+        decision,
+    }
+}
+
+/// A turn parked behind one card for three drops.
+async fn parked_batch() -> (DatabaseConnection, bot_turn::Model, ApprovalRequest) {
+    let (db, turn) = running().await;
+    let batch = ParkedBatch::new(&turn.id);
+    for index in DROPPED {
+        let description = format!("Drops '{index}'.");
+        let card = approval_request(
+            &turn.id,
+            "knowledge_drop",
+            &drop_of(index),
+            None,
+            &description,
+        );
+        batch.park(card, false);
+    }
+    let card = batch.card().unwrap();
+    assert_eq!(card.items.len(), DROPPED.len());
+    park_in(&db, &turn, HOST, &card, "c1", now_millis())
+        .await
+        .unwrap();
+    let turn = ledger::find(&db, &turn.id, None).await.unwrap().unwrap();
+    (db, turn, card)
+}
+
+async fn drop_check(db: &DatabaseConnection, index: &str) -> GrantCheck {
+    check_call(&rows(db), "knowledge_drop", &drop_of(index), None)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn an_answer_with_items_stores_each_decision() {
+    let (db, turn, card) = parked_batch().await;
+    let answer = ApprovalAnswer {
+        items: vec![
+            item("pets", ApprovalDecision::Always),
+            item("birds", ApprovalDecision::Deny),
+        ],
+        ..answer(&card, ApprovalDecision::Once)
+    };
+    let (queued, sent) = answer_in(&db, OWNER, BOT, &turn.id, &answer, "c1", now_millis())
+        .await
+        .unwrap();
+    assert_eq!(queued.status, STORED_QUEUED);
+    let response = &sent.entry.envelope["body"]["approval_response"];
+    assert_eq!(response["decision"], "once");
+    assert_eq!(
+        response["items"],
+        serde_json::to_value(&answer.items).unwrap()
+    );
+    assert_eq!(drop_check(&db, "notes").await, GrantCheck::Once);
+    assert_eq!(drop_check(&db, "pets").await, GrantCheck::Granted);
+    assert_eq!(drop_check(&db, "birds").await, GrantCheck::Denied);
+}
+
+#[tokio::test]
+async fn an_old_client_answer_applies_to_every_item() {
+    let (db, turn, card) = parked_batch().await;
+    resolve(&db, &turn, &card, ApprovalDecision::Always)
+        .await
+        .unwrap();
+    for index in DROPPED {
+        assert_eq!(drop_check(&db, index).await, GrantCheck::Granted, "{index}");
+    }
+    assert_eq!(
+        list_grants(&db, OWNER, BOT, false).await.unwrap().len(),
+        DROPPED.len()
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_item_is_refused() {
+    let (db, turn, card) = parked_batch().await;
+    let unknown = ItemDecision {
+        args_hash: "not-on-the-card".into(),
+        decision: ApprovalDecision::Deny,
+    };
+    for items in [
+        vec![unknown],
+        vec![
+            item("pets", ApprovalDecision::Deny),
+            item("pets", ApprovalDecision::Once),
+        ],
+    ] {
+        let answer = ApprovalAnswer {
+            items,
+            ..answer(&card, ApprovalDecision::Once)
+        };
+        let refused = answer_in(&db, OWNER, BOT, &turn.id, &answer, "c1", now_millis())
+            .await
+            .unwrap_err();
+        assert_code(
+            &refused,
+            StatusCode::BAD_REQUEST,
+            ERROR_APPROVAL_ITEM_UNKNOWN,
+        );
+    }
+    assert!(list_grants(&db, OWNER, BOT, true).await.unwrap().is_empty());
+    let waiting = ledger::find(&db, &turn.id, None).await.unwrap().unwrap();
+    assert_eq!(waiting.status, STORED_WAITING);
 }

@@ -437,3 +437,61 @@ fn a_group_task_pauses_once_its_bot_left_the_group() {
     assert!(group_triggers(&f, &group.id).is_empty());
     assert!(triggers(&f, &bot).is_empty());
 }
+
+#[test]
+fn a_group_turn_sees_and_changes_only_the_tasks_of_its_group() {
+    let f = fixture();
+    let bot = scheduler_bot(&f);
+    let other = f.bot("Other");
+    let group = f.group(&[&bot, &other]);
+    let private = f
+        .store
+        .create_task(&bot.id, once(5), TaskCreator::Bot)
+        .unwrap();
+    let shared = f
+        .store
+        .create_task_in(&bot.id, once(6), TaskCreator::Bot, Some(&group.id))
+        .unwrap();
+
+    let in_group = f.store.tasks_in_turn(&bot.id, Some(&group.id)).unwrap();
+    assert_eq!(
+        in_group.iter().map(|task| task.id.as_str()).collect::<Vec<_>>(),
+        [shared.id.as_str()]
+    );
+    let direct = f.direct(&bot);
+    assert_eq!(f.store.tasks_in_turn(&bot.id, Some(&direct.id)).unwrap().len(), 2);
+    assert_eq!(f.store.tasks_in_turn(&bot.id, None).unwrap().len(), 2);
+
+    let rename = || UpdateBotTask {
+        title: Some("Changed".into()),
+        ..Default::default()
+    };
+    let hidden = f
+        .store
+        .update_task_in_turn(&bot.id, &private.id, rename(), Some(&group.id))
+        .unwrap_err();
+    let missing = f
+        .store
+        .update_task_in_turn(&bot.id, "task_missing", rename(), Some(&group.id))
+        .unwrap_err();
+    assert_eq!(
+        hidden.to_string().replace(&private.id, "X"),
+        missing.to_string().replace("task_missing", "X")
+    );
+    assert!(f
+        .store
+        .delete_task_in_turn(&bot.id, &private.id, Some(&group.id))
+        .is_err());
+    assert_eq!(f.store.tasks(&bot.id).unwrap().len(), 2);
+
+    f.store
+        .update_task_in_turn(&bot.id, &shared.id, rename(), Some(&group.id))
+        .unwrap();
+    f.store
+        .delete_task_in_turn(&bot.id, &shared.id, Some(&group.id))
+        .unwrap();
+    f.store
+        .delete_task_in_turn(&bot.id, &private.id, Some(&direct.id))
+        .unwrap();
+    assert!(f.store.tasks(&bot.id).unwrap().is_empty());
+}

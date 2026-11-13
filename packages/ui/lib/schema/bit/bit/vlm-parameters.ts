@@ -1,9 +1,22 @@
 export interface IVlmParameters {
 	context_length: number;
+	/**
+	 * The most sensitive data this model may process; unset means untagged.
+	 */
+	data_classification?: null | IDataClassification;
 	model_classification: IBitModelClassification;
 	provider: IModelProvider;
 	[property: string]: any;
 }
+
+/**
+ * How sensitive data is, from least to most sensitive.
+ */
+export type IDataClassification =
+	| "public"
+	| "internal"
+	| "confidential"
+	| "restricted";
 
 export interface IBitModelClassification {
 	coding: number;

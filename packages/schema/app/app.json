@@ -163,6 +163,11 @@
 				}
 			],
 			"default": null
+		},
+		"refuse_bots": {
+			"description": "The owner refuses bots here; every host answers a bot's access with `APP_REFUSES_BOTS`.",
+			"type": "boolean",
+			"default": false
 		}
 	},
 	"required": [

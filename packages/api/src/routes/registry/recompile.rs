@@ -1,3 +1,4 @@
+use crate::compilation::pending::{retry_pending_after, still_pending_message};
 use crate::entity::sea_orm_active_enums::WasmCompilationStatus;
 use crate::entity::wasm_package_version;
 use crate::error::ApiError;
@@ -30,7 +31,7 @@ pub struct RecompileResponse {
     request_body = RecompileRequest,
     responses(
         (status = 200, description = "Recompilation triggered", body = RecompileResponse),
-        (status = 400, description = "Invalid request"),
+        (status = 400, description = "Invalid request, or the version is PENDING and its compile job was dispatched less than an hour ago"),
         (status = 401, description = "Authentication required"),
         (status = 403, description = "Insufficient permissions"),
         (status = 503, description = "WASM registry not configured")
@@ -72,8 +73,13 @@ pub async fn recompile(
         return Err(ApiError::bad_request("Already compiled"));
     }
 
-    if version_record.compilation_status == WasmCompilationStatus::Pending {
-        return Err(ApiError::bad_request("Compilation already in progress"));
+    if version_record.compilation_status == WasmCompilationStatus::Pending
+        && let Some(retry_at) = retry_pending_after(&version_record, chrono::Utc::now())
+    {
+        return Err(ApiError::bad_request(still_pending_message(
+            &version_record,
+            retry_at,
+        )));
     }
 
     let mut active: wasm_package_version::ActiveModel = version_record.into();

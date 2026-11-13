@@ -1,4 +1,5 @@
 pub mod apply_flowscript;
+pub mod board_cleanup;
 pub mod capabilities;
 pub mod delete_board;
 pub mod element_demand;

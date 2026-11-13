@@ -23,7 +23,7 @@ repos:
       -   id: trailing-whitespace
           # identify tags `.manifest` as text; the hook strips bytes out of Lance's binary manifests.
           # Vendored browser atoms, templates and parity goldens are byte-exact copies.
-          exclude: ^(packages/storage/tests/fixtures/|packages/browser/tests/fixtures/|packages/browser/src/js/|packages/browser/src/templates/)
+          exclude: ^(packages/storage/tests/fixtures/|packages/browser/tests/fixtures/|packages/browser/src/js/|packages/browser/src/templates/|packages/ui/.*/__snapshots__/.*\.snap$)
 
   -   repo: https://github.com/astral-sh/ruff-pre-commit
       # Ruff version.

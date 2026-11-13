@@ -1,28 +1,6 @@
 name: Compiler reproducibility
 
 on:
-  pull_request:
-    branches: [dev]
-    paths:
-      - '.github/**'
-      - '**/rust-toolchain*'
-      - '**/mise.toml'
-      - '**/Cargo.toml'
-      - '**/Cargo.lock'
-      - '**/Dockerfile*'
-      - '**/*.Dockerfile'
-      - 'apps/desktop/src-tauri/gen/apple/**'
-  push:
-    branches: [dev]
-    paths:
-      - '.github/**'
-      - '**/rust-toolchain*'
-      - '**/mise.toml'
-      - '**/Cargo.toml'
-      - '**/Cargo.lock'
-      - '**/Dockerfile*'
-      - '**/*.Dockerfile'
-      - 'apps/desktop/src-tauri/gen/apple/**'
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -31,6 +9,10 @@ on:
         required: false
         type: boolean
         default: false
+
+concurrency:
+  group: compiler-reproducibility-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -57,6 +39,7 @@ jobs:
     timeout-minutes: 15
     strategy:
       fail-fast: false
+      max-parallel: 3
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu

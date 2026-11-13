@@ -233,6 +233,30 @@ describe('what "Don\'t ask again" covers', () => {
 	});
 });
 
+test("a call asked again after web content says why and offers no Don't ask again", async () => {
+	const respond = vi.fn();
+	await show(
+		approval({
+			toolName: "web_request",
+			title: "Approve web_request",
+			description: "Send a GET request to cisa.gov/alerts",
+			appId: undefined,
+			rememberAppId: undefined,
+			asksAgain: "web_content",
+			respond,
+		}),
+	);
+	expect(
+		host.querySelector("[data-slot='web-content-notice']")?.textContent,
+	).toBe("Asked again because this turn read web pages.");
+	expect(host.querySelector("#inline-tool-prompt-remember")).toBeNull();
+	const approve = Array.from(host.querySelectorAll("button")).find(
+		(button) => button.textContent === "Approve",
+	);
+	await act(async () => approve?.click());
+	expect(respond).toHaveBeenCalledWith({ approved: true, remember: false });
+});
+
 test("configuration approval shows the complete prompt and model mapping without a remember option", async () => {
 	const instructions = `${"Follow these instructions.\n".repeat(100)}Final instruction.`;
 	await show(
@@ -343,7 +367,7 @@ describe("secret prompt", () => {
 		await typeValue("hunter2");
 		await act(async () => buttonLabelled("Save secret")?.click());
 		await settle();
-		expect(store).toHaveBeenCalledWith("hunter2");
+		expect(store).toHaveBeenCalledWith("hunter2", false);
 		expect(respond).toHaveBeenCalledWith({ approved: true, remember: false });
 		expect(JSON.stringify(respond.mock.calls)).not.toContain("hunter2");
 	});

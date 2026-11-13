@@ -141,6 +141,11 @@ service in the background. The image is pinned by digest from the signed
 release. The package directory is mounted into the container, so `state`
 persists outside the container.
 
+Run the wrapper as a non-root user with Docker access. The official image
+includes Chromium and a virtual desktop for browser and computer use. The
+package configures Chromium's seccomp profile and shared memory, and keeps its
+home directory in the persistent state folder.
+
 The generated Compose service uses `restart: unless-stopped`. Docker itself
 must start at boot for that policy to restore the agent after a reboot. If the
 package contains both modes, choose one agent process for that state directory.

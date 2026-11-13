@@ -2,12 +2,14 @@
 //!
 //! [`TurnLabel`] is the most sensitive classification any tool result of the turn reported, the
 //! bot's own and its sub-tasks' alike. Outbound tools check it ([`LabelBridge`]): a turn that
-//! handled data above the bot's own classification may not send anything out. [`TurnCompute`]
-//! carries the compute time of parallel sub-tasks to the host that settles the turn.
+//! handled data above the bot's own classification may not send anything out. The label also
+//! marks a turn that read web content ([`brings_web_content`]), which sets standing web grants
+//! aside. [`TurnCompute`] carries the compute time of parallel sub-tasks to the host that settles
+//! the turn.
 
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use async_trait::async_trait;
@@ -16,7 +18,7 @@ use serde_json::{Value, json};
 
 use super::bot_run::BotRunContext;
 use super::bot_talk::{ASK_BOT_TOOL, BotTalk, effective_level};
-use super::platform::PlatformToolBridge;
+use super::platform::{Clearance, PlatformToolBridge};
 
 /// Tools that send what they were given out of the platform or to another principal: mail,
 /// web and connector requests, images, a person or another bot, a shell, code, a browser, the
@@ -49,13 +51,46 @@ const OUTBOUND_TOOLS: [&str; 21] = [
 /// that host, and a linked attachment makes every reader's app load it.
 const OUTBOUND_WITH_URL: [&str; 2] = ["file_save", "file_attach"];
 
+/// Tools whose result is text a web page or a search engine wrote.
+const WEB_CONTENT_TOOLS: [&str; 9] = [
+    "internet_search",
+    "open_url",
+    "archive_lookup",
+    "research_agent",
+    "web_request",
+    "browser_open",
+    "browser_snapshot",
+    "browser_act",
+    "browser_screenshot",
+];
+
+fn names_url(args: &Value) -> bool {
+    args.get("url")
+        .and_then(Value::as_str)
+        .is_some_and(|url| !url.trim().is_empty())
+}
+
 fn is_outbound(tool_name: &str, args: &Value) -> bool {
     OUTBOUND_TOOLS.contains(&tool_name)
-        || (OUTBOUND_WITH_URL.contains(&tool_name)
-            && args
-                .get("url")
-                .and_then(Value::as_str)
-                .is_some_and(|url| !url.trim().is_empty()))
+        || (OUTBOUND_WITH_URL.contains(&tool_name) && names_url(args))
+}
+
+/// Whether a call's result put web content into the model's context: a web or browser tool, or
+/// a download, that answered `ok` or `partial`. An HTTP error page counts (`web_request` reports
+/// it as `ok`); a gate's waiting result or a refusal does not.
+pub(super) fn brings_web_content(tool_name: &str, args: &Value, output: &str) -> bool {
+    let reads_web =
+        WEB_CONTENT_TOOLS.contains(&tool_name) || (tool_name == "file_save" && names_url(args));
+    reads_web
+        && serde_json::from_str::<Value>(output)
+            .ok()
+            .and_then(|result| {
+                result
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .map(|status| matches!(status, "ok" | "partial"))
+            })
+            .unwrap_or(false)
 }
 
 /// Mail and webhook content comes from outside the platform. The classification scale has no
@@ -146,6 +181,7 @@ pub(super) struct TurnLabel {
     level: Mutex<DataSensitivity>,
     own: DataClassification,
     talk: Option<Arc<BotTalk>>,
+    web_content: AtomicBool,
 }
 
 impl TurnLabel {
@@ -154,9 +190,19 @@ impl TurnLabel {
             level: Mutex::new(DataSensitivity::default()),
             own: effective_level(&bot.classification),
             talk,
+            web_content: AtomicBool::new(false),
         });
         label.raise(bot.seed_taint);
         label
+    }
+
+    /// The turn read web content; from its next round on, standing web grants are set aside.
+    pub(super) fn mark_web_content(&self) {
+        self.web_content.store(true, Ordering::SeqCst);
+    }
+
+    pub(super) fn has_web_content(&self) -> bool {
+        self.web_content.load(Ordering::SeqCst)
     }
 
     pub(super) fn get(&self) -> DataSensitivity {
@@ -240,6 +286,13 @@ impl PlatformToolBridge for LabelBridge {
         output
     }
 
+    async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
+        match self.label.refusal(tool_name, arguments) {
+            Some(refusal) => Clearance::Refused(refusal),
+            None => self.inner.clearance(tool_name, arguments).await,
+        }
+    }
+
     async fn drain_steering(&self) -> Vec<String> {
         self.inner.drain_steering().await
     }
@@ -267,7 +320,43 @@ mod tests {
             level: Mutex::new(DataSensitivity::default()),
             own,
             talk: None,
+            web_content: AtomicBool::new(false),
         })
+    }
+
+    #[test]
+    fn only_web_results_that_arrived_mark_the_turn() {
+        let ok = json!({"status": "ok"});
+        let partial = json!({"status": "partial"});
+        let not_found = json!({"status": "ok", "http_status": 404});
+        let failed = json!({"status": "error"});
+        let waiting = json!({"status": "waiting", "code": "bot_tool_waiting_for_approval"});
+        let page = json!({"url": "https://a.example/report.pdf"});
+        let none = json!({});
+        let cases = [
+            ("internet_search", &none, &ok, true),
+            ("research_agent", &none, &partial, true),
+            ("web_request", &page, &not_found, true),
+            ("file_save", &page, &ok, true),
+            ("browser_snapshot", &none, &ok, true),
+            ("internet_search", &none, &failed, false),
+            ("web_request", &page, &waiting, false),
+            ("call_app_event", &none, &ok, false),
+            ("file_save", &none, &ok, false),
+        ];
+        for (tool, args, output, marks) in cases {
+            assert_eq!(
+                brings_web_content(tool, args, &output.to_string()),
+                marks,
+                "{tool} {args} {output}"
+            );
+        }
+        assert!(!brings_web_content("open_url", &json!({}), "not json"));
+
+        let label = TurnLabel::new(&BotRunContext::general(), None);
+        assert!(!label.has_web_content());
+        label.mark_web_content();
+        assert!(label.has_web_content());
     }
 
     #[test]

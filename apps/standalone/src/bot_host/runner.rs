@@ -4,8 +4,8 @@
 
 use super::{
     backends::{
-        BotRoutes, HubConnectors, HubMail, HubNotifier, HubPeople, HubScheduler, HubSkills,
-        HubUserContext,
+        BotRoutes, DeviceSkills, HubConnectors, HubImageSignIn, HubMail, HubNotifier, HubPeople,
+        HubRooms, HubScheduler, HubSkills, HubUserContext, PackageRun,
     },
     env::{
         ConversationFiles, DeviceToolEnv, HubImages, HubSecrets, MachineBackends, Machines,
@@ -29,11 +29,11 @@ use flow_like::{
 };
 use flow_like_bot_host::{
     bridge::{EnvFactory, ToolEnvBridge},
-    host::{RunError, TurnJob, TurnRunner},
+    host::{RunError, TurnJob, TurnRunner, failure_code, names_missing_model},
     hub::TurnHub,
 };
 use flow_like_bot_tools::{LocalShell, MemorySessions, SandboxBackend, code::CatalogSandbox};
-use flow_like_bot_tools_host::{HostEnv, JobApp, JobScope, StateModels};
+use flow_like_bot_tools_host::{HostEnv, JobApp, JobScope, ModelSource, StateModels, VisionRouted};
 use flow_like_types::{
     bot::BotCapability, data_classification::DataClassification, device_bot::DeviceTurnGrant,
 };
@@ -51,7 +51,7 @@ use tokio::sync::Notify;
 pub const CODE_RUN_FAILED: &str = "BOT_TURN_FAILED";
 pub const CODE_SETUP: &str = "BOT_TURN_SETUP";
 
-const TOOLS_NEEDING_UNLINKED_SERVICES: [&str; 7] = [
+const TOOLS_NEEDING_UNLINKED_SERVICES: [&str; 9] = [
     // Device runtime tokens have no endpoint for an approved settings change or for managing
     // the owner's bots.
     "bot_configuration",
@@ -61,6 +61,8 @@ const TOOLS_NEEDING_UNLINKED_SERVICES: [&str; 7] = [
     "get_bot",
     "create_bot",
     "update_bot",
+    "delete_bot",
+    "list_bot_devices",
 ];
 
 const IMAGE_GENERATE: &str = "image_generate";
@@ -81,6 +83,7 @@ pub struct DeviceRunner {
     shell_root: PathBuf,
     running: Mutex<HashMap<String, Arc<RunControl>>>,
     sessions: Mutex<HashMap<String, (Arc<MemorySessions>, Instant)>>,
+    e2e: std::sync::OnceLock<Arc<flow_like_bot_host::e2e::E2eHost>>,
 }
 
 fn setup(message: impl Into<String>) -> RunError {
@@ -95,22 +98,39 @@ fn bit_of(value: &serde_json::Value, role: &str) -> Result<Bit, RunError> {
         .map_err(|error| setup(format!("The hub sent an unreadable {role} model: {error}")))
 }
 
+/// The claim's vision model, when it is one that reads images.
+fn vision_of(grant: &DeviceTurnGrant) -> Option<Bit> {
+    grant
+        .models
+        .vision
+        .as_ref()
+        .and_then(|value| bit_of(value, "vision").ok())
+        .filter(Bit::is_multimodal)
+}
+
 async fn saved_reply(
     recovery: Option<&Arc<dyn flow_like::flow::copilot::run_recovery::BotRunRecovery>>,
     delivery_only: bool,
+    usage: &flow_like::flow::copilot::bot_usage::BotUsage,
 ) -> Result<Option<String>, RunError> {
-    let answer = match recovery {
+    let checkpoint = match recovery {
         Some(recovery) => recovery
             .load()
             .await
-            .map_err(|error| setup(error.to_string()))?
-            .as_ref()
-            .map(flow_like::flow::copilot::run_recovery::finished_reply)
-            .transpose()
-            .map_err(|error| setup(error.to_string()))?
-            .flatten(),
+            .map_err(|error| setup(error.to_string()))?,
         None => None,
     };
+    let answer = checkpoint
+        .as_ref()
+        .map(flow_like::flow::copilot::run_recovery::finished_reply)
+        .transpose()
+        .map_err(|error| setup(error.to_string()))?
+        .flatten();
+    if answer.is_some()
+        && let Some(checkpoint) = &checkpoint
+    {
+        usage.restore(checkpoint);
+    }
     if delivery_only && answer.is_none() {
         return Err(setup(
             "The completed checkpoint required by this delivery claim is unavailable",
@@ -140,10 +160,19 @@ mod recovery_tests {
 
     #[tokio::test]
     async fn delivery_claims_require_a_finished_checkpoint_before_execution() {
-        assert!(saved_reply(None, true).await.is_err());
+        assert!(saved_reply(None, true, &Default::default()).await.is_err());
         let empty: Arc<dyn BotRunRecovery> = Arc::new(EmptyRecovery);
-        assert!(saved_reply(Some(&empty), true).await.is_err());
-        assert_eq!(saved_reply(Some(&empty), false).await.unwrap(), None);
+        assert!(
+            saved_reply(Some(&empty), true, &Default::default())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            saved_reply(Some(&empty), false, &Default::default())
+                .await
+                .unwrap(),
+            None
+        );
     }
 }
 
@@ -178,6 +207,7 @@ fn profile_of(grant: &DeviceTurnGrant) -> Result<(Profile, Bit, Option<Bit>), Ru
                 })
             }),
     );
+    bits.extend(vision_of(grant));
     let profile = Profile {
         name: grant.bot.name.clone(),
         bits: bits.iter().map(|bit| bit.id.clone()).collect(),
@@ -335,7 +365,13 @@ impl DeviceRunner {
             shell_root: state_dir.to_path_buf(),
             running: Mutex::default(),
             sessions: Mutex::default(),
+            e2e: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Lets turns open secrets sealed to a bot's own key with the keys this device holds.
+    pub fn enable_e2e(&self, e2e: Arc<flow_like_bot_host::e2e::E2eHost>) {
+        let _ = self.e2e.set(e2e);
     }
 
     /// What the tools remember between calls (the browser's approved sites) lives per bot and
@@ -401,7 +437,9 @@ impl DeviceRunner {
         });
         let secrets = Arc::new(HubSecrets {
             hub: bot_hub.clone(),
+            bot_id: grant.bot.bot_id.clone(),
             turn_id: grant.turn.id.clone(),
+            e2e: self.e2e.get().cloned(),
         });
         let scope = job_scope(grant, &workspace);
         let sessions = self.sessions_for(grant);
@@ -424,22 +462,40 @@ impl DeviceRunner {
                     creds: creds.clone(),
                     usage: models.usage.clone(),
                     budget: Arc::default(),
+                    sign_in: HubImageSignIn(routes.clone()),
                 })
             });
         let connectors = Arc::new(HubConnectors::new(routes.clone()));
+        let token_creds = creds.clone();
+        let skills = Arc::new(DeviceSkills::new(
+            HubSkills(routes.clone()),
+            PackageRun {
+                state: self.state.clone(),
+                token: Arc::new(move || token_creds.executor_token()),
+                workspace: workspace.clone(),
+                access: access.clone(),
+                turn_id: grant.turn.id.clone(),
+                owner_id: grant.turn.owner_id.clone(),
+                usage: models.usage.clone(),
+            },
+        ));
         let shell_dir = shell_dir(&self.shell_root, &grant.bot.bot_id);
         let files_hub = routes.hub.clone();
         let files_conversation = grant.conversation.id.clone();
+        let vision = vision_of(grant)
+            .map(|bit| Arc::new(models.answering_with(bit)) as Arc<dyn ModelSource>);
+        let readers: Arc<dyn ModelSource> = Arc::new(VisionRouted::new(models.clone(), vision));
         Ok(Arc::new(move |expensive_documents| {
-            let mut env = HostEnv::new(&workspace, &scope, access.clone(), models.clone())
+            let mut env = HostEnv::new(&workspace, &scope, access.clone(), readers.clone())
                 .with_expensive_documents(expensive_documents)
                 .with_secrets(secrets.clone())
                 .with_sessions(sessions.clone())
                 .with_notifier(Arc::new(HubNotifier(routes.clone())))
                 .with_scheduler(Arc::new(HubScheduler(routes.clone())))
                 .with_people(Arc::new(HubPeople(routes.clone())))
-                .with_skills(Arc::new(HubSkills(routes.clone())))
+                .with_skills(skills.clone())
                 .with_user_context(Arc::new(HubUserContext(routes.clone())))
+                .with_rooms(Arc::new(HubRooms(routes.clone())))
                 .with_mail(Arc::new(HubMail(routes.clone())))
                 .with_connectors(connectors.clone());
             if let Some(images) = &images {
@@ -558,7 +614,12 @@ impl TurnRunner for DeviceRunner {
                 grant.deadline.saturating_mul(1000),
             )) as Arc<dyn flow_like::flow::copilot::run_recovery::BotRunRecovery>
         });
-        if let Some(answer) = saved_reply(job.recovery.as_ref(), grant.delivery_only).await? {
+        job.recovery = job
+            .recovery
+            .map(|recovery| job.usage.with_recovery(recovery));
+        if let Some(answer) =
+            saved_reply(job.recovery.as_ref(), grant.delivery_only, &job.usage).await?
+        {
             return Ok(answer);
         }
         let (profile, completion, embedding) = profile_of(grant)?;
@@ -574,6 +635,7 @@ impl TurnRunner for DeviceRunner {
         if let Some(files) = &job.reply_files {
             tools = tools.with_reply_files(files.clone());
         }
+        tools = tools.with_conversation_key(grant.conversation.id.clone());
         let mut context = context_of(grant, &job, tools);
         let access = Arc::new(PresignedAccess::new(
             reqwest::Client::new(),
@@ -633,18 +695,22 @@ impl TurnRunner for DeviceRunner {
                 attachments: &[],
             },
         );
-        let bridge: Arc<dyn PlatformToolBridge> = Arc::new(ToolEnvBridge::new(
-            factory,
-            context.host_tools.clone(),
-            job.gate.clone(),
-            mutating.clone(),
-            control.stopped.clone(),
-        )
-        .with_hub_apps(spec.bot_hub.clone(), &job.bot_id, &job.run_id));
+        let bridge: Arc<dyn PlatformToolBridge> = Arc::new(
+            ToolEnvBridge::new(
+                factory,
+                context.host_tools.clone(),
+                job.gate.clone(),
+                mutating.clone(),
+                control.stopped.clone(),
+            )
+            .with_hub_apps(spec.bot_hub.clone(), &job.bot_id, &job.run_id),
+        );
         let bridge: Arc<dyn PlatformToolBridge> = match &job.room_updates {
             Some(updates) => Arc::new(RoomUpdatesBridge::new(bridge, updates.clone())),
             None => bridge,
         };
+        let usage = job.usage.clone();
+        let reply_sink = job.reply_stream.clone();
         let chat = run_bot_chat_with_talk(
             self.state.clone(),
             Some(profile),
@@ -658,7 +724,12 @@ impl TurnRunner for DeviceRunner {
             token,
             bridge,
             None,
-            None::<fn(String)>,
+            Some(move |frame: String| {
+                usage.observe(&frame);
+                if let Some(sink) = &reply_sink {
+                    sink.push(&frame);
+                }
+            }),
             None,
         );
         tokio::pin!(chat);
@@ -687,14 +758,15 @@ impl TurnRunner for DeviceRunner {
         self.untrack(&job.run_id);
         match outcome {
             Some(Ok(text)) => Ok(text),
-            Some(Err(error)) if mutating.load(Ordering::SeqCst) => Err(RunError::Failed {
-                code: CODE_RUN_FAILED.into(),
-                message: format!("{error:#}"),
-            }),
-            Some(Err(error)) => Err(RunError::Retry {
-                code: CODE_RUN_FAILED.into(),
-                message: format!("{error:#}"),
-            }),
+            Some(Err(error)) => {
+                let message = format!("{error:#}");
+                let code = failure_code(CODE_RUN_FAILED, &message).into();
+                if mutating.load(Ordering::SeqCst) || names_missing_model(&message) {
+                    Err(RunError::Failed { code, message })
+                } else {
+                    Err(RunError::Retry { code, message })
+                }
+            }
             None => Err(RunError::Failed {
                 code: flow_like_bot_host::host::CODE_CANCELLED.into(),
                 message: "The turn was stopped".into(),

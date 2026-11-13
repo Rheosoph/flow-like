@@ -4,7 +4,8 @@
 
 use crate::bot_host::e2e_vault::KeychainVault;
 use flow_like_device_crypto::inbox::{
-    InboxKeyring, Member, PublicInboxKey, Scope, open_with, seal_all,
+    InboxKeyring, Member, PublicInboxKey, RecipientKey, Scope, SecretScope, open_with, seal_all,
+    seal_secret,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -80,6 +81,27 @@ pub async fn inbox_e2e_seal(
         };
         seal_all(&scope, &members, &plaintext)
             .map_err(|error| format!("Sealing message '{message_id}' failed: {error}"))
+    })
+    .await
+}
+
+/// A bot secret's `value` sealed to the bot's published `keys`, bound to its bot id and name; the
+/// host holding the bot's key opens it, the server cannot.
+#[tauri::command]
+pub async fn inbox_e2e_seal_secret(
+    bot_id: String,
+    name: String,
+    keys: Vec<RecipientKey>,
+    value: String,
+) -> Result<Value, String> {
+    let value = zeroize::Zeroizing::new(value);
+    blocking(move || {
+        let scope = SecretScope {
+            bot_id: &bot_id,
+            name: &name,
+        };
+        seal_secret(&scope, &keys, value.as_bytes())
+            .map_err(|error| format!("Sealing secret '{name}' of bot '{bot_id}' failed: {error}"))
     })
     .await
 }

@@ -4,9 +4,9 @@ use super::{
     entries::send_in,
     files::{
         ATTACHMENTS_ENCRYPTED_UNSUPPORTED, ConversationFileReady, INBOX_FILE_NOT_FOUND,
-        INBOX_FILE_NOT_READY, INBOX_FILE_TAKEN, INBOX_FILE_TOO_LARGE, MintFileRequest,
-        bot_readable_key, complete_in, drop_message_files, mint_in, object_key, readable_file,
-        stored_file_name, sweep_in, validate_request,
+        INBOX_FILE_NOT_READY, INBOX_FILE_SEALED, INBOX_FILE_TAKEN, INBOX_FILE_TOO_LARGE,
+        MintFileRequest, bot_readable_key, complete_in, drop_message_files, ensure_server_readable,
+        mint_in, object_key, readable_file, stored_file_name, sweep_in, validate_request,
     },
     fixture::{assert_code, at, bot_principal, database, insert_bot, outgoing, user},
     members::remove_in,
@@ -169,6 +169,28 @@ async fn encrypted_conversations_refuse_attachments() {
         StatusCode::CONFLICT,
         ATTACHMENTS_ENCRYPTED_UNSUPPORTED,
     );
+}
+
+#[tokio::test]
+async fn server_tools_say_they_cannot_read_a_file_of_an_encrypted_conversation() {
+    let db = database().await;
+    room(&db, "secret", ConversationEncryption::E2e).await;
+    let error = bot_readable_key(&db, "secret", "bot_1", "file_1")
+        .await
+        .unwrap_err();
+    assert_code(&error, StatusCode::CONFLICT, INBOX_FILE_SEALED);
+    let message = error.public_message().unwrap_or_default();
+    assert!(
+        message.contains("open only on the members' devices")
+            && message.contains("tools that run on the server can't read them"),
+        "{message}"
+    );
+    let in_process = ensure_server_readable(&db, "secret").await.unwrap_err();
+    assert_code(&in_process, StatusCode::CONFLICT, INBOX_FILE_SEALED);
+    let outsider = bot_readable_key(&db, "secret", "bot_9", "file_1")
+        .await
+        .unwrap_err();
+    assert_eq!(outsider.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

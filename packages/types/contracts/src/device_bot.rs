@@ -7,7 +7,7 @@
 //! hub-resolved models.
 
 use crate::{
-    bot::{BotCapability, BotModelPolicy, BotSystemKind},
+    bot::{BotCapability, BotExecutionMode, BotModelPolicy, BotSystemKind},
     bot_connector::ConnectorRule,
     bot_message::ApprovalRequest,
     bot_skill::SkillIndexEntry,
@@ -16,7 +16,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The longest a device waits between polls, so its bots stay online (150 s window).
 pub const MAX_POLL_MS: u64 = 60_000;
@@ -26,8 +26,10 @@ pub const BUSY_POLL_MS: u64 = 2_000;
 pub const IDLE_POLL_MS: u64 = 30_000;
 /// Tokens of a grant or heartbeat with less than this many seconds left are replaced by fresh ones.
 pub const TOKEN_REFRESH_SECS: i64 = 300;
-/// The most bytes a reply request body may carry.
-pub const MAX_REPLY_BYTES: usize = 256 * 1024;
+/// The most bytes a reply request body may carry: one sealed envelope for every member of the
+/// largest conversation.
+pub const MAX_REPLY_BYTES: usize =
+    crate::inbox::MAX_CONVERSATION_MEMBERS * (crate::inbox::MAX_ENVELOPE_BYTES + 1024) + 64 * 1024;
 /// Lifetime of tokens a heartbeat issues, seconds; the lease, not the token, bounds the turn.
 pub const REFRESHED_TOKEN_SECS: i64 = 900;
 
@@ -35,6 +37,33 @@ pub const REFRESHED_TOKEN_SECS: i64 = 900;
 pub struct DeviceHostRequest {
     /// Names this host in the turn's lease. 1 to 128 characters without spaces; one per agent boot.
     pub host_id: String,
+    /// Modes this host can execute. An older host that omits this runs native bots only.
+    #[serde(default)]
+    pub execution_modes: Vec<BotExecutionMode>,
+    /// Docker readiness measured by the agent, never inferred from its version.
+    #[serde(default)]
+    pub docker: Option<DeviceDockerSupport>,
+    /// Bots whose runtime is ready. Omitted by older hosts, which report every compatible bot.
+    #[serde(default)]
+    pub ready_bot_ids: Option<Vec<String>>,
+}
+
+impl DeviceHostRequest {
+    pub fn supports(&self, mode: BotExecutionMode) -> bool {
+        if self.execution_modes.is_empty() {
+            mode == BotExecutionMode::Native
+        } else {
+            self.execution_modes.contains(&mode)
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceDockerSupport {
+    pub installed: bool,
+    pub available: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// `POST /devices/{id}/bots/poll`: reports presence for the device's bots and lists its work.
@@ -45,6 +74,8 @@ pub type DevicePollRequest = DeviceHostRequest;
 pub struct DeviceBotInfo {
     pub id: String,
     #[serde(default)]
+    pub execution_mode: BotExecutionMode,
+    #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
     pub capabilities: Vec<BotCapability>,
@@ -54,7 +85,7 @@ pub struct DeviceBotInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DevicePollResponse {
-    /// The live bots bound to this device, now reported online.
+    /// All live bots bound to this device; only compatible, ready bots are reported online.
     #[serde(default)]
     pub bots: Vec<DeviceBotInfo>,
     /// Queued turns of those bots, oldest first (one per bot and conversation, `batched` set).
@@ -95,6 +126,9 @@ pub struct DeviceUsageReport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceBotSpec {
     pub bot_id: String,
+    /// Required by the owner. A host must never fall back to native execution.
+    #[serde(default)]
+    pub execution_mode: BotExecutionMode,
     #[serde(default)]
     pub system: Option<BotSystemKind>,
     pub name: String,
@@ -169,6 +203,9 @@ pub struct DeviceModels {
     /// The hosted System One Bit used for the bot's response decisions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision: Option<Value>,
+    /// The hosted vision Bit that reads a turn's images when the completion model cannot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -239,8 +276,13 @@ pub struct DeviceHeartbeatResponse {
 pub struct DeviceReplyRequest {
     pub host_id: String,
     pub message_id: String,
-    /// `{ v: 1, enc: "none", body }` as `POST /inbox/conversations/{id}/entries` takes it.
+    /// `{ v: 1, enc: "none", body }` as `POST /inbox/conversations/{id}/entries` takes it; null
+    /// in an end-to-end encrypted conversation.
+    #[serde(default, skip_serializing_if = "Value::is_null")]
     pub envelope: Value,
+    /// An end-to-end encrypted conversation's reply: one sealed envelope per member, by member id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub envelopes: Option<BTreeMap<String, Value>>,
     #[serde(default)]
     pub failure_code: Option<String>,
     #[serde(default)]
@@ -335,6 +377,26 @@ mod tests {
         )
         .unwrap();
         assert!(!release.retry);
+    }
+
+    #[test]
+    fn execution_modes_are_explicit_and_older_hosts_are_native_only() {
+        let old: DeviceClaimRequest =
+            serde_json::from_value(serde_json::json!({"host_id":"old"})).unwrap();
+        assert!(old.supports(BotExecutionMode::Native));
+        assert!(!old.supports(BotExecutionMode::Docker));
+        let isolated: DeviceClaimRequest = serde_json::from_value(serde_json::json!({
+            "host_id":"container", "execution_modes":["docker"]
+        }))
+        .unwrap();
+        assert!(isolated.supports(BotExecutionMode::Docker));
+        assert!(!isolated.supports(BotExecutionMode::Native));
+        assert!(
+            serde_json::from_value::<DeviceClaimRequest>(serde_json::json!({
+                "host_id":"future", "execution_modes":["unknown"]
+            }))
+            .is_err()
+        );
     }
 
     #[test]

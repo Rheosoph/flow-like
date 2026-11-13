@@ -5,6 +5,10 @@ on:
     branches:
       - dev
 
+concurrency:
+  group: fossa-scan-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   fossa-scan:
     name: FOSSA Scan

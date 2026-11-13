@@ -21,6 +21,38 @@ fn is_image_capable(bit: &Bit) -> bool {
     matches!(bit.bit_type, BitTypes::ImageGeneration)
 }
 
+/// Whether the Bit runs on the machine from stable-diffusion.cpp weights, not at a provider.
+pub fn is_local_image_bit(bit: &Bit) -> bool {
+    bit.parameters["provider"]["provider_name"].as_str()
+        == Some(flow_like_model_provider::stablediffusion::PROVIDER_NAME)
+}
+
+/// Whether the Bit is an image model at a provider the owner signs in to with their own key;
+/// the Bit's provider `params` carry that key.
+pub fn is_own_key_image_bit(bit: &Bit) -> bool {
+    is_image_capable(bit) && !is_hosted_image_bit(bit) && !is_local_image_bit(bit)
+}
+
+/// Takes the provider `params` (keys, endpoints) out of the Bit.
+pub fn take_provider_params(bit: &mut Bit) -> Option<serde_json::Value> {
+    bit.parameters
+        .get_mut("provider")?
+        .as_object_mut()?
+        .remove("params")
+}
+
+/// The Bit with provider `params` put back, for one call.
+pub fn with_provider_params(mut bit: Bit, params: serde_json::Value) -> Bit {
+    if let Some(provider) = bit
+        .parameters
+        .get_mut("provider")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        provider.insert("params".into(), params);
+    }
+    bit
+}
+
 /// The bot's `image_model`, else the first image generation Bit the profile lists (its own
 /// library first, then its hub references).
 pub async fn resolve_bit(
@@ -65,4 +97,45 @@ pub async fn resolve_bit(
         }
     }
     Err(ImageUnavailable::NoModel)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn image_bit(provider_name: &str) -> Bit {
+        Bit {
+            bit_type: BitTypes::ImageGeneration,
+            parameters: json!({ "provider": {
+                "provider_name": provider_name, "model_id": "m",
+                "params": { "api_key": "owner-key" },
+            }}),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn image_bits_are_hosted_local_or_signed_in_with_the_owners_key() {
+        let hosted = image_bit("hosted:openrouter");
+        let local = image_bit(flow_like_model_provider::stablediffusion::PROVIDER_NAME);
+        let own_key = image_bit("openai");
+        assert!(is_hosted_image_bit(&hosted) && !is_own_key_image_bit(&hosted));
+        assert!(is_local_image_bit(&local) && !is_own_key_image_bit(&local));
+        assert!(is_own_key_image_bit(&own_key) && !is_local_image_bit(&own_key));
+    }
+
+    #[test]
+    fn provider_params_leave_the_bit_and_come_back_for_one_call() {
+        let mut bit = image_bit("openai");
+        let params = take_provider_params(&mut bit).expect("the key was there");
+        assert_eq!(params["api_key"], "owner-key");
+        assert!(bit.parameters["provider"].get("params").is_none());
+        assert_eq!(bit.parameters["provider"]["provider_name"], "openai");
+        let signed = with_provider_params(bit, params);
+        assert_eq!(
+            signed.parameters["provider"]["params"]["api_key"],
+            "owner-key"
+        );
+    }
 }

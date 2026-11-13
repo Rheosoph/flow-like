@@ -158,6 +158,47 @@ test("operation details use an accessible lazy-loaded panel and retain estimates
 	);
 	expect(window.document.querySelector('[role="dialog"]')).toBeNull();
 	expect(enabled).toBe(false);
+	for (const [read, write, expected] of [
+		[70, 20, "70%"],
+		[0, 0, "0%"],
+		[null, null, "Not reported"],
+	] as const) {
+		detail = {
+			...detail,
+			kind: "llm",
+			fundingClass: "hosted",
+			meteringBasis: null,
+			inputTokens: 100,
+			outputTokens: 10,
+			cacheReadTokens: read,
+			cacheWriteTokens: write,
+		};
+		await act(async () => trigger.click());
+		const cachePanel = window.document.querySelector('[role="dialog"]');
+		if (!cachePanel) throw new Error("Operation details did not open");
+		const row = (label: string) =>
+			Array.from(cachePanel.querySelectorAll("dt"))
+				.find((item) => item.textContent === label)
+				?.parentElement?.querySelector("dd")?.textContent;
+		expect(row("Input tokens")).toBe("100");
+		expect(row("Read from cache")).toBe(
+			read === null ? "Not reported" : String(read),
+		);
+		expect(row("Written to cache")).toBe(
+			write === null ? "Not reported" : String(write),
+		);
+		expect(row("Cached input")).toBe(expected);
+		const meter = cachePanel.querySelector(
+			'[role="meter"][aria-label="Cached input"]',
+		);
+		if (read === null) expect(meter).toBeNull();
+		else expect(meter?.getAttribute("aria-valuenow")).toBe(String(read));
+		await act(async () =>
+			Array.from(cachePanel.querySelectorAll("button"))
+				.find((button) => button.textContent === "Close")
+				?.click(),
+		);
+	}
 	await act(async () => root.unmount());
 	window.happyDOM.abort();
 });

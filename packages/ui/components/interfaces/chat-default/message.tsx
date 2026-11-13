@@ -1137,7 +1137,7 @@ export const MessageComponent = memo(
 							</Button>
 						)}
 						{!isUser && message.error && (
-							<ChatMessageError error={message.error} />
+							<ChatMessageError error={message.error} messageId={message.id} />
 						)}
 						<AttachmentStrip
 							files={processedAttachments}

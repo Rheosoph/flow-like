@@ -263,16 +263,10 @@ impl ChannelIssuer {
         self.publish_realtime_for_user(sub, true).await;
     }
 
-    /// Whether the transport delivers each published message on its own. Firebase keeps one
-    /// overwritten node per account, where a fast series of messages could hide a wakeup.
+    /// Whether the transport can reach an account's devices with a reply. Firebase overwrites
+    /// one node per message, so replies get a node of their own and never hide a wakeup.
     pub fn carries_realtime_replies(&self) -> bool {
-        match self.backend {
-            ChannelBackend::Http => false,
-            #[cfg(feature = "channel-gcp")]
-            ChannelBackend::GcpFirebaseRtdb => false,
-            #[allow(unreachable_patterns)]
-            _ => true,
-        }
+        !matches!(self.backend, ChannelBackend::Http)
     }
 
     /// Sends an encoded [`flow_like_types::realtime::RealtimeReply`] to one account's devices and
@@ -283,7 +277,8 @@ impl ChannelIssuer {
         if !self.carries_realtime_replies() || sub.is_empty() {
             return;
         }
-        let publication = self.realtime_publication(realtime_scope(sub), payload);
+        let publication =
+            self.realtime_publication(realtime_scope(sub), payload, RealtimeMessage::Reply);
         send_wakeup(
             publication,
             self.realtime_failures.clone(),
@@ -314,7 +309,7 @@ impl ChannelIssuer {
         let Ok(payload) = serde_json::to_vec(&wakeup) else {
             return;
         };
-        let publication = self.realtime_publication(scope, payload);
+        let publication = self.realtime_publication(scope, payload, RealtimeMessage::Wakeup);
         let failures = self.realtime_failures.clone();
         let transport = self.transport();
         let Admission::After(delay) = admission else {
@@ -348,6 +343,7 @@ impl ChannelIssuer {
         &self,
         scope: String,
         payload: Vec<u8>,
+        message: RealtimeMessage,
     ) -> BoxFuture<'static, Result<()>> {
         match self.backend {
             ChannelBackend::Http => Box::pin(async { Ok(()) }),
@@ -374,9 +370,13 @@ impl ChannelIssuer {
             ChannelBackend::GcpFirebaseRtdb => {
                 let gcp = self.gcp.clone();
                 Box::pin(async move {
-                    gcp.ok_or_else(|| anyhow!("Firebase unavailable"))?
-                        .publish_realtime(&scope, &payload)
-                        .await
+                    let gcp = gcp.ok_or_else(|| anyhow!("Firebase unavailable"))?;
+                    match message {
+                        RealtimeMessage::Wakeup => gcp.publish_realtime(&scope, &payload).await,
+                        RealtimeMessage::Reply => {
+                            gcp.publish_realtime_reply(&scope, &payload).await
+                        }
+                    }
                 })
             }
             #[cfg(feature = "channel-aws")]
@@ -691,6 +691,13 @@ fn realtime_scope(sub: &str) -> String {
     hash.finalize().to_hex().to_string()
 }
 
+/// What a realtime publication carries; Firebase writes each to its own node.
+#[derive(Clone, Copy)]
+enum RealtimeMessage {
+    Wakeup,
+    Reply,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum Admission {
     Now,
@@ -810,6 +817,18 @@ mod tests {
         issuer
             .publish_realtime_reply("user-a", b"{}".to_vec())
             .await;
+    }
+
+    #[test]
+    fn every_provider_transport_carries_replies() {
+        for transport in ["aws_mqtt", "azure_web_pubsub", "gcp_firebase_rtdb", "nats"] {
+            let Ok(backend) = ChannelBackend::parse(Some(transport)) else {
+                continue;
+            };
+            let mut issuer = ChannelIssuer::http_only("https://api.test");
+            issuer.backend = backend;
+            assert!(issuer.carries_realtime_replies(), "{transport}");
+        }
     }
 
     #[test]

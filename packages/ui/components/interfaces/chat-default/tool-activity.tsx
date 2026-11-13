@@ -18,6 +18,7 @@ import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
 import { getToolActivityLabel } from "../../../state/global-chat/tool-step-activity";
 import { BotExchangeCard } from "../../global-chat/bot-exchange-card";
+import { ComputerPermissionCard } from "../../global-chat/computer-permission-card";
 import { AppReferenceChip } from "./app-references";
 import type { IPlanStep, IToolActivityDetail } from "./chat-db";
 import { ReasoningBody } from "./reasoning-viewer";
@@ -267,6 +268,7 @@ function activityNote(
 	description: string | undefined,
 	shown: (string | undefined)[],
 ) {
+	if (detail.permission) return undefined;
 	if (detail.outcome) return detail.outcome;
 	return description && !shown.includes(description) ? description : undefined;
 }
@@ -368,6 +370,9 @@ export function ToolActivityRow({
 					)}
 					{detail.terminal && <TerminalCard terminal={detail.terminal} />}
 					{detail.exchange && <BotExchangeCard exchange={detail.exchange} />}
+					{detail.permission && (
+						<ComputerPermissionCard need={detail.permission} />
+					)}
 					{hasMeta && (
 						<div className="flex min-w-0 items-center gap-2 pt-0.5 text-[11px] text-muted-foreground/80">
 							{detail.method && (

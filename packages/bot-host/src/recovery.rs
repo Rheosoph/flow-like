@@ -36,7 +36,7 @@ impl BotRunRecovery for CappedRecovery {
     }
 }
 use async_trait::async_trait;
-use flow_like::flow::copilot::run_recovery::BotRunRecovery;
+use flow_like::flow::copilot::run_recovery::{self, BotRunRecovery};
 use flow_like_types::{
     Result, anyhow,
     bot_turn::{BotRunCheckpoint, BotTurn},
@@ -153,24 +153,38 @@ impl BotRunRecovery for HubRecovery {
     }
 }
 
-/// A parked approval proves this one call did not execute; leave every unknown sibling intact.
-pub async fn preserve_unexecuted_approval(
+/// A parked batch proves its held calls did not execute: the checkpoint confirms them, so the
+/// resume runs them. Every call no gate held keeps its unknown outcome.
+pub async fn preserve_held_batch(
     recovery: Option<&Arc<dyn BotRunRecovery>>,
     gate: &crate::gate::ApprovalGate,
 ) -> Result<()> {
-    let (Some(recovery), Some((id, tool))) = (recovery, gate.unexecuted_call()) else {
+    let held = gate.held_calls();
+    let Some(recovery) = recovery.filter(|_| !held.is_empty()) else {
         return Ok(());
     };
     if let Some(checkpoint) = recovery.load().await?
-        && let Some(updated) = flow_like::flow::copilot::run_recovery::record_unexecuted_approval(
-            &checkpoint,
-            &id,
-            &tool,
-        )?
+        && let Some(updated) = run_recovery::record_held_batch(&checkpoint, &held)?
     {
         recovery.save(&updated).await?;
     }
     Ok(())
+}
+
+/// The trigger's prompt with the note on the owner's answers. A checkpoint that resumes its held
+/// round runs the answered calls as they are, so its turn gets no note: "make the same call
+/// again" would repeat calls that already ran.
+pub fn resumed_prompt(
+    prompt: String,
+    note: Option<String>,
+    checkpoint: Option<&BotRunCheckpoint>,
+) -> String {
+    match note {
+        Some(note) if !checkpoint.is_some_and(run_recovery::resumes_held_round) => {
+            format!("{prompt}\n\n{note}")
+        }
+        _ => prompt,
+    }
 }
 
 pub fn remaining_deadline(

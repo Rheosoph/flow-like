@@ -4,6 +4,7 @@ use super::{
     ModelLogic, OPENROUTER_ONLY, ParamDialect, body_params, drop_body_param, drop_temperature,
     extract_headers,
     media::{self, MediaDialect},
+    prompt_cache::{CacheBreakpoints, CacheDialect},
     unforce_tool_choice, user_media,
 };
 use crate::history::{History, HistoryThinking};
@@ -22,7 +23,7 @@ use rig::message::ToolChoice;
 use serde_json::{Value, json};
 
 pub struct AnthropicModel {
-    client: rig::providers::anthropic::Client<AuthorizedHttpClient>,
+    client: rig::providers::anthropic::Client<CacheBreakpoints>,
     _provider: ModelProvider,
     default_model: Option<String>,
 }
@@ -38,7 +39,10 @@ impl AnthropicModel {
 
         let mut builder = rig::providers::anthropic::Client::builder()
             .api_key(&api_key)
-            .http_client(AuthorizedHttpClient::default());
+            .http_client(CacheBreakpoints::new(
+                AuthorizedHttpClient::default(),
+                CacheDialect::Messages,
+            ));
         if let Some(endpoint) = anthropic_config.endpoint.as_deref() {
             builder = builder.base_url(endpoint);
         }
@@ -75,7 +79,10 @@ impl AnthropicModel {
 
         let mut builder = rig::providers::anthropic::Client::builder()
             .api_key(api_key)
-            .http_client(AuthorizedHttpClient::for_provider(provider, egress)?);
+            .http_client(CacheBreakpoints::new(
+                AuthorizedHttpClient::for_provider(provider, egress)?,
+                CacheDialect::Messages,
+            ));
         if let Some(endpoint) = params.get("endpoint").and_then(|v| v.as_str()) {
             builder = builder.base_url(endpoint);
         }
@@ -115,10 +122,10 @@ impl Cacheable for AnthropicModel {
 impl ModelLogic for AnthropicModel {
     #[allow(deprecated)]
     async fn provider(&self) -> Result<ModelConstructor> {
-        Ok(user_media::constructor(
-            self.client.clone(),
-            anthropic_request,
-        ))
+        Ok(
+            user_media::constructor(self.client.clone(), anthropic_request)
+                .with_messages_api_usage(),
+        )
     }
 
     async fn default_model(&self) -> Option<String> {
@@ -841,6 +848,223 @@ mod tests {
                 assert_eq!(body["stream"].as_bool().unwrap_or(false), streaming);
             }
         }
+    }
+
+    const STABLE: &str = "You are Ada, one of your owner's bots.\n\n## WHAT YOU CAN DO\nSearch.";
+    const CONTEXT: &str = "## CONTEXT\nIt is Friday, 09:30.";
+
+    fn cached_message(usage: Value) -> Value {
+        json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5-5",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": usage,
+        })
+    }
+
+    async fn messages_api(api_key: &str, model_id: &str, endpoint: Option<&str>) -> AnthropicModel {
+        let mut params = HashMap::from([
+            ("api_key".to_string(), json!(api_key)),
+            ("model_id".to_string(), json!(model_id)),
+        ]);
+        params.extend(endpoint.map(|endpoint| ("endpoint".to_string(), json!(endpoint))));
+        let provider = ModelProvider {
+            provider_name: "anthropic".to_string(),
+            model_id: None,
+            version: None,
+            api_surface: None,
+            params: Some(params),
+        };
+        AnthropicModel::from_provider(&provider, ProviderEgress::Open)
+            .await
+            .unwrap()
+    }
+
+    async fn streamed_usage(
+        request: rig::completion::CompletionRequestBuilder<crate::llm::CompletionModelHandle<'_>>,
+    ) -> rig::completion::Usage {
+        use rig::completion::GetTokenUsage;
+        use rig::streaming::StreamedAssistantContent;
+
+        let mut stream = request.stream().await.unwrap();
+        let mut usage = None;
+        while let Some(chunk) = stream.next().await {
+            if let StreamedAssistantContent::Final(response) = chunk.unwrap() {
+                usage = response.token_usage();
+            }
+        }
+        usage.expect("the stream closes with its usage")
+    }
+
+    /// A reply that read 4096 prompt tokens from cache and wrote 8. Its stream states the cache
+    /// counts in `message_start` only.
+    fn cached_reply(streaming: bool) -> String {
+        let usage = json!({
+            "input_tokens": 40,
+            "cache_read_input_tokens": 4096,
+            "cache_creation_input_tokens": 8,
+            "output_tokens": 3,
+        });
+        if !streaming {
+            return json_response(cached_message(usage));
+        }
+        sse_response(&[
+            json!({"type": "message_start", "message": cached_message(usage)}),
+            json!({
+                "type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": "ok"},
+            }),
+            json!({
+                "type": "message_delta", "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 3},
+            }),
+        ])
+    }
+
+    /// One bot turn against a recorded Messages API: the body it sent and the usage it read.
+    async fn bot_turn(streaming: bool, stable: Option<&str>) -> (Value, rig::completion::Usage) {
+        let (endpoint, server) = serve_once(cached_reply(streaming)).await;
+        let agent = messages_api("test-key", "claude-opus-5-5", Some(&endpoint))
+            .await
+            .provider()
+            .await
+            .unwrap()
+            .into_client()
+            .agent("claude-opus-5-5")
+            .preamble(&format!("{STABLE}\n\n{CONTEXT}"))
+            .build();
+        let call = async {
+            let request = agent
+                .completion("Hi", Vec::<rig::completion::Message>::new())
+                .await
+                .unwrap()
+                .tools(vec![crate::llm::test_support::typeless_tool()]);
+            if streaming {
+                streamed_usage(request).await
+            } else {
+                request.send().await.unwrap().usage
+            }
+        };
+        let usage = match stable {
+            Some(stable) => {
+                super::super::prompt_cache::with_stable_system_prefix(stable.to_string(), call)
+                    .await
+            }
+            None => call.await,
+        };
+        (serde_json::from_str(&server.await.unwrap()).unwrap(), usage)
+    }
+
+    #[tokio::test]
+    async fn bot_turns_cache_the_stable_head_and_growing_conversation() {
+        for streaming in [false, true] {
+            let (body, _) = bot_turn(streaming, Some(STABLE)).await;
+
+            assert_eq!(
+                body["system"],
+                json!([
+                    {"type": "text", "text": STABLE, "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": CONTEXT},
+                ]),
+                "stream={streaming}"
+            );
+            assert_eq!(
+                body.to_string().matches("cache_control").count(),
+                2,
+                "a fixed head and an automatic conversation breakpoint: {body}"
+            );
+            assert_eq!(body["cache_control"], json!({"type": "ephemeral"}));
+            assert_eq!(body["tools"][0]["name"], "interact_app_page");
+        }
+    }
+
+    #[tokio::test]
+    async fn calls_without_a_stable_head_send_one_unmarked_system_block() {
+        for streaming in [false, true] {
+            let (body, _) = bot_turn(streaming, None).await;
+            assert_eq!(
+                body["system"],
+                json!([{"type": "text", "text": format!("{STABLE}\n\n{CONTEXT}")}]),
+                "stream={streaming}"
+            );
+            assert!(!body.to_string().contains("cache_control"), "{body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn usage_counts_cached_prompt_tokens_as_input() {
+        for streaming in [false, true] {
+            let (_, usage) = bot_turn(streaming, Some(STABLE)).await;
+            assert_eq!(usage.input_tokens, 40 + 4096 + 8, "stream={streaming}");
+            assert_eq!(usage.cached_input_tokens, 4096, "stream={streaming}");
+            assert_eq!(usage.cache_creation_input_tokens, 8, "stream={streaming}");
+            assert_eq!(usage.total_tokens, 40 + 4096 + 8 + 3, "stream={streaming}");
+            let metered = crate::response::Usage::from_rig(usage);
+            assert_eq!(metered.prompt_tokens, 4144, "stream={streaming}");
+            assert_eq!(
+                metered.prompt_tokens + metered.completion_tokens,
+                metered.total_tokens
+            );
+        }
+    }
+
+    /// `ANTHROPIC_API_KEY=… cargo test -p flow-like-model-provider --lib -- --ignored
+    /// live_second_call_reads_the_stable_head_from_cache --nocapture`; `ANTHROPIC_CACHE_MODEL`
+    /// picks the model (default `claude-opus-5-5`).
+    #[tokio::test]
+    #[ignore = "calls the live Anthropic API set by ANTHROPIC_API_KEY"]
+    async fn live_second_call_reads_the_stable_head_from_cache() {
+        dotenv::dotenv().ok();
+        let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") else {
+            println!("Skipping the Anthropic cache test: ANTHROPIC_API_KEY is not set");
+            return;
+        };
+        let model_id =
+            std::env::var("ANTHROPIC_CACHE_MODEL").unwrap_or_else(|_| "claude-opus-5-5".into());
+        let client = messages_api(&api_key, &model_id, None)
+            .await
+            .provider()
+            .await
+            .unwrap()
+            .into_client();
+        let stable: String = std::iter::once(
+            "You are Ada, a terse assistant. Answer in one short sentence.".to_string(),
+        )
+        .chain((1..=600).map(|rule| {
+            format!("Rule {rule}: when asked about item {rule}, say it is stocked in aisle {rule}.")
+        }))
+        .collect::<Vec<_>>()
+        .join("\n");
+        let mut reads = Vec::new();
+        for (turn, clock) in ["09:30", "09:31"].into_iter().enumerate() {
+            let agent = client
+                .agent(&model_id)
+                .preamble(&format!(
+                    "{stable}\n\n## CONTEXT\nIt is {clock}. Turn {turn}."
+                ))
+                .max_tokens(256)
+                .build();
+            let usage =
+                super::super::prompt_cache::with_stable_system_prefix(stable.clone(), async {
+                    let request = agent
+                        .completion("Where is item 7?", Vec::<rig::completion::Message>::new())
+                        .await
+                        .unwrap();
+                    streamed_usage(request).await
+                })
+                .await;
+            println!("turn {turn}: {usage:?}");
+            reads.push(usage);
+        }
+        assert!(
+            reads[1].cached_input_tokens > 0,
+            "the second call read nothing from cache: {:?}",
+            reads[1]
+        );
+        assert!(reads[1].input_tokens > reads[1].cached_input_tokens);
     }
 
     #[tokio::test]

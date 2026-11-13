@@ -141,6 +141,7 @@ flow-like-device-crypto.workspace = true
 tauri-plugin-single-instance = { version = "2.5.4", features = ["deep-link"] }
 tauri-plugin-window-state = "2.5.0"
 tauri-plugin-updater = "2.14.0"
+tauri-plugin-autostart = "2.7.0"
 xcap = "0.8.1"
 arboard = "3.6.1"
 enigo = "0.6.1"

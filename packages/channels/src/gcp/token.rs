@@ -293,5 +293,12 @@ mod tests {
             "auth != null && auth.token.role === 'realtime' && auth.token.realtime_scope === $scope && auth.token.realtime_until > now"
         );
         assert_eq!(wake.as_object().unwrap().len(), 2);
+        assert_eq!(
+            account["reply"], *wake,
+            "replies are read exactly like wakeups"
+        );
+        let mut nodes: Vec<_> = account.as_object().unwrap().keys().collect();
+        nodes.sort();
+        assert_eq!(nodes, ["reply", "wake"]);
     }
 }

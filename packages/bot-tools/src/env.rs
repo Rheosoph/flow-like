@@ -390,6 +390,12 @@ pub trait ToolEnv: Send + Sync {
         None
     }
 
+    /// Invites people into the group chat the turn runs in for `room_invite`; `None` outside a
+    /// group chat or where the bot is not on an account.
+    fn rooms(&self) -> Option<Arc<dyn crate::rooms::RoomInvites>> {
+        None
+    }
+
     /// Requests context through the current conversation. The person supplying it consents.
     fn user_context(&self) -> Option<Arc<dyn crate::user_context::UserContextBackend>> {
         None
@@ -400,8 +406,8 @@ pub trait ToolEnv: Send + Sync {
         None
     }
 
-    /// The owner's bots for Flux's `list_bots`, `get_bot`, `create_bot` and `update_bot`, after
-    /// host-enforced owner approval; `None` where the host can't manage them.
+    /// The owner's bots and devices for Flux's crew tools (`crate::crew`), after host-enforced
+    /// owner approval; `None` where the host can't manage them.
     fn crew(&self) -> Option<Arc<dyn crate::crew::CrewBackend>> {
         None
     }

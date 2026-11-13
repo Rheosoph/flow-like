@@ -4,6 +4,7 @@ use super::{
     ModelLogic, UsageReportingMode, extract_headers,
     media::{self, MediaDialect},
     merge_additional_params, output_budget_as_body_param,
+    prompt_cache::{CacheBreakpoints, CacheDialect, is_openrouter_claude},
     user_media::{self, leading_bytes},
 };
 use crate::authorization::AuthorizedHttpClient;
@@ -24,10 +25,12 @@ use rig::message::{DocumentSourceKind, UserContent, VideoMediaType};
 use serde_json::json;
 
 pub struct OpenRouterModel {
-    client: rig::providers::openrouter::Client<AuthorizedHttpClient>,
+    client: rig::providers::openrouter::Client<CacheBreakpoints>,
     _provider: ModelProvider,
     default_model: Option<String>,
 }
+
+const BY_REQUESTED_MODEL: CacheDialect = CacheDialect::OpenRouter { claude: false };
 
 impl OpenRouterModel {
     pub async fn new(
@@ -40,7 +43,10 @@ impl OpenRouterModel {
 
         let mut builder = rig::providers::openrouter::Client::builder()
             .api_key(&api_key)
-            .http_client(AuthorizedHttpClient::default());
+            .http_client(CacheBreakpoints::new(
+                AuthorizedHttpClient::default(),
+                BY_REQUESTED_MODEL,
+            ));
 
         if let Some(endpoint) = openrouter_config.endpoint.as_deref() {
             builder = builder.base_url(endpoint);
@@ -61,13 +67,19 @@ impl OpenRouterModel {
     ) -> anyhow::Result<Self> {
         Self::with_http_client(
             provider,
-            AuthorizedHttpClient::for_provider(provider, egress)?,
+            CacheBreakpoints::new(
+                AuthorizedHttpClient::for_provider(provider, egress)?,
+                BY_REQUESTED_MODEL,
+            ),
         )
     }
 
+    /// A hosted Bit through the Flow-Like API. Its requests name the Bit, so `upstream_model`,
+    /// the model its catalog entry names, decides whether a stable system head is cached.
     pub async fn from_provider_with_authorizer(
         provider: &ModelProvider,
         authorizer: Option<Arc<dyn RequestAuthorizer>>,
+        upstream_model: Option<&str>,
     ) -> anyhow::Result<Self> {
         let http_client = match authorizer {
             Some(authorizer) => AuthorizedHttpClient::new(
@@ -84,12 +96,16 @@ impl OpenRouterModel {
             )?,
             None => AuthorizedHttpClient::default(),
         };
-        Self::with_http_client(provider, http_client)
+        let claude = upstream_model.is_some_and(is_openrouter_claude);
+        Self::with_http_client(
+            provider,
+            CacheBreakpoints::new(http_client, CacheDialect::OpenRouter { claude }),
+        )
     }
 
     fn with_http_client(
         provider: &ModelProvider,
-        http_client: AuthorizedHttpClient,
+        http_client: CacheBreakpoints,
     ) -> anyhow::Result<Self> {
         let params = provider.params.clone().unwrap_or_default();
         let api_key = params.get("api_key").cloned().unwrap_or_default();
@@ -584,5 +600,101 @@ mod tests {
                 .contains("[attachment omitted: unsupported file type video]"),
             "{body}"
         );
+    }
+
+    const STABLE: &str = "You are Ada, one of your owner's bots.\n\n## WHAT YOU CAN DO\nSearch.";
+    const CONTEXT: &str = "## CONTEXT\nIt is Friday, 09:30.";
+
+    /// The body of one bot-turn call. `upstream` builds the client for a hosted Bit whose catalog
+    /// names that model; `stable` runs the call with that stable system head.
+    async fn bot_turn_body(upstream: Option<&str>, model_id: &str, stable: Option<&str>) -> String {
+        let (endpoint, server) =
+            serve_once(json_response(chat_completion(model_id, "stop", 1))).await;
+        let provider = ModelProvider {
+            provider_name: "openrouter".to_string(),
+            model_id: None,
+            version: None,
+            api_surface: None,
+            params: Some(HashMap::from([
+                ("api_key".to_string(), json!("test-key")),
+                ("model_id".to_string(), json!(model_id)),
+                ("endpoint".to_string(), json!(endpoint)),
+            ])),
+        };
+        let model = match upstream {
+            Some(upstream) => {
+                OpenRouterModel::from_provider_with_authorizer(&provider, None, Some(upstream))
+                    .await
+                    .unwrap()
+            }
+            None => OpenRouterModel::from_provider(&provider, ProviderEgress::Open)
+                .await
+                .unwrap(),
+        };
+        let agent = model
+            .provider()
+            .await
+            .unwrap()
+            .into_client()
+            .agent(model_id)
+            .preamble(&format!("{STABLE}\n\n{CONTEXT}"))
+            .build();
+        let call = async {
+            agent
+                .completion("Hi", Vec::<rig::completion::Message>::new())
+                .await
+                .unwrap()
+                .tools(vec![crate::llm::test_support::typeless_tool()])
+                .send()
+                .await
+                .unwrap();
+        };
+        match stable {
+            Some(stable) => {
+                crate::llm::prompt_cache::with_stable_system_prefix(stable.to_string(), call).await
+            }
+            None => call.await,
+        }
+        server.await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn claude_bot_turns_cache_the_stable_head_direct_and_hosted() {
+        for (upstream, model_id) in [(None, MODEL), (Some(MODEL), "bit-id")] {
+            let body: Value =
+                serde_json::from_str(&bot_turn_body(upstream, model_id, Some(STABLE)).await)
+                    .unwrap();
+
+            assert_eq!(body["model"], model_id);
+            assert_eq!(body["messages"][0]["role"], "system");
+            assert_eq!(
+                body["messages"][0]["content"],
+                json!([
+                    {"type": "text", "text": STABLE, "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": CONTEXT},
+                ]),
+                "{body}"
+            );
+            assert_eq!(
+                body.to_string().matches("cache_control").count(),
+                2,
+                "{body}"
+            );
+            assert_eq!(body["cache_control"], json!({"type": "ephemeral"}));
+        }
+    }
+
+    #[tokio::test]
+    async fn other_models_send_the_same_bytes_with_or_without_a_stable_head() {
+        for (upstream, model_id) in [
+            (None, "openai/gpt-4o-mini"),
+            (Some("openai/gpt-4o-mini"), "bit-id"),
+            (None, "bit-id"),
+        ] {
+            let plain = bot_turn_body(upstream, model_id, None).await;
+            let scoped = bot_turn_body(upstream, model_id, Some(STABLE)).await;
+            assert_eq!(plain, scoped, "{model_id} upstream={upstream:?}");
+            assert!(!plain.contains("cache_control"), "{plain}");
+        }
     }
 }

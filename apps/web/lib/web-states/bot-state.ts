@@ -36,6 +36,10 @@ import type {
 } from "@flow-like/flow-like-ui";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import {
+	type IBotApprovalItemDecision,
+	approvalAnswerBody,
+} from "@flow-like/flow-like-ui/state/backend-state/bot-state";
+import {
 	type WebBackendRef,
 	apiDelete,
 	apiGet,
@@ -279,10 +283,11 @@ export class WebBotState implements IBotState {
 		turnId: string,
 		approvalId: string,
 		decision: BotApprovalDecision,
+		items?: readonly IBotApprovalItemDecision[],
 	): Promise<void> {
 		await apiPost(
 			`${botPath(botId)}/turns/${encodeURIComponent(turnId)}/approval`,
-			{ approval_id: approvalId, decision },
+			approvalAnswerBody(approvalId, decision, items),
 			this.backend.auth,
 		);
 	}

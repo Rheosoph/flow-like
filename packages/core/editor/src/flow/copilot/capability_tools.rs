@@ -136,6 +136,9 @@ fn ask_message(tool: &str, args: &Value) -> String {
     if tool == tools::people::MESSAGE_PERSON {
         return person_ask_message(args);
     }
+    if tool == tools::rooms::ROOM_INVITE {
+        return tools::rooms::ask_message(args);
+    }
     if tool == tools::web::WEB_REQUEST {
         return tools::web::ask_summary(args);
     }
@@ -199,6 +202,8 @@ registered_tools!(
     "get_bot",
     "create_bot",
     "update_bot",
+    "delete_bot",
+    "list_bot_devices",
     "file_list",
     "file_read",
     "file_save",
@@ -222,6 +227,7 @@ registered_tools!(
     "message_owner",
     "list_people",
     "message_person",
+    "room_invite",
     "user_context_available",
     "user_context_request",
     "user_context_set_status",
@@ -256,6 +262,11 @@ registered_tools!(
     "connector_request",
     "web_request",
 );
+
+/// Offered in group chats to every bot, without a capability: the owner approves each call.
+pub(super) fn is_room_tool(name: &str) -> bool {
+    name == tools::rooms::ROOM_INVITE
+}
 
 /// Offered beside a tool that takes secrets by name rather than through a capability of their own.
 pub(super) fn is_secret_tool(name: &str) -> bool {
@@ -379,6 +390,7 @@ pub struct HostTools {
     notes: Option<NotesHandle>,
     trail: Option<ToolTrail>,
     reply_files: Option<ReplyFiles>,
+    conversation_key: Option<String>,
 }
 
 impl HostTools {
@@ -469,6 +481,18 @@ impl HostTools {
         self.reply_files.as_ref()
     }
 
+    /// Names the conversation the turn answers, unique on this host. The conversation's next
+    /// turn then starts from this turn's summary of its older messages instead of summarizing
+    /// them again. Hosts pass it only when the turn's history is that conversation's own.
+    pub fn with_conversation_key(mut self, key: String) -> Self {
+        self.conversation_key = Some(key);
+        self
+    }
+
+    pub fn conversation_key(&self) -> Option<&String> {
+        self.conversation_key.as_ref()
+    }
+
     /// The languages `code_run` runs on this host (`ToolEnv::code_languages`). None: the host
     /// can't run code, so `code_run` is not offered.
     pub fn with_code_languages<S: AsRef<str>>(mut self, languages: &[S]) -> Self {
@@ -531,6 +555,7 @@ mod tests {
             assert!(
                 required_capability(&spec).is_some()
                     || is_secret_tool(spec.name)
+                    || is_room_tool(spec.name)
                     || tools::configuration::is_settings_tool(spec.name),
                 "{} has no capability",
                 spec.name
@@ -566,6 +591,7 @@ mod tests {
                         | "bot_update_configuration"
                         | "create_bot"
                         | "update_bot"
+                        | "delete_bot"
                         | "shell_run"
                         | "browser_open"
                         | "computer_screenshot"
@@ -575,6 +601,7 @@ mod tests {
                         | "email_send"
                         | "email_reply"
                         | "message_person"
+                        | "room_invite"
                         | "secret_request"
                         | "skill_run"
                         | "web_request"

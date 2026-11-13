@@ -111,7 +111,21 @@ fn bounded(args: &Value, key: &str, default: u64, max: u64) -> u64 {
 }
 
 fn failed(error: ApiError) -> String {
-    error.to_string()
+    match error.public_message() {
+        Some(message) => format!("{error}: {message}"),
+        None => error.to_string(),
+    }
+}
+
+/// An app that refuses bots stays in the listing with no events, so the bot can tell its owner why.
+fn refused_listing(app_id: &str, name: &str, refused_name: &str) -> Value {
+    json!({
+        "app_id": app_id,
+        "name": name,
+        "description": flow_like_types::bot_restrictions::app_refuses_bots_message(refused_name),
+        "events": [],
+        "events_status": "ok",
+    })
 }
 
 fn event_kind(event: &Event) -> &'static str {
@@ -471,6 +485,9 @@ impl AppTools {
         let candidates: Vec<String> = super::scope::candidate_apps(&self.bot)
             .into_iter()
             .collect();
+        let refusing = crate::bot_app_gate::refusing_among(&self.state.db, candidates.iter())
+            .await
+            .map_err(|error| error.to_string())?;
         let metas = self.metas(&candidates).await?;
         let meta_of = |app_id: &str| {
             metas
@@ -500,8 +517,12 @@ impl AppTools {
         let matched = visible.len();
         let truncated = matched > MAX_LISTED_APPS;
         visible.truncate(MAX_LISTED_APPS);
+        let refusing = &refusing;
         let apps: Vec<(Value, bool)> = futures::stream::iter(visible)
             .map(|(app_id, name, description)| async move {
+                if let Some(refused) = refusing.get(&app_id) {
+                    return (refused_listing(&app_id, &name, refused), true);
+                }
                 let (events, read) = match self.events(&app_id).await {
                     Ok(events) => (events.iter().map(event_summary).collect::<Vec<_>>(), true),
                     Err(error) => {
@@ -903,5 +924,21 @@ mod tests {
         let headless = event_summary(&event("api", None));
         assert_eq!(headless["consumer_tool"], CALL_APP_EVENT);
         assert_eq!(headless["route"], "/");
+    }
+
+    #[test]
+    fn an_app_that_refuses_bots_is_listed_with_the_sentence_to_pass_on() {
+        let listed = refused_listing("app-crm", "CRM", "CRM");
+        assert_eq!(
+            listed["description"],
+            "The app 'CRM' does not allow bots; ask its owner."
+        );
+        assert_eq!(
+            (&listed["events"], &listed["events_status"]),
+            (&json!([]), &json!("ok"))
+        );
+        let refusal = failed(crate::bot_app_gate::refusal("CRM"));
+        assert!(refusal.contains("APP_REFUSES_BOTS"), "{refusal}");
+        assert!(refusal.ends_with("The app 'CRM' does not allow bots; ask its owner."));
     }
 }

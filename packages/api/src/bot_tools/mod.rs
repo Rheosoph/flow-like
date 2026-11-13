@@ -211,6 +211,12 @@ pub(crate) async fn turn_host(
         bot.image_model.clone(),
     )))
     .with_files(files.clone());
+    let host = match conv_id {
+        Some(room) => host.with_rooms(std::sync::Arc::new(
+            crate::routes::bots::rooms::ServerRoomInvites::new(state, &bot.bot_id, room),
+        )),
+        None => host,
+    };
     let host = if bot.tool_host == flow_like::flow::copilot::BotToolHost::Hosted {
         host.with_apps(std::sync::Arc::new(
             apps::AppTools::new(

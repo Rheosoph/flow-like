@@ -94,6 +94,20 @@ async function exclusive<T>(work: () => Promise<T>): Promise<T> {
 }
 
 /**
+ * Files of encrypted conversations, sealed and opened in the device-crypto WebAssembly module.
+ * They need no inbox key (each file has its own, carried in the sealed message), so the desktop
+ * uses this too instead of moving whole files through native calls.
+ */
+export const wasmFileCrypto: Required<
+	Pick<IInboxCrypto, "sealFile" | "openFile">
+> = {
+	sealFile: async (conversationId, file) =>
+		(await loadDeviceCrypto()).inboxSealFile(conversationId, file),
+	openFile: async (conversationId, key, ciphertext) =>
+		(await loadDeviceCrypto()).inboxOpenFile(conversationId, key, ciphertext),
+};
+
+/**
  * This browser's inbox keys: seeds in IndexedDB, sealed by a non-extractable AES key stored
  * beside them; sealing and opening run in the device-crypto WebAssembly module.
  */
@@ -113,6 +127,12 @@ export const browserInboxCrypto: IInboxCrypto = {
 			string,
 			IInboxSealedEnvelope
 		>,
+	sealSecret: async (scope, keys, value) =>
+		(await loadDeviceCrypto()).inboxSealSecret(
+			scope,
+			keys,
+			value,
+		) as IInboxSealedEnvelope,
 	open: async (principalId, entries) => {
 		const [module, seeds] = await Promise.all([
 			loadDeviceCrypto(),
@@ -121,4 +141,5 @@ export const browserInboxCrypto: IInboxCrypto = {
 		if (seeds.length === 0) return entries.map(() => null);
 		return module.inboxOpen(seeds, principalId, entries);
 	},
+	...wasmFileCrypto,
 };

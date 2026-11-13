@@ -539,6 +539,168 @@ fn cloudflare_bge_cannot_silently_mix_mean_vectors_with_a_cls_bit() {
     validate_request(&provider, &config, &payload()).unwrap();
 }
 
+fn cloudflare_gemma2() -> (EmbeddingModelProvider, RemoteExecutionConfig) {
+    let (mut provider, mut config) = gemma2();
+    provider.prefix.query = "task: search result | query: ".into();
+    provider.prefix.paragraph = "title: none | text: ".into();
+    config.implementation = Some(RemoteEmbeddingProvider::CloudflareWorkersAI);
+    config.model_id = Some("@cf/google/embeddinggemma-2".into());
+    (provider, config)
+}
+
+#[test]
+fn cloudflare_gemma2_uses_native_endpoint_and_requested_text_dimensions() {
+    assert_eq!(
+        cloudflare::endpoint_url(Some("0123456789abcdef0123456789abcdef"))
+            .unwrap()
+            .as_str(),
+        "https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/run/@cf/google/embeddinggemma-2"
+    );
+    assert!(cloudflare::endpoint_url(Some("account/../../escape")).is_err());
+    let (mut provider, mut config) = cloudflare_gemma2();
+    config.model_id = Some(" @cf/google/embeddinggemma-2 ".into());
+    let mut input = request(serde_json::json!([
+        "first", {"type":"text", "text":"second"},
+        {"type":"content", "parts":[{"type":"text", "text":"third"},{"type":"text", "text":" fourth"}]}
+    ]));
+    for dimensions in [128, 256, 512, 768] {
+        provider.vector_length = dimensions;
+        validate_request(&provider, &config, &input).unwrap();
+        assert_eq!(
+            request_body(&provider, &config, &input),
+            serde_json::json!({
+                "input": ["task: search result | query: first", "task: search result | query: second", "task: search result | query: third fourth"],
+                "dimensions": dimensions, "encoding_format": "float"
+            })
+        );
+    }
+    input.embed_type = EmbedType::Document;
+    assert_eq!(
+        request_body(&provider, &config, &input)["input"][0],
+        "title: none | text: first"
+    );
+    for dimensions in [0, 127, 384, 769] {
+        provider.vector_length = dimensions;
+        assert!(validate_request(&provider, &config, &input).is_err());
+    }
+}
+
+#[test]
+fn cloudflare_gemma2_validates_media_before_admission() {
+    let (mut provider, mut config) = cloudflare_gemma2();
+    for invalid in [
+        serde_json::json!({"type":"content", "parts":[]}),
+        serde_json::json!({"type":"multimodal"}),
+        serde_json::json!({"type":"image", "image":"https://media.example/a.png"}),
+        serde_json::json!({"type":"audio", "audio":"https://media.example/a.wav"}),
+        serde_json::json!({"type":"video", "video":"https://media.example/a.mp4"}),
+        serde_json::json!({"type":"audio", "audio":"data:image/png;base64,AAAA"}),
+        serde_json::json!({"type":"video", "video":"data:video/mp4;base64,badbase64"}),
+        serde_json::json!({"type":"image", "image":"data:image/png,AAAA"}),
+        serde_json::json!({"type":"file", "source":"AAAA", "mime_type":"application/pdf"}),
+        serde_json::json!({"type":"content", "parts":[{"type":"file", "source":"AAAA", "mime_type":"application/pdf"}]}),
+    ] {
+        assert!(
+            validate_request(&provider, &config, &request(invalid.clone())).is_err(),
+            "accepted {invalid}"
+        );
+    }
+    let image = request(serde_json::json!({"type":"image", "image":"data:image/png;base64,AAAA"}));
+    for input_length in [0, 8193] {
+        provider.input_length = input_length;
+        assert!(validate_request(&provider, &config, &image).is_err());
+    }
+    provider.input_length = 8192;
+    config.endpoint_secret_name = Some("OTHER_ENDPOINT".into());
+    assert!(validate_request(&provider, &config, &image).is_err());
+    config.endpoint_secret_name = None;
+    config.model_id = Some("@cf/google/embeddinggemma-300m".into());
+    assert!(validate_request(&provider, &config, &image).is_err());
+}
+
+#[tokio::test]
+async fn cloudflare_gemma2_sends_ordered_media_batches_and_decodes_native_envelopes() {
+    use axum::{Json, Router, http::HeaderMap, routing::post};
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+    let router = Router::new().route(
+        "/ai/run/@cf/google/embeddinggemma-2",
+        post(move |headers: HeaderMap, Json(body): Json<serde_json::Value>| async move {
+            sender.send((headers, body)).await.unwrap();
+            Json(serde_json::json!({"success":true, "errors":[], "result": {
+                "id":"embd-test", "model":"@cf/google/embeddinggemma-2",
+                "data":[{"index":1,"embedding":vec![0.2;256]}, {"index":0,"embedding":vec![0.1;256]}],
+                "usage":{"prompt_tokens":266,"total_tokens":266}
+            }}))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let (mut provider, config) = cloudflare_gemma2();
+    provider.vector_length = 256;
+    let input = request(serde_json::json!([
+        {"type":"content", "parts":[
+            {"type":"image", "source":"data:image/jpeg;base64,AAAA"},
+            {"type":"text", "text":"Compare"},
+            {"type":"image", "source":"AAAA"},
+            {"type":"text", "text":" these"},
+            {"type":"audio", "source":"data:audio/wav;base64,AAAA"},
+            {"type":"video", "source":"data:video/mp4;base64,AAAA"}
+        ]}, "plain"
+    ]));
+    validate_request(&provider, &config, &input).unwrap();
+    let body = request_body(&provider, &config, &input);
+    assert_eq!(
+        body,
+        serde_json::json!({"dimensions":256,"encoding_format":"float","messages":[
+            [{"role":"user","content":[
+                {"type":"image_url","image_url":{"url":"data:image/jpeg;base64,AAAA"}},
+                {"type":"text","text":"task: search result | query: Compare"},
+                {"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}},
+                {"type":"text","text":" these"},
+                {"type":"input_audio","input_audio":{"data":"AAAA","format":"wav"}},
+                {"type":"video_url","video_url":{"url":"data:video/mp4;base64,AAAA"}}
+            ]}],
+            [{"role":"user","content":[{"type":"text","text":"task: search result | query: plain"}]}]
+        ]})
+    );
+    let result = send_request(
+        &RemoteEmbeddingProvider::CloudflareWorkersAI,
+        Url::parse(&format!(
+            "http://{address}/ai/run/@cf/google/embeddinggemma-2"
+        ))
+        .unwrap(),
+        "test-cloudflare-token",
+        &body,
+        2,
+        256,
+        2000,
+    )
+    .await
+    .unwrap();
+    let (headers, sent) = receiver.recv().await.unwrap();
+    assert_eq!(headers["authorization"], "Bearer test-cloudflare-token");
+    assert_eq!(sent, body);
+    assert_eq!(result.embeddings, vec![vec![0.1; 256], vec![0.2; 256]]);
+    assert_eq!(result.usage.unwrap().total_tokens, 266);
+    assert_eq!(result.provider_request_id.as_deref(), Some("embd-test"));
+    server.abort();
+}
+
+#[test]
+fn cloudflare_accepts_flat_results_but_rejects_failed_or_invalid_envelopes() {
+    let result = serde_json::json!({"data":[{"index":0,"embedding":[0.1,0.2]}]});
+    assert!(cloudflare::decode_response(&serde_json::to_vec(&result).unwrap(), 1, 2).is_ok());
+    for invalid in [
+        serde_json::json!({"success":false,"result":result}),
+        serde_json::json!({"result":result}),
+        serde_json::json!({"success":true,"result":{"data":[{"index":0,"embedding":[0.1]}]}}),
+        serde_json::json!({"success":true,"result":{"data":[{"index":1,"embedding":[0.1,0.2]}]}}),
+    ] {
+        assert!(cloudflare::decode_response(&serde_json::to_vec(&invalid).unwrap(), 1, 2).is_err());
+    }
+}
+
 #[test]
 fn normalizes_server_endpoint_roots_and_api_paths() {
     for variant in [

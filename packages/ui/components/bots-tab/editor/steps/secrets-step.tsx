@@ -4,11 +4,18 @@ import { useTranslation } from "@flow-like/locales";
 import { KeyRound, LockKeyhole, Plus } from "lucide-react";
 import { useId, useState } from "react";
 import { toast } from "sonner";
+import { useBotSecretSealing } from "../../../../hooks/use-bot-secret-sealing";
 import {
+	useBot,
+	useBotLabels,
 	useBotSecrets,
 	useDeleteBotSecret,
 	useUpsertBotSecret,
 } from "../../../../hooks/use-bots";
+import {
+	type BotSecretSealing,
+	sealsSecret,
+} from "../../../../lib/bot-secret-sealing";
 import {
 	BOT_LIMITS,
 	BOT_SECRET_NAME_PATTERN,
@@ -19,6 +26,7 @@ import { Input } from "../../../ui/input";
 import { Label } from "../../../ui/label";
 import { RelativeTime } from "../../../ui/relative-time";
 import { Skeleton } from "../../../ui/skeleton";
+import { SecretSealChoice } from "../../secret-request-form";
 import { useBotErrorMessage } from "../bot-editor-copy";
 import { BotNotice, BotStepPanel, BotTag } from "../bot-editor-parts";
 
@@ -57,6 +65,7 @@ export function botSecretValueBytes(value: string): number {
 export function SecretsStep({ botId }: Readonly<{ botId: string }>) {
 	const { t } = useTranslation("bots");
 	const secrets = useBotSecrets(botId);
+	const sealing = useBotSecretSealing(botId);
 	const [form, setForm] = useState<SecretFormState | null>(null);
 	const list = secrets.data ?? [];
 	const full = list.length >= BOT_LIMITS.secrets;
@@ -90,6 +99,7 @@ export function SecretsStep({ botId }: Readonly<{ botId: string }>) {
 					botId={botId}
 					initial={form}
 					existing={list}
+					sealing={sealing}
 					onDone={() => setForm(null)}
 				/>
 			)}
@@ -101,6 +111,7 @@ export function SecretsStep({ botId }: Readonly<{ botId: string }>) {
 			<SecretList
 				botId={botId}
 				secrets={list}
+				sealing={sealing}
 				isLoading={secrets.isLoading}
 				isError={secrets.isError}
 				onReplace={(secret) =>
@@ -119,12 +130,14 @@ export function SecretsStep({ botId }: Readonly<{ botId: string }>) {
 function SecretList({
 	botId,
 	secrets,
+	sealing,
 	isLoading,
 	isError,
 	onReplace,
 }: Readonly<{
 	botId: string;
 	secrets: readonly IBotSecretInfo[];
+	sealing: BotSecretSealing;
 	isLoading: boolean;
 	isError: boolean;
 	onReplace: (secret: IBotSecretInfo) => void;
@@ -153,6 +166,7 @@ function SecretList({
 					key={secret.name}
 					botId={botId}
 					secret={secret}
+					resealable={sealing === "available"}
 					onReplace={onReplace}
 				/>
 			))}
@@ -163,10 +177,13 @@ function SecretList({
 function SecretRow({
 	botId,
 	secret,
+	resealable,
 	onReplace,
 }: Readonly<{
 	botId: string;
 	secret: IBotSecretInfo;
+	/** A sealed value can be replaced here by sealing the new one to the bot's key. */
+	resealable: boolean;
 	onReplace: (secret: IBotSecretInfo) => void;
 }>) {
 	const { t } = useTranslation("bots");
@@ -175,6 +192,7 @@ function SecretRow({
 	const sealedHintId = useId();
 	const [confirming, setConfirming] = useState(false);
 	const sealed = secret.encryption === "sealed";
+	const locked = sealed && !resealable;
 	const deleteSecret = () =>
 		remove.mutate(
 			{ botId, name: secret.name },
@@ -217,7 +235,7 @@ function SecretRow({
 						t("editor.secrets.neverUsed")
 					)}
 				</span>
-				{sealed && (
+				{locked && (
 					<span
 						id={sealedHintId}
 						className="text-[0.6875rem] text-muted-foreground"
@@ -252,8 +270,8 @@ function SecretRow({
 					<Button
 						size="sm"
 						variant="ghost"
-						disabled={sealed}
-						aria-describedby={sealed ? sealedHintId : undefined}
+						disabled={locked}
+						aria-describedby={locked ? sealedHintId : undefined}
 						onClick={() => onReplace(secret)}
 					>
 						{t("editor.secrets.replaceValue")}
@@ -272,14 +290,19 @@ function SecretRow({
 	);
 }
 
-/** A sealed secret is only readable by the bot's host; a value sent from here would be stored readable by the server. */
-function secretFormProblem(
+/**
+ * A sealed secret is only readable by the bot's host; without sealing here a new value would be
+ * stored readable by the server, so it is replaced only where it can be sealed again.
+ */
+export function secretFormProblem(
 	form: SecretFormState,
 	existing: readonly IBotSecretInfo[],
+	sealing: BotSecretSealing = "unavailable",
 ): SecretFormProblem | null {
 	if (!BOT_SECRET_NAME_PATTERN.test(form.name)) return "nameInvalid";
 	const match = existing.find((secret) => secret.name === form.name);
-	if (match?.encryption === "sealed") return "sealed";
+	if (match?.encryption === "sealed" && sealing !== "available")
+		return "sealed";
 	if (!form.value) return "valueMissing";
 	if (botSecretValueBytes(form.value) > BOT_LIMITS.secretValueBytes)
 		return "valueTooLarge";
@@ -336,26 +359,33 @@ function SecretForm({
 	botId,
 	initial,
 	existing,
+	sealing,
 	onDone,
 }: Readonly<{
 	botId: string;
 	initial: SecretFormState;
 	existing: readonly IBotSecretInfo[];
+	sealing: BotSecretSealing;
 	onDone: () => void;
 }>) {
 	const { t } = useTranslation("bots");
 	const errorMessage = useBotErrorMessage();
 	const upsert = useUpsertBotSecret();
+	const bot = useBot(botId);
+	const labels = useBotLabels();
 	const ids = useId();
 	const [form, setForm] = useState(initial);
+	const [sealChosen, setSealChosen] = useState(true);
 	const [error, setError] = useState<string | null>(null);
-	const problem = secretFormProblem(form, existing);
+	const problem = secretFormProblem(form, existing, sealing);
 	const match = existing.find((secret) => secret.name === form.name);
+	const keepsSealed = match?.encryption === "sealed";
+	const sealed = sealsSecret(sealing, keepsSealed || sealChosen);
 	const description = form.description ?? match?.description ?? "";
 	const nameInvalid =
 		problem === "sealed" || (problem === "nameInvalid" && !!form.name);
 	const save = () => {
-		if (problem) return;
+		if (problem || sealing === "checking") return;
 		setError(null);
 		upsert.mutate(
 			{
@@ -365,6 +395,7 @@ function SecretForm({
 					value: form.value,
 					description: description.trim() || null,
 				},
+				sealed,
 			},
 			{
 				onSuccess: () => {
@@ -459,6 +490,15 @@ function SecretForm({
 					{t("editor.secrets.limit", { max: BOT_LIMITS.secrets })}
 				</p>
 			)}
+			{sealing === "available" && (
+				<SecretSealChoice
+					id={`${ids}-seal`}
+					botName={bot.data ? labels(bot.data).name : ""}
+					checked={keepsSealed || sealChosen}
+					disabled={keepsSealed || upsert.isPending}
+					onCheckedChange={setSealChosen}
+				/>
+			)}
 			{error && (
 				<p role="alert" className="text-xs text-destructive">
 					{error}
@@ -471,7 +511,7 @@ function SecretForm({
 				<Button
 					type="submit"
 					size="sm"
-					disabled={!!problem || upsert.isPending}
+					disabled={!!problem || sealing === "checking" || upsert.isPending}
 				>
 					{upsert.isPending
 						? t("editor.actions.saving")

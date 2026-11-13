@@ -5,13 +5,17 @@
 use std::sync::Arc;
 
 use flow_like_types::channel::{CHANNEL_TRANSPORT_GCP_FIREBASE_RTDB, ChannelPush, ChannelPushKind};
+use flow_like_types::realtime::{MAX_REALTIME_WAKEUP_BYTES, RealtimeReplyState};
 use flow_like_types::{anyhow, async_trait};
 use futures_util::future::BoxFuture;
 use reqwest::header::IF_MATCH;
 use reqwest::{Method, StatusCode, Url};
 use serde_json::{Value, json};
 
-use super::{database_root, json_url, validate_channel_id, validate_key};
+use super::{
+    REALTIME_REPLY_NODE, REALTIME_WAKE_NODE, database_root, json_url, validate_channel_id,
+    validate_key,
+};
 use crate::ChannelForwarder;
 
 /// Yields a Google OAuth access token for the service account (scopes
@@ -78,16 +82,55 @@ impl FirebaseRtdbForwarder {
         scope: &str,
         payload: &[u8],
     ) -> flow_like_types::Result<()> {
+        self.put_realtime(scope, REALTIME_WAKE_NODE, payload)
+            .await
+            .map(drop)
+    }
+
+    /// Overwrite the account's reply node, never its wakeup node. Each message carries the
+    /// reply's whole text so far, so an overwritten one loses nothing. A final one is removed
+    /// once written: the stored message takes over and the database keeps no conversation text.
+    pub async fn publish_realtime_reply(
+        &self,
+        scope: &str,
+        payload: &[u8],
+    ) -> flow_like_types::Result<()> {
+        let body = self
+            .put_realtime(scope, REALTIME_REPLY_NODE, payload)
+            .await?;
+        let state = serde_json::from_value::<RealtimeReplyState>(body["state"].clone());
+        if !state.is_ok_and(RealtimeReplyState::is_final) {
+            return Ok(());
+        }
+        self.write(
+            Method::DELETE,
+            &["realtime", scope, REALTIME_REPLY_NODE],
+            None,
+            None,
+        )
+        .await
+        .map(drop)
+    }
+
+    async fn put_realtime(
+        &self,
+        scope: &str,
+        node: &str,
+        payload: &[u8],
+    ) -> flow_like_types::Result<Value> {
         if scope.len() != 64 || !scope.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             flow_like_types::bail!("invalid realtime scope");
         }
-        if payload.len() > flow_like_types::realtime::MAX_REALTIME_WAKEUP_BYTES {
-            flow_like_types::bail!("realtime wakeup exceeds the size limit");
+        if payload.len() > MAX_REALTIME_WAKEUP_BYTES {
+            flow_like_types::bail!(
+                "realtime {node} message is {} bytes, the limit is {MAX_REALTIME_WAKEUP_BYTES}",
+                payload.len()
+            );
         }
         let body = serde_json::from_slice(payload)?;
-        self.write(Method::PUT, &["realtime", scope, "wake"], Some(&body), None)
-            .await
-            .map(drop)
+        self.write(Method::PUT, &["realtime", scope, node], Some(&body), None)
+            .await?;
+        Ok(body)
     }
 
     async fn write(
@@ -233,6 +276,128 @@ mod tests {
             FirebaseRtdbForwarder::new("nope", Arc::new(|| Box::pin(async { Ok(String::new()) })))
                 .is_err()
         );
+    }
+
+    type Recorded = Arc<std::sync::Mutex<Vec<(String, String)>>>;
+
+    /// A database that answers every request with an empty 200 and records its method, path
+    /// and body.
+    async fn recording_database() -> (String, Recorded) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let recorded = Recorded::default();
+        let requests = recorded.clone();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") && socket.read(&mut byte).await.unwrap_or(0) == 1
+                {
+                    head.push(byte[0]);
+                }
+                let head = String::from_utf8_lossy(&head).into_owned();
+                let length = head
+                    .lines()
+                    .find_map(|line| {
+                        let line = line.to_ascii_lowercase();
+                        line.strip_prefix("content-length:")
+                            .and_then(|value| value.trim().parse::<usize>().ok())
+                    })
+                    .unwrap_or(0);
+                let mut body = vec![0; length];
+                let _ = socket.read_exact(&mut body).await;
+                let mut request_line = head.split_whitespace();
+                let method = request_line.next().unwrap_or_default();
+                let path = request_line
+                    .next()
+                    .and_then(|target| target.split('?').next())
+                    .unwrap_or_default();
+                requests.lock().unwrap().push((
+                    format!("{method} {path}"),
+                    String::from_utf8_lossy(&body).into_owned(),
+                ));
+                let _ = socket
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                    .await;
+            }
+        });
+        (url, recorded)
+    }
+
+    fn reply_message(state: &str) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "protocol_version": 1, "kind": "reply", "conversation_id": "c-1",
+            "message_id": "re-1", "reply_to": "m-1", "sender_id": "bot-1",
+            "offset": 0, "text": "Hello", "state": state, "later_field": 3
+        }))
+        .unwrap()
+    }
+
+    async fn recorded_forwarder() -> (FirebaseRtdbForwarder, Recorded) {
+        let (url, recorded) = recording_database().await;
+        let forwarder =
+            FirebaseRtdbForwarder::new(&url, Arc::new(|| Box::pin(async { Ok("t".into()) })))
+                .unwrap();
+        (forwarder, recorded)
+    }
+
+    #[tokio::test]
+    async fn wakeups_and_replies_never_share_a_node() {
+        let (forwarder, recorded) = recorded_forwarder().await;
+        let scope = "a".repeat(64);
+        let wakeup = br#"{"protocol_version":1,"kind":"invalidate","nonce":"n"}"#;
+        forwarder.publish_realtime(&scope, wakeup).await.unwrap();
+        for state in ["writing", "working", "done", "dropped"] {
+            forwarder
+                .publish_realtime_reply(&scope, &reply_message(state))
+                .await
+                .unwrap();
+        }
+        forwarder.publish_realtime(&scope, wakeup).await.unwrap();
+
+        let wake = format!("/realtime/{scope}/wake.json");
+        let reply = format!("/realtime/{scope}/reply.json");
+        let requests = recorded.lock().unwrap().clone();
+        let lines: Vec<_> = requests.iter().map(|(line, _)| line.as_str()).collect();
+        assert_eq!(
+            lines,
+            [
+                format!("PUT {wake}"),
+                format!("PUT {reply}"),
+                format!("PUT {reply}"),
+                format!("PUT {reply}"),
+                format!("DELETE {reply}"),
+                format!("PUT {reply}"),
+                format!("DELETE {reply}"),
+                format!("PUT {wake}"),
+            ]
+        );
+        for (line, body) in &requests {
+            let body: Value = serde_json::from_str(body).unwrap_or(Value::Null);
+            if line.starts_with("PUT") && line.ends_with("/wake.json") {
+                assert_eq!(body["kind"], "invalidate", "{line}");
+            } else if line.starts_with("PUT") {
+                assert_eq!(body["kind"], "reply", "{line}");
+                assert_eq!(body["later_field"], 3, "a reply passes through whole");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_reply_over_the_limit_or_for_a_foreign_path_sends_nothing() {
+        let (forwarder, recorded) = recorded_forwarder().await;
+        let oversized = vec![b' '; MAX_REALTIME_WAKEUP_BYTES + 1];
+        let refused = [
+            forwarder
+                .publish_realtime_reply(&"a".repeat(64), &oversized)
+                .await,
+            forwarder
+                .publish_realtime_reply("../wake", &reply_message("writing"))
+                .await,
+        ];
+        assert!(refused.iter().all(Result::is_err));
+        assert!(recorded.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

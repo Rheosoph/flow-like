@@ -632,7 +632,7 @@ fn save_bot_limits(
     Ok(())
 }
 
-fn existing_direct(tx: &Connection, other: &str) -> Result<Option<String>> {
+pub(crate) fn existing_direct(tx: &Connection, other: &str) -> Result<Option<String>> {
     Ok(tx
         .query_row(
             "SELECT id FROM conversations WHERE direct_key = ?1",
@@ -951,6 +951,32 @@ fn validate_send_as(request: SendEntryRequest, internal: bool) -> Result<Outgoin
         workspace_apps,
         conversation_files,
     })
+}
+
+/// The message `message_id` in `conversation_id` and the edits and deletions of it, oldest first.
+pub(crate) fn message_with_changes(
+    db: &Connection,
+    conversation_id: &str,
+    message_id: &str,
+) -> Result<Vec<InboxEntry>> {
+    let mut statement = db.prepare_cached(&format!(
+        "SELECT {ENTRY_COLUMNS} FROM entries WHERE conversation_id = ?1
+           AND (message_id = ?2 OR (kind IN (?3, ?4)
+             AND json_extract(envelope, '$.body.target') = ?2))
+         ORDER BY seq, created_at, id"
+    ))?;
+    let entries = statement
+        .query_map(
+            params![
+                conversation_id,
+                message_id,
+                InboxEntryKind::Edit.as_str(),
+                InboxEntryKind::Delete.as_str()
+            ],
+            read_entry,
+        )?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(entries)
 }
 
 pub(crate) fn entry_by_message_id(db: &Connection, message_id: &str) -> Result<Option<InboxEntry>> {

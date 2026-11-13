@@ -381,6 +381,7 @@ pub(crate) async fn extract_structured_history_with_usage(
         duration_ms: Some(duration_ms),
         iterations: None,
         calls: vec![],
+        ..Default::default()
     };
 
     let mut last_args: Option<Value> = None;

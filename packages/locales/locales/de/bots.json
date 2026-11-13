@@ -236,7 +236,19 @@
 		"focus": "",
 		"actionRunning": "",
 		"actionFailed": "",
-		"actionCompleted": ""
+		"actionCompleted": "",
+		"permission": {
+			"accessibility": "",
+			"accessibilityReason": "",
+			"afterAllow": "",
+			"elsewhere": "",
+			"open": "",
+			"restartHint": "",
+			"restartTitle": "",
+			"screenReason": "",
+			"screenRecording": "",
+			"title": ""
+		}
 	},
 	"connectors": {
 		"account": {
@@ -300,9 +312,44 @@
 			"always": "",
 			"answeredAlways": "",
 			"answeredDeny": "",
+			"answeredElsewhere": "",
 			"answeredOnce": "",
 			"askEveryTime": "",
+			"batch": {
+				"allowAllOnce": "",
+				"alwaysAllowAll": "",
+				"answered": "",
+				"answeredUniform_one": "",
+				"answeredUniform_other": "",
+				"back": "",
+				"callAnswer": "",
+				"choose": "",
+				"count_one": "",
+				"count_other": "",
+				"denyAll": "",
+				"groupAnswer_one": "",
+				"groupAnswer_other": "",
+				"label_one": "",
+				"label_other": "",
+				"mixed": "",
+				"notRememberable": "",
+				"optionAlways": "",
+				"optionDeny": "",
+				"optionOnce": "",
+				"secretFirst": "",
+				"send": "",
+				"showAll_one": "",
+				"showAll_other": "",
+				"showAllGroups_one": "",
+				"showAllGroups_other": "",
+				"showCalls": "",
+				"showFewer": "",
+				"tally": "",
+				"title_one": "",
+				"title_other": ""
+			},
 			"botFallback": "",
+			"cancelled": "",
 			"configuration": {
 				"title": "Bot-Einstellungen ändern",
 				"requestTitle": "{{name}} möchte seine Einstellungen ändern",
@@ -333,6 +380,8 @@
 			},
 			"configurationChanges": "Vorgeschlagene Änderungen",
 			"clearValue": "Wert löschen",
+			"expired": "",
+			"expiredHint": "",
 			"fields": {
 				"name": "Name",
 				"description": "Beschreibung",
@@ -346,8 +395,11 @@
 				"vision_model": "Modell zur Bilderkennung",
 				"subtask_model": "Modell für Teilaufgaben",
 				"look": "",
+				"classification": "",
 				"location": "",
-				"app_ids": ""
+				"device_id": "",
+				"app_ids": "",
+				"app_restrictions": ""
 			},
 			"deny": "",
 			"failed": "",
@@ -364,6 +416,8 @@
 				"save": "",
 				"saved": "",
 				"saving": "",
+				"seal": "",
+				"sealHint": "",
 				"title": "",
 				"tooLarge": "",
 				"valueLabel": ""
@@ -385,6 +439,36 @@
 				"requestTitle": "",
 				"hint": "",
 				"target": ""
+			},
+			"deleteBot": {
+				"title": "",
+				"requestTitle": "",
+				"hint": "",
+				"approve": "",
+				"reject": "",
+				"approved": "",
+				"rejected": ""
+			},
+			"classification": {
+				"level": "",
+				"unset": "",
+				"pii": "",
+				"piiYes": "",
+				"piiNo": ""
+			},
+			"webContent": {
+				"badge": "",
+				"hint": "",
+				"noAlways": "",
+				"notice": ""
+			},
+			"invite": {
+				"allow": "",
+				"because": "",
+				"next": "",
+				"nextInRoom": "",
+				"title": "",
+				"why": ""
 			}
 		},
 		"botSettings": "Einstellungen für {{name}}",
@@ -580,6 +664,8 @@
 			"unmute": ""
 		},
 		"needs": {
+			"approvalBatchMeta_one": "",
+			"approvalBatchMeta_other": "",
 			"approvalMeta": "",
 			"assistantMeta": "Pausiert, bis du entscheidest",
 			"assistantTitle": "Wartet auf deine Antwort",
@@ -884,6 +970,7 @@
 			"appsFailed": "Die App konnte nicht aktualisiert werden.",
 			"appsLeft": "Du bist kein Mitglied mehr",
 			"appsNoMatch": "Keine Apps passen zu deiner Suche.",
+			"appsRefusesBots": "",
 			"appsRole": "Deine Rolle: {{role}}",
 			"appsSearch": "Apps durchsuchen",
 			"appsUntitled": "Unbenannte App",
@@ -1014,6 +1101,7 @@
 		"duplicated": "Als {{name}} dupliziert",
 		"errors": {
 			"appLimit": "Dieser Bot nutzt bereits die maximale Anzahl von 200 ausgewählten Apps.",
+			"appRefusesBots": "",
 			"capabilityLocation": "Computersteuerung, Browser und Befehlszeile brauchen die Desktop-App oder ein Gerät. Schalte sie aus oder ändere, wo der Bot läuft.",
 			"createFailed": "Der Bot konnte nicht erstellt werden.",
 			"deleteFailed": "Der Bot konnte nicht gelöscht werden.",
@@ -1154,7 +1242,12 @@
 		"person": "",
 		"personUnknown": "",
 		"table": "",
-		"tool": ""
+		"tool": "",
+		"webPrivateRead": "",
+		"webPrivateWrite": "",
+		"webRead": "",
+		"webSecret": "",
+		"webWrite": ""
 	},
 	"history": {
 		"busy": "",

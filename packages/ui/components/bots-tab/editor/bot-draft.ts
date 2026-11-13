@@ -4,6 +4,7 @@ import {
 	BOT_CAPABILITIES,
 	BOT_LIMITS,
 	type BotCapability,
+	type BotExecutionMode,
 	type BotLocation,
 	type BotSystemKey,
 	FLOWPILOT_CAPABILITY,
@@ -47,6 +48,7 @@ export interface BotDraft {
 	capabilities: BotCapability[];
 	profileId: string | null;
 	location: BotLocation;
+	executionMode: BotExecutionMode;
 	deviceId: string | null;
 }
 
@@ -83,7 +85,8 @@ export type BotDraftProblem =
 	| { code: "look_locked"; items: string[] }
 	| { code: "look_invalid"; items: string[] }
 	| { code: "profile_required" }
-	| { code: "device_required" };
+	| { code: "device_required" }
+	| { code: "docker_requires_device" };
 
 const text = (value: string | null | undefined) => value?.trim() || null;
 
@@ -141,6 +144,7 @@ export function createEmptyBotDraft(): BotDraft {
 		capabilities: [...NEW_BOT_CAPABILITIES],
 		profileId: null,
 		location: "server",
+		executionMode: "native",
 		deviceId: null,
 	};
 }
@@ -184,6 +188,7 @@ export function botDraftFromBot(bot: IBot): BotDraft {
 		),
 		profileId: bot.profile_id,
 		location: bot.location,
+		executionMode: bot.execution_mode ?? "native",
 		deviceId: bot.device_id,
 	};
 }
@@ -302,6 +307,7 @@ function draftFields(draft: BotDraft): BotFields {
 		capabilities: ordered,
 		profile_id: ordered.includes("profile_apps") ? draft.profileId : null,
 		location: draft.location,
+		execution_mode: draft.executionMode,
 		device_id: draft.location === "device" ? draft.deviceId : null,
 	};
 }
@@ -323,6 +329,7 @@ function botFields(bot: IBot): BotFields {
 		capabilities: orderBotCapabilities(bot.capabilities),
 		profile_id: bot.profile_id ?? null,
 		location: bot.location,
+		execution_mode: bot.execution_mode ?? "native",
 		device_id: bot.device_id ?? null,
 	};
 }
@@ -333,7 +340,12 @@ function withFixedFields(bot: IBot, draft: BotDraft): BotDraft {
 		? { ...draft, capabilities: bot.capabilities }
 		: draft;
 	return hasFixedLocation(bot.system)
-		? { ...kept, location: bot.location, deviceId: bot.device_id }
+		? {
+				...kept,
+				location: bot.location,
+				deviceId: bot.device_id,
+				executionMode: bot.execution_mode ?? "native",
+			}
 		: kept;
 }
 
@@ -348,8 +360,10 @@ export function buildCreateBotRequest(draft: BotDraft): ICreateBotRequest {
 		subtask_model,
 		...fields
 	} = draftFields(draft);
+	const { execution_mode, ...compatibleFields } = fields;
 	return {
-		...fields,
+		...compatibleFields,
+		...(execution_mode === "docker" ? { execution_mode } : {}),
 		...(embedding_model ? { embedding_model } : {}),
 		...(stt_model ? { stt_model } : {}),
 		...(tts_model ? { tts_model } : {}),
@@ -422,5 +436,7 @@ export function getBotDraftProblems(
 		problems.push({ code: "profile_required" });
 	if (draft.location === "device" && !draft.deviceId)
 		problems.push({ code: "device_required" });
+	if (draft.executionMode === "docker" && draft.location !== "device")
+		problems.push({ code: "docker_requires_device" });
 	return problems;
 }

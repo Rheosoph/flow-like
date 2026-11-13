@@ -13,9 +13,9 @@ use async_trait::async_trait;
 use flow_like::{
     flow::copilot::{
         BotRunContext, BotToolHost, BotToolset, FLUX_BOT_ID, FLUX_BOT_NAME,
-        GENERAL_BOT_DESCRIPTION, GENERAL_BOT_ID, GENERAL_BOT_NAME, bot_persona_section,
-        bot_model_preference, memory::MemoryScope, platform::PlatformToolBridge,
-        resolve_bot_model, resolve_host_completion_model_preferring, runnable_completion_model,
+        GENERAL_BOT_DESCRIPTION, GENERAL_BOT_ID, GENERAL_BOT_NAME, bot_model_preference,
+        bot_persona_section, memory::MemoryScope, platform::PlatformToolBridge, resolve_bot_model,
+        resolve_host_completion_model_preferring, runnable_completion_model,
     },
     profile::Profile,
     state::FlowLikeState,
@@ -290,7 +290,11 @@ pub(super) struct DesktopBot {
 impl DesktopBot {
     fn with_account(mut self, account: bool) -> Self {
         self.account = account;
-        if account { self } else { self.without_hub_tools() }
+        if account {
+            self
+        } else {
+            self.without_hub_tools()
+        }
     }
 
     fn without_hub_tools(mut self) -> Self {
@@ -975,8 +979,9 @@ pub(super) async fn bot_model(
         .map(|bit| bit.id)
         .map_err(|error| {
             format!(
-                "Bot '{}' can't answer: no language model it can use runs on this desktop ({error}). Add one in Settings → Models or pick one in the bot's settings.",
-                bot.context.name
+                "Bot '{}' can't answer: {} ({error}). Add one in Settings → Models or pick one in the bot's settings.",
+                bot.context.name,
+                flow_like_bot_host::host::NO_DESKTOP_MODEL_TEXT
             )
         })
 }
@@ -999,17 +1004,31 @@ pub(super) fn bot_tool_set(tool_name: &str) -> FrontendPlatformToolSet {
 /// the bot's limits; this resolves its approval and timeout and dispatches it like FlowPilot's.
 pub(super) struct BotDesktopBridge(pub(super) DesktopPlatformBridge);
 
-#[async_trait]
-impl PlatformToolBridge for BotDesktopBridge {
-    async fn call(&self, tool_name: &str, arguments: serde_json::Value) -> String {
+impl BotDesktopBridge {
+    fn for_tool(&self, tool_name: &str) -> DesktopPlatformBridge {
         DesktopPlatformBridge {
             bridge: self.0.bridge.clone(),
             tool_set: bot_tool_set(tool_name),
             cancellation: self.0.cancellation.clone(),
             steerable: false,
         }
-        .call(tool_name, arguments)
-        .await
+    }
+}
+
+#[async_trait]
+impl PlatformToolBridge for BotDesktopBridge {
+    async fn call(&self, tool_name: &str, arguments: serde_json::Value) -> String {
+        self.for_tool(tool_name).call(tool_name, arguments).await
+    }
+
+    async fn clearance(
+        &self,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) -> flow_like::flow::copilot::platform::Clearance {
+        self.for_tool(tool_name)
+            .clearance(tool_name, arguments)
+            .await
     }
 
     async fn drain_steering(&self) -> Vec<String> {
@@ -1324,7 +1343,11 @@ mod tests {
         assert_eq!(assistant.model.fallbacks, ["my-fallback"]);
         assert!(assistant.context.capabilities.is_empty());
         let tools = assistant.context.tool_specs(false);
-        for name in ["bot_configuration", "bot_models", "bot_update_configuration"] {
+        for name in [
+            "bot_configuration",
+            "bot_models",
+            "bot_update_configuration",
+        ] {
             assert!(tools.iter().any(|tool| tool.name == name), "{name}");
         }
     }

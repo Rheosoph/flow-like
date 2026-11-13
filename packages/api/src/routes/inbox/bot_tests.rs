@@ -15,7 +15,9 @@ use super::{
     view::conversations_for,
     watched_inboxes,
 };
-use crate::entity::{bot, conversation, conversation_member, inbox_entry, json_types::StringList};
+use crate::entity::{
+    bot, bot_turn, conversation, conversation_member, inbox_entry, json_types::StringList,
+};
 use axum::http::StatusCode;
 use flow_like_types::{
     bot::BotLocation,
@@ -492,6 +494,63 @@ async fn a_persons_unaddressed_message_lets_every_bot_member_read_along_unless_l
         from_bot.bots.iter().all(|bot| !bot.read_along),
         "a bot's message never wakes the others unaddressed"
     );
+}
+
+#[tokio::test]
+async fn a_new_members_unmentioned_question_queues_both_bots_with_that_member_as_requester() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "felix", "DESKTOP").await;
+    insert_bot(&db, "bot_2", "felix", "SERVER").await;
+    let plan = NewConversation {
+        kind: ConversationKind::Group,
+        title: Some("team".into()),
+        members: Vec::new(),
+        encryption: ConversationEncryption::Plain,
+    };
+    start_group(
+        &db,
+        "team",
+        "felix",
+        &plan,
+        &[
+            user("christian"),
+            bot_principal("bot_1"),
+            bot_principal("bot_2"),
+        ],
+        at(0),
+    )
+    .await
+    .unwrap();
+    let question = outgoing(
+        "christian-question",
+        InboxEntryKind::Message,
+        json!({ "text": "Hallo zusammen wer ist im Chat\nSind Bots im Chat?" }),
+    );
+    let sent = send_in(&db, "team", "christian", &question, at(1))
+        .await
+        .unwrap();
+    assert_eq!(sent.bots.len(), 2);
+    assert!(
+        sent.bots
+            .iter()
+            .all(|recipient| recipient.read_along && !recipient.mentioned && !recipient.replied_to)
+    );
+    let mut turns = bot_turn::Entity::find().all(&db).await.unwrap();
+    turns.sort_by(|left, right| left.bot_id.cmp(&right.bot_id));
+    assert_eq!(turns.len(), 2);
+    for (turn, bot, host) in [
+        (&turns[0], "bot_1", "DESKTOP"),
+        (&turns[1], "bot_2", "SERVER"),
+    ] {
+        assert_eq!(turn.bot_id, bot);
+        assert_eq!(turn.host_kind, host);
+        assert_eq!(turn.status, "QUEUED");
+        assert_eq!(turn.trigger_message_id, "christian-question");
+        assert_eq!(turn.requester_id.as_deref(), Some("christian"));
+        assert_eq!(turn.owner_id, "felix");
+        assert_eq!(turn.audience, "ROOM");
+        assert_eq!(turn.unprompted, Some(true));
+    }
 }
 
 #[tokio::test]

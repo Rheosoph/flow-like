@@ -1,4 +1,5 @@
 import { parseAskBotResult } from "../../components/global-chat/bot-exchange";
+import { computerPermissionNeed } from "../../components/global-chat/computer-permission";
 import type { IToolActivityDetail } from "../../components/interfaces/chat-default/chat-db";
 
 const MAX_CONTEXT_CHARS = 240;
@@ -54,6 +55,7 @@ const TOOL_ACTIVITIES: Record<
 	ask_user: ["tool", "Requesting your input"],
 	secret_request: ["tool", "Asking for a secret"],
 	secret_list: ["tool", "Checking stored secrets"],
+	room_invite: ["tool", "Inviting someone to the chat"],
 	shell_run: ["terminal", "Running a command"],
 	ask_bot: ["tool", "Asking another bot"],
 };
@@ -520,6 +522,7 @@ export function buildToolActivity(
 					"",
 				) ?? previous?.exchange)
 			: undefined;
+	const permission = results.map(computerPermissionNeed).find(Boolean);
 	return {
 		...previous,
 		kind: "tool_activity",
@@ -534,5 +537,6 @@ export function buildToolActivity(
 		...(outcome ? { outcome } : {}),
 		...(terminal ? { terminal } : {}),
 		...(exchange ? { exchange } : {}),
+		...(permission ? { permission } : {}),
 	};
 }

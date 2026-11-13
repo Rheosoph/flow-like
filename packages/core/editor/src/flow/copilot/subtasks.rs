@@ -28,13 +28,15 @@ use serde_json::{Value, json};
 use super::bot_run::{BotRunContext, BotToolBridge, BotToolHost, BotToolset, bot_system_prompt};
 use super::bot_talk::ASK_BOT_TOOL;
 use super::platform::{
-    IncompleteWork, PlatformCopilot, PlatformSurface, PlatformToolBridge, WebAccess, WorkStopReason,
+    Clearance, IncompleteWork, PlatformCopilot, PlatformSurface, PlatformToolBridge, WebAccess,
+    WorkStopReason,
 };
 use super::tool_spec::{
     MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL, PlatformToolSpec, ToolApprovalSpec,
     resolve_tool_approval_timing,
 };
 use super::turn_label::{LabelBridge, TurnCompute, TurnLabel};
+use super::vision_reader::ImageDetour;
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
 
@@ -178,6 +180,7 @@ pub struct ModelSubtaskRunner {
     pub thinking: Option<HistoryThinking>,
     pub token: Option<String>,
     web_access: WebAccess,
+    vision: Option<Arc<ImageDetour>>,
     chosen: tokio::sync::OnceCell<Option<String>>,
 }
 
@@ -211,6 +214,7 @@ impl ModelSubtaskRunner {
             thinking,
             token,
             web_access: WebAccess::default(),
+            vision: None,
             chosen: Default::default(),
         }
     }
@@ -218,6 +222,12 @@ impl ModelSubtaskRunner {
     /// The owner's own search and page readers, for children that research.
     pub fn with_web_access(mut self, web_access: WebAccess) -> Self {
         self.web_access = web_access;
+        self
+    }
+
+    /// The parent turn's image detour, so children share its budget.
+    pub(super) fn with_vision(mut self, vision: Option<Arc<ImageDetour>>) -> Self {
+        self.vision = vision;
         self
     }
 
@@ -264,6 +274,7 @@ impl SubtaskRunner for ModelSubtaskRunner {
             .with_tool_specs(child.tool_specs)
             .with_tool_rounds(child.tool_rounds)
             .with_web_access(self.web_access.clone())
+            .with_vision(self.vision.clone())
             .with_turn_label(child.label);
         // Output-schema repair is a single tool-free completion.
         let copilot = if child.tool_rounds > 0 {
@@ -271,8 +282,9 @@ impl SubtaskRunner for ModelSubtaskRunner {
         } else {
             copilot
         };
-        copilot
-            .chat(
+        let stable_prompt = child.system_prompt.clone();
+        let reply: futures::future::BoxFuture<'_, flow_like_types::Result<String>> =
+            Box::pin(copilot.chat(
                 PlatformSurface::Subtask,
                 child.system_prompt,
                 child.user_prompt,
@@ -283,7 +295,8 @@ impl SubtaskRunner for ModelSubtaskRunner {
                 child.bridge,
                 None,
                 on_token,
-            )
+            ));
+        flow_like_model_provider::llm::prompt_cache::with_stable_system_prefix(stable_prompt, reply)
             .await
     }
 }
@@ -395,6 +408,10 @@ impl PlatformToolBridge for LazySurface {
         self.inner.call(tool_name, arguments).await
     }
 
+    async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
+        self.inner.clearance(tool_name, arguments).await
+    }
+
     async fn drain_steering(&self) -> Vec<String> {
         self.inner.drain_steering().await
     }
@@ -441,6 +458,13 @@ impl PlatformToolBridge for SubtaskBridge {
             None
         };
         self.inner.call(tool_name, arguments).await
+    }
+
+    async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
+        if tool_name == SPAWN_SUBTASKS_TOOL {
+            return Clearance::Clear;
+        }
+        self.inner.clearance(tool_name, arguments).await
     }
 
     async fn drain_steering(&self) -> Vec<String> {
@@ -777,6 +801,13 @@ impl PlatformToolBridge for ChildGuard {
         output
     }
 
+    async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
+        match child_name_refusal(tool_name) {
+            Some(message) => Clearance::Refused(refusal_json(tool_name, &message)),
+            None => self.inner.clearance(tool_name, arguments).await,
+        }
+    }
+
     async fn is_cancelled(&self) -> bool {
         self.inner.is_cancelled().await
     }
@@ -797,6 +828,13 @@ impl PlatformToolBridge for ApprovalGate {
             return refusal_json(tool_name, &message);
         }
         self.inner.call(tool_name, arguments).await
+    }
+
+    async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
+        match child_approval_refusal(tool_name, arguments) {
+            Some(message) => Clearance::Refused(refusal_json(tool_name, &message)),
+            None => self.inner.clearance(tool_name, arguments).await,
+        }
     }
 
     async fn is_cancelled(&self) -> bool {
@@ -1106,11 +1144,13 @@ impl SubtaskBridge {
         meter: &Arc<ChildMeter>,
         parent_request: &str,
         request_id: &str,
+        usage_id: &str,
     ) -> Arc<dyn Fn(String) + Send + Sync> {
         let meter = meter.clone();
         let events = self.env.on_token.clone();
         let parent_request = parent_request.to_string();
         let request_id = request_id.to_string();
+        let usage_id = usage_id.to_string();
         Arc::new(move |frame: String| {
             meter.observe_frame(&frame);
             if let Some(sink) = &events {
@@ -1118,6 +1158,7 @@ impl SubtaskBridge {
                     json!({
                         "type": "native_specialist_event",
                         "requestId": request_id,
+                        "usageId": usage_id,
                         "parentRequestId": parent_request,
                         "toolName": SPAWN_SUBTASKS_TOOL,
                         "frame": frame,
@@ -1158,7 +1199,7 @@ impl SubtaskBridge {
             }),
             meter: meter.clone(),
         });
-        let sink = self.sink_for(meter, parent_request, request_id);
+        let sink = self.sink_for(meter, parent_request, request_id, request_id);
         let first = ChildTurn {
             system_prompt: child_system_prompt(&child),
             user_prompt: child_user_prompt(task, can_read_files),
@@ -1195,7 +1236,12 @@ impl SubtaskBridge {
             tool_specs: Vec::new(),
             tool_rounds: 0,
             bridge: guard,
-            on_token: Some(sink),
+            on_token: Some(self.sink_for(
+                meter,
+                parent_request,
+                request_id,
+                &format!("{request_id}:repair"),
+            )),
             label: self.env.label.clone(),
         };
         let repaired = match self.limited(left, self.env.runner.run(repair)).await {

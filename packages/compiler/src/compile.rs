@@ -131,6 +131,7 @@ async fn download_bytes(
     url: &str,
     max_bytes: u64,
     purpose: &str,
+    refusal_is_final: bool,
 ) -> Result<bytes::Bytes, CompilerError> {
     let mut response = client
         .get(url)
@@ -138,11 +139,16 @@ async fn download_bytes(
         .await
         .map_err(|_| CompilerError::Download(format!("signed {purpose} GET request failed")))?;
 
-    if !response.status().is_success() {
-        return Err(CompilerError::Download(format!(
-            "signed {purpose} GET returned {}",
-            response.status()
-        )));
+    let status = response.status();
+    if !status.is_success() {
+        let message = format!("signed {purpose} GET returned {status}");
+        return Err(
+            if refusal_is_final && is_permanent_download_status(status) {
+                CompilerError::DownloadRejected(message)
+            } else {
+                CompilerError::Download(message)
+            },
+        );
     }
 
     if response
@@ -173,6 +179,13 @@ async fn download_bytes(
     }
 
     Ok(bytes::Bytes::from(body))
+}
+
+/// A signed GET that is refused or points at nothing fails the same way on
+/// every redelivery: the signature expired while the job waited, or the object
+/// is gone. Nothing retries a started task, so it must end in a failed callback.
+fn is_permanent_download_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 400 | 401 | 403 | 404 | 410)
 }
 
 async fn upload_artifact(
@@ -269,7 +282,7 @@ async fn upload_compiled_artifacts(
             .ok_or_else(|| invalid_job("generation target has no artifact retry GET URL"))?;
         // Another delivery may have compiled different bytes. The checksum
         // must describe the artifact that won creation in storage.
-        let stored = download_bytes(client, url, max_bytes, "compiled artifact").await?;
+        let stored = download_bytes(client, url, max_bytes, "compiled artifact", false).await?;
         checksum = blake3::hash(&stored).to_hex().to_string();
     }
     let created_checksum = upload_artifact(
@@ -286,7 +299,7 @@ async fn upload_compiled_artifacts(
             .checksum_download_url
             .as_deref()
             .ok_or_else(|| invalid_job("generation target has no checksum retry GET URL"))?;
-        let stored = download_bytes(client, url, 64, "compiled checksum").await?;
+        let stored = download_bytes(client, url, 64, "compiled checksum", false).await?;
         if stored.as_ref() != checksum.as_bytes() {
             return Err(CompilerError::Compilation(
                 "existing generation checksum does not match its stored artifact".to_string(),
@@ -819,6 +832,7 @@ async fn compile_inner(
         &job.wasm_download_url,
         config.max_wasm_bytes,
         "WASM",
+        true,
     )
     .await?;
 
@@ -1237,6 +1251,50 @@ mod tests {
         let bounded = bounded_terminal_error(&error);
         assert!(bounded.len() <= MAX_CALLBACK_ERROR_BYTES + "…".len());
         assert!(bounded.ends_with('…'));
+    }
+
+    async fn status_server(status: u16) -> String {
+        let app = axum::Router::new().route(
+            "/node.wasm",
+            axum::routing::get(move || async move {
+                (axum::http::StatusCode::from_u16(status).unwrap(), "no")
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/node.wasm", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        url
+    }
+
+    #[tokio::test]
+    async fn an_expired_source_url_ends_in_a_failed_compile_instead_of_a_retry() {
+        let client = Client::new();
+        for status in [403, 404, 410] {
+            let url = status_server(status).await;
+            let error = download_bytes(&client, &url, 1024, "WASM", true)
+                .await
+                .unwrap_err();
+            assert!(!is_retryable(&error), "{status}: {error}");
+            assert!(error.to_string().contains(&status.to_string()));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_server_error_or_a_checksum_read_stays_retryable() {
+        let client = Client::new();
+        let url = status_server(503).await;
+        let error = download_bytes(&client, &url, 1024, "WASM", true)
+            .await
+            .unwrap_err();
+        assert!(is_retryable(&error));
+
+        let url = status_server(404).await;
+        let error = download_bytes(&client, &url, 1024, "compiled checksum", false)
+            .await
+            .unwrap_err();
+        assert!(is_retryable(&error));
     }
 
     #[test]

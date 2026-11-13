@@ -4,6 +4,7 @@ use std::fmt;
 pub enum CompilerError {
     Jwt(String),
     Download(String),
+    DownloadRejected(String),
     Upload(String),
     Compilation(String),
     Callback(String),
@@ -17,6 +18,7 @@ impl fmt::Display for CompilerError {
         match self {
             CompilerError::Jwt(msg) => write!(f, "JWT error: {msg}"),
             CompilerError::Download(msg) => write!(f, "Download error: {msg}"),
+            CompilerError::DownloadRejected(msg) => write!(f, "Download rejected: {msg}"),
             CompilerError::Upload(msg) => write!(f, "Upload error: {msg}"),
             CompilerError::Compilation(msg) => write!(f, "Compilation error: {msg}"),
             CompilerError::Callback(msg) => write!(f, "Callback error: {msg}"),

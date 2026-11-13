@@ -29,8 +29,9 @@ The **Brain** step holds the bot's instructions and models:
 | **Subtask model** | Runs the parallel parts of a big job when the bot delegates. A smaller model keeps them cheap. |
 | **Embedding model** | Powers its memory. Memory stays off without one. |
 | **Image model** | Used by image generation. |
+| **Vision model** | Reads images for a chat model that can't see them: photos you send, page captures and screenshots its tools return, and pictures it looks at behind links. The chat model gets the vision model's description of each image instead, for up to 8 images a turn. The document tools also read scanned pages with it. A chat model that sees images gets them as they are. |
 
-A model left unset is chosen by the host the bot runs on. The editor also holds pins for speech recognition, speech and vision models.
+A model left unset is chosen by the host the bot runs on. The editor also holds pins for the speech recognition and speech models that calls use.
 
 :::note[Models depend on the host]
 Bots in the cloud use hosted models your plan includes, or a provider you connected with your own key. Bots on a managed device use hosted models. Only the desktop app can run models on your own hardware. See [Where bots run](/bots/hosts/).

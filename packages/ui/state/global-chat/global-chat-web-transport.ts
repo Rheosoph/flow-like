@@ -217,6 +217,7 @@ async function withDeliveryTimeout<T>(
 function parseRunFrame(data: string): {
 	runId: string;
 	channel: IChannelHandle;
+	modelId?: string;
 } {
 	let value: unknown;
 	try {
@@ -224,14 +225,22 @@ function parseRunFrame(data: string): {
 	} catch {
 		throw new Error("Malformed run frame: payload is not valid JSON.");
 	}
-	const record = (value ?? {}) as { runId?: unknown; channel?: unknown };
+	const record = (value ?? {}) as {
+		runId?: unknown;
+		channel?: unknown;
+		modelId?: unknown;
+	};
 	if (typeof record.runId !== "string" || !record.runId.trim()) {
 		throw new Error("Malformed run frame: runId is missing.");
 	}
 	if (!isChannelHandle(record.channel)) {
 		throw new Error("Malformed run frame: channel is missing.");
 	}
-	return { runId: record.runId, channel: record.channel };
+	const modelId =
+		typeof record.modelId === "string" && record.modelId.trim()
+			? record.modelId
+			: undefined;
+	return { runId: record.runId, channel: record.channel, modelId };
 }
 
 function parseToolRequest(data: string): WebToolRequest {
@@ -488,7 +497,10 @@ export async function dispatchSpecialistToolRequest(params: {
  * replies on each request's channel, and resolves with the final `UnifiedCopilotResponse`.
  */
 export function webGlobalChatStart(options: WebGlobalChatOptions) {
-	return async (onChunk: (chunk: string) => void): Promise<unknown> => {
+	return async (
+		onChunk: (chunk: string) => void,
+		onModel?: (modelId: string) => void,
+	): Promise<unknown> => {
 		const { baseUrl, token, body, profileId } = options;
 		const authHeaders: Record<string, string> = token
 			? { authorization: `Bearer ${token}` }
@@ -597,7 +609,7 @@ export function webGlobalChatStart(options: WebGlobalChatOptions) {
 				if (transportError) return;
 				switch (eventName) {
 					case "run": {
-						let parsed: { runId: string; channel: IChannelHandle };
+						let parsed: ReturnType<typeof parseRunFrame>;
 						try {
 							parsed = parseRunFrame(data);
 						} catch (error) {
@@ -615,6 +627,7 @@ export function webGlobalChatStart(options: WebGlobalChatOptions) {
 						// The run is addressable from here on — the control registered above starts
 						// reaching the server instead of only aborting locally.
 						runChannel = parsed.channel;
+						if (parsed.modelId) onModel?.(parsed.modelId);
 						// Nested specialist runs are separate HTTP requests that still ride THIS run,
 						// so they need the server's id too.
 						if (options.clientRunId) {

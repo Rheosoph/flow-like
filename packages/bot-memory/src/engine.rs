@@ -7,6 +7,7 @@ mod commit;
 mod draft;
 mod maintenance;
 mod reset;
+mod telemetry;
 
 pub(crate) use commit::CommitOutcome;
 

@@ -68,11 +68,34 @@ pub struct ContextQuery {
     pub conversation_id: String,
 }
 
-#[derive(Deserialize)]
 pub struct ContextRequest {
     pub conversation_id: String,
-    #[serde(flatten)]
     pub request: UserContextRequestArgs,
+}
+
+/// Read by hand: `serde(flatten)` hides unknown fields from the arguments' `deny_unknown_fields`.
+impl<'de> Deserialize<'de> for ContextRequest {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        use serde::de::Error;
+        let mut fields = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        let conversation_id = match fields.remove("conversation_id") {
+            Some(serde_json::Value::String(id)) => id,
+            Some(other) => {
+                return Err(D::Error::custom(format!(
+                    "conversation_id must be a string, got {other}"
+                )));
+            }
+            None => return Err(D::Error::missing_field("conversation_id")),
+        };
+        let request =
+            serde_json::from_value(serde_json::Value::Object(fields)).map_err(D::Error::custom)?;
+        Ok(Self {
+            conversation_id,
+            request,
+        })
+    }
 }
 
 pub(crate) struct ServerUserContext {
@@ -220,7 +243,7 @@ impl UserContextBackend for ServerUserContext {
 }
 
 // Hosted tools display anyhow errors directly, so keep the public message outside the typed error.
-fn backend_error(error: ApiError) -> flow_like_types::Error {
+pub(super) fn backend_error(error: ApiError) -> flow_like_types::Error {
     let message = error.public_message().map(str::to_owned);
     let error = flow_like_types::Error::new(error);
     match message {
@@ -230,7 +253,7 @@ fn backend_error(error: ApiError) -> flow_like_types::Error {
 }
 
 // The tool backend uses anyhow; restore the API's status and public message at the HTTP boundary.
-fn context_error(error: flow_like_types::Error) -> ApiError {
+pub(super) fn context_error(error: flow_like_types::Error) -> ApiError {
     let error = match error.downcast::<ApiError>() {
         Ok(error) => return error,
         Err(error) => error,

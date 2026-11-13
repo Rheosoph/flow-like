@@ -1141,6 +1141,7 @@ mod tests {
             capabilities: Default::default(),
             profile_id: None,
             location: "SERVER".into(),
+            execution_mode: None,
             device_id: None,
             created_at: created,
             updated_at: created,

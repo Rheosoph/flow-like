@@ -9,6 +9,8 @@ use std::{
 use tauri::{AppHandle, Emitter, EventTarget, Manager};
 use tokio::sync::oneshot;
 
+use flow_like::flow::copilot::platform::Clearance;
+use flow_like::flow::copilot::run_recovery::{self, CallScope};
 use flow_like::flow::copilot::tool_spec::HTTP_REQUEST_TOOL;
 use flow_like_types::channel::{
     Channel, ChannelHandle, ChannelOutcome, ChannelTicket, InProcessChannel, new_request_id,
@@ -105,6 +107,9 @@ fn emit_to_owner<S: Serialize + Clone>(
 struct ScopedToolExecution {
     cancellation: CancellationToken,
     deadline: Option<Instant>,
+    /// The core loop's running call. Its task-local scope does not cross `spawn_blocking`, and
+    /// the bot's approval gate reads it to hold the call back and to judge its round.
+    call: Option<CallScope>,
 }
 
 thread_local! {
@@ -124,6 +129,50 @@ pub(super) fn with_frontend_tool_execution_scope<T>(
     deadline: Option<Instant>,
     run: impl FnOnce() -> T,
 ) -> T {
+    with_scoped_execution(
+        ScopedToolExecution {
+            cancellation,
+            deadline,
+            call: None,
+        },
+        run,
+    )
+}
+
+/// [`with_frontend_tool_execution_scope`] for a call of the core loop, captured with
+/// [`current_call_scope`] before the blocking worker started.
+pub(super) fn with_frontend_tool_call_scope<T>(
+    cancellation: CancellationToken,
+    call: Option<CallScope>,
+    run: impl FnOnce() -> T,
+) -> T {
+    with_scoped_execution(
+        ScopedToolExecution {
+            cancellation,
+            deadline: None,
+            call,
+        },
+        run,
+    )
+}
+
+/// The core loop's call running on this task.
+pub(super) fn current_call_scope() -> Option<CallScope> {
+    run_recovery::current_call_scope()
+}
+
+/// Runs `future` as the core loop's call `call`, so the approval gate it reaches sees that call.
+async fn within_call<T>(
+    call: Option<CallScope>,
+    future: impl std::future::Future<Output = T>,
+) -> T {
+    match call {
+        Some(call) => run_recovery::scope_call(call, future).await,
+        None => future.await,
+    }
+}
+
+fn with_scoped_execution<T>(execution: ScopedToolExecution, run: impl FnOnce() -> T) -> T {
     struct ScopeGuard;
     impl Drop for ScopeGuard {
         fn drop(&mut self) {
@@ -134,10 +183,7 @@ pub(super) fn with_frontend_tool_execution_scope<T>(
     }
 
     SCOPED_TOOL_EXECUTIONS.with(|executions| {
-        executions.borrow_mut().push(ScopedToolExecution {
-            cancellation,
-            deadline,
-        });
+        executions.borrow_mut().push(execution);
     });
     let _guard = ScopeGuard;
     run()
@@ -357,7 +403,16 @@ pub struct FrontendToolApproval {
     pub title: String,
     pub description: String,
     pub session_key: String,
+    /// Why a call the owner always allows asks again: [`ASKS_AGAIN_WEB_CONTENT`]. The client then
+    /// skips its standing grants and session memory and offers no "Don't ask again". Named as
+    /// the web chat names it.
+    #[serde(rename = "asks_again", skip_serializing_if = "Option::is_none")]
+    pub asks_again: Option<&'static str>,
 }
+
+/// The run's round read web content first, so the owner's standing grant for a call that reaches
+/// a web destination does not cover it.
+pub const ASKS_AGAIN_WEB_CONTENT: &str = "web_content";
 
 /// Reply value the frontend pushes for a tool request. A bare value without an `approved`
 /// boolean is treated as an approved result (see [`parse_frontend_tool_response`]).
@@ -554,6 +609,7 @@ impl FrontendToolApproval {
             title: String::new(),
             description: String::new(),
             session_key: String::new(),
+            asks_again: None,
         }
     }
 
@@ -567,6 +623,7 @@ impl FrontendToolApproval {
             title: title.into(),
             description: description.into(),
             session_key: session_key.into(),
+            asks_again: None,
         }
     }
 
@@ -581,7 +638,17 @@ impl FrontendToolApproval {
             title: title.into(),
             description: description.into(),
             session_key: session_key.into(),
+            asks_again: None,
         }
+    }
+
+    /// The prompt for a call the owner may always allow, marked when the run's web content set
+    /// that standing grant aside.
+    fn asking_again(mut self, tool_name: &str, arguments: &Value) -> Self {
+        if flow_like::flow::copilot::tool_grants::grant_set_aside(tool_name, arguments) {
+            self.asks_again = Some(ASKS_AGAIN_WEB_CONTENT);
+        }
+        self
     }
 }
 
@@ -909,6 +976,9 @@ impl FrontendToolBridge {
         let cancellation = scoped_execution
             .as_ref()
             .map(|execution| execution.cancellation.clone());
+        let call = scoped_execution
+            .as_ref()
+            .and_then(|execution| execution.call.clone());
         // A caller may provide an explicit scoped deadline, but ordinary FlowPilot provider runs
         // intentionally do not: the shared tool spec remains the sole wall-clock bound for this
         // individual operation.
@@ -916,29 +986,141 @@ impl FrontendToolBridge {
             .and_then(|execution| execution.deadline)
             .map(|deadline| timeout.min(deadline.saturating_duration_since(Instant::now())))
             .unwrap_or(timeout);
-        block_on_bridge(self.dispatch(tool_name.into(), arguments, approval, timeout, cancellation))
+        block_on_bridge(within_call(
+            call,
+            self.dispatch(tool_name.into(), arguments, approval, timeout, cancellation),
+        ))
+    }
+
+    fn context_app(&self) -> Option<&str> {
+        self.context
+            .as_ref()
+            .and_then(|context| context.app_id.as_deref())
+    }
+
+    /// The call's arguments as its tool runs them; `Err` is the call's own refusal.
+    fn prepared_arguments(&self, tool_name: &str, mut arguments: Value) -> Result<Value, Value> {
+        apply_tool_context(tool_name, &mut arguments, self.context.as_ref());
+        if !flow_like_bot_tools::configuration::is_settings_tool(tool_name) {
+            return Ok(arguments);
+        }
+        let Some(bot) = self.bot_context() else {
+            return Err(json!({"status":"error", "tool":tool_name,
+                "code":"bot_tool_unavailable", "message":"This tool requires a bot turn."}));
+        };
+        bot.prepare_tool_call(tool_name, arguments)
+            .map_err(|refusal| {
+                serde_json::from_str(&refusal).unwrap_or_else(
+                    |_| json!({"status":"error", "tool":tool_name, "message":refusal}),
+                )
+            })
+    }
+
+    /// A Flux call on the owner's bots that its target rules out, or a bot's call into an app that
+    /// refuses bots, refused before any approval.
+    async fn refusal_before_approval(&self, tool_name: &str, arguments: &Value) -> Option<Value> {
+        if self.bot_context().is_some()
+            && let Some(refused) =
+                super::native_bot_tools::bot_app_refusal(&self.app_handle, tool_name, arguments)
+                    .await
+        {
+            return Some(refused);
+        }
+        super::native_bot_tools::crew_refusal(
+            &self.app_handle,
+            self.context.as_ref(),
+            tool_name,
+            arguments,
+        )
+        .await
+    }
+
+    /// Whether a native call asks its owner before it runs: one rule for the bot's headless gate,
+    /// its clearance and the live prompt.
+    async fn asks_owner(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        approval: &FrontendToolApproval,
+        options: &super::native_tool_bridge::NativeRunOptions,
+    ) -> bool {
+        let requires_user = flow_like_bot_tools::configuration::requires_approval(tool_name);
+        if requires_user {
+            return true;
+        }
+        let waived = options.auto_approve
+            && ![
+                flow_like_types::bot_message::SECRET_REQUEST_TOOL,
+                flow_like_types::bot_message::ROOM_INVITE_TOOL,
+            ]
+            .contains(&tool_name);
+        matches!(approval.kind.as_str(), "mutating" | "execute")
+            && !waived
+            && !(tool_name == "database_tool"
+                && super::native_platform_tools::should_skip_cached_schema_approval(
+                    &self.app_handle,
+                    self.context.as_ref(),
+                    arguments,
+                )
+                .await)
+    }
+
+    /// The bot's headless gate on a call its round held back after a park, under the rule
+    /// [`Self::dispatch`] applies, without running the call. A call the gate would not see needs
+    /// no answer.
+    pub(crate) async fn clearance(
+        &self,
+        tool_name: &str,
+        arguments: Value,
+        approval: FrontendToolApproval,
+    ) -> Clearance {
+        let options = super::native_tool_bridge::run_options(self.context.as_ref());
+        let Some(gate) = options.approval_gate.clone() else {
+            return Clearance::Clear;
+        };
+        let Ok(arguments) = self.prepared_arguments(tool_name, arguments) else {
+            return Clearance::Clear;
+        };
+        if !super::native_tool_bridge::supports(tool_name, &arguments) {
+            return Clearance::Clear;
+        }
+        if let Some(refused) = self.refusal_before_approval(tool_name, &arguments).await {
+            return Clearance::Refused(refused.to_string());
+        }
+        let approval = match super::native_specialist_tools::approval(tool_name, &arguments) {
+            Ok(Some(approval)) => approval,
+            Ok(None) => approval,
+            Err(_) => return Clearance::Clear,
+        };
+        if !self
+            .asks_owner(tool_name, &arguments, &approval, &options)
+            .await
+        {
+            return Clearance::Clear;
+        }
+        gate.clearance(
+            tool_name,
+            &arguments,
+            self.context_app(),
+            &approval.description,
+        )
+        .await
     }
 
     async fn dispatch(
         &self,
         tool_name: String,
-        mut arguments: Value,
+        arguments: Value,
         approval: FrontendToolApproval,
         timeout: Duration,
         cancellation: Option<CancellationToken>,
     ) -> Value {
-        apply_tool_context(&tool_name, &mut arguments, self.context.as_ref());
-        if flow_like_bot_tools::configuration::is_settings_tool(&tool_name) {
-            let Some(bot) = self.bot_context() else {
-                return json!({"status":"error", "tool":tool_name,
-                    "code":"bot_tool_unavailable", "message":"This tool requires a bot turn."});
-            };
-            arguments = match bot.prepare_tool_call(&tool_name, arguments) {
-                Ok(arguments) => arguments,
-                Err(refusal) => return serde_json::from_str(&refusal).unwrap_or_else(|_| {
-                    json!({"status":"error", "tool":tool_name, "message":refusal})
-                }),
-            };
+        let arguments = match self.prepared_arguments(&tool_name, arguments) {
+            Ok(arguments) => arguments,
+            Err(refusal) => return refusal,
+        };
+        if let Some(refused) = self.refusal_before_approval(&tool_name, &arguments).await {
+            return refused;
         }
         if super::native_tool_bridge::supports(&tool_name, &arguments) {
             let approval = match super::native_specialist_tools::approval(&tool_name, &arguments) {
@@ -953,34 +1135,24 @@ impl FrontendToolBridge {
                 Some(deadline),
             );
             let work = async {
-                let cached_schema = tool_name == "database_tool"
-                    && super::native_platform_tools::should_skip_cached_schema_approval(
-                        &self.app_handle,
-                        self.context.as_ref(),
-                        &arguments,
-                    )
-                    .await;
                 let options = super::native_tool_bridge::run_options(self.context.as_ref());
-                let requires_user = flow_like_bot_tools::configuration::requires_approval(&tool_name);
-                let waived = options.auto_approve
-                    && !requires_user
-                    && tool_name != flow_like_types::bot_message::SECRET_REQUEST_TOOL;
-                let asks = requires_user
-                    || (matches!(approval.kind.as_str(), "mutating" | "execute")
-                        && !waived
-                        && !cached_schema);
+                let asks = self
+                    .asks_owner(&tool_name, &arguments, &approval, &options)
+                    .await;
                 if asks && let Some(gate) = &options.approval_gate {
-                    let context_app = self
-                        .context
-                        .as_ref()
-                        .and_then(|context| context.app_id.as_deref());
                     if let Err(answer) = gate
-                        .clear(&tool_name, &arguments, context_app, &approval.description)
+                        .clear(
+                            &tool_name,
+                            &arguments,
+                            self.context_app(),
+                            &approval.description,
+                        )
                         .await
                     {
                         return answer;
                     }
                 } else if asks {
+                    let approval = approval.asking_again(&tool_name, &arguments);
                     let answer = self
                         .dispatch_to_frontend(
                             tool_name.clone(),
@@ -2035,6 +2207,33 @@ mod tests {
             await_dispatch(event_rx, Duration::from_millis(10), None).await,
             DispatchOutcome::Timeout
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_core_call_scope_reaches_the_gate_behind_the_blocking_bridge() {
+        let scope = CallScope {
+            id: "call-7".into(),
+            round_web_content: true,
+            held_replay: true,
+        };
+        let seen = run_recovery::scope_call(scope, async {
+            let call = current_call_scope();
+            tokio::task::spawn_blocking(move || {
+                with_frontend_tool_call_scope(CancellationToken::new(), call, || {
+                    let call = current_tool_execution().and_then(|execution| execution.call);
+                    block_on_bridge(within_call(call, async {
+                        (
+                            run_recovery::current_recovery_call_id(),
+                            run_recovery::round_has_web_content(),
+                        )
+                    }))
+                })
+            })
+            .await
+            .unwrap()
+        })
+        .await;
+        assert_eq!(seen, (Some("call-7".to_string()), true));
     }
 
     #[test]

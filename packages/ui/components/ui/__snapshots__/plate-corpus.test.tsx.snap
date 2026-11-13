@@ -173,7 +173,7 @@ exports[`markdown fixtures M01-headings streams towards the settled render 1`] =
 
 exports[`markdown fixtures M01-headings serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "# Heading one
 
 ## Heading two
@@ -649,7 +649,7 @@ exports[`markdown fixtures M02-marks-markdown streams towards the settled render
 
 exports[`markdown fixtures M02-marks-markdown serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "Plain **bold** _italic_ _**bold italic**_ ~~strike~~ ~~single~~ \`inline code\` end.
 
 A [titled link](https://example.com/docs) and a bare https://example.com/bare and https://example.org/angle and [www.example.net](http://www.example.net).
@@ -861,7 +861,7 @@ exports[`markdown fixtures M03-marks-mdx streams towards the settled render 1`] 
 
 exports[`markdown fixtures M03-marks-mdx serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "<u>underline</u> H<sub>2</sub>O x<sup>2</sup> <kbd>Ctrl</kbd>+<kbd>K</kbd> <mark>highlight</mark> deleted
 
 <span style="background-color: yellow;"><span style="color: #ff0000;"><span style="font-family: monospace;"><span style="font-size: 20px;">styled span</span></span></span></span>
@@ -1132,7 +1132,7 @@ exports[`markdown fixtures M04-special-links streams towards the settled render 
 
 exports[`markdown fixtures M04-special-links serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "Open  then .
 
 Ping  and \\<user>sub-bob\\</user>.
@@ -1346,7 +1346,7 @@ exports[`markdown fixtures M05-blockquotes streams towards the settled render 1`
 
 exports[`markdown fixtures M05-blockquotes serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "> single line quote
 
 > outer
@@ -2236,7 +2236,7 @@ exports[`markdown fixtures M06-code-blocks streams towards the settled render 1`
 
 exports[`markdown fixtures M06-code-blocks serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "\`\`\`ts
 export const answer: number = 42;
 function greet(name: string) { return \`hi \${name}\`; }
@@ -2688,7 +2688,7 @@ exports[`markdown fixtures M07-lists streams towards the settled render 1`] = `
 
 exports[`markdown fixtures M07-lists serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "* alpha
   * beta
     * gamma
@@ -2912,7 +2912,7 @@ exports[`markdown fixtures M08-task-lists streams towards the settled render 1`]
 
 exports[`markdown fixtures M08-task-lists serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "* [ ] open task
 * [x] done task
   * [ ] nested open
@@ -4150,7 +4150,7 @@ exports[`markdown fixtures M09-tables streams towards the settled render 1`] = `
 
 exports[`markdown fixtures M09-tables serializes back to markdown 1`] = `
 {
-  "markdown":\u0020
+  "markdown": 
 "| Left     |   Center   |                       Right |
 | :------- | :--------: | --------------------------: |
 | **bold** |   \`code\`   | [link](https://example.com) |
@@ -4177,7 +4177,7 @@ exports[`markdown fixtures M10-breaks-rules parses to the pinned Plate value 1`]
         "text": "line one",
       },
       {
-        "text":
+        "text": 
 "
 "
 ,
@@ -4194,7 +4194,7 @@ exports[`markdown fixtures M10-breaks-rules parses to the pinned Plate value 1`]
         "text": "hard break with two spaces",
       },
       {
-        "text":
+        "text": 
 "
 "
 ,
@@ -4211,7 +4211,7 @@ exports[`markdown fixtures M10-breaks-rules parses to the pinned Plate value 1`]
         "text": "backslash break",
       },
       {
-        "text":
+        "text": 
 "
 "
 ,
@@ -4379,7 +4379,7 @@ exports[`markdown fixtures M10-breaks-rules streams towards the settled render 1
 
 exports[`markdown fixtures M10-breaks-rules serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "line one\\
 line two joined by remark-breaks
 
@@ -4746,7 +4746,7 @@ exports[`markdown fixtures M11-math streams towards the settled render 1`] = `
 
 exports[`markdown fixtures M11-math serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "Inline $$E = mc^2$$ inside prose.
 
 $$
@@ -5039,7 +5039,7 @@ exports[`markdown fixtures M12-images streams towards the settled render 1`] = `
 
 exports[`markdown fixtures M12-images serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "![Alt text](https://example.com/a.png)
 
 ![Titled](https://example.com/b.png "The title")
@@ -5203,7 +5203,7 @@ exports[`markdown fixtures M13-media-mdx streams towards the settled render 1`] 
 
 exports[`markdown fixtures M13-media-mdx serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "<video src="https://example.com/v.mp4" />
 
 <video src="https://www.youtube.com/watch?v=dQw4w9WgXcQ" />
@@ -5457,7 +5457,7 @@ exports[`markdown fixtures M14-mdx-blocks streams towards the settled render 1`]
 
 exports[`markdown fixtures M14-mdx-blocks serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "# Doc with toc
 
 <toc />
@@ -5635,7 +5635,7 @@ exports[`markdown fixtures M15-directives parses to the pinned Plate value 1`] =
         "text": ":::info",
       },
       {
-        "text":
+        "text": 
 "
 "
 ,
@@ -5915,7 +5915,7 @@ exports[`markdown fixtures M15-directives streams towards the settled render 1`]
 
 exports[`markdown fixtures M15-directives serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "\`\`\`directive-info
 Informational \`code\` text.
 \`\`\`
@@ -6242,7 +6242,7 @@ exports[`markdown fixtures M16-chart-fences streams towards the settled render 1
 
 exports[`markdown fixtures M16-chart-fences serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "\`\`\`nivo
 type: bar
 title: Sales
@@ -6360,7 +6360,7 @@ exports[`markdown fixtures M17-emoji streams towards the settled render 1`] = `
 
 exports[`markdown fixtures M17-emoji serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "Launch 🚀 👍 :not\\_a\\_real\\_emoji: and raw 🚀 ✅ 👍🏽
 "
 ,
@@ -6511,7 +6511,7 @@ exports[`markdown fixtures M18-mentions streams towards the settled render 1`] =
 
 exports[`markdown fixtures M18-mentions serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "Hello [alice](mention:alice) and [Bob Builder](mention:bob_id) and email <bob@example.com>.
 "
 ,
@@ -6696,7 +6696,7 @@ exports[`markdown fixtures M19-references-footnotes streams towards the settled 
 
 exports[`markdown fixtures M19-references-footnotes serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "See [the docs](https://example.com/ref) and [again](https://example.com/ref).
 
 A claim with a footnote.[^1]
@@ -6724,7 +6724,7 @@ exports[`markdown fixtures M20-html-in-markdown parses to the pinned Plate value
         "text": "line with ",
       },
       {
-        "text":
+        "text": 
 "
 "
 ,
@@ -6875,7 +6875,7 @@ exports[`markdown fixtures M20-html-in-markdown streams towards the settled rend
 
 exports[`markdown fixtures M20-html-in-markdown serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "\\<div>block html\\</div>
 
 line with \\
@@ -6983,7 +6983,7 @@ exports[`markdown fixtures M21-mdx-breaking streams towards the settled render 1
 
 exports[`markdown fixtures M21-mdx-breaking serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "Math-ish: a \\< b and 5 > 3 and \\<3 love.
 
 Braces \\{curly} and \\{\\{double}} and an unclosed \\<tag
@@ -7058,7 +7058,7 @@ exports[`markdown fixtures M22-empty-whitespace streams towards the settled rend
 
 exports[`markdown fixtures M22-empty-whitespace serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "​
 "
 ,
@@ -7159,7 +7159,7 @@ exports[`markdown fixtures M23-unicode streams towards the settled render 1`] = 
 
 exports[`markdown fixtures M23-unicode serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "مرحبا بالعالم — עברית — 中文字符 — 日本語 — 한국어
 
 zero​width‍joiner é combining
@@ -8078,7 +8078,7 @@ exports[`markdown fixtures M24-deep-nesting streams towards the settled render 1
 
 exports[`markdown fixtures M24-deep-nesting serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "* level 0
   * level 1
     * level 2
@@ -10737,7 +10737,7 @@ exports[`markdown fixtures M25-long-document streams towards the settled render 
 
 exports[`markdown fixtures M25-long-document serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "## Section 0
 
 Body 0 with **bold** and \`code\`.
@@ -11578,7 +11578,7 @@ exports[`markdown fixtures M26-mixed-report streams towards the settled render 1
 
 exports[`markdown fixtures M26-mixed-report serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "# Release notes
 
 A paragraph with \`inline code\`, **bold** and a [link](https://example.com/docs).
@@ -11745,7 +11745,7 @@ exports[`markdown fixtures M27-embed-fences streams towards the settled render 1
 
 exports[`markdown fixtures M27-embed-fences serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "\`\`\`embed
 https://youtube.com/watch?v=dQw4w9WgXcQ
 \`\`\`
@@ -11872,7 +11872,7 @@ exports[`markdown fixtures M28-map-fence streams towards the settled render 1`] 
 
 exports[`markdown fixtures M28-map-fence serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "\`\`\`map
 lat: 48.1351
 lng: 11.5820
@@ -12024,7 +12024,7 @@ exports[`markdown fixtures X01-script-tags streams towards the settled render 1`
 
 exports[`markdown fixtures X01-script-tags serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "\\<script>window.\\_\\_xss = 1\\</script>
 
 Text \\<script>window.\\_\\_xss = 2\\</script> inline.
@@ -12191,7 +12191,7 @@ exports[`markdown fixtures X02-javascript-links streams towards the settled rend
 
 exports[`markdown fixtures X02-javascript-links serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "plain
 
 mixed case
@@ -12428,7 +12428,7 @@ exports[`markdown fixtures X03-event-handlers-mdx streams towards the settled re
 
 exports[`markdown fixtures X03-event-handlers-mdx serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "\\<img src="x" onerror="window.\\_\\_xss=1" />
 
 \\<video src="x" onerror="window.\\_\\_xss=2" />
@@ -12650,7 +12650,7 @@ exports[`markdown fixtures X03b-event-handlers-without-img streams towards the s
 
 exports[`markdown fixtures X03b-event-handlers-without-img serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "\\<video src="x" onerror="window.\\_\\_xss=2" />
 
 \\<a href="javascript:window.\\_\\_xss=3" onclick="window.\\_\\_xss=4">anchor\\</a>
@@ -12761,7 +12761,7 @@ exports[`markdown fixtures X04-image-urls streams towards the settled render 1`]
 
 exports[`markdown fixtures X04-image-urls serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "!\\[x]\\(x" onerror="window.\\_\\_xss=2)
 
 ![x](data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9ImFsZXJ0KDEpIi8+)
@@ -12922,7 +12922,7 @@ exports[`markdown fixtures X05-katex streams towards the settled render 1`] = `
 
 exports[`markdown fixtures X05-katex serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "$$\\href{javascript:window.__xss=1}{click}$$
 
 $$
@@ -13051,7 +13051,7 @@ exports[`markdown fixtures X06-embed-urls streams towards the settled render 1`]
 
 exports[`markdown fixtures X06-embed-urls serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "\`\`\`embed
 javascript:window.__xss=1
 \`\`\`
@@ -13178,7 +13178,7 @@ exports[`markdown fixtures X07-map-label streams towards the settled render 1`] 
 
 exports[`markdown fixtures X07-map-label serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "\`\`\`map
 label: "<img src=x onerror=window.__xss=3>"
 lat: 1
@@ -13382,7 +13382,7 @@ exports[`markdown fixtures X08-text-that-looks-like-markup streams towards the s
 
 exports[`markdown fixtures X08-text-that-looks-like-markup serializes back to markdown 1`] = `
 {
-  "markdown":
+  "markdown": 
 "Inline \`<script>window.__xss=1</script>\` code.
 
 \`\`\`html

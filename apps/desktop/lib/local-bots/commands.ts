@@ -2,6 +2,7 @@ import type {
 	BotApprovalDecision,
 	IBot,
 	IBotApp,
+	IBotApprovalItemDecision,
 	IBotPermission,
 	IBotRestrictions,
 	IBotRoomLimits,
@@ -337,11 +338,18 @@ export const localToolGrants = {
 		turnId: string,
 		approvalId: string,
 		decision: BotApprovalDecision,
+		items?: readonly IBotApprovalItemDecision[],
 	): Promise<void> {
 		await run(
 			`answer the approval of local bot ${botId}`,
 			"local_bot_answer_approval",
-			{ botId, turnId, approvalId, decision },
+			{
+				botId,
+				turnId,
+				approvalId,
+				decision,
+				...(items?.length ? { items } : {}),
+			},
 		);
 	},
 };

@@ -1,3 +1,5 @@
+import chromeSeccomp from "../../../apps/standalone/packaging/chrome-seccomp.json";
+
 export type ReleaseTarget =
 	| "x86_64-unknown-linux-gnu"
 	| "aarch64-unknown-linux-gnu"
@@ -924,9 +926,10 @@ exec ./flow-like-standalone --state-dir ./state run
 	if (input.mode !== "binary") {
 		const image = release.manifest.container?.image;
 		assert(image && platform, "Container metadata is missing.");
+		add("chrome-seccomp.json", JSON.stringify(chromeSeccomp));
 		add(
 			"compose.yaml",
-			`services:\n  agent:\n    image: ${image}\n    platform: ${platform}\n    restart: unless-stopped\n    user: "\${FLOW_LIKE_DEVICE_UID:?Run start-docker.sh}:\${FLOW_LIKE_DEVICE_GID:?Run start-docker.sh}"\n    working_dir: /package\n    env_file: .env\n    ports:\n      - "\${FLOW_LIKE_PUBLISH_HOST:-127.0.0.1}:\${FLOW_LIKE_SERVICE_PORT:-8080}:\${FLOW_LIKE_SERVICE_PORT:-8080}"\n    volumes:\n      - ./:/package\n    entrypoint: ["/bin/sh", "/package/container-start.sh"]\n    stop_grace_period: 45s\n`,
+			`services:\n  agent:\n    image: ${image}\n    platform: ${platform}\n    restart: unless-stopped\n    init: true\n    shm_size: 1gb\n    cap_drop: [ALL]\n    security_opt:\n      - no-new-privileges:true\n      - seccomp=./chrome-seccomp.json\n    user: "\${FLOW_LIKE_DEVICE_UID:?Run start-docker.sh}:\${FLOW_LIKE_DEVICE_GID:?Run start-docker.sh}"\n    working_dir: /package\n    env_file: .env\n    environment:\n      HOME: /package/state\n      FLOW_LIKE_PLAYGROUND: virtual\n    ports:\n      - "\${FLOW_LIKE_PUBLISH_HOST:-127.0.0.1}:\${FLOW_LIKE_SERVICE_PORT:-8080}:\${FLOW_LIKE_SERVICE_PORT:-8080}"\n    volumes:\n      - ./:/package\n    entrypoint: ["/bin/sh", "/package/container-start.sh"]\n    stop_grace_period: 45s\n`,
 		);
 		add(
 			"container-start.sh",
@@ -935,7 +938,7 @@ exec ./flow-like-standalone --state-dir ./state run
 		);
 		add(
 			"start-docker.sh",
-			'#!/bin/sh\nset -eu\ncd -- "$(dirname -- "$0")"\nchmod 700 .\nchmod 600 .env onboarding.json release-trust.json release.jws 2>/dev/null || true\nif [ -f ./state/agent.env ]; then chmod 600 ./state/agent.env; fi\nexport FLOW_LIKE_DEVICE_UID="$(id -u)"\nexport FLOW_LIKE_DEVICE_GID="$(id -g)"\nexec docker compose up -d\n',
+			'#!/bin/sh\nset -eu\ncd -- "$(dirname -- "$0")"\nif [ "$(id -u)" = 0 ]; then echo "Run start-docker.sh as a non-root user with Docker access; Chromium requires its sandbox." >&2; exit 1; fi\nchmod 700 .\nchmod 600 .env onboarding.json release-trust.json release.jws 2>/dev/null || true\nif [ -f ./state/agent.env ]; then chmod 600 ./state/agent.env; fi\nexport FLOW_LIKE_DEVICE_UID="$(id -u)"\nexport FLOW_LIKE_DEVICE_GID="$(id -g)"\nexec docker compose up -d\n',
 			0o100700,
 		);
 	}

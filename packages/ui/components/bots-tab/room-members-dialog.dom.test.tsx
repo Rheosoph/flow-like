@@ -35,10 +35,18 @@ const removed: [string, string][] = [];
 const invited: unknown[] = [];
 const created: unknown[] = [];
 let fail = false;
+let keyed: string[] = [];
 mock.module("../../state/backend-state", () => ({
 	...actualBackend,
 	useBackend: () => ({
 		inboxState: {
+			getKeys: async (ids: string[]) =>
+				ids
+					.filter((id) => keyed.includes(id))
+					.map((id) => ({
+						principal_id: id,
+						algorithm: "hpke-x25519-sha256-chacha20poly1305",
+					})),
 			invite: async (_id: string, request: unknown) => {
 				invited.push(request);
 				return { added: ["bot-next"], invited: [], conversation: room() };
@@ -161,12 +169,15 @@ const directory: CrewDirectory = (id) => ({
 	isPending: false,
 	isResolved: true,
 });
-function room(createdBy = "them"): IConversation {
+function room(
+	createdBy = "them",
+	encryption: IConversation["encryption"] = "plain",
+): IConversation {
 	return {
 		id: "room-1",
 		kind: "group",
 		title: "Launch",
-		encryption: "plain",
+		encryption,
 		created_by: createdBy,
 		created_at: "2026-11-05T12:00:00Z",
 		last_activity_at: "2026-11-05T12:00:00Z",
@@ -191,7 +202,7 @@ function Harness({
 		conversation,
 		directory,
 		me,
-		source: {} as never,
+		source: { bots: [] } as never,
 		onLeave: () => {
 			left += 1;
 		},
@@ -202,6 +213,7 @@ async function show(conversation = room(), me = "me", newRoom = false) {
 	invited.length = 0;
 	created.length = 0;
 	fail = false;
+	keyed = [];
 	left = 0;
 	client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	container = window.document.createElement("div") as unknown as HTMLElement;
@@ -297,6 +309,45 @@ describe("room member controls", () => {
 		expect(removed).toEqual([["room-1", "me"]]);
 		expect(left).toBe(1);
 		expect(window.document.querySelector('[role="dialog"]')).toBeNull();
+	});
+});
+
+describe("inviting into an end-to-end encrypted room", () => {
+	test("says what a newcomer reads and holds back whoever has no key", async () => {
+		await show(room("them", "e2e"));
+		expect(window.document.body.textContent).toContain(
+			"reads only what is sent after they join, never the earlier messages",
+		);
+		await act(async () => button("Choose Ada").click());
+		await settle();
+		expect(window.document.body.textContent).toContain(
+			"Ada: Has no encryption key yet; opening the app signed in publishes one",
+		);
+		expect(button("Add or invite 1").disabled).toBe(true);
+		expect(invited).toEqual([]);
+	});
+
+	test("invites once everyone picked has a key", async () => {
+		await show(room("them", "e2e"));
+		keyed = ["user-next"];
+		await act(async () => button("Choose Ada").click());
+		await settle();
+		expect(window.document.body.textContent).not.toContain(
+			"Has no encryption key yet",
+		);
+		await act(async () => button("Add or invite 1").click());
+		await settle();
+		expect(invited).toEqual([{ principal_ids: ["user-next"] }]);
+	});
+
+	test("a plain room asks for no keys", async () => {
+		await show();
+		await act(async () => button("Choose Ada").click());
+		await settle();
+		expect(window.document.body.textContent).not.toContain(
+			"end-to-end encrypted",
+		);
+		expect(button("Add or invite 1").disabled).toBe(false);
 	});
 });
 

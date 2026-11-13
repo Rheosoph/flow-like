@@ -445,6 +445,31 @@ pub(crate) async fn queued_device_heads<C: ConnectionTrait>(
     .await
 }
 
+/// A device's queued work, restricted before the scan to bots its host can execute.
+pub(crate) async fn queued_device_heads_for_bots<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    device_id: &str,
+    bot_ids: &[String],
+    now: DateTime<FixedOffset>,
+    limit: u64,
+) -> Result<Vec<(bot_turn::Model, Vec<String>)>, DbErr> {
+    if bot_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut bots = device_bots(owner_id, device_id);
+    bots.and_where(Expr::col(bot::Column::Id).is_in(bot_ids.iter().cloned()));
+    queued_heads_scoped(
+        db,
+        Some(owner_id),
+        TurnHostKind::Device,
+        Some(bots),
+        now,
+        limit,
+    )
+    .await
+}
+
 /// The live bots of `owner_id` that run on the device `device_id`.
 pub(crate) fn device_bots(owner_id: &str, device_id: &str) -> sea_orm::sea_query::SelectStatement {
     use sea_orm::QueryTrait;
@@ -907,6 +932,7 @@ pub(crate) async fn claim_for_device(
     db: &DatabaseConnection,
     dialect: DbDialect,
     device_id: &str,
+    host: &flow_like_types::device_bot::DeviceClaimRequest,
     request: ClaimRequest,
 ) -> Result<ClaimResult, ApiError> {
     let Some(owner) = request.owner_id.clone() else {
@@ -915,9 +941,19 @@ pub(crate) async fn claim_for_device(
         ));
     };
     retry_transaction(db, dialect, None, &RetryPolicy::default(), |txn| {
-        let (owner, device_id, request) = (owner.clone(), device_id.to_string(), request.clone());
+        let (owner, device_id, request, host) = (
+            owner.clone(),
+            device_id.to_string(),
+            request.clone(),
+            host.clone(),
+        );
         Box::pin(async move {
             coordinate(txn, "bot-turn-owner", &[owner.as_str()]).await?;
+            let turn = device_turn(txn, &request.turn_id, &owner, &device_id)
+                .await?
+                .ok_or_else(|| Refusal::NotFound.into_api(&request.turn_id))?;
+            crate::routes::bots::lock_bot(txn, &turn.bot_id).await?;
+            crate::devices::bots::require_execution_mode(txn, &owner, &turn.bot_id, &host).await?;
             claim_device_in(txn, &device_id, &request).await
         })
     })

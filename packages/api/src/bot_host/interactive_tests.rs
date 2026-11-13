@@ -83,6 +83,7 @@ async fn turn(db: &DatabaseConnection) -> bot_turn::Model {
 
 fn interactive(turn: &bot_turn::Model) -> InteractiveTurn {
     InteractiveTurn {
+        usage: Default::default(),
         turn: turn.clone(),
         host_id: "interactive:run_1".into(),
         trail: None,
@@ -180,6 +181,23 @@ async fn the_chat_stores_its_reply_as_the_bot_and_ends_the_turn() {
     queue(&db, true, at(100)).await;
     let held = turn(&db).await;
     let chat_turn = interactive(&held);
+    chat_turn.usage.record(
+        "Assistant",
+        flow_like::flow_like_model_provider::response::LLMUsageStats {
+            usage: flow_like::flow_like_model_provider::response::Usage {
+                prompt_tokens: 100,
+                completion_tokens: 10,
+                total_tokens: 110,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        chat_turn.request("It is Tuesday.", None).envelope.unwrap()["body"]["usage_stats"][0]["stats"]
+            ["usage"]["total_tokens"],
+        110
+    );
 
     let outgoing = validate_send(chat_turn.request("It is Tuesday.", None)).unwrap();
     let claim_row = TurnClaim {

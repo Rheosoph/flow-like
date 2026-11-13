@@ -34,7 +34,7 @@ describe("Home FlowPilot tools", () => {
 	test("catalog filtering returns exact creation templates", () => {
 		const result = getHomeWidgetCatalog({
 			category: "assistant",
-			query: "hero",
+			query: "flowpilot-hero",
 		});
 		expect(result).toMatchObject({
 			status: "ok",

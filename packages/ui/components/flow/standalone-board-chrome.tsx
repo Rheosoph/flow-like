@@ -46,8 +46,8 @@ export function StandaloneBoardControls({
 			<button
 				type="button"
 				className={`${buttonClass} react-flow__controls-zoomin`}
-				title="zoom in"
-				aria-label="zoom in"
+				title={t("boardZoomIn", "Zoom in")}
+				aria-label={t("boardZoomIn", "Zoom in")}
 				disabled={zoomLimit === "max"}
 				onClick={() => void runtime.flow.zoomIn()}
 			>
@@ -56,8 +56,8 @@ export function StandaloneBoardControls({
 			<button
 				type="button"
 				className={`${buttonClass} react-flow__controls-zoomout`}
-				title="zoom out"
-				aria-label="zoom out"
+				title={t("boardZoomOut", "Zoom out")}
+				aria-label={t("boardZoomOut", "Zoom out")}
 				disabled={zoomLimit === "min"}
 				onClick={() => void runtime.flow.zoomOut()}
 			>
@@ -66,8 +66,8 @@ export function StandaloneBoardControls({
 			<button
 				type="button"
 				className={`${buttonClass} react-flow__controls-fitview`}
-				title="fit view"
-				aria-label="fit view"
+				title={t("boardFitView", "Fit view")}
+				aria-label={t("boardFitView", "Fit view")}
 				onClick={() => void runtime.flow.fitView()}
 			>
 				<Maximize />
@@ -75,8 +75,8 @@ export function StandaloneBoardControls({
 			<button
 				type="button"
 				className={`${buttonClass} react-flow__controls-interactive`}
-				title="toggle interactivity"
-				aria-label="toggle interactivity"
+				title={t("boardToggleInteractivity", "Toggle interactivity")}
+				aria-label={t("boardToggleInteractivity", "Toggle interactivity")}
 				aria-pressed={!interactive}
 				onClick={() =>
 					runtime.store.setState({

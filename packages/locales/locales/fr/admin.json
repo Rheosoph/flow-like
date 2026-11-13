@@ -1318,6 +1318,7 @@
 	"botFailureTimeout": "",
 	"botFailureQuota": "",
 	"botFailureSetup": "",
+	"botFailureNoModel": "",
 	"botFailureReplyRefused": "",
 	"botFailureUnreadable": "",
 	"botFailureExpired": "",

@@ -8,6 +8,19 @@ export interface FrontendToolApprovalScopeInput {
 	approvalKind?: string;
 	approvalSessionKey?: string;
 	contextAppId?: string;
+	/** Why the host asks although a standing grant may cover the call (`asksAgainOf`). */
+	asksAgain?: AsksAgain;
+}
+
+/** The turn read web pages first, so the host set a standing grant for this call aside. */
+export type AsksAgain = "web_content";
+
+/** The host's `asks_again` mark on a request's approval, in either spelling the hosts send. */
+export function asksAgainOf(
+	approval: { asksAgain?: unknown; asks_again?: unknown } | undefined,
+): AsksAgain | undefined {
+	const mark = approval?.asksAgain ?? approval?.asks_again;
+	return mark === "web_content" ? mark : undefined;
 }
 
 export interface FrontendToolApprovalScope {
@@ -21,20 +34,25 @@ const BOT_SETTINGS_TOOLS: ReadonlySet<string> = new Set([
 	"bot_update_configuration",
 	"create_bot",
 	"update_bot",
+	"delete_bot",
 ]);
 
-/** A bot's settings change, its own or Flux creating or changing one, needs a new decision for every call. */
+/** A bot's settings change, its own or Flux creating, changing or deleting one, needs a new decision for every call. */
 export function requiresFreshToolApproval(toolName: string): boolean {
 	return BOT_SETTINGS_TOOLS.has(toolName);
 }
 
-/** The settings an approval shows: a new bot's whole request, or the changes to one. */
+/** The settings an approval shows: a new bot's whole request, the changes to one, or the bot a delete removes. */
 export function proposedBotSettings(
 	toolName: string,
 	args: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
 	if (!BOT_SETTINGS_TOOLS.has(toolName)) return undefined;
 	if (toolName === "create_bot") return args;
+	if (toolName === "delete_bot")
+		return typeof args.bot_id === "string"
+			? { bot_id: args.bot_id }
+			: undefined;
 	const changes = args.changes;
 	if (typeof changes !== "object" || changes === null || Array.isArray(changes))
 		return undefined;
@@ -212,8 +230,9 @@ export function resolveFrontendToolApprovalScope({
 	approvalKind,
 	approvalSessionKey,
 	contextAppId,
+	asksAgain,
 }: FrontendToolApprovalScopeInput): FrontendToolApprovalScope {
-	if (requiresFreshToolApproval(toolName)) {
+	if (requiresFreshToolApproval(toolName) || asksAgain) {
 		return {
 			sessionKey: `${toolName}:request:${scopePart(requestId)}`,
 			rememberable: false,

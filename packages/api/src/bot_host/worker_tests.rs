@@ -4,8 +4,8 @@ use super::{
     ledger::{self, ClaimRequest, enqueue_in},
     worker::{
         AbortOnDrop, Answer, CODE_TIMEOUT, Failure, answer_request, commit_reply_in,
-        executor_token, holds_lease_or_retry, memory_written, refuse_tool, reply_request, retries,
-        room_of, run_while_notifying, usable_decision_model,
+        executor_token, failure_request, holds_lease_or_retry, memory_written, refuse_tool,
+        reply_request, retries, run_while_notifying, settled_decision,
     },
 };
 use crate::{
@@ -626,6 +626,7 @@ fn memory_writes_end_the_retries_but_reads_do_not() {
         retryable: true,
         post: true,
         park: None,
+        usage_stats: Vec::new(),
     };
     for tool in ["_memory_store", "memory_store", "memory_save"] {
         let mutating = AtomicBool::new(false);
@@ -663,16 +664,140 @@ fn a_turn_token_names_the_bot_and_keeps_the_owner_as_payer() {
     assert_eq!(claims.run_id, "turn-1");
     assert!(claims.unattended);
 
-    let room = room_of(ConversationKind::Group, "conv-1");
-    let token = executor_token("owner", "bot-1", room, "turn-1", Some("ws"), 600).unwrap();
+    let token =
+        executor_token("owner", "bot-1", Some("conv-1"), "turn-1", Some("ws"), 600).unwrap();
     let claims = crate::execution::verify_execution_jwt(&token).unwrap();
     assert_eq!(claims.conv_id.as_deref(), Some("conv-1"));
-    assert_eq!(room_of(ConversationKind::Direct, "conv-1"), None);
 }
 
-#[test]
-fn only_a_spoken_answer_posts_a_reply() {
-    let turn = bot_turn::Model {
+/// user-a edits `app-in` and `app-out`, both attached to bot_1. user-b's direct chat with bot_1
+/// was accepted for `app-in` only; user-c's was accepted without limits.
+async fn guest_world() -> DatabaseConnection {
+    use crate::entity::{bot_app, conversation_member, membership, role};
+    use sea_orm::{ActiveModelTrait, ActiveValue::Set, Schema, sea_query::Table};
+    let db = database().await;
+    let schema = Schema::new(db.get_database_backend());
+    for source in [
+        schema.create_table_from_entity(role::Entity),
+        schema.create_table_from_entity(bot_app::Entity),
+    ] {
+        let mut table = Table::create();
+        table.table(source.get_table_name().unwrap().clone());
+        for column in source.get_columns() {
+            table.col(column.clone());
+        }
+        db.execute(&table).await.unwrap();
+    }
+    insert_bot(&db, "bot_1", "user-a", "SERVER").await;
+    let edit = (crate::permission::role_permission::RolePermissions::ReadFiles
+        | crate::permission::role_permission::RolePermissions::WriteFiles)
+        .bits();
+    for app_id in ["app-in", "app-out"] {
+        role::ActiveModel {
+            id: Set(format!("role-{app_id}")),
+            name: Set("Editor".into()),
+            permissions: Set(edit),
+            app_id: Set(Some(app_id.into())),
+            created_at: Set(at(0)),
+            updated_at: Set(at(0)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        membership::ActiveModel {
+            id: Set(format!("m-{app_id}")),
+            user_id: Set("user-a".into()),
+            app_id: Set(app_id.into()),
+            role_id: Set(format!("role-{app_id}")),
+            created_at: Set(at(0)),
+            updated_at: Set(at(0)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        db.execute_unprepared(&format!(
+            r#"INSERT INTO public."BotApp" ("botId","appId","addedAt","permissionMask","scopes")
+            VALUES ('bot_1','{app_id}','2023-11-14T00:00:00+00:00',NULL,'{{}}')"#
+        ))
+        .await
+        .unwrap();
+    }
+    conversation(&db, "owner-chat", "DIRECT", "PLAIN", &["user-a", "bot_1"]).await;
+    conversation(&db, "guest-chat", "DIRECT", "PLAIN", &["user-b", "bot_1"]).await;
+    conversation(&db, "open-chat", "DIRECT", "PLAIN", &["user-c", "bot_1"]).await;
+    conversation_member::Entity::update_many()
+        .col_expr(
+            conversation_member::Column::Limits,
+            sea_orm::sea_query::Expr::value(json!({ "apps": ["app-in"] })),
+        )
+        .filter(conversation_member::Column::ConversationId.eq("guest-chat"))
+        .filter(conversation_member::Column::PrincipalId.eq("bot_1"))
+        .exec(&db)
+        .await
+        .unwrap();
+    db
+}
+
+/// What a server turn in `chat` may hold in `app_id`, through the token the worker signs for it.
+async fn server_turn_bits(db: &DatabaseConnection, chat: &str, app_id: &str) -> Option<i64> {
+    let scope = crate::bot_permission::limited_conversation(db, chat, "user-a", "bot_1")
+        .await
+        .unwrap();
+    let token = executor_token("user-a", "bot_1", scope.as_deref(), "turn-1", None, 600).unwrap();
+    let claims = crate::execution::verify_execution_jwt(&token).unwrap();
+    assert_eq!(claims.conv_id, scope, "{chat}");
+    let bot = crate::middleware::jwt::BotUser {
+        bot_id: "bot_1".into(),
+        turn_id: "turn-1".into(),
+        conv_id: claims.conv_id,
+    };
+    crate::bot_permission::bot_grant_in(db, &bot, app_id)
+        .await
+        .ok()
+        .map(|grant| grant.permissions.bits())
+}
+
+#[tokio::test]
+async fn a_server_turn_in_someone_elses_direct_chat_keeps_the_accepted_limits() {
+    crate::backend_jwt::init_for_tests();
+    let db = guest_world().await;
+    for chat in ["guest-chat", "open-chat"] {
+        assert_eq!(
+            crate::bot_permission::limited_conversation(&db, chat, "user-a", "bot_1")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(chat)
+        );
+    }
+    assert_eq!(
+        crate::bot_permission::limited_conversation(&db, "owner-chat", "user-a", "bot_1")
+            .await
+            .unwrap(),
+        None
+    );
+    let owner = server_turn_bits(&db, "owner-chat", "app-out").await;
+    assert!(owner.is_some_and(|bits| bits != 0));
+    assert_eq!(server_turn_bits(&db, "owner-chat", "app-in").await, owner);
+    assert_eq!(server_turn_bits(&db, "guest-chat", "app-in").await, owner);
+    assert_eq!(
+        server_turn_bits(&db, "guest-chat", "app-out").await,
+        None,
+        "an app outside the accepted limits is refused"
+    );
+    for app_id in ["app-in", "app-out"] {
+        assert_eq!(
+            server_turn_bits(&db, "open-chat", app_id).await,
+            owner,
+            "a chat accepted without limits keeps what the owner's bot holds in {app_id}"
+        );
+    }
+}
+
+fn reply_turn() -> bot_turn::Model {
+    bot_turn::Model {
         id: turn_id("bot_1", "m3"),
         bot_id: "bot_1".into(),
         owner_id: "user-a".into(),
@@ -693,7 +818,52 @@ fn only_a_spoken_answer_posts_a_reply() {
         unprompted: None,
         created_at: now_millis(),
         updated_at: now_millis(),
+    }
+}
+
+#[test]
+fn usage_stats_yield_to_reply_files_near_the_body_limit() {
+    let turn = reply_turn();
+    let mut answer = Answer {
+        acknowledgement: false,
+        text: String::new(),
+        resumed: false,
+        silent: false,
+        completed: false,
+        event_delivery: None,
+        note: None,
+        tool_calls: Vec::new(),
+        files: vec![flow_like_types::bot_reply_files::ReplyFile::linked(
+            "report.pdf".into(),
+            format!("https://example.com/{}", "r".repeat(1_000)),
+            Some("application/pdf".into()),
+        )],
+        usage_stats: Vec::new(),
+        taint: Default::default(),
     };
+    let small = answer_request(&turn, &answer).unwrap().envelope.unwrap();
+    let overhead = serde_json::to_vec(&small["body"]).unwrap().len();
+    answer.text = "x".repeat(flow_like_types::bot_tool_trail::MAX_BODY_BYTES - overhead - 64);
+    let without_usage = answer_request(&turn, &answer).unwrap().envelope.unwrap();
+    assert_eq!(without_usage["body"]["parts"].as_array().unwrap().len(), 1);
+
+    answer.usage_stats = vec![json!({
+        "step_name": "Assistant", "stats": {"usage": {
+            "prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110,
+            "prompt_tokens_details": {"cached_tokens": 80}
+        }}
+    })];
+    let request = answer_request(&turn, &answer).unwrap();
+    let body = &request.envelope.as_ref().unwrap()["body"];
+    assert_eq!(body["text"], answer.text);
+    assert_eq!(body["parts"], without_usage["body"]["parts"]);
+    assert!(body.get("usage_stats").is_none());
+    assert!(validate_send(request).is_ok());
+}
+
+#[test]
+fn only_a_spoken_answer_posts_a_reply() {
+    let turn = reply_turn();
     let silent = Answer {
         acknowledgement: false,
         text: String::new(),
@@ -704,6 +874,7 @@ fn only_a_spoken_answer_posts_a_reply() {
         note: None,
         tool_calls: Vec::new(),
         files: Vec::new(),
+        usage_stats: Vec::new(),
         taint: Default::default(),
     };
     assert!(answer_request(&turn, &silent).is_none());
@@ -717,9 +888,46 @@ fn only_a_spoken_answer_posts_a_reply() {
         note: None,
         tool_calls: Vec::new(),
         files: Vec::new(),
+        usage_stats: Vec::new(),
         taint: Default::default(),
     };
     assert!(answer_request(&turn, &spoken).is_some());
+    spoken.usage_stats = vec![json!({
+        "step_name": "Assistant", "stats": {"usage": {
+            "prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110,
+            "prompt_tokens_details": {"cached_tokens": 80}
+        }}
+    })];
+    assert_eq!(
+        answer_request(&turn, &spoken).unwrap().envelope.unwrap()["body"]["usage_stats"][0]["stats"]
+            ["usage"]["prompt_tokens_details"]["cached_tokens"],
+        80
+    );
+    let checkpoint = flow_like_types::bot_turn::BotRunCheckpoint {
+        revision: 1,
+        started_at_ms: 1,
+        deadline_at_ms: 100,
+        state: json!({
+            "original_request": "private request", "provider_error": "private provider response",
+            "stats": {"usage": {"prompt_tokens": 30, "completion_tokens": 12, "total_tokens": 42}},
+        }),
+    };
+    let mut failure = Failure::new(CODE_TIMEOUT, "The turn timed out.", false, true);
+    let restored = failure_request(&turn, &failure, Some(&checkpoint));
+    let restored_body = &restored.envelope.as_ref().unwrap()["body"];
+    assert_eq!(
+        restored_body["usage_stats"][0]["stats"]["usage"]["total_tokens"],
+        42
+    );
+    assert_eq!(restored_body["error"]["code"], CODE_TIMEOUT);
+    assert!(!restored_body.to_string().contains("private"));
+    failure.usage_stats = spoken.usage_stats.clone();
+    let current = failure_request(&turn, &failure, Some(&checkpoint));
+    assert_eq!(
+        current.envelope.as_ref().unwrap()["body"]["usage_stats"][0]["stats"]["usage"]["total_tokens"],
+        110
+    );
+    assert!(validate_send(current).is_ok());
     spoken.acknowledgement = true;
     assert_eq!(
         answer_request(&turn, &spoken).unwrap().envelope.unwrap()["body"]["system_one_acknowledgement"],
@@ -1002,18 +1210,13 @@ async fn several_reactions_in_a_row_make_one_turn_that_names_each() {
 
 #[test]
 fn an_unavailable_decision_model_is_skipped_not_failed() {
-    use crate::routes::ai::global_chat::ProfileModelAccess;
-    let none = ProfileModelAccess::default();
-    assert_eq!(usable_decision_model(&none, Some("bit"), "t1"), None);
-    assert_eq!(usable_decision_model(&none, None, "t1"), None);
-    let covered = ProfileModelAccess {
-        profile_models: 1,
-        allowed_models: 1,
-        ..Default::default()
-    };
+    use flow_like::flow::copilot::decision::Decision;
+    let refused = crate::error::ApiError::internal("The decision model request failed");
+    assert_eq!(settled_decision(Some(Err(refused)), "t1"), None);
+    assert_eq!(settled_decision(None, "t1"), None);
     assert_eq!(
-        usable_decision_model(&covered, Some("bit"), "t1"),
-        Some("bit")
+        settled_decision(Some(Ok(Decision::AnswerNow)), "t1"),
+        Some(Decision::AnswerNow)
     );
 }
 
