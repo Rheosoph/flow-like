@@ -66,6 +66,9 @@ class StandaloneReleaseTests(unittest.TestCase):
             self.assertEqual(value["state_schema_version"], 4)
             self.assertEqual(value["issued_at"], 100)
             self.assertEqual(value["expires_at"], 100 + 365 * DAY)
+            self.assertEqual(set(value), {"version", "state_schema_version", "sequence", "release_version",
+                                          "issued_at", "expires_at", "artifacts", "container"})
+            self.assertEqual(value["container"], {"image": IMAGE, "platforms": ["linux/amd64", "linux/arm64"]})
             self.assertEqual([artifact["target"] for artifact in value["artifacts"]], [
                 "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "aarch64-apple-darwin",
             ])
