@@ -50,13 +50,12 @@ impl From<certificate::Model> for CertificateView {
 }
 
 fn verified_display_name(user: &user::Model) -> String {
-    user.name
-        .as_deref()
-        .or(user.preferred_username.as_deref())
-        .or(user.username.as_deref())
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| value.trim().to_string())
-        .unwrap_or_else(|| "Anonymous".to_string())
+    crate::routes::user::identity::public_display_name(
+        user.name.as_deref(),
+        user.preferred_username.as_deref(),
+        user.email.as_deref(),
+    )
+    .unwrap_or_else(|| "Anonymous".to_string())
 }
 
 type CourseMetaNames = HashMap<String, Vec<(String, String)>>;

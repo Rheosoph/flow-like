@@ -1,5 +1,9 @@
 {
 	"capabilities": {
+		"barcodes": {
+			"description": "",
+			"label": ""
+		},
 		"browser_use": {
 			"description": "",
 			"label": ""
@@ -174,7 +178,13 @@
 		"manualAvailability": "",
 		"freeBusyHint": "",
 		"manageAvailability": "",
-		"applyStatus": ""
+		"applyStatus": "",
+		"sessionShared": "",
+		"revoked": "",
+		"sessionAccessDirect": "",
+		"sessionAccessGroup": "",
+		"onceRetention": "",
+		"revokeFailed": ""
 	},
 	"computer": {
 		"alt": "",
@@ -226,7 +236,19 @@
 		"focus": "",
 		"actionRunning": "",
 		"actionFailed": "",
-		"actionCompleted": ""
+		"actionCompleted": "",
+		"permission": {
+			"accessibility": "",
+			"accessibilityReason": "",
+			"afterAllow": "",
+			"elsewhere": "",
+			"open": "",
+			"restartHint": "",
+			"restartTitle": "",
+			"screenReason": "",
+			"screenRecording": "",
+			"title": ""
+		}
 	},
 	"connectors": {
 		"account": {
@@ -290,11 +312,55 @@
 			"always": "",
 			"answeredAlways": "",
 			"answeredDeny": "",
+			"answeredElsewhere": "",
 			"answeredOnce": "",
 			"askEveryTime": "",
+			"batch": {
+				"allowAllOnce": "",
+				"alwaysAllowAll": "",
+				"answered": "",
+				"answeredUniform_one": "",
+				"answeredUniform_many": "",
+				"answeredUniform_other": "",
+				"back": "",
+				"callAnswer": "",
+				"choose": "",
+				"count_one": "",
+				"count_many": "",
+				"count_other": "",
+				"denyAll": "",
+				"groupAnswer_one": "",
+				"groupAnswer_many": "",
+				"groupAnswer_other": "",
+				"label_one": "",
+				"label_many": "",
+				"label_other": "",
+				"mixed": "",
+				"notRememberable": "",
+				"optionAlways": "",
+				"optionDeny": "",
+				"optionOnce": "",
+				"secretFirst": "",
+				"send": "",
+				"showAll_one": "",
+				"showAll_many": "",
+				"showAll_other": "",
+				"showAllGroups_one": "",
+				"showAllGroups_many": "",
+				"showAllGroups_other": "",
+				"showCalls": "",
+				"showFewer": "",
+				"tally": "",
+				"title_one": "",
+				"title_many": "",
+				"title_other": ""
+			},
 			"botFallback": "",
+			"cancelled": "",
 			"configurationChanges": "",
 			"clearValue": "",
+			"expired": "",
+			"expiredHint": "",
 			"fields": {
 				"name": "",
 				"description": "",
@@ -308,8 +374,11 @@
 				"vision_model": "",
 				"subtask_model": "",
 				"look": "",
+				"classification": "",
 				"location": "",
-				"app_ids": ""
+				"device_id": "",
+				"app_ids": "",
+				"app_restrictions": ""
 			},
 			"deny": "",
 			"failed": "",
@@ -326,6 +395,8 @@
 				"save": "",
 				"saved": "",
 				"saving": "",
+				"seal": "",
+				"sealHint": "",
 				"title": "",
 				"tooLarge": "",
 				"valueLabel": ""
@@ -347,6 +418,36 @@
 				"requestTitle": "",
 				"hint": "",
 				"target": ""
+			},
+			"deleteBot": {
+				"title": "",
+				"requestTitle": "",
+				"hint": "",
+				"approve": "",
+				"reject": "",
+				"approved": "",
+				"rejected": ""
+			},
+			"classification": {
+				"level": "",
+				"unset": "",
+				"pii": "",
+				"piiYes": "",
+				"piiNo": ""
+			},
+			"webContent": {
+				"badge": "",
+				"hint": "",
+				"noAlways": "",
+				"notice": ""
+			},
+			"invite": {
+				"allow": "",
+				"because": "",
+				"next": "",
+				"nextInRoom": "",
+				"title": "",
+				"why": ""
 			}
 		},
 		"botSettings": "",
@@ -367,6 +468,9 @@
 				"full": "",
 				"unavailable": ""
 			},
+			"interrupt": "",
+			"interruptHint": "",
+			"interruptShort": "",
 			"join": "",
 			"leave": "",
 			"listen": "",
@@ -397,7 +501,23 @@
 			"screenLabel": "",
 			"cameraLabel": "",
 			"you": "",
-			"fullscreen": ""
+			"fullscreen": "",
+			"setup": {
+				"title": "",
+				"body": "",
+				"readyTitle": "",
+				"readyBody": "",
+				"unsupportedTitle": "",
+				"unsupportedBody": "",
+				"start": "",
+				"voice": "",
+				"choose": "",
+				"needed": "",
+				"optional": "",
+				"voiceHint": "",
+				"saveFailed": "",
+				"pinnedUnusable": ""
+			}
 		},
 		"cancel": "",
 		"composer": {
@@ -524,6 +644,9 @@
 			"unmute": ""
 		},
 		"needs": {
+			"approvalBatchMeta_one": "",
+			"approvalBatchMeta_many": "",
+			"approvalBatchMeta_other": "",
 			"approvalMeta": "",
 			"assistantMeta": "",
 			"assistantTitle": "",
@@ -546,6 +669,14 @@
 			"create": "",
 			"createInvite": "",
 			"description": "",
+			"encryptionBotNoAbility": "",
+			"encryptionHint": "",
+			"encryptionKeyMissing": "",
+			"encryptionLabel": "",
+			"encryptionNoKey": "",
+			"encryptionNotAllowed": "",
+			"encryptionOnDevice": "",
+			"encryptionServerBot": "",
 			"failed": "",
 			"full_many": "",
 			"full_one": "",
@@ -699,6 +830,17 @@
 		"unread_many": "",
 		"unread_one": "",
 		"unread_other": "",
+		"visibility": {
+			"description": "",
+			"descriptionNamed": "",
+			"failed": "",
+			"hidden": "",
+			"hiddenCount_many": "",
+			"hiddenCount_one": "",
+			"hiddenCount_other": "",
+			"shown": "",
+			"title": ""
+		},
 		"you": "",
 		"youObject": "",
 		"yourCrew": "",
@@ -820,6 +962,7 @@
 			"appsFailed": "",
 			"appsLeft": "",
 			"appsNoMatch": "",
+			"appsRefusesBots": "",
 			"appsRole": "",
 			"appsSearch": "",
 			"appsUntitled": "",
@@ -837,6 +980,7 @@
 				"web": ""
 			},
 			"needsLocal": "",
+			"notOnDevice": "",
 			"profile": "",
 			"profileApps_many": "",
 			"profileApps_one": "",
@@ -886,7 +1030,6 @@
 			"memoryHost": "",
 			"memoryHostHint": "",
 			"memoryModel": "",
-			"memoryNone": "",
 			"moveDown": "",
 			"moveUp": "",
 			"noModels": "",
@@ -896,7 +1039,6 @@
 				"hostHint": "",
 				"image": "",
 				"imageHint": "",
-				"none": "",
 				"ownModel": "",
 				"ownModelHint": "",
 				"stt": "",
@@ -914,7 +1056,12 @@
 			"searchModels": "",
 			"subtitle": "",
 			"title": "",
-			"unknownModel": ""
+			"unknownModel": "",
+			"yourModels": "",
+			"allModels": "",
+			"catalogNotice": "",
+			"catalogFailed": "",
+			"addAndUse": ""
 		},
 		"delete": {
 			"action": "",
@@ -948,6 +1095,7 @@
 		"duplicated": "",
 		"errors": {
 			"appLimit": "",
+			"appRefusesBots": "",
 			"capabilityLocation": "",
 			"createFailed": "",
 			"deleteFailed": "",
@@ -971,7 +1119,8 @@
 			"subtitle": "",
 			"title": "",
 			"turnedBackOn": "",
-			"turnedOff": ""
+			"turnedOff": "",
+			"turnedOffDevice": ""
 		},
 		"preview": {
 			"blank": "",
@@ -1082,11 +1231,17 @@
 		"event": "",
 		"host": "",
 		"other": "",
+		"ownerBrowser": "",
 		"page": "",
 		"person": "",
 		"personUnknown": "",
 		"table": "",
-		"tool": ""
+		"tool": "",
+		"webPrivateRead": "",
+		"webPrivateWrite": "",
+		"webRead": "",
+		"webSecret": "",
+		"webWrite": ""
 	},
 	"history": {
 		"busy": "",
@@ -1533,7 +1688,10 @@
 			"tz": "",
 			"monitoring": "",
 			"monitoringHint": "",
-			"monitoringLabel": ""
+			"monitoringLabel": "",
+			"placeDirect": "",
+			"placeGroup": "",
+			"placeUnnamedGroup": ""
 		},
 		"waitingForYou": "",
 		"webhooks": {

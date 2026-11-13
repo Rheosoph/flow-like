@@ -5,6 +5,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { publicNameFromClaims } from "@flow-like/flow-like-ui/lib/user-display";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useMemo } from "react";
@@ -111,11 +112,8 @@ export default function LearnPage() {
 
 	const displayName =
 		optInQuery.data?.display_name ||
-		(typeof auth.user?.profile?.preferred_username === "string"
-			? auth.user.profile.preferred_username
-			: typeof auth.user?.profile?.name === "string"
-				? auth.user.profile.name
-				: null);
+		publicNameFromClaims(auth.user?.profile) ||
+		null;
 
 	return (
 		<div className="flex-1 overflow-auto">

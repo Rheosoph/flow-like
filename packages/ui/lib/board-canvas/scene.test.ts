@@ -6,6 +6,7 @@ import {
 	IValueType,
 	IVariableType,
 } from "../schema/flow/pin";
+import { WARM_EDITOR_LIMIT } from "./dom-visibility";
 import {
 	type FlowSceneEdge,
 	type FlowSceneNode,
@@ -235,6 +236,24 @@ describe("production board canvas scene", () => {
 				.nodes.filter((node) => node.dom)
 				.map((node) => node.id),
 		).toEqual([...ids]);
+	});
+
+	test("a selection larger than the warm editor population stays native", () => {
+		const selection = (count: number) =>
+			Array.from({ length: count }, (_, index) => ({
+				...node(`n${index}`, []),
+				selected: true,
+			}));
+		expect(collectDomNodeIds(selection(WARM_EDITOR_LIMIT)).size).toBe(
+			WARM_EDITOR_LIMIT,
+		);
+		const large = selection(WARM_EDITOR_LIMIT + 1);
+		const ids = collectDomNodeIds(large);
+		expect(ids.size).toBe(0);
+		const painted = sceneFromFlow(large, [], palette, {
+			domNodeIds: ids,
+		}).nodes;
+		expect(painted.every((entry) => entry.selected && !entry.dom)).toBe(true);
 	});
 
 	test("native edges defer animations, path variants and decorations to the original SVG", () => {

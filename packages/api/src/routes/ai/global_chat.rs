@@ -49,6 +49,7 @@ use flow_like::bit::BitTypes;
 use flow_like::copilot::{ChatImage, CopilotScope, UnifiedCopilotResponse, flowpilot_thinking};
 use flow_like::flow::copilot::memory::{AssistantMemory, MemoryEntry, MemoryScope, MemoryStatus};
 use flow_like::flow::copilot::platform::{PlatformToolBridge, run_internet_search};
+use flow_like::flow::copilot::tool_grants::{ASKS_AGAIN_WEB_CONTENT, grant_set_aside};
 use flow_like::flow::copilot::tool_spec::{
     HTTP_REQUEST_TOOL, INTERNET_SEARCH_TOOL, PlatformToolSpec, ResolvedToolApproval,
     find_data_studio_tool_spec, find_global_tool_spec, find_home_tool_spec_for_access,
@@ -277,6 +278,7 @@ fn profile_model_to_core(model: profile::Model) -> Profile {
         shortcuts: model
             .shortcuts
             .and_then(|value| serde_json::from_value(value).ok()),
+        hidden_bots: model.hidden_bots.unwrap_or_default().into(),
         theme: model.theme,
         home_layout: model.home_layout,
         home_default_id: model.home_default_id,
@@ -353,14 +355,21 @@ pub(crate) async fn load_user_profile_access(
     Ok(Some((Arc::new(profile), access)))
 }
 
-/// What the caller's plan leaves them to work with, once the profile's own
-/// line-up has been measured against it.
-#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
+/// The code of the rejection that only another language model in the profile resolves.
+/// Clients answer it with a model picker.
+pub(crate) const PROFILE_MODEL_REQUIRED: &str = "PROFILE_MODEL_REQUIRED";
+
+/// What the profile's language models leave the caller to work with on this server.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ProfileModelAccess {
-    /// LLM/VLM models the profile references, whatever the plan says.
+    /// LLM/VLM models the profile references, wherever they run.
     pub profile_models: usize,
-    /// ...of those, the ones the plan actually covers.
+    /// ...of those, the ones this server runs for the caller: hosted models the plan
+    /// covers and models on the caller's own provider.
     pub allowed_models: usize,
+    /// ...and the hosted ones the plan leaves out. The rest need one of the caller's devices.
+    #[serde(default)]
+    pub above_plan: usize,
 }
 
 impl ProfileModelAccess {
@@ -371,22 +380,75 @@ impl ProfileModelAccess {
         if model_id.is_some() || self.allowed_models > 0 {
             return None;
         }
-        if self.profile_models > 0 {
-            return Some(ApiError::payment_required(
-                "None of the models in this profile are included in your plan. Upgrade, or add a model your plan covers in Settings → Models.".to_string(),
-            ));
-        }
-        Some(ApiError::bad_request(
-            "This profile has no language model. Add one in Settings → Models before using FlowPilot.".to_string(),
-        ))
+        let (status, message) = if self.above_plan > 0 {
+            (
+                axum::http::StatusCode::PAYMENT_REQUIRED,
+                "Your plan does not include the hosted language models in this profile. Add a model your plan covers, or upgrade.",
+            )
+        } else if self.profile_models > 0 {
+            (
+                axum::http::StatusCode::BAD_REQUEST,
+                "This profile has no language model that runs in the cloud. Its models run on your own devices. Add a hosted model to get an answer here.",
+            )
+        } else {
+            (
+                axum::http::StatusCode::BAD_REQUEST,
+                "This profile has no language model yet. Add one to get an answer.",
+            )
+        };
+        tracing::warn!(
+            profile_models = self.profile_models,
+            above_plan = self.above_plan,
+            "Profile offers no language model this server can run"
+        );
+        Some(ApiError::coded(status, PROFILE_MODEL_REQUIRED, message))
     }
 }
 
-/// Strip the profile's LLM/VLM references that the caller's plan does not include,
-/// so automatic "best model" selection cannot pick one the proxy will reject with a
-/// 402 halfway through the stream — or, worse, escape the profile entirely and land
-/// on the catalog's flagship. Custom bits are counted but never stripped: those run
-/// on the user's own provider credentials, not on a hosted tier.
+/// Where this server stands on one of the profile's language models.
+#[derive(Debug, PartialEq, Eq)]
+enum ModelStanding {
+    /// Hosted and in the plan, or on the caller's own provider.
+    Runs,
+    /// Hosted, but the plan leaves it out.
+    AbovePlan,
+    /// Needs a runtime on one of the caller's devices.
+    Elsewhere,
+}
+
+fn model_standing(
+    bit: &flow_like::bit::Bit,
+    user_tier: &flow_like::hub::UserTier,
+) -> ModelStanding {
+    let Some(provider) = bit.try_to_provider() else {
+        return ModelStanding::Elsewhere;
+    };
+    let name = provider.provider_name.as_str();
+    if flow_like::flow_like_model_provider::provider::is_hosted_provider_name(name) {
+        return if crate::model_tier::llm_bit_allowed(bit, user_tier) {
+            ModelStanding::Runs
+        } else {
+            ModelStanding::AbovePlan
+        };
+    }
+    if crate::routes::user::bits::relayable_provider(name) {
+        ModelStanding::Runs
+    } else {
+        ModelStanding::Elsewhere
+    }
+}
+
+fn referenced_bit_id(reference: &str) -> &str {
+    reference.rsplit_once(':').map_or(reference, |(_, id)| id)
+}
+
+/// Measure the profile's LLM/VLM references against what this server runs for the
+/// caller, and strip the hosted ones their plan does not include, so automatic "best
+/// model" selection cannot pick one the proxy will reject with a 402 halfway through
+/// the stream — or, worse, escape the profile entirely and land on the catalog's
+/// flagship. Custom bits are never stripped: those run on the user's own provider
+/// credentials, not on a hosted tier. A model that needs one of the user's devices
+/// stays too, and counts as neither usable here nor above the plan.
 ///
 /// Best effort — a tier or bit lookup that fails leaves the profile as it was rather
 /// than locking the user out of their own models.
@@ -395,106 +457,34 @@ async fn drop_models_above_plan(
     sub: &str,
     profile: &mut Profile,
 ) -> ProfileModelAccess {
-    let custom_models = profile
-        .custom_bits
-        .iter()
-        .map(|custom| &custom.0)
-        .filter(|bit| matches!(bit.bit_type, BitTypes::Llm | BitTypes::Vlm))
-        .filter(|bit| {
-            profile.bits.iter().any(|reference| {
-                reference
-                    .rsplit_once(':')
-                    .map_or(reference.as_str(), |(_, id)| id)
-                    == bit.id
-            })
-        })
-        .count();
-
+    let (custom_models, custom_runnable) = activated_custom_models(profile);
     let unmeasured = ProfileModelAccess {
         profile_models: custom_models,
-        allowed_models: custom_models,
+        allowed_models: custom_runnable,
+        above_plan: 0,
     };
 
     if profile.bits.is_empty() {
         return unmeasured;
     }
-
-    let user_tier = match crate::middleware::jwt::tier_for_sub(state, sub).await {
-        Ok(tier) => tier,
-        Err(err) => {
-            tracing::warn!(sub = %sub, "Could not resolve tier for model gating: {err:?}");
-            return unmeasured;
-        }
-    };
-
-    let raw_ids: Vec<&str> = profile
-        .bits
-        .iter()
-        .map(|reference| {
-            reference
-                .rsplit_once(':')
-                .map_or(reference.as_str(), |(_, id)| id)
-        })
-        .collect();
-
-    // Every chat turn loads the profile, so keep the bit lookup off the hot path:
-    // the verdict only changes when the profile's line-up or the plan changes.
-    let cache_key = format!(
-        "plan_blocked_bits:{}:{}:{}",
-        profile.id,
-        user_tier.llm_tiers.join(","),
-        raw_ids.join(",")
-    );
-
-    let (blocked, hub_models): (Vec<String>, usize) = match state.get_cache(&cache_key) {
-        Some(cached) => cached,
-        None => {
-            let rows = match bit::Entity::find()
-                .filter(bit::Column::Id.is_in(raw_ids))
-                .all(&state.db)
-                .await
-            {
-                Ok(rows) => rows,
-                Err(err) => {
-                    tracing::warn!(sub = %sub, "Could not load profile bits for model gating: {err:?}");
-                    return unmeasured;
-                }
-            };
-
-            let mut blocked = Vec::new();
-            let mut hub_models = 0usize;
-            for row in rows {
-                let id = row.id.clone();
-                let bit = flow_like::bit::Bit::from(row);
-                if !matches!(bit.bit_type, BitTypes::Llm | BitTypes::Vlm) {
-                    continue;
-                }
-                hub_models += 1;
-                if !crate::model_tier::llm_bit_allowed(&bit, &user_tier) {
-                    blocked.push(id);
-                }
-            }
-            state.set_cache(cache_key, (&blocked, hub_models));
-            (blocked, hub_models)
-        }
+    let Some(hub) = hub_model_standing(state, sub, profile).await else {
+        return unmeasured;
     };
 
     let access = ProfileModelAccess {
-        profile_models: custom_models + hub_models,
-        allowed_models: custom_models + hub_models - blocked.len(),
+        profile_models: custom_models + hub.models,
+        allowed_models: custom_runnable + hub.runnable,
+        above_plan: hub.above_plan.len(),
     };
 
-    if blocked.is_empty() {
+    if hub.above_plan.is_empty() {
         return access;
     }
 
-    let blocked: HashSet<String> = blocked.into_iter().collect();
-    profile.bits.retain(|reference| {
-        let id = reference
-            .rsplit_once(':')
-            .map_or(reference.as_str(), |(_, id)| id);
-        !blocked.contains(id)
-    });
+    let blocked: HashSet<String> = hub.above_plan.into_iter().collect();
+    profile
+        .bits
+        .retain(|reference| !blocked.contains(referenced_bit_id(reference)));
     tracing::debug!(
         sub = %sub,
         "Removed {} model(s) above the user's plan from profile {}",
@@ -503,6 +493,236 @@ async fn drop_models_above_plan(
     );
 
     access
+}
+
+/// The custom LLM/VLM bits the profile activated: how many there are, and how many of
+/// them run on a provider this server reaches. A user's own Local or MLX model does not.
+fn activated_custom_models(profile: &Profile) -> (usize, usize) {
+    profile
+        .custom_bits
+        .iter()
+        .map(|custom| &custom.0)
+        .filter(|bit| matches!(bit.bit_type, BitTypes::Llm | BitTypes::Vlm))
+        .filter(|bit| {
+            profile
+                .bits
+                .iter()
+                .any(|reference| referenced_bit_id(reference) == bit.id)
+        })
+        .fold((0, 0), |(models, runnable), bit| {
+            let runs = bit.try_to_provider().is_some_and(|provider| {
+                crate::routes::user::bits::relayable_provider(&provider.provider_name)
+            });
+            (models + 1, runnable + usize::from(runs))
+        })
+}
+
+/// The hub LLM/VLM bits a profile references, measured against the caller's plan.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct HubModelStanding {
+    /// Ids of the hosted models the plan leaves out.
+    above_plan: Vec<String>,
+    models: usize,
+    runnable: usize,
+}
+
+/// `None` when the caller's tier or the bits could not be read.
+async fn hub_model_standing(
+    state: &AppState,
+    sub: &str,
+    profile: &Profile,
+) -> Option<HubModelStanding> {
+    let user_tier = crate::middleware::jwt::tier_for_sub(state, sub)
+        .await
+        .inspect_err(
+            |err| tracing::warn!(sub = %sub, "Could not resolve tier for model gating: {err:?}"),
+        )
+        .ok()?;
+
+    let raw_ids: Vec<&str> = profile
+        .bits
+        .iter()
+        .map(|reference| referenced_bit_id(reference))
+        .collect();
+
+    // Every chat turn loads the profile, so keep the bit lookup off the hot path:
+    // the verdict only changes when the profile's line-up or the plan changes.
+    let cache_key = format!(
+        "profile_model_standing:{}:{}:{}",
+        profile.id,
+        user_tier.llm_tiers.join(","),
+        raw_ids.join(",")
+    );
+    if let Some(cached) = state.get_cache(&cache_key) {
+        return Some(cached);
+    }
+
+    let rows = bit::Entity::find()
+        .filter(bit::Column::Id.is_in(raw_ids))
+        .all(&state.db)
+        .await
+        .inspect_err(|err| {
+            tracing::warn!(sub = %sub, "Could not load profile bits for model gating: {err:?}")
+        })
+        .ok()?;
+
+    let mut standing = HubModelStanding::default();
+    for row in rows {
+        let id = row.id.clone();
+        let bit = flow_like::bit::Bit::from(row);
+        if !matches!(bit.bit_type, BitTypes::Llm | BitTypes::Vlm) {
+            continue;
+        }
+        standing.models += 1;
+        match model_standing(&bit, &user_tier) {
+            ModelStanding::Runs => standing.runnable += 1,
+            ModelStanding::AbovePlan => standing.above_plan.push(id),
+            ModelStanding::Elsewhere => {}
+        }
+    }
+    state.set_cache(cache_key, &standing);
+    Some(standing)
+}
+
+#[cfg(test)]
+mod profile_model_access_tests {
+    use super::*;
+    use axum::http::StatusCode;
+    use flow_like::{bit::Bit, hub::UserTier};
+
+    fn plan(llm_tiers: &[&str]) -> UserTier {
+        UserTier {
+            max_non_visible_projects: 0,
+            max_remote_executions: 0,
+            max_runtime_ms: -1,
+            max_concurrent_executions: -1,
+            max_ai_cost_micros: -1,
+            execution_tier: "SHARED".to_string(),
+            max_total_size: 0,
+            max_llm_cost: 0,
+            max_llm_calls: None,
+            llm_tiers: llm_tiers.iter().map(|tier| tier.to_string()).collect(),
+            product_id: None,
+        }
+    }
+
+    fn model(provider_name: &str, tier: Option<&str>) -> Bit {
+        let params = tier.map_or_else(|| json!({}), |tier| json!({ "tier": tier }));
+        Bit {
+            bit_type: BitTypes::Llm,
+            parameters: json!({
+                "context_length": 8192,
+                "provider": {
+                    "provider_name": provider_name,
+                    "model_id": "owner/model",
+                    "params": params,
+                },
+                "model_classification": {
+                    "cost": 0.3,
+                    "speed": 0.3,
+                    "reasoning": 0.3,
+                    "creativity": 0.3,
+                    "factuality": 0.3,
+                    "function_calling": 0.3,
+                    "safety": 0.3,
+                    "openness": 0.3,
+                    "multilinguality": 0.3,
+                    "coding": 0.3,
+                },
+            }),
+            ..Bit::default()
+        }
+    }
+
+    #[test]
+    fn a_model_on_the_users_device_is_never_a_plan_matter() {
+        let pro = plan(&["PRO", "PREMIUM", "FREE"]);
+        let enterprise = plan(&["MAX", "PRO", "PREMIUM", "ENTERPRISE", "FREE"]);
+        for provider in ["Local", "MLX", "device", "custom:claude-code"] {
+            for tier in [&pro, &enterprise] {
+                assert_eq!(
+                    model_standing(&model(provider, None), tier),
+                    ModelStanding::Elsewhere,
+                    "{provider}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_hosted_model_follows_the_plan_and_an_own_provider_always_runs() {
+        let pro = plan(&["PRO", "PREMIUM", "FREE"]);
+        assert_eq!(
+            model_standing(&model("Premium", Some("PRO")), &pro),
+            ModelStanding::Runs
+        );
+        assert_eq!(
+            model_standing(&model("hosted:openrouter", Some("MAX")), &pro),
+            ModelStanding::AbovePlan
+        );
+        assert_eq!(
+            model_standing(&model("Hosted", None), &pro),
+            ModelStanding::AbovePlan
+        );
+        assert_eq!(
+            model_standing(&model("custom:openai", None), &pro),
+            ModelStanding::Runs
+        );
+    }
+
+    #[test]
+    fn only_a_plan_shortfall_is_a_payment_matter() {
+        let rejected = |access: ProfileModelAccess| {
+            let error = access.rejection(None).expect("nothing here can answer");
+            assert_eq!(error.public_code(), PROFILE_MODEL_REQUIRED);
+            (
+                error.status(),
+                error.public_message().unwrap_or_default().to_string(),
+            )
+        };
+
+        let (status, message) = rejected(ProfileModelAccess::default());
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(message.contains("no language model yet"));
+
+        let (status, message) = rejected(ProfileModelAccess {
+            profile_models: 2,
+            ..Default::default()
+        });
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(message.contains("own devices") && !message.contains("plan"));
+
+        let (status, message) = rejected(ProfileModelAccess {
+            profile_models: 3,
+            above_plan: 1,
+            ..Default::default()
+        });
+        assert_eq!(status, StatusCode::PAYMENT_REQUIRED);
+        assert!(message.contains("plan"));
+    }
+
+    #[test]
+    fn a_usable_or_named_model_is_never_rejected() {
+        let usable = ProfileModelAccess {
+            profile_models: 2,
+            allowed_models: 1,
+            above_plan: 1,
+        };
+        assert!(usable.rejection(None).is_none());
+        assert!(
+            ProfileModelAccess::default()
+                .rejection(Some("bit"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn an_access_stored_before_the_plan_count_still_reads() {
+        let stored: ProfileModelAccess =
+            serde_json::from_value(json!({ "profile_models": 1, "allowed_models": 1 }))
+                .expect("the earlier shape");
+        assert_eq!(stored.above_plan, 0);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -533,6 +753,8 @@ pub(crate) struct ServerPlatformBridge {
     bot: bool,
     /// The bot tools this server runs for the turn (in the API or on the executor).
     bot_tools: Option<Arc<crate::bot_tools::BotToolsHost>>,
+    /// The model the browser starts this turn's assistants on; `None` leaves its own selection.
+    assistant_model: Option<String>,
 }
 
 impl ServerPlatformBridge {
@@ -548,6 +770,7 @@ impl ServerPlatformBridge {
             read_only: false,
             bot: false,
             bot_tools: None,
+            assistant_model: None,
         }
     }
 
@@ -575,6 +798,7 @@ impl ServerPlatformBridge {
             read_only: false,
             bot: false,
             bot_tools: None,
+            assistant_model: None,
         }
     }
 
@@ -583,6 +807,11 @@ impl ServerPlatformBridge {
         bot_tools: Option<Arc<crate::bot_tools::BotToolsHost>>,
     ) -> Self {
         self.bot_tools = bot_tools;
+        self
+    }
+
+    pub(crate) fn with_assistant_model(mut self, model_id: String) -> Self {
+        self.assistant_model = Some(model_id);
         self
     }
 
@@ -610,6 +839,10 @@ impl ServerPlatformBridge {
                 tracing::warn!(%error, tool_name, "[global_chat] failed to register approval request");
                 tool_error(tool_name, "Failed to register the approval request.")
             })?;
+        let mut approval = json!(approval);
+        if grant_set_aside(tool_name, arguments) {
+            approval["asks_again"] = json!(ASKS_AGAIN_WEB_CONTENT);
+        }
         let request = json!({
             "requestId": ticket.request_id,
             "toolName": tool_name,
@@ -675,7 +908,10 @@ impl ServerPlatformBridge {
             && !self.read_only
             && (flow_like_bot_tools::configuration::is_settings_tool(tool_name)
                 || flow_like_bot_tools::user_context::is_user_context_tool(tool_name))
-            && self.bot_tools.as_ref().is_some_and(|host| host.handles(tool_name))
+            && self
+                .bot_tools
+                .as_ref()
+                .is_some_and(|host| host.handles(tool_name))
         {
             return find_bot_tool_spec(tool_name);
         }
@@ -911,6 +1147,37 @@ mod specialist_tool_spec_tests {
     }
 
     #[flow_like_types::tokio::test]
+    async fn a_bot_turn_names_its_assistant_model_in_tool_requests() {
+        for assistant_model in [Some("small"), None] {
+            let channel = flow_like_types::channel::InProcessChannel::register(
+                flow_like_types::channel::new_request_id(),
+                Duration::from_secs(30),
+            )
+            .await;
+            let (frames, mut received) = mpsc::unbounded_channel();
+            let mut bridge = ServerPlatformBridge::orchestrator(channel.clone(), frames);
+            if let Some(model_id) = assistant_model {
+                bridge = bridge.with_assistant_model(model_id.to_string());
+            }
+            let pending = async move { bridge.call("list_apps", json!({})).await };
+            let call = flow_like_types::tokio::spawn(pending);
+            let frame =
+                flow_like_types::tokio::time::timeout(Duration::from_secs(1), received.recv())
+                    .await
+                    .expect("the tool request must reach the stream");
+            let Some(GlobalChatFrame::ToolRequest(request)) = frame else {
+                panic!("expected a tool request frame");
+            };
+            assert_eq!(
+                request["context"]["assistantModelId"].as_str(),
+                assistant_model
+            );
+            call.abort();
+            channel.close().await;
+        }
+    }
+
+    #[flow_like_types::tokio::test]
     async fn home_read_only_bridge_rejects_apply_without_emitting_a_request() {
         let channel = flow_like_types::channel::InProcessChannel::register(
             "home-read-only-bridge-test",
@@ -973,6 +1240,23 @@ mod specialist_tool_spec_tests {
     }
 }
 
+fn run_event_payload(run_id: &str, channel: &impl serde::Serialize, model_id: &str) -> Value {
+    json!({ "runId": run_id, "channel": channel, "modelId": model_id })
+}
+
+#[cfg(test)]
+mod run_event_tests {
+    use super::*;
+
+    #[test]
+    fn the_run_event_names_the_model_the_server_resolved() {
+        let payload = run_event_payload("run-1", &json!({ "id": "c" }), "bit-7");
+        assert_eq!(payload["modelId"], "bit-7");
+        assert_eq!(payload["runId"], "run-1");
+        assert_eq!(payload["channel"], json!({ "id": "c" }));
+    }
+}
+
 fn tool_error(tool_name: &str, error: &str) -> String {
     json!({ "status": "error", "tool": tool_name, "error": error }).to_string()
 }
@@ -1009,6 +1293,13 @@ impl PlatformToolBridge for ServerPlatformBridge {
         self.channel.is_cancelled().await
     }
 
+    async fn bot_secret(&self, name: &str) -> Option<String> {
+        if !self.bot {
+            return None;
+        }
+        self.bot_tools.as_ref()?.secret(name).await
+    }
+
     async fn call(&self, tool_name: &str, arguments: Value) -> String {
         let Some(spec) = self.tool_spec(tool_name) else {
             return json!({
@@ -1035,13 +1326,17 @@ impl PlatformToolBridge for ServerPlatformBridge {
                 .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string());
         }
 
-        if (self.bot || flow_like_bot_tools::configuration::is_settings_tool(tool_name)
+        if (self.bot
+            || flow_like_bot_tools::configuration::is_settings_tool(tool_name)
             || flow_like_bot_tools::user_context::is_user_context_tool(tool_name))
             && let Some(bot_tools) = self
                 .bot_tools
                 .as_ref()
                 .filter(|host| host.handles(tool_name))
         {
+            if let Some(refused) = bot_tools.crew_refusal(tool_name, &arguments).await {
+                return refused;
+            }
             let approval = resolve_tool_approval(&spec, &arguments);
             if approval.kind != "none" && !bot_tools.covers(tool_name, &arguments).await {
                 match self
@@ -1069,13 +1364,16 @@ impl PlatformToolBridge for ServerPlatformBridge {
             }
         };
 
-        let request = json!({
+        let mut request = json!({
             "requestId": ticket.request_id,
             "toolName": tool_name,
             "arguments": arguments,
             "approval": approval,
             "channel": ticket.handle,
         });
+        if let Some(model_id) = &self.assistant_model {
+            request["context"] = json!({ "assistantModelId": model_id });
+        }
 
         if self
             .frames
@@ -1443,6 +1741,8 @@ pub(crate) async fn settle_assistant_usage(
             "costMicroEur":if usage.funding_class=="hosted" {Some(usage.rate.all_in_micro_eur(0,elapsed_ms))} else {None}})).await
 }
 
+const RUN_CANCELLED: &str = "Run cancelled";
+
 pub async fn global_chat(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -1465,6 +1765,7 @@ pub(crate) async fn run_global_chat(
     let mut payload: GlobalChatRequest = serde_json::from_value(raw_payload.clone())
         .map_err(|_| ApiError::bad_request("Invalid assistant request"))?;
     validate(&payload)?;
+    let request_started = std::time::Instant::now();
     let token = Some(token);
     let (profile, model_access) =
         load_user_profile_access(&state, &sub, payload.profile_id.as_deref())
@@ -1477,7 +1778,7 @@ pub(crate) async fn run_global_chat(
     let mut bot =
         crate::routes::bots::runtime::chat_bot(&state, &sub, payload.bot_id.as_deref(), &profile)
             .await?;
-    let interactive_turn = match (&bot, &payload.interactive) {
+    let mut interactive_turn = match (&bot, &payload.interactive) {
         (Some(bot), Some(reference)) => {
             crate::bot_host::interactive::InteractiveTurn::find(
                 &state,
@@ -1494,8 +1795,23 @@ pub(crate) async fn run_global_chat(
             "The bot conversation turn is unavailable",
         ));
     }
-    if let (Some(bot), Some(interactive)) = (&mut bot, &interactive_turn) {
-        bot.context.ephemeral_user_context = interactive.ephemeral_user_context(&state).await?;
+    let mut live_call = false;
+    if let (Some(bot), Some(interactive)) = (&mut bot, &mut interactive_turn) {
+        let facts = interactive.trigger_facts(&state).await?;
+        bot.context.ephemeral_user_context = facts.ephemeral_user_context;
+        bot.context.live_call = facts.live_call;
+        bot.context.host_tools = std::mem::take(&mut bot.context.host_tools)
+            .with_conversation_key(interactive.turn.conversation_id.clone());
+        live_call = facts.live_call;
+        if !bot.context.ephemeral_user_context
+            && let Some(trail) = interactive.open_trail(&state).await
+        {
+            bot.context.host_tools = std::mem::take(&mut bot.context.host_tools).with_trail(trail);
+        }
+        if !bot.context.ephemeral_user_context {
+            bot.context.host_tools = std::mem::take(&mut bot.context.host_tools)
+                .with_reply_files(interactive.reply_files.clone());
+        }
     }
     if let Some(bot) = &mut bot {
         bot.context.host_tools = std::mem::take(&mut bot.context.host_tools)
@@ -1529,10 +1845,7 @@ pub(crate) async fn run_global_chat(
     let selected_model = profile
         .resolve_completion_model(
             payload.model_id.as_deref(),
-            &flow_like::bit::BitModelPreference {
-                reasoning_weight: Some(1.0),
-                ..Default::default()
-            },
+            &flow_like::flow::copilot::bot_model_preference(live_call),
             false,
             flow_like::state::FlowLikeState::completion_model_capabilities(&flow_like_state).await,
             None,
@@ -1574,17 +1887,19 @@ pub(crate) async fn run_global_chat(
     };
     payload.model_id = Some(selected_model.id.clone());
     raw_payload["model_id"] = json!(selected_model.id);
+    let interactive_scope = match &interactive_turn {
+        Some(interactive) => {
+            crate::routes::bots::runtime_token::turn_scope(&state.db, &interactive.turn).await?
+        }
+        None => None,
+    };
     let metered_bot = bot.as_ref().map(|bot| crate::middleware::jwt::BotUser {
         bot_id: bot.context.bot_id.clone(),
         turn_id: interactive_turn
             .as_ref()
             .map(|interactive| interactive.turn.id.clone())
             .unwrap_or_else(flow_like_types::create_id),
-        conv_id: interactive_turn.as_ref().and_then(|interactive| {
-            (flow_like_types::bot_turn::TurnAudience::parse(&interactive.turn.audience)
-                == Some(flow_like_types::bot_turn::TurnAudience::Room))
-            .then(|| interactive.turn.conversation_id.clone())
-        }),
+        conv_id: interactive_scope,
     });
     let model_token = match &metered_bot {
         Some(bot) => Some(
@@ -1632,16 +1947,21 @@ pub(crate) async fn run_global_chat(
         worker_usage.worker = true;
         return crate::routes::chat::hosted_worker::dispatch(
             state,
-            crate::routes::chat::hosted_worker::HostedAiJob {
-                operation_id: usage.operation_id.clone(),
-                deadline: usage.deadline,
-                request: crate::routes::chat::hosted_worker::HostedWork::GlobalAssistant {
+            crate::routes::chat::hosted_worker::HostedAiJob::new(
+                usage.operation_id.clone(),
+                crate::routes::chat::hosted_worker::HostedWork::GlobalAssistant {
                     payload: raw_payload,
                     sub,
                     token: token.unwrap_or_default(),
                     usage: worker_usage,
                 },
-            },
+                usage.deadline,
+            )
+            .with_pace(if live_call {
+                crate::routes::chat::hosted_worker::JobPace::Fast
+            } else {
+                crate::routes::chat::hosted_worker::JobPace::Standard
+            }),
         )
         .await;
     }
@@ -1747,7 +2067,18 @@ pub(crate) async fn run_global_chat(
         _ => None,
     };
 
-    let attachments_manifest = payload.attachments_manifest.clone().unwrap_or_default();
+    let trigger_files = match &interactive_turn {
+        Some(interactive) => interactive.trigger_files(&state).await?,
+        None => Vec::new(),
+    };
+    let attachments_manifest = flow_like::flow::copilot::with_stored_files(
+        payload.attachments_manifest.as_deref().unwrap_or_default(),
+        &trigger_files,
+    );
+    let (attachments_manifest, attached_files) = match &bot {
+        Some(_) => attachments::with_turn_files(&state, &sub, attachments_manifest).await,
+        None => (attachments_manifest, Default::default()),
+    };
     let context_input = PlatformContextInput {
         user_context: payload.user_context.as_deref(),
         active_profile: Some((profile.name.as_str(), profile.id.as_str())),
@@ -1760,11 +2091,29 @@ pub(crate) async fn run_global_chat(
         Some(bot) => bot_platform_context(&bot.context, context_input),
         None => build_platform_context(context_input),
     };
-    let context = match &memory_turn {
-        Some(opened) => format!("{context}\n\n{}", opened.context()),
-        None => context,
+    // A turn answering shared context keeps the chat's prompt and history: memory holds only
+    // value-free notes of it. Other memory turns read live session snapshots from a section.
+    let ephemeral_user_context = bot
+        .as_ref()
+        .is_some_and(|bot| bot.context.ephemeral_user_context);
+    let context = match (&memory_turn, &interactive_turn) {
+        (Some(opened), Some(interactive)) if !ephemeral_user_context => {
+            let shared = crate::bot_host::history::shared_context(
+                &state.db,
+                &interactive.turn.bot_id,
+                &interactive.turn.conversation_id,
+            )
+            .await?;
+            [Some(context), Some(opened.context().to_string()), shared]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        }
+        (Some(opened), _) => format!("{context}\n\n{}", opened.context()),
+        (None, _) => context,
     };
-    if let Some(opened) = &memory_turn {
+    if let Some(opened) = memory_turn.as_ref().filter(|_| !ephemeral_user_context) {
         payload.user_prompt = opened.prompt().to_string();
         payload.history = opened.history();
     }
@@ -1795,8 +2144,11 @@ pub(crate) async fn run_global_chat(
                 token.clone(),
                 crate::routes::bots::tool_grants::rows_for_owner(&state, &bot.context.bot_id, &sub),
                 None,
-                interactive_turn.as_ref().map(|turn| turn.turn.conversation_id.as_str()),
+                interactive_turn
+                    .as_ref()
+                    .map(|turn| turn.turn.conversation_id.as_str()),
                 Some(flow_like_bot_tools::TurnSite::OwnerLive),
+                attached_files,
             )
             .await;
             let bridge = if bot.context.toolset == BotToolset::Capabilities {
@@ -1804,13 +2156,36 @@ pub(crate) async fn run_global_chat(
             } else {
                 ServerPlatformBridge::orchestrator(channel.clone(), frames_tx.clone())
             };
-            bridge.with_bot_tools(bot_tools)
+            let assistant_model = crate::routes::bots::runtime::server_assistant_model(
+                &state,
+                &sub,
+                &flow_like_state,
+                &profile,
+                bot.context.subtask_model.as_deref(),
+                &selected_model.id,
+            )
+            .await;
+            bridge
+                .with_bot_tools(bot_tools)
+                .with_assistant_model(assistant_model)
         }
         _ => ServerPlatformBridge::orchestrator(channel.clone(), frames_tx.clone()),
     });
 
     let token_frames = frames_tx.clone();
+    let first_token_ms = Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
+    let first_token_at = first_token_ms.clone();
+    let bot_usage = interactive_turn.as_ref().map(|turn| turn.usage.clone());
     let on_token = move |chunk: String| {
+        if let Some(usage) = &bot_usage {
+            usage.observe(&chunk);
+        }
+        let _ = first_token_at.compare_exchange(
+            u64::MAX,
+            request_started.elapsed().as_millis() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let _ = token_frames.send(GlobalChatFrame::Token(chunk));
     };
 
@@ -1831,7 +2206,13 @@ pub(crate) async fn run_global_chat(
         let remaining = (usage.deadline - chrono::Utc::now())
             .num_milliseconds()
             .max(1) as u64;
-        let thinking = Some(flowpilot_thinking(payload.reasoning_effort.as_deref()));
+        let thinking = Some(if live_call {
+            flow_like::flow::copilot::bot_thinking(true)
+        } else {
+            flowpilot_thinking(payload.reasoning_effort.as_deref())
+        });
+        let prep_ms = request_started.elapsed().as_millis() as u64;
+        let model_label = payload.model_id.clone().unwrap_or_default();
         let chat = async move {
             match bot {
                 Some(bot) => {
@@ -1903,13 +2284,42 @@ pub(crate) async fn run_global_chat(
         if let Some(hold) = hold {
             hold.abort();
         }
+        if live_call && let Some(interactive) = &interactive_turn {
+            let first_token = first_token_ms.load(std::sync::atomic::Ordering::Relaxed);
+            tracing::info!(
+                target: "bot_call_latency",
+                route = "interactive",
+                turn_id = %interactive.turn.id,
+                bot_id = %interactive.turn.bot_id,
+                prep_ms,
+                first_token_ms = (first_token != u64::MAX).then_some(first_token),
+                total_ms = request_started.elapsed().as_millis() as u64,
+                model = %model_label,
+                ok = result.is_ok(),
+                "voice call turn"
+            );
+        }
         if let Some(interactive) = &interactive_turn {
-            let (text, code) = match &result {
-                Ok(response) => (response.message.as_str(), None),
-                Err(error) => (error.as_str(), Some("BOT_TURN_INTERACTIVE_FAILED")),
-            };
-            if let Err(error) = interactive.store_reply(&usage_state, text, code).await {
-                tracing::error!(%error, turn_id = %interactive.turn.id, "Interactive chat: the reply was not stored");
+            if live_call && matches!(&result, Err(error) if error.contains(RUN_CANCELLED)) {
+                if let Err(error) = crate::bot_host::ledger::cancel_owned_in(
+                    &usage_state.db,
+                    &interactive.turn.owner_id,
+                    &interactive.turn.bot_id,
+                    &interactive.turn.id,
+                    crate::routes::inbox::now_millis(),
+                )
+                .await
+                {
+                    tracing::warn!(%error, turn_id = %interactive.turn.id, "Interactive chat: the cancelled live call turn was not cancelled");
+                }
+            } else {
+                let (text, code) = match &result {
+                    Ok(response) => (response.message.as_str(), None),
+                    Err(error) => (error.as_str(), Some("BOT_TURN_INTERACTIVE_FAILED")),
+                };
+                if let Err(error) = interactive.store_reply(&usage_state, text, code).await {
+                    tracing::error!(%error, turn_id = %interactive.turn.id, "Interactive chat: the reply was not stored");
+                }
             }
         }
         if let (Ok(_), Some(opened)) = (&result, memory_turn) {
@@ -1926,7 +2336,7 @@ pub(crate) async fn run_global_chat(
         yield Ok::<Event, Infallible>(
             Event::default()
                 .event("run")
-                .data(json!({ "runId": run_id, "channel": channel.handle() }).to_string()),
+                .data(run_event_payload(&run_id, &channel.handle(), &selected_model.id).to_string()),
         );
 
         let mut frame_stream_open = true;

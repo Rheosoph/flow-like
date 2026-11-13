@@ -388,7 +388,7 @@ pub async fn create(
     let account = recipient.connected_account();
     let payee_name=if platform_owned { Some("Flow-Like".to_owned()) } else {
         account.and_then(|account|account.business.as_ref()).and_then(|business|business["name"].as_str()).map(str::to_owned)
-        .or_else(||payee_user.and_then(|user|user.username.or(user.name)))
+        .or_else(||payee_user.and_then(|user|crate::routes::user::identity::public_display_name(user.name.as_deref(),user.preferred_username.as_deref(),user.email.as_deref())))
     };
     let app_name=txn.query_one_raw(sql(r#"SELECT name FROM "Meta" WHERE "appId"=$1 ORDER BY CASE WHEN lang='en' THEN 0 ELSE 1 END LIMIT 1"#,vec![signed.app_id.clone().into()])).await?.map(|row|row.try_get::<String>("","name")).transpose()?;
     let snapshot = json!({"platformOwned":platform_owned,"accountRowId":account.map(|account|&account.id),"accountRevision":account.map(|account|account.revision),"methodPolicy":policy,"ownerTermsVersion":if platform_owned {None} else {config.owner_terms_version.as_deref()},"taxMode":if platform_owned {"platform_supplier"} else {"seller_supplier"},"automaticTax":true,"productTaxCode":input.product_tax_code,"shippingCountries":input.shipping_countries,"payeeDisplayName":payee_name,"appName":app_name});

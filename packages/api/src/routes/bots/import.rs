@@ -25,7 +25,8 @@ use crate::{
 };
 use axum::{Extension, Json, extract::State, http::StatusCode};
 use chrono::{DateTime, FixedOffset};
-use flow_like_types::bot::{BotCapability, BotLocation};
+use flow_like_types::bot::{BotCapability, BotExecutionMode, BotLocation};
+use flow_like_types::bot_restrictions::{APP_REFUSES_BOTS, app_refuses_bots_message};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait,
     QueryFilter, QuerySelect, Statement, sea_query::Expr,
@@ -75,8 +76,8 @@ pub enum ImportIssuePart {
 pub struct ImportIssue {
     pub part: ImportIssuePart,
     /// `BOT_INVALID`, `BOT_LIMIT_REACHED`, `BOT_SERVER_LIMIT_REACHED`, `BOT_CAPABILITY_LOCATION`,
-    /// `BOT_PROFILE_UNAVAILABLE`, `BOT_DEVICE_UNAVAILABLE`, `BOT_APP_UNAVAILABLE`,
-    /// `BOT_APP_LIMIT_REACHED` or `BOT_WORKSPACE_LOCKED`.
+    /// `BOT_PROFILE_UNAVAILABLE`, `BOT_DEVICE_UNAVAILABLE`, `BOT_DOCKER_UNAVAILABLE`, `BOT_APP_UNAVAILABLE`,
+    /// `BOT_APP_LIMIT_REACHED`, `BOT_WORKSPACE_LOCKED` or `APP_REFUSES_BOTS`.
     #[schema(example = "BOT_APP_UNAVAILABLE")]
     pub code: String,
     pub message: String,
@@ -236,6 +237,26 @@ pub(super) async fn review<C: ConnectionTrait>(
         ));
     }
     issues.extend(reference_issues(db, owner_id, &request.bot).await?);
+    if let Some((_, settings)) = &settings
+        && settings.execution_mode == BotExecutionMode::Docker
+        && !issues
+            .iter()
+            .any(|issue| issue.part == ImportIssuePart::Device)
+        && let Some(device_id) = settings.device_id.as_deref()
+        && let Err(error) = super::crud::verify_docker_ready(db, owner_id, device_id).await
+    {
+        if error.public_code() != "BOT_DOCKER_UNAVAILABLE" {
+            return Err(error);
+        }
+        issues.push(ImportIssue::new(
+            ImportIssuePart::Device,
+            error.public_code(),
+            error
+                .public_message()
+                .unwrap_or("Docker is unavailable on the selected device"),
+            Some(device_id),
+        ));
+    }
     let app_ids = requested_apps(&request.app_ids);
     issues.extend(app_issues(db, owner_id, &app_ids).await?);
     Ok(match settings {
@@ -294,11 +315,7 @@ fn location_issues(fields: &CreateBotRequest) -> Vec<ImportIssue> {
             ImportIssue::new(
                 ImportIssuePart::Capability,
                 BOT_CAPABILITY_LOCATION,
-                format!(
-                    "A bot on the {} can't hold '{}'; move it to a desktop or device first",
-                    location.as_str(),
-                    capability.as_str()
-                ),
+                validation::location_refusal(location, capability),
                 Some(capability.as_str()),
             )
         })
@@ -413,6 +430,7 @@ async fn app_issues<C: ConnectionTrait>(
         .into_iter()
         .collect();
     let workspaces = workspaces_among(db, app_ids.iter()).await?;
+    let refusing = crate::bot_app_gate::refusing_among(db, app_ids.iter()).await?;
     Ok(app_ids
         .iter()
         .filter_map(|app_id| {
@@ -428,6 +446,13 @@ async fn app_issues<C: ConnectionTrait>(
                     ImportIssuePart::App,
                     BOT_WORKSPACE_LOCKED,
                     format!("App '{app_id}' is a bot's workspace, so your bot can't use it"),
+                    Some(app_id),
+                ))
+            } else if let Some(name) = refusing.get(app_id) {
+                Some(ImportIssue::new(
+                    ImportIssuePart::App,
+                    APP_REFUSES_BOTS,
+                    app_refuses_bots_message(name),
                     Some(app_id),
                 ))
             } else {

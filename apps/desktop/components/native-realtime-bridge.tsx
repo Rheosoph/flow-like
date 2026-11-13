@@ -3,10 +3,13 @@
 import { useBackend, useBackendReady } from "@flow-like/flow-like-ui";
 import { IncomingCallProvider } from "@flow-like/flow-like-ui/components/incoming-call-provider";
 import { unwatchedInboxPredicate } from "@flow-like/flow-like-ui/hooks/use-inbox";
+import { deliverRealtimeReply } from "@flow-like/flow-like-ui/lib/realtime/reply-streams";
 import type { RealtimeConversationSubscription } from "@flow-like/flow-like-ui/lib/realtime/types";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useAuth } from "react-oidc-context";
+import { pokeBotHost } from "../lib/bot-host-poke";
+import { watchBotHostReplies } from "../lib/bot-host-replies";
 import {
 	desktopConversationFeed,
 	onWatchedConversationsChange,
@@ -69,6 +72,19 @@ export function NativeRealtimeBridge() {
 	// The native owner refreshes its own token; a refresh here must not retire its connection.
 	const hasToken = Boolean(auth.user?.access_token);
 	const signedIn = auth.isAuthenticated && !auth.isLoading;
+	const localIds = useRef<ReadonlyMap<string, string>>(new Map());
+
+	// A host on this computer answered the call: its reply joins the replies the server pushes.
+	useEffect(
+		() =>
+			watchBotHostReplies((reply) =>
+				deliverRealtimeReply(
+					reply,
+					localIds.current.get(reply.conversation_id) ?? reply.conversation_id,
+				),
+			),
+		[],
+	);
 
 	useEffect(() => {
 		if (!ready || !signedIn || !profileId || !subject || !issuer || !hasToken)
@@ -77,11 +93,12 @@ export function NativeRealtimeBridge() {
 		let closed = false;
 		let stopWatching: (() => void) | undefined;
 		let requested = "[]";
-		let localIds: ReadonlyMap<string, string> = new Map();
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const unwatched = unwatchedInboxPredicate((id, as) =>
 			desktopConversationFeed.isWatched(id, as),
 		);
+		const localId = (accountId: string) =>
+			localIds.current.get(accountId) ?? accountId;
 		const open = (conversations: RealtimeConversationSubscription[]) => {
 			stopWatching?.();
 			stopWatching = watchNativeRealtime({
@@ -95,15 +112,23 @@ export function NativeRealtimeBridge() {
 					timeout_ms: 20_000,
 				},
 				onMessage: (message) => {
+					if (message.type === "reply") {
+						deliverRealtimeReply(
+							message.reply,
+							localId(message.reply.conversation_id),
+						);
+						return;
+					}
 					if (message.type !== "update") return;
 					for (const item of message.response.conversations ?? [])
 						desktopConversationFeed.deliver(
-							localIds.get(item.conversation_id) ?? item.conversation_id,
+							localId(item.conversation_id),
 							item.entries,
 							{ as: item.as },
 						);
 					const update = message.response.notifications;
 					if (!update || update.revision === revision) return;
+					pokeBotHost();
 					return queryClient
 						.invalidateQueries(
 							{
@@ -130,7 +155,7 @@ export function NativeRealtimeBridge() {
 				]),
 			);
 			if (closed) return;
-			localIds = account.localIds;
+			localIds.current = account.localIds;
 			if (signature === requested) return;
 			requested = signature;
 			open(account.subscriptions);
@@ -143,6 +168,7 @@ export function NativeRealtimeBridge() {
 		void resubscribe();
 		return () => {
 			closed = true;
+			localIds.current = new Map();
 			clearTimeout(timer);
 			stopListening();
 			stopWatching?.();

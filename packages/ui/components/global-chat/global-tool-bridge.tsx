@@ -42,6 +42,7 @@ import {
 	type AskUserAnswerPayload,
 	parseAskUserArguments,
 } from "../../lib/ask-user";
+import { botSecretRequest } from "../../lib/bot-secret-sealing";
 import { replyToChannel } from "../../lib/channel";
 import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-capability-session";
 import { getErrorMessage } from "../../lib/error-message";
@@ -78,7 +79,9 @@ import {
 } from "../../lib/forwarded-attachments";
 import {
 	type ApprovalOwner,
+	type AsksAgain,
 	StandingApprovals,
+	asksAgainOf,
 	grantStoreOf,
 	proposedBotSettings,
 	requiresFreshToolApproval,
@@ -262,6 +265,7 @@ import {
 	isReturnedAppInventory,
 	sealedResearchRefusal,
 } from "./local-app-discovery";
+import { assistantSelection, withAssistantModel } from "./model-selection";
 import { readFlowScriptSource } from "./read-flowscript-source";
 import { researchAgentPrompt } from "./research-brief";
 import {
@@ -360,6 +364,9 @@ interface FrontendToolApproval {
 	title?: string;
 	description?: string;
 	sessionKey?: string;
+	/** Set when web content in the turn put a standing grant for this call aside. */
+	asksAgain?: AsksAgain;
+	asks_again?: AsksAgain;
 }
 
 export interface FrontendToolRequest {
@@ -402,6 +409,11 @@ export interface FrontendToolRequest {
 		 */
 		runId?: string;
 		run_id?: string;
+		/**
+		 * The model the owning bot turn names for its assistants: the bot's sub-task model, else
+		 * the turn's own. Absent outside a bot turn, where the chat's selection applies.
+		 */
+		assistantModelId?: string;
 	};
 }
 
@@ -702,7 +714,10 @@ export interface RunScope {
 			appId?: string;
 		} | null,
 	): void;
-	/** The provider/model/effort pinned by this run, for nested specialists. */
+	/**
+	 * The provider/model/effort nested specialists run on: the model the owning bot turn names,
+	 * else this run's own selection.
+	 */
 	turnSelection(): GlobalChatAgentSelection;
 }
 
@@ -729,7 +744,10 @@ function setSolveRoutingState(
 	}
 }
 
-function createRunScope(runId: string | undefined): RunScope {
+function createRunScope(
+	runId: string | undefined,
+	assistantModelId?: string,
+): RunScope {
 	const store = () => useGlobalChatStore.getState();
 	const live = () => (runId ? Boolean(store().runs[runId]) : false);
 	const guard = (write: (id: string) => void) => {
@@ -768,7 +786,8 @@ function createRunScope(runId: string | undefined): RunScope {
 				guard((id) => store().setPendingComponentsDraft(id, requestId, draft));
 			else store().setPendingComponentsDraft(runId, requestId, null);
 		},
-		turnSelection: () => getGlobalChatTurnSelection(runId),
+		turnSelection: () =>
+			assistantSelection(getGlobalChatTurnSelection(runId), assistantModelId),
 	};
 }
 
@@ -1449,6 +1468,7 @@ function promptForDialog(
 		approvalKind: request.approval?.kind,
 		approvalSessionKey: request.approval?.sessionKey,
 		contextAppId: request.context?.appId || request.context?.app_id,
+		asksAgain: asksAgainOf(request.approval),
 	});
 	const rememberable =
 		approvalScope.rememberable && asking.conversationId !== undefined;
@@ -1458,6 +1478,7 @@ function promptForDialog(
 		...asking,
 		destructive: dialog.override?.destructive ?? false,
 		rememberable,
+		asksAgain: asksAgainOf(request.approval),
 		rememberAppId: rememberable ? approvalScope.appId : undefined,
 		configurationChanges: proposedBotSettings(
 			request.toolName,
@@ -1586,6 +1607,8 @@ export function GlobalToolBridge() {
 	// "Don't ask again" per owner: one bot's (or Flux's) answer never waives another's calls.
 	const botStateRef = useRef(backend.botState);
 	botStateRef.current = backend.botState;
+	const inboxStateRef = useRef(backend.inboxState);
+	inboxStateRef.current = backend.inboxState;
 	const standingApprovalsRef = useRef(
 		new StandingApprovals(() => grantStoreOf(botStateRef.current)),
 	);
@@ -5244,7 +5267,7 @@ export function GlobalToolBridge() {
 								.map((node) => node.id),
 						);
 
-						// Run the board copilot as a sub-agent, using the global chat's selected model.
+						// Run the board copilot as a sub-agent, on the model this run's assistants use.
 						const turnSelection = scope.turnSelection();
 						const owningUserPrompt = sourceUserPrompt(request);
 						const owningConversationId = conversationScopeId(request);
@@ -7008,7 +7031,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 					);
 					if (alreadyCreated) return alreadyCreated;
 
-					// Run the widget copilot as a sub-agent, using the global chat's selected model.
+					// Run the widget copilot as a sub-agent, on the model this run's assistants use.
 					const turnSelection = scope.turnSelection();
 					const owningUserPrompt = sourceUserPrompt(request);
 					const owningConversationId = conversationScopeId(request);
@@ -8105,11 +8128,19 @@ Completion contract: build complete helper logic first and add the Event entry l
 				request,
 				secret: {
 					...details,
-					store: async (value) => {
-						await store.upsertBotSecret(botId, details.name, {
-							value,
-							description: details.description,
-						});
+					store: async (value, sealed = false) => {
+						await store.upsertBotSecret(
+							botId,
+							details.name,
+							await botSecretRequest(
+								inboxStateRef.current,
+								botId,
+								details.name,
+								value,
+								details.description,
+								sealed,
+							),
+						);
 					},
 				},
 			});
@@ -8224,6 +8255,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 				}
 
 				const approval = request.approval;
+				const asksAgain = asksAgainOf(approval);
 				const approvalScope = resolveFrontendToolApprovalScope({
 					requestId: request.requestId,
 					toolName: request.toolName,
@@ -8231,6 +8263,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 					approvalKind: approval?.kind,
 					approvalSessionKey: approval?.sessionKey,
 					contextAppId: request.context?.appId || request.context?.app_id,
+					asksAgain,
 				});
 				const sessionKey = approvalScope.sessionKey;
 				// Waivers belong to the run that asks: its bot's auto mode and "don't ask again", or
@@ -8239,8 +8272,10 @@ Completion contract: build complete helper logic first and add the Event entry l
 				// by the backend is untouched, so ordered execution of mutating tools still holds.
 				const asking = askingChat(request);
 				const owner = approvalOwner(asking);
+				// A call asked again after web content asks even in auto mode (D8b).
 				const needsApproval =
 					requiresFreshToolApproval(request.toolName) ||
+					asksAgain !== undefined ||
 					(!selectAutoMode(
 						useGlobalChatStore.getState(),
 						asking.conversationId,
@@ -8373,7 +8408,10 @@ Completion contract: build complete helper logic first and add the Event entry l
 			}
 			// Resolved once, here, and threaded down: every store write this tool performs is
 			// addressed to the run that asked for it.
-			const scope = createRunScope(ownerMessageId);
+			const scope = createRunScope(
+				ownerMessageId,
+				request.context?.assistantModelId,
+			);
 			if (request.toolName === "flowpilot_board") {
 				const appId =
 					argString(request.arguments, "app_id") ||
@@ -8540,6 +8578,12 @@ Completion contract: build complete helper logic first and add the Event entry l
 			if (timeoutId !== undefined) clearTimeout(timeoutId);
 
 			response = { ...response, requestId: request.requestId };
+			if (isCancellableNestedCopilotTool(request.toolName)) {
+				response = {
+					...response,
+					result: withAssistantModel(response.result, scope.turnSelection()),
+				};
+			}
 			if (
 				request.toolName === "list_apps" &&
 				!requestExecutionFenceRef.current.isInvalidated(executionLease) &&

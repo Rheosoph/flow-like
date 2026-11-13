@@ -22,6 +22,8 @@ export interface IApp {
 	rating_count: number;
 	rating_sum: number;
 	relevance_score?: number | null;
+	/** The owner refuses bots here: every bot's access answers `APP_REFUSES_BOTS`. */
+	refuse_bots?: boolean;
 	secondary_category?: IAppCategory | null;
 	/** Owner-declared app type. Null/undefined means unclassified. */
 	app_type?: IAppType | null;

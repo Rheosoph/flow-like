@@ -22,6 +22,26 @@ use flow_like_types::Result;
 use flow_like_types::inbox::{InboxEntryKind, plain_envelope, tombstone_envelope};
 use serde_json::{Value, json};
 
+struct MeteredLlm(Arc<StubLlm>);
+
+#[async_trait]
+impl flow_like_bot_memory::MemoryLlm for MeteredLlm {
+    async fn complete(&self, request: flow_like_bot_memory::LlmRequest) -> Result<String> {
+        flow_like_bot_memory::telemetry::record_model_usage(
+            request.task,
+            "metered-stub",
+            &flow_like_model_provider::response::Usage {
+                prompt_tokens: 11,
+                completion_tokens: 3,
+                total_tokens: 14,
+                ..Default::default()
+            },
+            2,
+        );
+        flow_like_bot_memory::MemoryLlm::complete(self.0.as_ref(), request).await
+    }
+}
+
 const BOT: &str = "bot_rex";
 const OWNER: &str = "user_ada";
 
@@ -216,7 +236,7 @@ impl Host {
         let inbox = Arc::new(Inbox::default());
         let session = Arc::new(MemorySession::new(
             stores,
-            Arc::new(SwitchLlm::new(llm.clone())),
+            Arc::new(SwitchLlm::new(Arc::new(MeteredLlm(llm.clone())))),
             embedder,
             inbox.clone(),
             SessionOptions::new(budget, tz()),
@@ -564,6 +584,24 @@ async fn a_long_history_compacts_before_the_turn_and_the_prompt_stays_in_budget(
         .unwrap();
 
     assert!(prepared.compacted, "the Hard trigger must compact first");
+    let measured = prepared
+        .stats
+        .compactions
+        .first()
+        .expect("measured compaction");
+    assert_eq!(measured.trigger, "hard");
+    assert_eq!(measured.status, "completed");
+    assert!(measured.after_tokens.unwrap() < measured.before_tokens);
+    assert!(measured.usage.as_ref().unwrap().total_tokens > 0);
+    assert!(prepared.stats.calls.iter().all(|call| {
+        call.purpose
+            .as_deref()
+            .is_some_and(|purpose| purpose.starts_with("memory_"))
+    }));
+    assert_eq!(
+        prepared.stats.context.as_ref().unwrap().context_window,
+        small_budget().context_window
+    );
     let state = host.session.engine().stores().state.load().await.unwrap();
     assert!(state.compacted_through.is_some());
     assert!(prepared.context.contains("Earlier in this conversation"));
@@ -602,6 +640,103 @@ async fn a_long_history_compacts_before_the_turn_and_the_prompt_stays_in_budget(
             .all(|segment| segment.seq_to <= state.compacted_through.unwrap())
     );
     assert!(written.iter().all(|segment| segment.summary.contains("#")));
+}
+
+#[tokio::test]
+async fn background_compaction_usage_survives_reopening_and_is_reported_once() {
+    let host = Host::new(small_budget()).await;
+    host.exchanges(60);
+    let trigger = host.copy.user("Continue from the saved progress.");
+    let request = host.request(trigger);
+    let done = host
+        .session
+        .after_turn(host.reader.as_ref(), &request)
+        .await;
+    assert!(done.compacted);
+    assert!(
+        host.session
+            .engine()
+            .stores()
+            .state
+            .load()
+            .await
+            .unwrap()
+            .pending_usage
+            .is_some()
+    );
+
+    let embedder = Arc::new(SwitchEmbedder::new(Arc::new(HashEmbedder::new("hash", 64))));
+    let stores = MemoryStores::open_local(host._dir.path(), embedder.clone())
+        .await
+        .unwrap();
+    let reopened = MemorySession::new(
+        stores,
+        Arc::new(SwitchLlm::new(Arc::new(MeteredLlm(host.llm.clone())))),
+        embedder,
+        host.inbox.clone(),
+        SessionOptions::new(small_budget(), tz()),
+    );
+    let prepared = reopened
+        .prepare(host.reader.as_ref(), &request)
+        .await
+        .unwrap();
+    assert!(
+        prepared
+            .stats
+            .compactions
+            .iter()
+            .any(|event| event.trigger == "soft" && event.status == "completed")
+    );
+    assert!(prepared.stats.usage.total_tokens > 0);
+    assert_eq!(
+        prepared.stats.usage.total_tokens,
+        prepared
+            .stats
+            .calls
+            .iter()
+            .map(|call| call.usage.total_tokens)
+            .sum::<u32>()
+    );
+    assert!(
+        reopened
+            .engine()
+            .stores()
+            .state
+            .load()
+            .await
+            .unwrap()
+            .pending_usage
+            .is_none()
+    );
+    assert_eq!(
+        prepared.usage_delivery.take().usage.total_tokens,
+        prepared.stats.usage.total_tokens
+    );
+
+    let next = reopened
+        .prepare(host.reader.as_ref(), &request)
+        .await
+        .unwrap();
+    assert!(next.stats.compactions.is_empty());
+    assert!(next.stats.calls.is_empty());
+}
+
+#[tokio::test]
+async fn preparation_reserves_the_system_prompt_and_tools_before_the_host_builds_them() {
+    let host = Host::new(small_budget()).await;
+    let trigger = host.copy.user("Hello.");
+    let prepared = host
+        .session
+        .prepare(host.reader.as_ref(), &host.request(trigger))
+        .await
+        .unwrap();
+    let reserve = small_budget().system_tools;
+    assert!(prepared.report.total_tokens >= reserve);
+    assert!(prepared.report.total_tokens < reserve + 100);
+    assert_eq!(
+        prepared.stats.context.as_ref().unwrap().estimated_tokens,
+        prepared.report.total_tokens
+    );
 }
 
 #[tokio::test]

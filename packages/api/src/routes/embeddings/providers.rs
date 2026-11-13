@@ -13,6 +13,8 @@ use serde::Deserialize;
 use super::embed::{EmbedRequest, EmbedType, EmbedUsage};
 use crate::{error::ApiError, state::AppState};
 
+#[path = "cloudflare.rs"]
+mod cloudflare;
 #[path = "openrouter.rs"]
 mod openrouter;
 
@@ -96,6 +98,14 @@ pub(crate) fn validate_request(
         nonempty(config.model_id.as_deref()).unwrap_or_default(),
         provider.vector_length,
     )?;
+    if cloudflare::is_gemma2(config) {
+        if nonempty(config.endpoint_secret_name.as_deref()).is_some() {
+            return Err(ApiError::bad_request(
+                "This embedding provider uses a fixed endpoint",
+            ));
+        }
+        return cloudflare::validate_request(provider, payload);
+    }
     if implementation(config) == &RemoteEmbeddingProvider::OpenRouter {
         if nonempty(config.endpoint_secret_name.as_deref()).is_some() {
             return Err(ApiError::bad_request(
@@ -444,6 +454,9 @@ fn request_body(
     config: &RemoteExecutionConfig,
     payload: &EmbedRequest,
 ) -> serde_json::Value {
+    if cloudflare::is_gemma2(config) {
+        return cloudflare::request_body(provider, payload);
+    }
     if implementation(config) == &RemoteEmbeddingProvider::OpenRouter {
         return openrouter::request_body(provider, config, payload);
     }
@@ -542,6 +555,9 @@ fn validate_dimensions(
 ) -> Result<(), ApiError> {
     let allowed: Option<&[u32]> = match (provider, model) {
         (RemoteEmbeddingProvider::Internal, "embeddinggemma-2") => Some(&[768]),
+        (RemoteEmbeddingProvider::CloudflareWorkersAI, "@cf/google/embeddinggemma-2") => {
+            Some(&[128, 256, 512, 768])
+        }
         (RemoteEmbeddingProvider::Cohere, "embed-v4.0") => Some(&[256, 512, 1024, 1536]),
         (RemoteEmbeddingProvider::Cohere, "embed-v5.0-fast" | "embed-v5.0-pro") => {
             Some(&[256, 512, 768, 1024, 1536, 2048])
@@ -649,7 +665,11 @@ async fn prepare_connection(
     } else {
         None
     };
-    let url = endpoint_url(implementation, endpoint.as_deref(), account.as_deref())?;
+    let url = if cloudflare::is_gemma2(config) {
+        cloudflare::endpoint_url(account.as_deref())?
+    } else {
+        endpoint_url(implementation, endpoint.as_deref(), account.as_deref())?
+    };
     let api_key = secret(
         state,
         nonempty(config.secret_name.as_deref()).unwrap_or(key_secret(implementation)),
@@ -756,6 +776,9 @@ async fn send_request(
         }
         RemoteEmbeddingProvider::OpenRouter => {
             openrouter::decode_response(&bytes, expected_count, expected_dimensions)?
+        }
+        RemoteEmbeddingProvider::CloudflareWorkersAI => {
+            cloudflare::decode_response(&bytes, expected_count, expected_dimensions)?
         }
         _ => decode_response(&bytes, expected_count, expected_dimensions)?,
     };

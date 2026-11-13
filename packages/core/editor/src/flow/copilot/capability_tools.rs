@@ -14,6 +14,8 @@ use flow_like_types::bot::BotCapability;
 use serde_json::{Value, json};
 
 use super::bot_notes::NotesHandle;
+use super::bot_reply_files::ReplyFiles;
+use super::bot_trail::ToolTrail;
 use super::memory_tools::MemoryHandle;
 use super::platform::PLATFORM_TOOL_IMAGE_URLS_FIELD;
 
@@ -134,8 +136,14 @@ fn ask_message(tool: &str, args: &Value) -> String {
     if tool == tools::people::MESSAGE_PERSON {
         return person_ask_message(args);
     }
+    if tool == tools::rooms::ROOM_INVITE {
+        return tools::rooms::ask_message(args);
+    }
     if tool == tools::web::WEB_REQUEST {
         return tools::web::ask_summary(args);
+    }
+    if let Some(message) = tools::browser::ask_message(tool, args) {
+        return message;
     }
     let target = ["index", "path", "name", "url"]
         .iter()
@@ -194,10 +202,13 @@ registered_tools!(
     "get_bot",
     "create_bot",
     "update_bot",
+    "delete_bot",
+    "list_bot_devices",
     "file_list",
     "file_read",
     "file_save",
     "file_write",
+    "file_link",
     "knowledge_create",
     "knowledge_add",
     "knowledge_search",
@@ -205,6 +216,7 @@ registered_tools!(
     "knowledge_drop",
     "file_summarize",
     "file_extract",
+    "file_extract_content",
     "pdf_render",
     "excel_inspect",
     "document_create",
@@ -215,12 +227,14 @@ registered_tools!(
     "message_owner",
     "list_people",
     "message_person",
+    "room_invite",
     "user_context_available",
     "user_context_request",
     "user_context_set_status",
     "schedule_task",
     "list_tasks",
     "cancel_task",
+    "update_task",
     "shell_run",
     "browser_open",
     "browser_snapshot",
@@ -236,6 +250,7 @@ registered_tools!(
     "email_send",
     "email_reply",
     "image_generate",
+    "barcode_read",
     "secret_list",
     "secret_request",
     "skill_load",
@@ -247,6 +262,11 @@ registered_tools!(
     "connector_request",
     "web_request",
 );
+
+/// Offered in group chats to every bot, without a capability: the owner approves each call.
+pub(super) fn is_room_tool(name: &str) -> bool {
+    name == tools::rooms::ROOM_INVITE
+}
 
 /// Offered beside a tool that takes secrets by name rather than through a capability of their own.
 pub(super) fn is_secret_tool(name: &str) -> bool {
@@ -368,6 +388,9 @@ pub struct HostTools {
     code_languages: Vec<String>,
     memory: Option<MemoryHandle>,
     notes: Option<NotesHandle>,
+    trail: Option<ToolTrail>,
+    reply_files: Option<ReplyFiles>,
+    conversation_key: Option<String>,
 }
 
 impl HostTools {
@@ -383,9 +406,7 @@ impl HostTools {
                 .into_iter()
                 .filter(|name| !LOCAL_MACHINE_TOOLS.contains(name))
                 .collect(),
-            code_languages: Vec::new(),
-            memory: None,
-            notes: None,
+            ..Self::default()
         }
     }
 
@@ -413,9 +434,7 @@ impl HostTools {
                 .into_iter()
                 .filter(|linked| names.iter().any(|name| name.as_ref() == *linked))
                 .collect(),
-            code_languages: Vec::new(),
-            memory: None,
-            notes: None,
+            ..Self::default()
         }
     }
 
@@ -438,6 +457,40 @@ impl HostTools {
 
     pub fn notes(&self) -> Option<&NotesHandle> {
         self.notes.as_ref()
+    }
+
+    /// Records the turn's tool calls for its reply and shows those of the bot's earlier replies.
+    /// Hosts pass it only for the owner's direct conversation with the bot.
+    pub fn with_trail(mut self, trail: ToolTrail) -> Self {
+        self.trail = Some(trail);
+        self
+    }
+
+    pub fn trail(&self) -> Option<&ToolTrail> {
+        self.trail.as_ref()
+    }
+
+    /// Collects the files the bot attaches with `file_attach`; offered only when a host passes
+    /// it, and that host puts them on the stored reply.
+    pub fn with_reply_files(mut self, files: ReplyFiles) -> Self {
+        self.reply_files = Some(files);
+        self
+    }
+
+    pub fn reply_files(&self) -> Option<&ReplyFiles> {
+        self.reply_files.as_ref()
+    }
+
+    /// Names the conversation the turn answers, unique on this host. The conversation's next
+    /// turn then starts from this turn's summary of its older messages instead of summarizing
+    /// them again. Hosts pass it only when the turn's history is that conversation's own.
+    pub fn with_conversation_key(mut self, key: String) -> Self {
+        self.conversation_key = Some(key);
+        self
+    }
+
+    pub fn conversation_key(&self) -> Option<&String> {
+        self.conversation_key.as_ref()
     }
 
     /// The languages `code_run` runs on this host (`ToolEnv::code_languages`). None: the host
@@ -464,7 +517,8 @@ impl HostTools {
             self.names
                 .remove(tools::user_context::USER_CONTEXT_AVAILABLE);
             self.names.remove(tools::user_context::USER_CONTEXT_REQUEST);
-            self.names.remove(tools::user_context::USER_CONTEXT_SET_STATUS);
+            self.names
+                .remove(tools::user_context::USER_CONTEXT_SET_STATUS);
         }
         self
     }
@@ -501,6 +555,7 @@ mod tests {
             assert!(
                 required_capability(&spec).is_some()
                     || is_secret_tool(spec.name)
+                    || is_room_tool(spec.name)
                     || tools::configuration::is_settings_tool(spec.name),
                 "{} has no capability",
                 spec.name
@@ -536,6 +591,7 @@ mod tests {
                         | "bot_update_configuration"
                         | "create_bot"
                         | "update_bot"
+                        | "delete_bot"
                         | "shell_run"
                         | "browser_open"
                         | "computer_screenshot"
@@ -545,6 +601,7 @@ mod tests {
                         | "email_send"
                         | "email_reply"
                         | "message_person"
+                        | "room_invite"
                         | "secret_request"
                         | "skill_run"
                         | "web_request"
@@ -586,6 +643,22 @@ mod tests {
     }
 
     #[test]
+    fn opening_a_page_in_the_owners_browser_says_so_when_it_asks() {
+        let spec = bot_tool_spec("browser_open").expect("browser_open");
+        let ToolApprovalSpec::Mutating { message, .. } = spec.approval else {
+            panic!("browser_open must ask");
+        };
+        assert_eq!(
+            message(&json!({ "url": "https://shop.example/" })),
+            "The bot wants to run browser_open 'https://shop.example/'."
+        );
+        assert_eq!(
+            message(&json!({ "url": "https://shop.example/", "browser": "owner" })),
+            "The bot wants to open 'https://shop.example/' in your own browser, where you are signed in."
+        );
+    }
+
+    #[test]
     fn web_requests_ask_with_the_site_and_need_their_own_capability() {
         assert_eq!(
             tool_capability("web_request"),
@@ -597,7 +670,7 @@ mod tests {
         };
         assert_eq!(
             message(&json!({ "url": "https://www.cisa.gov/feeds/kev.xml?x=1" })),
-            "The bot wants to send a GET request to www.cisa.gov/feeds/kev.xml."
+            "The bot wants to send a GET request to www.cisa.gov/feeds/kev.xml?x=1."
         );
     }
 

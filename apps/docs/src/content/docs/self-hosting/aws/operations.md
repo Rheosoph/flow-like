@@ -40,6 +40,13 @@ receive-only grant for the signed-in account. The connection receives small
 invalidation messages; clients fetch authorized data through HTTP replay.
 Active HTTP execution streams continue to carry their own output.
 
+One kind of content also travels on this connection. While a hosted bot answers
+in a voice call, the text of its reply is published to the devices of the
+people in that conversation as it is written, so the call can speak the first
+sentence without waiting for the whole reply. Each message is at most 4 KB and
+goes to the same account topics. The stored message still arrives through HTTP
+replay, and a device that misses these messages only loses the head start.
+
 The existing `CHANNEL_IOT_ENDPOINT`, `CHANNEL_IOT_ROLE_ARN`, region and account
 settings also configure this connection. Extend deployment IAM before enabling
 it. With the default `CHANNEL_IOT_TOPIC_PREFIX=runs`, the required resources are:

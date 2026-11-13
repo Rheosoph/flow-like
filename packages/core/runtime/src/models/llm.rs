@@ -594,6 +594,7 @@ impl ModelFactory {
             );
 
             let mut model_provider = model_provider.clone();
+            let upstream_model = model_provider.model_id.clone();
             // Only fields required by the trusted Flow-Like proxy are passed to
             // the OpenAI-compatible client. Provider params stored on a Bit are
             // catalog metadata and are never forwarded as request options.
@@ -678,6 +679,7 @@ impl ModelFactory {
                     OpenRouterModel::from_provider_with_authorizer(
                         &model_provider,
                         authorizer.clone(),
+                        upstream_model.as_deref(),
                     )
                     .await
                     .map_err(|e| {
@@ -798,6 +800,7 @@ mod tests {
             parameters: flow_like_types::json::to_value(LLMParameters {
                 context_length: 20_000,
                 model_classification: BitModelClassification::default(),
+                data_classification: None,
                 provider: ModelProvider {
                     api_surface,
                     provider_name: provider_name.to_string(),
@@ -1694,6 +1697,7 @@ mod tests {
                 parameters: flow_like_types::json::to_value(LLMParameters {
                     context_length: 200_000,
                     model_classification: BitModelClassification::default(),
+                    data_classification: None,
                     provider: ModelProvider {
                         api_surface: Some(ModelApiSurface::ChatCompletions),
                         provider_name: provider_name.to_string(),

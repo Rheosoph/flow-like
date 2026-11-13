@@ -2219,6 +2219,8 @@ export class BoardState implements IBoardState {
 				runtime_variables: payload.runtime_variables,
 				profile_id: this.backend.profile?.id,
 			},
+			// The board reads the run's logs as soon as this settles.
+			awaitStreamClose: true,
 			onRunId: eventId,
 			onEvent: (event) => {
 				// Handle toast events globally

@@ -1,5 +1,9 @@
 {
 	"capabilities": {
+		"barcodes": {
+			"description": "Reads QR codes and barcodes in photos, scans and screenshots",
+			"label": "Barcodes"
+		},
 		"browser_use": {
 			"description": "Drive a web browser on its desktop or device",
 			"label": "Browser"
@@ -57,7 +61,7 @@
 			"label": "Image generation"
 		},
 		"internet": {
-			"description": "Search the web and read pages through a separate researcher",
+			"description": "Searches the web and reads public pages",
 			"label": "Internet"
 		},
 		"knowledge": {
@@ -174,7 +178,13 @@
 		"manualAvailability": "Enter availability for this answer",
 		"freeBusyHint": "Share busy time ranges from your linked calendars for up to the next 24 hours. Event details are not included.",
 		"manageAvailability": "Manage availability and calendars",
-		"applyStatus": "Apply status change"
+		"applyStatus": "Apply status change",
+		"sessionShared": "Shared for this session",
+		"revoked": "Session access revoked",
+		"sessionAccessDirect": "Allow for this session: for up to 30 minutes the bot can keep using what you share in this conversation, and this device answers its new requests for these fields automatically. You can revoke it here at any time.",
+		"sessionAccessGroup": "Allow for this session: for up to 30 minutes this device answers the bot's new requests for these fields in this group automatically. You can revoke it here at any time.",
+		"onceRetention": "Share once: the snapshot is current for up to five minutes and is used for the bot's next answer only. Shared messages remain in this conversation.",
+		"revokeFailed": "Couldn't revoke session access. Try again."
 	},
 	"computer": {
 		"alt": "What {{name}} sees right now",
@@ -226,7 +236,19 @@
 		"focus": "Focus: {{label}}",
 		"actionRunning": "In progress",
 		"actionFailed": "Failed",
-		"actionCompleted": "Completed"
+		"actionCompleted": "Completed",
+		"permission": {
+			"accessibility": "Accessibility",
+			"accessibilityReason": "Without it, the bot can't use the mouse and keyboard or list windows.",
+			"afterAllow": "After you allow it, quit and reopen Flow Like.",
+			"elsewhere": "Allow it in System Settings > Privacy & Security on the Mac that runs this bot, then quit and reopen Flow Like there.",
+			"open": "Open permissions",
+			"restartHint": "macOS applies {{permission}} only after Flow Like starts again. Quit Flow Like, open it again, then ask the bot to try again.",
+			"restartTitle": "Quit and reopen Flow Like",
+			"screenReason": "Without it, the bot sees only the wallpaper, not the windows of other apps.",
+			"screenRecording": "Screen Recording",
+			"title": "Flow Like needs {{permission}} access"
+		}
 	},
 	"connectors": {
 		"account": {
@@ -290,9 +312,44 @@
 			"always": "Always allow",
 			"answeredAlways": "Always allowed",
 			"answeredDeny": "Denied",
+			"answeredElsewhere": "Answered on another device",
 			"answeredOnce": "Allowed once",
 			"askEveryTime": "Always asks first",
+			"batch": {
+				"allowAllOnce": "Allow all once",
+				"alwaysAllowAll": "Always allow all",
+				"answered": "{{allowed}} allowed, {{denied}} denied",
+				"answeredUniform_one": "{{decision}} · {{count}} call",
+				"answeredUniform_other": "{{decision}} · {{count}} calls",
+				"back": "Back",
+				"callAnswer": "Answer for {{summary}}",
+				"choose": "Choose per call",
+				"count_one": "{{count}} call",
+				"count_other": "{{count}} calls",
+				"denyAll": "Deny all",
+				"groupAnswer_one": "Answer for {{count}} call to {{target}}",
+				"groupAnswer_other": "Answer for {{count}} calls to {{target}}",
+				"label_one": "Approval request, {{count}} call",
+				"label_other": "Approval request, {{count}} calls",
+				"mixed": "Mixed",
+				"notRememberable": "This call is asked every time",
+				"optionAlways": "Always",
+				"optionDeny": "Deny",
+				"optionOnce": "Once",
+				"secretFirst": "Save or decline the secret first",
+				"send": "Send answers",
+				"showAll_one": "Show the call",
+				"showAll_other": "Show all {{count}} calls",
+				"showAllGroups_one": "Show all {{count}} call in {{groups}} groups",
+				"showAllGroups_other": "Show all {{count}} calls in {{groups}} groups",
+				"showCalls": "Show calls",
+				"showFewer": "Show fewer",
+				"tally": "{{allowed}} allowed · {{denied}} denied",
+				"title_one": "{{name}} wants to make {{count}} call",
+				"title_other": "{{name}} wants to make {{count}} calls"
+			},
 			"botFallback": "Your bot",
+			"cancelled": "Task cancelled",
 			"configuration": {
 				"title": "Update bot settings",
 				"requestTitle": "{{name}} wants to update its settings",
@@ -323,6 +380,8 @@
 			},
 			"configurationChanges": "Proposed changes",
 			"clearValue": "Clear value",
+			"expired": "Expired",
+			"expiredHint": "Nobody answered within 7 days, so {{name}} stopped.",
 			"fields": {
 				"name": "Name",
 				"description": "Description",
@@ -336,8 +395,12 @@
 				"vision_model": "Vision model",
 				"subtask_model": "Subtask model",
 				"look": "Look",
+				"classification": "Data classification",
 				"location": "Runs on",
-				"app_ids": "Apps"
+				"device_id": "Device",
+				"app_ids": "Apps",
+				"app_restrictions": "What it may do in each app",
+				"execution_mode": "Execution environment"
 			},
 			"deny": "Deny",
 			"failed": "Couldn't send your answer. Try again.",
@@ -354,6 +417,8 @@
 				"save": "Save secret",
 				"saved": "Secret saved",
 				"saving": "Saving...",
+				"seal": "Seal to {{name}}'s key",
+				"sealHint": "Only the desktop or device that runs {{name}} can read it. The server keeps it but can't open it.",
 				"title": "{{name}} needs a secret",
 				"tooLarge": "Too large. The limit is {{max}} KB.",
 				"valueLabel": "Secret value"
@@ -375,6 +440,36 @@
 				"requestTitle": "{{name}} wants to change a bot's settings",
 				"hint": "Only the settings below will change, starting with the bot's next turn.",
 				"target": "Bot"
+			},
+			"deleteBot": {
+				"title": "Delete a bot",
+				"requestTitle": "{{name}} wants to delete a bot",
+				"hint": "The bot below is deleted for good with its settings, app access, secrets and workspace files and tables; its past messages stay.",
+				"approve": "Delete bot",
+				"reject": "Keep bot",
+				"approved": "Deletion approved",
+				"rejected": "Deletion rejected"
+			},
+			"classification": {
+				"level": "Sensitivity",
+				"unset": "Not classified",
+				"pii": "Personal data",
+				"piiYes": "Handles personal data",
+				"piiNo": "No personal data"
+			},
+			"webContent": {
+				"badge": "Asked again",
+				"hint": "You always allow {{target}}, but this turn read web pages first, so it asks once more. Turns without web content still use your permission.",
+				"noAlways": "Can't be remembered after the turn read web pages",
+				"notice": "Asked again because this turn read web pages."
+			},
+			"invite": {
+				"allow": "Invite",
+				"because": "Why: {{reason}}",
+				"next": "They join once they accept. Asked every time.",
+				"nextInRoom": "They join {{room}} once they accept. Asked every time.",
+				"title": "{{name}} wants to invite {{person}}",
+				"why": "Why"
 			}
 		},
 		"botSettings": "Settings for {{name}}",
@@ -395,6 +490,9 @@
 				"full": "This call is full.",
 				"unavailable": "No microphone was found, or another app is using it."
 			},
+			"interrupt": "Interrupt {{name}}",
+			"interruptHint": "Interrupt {{name}} (Esc)",
+			"interruptShort": "Interrupt",
 			"join": "Join",
 			"leave": "Leave call",
 			"listen": "Let bots listen",
@@ -425,7 +523,23 @@
 			"screenLabel": "{{name}}'s screen",
 			"cameraLabel": "{{name}}'s camera",
 			"you": "You",
-			"fullscreen": "Expand {{name}}"
+			"fullscreen": "Expand {{name}}",
+			"setup": {
+				"title": "Calls need speech recognition",
+				"body": "{{name}} hears you by turning your voice into text. Choose a speech-to-text model and you can call right away.",
+				"readyTitle": "Ready to call {{name}}",
+				"readyBody": "{{name}} can hear you now.",
+				"unsupportedTitle": "Calls aren't available here",
+				"unsupportedBody": "This app can't turn speech into text, so {{name}} couldn't hear you.",
+				"start": "Start the call",
+				"voice": "Voice",
+				"choose": "Choose a model",
+				"needed": "Needed",
+				"optional": "Optional",
+				"voiceHint": "Without one, {{name}} uses your default voice or answers in the chat.",
+				"saveFailed": "The model couldn't be saved",
+				"pinnedUnusable": "This model can't run in this app. Choose another one."
+			}
 		},
 		"cancel": "Cancel",
 		"composer": {
@@ -551,6 +665,8 @@
 			"unmute": "Unmute notifications"
 		},
 		"needs": {
+			"approvalBatchMeta_one": "{{count}} call waits for you · {{time}}",
+			"approvalBatchMeta_other": "{{count}} calls wait for you · {{time}}",
 			"approvalMeta": "Waiting for you · {{time}}",
 			"assistantMeta": "It paused until you decide",
 			"assistantTitle": "Waiting for your answer",
@@ -572,6 +688,19 @@
 			"create": "Create room",
 			"createInvite": "Create room and invite",
 			"description": "Bring people and your bots together in one conversation.",
+			"encryptionBotNoAbility": "Needs the end-to-end encryption ability",
+			"encryptionBotNoKey": "Has no encryption key yet; its host publishes one while it runs the bot with end-to-end encryption",
+			"encryptionCheckFailed": "Couldn't check who has an encryption key. Try again.",
+			"encryptionChecking": "Checking everyone's encryption keys…",
+			"encryptionHint": "Messages are sealed on each device. Bots that run on the server can't take part, and files can't be attached yet.",
+			"encryptionKeyMissing": "A member has no encryption key yet, so nothing can be sealed to them.",
+			"encryptionLabel": "End-to-end encrypted",
+			"encryptionMeaning": "Only the members' devices can read it, the server can't: attachments and cards the server posts are limited, and each person reads only what is sent after they join on a device that has published its key.",
+			"encryptionNoKey": "Has no encryption key yet; opening the app signed in publishes one",
+			"encryptionNotAllowed": "One of the members can't join an encrypted room. Another person's bot can only join a plain room.",
+			"encryptionOnDevice": "Lives on this device only",
+			"encryptionServerBot": "Runs on the server, which can't read an encrypted room",
+			"encryptionWaitsFor": "Possible once everyone can be sealed to:",
 			"failed": "Couldn't create the room.",
 			"full_one": "A room holds up to {{count}} members.",
 			"full_other": "A room holds up to {{count}} members.",
@@ -717,6 +846,16 @@
 		"unknownMember": "Someone",
 		"unread_one": "{{count}} unread",
 		"unread_other": "{{count}} unread",
+		"visibility": {
+			"description": "Choose the bots this profile shows. A hidden bot keeps working and stays in its rooms.",
+			"descriptionNamed": "Choose the bots “{{profile}}” shows. A hidden bot keeps working and stays in its rooms.",
+			"failed": "Couldn't change which bots this profile shows.",
+			"hidden": "Hidden in this profile",
+			"hiddenCount_one": "{{count}} hidden in this profile",
+			"hiddenCount_other": "{{count}} hidden in this profile",
+			"shown": "Shown in this profile",
+			"title": "Bots in this profile"
+		},
 		"you": "You",
 		"youObject": "you",
 		"yourCrew": "Your crew",
@@ -837,6 +976,7 @@
 			"appsFailed": "The app couldn't be updated.",
 			"appsLeft": "You're no longer a member",
 			"appsNoMatch": "No apps match your search.",
+			"appsRefusesBots": "Doesn't allow bots",
 			"appsRole": "Your role: {{role}}",
 			"appsSearch": "Search apps",
 			"appsUntitled": "Untitled app",
@@ -854,6 +994,7 @@
 				"web": "Web"
 			},
 			"needsLocal": "Needs the desktop app or a device. Change where it runs to switch this on.",
+			"notOnDevice": "Not available on a device yet.",
 			"profile": "Profile",
 			"profileApps_one": "{{count}} app",
 			"profileApps_other": "{{count}} apps",
@@ -896,7 +1037,6 @@
 			"memoryHost": "Let the host choose",
 			"memoryHostHint": "The app or server it runs on picks one",
 			"memoryModel": "Memory model",
-			"memoryNone": "Add an embedding model to your profile to choose one here.",
 			"moveDown": "Move down",
 			"moveUp": "Move up",
 			"noModels": "No matching models.",
@@ -906,13 +1046,12 @@
 				"hostHint": "The app or server it runs on picks one",
 				"image": "Image generation",
 				"imageHint": "Draws the images it creates.",
-				"none": "Add a matching model to your profile to choose one here.",
 				"ownModel": "Use its own model",
-				"ownModelHint": "Sub-tasks run on the model it thinks with",
+				"ownModelHint": "Sub-tasks and assistants run on the model it thinks with",
 				"stt": "Speech to text",
 				"sttHint": "Transcribes the voice messages and calls it hears.",
 				"subtask": "Sub-tasks",
-				"subtaskHint": "Runs the parallel parts of a big job; a smaller, faster model keeps them cheap. Used only where the host can run it.",
+				"subtaskHint": "Runs the parallel parts of a big job and the assistants that build workflows, pages and data; a smaller, faster model keeps them cheap. Used only where the host can run it.",
 				"title": "Pinned models",
 				"tts": "Text to speech",
 				"ttsHint": "Speaks its replies aloud.",
@@ -929,7 +1068,12 @@
 			"searchModels": "Search models",
 			"subtitle": "Tell it how to work and pick the models it thinks with.",
 			"title": "Instructions and models",
-			"unknownModel": "Unknown model ({{id}})"
+			"unknownModel": "Unknown model ({{id}})",
+			"yourModels": "Your models",
+			"allModels": "All models",
+			"catalogNotice": "None of your models fit here yet. Pick one from the catalog and it is added to your models.",
+			"catalogFailed": "The model catalog couldn't be loaded.",
+			"addAndUse": "Add to your models and use"
 		},
 		"delete": {
 			"action": "Delete",
@@ -963,6 +1107,7 @@
 		"duplicated": "Duplicated as {{name}}",
 		"errors": {
 			"appLimit": "This bot already uses the maximum of 200 selected apps.",
+			"appRefusesBots": "An app you picked doesn't allow bots; ask its owner.",
 			"capabilityLocation": "Computer use, Browser and Command line need the desktop app or a device. Switch them off or change where the bot runs.",
 			"createFailed": "The bot couldn't be created.",
 			"deleteFailed": "The bot couldn't be deleted.",
@@ -986,7 +1131,8 @@
 			"subtitle": "A bot lives on one host. Pick the one that has what it needs.",
 			"title": "Choose where it runs",
 			"turnedBackOn": "Switched back on because this host has a screen and shell: {{capabilities}}.",
-			"turnedOff": "Switched off because the cloud has no screen or shell: {{capabilities}}."
+			"turnedOff": "Switched off because the cloud has no screen or shell: {{capabilities}}.",
+			"turnedOffDevice": "Switched off because a device can't do these yet: {{capabilities}}."
 		},
 		"preview": {
 			"blank": "Blank",
@@ -1009,7 +1155,8 @@
 			"lookLocked": "The look uses items from packs you don't own yet: {{items}}.",
 			"nameRequired": "Give your bot a name.",
 			"nameTooLong": "Shorten the name to {{max, number}} characters.",
-			"profileRequired": "Choose the profile whose apps it may use."
+			"profileRequired": "Choose the profile whose apps it may use.",
+			"dockerRequiresDevice": "Choose a managed device for Docker hosting, or explicitly switch back to running directly on the host."
 		},
 		"safety": {
 			"encryptionHint": "When it's on, only you and the bot's host can read its messages and secrets. Bots on a device already talk over an encrypted tunnel.",
@@ -1070,7 +1217,28 @@
 			"create": "New bot",
 			"edit": "Bot settings"
 		},
-		"unavailable": "Bots need a signed-in Flow-Like account."
+		"unavailable": "Bots need a signed-in Flow-Like account.",
+		"docker": {
+			"ready": "Docker is ready on this device.",
+			"chooseDevice": "Choose a device to check Docker availability.",
+			"unknown": "Update and start the device agent to check Docker availability.",
+			"offline": "The device is offline or its Docker check has expired. Start the agent and check again.",
+			"notInstalled": "Install Docker on the selected device, start Docker, then check again.",
+			"unreachable": "Docker is installed, but the agent cannot connect. Start Docker and allow the agent to use it.",
+			"remoteEndpoint": "Select a local Docker connection on the device so the bot runs on this machine.",
+			"linuxRequired": "Switch Docker to Linux containers on the device.",
+			"imageUnavailable": "Update the device agent to a release that includes our prebuilt bot image for this machine.",
+			"title": "Execution environment",
+			"native": "Run directly on the host",
+			"nativeDescription": "Uses the device agent's own environment.",
+			"docker": "Run in Docker",
+			"description": "A separate container for this bot, with its own browser, desktop and shell. Flow-Like pulls our prebuilt image and manages the container.",
+			"deviceOnly": "Docker hosting is currently available for managed-device bots. Choose a device, or switch back to running directly on the host.",
+			"checkFailed": "The device's Docker status could not be checked. Try again.",
+			"install": "Docker installation instructions",
+			"recheck": "Check again",
+			"hubUnreachable": "Configure the device agent with a hub address reachable from Docker. A localhost address only works on the host."
+		}
 	},
 	"exchange": {
 		"answered": "{{caller}} asked {{callee}}",
@@ -1097,11 +1265,17 @@
 		"event": "Run event {{id}} of app {{app}}",
 		"host": "Run code that reaches {{host}}",
 		"other": "{{tool}}: {{scope}}",
+		"ownerBrowser": "Open sites on {{site}} in your own browser",
 		"page": "Use page {{id}} of app {{app}}",
 		"person": "Message {{name}}",
 		"personUnknown": "Message a person you chat with",
 		"table": "Use {{tool}} on table {{table}}",
-		"tool": "Use {{tool}}"
+		"tool": "Use {{tool}}",
+		"webPrivateRead": "Read from {{site}} on a private network",
+		"webPrivateWrite": "Write to {{site}} on a private network",
+		"webRead": "Read from {{site}}",
+		"webSecret": "Send {{secret}} to {{site}}",
+		"webWrite": "Write to {{site}}"
 	},
 	"history": {
 		"busy": "Wait for the reply to finish, then try again.",
@@ -1403,7 +1577,8 @@
 			"fallbacks_other": "Then {{count}} fallbacks",
 			"onDevice": "On {{device}}",
 			"runs": "Where it runs",
-			"status": "Status"
+			"status": "Status",
+			"dockerOnDevice": "Docker on {{device}}"
 		},
 		"encryption": {
 			"fingerprint": "Key fingerprint {{fingerprint}}",
@@ -1417,6 +1592,7 @@
 			"waiting": "Waiting for the host to make the key."
 		},
 		"grants": {
+			"expires": "Lapses on {{date}} if unused",
 			"none": "Nothing yet. {{name}} asks you before it acts, and you can tell it to stop asking.",
 			"revoke": "Stop allowing: {{action}}",
 			"title": "Allowed actions"
@@ -1531,7 +1707,10 @@
 			"tz": "Time zone",
 			"monitoring": "Only report meaningful changes",
 			"monitoringHint": "Uses the bot's decision model after each check. Leave off for reminders and regular reports.",
-			"monitoringLabel": "Monitoring"
+			"monitoringLabel": "Monitoring",
+			"placeDirect": "In a chat with someone else",
+			"placeGroup": "In {{name}}",
+			"placeUnnamedGroup": "In a group chat"
 		},
 		"waitingForYou": "Waiting for you",
 		"webhooks": {
@@ -1560,7 +1739,7 @@
 			"responseHint": "Without wait, the request returns 202 with the turn state. Add ?wait=30 to the URL, or &wait=30 if it already has a query, to wait up to 30 seconds for a reply.",
 			"rotate": "Rotate the secret of {{name}}",
 			"secret": "Secret",
-			"signingHint": "Use the signing key as text to sign the exact request body with HMAC-SHA256. Send the lowercase hex digest in X-Flow-Like-Signature: sha256=<hex>. No secret header or URL parameter is needed when signing.",
+			"signingHint": "Use the signing key (the same value as the secret) as text. For each call send X-Flow-Like-Timestamp (Unix seconds, within 5 minutes of now), X-Flow-Like-Delivery (a unique id per delivery) and X-Flow-Like-Signature: sha256=<hex>, the lowercase hex HMAC-SHA256 of \"<timestamp>.<delivery id>.<raw body>\". Each delivery id is accepted once. No secret header or URL parameter is needed when signing.",
 			"signingKey": "Signing key (HMAC-SHA256)",
 			"title": "Webhooks",
 			"url": "URL",
@@ -1739,6 +1918,7 @@
 		"cancelFailed": "Couldn't withdraw the invitation.",
 		"declined": "Declined",
 		"description": "Invited people and other people's bots join once they accept.",
+		"encryptedInvite": "This room is end-to-end encrypted. Whoever you bring in needs an encryption key first, and reads only what is sent after they join, never the earlier messages.",
 		"invite": "Bring someone in",
 		"inviteFailed": "Couldn't send the invitations.",
 		"limits": "Room limits",

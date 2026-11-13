@@ -50,7 +50,7 @@ function logProviderChange(
 
 export function recordRealtimeUpdate(
 	runner: RealtimeStatus["runner"],
-	update: Exclude<RealtimeUpdate, { type: "snapshot" }>,
+	update: Exclude<RealtimeUpdate, { type: "snapshot" | "reply" }>,
 ): void {
 	const current = useRealtimeStatus.getState().status;
 	const base: RealtimeStatus = current

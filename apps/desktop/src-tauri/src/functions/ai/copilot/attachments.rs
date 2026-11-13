@@ -2,6 +2,9 @@
 
 use copilot_sdk::{AttachmentType, UserMessageAttachment};
 use flow_like::copilot::ChatImage;
+use flow_like::flow::copilot::AttachmentManifestEntry;
+use flow_like_bot_tools::{FileData, FileLink};
+use flow_like_types::bot_message::WorkspaceHandle;
 use flow_like_types::images::{
     PORTABLE_INLINE_IMAGE_BYTES, PORTABLE_INLINE_IMAGES_BYTES, fit_image_within,
 };
@@ -117,6 +120,136 @@ fn local_asset_path(url: &str) -> Option<PathBuf> {
         PathBuf::from(format!("/{decoded}"))
     };
     path.is_file().then_some(path)
+}
+
+/// A chat attachment's bytes and full size, from a local asset URL or an http(s) link. The bytes
+/// stay empty when the file is larger than `max_bytes`, so the caller can name its size.
+pub(crate) async fn read_chat_attachment(
+    url: &str,
+    max_bytes: u64,
+) -> Result<(Vec<u8>, u64), String> {
+    if let Some(path) = local_asset_path(url) {
+        let size = tokio::fs::metadata(&path)
+            .await
+            .map_err(|error| format!("Reading the attachment failed: {error}"))?
+            .len();
+        if size > max_bytes {
+            return Ok((Vec::new(), size));
+        }
+        let bytes = tokio::fs::read(&path)
+            .await
+            .map_err(|error| format!("Reading the attachment failed: {error}"))?;
+        return Ok((bytes, size));
+    }
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("The attachment is neither a local file nor an HTTP(S) link".into());
+    }
+    let mut response = flow_like_types::reqwest::get(url)
+        .await
+        .map_err(|error| format!("Downloading the attachment failed: {}", error.without_url()))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Downloading the attachment failed (HTTP {})",
+            response.status().as_u16()
+        ));
+    }
+    if let Some(size) = response.content_length().filter(|size| *size > max_bytes) {
+        return Ok((Vec::new(), size));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("Downloading the attachment failed: {}", error.without_url()))?
+    {
+        bytes.extend_from_slice(&chunk);
+        if bytes.len() as u64 > max_bytes {
+            return Ok((Vec::new(), bytes.len() as u64));
+        }
+    }
+    let size = bytes.len() as u64;
+    Ok((bytes, size))
+}
+
+/// The conversation id in the handle of a file attached to the message being answered. It names
+/// no stored conversation: the run serves these files from the chat's upload.
+pub(crate) const CHAT_FILES: &str = flow_like::flow::copilot::TURN_FILES;
+
+/// The handle a file tool reads `entry` with.
+pub(crate) fn chat_file_handle(entry: &AttachmentManifestEntry) -> Option<WorkspaceHandle> {
+    let name = entry.name.as_deref().filter(|name| !name.is_empty())?;
+    Some(WorkspaceHandle::conversation_file(
+        CHAT_FILES,
+        name,
+        entry.size.unwrap_or_default(),
+        "",
+        entry.mime_type.as_deref().unwrap_or_default(),
+    ))
+}
+
+/// The attachments, each with its handle: the stored file's when the message carries one, else a
+/// handle for this turn when it has a link to read and a name no other attachment shares.
+pub(super) fn with_chat_file_handles(
+    attachments: &[AttachmentManifestEntry],
+) -> Vec<AttachmentManifestEntry> {
+    attachments
+        .iter()
+        .map(|entry| {
+            let unique = attachments
+                .iter()
+                .filter(|other| other.name == entry.name)
+                .count()
+                == 1;
+            AttachmentManifestEntry {
+                handle: entry.handle.clone().or_else(|| {
+                    (unique && entry.url.is_some())
+                        .then(|| chat_file_handle(entry))
+                        .flatten()
+                }),
+                ..entry.clone()
+            }
+        })
+        .collect()
+}
+
+/// A download link to an attachment of this turn: its upload's web address, when it has one.
+pub(crate) fn chat_file_link(
+    attachments: &[AttachmentManifestEntry],
+    path: &str,
+) -> Option<FileLink> {
+    attachments
+        .iter()
+        .find(|entry| entry.name.as_deref() == Some(path))
+        .and_then(|entry| entry.url.as_deref())
+        .and_then(FileLink::web)
+}
+
+/// The file a [`chat_file_handle`] names, read from the chat's upload.
+pub(crate) async fn read_chat_file(
+    attachments: &[AttachmentManifestEntry],
+    path: &str,
+    max_bytes: u64,
+) -> flow_like_types::Result<FileData> {
+    let entry = attachments
+        .iter()
+        .find(|entry| entry.name.as_deref() == Some(path))
+        .ok_or_else(|| {
+            flow_like_types::anyhow!(
+                "'{path}' is not attached to the message being answered. A file from an earlier message can no longer be read: ask for it again, or use its copy in the workspace if one was saved"
+            )
+        })?;
+    let url = entry.url.as_deref().ok_or_else(|| {
+        flow_like_types::anyhow!("The attachment '{path}' has no link to read it from")
+    })?;
+    let (bytes, size) = read_chat_attachment(url, max_bytes)
+        .await
+        .map_err(|error| flow_like_types::anyhow!("{path}: {error}"))?;
+    Ok(FileData {
+        bytes: bytes.into(),
+        size,
+        mime: entry.mime_type.clone().filter(|mime| !mime.is_empty()),
+        classification: None,
+    })
 }
 
 /// Maximum size of a single fetched attachment; larger ones are skipped to bound memory use.

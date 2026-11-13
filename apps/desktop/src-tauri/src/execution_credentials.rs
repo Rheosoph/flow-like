@@ -767,6 +767,21 @@ pub(crate) fn native_request_authorizer(
     })
 }
 
+/// Routes `model_state`'s hosted and device model calls through the signed-in session; returns
+/// the session's access token for the model factory.
+pub(crate) async fn authorize_native_models(
+    model_state: &mut FlowLikeState,
+    binding: &crate::native_auth::SessionBinding,
+) -> Result<String, String> {
+    #[cfg(desktop)]
+    {
+        model_state.device_model_connector =
+            Some(crate::device_models::connector_for_session(binding.clone()));
+    }
+    model_state.request_authorizer = Some(native_request_authorizer(binding.clone(), ""));
+    binding.cached_access_token().await
+}
+
 /// Hosted model calls of an account bot use a renewable token scoped to that bot and turn.
 pub(crate) fn native_bot_model_authorizer(
     binding: crate::native_auth::SessionBinding,

@@ -1,5 +1,9 @@
 {
 	"capabilities": {
+		"barcodes": {
+			"description": "Liest QR-Codes und Barcodes auf Fotos, Scans und Screenshots",
+			"label": "Barcodes"
+		},
 		"browser_use": {
 			"description": "Einen Webbrowser auf seinem Desktop oder Gerät steuern",
 			"label": "Browser"
@@ -57,7 +61,7 @@
 			"label": ""
 		},
 		"internet": {
-			"description": "Im Web suchen und Seiten lesen, über einen separaten Rechercheur",
+			"description": "Sucht im Web und liest öffentliche Seiten",
 			"label": "Internet"
 		},
 		"knowledge": {
@@ -174,7 +178,13 @@
 		"manualAvailability": "Verfügbarkeit für diese Antwort eingeben",
 		"freeBusyHint": "Teile belegte Zeiträume aus deinen verknüpften Kalendern für bis zu 24 Stunden. Termindetails werden nicht geteilt.",
 		"manageAvailability": "Verfügbarkeit und Kalender verwalten",
-		"applyStatus": "Statusänderung anwenden"
+		"applyStatus": "Statusänderung anwenden",
+		"sessionShared": "",
+		"revoked": "",
+		"sessionAccessDirect": "",
+		"sessionAccessGroup": "",
+		"onceRetention": "",
+		"revokeFailed": ""
 	},
 	"computer": {
 		"alt": "",
@@ -226,7 +236,19 @@
 		"focus": "",
 		"actionRunning": "",
 		"actionFailed": "",
-		"actionCompleted": ""
+		"actionCompleted": "",
+		"permission": {
+			"accessibility": "",
+			"accessibilityReason": "",
+			"afterAllow": "",
+			"elsewhere": "",
+			"open": "",
+			"restartHint": "",
+			"restartTitle": "",
+			"screenReason": "",
+			"screenRecording": "",
+			"title": ""
+		}
 	},
 	"connectors": {
 		"account": {
@@ -290,9 +312,44 @@
 			"always": "",
 			"answeredAlways": "",
 			"answeredDeny": "",
+			"answeredElsewhere": "",
 			"answeredOnce": "",
 			"askEveryTime": "",
+			"batch": {
+				"allowAllOnce": "",
+				"alwaysAllowAll": "",
+				"answered": "",
+				"answeredUniform_one": "",
+				"answeredUniform_other": "",
+				"back": "",
+				"callAnswer": "",
+				"choose": "",
+				"count_one": "",
+				"count_other": "",
+				"denyAll": "",
+				"groupAnswer_one": "",
+				"groupAnswer_other": "",
+				"label_one": "",
+				"label_other": "",
+				"mixed": "",
+				"notRememberable": "",
+				"optionAlways": "",
+				"optionDeny": "",
+				"optionOnce": "",
+				"secretFirst": "",
+				"send": "",
+				"showAll_one": "",
+				"showAll_other": "",
+				"showAllGroups_one": "",
+				"showAllGroups_other": "",
+				"showCalls": "",
+				"showFewer": "",
+				"tally": "",
+				"title_one": "",
+				"title_other": ""
+			},
 			"botFallback": "",
+			"cancelled": "",
 			"configuration": {
 				"title": "Bot-Einstellungen ändern",
 				"requestTitle": "{{name}} möchte seine Einstellungen ändern",
@@ -323,6 +380,8 @@
 			},
 			"configurationChanges": "Vorgeschlagene Änderungen",
 			"clearValue": "Wert löschen",
+			"expired": "",
+			"expiredHint": "",
 			"fields": {
 				"name": "Name",
 				"description": "Beschreibung",
@@ -336,8 +395,11 @@
 				"vision_model": "Modell zur Bilderkennung",
 				"subtask_model": "Modell für Teilaufgaben",
 				"look": "",
+				"classification": "",
 				"location": "",
-				"app_ids": ""
+				"device_id": "",
+				"app_ids": "",
+				"app_restrictions": ""
 			},
 			"deny": "",
 			"failed": "",
@@ -354,6 +416,8 @@
 				"save": "",
 				"saved": "",
 				"saving": "",
+				"seal": "",
+				"sealHint": "",
 				"title": "",
 				"tooLarge": "",
 				"valueLabel": ""
@@ -375,6 +439,36 @@
 				"requestTitle": "",
 				"hint": "",
 				"target": ""
+			},
+			"deleteBot": {
+				"title": "",
+				"requestTitle": "",
+				"hint": "",
+				"approve": "",
+				"reject": "",
+				"approved": "",
+				"rejected": ""
+			},
+			"classification": {
+				"level": "",
+				"unset": "",
+				"pii": "",
+				"piiYes": "",
+				"piiNo": ""
+			},
+			"webContent": {
+				"badge": "",
+				"hint": "",
+				"noAlways": "",
+				"notice": ""
+			},
+			"invite": {
+				"allow": "",
+				"because": "",
+				"next": "",
+				"nextInRoom": "",
+				"title": "",
+				"why": ""
 			}
 		},
 		"botSettings": "Einstellungen für {{name}}",
@@ -395,6 +489,9 @@
 				"full": "",
 				"unavailable": ""
 			},
+			"interrupt": "{{name}} unterbrechen",
+			"interruptHint": "{{name}} unterbrechen (Esc)",
+			"interruptShort": "Unterbrechen",
 			"join": "",
 			"leave": "",
 			"listen": "",
@@ -425,7 +522,23 @@
 			"screenLabel": "",
 			"cameraLabel": "",
 			"you": "",
-			"fullscreen": ""
+			"fullscreen": "",
+			"setup": {
+				"title": "",
+				"body": "",
+				"readyTitle": "",
+				"readyBody": "",
+				"unsupportedTitle": "",
+				"unsupportedBody": "",
+				"start": "",
+				"voice": "",
+				"choose": "",
+				"needed": "",
+				"optional": "",
+				"voiceHint": "",
+				"saveFailed": "",
+				"pinnedUnusable": ""
+			}
 		},
 		"cancel": "Abbrechen",
 		"composer": {
@@ -551,6 +664,8 @@
 			"unmute": ""
 		},
 		"needs": {
+			"approvalBatchMeta_one": "",
+			"approvalBatchMeta_other": "",
 			"approvalMeta": "",
 			"assistantMeta": "Pausiert, bis du entscheidest",
 			"assistantTitle": "Wartet auf deine Antwort",
@@ -572,6 +687,14 @@
 			"create": "Raum erstellen",
 			"createInvite": "",
 			"description": "Bring Menschen und deine Bots in einer Unterhaltung zusammen.",
+			"encryptionBotNoAbility": "",
+			"encryptionHint": "",
+			"encryptionKeyMissing": "",
+			"encryptionLabel": "",
+			"encryptionNoKey": "",
+			"encryptionNotAllowed": "",
+			"encryptionOnDevice": "",
+			"encryptionServerBot": "",
 			"failed": "Der Raum konnte nicht erstellt werden.",
 			"full_one": "Ein Raum fasst bis zu {{count}} Mitglied.",
 			"full_other": "Ein Raum fasst bis zu {{count}} Mitglieder.",
@@ -717,6 +840,16 @@
 		"unknownMember": "Jemand",
 		"unread_one": "{{count}} ungelesen",
 		"unread_other": "{{count}} ungelesen",
+		"visibility": {
+			"description": "Wähle, welche Bots dieses Profil zeigt. Ein ausgeblendeter Bot arbeitet weiter und bleibt in seinen Räumen.",
+			"descriptionNamed": "Wähle, welche Bots „{{profile}}“ zeigt. Ein ausgeblendeter Bot arbeitet weiter und bleibt in seinen Räumen.",
+			"failed": "Die Bots dieses Profils konnten nicht ein- oder ausgeblendet werden.",
+			"hidden": "In diesem Profil ausgeblendet",
+			"hiddenCount_one": "{{count}} in diesem Profil ausgeblendet",
+			"hiddenCount_other": "{{count}} in diesem Profil ausgeblendet",
+			"shown": "In diesem Profil sichtbar",
+			"title": "Bots in diesem Profil"
+		},
 		"you": "Du",
 		"youObject": "dich",
 		"yourCrew": "Deine Crew",
@@ -837,6 +970,7 @@
 			"appsFailed": "Die App konnte nicht aktualisiert werden.",
 			"appsLeft": "Du bist kein Mitglied mehr",
 			"appsNoMatch": "Keine Apps passen zu deiner Suche.",
+			"appsRefusesBots": "",
 			"appsRole": "Deine Rolle: {{role}}",
 			"appsSearch": "Apps durchsuchen",
 			"appsUntitled": "Unbenannte App",
@@ -854,6 +988,7 @@
 				"web": "Web"
 			},
 			"needsLocal": "Braucht die Desktop-App oder ein Gerät. Ändere, wo er läuft, um das einzuschalten.",
+			"notOnDevice": "",
 			"profile": "Profil",
 			"profileApps_one": "{{count}} App",
 			"profileApps_other": "{{count}} Apps",
@@ -896,7 +1031,6 @@
 			"memoryHost": "Den Host wählen lassen",
 			"memoryHostHint": "Die App oder der Server, auf dem er läuft, wählt eines aus",
 			"memoryModel": "Gedächtnismodell",
-			"memoryNone": "Füge deinem Profil ein Embedding-Modell hinzu, um hier eines zu wählen.",
 			"moveDown": "Nach unten verschieben",
 			"moveUp": "Nach oben verschieben",
 			"noModels": "Keine passenden Modelle.",
@@ -906,7 +1040,6 @@
 				"hostHint": "",
 				"image": "",
 				"imageHint": "",
-				"none": "",
 				"ownModel": "",
 				"ownModelHint": "",
 				"stt": "",
@@ -929,7 +1062,12 @@
 			"decision": "",
 			"decisionDisabled": "",
 			"decisionDisabledHint": "",
-			"decisionHosted": ""
+			"decisionHosted": "",
+			"yourModels": "",
+			"allModels": "",
+			"catalogNotice": "",
+			"catalogFailed": "",
+			"addAndUse": ""
 		},
 		"delete": {
 			"action": "Löschen",
@@ -963,6 +1101,7 @@
 		"duplicated": "Als {{name}} dupliziert",
 		"errors": {
 			"appLimit": "Dieser Bot nutzt bereits die maximale Anzahl von 200 ausgewählten Apps.",
+			"appRefusesBots": "",
 			"capabilityLocation": "Computersteuerung, Browser und Befehlszeile brauchen die Desktop-App oder ein Gerät. Schalte sie aus oder ändere, wo der Bot läuft.",
 			"createFailed": "Der Bot konnte nicht erstellt werden.",
 			"deleteFailed": "Der Bot konnte nicht gelöscht werden.",
@@ -986,7 +1125,8 @@
 			"subtitle": "Ein Bot lebt auf genau einem Host. Wähle den, der alles bietet, was er braucht.",
 			"title": "Wähle, wo er läuft",
 			"turnedBackOn": "Wieder eingeschaltet, weil dieser Host einen Bildschirm und eine Shell hat: {{capabilities}}.",
-			"turnedOff": "Ausgeschaltet, weil die Cloud keinen Bildschirm und keine Shell hat: {{capabilities}}."
+			"turnedOff": "Ausgeschaltet, weil die Cloud keinen Bildschirm und keine Shell hat: {{capabilities}}.",
+			"turnedOffDevice": ""
 		},
 		"preview": {
 			"blank": "Ohne Vorlage",
@@ -1097,11 +1237,17 @@
 		"event": "",
 		"host": "",
 		"other": "",
+		"ownerBrowser": "",
 		"page": "",
 		"person": "",
 		"personUnknown": "",
 		"table": "",
-		"tool": ""
+		"tool": "",
+		"webPrivateRead": "",
+		"webPrivateWrite": "",
+		"webRead": "",
+		"webSecret": "",
+		"webWrite": ""
 	},
 	"history": {
 		"busy": "",
@@ -1531,7 +1677,10 @@
 			"tz": "",
 			"monitoring": "Nur relevante Änderungen melden",
 			"monitoringHint": "Nutzt nach jeder Prüfung das Entscheidungsmodell des Bots. Für Erinnerungen und regelmäßige Berichte ausgeschaltet lassen.",
-			"monitoringLabel": "Beobachtung"
+			"monitoringLabel": "Beobachtung",
+			"placeDirect": "In einem Chat mit jemand anderem",
+			"placeGroup": "In {{name}}",
+			"placeUnnamedGroup": "In einem Gruppenchat"
 		},
 		"waitingForYou": "",
 		"webhooks": {

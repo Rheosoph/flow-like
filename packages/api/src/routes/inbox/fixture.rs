@@ -20,6 +20,15 @@ use sea_orm::{
 };
 use serde_json::{Value, json};
 
+pub(crate) const BOT_TURN_TABLE: &str = r#"CREATE TABLE public."BotTurn" (
+        "id" TEXT PRIMARY KEY, "botId" TEXT NOT NULL, "ownerId" TEXT NOT NULL,
+        "conversationId" TEXT NOT NULL, "triggerMessageId" TEXT NOT NULL,
+        "hostKind" TEXT NOT NULL, "status" TEXT NOT NULL, "attempts" INTEGER NOT NULL,
+        "hostId" TEXT, "leaseUntil" TEXT, "operationId" TEXT, "replyMessageId" TEXT,
+        "errorCode" TEXT, "hops" INTEGER NOT NULL, "requesterId" TEXT,
+        "audience" TEXT NOT NULL DEFAULT 'OWNER', "statusText" TEXT, "unprompted" BOOLEAN, "createdAt" TEXT NOT NULL,
+        "updatedAt" TEXT NOT NULL, UNIQUE ("botId", "triggerMessageId"))"#;
+
 const TABLES: [&str; 8] = [
     r#"CREATE TABLE public."Conversation" (
         "id" TEXT PRIMARY KEY, "kind" TEXT NOT NULL, "title" TEXT, "encryption" TEXT NOT NULL,
@@ -37,17 +46,11 @@ const TABLES: [&str; 8] = [
         "messageId" TEXT NOT NULL, "senderId" TEXT NOT NULL, "kind" TEXT NOT NULL,
         "envelope" TEXT NOT NULL, "createdAt" TEXT NOT NULL, "seq" INTEGER, "cleared" BOOLEAN,
         UNIQUE ("inboxId", "messageId"), UNIQUE ("inboxId", "conversationId", "seq"))"#,
-    r#"CREATE TABLE public."App" ("id" TEXT PRIMARY KEY, "botId" TEXT UNIQUE)"#,
+    r#"CREATE TABLE public."App" ("id" TEXT PRIMARY KEY, "botId" TEXT UNIQUE, "refuseBots" BOOLEAN)"#,
     r#"CREATE TABLE public."User" (
-        "id" TEXT PRIMARY KEY, "name" TEXT, "username" TEXT, "preferredUsername" TEXT, "additionalInformation" TEXT, "updatedAt" TEXT)"#,
-    r#"CREATE TABLE public."BotTurn" (
-        "id" TEXT PRIMARY KEY, "botId" TEXT NOT NULL, "ownerId" TEXT NOT NULL,
-        "conversationId" TEXT NOT NULL, "triggerMessageId" TEXT NOT NULL,
-        "hostKind" TEXT NOT NULL, "status" TEXT NOT NULL, "attempts" INTEGER NOT NULL,
-        "hostId" TEXT, "leaseUntil" TEXT, "operationId" TEXT, "replyMessageId" TEXT,
-        "errorCode" TEXT, "hops" INTEGER NOT NULL, "requesterId" TEXT,
-        "audience" TEXT NOT NULL DEFAULT 'OWNER', "statusText" TEXT, "createdAt" TEXT NOT NULL,
-        "updatedAt" TEXT NOT NULL, UNIQUE ("botId", "triggerMessageId"))"#,
+        "id" TEXT PRIMARY KEY, "name" TEXT, "email" TEXT, "username" TEXT, "preferredUsername" TEXT, "additionalInformation" TEXT, "updatedAt" TEXT,
+        "tier" TEXT NOT NULL DEFAULT 'FREE')"#,
+    BOT_TURN_TABLE,
     r#"CREATE TABLE public."ConversationSegment" (
         "id" TEXT PRIMARY KEY, "conversationId" TEXT NOT NULL, "authorId" TEXT NOT NULL,
         "level" INTEGER NOT NULL, "seqFrom" INTEGER NOT NULL, "seqTo" INTEGER NOT NULL,
@@ -118,6 +121,25 @@ pub(crate) fn bot_principal(id: &str) -> Principal {
     }
 }
 
+/// A group `id`, titled after its id, that `creator` started with `others`.
+pub(crate) async fn group(
+    db: &DatabaseConnection,
+    id: &str,
+    creator: &str,
+    others: &[Principal],
+    encryption: flow_like_types::inbox::ConversationEncryption,
+) {
+    let plan = super::conversations::NewConversation {
+        kind: flow_like_types::inbox::ConversationKind::Group,
+        title: Some(id.into()),
+        members: Vec::new(),
+        encryption,
+    };
+    super::conversations::start_group(db, id, creator, &plan, others, at(0))
+        .await
+        .unwrap();
+}
+
 pub(crate) fn assert_code(error: &ApiError, status: StatusCode, code: &str) {
     assert_eq!(
         (error.status(), error.public_code()),
@@ -149,6 +171,7 @@ pub(crate) async fn insert_bot(db: &DatabaseConnection, id: &str, owner_id: &str
         capabilities: Set(Default::default()),
         profile_id: Set(None),
         location: Set(location.into()),
+        execution_mode: Set(None),
         device_id: Set((location == "DEVICE").then(|| format!("device-of-{id}"))),
         created_at: Set(at(0)),
         updated_at: Set(at(0)),
@@ -228,6 +251,7 @@ pub(crate) async fn running_turn(
         requester_id: Set(None),
         audience: Set("OWNER".into()),
         status_text: Set(None),
+        unprompted: Set(None),
         created_at: Set(at(0)),
         updated_at: Set(at(0)),
     }

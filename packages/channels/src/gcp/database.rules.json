@@ -7,6 +7,10 @@
         "wake": {
           ".read": "auth != null && auth.token.role === 'realtime' && auth.token.realtime_scope === $scope && auth.token.realtime_until > now",
           ".write": false
+        },
+        "reply": {
+          ".read": "auth != null && auth.token.role === 'realtime' && auth.token.realtime_scope === $scope && auth.token.realtime_until > now",
+          ".write": false
         }
       }
     },

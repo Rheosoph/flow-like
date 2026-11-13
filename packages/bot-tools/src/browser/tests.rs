@@ -126,6 +126,8 @@ pub(crate) struct FakeBrowser {
     pub downloads: Mutex<Vec<Download>>,
     pub redirects: Mutex<Vec<(String, String)>>,
     pub body_override: Mutex<Option<String>>,
+    pub has_owner_browser: Mutex<bool>,
+    pub owner_opened: Mutex<Vec<String>>,
 }
 
 impl FakeBrowser {
@@ -171,6 +173,15 @@ impl BrowserBackend for FakeBrowser {
             .map_or(url.to_string(), |(_, to)| to.clone());
         *self.current.lock().unwrap() = Some(landed.clone());
         Ok(self.state(landed))
+    }
+
+    async fn open_in_owner_browser(&self, url: &str) -> Result<PageState> {
+        if !*self.has_owner_browser.lock().unwrap() {
+            return Err(anyhow!("this host has no owner browser"));
+        }
+        self.owner_opened.lock().unwrap().push(url.to_string());
+        *self.current.lock().unwrap() = Some(url.to_string());
+        Ok(self.state(url.to_string()))
     }
 
     async fn snapshot(&self, request: SnapshotRequest) -> Result<SnapshotView> {
@@ -413,6 +424,132 @@ async fn a_redirect_to_another_site_is_not_followed_silently() {
     .await;
     assert_eq!(outcome.status, Status::NeedsApproval);
     assert_eq!(*browser.left.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn a_site_approved_for_the_bots_browser_is_not_approved_in_the_owners() {
+    let (browser, env) = shop().await;
+    *browser.has_owner_browser.lock().unwrap() = true;
+    ok(&call(
+        &env,
+        "browser_open",
+        json!({ "url": "https://partner.example/" }),
+    )
+    .await);
+    let opened = call(
+        &env,
+        "browser_open",
+        json!({ "url": "https://shop.example/", "browser": "owner" }),
+    )
+    .await;
+    assert_eq!(ok(&opened).result["browser"], "owner");
+    assert_eq!(
+        *browser.owner_opened.lock().unwrap(),
+        ["https://shop.example/"]
+    );
+    assert_eq!(
+        *browser.opened.lock().unwrap(),
+        ["https://partner.example/"]
+    );
+
+    let clicked = call(
+        &env,
+        "browser_act",
+        json!({ "action": "click", "ref": "e1" }),
+    )
+    .await;
+    assert_eq!(clicked.status, Status::NeedsApproval);
+    let message = clicked.error.unwrap().message;
+    assert!(message.contains("partner.example"), "{message}");
+    assert!(message.contains("browser 'owner'"), "{message}");
+    assert_eq!(*browser.left.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn a_refused_owner_browser_leaves_the_session_in_the_bots_own() {
+    let (browser, env) = shop().await;
+    ok(&call(
+        &env,
+        "browser_open",
+        json!({ "url": "https://shop.example/" }),
+    )
+    .await);
+    let refused = call(
+        &env,
+        "browser_open",
+        json!({ "url": "https://shop.example/", "browser": "owner" }),
+    )
+    .await;
+    assert!(!refused.is_ok());
+    assert!(browser.owner_opened.lock().unwrap().is_empty());
+    let snapshot = call(&env, "browser_snapshot", json!({})).await;
+    assert_eq!(ok(&snapshot).result["title"], "Shop");
+    assert_eq!(*browser.left.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn a_backend_without_the_owners_browser_says_it_is_not_supported() {
+    struct OwnOnly(FakeBrowser);
+
+    #[async_trait]
+    impl BrowserBackend for OwnOnly {
+        async fn open(&self, url: &str) -> Result<PageState> {
+            self.0.open(url).await
+        }
+        async fn snapshot(&self, request: SnapshotRequest) -> Result<SnapshotView> {
+            self.0.snapshot(request).await
+        }
+        async fn act(&self, step: &BrowserStep) -> Result<PageState> {
+            self.0.act(step).await
+        }
+        async fn screenshot(&self) -> Result<Vec<u8>> {
+            self.0.screenshot().await
+        }
+        async fn current(&self) -> Result<Option<PageState>> {
+            self.0.current().await
+        }
+        async fn leave(&self) -> Result<()> {
+            self.0.leave().await
+        }
+        async fn take_downloads(&self) -> Result<Vec<Download>> {
+            self.0.take_downloads().await
+        }
+        async fn close(&self) -> Result<()> {
+            self.0.close().await
+        }
+    }
+
+    let mut env = CapEnv::new().await;
+    env.browser = Some(Arc::new(OwnOnly(FakeBrowser::default())));
+    let outcome = call(
+        &env,
+        "browser_open",
+        json!({ "url": "https://shop.example/", "browser": "owner" }),
+    )
+    .await;
+    assert_eq!(error_code(&outcome), crate::error::code::NOT_SUPPORTED);
+}
+
+#[test]
+fn the_owners_browser_has_its_own_grant_scope_and_question() {
+    let own = json!({ "url": "https://shop.example/" });
+    let named = json!({ "url": "https://shop.example/", "browser": "own" });
+    let owner = json!({ "url": "https://shop.example/", "browser": "owner" });
+    let unknown = json!({ "url": "https://shop.example/", "browser": "Owner" });
+    for args in [&own, &named, &unknown] {
+        assert!(!opens_in_owner_browser(args), "{args}");
+        assert_eq!(grant_prefix(args), "browser");
+        assert_eq!(ask_message(BROWSER_OPEN, args), None);
+    }
+    assert_eq!(grant_prefix(&owner), "owner_browser");
+    assert_eq!(ask_message(BROWSER_ACT, &owner), None);
+    let question = ask_message(BROWSER_OPEN, &owner).unwrap();
+    assert!(question.contains("https://shop.example/"), "{question}");
+    assert!(question.contains("your own browser"), "{question}");
+    assert!(
+        crate::parse_args::<BrowserOpenArgs>("browser_open", unknown).is_err(),
+        "a browser the grant rule reads as the bot's own must not open the owner's"
+    );
 }
 
 #[tokio::test]

@@ -23,14 +23,17 @@ export function BotNoteChip({
 	note: IBotNoteRef;
 	botId: string;
 	conversationId: string;
-	directory: CrewDirectory;
+	/** A room's members; without it only the bot identity says whether you own the bot. */
+	directory?: CrewDirectory;
 	me?: string | null;
 }>) {
 	const { t } = useTranslation("bots");
 	const [open, setOpen] = useState(false);
 	const readable = Boolean(useBackend().botState?.getNote);
 	const bot = useUserIdentity(botId).bot;
-	const owner = bot?.isOwn || isSelfPrincipal(directory(botId).ownerId, me);
+	const owner =
+		bot?.isOwn ||
+		(directory ? isSelfPrincipal(directory(botId).ownerId, me) : false);
 	const Icon = note.closed ? CheckIcon : StickyNoteIcon;
 
 	return (

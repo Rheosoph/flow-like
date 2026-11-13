@@ -10,6 +10,7 @@ import {
 } from "@flow-like/flow-like-ui";
 import type { LeaderboardOptIn } from "@flow-like/flow-like-ui/lib/learn/types";
 import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
+import { publicNameFromClaims } from "@flow-like/flow-like-ui/lib/user-display";
 import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
@@ -50,12 +51,7 @@ export default function LeaderboardPage() {
 		queryFn: () => learnApi.getMyOptIn(profile!, auth),
 	});
 
-	const fallbackName =
-		(typeof auth.user?.profile?.preferred_username === "string"
-			? auth.user.profile.preferred_username
-			: typeof auth.user?.profile?.name === "string"
-				? auth.user.profile.name
-				: null) ?? "Anonymous";
+	const fallbackName = publicNameFromClaims(auth.user?.profile) ?? "Anonymous";
 
 	const me = myOptInQuery.data;
 	const optedIn = Boolean(me?.is_opted_in);

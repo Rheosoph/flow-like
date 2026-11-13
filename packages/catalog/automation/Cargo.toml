@@ -33,6 +33,8 @@ execute = [
     "dep:objc2-core-graphics",
     "dep:objc2-foundation",
     "dep:objc2-vision",
+    "dep:objc2-screen-capture-kit",
+    "dep:block2",
 ]
 
 [dependencies]
@@ -88,6 +90,8 @@ objc2-core-foundation = { version = "0.3.2", optional = true, default-features =
 objc2-core-graphics = { version = "0.3.2", optional = true, default-features = false, features = ["std", "CGColorSpace", "CGDataProvider", "CGImage"] }
 objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "NSArray", "NSDictionary", "NSEnumerator", "NSError", "NSObject", "NSRange", "NSString"] }
 objc2-vision = { version = "0.3.2", optional = true, default-features = false, features = ["std", "objc2-core-foundation", "objc2-core-graphics", "VNObservation", "VNRecognizeTextRequest", "VNRequest", "VNRequestHandler", "VNTypes"] }
+objc2-screen-capture-kit = { version = "0.3.2", optional = true, default-features = false, features = ["std", "block2", "objc2-core-foundation", "objc2-core-graphics", "SCScreenshotManager", "SCShareableContent", "SCStream"] }
+block2 = { version = "0.6.2", optional = true, default-features = false, features = ["std"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 atspi = { version = "0.25", features = ["zbus"], optional = true }

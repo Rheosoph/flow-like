@@ -11,6 +11,8 @@ struct DecisionRunner {
     prompt: Mutex<Option<String>>,
     acknowledgement: AtomicBool,
     acknowledgement_offered: AtomicBool,
+    live_call: AtomicBool,
+    gated: AtomicBool,
 }
 
 #[async_trait]
@@ -28,6 +30,14 @@ impl TurnRunner for DecisionRunner {
     }
 
     async fn run(&self, job: TurnJob) -> Result<String, RunError> {
+        self.live_call.store(job.live_call, Ordering::SeqCst);
+        self.gated
+            .fetch_or(job.tool_gate.is_some(), Ordering::SeqCst);
+        if let Some(gate) = &job.tool_gate
+            && !gate.passes().await
+        {
+            return Err(RunError::SessionChanged);
+        }
         self.ran.fetch_add(1, Ordering::SeqCst);
         self.acknowledgement
             .store(job.acknowledgement, Ordering::SeqCst);
@@ -75,6 +85,8 @@ async fn classified_on_hub(
         prompt: Mutex::new(None),
         acknowledgement: AtomicBool::new(false),
         acknowledgement_offered: AtomicBool::new(false),
+        live_call: AtomicBool::new(false),
+        gated: AtomicBool::new(false),
     });
     let host = AccountHost::new(
         hub.clone(),
@@ -216,8 +228,12 @@ async fn mismatched_ask_metadata_does_not_bypass_group_classification() {
 
     assert_eq!(status, TurnStatus::Done);
     assert_eq!(runner.classified.load(Ordering::SeqCst), 1);
-    assert_eq!(runner.ran.load(Ordering::SeqCst), 0);
-    assert!(hub.has(|call| *call == Call::Silent));
+    assert_eq!(
+        runner.ran.load(Ordering::SeqCst),
+        1,
+        "the message mentions the bot, so no_answer does not silence it"
+    );
+    assert!(!hub.has(|call| *call == Call::Silent));
 }
 
 #[tokio::test]
@@ -291,8 +307,7 @@ fn bot_acknowledgements_do_not_wake_a_local_bot_or_satisfy_a_participant_wait() 
             "bot",
             &[entry.clone()],
             since,
-            false
-        )
+            false, false)
         .is_none()
     );
     assert!(
@@ -314,7 +329,7 @@ fn bot_acknowledgements_do_not_wake_a_local_bot_or_satisfy_a_participant_wait() 
             "bot",
             &[entry.clone()],
             since,
-            false
+            false, false
         )
         .is_some()
     );
@@ -347,7 +362,7 @@ fn a_named_bot_reply_wakes_without_a_mention_and_respects_the_checkpoint() {
     message.seq = Some(2);
     let entries = [message];
     let since = (Utc::now() - chrono::Duration::hours(1)).fixed_offset();
-    assert!(crate::rule::waiting(ConversationKind::Group, "bot", &entries, since, false).is_none());
+    assert!(crate::rule::waiting(ConversationKind::Group, "bot", &entries, since, false, false).is_none());
     let found = crate::rule::waiting_participant(
         ConversationKind::Group,
         "bot",
@@ -386,4 +401,106 @@ fn a_named_bot_reply_wakes_without_a_mention_and_respects_the_checkpoint() {
         )
         .is_none()
     );
+}
+
+#[tokio::test]
+async fn live_call_is_set_for_transcript_turns_only() {
+    let (_, runner, _) = classified_turn(true, Some(Decision::AnswerNow), None).await;
+    assert!(!runner.live_call.load(Ordering::SeqCst));
+    let (_, runner, status) =
+        classified_entry(false, Some(Decision::AnswerNow), None, spoken(&[])).await;
+    assert_eq!(status, TurnStatus::Done);
+    assert!(runner.live_call.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn the_reply_starts_with_the_decision_for_direct_or_addressed_utterances_only() {
+    let (_, runner, _) = classified_turn(true, Some(Decision::AnswerNow), None).await;
+    assert!(!runner.gated.load(Ordering::SeqCst));
+    let (_, runner, _) =
+        classified_entry(true, Some(Decision::AnswerNow), None, spoken(&[])).await;
+    assert!(!runner.gated.load(Ordering::SeqCst), "an unaddressed group utterance stays sequential");
+    for (room, mentions) in [(false, vec![]), (true, vec!["bot"])] {
+        let (hub, runner, status) =
+            classified_entry(room, Some(Decision::AnswerNow), None, spoken(&mentions)).await;
+        assert_eq!(status, TurnStatus::Done);
+        assert!(runner.gated.load(Ordering::SeqCst));
+        assert_eq!(runner.ran.load(Ordering::SeqCst), 1);
+        assert!(hub.has(|call| matches!(call, Call::Send(_))));
+    }
+}
+
+#[tokio::test]
+async fn a_parallel_no_answer_runs_no_tool_and_posts_nothing() {
+    let (hub, runner, status) =
+        classified_entry(false, Some(Decision::NoAnswer), None, spoken(&[])).await;
+    assert_eq!(status, TurnStatus::Done);
+    assert_eq!(runner.ran.load(Ordering::SeqCst), 0);
+    assert!(!hub.has(|call| matches!(call, Call::Send(_))));
+    assert!(hub.has(|call| *call == Call::Silent));
+}
+
+#[tokio::test]
+async fn poke_brings_the_next_poll_forward() {
+    let hub = Arc::new(DeviceHub {
+        memory_ready: true,
+        ..Default::default()
+    });
+    *hub.entries.lock().unwrap() = vec![plain("Hello")];
+    let runner = Arc::new(DecisionRunner {
+        decision: None,
+        classified: AtomicUsize::new(0),
+        ran: AtomicUsize::new(0),
+        prompt: Mutex::new(None),
+        acknowledgement: AtomicBool::new(false),
+        acknowledgement_offered: AtomicBool::new(false),
+        live_call: AtomicBool::new(false),
+        gated: AtomicBool::new(false),
+    });
+    let host = AccountHost::new(
+        hub.clone(),
+        runner,
+        Arc::new(Quiet),
+        Arc::new(Semaphore::new(1)),
+        config(),
+    );
+    let task = tokio::spawn(host.clone().run());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(host.turns().is_empty());
+    hub.turns.lock().unwrap().push(turn("bt_poked"));
+    host.poke();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !host.turns().iter().any(|turn| turn.finished_at.is_some()) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the poked poll claims the turn long before the 60 s poll");
+    task.abort();
+}
+
+#[test]
+fn history_cuts_an_interrupted_reply_at_the_heard_share() {
+    use flow_like_types::inbox::ConversationKind;
+    let reply = "The weather is sunny today and tomorrow.";
+    let mut bot_reply = plain(reply);
+    bot_reply.message_id = "m_bot".into();
+    bot_reply.sender_id = "bot".into();
+    let mut stop = spoken(&[]);
+    stop.message_id = "m_stop".into();
+    stop.envelope["body"]["interrupted"] =
+        json!({ "message_id": "m_bot", "heard_chars": 10, "spoken_chars": 40 });
+    let found = crate::transcript::transcript(
+        "bot",
+        ConversationKind::Direct,
+        "m_stop",
+        &[bot_reply, stop],
+        &Default::default(),
+        "owner",
+    )
+    .unwrap();
+    let heard = &found.history[0].content;
+    assert!(heard.starts_with("The"), "{heard}");
+    assert!(!heard.contains("tomorrow") && !heard.contains("sunny"), "{heard}");
+    assert!(heard.contains("cut off"), "{heard}");
 }

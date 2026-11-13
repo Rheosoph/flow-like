@@ -10,6 +10,7 @@ use super::{
     kick,
     ledger::{self, ClaimRequest, Claimed},
     recover,
+    reply_stream::ReplyStream,
 };
 use crate::{
     db::{DbDialect, RetryPolicy, retry_transaction},
@@ -20,8 +21,9 @@ use crate::{
         ai::{
             copilot::master_flow_like_state,
             global_chat::{
-                ensure_metered_or_customer_provider, load_user_profile_access,
-                reserve_assistant_usage_with_max_runtime, settle_assistant_usage,
+                PROFILE_MODEL_REQUIRED, ensure_metered_or_customer_provider,
+                load_user_profile_access, reserve_assistant_usage_with_max_runtime,
+                settle_assistant_usage,
             },
         },
         bots::runtime::{chat_bot, server_bot_model},
@@ -40,16 +42,17 @@ use async_trait::async_trait;
 use axum::http::StatusCode;
 use chrono::{DateTime, Duration as ChronoDuration, FixedOffset};
 use flow_like::{
-    copilot::flowpilot_thinking,
     flow::copilot::{
-        BotToolHost, HeadlessMemory, NotesHandle, PlatformContextInput, bot_platform_context,
+        BotToolHost, BotToolset, HeadlessMemory, NotesHandle, PlatformContextInput, ReplyFiles,
+        ToolTrail, bot_platform_context,
         bot_talk::{AnsweredRound, BotPresence, BotTalk},
         decision_event::{self, EventDecision},
         find_bot_tool_spec,
         memory::{AssistantMemory, MemoryScope},
-        platform::{PlatformToolBridge, RoomUpdatesBridge},
+        platform::{Clearance, PlatformToolBridge, RoomUpdatesBridge},
         run_bot_chat_with_talk,
-        tool_grants::{GrantStore, clear_tokens, resume_note},
+        run_recovery::resumes_held_round,
+        tool_grants::{GrantStore, ParkedBatch, clear_tokens, resume_note},
         tool_spec::{MEMORY_STORE_TOOL, ToolEffect},
     },
     flow_like_model_provider::provider::is_hosted_provider_name,
@@ -107,6 +110,8 @@ const RETRY_BACKOFF_SECS: [i64; 2] = [10, 30];
 pub const CODE_TIMEOUT: &str = "BOT_TURN_TIMEOUT";
 pub const CODE_QUOTA: &str = "BOT_TURN_QUOTA";
 pub const CODE_SETUP: &str = "BOT_TURN_SETUP";
+/// The owner's profile has no language model the turn can run on; clients offer a model picker.
+pub const CODE_NO_MODEL: &str = "BOT_TURN_NO_MODEL";
 pub const CODE_MODEL: &str = "BOT_TURN_MODEL_ERROR";
 pub const CODE_FAILED: &str = "BOT_TURN_FAILED";
 pub const CODE_ENCRYPTED: &str = "BOT_TURN_ENCRYPTED";
@@ -150,6 +155,8 @@ pub(crate) struct Failure {
     pub post: bool,
     /// Not a failure: the turn asked its owner to approve a call and waits for the answer.
     pub park: Option<ApprovalRequest>,
+    /// Numeric usage captured before the turn failed, without provider response text.
+    pub usage_stats: Vec<serde_json::Value>,
 }
 
 impl Failure {
@@ -165,6 +172,7 @@ impl Failure {
             retryable,
             post,
             park: None,
+            usage_stats: Vec::new(),
         }
     }
 
@@ -181,6 +189,14 @@ impl Failure {
 
     pub(crate) fn from_api(error: &ApiError) -> Self {
         let reason = error.public_message().unwrap_or("unexpected error");
+        if error.public_code() == PROFILE_MODEL_REQUIRED {
+            return Self::new(
+                CODE_NO_MODEL,
+                format!("I can't answer yet: {reason}"),
+                false,
+                true,
+            );
+        }
         match error.status() {
             StatusCode::PAYMENT_REQUIRED | StatusCode::TOO_MANY_REQUESTS => Self::new(
                 CODE_QUOTA,
@@ -376,30 +392,25 @@ impl PlatformToolBridge for HeadlessBridge {
         refuse_tool(tool_name, &self.mutating)
     }
 
-    async fn is_cancelled(&self) -> bool {
-        if self
+    async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
+        match self
             .bot_tools
             .as_ref()
-            .is_some_and(|bot_tools| bot_tools.parked().is_some())
+            .filter(|bot_tools| bot_tools.handles(tool_name))
         {
-            return true;
+            Some(bot_tools) => bot_tools.clearance(tool_name, arguments).await,
+            None => Clearance::Clear,
         }
+    }
+
+    /// A parked turn is not cancelled: its running calls finish so their outcomes stay known, and
+    /// the run pauses after the batch.
+    async fn is_cancelled(&self) -> bool {
         !holds_lease_or_retry(&self.state.db, &self.turn_id, &self.host_id).await
     }
-}
 
-pub(super) fn usable_decision_model<'a>(
-    access: &crate::routes::ai::global_chat::ProfileModelAccess,
-    bit_id: Option<&'a str>,
-    turn_id: &str,
-) -> Option<&'a str> {
-    let bit_id = bit_id?;
-    match access.rejection(Some(bit_id)) {
-        Some(rejection) => {
-            tracing::warn!(%rejection, turn_id, "Bot participation decision unavailable; using normal response handling");
-            None
-        }
-        None => Some(bit_id),
+    async fn bot_secret(&self, name: &str) -> Option<String> {
+        self.bot_tools.as_ref()?.secret(name).await
     }
 }
 
@@ -407,7 +418,11 @@ const LEASE_CHECK_RETRIES: u32 = 2;
 const LEASE_CHECK_BACKOFF: Duration = Duration::from_millis(150);
 
 /// A database error is retried before it counts as a lost lease; `Ok(false)` is final.
-pub(super) async fn holds_lease_or_retry(db: &DatabaseConnection, turn_id: &str, host_id: &str) -> bool {
+pub(super) async fn holds_lease_or_retry(
+    db: &DatabaseConnection,
+    turn_id: &str,
+    host_id: &str,
+) -> bool {
     for attempt in 0..=LEASE_CHECK_RETRIES {
         match ledger::holds_lease(db, turn_id, host_id, now_millis()).await {
             Ok(held) => return held,
@@ -450,10 +465,6 @@ async fn turn_requester(
 
 fn host_id() -> String {
     format!("server:{}", uuid::Uuid::new_v4())
-}
-
-pub(crate) fn room_of(kind: ConversationKind, conversation_id: &str) -> Option<&str> {
-    matches!(kind, ConversationKind::Group).then_some(conversation_id)
 }
 
 /// The turn's executor token: the owner stays the payer (`sub`), app callbacks run as the bot.
@@ -568,16 +579,35 @@ pub(crate) fn answer_request(turn: &bot_turn::Model, answer: &Answer) -> Option<
         {
             envelope["body"][decision_event::REPLY_DELIVERY_FIELD] = json!("respond");
         }
+        if let Some(envelope) = request.envelope.as_mut() {
+            super::taint::attach(&mut envelope["body"], &answer.taint);
+        }
         if let Some(note) = &answer.note
             && let Some(envelope) = request.envelope.as_mut()
         {
             envelope["body"]["note"] = json!(note);
+        }
+        if let Some(envelope) = request.envelope.as_mut() {
+            flow_like_types::bot_reply_files::attach_reply_files(
+                &mut envelope["body"],
+                &answer.files,
+            );
+            flow_like_types::bot_tool_trail::attach_tool_parts(
+                &mut envelope["body"],
+                &answer.tool_calls,
+            );
         }
         if answer.acknowledgement
             && let Some(envelope) = request.envelope.as_mut()
         {
             envelope["body"][flow_like::flow::copilot::decision::ACKNOWLEDGEMENT_FIELD] =
                 json!(true);
+        }
+        if let Some(envelope) = request.envelope.as_mut() {
+            flow_like::flow::copilot::bot_usage::attach_usage_stats(
+                &mut envelope["body"],
+                answer.usage_stats.clone(),
+            );
         }
         request
     })
@@ -589,6 +619,7 @@ type FollowUp = Arc<std::sync::Mutex<Option<HeadlessMemory>>>;
 /// One attempt at a turn: everything up to the model's answer.
 /// A finished turn's answer; `resumed` when the turn slept for an owner's approval.
 pub(crate) struct Answer {
+    pub(crate) usage_stats: Vec<serde_json::Value>,
     pub(crate) acknowledgement: bool,
     pub(crate) text: String,
     pub(crate) resumed: bool,
@@ -599,6 +630,185 @@ pub(crate) struct Answer {
     pub(crate) event_delivery: Option<EventDecision>,
     /// The note the turn last wrote or closed; the reply carries it as `body.note`.
     pub(crate) note: Option<flow_like_types::bot_notes::NoteRef>,
+    /// The turn's tool calls, kept on the reply in the owner's direct conversation.
+    pub(crate) tool_calls: Vec<flow_like_types::bot_tool_trail::ToolCall>,
+    /// The files the bot attached to its reply with `file_attach`.
+    pub(crate) files: Vec<flow_like_types::bot_reply_files::ReplyFile>,
+    /// The taint the turn ended with; the reply records it for the turns that read it.
+    pub(crate) taint: flow_like_types::data_classification::DataSensitivity,
+}
+
+type DecisionResult = Option<Result<flow_like::flow::copilot::decision::Decision, ApiError>>;
+
+enum Verdict {
+    Proceed,
+    Acknowledge,
+    Done(Answer),
+}
+
+enum Raced<T> {
+    Allowed {
+        outcome: T,
+        decision: DecisionResult,
+    },
+    Withheld(DecisionResult),
+}
+
+#[derive(Default)]
+struct CallTrace {
+    parallel: bool,
+    decision_ms: Option<i64>,
+    decision: &'static str,
+    model_ms: Option<i64>,
+}
+
+fn silent_answer(completed: bool) -> Answer {
+    Answer {
+        acknowledgement: false,
+        text: String::new(),
+        resumed: false,
+        silent: true,
+        completed,
+        event_delivery: None,
+        note: None,
+        tool_calls: Vec::new(),
+        files: Vec::new(),
+        usage_stats: Vec::new(),
+        taint: Default::default(),
+    }
+}
+
+fn live_call_turn(trigger_kind: Option<InboxEntryKind>) -> bool {
+    trigger_kind == Some(InboxEntryKind::Transcript)
+}
+
+fn decides_in_parallel(
+    live_call: bool,
+    kind: ConversationKind,
+    addressed: bool,
+    has_decision_model: bool,
+) -> bool {
+    live_call && has_decision_model && (kind == ConversationKind::Direct || addressed)
+}
+
+fn decision_label(decision: &DecisionResult) -> &'static str {
+    use flow_like::flow::copilot::decision::Decision;
+    match decision {
+        Some(Ok(Decision::AnswerNow)) => "answer_now",
+        Some(Ok(Decision::Acknowledge)) => "acknowledge",
+        Some(Ok(Decision::NoAnswer)) => "no_answer",
+        Some(Ok(Decision::WaitFor(_))) => "wait_for",
+        Some(Err(_)) => "error",
+        None => "timeout",
+    }
+}
+
+fn lets_reply_through(decision: &DecisionResult) -> bool {
+    use flow_like::flow::copilot::decision::Decision;
+    !matches!(
+        decision,
+        Some(Ok(Decision::NoAnswer
+            | Decision::WaitFor(_)
+            | Decision::Acknowledge))
+    )
+}
+
+/// Runs the reply while the participation decision is pending. The reply's tools stay held until
+/// the decision lets the turn answer, and a finished reply is returned only once it has.
+async fn race_decision<T>(
+    chat: impl Future<Output = T>,
+    mut decision: JoinHandle<(DecisionResult, i64)>,
+    opener: flow_like::flow::copilot::tool_gate::ToolGateOpener,
+    trace: &std::sync::Mutex<CallTrace>,
+) -> Raced<T> {
+    let mut chat = std::pin::pin!(chat);
+    let mut finished = None;
+    let decided = loop {
+        tokio::select! {
+            decided = &mut decision => break decided,
+            outcome = &mut chat, if finished.is_none() => finished = Some(outcome),
+        }
+    };
+    let (decided, decision_ms) = decided.unwrap_or_else(|error| {
+        tracing::warn!(%error, "Bot participation decision task failed; using normal response handling");
+        (None, 0)
+    });
+    {
+        let mut trace = trace
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        trace.decision_ms = Some(decision_ms);
+        trace.decision = decision_label(&decided);
+    }
+    if !lets_reply_through(&decided) {
+        opener.shut();
+        return Raced::Withheld(decided);
+    }
+    opener.open();
+    let outcome = match finished {
+        Some(outcome) => outcome,
+        None => chat.await,
+    };
+    Raced::Allowed {
+        outcome,
+        decision: decided,
+    }
+}
+
+async fn apply_decision(
+    state: &AppState,
+    turn: &bot_turn::Model,
+    host_id: &str,
+    kind: ConversationKind,
+    decision: DecisionResult,
+) -> Result<Verdict, Failure> {
+    use flow_like::flow::copilot::decision::Decision;
+    let Some(decision) = settled_decision(decision, &turn.id) else {
+        return Ok(Verdict::Proceed);
+    };
+    match decision {
+        Decision::NoAnswer => Ok(Verdict::Done(silent_answer(false))),
+        Decision::WaitFor(participant) => {
+            // In a direct call, keeping quiet already waits for the only other
+            // participant. Their next utterance gets its own decision.
+            if kind == ConversationKind::Direct {
+                return Ok(Verdict::Done(silent_answer(false)));
+            }
+            use super::decision_wait::ParkOutcome;
+            match super::decision_wait::park_wait(state, turn, host_id, &participant).await? {
+                ParkOutcome::Parked | ParkOutcome::LeaseLost => {
+                    Ok(Verdict::Done(silent_answer(true)))
+                }
+                ParkOutcome::Superseded => Ok(Verdict::Done(silent_answer(false))),
+                ParkOutcome::AlreadyAnswered | ParkOutcome::Unavailable => Ok(Verdict::Proceed),
+            }
+        }
+        Decision::Acknowledge => Ok(Verdict::Acknowledge),
+        Decision::AnswerNow => Ok(Verdict::Proceed),
+    }
+}
+
+/// What the decision model said. A call that failed or timed out says nothing, so the turn goes
+/// on as it would without a decision model: only the hosted proxy knows whether it can run the
+/// bot's System One Bit, and an unavailable one must never fail the turn.
+pub(super) fn settled_decision(
+    decision: DecisionResult,
+    turn_id: &str,
+) -> Option<flow_like::flow::copilot::decision::Decision> {
+    match decision {
+        Some(Ok(decision)) => Some(decision),
+        Some(Err(error)) => {
+            tracing::warn!(%error, turn_id, "Bot participation decision failed; using normal response handling");
+            None
+        }
+        None => {
+            tracing::warn!(
+                turn_id,
+                "Bot participation decision timed out; using normal response handling"
+            );
+            None
+        }
+    }
 }
 
 async fn attempt(
@@ -609,6 +819,80 @@ async fn attempt(
     follow_up: &FollowUp,
     unaddressed: &AtomicBool,
     batched: &[String],
+) -> Result<Answer, Failure> {
+    let started = Instant::now();
+    let queued_ms = chrono::Utc::now().timestamp_millis() - turn.created_at.timestamp_millis();
+    let trace = std::sync::Mutex::new(CallTrace::default());
+    let result = attempt_decided(
+        state,
+        turn,
+        host_id,
+        mutating,
+        follow_up,
+        unaddressed,
+        batched,
+        None,
+        &trace,
+    )
+    .await;
+    let trace = trace
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !trace.decision.is_empty() || trace.model_ms.is_some() {
+        tracing::info!(
+            target: "bot_call_latency",
+            turn_id = %turn.id,
+            bot_id = %turn.bot_id,
+            queued_ms,
+            decision_ms = trace.decision_ms,
+            decision = trace.decision,
+            parallel = trace.parallel,
+            model_ms = trace.model_ms,
+            total_ms = started.elapsed().as_millis() as i64,
+            ok = result.is_ok(),
+            silent = result.as_ref().is_ok_and(|answer| answer.silent),
+            "voice call turn"
+        );
+    }
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn attempt_decided<'a>(
+    state: &'a AppState,
+    turn: &'a bot_turn::Model,
+    host_id: &'a str,
+    mutating: &'a Arc<AtomicBool>,
+    follow_up: &'a FollowUp,
+    unaddressed: &'a AtomicBool,
+    batched: &'a [String],
+    preset: Option<Verdict>,
+    trace: &'a std::sync::Mutex<CallTrace>,
+) -> std::pin::Pin<Box<dyn Future<Output = Result<Answer, Failure>> + Send + 'a>> {
+    Box::pin(attempt_with(
+        state,
+        turn,
+        host_id,
+        mutating,
+        follow_up,
+        unaddressed,
+        batched,
+        preset,
+        trace,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn attempt_with(
+    state: &AppState,
+    turn: &bot_turn::Model,
+    host_id: &str,
+    mutating: &Arc<AtomicBool>,
+    follow_up: &FollowUp,
+    unaddressed: &AtomicBool,
+    batched: &[String],
+    preset: Option<Verdict>,
+    trace: &std::sync::Mutex<CallTrace>,
 ) -> Result<Answer, Failure> {
     let owner = turn.owner_id.as_str();
     let recovery = Arc::new(super::recovery::ServerRecovery::new(state, turn, host_id));
@@ -643,7 +927,7 @@ async fn attempt(
             flow_like_types::bot_user_context::response_for(body, &entry.sender_id, &turn.bot_id)
         })
     });
-    let checkpoint = if ephemeral_user_context {
+    let checkpoint = if ephemeral_user_context || preset.is_some() {
         None
     } else {
         recovery.read().await?
@@ -675,6 +959,10 @@ async fn attempt(
             completed: false,
             event_delivery: None,
             note: None,
+            tool_calls: Vec::new(),
+            files: Vec::new(),
+            usage_stats: Vec::new(),
+            taint: Default::default(),
         });
     }
     let reacting = trigger_kind == Some(InboxEntryKind::Reaction);
@@ -724,6 +1012,10 @@ async fn attempt(
             completed: false,
             event_delivery: None,
             note: None,
+            tool_calls: Vec::new(),
+            files: Vec::new(),
+            usage_stats: Vec::new(),
+            taint: Default::default(),
         });
     }
     let mut chat_conversation = turn.conversation_id.clone();
@@ -819,6 +1111,10 @@ async fn attempt(
                     .await
                     {
                         Ok(choice) => {
+                            let choice = super::event_decision::guard_ignore(
+                                &state.db, turn, &event, choice,
+                            )
+                            .await;
                             event_delivery = Some(
                                 super::event_decision::limit_notify(
                                     &state.db,
@@ -845,6 +1141,8 @@ async fn attempt(
             if failed {
                 event_delivery = None;
             }
+            let usage = flow_like::flow::copilot::bot_usage::BotUsage::default();
+            usage.restore(saved);
             return Ok(Answer {
                 acknowledgement: false,
                 silent: event_delivery.is_some_and(EventDecision::quiet)
@@ -854,6 +1152,10 @@ async fn attempt(
                 completed: false,
                 event_delivery,
                 note: None,
+                tool_calls: Vec::new(),
+                files: Vec::new(),
+                usage_stats: usage.snapshot(),
+                taint: Default::default(),
             });
         }
     }
@@ -862,17 +1164,32 @@ async fn attempt(
     let mut bot = chat_bot(state, owner, Some(turn.bot_id.as_str()), &profile)
         .await?
         .ok_or_else(|| Failure::silent(CODE_BOT_GONE, "The bot was deleted"))?;
-    bot.context.tool_host = BotToolHost::CoreOnly;
+    bot.context.tool_host = match bot.context.toolset {
+        BotToolset::Capabilities => BotToolHost::Hosted,
+        BotToolset::FlowPilot => BotToolHost::CoreOnly,
+    };
     bot.context.ephemeral_user_context = ephemeral_user_context;
+    bot.context.seed_taint = flow_like::flow::copilot::TurnReads {
+        personal_context: ephemeral_user_context,
+        ..transcript.reads.clone()
+    }
+    .seed();
     bot.context.recovery = (!ephemeral_user_context).then(|| {
-        (recovery.clone() as Arc<dyn flow_like::flow::copilot::run_recovery::BotRunRecovery>)
-            .into()
+        (recovery.clone() as Arc<dyn flow_like::flow::copilot::run_recovery::BotRunRecovery>).into()
     });
     bot.context.requester = Some(requester);
     let requester = bot.context.requester.clone();
     let grants = crate::routes::bots::tool_grants::rows_for_owner(state, &turn.bot_id, owner);
     let seen = grants.list().await.unwrap_or_default();
-    let note = resume_note(grants.as_ref()).await;
+    // A held round runs the answered calls itself; "make the same call again" would repeat
+    // calls that already ran.
+    let note = match checkpoint
+        .as_ref()
+        .filter(|saved| resumes_held_round(saved))
+    {
+        Some(_) => None,
+        None => resume_note(grants.as_ref()).await,
+    };
     let resumed = note.is_some() || checkpoint.is_some();
     let event =
         if saved_delivery.is_some() || (!resumed && answered_round.is_none() && asker.is_none()) {
@@ -899,41 +1216,40 @@ async fn attempt(
         && saved_delivery.is_none()
         && !resumed
     {
-        if let Some(rejection) = access.rejection(Some(bit_id)) {
-            tracing::warn!(%rejection, turn_id = %turn.id, "Bot event decision unavailable; processing normally");
-        } else {
-            let classified =
-                super::event_decision::classify(state, turn, bit_id, event, &event_context, None)
-                    .await;
-            let classified = match classified {
-                Ok(choice) => Ok(
-                    super::event_decision::guard_ignore(&state.db, turn, event, choice).await,
-                ),
-                Err(error) => Err(error),
-            };
-            match classified {
-                Ok(Some(EventDecision::Ignore)) => {
-                    return Ok(Answer {
-                        acknowledgement: false,
-                        text: String::new(),
-                        resumed: false,
-                        silent: true,
-                        completed: false,
-                        event_delivery: Some(EventDecision::Ignore),
-                        note: None,
-                    });
-                }
-                Ok(choice) => {
-                    event_delivery = match choice {
-                        Some(choice) => {
-                            Some(super::event_decision::limit_notify(&state.db, turn, choice).await)
-                        }
-                        None => None,
+        let classified =
+            super::event_decision::classify(state, turn, bit_id, event, &event_context, None).await;
+        let classified = match classified {
+            Ok(choice) => {
+                Ok(super::event_decision::guard_ignore(&state.db, turn, event, choice).await)
+            }
+            Err(error) => Err(error),
+        };
+        match classified {
+            Ok(Some(EventDecision::Ignore)) => {
+                return Ok(Answer {
+                    acknowledgement: false,
+                    text: String::new(),
+                    resumed: false,
+                    silent: true,
+                    completed: false,
+                    event_delivery: Some(EventDecision::Ignore),
+                    note: None,
+                    tool_calls: Vec::new(),
+                    files: Vec::new(),
+                    usage_stats: Vec::new(),
+                    taint: Default::default(),
+                });
+            }
+            Ok(choice) => {
+                event_delivery = match choice {
+                    Some(choice) => {
+                        Some(super::event_decision::limit_notify(&state.db, turn, choice).await)
                     }
+                    None => None,
                 }
-                Err(error) => {
-                    tracing::warn!(%error, turn_id = %turn.id, "Bot event decision failed; processing normally")
-                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, turn_id = %turn.id, "Bot event decision failed; processing normally")
             }
         }
         let instruction = if decision_event::monitoring(event) {
@@ -973,91 +1289,81 @@ async fn attempt(
                 .into(),
         );
     }
-    if (kind == ConversationKind::Group || trigger_kind == Some(InboxEntryKind::Transcript))
-        && event.is_none()
-        && answered_round.is_none()
-        && asker.is_none()
-        && !resumed
-    {
-        if let Some(bit_id) = usable_decision_model(&access, bot.model.decision.as_deref(), &turn.id)
-        {
-            use flow_like::flow::copilot::decision::{Decision, TIMEOUT_SECS};
-            let decision = tokio::time::timeout(
-                Duration::from_secs(TIMEOUT_SECS),
-                super::decision::evaluate(
-                    state,
-                    turn,
-                    &bot.context,
-                    bit_id,
-                    &transcript,
-                    addressed,
-                ),
-            )
-            .await;
-            match decision {
-                Ok(Ok(Decision::NoAnswer)) => {
-                    return Ok(Answer {
-                        acknowledgement: false,
-                        text: String::new(),
-                        resumed: false,
-                        silent: true,
-                        completed: false,
-                        event_delivery: None,
-                        note: None,
-                    });
-                }
-                Ok(Ok(Decision::WaitFor(participant))) => {
-                    // In a direct call, keeping quiet already waits for the only other
-                    // participant. Their next utterance gets its own decision.
-                    if kind == ConversationKind::Direct {
-                        return Ok(Answer {
-                            acknowledgement: false,
-                            text: String::new(),
-                            resumed: false,
-                            silent: true,
-                            completed: false,
-                            event_delivery: None,
-                            note: None,
-                        });
-                    }
-                    use super::decision_wait::ParkOutcome;
-                    match super::decision_wait::park_wait(state, turn, host_id, &participant)
-                        .await?
+    let live_call = live_call_turn(trigger_kind);
+    bot.context.live_call = live_call;
+    let mut decision_task = None;
+    let mut tool_gate_opener = None;
+    match &preset {
+        Some(Verdict::Acknowledge) => bot.context.acknowledgement = live_call,
+        Some(_) => {}
+        None => {
+            if (kind == ConversationKind::Group || live_call)
+                && event.is_none()
+                && answered_round.is_none()
+                && asker.is_none()
+                && !resumed
+                && let Some(bit_id) = decision_bit.as_deref()
+            {
+                use flow_like::flow::copilot::decision::TIMEOUT_SECS;
+                if decides_in_parallel(live_call, kind, addressed, true) {
+                    trace
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .parallel = true;
+                    let (opener, gate) = flow_like::flow::copilot::tool_gate::tool_gate();
+                    bot.context.tool_gate = Some(gate);
+                    tool_gate_opener = Some(opener);
+                    let (state, turn, context, bit_id, transcript) = (
+                        state.clone(),
+                        turn.clone(),
+                        bot.context.clone(),
+                        bit_id.to_string(),
+                        transcript.clone(),
+                    );
+                    decision_task = Some(tokio::spawn(async move {
+                        let started = Instant::now();
+                        let decision = tokio::time::timeout(
+                            Duration::from_secs(TIMEOUT_SECS),
+                            super::decision::evaluate(
+                                &state,
+                                &turn,
+                                &context,
+                                &bit_id,
+                                &transcript,
+                                addressed,
+                            ),
+                        )
+                        .await
+                        .ok();
+                        (decision, started.elapsed().as_millis() as i64)
+                    }));
+                } else {
+                    let started = Instant::now();
+                    let decision = tokio::time::timeout(
+                        Duration::from_secs(TIMEOUT_SECS),
+                        super::decision::evaluate(
+                            state,
+                            turn,
+                            &bot.context,
+                            bit_id,
+                            &transcript,
+                            addressed,
+                        ),
+                    )
+                    .await
+                    .ok();
                     {
-                        ParkOutcome::Parked | ParkOutcome::LeaseLost => {
-                            return Ok(Answer {
-                                acknowledgement: false,
-                                text: String::new(),
-                                resumed: false,
-                                silent: true,
-                                completed: true,
-                                event_delivery: None,
-                                note: None,
-                            });
-                        }
-                        ParkOutcome::Superseded => {
-                            return Ok(Answer {
-                                acknowledgement: false,
-                                text: String::new(),
-                                resumed: false,
-                                silent: true,
-                                completed: false,
-                                event_delivery: None,
-                                note: None,
-                            });
-                        }
-                        ParkOutcome::AlreadyAnswered | ParkOutcome::Unavailable => {}
+                        let mut trace = trace
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        trace.decision_ms = Some(started.elapsed().as_millis() as i64);
+                        trace.decision = decision_label(&decision);
                     }
-                }
-                Ok(Ok(Decision::Acknowledge)) => {
-                    bot.context.acknowledgement = trigger_kind == Some(InboxEntryKind::Transcript);
-                }
-                Ok(Ok(Decision::AnswerNow)) => {}
-                Ok(Err(error)) => {
-                    tracing::warn!(%error, turn_id = %turn.id, "Bot participation decision failed; using normal response handling")
-                }
-                Err(_) => {
-                    tracing::warn!(turn_id = %turn.id, "Bot participation decision timed out; using normal response handling")
+                    match apply_decision(state, turn, host_id, kind, decision).await? {
+                        Verdict::Done(answer) => return Ok(answer),
+                        Verdict::Acknowledge => bot.context.acknowledgement = live_call,
+                        Verdict::Proceed => {}
+                    }
                 }
             }
         }
@@ -1070,10 +1376,7 @@ async fn attempt(
     let selected = profile
         .resolve_completion_model(
             model_id.as_deref(),
-            &flow_like::bit::BitModelPreference {
-                reasoning_weight: Some(1.0),
-                ..Default::default()
-            },
+            &flow_like::flow::copilot::bot_model_preference(live_call),
             false,
             flow_like::state::FlowLikeState::completion_model_capabilities(&flow_like_state).await,
             None,
@@ -1113,6 +1416,13 @@ async fn attempt(
         is_hosted_provider_name(&provider.provider_name),
         memory_hosted,
     );
+    let scope = crate::bot_permission::limited_conversation(
+        &state.db,
+        &chat_conversation,
+        owner,
+        &turn.bot_id,
+    )
+    .await?;
     let usage = reserve_assistant_usage_with_max_runtime(
         state,
         owner,
@@ -1125,7 +1435,7 @@ async fn attempt(
         Some(&crate::middleware::jwt::BotUser {
             bot_id: turn.bot_id.clone(),
             turn_id: turn.id.clone(),
-            conv_id: room_of(kind, &chat_conversation).map(ToOwned::to_owned),
+            conv_id: scope.clone(),
         }),
     )
     .await?;
@@ -1142,7 +1452,7 @@ async fn attempt(
     let remaining = (usage.deadline - chrono::Utc::now())
         .num_milliseconds()
         .max(1);
-    let conv_id = room_of(kind, &chat_conversation);
+    let conv_id = scope.as_deref();
     let token = executor_token(
         owner,
         &turn.bot_id,
@@ -1183,6 +1493,28 @@ async fn attempt(
         transcript.topic_at,
     );
     bot.context.host_tools = std::mem::take(&mut bot.context.host_tools).with_notes(notes.clone());
+    let owner_direct = kind == ConversationKind::Direct
+        && answered_round.is_none()
+        && asker.is_none()
+        && !ephemeral_user_context
+        && requester.as_ref().is_some_and(|requester| {
+            requester.audience == TurnAudience::Owner && requester.requester_id == owner
+        });
+    // An ask or a continuation runs on a reconstructed exchange, not the conversation's history.
+    if answered_round.is_none() && asker.is_none() {
+        bot.context.host_tools = std::mem::take(&mut bot.context.host_tools)
+            .with_conversation_key(chat_conversation.clone());
+    }
+    let trail = owner_direct.then(|| ToolTrail::new(transcript.trail.clone()));
+    if let Some(trail) = &trail {
+        bot.context.host_tools =
+            std::mem::take(&mut bot.context.host_tools).with_trail(trail.clone());
+    }
+    let reply_files = (!ephemeral_user_context).then(ReplyFiles::new);
+    if let Some(files) = &reply_files {
+        bot.context.host_tools =
+            std::mem::take(&mut bot.context.host_tools).with_reply_files(files.clone());
+    }
     let room_memory = kind == ConversationKind::Group;
     let owner_memory_allowed =
         super::memory::memory_policy(&state.db, &chat_conversation, owner, &turn.bot_id)
@@ -1229,11 +1561,31 @@ async fn attempt(
         Some(note) => format!("{context}\n\n{note}"),
         None => context,
     };
+    // A turn answering shared context keeps its own prompt and history: memory holds only
+    // value-free notes of it. Other memory turns read live session snapshots from a section.
     let (context, prompt, history) = match &memory_turn {
+        Some(memory_turn) if !ephemeral_user_context => {
+            let shared =
+                history::shared_context(&state.db, &turn.bot_id, &turn.conversation_id).await?;
+            let sections = [
+                Some(context),
+                Some(memory_turn.context().to_string()),
+                shared,
+            ];
+            (
+                sections
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+                memory_turn.prompt().to_string(),
+                memory_turn.history(),
+            )
+        }
         Some(memory_turn) => (
             format!("{context}\n\n{}", memory_turn.context()),
-            memory_turn.prompt().to_string(),
-            memory_turn.history(),
+            transcript.prompt,
+            transcript.history,
         ),
         None => (context, transcript.prompt, transcript.history),
     };
@@ -1255,12 +1607,15 @@ async fn attempt(
         Some(flow_like_bot_tools::TurnSite::Conversation(
             chat_conversation.clone(),
         )),
+        Default::default(),
     )
     .await;
     if let Some(bot_tools) = &bot_tools
-        && let Some(model) = usable_decision_model(&access, bot.model.decision.as_deref(), &turn.id)
+        && let Some(model) = decision_bit.as_deref()
     {
-        bot_tools.set_inference(Arc::new(super::authorization::ServerInference::new(state, turn, model)));
+        bot_tools.set_inference(Arc::new(super::authorization::ServerInference::new(
+            state, turn, model,
+        )));
     }
     let bridge: Arc<dyn PlatformToolBridge> = Arc::new(HeadlessBridge {
         state: state.clone(),
@@ -1273,6 +1628,10 @@ async fn attempt(
         Some(updates) => Arc::new(RoomUpdatesBridge::new(bridge, updates)),
         None => bridge,
     };
+    let batch = bot_tools.as_ref().map_or_else(
+        || Arc::new(ParkedBatch::new(&turn.id)),
+        |bot_tools| bot_tools.batch().clone(),
+    );
     let talk_host = Arc::new(super::talk::ServerTalkHost::for_turn(
         state.clone(),
         super::talk::HeldTurn {
@@ -1280,7 +1639,10 @@ async fn attempt(
             host_id: host_id.to_string(),
         },
         ancestors,
+        batch.clone(),
     ));
+    // A call hears the reply while it is written when the turn answers in its own conversation.
+    let streams_reply = live_call && answered_round.is_none() && asker.is_none();
     let talk = match asker {
         Some(asked_by) => BotTalk::resumed(
             talk_host.clone(),
@@ -1291,8 +1653,19 @@ async fn attempt(
         None => BotTalk::for_run(talk_host.clone(), &bot.context, BotLocation::Server),
     };
     let talk = Arc::new(talk.with_answered(answered_round.as_ref()));
+    let run_taint = talk.clone();
     let acknowledgement = bot.context.acknowledgement;
     let sub_task_compute = bot.context.compute.clone();
+    let reply_stream = streams_reply
+        .then(|| ReplyStream::open(state, turn, bot.context.tool_gate.clone()))
+        .flatten();
+    let reply_sink = reply_stream.as_ref().map(ReplyStream::sink);
+    let usage_stats = flow_like::flow::copilot::bot_usage::BotUsage::default();
+    let usage_sink = usage_stats.clone();
+    if let Some(recovery) = bot.context.recovery.take() {
+        bot.context.recovery = Some(usage_stats.with_recovery(recovery.as_store()).into());
+    }
+    bot.context.spoken_drafts = reply_stream.is_some();
     let chat = run_bot_chat_with_talk(
         flow_like_state,
         Some(profile),
@@ -1302,14 +1675,63 @@ async fn attempt(
         attached_images(state, &turn.conversation_id, &turn.trigger_message_id).await,
         history,
         Some(selected.id.clone()),
-        Some(flowpilot_thinking(None)),
+        Some(flow_like::flow::copilot::bot_thinking(live_call)),
         token,
         bridge,
         memory,
-        None::<fn(String)>,
+        Some(move |chunk: String| {
+            usage_sink.observe(&chunk);
+            if let Some(sink) = &reply_sink {
+                sink.push(&chunk);
+            }
+        }),
         Some(talk),
     );
-    let outcome = tokio::time::timeout(Duration::from_millis(remaining as u64), chat).await;
+    let chat = tokio::time::timeout(Duration::from_millis(remaining as u64), chat);
+    let outcome = match (decision_task, tool_gate_opener) {
+        (Some(decision), Some(opener)) => {
+            match race_decision(chat, decision, opener, trace).await {
+                Raced::Allowed { outcome, .. } => outcome,
+                Raced::Withheld(decision) => {
+                    let elapsed = started.elapsed().as_millis().min(i64::MAX as u128) as i64
+                        + sub_task_compute.extra_millis();
+                    if let Err(error) = settle_assistant_usage(state, &usage, elapsed, false).await
+                    {
+                        tracing::error!(%error, operation_id = %usage.operation_id, "Bot turn usage settlement remains pending");
+                    }
+                    follow_up
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .take();
+                    return match apply_decision(state, turn, host_id, kind, decision).await? {
+                        Verdict::Done(answer) => Ok(answer),
+                        verdict => {
+                            attempt_decided(
+                                state,
+                                turn,
+                                host_id,
+                                mutating,
+                                follow_up,
+                                unaddressed,
+                                batched,
+                                Some(verdict),
+                                trace,
+                            )
+                            .await
+                        }
+                    };
+                }
+            }
+        }
+        _ => chat.await,
+    };
+    if let (Some(stream), Ok(Ok(_))) = (&reply_stream, &outcome) {
+        stream.pause();
+    }
+    trace
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .model_ms = Some(started.elapsed().as_millis() as i64);
     if !matches!(&outcome, Ok(Ok(text)) if !text.trim().is_empty())
         && let Some(scope) = &memory_scope
         && memory_written(
@@ -1325,33 +1747,16 @@ async fn attempt(
     if let Err(error) = settle_assistant_usage(state, &usage, elapsed, answered).await {
         tracing::error!(%error, operation_id = %usage.operation_id, "Bot turn usage settlement remains pending");
     }
-    if let Some((card, call_id)) = bot_tools
-        .as_ref()
-        .and_then(|bot_tools| {
-            bot_tools
-                .parked()
-                .map(|card| (card, bot_tools.parked_recovery_call_id()))
-        })
-        .or_else(|| {
-            talk_host
-                .parked_card()
-                .map(|card| (card, talk_host.parked_recovery_call_id()))
-        })
-    {
-        if let Some(call_id) = call_id {
-            use flow_like::flow::copilot::run_recovery::{
-                BotRunRecovery, record_unexecuted_approval,
-            };
-            if let Some(saved) = recovery.read().await? {
-                if let Some(updated) = record_unexecuted_approval(&saved, &call_id, &card.tool)
-                    .map_err(|error| Failure::model(&error))?
-                {
-                    recovery
-                        .save(&updated)
-                        .await
-                        .map_err(|error| Failure::model(&error))?;
-                }
-            }
+    if let Some(card) = batch.card() {
+        use flow_like::flow::copilot::run_recovery::{BotRunRecovery, record_held_batch};
+        if let Some(saved) = recovery.read().await?
+            && let Some(updated) = record_held_batch(&saved, &batch.held_calls())
+                .map_err(|error| Failure::model(&error))?
+        {
+            recovery
+                .save(&updated)
+                .await
+                .map_err(|error| Failure::model(&error))?;
         }
         return Err(Failure::parked(card));
     }
@@ -1367,7 +1772,7 @@ async fn attempt(
     if failed_execution {
         event_delivery = None;
     }
-    match outcome {
+    let answer = match outcome {
         Err(_) => Err(Failure::timeout()),
         Ok(Err(error)) => Err(Failure::model(&error)),
         Ok(Ok(text))
@@ -1385,6 +1790,10 @@ async fn attempt(
                 completed: false,
                 event_delivery: None,
                 note: None,
+                tool_calls: Vec::new(),
+                files: Vec::new(),
+                usage_stats: Vec::new(),
+                taint: Default::default(),
             })
         }
         Ok(Ok(text))
@@ -1429,6 +1838,9 @@ async fn attempt(
                     .await
                     {
                         Ok(choice) => {
+                            let choice =
+                                super::event_decision::guard_ignore(&state.db, turn, event, choice)
+                                    .await;
                             event_delivery = Some(
                                 super::event_decision::limit_notify(
                                     &state.db,
@@ -1455,15 +1867,31 @@ async fn attempt(
             }
             Ok(Answer {
                 acknowledgement,
+                usage_stats: usage_stats.snapshot(),
                 text,
                 resumed,
                 silent: event_delivery.is_some_and(EventDecision::quiet),
                 completed: false,
                 event_delivery,
                 note: notes.touched(),
+                tool_calls: trail.as_ref().map(ToolTrail::calls).unwrap_or_default(),
+                files: reply_files
+                    .as_ref()
+                    .map(ReplyFiles::files)
+                    .unwrap_or_default(),
+                taint: run_taint.taint(),
             })
         }
+    };
+    if let Some(stream) = reply_stream {
+        stream
+            .finish(matches!(&answer, Ok(answer) if !answer.silent))
+            .await;
     }
+    answer.map_err(|mut failure| {
+        failure.usage_stats = usage_stats.snapshot();
+        failure
+    })
 }
 
 /// The embedding model a remembering bot's memories were stored with, when the bot names none of
@@ -1624,7 +2052,7 @@ pub(crate) async fn post_reply(
     state: &AppState,
     turn: &bot_turn::Model,
     host_id: &str,
-    request: SendEntryRequest,
+    mut request: SendEntryRequest,
     failure_code: Option<&'static str>,
     resumed: bool,
 ) -> Result<(), ApiError> {
@@ -1632,6 +2060,13 @@ pub(crate) async fn post_reply(
         return post_reply_in_origin(state, turn, host_id, &answered.origin_conversation, request)
             .await;
     }
+    crate::routes::inbox::reply_files::adopt(
+        state,
+        &turn.conversation_id,
+        &turn.bot_id,
+        &mut request,
+    )
+    .await;
     let sent = commit_reply(
         &state.db,
         state.db_dialect,
@@ -1664,8 +2099,15 @@ async fn post_reply_in_origin(
     turn: &bot_turn::Model,
     host_id: &str,
     origin_conversation: &str,
-    request: SendEntryRequest,
+    mut request: SendEntryRequest,
 ) -> Result<(), ApiError> {
+    crate::routes::inbox::reply_files::adopt(
+        state,
+        origin_conversation,
+        &turn.bot_id,
+        &mut request,
+    )
+    .await;
     let outgoing = validate_send(request)?;
     crate::routes::inbox::exchange::reply_in_origin(
         state,
@@ -1699,7 +2141,7 @@ pub(crate) async fn finish(
                     CODE_SETUP,
                     format!(
                         "I needed your approval to run {} but could not ask you: {}",
-                        card.tool,
+                        card.tool_names().join(", "),
                         error.public_message().unwrap_or("unexpected error")
                     ),
                     false,
@@ -1735,50 +2177,84 @@ pub(crate) async fn finish(
         }
         Err(failure) if retries(&failure, turn.attempts, mutating_started) => {
             let retry_at = now + ChronoDuration::seconds(backoff_secs(turn.attempts));
+            let code = failure.code;
             match state
                 .transaction(|txn| {
                     let (turn_id, host_id) = (turn.id.clone(), host_id.to_owned());
                     Box::pin(async move {
-                        ledger::release_for_retry_in(
-                            txn,
-                            &turn_id,
-                            &host_id,
-                            retry_at,
-                            failure.code,
-                            now,
-                        )
-                        .await
-                        .map_err(ApiError::from)
+                        ledger::release_for_retry_in(txn, &turn_id, &host_id, retry_at, code, now)
+                            .await
+                            .map_err(ApiError::from)
                     })
                 })
                 .await
             {
-                Ok(true) => {
+                Ok(ledger::RetryRelease::Requeued) => {
                     kick_later(retry_at);
                     wake(state, [turn.owner_id.clone()]).await;
                 }
-                Ok(false) => {}
+                Ok(ledger::RetryRelease::Spent) => {
+                    report_failure(state, turn, host_id, &failure, now).await
+                }
+                Ok(ledger::RetryRelease::Lost) => {}
                 Err(error) => {
                     tracing::warn!(%error, turn_id = %turn.id, "Bot turn: retry not queued")
                 }
             }
         }
-        Err(failure) if failure.post => {
-            let request = reply_request(
-                turn,
-                failure_message_id(&turn.bot_id, &turn.trigger_message_id),
-                &failure.text,
-                Some(failure.code),
-            );
-            if let Err(error) =
-                post_reply(state, turn, host_id, request, Some(failure.code), false).await
-            {
-                tracing::warn!(%error, turn_id = %turn.id, "Bot turn: the failure report was refused");
-                record_failure(state, turn, host_id, failure.code, now).await;
-            }
-        }
-        Err(failure) => record_failure(state, turn, host_id, failure.code, now).await,
+        Err(failure) => report_failure(state, turn, host_id, &failure, now).await,
     }
+}
+
+async fn report_failure(
+    state: &AppState,
+    turn: &bot_turn::Model,
+    host_id: &str,
+    failure: &Failure,
+    now: DateTime<FixedOffset>,
+) {
+    if !failure.post {
+        record_failure(state, turn, host_id, failure.code, now).await;
+        return;
+    }
+    let checkpoint = super::recovery::ServerRecovery::new(state, turn, host_id)
+        .read()
+        .await
+        .ok()
+        .flatten();
+    let request = failure_request(turn, failure, checkpoint.as_ref());
+    if let Err(error) = post_reply(state, turn, host_id, request, Some(failure.code), false).await {
+        tracing::warn!(%error, turn_id = %turn.id, "Bot turn: the failure report was refused");
+        record_failure(state, turn, host_id, failure.code, now).await;
+    }
+}
+
+pub(crate) fn failure_request(
+    turn: &bot_turn::Model,
+    failure: &Failure,
+    checkpoint: Option<&flow_like_types::bot_turn::BotRunCheckpoint>,
+) -> SendEntryRequest {
+    let usage = flow_like::flow::copilot::bot_usage::BotUsage::default();
+    if let Some(checkpoint) = checkpoint {
+        usage.restore(checkpoint);
+    }
+    for record in &failure.usage_stats {
+        if let Some(name) = record["step_name"].as_str()
+            && let Ok(stats) = serde_json::from_value(record["stats"].clone())
+        {
+            usage.record(name, stats);
+        }
+    }
+    let mut request = reply_request(
+        turn,
+        failure_message_id(&turn.bot_id, &turn.trigger_message_id),
+        &failure.text,
+        Some(failure.code),
+    );
+    if let Some(envelope) = request.envelope.as_mut() {
+        usage.attach(&mut envelope["body"]);
+    }
+    request
 }
 
 async fn record_failure(
@@ -1811,12 +2287,18 @@ fn spawn_heartbeat(
     turn_id: String,
     host_id: String,
     lost: Arc<Notify>,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
+) -> AbortOnDrop {
+    AbortOnDrop(tokio::spawn(async move {
+        let started = Instant::now();
+        let budget = Duration::from_millis(MAX_TURN_RUNTIME_MS as u64) + HEARTBEAT_GRACE;
         let mut tick = tokio::time::interval(Duration::from_secs(HEARTBEAT_SECS));
         tick.tick().await;
         loop {
             tick.tick().await;
+            if started.elapsed() > budget {
+                tracing::warn!(turn_id = %turn_id, "Bot turn: heartbeat stopped past the maximum runtime");
+                return;
+            }
             match ledger::heartbeat_in(&state.db, &turn_id, None, &host_id, now_millis()).await {
                 Ok(_) => {}
                 Err(error)
@@ -1831,7 +2313,18 @@ fn spawn_heartbeat(
                 }
             }
         }
-    })
+    }))
+}
+
+const HEARTBEAT_GRACE: Duration = Duration::from_secs(120);
+
+/// Aborts the task when dropped, so a dropped or panicking turn stops renewing its lease.
+pub(super) struct AbortOnDrop(pub(super) JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 pub(super) async fn run_while_notifying<T>(
@@ -1872,7 +2365,7 @@ async fn run_claimed(state: &AppState, host_id: &str, claimed: Claimed) {
         }
         other => other,
     };
-    heartbeat.abort();
+    drop(heartbeat);
     match result {
         Some(result) => {
             let answered = matches!(&result, Ok(answer) if !answer.silent);
@@ -1901,6 +2394,35 @@ async fn run_claimed(state: &AppState, host_id: &str, claimed: Claimed) {
 /// Claims `turn_id`, runs it and then every turn that queued behind it for the same bot and
 /// conversation. Returns how many turns it ran.
 pub(crate) async fn drive(state: &AppState, host_id: &str, turn_id: &str) -> u32 {
+    drive_within(state, host_id, turn_id, None).await
+}
+
+/// Lambda's hard maximum; the hosted worker's configured timeout can only be shorter.
+const HOSTED_INVOCATION_SECS: u64 = 900;
+/// Remaining invocation time below which a queued turn is handed to a fresh invocation.
+const HOSTED_CHAIN_RESERVE: Duration = Duration::from_secs(300);
+
+fn hosted_invocation_budget() -> Duration {
+    let secs = std::env::var("FLOWLIKE_HOSTED_WORKER_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(HOSTED_INVOCATION_SECS);
+    Duration::from_secs(secs)
+}
+
+fn chain_has_room(elapsed: Duration, budget: Duration) -> bool {
+    budget.saturating_sub(elapsed) > HOSTED_CHAIN_RESERVE
+}
+
+/// [`drive`] that stops chaining once `invocation` (start, budget) can't cover another turn and
+/// enqueues the next one for a fresh hosted invocation instead.
+async fn drive_within(
+    state: &AppState,
+    host_id: &str,
+    turn_id: &str,
+    invocation: Option<(Instant, Duration)>,
+) -> u32 {
     let mut next = turn_id.to_string();
     let mut ran = 0;
     loop {
@@ -1937,15 +2459,27 @@ pub(crate) async fn drive(state: &AppState, host_id: &str, turn_id: &str) -> u32
         )
         .await
         {
-            Ok(Some(head)) => next = head.id,
+            Ok(Some(head)) => {
+                if let Some((started, budget)) = invocation
+                    && !chain_has_room(started.elapsed(), budget)
+                {
+                    if let Err(error) = hosted_worker::enqueue_bot_turn(state, &head.id).await {
+                        tracing::warn!(%error, turn_id = %head.id, "Bot turn: handoff to a fresh invocation failed; recovery redispatches it");
+                    }
+                    return ran;
+                }
+                next = head.id
+            }
             _ => return ran,
         }
     }
 }
 
-/// The hosted worker's entry: one invocation drives one turn and what queued behind it.
+/// The hosted worker's entry: one invocation drives one turn and what queued behind it, within
+/// the invocation's time.
 pub(crate) async fn run_hosted(state: &AppState, turn_id: &str) {
-    drive(state, &host_id(), turn_id).await;
+    let invocation = (Instant::now(), hosted_invocation_budget());
+    drive_within(state, &host_id(), turn_id, Some(invocation)).await;
 }
 
 /// One pass: starts a task for each turn waiting for the server while there are free slots.
@@ -2050,6 +2584,14 @@ mod tests {
     }
 
     #[test]
+    fn a_hosted_invocation_chains_only_while_its_time_can_cover_another_turn() {
+        let budget = Duration::from_secs(HOSTED_INVOCATION_SECS);
+        assert!(chain_has_room(Duration::ZERO, budget));
+        assert!(!chain_has_room(budget - HOSTED_CHAIN_RESERVE, budget));
+        assert!(!chain_has_room(budget, budget));
+    }
+
+    #[test]
     fn backoff_grows_then_holds() {
         assert_eq!([1, 2, 3, 9].map(backoff_secs), [10, 30, 30, 30]);
     }
@@ -2075,6 +2617,29 @@ mod tests {
         assert_eq!((quota.code, quota.retryable), (CODE_QUOTA, false));
         let internal = Failure::from_api(&ApiError::internal("db down"));
         assert_eq!((internal.code, internal.retryable), (CODE_FAILED, true));
+    }
+
+    #[test]
+    fn a_profile_without_a_usable_model_asks_for_one_whatever_the_plan() {
+        use crate::routes::ai::global_chat::ProfileModelAccess;
+        let device_only = ProfileModelAccess {
+            profile_models: 2,
+            ..Default::default()
+        };
+        let above_plan = ProfileModelAccess {
+            profile_models: 1,
+            above_plan: 1,
+            ..Default::default()
+        };
+        for access in [ProfileModelAccess::default(), device_only, above_plan] {
+            let rejection = access.rejection(None).expect("nothing here can answer");
+            let failure = Failure::from_api(&rejection);
+            assert_eq!(
+                (failure.code, failure.retryable, failure.post),
+                (CODE_NO_MODEL, false, true),
+                "{access:?}"
+            );
+        }
     }
 
     #[test]
@@ -2107,6 +2672,93 @@ mod tests {
                 (CODE_MODEL, true),
                 "{message}"
             );
+        }
+    }
+
+    #[test]
+    fn only_transcript_turns_are_live_calls_and_only_direct_or_addressed_ones_race() {
+        assert!(live_call_turn(Some(InboxEntryKind::Transcript)));
+        assert!(!live_call_turn(Some(InboxEntryKind::Message)));
+        assert!(!live_call_turn(None));
+        let race = |live, kind, addressed, model| decides_in_parallel(live, kind, addressed, model);
+        assert!(race(true, ConversationKind::Direct, false, true));
+        assert!(race(true, ConversationKind::Group, true, true));
+        assert!(!race(true, ConversationKind::Group, false, true));
+        assert!(!race(true, ConversationKind::Direct, true, false));
+        assert!(!race(false, ConversationKind::Direct, true, true));
+    }
+
+    async fn raced(
+        decision: DecisionResult,
+        reply_first: bool,
+    ) -> (Raced<Option<&'static str>>, bool) {
+        use flow_like::flow::copilot::tool_gate::tool_gate;
+        let (opener, gate) = tool_gate();
+        let tool_ran = Arc::new(AtomicBool::new(false));
+        let ran = tool_ran.clone();
+        let chat = async move {
+            if reply_first {
+                return Some("reply");
+            }
+            if gate.passes().await {
+                ran.store(true, Ordering::SeqCst);
+                Some("reply")
+            } else {
+                None
+            }
+        };
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            (decision, 30)
+        });
+        let trace = std::sync::Mutex::new(CallTrace::default());
+        let result = race_decision(chat, task, opener, &trace).await;
+        (result, tool_ran.load(Ordering::SeqCst))
+    }
+
+    #[tokio::test]
+    async fn a_no_answer_decision_drops_the_run_before_any_tool_runs() {
+        use flow_like::flow::copilot::decision::Decision;
+        let (result, tool_ran) = raced(Some(Ok(Decision::NoAnswer)), false).await;
+        assert!(matches!(
+            result,
+            Raced::Withheld(Some(Ok(Decision::NoAnswer)))
+        ));
+        assert!(!tool_ran);
+    }
+
+    #[tokio::test]
+    async fn a_finished_reply_is_withheld_until_the_decision_allows_it() {
+        use flow_like::flow::copilot::decision::Decision;
+        let (result, _) = raced(Some(Ok(Decision::Acknowledge)), true).await;
+        assert!(matches!(result, Raced::Withheld(_)));
+        let (result, _) = raced(Some(Ok(Decision::AnswerNow)), true).await;
+        assert!(matches!(
+            result,
+            Raced::Allowed {
+                outcome: Some("reply"),
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_answer_now_decision_error_or_timeout_lets_the_tools_and_reply_through() {
+        use flow_like::flow::copilot::decision::Decision;
+        for decision in [
+            Some(Ok(Decision::AnswerNow)),
+            Some(Err(ApiError::bad_request("x"))),
+            None,
+        ] {
+            let (result, tool_ran) = raced(decision, false).await;
+            assert!(matches!(
+                result,
+                Raced::Allowed {
+                    outcome: Some("reply"),
+                    ..
+                }
+            ));
+            assert!(tool_ran);
         }
     }
 

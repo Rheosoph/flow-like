@@ -3,7 +3,7 @@
 mod bot_chat;
 mod bot_talk;
 
-use super::attachments::resolve_attachment_images;
+use super::attachments::{resolve_attachment_images, with_chat_file_handles};
 use super::backend_types::{
     FlowPilotAgentBackendKind, FlowPilotChatBackend, FlowPilotModelSelection,
 };
@@ -426,9 +426,15 @@ pub async fn global_chat(
     let mut finish = None;
     let mut bot_memory = None;
     let mut notes = None;
+    let mut trail = None;
+    let mut reply_files = None;
+    let mut usage = flow_like::flow::copilot::bot_usage::BotUsage::default();
     let mut recovery = None;
     let mut inbox_conversation_id = None;
     let mut ephemeral_user_context = false;
+    let mut live_call = false;
+    let mut shared_context = None;
+    let mut trigger_files = Vec::new();
     let mut legacy_memory_read_only = interactive.is_some();
     let mut legacy_memory_allowed = interactive.as_ref().map(|_| false);
     let bot_turn_id = interactive
@@ -443,11 +449,16 @@ pub async fn global_chat(
             crate::bot_host::interactive::begin(Some(&app_handle), bot, run.conversation_id());
         inbox_conversation_id = Some(run.conversation_id().to_owned());
         ephemeral_user_context = run.ephemeral_user_context().await?;
+        live_call = run.live_call().await?;
+        trigger_files = run.trigger_files().await;
         let access = run.legacy_memory_access().await;
         legacy_memory_allowed = Some(access.is_some());
         legacy_memory_read_only = access.unwrap_or(true);
+        bot_memory = run.memory().await;
+        if bot_memory.is_some() {
+            shared_context = run.shared_context().await;
+        }
         if !ephemeral_user_context {
-            bot_memory = run.memory().await;
             recovery = run
                 .recovery(
                     app_handle
@@ -455,10 +466,11 @@ pub async fn global_chat(
                         .map(|host| host.inner().clone()),
                 )
                 .await?;
-        }
-        if !ephemeral_user_context {
             notes = run.notes().await;
+            trail = run.trail().await;
+            reply_files = Some(run.reply_files());
         }
+        usage = run.usage.clone();
         let hold = run.hold();
         finish = Some(crate::bot_host::interactive::Finish {
             memory: bot_memory.clone(),
@@ -467,6 +479,14 @@ pub async fn global_chat(
             hold,
         });
     }
+    let attachments_manifest = if trigger_files.is_empty() {
+        attachments_manifest
+    } else {
+        Some(flow_like::flow::copilot::with_stored_files(
+            attachments_manifest.as_deref().unwrap_or_default(),
+            &trigger_files,
+        ))
+    };
     let result = global_chat_native(
         app_handle,
         Some(webview.label().to_owned()),
@@ -487,6 +507,7 @@ pub async fn global_chat(
         run_id,
         channel,
         crate::functions::ai::native_tool_bridge::NativeRunOptions {
+            usage,
             model_id,
             reasoning_effort,
             conversation_id,
@@ -496,7 +517,11 @@ pub async fn global_chat(
                 crate::functions::ai::native_tool_bridge::NativeInteractionMode::Interactive,
             bot_memory,
             notes,
+            trail,
+            reply_files,
             ephemeral_user_context,
+            live_call,
+            shared_context,
             recovery,
             legacy_memory_read_only,
             legacy_memory_allowed,
@@ -542,6 +567,69 @@ fn allows_legacy_owner_memory(
     })
 }
 
+const UNSET_MS: u64 = u64::MAX;
+
+struct CallTiming {
+    prep_ms: std::sync::atomic::AtomicU64,
+    first_token_ms: std::sync::atomic::AtomicU64,
+    model: StdMutex<String>,
+}
+
+impl Default for CallTiming {
+    fn default() -> Self {
+        Self {
+            prep_ms: std::sync::atomic::AtomicU64::new(UNSET_MS),
+            first_token_ms: std::sync::atomic::AtomicU64::new(UNSET_MS),
+            model: StdMutex::new(String::new()),
+        }
+    }
+}
+
+impl CallTiming {
+    fn model_ready(&self, started: std::time::Instant, model: &str) {
+        self.prep_ms.store(
+            started.elapsed().as_millis() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        if let Ok(mut label) = self.model.lock() {
+            *label = model.to_owned();
+        }
+    }
+
+    fn first_token(&self, started: std::time::Instant) {
+        let _ = self.first_token_ms.compare_exchange(
+            UNSET_MS,
+            started.elapsed().as_millis() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    fn log(&self, started: std::time::Instant, turn_id: &str, bot_id: &str, ok: bool) {
+        let set = |value: &std::sync::atomic::AtomicU64| {
+            let value = value.load(std::sync::atomic::Ordering::Relaxed);
+            (value != UNSET_MS).then_some(value)
+        };
+        let model = self
+            .model
+            .lock()
+            .map(|label| label.clone())
+            .unwrap_or_default();
+        tracing::info!(
+            target: "bot_call_latency",
+            route = "interactive",
+            turn_id,
+            bot_id,
+            prep_ms = set(&self.prep_ms),
+            first_token_ms = set(&self.first_token_ms),
+            total_ms = started.elapsed().as_millis() as u64,
+            model = %model,
+            ok,
+            "voice call turn"
+        );
+    }
+}
+
 pub async fn global_chat_native(
     app_handle: AppHandle,
     webview: Option<String>,
@@ -573,15 +661,31 @@ pub async fn global_chat_native(
 ) -> Result<UnifiedCopilotResponse, String> {
     // Keep model selection, memory and delegated tools on the profile that owns this run.
     let mut options = options;
+    let usage = options.usage.clone();
     let nested_talk = options.bot_talk.take();
     let answered_round = options.answered_round.take();
     let bot_memory = options.bot_memory.take();
     let notes = options.notes.take();
-    let recovery = options.recovery.take();
+    let trail = options.trail.take();
+    let reply_files = options.reply_files.take();
+    let recovery = options
+        .recovery
+        .take()
+        .map(|recovery| usage.with_recovery(recovery));
     let room_updates = options.room_updates.take();
     let requester = options.requester.take();
+    let reply_stream = options.reply_stream.take();
     let acknowledgement = options.acknowledgement;
+    let live_call = options.live_call;
+    let call_started = std::time::Instant::now();
+    let log_call = live_call
+        && options.interaction_mode
+            == crate::functions::ai::native_tool_bridge::NativeInteractionMode::Interactive;
+    let call_timing = Arc::new(CallTiming::default());
+    let tool_gate = options.tool_gate.take();
     let ephemeral_user_context = options.ephemeral_user_context;
+    let seed_taint = options.seed_taint;
+    let shared_context = options.shared_context.take();
     let suppress_owner_notifications = options.suppress_owner_notifications;
     let legacy_memory_allowed = allows_legacy_owner_memory(
         options.legacy_memory_allowed,
@@ -603,6 +707,10 @@ pub async fn global_chat_native(
     options.attachments = attachments_manifest.clone().unwrap_or_default();
     let conversation_id = options.conversation_id.clone();
     let has_inbox_conversation = options.inbox_conversation_id.is_some();
+    let conversation_key = options
+        .inbox_conversation_id
+        .clone()
+        .or_else(|| conversation_id.clone());
     let run_id = Some(run_id.unwrap_or_else(flow_like_types::create_id));
     let _native_run = crate::functions::ai::native_tool_bridge::claim_run(
         &app_handle,
@@ -636,17 +744,10 @@ pub async fn global_chat_native(
         .as_ref()
         .and_then(|identity| identity.auth.as_ref())
     {
-        Some(binding) => {
-            #[cfg(desktop)]
-            {
-                model_state.device_model_connector =
-                    Some(crate::device_models::connector_for_session(binding.clone()));
-            }
-            model_state.request_authorizer = Some(
-                crate::execution_credentials::native_request_authorizer(binding.clone(), ""),
-            );
-            Some(binding.cached_access_token().await?)
-        }
+        Some(binding) => Some(
+            crate::execution_credentials::authorize_native_models(&mut model_state, binding)
+                .await?,
+        ),
         None => {
             if token.is_some() {
                 if let Some(identity) = &identity {
@@ -664,6 +765,7 @@ pub async fn global_chat_native(
         && let Some(message) = flow_like::flow::copilot::run_recovery::finished_reply(&checkpoint)
             .map_err(|error| error.to_string())?
     {
+        usage.restore(&checkpoint);
         if identity
             .as_ref()
             .and_then(|identity| identity.auth.as_ref())
@@ -716,14 +818,27 @@ pub async fn global_chat_native(
     let model_state = Arc::new(model_state);
     if let Some(bot) = bot.as_mut() {
         let context = std::sync::Arc::make_mut(&mut bot.context);
-        context.host_tools = std::mem::take(&mut context.host_tools)
-            .with_user_context(has_inbox_conversation);
+        context.host_tools =
+            std::mem::take(&mut context.host_tools).with_user_context(has_inbox_conversation);
         if let Some(notes) = notes {
             context.host_tools = std::mem::take(&mut context.host_tools).with_notes(notes);
         }
+        if let Some(trail) = trail {
+            context.host_tools = std::mem::take(&mut context.host_tools).with_trail(trail);
+        }
+        if let Some(files) = reply_files {
+            context.host_tools = std::mem::take(&mut context.host_tools).with_reply_files(files);
+        }
+        if let Some(key) = conversation_key {
+            context.host_tools = std::mem::take(&mut context.host_tools).with_conversation_key(key);
+        }
         std::sync::Arc::make_mut(&mut bot.context).recovery = recovery.map(Into::into);
         std::sync::Arc::make_mut(&mut bot.context).acknowledgement = acknowledgement;
+        std::sync::Arc::make_mut(&mut bot.context).live_call = live_call;
+        std::sync::Arc::make_mut(&mut bot.context).spoken_drafts = reply_stream.is_some();
+        std::sync::Arc::make_mut(&mut bot.context).tool_gate = tool_gate;
         std::sync::Arc::make_mut(&mut bot.context).ephemeral_user_context = ephemeral_user_context;
+        std::sync::Arc::make_mut(&mut bot.context).seed_taint = seed_taint;
         std::sync::Arc::make_mut(&mut bot.context).suppress_owner_notifications =
             suppress_owner_notifications;
     }
@@ -760,9 +875,30 @@ pub async fn global_chat_native(
                 profile,
                 bot,
                 bot_chat::chat_bits_model(&model_selection),
+                live_call,
             )
             .await?,
         ),
+        _ => None,
+    };
+    if let (Some(model_id), Some(id)) = (bot_model.as_deref(), run_id.as_deref()) {
+        let _ = channel.send(
+            crate::functions::ai::native_tool_bridge::run_model_announcement(id, model_id)
+                .to_string(),
+        );
+    }
+    // Its assistants run on the bot's sub-task model when this desktop can run it, else on that
+    // model.
+    let assistant_model = match (&bot, &profile) {
+        (Some(bot), Some(profile)) => {
+            flow_like::flow::copilot::resolve_subtask_model(
+                &model_state,
+                Some(profile.as_ref()),
+                bot.context.subtask_model.as_deref(),
+                bot_model.as_deref(),
+            )
+            .await
+        }
         _ => None,
     };
     let mut history = history.unwrap_or_default();
@@ -784,27 +920,37 @@ pub async fn global_chat_native(
         }
         _ => None,
     };
+    // A turn answering shared context keeps the host's prompt and history: memory holds only
+    // value-free notes of it. Memory turns read live session snapshots from their own section.
     if let Some(memory) = &headless_memory {
-        history = memory
-            .prepared()
-            .history
-            .iter()
-            .map(|message| UnifiedChatMessage {
-                role: if message.role == flow_like_bot_memory::model::Role::Assistant {
-                    flow_like::flow::copilot::ChatRole::Assistant
-                } else {
-                    flow_like::flow::copilot::ChatRole::User
-                },
-                content: message.text.clone(),
-                images: None,
-            })
-            .collect();
-        user_prompt = memory.prompt().to_string();
+        if !ephemeral_user_context {
+            history = memory
+                .prepared()
+                .history
+                .iter()
+                .map(|message| UnifiedChatMessage {
+                    role: if message.role == flow_like_bot_memory::model::Role::Assistant {
+                        flow_like::flow::copilot::ChatRole::Assistant
+                    } else {
+                        flow_like::flow::copilot::ChatRole::User
+                    },
+                    content: message.text.clone(),
+                    images: None,
+                })
+                .collect();
+            user_prompt = memory.prompt().to_string();
+        }
+        let sections = [
+            user_context.filter(|context| !context.trim().is_empty()),
+            Some(memory.context().to_string()),
+            shared_context.filter(|_| !ephemeral_user_context),
+        ];
         user_context = Some(
-            match user_context.filter(|context| !context.trim().is_empty()) {
-                Some(context) => format!("{context}\n\n{}", memory.context()),
-                None => memory.context().to_string(),
-            },
+            sections
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("\n\n"),
         );
     }
     let attachments_manifest = attachments_manifest.unwrap_or_default();
@@ -819,7 +965,7 @@ pub async fn global_chat_native(
                 switchable_profiles: &[],
                 open_board: board_context.as_ref(),
                 open_data_studio: data_studio_context.as_ref(),
-                attachments: &attachments_manifest,
+                attachments: &with_chat_file_handles(&attachments_manifest),
             },
         ),
         _ => {
@@ -952,6 +1098,17 @@ pub async fn global_chat_native(
         Some(run) => global_chat_run_channel(run.clone()),
         None => channel,
     };
+    let sink = Channel::new(move |body: InvokeResponseBody| {
+        let chunk = match &body {
+            InvokeResponseBody::Json(json) => serde_json::from_str::<String>(json).ok(),
+            InvokeResponseBody::Raw(bytes) => String::from_utf8(bytes.clone()).ok(),
+        };
+        if let Some(chunk) = chunk {
+            usage.observe(&chunk);
+            sink.send(chunk)?;
+        }
+        Ok(())
+    });
     crate::functions::ai::native_tool_bridge::set_run_stream(
         run_id.as_deref().expect("native run id"),
         sink.clone(),
@@ -973,6 +1130,7 @@ pub async fn global_chat_native(
             model_id: bot_model
                 .clone()
                 .or_else(|| model_selection.model_id.clone()),
+            assistant_model_id: assistant_model.clone(),
             embedding_model_id: bot
                 .context
                 .embedding_model
@@ -1130,11 +1288,28 @@ pub async fn global_chat_native(
                     })
                     .collect();
 
+                call_timing.model_ready(
+                    call_started,
+                    bot_model
+                        .as_deref()
+                        .or(model_selection.model_id.as_deref())
+                        .unwrap_or_default(),
+                );
+                let token_timing = call_timing.clone();
                 let on_token = move |token: String| {
+                    token_timing.first_token(call_started);
+                    if let Some(reply) = &reply_stream {
+                        reply.push(&token);
+                    }
                     let _ = sink.send(token);
                 };
 
-                let thinking = Some(flowpilot_thinking(reasoning_effort.as_deref()));
+                let thinking = Some(match &bot {
+                    Some(bot) if bot.context.live_call => {
+                        flow_like::flow::copilot::bot_thinking(true)
+                    }
+                    _ => flowpilot_thinking(reasoning_effort.as_deref()),
+                });
                 let platform_chat = async {
                     match bot {
                         Some(bot) => {
@@ -1197,6 +1372,15 @@ pub async fn global_chat_native(
         }
     }
     .await;
+
+    if log_call {
+        call_timing.log(
+            call_started,
+            bot_turn_id.as_deref().unwrap_or_default(),
+            bot_id.as_deref().unwrap_or_default(),
+            result.is_ok(),
+        );
+    }
 
     if let Some(guard) = &mut run_guard {
         guard.completed = true;

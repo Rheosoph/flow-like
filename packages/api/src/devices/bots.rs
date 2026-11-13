@@ -5,7 +5,7 @@
 //! scoped to the device and its owner in SQL; a turn of another device's bot reads as missing.
 //! Model usage is reserved at the claim and settled by the call that ends the turn.
 
-use super::bots_grant;
+use super::{bots_grant, bots_keys};
 use crate::{
     bot_host::{
         approvals,
@@ -33,6 +33,7 @@ use axum::{
 };
 use chrono::{DateTime, Duration, FixedOffset};
 use flow_like_types::{
+    bot::BotExecutionMode,
     bot_message::ApprovalRequest,
     bot_turn::{TurnHostKind, failure_message_id, reply_message_id},
     device_bot::{
@@ -40,18 +41,18 @@ use flow_like_types::{
         DeviceHeartbeatRequest, DeviceHeartbeatResponse, DeviceParkRequest, DevicePollRequest,
         DevicePollResponse, DeviceReleaseRequest, DeviceReplyRequest, DeviceReplyResponse,
         DeviceSilentRequest, DeviceTurnGrant, DeviceTurnState, DeviceWaitRequest,
-        DeviceWaitResponse, IDLE_POLL_MS, MAX_POLL_MS, MAX_REPLY_BYTES, REFRESHED_TOKEN_SECS,
-        TOKEN_REFRESH_SECS,
+        DeviceWaitResponse, IDLE_POLL_MS, MAX_POLL_MS, MAX_REPLY_BYTES, TOKEN_REFRESH_SECS,
     },
     inbox::{InboxEntryKind, is_valid_message_id},
 };
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder};
 
 const MAX_ERROR_CODE_CHARS: usize = 64;
-const REPLY_FAILURE_CODES: [&str; 6] = [
+const REPLY_FAILURE_CODES: [&str; 7] = [
     worker::CODE_TIMEOUT,
     worker::CODE_QUOTA,
     worker::CODE_SETUP,
+    worker::CODE_NO_MODEL,
     worker::CODE_MODEL,
     worker::CODE_FAILED,
     worker::CODE_REPLY_REFUSED,
@@ -60,6 +61,7 @@ const REPLY_FAILURE_CODES: [&str; 6] = [
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/{id}/bots/poll", post(poll))
+        .route("/{id}/bots/inbox-keys", post(super::bots_keys::publish_key))
         .route("/{id}/bots/hosts/forget", post(forget))
         .route("/{id}/bots/turns/{turn_id}/claim", post(claim))
         .route(
@@ -82,7 +84,7 @@ pub(crate) fn routes() -> Router<AppState> {
 }
 
 /// The owner of the device behind a verified device session; the DPoP proof binds `path`.
-async fn owner_of(
+pub(super) async fn owner_of(
     state: &AppState,
     id: &str,
     headers: &HeaderMap,
@@ -250,12 +252,58 @@ pub(crate) async fn device_bot_infos<C: ConnectionTrait>(
         .await?
         .into_iter()
         .map(|row| DeviceBotInfo {
+            execution_mode: crate::routes::bots::model::stored_execution_mode(&row),
             capabilities: crate::routes::bots::model::BotSettings::from_row(&row).capabilities,
             id: row.id,
             name: row.name,
             updated_at: row.updated_at.to_rfc3339(),
         })
         .collect())
+}
+
+pub(crate) const BOT_EXECUTION_MODE_UNSUPPORTED: &str = "BOT_EXECUTION_MODE_UNSUPPORTED";
+
+/// Checked under the bot's lock before claiming or issuing any credentials.
+pub(crate) async fn require_execution_mode<C: ConnectionTrait>(
+    db: &C,
+    owner: &str,
+    bot_id: &str,
+    request: &DeviceClaimRequest,
+) -> Result<(), ApiError> {
+    let row = crate::routes::bots::owned_bot(db, owner, bot_id).await?;
+    let mode = match row.execution_mode.as_deref() {
+        None => Some(BotExecutionMode::Native),
+        Some(mode) => BotExecutionMode::parse(mode),
+    };
+    if mode.is_some_and(|mode| request.supports(mode)) {
+        return Ok(());
+    }
+    Err(ApiError::coded(
+        StatusCode::CONFLICT,
+        BOT_EXECUTION_MODE_UNSUPPORTED,
+        "This bot requires an execution mode this device host cannot provide. Update the agent and check Docker; the bot will not run natively",
+    ))
+}
+
+async fn record_docker_support<C: ConnectionTrait>(
+    db: &C,
+    device_id: &str,
+    docker: Option<&flow_like_types::device_bot::DeviceDockerSupport>,
+    now_ms: i64,
+) -> Result<(), ApiError> {
+    let report = docker.map(|docker| serde_json::json!({
+        "installed": docker.installed,
+        "available": docker.installed && docker.available,
+        "reason": docker.reason.as_deref().map(|reason| reason.chars().filter(|c| !c.is_control()).take(256).collect::<String>()),
+        "seen_at": now_ms,
+    }));
+    db.execute_raw(sea_orm::Statement::from_sql_and_values(
+        sea_orm::DatabaseBackend::Postgres,
+        r#"UPDATE "ManagedDevice" SET "botDocker" = $1 WHERE id = $2"#,
+        [report.into(), device_id.into()],
+    ))
+    .await?;
+    Ok(())
 }
 
 const BOT_HOST_SEEN_EVERY_MS: i64 = 60_000;
@@ -298,10 +346,62 @@ pub(crate) async fn poll_in<C: ConnectionTrait>(
     host_id: &str,
     now: DateTime<FixedOffset>,
 ) -> Result<DevicePollResponse, ApiError> {
+    poll_in_modes(
+        db,
+        owner,
+        device_id,
+        host_id,
+        now,
+        &DevicePollRequest {
+            host_id: host_id.to_string(),
+            execution_modes: Vec::new(),
+            docker: None,
+            ready_bot_ids: None,
+        },
+    )
+    .await
+}
+
+pub(crate) async fn poll_in_modes<C: ConnectionTrait>(
+    db: &C,
+    owner: &str,
+    device_id: &str,
+    host_id: &str,
+    now: DateTime<FixedOffset>,
+    request: &DevicePollRequest,
+) -> Result<DevicePollResponse, ApiError> {
     let bots = device_bot_infos(db, owner, device_id).await?;
-    let ids: Vec<String> = bots.iter().map(|bot| bot.id.clone()).collect();
-    report_device_in(db, owner, device_id, host_id, &ids, now).await?;
-    let heads = ledger::queued_device_heads(db, owner, device_id, now, ledger::LIST_LIMIT).await?;
+    let ids: Vec<String> = bots
+        .iter()
+        .filter(|bot| request.supports(bot.execution_mode))
+        .map(|bot| bot.id.clone())
+        .collect();
+    let ready: Vec<String> = ids
+        .iter()
+        .filter(|id| {
+            request
+                .ready_bot_ids
+                .as_ref()
+                .is_none_or(|ready| ready.contains(id))
+        })
+        .cloned()
+        .collect();
+    let unavailable: Vec<&str> = bots
+        .iter()
+        .filter(|bot| !ready.contains(&bot.id))
+        .map(|bot| bot.id.as_str())
+        .collect();
+    if !unavailable.is_empty() {
+        crate::entity::bot_host_heartbeat::Entity::delete_many()
+            .filter(crate::entity::bot_host_heartbeat::Column::HostId.eq(host_id))
+            .filter(crate::entity::bot_host_heartbeat::Column::BotId.is_in(unavailable))
+            .exec(db)
+            .await?;
+    }
+    report_device_in(db, owner, device_id, host_id, &ready, now).await?;
+    let heads =
+        ledger::queued_device_heads_for_bots(db, owner, device_id, &ids, now, ledger::LIST_LIMIT)
+            .await?;
     Ok(DevicePollResponse {
         bots,
         next_poll_ms: next_poll_ms(heads.len()),
@@ -334,10 +434,13 @@ pub(crate) async fn poll(
     Json(body): Json<DevicePollRequest>,
 ) -> Result<Json<DevicePollResponse>, ApiError> {
     let owner = owner_of(&state, &id, &headers, "/bots/poll").await?;
-    let host_id = host(body.host_id)?;
-    record_bot_host_seen(&state.db, &id, chrono::Utc::now().timestamp_millis()).await?;
+    let host_id = host(body.host_id.clone())?;
+    let seen_at = chrono::Utc::now().timestamp_millis();
+    if record_bot_host_seen(&state.db, &id, seen_at).await? {
+        record_docker_support(&state.db, &id, body.docker.as_ref(), seen_at).await?;
+    }
     Ok(Json(
-        poll_in(&state.db, &owner, &id, &host_id, now_millis()).await?,
+        poll_in_modes(&state.db, &owner, &id, &host_id, now_millis(), &body).await?,
     ))
 }
 
@@ -357,7 +460,7 @@ pub(crate) async fn poll(
         (status = 401, description = "The device session or request proof is invalid or revoked"),
         (status = 402, description = "The owner's usage allowance is not available"),
         (status = 404, description = "No such turn for a bot bound to this device, or its bot was deleted"),
-        (status = 409, description = "BOT_TURN_NOT_QUEUED, BOT_TURN_BUSY, BOT_TURN_OWNER_BUSY, BOT_TURN_HOST_KIND, or BOT_TURN_ENCRYPTED: the conversation is end-to-end encrypted, which a device bot can't read yet")
+        (status = 409, description = "BOT_TURN_NOT_QUEUED, BOT_TURN_BUSY, BOT_TURN_OWNER_BUSY, BOT_TURN_HOST_KIND, or BOT_DEVICE_E2E_KEY_MISSING: the conversation is end-to-end encrypted and the bot holds no encryption ability or published inbox key; the turn fails")
     )
 )]
 pub(crate) async fn claim(
@@ -373,7 +476,7 @@ pub(crate) async fn claim(
         &format!("/bots/turns/{turn_id}/claim"),
     )
     .await?;
-    let host_id = host(body.host_id)?;
+    let host_id = host(body.host_id.clone())?;
     let turn = held_turn(&state.db, &owner, &id, &turn_id).await?;
     if turn.host_kind != TurnHostKind::Device.stored() {
         return Err(ledger::Refusal::HostKind(
@@ -385,6 +488,7 @@ pub(crate) async fn claim(
         &state.db,
         state.db_dialect,
         &id,
+        &body,
         ClaimRequest {
             turn_id: turn_id.clone(),
             owner_id: Some(owner.clone()),
@@ -411,24 +515,7 @@ async fn grant_for(
     host_id: &str,
 ) -> Result<DeviceTurnGrant, ApiError> {
     let conversation = bots_grant::conversation_of(state, &claimed.turn.conversation_id).await?;
-    if bots_grant::is_end_to_end(&conversation) {
-        ledger::fail_held_in(
-            &state.db,
-            &claimed.turn.id,
-            host_id,
-            bots_grant::BOT_TURN_ENCRYPTED,
-            now_millis(),
-        )
-        .await?;
-        return Err(ApiError::coded(
-            StatusCode::CONFLICT,
-            bots_grant::BOT_TURN_ENCRYPTED,
-            format!(
-                "Conversation '{}' is end-to-end encrypted; a device bot can't read it",
-                conversation.id
-            ),
-        ));
-    }
+    bots_keys::ensure_openable(&state.db, &claimed.turn, host_id, &conversation).await?;
     bots_grant::build(state, claimed, host_id, &conversation).await
 }
 
@@ -448,13 +535,14 @@ pub(crate) fn claim_failure(error: &ApiError) -> worker::Failure {
 }
 
 async fn give_up(state: &AppState, turn: &bot_turn::Model, host_id: &str, error: &ApiError) {
-    if error.public_code() == bots_grant::BOT_TURN_ENCRYPTED {
+    if error.public_code() == bots_keys::BOT_DEVICE_E2E_KEY_MISSING {
         return;
     }
     worker::finish(state, turn, host_id, Err(claim_failure(error)), false).await;
 }
 
-/// Fresh tokens for the ones that have less than [`TOKEN_REFRESH_SECS`] left.
+/// Fresh tokens for the ones the device reports with less than [`TOKEN_REFRESH_SECS`] left.
+/// Whatever it reports, a refreshed token ends with the hold of the turn's allowance.
 pub(crate) async fn refreshed<C: ConnectionTrait>(
     db: &C,
     turn: &bot_turn::Model,
@@ -466,60 +554,45 @@ pub(crate) async fn refreshed<C: ConnectionTrait>(
     ),
     ApiError,
 > {
-    let horizon = chrono::Utc::now().timestamp() + TOKEN_REFRESH_SECS;
-    let due = |expires_at: Option<i64>| expires_at.is_some_and(|at| at < horizon);
-    if bots_grant::has_finished_checkpoint(db, turn, &request.host_id).await? {
-        let bot_token = if due(request.bot_token_expires_at) {
-            Some(
-                bots_grant::bot_token(
-                    db,
-                    &turn.owner_id,
-                    &turn.bot_id,
-                    &turn.id,
-                    bots_grant::DELIVERY_TTL_SECS,
-                )
-                .await?,
-            )
-        } else {
-            None
-        };
-        // A completed checkpoint cannot acquire executor credentials through a heartbeat.
+    let now = chrono::Utc::now().timestamp();
+    let due = |expires_at: Option<i64>| expires_at.is_some_and(|at| at < now + TOKEN_REFRESH_SECS);
+    let (bot_due, executor_due) = (
+        due(request.bot_token_expires_at),
+        due(request.executor_token_expires_at),
+    );
+    if !bot_due && !executor_due {
+        return Ok((None, None));
+    }
+    let finished = bots_grant::has_finished_checkpoint(db, turn, &request.host_id).await?;
+    let ttl = if finished {
+        bots_grant::DELIVERY_TTL_SECS
+    } else {
+        bots_grant::refresh_ttl(bots_grant::hold_end(db, turn).await?, now)
+    };
+    let bot_token = if bot_due {
+        Some(bots_grant::bot_token(db, &turn.owner_id, &turn.bot_id, &turn.id, ttl).await?)
+    } else {
+        None
+    };
+    // A completed checkpoint cannot acquire executor credentials through a heartbeat.
+    if finished || !executor_due {
         return Ok((bot_token, None));
     }
-    let bot_token = if due(request.bot_token_expires_at) {
-        Some(
-            bots_grant::bot_token(
-                db,
-                &turn.owner_id,
-                &turn.bot_id,
-                &turn.id,
-                REFRESHED_TOKEN_SECS,
-            )
-            .await?,
-        )
-    } else {
-        None
-    };
-    let executor = if due(request.executor_token_expires_at) {
-        let workspace = live_workspace(db, &turn.owner_id, &turn.bot_id).await?;
-        let conversation = crate::entity::conversation::Entity::find_by_id(&turn.conversation_id)
-            .one(db)
-            .await?
-            .ok_or_else(|| ApiError::not_found("The turn's conversation is gone"))?;
-        let kind = flow_like_types::inbox::ConversationKind::parse(&conversation.kind)
-            .unwrap_or(flow_like_types::inbox::ConversationKind::Group);
-        Some(bots_grant::executor_token(
-            &turn.owner_id,
-            &turn.bot_id,
-            worker::room_of(kind, &turn.conversation_id),
-            &turn.id,
-            workspace.as_deref(),
-            REFRESHED_TOKEN_SECS,
-        )?)
-    } else {
-        None
-    };
-    Ok((bot_token, executor))
+    let workspace = live_workspace(db, &turn.owner_id, &turn.bot_id).await?;
+    crate::entity::conversation::Entity::find_by_id(&turn.conversation_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::not_found("The turn's conversation is gone"))?;
+    let scope = crate::routes::bots::runtime_token::turn_scope(db, turn).await?;
+    let executor = bots_grant::executor_token(
+        &turn.owner_id,
+        &turn.bot_id,
+        scope.as_deref(),
+        &turn.id,
+        workspace.as_deref(),
+        ttl,
+    )?;
+    Ok((bot_token, Some(executor)))
 }
 
 #[utoipa::path(
@@ -553,7 +626,8 @@ pub(crate) async fn heartbeat(
     )
     .await?;
     let host_id = host(body.host_id.clone())?;
-    held_turn(&state.db, &owner, &id, &turn_id).await?;
+    let held = held_turn(&state.db, &owner, &id, &turn_id).await?;
+    bots_grant::require_hold(&state.db, &held, &host_id).await?;
     let turn =
         ledger::heartbeat_in(&state.db, &turn_id, Some(&owner), &host_id, now_millis()).await?;
     let (bot_token, executor_token) = refreshed(&state.db, &turn, &body).await?;
@@ -719,7 +793,8 @@ fn valid_error_code(code: &str) -> bool {
             .all(|char| char.is_ascii_uppercase() || char.is_ascii_digit() || char == '_')
 }
 
-/// Gives the held turn up: queued again after a backoff, or `FAILED` with `error_code`.
+/// Gives the held turn up: queued again after a backoff, or `FAILED` with `error_code`. A retry
+/// whose budget is spent leaves the turn held, running, for the device to post its failure reply.
 pub(crate) async fn release_in<C: ConnectionTrait>(
     db: &C,
     owner: &str,
@@ -738,7 +813,7 @@ pub(crate) async fn release_in<C: ConnectionTrait>(
     let retry_at = request
         .retry
         .then(|| now + Duration::seconds(worker::backoff_secs(turn.attempts)));
-    let released = match retry_at {
+    let held = match retry_at {
         Some(retry_at) => {
             ledger::release_for_retry_in(
                 db,
@@ -749,12 +824,13 @@ pub(crate) async fn release_in<C: ConnectionTrait>(
                 now,
             )
             .await?
+                != ledger::RetryRelease::Lost
         }
         None => {
             ledger::fail_held_in(db, turn_id, &request.host_id, &request.error_code, now).await?
         }
     };
-    if !released {
+    if !held {
         return Err(lease_lost(&request.host_id, turn_id, "release it"));
     }
     let state = turn_state(db, owner, turn_id).await?;
@@ -764,18 +840,25 @@ pub(crate) async fn release_in<C: ConnectionTrait>(
     Ok((state, retry_at))
 }
 
+/// Whether a released turn is queued again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub(crate) struct DeviceReleaseResponse {
+    /// `false`: the retries are spent or the turn failed, and the device posts the failure reply.
+    pub requeued: bool,
+}
+
 #[utoipa::path(
     post,
     path = "/devices/{id}/bots/turns/{turn_id}/release",
     tag = "devices",
-    description = "A device gives a turn up: it is queued again after a backoff, or fails with the given code and posts nothing.",
+    description = "A device gives a turn up: it is queued again after a backoff (requeued true). With its retries spent the turn stays held and requeued is false: the device posts the failure reply. Without retry it fails with the given code and posts nothing.",
     params(
         ("id" = String, Path, description = "Device ID"),
         ("turn_id" = String, Path, description = "The claimed turn")
     ),
     request_body = Object,
     responses(
-        (status = 200, description = "The turn after the release", body = Object),
+        (status = 200, description = "Whether the turn is queued again", body = DeviceReleaseResponse),
         (status = 400, description = "host_id or error_code is invalid"),
         (status = 401, description = "The device session or request proof is invalid or revoked"),
         (status = 404, description = "No such turn for a bot bound to this device"),
@@ -787,7 +870,7 @@ pub(crate) async fn release(
     Path((id, turn_id)): Path<(String, String)>,
     headers: HeaderMap,
     Json(mut body): Json<DeviceReleaseRequest>,
-) -> Result<Json<DeviceTurnState>, ApiError> {
+) -> Result<Json<DeviceReleaseResponse>, ApiError> {
     let owner = owner_of(
         &state,
         &id,
@@ -810,7 +893,9 @@ pub(crate) async fn release(
     }
     bots_grant::settle(&state, &owner, body.usage.as_ref(), false).await;
     wake(&state, [owner]).await;
-    Ok(Json(ended))
+    Ok(Json(DeviceReleaseResponse {
+        requeued: ended.turn.status == flow_like_types::bot_turn::TurnStatus::Queued,
+    }))
 }
 
 /// The approval card of a parked turn names that turn, a tool and a valid card id.
@@ -827,7 +912,12 @@ pub(crate) fn checked_card(
             turn.id
         )));
     }
-    Ok(())
+    flow_like_types::bot_message::MessageBody {
+        approval: Some(approval.clone()),
+        ..Default::default()
+    }
+    .check()
+    .map_err(|error| ApiError::bad_request(error.to_string()))
 }
 
 #[utoipa::path(
@@ -861,7 +951,7 @@ pub(crate) async fn park(
         &format!("/bots/turns/{turn_id}/park"),
     )
     .await?;
-    let host_id = host(body.host_id)?;
+    let host_id = host(body.host_id.clone())?;
     let turn = held_turn(&state.db, &owner, &id, &turn_id).await?;
     checked_card(&turn, &body.approval)?;
     approvals::park_held(&state, &turn, &host_id, &body.approval).await?;
@@ -903,8 +993,8 @@ pub(crate) fn checked_reply(
     let request = SendEntryRequest {
         message_id: body.message_id,
         kind: InboxEntryKind::Message,
-        envelope: Some(body.envelope),
-        envelopes: None,
+        envelope: (!body.envelope.is_null()).then_some(body.envelope),
+        envelopes: body.envelopes,
         turn: None,
     };
     validate_send(request.clone())?;
@@ -915,7 +1005,7 @@ pub(crate) fn checked_reply(
     post,
     path = "/devices/{id}/bots/turns/{turn_id}/reply",
     tag = "devices",
-    description = "A device posts the bot's answer (or its failure report) and completes the turn in one step. Sending the same answer again returns the first copy.",
+    description = "A device posts the bot's answer (or its failure report) and completes the turn in one step: one plain envelope, or in an end-to-end encrypted conversation one sealed envelope per member. Sending the same answer again returns the first copy.",
     params(
         ("id" = String, Path, description = "Device ID"),
         ("turn_id" = String, Path, description = "The claimed turn")
@@ -923,10 +1013,10 @@ pub(crate) fn checked_reply(
     request_body = Object,
     responses(
         (status = 200, description = "The turn is done (or failed, for a failure report); `posted` is false on a repeat", body = Object),
-        (status = 400, description = "message_id is not this turn's answer id, failure_code is unknown, or the envelope is malformed"),
+        (status = 400, description = "message_id is not this turn's answer id, failure_code is unknown, the envelope is malformed, or INBOX_ENCRYPTION_MISMATCH: a plain envelope in an end-to-end encrypted conversation or sealed ones in a plain one"),
         (status = 401, description = "The device session or request proof is invalid or revoked"),
         (status = 404, description = "No such turn for a bot bound to this device"),
-        (status = 409, description = "BOT_TURN_NOT_CLAIMED: the device doesn't hold the turn with a live lease")
+        (status = 409, description = "BOT_TURN_NOT_CLAIMED: the device doesn't hold the turn with a live lease; INBOX_ENVELOPES_MISMATCH: the sealed envelopes don't name exactly the conversation's members")
     )
 )]
 pub(crate) async fn reply(
@@ -945,7 +1035,16 @@ pub(crate) async fn reply(
     let host_id = host(body.host_id.clone())?;
     let turn = held_turn(&state.db, &owner, &id, &turn_id).await?;
     let usage = body.usage.clone();
-    let (request, failure) = checked_reply(&turn, body)?;
+    let (mut request, failure) = checked_reply(&turn, body)?;
+    if failure.is_none() {
+        crate::routes::inbox::reply_files::adopt(
+            &state,
+            &turn.conversation_id,
+            &turn.bot_id,
+            &mut request,
+        )
+        .await;
+    }
     let message_id = request.message_id.clone();
     let sent = worker::commit_reply(
         &state.db,

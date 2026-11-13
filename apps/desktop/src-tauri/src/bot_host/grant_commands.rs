@@ -3,7 +3,10 @@ use super::{
     store::{AppStore, HostStore},
 };
 use crate::functions::local_bots::{LocalBots, on_store};
-use flow_like_types::tool_grant::{ApprovalDecision, ToolGrant, ToolGrantKey};
+use flow_like_types::{
+    bot_message::ItemDecision,
+    tool_grant::{ApprovalDecision, ToolGrant, ToolGrantKey},
+};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
 
@@ -49,7 +52,8 @@ pub async fn local_bot_delete_tool_grant(
 }
 
 /// Answers the approval card a parked local turn waits on. `decision` is `once`, `always` or
-/// `deny`; the turn runs again afterwards.
+/// `deny` for every item of a batch card that `items` does not answer otherwise; the turn runs
+/// again afterwards. Refusals carry a `code` (`BOT_TURN_NOT_WAITING` once it was answered).
 #[tauri::command]
 pub async fn local_bot_answer_approval(
     app: AppHandle,
@@ -57,9 +61,18 @@ pub async fn local_bot_answer_approval(
     turn_id: String,
     approval_id: String,
     decision: ApprovalDecision,
-) -> Result<(), String> {
+    items: Option<Vec<ItemDecision>>,
+) -> Result<(), approvals::AnswerRefused> {
     let store: Arc<dyn HostStore> = Arc::new(AppStore(app.clone()));
-    approvals::answer_local(&store, &bot_id, &turn_id, &approval_id, decision).await?;
+    approvals::answer_local(
+        &store,
+        &bot_id,
+        &turn_id,
+        &approval_id,
+        decision,
+        &items.unwrap_or_default(),
+    )
+    .await?;
     if let Some(host) = app.try_state::<super::BotHost>() {
         host.poke(None);
     }

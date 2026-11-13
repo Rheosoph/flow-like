@@ -19,9 +19,11 @@ use crate::{
     },
     state::AppState,
 };
+use flow_like::flow::copilot::{ReplyFiles, ToolTrail};
 use flow_like_types::{
-    bot_turn::{INTERACTIVE_HOST_PREFIX, reply_message_id, turn_id},
-    inbox::{InboxEntryKind, plain_envelope},
+    bot_message::{AttachmentPart, MessageBody},
+    bot_turn::{INTERACTIVE_HOST_PREFIX, TurnAudience, reply_message_id, turn_id},
+    inbox::{ConversationKind, InboxEntryKind, plain_envelope},
     tokio::{self, task::JoinHandle},
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
@@ -43,24 +45,98 @@ pub struct InteractiveRef {
 /// The queued turn an interactive chat answers, once checked against the caller and the bot.
 #[derive(Debug, Clone)]
 pub(crate) struct InteractiveTurn {
+    pub usage: flow_like::flow::copilot::bot_usage::BotUsage,
     pub turn: bot_turn::Model,
     pub host_id: String,
+    /// Set once [`Self::open_trail`] found the owner's direct conversation.
+    pub trail: Option<ToolTrail>,
+    /// The files the run attaches to its reply.
+    pub reply_files: ReplyFiles,
+}
+
+/// Facts of the stored trigger entry an interactive run acts on, never taken from the client.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct TriggerFacts {
+    pub ephemeral_user_context: bool,
+    /// The trigger is a spoken `transcript`: the run is a turn of a live call.
+    pub live_call: bool,
 }
 
 impl InteractiveTurn {
-    pub(crate) async fn ephemeral_user_context(&self, state: &AppState) -> Result<bool, ApiError> {
+    /// The turn's tool trail when it answers the owner in their direct conversation: the bot's
+    /// earlier calls for the prompt, this turn's calls for the reply.
+    pub(crate) async fn open_trail(&mut self, state: &AppState) -> Option<ToolTrail> {
+        let turn = &self.turn;
+        if TurnAudience::parse(&turn.audience) != Some(TurnAudience::Owner)
+            || turn
+                .requester_id
+                .as_deref()
+                .is_some_and(|requester| requester != turn.owner_id)
+        {
+            return None;
+        }
+        let section = super::history::transcript(
+            &state.db,
+            &turn.bot_id,
+            &turn.conversation_id,
+            &turn.trigger_message_id,
+            ConversationKind::Direct,
+            &turn.owner_id,
+        )
+        .await
+        .ok()
+        .and_then(|transcript| transcript.trail);
+        let trail = ToolTrail::new(section);
+        self.trail = Some(trail.clone());
+        Some(trail)
+    }
+
+    async fn trigger_entry(
+        &self,
+        state: &AppState,
+    ) -> Result<Option<crate::entity::inbox_entry::Model>, ApiError> {
         use crate::entity::inbox_entry;
-        let trigger = inbox_entry::Entity::find()
+        Ok(inbox_entry::Entity::find()
             .filter(inbox_entry::Column::InboxId.eq(&self.turn.bot_id))
             .filter(inbox_entry::Column::ConversationId.eq(&self.turn.conversation_id))
             .filter(inbox_entry::Column::MessageId.eq(&self.turn.trigger_message_id))
             .one(&state.db)
-            .await?;
-        Ok(trigger.is_some_and(|entry| {
-            entry.envelope.get("body").is_some_and(|body| {
-                flow_like_types::bot_user_context::response_for(body, &entry.sender_id, &self.turn.bot_id)
+            .await?)
+    }
+
+    /// The files the stored trigger carries that were uploaded to the turn's conversation.
+    pub(crate) async fn trigger_files(
+        &self,
+        state: &AppState,
+    ) -> Result<Vec<AttachmentPart>, ApiError> {
+        let trigger = self.trigger_entry(state).await?;
+        Ok(trigger
+            .as_ref()
+            .and_then(|entry| super::history::plain_body(&entry.envelope))
+            .and_then(|body| MessageBody::parse(body).ok())
+            .map(|body| {
+                body.conversation_attachments(&self.turn.conversation_id)
+                    .cloned()
+                    .collect()
             })
-        }))
+            .unwrap_or_default())
+    }
+
+    /// What the turn's stored trigger entry says about the run answering it.
+    pub(crate) async fn trigger_facts(&self, state: &AppState) -> Result<TriggerFacts, ApiError> {
+        let trigger = self.trigger_entry(state).await?;
+        Ok(
+            trigger.map_or_else(TriggerFacts::default, |entry| TriggerFacts {
+                ephemeral_user_context: entry.envelope.get("body").is_some_and(|body| {
+                    flow_like_types::bot_user_context::response_for(
+                        body,
+                        &entry.sender_id,
+                        &self.turn.bot_id,
+                    )
+                }),
+                live_call: InboxEntryKind::parse(&entry.kind) == Some(InboxEntryKind::Transcript),
+            }),
+        )
     }
 
     pub(crate) async fn find(
@@ -79,8 +155,11 @@ impl InteractiveTurn {
                     && turn.conversation_id == reference.conversation_id
             });
         Ok(turn.map(|turn| Self {
+            usage: Default::default(),
             turn,
             host_id: format!("{INTERACTIVE_HOST_PREFIX}{}", reference.client_run_id),
+            trail: None,
+            reply_files: ReplyFiles::new(),
         }))
     }
 
@@ -113,7 +192,13 @@ impl InteractiveTurn {
         });
         if let Some(code) = error_code {
             body["error"] = json!({ "code": code });
+        } else {
+            self.reply_files.attach(&mut body);
+            if let Some(trail) = &self.trail {
+                trail.attach(&mut body);
+            }
         }
+        self.usage.attach(&mut body);
         SendEntryRequest {
             message_id: reply_message_id(&self.turn.bot_id, &self.turn.trigger_message_id),
             kind: InboxEntryKind::Message,
@@ -131,7 +216,15 @@ impl InteractiveTurn {
         text: &str,
         error_code: Option<&str>,
     ) -> Result<Option<Sent>, ApiError> {
-        let outgoing = Arc::new(validate_send(self.request(text, error_code))?);
+        let mut request = self.request(text, error_code);
+        crate::routes::inbox::reply_files::adopt(
+            state,
+            &self.turn.conversation_id,
+            &self.turn.bot_id,
+            &mut request,
+        )
+        .await;
+        let outgoing = Arc::new(validate_send(request)?);
         let claim = TurnClaim {
             id: self.turn.id.clone(),
             host_id: self.host_id.clone(),

@@ -13,15 +13,16 @@ use async_trait::async_trait;
 use flow_like::{
     flow::copilot::{
         BotRunContext, BotToolHost, BotToolset, FLUX_BOT_ID, FLUX_BOT_NAME,
-        GENERAL_BOT_DESCRIPTION, GENERAL_BOT_ID, GENERAL_BOT_NAME, bot_persona_section,
-        memory::MemoryScope, platform::PlatformToolBridge, resolve_bot_model,
-        resolve_host_completion_model, runnable_completion_model,
+        GENERAL_BOT_DESCRIPTION, GENERAL_BOT_ID, GENERAL_BOT_NAME, bot_model_preference,
+        bot_persona_section, memory::MemoryScope, platform::PlatformToolBridge, resolve_bot_model,
+        resolve_host_completion_model_preferring, runnable_completion_model,
     },
     profile::Profile,
     state::FlowLikeState,
 };
 use flow_like_types::{
     bot::{BotCapability, BotLocation, BotModelPolicy, BotSystemKind},
+    bot_restrictions::BotRestrictions,
     data_classification::DataSensitivity,
 };
 use reqwest::Method;
@@ -249,6 +250,9 @@ pub(super) struct BotAppRecord {
     pub(super) app_id: String,
     #[serde(default)]
     pub(super) owner_role: Option<String>,
+    /// What the owner lets the bot do in this app; the hub sends it with every app.
+    #[serde(default)]
+    pub(super) restrictions: BotRestrictions,
 }
 
 #[derive(Debug, Deserialize)]
@@ -286,6 +290,17 @@ pub(super) struct DesktopBot {
 impl DesktopBot {
     fn with_account(mut self, account: bool) -> Self {
         self.account = account;
+        if account {
+            self
+        } else {
+            self.without_hub_tools()
+        }
+    }
+
+    fn without_hub_tools(mut self) -> Self {
+        let context = Arc::make_mut(&mut self.context);
+        let tools = std::mem::take(&mut context.host_tools);
+        context.host_tools = super::super::super::native_bot_tools::without_hub_tools(tools);
         self
     }
 
@@ -379,6 +394,15 @@ pub(super) fn desktop_bot(
         selected_app_ids: apps
             .into_iter()
             .filter(|app| app.owner_role.is_some())
+            .filter(|app| {
+                super::super::super::native_bot_tools::effective_in(
+                    &app.app_id,
+                    &app.restrictions,
+                    None,
+                )
+                .role_mask
+                .is_none_or(|bits| bits != 0)
+            })
             .map(|app| app.app_id)
             .collect(),
         profile_app_ids,
@@ -387,7 +411,12 @@ pub(super) fn desktop_bot(
         decision_model: record.model.decision.clone(),
         decision_hosted_only: record.location != BotLocation::Desktop,
         acknowledgement: false,
+        live_call: false,
+        spoken_drafts: false,
+        tool_gate: None,
         ephemeral_user_context: false,
+        owner_mail_addresses: Vec::new(),
+        seed_taint: Default::default(),
         suppress_owner_notifications: false,
         stt_model: record.stt_model,
         tts_model: record.tts_model,
@@ -430,20 +459,20 @@ pub(super) async fn load_bot(
         BotRequest::Flux => return Ok(flux_bot(app, signed_in, tool_host).await),
         BotRequest::General if signed_in.is_none() => {
             let Some(store) = app.try_state::<LocalBots>() else {
-                return Ok(Some(DesktopBot::general(tool_host)));
+                return Ok(Some(DesktopBot::general(tool_host).with_account(false)));
             };
             match local_built_in(store, BotSystemKind::General).await {
                 Ok(Some(record)) => record.id,
-                Ok(None) => return Ok(Some(DesktopBot::general(tool_host))),
+                Ok(None) => return Ok(Some(DesktopBot::general(tool_host).with_account(false))),
                 Err(error) => {
                     tracing::warn!(%error, "Assistant's local row is unavailable; using its defaults");
-                    return Ok(Some(DesktopBot::general(tool_host)));
+                    return Ok(Some(DesktopBot::general(tool_host).with_account(false)));
                 }
             }
         }
         BotRequest::General => {
             let Some(identity) = signed_in else {
-                return Ok(Some(DesktopBot::general(tool_host)));
+                return Ok(Some(DesktopBot::general(tool_host).with_account(false)));
             };
             let listed = hub_get::<BotRecordList>(identity, "bots").await;
             let record = listed.ok().flatten().and_then(|list| {
@@ -678,6 +707,7 @@ async fn local_bot(
         .map(|app| BotAppRecord {
             app_id: app.app_id,
             owner_role: app.owner_role,
+            restrictions: app.restrictions,
         })
         .collect();
     Ok(Some((bot.into(), apps)))
@@ -717,7 +747,9 @@ async fn flux_bot(
 async fn device_flux(app: &AppHandle, tool_host: BotToolHost) -> Option<DesktopBot> {
     let bots = app.try_state::<LocalBots>()?;
     match local_built_in(bots, BotSystemKind::Flux).await {
-        Ok(row) => row.map(|row| desktop_bot(row.into(), Vec::new(), BTreeSet::new(), tool_host)),
+        Ok(row) => row.map(|row| {
+            desktop_bot(row.into(), Vec::new(), BTreeSet::new(), tool_host).with_account(false)
+        }),
         Err(error) => {
             tracing::warn!(%error, "Flux's row on this device is unavailable; Flux runs without its edits");
             None
@@ -937,17 +969,19 @@ pub(super) async fn bot_model(
     profile: &Arc<Profile>,
     bot: &DesktopBot,
     chat_model: Option<String>,
+    live_call: bool,
 ) -> Result<String, String> {
     if let Some(model_id) = own_model(state, profile, bot).await.or(chat_model) {
         return Ok(model_id);
     }
-    resolve_host_completion_model(state, profile, None)
+    resolve_host_completion_model_preferring(state, profile, None, bot_model_preference(live_call))
         .await
         .map(|bit| bit.id)
         .map_err(|error| {
             format!(
-                "Bot '{}' can't answer: no language model it can use runs on this desktop ({error}). Add one in Settings → Models or pick one in the bot's settings.",
-                bot.context.name
+                "Bot '{}' can't answer: {} ({error}). Add one in Settings → Models or pick one in the bot's settings.",
+                bot.context.name,
+                flow_like_bot_host::host::NO_DESKTOP_MODEL_TEXT
             )
         })
 }
@@ -970,17 +1004,31 @@ pub(super) fn bot_tool_set(tool_name: &str) -> FrontendPlatformToolSet {
 /// the bot's limits; this resolves its approval and timeout and dispatches it like FlowPilot's.
 pub(super) struct BotDesktopBridge(pub(super) DesktopPlatformBridge);
 
-#[async_trait]
-impl PlatformToolBridge for BotDesktopBridge {
-    async fn call(&self, tool_name: &str, arguments: serde_json::Value) -> String {
+impl BotDesktopBridge {
+    fn for_tool(&self, tool_name: &str) -> DesktopPlatformBridge {
         DesktopPlatformBridge {
             bridge: self.0.bridge.clone(),
             tool_set: bot_tool_set(tool_name),
             cancellation: self.0.cancellation.clone(),
             steerable: false,
         }
-        .call(tool_name, arguments)
-        .await
+    }
+}
+
+#[async_trait]
+impl PlatformToolBridge for BotDesktopBridge {
+    async fn call(&self, tool_name: &str, arguments: serde_json::Value) -> String {
+        self.for_tool(tool_name).call(tool_name, arguments).await
+    }
+
+    async fn clearance(
+        &self,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) -> flow_like::flow::copilot::platform::Clearance {
+        self.for_tool(tool_name)
+            .clearance(tool_name, arguments)
+            .await
     }
 
     async fn drain_steering(&self) -> Vec<String> {
@@ -989,6 +1037,10 @@ impl PlatformToolBridge for BotDesktopBridge {
 
     async fn is_cancelled(&self) -> bool {
         self.0.is_cancelled().await
+    }
+
+    async fn bot_secret(&self, name: &str) -> Option<String> {
+        self.0.bot_secret(name).await
     }
 }
 
@@ -1162,10 +1214,12 @@ mod tests {
                 BotAppRecord {
                     app_id: "app-crm".into(),
                     owner_role: Some("owner".into()),
+                    restrictions: Default::default(),
                 },
                 BotAppRecord {
                     app_id: "app-left".into(),
                     owner_role: None,
+                    restrictions: Default::default(),
                 },
             ],
             ["app-notes".to_string()].into(),
@@ -1289,7 +1343,11 @@ mod tests {
         assert_eq!(assistant.model.fallbacks, ["my-fallback"]);
         assert!(assistant.context.capabilities.is_empty());
         let tools = assistant.context.tool_specs(false);
-        for name in ["bot_configuration", "bot_models", "bot_update_configuration"] {
+        for name in [
+            "bot_configuration",
+            "bot_models",
+            "bot_update_configuration",
+        ] {
             assert!(tools.iter().any(|tool| tool.name == name), "{name}");
         }
     }
@@ -1307,6 +1365,7 @@ mod tests {
             vec![BotAppRecord {
                 app_id: "app-crm".into(),
                 owner_role: Some("owner".into()),
+                restrictions: Default::default(),
             }]
         };
         let offered = |tool_host| -> Vec<&'static str> {
@@ -1328,7 +1387,10 @@ mod tests {
             assert!(chat.contains(&chat_only));
             assert!(!headless.contains(&chat_only), "{chat_only}");
         }
-        for tool_name in &headless {
+        for tool_name in headless
+            .iter()
+            .filter(|name| !flow_like::flow::copilot::platform::runs_in_tool_loop(name))
+        {
             assert!(
                 crate::functions::ai::native_tool_bridge::supports(
                     tool_name,
@@ -1370,8 +1432,10 @@ mod tests {
                 "{builds} missing from {offered:?}"
             );
         }
-        let core_runs = flow_like::flow::copilot::tool_spec::RESEARCH_AGENT_TOOL;
-        for tool_name in offered.iter().filter(|name| **name != core_runs) {
+        for tool_name in offered
+            .iter()
+            .filter(|name| !flow_like::flow::copilot::platform::runs_in_tool_loop(name))
+        {
             assert!(
                 crate::functions::ai::native_tool_bridge::supports(tool_name, &json!({})),
                 "{tool_name} has no native implementation"
@@ -1412,6 +1476,7 @@ mod tests {
             vec![BotAppRecord {
                 app_id: "app-crm".into(),
                 owner_role: Some("owner".into()),
+                restrictions: Default::default(),
             }],
             BTreeSet::new(),
             BotToolHost::Chat,

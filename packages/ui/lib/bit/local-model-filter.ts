@@ -1,6 +1,7 @@
 import { asArray } from "../response-shape";
 import type { IBit } from "../schema";
 import { IBitTypes } from "../schema";
+import { supportsCustomRequestParams } from "./custom-request-params";
 
 const LLM_BIT_TYPES: ReadonlySet<string> = new Set([
 	IBitTypes.Llm,
@@ -121,6 +122,17 @@ export function isHostedLlmProviderName(providerName?: null | string): boolean {
 export function isHostedLlmModel(bit: IBit): boolean {
 	return isHostedLlmProviderName(
 		bit.parameters?.provider?.provider_name as string | undefined,
+	);
+}
+
+/**
+ * A model the cloud can answer with: a hosted one, or one on the person's own provider that the
+ * API relays to. Models on a device and personal agent accounts only run where they are installed.
+ */
+export function isCloudRunnableLlmModel(bit: IBit): boolean {
+	return (
+		isHostedLlmModel(bit) ||
+		supportsCustomRequestParams(bit.parameters?.provider?.provider_name)
 	);
 }
 

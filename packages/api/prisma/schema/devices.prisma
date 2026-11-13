@@ -13,6 +13,8 @@ model ManagedDevice {
   displayName  String?
   /// When the device's bot host last polled the hub (unix ms); written at most once a minute.
   botHostSeenAt BigInt?
+  /// Authenticated agent report: installed, available, reason and seen_at (unix ms).
+  botDocker Json?
 
   @@index([ownerId, status])
 }

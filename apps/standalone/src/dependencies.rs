@@ -1156,6 +1156,83 @@ pub fn model_asset_binds(config: &PlacementConfig, data: &Path) -> Result<Vec<(P
         .collect()
 }
 
+/// The engine package nodes run in on this device. Only portable WASM bytes enter it: imported
+/// AOT files are never deserialized, including through a writable compilation cache. Wasmtime
+/// 48's Mach handler aborts on interrupted receives while child processes exit; Unix signal
+/// traps support the agent's child supervision.
+pub(crate) fn package_engine() -> Result<Arc<WasmEngine>> {
+    let engine = Arc::new(WasmEngine::new(
+        WasmConfig::production()
+            .without_cache()
+            .with_macos_signal_traps(),
+    )?);
+    engine.start_epoch_ticker();
+    Ok(engine)
+}
+
+/// A package's sandbox on this device: its manifest permissions within the device's memory and
+/// time caps, behind the server egress guard.
+pub(crate) fn package_security(
+    permissions: &flow_like_wasm::PackagePermissions,
+) -> Result<WasmSecurityConfig> {
+    let mut security: WasmSecurityConfig = permissions.to_security_config();
+    ensure!(
+        security.limits.memory_limit <= 512 * 1024 * 1024
+            && security.limits.timeout <= Duration::from_secs(300),
+        "Package exceeds standalone memory or invocation time limits"
+    );
+    security.execution_environment = ExecutionEnvironment::Server;
+    Ok(security)
+}
+
+/// Compiles a package's portable WASM bytes and reads its node definitions under the metadata
+/// sandbox.
+pub(crate) async fn package_definitions(
+    engine: &Arc<WasmEngine>,
+    bytes: &[u8],
+    security: &WasmSecurityConfig,
+) -> Result<(
+    flow_like_wasm::LoadedWasm,
+    Vec<flow_like_wasm::abi::WasmNodeDefinition>,
+)> {
+    ensure!(
+        bytes.starts_with(b"\0asm"),
+        "Package must contain portable WASM bytes"
+    );
+    let loaded = engine.load_auto(bytes).await?;
+    let definitions = tokio::time::timeout(Duration::from_secs(30), async {
+        let mut instance = loaded.instantiate(engine, security.for_metadata()).await?;
+        instance.call_get_nodes().await
+    })
+    .await
+    .context("Package metadata initialization timed out")??;
+    ensure!(
+        !definitions.is_empty() && definitions.len() <= 512,
+        "Invalid package node count"
+    );
+    Ok((loaded, definitions))
+}
+
+/// One node of a package: its own permissions inside the package's settings.
+pub(crate) fn package_node(
+    loaded: &flow_like_wasm::LoadedWasm,
+    engine: &Arc<WasmEngine>,
+    security: &WasmSecurityConfig,
+    definition: flow_like_wasm::abi::WasmNodeDefinition,
+    package_id: &str,
+) -> WasmNodeLogic {
+    let mut node_security = WasmSecurityConfig::from_node_permissions(&definition.permissions)
+        .with_package_settings(security);
+    node_security.execution_environment = ExecutionEnvironment::Server;
+    WasmNodeLogic::from_loaded_with_target(
+        loaded.clone(),
+        engine.clone(),
+        node_security,
+        definition,
+    )
+    .with_package_id(package_id.to_string())
+}
+
 pub(crate) async fn register_packages(
     config: &PlacementConfig,
     app: &App,
@@ -1164,16 +1241,7 @@ pub(crate) async fn register_packages(
     if config.package_pins.is_empty() {
         return Ok(());
     }
-    // Only portable WASM bytes enter this engine. Imported AOT files are never
-    // deserialized, including through a writable compilation cache.
-    // Wasmtime 48's Mach handler aborts on interrupted receives while child
-    // processes exit. Unix signal traps support the agent's child supervision.
-    let engine = Arc::new(WasmEngine::new(
-        WasmConfig::production()
-            .without_cache()
-            .with_macos_signal_traps(),
-    )?);
-    engine.start_epoch_ticker();
+    let engine = package_engine()?;
     let mut names: HashSet<String> = state
         .node_registry
         .read()
@@ -1219,28 +1287,8 @@ pub(crate) async fn register_packages(
             artifact_sha256(&bytes) == pin.wasm_sha256,
             "Package WASM digest differs"
         );
-        ensure!(
-            bytes.starts_with(b"\0asm"),
-            "Package must contain portable WASM bytes"
-        );
-        let mut security: WasmSecurityConfig = manifest.permissions.to_security_config();
-        ensure!(
-            security.limits.memory_limit <= 512 * 1024 * 1024
-                && security.limits.timeout <= Duration::from_secs(300),
-            "Package exceeds standalone memory or invocation time limits"
-        );
-        security.execution_environment = ExecutionEnvironment::Server;
-        let loaded = engine.load_auto(&bytes).await?;
-        let definitions = tokio::time::timeout(Duration::from_secs(30), async {
-            let mut instance = loaded.instantiate(&engine, security.for_metadata()).await?;
-            instance.call_get_nodes().await
-        })
-        .await
-        .context("Package metadata initialization timed out")??;
-        ensure!(
-            !definitions.is_empty() && definitions.len() <= 512,
-            "Invalid package node count"
-        );
+        let security = package_security(&manifest.permissions)?;
+        let (loaded, definitions) = package_definitions(&engine, &bytes, &security).await?;
         for definition in definitions {
             ensure!(
                 !definition.name.is_empty()
@@ -1250,19 +1298,13 @@ pub(crate) async fn register_packages(
                     && names.insert(definition.name.clone()),
                 "Package node name collides with another node or exceeds its bounds"
             );
-            let mut node_security =
-                WasmSecurityConfig::from_node_permissions(&definition.permissions)
-                    .with_package_settings(&security);
-            node_security.execution_environment = ExecutionEnvironment::Server;
-            prepared.push(Arc::new(
-                WasmNodeLogic::from_loaded_with_target(
-                    loaded.clone(),
-                    engine.clone(),
-                    node_security,
-                    definition,
-                )
-                .with_package_id(pin.package_id.clone()),
-            ));
+            prepared.push(Arc::new(package_node(
+                &loaded,
+                &engine,
+                &security,
+                definition,
+                &pin.package_id,
+            )));
         }
     }
     state.node_registry.write().await.push_nodes(prepared);

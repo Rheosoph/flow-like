@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use flow_like_bot_tools::{
-    AppTables, Attachment, Environment, FileData, FileEntry, FileMeta, KnowledgeEmbedder, Limits,
-    ModelRole, Scope, SecretInfo, SessionCache, ToolEnv,
+    AppTables, Attachment, Environment, FileData, FileEntry, FileLink, FileMeta, KnowledgeEmbedder,
+    Limits, ModelRole, Scope, SecretInfo, SessionCache, ToolEnv,
 };
 use flow_like_model_provider::llm::ModelLogic;
 use flow_like_storage::Path;
@@ -17,6 +17,7 @@ use flow_like_types::bot_message::{CONVERSATION_FILE_APP_PREFIX, WorkspaceHandle
 use flow_like_types::{Bytes, Result, anyhow};
 use futures::TryStreamExt;
 
+use crate::files::{ConversationFiles, read_object};
 use crate::models::ModelSource;
 use crate::wire::{JobApp, JobScope};
 
@@ -83,6 +84,7 @@ pub struct HostEnv {
     object_writes: bool,
     notifier: Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>>,
     people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
+    rooms: Option<Arc<dyn flow_like_bot_tools::RoomInvites>>,
     user_context: Option<Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>>,
     configuration: Option<Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>>,
     crew: Option<Arc<dyn flow_like_bot_tools::crew::CrewBackend>>,
@@ -92,6 +94,7 @@ pub struct HostEnv {
     secrets: Option<Arc<dyn SecretSource>>,
     images: Option<Arc<dyn ImageSource>>,
     connectors: Option<Arc<dyn flow_like_bot_tools::services::ConnectorSource>>,
+    conversation_files: Option<Arc<dyn ConversationFiles>>,
 }
 
 fn conversation_of_app(app_id: &str) -> Option<&str> {
@@ -125,6 +128,7 @@ impl HostEnv {
             object_writes: true,
             notifier: None,
             people: None,
+            rooms: None,
             user_context: None,
             configuration: None,
             crew: None,
@@ -134,7 +138,29 @@ impl HostEnv {
             secrets: None,
             images: None,
             connectors: None,
+            conversation_files: None,
         }
+    }
+
+    /// Where conversation files come from when the app stores do not hold them.
+    pub fn with_conversation_files(mut self, files: Arc<dyn ConversationFiles>) -> Self {
+        self.conversation_files = Some(files);
+        self
+    }
+
+    /// A conversation file from the host's own source, when that source serves the conversation.
+    async fn conversation_file(
+        &self,
+        app_id: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> Option<Result<Option<FileData>>> {
+        let conversation_id = conversation_of_app(app_id)?;
+        let files = self
+            .conversation_files
+            .as_ref()
+            .filter(|files| files.serves(conversation_id))?;
+        Some(files.read(conversation_id, path, max_bytes).await)
     }
 
     pub fn with_connectors(
@@ -176,6 +202,11 @@ impl HostEnv {
 
     pub fn with_people(mut self, people: Arc<dyn flow_like_bot_tools::PeopleBackend>) -> Self {
         self.people = Some(people);
+        self
+    }
+
+    pub fn with_rooms(mut self, rooms: Arc<dyn flow_like_bot_tools::RoomInvites>) -> Self {
+        self.rooms = Some(rooms);
         self
     }
 
@@ -309,6 +340,10 @@ impl ToolEnv for HostEnv {
         self.people.clone()
     }
 
+    fn rooms(&self) -> Option<Arc<dyn flow_like_bot_tools::RoomInvites>> {
+        self.rooms.clone()
+    }
+
     fn user_context(
         &self,
     ) -> Option<Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>> {
@@ -335,29 +370,27 @@ impl ToolEnv for HostEnv {
         path: &str,
         max_bytes: u64,
     ) -> Result<Option<FileData>> {
+        if let Some(file) = self.conversation_file(app_id, path, max_bytes).await {
+            return file;
+        }
         let (store, base) = self.base(app_id).await?;
         let location = join_object_path(&base, path);
-        let generic = store.as_generic();
-        let meta = match generic.head(&location).await {
-            Ok(meta) => meta,
-            Err(flow_like_storage::object_store::Error::NotFound { .. }) => return Ok(None),
-            Err(error) => return Err(error.into()),
-        };
-        let wanted = meta.size.min(max_bytes);
-        let bytes = if wanted == 0 {
-            Bytes::new()
-        } else {
-            generic.get_range(&location, 0..wanted).await?
-        };
-        Ok(Some(FileData {
+        let read = read_object(&store, &location, max_bytes).await?;
+        Ok(read.map(|(bytes, size)| FileData {
             bytes,
-            size: meta.size,
+            size,
             mime: Some(flow_like_bot_tools::files::guess_mime(path)),
             classification: None,
         }))
     }
 
     async fn stat_file(&self, app_id: &str, path: &str) -> Result<Option<FileMeta>> {
+        if let Some(file) = self.conversation_file(app_id, path, 0).await {
+            return Ok(file?.map(|file| FileMeta {
+                bytes: file.size,
+                mime: file.mime,
+            }));
+        }
         let (store, base) = self.base(app_id).await?;
         let location = join_object_path(&base, path);
         match store.as_generic().head(&location).await {
@@ -409,6 +442,19 @@ impl ToolEnv for HostEnv {
 
     async fn message_attachment(&self, _seq: u64, _part: &str) -> Result<Option<Attachment>> {
         Ok(None)
+    }
+
+    async fn file_link(&self, app_id: &str, path: &str) -> Result<Option<FileLink>> {
+        if let Some(conversation_id) = conversation_of_app(app_id)
+            && let Some(files) = self
+                .conversation_files
+                .as_ref()
+                .filter(|files| files.serves(conversation_id))
+        {
+            return files.file_link(conversation_id, path).await;
+        }
+        let (store, base) = self.base(app_id).await?;
+        FileLink::signed(&store, &join_object_path(&base, path)).await
     }
 
     fn handle_granted(&self, handle: &WorkspaceHandle) -> bool {

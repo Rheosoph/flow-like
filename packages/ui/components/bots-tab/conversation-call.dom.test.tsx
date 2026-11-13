@@ -181,6 +181,111 @@ describe("ConversationCallBar", () => {
 	});
 });
 
+describe("interrupting a speaking bot", () => {
+	const joinedWithBot = (overrides: Record<string, unknown> = {}) => {
+		const stops: number[] = [];
+		const { state } = callState({
+			joined: true,
+			live: {
+				callId: "call_1",
+				startedAt: null,
+				participants: [{ sub: "me", muted: false, speaking: false }],
+			},
+			speakingBot: "bot-1",
+			interruptSpeech: () => {
+				stops.push(1);
+			},
+			...overrides,
+		});
+		return { state, stops };
+	};
+	const press = (key: string, target: EventTarget = document.body) =>
+		act(async () => {
+			const event = new domWindow.KeyboardEvent("keydown", {
+				key,
+				bubbles: true,
+				cancelable: true,
+			});
+			target.dispatchEvent(event as never);
+		});
+
+	test("a button names the speaking bot and stops it", async () => {
+		const { ConversationCallBar } = await import("./conversation-call");
+		const { state, stops } = joinedWithBot();
+		const container = await render((c) =>
+			c(ConversationCallBar, { call: state as never, me: "me", directory }),
+		);
+		const button = container.querySelector<HTMLButtonElement>(
+			"[data-slot=call-interrupt]",
+		);
+		expect(label(button)).toBe("Interrupt bot-1");
+		await act(async () => {
+			button?.click();
+		});
+		expect(stops).toHaveLength(1);
+	});
+
+	test("there is no button while nobody speaks or you are not in the call", async () => {
+		const { ConversationCallBar } = await import("./conversation-call");
+		for (const overrides of [{ speakingBot: null }, { joined: false }]) {
+			const { state } = joinedWithBot(overrides);
+			const container = await render((c) =>
+				c(ConversationCallBar, { call: state as never, me: "me", directory }),
+			);
+			expect(container.querySelector("[data-slot=call-interrupt]")).toBeNull();
+		}
+	});
+
+	test("Escape interrupts, but not from a text field, a handled key or an open dialog", async () => {
+		const { ConversationCallBar } = await import("./conversation-call");
+		const { state, stops } = joinedWithBot();
+		await render((c) =>
+			c(ConversationCallBar, { call: state as never, me: "me", directory }),
+		);
+		await press("Enter");
+		expect(stops).toHaveLength(0);
+		await press("Escape");
+		expect(stops).toHaveLength(1);
+
+		const input = document.createElement("input");
+		document.body.append(input);
+		await press("Escape", input);
+		expect(stops).toHaveLength(1);
+		input.remove();
+
+		const editable = document.createElement("div");
+		editable.setAttribute("contenteditable", "true");
+		document.body.append(editable);
+		await press("Escape", editable);
+		expect(stops).toHaveLength(1);
+		editable.remove();
+
+		const dialog = document.createElement("div");
+		dialog.setAttribute("role", "dialog");
+		dialog.setAttribute("data-state", "open");
+		document.body.append(dialog);
+		await press("Escape");
+		expect(stops).toHaveLength(1);
+		dialog.remove();
+
+		const handled = (event: Event) => event.preventDefault();
+		document.addEventListener("keydown", handled);
+		await press("Escape");
+		document.removeEventListener("keydown", handled);
+		expect(stops).toHaveLength(1);
+	});
+
+	test("Escape does nothing when no bot is speaking", async () => {
+		const { ConversationCallBar } = await import("./conversation-call");
+		const { state, stops } = joinedWithBot({ speakingBot: null });
+		await render((c) =>
+			c(ConversationCallBar, { call: state as never, me: "me", directory }),
+		);
+		await press("Escape");
+		expect(stops).toHaveLength(0);
+	});
+});
+
 describe("CallLine", () => {
 	const call = (extra = {}) => ({
 		type: "call" as const,

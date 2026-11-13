@@ -402,12 +402,29 @@ fn files_of(
         .collect()
 }
 
+pub(crate) const MAIL_LIMIT: &str = "MAIL_LIMIT";
+pub(crate) const MAIL_NO_THREAD: &str = "MAIL_NO_THREAD";
+pub(crate) const MAIL_NO_ADDRESS: &str = "MAIL_NO_ADDRESS";
+
 pub(crate) fn failure_status(failure: flow_like_bot_tools::email::MailFailure) -> ApiError {
     use flow_like_bot_tools::email::failure as code;
     match failure.code {
-        code::LIMIT => ApiError::too_many_requests(failure.message),
-        code::NO_THREAD => ApiError::not_found(failure.message),
-        code::NO_ADDRESS | code::REFUSED => ApiError::bad_request(failure.message),
+        code::LIMIT => ApiError::coded(
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            MAIL_LIMIT,
+            failure.message,
+        ),
+        code::NO_THREAD => ApiError::coded(
+            axum::http::StatusCode::NOT_FOUND,
+            MAIL_NO_THREAD,
+            failure.message,
+        ),
+        code::NO_ADDRESS => ApiError::coded(
+            axum::http::StatusCode::BAD_REQUEST,
+            MAIL_NO_ADDRESS,
+            failure.message,
+        ),
+        code::REFUSED => ApiError::bad_request(failure.message),
         _ => ApiError::service_unavailable(failure.message),
     }
 }
@@ -431,9 +448,9 @@ fn sent_view(sent: flow_like_bot_tools::email::SentMail) -> Json<BotSentMail> {
     request_body = BotSendMail,
     responses(
         (status = 200, description = "The mail was accepted by the provider", body = BotSentMail),
-        (status = 400, description = "Invalid mail, or the bot has no address or no email ability"),
+        (status = 400, description = "Invalid mail (BAD_REQUEST), or the bot has no address (MAIL_NO_ADDRESS)"),
         (status = 404, description = "You have no bot with this id"),
-        (status = 429, description = "Mail limit reached"),
+        (status = 429, description = "MAIL_LIMIT: the mail limit is reached"),
         (status = 503, description = "Mail is unavailable")
     ),
     security(("bearer_auth" = []))
@@ -469,9 +486,9 @@ pub async fn send_bot_mail(
     request_body = BotReplyMail,
     responses(
         (status = 200, description = "The reply was accepted by the provider", body = BotSentMail),
-        (status = 400, description = "Invalid mail, or the bot has no address or no email ability"),
-        (status = 404, description = "No such bot or thread of yours"),
-        (status = 429, description = "Mail limit reached"),
+        (status = 400, description = "Invalid mail (BAD_REQUEST), or the bot has no address (MAIL_NO_ADDRESS)"),
+        (status = 404, description = "No such bot of yours, or MAIL_NO_THREAD: no such mail thread"),
+        (status = 429, description = "MAIL_LIMIT: the mail limit is reached"),
         (status = 503, description = "Mail is unavailable")
     ),
     security(("bearer_auth" = []))
@@ -494,4 +511,30 @@ pub async fn reply_bot_mail(
         .await
         .map(sent_view)
         .map_err(failure_status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+    use flow_like_bot_tools::email::{MailFailure, failure};
+
+    #[test]
+    fn mail_refusals_carry_their_own_public_codes() {
+        let cases = [
+            (failure::LIMIT, StatusCode::TOO_MANY_REQUESTS, "MAIL_LIMIT"),
+            (failure::NO_THREAD, StatusCode::NOT_FOUND, "MAIL_NO_THREAD"),
+            (
+                failure::NO_ADDRESS,
+                StatusCode::BAD_REQUEST,
+                "MAIL_NO_ADDRESS",
+            ),
+        ];
+        for (kind, status, public) in cases {
+            let error = failure_status(MailFailure::new(kind, "refused"));
+            assert_eq!((error.status(), error.public_code()), (status, public));
+        }
+        let refused = failure_status(MailFailure::new(failure::REFUSED, "refused"));
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    }
 }

@@ -1,13 +1,13 @@
 use super::{
     INBOX_HANDLE_NOT_ALLOWED, Reader,
     conversations::{NewConversation, start_group},
+    entries::send_in,
     files::{
         ATTACHMENTS_ENCRYPTED_UNSUPPORTED, ConversationFileReady, INBOX_FILE_NOT_FOUND,
-        INBOX_FILE_NOT_READY, INBOX_FILE_TAKEN, INBOX_FILE_TOO_LARGE, MintFileRequest,
-        bot_readable_key, complete_in, drop_message_files, mint_in, object_key, readable_file,
-        stored_file_name, sweep_in, validate_request,
+        INBOX_FILE_NOT_READY, INBOX_FILE_SEALED, INBOX_FILE_TAKEN, INBOX_FILE_TOO_LARGE,
+        MintFileRequest, bot_readable_key, complete_in, drop_message_files, ensure_server_readable,
+        mint_in, object_key, readable_file, stored_file_name, sweep_in, validate_request,
     },
-    entries::send_in,
     fixture::{assert_code, at, bot_principal, database, insert_bot, outgoing, user},
     members::remove_in,
 };
@@ -60,9 +60,15 @@ async fn uploaded(
     uploader: &str,
     data: &[u8],
 ) -> ConversationFileReady {
-    let file = mint_in(db, conversation, uploader, &request(data.len() as u64), at(1))
-        .await
-        .unwrap();
+    let file = mint_in(
+        db,
+        conversation,
+        uploader,
+        &request(data.len() as u64),
+        at(1),
+    )
+    .await
+    .unwrap();
     let location = ObjectPath::from(object_key(conversation, &stored_file_name(&file)));
     store
         .put(&location, PutPayload::from(data.to_vec()))
@@ -88,7 +94,11 @@ fn message(message_id: &str, ready: &ConversationFileReady) -> super::entries::O
 #[test]
 fn limits_match_the_chat_uploads() {
     let too_big = validate_request(&request(MAX_CONVERSATION_FILE_BYTES + 1)).unwrap_err();
-    assert_code(&too_big, StatusCode::PAYLOAD_TOO_LARGE, INBOX_FILE_TOO_LARGE);
+    assert_code(
+        &too_big,
+        StatusCode::PAYLOAD_TOO_LARGE,
+        INBOX_FILE_TOO_LARGE,
+    );
     assert_eq!(
         validate_request(&request(0)).unwrap_err().status(),
         StatusCode::BAD_REQUEST
@@ -104,7 +114,11 @@ async fn only_active_members_mint_and_read() {
     let store = InMemory::new();
     let ready = uploaded(&db, &store, "team", "user-a", b"hello").await;
 
-    assert!(mint_in(&db, "team", "user-x", &request(5), at(2)).await.is_err());
+    assert!(
+        mint_in(&db, "team", "user-x", &request(5), at(2))
+            .await
+            .is_err()
+    );
     readable_file(&db, "team", &Reader::own("user-b"), &ready.file_id)
         .await
         .unwrap();
@@ -113,7 +127,9 @@ async fn only_active_members_mint_and_read() {
         .unwrap_err();
     assert_eq!(stranger.status(), StatusCode::NOT_FOUND);
 
-    remove_in(&db, "team", "user-b", "user-b", at(3)).await.unwrap();
+    remove_in(&db, "team", "user-b", "user-b", at(3))
+        .await
+        .unwrap();
     assert!(
         readable_file(&db, "team", &Reader::own("user-b"), &ready.file_id)
             .await
@@ -130,9 +146,15 @@ async fn bots_read_only_where_they_are_members() {
     room(&db, "team", ConversationEncryption::Plain).await;
     let store = InMemory::new();
     let ready = uploaded(&db, &store, "team", "user-a", b"hello").await;
-    let key = bot_readable_key(&db, "team", "bot_1", &ready.path).await.unwrap();
+    let key = bot_readable_key(&db, "team", "bot_1", &ready.path)
+        .await
+        .unwrap();
     assert!(key.starts_with("conversations/team/"));
-    assert!(bot_readable_key(&db, "team", "bot_9", &ready.path).await.is_err());
+    assert!(
+        bot_readable_key(&db, "team", "bot_9", &ready.path)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -142,7 +164,33 @@ async fn encrypted_conversations_refuse_attachments() {
     let error = mint_in(&db, "secret", "user-a", &request(5), at(2))
         .await
         .unwrap_err();
-    assert_code(&error, StatusCode::CONFLICT, ATTACHMENTS_ENCRYPTED_UNSUPPORTED);
+    assert_code(
+        &error,
+        StatusCode::CONFLICT,
+        ATTACHMENTS_ENCRYPTED_UNSUPPORTED,
+    );
+}
+
+#[tokio::test]
+async fn server_tools_say_they_cannot_read_a_file_of_an_encrypted_conversation() {
+    let db = database().await;
+    room(&db, "secret", ConversationEncryption::E2e).await;
+    let error = bot_readable_key(&db, "secret", "bot_1", "file_1")
+        .await
+        .unwrap_err();
+    assert_code(&error, StatusCode::CONFLICT, INBOX_FILE_SEALED);
+    let message = error.public_message().unwrap_or_default();
+    assert!(
+        message.contains("open only on the members' devices")
+            && message.contains("tools that run on the server can't read them"),
+        "{message}"
+    );
+    let in_process = ensure_server_readable(&db, "secret").await.unwrap_err();
+    assert_code(&in_process, StatusCode::CONFLICT, INBOX_FILE_SEALED);
+    let outsider = bot_readable_key(&db, "secret", "bot_9", "file_1")
+        .await
+        .unwrap_err();
+    assert_eq!(outsider.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -150,8 +198,12 @@ async fn completing_checks_the_object_and_hashes_it() {
     let db = database().await;
     room(&db, "team", ConversationEncryption::Plain).await;
     let store = InMemory::new();
-    let file = mint_in(&db, "team", "user-a", &request(5), at(1)).await.unwrap();
-    let early = complete_in(&db, &store, "team", "user-a", &file.id).await.unwrap_err();
+    let file = mint_in(&db, "team", "user-a", &request(5), at(1))
+        .await
+        .unwrap();
+    let early = complete_in(&db, &store, "team", "user-a", &file.id)
+        .await
+        .unwrap_err();
     assert_code(&early, StatusCode::CONFLICT, INBOX_FILE_NOT_READY);
     let ready = uploaded(&db, &store, "team", "user-a", b"hello").await;
     assert_eq!(
@@ -183,7 +235,9 @@ async fn a_message_carries_only_its_senders_ready_files() {
         .unwrap_err();
     assert_code(&lie, StatusCode::FORBIDDEN, INBOX_HANDLE_NOT_ALLOWED);
 
-    send_in(&db, "team", "user-a", &message("m_2", &ready), at(7)).await.unwrap();
+    send_in(&db, "team", "user-a", &message("m_2", &ready), at(7))
+        .await
+        .unwrap();
     let row = conversation_file::Entity::find_by_id(ready.file_id.as_str())
         .one(&db)
         .await
@@ -202,12 +256,16 @@ async fn deleting_the_message_deletes_its_files() {
     room(&db, "team", ConversationEncryption::Plain).await;
     let store = InMemory::new();
     let ready = uploaded(&db, &store, "team", "user-a", b"hello").await;
-    send_in(&db, "team", "user-a", &message("m_1", &ready), at(5)).await.unwrap();
+    send_in(&db, "team", "user-a", &message("m_1", &ready), at(5))
+        .await
+        .unwrap();
     let location = ObjectPath::from(object_key("team", &ready.path));
     assert!(store.head(&location).await.is_ok());
 
     let delete = outgoing("d_1", InboxEntryKind::Delete, json!({ "target": "m_1" }));
-    send_in(&db, "team", "user-a", &delete, at(6)).await.unwrap();
+    send_in(&db, "team", "user-a", &delete, at(6))
+        .await
+        .unwrap();
     let gone = readable_file(&db, "team", &Reader::own("user-b"), &ready.file_id)
         .await
         .unwrap_err();
@@ -230,8 +288,12 @@ async fn leaving_keeps_files_and_unsent_ones_lapse() {
     room(&db, "team", ConversationEncryption::Plain).await;
     let store = InMemory::new();
     let ready = uploaded(&db, &store, "team", "user-a", b"hello").await;
-    send_in(&db, "team", "user-a", &message("m_1", &ready), at(5)).await.unwrap();
-    remove_in(&db, "team", "user-b", "user-b", at(6)).await.unwrap();
+    send_in(&db, "team", "user-a", &message("m_1", &ready), at(5))
+        .await
+        .unwrap();
+    remove_in(&db, "team", "user-b", "user-b", at(6))
+        .await
+        .unwrap();
     let unsent = uploaded(&db, &store, "team", "user-a", b"draft").await;
 
     assert_eq!(sweep_in(&db, &store, at(60)).await.unwrap(), 0);
@@ -255,8 +317,12 @@ async fn dropping_a_message_marks_only_its_files() {
     let store = InMemory::new();
     let first = uploaded(&db, &store, "team", "user-a", b"one").await;
     let second = uploaded(&db, &store, "team", "user-a", b"two").await;
-    send_in(&db, "team", "user-a", &message("m_1", &first), at(5)).await.unwrap();
-    send_in(&db, "team", "user-a", &message("m_2", &second), at(6)).await.unwrap();
+    send_in(&db, "team", "user-a", &message("m_1", &first), at(5))
+        .await
+        .unwrap();
+    send_in(&db, "team", "user-a", &message("m_2", &second), at(6))
+        .await
+        .unwrap();
     drop_message_files(&db, "team", "m_1", at(7)).await.unwrap();
     let marked = |id: String| {
         let db = db.clone();

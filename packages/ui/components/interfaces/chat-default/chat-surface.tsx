@@ -10,6 +10,7 @@ import {
 	type RunWidgetAction,
 } from "./chat-widget-execution";
 import type { ISendMessageFunction } from "./chatbox";
+import { ComposerHandoffProvider } from "./chatbox/composer-handoff";
 import { ChatWelcome, type ChatWelcomeGreeting } from "./welcome";
 
 function ConversationLoading() {
@@ -60,33 +61,36 @@ export function ChatSurface({
 	);
 
 	return (
-		<ChatAppearance
-			appId={chat.appId}
-			eventId={chat.eventId ?? ""}
-			config={chat.config}
-			fallback={<ConversationLoading />}
-		>
-			{loading ? (
-				<ConversationLoading />
-			) : welcome ? (
-				<ChatWelcome
-					greeting={welcome}
-					composer={{
-						thinking: chat.thinking,
-						model: chat.model,
-						actions: chat.composerActions,
-						onDraftChange: chat.onDraftChange,
-					}}
-					onSendMessage={sendFromWelcome}
-					config={chat.config}
-					isSending={sendingFromWelcome}
-					appId={chat.appId}
-				/>
-			) : (
-				<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>
-					<Chat ref={chatRef} {...chat} />
-				</ChatWidgetExecutionProvider>
-			)}
-		</ChatAppearance>
+		<ComposerHandoffProvider scope={chat.sessionId}>
+			<ChatAppearance
+				appId={chat.appId}
+				eventId={chat.eventId ?? ""}
+				config={chat.config}
+				fallback={<ConversationLoading />}
+			>
+				{loading ? (
+					<ConversationLoading />
+				) : welcome ? (
+					<ChatWelcome
+						greeting={welcome}
+						composer={{
+							thinking: chat.thinking,
+							model: chat.model,
+							actions: chat.composerActions,
+							onDraftChange: chat.onDraftChange,
+							attachSources: chat.attachSources,
+						}}
+						onSendMessage={sendFromWelcome}
+						config={chat.config}
+						isSending={sendingFromWelcome}
+						appId={chat.appId}
+					/>
+				) : (
+					<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>
+						<Chat ref={chatRef} {...chat} />
+					</ChatWidgetExecutionProvider>
+				)}
+			</ChatAppearance>
+		</ComposerHandoffProvider>
 	);
 }

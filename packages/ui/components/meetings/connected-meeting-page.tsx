@@ -12,6 +12,7 @@ import {
 import { meetingPageUrl } from "../../lib/meetings/transport";
 import { openExternalUrl } from "../../lib/open-external";
 import { isTauri } from "../../lib/platform";
+import { publicNameFromClaims } from "../../lib/user-display";
 import { useBackend, useSignedIn } from "../../state/backend-state";
 import { Button } from "../ui/button";
 import { MeetingPage } from "./meeting-page";
@@ -69,8 +70,7 @@ export function ConnectedMeetingPage() {
 	}
 	const me =
 		signedIn && auth.isAuthenticated ? auth.user?.profile.sub : undefined;
-	const displayName =
-		auth.user?.profile.name ?? auth.user?.profile.preferred_username;
+	const displayName = publicNameFromClaims(auth.user?.profile);
 	return (
 		<div className="min-h-0 flex-1 overflow-auto">
 			{isTauri() && !navigator.mediaDevices?.getDisplayMedia && (
@@ -93,7 +93,7 @@ export function ConnectedMeetingPage() {
 							window.location.hash,
 					})
 				}
-				displayName={typeof displayName === "string" ? displayName : undefined}
+				displayName={displayName}
 			/>
 		</div>
 	);

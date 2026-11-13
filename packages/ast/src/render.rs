@@ -962,8 +962,10 @@ fn render_expr(expr: &Expr) -> String {
     match expr {
         Expr::Call(call) => render_call(call),
         Expr::Ref(name) => name.clone(),
-        Expr::Field { base, pin } => format!("{}.{}", render_expr(base), to_camel_case(pin)),
-        Expr::Member { base, field } => render_member(&render_expr(base), field),
+        Expr::Field { base, pin } => {
+            format!("{}.{}", render_binary_operand(base), to_camel_case(pin))
+        }
+        Expr::Member { base, field } => render_member(&render_binary_operand(base), field),
         Expr::Object(fields) => render_object(fields),
         Expr::Array(items) => {
             let entries: Vec<String> = items.iter().map(render_expr).collect();

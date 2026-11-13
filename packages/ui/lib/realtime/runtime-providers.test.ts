@@ -489,6 +489,53 @@ describe("shared provider lifecycle", () => {
 		expect(polls(fetcher)).toHaveLength(count + 1);
 	});
 
+	test("a provider reply reaches every port of its scope without a poll", async () => {
+		let callbacks!: RealtimeProviderCallbacks;
+		const open = vi.fn<RealtimeProviderOpener>(async (_transport, events) => {
+			callbacks = events;
+			return { close() {} };
+		});
+		const fetcher = vi.fn<RealtimeFetch>(async (url) =>
+			String(url).endsWith("/connect") ? grant() : empty(),
+		);
+		const runtime = create(fetcher, open);
+		const first = port(runtime, "first");
+		const second = port(runtime, "second");
+		first.subscribe();
+		second.subscribe();
+		await vi.advanceTimersByTimeAsync(2);
+		const foreignMessages: RealtimeMessage[] = [];
+		runtime.receive(
+			{ postMessage: (message) => foreignMessages.push(message) },
+			{
+				type: "connect",
+				id: "foreign",
+				session: { ...first.session, scope: "other" },
+				activity: { online: true, visible: true },
+			},
+		);
+		const reply = {
+			protocol_version: 1,
+			kind: "reply",
+			conversation_id: "c1",
+			message_id: "re-1",
+			reply_to: "m1",
+			sender_id: "bot",
+			offset: 0,
+			text: "Hello",
+			state: "writing",
+		} as const;
+		const count = polls(fetcher).length;
+		const foreign = foreignMessages.length;
+		callbacks.reply?.(reply);
+		await vi.advanceTimersByTimeAsync(500);
+		const expected = { type: "reply", reply };
+		expect(first.messages).toContainEqual(expected);
+		expect(second.messages).toContainEqual(expected);
+		expect(foreignMessages.slice(foreign)).not.toContainEqual(expected);
+		expect(polls(fetcher)).toHaveLength(count);
+	});
+
 	test("HTTP preference avoids grants and cannot override another tab's configured preference", async () => {
 		const close = vi.fn();
 		const open = vi.fn<RealtimeProviderOpener>(async () => ({ close }));

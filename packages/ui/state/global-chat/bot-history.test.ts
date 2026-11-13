@@ -30,6 +30,48 @@ const BOT = "bot_ada";
 const CONVERSATION = "conv_1";
 const target = { botId: BOT, conversationId: CONVERSATION };
 
+test("saved and pushed bot replies retain cache and compaction measurements", () => {
+	const usage = {
+		step_name: "Assistant",
+		stats: {
+			usage: {
+				prompt_tokens: 100,
+				completion_tokens: 10,
+				total_tokens: 110,
+				prompt_tokens_details: { cached_tokens: 80, cache_write_tokens: 0 },
+			},
+			context: {
+				estimated_tokens: 100,
+				context_window: 1_000,
+				reserved_output_tokens: 100,
+			},
+			compactions: [
+				{
+					kind: "turn",
+					trigger: "soft",
+					status: "completed",
+					before_tokens: 400,
+					after_tokens: 100,
+					duration_ms: 200,
+				},
+			],
+		},
+	};
+	const reply = entry(2, BOT, "Done", {
+		envelope: {
+			v: 1,
+			enc: "none",
+			body: { text: "Done", usage_stats: [usage] },
+		},
+	});
+	expect(
+		transcriptOf([reply], BOT, "bot:bot_ada").messages[0].usage_stats,
+	).toEqual([usage]);
+	expect(
+		pushedTranscript([reply], BOT, "bot:bot_ada", []).messages[0].usage_stats,
+	).toEqual([usage]);
+});
+
 function entry(
 	seq: number,
 	sender: string,
@@ -214,6 +256,38 @@ describe("the chat from the bot's inbox history", () => {
 		]);
 	});
 
+	test("a turn the bot could not answer is the error card, with the picker when it lacks a model", () => {
+		const failed = (seq: number, text: string, code: string) =>
+			entry(seq, BOT, text, {
+				envelope: { v: 1, enc: "none", body: { text, error: { code } } },
+			});
+		const { messages } = transcriptOf(
+			[
+				entry(1, "user_1", "hello"),
+				failed(2, "I can't answer yet: no model.", "BOT_TURN_NO_MODEL"),
+				failed(3, "I ran out of time.", "BOT_TURN_TIMEOUT"),
+			],
+			BOT,
+			"bot:bot_ada",
+		);
+
+		expect(messages.map((message) => message.inner.content)).toEqual([
+			"hello",
+			"",
+			"",
+		]);
+		expect(messages[1].error).toMatchObject({
+			message: "I can't answer yet: no model.",
+			code: "BOT_TURN_NO_MODEL",
+			action: { kind: "add-model", hostedOnly: true },
+		});
+		expect(messages[2].error).toMatchObject({
+			kind: "network",
+			message: "I ran out of time.",
+		});
+		expect(messages[2].error?.action).toBeUndefined();
+	});
+
 	test("a trigger and a bot ask show as notices; only the trigger reaches the model", () => {
 		const entries = [
 			entry(1, "user_1", "", {
@@ -306,19 +380,36 @@ describe("the chat from the bot's inbox history", () => {
 
 describe("entries the realtime feed pushes", () => {
 	const sessionId = "bot:bot_ada";
-	const shown = (id: string, role: IRole, timestamp: number) => ({
+	const shown = (
+		id: string,
+		role: IRole,
+		timestamp: number,
+		streamedAnswerTo?: string,
+	) => ({
 		id,
 		appId: "global",
 		sessionId,
 		inner: { role, content: id },
 		files: [],
 		timestamp,
+		...(streamedAnswerTo
+			? {
+					run_context: {
+						schema: "flowpilot.run-context/v1",
+						user_message_id: streamedAnswerTo,
+					},
+				}
+			: {}),
 	});
+	const reply = (seq: number, text: string, replyTo: string) =>
+		entry(seq, BOT, text, {
+			envelope: { v: 1, enc: "none", body: { text, reply_to: replyTo } },
+		});
 
 	test("the bot's stored reply to a message the chat streamed is left out", () => {
 		const onScreen = [
 			shown("m1", IRole.User, 1),
-			shown("local-answer", IRole.Assistant, 2),
+			shown("local-answer", IRole.Assistant, 2, "m1"),
 		];
 		const pushed = [
 			entry(1, "user_1", "hi"),
@@ -363,6 +454,27 @@ describe("entries the realtime feed pushes", () => {
 		const { messages } = pushedTranscript(pushed, BOT, sessionId, onScreen);
 		expect(messages.map((message) => message.id)).toEqual(["m2"]);
 	});
+
+	test("a call utterance spoken before the previous stored reply landed still gets its reply", () => {
+		const onScreen = [
+			shown("m1", IRole.User, 1),
+			shown("m2", IRole.User, 2),
+			shown("m3", IRole.Assistant, 3),
+		];
+		const pushed = [reply(4, "Verstanden.", "m2")];
+		const { messages } = pushedTranscript(pushed, BOT, sessionId, onScreen);
+		expect(messages.map((message) => message.id)).toEqual(["m4"]);
+	});
+
+	test("an approval card on screen doesn't hide the answer that follows it", () => {
+		const onScreen = [
+			shown("m1", IRole.User, 1),
+			shown("m2", IRole.Assistant, 2),
+		];
+		const pushed = [reply(3, "Assistant says it's doing well.", "m1")];
+		const { messages } = pushedTranscript(pushed, BOT, sessionId, onScreen);
+		expect(messages.map((message) => message.id)).toEqual(["m3"]);
+	});
 });
 
 describe("sending from the interactive chat", () => {
@@ -390,6 +502,39 @@ describe("sending from the interactive chat", () => {
 		expect(interactiveEnvelope("x", "r").body).toMatchObject({
 			interactive: { client_run_id: "r" },
 		});
+	});
+
+	test("a spoken turn is stored as a transcript that still carries the interactive mark", async () => {
+		const { inbox, sent } = fakeInbox(2);
+		await sendInteractive(inbox, target, {
+			id: "msg_voice",
+			text: "What is next",
+			clientRunId: "run_v",
+			transcript: {
+				call: "call_1",
+				offset_ms: 1200,
+				duration_ms: 900,
+				mentions: ["bot_a"],
+			},
+		});
+		expect(sent).toEqual([
+			{
+				message_id: "msg_voice",
+				kind: "transcript",
+				envelope: {
+					v: 1,
+					enc: "none",
+					body: {
+						call: "call_1",
+						offset_ms: 1200,
+						duration_ms: 900,
+						mentions: ["bot_a"],
+						text: "What is next",
+						interactive: { client_run_id: "run_v" },
+					},
+				},
+			},
+		]);
 	});
 
 	test("New topic writes a topic entry, titled when asked", async () => {
@@ -510,5 +655,77 @@ describe("the import of the IndexedDB chat", () => {
 		expect(
 			await globalChatDb.markers.get(`bot-chat-imported:${BOT}`),
 		).toBeDefined();
+	});
+
+	test("stored attachments of both sides come back as files, conversation files included", async () => {
+		const handle = {
+			app_id: "app1",
+			path: "bot/files/a b.pdf",
+			bytes: 5,
+			sha256: "s",
+			mime: "application/pdf",
+		};
+		const withParts = (seq: number, sender: string, parts: unknown[]) =>
+			entry(seq, sender, "see", {
+				envelope: { v: 1, enc: "none", body: { text: "see", parts } },
+			});
+		const entries = [
+			withParts(1, "user_1", [
+				{
+					kind: "attachment",
+					id: "a1",
+					name: "u.pdf",
+					url: "https://a.test/u.pdf",
+				},
+			]),
+			withParts(2, BOT, [
+				{ kind: "attachment", id: "a1", name: "a b.pdf", handle },
+				{
+					kind: "attachment",
+					id: "a2",
+					name: "l.pdf",
+					url: "https://a.test/l.pdf",
+					mime: "application/pdf",
+				},
+				{
+					kind: "attachment",
+					id: "a3",
+					name: "c.pdf",
+					handle: { ...handle, app_id: "conversation_c1" },
+				},
+			]),
+		];
+		const inbox = {
+			async listEntries() {
+				return {
+					entries,
+					next_before: null,
+					next_to_seq: null,
+					next_from_seq: null,
+				};
+			},
+			async listSegments() {
+				return { segments: [] as IConversationSegment[], next_after: null };
+			},
+		} as unknown as IInboxState;
+		const page = await loadLatest(inbox, target, "bot:bot_ada", 50);
+		expect(page.messages[0].files).toEqual([
+			{ url: "https://a.test/u.pdf", name: "u.pdf" },
+		]);
+		expect(page.messages[1].files).toEqual([
+			{
+				url: "storage://apps/app1/app/bot/files/a%20b.pdf",
+				name: "a b.pdf",
+				type: "application/pdf",
+				size: 5,
+			},
+			{ url: "https://a.test/l.pdf", name: "l.pdf", type: "application/pdf" },
+			{
+				url: "storage://apps/conversation_c1/app/bot/files/a%20b.pdf",
+				name: "c.pdf",
+				type: "application/pdf",
+				size: 5,
+			},
+		]);
 	});
 });

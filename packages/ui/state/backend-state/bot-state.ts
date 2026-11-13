@@ -17,6 +17,7 @@ export const BOT_CAPABILITIES = [
 	"data_studio",
 	"memory",
 	"documents",
+	"barcodes",
 	"data_connections",
 	"knowledge",
 	"connectors",
@@ -40,6 +41,7 @@ export const MEMORY_CAPABILITY: BotCapability = "memory";
 
 export const BOT_LOCATIONS = ["server", "desktop", "device"] as const;
 export type BotLocation = (typeof BOT_LOCATIONS)[number];
+export type BotExecutionMode = "native" | "docker";
 
 /** Need a screen, a shell or a key only the host holds, so a bot on the server can't hold them. */
 export const LOCAL_ONLY_BOT_CAPABILITIES: readonly BotCapability[] = [
@@ -49,13 +51,28 @@ export const LOCAL_ONLY_BOT_CAPABILITIES: readonly BotCapability[] = [
 	"encryption",
 ];
 
+/** What a managed device can't serve; it holds every capability now, encryption included. */
+export const DEVICE_UNAVAILABLE_BOT_CAPABILITIES: readonly BotCapability[] = [];
+
 export function isBotCapabilityAvailable(
 	capability: BotCapability,
 	location: BotLocation,
 ): boolean {
-	return (
-		location !== "server" || !LOCAL_ONLY_BOT_CAPABILITIES.includes(capability)
-	);
+	if (location === "server") {
+		return !LOCAL_ONLY_BOT_CAPABILITIES.includes(capability);
+	}
+	if (location === "device") {
+		return !DEVICE_UNAVAILABLE_BOT_CAPABILITIES.includes(capability);
+	}
+	return true;
+}
+
+export function botCapabilityUnavailableReason(
+	capability: BotCapability,
+	location: BotLocation,
+): "local" | "device" | null {
+	if (isBotCapabilityAvailable(capability, location)) return null;
+	return location === "device" ? "device" : "local";
 }
 
 export type BotSystemKey = "general" | "flux";
@@ -113,6 +130,8 @@ export interface IBot {
 	/** The profile whose apps `profile_apps` covers. */
 	profile_id: string | null;
 	location: BotLocation;
+	/** Omitted by older hubs, which only run bots natively. */
+	execution_mode?: BotExecutionMode;
 	/** Set when `location` is `device`. */
 	device_id: string | null;
 	created_at: string;
@@ -139,6 +158,7 @@ export interface ICreateBotRequest {
 	capabilities?: BotCapability[];
 	profile_id?: string | null;
 	location?: BotLocation;
+	execution_mode?: BotExecutionMode;
 	device_id?: string | null;
 }
 
@@ -160,6 +180,7 @@ export interface IUpdateBotRequest {
 	capabilities?: BotCapability[];
 	profile_id?: string | null;
 	location?: BotLocation;
+	execution_mode?: BotExecutionMode;
 	device_id?: string | null;
 }
 
@@ -365,12 +386,33 @@ export interface IBotPermissions {
 /** What the owner may answer to an approval card. */
 export type BotApprovalDecision = "once" | "always" | "deny";
 
+/** The answer for one call of a batch card, named by the call's `args_hash`. */
+export interface IBotApprovalItemDecision {
+	args_hash: string;
+	decision: BotApprovalDecision;
+}
+
+/** The request body that answers a card; it lists `items` only when some call's answer differs. */
+export function approvalAnswerBody(
+	approvalId: string,
+	decision: BotApprovalDecision,
+	items?: readonly IBotApprovalItemDecision[],
+) {
+	return {
+		approval_id: approvalId,
+		decision,
+		...(items?.length ? { items } : {}),
+	};
+}
+
 /** A call the owner allowed for good: `tool` for `scope` (`*` covers every scope of the tool). */
 export interface IBotToolGrant {
 	tool: string;
 	scope: string;
 	granted_at: string;
 	granted_by: string;
+	/** When the grant lapses unless the bot uses it first (90 days after its last use). */
+	expires_at?: string | null;
 }
 
 export type BotTurnStatus =
@@ -747,6 +789,16 @@ export interface IBotTask {
 	enabled: boolean;
 	created_by: "bot" | "owner";
 	created_at: string;
+	/** The group or chat the task fires in; none fires in the owner's chat with the bot. */
+	conversation?: IBotTaskConversation | null;
+}
+
+/** Where a task scheduled outside the owner's chat fires. */
+export interface IBotTaskConversation {
+	id: string;
+	kind: "group" | "direct";
+	/** The group's name, when it has one. */
+	title?: string | null;
 }
 
 export interface ICreateBotTaskRequest {
@@ -831,12 +883,16 @@ export interface IBotState {
 	): Promise<IBotToolGrant>;
 	/** Takes the grant back; none is not an error. */
 	deleteToolGrant?(botId: string, tool: string, scope: string): Promise<void>;
-	/** Answers the approval card a parked turn sleeps on; the turn runs again unless it was denied. */
+	/**
+	 * Answers the approval card a parked turn sleeps on; the turn runs again unless it was denied.
+	 * On a batch card `decision` covers every call that `items` does not list.
+	 */
 	answerApproval?(
 		botId: string,
 		turnId: string,
 		approvalId: string,
 		decision: BotApprovalDecision,
+		items?: readonly IBotApprovalItemDecision[],
 	): Promise<void>;
 	/** Scheduled tasks of a bot with the scheduling capability, soonest first. */
 	listTasks?(botId: string): Promise<IBotTask[]>;

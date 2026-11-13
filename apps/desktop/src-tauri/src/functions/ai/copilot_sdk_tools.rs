@@ -980,6 +980,7 @@ pub fn approval_from_spec(spec: &PlatformToolSpec, args: &Value) -> FrontendTool
         title: resolved.title,
         description: resolved.description,
         session_key: resolved.session_key,
+        asks_again: None,
     }
 }
 
@@ -1045,12 +1046,11 @@ fn global_assistant_specs_for_bot(
     bot: Option<&flow_like::flow::copilot::BotRunContext>,
 ) -> Vec<PlatformToolSpec> {
     let mut specs = global_assistant_tool_specs(memory_enabled);
-    if let Some(bot) = bot {
-        specs.extend(
-            bot.tool_specs(memory_enabled).into_iter().filter(|spec| {
-                flow_like_bot_tools::configuration::is_settings_tool(spec.name)
-            }),
-        );
+    match bot {
+        Some(bot) => specs.extend(bot.tool_specs(memory_enabled).into_iter().filter(|spec| {
+            flow_like_bot_tools::configuration::is_settings_tool(spec.name)
+        })),
+        None => specs.extend(flow_like::flow::copilot::tool_spec::flowpilot_file_tool_specs()),
     }
     specs
 }

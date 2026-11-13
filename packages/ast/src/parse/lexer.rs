@@ -83,7 +83,14 @@ struct Lexer {
     line: usize,
     col: usize,
     byte: usize,
+    /// Template literals currently open around the cursor, not counting the outermost one.
+    template_depth: usize,
 }
+
+/// How many template literals may nest inside one another's `${ … }`. Each level recurses here and
+/// re-enters the whole expression chain in the parser, so user text nested without a bound aborts
+/// the process with a stack overflow long before the parser's own nesting budget is spent.
+const MAX_TEMPLATE_NESTING: usize = 16;
 
 /// Multi-character operators, longest first so the scanner is greedy.
 const OPERATORS: &[&str] = &[
@@ -99,6 +106,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, ParseError> {
         line: 1,
         col: 1,
         byte: 0,
+        template_depth: 0,
     };
     lexer.run()
 }
@@ -118,6 +126,11 @@ impl Lexer {
                     continue;
                 }
                 '/' if self.peek(1) == Some('/') => self.line_comment(),
+                '/' if self.peek(1) == Some('*') => {
+                    return Err(self.err(
+                        "block comments (`/* … */`) are not supported: start each comment line with `//`",
+                    ));
+                }
                 '"' | '\'' => self.string(c)?,
                 '`' => self.template()?,
                 '@' => self.single(Tok::At),
@@ -467,6 +480,18 @@ impl Lexer {
 
     /// Skip a nested template literal inside an interpolation, including its own `${ … }`.
     fn skip_template(&mut self) -> Result<(), ParseError> {
+        if self.template_depth >= MAX_TEMPLATE_NESTING {
+            return Err(self.err(format!(
+                "template literals are nested more than {MAX_TEMPLATE_NESTING} levels deep"
+            )));
+        }
+        self.template_depth += 1;
+        let result = self.skip_nested_template();
+        self.template_depth -= 1;
+        result
+    }
+
+    fn skip_nested_template(&mut self) -> Result<(), ParseError> {
         let line = self.line;
         let col = self.col;
         self.advance();

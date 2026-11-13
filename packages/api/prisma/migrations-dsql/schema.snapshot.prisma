@@ -458,6 +458,9 @@ model App {
   /// Set on a bot's workspace: the bot's id, kept as a free-form string like `forkedFrom`.
   /// One workspace per bot; apps lists hide workspaces with `"botId" IS NULL`.
   botId        String?   @unique
+  /// The owner refuses bots in this app: every bot's access answers `APP_REFUSES_BOTS`.
+  /// NULL or false lets bots use it, bounded by their owners' roles.
+  refuseBots   Boolean?
 
   technicalUsers TechnicalUser[]
   botApps        BotApp[]
@@ -583,12 +586,6 @@ model TechnicalUser {
   creatorUserId       String?
   creatorMembership   Membership? @relation("TechnicalUserCreatorMembership", fields: [creatorMembershipId], references: [id], onDelete: Cascade)
   creatorMembershipId String?
-
-  llmUsage            LLMUsageTracking[]
-  embeddingUsage      EmbeddingUsageTracking[]
-  executionUsage      ExecutionUsageTracking[]
-  executionUsageDaily ExecutionUsageDaily[]
-  executionRuns       ExecutionRun[]
 
   validUntil DateTime? @db.Timestamptz(3)
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
@@ -1616,6 +1613,8 @@ model Bot {
   profileId       String?
   /// SERVER | DESKTOP | DEVICE
   location        String                @default("SERVER")
+  /// NATIVE | DOCKER; null on older bots means NATIVE.
+  executionMode   String?
   deviceId        String?
   apps            BotApp[]
   secrets         BotSecret[]
@@ -1755,6 +1754,9 @@ model BotToolGrant {
   grantedAt DateTime @default(now()) @db.Timestamptz(3)
   /// The person who granted it.
   grantedBy String
+  /// The grant lapses here unless a use moves it forward (90 days after the last use). Null only
+  /// on rows older than the expiry; the maintenance sweep stamps them.
+  expiresAt DateTime? @db.Timestamptz(3)
 
   @@unique([botId, tool, scope])
 }
@@ -1828,6 +1830,8 @@ model BotTurn {
   audience         String       @default("OWNER")
   /// The running turn's live status line, at most 120 characters; cleared when it stops running.
   statusText       String?
+  /// True for a turn the bot only read along with or got a reaction for; null on turns from before the column existed. The requester daily cap skips these.
+  unprompted       Boolean?
   createdAt        DateTime     @default(now()) @db.Timestamptz(3)
   updatedAt        DateTime     @updatedAt @db.Timestamptz(3)
 
@@ -1894,6 +1898,10 @@ model BotWebhook {
   name         String
   /// blake3 of the secret, lowercase hex.
   secretHash   String
+  /// The secret itself, encrypted like a bot secret (`v1:` + base64); it keys the HMAC
+  /// signature. Null on hooks created before signing used the real secret: they verify
+  /// signatures keyed by `secretHash` until the owner rotates.
+  secretCiphertext String?
   /// What the bot should do with a call.
   instruction  String    @default("")
   enabled      Boolean   @default(true)
@@ -1905,7 +1913,8 @@ model BotWebhook {
 
 /// A task a bot runs for its owner at a time: once (`runAt`) or on a cron schedule in a time
 /// zone. A maintenance sweep claims due tasks with a compare-and-set on `nextRunAt` and writes a
-/// `trigger` entry (source `schedule`) into the bot's conversation with its owner.
+/// `trigger` entry (source `schedule`) into the bot's conversation with its owner, or into
+/// `conversationId` as `requestedBy` when the task was scheduled in another conversation.
 model BotTask {
   id          String    @id
   botId       String
@@ -1927,6 +1936,16 @@ model BotTask {
   createdBy   String
   createdAt   DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+  /// The group or chat the task was scheduled in; NULL fires in the owner's chat with the bot.
+  conversationId String?
+  /// The person whose request scheduled the task; its trigger is sent as them.
+  requestedBy    String?
+  /// The owner wrote the instruction themselves, not through a bot's turn. NULL on rows from
+  /// before this was recorded, which authorize nothing.
+  ownerWritten          Boolean?
+  /// The owner's chat with the bot and the message in it that asked the bot for the task.
+  requestConversationId String?
+  requestMessageId      String?
 
   @@index([botId])
   @@index([enabled, nextRunAt])
@@ -2243,6 +2262,8 @@ model ManagedDevice {
   displayName  String?
   /// When the device's bot host last polled the hub (unix ms); written at most once a minute.
   botHostSeenAt BigInt?
+  /// Authenticated agent report: installed, available, reason and seen_at (unix ms).
+  botDocker Json?
 
   @@index([ownerId, status])
 }
@@ -4948,6 +4969,9 @@ model User {
   tutorialCompleted    Boolean @default(false)
   devMode              Boolean @default(false)
 
+  // Other people see `email` only once its owner turned this on. Null is off.
+  shareEmail Boolean? @default(false)
+
   memberships                 Membership[]
   profiles                    Profile[]
   personalAccessToken         PAT[]
@@ -5017,6 +5041,8 @@ model Profile {
   bitIds        Json?
   hub           String
   hubs          Json?
+  // Bots the profile hides from its crew: a custom bot's ID or a built-in bot's system key.
+  hiddenBots    Json?
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -5111,7 +5137,6 @@ model LLMUsageTracking {
   userId String?
 
   technicalUserId String?
-  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   app   App?    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String?
@@ -5150,7 +5175,6 @@ model EmbeddingUsageTracking {
   appId String?
 
   technicalUserId String?
-  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   price BigInt
 
@@ -5186,7 +5210,6 @@ model ExecutionUsageTracking {
   appId String?
 
   technicalUserId String?
-  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -5216,7 +5239,6 @@ model ExecutionUsageDaily {
   userId String?
 
   technicalUserId String?
-  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   app   App?    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String?
@@ -5418,8 +5440,10 @@ model ExecutionRun {
   app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String
 
+  /// The technical actor that started the run: an API key (`TechnicalUser.id`) or a bot
+  /// (`Bot.id`). No foreign key, because a bot is not a `TechnicalUser`; the usage tables'
+  /// `technicalUserId` copies it and has none either.
   technicalUserId String?
-  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   /// If the run was triggered through an app connection: the chain of apps
   /// that led to this run (first = original caller), stored as a JSON string

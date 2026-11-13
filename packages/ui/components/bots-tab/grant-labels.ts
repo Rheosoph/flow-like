@@ -14,6 +14,9 @@ import {
 import { useBackend } from "../../state/backend-state";
 
 const PERSON_PREFIX = "person:";
+/** `web:<site>:read`, `web:<site>:write`, and both with `private:` before the kind. */
+const WEB_ACCESS = /^web:(.+?):(private:)?(read|write)$/;
+const WEB_SECRET = /^web:(.+?):secret:(.+)$/;
 
 function toolName(tool: string): string {
 	return tool.replace(/_/g, " ");
@@ -86,9 +89,42 @@ export function useGrantLabel(scopes: readonly string[] = []) {
 					domain: after(scope, "email:"),
 				});
 			}
+			if (scope.startsWith("owner_browser:")) {
+				return t(
+					"grants.ownerBrowser",
+					"Open sites on {{site}} in your own browser",
+					{ site: after(scope, "owner_browser:") },
+				);
+			}
 			if (scope.startsWith("browser:")) {
 				return t("grants.browser", "Open sites on {{site}}", {
 					site: after(scope, "browser:"),
+				});
+			}
+			const access = WEB_ACCESS.exec(scope);
+			if (access) {
+				const [, site, privateNetwork, kind] = access;
+				if (kind === "read")
+					return privateNetwork
+						? t(
+								"grants.webPrivateRead",
+								"Read from {{site}} on a private network",
+								{ site },
+							)
+						: t("grants.webRead", "Read from {{site}}", { site });
+				return privateNetwork
+					? t(
+							"grants.webPrivateWrite",
+							"Write to {{site}} on a private network",
+							{ site },
+						)
+					: t("grants.webWrite", "Write to {{site}}", { site });
+			}
+			const sent = WEB_SECRET.exec(scope);
+			if (sent) {
+				return t("grants.webSecret", "Send {{secret}} to {{site}}", {
+					site: sent[1],
+					secret: sent[2],
 				});
 			}
 			if (scope.startsWith("host:")) {

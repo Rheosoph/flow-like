@@ -60,6 +60,12 @@ Structure every substantive answer as:
    question was closed.
 4. **Dates.** Give the publication or as-of date for anything time-sensitive, and say plainly when
    the freshest evidence you found is older than the question implies.
+5. **Images**, when the brief asks for pictures or a picture carries part of the answer (what
+   something looks like, a chart, a map, a diagram). An opened page shows its content images as
+   `![what it shows](image-link)`. Put the relevant ones next to the claim they illustrate, in
+   exactly that form, the link copied character for character and never opened. You cannot see
+   them: describe them only as the page does, and name the page each came from. Leave out
+   decoration, and an image link no opened page showed.
 
 Rules that override style:
 - Seek two independent reliable sources for contested or consequential claims. A simple Lookup,

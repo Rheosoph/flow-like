@@ -3,6 +3,7 @@
 import { useTranslation } from "@flow-like/locales";
 import {
 	AudioLinesIcon,
+	HandIcon,
 	MicIcon,
 	MicOffIcon,
 	MonitorOffIcon,
@@ -172,6 +173,69 @@ function CallPerson({
 	);
 }
 
+const EDITABLE =
+	'input, textarea, select, [contenteditable=""], [contenteditable="true"]';
+const OPEN_OVERLAY =
+	'[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"], [role="menu"][data-state="open"]';
+
+export function shouldInterruptOnKey(
+	event: Pick<KeyboardEvent, "key" | "defaultPrevented" | "target">,
+	doc: Pick<Document, "querySelector"> = document,
+): boolean {
+	if (event.key !== "Escape" || event.defaultPrevented) return false;
+	const target = event.target;
+	if (
+		target instanceof Element &&
+		(target.closest(EDITABLE) || (target as HTMLElement).isContentEditable)
+	)
+		return false;
+	return doc.querySelector(OPEN_OVERLAY) === null;
+}
+
+/** Escape stops the speaking bot while you are in the call, unless the key belongs to something else. */
+function useInterruptShortcut(active: boolean, interrupt: () => void) {
+	useEffect(() => {
+		if (!active) return;
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (!shouldInterruptOnKey(event)) return;
+			event.preventDefault();
+			interrupt();
+		};
+		window.addEventListener("keydown", onKeyDown);
+		return () => window.removeEventListener("keydown", onKeyDown);
+	}, [active, interrupt]);
+}
+
+function InterruptBotButton({
+	botName,
+	onInterrupt,
+}: Readonly<{ botName: string; onInterrupt: () => void }>) {
+	const { t } = useTranslation("bots");
+	const label = t("crew.call.interrupt", "Interrupt {{name}}", {
+		name: botName,
+	});
+	return (
+		<Button
+			type="button"
+			variant="secondary"
+			size="sm"
+			className="shrink-0"
+			data-slot="call-interrupt"
+			onClick={onInterrupt}
+			aria-label={label}
+			aria-keyshortcuts="Escape"
+			title={t("crew.call.interruptHint", "Interrupt {{name}} (Esc)", {
+				name: botName,
+			})}
+		>
+			<HandIcon aria-hidden />
+			<span className="@max-[820px]/bots:hidden">
+				{t("crew.call.interruptShort", "Interrupt")}
+			</span>
+		</Button>
+	);
+}
+
 /** Lets bots read your side of the call; off until you switch it on, and unavailable without a speech model. */
 export function ListeningToggle({
 	call,
@@ -225,6 +289,8 @@ export function ConversationCallBar({
 		| "canListen"
 		| "botsPresent"
 		| "setListening"
+		| "speakingBot"
+		| "interruptSpeech"
 		| "cameraOn"
 		| "screenSharing"
 		| "canUseCamera"
@@ -240,6 +306,11 @@ export function ConversationCallBar({
 }>) {
 	const { t } = useTranslation("bots");
 	const elapsed = useElapsed(call.live?.startedAt ?? null);
+	const speakingBot = call.joined ? (call.speakingBot ?? null) : null;
+	useInterruptShortcut(
+		speakingBot !== null && call.interruptSpeech !== undefined,
+		call.interruptSpeech,
+	);
 	if (!call.live) return null;
 	const mine = call.live.participants.find((p) => p.sub === me);
 	const muteLabel = mine?.muted
@@ -299,6 +370,12 @@ export function ConversationCallBar({
 				</span>
 				{call.joined ? (
 					<>
+						{speakingBot !== null && (
+							<InterruptBotButton
+								botName={directory(speakingBot).name}
+								onInterrupt={call.interruptSpeech}
+							/>
+						)}
 						{call.botsPresent && <ListeningToggle call={call} />}
 						<Button
 							type="button"

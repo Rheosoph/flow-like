@@ -242,6 +242,8 @@ export interface QuotaOperationDetail {
 	status: string;
 	inputTokens?: number | null;
 	outputTokens?: number | null;
+	cacheReadTokens?: number | null;
+	cacheWriteTokens?: number | null;
 	embeddingTokens?: number | null;
 	providerCostMicroUsd?: number | null;
 	providerFundingCostMicroUsd?: number | null;

@@ -38,7 +38,7 @@ use flow_like::flow::copilot::{
         BotPresence, BotTalkHost, CrewMember, HeadlessPermission, MAX_ASK_HOPS, NestedBotTurn,
         PendingAnswer,
     },
-    tool_grants::{GrantCheck, GrantStore, approval_request, check_call},
+    tool_grants::{GrantCheck, GrantStore, ParkedBatch, approval_request, check_call},
 };
 use flow_like_types::{
     bot::{BotLocation, BotSystemKind},
@@ -54,7 +54,7 @@ use sea_orm::{
 };
 use serde_json::{Value, json};
 use std::{
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -373,7 +373,7 @@ pub struct ServerTalkHost {
     held: Option<HeldTurn>,
     ancestors: Vec<String>,
     trigger_hops: u32,
-    parked: Mutex<Option<(ApprovalRequest, Option<String>)>>,
+    batch: Arc<ParkedBatch>,
     asked: Mutex<Asked>,
 }
 
@@ -381,7 +381,8 @@ impl ServerTalkHost {
     /// A chat run of `run_id`; its late answers return to the owner's direct conversation, or to
     /// the conversation of the desktop-hosted turn `run_id` names.
     pub fn for_chat(state: AppState, owner_id: &str, run_id: &str) -> Self {
-        Self::new(state, owner_id, run_id, None, Vec::new())
+        let batch = Arc::new(ParkedBatch::new(run_id));
+        Self::new(state, owner_id, run_id, None, Vec::new(), batch)
     }
 
     /// An ask made by another host carries the validated turn context without claiming its lease.
@@ -391,17 +392,24 @@ impl ServerTalkHost {
         run_id: &str,
         context: RemoteTalkContext,
     ) -> Self {
-        let mut host = Self::new(state, owner_id, run_id, None, context.ancestors);
+        let batch = Arc::new(ParkedBatch::new(run_id));
+        let mut host = Self::new(state, owner_id, run_id, None, context.ancestors, batch);
         host.trigger_hops = context.hops;
         host
     }
 
     /// A headless turn the host holds. `ancestors` are the bots waiting on the ask that started
-    /// it, the first asker first.
-    pub(crate) fn for_turn(state: AppState, held: HeldTurn, ancestors: Vec<String>) -> Self {
+    /// it, the first asker first. An ask that needs the owner joins `batch`, the approval card the
+    /// attempt's other calls share.
+    pub(crate) fn for_turn(
+        state: AppState,
+        held: HeldTurn,
+        ancestors: Vec<String>,
+        batch: Arc<ParkedBatch>,
+    ) -> Self {
         let owner = held.turn.owner_id.clone();
         let run = held.turn.id.clone();
-        Self::new(state, &owner, &run, Some(held), ancestors)
+        Self::new(state, &owner, &run, Some(held), ancestors, batch)
     }
 
     fn new(
@@ -410,6 +418,7 @@ impl ServerTalkHost {
         run_id: &str,
         held: Option<HeldTurn>,
         ancestors: Vec<String>,
+        batch: Arc<ParkedBatch>,
     ) -> Self {
         let trigger_hops = held
             .as_ref()
@@ -421,23 +430,9 @@ impl ServerTalkHost {
             held,
             ancestors,
             trigger_hops,
-            parked: Mutex::default(),
+            batch,
             asked: Mutex::default(),
         }
-    }
-
-    /// The card the run needs answered before its turn goes on; the worker parks the turn behind
-    /// it instead of posting a reply.
-    pub(crate) fn parked_card(&self) -> Option<ApprovalRequest> {
-        self.parked
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .as_ref().map(|(card, _)| card.clone())
-    }
-
-    pub(crate) fn parked_recovery_call_id(&self) -> Option<String> {
-        self.parked.lock().unwrap_or_else(|p| p.into_inner())
-            .as_ref().and_then(|(_, call_id)| call_id.clone())
     }
 
     fn remember<T>(&self, change: impl FnOnce(&mut Asked) -> T) -> T {
@@ -576,8 +571,7 @@ impl BotTalkHost for ServerTalkHost {
         let (verdict, card) =
             headless_verdict(&store, &held.turn.id, caller, callee, question).await;
         if let Some(card) = card {
-            self.parked.lock().unwrap_or_else(|p| p.into_inner())
-                .get_or_insert_with(|| (card, flow_like::flow::copilot::run_recovery::current_recovery_call_id()));
+            self.batch.park(card, false);
         }
         verdict
     }
@@ -700,8 +694,8 @@ impl ServerTalkHost {
         }
         match callee.location {
             BotLocation::Server => {
-                let wait = Duration::from_secs(u64::from(WAIT_SECS));
-                let _ = tokio::time::timeout(wait, super::run_hosted(&self.state, &tid)).await;
+                let (state, run_id) = (self.state.clone(), tid.clone());
+                tokio::spawn(async move { super::run_hosted(&state, &run_id).await });
             }
             _ if callee.presence == BotPresence::Offline => {
                 let seen = last_seen(&self.state.db, &self.owner_id, &callee.id, now_millis())
@@ -924,6 +918,8 @@ pub(crate) async fn ask_result_transcript<C: ConnectionTrait>(
         history,
         addressed: true,
         topic_at: None,
+        trail: None,
+        reads: Default::default(),
     })
 }
 

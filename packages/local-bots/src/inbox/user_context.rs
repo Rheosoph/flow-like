@@ -1,7 +1,7 @@
 use super::*;
 use flow_like_types::bot_user_context::{
     UserContextAudience, UserContextMessage, UserContextRequest, parse_context_message,
-    response_message_id,
+    response_message_id, revoke_message_id,
 };
 
 pub(super) fn validate(
@@ -44,17 +44,21 @@ pub(super) fn validate(
                     "Only the requested person may answer this context request",
                 ));
             }
-            let original = entry_by_message_id(db, &response.request_id)?
-                .filter(|entry| entry.conversation_id == conversation_id)
-                .ok_or_else(|| Error::not_found("Context request not found"))?;
-            let request: UserContextRequest =
-                serde_json::from_value(original.envelope["body"]["user_context_request"].clone())
-                    .map_err(|_| Error::invalid("Context request not found"))?;
-            if original.sender_id != request.bot_id {
-                return Err(Error::invalid("Invalid context request author"));
-            }
+            let request = original_request(db, conversation_id, &response.request_id)?;
             response.validate(&request, now).map_err(Error::invalid)?;
             request
+        }
+        UserContextMessage::Revoke(revoke) => {
+            if revoke.subject_id != sender
+                || sender != LOCAL_OWNER_ID
+                || outgoing.message_id != revoke_message_id(&revoke.request_id)
+            {
+                return Err(Error::invalid(
+                    "Only the person who shared context may revoke its session access",
+                ));
+            }
+            let request = original_request(db, conversation_id, &revoke.request_id)?;
+            return revoke.validate(&request, now).map_err(Error::invalid);
         }
     };
     request.validate(now).map_err(Error::invalid)?;
@@ -83,6 +87,23 @@ pub(super) fn validate(
         ));
     }
     Ok(())
+}
+
+fn original_request(
+    db: &Connection,
+    conversation_id: &str,
+    request_id: &str,
+) -> Result<UserContextRequest> {
+    let original = entry_by_message_id(db, request_id)?
+        .filter(|entry| entry.conversation_id == conversation_id)
+        .ok_or_else(|| Error::not_found("Context request not found"))?;
+    let request: UserContextRequest =
+        serde_json::from_value(original.envelope["body"]["user_context_request"].clone())
+            .map_err(|_| Error::invalid("Context request not found"))?;
+    if original.sender_id != request.bot_id {
+        return Err(Error::invalid("Invalid context request author"));
+    }
+    Ok(request)
 }
 
 pub(super) fn mark_derived(
@@ -144,7 +165,38 @@ pub(super) fn mark_derived(
         }
         envelope["body"][DERIVED_FIELD] = Value::String(request_id.to_owned());
     }
+    if envelope["body"].get(DERIVED_FIELD).is_none()
+        && member_conversation(db, conversation, sender)?.kind == ConversationKind::Direct
+        && let Some(request_id) = live_session_request(db, conversation, sender)?
+    {
+        envelope["body"][DERIVED_FIELD] = Value::String(request_id);
+    }
     Ok(())
+}
+
+const LIVE_SESSION_WINDOW: usize = 400;
+
+fn live_session_request(db: &Connection, conversation: &str, bot: &str) -> Result<Option<String>> {
+    let mut recent = db
+        .prepare_cached(&format!(
+            "SELECT {ENTRY_COLUMNS} FROM entries
+             WHERE conversation_id = ?1 AND kind = 'message'
+             ORDER BY seq DESC LIMIT ?2"
+        ))?
+        .query_map(
+            params![conversation, LIVE_SESSION_WINDOW as i64],
+            read_entry,
+        )?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    recent.reverse();
+    let history = flow_like_types::bot_user_context::ContextHistory::new(
+        recent
+            .iter()
+            .map(|entry| (entry.sender_id.as_str(), &entry.envelope["body"])),
+        bot,
+        now_micros() / 1_000,
+    );
+    Ok(history.live_request_id().map(str::to_owned))
 }
 
 fn latest_foreign_message(

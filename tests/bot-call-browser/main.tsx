@@ -21,6 +21,7 @@ import { useConversationRoom } from "../../packages/ui/hooks/use-conversation-ro
 import { useInboxEntries } from "../../packages/ui/hooks/use-inbox";
 import { useSpeechModel } from "../../packages/ui/hooks/use-speech-model";
 import { encodeWav } from "../../packages/ui/lib/realtime/call-listening";
+import { getCallTurnDetector } from "../../packages/ui/lib/realtime/call-turn-detector";
 import {
 	BackendContext,
 	type IBackendState,
@@ -98,13 +99,49 @@ let phrase = "";
 let replyText: string | null = null;
 let microphoneContext: AudioContext | null = null;
 let microphoneGain: GainNode | null = null;
+let microphoneDestination: MediaStreamAudioDestinationNode | null = null;
 const NativeAudioContext = window.AudioContext;
+
+// The tone microphone is not speech, so the default fixture keeps the call on the energy rule;
+// `?models=on` loads the real voice-activity and turn models for recorded speech.
+if (params.get("models") !== "on") {
+	const refuseCallModels = (url: string | URL) => {
+		if (String(url).includes("call-turn.worker"))
+			throw new Error("Call models are off in this fixture");
+	};
+	const NativeWorker = window.Worker;
+	window.Worker = class extends NativeWorker {
+		constructor(url: string | URL, options?: WorkerOptions) {
+			refuseCallModels(url);
+			super(url, options);
+		}
+	};
+	const NativeSharedWorker = window.SharedWorker;
+	if (NativeSharedWorker) {
+		window.SharedWorker = class extends NativeSharedWorker {
+			constructor(url: string | URL, options?: string | WorkerOptions) {
+				refuseCallModels(url);
+				super(url, options);
+			}
+		};
+	}
+}
 
 // Observe native audio without replacing decoding, mixing, or playback.
 class ObservedAudioContext extends NativeAudioContext {
+	private speakers = new WeakSet<AudioNode>();
 	constructor(options?: AudioContextOptions) {
 		super(options);
 		stats.contexts.push(this);
+	}
+	createGain() {
+		const gain = super.createGain();
+		const connect = gain.connect.bind(gain);
+		gain.connect = ((target: AudioNode, ...args: number[]) => {
+			if (target === this.destination) this.speakers.add(gain);
+			return connect(target, ...args);
+		}) as typeof gain.connect;
+		return gain;
 	}
 	createMediaStreamDestination() {
 		const destination = super.createMediaStreamDestination();
@@ -143,7 +180,8 @@ class ObservedAudioContext extends NativeAudioContext {
 			start(...args);
 		};
 		source.connect = ((target: AudioNode, ...args: number[]) => {
-			if (target === this.destination) stats.localAudioConnections++;
+			if (target === this.destination || this.speakers.has(target))
+				stats.localAudioConnections++;
 			return connect(target, ...args);
 		}) as typeof source.connect;
 		return source;
@@ -165,6 +203,7 @@ Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
 		oscillator.connect(microphoneGain);
 		microphoneGain.connect(destination);
 		oscillator.start();
+		microphoneDestination = destination;
 		stats.microphones.push(destination.stream);
 		return destination.stream;
 	},
@@ -348,11 +387,37 @@ async function endSpeaking() {
 	microphoneGain.gain.value = 0;
 	await pause(1000);
 }
+/** Plays recorded speech (a WAV file as base64) into the microphone and waits out the turn. */
+async function speakRecording(text: string, wavBase64: string, waitMs: number) {
+	if (!microphoneContext || !microphoneDestination)
+		throw new Error("Join before speaking");
+	phrase = text;
+	const bytes = Uint8Array.from(atob(wavBase64), (char) => char.charCodeAt(0));
+	const buffer = await microphoneContext.decodeAudioData(bytes.buffer);
+	const source = microphoneContext.createBufferSource();
+	source.buffer = buffer;
+	source.connect(microphoneDestination);
+	const ended = new Promise((resolve) =>
+		source.addEventListener("ended", resolve, { once: true }),
+	);
+	source.start();
+	await ended;
+	await pause(waitMs);
+}
 window.botCallTest = {
 	async utterance(text: string) {
 		beginSpeaking(text);
 		await pause(750);
 		await endSpeaking();
+	},
+	speakRecording,
+	models: () => {
+		const detector = getCallTurnDetector();
+		return {
+			speech: detector.ready,
+			turn: detector.turnReady,
+			lastTurnMs: detector.lastTurnMs ?? null,
+		};
 	},
 	beginSpeaking,
 	endSpeaking,
@@ -376,6 +441,12 @@ declare global {
 	interface Window {
 		botCallTest: {
 			utterance(text: string): Promise<void>;
+			speakRecording(
+				text: string,
+				wavBase64: string,
+				waitMs: number,
+			): Promise<void>;
+			models(): { speech: boolean; turn: boolean; lastTurnMs: number | null };
 			beginSpeaking(text: string): void;
 			endSpeaking(): Promise<void>;
 			setReplyText(text: string): void;

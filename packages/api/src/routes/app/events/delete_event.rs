@@ -6,6 +6,7 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
+use flow_like::app::App;
 use flow_like_types::anyhow;
 
 use super::db::delete_event_with_sink;
@@ -57,23 +58,31 @@ pub async fn delete_event(
         )
         .await?;
 
-    // Restored versions can change an event's type, so this runs for every event.
-    crate::teams::management::cleanup_event(&state, &event_id).await?;
+    remove_event(&state, &mut app, &event_id).await?;
 
-    // Try to delete from bucket, but don't fail if file doesn't exist
+    audit_branch!(state, user, app_id, "event.delete", "Event", event_id);
+    Ok(Json(()))
+}
+
+/// Everything an event owns outside its own bucket file: Teams bot registration, sink and
+/// external schedule, remote registrations and auth. Safe to repeat for an event already gone.
+pub(crate) async fn remove_event(
+    state: &AppState,
+    app: &mut App,
+    event_id: &str,
+) -> Result<(), ApiError> {
+    // Restored versions can change an event's type, so this runs for every event.
+    crate::teams::management::cleanup_event(state, event_id).await?;
+
     // The event might only exist in the database (e.g., if bucket sync failed)
-    if let Err(e) = app.delete_event(&event_id).await {
+    if let Err(e) = app.delete_event(event_id).await {
         tracing::warn!("Failed to delete event from bucket (may not exist): {}", e);
     }
 
-    // Always delete from database and external schedulers
-    delete_event_with_sink(&state.db, &state, &event_id)
+    delete_event_with_sink(&state.db, state, event_id)
         .await
         .map_err(|e| {
             tracing::error!("Failed to delete event from database: {}", e);
             ApiError::internal_error(anyhow!(e))
-        })?;
-
-    audit_branch!(state, user, app_id, "event.delete", "Event", event_id);
-    Ok(Json(()))
+        })
 }

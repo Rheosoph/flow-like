@@ -283,5 +283,206 @@ async fn user_context_unearned_derived_marker_is_rejected() {
         InboxEntryKind::Message,
         json!({"text":"Hello","reply_to":"missing",DERIVED_FIELD:request.id}),
     );
-    assert!(send_in(&db, "room", "bot", &unrelated, at(2)).await.is_err());
+    assert!(
+        send_in(&db, "room", "bot", &unrelated, at(2))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn user_context_revocation_is_the_subjects_wakes_no_bot_and_outlives_the_request() {
+    let (db, request) = setup().await;
+    let card = outgoing(
+        &request.id,
+        InboxEntryKind::Message,
+        json!({REQUEST_FIELD:request}),
+    );
+    send_in(&db, "room", "bot", &card, at(1)).await.unwrap();
+    let mut shared = response(&request);
+    shared[RESPONSE_FIELD]["decision"] = json!("session");
+    let answer = outgoing(
+        &request.response_message_id(),
+        InboxEntryKind::Message,
+        shared,
+    );
+    send_in(&db, "room", "guest", &answer, at(2)).await.unwrap();
+    let later = at(1_000);
+    let revoke = |subject: &str| {
+        json!({"text":"Context session access revoked.",REVOKE_FIELD:{
+            "request_id":request.id,"bot_id":"bot","subject_id":subject,
+            "conversation_id":"room","revoked_at":later.timestamp_millis()
+        }})
+    };
+    let id = revoke_message_id(&request.id);
+    let send = |sender: &'static str, body: Value| {
+        let db = db.clone();
+        let message = outgoing(&id, InboxEntryKind::Message, body);
+        async move { send_in(&db, "room", sender, &message, later).await }
+    };
+    assert!(send("owner", revoke("owner")).await.is_err());
+    let mut addressed = revoke("guest");
+    addressed["mentions"] = json!(["bot"]);
+    assert!(send("guest", addressed).await.is_err());
+    let sent = send("guest", revoke("guest")).await.unwrap();
+    assert!(sent.bots.is_empty(), "a revocation must not wake a bot");
+}
+
+fn shared_at(request: &UserContextRequest, now: i64, decision: &str) -> Value {
+    let mut body = response(request);
+    body[RESPONSE_FIELD]["captured_at"] = json!(now);
+    body[RESPONSE_FIELD]["expires_at"] = json!(now + 300_000);
+    body[RESPONSE_FIELD]["decision"] = json!(decision);
+    body
+}
+
+async fn session_in(
+    kind: ConversationKind,
+) -> (
+    DatabaseConnection,
+    String,
+    UserContextRequest,
+    chrono::DateTime<chrono::FixedOffset>,
+) {
+    let (db, _) = setup().await;
+    let request;
+    let now = chrono::Utc::now().fixed_offset();
+    let room = if kind == ConversationKind::Direct {
+        let id = super::conversations::start_direct(
+            &db,
+            "guest",
+            &bot_principal("bot"),
+            ConversationEncryption::Plain,
+            now,
+        )
+        .await
+        .unwrap();
+        request = UserContextRequest::new(
+            "ctx1".into(),
+            "bot".into(),
+            id.clone(),
+            UserContextRequestArgs {
+                subject_id: "guest".into(),
+                fields: vec![UserContextField::Timezone],
+                purpose: "Arrange a suitable time".into(),
+                precision: UserContextPrecision::Approximate,
+                status_change: None,
+            },
+            UserContextAudience::Direct,
+            vec!["bot".into(), "guest".into()],
+            now.timestamp_millis(),
+        );
+        id
+    } else {
+        request = UserContextRequest::new(
+            "ctx1".into(),
+            "bot".into(),
+            "room".into(),
+            UserContextRequestArgs {
+                subject_id: "guest".into(),
+                fields: vec![UserContextField::Timezone],
+                purpose: "Arrange a suitable time".into(),
+                precision: UserContextPrecision::Approximate,
+                status_change: None,
+            },
+            UserContextAudience::Group,
+            vec![
+                "owner".into(),
+                "guest".into(),
+                "bot".into(),
+                "other-bot".into(),
+            ],
+            now.timestamp_millis(),
+        );
+        "room".to_owned()
+    };
+    let card = outgoing(
+        &request.id,
+        InboxEntryKind::Message,
+        json!({REQUEST_FIELD:request}),
+    );
+    send_in(&db, &room, "bot", &card, now).await.unwrap();
+    let later = now + chrono::Duration::seconds(1);
+    let mut answer = shared_at(&request, later.timestamp_millis(), "session");
+    answer[RESPONSE_FIELD]["conversation_id"] = json!(room);
+    let answer = outgoing(
+        &request.response_message_id(),
+        InboxEntryKind::Message,
+        answer,
+    );
+    send_in(&db, &room, "guest", &answer, later).await.unwrap();
+    (db, room, request, now)
+}
+
+#[tokio::test]
+async fn a_later_reply_in_a_direct_session_is_marked_derived_until_the_revocation() {
+    let (db, room, request, now) = session_in(ConversationKind::Direct).await;
+    let reply = |id: &str| outgoing(id, InboxEntryKind::Message, json!({"text":"Noted."}));
+    let marked = send_in(
+        &db,
+        &room,
+        "bot",
+        &reply("r1"),
+        now + chrono::Duration::seconds(2),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        marked.entry.envelope["body"][DERIVED_FIELD],
+        json!(request.id)
+    );
+    let revoked_at = now + chrono::Duration::seconds(3);
+    let revoke = outgoing(
+        &revoke_message_id(&request.id),
+        InboxEntryKind::Message,
+        json!({"text":"Context session access revoked.",REVOKE_FIELD:{
+            "request_id":request.id,"bot_id":"bot","subject_id":"guest",
+            "conversation_id":room,"revoked_at":revoked_at.timestamp_millis()
+        }}),
+    );
+    send_in(&db, &room, "guest", &revoke, revoked_at)
+        .await
+        .unwrap();
+    let plain = send_in(
+        &db,
+        &room,
+        "bot",
+        &reply("r2"),
+        now + chrono::Duration::seconds(4),
+    )
+    .await
+    .unwrap();
+    assert!(plain.entry.envelope["body"].get(DERIVED_FIELD).is_none());
+}
+
+#[tokio::test]
+async fn a_later_reply_in_a_group_session_is_not_marked_derived() {
+    let (db, room, _, now) = session_in(ConversationKind::Group).await;
+    let reply = outgoing("r1", InboxEntryKind::Message, json!({"text":"Noted."}));
+    let sent = send_in(
+        &db,
+        &room,
+        "bot",
+        &reply,
+        now + chrono::Duration::seconds(2),
+    )
+    .await
+    .unwrap();
+    assert!(sent.entry.envelope["body"].get(DERIVED_FIELD).is_none());
+}
+
+#[tokio::test]
+async fn a_bot_message_ask_carries_the_hops_of_the_sending_turn() {
+    use super::entries::fan_out;
+    let (db, _) = setup().await;
+    let body = json!({
+        "text":"Can you check?","mentions":["other-bot"],
+        "ask":{"id":"ask1","origin_conversation":"room","hops":1,
+               "reply_by":"2030-01-01T00:00:00+00:00","chain":["bot"],"round":1},
+    });
+    let question = outgoing("ask1", InboxEntryKind::Message, body);
+    let sent = fan_out(&db, "room", "bot", 3, &question, at(5))
+        .await
+        .unwrap();
+    assert_eq!(sent.entry.envelope["body"]["ask"]["hops"], json!(3));
 }

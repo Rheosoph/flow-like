@@ -1,4 +1,5 @@
 pub mod apply_flowscript;
+pub mod board_cleanup;
 pub mod capabilities;
 pub mod delete_board;
 pub mod element_demand;
@@ -105,11 +106,13 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/{board_id}/flowscript/apply",
-            post(apply_flowscript::apply_flowscript),
+            post(apply_flowscript::apply_flowscript)
+                .layer(DefaultBodyLimit::max(BOARD_COMMAND_BODY_LIMIT_BYTES)),
         )
         .route(
             "/{board_id}/flowscript/format",
-            post(format_flowscript::format_flowscript),
+            post(format_flowscript::format_flowscript)
+                .layer(DefaultBodyLimit::max(BOARD_COMMAND_BODY_LIMIT_BYTES)),
         )
         .route(
             "/{board_id}/flow-ir-commit/disposition",

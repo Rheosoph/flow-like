@@ -4,9 +4,11 @@
 pub(crate) mod connectors;
 pub(crate) mod configuration;
 pub(crate) mod crew;
+pub(crate) mod flowpilot_documents;
 pub(crate) mod images;
 pub(crate) mod mail;
 pub(crate) mod people;
+pub(crate) mod rooms;
 pub(crate) mod schedule;
 pub(crate) mod skills;
 pub mod view;

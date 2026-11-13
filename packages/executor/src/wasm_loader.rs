@@ -23,7 +23,16 @@ pub(crate) struct WasmLoadReport {
 }
 
 static WASM_ENGINE: OnceCell<Arc<WasmEngine>> = OnceCell::const_new();
-static WASM_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
+const WASM_DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const WASM_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
+
+static WASM_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .connect_timeout(WASM_DOWNLOAD_CONNECT_TIMEOUT)
+        .timeout(WASM_DOWNLOAD_TIMEOUT)
+        .build()
+        .unwrap_or_default()
+});
 /// Nodes registered by one WASM package, keyed by the package cache key.
 type WasmPackageNodeCache = moka::sync::Cache<String, Arc<Vec<Arc<dyn NodeLogic>>>>;
 
@@ -133,40 +142,51 @@ pub(crate) async fn load_wasm_packages(
     let mut all_nodes: Vec<Arc<dyn NodeLogic>> = Vec::new();
     let mut failed_package_ids = BTreeSet::new();
 
-    for (package_id, pkg_ref) in wasm_packages {
-        let cache_key = package_cache_key(app_id, package_id, pkg_ref);
-        if let Some(cached_nodes) = WASM_PACKAGE_CACHE.get(&cache_key) {
-            tracing::debug!(
-                app_id = %app_id,
-                board_id = %board_id,
-                package_id = %package_id,
-                version = %pkg_ref.version,
-                node_count = cached_nodes.len(),
-                "WASM package cache hit"
-            );
-            all_nodes.extend(cached_nodes.iter().cloned());
-            continue;
-        }
-
-        match load_single_package(&engine, http, package_id, pkg_ref).await {
-            Ok(nodes) => {
-                tracing::info!(
+    let loads = wasm_packages.iter().map(|(package_id, pkg_ref)| {
+        let engine = &engine;
+        async move {
+            let cache_key = package_cache_key(app_id, package_id, pkg_ref);
+            if let Some(cached_nodes) = WASM_PACKAGE_CACHE.get(&cache_key) {
+                tracing::debug!(
+                    app_id = %app_id,
+                    board_id = %board_id,
                     package_id = %package_id,
                     version = %pkg_ref.version,
-                    node_count = nodes.len(),
-                    "Loaded WASM package"
+                    node_count = cached_nodes.len(),
+                    "WASM package cache hit"
                 );
-                let nodes = Arc::new(nodes);
-                WASM_PACKAGE_CACHE.insert(cache_key, nodes.clone());
-                all_nodes.extend(nodes.iter().cloned());
+                return (package_id, Some(cached_nodes));
             }
-            Err(e) => {
-                tracing::error!(
-                    package_id = %package_id,
-                    version = %pkg_ref.version,
-                    error = %e,
-                    "Failed to load WASM package"
-                );
+
+            match load_single_package(engine, http, package_id, pkg_ref).await {
+                Ok(nodes) => {
+                    tracing::info!(
+                        package_id = %package_id,
+                        version = %pkg_ref.version,
+                        node_count = nodes.len(),
+                        "Loaded WASM package"
+                    );
+                    let nodes = Arc::new(nodes);
+                    WASM_PACKAGE_CACHE.insert(cache_key, nodes.clone());
+                    (package_id, Some(nodes))
+                }
+                Err(e) => {
+                    tracing::error!(
+                        package_id = %package_id,
+                        version = %pkg_ref.version,
+                        error = %e,
+                        "Failed to load WASM package"
+                    );
+                    (package_id, None)
+                }
+            }
+        }
+    });
+
+    for (package_id, nodes) in futures_util::future::join_all(loads).await {
+        match nodes {
+            Some(nodes) => all_nodes.extend(nodes.iter().cloned()),
+            None => {
                 failed_package_ids.insert(package_id.clone());
             }
         }

@@ -56,7 +56,7 @@ export interface ScopeOptions {
 	boards: ScopeOption[];
 }
 
-function usePermissionLabels(): Record<BotPermission, string> {
+export function usePermissionLabels(): Record<BotPermission, string> {
 	const { t } = useTranslation("bots");
 	return useMemo(
 		() => ({
@@ -139,7 +139,10 @@ function useGroupLabels(): Record<PermissionGroupId, string> {
 	);
 }
 
-function usePresetLabels(): Record<BotRestrictionPreset | "custom", string> {
+export function usePresetLabels(): Record<
+	BotRestrictionPreset | "custom",
+	string
+> {
 	const { t } = useTranslation("bots");
 	return useMemo(
 		() => ({

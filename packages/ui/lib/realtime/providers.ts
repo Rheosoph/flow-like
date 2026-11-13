@@ -7,6 +7,8 @@ import {
 } from "../channel/aws-sigv4";
 import type {
 	RealtimeProviderStage,
+	RealtimeReply,
+	RealtimeReplyState,
 	RealtimeTransport,
 	RealtimeWakeup,
 } from "./types";
@@ -16,6 +18,7 @@ const NATS_CONNECT_TIMEOUT_MS = 10_000;
 const NATS_FLUSH_TIMEOUT_MS = 10_000;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+const CONTROL_CHARACTER = /\p{Cc}/u;
 
 export class RealtimeProviderProtocolError extends Error {}
 
@@ -25,6 +28,7 @@ export interface RealtimeProviderConnection {
 
 export interface RealtimeProviderCallbacks {
 	wakeup(wakeup: RealtimeWakeup): void;
+	reply?(reply: RealtimeReply): void;
 	disconnected(reason?: string): void;
 }
 
@@ -68,10 +72,29 @@ function validUrl(value: string, protocols: string[]): URL {
 	return url;
 }
 
-/** Provider messages can only invalidate a snapshot; the API authenticates the replay. */
-export function parseRealtimeWakeup(
-	input: unknown,
-): RealtimeWakeup | undefined {
+const WAKEUP_KEYS = ["protocol_version", "kind", "nonce"];
+const REPLY_STATES: readonly unknown[] = [
+	"writing",
+	"working",
+	"done",
+	"dropped",
+];
+
+type ReplyFields = Partial<Record<keyof RealtimeReply, unknown>>;
+
+const wakeupNonce = (nonce: unknown): nonce is string =>
+	typeof nonce === "string" &&
+	nonce !== "" &&
+	encoder.encode(nonce).byteLength <= 128 &&
+	!CONTROL_CHARACTER.test(nonce);
+
+const replyId = (value: unknown): value is string =>
+	typeof value === "string" &&
+	value.length > 0 &&
+	value.length <= 256 &&
+	!CONTROL_CHARACTER.test(value);
+
+function decodeMessage(input: unknown) {
 	let value = input;
 	if (typeof value === "string") {
 		if (encoder.encode(value).byteLength > 4096) return;
@@ -82,28 +105,85 @@ export function parseRealtimeWakeup(
 		}
 	}
 	if (!value || typeof value !== "object" || Array.isArray(value)) return;
-	if (
-		Object.keys(value).some(
-			(key) => !["protocol_version", "kind", "nonce"].includes(key),
-		)
-	)
-		return;
-	const wakeup = value as Partial<RealtimeWakeup>;
-	if (
-		wakeup.protocol_version !== 1 ||
-		wakeup.kind !== "invalidate" ||
-		typeof wakeup.nonce !== "string" ||
-		!wakeup.nonce ||
-		encoder.encode(wakeup.nonce).byteLength > 128 ||
-		/\p{Cc}/u.test(wakeup.nonce)
-	)
-		return;
-	return { protocol_version: 1, kind: "invalidate", nonce: wakeup.nonce };
+	return value;
 }
 
-function wake(callbacks: RealtimeProviderCallbacks, value: unknown): void {
-	const message = parseRealtimeWakeup(value);
-	if (message) callbacks.wakeup(message);
+function wakeupFrom(value: object) {
+	if (Object.keys(value).some((key) => !WAKEUP_KEYS.includes(key))) return;
+	const { protocol_version, kind, nonce } = value as Partial<RealtimeWakeup>;
+	if (protocol_version !== 1 || kind !== "invalidate") return;
+	if (!wakeupNonce(nonce)) return;
+	const wakeup: RealtimeWakeup = {
+		protocol_version: 1,
+		kind: "invalidate",
+		nonce,
+	};
+	return wakeup;
+}
+
+function replyIds(fields: ReplyFields) {
+	const { conversation_id, message_id, reply_to, sender_id } = fields;
+	if (!replyId(conversation_id) || !replyId(message_id)) return;
+	if (!replyId(reply_to) || !replyId(sender_id)) return;
+	return { conversation_id, message_id, reply_to, sender_id };
+}
+
+function replyBody(fields: ReplyFields) {
+	const { offset, text, state } = fields;
+	if (typeof offset !== "number" || !Number.isSafeInteger(offset)) return;
+	if (offset < 0 || typeof text !== "string" || text.length > 4096) return;
+	if (!REPLY_STATES.includes(state)) return;
+	return { offset, text, state: state as RealtimeReplyState };
+}
+
+/** A rewritten reply names its draft; the first draft leaves it out. */
+function replyDraft({ draft = 0 }: ReplyFields) {
+	if (typeof draft !== "number" || !Number.isSafeInteger(draft) || draft < 0)
+		return;
+	return draft > 0 ? { draft } : {};
+}
+
+function replyFrom(value: object) {
+	const fields = value as ReplyFields;
+	if (fields.protocol_version !== 1 || fields.kind !== "reply") return;
+	const ids = replyIds(fields);
+	const body = replyBody(fields);
+	const draft = replyDraft(fields);
+	if (!ids || !body || !draft) return;
+	const reply: RealtimeReply = {
+		protocol_version: 1,
+		kind: "reply",
+		...ids,
+		...body,
+		...draft,
+	};
+	return reply;
+}
+
+function receive(callbacks: RealtimeProviderCallbacks, input: unknown) {
+	const value = decodeMessage(input);
+	if (!value) return;
+	const wakeup = wakeupFrom(value);
+	if (wakeup) {
+		callbacks.wakeup(wakeup);
+		return;
+	}
+	const reply = replyFrom(value);
+	if (reply) callbacks.reply?.(reply);
+}
+
+/** A wake-up only invalidates a snapshot; the API authenticates the replay. */
+export function parseRealtimeWakeup(
+	input: unknown,
+): RealtimeWakeup | undefined {
+	const value = decodeMessage(input);
+	return value && wakeupFrom(value);
+}
+
+/** A reply only shortens the wait; the stored message from the replay replaces it. */
+export function parseRealtimeReply(input: unknown): RealtimeReply | undefined {
+	const value = decodeMessage(input);
+	return value && replyFrom(value);
 }
 
 interface SocketHandlers {
@@ -231,7 +311,7 @@ function azure(
 					((message.from === "server" && message.group === undefined) ||
 						(message.from === "group" && message.group === transport.group))
 				)
-					wake(callbacks, message.data);
+					receive(callbacks, message.data);
 			},
 			tick(socket) {
 				if (Date.now() - lastReceived >= 60_000)
@@ -420,7 +500,10 @@ async function aws(
 							decoder.decode(payload.slice(2, topicLength + 2)) ===
 							transport.topic
 						)
-							wake(callbacks, decoder.decode(payload.slice(topicLength + 2)));
+							receive(
+								callbacks,
+								decoder.decode(payload.slice(topicLength + 2)),
+							);
 					} else if (type === 0xd0) pingOutstanding = false;
 				}
 			},
@@ -520,7 +603,7 @@ async function nats(
 				callbacks.disconnected();
 				return;
 			}
-			wake(callbacks, decoder.decode(message.data));
+			receive(callbacks, decoder.decode(message.data));
 		},
 	});
 	try {
@@ -539,6 +622,98 @@ async function nats(
 	return { close };
 }
 
+const firebasePath = (path?: string): path is string =>
+	!!path &&
+	!path.split("/").some((segment) => segment === ".." || segment === ".");
+
+function firebaseNodeUrl(database: URL, path: string, idToken: string) {
+	const url = new URL(database);
+	url.pathname = `${path.replace(/^\/+|\/+$/g, "")}.json`;
+	url.searchParams.set("auth", idToken);
+	return url;
+}
+
+async function firebaseSubscribe(url: URL, signal: AbortSignal) {
+	const response = await fetch(url, {
+		headers: { Accept: "text/event-stream" },
+		signal,
+		credentials: "omit",
+	});
+	if (!response.ok || !response.body) {
+		await response.body?.cancel();
+		throw new Error("Firebase realtime subscription failed");
+	}
+	return response.body.getReader();
+}
+
+/** The event name and data of one server-sent event. */
+function firebaseEvent(frame: string) {
+	const lines = frame.split(/\r?\n/);
+	const name = lines
+		.find((line) => line.startsWith("event:"))
+		?.slice(6)
+		.trim();
+	const raw = lines
+		.filter((line) => line.startsWith("data:"))
+		.map((line) => line.slice(5).trim())
+		.join("\n");
+	return { name, raw };
+}
+
+/** Hands on the value of every write to the node; rejects when the stream ends. */
+async function firebaseWrites(
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+	written: (data: unknown) => void,
+	received?: () => void,
+) {
+	const streamDecoder = new TextDecoder();
+	let buffer = "";
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) throw new Error("Firebase realtime stream ended");
+			received?.();
+			if (value.byteLength > MAX_FRAME_BYTES)
+				throw new Error("Firebase realtime frame too large");
+			buffer += streamDecoder.decode(value, { stream: true });
+			if (encoder.encode(buffer).byteLength > MAX_FRAME_BYTES)
+				throw new Error("Firebase realtime frame too large");
+			for (;;) {
+				const separator = /\r?\n\r?\n/.exec(buffer);
+				if (!separator) break;
+				const { name, raw } = firebaseEvent(buffer.slice(0, separator.index));
+				buffer = buffer.slice(separator.index + separator[0].length);
+				if (name === "cancel" || name === "auth_revoked")
+					throw new Error("Firebase realtime access ended");
+				if (name === "put" || name === "patch") written(JSON.parse(raw).data);
+			}
+		}
+	} finally {
+		await reader.cancel().catch(() => {});
+		reader.releaseLock();
+	}
+}
+
+/**
+ * Replies have a node of their own beside the wake-ups, so they never hide one. Best effort: a
+ * refused read (rules that predate the node) or an ended stream waits for the next connection,
+ * and the wake-ups go on.
+ */
+function firebaseReplies(
+	url: URL,
+	callbacks: RealtimeProviderCallbacks,
+	signal: AbortSignal,
+) {
+	void firebaseSubscribe(url, signal)
+		.then((replies) =>
+			firebaseWrites(replies, (data) => {
+				const reply = parseRealtimeReply(data);
+				if (reply) callbacks.reply?.(reply);
+			}),
+		)
+		.catch(() => {});
+}
+
 async function firebase(
 	transport: Extract<RealtimeTransport, { type: "gcp_firebase_rtdb" }>,
 	callbacks: RealtimeProviderCallbacks,
@@ -548,10 +723,7 @@ async function firebase(
 	if (
 		url.search ||
 		(url.pathname !== "/" && url.pathname !== "") ||
-		!transport.path ||
-		transport.path
-			.split("/")
-			.some((segment) => segment === ".." || segment === ".")
+		!firebasePath(transport.path)
 	)
 		throw new Error("Invalid Firebase realtime path");
 	const controller = new AbortController();
@@ -595,62 +767,26 @@ async function firebase(
 		const auth = await boundedJson(exchange);
 		if (typeof auth.idToken !== "string" || !auth.idToken)
 			throw new Error("Firebase returned no identity token");
-		url.pathname = `${transport.path.replace(/^\/+|\/+$/g, "")}.json`;
-		url.searchParams.set("auth", auth.idToken);
-		const response = await fetch(url, {
-			headers: { Accept: "text/event-stream" },
-			signal: controller.signal,
-			credentials: "omit",
-		});
-		if (!response.ok || !response.body) {
-			await response.body?.cancel();
-			throw new Error("Firebase realtime subscription failed");
-		}
-		const reader = response.body.getReader();
-		void (async () => {
-			const streamDecoder = new TextDecoder();
-			let buffer = "";
-			try {
-				for (;;) {
-					const { done, value } = await reader.read();
-					if (done) throw new Error("Firebase realtime stream ended");
-					resetIdle();
-					if (value.byteLength > MAX_FRAME_BYTES)
-						throw new Error("Firebase realtime frame too large");
-					buffer += streamDecoder.decode(value, { stream: true });
-					if (encoder.encode(buffer).byteLength > MAX_FRAME_BYTES)
-						throw new Error("Firebase realtime frame too large");
-					for (;;) {
-						const separator = /\r?\n\r?\n/.exec(buffer);
-						if (!separator) break;
-						const frame = buffer.slice(0, separator.index);
-						buffer = buffer.slice(separator.index + separator[0].length);
-						const lines = frame.split(/\r?\n/);
-						const name = lines
-							.find((line) => line.startsWith("event:"))
-							?.slice(6)
-							.trim();
-						if (name === "cancel" || name === "auth_revoked")
-							throw new Error("Firebase realtime access ended");
-						if (name !== "put" && name !== "patch") continue;
-						const raw = lines
-							.filter((line) => line.startsWith("data:"))
-							.map((line) => line.slice(5).trim())
-							.join("\n");
-						const event = JSON.parse(raw);
-						wake(callbacks, event.data);
-					}
-				}
-			} catch {
-				if (!closed) {
-					close();
-					callbacks.disconnected();
-				}
-			} finally {
-				await reader.cancel().catch(() => {});
-				reader.releaseLock();
+		const wakeups = await firebaseSubscribe(
+			firebaseNodeUrl(url, transport.path, auth.idToken),
+			controller.signal,
+		);
+		void firebaseWrites(
+			wakeups,
+			(data) => receive(callbacks, data),
+			resetIdle,
+		).catch(() => {
+			if (!closed) {
+				close();
+				callbacks.disconnected();
 			}
-		})();
+		});
+		if (callbacks.reply && firebasePath(transport.reply_path))
+			firebaseReplies(
+				firebaseNodeUrl(url, transport.reply_path, auth.idToken),
+				callbacks,
+				controller.signal,
+			);
 		return { close };
 	} catch (error) {
 		close();

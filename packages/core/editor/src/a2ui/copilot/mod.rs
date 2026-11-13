@@ -537,6 +537,7 @@ impl A2UICopilot {
                         params: None,
                     },
                     model_classification: Default::default(),
+                    data_classification: None,
                 })
                 .unwrap(),
                 ..Default::default()

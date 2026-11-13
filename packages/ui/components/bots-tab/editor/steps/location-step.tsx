@@ -12,6 +12,7 @@ import { cn } from "../../../../lib/utils";
 import {
 	BOT_LOCATIONS,
 	type BotCapability,
+	type BotExecutionMode,
 	type BotLocation,
 } from "../../../../state/backend-state/bot-state";
 import { Label } from "../../../ui/label";
@@ -32,6 +33,7 @@ import {
 } from "../bot-editor-copy";
 import { BotNotice, BotStepPanel } from "../bot-editor-parts";
 import { BOT_LOCATION_ICONS } from "../bot-preview-panel";
+import { ExecutionModePicker } from "./execution-mode-picker";
 
 const THIS_COMPUTER: readonly BotLocation[] = ["desktop"];
 
@@ -39,21 +41,25 @@ export function LocationStep({
 	location,
 	localOnly = false,
 	deviceId,
+	executionMode = "native",
 	removed,
 	restored,
 	onLocationChange,
 	onDeviceChange,
+	onExecutionModeChange,
 }: Readonly<{
 	location: BotLocation;
 	/** The bot lives only on this computer, so this computer is the one host it can have. */
 	localOnly?: boolean;
 	deviceId: string | null;
+	executionMode?: BotExecutionMode;
 	/** Switched off by the last move to the cloud. */
 	removed: readonly BotCapability[];
 	/** Switched back on by the last move away from the cloud. */
 	restored: readonly BotCapability[];
 	onLocationChange: (location: BotLocation) => void;
 	onDeviceChange: (deviceId: string) => void;
+	onExecutionModeChange?: (mode: BotExecutionMode) => void;
 }>) {
 	const { t } = useTranslation("bots");
 	const capabilityCopy = useBotCapabilityCopy();
@@ -100,7 +106,12 @@ export function LocationStep({
 			)}
 			{removed.length > 0 && (
 				<BotNotice tone="warning">
-					{t("editor.location.turnedOff", { capabilities: labels(removed) })}
+					{t(
+						location === "device"
+							? "editor.location.turnedOffDevice"
+							: "editor.location.turnedOff",
+						{ capabilities: labels(removed) },
+					)}
 				</BotNotice>
 			)}
 			{restored.length > 0 && (
@@ -120,6 +131,15 @@ export function LocationStep({
 					/>
 				</div>
 			)}
+			{onExecutionModeChange &&
+				(location === "device" || executionMode === "docker") && (
+					<ExecutionModePicker
+						location={location}
+						deviceId={deviceId}
+						value={executionMode}
+						onChange={onExecutionModeChange}
+					/>
+				)}
 		</BotStepPanel>
 	);
 }

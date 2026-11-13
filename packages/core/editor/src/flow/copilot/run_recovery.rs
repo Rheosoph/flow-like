@@ -20,6 +20,26 @@ use super::work_plan::WorkPlanState;
 
 const SNAPSHOT_VERSION: u32 = 1;
 pub(super) const MAX_RECOVERIES: u32 = 3;
+const WAITING_CODES: [&str; 2] = [
+    "bot_tool_waiting_for_approval",
+    "bot_talk_waiting_for_owner",
+];
+
+/// The pause code of a call that a host gate held back for the owner's answer.
+pub(super) fn waiting_code(output: &str) -> Option<&'static str> {
+    let value = serde_json::from_str::<Value>(output).ok()?;
+    let code = value.get("code")?.as_str()?;
+    WAITING_CODES.into_iter().find(|waiting| *waiting == code)
+}
+
+/// The pause code of a fresh tool output, only when it has the shape of a host gate's hold
+/// (`status: "waiting"`); a tool's own error that happens to carry the code does not pause.
+pub(super) fn gate_waiting_code(output: &str) -> Option<&'static str> {
+    let value = serde_json::from_str::<Value>(output).ok()?;
+    (value.get("status")?.as_str()? == "waiting")
+        .then(|| waiting_code(output))
+        .flatten()
+}
 
 /// Storage is scoped to one claimed turn. Hosts must encrypt private state, validate ownership,
 /// and reject stale writers with the checkpoint revision and their current claim fence.
@@ -54,25 +74,56 @@ impl PartialEq for RecoveryHandle {
 }
 impl Eq for RecoveryHandle {}
 
+/// The call a lane runs or asks about: its durable id, and whether web content was in the model's
+/// context when the call's round began.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CallScope {
+    pub id: String,
+    pub round_web_content: bool,
+    /// The call was held in a parked round and runs now that the owner answered its card.
+    pub held_replay: bool,
+}
+
 flow_like_types::tokio::task_local! {
-    static RECOVERY_CALL_ID: String;
+    static CALL_SCOPE: CallScope;
 }
 
 /// Hosts capture this id when a gate confirms that a call has not executed and parks it.
 pub fn current_recovery_call_id() -> Option<String> {
-    RECOVERY_CALL_ID.try_with(Clone::clone).ok()
+    CALL_SCOPE.try_with(|scope| scope.id.clone()).ok()
 }
 
-pub(super) async fn scope_call<T>(id: String, future: impl std::future::Future<Output = T>) -> T {
-    RECOVERY_CALL_ID.scope(id, future).await
+/// Whether the running call's round began with web content in the model's context.
+pub fn round_has_web_content() -> bool {
+    CALL_SCOPE
+        .try_with(|scope| scope.round_web_content)
+        .unwrap_or(false)
+}
+
+/// Whether the running call is a held call of an answered round. One answer on the card covers
+/// every identical call of that round, and no call after it.
+pub fn replays_held_call() -> bool {
+    CALL_SCOPE
+        .try_with(|scope| scope.held_replay)
+        .unwrap_or(false)
+}
+
+/// The running call's scope, for a host that leaves the task before the call reaches its gate.
+pub fn current_call_scope() -> Option<CallScope> {
+    CALL_SCOPE.try_with(Clone::clone).ok()
+}
+
+/// Runs `future` as the call `scope` names; gates read it through [`current_recovery_call_id`],
+/// [`round_has_web_content`] and [`replays_held_call`].
+pub async fn scope_call<T>(scope: CallScope, future: impl std::future::Future<Output = T>) -> T {
+    CALL_SCOPE.scope(scope, future).await
 }
 
 /// A host may publish an already-finished reply without resolving a model or rerunning tools.
 pub fn finished_reply(checkpoint: &BotRunCheckpoint) -> Result<Option<String>> {
-    checkpoint.validate().map_err(|error| anyhow!(error))?;
-    let snapshot: RunSnapshot = serde_json::from_value(checkpoint.state.clone())?;
-    snapshot.validate()?;
-    Ok(snapshot.answer.map(|answer| answer.output))
+    Ok(load_checkpoint(checkpoint)?
+        .answer
+        .map(|answer| answer.output))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,6 +134,10 @@ pub(super) enum RecoveryPhase {
     Finished,
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct PendingCall {
@@ -90,6 +145,53 @@ pub(super) struct PendingCall {
     pub name: String,
     pub arguments: Value,
     pub output: Option<String>,
+    /// Known not to have run: the round never dispatched it, or a host gate confirmed it parked
+    /// for the owner. The resumed round runs it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub held: bool,
+}
+
+impl PendingCall {
+    fn open(&self) -> bool {
+        self.output.is_none()
+    }
+
+    fn tool_call(&self) -> rig::message::ToolCall {
+        rig::message::ToolCall::new(
+            self.id.clone(),
+            rig::message::ToolFunction {
+                name: self.name.clone(),
+                arguments: self.arguments.clone(),
+            },
+        )
+    }
+}
+
+/// A parked round the resume runs again: its calls in declared order, with the results that were
+/// recorded before it parked. Only its held calls run.
+#[derive(Debug, Clone)]
+pub(super) struct HeldRound {
+    calls: Vec<PendingCall>,
+}
+
+impl HeldRound {
+    pub(super) fn of(snapshot: &RunSnapshot) -> Option<Self> {
+        snapshot.resumes_held_round().then(|| Self {
+            calls: snapshot.pending_calls.clone(),
+        })
+    }
+
+    pub(super) fn tool_calls(&self) -> Vec<rig::message::ToolCall> {
+        self.calls.iter().map(PendingCall::tool_call).collect()
+    }
+
+    /// The results recorded before the round parked, by call id.
+    pub(super) fn recorded(&self) -> std::collections::HashMap<String, String> {
+        self.calls
+            .iter()
+            .filter_map(|call| Some((call.id.clone(), call.output.clone()?)))
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,6 +221,9 @@ pub(super) struct RunSnapshot {
     pub empty_continuations: usize,
     pub progress_seen: Vec<String>,
     pub stats: LLMUsageStats,
+    /// Bounded usage records saved by the host, including delegated workers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub usage_stats: Vec<Value>,
     pub web: Value,
     pub delegated_web: Value,
     pub local_app_discovery_returned: bool,
@@ -127,6 +232,9 @@ pub(super) struct RunSnapshot {
     pub approval_resume: bool,
     pub pending_calls: Vec<PendingCall>,
     pub answer: Option<SavedAnswer>,
+    /// Web content was in the model's context when the saved round began.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub web_content: bool,
 }
 
 impl RunSnapshot {
@@ -171,6 +279,17 @@ impl RunSnapshot {
         {
             return Err(anyhow!("Execution checkpoint has invalid pending calls"));
         }
+        if let Some(call) = self
+            .pending_calls
+            .iter()
+            .find(|call| call.held && !call.open())
+        {
+            return Err(anyhow!(
+                "Execution checkpoint holds {} ({}) although its result is recorded",
+                call.name,
+                call.id
+            ));
+        }
         let mut ids = std::collections::HashSet::new();
         if self.pending_calls.iter().any(|call| !ids.insert(&call.id)) {
             return Err(anyhow!("Execution checkpoint repeats a pending call id"));
@@ -179,6 +298,18 @@ impl RunSnapshot {
             validate_tool_pairs(&self.history, &self.prompt)?;
         }
         Ok(())
+    }
+
+    /// A parked round whose open calls are all known not to have run: the resume runs them
+    /// instead of ending the turn with unknown outcomes.
+    pub(super) fn resumes_held_round(&self) -> bool {
+        self.phase == RecoveryPhase::ToolsInFlight
+            && self.pending_calls.iter().any(PendingCall::open)
+            && self
+                .pending_calls
+                .iter()
+                .filter(|call| call.open())
+                .all(|call| call.held)
     }
 
     fn without_transient_content(mut self) -> Self {
@@ -199,21 +330,18 @@ impl RunSnapshot {
         {
             return Ok(false);
         }
+        self.web_content |= self.pending_calls.iter().any(|call| {
+            call.output.as_deref().is_some_and(|output| {
+                super::turn_label::brings_web_content(&call.name, &call.arguments, output)
+            })
+        });
         self.history.push(self.prompt.clone());
         self.history.push(Message::Assistant {
             id: None,
             content: OneOrMany::many(
                 self.pending_calls
                     .iter()
-                    .map(|call| {
-                        AssistantContent::ToolCall(rig::message::ToolCall::new(
-                            call.id.clone(),
-                            rig::message::ToolFunction {
-                                name: call.name.clone(),
-                                arguments: call.arguments.clone(),
-                            },
-                        ))
-                    })
+                    .map(|call| AssistantContent::ToolCall(call.tool_call()))
                     .collect::<Vec<_>>(),
             )
             .expect("batch contains calls"),
@@ -243,66 +371,17 @@ impl RunSnapshot {
     }
 }
 
-/// Reconcile only the exact call that a trusted host gate knows did not run. Other unresolved
-/// calls retain their unknown status. The returned checkpoint is ready for the host's fenced save.
-pub fn record_unexecuted_approval(
-    checkpoint: &BotRunCheckpoint,
-    call_id: &str,
-    tool_name: &str,
-) -> Result<Option<BotRunCheckpoint>> {
+fn load_checkpoint(checkpoint: &BotRunCheckpoint) -> Result<RunSnapshot> {
     checkpoint.validate().map_err(|error| anyhow!(error))?;
-    let mut snapshot: RunSnapshot = serde_json::from_value(checkpoint.state.clone())?;
+    let snapshot: RunSnapshot = serde_json::from_value(checkpoint.state.clone())?;
     snapshot.validate()?;
-    if snapshot.phase == RecoveryPhase::Ready {
-        let last_call = snapshot.history.iter().rev().find_map(|message| match message {
-            Message::Assistant { content, .. } if content.iter().any(|item| matches!(item, AssistantContent::ToolCall(_))) => Some(content),
-            _ => None,
-        }).is_some_and(|content| content.iter().any(|item| matches!(item, AssistantContent::ToolCall(call) if call.id == call_id && call.function.name == tool_name)));
-        let waiting_result = match &snapshot.prompt {
-            Message::User { content } => content.iter().any(|item| match item {
-                UserContent::ToolResult(result) if result.id == call_id => {
-                    result.content.iter().any(|item| match item {
-                        ToolResultContent::Text(text) => serde_json::from_str::<Value>(&text.text)
-                            .ok()
-                            .is_some_and(|value| {
-                                matches!(
-                                    value.get("code").and_then(Value::as_str),
-                                    Some(
-                                        "bot_tool_waiting_for_approval"
-                                            | "bot_talk_waiting_for_owner"
-                                    )
-                                )
-                            }),
-                        _ => false,
-                    })
-                }
-                _ => false,
-            }),
-            _ => false,
-        };
-        if !last_call || !waiting_result || snapshot.approval_resume {
-            return Ok(None);
-        }
-    } else if snapshot.phase == RecoveryPhase::ToolsInFlight {
-        let Some(call) = snapshot
-            .pending_calls
-            .iter_mut()
-            .find(|call| call.id == call_id && call.name == tool_name)
-        else {
-            return Ok(None);
-        };
-        if call.output.is_some() {
-            return Ok(None);
-        }
-        call.output = Some(serde_json::json!({
-        "status": "error", "code": "bot_tool_waiting_for_approval", "executed": false,
-        "message": "The host confirmed this call did not execute because it required approval. After the owner answers, reassess the current state and request the action under the current permission; do not repeat completed sibling actions.",
-        }).to_string());
-        snapshot.promote_completed_batch()?;
-    } else {
-        return Ok(None);
-    }
-    snapshot.approval_resume = true;
+    Ok(snapshot)
+}
+
+fn next_checkpoint(
+    checkpoint: &BotRunCheckpoint,
+    snapshot: RunSnapshot,
+) -> Result<BotRunCheckpoint> {
     let next = BotRunCheckpoint {
         revision: checkpoint
             .revision
@@ -312,7 +391,77 @@ pub fn record_unexecuted_approval(
         ..checkpoint.clone()
     };
     next.validate().map_err(|error| anyhow!(error))?;
-    Ok(Some(next))
+    Ok(next)
+}
+
+/// Whether a promoted round's last call is `call_id` and its saved result is a gate's pause.
+fn reports_paused_call(snapshot: &RunSnapshot, call_id: &str, tool_name: &str) -> bool {
+    let last_call = snapshot.history.iter().rev().find_map(|message| match message {
+        Message::Assistant { content, .. } if content.iter().any(|item| matches!(item, AssistantContent::ToolCall(_))) => Some(content),
+        _ => None,
+    }).is_some_and(|content| content.iter().any(|item| matches!(item, AssistantContent::ToolCall(call) if call.id == call_id && call.function.name == tool_name)));
+    let waiting_result = match &snapshot.prompt {
+        Message::User { content } => content.iter().any(|item| match item {
+            UserContent::ToolResult(result) if result.id == call_id => {
+                result.content.iter().any(|item| match item {
+                    ToolResultContent::Text(text) => waiting_code(&text.text).is_some(),
+                    _ => false,
+                })
+            }
+            _ => false,
+        }),
+        _ => false,
+    };
+    last_call && waiting_result
+}
+
+/// Whether a host should resume this checkpoint's parked round as it is: every open call is
+/// held, so the resume runs them without another model round (and needs no resume note).
+pub fn resumes_held_round(checkpoint: &BotRunCheckpoint) -> bool {
+    load_checkpoint(checkpoint).is_ok_and(|snapshot| snapshot.resumes_held_round())
+}
+
+/// Confirms the calls a host's gates parked, `(call id, tool)`: each open call among them is held
+/// and runs on resume. An open call no gate confirmed keeps its unknown outcome, so a spoofed
+/// waiting result is never replayed. Once every open call is held the resume is an approval
+/// resume. A round saved before held calls existed (already promoted with the pause as its
+/// result) is reconciled as before. The returned checkpoint is ready for the host's fenced save.
+pub fn record_held_batch(
+    checkpoint: &BotRunCheckpoint,
+    parked: &[(String, String)],
+) -> Result<Option<BotRunCheckpoint>> {
+    let mut snapshot = load_checkpoint(checkpoint)?;
+    let changed = match snapshot.phase {
+        RecoveryPhase::Ready => {
+            let paused = parked
+                .iter()
+                .any(|(id, tool)| reports_paused_call(&snapshot, id, tool));
+            let resumes = paused && !snapshot.approval_resume;
+            snapshot.approval_resume |= resumes;
+            resumes
+        }
+        RecoveryPhase::ToolsInFlight => {
+            let mut changed = false;
+            for call in snapshot
+                .pending_calls
+                .iter_mut()
+                .filter(|call| call.open() && !call.held)
+            {
+                call.held = parked
+                    .iter()
+                    .any(|(id, tool)| *id == call.id && *tool == call.name);
+                changed |= call.held;
+            }
+            let resumes = snapshot.resumes_held_round() && !snapshot.approval_resume;
+            snapshot.approval_resume |= resumes;
+            changed || resumes
+        }
+        RecoveryPhase::Finished => false,
+    };
+    if !changed {
+        return Ok(None);
+    }
+    next_checkpoint(checkpoint, snapshot).map(Some)
 }
 
 pub(super) fn image_fingerprints(images: &[UserContent]) -> Vec<String> {
@@ -407,6 +556,29 @@ fn validate_tool_pairs(history: &[Message], prompt: &Message) -> Result<()> {
     Ok(())
 }
 
+fn unrecorded_call<'a>(
+    snapshot: &'a mut RunSnapshot,
+    id: &str,
+    name: &str,
+) -> Result<&'a mut PendingCall> {
+    if snapshot.phase != RecoveryPhase::ToolsInFlight {
+        return Err(anyhow!(
+            "Cannot record a result outside its durable tool batch"
+        ));
+    }
+    let call = snapshot
+        .pending_calls
+        .iter_mut()
+        .find(|call| call.id == id && call.name == name)
+        .ok_or_else(|| anyhow!("Tool result for {name} ({id}) does not match its durable call"))?;
+    if call.output.is_some() {
+        return Err(anyhow!(
+            "Tool result for {name} ({id}) was already recorded"
+        ));
+    }
+    Ok(call)
+}
+
 pub(super) struct RecoverySession {
     store: Arc<dyn BotRunRecovery>,
     header: BotRunCheckpoint,
@@ -415,7 +587,7 @@ pub(super) struct RecoverySession {
 impl RecoverySession {
     pub async fn terminal_before_model(
         store: Arc<dyn BotRunRecovery>,
-        _original_request: &str,
+        partial_answer: Option<&str>,
     ) -> Result<Option<SavedAnswer>> {
         let (mut recovery, snapshot) = Self::load(store).await?;
         let Some(mut snapshot) = snapshot else {
@@ -425,14 +597,20 @@ impl RecoverySession {
             return Ok(Some(answer));
         }
         let plan = WorkPlanState::restore(snapshot.work_plan.clone())?;
-        let stopped = if snapshot.phase == RecoveryPhase::ToolsInFlight {
-            let calls = snapshot
+        let calls_named = |held: bool| {
+            snapshot
                 .pending_calls
                 .iter()
-                .filter(|call| call.output.is_none())
+                .filter(|call| call.open() && call.held == held)
                 .map(|call| format!("{} ({})", call.name, call.id))
                 .collect::<Vec<_>>()
-                .join(", ");
+                .join(", ")
+        };
+        let held = calls_named(true);
+        let stopped = if snapshot.phase == RecoveryPhase::ToolsInFlight
+            && !snapshot.resumes_held_round()
+        {
+            let calls = calls_named(false);
             let known = snapshot
                 .pending_calls
                 .iter()
@@ -456,7 +634,15 @@ impl RecoverySession {
                 ),
             ))
         } else if recovery.expired() {
-            Some((WorkStopReason::Budget, "The original execution deadline passed while this task was interrupted. I have not started more model or tool work.".into()))
+            Some((
+                WorkStopReason::Budget,
+                match partial_answer.map(str::trim).filter(|text| !text.is_empty()) {
+                    Some(text) => format!(
+                        "{text}\n\n(This answer was cut off at the execution deadline; I started no more model or tool work.)"
+                    ),
+                    None => "The original execution deadline passed while this task was interrupted. I have not started more model or tool work.".into(),
+                },
+            ))
         } else if snapshot.recoveries >= MAX_RECOVERIES && !snapshot.approval_resume {
             Some((WorkStopReason::Blocked, "This task reached its automatic recovery limit. I have not started another attempt.".into()))
         } else {
@@ -465,6 +651,11 @@ impl RecoverySession {
         let Some((reason, mut output)) = stopped else {
             return Ok(None);
         };
+        if !held.is_empty() {
+            output.push_str(&format!(
+                "\nThese calls waited for the owner's approval and did not run: {held}."
+            ));
+        }
         if let Some(handoff) = plan.handoff() {
             output.push_str(&format!("\n\n{handoff}"));
         }
@@ -527,21 +718,7 @@ impl RecoverySession {
         stats: LLMUsageStats,
     ) -> Result<()> {
         let mut snapshot: RunSnapshot = serde_json::from_value(self.header.state.clone())?;
-        if snapshot.phase != RecoveryPhase::ToolsInFlight {
-            return Err(anyhow!(
-                "Cannot record a result outside its durable tool batch"
-            ));
-        }
-        let Some(call) = snapshot
-            .pending_calls
-            .iter_mut()
-            .find(|call| call.id == id && call.name == name)
-        else {
-            return Err(anyhow!("Tool result does not match its durable call"));
-        };
-        if call.output.is_some() {
-            return Err(anyhow!("Tool result was already recorded"));
-        }
+        let call = unrecorded_call(&mut snapshot, id, name)?;
         let discovered_apps = name == "list_apps"
             && serde_json::from_str::<Value>(&output)
                 .ok()
@@ -552,6 +729,7 @@ impl RecoverySession {
                     )
                 });
         call.output = Some(output);
+        call.held = false;
         snapshot.work_plan = work_plan;
         snapshot.web = web;
         snapshot.delegated_web = delegated_web;
@@ -559,6 +737,32 @@ impl RecoverySession {
         snapshot.local_app_discovery_returned |= discovered_apps;
         snapshot.empty_continuations = 0;
         snapshot.promote_completed_batch()?;
+        self.save(snapshot).await
+    }
+
+    /// Calls of a parked round that were never dispatched: they are known not to have run, so the
+    /// batch stays in flight and the resumed round runs them.
+    pub async fn record_held(&mut self, calls: &[(String, String)]) -> Result<()> {
+        if calls.is_empty() {
+            return Ok(());
+        }
+        let mut snapshot: RunSnapshot = serde_json::from_value(self.header.state.clone())?;
+        for (id, name) in calls {
+            unrecorded_call(&mut snapshot, id, name)?.held = true;
+        }
+        self.save(snapshot).await
+    }
+
+    /// A resumed round is about to run its held calls: they stop being held before any runs, so
+    /// a crash during the round leaves them unknown instead of replaying a call that may have run.
+    pub async fn release_held(&mut self) -> Result<()> {
+        let mut snapshot: RunSnapshot = serde_json::from_value(self.header.state.clone())?;
+        if !snapshot.pending_calls.iter().any(|call| call.held) {
+            return Ok(());
+        }
+        for call in &mut snapshot.pending_calls {
+            call.held = false;
+        }
         self.save(snapshot).await
     }
 

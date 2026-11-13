@@ -25,7 +25,9 @@ fn card(turn_id: &str) -> ApprovalRequest {
         requester_name: None,
         room: None,
         secret: None,
+        invite: None,
         configuration_changes: None,
+        items: Vec::new(),
     }
 }
 
@@ -182,6 +184,7 @@ fn parking_posts_one_card_and_answering_releases_the_turn_without_waking_the_bot
     let wrong = ApprovalResponse {
         approval_id: "ap-other".into(),
         decision: ApprovalDecision::Once,
+        items: Vec::new(),
     };
     assert_eq!(
         fixture
@@ -193,6 +196,7 @@ fn parking_posts_one_card_and_answering_releases_the_turn_without_waking_the_bot
     let right = ApprovalResponse {
         approval_id: card.id.clone(),
         decision: ApprovalDecision::Once,
+        items: Vec::new(),
     };
     let released = fixture
         .store
@@ -269,11 +273,96 @@ fn clearing_a_conversation_hides_its_approval_cards_and_rejects_stale_answers() 
     let response = ApprovalResponse {
         approval_id: card.id,
         decision: ApprovalDecision::Once,
+        items: Vec::new(),
     };
     assert!(
         f.store
             .resolve_parked(&bot.id, "bt_clear", &response)
-            .is_err()
+            .unwrap()
+            .is_none()
     );
     assert!(f.store.conversations().unwrap().is_empty());
+}
+
+#[test]
+fn deleting_or_forgetting_a_conversation_drops_its_parked_turns() {
+    let fixture = fixture();
+    let bot = fixture.bot("Scout");
+    let first = fixture.direct(&bot);
+    let second = fixture.group(&[&bot]);
+    fixture
+        .store
+        .park_turn("bt_1", &bot.id, &first.id, "m1", &card("bt_1"))
+        .unwrap();
+    fixture
+        .store
+        .park_turn("bt_2", &bot.id, &second.id, "m2", &card("bt_2"))
+        .unwrap();
+    assert_eq!(fixture.store.parked_turns().unwrap().len(), 2);
+    fixture.store.delete_conversation(&first.id).unwrap();
+    let left = fixture.store.parked_turns().unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].turn_id, "bt_2");
+    fixture.store.forget_conversation(&second.id, None).unwrap();
+    assert!(fixture.store.parked_turns().unwrap().is_empty());
+}
+
+fn set_expiry(fixture: &super::Fixture, bot_id: &str, expires_at: Option<i64>) {
+    fixture
+        .store
+        .write(|tx, _| {
+            tx.execute(
+                "UPDATE tool_grants SET expires_at = ?1 WHERE bot_id = ?2",
+                params![expires_at, bot_id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+fn expiry(fixture: &super::Fixture, bot_id: &str) -> Option<i64> {
+    fixture
+        .store
+        .read(|db| {
+            Ok(db.query_row(
+                "SELECT expires_at FROM tool_grants WHERE bot_id = ?1",
+                [bot_id],
+                |row| row.get(0),
+            )?)
+        })
+        .unwrap()
+}
+
+#[test]
+fn a_grant_lapses_after_ninety_days_unused_and_a_use_slides_it_once_a_day() {
+    const DAY: i64 = 86_400_000_000;
+    let fixture = fixture();
+    let bot = fixture.bot("Scout");
+    let grant = key("code_run", "host:example.com");
+    let used = [("code_run".to_string(), "host:example.com".to_string())];
+    fixture.store.grant_tool(&bot.id, &grant).unwrap();
+    let granted = expiry(&fixture, &bot.id).unwrap();
+    let now = crate::store::now_micros();
+    assert!(granted > now + 89 * DAY);
+    let listed = fixture.store.tool_grants(&bot.id).unwrap();
+    assert!(listed[0].expires_at.is_some());
+
+    fixture.store.touch_tool_keys(&bot.id, &used).unwrap();
+    assert_eq!(expiry(&fixture, &bot.id), Some(granted), "within a day");
+
+    set_expiry(&fixture, &bot.id, Some(now + 60 * DAY));
+    fixture.store.touch_tool_keys(&bot.id, &used).unwrap();
+    assert!(expiry(&fixture, &bot.id).unwrap() > now + 89 * DAY);
+
+    set_expiry(&fixture, &bot.id, Some(now - DAY));
+    assert!(fixture.store.tool_grants(&bot.id).unwrap().is_empty());
+    assert!(fixture.store.tool_keys(&bot.id).unwrap().is_empty());
+    assert_eq!(
+        fixture.store.delete_tool_key(&bot.id, "code_run", "host:example.com").unwrap(),
+        false,
+        "the lapsed row was swept"
+    );
+    fixture.store.touch_tool_keys(&bot.id, &used).unwrap();
+    fixture.store.grant_tool(&bot.id, &grant).unwrap();
+    assert!(!fixture.store.tool_grants(&bot.id).unwrap().is_empty());
 }

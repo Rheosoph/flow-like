@@ -11,6 +11,8 @@
     "background": false
   },
   "simple_chat": {
+    "allow_model_selection": true,
+    "require_vlm": false,
     "allow_file_upload": true,
     "allow_voice_input": false,
     "ai_disclosure": "You’re chatting with AI — brilliant at patterns, occasionally creative with facts. Double-check the important stuff.",

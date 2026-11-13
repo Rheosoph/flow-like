@@ -1,5 +1,41 @@
+import type { GlobalChatAgentSelection } from "../../state/global-chat/global-chat-store";
+import {
+	flowPilotModelIdForProvider,
+	normalizeAIProvider,
+} from "../flowpilot/types";
+
 export interface SelectableModel {
 	id: string;
+}
+
+/**
+ * The selection a run's nested assistants use: the profile model its bot turn names, else the
+ * run's own.
+ */
+export function assistantSelection(
+	selection: GlobalChatAgentSelection,
+	assistantModelId?: string,
+): GlobalChatAgentSelection {
+	return assistantModelId
+		? { ...selection, provider: "bits", selectedModelId: assistantModelId }
+		: selection;
+}
+
+/** An assistant's error result names the model it ran on, so the bot need not guess which one failed. */
+export function withAssistantModel(
+	result: unknown,
+	selection: GlobalChatAgentSelection,
+): unknown {
+	if (!result || typeof result !== "object" || Array.isArray(result)) {
+		return result;
+	}
+	const record = result as Record<string, unknown>;
+	if (record.status !== "error" || record.model_id) return result;
+	const modelId = flowPilotModelIdForProvider(
+		normalizeAIProvider(selection.provider),
+		selection.selectedModelId,
+	);
+	return modelId ? { ...record, model_id: modelId } : result;
 }
 
 interface ResolveModelSelectionOptions<TModel extends SelectableModel> {

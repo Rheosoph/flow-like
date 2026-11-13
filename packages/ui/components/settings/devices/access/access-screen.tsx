@@ -21,6 +21,7 @@ import {
 	type AccessHeadline,
 	accessHeadline,
 } from "../../../../lib/device-management/sharing";
+import { ownNameFromClaims } from "../../../../lib/user-display";
 import { TabsContent } from "../../../ui/tabs";
 import { type DevicesT, useAreaTime } from "../primitives/area-context";
 import { PageHeader } from "../primitives/block";
@@ -80,8 +81,7 @@ const CLOUD_KEYS: ReadonlySet<AttentionKey> = new Set([
 ]);
 
 function useSignedInName(): string | undefined {
-	const profile = useContext(AuthContext)?.user?.profile;
-	return profile?.name ?? profile?.preferred_username ?? profile?.email;
+	return ownNameFromClaims(useContext(AuthContext)?.user?.profile);
 }
 
 function subLine(

@@ -67,6 +67,7 @@ async fn authoritative_enrollment_and_replay() {
         include_str!("../../../prisma/migrations/20261001120000_device_console/migration.sql"),
         include_str!("../../../prisma/migrations/20261002120000_device_schedules/migration.sql"),
         include_str!("../../../prisma/migrations/20261105190000_device_bot_host/migration.sql"),
+        include_str!("../../../prisma/migrations/20261113121000_device_bot_docker/migration.sql"),
     ]
     .into_iter()
     .flat_map(|migration| migration.split(';'))

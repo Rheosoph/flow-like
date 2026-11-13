@@ -3,6 +3,7 @@
 //! reference for every source) and `knowledge` (on-demand RAG indexes in the workspace).
 //! Contract: `todo/bots-capabilities/lanes/BOT-TOOLS.md`.
 
+pub mod barcode;
 pub mod browser;
 pub mod code;
 pub mod computer;
@@ -27,6 +28,7 @@ pub mod layout;
 pub mod notify;
 pub mod outcome;
 pub mod people;
+pub mod rooms;
 pub mod schedule;
 pub mod secret_text;
 pub mod secrets;
@@ -48,6 +50,7 @@ use std::time::Instant;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+pub use barcode::BarcodeReader;
 pub use browser::{BrowserBackend, BrowserStep, PageState};
 pub use code::{LanguageSupport, RunRequest, RunResponse, RunStatus, SandboxBackend};
 pub use computer::{ComputerAction, ComputerBackend, Screen};
@@ -56,14 +59,15 @@ pub use data_backend::{DataBackend, NetworkTable, SourceTable};
 pub use documents::DocumentBackend;
 pub use embed::{KnowledgeEmbedder, ModelEmbedder};
 pub use env::{
-    Access, AppGrant, AppTables, Attachment, Environment, FileData, FileEntry, FileMeta, Limits,
-    MemorySessions, ModelRole, Progress, Scope, SessionCache, ToolEnv,
+    Access, AppGrant, AppTables, Attachment, Environment, FileData, FileEntry, FileLink, FileMeta,
+    Limits, MemorySessions, ModelRole, Progress, Scope, SessionCache, ToolEnv,
 };
 pub use error::{ToolError, ToolResult};
 pub use files::FileRef;
 pub use notify::{NoticeReceipt, OwnerNotice, OwnerNotifier, TurnSite};
 pub use outcome::{Status, ToolImage, ToolOutcome, ToolOutput, Usage};
 pub use people::{Contact, Delivery, PeopleBackend, PersonMessage};
+pub use rooms::{InviteOutcome, InviteTarget, RoomInvites};
 pub use schedule::Scheduler;
 pub use secrets::SecretInfo;
 pub use shell::{LocalShell, ShellBackend, ShellRequest, ShellResponse};
@@ -100,10 +104,13 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         crew::GET_BOT => crew::get_bot(env, parse_args(tool, args)?).await,
         crew::CREATE_BOT => crew::create_bot(env, args).await,
         crew::UPDATE_BOT => crew::update_bot(env, parse_args(tool, args)?).await,
+        crew::DELETE_BOT => crew::delete_bot(env, parse_args(tool, args)?).await,
+        crew::LIST_BOT_DEVICES => crew::list_bot_devices(env, parse_args(tool, args)?).await,
         files::FILE_LIST => files::file_list(env, parse_args(tool, args)?).await,
         files::FILE_READ => files::file_read(env, parse_args(tool, args)?).await,
         files::FILE_SAVE => files::file_save(env, parse_args(tool, args)?).await,
         files::FILE_WRITE => files::file_write(env, parse_args(tool, args)?).await,
+        files::FILE_LINK => files::file_link(env, parse_args(tool, args)?).await,
         knowledge::KNOWLEDGE_CREATE => {
             knowledge::knowledge_create(env, parse_args(tool, args)?).await
         }
@@ -115,11 +122,16 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         knowledge::KNOWLEDGE_DROP => knowledge::knowledge_drop(env, parse_args(tool, args)?).await,
         documents::FILE_SUMMARIZE => documents::file_summarize(env, parse_args(tool, args)?).await,
         documents::FILE_EXTRACT => documents::file_extract(env, parse_args(tool, args)?).await,
+        documents::FILE_EXTRACT_CONTENT => {
+            documents::file_extract_content(env, parse_args(tool, args)?).await
+        }
         code::CODE_RUN => code::code_run(env, parse_args(tool, args)?).await,
         image::IMAGE_GENERATE => image::image_generate(env, parse_args(tool, args)?).await,
+        barcode::BARCODE_READ => barcode::barcode_read(env, parse_args(tool, args)?).await,
         notify::MESSAGE_OWNER => notify::message_owner(env, parse_args(tool, args)?).await,
         people::LIST_PEOPLE => people::list_people(env, parse_args(tool, args)?).await,
         people::MESSAGE_PERSON => people::message_person(env, parse_args(tool, args)?).await,
+        rooms::ROOM_INVITE => rooms::room_invite(env, parse_args(tool, args)?).await,
         user_context::USER_CONTEXT_AVAILABLE => {
             user_context::user_context_available(env, parse_args(tool, args)?).await
         }
@@ -157,6 +169,7 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         schedule::SCHEDULE_TASK => schedule::schedule_task(env, parse_args(tool, args)?).await,
         schedule::LIST_TASKS => schedule::list_tasks(env, parse_args(tool, args)?).await,
         schedule::CANCEL_TASK => schedule::cancel_task(env, parse_args(tool, args)?).await,
+        schedule::UPDATE_TASK => schedule::update_task(env, parse_args(tool, args)?).await,
         skills::SKILL_LOAD => skills::skill_load(env, parse_args(tool, args)?).await,
         skills::SKILL_PROPOSE => skills::skill_propose(env, parse_args(tool, args)?).await,
         skills::SKILL_CALL => skills::skill_call(env, parse_args(tool, args)?).await,

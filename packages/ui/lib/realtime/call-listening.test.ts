@@ -1,14 +1,25 @@
 import { describe, expect, test } from "bun:test";
 import { type IBit, IBitTypes } from "../schema";
 import {
+	BARGE_IN_CONFIRM_MS,
+	BARGE_IN_VAD_PROBABILITY,
+	END_SILENCE_MS,
+	INCOMPLETE_TURN_SILENCE_MS,
+	MIN_SPEECH_MS,
 	STT_LOCAL_PROVIDER,
+	TURN_CHECK_SILENCE_MS,
 	type Utterance,
+	VAD_CONTINUE_PROBABILITY,
+	VAD_START_PROBABILITY,
 	bytesToBase64,
+	createBargeInDetector,
 	createSerialQueue,
 	createUtteranceSegmenter,
 	encodeWav,
+	offersCalls,
 	resample,
 	resolveSttChoice,
+	rms,
 } from "./call-listening";
 
 const RATE = 16_000;
@@ -61,7 +72,11 @@ describe("createUtteranceSegmenter", () => {
 			firstSamples,
 		);
 		expect(previews[0].samples).toEqual(firstSamples);
-		expect(previews).toHaveLength(2);
+		expect(previews).toHaveLength(3);
+		expect(previews[2].settled).toBe(true);
+		expect(previews[2].samples).toEqual(final[0].samples);
+		expect(previews[2].offsetMs).toBe(final[0].offsetMs);
+		expect(previews[2].durationMs).toBe(final[0].durationMs);
 		expect(segmenter.flush()).toBeNull();
 	});
 
@@ -112,7 +127,7 @@ describe("createUtteranceSegmenter", () => {
 		]);
 	});
 
-	test("cuts one utterance after 700 ms of silence", () => {
+	test("cuts one utterance after 450 ms of silence", () => {
 		const segmenter = createUtteranceSegmenter();
 		const found = feed(
 			segmenter,
@@ -125,9 +140,50 @@ describe("createUtteranceSegmenter", () => {
 		expect(found[0].durationMs).toBeLessThan(1500);
 	});
 
+	test("a settled preview is emitted once, with exactly the final's audio", () => {
+		const previews: Utterance[] = [];
+		const segmenter = createUtteranceSegmenter({
+			onPartial: (utterance) => previews.push(utterance),
+		});
+		const found = feed(segmenter, join(tone(800), silence(1000)));
+		const settled = previews.filter((utterance) => utterance.settled);
+		expect(END_SILENCE_MS).toBe(450);
+		expect(settled).toHaveLength(1);
+		expect(found).toHaveLength(1);
+		expect(settled[0].offsetMs).toBe(found[0].offsetMs);
+		expect(settled[0].samples).toEqual(found[0].samples);
+		expect(settled[0].durationMs).toBe(found[0].durationMs);
+	});
+
+	test("speech resuming after a settled preview settles again with the longer audio", () => {
+		const previews: Utterance[] = [];
+		const segmenter = createUtteranceSegmenter({
+			onPartial: (utterance) => previews.push(utterance),
+		});
+		const found = feed(
+			segmenter,
+			join(tone(800), silence(300), tone(800), silence(1000)),
+		);
+		const settled = previews.filter((utterance) => utterance.settled);
+		expect(settled).toHaveLength(2);
+		expect(settled[1].samples.length).toBeGreaterThan(
+			settled[0].samples.length,
+		);
+		expect(settled[1].samples).toEqual(found[0].samples);
+	});
+
+	test("short noises never settle", () => {
+		const previews: Utterance[] = [];
+		const segmenter = createUtteranceSegmenter({
+			onPartial: (utterance) => previews.push(utterance),
+		});
+		feed(segmenter, join(tone(200), silence(1000)));
+		expect(previews).toEqual([]);
+	});
+
 	test("waits for the full silence before ending", () => {
 		const segmenter = createUtteranceSegmenter();
-		expect(feed(segmenter, join(tone(1000), silence(400)))).toHaveLength(0);
+		expect(feed(segmenter, join(tone(1000), silence(300)))).toHaveLength(0);
 		expect(segmenter.flush()?.durationMs).toBeGreaterThan(1000);
 	});
 
@@ -271,6 +327,36 @@ describe("resolveSttChoice", () => {
 		expect(resolveSttChoice([], { desktop: true, installed: none })).toBeNull();
 	});
 
+	test("local only never falls back to the hosted gateway", () => {
+		expect(
+			resolveSttChoice([hosted, local], {
+				desktop: true,
+				installed: new Set(["whisper"]),
+				localOnly: true,
+			}),
+		).toEqual({ bitId: "hub.example:whisper", route: "local" });
+		for (const desktop of [true, false]) {
+			expect(
+				resolveSttChoice([local, hosted], {
+					desktop,
+					installed: desktop ? none : new Set(["whisper"]),
+					localOnly: true,
+				}),
+			).toBeNull();
+		}
+	});
+
+	test("an encrypted conversation offers calls only with a speech model on the device", () => {
+		const onDevice = { bitId: "hub.example:whisper", route: "local" } as const;
+		const hostedChoice = { bitId: "or-whisper", route: "remote" } as const;
+		for (const speech of [onDevice, hostedChoice, null]) {
+			expect(offersCalls(false, speech)).toBe(true);
+		}
+		expect(offersCalls(true, onDevice)).toBe(true);
+		expect(offersCalls(true, hostedChoice)).toBe(false);
+		expect(offersCalls(true, null)).toBe(false);
+	});
+
 	test("skips custom keys, legacy aliases and unsupported hosted providers", () => {
 		const unsupported = [
 			"custom:openai",
@@ -348,5 +434,293 @@ describe("createSerialQueue", () => {
 		queue.push(1);
 		await new Promise((r) => setTimeout(r, 5));
 		expect(ran).toEqual([]);
+	});
+});
+
+describe("createBargeInDetector", () => {
+	const detect = (signal: Float32Array) => {
+		const detector = createBargeInDetector();
+		const hits: Float32Array[][] = [];
+		for (let at = 0; at < signal.length; at += CHUNK) {
+			const hit = detector.push(signal.subarray(at, at + CHUNK));
+			if (hit) hits.push(hit);
+		}
+		return hits;
+	};
+
+	test("ignores speech-level and echo-level audio below the raised threshold", () => {
+		expect(detect(tone(3000, 0.04))).toEqual([]);
+	});
+
+	test("needs 300 ms of loud audio and tolerates short gaps", () => {
+		expect(detect(tone(200, 0.4))).toEqual([]);
+		expect(
+			detect(join(tone(200, 0.4), silence(100), tone(100, 0.4))),
+		).toHaveLength(1);
+		expect(
+			detect(join(tone(100, 0.4), silence(900), tone(100, 0.4), silence(900))),
+		).toEqual([]);
+	});
+
+	test("returns the window starting just before the first loud chunk", () => {
+		const [hit] = detect(join(silence(300), tone(400, 0.4)));
+		expect(hit.length).toBeLessThanOrEqual(6);
+		expect(hit.length).toBeGreaterThanOrEqual(4);
+		expect(hit[0].every((value) => value === 0)).toBe(true);
+	});
+});
+
+describe("createUtteranceSegmenter with a voice-activity model", () => {
+	const speechOf = (chunk: Float32Array) => (rms(chunk) > 0.01 ? 0.9 : 0.02);
+
+	function harness(
+		options: { turnModel?: boolean; onPartial?: (u: Utterance) => void } = {},
+	) {
+		const asks: { id: number; samples: Float32Array }[] = [];
+		const segmenter = createUtteranceSegmenter({
+			onPartial: options.onPartial,
+			onTurnCheck:
+				options.turnModel === false
+					? undefined
+					: (id, samples) => {
+							asks.push({ id, samples });
+							return true;
+						},
+		});
+		const push = (signal: Float32Array, probability = speechOf) => {
+			const out: Utterance[] = [];
+			for (let at = 0; at < signal.length; at += CHUNK) {
+				const chunk = signal.subarray(at, at + CHUNK);
+				out.push(...segmenter.push(chunk, probability(chunk)));
+			}
+			return out;
+		};
+		return { segmenter, asks, push };
+	}
+
+	test("a short 'Ja' passes with the model and is dropped by the energy rule", () => {
+		const h = harness();
+		expect(h.push(join(silence(300), tone(300, 0.3), silence(200)))).toEqual(
+			[],
+		);
+		expect(h.asks).toHaveLength(1);
+		const [done] = h.segmenter.answerTurn(h.asks[0].id, 0.95);
+		expect(done.turn).toMatchObject({ source: "model", probability: 0.95 });
+
+		const energy = createUtteranceSegmenter();
+		expect(
+			feed(energy, join(silence(300), tone(300, 0.3), silence(600))),
+		).toEqual([]);
+	});
+
+	test("rejects a sound shorter than the minimum speech", () => {
+		const h = harness();
+		h.push(join(tone(100, 0.3), silence(300)));
+		expect(h.segmenter.answerTurn(h.asks[0].id, 0.95)).toEqual([]);
+	});
+
+	test("a short answer still passes when its last blocks were judged by energy", () => {
+		const h = harness({ turnModel: false });
+		expect(h.push(join(silence(300), tone(300, 0.3)))).toEqual([]);
+		const out = feed(h.segmenter, silence(500));
+		expect(out).toHaveLength(1);
+		expect(out[0].turn?.source).toBe("silence");
+	});
+
+	test("an incomplete verdict keeps holding through blocks judged by energy", () => {
+		const h = harness();
+		h.push(join(tone(1000, 0.3), silence(200)));
+		expect(h.segmenter.answerTurn(h.asks[0].id, 0.1)).toEqual([]);
+		expect(feed(h.segmenter, silence(1200))).toEqual([]);
+		const [done] = feed(h.segmenter, silence(100));
+		expect(done.turn).toMatchObject({ source: "silence", waitedMs: 1500 });
+	});
+
+	test("hysteresis starts above 0.5 and continues above 0.35", () => {
+		const segmenter = createUtteranceSegmenter({ onTurnCheck: () => true });
+		const chunk = tone(100, 0.3);
+		segmenter.push(chunk, 0.4);
+		expect(segmenter.flush()).toBeNull();
+		segmenter.push(chunk, 0.6);
+		segmenter.push(chunk, 0.4);
+		segmenter.push(chunk, 0.4);
+		segmenter.push(chunk, 0.2);
+		const done = segmenter.flush();
+		expect(done?.turn?.waitedMs).toBe(100);
+		expect(done?.durationMs).toBeGreaterThanOrEqual(300);
+	});
+
+	test("a complete turn finishes as soon as the model says so, about 200 ms after speech", () => {
+		const previews: Utterance[] = [];
+		const h = harness({ onPartial: (u) => previews.push(u) });
+		const speech = join(silence(200), tone(1000, 0.3));
+		expect(h.push(speech)).toEqual([]);
+		expect(h.asks).toHaveLength(0);
+		expect(h.push(silence(100))).toEqual([]);
+		expect(h.asks).toHaveLength(0);
+		expect(h.push(silence(100))).toEqual([]);
+		expect(h.asks).toHaveLength(1);
+		const settled = previews.filter((u) => u.settled);
+		expect(settled).toHaveLength(1);
+		const [done] = h.segmenter.answerTurn(h.asks[0].id, 0.8);
+		expect(done.turn).toEqual({
+			source: "model",
+			probability: 0.8,
+			waitedMs: 200,
+		});
+		expect(done.speechEndMs).toBe(1200);
+		expect(done.samples).toEqual(settled[0].samples);
+		expect(done.offsetMs).toBe(settled[0].offsetMs);
+		expect(done.durationMs).toBe(settled[0].durationMs);
+	});
+
+	test("the turn check sees the whole utterance so far", () => {
+		const h = harness();
+		h.push(join(tone(1000, 0.3), silence(200)));
+		expect(h.asks[0].samples.length).toBe(RATE * 1.2);
+	});
+
+	test("an incomplete turn keeps listening, asks again after speech resumes and ends at 1500 ms", () => {
+		const h = harness();
+		h.push(join(tone(1000, 0.3), silence(200)));
+		expect(h.segmenter.answerTurn(h.asks[0].id, 0.1)).toEqual([]);
+		expect(h.push(silence(1000))).toEqual([]);
+		h.push(tone(500, 0.3));
+		expect(h.asks).toHaveLength(1);
+		expect(h.push(silence(200))).toEqual([]);
+		expect(h.asks).toHaveLength(2);
+		expect(h.segmenter.answerTurn(h.asks[1].id, 0.2)).toEqual([]);
+		expect(h.push(silence(1200))).toEqual([]);
+		const [done] = h.push(silence(100));
+		expect(done.turn).toEqual({
+			source: "silence",
+			probability: 0.2,
+			waitedMs: 1500,
+		});
+		expect(done.durationMs).toBe(2850);
+	});
+
+	test("a stale answer after speech resumed is ignored", () => {
+		const h = harness();
+		h.push(join(tone(1000, 0.3), silence(200)));
+		const stale = h.asks[0].id;
+		h.push(tone(400, 0.3));
+		expect(h.segmenter.answerTurn(stale, 0.9)).toEqual([]);
+		h.push(silence(200));
+		expect(h.asks).toHaveLength(2);
+	});
+
+	test("an unanswered check ends the turn by the silence rule and its late answer is ignored", () => {
+		const h = harness();
+		expect(h.push(join(tone(1000, 0.3), silence(400)))).toEqual([]);
+		const [done] = h.push(silence(100));
+		expect(done.turn).toMatchObject({ source: "silence", waitedMs: 500 });
+		expect(h.segmenter.answerTurn(h.asks[0].id, 0.1)).toEqual([]);
+		expect(h.segmenter.answerTurn(h.asks[0].id, 0.9)).toEqual([]);
+	});
+
+	test("without a turn model the utterance ends at 450 ms of silence", () => {
+		const declined = createUtteranceSegmenter({ onTurnCheck: () => false });
+		const withoutModel = (segmenter: typeof declined) => {
+			const out: Utterance[] = [];
+			for (const part of [tone(1000, 0.3), silence(500)]) {
+				for (let at = 0; at < part.length; at += CHUNK) {
+					const chunk = part.subarray(at, at + CHUNK);
+					out.push(...segmenter.push(chunk, speechOf(chunk)));
+				}
+			}
+			return out;
+		};
+		const missing = harness({ turnModel: false });
+		missing.push(tone(1000, 0.3));
+		expect(missing.push(silence(400))).toEqual([]);
+		expect(missing.push(silence(100))[0].turn).toMatchObject({
+			source: "silence",
+			waitedMs: 500,
+		});
+		expect(withoutModel(declined)[0].turn?.source).toBe("silence");
+	});
+
+	test("a null answer falls back to the 450 ms rule", () => {
+		const h = harness();
+		h.push(join(tone(1000, 0.3), silence(200)));
+		expect(h.segmenter.answerTurn(h.asks[0].id, null)).toEqual([]);
+		expect(h.push(silence(200))).toEqual([]);
+		const [done] = h.push(silence(100));
+		expect(done.turn).toMatchObject({ source: "silence", waitedMs: 500 });
+	});
+
+	test("continuous speech is cut at 15 s and flush reports its source", () => {
+		const h = harness();
+		const [cut] = h.push(tone(15_000, 0.3));
+		expect(cut.turn?.source).toBe("max");
+		h.push(tone(500, 0.3));
+		expect(h.segmenter.flush()?.turn?.source).toBe("flush");
+	});
+
+	test("chunks without a probability follow the energy rules, mid-stream", () => {
+		const segmenter = createUtteranceSegmenter({ onTurnCheck: () => true });
+		const out = feed(segmenter, join(tone(700, 0.3), silence(500)));
+		expect(out).toHaveLength(1);
+		expect(out[0].turn).toMatchObject({ source: "silence", waitedMs: 500 });
+	});
+
+	test("reset drops a pending turn check", () => {
+		const h = harness();
+		h.push(join(tone(1000, 0.3), silence(200)));
+		h.segmenter.reset();
+		expect(h.segmenter.answerTurn(h.asks[0].id, 0.9)).toEqual([]);
+	});
+});
+
+describe("createBargeInDetector with a voice-activity model", () => {
+	const detect = (signal: Float32Array, probability?: number) => {
+		const detector = createBargeInDetector();
+		const hits: Float32Array[][] = [];
+		for (let at = 0; at < signal.length; at += CHUNK) {
+			const hit = detector.push(signal.subarray(at, at + CHUNK), probability);
+			if (hit) hits.push(hit);
+		}
+		return hits;
+	};
+
+	test("250 ms of loud speech starts a barge-in", () => {
+		expect(detect(tone(200, 0.4), 0.9)).toEqual([]);
+		expect(detect(tone(300, 0.4), 0.9)).toHaveLength(1);
+	});
+
+	test("loud audio the model calls non-speech does not", () => {
+		expect(detect(tone(3000, 0.4), 0.3)).toEqual([]);
+	});
+
+	test("speech the model hears but that is below the barge threshold does not", () => {
+		expect(detect(tone(3000, 0.04), 0.95)).toEqual([]);
+	});
+
+	test("the window is 500 ms", () => {
+		const gap = join(
+			tone(100, 0.4),
+			silence(600),
+			tone(100, 0.4),
+			silence(600),
+		);
+		expect(detect(gap, 0.9)).toEqual([]);
+	});
+
+	test("without a probability the loud-only rule applies", () => {
+		expect(detect(tone(200, 0.4))).toEqual([]);
+		expect(detect(tone(300, 0.4))).toHaveLength(1);
+	});
+});
+
+describe("model endpointing constants", () => {
+	test("match the contract", () => {
+		expect(MIN_SPEECH_MS).toBe(250);
+		expect(TURN_CHECK_SILENCE_MS).toBe(200);
+		expect(INCOMPLETE_TURN_SILENCE_MS).toBe(1500);
+		expect(VAD_START_PROBABILITY).toBe(0.5);
+		expect(VAD_CONTINUE_PROBABILITY).toBe(0.35);
+		expect(BARGE_IN_CONFIRM_MS).toBe(500);
+		expect(BARGE_IN_VAD_PROBABILITY).toBe(0.6);
 	});
 });

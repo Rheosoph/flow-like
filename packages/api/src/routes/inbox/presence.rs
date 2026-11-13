@@ -272,7 +272,13 @@ pub async fn conversation_realtime(
     let name = user::Entity::find_by_id(&sub)
         .one(&state.db)
         .await?
-        .and_then(|model| model.name);
+        .and_then(|model| {
+            crate::routes::user::identity::public_display_name(
+                model.name.as_deref(),
+                model.preferred_username.as_deref(),
+                model.email.as_deref(),
+            )
+        });
 
     let jti = create_id();
     let issued = state.realtime_ice.issue(&jti).await.map_err(|error| {

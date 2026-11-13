@@ -488,7 +488,17 @@ impl Usage {
             completion_tokens: Self::safe_downcast(usage.output_tokens),
             total_tokens: Self::safe_downcast(usage.total_tokens),
             cost: None,
-            prompt_tokens_details: None,
+            // Rig uses zero for both an unreported count and a cache miss. Preserve that
+            // uncertainty unless at least one cache counter proves the provider reported it.
+            prompt_tokens_details: (usage.cached_input_tokens > 0
+                || usage.cache_creation_input_tokens > 0)
+                .then(|| PromptTokenDetails {
+                    cached_tokens: (usage.cached_input_tokens > 0)
+                        .then(|| Self::safe_downcast(usage.cached_input_tokens)),
+                    cache_write_tokens: (usage.cache_creation_input_tokens > 0)
+                        .then(|| Self::safe_downcast(usage.cache_creation_input_tokens)),
+                    audio_tokens: None,
+                }),
             completion_tokens_details: None,
             upstream_inference_cost: None,
         }
@@ -497,6 +507,31 @@ impl Usage {
     fn safe_downcast(value: u64) -> u32 {
         u32::try_from(value).unwrap_or(u32::MAX)
     }
+
+    pub fn accumulate(&mut self, other: &Self) {
+        self.prompt_tokens = self.prompt_tokens.saturating_add(other.prompt_tokens);
+        self.completion_tokens = self
+            .completion_tokens
+            .saturating_add(other.completion_tokens);
+        self.total_tokens = self.total_tokens.saturating_add(other.total_tokens);
+        if let Some(cost) = other.cost {
+            self.cost = Some(self.cost.unwrap_or(0.0) + cost);
+        }
+        if let Some(details) = &other.prompt_tokens_details {
+            let total = self
+                .prompt_tokens_details
+                .get_or_insert_with(Default::default);
+            add_count(&mut total.cached_tokens, details.cached_tokens);
+            add_count(&mut total.cache_write_tokens, details.cache_write_tokens);
+            add_count(&mut total.audio_tokens, details.audio_tokens);
+        }
+    }
+}
+
+fn add_count(total: &mut Option<u32>, count: Option<u32>) {
+    if let Some(count) = count {
+        *total = Some(total.unwrap_or(0).saturating_add(count));
+    }
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
@@ -504,10 +539,13 @@ pub struct CostDetails {
     upstream_inference_cost: Option<u32>,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 pub struct PromptTokenDetails {
-    cached_tokens: Option<u32>,
-    audio_tokens: Option<u32>,
+    pub cached_tokens: Option<u32>,
+    /// Input tokens written to the provider cache, already included in prompt_tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<u32>,
+    pub audio_tokens: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
@@ -641,9 +679,7 @@ impl Response {
         }
 
         if let Some(usage) = chunk.usage {
-            self.usage.completion_tokens += usage.completion_tokens;
-            self.usage.prompt_tokens += usage.prompt_tokens;
-            self.usage.total_tokens += usage.total_tokens;
+            self.usage.accumulate(&usage);
         }
 
         for choice in chunk.choices {
@@ -686,6 +722,34 @@ pub struct ModelCallEntry {
     pub usage: Usage,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
+}
+
+/// The most recent answer request. Estimates include system text, tools and image reserves.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+pub struct ContextUsage {
+    pub estimated_tokens: u32,
+    pub context_window: u32,
+    pub reserved_output_tokens: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measured_tokens: Option<u32>,
+}
+
+/// One context reduction. Sizes are estimates; usage is the provider's measured summary cost.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+pub struct CompactionStats {
+    pub kind: String,
+    pub trigger: String,
+    pub status: String,
+    pub before_tokens: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_tokens: Option<u32>,
+    pub duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
@@ -699,6 +763,18 @@ pub struct LLMUsageStats {
     pub iterations: Option<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub calls: Vec<ModelCallEntry>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub calls_omitted: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ContextUsage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compactions: Vec<CompactionStats>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub compactions_omitted: u32,
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 impl LLMUsageStats {
@@ -707,6 +783,7 @@ impl LLMUsageStats {
             model: response.model.clone().unwrap_or_default(),
             usage: response.usage.clone(),
             duration_ms: None,
+            purpose: None,
         };
         Self {
             usage: response.usage.clone(),
@@ -714,6 +791,7 @@ impl LLMUsageStats {
             duration_ms: None,
             iterations: None,
             calls: vec![call],
+            ..Default::default()
         }
     }
 
@@ -731,20 +809,34 @@ impl LLMUsageStats {
     }
 
     pub fn accumulate(&mut self, other: &Usage, model: Option<&str>) {
-        self.usage.prompt_tokens = self.usage.prompt_tokens.saturating_add(other.prompt_tokens);
-        self.usage.completion_tokens = self
-            .usage
-            .completion_tokens
-            .saturating_add(other.completion_tokens);
-        self.usage.total_tokens = self.usage.total_tokens.saturating_add(other.total_tokens);
-        if let Some(other_cost) = other.cost {
-            self.usage.cost = Some(self.usage.cost.unwrap_or(0.0) + other_cost);
-        }
+        self.usage.accumulate(other);
         self.calls.push(ModelCallEntry {
             model: model.unwrap_or_default().to_string(),
             usage: other.clone(),
             duration_ms: None,
+            purpose: None,
         });
+    }
+
+    pub fn record_call(&mut self, usage: &Usage, model: &str, purpose: &str, duration_ms: u64) {
+        self.accumulate(usage, Some(model));
+        if let Some(call) = self.calls.last_mut() {
+            call.purpose = Some(purpose.to_string());
+            call.duration_ms = Some(duration_ms);
+        }
+    }
+
+    pub fn merge(&mut self, other: &Self) {
+        self.usage.accumulate(&other.usage);
+        self.calls.extend(other.calls.iter().cloned());
+        self.compactions.extend(other.compactions.iter().cloned());
+        self.calls_omitted = self.calls_omitted.saturating_add(other.calls_omitted);
+        self.compactions_omitted = self
+            .compactions_omitted
+            .saturating_add(other.compactions_omitted);
+        if let Some(context) = &other.context {
+            self.context = Some(context.clone());
+        }
     }
 }
 
@@ -753,6 +845,131 @@ mod tests {
     use super::*;
     use rig::message::{DocumentSourceKind, Image, ImageDetail, ImageMediaType, Reasoning};
     use serde_json as json;
+
+    #[test]
+    fn response_chunks_preserve_cache_usage_and_cost() {
+        let mut response = Response::new();
+        response.push_chunk(ResponseChunk {
+            usage: Some(Usage {
+                prompt_tokens: 10,
+                completion_tokens: 2,
+                total_tokens: 12,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert!(response.usage.prompt_tokens_details.is_none());
+        for (cached_tokens, cache_write_tokens, cost) in
+            [(Some(80), Some(20), 0.125), (Some(40), None, 0.25)]
+        {
+            response.push_chunk(ResponseChunk {
+                usage: Some(Usage {
+                    prompt_tokens: 120,
+                    completion_tokens: 5,
+                    total_tokens: 125,
+                    cost: Some(cost),
+                    prompt_tokens_details: Some(PromptTokenDetails {
+                        cached_tokens,
+                        cache_write_tokens,
+                        audio_tokens: None,
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
+        response.push_chunk(ResponseChunk::default());
+        assert_eq!(response.usage.prompt_tokens, 250);
+        assert_eq!(response.usage.completion_tokens, 12);
+        assert_eq!(response.usage.total_tokens, 262);
+        assert_eq!(response.usage.cost, Some(0.375));
+        let details = response.usage.prompt_tokens_details.unwrap();
+        assert_eq!(details.cached_tokens, Some(120));
+        assert_eq!(details.cache_write_tokens, Some(20));
+        assert_eq!(details.audio_tokens, None);
+    }
+
+    #[test]
+    fn cache_usage_survives_conversion_aggregation_and_serialization() {
+        let mut measured = RigUsage::new();
+        measured.input_tokens = 120;
+        measured.output_tokens = 5;
+        measured.total_tokens = 125;
+        measured.cached_input_tokens = 80;
+        measured.cache_creation_input_tokens = 20;
+        let usage = Usage::from_rig(measured);
+        let mut stats = LLMUsageStats::default();
+        stats.record_call(&usage, "model", "answer", 25);
+        let mut checkpoint = LLMUsageStats::default();
+        checkpoint.record_call(&usage, "model", "context_compaction", 10);
+        stats.merge(&checkpoint);
+        let value = serde_json::to_value(&stats).unwrap();
+        assert_eq!(value["usage"]["prompt_tokens"], 240);
+        assert_eq!(value["usage"]["total_tokens"], 250);
+        assert_eq!(
+            value["usage"]["prompt_tokens_details"]["cached_tokens"],
+            160
+        );
+        assert_eq!(
+            value["usage"]["prompt_tokens_details"]["cache_write_tokens"],
+            40
+        );
+        assert_eq!(value["calls"][1]["purpose"], "context_compaction");
+        assert_eq!(value["calls"][1]["duration_ms"], 10);
+        let restored: LLMUsageStats = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.calls.len(), 2);
+    }
+
+    #[test]
+    fn missing_cache_reporting_stays_unknown_and_old_stats_still_load() {
+        assert!(
+            Usage::from_rig(RigUsage::new())
+                .prompt_tokens_details
+                .is_none()
+        );
+        let old: LLMUsageStats = serde_json::from_value(serde_json::json!({
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+            "calls": [{"model": "old", "usage": {
+                "prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12
+            }}]
+        }))
+        .unwrap();
+        assert!(old.context.is_none());
+        assert!(old.compactions.is_empty());
+        assert!(old.calls[0].purpose.is_none());
+        let mut read_only = RigUsage::new();
+        read_only.cached_input_tokens = 80;
+        assert!(
+            Usage::from_rig(read_only)
+                .prompt_tokens_details
+                .unwrap()
+                .cache_write_tokens
+                .is_none()
+        );
+        let mut write_only = RigUsage::new();
+        write_only.cache_creation_input_tokens = 20;
+        assert!(
+            Usage::from_rig(write_only)
+                .prompt_tokens_details
+                .unwrap()
+                .cached_tokens
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn cache_counts_saturate_without_adding_them_twice_to_input() {
+        let mut measured = RigUsage::new();
+        measured.input_tokens = u64::MAX;
+        measured.cached_input_tokens = u64::MAX;
+        let mut usage = Usage::from_rig(measured);
+        usage.accumulate(&usage.clone());
+        assert_eq!(usage.prompt_tokens, u32::MAX);
+        assert_eq!(
+            usage.prompt_tokens_details.unwrap().cached_tokens,
+            Some(u32::MAX)
+        );
+    }
 
     #[test]
     fn deserialize_annotations_with_content() {

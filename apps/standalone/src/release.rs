@@ -2,8 +2,8 @@ use crate::{enrollment::unix_time, supervisor, vault};
 use anyhow::{Context, Result, ensure};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use flow_like_device_protocol::{
-    Ed25519PublicKey, MAX_COMPACT_JWS_BYTES, ReleaseTarget, StandaloneArtifact, StandaloneRelease,
-    validate_release_url, verify_standalone_release,
+    Ed25519PublicKey, MAX_COMPACT_JWS_BYTES, ReleaseTarget, StandaloneArtifact,
+    StandaloneContainer, StandaloneRelease, validate_release_url, verify_standalone_release,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -148,6 +148,42 @@ pub fn installed_release(state_dir: &Path) -> Option<StandaloneRelease> {
     }
     let payload = std::str::from_utf8(&compact).ok()?.split('.').nth(1)?;
     serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).ok()?).ok()
+}
+
+/// Only an installed, signed release may name the prebuilt image used for a bot container.
+pub fn installed_playground_container(state_dir: &Path) -> Result<StandaloneContainer> {
+    let trust = ReleaseTrust::load(&state_dir.join("release-trust.json"))?;
+    let compact =
+        String::from_utf8(vault::read_private(&state_dir.join("active-release.jws"))?.to_vec())?;
+    ensure!(
+        compact.len() <= MAX_COMPACT_JWS_BYTES,
+        "Installed release metadata is too large"
+    );
+    let payload = compact
+        .split('.')
+        .nth(1)
+        .context("Installed release metadata has no payload")?;
+    let issued: StandaloneRelease = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload)?)?;
+    // Installation checked freshness. Verify the same installed pin after its download window ends.
+    let release = verify_standalone_release(
+        &compact,
+        &trust.keys()?,
+        trust.minimum_sequence,
+        issued.issued_at,
+    )?;
+    let container = release
+        .container
+        .context("This installed release has no signed bot container image; update the agent")?;
+    let platform = match std::env::consts::ARCH {
+        "x86_64" => "linux/amd64",
+        "aarch64" => "linux/arm64",
+        _ => anyhow::bail!("Bot containers require an AMD64 or ARM64 device"),
+    };
+    ensure!(
+        container.platforms.iter().any(|entry| entry == platform),
+        "The signed bot container image does not support this device's architecture"
+    );
+    Ok(container)
 }
 
 const METADATA_TIMEOUT: Duration = Duration::from_secs(300);
@@ -428,10 +464,14 @@ impl PreparedPackage {
                 .docker_platform()
                 .context("Missing container platform")?;
             let compose = format!(
-                "services:\n  agent:\n    image: {}\n    platform: {platform}\n    restart: unless-stopped\n    user: \"${{FLOW_LIKE_DEVICE_UID:?Run start-docker.sh}}:${{FLOW_LIKE_DEVICE_GID:?Run start-docker.sh}}\"\n    working_dir: /package\n    env_file: .env\n    ports:\n      - \"${{FLOW_LIKE_PUBLISH_HOST:-127.0.0.1}}:${{FLOW_LIKE_SERVICE_PORT:-8080}}:${{FLOW_LIKE_SERVICE_PORT:-8080}}\"\n    volumes:\n      - ./:/package\n    entrypoint: [\"/bin/sh\", \"/package/container-start.sh\"]\n    stop_grace_period: 45s\n",
+                "services:\n  agent:\n    image: {}\n    platform: {platform}\n    restart: unless-stopped\n    init: true\n    shm_size: 1gb\n    cap_drop: [ALL]\n    security_opt:\n      - no-new-privileges:true\n      - seccomp=./chrome-seccomp.json\n    user: \"${{FLOW_LIKE_DEVICE_UID:?Run start-docker.sh}}:${{FLOW_LIKE_DEVICE_GID:?Run start-docker.sh}}\"\n    working_dir: /package\n    env_file: .env\n    environment:\n      HOME: /package/state\n      FLOW_LIKE_PLAYGROUND: virtual\n    ports:\n      - \"${{FLOW_LIKE_PUBLISH_HOST:-127.0.0.1}}:${{FLOW_LIKE_SERVICE_PORT:-8080}}:${{FLOW_LIKE_SERVICE_PORT:-8080}}\"\n    volumes:\n      - ./:/package\n    entrypoint: [\"/bin/sh\", \"/package/container-start.sh\"]\n    stop_grace_period: 45s\n",
                 container.image
             );
             vault::write_new_private(&directory.join("compose.yaml"), compose.as_bytes())?;
+            vault::write_new_private(
+                &directory.join("chrome-seccomp.json"),
+                include_bytes!("../packaging/chrome-seccomp.json"),
+            )?;
             script(directory, "container-start.sh", CONTAINER_START)?;
             script(directory, "start-docker.sh", DOCKER_START)?;
         }
@@ -441,7 +481,7 @@ impl PreparedPackage {
 
 const BINARY_START: &str = "#!/bin/sh\nset -eu\ncd -- \"$(dirname -- \"$0\")\"\nchmod 700 . ./flow-like-standalone\nchmod 600 .env onboarding.json release-trust.json release.jws 2>/dev/null || true\nif [ -f onboarding.json ]; then ./flow-like-standalone --state-dir ./state enroll .; fi\nif [ -f ./state/agent.env ]; then chmod 600 ./state/agent.env; fi\nexec ./flow-like-standalone --state-dir ./state run\n";
 const CONTAINER_START: &str = "#!/bin/sh\nset -eu\nif [ -f /package/onboarding.json ]; then flow-like-standalone --state-dir /package/state enroll /package; fi\nexec flow-like-standalone --state-dir /package/state run\n";
-const DOCKER_START: &str = "#!/bin/sh\nset -eu\ncd -- \"$(dirname -- \"$0\")\"\nchmod 700 .\nchmod 600 .env onboarding.json release-trust.json release.jws 2>/dev/null || true\nif [ -f ./state/agent.env ]; then chmod 600 ./state/agent.env; fi\nexport FLOW_LIKE_DEVICE_UID=\"$(id -u)\"\nexport FLOW_LIKE_DEVICE_GID=\"$(id -g)\"\nexec docker compose up -d\n";
+const DOCKER_START: &str = "#!/bin/sh\nset -eu\ncd -- \"$(dirname -- \"$0\")\"\nif [ \"$(id -u)\" = 0 ]; then echo \"Run start-docker.sh as a non-root user with Docker access; Chromium requires its sandbox.\" >&2; exit 1; fi\nchmod 700 .\nchmod 600 .env onboarding.json release-trust.json release.jws 2>/dev/null || true\nif [ -f ./state/agent.env ]; then chmod 600 ./state/agent.env; fi\nexport FLOW_LIKE_DEVICE_UID=\"$(id -u)\"\nexport FLOW_LIKE_DEVICE_GID=\"$(id -g)\"\nexec docker compose up -d\n";
 fn script(directory: &Path, name: &str, text: &str) -> Result<()> {
     vault::write_new_private(&directory.join(name), text.as_bytes())?;
     #[cfg(unix)]
@@ -484,6 +524,111 @@ mod tests {
             }],
             container: None,
         }
+    }
+
+    #[test]
+    fn bot_container_images_require_installed_signature_trust_and_supported_platform() -> Result<()>
+    {
+        let directory = tempfile::tempdir()?;
+        let key = SigningKey::generate();
+        let trust = ReleaseTrust {
+            manifest_url: "https://releases.example/release.jws".into(),
+            public_keys: vec![URL_SAFE_NO_PAD.encode(key.public_key().to_bytes()?)],
+            minimum_sequence: 2,
+        };
+        vault::write_new_private(
+            &directory.path().join("release-trust.json"),
+            &serde_json::to_vec(&trust)?,
+        )?;
+        let now = unix_time()?;
+        let mut manifest = release_manifest(2, now - 1, now + 3600);
+        let path = directory.path().join("active-release.jws");
+        let write = |manifest: &StandaloneRelease, signer: &SigningKey| -> Result<()> {
+            if path.exists() {
+                std::fs::remove_file(&path)?;
+            }
+            vault::write_new_private(&path, sign_standalone_release(manifest, signer)?.as_bytes())?;
+            Ok(())
+        };
+        write(&manifest, &key)?;
+        assert!(installed_playground_container(directory.path()).is_err());
+        let container = StandaloneContainer {
+            image: format!("ghcr.io/example/standalone@sha256:{}", "c".repeat(64)),
+            platforms: vec!["linux/amd64".into(), "linux/arm64".into()],
+        };
+        manifest.container = Some(container.clone());
+        write(&manifest, &key)?;
+        assert_eq!(installed_playground_container(directory.path())?, container);
+        let current = manifest.clone();
+        manifest.issued_at = 1;
+        manifest.expires_at = 2;
+        write(&manifest, &key)?;
+        assert_eq!(installed_playground_container(directory.path())?, container);
+        manifest = current;
+        let mut tampered = sign_standalone_release(&manifest, &key)?.into_bytes();
+        let signature = tampered.iter().rposition(|byte| *byte == b'.').unwrap() + 1;
+        tampered[signature] = if tampered[signature] == b'A' {
+            b'B'
+        } else {
+            b'A'
+        };
+        std::fs::write(&path, tampered)?;
+        assert!(installed_playground_container(directory.path()).is_err());
+        write(&manifest, &SigningKey::generate())?;
+        assert!(installed_playground_container(directory.path()).is_err());
+        manifest.container.as_mut().unwrap().platforms = vec![
+            if std::env::consts::ARCH == "x86_64" {
+                "linux/arm64"
+            } else {
+                "linux/amd64"
+            }
+            .into(),
+        ];
+        write(&manifest, &key)?;
+        assert!(installed_playground_container(directory.path()).is_err());
+        manifest.container = Some(container);
+        manifest.sequence = 1;
+        write(&manifest, &key)?;
+        assert!(installed_playground_container(directory.path()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn docker_packages_include_the_browser_sandbox_profile_and_persistent_home() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let key = SigningKey::generate();
+        let now = unix_time()?;
+        let mut manifest = release_manifest(2, now - 1, now + 3600);
+        manifest.container = Some(StandaloneContainer {
+            image: format!("ghcr.io/example/standalone@sha256:{}", "c".repeat(64)),
+            platforms: vec!["linux/amd64".into()],
+        });
+        let trust = ReleaseTrust {
+            manifest_url: "https://releases.example/release.jws".into(),
+            public_keys: vec![URL_SAFE_NO_PAD.encode(key.public_key().to_bytes()?)],
+            minimum_sequence: 2,
+        };
+        let package = PreparedPackage {
+            release: VerifiedRelease::verify(sign_standalone_release(&manifest, &key)?, &trust)?,
+            target: ReleaseTarget::LinuxX86_64,
+            mode: PackageMode::Docker,
+            binary: None,
+        };
+        package.write_payload(directory.path())?;
+        let compose = std::fs::read_to_string(directory.path().join("compose.yaml"))?;
+        assert!(compose.contains(&manifest.container.unwrap().image));
+        assert!(compose.contains("shm_size: 1gb"));
+        assert!(compose.contains("HOME: /package/state"));
+        assert!(compose.contains("FLOW_LIKE_PLAYGROUND: virtual"));
+        assert!(compose.contains("seccomp=./chrome-seccomp.json"));
+        assert!(compose.contains("cap_drop: [ALL]"));
+        assert!(compose.contains("no-new-privileges:true"));
+        assert_eq!(
+            std::fs::read(directory.path().join("chrome-seccomp.json"))?,
+            include_bytes!("../packaging/chrome-seccomp.json")
+        );
+        assert!(!directory.path().join("flow-like-standalone").exists());
+        Ok(())
     }
 
     #[test]

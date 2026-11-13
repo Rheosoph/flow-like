@@ -3,6 +3,7 @@ import {
 	decodeJwtExpiryMs,
 	prepareAuthenticatedSignaling,
 	realtimeRoomForAccess,
+	scopeSignalingFrame,
 	scopedSignalingUrl,
 } from "./authenticated-websocket";
 
@@ -53,6 +54,51 @@ describe("authenticated realtime signaling URL", () => {
 				"app_123:board_456",
 			),
 		).rejects.toThrow();
+	});
+});
+
+describe("signaling frames of a page with several rooms", () => {
+	const room = "inbox:conversation_1:room-v1";
+	const other = "app_123:board_456";
+	const frame = (message: object) => JSON.stringify(message);
+
+	test("a socket subscribes to its own room only", () => {
+		expect(
+			scopeSignalingFrame(
+				frame({ type: "subscribe", topics: [other, room] }),
+				room,
+			),
+		).toBe(frame({ type: "subscribe", topics: [room] }));
+		const own = frame({ type: "subscribe", topics: [room] });
+		expect(scopeSignalingFrame(own, room)).toBe(own);
+	});
+
+	test("another room's subscription, removal and announcement are dropped", () => {
+		for (const type of ["subscribe", "unsubscribe"]) {
+			expect(
+				scopeSignalingFrame(frame({ type, topics: [other] }), room),
+			).toBeNull();
+		}
+		expect(
+			scopeSignalingFrame(
+				frame({ type: "publish", topic: other, data: "sealed" }),
+				room,
+			),
+		).toBeNull();
+	});
+
+	test("the room's own traffic and keep-alives pass unchanged", () => {
+		for (const message of [
+			{ type: "publish", topic: room, data: "sealed" },
+			{ type: "unsubscribe", topics: [room] },
+			{ type: "subscribe", topics: [] },
+			{ type: "ping" },
+		]) {
+			expect(scopeSignalingFrame(frame(message), room)).toBe(frame(message));
+		}
+		const binary = new Uint8Array([1, 2, 3]);
+		expect(scopeSignalingFrame(binary, room)).toBe(binary);
+		expect(scopeSignalingFrame("not json", room)).toBe("not json");
 	});
 });
 

@@ -26,11 +26,31 @@ use flow_like_types::{
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, json};
 
-pub(crate) fn is_approval_response(envelope: &Value) -> bool {
-    envelope
+/// Whether the event is the owner's answer to one of their bot's cards: the sender owns a bot
+/// of the conversation, the message id is the one the card's answer has, and the sender's copy
+/// holds the card. Any other message carrying an `approval_response` is an ordinary message.
+pub(crate) async fn answers_card<C: ConnectionTrait>(
+    db: &C,
+    conversation_id: &str,
+    sender: &str,
+    message_id: &str,
+    owned_bots: bool,
+    envelope: &Value,
+) -> Result<bool, ApiError> {
+    let Some(response) = envelope
         .get("body")
         .and_then(|body| body.get("approval_response"))
-        .is_some_and(|response| !response.is_null())
+        .filter(|response| !response.is_null())
+        .and_then(|response| serde_json::from_value::<ApprovalResponse>(response.clone()).ok())
+    else {
+        return Ok(false);
+    };
+    if !owned_bots || message_id != approval_response_message_id(&response.approval_id) {
+        return Ok(false);
+    }
+    Ok(card_in(db, sender, conversation_id, &response.approval_id)
+        .await?
+        .is_some())
 }
 
 fn pair_key(owner_id: &str, bot_id: &str) -> String {

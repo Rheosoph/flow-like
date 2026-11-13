@@ -1,5 +1,5 @@
 use super::*;
-use crate::codes;
+use crate::{LOCAL_OWNER_ID, codes};
 use flow_like_types::inbox::{
     ActivityBody, ConversationEncryption, ConversationKind, InboxEntryKind, PrincipalKind,
     direct_pair_key,
@@ -1305,5 +1305,41 @@ fn an_activity_is_host_written_once_and_neither_unread_nor_a_preview() {
             .post_activity(&pebble.id, "act-2", &body, true)
             .unwrap()
             .is_some()
+    );
+}
+
+#[test]
+fn the_public_send_refuses_triggers_and_activity_but_the_runtime_path_takes_them() {
+    let f = fixture();
+    let bot = f.bot("Scout");
+    let chat = f.direct(&bot);
+    let trigger = json!({ "source": "webhook", "ref_id": "r1", "title": "Hook", "text": "Go" });
+    assert!(
+        f.send(&chat.id, LOCAL_OWNER_ID, "t1", "trigger", trigger.clone())
+            .is_err()
+    );
+    assert!(
+        f.send(&chat.id, &bot.id, "a1", "activity", json!({}))
+            .is_err()
+    );
+    let request = entry_request(json!({
+        "message_id": "t2",
+        "kind": "trigger",
+        "envelope": plain_envelope(trigger),
+    }));
+    assert!(
+        f.store
+            .send_internal(&chat.id, LOCAL_OWNER_ID, request)
+            .is_ok()
+    );
+    let bad = entry_request(json!({
+        "message_id": "t3",
+        "kind": "trigger",
+        "envelope": plain_envelope(json!({})),
+    }));
+    assert!(
+        f.store
+            .send_internal(&chat.id, LOCAL_OWNER_ID, bad)
+            .is_err()
     );
 }

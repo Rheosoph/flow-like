@@ -60,6 +60,16 @@ pub(crate) fn validate_home_patch(
     Ok(())
 }
 
+/// An omitted list stays omitted, so a client that does not know the field changes nothing.
+pub(crate) fn validate_hidden_bots(
+    hidden_bots: Option<Vec<String>>,
+) -> Result<Option<Vec<String>>, ApiError> {
+    hidden_bots
+        .map(flow_like::profile::normalize_hidden_bots)
+        .transpose()
+        .map_err(ApiError::bad_request)
+}
+
 /// Profile IDs are user-local keys. Historically the database used a global
 /// primary key, so insert paths still detect unique violations for rolling
 /// deploys and legacy schemas.
@@ -175,6 +185,33 @@ mod home_tests {
         );
         assert!(super::validate_profile_name(" \n ").is_err());
         assert!(super::validate_profile_name(&"x".repeat(101)).is_err());
+    }
+
+    #[test]
+    fn hidden_bots_stay_untouched_when_omitted_and_are_normalized_when_sent() {
+        let omitted: ProfileBody = serde_json::from_value(json!({"name":"Renamed"})).unwrap();
+        assert_eq!(
+            super::validate_hidden_bots(omitted.hidden_bots).unwrap(),
+            None
+        );
+        let old_client: SyncProfileRequest =
+            serde_json::from_value(json!({"id":"id","name":"Name"})).unwrap();
+        assert_eq!(old_client.hidden_bots, None);
+
+        let shown_again: ProfileBody = serde_json::from_value(json!({"hidden_bots":[]})).unwrap();
+        assert_eq!(
+            super::validate_hidden_bots(shown_again.hidden_bots).unwrap(),
+            Some(vec![])
+        );
+        let hidden: SyncProfileRequest = serde_json::from_value(
+            json!({"id":"id","name":"Name","hidden_bots":[" bot-a ","general","bot-a"]}),
+        )
+        .unwrap();
+        assert_eq!(
+            super::validate_hidden_bots(hidden.hidden_bots).unwrap(),
+            Some(vec!["bot-a".to_string(), "general".to_string()])
+        );
+        assert!(super::validate_hidden_bots(Some(vec![String::new()])).is_err());
     }
 
     #[test]

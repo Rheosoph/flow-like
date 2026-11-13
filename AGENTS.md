@@ -8,6 +8,16 @@ syntax.
 The goal is useful writing with a recognizable human point of view. Do not optimize for an AI
 detector. Detection is unreliable and can penalize non-native writers. Edit for the reader.
 
+## Rust builds
+
+Several agent sessions build this repository at once. Run every compiling cargo command (`check`,
+`build`, `test`, `clippy`, `doc`, `bench`, `fix`, `clean` and the `check-*`/`test-*` aliases)
+through the shared queue: `tools/cargo-queue/bin/cargo check -p <pkg>` in place of
+`cargo check -p <pkg>`. It runs one build at a time on this machine and lets identical requests
+share one run. Run it in the foreground. Do not background cargo, poll for other cargo processes,
+kill them, or set a private `CARGO_TARGET_DIR`. If a command times out, reattach with
+`tools/cargo-queue/bin/cargo queue wait <id>`, using the id printed when the job was queued.
+
 ## Documentation placement
 
 Implementation work should not leave a trail of explanatory Markdown beside the code.

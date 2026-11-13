@@ -468,11 +468,30 @@ pub enum DispatchError {
     LocalOnly(String),
 }
 
+/// Error code of a run the server refuses because the flow runs only on the user's own device.
+pub const LOCAL_EXECUTION_REQUIRED: &str = "LOCAL_EXECUTION_REQUIRED";
+
+fn event_name_of(request: &DispatchRequest) -> Option<String> {
+    let event: serde_json::Value = serde_json::from_str(request.event_json.as_deref()?).ok()?;
+    event
+        .get("name")?
+        .as_str()
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+}
+
 impl From<DispatchError> for crate::error::ApiError {
     fn from(error: DispatchError) -> Self {
         match error {
             DispatchError::Quota(error) => error,
-            DispatchError::LocalOnly(message) => Self::unprocessable(message),
+            DispatchError::LocalOnly(message) => {
+                tracing::warn!("Local-only flow refused at dispatch: {message}");
+                Self::coded(
+                    axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                    LOCAL_EXECUTION_REQUIRED,
+                    message,
+                )
+            }
             error => Self::internal(error.to_string()),
         }
     }
@@ -657,6 +676,50 @@ pub type WasmPackageResolver = Arc<
         + Sync,
 >;
 
+/// A run whose channel, artifact and admission are settled but whose executor is
+/// not invoked yet. It owns everything the invocation needs.
+pub struct PreparedStreamingRun {
+    dispatcher: Arc<Dispatcher>,
+    request: DispatchRequest,
+}
+
+impl PreparedStreamingRun {
+    /// Invokes the executor and waits for its stream prelude. A failure releases
+    /// the admission exactly as [`Dispatcher::dispatch_streaming_with_run`] does.
+    pub async fn invoke(self) -> Result<(DispatchResponse, ByteStream), RunDispatchError> {
+        let Self {
+            dispatcher,
+            request,
+        } = self;
+        let backend = dispatcher.config.backend.clone();
+        let result = match backend {
+            #[cfg(feature = "lambda")]
+            ExecutionBackend::LambdaStream => {
+                dispatcher
+                    .dispatch_lambda_stream(&create_id(), &request)
+                    .await
+            }
+            _ => Err(DispatchError::Configuration(format!(
+                "Streaming dispatch not supported for {backend:?} backend. Use LambdaStream backend."
+            ))),
+        };
+        if let Err(error) = &result {
+            dispatcher.release_undelivered(&request.run_id, error).await;
+        }
+        result.map_err(RunDispatchError::after_admission)
+    }
+}
+
+fn executor_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "Failed to build the dispatch HTTP client with a connect timeout");
+            reqwest::Client::new()
+        })
+}
+
 /// Unified job dispatcher
 #[derive(Clone)]
 pub struct Dispatcher {
@@ -741,7 +804,7 @@ impl Dispatcher {
 
         Self {
             config: Arc::new(config),
-            http_client: reqwest::Client::new(),
+            http_client: executor_http_client(),
             staging_bucket,
             artifact_ensurer: std::sync::OnceLock::new(),
             async_wasm_package_resolver: std::sync::OnceLock::new(),
@@ -761,7 +824,7 @@ impl Dispatcher {
     pub fn from_config(config: DispatchConfig) -> Self {
         Self {
             config: Arc::new(config),
-            http_client: reqwest::Client::new(),
+            http_client: executor_http_client(),
             staging_bucket: None,
             artifact_ensurer: std::sync::OnceLock::new(),
             async_wasm_package_resolver: std::sync::OnceLock::new(),
@@ -1028,7 +1091,9 @@ impl Dispatcher {
         )
         .await
         .map_err(|error| match error.downcast::<LocalOnlyBoard>() {
-            Ok(local_only) => DispatchError::LocalOnly(local_only.to_string()),
+            Ok(local_only) => {
+                DispatchError::LocalOnly(local_only.message(event_name_of(request).as_deref()))
+            }
             Err(error) => DispatchError::Artifact(error.to_string()),
         })
     }
@@ -1152,6 +1217,39 @@ impl Dispatcher {
         request: DispatchRequest,
         _run: Option<RunRecord>,
     ) -> Result<(DispatchResponse, ByteStream), RunDispatchError> {
+        validate_runtime_variable_transport(&self.config.backend, &request)
+            .map_err(RunDispatchError::before_admission)?;
+        Err(RunDispatchError::before_admission(
+            DispatchError::Configuration("Streaming dispatch requires the 'lambda' feature".into()),
+        ))
+    }
+
+    /// The part of [`Self::dispatch_streaming_with_run`] that decides the run: channel,
+    /// artifact and admission. The executor is invoked later by
+    /// [`PreparedStreamingRun::invoke`], so a caller can answer its client in between.
+    #[cfg(feature = "lambda")]
+    pub async fn prepare_streaming_with_run(
+        self: &Arc<Self>,
+        mut request: DispatchRequest,
+        run: Option<RunRecord>,
+    ) -> Result<PreparedStreamingRun, RunDispatchError> {
+        validate_runtime_variable_transport(&self.config.backend, &request)
+            .map_err(RunDispatchError::before_admission)?;
+        let backend = self.config.backend.clone();
+        self.prepare(&mut request, &backend, "realtime", run)
+            .await?;
+        Ok(PreparedStreamingRun {
+            dispatcher: Arc::clone(self),
+            request,
+        })
+    }
+
+    #[cfg(not(feature = "lambda"))]
+    pub async fn prepare_streaming_with_run(
+        self: &Arc<Self>,
+        request: DispatchRequest,
+        _run: Option<RunRecord>,
+    ) -> Result<PreparedStreamingRun, RunDispatchError> {
         validate_runtime_variable_transport(&self.config.backend, &request)
             .map_err(RunDispatchError::before_admission)?;
         Err(RunDispatchError::before_admission(
@@ -4699,6 +4797,72 @@ mod tests {
             bare.get("artifact").is_none(),
             "an unsigned request serialises without the field, which the executor rejects"
         );
+    }
+
+    fn local_only_ensurer() -> ArtifactEnsurer {
+        Arc::new(|_, _, _, _, _| {
+            Box::pin(async {
+                Err(super::LocalOnlyBoard {
+                    board_name: "Scraper".into(),
+                    nodes: vec!["Click".into()],
+                }
+                .into())
+            })
+        })
+    }
+
+    #[tokio::test]
+    async fn a_local_only_flow_is_refused_before_a_worker_starts_and_names_the_event() {
+        let dispatcher = Dispatcher::from_config(DispatchConfig::default());
+        dispatcher.set_artifact_ensurer(local_only_ensurer());
+        let mut request = dispatch_request(DispatchTrigger::User);
+        request.event_json = Some(r#"{"name":"Fetch prices"}"#.into());
+
+        let Err(DispatchError::LocalOnly(message)) = dispatcher.ensure_artifact(&request).await
+        else {
+            panic!("a local-only flow must be refused at the dispatcher's shared artifact step");
+        };
+        assert!(message.contains("Event \"Fetch prices\" (board \"Scraper\")"));
+        assert!(message.contains("only on your own device"));
+
+        let refusal = crate::error::ApiError::from(DispatchError::LocalOnly(message));
+        assert_eq!(
+            refusal.status(),
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(refusal.public_code(), super::LOCAL_EXECUTION_REQUIRED);
+    }
+
+    #[tokio::test]
+    async fn a_local_only_run_without_an_event_names_the_board() {
+        let dispatcher = Dispatcher::from_config(DispatchConfig::default());
+        dispatcher.set_artifact_ensurer(local_only_ensurer());
+
+        let Err(DispatchError::LocalOnly(message)) = dispatcher
+            .ensure_artifact(&dispatch_request(DispatchTrigger::User))
+            .await
+        else {
+            panic!("a board run is refused like an event run");
+        };
+        assert!(message.starts_with("Board \"Scraper\" runs only on your own device"));
+    }
+
+    #[tokio::test]
+    async fn a_flow_without_local_only_nodes_passes_the_artifact_step() {
+        let dispatcher = Dispatcher::from_config(DispatchConfig::default());
+        dispatcher.set_artifact_ensurer(Arc::new(|_, _, _, _, _| {
+            Box::pin(async {
+                Ok(EnsuredArtifact {
+                    path: flow_like_storage::Path::from("artifact"),
+                    source_etag: None,
+                    registry_fingerprint: [0; 32],
+                })
+            })
+        }));
+        dispatcher
+            .ensure_artifact(&dispatch_request(DispatchTrigger::User))
+            .await
+            .expect("a flow the server may run is not refused");
     }
 
     #[tokio::test]

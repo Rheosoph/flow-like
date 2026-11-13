@@ -388,10 +388,10 @@ function stageDirectMlDll(arch: Architecture, options: CliOptions): void {
 	}
 
 	fs.mkdirSync(config.outputDir, { recursive: true });
-	const destination = path.join(
-		config.outputDir,
-		`DirectML.dll-${config.targetTriple}`,
-	);
+	// Keep the install name: ort's copy-dylibs also drops DirectML.dll into the cargo
+	// target dir, and the MSI bundler only skips that copy when a resource source ends
+	// in the same file name. A suffixed name ships it twice and fails WiX ICE30.
+	const destination = path.join(config.outputDir, "DirectML.dll");
 	if (!options.force && fs.existsSync(destination)) {
 		if (fileHash(source) === fileHash(destination)) {
 			console.log(

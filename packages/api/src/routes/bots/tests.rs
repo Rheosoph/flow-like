@@ -62,7 +62,7 @@ async fn database() -> DatabaseConnection {
         r#"CREATE UNIQUE INDEX public."BotApp_pkey" ON "BotApp" ("botId", "appId")"#,
         r#"CREATE UNIQUE INDEX public."BotSecret_pkey" ON "BotSecret" ("botId", "name")"#,
         r#"CREATE TABLE public."User" ("id" TEXT PRIMARY KEY, "tier" TEXT NOT NULL)"#,
-        r#"CREATE TABLE public."App" ("id" TEXT PRIMARY KEY, "botId" TEXT UNIQUE)"#,
+        r#"CREATE TABLE public."App" ("id" TEXT PRIMARY KEY, "botId" TEXT UNIQUE, "refuseBots" BOOLEAN)"#,
     ] {
         db.execute_unprepared(statement).await.unwrap();
     }
@@ -519,16 +519,15 @@ async fn a_configuration_patch_keeps_model_fields_changed_since_approval() {
     assert_eq!(current.model.primary.as_deref(), Some("chat-approved"));
     assert_eq!(current.model.fallbacks, ["fallback-newer"]);
     assert_eq!(current.model.decision.as_deref(), Some("decision-newer"));
-    assert_eq!(current.instructions.as_deref(), Some("Keep this instruction."));
+    assert_eq!(
+        current.instructions.as_deref(),
+        Some("Keep this instruction.")
+    );
 
-    let cleared = super::configuration::patch_in(
-        &db,
-        "owner",
-        &row.id,
-        json!({"model": {"decision": null}}),
-    )
-    .await
-    .unwrap();
+    let cleared =
+        super::configuration::patch_in(&db, "owner", &row.id, json!({"model": {"decision": null}}))
+            .await
+            .unwrap();
     let cleared = BotSettings::from_row(&cleared.bot);
     assert_eq!(cleared.model.primary, current.model.primary);
     assert_eq!(cleared.model.fallbacks, current.model.fallbacks);
@@ -539,20 +538,19 @@ async fn a_configuration_patch_keeps_model_fields_changed_since_approval() {
 async fn configuration_patches_cannot_change_ownership_or_another_owners_bot() {
     let db = database().await;
     let row = custom_bot(&db, "owner", "Scout", at(0)).await;
-    for changes in [json!({"owner_id": "intruder"}), json!({"location": "server"})] {
+    for changes in [
+        json!({"owner_id": "intruder"}),
+        json!({"location": "server"}),
+    ] {
         let error = super::configuration::patch_in(&db, "owner", &row.id, changes)
             .await
             .unwrap_err();
         assert_eq!(error.status(), StatusCode::BAD_REQUEST);
     }
-    let error = super::configuration::patch_in(
-        &db,
-        "intruder",
-        &row.id,
-        json!({"name": "Changed"}),
-    )
-    .await
-    .unwrap_err();
+    let error =
+        super::configuration::patch_in(&db, "intruder", &row.id, json!({"name": "Changed"}))
+            .await
+            .unwrap_err();
     assert_eq!(error.status(), StatusCode::NOT_FOUND);
     let stored = owned_bot(&db, "owner", &row.id).await.unwrap();
     assert_eq!(stored.name.as_deref(), Some("Scout"));
@@ -585,6 +583,7 @@ fn stored_rows_read_back_as_the_settings_that_wrote_them() {
         capabilities: row.capabilities.unwrap(),
         profile_id: row.profile_id.unwrap(),
         location: row.location.unwrap(),
+        execution_mode: row.execution_mode.unwrap(),
         device_id: row.device_id.unwrap(),
         created_at: now,
         updated_at: now,
@@ -834,6 +833,7 @@ async fn a_duplicate_copies_the_settings_and_the_apps_the_owner_still_uses() {
         ],
         profile_id: Some("profile-1".into()),
         location: BotLocation::Device,
+        execution_mode: flow_like_types::bot::BotExecutionMode::Docker,
         device_id: Some("device-1".into()),
     };
     let mut row = new_bot_row("owner", None, Some("researcher".into()), &settings, at(0)).unwrap();
@@ -1272,4 +1272,283 @@ async fn only_server_secrets_open_for_the_bot_and_each_read_is_recorded() {
         .map(|info| info.name)
         .collect();
     assert_eq!(names, ["API_KEY", "SEALED_KEY"]);
+}
+
+#[tokio::test]
+async fn sealed_secrets_reach_only_their_bots_runtime_token_during_a_live_turn() {
+    use crate::middleware::jwt::{AppUser, BotUser, OpenIDUser};
+    use crate::routes::inbox::fixture;
+    let db = database().await;
+    db.execute_unprepared(fixture::BOT_TURN_TABLE)
+        .await
+        .unwrap();
+    for bot in ["bot_a", "bot_b"] {
+        fixture::insert_bot(&db, bot, "user-a", "DESKTOP").await;
+    }
+    let held = (chrono::Utc::now() + chrono::Duration::minutes(5)).fixed_offset();
+    fixture::running_turn(&db, "t-live", "bot_a", "room", "host", held).await;
+    fixture::running_turn(&db, "t-stale", "bot_a", "room", "host", fixture::at(0)).await;
+    let envelope = json!({
+        "v": 1,
+        "enc": "hpke-x25519-sha256-chacha20poly1305",
+        "ct": "Y3Q",
+        "keys": [{ "key_id": "ik_1", "enc_key": "ZW5j", "ck": "Y2s" }],
+    });
+    stored_secret(&db, "bot_a", "API_KEY", "SEALED", envelope.to_string()).await;
+    let master = [7u8; 32];
+    let server = super::secret_cipher::encrypt(&master, "bot_a", "TOKEN", "t-1").unwrap();
+    stored_secret(&db, "bot_a", "TOKEN", "SERVER", server).await;
+    let token = |bot: &str, turn: &str| {
+        AppUser::Bot(BotUser {
+            bot_id: bot.into(),
+            turn_id: turn.into(),
+            conv_id: None,
+        })
+    };
+
+    let live = token("bot_a", "t-live");
+    let reader = secrets::turn_reader(&db, &live, "t-live", "API_KEY")
+        .await
+        .unwrap();
+    assert_eq!(
+        secrets::sealed_for_bot(&db, &reader.bot_id, "API_KEY")
+            .await
+            .unwrap(),
+        Some(envelope)
+    );
+    let read = bot_secret::Entity::find_by_id(("bot_a".to_string(), "API_KEY".to_string()))
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(read.last_used_at.is_some());
+
+    let owner = AppUser::OpenID(OpenIDUser {
+        sub: "user-a".into(),
+        access_token: String::new(),
+    });
+    let refused = |error: ApiError| (error.status(), error.public_code().to_string());
+    for (user, turn, expected) in [
+        (&owner, "t-live", StatusCode::FORBIDDEN),
+        (&live, "t-stale", StatusCode::FORBIDDEN),
+        (&token("bot_a", "t-stale"), "t-stale", StatusCode::CONFLICT),
+        (&token("bot_b", "t-live"), "t-live", StatusCode::CONFLICT),
+    ] {
+        let error = secrets::turn_reader(&db, user, turn, "API_KEY")
+            .await
+            .unwrap_err();
+        assert_eq!(error.status(), expected, "{turn}");
+    }
+    let stale = secrets::turn_reader(&db, &token("bot_a", "t-stale"), "t-stale", "API_KEY")
+        .await
+        .unwrap_err();
+    assert_eq!(refused(stale).1, "BOT_TURN_LEASE_LOST");
+    assert_eq!(
+        secrets::turn_reader(&db, &live, "t-live", "api_key")
+            .await
+            .unwrap_err()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    let not_sealed = secrets::sealed_for_bot(&db, "bot_a", "TOKEN")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused(not_sealed),
+        (StatusCode::CONFLICT, "BOT_SECRET_NOT_SEALED".to_string())
+    );
+    assert_eq!(
+        secrets::sealed_for_bot(&db, "bot_a", "MISSING")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        secrets::sealed_for_bot(&db, "bot_b", "API_KEY")
+            .await
+            .unwrap(),
+        None
+    );
+    let value_route = secrets::open_for_bot(&db, &master, "bot_a", "API_KEY")
+        .await
+        .unwrap_err();
+    assert_eq!(value_route.public_code(), "BOT_SECRET_SEALED");
+}
+
+#[test]
+fn the_sealed_secret_route_is_documented() {
+    use utoipa::OpenApi;
+    let spec = serde_json::to_value(crate::openapi::ApiDoc::openapi()).unwrap();
+    let route = "/paths/~1bots~1turns~1{turn_id}~1secrets~1{name}~1sealed/post/responses";
+    for status in ["200", "403", "404", "409"] {
+        assert!(
+            spec.pointer(&format!("{route}/{status}")).is_some(),
+            "{status}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn flux_deletes_only_the_owner_s_own_bots_and_never_a_built_in_one() {
+    let db = database().await;
+    insert_system_bots(&db, DbDialect::Postgres, "owner", &BotSystemKind::ALL)
+        .await
+        .unwrap();
+    let scout = custom_bot(&db, "owner", "Scout", at(0)).await;
+    let theirs = custom_bot(&db, "someone-else", "Theirs", at(1)).await;
+
+    let deletable = super::crud::deletable_bot(&db, "owner", &scout.id)
+        .await
+        .unwrap();
+    assert_eq!(deletable.id, scout.id);
+    let foreign = super::crud::deletable_bot(&db, "owner", &theirs.id)
+        .await
+        .unwrap_err();
+    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+    let built_ins: Vec<bot::Model> = live_bots(&db, "owner")
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|row| row.system_key.is_some())
+        .collect();
+    assert_eq!(built_ins.len(), 2);
+    for built_in in built_ins {
+        let error = super::crud::deletable_bot(&db, "owner", &built_in.id)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            code(&error),
+            (
+                StatusCode::CONFLICT,
+                super::validation::BOT_SYSTEM_UNDELETABLE
+            )
+        );
+    }
+}
+
+#[tokio::test]
+async fn running_turns_must_stop_before_execution_mode_changes() {
+    use flow_like_types::bot::BotExecutionMode;
+    let db = database().await;
+    let mut settings = system_defaults(BotSystemKind::General);
+    settings.name = Some("Isolated".into());
+    settings.location = BotLocation::Device;
+    settings.device_id = Some("device-1".into());
+    let bot = new_bot_row("owner", None, None, &settings, at(0))
+        .unwrap()
+        .insert(&db)
+        .await
+        .unwrap();
+    db.execute_unprepared(crate::routes::inbox::fixture::BOT_TURN_TABLE)
+        .await
+        .unwrap();
+    crate::entity::bot_turn::ActiveModel {
+        id: Set("turn-mode-change".into()),
+        bot_id: Set(bot.id.clone()),
+        owner_id: Set("owner".into()),
+        conversation_id: Set("conversation".into()),
+        trigger_message_id: Set("trigger".into()),
+        host_kind: Set("DEVICE".into()),
+        status: Set("RUNNING".into()),
+        attempts: Set(1),
+        hops: Set(0),
+        audience: Set("OWNER".into()),
+        created_at: Set(at(0)),
+        updated_at: Set(at(0)),
+        ..Default::default()
+    }
+    .insert(&db)
+    .await
+    .unwrap();
+    for sql in [
+        r#"CREATE TABLE "ManagedDevice" (id TEXT, "ownerId" TEXT, status TEXT, "botDocker" JSON)"#,
+        r#"CREATE TABLE "DeviceManagementPolicy" ("deviceId" TEXT, "policyJws" TEXT, version BIGINT)"#,
+        r#"CREATE TABLE "DeviceEnrollment" ("deviceId" TEXT, manifest TEXT)"#,
+    ] {
+        db.execute_unprepared(sql).await.unwrap();
+    }
+    db.execute_raw(sea_orm::Statement::from_sql_and_values(sea_orm::DatabaseBackend::Sqlite,
+        r#"INSERT INTO "ManagedDevice" (id, "ownerId", status, "botDocker") VALUES ('device-1', 'owner', 'active', ?)"#,
+        [json!({"installed":true,"available":true,"seen_at":chrono::Utc::now().timestamp_millis()}).into()],
+    )).await.unwrap();
+    let request = UpdateBotRequest {
+        execution_mode: Some(BotExecutionMode::Docker),
+        ..Default::default()
+    };
+    let error = patch_in(&db, "owner", &bot.id, request.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(error.public_code(), "BOT_EXECUTION_MODE_BUSY", "{error:?}");
+    assert_eq!(
+        BotSettings::from_row(&owned_bot(&db, "owner", &bot.id).await.unwrap()).execution_mode,
+        BotExecutionMode::Native
+    );
+    db.execute_unprepared(r#"UPDATE public."BotTurn" SET status = 'DONE'"#)
+        .await
+        .unwrap();
+    let changed = patch_in(&db, "owner", &bot.id, request).await.unwrap();
+    assert_eq!(
+        BotSettings::from_row(&changed.bot).execution_mode,
+        BotExecutionMode::Docker
+    );
+    assert_eq!(changed.changed, ["execution_mode"]);
+    db.execute_unprepared(r#"UPDATE "ManagedDevice" SET "botDocker" = NULL"#)
+        .await
+        .unwrap();
+    let renamed = patch_in(
+        &db,
+        "owner",
+        &bot.id,
+        UpdateBotRequest {
+            name: Some(Some("Offline edit".into())),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        BotSettings::from_row(&renamed.bot).execution_mode,
+        BotExecutionMode::Docker
+    );
+    db.execute_unprepared(r#"INSERT INTO "ManagedDevice" (id, "ownerId", status) VALUES ('device-2', 'owner', 'active')"#).await.unwrap();
+    let refused = patch_in(
+        &db,
+        "owner",
+        &bot.id,
+        UpdateBotRequest {
+            device_id: Some(Some("device-2".into())),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(refused.public_code(), "BOT_DOCKER_UNAVAILABLE");
+}
+
+#[test]
+fn docker_assignments_need_a_current_positive_device_report() {
+    use super::crud::docker_status_ready;
+    let now = 1_800_000_000_000_i64;
+    assert!(!docker_status_ready(None, now));
+    assert!(!docker_status_ready(
+        Some(&json!({"installed":true,"available":true})),
+        now
+    ));
+    for (installed, available, age, ready) in [
+        (true, true, 0, true),
+        (true, true, 180_000, true),
+        (true, true, 180_001, false),
+        (true, true, -30_001, false),
+        (false, true, 0, false),
+        (true, false, 0, false),
+    ] {
+        assert_eq!(
+            docker_status_ready(
+                Some(&json!({"installed":installed,"available":available,"seen_at":now-age})),
+                now
+            ),
+            ready
+        );
+    }
 }

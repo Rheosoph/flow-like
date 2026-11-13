@@ -645,6 +645,8 @@ pub fn run() {
             }
         })
         .on_window_event(|window, event| {
+            #[cfg(desktop)]
+            tray::on_window_event(window, event);
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 execution_credentials::revoke_window(window.label());
                 realtime::close_window(window.label());
@@ -788,6 +790,10 @@ pub fn run() {
                 .plugin(tauri_plugin_updater::Builder::new().build())
             {
                 eprintln!("Failed to register updater plugin: {}", e);
+            }
+            #[cfg(desktop)]
+            if let Err(error) = app.handle().plugin(tray::autostart_plugin()) {
+                tracing::warn!(%error, "Start at login is unavailable: the autostart plugin failed");
             }
 
             // Initialize EventBus and register as managed state
@@ -950,6 +956,7 @@ pub fn run() {
                 } else {
                     tray::spawn_tray_refresh(relay_handle.clone());
                 }
+                tray::reveal_unreachable_hidden_start(&relay_handle);
             }
 
             #[cfg(any(target_os = "linux", windows))]
@@ -1166,6 +1173,7 @@ pub fn run() {
             functions::native_bot_input::native_bot_capabilities,
             functions::native_bot_input::native_bot_cancel_request,
             functions::native_bot_input::native_bot_activity_tokens,
+            functions::barcode::detect_barcodes,
             functions::native::native_clear_snapshot,
             functions::native::native_take_actions,
             functions::native::native_pending_actions,
@@ -1193,6 +1201,16 @@ pub fn run() {
             functions::storage_management::delete_local_storage_items,
             #[cfg(desktop)]
             tray::tray_update_state,
+            #[cfg(desktop)]
+            tray::get_keep_bots_running,
+            #[cfg(desktop)]
+            tray::set_keep_bots_running,
+            #[cfg(desktop)]
+            tray::get_start_at_login,
+            #[cfg(desktop)]
+            tray::set_start_at_login,
+            #[cfg(desktop)]
+            tray::claim_start_at_login_offer,
             #[cfg(not(desktop))]
             tray_update_state,
             functions::download::init::init_downloads,
@@ -1221,6 +1239,7 @@ pub fn run() {
             functions::settings::profiles::get_profile_icon_path,
             functions::settings::profiles::profile_update_app,
             functions::settings::profiles::profile_update_shortcuts,
+            functions::settings::profiles::profile_update_hidden_bots,
             functions::app::app_configured,
             functions::app::upsert_board,
             functions::app::delete_app_board,
@@ -1323,6 +1342,8 @@ pub fn run() {
             functions::bit::get_bit,
             functions::bit::is_bit_installed,
             functions::speech::speech_transcribe,
+            functions::speech::speech_transcribe_raw,
+            functions::speech::speech_warm,
             functions::speech::speech_synthesize,
             functions::bit::get_bit_size,
             functions::bit::get_pack_from_bit,
@@ -1549,10 +1570,12 @@ pub fn run() {
             functions::local_bots::history::local_inbox_import_history,
             functions::local_bots::history::local_inbox_write_segment,
             bot_host::commands::bot_host_turns,
+            bot_host::commands::bot_host_poke,
             bot_host::commands::bot_host_e2e_status,
             bot_host::commands::bot_host_e2e_rotate_key,
             functions::inbox_e2e::inbox_e2e_key,
             functions::inbox_e2e::inbox_e2e_seal,
+            functions::inbox_e2e::inbox_e2e_seal_secret,
             functions::inbox_e2e::inbox_e2e_open,
             bot_host::commands::bot_host_cancel_turn,
             bot_host::grant_commands::local_bot_tool_grants,
@@ -1707,6 +1730,9 @@ pub fn run() {
         }
     }
 
+    #[cfg(desktop)]
+    let context = tray::prepare_start(context);
+
     let app = frontend_assets::register(builder, &context)
         .build(context)
         .expect("error while building tauri application");
@@ -1731,6 +1757,8 @@ pub fn run() {
         }
         #[cfg(desktop)]
         window_layout::on_event(_app, &_event);
+        #[cfg(target_os = "macos")]
+        tray::on_run_event(_app, &_event);
     });
 }
 
@@ -1754,14 +1782,8 @@ pub(crate) fn application_context() -> tauri::Context<tauri::Wry> {
 
 fn handle_instance(app: &AppHandle, args: Vec<String>, _cwd: String) {
     #[cfg(desktop)]
-    {
-        let flowpilot_e2e_cli = args.iter().any(|arg| arg == "--flowpilot-e2e-cli");
-        if !flowpilot_e2e_cli {
-            let _ = app
-                .get_webview_window("main")
-                .expect("no main window")
-                .set_focus();
-        }
+    if tray::second_start_shows_window(&args) {
+        tray::open_main_window(app);
     }
 
     println!(
@@ -1773,6 +1795,11 @@ fn handle_instance(app: &AppHandle, args: Vec<String>, _cwd: String) {
 #[cfg(desktop)]
 #[tauri::command]
 fn restart_app(app_handle: AppHandle) {
+    let mut env = app_handle.env();
+    if tray::without_hidden_start(&mut env.args_os) {
+        app_handle.cleanup_before_exit();
+        tauri::process::restart(&env);
+    }
     app_handle.restart();
 }
 

@@ -350,16 +350,15 @@ async fn inviter(state: &AppState, user_id: &str) -> Result<Inviter, ApiError> {
             avatar: None,
         });
     };
-    let name = [
-        row.name.clone().filter(|_| lookup.name),
+    let name = crate::routes::user::identity::public_display_name(
+        row.name.as_deref().filter(|_| lookup.name),
         row.preferred_username
-            .clone()
+            .as_deref()
             .filter(|_| lookup.preferred_username),
-    ]
-    .into_iter()
-    .flatten()
+        None,
+    )
     .map(|name| bounded_text(&name, 80))
-    .find(|name| !name.is_empty());
+    .filter(|name| !name.is_empty());
     let avatar = match row.avatar.as_deref().filter(|_| lookup.avatar) {
         Some(avatar_id) => crate::routes::user::sign_avatar(&row.id, avatar_id, state)
             .await

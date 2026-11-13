@@ -8,7 +8,8 @@ use flow_like_bot_tools::browser::{
     BrowserBackend, BrowserScreen, BrowserStep, Download, PageState, SnapshotRequest, SnapshotView,
 };
 use flow_like_bot_tools::computer::{
-    ComputerAction, ComputerBackend, Screen, WindowBounds, WindowOp, WindowSummary,
+    ComputerAction, ComputerBackend, DisplaySummary, Screen, WindowBounds, WindowOp,
+    WindowSummary,
 };
 use flow_like_bot_tools::error::{ToolError, code};
 use flow_like_types::Result;
@@ -58,18 +59,29 @@ impl GuardedBrowser {
     fn fresh_look_needed(&self) -> Result<()> {
         self.channel.takeover.require_fresh(true).map_err(failure)
     }
+
+    async fn opened(
+        &self,
+        opening: impl Future<Output = Result<PageState>> + Send,
+    ) -> Result<PageState> {
+        let generation = self.channel.takeover.generation();
+        self.guard()?;
+        let page = opening.await?;
+        if self.channel.takeover.observed(true, generation) {
+            self.channel.takeover.take_note();
+        }
+        Ok(page)
+    }
 }
 
 #[async_trait]
 impl BrowserBackend for GuardedBrowser {
     async fn open(&self, url: &str) -> Result<PageState> {
-        let generation = self.channel.takeover.generation();
-        self.guard()?;
-        let page = self.inner.open(url).await?;
-        if self.channel.takeover.observed(true, generation) {
-            self.channel.takeover.take_note();
-        }
-        Ok(page)
+        self.opened(self.inner.open(url)).await
+    }
+
+    async fn open_in_owner_browser(&self, url: &str) -> Result<PageState> {
+        self.opened(self.inner.open_in_owner_browser(url)).await
     }
 
     async fn snapshot(&self, request: SnapshotRequest) -> Result<SnapshotView> {
@@ -200,6 +212,23 @@ impl ComputerBackend for GuardedComputer {
             Some(note) => format!("{done}. {note}"),
             None => done,
         })
+    }
+
+    async fn screenshot_display(&self, display: Option<u32>) -> Result<Screen> {
+        let generation = self.channel.takeover.generation();
+        let note = self.enter().await?;
+        let screen = self.inner.screenshot_display(display).await?;
+        self.channel.takeover.observed(false, generation);
+        Ok(self.shown(screen, note))
+    }
+
+    async fn displays(&self) -> Result<Vec<DisplaySummary>> {
+        self.inner.displays().await
+    }
+
+    async fn windows_listed(&self, include_offscreen: bool) -> Result<Vec<WindowSummary>> {
+        self.enter().await?;
+        self.inner.windows_listed(include_offscreen).await
     }
 
     async fn screenshot_window(&self, window: &str) -> Result<Screen> {

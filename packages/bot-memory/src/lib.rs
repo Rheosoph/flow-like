@@ -18,6 +18,7 @@ pub mod retrieval;
 pub mod spatial;
 pub mod store;
 pub mod summary;
+pub mod telemetry;
 pub mod testing;
 pub mod text;
 pub mod tools;

@@ -5,12 +5,12 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use flow_like::flow::copilot::HostTools;
-use flow_like::flow::copilot::platform::PlatformToolBridge;
-use flow_like::flow::copilot::tool_grants::{GrantKey, GrantStore};
+use flow_like::flow::copilot::platform::{Clearance, PlatformToolBridge};
+use flow_like::flow::copilot::tool_grants::{GrantKey, GrantStore, grant_scopes};
 use flow_like::flow_like_model_provider::llm::ModelLogic;
 use flow_like_bot_tools::{KnowledgeEmbedder, ModelRole};
 use flow_like_bot_tools_host::{
-    AppAccess, JobApp, JobScope, JobSecrets, ModelSource, ToolJob, ToolReply, job_hash,
+    AppAccess, JobApp, JobFile, JobScope, JobSecrets, ModelSource, ToolJob, ToolReply, job_hash,
 };
 use flow_like_storage::databases::vector::lancedb::connect_lance;
 use flow_like_storage::files::store::FlowLikeStore;
@@ -217,8 +217,18 @@ async fn host_with_grants(
     host_tools: HostTools,
     grants: Arc<MemoryGrants>,
 ) -> Arc<BotToolsHost> {
+    Arc::new(BotToolsHost::new(
+        turn_deps(executor, host_tools, grants).await,
+    ))
+}
+
+async fn turn_deps(
+    executor: Option<Arc<FakeExecutor>>,
+    host_tools: HostTools,
+    grants: Arc<MemoryGrants>,
+) -> TurnDeps {
     let access = Arc::new(Access::new(&[WORKSPACE, DOCS]).await);
-    Arc::new(BotToolsHost::new(TurnDeps {
+    TurnDeps {
         owner: OWNER.into(),
         bot: bot_user(),
         turn_id: TURN.into(),
@@ -230,6 +240,7 @@ async fn host_with_grants(
             source: Arc::new(NoModels),
             chat: None,
             embedding: None,
+            vision: None,
         },
         executor: executor.map(|executor| executor as Arc<dyn ToolExecutor>),
         grants,
@@ -240,7 +251,7 @@ async fn host_with_grants(
                 .collect(),
         )),
         connectors: None,
-    }))
+    }
 }
 
 fn parse(output: &str) -> Value {
@@ -295,6 +306,7 @@ async fn configuration_host(grants: Arc<MemoryGrants>) -> (Arc<BotToolsHost>, Ar
             source: Arc::new(NoModels),
             chat: None,
             embedding: None,
+            vision: None,
         },
         executor: None,
         grants,
@@ -366,6 +378,7 @@ async fn context_exchange_needs_no_workspace_app_scope_or_owner_approval() {
             source: Arc::new(NoModels),
             chat: None,
             embedding: None,
+            vision: None,
         },
         executor: None,
         grants: Arc::new(MemoryGrants::default()),
@@ -801,8 +814,6 @@ async fn a_headless_turn_parks_a_call_that_asks_and_runs_the_rest() {
         assert_eq!((card.tool.as_str(), card.scope.as_str()), (tool, scope));
         assert_eq!(card.turn_id, TURN);
         assert!(!mutating.load(Ordering::SeqCst));
-        let after = parse(&host.run_unattended(&mutating, "file_list", json!({})).await);
-        assert_eq!(after["code"], "bot_tool_waiting_for_approval");
     }
     assert!(executor.jobs.lock().unwrap().is_empty());
 
@@ -834,6 +845,106 @@ async fn a_headless_turn_parks_a_call_that_asks_and_runs_the_rest() {
     assert_eq!(written["status"], "ok");
     assert!(mutating.load(Ordering::SeqCst));
     assert!(host.parked().is_none());
+}
+
+async fn executor_host(grants: Arc<MemoryGrants>) -> Arc<BotToolsHost> {
+    host_with_grants(
+        Some(Arc::new(FakeExecutor::default())),
+        routing::host_tools(true, &["python".to_string()]),
+        grants,
+    )
+    .await
+}
+
+#[flow_like_types::tokio::test]
+async fn a_non_asking_call_still_runs_after_a_park() {
+    let host = executor_host(Arc::default()).await;
+    let mutating = AtomicBool::new(false);
+    let drop = asking_args("knowledge_drop");
+    let waiting = parse(&host.run_unattended(&mutating, "knowledge_drop", drop).await);
+    assert_eq!(waiting["status"], "waiting");
+    let listed = parse(&host.run_unattended(&mutating, "file_list", json!({})).await);
+    assert_eq!(listed["status"], "ok", "{listed}");
+    assert_eq!(host.parked().unwrap().tool, "knowledge_drop");
+}
+
+#[flow_like_types::tokio::test]
+async fn a_later_asking_call_joins_the_batch() {
+    let grants = Arc::new(MemoryGrants::default());
+    grants.put("code_run", "host:example.com").await.unwrap();
+    let host = executor_host(grants).await;
+    let mutating = AtomicBool::new(false);
+    let drop = asking_args("knowledge_drop");
+    let waiting = parse(&host.run_unattended(&mutating, "knowledge_drop", drop).await);
+    assert_eq!(waiting["status"], "waiting");
+    assert!(!mutating.load(Ordering::SeqCst));
+    let ran = parse(
+        &host
+            .run_unattended(&mutating, "code_run", asking_args("code_run"))
+            .await,
+    );
+    assert_eq!(ran["ran_on"], "executor");
+    let after_the_granted_call = mutating.load(Ordering::SeqCst);
+    let other = json!({ "index": "birds" });
+    let again = parse(
+        &host
+            .run_unattended(&mutating, "knowledge_drop", other)
+            .await,
+    );
+    assert_eq!(again["status"], "waiting");
+    let held = host
+        .clearance("knowledge_drop", &json!({ "index": "fish" }))
+        .await;
+    assert_eq!(held, Clearance::Asks);
+    let card = host.parked().unwrap();
+    assert_eq!(card.tool, flow_like_types::bot_message::APPROVAL_BATCH_TOOL);
+    let scopes: Vec<&str> = card.items.iter().map(|item| item.scope.as_str()).collect();
+    assert_eq!(scopes, vec!["table:pets", "table:birds", "table:fish"]);
+    assert_eq!(mutating.load(Ordering::SeqCst), after_the_granted_call);
+}
+
+#[flow_like_types::tokio::test]
+async fn a_granted_web_request_parks_with_a_flagged_item_after_web_content() {
+    use flow_like::flow::copilot::run_recovery::{CallScope, scope_call};
+    let feed = json!({ "method": "GET", "url": "https://cisa.gov/kev.json" });
+    let site = grant_scopes("web_request", &feed, None).unwrap().remove(0);
+    let grants = Arc::new(MemoryGrants::default());
+    grants.put("web_request", &site).await.unwrap();
+    let host = executor_host(grants).await;
+    let mutating = AtomicBool::new(false);
+    assert!(host.covers("web_request", &feed).await);
+    let ran = parse(
+        &host
+            .run_unattended(&mutating, "web_request", feed.clone())
+            .await,
+    );
+    assert_eq!(ran["ran_on"], "executor");
+
+    let marked = || CallScope {
+        id: "fetch-1".into(),
+        round_web_content: true,
+        held_replay: false,
+    };
+    assert!(!scope_call(marked(), host.covers("web_request", &feed)).await);
+    let waiting = parse(
+        &scope_call(
+            marked(),
+            host.run_unattended(&mutating, "web_request", feed.clone()),
+        )
+        .await,
+    );
+    assert_eq!(waiting["status"], "waiting");
+    let card = host.parked().unwrap();
+    assert_eq!(
+        (card.tool.as_str(), card.scope.as_str()),
+        ("web_request", "")
+    );
+    assert!(card.items[0].after_web_content);
+    assert_eq!(card.items[0].scope, site);
+    assert_eq!(
+        host.batch().held_calls(),
+        vec![("fetch-1".to_string(), "web_request".to_string())]
+    );
 }
 
 #[flow_like_types::tokio::test]
@@ -1034,6 +1145,15 @@ fn frame(frame: GlobalChatFrame) -> Value {
     }
 }
 
+/// The next request the bridge sent to the browser. A call that never asks fails here instead
+/// of hanging the suite.
+async fn asked(received: &mut mpsc::UnboundedReceiver<GlobalChatFrame>) -> Value {
+    let next = flow_like_types::tokio::time::timeout(Duration::from_secs(10), received.recv())
+        .await
+        .expect("the bridge asks the browser within 10 s");
+    frame(next.expect("the bridge is still connected"))
+}
+
 async fn reply(channel: &Arc<InProcessChannel>, request: &Value, value: Value) {
     channel
         .push(ChannelPush {
@@ -1075,7 +1195,7 @@ async fn the_bridge_runs_bot_tools_on_the_server_and_other_tools_in_the_browser(
                 .await
         })
     };
-    let request = frame(received.recv().await.unwrap());
+    let request = asked(&mut received).await;
     assert_eq!(request["toolName"], "database_tool");
     assert!(request.get("approvalOnly").is_none());
     reply(
@@ -1100,7 +1220,7 @@ async fn an_approval_gated_bot_tool_asks_the_browser_for_consent_only() {
                 .await
         })
     };
-    let request = frame(received.recv().await.unwrap());
+    let request = asked(&mut received).await;
     assert_eq!(request["toolName"], "knowledge_drop");
     assert_eq!(request["approvalOnly"], true);
     assert_eq!(request["approval"]["kind"], "mutating");
@@ -1130,7 +1250,7 @@ async fn every_configuration_change_requires_fresh_browser_approval() {
             let (bridge, args) = (bridge.clone(), args.clone());
             flow_like_types::tokio::spawn(async move { bridge.call(tool, args).await })
         };
-        let request = frame(received.recv().await.unwrap());
+        let request = asked(&mut received).await;
         assert_eq!(request["toolName"], tool);
         assert_eq!(request["approvalOnly"], true);
         assert_eq!(request["arguments"], args);
@@ -1181,7 +1301,7 @@ async fn flux_runs_configuration_on_the_server_and_keeps_its_authoring_bridge() 
                 .await
         })
     };
-    let request = frame(received.recv().await.unwrap());
+    let request = asked(&mut received).await;
     assert_eq!(request["approvalOnly"], true);
     reply(
         &channel,
@@ -1199,7 +1319,7 @@ async fn flux_runs_configuration_on_the_server_and_keeps_its_authoring_bridge() 
         let bridge = bridge.clone();
         flow_like_types::tokio::spawn(async move { bridge.call("list_apps", json!({})).await })
     };
-    let request = frame(received.recv().await.unwrap());
+    let request = asked(&mut received).await;
     assert_eq!(request["toolName"], "list_apps");
     assert!(request.get("approvalOnly").is_none());
     reply(
@@ -1244,7 +1364,7 @@ async fn a_declined_or_unacknowledged_approval_runs_nothing() {
                     .await
             })
         };
-        let request = frame(received.recv().await.unwrap());
+        let request = asked(&mut received).await;
         assert_eq!(request["approvalOnly"], true);
         let mut answer = answer;
         answer["requestId"] = request["requestId"].clone();
@@ -1301,6 +1421,7 @@ async fn image_host(
             source: Arc::new(NoModels),
             chat: None,
             embedding: None,
+            vision: None,
         },
         executor: executor.map(|executor| executor as Arc<dyn ToolExecutor>),
         grants: Arc::new(MemoryGrants::default()),
@@ -1383,4 +1504,155 @@ async fn without_an_executor_image_generate_is_refused_plainly() {
     let host = image_host(None, Some(image_bits(Some("my-image")))).await;
     let output = parse(&host.run("image_generate", json!({ "prompt": "a" })).await);
     assert_eq!(output["code"], "bot_tool_needs_executor");
+}
+
+/// One turn's conversation files: `notes.txt` attached to the message being answered and
+/// `f1.pdf` in the room `room1`. The store behind `broken.pdf` is down.
+struct Files;
+
+#[async_trait]
+impl flow_like_bot_tools_host::ConversationFiles for Files {
+    fn serves(&self, conversation_id: &str) -> bool {
+        conversation_id == "chat"
+    }
+
+    async fn read(
+        &self,
+        _conversation_id: &str,
+        path: &str,
+        _max_bytes: u64,
+    ) -> flow_like_types::Result<Option<flow_like_bot_tools::FileData>> {
+        Ok(
+            (path == "notes.txt").then(|| flow_like_bot_tools::FileData {
+                bytes: "from the chat".into(),
+                size: 13,
+                mime: Some("text/plain".into()),
+                classification: None,
+            }),
+        )
+    }
+}
+
+#[async_trait]
+impl super::host::TurnFiles for Files {
+    async fn link(
+        &self,
+        conversation_id: &str,
+        path: &str,
+    ) -> flow_like_types::Result<Option<JobFile>> {
+        match (conversation_id, path) {
+            ("chat", "notes.txt") | ("room1", "f1.pdf") => Ok(Some(JobFile {
+                app_id: format!("conversation_{conversation_id}"),
+                path: path.into(),
+                url: format!("https://store.example/{path}?X-Amz-Signature=s3cret"),
+                mime: None,
+            })),
+            ("room1", "broken.pdf") => Err(flow_like_types::anyhow!("the store is down")),
+            _ => Ok(None),
+        }
+    }
+}
+
+async fn files_host(executor: Arc<FakeExecutor>) -> BotToolsHost {
+    let deps = turn_deps(
+        Some(executor),
+        routing::host_tools(true, &[]),
+        Arc::new(MemoryGrants::default()),
+    )
+    .await;
+    BotToolsHost::new(deps).with_files(Arc::new(Files))
+}
+
+fn conversation_handle(conversation_id: &str, path: &str) -> Value {
+    json!({
+        "app_id": format!("conversation_{conversation_id}"),
+        "path": path,
+        "bytes": 13,
+        "sha256": "",
+        "mime": "text/plain",
+    })
+}
+
+fn linked(job: &str) -> Vec<(String, String)> {
+    let job: ToolJob = serde_json::from_str(job).unwrap();
+    job.files
+        .into_iter()
+        .map(|file| (file.app_id, file.path))
+        .collect()
+}
+
+#[flow_like_types::tokio::test]
+async fn an_executor_job_carries_a_read_link_for_each_conversation_file_it_names() {
+    let executor = Arc::new(FakeExecutor::default());
+    let host = files_host(executor.clone()).await;
+
+    let saved = host
+        .run(
+            "file_save",
+            json!({ "file": conversation_handle("chat", "notes.txt") }),
+        )
+        .await;
+    assert_eq!(parse(&saved)["ran_on"], "executor");
+    host.run(
+        "knowledge_add",
+        json!({ "index": "docs", "files": [
+            conversation_handle("room1", "f1.pdf"),
+            conversation_handle("room1", "f1.pdf"),
+            conversation_handle("room1", "f7.pdf"),
+            { "app_id": "conversation_room1", "path": "f1.pdf" },
+        ] }),
+    )
+    .await;
+    host.run("file_write", json!({ "path": "bot/a.md", "content": "x" }))
+        .await;
+
+    let jobs = executor.jobs.lock().unwrap();
+    assert_eq!(
+        linked(&jobs[0].3),
+        [("conversation_chat".to_string(), "notes.txt".to_string())]
+    );
+    assert!(jobs[0].3.contains("X-Amz-Signature=s3cret"));
+    assert_eq!(
+        linked(&jobs[1].3),
+        [("conversation_room1".to_string(), "f1.pdf".to_string())]
+    );
+    assert!(linked(&jobs[2].3).is_empty());
+}
+
+#[flow_like_types::tokio::test]
+async fn a_conversation_file_that_cannot_be_linked_fails_the_job_before_the_executor() {
+    let executor = Arc::new(FakeExecutor::default());
+    let host = files_host(executor.clone()).await;
+    let output = parse(
+        &host
+            .run(
+                "file_save",
+                json!({ "file": conversation_handle("room1", "broken.pdf") }),
+            )
+            .await,
+    );
+    assert_eq!(output["code"], "bot_tool_job_failed");
+    let message = output["message"].as_str().unwrap();
+    assert!(
+        message.contains("broken.pdf") && message.contains("the store is down"),
+        "{message}"
+    );
+    assert!(executor.jobs.lock().unwrap().is_empty());
+}
+
+#[flow_like_types::tokio::test]
+async fn a_file_attached_to_the_message_is_read_in_the_api() {
+    let executor = Arc::new(FakeExecutor::default());
+    let host = files_host(executor.clone()).await;
+    let read = parse(
+        &host
+            .run(
+                "file_read",
+                json!({ "file": conversation_handle("chat", "notes.txt") }),
+            )
+            .await,
+    );
+    assert_eq!(read["status"], "ok", "{read}");
+    assert_eq!(read["text"], "from the chat");
+    assert!(executor.jobs.lock().unwrap().is_empty());
 }

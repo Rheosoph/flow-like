@@ -5,9 +5,7 @@ import AudioLines from "lucide-react/dist/esm/icons/audio-lines.js";
 import AudioWaveform from "lucide-react/dist/esm/icons/audio-waveform.js";
 import CornerDownRight from "lucide-react/dist/esm/icons/corner-down-right.js";
 import FileIcon from "lucide-react/dist/esm/icons/file.js";
-import FolderIcon from "lucide-react/dist/esm/icons/folder.js";
 import MicIcon from "lucide-react/dist/esm/icons/mic.js";
-import Plus from "lucide-react/dist/esm/icons/plus.js";
 import Send from "lucide-react/dist/esm/icons/send.js";
 import SquareIcon from "lucide-react/dist/esm/icons/square.js";
 import WrenchIcon from "lucide-react/dist/esm/icons/wrench.js";
@@ -24,6 +22,7 @@ import {
 	useState,
 } from "react";
 import { cn, humanFileSize } from "../../../lib/utils";
+import type { ComposerAttachSource } from "../../../state/composer-capture";
 import { useMentionPicker } from "../../bots-tab/mention-picker";
 import type { Mentionable } from "../../bots-tab/mentions";
 import type { ThinkingOption } from "../../thinking/thinking-options";
@@ -35,6 +34,8 @@ import type { VoiceInvokeMode, VoiceMode } from "../../voice/types";
 import { useSpeechRecognition } from "../../voice/use-speech-recognition";
 import { useVoiceRecorder } from "../../voice/use-voice-recorder";
 import type { IChatMessageInteraction } from "./chat-message-interaction";
+import { AttachMenu } from "./chatbox/attach-menu";
+import { useComposerHandoff } from "./chatbox/composer-handoff";
 import { FileManagerDialog } from "./chatbox/file-dialog";
 import { isImageFile, useImagePreviewUrls } from "./chatbox/image-previews";
 import { type ChatBoxModel, ChatModelPicker } from "./model-picker";
@@ -89,6 +90,8 @@ interface ChatBoxProps {
 	/** Who typing `@` suggests; the text keeps `@Name`, so the host reads mentions from it. */
 	mentionables?: readonly Mentionable[];
 	placeholder?: string;
+	/** This chat's own "+" sources, e.g. its app storage. Keep the array stable between renders. */
+	attachSources?: readonly ComposerAttachSource[];
 }
 
 export interface ChatBoxStop {
@@ -113,6 +116,9 @@ function formatTime(seconds: number) {
 }
 
 const ComposerFileManager = memo(FileManagerDialog);
+
+/** A tap on Send must not take focus from the textarea: the keyboard would close and shift the composer under the finger. */
+const keepComposerFocus = (event: React.MouseEvent) => event.preventDefault();
 
 export interface ChatBoxRef {
 	setInput: (text: string) => void;
@@ -154,6 +160,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			actions,
 			mentionables,
 			placeholder,
+			attachSources,
 		}: Readonly<ChatBoxProps>,
 		ref,
 	) => {
@@ -249,6 +256,24 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 		const fileUploadRef = useRef(fileUpload);
 		fileUploadRef.current = fileUpload;
 
+		// Refs move with the state so a composer unmounted in the same batch hands off what was just written.
+		const writeDraft = useCallback((text: string, files?: File[]) => {
+			inputRef.current = text;
+			setInput(text);
+			if (!files) return;
+			attachedFilesRef.current = files;
+			setAttachedFiles(files);
+		}, []);
+
+		useComposerHandoff(
+			chatboxRef,
+			() => ({ text: inputRef.current, files: attachedFilesRef.current }),
+			(draft) => {
+				if (!draft.text && draft.files.length === 0) return;
+				writeDraft(draft.text, fileUploadRef.current ? draft.files : undefined);
+			},
+		);
+
 		useImperativeHandle(
 			ref,
 			() => ({
@@ -279,8 +304,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 					);
 				},
 				clearInput: () => {
-					setInput("");
-					setAttachedFiles([]);
+					writeDraft("", []);
 					setRecordedAudio(null);
 					setRecordedDuration(0);
 				},
@@ -301,7 +325,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 					} catch {}
 				},
 			}),
-			[],
+			[writeDraft],
 		);
 
 		/**
@@ -314,12 +338,12 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 				return;
 			}
 			setIsSteering(true);
-			setInput("");
+			writeDraft("");
 			try {
 				const delivered = await onSteer(message);
-				if (!delivered) setInput(message);
+				if (!delivered) writeDraft(message);
 			} catch {
-				setInput(message);
+				writeDraft(message);
 			} finally {
 				setIsSteering(false);
 			}
@@ -339,16 +363,14 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			// Clear the composer immediately on send — onSendMessage may not resolve until the
 			// whole response has streamed back, and leaving the sent text sitting there reads as
 			// "nothing happened". Restore it if the send fails so the user can retry.
-			setInput("");
-			setAttachedFiles([]);
+			writeDraft("", []);
 			setRecordedAudio(null);
 			setRecordedDuration(0);
 
 			try {
 				await onSendMessage(message, files, activeTools, audio);
 			} catch (error) {
-				setInput(message);
-				setAttachedFiles(files);
+				writeDraft(message, files);
 				setRecordedAudio(audio ?? null);
 				setRecordedDuration(audioDuration);
 				throw error;
@@ -424,6 +446,10 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			},
 			[fileUpload],
 		);
+
+		const insertText = useCallback((text: string) => {
+			setInput((prev) => (prev.trim() ? `${prev.trimEnd()}\n\n${text}` : text));
+		}, []);
 
 		const handlePaste = useCallback(
 			(e: React.ClipboardEvent) => {
@@ -595,7 +621,10 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 								availableTools={availableTools}
 								activeTools={activeTools}
 								attachedCount={attachedFiles.length}
+								attachSources={attachSources}
 								onFileUpload={handleFileUpload}
+								onAddFiles={addFiles}
+								onInsertText={insertText}
 								onToolToggle={handleToolToggle}
 								onClearFiles={clearFiles}
 							/>
@@ -761,6 +790,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 											isTranscribing
 										}
 										variant="secondary"
+										onMouseDown={keepComposerFocus}
 										onClick={handleSteer}
 										className="h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full transition-all duration-200"
 									>
@@ -785,6 +815,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 											!hasContent
 										}
 										variant={hasContent ? "default" : "secondary"}
+										onMouseDown={keepComposerFocus}
 										className="h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full transition-all duration-200"
 									>
 										<Send className="w-4 h-4" />
@@ -940,7 +971,10 @@ interface ComposerToolsProps {
 	readonly availableTools: string[];
 	readonly activeTools: string[];
 	readonly attachedCount: number;
+	readonly attachSources?: readonly ComposerAttachSource[];
 	readonly onFileUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+	readonly onAddFiles: (files: File[]) => void;
+	readonly onInsertText: (text: string) => void;
 	readonly onToolToggle: (tool: string) => void;
 	readonly onClearFiles: () => void;
 }
@@ -954,67 +988,23 @@ const ComposerTools = memo(function ComposerTools({
 	availableTools,
 	activeTools,
 	attachedCount,
+	attachSources,
 	onFileUpload,
+	onAddFiles,
+	onInsertText,
 	onToolToggle,
 	onClearFiles,
 }: ComposerToolsProps) {
 	const { t } = useTranslation();
 	return (
 		<div className="flex min-w-0 flex-wrap items-center gap-1 p-2 pt-0">
-			{fileUpload && (
-				<Popover>
-					<PopoverTrigger asChild>
-						<Button
-							aria-label={t("addAttachment", "Add attachment")}
-							type="button"
-							size="sm"
-							variant="ghost"
-							className="h-11 w-11 sm:h-8 sm:w-8 p-0 hover:bg-accent rounded-lg transition-colors"
-						>
-							<Plus className="w-4 h-4 text-muted-foreground" />
-						</Button>
-					</PopoverTrigger>
-					<PopoverContent
-						side="top"
-						align="start"
-						className="mb-2 w-52 rounded-xl p-1.5"
-					>
-						<input
-							type="file"
-							id="file-upload"
-							className="hidden"
-							onChange={onFileUpload}
-							multiple
-						/>
-						<input
-							type="file"
-							id="folder-upload"
-							className="hidden"
-							onChange={onFileUpload}
-							multiple
-							// @ts-ignore
-							directory=""
-							webkitdirectory=""
-						/>
-						<div className="space-y-0.5">
-							<label
-								htmlFor="file-upload"
-								className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors hover:bg-accent"
-							>
-								<FileIcon className="size-4 text-muted-foreground" />
-								{t("files", "Files")}
-							</label>
-							<label
-								htmlFor="folder-upload"
-								className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors hover:bg-accent"
-							>
-								<FolderIcon className="size-4 text-muted-foreground" />
-								{t("folder", "Folder")}
-							</label>
-						</div>
-					</PopoverContent>
-				</Popover>
-			)}
+			<AttachMenu
+				fileUpload={fileUpload}
+				sources={attachSources}
+				onFileUpload={onFileUpload}
+				onAddFiles={onAddFiles}
+				onInsertText={onInsertText}
+			/>
 
 			{model && <ChatModelPicker {...model} />}
 

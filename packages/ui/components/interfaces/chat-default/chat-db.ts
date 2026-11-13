@@ -1,12 +1,18 @@
 import Dexie, { type EntityTable } from "dexie";
 import type { IChatMessageError } from "../../../lib/flowpilot/chat-error";
+import type { IChatUsageStat } from "../../../lib/llm/usage";
 import type { IHistoryMessage } from "../../../lib/schema/llm/history";
 import { installRuntimeHistoryGuard } from "../../../lib/service-runtime/history-guard";
+import type { IBotNoteRef } from "../../../state/backend-state/bot-state";
 import type { IAgentDebugReport } from "../../../state/global-chat/agent-debug-report";
-import type { ConversationNote } from "../../bots-tab/fold-entries";
+import type {
+	ConversationApproval,
+	ConversationNote,
+} from "../../bots-tab/fold-entries";
 import type { UserContextCardData } from "../../bots-tab/user-context-entry";
 import type { FlowScriptWorkspaceCandidate } from "../../flowpilot/flowscript-workspace-candidates";
 import type { BotExchangeView } from "../../global-chat/bot-exchange";
+import type { ComputerPermissionNeed } from "../../global-chat/computer-permission";
 import { finalizePlanSteps } from "./chat-event-fold";
 import type { IChatMessageInteraction } from "./chat-message-interaction";
 
@@ -127,6 +133,19 @@ export interface IToolActivityDetail {
 	};
 	/** An `ask_bot` call: shown as the exchange card between the two bots. */
 	exchange?: BotExchangeView;
+	/** A computer tool that needs a macOS permission: shown as the card that opens the dialog. */
+	permission?: ComputerPermissionNeed;
+	/** The app a tool acted on: rendered as an app reference, never as its raw id. */
+	app?: {
+		id: string;
+		/** The name the model passed, shown until the app's metadata loads. */
+		name?: string;
+		eventId?: string;
+		eventName?: string;
+		eventType?: string;
+		mcpTool?: string;
+		runStatus?: string;
+	};
 	target?: string;
 	query?: string;
 	/** All queries issued by this tool call, retained across progress updates. */
@@ -170,34 +189,11 @@ export interface IPlanStep {
 	toolName?: string;
 }
 
-export interface IModelCallEntry {
-	model: string;
-	usage: {
-		completion_tokens: number;
-		prompt_tokens: number;
-		total_tokens: number;
-		cost?: number | null;
-	};
-	duration_ms?: number | null;
-}
-
-export interface ILLMUsageStats {
-	usage: {
-		completion_tokens: number;
-		prompt_tokens: number;
-		total_tokens: number;
-		cost?: number | null;
-	};
-	model?: string | null;
-	duration_ms?: number | null;
-	iterations?: number | null;
-	calls?: IModelCallEntry[];
-}
-
-export interface IChatUsageStat {
-	step_name: string;
-	stats: ILLMUsageStats;
-}
+export type {
+	IChatUsageStat,
+	ILLMUsageStats,
+	IModelCallEntry,
+} from "../../../lib/llm/usage";
 
 /**
  * How one assistant turn was actually executed, stamped on the message while the run is alive.
@@ -215,7 +211,11 @@ export interface IChatRunContext {
 	provider?: string;
 	/** Raw picker model id. */
 	model_id?: string;
-	/** The prefixed id actually handed to the backend. */
+	/**
+	 * The Bit the host reported running the turn on (the bot's own model, not the picker's), set at
+	 * the start of the run. Without a report (agent CLIs, older hosts) it is the id the picker handed
+	 * the backend.
+	 */
 	effective_model_id?: string;
 	reasoning_effort?: string;
 	auto_mode?: boolean;
@@ -242,18 +242,8 @@ export interface IChatRunContext {
 }
 
 /** A bot's approval request in its chat; the card answers it and shows the answer. */
-export interface IMessageApproval {
-	id: string;
+export interface IMessageApproval extends ConversationApproval {
 	botId: string;
-	turnId: string;
-	tool: string;
-	summary: string;
-	scopes: string[];
-	requesterName?: string;
-	room?: string;
-	configurationChanges?: Record<string, unknown>;
-	secret?: { name: string; description: string; replace?: boolean };
-	answer?: "once" | "always" | "deny";
 }
 
 export interface IReactionSummary {
@@ -274,8 +264,12 @@ export interface IMessage {
 	userContext?: UserContextCardData;
 	/** Visible in the transcript; excluded from later model input and automatic references. */
 	userContextDerived?: boolean;
+	/** Id of the context request whose values the derived reply used. */
+	userContextDerivedFrom?: string;
 	/** Set on a line between messages: the message renders as a pill, without actions. */
 	notice?: IMessageNotice;
+	/** The bot note this reply was written with, from the bot's inbox. */
+	note?: IBotNoteRef;
 	id: string;
 	/** Original response slot, shared by every message emitted in one run. */
 	stream_root_id?: string;

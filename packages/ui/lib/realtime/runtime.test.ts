@@ -354,6 +354,22 @@ describe("shared realtime runtime", () => {
 		]);
 	});
 
+	test("a run that has more but delivered nothing waits on a gap instead of polling at 50 ms", async () => {
+		const fetcher = vi.fn(async () =>
+			response({ runs: [{ ...run("a", []), has_more: true }] }),
+		);
+		const runtime = create(fetcher);
+		const port = connect(runtime, "first");
+		port.subscribe({ notifications: false, runs: [{ run_id: "a" }] });
+		await vi.advanceTimersByTimeAsync(1);
+		port.accept();
+		const calls = fetcher.mock.calls.length;
+		await vi.advanceTimersByTimeAsync(400);
+		expect(fetcher.mock.calls.length).toBe(calls);
+		await vi.advanceTimersByTimeAsync(400);
+		expect(fetcher.mock.calls.length).toBeGreaterThan(calls);
+	});
+
 	test("a finished run's closing page reaches the tab that accepted its last events", async () => {
 		const fetcher = replayApi({
 			status: "COMPLETED",

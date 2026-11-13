@@ -3,7 +3,7 @@
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, Request, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -15,6 +15,7 @@ use flow_like_bot_host::{
     account::{AccountConfig, AccountHost},
     host::{TurnEvents, TurnInfo},
 };
+use flow_like_device_crypto::inbox::{PublicInboxKey, Recipient, Scope};
 use flow_like_device_protocol::*;
 use flow_like_standalone::{
     bot_host::{
@@ -91,6 +92,9 @@ pub struct Scenario {
     pub model: VecDeque<Step>,
     pub capabilities: Vec<BotCapability>,
     pub prompt: String,
+    /// The chat is end-to-end encrypted; these are the owner's devices' published keys. The turn
+    /// is listed once the device published the bot's key, and the prompt arrives sealed to it.
+    pub owner_keys: Option<Vec<PublicInboxKey>>,
 }
 
 impl Default for Scenario {
@@ -102,6 +106,7 @@ impl Default for Scenario {
             model: VecDeque::new(),
             capabilities: Vec::new(),
             prompt: "Please say hello".into(),
+            owner_keys: None,
         }
     }
 }
@@ -114,6 +119,10 @@ pub struct Hub {
     pub model_requests: Vec<Value>,
     pub model_in_flight: usize,
     pub model_dropped: usize,
+    /// What the device saved last for the turn; a fresh turn has none.
+    pub checkpoint: Option<Value>,
+    /// The bot's public inbox key as the device published it.
+    pub bot_key: Option<Value>,
     manifest: Option<OnboardingManifest>,
     challenge: Option<EnrollmentChallenge>,
     receipt: Option<DeviceReceipt>,
@@ -194,6 +203,7 @@ pub fn hosted_bit() -> Value {
         parameters: serde_json::to_value(LLMParameters {
             context_length: 20_000,
             model_classification: BitModelClassification::default(),
+            data_classification: None,
             provider: ModelProvider {
                 api_surface: None,
                 provider_name: "hosted:openrouter".into(),
@@ -220,6 +230,7 @@ fn grant_of(state: &Hub) -> DeviceTurnGrant {
         },
         bot: DeviceBotSpec {
             bot_id: BOT_ID.into(),
+            execution_mode: Default::default(),
             system: None,
             name: "Deviceling".into(),
             description: None,
@@ -254,6 +265,8 @@ fn grant_of(state: &Hub) -> DeviceTurnGrant {
             fallbacks: Vec::new(),
             embedding: None,
             embedding_model_id: None,
+            image: None,
+            vision: None,
         },
         bot_token: DeviceToken {
             token: BOT_TOKEN.into(),
@@ -424,6 +437,16 @@ fn device_session(
     headers: &HeaderMap,
     path: &str,
 ) -> std::result::Result<(), Response> {
+    device_request(hub, id, headers, "POST", path)
+}
+
+fn device_request(
+    hub: &mut Hub,
+    id: &str,
+    headers: &HeaderMap,
+    method: &str,
+    path: &str,
+) -> std::result::Result<(), Response> {
     let receipt = hub.receipt.clone().unwrap();
     if receipt.device_id != id {
         return Err(error(404, "DEVICE_NOT_FOUND", "unknown device"));
@@ -442,7 +465,7 @@ fn device_session(
         proof,
         &receipt.identity.auth_key,
         &DpopContext {
-            method: "POST",
+            method,
             url: &endpoint,
             access_token: Some(token),
             nonce: None,
@@ -458,6 +481,35 @@ fn device_session(
     Ok(())
 }
 
+/// The proof of a checkpoint call names the path without its query, as the hub checks it.
+async fn checkpoint_load(
+    State(hub): State<Shared>,
+    Path((id, turn)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    let mut hub = hub.lock().await;
+    let path = format!("/devices/{id}/bots/turns/{turn}/checkpoint");
+    if let Err(response) = device_request(&mut hub, &id, &headers, "GET", &path) {
+        return response;
+    }
+    Json(json!({"checkpoint": hub.checkpoint, "monitor_result": null})).into_response()
+}
+
+async fn checkpoint_save(
+    State(hub): State<Shared>,
+    Path((id, turn)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    let mut hub = hub.lock().await;
+    let path = format!("/devices/{id}/bots/turns/{turn}/checkpoint");
+    if let Err(response) = device_request(&mut hub, &id, &headers, "PUT", &path) {
+        return response;
+    }
+    hub.checkpoint = Some(body["checkpoint"].clone());
+    Json(json!({"saved": true})).into_response()
+}
+
 async fn poll(
     State(hub): State<Shared>,
     Path(id): Path<String>,
@@ -470,10 +522,12 @@ async fn poll(
     {
         return response;
     }
-    let queued = hub.state == TurnState::Queued;
+    let queued = hub.state == TurnState::Queued
+        && (hub.scenario.owner_keys.is_none() || hub.bot_key.is_some());
     Json(DevicePollResponse {
         bots: vec![DeviceBotInfo {
             id: BOT_ID.into(),
+            execution_mode: Default::default(),
             name: Some("Deviceling".into()),
             capabilities: hub.scenario.capabilities.clone(),
             updated_at: rfc3339(0),
@@ -486,6 +540,90 @@ async fn poll(
         next_poll_ms: 500,
     })
     .into_response()
+}
+
+async fn publish_key(
+    State(hub): State<Shared>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    let mut hub = hub.lock().await;
+    let path = format!("/devices/{id}/bots/inbox-keys");
+    if let Err(response) = device_session(&mut hub, &id, &headers, &path) {
+        return response;
+    }
+    if body["principal_id"] != BOT_ID {
+        return error(404, "NOT_FOUND", "not a bot bound to this device");
+    }
+    hub.bot_key = Some(body.clone());
+    Json(body).into_response()
+}
+
+fn directory_key(principal: &str, key: &PublicInboxKey) -> Value {
+    json!({
+        "principal_id": principal,
+        "key_id": key.key_id,
+        "algorithm": key.algorithm,
+        "public_key": key.public_key,
+    })
+}
+
+/// The members' published keys; only the bot of a claimed turn reads them, for its chat.
+async fn inbox_keys(
+    State(hub): State<Shared>,
+    headers: HeaderMap,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if !bearer_ok(&headers, BOT_TOKEN) {
+        return error(401, "UNAUTHORIZED", "bot token expected");
+    }
+    if query.get("as").map(String::as_str) != Some(BOT_ID)
+        || query.get("conversation_id").map(String::as_str) != Some(CONVERSATION_ID)
+    {
+        return error(
+            403,
+            "FORBIDDEN",
+            "a bot reads only its chat's members' keys",
+        );
+    }
+    let hub = hub.lock().await;
+    let asked: Vec<&str> = query
+        .get("principals")
+        .map(|principals| principals.split(',').collect())
+        .unwrap_or_default();
+    let mut keys: Vec<Value> = hub.bot_key.iter().cloned().collect();
+    keys.extend(
+        hub.scenario
+            .owner_keys
+            .iter()
+            .flatten()
+            .map(|key| directory_key(OWNER_ID, key)),
+    );
+    keys.retain(|key| asked.iter().any(|id| key["principal_id"] == *id));
+    Json(json!({ "keys": keys })).into_response()
+}
+
+/// The prompt as the bot's inbox holds it: plain, or sealed to the bot's published key.
+fn trigger_envelope(hub: &Hub, conversation: &str) -> Value {
+    let body = json!({"text": hub.scenario.prompt});
+    let Some(key) = hub.scenario.owner_keys.as_ref().and(hub.bot_key.as_ref()) else {
+        return json!({"v": 1, "enc": "none", "body": body});
+    };
+    flow_like_device_crypto::inbox::seal(
+        &Scope {
+            conversation_id: conversation,
+            message_id: TRIGGER_ID,
+            sender_id: OWNER_ID,
+        },
+        &Recipient {
+            principal_id: BOT_ID.into(),
+            key_id: key["key_id"].as_str().unwrap().into(),
+            public_key: key["public_key"].as_str().unwrap().into(),
+        },
+        &serde_json::to_vec(&body).unwrap(),
+    )
+    .unwrap()
 }
 
 async fn claim(
@@ -657,6 +795,7 @@ async fn entries(
         return error(401, "UNAUTHORIZED", "bot token expected");
     }
     let hub = hub.lock().await;
+    let envelope = trigger_envelope(&hub, &conversation);
     let sent = chrono::DateTime::from_timestamp(now() - 5, 0)
         .unwrap()
         .to_rfc3339();
@@ -667,7 +806,7 @@ async fn entries(
             "conversation_id": conversation,
             "sender_id": OWNER_ID,
             "kind": "message",
-            "envelope": {"v": 1, "enc": "none", "body": {"text": hub.scenario.prompt}},
+            "envelope": envelope,
             "created_at": sent,
             "seq": 1,
             "cursor": "c1"
@@ -843,8 +982,13 @@ pub fn router(hub: Shared) -> Router {
         .route("/devices/{id}/receipt", post(receipt))
         .route("/devices/token", post(token))
         .route("/devices/{id}/bots/poll", post(poll))
+        .route("/devices/{id}/bots/inbox-keys", post(publish_key))
         .route("/devices/{id}/bots/turns/{turn}/claim", post(claim))
         .route("/devices/{id}/bots/turns/{turn}/heartbeat", post(heartbeat))
+        .route(
+            "/devices/{id}/bots/turns/{turn}/checkpoint",
+            get(checkpoint_load).put(checkpoint_save),
+        )
         .route("/devices/{id}/bots/turns/{turn}/reply", post(reply))
         .route("/devices/{id}/bots/turns/{turn}/silent", post(silent))
         .route("/devices/{id}/bots/turns/{turn}/park", post(park))
@@ -852,6 +996,7 @@ pub fn router(hub: Shared) -> Router {
         .route("/devices/{id}/bots/hosts/forget", post(forget))
         .route("/inbox/conversations/{c}/entries", get(entries))
         .route("/inbox/conversations/{c}", get(conversation))
+        .route("/inbox/keys", get(inbox_keys))
         .route(
             "/bots/{bot}/tool-grants",
             get(tool_grants)
@@ -893,6 +1038,8 @@ impl MockHub {
             model_requests: Vec::new(),
             model_in_flight: 0,
             model_dropped: 0,
+            checkpoint: None,
+            bot_key: None,
             manifest: None,
             challenge: None,
             receipt: None,
@@ -963,6 +1110,7 @@ impl TurnEvents for NoEvents {
 
 pub struct HostHandle {
     task: tokio::task::JoinHandle<()>,
+    _state: tempfile::TempDir,
 }
 
 impl Drop for HostHandle {
@@ -983,7 +1131,13 @@ pub fn start_host(session: Arc<DeviceSession>, machines: Option<Arc<dyn Machines
         flow_like::state::FlowLikeConfig::new(),
         flow_like::utils::http::HTTPClient::new_without_refetch(),
     ));
-    let runner = Arc::new(DeviceRunner::new(state, base_url, machines));
+    let state_dir = tempfile::tempdir().unwrap();
+    let runner = Arc::new(DeviceRunner::new(
+        state,
+        base_url,
+        machines,
+        state_dir.path(),
+    ));
     let mut config = AccountConfig::new(host_id);
     config.fire_tasks = false;
     config.heartbeat = Duration::from_millis(200);
@@ -997,6 +1151,7 @@ pub fn start_host(session: Arc<DeviceSession>, machines: Option<Arc<dyn Machines
     );
     HostHandle {
         task: tokio::spawn(host.run()),
+        _state: state_dir,
     }
 }
 

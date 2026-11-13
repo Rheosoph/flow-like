@@ -1,4 +1,5 @@
 import {
+	DataClassificationSelect,
 	type IBit,
 	type IBitModelClassification,
 	type ILlmParameters,
@@ -12,6 +13,7 @@ import {
 	SelectValue,
 	Slider,
 	humanFileSize,
+	parseDataClassification,
 } from "@flow-like/flow-like-ui";
 import {
 	Card,
@@ -230,6 +232,24 @@ export function LLMConfiguration({
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
+					<div className="space-y-2">
+						<Label>
+							{t(
+								"modelDataClassification",
+								"Most sensitive data it may process",
+							)}
+						</Label>
+						<DataClassificationSelect
+							value={parseDataClassification(parameters?.data_classification)}
+							onChange={(next) => updateParameter("data_classification", next)}
+						/>
+						<p className="text-xs text-muted-foreground">
+							{t(
+								"modelDataClassificationHint",
+								"A tag for now. It does not change which model is used.",
+							)}
+						</p>
+					</div>
 					<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 						{Object.entries(parameters?.model_classification || {}).map(
 							([key, value]) => {

@@ -17,7 +17,7 @@ Every account has two built-in bots you can't delete:
 
 <BuiltInBots />
 
-Flux is FlowPilot as a member of your crew: the [FlowPilot guide](/studio/flowpilot/) describes everything it can build. Flux also builds and adjusts your other bots. Ask it for a bot, such as "a bot that answers questions about my sales app", and it writes the instructions, switches on the abilities the bot needs and gives it the apps it should use, building an app first when none fits. Every new bot and every change to one shows you the proposed settings and waits for your approval. The Assistant is a general helper. Both work without an account.
+Flux is FlowPilot as a member of your crew: the [FlowPilot guide](/studio/flowpilot/) describes everything it can build. Flux also builds and adjusts your other bots. Ask it for a bot, such as "a bot that answers questions about my sales app", and it writes the instructions, switches on the abilities the bot needs and gives it the apps it should use, building an app first when none fits. It can also set a bot's data classification, limit what the bot may do in each of its apps, run a bot on one of your devices or move it there, and delete a bot you no longer need. Every new bot, every change and every deletion shows you the proposed settings, or the bot to be deleted, and waits for your approval. Flux never deletes the Assistant or itself. The look beyond the starter characters, secrets and tasks stay in the Bots tab. The Assistant is a general helper. Both work without an account.
 
 ## The Bots tab
 
@@ -29,7 +29,15 @@ Open **Bots** in the sidebar to see your crew:
 
 A bot's details have tabs for what it holds: **Details** (abilities, host, models, tasks, webhooks, skills, allowed actions, usage), **Files** and **Data** from its workspace, **Computer** for its screen and browser, **Memory** for what it remembers, and **Mail** for its inbox. Tabs a bot can't use stay hidden.
 
+To watch browser or computer use, select the bot's name or avatar in chat, then open **Computer**. The panel shows refreshed screenshots beside the conversation, with **Stop**, **Take over** and **Hand back** controls when the host supports them. Screenshots do not appear automatically in the message history. Watching a device bot, including one hosted in Docker, requires the desktop app and uses the encrypted device connection.
+
 You can also put bots on your Home page with the **Bot chat**, **Crew** and **Messages** widgets. See [Customize your Home](/start/home/).
+
+### Hide bots in a profile
+
+Each [profile](/start/profiles/) chooses which of your bots it shows. Select the eye button next to the search to open **Bots in this profile**, then switch off the bots this profile doesn't need. The Assistant and Flux can be hidden too.
+
+A hidden bot leaves that profile's crew, the pickers for new rooms and messages, and the **Crew** and **Bot chat** widgets on Home. Nothing else about it changes: it keeps running its tasks, stays in its rooms, and still shows under **Needs you** when it waits for your answer. Your other profiles keep showing it. Switch it back on in the same dialog, which you can also open from **hidden in this profile** above the crew.
 
 ## How a turn runs
 

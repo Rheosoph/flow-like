@@ -6,11 +6,7 @@
 //! the conversation read the object through their tools. Deleting the message marks its files
 //! deleted, and [`sweep`] removes the objects and rows, together with files nobody sent.
 
-use super::{
-    Reader, acting_reader, active_membership,
-    model::ReaderQuery,
-    now_millis,
-};
+use super::{Reader, acting_reader, active_membership, model::ReaderQuery, now_millis};
 use crate::{
     capacity,
     entity::{conversation, conversation_file},
@@ -25,7 +21,9 @@ use axum::{
     http::StatusCode,
 };
 use chrono::{DateTime, Duration as ChronoDuration, FixedOffset};
-use flow_like_storage::object_store::{self, ObjectStore, ObjectStoreExt, path::Path as ObjectPath};
+use flow_like_storage::object_store::{
+    self, ObjectStore, ObjectStoreExt, path::Path as ObjectPath,
+};
 use flow_like_types::{
     bot_message::{
         CONVERSATION_FILE_APP_PREFIX, MAX_CONVERSATION_FILE_BYTES, MAX_FILE_NAME_CHARS,
@@ -50,6 +48,7 @@ pub(crate) const INBOX_FILE_NOT_FOUND: &str = "INBOX_FILE_NOT_FOUND";
 pub(crate) const INBOX_FILE_TOO_LARGE: &str = "INBOX_FILE_TOO_LARGE";
 pub(crate) const INBOX_FILE_NOT_READY: &str = "INBOX_FILE_NOT_READY";
 pub(crate) const INBOX_FILE_TAKEN: &str = "INBOX_FILE_TAKEN";
+pub(crate) const INBOX_FILE_SEALED: &str = "INBOX_FILE_SEALED";
 
 pub(crate) const FILE_PENDING: &str = "PENDING";
 pub(crate) const FILE_READY: &str = "READY";
@@ -177,9 +176,19 @@ pub(crate) fn validate_request(request: &MintFileRequest) -> Result<(String, Str
     let mime = request
         .mime
         .as_deref()
-        .map(|mime| mime.split(';').next().unwrap_or_default().trim().to_ascii_lowercase())
+        .map(|mime| {
+            mime.split(';')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase()
+        })
         .filter(|mime| is_mime(mime))
-        .or_else(|| mime_guess::from_path(name).first().map(|mime| mime.to_string()))
+        .or_else(|| {
+            mime_guess::from_path(name)
+                .first()
+                .map(|mime| mime.to_string())
+        })
         .unwrap_or_else(|| OCTET_STREAM.to_string());
     Ok((name.to_string(), mime))
 }
@@ -194,7 +203,9 @@ async fn held_bytes<C: ConnectionTrait>(db: &C, uploader: &str) -> Result<i64, A
         .into_tuple::<i64>()
         .all(db)
         .await?;
-    Ok(files.into_iter().fold(0i64, |sum, bytes| sum.saturating_add(bytes)))
+    Ok(files
+        .into_iter()
+        .fold(0i64, |sum, bytes| sum.saturating_add(bytes)))
 }
 
 /// The conversation `inbox` is an active member of, in a plain (not end-to-end encrypted) form.
@@ -208,7 +219,8 @@ async fn plain_conversation<C: ConnectionTrait>(
         .one(db)
         .await?
         .ok_or_else(|| super::conversation_not_found(conversation_id))?;
-    if ConversationEncryption::parse(&conversation.encryption) != Some(ConversationEncryption::Plain)
+    if ConversationEncryption::parse(&conversation.encryption)
+        != Some(ConversationEncryption::Plain)
     {
         return Err(ApiError::coded(
             StatusCode::CONFLICT,
@@ -284,10 +296,16 @@ pub(crate) async fn complete_in<C: ConnectionTrait>(
             return Err(ApiError::coded(
                 StatusCode::CONFLICT,
                 INBOX_FILE_NOT_READY,
-                format!("File '{file_id}' has not been uploaded yet; PUT the bytes to its upload url first"),
+                format!(
+                    "File '{file_id}' has not been uploaded yet; PUT the bytes to its upload url first"
+                ),
             ));
         }
-        Err(error) => return Err(ApiError::internal(format!("head file '{file_id}': {error}"))),
+        Err(error) => {
+            return Err(ApiError::internal(format!(
+                "head file '{file_id}': {error}"
+            )));
+        }
     };
     if size > file.bytes.max(0) as u64 || size > MAX_CONVERSATION_FILE_BYTES {
         mark_deleted(db, &[file.id.clone()], super::now_millis()).await?;
@@ -310,7 +328,7 @@ pub(crate) async fn complete_in<C: ConnectionTrait>(
     Ok(ready_of(&ready.update(db).await?))
 }
 
-async fn hash_object(
+pub(super) async fn hash_object(
     store: &dyn ObjectStore,
     location: &ObjectPath,
 ) -> Result<String, object_store::Error> {
@@ -429,7 +447,31 @@ pub(crate) async fn ensure_member<C: ConnectionTrait>(
         .map(|_| ())
 }
 
-/// The object a bot's tools read: the file's key, after the bot's membership is checked.
+/// Fails with [`INBOX_FILE_SEALED`], in words a bot can pass on, for an end-to-end encrypted
+/// conversation: its files are ciphertext whose keys only the members' devices hold, so nothing
+/// that runs on the server reads them.
+pub(crate) async fn ensure_server_readable<C: ConnectionTrait>(
+    db: &C,
+    conversation_id: &str,
+) -> Result<(), ApiError> {
+    let encryption = conversation::Entity::find_by_id(conversation_id)
+        .one(db)
+        .await?
+        .and_then(|row| ConversationEncryption::parse(&row.encryption));
+    if encryption == Some(ConversationEncryption::Plain) {
+        return Ok(());
+    }
+    Err(ApiError::coded(
+        StatusCode::CONFLICT,
+        INBOX_FILE_SEALED,
+        format!(
+            "The files of the end-to-end encrypted conversation '{conversation_id}' open only on the members' devices, which hold their keys, so tools that run on the server can't read them. Ask the person to open the file in the app, or to send it in a conversation that isn't encrypted if a server tool should read it."
+        ),
+    ))
+}
+
+/// The object a bot's tools read on the server: the file's key, after the bot's membership is
+/// checked. A file of an end-to-end encrypted conversation is never read there.
 pub(crate) async fn bot_readable_key<C: ConnectionTrait>(
     db: &C,
     conversation_id: &str,
@@ -437,6 +479,7 @@ pub(crate) async fn bot_readable_key<C: ConnectionTrait>(
     path: &str,
 ) -> Result<String, ApiError> {
     active_membership(db, conversation_id, principal).await?;
+    ensure_server_readable(db, conversation_id).await?;
     let file_id = path.split_once('.').map_or(path, |(id, _)| id);
     let file = conversation_file::Entity::find_by_id(file_id)
         .filter(conversation_file::Column::ConversationId.eq(conversation_id))
@@ -506,15 +549,25 @@ pub(crate) async fn claim<C: ConnectionTrait>(
                     .to_string(),
             ));
         }
-        if file.message_id.as_deref().is_some_and(|owner| owner != message_id) {
+        if file
+            .message_id
+            .as_deref()
+            .is_some_and(|owner| owner != message_id)
+        {
             return Err(ApiError::coded(
                 StatusCode::CONFLICT,
                 INBOX_FILE_TAKEN,
-                format!("File '{}' belongs to another message; upload it again", used.file_id),
+                format!(
+                    "File '{}' belongs to another message; upload it again",
+                    used.file_id
+                ),
             ));
         }
         conversation_file::Entity::update_many()
-            .col_expr(conversation_file::Column::MessageId, Expr::value(message_id))
+            .col_expr(
+                conversation_file::Column::MessageId,
+                Expr::value(message_id),
+            )
             .filter(conversation_file::Column::Id.eq(used.file_id.as_str()))
             .exec(txn)
             .await?;
@@ -640,7 +693,9 @@ pub async fn mint_file(
     plain_conversation(&state.db, &conversation_id, &reader.inbox).await?;
     validate_request(&body)?;
     let held = held_bytes(&state.db, &payer).await?;
-    let requested = i64::try_from(body.bytes).unwrap_or(i64::MAX).saturating_add(held);
+    let requested = i64::try_from(body.bytes)
+        .unwrap_or(i64::MAX)
+        .saturating_add(held);
     capacity::check_storage_write(&state, "", &payer, requested).await?;
     let now = now_millis();
     let file = mint_in(&state.db, &conversation_id, &reader.inbox, &body, now).await?;
@@ -723,13 +778,7 @@ pub async fn download_file(
     Path((conversation_id, file_id)): Path<(String, String)>,
     Query(query): Query<ReaderQuery>,
 ) -> Result<Json<ConversationFileDownload>, ApiError> {
-    let reader = acting_reader(
-        &state.db,
-        &user,
-        query.as_bot.as_deref(),
-        &conversation_id,
-    )
-    .await?;
+    let reader = acting_reader(&state.db, &user, query.as_bot.as_deref(), &conversation_id).await?;
     let file = readable_file(&state.db, &conversation_id, &reader, &file_id).await?;
     let master = state.master_credentials().await?;
     let store = master.to_store(false).await?;

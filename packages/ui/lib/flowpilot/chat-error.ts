@@ -30,10 +30,17 @@ export type ChatErrorKind =
 
 /** The one recovery affordance the card offers, when the failure has an obvious next step. */
 export interface IChatErrorAction {
-	/** `navigate` pushes `href`; `upgrade` opens the plan-upgrade dialog. */
-	kind: "navigate" | "upgrade";
+	/**
+	 * `navigate` pushes `href`; `upgrade` opens the plan-upgrade dialog; `add-model` puts the model
+	 * picker in the card, and a pick is added to the profile.
+	 */
+	kind: "navigate" | "upgrade" | "add-model";
 	label: string;
 	href?: string;
+	/** With `add-model`: the answer runs in the cloud, so models on the person's devices don't help. */
+	hostedOnly?: boolean;
+	/** With `add-model`: the bot whose own profile the pick goes to; unset means the active one. */
+	botId?: string;
 }
 
 /**
@@ -59,6 +66,80 @@ export interface IChatMessageError {
 
 const MODEL_SETTINGS_ROUTE = "/settings/ai?tab=models";
 const DETAIL_LIMIT = 1_000;
+
+/** The API's code for a profile without a language model the server can run. */
+const PROFILE_MODEL_REQUIRED = "PROFILE_MODEL_REQUIRED";
+
+/** Core's model selection, when nothing in the profile runs on the host that asked. */
+const NO_MODEL_ON_HOST = "no available model found in this profile";
+/** The desktop's own wording around it, for a bot it runs itself. */
+const NO_MODEL_ON_DESKTOP = "no language model it can use runs on this";
+/**
+ * What the API answered before it had the code. The first sentence blamed the plan for models
+ * that only run on a device, and bot replies stored back then still carry these.
+ */
+const EARLIER_API_REFUSALS = [
+	"none of the models in this profile are included in your plan",
+	"this profile has no language model",
+	NO_MODEL_ON_HOST,
+];
+
+type ModelRequiredExtra = Partial<
+	Pick<IChatMessageError, "code" | "status" | "reference" | "detail">
+>;
+
+/**
+ * A turn nothing in the profile could answer. Only another model resolves it, so the card offers
+ * the picker instead of a sentence about settings the person may not be able to reach.
+ */
+export function modelRequiredError(
+	message: string,
+	hostedOnly: boolean,
+	extra: ModelRequiredExtra = {},
+): IChatMessageError {
+	return {
+		...extra,
+		kind: "config",
+		title: "Choose a language model",
+		message,
+		action: { kind: "add-model", label: "Choose a model", hostedOnly },
+		retryable: false,
+	};
+}
+
+/**
+ * The same refusal read from a sentence that carries no code: an earlier API's, a stored bot
+ * reply's, or this app's own. `ownRun` says the sentence came from a run on this device rather
+ * than from the API, which decides where core's bare sentence was spoken. The card gets a sentence
+ * of its own, since the earlier ones are wrong or point at settings.
+ */
+export function modelRequiredFromText(
+	text: string,
+	ownRun: boolean,
+	extra: ModelRequiredExtra = {},
+): IChatMessageError | null {
+	const lowered = text.toLowerCase();
+	const onThisDevice =
+		lowered.includes(NO_MODEL_ON_DESKTOP) ||
+		(ownRun && lowered.includes(NO_MODEL_ON_HOST));
+	if (onThisDevice) {
+		return modelRequiredError(
+			"No language model in this profile runs on this device. Add one to get an answer.",
+			false,
+			extra,
+		);
+	}
+	if (ownRun) return null;
+	for (const refusal of EARLIER_API_REFUSALS) {
+		if (!lowered.includes(refusal)) continue;
+		return modelRequiredError(
+			"No language model in this profile can answer here.",
+			true,
+			extra,
+		);
+	}
+	return null;
+}
 
 function providerLabel(provider: AIProvider | string): string {
 	switch (normalizeAIProvider(provider as AIProvider)) {
@@ -165,6 +246,12 @@ function fromApi(
 		detail,
 	};
 	const normalized = message.toLowerCase();
+
+	const modelRequired =
+		code === PROFILE_MODEL_REQUIRED
+			? modelRequiredError(message, true, base)
+			: modelRequiredFromText(message, false, base);
+	if (modelRequired) return modelRequired;
 
 	if (status === 402 || code === "PAYMENT_REQUIRED") {
 		return {
@@ -326,6 +413,9 @@ export function buildChatMessageError(
 			retryable: true,
 		};
 	}
+
+	const modelRequired = modelRequiredFromText(text, true, { detail });
+	if (modelRequired) return modelRequired;
 
 	if (isAgentBackendProvider(normalizeAIProvider(provider as AIProvider))) {
 		const diagnostic = classifyAgentBackendError(provider, error);

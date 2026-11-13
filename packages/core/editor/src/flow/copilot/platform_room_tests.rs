@@ -114,6 +114,15 @@ async fn run(
     update_round: usize,
     tool_rounds: usize,
 ) -> (String, String, Vec<CompletionRequest>, usize) {
+    run_in(rounds, update_round, tool_rounds, false).await
+}
+
+async fn run_in(
+    rounds: Vec<Vec<RawStreamingChoice<()>>>,
+    update_round: usize,
+    tool_rounds: usize,
+    spoken: bool,
+) -> (String, String, Vec<CompletionRequest>, usize) {
     let updates = Arc::new(Updates::default());
     let model = ScriptedModel {
         rounds: Arc::new(Mutex::new(rounds)),
@@ -128,9 +137,12 @@ async fn run(
         FlowLikeConfig::new(),
         HTTPClient::new_without_refetch(),
     ));
-    let copilot = PlatformCopilot::new(state, None)
+    let mut copilot = PlatformCopilot::new(state, None)
         .with_tool_rounds(tool_rounds)
         .with_tool_specs(vec![find_global_tool_spec("list_apps").unwrap()]);
+    if spoken {
+        copilot = copilot.with_spoken_drafts();
+    }
     let answer = copilot
         .chat_with_client(
             PlatformSurface::Orchestrator,
@@ -215,4 +227,46 @@ async fn room_updates_preserve_completed_tools_when_the_final_draft_changes() {
     let last = serde_json::to_string(&requests[2]).unwrap();
     assert!(last.contains("completed tool work"));
     assert!(last.contains("I already introduced myself"));
+}
+
+#[tokio::test]
+async fn a_spoken_draft_is_handed_on_once_while_it_is_written() {
+    let (answer, streamed, requests, _) =
+        run_in(vec![text("I am Joerg.")], usize::MAX, 0, true).await;
+    assert_eq!(answer, "I am Joerg.");
+    assert_eq!(streamed.matches("I am Joerg.").count(), 1);
+    assert!(!streamed.contains(&draft_replaced_frame()));
+    assert_eq!(requests.len(), 1);
+}
+
+#[tokio::test]
+async fn a_spoken_draft_the_room_replaces_is_marked_before_the_new_one() {
+    let (answer, streamed, _, _) = run_in(
+        vec![
+            text("Flux, please introduce yourself."),
+            text("I am Joerg. Hello Flux!"),
+        ],
+        0,
+        0,
+        true,
+    )
+    .await;
+    assert_eq!(answer, "I am Joerg. Hello Flux!");
+    let replaced = draft_replaced_frame();
+    let heard = streamed.find("please introduce yourself").unwrap();
+    let marked = streamed.find(&replaced).unwrap();
+    let rewritten = streamed.find("I am Joerg. Hello Flux!").unwrap();
+    assert!(heard < marked && marked < rewritten);
+    assert_eq!(streamed.matches(&replaced).count(), 1);
+    assert_eq!(streamed.matches("I am Joerg. Hello Flux!").count(), 1);
+}
+
+#[tokio::test]
+async fn a_spoken_lead_in_before_a_tool_is_handed_on() {
+    let (answer, streamed, _, calls) =
+        run_in(vec![tool(), text("I am Joerg.")], usize::MAX, 1, true).await;
+    assert_eq!(answer, "I am Joerg.");
+    assert_eq!(calls, 1);
+    assert!(streamed.contains("I will check the apps first."));
+    assert!(!streamed.contains(&draft_replaced_frame()));
 }

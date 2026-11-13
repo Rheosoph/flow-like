@@ -109,7 +109,7 @@ chrono-tz = { workspace = true, optional = true }
 flow-like-bots = { workspace = true, optional = true }
 flow-like = { workspace = true, optional = true }
 flow-like-bot-host = { workspace = true, optional = true }
-flow-like-bot-tools = { workspace = true, optional = true, features = ["documents"] }
+flow-like-bot-tools = { workspace = true, optional = true, features = ["documents", "barcodes", "code", "image", "mcp"] }
 flow-like-bot-tools-host = { workspace = true, optional = true }
 flow-like-local-bots = { workspace = true, optional = true }
 flow-like-model-provider = { workspace = true, optional = true }

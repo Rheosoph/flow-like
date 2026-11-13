@@ -239,3 +239,22 @@ export function useCrewMembers(bots?: readonly IBot[]): CrewMember[] {
 		return [...placeholders, ...members];
 	}, [bots, botLabels]);
 }
+
+/** What names a member in a profile's hidden bots: its system key when built in, else its id. */
+export function crewVisibilityKey(member: CrewMember): string {
+	return member.system ?? member.key;
+}
+
+/** The members the current profile shows. */
+export function useShownCrew(
+	members: CrewMember[],
+	hidden: ReadonlySet<string>,
+): CrewMember[] {
+	return useMemo(
+		() =>
+			hidden.size === 0
+				? members
+				: members.filter((member) => !hidden.has(crewVisibilityKey(member))),
+		[members, hidden],
+	);
+}

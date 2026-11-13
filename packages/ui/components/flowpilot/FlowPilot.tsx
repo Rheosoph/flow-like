@@ -45,6 +45,7 @@ import {
 	parseAskUserArguments,
 } from "../../lib/ask-user";
 import { replyToChannel } from "../../lib/channel";
+import { cornerObstacleRef } from "../../lib/corner-clearance";
 import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-capability-session";
 import { flowPilotCommandApplyDiagnostics } from "../../lib/flowpilot-command-apply";
 import {
@@ -4057,7 +4058,7 @@ function FlowPilotImpl({
 						viewportRef={scrollContainerRef}
 						onScroll={handleScroll}
 					>
-						<div className="w-full min-w-0 max-w-full space-y-3 overflow-hidden py-3">
+						<div className="w-full min-w-0 max-w-full space-y-3 overflow-hidden pt-3 pb-[calc(0.75rem+var(--fl-corner-overlay-reserve,0px))]">
 							{messages.length === 0 ? (
 								<EmptyState
 									agentMode={agentMode}
@@ -4186,7 +4187,10 @@ function FlowPilotImpl({
 						)}
 
 					{/* Input area */}
-					<div className="shrink-0 border-t border-border/30 bg-background/80 p-2.5 backdrop-blur-sm">
+					<div
+						ref={cornerObstacleRef}
+						className="shrink-0 border-t border-border/30 bg-background/80 p-2.5 backdrop-blur-sm"
+					>
 						{/* Context indicator */}
 						{contextIndicator}
 

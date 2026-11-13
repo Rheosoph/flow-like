@@ -1,36 +1,32 @@
 name: "Tests"
 
 on:
-  pull_request:
-    branches:
-      - dev
-  push:
-    branches:
-      - dev
+  workflow_call:
+    inputs:
+      rust:
+        type: boolean
+        required: true
+      bun:
+        type: boolean
+        required: true
+      ui:
+        type: boolean
+        required: true
+      azure_migrations:
+        type: boolean
+        required: true
 
 concurrency:
-  group: tests-${{ github.ref }}
+  group: tests-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  changes:
-    name: Detect test changes
-    runs-on: ubuntu-latest
-    outputs:
-      rust: ${{ steps.changes.outputs.rust }}
-      bun: ${{ steps.changes.outputs.bun }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: ./.github/actions/detect-changes
-        id: changes
-
   rust-tests:
     name: Rust tests
-    needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: inputs.rust
     runs-on: ubuntu-latest
     env:
       # Unoptimised test executables are mostly symbol table, and CI never
@@ -76,7 +72,7 @@ jobs:
         run: bash .github/scripts/run-with-resource-log.sh cargo test --locked --workspace --profile ci --no-run
 
       - name: Run Rust tests
-        if: github.event_name == 'pull_request'
+        if: github.event_name != 'push'
         # Preserve the pre-default-members CI coverage while keeping everyday
         # bare Cargo commands focused on the shared editing surface.
         run: bash .github/scripts/run-with-resource-log.sh cargo test --locked --workspace --profile ci
@@ -115,36 +111,63 @@ jobs:
           )
           sudo scripts/test-standalone-isolation-linux.sh --disposable-linux-host "$test_binary"
 
-  package-security:
-    name: Package manager security
-    needs: changes
-    if: needs.changes.outputs.bun == 'true'
+  frontend:
+    name: Frontend and migration checks
+    if: inputs.bun || inputs.ui || inputs.azure_migrations
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
         with:
-          bun-version: 1.3.1
+          fetch-depth: 2
+      - uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
+        id: bun
+        with:
+          bun-version: 1.4.4
       - name: Run package manager security E2E tests
+        if: ${{ !cancelled() && inputs.bun && steps.bun.outcome == 'success' }}
         run: bun run test:e2e:package-security
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  test-application:
-    name: Test Application
-    needs: [changes, rust-tests, package-security]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check test results
+      - name: Cache frontend dependency downloads
+        if: ${{ !cancelled() && inputs.ui && steps.bun.outcome == 'success' }}
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        with:
+          path: ${{ runner.temp }}/bun-install-cache
+          key: tests-frontend-${{ runner.os }}-${{ runner.arch }}-bun-1.4.4-${{ hashFiles('bun.lock', 'bunfig.toml', 'patches/**') }}
+          restore-keys: |
+            tests-frontend-${{ runner.os }}-${{ runner.arch }}-bun-1.4.4-
+      - name: Install frontend dependencies
+        id: frontend-install
+        if: ${{ !cancelled() && inputs.ui && steps.bun.outcome == 'success' }}
+        run: bun install --frozen-lockfile
         env:
-          CHANGES_RESULT: ${{ needs.changes.result }}
-          JOB_RESULTS: ${{ join(needs.*.result, ' ') }}
-        run: |
-          test "$CHANGES_RESULT" = success
-          for result in $JOB_RESULTS; do
-            case "$result" in
-              success|skipped) ;;
-              *) exit 1 ;;
-            esac
-          done
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Each suite still runs when an independent suite fails.
+      # packages/ui carries a large Biome backlog, so a pull request is held to the files it changes.
+      - name: Biome on changed packages/ui files
+        if: ${{ !cancelled() && steps.frontend-install.outcome == 'success' && github.event_name == 'pull_request' }}
+        run: bun run lint:ui:changed
+        env:
+          BIOME_BASE_REF: HEAD^1
+      - name: Run packages/ui tests
+        if: ${{ !cancelled() && steps.frontend-install.outcome == 'success' }}
+        run: bun run test:ui
+      - name: Test the widget bundler
+        if: ${{ !cancelled() && steps.frontend-install.outcome == 'success' }}
+        run: bun test
+        working-directory: packages/widget-bundler
+      - name: Type-check the widget bundler
+        if: ${{ !cancelled() && steps.frontend-install.outcome == 'success' }}
+        run: bun run typecheck
+        working-directory: packages/widget-bundler
+      - name: Install migration dependencies
+        id: migration-install
+        if: ${{ !cancelled() && inputs.azure_migrations && steps.bun.outcome == 'success' }}
+        run: bun install --frozen-lockfile
+        working-directory: apps/backend/azure/migration
+      - name: Run migration tests
+        if: ${{ !cancelled() && steps.migration-install.outcome == 'success' }}
+        run: bun test
+        working-directory: apps/backend/azure/migration

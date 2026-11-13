@@ -25,7 +25,8 @@ A single turn can run for up to 30 minutes.
 
 A desktop bot runs inside the Flow-Like desktop app on your computer.
 
-- **Answers while the app runs.** The app checks for new turns about every 30 seconds. Turns that arrive while it's closed wait, and expire after an hour.
+- **Answers while the app runs.** The app checks for new turns about every 30 seconds. Closing the window keeps the app running in the tray, so your bots keep answering (you can turn this off in **Settings > System**). Quitting the app, from the tray or the app menu, or shutting down the computer stops them, and turns that arrive meanwhile wait and expire after an hour.
+- **Starts at login if you want.** Turn on **Start Flow-Like at login** in **Settings > System**, and after a restart the app starts in the background, without a window, so your bots answer again without you opening it. Open the window from the tray icon or, on macOS, the Dock. The app offers this once, when you give a bot on this computer its first scheduled task. Turn the setting off to stop it.
 - **Every model in your profile,** local models on your own hardware included.
 - **Every ability,** including the computer's screen, a real browser, the command line and end-to-end encryption.
 - **Phones count too.** The iOS and Android apps answer desktop bots while they're open. Phones have no command line, and iPhones can't run code yet.
@@ -37,11 +38,25 @@ Bots you create while signed out always run here, until you [move them to your a
 A device bot runs on one of your [managed devices](/devices/), such as a server in your office, a mini PC or a home lab machine, through the Flow-Like device agent.
 
 - **Answers while the device agent runs.** The agent fetches turns from your hub over HTTPS, and only that one device can pick up the bot's turns.
-- **Hosted models** through Flow-Like's model service.
-- **Every ability.** On Linux, browser and computer use run on a virtual display.
+- **Hosted models** through Flow-Like's model service. For images, also an image model you connected with your own key: the device gets the key from your hub for each image and doesn't store it. Local image models run only in the desktop app. A vision model reads images there only if it's a hosted one.
+- **Every ability.** On Linux, browser and computer use run on a virtual display. Tools of package skills run on the device, in the same sandbox as package nodes in flows.
 - **Encrypted screen.** Watching or taking over a device bot's screen is end-to-end encrypted and works only in the desktop app.
 
 Choose the device in the editor's **Runs on** step. If the agent isn't running there, the bot shows as offline and answers once it comes back.
+
+### Run a device bot in Docker
+
+In **Runs on**, choose the managed device, then **Run in Docker**. Flow-Like starts a separate container on that device for the bot. Its model runner, tools, shell, browser and virtual desktop run inside the container. The parent device agent keeps the device credentials and manages the container.
+
+The device pulls Flow-Like's prebuilt image, verified against the digest in its signed release. It does not build an image. Chromium, Xvfb and a window manager are already included, so browser and computer use have a screen even on a server without a monitor. The first start can take longer while the image downloads; the bot appears online after its container starts.
+
+The option is disabled until the device reports that Docker is installed, its Linux container service is reachable and a signed image is available for its architecture. Install [Docker Engine](https://docs.docker.com/engine/install/) or [Docker Desktop](https://docs.docker.com/desktop/) on the device, start Docker, then choose **Check again**. If the agent still cannot find Docker after installation, restart the agent to refresh its environment. Docker hosting requires an updated agent and hub. If Docker stops working, the bot stays configured for Docker; it does not fall back to native execution.
+
+The device agent needs access to the host's local Docker service. The standard containerized agent setup does not provide that access; install the agent directly on the host to manage per-bot containers.
+
+Each container keeps that bot's data in its own volume. The host filesystem, Docker socket and device credentials are not mounted into it. The bot and its browser share a limit of two CPU cores, 4 GiB of memory and 512 processes. App permissions and tool approvals still apply. Containers have outbound network access, including to services reachable from the device. For a self-hosted hub, configure the agent with an address reachable from Docker; a localhost address points to the container itself.
+
+Docker hosting is currently available for device bots; desktop bots continue to run inside Studio.
 
 ## Flux and your desktop
 
@@ -51,7 +66,7 @@ Flux runs in the cloud, but its build tools need a desktop. While your desktop a
 
 | Situation | What happens |
 |---|---|
-| Desktop app closed, device agent stopped | New turns wait. A turn nobody picks up within an hour expires. |
+| Desktop app quit (not just its window closed) or not started again after a restart, device agent stopped | New turns wait. A turn nobody picks up within an hour expires. |
 | A scheduled task came due while the host was away | It fires once when the host is back, not once per missed run. |
 | A turn waits for your approval | It holds without blocking the host and expires after 7 days. |
 

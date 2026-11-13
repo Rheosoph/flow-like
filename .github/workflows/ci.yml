@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [dev, main, alpha]
+    tags: ['v*', 'beta-v*']
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Run checks or publish backend containers
+        type: choice
+        options: [checks, containers]
+        default: checks
+      cloud:
+        description: Container image set to publish
+        type: choice
+        options: [all, aws, gcp, azure, docker-compose, kubernetes, self-hosted]
+        default: all
+
+permissions:
+  contents: read
+
+concurrency:
+  # Dev publication can take hours. Its queue must not hold up the next commit's checks.
+  # Reusable workflows serialize their own dev runs; PRs and alpha replace the whole run.
+  group: ci-${{ github.ref }}-${{ github.event_name }}-${{ inputs.scope || 'automatic' }}-${{ inputs.cloud || 'all' }}-${{ (github.event_name == 'pull_request' || github.ref == 'refs/heads/alpha') && 'latest' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/alpha') }}
+
+jobs:
+  changes:
+    name: Select CI workloads
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.changes.outputs.rust }}
+      bun: ${{ steps.changes.outputs.bun }}
+      ui: ${{ steps.changes.outputs.ui }}
+      dsql: ${{ steps.changes.outputs.dsql }}
+      azure_migrations: ${{ steps.changes.outputs.azure_migrations }}
+      tests: ${{ steps.plan.outputs.tests }}
+      lint: ${{ steps.plan.outputs.lint }}
+      boundaries: ${{ steps.plan.outputs.boundaries }}
+      browser: ${{ steps.plan.outputs.browser }}
+      containers: ${{ steps.plan.outputs.containers }}
+      compiler: ${{ steps.plan.outputs.compiler }}
+      alpha: ${{ steps.plan.outputs.alpha }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/detect-changes
+        id: changes
+      - name: Select checks and publication prerequisites
+        id: plan
+        env:
+          CHANGES_JSON: ${{ toJSON(steps.changes.outputs) }}
+          INPUT_SCOPE: ${{ inputs.scope }}
+          INPUT_CLOUD: ${{ inputs.cloud }}
+        run: python3 .github/scripts/ci_workloads.py
+
+  tests:
+    needs: changes
+    if: needs.changes.outputs.tests == 'true'
+    uses: ./.github/workflows/tests.yml
+    with:
+      rust: ${{ needs.changes.outputs.rust == 'true' }}
+      bun: ${{ needs.changes.outputs.bun == 'true' }}
+      ui: ${{ needs.changes.outputs.ui == 'true' }}
+      azure_migrations: ${{ needs.changes.outputs.azure_migrations == 'true' }}
+    secrets: inherit
+
+  lint:
+    needs: changes
+    if: needs.changes.outputs.lint == 'true'
+    uses: ./.github/workflows/clippy.yml
+    with:
+      rust: ${{ needs.changes.outputs.rust == 'true' }}
+      dsql: ${{ needs.changes.outputs.dsql == 'true' }}
+    secrets: inherit
+
+  boundaries:
+    needs: changes
+    if: needs.changes.outputs.boundaries == 'true'
+    uses: ./.github/workflows/compile-guardrails.yml
+    secrets: inherit
+
+  browser:
+    needs: changes
+    if: needs.changes.outputs.browser == 'true'
+    uses: ./.github/workflows/browser.yml
+    secrets: inherit
+
+  compiler:
+    needs: changes
+    if: needs.changes.outputs.compiler == 'true'
+    uses: ./.github/workflows/compiler-reproducibility.yml
+    with:
+      namespace_runners: ${{ github.event_name == 'push' && github.ref == 'refs/heads/alpha' }}
+
+  containers:
+    needs: [changes, compiler]
+    if: needs.changes.outputs.containers == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/containers.yml
+    with:
+      cloud: ${{ inputs.cloud || 'all' }}
+    secrets: inherit
+
+  alpha:
+    needs: [changes, compiler]
+    if: needs.changes.outputs.alpha == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/alpha-release.yml
+    secrets: inherit
+
+  test-application:
+    name: Test Application
+    needs: [changes, tests, lint, boundaries, browser, compiler, containers, alpha]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Require every selected workload to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 .github/scripts/ci_workloads.py gate

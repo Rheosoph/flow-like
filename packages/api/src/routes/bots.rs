@@ -10,19 +10,21 @@ use axum::{
 };
 use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseTransaction, DbErr, EntityTrait, QueryFilter};
 
+pub mod app_tools;
 pub mod apps;
 pub mod ask;
-pub mod avatar;
 pub(crate) mod authorization;
+pub mod avatar;
 pub(crate) mod checkpoint;
 pub mod clone;
 pub mod configuration;
 pub mod connectors;
 pub mod crud;
 pub mod fire;
+pub mod image_credential;
 pub mod import;
-pub mod mail;
 pub mod live_activities;
+pub mod mail;
 pub mod memory;
 pub mod model;
 pub mod notes;
@@ -31,6 +33,7 @@ pub mod people;
 pub mod permissions;
 pub mod presence;
 mod provision;
+pub mod rooms;
 pub(crate) mod runtime;
 pub mod runtime_token;
 mod secret_cipher;
@@ -46,17 +49,19 @@ pub mod webhooks;
 pub mod workspace;
 
 #[cfg(test)]
+mod app_gate_tests;
+#[cfg(test)]
+mod connectors_tests;
+#[cfg(test)]
 mod import_tests;
 #[cfg(test)]
 mod permissions_tests;
 #[cfg(test)]
 mod presence_tests;
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
-mod connectors_tests;
-#[cfg(test)]
 mod skills_tests;
+#[cfg(test)]
+mod tests;
 #[cfg(test)]
 mod webhooks_tests;
 #[cfg(test)]
@@ -64,13 +69,32 @@ mod workspace_tests;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/{bot_id}/turns/{turn_id}/authorization-context", get(authorization::context))
-        .route("/{bot_id}/user-context/available", get(user_context::available))
-        .route("/{bot_id}/user-context/request", post(user_context::request))
+        .route(
+            "/{bot_id}/turns/{turn_id}/authorization-context",
+            get(authorization::context),
+        )
+        .route(
+            "/{bot_id}/turns/{turn_id}/app-tools/{tool}",
+            post(app_tools::run_app_tool),
+        )
+        .route(
+            "/{bot_id}/user-context/available",
+            get(user_context::available),
+        )
+        .route(
+            "/{bot_id}/user-context/request",
+            post(user_context::request),
+        )
         .route("/{bot_id}/usage", get(super::usage_budgets::get_bot))
         .route("/{bot_id}/usage/limits", put(super::usage_budgets::put_bot))
-        .route("/{bot_id}/usage/rooms/{group_id}", get(super::usage_budgets::get_room))
-        .route("/{bot_id}/usage/rooms/{group_id}/limits", put(super::usage_budgets::put_room))
+        .route(
+            "/{bot_id}/usage/rooms/{group_id}",
+            get(super::usage_budgets::get_room),
+        )
+        .route(
+            "/{bot_id}/usage/rooms/{group_id}/limits",
+            put(super::usage_budgets::put_room),
+        )
         .route("/", get(crud::list_bots).post(crud::create_bot))
         .route("/import", post(import::import_bot))
         .route("/import/check", post(import::check_bot_import))
@@ -87,8 +111,14 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/turns", get(turns::list_turns))
         .route("/turns/{turn_id}/claim", post(turns::claim_turn))
-        .route("/turns/{turn_id}/checkpoint", get(checkpoint::load).put(checkpoint::save)
-            .layer(DefaultBodyLimit::max(flow_like_types::bot_turn::MAX_CHECKPOINT_BYTES + 4096)))
+        .route(
+            "/turns/{turn_id}/checkpoint",
+            get(checkpoint::load)
+                .put(checkpoint::save)
+                .layer(DefaultBodyLimit::max(
+                    flow_like_types::bot_turn::MAX_CHECKPOINT_BYTES + 4096,
+                )),
+        )
         .route("/turns/{turn_id}/heartbeat", post(turns::heartbeat_turn))
         .route("/turns/{turn_id}/status", put(turns::set_turn_status))
         .route("/turns/{turn_id}/silent", post(turns::silent_turn))
@@ -98,6 +128,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/turns/{turn_id}/secrets/{name}",
             post(secrets::read_turn_secret),
+        )
+        .route(
+            "/turns/{turn_id}/secrets/{name}/sealed",
+            post(secrets::read_turn_sealed_secret),
         )
         .route(
             "/{bot_id}",
@@ -114,7 +148,10 @@ pub fn routes() -> Router<AppState> {
             "/{bot_id}/avatar",
             get(avatar::get_bot_avatar).put(avatar::put_bot_avatar),
         )
-        .route("/{bot_id}/model-token", post(runtime_token::mint_model_token))
+        .route(
+            "/{bot_id}/model-token",
+            post(runtime_token::mint_model_token),
+        )
         .route(
             "/{bot_id}/runtime-token",
             post(runtime_token::mint_runtime_token),
@@ -171,11 +208,13 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/{bot_id}/skills/import",
-            post(skills::import_bot_skill)
-                .layer(DefaultBodyLimit::max(skills::IMPORT_BODY_LIMIT)),
+            post(skills::import_bot_skill).layer(DefaultBodyLimit::max(skills::IMPORT_BODY_LIMIT)),
         )
         .route("/{bot_id}/skills/propose", post(skills::propose_bot_skill))
-        .route("/{bot_id}/skills/package", post(skills::install_bot_skill_package))
+        .route(
+            "/{bot_id}/skills/package",
+            post(skills::install_bot_skill_package),
+        )
         .route(
             "/{bot_id}/skills/{skill_id}",
             axum::routing::patch(skills::update_bot_skill).delete(skills::delete_bot_skill),
@@ -189,6 +228,14 @@ pub fn routes() -> Router<AppState> {
             post(skills::disable_bot_skill),
         )
         .route(
+            "/{bot_id}/skills/{skill_id}/package",
+            get(skills::bot_skill_package),
+        )
+        .route(
+            "/{bot_id}/image-model/credential",
+            post(image_credential::bot_image_credential),
+        )
+        .route(
             "/{bot_id}/webhooks",
             get(webhooks::list_bot_webhooks).post(webhooks::create_bot_webhook),
         )
@@ -199,6 +246,14 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/{bot_id}/connectors",
             get(connectors::list_bot_connectors).post(connectors::create_bot_connector),
+        )
+        .route(
+            "/{bot_id}/connectors/entries",
+            get(connectors::list_bot_connector_entries),
+        )
+        .route(
+            "/{bot_id}/connectors/{connector_id}/credential",
+            post(connectors::bot_connector_credential),
         )
         .route(
             "/{bot_id}/connectors/{connector_id}",
@@ -232,6 +287,7 @@ pub fn routes() -> Router<AppState> {
             "/{bot_id}/tool-grants",
             get(tool_grants::list_tool_grants)
                 .put(tool_grants::put_tool_grant)
+                .patch(tool_grants::touch_tool_grants)
                 .delete(tool_grants::delete_tool_grant),
         )
         .route(
@@ -243,10 +299,17 @@ pub fn routes() -> Router<AppState> {
             put(permissions::grant_bot_permission).delete(permissions::revoke_bot_permission),
         )
         .route("/{bot_id}/live-activities", post(live_activities::register))
-        .route("/{bot_id}/live-activities/{activity_id}", delete(live_activities::unregister))
+        .route(
+            "/{bot_id}/live-activities/{activity_id}",
+            delete(live_activities::unregister),
+        )
         .route("/{bot_id}/notify", post(notify::message_owner))
         .route("/{bot_id}/people", get(people::list_bot_people))
         .route("/{bot_id}/people/message", post(people::message_person))
+        .route(
+            "/{bot_id}/rooms/{conversation_id}/invitations",
+            post(rooms::invite_person),
+        )
         .route("/{bot_id}/apps", get(apps::list_bot_apps))
         .route(
             "/{bot_id}/apps/{app_id}",

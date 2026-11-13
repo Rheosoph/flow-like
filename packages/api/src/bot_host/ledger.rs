@@ -6,7 +6,9 @@
 
 use crate::{
     db::{DbDialect, RetryPolicy, coordination::coordinate, retry_transaction},
-    entity::{bot, bot_host_heartbeat, bot_turn, bot_turn_checkpoint, conversation},
+    entity::{
+        bot, bot_host_heartbeat, bot_turn, bot_turn_checkpoint, conversation, conversation_member,
+    },
     error::ApiError,
     routes::{
         bots::{model::hands_off_to_desktop, presence::ONLINE_WINDOW_SECS},
@@ -44,6 +46,7 @@ pub(crate) const BOT_TURN_NOT_RETRYABLE: &str = "BOT_TURN_NOT_RETRYABLE";
 pub(crate) const BOT_TURN_NOT_CANCELLABLE: &str = "BOT_TURN_NOT_CANCELLABLE";
 pub(crate) const ERROR_OWNER_CANCELLED: &str = "BOT_TURN_CANCELLED";
 pub(crate) const ERROR_RESUMING: &str = "BOT_TURN_RESUMING";
+pub(crate) const ERROR_LEFT_ROOM: &str = "BOT_TURN_LEFT_ROOM";
 
 /// How long a turn handed off to the owner's desktop waits for it before the server takes it
 /// back: the desktop host lists turns every 30 seconds, plus a margin.
@@ -77,14 +80,17 @@ pub(crate) fn host_kind_of(location: BotLocation) -> TurnHostKind {
 /// sent itself, not past
 /// [`MAX_HOPS`] bot turns, and in a group only when it names the bot or replies to it, or when a
 /// person wrote it and the bot reads along ([`BotRecipient::read_along`]). A person's reaction
-/// wakes only the bot whose message it reacts to.
+/// wakes only the bot whose message it reacts to, and in a group not one limited to mentions.
 /// Transcript deliveries set `read_along` only for bots with a decision model.
 pub(crate) fn queues_turn(delivery: &BotDelivery, recipient: &BotRecipient) -> bool {
     if recipient.bot_id == delivery.sender_id || recipient.hops > MAX_HOPS {
         return false;
     }
     match delivery.kind {
-        InboxEntryKind::Reaction => recipient.reacted,
+        InboxEntryKind::Reaction => {
+            recipient.reacted
+                && (delivery.conversation_kind == ConversationKind::Direct || recipient.read_along)
+        }
         InboxEntryKind::Transcript => recipient.mentioned || recipient.read_along,
         kind if kind.wakes_bot() => {
             delivery.conversation_kind == ConversationKind::Direct
@@ -222,6 +228,7 @@ fn queued_row(
         requester_id: Set(Some(waking.requester_id.clone())),
         audience: Set(waking.audience.stored().to_string()),
         status_text: Set(None),
+        unprompted: Set(recipient.unprompted().then_some(true)),
         created_at: Set(now),
         updated_at: Set(now),
     }
@@ -276,6 +283,26 @@ pub(crate) async fn enqueue_in<C: ConnectionTrait>(
     }
     let waking = super::cap::admit(db, waking, now).await?;
     let waking = waking_of(db, delivery, waking).await?;
+    let entry = waking.first().map(|first| {
+        (
+            first.recipient.trigger_message_id.clone(),
+            first.recipient.conversation_id.clone(),
+        )
+    });
+    let waking = match entry {
+        Some((message_id, conversation_id)) => {
+            super::taint::admit_mentions(
+                db,
+                &delivery.sender_id,
+                &message_id,
+                &conversation_id,
+                waking,
+                now,
+            )
+            .await?
+        }
+        None => waking,
+    };
     let waking = super::cap::admit_requesters(db, waking, now).await?;
     if waking.is_empty() {
         return Ok(0);
@@ -339,13 +366,16 @@ fn live_bots() -> sea_orm::sea_query::SelectStatement {
 
 fn checkpoint_turns() -> sea_orm::sea_query::SelectStatement {
     use sea_orm::QueryTrait;
-    bot_turn_checkpoint::Entity::find().select_only()
+    bot_turn_checkpoint::Entity::find()
+        .select_only()
         .column(bot_turn_checkpoint::Column::TurnId)
-        .filter(bot_turn_checkpoint::Column::Revision.gt(0)).into_query()
+        .filter(bot_turn_checkpoint::Column::Revision.gt(0))
+        .into_query()
 }
 
 fn resuming() -> Condition {
-    Condition::any().add(bot_turn::Column::ErrorCode.eq(ERROR_RESUMING))
+    Condition::any()
+        .add(bot_turn::Column::ErrorCode.eq(ERROR_RESUMING))
         .add(bot_turn::Column::Id.in_subquery(checkpoint_turns()))
 }
 
@@ -364,10 +394,14 @@ pub(crate) async fn next_head<C: ConnectionTrait>(
         .filter(bot_turn::Column::Status.eq(STORED_QUEUED))
         .filter(ready(now));
     // Recovered work retains its trigger and checkpoint even if newer messages arrive.
-    if let Some(resuming) = queued.clone()
+    if let Some(resuming) = queued
+        .clone()
         .filter(resuming())
         .order_by_asc(bot_turn::Column::CreatedAt)
-        .order_by_asc(bot_turn::Column::Id).one(db).await? {
+        .order_by_asc(bot_turn::Column::Id)
+        .one(db)
+        .await?
+    {
         return Ok(Some(resuming));
     }
     queued
@@ -400,6 +434,31 @@ pub(crate) async fn queued_device_heads<C: ConnectionTrait>(
     limit: u64,
 ) -> Result<Vec<(bot_turn::Model, Vec<String>)>, DbErr> {
     let bots = device_bots(owner_id, device_id);
+    queued_heads_scoped(
+        db,
+        Some(owner_id),
+        TurnHostKind::Device,
+        Some(bots),
+        now,
+        limit,
+    )
+    .await
+}
+
+/// A device's queued work, restricted before the scan to bots its host can execute.
+pub(crate) async fn queued_device_heads_for_bots<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    device_id: &str,
+    bot_ids: &[String],
+    now: DateTime<FixedOffset>,
+    limit: u64,
+) -> Result<Vec<(bot_turn::Model, Vec<String>)>, DbErr> {
+    if bot_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut bots = device_bots(owner_id, device_id);
+    bots.and_where(Expr::col(bot::Column::Id).is_in(bot_ids.iter().cloned()));
     queued_heads_scoped(
         db,
         Some(owner_id),
@@ -455,10 +514,17 @@ async fn queued_heads_scoped<C: ConnectionTrait>(
         return Ok(Vec::new());
     }
     let checkpointed: HashSet<String> = bot_turn_checkpoint::Entity::find()
-        .select_only().column(bot_turn_checkpoint::Column::TurnId)
-        .filter(bot_turn_checkpoint::Column::TurnId.is_in(queued.iter().map(|turn| turn.id.clone())))
+        .select_only()
+        .column(bot_turn_checkpoint::Column::TurnId)
+        .filter(
+            bot_turn_checkpoint::Column::TurnId.is_in(queued.iter().map(|turn| turn.id.clone())),
+        )
         .filter(bot_turn_checkpoint::Column::Revision.gt(0))
-        .into_tuple().all(db).await?.into_iter().collect();
+        .into_tuple()
+        .all(db)
+        .await?
+        .into_iter()
+        .collect();
     let busy: BTreeSet<(String, String)> = running
         .all(db)
         .await?
@@ -476,8 +542,10 @@ async fn queued_heads_scoped<C: ConnectionTrait>(
         .into_iter()
         .filter(|(key, _)| !busy.contains(key))
         .filter_map(|(_, mut turns)| {
-            if let Some(index) = turns.iter().position(|turn| turn.error_code.as_deref() == Some(ERROR_RESUMING)
-                || checkpointed.contains(&turn.id)) {
+            if let Some(index) = turns.iter().position(|turn| {
+                turn.error_code.as_deref() == Some(ERROR_RESUMING)
+                    || checkpointed.contains(&turn.id)
+            }) {
                 return Some((turns.remove(index), Vec::new()));
             }
             let head = turns.pop()?;
@@ -520,7 +588,7 @@ impl Refusal {
         match self {
             Self::NotFound => ApiError::not_found(format!("Turn '{turn_id}' not found")),
             Self::BotGone => ApiError::not_found(format!(
-                "The bot of turn '{turn_id}' was deleted; the turn is cancelled"
+                "The bot of turn '{turn_id}' was deleted or left its conversation; the turn is cancelled"
             )),
             Self::NotQueued(status) => conflict(
                 BOT_TURN_NOT_QUEUED,
@@ -617,6 +685,10 @@ pub(crate) async fn claim_in<C: ConnectionTrait>(
         cancel_in(db, &requested.id, ERROR_BOT_DELETED, now).await?;
         return Ok(Err(Refusal::BotGone));
     };
+    if has_left(db, &requested.conversation_id, &requested.bot_id).await? {
+        cancel_in(db, &requested.id, ERROR_LEFT_ROOM, now).await?;
+        return Ok(Err(Refusal::BotGone));
+    }
     if !runs_on(&bot, kind) {
         let located = host_kind_of(BotLocation::parse(&bot.location).unwrap_or_default());
         rehome_in(db, &requested.id, located, now).await?;
@@ -668,7 +740,9 @@ pub(crate) async fn claim_in<C: ConnectionTrait>(
         _ => requested.clone(),
     };
     let failures = if status == TurnStatus::Running {
-        if !lock_snapshot(db, &lead).await? { return Ok(Err(Refusal::Lost)); }
+        if !lock_snapshot(db, &lead).await? {
+            return Ok(Err(Refusal::Lost));
+        }
         super::recovery::charge_failure(db, &lead).await?
     } else {
         super::recovery::failures(db, &lead).await?
@@ -692,11 +766,12 @@ pub(crate) async fn claim_in<C: ConnectionTrait>(
     if !take_in(db, &lead.id, &request.host_id, now).await? {
         return Ok(Err(Refusal::Lost));
     }
-    let batched = if status == TurnStatus::Queued && lead.error_code.as_deref() != Some(ERROR_RESUMING) {
-        fold_into(db, &lead, now).await?
-    } else {
-        Vec::new()
-    };
+    let batched =
+        if status == TurnStatus::Queued && lead.error_code.as_deref() != Some(ERROR_RESUMING) {
+            fold_into(db, &lead, now).await?
+        } else {
+            Vec::new()
+        };
     let turn = find(db, &lead.id, None).await?.ok_or_else(|| {
         ApiError::internal(format!("Turn '{}' vanished after its claim", lead.id))
     })?;
@@ -726,7 +801,8 @@ pub(crate) async fn take_in<C: ConnectionTrait>(
         .filter(bot_turn::Column::Attempts.lt(i32::MAX))
         .filter(bot_turn::Column::Id.not_in_subquery({
             use sea_orm::QueryTrait;
-            bot_turn_checkpoint::Entity::find().select_only()
+            bot_turn_checkpoint::Entity::find()
+                .select_only()
                 .column(bot_turn_checkpoint::Column::TurnId)
                 .filter(bot_turn_checkpoint::Column::TurnId.eq(turn_id))
                 .filter(bot_turn_checkpoint::Column::RecoveryAttempts.gte(MAX_ATTEMPTS as i32))
@@ -758,7 +834,11 @@ async fn fold_into<C: ConnectionTrait>(
     now: DateTime<FixedOffset>,
 ) -> Result<Vec<String>, DbErr> {
     if bot_turn_checkpoint::Entity::find_by_id(&lead.id)
-        .filter(bot_turn_checkpoint::Column::Revision.gt(0)).one(db).await?.is_some() {
+        .filter(bot_turn_checkpoint::Column::Revision.gt(0))
+        .one(db)
+        .await?
+        .is_some()
+    {
         return Ok(Vec::new());
     }
     let older = bot_turn::Entity::find()
@@ -767,8 +847,11 @@ async fn fold_into<C: ConnectionTrait>(
         .filter(bot_turn::Column::HostKind.eq(lead.host_kind.as_str()))
         .filter(bot_turn::Column::Status.eq(STORED_QUEUED))
         .filter(bot_turn::Column::Id.ne(lead.id.as_str()))
-        .filter(Condition::any().add(bot_turn::Column::ErrorCode.is_null())
-            .add(bot_turn::Column::ErrorCode.ne(ERROR_RESUMING)))
+        .filter(
+            Condition::any()
+                .add(bot_turn::Column::ErrorCode.is_null())
+                .add(bot_turn::Column::ErrorCode.ne(ERROR_RESUMING)),
+        )
         .filter(bot_turn::Column::Id.not_in_subquery(checkpoint_turns()))
         .order_by_asc(bot_turn::Column::CreatedAt)
         .order_by_asc(bot_turn::Column::Id)
@@ -849,6 +932,7 @@ pub(crate) async fn claim_for_device(
     db: &DatabaseConnection,
     dialect: DbDialect,
     device_id: &str,
+    host: &flow_like_types::device_bot::DeviceClaimRequest,
     request: ClaimRequest,
 ) -> Result<ClaimResult, ApiError> {
     let Some(owner) = request.owner_id.clone() else {
@@ -857,9 +941,19 @@ pub(crate) async fn claim_for_device(
         ));
     };
     retry_transaction(db, dialect, None, &RetryPolicy::default(), |txn| {
-        let (owner, device_id, request) = (owner.clone(), device_id.to_string(), request.clone());
+        let (owner, device_id, request, host) = (
+            owner.clone(),
+            device_id.to_string(),
+            request.clone(),
+            host.clone(),
+        );
         Box::pin(async move {
             coordinate(txn, "bot-turn-owner", &[owner.as_str()]).await?;
+            let turn = device_turn(txn, &request.turn_id, &owner, &device_id)
+                .await?
+                .ok_or_else(|| Refusal::NotFound.into_api(&request.turn_id))?;
+            crate::routes::bots::lock_bot(txn, &turn.bot_id).await?;
+            crate::devices::bots::require_execution_mode(txn, &owner, &turn.bot_id, &host).await?;
             claim_device_in(txn, &device_id, &request).await
         })
     })
@@ -889,7 +983,8 @@ pub(crate) async fn claim_device_in<C: ConnectionTrait>(
 
 /// An interactive chat's hold on the turn of the message it sent: pushes the not-before that
 /// keeps hosts away while the chat streams its answer. `false`: a host claimed the turn or it is
-/// finished, so the chat must not write a second reply. One that isn't `owner_id`'s reads as
+/// finished, or it waited longer than [`QUEUED_EXPIRY_SECS`], so the chat must not write a
+/// second reply. One that isn't `owner_id`'s reads as
 /// missing.
 pub(crate) async fn hold_in<C: ConnectionTrait>(
     db: &C,
@@ -906,6 +1001,7 @@ pub(crate) async fn hold_in<C: ConnectionTrait>(
         .filter(bot_turn::Column::Id.eq(turn_id))
         .filter(bot_turn::Column::OwnerId.eq(owner_id))
         .filter(bot_turn::Column::Status.eq(STORED_QUEUED))
+        .filter(bot_turn::Column::CreatedAt.gt(now - Duration::seconds(QUEUED_EXPIRY_SECS)))
         .exec(db)
         .await?;
     Ok(held.rows_affected > 0)
@@ -1096,7 +1192,19 @@ pub(crate) async fn complete_silent_in<C: ConnectionTrait>(
     Ok(done.rows_affected > 0)
 }
 
-/// Under a transaction, spend one failure attempt and requeue at `retry_at`, or fail when spent.
+/// What [`release_for_retry_in`] did with the held turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RetryRelease {
+    /// Queued again for `retry_at`.
+    Requeued,
+    /// The retry budget is used up. The turn is still held; the caller reports the failure.
+    Spent,
+    /// The lease is no longer the host's.
+    Lost,
+}
+
+/// Under a transaction, spend one failure attempt and requeue at `retry_at`. With the budget
+/// spent the turn stays held and the caller ends it.
 pub(crate) async fn release_for_retry_in<C: ConnectionTrait>(
     db: &C,
     turn_id: &str,
@@ -1104,14 +1212,21 @@ pub(crate) async fn release_for_retry_in<C: ConnectionTrait>(
     retry_at: DateTime<FixedOffset>,
     error_code: &str,
     now: DateTime<FixedOffset>,
-) -> Result<bool, DbErr> {
+) -> Result<RetryRelease, DbErr> {
     let Some(turn) = bot_turn::Entity::find_by_id(turn_id)
         .filter(bot_turn::Column::Status.eq(STORED_RUNNING))
         .filter(bot_turn::Column::HostId.eq(host_id))
-        .filter(bot_turn::Column::LeaseUntil.gt(now)).one(db).await? else { return Ok(false); };
-    if !lock_snapshot(db, &turn).await? { return Ok(false); }
+        .filter(bot_turn::Column::LeaseUntil.gt(now))
+        .one(db)
+        .await?
+    else {
+        return Ok(RetryRelease::Lost);
+    };
+    if !lock_snapshot(db, &turn).await? {
+        return Ok(RetryRelease::Lost);
+    }
     if super::recovery::charge_failure(db, &turn).await? >= MAX_ATTEMPTS as i32 {
-        return fail_held_in(db, turn_id, host_id, error_code, now).await;
+        return Ok(RetryRelease::Spent);
     }
     let released = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_QUEUED))
@@ -1126,7 +1241,11 @@ pub(crate) async fn release_for_retry_in<C: ConnectionTrait>(
         .filter(bot_turn::Column::LeaseUntil.gt(now))
         .exec(db)
         .await?;
-    Ok(released.rows_affected > 0)
+    Ok(if released.rows_affected > 0 {
+        RetryRelease::Requeued
+    } else {
+        RetryRelease::Lost
+    })
 }
 
 /// Fails a turn nobody holds, whatever host it was claimed by.
@@ -1225,6 +1344,49 @@ async fn end_unfinished_in<C: ConnectionTrait>(
     Ok(())
 }
 
+/// The principal's membership of the conversation ended. A conversation without the row is not
+/// judged here: the row is what the bot's turns were queued from.
+async fn has_left<C: ConnectionTrait>(
+    db: &C,
+    conversation_id: &str,
+    principal_id: &str,
+) -> Result<bool, DbErr> {
+    Ok(conversation_member::Entity::find_by_id((
+        conversation_id.to_owned(),
+        principal_id.to_owned(),
+    ))
+    .filter(
+        Condition::any()
+            .add(conversation_member::Column::LeftAt.is_not_null())
+            .add(conversation_member::Column::Status.ne("ACTIVE")),
+    )
+    .one(db)
+    .await?
+    .is_some())
+}
+
+/// Cancels the unfinished turns of `bot_ids` in a conversation they left.
+pub(crate) async fn cancel_left_room_in<C: ConnectionTrait>(
+    db: &C,
+    conversation_id: &str,
+    bot_ids: &[String],
+    now: DateTime<FixedOffset>,
+) -> Result<(), DbErr> {
+    if bot_ids.is_empty() {
+        return Ok(());
+    }
+    let turns = bot_turn::Entity::find()
+        .filter(bot_turn::Column::ConversationId.eq(conversation_id))
+        .filter(bot_turn::Column::BotId.is_in(bot_ids.iter().cloned()))
+        .filter(bot_turn::Column::Status.is_in([STORED_QUEUED, STORED_RUNNING, STORED_WAITING]))
+        .all(db)
+        .await?;
+    for turn in turns {
+        cancel_in(db, &turn.id, ERROR_LEFT_ROOM, now).await?;
+    }
+    Ok(())
+}
+
 /// Moves a queued turn to the host kind its bot runs on now.
 async fn rehome_in<C: ConnectionTrait>(
     db: &C,
@@ -1244,7 +1406,8 @@ async fn rehome_in<C: ConnectionTrait>(
 
 /// Gives back to the server the turns of server bots that sat queued for a desktop for
 /// [`DESKTOP_HANDOFF_SECS`]: the desktop went offline before it claimed them, or lost its lease.
-/// Returns their ids, for the server's host to pick up at once.
+/// Turns of end-to-end conversations stay: the server can't read them. Returns their ids, for
+/// the server's host to pick up at once.
 pub(crate) async fn hand_back_in<C: ConnectionTrait>(
     db: &C,
     now: DateTime<FixedOffset>,
@@ -1255,6 +1418,14 @@ pub(crate) async fn hand_back_in<C: ConnectionTrait>(
         .column(bot::Column::Id)
         .filter(bot::Column::Location.eq(BotLocation::Server.as_str().to_ascii_uppercase()))
         .into_query();
+    let sealed = conversation::Entity::find()
+        .select_only()
+        .column(conversation::Column::Id)
+        .filter(
+            conversation::Column::Encryption
+                .eq(ConversationEncryption::E2e.as_str().to_ascii_uppercase()),
+        )
+        .into_query();
     let unclaimed: Vec<String> = bot_turn::Entity::find()
         .select_only()
         .column(bot_turn::Column::Id)
@@ -1263,6 +1434,7 @@ pub(crate) async fn hand_back_in<C: ConnectionTrait>(
         .filter(ready(now))
         .filter(bot_turn::Column::UpdatedAt.lt(now - Duration::seconds(DESKTOP_HANDOFF_SECS)))
         .filter(bot_turn::Column::BotId.in_subquery(server_bots))
+        .filter(bot_turn::Column::ConversationId.not_in_subquery(sealed))
         .limit(RECOVER_BATCH)
         .into_tuple()
         .all(db)
@@ -1334,7 +1506,10 @@ pub(crate) async fn retry_in<C: ConnectionTrait>(
         ));
     }
     bot_turn_checkpoint::Entity::update_many()
-        .col_expr(bot_turn_checkpoint::Column::RecoveryAttempts, Expr::value(0))
+        .col_expr(
+            bot_turn_checkpoint::Column::RecoveryAttempts,
+            Expr::value(0),
+        )
         .filter(bot_turn_checkpoint::Column::TurnId.eq(turn_id))
         .exec(db)
         .await?;
@@ -1432,10 +1607,14 @@ pub(crate) async fn recover_in<C: ConnectionTrait>(
         .await?;
     let (mut spent, mut retryable) = (Vec::new(), Vec::new());
     for turn in abandoned {
-        if !lock_snapshot(db, &turn).await? { continue; }
+        if !lock_snapshot(db, &turn).await? {
+            continue;
+        }
         if super::recovery::charge_failure(db, &turn).await? >= MAX_ATTEMPTS as i32 {
             spent.push(turn);
-        } else { retryable.push(turn); }
+        } else {
+            retryable.push(turn);
+        }
     }
     let lost = end_all(
         db,
@@ -1512,8 +1691,15 @@ pub(super) async fn end_all<C: ConnectionTrait>(
 /// after that read must win over a decision based on the old row.
 async fn lock_snapshot<C: ConnectionTrait>(db: &C, turn: &bot_turn::Model) -> Result<bool, DbErr> {
     Ok(bot_turn::Entity::update_many()
-        .col_expr(bot_turn::Column::UpdatedAt, Expr::col(bot_turn::Column::UpdatedAt))
-        .filter(unchanged_turns(std::slice::from_ref(turn))).exec(db).await?.rows_affected == 1)
+        .col_expr(
+            bot_turn::Column::UpdatedAt,
+            Expr::col(bot_turn::Column::UpdatedAt),
+        )
+        .filter(unchanged_turns(std::slice::from_ref(turn)))
+        .exec(db)
+        .await?
+        .rows_affected
+        == 1)
 }
 
 fn unchanged_turns(turns: &[bot_turn::Model]) -> Condition {

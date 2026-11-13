@@ -117,6 +117,12 @@ export class EmptyUserState implements IUserState {
 	): Promise<void> {
 		throw new Error("Method not implemented.");
 	}
+	updateProfileHiddenBots(
+		profile: ISettingsProfile,
+		hiddenBots: string[],
+	): Promise<void> {
+		throw new Error("Method not implemented.");
+	}
 
 	createPAT(
 		name: string,

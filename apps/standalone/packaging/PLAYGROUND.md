@@ -6,15 +6,16 @@ pieces. Without Xvfb, browser use still works headless and computer use reports 
 
 ## Container
 
-Use the `-playground` tag next to the normal image, for example `ghcr.io/<owner>/flow-like-standalone:sequence-<n>-playground`.
-It contains Xvfb, xauth, openbox, Chromium, emoji/CJK/Latin fonts and runs as user 65532 with the same volume
-(`/var/lib/flow-like`) and entrypoint as the base image.
+The default release image and its `-playground` tag contain Xvfb, xauth, openbox, Chromium and emoji/CJK/Latin fonts.
+They run as user 65532 with a volume at `/var/lib/flow-like`. The `-minimal` tag omits the desktop dependencies.
+App-managed bot containers use the default image's digest from the signed release metadata. Devices pull this
+prebuilt image; they do not build it.
 
 Chromium keeps its sandbox on and never runs with `--no-sandbox`. Inside a container that needs two things:
 
-- A seccomp profile that allows `clone`, `clone3` and `unshare` for user namespaces. Docker's and Kubernetes'
+- A seccomp profile that allows `clone`, `clone3`, `unshare` and `chroot` for Chromium's namespace sandbox. Docker's and Kubernetes'
   default profile blocks them ("No usable sandbox!"). Use `apps/standalone/packaging/chrome-seccomp.json`, which is
-  Docker's default profile with those three calls allowed. No added capabilities are needed.
+  Docker's default profile with those calls allowed. No added capabilities are needed.
 - A larger `/dev/shm`: `--shm-size=1g` (Docker's default is 64 MB).
 
 ```

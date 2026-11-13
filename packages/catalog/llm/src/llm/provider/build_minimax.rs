@@ -180,6 +180,7 @@ impl NodeLogic for BuildMiniMaxNode {
         let params_obj = VLMParameters {
             context_length: context_length_for_model(&model_id),
             model_classification: BitModelClassification::default(),
+            data_classification: None,
             provider: flow_like_model_provider::provider::ModelProvider {
                 api_surface: Some(
                     flow_like_model_provider::provider::ModelApiSurface::ChatCompletions,

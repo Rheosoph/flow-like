@@ -1,14 +1,22 @@
 //! Bot webhooks: public URLs that wake a bot. The owner creates one per integration (the secret is
-//! shown once, only its hash is stored); a call with the secret in a header or query parameter,
-//! or an optional HMAC signature keyed by the secret's hash, writes a `trigger` entry into the
-//! bot's conversation with its owner and answers with the turn it queued. Servers only: a bot
-//! that lives in a local store has no public URL.
+//! shown once; its hash is stored for comparison and the secret itself encrypted like a bot
+//! secret, to key signatures). A call with the secret in a header or query parameter, or a signed
+//! call, writes a `trigger` entry into the bot's conversation with its owner and answers with the
+//! turn it queued. Servers only: a bot that lives in a local store has no public URL.
+//!
+//! Signed call: send `X-Flow-Like-Timestamp` (Unix seconds, within five minutes of the server's
+//! clock), `X-Flow-Like-Delivery` (an id unique per delivery) and
+//! `X-Flow-Like-Signature: sha256=<hex>`, the HMAC-SHA256 under the webhook secret of
+//! `<timestamp>.<delivery id>.<raw body>`. A delivery id is accepted once per window. Hooks
+//! created before the secret was kept encrypted keep accepting the old signature (HMAC of the
+//! body under the secret's hash) until the owner rotates the secret.
 
 use super::{
     fire::{FiredTurn, fire_trigger, turn_state, wait_for_turn},
-    lock_bot, owned_bot, workspace,
+    lock_bot, owned_bot, secret_cipher, workspace,
 };
 use crate::{
+    cache::{PlatformCache, Reservation},
     credentials::{CredentialsAccess, RuntimeCredentials},
     entity::{bot, bot_webhook},
     error::ApiError,
@@ -55,6 +63,15 @@ const CALLS_PER_MINUTE: u32 = 30;
 const REFUSALS_PER_MINUTE: u32 = 10;
 const SECRET_HEADER: &str = "x-flow-like-webhook-secret";
 const SIGNATURE_HEADER: &str = "x-flow-like-signature";
+const TIMESTAMP_HEADER: &str = "x-flow-like-timestamp";
+const DELIVERY_HEADER: &str = "x-flow-like-delivery";
+const SIGNATURE_TOLERANCE_SECS: i64 = 300;
+const DELIVERY_ID_MAX_CHARS: usize = 128;
+const DELIVERY_TTL: Duration = Duration::from_secs(2 * SIGNATURE_TOLERANCE_SECS as u64);
+const DELIVERY_NAMESPACE: &str = "bot_webhook_delivery";
+const LIMIT_NAMESPACE: &str = "bot_webhook_limit";
+const LIMIT_WINDOW_SECS: i64 = 60;
+const DUPLICATE_DELIVERY: &str = "BOT_WEBHOOK_DUPLICATE_DELIVERY";
 const WEBHOOK_CAPABILITY: &str = "webhook";
 const WEBHOOK_LIMIT_REACHED: &str = "BOT_WEBHOOK_LIMIT_REACHED";
 const WEBHOOK_CAPABILITY_OFF: &str = "BOT_WEBHOOK_CAPABILITY_OFF";
@@ -104,9 +121,10 @@ pub struct IssuedBotWebhook {
     /// Send it in `X-Flow-Like-Webhook-Secret`, as a bearer token, or in the `secret` query
     /// parameter when the sender can only configure a URL. Shown once.
     pub secret: String,
-    /// Optional alternative to sending the secret: sign the raw body with HMAC-SHA256 under
-    /// this key (the lowercase hex blake3 hash of the secret) and send
-    /// `X-Flow-Like-Signature: sha256=<hex>`.
+    /// Optional alternative to sending the secret, for senders that sign: the same value as
+    /// `secret`. Send `X-Flow-Like-Timestamp` (Unix seconds, within five minutes of now),
+    /// `X-Flow-Like-Delivery` (an id unique per delivery) and `X-Flow-Like-Signature:
+    /// sha256=<hex>`, the HMAC-SHA256 under this key of `<timestamp>.<delivery id>.<raw body>`.
     /// Shown once.
     pub signing_key: String,
 }
@@ -142,6 +160,34 @@ pub(crate) fn hook_path(id: &str) -> String {
 
 pub(crate) fn hash_secret(secret: &str) -> String {
     blake3::hash(secret.as_bytes()).to_hex().to_string()
+}
+
+fn secret_name(hook_id: &str) -> String {
+    format!("webhook:{hook_id}")
+}
+
+fn seal_secret(
+    master: &[u8; 32],
+    bot_id: &str,
+    hook_id: &str,
+    secret: &str,
+) -> Result<String, ApiError> {
+    secret_cipher::encrypt(master, bot_id, &secret_name(hook_id), secret).map_err(|error| {
+        ApiError::internal(format!(
+            "Encrypting the secret of webhook '{hook_id}' failed: {error}"
+        ))
+    })
+}
+
+fn open_secret(master: &[u8; 32], hook: &bot_webhook::Model) -> Option<String> {
+    let stored = hook.secret_ciphertext.as_deref()?;
+    match secret_cipher::decrypt(master, &hook.bot_id, &secret_name(&hook.id), stored) {
+        Ok(secret) => Some(secret),
+        Err(error) => {
+            tracing::warn!(hook_id = %hook.id, %error, "Webhook secret could not be decrypted; only its plain secret is accepted");
+            None
+        }
+    }
 }
 
 fn new_secret() -> String {
@@ -235,6 +281,66 @@ impl WindowLimiter {
     }
 }
 
+fn window_slot(key: &str, unix_now: i64) -> String {
+    format!("{key}:{}", unix_now.div_euclid(LIMIT_WINDOW_SECS))
+}
+
+fn cache_unavailable(operation: &str, error: impl std::fmt::Display) {
+    tracing::warn!(%error, "Webhook {operation} fell back to this replica; the shared cache failed");
+}
+
+impl WindowLimiter {
+    pub(crate) async fn shared_exhausted(
+        &self,
+        cache: Option<&PlatformCache>,
+        key: &str,
+        env: &AdmitEnv<'_>,
+    ) -> bool {
+        if self.exhausted(key, env.now) {
+            return true;
+        }
+        let Some(cache) = cache else { return false };
+        match cache
+            .get::<u32>(LIMIT_NAMESPACE, &window_slot(key, env.unix_now))
+            .await
+        {
+            Ok(count) => count.unwrap_or(0) >= self.limit,
+            Err(error) => {
+                cache_unavailable("rate check", error);
+                false
+            }
+        }
+    }
+
+    pub(crate) async fn shared_allow(
+        &self,
+        cache: Option<&PlatformCache>,
+        key: &str,
+        env: &AdmitEnv<'_>,
+    ) -> bool {
+        if !self.allow(key, env.now) {
+            return false;
+        }
+        let Some(cache) = cache else { return true };
+        let slot = window_slot(key, env.unix_now);
+        let count = match cache.get::<u32>(LIMIT_NAMESPACE, &slot).await {
+            Ok(count) => count.unwrap_or(0),
+            Err(error) => {
+                cache_unavailable("rate check", error);
+                return true;
+            }
+        };
+        if count >= self.limit {
+            return false;
+        }
+        let ttl = Duration::from_secs(2 * LIMIT_WINDOW_SECS as u64);
+        if let Err(error) = cache.set(LIMIT_NAMESPACE, &slot, &(count + 1), ttl).await {
+            cache_unavailable("rate count", error);
+        }
+        true
+    }
+}
+
 static CALLS: LazyLock<WindowLimiter> =
     LazyLock::new(|| WindowLimiter::new(CALLS_PER_MINUTE, Duration::from_secs(60)));
 static REFUSALS: LazyLock<WindowLimiter> =
@@ -249,14 +355,19 @@ fn secret_from(headers: &HeaderMap) -> Option<&str> {
         .filter(|secret| !secret.is_empty())
 }
 
-fn signature_matches(secret_hash: &str, signature: &str, body: &[u8]) -> bool {
+fn header_text<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers.get(name).and_then(|value| value.to_str().ok())
+}
+
+fn decoded_signature(signature: &str) -> Option<Vec<u8>> {
+    hex::decode(signature.trim().strip_prefix("sha256=")?).ok()
+}
+
+fn legacy_signature_matches(secret_hash: &str, signature: &str, body: &[u8]) -> bool {
     if secret_hash.is_empty() {
         return false;
     }
-    let Some(hex_signature) = signature.trim().strip_prefix("sha256=") else {
-        return false;
-    };
-    let Ok(expected) = hex::decode(hex_signature) else {
+    let Some(expected) = decoded_signature(signature) else {
         return false;
     };
     let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(secret_hash.as_bytes()) else {
@@ -266,6 +377,41 @@ fn signature_matches(secret_hash: &str, signature: &str, body: &[u8]) -> bool {
     mac.verify_slice(&expected).is_ok()
 }
 
+fn valid_delivery_id(delivery: &str) -> bool {
+    !delivery.is_empty()
+        && delivery.chars().count() <= DELIVERY_ID_MAX_CHARS
+        && delivery
+            .chars()
+            .all(|char| char.is_ascii_alphanumeric() || matches!(char, '-' | '_' | '.' | ':'))
+}
+
+/// The delivery id of a call signed under `secret` over `<timestamp>.<delivery>.<body>` whose
+/// timestamp is within the tolerance of `unix_now`.
+pub(crate) fn signed_delivery(
+    secret: &str,
+    headers: &HeaderMap,
+    body: &[u8],
+    unix_now: i64,
+) -> Option<String> {
+    let timestamp: i64 = header_text(headers, TIMESTAMP_HEADER)?
+        .trim()
+        .parse()
+        .ok()?;
+    if timestamp.abs_diff(unix_now) > SIGNATURE_TOLERANCE_SECS as u64 {
+        return None;
+    }
+    let delivery = header_text(headers, DELIVERY_HEADER)?.trim();
+    if !valid_delivery_id(delivery) {
+        return None;
+    }
+    let expected = decoded_signature(header_text(headers, SIGNATURE_HEADER)?)?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).ok()?;
+    mac.update(format!("{timestamp}.{delivery}.").as_bytes());
+    mac.update(body);
+    mac.verify_slice(&expected).ok()?;
+    Some(delivery.to_string())
+}
+
 fn secret_matches(secret_hash: &str, presented: &str) -> bool {
     match blake3::Hash::from_hex(secret_hash) {
         Ok(stored) => blake3::hash(presented.as_bytes()) == stored,
@@ -273,22 +419,56 @@ fn secret_matches(secret_hash: &str, presented: &str) -> bool {
     }
 }
 
-/// Whether the call carries the webhook's secret or a valid signature of its body.
+fn secret_presented(secret_hash: &str, headers: &HeaderMap, query_secret: Option<&str>) -> bool {
+    let by_secret = secret_from(headers).is_some_and(|secret| secret_matches(secret_hash, secret));
+    let by_query = query_secret
+        .filter(|secret| !secret.is_empty())
+        .is_some_and(|secret| secret_matches(secret_hash, secret));
+    by_secret || by_query
+}
+
+fn legacy_signature_presented(secret_hash: &str, headers: &HeaderMap, body: &[u8]) -> bool {
+    header_text(headers, SIGNATURE_HEADER)
+        .is_some_and(|signature| legacy_signature_matches(secret_hash, signature, body))
+}
+
+/// Whether the call carries the secret or the body's signature keyed by the secret's hash, the
+/// way hooks without a stored secret verify.
 pub(crate) fn authorized(
     secret_hash: &str,
     headers: &HeaderMap,
     query_secret: Option<&str>,
     body: &[u8],
 ) -> bool {
-    let by_secret = secret_from(headers).is_some_and(|secret| secret_matches(secret_hash, secret));
-    let by_query = query_secret
-        .filter(|secret| !secret.is_empty())
-        .is_some_and(|secret| secret_matches(secret_hash, secret));
-    let by_signature = headers
-        .get(SIGNATURE_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|signature| signature_matches(secret_hash, signature, body));
-    by_secret || by_query || by_signature
+    secret_presented(secret_hash, headers, query_secret)
+        || legacy_signature_presented(secret_hash, headers, body)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Proof {
+    Secret,
+    Signed { delivery: String },
+}
+
+fn proof_of(
+    hook: &bot_webhook::Model,
+    plain_secret: Option<&str>,
+    headers: &HeaderMap,
+    query_secret: Option<&str>,
+    body: &[u8],
+    unix_now: i64,
+) -> Option<Proof> {
+    if secret_presented(&hook.secret_hash, headers, query_secret) {
+        return Some(Proof::Secret);
+    }
+    match (plain_secret, &hook.secret_ciphertext) {
+        (Some(secret), _) => signed_delivery(secret, headers, body, unix_now)
+            .map(|delivery| Proof::Signed { delivery }),
+        (None, None) => {
+            legacy_signature_presented(&hook.secret_hash, headers, body).then_some(Proof::Secret)
+        }
+        (None, Some(_)) => None,
+    }
 }
 
 pub(crate) fn check_payload_size(len: usize) -> Result<(), ApiError> {
@@ -418,7 +598,8 @@ pub(crate) async fn create_in<C: ConnectionTrait>(
     bot_id: &str,
     name: String,
     instruction: String,
-    secret_hash: String,
+    secret: &str,
+    master: &[u8; 32],
 ) -> Result<bot_webhook::Model, ApiError> {
     let bot = owned_bot(db, owner_id, bot_id).await?;
     refuse_without_capability(&bot)?;
@@ -433,11 +614,13 @@ pub(crate) async fn create_in<C: ConnectionTrait>(
             format!("Bot '{bot_id}' already has {MAX_WEBHOOKS_PER_BOT} webhooks; delete one first"),
         ));
     }
+    let id = format!("bh_{}", uuid::Uuid::new_v4().simple());
     Ok(bot_webhook::ActiveModel {
-        id: Set(format!("bh_{}", uuid::Uuid::new_v4().simple())),
+        secret_ciphertext: Set(Some(seal_secret(master, bot_id, &id, secret)?)),
+        id: Set(id),
         bot_id: Set(bot_id.to_string()),
         name: Set(name),
-        secret_hash: Set(secret_hash),
+        secret_hash: Set(hash_secret(secret)),
         instruction: Set(instruction),
         enabled: Set(true),
         created_at: Set(Utc::now().fixed_offset()),
@@ -453,6 +636,7 @@ pub(crate) async fn rotate_in<C: ConnectionTrait>(
     owner_id: &str,
     bot_id: &str,
     hook_id: &str,
+    master: &[u8; 32],
 ) -> Result<(bot_webhook::Model, String), ApiError> {
     owned_bot(db, owner_id, bot_id).await?;
     let row = bot_webhook::Entity::find_by_id(hook_id)
@@ -463,15 +647,15 @@ pub(crate) async fn rotate_in<C: ConnectionTrait>(
     let secret = new_secret();
     let mut active: bot_webhook::ActiveModel = row.into();
     active.secret_hash = Set(hash_secret(&secret));
+    active.secret_ciphertext = Set(Some(seal_secret(master, bot_id, hook_id, &secret)?));
     Ok((active.update(db).await?, secret))
 }
 
 fn issued(row: bot_webhook::Model, secret: String) -> IssuedBotWebhook {
-    let signing_key = row.secret_hash.clone();
     IssuedBotWebhook {
         webhook: row.into(),
+        signing_key: secret.clone(),
         secret,
-        signing_key,
     }
 }
 
@@ -532,16 +716,17 @@ pub async fn create_bot_webhook(
     let secret = new_secret();
     let row = state
         .transaction(|txn| {
-            let (sub, bot_id, name, instruction, secret_hash) = (
+            let (sub, bot_id, name, instruction, secret, master) = (
                 sub.clone(),
                 bot_id.clone(),
                 name.clone(),
                 instruction.clone(),
-                hash_secret(&secret),
+                secret.clone(),
+                state.encryption_key,
             );
             Box::pin(async move {
                 lock_bot(txn, &bot_id).await?;
-                create_in(txn, &sub, &bot_id, name, instruction, secret_hash).await
+                create_in(txn, &sub, &bot_id, name, instruction, &secret, &master).await
             })
         })
         .await?;
@@ -619,7 +804,8 @@ pub async fn rotate_bot_webhook(
     Path((bot_id, hook_id)): Path<(String, String)>,
 ) -> Result<Json<IssuedBotWebhook>, ApiError> {
     let sub = user.sub()?;
-    let (row, secret) = rotate_in(&state.db, &sub, &bot_id, &hook_id).await?;
+    let (row, secret) =
+        rotate_in(&state.db, &sub, &bot_id, &hook_id, &state.encryption_key).await?;
     Ok(Json(issued(row, secret)))
 }
 
@@ -662,32 +848,72 @@ fn unauthorized() -> ApiError {
     )
 }
 
+pub(crate) struct AdmitEnv<'a> {
+    pub master: &'a [u8; 32],
+    pub cache: Option<&'a PlatformCache>,
+    pub now: Instant,
+    pub unix_now: i64,
+}
+
+async fn claim_delivery(
+    cache: Option<&PlatformCache>,
+    hook_id: &str,
+    delivery: &str,
+) -> Result<(), ApiError> {
+    let Some(cache) = cache else { return Ok(()) };
+    let key = format!("{hook_id}:{delivery}");
+    match cache
+        .try_insert(DELIVERY_NAMESPACE, &key, &true, DELIVERY_TTL)
+        .await
+    {
+        Ok(Reservation::Acquired) => Ok(()),
+        Ok(Reservation::Held(_)) => Err(ApiError::coded(
+            StatusCode::CONFLICT,
+            DUPLICATE_DELIVERY,
+            format!("Delivery '{delivery}' of this webhook was already accepted"),
+        )),
+        Err(error) => {
+            cache_unavailable("delivery check", error);
+            Ok(())
+        }
+    }
+}
+
 /// The webhook and its live bot once the call proved the secret; every refusal before that is the
-/// same 401, so a caller can't tell a missing webhook from a wrong secret.
+/// same 401, so a caller can't tell a missing webhook from a wrong secret. A signed call also
+/// claims its delivery id, so the same signed request is accepted once.
 pub(crate) async fn admit(
     db: &DatabaseConnection,
     hook_id: &str,
     headers: &HeaderMap,
     query_secret: Option<&str>,
     body: &[u8],
-    now: Instant,
+    env: &AdmitEnv<'_>,
 ) -> Result<(bot_webhook::Model, bot::Model), ApiError> {
     let probe = format!("probe:{hook_id}");
-    if REFUSALS.exhausted(&probe, now) {
+    if REFUSALS.shared_exhausted(env.cache, &probe, env).await {
         return Err(ApiError::too_many_requests(
             "Too many refused webhook calls; wait a minute",
         ));
     }
     let hook = bot_webhook::Entity::find_by_id(hook_id).one(db).await?;
-    let stored = hook
-        .as_ref()
-        .map(|hook| hook.secret_hash.clone())
-        .unwrap_or_default();
-    let Some(hook) = hook.filter(|_| authorized(&stored, headers, query_secret, body)) else {
-        REFUSALS.allow(&probe, now);
+    let admitted = hook.and_then(|hook| {
+        let plain = open_secret(env.master, &hook);
+        proof_of(
+            &hook,
+            plain.as_deref(),
+            headers,
+            query_secret,
+            body,
+            env.unix_now,
+        )
+        .map(|proof| (hook, proof))
+    });
+    let Some((hook, proof)) = admitted else {
+        REFUSALS.shared_allow(env.cache, &probe, env).await;
         return Err(unauthorized());
     };
-    if !CALLS.allow(hook_id, now) {
+    if !CALLS.shared_allow(env.cache, hook_id, env).await {
         return Err(ApiError::too_many_requests(format!(
             "A webhook takes at most {CALLS_PER_MINUTE} calls a minute"
         )));
@@ -706,12 +932,21 @@ pub(crate) async fn admit(
         .await?
         .ok_or_else(|| ApiError::not_found("The bot of this webhook is gone"))?;
     refuse_without_capability(&bot)?;
+    if let Proof::Signed { delivery } = proof {
+        claim_delivery(env.cache, hook_id, &delivery).await?;
+    }
     Ok((hook, bot))
 }
 
 /// Wake a bot with a payload. Supply the webhook secret through `X-Flow-Like-Webhook-Secret`,
-/// `Authorization: Bearer <secret>`, or `?secret=<secret>`. HMAC signing is optional and can
-/// replace the secret with `X-Flow-Like-Signature: sha256=<hex>` over the exact request body.
+/// `Authorization: Bearer <secret>`, or `?secret=<secret>`. Senders that sign can replace the
+/// secret with three headers: `X-Flow-Like-Timestamp` (Unix seconds, at most five minutes off the
+/// server clock), `X-Flow-Like-Delivery` (an id of letters, digits, `-_.:`, at most 128
+/// characters, unique per delivery) and `X-Flow-Like-Signature: sha256=<hex>`, the lowercase hex
+/// HMAC-SHA256 under the webhook secret of the string `<timestamp>.<delivery id>.<raw body>`. A
+/// delivery id is accepted once per ten minutes (a repeat answers 409). Webhooks created before
+/// this scheme keep verifying `sha256=<hex>` of the body alone, keyed by the blake3 hex hash of
+/// the secret, until the owner rotates the secret.
 #[utoipa::path(
     post,
     path = "/bots/hooks/{hook_id}",
@@ -723,7 +958,7 @@ pub(crate) async fn admit(
         (status = 200, description = "With `wait`: the bot answered in time; the reply is in the body", body = FiredTurn),
         (status = 401, description = "BOT_WEBHOOK_UNAUTHORIZED: no such webhook, or the secret or signature is wrong"),
         (status = 403, description = "BOT_WEBHOOK_DISABLED or BOT_WEBHOOK_CAPABILITY_OFF"),
-        (status = 409, description = "BOT_TURN_NOT_QUEUED: the bot took no turn"),
+        (status = 409, description = "BOT_TURN_NOT_QUEUED: the bot took no turn; BOT_WEBHOOK_DUPLICATE_DELIVERY: a signed call repeated a delivery id"),
         (status = 413, description = "BOT_WEBHOOK_PAYLOAD_TOO_LARGE: more than 256 KiB"),
         (status = 429, description = "More than 30 calls a minute, or too many refused calls")
     )
@@ -736,13 +971,26 @@ pub async fn call_bot_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
+    let cache = match state.cache.platform().await {
+        Ok(cache) => Some(cache),
+        Err(error) => {
+            cache_unavailable("cache lookup", error);
+            None
+        }
+    };
+    let env = AdmitEnv {
+        master: &state.encryption_key,
+        cache: cache.as_ref(),
+        now: Instant::now(),
+        unix_now: Utc::now().timestamp(),
+    };
     let (hook, bot) = admit(
         &state.db,
         &hook_id,
         &headers,
         query.secret.as_deref(),
         &body,
-        Instant::now(),
+        &env,
     )
     .await?;
     let message_id = format!("wh-{}", uuid::Uuid::new_v4().simple());

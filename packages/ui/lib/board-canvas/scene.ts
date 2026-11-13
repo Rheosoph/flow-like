@@ -16,6 +16,7 @@ import type { INode } from "../schema/flow/node";
 import type { IPin } from "../schema/flow/pin";
 import type { ILayer } from "../schema/flow/run";
 import { parseUint8ArrayToJson } from "../uint8";
+import { WARM_EDITOR_LIMIT } from "./dom-visibility";
 import { hasNativeGlyphs } from "./font-coverage";
 import { isNativeIcon } from "./icons";
 
@@ -312,14 +313,24 @@ export interface NativePresentationState {
 /**
  * Nodes the DOM renders. Run state, logs, heat and lint marks are painted by the canvas
  * (`collectNodeStatus`), so running a board never moves nodes into the DOM.
+ *
+ * A selected node keeps its editor mounted wherever the camera is, so a selection larger
+ * than the warm editor population stays native and mounts editors on hover instead.
  */
 export function collectDomNodeIds(
 	nodes: readonly FlowSceneNode[],
 	state: NativePresentationState = {},
 ): Set<string> {
 	const result = new Set<string>();
+	let selected = 0;
+	for (const node of nodes) if (node.selected) selected++;
+	const editSelection = selected <= WARM_EDITOR_LIMIT;
 	for (const node of nodes) {
-		if (state.forceDomText || node.selected || nodeNeedsDom(node))
+		if (
+			state.forceDomText ||
+			(editSelection && node.selected) ||
+			nodeNeedsDom(node)
+		)
 			result.add(node.id);
 	}
 	return result;

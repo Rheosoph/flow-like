@@ -7,12 +7,12 @@
 use crate::{
     bot_host::{
         history,
-        ledger::Claimed,
+        ledger::{BOT_TURN_LEASE_LOST, Claimed},
         recovery,
         worker::{self, MAX_TURN_RUNTIME_MS},
     },
     bot_permission::{SignedBotToken, sign_bot_token},
-    entity::{bot, conversation},
+    entity::{bot, bot_turn, conversation},
     error::ApiError,
     routes::{
         ai::{
@@ -37,23 +37,75 @@ use flow_like::{
     flow_like_model_provider::provider::is_hosted_provider_name, profile::Profile,
     state::FlowLikeState,
 };
+use flow_like_bot_tools::image::{
+    is_hosted_image_bit, is_local_image_bit, is_own_key_image_bit,
+    resolve_bit as resolve_image_bit, take_provider_params,
+};
 use flow_like_types::{
-    bot_turn::TurnAudience,
+    bot_turn::{STORED_RUNNING, TurnAudience},
     device_bot::{
         DeviceBotSpec, DeviceConversation, DeviceModels, DeviceRequester, DeviceToken,
-        DeviceTurnGrant, DeviceUsageGrant, DeviceUsageReport,
+        DeviceTurnGrant, DeviceUsageGrant, DeviceUsageReport, REFRESHED_TOKEN_SECS,
     },
     inbox::{ConversationEncryption, ConversationKind},
 };
-use sea_orm::{ConnectionTrait, EntityTrait};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, sea_query::Expr};
 use std::sync::Arc;
-
-pub(crate) const BOT_TURN_ENCRYPTED: &str = worker::CODE_ENCRYPTED;
 
 pub(crate) const BOT_DEVICE_MODEL_NOT_HOSTED: &str = "BOT_DEVICE_MODEL_NOT_HOSTED";
 pub(crate) const MODEL_NOT_HOSTED_TEXT: &str =
     "This bot's model can't run on a device; pick a hosted model in its settings.";
 pub(crate) const DELIVERY_TTL_SECS: i64 = 60;
+/// Posted after "I can't answer yet: " when the bot's device is shared for deploying.
+pub(crate) const DEVICE_SHARED_TEXT: &str = "the device I run on lets other people deploy to it. My owner can end that access in the device's sharing settings or choose another place for me to run.";
+/// How long past the end of its allowance a device may keep a turn to hand its answer in.
+pub(crate) const HOLD_GRACE_SECS: i64 = 120;
+
+/// The unix second after which a device may no longer keep the turn alive: the end of the
+/// allowance recorded for its claim, plus the time to hand the answer in. `None` when the hub
+/// recorded no allowance for the turn. An allowance that cannot be found has ended.
+pub(crate) async fn hold_end<C: ConnectionTrait>(
+    db: &C,
+    turn: &bot_turn::Model,
+) -> Result<Option<i64>, ApiError> {
+    let Some(operation_id) = turn.operation_id.as_deref() else {
+        return Ok(None);
+    };
+    let window = crate::quota::assistant_window(db, operation_id, &turn.owner_id).await?;
+    Ok(Some(window.map_or(0, |(deadline_ms, _)| {
+        deadline_ms / 1_000 + HOLD_GRACE_SECS
+    })))
+}
+
+/// Refuses to keep a turn alive past the end of its allowance. A turn whose answer is saved
+/// stays: only publishing it is left.
+pub(crate) async fn require_hold<C: ConnectionTrait>(
+    db: &C,
+    turn: &bot_turn::Model,
+    host_id: &str,
+) -> Result<(), ApiError> {
+    let Some(end) = hold_end(db, turn).await? else {
+        return Ok(());
+    };
+    if chrono::Utc::now().timestamp() <= end || has_finished_checkpoint(db, turn, host_id).await? {
+        return Ok(());
+    }
+    Err(ApiError::coded(
+        StatusCode::CONFLICT,
+        BOT_TURN_LEASE_LOST,
+        format!(
+            "Turn '{}' ran past the end of its allowance; host '{host_id}' can't keep it",
+            turn.id
+        ),
+    ))
+}
+
+/// How long a token refreshed for a running turn lives: never past the end of its hold.
+pub(crate) fn refresh_ttl(hold_end: Option<i64>, now: i64) -> i64 {
+    hold_end.map_or(REFRESHED_TOKEN_SECS, |end| {
+        (end - now).clamp(DELIVERY_TTL_SECS, REFRESHED_TOKEN_SECS)
+    })
+}
 
 pub(crate) async fn has_finished_checkpoint<C: ConnectionTrait>(
     db: &C,
@@ -72,6 +124,8 @@ pub(crate) async fn has_finished_checkpoint<C: ConnectionTrait>(
     )
     .await?;
     match checkpoint {
+        // The hub can't read a sealed checkpoint, so its turn counts as still running.
+        Some(checkpoint) if checkpoint.state.get("sealed_checkpoint").is_some() => Ok(false),
         Some(checkpoint) => flow_like::flow::copilot::run_recovery::finished_reply(&checkpoint)
             .map(|answer| answer.is_some())
             .map_err(ApiError::internal_error),
@@ -114,6 +168,7 @@ pub(crate) async fn completed_delivery_in<C: ConnectionTrait>(
         },
         bot: DeviceBotSpec {
             bot_id: turn.bot_id.clone(),
+            execution_mode: crate::routes::bots::model::stored_execution_mode(row),
             system: None,
             name: row.name.clone().unwrap_or_else(|| "Bot".into()),
             description: None,
@@ -150,7 +205,9 @@ pub(crate) async fn completed_delivery_in<C: ConnectionTrait>(
             fallbacks: Vec::new(),
             embedding: None,
             embedding_model_id: None,
+            image: None,
             decision: None,
+            vision: None,
         },
         bot_token,
         executor_token: None,
@@ -178,6 +235,26 @@ async fn hosted_bit(
     is_hosted_provider_name(&provider.provider_name).then_some(bit)
 }
 
+/// The bot's vision model when it is a hosted model that reads images. A device turn whose
+/// model cannot see images has them described by it.
+async fn vision_bit(
+    fls: &Arc<FlowLikeState>,
+    profile: &Profile,
+    id: &str,
+) -> Option<serde_json::Value> {
+    let Some(bit) = hosted_bit(fls, profile, id)
+        .await
+        .filter(flow_like::bit::Bit::is_multimodal)
+    else {
+        tracing::warn!(
+            bit_id = id,
+            "Device bot vision model is not a hosted vision model; its turns' images go to the turn's model unread"
+        );
+        return None;
+    };
+    serde_json::to_value(&bit).ok()
+}
+
 async fn embedding_bit(
     fls: &Arc<FlowLikeState>,
     profile: &Profile,
@@ -199,6 +276,45 @@ async fn embedding_bit(
         return Err(unrunnable(&format!("memory model '{id}'")));
     }
     Ok(Some(bit))
+}
+
+/// The bot's image model as a device may hold it.
+async fn image_bit(
+    profile: &Profile,
+    fls: &Arc<FlowLikeState>,
+    id: &str,
+) -> Option<serde_json::Value> {
+    let bit = match resolve_image_bit(profile, fls, Some(id)).await {
+        Ok(bit) => bit,
+        Err(error) => {
+            tracing::warn!(
+                bit_id = id,
+                ?error,
+                "Device bot image model unavailable; the bot has no image_generate"
+            );
+            return None;
+        }
+    };
+    let held = device_image(bit);
+    if held.is_none() {
+        tracing::warn!(
+            bit_id = id,
+            "Device bot image model is not an image generation model; the bot has no image_generate"
+        );
+    }
+    held
+}
+
+/// A hosted model goes as it is. An own-key or local model goes without its provider `params`:
+/// the device asks the hub for an own-key model's sign-in per call, and refuses a local model
+/// with a sentence the bot can pass on.
+pub(crate) fn device_image(mut bit: flow_like::bit::Bit) -> Option<serde_json::Value> {
+    if is_own_key_image_bit(&bit) || is_local_image_bit(&bit) {
+        take_provider_params(&mut bit);
+    } else if !is_hosted_image_bit(&bit) {
+        return None;
+    }
+    serde_json::to_value(&bit).ok()
 }
 
 /// An optional classifier becoming unavailable must not disable the bot's primary model.
@@ -286,6 +402,14 @@ async fn resolve_models(
         Some(id) => decision_bit(profile, id, fls.http_client.clone()).await,
         None => None,
     };
+    let image = match bot.context.image_model.as_deref() {
+        Some(id) => image_bit(profile, fls, id).await,
+        None => None,
+    };
+    let vision = match bot.context.vision_model.as_deref().map(str::trim) {
+        Some(id) if !id.is_empty() => vision_bit(fls, profile, id).await,
+        _ => None,
+    };
     let funding = worker::funding_class(true, embedding.as_ref().map(|_| true));
     Ok(Resolved {
         provider_name: provider.provider_name.clone(),
@@ -296,15 +420,18 @@ async fn resolve_models(
             fallbacks,
             embedding: embedding.as_ref().map(serde_json::to_value).transpose()?,
             embedding_model_id: memory_model,
+            image,
             decision,
+            vision,
         },
     })
 }
 
-fn bot_spec(bot: ChatBot) -> DeviceBotSpec {
+fn bot_spec(bot: ChatBot, execution_mode: flow_like_types::bot::BotExecutionMode) -> DeviceBotSpec {
     let context = bot.context;
     DeviceBotSpec {
         bot_id: context.bot_id,
+        execution_mode,
         system: context.system,
         name: context.name,
         description: context.description,
@@ -433,6 +560,79 @@ pub(crate) fn is_end_to_end(conversation: &conversation::Model) -> bool {
     ConversationEncryption::parse(&conversation.encryption) == Some(ConversationEncryption::E2e)
 }
 
+/// The model allowance a claim runs on.
+struct Allowance {
+    operation_id: String,
+    deadline: chrono::DateTime<chrono::Utc>,
+    /// Set when this claim reserved it.
+    reserved: Option<AssistantUsage>,
+}
+
+/// A turn keeps the allowance recorded for it for as long as that allowance runs, so claiming
+/// it again neither reserves twice nor moves the end of the run. Otherwise a new one is
+/// reserved and recorded on the turn, which the device must still hold.
+async fn turn_allowance(
+    state: &AppState,
+    turn: &bot_turn::Model,
+    host_id: &str,
+    resolved: &Resolved,
+    room: Option<&str>,
+) -> Result<Allowance, ApiError> {
+    let owner = turn.owner_id.as_str();
+    if let Some(operation_id) = turn.operation_id.as_deref()
+        && let Some((deadline_ms, true)) =
+            crate::quota::assistant_window(&state.db, operation_id, owner).await?
+        && let Some(deadline) = chrono::DateTime::from_timestamp_millis(deadline_ms)
+        && deadline > chrono::Utc::now()
+    {
+        return Ok(Allowance {
+            operation_id: operation_id.to_owned(),
+            deadline,
+            reserved: None,
+        });
+    }
+    let usage = reserve(
+        state,
+        owner,
+        resolved,
+        &crate::middleware::jwt::BotUser {
+            bot_id: turn.bot_id.clone(),
+            turn_id: turn.id.clone(),
+            conv_id: room.map(ToOwned::to_owned),
+        },
+    )
+    .await?;
+    let recorded = bot_turn::Entity::update_many()
+        .col_expr(
+            bot_turn::Column::OperationId,
+            Expr::value(usage.operation_id.clone()),
+        )
+        .filter(bot_turn::Column::Id.eq(turn.id.as_str()))
+        .filter(bot_turn::Column::HostId.eq(host_id))
+        .filter(bot_turn::Column::Status.eq(STORED_RUNNING))
+        .exec(&state.db)
+        .await;
+    match recorded {
+        Ok(updated) if updated.rows_affected == 1 => Ok(Allowance {
+            operation_id: usage.operation_id.clone(),
+            deadline: usage.deadline,
+            reserved: Some(usage),
+        }),
+        outcome => {
+            settle_assistant_usage(state, &usage, 0, false).await.ok();
+            outcome?;
+            Err(ApiError::coded(
+                StatusCode::CONFLICT,
+                BOT_TURN_LEASE_LOST,
+                format!(
+                    "Host '{host_id}' no longer holds turn '{}'; its allowance was released",
+                    turn.id
+                ),
+            ))
+        }
+    }
+}
+
 /// The grant of a claimed device turn. The model allowance is reserved last, and released
 /// as a failed settlement when the tokens can't be signed.
 pub(crate) async fn build(
@@ -448,13 +648,29 @@ pub(crate) async fn build(
         .await?
         .filter(|row| row.deleted_at.is_none())
         .ok_or_else(|| ApiError::not_found(format!("Bot '{}' was deleted", turn.bot_id)))?;
+    if let Some(device_id) = row.device_id.as_deref()
+        && crate::devices::management::shared_for_deploy(
+            &state.db,
+            device_id,
+            owner,
+            chrono::Utc::now().timestamp(),
+        )
+        .await?
+    {
+        return Err(ApiError::coded(
+            StatusCode::CONFLICT,
+            crate::devices::management::DEVICE_SHARED_FOR_DEPLOY,
+            DEVICE_SHARED_TEXT,
+        ));
+    }
     if let Some(delivery) =
         completed_delivery_in(&state.db, claimed, host_id, &row, conversation).await?
     {
         return Ok(delivery);
     }
     let kind = ConversationKind::parse(&conversation.kind).unwrap_or(ConversationKind::Group);
-    let room = crate::bot_host::worker::room_of(kind, &turn.conversation_id);
+    let scope = crate::routes::bots::runtime_token::turn_scope(&state.db, turn).await?;
+    let room = scope.as_deref();
     let (profile, access) = worker::load_profile(state, owner, row.profile_id.as_deref()).await?;
     let bot = chat_bot(state, owner, Some(turn.bot_id.as_str()), &profile)
         .await?
@@ -463,17 +679,7 @@ pub(crate) async fn build(
     let resolved = resolve_models(state, owner, &bot, &profile, &access, &fls).await?;
     let requester = requester_of(state, turn, kind, conversation.title.as_deref()).await?;
     let workspace = bot.context.workspace_app_id.clone();
-    let usage = reserve(
-        state,
-        owner,
-        &resolved,
-        &crate::middleware::jwt::BotUser {
-            bot_id: turn.bot_id.clone(),
-            turn_id: turn.id.clone(),
-            conv_id: room.map(ToOwned::to_owned),
-        },
-    )
-    .await?;
+    let usage = turn_allowance(state, turn, host_id, &resolved, room).await?;
     let ttl = ((usage.deadline - chrono::Utc::now()).num_seconds()).clamp(60, 86_400);
     let tokens = async {
         Ok::<_, ApiError>((
@@ -492,7 +698,9 @@ pub(crate) async fn build(
     let (bot_token, executor_token) = match tokens {
         Ok(tokens) => tokens,
         Err(error) => {
-            settle_assistant_usage(state, &usage, 0, false).await.ok();
+            if let Some(reserved) = &usage.reserved {
+                settle_assistant_usage(state, reserved, 0, false).await.ok();
+            }
             return Err(error);
         }
     };
@@ -506,7 +714,7 @@ pub(crate) async fn build(
             kind: kind.as_str().to_string(),
             title: conversation.title.clone(),
         },
-        bot: bot_spec(bot),
+        bot: bot_spec(bot, crate::routes::bots::model::stored_execution_mode(&row)),
         requester: Some(requester),
         models: resolved.models,
         bot_token,
@@ -604,5 +812,64 @@ mod decision_tests {
             usable["parameters"]["provider"]["provider_name"],
             "hosted:typesafe"
         );
+    }
+}
+
+#[cfg(test)]
+mod hold_tests {
+    use super::*;
+
+    #[test]
+    fn a_refreshed_token_ends_with_the_hold_of_its_turn() {
+        let now = 1_790_000_000;
+        for (hold_end, ttl) in [
+            (None, REFRESHED_TOKEN_SECS),
+            (Some(now + 3_600), REFRESHED_TOKEN_SECS),
+            (Some(now + 400), 400),
+            (Some(now + 5), DELIVERY_TTL_SECS),
+            (Some(now - 500), DELIVERY_TTL_SECS),
+        ] {
+            assert_eq!(refresh_ttl(hold_end, now), ttl, "{hold_end:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+    use flow_like::bit::{Bit, BitTypes};
+    use serde_json::json;
+
+    fn image(bit_type: BitTypes, provider_name: &str) -> Bit {
+        Bit {
+            id: provider_name.into(),
+            bit_type,
+            parameters: json!({ "provider": {
+                "provider_name": provider_name, "model_id": "m",
+                "params": { "api_key": "owner-key" },
+            }}),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn no_image_model_reaches_a_device_with_the_owners_key() {
+        let hosted = device_image(image(BitTypes::ImageGeneration, "hosted:openrouter")).unwrap();
+        assert_eq!(
+            hosted["parameters"]["provider"]["params"]["api_key"],
+            "owner-key"
+        );
+        for provider in [
+            "openai",
+            flow_like::flow_like_model_provider::stablediffusion::PROVIDER_NAME,
+        ] {
+            let held = device_image(image(BitTypes::ImageGeneration, provider)).unwrap();
+            assert_eq!(held["parameters"]["provider"]["provider_name"], provider);
+            assert!(
+                held["parameters"]["provider"].get("params").is_none(),
+                "{provider}"
+            );
+        }
+        assert!(device_image(image(BitTypes::Llm, "openai")).is_none());
     }
 }

@@ -1,4 +1,8 @@
 import {
+	type WorkerPort,
+	portFromSharedWorker as sharedWorkerPort,
+} from "../shared-worker-port";
+import {
 	type EmotionInput,
 	type EmotionLoadState,
 	type EmotionWorkerRequest,
@@ -7,12 +11,10 @@ import {
 	boundEmotionInput,
 } from "./protocol";
 
-export interface EmotionWorkerPort {
-	postMessage(message: EmotionWorkerRequest): void;
-	terminate(): void;
-	onmessage: ((event: MessageEvent<EmotionWorkerResponse>) => void) | null;
-	onerror: ((event: ErrorEvent) => void) | null;
-}
+export type EmotionWorkerPort = WorkerPort<
+	EmotionWorkerRequest,
+	EmotionWorkerResponse
+>;
 
 interface Request {
 	id: number;
@@ -261,73 +263,8 @@ export function portFromSharedWorker(
 	worker: SharedWorker,
 	createFallback?: () => EmotionWorkerPort,
 ): EmotionWorkerPort {
-	const port = worker.port;
-	let fallback: EmotionWorkerPort | undefined;
-	let ready = false;
-	let terminated = false;
-	const pending: EmotionWorkerRequest[] = [];
-
-	function closeSharedPort() {
-		worker.onerror = null;
-		port.onmessage = null;
-		try {
-			port.postMessage({ type: "disconnect" });
-		} catch {
-			// A failed connection may already have detached its port.
-		} finally {
-			port.close();
-		}
-	}
-
-	const adapter: EmotionWorkerPort = {
-		onmessage: null,
-		onerror: null,
-		postMessage(message) {
-			if (terminated) return;
-			if (fallback) {
-				fallback.postMessage(message);
-				return;
-			}
-			if (!ready) pending.push(message);
-			port.postMessage(message);
-		},
-		terminate() {
-			if (terminated) return;
-			terminated = true;
-			pending.length = 0;
-			if (fallback) fallback.terminate();
-			else closeSharedPort();
-		},
-	};
-	port.onmessage = (event: MessageEvent<EmotionWorkerResponse>) => {
-		if (terminated || fallback) return;
-		if (event.data.type === "ready") {
-			ready = true;
-			pending.length = 0;
-		}
-		adapter.onmessage?.(event);
-	};
-	worker.onerror = (event: ErrorEvent) => {
-		if (terminated) return;
-		if (!createFallback || ready || fallback) {
-			adapter.onerror?.(event);
-			return;
-		}
-		// Module loading failures are reported after the constructor returns.
-		try {
-			closeSharedPort();
-			fallback = createFallback();
-			fallback.onmessage = (message) => {
-				if (!terminated) adapter.onmessage?.(message);
-			};
-			fallback.onerror = (error) => {
-				if (!terminated) adapter.onerror?.(error);
-			};
-			for (const request of pending.splice(0)) fallback.postMessage(request);
-		} catch {
-			adapter.onerror?.(event);
-		}
-	};
-	port.start();
-	return adapter;
+	return sharedWorkerPort<EmotionWorkerRequest, EmotionWorkerResponse>(
+		worker,
+		createFallback,
+	);
 }

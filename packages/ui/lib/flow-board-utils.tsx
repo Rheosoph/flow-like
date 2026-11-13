@@ -679,6 +679,97 @@ function boardNodeHandlers(deps: BoardNodeHandlerDeps) {
 	};
 }
 
+interface BoardEdgeView {
+	pathType?: string;
+	reduceMotion: boolean;
+	selected: boolean;
+}
+
+/** The edge a pin connection draws as, saved or still saving. */
+function pinEdge(
+	from: { nodeId: string; pin: IPin; layer?: string | null },
+	to: { nodeId: string; pin: IPin; layer?: string | null },
+	view: BoardEdgeView,
+) {
+	return {
+		id: `${from.pin.id}-${to.pin.id}`,
+		source: from.nodeId,
+		sourceHandle: from.pin.id,
+		zIndex: 18,
+		data: {
+			fromLayer: from.layer,
+			toLayer: to.layer,
+			pathType: view.pathType,
+			data_type: from.pin.data_type,
+			reduceMotion: view.reduceMotion,
+		},
+		animated: false,
+		reconnectable: true,
+		target: to.nodeId,
+		targetHandle: to.pin.id,
+		style: { stroke: typeToColor(from.pin.data_type) },
+		type: from.pin.data_type === "Execution" ? "execution" : "data",
+		data_type: from.pin.data_type,
+		selected: view.selected,
+	};
+}
+
+/** The edge from a node to a function it references. */
+function referenceEdge(
+	from: { nodeId: string; layer?: string | null },
+	to: { nodeId: string; layer?: string | null },
+	view: BoardEdgeView,
+) {
+	const sourceHandle = `ref_out_${from.nodeId}`;
+	const targetHandle = `ref_in_${to.nodeId}`;
+	return {
+		id: `${sourceHandle}-${targetHandle}`,
+		source: from.nodeId,
+		sourceHandle,
+		target: to.nodeId,
+		targetHandle,
+		zIndex: 18,
+		data: {
+			fromLayer: from.layer,
+			toLayer: to.layer,
+			isFnRef: true,
+			pathType: view.pathType,
+			reduceMotion: view.reduceMotion,
+		},
+		animated: false,
+		reconnectable: true,
+		style: { stroke: "var(--pin-fn-ref)" },
+		type: "veil",
+		selected: view.selected,
+	};
+}
+
+/** The edge a dropped connection shows while its save is in flight. */
+export function pendingEdge(
+	connection: {
+		source: string;
+		target: string;
+		sourceHandle?: string | null;
+		targetHandle?: string | null;
+	},
+	pinCache: ReadonlyMap<string, [IPin, INode | ILayer, boolean]>,
+	pathType?: string,
+) {
+	const { source, target, sourceHandle, targetHandle } = connection;
+	if (!sourceHandle || !targetHandle) return undefined;
+	const view = { pathType, reduceMotion: true, selected: false };
+	if (sourceHandle.startsWith("ref_out_") && targetHandle.startsWith("ref_in_"))
+		return referenceEdge({ nodeId: source }, { nodeId: target }, view);
+	const from = pinCache.get(sourceHandle);
+	const to = pinCache.get(targetHandle);
+	if (!from || !to) return undefined;
+	return pinEdge(
+		{ nodeId: source, pin: from[0], layer: from[1].layer },
+		{ nodeId: target, pin: to[0], layer: to[1].layer },
+		view,
+	);
+}
+
 export function parseBoard(
 	board: IBoard,
 	appId: string,
@@ -1110,27 +1201,21 @@ export function parseBoard(
 			}
 
 			if (pin.id && conntectedPin.id)
-				edges.push({
-					id: `${pin.id}-${conntectedPin.id}`,
-					source: sourceNodeId,
-					sourceHandle: pin.id,
-					zIndex: 18,
-					data: {
-						fromLayer: (node as any).layer,
-						toLayer: (connectedNode as any).layer,
-						pathType: connectionMode,
-						data_type: pin.data_type,
-						reduceMotion: reduceEdgeMotion,
-					},
-					animated: false,
-					reconnectable: true,
-					target: targetNodeId,
-					targetHandle: conntectedPin.id,
-					style: { stroke: typeToColor(pin.data_type) },
-					type: pin.data_type === "Execution" ? "execution" : "data",
-					data_type: pin.data_type,
-					selected: sel,
-				});
+				edges.push(
+					pinEdge(
+						{ nodeId: sourceNodeId, pin, layer: node.layer },
+						{
+							nodeId: targetNodeId,
+							pin: conntectedPin,
+							layer: connectedNode.layer,
+						},
+						{
+							pathType: connectionMode,
+							reduceMotion: reduceEdgeMotion,
+							selected: sel,
+						},
+					),
+				);
 			else {
 				console.log(`${pin.id}-${connectedTo} edge not created`);
 			}
@@ -1166,28 +1251,17 @@ export function parseBoard(
 				) {
 					edges.push(existingEdge);
 				} else {
-					edges.push({
-						id: edgeId,
-						source: node.id,
-						sourceHandle: sourceHandle,
-						target: refNodeId,
-						targetHandle: targetHandle,
-						zIndex: 18,
-						data: {
-							fromLayer: nodeLayer,
-							toLayer: targetLayer,
-							isFnRef: true,
-							pathType: connectionMode,
-							reduceMotion: reduceEdgeMotion,
-						},
-						animated: false,
-						reconnectable: true,
-						style: {
-							stroke: "var(--pin-fn-ref)",
-						},
-						type: "veil",
-						selected: selected.has(edgeId),
-					});
+					edges.push(
+						referenceEdge(
+							{ nodeId: node.id, layer: nodeLayer },
+							{ nodeId: refNodeId, layer: targetLayer },
+							{
+								pathType: connectionMode,
+								reduceMotion: reduceEdgeMotion,
+								selected: selected.has(edgeId),
+							},
+						),
+					);
 				}
 			}
 		}

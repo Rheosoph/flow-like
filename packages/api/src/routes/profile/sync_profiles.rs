@@ -38,6 +38,8 @@ pub struct SyncProfileRequest {
     pub apps: Option<Vec<ProfileApp>>,
     #[schema(value_type = Option<Vec<Object>>)]
     pub shortcuts: Option<Vec<ProfileShortcut>>,
+    /// Bots this profile hides: a custom bot's ID or a built-in bot's system key. Omit to keep the list.
+    pub hidden_bots: Option<Vec<String>>,
     #[serde(
         default,
         deserialize_with = "super::deserialize_nullable",
@@ -160,6 +162,7 @@ pub async fn sync_profiles(
         }
 
         super::validate_home_patch(&profile_req.home_layout, &profile_req.home_default_id)?;
+        profile_req.hidden_bots = super::validate_hidden_bots(profile_req.hidden_bots.take())?;
         if profile_req.id.trim().is_empty() {
             return Err(ApiError::bad_request("Profile ID is required"));
         }
@@ -221,6 +224,10 @@ pub async fn sync_profiles(
 
                 if let Some(shortcuts) = profile_req.shortcuts {
                     active_model.shortcuts = Set(Some(to_value(&shortcuts)?));
+                }
+
+                if let Some(hidden_bots) = profile_req.hidden_bots.clone() {
+                    active_model.hidden_bots = Set(Some(hidden_bots.into()));
                 }
 
                 if let Some(settings) = profile_req.settings {
@@ -426,6 +433,7 @@ pub async fn sync_profiles(
                     bit_ids: Set(profile_req.bit_ids.clone().map(Into::into)),
                     apps: Set(apps.clone()),
                     shortcuts: Set(shortcuts.clone()),
+                    hidden_bots: Set(profile_req.hidden_bots.clone().map(Into::into)),
                     home_layout: Set(profile_req.home_layout.clone().flatten()),
                     home_default_id: Set(profile_req.home_default_id.clone().flatten()),
                     settings: Set(settings.clone()),

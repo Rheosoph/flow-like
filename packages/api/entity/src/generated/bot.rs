@@ -43,6 +43,8 @@ pub struct Model {
     pub profile_id: Option<String>,
     #[sea_orm(column_type = "Text")]
     pub location: String,
+    #[sea_orm(column_name = "executionMode", column_type = "Text", nullable)]
+    pub execution_mode: Option<String>,
     #[sea_orm(column_name = "deviceId", column_type = "Text", nullable)]
     pub device_id: Option<String>,
     #[sea_orm(column_name = "createdAt")]

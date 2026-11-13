@@ -2,6 +2,9 @@ import { describe, expect, test } from "bun:test";
 import {
 	type GrantStore,
 	StandingApprovals,
+	asksAgainOf,
+	proposedBotSettings,
+	requiresFreshToolApproval,
 	resolveFrontendToolApprovalScope,
 } from "./frontend-tool-approval-scope";
 import { grantKeys, grantScopes } from "./tool-grant-scopes";
@@ -61,6 +64,22 @@ describe("resolveFrontendToolApprovalScope", () => {
 		);
 		expect(grantScopes("bot_update_configuration", {})).toBeNull();
 		expect(grantKeys("bot_update_configuration", {})).toEqual([]);
+	});
+	test("deleting a bot asks every time and the card names only the bot", () => {
+		expect(requiresFreshToolApproval("delete_bot")).toBe(true);
+		expect(grantScopes("delete_bot", { bot_id: "bot_1" })).toBeNull();
+		expect(proposedBotSettings("delete_bot", { bot_id: "bot_1" })).toEqual({
+			bot_id: "bot_1",
+		});
+		expect(proposedBotSettings("delete_bot", {})).toBeUndefined();
+		expect(
+			resolveFrontendToolApprovalScope({
+				requestId: "delete-1",
+				toolName: "delete_bot",
+				approvalKind: "mutating",
+				arguments: { bot_id: "bot_1" },
+			}).rememberable,
+		).toBe(false);
 	});
 	test("forecast saves approve one exact request without a session waiver", () => {
 		expect(
@@ -416,5 +435,30 @@ describe("StandingApprovals with persisted grants", () => {
 		} finally {
 			Date.now = now;
 		}
+	});
+});
+
+describe("a call asked again after web content", () => {
+	test("reads the host's mark in either spelling and nothing else", () => {
+		expect(asksAgainOf({ asksAgain: "web_content" })).toBe("web_content");
+		expect(asksAgainOf({ asks_again: "web_content" })).toBe("web_content");
+		expect(asksAgainOf({ asksAgain: "other" })).toBeUndefined();
+		expect(asksAgainOf(undefined)).toBeUndefined();
+	});
+
+	test("can't be remembered and has a key of its own", () => {
+		const input = {
+			requestId: "r 1",
+			toolName: "call_app_event",
+			arguments: { app_id: "app_atlas" },
+			approvalKind: "execute",
+		};
+		expect(resolveFrontendToolApprovalScope(input).rememberable).toBe(true);
+		expect(
+			resolveFrontendToolApprovalScope({ ...input, asksAgain: "web_content" }),
+		).toEqual({
+			sessionKey: "call_app_event:request:r%201",
+			rememberable: false,
+		});
 	});
 });

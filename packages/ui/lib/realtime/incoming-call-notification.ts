@@ -68,7 +68,10 @@ export function incomingCallEnded(
 	});
 }
 
-/** Verify a notification against the recipient's conversation before opening any peer room. */
+/**
+ * Verify a notification against the recipient's conversation before opening any peer room.
+ * Whether this device offers calls in an end-to-end encrypted conversation is the caller's check.
+ */
 export function incomingCallSender(
 	notice: IncomingCallNotice,
 	conversation: IConversation,
@@ -79,7 +82,6 @@ export function incomingCallSender(
 		conversation.id !== notice.conversationId ||
 		conversation.local ||
 		conversation.muted ||
-		conversation.encryption !== "plain" ||
 		!conversation.members.some(
 			(member) => member.kind === "user" && member.principal_id === userId,
 		) ||

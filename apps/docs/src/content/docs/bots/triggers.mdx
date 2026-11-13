@@ -52,7 +52,7 @@ curl -X POST "https://api.flow-like.com/api/v1/bots/hooks/<hook_id>?wait=20" \
 
 The editor shows ready-made examples with your real URL. Use your own hub's API address when you self-host.
 
-**Authentication.** Send the secret in the `X-Flow-Like-Webhook-Secret` header, as `Authorization: Bearer <secret>`, or as `?secret=`. For providers that sign payloads, sign the raw body with HMAC-SHA256 and send `X-Flow-Like-Signature: sha256=<hex>`; the key is the signing key the editor shows. You can rotate the secret at any time.
+**Authentication.** Send the secret in the `X-Flow-Like-Webhook-Secret` header, as `Authorization: Bearer <secret>`, or as `?secret=`. For senders that sign, send three headers instead of the secret: `X-Flow-Like-Timestamp` (Unix seconds, at most 5 minutes off the server clock), `X-Flow-Like-Delivery` (an id unique per delivery: letters, digits, `-_.:`, up to 128 characters) and `X-Flow-Like-Signature: sha256=<hex>`. The signature is the lowercase hex HMAC-SHA256, keyed by the signing key the editor shows (the same value as the secret), of the string `<timestamp>.<delivery id>.<raw body>`. A delivery id is accepted once; sending it again answers `409`. Webhooks created before this scheme keep accepting a signature of the body alone, keyed by the secret's blake3 hex hash, until you rotate the secret. You can rotate the secret at any time.
 
 **Payload.** JSON bodies arrive parsed, text stays text, and binary arrives base64-encoded. Payloads over 32 KB are saved as a file in the bot's workspace instead.
 
@@ -62,10 +62,11 @@ The editor shows ready-made examples with your real URL. Use your own hub's API 
 |---|---|
 | `202` | Queued. The body carries the turn's state. |
 | `200` | Answered within `wait`. |
-| `401` | Wrong or missing secret or signature. |
+| `401` | Wrong or missing secret or signature, or a signed call outside the 5-minute window. |
+| `409` | A signed call repeated a delivery id. |
 | `403` | The webhook is disabled or the bot's Webhook ability is off. |
 | `413` | Body larger than 256 KB. |
-| `429` | More than 30 calls a minute. |
+| `429` | More than 30 calls a minute (counted across all API servers). |
 
 A bot holds up to 10 webhooks. Bots that live only on your computer while you're signed out have no webhook URL.
 

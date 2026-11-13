@@ -1,12 +1,10 @@
 name: "alpha-release"
 
 on:
-  push:
-    branches:
-      - alpha
+  workflow_call:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: alpha-release-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -15,13 +13,6 @@ env:
   RUSTUP_MAX_RETRIES: 10
 
 jobs:
-  compiler-checks:
-    uses: ./.github/workflows/compiler-reproducibility.yml
-    with:
-      namespace_runners: true
-    permissions:
-      contents: read
-
   prepare-release-frontend:
     name: Prepare release frontend
     runs-on: namespace-profile-linux-amd-large
@@ -41,7 +32,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
         with:
-          bun-version: 1.3.8
+          bun-version: 1.4.4
 
       - name: Cache frontend dependency downloads
         uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
@@ -114,7 +105,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
         with:
-          bun-version: 1.3.8
+          bun-version: 1.4.4
 
       - name: Identify Apple MLX toolchain
         id: mlx-toolchain
@@ -160,7 +151,6 @@ jobs:
   alpha-release:
     needs:
       - prepare-release-frontend
-      - compiler-checks
     permissions:
       contents: write
     strategy:
@@ -209,7 +199,6 @@ jobs:
     needs:
       - prepare-release-frontend
       - prepare-release-mlx
-      - compiler-checks
     permissions:
       contents: write
     uses: ./.github/workflows/release-native.yml
@@ -241,7 +230,7 @@ jobs:
       - name: Setup Bun for updater signature verification
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
         with:
-          bun-version: 1.3.8
+          bun-version: 1.4.4
 
       - name: Generate and publish complete latest.json
         env:

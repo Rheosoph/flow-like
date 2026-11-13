@@ -1,0 +1,2 @@
+ALTER TABLE "User" ADD COLUMN "shareEmail" BOOLEAN;
+ALTER TABLE "User" ALTER COLUMN "shareEmail" SET DEFAULT false;

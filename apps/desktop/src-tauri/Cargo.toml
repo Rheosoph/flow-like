@@ -63,7 +63,7 @@ flow-like-local-bots.workspace = true
 flow-like-bot-memory.workspace = true
 flow-like-bot-host.workspace = true
 iana-time-zone.workspace = true
-flow-like-bot-tools = { workspace = true, features = ["documents", "connectors", "image", "mcp"] }
+flow-like-bot-tools = { workspace = true, features = ["documents", "connectors", "image", "barcodes", "mcp"] }
 
 # Tauri 2.12 uses Tao's corrected iOS scene lifecycle and configuration ownership.
 tauri = { version = "2.12.5", features = [
@@ -141,6 +141,7 @@ flow-like-device-crypto.workspace = true
 tauri-plugin-single-instance = { version = "2.5.4", features = ["deep-link"] }
 tauri-plugin-window-state = "2.5.0"
 tauri-plugin-updater = "2.14.0"
+tauri-plugin-autostart = "2.7.0"
 xcap = "0.8.1"
 arboard = "3.6.1"
 enigo = "0.6.1"

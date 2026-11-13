@@ -51,6 +51,7 @@ pub mod ollama;
 pub mod openai;
 pub mod openrouter;
 pub mod perplexity;
+pub mod prompt_cache;
 pub mod relay;
 mod responses_tools;
 pub mod subscription;
@@ -730,6 +731,15 @@ impl ModelConstructor {
             }),
         }
     }
+
+    /// For Anthropic's Messages API, whose `input_tokens` leaves out the prompt tokens read from
+    /// or written to the cache. Usage then counts the whole prompt there, as every other client
+    /// does, so metering sees cached tokens too.
+    pub(crate) fn with_messages_api_usage(self) -> Self {
+        Self {
+            inner: Box::new(MessagesUsageClient { inner: self.inner }),
+        }
+    }
 }
 
 /// Rewrites a request for the named model right before it reaches the provider client.
@@ -928,6 +938,82 @@ impl CompletionModelDyn for OutputBudgetModel<'_> {
     ) -> CompletionRequestBuilder<CompletionModelHandle<'_>> {
         CompletionRequestBuilder::new(CompletionModelHandle::new(Arc::new(self.clone())), prompt)
     }
+}
+
+struct MessagesUsageClient {
+    inner: Box<dyn CompletionClientDyn + Send + Sync>,
+}
+
+impl MessagesUsageClient {
+    fn model<'a>(&self, model: &str) -> MessagesUsageModel<'a> {
+        MessagesUsageModel(Arc::from(self.inner.completion_model(model)))
+    }
+}
+
+impl CompletionClientDyn for MessagesUsageClient {
+    fn completion_model<'a>(&self, model: &str) -> Box<dyn CompletionModelDyn + 'a> {
+        Box::new(self.model(model))
+    }
+
+    fn agent<'a>(&self, model: &str) -> AgentBuilder<CompletionModelHandle<'a>> {
+        AgentBuilder::new(CompletionModelHandle::new(Arc::new(self.model(model))))
+    }
+}
+
+#[derive(Clone)]
+struct MessagesUsageModel<'a>(Arc<dyn CompletionModelDyn + 'a>);
+
+impl CompletionModelDyn for MessagesUsageModel<'_> {
+    fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> WasmBoxedFuture<'_, Result<CompletionResponse<DynamicResponse>, CompletionError>> {
+        Box::pin(async move {
+            let mut response = self.0.completion(request).await?;
+            response.usage = whole_prompt_usage(response.usage);
+            Ok(response)
+        })
+    }
+
+    fn stream(
+        &self,
+        request: CompletionRequest,
+    ) -> WasmBoxedFuture<
+        '_,
+        Result<StreamingCompletionResponse<DynamicStreamingResponse>, CompletionError>,
+    > {
+        Box::pin(async move {
+            let stream = self.0.stream(request).await?.flat_map(|item| {
+                futures::stream::iter(match item {
+                    Ok(item) => raw_stream_items(item, |mut response: DynamicStreamingResponse| {
+                        response.usage = response.usage.map(whole_prompt_usage);
+                        response
+                    })
+                    .into_iter()
+                    .map(Ok)
+                    .collect::<Vec<_>>(),
+                    Err(err) => vec![Err(err)],
+                })
+            });
+            Ok(StreamingCompletionResponse::stream(Box::pin(stream)))
+        })
+    }
+
+    fn completion_request(
+        &self,
+        prompt: Message,
+    ) -> CompletionRequestBuilder<CompletionModelHandle<'_>> {
+        CompletionRequestBuilder::new(CompletionModelHandle::new(Arc::new(self.clone())), prompt)
+    }
+}
+
+/// Anthropic's `input_tokens` is the prompt after its last cache breakpoint.
+fn whole_prompt_usage(mut usage: RigUsage) -> RigUsage {
+    usage.input_tokens = usage
+        .input_tokens
+        .saturating_add(usage.cached_input_tokens)
+        .saturating_add(usage.cache_creation_input_tokens);
+    usage
 }
 
 /// Copies `CompletionRequest::max_tokens` into the body under the provider's own name.

@@ -47,6 +47,8 @@ pub struct Model {
     pub audience: String,
     #[sea_orm(column_name = "statusText", column_type = "Text", nullable)]
     pub status_text: Option<String>,
+    #[sea_orm(nullable)]
+    pub unprompted: Option<bool>,
     #[sea_orm(column_name = "createdAt")]
     pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]

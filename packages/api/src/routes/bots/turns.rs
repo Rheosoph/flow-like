@@ -280,7 +280,9 @@ pub struct TurnStatusRequest {
 }
 
 fn checked_status_text(text: Option<String>) -> Result<Option<String>, ApiError> {
-    let Some(text) = text.map(|text| text.trim().to_string()).filter(|text| !text.is_empty())
+    let Some(text) = text
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
     else {
         return Ok(None);
     };
@@ -496,10 +498,14 @@ pub async fn retry_turn(
 ) -> Result<Json<BotTurn>, ApiError> {
     let sub = user.sub()?;
     let bot = owned_bot(&state.db, &sub, &bot_id).await?;
-    let turn = state.transaction(|txn| {
-        let (sub, bot_id, turn_id) = (sub.clone(), bot.id.clone(), turn_id.clone());
-        Box::pin(async move { ledger::retry_in(txn, &sub, &bot_id, &turn_id, now_millis()).await })
-    }).await?
+    let turn = state
+        .transaction(|txn| {
+            let (sub, bot_id, turn_id) = (sub.clone(), bot.id.clone(), turn_id.clone());
+            Box::pin(
+                async move { ledger::retry_in(txn, &sub, &bot_id, &turn_id, now_millis()).await },
+            )
+        })
+        .await?
         .ok_or_else(|| ledger::Refusal::NotFound.into_api(&turn_id))?;
     crate::bot_host::dispatch_turns(&state, vec![turn.id.clone()]).await;
     wake(&state, [sub]).await;

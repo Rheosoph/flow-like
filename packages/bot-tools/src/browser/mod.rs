@@ -2,6 +2,10 @@
 //! behind [`BrowserBackend`]; these tools own the rules: a site is visited only after the owner
 //! approved it (`browser_open` asks per site), a page that lands elsewhere is left, downloads
 //! go to the workspace, and `{{secret:NAME}}` is filled in by the host and never shown back.
+//!
+//! `browser_open` can also ask for a tab in the owner's own browser ([`BrowserChoice::Owner`]).
+//! That is approved apart from the bot's browser: its grants are `owner_browser:<site>`, and a
+//! site approved for one browser is not approved for the other.
 
 mod backend;
 #[cfg(test)]
@@ -27,7 +31,7 @@ use crate::spec::{Approval, ToolSpec, schema_of};
 
 pub use backend::{
     BrowserBackend, BrowserScreen, BrowserStep, Download, PageState, ScrollTo, SnapshotRequest,
-    SnapshotView,
+    SnapshotView, no_owner_browser,
 };
 
 pub const BROWSER_OPEN: &str = "browser_open";
@@ -43,10 +47,49 @@ const MIN_SNAPSHOT_CHARS: usize = 500;
 const STATE_KEY: &str = "browser:state";
 const STATE_TTL: Duration = Duration::from_secs(60 * 60);
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserChoice {
+    #[default]
+    Own,
+    Owner,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct BrowserOpenArgs {
     /// An http or https address. The owner approves every new site before the page loads.
     pub url: String,
+    /// `own` (the default) is your own browser. `owner` opens the page in a new tab of the
+    /// browser the owner uses every day, signed in as the owner. Ask for it only when a site
+    /// turns your own browser away or the owner wants it; the owner approves it per site and
+    /// their browser asks them once more.
+    #[serde(default)]
+    pub browser: Option<BrowserChoice>,
+}
+
+/// Whether a `browser_open` call asks for the owner's browser.
+pub fn opens_in_owner_browser(args: &Value) -> bool {
+    args.get("browser")
+        .and_then(|choice| BrowserChoice::deserialize(choice).ok())
+        == Some(BrowserChoice::Owner)
+}
+
+/// The prefix of the grant scope of one `browser_open` call; the site follows it.
+pub fn grant_prefix(args: &Value) -> &'static str {
+    if opens_in_owner_browser(args) {
+        "owner_browser"
+    } else {
+        "browser"
+    }
+}
+
+/// What the owner is asked before a page opens in their own browser; `None` for every other
+/// call, which keeps the general question.
+pub fn ask_message(tool: &str, args: &Value) -> Option<String> {
+    let url = args.get("url").and_then(Value::as_str).unwrap_or("?");
+    (tool == BROWSER_OPEN && opens_in_owner_browser(args)).then(|| {
+        format!("The bot wants to open '{url}' in your own browser, where you are signed in.")
+    })
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -105,7 +148,7 @@ pub fn specs() -> Vec<ToolSpec> {
     vec![
         browser(
             BROWSER_OPEN,
-            "Open a web page in your own browser. The owner approves each new site first. Then take a browser_snapshot to see the page.",
+            "Open a web page in your own browser. The owner approves each new site first. Then take a browser_snapshot to see the page. A site that turns your browser away as automated can be opened in the owner's browser instead (browser: owner).",
             Approval::Ask,
             true,
             schema_of::<BrowserOpenArgs>(),
@@ -133,7 +176,7 @@ pub fn specs() -> Vec<ToolSpec> {
         ),
         browser(
             BROWSER_CLOSE,
-            "Close your browser. Open pages and unsaved form input are lost; cookies stay for the next session.",
+            "Close your browser and the tab you opened in the owner's browser. Open pages and unsaved form input are lost; your own browser's cookies stay for the next session.",
             Approval::None,
             true,
             schema_of::<BrowserCloseArgs>(),
@@ -141,8 +184,9 @@ pub fn specs() -> Vec<ToolSpec> {
     ]
 }
 
-/// What the tools remember of one browser session: the sites the owner approved and the names
-/// of the secrets typed, so later output can be cleaned of them.
+/// What the tools remember of one browser session: the sites the owner approved for each
+/// browser, which browser the session is in, and the names of the secrets typed, so later
+/// output can be cleaned of them.
 #[derive(Default)]
 pub struct BrowserState {
     inner: Mutex<StateInner>,
@@ -151,7 +195,18 @@ pub struct BrowserState {
 #[derive(Default)]
 struct StateInner {
     sites: BTreeSet<String>,
+    owner_sites: BTreeSet<String>,
+    current: BrowserChoice,
     secrets: BTreeSet<String>,
+}
+
+impl StateInner {
+    fn sites_of(&mut self, browser: BrowserChoice) -> &mut BTreeSet<String> {
+        match browser {
+            BrowserChoice::Own => &mut self.sites,
+            BrowserChoice::Owner => &mut self.owner_sites,
+        }
+    }
 }
 
 impl BrowserState {
@@ -159,12 +214,24 @@ impl BrowserState {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    pub fn approve(&self, site: &str) {
-        self.lock().sites.insert(site.to_string());
+    pub fn approve(&self, browser: BrowserChoice, site: &str) {
+        self.lock().sites_of(browser).insert(site.to_string());
     }
 
+    /// The session's pages are in `browser` from now on.
+    pub fn enter(&self, browser: BrowserChoice) {
+        self.lock().current = browser;
+    }
+
+    pub fn current(&self) -> BrowserChoice {
+        self.lock().current
+    }
+
+    /// Whether the owner approved `site` for the browser the session is in.
     pub fn approved(&self, site: &str) -> bool {
-        self.lock().sites.contains(site)
+        let mut state = self.lock();
+        let current = state.current;
+        state.sites_of(current).contains(site)
     }
 
     fn remember_secrets(&self, names: &BTreeSet<String>) {
@@ -239,10 +306,14 @@ async fn enforce_site(
     }
     let _ = backend.leave().await;
     let landed = site_of(&page.url).unwrap_or_else(|| page.url.clone());
+    let again = match state.current() {
+        BrowserChoice::Own => "that address",
+        BrowserChoice::Owner => "that address and browser 'owner'",
+    };
     Err(ToolError::new(
         code::NEEDS_APPROVAL,
         format!(
-            "The page moved to '{landed}', a site the owner has not approved. The browser went back to a blank page. Call browser_open with that address to ask the owner."
+            "The page moved to '{landed}', a site the owner has not approved. The browser went back to a blank page. Call browser_open with {again} to ask the owner."
         ),
     ))
 }
@@ -313,11 +384,19 @@ pub async fn browser_open(env: &dyn ToolEnv, args: BrowserOpenArgs) -> ToolResul
     let backend = backend_of(env)?;
     let state = state_of(env);
     let (url, site) = checked_url(&args.url)?;
-    state.approve(&site);
-    let page = backend.open(url.as_str()).await.map_err(ToolError::from)?;
+    let browser = args.browser.unwrap_or_default();
+    state.approve(browser, &site);
+    let page = match browser {
+        BrowserChoice::Own => backend.open(url.as_str()).await,
+        BrowserChoice::Owner => backend.open_in_owner_browser(url.as_str()).await,
+    }
+    .map_err(ToolError::from)?;
+    state.enter(browser);
     enforce_site(backend.as_ref(), &state, &page).await?;
     let scrubber = Scrubber::load(env, &state.secret_names()).await;
-    let output = save_downloads(env, backend.as_ref(), ToolOutput::new(page_json(&page))).await;
+    let mut result = page_json(&page);
+    result["browser"] = json!(browser);
+    let output = save_downloads(env, backend.as_ref(), ToolOutput::new(result)).await;
     finish(output, &scrubber)
 }
 

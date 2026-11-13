@@ -1,5 +1,6 @@
 //! Flux's management of its owner's bots: the account's through the hub, signed out this
-//! device's. The bridge has obtained the owner's approval before a create or update.
+//! device's. Each call is the one the Bots tab makes. The bridge has obtained the owner's
+//! approval before a create, update or delete.
 
 use std::sync::Arc;
 
@@ -7,9 +8,9 @@ use async_trait::async_trait;
 use flow_like::flow::copilot::{
     model_changes_need_catalogue, profile_models, validate_model_changes,
 };
-use flow_like_bot_tools::crew::CrewBackend;
+use flow_like_bot_tools::crew::{CrewApp, CrewBackend};
 use flow_like_local_bots::{CreateBotRequest, LocalBotStore};
-use flow_like_types::{Result, anyhow};
+use flow_like_types::{Result, anyhow, bot_restrictions::BotRestrictions};
 use reqwest::Method;
 use serde_json::Value;
 use tauri::{AppHandle, Manager};
@@ -17,7 +18,7 @@ use tauri::{AppHandle, Manager};
 use super::schedule::TaskApi;
 use crate::functions::{
     ai::{native_bot_tools::BotToolRuntime, native_platform_tools::segment},
-    local_bots::{LocalBots, on_store},
+    local_bots::{LocalBots, delete_local_bot, on_store},
 };
 
 pub(crate) struct DesktopCrew {
@@ -27,7 +28,11 @@ pub(crate) struct DesktopCrew {
 }
 
 impl DesktopCrew {
-    pub(crate) fn new(app: &AppHandle, runtime: Arc<BotToolRuntime>, api: Arc<dyn TaskApi>) -> Self {
+    pub(crate) fn new(
+        app: &AppHandle,
+        runtime: Arc<BotToolRuntime>,
+        api: Arc<dyn TaskApi>,
+    ) -> Self {
         Self {
             app: app.clone(),
             runtime,
@@ -42,16 +47,18 @@ impl DesktopCrew {
             .map_err(|error| anyhow!(error))
     }
 
+    fn local_bots(&self) -> Result<tauri::State<'_, LocalBots>> {
+        self.app
+            .try_state::<LocalBots>()
+            .ok_or_else(|| anyhow!("Bots on this device are unavailable"))
+    }
+
     async fn local<T, F>(&self, work: F) -> Result<T>
     where
         T: Send + 'static,
         F: FnOnce(&LocalBotStore) -> flow_like_local_bots::Result<T> + Send + 'static,
     {
-        let bots = self
-            .app
-            .try_state::<LocalBots>()
-            .ok_or_else(|| anyhow!("Bots on this device are unavailable"))?;
-        on_store(&bots, work)
+        on_store(&*self.local_bots()?, work)
             .await
             .map_err(|error| anyhow!(error.to_string()))
     }
@@ -86,6 +93,14 @@ impl DesktopCrew {
             }
             return Ok(());
         }
+        if let Some(refusal) =
+            crate::functions::ai::native_bot_tools::attach_refusal(&self.app, attach).await
+        {
+            return Err(anyhow!(
+                "{}: {refusal}",
+                flow_like_types::bot_restrictions::APP_REFUSES_BOTS
+            ));
+        }
         let (id, attach, detach) = (bot_id.to_string(), attach.to_vec(), detach.to_vec());
         self.local(move |store| {
             for app_id in &attach {
@@ -108,6 +123,22 @@ fn app_path(bot_id: &str, app_id: &str) -> String {
     format!("{}/apps/{}", bot_path(bot_id), segment(app_id))
 }
 
+fn local_app(app: flow_like_local_bots::BotApp) -> CrewApp {
+    CrewApp {
+        app_id: app.app_id,
+        restrictions: app.restrictions,
+    }
+}
+
+/// The hub's `BotAppList` as the apps Flux reads.
+fn hub_apps(list: &Value) -> Result<Vec<CrewApp>> {
+    Ok(serde_json::from_value(
+        list.get("apps")
+            .cloned()
+            .unwrap_or(Value::Array(Vec::new())),
+    )?)
+}
+
 #[async_trait]
 impl CrewBackend for DesktopCrew {
     async fn bots(&self) -> Result<Vec<Value>> {
@@ -121,19 +152,13 @@ impl CrewBackend for DesktopCrew {
             .collect()
     }
 
-    async fn bot(&self, bot_id: &str) -> Result<(Value, Vec<String>)> {
+    async fn bot(&self, bot_id: &str) -> Result<(Value, Vec<CrewApp>)> {
         if self.runtime.account {
             let bot = self.hub(Method::GET, &bot_path(bot_id), None).await?;
             let apps = self
                 .hub(Method::GET, &format!("{}/apps", bot_path(bot_id)), None)
                 .await?;
-            let ids = apps["apps"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|app| app["app_id"].as_str().map(str::to_string))
-                .collect();
-            return Ok((bot, ids));
+            return Ok((bot, hub_apps(&apps)?));
         }
         let id = bot_id.to_string();
         let (bot, apps) = self
@@ -142,7 +167,7 @@ impl CrewBackend for DesktopCrew {
         let bot = bot.ok_or_else(|| anyhow!("You have no bot '{bot_id}' on this device"))?;
         Ok((
             serde_json::to_value(bot)?,
-            apps.into_iter().map(|app| app.app_id).collect(),
+            apps.into_iter().map(local_app).collect(),
         ))
     }
 
@@ -189,11 +214,81 @@ impl CrewBackend for DesktopCrew {
             }
             Some(request) => {
                 let id = bot_id.to_string();
-                serde_json::to_value(self.local(move |store| store.patch_bot(&id, request)).await?)?
+                serde_json::to_value(
+                    self.local(move |store| store.patch_bot(&id, request))
+                        .await?,
+                )?
             }
             None => self.bot(bot_id).await?.0,
         };
         self.move_apps(bot_id, attach, detach).await?;
         Ok(bot)
+    }
+
+    async fn restrict(
+        &self,
+        bot_id: &str,
+        app_id: &str,
+        restrictions: &BotRestrictions,
+    ) -> Result<()> {
+        if self.runtime.account {
+            let body = serde_json::to_value(restrictions)?;
+            self.hub(
+                Method::PUT,
+                &format!("{}/restrictions", app_path(bot_id, app_id)),
+                Some(&body),
+            )
+            .await?;
+            return Ok(());
+        }
+        let (id, app, restrictions) =
+            (bot_id.to_string(), app_id.to_string(), restrictions.clone());
+        self.local(move |store| store.set_app_restrictions(&id, &app, restrictions))
+            .await?;
+        Ok(())
+    }
+
+    async fn delete(&self, bot_id: &str) -> Result<()> {
+        if self.runtime.account {
+            self.hub(Method::DELETE, &bot_path(bot_id), None).await?;
+            return Ok(());
+        }
+        delete_local_bot(&self.app, &*self.local_bots()?, bot_id)
+            .await
+            .map_err(|error| anyhow!("Deleting bot '{bot_id}' on this device failed: {error}"))
+    }
+
+    async fn devices(&self) -> Result<Vec<Value>> {
+        if !self.runtime.account {
+            return Ok(Vec::new());
+        }
+        let devices = self.hub(Method::GET, "devices", None).await?;
+        Ok(devices.as_array().cloned().unwrap_or_default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_types::bot_restrictions::BotPreset;
+    use serde_json::json;
+
+    #[test]
+    fn paths_keep_each_id_one_segment() {
+        assert_eq!(bot_path("bot_1"), "bots/bot_1");
+        assert_eq!(app_path("bot_1", "a/b"), "bots/bot_1/apps/a%2Fb");
+    }
+
+    #[test]
+    fn hub_apps_carry_their_restrictions() {
+        let restricted = BotPreset::ReadOnly.restrictions();
+        let apps = hub_apps(&json!({"apps": [
+            {"app_id": "a", "added_at": "2026-11-13T00:00:00Z", "owner_role": "Owner", "restrictions": restricted},
+            {"app_id": "b", "added_at": "2026-11-13T00:00:00Z", "owner_role": null, "restrictions": {}},
+        ]}))
+        .unwrap();
+        assert_eq!(apps[0].restrictions, restricted);
+        assert!(apps[1].restrictions.is_unrestricted());
+        assert!(hub_apps(&json!({})).unwrap().is_empty());
     }
 }

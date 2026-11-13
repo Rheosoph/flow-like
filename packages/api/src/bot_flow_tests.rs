@@ -182,3 +182,82 @@ fn the_routes_that_borrow_the_owner_stay_closed_to_bots() {
         assert!(!source.contains("run_user_id()"), "{name}");
     }
 }
+
+#[test]
+fn the_bot_mcp_door_runs_as_the_bot_and_never_as_the_owner() {
+    let source = include_str!("routes/inbound.rs");
+    let production = source.split("#[cfg(test)]").next().unwrap();
+    let door = production
+        .split_once("pub(crate) async fn dispatch_bot_mcp_operation(")
+        .unwrap()
+        .1
+        .split_once("\nasync fn dispatch_mcp_operation(")
+        .unwrap()
+        .0;
+    assert!(door.contains("BotFlowRun::admit_event("), "admits");
+    assert!(door.contains("false)"), "no page trigger");
+    assert!(!door.contains("member:"), "no person identity");
+    let stream = production
+        .split_once("\nasync fn dispatch_event_stream(")
+        .unwrap()
+        .1;
+    assert!(stream.contains("credential_target("), "credentials");
+    assert!(stream.contains("bind_executor("), "binds");
+    assert!(stream.contains("caller.borrows_from_sink(&sink)"), "sink");
+    assert!(!production.contains("person_user_id()"), "owner borrow");
+    assert!(
+        !include_str!("bot_tools/apps/mcp.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap()
+            .contains("person_user_id()")
+    );
+}
+
+fn references_technical_user<E: sea_orm::EntityTrait>() -> bool {
+    use sea_orm::{Iterable, RelationTrait, sea_query::TableRef};
+    <E::Relation as Iterable>::iter().any(|relation| {
+        matches!(&relation.def().to_tbl, TableRef::Table(name, _) if name.1.inner() == "TechnicalUser")
+    })
+}
+
+/// A bot's run records the bot id as `technicalUserId`, and a bot has no `TechnicalUser` row:
+/// a foreign key there refuses every run a bot starts (`23503`, surfaced as `DATABASE_ERROR`).
+#[test]
+fn technical_user_id_holds_bot_ids_without_a_foreign_key() {
+    use crate::entity::{
+        embedding_usage_tracking, execution_run, execution_usage_daily, execution_usage_tracking,
+        llm_usage_tracking,
+    };
+    for (table, references) in [
+        (
+            "ExecutionRun",
+            references_technical_user::<execution_run::Entity>(),
+        ),
+        (
+            "ExecutionUsageTracking",
+            references_technical_user::<execution_usage_tracking::Entity>(),
+        ),
+        (
+            "ExecutionUsageDaily",
+            references_technical_user::<execution_usage_daily::Entity>(),
+        ),
+        (
+            "LLMUsageTracking",
+            references_technical_user::<llm_usage_tracking::Entity>(),
+        ),
+        (
+            "EmbeddingUsageTracking",
+            references_technical_user::<embedding_usage_tracking::Entity>(),
+        ),
+    ] {
+        assert!(
+            !references,
+            "{table}.technicalUserId references TechnicalUser"
+        );
+    }
+    assert!(
+        !include_str!("../prisma/schema/user.prisma").contains("fields: [technicalUserId]"),
+        "a Prisma relation on technicalUserId"
+    );
+}

@@ -229,8 +229,9 @@ describe("widget and workflow action timing", () => {
 					});
 					await started;
 				});
+				let eventSequence = 0;
 				const event = (payload: unknown): IIntercomEvent => ({
-					event_id: "update",
+					event_id: `${name}-update-${++eventSequence}`,
 					event_type: "a2ui",
 					payload,
 					timestamp: { secs_since_epoch: 0, nanos_since_epoch: 0 },
@@ -239,13 +240,14 @@ describe("widget and workflow action timing", () => {
 				expect(
 					openRunTimingReports()[0].marks.map((mark) => mark.name),
 				).toEqual(["dispatch", "run_initiated"]);
-				const update = event({
-					type: "surfaceUpdate",
-					surfaceId: "page-history",
-					components: [],
-				});
-				onEvents?.([update, update]);
-				onEvents?.([update]);
+				const update = () =>
+					event({
+						type: "surfaceUpdate",
+						surfaceId: "page-history",
+						components: [],
+					});
+				onEvents?.([update(), update()]);
+				onEvents?.([update()]);
 				expect(applied).toBe(3);
 				expect(reports()).toEqual([]);
 				expect(

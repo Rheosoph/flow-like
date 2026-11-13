@@ -14,6 +14,7 @@ import {
 	X,
 } from "lucide-react";
 import {
+	type ReactNode,
 	useCallback,
 	useEffect,
 	useId,
@@ -292,6 +293,8 @@ export interface GraphViewerProps {
 		updates: Record<string, unknown>,
 		baseline: Record<string, unknown>,
 	) => Promise<void>;
+	/** Host controls placed at the right end of the toolbar. */
+	toolbarActions?: ReactNode;
 }
 
 interface PathOutcome {
@@ -342,6 +345,7 @@ export function GraphViewer({
 	edgeEditFields,
 	onUpdateNodeProperties,
 	onUpdateEdgeProperties,
+	toolbarActions,
 }: GraphViewerProps) {
 	const { t } = useTranslation("common");
 	const searchListId = useId();
@@ -1442,10 +1446,14 @@ export function GraphViewer({
 											value={searchQuery}
 											onChange={(e) => handleSearch(e.target.value)}
 											onFocus={() => setRemoteSearchOpen(true)}
-											placeholder={t(
-												"searchLoadedNodesThenFallbackToFullGraph",
-												"Search loaded nodes, then fallback to full graph...",
-											)}
+											placeholder={
+												onSearchNodes
+													? t(
+															"searchLoadedNodesThenFallbackToFullGraph",
+															"Search loaded nodes, then fallback to full graph...",
+														)
+													: t("searchNodes", "Search nodes...")
+											}
 											className="h-9 w-full rounded-md border bg-transparent pl-8 pr-8 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
 										/>
 										{searchQuery && (
@@ -1767,6 +1775,7 @@ export function GraphViewer({
 									Loading...
 								</span>
 							)}
+							{toolbarActions}
 						</div>
 					</div>
 				)}

@@ -19,35 +19,61 @@
 //! | `message_person` | `person:<id>` |
 //! | `data_sources` attach | `connection:<kind>:<host>:<port>:<database>` |
 //! | `web_request` | `web:<site>:read` or `web:<site>:write`, plus `web:<site>:secret:<NAME>` per secret sent |
-//! | `http_request`, `forecast_tool`, `flowpilot_board_review`, `app_build`, `apply_home_layout`, `bot_update_configuration`, `create_bot`, `update_bot` | none: asked every time |
+//! | `file_save` with `url` | `web:<site>:read` |
+//! | `browser_open` | `browser:<site>`; in the owner's own browser `owner_browser:<site>` |
+//! | `http_request`, `forecast_tool`, `flowpilot_board_review`, `app_build`, `apply_home_layout`, `bot_update_configuration`, `create_bot`, `update_bot`, `delete_bot`, `secret_request`, `room_invite` | none: asked every time |
 //! | every other tool that asks | `*` |
 //!
 //! The document cost check is the grant `(documents, documents.expensive)`.
+//!
+//! Once a round begins with web content in the model's context, standing grants do not cover a
+//! call whose scopes name a web destination ([`web_scoped`]): it asks again. A headless attempt
+//! collects every call of its round that asks into one [`ParkedBatch`] card.
 
 use async_trait::async_trait;
-use flow_like_types::bot_message::{ApprovalRequest, SECRET_REQUEST_TOOL, SecretAsk};
+use flow_like_types::bot_message::{
+    APPROVAL_BATCH_TOOL, ApprovalItem, ApprovalRequest, ApprovalResponse, MAX_APPROVAL_ITEMS,
+    ROOM_INVITE_TOOL, SECRET_REQUEST_TOOL, SecretAsk,
+};
 use flow_like_types::tool_grant::{
-    ApprovalDecision, DENY_PREFIX, DOCUMENTS_TOOL, ONCE_PREFIX, SCOPE_ALL,
-    SCOPE_DOCUMENTS_EXPENSIVE, args_hash,
+    ApprovalAnswer, ApprovalDecision, DENY_PREFIX, DOCUMENTS_TOOL, ONCE_PREFIX, SCOPE_ALL,
+    SCOPE_DOCUMENTS_EXPENSIVE, approval_message_id, args_hash, batch_args_hash,
 };
 use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::{Mutex, PoisonError};
 
 use flow_like_bot_tools as tools;
 
 use super::tool_authorization::AuthorizationInference;
 use super::tool_spec::spec_arg_str;
 
-const NOT_GRANTABLE: [&str; 9] = [
+const NOT_GRANTABLE: [&str; 11] = [
     "http_request",
     "forecast_tool",
     "flowpilot_board_review",
     "app_build",
     "apply_home_layout",
     SECRET_REQUEST_TOOL,
+    ROOM_INVITE_TOOL,
     tools::configuration::BOT_UPDATE_CONFIGURATION,
     tools::crew::CREATE_BOT,
     tools::crew::UPDATE_BOT,
+    tools::crew::DELETE_BOT,
 ];
+
+const CONFIGURATION_TOOLS: [&str; 4] = [
+    tools::configuration::BOT_UPDATE_CONFIGURATION,
+    tools::crew::CREATE_BOT,
+    tools::crew::UPDATE_BOT,
+    tools::crew::DELETE_BOT,
+];
+
+const WEB_SCOPE_PREFIXES: [&str; 3] = ["web:", "browser:", "owner_browser:"];
+
+/// The `asks_again` reason a live chat's approval prompt carries when [`grant_set_aside`] holds:
+/// the prompt offers no "don't ask again".
+pub const ASKS_AGAIN_WEB_CONTENT: &str = "web_content";
 
 /// One stored `(tool, scope)` pair.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -74,12 +100,22 @@ pub trait GrantStore: Send + Sync {
     /// Removes a pair; true when it existed.
     async fn delete(&self, tool: &str, scope: &str) -> flow_like_types::Result<bool>;
 
+    /// Records that the bot just relied on these standing grants, which moves their expiry
+    /// forward. It never creates a grant and never revives one that lapsed or was revoked.
+    async fn touch(&self, _keys: &[GrantKey]) -> flow_like_types::Result<()> {
+        Ok(())
+    }
+
     async fn has(&self, tool: &str, scope: &str) -> flow_like_types::Result<bool> {
-        Ok(self
+        let held = self
             .list()
             .await?
             .iter()
-            .any(|key| key.tool == tool && key.scope == scope))
+            .any(|key| key.tool == tool && key.scope == scope);
+        if held {
+            let _ = self.touch(&[GrantKey::new(tool, scope)]).await;
+        }
+        Ok(held)
     }
 }
 
@@ -176,7 +212,7 @@ pub fn grant_scopes(tool: &str, args: &Value, context_app: Option<&str>) -> Opti
         }
         "browser_open" => one(clean(arg(args, "url", "url"))
             .and_then(|url| tools::browser::site_of(&url))
-            .map(|site| format!("browser:{site}"))),
+            .map(|site| format!("{}:{site}", tools::browser::grant_prefix(args)))),
         "computer_screenshot" | "computer_act" | "computer_window" => {
             Some(vec!["computer:session".to_string()])
         }
@@ -188,12 +224,31 @@ pub fn grant_scopes(tool: &str, args: &Value, context_app: Option<&str>) -> Opti
         "shell_run" => one(flow_like_bot_tools::shell::grant_scope(args).and_then(|s| clean(&s))),
         "web_request" => flow_like_bot_tools::web::grant_scopes(args)
             .and_then(|scopes| scopes.iter().map(|scope| clean(scope)).collect()),
+        "file_save" => super::tool_spec::download_grant_scopes(args)
+            .and_then(|scopes| scopes.iter().map(|scope| clean(scope)).collect()),
         _ => Some(vec![SCOPE_ALL.to_string()]),
     }
 }
 
 fn token_scope(prefix: &str, hash: &str) -> String {
     format!("{prefix}{hash}")
+}
+
+/// Whether a call's grant scopes name a web destination (`web:`, `browser:`, `owner_browser:`).
+pub fn web_scoped(tool: &str, args: &Value) -> bool {
+    grant_scopes(tool, args, None).is_some_and(|scopes| {
+        scopes.iter().any(|scope| {
+            WEB_SCOPE_PREFIXES
+                .iter()
+                .any(|prefix| scope.starts_with(prefix))
+        })
+    })
+}
+
+/// Whether standing grants are set aside for this call: its round began with web content in the
+/// model's context and it reaches a web destination.
+pub fn grant_set_aside(tool: &str, args: &Value) -> bool {
+    super::run_recovery::round_has_web_content() && web_scoped(tool, args)
 }
 
 /// What the stores say about one call that asks.
@@ -207,6 +262,8 @@ pub enum GrantCheck {
     Denied,
     /// Nothing covers it: ask.
     Missing,
+    /// The round read web content first, so standing grants do not cover it: ask again.
+    SetAside,
 }
 
 impl GrantCheck {
@@ -215,32 +272,88 @@ impl GrantCheck {
     }
 }
 
+fn covering_grants(keys: &[GrantKey], tool: &str, scopes: &[String]) -> Option<Vec<GrantKey>> {
+    let held = |scope: &str| {
+        keys.iter()
+            .any(|key| key.tool == tool && key.scope == scope)
+    };
+    let used: Vec<&str> = if held(SCOPE_ALL) {
+        vec![SCOPE_ALL]
+    } else if scopes.iter().all(|scope| held(scope)) {
+        scopes.iter().map(String::as_str).collect()
+    } else {
+        return None;
+    };
+    Some(
+        used.into_iter()
+            .map(|scope| GrantKey::new(tool, scope))
+            .collect(),
+    )
+}
+
+/// `use_call` spends a one-time token and touches the grant it relies on; a peek leaves both.
+async fn match_call(
+    store: &dyn GrantStore,
+    tool: &str,
+    args: &Value,
+    context_app: Option<&str>,
+    use_call: bool,
+) -> flow_like_types::Result<GrantCheck> {
+    let hash = args_hash(tool, args);
+    if store.delete(tool, &token_scope(DENY_PREFIX, &hash)).await? {
+        return Ok(GrantCheck::Denied);
+    }
+    let set_aside = grant_set_aside(tool, args);
+    let mut keys = None;
+    if !set_aside && let Some(scopes) = grant_scopes(tool, args, context_app) {
+        let listed = store.list().await?;
+        if let Some(used) = covering_grants(&listed, tool, &scopes) {
+            if use_call {
+                let _ = store.touch(&used).await;
+            }
+            return Ok(GrantCheck::Granted);
+        }
+        keys = Some(listed);
+    }
+    let once = token_scope(ONCE_PREFIX, &hash);
+    let has_once = if use_call {
+        store.delete(tool, &once).await?
+    } else {
+        let keys = match keys {
+            Some(keys) => keys,
+            None => store.list().await?,
+        };
+        keys.iter().any(|key| key.tool == tool && key.scope == once)
+    };
+    Ok(match (has_once, set_aside) {
+        (true, _) => GrantCheck::Once,
+        (false, true) => GrantCheck::SetAside,
+        (false, false) => GrantCheck::Missing,
+    })
+}
+
 /// Matches one call against the bot's grants and answer tokens. A refusal token wins; a spent
-/// token cannot be used twice.
+/// token cannot be used twice. Under web content a web-scoped call skips the standing grants
+/// ([`GrantCheck::SetAside`]); its tokens still apply.
 pub async fn check_call(
     store: &dyn GrantStore,
     tool: &str,
     args: &Value,
     context_app: Option<&str>,
 ) -> flow_like_types::Result<GrantCheck> {
-    let hash = args_hash(tool, args);
-    if store.delete(tool, &token_scope(DENY_PREFIX, &hash)).await? {
-        return Ok(GrantCheck::Denied);
-    }
-    if let Some(scopes) = grant_scopes(tool, args, context_app) {
-        let keys = store.list().await?;
-        let held = |scope: &str| {
-            keys.iter()
-                .any(|key| key.tool == tool && key.scope == scope)
-        };
-        if held(SCOPE_ALL) || scopes.iter().all(|scope| held(scope)) {
-            return Ok(GrantCheck::Granted);
-        }
-    }
-    if store.delete(tool, &token_scope(ONCE_PREFIX, &hash)).await? {
-        return Ok(GrantCheck::Once);
-    }
-    Ok(GrantCheck::Missing)
+    match_call(store, tool, args, context_app, true).await
+}
+
+/// [`check_call`] for a call that does not run now: a one-time token stays for the run that
+/// spends it and no grant is touched. A refusal token is spent, since the refusal becomes the
+/// call's result.
+pub async fn peek_call(
+    store: &dyn GrantStore,
+    tool: &str,
+    args: &Value,
+    context_app: Option<&str>,
+) -> flow_like_types::Result<GrantCheck> {
+    match_call(store, tool, args, context_app, false).await
 }
 
 /// Whether the owner gave standing approval for expensive document work.
@@ -286,20 +399,49 @@ pub async fn record_answer(
 }
 
 /// [`record_answer`] for an answer to a posted card, which carries the scopes and the call's hash
-/// but not its arguments.
+/// but not its arguments. Every item of a batch card gets `decision`.
 pub async fn record_card_answer(
     store: &dyn GrantStore,
     card: &ApprovalRequest,
     decision: ApprovalDecision,
 ) -> flow_like_types::Result<()> {
-    let scopes: Vec<String> = card
-        .scope
-        .split(',')
-        .filter(|_| !NOT_GRANTABLE.contains(&card.tool.as_str()))
-        .filter(|scope| !scope.is_empty())
-        .map(str::to_string)
-        .collect();
-    store_decision(store, &card.tool, &card.args_hash, &scopes, decision).await
+    let answer = ApprovalAnswer {
+        approval_id: card.id.clone(),
+        decision,
+        items: Vec::new(),
+    };
+    record_batch_answer(store, card, &answer).await.map(drop)
+}
+
+/// Stores the owner's answer to every item of a card (an unlisted item takes the answer's
+/// `decision`; "always" on a call that is never remembered stays one-time) and returns the answer
+/// entry to post. Refuses an answer for another card or naming an item the card does not hold.
+pub async fn record_batch_answer(
+    store: &dyn GrantStore,
+    card: &ApprovalRequest,
+    answer: &ApprovalAnswer,
+) -> flow_like_types::Result<ApprovalResponse> {
+    if answer.approval_id != card.id {
+        return Err(flow_like_types::anyhow!(
+            "Answer for approval '{}' cannot settle card '{}'",
+            answer.approval_id,
+            card.id
+        ));
+    }
+    let decisions = card
+        .decisions(answer.decision, &answer.items)
+        .map_err(|error| flow_like_types::anyhow!(error))?;
+    for (item, decision) in &decisions {
+        let scopes: Vec<String> = item
+            .scope
+            .split(',')
+            .filter(|_| !NOT_GRANTABLE.contains(&item.tool.as_str()))
+            .filter(|scope| !scope.is_empty())
+            .map(str::to_string)
+            .collect();
+        store_decision(store, &item.tool, &item.args_hash, &scopes, *decision).await?;
+    }
+    Ok(ApprovalResponse::for_decisions(card.id.clone(), &decisions))
 }
 
 /// Spends the one-time token for exactly this call, if the owner left one.
@@ -355,7 +497,11 @@ pub fn approval_request(
         requester_name: None,
         room: None,
         secret: secret_ask(tool, args),
+        invite: (tool == ROOM_INVITE_TOOL)
+            .then(|| tools::rooms::invite_ask(args))
+            .flatten(),
         configuration_changes: tools::configuration::proposed_changes(tool, args),
+        items: Vec::new(),
     }
 }
 
@@ -412,7 +558,29 @@ pub async fn headless_answer_with_inference(
     description: &str,
     inference: Option<&dyn AuthorizationInference>,
 ) -> HeadlessAnswer {
-    match check_call(store, tool, args, context_app).await {
+    let check = check_call(store, tool, args, context_app).await;
+    answer_check(
+        check,
+        turn_id,
+        tool,
+        args,
+        context_app,
+        description,
+        inference,
+    )
+    .await
+}
+
+async fn answer_check(
+    check: flow_like_types::Result<GrantCheck>,
+    turn_id: &str,
+    tool: &str,
+    args: &Value,
+    context_app: Option<&str>,
+    description: &str,
+    inference: Option<&dyn AuthorizationInference>,
+) -> HeadlessAnswer {
+    match check {
         Ok(check) if check.runs() => HeadlessAnswer::Run,
         Ok(GrantCheck::Denied) => {
             if let Some(inference) = inference {
@@ -445,6 +613,347 @@ pub async fn headless_answer_with_inference(
         Err(error) => HeadlessAnswer::Refuse(format!(
             "The owner's standing approvals could not be read ({error}). Nothing was run."
         )),
+    }
+}
+
+/// Serialized cards stay below this size; the inbox envelope holds 64 KiB.
+const APPROVAL_CARD_BUDGET_BYTES: usize = 56 * 1024;
+/// An item's summary on a batch card has at most this many characters.
+const ITEM_SUMMARY_CHARS: usize = 300;
+/// A batch card's own summary has at most as many characters as a card for one call.
+const CARD_SUMMARY_CHARS: usize = 480;
+/// Clearance asks the decision model about at most this many calls of a parked round.
+const CLEARANCE_INFERENCES: usize = 8;
+
+fn clip(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut clipped: String = text.chars().take(max.saturating_sub(1)).collect();
+    clipped.push('…');
+    clipped
+}
+
+fn is_configuration(tool: &str) -> bool {
+    CONFIGURATION_TOOLS.contains(&tool)
+}
+
+struct BatchEntry {
+    card: ApprovalRequest,
+    calls: u32,
+    after_web_content: bool,
+}
+
+impl BatchEntry {
+    fn item(&self) -> ApprovalItem {
+        ApprovalItem {
+            args_hash: self.card.args_hash.clone(),
+            tool: self.card.tool.clone(),
+            summary: clip(&self.card.summary, ITEM_SUMMARY_CHARS),
+            scope: self.card.scope.clone(),
+            calls: self.calls,
+            after_web_content: self.after_web_content,
+            secret: self.card.secret.clone(),
+            invite: self.card.invite.clone(),
+        }
+    }
+
+    fn rememberable(&self) -> bool {
+        !self.after_web_content
+            && !self.card.scope.is_empty()
+            && !NOT_GRANTABLE.contains(&self.card.tool.as_str())
+    }
+
+    /// What the call does without its subject: "send a GET request to …".
+    fn action(&self) -> &str {
+        let summary = self.card.summary.as_str();
+        summary
+            .split_once(" wants to ")
+            .filter(|(subject, _)| subject.chars().count() <= 40)
+            .map_or(summary, |(_, action)| action)
+            .trim_end_matches('.')
+    }
+}
+
+/// Old clients offer "Always allow" for the card's top-level scope; it is set only when every
+/// item may be remembered.
+fn union_scope(entries: &[BatchEntry]) -> String {
+    if !entries.iter().all(BatchEntry::rememberable) {
+        return String::new();
+    }
+    let mut scopes: Vec<&str> = Vec::new();
+    for scope in entries.iter().flat_map(|entry| entry.card.scope.split(',')) {
+        if !scopes.contains(&scope) {
+            scopes.push(scope);
+        }
+    }
+    let union = scopes.join(",");
+    if union.chars().count() <= flow_like_types::tool_grant::MAX_KEY_CHARS * 4 {
+        union
+    } else {
+        String::new()
+    }
+}
+
+fn batch_summary(entries: &[BatchEntry]) -> String {
+    let calls: u32 = entries.iter().map(|entry| entry.calls).sum();
+    let actions: Vec<&str> = entries.iter().map(BatchEntry::action).collect();
+    clip(
+        &format!(
+            "The bot wants to make {calls} calls: {}",
+            actions.join("; ")
+        ),
+        CARD_SUMMARY_CHARS,
+    )
+}
+
+/// One plain call is the card [`approval_request`] built. A flagged call or several identical
+/// ones add their item; several items make a batch card whose top-level fields summarize them.
+fn batch_card(turn_id: &str, entries: &[BatchEntry]) -> Option<ApprovalRequest> {
+    let first = entries.first()?;
+    if entries.len() == 1 {
+        let mut card = first.card.clone();
+        if first.calls > 1 || first.after_web_content {
+            if first.after_web_content {
+                card.scope.clear();
+            }
+            card.items = vec![first.item()];
+        }
+        return Some(card);
+    }
+    let items: Vec<ApprovalItem> = entries.iter().map(BatchEntry::item).collect();
+    let args_hash = batch_args_hash(items.iter().map(|item| item.args_hash.as_str()));
+    Some(ApprovalRequest {
+        id: approval_message_id(turn_id, &args_hash),
+        turn_id: turn_id.to_string(),
+        tool: APPROVAL_BATCH_TOOL.to_string(),
+        summary: batch_summary(entries),
+        scope: union_scope(entries),
+        args_hash,
+        requester_id: None,
+        requester_name: None,
+        room: None,
+        secret: None,
+        invite: None,
+        configuration_changes: None,
+        items,
+    })
+}
+
+#[derive(Default)]
+struct BatchState {
+    entries: Vec<BatchEntry>,
+    held: Vec<(String, String)>,
+    answered: HashMap<String, GrantCheck>,
+    inferences: usize,
+}
+
+/// Every call of a headless attempt's round that waits for the owner, on one card. A host keeps
+/// one per attempt and shares it between its gates. Identical calls share an item; a card holds
+/// at most [`MAX_APPROVAL_ITEMS`] items and stays below the envelope size; a configuration change
+/// has the card to itself. A call that does not fit stays held and asks on the next card.
+pub struct ParkedBatch {
+    turn_id: String,
+    state: Mutex<BatchState>,
+}
+
+impl std::fmt::Debug for ParkedBatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.state();
+        f.debug_struct("ParkedBatch")
+            .field("turn_id", &self.turn_id)
+            .field("items", &state.entries.len())
+            .field("held", &state.held.len())
+            .finish()
+    }
+}
+
+impl ParkedBatch {
+    pub fn new(turn_id: &str) -> Self {
+        Self {
+            turn_id: turn_id.to_string(),
+            state: Mutex::new(BatchState::default()),
+        }
+    }
+
+    pub fn turn_id(&self) -> &str {
+        &self.turn_id
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, BatchState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Puts a call that waits for the owner on the card. The call the running
+    /// [`super::run_recovery::CallScope`] names is held: the gate confirms it did not run.
+    pub fn park(&self, card: ApprovalRequest, after_web_content: bool) {
+        let call =
+            super::run_recovery::current_recovery_call_id().map(|id| (id, card.tool.clone()));
+        let mut state = self.state();
+        if let Some(call) = call {
+            if state.held.contains(&call) {
+                return;
+            }
+            state.held.push(call);
+        }
+        if let Some(entry) = state
+            .entries
+            .iter_mut()
+            .find(|entry| entry.card.args_hash == card.args_hash)
+        {
+            entry.calls = entry.calls.saturating_add(1);
+            entry.after_web_content |= after_web_content;
+            return;
+        }
+        if state
+            .entries
+            .first()
+            .is_some_and(|entry| is_configuration(&entry.card.tool))
+        {
+            return;
+        }
+        let entry = BatchEntry {
+            card,
+            calls: 1,
+            after_web_content,
+        };
+        if is_configuration(&entry.card.tool) {
+            state.entries = vec![entry];
+            return;
+        }
+        if state.entries.len() >= MAX_APPROVAL_ITEMS {
+            return;
+        }
+        state.entries.push(entry);
+        let fits = batch_card(&self.turn_id, &state.entries)
+            .and_then(|card| serde_json::to_vec(&card).ok())
+            .is_some_and(|bytes| bytes.len() <= APPROVAL_CARD_BUDGET_BYTES);
+        if state.entries.len() > 1 && !fits {
+            state.entries.pop();
+        }
+    }
+
+    /// The gate of a call about to run: [`headless_answer_with_inference`], except that a call
+    /// identical to one whose answer this attempt already spent gets that answer again, and a call
+    /// that asks joins the card (`Park` carries its own one-call card).
+    pub async fn answer(
+        &self,
+        store: &dyn GrantStore,
+        tool: &str,
+        args: &Value,
+        context_app: Option<&str>,
+        description: &str,
+        inference: Option<&dyn AuthorizationInference>,
+    ) -> HeadlessAnswer {
+        let check = check_call(store, tool, args, context_app).await;
+        let check = self.recall(tool, args, check, true);
+        self.settle(check, tool, args, context_app, description, inference)
+            .await
+    }
+
+    /// The gate of a call held back in a parked round, asked without running it ([`peek_call`]):
+    /// `Run` means nothing needs asking now, `Refuse` is the call's result, `Park` put it on the
+    /// card. The decision model is asked about at most 8 such calls per attempt.
+    pub async fn clearance(
+        &self,
+        store: &dyn GrantStore,
+        tool: &str,
+        args: &Value,
+        context_app: Option<&str>,
+        description: &str,
+        inference: Option<&dyn AuthorizationInference>,
+    ) -> HeadlessAnswer {
+        let check = peek_call(store, tool, args, context_app).await;
+        let check = self.recall(tool, args, check, false);
+        let asks = matches!(check, Ok(GrantCheck::Missing | GrantCheck::SetAside));
+        let inference = inference.filter(|_| {
+            !asks || (permits_authorization_inference(tool, args) && self.reserve_inference())
+        });
+        self.settle(check, tool, args, context_app, description, inference)
+            .await
+    }
+
+    fn reserve_inference(&self) -> bool {
+        let mut state = self.state();
+        let free = state.inferences < CLEARANCE_INFERENCES;
+        state.inferences += usize::from(free);
+        free
+    }
+
+    /// One item on the card covers every identical call of its round. A spent refusal therefore
+    /// answers every identical call of the attempt. A spent one-time answer (`spent_once`) answers
+    /// the identical calls of the held round it was given for, and none after it: a later call
+    /// with the same arguments asks again.
+    fn recall(
+        &self,
+        tool: &str,
+        args: &Value,
+        check: flow_like_types::Result<GrantCheck>,
+        spent_once: bool,
+    ) -> flow_like_types::Result<GrantCheck> {
+        let hash = args_hash(tool, args);
+        let mut state = self.state();
+        match check {
+            Ok(GrantCheck::Denied) => {
+                state.answered.insert(hash, GrantCheck::Denied);
+                Ok(GrantCheck::Denied)
+            }
+            Ok(GrantCheck::Once) if spent_once => {
+                state.answered.insert(hash, GrantCheck::Once);
+                Ok(GrantCheck::Once)
+            }
+            Ok(open @ (GrantCheck::Missing | GrantCheck::SetAside)) => {
+                Ok(match state.answered.get(&hash).copied() {
+                    Some(GrantCheck::Denied) => GrantCheck::Denied,
+                    Some(GrantCheck::Once) if super::run_recovery::replays_held_call() => {
+                        GrantCheck::Once
+                    }
+                    _ => open,
+                })
+            }
+            other => other,
+        }
+    }
+
+    async fn settle(
+        &self,
+        check: flow_like_types::Result<GrantCheck>,
+        tool: &str,
+        args: &Value,
+        context_app: Option<&str>,
+        description: &str,
+        inference: Option<&dyn AuthorizationInference>,
+    ) -> HeadlessAnswer {
+        let set_aside = matches!(check, Ok(GrantCheck::SetAside));
+        let answer = answer_check(
+            check,
+            &self.turn_id,
+            tool,
+            args,
+            context_app,
+            description,
+            inference,
+        )
+        .await;
+        if let HeadlessAnswer::Park(card) = &answer {
+            self.park(card.clone(), set_aside);
+        }
+        answer
+    }
+
+    /// Whether any call of the attempt waits for the owner.
+    pub fn is_parked(&self) -> bool {
+        !self.state().entries.is_empty()
+    }
+
+    /// The card to post: `None` while nothing waits. One plain call is today's card.
+    pub fn card(&self) -> Option<ApprovalRequest> {
+        batch_card(&self.turn_id, &self.state().entries)
+    }
+
+    /// `(call id, tool)` of every call a gate held back, for [`super::run_recovery::record_held_batch`].
+    pub fn held_calls(&self) -> Vec<(String, String)> {
+        self.state().held.clone()
     }
 }
 
@@ -519,8 +1028,9 @@ mod tests {
     use serde_json::json;
     use std::sync::Mutex;
 
+    /// Grants and tokens, and the grants touched by use.
     #[derive(Default)]
-    struct Memory(Mutex<Vec<GrantKey>>);
+    struct Memory(Mutex<Vec<GrantKey>>, Mutex<Vec<GrantKey>>);
 
     #[derive(Default)]
     struct Infer {
@@ -812,6 +1322,490 @@ mod tests {
             keys.retain(|key| !(key.tool == tool && key.scope == scope));
             Ok(keys.len() != before)
         }
+        async fn touch(&self, keys: &[GrantKey]) -> flow_like_types::Result<()> {
+            self.1.lock().unwrap().extend_from_slice(keys);
+            Ok(())
+        }
+    }
+
+    use crate::flow::copilot::run_recovery::{CallScope, scope_call};
+    use flow_like_types::bot_message::{ItemDecision, MessageBody};
+
+    fn call_scope(id: &str, round_web_content: bool) -> CallScope {
+        CallScope {
+            id: id.into(),
+            round_web_content,
+            held_replay: false,
+        }
+    }
+
+    fn held_call(id: &str) -> CallScope {
+        CallScope {
+            id: id.into(),
+            round_web_content: false,
+            held_replay: true,
+        }
+    }
+
+    fn fetch(url: &str) -> Value {
+        json!({ "url": url })
+    }
+
+    fn fetch_card(turn_id: &str, url: &str) -> ApprovalRequest {
+        let site = url.trim_start_matches("https://");
+        approval_request(
+            turn_id,
+            "web_request",
+            &fetch(url),
+            None,
+            &format!("The bot wants to send a GET request to {site}."),
+        )
+    }
+
+    async fn park_in(batch: &ParkedBatch, call_id: &str, card: ApprovalRequest) {
+        scope_call(call_scope(call_id, false), async {
+            batch.park(card, false)
+        })
+        .await;
+    }
+
+    fn token(prefix: &str, tool: &str, args: &Value) -> GrantKey {
+        GrantKey::new(tool, format!("{prefix}{}", args_hash(tool, args)))
+    }
+
+    #[tokio::test]
+    async fn twelve_parks_make_one_card() {
+        let store = Memory::default();
+        let batch = ParkedBatch::new("bt_1");
+        let url = |n: usize| format!("https://cisa.gov/news-events/alerts?p={n}");
+        let description = |n: usize| {
+            format!(
+                "The bot wants to send a GET request to {}.",
+                url(n).trim_start_matches("https://")
+            )
+        };
+        let first = scope_call(
+            call_scope("c0", false),
+            batch.answer(
+                &store,
+                "web_request",
+                &fetch(&url(0)),
+                None,
+                &description(0),
+                None,
+            ),
+        )
+        .await;
+        let expected = approval_request(
+            "bt_1",
+            "web_request",
+            &fetch(&url(0)),
+            None,
+            &description(0),
+        );
+        assert_eq!(first, HeadlessAnswer::Park(expected.clone()));
+        assert_eq!(batch.card(), Some(expected));
+        for n in 1..12 {
+            scope_call(
+                call_scope(&format!("c{n}"), false),
+                batch.answer(
+                    &store,
+                    "web_request",
+                    &fetch(&url(n)),
+                    None,
+                    &description(n),
+                    None,
+                ),
+            )
+            .await;
+        }
+        let card = batch.card().unwrap();
+        assert_eq!(card.tool, APPROVAL_BATCH_TOOL);
+        assert_eq!(card.items.len(), 12);
+        assert!(
+            card.summary
+                .starts_with("The bot wants to make 12 calls: send a GET request to cisa.gov/"),
+            "{}",
+            card.summary
+        );
+        assert!(card.summary.chars().count() <= 480);
+        assert_eq!(
+            card.scope,
+            grant_scopes("web_request", &fetch(&url(0)), None)
+                .unwrap()
+                .join(",")
+        );
+        assert_eq!(
+            card.args_hash,
+            batch_args_hash(card.items.iter().rev().map(|item| item.args_hash.as_str()))
+        );
+        assert_eq!(card.id, approval_message_id("bt_1", &card.args_hash));
+        assert_eq!(batch.held_calls().len(), 12);
+        assert!(
+            MessageBody {
+                approval: Some(card.clone()),
+                ..Default::default()
+            }
+            .check()
+            .is_ok()
+        );
+        park_in(&batch, "c12", fetch_card("bt_1", &url(0))).await;
+        park_in(&batch, "c12", fetch_card("bt_1", &url(0))).await;
+        let card = batch.card().unwrap();
+        assert_eq!((card.items.len(), card.items[0].calls), (12, 2));
+        assert!(card.summary.starts_with("The bot wants to make 13 calls"));
+        assert_eq!(batch.held_calls().len(), 13);
+    }
+
+    #[tokio::test]
+    async fn items_past_the_budget_wait_for_the_next_card() {
+        let batch = ParkedBatch::new("bt_1");
+        for n in 0..40 {
+            let card = fetch_card("bt_1", &format!("https://site{n}.example/feed"));
+            park_in(&batch, &format!("c{n}"), card).await;
+        }
+        assert_eq!(batch.card().unwrap().items.len(), MAX_APPROVAL_ITEMS);
+        assert_eq!(batch.held_calls().len(), 40);
+
+        let batch = ParkedBatch::new("bt_2");
+        for n in 0..MAX_APPROVAL_ITEMS {
+            let mut card = fetch_card("bt_2", &format!("https://site{n}.example/feed"));
+            card.summary = "s".repeat(480);
+            card.scope = format!("web:site{n}.example:secret:{}", "K".repeat(960));
+            card.secret = Some(SecretAsk {
+                name: "API_KEY".into(),
+                description: "d".repeat(500),
+                replace: false,
+            });
+            park_in(&batch, &format!("c{n}"), card).await;
+        }
+        let card = batch.card().unwrap();
+        assert!(
+            (2..MAX_APPROVAL_ITEMS).contains(&card.items.len()),
+            "{}",
+            card.items.len()
+        );
+        assert!(serde_json::to_vec(&card).unwrap().len() <= APPROVAL_CARD_BUDGET_BYTES);
+        assert_eq!(batch.held_calls().len(), MAX_APPROVAL_ITEMS);
+    }
+
+    #[tokio::test]
+    async fn a_configuration_change_is_a_card_of_its_own() {
+        let batch = ParkedBatch::new("bt_1");
+        park_in(&batch, "c1", fetch_card("bt_1", "https://a.example/")).await;
+        let config = approval_request(
+            "bt_1",
+            tools::configuration::BOT_UPDATE_CONFIGURATION,
+            &json!({"changes": {"name": "Atlas"}}),
+            None,
+            "Change my settings",
+        );
+        park_in(&batch, "c2", config.clone()).await;
+        park_in(&batch, "c3", fetch_card("bt_1", "https://b.example/")).await;
+        assert_eq!(batch.card(), Some(config));
+        assert_eq!(
+            batch.held_calls(),
+            vec![
+                ("c1".to_string(), "web_request".to_string()),
+                (
+                    "c2".into(),
+                    tools::configuration::BOT_UPDATE_CONFIGURATION.into()
+                ),
+                ("c3".into(), "web_request".into()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn one_answer_covers_the_identical_calls_of_its_round_and_none_after() {
+        let store = Memory::default();
+        let args = json!({"index": "notes"});
+        record_answer(
+            &store,
+            "knowledge_drop",
+            &args,
+            None,
+            ApprovalDecision::Once,
+        )
+        .await
+        .unwrap();
+        let batch = ParkedBatch::new("turn-1");
+        let answer = || batch.answer(&store, "knowledge_drop", &args, None, "drop it", None);
+
+        assert!(matches!(
+            scope_call(held_call("call-1"), answer()).await,
+            HeadlessAnswer::Run
+        ));
+        assert!(matches!(
+            scope_call(held_call("call-2"), answer()).await,
+            HeadlessAnswer::Run
+        ));
+        assert!(matches!(
+            scope_call(call_scope("call-3", false), answer()).await,
+            HeadlessAnswer::Park(_)
+        ));
+        assert!(matches!(answer().await, HeadlessAnswer::Park(_)));
+    }
+
+    #[tokio::test]
+    async fn peek_spends_no_once_token() {
+        let store = Memory::default();
+        let args = json!({"index": "notes"});
+        let peek = || peek_call(&store, "knowledge_drop", &args, None);
+        record_answer(
+            &store,
+            "knowledge_drop",
+            &args,
+            None,
+            ApprovalDecision::Once,
+        )
+        .await
+        .unwrap();
+        assert_eq!(peek().await.unwrap(), GrantCheck::Once);
+        assert_eq!(peek().await.unwrap(), GrantCheck::Once);
+        assert_eq!(
+            check_call(&store, "knowledge_drop", &args, None)
+                .await
+                .unwrap(),
+            GrantCheck::Once
+        );
+        assert_eq!(peek().await.unwrap(), GrantCheck::Missing);
+        record_answer(
+            &store,
+            "knowledge_drop",
+            &args,
+            None,
+            ApprovalDecision::Deny,
+        )
+        .await
+        .unwrap();
+        assert_eq!(peek().await.unwrap(), GrantCheck::Denied);
+        assert_eq!(peek().await.unwrap(), GrantCheck::Missing);
+        store.put("knowledge_drop", "table:notes").await.unwrap();
+        assert_eq!(peek().await.unwrap(), GrantCheck::Granted);
+        assert!(store.1.lock().unwrap().is_empty());
+
+        let batch = ParkedBatch::new("bt_1");
+        let other = json!({"index": "other"});
+        record_answer(
+            &store,
+            "knowledge_drop",
+            &other,
+            None,
+            ApprovalDecision::Once,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            batch
+                .clearance(&store, "knowledge_drop", &other, None, "", None)
+                .await,
+            HeadlessAnswer::Run
+        );
+        assert!(store.list().await.unwrap().contains(&token(
+            ONCE_PREFIX,
+            "knowledge_drop",
+            &other
+        )));
+        let fresh = json!({"index": "fresh"});
+        assert!(matches!(
+            batch
+                .clearance(&store, "knowledge_drop", &fresh, None, "Drop 'fresh'", None)
+                .await,
+            HeadlessAnswer::Park(_)
+        ));
+        assert!(batch.is_parked());
+    }
+
+    #[tokio::test]
+    async fn record_batch_answer_stores_each_item() {
+        let batch = ParkedBatch::new("bt_1");
+        let a = fetch("https://a.example/feed");
+        let b = fetch("https://b.example/feed");
+        let notes = json!({"index": "notes"});
+        let secret = json!({"name": "API_TOKEN", "description": "Read the API"});
+        park_in(&batch, "c1", fetch_card("bt_1", "https://a.example/feed")).await;
+        park_in(&batch, "c2", fetch_card("bt_1", "https://b.example/feed")).await;
+        let drop_card = approval_request("bt_1", "knowledge_drop", &notes, None, "Drop notes");
+        park_in(&batch, "c3", drop_card).await;
+        let secret_card = approval_request("bt_1", SECRET_REQUEST_TOOL, &secret, None, "Asks");
+        park_in(&batch, "c4", secret_card).await;
+        let card = batch.card().unwrap();
+        assert_eq!(card.items.len(), 4);
+        assert_eq!(card.scope, "");
+
+        let store = Memory::default();
+        let item = |tool: &str, args: &Value, decision| ItemDecision {
+            args_hash: args_hash(tool, args),
+            decision,
+        };
+        let answer = ApprovalAnswer {
+            approval_id: card.id.clone(),
+            decision: ApprovalDecision::Once,
+            items: vec![
+                item("web_request", &b, ApprovalDecision::Always),
+                item("knowledge_drop", &notes, ApprovalDecision::Deny),
+            ],
+        };
+        let response = record_batch_answer(&store, &card, &answer).await.unwrap();
+        assert_eq!(response.decision, ApprovalDecision::Once);
+        assert_eq!(response.items, answer.items);
+        let keys = store.list().await.unwrap();
+        let b_scope = grant_scopes("web_request", &b, None).unwrap()[0].clone();
+        for key in [
+            token(ONCE_PREFIX, "web_request", &a),
+            token(ONCE_PREFIX, "web_request", &b),
+            GrantKey::new("web_request", b_scope),
+            token(DENY_PREFIX, "knowledge_drop", &notes),
+            token(ONCE_PREFIX, SECRET_REQUEST_TOOL, &secret),
+        ] {
+            assert!(keys.contains(&key), "{key:?} in {keys:?}");
+        }
+        assert_eq!(keys.len(), 5);
+
+        let untouched = Memory::default();
+        let wrong = ApprovalAnswer {
+            items: vec![ItemDecision {
+                args_hash: "nope".into(),
+                decision: ApprovalDecision::Deny,
+            }],
+            ..answer
+        };
+        assert!(
+            record_batch_answer(&untouched, &card, &wrong)
+                .await
+                .is_err()
+        );
+        assert!(untouched.list().await.unwrap().is_empty());
+
+        let old_client = Memory::default();
+        record_card_answer(&old_client, &card, ApprovalDecision::Always)
+            .await
+            .unwrap();
+        let keys = old_client.list().await.unwrap();
+        assert!(keys.contains(&GrantKey::new("knowledge_drop", "table:notes")));
+        assert!(
+            !keys
+                .iter()
+                .any(|key| key.tool == SECRET_REQUEST_TOOL && !key.scope.starts_with(ONCE_PREFIX))
+        );
+        assert_eq!(keys.len(), 4 + 3);
+    }
+
+    #[tokio::test]
+    async fn a_web_grant_is_set_aside_after_web_content() {
+        let store = Memory::default();
+        let feed = fetch("https://www.cisa.gov/feeds/kev.xml");
+        let site = grant_scopes("web_request", &feed, None).unwrap()[0].clone();
+        let browse = json!({"url": "https://shop.example/cart"});
+        let app = json!({"app_id": "a1", "event_id": "e"});
+        store.put("web_request", &site).await.unwrap();
+        store.put("browser_open", SCOPE_ALL).await.unwrap();
+        store.put("call_app_event", "app:a1").await.unwrap();
+        let marked = |id: &'static str| call_scope(id, true);
+        let check = |tool: &'static str, args: &Value| {
+            let args = args.clone();
+            let store = &store;
+            async move { check_call(store, tool, &args, None).await.unwrap() }
+        };
+
+        assert_eq!(check("web_request", &feed).await, GrantCheck::Granted);
+        assert!(!grant_set_aside("web_request", &feed));
+        store.1.lock().unwrap().clear();
+        assert_eq!(
+            scope_call(marked("c1"), check("web_request", &feed)).await,
+            GrantCheck::SetAside
+        );
+        assert_eq!(
+            scope_call(marked("c1"), check("browser_open", &browse)).await,
+            GrantCheck::SetAside
+        );
+        assert!(store.1.lock().unwrap().is_empty());
+        assert_eq!(
+            scope_call(marked("c1"), check("call_app_event", &app)).await,
+            GrantCheck::Granted
+        );
+        assert!(
+            scope_call(marked("c1"), async {
+                grant_set_aside("web_request", &feed)
+            })
+            .await
+        );
+        assert!(
+            !scope_call(marked("c1"), async {
+                grant_set_aside("call_app_event", &app)
+            })
+            .await
+        );
+        assert!(web_scoped("browser_open", &browse) && !web_scoped("call_app_event", &app));
+
+        record_answer(&store, "web_request", &feed, None, ApprovalDecision::Once)
+            .await
+            .unwrap();
+        assert_eq!(
+            scope_call(marked("c1"), check("web_request", &feed)).await,
+            GrantCheck::Once
+        );
+        record_answer(&store, "web_request", &feed, None, ApprovalDecision::Once)
+            .await
+            .unwrap();
+        record_answer(&store, "web_request", &feed, None, ApprovalDecision::Deny)
+            .await
+            .unwrap();
+        assert_eq!(
+            scope_call(marked("c1"), check("web_request", &feed)).await,
+            GrantCheck::Denied
+        );
+        store
+            .delete(
+                "web_request",
+                &token(ONCE_PREFIX, "web_request", &feed).scope,
+            )
+            .await
+            .unwrap();
+
+        let batch = ParkedBatch::new("bt_1");
+        let description = "The bot wants to send a GET request to cisa.gov/feeds/kev.xml.";
+        let parked = scope_call(
+            marked("c2"),
+            batch.answer(&store, "web_request", &feed, None, description, None),
+        )
+        .await;
+        assert!(matches!(parked, HeadlessAnswer::Park(_)));
+        let card = batch.card().unwrap();
+        assert_eq!(
+            (card.tool.as_str(), card.scope.as_str()),
+            ("web_request", "")
+        );
+        assert_eq!(
+            card.id,
+            approval_message_id("bt_1", &args_hash("web_request", &feed))
+        );
+        assert_eq!(card.items.len(), 1);
+        assert!(card.items[0].after_web_content);
+        assert_eq!(card.items[0].scope, site);
+        assert_eq!(
+            batch.held_calls(),
+            vec![("c2".to_string(), "web_request".to_string())]
+        );
+
+        let inference = Infer {
+            allow: true,
+            ..Default::default()
+        };
+        let inferred = scope_call(
+            marked("c3"),
+            batch.answer(
+                &store,
+                "web_request",
+                &feed,
+                None,
+                description,
+                Some(&inference),
+            ),
+        )
+        .await;
+        assert_eq!(inferred, HeadlessAnswer::Run);
     }
 
     #[test]
@@ -892,6 +1886,22 @@ mod tests {
             grant_scopes(
                 "browser_open",
                 &json!({"url": "https://www.Shop.example/cart?x=1"}),
+                None
+            ),
+            Some(vec!["browser:shop.example".into()])
+        );
+        assert_eq!(
+            grant_scopes(
+                "browser_open",
+                &json!({"url": "https://www.Shop.example/cart", "browser": "owner"}),
+                None
+            ),
+            Some(vec!["owner_browser:shop.example".into()])
+        );
+        assert_eq!(
+            grant_scopes(
+                "browser_open",
+                &json!({"url": "https://shop.example/", "browser": "own"}),
                 None
             ),
             Some(vec!["browser:shop.example".into()])
@@ -1293,6 +2303,48 @@ mod tests {
         );
         assert_eq!(
             approval_request("bt_1", "code_run", &args, None, "x").secret,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn a_room_invite_shows_who_and_why_and_asks_every_time() {
+        let store = Memory::default();
+        let args = json!({"person": "@ana.lima", "reason": "She owns the budget sheet."});
+        let HeadlessAnswer::Park(card) = headless_answer(
+            &store,
+            "bt_1",
+            ROOM_INVITE_TOOL,
+            &args,
+            None,
+            "The bot wants to invite @ana.lima to this group chat.",
+        )
+        .await
+        else {
+            panic!("expected a park");
+        };
+        assert_eq!(card.scope, "");
+        assert_eq!(
+            card.invite,
+            Some(flow_like_types::bot_message::RoomInviteAsk {
+                person: "ana.lima".into(),
+                reason: "She owns the budget sheet.".into(),
+            })
+        );
+        assert!(!permits_authorization_inference(ROOM_INVITE_TOOL, &args));
+        record_card_answer(&store, &card, ApprovalDecision::Always)
+            .await
+            .unwrap();
+        assert_eq!(
+            headless_answer(&store, "bt_1", ROOM_INVITE_TOOL, &args, None, "").await,
+            HeadlessAnswer::Run
+        );
+        assert!(matches!(
+            headless_answer(&store, "bt_2", ROOM_INVITE_TOOL, &args, None, "").await,
+            HeadlessAnswer::Park(_)
+        ));
+        assert_eq!(
+            approval_request("bt_1", "code_run", &args, None, "x").invite,
             None
         );
     }

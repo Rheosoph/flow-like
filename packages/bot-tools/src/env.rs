@@ -173,6 +173,43 @@ pub struct Attachment {
     pub handle: WorkspaceHandle,
 }
 
+/// A download link a host signed for one file: whoever holds it can download the file until it
+/// expires.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileLink {
+    pub url: String,
+    /// When the link stops working, in Unix milliseconds; `None` when the host cannot tell.
+    pub expires_at_ms: Option<i64>,
+}
+
+impl FileLink {
+    /// The longest a signed link works; credentials that lapse sooner end it sooner.
+    pub const TTL: Duration = Duration::from_secs(60 * 60);
+
+    /// A link `store` signs for `location`; `None` for a store whose objects have no web address,
+    /// such as one on this device.
+    pub async fn signed(
+        store: &flow_like_storage::files::store::FlowLikeStore,
+        location: &flow_like_storage::Path,
+    ) -> Result<Option<Self>> {
+        let url = store.sign_reference("GET", location, Self::TTL).await?;
+        Ok(url
+            .filter(|url| matches!(url.scheme(), "https" | "http"))
+            .map(|url| Self {
+                url: url.to_string(),
+                expires_at_ms: None,
+            }))
+    }
+
+    /// `url` when it is a web address; a local file has none to hand out.
+    pub fn web(url: &str) -> Option<Self> {
+        (url.starts_with("https://") || url.starts_with("http://")).then(|| Self {
+            url: url.to_string(),
+            expires_at_ms: None,
+        })
+    }
+}
+
 pub struct AppTables {
     pub connection: Connection,
     pub writable: bool,
@@ -224,6 +261,8 @@ impl SessionCache for MemorySessions {
 pub enum ModelRole {
     Default,
     Fast,
+    /// Reads pages and images; the bot's vision model when it has one.
+    Vision,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -259,6 +298,12 @@ pub trait ToolEnv: Send + Sync {
 
     async fn message_attachment(&self, seq: u64, part: &str) -> Result<Option<Attachment>>;
 
+    /// A signed https link to a file `read_file` reaches, for a service that fetches the file
+    /// itself. `None` when this host cannot sign one, such as for a file kept only on a device.
+    async fn file_link(&self, _app_id: &str, _path: &str) -> Result<Option<FileLink>> {
+        Ok(None)
+    }
+
     /// Whether `handle` reached the bot in a message, so its tools may read it whatever its app.
     fn handle_granted(&self, _handle: &WorkspaceHandle) -> bool {
         false
@@ -291,6 +336,12 @@ pub trait ToolEnv: Send + Sync {
     /// (feature `documents`) when the host supplies none.
     fn documents(&self) -> Option<Arc<dyn DocumentBackend>> {
         crate::documents::default_backend()
+    }
+
+    /// The decoder behind `barcode_read`; the catalog's (feature `barcodes`) when the host
+    /// supplies none.
+    fn barcodes(&self) -> Option<Arc<dyn crate::barcode::BarcodeReader>> {
+        crate::barcode::default_reader()
     }
 
     /// The code sandbox; the code-interpreter's (feature `code`) when the host supplies none.
@@ -339,6 +390,12 @@ pub trait ToolEnv: Send + Sync {
         None
     }
 
+    /// Invites people into the group chat the turn runs in for `room_invite`; `None` outside a
+    /// group chat or where the bot is not on an account.
+    fn rooms(&self) -> Option<Arc<dyn crate::rooms::RoomInvites>> {
+        None
+    }
+
     /// Requests context through the current conversation. The person supplying it consents.
     fn user_context(&self) -> Option<Arc<dyn crate::user_context::UserContextBackend>> {
         None
@@ -349,8 +406,8 @@ pub trait ToolEnv: Send + Sync {
         None
     }
 
-    /// The owner's bots for Flux's `list_bots`, `get_bot`, `create_bot` and `update_bot`, after
-    /// host-enforced owner approval; `None` where the host can't manage them.
+    /// The owner's bots and devices for Flux's crew tools (`crate::crew`), after host-enforced
+    /// owner approval; `None` where the host can't manage them.
     fn crew(&self) -> Option<Arc<dyn crate::crew::CrewBackend>> {
         None
     }

@@ -7,7 +7,7 @@ use crate::{
     model::{CreateBotRequest, UpdateBotRequest},
 };
 use flow_like_types::{
-    bot::{BotCapability, BotLocation, BotModelPolicy, BotSystemKind},
+    bot::{BotCapability, BotExecutionMode, BotLocation, BotModelPolicy, BotSystemKind},
     data_classification::DataSensitivity,
 };
 use serde_json::{Value, json};
@@ -109,7 +109,7 @@ pub(crate) fn create_settings(request: CreateBotRequest) -> Result<(Option<Strin
         profile_id: reference_id("profile_id", request.profile_id)?,
     };
     keeps_fixed_capabilities(&[], &settings.capabilities)?;
-    stays_on_the_desktop(request.location, request.device_id)?;
+    stays_on_the_desktop(request.location, request.device_id, request.execution_mode)?;
     check_rules(&settings)?;
     Ok((preset_id, settings))
 }
@@ -166,7 +166,11 @@ pub(crate) fn apply_patch(
     if let Some(profile_id) = patch.profile_id {
         next.profile_id = reference_id("profile_id", profile_id)?;
     }
-    stays_on_the_desktop(patch.location, patch.device_id.flatten())?;
+    stays_on_the_desktop(
+        patch.location,
+        patch.device_id.flatten(),
+        patch.execution_mode,
+    )?;
     check_rules(&next)?;
     Ok(next)
 }
@@ -218,7 +222,17 @@ fn keeps_fixed_capabilities(before: &[BotCapability], after: &[BotCapability]) -
 }
 
 /// A bot without an account runs on this desktop: no other location, no managed device.
-fn stays_on_the_desktop(location: Option<BotLocation>, device_id: Option<String>) -> Result<()> {
+fn stays_on_the_desktop(
+    location: Option<BotLocation>,
+    device_id: Option<String>,
+    execution_mode: Option<BotExecutionMode>,
+) -> Result<()> {
+    if execution_mode == Some(BotExecutionMode::Docker) {
+        return Err(Error::new(
+            codes::BOT_EXECUTION_MODE_LOCATION,
+            "Docker hosting requires a managed device. Bots on this computer run directly in Studio",
+        ));
+    }
     let elsewhere = location.is_some_and(|location| location != BotLocation::Desktop);
     if elsewhere || reference_id("device_id", device_id)?.is_some() {
         return Err(Error::account_required(SIGN_IN_TO_LEAVE_THE_DESKTOP));
@@ -249,6 +263,11 @@ fn bot_name(name: &str) -> Result<String> {
     let chars = name.chars().count();
     if chars > NAME_MAX_CHARS {
         return Err(too_long("name", NAME_MAX_CHARS, chars));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(Error::invalid(
+            "Bot name must not contain control characters or line breaks",
+        ));
     }
     Ok(name.to_string())
 }

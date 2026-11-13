@@ -123,4 +123,24 @@ describe("what a bot may do without asking on the web", () => {
 			auth,
 		);
 	});
+
+	test("a batch answer lists the calls whose answer differs", async () => {
+		mocks.apiPost.mockResolvedValue({});
+		await new WebBotState({ auth } as never).answerApproval(
+			"bot_a",
+			"turn_1",
+			"ap-b",
+			"once",
+			[{ args_hash: "h2", decision: "deny" }],
+		);
+		expect(mocks.apiPost).toHaveBeenLastCalledWith(
+			"bots/bot_a/turns/turn_1/approval",
+			{
+				approval_id: "ap-b",
+				decision: "once",
+				items: [{ args_hash: "h2", decision: "deny" }],
+			},
+			auth,
+		);
+	});
 });

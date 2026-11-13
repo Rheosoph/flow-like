@@ -39,6 +39,8 @@ pub enum BotCapability {
     Memory,
     /// Reads, summarizes and extracts files; creates Word, Excel, PowerPoint and PDF.
     Documents,
+    /// Reads QR codes and barcodes in images.
+    Barcodes,
     /// Connects to external databases like Postgres, MySQL or ODBC.
     DataConnections,
     /// Builds searchable indexes over files.
@@ -68,7 +70,7 @@ pub enum BotCapability {
 
 impl BotCapability {
     /// Every capability, in the order the settings list them.
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 27] = [
         Self::Internet,
         Self::WebRequests,
         Self::ProfileApps,
@@ -83,6 +85,7 @@ impl BotCapability {
         Self::DataStudio,
         Self::Memory,
         Self::Documents,
+        Self::Barcodes,
         Self::DataConnections,
         Self::Knowledge,
         Self::Connectors,
@@ -113,6 +116,7 @@ impl BotCapability {
             Self::DataStudio => "data_studio",
             Self::Memory => "memory",
             Self::Documents => "documents",
+            Self::Barcodes => "barcodes",
             Self::DataConnections => "data_connections",
             Self::Knowledge => "knowledge",
             Self::Connectors => "connectors",
@@ -152,6 +156,32 @@ impl BotCapability {
     }
 }
 
+/// The process boundary the owner requires for a bot's tools.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BotExecutionMode {
+    #[default]
+    Native,
+    Docker,
+}
+
+impl BotExecutionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Docker => "docker",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "native" => Some(Self::Native),
+            "docker" => Some(Self::Docker),
+            _ => None,
+        }
+    }
+}
+
 /// Where a bot's host runs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -186,7 +216,10 @@ impl BotLocation {
 
     /// Whether a bot running here may hold `capability`.
     pub fn allows(self, capability: BotCapability) -> bool {
-        self != Self::Server || !capability.requires_local_host()
+        match self {
+            Self::Server => !capability.requires_local_host(),
+            Self::Desktop | Self::Device => true,
+        }
     }
 
     /// Whether the owner's desktop answers the bot's turns while it is online: a server bot that
@@ -276,6 +309,7 @@ mod tests {
                 "data_studio",
                 "memory",
                 "documents",
+                "barcodes",
                 "data_connections",
                 "knowledge",
                 "connectors",
@@ -348,6 +382,19 @@ mod tests {
     }
 
     #[test]
+    fn a_device_serves_every_capability() {
+        let refused: Vec<BotCapability> = BotCapability::ALL
+            .into_iter()
+            .filter(|capability| !BotLocation::Device.allows(*capability))
+            .collect();
+        assert_eq!(refused, []);
+        assert!(BotLocation::Device.allows(BotCapability::CommandLine));
+        assert!(BotLocation::Desktop.allows(BotCapability::Skills));
+        assert!(BotLocation::Server.allows(BotCapability::Skills));
+        assert!(BotCapability::Encryption.requires_local_host());
+    }
+
+    #[test]
     fn locations_round_trip_and_read_stored_names() {
         for location in BotLocation::ALL {
             let wire = serde_json::to_value(location).unwrap();
@@ -414,6 +461,7 @@ mod tests {
     fn tool_capabilities_are_switchable_everywhere_and_round_trip() {
         let added = [
             (BotCapability::Documents, "documents"),
+            (BotCapability::Barcodes, "barcodes"),
             (BotCapability::DataConnections, "data_connections"),
             (BotCapability::Knowledge, "knowledge"),
             (BotCapability::Connectors, "connectors"),

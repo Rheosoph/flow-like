@@ -99,9 +99,7 @@ fn messages(entries: &[InboxEntry]) -> Vec<Message<'_>> {
         })
         .filter(|message| !is_approval_entry(message))
         .filter(|message| {
-            message.entry.envelope["body"]
-                .get(flow_like_types::bot_user_context::REQUEST_FIELD)
-                .is_none()
+            !flow_like_types::bot_user_context::is_silent_body(&message.entry.envelope["body"])
         })
         .collect()
 }
@@ -151,6 +149,7 @@ pub fn parse_body(entry: &InboxEntry) -> Option<MessageBody> {
         return Some(MessageBody {
             text: spoken.render(),
             mentions: spoken.mentions,
+            interactive: spoken.interactive,
             ..MessageBody::default()
         });
     }
@@ -213,6 +212,9 @@ fn addressed(
     let Some(body) = &message.body else {
         return false;
     };
+    if message.entry.kind == InboxEntryKind::Trigger {
+        return body.mentions.is_empty() || body.mentions.iter().any(|mention| mention == bot_id);
+    }
     body.mentions.iter().any(|mention| mention == bot_id)
         || body.reply_to.as_deref().is_some_and(|target| {
             messages.iter().any(|candidate| {
@@ -226,22 +228,41 @@ fn addressed(
 /// mentioned or replied to, and for a person's message also when the bot reads along (unless
 /// `mentioned_only`). A message of a bot counts at least one hop and none beyond [`MAX_HOPS`]
 /// wakes anyone. Edits, topics, reactions, member events, tombstones and messages sent before
-/// `not_before` are no trigger.
+/// `not_before` are no trigger. A bot with a decision model (`has_decision_model`) also reads
+/// along with spoken call transcripts; without one it would answer every utterance.
 pub fn waiting(
     kind: ConversationKind,
     bot_id: &str,
     entries: &[InboxEntry],
     not_before: DateTime<FixedOffset>,
     mentioned_only: bool,
+    has_decision_model: bool,
 ) -> Option<Waiting> {
-    waiting_held(kind, bot_id, entries, not_before, None, mentioned_only)
+    waiting_held(
+        kind,
+        bot_id,
+        entries,
+        not_before,
+        None,
+        mentioned_only,
+        has_decision_model,
+    )
 }
 
-fn reads_along(kind: ConversationKind, message: &Message, mentioned_only: bool) -> bool {
+fn reads_along(
+    kind: ConversationKind,
+    message: &Message,
+    mentioned_only: bool,
+    has_decision_model: bool,
+) -> bool {
     kind == ConversationKind::Group
         && !mentioned_only
-        && message.entry.kind == InboxEntryKind::Message
         && message.entry.sender_id == flow_like_local_bots::LOCAL_OWNER_ID
+        && match message.entry.kind {
+            InboxEntryKind::Message => true,
+            InboxEntryKind::Transcript => has_decision_model,
+            _ => false,
+        }
 }
 
 /// [`waiting`] that leaves the messages an interactive chat holds to that chat.
@@ -252,6 +273,7 @@ pub fn waiting_held(
     not_before: DateTime<FixedOffset>,
     hold: Option<Hold>,
     mentioned_only: bool,
+    has_decision_model: bool,
 ) -> Option<Waiting> {
     let parked = parked_turns(entries, bot_id);
     let messages = messages(entries);
@@ -270,7 +292,7 @@ pub fn waiting_held(
                 && !hold.is_some_and(|hold| hold.keeps(message))
                 && hops_of(message, bot_sender) <= MAX_HOPS
                 && (addressed(kind, bot_id, message, &messages)
-                    || reads_along(kind, message, mentioned_only))
+                    || reads_along(kind, message, mentioned_only, has_decision_model))
         })
         .filter(|message| {
             !parked.contains(&flow_like_types::bot_turn::turn_id(

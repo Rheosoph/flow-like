@@ -4,7 +4,6 @@ import { useTranslation } from "@flow-like/locales";
 import { AppWindow, Search } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useInvoke } from "../../../../hooks/use-invoke";
-import { IAppVisibility } from "../../../../lib/schema/app/app";
 import type { IProfile } from "../../../../lib/schema/profile/profile";
 import { useBackend } from "../../../../state/backend-state";
 import { Checkbox } from "../../../ui/checkbox";
@@ -18,14 +17,12 @@ import {
 } from "../../../ui/select";
 import { Skeleton } from "../../../ui/skeleton";
 import { BotAppAccess } from "../../bot-app-restrictions";
+import {
+	type AppOption,
+	canToggleApp,
+	libraryAppOptions,
+} from "../app-options";
 import type { BotAppDraft } from "../use-bot-app-draft";
-
-interface AppOption {
-	id: string;
-	name: string;
-	/** Edit mode only: the owner's role in the app, or null once they left it. */
-	role?: string | null;
-}
 
 function profileOptions(profiles: readonly IProfile[] | undefined) {
 	const options: { id: string; name: string; apps: number }[] = [];
@@ -96,12 +93,7 @@ function useLibraryApps(localOnly: boolean): {
 	return useMemo(
 		() => ({
 			isLoading: apps.isLoading,
-			apps: (apps.data ?? [])
-				// Account bots need a hub membership, even when they run on the desktop.
-				.filter(
-					([app]) => localOnly || app.visibility !== IAppVisibility.Offline,
-				)
-				.map(([app, metadata]) => ({ id: app.id, name: metadata?.name ?? "" })),
+			apps: libraryAppOptions(apps.data ?? [], localOnly),
 		}),
 		[apps.data, apps.isLoading, localOnly],
 	);
@@ -273,6 +265,7 @@ function AppRow({
 			<Checkbox
 				id={id}
 				checked={checked}
+				disabled={!canToggleApp(app, checked)}
 				onCheckedChange={(next) => onToggle(app.id, next === true)}
 			/>
 			<label
@@ -289,6 +282,13 @@ function AppRow({
 				{app.role === null && checked && (
 					<span className="text-[0.6875rem] text-warning">
 						{t("editor.abilities.appsLeft")}
+					</span>
+				)}
+				{app.refusesBots && (
+					<span
+						className={`text-[0.6875rem] ${checked ? "text-warning" : "text-muted-foreground"}`}
+					>
+						{t("editor.abilities.appsRefusesBots")}
 					</span>
 				)}
 				{app.role && (

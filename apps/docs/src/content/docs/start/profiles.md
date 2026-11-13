@@ -34,3 +34,7 @@ Sign in separately to any other Profiles that used that login.
 Each Profile can also have a personal Home layout. See
 [Customize your Home](/start/home/) for arranging widgets and choosing between
 personal, published, and bundled defaults.
+
+Each Profile also chooses which of your bots it shows, so a work Profile can
+leave out your personal bots. See
+[Hide bots in a profile](/bots/overview/#hide-bots-in-a-profile).

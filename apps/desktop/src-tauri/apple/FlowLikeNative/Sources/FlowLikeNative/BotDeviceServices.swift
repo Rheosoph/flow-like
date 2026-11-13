@@ -17,7 +17,7 @@ struct NativeBotDeviceOptions: Decodable {
     let text: String?
 
     func validate(snapshot: NativeSnapshot?) throws {
-        guard ["capabilities", "voice", "document", "photo", "summarize", "extract"].contains(operation) else {
+        guard ["capabilities", "voice", "document", "photo", "live_text", "summarize", "extract"].contains(operation) else {
             throw NativeBotDeviceFailure("invalid_input", "Unknown device operation.")
         }
         if operation == "capabilities" { return }
@@ -103,7 +103,7 @@ enum NativeBotLocalModel {
             try options.validate(snapshot: NativeStore.shared.catalog())
             if options.operation == "capabilities" {
                 let model = NativeBotLocalModel.availability()
-                var value: [String: Any] = ["voice": false, "document": false, "photo": false, "localAiAvailable": model.available]
+                var value: [String: Any] = ["voice": false, "document": false, "photo": false, "liveText": false, "localAiAvailable": model.available]
                 if let reason = model.reason { value["localAiReason"] = reason }
                 #if os(iOS)
                 value["voice"] = Bundle.main.object(forInfoDictionaryKey: "NSSpeechRecognitionUsageDescription") != nil
@@ -111,6 +111,7 @@ enum NativeBotLocalModel {
                 let camera = Bundle.main.object(forInfoDictionaryKey: "NSCameraUsageDescription") != nil
                 value["document"] = camera && VNDocumentCameraViewController.isSupported
                 value["photo"] = camera && UIImagePickerController.isSourceTypeAvailable(.camera)
+                value["liveText"] = camera && DataScannerViewController.isSupported
                 #endif
                 deliver(id, ["ok": true, "value": value], callback)
                 return
@@ -120,8 +121,8 @@ enum NativeBotLocalModel {
             #else
             guard NSApplication.shared.isActive else { throw NativeBotDeviceFailure("inactive", "Open Flow Like to use this device feature.") }
             #endif
-            let capture = ["voice", "document", "photo"].contains(options.operation)
-            guard !capture || !requests.values.contains(where: { ["voice", "document", "photo"].contains($0.options.operation) }) else {
+            let capture = ["voice", "document", "photo", "live_text"].contains(options.operation)
+            guard !capture || !requests.values.contains(where: { ["voice", "document", "photo", "live_text"].contains($0.options.operation) }) else {
                 throw NativeBotDeviceFailure("busy", "Finish the current recording or scan first.")
             }
             let request = NativeBotDeviceRequest(id: id, options: options, callback: callback)
@@ -168,7 +169,7 @@ enum NativeBotLocalModel {
         observer = NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.fail("cancelled", "The device request stopped when Flow Like left the foreground.") }
         }
-        if ["voice", "document", "photo"].contains(options.operation) {
+        if ["voice", "document", "photo", "live_text"].contains(options.operation) {
             #if os(iOS)
             startCapture()
             #else

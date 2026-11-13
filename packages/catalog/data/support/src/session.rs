@@ -76,6 +76,7 @@ pub struct CachedDataFusionSession {
     pub ctx: Arc<SessionContext>,
     lance_tables: Arc<Mutex<HashMap<String, LanceTableRegistration>>>,
     pending_mounts: Arc<Mutex<Vec<Arc<dyn DeferredMount>>>>,
+    applied_mounts: Arc<Mutex<Vec<(Option<String>, String)>>>,
 }
 
 #[cfg(feature = "execute")]
@@ -143,7 +144,38 @@ impl CachedDataFusionSession {
             ctx: Arc::new(ctx),
             lance_tables: Arc::new(Mutex::new(HashMap::new())),
             pending_mounts: Arc::new(Mutex::new(Vec::new())),
+            applied_mounts: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// Stable fingerprint of what the session holds or is about to hold: applied and
+    /// queued mounts in mount order, plus tracked Lance tables with their generation.
+    /// Reads only in-memory state — nothing is materialized and no I/O happens.
+    pub async fn content_identity(&self) -> String {
+        let mut identity = String::new();
+        for (key, description) in self.applied_mounts.lock().await.iter() {
+            identity.push_str(&format!(
+                "mount\t{}\t{description}\n",
+                key.as_deref().unwrap_or("")
+            ));
+        }
+        for mount in self.pending_mounts.lock().await.iter() {
+            identity.push_str(&format!(
+                "mount\t{}\t{}\n",
+                mount.dedupe_key().unwrap_or_default(),
+                mount.describe()
+            ));
+        }
+        let lance = self.lance_tables.lock().await;
+        let mut tables: Vec<_> = lance
+            .iter()
+            .map(|(name, registration)| (name.as_str(), registration.generation))
+            .collect();
+        tables.sort_unstable();
+        for (name, generation) in tables {
+            identity.push_str(&format!("lance\t{name}\t{generation}\n"));
+        }
+        identity
     }
 
     /// Registers `provider` as `table`, replacing whatever is registered under that name.
@@ -185,6 +217,12 @@ impl CachedDataFusionSession {
                 flow_like_types::anyhow!("Deferred mount of {} failed: {err}", mount.describe())
             })?;
             pending.remove(0);
+            let mut applied = self.applied_mounts.lock().await;
+            let key = mount.dedupe_key();
+            if key.is_some() {
+                applied.retain(|(applied_key, _)| *applied_key != key);
+            }
+            applied.push((key, mount.describe()));
         }
         Ok(())
     }

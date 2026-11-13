@@ -59,6 +59,20 @@ def triggers(workflow):
 
 
 class StandaloneReleaseWorkflowTests(unittest.TestCase):
+    def test_native_worker_smokes_gate_signing_the_exact_published_digest(self):
+        job = job_body("worker-smoke")
+        self.assertIn("needs: [prepare, container]", job)
+        for platform, runner in [("linux/amd64", "namespace-profile-linux-amd-large-24"),
+                                 ("linux/arm64", "namespace-profile-linux-arm-large-24")]:
+            self.assertIn(f"platform: {platform}\n            runner: {runner}", job)
+        self.assertIn("runs-on: ${{ matrix.runner }}", job)
+        self.assertIn("RELEASE_IMAGE: ${{ needs.prepare.outputs.image }}@${{ needs.container.outputs.digest }}", job)
+        self.assertIn('standalone_worker_smoke.py --image "$RELEASE_IMAGE" --platform "$RELEASE_PLATFORM"', job)
+        self.assertNotIn("STANDALONE_RELEASE_SIGNING_KEY", job)
+        self.assertIn("needs: [prepare, binaries, container, worker-smoke]", job_body("signed-bundle"))
+        self.assertIn("test_standalone_release*.py", job_body("prepare"))
+        self.assertTrue(Path(__file__).with_name("test_standalone_release_worker.py").is_file())
+
     def run_build(self, failure=""):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)

@@ -29,42 +29,71 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  typescript:
+  sdks:
+    name: Platform SDK checks
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        id: checkout
       - uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
+        id: bun
         with:
-          bun-version: 1.3.1
-      - run: bun install --frozen-lockfile --filter @flow-like/sdk
-      - run: bun run --cwd libs/platform/nodejs build
-      - run: bun test ./libs/platform/nodejs/tests
-      - run: bun run --cwd libs/platform/nodejs check:package
+          bun-version: 1.4.4
+      - name: Install TypeScript SDK dependencies
+        id: node-install
+        run: bun install --frozen-lockfile --filter @flow-like/sdk
+      - name: Build the TypeScript SDK
+        id: node-build
+        run: bun run --cwd libs/platform/nodejs build
+      - name: Test the TypeScript SDK
+        if: ${{ !cancelled() && steps.node-install.outcome == 'success' }}
+        run: bun test ./libs/platform/nodejs/tests
+      - name: Check the TypeScript package
+        if: ${{ !cancelled() && steps.node-build.outcome == 'success' }}
+        run: bun run --cwd libs/platform/nodejs check:package
 
-  python:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.10', '3.13']
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # A failed SDK must not suppress checks for the other languages or Python versions.
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        id: python310
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         with:
-          python-version: ${{ matrix.python-version }}
-      - run: python -m pip install build twine
-      - run: python -m build libs/platform/python --outdir "$RUNNER_TEMP/python-sdk"
-      - run: python -m twine check "$RUNNER_TEMP"/python-sdk/*
-      - run: python -m pip install "$RUNNER_TEMP"/python-sdk/*.whl
-      - run: python -m unittest discover -s libs/platform/python/tests
+          python-version: '3.10'
+      - name: Build and test the Python 3.10 SDK
+        if: ${{ !cancelled() && steps.python310.outcome == 'success' }}
+        run: |
+          python -m pip install build twine
+          python -m build libs/platform/python --outdir "$RUNNER_TEMP/python-sdk-3.10"
+          python -m twine check "$RUNNER_TEMP"/python-sdk-3.10/*
+          python -m pip install "$RUNNER_TEMP"/python-sdk-3.10/*.whl
+          python -m unittest discover -s libs/platform/python/tests
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        id: python313
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        with:
+          python-version: '3.13'
+      - name: Build and test the Python 3.13 SDK
+        if: ${{ !cancelled() && steps.python313.outcome == 'success' }}
+        run: |
+          python -m pip install build twine
+          python -m build libs/platform/python --outdir "$RUNNER_TEMP/python-sdk-3.13"
+          python -m twine check "$RUNNER_TEMP"/python-sdk-3.13/*
+          python -m pip install "$RUNNER_TEMP"/python-sdk-3.13/*.whl
+          python -m unittest discover -s libs/platform/python/tests
 
-  rust:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: ./.github/actions/setup-rust
+        id: rust
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
       - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+        if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
         with:
           shared-key: platform-sdk
-      - run: cargo test --locked -p flow-like-platform
-      - run: cargo clippy --locked -p flow-like-platform --all-targets -- -D warnings
-      - run: cargo package --locked -p flow-like-platform
+      - name: Test the Rust SDK
+        if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
+        run: cargo test --locked -p flow-like-platform
+      - name: Lint the Rust SDK
+        if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
+        run: cargo clippy --locked -p flow-like-platform --all-targets -- -D warnings
+      - name: Package the Rust SDK
+        if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
+        run: cargo package --locked -p flow-like-platform

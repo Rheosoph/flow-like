@@ -6,8 +6,7 @@
 //! goes to its owner, who accepts and sets limits as for a room.
 
 use super::{
-    INBOX_MEMBER_NOT_ALLOWED, INBOX_REQUEST_LIMIT, MEMBER_BLOCKED, MEMBER_DECLINED,
-    MEMBER_PENDING,
+    INBOX_MEMBER_NOT_ALLOWED, INBOX_REQUEST_LIMIT, MEMBER_BLOCKED, MEMBER_DECLINED, MEMBER_PENDING,
     delivery::{
         Addressed, BotDelivery, BotRecipient, bot_recipients, deliver_to_bots, live_bots,
         people_to_wake,

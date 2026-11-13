@@ -7,6 +7,8 @@
 //! /channels/{channel_id}/inbox/{request_id}   { "payload": "<ChannelPush JSON>" }   client create-only, replies
 //! /channels/{channel_id}/inbound/{push_id}    { "payload": "<ChannelPush JSON>" }   client create-only, inbound/cancel
 //! /channels/{channel_id}/meta                 { "owner", "created_at" }             API only (bypasses rules)
+//! /realtime/{scope}/wake                      RealtimeWakeup                        API overwrites; the account's realtime token reads
+//! /realtime/{scope}/reply                     RealtimeReply                         API overwrites, removes when final; same read rule
 //! ```
 //!
 //! Clients sign in with a custom token whose claims are [`client_claims`]; the executor signs in
@@ -41,6 +43,10 @@ pub const DATABASE_RULES: &str = include_str!("database.rules.json");
 pub const MAX_CHANNEL_ID_BYTES: usize = 768;
 /// Upper bound the rules enforce on the `payload` string of a client-created node.
 pub const MAX_PAYLOAD_CHARS: usize = 16384;
+/// The node under `/realtime/{scope}` that carries an account's wakeups.
+pub const REALTIME_WAKE_NODE: &str = "wake";
+/// Its sibling for the replies a host is still writing, so a reply never overwrites a wakeup.
+pub const REALTIME_REPLY_NODE: &str = "reply";
 
 const FORBIDDEN_KEY_CHARS: &[char] = &['.', '$', '#', '[', ']', '/'];
 
@@ -71,6 +77,10 @@ pub fn inbound_path(channel_id: &str) -> flow_like_types::Result<String> {
 
 pub fn meta_path(channel_id: &str) -> flow_like_types::Result<String> {
     Ok(format!("{}/meta", channel_path(channel_id)?))
+}
+
+pub fn realtime_path(scope: &str, node: &str) -> String {
+    format!("/realtime/{scope}/{node}")
 }
 
 pub(crate) fn validate_key(label: &str, key: &str) -> flow_like_types::Result<()> {
@@ -190,6 +200,14 @@ mod tests {
         assert_eq!(inbound_path("run-1").unwrap(), "/channels/run-1/inbound");
         assert_eq!(meta_path("run-1").unwrap(), "/channels/run-1/meta");
         assert_eq!(channel_path("run-1").unwrap(), "/channels/run-1");
+        assert_eq!(
+            realtime_path("abc", REALTIME_WAKE_NODE),
+            "/realtime/abc/wake"
+        );
+        assert_eq!(
+            realtime_path("abc", REALTIME_REPLY_NODE),
+            "/realtime/abc/reply"
+        );
     }
 
     #[test]

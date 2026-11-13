@@ -116,6 +116,80 @@ describe("sanitizeCallPresence", () => {
 	});
 });
 
+describe("interrupt presence", () => {
+	const record = {
+		message_id: "msg_abc",
+		heard_chars: 10,
+		spoken_chars: 40,
+		at: 5,
+	};
+
+	test("keeps well-formed interrupt requests and reports", () => {
+		const value = sanitizeCallPresence({
+			...presence("c", "p"),
+			interruptBot: { botId: "bot:a", at: 7 },
+			interruptedSpeech: record,
+		});
+		expect(value?.interruptBot).toEqual({ botId: "bot:a", at: 7 });
+		expect(value?.interruptedSpeech).toEqual(record);
+	});
+
+	test("drops malformed or out-of-range values", () => {
+		for (const interruptBot of [
+			null,
+			"bot",
+			{ botId: "bad id", at: 1 },
+			{ botId: "bot", at: "1" },
+			{ botId: "bot", at: Number.NaN },
+			{ botId: "bot", at: 0 },
+		]) {
+			expect(
+				sanitizeCallPresence({ ...presence("c", "p"), interruptBot })
+					?.interruptBot,
+			).toBeUndefined();
+		}
+		for (const patch of [
+			{ message_id: "bad id" },
+			{ spoken_chars: 0, heard_chars: 0 },
+			{ heard_chars: 41 },
+			{ heard_chars: -1 },
+			{ spoken_chars: 64_001 },
+			{ heard_chars: 1.5 },
+			{ at: -1 },
+		]) {
+			expect(
+				sanitizeCallPresence({
+					...presence("c", "p"),
+					interruptedSpeech: { ...record, ...patch },
+				})?.interruptedSpeech,
+			).toBeUndefined();
+		}
+	});
+
+	test("reach derived participants", () => {
+		const live = deriveLiveCall(
+			states([
+				[
+					3,
+					{
+						sub: "me",
+						[CALL_FIELD]: {
+							...presence("c", "pm"),
+							interruptBot: { botId: "bot-1", at: 9 },
+						},
+					},
+				],
+			]),
+			3,
+			new Set(["me"]),
+		);
+		expect(live?.participants[0]?.interruptBot).toEqual({
+			botId: "bot-1",
+			at: 9,
+		});
+	});
+});
+
 describe("deriveLiveCall", () => {
 	const members = new Set(["anna", "paul", "me"]);
 
@@ -395,15 +469,21 @@ class FakePeer implements CallPeerLike {
 	removeStream(stream: MediaStream) {
 		this.removed.push(stream);
 	}
-	on(event: "stream" | "close", listener: (s?: MediaStream) => void) {
+	on(
+		event: "stream" | "close" | "connect",
+		listener: (s?: MediaStream) => void,
+	) {
 		const set = this.handlers.get(event) ?? new Set();
 		set.add(listener);
 		this.handlers.set(event, set);
 	}
-	off(event: "stream" | "close", listener: (s?: MediaStream) => void) {
+	off(
+		event: "stream" | "close" | "connect",
+		listener: (s?: MediaStream) => void,
+	) {
 		this.handlers.get(event)?.delete(listener);
 	}
-	emit(event: "stream" | "close", stream?: MediaStream) {
+	emit(event: "stream" | "close" | "connect", stream?: MediaStream) {
 		for (const l of [...(this.handlers.get(event) ?? [])]) l(stream);
 	}
 	listeners(event: string) {
@@ -411,8 +491,14 @@ class FakePeer implements CallPeerLike {
 	}
 }
 
+interface FakeConn {
+	peer?: unknown;
+	connected?: boolean;
+	glareToken?: number;
+}
+
 class FakeProvider {
-	room = { webrtcConns: new Map<string, { peer?: unknown }>() };
+	room = { webrtcConns: new Map<string, FakeConn>() };
 	private peersListeners = new Set<(change: unknown) => void>();
 	on(_: "peers", l: (change: unknown) => void) {
 		this.peersListeners.add(l);
@@ -525,6 +611,36 @@ describe("createCallEngine", () => {
 		expect(provider.listenerCount).toBe(0);
 		expect(peer.listeners("stream")).toBe(0);
 		expect(peer.listeners("close")).toBe(0);
+		expect(peer.listeners("connect")).toBe(0);
+	});
+
+	test("a peer keeps its glare token for the first handshake and loses it once connected", () => {
+		const provider = new FakeProvider();
+		const engine = createCallEngine(provider);
+		const peer = provider.connect("a");
+		const conn = provider.room.webrtcConns.get("a") as FakeConn;
+		conn.glareToken = 1_731_312_000_000.5;
+		provider.fire();
+		expect(conn.glareToken).toBe(1_731_312_000_000.5);
+
+		conn.connected = true;
+		peer.emit("connect");
+		expect(conn.glareToken).toBeUndefined();
+		conn.glareToken = 1_731_312_003_000.5;
+		expect(conn.glareToken).toBeUndefined();
+		expect(JSON.parse(JSON.stringify({ token: conn.glareToken }))).toEqual({});
+		engine.dispose();
+	});
+
+	test("a peer that was connected before the call engine carries no glare token", () => {
+		const provider = new FakeProvider();
+		provider.connect("a");
+		const conn = provider.room.webrtcConns.get("a") as FakeConn;
+		conn.connected = true;
+		conn.glareToken = 1_731_312_000_000.5;
+		const engine = createCallEngine(provider);
+		expect(conn.glareToken).toBeUndefined();
+		engine.dispose();
 	});
 });
 

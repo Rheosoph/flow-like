@@ -157,6 +157,7 @@ mod envelope {
             "file_read",
             "file_save",
             "file_write",
+            "file_link",
             "knowledge_create",
             "knowledge_add",
             "knowledge_search",
@@ -224,6 +225,26 @@ mod files {
         assert_eq!(ok(&read).result["text"], "# hello");
         assert_eq!(read.result["kind"], "text");
         assert_eq!(read.result["markdown_url"], url);
+        assert_eq!(read.result["untrusted"], true);
+        assert!(!read.warnings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_saved_web_response_reads_back_marked() {
+        let env = FakeEnv::new().await;
+        env.put(
+            WORKSPACE,
+            "bot/web/abc-feed.json",
+            b"{\"a\":1}",
+            "application/json",
+        );
+        let read = call(
+            &env,
+            "file_read",
+            json!({ "file": "bot/web/abc-feed.json" }),
+        )
+        .await;
+        assert_eq!(ok(&read).result["untrusted"], true);
     }
 
     #[test]
@@ -527,6 +548,62 @@ mod files {
             err_code(&call(&env, "file_read", json!({ "file": "#x.a1" })).await),
             "invalid_args"
         );
+    }
+
+    #[tokio::test]
+    async fn a_link_names_the_file_and_when_it_expires() {
+        let env = FakeEnv::new().await;
+        env.signs_links.store(true, Ordering::SeqCst);
+        env.put(WORKSPACE, "bot/files/logo.png", b"png", "image/png");
+        let linked = call(&env, "file_link", json!({ "file": "bot/files/logo.png" })).await;
+        let result = &ok(&linked).result;
+        assert_eq!(
+            result["url"],
+            format!("https://files.test/{WORKSPACE}/bot/files/logo.png")
+        );
+        assert_eq!(result["name"], "logo.png");
+        assert_eq!(result["mime"], "image/png");
+        assert_eq!(result["bytes"], 3);
+        assert_eq!(result["expires_at"], "2026-01-01T00:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn a_link_follows_the_read_rules_and_says_when_none_can_be_made() {
+        let env = FakeEnv::new().await;
+        env.put(OTHER_APP, "docs/plan.md", b"plan", "text/markdown");
+        let other = call(
+            &env,
+            "file_link",
+            json!({ "file": format!("app:{OTHER_APP}/docs/plan.md") }),
+        )
+        .await;
+        assert_eq!(err_code(&other), "scope_refused");
+
+        let handle = handle_for("conversation_c1", "f1.png", b"png", "image/png");
+        env.put("conversation_c1", "f1.png", b"png", "image/png");
+        env.granted.lock().expect("granted").push(handle.clone());
+        let unsigned = call(&env, "file_link", json!({ "file": handle })).await;
+        assert_eq!(err_code(&unsigned), "not_supported");
+
+        env.signs_links.store(true, Ordering::SeqCst);
+        let signed = call(&env, "file_link", json!({ "file": handle })).await;
+        assert_eq!(
+            ok(&signed).result["url"],
+            "https://files.test/conversation_c1/f1.png"
+        );
+        assert_eq!(
+            err_code(&call(&env, "file_link", json!({ "file": "bot/missing.txt" })).await),
+            "not_found"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_attachment_number_no_host_serves_points_at_the_handle() {
+        let env = FakeEnv::new().await;
+        let missing = call(&env, "file_save", json!({ "file": "#17.a1" })).await;
+        assert_eq!(err_code(&missing), "not_found");
+        let message = &missing.error.as_ref().expect("error").message;
+        assert!(message.contains("file = {"), "{message}");
     }
 
     #[tokio::test]
@@ -1533,8 +1610,13 @@ mod documents {
                 .contains("what changed in Q3?")
         );
         assert_eq!(outcome.result["pages"], 12);
-        assert_eq!(outcome.saved[0].path, "bot/notes/q3.summary.md");
-        assert_eq!(outcome.result["notes"]["path"], "bot/notes/q3.summary.md");
+        let notes = &outcome.saved[0].path;
+        assert!(
+            notes.starts_with("bot/notes/") && notes.ends_with("-q3.summary.md"),
+            "{notes}"
+        );
+        assert_eq!(outcome.result["notes"]["path"], json!(notes));
+        assert_eq!(outcome.result["untrusted"], true);
         assert_eq!(
             (outcome.usage.model_in, outcome.usage.model_out),
             (1200, 80)
@@ -1654,8 +1736,13 @@ mod documents {
         assert_eq!(results.len(), 2);
         assert_eq!(results[1]["value"]["first_word"], "Globex");
         assert_eq!(outcome.saved.len(), 2);
-        assert_eq!(outcome.saved[0].path, "bot/extractions/inv1.json");
-        assert!(env.get(WORKSPACE, "bot/extractions/inv2.json").is_some());
+        let (first, second) = (&outcome.saved[0].path, &outcome.saved[1].path);
+        assert!(
+            first.starts_with("bot/extractions/") && first.ends_with("-inv1.json"),
+            "{first}"
+        );
+        assert!(env.get(WORKSPACE, second).is_some());
+        assert_eq!(outcome.result["untrusted"], true);
         assert_eq!(
             env.backend().extractions.lock().expect("e").as_slice(),
             ["vendor only", "vendor only"]
@@ -1731,6 +1818,130 @@ mod documents {
         );
     }
 
+    fn scanned_pdf(pages: usize, text: &str) -> Vec<u8> {
+        format!("%PDF-1.7 PAGES:{pages} {} {text}", crate::testing::SCANNED).into_bytes()
+    }
+
+    #[tokio::test]
+    async fn extract_reads_scanned_documents_with_the_model() {
+        let env = FakeEnv::new().await;
+        env.put(
+            WORKSPACE,
+            "scan.pdf",
+            &scanned_pdf(1, "ACME"),
+            "application/pdf",
+        );
+        let outcome = call(
+            &env,
+            "file_extract",
+            json!({ "files": ["scan.pdf"], "schema": {"a": 1} }),
+        )
+        .await;
+        assert_eq!(
+            ok(&outcome).result["results"][0]["value"]["first_word"],
+            "Transcribed"
+        );
+        assert_eq!(env.backend().readings.lock().expect("r").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn extract_content_transcribes_and_saves_the_full_text() {
+        let env = FakeEnv::new().await;
+        env.put(
+            WORKSPACE,
+            "scan.pdf",
+            &scanned_pdf(2, "Invoice 42"),
+            "application/pdf",
+        );
+        let outcome = call(&env, "file_extract_content", json!({ "file": "scan.pdf" })).await;
+        ok(&outcome);
+        assert!(
+            outcome.result["content"]
+                .as_str()
+                .expect("content")
+                .ends_with("Invoice 42")
+        );
+        assert_eq!(outcome.result["pages"], 2);
+        assert_eq!(outcome.result["truncated"], false);
+        let saved = &outcome.saved[0].path;
+        assert!(
+            saved.starts_with("bot/extractions/") && saved.ends_with("-scan.md"),
+            "{saved}"
+        );
+        assert!(env.get(WORKSPACE, saved).is_some());
+        assert_eq!(outcome.result["untrusted"], true);
+        assert!(outcome.usage.model_in > 0, "the model reading is counted");
+        assert!(outcome.warnings.iter().any(|w| w == "read by the model"));
+    }
+
+    #[tokio::test]
+    async fn extract_adds_up_model_reads_over_the_whole_call() {
+        let env = FakeEnv::new().await;
+        for name in ["a.pdf", "b.pdf", "c.pdf"] {
+            env.put(WORKSPACE, name, &scanned_pdf(40, name), "application/pdf");
+        }
+        let args = json!({ "files": ["a.pdf", "b.pdf", "c.pdf"], "schema": {"a": 1} });
+        let asked = call(&env, "file_extract", args.clone()).await;
+        assert_eq!(asked.status, Status::NeedsApproval);
+        assert_eq!(env.backend().calls(), 0);
+        env.expensive_ok.store(true, Ordering::SeqCst);
+        let done = call(&env, "file_extract", args).await;
+        ok(&done);
+        assert!(done.usage.model_in >= 3 * 40 * 1500);
+    }
+
+    #[tokio::test]
+    async fn outputs_of_same_named_files_do_not_overwrite_each_other() {
+        let env = FakeEnv::new().await;
+        env.put(WORKSPACE, "one/long.png", b"first", "image/png");
+        env.put(WORKSPACE, "two/long.png", b"second", "image/png");
+        let one = call(
+            &env,
+            "file_extract_content",
+            json!({ "file": "one/long.png" }),
+        )
+        .await;
+        let two = call(
+            &env,
+            "file_extract_content",
+            json!({ "file": "two/long.png" }),
+        )
+        .await;
+        ok(&one);
+        ok(&two);
+        assert_ne!(one.saved[0].path, two.saved[0].path);
+    }
+
+    #[tokio::test]
+    async fn extract_content_cuts_long_text_but_saves_all_of_it() {
+        let env = FakeEnv::new().await;
+        let long = "ü".repeat(30_000);
+        env.put(WORKSPACE, "long.png", long.as_bytes(), "image/png");
+        let outcome = call(&env, "file_extract_content", json!({ "file": "long.png" })).await;
+        ok(&outcome);
+        assert_eq!(outcome.result["truncated"], true);
+        assert!(!outcome.truncated, "cut by the tool, not by the inline cap");
+        let content = outcome.result["content"].as_str().expect("content");
+        assert!(content.len() < crate::ToolEnv::limits(&env).inline_cap_bytes);
+        assert!(content.starts_with("Transcribed ü"));
+        let saved = env.get(WORKSPACE, &outcome.saved[0].path).expect("saved");
+        assert!(String::from_utf8_lossy(&saved).ends_with(&long));
+    }
+
+    #[tokio::test]
+    async fn extract_content_asks_before_big_documents() {
+        let env = FakeEnv::new().await;
+        env.put(
+            WORKSPACE,
+            "huge.pdf",
+            &scanned_pdf(150, "x"),
+            "application/pdf",
+        );
+        let asked = call(&env, "file_extract_content", json!({ "file": "huge.pdf" })).await;
+        assert_eq!(asked.status, Status::NeedsApproval);
+        assert_eq!(env.backend().calls(), 0);
+    }
+
     #[tokio::test]
     async fn pdf_render_saves_every_page_and_shows_at_most_four() {
         let env = FakeEnv::new().await;
@@ -1749,10 +1960,18 @@ mod documents {
         ok(&outcome);
         assert_eq!(outcome.saved.len(), 6);
         assert_eq!(outcome.images.len(), 4);
-        assert_eq!(outcome.saved[0].path, "bot/renders/Deck v2/page-001.png");
+        let folder = outcome.saved[0]
+            .path
+            .strip_suffix("/page-001.png")
+            .expect("page folder")
+            .to_string();
+        assert!(
+            folder.starts_with("bot/renders/") && folder.ends_with("-Deck v2"),
+            "{folder}"
+        );
         assert_eq!(outcome.saved[5].mime, "image/png");
         assert!(
-            env.get(WORKSPACE, "bot/renders/Deck v2/page-006.png")
+            env.get(WORKSPACE, &format!("{folder}/page-006.png"))
                 .is_some()
         );
         let pages = outcome.result["pages"].as_array().expect("pages");
@@ -3114,19 +3333,33 @@ mod authoring {
         assert_eq!(first.saved[0].path, "bot/exports/Quarterly Report.docx");
         assert_eq!(first.saved[0].app_id, WORKSPACE);
         assert!(first.saved[0].mime.contains("wordprocessingml"));
-        assert_eq!(first.result["handle"]["path"], "bot/exports/Quarterly Report.docx");
+        assert_eq!(
+            first.result["handle"]["path"],
+            "bot/exports/Quarterly Report.docx"
+        );
         assert_eq!(first.result["handle"]["bytes"], first.saved[0].bytes);
         assert_eq!(first.result["handle"]["sha256"], first.saved[0].sha256);
-        assert!(first.warnings.iter().any(|w| w.contains("fake docx warning")));
+        assert!(
+            first
+                .warnings
+                .iter()
+                .any(|w| w.contains("fake docx warning"))
+        );
 
-        env.put(WORKSPACE, "bot/exports/Quarterly Report.docx", b"MINE", "text/plain");
+        env.put(
+            WORKSPACE,
+            "bot/exports/Quarterly Report.docx",
+            b"MINE",
+            "text/plain",
+        );
         let second = call(&env, "document_create", args.clone()).await;
         ok(&second);
         assert_eq!(second.saved[0].path, "bot/exports/Quarterly Report-2.docx");
         let third = call(&env, "document_create", args).await;
         assert_eq!(third.saved[0].path, "bot/exports/Quarterly Report-3.docx");
         assert_eq!(
-            env.get(WORKSPACE, "bot/exports/Quarterly Report.docx").expect("kept"),
+            env.get(WORKSPACE, "bot/exports/Quarterly Report.docx")
+                .expect("kept"),
             "MINE".as_bytes()
         );
     }
@@ -3180,27 +3413,72 @@ mod authoring {
         let code_of = |outcome: ToolOutcome| err_code(&outcome);
         for (args, expected) in [
             (json!({ "format": "pdf", "name": "a" }), "invalid_args"),
-            (json!({ "format": "pdf", "name": "a", "markdown": "  " }), "invalid_args"),
-            (json!({ "format": "pdf", "name": "  ", "markdown": "x" }), "invalid_args"),
-            (json!({ "format": "pdf", "name": "a", "markdown": "x", "sheets": [] }), "invalid_args"),
-            (json!({ "format": "docx", "name": "a", "markdown": "x".repeat(500_001) }), "too_large"),
+            (
+                json!({ "format": "pdf", "name": "a", "markdown": "  " }),
+                "invalid_args",
+            ),
+            (
+                json!({ "format": "pdf", "name": "  ", "markdown": "x" }),
+                "invalid_args",
+            ),
+            (
+                json!({ "format": "pdf", "name": "a", "markdown": "x", "sheets": [] }),
+                "invalid_args",
+            ),
+            (
+                json!({ "format": "docx", "name": "a", "markdown": "x".repeat(500_001) }),
+                "too_large",
+            ),
             (json!({ "format": "pptx", "name": "a" }), "invalid_args"),
-            (json!({ "format": "pptx", "name": "a", "slides": [] }), "invalid_args"),
-            (json!({ "format": "pptx", "name": "a", "slides": (0..101).map(|i| json!({ "title": i.to_string() })).collect::<Vec<_>>() }), "invalid_args"),
-            (json!({ "format": "pptx", "name": "a", "slides": [{ "title": "t", "layout": "table" }] }), "invalid_args"),
-            (json!({ "format": "pptx", "name": "a", "slides": [{ "title": "t", "chart": { "kind": "line", "categories": ["a"], "series": [{ "name": "s", "values": [1, 2] }] } }] }), "invalid_args"),
-            (json!({ "format": "xlsx", "name": "a", "sheets": [] }), "invalid_args"),
-            (json!({ "format": "xlsx", "name": "a", "sheets": (0..51).map(|i| json!({ "name": i.to_string(), "rows": [] })).collect::<Vec<_>>() }), "invalid_args"),
-            (json!({ "format": "xlsx", "name": "a", "sheets": [{ "name": "s", "rows": [[{ "nested": 1 }]] }] }), "invalid_args"),
-            (json!({ "format": "xlsx", "name": "a", "sheets": [{ "name": "s", "rows": (0..101).map(|_| vec![1; 1000]).collect::<Vec<_>>() }] }), "invalid_args"),
+            (
+                json!({ "format": "pptx", "name": "a", "slides": [] }),
+                "invalid_args",
+            ),
+            (
+                json!({ "format": "pptx", "name": "a", "slides": (0..101).map(|i| json!({ "title": i.to_string() })).collect::<Vec<_>>() }),
+                "invalid_args",
+            ),
+            (
+                json!({ "format": "pptx", "name": "a", "slides": [{ "title": "t", "layout": "table" }] }),
+                "invalid_args",
+            ),
+            (
+                json!({ "format": "pptx", "name": "a", "slides": [{ "title": "t", "chart": { "kind": "line", "categories": ["a"], "series": [{ "name": "s", "values": [1, 2] }] } }] }),
+                "invalid_args",
+            ),
+            (
+                json!({ "format": "xlsx", "name": "a", "sheets": [] }),
+                "invalid_args",
+            ),
+            (
+                json!({ "format": "xlsx", "name": "a", "sheets": (0..51).map(|i| json!({ "name": i.to_string(), "rows": [] })).collect::<Vec<_>>() }),
+                "invalid_args",
+            ),
+            (
+                json!({ "format": "xlsx", "name": "a", "sheets": [{ "name": "s", "rows": [[{ "nested": 1 }]] }] }),
+                "invalid_args",
+            ),
+            (
+                json!({ "format": "xlsx", "name": "a", "sheets": [{ "name": "s", "rows": (0..101).map(|_| vec![1; 1000]).collect::<Vec<_>>() }] }),
+                "invalid_args",
+            ),
             (json!({ "format": "odt", "name": "a" }), "invalid_args"),
         ] {
-            assert_eq!(code_of(call(&env, "document_create", args.clone()).await), expected, "{args}");
+            assert_eq!(
+                code_of(call(&env, "document_create", args.clone()).await),
+                expected,
+                "{args}"
+            );
         }
         assert!(env.backend().created.lock().expect("c").is_empty());
         assert!(env.writes.lock().expect("w").is_empty());
         env.scope.workspace = None;
-        let none = call(&env, "document_create", json!({ "format": "pdf", "name": "a", "markdown": "x" })).await;
+        let none = call(
+            &env,
+            "document_create",
+            json!({ "format": "pdf", "name": "a", "markdown": "x" }),
+        )
+        .await;
         assert_eq!(err_code(&none), "no_workspace");
     }
 
@@ -3217,7 +3495,11 @@ mod authoring {
         ok(&outcome);
         assert!(env.backend().created.lock().expect("c")[0].ends_with("|1"));
         assert_eq!(
-            outcome.warnings.iter().filter(|w| w.contains("none.png") || w.contains("x.test")).count(),
+            outcome
+                .warnings
+                .iter()
+                .filter(|w| w.contains("none.png") || w.contains("x.test"))
+                .count(),
             2
         );
     }
@@ -3225,7 +3507,12 @@ mod authoring {
     #[tokio::test]
     async fn fill_writes_a_new_file_and_names_what_did_not_match() {
         let env = FakeEnv::new().await;
-        env.put(WORKSPACE, "bot/files/letter.docx", b"DOCX:Dear {{name}}", "application/octet-stream");
+        env.put(
+            WORKSPACE,
+            "bot/files/letter.docx",
+            b"DOCX:Dear {{name}}",
+            "application/octet-stream",
+        );
         let outcome = call(
             &env,
             "document_fill",
@@ -3239,7 +3526,8 @@ mod authoring {
         assert_eq!(outcome.result["missing"], json!(["ghost1"]));
         assert!(!outcome.warnings.is_empty());
         assert_eq!(
-            env.get(WORKSPACE, "bot/files/letter.docx").expect("template"),
+            env.get(WORKSPACE, "bot/files/letter.docx")
+                .expect("template"),
             "DOCX:Dear {{name}}".as_bytes()
         );
         let again = call(
@@ -3259,13 +3547,32 @@ mod authoring {
         env.put(OTHER_APP, "t.docx", b"DOCX:x", "application/octet-stream");
         for (args, expected) in [
             (json!({ "template": "t.docx" }), "invalid_args"),
-            (json!({ "template": "t.docx", "values": { "ghost": "x" } }), "invalid_args"),
-            (json!({ "template": "t.txt", "values": { "a": "x" } }), "unsupported_file"),
-            (json!({ "template": "gone.docx", "values": { "a": "x" } }), "not_found"),
-            (json!({ "template": "t.docx", "tables": { "a": [{ "x": 1 }, [1]] } }), "invalid_args"),
-            (json!({ "template": format!("app:{OTHER_APP}/t.docx"), "values": { "a": "x" } }), "scope_refused"),
+            (
+                json!({ "template": "t.docx", "values": { "ghost": "x" } }),
+                "invalid_args",
+            ),
+            (
+                json!({ "template": "t.txt", "values": { "a": "x" } }),
+                "unsupported_file",
+            ),
+            (
+                json!({ "template": "gone.docx", "values": { "a": "x" } }),
+                "not_found",
+            ),
+            (
+                json!({ "template": "t.docx", "tables": { "a": [{ "x": 1 }, [1]] } }),
+                "invalid_args",
+            ),
+            (
+                json!({ "template": format!("app:{OTHER_APP}/t.docx"), "values": { "a": "x" } }),
+                "scope_refused",
+            ),
         ] {
-            assert_eq!(err_code(&call(&env, "document_fill", args.clone()).await), expected, "{args}");
+            assert_eq!(
+                err_code(&call(&env, "document_fill", args.clone()).await),
+                expected,
+                "{args}"
+            );
         }
         assert!(env.get(WORKSPACE, "bot/exports/t-filled.docx").is_none());
     }
@@ -3273,7 +3580,10 @@ mod authoring {
     #[test]
     fn export_names_are_cleaned() {
         use crate::documents::export_stem;
-        assert_eq!(export_stem("../evil/Report.PDF", "pdf").expect("stem"), "Report");
+        assert_eq!(
+            export_stem("../evil/Report.PDF", "pdf").expect("stem"),
+            "Report"
+        );
         assert_eq!(export_stem("a:b?.docx", "docx").expect("stem"), "a_b_");
         assert!(export_stem("  ", "pdf").is_err());
     }

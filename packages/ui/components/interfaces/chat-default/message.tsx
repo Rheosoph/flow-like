@@ -60,6 +60,7 @@ import { AttachmentStrip } from "./attachment-strip";
 import type { IAttachment, IMessage } from "./chat-db";
 import { ChatMessageError } from "./chat-message-error";
 import { useProcessedAttachments } from "./hooks/use-processed-attachments";
+import { useResolvedAttachments } from "./hooks/use-resolved-attachments";
 import {
 	type InlineAnchoredContent,
 	buildInlineSegments,
@@ -603,8 +604,8 @@ export const MessageComponent = memo(
 			};
 		}, [message.inner.content, message.files, isUser]);
 
-		const processedAttachments = useProcessedAttachments(
-			messageContent.attachments,
+		const processedAttachments = useResolvedAttachments(
+			useProcessedAttachments(messageContent.attachments),
 		);
 
 		// A long paste should not push the answer off screen. The cap is measured
@@ -631,6 +632,7 @@ export const MessageComponent = memo(
 		}, [isUser]);
 
 		const handleFileClick = useCallback((file: ProcessedAttachment) => {
+			if (file.access) return;
 			// A cited page is a destination, not a file — downloading its markup is
 			// never what the external-link affordance promised.
 			if (file.type === "website") {
@@ -909,14 +911,14 @@ export const MessageComponent = memo(
 				>
 					<div
 						className={cn(
-							"relative min-w-0 flex-1 whitespace-break-spaces transition-all duration-300 ease-in-out",
+							"relative min-w-0 whitespace-break-spaces transition-all duration-300 ease-in-out",
 							room
 								? isUser
 									? "ml-auto mr-4 w-fit max-w-[85%] rounded-2xl rounded-br-md bg-muted px-3.5 py-2 text-foreground outline-none"
-									: "w-full max-w-full py-0 pr-4 pl-[calc(1rem+30px)]"
+									: "w-full max-w-full flex-1 py-0 pr-4 pl-[calc(1rem+30px)]"
 								: isUser
-									? "w-full border-l-2 py-2 pr-4 pl-3.5"
-									: "w-full max-w-full p-4 pt-2 pb-0",
+									? "w-full flex-1 border-l-2 py-2 pr-4 pl-3.5"
+									: "w-full max-w-full flex-1 p-4 pt-2 pb-0",
 							room && hasSelectedReactions && "mb-3",
 						)}
 						data-fl-chat-message={isUser ? "user" : "assistant"}
@@ -1135,7 +1137,7 @@ export const MessageComponent = memo(
 							</Button>
 						)}
 						{!isUser && message.error && (
-							<ChatMessageError error={message.error} />
+							<ChatMessageError error={message.error} messageId={message.id} />
 						)}
 						<AttachmentStrip
 							files={processedAttachments}

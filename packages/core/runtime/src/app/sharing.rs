@@ -3227,6 +3227,7 @@ mod tests {
             forked_at: None,
             forked_from: None,
             bot_id: None,
+            refuse_bots: false,
         }
     }
 

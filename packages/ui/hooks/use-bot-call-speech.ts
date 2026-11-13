@@ -7,12 +7,16 @@ import { toast } from "sonner";
 import type { ConversationItem } from "../components/bots-tab/fold-entries";
 import type { CrewDirectory } from "../components/bots-tab/use-crew-directory";
 import { isHostedAudioProvider } from "../lib/bit/hosted-audio";
+import { plainMarkdownLines } from "../lib/markdown-text";
 import {
 	type BotSpeechVoice,
 	createBotCallSpeech,
 	speechBitReference,
 	speechCharacterLimit,
 } from "../lib/realtime/bot-call-speech";
+import type { CallSpeechOutput } from "../lib/realtime/call-speech-output";
+import { followPushedReplies } from "../lib/realtime/pushed-reply-speech";
+import { watchReplyStreams } from "../lib/realtime/reply-streams";
 import { asArray } from "../lib/response-shape";
 import { type IBit, IBitTypes } from "../lib/schema/bit/bit";
 import { useBackend } from "../state/backend-state";
@@ -21,6 +25,12 @@ import type {
 	IInboxEntry,
 } from "../state/backend-state/inbox-state";
 import type { ConversationCallState } from "./use-conversation-call";
+
+const ELECTION_DELAY_MS = 350;
+
+function speechOutputOf(call: ConversationCallState): CallSpeechOutput | null {
+	return call.speechOutput?.() ?? null;
+}
 
 function voiceOf(bit: IBit, local: boolean, hub?: string): BotSpeechVoice {
 	return {
@@ -44,6 +54,22 @@ function localVoice(bit: IBit): boolean {
 	);
 }
 
+function latestSpokenText(
+	items: readonly ConversationItem[],
+	botId: string,
+): string | null {
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		if (
+			item.type === "message" &&
+			item.senderId === botId &&
+			item.content.kind === "text"
+		)
+			return [...plainMarkdownLines(item.content.text)].join("\n");
+	}
+	return null;
+}
+
 /** The elected participant supplies the bot's pinned voice, or their profile's default voice. */
 export function useBotCallSpeech({
 	conversation,
@@ -64,6 +90,8 @@ export function useBotCallSpeech({
 	const { t } = useTranslation("bots");
 	const callId = call.joined ? call.live?.callId : undefined;
 	const desktop = backend.capabilities?.().canExecuteLocally ?? false;
+	// A hosted voice is sent the bot's reply, so an encrypted conversation speaks only with voices on this device.
+	const localOnly = conversation.encryption === "e2e";
 	const pins = useMemo(
 		() =>
 			conversation.members
@@ -77,7 +105,7 @@ export function useBotCallSpeech({
 	);
 	const modelPins = [...new Set(pins.flatMap(({ pin }) => (pin ? [pin] : [])))];
 	const defaultVoice = useQuery({
-		queryKey: ["call-bot-voice-default", desktop],
+		queryKey: ["call-bot-voice-default", desktop, localOnly],
 		enabled: Boolean(
 			callId &&
 				backend.audioState &&
@@ -93,6 +121,7 @@ export function useBotCallSpeech({
 						return voiceOf(bit, true);
 				}
 			}
+			if (localOnly) return null;
 			const hosted = bits.find((bit) =>
 				isHostedAudioProvider(bit.parameters?.provider?.provider_name),
 			);
@@ -103,7 +132,7 @@ export function useBotCallSpeech({
 	});
 	const queries = useQueries({
 		queries: modelPins.map((pin) => ({
-			queryKey: ["call-bot-voice", pin, desktop],
+			queryKey: ["call-bot-voice", pin, desktop, localOnly],
 			enabled: Boolean(callId && pin && backend.audioState),
 			queryFn: async (): Promise<BotSpeechVoice | null> => {
 				if (!pin) return null;
@@ -111,7 +140,8 @@ export function useBotCallSpeech({
 				const bit = await backend.bitState.getBit(reference.id, reference.hub);
 				if (bit.type !== IBitTypes.Tts) return null;
 				const provider = bit.parameters?.provider?.provider_name;
-				if (isHostedAudioProvider(provider)) return voiceOf(bit, false);
+				if (isHostedAudioProvider(provider))
+					return localOnly ? null : voiceOf(bit, false);
 				if (
 					desktop &&
 					localVoice(bit) &&
@@ -157,14 +187,18 @@ export function useBotCallSpeech({
 		[callId, call.setBotVoiceCapabilities],
 	);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: changing conversations must cancel the previous call's queue
 	useEffect(() => {
 		const audio = backend.audioState;
 		if (!callId || !historyReady || !audio) return;
 		let reported = false;
+		const speakStream = audio.speakStream?.bind(audio);
 		const controller = createBotCallSpeech({
 			callId,
-			electionDelayMs: 350,
+			electionDelayMs: () =>
+				latest.current.call.live?.participants.length === 1
+					? 0
+					: ELECTION_DELAY_MS,
+			progress: () => latest.current.call.speechProgress?.() ?? null,
 			initialEntries: latest.current.entries,
 			synthesize: (voice, text) =>
 				audio.speak({
@@ -172,10 +206,31 @@ export function useBotCallSpeech({
 					text,
 					local: voice.local,
 					...(voice.voice ? { voice: voice.voice } : {}),
-					format: "wav",
+					format: voice.local ? "wav" : "mp3",
 				}),
+			synthesizeStream: speakStream
+				? (voice, text, signal) =>
+						speakStream(
+							{
+								bit_id: voice.bitId,
+								text,
+								...(voice.voice ? { voice: voice.voice } : {}),
+								format: "pcm",
+							},
+							{ signal },
+						)
+				: undefined,
+			canStream: () => speechOutputOf(latest.current.call) !== null,
 			play: (blob, botId) => latest.current.call.playBotSpeech(blob, botId),
+			playStream: async (stream, botId) => {
+				const output = speechOutputOf(latest.current.call);
+				if (!output) throw new Error("Call audio playback is unavailable");
+				await output.playStream(stream, botId);
+			},
 			stop: () => latest.current.call.stopBotSpeech?.(),
+			pause: () => speechOutputOf(latest.current.call)?.pause() ?? false,
+			resume: () => speechOutputOf(latest.current.call)?.resume(),
+			cue: () => speechOutputOf(latest.current.call)?.cue.thinking,
 			canSpeak: (botId) => latest.current.call.canSpeakForBot?.(botId) ?? false,
 			onError: (error) => {
 				console.warn("Bot call speech failed", error);
@@ -189,12 +244,50 @@ export function useBotCallSpeech({
 				);
 			},
 		});
+		const pushed = followPushedReplies({
+			stream: (transcriptId, botId, options) =>
+				controller.stream(transcriptId, botId, options),
+		});
+		const unwatch = watchReplyStreams(conversation.id, (reply) =>
+			pushed.apply(reply),
+		);
 		scheduler.current = controller;
+		latest.current.call.registerSpeechControl?.({
+			interrupt: (filter) => controller.interrupt(filter),
+			stream: (transcriptId, botId) => controller.stream(transcriptId, botId),
+			pause: () => controller.pause(),
+			resume: () => controller.resume(),
+			echoText: (botId) =>
+				controller.playingText(botId) ??
+				latestSpokenText(latest.current.items, botId),
+		});
 		return () => {
+			latest.current.call.registerSpeechControl?.(null);
+			unwatch();
+			pushed.dispose();
 			controller.dispose();
 			if (scheduler.current === controller) scheduler.current = null;
 		};
 	}, [conversation.id, callId, historyReady, backend.audioState]);
+
+	const warmed = useRef<{ callId?: string; keys: Set<string> }>({
+		keys: new Set(),
+	});
+	useEffect(() => {
+		const audio = backend.audioState;
+		if (!callId || !audio?.warm) return;
+		if (warmed.current.callId !== callId)
+			warmed.current = { callId, keys: new Set() };
+		for (const voice of voices.values()) {
+			const key = `${voice?.bitId}|${voice?.local}`;
+			if (!voice || warmed.current.keys.has(key)) continue;
+			warmed.current.keys.add(key);
+			const request = { tts: { bit_id: voice.bitId, local: voice.local } };
+			Promise.resolve()
+				.then(() => audio.warm?.(request))
+				.catch(() => {});
+		}
+	});
 
 	useEffect(() => {
 		scheduler.current?.update({ entries, items, voices });

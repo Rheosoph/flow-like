@@ -1,7 +1,7 @@
 use super::{
     Event, INBOX_ENCRYPTION_MISMATCH, INBOX_ENVELOPES_MISMATCH, INBOX_HANDLE_NOT_ALLOWED,
-    INBOX_MESSAGE_ID_TAKEN,
-    acting_reader, active_members, active_membership, allocate_seqs, conversation_not_found,
+    INBOX_MESSAGE_ID_TAKEN, acting_reader, active_members, active_membership, allocate_seqs,
+    conversation_not_found,
     delivery::{
         Addressed, BotDelivery, BotRecipient, bot_recipients, deliver_to_bots, live_bots,
         reading_along, woken,
@@ -519,17 +519,32 @@ pub(super) async fn repeat_of<C: ConnectionTrait>(
     }
 }
 
-/// The envelope each active member receives, by member id.
+fn same_for_every_member(
+    envelope: &Value,
+    members: &[conversation_member::Model],
+) -> Vec<(String, Value)> {
+    members
+        .iter()
+        .map(|member| (member.principal_id.clone(), envelope.clone()))
+        .collect()
+}
+
+/// The envelope each active member receives, by member id. A call entry says only that a call
+/// started or ended and people are rung from it, so it stays plain in an end-to-end encrypted
+/// conversation, like the joins and renames the server writes there.
 fn envelopes_for(
+    kind: InboxEntryKind,
     content: &Content,
     encryption: ConversationEncryption,
     members: &[conversation_member::Model],
 ) -> Result<Vec<(String, Value)>, ApiError> {
     match (content, encryption) {
-        (Content::Plain(envelope), ConversationEncryption::Plain) => Ok(members
-            .iter()
-            .map(|member| (member.principal_id.clone(), envelope.clone()))
-            .collect()),
+        (Content::Plain(envelope), ConversationEncryption::Plain) => {
+            Ok(same_for_every_member(envelope, members))
+        }
+        (Content::Plain(envelope), ConversationEncryption::E2e) if kind == InboxEntryKind::Call => {
+            Ok(same_for_every_member(envelope, members))
+        }
         (Content::Plain(_), ConversationEncryption::E2e) => Err(ApiError::coded(
             StatusCode::BAD_REQUEST,
             INBOX_ENCRYPTION_MISMATCH,
@@ -635,11 +650,22 @@ pub(super) async fn fan_out<C: ConnectionTrait>(
     )
     .await?;
     let derived_request =
-        super::user_context::derived(txn, conversation_id, sender, outgoing, &members).await?;
+        super::user_context::derived(txn, &conversation, sender, outgoing, &members).await?;
     if let Some(request_id) = &derived_request {
         for (_, envelope) in &mut envelopes {
             envelope["body"][flow_like_types::bot_user_context::DERIVED_FIELD] =
                 Value::String(request_id.clone());
+        }
+    }
+    if hops > 0 && outgoing.kind == InboxEntryKind::Message {
+        for (_, envelope) in &mut envelopes {
+            if let Some(ask) = envelope
+                .get_mut("body")
+                .and_then(|body| body.get_mut("ask"))
+                .and_then(Value::as_object_mut)
+            {
+                ask.insert("hops".to_owned(), Value::from(hops));
+            }
         }
     }
     super::requests::ensure_request_room(txn, &conversation, sender, outgoing.kind).await?;
@@ -732,7 +758,7 @@ async fn deliver<'e, C: ConnectionTrait>(
     outgoing: &Outgoing,
     hops: u32,
 ) -> Result<Vec<BotRecipient>, ApiError> {
-    if matches!(&outgoing.content, Content::Plain(envelope) if envelope["body"].get(flow_like_types::bot_user_context::REQUEST_FIELD).is_some())
+    if matches!(&outgoing.content, Content::Plain(envelope) if flow_like_types::bot_user_context::is_silent_body(&envelope["body"]))
     {
         return Ok(Vec::new());
     }
@@ -766,6 +792,11 @@ async fn deliver<'e, C: ConnectionTrait>(
         seq: event.seq,
         recipients: recipients_of(txn, event, bots, &reading_along, outgoing, hops).await?,
     };
+    if speaks_to_direct_bot(event.sender_id, conversation_kind, bots, outgoing) {
+        for recipient in &mut delivery.recipients {
+            recipient.mentioned = true;
+        }
+    }
     if let Content::Plain(envelope) = &outgoing.content
         && let Some(bot_id) =
             envelope["body"][flow_like_types::bot_user_context::RESPONSE_FIELD]["bot_id"].as_str()
@@ -774,7 +805,23 @@ async fn deliver<'e, C: ConnectionTrait>(
             .recipients
             .retain(|recipient| recipient.bot_id == bot_id);
     }
-    let answers_an_approval = matches!(&outgoing.content, Content::Plain(envelope) if super::approvals::is_approval_response(envelope));
+    if event.kind == InboxEntryKind::Trigger && !outgoing.links.mentions.is_empty() {
+        delivery.recipients.retain(|recipient| recipient.mentioned);
+    }
+    let answers_an_approval = match &outgoing.content {
+        Content::Plain(envelope) => {
+            super::approvals::answers_card(
+                txn,
+                event.conversation_id,
+                event.sender_id,
+                event.message_id,
+                bots.iter().any(|bot| bot.owner_id == event.sender_id),
+                envelope,
+            )
+            .await?
+        }
+        Content::Sealed(_) => false,
+    };
     if answers_an_approval {
         return Ok(Vec::new());
     }
@@ -782,6 +829,20 @@ async fn deliver<'e, C: ConnectionTrait>(
         deliver_to_bots(txn, &delivery).await?;
     }
     Ok(delivery.recipients)
+}
+
+/// A person's line spoken in a direct conversation addresses its bot. Clients say so in
+/// `mentions`, which the server can't read in a sealed line, so there it is taken as said.
+fn speaks_to_direct_bot(
+    sender_id: &str,
+    conversation_kind: ConversationKind,
+    bots: &[bot::Model],
+    outgoing: &Outgoing,
+) -> bool {
+    outgoing.kind == InboxEntryKind::Transcript
+        && conversation_kind == ConversationKind::Direct
+        && matches!(&outgoing.content, Content::Sealed(_))
+        && bots.iter().all(|bot| bot.id != sender_id)
 }
 
 /// The bots among the recipients with what the event says to each: whether it mentions them and
@@ -898,9 +959,10 @@ async fn checked_envelopes<C: ConnectionTrait>(
     let members = active_members(txn, &[conversation_id.to_string()]).await?;
     let encryption = ConversationEncryption::parse(&conversation.encryption)
         .unwrap_or(ConversationEncryption::E2e);
-    ensure_readable_kind(encryption, &members, outgoing)?;
-    let stripped = room_content(&conversation, &members, sender, outgoing);
+    ensure_call_form(&members, outgoing)?;
+    let stripped = room_content(txn, &members, sender, outgoing).await?;
     let envelopes = envelopes_for(
+        outgoing.kind,
         stripped.as_ref().unwrap_or(&outgoing.content),
         encryption,
         &members,
@@ -913,71 +975,74 @@ async fn checked_envelopes<C: ConnectionTrait>(
     Ok((conversation, members, envelopes))
 }
 
-/// Calls have no end-to-end encrypted form in v1, and a transcript may only name members.
-fn ensure_readable_kind(
-    encryption: ConversationEncryption,
+/// A call entry is never sealed, because people are rung from it, and a readable transcript may
+/// only name members. What was said in an end-to-end encrypted conversation arrives sealed like
+/// its messages, so nothing of it is checked here.
+fn ensure_call_form(
     members: &[conversation_member::Model],
     outgoing: &Outgoing,
 ) -> Result<(), ApiError> {
-    if !matches!(
-        outgoing.kind,
-        InboxEntryKind::Call | InboxEntryKind::Transcript
-    ) {
-        return Ok(());
-    }
-    if encryption == ConversationEncryption::E2e {
-        return Err(ApiError::bad_request(format!(
-            "A {} entry needs a readable body: calls are not available in end-to-end encrypted conversations",
-            outgoing.kind.as_str()
-        )));
-    }
-    match outgoing
-        .links
-        .mentions
-        .iter()
-        .find(|id| !members.iter().any(|member| &member.principal_id == *id))
-    {
-        Some(stranger) => Err(ApiError::bad_request(format!(
-            "body.mentions names '{stranger}', who is not a member of this conversation"
-        ))),
-        None => Ok(()),
+    match (outgoing.kind, &outgoing.content) {
+        (InboxEntryKind::Call, Content::Sealed(_)) => Err(ApiError::bad_request(
+            "A call entry is one plain envelope in every conversation, end-to-end encrypted ones included: it only says that a call started or ended",
+        )),
+        (InboxEntryKind::Transcript, Content::Plain(_)) => match outgoing
+            .links
+            .mentions
+            .iter()
+            .find(|id| !members.iter().any(|member| &member.principal_id == *id))
+        {
+            Some(stranger) => Err(ApiError::bad_request(format!(
+                "body.mentions names '{stranger}', who is not a member of this conversation"
+            ))),
+            None => Ok(()),
+        },
+        _ => Ok(()),
     }
 }
 
-/// What a bot's message looks like in a room with other people: its tool parts cut down to a
-/// name and a summary, so its owner's arguments and results stay out of the members' copies.
-fn room_content(
-    conversation: &conversation::Model,
+/// What a bot's message looks like where a person other than its owner reads it (a room with
+/// other people, someone else's direct chat with the bot): its tool parts cut down to a name and
+/// a summary, so its owner's arguments and results stay out of their copies.
+async fn room_content<C: ConnectionTrait>(
+    txn: &C,
     members: &[conversation_member::Model],
     sender: &str,
     outgoing: &Outgoing,
-) -> Option<Content> {
+) -> Result<Option<Content>, DbErr> {
     use flow_like_types::inbox::PrincipalKind;
     let Content::Plain(envelope) = &outgoing.content else {
-        return None;
+        return Ok(None);
     };
-    let is_room = ConversationKind::parse(&conversation.kind) == Some(ConversationKind::Group)
-        && members
-            .iter()
-            .filter(|member| {
-                PrincipalKind::parse(&member.principal_kind) == Some(PrincipalKind::User)
-            })
-            .count()
-            > 1;
     let from_bot = members.iter().any(|member| {
         member.principal_id == sender
             && PrincipalKind::parse(&member.principal_kind) == Some(PrincipalKind::Bot)
     });
-    if !is_room
-        || !from_bot
+    if !from_bot
         || !matches!(
             outgoing.kind,
             InboxEntryKind::Message | InboxEntryKind::Edit
         )
     {
-        return None;
+        return Ok(None);
     }
-    flow_like_types::bot_message::without_tool_details(envelope).map(Content::Plain)
+    let people: Vec<&str> = members
+        .iter()
+        .filter(|member| PrincipalKind::parse(&member.principal_kind) == Some(PrincipalKind::User))
+        .map(|member| member.principal_id.as_str())
+        .collect();
+    let read_by_others = match people.as_slice() {
+        [] => false,
+        [person] => bot::Entity::find_by_id(sender)
+            .one(txn)
+            .await?
+            .is_none_or(|row| row.owner_id != *person),
+        _ => true,
+    };
+    if !read_by_others {
+        return Ok(None);
+    }
+    Ok(flow_like_types::bot_message::without_tool_details(envelope).map(Content::Plain))
 }
 
 /// Messages move the conversation up the list; reactions, edits, deletions and topics don't.
@@ -1199,6 +1264,9 @@ pub async fn send_entry(
         }
         SendAs::Bot { bot_id, claim } if is_interactive_host(&claim.host_id) => {
             let bot = owned_bot(&state.db, &sub, &bot_id).await?;
+            let outgoing =
+                super::reply_files::adopted(&state, &conversation_id, &bot.id, outgoing.clone())
+                    .await?;
             let sent =
                 send_as_interactive(&state, &conversation_id, &bot.id, &claim, &outgoing).await;
             (bot.id, sent)
@@ -1208,6 +1276,9 @@ pub async fn send_entry(
             let sent = match answer_origin(&state.db, &bot.id, &claim, &outgoing).await? {
                 Some((turn, origin)) => {
                     destination = origin.clone();
+                    let outgoing =
+                        super::reply_files::adopted(&state, &origin, &bot.id, outgoing.clone())
+                            .await?;
                     super::exchange::reply_in_origin(
                         &state,
                         &turn,
@@ -1217,7 +1288,16 @@ pub async fn send_entry(
                     )
                     .await
                 }
-                _ => send_as_bot(&state, &conversation_id, &bot.id, &claim, &outgoing).await,
+                _ => {
+                    let outgoing = super::reply_files::adopted(
+                        &state,
+                        &conversation_id,
+                        &bot.id,
+                        outgoing.clone(),
+                    )
+                    .await?;
+                    send_as_bot(&state, &conversation_id, &bot.id, &claim, &outgoing).await
+                }
             };
             (bot.id, sent)
         }

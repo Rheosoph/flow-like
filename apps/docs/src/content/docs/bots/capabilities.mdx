@@ -5,18 +5,34 @@ description: The 26 abilities a bot can have, what each one unlocks, which ones 
 
 import CapabilityExplorer from "../../../components/bots/CapabilityExplorer";
 
-A bot's abilities decide which tools its model may use. **Every ability starts switched off.** A bot with none can still talk, ask you questions, keep notes for a long task and read its own settings, but it can't reach anything outside the conversation.
+A bot's abilities decide which tools its model may use. **Every ability starts switched off.** A bot with none can still talk, ask you questions, keep notes for a long task, read its own settings and look at images behind links it was given, but it can't reach anything else outside the conversation.
+
+Every bot can look at the image behind a link it received in the current turn, for example a page preview that an app or MCP server returned, a picture from a web page it read, or a link you sent. The link goes to the model and nothing is saved. A link the bot wrote itself is refused, so instructions hidden in a document or web page can't use this to send data to another site. If the bot's chat model can't see images, its [vision model](/bots/create/#3-brain) reads the image and the chat model gets the description.
 
 <CapabilityExplorer client:visible />
 
 ## Web: Internet or Web requests
 
-The two web abilities protect against different risks:
+The two web abilities do different jobs:
 
-- **Internet** hands research to a separate, sealed researcher. It searches and reads public pages but gets only the question, never the bot's memory, files or secrets. Instructions hidden in a web page can't use the bot's other tools.
+- **Internet** lets the bot search the web and read public pages itself. It opens only links that came from a search result or from your message, never a link it wrote itself or found inside a page, so text hidden in a page can't send it to a new address. A page's text reaches the bot the way a mail or a file does, and the tools that send something out keep their own approvals. Pages keep their pictures as links the bot can look at. For a job that needs many sources, the bot can hand the question to a separate researcher that reads in its own context and returns findings with their sources.
 - **Web requests** let the bot call APIs and fetch URLs itself, such as RSS feeds, JSON endpoints or webhooks of other services. It asks before each new site, approves reading and writing separately, and asks again for each secret it wants to send there. Secrets travel over https only and are scrubbed from responses.
 
 Give a news-digest bot **Internet**. Give a bot that reads a feed from a URL in its instructions, or posts to an API on a schedule, **Web requests**.
+
+### Your own search and reader keys
+
+Research uses Flow-Like's built-in search and reads pages with a plain request. Some sites refuse such requests or show nothing without JavaScript. If you have an account with one of the providers below, store its API key as a [secret](/bots/safety/#secrets) of the bot under the name shown. That switches the provider on for this bot's research; deleting the secret switches it off.
+
+| Secret name | Provider | Used for |
+| --- | --- | --- |
+| `TAVILY_API_KEY` | Tavily | Search, and reading pages a plain request can't |
+| `BRAVE_SEARCH_API_KEY` | Brave Search | Search |
+| `EXA_API_KEY` | Exa | Search, and reading pages a plain request can't |
+| `FIRECRAWL_API_KEY` | Firecrawl | Search, and reading pages a plain request can't |
+| `JINA_API_KEY` | Jina Reader | Reading pages a plain request can't |
+
+With several keys stored, search uses the first one in the order Tavily, Brave, Exa, Firecrawl. If a provider fails or finds nothing, the next one is tried, and after the last one the built-in search answers. A reader is asked only after the plain request for a page failed, in the order Firecrawl, Tavily, Jina, Exa. Each key is sent to its own provider and nowhere else, and the model never sees it.
 
 ## Apps
 
@@ -26,6 +42,7 @@ Give a news-digest bot **Internet**. Give a bot that reads a feed from a URL in 
 
 - **Run code** runs Python 3.12, a scientific Python build (numpy, pandas, scipy, scikit-learn, matplotlib and more) or JavaScript in a WebAssembly sandbox. Each run starts fresh, sees only its own input and output folders, and has no network unless you approve named hosts. Results land in the bot's workspace. Operators can mirror the runtimes; see [Bot code runtimes](/self-hosting/code-runtimes/).
 - **Computer use**, **Browser** and **Command line** work on the bot's own desktop or device. Watch the bot, take over with your own mouse and keyboard (hold Esc for a second to hand back) or stop it from its **Computer** tab.
+- **Browser** gives the bot a Chrome of its own with a separate profile, so it never sees your logins, cookies or history. In the desktop app that Chrome is a window on your screen. Some sites turn automated browsers away. A desktop bot can then ask to open such a site in a new tab of your own Chrome or Edge, signed in as you. You approve this per site, apart from the bot's own browser, and your browser asks you once more before it lets the bot in. It needs Chrome or Edge 144 or newer with **Allow remote debugging for this browser instance** switched on at `chrome://inspect/#remote-debugging`. The bot works only in its own tab, which closes when the bot closes its browser or has left it idle for ten minutes. Files it downloads there stay in your browser's download folder.
 - **Skills** are instructions and scripts the bot follows for recurring jobs. It only sees skills you approved, and can propose new ones for you to review.
 - **Delegation** splits big jobs into parallel sub-tasks on the subtask model. Sub-tasks can't ask you questions, schedule, send mail or message people.
 - **Image generation** uses the bot's image model: up to 4 images per call, 8 per turn and 50 per day.
@@ -42,8 +59,9 @@ Give a news-digest bot **Internet**. Give a bot that reads a feed from a URL in 
 ## Memory and data
 
 - **Memory** remembers facts from your chats and recalls them later. It needs an embedding model. See [Memory and workspace](/bots/memory/).
-- **Files** and **Data Studio** give the bot a private workspace for files and tables, stored like an app's storage and databases.
+- **Files** and **Data Studio** give the bot a private workspace for files and tables, stored like an app's storage and databases. A bot can also download a link into its workspace, for example a signed download link an app returned. It asks you before it downloads from a new site. In chats that show files it can attach a file or a link to its reply; a linked attachment counts as data leaving the bot.
 - **Documents** reads, summarizes and extracts files, and creates Word, Excel, PowerPoint and PDF documents.
+- **Barcodes** reads the QR codes and barcodes in a photo, scan or screenshot, such as a parcel label, a ticket or a product, and returns each code's format, text and position. It uses the same decoder as the Read Barcodes node. For a PDF, the bot renders the pages first, which needs **Documents**.
 - **Knowledge** builds searchable indexes over your files.
 - **Data connections** attach external databases such as Postgres, MySQL or ODBC sources.
 - **Scheduling** lets the bot run once at a set time or on a cron schedule.
@@ -58,4 +76,4 @@ Give a news-digest bot **Internet**. Give a bot that reads a feed from a URL in 
 
 ## Where tools run
 
-A bot in the cloud runs files, documents, code, images, web requests, connectors and skills on Flow-Like's executor. On a self-hosted server without an executor these tools report that they're unavailable. Bots on the desktop app or a device run their tools on that machine. Phones have no command line, and iPhones can't run code yet.
+A bot in the cloud runs files, documents, barcodes, code, images, web requests, connectors and skills on Flow-Like's executor. On a self-hosted server without an executor these tools report that they're unavailable. Bots on the desktop app or a device run their tools on that machine. Phones have no command line, and iPhones can't run code yet.

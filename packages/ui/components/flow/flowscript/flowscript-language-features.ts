@@ -38,6 +38,7 @@ import {
 	stripTrailingWord,
 	toFlowScriptIdentifier,
 	trimTrailingSpacesTabs,
+	useMemberLocalName,
 } from "./flowscript-language";
 import type {
 	CancellationTokenLike,
@@ -1375,7 +1376,10 @@ function useImportEdit(
 			if (namespaceKey(expandPath(use.path, analysis.env.scope)) !== nsKey)
 				continue;
 			if (use.members.includes(alias)) return undefined;
-			const members = [...use.members, alias].sort();
+			const members = [...use.members, alias].sort().map((member) => {
+				const local = useMemberLocalName(use, member);
+				return local === member ? member : `${member} as ${local}`;
+			});
 			return {
 				range: rangeOfSpan(analysis, { start: use.start, end: use.end }),
 				text: `${use.path.join("::")}::{ ${members.join(", ")} }`,

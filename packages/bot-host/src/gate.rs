@@ -1,13 +1,15 @@
 //! The approval gate of a headless bot turn: a call that asks the owner runs under a standing
-//! grant, a one-time answer or an inferred owner instruction. Otherwise it parks behind a card.
-//! Tools consult it where an open chat would show a prompt; once it parks, it stops the run.
+//! grant, a one-time answer or an inferred owner instruction. Otherwise it joins the attempt's
+//! [`ParkedBatch`], the one card the turn parks behind. Tools consult it where an open chat would
+//! show a prompt. A park stops nothing else: later calls are checked on their own, and the run
+//! pauses after its round has settled.
 
 use flow_like::flow::copilot::bot_talk::{CrewMember, HeadlessPermission};
+use flow_like::flow::copilot::platform::Clearance;
 use flow_like::flow::copilot::tool_authorization::AuthorizationInference;
 use flow_like::flow::copilot::tool_grants::{
-    GrantCheck, GrantStore, HeadlessAnswer, approval_request, check_call,
-    documents_expensive_granted, expensive_documents_request, headless_answer_with_inference,
-    take_once,
+    GrantCheck, GrantStore, HeadlessAnswer, ParkedBatch, approval_request, check_call,
+    documents_expensive_granted, expensive_documents_request, take_once,
 };
 use flow_like_types::bot_message::ApprovalRequest;
 use flow_like_types::tool_grant::args_hash;
@@ -26,25 +28,29 @@ pub fn ask_bot_scope(callee_id: &str) -> String {
     format!("bot:{callee_id}")
 }
 
+/// The tools a card asks about, each once, for a failure text.
+pub fn card_tools(card: &ApprovalRequest) -> String {
+    let mut tools: Vec<String> = Vec::new();
+    for item in card.batch() {
+        if !tools.contains(&item.tool) {
+            tools.push(item.tool);
+        }
+    }
+    tools.join(", ")
+}
+
 pub struct ApprovalGate {
     grants: Arc<dyn GrantStore>,
-    turn_id: String,
-    parked: Mutex<Option<ParkedCall>>,
+    batch: ParkedBatch,
     inference: Mutex<Option<Arc<dyn AuthorizationInference>>>,
     refused: Mutex<HashSet<String>>,
     approval_lock: tokio::sync::Mutex<()>,
-    stop: Box<dyn Fn() + Send + Sync>,
-}
-
-struct ParkedCall {
-    card: ApprovalRequest,
-    recovery_call_id: Option<String>,
 }
 
 impl std::fmt::Debug for ApprovalGate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ApprovalGate")
-            .field("turn_id", &self.turn_id)
+            .field("batch", &self.batch)
             .finish()
     }
 }
@@ -53,20 +59,22 @@ fn result(tool: &str, code: &str, message: &str) -> Value {
     json!({ "status": "error", "tool": tool, "code": code, "retryable": false, "message": message })
 }
 
+/// The run pauses only on this gate shape (`status: "waiting"`), the same one the server gate uses.
+fn waiting(tool: &str) -> Value {
+    json!({
+        "status": "waiting", "tool": tool, "code": CODE_WAITING, "retryable": false,
+        "message": "Your owner was asked to approve this call. This turn pauses and continues after their answer. Call no further tools and write nothing more now.",
+    })
+}
+
 impl ApprovalGate {
-    pub fn new(
-        grants: Arc<dyn GrantStore>,
-        turn_id: &str,
-        stop: impl Fn() + Send + Sync + 'static,
-    ) -> Arc<Self> {
+    pub fn new(grants: Arc<dyn GrantStore>, turn_id: &str) -> Arc<Self> {
         Arc::new(Self {
             grants,
-            turn_id: turn_id.to_string(),
-            parked: Mutex::new(None),
+            batch: ParkedBatch::new(turn_id),
             inference: Mutex::new(None),
             refused: Mutex::new(HashSet::new()),
             approval_lock: tokio::sync::Mutex::new(()),
-            stop: Box::new(stop),
         })
     }
 
@@ -75,7 +83,7 @@ impl ApprovalGate {
     }
 
     pub fn turn_id(&self) -> &str {
-        &self.turn_id
+        self.batch.turn_id()
     }
 
     /// The host may replace its inference context after receiving authenticated owner input.
@@ -86,47 +94,38 @@ impl ApprovalGate {
             .unwrap_or_else(PoisonError::into_inner) = inference;
     }
 
-    /// The card of the call that parked the turn.
+    /// The card the turn parks behind: every call of this attempt that waits for the owner.
     pub fn parked(&self) -> Option<ApprovalRequest> {
-        self.parked
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-            .map(|parked| parked.card.clone())
+        self.batch.card()
     }
 
-    /// The exact runtime call that this gate refused before execution.
-    pub fn unexecuted_call(&self) -> Option<(String, String)> {
-        self.parked
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-            .and_then(|parked| {
-                parked
-                    .recovery_call_id
-                    .clone()
-                    .map(|id| (id, parked.card.tool.clone()))
-            })
+    /// `(call id, tool)` of every call this gate held back before it ran.
+    pub fn held_calls(&self) -> Vec<(String, String)> {
+        self.batch.held_calls()
     }
 
     fn park(&self, tool: &str, card: ApprovalRequest) -> Value {
-        self.parked
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get_or_insert_with(|| ParkedCall {
-                card,
-                recovery_call_id: flow_like::flow::copilot::run_recovery::current_recovery_call_id(
-                ),
-            });
-        (self.stop)();
-        result(
-            tool,
-            CODE_WAITING,
-            "Your owner was asked to approve this call. This turn pauses and continues after their answer. Call no further tools and write nothing more now.",
-        )
+        self.batch.park(card, false);
+        waiting(tool)
     }
 
-    /// `Ok` when the call may run; `Err` is the tool result for the model.
+    /// The tool result of a call the owner refused earlier in this turn.
+    fn refused_before(&self, tool: &str, args: &Value) -> Option<Value> {
+        self.refused
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(&args_hash(tool, args))
+            .then(|| {
+                result(
+                    tool,
+                    CODE_REFUSED,
+                    "The owner refused this call during this turn. Do not try it again.",
+                )
+            })
+    }
+
+    /// `Ok` when the call may run; `Err` is the tool result for the model. A call that asks joins
+    /// the turn's card.
     pub async fn clear(
         &self,
         tool: &str,
@@ -136,44 +135,63 @@ impl ApprovalGate {
     ) -> Result<(), Value> {
         // A consumed denial must be recorded before another call can check its token.
         let _approval = self.approval_lock.lock().await;
-        if self.parked().is_some() {
-            return Err(result(
-                tool,
-                CODE_WAITING,
-                "This turn is waiting for an approval.",
-            ));
+        if let Some(refused) = self.refused_before(tool, args) {
+            return Err(refused);
         }
-        if self
-            .refused
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .contains(&args_hash(tool, args))
-        {
-            return Err(result(
+        match self
+            .batch
+            .answer(
+                self.grants.as_ref(),
                 tool,
-                CODE_REFUSED,
-                "The owner refused this call during this turn. Do not try it again.",
-            ));
-        }
-        match headless_answer_with_inference(
-            self.grants.as_ref(),
-            &self.turn_id,
-            tool,
-            args,
-            context_app,
-            description,
-            Some(self),
-        )
-        .await
+                args,
+                context_app,
+                description,
+                Some(self),
+            )
+            .await
         {
             HeadlessAnswer::Run => Ok(()),
             HeadlessAnswer::Refuse(message) => Err(result(tool, CODE_REFUSED, &message)),
-            HeadlessAnswer::Park(card) => Err(self.park(tool, card)),
+            HeadlessAnswer::Park(_) => Err(waiting(tool)),
         }
     }
 
-    /// A first ask of `callee` by a headless bot: the owner's earlier answer decides, else the
-    /// turn parks behind a "<caller> wants to ask <callee>" card. The answer is per callee, so
+    /// The gate of a call its round held back after a park, asked without running it: no
+    /// one-time answer is spent, a refusal is the call's result and a call that asks joins the
+    /// card.
+    pub async fn clearance(
+        &self,
+        tool: &str,
+        args: &Value,
+        context_app: Option<&str>,
+        description: &str,
+    ) -> Clearance {
+        let _approval = self.approval_lock.lock().await;
+        if let Some(refused) = self.refused_before(tool, args) {
+            return Clearance::Refused(refused.to_string());
+        }
+        match self
+            .batch
+            .clearance(
+                self.grants.as_ref(),
+                tool,
+                args,
+                context_app,
+                description,
+                Some(self),
+            )
+            .await
+        {
+            HeadlessAnswer::Run => Clearance::Clear,
+            HeadlessAnswer::Refuse(message) => {
+                Clearance::Refused(result(tool, CODE_REFUSED, &message).to_string())
+            }
+            HeadlessAnswer::Park(_) => Clearance::Asks,
+        }
+    }
+
+    /// A first ask of `callee` by a headless bot: the owner's earlier answer decides, else a
+    /// "<caller> wants to ask <callee>" item joins the turn's card. The answer is per callee, so
     /// a rephrased question after "Allow once" still finds it.
     pub async fn ask_bot(
         &self,
@@ -182,9 +200,6 @@ impl ApprovalGate {
         question: &str,
     ) -> HeadlessPermission {
         let _approval = self.approval_lock.lock().await;
-        if self.parked().is_some() {
-            return HeadlessPermission::Parked;
-        }
         let args = json!({ "bot": callee.id });
         if self
             .refused
@@ -219,7 +234,8 @@ impl ApprovalGate {
                 {
                     return HeadlessPermission::Allowed;
                 }
-                let mut card = approval_request(&self.turn_id, ASK_BOT_TOOL, &args, None, &summary);
+                let mut card =
+                    approval_request(self.turn_id(), ASK_BOT_TOOL, &args, None, &summary);
                 card.scope = scope;
                 self.park(ASK_BOT_TOOL, card);
                 HeadlessPermission::Parked
@@ -255,7 +271,8 @@ impl ApprovalGate {
                 .unwrap_or(false)
     }
 
-    /// Parks the turn for a document call that refused for its cost; the tool result otherwise.
+    /// Puts a document call that refused for its cost on the turn's card; the tool result
+    /// otherwise.
     pub fn park_for_cost(&self, tool: &str, args: &Value, outcome: Value) -> Value {
         if outcome["code"] != flow_like_bot_tools::error::code::NEEDS_APPROVAL {
             return outcome;
@@ -265,7 +282,7 @@ impl ApprovalGate {
             .unwrap_or("This document call is above the cost limits.");
         self.park(
             tool,
-            expensive_documents_request(&self.turn_id, tool, args, message),
+            expensive_documents_request(self.turn_id(), tool, args, message),
         )
     }
 }
@@ -309,9 +326,38 @@ impl AuthorizationInference for ApprovalGate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like::flow::copilot::tool_grants::GrantKey;
-    use flow_like_types::tool_grant::DENY_PREFIX;
+    use flow_like::flow::copilot::run_recovery::{CallScope, scope_call};
+    use flow_like::flow::copilot::tool_grants::{GrantKey, grant_scopes};
+    use flow_like_types::bot_message::APPROVAL_BATCH_TOOL;
+    use flow_like_types::tool_grant::{DENY_PREFIX, ONCE_PREFIX, SCOPE_DOCUMENTS_EXPENSIVE};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn call(id: &str, round_web_content: bool) -> CallScope {
+        CallScope {
+            id: id.into(),
+            round_web_content,
+            held_replay: false,
+        }
+    }
+
+    fn token(prefix: &str, tool: &str, args: &Value) -> GrantKey {
+        GrantKey::new(tool, format!("{prefix}{}", args_hash(tool, args)))
+    }
+
+    fn held(calls: &[(&str, &str)]) -> Vec<(String, String)> {
+        calls
+            .iter()
+            .map(|(id, tool)| ((*id).into(), (*tool).into()))
+            .collect()
+    }
+
+    fn member(id: &str) -> CrewMember {
+        CrewMember {
+            id: id.into(),
+            name: id.to_uppercase(),
+            ..Default::default()
+        }
+    }
 
     struct Grants(Mutex<Vec<GrantKey>>);
 
@@ -350,7 +396,7 @@ mod tests {
             "email_reply",
             format!("{DENY_PREFIX}{}", args_hash("email_reply", &args)),
         )])));
-        let gate = ApprovalGate::new(grants.clone(), "turn", || {});
+        let gate = ApprovalGate::new(grants.clone(), "turn");
         let inference = Arc::new(Allow::default());
         gate.set_inference(Some(inference.clone()));
         let (first, second) = tokio::join!(
@@ -367,7 +413,7 @@ mod tests {
     #[tokio::test]
     async fn inference_runs_a_call_without_creating_a_card_or_grant() {
         let grants = Arc::new(Grants(Mutex::new(Vec::new())));
-        let gate = ApprovalGate::new(grants.clone(), "turn", || panic!("must not park"));
+        let gate = ApprovalGate::new(grants.clone(), "turn");
         let inference = Arc::new(Allow::default());
         gate.set_inference(Some(inference.clone()));
         gate.clear(
@@ -397,7 +443,7 @@ mod tests {
         };
         let args = json!({"bot":"b"});
         let grants = Arc::new(Grants(Mutex::new(Vec::new())));
-        let gate = ApprovalGate::new(grants.clone(), "turn", || panic!("must not park"));
+        let gate = ApprovalGate::new(grants.clone(), "turn");
         let inference = Arc::new(Allow::default());
         gate.set_inference(Some(inference.clone()));
         assert!(matches!(
@@ -422,5 +468,195 @@ mod tests {
             HeadlessPermission::Denied
         ));
         assert_eq!(inference.0.load(Ordering::SeqCst), 1);
+        assert!(gate.parked().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_later_asking_call_joins_the_batch() {
+        let first = json!({"thread":"t", "body":"Reply"});
+        let second = json!({"thread":"u", "body":"Other reply"});
+        let drop = json!({"index":"notes"});
+        let grants = Arc::new(Grants(Mutex::new(
+            grant_scopes("knowledge_drop", &drop, None)
+                .unwrap()
+                .into_iter()
+                .map(|scope| GrantKey::new("knowledge_drop", scope))
+                .collect(),
+        )));
+        let gate = ApprovalGate::new(grants, "turn");
+        let parked = scope_call(
+            call("c1", false),
+            gate.clear("email_reply", &first, None, "Reply"),
+        )
+        .await;
+        assert_eq!(parked.unwrap_err()["status"], "waiting");
+        scope_call(
+            call("c2", false),
+            gate.clear("knowledge_drop", &drop, None, "Drop"),
+        )
+        .await
+        .expect("a granted call runs after a park");
+        let joined = scope_call(
+            call("c3", false),
+            gate.clear("email_reply", &second, None, "Other"),
+        )
+        .await;
+        assert_eq!(joined.unwrap_err()["code"], CODE_WAITING);
+        let card = gate.parked().unwrap();
+        assert_eq!(card.tool, APPROVAL_BATCH_TOOL);
+        assert_eq!(
+            card.items
+                .iter()
+                .map(|item| item.args_hash.clone())
+                .collect::<Vec<_>>(),
+            [
+                args_hash("email_reply", &first),
+                args_hash("email_reply", &second)
+            ]
+        );
+        assert_eq!(
+            gate.held_calls(),
+            held(&[("c1", "email_reply"), ("c3", "email_reply")])
+        );
+    }
+
+    #[tokio::test]
+    async fn clearance_spends_no_token() {
+        let once = json!({"thread":"o", "body":"Once"});
+        let denied = json!({"thread":"d", "body":"Denied"});
+        let asking = json!({"thread":"a", "body":"Ask"});
+        let grants = Arc::new(Grants(Mutex::new(vec![
+            token(ONCE_PREFIX, "email_reply", &once),
+            token(DENY_PREFIX, "email_reply", &denied),
+        ])));
+        let gate = ApprovalGate::new(grants.clone(), "turn");
+        let clear = scope_call(
+            call("c1", false),
+            gate.clearance("email_reply", &once, None, "Once"),
+        )
+        .await;
+        assert_eq!(clear, Clearance::Clear);
+        let Clearance::Refused(refused) = scope_call(
+            call("c2", false),
+            gate.clearance("email_reply", &denied, None, "Denied"),
+        )
+        .await
+        else {
+            panic!("a refused call is refused at clearance");
+        };
+        assert_eq!(
+            serde_json::from_str::<Value>(&refused).unwrap()["code"],
+            CODE_REFUSED
+        );
+        assert_eq!(
+            grants.list().await.unwrap(),
+            [token(ONCE_PREFIX, "email_reply", &once)],
+            "clearance spends the refusal but not the one-time answer"
+        );
+        let asks = scope_call(
+            call("c3", false),
+            gate.clearance("email_reply", &asking, None, "Ask"),
+        )
+        .await;
+        assert_eq!(asks, Clearance::Asks);
+        let card = gate.parked().unwrap();
+        assert_eq!(card.args_hash, args_hash("email_reply", &asking));
+        assert_eq!(gate.held_calls(), held(&[("c3", "email_reply")]));
+        gate.clear("email_reply", &once, None, "Once")
+            .await
+            .expect("the one-time answer runs the call");
+        assert!(grants.list().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn ask_bot_and_cost_join_the_batch() {
+        let reply = json!({"thread":"t", "body":"Reply"});
+        let document = json!({"path":"report.pdf"});
+        let gate = ApprovalGate::new(Arc::new(Grants(Mutex::new(Vec::new()))), "turn");
+        scope_call(
+            call("c1", false),
+            gate.clear("email_reply", &reply, None, "Reply"),
+        )
+        .await
+        .unwrap_err();
+        let asked = scope_call(
+            call("c2", false),
+            gate.ask_bot(&member("a"), &member("b"), "Check this report"),
+        )
+        .await;
+        assert!(matches!(asked, HeadlessPermission::Parked));
+        let costly = scope_call(call("c3", false), async {
+            gate.park_for_cost(
+                "file_summarize",
+                &document,
+                json!({
+                    "code": flow_like_bot_tools::error::code::NEEDS_APPROVAL,
+                    "message": "above the cost limits",
+                }),
+            )
+        })
+        .await;
+        assert_eq!(costly["status"], "waiting");
+        let card = gate.parked().unwrap();
+        assert_eq!(
+            card.items
+                .iter()
+                .map(|item| (item.tool.as_str(), item.scope.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("email_reply", "*"),
+                (ASK_BOT_TOOL, "bot:b"),
+                ("file_summarize", SCOPE_DOCUMENTS_EXPENSIVE),
+            ]
+        );
+        assert_eq!(
+            gate.held_calls(),
+            held(&[
+                ("c1", "email_reply"),
+                ("c2", ASK_BOT_TOOL),
+                ("c3", "file_summarize")
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn a_granted_web_request_parks_with_a_flagged_item_after_web_content() {
+        let fetch = json!({"url":"https://example.com/news"});
+        let grants = Arc::new(Grants(Mutex::new(
+            grant_scopes("web_request", &fetch, None)
+                .unwrap()
+                .into_iter()
+                .map(|scope| GrantKey::new("web_request", scope))
+                .collect(),
+        )));
+        let gate = ApprovalGate::new(grants, "turn");
+        scope_call(
+            call("c1", false),
+            gate.clear("web_request", &fetch, None, "Fetch"),
+        )
+        .await
+        .expect("the grant covers the call before web content");
+        assert!(gate.parked().is_none());
+        let marked = scope_call(
+            call("c2", true),
+            gate.clear("web_request", &fetch, None, "Fetch"),
+        )
+        .await;
+        assert_eq!(marked.unwrap_err()["status"], "waiting");
+        let asks = scope_call(
+            call("c3", true),
+            gate.clearance("web_request", &fetch, None, "Fetch"),
+        )
+        .await;
+        assert_eq!(asks, Clearance::Asks);
+        let card = gate.parked().unwrap();
+        assert_eq!(card.scope, "", "no standing grant is offered");
+        assert_eq!(card.items.len(), 1);
+        assert!(card.items[0].after_web_content);
+        assert_eq!(card.items[0].calls, 2);
+        assert_eq!(
+            gate.held_calls(),
+            held(&[("c2", "web_request"), ("c3", "web_request")])
+        );
     }
 }

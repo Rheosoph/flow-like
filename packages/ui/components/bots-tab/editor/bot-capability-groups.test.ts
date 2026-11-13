@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 import bots from "../../../../locales/locales/en/bots.json";
 import {
 	BOT_CAPABILITIES,
+	DEVICE_UNAVAILABLE_BOT_CAPABILITIES,
+	botCapabilityUnavailableReason,
 	isBotCapabilityAvailable,
 } from "../../../state/backend-state/bot-state";
 import {
@@ -13,6 +15,7 @@ import {
 
 const NEW_CAPABILITIES = [
 	"documents",
+	"barcodes",
 	"data_connections",
 	"knowledge",
 	"connectors",
@@ -59,11 +62,28 @@ describe("capability list", () => {
 		}
 	});
 
-	test("the new capabilities are allowed on every location", () => {
+	test("the new capabilities are allowed on the server and desktop, and on a device unless it can't serve them yet", () => {
 		for (const capability of NEW_CAPABILITIES) {
-			for (const location of ["server", "desktop", "device"] as const) {
+			for (const location of ["server", "desktop"] as const) {
 				expect(isBotCapabilityAvailable(capability, location)).toBe(true);
 			}
+			expect(isBotCapabilityAvailable(capability, "device")).toBe(
+				!DEVICE_UNAVAILABLE_BOT_CAPABILITIES.includes(capability),
+			);
 		}
+	});
+
+	test("a device holds every capability, encryption included", () => {
+		expect([...DEVICE_UNAVAILABLE_BOT_CAPABILITIES]).toEqual([]);
+		for (const capability of BOT_CAPABILITIES) {
+			expect(isBotCapabilityAvailable(capability, "device")).toBe(true);
+			expect(botCapabilityUnavailableReason(capability, "device")).toBeNull();
+		}
+		expect(botCapabilityUnavailableReason("encryption", "server")).toBe(
+			"local",
+		);
+		expect(botCapabilityUnavailableReason("command_line", "server")).toBe(
+			"local",
+		);
 	});
 });

@@ -25,6 +25,8 @@ mod linux;
 use linux as platform;
 #[cfg(target_os = "macos")]
 mod ocr_macos;
+#[cfg(target_os = "macos")]
+pub(crate) mod screen_capture_macos;
 #[cfg(any(target_os = "linux", test))]
 pub(crate) mod ocr_tesseract;
 #[cfg(target_os = "windows")]
@@ -55,7 +57,31 @@ pub fn window_info(w: &NativeWindow) -> WindowInfo {
         height: w.height().unwrap_or_default(),
         is_focused: w.is_focused().unwrap_or(false),
         is_minimized: w.is_minimized().unwrap_or(false),
+        is_onscreen: on_screen(w),
     }
+}
+
+#[cfg(target_os = "macos")]
+fn is_ghost(window: &NativeWindow) -> bool {
+    window.is_ghost()
+}
+#[cfg(not(target_os = "macos"))]
+fn is_ghost(window: &NativeWindow) -> bool {
+    window.width().unwrap_or(0) == 0 || window.height().unwrap_or(0) == 0
+}
+
+/// Windows worth showing a model: no ghosts or helper windows, and unless `include_offscreen`
+/// only those on screen or minimized (windows on other Spaces are hidden by default).
+pub fn listed_windows(include_offscreen: bool) -> Result<Vec<WindowInfo>> {
+    Ok(NativeWindow::all()?
+        .iter()
+        .filter(|window| !is_ghost(window))
+        .map(window_info)
+        .filter(|info| include_offscreen || info.is_onscreen || info.is_minimized)
+        .collect())
+}
+pub async fn listed_windows_async(include_offscreen: bool) -> Result<Vec<WindowInfo>> {
+    tokio::task::spawn_blocking(move || listed_windows(include_offscreen)).await?
 }
 pub fn select_window(
     id: &str,

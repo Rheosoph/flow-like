@@ -13,10 +13,26 @@
 		},
 		"model_classification": {
 			"$ref": "#/$defs/BitModelClassification"
+		},
+		"data_classification": {
+			"description": "The most sensitive data this model may process; `None` means untagged.",
+			"anyOf": [
+				{
+					"$ref": "#/$defs/DataClassification"
+				},
+				{
+					"type": "null"
+				}
+			]
 		}
 	},
 	"required": ["context_length", "provider", "model_classification"],
 	"$defs": {
+		"DataClassification": {
+			"description": "How sensitive data is, from least to most sensitive.",
+			"type": "string",
+			"enum": ["public", "internal", "confidential", "restricted"]
+		},
 		"ModelProvider": {
 			"type": "object",
 			"properties": {

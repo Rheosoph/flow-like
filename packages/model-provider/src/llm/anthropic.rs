@@ -4,6 +4,7 @@ use super::{
     ModelLogic, OPENROUTER_ONLY, ParamDialect, body_params, drop_body_param, drop_temperature,
     extract_headers,
     media::{self, MediaDialect},
+    prompt_cache::{CacheBreakpoints, CacheDialect},
     unforce_tool_choice, user_media,
 };
 use crate::history::{History, HistoryThinking};
@@ -22,7 +23,7 @@ use rig::message::ToolChoice;
 use serde_json::{Value, json};
 
 pub struct AnthropicModel {
-    client: rig::providers::anthropic::Client<AuthorizedHttpClient>,
+    client: rig::providers::anthropic::Client<CacheBreakpoints>,
     _provider: ModelProvider,
     default_model: Option<String>,
 }
@@ -38,7 +39,10 @@ impl AnthropicModel {
 
         let mut builder = rig::providers::anthropic::Client::builder()
             .api_key(&api_key)
-            .http_client(AuthorizedHttpClient::default());
+            .http_client(CacheBreakpoints::new(
+                AuthorizedHttpClient::default(),
+                CacheDialect::Messages,
+            ));
         if let Some(endpoint) = anthropic_config.endpoint.as_deref() {
             builder = builder.base_url(endpoint);
         }
@@ -75,7 +79,10 @@ impl AnthropicModel {
 
         let mut builder = rig::providers::anthropic::Client::builder()
             .api_key(api_key)
-            .http_client(AuthorizedHttpClient::for_provider(provider, egress)?);
+            .http_client(CacheBreakpoints::new(
+                AuthorizedHttpClient::for_provider(provider, egress)?,
+                CacheDialect::Messages,
+            ));
         if let Some(endpoint) = params.get("endpoint").and_then(|v| v.as_str()) {
             builder = builder.base_url(endpoint);
         }
@@ -115,10 +122,10 @@ impl Cacheable for AnthropicModel {
 impl ModelLogic for AnthropicModel {
     #[allow(deprecated)]
     async fn provider(&self) -> Result<ModelConstructor> {
-        Ok(user_media::constructor(
-            self.client.clone(),
-            anthropic_request,
-        ))
+        Ok(
+            user_media::constructor(self.client.clone(), anthropic_request)
+                .with_messages_api_usage(),
+        )
     }
 
     async fn default_model(&self) -> Option<String> {
@@ -148,6 +155,9 @@ const MESSAGES_API: ParamDialect = ParamDialect {
 };
 
 const MIN_THINKING_BUDGET: u64 = 1024;
+
+/// The largest output any current Claude model accepts.
+const MAX_OUTPUT_TOKENS: u64 = 128_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClaudeFamily {
@@ -241,6 +251,22 @@ impl Claude {
         }
     }
 
+    /// Anthropic's published output ceiling. Later generations keep the newest one.
+    fn max_output_tokens(self) -> u64 {
+        use ClaudeFamily::*;
+        match (self.family, self.version) {
+            (Fable | Mythos, _) => MAX_OUTPUT_TOKENS,
+            (Opus | Sonnet, version) if version >= (4, 6) => MAX_OUTPUT_TOKENS,
+            (Haiku, version) if version >= (5, 0) => MAX_OUTPUT_TOKENS,
+            (Opus, version) if version >= (4, 5) => 64_000,
+            (Opus, version) if version >= (4, 0) => 32_000,
+            (Sonnet, version) if version >= (3, 7) => 64_000,
+            (Haiku, version) if version >= (4, 5) => 64_000,
+            (Sonnet | Haiku, version) if version >= (3, 5) => 8_192,
+            _ => 4_096,
+        }
+    }
+
     /// Non-default `temperature`/`top_p`/`top_k` return 400 on these models, thinking or not.
     fn rejects_sampling(self) -> bool {
         use ClaudeFamily::*;
@@ -329,21 +355,11 @@ fn messages_params(history: &History, claude: Option<Claude>) -> Value {
     params
 }
 
-/// Keeps Rig's known-model limits and its conservative fallback for other IDs.
-fn default_max_tokens(model: &str) -> u64 {
-    if ["claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6"]
-        .iter()
-        .any(|prefix| model.starts_with(prefix))
-    {
-        128_000
-    } else if ["claude-opus-4", "claude-sonnet-4", "claude-haiku-4-5"]
-        .iter()
-        .any(|prefix| model.starts_with(prefix))
-    {
-        64_000
-    } else {
-        2_048
-    }
+/// Anthropic requires `max_tokens`, so an unset budget sends the model's whole output ceiling.
+/// An endpoint serving a non-Claude ID with a lower ceiling rejects it; its provider then needs
+/// `max_tokens` in the request parameters.
+fn max_output_tokens(model: &str) -> u64 {
+    Claude::parse(model).map_or(MAX_OUTPUT_TOKENS, Claude::max_output_tokens)
 }
 
 fn thinking_type(request: &CompletionRequest) -> Option<&str> {
@@ -365,10 +381,9 @@ fn anthropic_request(
 /// Applies Anthropic's per-model limits to the final request, including the fields agents set
 /// on the builder (`tool_choice`, `temperature`) that the History mapping cannot see.
 fn enforce_model_constraints(model: &str, mut request: CompletionRequest) -> CompletionRequest {
-    // Rig's default constructor has no output limit for IDs outside its model table.
     let max_tokens = *request
         .max_tokens
-        .get_or_insert_with(|| default_max_tokens(model));
+        .get_or_insert_with(|| max_output_tokens(model));
     let Some(claude) = Claude::parse(model) else {
         return request;
     };
@@ -495,12 +510,23 @@ mod tests {
     }
 
     #[test]
-    fn missing_output_limits_cover_known_new_and_custom_model_ids() {
+    fn missing_output_limits_send_the_model_output_ceiling() {
         for (model, expected) in [
-            ("claude-sonnet-4-6", 64_000),
+            ("claude-opus-5-5", 128_000),
+            ("claude-sonnet-5-5", 128_000),
+            ("claude-haiku-5-5", 128_000),
+            ("claude-fable-5-1", 128_000),
+            ("claude-mythos-preview", 128_000),
+            ("claude-sonnet-4-6", 128_000),
             ("claude-opus-4-7", 128_000),
-            ("claude-opus-5-5", 2_048),
-            ("hosted-assistant-bit", 2_048),
+            ("claude-opus-4-5", 64_000),
+            ("claude-sonnet-4-5-20250929", 64_000),
+            ("anthropic.claude-haiku-4-5@20251001", 64_000),
+            ("claude-opus-4-1-20250805", 32_000),
+            ("claude-3-5-haiku-20241022", 8_192),
+            ("claude-3-opus-20240229", 4_096),
+            ("claude-opus-7", 128_000),
+            ("hosted-assistant-bit", 128_000),
         ] {
             let mut unbounded = request(json!({}));
             unbounded.max_tokens = None;
@@ -517,18 +543,18 @@ mod tests {
     }
 
     #[test]
-    fn thinking_budget_uses_the_fallback_output_limit() {
+    fn thinking_budget_fits_the_model_output_ceiling() {
         let mut unbounded = request(json!({
-            "thinking": {"type": "enabled", "budget_tokens": 16_384},
+            "thinking": {"type": "enabled", "budget_tokens": 100_000},
         }));
         unbounded.max_tokens = None;
 
-        let fixed = anthropic_request("claude-3-7-sonnet-latest", unbounded).unwrap();
+        let fixed = anthropic_request("claude-haiku-4-5", unbounded).unwrap();
 
-        assert_eq!(fixed.max_tokens, Some(2_048));
+        assert_eq!(fixed.max_tokens, Some(64_000));
         assert_eq!(
             fixed.additional_params.unwrap()["thinking"]["budget_tokens"],
-            2_047
+            63_999
         );
     }
 
@@ -815,10 +841,230 @@ mod tests {
 
                 let body: Value = serde_json::from_str(&server.await.unwrap()).unwrap();
                 assert_eq!(body["model"], model_id);
-                assert_eq!(body["max_tokens"], 2_048, "{model_id}, stream={streaming}");
+                assert_eq!(
+                    body["max_tokens"], 128_000,
+                    "{model_id}, stream={streaming}"
+                );
                 assert_eq!(body["stream"].as_bool().unwrap_or(false), streaming);
             }
         }
+    }
+
+    const STABLE: &str = "You are Ada, one of your owner's bots.\n\n## WHAT YOU CAN DO\nSearch.";
+    const CONTEXT: &str = "## CONTEXT\nIt is Friday, 09:30.";
+
+    fn cached_message(usage: Value) -> Value {
+        json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5-5",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": usage,
+        })
+    }
+
+    async fn messages_api(api_key: &str, model_id: &str, endpoint: Option<&str>) -> AnthropicModel {
+        let mut params = HashMap::from([
+            ("api_key".to_string(), json!(api_key)),
+            ("model_id".to_string(), json!(model_id)),
+        ]);
+        params.extend(endpoint.map(|endpoint| ("endpoint".to_string(), json!(endpoint))));
+        let provider = ModelProvider {
+            provider_name: "anthropic".to_string(),
+            model_id: None,
+            version: None,
+            api_surface: None,
+            params: Some(params),
+        };
+        AnthropicModel::from_provider(&provider, ProviderEgress::Open)
+            .await
+            .unwrap()
+    }
+
+    async fn streamed_usage(
+        request: rig::completion::CompletionRequestBuilder<crate::llm::CompletionModelHandle<'_>>,
+    ) -> rig::completion::Usage {
+        use rig::completion::GetTokenUsage;
+        use rig::streaming::StreamedAssistantContent;
+
+        let mut stream = request.stream().await.unwrap();
+        let mut usage = None;
+        while let Some(chunk) = stream.next().await {
+            if let StreamedAssistantContent::Final(response) = chunk.unwrap() {
+                usage = response.token_usage();
+            }
+        }
+        usage.expect("the stream closes with its usage")
+    }
+
+    /// A reply that read 4096 prompt tokens from cache and wrote 8. Its stream states the cache
+    /// counts in `message_start` only.
+    fn cached_reply(streaming: bool) -> String {
+        let usage = json!({
+            "input_tokens": 40,
+            "cache_read_input_tokens": 4096,
+            "cache_creation_input_tokens": 8,
+            "output_tokens": 3,
+        });
+        if !streaming {
+            return json_response(cached_message(usage));
+        }
+        sse_response(&[
+            json!({"type": "message_start", "message": cached_message(usage)}),
+            json!({
+                "type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": "ok"},
+            }),
+            json!({
+                "type": "message_delta", "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 3},
+            }),
+        ])
+    }
+
+    /// One bot turn against a recorded Messages API: the body it sent and the usage it read.
+    async fn bot_turn(streaming: bool, stable: Option<&str>) -> (Value, rig::completion::Usage) {
+        let (endpoint, server) = serve_once(cached_reply(streaming)).await;
+        let agent = messages_api("test-key", "claude-opus-5-5", Some(&endpoint))
+            .await
+            .provider()
+            .await
+            .unwrap()
+            .into_client()
+            .agent("claude-opus-5-5")
+            .preamble(&format!("{STABLE}\n\n{CONTEXT}"))
+            .build();
+        let call = async {
+            let request = agent
+                .completion("Hi", Vec::<rig::completion::Message>::new())
+                .await
+                .unwrap()
+                .tools(vec![crate::llm::test_support::typeless_tool()]);
+            if streaming {
+                streamed_usage(request).await
+            } else {
+                request.send().await.unwrap().usage
+            }
+        };
+        let usage = match stable {
+            Some(stable) => {
+                super::super::prompt_cache::with_stable_system_prefix(stable.to_string(), call)
+                    .await
+            }
+            None => call.await,
+        };
+        (serde_json::from_str(&server.await.unwrap()).unwrap(), usage)
+    }
+
+    #[tokio::test]
+    async fn bot_turns_cache_the_stable_head_and_growing_conversation() {
+        for streaming in [false, true] {
+            let (body, _) = bot_turn(streaming, Some(STABLE)).await;
+
+            assert_eq!(
+                body["system"],
+                json!([
+                    {"type": "text", "text": STABLE, "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": CONTEXT},
+                ]),
+                "stream={streaming}"
+            );
+            assert_eq!(
+                body.to_string().matches("cache_control").count(),
+                2,
+                "a fixed head and an automatic conversation breakpoint: {body}"
+            );
+            assert_eq!(body["cache_control"], json!({"type": "ephemeral"}));
+            assert_eq!(body["tools"][0]["name"], "interact_app_page");
+        }
+    }
+
+    #[tokio::test]
+    async fn calls_without_a_stable_head_send_one_unmarked_system_block() {
+        for streaming in [false, true] {
+            let (body, _) = bot_turn(streaming, None).await;
+            assert_eq!(
+                body["system"],
+                json!([{"type": "text", "text": format!("{STABLE}\n\n{CONTEXT}")}]),
+                "stream={streaming}"
+            );
+            assert!(!body.to_string().contains("cache_control"), "{body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn usage_counts_cached_prompt_tokens_as_input() {
+        for streaming in [false, true] {
+            let (_, usage) = bot_turn(streaming, Some(STABLE)).await;
+            assert_eq!(usage.input_tokens, 40 + 4096 + 8, "stream={streaming}");
+            assert_eq!(usage.cached_input_tokens, 4096, "stream={streaming}");
+            assert_eq!(usage.cache_creation_input_tokens, 8, "stream={streaming}");
+            assert_eq!(usage.total_tokens, 40 + 4096 + 8 + 3, "stream={streaming}");
+            let metered = crate::response::Usage::from_rig(usage);
+            assert_eq!(metered.prompt_tokens, 4144, "stream={streaming}");
+            assert_eq!(
+                metered.prompt_tokens + metered.completion_tokens,
+                metered.total_tokens
+            );
+        }
+    }
+
+    /// `ANTHROPIC_API_KEY=… cargo test -p flow-like-model-provider --lib -- --ignored
+    /// live_second_call_reads_the_stable_head_from_cache --nocapture`; `ANTHROPIC_CACHE_MODEL`
+    /// picks the model (default `claude-opus-5-5`).
+    #[tokio::test]
+    #[ignore = "calls the live Anthropic API set by ANTHROPIC_API_KEY"]
+    async fn live_second_call_reads_the_stable_head_from_cache() {
+        dotenv::dotenv().ok();
+        let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") else {
+            println!("Skipping the Anthropic cache test: ANTHROPIC_API_KEY is not set");
+            return;
+        };
+        let model_id =
+            std::env::var("ANTHROPIC_CACHE_MODEL").unwrap_or_else(|_| "claude-opus-5-5".into());
+        let client = messages_api(&api_key, &model_id, None)
+            .await
+            .provider()
+            .await
+            .unwrap()
+            .into_client();
+        let stable: String = std::iter::once(
+            "You are Ada, a terse assistant. Answer in one short sentence.".to_string(),
+        )
+        .chain((1..=600).map(|rule| {
+            format!("Rule {rule}: when asked about item {rule}, say it is stocked in aisle {rule}.")
+        }))
+        .collect::<Vec<_>>()
+        .join("\n");
+        let mut reads = Vec::new();
+        for (turn, clock) in ["09:30", "09:31"].into_iter().enumerate() {
+            let agent = client
+                .agent(&model_id)
+                .preamble(&format!(
+                    "{stable}\n\n## CONTEXT\nIt is {clock}. Turn {turn}."
+                ))
+                .max_tokens(256)
+                .build();
+            let usage =
+                super::super::prompt_cache::with_stable_system_prefix(stable.clone(), async {
+                    let request = agent
+                        .completion("Where is item 7?", Vec::<rig::completion::Message>::new())
+                        .await
+                        .unwrap();
+                    streamed_usage(request).await
+                })
+                .await;
+            println!("turn {turn}: {usage:?}");
+            reads.push(usage);
+        }
+        assert!(
+            reads[1].cached_input_tokens > 0,
+            "the second call read nothing from cache: {:?}",
+            reads[1]
+        );
+        assert!(reads[1].input_tokens > reads[1].cached_input_tokens);
     }
 
     #[tokio::test]

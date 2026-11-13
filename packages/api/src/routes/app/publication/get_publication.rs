@@ -3,7 +3,10 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::user::sign_avatar,
+    routes::user::{
+        identity::{public_display_name, public_handle},
+        sign_avatar,
+    },
     state::AppState,
 };
 use axum::{
@@ -121,12 +124,20 @@ pub async fn get_publication_requests(
             None => None,
         };
 
+        // `username` is the handle the directory shows, never the login name.
         authors.insert(
             user_record.id.clone(),
             AppPublicationActor {
+                username: user_record
+                    .preferred_username
+                    .as_deref()
+                    .and_then(public_handle),
+                name: public_display_name(
+                    user_record.name.as_deref(),
+                    None,
+                    user_record.email.as_deref(),
+                ),
                 user_id: user_record.id,
-                username: user_record.username,
-                name: user_record.name,
                 avatar,
             },
         );

@@ -126,9 +126,12 @@ export function useBotEditorSubmit(
 			),
 		);
 		const failed = results.filter(
-			(result) => result.status === "rejected",
-		).length;
-		if (failed) toast.warning(t("editor.appsAttachFailed", { count: failed }));
+			(result): result is PromiseRejectedResult => result.status === "rejected",
+		);
+		if (failed.length)
+			toast.warning(t("editor.appsAttachFailed", { count: failed.length }), {
+				description: errorMessage(failed[0].reason, "") || undefined,
+			});
 	};
 
 	const create = async () => {

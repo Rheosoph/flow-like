@@ -49,6 +49,11 @@ interface PlanStepsProps {
 
 const VISIBLE_STEPS_COUNT = 4;
 
+/** A step whose card asks the user to act; a live turn's group stays open for it. */
+function needsUser(step: IPlanStep): boolean {
+	return step.detail?.kind === "tool_activity" && !!step.detail.permission;
+}
+
 function StatusIcon({ status }: { status: PlanStepStatus }) {
 	const labels: Record<PlanStepStatus, string> = {
 		planned: "Planned",
@@ -582,11 +587,12 @@ export function InlineStepGroup({
 		steps.some((s) => s.status === "progress" || s.status === "planned");
 	const [open, setOpen] = useState(isLive);
 	const wasLiveRef = useRef(isLive);
+	const asksUser = steps.some(needsUser);
 	useEffect(() => {
-		if (wasLiveRef.current && !isLive) setOpen(false);
+		if (wasLiveRef.current && !isLive && !asksUser) setOpen(false);
 		if (!wasLiveRef.current && isLive) setOpen(true);
 		wasLiveRef.current = isLive;
-	}, [isLive]);
+	}, [isLive, asksUser]);
 
 	useEffect(() => {
 		if (!currentStepId) return;
@@ -694,15 +700,16 @@ export function PlanSteps({
 	// Messages loaded from history (settled from the start) begin collapsed for the same reason.
 	const [open, setOpen] = useState(running || hasGaps);
 	const wasRunningRef = useRef(running);
+	const asksUser = steps.some(needsUser);
 	useEffect(() => {
-		if (wasRunningRef.current && !running && !hasGaps) {
+		if (wasRunningRef.current && !running && !hasGaps && !asksUser) {
 			setOpen(false);
 		}
 		if (!wasRunningRef.current && running) {
 			setOpen(true);
 		}
 		wasRunningRef.current = running;
-	}, [running, hasGaps]);
+	}, [running, hasGaps, asksUser]);
 
 	useEffect(() => {
 		if (currentStepId) {
@@ -722,7 +729,9 @@ export function PlanSteps({
 		// Keep the build lanes and complete research trail visible as more tool calls arrive.
 		const researchIds = new Set(getResearchSteps(steps).map((step) => step.id));
 		const pinned = (step: IPlanStep) =>
-			step.detail?.kind === "build_lane" || researchIds.has(step.id);
+			step.detail?.kind === "build_lane" ||
+			researchIds.has(step.id) ||
+			needsUser(step);
 		const rest = steps.filter((step) => !pinned(step));
 		if (rest.length === steps.length) {
 			const cutoff = steps.length - VISIBLE_STEPS_COUNT;

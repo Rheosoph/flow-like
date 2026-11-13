@@ -138,4 +138,7 @@ message App {
   // Set on a bot's workspace: the id of the bot the app belongs to. App lists
   // hide such apps.
   optional string bot_id = 32;
+
+  // The owner refuses bots in this app. Unset means bots may use it.
+  optional bool refuse_bots = 33;
 }

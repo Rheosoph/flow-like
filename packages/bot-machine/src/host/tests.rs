@@ -54,6 +54,10 @@ impl BrowserBackend for FakeBrowser {
         self.opened.lock().unwrap().push(url.into());
         Ok(page(url))
     }
+    async fn open_in_owner_browser(&self, url: &str) -> Result<PageState> {
+        self.opened.lock().unwrap().push(format!("owner:{url}"));
+        Ok(page(url))
+    }
     async fn snapshot(&self, request: SnapshotRequest) -> Result<SnapshotView> {
         Ok(SnapshotView {
             page: page("https://a.example/"),
@@ -122,6 +126,7 @@ impl ComputerBackend for FakeScreen {
             height: 4,
             focused: true,
             minimized: false,
+            onscreen: true,
         }])
     }
     async fn window(&self, window: &str, op: WindowOp, bounds: WindowBounds) -> Result<String> {
@@ -227,6 +232,25 @@ async fn while_taken_over_every_computer_and_browser_call_is_refused_and_the_not
             .contains("The owner used the computer")
     );
     assert!(computer.screenshot().await.unwrap().note.is_none());
+}
+
+#[tokio::test]
+async fn an_open_in_the_owners_browser_passes_the_same_takeover_guard() {
+    let playground = Arc::new(FakePlayground::default());
+    let host = local_ish(playground.clone());
+    let browser = host.machine("b", None, true, false).browser.unwrap();
+    let url = "https://a.example/";
+    host.take_over("b").unwrap();
+    let refused = browser.open_in_owner_browser(url).await.unwrap_err();
+    assert_eq!(ToolError::from(refused).code, code::TAKEN_OVER);
+    assert!(playground.browser.opened.lock().unwrap().is_empty());
+
+    host.hand_back("b").unwrap();
+    assert_eq!(browser.open_in_owner_browser(url).await.unwrap().url, url);
+    assert_eq!(
+        *playground.browser.opened.lock().unwrap(),
+        [format!("owner:{url}")]
+    );
 }
 
 #[tokio::test]

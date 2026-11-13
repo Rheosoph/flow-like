@@ -3,9 +3,10 @@ use super::{
         assert_code, at, conversation, database, delete_bot, delivery, insert_bot, recipient, says,
     },
     ledger::{
-        BOT_TURN_LEASE_LOST, BOT_TURN_NOT_RETRYABLE, ClaimRequest, DESKTOP_HANDOFF_SECS, Refusal,
-        claim_in, enqueue_in, fail_held_in, hand_back_in, heartbeat_in, mark_failed_after_reply_in,
-        next_head, queued_heads, queues_turn, recover_in, release_for_retry_in, retry_in, take_in,
+        BOT_TURN_LEASE_LOST, BOT_TURN_NOT_RETRYABLE, ClaimRequest, DESKTOP_HANDOFF_SECS,
+        ERROR_LEFT_ROOM, Refusal, RetryRelease, cancel_left_room_in, claim_in, enqueue_in,
+        fail_held_in, hand_back_in, heartbeat_in, hold_in, mark_failed_after_reply_in, next_head,
+        queued_heads, queues_turn, recover_in, release_for_retry_in, retry_in, take_in,
         watched_turn,
     },
 };
@@ -219,6 +220,7 @@ fn a_reaction_wakes_only_the_bot_it_reacts_to_in_a_group_or_a_direct_conversatio
     for kind in [ConversationKind::Group, ConversationKind::Direct] {
         let mut reacted = recipient("bot_1", "user-a", SERVER);
         reacted.reacted = true;
+        reacted.read_along = kind == ConversationKind::Group;
         let mut other = recipient("bot_2", "user-a", SERVER);
         other.read_along = true;
         other.mentioned = true;
@@ -559,10 +561,17 @@ async fn a_claim_checks_ownership_host_kind_bot_and_retry_time() {
 
     claim(&db, "bot_1", "m1", "h1", at(10)).await.unwrap();
     let retry_at = at(30);
-    assert!(
+    assert_eq!(
         release_for_retry_in(&db, &id, "h1", retry_at, "BOT_TURN_MODEL_ERROR", at(20))
             .await
-            .unwrap()
+            .unwrap(),
+        RetryRelease::Requeued
+    );
+    assert_eq!(
+        release_for_retry_in(&db, &id, "h1", retry_at, "BOT_TURN_MODEL_ERROR", at(21))
+            .await
+            .unwrap(),
+        RetryRelease::Lost
     );
     assert_eq!(
         claim(&db, "bot_1", "m1", "h2", at(25)).await.unwrap_err(),
@@ -673,7 +682,10 @@ async fn recovery_requeues_lost_hosts_fails_the_spent_and_the_stale() {
         claim_in(&db, &lost(bot)).await.unwrap().unwrap();
     }
     bot_turn_checkpoint::Entity::update_many()
-        .col_expr(bot_turn_checkpoint::Column::RecoveryAttempts, Expr::value(MAX_ATTEMPTS as i32 - 1))
+        .col_expr(
+            bot_turn_checkpoint::Column::RecoveryAttempts,
+            Expr::value(MAX_ATTEMPTS as i32 - 1),
+        )
         .filter(bot_turn_checkpoint::Column::TurnId.eq(turn_id("bot_2", "m1")))
         .exec(&db)
         .await
@@ -723,7 +735,9 @@ async fn recovered_work_keeps_its_trigger_and_does_not_fold_newer_messages() {
     claim(&db, "bot_1", "original", "old", at(2)).await.unwrap();
     queue(&db, "bot_1", "user-a", SERVER, "c1", "newer", at(3)).await;
     assert_eq!(recover_in(&db, at(63)).await.unwrap().requeued, 1);
-    let heads = queued_heads(&db, Some("user-a"), TurnHostKind::Server, at(64), 10).await.unwrap();
+    let heads = queued_heads(&db, Some("user-a"), TurnHostKind::Server, at(64), 10)
+        .await
+        .unwrap();
     assert_eq!(heads.len(), 1);
     assert_eq!(heads[0].0.trigger_message_id, "original");
     assert!(heads[0].1.is_empty());
@@ -741,13 +755,40 @@ async fn stale_recovery_snapshot_cannot_fail_a_renewed_or_reclaimed_lease() {
     queue(&db, "bot_1", "user-a", SERVER, "c1", "m1", at(1)).await;
     claim(&db, "bot_1", "m1", "first", at(2)).await.unwrap();
     let stale = row(&db, "bot_1", "m1").await;
-    heartbeat_in(&db, &stale.id, Some("user-a"), "first", at(60)).await.unwrap();
-    assert_eq!(super::ledger::end_all(&db, std::slice::from_ref(&stale), &[STORED_RUNNING],
-        STORED_FAILED, ERROR_HOST_LOST, at(63)).await.unwrap(), 0);
+    heartbeat_in(&db, &stale.id, Some("user-a"), "first", at(60))
+        .await
+        .unwrap();
+    assert_eq!(
+        super::ledger::end_all(
+            &db,
+            std::slice::from_ref(&stale),
+            &[STORED_RUNNING],
+            STORED_FAILED,
+            ERROR_HOST_LOST,
+            at(63)
+        )
+        .await
+        .unwrap(),
+        0
+    );
     claim(&db, "bot_1", "m1", "second", at(121)).await.unwrap();
-    assert_eq!(super::ledger::end_all(&db, std::slice::from_ref(&stale), &[STORED_RUNNING],
-        STORED_FAILED, ERROR_HOST_LOST, at(122)).await.unwrap(), 0);
-    assert_eq!(row(&db, "bot_1", "m1").await.host_id.as_deref(), Some("second"));
+    assert_eq!(
+        super::ledger::end_all(
+            &db,
+            std::slice::from_ref(&stale),
+            &[STORED_RUNNING],
+            STORED_FAILED,
+            ERROR_HOST_LOST,
+            at(122)
+        )
+        .await
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        row(&db, "bot_1", "m1").await.host_id.as_deref(),
+        Some("second")
+    );
 }
 
 #[tokio::test]
@@ -756,13 +797,27 @@ async fn exhausted_queued_claim_cannot_restart_the_attempt_budget() {
     insert_bot(&db, "bot_1", "user-a", "SERVER").await;
     queue(&db, "bot_1", "user-a", SERVER, "c1", "m1", at(1)).await;
     let id = turn_id("bot_1", "m1");
-    super::recovery::ensure_metadata(&db, &row(&db, "bot_1", "m1").await).await.unwrap();
+    super::recovery::ensure_metadata(&db, &row(&db, "bot_1", "m1").await)
+        .await
+        .unwrap();
     bot_turn_checkpoint::Entity::update_many()
-        .col_expr(bot_turn_checkpoint::Column::RecoveryAttempts, Expr::value(MAX_ATTEMPTS as i32))
-        .filter(bot_turn_checkpoint::Column::TurnId.eq(&id)).exec(&db).await.unwrap();
+        .col_expr(
+            bot_turn_checkpoint::Column::RecoveryAttempts,
+            Expr::value(MAX_ATTEMPTS as i32),
+        )
+        .filter(bot_turn_checkpoint::Column::TurnId.eq(&id))
+        .exec(&db)
+        .await
+        .unwrap();
     assert!(!take_in(&db, &id, "host", at(2)).await.unwrap());
-    assert_eq!(claim(&db, "bot_1", "m1", "host", at(2)).await.unwrap_err(), Refusal::NotQueued(TurnStatus::Failed));
-    assert_eq!(row(&db, "bot_1", "m1").await.error_code.as_deref(), Some(ERROR_HOST_LOST));
+    assert_eq!(
+        claim(&db, "bot_1", "m1", "host", at(2)).await.unwrap_err(),
+        Refusal::NotQueued(TurnStatus::Failed)
+    );
+    assert_eq!(
+        row(&db, "bot_1", "m1").await.error_code.as_deref(),
+        Some(ERROR_HOST_LOST)
+    );
 }
 
 #[tokio::test]
@@ -1077,4 +1132,125 @@ async fn the_server_takes_back_a_handed_off_turn_no_desktop_claimed() {
     );
     assert_eq!(host_kind(&db, "bot_desk", "m1").await, "DESKTOP");
     assert!(claim(&db, "bot_flux", "m1", "server", late).await.is_ok());
+}
+
+#[test]
+fn a_reaction_does_not_wake_a_bot_limited_to_mentions_in_a_group() {
+    let mut limited = recipient("bot_1", "user-a", SERVER);
+    limited.reacted = true;
+    limited.read_along = false;
+    let mut found = delivery(ConversationKind::Group, vec![limited.clone()]);
+    found.kind = InboxEntryKind::Reaction;
+    assert!(!queues_turn(&found, &limited));
+    limited.read_along = true;
+    assert!(queues_turn(&found, &limited));
+}
+
+#[tokio::test]
+async fn a_spent_retry_leaves_the_turn_held_for_the_caller_to_end() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", "SERVER").await;
+    queue(&db, "bot_1", "user-a", SERVER, "c1", "m1", at(1)).await;
+    let id = turn_id("bot_1", "m1");
+    let mut now = at(10);
+    for attempt in 1..=MAX_ATTEMPTS {
+        claim(&db, "bot_1", "m1", "h1", now).await.unwrap();
+        let released = release_for_retry_in(&db, &id, "h1", now, "BOT_TURN_MODEL_ERROR", now)
+            .await
+            .unwrap();
+        if attempt == MAX_ATTEMPTS {
+            assert_eq!(released, RetryRelease::Spent);
+        } else {
+            assert_eq!(released, RetryRelease::Requeued);
+        }
+        now += Duration::seconds(1);
+    }
+    let held = row(&db, "bot_1", "m1").await;
+    assert_eq!(held.status, STORED_RUNNING);
+    assert_eq!(held.host_id.as_deref(), Some("h1"));
+}
+
+#[tokio::test]
+async fn the_server_does_not_take_back_a_sealed_conversations_turn() {
+    let db = handoff_db().await;
+    conversation(&db, "c1", "DIRECT", "E2E", &["user-a", "bot_flux"]).await;
+    desktop_saw_flux(&db, at(0)).await;
+    let flux = BotRecipient {
+        hands_off: true,
+        ..recipient("bot_flux", "user-a", SERVER)
+    };
+    let queued = enqueue_in(&db, &delivery(ConversationKind::Direct, vec![flux]), at(1))
+        .await
+        .unwrap();
+    assert_eq!(queued, 1);
+    assert_eq!(host_kind(&db, "bot_flux", "m1").await, "DESKTOP");
+
+    let late = at(2 + DESKTOP_HANDOFF_SECS);
+    assert!(hand_back_in(&db, late).await.unwrap().is_empty());
+    assert_eq!(host_kind(&db, "bot_flux", "m1").await, "DESKTOP");
+}
+
+#[tokio::test]
+async fn a_bot_that_left_the_room_loses_its_unfinished_turns_and_cannot_claim() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", "SERVER").await;
+    insert_bot(&db, "bot_2", "user-a", "SERVER").await;
+    conversation(&db, "c1", "GROUP", "PLAIN", &["user-a", "bot_1", "bot_2"]).await;
+    queue(&db, "bot_1", "user-a", SERVER, "c1", "m1", at(1)).await;
+    queue(&db, "bot_2", "user-a", SERVER, "c1", "m1", at(1)).await;
+    queue(&db, "bot_1", "user-a", SERVER, "c1", "m2", at(2)).await;
+
+    cancel_left_room_in(&db, "c1", &["bot_1".to_string()], at(5))
+        .await
+        .unwrap();
+    for trigger in ["m1", "m2"] {
+        let cancelled = row(&db, "bot_1", trigger).await;
+        assert_eq!(cancelled.status, STORED_CANCELLED, "{trigger}");
+        assert_eq!(cancelled.error_code.as_deref(), Some(ERROR_LEFT_ROOM));
+    }
+    assert_eq!(row(&db, "bot_2", "m1").await.status, STORED_QUEUED);
+
+    queue(&db, "bot_1", "user-a", SERVER, "c1", "m3", at(6)).await;
+    crate::entity::conversation_member::Entity::update_many()
+        .col_expr(
+            crate::entity::conversation_member::Column::LeftAt,
+            Expr::value(at(5)),
+        )
+        .filter(crate::entity::conversation_member::Column::PrincipalId.eq("bot_1"))
+        .exec(&db)
+        .await
+        .unwrap();
+    assert_eq!(
+        claim(&db, "bot_1", "m3", "h1", at(7)).await.unwrap_err(),
+        Refusal::BotGone
+    );
+    assert_eq!(row(&db, "bot_1", "m3").await.status, STORED_CANCELLED);
+}
+
+#[tokio::test]
+async fn a_hold_does_not_keep_a_queued_turn_alive_past_the_queue_expiry() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", "SERVER").await;
+    let mut interactive = recipient("bot_1", "user-a", SERVER);
+    interactive.interactive = true;
+    enqueue_in(
+        &db,
+        &delivery(ConversationKind::Direct, vec![interactive]),
+        at(1),
+    )
+    .await
+    .unwrap();
+    let id = turn_id("bot_1", "m1");
+    assert!(
+        hold_in(&db, &id, "user-a", at(QUEUED_EXPIRY_SECS - 10))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !hold_in(&db, &id, "user-a", at(QUEUED_EXPIRY_SECS + 5))
+            .await
+            .unwrap()
+    );
+    let recovered = recover_in(&db, at(2 * QUEUED_EXPIRY_SECS)).await.unwrap();
+    assert_eq!(recovered.expired, 1);
 }

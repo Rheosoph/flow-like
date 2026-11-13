@@ -25,6 +25,9 @@ model User {
   tutorialCompleted    Boolean @default(false)
   devMode              Boolean @default(false)
 
+  // Other people see `email` only once its owner turned this on. Null is off.
+  shareEmail Boolean? @default(false)
+
   memberships                 Membership[]
   profiles                    Profile[]
   personalAccessToken         PAT[]
@@ -94,6 +97,8 @@ model Profile {
   bitIds        Json?
   hub           String
   hubs          Json?
+  // Bots the profile hides from its crew: a custom bot's ID or a built-in bot's system key.
+  hiddenBots    Json?
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -188,7 +193,6 @@ model LLMUsageTracking {
   userId String?
 
   technicalUserId String?
-  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   app   App?    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String?
@@ -227,7 +231,6 @@ model EmbeddingUsageTracking {
   appId String?
 
   technicalUserId String?
-  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   price BigInt
 
@@ -263,7 +266,6 @@ model ExecutionUsageTracking {
   appId String?
 
   technicalUserId String?
-  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -293,7 +295,6 @@ model ExecutionUsageDaily {
   userId String?
 
   technicalUserId String?
-  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   app   App?    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String?
@@ -495,8 +496,10 @@ model ExecutionRun {
   app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String
 
+  /// The technical actor that started the run: an API key (`TechnicalUser.id`) or a bot
+  /// (`Bot.id`). No foreign key, because a bot is not a `TechnicalUser`; the usage tables'
+  /// `technicalUserId` copies it and has none either.
   technicalUserId String?
-  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   /// If the run was triggered through an app connection: the chain of apps
   /// that led to this run (first = original caller), stored as a JSON string

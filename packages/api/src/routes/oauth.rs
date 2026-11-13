@@ -866,11 +866,16 @@ pub(crate) async fn authorize_incoming_oauth_tokens(
         return Ok(());
     };
     let owner = incoming_token_owner(user, tokens)?;
-    for (provider, token) in tokens.iter_mut() {
-        *token = resolve_oauth_token(state, provider, token, owner.as_deref())
-            .await
-            .map_err(|error| oauth_api_error(provider, error))?;
-    }
+    let owner = owner.as_deref();
+    let resolved =
+        futures::future::try_join_all(tokens.iter().map(|(provider, token)| async move {
+            resolve_oauth_token(state, provider, token, owner)
+                .await
+                .map(|resolved| (provider.clone(), resolved))
+                .map_err(|error| oauth_api_error(provider, error))
+        }))
+        .await?;
+    tokens.extend(resolved);
     Ok(())
 }
 

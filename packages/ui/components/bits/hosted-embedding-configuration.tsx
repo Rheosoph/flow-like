@@ -227,6 +227,23 @@ export function HostedEmbeddingConfiguration({
 								)}
 							</p>
 						)}
+						{implementation === IRemoteEmbeddingProvider.CloudflareWorkersAI &&
+							remote.model_id?.trim() === "@cf/google/embeddinggemma-2" && (
+								<div className="space-y-2 text-sm text-muted-foreground">
+									<p>
+										{t(
+											"cloudflareGemma2EmbeddingCapabilities",
+											"EmbeddingGemma 2 accepts text, images, audio and video. Set 128, 256, 512 or 768 vector dimensions and an input length of at most 8192 tokens. The server requests the vector length configured for this Bit; the model's default is 768.",
+										)}
+									</p>
+									<p>
+										{t(
+											"cloudflareGemma2EmbeddingPrefixes",
+											'For search, set the query prefix to "task: search result | query: " and the paragraph prefix to "title: none | text: ", including the trailing spaces. Prefixes apply to text.',
+										)}
+									</p>
+								</div>
+							)}
 						{implementation === IRemoteEmbeddingProvider.OpenRouter &&
 							remote.model_id?.trim() === "google/gemini-embedding-2" && (
 								<p className="text-sm text-muted-foreground">

@@ -7,6 +7,7 @@
 //! reads is derived here instead, from the standard OIDC profile claims.
 
 use crate::middleware::jwt::UserInfo;
+use flow_like::hub::Lookup;
 
 const MAX_DISPLAY_NAME_LEN: usize = 96;
 const MAX_HANDLE_LEN: usize = 64;
@@ -144,18 +145,22 @@ fn title_case_word(word: &str) -> String {
     }
 }
 
-/// `felix.schultz@example.com` → `Felix Schultz`. Returns `None` for relay
+/// The part of an address that names its owner, without a `+tag`. `None` for relay
 /// addresses and for local parts that are themselves opaque.
-pub fn humanize_email_local_part(email: &str) -> Option<String> {
+fn email_local_part(email: &str) -> Option<&str> {
     if is_private_relay_email(email) {
         return None;
     }
 
     let local = email.split('@').next()?.trim();
     let local = local.split('+').next().unwrap_or(local);
-    if local.is_empty() || is_opaque_identifier(&local.to_ascii_lowercase()) {
-        return None;
-    }
+    (!local.is_empty() && !is_opaque_identifier(&local.to_ascii_lowercase())).then_some(local)
+}
+
+/// `felix.schultz@example.com` → `Felix Schultz`. Returns `None` for relay
+/// addresses and for local parts that are themselves opaque.
+pub fn humanize_email_local_part(email: &str) -> Option<String> {
+    let local = email_local_part(email)?;
 
     let words = local
         .split(['.', '_', '-'])
@@ -170,20 +175,198 @@ pub fn humanize_email_local_part(email: &str) -> Option<String> {
     sanitize_display_name(&words.join(" "))
 }
 
-/// The handle we are willing to show publicly, or `None` when the provider only
-/// gave us its internal one.
-pub fn derive_public_handle(info: &UserInfo) -> Option<String> {
-    let candidate = info.preferred_username.as_deref()?;
-    if is_idp_handle(candidate) {
+/// The address other people see for an account: none, unless the hub shows every
+/// member's address (`lookup.email`) or the person turned sharing on (`User.shareEmail`,
+/// off until they do).
+pub fn shared_email(
+    lookup: &Lookup,
+    share_email: Option<bool>,
+    email: Option<String>,
+) -> Option<String> {
+    email.filter(|_| lookup.email || share_email == Some(true))
+}
+
+/// True for a bare address such as `felix@example.com`. Federated sign-ins map the
+/// address into `preferred_username`, and from there it used to become the display
+/// name, so neither field may be shown as it is stored: a person's address reaches
+/// other people only through [`shared_email`].
+pub fn is_email_like(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.chars().any(char::is_whitespace) {
+        return false;
+    }
+    trimmed.rsplit_once('@').is_some_and(|(local, domain)| {
+        !local.is_empty()
+            && domain.contains('.')
+            && !domain.starts_with('.')
+            && !domain.ends_with('.')
+    })
+}
+
+/// A handle other people may see, or `None` for a provider handle or an address.
+pub fn public_handle(value: &str) -> Option<String> {
+    if is_idp_handle(value) || is_email_like(value) {
         return None;
     }
-    sanitize_bounded(candidate, MAX_HANDLE_LEN)
+    sanitize_bounded(value, MAX_HANDLE_LEN)
+}
+
+pub const HANDLE_MIN_LEN: usize = 3;
+pub const HANDLE_MAX_LEN: usize = 30;
+
+/// A derived username leaves room for the `-9999` that tells it apart from a taken one.
+pub(crate) const DERIVED_HANDLE_MAX_LEN: usize = HANDLE_MAX_LEN - 5;
+
+/// Characters that only join the letters around them: apostrophes, as in `O'Neil`, and
+/// combining accents of decomposed text.
+fn is_elided(c: char) -> bool {
+    matches!(c, '\'' | '’' | '‘' | '`' | '´' | '\u{0300}'..='\u{036F}')
+}
+
+/// The ASCII spelling of a lowercase letter outside ASCII, empty for anything else.
+/// Kept in lockstep with `ASCII_LETTERS` in packages/ui/lib/user-display.ts.
+fn ascii_letters(c: char) -> &'static str {
+    match c {
+        'ä' | 'æ' => "ae",
+        'ö' | 'œ' => "oe",
+        'ü' => "ue",
+        'ß' => "ss",
+        'þ' => "th",
+        'à' | 'á' | 'â' | 'ã' | 'å' | 'ā' | 'ă' | 'ą' => "a",
+        'ç' | 'ć' | 'č' => "c",
+        'ď' | 'đ' | 'ð' => "d",
+        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ė' | 'ę' | 'ě' => "e",
+        'ğ' => "g",
+        'ì' | 'í' | 'î' | 'ï' | 'ī' | 'į' | 'ı' => "i",
+        'ł' => "l",
+        'ñ' | 'ń' | 'ň' => "n",
+        'ò' | 'ó' | 'ô' | 'õ' | 'ō' | 'ő' | 'ø' => "o",
+        'ř' => "r",
+        'ś' | 'š' | 'ş' | 'ș' => "s",
+        'ť' | 'ţ' | 'ț' => "t",
+        'ù' | 'ú' | 'û' | 'ū' | 'ů' | 'ű' | 'ų' => "u",
+        'ý' | 'ÿ' => "y",
+        'ź' | 'ż' | 'ž' => "z",
+        _ => "",
+    }
+}
+
+/// A username spelled from free text: lowercase ASCII words joined by `-`, so
+/// `Jürgen O'Neil` → `juergen-oneil`. `None` when fewer than three characters or no
+/// letter remain, or what remains reads as an account id.
+pub fn handle_slug(value: &str) -> Option<String> {
+    let mut words: Vec<String> = Vec::new();
+    let mut word = String::new();
+    for c in value.chars().flat_map(char::to_lowercase) {
+        if c.is_ascii_alphanumeric() {
+            word.push(c);
+            continue;
+        }
+        if is_elided(c) {
+            continue;
+        }
+        match ascii_letters(c) {
+            "" if !word.is_empty() => words.push(std::mem::take(&mut word)),
+            "" => {}
+            ascii => word.push_str(ascii),
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+
+    let mut slug = String::new();
+    for word in words {
+        let separator = usize::from(!slug.is_empty());
+        if slug.len() + separator + word.len() > DERIVED_HANDLE_MAX_LEN {
+            if slug.is_empty() {
+                slug = word[..DERIVED_HANDLE_MAX_LEN].to_string();
+            }
+            break;
+        }
+        if separator == 1 {
+            slug.push('-');
+        }
+        slug.push_str(&word);
+    }
+
+    (slug.len() >= HANDLE_MIN_LEN
+        && slug.chars().any(|c| c.is_ascii_alphabetic())
+        && !is_idp_handle(&slug))
+    .then_some(slug)
+}
+
+/// The username an account that has none is given: spelled from its name, else from
+/// its address's local part. Never from an address stored as the name, a relay address
+/// or a local part that is itself an id.
+pub fn derive_handle(name: Option<&str>, email: Option<&str>) -> Option<String> {
+    name.filter(|name| !is_email_like(name) && !is_idp_handle(name))
+        .and_then(handle_slug)
+        .or_else(|| email.and_then(email_local_part).and_then(handle_slug))
+}
+
+/// Why `value` cannot be chosen as a username, or `None` when it can. Usernames are
+/// unique without regard to case, which the caller checks.
+pub fn handle_problem(value: &str) -> Option<&'static str> {
+    let length = value.chars().count();
+    if !(HANDLE_MIN_LEN..=HANDLE_MAX_LEN).contains(&length) {
+        return Some("A username has 3 to 30 characters.");
+    }
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Some("A username uses only letters, digits, dots, hyphens and underscores.");
+    }
+    let letter_or_digit = |c: char| c.is_ascii_alphanumeric();
+    if !value.starts_with(letter_or_digit) || !value.ends_with(letter_or_digit) {
+        return Some("A username starts and ends with a letter or digit.");
+    }
+    if !value.chars().any(|c| c.is_ascii_alphabetic()) || is_idp_handle(value) {
+        return Some("Choose a username people can recognize, not an account id.");
+    }
+    None
+}
+
+/// A name other people may see. An address stored as a name reads as the name its
+/// local part spells, the same way an account without a name is shown.
+fn public_name(value: &str) -> Option<String> {
+    let name = sanitize_display_name(value)?;
+    if is_email_like(&name) {
+        return humanize_email_local_part(&name);
+    }
+    Some(name)
+}
+
+/// What other people call the account these columns belong to: the name, then the
+/// handle, then the name the email's local part spells. Never an address, a provider
+/// handle or the pool `username`, so every surface that names a person goes through
+/// here instead of chaining the columns itself.
+pub fn public_display_name(
+    name: Option<&str>,
+    preferred_username: Option<&str>,
+    email: Option<&str>,
+) -> Option<String> {
+    name.and_then(public_name)
+        .or_else(|| preferred_username.and_then(public_handle))
+        .or_else(|| email.and_then(humanize_email_local_part))
+}
+
+/// The handle we are willing to show publicly, or `None` when the provider only
+/// gave us its internal one or the person's address.
+pub fn derive_public_handle(info: &UserInfo) -> Option<String> {
+    public_handle(info.preferred_username.as_deref()?)
 }
 
 /// Best available human-readable name, in descending order of quality:
 /// `name` → `given_name family_name` → public handle → `nickname` → email local part.
 pub fn derive_display_name(info: &UserInfo) -> Option<String> {
-    if let Some(name) = info.name.as_deref().and_then(sanitize_display_name) {
+    if let Some(name) = info
+        .name
+        .as_deref()
+        .and_then(sanitize_display_name)
+        .filter(|name| !is_email_like(name))
+    {
         return Some(name);
     }
 
@@ -202,6 +385,7 @@ pub fn derive_display_name(info: &UserInfo) -> Option<String> {
 
     if let Some(nickname) = info.nickname.as_deref()
         && !is_idp_handle(nickname)
+        && !is_email_like(nickname)
         && let Some(nickname) = sanitize_display_name(nickname)
     {
         return Some(nickname);
@@ -510,6 +694,178 @@ mod tests {
         federated.preferred_username = Some("google_110293847561029384756".to_string());
         assert_eq!(derive_display_name(&federated), None);
         assert_eq!(derive_public_handle(&federated), None);
+    }
+
+    #[test]
+    fn an_address_is_neither_a_name_nor_a_handle() {
+        assert!(is_email_like("felix.schultz@example.com"));
+        assert!(is_email_like("  Felix@Example.COM "));
+        for readable in [
+            "@felix",
+            "felix@",
+            "felix@localhost",
+            "Felix @ Work",
+            "felix",
+        ] {
+            assert!(!is_email_like(readable), "{readable}");
+        }
+
+        assert_eq!(public_handle("felix.schultz@example.com"), None);
+        assert_eq!(public_handle("google_110293847561029384756"), None);
+        assert_eq!(public_handle(" felix ").as_deref(), Some("felix"));
+    }
+
+    #[test]
+    fn a_username_is_spelled_in_lowercase_ascii_words() {
+        for (text, slug) in [
+            ("Felix Schultz", "felix-schultz"),
+            ("felix.schultz", "felix-schultz"),
+            ("Jürgen Groß", "juergen-gross"),
+            ("Øyvind Ærø", "oyvind-aero"),
+            ("José María", "jose-maria"),
+            ("Jose\u{0301} Mari\u{0301}a", "jose-maria"),
+            ("O'Neil", "oneil"),
+            ("  Anna -- Lena  ", "anna-lena"),
+            ("fschultz88", "fschultz88"),
+        ] {
+            assert_eq!(handle_slug(text).as_deref(), Some(slug), "{text}");
+        }
+
+        let long = handle_slug("Maximilian Alexander von Hohenberg-Lichtenstein").unwrap();
+        assert!(long.len() <= DERIVED_HANDLE_MAX_LEN, "{long}");
+        assert_eq!(long, "maximilian-alexander-von");
+        let one_word = handle_slug(&"a".repeat(80)).unwrap();
+        assert_eq!(one_word.len(), DERIVED_HANDLE_MAX_LEN);
+    }
+
+    #[test]
+    fn text_without_a_recognizable_name_spells_no_username() {
+        for text in [
+            "李雷",
+            "Al",
+            "12345678",
+            "--",
+            "",
+            "9f8e7d6c5b4a3f2e1d0c9b8a7f6e",
+        ] {
+            assert_eq!(handle_slug(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_derived_username_prefers_the_name_and_never_spells_an_id() {
+        let address = Some("f.schultz88+news@example.com");
+        assert_eq!(
+            derive_handle(Some("Felix Schultz"), address).as_deref(),
+            Some("felix-schultz")
+        );
+        // An address stored as the name is not a name to spell.
+        assert_eq!(
+            derive_handle(Some("f.schultz88@example.com"), address).as_deref(),
+            Some("f-schultz88")
+        );
+        assert_eq!(derive_handle(None, address).as_deref(), Some("f-schultz88"));
+        assert_eq!(
+            derive_handle(Some("李雷"), address).as_deref(),
+            Some("f-schultz88")
+        );
+        for (name, email) in [
+            (None, Some("kj2h3g4jh2g@privaterelay.appleid.com")),
+            (None, Some("9f8e7d6c5b4a3f2e1d0c9b8a@example.com")),
+            (Some("001234.9f8e7d6c5b4a.0123"), None),
+            (None, None),
+        ] {
+            assert_eq!(derive_handle(name, email), None, "{name:?} {email:?}");
+        }
+    }
+
+    #[test]
+    fn a_chosen_username_is_short_plain_and_recognizable() {
+        for chosen in ["felix", "Felix.Schultz", "f_schultz-88", "abc"] {
+            assert_eq!(handle_problem(chosen), None, "{chosen}");
+        }
+        for refused in [
+            "fs",
+            "a-very-long-username-that-keeps-going",
+            "felix schultz",
+            "felix@example.com",
+            "jürgen",
+            "-felix",
+            "felix.",
+            "12345",
+            "google_110293847561029384756",
+        ] {
+            assert!(handle_problem(refused).is_some(), "{refused}");
+        }
+    }
+
+    #[test]
+    fn an_address_is_hidden_until_its_owner_or_the_hub_shares_it() {
+        let address = || Some("person@example.com".to_string());
+        let hidden = Lookup::default();
+        assert!(!hidden.email);
+        for not_shared in [None, Some(false)] {
+            assert_eq!(shared_email(&hidden, not_shared, address()), None);
+        }
+        assert_eq!(shared_email(&hidden, Some(true), address()), address());
+        assert_eq!(shared_email(&hidden, Some(true), None), None);
+
+        let hub_wide = Lookup {
+            email: true,
+            ..Lookup::default()
+        };
+        assert_eq!(shared_email(&hub_wide, None, address()), address());
+    }
+
+    #[test]
+    fn a_sign_in_that_maps_the_address_to_the_handle_still_gets_a_readable_name() {
+        let mut google = info(None, None, None);
+        google.email = Some("felix.schultz@example.com".to_string());
+        google.preferred_username = Some("felix.schultz@example.com".to_string());
+        assert_eq!(derive_public_handle(&google), None);
+        assert_eq!(
+            derive_display_name(&google).as_deref(),
+            Some("Felix Schultz")
+        );
+
+        let mut named_by_address = info(Some("felix.schultz@example.com"), None, None);
+        named_by_address.email = Some("felix.schultz@example.com".to_string());
+        named_by_address.nickname = Some("felix.schultz@example.com".to_string());
+        assert_eq!(
+            derive_display_name(&named_by_address).as_deref(),
+            Some("Felix Schultz")
+        );
+    }
+
+    #[test]
+    fn stored_columns_never_name_a_person_by_address_or_provider_handle() {
+        let address = Some("felix.schultz@example.com");
+        assert_eq!(
+            public_display_name(Some("Felix Schultz"), Some("felix"), address).as_deref(),
+            Some("Felix Schultz")
+        );
+        assert_eq!(
+            public_display_name(address, address, None).as_deref(),
+            Some("Felix Schultz")
+        );
+        assert_eq!(public_display_name(None, address, None), None);
+        assert_eq!(
+            public_display_name(None, Some("felix"), address).as_deref(),
+            Some("felix")
+        );
+        assert_eq!(
+            public_display_name(None, Some("google_110293847561029384756"), address).as_deref(),
+            Some("Felix Schultz")
+        );
+        assert_eq!(
+            public_display_name(Some("kj2h3g4jh2g@privaterelay.appleid.com"), None, None),
+            None
+        );
+        assert_eq!(
+            public_display_name(Some("  Ada   Lovelace "), None, address).as_deref(),
+            Some("Ada Lovelace")
+        );
+        assert_eq!(public_display_name(Some("  "), None, None), None);
     }
 
     #[test]

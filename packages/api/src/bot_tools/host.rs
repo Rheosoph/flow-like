@@ -5,18 +5,20 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use flow_like::bit::Bit;
+use flow_like::flow::copilot::platform::Clearance;
 use flow_like::flow::copilot::tool_authorization::AuthorizationInference;
 use flow_like::flow::copilot::tool_grants::{
-    GrantCheck, GrantStore, HeadlessAnswer, check_call, documents_expensive_granted,
-    expensive_documents_request, headless_answer_with_inference, record_answer, take_once,
+    GrantCheck, GrantStore, HeadlessAnswer, ParkedBatch, check_call, documents_expensive_granted,
+    expensive_documents_request, record_answer, take_once,
 };
-use flow_like::flow::copilot::tool_spec::resolve_tool_approval;
+use flow_like::flow::copilot::tool_spec::{ToolEffect, resolve_tool_approval, resolve_tool_effect};
 use flow_like::flow::copilot::{HostTools, find_bot_tool_spec, tool_outcome_output};
 use flow_like_bot_tools::MemorySessions;
 use flow_like_bot_tools_host::{
-    AppAccess, HostEnv, JobConnector, JobModels, JobScope, JobSecrets, ModelSource, SecretSource,
-    ToolJob,
+    AppAccess, ConversationFiles, HostEnv, JobConnector, JobFile, JobModels, JobScope, JobSecrets,
+    ModelSource, SecretSource, ToolJob,
 };
+use flow_like_types::bot_message::CONVERSATION_FILE_APP_PREFIX;
 use flow_like_types::tokio::sync::OnceCell;
 use flow_like_types::{bot_message::ApprovalRequest, tool_grant::ApprovalDecision};
 use serde_json::{Value, json};
@@ -29,8 +31,50 @@ use super::{
 };
 
 const MAX_EXECUTOR_JOBS_PER_TURN: usize = 30;
+const MAX_JOB_FILES: usize = 16;
 const IMAGE_TOOL: &str = "image_generate";
 const EXECUTOR_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// The conversation files a turn's tools may read: here through [`ConversationFiles`], on the
+/// executor through a link signed for one job.
+#[async_trait]
+pub(crate) trait TurnFiles: ConversationFiles {
+    /// The file with its read link; `None` when the turn has no such file.
+    async fn link(
+        &self,
+        conversation_id: &str,
+        path: &str,
+    ) -> flow_like_types::Result<Option<JobFile>>;
+}
+
+/// The conversation files `args` name by handle, as `(conversation id, path)`.
+fn conversation_handles(args: &Value) -> Vec<(String, String)> {
+    fn collect(value: &Value, found: &mut Vec<(String, String)>) {
+        match value {
+            Value::Object(fields) => {
+                let conversation_id = fields
+                    .get("app_id")
+                    .and_then(Value::as_str)
+                    .and_then(|app_id| app_id.strip_prefix(CONVERSATION_FILE_APP_PREFIX));
+                let path = fields.get("path").and_then(Value::as_str);
+                if let (Some(conversation_id), Some(path), true) =
+                    (conversation_id, path, fields.contains_key("sha256"))
+                {
+                    let handle = (conversation_id.to_string(), path.to_string());
+                    if !found.contains(&handle) {
+                        found.push(handle);
+                    }
+                }
+                fields.values().for_each(|value| collect(value, found));
+            }
+            Value::Array(items) => items.iter().for_each(|item| collect(item, found)),
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    collect(args, &mut found);
+    found
+}
 
 /// What the owner holds, resolved when the first tool runs: which apps the bot reaches with
 /// which rights, and a credential scoped to each of them for the executor.
@@ -45,6 +89,7 @@ pub(crate) struct TurnModels {
     pub source: Arc<dyn ModelSource>,
     pub chat: Option<Bit>,
     pub embedding: Option<Bit>,
+    pub vision: Option<Bit>,
 }
 
 pub(crate) struct TurnDeps {
@@ -69,11 +114,12 @@ pub(crate) struct BotToolsHost {
     scope: OnceCell<JobScope>,
     sessions: Arc<MemorySessions>,
     executor_jobs: AtomicUsize,
-    parked: Mutex<Option<(ApprovalRequest, Option<String>)>>,
+    batch: Arc<ParkedBatch>,
     inference: Mutex<Option<Arc<dyn AuthorizationInference>>>,
     approval_check: flow_like_types::tokio::sync::Mutex<()>,
     notifier: Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>>,
     people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
+    rooms: Option<Arc<dyn flow_like_bot_tools::RoomInvites>>,
     user_context: Option<Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>>,
     configuration: Option<Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>>,
     crew: Option<Arc<dyn flow_like_bot_tools::crew::CrewBackend>>,
@@ -82,6 +128,8 @@ pub(crate) struct BotToolsHost {
     skill_jobs: Option<Arc<dyn super::skills::SkillJobs>>,
     mail: Option<Arc<dyn flow_like_bot_tools::email::MailBackend>>,
     images: Option<Arc<super::images::ImageBits>>,
+    apps: Option<Arc<super::apps::AppTools>>,
+    files: Option<Arc<dyn TurnFiles>>,
 }
 
 fn refusal(tool: &str, code: &str, message: &str) -> String {
@@ -135,15 +183,16 @@ fn bit_json(bit: &Option<Bit>) -> Option<Value> {
 impl BotToolsHost {
     pub(crate) fn new(deps: TurnDeps) -> Self {
         Self {
+            batch: Arc::new(ParkedBatch::new(&deps.turn_id)),
             deps,
             scope: OnceCell::new(),
             sessions: Arc::new(MemorySessions::default()),
             executor_jobs: AtomicUsize::new(0),
-            parked: Mutex::new(None),
             inference: Mutex::new(None),
             approval_check: flow_like_types::tokio::sync::Mutex::new(()),
             notifier: None,
             people: None,
+            rooms: None,
             user_context: None,
             configuration: None,
             crew: None,
@@ -152,7 +201,31 @@ impl BotToolsHost {
             skill_jobs: None,
             mail: None,
             images: None,
+            apps: None,
+            files: None,
         }
+    }
+
+    pub(crate) fn with_files(mut self, files: Arc<dyn TurnFiles>) -> Self {
+        self.files = Some(files);
+        self
+    }
+
+    /// A read link for each conversation file the call names; the executor holds no store for
+    /// them. A file the turn may not read gets none, and the tool reports it as missing.
+    async fn job_files(&self, args: &Value) -> Result<Vec<JobFile>, String> {
+        let Some(files) = &self.files else {
+            return Ok(Vec::new());
+        };
+        let mut linked = Vec::new();
+        for (conversation_id, path) in conversation_handles(args).into_iter().take(MAX_JOB_FILES) {
+            let link = files
+                .link(&conversation_id, &path)
+                .await
+                .map_err(|error| format!("Cannot prepare file '{path}' for the tool: {error}"))?;
+            linked.extend(link);
+        }
+        Ok(linked)
     }
 
     pub(crate) fn set_inference(&self, inference: Arc<dyn AuthorizationInference>) {
@@ -257,8 +330,33 @@ impl BotToolsHost {
         self
     }
 
+    /// Lets `room_invite` invite into the group chat this turn runs in.
+    pub(crate) fn with_rooms(mut self, rooms: Arc<dyn flow_like_bot_tools::RoomInvites>) -> Self {
+        self.rooms = Some(rooms);
+        self
+    }
+
+    /// Lets this turn use apps on the server; only a headless turn does, an open chat runs them
+    /// in its window.
+    pub(crate) fn with_apps(mut self, apps: Arc<super::apps::AppTools>) -> Self {
+        self.apps = Some(apps);
+        self
+    }
+
+    fn app_tools(&self, tool: &str) -> Option<&Arc<super::apps::AppTools>> {
+        self.apps
+            .as_ref()
+            .filter(|_| super::apps::is_app_tool(tool))
+    }
+
     pub(crate) fn handles(&self, tool: &str) -> bool {
-        is_bot_tool(tool) && self.deps.host_tools.runs(tool)
+        self.app_tools(tool).is_some() || (is_bot_tool(tool) && self.deps.host_tools.runs(tool))
+    }
+
+    /// A secret of the turn's bot for an integration the platform runs for it, such as its
+    /// owner's web research key. A secret the server cannot open reads as absent.
+    pub(crate) async fn secret(&self, name: &str) -> Option<String> {
+        self.deps.secrets.secret(name).await.ok().flatten()
     }
 
     async fn scope(&self) -> Result<&JobScope, String> {
@@ -273,6 +371,9 @@ impl BotToolsHost {
     }
 
     async fn run_allowing(&self, tool: &str, args: Value, expensive_documents: bool) -> String {
+        if let Some(apps) = self.app_tools(tool) {
+            return apps.run(tool, args).await;
+        }
         match route(tool, &args, self.deps.executor.is_some()) {
             None => refusal(
                 tool,
@@ -293,48 +394,32 @@ impl BotToolsHost {
             .is_ok_and(GrantCheck::runs)
     }
 
-    /// Stores the owner's "don't ask again" for this call.
+    /// Stores the owner's "don't ask again" for this call. The open chat runs the call itself
+    /// right after, so the one-time token the answer writes for a resumed run is spent here: left
+    /// behind, it would let the same call through once more without asking, also for a call
+    /// that is never remembered.
     pub(crate) async fn remember(&self, tool: &str, args: &Value) {
-        let stored = record_answer(
-            self.deps.grants.as_ref(),
-            tool,
-            args,
-            None,
-            ApprovalDecision::Always,
-        )
-        .await;
+        let grants = self.deps.grants.as_ref();
+        let stored = record_answer(grants, tool, args, None, ApprovalDecision::Always).await;
         if let Err(error) = stored {
             tracing::warn!(%error, tool, "[bot_tools] the owner's standing approval was not stored");
         }
+        if let Err(error) = take_once(grants, tool, args).await {
+            tracing::warn!(%error, tool, "[bot_tools] the one-time approval of a call the chat runs itself was not cleared");
+        }
     }
 
-    /// The approval card of the call that parked this turn, once there is one.
+    /// The approval card of this attempt's calls that wait for the owner, once there is one.
     pub(crate) fn parked(&self) -> Option<ApprovalRequest> {
-        self.parked
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .as_ref()
-            .map(|(card, _)| card.clone())
+        self.batch.card()
     }
 
-    pub(crate) fn parked_recovery_call_id(&self) -> Option<String> {
-        self.parked
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .as_ref()
-            .and_then(|(_, call_id)| call_id.clone())
+    /// The attempt's approval batch; the turn's talk host adds its asks to the same card.
+    pub(crate) fn batch(&self) -> &Arc<ParkedBatch> {
+        &self.batch
     }
 
-    fn park(&self, tool: &str, card: ApprovalRequest) -> String {
-        self.parked
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get_or_insert_with(|| {
-                (
-                    card,
-                    flow_like::flow::copilot::run_recovery::current_recovery_call_id(),
-                )
-            });
+    fn waiting(tool: &str) -> String {
         json!({
             "status": "waiting",
             "tool": tool,
@@ -343,6 +428,61 @@ impl BotToolsHost {
             "message": "Your owner was asked to approve this call. This turn pauses and continues after their answer. Call no further tools and write nothing more now."
         })
         .to_string()
+    }
+
+    fn inference(&self) -> Option<Arc<dyn AuthorizationInference>> {
+        self.inference
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// The refusal of a Flux call on the owner's bots that its target rules out, found before
+    /// the owner is asked: deleting a built-in bot or moving one where it can't keep its
+    /// capabilities.
+    pub(crate) async fn crew_refusal(&self, tool: &str, args: &Value) -> Option<String> {
+        if !flow_like_bot_tools::crew::reads_target_first(tool, args) {
+            return None;
+        }
+        let crew = self.crew.as_ref()?;
+        flow_like_bot_tools::crew::precheck(crew.as_ref(), tool, args)
+            .await
+            .err()
+            .map(|error| refusal(tool, error.code, &error.message))
+    }
+
+    /// The gate's verdict on a call held back in a parked round, without running it: a call
+    /// that asks joins the card, a refusal becomes its result.
+    pub(crate) async fn clearance(&self, tool: &str, args: &Value) -> Clearance {
+        if let Some(refused) = self.crew_refusal(tool, args).await {
+            return Clearance::Refused(refused);
+        }
+        let Some(approval) = find_bot_tool_spec(tool)
+            .map(|spec| resolve_tool_approval(&spec, args))
+            .filter(|approval| approval.kind != "none")
+        else {
+            return Clearance::Clear;
+        };
+        let _approval_check = self.approval_check.lock().await;
+        let inference = self.inference();
+        match self
+            .batch
+            .clearance(
+                self.deps.grants.as_ref(),
+                tool,
+                args,
+                None,
+                &approval.description,
+                inference.as_deref(),
+            )
+            .await
+        {
+            HeadlessAnswer::Run => Clearance::Clear,
+            HeadlessAnswer::Refuse(message) => {
+                Clearance::Refused(refusal(tool, "bot_tool_refused_by_owner", &message))
+            }
+            HeadlessAnswer::Park(_) => Clearance::Asks,
+        }
     }
 
     async fn expensive_documents_allowed(&self, tool: &str, args: &Value) -> bool {
@@ -356,48 +496,50 @@ impl BotToolsHost {
     }
 
     /// The headless path: nobody can approve right now, so a call that asks runs under a standing
-    /// grant (or the owner's one-time answer) and otherwise parks the turn behind an approval
-    /// card. A tool that changes anything ends the turn's retries.
+    /// grant (or the owner's one-time answer) and otherwise joins the attempt's approval card.
+    /// Calls that ask nothing keep running after a park. A tool that changes anything ends the
+    /// turn's retries.
     pub(crate) async fn run_unattended(
         &self,
         mutating: &AtomicBool,
         tool: &str,
         args: Value,
     ) -> String {
-        let approval_check = self.approval_check.lock().await;
-        if self.parked().is_some() {
-            return self.park_notice(tool);
+        if let Some(refused) = self.crew_refusal(tool, &args).await {
+            return refused;
         }
+        let approval_check = self.approval_check.lock().await;
         let mut expensive = false;
         match find_bot_tool_spec(tool).map(|spec| resolve_tool_approval(&spec, &args)) {
             Some(approval) if approval.kind != "none" => {
-                let inference = self
-                    .inference
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .clone();
-                match headless_answer_with_inference(
-                    self.deps.grants.as_ref(),
-                    &self.deps.turn_id,
-                    tool,
-                    &args,
-                    None,
-                    &approval.description,
-                    inference.as_deref(),
-                )
-                .await
+                let inference = self.inference();
+                match self
+                    .batch
+                    .answer(
+                        self.deps.grants.as_ref(),
+                        tool,
+                        &args,
+                        None,
+                        &approval.description,
+                        inference.as_deref(),
+                    )
+                    .await
                 {
                     HeadlessAnswer::Run => {}
                     HeadlessAnswer::Refuse(message) => {
                         return refusal(tool, "bot_tool_refused_by_owner", &message);
                     }
-                    HeadlessAnswer::Park(card) => return self.park(tool, card),
+                    HeadlessAnswer::Park(_) => return Self::waiting(tool),
                 }
             }
             _ => expensive = self.expensive_documents_allowed(tool, &args).await,
         }
         drop(approval_check);
-        if flow_like_bot_tools::spec(tool).is_some_and(|spec| spec.mutating) {
+        if flow_like_bot_tools::spec(tool).is_some_and(|spec| spec.mutating)
+            || (self.app_tools(tool).is_some()
+                && find_bot_tool_spec(tool)
+                    .is_some_and(|spec| resolve_tool_effect(&spec, &args) != ToolEffect::ReadOnly))
+        {
             mutating.store(true, Ordering::SeqCst);
         }
         let output = self.run_allowing(tool, args.clone(), expensive).await;
@@ -408,13 +550,10 @@ impl BotToolsHost {
                 &args,
                 &cost_message(&output),
             );
-            return self.park(tool, card);
+            self.batch.park(card, false);
+            return Self::waiting(tool);
         }
         output
-    }
-
-    fn park_notice(&self, tool: &str) -> String {
-        self.park(tool, self.parked().expect("a parked turn has a card"))
     }
 
     async fn run_in_process(&self, tool: &str, args: Value, expensive_documents: bool) -> String {
@@ -427,6 +566,7 @@ impl BotToolsHost {
         };
         let scope = if flow_like_bot_tools::configuration::is_settings_tool(tool)
             || flow_like_bot_tools::user_context::is_user_context_tool(tool)
+            || tool == flow_like_bot_tools::rooms::ROOM_INVITE
         {
             &empty_scope
         } else {
@@ -463,13 +603,23 @@ impl BotToolsHost {
         if let Some(people) = &self.people {
             env = env.with_people(people.clone());
         }
+        if let Some(rooms) = &self.rooms {
+            env = env.with_rooms(rooms.clone());
+        }
         if let Some(scheduler) = &self.scheduler {
             env = env.with_scheduler(scheduler.clone());
         }
         if let Some(mail) = &self.mail {
             env = env.with_mail(mail.clone());
         }
-        tool_outcome_output(&flow_like_bot_tools::run(tool, args, &env).await)
+        if let Some(files) = &self.files {
+            env = env.with_conversation_files(files.clone());
+        }
+        let outcome = flow_like_bot_tools::run(tool, args, &env).await;
+        if let Some(error) = &outcome.error {
+            tracing::info!(tool, turn_id = %self.deps.turn_id, code = error.code, "[bot_tools] tool call failed");
+        }
+        tool_outcome_output(&outcome)
     }
 
     async fn build_job(
@@ -497,6 +647,7 @@ impl BotToolsHost {
             _ => None,
         };
         let args_for_connectors = args.clone();
+        let files = self.job_files(&args).await?;
         let mut secrets = BTreeMap::new();
         for name in flow_like_bot_tools::secrets::referenced_secrets(&args) {
             let value = self
@@ -521,12 +672,14 @@ impl BotToolsHost {
             models: JobModels {
                 chat: bit_json(&self.deps.models.chat),
                 embedding: bit_json(&self.deps.models.embedding),
+                vision: bit_json(&self.deps.models.vision),
                 image,
             },
             allow_expensive_documents: expensive_documents,
             secrets: JobSecrets(secrets),
             connectors: self.job_connectors(tool, &args_for_connectors).await?,
             skill_call: self.skill_job(tool, &args_for_connectors).await?,
+            files,
         };
         serde_json::to_string(&job).map_err(|error| format!("Cannot encode the tool job: {error}"))
     }

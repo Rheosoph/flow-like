@@ -39,7 +39,7 @@ export function RoomBotSetup({
 }>) {
 	const { t } = useTranslation("bots");
 	return (
-		<div className="flex min-h-0 flex-col gap-5">
+		<div className="flex flex-col gap-5">
 			<div className="space-y-1">
 				<h3 className="text-sm font-semibold">
 					{t("roomLimits.setup.title", "Set up your bots")}

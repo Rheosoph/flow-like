@@ -1358,6 +1358,28 @@ export class AppState implements IAppState {
 		);
 	}
 
+	/** A local app keeps the setting in its manifest; an online app's copy follows the hub. */
+	async changeAppBotAccess(appId: string, refuseBots: boolean): Promise<void> {
+		if (await this.backend.isOffline(appId)) {
+			const app = await invoke<IApp>("get_app", { appId });
+			await invoke("update_app", { app: { ...app, refuse_bots: refuseBots } });
+			return;
+		}
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth not set. Cannot change bot access.");
+		}
+		await fetcher(
+			this.backend.profile,
+			`apps/${appId}/settings/bots`,
+			{
+				method: "PATCH",
+				body: JSON.stringify({ refuse_bots: refuseBots }),
+			},
+			this.backend.auth,
+		);
+		await this.fetchRemoteApp(appId);
+	}
+
 	async changeAppForkPolicy(appId: string, policy: IForkPolicy): Promise<void> {
 		if (await this.backend.isOffline(appId)) {
 			throw new Error("Forking settings are only available for online apps.");

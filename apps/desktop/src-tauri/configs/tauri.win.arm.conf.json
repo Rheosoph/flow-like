@@ -6,7 +6,7 @@
 			"binaries/win/arm/llama-server"
 		],
 		"resources": {
-			"binaries/win/arm/DirectML.dll-aarch64-pc-windows-msvc": "DirectML.dll",
+			"binaries/win/arm/DirectML.dll": "DirectML.dll",
 			"binaries/win/arm/llama-server-impl.dll-aarch64-pc-windows-msvc": "llama-server-impl.dll",
 			"binaries/win/arm/llama-common.dll-aarch64-pc-windows-msvc": "llama-common.dll",
 			"binaries/win/arm/llama.dll-aarch64-pc-windows-msvc": "llama.dll",

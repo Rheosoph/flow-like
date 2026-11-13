@@ -169,7 +169,19 @@ async fn queue_artifact_upgrade(
 
 /// Resolve all WASM packages for an app, returning presigned download URLs.
 ///
-/// Returns `None` if the app has no WASM packages or if the registry is not enabled.
+/// Returns `None` if the app has no WASM packages or if the registry is not enabled,
+/// and a database error when the package set could not be read: dispatching the
+/// board without its packages would fail it in a way the caller cannot retry.
+pub async fn try_resolve_wasm_packages(
+    state: &AppState,
+    app_id: &str,
+) -> Result<Option<HashMap<String, flow_like_types::dispatch::WasmPackageRef>>, sea_orm::DbErr> {
+    let target = executor_target_platform();
+    try_resolve_wasm_packages_for_platform(state, app_id, &target).await
+}
+
+/// [`try_resolve_wasm_packages`] for callers with no way to report the failure:
+/// a database error reads as "no packages".
 pub async fn resolve_wasm_packages(
     state: &AppState,
     app_id: &str,
@@ -178,24 +190,39 @@ pub async fn resolve_wasm_packages(
     resolve_wasm_packages_for_platform(state, app_id, &target).await
 }
 
-/// Resolve packages for the executor receiving this run. Background and live
-/// executors can use different CPU architectures in the same deployment.
-/// Versionless OS/architecture targets use this API build's artifact version.
+/// Lenient form of [`try_resolve_wasm_packages_for_platform`].
 pub async fn resolve_wasm_packages_for_platform(
     state: &AppState,
     app_id: &str,
     target: &str,
 ) -> Option<HashMap<String, flow_like_types::dispatch::WasmPackageRef>> {
-    let registry = state.wasm_registry.as_ref()?;
+    match try_resolve_wasm_packages_for_platform(state, app_id, target).await {
+        Ok(packages) => packages,
+        Err(error) => {
+            tracing::error!(app_id = %app_id, %error, "Failed to read the app's WASM packages");
+            None
+        }
+    }
+}
+
+/// Resolve packages for the executor receiving this run. Background and live
+/// executors can use different CPU architectures in the same deployment.
+/// Versionless OS/architecture targets use this API build's artifact version.
+pub async fn try_resolve_wasm_packages_for_platform(
+    state: &AppState,
+    app_id: &str,
+    target: &str,
+) -> Result<Option<HashMap<String, flow_like_types::dispatch::WasmPackageRef>>, sea_orm::DbErr> {
+    let Some(registry) = state.wasm_registry.as_ref() else {
+        return Ok(None);
+    };
     let target = current_artifact_platform(target);
 
     // Lapsed pins keep running through the licence grace period; expired ones do not.
-    let packages = crate::package_license::usable_app_pins(&state.db, app_id)
-        .await
-        .ok()?;
+    let packages = crate::package_license::usable_app_pins(&state.db, app_id).await?;
 
     if packages.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     // One batched lookup instead of a query per pinned package.
@@ -224,14 +251,13 @@ pub async fn resolve_wasm_packages_for_platform(
             .into_tuple::<(String, WasmPackageVisibility, serde_json::Value)>()
             .all(&state.db),
     );
-    let mut version_records: HashMap<(String, String), wasm_package_version::Model> = version_rows
-        .ok()?
+    let mut version_records: HashMap<(String, String), wasm_package_version::Model> = version_rows?
         .into_iter()
         .map(|record| ((record.package_id.clone(), record.version.clone()), record))
         .collect();
     let mut active_packages: HashMap<String, WasmPackageVisibility> = HashMap::new();
     let mut package_permissions: HashMap<String, serde_json::Value> = HashMap::new();
-    for (package_id, visibility, permissions) in active_package_rows.ok()? {
+    for (package_id, visibility, permissions) in active_package_rows? {
         package_permissions.insert(package_id.clone(), permissions);
         active_packages.insert(package_id, visibility);
     }
@@ -352,7 +378,7 @@ pub async fn resolve_wasm_packages_for_platform(
     had_errors |= result.len() < attempted;
 
     if result.is_empty() {
-        None
+        Ok(None)
     } else {
         if had_errors {
             tracing::warn!(
@@ -362,7 +388,7 @@ pub async fn resolve_wasm_packages_for_platform(
                 "Resolved WASM packages with skipped entries"
             );
         }
-        Some(result)
+        Ok(Some(result))
     }
 }
 

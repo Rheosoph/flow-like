@@ -4,8 +4,16 @@ use super::{
     now_millis,
 };
 use crate::{
-    audit, db::coordination::coordinate, entity::inbox_key, error::ApiError,
-    middleware::jwt::AppUser, routes::bots::owned_bot, state::AppState,
+    audit, bot_caller,
+    db::coordination::coordinate,
+    entity::inbox_key,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    routes::{
+        bots::owned_bot,
+        inbox::{active_members, active_membership},
+    },
+    state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -29,7 +37,7 @@ pub(super) const MAX_KEY_PRINCIPALS: usize = 50;
 
 /// A key to register, validated.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct NewKey {
+pub(crate) struct NewKey {
     pub key_id: String,
     pub algorithm: String,
     pub public_key: String,
@@ -55,7 +63,7 @@ fn token(
     Ok(value.to_string())
 }
 
-pub(super) fn validate_key(request: &RegisterInboxKeyRequest) -> Result<NewKey, ApiError> {
+pub(crate) fn validate_key(request: &RegisterInboxKeyRequest) -> Result<NewKey, ApiError> {
     let public_key = request.public_key.trim();
     if public_key.is_empty()
         || public_key.len() > PUBLIC_KEY_MAX_CHARS
@@ -137,7 +145,7 @@ fn same_key(existing: inbox_key::Model, key: &NewKey) -> Result<inbox_key::Model
 
 /// Registers `key` for `principal`. Keys never change: the same key again returns the stored
 /// one, different material under a used `key_id` is a conflict.
-pub(super) async fn register_in<C: ConnectionTrait>(
+pub(crate) async fn register_in<C: ConnectionTrait>(
     db: &C,
     principal: &str,
     key: &NewKey,
@@ -220,9 +228,10 @@ async fn key_owner<C: ConnectionTrait>(
     params(KeysQuery),
     responses(
         (status = 200, description = "The active public keys of these people and bots, to seal envelopes to", body = InboxKeyList),
-        (status = 400, description = "More than 50 principals"),
-        (status = 401, description = "Not signed in"),
-        (status = 403, description = "Only people read inbox keys, not API keys or running flows")
+        (status = 400, description = "More than 50 principals, or a bot named no conversation"),
+        (status = 401, description = "Not signed in, or the bot's turn has ended"),
+        (status = 403, description = "API keys and running flows read no inbox keys; a bot reads only the keys of the members of a conversation it is in"),
+        (status = 404, description = "The bot is not a member of the conversation")
     ),
     security(("bearer_auth" = []))
 )]
@@ -232,11 +241,57 @@ pub async fn list_keys(
     Extension(user): Extension<AppUser>,
     Query(query): Query<KeysQuery>,
 ) -> Result<Json<InboxKeyList>, ApiError> {
-    user.sub()?;
     let principals = requested_principals(query.principals.as_deref())?;
+    match &user {
+        AppUser::Bot(bot) => {
+            members_of_bot_conversation(&state.db, &user, &bot.bot_id, &query, &principals).await?
+        }
+        _ => {
+            user.sub()?;
+        }
+    }
     Ok(Json(InboxKeyList {
         keys: active_keys(&state.db, &principals).await?,
     }))
+}
+
+/// A bot reads the keys it seals a reply to: those of the active members of a conversation it is
+/// an active member of, during a live turn.
+pub(crate) async fn members_of_bot_conversation<C: ConnectionTrait>(
+    db: &C,
+    user: &AppUser,
+    bot_id: &str,
+    query: &KeysQuery,
+    principals: &[String],
+) -> Result<(), ApiError> {
+    let conversation = query
+        .conversation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "A bot reads the keys of one conversation's members: name it with conversation_id",
+            )
+        })?;
+    let names = bot_caller::Names {
+        as_bot: query.as_bot.as_deref(),
+        conversation: Some(conversation),
+        turn: None,
+    };
+    bot_caller::acting_owner(db, user, &names).await?;
+    active_membership(db, conversation, bot_id).await?;
+    let members = active_members(db, &[conversation.to_string()]).await?;
+    match principals.iter().find(|principal| {
+        !members
+            .iter()
+            .any(|member| &member.principal_id == *principal)
+    }) {
+        Some(stranger) => Err(ApiError::forbidden(format!(
+            "'{stranger}' is not a member of conversation '{conversation}'; a bot reads only its members' keys"
+        ))),
+        None => Ok(()),
+    }
 }
 
 #[utoipa::path(

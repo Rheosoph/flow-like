@@ -1,5 +1,8 @@
 import type { CopilotStreamEvent } from "../../components/flowpilot/copilot-stream-parser";
+import { readUsageStat } from "../../lib/llm/usage";
+export { mergeUsageStats, readUsageStat } from "../../lib/llm/usage";
 import type {
+	IAttachment,
 	IChatUsageStat,
 	IPlanStep,
 	PlanStepStatus,
@@ -178,37 +181,6 @@ export function orderedSteps(acc: StreamAccumulator): IPlanStep[] {
 		.filter((step): step is IPlanStep => step !== undefined);
 }
 
-/** Concatenate usage-stat lists, dropping exact duplicates (same JSON) across sources. */
-export function mergeUsageStats(
-	...lists: IChatUsageStat[][]
-): IChatUsageStat[] {
-	const seen = new Set<string>();
-	const merged: IChatUsageStat[] = [];
-	for (const list of lists) {
-		for (const stat of list) {
-			const signature = JSON.stringify(stat);
-			if (seen.has(signature)) continue;
-			seen.add(signature);
-			merged.push(stat);
-		}
-	}
-	return merged;
-}
-
-/** Narrow an arbitrary stream payload to an IChatUsageStat, or null if it isn't one. */
-export function readUsageStat(data: unknown): IChatUsageStat | null {
-	if (!data || typeof data !== "object") return null;
-	const record = data as Record<string, unknown>;
-	const stats = record.stats;
-	if (!stats || typeof stats !== "object") return null;
-	if (!("usage" in (stats as Record<string, unknown>))) return null;
-	return {
-		step_name:
-			typeof record.step_name === "string" ? record.step_name : "Assistant",
-		stats: stats as IChatUsageStat["stats"],
-	};
-}
-
 function toolFieldId(data: unknown, fallback: string): string {
 	const record = (data ?? {}) as Record<string, unknown>;
 	return String(
@@ -241,6 +213,24 @@ function toolActivityDetail(name: string, data: unknown, existing?: IPlanStep) {
 			? { ...previous, label: getToolActivityLabel(name) }
 			: previous,
 	);
+}
+
+/** Narrow a `<reply_attachment>` payload to a chip; frames without a usable url are dropped. */
+export function readReplyAttachment(data: unknown): IAttachment | null {
+	if (!data || typeof data !== "object") return null;
+	const record = data as Record<string, unknown>;
+	const url = typeof record.url === "string" ? record.url.trim() : "";
+	if (!/^(https?|storage):\/\//i.test(url)) return null;
+	return {
+		url,
+		...(typeof record.name === "string" && record.name
+			? { name: record.name }
+			: {}),
+		...(typeof record.mime === "string" && record.mime
+			? { type: record.mime }
+			: {}),
+		...(typeof record.bytes === "number" ? { size: record.bytes } : {}),
+	};
 }
 
 export function applyStreamEvent(
@@ -383,11 +373,18 @@ export function applyStreamEvent(
 		case "usage_stat": {
 			const stat = readUsageStat(event.data);
 			if (!stat) break;
-			// Dedup by identity: a backend may re-emit the same aggregated stat frame.
-			const signature = JSON.stringify(stat);
-			if (!acc.usageStats.some((s) => JSON.stringify(s) === signature)) {
-				acc.usageStats.push(stat);
-			}
+			// Each stream publishes cumulative snapshots for its own steps.
+			const index = acc.usageStats.findIndex(
+				(previous) =>
+					previous.step_name === stat.step_name &&
+					previous.source_id === stat.source_id,
+			);
+			acc.usageStats =
+				index < 0
+					? [...acc.usageStats, stat]
+					: acc.usageStats.map((previous, at) =>
+							at === index ? stat : previous,
+						);
 			break;
 		}
 		default:

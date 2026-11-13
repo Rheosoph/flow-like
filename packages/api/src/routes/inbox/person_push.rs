@@ -10,6 +10,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     push_notifications::DispatchNotificationInput,
+    routes::user::identity::public_display_name,
     state::AppState,
 };
 use axum::{
@@ -106,11 +107,12 @@ async fn sender_name<C: ConnectionTrait>(db: &C, sender: &str) -> Result<String>
         .select_only()
         .column(user::Column::Name)
         .column(user::Column::PreferredUsername)
-        .column(user::Column::Username)
-        .into_tuple::<(Option<String>, Option<String>, Option<String>)>()
+        .into_tuple::<(Option<String>, Option<String>)>()
         .one(db)
         .await?
-        .and_then(|(name, preferred, username)| name.or(preferred).or(username))
+        .and_then(|(name, preferred)| {
+            public_display_name(name.as_deref(), preferred.as_deref(), None)
+        })
         .unwrap_or_else(|| "Someone".to_string()))
 }
 

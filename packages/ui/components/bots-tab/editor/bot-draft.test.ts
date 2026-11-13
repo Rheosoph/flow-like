@@ -10,6 +10,7 @@ import {
 	createEmptyBotDraft,
 	getBotDraftProblems,
 	hasFlowPilot,
+	heldUnavailableCapabilities,
 	normalizeBotModelPolicy,
 	setBotDraftCapability,
 	setBotDraftLocation,
@@ -41,6 +42,33 @@ function bot(overrides: Partial<IBot> = {}): IBot {
 }
 
 describe("drafts", () => {
+	test("Docker is saved explicitly and never silently removed by a host change", () => {
+		const saved = bot({
+			location: "device",
+			device_id: "device-1",
+			execution_mode: "docker",
+		});
+		const draft = botDraftFromBot(saved);
+		expect(draft.executionMode).toBe("docker");
+		expect(buildCreateBotRequest(draft).execution_mode).toBe("docker");
+		expect(buildUpdateBotRequest(saved, draft)).toEqual({});
+		const moved = setBotDraftLocation(draft, "desktop").draft;
+		expect(moved.executionMode).toBe("docker");
+		expect(
+			getBotDraftProblems(moved, { system: null, checkLook: false }),
+		).toContainEqual({ code: "docker_requires_device" });
+		expect(
+			buildUpdateBotRequest(saved, { ...draft, executionMode: "native" }),
+		).toEqual({ execution_mode: "native" });
+	});
+
+	test("old bots remain native without sending a new field to older hubs", () => {
+		const saved = bot();
+		const draft = botDraftFromBot(saved);
+		expect(draft.executionMode).toBe("native");
+		expect(buildCreateBotRequest(draft)).not.toHaveProperty("execution_mode");
+		expect(buildUpdateBotRequest(saved, draft)).toEqual({});
+	});
 	test("a blank draft only needs a name and starts with Memory on", () => {
 		const draft = createEmptyBotDraft();
 		expect(draft.appearance.kind).toBe(defaultBotCatalog.defaultKind);
@@ -103,6 +131,40 @@ describe("drafts", () => {
 		expect(back.removed).toEqual([]);
 		expect(back.restored).toEqual(["computer_use"]);
 		expect(back.remembered).toEqual([]);
+	});
+
+	test("moving to a device keeps its encryption and shell abilities", () => {
+		const draft = {
+			...createEmptyBotDraft(),
+			location: "desktop" as const,
+			capabilities: [
+				"internet",
+				"encryption",
+				"command_line",
+			] as IBot["capabilities"],
+		};
+		const moved = setBotDraftLocation(draft, "device");
+		expect(moved.removed).toEqual([]);
+		expect(moved.draft.capabilities).toEqual([
+			"internet",
+			"command_line",
+			"encryption",
+		]);
+	});
+
+	test("editing a device bot preserves encryption", () => {
+		const saved = bot({
+			location: "device",
+			device_id: "device-1",
+			capabilities: ["internet", "encryption"] as IBot["capabilities"],
+		});
+		expect(heldUnavailableCapabilities(saved)).toEqual([]);
+		const draft = botDraftFromBot(saved);
+		expect(draft.capabilities).toEqual(["internet", "encryption"]);
+		expect(buildUpdateBotRequest(saved, { ...draft, name: "Renamed" })).toEqual(
+			{ name: "Renamed" },
+		);
+		expect(buildUpdateBotRequest(saved, draft)).toEqual({});
 	});
 
 	test("capabilities keep the wire order and respect the location", () => {

@@ -323,7 +323,10 @@ pub(crate) async fn sync_own_bot_direct<C: ConnectionTrait>(
 ) -> Result<bool, DbErr> {
     let encryption = stored(own_bot_encryption(bot).as_str());
     let updated = conversation::Entity::update_many()
-        .col_expr(conversation::Column::Encryption, Expr::value(encryption.clone()))
+        .col_expr(
+            conversation::Column::Encryption,
+            Expr::value(encryption.clone()),
+        )
         .col_expr(conversation::Column::UpdatedAt, Expr::value(now_millis()))
         .filter(conversation::Column::DirectKey.eq(direct_pair_key(&bot.owner_id, &bot.id)))
         .filter(conversation::Column::Encryption.ne(encryption))

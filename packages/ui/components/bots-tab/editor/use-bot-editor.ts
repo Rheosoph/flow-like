@@ -5,6 +5,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { IDataSensitivity } from "../../../lib/data-classification";
 import type {
 	BotCapability,
+	BotExecutionMode,
 	BotLocation,
 	IBot,
 	IBotApp,
@@ -25,6 +26,7 @@ import {
 	getBotDraftProblems,
 	hasFixedLocation,
 	hasFlowPilot,
+	heldUnavailableCapabilities,
 	keepOnThisComputer,
 	setBotDraftCapability,
 	setBotDraftLocation,
@@ -87,6 +89,7 @@ export interface BotEditor {
 	setModelPin: (pin: BotModelPin, bitId: string | null) => void;
 	setLocation: (location: BotLocation) => void;
 	setDeviceId: (deviceId: string) => void;
+	setExecutionMode: (executionMode: BotExecutionMode) => void;
 	setClassification: (classification: IDataSensitivity) => void;
 }
 
@@ -242,8 +245,14 @@ export function useBotEditor(
 	);
 	const [pendingAppIds, setPendingAppIds] = useState<string[]>([]);
 	const appAccess = useBotAppDraft(options.savedApps);
-	const [locationChange, setLocationChange] =
-		useState<BotLocationChange>(NO_LOCATION_CHANGE);
+	const [locationChange, setLocationChange] = useState<BotLocationChange>(() =>
+		original
+			? {
+					...NO_LOCATION_CHANGE,
+					removed: heldUnavailableCapabilities(original),
+				}
+			: NO_LOCATION_CHANGE,
+	);
 	const {
 		text,
 		choice,
@@ -365,6 +374,7 @@ export function useBotEditor(
 			setLocationChange(change);
 		},
 		setDeviceId: (deviceId) => update({ deviceId }),
+		setExecutionMode: (executionMode) => update({ executionMode }),
 		setClassification: (classification) => update({ classification }),
 	};
 }

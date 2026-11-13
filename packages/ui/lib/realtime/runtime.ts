@@ -801,6 +801,10 @@ export class RealtimeRuntime {
 					}
 				}, 100);
 			},
+			reply: (reply) => {
+				for (const port of [...scope.ports])
+					this.send(port, { type: "reply", reply });
+			},
 			status: (status) => {
 				scope.providerStatus = status;
 				for (const port of scope.ports)
@@ -989,10 +993,12 @@ export class RealtimeRuntime {
 		elapsedMs: number,
 	): number {
 		if (
-			response.runs.some((run) => run.has_more) ||
+			response.runs.some((run) => run.has_more && run.events.length > 0) ||
 			response.conversations?.some((item) => item.has_more)
 		)
 			return 50;
+		// has_more without events is a sequence gap that only time resolves.
+		if (response.runs.some((run) => run.has_more)) return CHASE_MS;
 		const runs = [...scope.ports].some(
 			(port) => port.activity.online && port.runs.size > 0,
 		);

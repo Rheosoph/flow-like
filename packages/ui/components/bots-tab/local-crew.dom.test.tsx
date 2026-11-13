@@ -191,6 +191,9 @@ const backend = {
 			throw new Error("Signed out");
 		},
 		getProfile: async () => null,
+		getSettingsProfile: async () => ({
+			hub_profile: { id: "profile_1", bits: [] },
+		}),
 		lookupUser,
 		lookupUsers,
 	},

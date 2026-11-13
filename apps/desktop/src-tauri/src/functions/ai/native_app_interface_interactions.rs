@@ -109,6 +109,7 @@ pub(super) async fn answer(
                 title: request.name.clone(),
                 description: request.description.clone(),
                 session_key: request.id.clone(),
+                asks_again: None,
             },
         ),
     )

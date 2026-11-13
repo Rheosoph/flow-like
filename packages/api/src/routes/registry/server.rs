@@ -644,6 +644,27 @@ pub struct AuthorInfo {
     pub role: Option<String>,
 }
 
+impl AuthorInfo {
+    /// An author as other people may see them: `username` is the handle the
+    /// directory shows, never the login name, and neither field is an address.
+    fn public(
+        user_id: String,
+        preferred_username: Option<&str>,
+        name: Option<&str>,
+        avatar: Option<String>,
+        role: Option<String>,
+    ) -> Self {
+        use crate::routes::user::identity::{public_display_name, public_handle};
+        Self {
+            user_id,
+            username: preferred_username.and_then(public_handle),
+            name: public_display_name(name, None, None),
+            avatar,
+            role,
+        }
+    }
+}
+
 /// Extended package summary with additional metadata for UI
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PackageDetails {
@@ -1462,7 +1483,7 @@ impl ServerRegistry {
             .select_only()
             .column(wasm_package_author::Column::UserId)
             .column(wasm_package_author::Column::Role)
-            .column(user::Column::Username)
+            .column(user::Column::PreferredUsername)
             .column(user::Column::Name)
             .column(user::Column::Avatar)
             .join(
@@ -1482,12 +1503,8 @@ impl ServerRegistry {
 
         Ok(rows
             .into_iter()
-            .map(|(user_id, role, username, name, avatar)| AuthorInfo {
-                user_id,
-                username,
-                name,
-                avatar,
-                role,
+            .map(|(user_id, role, handle, name, avatar)| {
+                AuthorInfo::public(user_id, handle.as_deref(), name.as_deref(), avatar, role)
             })
             .collect())
     }
@@ -1498,12 +1515,14 @@ impl ServerRegistry {
     ) -> flow_like_types::Result<Option<AuthorInfo>> {
         let user_info = user::Entity::find_by_id(user_id).one(&self.db).await?;
 
-        Ok(user_info.map(|user_info| AuthorInfo {
-            user_id: user_id.to_string(),
-            username: user_info.username,
-            name: user_info.name,
-            avatar: user_info.avatar,
-            role: None,
+        Ok(user_info.map(|user_info| {
+            AuthorInfo::public(
+                user_id.to_string(),
+                user_info.preferred_username.as_deref(),
+                user_info.name.as_deref(),
+                user_info.avatar,
+                None,
+            )
         }))
     }
 
@@ -2784,11 +2803,11 @@ impl ServerRegistry {
                     update_model.wasm_path = Set(latest.wasm_path.clone());
                     update_model.wasm_hash = Set(latest.wasm_hash.clone());
                     update_model.wasm_size = Set(latest.wasm_size);
-                    update_model.nodes = Set(latest.nodes.clone());
-                    if let Some(permissions) =
-                        permissions_with_node_capabilities(&pkg.permissions, &latest.nodes)
-                    {
-                        update_model.permissions = Set(permissions);
+                    if let Some((nodes, permissions)) = approved_node_catalog(&pkg.permissions, latest) {
+                        update_model.nodes = Set(nodes);
+                        if let Some(permissions) = permissions {
+                            update_model.permissions = Set(permissions);
+                        }
                     }
                     update_model.widgets = Set(latest.widgets.clone());
                     update_model.widget_bundle_hash = Set(latest.widget_bundle_hash.clone());
@@ -2973,13 +2992,13 @@ impl ServerRegistry {
         };
         author_model.insert(&self.db).await?;
 
-        Ok(AuthorInfo {
-            user_id: user_id.to_string(),
-            username: user_record.username,
-            name: user_record.name,
-            avatar: user_record.avatar,
+        Ok(AuthorInfo::public(
+            user_id.to_string(),
+            user_record.preferred_username.as_deref(),
+            user_record.name.as_deref(),
+            user_record.avatar,
             role,
-        })
+        ))
     }
 
     /// Remove an author from a package
@@ -3069,6 +3088,23 @@ pub(crate) fn permissions_with_node_capabilities(
         return None;
     }
     serde_json::to_value(authored.with_node_capabilities(&nodes)).ok()
+}
+
+/// The node list and permissions an approval may copy onto the package row.
+/// Only a version whose compile succeeded has real nodes; any other version
+/// carries the empty placeholder from publish, so the package keeps its
+/// previous catalog until the compile callback delivers the new one.
+pub(crate) fn approved_node_catalog(
+    stored_permissions: &serde_json::Value,
+    version: &wasm_package_version::Model,
+) -> Option<(serde_json::Value, Option<serde_json::Value>)> {
+    if version.compilation_status != WasmCompilationStatus::Compiled {
+        return None;
+    }
+    Some((
+        version.nodes.clone(),
+        permissions_with_node_capabilities(stored_permissions, &version.nodes),
+    ))
 }
 
 /// Derive the listing capability tags from a stored `permissions` blob.
@@ -3297,6 +3333,36 @@ impl PackageWidgetSource for ServerRegistry {
 
 #[cfg(test)]
 mod tests {
+    fn version_with(status: &str, nodes: serde_json::Value) -> wasm_package_version::Model {
+        serde_json::from_value(serde_json::json!({
+            "id": "version", "package_id": "com.example.typst", "version": "0.4.0",
+            "wasm_path": "node.wasm", "wasm_hash": "hash", "wasm_size": 8,
+            "yanked": false, "published_at": "2026-01-01T00:00:00Z", "duplicate_flagged": false,
+            "nodes": nodes, "widgets": [], "status": "PendingReview", "compilation_status": status,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn approving_an_uncompiled_version_never_copies_its_empty_node_list() {
+        let stored = serde_json::json!({});
+        for status in ["Pending", "LocalOnly"] {
+            let version = version_with(status, serde_json::json!([]));
+            assert!(
+                super::approved_node_catalog(&stored, &version).is_none(),
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn approving_a_compiled_version_copies_its_nodes() {
+        let nodes = serde_json::json!([{ "name": "typst_compile" }]);
+        let version = version_with("Compiled", nodes.clone());
+        let (copied, _) = super::approved_node_catalog(&serde_json::json!({}), &version).unwrap();
+        assert_eq!(copied, nodes);
+    }
+
     #[test]
     fn a_version_without_skills_stores_null_and_one_with_skills_keeps_them() {
         use flow_like_wasm_schema::manifest::PackageSkillEntry;
@@ -3308,7 +3374,9 @@ mod tests {
             instructions: Some("1. Fill".into()),
             tools: vec!["fill_form".into()],
         };
-        let stored = super::stored_skills_json(&[entry.clone()]).unwrap().unwrap();
+        let stored = super::stored_skills_json(&[entry.clone()])
+            .unwrap()
+            .unwrap();
         let back: Vec<PackageSkillEntry> = serde_json::from_value(stored).unwrap();
         assert_eq!(back, vec![entry]);
     }

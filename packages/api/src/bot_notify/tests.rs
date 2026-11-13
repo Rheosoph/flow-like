@@ -18,11 +18,15 @@ struct RecordingSink {
 
 #[async_trait]
 impl NoticeSink for RecordingSink {
+    /// Idempotent by id, as the production dispatch is.
     async fn send(&self, id: &str, input: DispatchNotificationInput) -> Result<()> {
-        self.sent
-            .lock()
-            .unwrap()
-            .push((id.to_string(), input.clone()));
+        {
+            let mut sent = self.sent.lock().unwrap();
+            if sent.iter().any(|(sent_id, _)| sent_id == id) {
+                return Ok(());
+            }
+            sent.push((id.to_string(), input.clone()));
+        }
         let db = self.db.lock().unwrap().clone().expect("db");
         notification::ActiveModel {
             id: Set(id.to_string()),
@@ -95,6 +99,7 @@ async fn turn(db: &DatabaseConnection, id: &str, trigger_kind: &str, hops: i32) 
         requester_id: Set(None),
         audience: Set("OWNER".into()),
         status_text: Set(None),
+        unprompted: Set(None),
         created_at: Set(at(0)),
         updated_at: Set(at(0)),
     }
@@ -139,7 +144,7 @@ async fn responding_to_a_background_event_keeps_its_reply_without_an_owner_push(
         turn(&db, "t1", "TRIGGER", 0).await;
         inbox_entry::ActiveModel {
             id: Set("reply-entry".into()),
-            inbox_id: Set("user-a".into()),
+            inbox_id: Set("bot_1".into()),
             conversation_id: Set("c1".into()),
             message_id: Set("re-1".into()),
             sender_id: Set("bot_1".into()),
@@ -475,4 +480,31 @@ async fn a_resumed_turn_notifies_even_when_a_person_asked() {
         ..reply("t1", "re-2", "Done")
     };
     assert!(notify_for_reply(&db, &sink, &resumed).await.unwrap());
+}
+
+#[tokio::test]
+async fn a_turn_repeating_a_message_posts_and_pushes_it_once() {
+    let (db, sink) = setup().await;
+    let site = TurnSite::Conversation("mail-thread".into());
+    let chat = DbChat(&db);
+    let send = |turn: &'static str, text: &'static str| {
+        deliver_owner_message_in_turn(
+            &db,
+            &sink,
+            &chat,
+            "bot_1",
+            Some(&site),
+            Some(turn),
+            notice(None, text),
+        )
+    };
+    let first = send("t-1", "Invoice paid").await.unwrap();
+    let again = send("t-1", "Invoice paid").await.unwrap();
+    assert_eq!(first.id, again.id);
+    assert_eq!(sink.count(), 1);
+    assert_eq!(count_tool_messages(&db, "bot_1", 0).await.unwrap(), 1);
+    let other_text = send("t-1", "Invoice overdue").await.unwrap();
+    let other_turn = send("t-2", "Invoice paid").await.unwrap();
+    assert_ne!(first.id, other_text.id);
+    assert_ne!(first.id, other_turn.id);
 }

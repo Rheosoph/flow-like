@@ -150,9 +150,8 @@ pub fn specs() -> Vec<ToolSpec> {
 }
 
 fn host(env: &dyn ToolEnv) -> ToolResult<Arc<dyn SkillHost>> {
-    env.skills().ok_or_else(|| {
-        ToolError::new(code::FAILED, "This host does not keep skills for the bot")
-    })
+    env.skills()
+        .ok_or_else(|| ToolError::new(code::FAILED, "This host does not keep skills for the bot"))
 }
 
 async fn active(host: &dyn SkillHost, name: &str) -> ToolResult<BotSkill> {
@@ -172,7 +171,11 @@ pub async fn skill_load(env: &dyn ToolEnv, args: SkillLoadArgs) -> ToolResult<To
     let workspace = env.scope().workspace.clone();
     let references = match &workspace {
         Some(app_id) => env
-            .list_files(app_id, &format!("{}/", skill_dir(&skill.name)), MAX_REFERENCES)
+            .list_files(
+                app_id,
+                &format!("{}/", skill_dir(&skill.name)),
+                MAX_REFERENCES,
+            )
             .await
             .unwrap_or_default()
             .into_iter()
@@ -231,16 +234,11 @@ pub async fn skill_run(env: &dyn ToolEnv, args: SkillCallArgs) -> ToolResult<Too
     call_tool(env, args, true).await
 }
 
-async fn call_tool(
-    env: &dyn ToolEnv,
-    args: SkillCallArgs,
-    asks: bool,
-) -> ToolResult<ToolOutput> {
+async fn call_tool(env: &dyn ToolEnv, args: SkillCallArgs, asks: bool) -> ToolResult<ToolOutput> {
     let host = host(env)?;
     let skill = active(host.as_ref(), &args.skill).await?;
     let tool = args.tool.trim();
-    if check_tools(&[tool.to_string()]).is_err() || !skill.tools.iter().any(|known| known == tool)
-    {
+    if check_tools(&[tool.to_string()]).is_err() || !skill.tools.iter().any(|known| known == tool) {
         return Err(ToolError::invalid(format!(
             "Skill '{}' has no tool '{tool}'; its tools are: {}",
             skill.name,
@@ -254,12 +252,17 @@ async fn call_tool(
         .into_iter()
         .find(|spec| spec.name == tool)
         .ok_or_else(|| {
-            ToolError::invalid(format!("Skill '{}' offers no tool '{tool}' on this host", skill.name))
+            ToolError::invalid(format!(
+                "Skill '{}' offers no tool '{tool}' on this host",
+                skill.name
+            ))
         })?
         .needs_approval();
     if gated != asks {
         return Err(ToolError::invalid(if gated {
-            format!("'{tool}' reaches the network or writes data: run it with `skill_run`, which asks your owner")
+            format!(
+                "'{tool}' reaches the network or writes data: run it with `skill_run`, which asks your owner"
+            )
         } else {
             format!("'{tool}' is read-only: run it with `skill_call`")
         }));

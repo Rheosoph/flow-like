@@ -37,7 +37,7 @@ pub struct ExecutorConfig {
 }
 
 fn default_batch_interval_ms() -> u64 {
-    1000
+    250
 }
 fn default_max_batch_size() -> usize {
     100

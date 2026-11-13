@@ -398,6 +398,156 @@ describe("execution runtime", () => {
 		}
 	});
 
+	describe("stream after the terminal event", () => {
+		const run = (awaitStreamClose = false) => {
+			const cancelled = vi.fn();
+			const encoder = new TextEncoder();
+			let controller!: ReadableStreamDefaultController<Uint8Array>;
+			const body = new ReadableStream<Uint8Array>({
+				start(value) {
+					controller = value;
+				},
+				cancel: cancelled,
+			});
+			const runtime = new ExecutionRuntime({
+				fetch: async () => new Response(body),
+				push: async () => {},
+			});
+			const client = connect(runtime);
+			const settled = { done: false };
+			const result = client
+				.execute(metadata(), {
+					url: "https://hub.test/invoke",
+					body: {},
+					awaitStreamClose,
+				})
+				.then(
+					() => undefined,
+					(error: Error) => error,
+				)
+				.finally(() => {
+					settled.done = true;
+				});
+			return {
+				client,
+				result,
+				settled,
+				cancelled,
+				send: (frame: string) => controller.enqueue(encoder.encode(frame)),
+				end: () => controller.close(),
+			};
+		};
+		const frame = (item: IIntercomEvent) => `data: ${JSON.stringify(item)}\n\n`;
+
+		test("completes at once, keeps reading until the server ends the stream", async () => {
+			vi.useFakeTimers();
+			try {
+				const source = run();
+				await vi.advanceTimersByTimeAsync(1);
+				source.send(frame(event("run", "run_initiated", { run_id: "r" })));
+				source.send(frame(event("done", "completed", { status: "completed" })));
+				await expect(source.result).resolves.toBeUndefined();
+				expect(source.client.getTask("task")?.status).toBe("completed");
+				await vi.advanceTimersByTimeAsync(30_000);
+				expect(source.cancelled).not.toHaveBeenCalled();
+				source.send(frame(event("late", "chunk", {})));
+				source.end();
+				await vi.advanceTimersByTimeAsync(1);
+				expect(source.cancelled).not.toHaveBeenCalled();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		test("a caller awaiting the stream close settles when the server ends it, after the task completed", async () => {
+			vi.useFakeTimers();
+			try {
+				const source = run(true);
+				await vi.advanceTimersByTimeAsync(1);
+				source.send(frame(event("done", "completed", { status: "completed" })));
+				await vi.advanceTimersByTimeAsync(1_000);
+				expect(source.client.getTask("task")?.status).toBe("completed");
+				expect(source.settled.done).toBe(false);
+				source.end();
+				await vi.advanceTimersByTimeAsync(1);
+				expect(source.settled.done).toBe(true);
+				await expect(source.result).resolves.toBeUndefined();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		test("a caller awaiting the stream close settles after 10 s while the reader stays open", async () => {
+			vi.useFakeTimers();
+			try {
+				const source = run(true);
+				await vi.advanceTimersByTimeAsync(1);
+				source.send(frame(event("done", "completed", { status: "completed" })));
+				await vi.advanceTimersByTimeAsync(9_000);
+				expect(source.settled.done).toBe(false);
+				await vi.advanceTimersByTimeAsync(1_500);
+				expect(source.settled.done).toBe(true);
+				expect(source.cancelled).not.toHaveBeenCalled();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		test("cancels the reader after the 60 s cap", async () => {
+			vi.useFakeTimers();
+			try {
+				const source = run();
+				await vi.advanceTimersByTimeAsync(1);
+				source.send(frame(event("done", "completed", { status: "completed" })));
+				await source.result;
+				await vi.advanceTimersByTimeAsync(59_000);
+				expect(source.cancelled).not.toHaveBeenCalled();
+				await vi.advanceTimersByTimeAsync(1_500);
+				expect(source.cancelled).toHaveBeenCalledTimes(1);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		test("an in-stream error event before completion fails the task with its message", async () => {
+			const source = run();
+			source.send(frame(event("err", "error", { message: "executor failed" })));
+			source.end();
+			expect((await source.result)?.message).toBe("executor failed");
+			expect(source.client.getTask("task")?.status).toBe("failed");
+			expect(source.client.getTask("task")?.error).toBe("executor failed");
+		});
+
+		test("an `event: error` frame without an event_type surfaces its message", async () => {
+			const source = run();
+			source.send('event: error\ndata: {"error":"proxy refused"}\n\n');
+			source.end();
+			expect((await source.result)?.message).toBe("proxy refused");
+			expect(source.client.getTask("task")?.error).toBe("proxy refused");
+		});
+
+		test("a bare error body without an event name surfaces its message", async () => {
+			const source = run();
+			source.send('data: {"error":"upstream down"}\n\n');
+			source.end();
+			expect((await source.result)?.message).toBe("upstream down");
+		});
+
+		test("a repeated run_initiated for one run is recorded once", async () => {
+			const source = run();
+			source.send(frame(event("a", "run_initiated", { run_id: "r" })));
+			source.send(frame(event("b", "run_initiated", { run_id: "r" })));
+			source.send(frame(event("done", "completed", { status: "completed" })));
+			source.end();
+			await source.result;
+			expect(
+				source.client
+					.getTask("task")
+					?.events.filter((item) => item.event_type === "run_initiated"),
+			).toHaveLength(1);
+		});
+	});
+
 	test("healthy and interrupted SSE streams do not open a replay subscription", async () => {
 		const realtime = vi.fn();
 		for (const complete of [true, false]) {

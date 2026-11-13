@@ -21,7 +21,7 @@ pub use frames::{FRAME_MAX_WIDTH, Frame, FrameKind, FrameStream, Shot};
 pub use guard::{BotChannel, GuardedBrowser, GuardedComputer, NoDisplay};
 pub use host::{Machine, MachineHost, Mode};
 pub use input::InputEvent;
-pub use local::{LocalPlayground, bot_dir};
+pub use local::{LocalPlayground, Surface, bot_dir};
 pub use playground::Playground;
 pub use rpc::{Connection, RemotePlayground, Spawner, Transport, serve};
 pub use takeover::Takeover;

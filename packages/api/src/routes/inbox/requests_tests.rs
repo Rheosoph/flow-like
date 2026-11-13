@@ -1,12 +1,13 @@
 use super::{
-    INBOX_REQUEST_LIMIT, MEMBER_ACTIVE, MEMBER_BLOCKED, MEMBER_DECLINED, MEMBER_PENDING, Reader,
+    INBOX_ENCRYPTION_MISMATCH, INBOX_REQUEST_LIMIT, MEMBER_ACTIVE, MEMBER_BLOCKED, MEMBER_DECLINED,
+    MEMBER_PENDING, Reader,
     conversations::{NewConversation, start_direct_as, start_group},
-    entries::send_in,
+    entries::{Outgoing, send_in, validate_send},
     fixture::{
         assert_code, at, bot_principal, copies, database, insert_bot, outgoing, says, text, user,
     },
     invitations::{accept_in, classify, decline_in, invitations_for, invite_in, set_limits_in},
-    model::InboxEntry,
+    model::{InboxEntry, SendEntryRequest},
     person_push::{is_muted, notify_message, push_targets, set_muted_in},
     requests::{MAX_HELD_MESSAGES, answer_by_writing, block_in, deliver_held_in, plan_direct},
     view::conversations_for,
@@ -721,8 +722,26 @@ async fn a_transcript_naming_a_stranger_is_refused() {
     assert!(copies(&db, "t_1").await.is_empty());
 }
 
+fn sealed_entry(message_id: &str, kind: InboxEntryKind, members: &[&str]) -> Outgoing {
+    let envelope =
+        json!({ "v": 1, "enc": "hpke", "key_id": "k1", "enc_key": "ZQ==", "ct": "Yw==" });
+    validate_send(SendEntryRequest {
+        message_id: message_id.into(),
+        kind,
+        envelope: None,
+        envelopes: Some(
+            members
+                .iter()
+                .map(|member| (member.to_string(), envelope.clone()))
+                .collect(),
+        ),
+        turn: None,
+    })
+    .unwrap()
+}
+
 #[tokio::test]
-async fn calls_are_refused_in_end_to_end_encrypted_conversations() {
+async fn a_call_rings_in_an_end_to_end_encrypted_conversation_and_what_is_said_stays_sealed() {
     let db = world().await;
     launch_room(&db).await;
     db.execute_unprepared(
@@ -730,21 +749,115 @@ async fn calls_are_refused_in_end_to_end_encrypted_conversations() {
     )
     .await
     .unwrap();
-    for sent in [
-        outgoing("call_1", InboxEntryKind::Call, json!({ "op": "started" })),
-        outgoing(
-            "t_1",
-            InboxEntryKind::Transcript,
-            json!({ "call": "call_1", "text": "hi", "offset_ms": 0, "duration_ms": 10 }),
-        ),
-    ] {
-        let error = send_in(&db, "room", "user-a", &sent, at(2))
-            .await
-            .unwrap_err();
-        assert_eq!(error.status(), StatusCode::BAD_REQUEST);
-        assert!(says(&error, "end-to-end"), "{error:?}");
-    }
-    assert!(copies(&db, "call_1").await.is_empty());
+    let everyone = ["user-a", "user-b", "bot_a"];
+
+    let started = outgoing("call_1", InboxEntryKind::Call, json!({ "op": "started" }));
+    send_in(&db, "room", "user-a", &started, at(2))
+        .await
+        .unwrap();
+    let markers = copies(&db, "call_1").await;
+    assert_eq!(markers.len(), everyone.len());
+    assert!(
+        markers
+            .iter()
+            .all(|copy| copy.envelope
+                == json!({ "v": 1, "enc": "none", "body": { "op": "started" } }))
+    );
+    let sink = Recorder::default();
+    let told = notify_message(&db, &sink, &entry(&db, "call_1", "user-a").await)
+        .await
+        .unwrap();
+    assert_eq!(told, 1, "the other person is rung");
+    assert_eq!(
+        sink.sent()[0].1.link.as_deref(),
+        Some("/bots?conversation=room&call=call_1")
+    );
+
+    let hidden_call = sealed_entry("call_2", InboxEntryKind::Call, &everyone);
+    let error = send_in(&db, "room", "user-a", &hidden_call, at(3))
+        .await
+        .unwrap_err();
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+    assert!(says(&error, "plain envelope"), "{error:?}");
+    assert!(copies(&db, "call_2").await.is_empty());
+
+    let readable_line = outgoing(
+        "t_1",
+        InboxEntryKind::Transcript,
+        json!({ "call": "call_1", "text": "hi", "offset_ms": 0, "duration_ms": 10 }),
+    );
+    let error = send_in(&db, "room", "user-a", &readable_line, at(4))
+        .await
+        .unwrap_err();
+    assert_code(&error, StatusCode::BAD_REQUEST, INBOX_ENCRYPTION_MISMATCH);
+    assert!(copies(&db, "t_1").await.is_empty());
+
+    let sealed_line = sealed_entry("t_2", InboxEntryKind::Transcript, &everyone);
+    send_in(&db, "room", "user-a", &sealed_line, at(5))
+        .await
+        .unwrap();
+    let lines = copies(&db, "t_2").await;
+    assert_eq!(lines.len(), everyone.len());
+    assert!(
+        lines
+            .iter()
+            .all(|copy| copy.envelope["enc"] == json!("hpke"))
+    );
+    assert_eq!(turns(&db).await, 0, "the server reads no sealed line");
+}
+
+#[tokio::test]
+async fn a_sealed_line_spoken_to_a_bot_alone_wakes_it_and_one_in_a_room_names_nobody() {
+    let db = world().await;
+    insert_bot(&db, "bot_d", "user-a", "DESKTOP").await;
+    let chat = start_direct_as(
+        &db,
+        "user-a",
+        &bot_principal("bot_d"),
+        ConversationEncryption::E2e,
+        false,
+        at(1),
+    )
+    .await
+    .unwrap();
+    let spoken = sealed_entry("t_1", InboxEntryKind::Transcript, &["user-a", "bot_d"]);
+    let sent = send_in(&db, &chat, "user-a", &spoken, at(2)).await.unwrap();
+    assert!(
+        sent.bots[0].mentioned,
+        "a line said to a bot alone is for it"
+    );
+    assert_eq!(turns(&db).await, 1);
+
+    let plan = NewConversation {
+        kind: ConversationKind::Group,
+        title: Some("Crew".into()),
+        members: Vec::new(),
+        encryption: ConversationEncryption::E2e,
+    };
+    start_group(
+        &db,
+        "crew",
+        "user-a",
+        &plan,
+        &[user("user-b"), bot_principal("bot_d")],
+        at(3),
+    )
+    .await
+    .unwrap();
+    let in_room = sealed_entry(
+        "t_2",
+        InboxEntryKind::Transcript,
+        &["user-a", "user-b", "bot_d"],
+    );
+    let sent = send_in(&db, "crew", "user-a", &in_room, at(4))
+        .await
+        .unwrap();
+    assert!(sent.bots.iter().all(|bot| !bot.mentioned));
+    assert_eq!(
+        turns(&db).await,
+        1,
+        "a room's sealed line wakes no bot by name"
+    );
 }
 
 #[tokio::test]

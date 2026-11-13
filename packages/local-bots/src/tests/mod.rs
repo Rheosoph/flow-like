@@ -13,6 +13,7 @@ mod room_decisions;
 mod secrets;
 mod skills;
 mod storage;
+mod task_authority;
 mod tasks;
 mod tool_grants;
 mod transfer;

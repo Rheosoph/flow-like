@@ -22,8 +22,8 @@ export const CAPABILITY_DETAILS: Readonly<
 	Record<BotCapability, CapabilityDetail>
 > = {
 	internet: {
-		tools: ["research_agent"],
-		note: "A separate, sealed researcher searches and reads public pages. It only gets the question, never the bot's memory, files or secrets, so instructions hidden in a page can't reach them.",
+		tools: ["internet_search", "open_url", "archive_lookup", "research_agent"],
+		note: "The bot searches and reads public pages itself. It opens only links from a search result or from your message, never one it wrote or found inside a page. For a job with many sources it can hand the question to a separate researcher.",
 	},
 	web_requests: {
 		tools: ["web_request"],
@@ -77,12 +77,13 @@ export const CAPABILITY_DETAILS: Readonly<
 		note: "Push notifications to your phone and desktop.",
 	},
 	scheduling: {
-		tools: ["schedule_task", "list_tasks", "cancel_task"],
+		tools: ["schedule_task", "list_tasks", "update_task", "cancel_task"],
 		note: "One-time runs and cron schedules, at most every 5 minutes, 50 tasks per bot.",
 	},
 	storage: {
 		tools: ["file_list", "file_read", "file_save", "file_write"],
-		note: "Files in the bot's own workspace, stored like app storage.",
+		asks: "Before file_save downloads from a new site.",
+		note: "Files in the bot's own workspace, stored like app storage. file_save can also download a link, such as a signed download link an app returned; that counts as outbound. Every chat that can show files also gets file_attach, which attaches a file or a link to the reply so it shows as a file in the chat; it needs no capability, and a link attachment counts as outbound.",
 	},
 	data_studio: {
 		tools: ["database_tool"],
@@ -103,6 +104,7 @@ export const CAPABILITY_DETAILS: Readonly<
 		tools: [
 			"file_summarize",
 			"file_extract",
+			"file_extract_content",
 			"pdf_render",
 			"excel_inspect",
 			"document_create",
@@ -110,6 +112,10 @@ export const CAPABILITY_DETAILS: Readonly<
 		],
 		asks: "Before processing very large documents.",
 		note: "Creates Word, Excel, PowerPoint and PDF files in its workspace.",
+	},
+	barcodes: {
+		tools: ["barcode_read"],
+		note: "QR, Data Matrix, Aztec, PDF417, EAN/UPC, Code 128/39/93, ITF, Codabar and GS1 DataBar. A quick search that finds nothing is retried more thoroughly. Photos above 16 megapixels are read scaled down.",
 	},
 	data_connections: {
 		tools: ["data_sources", "data_query"],
@@ -138,13 +144,7 @@ export const CAPABILITY_DETAILS: Readonly<
 		note: "Messages people you chat with. Slack, Teams, Telegram and Discord come later.",
 	},
 	skills: {
-		tools: [
-			"skill_load",
-			"skill_call",
-			"skill_run",
-			"skill_propose",
-			"skill_import",
-		],
+		tools: ["skill_load", "skill_call", "skill_run", "skill_propose"],
 		asks: "Before it runs a skill's code.",
 		note: "It only sees skills you approved. It can propose new ones for you to review.",
 	},

@@ -1722,6 +1722,7 @@ export function ProfileSyncer({
 						theme: hubProfile.theme,
 						home_layout: hubProfile.home_layout ?? null,
 						home_default_id: hubProfile.home_default_id ?? null,
+						hidden_bots: hubProfile.hidden_bots ?? [],
 						bit_ids: hubProfile.bits,
 						apps: filteredApps,
 						shortcuts: shortcuts,

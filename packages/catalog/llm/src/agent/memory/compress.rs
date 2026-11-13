@@ -191,6 +191,7 @@ impl NodeLogic for CompressMemoryNode {
             duration_ms: Some(duration_ms),
             iterations: None,
             calls: Vec::new(),
+            ..Default::default()
         };
         stats.set_duration_ms(duration_ms);
 

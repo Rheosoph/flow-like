@@ -9,10 +9,12 @@ use flow_like::{
 use flow_like_local_bots::InboxEntry;
 use flow_like_types::{
     bot_message::{MessageBody, MessagePart},
-    bot_turn::room_message,
+    bot_tool_trail::{TrailEntry, TrailSection, trail_of},
+    bot_turn::{clip_keeping_tail, room_message},
+    bot_user_context::{ContextHistory, ContextLine},
     inbox::{
-        ConversationKind, InboxEntryKind, ReactionEvent, TranscriptBody, body_target, is_tombstone,
-        net_reactions,
+        ConversationKind, InboxEntryKind, InterruptedSpeech, ReactionEvent, TranscriptBody,
+        body_target, is_tombstone, net_reactions,
     },
 };
 use std::collections::HashMap;
@@ -51,8 +53,14 @@ struct Line {
     message_id: String,
     sender_id: String,
     text: String,
+    /// How many characters at the end of `text` are file and UI notes, which a cut keeps whole.
+    keep: usize,
     mentions: Vec<String>,
     reply_to: Option<String>,
+    /// A scheduled or webhook trigger: it always addresses the bot.
+    from_trigger: bool,
+    /// A context message shown as a value-free note: edits never restore its text.
+    withheld: bool,
 }
 
 fn addressed_to(lines: &[Line], bot_id: &str) -> bool {
@@ -61,7 +69,8 @@ fn addressed_to(lines: &[Line], bot_id: &str) -> bool {
         .rposition(|line| line.sender_id == bot_id)
         .map_or(0, |last| last + 1);
     lines[since..].iter().any(|line| {
-        line.mentions.iter().any(|mention| mention == bot_id)
+        line.from_trigger
+            || line.mentions.iter().any(|mention| mention == bot_id)
             || line.reply_to.as_deref().is_some_and(|target| {
                 lines
                     .iter()
@@ -70,8 +79,11 @@ fn addressed_to(lines: &[Line], bot_id: &str) -> bool {
     })
 }
 
-fn render(body: &MessageBody) -> String {
+/// The message's text with a line for each UI block and file it carries, and how many characters
+/// at its end those lines take.
+fn render(body: &MessageBody) -> (String, usize) {
     let mut text = body.text.clone();
+    let written = text.chars().count();
     for part in &body.parts {
         let note = match part {
             MessagePart::Ui(ui) => ui
@@ -94,7 +106,8 @@ fn render(body: &MessageBody) -> String {
         }
         text.push_str(&note.line());
     }
-    text
+    let keep = text.chars().count() - written;
+    (text, keep)
 }
 
 fn body_of(entry: &InboxEntry) -> Option<MessageBody> {
@@ -109,48 +122,120 @@ fn spoken_of(entry: &InboxEntry) -> Option<TranscriptBody> {
     TranscriptBody::parse(body).ok()
 }
 
-fn lines_of(entries: &[InboxEntry]) -> Vec<Line> {
+fn readable_bodies(entries: &[InboxEntry]) -> impl Iterator<Item = (&str, &serde_json::Value)> {
+    entries
+        .iter()
+        .filter(|entry| !is_tombstone(&entry.envelope) && crate::rule::is_plain(entry))
+        .map(|entry| (entry.sender_id.as_str(), &entry.envelope["body"]))
+}
+
+/// What `bot_id` knows of the context shared in `window` (oldest first); of the `later` entries,
+/// written after the turn's trigger, only revocations count.
+fn context_of(window: &[InboxEntry], later: &[InboxEntry], bot_id: &str) -> ContextHistory {
+    ContextHistory::with_later(
+        readable_bodies(window),
+        readable_bodies(later),
+        bot_id,
+        chrono::Utc::now().timestamp_millis(),
+    )
+}
+
+/// The session snapshots still usable in `entries` (oldest first), for a turn whose history
+/// comes from memory and so leaves them out. `entries` are all the entries, oldest first; the
+/// window ends at `trigger_message_id`, and a revocation after it still ends a session.
+pub fn shared_context(
+    entries: &[InboxEntry],
+    trigger_message_id: &str,
+    bot_id: &str,
+) -> Option<String> {
+    let upto = entries
+        .iter()
+        .position(|entry| entry.message_id == trigger_message_id)
+        .map_or(entries.len(), |index| index + 1);
+    let start = upto.saturating_sub(HISTORY_ENTRIES);
+    context_of(&entries[start..upto], &entries[upto..], bot_id).live_note()
+}
+
+fn lines_of(entries: &[InboxEntry], later: &[InboxEntry], bot_id: &str) -> Vec<Line> {
+    let live = || {
+        entries
+            .iter()
+            .filter(|entry| !is_tombstone(&entry.envelope))
+    };
+    let context = context_of(entries, later, bot_id);
     let mut lines: Vec<Line> = Vec::new();
-    for entry in entries {
-        if is_tombstone(&entry.envelope)
-            || flow_like_types::bot_user_context::is_ephemeral_body(&entry.envelope["body"])
-        {
-            continue;
-        }
-        match entry.kind {
-            InboxEntryKind::Topic => lines.clear(),
-            InboxEntryKind::Message | InboxEntryKind::Trigger => {
-                if let Some(body) = body_of(entry) {
+    let mut cut_off: Vec<InterruptedSpeech> = Vec::new();
+    for entry in live() {
+        let context = match context.line(&entry.sender_id, &entry.envelope["body"]) {
+            ContextLine::Hidden => continue,
+            ContextLine::Text(text) => Some(text),
+            ContextLine::Ordinary => None,
+        };
+        match (entry.kind, context) {
+            (InboxEntryKind::Topic, _) => lines.clear(),
+            (InboxEntryKind::Message, Some(text)) => lines.push(Line {
+                message_id: entry.message_id.clone(),
+                sender_id: entry.sender_id.clone(),
+                text,
+                keep: 0,
+                mentions: Vec::new(),
+                reply_to: None,
+                from_trigger: false,
+                withheld: true,
+            }),
+            (InboxEntryKind::Message | InboxEntryKind::Trigger, None) => {
+                if let Some(body) = body_of(entry)
+                    && body.approval_response.is_none()
+                {
+                    let (text, keep) = render(&body);
                     lines.push(Line {
                         message_id: entry.message_id.clone(),
                         sender_id: entry.sender_id.clone(),
-                        text: render(&body),
+                        text,
+                        keep,
                         mentions: body.mentions.clone(),
                         reply_to: body.reply_to.clone(),
+                        from_trigger: entry.kind == InboxEntryKind::Trigger,
+                        withheld: false,
                     });
                 }
             }
-            InboxEntryKind::Transcript => {
+            (InboxEntryKind::Transcript, None) => {
                 if let Some(spoken) = spoken_of(entry) {
+                    cut_off.extend(spoken.interrupted.clone());
                     lines.push(Line {
                         message_id: entry.message_id.clone(),
                         sender_id: entry.sender_id.clone(),
                         text: spoken.render(),
+                        keep: 0,
                         mentions: spoken.mentions,
                         reply_to: None,
+                        from_trigger: false,
+                        withheld: false,
                     });
                 }
             }
-            InboxEntryKind::Edit => {
+            (InboxEntryKind::Edit, None) => {
                 if let (Some(target), Some(body)) = (body_target(&entry.envelope), body_of(entry))
-                    && let Some(line) = lines
-                        .iter_mut()
-                        .find(|line| line.message_id == target && line.sender_id == entry.sender_id)
+                    && let Some(line) = lines.iter_mut().find(|line| {
+                        line.message_id == target
+                            && line.sender_id == entry.sender_id
+                            && !line.withheld
+                    })
                 {
-                    line.text = render(&body);
+                    (line.text, line.keep) = render(&body);
                 }
             }
             _ => {}
+        }
+    }
+    for cut in &cut_off {
+        if let Some(line) = lines
+            .iter_mut()
+            .find(|line| line.message_id == cut.message_id && !line.withheld)
+        {
+            line.text = cut.heard_part(&line.text);
+            line.keep = 0;
         }
     }
     lines
@@ -175,7 +260,7 @@ pub fn transcript(
         .position(|entry| entry.message_id == trigger_message_id)
         .ok_or(Unreadable::Missing)?;
     let start = (upto + 1).saturating_sub(HISTORY_ENTRIES);
-    let lines = lines_of(&entries[start..=upto]);
+    let lines = lines_of(&entries[start..=upto], &entries[upto + 1..], bot_id);
     if let Some(prompt) = flow_like_types::bot_user_context::response_prompt(
         &entries[upto].envelope["body"],
         bot_id,
@@ -207,7 +292,7 @@ pub fn transcript(
         let name = names.get(&line.sender_id).unwrap_or(&line.sender_id);
         room_message(name, line.sender_id == owner_id, &line.text)
     };
-    let prompt = clipped(&spoken(answered), MAX_PROMPT_CHARS);
+    let prompt = clip_keeping_tail(&spoken(answered), answered.keep, MAX_PROMPT_CHARS);
     let history = lines[..lines.len() - 1]
         .iter()
         .map(|line| UnifiedChatMessage {
@@ -216,7 +301,7 @@ pub fn transcript(
             } else {
                 ChatRole::User
             },
-            content: clipped(&spoken(line), MAX_HISTORY_MESSAGE_CHARS),
+            content: clip_keeping_tail(&spoken(line), line.keep, MAX_HISTORY_MESSAGE_CHARS),
             images: None,
         })
         .collect();
@@ -251,7 +336,7 @@ pub fn render_history(
     owner_id: &str,
     limit: usize,
 ) -> Vec<UnifiedChatMessage> {
-    let lines = lines_of(entries);
+    let lines = lines_of(entries, &[], bot_id);
     let start = lines.len().saturating_sub(limit);
     lines
         .into_iter()
@@ -273,11 +358,25 @@ pub fn render_history(
                 } else {
                     ChatRole::User
                 },
-                content: clipped(&content, MAX_HISTORY_MESSAGE_CHARS),
+                content: clip_keeping_tail(&content, line.keep, MAX_HISTORY_MESSAGE_CHARS),
                 images: None,
             }
         })
         .collect()
+}
+
+/// The trail section of `bot_id`'s replies in `entries` (oldest first) since the newest "New
+/// topic" marker: their tool calls, each with the message it answered.
+pub fn tool_trail(bot_id: &str, entries: &[InboxEntry]) -> Option<TrailSection> {
+    trail_of(
+        bot_id,
+        entries.iter().map(|entry| TrailEntry {
+            message_id: &entry.message_id,
+            sender_id: &entry.sender_id,
+            kind: entry.kind,
+            envelope: &entry.envelope,
+        }),
+    )
 }
 
 const EXCERPT_CHARS: usize = 120;
@@ -304,7 +403,7 @@ pub fn reaction_turn(
 ) -> ReactionTurn {
     let start = entries.len().saturating_sub(HISTORY_ENTRIES);
     let window = &entries[start..];
-    let lines = lines_of(window);
+    let lines = lines_of(window, &[], bot_id);
     let events: Vec<ReactionEvent> = window
         .iter()
         .filter(|entry| {
@@ -352,7 +451,7 @@ pub fn reaction_turn(
         } else {
             ChatRole::User
         },
-        content: clipped(&spoken(line), MAX_HISTORY_MESSAGE_CHARS),
+        content: clip_keeping_tail(&spoken(line), line.keep, MAX_HISTORY_MESSAGE_CHARS),
         images: None,
     };
     let reaction_text = reactions
@@ -367,14 +466,21 @@ pub fn reaction_turn(
         .join("\n");
     let (prompt, history, reactions) = match lines.split_last() {
         Some((last, earlier)) if fresh > 0 => {
-            let prompt = if reaction_text.is_empty() {
-                spoken(last)
+            let room = if reaction_text.is_empty() {
+                MAX_PROMPT_CHARS
             } else {
-                format!("{}\n\n{reaction_text}", spoken(last))
+                MAX_PROMPT_CHARS.saturating_sub(reaction_text.chars().count() + 2)
+            };
+            let said = clip_keeping_tail(&spoken(last), last.keep, room);
+            let said_chars = said.chars().count();
+            let prompt = if reaction_text.is_empty() {
+                said
+            } else {
+                format!("{said}\n\n{reaction_text}")
             };
             let kept = if addressed { Vec::new() } else { reactions };
             (
-                clipped(&prompt, MAX_PROMPT_CHARS),
+                clipped(&prompt, MAX_PROMPT_CHARS.max(said_chars)),
                 earlier.iter().map(as_history).collect(),
                 kept,
             )
@@ -452,9 +558,23 @@ mod tests {
         }
     }
 
-    #[test]
-    fn user_context_values_and_derived_answers_never_enter_later_history() {
-        let entries = vec![
+    fn shared_entries(decision: &str) -> Vec<InboxEntry> {
+        let now = chrono::Utc::now().timestamp_millis();
+        let request = json!({
+            "id": "request", "bot_id": "bot", "subject_id": "local", "conversation_id": "conversation",
+            "purpose": "Find nearby places", "fields": ["location"], "precision": "approximate",
+            "audience": "direct", "audience_member_ids": ["bot", "local"],
+            "created_at": now - 120_000, "expires_at": now + 180_000,
+        });
+        let response = json!({
+            "request_id": "request", "bot_id": "bot", "subject_id": "local",
+            "conversation_id": "conversation", "decision": decision,
+            "captured_at": now - 60_000, "expires_at": now + 240_000,
+            "source": {"session_id": "s1", "platform": "web"},
+            "values": {"location": {"latitude": 48.17, "longitude": 11.6, "accuracy_m": 1500, "precision": "approximate"}},
+            "unavailable": {},
+        });
+        vec![
             entry(
                 "normal",
                 "local",
@@ -465,13 +585,13 @@ mod tests {
                 "request",
                 "bot",
                 InboxEntryKind::Message,
-                json!({"text":"Location request", "user_context_request":{"id":"request"}}),
+                json!({"text":"Location request", "user_context_request": request}),
             ),
             entry(
                 "answer",
                 "local",
                 InboxEntryKind::Message,
-                json!({"text":"Sensitive place", "user_context_response":{"request_id":"request"}}),
+                json!({"text":"Shared", "user_context_response": response}),
             ),
             entry(
                 "reply",
@@ -479,17 +599,126 @@ mod tests {
                 InboxEntryKind::Message,
                 json!({"text":"Sensitive nearby answer", "user_context_derived":"request"}),
             ),
-        ];
-        let history = render_history(
+        ]
+    }
+
+    fn history_of(entries: &[InboxEntry]) -> Vec<String> {
+        render_history(
             "bot",
             ConversationKind::Direct,
-            &entries,
+            entries,
+            &HashMap::new(),
+            "local",
+            32,
+        )
+        .into_iter()
+        .map(|message| message.content)
+        .collect()
+    }
+
+    #[test]
+    fn values_shared_once_leave_only_value_free_notes_in_later_history() {
+        let mut entries = shared_entries("once");
+        entries.push(entry(
+            "edit",
+            "bot",
+            InboxEntryKind::Edit,
+            json!({"target":"reply","text":"Sensitive edited answer"}),
+        ));
+        entries.push(entry(
+            "malformed",
+            "bot",
+            InboxEntryKind::Message,
+            json!({"text":"Sensitive card", "user_context_request":{"id":"malformed"}}),
+        ));
+        let history = history_of(&entries);
+        assert_eq!(history[0], "Find nearby places");
+        assert_eq!(history[1], "[You asked for user context (location).]");
+        assert!(history[2].contains("(location) once"));
+        assert!(history[3].contains("withheld"));
+        assert_eq!(history.len(), 4);
+        assert!(
+            history
+                .iter()
+                .all(|line| !line.contains("Sensitive") && !line.contains("48.17"))
+        );
+    }
+
+    #[test]
+    fn a_session_answer_keeps_the_snapshot_and_the_reply_in_later_turns() {
+        let history = history_of(&shared_entries("session"));
+        assert!(history[2].contains("for this session"));
+        assert!(history[2].contains("48.17"));
+        assert_eq!(history[3], "Sensitive nearby answer");
+        assert!(
+            shared_context(&shared_entries("session"), "reply", "bot")
+                .is_some_and(|note| note.contains("48.17"))
+        );
+        assert!(shared_context(&shared_entries("once"), "reply", "bot").is_none());
+        let mut group = shared_entries("session");
+        group[1].envelope["body"]["user_context_request"]["audience"] = json!("group");
+        let group = render_history(
+            "bot",
+            ConversationKind::Group,
+            &group,
             &HashMap::new(),
             "local",
             32,
         );
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].content, "Find nearby places");
+        assert!(group.iter().all(|line| !line.content.contains("48.17")));
+    }
+
+    #[test]
+    fn a_revocation_after_the_trigger_ends_the_shared_session() {
+        let mut entries = shared_entries("session");
+        entries.push(entry(
+            "revoked",
+            "local",
+            InboxEntryKind::Message,
+            json!({"text":"Revoked", "user_context_revoke": {
+                "request_id": "request", "bot_id": "bot", "subject_id": "local",
+                "conversation_id": "conversation",
+                "revoked_at": chrono::Utc::now().timestamp_millis(),
+            }}),
+        ));
+        assert!(shared_context(&entries, "reply", "bot").is_none());
+        assert!(shared_context(&entries, "revoked", "bot").is_none());
+        let before = &entries[..entries.len() - 1];
+        assert!(shared_context(before, "reply", "bot").is_some());
+    }
+
+    #[test]
+    fn approval_answers_are_no_lines_and_triggers_address_the_bot() {
+        let entries = vec![
+            entry(
+                "ask",
+                "guest",
+                InboxEntryKind::Message,
+                json!({"text":"Please run it"}),
+            ),
+            entry(
+                "approved",
+                "guest",
+                InboxEntryKind::Message,
+                json!({"text":"Approved", "approval_response": {
+                    "approval_id": "a1", "decision": "once",
+                }}),
+            ),
+        ];
+        let lines = lines_of(&entries, &[], "bot");
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].message_id, "ask");
+
+        let trigger = entry(
+            "tick",
+            "system",
+            InboxEntryKind::Trigger,
+            json!({"source":"schedule","ref_id":"task","title":"Daily","text":"Check the report"}),
+        );
+        let lines = lines_of(&[trigger], &[], "bot");
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].from_trigger);
+        assert!(addressed_to(&lines, "bot"));
     }
 
     #[test]
@@ -506,8 +735,7 @@ mod tests {
                 "other-bot",
                 &[card.clone()],
                 card.created_at,
-                false
-            )
+                false, false)
             .is_none()
         );
         let answer = entry(
@@ -522,7 +750,7 @@ mod tests {
                 "bot",
                 &[answer.clone()],
                 answer.created_at,
-                false
+                false, false
             )
             .is_some()
         );
@@ -532,7 +760,7 @@ mod tests {
                 "other-bot",
                 &[answer.clone()],
                 answer.created_at,
-                false
+                false, false
             )
             .is_none()
         );
@@ -548,10 +776,68 @@ mod tests {
                 "other-bot",
                 &[reply.clone()],
                 reply.created_at,
-                false
+                false, false
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn another_bots_linked_file_reaches_the_room_with_its_whole_link() {
+        let link = "https://vault.s3.eu-central-1.amazonaws.com/offers/Offer.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc123";
+        let entries = vec![entry(
+            "made",
+            "maker",
+            InboxEntryKind::Message,
+            json!({
+                "text": "The offer is ready.",
+                "parts": [{ "kind": "attachment", "id": "a1", "name": "Offer.pdf", "url": link, "mime": "application/pdf" }]
+            }),
+        )];
+        let names = HashMap::from([("maker".to_string(), "Maker".to_string())]);
+        let note = format!("[file: Offer.pdf (link: {link})]");
+
+        let turn = transcript(
+            "reader",
+            ConversationKind::Group,
+            "made",
+            &entries,
+            &names,
+            "owner",
+        )
+        .unwrap();
+        assert!(turn.prompt.contains(&note), "{}", turn.prompt);
+
+        let history = render_history("other", ConversationKind::Group, &entries, &names, "owner", 8);
+        assert!(history[0].content.contains(&note), "{}", history[0].content);
+    }
+
+    #[test]
+    fn a_long_message_is_cut_before_its_links_not_through_them() {
+        let link = |n: usize| {
+            format!(
+                "https://vault.s3.amazonaws.com/offers/{n}.pdf?X-Amz-Signature={}",
+                "s".repeat(1_400)
+            )
+        };
+        let parts: Vec<Value> = (1..=6)
+            .map(|n| json!({ "kind": "attachment", "id": format!("a{n}"), "name": format!("{n}.pdf"), "url": link(n) }))
+            .collect();
+        let entries = vec![
+            entry(
+                "made",
+                "maker",
+                InboxEntryKind::Message,
+                json!({ "text": "x".repeat(9_000), "parts": parts }),
+            ),
+            entry("later", "owner", InboxEntryKind::Message, json!({ "text": "thanks" })),
+        ];
+        let history = render_history("reader", ConversationKind::Group, &entries, &HashMap::new(), "owner", 8);
+        let content = &history[0].content;
+        for n in 1..=6 {
+            assert!(content.contains(&format!("[file: {n}.pdf (link: {})]", link(n))), "link {n} was cut");
+        }
+        assert!(content.starts_with(&room_message("maker", false, "xxx")));
     }
 
     #[test]

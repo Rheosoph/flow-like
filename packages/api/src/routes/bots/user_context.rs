@@ -15,14 +15,14 @@ use flow_like_types::{
     bot_user_context::{UserContextAudience, UserContextField, UserContextRequest},
     create_id,
 };
-use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::Deserialize;
 use serde_json::json;
 use utoipa::IntoParams;
 
 use crate::{
     bot_caller::{self, Names},
-    entity::{bot, conversation, conversation_member},
+    entity::{bot, conversation, conversation_member, inbox_entry},
     error::ApiError,
     middleware::jwt::AppUser,
     routes::inbox::{
@@ -32,16 +32,70 @@ use crate::{
     state::AppState,
 };
 
+const MAX_REQUESTS_PER_SUBJECT_HOUR: usize = 6;
+const REQUEST_WINDOW_MS: i64 = 3_600_000;
+
+/// The bot's own request cards for `subject_id` in the conversation during the last hour.
+pub(crate) async fn recent_requests<C: ConnectionTrait>(
+    db: &C,
+    bot_id: &str,
+    conversation_id: &str,
+    subject_id: &str,
+    now: i64,
+) -> Result<usize, sea_orm::DbErr> {
+    let since = chrono::DateTime::from_timestamp_millis(now - REQUEST_WINDOW_MS)
+        .unwrap_or_default()
+        .fixed_offset();
+    let rows = inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::InboxId.eq(bot_id))
+        .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
+        .filter(inbox_entry::Column::SenderId.eq(bot_id))
+        .filter(inbox_entry::Column::Kind.eq("MESSAGE"))
+        .filter(inbox_entry::Column::CreatedAt.gt(since))
+        .order_by_desc(inbox_entry::Column::CreatedAt)
+        .limit(200)
+        .all(db)
+        .await?;
+    Ok(rows
+        .iter()
+        .filter_map(|row| row.envelope["body"].get("user_context_request"))
+        .filter(|card| card["subject_id"].as_str() == Some(subject_id))
+        .count())
+}
+
 #[derive(Deserialize, IntoParams)]
 pub struct ContextQuery {
     pub conversation_id: String,
 }
 
-#[derive(Deserialize)]
 pub struct ContextRequest {
     pub conversation_id: String,
-    #[serde(flatten)]
     pub request: UserContextRequestArgs,
+}
+
+/// Read by hand: `serde(flatten)` hides unknown fields from the arguments' `deny_unknown_fields`.
+impl<'de> Deserialize<'de> for ContextRequest {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        use serde::de::Error;
+        let mut fields = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        let conversation_id = match fields.remove("conversation_id") {
+            Some(serde_json::Value::String(id)) => id,
+            Some(other) => {
+                return Err(D::Error::custom(format!(
+                    "conversation_id must be a string, got {other}"
+                )));
+            }
+            None => return Err(D::Error::missing_field("conversation_id")),
+        };
+        let request =
+            serde_json::from_value(serde_json::Value::Object(fields)).map_err(D::Error::custom)?;
+        Ok(Self {
+            conversation_id,
+            request,
+        })
+    }
 }
 
 pub(crate) struct ServerUserContext {
@@ -134,6 +188,19 @@ impl UserContextBackend for ServerUserContext {
             )));
         }
         let now = chrono::Utc::now().timestamp_millis();
+        let sent = recent_requests(
+            &self.state.db,
+            &self.bot_id,
+            &conversation.id,
+            &args.subject_id,
+            now,
+        )
+        .await?;
+        if sent >= MAX_REQUESTS_PER_SUBJECT_HOUR {
+            return Err(backend_error(ApiError::too_many_requests(format!(
+                "You already asked this person for context {sent} times in the last hour; wait before asking again"
+            ))));
+        }
         let id = create_id();
         let mut audience: Vec<_> = members
             .iter()
@@ -176,7 +243,7 @@ impl UserContextBackend for ServerUserContext {
 }
 
 // Hosted tools display anyhow errors directly, so keep the public message outside the typed error.
-fn backend_error(error: ApiError) -> flow_like_types::Error {
+pub(super) fn backend_error(error: ApiError) -> flow_like_types::Error {
     let message = error.public_message().map(str::to_owned);
     let error = flow_like_types::Error::new(error);
     match message {
@@ -186,7 +253,7 @@ fn backend_error(error: ApiError) -> flow_like_types::Error {
 }
 
 // The tool backend uses anyhow; restore the API's status and public message at the HTTP boundary.
-fn context_error(error: flow_like_types::Error) -> ApiError {
+pub(super) fn context_error(error: flow_like_types::Error) -> ApiError {
     let error = match error.downcast::<ApiError>() {
         Ok(error) => return error,
         Err(error) => error,
@@ -416,6 +483,15 @@ mod tests {
     async fn request_routes_bind_bot_tokens_to_their_bot_and_conversation() {
         let db = crate::routes::inbox::fixture::database().await;
         crate::routes::inbox::fixture::insert_bot(&db, "bot_test", "owner", "DESKTOP").await;
+        crate::routes::inbox::fixture::running_turn(
+            &db,
+            "turn_test",
+            "bot_test",
+            "room",
+            "host",
+            crate::routes::inbox::fixture::at(60),
+        )
+        .await;
         let token = AppUser::Bot(BotUser {
             bot_id: "bot_test".into(),
             turn_id: "turn_test".into(),
@@ -440,7 +516,11 @@ mod tests {
         assert!(authorized(&db, &owner, "bot_test", "room").await.is_err());
         db.execute_unprepared(r#"INSERT INTO public."ConversationMember" ("conversationId","principalId","principalKind","joinedAt","status") VALUES ('room','owner','USER','2023-01-01T00:00:00+00:00','ACTIVE')"#).await.unwrap();
         assert!(authorized(&db, &owner, "bot_test", "room").await.is_ok());
-        assert!(authorized(&db, &owner, "bot_test", "other-room").await.is_err());
+        assert!(
+            authorized(&db, &owner, "bot_test", "other-room")
+                .await
+                .is_err()
+        );
         let direct = AppUser::Bot(BotUser {
             bot_id: "bot_test".into(),
             turn_id: "direct:app".into(),

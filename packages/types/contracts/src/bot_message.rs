@@ -15,6 +15,9 @@ use std::fmt;
 
 /// At most this many parts in one message.
 pub const MAX_PARTS: usize = 32;
+/// Usage summaries leave room for message text, attachments and encryption overhead.
+pub const MAX_USAGE_STATS_BYTES: usize = 8 * 1024;
+pub const MAX_USAGE_STATS_RECORDS: usize = 4;
 /// Principal ids, call ids and tool names have at most this many characters.
 pub const MAX_NAME_CHARS: usize = 128;
 /// A part's one-line summary has at most this many characters.
@@ -23,6 +26,8 @@ pub const MAX_SUMMARY_CHARS: usize = 500;
 pub const MAX_FILE_NAME_CHARS: usize = 255;
 /// A workspace path has at most this many characters.
 pub const MAX_PATH_CHARS: usize = 1_024;
+/// An attachment's link has at most this many bytes; signed links run to about 2,000.
+pub const MAX_LINK_CHARS: usize = 4_096;
 /// An error code or a MIME type has at most this many characters.
 pub const MAX_CODE_CHARS: usize = 64;
 /// At most this many bots wait on one question's chain.
@@ -80,6 +85,9 @@ pub struct MessageBody {
     /// body only to the bot's owner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<crate::bot_notes::NoteRef>,
+    /// Numeric model usage and bounded call/compaction detail, grouped by step name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub usage_stats: Vec<Value>,
 }
 
 /// Names the interactive chat run that answers a message.
@@ -114,9 +122,87 @@ pub struct ApprovalRequest {
     /// answers `once` (or `deny`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret: Option<SecretAsk>,
+    /// Set on a `room_invite` card: who the bot wants to bring into the room, and why.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invite: Option<RoomInviteAsk>,
     /// The full proposed settings patch, shown before approving a bot configuration change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub configuration_changes: Option<Value>,
+    /// The calls the card asks about. Empty on a card for one plain call, which the top-level
+    /// fields describe; a batch card's top-level fields summarize its items for older clients.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<ApprovalItem>,
+}
+
+/// At most this many items on one approval card.
+pub const MAX_APPROVAL_ITEMS: usize = 32;
+
+/// The `tool` of a card that asks about several calls at once.
+pub const APPROVAL_BATCH_TOOL: &str = "approval_batch";
+
+fn one_call() -> u32 {
+    1
+}
+
+fn is_one_call(calls: &u32) -> bool {
+    *calls == 1
+}
+
+/// One call on an approval card, or several identical ones.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ApprovalItem {
+    /// Hash of the tool and its arguments; the answer names the item by it.
+    pub args_hash: String,
+    pub tool: String,
+    /// What the call would do, in one line.
+    pub summary: String,
+    /// The grant scopes an "always" answer stores, comma separated; empty when the call is asked
+    /// every time.
+    pub scope: String,
+    /// How many identical calls the item covers.
+    #[serde(default = "one_call", skip_serializing_if = "is_one_call")]
+    pub calls: u32,
+    /// The turn read web content before this call, so the owner's standing grants for it were set
+    /// aside and it asks again; "always" is not offered.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub after_web_content: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<SecretAsk>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invite: Option<RoomInviteAsk>,
+}
+
+impl ApprovalItem {
+    fn check(&self, field: &str) -> Result<(), BodyError> {
+        check_name(
+            &format!("{field}.args_hash"),
+            &self.args_hash,
+            MAX_NAME_CHARS,
+        )?;
+        check_name(&format!("{field}.tool"), &self.tool, MAX_NAME_CHARS)?;
+        check_line(
+            &format!("{field}.summary"),
+            Some(&self.summary),
+            MAX_SUMMARY_CHARS,
+        )?;
+        check_line(
+            &format!("{field}.scope"),
+            Some(&self.scope),
+            crate::tool_grant::MAX_KEY_CHARS * 4,
+        )?;
+        if self.calls == 0 {
+            return refuse(format!("{field}.calls must be at least 1"));
+        }
+        self.secret.as_ref().map_or(Ok(()), SecretAsk::check)?;
+        self.invite.as_ref().map_or(Ok(()), RoomInviteAsk::check)
+    }
+}
+
+/// The owner's answer to one item of a batch card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ItemDecision {
+    pub args_hash: String,
+    pub decision: crate::tool_grant::ApprovalDecision,
 }
 
 /// A secret name has at most this many characters.
@@ -160,14 +246,143 @@ impl SecretAsk {
     }
 }
 
+/// The tool a bot invites a person into its group chat with.
+pub const ROOM_INVITE_TOOL: &str = "room_invite";
+
+/// An invited person's username or email address has at most this many characters.
+pub const MAX_INVITE_PERSON_CHARS: usize = 254;
+
+/// The person a bot wants to invite into the room its turn runs in, as the bot named them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RoomInviteAsk {
+    /// The exact username or email address the bot was given.
+    pub person: String,
+    /// Why the bot wants them in the room, in its own words.
+    pub reason: String,
+}
+
+impl RoomInviteAsk {
+    fn check(&self) -> Result<(), BodyError> {
+        check_line(
+            "body.approval.invite.person",
+            Some(&self.person),
+            MAX_INVITE_PERSON_CHARS,
+        )?;
+        check_line(
+            "body.approval.invite.reason",
+            Some(&self.reason),
+            MAX_SUMMARY_CHARS,
+        )
+    }
+}
+
 /// The owner's answer to an [`ApprovalRequest`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ApprovalResponse {
     pub approval_id: String,
+    /// The answer to every item not listed in `items`.
     pub decision: crate::tool_grant::ApprovalDecision,
+    /// The items answered differently from `decision`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<ItemDecision>,
+}
+
+impl ApprovalResponse {
+    /// The answer entry for a card's resolved items: their common decision, or `once` with the
+    /// items that differ from it when they do not agree. A card for one call answers like before.
+    pub fn for_decisions(
+        approval_id: impl Into<String>,
+        decisions: &[(ApprovalItem, crate::tool_grant::ApprovalDecision)],
+    ) -> Self {
+        let first = decisions.first().map(|(_, decision)| *decision);
+        let decision = first
+            .filter(|first| decisions.iter().all(|(_, decision)| decision == first))
+            .unwrap_or(crate::tool_grant::ApprovalDecision::Once);
+        Self {
+            approval_id: approval_id.into(),
+            decision,
+            items: decisions
+                .iter()
+                .filter(|(_, item_decision)| *item_decision != decision)
+                .map(|(item, item_decision)| ItemDecision {
+                    args_hash: item.args_hash.clone(),
+                    decision: *item_decision,
+                })
+                .collect(),
+        }
+    }
 }
 
 impl ApprovalRequest {
+    /// The calls this card asks about: its items, or the card itself for a card written for one
+    /// call (and every card written before batches).
+    pub fn batch(&self) -> Vec<ApprovalItem> {
+        if !self.items.is_empty() {
+            return self.items.clone();
+        }
+        vec![ApprovalItem {
+            args_hash: self.args_hash.clone(),
+            tool: self.tool.clone(),
+            summary: self.summary.clone(),
+            scope: self.scope.clone(),
+            calls: 1,
+            after_web_content: false,
+            secret: self.secret.clone(),
+            invite: self.invite.clone(),
+        }]
+    }
+
+    /// The tools the card asks about, each once, in the order of its items.
+    pub fn tool_names(&self) -> Vec<String> {
+        let mut tools: Vec<String> = Vec::new();
+        for item in self.batch() {
+            if !tools.contains(&item.tool) {
+                tools.push(item.tool);
+            }
+        }
+        tools
+    }
+
+    /// Every item with its answer: a listed item takes its own decision, every other item
+    /// `decision`. Refuses a hash that is not on the card or is listed twice.
+    pub fn decisions(
+        &self,
+        decision: crate::tool_grant::ApprovalDecision,
+        answers: &[ItemDecision],
+    ) -> Result<Vec<(ApprovalItem, crate::tool_grant::ApprovalDecision)>, String> {
+        let batch = self.batch();
+        let mut listed = std::collections::HashMap::new();
+        for answer in answers {
+            if !batch.iter().any(|item| item.args_hash == answer.args_hash) {
+                return Err(format!(
+                    "Approval '{}' has no item '{}'",
+                    self.id,
+                    clipped(&answer.args_hash)
+                ));
+            }
+            if listed
+                .insert(answer.args_hash.as_str(), answer.decision)
+                .is_some()
+            {
+                return Err(format!(
+                    "Approval '{}' answers item '{}' twice",
+                    self.id,
+                    clipped(&answer.args_hash)
+                ));
+            }
+        }
+        Ok(batch
+            .into_iter()
+            .map(|item| {
+                let answer = listed
+                    .get(item.args_hash.as_str())
+                    .copied()
+                    .unwrap_or(decision);
+                (item, answer)
+            })
+            .collect())
+    }
+
     fn check(&self) -> Result<(), BodyError> {
         check_name("body.approval.id", &self.id, MAX_NAME_CHARS)?;
         check_name("body.approval.turn_id", &self.turn_id, MAX_NAME_CHARS)?;
@@ -196,7 +411,17 @@ impl ApprovalRequest {
         {
             return refuse("body.approval.configuration_changes must be an object".to_string());
         }
-        self.secret.as_ref().map_or(Ok(()), SecretAsk::check)
+        self.secret.as_ref().map_or(Ok(()), SecretAsk::check)?;
+        self.invite.as_ref().map_or(Ok(()), RoomInviteAsk::check)?;
+        check_item_hashes(
+            "body.approval.items",
+            self.items.len(),
+            self.items.iter().map(|item| item.args_hash.as_str()),
+        )?;
+        for (index, item) in self.items.iter().enumerate() {
+            item.check(&format!("body.approval.items[{index}]"))?;
+        }
+        Ok(())
     }
 }
 
@@ -206,8 +431,38 @@ impl ApprovalResponse {
             "body.approval_response.approval_id",
             &self.approval_id,
             MAX_NAME_CHARS,
-        )
+        )?;
+        check_item_hashes(
+            "body.approval_response.items",
+            self.items.len(),
+            self.items.iter().map(|item| item.args_hash.as_str()),
+        )?;
+        for (index, item) in self.items.iter().enumerate() {
+            check_name(
+                &format!("body.approval_response.items[{index}].args_hash"),
+                &item.args_hash,
+                MAX_NAME_CHARS,
+            )?;
+        }
+        Ok(())
     }
+}
+
+fn check_item_hashes<'a>(
+    field: &str,
+    count: usize,
+    mut hashes: impl Iterator<Item = &'a str>,
+) -> Result<(), BodyError> {
+    if count > MAX_APPROVAL_ITEMS {
+        return refuse(format!(
+            "{field} holds at most {MAX_APPROVAL_ITEMS} items; this one holds {count}"
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    if let Some(repeated) = hashes.find(|hash| !seen.insert(*hash)) {
+        return refuse(format!("{field} names item '{}' twice", clipped(repeated)));
+    }
+    Ok(())
 }
 
 /// One addressable part of a message.
@@ -262,29 +517,115 @@ pub struct UiPart {
     pub handle: Option<WorkspaceHandle>,
 }
 
-/// A file from the sending bot's workspace, or a conversation file any member sent.
+/// A file from the sending bot's workspace, a conversation file any member sent, or a link to a
+/// file stored elsewhere. Exactly one of `handle` and `url`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AttachmentPart {
     /// `a1`, `a2` …
     pub id: String,
     /// The file name shown.
     pub name: String,
-    pub handle: WorkspaceHandle,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handle: Option<WorkspaceHandle>,
+    /// An http(s) link to the file, such as a signed download link; it works only until it
+    /// expires.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// The linked file's `type/subtype`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
 }
 
 impl AttachmentPart {
+    pub fn stored(id: String, name: String, handle: WorkspaceHandle) -> Self {
+        Self {
+            id,
+            name,
+            handle: Some(handle),
+            url: None,
+            mime: None,
+        }
+    }
+
+    pub fn linked(id: String, name: String, url: String, mime: Option<String>) -> Self {
+        Self {
+            id,
+            name,
+            handle: None,
+            url: Some(url),
+            mime,
+        }
+    }
+
     /// The line a model reads for the file. A conversation file carries its whole handle, which
     /// the file tools take as the `file` argument.
     pub fn note(&self) -> String {
-        if !self.handle.is_conversation_file() {
+        let Some(handle) = &self.handle else {
+            let url = self.url.as_deref().unwrap_or_default();
+            return format!("[file: {} (link: {url})]", self.name);
+        };
+        if !handle.is_conversation_file() {
             return format!("[file: {}]", self.name);
         }
-        let handle = serde_json::to_string(&self.handle).unwrap_or_default();
+        let json = serde_json::to_string(handle).unwrap_or_default();
         format!(
-            "[file: {} ({}, {} bytes); read it with the file tools, file = {handle}]",
-            self.name, self.handle.mime, self.handle.bytes
+            "[file: {} ({}, {} bytes); read it with the file tools, file = {json}]",
+            self.name, handle.mime, handle.bytes
         )
     }
+
+    fn check(&self, field: &str) -> Result<(), BodyError> {
+        if !(1..=MAX_FILE_NAME_CHARS).contains(&chars(&self.name))
+            || self.name.chars().any(char::is_control)
+        {
+            return refuse(format!(
+                "{field}.name must be 1 to {MAX_FILE_NAME_CHARS} characters"
+            ));
+        }
+        match (&self.handle, &self.url) {
+            (Some(_), None) => {
+                if self.mime.is_some() {
+                    return refuse(format!(
+                        "{field}.mime belongs to a linked file; a stored file keeps its type in handle.mime"
+                    ));
+                }
+                Ok(())
+            }
+            (None, Some(url)) => {
+                if !is_file_link(url) {
+                    return refuse(format!(
+                        "{field}.url must be an http(s) address with a host and no user name or password, at most {MAX_LINK_CHARS} characters"
+                    ));
+                }
+                match &self.mime {
+                    Some(mime) if !is_mime(mime) => refuse(format!(
+                        "{field}.mime '{}' is not type/subtype",
+                        clipped(mime)
+                    )),
+                    _ => Ok(()),
+                }
+            }
+            _ => refuse(format!(
+                "{field} needs exactly one of handle (a stored file) and url (a link)"
+            )),
+        }
+    }
+}
+
+/// Whether `url` can be an attachment's link: http(s), a host, no credentials, no whitespace.
+pub fn is_file_link(url: &str) -> bool {
+    let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    url.len() <= MAX_LINK_CHARS
+        && !authority.is_empty()
+        && !authority.starts_with(':')
+        && !authority.contains('@')
+        && !url.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
 /// A file in a bot's workspace app, for content too large for the envelope.
@@ -371,7 +712,7 @@ fn chars(value: &str) -> usize {
 }
 
 /// 1 to `max` characters, none of them whitespace or control characters.
-fn is_name(value: &str, max: usize) -> bool {
+pub(crate) fn is_name(value: &str, max: usize) -> bool {
     (1..=max).contains(&chars(value))
         && !value
             .chars()
@@ -450,6 +791,18 @@ impl MessageBody {
         }
         self.check_mentions()?;
         check_parts(&self.parts)?;
+        if self.usage_stats.len() > MAX_USAGE_STATS_RECORDS
+            || serde_json::to_vec(&self.usage_stats).map_or(usize::MAX, |bytes| bytes.len())
+                > MAX_USAGE_STATS_BYTES
+            || self.usage_stats.iter().any(|record| {
+                !record.get("step_name").is_some_and(Value::is_string)
+                    || !record.get("stats").is_some_and(Value::is_object)
+            })
+        {
+            return refuse(
+                "body.usage_stats exceeds the usage summary limits or has an invalid record",
+            );
+        }
         if let Some(error) = &self.error {
             error.check()?;
         }
@@ -496,6 +849,25 @@ impl MessageBody {
     /// Every file the parts point to, workspace and conversation files alike.
     pub fn handles(&self) -> impl Iterator<Item = &WorkspaceHandle> {
         self.parts.iter().filter_map(MessagePart::handle)
+    }
+
+    /// The attachments that carry a file uploaded to `conversation_id`.
+    pub fn conversation_attachments<'a>(
+        &'a self,
+        conversation_id: &'a str,
+    ) -> impl Iterator<Item = &'a AttachmentPart> + 'a {
+        self.parts.iter().filter_map(move |part| match part {
+            MessagePart::Attachment(file)
+                if file
+                    .handle
+                    .as_ref()
+                    .and_then(WorkspaceHandle::conversation_id)
+                    == Some(conversation_id) =>
+            {
+                Some(file)
+            }
+            _ => None,
+        })
     }
 
     /// The conversation files the parts point to.
@@ -546,7 +918,7 @@ impl MessagePart {
         match self {
             Self::Tool(part) => part.handle.as_ref(),
             Self::Ui(part) => part.handle.as_ref(),
-            Self::Attachment(part) => Some(&part.handle),
+            Self::Attachment(part) => part.handle.as_ref(),
         }
     }
 
@@ -578,15 +950,7 @@ impl MessagePart {
                     ));
                 }
             }
-            Self::Attachment(part) => {
-                if !(1..=MAX_FILE_NAME_CHARS).contains(&chars(&part.name))
-                    || part.name.chars().any(char::is_control)
-                {
-                    return refuse(format!(
-                        "{field}.name must be 1 to {MAX_FILE_NAME_CHARS} characters"
-                    ));
-                }
-            }
+            Self::Attachment(part) => part.check(field)?,
         }
         match self.handle() {
             Some(handle) => {
@@ -732,7 +1096,11 @@ impl WorkspaceHandle {
     /// The file's id: its path without the extension.
     pub fn file_id(&self) -> Option<&str> {
         self.conversation_id()?;
-        Some(self.path.split_once('.').map_or(self.path.as_str(), |(id, _)| id))
+        Some(
+            self.path
+                .split_once('.')
+                .map_or(self.path.as_str(), |(id, _)| id),
+        )
     }
 
     fn check(&self, field: &str) -> Result<(), BodyError> {
@@ -869,6 +1237,28 @@ mod tool_detail_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usage_summaries_round_trip_and_reject_oversized_or_malformed_records() {
+        let record = serde_json::json!({"step_name": "Assistant", "stats": {
+            "usage": {"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110},
+            "context": {"estimated_tokens": 200, "context_window": 32_000, "reserved_output_tokens": 2_000}
+        }});
+        let body = serde_json::json!({"text": "done", "usage_stats": [record.clone()]});
+        let parsed = MessageBody::parse(&body).unwrap();
+        assert_eq!(
+            serde_json::to_value(parsed).unwrap()["usage_stats"],
+            body["usage_stats"]
+        );
+        assert!(MessageBody::parse(&serde_json::json!({"usage_stats": [record.clone(), record.clone(), record.clone(), record.clone(), record]})).is_err());
+        assert!(MessageBody::parse(&serde_json::json!({"usage_stats": [{"step_name": "Assistant", "stats": {"data": "x".repeat(MAX_USAGE_STATS_BYTES)}}]})).is_err());
+        assert!(
+            MessageBody::parse(
+                &serde_json::json!({"usage_stats": [{"step_name": 2, "stats": {}}]})
+            )
+            .is_err()
+        );
+    }
     use serde_json::json;
 
     fn handle(app_id: &str, path: &str) -> Value {
@@ -1098,7 +1488,13 @@ mod conversation_file_tests {
     }
 
     fn handle() -> WorkspaceHandle {
-        WorkspaceHandle::conversation_file("conv9", "file_1.pdf", 2048, &"b".repeat(64), "application/pdf")
+        WorkspaceHandle::conversation_file(
+            "conv9",
+            "file_1.pdf",
+            2048,
+            &"b".repeat(64),
+            "application/pdf",
+        )
     }
 
     #[test]
@@ -1188,6 +1584,222 @@ mod conversation_file_tests {
             json!({ "name": "KEY", "description": "d".repeat(MAX_SUMMARY_CHARS + 1) }),
         ));
         assert!(long.is_err());
+    }
+
+    #[test]
+    fn an_invite_card_carries_the_person_and_one_line_of_reason() {
+        let card = |invite: Value| {
+            json!({ "approval": {
+                "id": "ap-1", "turn_id": "bt_1", "tool": ROOM_INVITE_TOOL,
+                "summary": "Invite ana", "scope": "", "args_hash": "h", "invite": invite,
+            } })
+        };
+        let body = MessageBody::parse(&card(
+            json!({ "person": "ana.lima", "reason": "She owns the budget sheet." }),
+        ))
+        .unwrap();
+        let approval = body.approval.unwrap();
+        assert_eq!(
+            approval.invite,
+            Some(RoomInviteAsk {
+                person: "ana.lima".into(),
+                reason: "She owns the budget sheet.".into(),
+            })
+        );
+        assert_eq!(approval.batch()[0].invite, approval.invite);
+        for invite in [
+            json!({ "person": "ana", "reason": "line\nbreak" }),
+            json!({ "person": "a".repeat(MAX_INVITE_PERSON_CHARS + 1), "reason": "x" }),
+            json!({ "person": "ana", "reason": "r".repeat(MAX_SUMMARY_CHARS + 1) }),
+        ] {
+            let error = MessageBody::parse(&card(invite)).unwrap_err().to_string();
+            assert!(error.contains("approval.invite"), "{error}");
+        }
+    }
+
+    fn plain_card() -> ApprovalRequest {
+        ApprovalRequest {
+            id: "ap-1".into(),
+            turn_id: "bt_1".into(),
+            tool: "web_request".into(),
+            summary: "The bot wants to send a GET request to cisa.gov/feeds.".into(),
+            scope: "web:cisa.gov:read".into(),
+            args_hash: "h1".into(),
+            requester_id: None,
+            requester_name: None,
+            room: None,
+            secret: None,
+            invite: None,
+            configuration_changes: None,
+            items: Vec::new(),
+        }
+    }
+
+    fn item(hash: &str) -> ApprovalItem {
+        ApprovalItem {
+            args_hash: hash.into(),
+            tool: "web_request".into(),
+            summary: format!("The bot wants to fetch {hash}."),
+            scope: "web:cisa.gov:read".into(),
+            calls: 1,
+            after_web_content: false,
+            secret: None,
+            invite: None,
+        }
+    }
+
+    fn batch_card(hashes: &[&str]) -> ApprovalRequest {
+        ApprovalRequest {
+            tool: APPROVAL_BATCH_TOOL.into(),
+            items: hashes.iter().map(|hash| item(hash)).collect(),
+            ..plain_card()
+        }
+    }
+
+    #[test]
+    fn a_batch_of_one_serializes_like_todays_card() {
+        use crate::tool_grant::{ApprovalAnswer, ApprovalDecision};
+        let golden = r#"{"id":"ap-1","turn_id":"bt_1","tool":"web_request","summary":"The bot wants to send a GET request to cisa.gov/feeds.","scope":"web:cisa.gov:read","args_hash":"h1"}"#;
+        assert_eq!(serde_json::to_string(&plain_card()).unwrap(), golden);
+        assert_eq!(
+            serde_json::from_str::<ApprovalRequest>(golden).unwrap(),
+            plain_card()
+        );
+        let decisions = plain_card()
+            .decisions(ApprovalDecision::Always, &[])
+            .unwrap();
+        let response = ApprovalResponse::for_decisions("ap-1", &decisions);
+        assert_eq!(
+            serde_json::to_string(&response).unwrap(),
+            r#"{"approval_id":"ap-1","decision":"always"}"#
+        );
+        let answer = ApprovalAnswer {
+            approval_id: "ap-1".into(),
+            decision: ApprovalDecision::Once,
+            items: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_string(&answer).unwrap(),
+            r#"{"approval_id":"ap-1","decision":"once"}"#
+        );
+        assert_eq!(
+            serde_json::to_value(item("h2")).unwrap(),
+            json!({"args_hash":"h2","tool":"web_request","summary":"The bot wants to fetch h2.","scope":"web:cisa.gov:read"})
+        );
+    }
+
+    #[test]
+    fn an_old_card_reads_as_a_batch_of_one() {
+        let mut card = plain_card();
+        card.secret = Some(SecretAsk {
+            name: "CISA_KEY".into(),
+            description: "Read the feed".into(),
+            replace: false,
+        });
+        let raw = serde_json::to_value(&card).unwrap();
+        assert!(raw.get("items").is_none());
+        let parsed = MessageBody::parse(&json!({ "approval": raw })).unwrap();
+        let batch = parsed.approval.unwrap().batch();
+        assert_eq!(batch.len(), 1);
+        assert_eq!(
+            batch[0],
+            ApprovalItem {
+                args_hash: "h1".into(),
+                tool: "web_request".into(),
+                summary: card.summary.clone(),
+                scope: card.scope.clone(),
+                calls: 1,
+                after_web_content: false,
+                secret: card.secret.clone(),
+                invite: None,
+            }
+        );
+        let parsed: ApprovalResponse =
+            serde_json::from_value(json!({"approval_id": "ap-1", "decision": "deny"})).unwrap();
+        assert!(parsed.items.is_empty());
+    }
+
+    #[test]
+    fn a_card_refuses_33_items_and_repeated_hashes() {
+        let body = |card: &ApprovalRequest| MessageBody {
+            approval: Some(card.clone()),
+            ..Default::default()
+        };
+        let hashes: Vec<String> = (0..MAX_APPROVAL_ITEMS).map(|n| format!("h{n}")).collect();
+        let full = batch_card(&hashes.iter().map(String::as_str).collect::<Vec<_>>());
+        assert!(body(&full).check().is_ok());
+        let mut over = full.clone();
+        over.items.push(item("h99"));
+        let error = body(&over).check().unwrap_err().to_string();
+        assert!(error.contains("at most 32 items"), "{error}");
+        let repeated = batch_card(&["h1", "h2", "h1"]);
+        let error = body(&repeated).check().unwrap_err().to_string();
+        assert!(error.contains("names item 'h1' twice"), "{error}");
+        let mut no_calls = batch_card(&["h1", "h2"]);
+        no_calls.items[1].calls = 0;
+        let error = body(&no_calls).check().unwrap_err().to_string();
+        assert!(error.contains("items[1].calls"), "{error}");
+        let mut spaced = batch_card(&["h1", "h2"]);
+        spaced.items[0].tool = "web request".into();
+        let error = body(&spaced).check().unwrap_err().to_string();
+        assert!(error.contains("items[0].tool"), "{error}");
+        let response = MessageBody {
+            approval_response: Some(ApprovalResponse {
+                approval_id: "ap-1".into(),
+                decision: crate::tool_grant::ApprovalDecision::Once,
+                items: ["h1", "h1"]
+                    .map(|hash| ItemDecision {
+                        args_hash: hash.into(),
+                        decision: crate::tool_grant::ApprovalDecision::Deny,
+                    })
+                    .to_vec(),
+            }),
+            ..Default::default()
+        };
+        assert!(response.check().is_err());
+    }
+
+    #[test]
+    fn an_answer_defaults_unlisted_items_to_its_decision() {
+        use crate::tool_grant::ApprovalDecision::{Always, Deny, Once};
+        let card = batch_card(&["h1", "h2", "h3"]);
+        let answer = |hash: &str, decision| ItemDecision {
+            args_hash: hash.into(),
+            decision,
+        };
+        let decided = |decisions: Vec<(ApprovalItem, crate::tool_grant::ApprovalDecision)>| {
+            decisions
+                .into_iter()
+                .map(|(item, decision)| (item.args_hash, decision))
+                .collect::<Vec<_>>()
+        };
+        let mixed = card.decisions(Deny, &[answer("h2", Once)]).unwrap();
+        assert_eq!(
+            decided(mixed.clone()),
+            vec![
+                ("h1".to_string(), Deny),
+                ("h2".to_string(), Once),
+                ("h3".to_string(), Deny)
+            ]
+        );
+        let response = ApprovalResponse::for_decisions(card.id.clone(), &mixed);
+        assert_eq!(response.decision, Once);
+        assert_eq!(response.items, vec![answer("h1", Deny), answer("h3", Deny)]);
+        let uniform = card.decisions(Always, &[answer("h3", Always)]).unwrap();
+        assert_eq!(
+            ApprovalResponse::for_decisions(card.id.clone(), &uniform),
+            ApprovalResponse {
+                approval_id: card.id.clone(),
+                decision: Always,
+                items: Vec::new(),
+            }
+        );
+        let unknown = card.decisions(Once, &[answer("h9", Deny)]).unwrap_err();
+        assert!(unknown.contains("no item 'h9'"), "{unknown}");
+        let twice = card
+            .decisions(Once, &[answer("h1", Deny), answer("h1", Once)])
+            .unwrap_err();
+        assert!(twice.contains("twice"), "{twice}");
     }
 
     #[test]

@@ -237,15 +237,32 @@ impl Stream {
                             write_service(id, write, task_writer, output.clone())
                         )
                     };
+                    let serving = async {
+                        match target.host {
+                            crate::management::tunnel::PlaygroundHost::Native(host) => {
+                                crate::management::playground_stream::serve(
+                                    view,
+                                    host,
+                                    target.bot_id,
+                                    target.observations,
+                                    Default::default(),
+                                )
+                                .await
+                            }
+                            #[cfg(feature = "bot-host")]
+                            crate::management::tunnel::PlaygroundHost::Container => {
+                                crate::bot_host::container::serve_view(
+                                    view,
+                                    &target.bot_id,
+                                    target.observations,
+                                )
+                                .await
+                            }
+                        }
+                    };
                     tokio::select! {
                         result = pipe => result.map(|_| ()),
-                        result = crate::management::playground_stream::serve(
-                            view,
-                            target.host,
-                            target.bot_id,
-                            target.observations,
-                            Default::default(),
-                        ) => result,
+                        result = serving => result,
                     }
                 }
                 .await;

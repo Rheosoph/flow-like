@@ -148,6 +148,7 @@ impl GovernanceCopilot {
                         params: None,
                     },
                     model_classification: Default::default(),
+                    data_classification: None,
                 })
                 .unwrap_or_default(),
                 ..Default::default()

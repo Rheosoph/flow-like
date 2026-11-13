@@ -165,6 +165,19 @@ function nextRun(task: IBotTask, label: string, fallback: string): string {
 	return `${label} ${formatRelativeTime(task.next_run_at, "long", "")}`;
 }
 
+/** Where the task fires when that is not the owner's chat with the bot. */
+function useTaskPlace(task: IBotTask): string | null {
+	const { t } = useTranslation("bots");
+	const conversation = task.conversation;
+	if (!conversation) return null;
+	if (conversation.kind === "direct") {
+		return t("panel.tasks.placeDirect", "In a chat with someone else");
+	}
+	return conversation.title
+		? t("panel.tasks.placeGroup", "In {{name}}", { name: conversation.title })
+		: t("panel.tasks.placeUnnamedGroup", "In a group chat");
+}
+
 function TaskRow({
 	task,
 	busy,
@@ -177,6 +190,7 @@ function TaskRow({
 	onDelete: (task: IBotTask) => void;
 }>) {
 	const { t, i18n } = useTranslation("bots");
+	const place = useTaskPlace(task);
 	const state = taskState(task);
 	const fallback =
 		state === "done"
@@ -191,6 +205,7 @@ function TaskRow({
 			<div className="min-w-0 flex-1">
 				<p className="truncate text-sm font-medium">{task.title}</p>
 				<p className="truncate text-xs text-muted-foreground">
+					{place && `${place} · `}
 					{task.monitoring &&
 						`${t("panel.tasks.monitoringLabel", "Monitoring")} · `}
 					{describeSchedule(task, i18n?.language)}

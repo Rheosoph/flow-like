@@ -1,18 +1,10 @@
 import type { IChatMessageError } from "../../lib/flowpilot/chat-error";
-import type { ChatErrorKind } from "../../lib/flowpilot/chat-error";
 import { IRole } from "../../lib/schema/llm/history";
 import { GLOBAL_CHAT_APP_ID } from "../../state/global-chat/global-chat-db";
 import type { IMessage } from "../interfaces/chat-default/chat-db";
+import { botTurnError } from "./bot-turn-error";
 import type { ConversationMessage } from "./fold-entries";
 import { type MentionTarget, inlineMentions } from "./mentions";
-
-const ERROR_KINDS: Record<string, ChatErrorKind> = {
-	BOT_TURN_MODEL_ERROR: "server",
-	BOT_TURN_TIMEOUT: "network",
-	BOT_TURN_QUOTA: "billing",
-	BOT_TURN_SETUP: "config",
-	BOT_TURN_REPLY_REFUSED: "permission",
-};
 
 /**
  * A room message as the chat engine reads it: yours is the ask, everyone else's an answer, so a
@@ -26,6 +18,8 @@ export function roomChatMessage(
 		mentions?: readonly MentionTarget[];
 		mentionCandidates?: readonly MentionTarget[];
 		errorTitle?: string;
+		/** The sender is one of the reader's bots, so a failure they can fix offers the fix. */
+		ownBot?: boolean;
 		notice?: string;
 		editedLabel?: string;
 		reactorName?: (id: string) => string;
@@ -39,13 +33,11 @@ export function roomChatMessage(
 			? message.content.text
 			: (options.notice ?? "");
 	const error: IChatMessageError | undefined = message.errorCode
-		? {
-				kind: ERROR_KINDS[message.errorCode] ?? "generic",
+		? botTurnError(message.errorCode, text, {
 				title: options.errorTitle ?? "Couldn't answer",
-				message: text,
-				code: message.errorCode,
-				retryable: false,
-			}
+				ownBot: options.ownBot ?? false,
+				botId: message.senderId,
+			})
 		: undefined;
 	const mine = message.reactions.filter((r) => r.mine).map((r) => r.emoji);
 	const reactionSummary = Object.fromEntries(
@@ -89,8 +81,12 @@ export function roomChatMessage(
 						: ""),
 		},
 		...(error ? { error } : {}),
+		...(message.usageStats?.length ? { usage_stats: message.usageStats } : {}),
 		...(message.userContext ? { userContext: message.userContext } : {}),
 		...(message.userContextDerived ? { userContextDerived: true } : {}),
+		...(message.userContextDerivedFrom
+			? { userContextDerivedFrom: message.userContextDerivedFrom }
+			: {}),
 		...(message.approval
 			? {
 					approval: {

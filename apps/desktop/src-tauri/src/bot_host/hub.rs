@@ -426,6 +426,25 @@ impl TurnHub for ProfileHub {
         .map(drop)
     }
 
+    async fn touch_tool_keys(
+        &self,
+        bot_id: &str,
+        keys: &[(String, String)],
+    ) -> Result<(), HubFailure> {
+        let grants: Vec<Value> = keys
+            .iter()
+            .map(|(tool, scope)| json!({ "tool": tool, "scope": scope }))
+            .collect();
+        self.call(
+            Method::PATCH,
+            &format!("bots/{bot_id}/tool-grants"),
+            &[],
+            Some(json!({ "grants": grants })),
+        )
+        .await
+        .map(drop)
+    }
+
     async fn delete_tool_key(
         &self,
         bot_id: &str,

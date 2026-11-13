@@ -7,7 +7,7 @@ use flow_like_types::{
     bot::BotCapability,
     bot_user_context::{
         UserContextAudience, UserContextMessage, UserContextRequest, parse_context_message,
-        response_message_id,
+        response_message_id, revoke_message_id,
     },
     inbox::{ConversationKind, InboxEntryKind, PrincipalKind, body_target},
     user_availability::{AvailabilityOverride, AvailabilitySource, AvailabilityStatus},
@@ -63,23 +63,25 @@ pub(super) async fn validate<C: ConnectionTrait>(
                     "Only the requested person may answer this context request",
                 ));
             }
-            let original = inbox_entry::Entity::find()
-                .filter(inbox_entry::Column::InboxId.eq(sender))
-                .filter(inbox_entry::Column::ConversationId.eq(&conversation.id))
-                .filter(inbox_entry::Column::MessageId.eq(&response.request_id))
-                .one(db)
-                .await?
-                .ok_or_else(|| ApiError::not_found("Context request not found"))?;
-            let request: UserContextRequest =
-                serde_json::from_value(original.envelope["body"]["user_context_request"].clone())
-                    .map_err(|_| ApiError::bad_request("Context request not found"))?;
-            if original.sender_id != request.bot_id {
-                return Err(ApiError::bad_request("Invalid context request author"));
-            }
+            let request = original_request(db, conversation, sender, &response.request_id).await?;
             response
                 .validate(&request, now)
                 .map_err(ApiError::bad_request)?;
             request
+        }
+        UserContextMessage::Revoke(revoke) => {
+            if revoke.subject_id != sender
+                || outgoing.message_id != revoke_message_id(&revoke.request_id)
+            {
+                return Err(ApiError::forbidden(
+                    "Only the person who shared context may revoke its session access",
+                ));
+            }
+            let request = original_request(db, conversation, sender, &revoke.request_id).await?;
+            revoke
+                .validate(&request, now)
+                .map_err(ApiError::bad_request)?;
+            return Ok(None);
         }
     };
     request.validate(now).map_err(ApiError::bad_request)?;
@@ -160,9 +162,32 @@ pub(super) async fn validate<C: ConnectionTrait>(
     Ok(approved)
 }
 
+/// The bot's request, read from the sender's own copy of the conversation.
+async fn original_request<C: ConnectionTrait>(
+    db: &C,
+    conversation: &conversation::Model,
+    sender: &str,
+    request_id: &str,
+) -> Result<UserContextRequest, ApiError> {
+    let original = inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::InboxId.eq(sender))
+        .filter(inbox_entry::Column::ConversationId.eq(&conversation.id))
+        .filter(inbox_entry::Column::MessageId.eq(request_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Context request not found"))?;
+    let request: UserContextRequest =
+        serde_json::from_value(original.envelope["body"]["user_context_request"].clone())
+            .map_err(|_| ApiError::bad_request("Context request not found"))?;
+    if original.sender_id != request.bot_id {
+        return Err(ApiError::bad_request("Invalid context request author"));
+    }
+    Ok(request)
+}
+
 pub(super) async fn derived<C: ConnectionTrait>(
     db: &C,
-    conversation: &str,
+    conversation: &conversation::Model,
     sender: &str,
     outgoing: &Outgoing,
     members: &[conversation_member::Model],
@@ -192,7 +217,7 @@ pub(super) async fn derived<C: ConnectionTrait>(
 
 async fn earned_request<C: ConnectionTrait>(
     db: &C,
-    conversation: &str,
+    conversation: &conversation::Model,
     sender: &str,
     outgoing: &Outgoing,
     members: &[conversation_member::Model],
@@ -206,11 +231,11 @@ async fn earned_request<C: ConnectionTrait>(
         return Ok(None);
     }
     let Some(target) = envelope["body"]["reply_to"].as_str() else {
-        return Ok(None);
+        return session_request(db, conversation, sender, members, &envelope["body"]).await;
     };
     let original = inbox_entry::Entity::find()
         .filter(inbox_entry::Column::InboxId.eq(sender))
-        .filter(inbox_entry::Column::ConversationId.eq(conversation))
+        .filter(inbox_entry::Column::ConversationId.eq(&conversation.id))
         .filter(inbox_entry::Column::MessageId.eq(target))
         .one(db)
         .await?;
@@ -224,7 +249,7 @@ async fn earned_request<C: ConnectionTrait>(
         ));
     }
     let Some(original) = original.filter(|entry| is_ephemeral_body(&entry.envelope["body"])) else {
-        return Ok(None);
+        return session_request(db, conversation, sender, members, &envelope["body"]).await;
     };
     let body = &original.envelope["body"];
     let request_id = body["user_context_response"]["request_id"]
@@ -232,9 +257,48 @@ async fn earned_request<C: ConnectionTrait>(
         .or_else(|| body["user_context_request"]["id"].as_str())
         .or_else(|| body[DERIVED_FIELD].as_str())
         .ok_or_else(|| ApiError::bad_request("Context reply has no original request"))?;
+    checked_request(db, conversation, sender, members, request_id)
+        .await
+        .map(|()| Some(request_id.to_owned()))
+}
+
+/// A bot's ordinary message in a direct conversation where it holds a live session snapshot is
+/// derived from that snapshot's request.
+async fn session_request<C: ConnectionTrait>(
+    db: &C,
+    conversation: &conversation::Model,
+    sender: &str,
+    members: &[conversation_member::Model],
+    body: &serde_json::Value,
+) -> Result<Option<String>, ApiError> {
+    if ConversationKind::parse(&conversation.kind) != Some(ConversationKind::Direct)
+        || flow_like_types::bot_user_context::is_ephemeral_body(body)
+    {
+        return Ok(None);
+    }
+    let Some(request_id) =
+        crate::bot_host::history::live_request_id(db, sender, &conversation.id).await?
+    else {
+        return Ok(None);
+    };
+    Ok(
+        checked_request(db, conversation, sender, members, &request_id)
+            .await
+            .is_ok()
+            .then_some(request_id),
+    )
+}
+
+async fn checked_request<C: ConnectionTrait>(
+    db: &C,
+    conversation: &conversation::Model,
+    sender: &str,
+    members: &[conversation_member::Model],
+    request_id: &str,
+) -> Result<(), ApiError> {
     let request_entry = inbox_entry::Entity::find()
         .filter(inbox_entry::Column::InboxId.eq(sender))
-        .filter(inbox_entry::Column::ConversationId.eq(conversation))
+        .filter(inbox_entry::Column::ConversationId.eq(&conversation.id))
         .filter(inbox_entry::Column::MessageId.eq(request_id))
         .one(db)
         .await?
@@ -247,5 +311,5 @@ async fn earned_request<C: ConnectionTrait>(
             "The conversation audience changed after context was shared",
         ));
     }
-    Ok(Some(request_id.to_owned()))
+    Ok(())
 }

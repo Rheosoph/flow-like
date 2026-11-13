@@ -18,10 +18,15 @@ pub fn retired_bot_rows() -> [(&'static str, Predicate); 13] {
         column: column.to_owned(),
     };
     [
-        ("BotTurnCheckpoint", Predicate::Via {
-            column: "turnId".into(), parent: "BotTurn".into(), parent_column: "id".into(),
-            inner: Box::new(by("botId")),
-        }),
+        (
+            "BotTurnCheckpoint",
+            Predicate::Via {
+                column: "turnId".into(),
+                parent: "BotTurn".into(),
+                parent_column: "id".into(),
+                inner: Box::new(by("botId")),
+            },
+        ),
         ("BotDecisionWait", by("botId")),
         ("BotNote", by("botId")),
         ("BotPermission", by("fromBotId")),

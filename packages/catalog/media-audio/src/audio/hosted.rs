@@ -92,6 +92,7 @@ fn speech_request_for(
         text: request.text.clone(),
         voice: request.voice.clone(),
         format: Some(request.output_format.clone()),
+        stream: false,
     };
     request.validate()?;
     Ok(request)

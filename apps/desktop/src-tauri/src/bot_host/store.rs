@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use flow_like::flow::copilot::tool_grants::GrantKey;
 use flow_like_local_bots::{
     Bot, Conversation, ConversationSegmentList, EntriesQuery, InboxEntriesPage, InboxEntry,
-    PositionQuery, SegmentsQuery, SendEntryRequest, WriteSegmentRequest,
+    PositionQuery, SegmentsQuery, SendEntryRequest, TaskAuthority, WriteSegmentRequest,
 };
 use flow_like_types::{
     bot_effective::BotRoomLimits,
@@ -14,6 +14,8 @@ use flow_like_types::{
 };
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
+
+mod room_files;
 
 pub const WINDOW: u64 = 100;
 
@@ -65,11 +67,12 @@ pub trait HostStore: Send + Sync + 'static {
     /// The newest [`WINDOW`] entries, newest first.
     async fn newest(&self, conversation_id: &str) -> Result<Vec<InboxEntry>, String>;
     async fn bot(&self, bot_id: &str) -> Result<Option<Bot>, String>;
-    async fn task(
+    /// What a task's runs may act on (see [`TaskAuthority`]).
+    async fn task_authority(
         &self,
         _bot_id: &str,
         _task_id: &str,
-    ) -> Result<Option<flow_like_types::bot_task::BotTask>, String> {
+    ) -> Result<Option<TaskAuthority>, String> {
         Ok(None)
     }
     async fn room_decision_state(
@@ -155,6 +158,14 @@ pub trait HostStore: Send + Sync + 'static {
     ) -> Result<bool, String> {
         Ok(false)
     }
+    /// Reports that the bot used these standing grants so their expiry moves forward.
+    async fn touch_tool_keys(
+        &self,
+        _bot_id: &str,
+        _keys: &[(String, String)],
+    ) -> Result<(), String> {
+        Ok(())
+    }
     /// Posts the approval card as the bot and parks the turn behind it.
     async fn park(
         &self,
@@ -169,6 +180,10 @@ pub trait HostStore: Send + Sync + 'static {
     /// The approval card with this id as the bot posted it.
     async fn approval_card(&self, _approval_id: &str) -> Result<Option<ApprovalRequest>, String> {
         Ok(None)
+    }
+    /// Whether the turn is still parked behind this card.
+    async fn waits_for(&self, _turn_id: &str, _approval_id: &str) -> Result<bool, String> {
+        Ok(false)
     }
     /// Records the person's answer and releases the parked turn; false when none waits.
     async fn resolve_parked(
@@ -358,13 +373,13 @@ impl HostStore for AppStore {
         self.with(move |store| store.get_bot(&id)).await
     }
 
-    async fn task(
+    async fn task_authority(
         &self,
         bot_id: &str,
         task_id: &str,
-    ) -> Result<Option<flow_like_types::bot_task::BotTask>, String> {
+    ) -> Result<Option<TaskAuthority>, String> {
         let (bot, task) = (bot_id.to_owned(), task_id.to_owned());
-        self.with(move |store| Ok(store.tasks(&bot)?.into_iter().find(|row| row.id == task)))
+        self.with(move |store| store.task_authority(&bot, &task))
             .await
     }
 
@@ -423,8 +438,10 @@ impl HostStore for AppStore {
         &self,
         conversation_id: &str,
         sender_id: &str,
-        request: SendEntryRequest,
+        mut request: SendEntryRequest,
     ) -> Result<InboxEntry, String> {
+        self.share_room_files(conversation_id, sender_id, &mut request)
+            .await;
         let (conversation, sender) = (conversation_id.to_owned(), sender_id.to_owned());
         self.with(move |store| store.send(&conversation, &sender, request))
             .await
@@ -469,9 +486,30 @@ impl HostStore for AppStore {
             .await
     }
 
+    async fn touch_tool_keys(
+        &self,
+        bot_id: &str,
+        keys: &[(String, String)],
+    ) -> Result<(), String> {
+        let (id, keys) = (bot_id.to_owned(), keys.to_vec());
+        self.with(move |store| store.touch_tool_keys(&id, &keys))
+            .await
+    }
+
     async fn approval_card(&self, approval_id: &str) -> Result<Option<ApprovalRequest>, String> {
         let id = approval_id.to_owned();
         self.with(move |store| store.approval_card(&id)).await
+    }
+
+    async fn waits_for(&self, turn_id: &str, approval_id: &str) -> Result<bool, String> {
+        let (turn, approval) = (turn_id.to_owned(), approval_id.to_owned());
+        self.with(move |store| {
+            Ok(store
+                .parked_turns()?
+                .iter()
+                .any(|parked| parked.turn_id == turn && parked.approval_id == approval))
+        })
+        .await
     }
 
     async fn resolve_parked(
@@ -558,6 +596,17 @@ impl flow_like::flow::copilot::tool_grants::GrantStore for StoreGrants {
     async fn delete(&self, tool: &str, scope: &str) -> flow_like_types::Result<bool> {
         self.store
             .delete_tool_key(&self.bot_id, tool, scope)
+            .await
+            .map_err(flow_like_types::Error::msg)
+    }
+
+    async fn touch(&self, keys: &[GrantKey]) -> flow_like_types::Result<()> {
+        let keys: Vec<(String, String)> = keys
+            .iter()
+            .map(|key| (key.tool.clone(), key.scope.clone()))
+            .collect();
+        self.store
+            .touch_tool_keys(&self.bot_id, &keys)
             .await
             .map_err(flow_like_types::Error::msg)
     }

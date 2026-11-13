@@ -174,7 +174,7 @@ export function IssuedCredentials({
 					<p className="leading-relaxed text-muted-foreground">
 						{t(
 							"panel.webhooks.signingHint",
-							"Use the signing key as text to sign the exact request body with HMAC-SHA256. Send the lowercase hex digest in X-Flow-Like-Signature: sha256=<hex>. No secret header or URL parameter is needed when signing.",
+							'Use the signing key (the same value as the secret) as text. For each call send X-Flow-Like-Timestamp (Unix seconds, within 5 minutes of now), X-Flow-Like-Delivery (a unique id per delivery) and X-Flow-Like-Signature: sha256=<hex>, the lowercase hex HMAC-SHA256 of "<timestamp>.<delivery id>.<raw body>". Each delivery id is accepted once. No secret header or URL parameter is needed when signing.',
 						)}
 					</p>
 					<CopyField

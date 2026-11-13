@@ -5515,6 +5515,7 @@
 				"when": "Afterwards"
 			},
 			"rows": {
+				"bots": "Bots that run on it stop answering: {{bots}}. Each one says that its device was removed until you choose another place for it in its settings.",
 				"cloud": "Its cloud access and spending limits stay active unless you revoke them. Cloud credentials already issued stay valid for up to 1 hour; relay credentials for up to 4 hours.",
 				"data": "Nothing on the device is erased. Access tokens deployed to it may still work; rotate them in each app's events.",
 				"stays": "Services on it keep running until someone stops them there.",

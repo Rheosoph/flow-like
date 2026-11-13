@@ -15,7 +15,7 @@ use view::{
 const API_BASE: &str = "https://device-test.example/api/v1";
 const HEARTBEAT: &str = "/devices/device/heartbeat";
 
-const VIEW_FIELDS: [&str; 16] = [
+const VIEW_FIELDS: [&str; 17] = [
     "device_id",
     "owner_id",
     "name",
@@ -32,6 +32,7 @@ const VIEW_FIELDS: [&str; 16] = [
     "cloud_approvals",
     "auth_rejection",
     "bot_host_seen_at",
+    "bot_docker",
 ];
 
 fn sql(query: &str, values: impl IntoIterator<Item = Value>) -> Statement {
@@ -142,6 +143,7 @@ impl TestDatabase {
             include_str!("../../prisma/migrations/20261001120000_device_console/migration.sql"),
             include_str!("../../prisma/migrations/20261002120000_device_schedules/migration.sql"),
             include_str!("../../prisma/migrations/20261105190000_device_bot_host/migration.sql"),
+            include_str!("../../prisma/migrations/20261113121000_device_bot_docker/migration.sql"),
         ]
         .into_iter()
         .flat_map(|migration| migration.split(';'))

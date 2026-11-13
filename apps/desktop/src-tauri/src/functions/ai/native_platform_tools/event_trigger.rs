@@ -28,6 +28,7 @@ fn approval(title: &str, description: &str) -> FrontendToolApproval {
         // These approvals always reach the host. Auto mode and a previous tool approval
         // cannot authorize a persistent trigger or this workflow revision's capabilities.
         session_key: flow_like_types::create_id(),
+        asks_again: None,
     }
 }
 

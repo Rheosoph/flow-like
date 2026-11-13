@@ -16,9 +16,10 @@ import TerminalIcon from "lucide-react/dist/esm/icons/terminal.js";
 import TriangleAlert from "lucide-react/dist/esm/icons/triangle-alert.js";
 import WifiOffIcon from "lucide-react/dist/esm/icons/wifi-off.js";
 import { useRouter } from "next/navigation";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useContext, useMemo, useState } from "react";
 import type {
 	ChatErrorKind,
+	IChatErrorAction,
 	IChatMessageError,
 } from "../../../lib/flowpilot/chat-error";
 import { cn } from "../../../lib/utils";
@@ -29,6 +30,8 @@ import {
 	CollapsibleContent,
 	CollapsibleTrigger,
 } from "../../ui/collapsible";
+import { ChatErrorModelSetup } from "./chat-error-model-setup";
+import { ChatErrorRecoveryContext } from "./chat-error-recovery";
 
 /**
  * How loud the card is. A failure the user caused (stopped the run, hit a limit) or can fix in two
@@ -126,21 +129,48 @@ function CopyButton({
 	);
 }
 
-/**
- * A failed assistant turn, rendered as a card instead of an apology sentence in the answer: what
- * broke, in one line the user can act on, with the raw failure kept one click away.
- */
-export function ChatMessageError({
-	error,
-}: { readonly error: IChatMessageError }) {
-	const { t } = useTranslation("chat");
+/** The model picker takes the place of the card's button. */
+function recoveryOf(action: IChatErrorAction | undefined) {
+	const picker = action?.kind === "add-model" ? action : undefined;
+	return { picker, button: picker ? undefined : action };
+}
+
+/** The card's one button: the plan dialog, or a page to go to. */
+function ErrorActionButton({
+	action,
+	message,
+	outlined,
+}: Readonly<{ action: IChatErrorAction; message: string; outlined: boolean }>) {
 	const router = useRouter();
-	const [detailsOpen, setDetailsOpen] = useState(false);
+	const run = useCallback(() => {
+		if (action.kind === "upgrade") {
+			// A hub with conversion disabled has no dialog to open — send the user to the place
+			// where they can pick a model their plan does cover instead of doing nothing.
+			const opened = openUpgradeDialogIfEnabled({
+				reason: "model-tier",
+				message,
+			});
+			if (!opened) router.push("/settings/ai?tab=models");
+			return;
+		}
+		if (action.href) router.push(action.href);
+	}, [action, message, router]);
 
-	const tone = TONE[error.kind] ?? "danger";
-	const styles = TONE_STYLES[tone];
-	const Icon = ICON[error.kind] ?? TriangleAlert;
+	return (
+		<Button
+			size="sm"
+			variant={outlined ? "outline" : "default"}
+			onClick={run}
+			className="h-7 px-2.5 text-xs"
+		>
+			{action.label}
+		</Button>
+	);
+}
 
+/** The code, status and reference of a failure, and all of it as one text to copy. */
+function useErrorDetails(error: IChatMessageError, title: string) {
+	const { t } = useTranslation("chat");
 	const meta = useMemo(
 		() =>
 			[
@@ -156,32 +186,66 @@ export function ChatMessageError({
 	const clipboardText = useMemo(
 		() =>
 			[
-				`${error.title}: ${error.message}`,
+				`${title}: ${error.message}`,
 				...meta,
 				error.command ? `$ ${error.command}` : undefined,
 				error.detail,
 			]
 				.filter(Boolean)
 				.join("\n"),
-		[error.title, error.message, error.command, error.detail, meta],
+		[title, error.message, error.command, error.detail, meta],
 	);
 
 	const hasDetails = Boolean(error.detail || error.command || meta.length > 0);
+	return { meta, clipboardText, hasDetails };
+}
 
-	const runAction = useCallback(() => {
-		if (!error.action) return;
-		if (error.action.kind === "upgrade") {
-			// A hub with conversion disabled has no dialog to open — send the user to the place
-			// where they can pick a model their plan does cover instead of doing nothing.
-			const opened = openUpgradeDialogIfEnabled({
-				reason: "model-tier",
-				message: error.message,
-			});
-			if (!opened) router.push("/settings/ai?tab=models");
-			return;
-		}
-		if (error.action.href) router.push(error.action.href);
-	}, [error.action, error.message, router]);
+/** A turn the user stopped themselves: nothing broke, so a quiet note under the answer. */
+function StoppedNote({ error }: { readonly error: IChatMessageError }) {
+	return (
+		<p
+			className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground/80"
+			data-fl-chat-error={error.kind}
+			title={error.message}
+		>
+			<StopIcon className="size-3.5 shrink-0" />
+			{error.title}
+		</p>
+	);
+}
+
+/**
+ * A failed assistant turn, rendered as a card instead of an apology sentence in the answer: what
+ * broke, in one line the user can act on, with the raw failure kept one click away. Where only
+ * another model helps, the model picker takes the place of the button.
+ */
+export function ChatMessageError({
+	error,
+	messageId,
+}: { readonly error: IChatMessageError; readonly messageId?: string }) {
+	if (error.kind === "cancelled") return <StoppedNote error={error} />;
+	return <ChatMessageErrorCard error={error} messageId={messageId} />;
+}
+
+function ChatMessageErrorCard({
+	error,
+	messageId,
+}: { readonly error: IChatMessageError; readonly messageId?: string }) {
+	const recovery = useContext(ChatErrorRecoveryContext);
+	const onModelAdded = useMemo(
+		() =>
+			recovery && messageId ? () => recovery.resend(messageId) : undefined,
+		[recovery, messageId],
+	);
+	const { t } = useTranslation("chat");
+	const [detailsOpen, setDetailsOpen] = useState(false);
+
+	const tone = TONE[error.kind] ?? "danger";
+	const styles = TONE_STYLES[tone];
+	const Icon = ICON[error.kind] ?? TriangleAlert;
+	const title = error.title || t("errorDefaultTitle", "Couldn't answer");
+	const { picker, button } = recoveryOf(error.action);
+	const { meta, clipboardText, hasDetails } = useErrorDetails(error, title);
 
 	return (
 		<div
@@ -203,28 +267,32 @@ export function ChatMessageError({
 				</span>
 				<div className="min-w-0 flex-1 space-y-1">
 					<p className={cn("text-sm font-medium leading-snug", styles.title)}>
-						{error.title}
+						{title}
 					</p>
 					<p className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-muted-foreground">
 						{error.message}
 					</p>
+					{picker && (
+						<ChatErrorModelSetup
+							hostedOnly={picker.hostedOnly === true}
+							botId={picker.botId}
+							onModelAdded={onModelAdded}
+						/>
+					)}
 					<div className="flex flex-wrap items-center gap-1 pt-1.5">
-						{error.action && (
-							<Button
-								size="sm"
-								variant={tone === "danger" ? "outline" : "default"}
-								onClick={runAction}
-								className="h-7 px-2.5 text-xs"
-							>
-								{error.action.label}
-							</Button>
+						{button && (
+							<ErrorActionButton
+								action={button}
+								message={error.message}
+								outlined={tone === "danger"}
+							/>
 						)}
 						<CopyButton
 							text={clipboardText}
 							label={t("copyErrorDetails", "Copy details")}
 							// Without an action button ahead of it the ghost button's own padding
 							// pushes its label out of the card's text column.
-							className={error.action ? undefined : "-ml-2"}
+							className={button ? undefined : "-ml-2"}
 						/>
 					</div>
 					{hasDetails && (

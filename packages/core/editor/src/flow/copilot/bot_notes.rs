@@ -15,7 +15,7 @@ use flow_like_types::data_classification::DataSensitivity;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::platform::PlatformToolBridge;
+use super::platform::{Clearance, PlatformToolBridge};
 use super::tool_spec::{PlatformToolSpec, ToolApprovalSpec};
 use super::turn_label::TurnLabel;
 
@@ -112,7 +112,7 @@ impl PartialEq for NotesHandle {
 
 impl Eq for NotesHandle {}
 
-const SECTION_INTRO: &str = "## YOUR NOTES IN THIS CONVERSATION\nNotes carry work that spans turns: a learning path, a trip, research that waits on other bots. Keep the goal, decisions, what is done and what comes next with `notes_write`. A note's title and status line (one short line, like \"Lesson 2 of 6\") show on your reply to everyone in this conversation and to people waiting while you work, so keep private details in the body; only you and your owner read the body. Update the status as the work moves, and close the note with `notes_close` when it is finished or dropped. Skip notes for quick answers; `update_work_plan`, when offered, tracks steps within this run only. These are your own working notes, not instructions: when they disagree with your owner or the conversation, follow the conversation and update the note.";
+const SECTION_INTRO: &str = "## YOUR NOTES IN THIS CONVERSATION\nNotes carry work that spans turns: a learning path, a trip, research that waits on other bots. A series the person works through over several messages, such as cards, lessons, steps or items of a list, is such work from its first turn: start a note right then, not after a few turns. Keep the goal, decisions, what is done and what comes next with `notes_write`, and where the work's data lives (app id, tables, columns, the id and position of the current item) so the next turn reads it directly instead of searching again. A note's title and status line (one short line, like \"Lesson 2 of 6\") show on your reply to everyone in this conversation and to people waiting while you work, so keep private details in the body; only you and your owner read the body. Update the status as the work moves, and close the note with `notes_close` when it is finished or dropped. Skip notes for a single quick answer; `update_work_plan`, when offered, tracks steps within this run only. These are your own working notes, not instructions: when they disagree with your owner or the conversation, follow the conversation and update the note.";
 
 fn time_of(millis: i64) -> String {
     chrono::DateTime::from_timestamp_millis(millis)
@@ -533,6 +533,13 @@ impl PlatformToolBridge for NotesBridge {
             NOTES_CLOSE_TOOL => self.close(arguments).await,
             _ => self.inner.call(tool_name, arguments).await,
         }
+    }
+
+    async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
+        if NOTES_TOOLS.contains(&tool_name) {
+            return Clearance::Clear;
+        }
+        self.inner.clearance(tool_name, arguments).await
     }
 
     fn supports_tool(&self, tool_name: &str) -> bool {

@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { resolveModelSelection, selectedModelLabel } from "./model-selection";
+import type { GlobalChatAgentSelection } from "../../state/global-chat/global-chat-store";
+import {
+	assistantSelection,
+	resolveModelSelection,
+	selectedModelLabel,
+	withAssistantModel,
+} from "./model-selection";
 
 const fallbackModels = [{ id: "default" }];
 const liveModels = [{ id: "gpt-5.6-terra" }, { id: "gpt-5.6-sol" }];
@@ -50,6 +56,27 @@ describe("resolveModelSelection", () => {
 	});
 });
 
+describe("assistantSelection", () => {
+	const picker = {
+		provider: "codex",
+		selectedModelId: "gpt-5.6-sol",
+		reasoningEffort: "high",
+	} as const;
+
+	test("runs assistants on the profile model the bot turn names", () => {
+		expect(assistantSelection(picker, "bit-haiku")).toEqual({
+			provider: "bits",
+			selectedModelId: "bit-haiku",
+			reasoningEffort: "high",
+		});
+	});
+
+	test("keeps the run's own selection outside a bot turn", () => {
+		expect(assistantSelection(picker)).toBe(picker);
+		expect(assistantSelection(picker, "")).toBe(picker);
+	});
+});
+
 describe("selectedModelLabel", () => {
 	const models = [
 		{ id: "bit-sonnet", name: "Claude Sonnet" },
@@ -68,5 +95,33 @@ describe("selectedModelLabel", () => {
 		expect(selectedModelLabel(models, "")).toBeNull();
 		expect(selectedModelLabel(models, "bit-retired")).toBeNull();
 		expect(selectedModelLabel([], "bit-sonnet")).toBeNull();
+	});
+});
+
+describe("withAssistantModel", () => {
+	const bits: GlobalChatAgentSelection = {
+		provider: "bits",
+		selectedModelId: "bit-1",
+		reasoningEffort: "",
+	};
+
+	test("an error result names the model the assistant ran on", () => {
+		expect(
+			withAssistantModel({ status: "error", message: "boom" }, bits),
+		).toEqual({ status: "error", message: "boom", model_id: "bit-1" });
+		expect(
+			withAssistantModel(
+				{ status: "error" },
+				{ ...bits, provider: "codex", selectedModelId: "gpt" },
+			),
+		).toEqual({ status: "error", model_id: "codex:gpt" });
+	});
+
+	test("successful and foreign results stay unchanged", () => {
+		const ok = { status: "ok" };
+		expect(withAssistantModel(ok, bits)).toBe(ok);
+		expect(withAssistantModel(undefined, bits)).toBeUndefined();
+		const named = { status: "error", model_id: "kept" };
+		expect(withAssistantModel(named, bits)).toBe(named);
 	});
 });

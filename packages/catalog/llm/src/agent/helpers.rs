@@ -1792,6 +1792,7 @@ pub async fn execute_agent_streaming(
         duration_ms: None,
         iterations: None,
         calls: vec![],
+        ..Default::default()
     };
 
     if agent.infinite_context {

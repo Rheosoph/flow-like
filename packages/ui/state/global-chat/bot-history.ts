@@ -1,21 +1,25 @@
 import { createId } from "@paralleldrive/cuid2";
 import { plainBody } from "../../components/bots-tab/approval-entry";
+import { botTurnError } from "../../components/bots-tab/bot-turn-error";
 import {
 	type ConversationNote,
 	foldInboxEntries,
 } from "../../components/bots-tab/fold-entries";
 import { triggerModelText } from "../../components/bots-tab/note-facts";
 import type { IMessage } from "../../components/interfaces/chat-default/chat-db";
+import { storedAttachmentOf } from "../../lib/inbox-attachment-part";
 import { compareInboxCursors } from "../../lib/inbox-cursor";
 import { IRole } from "../../lib/schema/llm/history";
 import type {
 	IConversationSegment,
+	IInboxAttachmentPart,
 	IInboxEntry,
 	IInboxImportEntry,
 	IInboxPlainEnvelope,
 	IInboxState,
 } from "../backend-state/inbox-state";
 import { GLOBAL_CHAT_APP_ID, globalChatDb } from "./global-chat-db";
+import type { VoiceTranscript } from "./voice-turn";
 
 /** Hosts leave a marked message to its chat this long; the chat holds the turn while it streams. */
 export const INTERACTIVE_GRACE_MS = 120_000;
@@ -76,11 +80,28 @@ export function forgetBotConversation(botId?: string) {
 export function interactiveEnvelope(
 	text: string,
 	clientRunId: string,
+	parts: readonly IInboxAttachmentPart[] = [],
 ): IInboxPlainEnvelope {
 	return {
 		v: 1,
 		enc: "none",
-		body: { text, interactive: { client_run_id: clientRunId } },
+		body: {
+			text,
+			interactive: { client_run_id: clientRunId },
+			...(parts.length > 0 ? { parts: [...parts] } : {}),
+		},
+	};
+}
+
+function transcriptEnvelope(
+	text: string,
+	clientRunId: string,
+	transcript: VoiceTranscript,
+): IInboxPlainEnvelope {
+	return {
+		v: 1,
+		enc: "none",
+		body: { ...transcript, text, interactive: { client_run_id: clientRunId } },
 	};
 }
 
@@ -95,12 +116,25 @@ function plainEnvelope(body: unknown): IInboxPlainEnvelope {
 export function sendInteractive(
 	inbox: IInboxState,
 	target: BotHistoryTarget,
-	message: { id: string; text: string; clientRunId: string },
+	message: {
+		id: string;
+		text: string;
+		clientRunId: string;
+		transcript?: VoiceTranscript;
+		/** Files already uploaded into the conversation; a spoken line carries none. */
+		parts?: readonly IInboxAttachmentPart[];
+	},
 ): Promise<IInboxEntry> {
 	return inbox.sendEntry(target.conversationId, {
 		message_id: message.id,
-		kind: "message",
-		envelope: interactiveEnvelope(message.text, message.clientRunId),
+		kind: message.transcript ? "transcript" : "message",
+		envelope: message.transcript
+			? transcriptEnvelope(
+					message.text,
+					message.clientRunId,
+					message.transcript,
+				)
+			: interactiveEnvelope(message.text, message.clientRunId, message.parts),
 	});
 }
 
@@ -162,34 +196,36 @@ function messageOf(
 	}
 	if (item.type !== "message" || item.content.kind !== "text") return null;
 	const { approval } = item;
+	// A turn the bot could not answer is the same card a room shows, not a reply to read as text.
+	const error =
+		item.errorCode && item.senderId === botId
+			? botTurnError(item.errorCode, item.content.text, {
+					title: "",
+					ownBot: true,
+					botId,
+				})
+			: undefined;
 	return {
+		...(error ? { error } : {}),
+		...(item.usageStats?.length ? { usage_stats: item.usageStats } : {}),
 		...(item.userContext ? { userContext: item.userContext } : {}),
 		...(item.userContextDerived ? { userContextDerived: true } : {}),
-		...(approval
-			? {
-					approval: {
-						id: approval.id,
-						botId: item.senderId,
-						turnId: approval.turnId,
-						tool: approval.tool,
-						summary: approval.summary,
-						scopes: approval.scopes,
-						requesterName: approval.requesterName,
-						room: approval.room,
-						configurationChanges: approval.configurationChanges,
-						...(approval.secret ? { secret: approval.secret } : {}),
-						answer: approval.answer,
-					},
-				}
+		...(item.userContextDerivedFrom
+			? { userContextDerivedFrom: item.userContextDerivedFrom }
 			: {}),
+		...(item.note ? { note: item.note } : {}),
+		...(approval ? { approval: { ...approval, botId: item.senderId } } : {}),
 		id: item.id,
 		appId: GLOBAL_CHAT_APP_ID,
 		sessionId,
 		inner: {
 			role: item.senderId === botId ? IRole.Assistant : IRole.User,
-			content: approval || item.userContext ? "" : item.content.text,
+			content: approval || item.userContext || error ? "" : item.content.text,
 		},
-		files: [],
+		files: (item.attachments ?? []).flatMap((part) => {
+			const attachment = storedAttachmentOf(part);
+			return attachment ? [attachment] : [];
+		}),
 		tools: [],
 		actions: [],
 		timestamp: item.time,
@@ -221,23 +257,23 @@ export function transcriptOf(
 	return { messages, seqs };
 }
 
-/** Ids of the person's messages the chat already shows an answer after, e.g. one it streamed. */
+/**
+ * Ids of the person's messages this chat answered live. A streamed reply names the message it
+ * answers; a stored reply on screen (an approval card, a reply to an earlier call utterance) answers
+ * nothing here, so it never hides the bot's later reply to the same or a newer message.
+ */
 function answeredOnScreen(shown: readonly IMessage[]): Set<string> {
-	const answered = new Set<string>();
-	let waiting: string[] = [];
-	for (const message of [...shown].sort((a, b) => a.timestamp - b.timestamp)) {
-		if (message.inner.role === IRole.User) waiting.push(message.id);
-		if (message.inner.role === IRole.Assistant && !message.notice) {
-			for (const id of waiting) answered.add(id);
-			waiting = [];
-		}
-	}
-	return answered;
+	return new Set(
+		shown.flatMap((message) => {
+			const answered = message.run_context?.user_message_id;
+			return answered ? [answered] : [];
+		}),
+	);
 }
 
 /**
  * Entries the realtime feed pushed, as chat messages. The bot's stored reply to a message the chat
- * answered live carries another id than the streamed one, so it is left out.
+ * streamed an answer to carries another id than the streamed one, so it is left out.
  */
 export function pushedTranscript(
 	entries: readonly IInboxEntry[],

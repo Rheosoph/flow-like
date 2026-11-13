@@ -59,6 +59,14 @@ class RustToolchainTests(unittest.TestCase):
         self.assertEqual(len(self.errors()), 1)
         self.assertIn("root compiler pin", self.errors()[0])
 
+    def test_build_environment_delegates_to_the_pinned_rust_setup(self):
+        self.write(".github/workflows/clippy.yml", f"steps:\n  - uses: {toolchain.ENVIRONMENT_ACTION}\n")
+        setup = ".github/actions/setup-environment/action.yml"
+        self.write(setup, f"steps:\n  - uses: {toolchain.SETUP_ACTION}\n")
+        self.assertEqual(self.errors(), [])
+        self.write(setup, "steps:\n  - run: echo missing Rust setup\n")
+        self.assertTrue(any(setup in error and "missing" in error for error in self.errors()))
+
     def test_exported_template_pin_and_prerequisite_prose_are_checked(self):
         self.write("templates/wasm-node-rust/.github/workflows/build.yml", "steps:\n  - uses: dtolnay/rust-toolchain@stable\n    with:\n      toolchain: 1.97.1\n")
         self.write("templates/wasm-node-rust/README.md", "Requires Rust 1.97.1, matching mise.toml.\n")

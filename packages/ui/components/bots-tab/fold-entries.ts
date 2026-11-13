@@ -1,7 +1,11 @@
 import { compareInboxCursors } from "../../hooks/use-inbox";
+import { isHttpUrl } from "../../lib/inbox-attachment-part";
+import { type IChatUsageStat, readUsageStat } from "../../lib/llm/usage";
 import { isRecord } from "../../lib/response-shape";
 import type { IBotNoteRef } from "../../state/backend-state/bot-state";
 import type {
+	IInboxApproval,
+	IInboxApprovalInvite,
 	IInboxApprovalSecret,
 	IInboxAttachmentPart,
 	IInboxEntry,
@@ -19,6 +23,7 @@ import {
 	type UserContextCardData,
 	userContextRequestOf,
 	userContextResponseOf,
+	userContextRevokeOf,
 } from "./user-context-entry";
 
 export interface ConversationReaction {
@@ -33,6 +38,19 @@ export type ConversationMessageContent =
 	| { kind: "sealed" }
 	| { kind: "unsupported" };
 
+/** One call of a batch card; `calls` counts the identical calls it stands for. */
+export interface ConversationApprovalItem {
+	argsHash: string;
+	tool: string;
+	summary: string;
+	scopes: string[];
+	calls: number;
+	/** Its standing grant was set aside because the turn read web pages first. */
+	afterWebContent: boolean;
+	secret?: IInboxApprovalSecret;
+	invite?: IInboxApprovalInvite;
+}
+
 /** A bot's request to run a call, with the owner's answer once there is one. */
 export interface ConversationApproval {
 	id: string;
@@ -44,9 +62,60 @@ export interface ConversationApproval {
 	requesterName?: string;
 	room?: string;
 	secret?: IInboxApprovalSecret;
+	invite?: IInboxApprovalInvite;
 	configurationChanges?: Record<string, unknown>;
+	/** On a card for one call: its standing grant was set aside after web content. */
+	afterWebContent?: boolean;
+	/** Two or more calls of one model round; absent on a card for one call. */
+	items?: ConversationApprovalItem[];
 	answer?: ApprovalDecision;
+	/** Per-call answers of a batch that differ from `answer`, by args hash. */
+	itemAnswers?: Record<string, ApprovalDecision>;
+	/** When the card was posted, in epoch ms. */
+	postedAt?: number;
+	/** The owner cancelled the task while the card waited. */
+	cancelled?: boolean;
 }
+
+function conversationApproval(
+	approval: IInboxApproval,
+	postedAt: number,
+): ConversationApproval {
+	return {
+		id: approval.id,
+		turnId: approval.turn_id,
+		tool: approval.tool,
+		summary: approval.summary,
+		scopes: scopeList(approval.scope),
+		requesterName: approval.requester_name ?? approval.requester_id,
+		room: approval.room,
+		configurationChanges: approval.configuration_changes,
+		...(approval.secret ? { secret: approval.secret } : {}),
+		...(approval.invite ? { invite: approval.invite } : {}),
+		...(approval.after_web_content ? { afterWebContent: true } : {}),
+		...(approval.items
+			? {
+					items: approval.items.map((item) => ({
+						argsHash: item.args_hash,
+						tool: item.tool,
+						summary: item.summary,
+						scopes: scopeList(item.scope),
+						calls: item.calls ?? 1,
+						afterWebContent: item.after_web_content === true,
+						...(item.secret ? { secret: item.secret } : {}),
+						...(item.invite ? { invite: item.invite } : {}),
+					})),
+				}
+			: {}),
+		postedAt,
+	};
+}
+
+function scopeList(scope: string): string[] {
+	return scope.split(",").filter(Boolean);
+}
+
+const CANCEL_NOTICE_PREFIX = "cancel-";
 
 function attachmentsOf(entry: IInboxEntry): IInboxAttachmentPart[] {
 	const parts = plainBody(entry)?.parts;
@@ -56,8 +125,8 @@ function attachmentsOf(entry: IInboxEntry): IInboxAttachmentPart[] {
 			isRecord(part) &&
 			part.kind === "attachment" &&
 			typeof part.name === "string" &&
-			isRecord(part.handle) &&
-			typeof part.handle.path === "string",
+			((isRecord(part.handle) && typeof part.handle.path === "string") ||
+				isHttpUrl(part.url)),
 	);
 }
 
@@ -94,6 +163,7 @@ export interface ConversationMessage {
 	createdAt: string;
 	time: number;
 	content: ConversationMessageContent;
+	usageStats?: IChatUsageStat[];
 	replyTo?: string;
 	mentions: string[];
 	errorCode?: string;
@@ -101,6 +171,7 @@ export interface ConversationMessage {
 	approval?: ConversationApproval;
 	userContext?: UserContextCardData;
 	userContextDerived?: boolean;
+	userContextDerivedFrom?: string;
 	note?: IBotNoteRef;
 	/** Recipients of the email this message was sent as. */
 	mailedTo?: string[];
@@ -410,6 +481,7 @@ export function foldInboxEntries(
 	const ordered = uniqueChronological(entries);
 	const items: ConversationItem[] = [];
 	const messages = new Map<string, ConversationMessage>();
+	const cardsByTurn = new Map<string, ConversationMessage>();
 	const reactions = new Map<string, Map<string, Set<string>>>();
 	const deleted = new Set<string>();
 	const calls = new Map<string, ConversationCall>();
@@ -441,6 +513,19 @@ export function foldInboxEntries(
 			continue;
 		}
 		if (entry.kind === "message") {
+			const contextRevoke = userContextRevokeOf(entry);
+			if (contextRevoke) {
+				for (const card of messages.values()) {
+					const context = card.userContext;
+					if (
+						context?.answer === "session" &&
+						context.request.bot_id === contextRevoke.bot_id &&
+						context.request.subject_id === contextRevoke.subject_id
+					)
+						context.revoked = true;
+				}
+				continue;
+			}
 			const contextResponse = userContextResponseOf(entry);
 			if (contextResponse) {
 				const card = messages.get(contextResponse.request_id);
@@ -448,21 +533,42 @@ export function foldInboxEntries(
 					card?.userContext?.request.subject_id ===
 						contextResponse.subject_id &&
 					card.userContext.request.bot_id === contextResponse.bot_id
-				)
+				) {
 					card.userContext.answer = contextResponse.decision;
+					card.userContext.response = contextResponse;
+				}
 				continue;
 			}
 			const response = approvalResponseOf(entry);
 			if (response) {
 				const card = messages.get(response.approval_id);
-				if (card?.approval) card.approval.answer = response.decision;
+				if (card?.approval) {
+					card.approval.answer = response.decision;
+					if (response.items)
+						card.approval.itemAnswers = Object.fromEntries(
+							response.items.map((item) => [item.args_hash, item.decision]),
+						);
+				}
 				continue;
+			}
+			if (entry.message_id.startsWith(CANCEL_NOTICE_PREFIX)) {
+				const card = cardsByTurn.get(
+					entry.message_id.slice(CANCEL_NOTICE_PREFIX.length),
+				);
+				if (card?.senderId === entry.sender_id && card.approval)
+					card.approval.cancelled = true;
 			}
 			const replyTo = text(plainBody(entry)?.reply_to);
 			const approval = approvalOf(entry);
 			const contextRequest = userContextRequestOf(entry);
 			const mailedTo = mailedToOf(entry);
 			const note = noteRefOf(entry);
+			const rawUsage = plainBody(entry)?.usage_stats;
+			const usageStats = Array.isArray(rawUsage)
+				? rawUsage
+						.map(readUsageStat)
+						.filter((stat): stat is IChatUsageStat => stat !== null)
+				: [];
 			const message: ConversationMessage = {
 				type: "message",
 				id: entry.message_id,
@@ -471,10 +577,15 @@ export function foldInboxEntries(
 				createdAt: entry.created_at,
 				time: entryTime(entry),
 				content: inboxMessageContent(entry),
+				...(usageStats.length > 0 ? { usageStats } : {}),
 				mentions: mentionsOf(entry),
 				...(contextRequest ? { userContext: { request: contextRequest } } : {}),
 				...(typeof plainBody(entry)?.user_context_derived === "string"
-					? { userContextDerived: true }
+					? {
+							userContextDerived: true,
+							userContextDerivedFrom: plainBody(entry)
+								?.user_context_derived as string,
+						}
 					: {}),
 				...(errorCodeOf(entry) ? { errorCode: errorCodeOf(entry) } : {}),
 				...(attachmentsOf(entry).length > 0
@@ -484,24 +595,13 @@ export function foldInboxEntries(
 				...(note ? { note } : {}),
 				...(mailedTo.length > 0 ? { mailedTo } : {}),
 				...(approval
-					? {
-							approval: {
-								id: approval.id,
-								turnId: approval.turn_id,
-								tool: approval.tool,
-								summary: approval.summary,
-								scopes: approval.scope.split(",").filter(Boolean),
-								requesterName: approval.requester_name ?? approval.requester_id,
-								room: approval.room,
-								configurationChanges: approval.configuration_changes,
-								...(approval.secret ? { secret: approval.secret } : {}),
-							},
-						}
+					? { approval: conversationApproval(approval, entryTime(entry)) }
 					: {}),
 				edited: false,
 				reactions: [],
 			};
 			messages.set(message.id, message);
+			if (approval) cardsByTurn.set(approval.turn_id, message);
 			items.push(message);
 			continue;
 		}

@@ -83,6 +83,12 @@ pub(super) async fn publish_write_receipt(
     Ok(())
 }
 
+#[cfg(feature = "execute")]
+pub(crate) fn non_negative(name: &str, value: i64) -> flow_like_types::Result<usize> {
+    usize::try_from(value)
+        .map_err(|_| flow_like_types::anyhow!("'{name}' must not be negative, got {value}"))
+}
+
 /// Cleanup operations on a table that does not exist yet have nothing to do.
 /// Returns `true` (after logging a warning) when the caller should skip.
 #[cfg(feature = "execute")]

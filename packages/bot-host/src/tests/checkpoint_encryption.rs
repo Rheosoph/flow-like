@@ -10,7 +10,7 @@ use std::{
 use zeroize::Zeroizing;
 
 #[derive(Default)]
-struct Vault(Mutex<HashMap<String, Vec<u8>>>);
+pub(super) struct Vault(Mutex<HashMap<String, Vec<u8>>>);
 
 impl InboxKeyVault for Vault {
     fn load(&self, owner: &str) -> Result<Option<Zeroizing<Vec<u8>>>, String> {

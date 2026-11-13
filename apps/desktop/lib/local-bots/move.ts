@@ -16,6 +16,13 @@ import {
 	hubAccessToken,
 } from "./account";
 import { errorCode, localBots } from "./commands";
+import {
+	type IMarkWrite,
+	type MarksByConversation,
+	applyMarkWrites,
+	markWrites,
+	readLocalMarks,
+} from "./move-marks";
 import { localRegistries } from "./registry";
 
 const MOVE_EVENT = "local-bots://move";
@@ -94,6 +101,9 @@ interface ISignedIn {
  * hub; this passes the sign-in and keeps local ids pointing at the account's.
  */
 export class LocalBotMover implements ILocalBotHost {
+	/** Pins and stars the account refused after their chat moved; the next move tries them again. */
+	private owed: { sub: string; writes: IMarkWrite[] } = { sub: "", writes: [] };
+
 	constructor(private readonly backend: ILocalBotsBackend) {}
 
 	list(): Promise<IBot[]> {
@@ -132,11 +142,35 @@ export class LocalBotMover implements ILocalBotHost {
 		);
 	}
 
+	private async readMarks(botId: string): Promise<MarksByConversation> {
+		try {
+			return await readLocalMarks(botId);
+		} catch (error) {
+			throw new BotMoveError(
+				`Could not read the pins and stars of bot ${botId} before moving it: ${textOf(error) ?? String(error)}`,
+				{ step: "marks", cause: error },
+			);
+		}
+	}
+
+	/** Returns how many writes the account still owes. */
+	private async carryMarks(
+		session: IAccountSession,
+		writes: readonly IMarkWrite[],
+	): Promise<number> {
+		const earlier = this.owed.sub === session.sub ? this.owed.writes : [];
+		const failed = await applyMarkWrites(session, [...earlier, ...writes]);
+		this.owed = { sub: session.sub, writes: failed };
+		return failed.length;
+	}
+
 	/** Afterwards the local ids of the bot and its moved chats stand for their account ids. */
 	async move(botId: string): Promise<IMovedBot> {
 		const { session, accessToken } = this.signedIn(botId);
 		const fallback = `Could not move bot ${botId} to your account`;
 		const registries = localRegistries(this.backend);
+		const marks = await this.readMarks(botId);
+		const carried: IMarkWrite[] = [];
 		const follow = (moved: readonly IMovedConversation[]) => {
 			for (const { local_id, account_id } of moved) {
 				registries.conversations.moveToAccount(
@@ -144,6 +178,8 @@ export class LocalBotMover implements ILocalBotHost {
 					local_id,
 					account_id,
 				);
+				const kept = marks.get(local_id);
+				if (kept) carried.push(...markWrites(account_id, kept));
 			}
 		};
 		let moved: unknown;
@@ -151,6 +187,7 @@ export class LocalBotMover implements ILocalBotHost {
 			moved = await invoke("local_bots_move", { botId, accessToken });
 		} catch (error) {
 			if (isRecord(error)) follow(movedConversations(error.conversations));
+			await this.carryMarks(session, carried);
 			throw moveError(error, fallback);
 		}
 		const bot = isRecord(moved) ? moved.bot : undefined;
@@ -159,10 +196,11 @@ export class LocalBotMover implements ILocalBotHost {
 		}
 		follow(movedConversations(isRecord(moved) ? moved.conversations : []));
 		registries.bots.moveToAccount(session.sub, botId, bot.id);
+		const unmoved = await this.carryMarks(session, carried);
 		const warnings = isRecord(moved) ? moved.warnings : undefined;
 		return {
 			bot: bot as unknown as IBot,
-			warnings: typeof warnings === "number" ? warnings : 0,
+			warnings: (typeof warnings === "number" ? warnings : 0) + unmoved,
 		};
 	}
 }

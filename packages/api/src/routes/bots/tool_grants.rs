@@ -21,15 +21,18 @@ use crate::{
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
+    http::StatusCode,
 };
 use flow_like::flow::copilot::tool_grants::GrantStore;
 use flow_like_types::{
-    bot_message::ApprovalRequest,
+    bot_message::{ApprovalRequest, ItemDecision},
     tool_grant::{ApprovalAnswer, ApprovalDecision, ToolGrantKey},
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::{IntoParams, ToSchema};
+
+const MAX_TOUCHED_GRANTS: usize = 50;
 
 /// One standing approval.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
@@ -42,6 +45,9 @@ pub struct BotToolGrant {
     pub granted_at: String,
     /// The person who granted it.
     pub granted_by: String,
+    /// When the grant lapses: 90 days after the bot last used it. Each use moves it forward,
+    /// at most once a day; a lapsed grant is ignored and removed.
+    pub expires_at: Option<String>,
 }
 
 impl From<flow_like_types::tool_grant::ToolGrant> for BotToolGrant {
@@ -51,6 +57,7 @@ impl From<flow_like_types::tool_grant::ToolGrant> for BotToolGrant {
             scope: grant.scope,
             granted_at: grant.granted_at,
             granted_by: grant.granted_by,
+            expires_at: grant.expires_at,
         }
     }
 }
@@ -79,6 +86,13 @@ impl From<BotToolGrantKey> for ToolGrantKey {
     }
 }
 
+/// The grants a host's bot just used.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, ToSchema)]
+pub struct BotToolGrantTouch {
+    /// At most 50 grants; ones the bot doesn't hold (or that lapsed) are ignored.
+    pub grants: Vec<BotToolGrantKey>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct BotToolGrantRemoved {
     /// False when the bot had no such grant.
@@ -90,9 +104,14 @@ pub struct BotToolGrantRemoved {
 pub struct BotApprovalAnswer {
     /// The card's id (`ap-…`), also its message id and the turn's `reply_message_id` while waiting.
     pub approval_id: String,
-    /// `once` runs this call, `always` also stores a grant, `deny` refuses it.
+    /// `once` runs this call, `always` also stores a grant, `deny` refuses it. On a card with
+    /// several calls, the answer for every call not listed in `items`.
     #[schema(value_type = String, example = "always")]
     pub decision: ApprovalDecision,
+    /// Calls of the card answered differently: `{ "args_hash": "…", "decision": "deny" }` each.
+    #[serde(default)]
+    #[schema(value_type = Vec<Object>)]
+    pub items: Vec<ItemDecision>,
 }
 
 #[derive(Debug, Default, Deserialize, IntoParams)]
@@ -108,7 +127,7 @@ pub struct GrantsQuery {
     tag = "Bots",
     params(("bot_id" = String, Path, description = "Your bot's id"), GrantsQuery),
     responses(
-        (status = 200, description = "What the bot may run without asking you again, oldest first.", body = BotToolGrantList),
+        (status = 200, description = "What the bot may run without asking you again, oldest first. Each grant carries `expires_at`: it lapses 90 days after the bot last used it, and lapsed grants are left out.", body = BotToolGrantList),
         (status = 401, description = "Not signed in"),
         (status = 404, description = "You have no bot with this id")
     ),
@@ -151,16 +170,61 @@ pub async fn put_tool_grant(
 ) -> Result<Json<BotToolGrant>, ApiError> {
     let sub = user.sub()?;
     let key = ToolGrantKey::from(body);
-    let grant = approvals::grant_in(&state.db, &sub, &bot_id, &key, now_millis()).await?;
-    audit!(
-        state,
-        user,
-        "bot.tool_grant.put",
-        "Bot",
-        bot_id,
-        serde_json::json!({ "tool": key.tool, "scope": key.scope })
-    );
+    let now = now_millis();
+    let held = approvals::list_grants(&state.db, &sub, &bot_id, true)
+        .await?
+        .iter()
+        .any(|grant| grant.tool == key.tool && grant.scope == key.scope);
+    let grant = approvals::grant_in(&state.db, &sub, &bot_id, &key, now).await?;
+    if !held {
+        audit!(
+            state,
+            user,
+            "bot.tool_grant.put",
+            "Bot",
+            bot_id,
+            serde_json::json!({ "tool": key.tool, "scope": key.scope })
+        );
+    }
     Ok(Json(grant.into()))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/bots/{bot_id}/tool-grants",
+    tag = "Bots",
+    params(("bot_id" = String, Path, description = "Your bot's id")),
+    request_body = BotToolGrantTouch,
+    responses(
+        (status = 204, description = "A host reports that the bot used these standing grants: their expiry moves 90 days past now, at most once a day each. Grants that don't exist or already lapsed stay as they are."),
+        (status = 400, description = "More than 50 grants"),
+        (status = 401, description = "Not signed in"),
+        (status = 404, description = "You have no bot with this id")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(name = "PATCH /bots/{bot_id}/tool-grants", skip(state, user, body))]
+pub async fn touch_tool_grants(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(bot_id): Path<String>,
+    Json(body): Json<BotToolGrantTouch>,
+) -> Result<StatusCode, ApiError> {
+    let sub = user.sub()?;
+    if body.grants.len() > MAX_TOUCHED_GRANTS {
+        return Err(ApiError::bad_request(format!(
+            "At most {MAX_TOUCHED_GRANTS} grants per call; this one has {}",
+            body.grants.len()
+        )));
+    }
+    owned_bot(&state.db, &sub, &bot_id).await?;
+    let keys: Vec<(String, String)> = body
+        .grants
+        .into_iter()
+        .map(|key| (key.tool, key.scope))
+        .collect();
+    approvals::touch_in(&state.db, &bot_id, &keys, now_millis()).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[utoipa::path(
@@ -211,6 +275,7 @@ pub async fn delete_tool_grant(
     request_body = BotApprovalAnswer,
     responses(
         (status = 200, description = "Your answer is recorded in the conversation and the turn is queued again: `once` lets this one call run, `always` also stores a grant, `deny` tells the bot you refused.", body = BotTurn),
+        (status = 400, description = "BOT_APPROVAL_ITEM_UNKNOWN: `items` names a call that is not on the card, or one call twice"),
         (status = 401, description = "Not signed in"),
         (status = 404, description = "You have no such bot or turn"),
         (status = 409, description = "BOT_TURN_NOT_WAITING: the turn is not waiting for an approval (answered already, cancelled or finished); BOT_APPROVAL_UNKNOWN: the turn waits for another card")
@@ -231,6 +296,7 @@ pub async fn answer_approval(
     let answer = ApprovalAnswer {
         approval_id: body.approval_id,
         decision: body.decision,
+        items: body.items,
     };
     let turn = approvals::answer(&state, &sub, &bot_id, &turn_id, &answer).await?;
     audit!(

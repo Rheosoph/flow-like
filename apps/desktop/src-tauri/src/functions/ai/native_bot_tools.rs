@@ -3,7 +3,7 @@
 //! `flow-like-bot-tools`; it checks scope again for everything it hands out.
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
@@ -11,10 +11,11 @@ use std::{
 use async_trait::async_trait;
 use dashmap::DashMap;
 use flow_like::{
+    bit::Bit,
     credentials::SharedCredentials,
     flow::copilot::{
-        BotRunContext, HostTools, linked_tool_names, resolve_host_completion_model,
-        tool_outcome_output,
+        AttachmentManifestEntry, BotRunContext, EffectivePermissions, HostTools,
+        linked_tool_names, resolve_host_completion_model, tool_outcome_output,
     },
     flow_like_model_provider::llm::ModelLogic,
     flow_like_storage::{
@@ -29,14 +30,22 @@ use flow_like::{
     profile::Profile,
     state::FlowLikeState,
 };
+use flow_like_bot_host::secrets as bot_secrets;
 use flow_like_bot_tools::{
-    AppGrant, AppTables, Attachment, Environment, FileData, FileEntry, FileMeta, KnowledgeEmbedder,
-    Limits, LocalShell, MemorySessions, ModelEmbedder, ModelRole, Scope, SecretInfo, ShellBackend,
-    ToolEnv, ToolOutcome, env::Access, files::guess_mime,
+    AppGrant, AppTables, Attachment, Environment, FileData, FileEntry, FileLink, FileMeta,
+    KnowledgeEmbedder, Limits, LocalShell, MemorySessions, ModelEmbedder, ModelRole, Scope,
+    SecretInfo, ShellBackend, ToolEnv, ToolOutcome, env::Access, files::guess_mime,
 };
 use flow_like_types::{
-    Bytes, Result, anyhow, bot::BotCapability, bot_message::WorkspaceHandle,
-    data_classification::DataClassification, tokio_util::sync::CancellationToken,
+    Bytes, Result, anyhow,
+    bot::BotCapability,
+    bot_effective::{ALL_ROLE_BITS, BotRoomLimits},
+    bot_message::WorkspaceHandle,
+    bot_restrictions::{
+        APP_REFUSES_BOTS, BotPermission, BotRestrictions, app_refuses_bots_message,
+    },
+    data_classification::DataClassification,
+    tokio_util::sync::CancellationToken,
 };
 use futures::StreamExt;
 use reqwest::Method;
@@ -45,6 +54,7 @@ use tauri::{AppHandle, Manager};
 
 use super::{
     bot_tools::LocalMachine,
+    copilot::{CHAT_FILES, chat_file_link, read_chat_file},
     frontend_tool_bridge::FrontendToolContext,
     native_platform_tools::{NativePlatformSession, segment},
 };
@@ -63,6 +73,9 @@ pub(crate) struct BotToolRuntime {
     pub(crate) profile: Option<Arc<Profile>>,
     pub(crate) token: Option<String>,
     pub(crate) model_id: Option<String>,
+    /// The model this turn's assistants run on: the bot's sub-task model, else its own. `None`
+    /// leaves the chat's selection.
+    pub(crate) assistant_model_id: Option<String>,
     pub(crate) embedding_model_id: Option<String>,
     pub(crate) run_id: Option<String>,
     /// The bot turn this run answers; an account bot reads its secrets for it.
@@ -104,6 +117,19 @@ pub(crate) fn host_tools() -> HostTools {
     tools
 }
 
+/// A bot held on this device has no hub mailbox, contacts or rooms: those tools are not offered.
+pub(crate) fn without_hub_tools(tools: HostTools) -> HostTools {
+    [
+        flow_like_bot_tools::email::EMAIL_SEND,
+        flow_like_bot_tools::email::EMAIL_REPLY,
+        flow_like_bot_tools::people::LIST_PEOPLE,
+        flow_like_bot_tools::people::MESSAGE_PERSON,
+        flow_like_bot_tools::rooms::ROOM_INVITE,
+    ]
+    .into_iter()
+    .fold(tools, |tools, name| tools.without(name))
+}
+
 pub(crate) fn supports(tool: &str) -> bool {
     linked_tool_names().contains(&tool)
 }
@@ -120,15 +146,127 @@ fn turn_site(
     conversation_id.map(flow_like_bot_tools::TurnSite::Conversation)
 }
 
+/// A secret of the bot this turn runs, for an integration the platform runs for it, such as its
+/// owner's web research key. `None` outside a bot's turn and for a secret this device cannot open.
+pub(crate) async fn bot_secret(
+    app: &AppHandle,
+    context: Option<&FrontendToolContext>,
+    name: &str,
+) -> Option<String> {
+    let runtime = context.and_then(|context| context.bot.clone())?;
+    let session = NativePlatformSession::new(app, context).await.ok()?;
+    session.assert_current_profile().await.ok()?;
+    let attachments = super::native_tool_bridge::run_options(context)
+        .attachments
+        .clone();
+    let host = LiveHost::new(session, runtime, attachments);
+    ToolHost::secret(&host, name).await.ok().flatten()
+}
+
+/// The refusal of a Flux call on the owner's bots that its target rules out, found before the
+/// owner is asked: see [`flow_like_bot_tools::crew::precheck`].
+pub(crate) async fn crew_refusal(
+    app: &AppHandle,
+    context: Option<&FrontendToolContext>,
+    tool: &str,
+    args: &Value,
+) -> Option<Value> {
+    if !flow_like_bot_tools::crew::reads_target_first(tool, args) {
+        return None;
+    }
+    let runtime = context
+        .and_then(|context| context.bot.clone())
+        .filter(|runtime| {
+            runtime.context.toolset == flow_like::flow::copilot::BotToolset::FlowPilot
+        })?;
+    let refused = |code: &str, message: String| {
+        Some(serde_json::json!({"status": "error", "tool": tool, "code": code, "message": message}))
+    };
+    let session = match NativePlatformSession::new(app, context).await {
+        Ok(session) => session,
+        Err(error) => return refused("bot_tool_unavailable", error),
+    };
+    let host = Arc::new(LiveHost::new(session, runtime.clone(), Vec::new()));
+    let crew = super::bot_tools::crew::DesktopCrew::new(app, runtime, host);
+    flow_like_bot_tools::crew::precheck(&crew, tool, args)
+        .await
+        .err()
+        .and_then(|error| refused(error.code, error.message))
+}
+
+/// The refusal of a bot's call into an app whose copy on this device refuses bots. The core gate
+/// has already pinned the one app a call acts on to `app_id`.
+pub(crate) async fn bot_app_refusal(app: &AppHandle, tool: &str, args: &Value) -> Option<Value> {
+    let app_id = args.get("app_id").and_then(Value::as_str)?;
+    let refusing = refusing_apps(app, &[app_id.to_string()]).await;
+    app_refusal(tool, app_id, &refusing)
+}
+
+/// The result of a call into `app_id` when `refusing` names it: the sentence the bot passes on.
+pub(crate) fn app_refusal(
+    tool: &str,
+    app_id: &str,
+    refusing: &BTreeMap<String, String>,
+) -> Option<Value> {
+    let name = refusing.get(app_id)?;
+    Some(serde_json::json!({
+        "status": "error",
+        "tool": tool,
+        "code": APP_REFUSES_BOTS,
+        "retryable": false,
+        "message": app_refuses_bots_message(name),
+    }))
+}
+
+/// Why a bot may not be attached to `app_ids`: the sentence of the first that refuses bots here.
+pub(crate) async fn attach_refusal(app: &AppHandle, app_ids: &[String]) -> Option<String> {
+    let refusing = refusing_apps(app, app_ids).await;
+    app_ids
+        .iter()
+        .find_map(|app_id| refusing.get(app_id))
+        .map(|name| app_refuses_bots_message(name))
+}
+
+/// Apps among `app_ids` whose copy on this device refuses bots, each with its name. The setting
+/// travels in the app's manifest: the owner's own for a local app, the hub's on every sync for an
+/// online one. An app this device holds no copy of is left to the hub.
+pub(crate) async fn refusing_apps(app: &AppHandle, app_ids: &[String]) -> BTreeMap<String, String> {
+    let mut refusing = BTreeMap::new();
+    let Ok(state) = TauriFlowLikeState::construct(app).await else {
+        return refusing;
+    };
+    for app_id in app_ids {
+        let Ok(manifest) = flow_like::app::App::load(app_id.clone(), state.clone()).await else {
+            continue;
+        };
+        if !manifest.refuse_bots {
+            continue;
+        }
+        let name = flow_like::app::App::get_meta(app_id.clone(), state.clone(), None, None)
+            .await
+            .ok()
+            .map(|meta| meta.name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| app_id.clone());
+        refusing.insert(app_id.clone(), name);
+    }
+    refusing
+}
+
 pub(crate) async fn execute(
     app: &AppHandle,
     context: Option<&FrontendToolContext>,
     tool: &str,
     args: &Value,
 ) -> std::result::Result<Value, String> {
-    let runtime = context
-        .and_then(|context| context.bot.clone())
-        .ok_or_else(|| format!("{tool} is a bot tool and runs only inside a bot's turn."))?;
+    let Some(runtime) = context.and_then(|context| context.bot.clone()) else {
+        if super::bot_tools::flowpilot_documents::runs(tool) {
+            return super::bot_tools::flowpilot_documents::execute(app, context, tool, args).await;
+        }
+        return Err(format!(
+            "{tool} is a bot tool and runs only inside a bot's turn."
+        ));
+    };
     if !runtime.context.host_tools.runs(tool) {
         return Err(format!("This device does not run the bot tool {tool}."));
     }
@@ -140,16 +278,39 @@ pub(crate) async fn execute(
         Some(gate) => options.auto_approve || gate.expensive_documents_allowed(tool, args).await,
         None => options.auto_approve,
     };
-    let host = Arc::new(LiveHost::new(session, runtime.clone()));
-    let scheduler =
-        super::bot_tools::schedule::scheduler_for(app, &runtime.context.bot_id, host.clone()).await;
+    let host = Arc::new(LiveHost::new(
+        session,
+        runtime.clone(),
+        options.attachments.clone(),
+    ));
+    let turn_conversation = options
+        .inbox_conversation_id
+        .clone()
+        .or_else(|| context.and_then(|context| context.conversation_id.clone()));
+    let scheduler = super::bot_tools::schedule::scheduler_for(
+        app,
+        &runtime.context.bot_id,
+        host.clone(),
+        super::bot_tools::schedule::TaskTurn {
+            turn_id: runtime.turn_id.clone(),
+            conversation_id: turn_conversation.clone(),
+        },
+    )
+    .await;
+    let rights = host
+        .app_rights(options.inbox_conversation_id.as_deref())
+        .await;
+    let scope = scope_with(&runtime.context, Some(&rights));
+    let sessions = sessions_for(&runtime.context, context, &scope, &rights);
     let env = DesktopToolEnv::new(
         host.clone(),
-        scope_of(&runtime.context),
-        sessions_for(&runtime.context, context),
+        scope,
+        sessions,
         super::native_tool_bridge::execution_cancellation(),
         auto_approved,
     )
+    .with_rights(Some(rights))
+    .with_turn_conversation(turn_conversation)
     .with_configuration(Arc::new(
         super::bot_tools::configuration::DesktopConfiguration::new(app, runtime.clone(), host.clone()),
     ))
@@ -169,6 +330,15 @@ pub(crate) async fn execute(
     )
     .with_user_context(
         super::bot_tools::user_context::context_for(
+            app,
+            &runtime.context.bot_id,
+            options.inbox_conversation_id.as_deref(),
+            host.clone(),
+        )
+        .await,
+    )
+    .with_rooms(
+        super::bot_tools::rooms::rooms_for(
             app,
             &runtime.context.bot_id,
             options.inbox_conversation_id.as_deref(),
@@ -196,7 +366,7 @@ pub(crate) async fn execute(
         .await,
     ))
     .with_shell(shell_backend(app, &runtime.context.bot_id).await)
-    .with_notifier(crate::bot_host::notifier_for(
+    .with_notifier(crate::bot_host::notifier_for_turn(
         app,
         &runtime.context.bot_id,
         &runtime.context.name,
@@ -204,6 +374,7 @@ pub(crate) async fn execute(
             gate.is_some(),
             context.and_then(|context| context.conversation_id.clone()),
         ),
+        options.bot_turn_id.as_deref(),
     ))
     .with_machine(super::bot_tools::local_machine(
         app,
@@ -253,7 +424,7 @@ async fn package_runner(
 }
 
 /// Runs `tool` on its own task, so a panic in a heavy backend fails the call and not the turn.
-async fn run_tool(
+pub(crate) async fn run_tool(
     env: DesktopToolEnv,
     tool: &str,
     args: Value,
@@ -272,7 +443,101 @@ pub(crate) fn outcome_value(outcome: &ToolOutcome) -> std::result::Result<Value,
         .map_err(|error| format!("The bot tool result is not valid JSON: {error}"))
 }
 
-pub(crate) fn scope_of(bot: &BotRunContext) -> Scope {
+/// What the bot may do in one attached app after the owner's restrictions and the room's limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AppRights {
+    pub(crate) files: bool,
+    pub(crate) tables: bool,
+}
+
+pub(crate) type RightsMap = BTreeMap<String, AppRights>;
+
+const RIGHTS_TTL: Duration = Duration::from_secs(30);
+const RIGHTS_CAPACITY: usize = 256;
+
+/// Resolved rights of account bots for a short while, so a tool call does not cost hub round
+/// trips. A failed read is never stored.
+#[derive(Default)]
+struct RightsCache {
+    entries: std::sync::Mutex<HashMap<String, (Instant, RightsMap)>>,
+}
+
+impl RightsCache {
+    fn fresh(&self, key: &str, now: Instant) -> Option<RightsMap> {
+        let entries = self.entries.lock().ok()?;
+        let (read, rights) = entries.get(key)?;
+        (now.duration_since(*read) < RIGHTS_TTL).then(|| rights.clone())
+    }
+
+    fn store(&self, key: String, rights: RightsMap, now: Instant) {
+        let Ok(mut entries) = self.entries.lock() else {
+            return;
+        };
+        entries.retain(|_, (read, _)| now.duration_since(*read) < RIGHTS_TTL);
+        if entries.len() >= RIGHTS_CAPACITY {
+            entries.clear();
+        }
+        entries.insert(key, (now, rights));
+    }
+}
+
+static RIGHTS: LazyLock<RightsCache> = LazyLock::new(RightsCache::default);
+
+/// The owner's role bits are not known on this device, so the bot's own mask is the upper bound;
+/// the owner's credentials narrow the rest when the app is opened.
+pub(crate) fn effective_in(
+    app_id: &str,
+    restrictions: &BotRestrictions,
+    room: Option<&BotRoomLimits>,
+) -> EffectivePermissions {
+    EffectivePermissions::resolve(
+        ALL_ROLE_BITS,
+        app_id,
+        restrictions.permission_bits(),
+        &restrictions.scopes,
+        room,
+    )
+}
+
+/// Files need the files permission; tables need the database permission or the files permission
+/// (a table lives in the app's storage) and a table scope that is not empty: the server's rule.
+pub(crate) fn rights_of(
+    app_id: &str,
+    restrictions: &BotRestrictions,
+    room: Option<&BotRoomLimits>,
+) -> AppRights {
+    let effective = effective_in(app_id, restrictions, room);
+    let files = effective.holds(BotPermission::ReadFiles);
+    let named = effective
+        .scopes
+        .tables
+        .as_ref()
+        .is_none_or(|tables| !tables.is_empty());
+    AppRights {
+        files,
+        tables: named && (files || effective.holds(BotPermission::ReadDatabase)),
+    }
+}
+
+/// What the bot holds in each candidate app; an app that refuses bots is left out, so no scope
+/// of this turn reaches it.
+pub(crate) fn admitted_rights(
+    candidates: &[String],
+    restrictions: &HashMap<String, BotRestrictions>,
+    room: Option<&BotRoomLimits>,
+    refusing: &BTreeMap<String, String>,
+) -> RightsMap {
+    candidates
+        .iter()
+        .filter(|app_id| !refusing.contains_key(*app_id))
+        .map(|app_id| {
+            let held = restrictions.get(app_id).cloned().unwrap_or_default();
+            (app_id.clone(), rights_of(app_id, &held, room))
+        })
+        .collect()
+}
+
+fn candidate_apps(bot: &BotRunContext) -> Vec<String> {
     let mut apps: Vec<&String> = Vec::new();
     if bot.has(BotCapability::SelectedApps) {
         apps.extend(bot.selected_app_ids.iter());
@@ -282,13 +547,32 @@ pub(crate) fn scope_of(bot: &BotRunContext) -> Scope {
     }
     apps.sort();
     apps.dedup();
+    apps.into_iter()
+        .filter(|app_id| bot.workspace_app_id.as_deref() != Some(app_id.as_str()))
+        .cloned()
+        .collect()
+}
+
+pub(crate) fn scope_of(bot: &BotRunContext) -> Scope {
+    scope_with(bot, None)
+}
+
+/// The scope of a turn. With `rights`, an app the bot holds neither files nor tables in is left
+/// out, and so is an app `rights` does not name; without, every candidate app is read-granted.
+pub(crate) fn scope_with(bot: &BotRunContext, rights: Option<&RightsMap>) -> Scope {
     Scope {
         workspace: bot.workspace_app_id.clone(),
-        apps: apps
+        apps: candidate_apps(bot)
             .into_iter()
-            .filter(|app_id| bot.workspace_app_id.as_deref() != Some(app_id.as_str()))
+            .filter(|app_id| {
+                rights.is_none_or(|rights| {
+                    rights
+                        .get(app_id)
+                        .is_some_and(|held| held.files || held.tables)
+                })
+            })
             .map(|app_id| AppGrant {
-                app_id: app_id.clone(),
+                app_id,
                 access: Access::Read,
                 alias: None,
             })
@@ -300,6 +584,13 @@ pub(crate) fn scope_of(bot: &BotRunContext) -> Scope {
             .classification
             .unwrap_or(DataClassification::Internal),
     }
+}
+
+fn pinned_vision(bot: &BotRunContext) -> Option<&str> {
+    bot.vision_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
 }
 
 fn desktop_limits() -> Limits {
@@ -314,14 +605,26 @@ static SESSIONS: LazyLock<DashMap<String, (Arc<MemorySessions>, Instant)>> =
     LazyLock::new(DashMap::new);
 
 /// One cache per bot, conversation and set of grants, so a changed grant starts clean.
-fn sessions_for(bot: &BotRunContext, context: Option<&FrontendToolContext>) -> Arc<MemorySessions> {
+fn sessions_for(
+    bot: &BotRunContext,
+    context: Option<&FrontendToolContext>,
+    scope: &Scope,
+    rights: &RightsMap,
+) -> Arc<MemorySessions> {
     let now = Instant::now();
     SESSIONS.retain(|_, (_, used)| now.duration_since(*used) < IDLE_SESSION);
-    let scope = scope_of(bot);
-    let grants: Vec<&str> = scope
+    let grants: Vec<String> = scope
         .apps
         .iter()
-        .map(|grant| grant.app_id.as_str())
+        .map(|grant| {
+            let held = rights.get(&grant.app_id);
+            format!(
+                "{}:{}{}",
+                grant.app_id,
+                u8::from(held.is_some_and(|held| held.files)),
+                u8::from(held.is_some_and(|held| held.tables)),
+            )
+        })
         .collect();
     let key = format!(
         "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
@@ -346,6 +649,12 @@ pub(crate) trait ToolHost: Send + Sync {
     async fn store(&self, app_id: &str) -> Result<FlowLikeStore>;
     async fn tables(&self, app_id: &str) -> Result<(Connection, ColumnReader)>;
     async fn model(&self) -> Result<Arc<dyn ModelLogic>>;
+
+    /// The bot's vision model; `None` when it pins none or this host cannot run it.
+    async fn vision_model(&self) -> Option<Arc<dyn ModelLogic>> {
+        None
+    }
+
     async fn embedder(&self) -> Result<Option<Arc<dyn KnowledgeEmbedder>>>;
     async fn secret(&self, name: &str) -> Result<Option<String>>;
     async fn secrets(&self) -> Result<Vec<SecretInfo>>;
@@ -359,11 +668,21 @@ pub(crate) trait ToolHost: Send + Sync {
     ) -> Result<Option<FileData>> {
         Ok(None)
     }
+
+    /// A download link to a conversation file; `None` when it is kept only on this device.
+    async fn conversation_file_link(
+        &self,
+        _conversation_id: &str,
+        _path: &str,
+    ) -> Result<Option<FileLink>> {
+        Ok(None)
+    }
 }
 
 pub(crate) struct DesktopToolEnv {
     host: Arc<dyn ToolHost>,
     scope: Scope,
+    rights: Option<RightsMap>,
     limits: Limits,
     sessions: Arc<MemorySessions>,
     cancellation: CancellationToken,
@@ -375,11 +694,13 @@ pub(crate) struct DesktopToolEnv {
     notifier: Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>>,
     mail: Option<Arc<dyn flow_like_bot_tools::email::MailBackend>>,
     people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
+    rooms: Option<Arc<dyn flow_like_bot_tools::RoomInvites>>,
     user_context: Option<Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>>,
     configuration: Option<Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>>,
     crew: Option<Arc<dyn flow_like_bot_tools::crew::CrewBackend>>,
     images: Option<Arc<super::bot_tools::images::DesktopImages>>,
     connectors: Option<Arc<dyn flow_like_bot_tools::services::ConnectorSource>>,
+    turn_conversation: Option<String>,
 }
 
 /// One working directory per bot next to the project directory, on local and account bots alike:
@@ -422,6 +743,7 @@ impl DesktopToolEnv {
         Self {
             host,
             scope,
+            rights: None,
             limits: desktop_limits(),
             sessions,
             cancellation,
@@ -433,12 +755,45 @@ impl DesktopToolEnv {
             notifier: None,
             mail: None,
             people: None,
+            rooms: None,
             user_context: None,
             configuration: None,
             crew: None,
             images: None,
             connectors: None,
+            turn_conversation: None,
         }
+    }
+
+    /// The conversation the turn answers in: the only one whose files the bot reads.
+    pub(crate) fn with_turn_conversation(mut self, conversation_id: Option<String>) -> Self {
+        self.turn_conversation = conversation_id;
+        self
+    }
+
+    fn ensure_turn_conversation(&self, conversation_id: &str) -> Result<()> {
+        if conversation_id == CHAT_FILES
+            || self.turn_conversation.as_deref() == Some(conversation_id)
+        {
+            return Ok(());
+        }
+        Err(anyhow!(
+            "Conversation '{conversation_id}' is not this turn's conversation; a bot reads the files of the conversation it answers in"
+        ))
+    }
+
+    /// Per-app files and tables rights; without them every app in the scope is read as granted.
+    pub(crate) fn with_rights(mut self, rights: Option<RightsMap>) -> Self {
+        self.rights = rights;
+        self
+    }
+
+    fn holds(&self, app_id: &str, right: fn(&AppRights) -> bool) -> bool {
+        self.scope.is_workspace(app_id)
+            || self
+                .rights
+                .as_ref()
+                .is_none_or(|rights| rights.get(app_id).is_some_and(right))
     }
 
     pub(crate) fn with_connectors(
@@ -487,6 +842,11 @@ impl DesktopToolEnv {
         self
     }
 
+    pub(crate) fn with_rooms(mut self, rooms: Option<Arc<dyn flow_like_bot_tools::RoomInvites>>) -> Self {
+        self.rooms = rooms;
+        self
+    }
+
     pub(crate) fn with_user_context(mut self, context: Option<Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>>) -> Self {
         self.user_context = context;
         self
@@ -524,11 +884,11 @@ impl DesktopToolEnv {
     }
 
     fn require_files(&self, app_id: &str) -> Result<()> {
-        if self.scope.can_read_storage(app_id) {
+        if self.scope.can_read_storage(app_id) && self.holds(app_id, |held| held.files) {
             Ok(())
         } else {
             Err(anyhow!(
-                "The bot may not read the files of app '{app_id}': it is neither its workspace nor an app it was given with file access"
+                "The bot may not read the files of app '{app_id}': it is neither its workspace nor an app it holds the files permission in"
             ))
         }
     }
@@ -581,6 +941,7 @@ impl ToolEnv for DesktopToolEnv {
         max_bytes: u64,
     ) -> Result<Option<FileData>> {
         if let Some(conversation_id) = conversation_of_app(app_id) {
+            self.ensure_turn_conversation(conversation_id)?;
             return self
                 .host
                 .conversation_file(conversation_id, path, max_bytes)
@@ -610,6 +971,7 @@ impl ToolEnv for DesktopToolEnv {
 
     async fn stat_file(&self, app_id: &str, path: &str) -> Result<Option<FileMeta>> {
         if let Some(conversation_id) = conversation_of_app(app_id) {
+            self.ensure_turn_conversation(conversation_id)?;
             return Ok(self
                 .host
                 .conversation_file(conversation_id, path, 0)
@@ -668,6 +1030,19 @@ impl ToolEnv for DesktopToolEnv {
         Ok(None)
     }
 
+    async fn file_link(&self, app_id: &str, path: &str) -> Result<Option<FileLink>> {
+        if let Some(conversation_id) = conversation_of_app(app_id) {
+            self.ensure_turn_conversation(conversation_id)?;
+            return self
+                .host
+                .conversation_file_link(conversation_id, path)
+                .await;
+        }
+        self.require_files(app_id)?;
+        let (store, location) = self.locate(app_id, path).await?;
+        FileLink::signed(&store, &location).await
+    }
+
     fn handle_granted(&self, handle: &WorkspaceHandle) -> bool {
         handle.is_conversation_file()
     }
@@ -677,9 +1052,9 @@ impl ToolEnv for DesktopToolEnv {
     }
 
     async fn app_tables(&self, app_id: &str) -> Result<AppTables> {
-        if !self.scope.can_read_tables(app_id) {
+        if !self.scope.can_read_tables(app_id) || !self.holds(app_id, |held| held.tables) {
             return Err(anyhow!(
-                "The bot may not read the tables of app '{app_id}': it is neither its workspace nor an app it was given"
+                "The bot may not read the tables of app '{app_id}': it is neither its workspace nor an app it holds the database permission in"
             ));
         }
         let (connection, reader) = self.host.tables(app_id).await?;
@@ -690,7 +1065,12 @@ impl ToolEnv for DesktopToolEnv {
         })
     }
 
-    async fn model(&self, _role: ModelRole) -> Result<Arc<dyn ModelLogic>> {
+    async fn model(&self, role: ModelRole) -> Result<Arc<dyn ModelLogic>> {
+        if role == ModelRole::Vision
+            && let Some(vision) = self.host.vision_model().await
+        {
+            return Ok(vision);
+        }
         self.host.model().await
     }
 
@@ -744,6 +1124,10 @@ impl ToolEnv for DesktopToolEnv {
         self.people.clone()
     }
 
+    fn rooms(&self) -> Option<Arc<dyn flow_like_bot_tools::RoomInvites>> {
+        self.rooms.clone()
+    }
+
     async fn images(
         &self,
     ) -> std::result::Result<
@@ -773,6 +1157,38 @@ impl ToolEnv for DesktopToolEnv {
     }
 }
 
+/// The first `max_bytes` of the file behind a signed link and its full size, read in chunks so a
+/// large file is never held whole; a redirect is an error, not followed.
+async fn download_head(url: &str, max_bytes: u64) -> Result<(Bytes, u64)> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+    let mut response = client.get(url).send().await.map_err(|error| {
+        anyhow!("The download failed: {}", error.without_url())
+    })?;
+    if !response.status().is_success() {
+        return Err(anyhow!(
+            "The download failed (HTTP {})",
+            response.status().as_u16()
+        ));
+    }
+    let announced = response.content_length();
+    let mut bytes = Vec::new();
+    while (bytes.len() as u64) <= max_bytes {
+        let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|error| anyhow!("The download failed: {}", error.without_url()))?
+        else {
+            break;
+        };
+        bytes.extend_from_slice(&chunk);
+    }
+    let read = bytes.len() as u64;
+    bytes.truncate(max_bytes as usize);
+    Ok((Bytes::from(bytes), announced.map_or(read, |size| size.max(read))))
+}
+
 /// The bot's secrets for a connector's sign-in.
 struct HostSecrets(Arc<LiveHost>);
 
@@ -788,6 +1204,8 @@ impl super::bot_tools::connectors::SecretReader for HostSecrets {
 struct LiveHost {
     session: NativePlatformSession,
     runtime: Arc<BotToolRuntime>,
+    /// The files attached to the message this run answers.
+    attachments: Vec<AttachmentManifestEntry>,
     credentials: tokio::sync::Mutex<HashMap<String, Arc<SharedCredentials>>>,
     bot_token: tokio::sync::Mutex<Option<String>>,
 }
@@ -805,10 +1223,15 @@ impl super::bot_tools::schedule::TaskApi for LiveHost {
 }
 
 impl LiveHost {
-    fn new(session: NativePlatformSession, runtime: Arc<BotToolRuntime>) -> Self {
+    fn new(
+        session: NativePlatformSession,
+        runtime: Arc<BotToolRuntime>,
+        attachments: Vec<AttachmentManifestEntry>,
+    ) -> Self {
         Self {
             session,
             runtime,
+            attachments,
             credentials: Default::default(),
             bot_token: Default::default(),
         }
@@ -836,6 +1259,142 @@ impl LiveHost {
         Ok(credentials)
     }
 
+    /// What the bot holds in each app it may name this turn. Anything unreadable leaves the bot
+    /// with no attached app for the call.
+    async fn app_rights(&self, conversation_id: Option<&str>) -> RightsMap {
+        let candidates = candidate_apps(&self.runtime.context);
+        if candidates.is_empty() {
+            return RightsMap::new();
+        }
+        let local = matches!(self.local_bots().await, Ok(Some(_)));
+        let key = format!(
+            "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+            self.session.hub,
+            self.session.subject.as_deref().unwrap_or(""),
+            self.runtime.context.bot_id,
+            conversation_id.unwrap_or("")
+        );
+        if !local && let Some(rights) = RIGHTS.fresh(&key, Instant::now()) {
+            return rights;
+        }
+        match self.resolve_rights(&candidates, conversation_id).await {
+            Ok(rights) => {
+                if !local {
+                    RIGHTS.store(key, rights.clone(), Instant::now());
+                }
+                rights
+            }
+            Err(error) => {
+                tracing::warn!(%error, bot_id = %self.runtime.context.bot_id, "The bot's app restrictions are unreadable; it reaches no attached app for this call");
+                RightsMap::new()
+            }
+        }
+    }
+
+    async fn resolve_rights(
+        &self,
+        candidates: &[String],
+        conversation_id: Option<&str>,
+    ) -> Result<RightsMap> {
+        let restrictions = self.app_restrictions().await?;
+        let room = match conversation_id {
+            Some(conversation_id) => self.room_limits(conversation_id).await?,
+            None => None,
+        };
+        let refusing = refusing_apps(&self.session.app_handle, candidates).await;
+        Ok(admitted_rights(
+            candidates,
+            &restrictions,
+            room.as_ref(),
+            &refusing,
+        ))
+    }
+
+    /// The owner's restrictions per attached app: the device store for a local bot, the hub's
+    /// bot-app list for an account bot. An app without a row is unrestricted, as on the server.
+    async fn app_restrictions(&self) -> Result<HashMap<String, BotRestrictions>> {
+        let bot_id = self.runtime.context.bot_id.clone();
+        if let Ok(Some(bots)) = self.local_bots().await {
+            let apps = crate::functions::local_bots::on_store(&bots, move |store| {
+                store.bot_apps(&bot_id)
+            })
+            .await
+            .map_err(|error| anyhow!(error.to_string()))?;
+            return Ok(apps
+                .into_iter()
+                .map(|app| (app.app_id, app.restrictions))
+                .collect());
+        }
+        let listed = self
+            .session
+            .request(Method::GET, &format!("bots/{}/apps", segment(&bot_id)), None)
+            .await
+            .map_err(|error| anyhow!("The apps of bot '{bot_id}' can't be read: {error}"))?;
+        let mut held = HashMap::new();
+        for app in listed["apps"].as_array().into_iter().flatten() {
+            let app_id = app["app_id"]
+                .as_str()
+                .ok_or_else(|| anyhow!("The hub listed an app of bot '{bot_id}' without an id"))?;
+            let restrictions = match app.get("restrictions") {
+                Some(value) if !value.is_null() => serde_json::from_value(value.clone())
+                    .map_err(|error| {
+                        anyhow!("The restrictions of app '{app_id}' are unreadable: {error}")
+                    })?,
+                _ => BotRestrictions::default(),
+            };
+            held.insert(app_id.to_string(), restrictions);
+        }
+        Ok(held)
+    }
+
+    /// The limits the owner set for this bot in the room: the device store for a room held here,
+    /// else the member row the hub shows the bot's owner. `None` adds no limit.
+    async fn room_limits(&self, conversation_id: &str) -> Result<Option<BotRoomLimits>> {
+        let bot_id = self.runtime.context.bot_id.clone();
+        if let Ok(Some(bots)) = self.local_bots().await {
+            let (conversation, bot) = (conversation_id.to_string(), bot_id.clone());
+            let local = crate::functions::local_bots::on_store(&bots, move |store| {
+                store.member_limits(&conversation, &bot)
+            })
+            .await;
+            if let Ok(limits) = local {
+                return Ok(limits);
+            }
+        }
+        let conversation = self
+            .session
+            .request(
+                Method::GET,
+                &format!(
+                    "inbox/conversations/{}?as={}",
+                    segment(conversation_id),
+                    segment(&bot_id)
+                ),
+                None,
+            )
+            .await
+            .map_err(|error| anyhow!("The room '{conversation_id}' can't be read: {error}"))?;
+        let member = conversation["members"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|member| {
+                member["principal_id"].as_str() == Some(bot_id.as_str())
+                    && member["kind"]
+                        .as_str()
+                        .is_some_and(|kind| kind.eq_ignore_ascii_case("bot"))
+            })
+            .ok_or_else(|| anyhow!("Bot '{bot_id}' is not a member of room '{conversation_id}'"))?;
+        match member.get("limits") {
+            Some(limits) if !limits.is_null() => serde_json::from_value(limits.clone())
+                .map(Some)
+                .map_err(|error| {
+                    anyhow!("The limits of bot '{bot_id}' in room '{conversation_id}' are unreadable: {error}")
+                }),
+            _ => Ok(None),
+        }
+    }
+
     async fn is_local(&self, app_id: &str) -> Result<bool> {
         self.session
             .is_local(app_id)
@@ -849,6 +1408,19 @@ impl LiveHost {
             run_id: self.runtime.run_id.clone(),
             api_base_url: None,
         }
+    }
+
+    async fn build_model(&self, bit: &Bit) -> Result<Arc<dyn ModelLogic>> {
+        let state = &self.runtime.state;
+        state
+            .model_factory
+            .build(
+                bit,
+                state.clone(),
+                self.runtime.token.clone(),
+                Some(self.usage_context()),
+            )
+            .await
     }
 
     fn profile(&self) -> Result<&Arc<Profile>> {
@@ -898,19 +1470,28 @@ impl ToolHost for LiveHost {
     }
 
     async fn model(&self) -> Result<Arc<dyn ModelLogic>> {
-        let state = &self.runtime.state;
-        let bit =
-            resolve_host_completion_model(state, self.profile()?, self.runtime.model_id.as_deref())
-                .await?;
-        state
-            .model_factory
-            .build(
-                &bit,
-                state.clone(),
-                self.runtime.token.clone(),
-                Some(self.usage_context()),
-            )
+        let bit = resolve_host_completion_model(
+            &self.runtime.state,
+            self.profile()?,
+            self.runtime.model_id.as_deref(),
+        )
+        .await?;
+        self.build_model(&bit).await
+    }
+
+    async fn vision_model(&self) -> Option<Arc<dyn ModelLogic>> {
+        let id = pinned_vision(&self.runtime.context)?;
+        let bit = self
+            .profile()
+            .ok()?
+            .find_bit(id, self.runtime.state.http_client.clone())
             .await
+            .map_err(|error| tracing::warn!(%error, id, "Bot tools: vision model not found"))
+            .ok()?;
+        self.build_model(&bit)
+            .await
+            .map_err(|error| tracing::warn!(%error, id, "Bot tools: vision model cannot run"))
+            .ok()
     }
 
     async fn embedder(&self) -> Result<Option<Arc<dyn KnowledgeEmbedder>>> {
@@ -947,12 +1528,16 @@ impl ToolHost for LiveHost {
         path: &str,
         max_bytes: u64,
     ) -> Result<Option<FileData>> {
-        let bot_id = self.runtime.context.bot_id.clone();
+        if conversation_id == CHAT_FILES {
+            return read_chat_file(&self.attachments, path, max_bytes)
+                .await
+                .map(Some);
+        }
         if let Some(bots) = self.session.app_handle.try_state::<LocalBots>() {
             let (conversation, file, reader) = (
                 conversation_id.to_string(),
                 path.to_string(),
-                bot_id.clone(),
+                self.runtime.context.bot_id.clone(),
             );
             let local = crate::functions::local_bots::on_store(&bots, move |store| {
                 store.read_conversation_file(&conversation, &reader, &file)
@@ -971,32 +1556,36 @@ impl ToolHost for LiveHost {
                 }));
             }
         }
-        let file_id = path.split_once('.').map_or(path, |(id, _)| id);
-        let download = self
-            .session
-            .request(
-                Method::GET,
-                &format!(
-                    "inbox/conversations/{}/files/{}?as={}",
-                    segment(conversation_id),
-                    segment(file_id),
-                    segment(&bot_id)
-                ),
-                None,
-            )
+        let (url, download) = self.hub_file_download(conversation_id, path).await?;
+        let (bytes, size) = download_head(&url, max_bytes)
             .await
             .map_err(|error| anyhow!("Conversation file '{path}': {error}"))?;
-        let url = download["url"].as_str().ok_or_else(|| {
-            anyhow!("The hub sent no download link for conversation file '{path}'")
-        })?;
-        let bytes = reqwest::get(url).await?.error_for_status()?.bytes().await?;
-        let size = bytes.len() as u64;
-        let end = size.min(max_bytes) as usize;
         Ok(Some(FileData {
-            bytes: bytes.slice(..end),
+            bytes,
             size,
             mime: download["mime"].as_str().map(str::to_string),
             classification: None,
+        }))
+    }
+
+    async fn conversation_file_link(
+        &self,
+        conversation_id: &str,
+        path: &str,
+    ) -> Result<Option<FileLink>> {
+        if conversation_id == CHAT_FILES {
+            return Ok(chat_file_link(&self.attachments, path));
+        }
+        if self.is_local_conversation(conversation_id).await {
+            return Ok(None);
+        }
+        let (url, download) = self.hub_file_download(conversation_id, path).await?;
+        Ok(Some(FileLink {
+            url,
+            expires_at_ms: download["expires_at"]
+                .as_str()
+                .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+                .map(|at| at.timestamp_millis()),
         }))
     }
 
@@ -1064,6 +1653,50 @@ impl ToolHost for LiveHost {
 }
 
 impl LiveHost {
+    /// The hub's short-lived download of a conversation file, read as this run's bot: its `url`,
+    /// `expires_at` and `mime`.
+    async fn hub_file_download(
+        &self,
+        conversation_id: &str,
+        path: &str,
+    ) -> Result<(String, Value)> {
+        let file_id = path.split_once('.').map_or(path, |(id, _)| id);
+        let download = self
+            .session
+            .request(
+                Method::GET,
+                &format!(
+                    "inbox/conversations/{}/files/{}?as={}",
+                    segment(conversation_id),
+                    segment(file_id),
+                    segment(&self.runtime.context.bot_id)
+                ),
+                None,
+            )
+            .await
+            .map_err(|error| anyhow!("Conversation file '{path}': {error}"))?;
+        let url = download["url"]
+            .as_str()
+            .ok_or_else(|| anyhow!("The hub sent no download link for conversation file '{path}'"))?
+            .to_string();
+        Ok((url, download))
+    }
+
+    /// Whether the conversation lives in this device's bot store rather than on the hub.
+    async fn is_local_conversation(&self, conversation_id: &str) -> bool {
+        let Some(bots) = self.session.app_handle.try_state::<LocalBots>() else {
+            return false;
+        };
+        let conversation = conversation_id.to_string();
+        matches!(
+            crate::functions::local_bots::on_store(&bots, move |store| {
+                store.conversation(&conversation)
+            })
+            .await,
+            Ok(Some(_))
+        )
+    }
+
     /// This device's bot store when the bot is a local one; `None` for an account bot.
     async fn local_bots(&self) -> Result<Option<tauri::State<'_, LocalBots>>> {
         let Some(bots) = self.session.app_handle.try_state::<LocalBots>() else {
@@ -1105,6 +1738,7 @@ impl LiveHost {
     }
 
     /// An account bot's secret, read with the bot's own token while its turn runs; never cached.
+    /// A sealed one arrives as the envelope the owner sealed to the bot's keys and opens here.
     async fn account_secret(&self, name: &str) -> Result<Option<String>> {
         let turn_id = self.runtime.turn_id.as_deref().ok_or_else(|| {
             anyhow!(
@@ -1117,11 +1751,49 @@ impl LiveHost {
             .request_as_bot(
                 &token,
                 Method::POST,
-                &format!("bots/turns/{}/secrets/{}", segment(turn_id), segment(name)),
+                &bot_secrets::value_route(&segment(turn_id), &segment(name)),
+            )
+            .await;
+        match read {
+            Ok(read) => Ok(read.and_then(|read| read["value"].as_str().map(str::to_string))),
+            Err(error) if error.contains(bot_secrets::CODE_SECRET_SEALED) => {
+                self.sealed_account_secret(&token, turn_id, name).await
+            }
+            Err(error) => Err(anyhow!("Reading the bot's secret '{name}': {error}")),
+        }
+    }
+
+    async fn sealed_account_secret(
+        &self,
+        token: &str,
+        turn_id: &str,
+        name: &str,
+    ) -> Result<Option<String>> {
+        let Some(e2e) = self
+            .session
+            .app_handle
+            .try_state::<Arc<flow_like_bot_host::e2e::E2eHost>>()
+        else {
+            return Err(bot_secrets::sealed_without_key(name).into());
+        };
+        let read = self
+            .session
+            .request_as_bot(
+                token,
+                Method::POST,
+                &bot_secrets::sealed_route(&segment(turn_id), &segment(name)),
             )
             .await
-            .map_err(|error| anyhow!("Reading the bot's secret '{name}': {error}"))?;
-        Ok(read.and_then(|read| read["value"].as_str().map(str::to_string)))
+            .map_err(|error| anyhow!("Reading the bot's sealed secret '{name}': {error}"))?;
+        let Some(read) = read else {
+            return Ok(None);
+        };
+        let envelope = bot_secrets::envelope_of(&read, name)?;
+        Ok(Some(e2e.open_secret(
+            &self.runtime.context.bot_id,
+            name,
+            &envelope,
+        )?))
     }
 }
 

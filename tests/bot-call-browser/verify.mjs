@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { mkdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import puppeteer from "puppeteer";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
@@ -59,9 +60,11 @@ try {
 	const errors = [];
 	page.on("pageerror", (error) => errors.push(String(error)));
 	const snapshot = () => page.evaluate(() => window.botCallTest.snapshot());
-	async function start(kind, voice) {
+	const transcripts = (state) =>
+		state.sent.filter((entry) => entry.kind === "transcript");
+	async function start(kind, voice, models = "off") {
 		errors.length = 0;
-		await page.goto(`${origin}/?kind=${kind}&voice=${voice}`);
+		await page.goto(`${origin}/?kind=${kind}&voice=${voice}&models=${models}`);
 		await page.waitForFunction(() => Boolean(window.botCallTest));
 		await page.waitForSelector(
 			'button[aria-label="Start a call"]:not([disabled])',
@@ -135,14 +138,22 @@ try {
 	await page.waitForFunction(
 		() => window.botCallTest.snapshot().playbacks === 1,
 	);
+	// The bot's own words coming back through the microphone are checked once and dropped.
 	await page.evaluate(() =>
-		window.botCallTest.utterance("Scout, echo from the speakers"),
+		window.botCallTest.utterance(
+			"Scout heard: Scout, summarize this conversation",
+		),
 	);
 	let state = await snapshot();
 	assert.equal(
-		state.transcriptions.length,
+		transcripts(state).length,
 		1,
-		"bot audio must not feed back into transcription",
+		"bot audio must not feed back into the conversation",
+	);
+	assert.equal(
+		state.transcriptions.length,
+		2,
+		"audio over the bot's voice is transcribed once, to tell an echo from a person",
 	);
 	assert.ok(
 		state.transcriptions[0].wav && state.transcriptions[0].bytes > 20_000,
@@ -160,10 +171,9 @@ try {
 		"an unpinned bot uses the profile voice",
 	);
 	assert.equal(state.speech[0].voice, "alloy");
-	assert.equal(state.speech[0].format, "wav");
-	assert.equal(
-		state.localAudioConnections,
-		1,
+	assert.equal(state.speech[0].format, "mp3");
+	assert.ok(
+		state.localAudioConnections >= 1,
 		"bot speech reaches the local speakers",
 	);
 	assert.ok(
@@ -188,20 +198,24 @@ try {
 		1,
 		"unaddressed group speech does not wake bots",
 	);
+	const beforeMute = state.transcriptions.length;
 	await page.click('button[aria-label="Mute microphone"]');
 	await page.evaluate(() =>
 		window.botCallTest.utterance("Scout, muted speech"),
 	);
 	assert.equal(
 		(await snapshot()).transcriptions.length,
-		2,
+		beforeMute,
 		"muting pauses transcription",
 	);
 	await page.click('button[aria-label="Unmute microphone"]');
 	await say("Scribe, record the decision");
 	await reply("Scribe heard: Scribe, record the decision");
-	await page.waitForFunction(
-		() => window.botCallTest.snapshot().playbacks === 2,
+	// The first reply was paused and resumed, so count replies by their own audio, not by starts.
+	await page.waitForFunction(() =>
+		window.botCallTest
+			.snapshot()
+			.playbackEvents.some((event) => event.kind === "start" && event.id === 2),
 	);
 	await pause(1250);
 	await page.screenshot({
@@ -233,6 +247,39 @@ try {
 	});
 	results.push({
 		scenario: "direct bot call with automatic listening and default voice",
+		...(await leave()),
+	});
+
+	await start("direct", "default");
+	await say("Tell me about tomorrow");
+	await reply("Scout heard: Tell me about tomorrow");
+	await page.waitForFunction(
+		() => window.botCallTest.snapshot().playbacks === 1,
+	);
+	// A person talking over the bot stops it, and their utterance says how much was heard.
+	await page.evaluate(() =>
+		window.botCallTest.utterance("Stop, I meant something else"),
+	);
+	await page.waitForFunction(
+		() =>
+			window.botCallTest
+				.snapshot()
+				.sent.filter((entry) => entry.kind === "transcript").length === 2,
+	);
+	state = await snapshot();
+	const cutReply = state.entries.find((entry) => entry.kind === "message");
+	const interrupted = transcripts(state)[1].envelope.body.interrupted;
+	assert.equal(
+		interrupted?.message_id,
+		cutReply.message_id,
+		"the interrupting utterance names the reply it cut off",
+	);
+	assert.ok(
+		interrupted.heard_chars < interrupted.spoken_chars,
+		"the reply stopped before its end",
+	);
+	results.push({
+		scenario: "talking over the bot interrupts it",
 		...(await leave()),
 	});
 
@@ -313,7 +360,7 @@ try {
 		2,
 		"only the first chunk and one prefetched chunk are prepared during initial playback",
 	);
-	assert.ok(Array.from(state.speech[0].text).length <= 160);
+	assert.ok(Array.from(state.speech[0].text).length <= 80);
 	assert.ok(Array.from(state.speech[1].text).length <= 240);
 	assert.equal(
 		state.synthesis[1].completedPlaybacks,
@@ -395,6 +442,150 @@ try {
 		scenario: "voice failure preserves text",
 		...(await leave()),
 	});
+
+	// Recorded speech through the real voice-activity and turn models (macOS `say` makes the clips).
+	if (process.platform === "darwin") {
+		const recording = async (name, text) => {
+			const file = resolve(output, `${name}.wav`);
+			await promisify(execFile)("say", [
+				"-v",
+				process.env.BOT_CALL_TEST_VOICE ?? "Anna",
+				"-o",
+				file,
+				"--data-format=LEI16@16000",
+				text,
+			]);
+			return (await readFile(file)).toString("base64");
+		};
+		const question = "Wie wird das Wetter morgen in Berlin?";
+		const clips = {
+			question: await recording("question", question),
+			yes: await recording("yes", "Ja."),
+		};
+		const latency = [];
+		page.on("console", (message) => {
+			if (!message.text().startsWith("[call-latency]")) return;
+			void message
+				.args()[1]
+				?.jsonValue()
+				.then(
+					(line) => latency.push(line),
+					() => {},
+				);
+		});
+		await start("direct", "none", "on");
+		await page.waitForFunction(() => window.botCallTest.models().speech, {
+			timeout: 120_000,
+		});
+		await page.evaluate(() => window.botCallTest.utterance("a tone"));
+		assert.equal(
+			(await snapshot()).transcriptions.length,
+			0,
+			"the voice-activity model ignores sound that is not speech",
+		);
+		const sentAfter = async (text, clip, count) => {
+			await page.evaluate(
+				({ text, clip }) => window.botCallTest.speakRecording(text, clip, 2500),
+				{ text, clip },
+			);
+			await page.waitForFunction(
+				(expected) =>
+					window.botCallTest
+						.snapshot()
+						.sent.filter((entry) => entry.kind === "transcript").length ===
+					expected,
+				{},
+				count,
+			);
+		};
+		await sentAfter(question, clips.question, 1);
+		await sentAfter("Ja.", clips.yes, 2);
+		const models = await page.evaluate(() => window.botCallTest.models());
+		await pause(500);
+
+		// Every tab uses the same workers, one per model, so a second call adds no model runtime.
+		// Counted from Chrome's own target list: Puppeteer keeps listing a worker that ended after a
+		// session detached from it.
+		const chrome = await browser.target().createCDPSession();
+		const liveCallWorkers = async () =>
+			(await chrome.send("Target.getTargets")).targetInfos.filter(
+				(target) =>
+					target.type === "shared_worker" &&
+					target.url.includes("call-turn.worker"),
+			).length;
+		const sharedBefore = await liveCallWorkers();
+		assert.ok(
+			sharedBefore >= 1 && sharedBefore <= 2,
+			`the call models run in shared workers, one per model; found ${sharedBefore}`,
+		);
+		const second = await browser.newPage();
+		await second.goto(`${origin}/?kind=direct&voice=none&models=on`);
+		await second.waitForSelector(
+			'button[aria-label="Start a call"]:not([disabled])',
+		);
+		await second.click('button[aria-label="Start a call"]');
+		await second.waitForFunction(() => window.botCallTest.models().speech, {
+			timeout: 120_000,
+		});
+		const sharedByTwo = await liveCallWorkers();
+		assert.ok(
+			sharedByTwo <= 2,
+			`a second tab shares the workers; found ${sharedByTwo}`,
+		);
+		let workerMemoryMb = 0;
+		const workerTargets = browser
+			.targets()
+			.filter(
+				(target) =>
+					target.type() === "shared_worker" &&
+					target.url().includes("call-turn.worker"),
+			);
+		for (const target of workerTargets) {
+			const inspector = await target.createCDPSession();
+			const heap = await inspector.send("Runtime.getHeapUsage");
+			await inspector.detach();
+			workerMemoryMb += Math.round(
+				(heap.usedSize + (heap.backingStorageSize ?? 0)) / 1_048_576,
+			);
+		}
+		assert.ok(
+			workerMemoryMb < 250,
+			`the call models stay small; their workers hold ${workerMemoryMb} MB`,
+		);
+		// The second tab ends its call and stays open: a tab closed in mid-call cannot say goodbye,
+		// and its share of the workers is only released by their inactivity timeout.
+		await second.click('button[aria-label="Leave call"]');
+		await page.bringToFront();
+		await sentAfter(question, clips.question, 3);
+
+		console.log(
+			JSON.stringify(
+				{ scenario: "recorded speech", models, workerMemoryMb, latency },
+				null,
+				2,
+			),
+		);
+		const speechState = await leave();
+		// The page gives the models up 30 s after its last call and the workers end a second later;
+		// a worker nobody disconnected from would only go after a minute or two.
+		const left = Date.now();
+		while ((await liveCallWorkers()) > 0 && Date.now() - left < 55_000) {
+			await pause(500);
+		}
+		assert.equal(
+			await liveCallWorkers(),
+			0,
+			"the models are freed once no call needs them",
+		);
+		console.log(
+			JSON.stringify({ modelsFreedAfterMs: Date.now() - left }, null, 2),
+		);
+		await second.close();
+		results.push({
+			scenario: "recorded speech through the voice-activity and turn models",
+			...speechState,
+		});
+	}
 	console.log(
 		JSON.stringify(
 			results.map(
@@ -439,3 +630,5 @@ try {
 	await browser?.close();
 	server.kill();
 }
+// A Chrome helper that outlives the browser keeps its output pipes open and would hold this process.
+process.exit(0);

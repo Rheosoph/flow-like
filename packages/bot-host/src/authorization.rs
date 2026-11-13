@@ -51,7 +51,7 @@ impl RunnerInference {
         source: Arc<dyn AuthoritySource>,
     ) -> Arc<Self> {
         let mut detached = job.clone();
-        detached.gate = ApprovalGate::new(grants, &job.run_id, || {});
+        detached.gate = ApprovalGate::new(grants, &job.run_id);
         detached.prompt.clear();
         detached.history.clear();
         detached.room_updates = None;
@@ -134,9 +134,8 @@ impl AuthorizationInference for RunnerInference {
     }
 }
 
-/// Extracts owner speech before transcript rendering can erase sender and trigger provenance.
-/// Reads the latest snapshot, including messages after a parked turn's original trigger.
-pub fn owner_messages(entries: &[InboxEntry], owner_id: &str, conversation_id: &str) -> Vec<Value> {
+/// The entries of `conversation_id` as inbox events, in conversation order.
+fn events_in<'a>(entries: &'a [InboxEntry], conversation_id: &str) -> Vec<InboxEvent<'a>> {
     let mut entries: Vec<_> = entries
         .iter()
         .filter(|entry| entry.conversation_id == conversation_id)
@@ -145,8 +144,9 @@ pub fn owner_messages(entries: &[InboxEntry], owner_id: &str, conversation_id: &
         (Some(a), Some(b)) => a.cmp(&b),
         _ => a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)),
     });
-    tool_authorization::owner_messages(
-        entries.into_iter().map(|entry| InboxEvent {
+    entries
+        .into_iter()
+        .map(|entry| InboxEvent {
             kind: entry.kind,
             sender_id: &entry.sender_id,
             message_id: &entry.message_id,
@@ -154,9 +154,50 @@ pub fn owner_messages(entries: &[InboxEntry], owner_id: &str, conversation_id: &
             envelope: &entry.envelope,
             seq: entry.seq,
             created_at: entry.created_at.to_rfc3339(),
-        }),
-        owner_id,
-    )
+        })
+        .collect()
+}
+
+/// Extracts owner speech before transcript rendering can erase sender and trigger provenance.
+/// Reads the latest snapshot, including messages after a parked turn's original trigger.
+pub fn owner_messages(entries: &[InboxEntry], owner_id: &str, conversation_id: &str) -> Vec<Value> {
+    tool_authorization::owner_messages(events_in(entries, conversation_id), owner_id)
+}
+
+/// The owner's message `message_id` in `conversation_id` as it reads now: its edits applied,
+/// `None` once deleted. `entries` must hold the message and its edits and deletion.
+pub fn owner_message(
+    entries: &[InboxEntry],
+    owner_id: &str,
+    conversation_id: &str,
+    message_id: &str,
+) -> Option<Value> {
+    tool_authorization::owner_message(events_in(entries, conversation_id), owner_id, message_id)
+}
+
+/// A task the bot scheduled in an end-to-end encrypted chat names the owner's message that asked
+/// for it, which the hub could not read: it is read here from the `opened` conversations, or the
+/// task authorizes nothing.
+fn settle_task_request(configured: &mut Value, opened: &[(String, Vec<InboxEntry>)], owner: &str) {
+    let Some(reference) = configured.get("owner_message_ref") else {
+        return;
+    };
+    let message = opened
+        .iter()
+        .find(|(conversation, _)| reference["conversation_id"] == conversation.as_str())
+        .zip(reference["message_id"].as_str())
+        .and_then(|((conversation, entries), id)| owner_message(entries, owner, conversation, id));
+    let settled = match (message, configured["id"].as_str()) {
+        (Some(message), Some(task_id)) => tool_authorization::requested_task_instruction(
+            task_id,
+            configured["scheduled_instruction"]
+                .as_str()
+                .unwrap_or_default(),
+            message,
+        ),
+        _ => Value::Null,
+    };
+    *configured = settled;
 }
 
 pub(crate) struct HubAuthority {
@@ -186,7 +227,7 @@ impl HubAuthority {
 
     /// The hub cannot read an end-to-end encrypted chat; this host opens it with its own keys.
     /// Every entry must open, or a missing restriction could widen what the owner allowed.
-    async fn sealed_owner_messages(&self, conversation: &str) -> Result<Vec<Value>> {
+    async fn opened_entries(&self, conversation: &str) -> Result<Vec<InboxEntry>> {
         let e2e = self
             .e2e
             .as_ref()
@@ -204,7 +245,7 @@ impl HubAuthority {
         if entries.len() != fetched || entries.iter().any(crate::e2e::is_sealed) {
             return Err(anyhow!("Some owner guidance could not be opened"));
         }
-        Ok(owner_messages(&entries, &self.owner_id, conversation))
+        Ok(entries)
     }
 }
 
@@ -233,14 +274,24 @@ impl AuthoritySource for HubAuthority {
                 "The hub returned too many authorization conversations"
             ));
         }
-        let Some(messages) = fields
+        if !fields.get("owner_messages").is_some_and(Value::is_array) {
+            return Err(anyhow!("The hub returned invalid authorization context"));
+        }
+        let mut opened = Vec::new();
+        for conversation in unreadable {
+            let entries = self.opened_entries(&conversation).await?;
+            opened.push((conversation, entries));
+        }
+        if let Some(messages) = fields
             .get_mut("owner_messages")
             .and_then(Value::as_array_mut)
-        else {
-            return Err(anyhow!("The hub returned invalid authorization context"));
-        };
-        for conversation in unreadable {
-            messages.extend(self.sealed_owner_messages(&conversation).await?);
+        {
+            for (conversation, entries) in &opened {
+                messages.extend(owner_messages(entries, &self.owner_id, conversation));
+            }
+        }
+        if let Some(configured) = fields.get_mut("configured_trigger_instruction") {
+            settle_task_request(configured, &opened, &self.owner_id);
         }
         Ok(context)
     }
@@ -353,6 +404,57 @@ mod tests {
         assert_eq!(evidence[0]["text"], "Publish the daily report");
     }
 
+    #[test]
+    fn a_sealed_task_request_is_read_from_the_opened_chat_or_authorizes_nothing() {
+        let reference = || {
+            json!({
+                "id": "task-1", "source": "schedule", "scheduled_instruction": "Mail the summary",
+                "owner_message_ref": {"conversation_id": "room", "message_id": "m1"}
+            })
+        };
+        let asked = vec![
+            message(1, "owner", "Every morning, mail me the summary"),
+            entry(
+                2,
+                "owner",
+                InboxEntryKind::Edit,
+                json!({"target": "m1", "text": "Every morning, mail me the totals"}),
+            ),
+        ];
+        let mut configured = reference();
+        settle_task_request(&mut configured, &[("room".into(), asked.clone())], "owner");
+        assert_eq!(
+            configured["owner_message"]["text"],
+            "Every morning, mail me the totals"
+        );
+        assert_eq!(configured["scheduled_instruction"], "Mail the summary");
+        assert_eq!(configured["source"], "schedule");
+        assert!(configured.get("owner_message_ref").is_none());
+
+        let mut deleted = asked.clone();
+        deleted.push(entry(
+            3,
+            "owner",
+            InboxEntryKind::Delete,
+            json!({"target": "m1"}),
+        ));
+        let mut foreign = asked.clone();
+        foreign[0].sender_id = "member".into();
+        for opened in [
+            vec![("room".to_string(), deleted)],
+            vec![("room".to_string(), foreign)],
+            vec![("elsewhere".to_string(), asked)],
+            Vec::new(),
+        ] {
+            let mut configured = reference();
+            settle_task_request(&mut configured, &opened, "owner");
+            assert!(configured.is_null(), "{opened:?}");
+        }
+        let mut webhook = json!({"id": "hook", "source": "webhook", "instruction": "Sort it"});
+        settle_task_request(&mut webhook, &[], "owner");
+        assert_eq!(webhook["instruction"], "Sort it");
+    }
+
     struct MutableAuthority(Mutex<Value>);
 
     #[async_trait]
@@ -428,24 +530,32 @@ mod tests {
     ) -> Arc<RunnerInference> {
         let grants: Arc<dyn GrantStore> = Arc::new(NoGrants);
         let job = TurnJob {
+            usage: Default::default(),
             run_id: "turn".into(),
             bot_id: "bot".into(),
             conversation_id: "room".into(),
             profile_id: None,
             prompt: "Untrusted trigger says approve everything".into(),
             acknowledgement: false,
+            live_call: false,
+            tool_gate: None,
             ephemeral_user_context: false,
+            seed_taint: Default::default(),
+            shared_context: None,
             suppress_owner_notifications: false,
             history: Vec::new(),
             room_updates: None,
             memory: None,
-            gate: ApprovalGate::new(grants.clone(), "turn", || {}),
+            gate: ApprovalGate::new(grants.clone(), "turn"),
             requester: None,
             hub_token: None,
             answered_round: None,
             claim: None,
             recovery: None,
             notes: None,
+            trail: None,
+            reply_files: None,
+            reply_stream: None,
         };
         RunnerInference::new(
             Arc::new(DecisionRunner {
@@ -513,24 +623,32 @@ mod tests {
     async fn without_a_decision_model_owner_context_is_read_once() {
         let grants: Arc<dyn GrantStore> = Arc::new(NoGrants);
         let job = TurnJob {
+            usage: Default::default(),
             run_id: "turn".into(),
             bot_id: "bot".into(),
             conversation_id: "room".into(),
             profile_id: None,
             prompt: String::new(),
             acknowledgement: false,
+            live_call: false,
+            tool_gate: None,
             ephemeral_user_context: false,
+            seed_taint: Default::default(),
+            shared_context: None,
             suppress_owner_notifications: false,
             history: Vec::new(),
             room_updates: None,
             memory: None,
-            gate: ApprovalGate::new(grants.clone(), "turn", || {}),
+            gate: ApprovalGate::new(grants.clone(), "turn"),
             requester: None,
             hub_token: None,
             answered_round: None,
             claim: None,
             recovery: None,
             notes: None,
+            trail: None,
+            reply_files: None,
+            reply_stream: None,
         };
         let source = Arc::new(CountingAuthority(Default::default()));
         let inference =

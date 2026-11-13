@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use axum::{
     Extension, Json, Router,
+    body::Body,
     extract::{DefaultBodyLimit, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
@@ -42,6 +43,8 @@ mod tests;
 
 pub(crate) const MAX_TRANSCRIPTION_BODY_BYTES: usize = MAX_AUDIO_BYTES.div_ceil(3) * 4 + 64 * 1024;
 pub(crate) const MAX_SPEECH_BODY_BYTES: usize = 32 * 1024;
+const SPEECH_STREAM_UNSUPPORTED: &str = "SPEECH_STREAM_UNSUPPORTED";
+const STREAM_CHANNEL_CHUNKS: usize = 16;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -88,6 +91,7 @@ fn catalog_defaults(bit: &Bit) -> Result<AudioDefaults, ApiError> {
         text: "Validate catalog voice".into(),
         voice: defaults.default_voice.clone(),
         format: None,
+        stream: false,
     }
     .validate()
     .map_err(|error| ApiError::bad_request(format!("Invalid default voice: {error}")))?;
@@ -244,6 +248,19 @@ impl AudioPayload {
         }
     }
 
+    fn ensure_stream_supported(
+        &self,
+        implementation: HostedAudioProvider,
+        model: &str,
+    ) -> Result<(), ApiError> {
+        match self {
+            Self::Speech(request) if request.stream => {
+                stream_sample_rate(implementation, model).map(|_| ())
+            }
+            _ => Ok(()),
+        }
+    }
+
     fn validate_provider(
         &self,
         implementation: HostedAudioProvider,
@@ -291,6 +308,10 @@ async fn authorized_audio(
         official_bit(&state, payload.bit_id(), payload.bit_type()).await?;
     let pricing = AudioPricing::from_bit(&bit)?;
     let reserved_cost = payload.reserved_cost(pricing)?;
+    payload.ensure_stream_supported(
+        implementation,
+        provider.model_id.as_deref().unwrap_or_default(),
+    )?;
     // Freeze model defaults into the accepted job, including durable and instance jobs.
     payload.apply_catalog_defaults(&bit)?;
     payload.validate_provider(
@@ -321,6 +342,7 @@ async fn authorized_audio(
         estimated_cost_micro_dollars: reserved_cost,
         rate: Some(rate.clone()),
     };
+    let reserve_started = Instant::now();
     let id = match instance.as_ref() {
         Some(instance) => {
             start_instance_usage_invocation(&state, start, instance, required_model_tier(&provider))
@@ -329,6 +351,14 @@ async fn authorized_audio(
         None => start_usage_invocation(&state, start).await?,
     }
     .ok_or_else(|| ApiError::internal("Hosted audio reservation is missing"))?;
+    tracing::info!(
+        target: "audio_latency",
+        kind = payload.kind().invocation_kind(),
+        provider = implementation.label(),
+        model = provider.model_id.as_deref().unwrap_or_default(),
+        reserve_ms = reserve_started.elapsed().as_millis() as u64,
+        "Hosted audio reserved"
+    );
     let job = HostedAudioJob {
         payload,
         provider,
@@ -338,11 +368,11 @@ async fn authorized_audio(
     if super::chat::hosted_worker::enabled() {
         return super::chat::hosted_worker::dispatch(
             state,
-            super::chat::hosted_worker::HostedAiJob {
-                operation_id: id,
-                request: super::chat::hosted_worker::HostedWork::Audio(job),
-                deadline: chrono::Utc::now() + chrono::Duration::milliseconds(rate.max_request_ms),
-            },
+            super::chat::hosted_worker::HostedAiJob::new(
+                id,
+                super::chat::hosted_worker::HostedWork::Audio(job),
+                chrono::Utc::now() + chrono::Duration::milliseconds(rate.max_request_ms),
+            ),
         )
         .await;
     }
@@ -374,6 +404,11 @@ pub(crate) async fn execute_hosted_audio(
     provider_request_started: &mut bool,
 ) -> Result<Response, ApiError> {
     let started = Instant::now();
+    let kind = job.payload.kind().invocation_kind();
+    let provider_label = job.provider.provider_name.clone();
+    let model_label = job.provider.model_id.clone().unwrap_or_default();
+    let mut bytes = 0usize;
+    let mut provider_ms = 0u64;
     let outcome = async {
         let (bit, current, implementation) = official_bit(state, job.payload.bit_id(), job.payload.bit_type()).await?;
         if current != job.provider {
@@ -385,12 +420,34 @@ pub(crate) async fn execute_hosted_audio(
         job.pricing.validate(job.payload.kind())?;
         job.payload.validate_provider(implementation, model)?;
         let connection = providers::connection(state, implementation).await?;
+        if let AudioPayload::Speech(request) = &job.payload
+            && request.stream
+        {
+            let provider_started = Instant::now();
+            let response = stream_speech(
+                state,
+                &connection,
+                implementation,
+                model,
+                request,
+                job.pricing,
+                id.clone(),
+                started,
+                timeout_ms,
+                provider_request_started,
+            )
+            .await?;
+            provider_ms = provider_started.elapsed().as_millis() as u64;
+            return Ok(response);
+        }
+        let provider_started = Instant::now();
         let (response, request_id, cost, raw_usage) = match job.payload {
             AudioPayload::Transcription(request) => {
                 let audio = request.decode().map_err(|error| ApiError::bad_request(error.to_string()))?;
                 let estimated_seconds = metering::estimated_audio_seconds(&audio);
                 let (parsed, request_id) = providers::transcribe(&connection, model, &request, audio, timeout_ms, provider_request_started).await?;
                 let seconds = metering::settled_seconds(parsed.billed_seconds, estimated_seconds);
+                provider_ms = provider_started.elapsed().as_millis() as u64;
                 let provider_cost = parsed.provider_cost_usd.and_then(metering::usd_to_micro);
                 let cost = provider_cost.unwrap_or(job.pricing.transcription_cost(seconds)?);
                 (Json(parsed.transcription).into_response(), request_id, cost, json!({
@@ -402,6 +459,8 @@ pub(crate) async fn execute_hosted_audio(
             }
             AudioPayload::Speech(request) => {
                 let (speech, request_id) = providers::speak(&connection, model, &request, timeout_ms, provider_request_started).await?;
+                provider_ms = provider_started.elapsed().as_millis() as u64;
+                bytes = speech.bytes.len();
                 let characters = request.characters();
                 ((StatusCode::OK, [(header::CONTENT_TYPE, speech.mime)], speech.bytes).into_response(),
                     request_id, job.pricing.speech_cost(&request.text)?,
@@ -418,6 +477,17 @@ pub(crate) async fn execute_hosted_audio(
         }).await?;
         Ok(response)
     }.await;
+    tracing::info!(
+        target: "audio_latency",
+        kind,
+        provider = provider_label.as_str(),
+        model = model_label.as_str(),
+        provider_ms,
+        total_ms = started.elapsed().as_millis() as u64,
+        bytes,
+        ok = outcome.is_ok(),
+        "Hosted audio executed"
+    );
     if outcome.is_err() {
         // A timeout or malformed response cannot establish that the provider did no work.
         let _ = settle_hosted_usage_invocation(
@@ -437,6 +507,138 @@ pub(crate) async fn execute_hosted_audio(
         .await;
     }
     outcome
+}
+
+/// The PCM sample rate a streamed speech response of `model` carries, or the public refusal.
+fn stream_sample_rate(implementation: HostedAudioProvider, model: &str) -> Result<u32, ApiError> {
+    implementation.stream_pcm_sample_rate(model).ok_or_else(|| {
+        ApiError::coded(
+            StatusCode::BAD_REQUEST,
+            SPEECH_STREAM_UNSUPPORTED,
+            format!(
+                "This hosted {} voice cannot be streamed; request the complete audio instead",
+                implementation.label()
+            ),
+        )
+    })
+}
+
+/// Settlement runs in the spawned task, so it does not depend on the client reading the body.
+#[allow(clippy::too_many_arguments)]
+async fn stream_speech(
+    state: &AppState,
+    connection: &providers::Connection,
+    implementation: HostedAudioProvider,
+    model: &str,
+    request: &HostedSpeechRequest,
+    pricing: AudioPricing,
+    id: String,
+    started: Instant,
+    timeout_ms: u64,
+    provider_request_started: &mut bool,
+) -> Result<Response, ApiError> {
+    use futures_util::StreamExt;
+    let sample_rate = stream_sample_rate(implementation, model)?;
+    let cost = pricing.speech_cost(&request.text)?;
+    let raw_usage = json!({
+        "characters": request.characters(),
+        "input_bytes": request.text.len(),
+        "cost_source": pricing.speech_cost_source(),
+        "pricing": pricing,
+        "streamed": true,
+    });
+    let providers::SpeechStream {
+        response,
+        request_id,
+    } = providers::speak_stream(
+        connection,
+        model,
+        request,
+        timeout_ms,
+        provider_request_started,
+    )
+    .await?;
+    let (sender, receiver) = flow_like_types::tokio::sync::mpsc::channel::<
+        Result<flow_like_types::Bytes, std::io::Error>,
+    >(STREAM_CHANNEL_CHUNKS);
+    let state = state.clone();
+    let kind = AudioKind::Speech.invocation_kind();
+    let provider_label = implementation.label();
+    let model_label = model.to_owned();
+    flow_like_types::tokio::spawn(async move {
+        let upstream_started = Instant::now();
+        let mut total = 0usize;
+        let mut failure: Option<&'static str> = None;
+        let mut upstream = response.bytes_stream();
+        while let Some(chunk) = upstream.next().await {
+            let chunk = match chunk {
+                Ok(chunk) => chunk,
+                Err(_) => {
+                    failure = Some("Hosted audio response was interrupted");
+                    break;
+                }
+            };
+            total = total.saturating_add(chunk.len());
+            if total > MAX_AUDIO_BYTES {
+                failure = Some("Hosted audio response exceeds its size limit");
+                break;
+            }
+            if chunk.is_empty() {
+                continue;
+            }
+            if sender.send(Ok(chunk)).await.is_err() {
+                break;
+            }
+        }
+        if failure.is_none() && total == 0 {
+            failure = Some("Hosted speech could not be read");
+        }
+        if let Some(message) = failure {
+            let _ = sender.send(Err(std::io::Error::other(message))).await;
+        }
+        tracing::info!(
+            target: "audio_latency",
+            kind,
+            provider = provider_label,
+            model = model_label.as_str(),
+            provider_ms = upstream_started.elapsed().as_millis() as u64,
+            total_ms = started.elapsed().as_millis() as u64,
+            bytes = total,
+            ok = failure.is_none(),
+            "Hosted audio stream ended"
+        );
+        let settlement = if failure.is_none() {
+            UsageInvocationSettlement {
+                status: STATUS_COMPLETED,
+                cost_micro_dollars: cost,
+                latency_ms: Some(started.elapsed().as_secs_f64() * 1000.0),
+                provider_request_id: request_id,
+                raw_usage: Some(raw_usage),
+                ..Default::default()
+            }
+        } else {
+            UsageInvocationSettlement {
+                status: STATUS_UNKNOWN_USAGE,
+                error: Some("Hosted audio request failed".into()),
+                latency_ms: Some(started.elapsed().as_secs_f64() * 1000.0),
+                ..Default::default()
+            }
+        };
+        let _ = settle_hosted_usage_invocation(&state, Some(&id), settlement).await;
+        // The hosted worker returns once the body ends; keep it open until settlement is written.
+        drop(sender);
+    });
+    let body = Body::from_stream(futures_util::stream::unfold(
+        receiver,
+        |mut receiver| async move { receiver.recv().await.map(|item| (item, receiver)) },
+    ));
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "audio/pcm")
+        .header("x-audio-sample-rate", sample_rate.to_string())
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(body)
+        .map_err(|_| ApiError::internal("Hosted speech stream could not be built"))
 }
 
 /// Transcribe a short audio clip with a hosted speech-to-text model. The audio is sent as base64
@@ -471,10 +673,10 @@ pub async fn transcribe_audio(
     path = "/audio/speech",
     tag = "audio",
     request_body = serde_json::Value,
-    description = "Turn text (up to 4096 characters) into spoken audio with a hosted text-to-speech model. The response is the audio file; usage is billed by character count.",
+    description = "Turn text (up to 4096 characters) into spoken audio with a hosted text-to-speech model. The response is the audio file; usage is billed by character count. Set stream to true together with format pcm to receive raw 16-bit mono PCM as it is generated; the x-audio-sample-rate response header gives its sample rate.",
     responses(
-        (status = 200, description = "The generated audio, with the provider's audio content type"),
-        (status = 400, description = "The request is invalid or the text is too long"),
+        (status = 200, description = "The generated audio, with the provider's audio content type. With stream, chunked audio/pcm plus an x-audio-sample-rate header"),
+        (status = 400, description = "The request is invalid, the text is too long, or the model's provider cannot stream speech (code SPEECH_STREAM_UNSUPPORTED)"),
         (status = 403, description = "The model is not an official text-to-speech model or is not available on your plan"),
         (status = 503, description = "The provider behind this model is not available")
     )

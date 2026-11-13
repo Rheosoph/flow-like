@@ -239,6 +239,15 @@
 	"board2": "ボード",
 	"boardNotFound": "ボードが見つかりません!",
 	"boardVersion": "ボードバージョン",
+	"botAccess": {
+		"allow": "",
+		"allowed": "",
+		"description": "",
+		"ownerOnly": "",
+		"refused": "",
+		"saveFailed": "",
+		"title": ""
+	},
 	"bothJoinColumnsLiveInThisTablePickALinkTableForManytomany": "",
 	"bothUseTheSameRandomInstallIdItIsDeletedOnceBothSwitchesAreOffAndAFreshOneIsCreatedIfYouTurnEitherBackOn": "どちらも同じランダムなインストールIDを使用します。両方のスイッチがオフになると削除され、いずれかを再びオンにすると新しいIDが作成されます。",
 	"branding": "ブランディング",

@@ -7,9 +7,11 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
+use flow_like_model_provider::response::{CompactionStats, ContextUsage, LLMUsageStats};
 use flow_like_storage::lancedb::Connection;
 use flow_like_storage::lancedb::table::WriteOptions;
 use flow_like_types::tokio::sync::Mutex;
@@ -26,6 +28,7 @@ use crate::prompt::{
 };
 use crate::retrieval::Recency;
 use crate::store::{FactFilter, FactQuery, MemoryStores};
+use crate::telemetry::UsageDelivery;
 use crate::tools::HistoryReader;
 
 const DELETIONS_PER_SWEEP: usize = 200;
@@ -99,6 +102,10 @@ pub struct PreparedTurn {
     pub report: BudgetReport,
     /// A Hard compaction ran before the call.
     pub compacted: bool,
+    /// This preparation and unreported maintenance from earlier turns.
+    pub stats: LLMUsageStats,
+    /// Transfers these measurements to the host once; an abandoned turn refunds them.
+    pub usage_delivery: UsageDelivery,
 }
 
 /// What a turn's background work did.
@@ -278,9 +285,9 @@ impl MemorySession {
                     self.options.config.preceding_messages,
                 )
                 .await?;
-            let outcome = self
-                .engine
-                .compact(CompactionInput {
+            let started = Instant::now();
+            let (outcome, stats) =
+                crate::telemetry::capture(self.engine.compact(CompactionInput {
                     plan: &compaction,
                     items: &items,
                     preceding: &preceding,
@@ -288,8 +295,60 @@ impl MemorySession {
                     history_window: self.window(),
                     now: request.now,
                     model: self.options.model.clone(),
-                })
-                .await?;
+                }))
+                .await;
+            crate::telemetry::record(&stats);
+            let mut after_tokens = None;
+            if let Ok(outcome) = &outcome
+                && !outcome.stale
+                && let Ok(after) = self
+                    .engine
+                    .live_items(reader, &outcome.state, trigger_seq)
+                    .await
+                && let Ok(plan) = self
+                    .engine
+                    .plan(
+                        &after,
+                        &outcome.state,
+                        self.window(),
+                        request.open_task_seqs,
+                        phase,
+                    )
+                    .await
+            {
+                after_tokens = Some(plan.used_tokens);
+            }
+            let event = CompactionStats {
+                kind: "memory".into(),
+                trigger: match compaction.trigger {
+                    crate::compaction::Trigger::Hard => "hard",
+                    crate::compaction::Trigger::Soft => "soft",
+                    crate::compaction::Trigger::Idle => "idle",
+                }
+                .into(),
+                status: match &outcome {
+                    Ok(outcome) if outcome.stale => "stale",
+                    Ok(_) => "completed",
+                    Err(error) if is_busy(error) => "busy",
+                    Err(_) => "failed",
+                }
+                .into(),
+                before_tokens: compaction.tokens_before,
+                after_tokens,
+                duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                model: stats
+                    .calls
+                    .iter()
+                    .find(|call| call.purpose.as_deref() == Some("memory_segment_summary"))
+                    .map(|call| call.model.clone())
+                    .or_else(|| self.options.model.clone()),
+                usage: (!stats.calls.is_empty()).then(|| stats.usage.clone()),
+            };
+            crate::telemetry::record(&LLMUsageStats {
+                compactions: vec![event],
+                ..Default::default()
+            });
+            let outcome = outcome?;
             if outcome.stale {
                 continue;
             }
@@ -303,6 +362,34 @@ impl MemorySession {
     /// assembles the prompt. `Err` only when the history cannot be read; the host then answers
     /// the way it did before memory.
     pub async fn prepare(
+        &self,
+        reader: &dyn HistoryReader,
+        request: &TurnRequest<'_>,
+    ) -> Result<PreparedTurn> {
+        let delivery = UsageDelivery::new(self.engine.clone(), LLMUsageStats::default());
+        let mut prepared =
+            crate::telemetry::capture_into(delivery.buffer(), self.prepare_inner(reader, request))
+                .await?;
+        match self.engine.take_pending_usage().await {
+            Ok(pending) => delivery.merge(&pending.take()),
+            Err(error) => tracing::warn!("Reading pending memory usage failed: {error:#}"),
+        }
+        delivery
+            .buffer()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .context = Some(ContextUsage {
+            estimated_tokens: prepared.report.total_tokens,
+            context_window: self.options.budget.context_window,
+            reserved_output_tokens: self.options.budget.output,
+            ..Default::default()
+        });
+        prepared.stats = delivery.snapshot();
+        prepared.usage_delivery = delivery;
+        Ok(prepared)
+    }
+
+    async fn prepare_inner(
         &self,
         reader: &dyn HistoryReader,
         request: &TurnRequest<'_>,
@@ -412,7 +499,12 @@ impl MemorySession {
         let assembled = assemble(
             &PromptInput {
                 system_and_tools: "",
-                tool_tokens: self.options.tool_tokens,
+                // Hosts assemble the final system prompt later. Keep its configured reserve
+                // until they can supply a measured fixed-section size.
+                tool_tokens: self
+                    .options
+                    .tool_tokens
+                    .max(self.options.budget.system_tools),
                 about_you: &about_you,
                 summaries: &summaries,
                 now_block: state.now.as_ref(),
@@ -466,6 +558,8 @@ impl MemorySession {
             trigger,
             report: assembled.report,
             compacted,
+            stats: LLMUsageStats::default(),
+            usage_delivery: UsageDelivery::new(self.engine.clone(), LLMUsageStats::default()),
         })
     }
 
@@ -474,6 +568,23 @@ impl MemorySession {
     /// maintenance. Runs under the engine's lease; another engine's work (`MemoryBusy`) defers
     /// the rest to the next turn. Dormant conversations wait for their next active turn.
     pub async fn after_turn(
+        &self,
+        reader: &dyn HistoryReader,
+        request: &TurnRequest<'_>,
+    ) -> AfterTurn {
+        let delivery = UsageDelivery::new(self.engine.clone(), LLMUsageStats::default());
+        let done = crate::telemetry::capture_into(
+            delivery.buffer(),
+            self.after_turn_inner(reader, request),
+        )
+        .await;
+        if let Err(error) = self.engine.record_pending_usage(&delivery.take()).await {
+            tracing::warn!("Persisting background memory usage was deferred: {error:#}");
+        }
+        done
+    }
+
+    async fn after_turn_inner(
         &self,
         reader: &dyn HistoryReader,
         request: &TurnRequest<'_>,

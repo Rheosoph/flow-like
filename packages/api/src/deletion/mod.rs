@@ -51,10 +51,11 @@
 //!    `EventSetup`/`EventAlias`/`EventSink` before `Event`.
 //! 4. `NullOut` steps sit immediately before the parent they protect and
 //!    after the in-set child drained, so they only touch rows outside the
-//!    app: the four usage tables' `technicalUserId` before `TechnicalUser`,
-//!    `EventRemoteRegistration.authId` before `EventRemoteAuth`,
+//!    app: `EventRemoteRegistration.authId` before `EventRemoteAuth`,
 //!    `TechnicalUser.roleId`/`AppConnection.roleId` and the back-edge
-//!    `App.defaultRoleId`/`App.ownerRoleId` before `Role`.
+//!    `App.defaultRoleId`/`App.ownerRoleId` before `Role`. The run and usage
+//!    tables' `technicalUserId` holds API key and bot ids by value, without a
+//!    foreign key, so a removed key's id stays on rows outside the app.
 //! 5. `Membership` before `Role` (`Membership.roleId` is `Restrict`).
 //! 6. Every table with a direct `appId` cascade that nothing else orders.
 //! 7. `SweepSoft` — `AppCacheEntry`, `UsageInvocation`, `UsageAlert`,

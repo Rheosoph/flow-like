@@ -2,6 +2,7 @@ use super::{
     INBOX_MEMBER_LIMIT, INBOX_MEMBER_NOT_ALLOWED, INBOX_MESSAGE_ID_TAKEN, Reader,
     conversations::{NewConversation, start_direct, start_group},
     entries::{send_in, validate_send},
+    fixture::database,
     import::{
         INBOX_CONVERSATION_TAKEN, INBOX_IMPORT_TOO_LARGE, ImportConversationRequest, ImportPlan,
         Imported, MAX_IMPORT_COPIES, MAX_IMPORT_ENTRIES, MAX_IMPORT_WRITES, check_writes,
@@ -23,76 +24,14 @@ use flow_like_types::inbox::{
     PrincipalKind, direct_pair_key,
 };
 use sea_orm::{
-    ActiveModelTrait,
-    ActiveValue::Set,
-    ColumnTrait, ConnectOptions, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, Schema,
-    sea_query::{Expr, Table},
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
+    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, sea_query::Expr,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
 /// The conversation's id on the device: only an import key in the account.
 const LOCAL: &str = "tz4a98xxat96iws9zmbrgj3a";
-
-const INBOX_TABLES: [&str; 6] = [
-    r#"CREATE TABLE public."User" (
-        "id" TEXT PRIMARY KEY, "name" TEXT, "username" TEXT, "preferredUsername" TEXT)"#,
-    r#"CREATE TABLE public."Conversation" (
-        "id" TEXT PRIMARY KEY, "kind" TEXT NOT NULL, "title" TEXT, "encryption" TEXT NOT NULL,
-        "directKey" TEXT UNIQUE, "createdBy" TEXT NOT NULL, "lastActivityAt" TEXT NOT NULL,
-        "createdAt" TEXT NOT NULL, "updatedAt" TEXT NOT NULL, "importKey" TEXT, "lastSeq" INTEGER,
-        "image" TEXT, UNIQUE ("createdBy", "importKey"))"#,
-    r#"CREATE TABLE public."ConversationMember" (
-        "conversationId" TEXT NOT NULL, "principalId" TEXT NOT NULL,
-        "principalKind" TEXT NOT NULL, "addedBy" TEXT, "joinedAt" TEXT NOT NULL,
-        "leftAt" TEXT, "lastReadAt" TEXT,
-        "status" TEXT NOT NULL DEFAULT 'ACTIVE', "limits" TEXT, "invitedBy" TEXT, "invitedAt" TEXT,
-        "acceptedAt" TEXT, "hiddenAt" TEXT, "clearedAt" TEXT, "clearedLegacyAt" TEXT, "clearedSeq" INTEGER, PRIMARY KEY ("conversationId", "principalId"))"#,
-    r#"CREATE TABLE public."InboxEntry" (
-        "id" TEXT PRIMARY KEY, "inboxId" TEXT NOT NULL, "conversationId" TEXT NOT NULL,
-        "messageId" TEXT NOT NULL, "senderId" TEXT NOT NULL, "kind" TEXT NOT NULL,
-        "envelope" TEXT NOT NULL, "createdAt" TEXT NOT NULL, "seq" INTEGER, "cleared" BOOLEAN, UNIQUE ("inboxId", "messageId"),
-        UNIQUE ("inboxId", "conversationId", "seq"))"#,
-    r#"CREATE TABLE public."App" ("id" TEXT PRIMARY KEY, "botId" TEXT UNIQUE)"#,
-    r#"CREATE TABLE public."BotTurn" (
-        "id" TEXT PRIMARY KEY, "botId" TEXT NOT NULL, "ownerId" TEXT NOT NULL,
-        "conversationId" TEXT NOT NULL, "triggerMessageId" TEXT NOT NULL,
-        "hostKind" TEXT NOT NULL, "status" TEXT NOT NULL, "attempts" INTEGER NOT NULL,
-        "hostId" TEXT, "leaseUntil" TEXT, "operationId" TEXT, "replyMessageId" TEXT,
-        "errorCode" TEXT, "hops" INTEGER NOT NULL, "requesterId" TEXT,
-        "audience" TEXT NOT NULL DEFAULT 'OWNER', "createdAt" TEXT NOT NULL,
-        "updatedAt" TEXT NOT NULL, UNIQUE ("botId", "triggerMessageId"))"#,
-];
-
-async fn database() -> DatabaseConnection {
-    let mut options = ConnectOptions::new("sqlite::memory:");
-    options.max_connections(1);
-    let db = Database::connect(options).await.unwrap();
-    db.execute_unprepared("ATTACH DATABASE ':memory:' AS public")
-        .await
-        .unwrap();
-    let schema = Schema::new(db.get_database_backend());
-    for source in [
-        schema.create_table_from_entity(bot::Entity),
-        schema.create_table_from_entity(crate::entity::mutation_lock::Entity),
-    ] {
-        let mut table = Table::create();
-        table.table(source.get_table_name().unwrap().clone());
-        for column in source.get_columns() {
-            table.col(column.clone());
-        }
-        db.execute(&table).await.unwrap();
-    }
-    for statement in INBOX_TABLES
-        .iter()
-        .chain(&super::marks::TEST_TABLES)
-        .chain(&super::blocks::TEST_TABLES)
-    {
-        db.execute_unprepared(statement).await.unwrap();
-    }
-    db
-}
 
 /// Test times lie in the past, before [`now`].
 fn at(seconds: i64) -> DateTime<FixedOffset> {
@@ -121,6 +60,7 @@ async fn insert_bot(db: &DatabaseConnection, id: &str, owner_id: &str, deleted: 
         capabilities: Set(Default::default()),
         profile_id: Set(None),
         location: Set("DESKTOP".into()),
+        execution_mode: Set(None),
         device_id: Set(None),
         created_at: Set(at(0)),
         updated_at: Set(at(0)),

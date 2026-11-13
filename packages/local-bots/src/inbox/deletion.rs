@@ -162,6 +162,7 @@ impl LocalBotStore {
             )?;
             tx.execute("DELETE FROM pinned_conversations WHERE conversation_id = ?1", [conversation_id])?;
             tx.execute("DELETE FROM starred_messages WHERE conversation_id = ?1", [conversation_id])?;
+            tx.execute("DELETE FROM parked_turns WHERE conversation_id = ?1", [conversation_id])?;
             if current.kind == ConversationKind::Direct {
                 tx.execute("DELETE FROM bot_notes WHERE conversation_id = ?1", [conversation_id])?;
             }

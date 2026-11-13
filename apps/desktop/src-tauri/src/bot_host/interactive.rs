@@ -90,15 +90,31 @@ use super::{
     memory::{hub_source_for, source_for},
     store::HostStore,
 };
-use flow_like::flow::copilot::MemoryTurnSource;
+use flow_like::flow::copilot::{MemoryTurnSource, ReplyFiles, ToolTrail};
 use flow_like_local_bots::{InboxEntry, SendEntryRequest};
 use flow_like_types::{
+    bot_message::AttachmentPart,
     bot_turn::{INTERACTIVE_HOST_PREFIX, reply_message_id, turn_id},
     inbox::{InboxEntryKind, plain_envelope},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
+
+/// The loop that extends a hub hold; it stops when the owner of the run lets go of it.
+pub struct HoldLoop(tokio::task::JoinHandle<()>);
+
+impl HoldLoop {
+    pub fn abort(&self) {
+        self.0.abort();
+    }
+}
+
+impl Drop for HoldLoop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 const HOLD_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -119,11 +135,14 @@ enum Home {
 /// An interactive run's way to the bot's inbox: the local store for a conversation on this
 /// computer, the hub for an account conversation.
 pub struct InteractiveRun {
+    pub usage: flow_like::flow::copilot::bot_usage::BotUsage,
     bot_id: String,
     args: InteractiveArgs,
     home: Home,
     encryption: Option<Arc<super::e2e::E2eHost>>,
     notes: Option<flow_like::flow::copilot::bot_notes::NotesHandle>,
+    trail: Option<ToolTrail>,
+    reply_files: ReplyFiles,
 }
 
 impl InteractiveRun {
@@ -144,11 +163,14 @@ impl InteractiveRun {
             Home::Account(hub?)
         };
         Some(Self {
+            usage: Default::default(),
             bot_id: bot_id.to_owned(),
             args,
             home,
             encryption: None,
             notes: None,
+            trail: None,
+            reply_files: ReplyFiles::new(),
         })
     }
 
@@ -156,20 +178,65 @@ impl InteractiveRun {
         &self.args.conversation_id
     }
 
+    /// The conversation's newest entries around the trigger, newest first.
+    async fn entries(&self) -> Result<Vec<InboxEntry>, String> {
+        match &self.home {
+            Home::Local(store) => store.newest(&self.args.conversation_id).await,
+            Home::Account(hub) => hub
+                .entries_for_turn(
+                    &self.bot_id,
+                    &self.args.conversation_id,
+                    &self.args.trigger_message_id,
+                )
+                .await
+                .map_err(|error| error.to_string()),
+        }
+    }
+
     /// Read the stored trigger rather than accepting a memory policy from the window.
     pub async fn ephemeral_user_context(&self) -> Result<bool, String> {
-        let entries = match &self.home {
-            Home::Local(store) => store.newest(&self.args.conversation_id).await?,
-            Home::Account(hub) => hub
-                .entries_for_turn(&self.bot_id, &self.args.conversation_id, &self.args.trigger_message_id)
-                .await
-                .map_err(|error| error.to_string())?,
+        let entries = self.entries().await?;
+        Ok(
+            trigger_of(entries, &self.args.trigger_message_id).is_some_and(|entry| {
+                entry.envelope.get("body").is_some_and(|body| {
+                    flow_like_types::bot_user_context::response_for(
+                        body,
+                        &entry.sender_id,
+                        &self.bot_id,
+                    )
+                })
+            }),
+        )
+    }
+
+    /// The files the stored trigger carries that were uploaded to this conversation.
+    pub async fn trigger_files(&self) -> Vec<AttachmentPart> {
+        let Ok(entries) = self.entries().await else {
+            return Vec::new();
         };
-        Ok(trigger_of(entries, &self.args.trigger_message_id).is_some_and(|entry| {
-            entry.envelope.get("body").is_some_and(|body| {
-                flow_like_types::bot_user_context::response_for(body, &entry.sender_id, &self.bot_id)
+        trigger_of(entries, &self.args.trigger_message_id)
+            .and_then(|entry| super::rule::parse_body(&entry))
+            .map(|body| {
+                body.conversation_attachments(&self.args.conversation_id)
+                    .cloned()
+                    .collect()
             })
-        }))
+            .unwrap_or_default()
+    }
+
+    /// Whether the stored trigger is a spoken transcript: the run is a turn of a live call.
+    pub async fn live_call(&self) -> Result<bool, String> {
+        let entries = self.entries().await?;
+        Ok(trigger_of(entries, &self.args.trigger_message_id)
+            .is_some_and(|entry| entry.kind == InboxEntryKind::Transcript))
+    }
+
+    /// Session snapshots of user context still usable up to the trigger, for a turn whose
+    /// history comes from memory.
+    pub async fn shared_context(&self) -> Option<String> {
+        let mut entries = self.entries().await.ok()?;
+        entries.reverse();
+        super::transcript::shared_context(&entries, &self.args.trigger_message_id, &self.bot_id)
     }
 
     /// Whether legacy owner memory is available, and whether it must be read-only. This is
@@ -242,6 +309,28 @@ impl InteractiveRun {
         };
         self.notes = Some(handle.clone());
         Some(handle)
+    }
+
+    /// The run's tool trail: the bot's earlier calls in this direct conversation for the prompt,
+    /// and this run's calls for the reply. Sealed replies stay out of the section.
+    pub async fn trail(&mut self) -> Option<ToolTrail> {
+        let mut entries = self.entries().await.ok()?;
+        entries.reverse();
+        let upto = entries
+            .iter()
+            .position(|entry| entry.message_id == self.args.trigger_message_id)
+            .map_or(entries.len(), |index| index + 1);
+        let trail = ToolTrail::new(flow_like_bot_host::transcript::tool_trail(
+            &self.bot_id,
+            &entries[..upto],
+        ));
+        self.trail = Some(trail.clone());
+        Some(trail)
+    }
+
+    /// The files the run attaches to its reply.
+    pub fn reply_files(&self) -> ReplyFiles {
+        self.reply_files.clone()
     }
 
     pub fn host_id(&self) -> String {
@@ -321,12 +410,6 @@ impl InteractiveRun {
                     .ok_or_else(|| {
                         "The message this bot turn answers could not be read".to_string()
                     })?;
-                let mut recovery = flow_like_bot_host::recovery::HubRecovery::new(
-                    hub.clone(),
-                    &turn,
-                    &self.host_id(),
-                    deadline,
-                );
                 if flow_like_bot_host::e2e::is_sealed(trigger) {
                     let encryption = encryption
                         .ok_or_else(|| "This bot's encryption keys are unavailable".to_string())?;
@@ -334,9 +417,22 @@ impl InteractiveRun {
                         .open_entries(&self.bot_id, &self.args.trigger_message_id, entries)
                         .await
                         .map_err(|error| error.message)?;
+                    self.encryption = Some(encryption);
+                }
+                // The hub keeps checkpoints only for desktop turns: a server or device turn is
+                // recovered by its own host, so this chat answers it without a checkpoint.
+                if turn.host_kind != flow_like_types::bot_turn::TurnHostKind::Desktop {
+                    return Ok(None);
+                }
+                let mut recovery = flow_like_bot_host::recovery::HubRecovery::new(
+                    hub.clone(),
+                    &turn,
+                    &self.host_id(),
+                    deadline,
+                );
+                if let Some(encryption) = &self.encryption {
                     recovery = recovery
                         .with_encryption(encryption.clone(), self.args.conversation_id.clone());
-                    self.encryption = Some(encryption);
                 }
                 Ok(Some(Arc::new(recovery)))
             }
@@ -399,12 +495,12 @@ impl InteractiveRun {
     }
 
     /// Keeps the hub's hosts away while the run streams; local runs are held by [`begin`].
-    pub fn hold(&self) -> Option<tokio::task::JoinHandle<()>> {
+    pub fn hold(&self) -> Option<HoldLoop> {
         let Home::Account(hub) = &self.home else {
             return None;
         };
         let (hub, path) = (hub.clone(), format!("bots/turns/{}/hold", self.turn_id()));
-        Some(tokio::spawn(async move {
+        Some(HoldLoop(tokio::spawn(async move {
             loop {
                 match hub.write(&path, Vec::new(), json!({})).await {
                     Ok(value) if value.get("held").and_then(Value::as_bool) == Some(false) => {
@@ -415,7 +511,7 @@ impl InteractiveRun {
                 }
                 tokio::time::sleep(HOLD_EVERY).await;
             }
-        }))
+        })))
     }
 
     fn body(&self, text: &str, error_code: Option<&str>) -> Value {
@@ -426,9 +522,17 @@ impl InteractiveRun {
         });
         if let Some(code) = error_code {
             body["error"] = json!({ "code": code });
-        } else if let Some(notes) = &self.notes {
+            self.usage.attach(&mut body);
+            return body;
+        }
+        if let Some(notes) = &self.notes {
             flow_like_bot_host::notes::attach_note(&mut body, notes.touched().as_ref());
         }
+        self.reply_files.attach(&mut body);
+        if let Some(trail) = &self.trail {
+            trail.attach(&mut body);
+        }
+        self.usage.attach(&mut body);
         body
     }
 
@@ -444,10 +548,14 @@ impl InteractiveRun {
                     envelope: Some(plain_envelope(body)),
                     envelopes: None,
                 };
-                store
+                let sent = request
+                    .envelope
+                    .as_ref()
+                    .and_then(|envelope| envelope["body"]["text"].as_str().map(str::to_owned));
+                let stored = store
                     .send(&self.args.conversation_id, &self.bot_id, request)
-                    .await
-                    .map(|_| true)
+                    .await?;
+                Ok(stored.envelope["body"]["text"].as_str() == sent.as_deref())
             }
             Home::Account(hub) => {
                 let mut message = json!({
@@ -510,7 +618,7 @@ pub(crate) async fn open_for_app(
 pub(crate) struct Finish {
     pub run: InteractiveRun,
     pub guard: RunGuard,
-    pub hold: Option<tokio::task::JoinHandle<()>>,
+    pub hold: Option<HoldLoop>,
     pub memory: Option<MemoryTurnSource>,
 }
 

@@ -100,7 +100,13 @@ pub async fn get_comments(
             rating: c.rating,
             user_name: u
                 .as_ref()
-                .and_then(|u| u.name.clone().or(u.username.clone()))
+                .and_then(|u| {
+                    crate::routes::user::identity::public_display_name(
+                        u.name.as_deref(),
+                        u.preferred_username.as_deref(),
+                        u.email.as_deref(),
+                    )
+                })
                 .or_else(|| Some(c.user_id.clone())),
             user_avatar: u.as_ref().and_then(|u| u.avatar.clone()),
             user_id: c.user_id,

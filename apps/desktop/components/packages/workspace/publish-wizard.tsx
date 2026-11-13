@@ -32,6 +32,7 @@ import type {
 	PackageInspection,
 	PublishArtifacts,
 } from "@flow-like/flow-like-ui/lib/schema/developer";
+import { publicNameFromClaims } from "@flow-like/flow-like-ui/lib/user-display";
 import { Trans, i18n as i18next, useTranslation } from "@flow-like/locales";
 import { useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
@@ -522,20 +523,14 @@ export function PublishWizard({
 				);
 			}
 
+			const authorName = publicNameFromClaims(auth.user?.profile);
 			const publishManifest: PublishManifest = {
 				manifestVersion: 2,
 				id: formData.id,
 				name: formData.name,
 				version: formData.version,
 				description: formData.description,
-				authors: auth.user?.profile.name
-					? [
-							{
-								name: auth.user.profile.name,
-								email: auth.user.profile.email,
-							},
-						]
-					: [],
+				authors: authorName ? [{ name: authorName }] : [],
 				license: formData.license || undefined,
 				repository: formData.repository || undefined,
 				homepage: formData.homepage || undefined,

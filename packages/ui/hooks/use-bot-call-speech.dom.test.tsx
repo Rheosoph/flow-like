@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
 import { i18n } from "@flow-like/locales";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
@@ -17,12 +17,16 @@ import type {
 	IInboxEntry,
 } from "../state/backend-state/inbox-state";
 import { useBotCallSpeech } from "./use-bot-call-speech";
-import type { ConversationCallState } from "./use-conversation-call";
+import type {
+	BotSpeechControl,
+	ConversationCallState,
+} from "./use-conversation-call";
 
 installDomGlobals();
 const { createRoot } = await import("react-dom/client");
 const previousBackend = useBackendStore.getState().backend;
 beforeAll(installDomGlobals);
+spyOn(console, "info").mockImplementation(() => {});
 afterAll(() => {
 	useBackendStore.setState({ backend: previousBackend });
 	restoreDomGlobals();
@@ -69,9 +73,12 @@ async function fixture(
 		pin?: string | null;
 		profileBits?: IBit[] | Promise<IBit[]>;
 		installed?: boolean;
+		warmFails?: boolean;
+		encrypted?: boolean;
 	} = {},
 ) {
 	const requests: unknown[] = [];
+	const warmups: unknown[] = [];
 	const played: string[] = [];
 	let capabilities: readonly string[] = [];
 	let lookups = 0;
@@ -104,6 +111,10 @@ async function fixture(
 				requests.push(request);
 				return new Blob([request.text]);
 			},
+			warm: async (request: unknown) => {
+				warmups.push(request);
+				if (options.warmFails) throw new Error("warm failed");
+			},
 		},
 	} as never);
 	const client = new QueryClient({
@@ -113,6 +124,9 @@ async function fixture(
 	window.document.body.append(host);
 	const root = createRoot(host as never);
 	let joined = false;
+	let participants: unknown[] = [{}, {}];
+	let control: BotSpeechControl | null = null;
+	const registrations: (BotSpeechControl | null)[] = [];
 	let entries = [entry("spoken", 1), entry("old", 2, true)];
 	const controls = {
 		setBotVoiceCapabilities: (ids: readonly string[]) => {
@@ -125,10 +139,17 @@ async function fixture(
 		stopBotSpeech: () => {
 			stops++;
 		},
+		registerSpeechControl: (next: BotSpeechControl | null) => {
+			control = next;
+			registrations.push(next);
+		},
+		speechProgress: () => null,
 	};
 	function Harness() {
 		useBotCallSpeech({
-			conversation,
+			conversation: options.encrypted
+				? { ...conversation, encryption: "e2e" }
+				: conversation,
 			entries,
 			items: foldInboxEntries(entries),
 			historyReady: true,
@@ -139,7 +160,7 @@ async function fixture(
 			call: {
 				...controls,
 				joined,
-				live: joined ? { callId: "call" } : null,
+				live: joined ? { callId: "call", participants } : null,
 			} as unknown as ConversationCallState,
 		});
 		return null;
@@ -157,6 +178,7 @@ async function fixture(
 	await render();
 	return {
 		requests,
+		warmups,
 		played,
 		get capabilities() {
 			return capabilities;
@@ -169,6 +191,13 @@ async function fixture(
 		},
 		get stops() {
 			return stops;
+		},
+		get control() {
+			return control;
+		},
+		registrations,
+		alone(on: boolean) {
+			participants = on ? [{}] : [{}, {}];
 		},
 		async join() {
 			joined = true;
@@ -196,6 +225,25 @@ async function waitForVoice() {
 	});
 }
 
+test("a joined call warms each voice once and offers streamed replies, pause and resume", async () => {
+	const f = await fixture(false, "hosted:openrouter", undefined, undefined, {
+		warmFails: true,
+	});
+	try {
+		expect(f.warmups).toEqual([]);
+		await f.join();
+		await waitForVoice();
+		await f.add("again", 3);
+		await waitForVoice();
+		expect(f.warmups).toEqual([{ tts: { bit_id: "voice", local: false } }]);
+		expect(f.control?.stream?.("spoken", "bot")).not.toBeNull();
+		expect(f.control?.stream?.("spoken", "nobody")).toBeNull();
+		expect(f.control?.pause?.()).toBe(false);
+	} finally {
+		await f.dispose();
+	}
+});
+
 test("joined calls synthesize only new replies with the pinned hosted voice and stop on leave", async () => {
 	const f = await fixture(false, "hosted:openrouter", "af_heart");
 	try {
@@ -212,7 +260,7 @@ test("joined calls synthesize only new replies with the pinned hosted voice and 
 				text: "answer",
 				local: false,
 				voice: "af_heart",
-				format: "wav",
+				format: "mp3",
 			},
 		]);
 		expect(f.played).toEqual(["answer"]);
@@ -260,11 +308,13 @@ test("catalog speech limits split long call replies without dropping text", asyn
 		const text = "😀".repeat(4100);
 		await f.add("long-answer", 3, text);
 		await waitForVoice();
-		expect(f.played.map((chunk) => Array.from(chunk).length)).toEqual(
-			Array(41).fill(100),
-		);
+		expect(f.played.map((chunk) => Array.from(chunk).length)).toEqual([
+			80,
+			...Array(40).fill(100),
+			20,
+		]);
 		expect(f.played.join("")).toBe(text);
-		expect(f.requests).toHaveLength(41);
+		expect(f.requests).toHaveLength(42);
 	} finally {
 		await f.dispose();
 	}
@@ -304,7 +354,7 @@ test("unpinned bots use an installed profile voice on desktop or a hosted voice 
 					text: "answer",
 					local: desktop,
 					voice: "profile-voice",
-					format: "wav",
+					format: desktop ? "wav" : "mp3",
 				},
 			]);
 			expect(f.played).toEqual(["answer"]);
@@ -337,6 +387,50 @@ test("uninstalled local defaults fall back to hosted speech and absent voices le
 				});
 		} finally {
 			await f.dispose();
+		}
+	}
+});
+
+test("an encrypted conversation speaks only with a voice on this device", async () => {
+	const profileBits = [
+		profileVoice("local-voice", "local:any-tts"),
+		profileVoice("hosted-voice", "hosted:openrouter"),
+	];
+	const onDevice = await fixture(true, undefined, undefined, undefined, {
+		pin: null,
+		profileBits,
+		encrypted: true,
+	});
+	try {
+		await onDevice.join();
+		await onDevice.add("answer", 3);
+		await waitForVoice();
+		expect(onDevice.requests).toEqual([
+			expect.objectContaining({ bit_id: "hub:local-voice", local: true }),
+		]);
+	} finally {
+		await onDevice.dispose();
+	}
+	for (const options of [
+		{ pin: null, profileBits, installed: false },
+		{ profileBits },
+	]) {
+		const hostedOnly = await fixture(
+			true,
+			"hosted:openrouter",
+			undefined,
+			undefined,
+			{ ...options, encrypted: true },
+		);
+		try {
+			await hostedOnly.join();
+			await hostedOnly.add("answer", 3);
+			await waitForVoice();
+			expect(hostedOnly.capabilities).toEqual([]);
+			expect(hostedOnly.requests).toEqual([]);
+			expect(hostedOnly.warmups).toEqual([]);
+		} finally {
+			await hostedOnly.dispose();
 		}
 	}
 });
@@ -400,4 +494,42 @@ test("a language change does not rebuild the speech scheduler", async () => {
 		});
 		await f.dispose();
 	}
+});
+
+test("the call receives a speech control while joined, and it is withdrawn on leave", async () => {
+	const f = await fixture(false);
+	try {
+		expect(f.control).toBeNull();
+		await f.join();
+		expect(f.control).not.toBeNull();
+		expect(f.control?.interrupt()).toBeNull();
+		expect(f.control?.echoText("bot")).toBe("old");
+		expect(f.control?.echoText("other")).toBeNull();
+		await f.add("answer", 3, "The answer is **forty-two**.");
+		await waitForVoice();
+		expect(f.control?.echoText("bot")).toBe("The answer is forty-two.");
+		await f.leave();
+		expect(f.control).toBeNull();
+	} finally {
+		await f.dispose();
+	}
+});
+
+test("a one-person call skips the election delay, a shared call waits for it", async () => {
+	const quick = async (alone: boolean) => {
+		const f = await fixture(false);
+		try {
+			f.alone(alone);
+			await f.join();
+			await f.add("answer", 3);
+			await act(async () => {
+				await new Promise((resolve) => setTimeout(resolve, 80));
+			});
+			return f.played.length;
+		} finally {
+			await f.dispose();
+		}
+	};
+	expect(await quick(true)).toBe(1);
+	expect(await quick(false)).toBe(0);
 });

@@ -44,59 +44,22 @@ fn ensure_consistent_batches(
 }
 
 #[cfg(feature = "execute")]
-pub fn batches_to_rows(
+fn batches_to_value_rows(
     batches: &[flow_like_storage::datafusion::arrow::record_batch::RecordBatch],
-) -> flow_like_types::Result<Vec<QueryRow>> {
-    if batches.is_empty() {
-        return Ok(vec![]);
-    }
+) -> flow_like_types::Result<(Vec<String>, Vec<Vec<Value>>)> {
+    let Some(first) = batches.first() else {
+        return Ok((vec![], vec![]));
+    };
 
     ensure_consistent_batches(batches)?;
-    let schema = batches[0].schema();
+    let schema = first.schema();
     let headers: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
-    ensure_unique_columns(&headers)?;
-    let mut rows: Vec<QueryRow> = Vec::new();
+    let mut rows: Vec<Vec<Value>> =
+        Vec::with_capacity(batches.iter().map(|batch| batch.num_rows()).sum());
 
     for batch in batches {
         for row_idx in 0..batch.num_rows() {
-            let mut row: QueryRow = HashMap::with_capacity(batch.num_columns());
-
-            for (col_idx, header) in headers.iter().enumerate() {
-                let col = batch.column(col_idx);
-                let value = array_value_to_json_with_field(
-                    col.as_ref(),
-                    Some(batch.schema().field(col_idx)),
-                    row_idx,
-                )?;
-                row.insert(header.clone(), value);
-            }
-
-            rows.push(row);
-        }
-    }
-
-    Ok(rows)
-}
-
-#[cfg(feature = "execute")]
-pub fn batches_to_csv_table(
-    batches: &[flow_like_storage::datafusion::arrow::record_batch::RecordBatch],
-) -> flow_like_types::Result<CSVTable> {
-    use flow_like_types::Value as JsonValue;
-
-    if batches.is_empty() {
-        return Ok(CSVTable::new(vec![], vec![], None));
-    }
-
-    ensure_consistent_batches(batches)?;
-    let schema = batches[0].schema();
-    let headers: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
-
-    let mut rows: Vec<Vec<JsonValue>> = Vec::new();
-
-    for batch in batches {
-        for row_idx in 0..batch.num_rows() {
-            let mut row: Vec<JsonValue> = Vec::with_capacity(batch.num_columns());
+            let mut row: Vec<Value> = Vec::with_capacity(batch.num_columns());
 
             for col_idx in 0..batch.num_columns() {
                 let col = batch.column(col_idx);
@@ -112,7 +75,50 @@ pub fn batches_to_csv_table(
         }
     }
 
+    Ok((headers, rows))
+}
+
+#[cfg(feature = "execute")]
+fn value_rows_to_query_rows(headers: &[String], rows: &[Vec<Value>]) -> Vec<QueryRow> {
+    rows.iter()
+        .map(|row| {
+            headers
+                .iter()
+                .cloned()
+                .zip(row.iter().cloned())
+                .collect::<QueryRow>()
+        })
+        .collect()
+}
+
+#[cfg(feature = "execute")]
+pub fn batches_to_rows(
+    batches: &[flow_like_storage::datafusion::arrow::record_batch::RecordBatch],
+) -> flow_like_types::Result<Vec<QueryRow>> {
+    let (headers, rows) = batches_to_value_rows(batches)?;
+    ensure_unique_columns(&headers)?;
+    Ok(value_rows_to_query_rows(&headers, &rows))
+}
+
+#[cfg(feature = "execute")]
+pub fn batches_to_csv_table(
+    batches: &[flow_like_storage::datafusion::arrow::record_batch::RecordBatch],
+) -> flow_like_types::Result<CSVTable> {
+    let (headers, rows) = batches_to_value_rows(batches)?;
     Ok(CSVTable::new(headers, rows, None))
+}
+
+/// Both result shapes from one pass over the batches. The row objects keep the raw JSON values,
+/// so they match `batches_to_rows` exactly; deriving them from the table would normalize
+/// date-like strings, stringify unsigned values beyond i64 and flatten nested values.
+#[cfg(feature = "execute")]
+pub fn batches_to_table_and_rows(
+    batches: &[flow_like_storage::datafusion::arrow::record_batch::RecordBatch],
+) -> flow_like_types::Result<(CSVTable, Vec<QueryRow>)> {
+    let (headers, rows) = batches_to_value_rows(batches)?;
+    ensure_unique_columns(&headers)?;
+    let query_rows = value_rows_to_query_rows(&headers, &rows);
+    Ok((CSVTable::new(headers, rows, None), query_rows))
 }
 
 #[cfg(all(test, feature = "execute"))]
@@ -267,8 +273,8 @@ fn array_value_to_json_with_field(
         DataType::Date64 => {
             let arr = typed_column::<Date64Array>(array)?;
             let ms = arr.value(idx);
-            let secs = ms / 1000;
-            let nsecs = ((ms % 1000) * 1_000_000) as u32;
+            let secs = ms.div_euclid(1000);
+            let nsecs = (ms.rem_euclid(1000) * 1_000_000) as u32;
             if let Some(dt) = chrono::DateTime::from_timestamp(secs, nsecs) {
                 JsonValue::String(dt.format("%Y-%m-%dT%H:%M:%S").to_string())
             } else {
@@ -319,11 +325,16 @@ fn array_value_to_json_with_field(
         _ => {
             use flow_like_storage::arrow::util::display::{ArrayFormatter, FormatOptions};
             let options = FormatOptions::default();
+            // Text stays text: only a numeric type, plain or dictionary-encoded, becomes a number.
+            let numeric = match array.data_type() {
+                DataType::Dictionary(_, values) => values.is_numeric(),
+                other => other.is_numeric(),
+            };
             match ArrayFormatter::try_new(array, &options) {
-                Ok(formatter) => {
-                    let formatted = formatter.value(idx).to_string();
-                    decimal_string_to_json(formatted)
+                Ok(formatter) if numeric => {
+                    decimal_string_to_json(formatter.value(idx).to_string())
                 }
+                Ok(formatter) => JsonValue::String(formatter.value(idx).to_string()),
                 Err(_) => JsonValue::Null,
             }
         }
@@ -362,6 +373,7 @@ fn list_values_to_json_with_field(
     Ok(Value::Array(items))
 }
 
+/// A number when JSON can hold the value exactly, otherwise its decimal text.
 #[cfg(feature = "execute")]
 fn decimal_string_to_json(raw: String) -> Value {
     if let Ok(value) = raw.parse::<i64>() {
@@ -598,6 +610,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn single_pass_conversion_matches_the_separate_conversions() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("label", DataType::Utf8, true),
+            Field::new("big", DataType::UInt64, true),
+            Field::new("score", DataType::Float64, true),
+            Field::new("tags", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), None, Some(3)])),
+                Arc::new(StringArray::from(vec![
+                    Some("2021-01-01"),
+                    Some("plain"),
+                    None,
+                ])),
+                Arc::new(UInt64Array::from(vec![Some(u64::MAX), Some(5), None])),
+                Arc::new(Float64Array::from(vec![Some(1.5), None, Some(-2.0)])),
+                Arc::new(StringArray::from(vec![None, Some("[1,2]"), Some("x")])),
+            ],
+        )
+        .unwrap();
+        let batches = [batch.clone(), batch];
+
+        let (table, rows) = batches_to_table_and_rows(&batches).unwrap();
+
+        assert_eq!(rows, batches_to_rows(&batches).unwrap());
+        assert_eq!(json!(table), json!(batches_to_csv_table(&batches).unwrap()));
+        assert_eq!(rows.len(), 6);
+        assert_eq!(rows[0].get("big"), Some(&json!(u64::MAX)));
+        assert_eq!(table.row_count(), 6);
+
+        let (empty_table, empty_rows) = batches_to_table_and_rows(&[]).unwrap();
+        assert_eq!(empty_table.row_count(), 0);
+        assert!(empty_rows.is_empty());
+    }
+
+    #[tokio::test]
     async fn test_batches_to_csv_table_empty() {
         let result = batches_to_csv_table(&[]).unwrap();
         assert_eq!(result.row_count(), 0);
@@ -731,6 +782,43 @@ mod tests {
 
         assert_eq!(array_value_to_json(&integer_array, 0).unwrap(), json!(12));
         assert_eq!(array_value_to_json(&scaled_array, 0).unwrap(), json!(57.5));
+    }
+
+    #[tokio::test]
+    async fn dictionary_strings_stay_strings_and_dictionary_numbers_stay_numbers() {
+        let text: DictionaryArray<Int32Type> = vec!["007", "1.50", "abc"].into_iter().collect();
+        assert_eq!(array_value_to_json(&text, 0).unwrap(), json!("007"));
+        assert_eq!(array_value_to_json(&text, 1).unwrap(), json!("1.50"));
+        assert_eq!(array_value_to_json(&text, 2).unwrap(), json!("abc"));
+
+        let numbers = DictionaryArray::<Int32Type>::try_new(
+            Int32Array::from(vec![1, 0]),
+            Arc::new(Int64Array::from(vec![7, 12_345])),
+        )
+        .unwrap();
+        assert_eq!(array_value_to_json(&numbers, 0).unwrap(), json!(12_345));
+        assert_eq!(array_value_to_json(&numbers, 1).unwrap(), json!(7));
+    }
+
+    #[tokio::test]
+    async fn date64_before_the_epoch_keeps_its_millisecond_remainder() {
+        let array = Date64Array::from(vec![-1, -1_500, 1_500, 0]);
+        assert_eq!(
+            array_value_to_json(&array, 0).unwrap(),
+            json!("1969-12-31T23:59:59")
+        );
+        assert_eq!(
+            array_value_to_json(&array, 1).unwrap(),
+            json!("1969-12-31T23:59:58")
+        );
+        assert_eq!(
+            array_value_to_json(&array, 2).unwrap(),
+            json!("1970-01-01T00:00:01")
+        );
+        assert_eq!(
+            array_value_to_json(&array, 3).unwrap(),
+            json!("1970-01-01T00:00:00")
+        );
     }
 
     fn subscription_fields() -> (Arc<Field>, Arc<Field>) {

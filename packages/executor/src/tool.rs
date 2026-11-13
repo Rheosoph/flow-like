@@ -16,16 +16,20 @@ use flow_like::credentials::{SharedCredentials, StoreType};
 use flow_like::flow::execution::ExecutionEnvironment;
 use flow_like::flow_like_model_provider::provider::ModelProviderConfiguration;
 use flow_like::models::llm::ModelUsageContext;
+#[cfg(feature = "bot-tools-heavy")]
+use flow_like::profile::Profile;
 use flow_like::state::{FlowLikeConfig, FlowLikeState};
 use flow_like::utils::http::HTTPClient;
-use flow_like::profile::Profile;
+#[cfg(feature = "bot-tools-heavy")]
 use flow_like_bot_tools::image::{
     hosted_access, CatalogImages, ImageBackend, ImageBudget, ImageUnavailable,
 };
 use flow_like_bot_tools::{run, MemorySessions};
+#[cfg(feature = "bot-tools-heavy")]
+use flow_like_bot_tools_host::ImageSource;
 use flow_like_bot_tools_host::{
-    job_hash, outcome_output, AppAccess, HostEnv, ImageSource, JobModels, StateModels, ToolJob, ToolJobEnvelope,
-    ToolReply,
+    job_hash, outcome_output, AppAccess, HostEnv, JobModels, LinkedFiles, ModelSource, StateModels,
+    ToolJob, ToolJobEnvelope, ToolReply, VisionRouted,
 };
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::lancedb::Connection;
@@ -187,9 +191,14 @@ fn models(
     claims: &ExecutorClaims,
     token: &str,
     state: Arc<FlowLikeState>,
-) -> StateModels {
-    let JobModels { chat, embedding, .. } = job.models.clone();
-    StateModels {
+) -> VisionRouted {
+    let JobModels {
+        chat,
+        embedding,
+        vision,
+        ..
+    } = job.models.clone();
+    let base = StateModels {
         state,
         chat: bit_of(&chat),
         embedding: bit_of(&embedding),
@@ -199,11 +208,15 @@ fn models(
             run_id: Some(job.turn_id.clone()),
             api_base_url: flow_like::hub::hub_origin(&claims.callback_url, true),
         },
-    }
+    };
+    let vision =
+        bit_of(&vision).map(|bit| Arc::new(base.answering_with(bit)) as Arc<dyn ModelSource>);
+    VisionRouted::new(Arc::new(base), vision)
 }
 
 /// The image model of an `image_generate` job: the Bit the API opened for this job, called from
 /// here through the server's guarded client.
+#[cfg(feature = "bot-tools-heavy")]
 struct JobImages {
     bit: serde_json::Value,
     left: u32,
@@ -212,6 +225,7 @@ struct JobImages {
     usage: ModelUsageContext,
 }
 
+#[cfg(feature = "bot-tools-heavy")]
 fn job_images(
     job: &ToolJob,
     claims: &ExecutorClaims,
@@ -232,11 +246,10 @@ fn job_images(
     })
 }
 
+#[cfg(feature = "bot-tools-heavy")]
 #[async_trait]
 impl ImageSource for JobImages {
-    async fn images(
-        &self,
-    ) -> Result<Arc<dyn ImageBackend>, ImageUnavailable> {
+    async fn images(&self) -> Result<Arc<dyn ImageBackend>, ImageUnavailable> {
         let bit: Bit = serde_json::from_value(self.bit.clone())
             .map_err(|_| ImageUnavailable::Unusable("the job's image model is malformed".into()))?;
         let hosted = hosted_access(&self.state, Some(self.token.clone()), Some(&self.usage));
@@ -270,6 +283,7 @@ pub(crate) async fn run_job(
             .map_err(|error| forbidden(error.to_string()))?,
     )
     .await?;
+    #[cfg(feature = "bot-tools-heavy")]
     let images = job_images(&job, claims, &envelope.executor_jwt, &state);
     let skills = if matches!(
         job.tool.as_str(),
@@ -306,7 +320,9 @@ pub(crate) async fn run_job(
         .with_sessions(Arc::new(MemorySessions::default()))
         .with_expensive_documents(job.allow_expensive_documents)
         .with_secrets(Arc::new(job.secrets.clone()))
-        .with_connectors(flow_like_bot_tools_host::connector_source(&job.connectors));
+        .with_connectors(flow_like_bot_tools_host::connector_source(&job.connectors))
+        .with_conversation_files(Arc::new(LinkedFiles::new(job.files.clone())));
+    #[cfg(feature = "bot-tools-heavy")]
     if let Some(images) = images {
         env = env.with_images(Arc::new(images));
     }
@@ -322,6 +338,9 @@ pub(crate) async fn run_job(
                 format!("{} timed out", job.tool),
             )
         })?;
+    if let Some(error) = &outcome.error {
+        tracing::info!(tool = %job.tool, turn_id = %job.turn_id, code = error.code, "[bot_tools] tool call failed");
+    }
     Ok(ToolReply {
         output: outcome_output(&outcome),
         cpu_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
@@ -376,6 +395,7 @@ mod tests {
             secrets: Default::default(),
             connectors: Vec::new(),
             skill_call: None,
+            files: Vec::new(),
         }
     }
 

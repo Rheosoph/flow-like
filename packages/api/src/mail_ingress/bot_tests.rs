@@ -209,3 +209,89 @@ async fn mail_for_a_deleted_bot_has_no_destination() {
         .unwrap();
     assert_eq!(bot_of_address(&db, "ann@flow-like.me").await.unwrap(), None);
 }
+
+#[test]
+fn only_the_owners_own_profile_facts_name_owner_addresses() {
+    use super::owner_addresses::addresses_in;
+    use flow_like_bot_memory::{
+        facts::{Fact, FactKind},
+        model::FactSource,
+    };
+    let fact = |text: &str, subject: &str, kind: FactKind, source: FactSource| Fact {
+        id: "f".into(),
+        text: text.into(),
+        kind,
+        subject: subject.into(),
+        geojson: None,
+        time: None,
+        expires_at: None,
+        valid_from: None,
+        valid_to: None,
+        recorded_at: chrono::Utc::now(),
+        expired_at: None,
+        evidence: Vec::new(),
+        segment_id: None,
+        source,
+        confidence: 1.0,
+        superseded_by: None,
+        content_hash: String::new(),
+    };
+    let facts = vec![
+        fact(
+            "The user's email address is Me@Home.org.",
+            "user",
+            FactKind::Profile,
+            FactSource::UserStated,
+        ),
+        fact(
+            "Ann's email is ann@x.com",
+            "user.sister",
+            FactKind::Profile,
+            FactSource::UserStated,
+        ),
+        fact(
+            "The user's email is eve@x.com",
+            "user",
+            FactKind::Knowledge,
+            FactSource::ToolUntrusted,
+        ),
+        fact(
+            "The user's mail is bot@x.com",
+            "user",
+            FactKind::Profile,
+            FactSource::ToolUntrusted,
+        ),
+        fact(
+            "The user lives at 1 Main St, user@home",
+            "user",
+            FactKind::Profile,
+            FactSource::UserStated,
+        ),
+    ];
+    assert_eq!(addresses_in(&facts), vec!["me@home.org"]);
+}
+
+#[test]
+fn owner_mail_needs_a_passing_dmarc_verdict_and_only_named_senders() {
+    use super::owner_addresses::{dmarc_passed, from_addresses};
+    let signed = |dmarc: Option<InboundEmailVerdict>| InboundEmailAuthentication {
+        dmarc,
+        spf: verdict("PASS"),
+        dkim: verdict("PASS"),
+        ..Default::default()
+    };
+    assert!(dmarc_passed(Some(&signed(verdict("pass")))));
+    assert!(!dmarc_passed(Some(&signed(verdict("GRAY")))));
+    assert!(!dmarc_passed(Some(&signed(None))));
+    assert!(!dmarc_passed(None));
+    assert_eq!(
+        from_addresses(&email("Me@Home.org", json!({}))),
+        Some(vec!["me@home.org".to_owned()])
+    );
+    assert_eq!(from_addresses(&email("", json!({"from": []}))), None);
+    let mut nameless = email("me@home.org", json!({}));
+    nameless
+        .from
+        .push(serde_json::from_value(json!({"name": "x"})).unwrap());
+    assert_eq!(from_addresses(&nameless), None);
+}

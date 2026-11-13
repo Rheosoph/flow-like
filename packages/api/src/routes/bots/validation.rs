@@ -3,7 +3,7 @@ use crate::error::ApiError;
 use axum::http::StatusCode;
 use flow_like_types::{
     Value,
-    bot::{BotCapability, BotLocation, BotModelPolicy, BotSystemKind},
+    bot::{BotCapability, BotExecutionMode, BotLocation, BotModelPolicy, BotSystemKind},
     data_classification::DataSensitivity,
 };
 
@@ -62,6 +62,7 @@ fn new_bot(
         capabilities: Vec::new(),
         profile_id: None,
         location: BotLocation::Server,
+        execution_mode: BotExecutionMode::Native,
         device_id: None,
     };
     let fields = UpdateBotRequest {
@@ -80,6 +81,7 @@ fn new_bot(
         capabilities: request.capabilities,
         profile_id: Some(request.profile_id),
         location: request.location,
+        execution_mode: request.execution_mode,
         device_id: Some(request.device_id),
     };
     Ok((preset_id, empty, fields))
@@ -196,6 +198,7 @@ fn patch_scope(
         reference_id("profile_id", id)
     })?;
     replace(&mut next.location, patch.location.take(), Ok)?;
+    replace(&mut next.execution_mode, patch.execution_mode.take(), Ok)?;
     replace(&mut next.device_id, patch.device_id.take(), |id| {
         reference_id("device_id", id)
     })
@@ -239,7 +242,7 @@ fn patched_capabilities(
     ))
 }
 
-fn location_refusal(location: BotLocation, capability: BotCapability) -> String {
+pub(super) fn location_refusal(location: BotLocation, capability: BotCapability) -> String {
     let why = if capability == BotCapability::Encryption {
         " (its key lives only on the host that runs it, and the server must never read encrypted chats)"
     } else {
@@ -254,6 +257,15 @@ fn location_refusal(location: BotLocation, capability: BotCapability) -> String 
 
 /// Rules between fields, checked on every create and on the merged result of every update.
 pub(super) fn check_rules(settings: &BotSettings) -> Result<(), ApiError> {
+    if settings.execution_mode == BotExecutionMode::Docker
+        && settings.location != BotLocation::Device
+    {
+        return Err(ApiError::coded(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "BOT_EXECUTION_MODE_LOCATION",
+            "Docker hosting requires a managed device. Choose native execution explicitly before moving this bot to another host",
+        ));
+    }
     if let Some(capability) = settings
         .capabilities
         .iter()
@@ -286,6 +298,11 @@ fn bot_name(name: &str) -> Result<String, ApiError> {
     let name = name.trim();
     if name.is_empty() {
         return Err(ApiError::bad_request("Bot name must not be empty"));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(ApiError::bad_request(
+            "Bot name must not contain control characters or line breaks",
+        ));
     }
     let chars = name.chars().count();
     if chars > NAME_MAX_CHARS {
@@ -428,6 +445,7 @@ pub(super) fn system_defaults(kind: BotSystemKind) -> BotSettings {
         capabilities,
         profile_id: None,
         location: BotLocation::Server,
+        execution_mode: BotExecutionMode::Native,
         device_id: None,
     }
 }
@@ -465,6 +483,15 @@ mod tests {
     }
 
     #[test]
+    fn bot_names_reject_control_characters_and_line_breaks() {
+        for name in ["Scout\nwrote:", "Sc\tout", "Scout\u{7}", "a\r\nb"] {
+            let error = bot_name(name).unwrap_err();
+            assert_eq!(error.status(), StatusCode::BAD_REQUEST, "{name:?}");
+        }
+        assert_eq!(bot_name("  Scout  ").unwrap(), "Scout");
+    }
+
+    #[test]
     fn a_new_bot_starts_with_only_what_it_asks_for() {
         let (preset, settings) = create(json!({
             "name": "  Scout  ",
@@ -486,6 +513,46 @@ mod tests {
             .unwrap()
             .1;
         assert!(bare.capabilities.is_empty());
+    }
+
+    #[test]
+    fn docker_is_device_only_and_never_silently_downgraded() {
+        let native = custom();
+        assert_eq!(native.execution_mode, BotExecutionMode::Native);
+        for location in ["desktop", "server"] {
+            let error = patch(
+                &native,
+                None,
+                json!({"location":location, "execution_mode":"docker"}),
+            )
+            .unwrap_err();
+            assert_eq!(error.public_code(), "BOT_EXECUTION_MODE_LOCATION");
+        }
+        let isolated = patch(
+            &native,
+            None,
+            json!({
+                "location":"device", "device_id":"device-1", "execution_mode":"docker"
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            patch(&isolated, None, json!({"name":"Renamed"}))
+                .unwrap()
+                .execution_mode,
+            BotExecutionMode::Docker
+        );
+        assert!(patch(&isolated, None, json!({"location":"desktop"})).is_err());
+        assert_eq!(
+            patch(
+                &isolated,
+                None,
+                json!({"location":"desktop", "execution_mode":"native"})
+            )
+            .unwrap()
+            .execution_mode,
+            BotExecutionMode::Native
+        );
     }
 
     #[test]
@@ -538,18 +605,48 @@ mod tests {
             format!("{error:?}").contains("server must never read"),
             "{error:?}"
         );
-        for location in ["desktop", "device"] {
-            let bot = create(json!({
-                "name": "Vault",
+        let bot = create(json!({
+            "name": "Vault",
+            "appearance": { "kind": "pip" },
+            "capabilities": ["encryption"],
+            "location": "desktop",
+        }))
+        .unwrap()
+        .1;
+        assert!(bot.has(BotCapability::Encryption));
+    }
+
+    #[test]
+    fn a_device_holds_what_a_desktop_holds_and_a_move_keeps_the_capabilities() {
+        for id in ["connectors", "skills", "image_generation", "encryption"] {
+            let on_device = create(json!({
+                "name": "Worker",
                 "appearance": { "kind": "pip" },
-                "capabilities": ["encryption"],
-                "location": location,
-                "device_id": (location == "device").then_some("device-1"),
+                "capabilities": [id],
+                "location": "device",
+                "device_id": "device-1",
             }))
-            .unwrap()
+            .unwrap_or_else(|error| panic!("{id} on a device: {error:?}"))
             .1;
-            assert!(bot.has(BotCapability::Encryption), "{location}");
+            assert_eq!(on_device.location, BotLocation::Device, "{id}");
+            assert_eq!(on_device.capabilities.len(), 1, "{id}");
         }
+        let desktop = create(json!({
+            "name": "Worker",
+            "appearance": { "kind": "pip" },
+            "capabilities": ["skills", "command_line", "encryption"],
+            "location": "desktop",
+        }))
+        .unwrap()
+        .1;
+        let moved = patch(
+            &desktop,
+            None,
+            json!({ "location": "device", "device_id": "device-1" }),
+        )
+        .unwrap();
+        assert_eq!(moved.location, BotLocation::Device);
+        assert_eq!(moved.capabilities, desktop.capabilities);
     }
 
     #[test]
@@ -817,10 +914,7 @@ mod tests {
     fn tool_capabilities_are_accepted_on_every_location_and_kept_in_canonical_order() {
         let ids: Vec<&str> = vec![
             "delegation",
-            "image_generation",
-            "skills",
             "channels",
-            "connectors",
             "knowledge",
             "data_connections",
             "documents",

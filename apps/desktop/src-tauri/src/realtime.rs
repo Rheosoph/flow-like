@@ -4,7 +4,7 @@ use crate::native_auth::SessionBinding;
 use flow_like_types::realtime::{
     MAX_REALTIME_CONVERSATIONS, MAX_REALTIME_RESPONSE_BYTES, MAX_REALTIME_RUNS,
     MAX_REALTIME_TIMEOUT_MS, REALTIME_PROTOCOL_VERSION, RealtimePollRequest, RealtimePollResponse,
-    RealtimeTransportPreference,
+    RealtimeReply, RealtimeTransportPreference,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
@@ -51,6 +51,11 @@ pub(crate) enum RealtimeMessage {
     Update {
         delivery_id: String,
         response: RealtimePollResponse,
+    },
+    /// A reply its host is still writing. It belongs to no replay batch: nothing acknowledges
+    /// it and nothing resends it.
+    Reply {
+        reply: RealtimeReply,
     },
 }
 
@@ -380,6 +385,32 @@ fn set_state(session: &Session, connection: ConnectionState) {
                 .send(RealtimeMessage::State { state: connection })
                 .is_ok()
         });
+    }
+}
+
+/// Hands a reply to the windows that watch its conversation.
+fn deliver_reply(session: &Session, reply: &RealtimeReply) {
+    let mut state = lock(&session.state);
+    if !session.binding.is_current() {
+        return;
+    }
+    let before = state.subscribers.len();
+    state.subscribers.retain(|_, subscriber| {
+        let watches = subscriber
+            .request
+            .conversations
+            .iter()
+            .any(|watched| watched.conversation_id == reply.conversation_id);
+        !watches
+            || subscriber
+                .events
+                .send(RealtimeMessage::Reply {
+                    reply: reply.clone(),
+                })
+                .is_ok()
+    });
+    if state.subscribers.len() != before {
+        session.changed.notify_one();
     }
 }
 

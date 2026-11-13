@@ -113,7 +113,10 @@ function foldUsage(
 		if (entry.stats.model) models.add(entry.stats.model);
 		for (const call of entry.stats.calls ?? []) {
 			if (call.model) models.add(call.model);
-			if (typeof call.usage?.cost === "number") {
+			if (
+				typeof usage?.cost !== "number" &&
+				typeof call.usage?.cost === "number"
+			) {
 				cost += call.usage.cost;
 				hasCost = true;
 			}

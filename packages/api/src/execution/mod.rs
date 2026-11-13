@@ -60,11 +60,14 @@ pub use run_sweeper::{RunSweeperConfig, spawn_run_sweeper};
 pub(crate) use sse_proxy::completed_run_status;
 pub(crate) use sse_proxy::update_run_on_completion_with_runtime;
 pub(crate) use sse_proxy::{
-    CompletionWrites, executor_response_bytes, fail_run_on_stream_error, stream_failure_event,
-    stream_http_response, wants_http_event_stream,
+    CompletionWrites, EXECUTOR_DRAIN_TIMEOUT, STREAM_ENDED_WITHOUT_COMPLETION,
+    executor_response_bytes, fail_run_on_missing_completion, fail_run_on_stream_error, next_before,
+    observe_completed, run_initiated_event, stream_failure_event, stream_http_response,
+    wants_http_event_stream,
 };
 pub use sse_proxy::{
-    collect_generic_result, collect_generic_result_bytes, proxy_sse_response,
+    MissingResult, collect_generic_result, collect_generic_result_bytes,
+    collect_generic_result_outcome, proxy_sse_response,
     proxy_sse_response_with_page_actions, update_run_on_completion,
 };
 pub use state::{
@@ -72,7 +75,7 @@ pub use state::{
     ExecutionStateStore, RunMode, RunStatus, RunVariant, StateBackend, StateStoreConfig,
     StateStoreError, UpdateRunInput, create_state_store,
 };
-pub use wasm_resolve::resolve_wasm_packages;
+pub use wasm_resolve::{resolve_wasm_packages, try_resolve_wasm_packages};
 
 /// Canonical `ExecutionRun.version` label for a board version tuple —
 /// `v{major}-{minor}-{patch}`, the same key the LanceDB run store uses for

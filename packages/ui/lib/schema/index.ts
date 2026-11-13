@@ -26,6 +26,7 @@ export type { IImageEmbeddingModelParameters } from "./bit/bit/image-embedding-m
 export type { ILlmParameters } from "./bit/bit/llm-parameters";
 export type {
 	IBitModelClassification,
+	IDataClassification,
 	IModelProvider,
 } from "./bit/bit/llm-parameters";
 export { IModelApiSurface } from "./bit/bit/llm-parameters";

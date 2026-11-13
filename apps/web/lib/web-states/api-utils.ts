@@ -11,6 +11,7 @@ import {
 	CURRENT_BOARD_FORMAT_VERSION,
 } from "@flow-like/flow-like-ui/lib/board-format";
 import {
+	STREAM_HEADER_TIMEOUT_MS,
 	requestTimeoutMs,
 	withRequestDeadline,
 } from "@flow-like/flow-like-ui/lib/request-deadline";
@@ -304,5 +305,46 @@ export async function apiPostBlob(
 			return response.blob();
 		},
 		{ timeoutMs: requestTimeoutMs(cleanApiPath(path), "POST", payload.length) },
+	);
+}
+
+/** POST whose response body is read by the caller; only the headers are bounded by a deadline. */
+export async function apiPostStream(
+	path: string,
+	body: unknown,
+	auth?: AuthContextProps,
+	options?: { signal?: AbortSignal },
+): Promise<Response> {
+	const accessToken = auth?.user?.access_token;
+	const headers = new Headers({ "Content-Type": "application/json" });
+	if (accessToken) {
+		headers.set("Authorization", `Bearer ${accessToken}`);
+	}
+	const payload = jsonStringify(body);
+	const safePath = redactApiPathSecrets(path) ?? path;
+	const controller = new AbortController();
+	const caller = options?.signal;
+	if (caller?.aborted) controller.abort();
+	caller?.addEventListener("abort", () => controller.abort(), { once: true });
+	return withRequestDeadline<Response>(
+		safePath,
+		async (deadline) => {
+			const response = await fetchWithSession(
+				constructApiUrl(path),
+				{
+					method: "POST",
+					body: payload,
+					headers,
+					signal: deadline.signal,
+				},
+				auth,
+			);
+			if (!response.ok) {
+				throw apiResponseError(response, await response.text(), path);
+			}
+			deadline.release();
+			return response;
+		},
+		{ timeoutMs: STREAM_HEADER_TIMEOUT_MS, controller },
 	);
 }

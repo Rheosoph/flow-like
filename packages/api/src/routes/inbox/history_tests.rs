@@ -1057,3 +1057,58 @@ async fn a_person_keeps_their_own_parts_and_a_private_group_is_not_cut() {
         assert!(copy.envelope["body"]["parts"][0].get("result").is_some());
     }
 }
+
+#[tokio::test]
+async fn a_guest_in_someone_elses_direct_chat_gets_no_tool_details_but_the_owner_does() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", "DESKTOP").await;
+    insert_workspace(&db, "app_ws1", "bot_1").await;
+    let plain = ConversationEncryption::Plain;
+    let own = start_direct(&db, "user-a", &bot_principal("bot_1"), plain, at(0))
+        .await
+        .unwrap();
+    let guest = start_direct(&db, "user-b", &bot_principal("bot_1"), plain, at(0))
+        .await
+        .unwrap();
+    for (chat, prefix) in [(&own, "own"), (&guest, "guest")] {
+        send_in(
+            &db,
+            chat,
+            "bot_1",
+            &tool_reply(&format!("{prefix}_result")),
+            at(10),
+        )
+        .await
+        .unwrap();
+        send_in(
+            &db,
+            chat,
+            "bot_1",
+            &with_handle(&format!("{prefix}_handle"), "app_ws1"),
+            at(11),
+        )
+        .await
+        .unwrap();
+    }
+    for (message_id, field) in [("guest_result", "result"), ("guest_handle", "handle")] {
+        let held = copies(&db, message_id).await;
+        assert!(held.iter().any(|copy| copy.inbox_id == "user-b"));
+        for copy in held {
+            let tool = &copy.envelope["body"]["parts"][0];
+            assert!(tool.get(field).is_none(), "{message_id} {}", copy.inbox_id);
+            assert!(
+                tool["summary"].is_string(),
+                "{message_id} {}",
+                copy.inbox_id
+            );
+        }
+    }
+    for (message_id, field) in [("own_result", "result"), ("own_handle", "handle")] {
+        let held = copies(&db, message_id).await;
+        assert!(held.iter().any(|copy| copy.inbox_id == "user-a"));
+        for copy in held {
+            let tool = &copy.envelope["body"]["parts"][0];
+            assert!(tool.get(field).is_some(), "{message_id} {}", copy.inbox_id);
+        }
+    }
+}

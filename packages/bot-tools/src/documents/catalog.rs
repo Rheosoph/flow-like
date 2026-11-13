@@ -2,26 +2,26 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use flow_like_catalog_data::data::excel::workbook::{XlsxCell, XlsxSheet, build_workbook};
 use flow_like_catalog_data::data::excel::inspect::{
     StyleFilter, find_styled_cells, inspect_range, load_sheet, sheet_view, table_candidates,
     value_index, workbook_overview,
 };
 use flow_like_catalog_data::data::excel::sheet_compressor::EncodeOptions;
 use flow_like_catalog_data::data::excel::table_detect::ExtractConfig;
+use flow_like_catalog_data::data::excel::workbook::{XlsxCell, XlsxSheet, build_workbook};
+use flow_like_catalog_llm::llm::llm_extractor::{
+    ExtractOptions, extract_with_model, prepare_schema,
+};
+use flow_like_catalog_media_document::document::service::chart::{SHEET_NAME, WorkbookCell};
 use flow_like_catalog_media_document::document::service::docx::{DocxOptions, docx_from_markdown};
 use flow_like_catalog_media_document::document::service::fill::{
     FillInput, TableRows, TemplateKind, fill_template,
 };
 use flow_like_catalog_media_document::document::service::pdf::{PdfOptions, pdf_from_markdown};
-use flow_like_catalog_media_document::document::service::chart::{SHEET_NAME, WorkbookCell};
 use flow_like_catalog_media_document::document::service::pptx::{
     ChartKind as DeckChartKind, DeckOptions, Slide, SlideChart, SlideLayout, pptx_from_slides,
 };
 use flow_like_catalog_media_document::document::service::{Built, Images};
-use flow_like_catalog_llm::llm::llm_extractor::{
-    ExtractOptions, extract_with_model, prepare_schema,
-};
 use flow_like_catalog_media_image::image::pdf::{
     PageBackground, RenderOptions, page_count, render_pages,
 };
@@ -34,8 +34,8 @@ use flow_like_types::{Bytes, Result, anyhow};
 
 use super::backend::{
     BuiltDocument, ChartKind, DeckSlide, DocumentBackend, ExcelOperation, ExcelRequest, Extracted,
-    FillRows, FilledDocument, MarkdownDocument, ModelTokens, RenderedPng, SheetCell, SheetData,
-    SlideLayoutKind, Summary, SummaryRequest, TemplateFill,
+    FillRows, FilledDocument, MarkdownDocument, ModelReading, ModelTokens, RenderedPng, SheetCell,
+    SheetData, SlideLayoutKind, Summary, SummaryRequest, TemplateFill,
 };
 use crate::convert::{ConvertInput, Converted, DocumentConverter};
 
@@ -211,6 +211,17 @@ pub fn to_converted(document: &service::Document) -> Converted {
     Converted { text, page_starts }
 }
 
+async fn reader_for(model: Arc<dyn ModelLogic>) -> Result<service::ReaderClient> {
+    let model_name = model.default_model().await.unwrap_or_default();
+    service::build_llm_client(&ReaderModel {
+        model,
+        model_name,
+        thinking: HistoryThinking::Off,
+        config: LlmConfig::default(),
+    })
+    .await
+}
+
 #[async_trait]
 impl DocumentBackend for CatalogBackend {
     async fn summarize(
@@ -218,14 +229,7 @@ impl DocumentBackend for CatalogBackend {
         model: Arc<dyn ModelLogic>,
         request: SummaryRequest<'_>,
     ) -> Result<Summary> {
-        let model_name = model.default_model().await.unwrap_or_default();
-        let reader = service::build_llm_client(&ReaderModel {
-            model,
-            model_name,
-            thinking: HistoryThinking::Off,
-            config: LlmConfig::default(),
-        })
-        .await?;
+        let reader = reader_for(model).await?;
         let options = SummarizeOptions {
             goal: Some(request.goal.to_string()),
             language: request.language.map(str::to_string),
@@ -280,6 +284,28 @@ impl DocumentBackend for CatalogBackend {
         Ok(to_converted(&document))
     }
 
+    async fn read_with_model(
+        &self,
+        model: Arc<dyn ModelLogic>,
+        bytes: Bytes,
+        extension: Option<&str>,
+        source_path: &str,
+    ) -> Result<ModelReading> {
+        let reader = reader_for(model).await?;
+        let options = ConvertOptions {
+            extract_images: true,
+            force_ocr: false,
+            source_path: Some(source_path.to_string()),
+        };
+        let document = service::convert(bytes, extension, &options, Some(&reader)).await?;
+        let mut warnings = reader.warnings.clone();
+        warnings.extend(reader.rejected_settings());
+        Ok(ModelReading {
+            converted: to_converted(&document),
+            warnings,
+        })
+    }
+
     async fn excel(&self, bytes: Bytes, request: ExcelRequest) -> Result<String> {
         flow_like_types::tokio::task::spawn_blocking(move || inspect_workbook(&bytes, &request))
             .await
@@ -325,7 +351,8 @@ impl DocumentBackend for CatalogBackend {
                 workbook: Some(chart_workbook),
             },
             &slides,
-        ).map(built)
+        )
+        .map(built)
     }
 
     fn create_xlsx(&self, sheets: Vec<SheetData>) -> Result<BuiltDocument> {
@@ -426,7 +453,9 @@ mod tests {
     use crate::documents::{ChartKind, DeckChart, DeckSlide, SlideLayoutKind};
 
     fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-        haystack.windows(needle.len()).any(|window| window == needle)
+        haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
     }
 
     #[test]
@@ -464,8 +493,9 @@ mod tests {
         let workbook = &files["ppt/embeddings/Microsoft_Excel_Sheet1.xlsx"];
         assert!(workbook.starts_with(b"PK"));
         assert!(contains(workbook, b"xl/workbook.xml"));
-        let book = flow_like_catalog_data::data::excel::inspect::workbook_overview(workbook.clone())
-            .expect("readable workbook");
+        let book =
+            flow_like_catalog_data::data::excel::inspect::workbook_overview(workbook.clone())
+                .expect("readable workbook");
         assert_eq!(book.sheets[0].name, "Sheet1");
     }
 }

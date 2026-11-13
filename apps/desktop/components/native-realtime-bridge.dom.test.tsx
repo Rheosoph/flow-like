@@ -19,6 +19,22 @@ const state = vi.hoisted(() => ({
 	close: vi.fn(),
 	invalidateQueries: vi.fn().mockResolvedValue(undefined),
 	incomingCall: vi.fn(() => null),
+	poke: vi.fn(),
+	deliverReply: vi.fn(),
+	events: new Map<string, (event: { payload: unknown }) => void>(),
+	unlisten: vi.fn(),
+}));
+vi.mock("@flow-like/flow-like-ui/lib/realtime/reply-streams", () => ({
+	deliverRealtimeReply: state.deliverReply,
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+	listen: async (
+		name: string,
+		handler: (event: { payload: unknown }) => void,
+	) => {
+		state.events.set(name, handler);
+		return state.unlisten;
+	},
 }));
 
 vi.mock("./tauri-provider", () => ({
@@ -40,6 +56,7 @@ vi.mock("@tanstack/react-query", () => ({
 	useQueryClient: () => ({ invalidateQueries: state.invalidateQueries }),
 }));
 vi.mock("../lib/native-realtime", () => ({ watchNativeRealtime: state.watch }));
+vi.mock("../lib/bot-host-poke", () => ({ pokeBotHost: state.poke }));
 vi.mock("@flow-like/flow-like-ui/components/incoming-call-provider", () => ({
 	IncomingCallProvider: state.incomingCall,
 }));
@@ -56,6 +73,10 @@ beforeEach(() => {
 	state.watch.mockReset().mockReturnValue(state.close);
 	state.close.mockReset();
 	state.incomingCall.mockClear();
+	state.poke.mockClear();
+	state.deliverReply.mockClear();
+	state.events.clear();
+	state.unlisten.mockClear();
 	state.invalidateQueries.mockReset().mockResolvedValue(undefined);
 	host = document.createElement("div");
 	document.body.append(host);
@@ -98,6 +119,62 @@ describe("native realtime shell bridge", () => {
 		);
 	});
 
+	it("hands a reply to the reply store without touching the inbox", async () => {
+		await act(async () => root.render(<NativeRealtimeBridge />));
+		const { onMessage } = state.watch.mock.calls[0][0];
+		const reply = {
+			protocol_version: 1,
+			kind: "reply",
+			conversation_id: "remote-1",
+			message_id: "re-1",
+			reply_to: "m1",
+			sender_id: "bot",
+			offset: 0,
+			text: "Hi",
+			state: "writing",
+		};
+		await onMessage({ type: "reply", reply });
+		expect(state.deliverReply).toHaveBeenCalledWith(reply, "remote-1");
+		expect(state.invalidateQueries).not.toHaveBeenCalled();
+	});
+
+	it("hands a reply a bot host on this computer writes to the reply store, signed out too", async () => {
+		state.auth.isAuthenticated = false;
+		await act(async () => root.render(<NativeRealtimeBridge />));
+		const emit = state.events.get("bot-host://reply");
+		expect(emit).toBeDefined();
+		const reply = {
+			protocol_version: 1,
+			kind: "reply",
+			conversation_id: "local-1",
+			message_id: "re-1",
+			reply_to: "m1",
+			sender_id: "bot",
+			offset: 0,
+			text: "Here is the plan.",
+			state: "writing",
+			draft: 1,
+		};
+		emit?.({ payload: reply });
+		expect(state.deliverReply).toHaveBeenCalledExactlyOnceWith(
+			reply,
+			"local-1",
+		);
+		for (const payload of [
+			{ ...reply, state: "typing" },
+			{ ...reply, kind: "invalidate" },
+			{ ...reply, text: 5 },
+			{ ...reply, draft: -1 },
+			"not a reply",
+			null,
+		])
+			emit?.({ payload });
+		expect(state.deliverReply).toHaveBeenCalledOnce();
+		await act(async () => root.unmount());
+		root = createRoot(host);
+		expect(state.unlisten).toHaveBeenCalledOnce();
+	});
+
 	it("refreshes inbox queries once per revision and ignores run-only updates", async () => {
 		await act(async () => root.render(<NativeRealtimeBridge />));
 		const { onMessage } = state.watch.mock.calls[0][0];
@@ -131,6 +208,20 @@ describe("native realtime shell bridge", () => {
 			predicate({ queryKey: ["home", "hub", "profile", "subject", "apps"] }),
 		).toBe(false);
 		expect(predicate({ queryKey: ["getApps"] })).toBe(false);
+	});
+
+	it("wakes the account bot host once per new inbox revision", async () => {
+		await act(async () => root.render(<NativeRealtimeBridge />));
+		const { onMessage } = state.watch.mock.calls[0][0];
+		onMessage({ type: "update", response: { runs: [], errors: [] } });
+		expect(state.poke).not.toHaveBeenCalled();
+		const message = {
+			type: "update",
+			response: { notifications: { revision: "turn-queued" } },
+		};
+		await onMessage(message);
+		await onMessage(message);
+		expect(state.poke).toHaveBeenCalledOnce();
 	});
 
 	it("keeps a failed invalidation eligible for native redelivery", async () => {

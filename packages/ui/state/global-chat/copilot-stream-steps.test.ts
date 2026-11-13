@@ -5,6 +5,27 @@ import {
 	toolEndPlanStepStatus,
 } from "./copilot-stream-steps";
 
+test("cumulative usage snapshots replace the previous total for the same stream step", () => {
+	const acc = createStreamAccumulator();
+	for (const tokens of [100, 200, 200])
+		applyStreamEvent(acc, {
+			type: "usage_stat",
+			raw: "",
+			data: {
+				step_name: "Assistant",
+				stats: {
+					usage: {
+						prompt_tokens: tokens,
+						completion_tokens: 10,
+						total_tokens: tokens + 10,
+					},
+				},
+			},
+		});
+	expect(acc.usageStats).toHaveLength(1);
+	expect(acc.usageStats[0].stats.usage.total_tokens).toBe(210);
+});
+
 describe("toolEndPlanStepStatus", () => {
 	test("keeps accepted plans and host advisories out of the failure count", () => {
 		for (const status of [

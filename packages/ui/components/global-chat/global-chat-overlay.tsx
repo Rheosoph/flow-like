@@ -13,6 +13,7 @@ import {
 	useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { PAGE_SNAPSHOT_IGNORE_ATTRIBUTE } from "../../lib/page-snapshot";
 import { cn } from "../../lib/utils";
 import { useAssistantSurface } from "../../state/assistant-surface";
 import { useBackend, useSignedIn } from "../../state/backend-state";
@@ -330,6 +331,7 @@ export function GlobalChatOverlay() {
 		<AnimatePresence>
 			{mode === "overlay" && (
 				<motion.div
+					{...{ [PAGE_SNAPSHOT_IGNORE_ATTRIBUTE]: "" }}
 					// Balloon out of the bottom-right corner where the FlowPilot bubble launcher sits,
 					// so opening the chat reads as that small bubble morphing into the panel.
 					initial={{ opacity: 0, scale: 0.32 }}

@@ -3,11 +3,16 @@
 //! and a failed write leaves the run due. A run missed while nothing was sweeping fires once, and
 //! the task's next run is the first one after now. Tasks of desktop bots are fired by their desktop
 //! host (`POST /bots/{bot_id}/tasks/{task_id}/fire`); the sweep fires the rest.
+//!
+//! A task scheduled in a group or in someone else's chat fires there, sent as the person who
+//! asked and naming the bot, so only that bot wakes and its run has that person's rights. Once
+//! the bot or that person has left, the task is paused instead.
 
 use crate::{
-    entity::{bot, bot_task},
+    entity::{bot, bot_task, conversation, conversation_member},
     error::ApiError,
     routes::inbox::{
+        active_member,
         delivery::BotRecipient,
         now_millis,
         triggers::{lock_trigger_conversation, trigger_conversation, write_trigger_in},
@@ -19,11 +24,15 @@ use chrono::{DateTime, FixedOffset, Utc};
 use flow_like_types::{
     bot::BotLocation,
     bot_task::{TaskKind, TaskSchedule, fire_message_id},
-    inbox::{TRIGGER_TEXT_MAX_CHARS, TRIGGER_TITLE_MAX_CHARS, TriggerBody, TriggerSource},
+    inbox::{
+        ConversationEncryption, TRIGGER_TEXT_MAX_CHARS, TRIGGER_TITLE_MAX_CHARS, TriggerBody,
+        TriggerSource,
+    },
 };
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, QueryTrait,
-    sea_query::Expr,
+    ColumnTrait, Condition, ConnectionTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect, QueryTrait,
+    sea_query::{Expr, ExprTrait},
 };
 
 pub(crate) const SCHEDULING_CAPABILITY: &str = "scheduling";
@@ -36,7 +45,16 @@ pub(crate) enum Fired {
     Lost,
     /// The run was claimed and the bot's conversation can't be written to (end-to-end encrypted).
     Skipped,
+    /// The bot or the person who asked left the group or chat the task fires in; it is paused.
+    Paused,
     Sent(Vec<String>, Vec<BotRecipient>),
+}
+
+/// Whether a task's run can go into the group or chat it was scheduled in.
+enum Place {
+    Open,
+    Sealed,
+    Left,
 }
 
 pub(crate) fn schedule_of(task: &bot_task::Model) -> Option<TaskSchedule> {
@@ -64,8 +82,33 @@ pub(crate) fn trigger_for(task: &bot_task::Model) -> TriggerBody {
         text: truncated(&task.instruction, TRIGGER_TEXT_MAX_CHARS),
         payload: None,
         payload_handle: None,
-        bot_id: None,
+        bot_id: task
+            .conversation_id
+            .as_ref()
+            .map(|_| task.bot_id.clone()),
     }
+}
+
+/// Who a run of `task` is sent as: the person who asked for it in their group or chat, else the
+/// owner.
+pub(crate) fn sender_of(task: &bot_task::Model) -> &str {
+    match (&task.conversation_id, &task.requested_by) {
+        (Some(_), Some(requested_by)) => requested_by,
+        _ => &task.owner_id,
+    }
+}
+
+/// The task as it was read, still due for `due`: no other sweep, edit or pause moved it since.
+fn unchanged(task: &bot_task::Model, due: DateTime<FixedOffset>) -> Condition {
+    Condition::all()
+        .add(bot_task::Column::Id.eq(task.id.as_str()))
+        .add(bot_task::Column::Enabled.eq(true))
+        .add(bot_task::Column::NextRunAt.eq(due))
+        .add(bot_task::Column::UpdatedAt.eq(task.updated_at))
+        .add(match task.monitoring {
+            Some(monitoring) => bot_task::Column::Monitoring.eq(monitoring),
+            None => bot_task::Column::Monitoring.is_null(),
+        })
 }
 
 /// Moves the task past the run `task.next_run_at` names, once: `false` when its stored next run
@@ -86,21 +129,63 @@ async fn claim_in<C: ConnectionTrait>(
         .col_expr(bot_task::Column::LastRunAt, Expr::value(now))
         .col_expr(bot_task::Column::Enabled, Expr::value(next.is_some()))
         .col_expr(bot_task::Column::UpdatedAt, Expr::value(now))
-        .filter(bot_task::Column::Id.eq(task.id.as_str()))
-        .filter(bot_task::Column::Enabled.eq(true))
-        .filter(bot_task::Column::NextRunAt.eq(due))
-        .filter(bot_task::Column::UpdatedAt.eq(task.updated_at))
-        .filter(match task.monitoring {
-            Some(monitoring) => bot_task::Column::Monitoring.eq(monitoring),
-            None => bot_task::Column::Monitoring.is_null(),
-        })
+        .filter(unchanged(task, due))
         .exec(db)
         .await?;
     Ok(claimed.rows_affected == 1)
 }
 
+/// Pauses the task instead of running it, once: `false` when another sweep or an edit moved it.
+async fn pause_in<C: ConnectionTrait>(
+    db: &C,
+    task: &bot_task::Model,
+    now: DateTime<FixedOffset>,
+) -> Result<bool, ApiError> {
+    let Some(due) = task.next_run_at else {
+        return Ok(false);
+    };
+    let paused = bot_task::Entity::update_many()
+        .col_expr(bot_task::Column::Enabled, Expr::value(false))
+        .col_expr(bot_task::Column::UpdatedAt, Expr::value(now))
+        .filter(unchanged(task, due))
+        .exec(db)
+        .await?;
+    Ok(paused.rows_affected == 1)
+}
+
+/// Whether the bot and the person who asked are both still in `conversation_id` and the server
+/// can write into it. The caller holds the conversation's lock.
+async fn place_of<C: ConnectionTrait>(
+    db: &C,
+    conversation_id: &str,
+    task: &bot_task::Model,
+) -> Result<Place, ApiError> {
+    let Some(conversation) = conversation::Entity::find_by_id(conversation_id)
+        .one(db)
+        .await?
+    else {
+        return Ok(Place::Left);
+    };
+    let present = conversation_member::Entity::find()
+        .filter(conversation_member::Column::ConversationId.eq(conversation_id))
+        .filter(conversation_member::Column::PrincipalId.is_in([task.bot_id.as_str(), sender_of(task)]))
+        .filter(active_member())
+        .count(db)
+        .await?;
+    if present < 2 {
+        return Ok(Place::Left);
+    }
+    Ok(
+        match ConversationEncryption::parse(&conversation.encryption) {
+            Some(ConversationEncryption::Plain) => Place::Open,
+            _ => Place::Sealed,
+        },
+    )
+}
+
 /// Claims the run `task` is due for and writes its trigger into `conversation_id`, whose lock
-/// the caller holds.
+/// the caller holds. A task of a group or chat the server can't write into moves on without a
+/// run; one the bot or the person who asked left is paused.
 pub(crate) async fn fire_locked_in<C: ConnectionTrait>(
     db: &C,
     conversation_id: &str,
@@ -110,6 +195,17 @@ pub(crate) async fn fire_locked_in<C: ConnectionTrait>(
     let Some(due) = task.next_run_at else {
         return Ok(Fired::Lost);
     };
+    if task.conversation_id.is_some() {
+        match place_of(db, conversation_id, task).await? {
+            Place::Open => {}
+            Place::Sealed => {
+                claim_in(db, task, now).await?;
+                return Ok(Fired::Skipped);
+            }
+            Place::Left if pause_in(db, task, now).await? => return Ok(Fired::Paused),
+            Place::Left => return Ok(Fired::Lost),
+        }
+    }
     if !claim_in(db, task, now).await? {
         return Ok(Fired::Lost);
     }
@@ -117,7 +213,7 @@ pub(crate) async fn fire_locked_in<C: ConnectionTrait>(
     let sent = write_trigger_in(
         db,
         conversation_id,
-        &task.owner_id,
+        sender_of(task),
         &message_id,
         &trigger_for(task),
         now,
@@ -126,14 +222,19 @@ pub(crate) async fn fire_locked_in<C: ConnectionTrait>(
     Ok(Fired::Sent(sent.wake, sent.bots))
 }
 
-/// [`fire_locked_in`] under the conversation's lock. A task whose conversation the server cannot
-/// write to (end-to-end encrypted) is moved on without a run.
+/// [`fire_locked_in`] under the conversation's lock, in the group or chat the task was scheduled
+/// in or else the owner's chat with the bot. An owner's chat the server cannot write to
+/// (end-to-end encrypted) moves the task on without a run.
 async fn fire_in(
     txn: &sea_orm::DatabaseTransaction,
     task: &bot_task::Model,
     now: DateTime<FixedOffset>,
 ) -> Result<Fired, ApiError> {
-    match trigger_conversation(txn, &task.owner_id, &task.bot_id, now).await? {
+    let conversation_id = match &task.conversation_id {
+        Some(conversation_id) => Some(conversation_id.clone()),
+        None => trigger_conversation(txn, &task.owner_id, &task.bot_id, now).await?,
+    };
+    match conversation_id {
         Some(conversation_id) => {
             lock_trigger_conversation(txn, &conversation_id).await?;
             fire_locked_in(txn, &conversation_id, task, now).await
@@ -155,13 +256,18 @@ pub(crate) async fn fire(state: &AppState, task: &bot_task::Model) -> Result<boo
             Box::pin(async move { fire_in(txn, &task, now).await })
         })
         .await?;
-    if !matches!(fired, Fired::Lost) && TaskKind::parse(&task.kind) == Some(TaskKind::Once) {
+    let ends = TaskKind::parse(&task.kind) == Some(TaskKind::Once) || matches!(fired, Fired::Paused);
+    if !matches!(fired, Fired::Lost) && ends {
         super::task_schedules::remove(state, &task.id).await;
     }
     match fired {
         Fired::Lost => Ok(false),
         Fired::Skipped => {
             tracing::warn!(task_id = %task.id, bot_id = %task.bot_id, "Bot task skipped: the conversation is end-to-end encrypted");
+            Ok(false)
+        }
+        Fired::Paused => {
+            tracing::info!(task_id = %task.id, bot_id = %task.bot_id, conversation_id = ?task.conversation_id, "Bot task paused: the bot or the person who asked for it left its conversation");
             Ok(false)
         }
         Fired::Sent(people, bots) => {
@@ -178,10 +284,17 @@ fn firing_bots() -> sea_orm::sea_query::SelectStatement {
         .column(bot::Column::Id)
         .filter(bot::Column::DeletedAt.is_null())
         .filter(bot::Column::Location.ne(BotLocation::Desktop.as_str().to_ascii_uppercase()))
+        .filter(
+            Expr::col(bot::Column::Capabilities)
+                .cast_as("text")
+                .like(format!("%\"{SCHEDULING_CAPABILITY}\"%")),
+        )
         .into_query()
 }
 
-/// Enabled tasks of the bots the server fires for whose next run has come.
+/// Enabled tasks of the bots the server fires for, holding the scheduling capability, whose next
+/// run has come. The capability is filtered in SQL so tasks of bots without it can't fill the
+/// batch.
 pub(crate) async fn due_in<C: ConnectionTrait>(
     db: &C,
     now: DateTime<FixedOffset>,

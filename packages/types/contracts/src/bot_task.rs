@@ -101,6 +101,20 @@ pub struct BotTask {
     pub monitoring: bool,
     pub created_by: TaskCreator,
     pub created_at: String,
+    /// Where the task fires when that is not the owner's chat with the bot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<TaskConversation>,
+}
+
+/// The conversation a task was scheduled in and fires in. Its trigger comes from the person who
+/// asked for the task, and everyone in the conversation reads it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskConversation {
+    pub id: String,
+    pub kind: crate::inbox::ConversationKind,
+    /// The group's name, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 /// Creates a task. A once task needs `at`, a cron task `cron` (and optionally `tz`, UTC when

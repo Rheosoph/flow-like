@@ -184,6 +184,8 @@ export type RealtimeTransport =
 			project_id: string;
 			custom_token: string;
 			path: string;
+			/** Sibling of `path` carrying replies; absent when the server publishes none there. */
+			reply_path?: string;
 	  };
 
 export interface RealtimeConnectResponse {
@@ -201,6 +203,34 @@ export interface RealtimeWakeup {
 	protocol_version: 1;
 	kind: "invalidate";
 	nonce: string;
+}
+
+export type RealtimeReplyState = "writing" | "working" | "done" | "dropped";
+
+/**
+ * A bot's reply while its host writes it. It only shortens the wait: the stored message still
+ * arrives through the replay and replaces it.
+ */
+export interface RealtimeReply {
+	protocol_version: 1;
+	kind: "reply";
+	conversation_id: string;
+	/** The id the stored message will have. */
+	message_id: string;
+	/** The message this reply answers. */
+	reply_to: string;
+	/** The bot that writes the reply. */
+	sender_id: string;
+	/** Where `text` starts in the reply, in UTF-16 code units. */
+	offset: number;
+	/** The reply from `offset` to its current end; normally the whole reply so far. */
+	text: string;
+	state: RealtimeReplyState;
+	/**
+	 * How often the bot began the reply again because the conversation moved on; missing means 0.
+	 * A later draft replaces an earlier one from its start; messages of an earlier one are late.
+	 */
+	draft?: number;
 }
 
 export interface RealtimeActivity {
@@ -243,6 +273,7 @@ export interface RealtimeStatus {
 export type RealtimeUpdate =
 	| { type: "state"; state: RealtimeConnectionState }
 	| { type: "provider"; status: RealtimeProviderStatus }
+	| { type: "reply"; reply: RealtimeReply }
 	| { type: "snapshot"; snapshot: RealtimePollResponse };
 
 export type RealtimeListener = (update: RealtimeUpdate) => void | Promise<void>;
@@ -292,6 +323,7 @@ export type RealtimeMessage =
 	| { type: "expired" }
 	| { type: "state"; state: RealtimeConnectionState }
 	| { type: "provider"; status: RealtimeProviderStatus }
+	| { type: "reply"; reply: RealtimeReply }
 	| {
 			type: "snapshot";
 			delivery_id: string;

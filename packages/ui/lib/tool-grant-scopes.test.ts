@@ -164,6 +164,20 @@ const ROWS: Row[] = [
 		["browser:github.com"],
 	],
 	[
+		"browser_open in the owner's browser has its own scope",
+		"browser_open",
+		{ url: "https://www.GitHub.com/a/b", browser: "owner" },
+		undefined,
+		["owner_browser:github.com"],
+	],
+	[
+		"browser_open in the bot's own browser, named",
+		"browser_open",
+		{ url: "https://github.com/a", browser: "own" },
+		undefined,
+		["browser:github.com"],
+	],
+	[
 		"browser_open with a bad url",
 		"browser_open",
 		{ url: "not a url" },

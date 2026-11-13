@@ -49,7 +49,10 @@ pub mod widget;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/{app_id}/usage/budget", get(super::usage_budgets::get_app))
-        .route("/{app_id}/usage/budget/limits", axum::routing::put(super::usage_budgets::put_app))
+        .route(
+            "/{app_id}/usage/budget/limits",
+            axum::routing::put(super::usage_budgets::put_app),
+        )
         .route("/", get(internal::get_apps::get_apps))
         .route("/nodes", get(internal::get_nodes::get_nodes))
         .route("/{app_id}/nodes", get(internal::get_nodes::get_app_nodes))
@@ -95,6 +98,10 @@ pub fn routes() -> Router<AppState> {
             "/{app_id}/settings/forking",
             patch(internal::change_forking::change_forking)
                 .get(internal::change_forking::get_forking),
+        )
+        .route(
+            "/{app_id}/settings/bots",
+            patch(internal::change_bot_access::change_bot_access),
         )
         .route("/{app_id}/fork", post(fork::online_fork::online_fork))
         .route(

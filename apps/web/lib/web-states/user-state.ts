@@ -93,6 +93,7 @@ interface ApiProfile {
 	settings?: unknown;
 	apps?: unknown;
 	shortcuts?: unknown;
+	hidden_bots?: string[] | null;
 	home_layout?: IHomeLayout | null;
 	home_default_id?: string | null;
 	bit_ids?: string[] | null;
@@ -121,6 +122,7 @@ function transformApiProfile(apiProfile: ApiProfile): IProfile {
 		settings: apiProfile.settings as ISettings | undefined,
 		apps: apiProfile.apps as IProfileApp[] | undefined,
 		shortcuts: apiProfile.shortcuts as IProfileShortcut[] | undefined,
+		hidden_bots: apiProfile.hidden_bots ?? [],
 		home_layout: apiProfile.home_layout,
 		home_default_id: apiProfile.home_default_id,
 		bits: apiProfile.bit_ids ?? [],
@@ -680,6 +682,27 @@ export class WebUserState implements IUserState {
 		}
 
 		await apiPost(`profile/${profileId}`, { shortcuts }, this.backend.auth);
+	}
+
+	async updateProfileHiddenBots(
+		profile: ISettingsProfile,
+		hiddenBots: string[],
+	): Promise<void> {
+		const profileId = profile.hub_profile.id;
+		if (!profileId) {
+			throw new Error("Profile ID is required");
+		}
+
+		const response = await apiPost<UpsertProfileResponse>(
+			`profile/${encodeURIComponent(profileId)}`,
+			{ hidden_bots: hiddenBots },
+			this.backend.auth,
+		);
+		// Older hubs accept the field without saving it; their stored profile has no such key.
+		if (!response?.profile || !Object.hasOwn(response.profile, "hidden_bots")) {
+			throw new Error("This server does not support hiding bots yet.");
+		}
+		profile.hub_profile.hidden_bots = response.profile.hidden_bots ?? [];
 	}
 
 	private async saveToOfflineStorage(

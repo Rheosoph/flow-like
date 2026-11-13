@@ -7,7 +7,7 @@ use super::{
         self, BOT_TURN_HOST_KIND, BOT_TURN_LEASE_LOST, ClaimRequest, Refusal, claim_device_in,
         claim_in, enqueue_in, queued_device_heads,
     },
-    worker::{CODE_FAILED, CODE_SETUP, commit_reply_in},
+    worker::{CODE_FAILED, CODE_NO_MODEL, CODE_SETUP, commit_reply_in},
 };
 use crate::{
     devices::bots::{
@@ -83,7 +83,7 @@ async fn fleet() -> DatabaseConnection {
         r#"CREATE TABLE public."BotToolGrant" (
             "id" TEXT PRIMARY KEY, "botId" TEXT NOT NULL, "ownerId" TEXT NOT NULL,
             "tool" TEXT NOT NULL, "scope" TEXT NOT NULL, "grantedAt" TEXT NOT NULL,
-            "grantedBy" TEXT NOT NULL, UNIQUE ("botId", "tool", "scope"))"#,
+            "grantedBy" TEXT NOT NULL, "expiresAt" TEXT, UNIQUE ("botId", "tool", "scope"))"#,
     )
     .await
     .unwrap();
@@ -395,6 +395,7 @@ fn reply(turn: &bot_turn::Model, message_id: String, failure: Option<&str>) -> D
         host_id: HOST.into(),
         message_id,
         envelope: json!({ "v": 1, "enc": "none", "body": { "text": "Done", "reply_to": turn.trigger_message_id } }),
+        envelopes: None,
         failure_code: failure.map(str::to_string),
         usage: None,
     }
@@ -419,6 +420,15 @@ async fn a_reply_must_use_the_turns_answer_or_failure_message_id() {
             StatusCode::BAD_REQUEST
         );
     }
+}
+
+#[tokio::test]
+async fn a_host_that_found_no_model_reports_it_with_its_own_code() {
+    let db = fleet().await;
+    let turn = claimed(&db, "bot_a").await;
+    let failure = failure_message_id("bot_a", "m1");
+    let (_, code) = checked_reply(&turn, reply(&turn, failure, Some("BOT_TURN_NO_MODEL"))).unwrap();
+    assert_eq!(code, Some(CODE_NO_MODEL));
 }
 
 #[tokio::test]
@@ -902,5 +912,236 @@ async fn a_delivery_token_needs_a_live_bot_that_is_still_in_the_conversation() {
         bots_grant::completed_delivery_in(&db, &claimed, HOST, &row, &room)
             .await
             .is_err()
+    );
+}
+
+#[tokio::test]
+async fn a_heartbeat_refreshes_only_the_tokens_that_are_due() {
+    use flow_like_types::device_bot::{DeviceHeartbeatRequest, REFRESHED_TOKEN_SECS};
+    crate::backend_jwt::init_for_tests();
+    let db = fleet().await;
+    let turn = claimed(&db, "bot_a").await;
+    let beat = |bot_token_expires_at: Option<i64>| DeviceHeartbeatRequest {
+        host_id: HOST.into(),
+        bot_token_expires_at,
+        executor_token_expires_at: None,
+    };
+    let later = chrono::Utc::now().timestamp() + 3_600;
+    let (bot_token, executor) = crate::devices::bots::refreshed(&db, &turn, &beat(Some(later)))
+        .await
+        .unwrap();
+    assert!(bot_token.is_none() && executor.is_none());
+    let (bot_token, executor) = crate::devices::bots::refreshed(&db, &turn, &beat(Some(0)))
+        .await
+        .unwrap();
+    assert!(executor.is_none());
+    let claims = crate::bot_permission::verify_bot_token(&bot_token.unwrap().token).unwrap();
+    assert_eq!(claims.exp - claims.iat, REFRESHED_TOKEN_SECS);
+}
+
+#[tokio::test]
+async fn only_queued_turns_of_bots_whose_device_is_gone_are_orphaned() {
+    use crate::devices::bots_removed::orphaned_in;
+    let db = fleet().await;
+    db.execute_unprepared(
+        r#"CREATE TABLE public."ManagedDevice" (
+            "id" TEXT PRIMARY KEY, "ownerId" TEXT NOT NULL, "status" TEXT NOT NULL)"#,
+    )
+    .await
+    .unwrap();
+    // bot_a runs on an active device of its owner, bot_b's device is revoked, and the device
+    // bot_c names belongs to someone else.
+    db.execute_unprepared(&format!(
+        r#"INSERT INTO public."ManagedDevice" ("id", "ownerId", "status") VALUES
+            ('{}', '{OWNER}', 'active'), ('{}', '{OWNER}', 'revoked'), ('{}', '{OWNER}', 'active')"#,
+        device_of("bot_a"),
+        device_of("bot_b"),
+        device_of("bot_c"),
+    ))
+    .await
+    .unwrap();
+    let listed = |mut turns: Vec<(String, String)>| {
+        turns.sort();
+        turns
+    };
+    assert_eq!(
+        listed(orphaned_in(&db, 10).await.unwrap()),
+        listed(vec![
+            (turn_id("bot_b", "m1"), OWNER.to_owned()),
+            (turn_id("bot_c", "m1"), OTHER_OWNER.to_owned()),
+        ])
+    );
+    assert_eq!(orphaned_in(&db, 1).await.unwrap().len(), 1);
+
+    claim_in(
+        &db,
+        &ClaimRequest {
+            host_id: "hub:device-removed".into(),
+            ..request("bot_b", OWNER)
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    delete_bot(&db, "bot_c").await;
+    assert!(
+        orphaned_in(&db, 10).await.unwrap().is_empty(),
+        "a claimed turn and a deleted bot's turn are no longer listed"
+    );
+}
+
+#[tokio::test]
+async fn old_hosts_cannot_claim_or_report_docker_bots_online() {
+    use crate::devices::bots::{
+        BOT_EXECUTION_MODE_UNSUPPORTED, poll_in_modes, require_execution_mode,
+    };
+    use flow_like_types::{bot::BotExecutionMode, device_bot::DeviceClaimRequest};
+    let db = fleet().await;
+    db.execute_unprepared(
+        r#"UPDATE public."Bot" SET "executionMode" = 'DOCKER' WHERE id = 'bot_a'"#,
+    )
+    .await
+    .unwrap();
+    let old: DeviceClaimRequest = serde_json::from_value(json!({"host_id":HOST})).unwrap();
+    let poll = poll_in_modes(&db, OWNER, &device_of("bot_a"), HOST, now_millis(), &old)
+        .await
+        .unwrap();
+    assert_eq!(poll.bots[0].execution_mode, BotExecutionMode::Docker);
+    assert!(poll.turns.is_empty());
+    let error = require_execution_mode(&db, OWNER, "bot_a", &old)
+        .await
+        .unwrap_err();
+    assert_eq!(error.public_code(), BOT_EXECUTION_MODE_UNSUPPORTED);
+    let turn = ledger::find(&db, &turn_id("bot_a", "m1"), Some(OWNER))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.status, STORED_QUEUED);
+    assert!(turn.host_id.is_none());
+    let docker: DeviceClaimRequest =
+        serde_json::from_value(json!({"host_id":HOST,"execution_modes":["docker"]})).unwrap();
+    require_execution_mode(&db, OWNER, "bot_a", &docker)
+        .await
+        .unwrap();
+    let poll = poll_in_modes(&db, OWNER, &device_of("bot_a"), HOST, now_millis(), &docker)
+        .await
+        .unwrap();
+    assert_eq!(poll.turns.len(), 1);
+    assert!(
+        require_execution_mode(&db, OWNER, "bot_b", &docker)
+            .await
+            .is_err()
+    );
+    db.execute_unprepared(
+        r#"UPDATE public."Bot" SET "executionMode" = 'FUTURE' WHERE id = 'bot_a'"#,
+    )
+    .await
+    .unwrap();
+    assert!(
+        require_execution_mode(&db, OWNER, "bot_a", &docker)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn unsupported_docker_work_cannot_fill_the_native_hosts_scan() {
+    let db = fleet().await;
+    bind(&db, "bot_b", &device_of("bot_a")).await;
+    db.execute_unprepared(
+        r#"UPDATE public."Bot" SET "executionMode" = 'DOCKER' WHERE id = 'bot_a'"#,
+    )
+    .await
+    .unwrap();
+    db.execute_unprepared(r#"DELETE FROM public."BotTurn" WHERE "botId" = 'bot_b'"#)
+        .await
+        .unwrap();
+    for n in 0..400 {
+        queue(&db, "bot_a", OWNER, "c_a", &format!("docker-{n}")).await;
+    }
+    queue(&db, "bot_b", OWNER, "c_b", "m1").await;
+
+    let poll = poll_in(&db, OWNER, &device_of("bot_a"), HOST, now_millis())
+        .await
+        .unwrap();
+    assert_eq!(poll.bots.len(), 2);
+    assert_eq!(poll.turns.len(), 1);
+    assert_eq!(poll.turns[0].bot_id, "bot_b");
+}
+
+#[tokio::test]
+async fn docker_turns_remain_dispatchable_until_the_runtime_is_ready() {
+    use crate::devices::bots::poll_in_modes;
+    use flow_like_types::device_bot::DevicePollRequest;
+    let db = fleet().await;
+    db.execute_unprepared(
+        r#"UPDATE public."Bot" SET "executionMode" = 'DOCKER' WHERE id = 'bot_a'"#,
+    )
+    .await
+    .unwrap();
+    let mut request: DevicePollRequest = serde_json::from_value(json!({
+        "host_id":HOST, "execution_modes":["native","docker"], "ready_bot_ids":[]
+    }))
+    .unwrap();
+    let polled = poll_in_modes(
+        &db,
+        OWNER,
+        &device_of("bot_a"),
+        HOST,
+        now_millis(),
+        &request,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        polled.turns.len(),
+        1,
+        "A queued turn can start its container"
+    );
+    assert_eq!(
+        crate::entity::bot_host_heartbeat::Entity::find()
+            .all(&db)
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
+    request.ready_bot_ids = Some(vec!["bot_a".into(), "bot_c".into()]);
+    poll_in_modes(
+        &db,
+        OWNER,
+        &device_of("bot_a"),
+        HOST,
+        now_millis(),
+        &request,
+    )
+    .await
+    .unwrap();
+    let heartbeats = crate::entity::bot_host_heartbeat::Entity::find()
+        .all(&db)
+        .await
+        .unwrap();
+    assert_eq!(heartbeats.len(), 1);
+    assert_eq!(
+        heartbeats[0].bot_id, "bot_a",
+        "Readiness cannot mark another device's bot online"
+    );
+    request.ready_bot_ids = Some(vec![]);
+    poll_in_modes(
+        &db,
+        OWNER,
+        &device_of("bot_a"),
+        HOST,
+        now_millis(),
+        &request,
+    )
+    .await
+    .unwrap();
+    assert!(
+        crate::entity::bot_host_heartbeat::Entity::find()
+            .all(&db)
+            .await
+            .unwrap()
+            .is_empty()
     );
 }

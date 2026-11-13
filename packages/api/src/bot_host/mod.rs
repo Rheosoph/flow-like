@@ -17,8 +17,11 @@ pub(crate) mod memory;
 mod monitor_baseline;
 pub(crate) mod notes;
 pub(crate) mod recovery;
+mod reply_stream;
 mod room_updates;
+pub(crate) mod taint;
 pub(crate) mod talk;
+pub(crate) mod task_authority;
 pub(crate) mod task_schedules;
 pub(crate) mod tasks;
 pub(crate) mod worker;
@@ -31,6 +34,8 @@ mod cancel_tests;
 mod cap_tests;
 #[cfg(all(test, feature = "db-chaos"))]
 mod chaos_tests;
+#[cfg(test)]
+mod device_e2e_tests;
 #[cfg(test)]
 mod device_tests;
 #[cfg(test)]
@@ -45,6 +50,8 @@ mod memory_tests;
 mod recovery_tests;
 #[cfg(test)]
 mod talk_tests;
+#[cfg(test)]
+mod task_authority_tests;
 #[cfg(test)]
 mod tasks_tests;
 #[cfg(test)]
@@ -155,6 +162,11 @@ pub async fn recover(state: &AppState) -> Result<Recovered, ApiError> {
             tracing::warn!(%error, "Bot turns handed off to a desktop were not taken back")
         }
     }
+    match crate::devices::bots_removed::fail_orphaned(state).await {
+        Ok(0) => {}
+        Ok(ended) => tracing::info!(turns = ended, "Bot turns of removed devices ended"),
+        Err(error) => tracing::warn!(%error, "Bot turns of removed devices were not ended"),
+    }
     if let Err(error) = talk::expire_asks(state, now).await {
         tracing::warn!(%error, "Bot talk: lapsed questions were not ended");
     }
@@ -162,6 +174,7 @@ pub async fn recover(state: &AppState) -> Result<Recovered, ApiError> {
         Ok(expired) if expired != approvals::Expired::default() => tracing::info!(
             turns = expired.turns,
             tokens = expired.tokens,
+            grants = expired.grants,
             "Bot turn approvals expired"
         ),
         Ok(_) => {}

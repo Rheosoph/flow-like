@@ -3,7 +3,7 @@ use crate::{Bot, LOCAL_OWNER_ID};
 use chrono::{Duration, Utc};
 use flow_like_types::{
     bot_task::{BotTask, CreateBotTask, MAX_TASKS_PER_BOT, TaskCreator, TaskKind, UpdateBotTask},
-    inbox::InboxEntryKind,
+    inbox::{ConversationKind, InboxEntryKind},
 };
 use serde_json::json;
 
@@ -373,4 +373,125 @@ fn a_trigger_is_idempotent_by_message_id() {
         malformed.is_err(),
         "a trigger needs a source, a ref and a title"
     );
+}
+
+fn group_triggers(f: &Fixture, conversation_id: &str) -> Vec<crate::InboxEntry> {
+    f.all_entries(conversation_id)
+        .into_iter()
+        .filter(|entry| entry.kind == InboxEntryKind::Trigger)
+        .collect()
+}
+
+#[test]
+fn a_task_scheduled_in_a_group_fires_there_naming_its_bot() {
+    let f = fixture();
+    let bot = scheduler_bot(&f);
+    let other = f.bot("Other");
+    let group = f.group(&[&bot, &other]);
+    let direct = f.direct(&bot);
+    let private = f
+        .store
+        .create_task_in(&bot.id, once(5), TaskCreator::Bot, Some(&direct.id))
+        .unwrap();
+    assert_eq!(private.conversation, None);
+    f.store.delete_task(&bot.id, &private.id).unwrap();
+
+    let task = f
+        .store
+        .create_task_in(&bot.id, once(5), TaskCreator::Bot, Some(&group.id))
+        .unwrap();
+    let place = task.conversation.clone().expect("the task fires in its group");
+    assert_eq!(
+        (place.id.as_str(), place.kind, place.title.as_deref()),
+        (group.id.as_str(), ConversationKind::Group, Some("Crew"))
+    );
+    assert_eq!(f.store.fire_due_tasks(later(&task)).unwrap().len(), 1);
+    let fired = group_triggers(&f, &group.id);
+    assert_eq!(fired.len(), 1);
+    assert_eq!(fired[0].sender_id, LOCAL_OWNER_ID);
+    assert_eq!(fired[0].envelope["body"]["bot_id"], json!(bot.id));
+    assert!(triggers(&f, &bot).is_empty());
+}
+
+#[test]
+fn a_group_task_pauses_once_its_bot_left_the_group() {
+    let f = fixture();
+    let bot = scheduler_bot(&f);
+    let other = f.bot("Other");
+    let group = f.group(&[&bot, &other]);
+    let task = f
+        .store
+        .create_task_in(&bot.id, hourly(), TaskCreator::Bot, Some(&group.id))
+        .unwrap();
+    f.store.remove_member(&group.id, &bot.id).unwrap();
+    assert!(f.store.fire_due_tasks(later(&task)).unwrap().is_empty());
+    let paused = f
+        .store
+        .tasks(&bot.id)
+        .unwrap()
+        .into_iter()
+        .find(|row| row.id == task.id)
+        .unwrap();
+    assert!(!paused.enabled);
+    assert_eq!(paused.last_run_at, None);
+    assert!(group_triggers(&f, &group.id).is_empty());
+    assert!(triggers(&f, &bot).is_empty());
+}
+
+#[test]
+fn a_group_turn_sees_and_changes_only_the_tasks_of_its_group() {
+    let f = fixture();
+    let bot = scheduler_bot(&f);
+    let other = f.bot("Other");
+    let group = f.group(&[&bot, &other]);
+    let private = f
+        .store
+        .create_task(&bot.id, once(5), TaskCreator::Bot)
+        .unwrap();
+    let shared = f
+        .store
+        .create_task_in(&bot.id, once(6), TaskCreator::Bot, Some(&group.id))
+        .unwrap();
+
+    let in_group = f.store.tasks_in_turn(&bot.id, Some(&group.id)).unwrap();
+    assert_eq!(
+        in_group.iter().map(|task| task.id.as_str()).collect::<Vec<_>>(),
+        [shared.id.as_str()]
+    );
+    let direct = f.direct(&bot);
+    assert_eq!(f.store.tasks_in_turn(&bot.id, Some(&direct.id)).unwrap().len(), 2);
+    assert_eq!(f.store.tasks_in_turn(&bot.id, None).unwrap().len(), 2);
+
+    let rename = || UpdateBotTask {
+        title: Some("Changed".into()),
+        ..Default::default()
+    };
+    let hidden = f
+        .store
+        .update_task_in_turn(&bot.id, &private.id, rename(), Some(&group.id))
+        .unwrap_err();
+    let missing = f
+        .store
+        .update_task_in_turn(&bot.id, "task_missing", rename(), Some(&group.id))
+        .unwrap_err();
+    assert_eq!(
+        hidden.to_string().replace(&private.id, "X"),
+        missing.to_string().replace("task_missing", "X")
+    );
+    assert!(f
+        .store
+        .delete_task_in_turn(&bot.id, &private.id, Some(&group.id))
+        .is_err());
+    assert_eq!(f.store.tasks(&bot.id).unwrap().len(), 2);
+
+    f.store
+        .update_task_in_turn(&bot.id, &shared.id, rename(), Some(&group.id))
+        .unwrap();
+    f.store
+        .delete_task_in_turn(&bot.id, &shared.id, Some(&group.id))
+        .unwrap();
+    f.store
+        .delete_task_in_turn(&bot.id, &private.id, Some(&direct.id))
+        .unwrap();
+    assert!(f.store.tasks(&bot.id).unwrap().is_empty());
 }

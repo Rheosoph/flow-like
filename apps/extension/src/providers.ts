@@ -180,6 +180,13 @@ export const FLOW_DECORATORS: readonly DecoratorDef[] = [
 		doc: 'Groups the nodes its statements create into a visual Collapsed layer; execution and scope are unchanged. `"A/B"` nests B in A, `\\/` keeps a slash in one name, a leading `/` starts from the section root. Only inside an event, function or `detached` body.',
 		snippet: '@collapse("${1:Group}") {\n\t$0\n}',
 	},
+	{
+		name: "parallel",
+		argumentKind: "none",
+		detail: "@parallel for (const item of items) { … }",
+		doc: "Runs the iterations of the `for…of` loop below concurrently instead of one after another.",
+		snippet: "@parallel\nfor (const ${1:item} of ${2:items}) {\n\t$0\n}",
+	},
 ];
 
 const DECORATOR_BY_NAME = new Map(FLOW_DECORATORS.map((d) => [d.name, d]));
@@ -293,7 +300,8 @@ export class FlowCompletionProvider implements vscode.CompletionItemProvider {
 					continue;
 				}
 				opened.add(sig);
-				items.push(nodeItem(sig, alias, callSnippet(sig, alias), "0"));
+				const local = (use.kind === "members" && use.aliases?.[alias]) || alias;
+				items.push(nodeItem(sig, local, callSnippet(sig, local), "0"));
 			}
 		}
 		for (const sig of this.registry.all()) {

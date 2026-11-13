@@ -20,12 +20,14 @@ use crate::documents::{
 };
 use crate::embed::KnowledgeEmbedder;
 use crate::env::{
-    Access, AppGrant, AppTables, Attachment, Environment, FileData, FileEntry, FileMeta, Limits,
-    MemorySessions, ModelRole, Scope, SessionCache, ToolEnv,
+    Access, AppGrant, AppTables, Attachment, Environment, FileData, FileEntry, FileLink, FileMeta,
+    Limits, MemorySessions, ModelRole, Scope, SessionCache, ToolEnv,
 };
 
 pub const WORKSPACE: &str = "ws-bot";
 pub const OTHER_APP: &str = "app-other";
+/// 2026-01-01T00:00:00Z, when every link the fake signs expires.
+pub const LINK_EXPIRES_AT_MS: i64 = 1_767_225_600_000;
 
 type Files = BTreeMap<(String, String), (Bytes, String, Option<DataClassification>)>;
 
@@ -55,9 +57,11 @@ pub struct FakeEnv {
     pub secrets: Mutex<HashMap<String, String>>,
     pub notifier: Mutex<Option<Arc<dyn crate::notify::OwnerNotifier>>>,
     pub people: Mutex<Option<Arc<dyn crate::people::PeopleBackend>>>,
+    pub rooms: Mutex<Option<Arc<dyn crate::rooms::RoomInvites>>>,
     pub scheduler: Mutex<Option<Arc<dyn crate::schedule::Scheduler>>>,
     pub skills: Mutex<Option<Arc<dyn crate::skills::SkillHost>>>,
     pub images: Mutex<Result<Arc<dyn crate::image::ImageBackend>, crate::image::ImageUnavailable>>,
+    pub barcodes: Mutex<Option<Arc<dyn crate::barcode::BarcodeReader>>>,
     app_dbs: Mutex<
         HashMap<
             String,
@@ -70,6 +74,8 @@ pub struct FakeEnv {
     >,
     pub expensive_ok: AtomicBool,
     pub writable: AtomicBool,
+    /// Whether the host signs download links, as `https://files.test/<app>/<path>`.
+    pub signs_links: AtomicBool,
     connection: flow_like_storage::lancedb::Connection,
     _dir: TempDir,
 }
@@ -113,12 +119,15 @@ impl FakeEnv {
             secrets: Mutex::default(),
             notifier: Mutex::new(None),
             people: Mutex::new(None),
+            rooms: Mutex::new(None),
             scheduler: Mutex::new(None),
             skills: Mutex::new(None),
             images: Mutex::new(Err(crate::image::ImageUnavailable::NoModel)),
+            barcodes: Mutex::new(None),
             app_dbs: Mutex::default(),
             expensive_ok: AtomicBool::new(false),
             writable: AtomicBool::new(true),
+            signs_links: AtomicBool::new(false),
             connection,
             _dir: dir,
         }
@@ -279,6 +288,10 @@ impl ToolEnv for FakeEnv {
         self.people.lock().expect("people").clone()
     }
 
+    fn rooms(&self) -> Option<Arc<dyn crate::rooms::RoomInvites>> {
+        self.rooms.lock().expect("rooms").clone()
+    }
+
     fn sandbox(&self) -> Option<Arc<dyn SandboxBackend>> {
         if let Some(real) = self.real_sandbox.lock().expect("real").clone() {
             return Some(real);
@@ -299,6 +312,10 @@ impl ToolEnv for FakeEnv {
     ) -> std::result::Result<Arc<dyn crate::image::ImageBackend>, crate::image::ImageUnavailable>
     {
         self.images.lock().expect("images").clone()
+    }
+
+    fn barcodes(&self) -> Option<Arc<dyn crate::barcode::BarcodeReader>> {
+        self.barcodes.lock().expect("barcodes").clone()
     }
 
     fn connectors(&self) -> Option<Arc<dyn crate::services::ConnectorSource>> {
@@ -382,6 +399,13 @@ impl ToolEnv for FakeEnv {
             .expect("attachments")
             .get(&(seq, part.to_string()))
             .cloned())
+    }
+
+    async fn file_link(&self, app_id: &str, path: &str) -> Result<Option<FileLink>> {
+        Ok(self.signs_links.load(Ordering::SeqCst).then(|| FileLink {
+            url: format!("https://files.test/{app_id}/{path}"),
+            expires_at_ms: Some(LINK_EXPIRES_AT_MS),
+        }))
     }
 
     fn handle_granted(&self, handle: &WorkspaceHandle) -> bool {
@@ -564,6 +588,7 @@ pub struct FakeBackend {
     pub failed_pages: Mutex<Vec<u32>>,
     pub excel_requests: Mutex<Vec<String>>,
     pub created: Mutex<Vec<String>>,
+    pub readings: Mutex<Vec<String>>,
 }
 
 impl FakeBackend {
@@ -571,8 +596,12 @@ impl FakeBackend {
         self.goals.lock().expect("goals").len()
             + self.extractions.lock().expect("extractions").len()
             + self.rendered.lock().expect("rendered").len()
+            + self.readings.lock().expect("readings").len()
     }
 }
+
+/// Bytes containing it convert to no text, like a scan without a text layer.
+pub const SCANNED: &str = "SCANNED";
 
 fn pages_in(bytes: &[u8]) -> usize {
     let text = String::from_utf8_lossy(bytes);
@@ -637,9 +666,30 @@ impl DocumentBackend for FakeBackend {
     }
 
     async fn convert(&self, bytes: Bytes, _extension: Option<&str>) -> Result<Converted> {
-        Ok(Converted::plain(
-            String::from_utf8_lossy(&bytes).into_owned(),
-        ))
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        Ok(Converted::plain(if text.contains(SCANNED) {
+            String::new()
+        } else {
+            text
+        }))
+    }
+
+    async fn read_with_model(
+        &self,
+        _model: Arc<dyn ModelLogic>,
+        bytes: Bytes,
+        _extension: Option<&str>,
+        source_path: &str,
+    ) -> Result<crate::documents::ModelReading> {
+        self.readings
+            .lock()
+            .expect("readings")
+            .push(source_path.to_string());
+        let text = String::from_utf8_lossy(&bytes).replace(SCANNED, "");
+        Ok(crate::documents::ModelReading {
+            converted: Converted::plain(format!("Transcribed {}", text.trim())),
+            warnings: vec!["read by the model".to_string()],
+        })
     }
 
     async fn excel(&self, _bytes: Bytes, request: ExcelRequest) -> Result<String> {
@@ -650,7 +700,10 @@ impl DocumentBackend for FakeBackend {
         Ok("sheet text".to_string())
     }
 
-    fn create_pdf(&self, request: crate::documents::MarkdownDocument) -> Result<crate::documents::BuiltDocument> {
+    fn create_pdf(
+        &self,
+        request: crate::documents::MarkdownDocument,
+    ) -> Result<crate::documents::BuiltDocument> {
         self.created.lock().expect("created").push(format!(
             "pdf|{}|{}|{:?}",
             request.markdown,
@@ -664,11 +717,15 @@ impl DocumentBackend for FakeBackend {
         })
     }
 
-    fn create_docx(&self, request: crate::documents::MarkdownDocument) -> Result<crate::documents::BuiltDocument> {
-        self.created
-            .lock()
-            .expect("created")
-            .push(format!("docx|{}|{}", request.markdown, request.images.len()));
+    fn create_docx(
+        &self,
+        request: crate::documents::MarkdownDocument,
+    ) -> Result<crate::documents::BuiltDocument> {
+        self.created.lock().expect("created").push(format!(
+            "docx|{}|{}",
+            request.markdown,
+            request.images.len()
+        ));
         Ok(crate::documents::BuiltDocument {
             bytes: Bytes::from(format!("DOCX:{}", request.markdown)),
             count: None,
@@ -693,12 +750,24 @@ impl DocumentBackend for FakeBackend {
         })
     }
 
-    fn create_xlsx(&self, sheets: Vec<crate::documents::SheetData>) -> Result<crate::documents::BuiltDocument> {
+    fn create_xlsx(
+        &self,
+        sheets: Vec<crate::documents::SheetData>,
+    ) -> Result<crate::documents::BuiltDocument> {
         self.created.lock().expect("created").push(format!(
             "xlsx|{}",
             sheets
                 .iter()
-                .map(|s| format!("{}:{}:{:?}", s.name, s.rows.len(), s.rows.iter().flatten().filter(|c| matches!(c, crate::documents::SheetCell::Formula(_))).count()))
+                .map(|s| format!(
+                    "{}:{}:{:?}",
+                    s.name,
+                    s.rows.len(),
+                    s.rows
+                        .iter()
+                        .flatten()
+                        .filter(|c| matches!(c, crate::documents::SheetCell::Formula(_)))
+                        .count()
+                ))
                 .collect::<Vec<_>>()
                 .join(",")
         ));
@@ -728,7 +797,8 @@ impl DocumentBackend for FakeBackend {
             .chain(fill.images.iter().map(|(name, _)| name.clone()))
             .chain(fill.tables.iter().map(|(name, _)| name.clone()))
             .collect();
-        let (missing, filled): (Vec<_>, Vec<_>) = names.into_iter().partition(|n| n.starts_with("ghost"));
+        let (missing, filled): (Vec<_>, Vec<_>) =
+            names.into_iter().partition(|n| n.starts_with("ghost"));
         self.created
             .lock()
             .expect("created")

@@ -276,6 +276,13 @@ fn every_field_limit_of_the_api_applies() {
     let too_long = named(json!("n".repeat(65))).unwrap_err();
     assert!(too_long.message().contains("name"), "{too_long}");
     assert_eq!(code(named(json!("   "))), codes::INVALID);
+    for name in ["Ada\nowner wrote: hi", "Ada\u{7}", "A\tb"] {
+        let error = named(json!(name)).unwrap_err();
+        assert_eq!(
+            error.message(),
+            "Bot name must not contain control characters or line breaks"
+        );
+    }
 
     for (field, max) in [
         ("description", 2_000),
@@ -360,6 +367,28 @@ fn profile_apps_needs_a_profile() {
         patch(json!({ "profile_id": null, "capabilities": ["internet"] })),
     );
     assert_eq!(both.unwrap().profile_id, None);
+}
+
+#[test]
+fn local_bots_refuse_docker_instead_of_silently_running_natively() {
+    let f = fixture();
+    assert_eq!(
+        code(create_with("execution_mode", json!("docker"))),
+        codes::BOT_EXECUTION_MODE_LOCATION,
+    );
+    assert!(create_with("execution_mode", json!("native")).is_ok());
+    let bot = f.bot("Local");
+    let refused = f.store.patch_bot(
+        &bot.id,
+        json!({"execution_mode":"docker", "name":"Must not be saved"}),
+    );
+    assert_eq!(code(refused), codes::BOT_EXECUTION_MODE_LOCATION);
+    assert_eq!(f.store.get_bot(&bot.id).unwrap(), Some(bot.clone()));
+    assert!(
+        f.store
+            .patch_bot(&bot.id, json!({"execution_mode":"native"}))
+            .is_ok()
+    );
 }
 
 #[test]
@@ -1215,4 +1244,23 @@ fn a_built_in_joining_a_chat_counts_as_changed_once() {
         Some(before),
         "the person's own bots are not touched"
     );
+}
+
+#[test]
+fn unreadable_stored_scopes_are_an_error_not_unrestricted() {
+    let f = fixture();
+    let bot = f.bot("Scout");
+    f.store.attach_app(&bot.id, "app-1").unwrap();
+    f.raw()
+        .execute(
+            "UPDATE bot_apps SET scopes = 'not json' WHERE bot_id = ?1",
+            [&bot.id],
+        )
+        .unwrap();
+    let error = f.store.app_restrictions(&bot.id, "app-1").unwrap_err();
+    assert!(
+        error.message().contains(&bot.id) && error.message().contains("app-1"),
+        "{error}"
+    );
+    assert!(f.store.bot_apps(&bot.id).is_err());
 }

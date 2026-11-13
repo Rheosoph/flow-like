@@ -19,6 +19,7 @@ import type {
 	FleetRoute,
 	FleetView,
 } from "../../../../lib/device-management/model/types";
+import { ownNameFromClaims } from "../../../../lib/user-display";
 import { headlineCopy, headlineNames } from "../copy/headline-copy";
 import {
 	Annunciator,
@@ -71,10 +72,7 @@ interface Notice {
 
 /** The signed-in person as the identity provider names them; nothing when it sends no name. */
 function useSignedInName() {
-	const auth = useContext(AuthContext);
-	if (!auth?.user) return undefined;
-	const { name, preferred_username: handle, email } = auth.user.profile;
-	return name || handle || email;
+	return ownNameFromClaims(useContext(AuthContext)?.user?.profile);
 }
 
 interface NoticeState {

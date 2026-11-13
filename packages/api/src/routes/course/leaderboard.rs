@@ -2,7 +2,10 @@ use crate::{
     entity::{leaderboard_opt_in, user},
     error::ApiError,
     middleware::jwt::AppUser,
-    routes::{PaginationParams, user::sign_avatar},
+    routes::{
+        PaginationParams,
+        user::{identity::public_display_name, sign_avatar},
+    },
     state::AppState,
 };
 use axum::{
@@ -33,12 +36,11 @@ pub struct OptInBody {
 
 fn verified_display_name(user: Option<&user::Model>) -> String {
     user.and_then(|user| {
-        user.name
-            .as_deref()
-            .or(user.preferred_username.as_deref())
-            .or(user.username.as_deref())
-            .filter(|value| !value.trim().is_empty())
-            .map(|value| value.trim().to_string())
+        public_display_name(
+            user.name.as_deref(),
+            user.preferred_username.as_deref(),
+            user.email.as_deref(),
+        )
     })
     .unwrap_or_else(|| "Anonymous".to_string())
 }

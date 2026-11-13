@@ -478,6 +478,15 @@ opt-level = 1
 [profile.dev.package.regalloc2]
 opt-level = 1
 
+# The barcode readers run on every frame of the live scanner. Unoptimized, one camera frame
+# takes seconds. rxing's readers are generic over the image source, so the binarizing half of
+# them compiles into the image catalog crate.
+[profile.dev.package.rxing]
+opt-level = 1
+
+[profile.dev.package.flow-like-catalog-media-image]
+opt-level = 1
+
 [profile.dev-run]
 inherits = "dev"
 
@@ -499,6 +508,12 @@ opt-level = 0
 opt-level = 0
 
 [profile.ci.package.regalloc2]
+opt-level = 0
+
+[profile.ci.package.rxing]
+opt-level = 0
+
+[profile.ci.package.flow-like-catalog-media-image]
 opt-level = 0
 
 [profile.release-fast]

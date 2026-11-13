@@ -263,6 +263,74 @@ export interface IAdminUsageOverview {
 	computeCostModel: IComputeCostModel;
 }
 
+export interface IAdminBotTotals {
+	turns: number;
+	completed: number;
+	failed: number;
+	cancelled: number;
+	activeBots: number;
+	people: number;
+	conversations: number;
+	liveBots: number;
+	newBots: number;
+	/** Budget month to date, in micro-dollars. */
+	aiCostMicros: number;
+	aiCalls: number;
+	runtimeMs: number;
+}
+
+export interface IAdminBotTrendPoint {
+	bucket: string;
+	label: string;
+	turns: number;
+	completed: number;
+	failed: number;
+	cancelled: number;
+	activeBots: number;
+}
+
+export interface IAdminBotHost {
+	hostKind: string;
+	turns: number;
+}
+
+export interface IAdminBotFailure {
+	errorCode: string | null;
+	turns: number;
+}
+
+export interface IAdminBotUsage {
+	botId: string;
+	name: string | null;
+	ownerId: string | null;
+	ownerName: string | null;
+	deleted: boolean;
+	turns: number;
+	completed: number;
+	failed: number;
+	cancelled: number;
+	people: number;
+	conversations: number;
+	lastTurnAt: string | null;
+	/** Budget month to date, in micro-dollars. */
+	aiCostMicros: number;
+	aiCalls: number;
+	runtimeMs: number;
+}
+
+export interface IAdminBotActivity {
+	period: IUsageLimitPeriod;
+	startedAt: string;
+	/** Start of the budget month every spend figure covers. */
+	spendSince: string;
+	totals: IAdminBotTotals;
+	trend: IAdminBotTrendPoint[];
+	hosts: IAdminBotHost[];
+	failures: IAdminBotFailure[];
+	topBots: IAdminBotUsage[];
+	topSpenders: IAdminBotUsage[];
+}
+
 export interface IAdminPaginated<T> {
 	items: T[];
 	total: number;

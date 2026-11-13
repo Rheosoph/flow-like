@@ -22,7 +22,8 @@ documents = [
     "flow-like-catalog-media-image/execute",
     "flow-like-catalog-media-document/execute",
 ]
-image-resolve = ["dep:flow-like-runtime"]
+barcodes = ["dep:flow-like-catalog-media-image"]
+image-resolve = ["dep:flow-like-runtime", "flow-like-runtime/model"]
 image = [
     "image-resolve",
     "dep:flow-like-catalog-media-image",
@@ -68,5 +69,6 @@ zip.workspace = true
 libc = "0.2"
 
 [dev-dependencies]
+rxing = { version = "0.7.1", features = ["serde", "image"] }
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

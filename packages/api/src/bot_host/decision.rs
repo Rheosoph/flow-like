@@ -91,7 +91,9 @@ pub(super) async fn evaluate(
         "message": decision::excerpt(&transcript.prompt, 4_000),
     }), &participants).map_err(|e| ApiError::bad_request(e.to_string()))?;
     let response = invoke(state, turn, bit_id, &request).await?;
-    decision::parse(&request, &response).map_err(|e| ApiError::internal(e.to_string()))
+    let decided =
+        decision::parse(&request, &response).map_err(|e| ApiError::internal(e.to_string()))?;
+    Ok(decided.answering_addressed(addressed, trigger_kind == Some(InboxEntryKind::Transcript)))
 }
 
 pub(super) async fn invoke(

@@ -152,9 +152,13 @@ function OnDevice({
 			}
 		>
 			{device
-				? t("panel.details.onDevice", "On {{device}}", {
-						device: device.display_name || device.name,
-					})
+				? bot.execution_mode === "docker"
+					? t("panel.details.dockerOnDevice", "Docker on {{device}}", {
+							device: device.display_name || device.name,
+						})
+					: t("panel.details.onDevice", "On {{device}}", {
+							device: device.display_name || device.name,
+						})
 				: location.label}
 		</DetailRow>
 	);

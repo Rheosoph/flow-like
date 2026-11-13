@@ -9,11 +9,13 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
+import { botSecretRequest } from "../lib/bot-secret-sealing";
 import { useBackend } from "../state/backend-state";
 import type {
 	BotApprovalDecision,
 	BotSystemKey,
 	IBot,
+	IBotApprovalItemDecision,
 	IBotConnector,
 	IBotRestrictions,
 	IBotSkill,
@@ -309,18 +311,35 @@ export function useBotSecrets(botId?: string | null) {
 }
 
 export function useUpsertBotSecret() {
-	const state = useBackend().botState;
+	const { botState: state, inboxState } = useBackend();
 	const queryClient = useQueryClient();
 	return useMutation({
-		mutationFn: ({
+		mutationFn: async ({
 			botId,
 			name,
 			request,
+			sealed = false,
 		}: {
 			botId: string;
 			name: string;
 			request: IUpsertBotSecretRequest;
-		}) => requireBotState(state).upsertBotSecret(botId, name, request),
+			/** Seal `request.value` on this device to the bot's keys before it is sent. */
+			sealed?: boolean;
+		}) =>
+			requireBotState(state).upsertBotSecret(
+				botId,
+				name,
+				sealed && request.value !== undefined
+					? await botSecretRequest(
+							inboxState,
+							botId,
+							name,
+							request.value,
+							request.description,
+							true,
+						)
+					: request,
+			),
 		gcTime: 0,
 		onSettled: (_, __, { botId }) =>
 			queryClient.invalidateQueries({ queryKey: botKeys.secrets(botId) }),
@@ -428,19 +447,27 @@ export function useAnswerBotApproval() {
 			turnId,
 			approvalId,
 			decision,
+			items,
 		}: {
 			botId: string;
 			turnId: string;
 			approvalId: string;
 			decision: BotApprovalDecision;
+			/** Calls of a batch whose answer differs from `decision`. */
+			items?: readonly IBotApprovalItemDecision[];
 		}) => {
 			const answer = requireBotState(state).answerApproval;
 			if (!answer) throw new Error("This backend cannot answer approvals");
-			return answer.call(state, botId, turnId, approvalId, decision);
+			return items?.length
+				? answer.call(state, botId, turnId, approvalId, decision, items)
+				: answer.call(state, botId, turnId, approvalId, decision);
 		},
-		onSettled: (_, __, { botId, decision }) => {
+		onSettled: (_, __, { botId, decision, items }) => {
 			queryClient.invalidateQueries({ queryKey: inboxKeys.all });
-			if (decision === "always") {
+			if (
+				decision === "always" ||
+				items?.some((item) => item.decision === "always")
+			) {
 				queryClient.invalidateQueries({ queryKey: botKeys.toolGrants(botId) });
 			}
 		},

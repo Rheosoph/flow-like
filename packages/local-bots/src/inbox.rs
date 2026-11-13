@@ -632,7 +632,7 @@ fn save_bot_limits(
     Ok(())
 }
 
-fn existing_direct(tx: &Connection, other: &str) -> Result<Option<String>> {
+pub(crate) fn existing_direct(tx: &Connection, other: &str) -> Result<Option<String>> {
     Ok(tx
         .query_row(
             "SELECT id FROM conversations WHERE direct_key = ?1",
@@ -749,27 +749,72 @@ pub(crate) fn write_trigger(
     message_id: &str,
     body: &TriggerBody,
 ) -> Result<InboxEntry> {
-    if !is_valid_message_id(message_id) {
-        return Err(Error::invalid(format!(
-            "message_id '{}' must be 1 to 64 characters of A-Z, a-z, 0-9, '_' and '-'",
-            message_id.chars().take(80).collect::<String>()
-        )));
-    }
+    check_trigger_id(message_id)?;
     let conversation_id = open_direct(tx, bot_id, changes)?;
-    if let Some(existing) = entry_by_message_id(tx, message_id)? {
-        return repeated(existing, &conversation_id, LOCAL_OWNER_ID);
+    insert_trigger(tx, changes, &conversation_id, message_id, body)
+}
+
+/// The trigger entry of `body` in `conversation_id`, a group the person and `bot_id` are both
+/// still in, inside the caller's transaction. `None` when the group is gone or either left it.
+pub(crate) fn write_group_trigger(
+    tx: &Connection,
+    changes: &mut Changes,
+    conversation_id: &str,
+    bot_id: &str,
+    message_id: &str,
+    body: &TriggerBody,
+) -> Result<Option<InboxEntry>> {
+    check_trigger_id(message_id)?;
+    if !in_group(tx, conversation_id, bot_id)? {
+        return Ok(None);
     }
-    let at = next_event_time(tx, &conversation_id)?;
+    insert_trigger(tx, changes, conversation_id, message_id, body).map(Some)
+}
+
+/// Whether `conversation_id` is a group the person and `bot_id` are both still in.
+pub(crate) fn in_group(db: &Connection, conversation_id: &str, bot_id: &str) -> Result<bool> {
+    let kind: Option<String> = db
+        .prepare_cached("SELECT kind FROM conversations WHERE id = ?1")?
+        .query_row([conversation_id], |row| row.get(0))
+        .optional()?;
+    if kind.as_deref().and_then(ConversationKind::parse) != Some(ConversationKind::Group) {
+        return Ok(false);
+    }
+    Ok(membership(db, conversation_id, bot_id)?.is_some()
+        && membership(db, conversation_id, LOCAL_OWNER_ID)?.is_some())
+}
+
+fn check_trigger_id(message_id: &str) -> Result<()> {
+    if is_valid_message_id(message_id) {
+        return Ok(());
+    }
+    Err(Error::invalid(format!(
+        "message_id '{}' must be 1 to 64 characters of A-Z, a-z, 0-9, '_' and '-'",
+        message_id.chars().take(80).collect::<String>()
+    )))
+}
+
+fn insert_trigger(
+    tx: &Connection,
+    changes: &mut Changes,
+    conversation_id: &str,
+    message_id: &str,
+    body: &TriggerBody,
+) -> Result<InboxEntry> {
+    if let Some(existing) = entry_by_message_id(tx, message_id)? {
+        return repeated(existing, conversation_id, LOCAL_OWNER_ID);
+    }
+    let at = next_event_time(tx, conversation_id)?;
     let entry = insert_event(
         tx,
-        &conversation_id,
+        conversation_id,
         message_id,
         LOCAL_OWNER_ID,
         InboxEntryKind::Trigger,
         body.envelope(),
         at,
     )?;
-    changes.conversation(&conversation_id);
+    changes.conversation(conversation_id);
     Ok(entry)
 }
 
@@ -854,21 +899,25 @@ struct Outgoing {
 }
 
 fn validate_send(request: SendEntryRequest) -> Result<Outgoing> {
+    validate_send_as(request, false)
+}
+
+fn validate_send_as(request: SendEntryRequest, internal: bool) -> Result<Outgoing> {
     if !is_valid_message_id(&request.message_id) {
         return Err(Error::invalid(format!(
             "message_id '{}' must be 1 to 64 characters of A-Z, a-z, 0-9, '_' and '-'",
             request.message_id.chars().take(80).collect::<String>()
         )));
     }
-    if !request.kind.client_sendable()
-        && !matches!(
-            request.kind,
-            InboxEntryKind::Trigger | InboxEntryKind::Activity
-        )
-    {
-        return Err(Error::invalid(
-            "Member entries are written when members join or leave",
-        ));
+    let internal_kind = matches!(
+        request.kind,
+        InboxEntryKind::Trigger | InboxEntryKind::Activity
+    );
+    if !request.kind.client_sendable() && !(internal && internal_kind) {
+        return Err(Error::invalid(format!(
+            "A {} entry is written by the runtime, not sent",
+            request.kind.as_str()
+        )));
     }
     if request.envelopes.is_some() {
         return Err(Error::account_required(
@@ -902,6 +951,32 @@ fn validate_send(request: SendEntryRequest) -> Result<Outgoing> {
         workspace_apps,
         conversation_files,
     })
+}
+
+/// The message `message_id` in `conversation_id` and the edits and deletions of it, oldest first.
+pub(crate) fn message_with_changes(
+    db: &Connection,
+    conversation_id: &str,
+    message_id: &str,
+) -> Result<Vec<InboxEntry>> {
+    let mut statement = db.prepare_cached(&format!(
+        "SELECT {ENTRY_COLUMNS} FROM entries WHERE conversation_id = ?1
+           AND (message_id = ?2 OR (kind IN (?3, ?4)
+             AND json_extract(envelope, '$.body.target') = ?2))
+         ORDER BY seq, created_at, id"
+    ))?;
+    let entries = statement
+        .query_map(
+            params![
+                conversation_id,
+                message_id,
+                InboxEntryKind::Edit.as_str(),
+                InboxEntryKind::Delete.as_str()
+            ],
+            read_entry,
+        )?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(entries)
 }
 
 pub(crate) fn entry_by_message_id(db: &Connection, message_id: &str) -> Result<Option<InboxEntry>> {
@@ -1433,6 +1508,18 @@ impl LocalBotStore {
         self.write(|tx, changes| send_in(tx, changes, conversation_id, sender_id, &outgoing))
     }
 
+    /// [`Self::send`] for the runtime's own writers: it also accepts `trigger` and `activity`
+    /// entries, which no client may send.
+    pub fn send_internal(
+        &self,
+        conversation_id: &str,
+        sender_id: &str,
+        request: SendEntryRequest,
+    ) -> Result<InboxEntry> {
+        let outgoing = validate_send_as(request, true)?;
+        self.write(|tx, changes| send_in(tx, changes, conversation_id, sender_id, &outgoing))
+    }
+
     /// Stores a message `bot_id` writes into the person's direct conversation with it, started
     /// when missing. `None` when `from_conversation` is that conversation: nothing is written.
     pub fn send_to_owner(
@@ -1460,6 +1547,7 @@ impl LocalBotStore {
         message_id: &str,
         body: &TriggerBody,
     ) -> Result<InboxEntry> {
+        TriggerBody::parse(&body.envelope()["body"]).map_err(Error::invalid)?;
         self.write(|tx, changes| write_trigger(tx, changes, bot_id, message_id, body))
     }
 
@@ -1473,12 +1561,15 @@ impl LocalBotStore {
         body: &ActivityBody,
         start: bool,
     ) -> Result<Option<InboxEntry>> {
-        let outgoing = validate_send(SendEntryRequest {
-            message_id: message_id.to_string(),
-            kind: InboxEntryKind::Activity,
-            envelope: Some(body.envelope()),
-            envelopes: None,
-        })?;
+        let outgoing = validate_send_as(
+            SendEntryRequest {
+                message_id: message_id.to_string(),
+                kind: InboxEntryKind::Activity,
+                envelope: Some(body.envelope()),
+                envelopes: None,
+            },
+            true,
+        )?;
         self.write(|tx, changes| {
             let conversation_id = if start {
                 open_direct(tx, bot_id, changes)?
@@ -1561,6 +1652,10 @@ impl LocalBotStore {
                     "Conversation '{conversation_id}' has events after {cursor} on this device, so it stays here; move them first"
                 )));
             }
+            tx.execute(
+                "DELETE FROM parked_turns WHERE conversation_id = ?1",
+                [conversation_id],
+            )?;
             if tx.execute("DELETE FROM conversations WHERE id = ?1", [conversation_id])? > 0 {
                 changes.conversation(conversation_id);
                 changes.files();

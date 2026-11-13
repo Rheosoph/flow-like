@@ -10,8 +10,11 @@ pub mod behavioral_evaluation;
 pub mod behavioral_state;
 pub mod benchmark_cases;
 pub mod bot_notes;
+pub mod bot_reply_files;
 pub mod bot_run;
 pub mod bot_talk;
+pub mod bot_trail;
+pub mod bot_usage;
 mod capability_tools;
 mod configuration_models;
 mod context;
@@ -24,6 +27,7 @@ mod draft_test;
 pub mod evaluation;
 mod executability;
 pub mod http_request;
+pub mod image_view;
 pub mod ir;
 pub mod ir_tools;
 pub mod manifest;
@@ -34,6 +38,7 @@ pub mod memory_tools;
 pub mod platform;
 mod provider;
 pub mod public_web;
+pub mod reply_stream;
 pub mod run_recovery;
 mod search;
 pub mod session;
@@ -42,6 +47,7 @@ pub mod stream;
 mod subtasks;
 mod tool_arguments;
 pub mod tool_authorization;
+pub mod tool_gate;
 pub mod tool_grants;
 #[cfg(test)]
 mod tool_schema_tests;
@@ -51,14 +57,16 @@ mod turn_label;
 mod typed_ir_parse;
 mod types;
 mod validation;
+mod vision_reader;
+pub mod web_providers;
 mod work_plan;
 
 pub use assistant::{
     AttachmentManifestEntry, GlobalDataStudioContext, GlobalOpenBoardContext, PlatformContextInput,
-    PlatformSpecialist, WebResearchCapability, build_platform_context, data_studio_section,
-    global_assistant_system_prompt, global_assistant_system_prompt_for, open_board_section,
-    run_ontology_query_chat, run_platform_chat, run_specialist_chat,
-    run_specialist_chat_with_access,
+    PlatformSpecialist, TURN_FILES, WebResearchCapability, build_platform_context,
+    data_studio_section, global_assistant_system_prompt, global_assistant_system_prompt_for,
+    open_board_section, run_ontology_query_chat, run_platform_chat, run_specialist_chat,
+    run_specialist_chat_with_access, with_stored_files,
 };
 pub use behavioral_evaluation::*;
 pub use behavioral_state::*;
@@ -66,8 +74,8 @@ pub use benchmark_cases::workflow_benchmark_cases;
 pub use bot_run::{
     BotRunContext, BotToolHost, BotToolset, EffectivePermissions, FLUX_BOT_ID, FLUX_BOT_NAME,
     GENERAL_BOT_DESCRIPTION, GENERAL_BOT_ID, GENERAL_BOT_NAME, ReactionNote, SILENT_REPLY,
-    TurnRequester, bot_persona_section, bot_platform_context, bot_system_prompt,
-    find_bot_tool_spec, resolve_bot_model, resolve_host_completion_model, run_bot_chat,
+    TurnRequester, bot_model_preference, bot_persona_section, bot_platform_context,
+    bot_system_prompt, bot_thinking, find_bot_tool_spec, resolve_bot_model, resolve_host_completion_model, resolve_host_completion_model_preferring, run_bot_chat,
     run_bot_chat_with_talk, runnable_completion_model,
 };
 pub use capability_tools::{HostTools, bot_tool_spec, linked_tool_names, tool_outcome_output};
@@ -115,6 +123,8 @@ pub use manifest::{
     default_flowscript_module_templates,
 };
 pub use bot_notes::{NotesHandle, NotesStore, notes_tool_specs};
+pub use bot_reply_files::ReplyFiles;
+pub use bot_trail::ToolTrail;
 pub use memory_tools::{HeadlessMemory, MemoryHandle, MemoryTurnSource, memory_tool_specs};
 pub use provider::{CatalogProvider, node_to_metadata, pin_to_metadata};
 /// Re-export of the rig tool trait so non-rig adapter crates can bound on it (e.g. to derive
@@ -134,6 +144,7 @@ pub use session::{
     WorkflowToolObservation, WorkflowToolPreflightDecision, WorkflowValidationState,
     WorkflowValidationStatus, workflow_strategy_fingerprint, workflow_tool_result_succeeded,
 };
+pub use subtasks::resolve_subtask_model;
 pub use tools::{
     CatalogTool, CheckFlowScriptTool, CommitFlowScriptTool, DatabaseContextTool,
     EditFlowScriptArgs, EmitCommandsArgs, ExecuteEventArgs, ExecuteEventTool, ExecuteNodeArgs,
@@ -155,7 +166,7 @@ pub use tools::{
     render_flowscript_candidate_regression, render_flowscript_modular_partial_result,
     run_declaration_queries, tool_definition_parts,
 };
-pub use turn_label::TurnCompute;
+pub use turn_label::{EXTERNAL_CONTENT, TurnCompute, TurnReads};
 pub use typed_ir_parse::parse_typed_ir_arguments;
 pub use types::{
     AgentType, BoardCommand, ChatImage, ChatMessage, ChatRole, Connection, CopilotResponse, Edge,
@@ -3017,6 +3028,7 @@ impl Copilot {
                         params: None,
                     },
                     model_classification: Default::default(),
+                    data_classification: None,
                 })
                 .unwrap(),
                 ..Default::default()

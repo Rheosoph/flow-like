@@ -8,6 +8,7 @@ const NOT_GRANTABLE: ReadonlySet<string> = new Set([
 	"bot_update_configuration",
 	"create_bot",
 	"update_bot",
+	"delete_bot",
 	"http_request",
 	"forecast_tool",
 	"flowpilot_board_review",
@@ -164,7 +165,8 @@ export function grantScopes(
 			return single(connectionScope(args));
 		case "browser_open": {
 			const site = siteOf(argument(args, "url", "url"));
-			return single(site ? `browser:${site}` : undefined);
+			const prefix = args.browser === "owner" ? "owner_browser" : "browser";
+			return single(site ? `${prefix}:${site}` : undefined);
 		}
 		case "computer_screenshot":
 		case "computer_act":

@@ -36,6 +36,23 @@ async function drag(from, to) {
 	await page.mouse.up();
 	await page.waitForTimeout(250);
 }
+function pathPoint(path, at) {
+	return page.evaluate(
+		({ path, at }) => {
+			const element = document.createElementNS(
+				"http://www.w3.org/2000/svg",
+				"path",
+			);
+			element.setAttribute("d", path);
+			const total = element.getTotalLength();
+			const point = element.getPointAtLength(
+				at.fraction === undefined ? total - at.fromEnd : total * at.fraction,
+			);
+			return { x: point.x, y: point.y };
+		},
+		{ path, at },
+	);
+}
 async function refs(expected) {
 	await page.waitForFunction(
 		(expected) =>
@@ -217,15 +234,7 @@ try {
 		sourcePosition: Position.Bottom,
 		targetPosition: Position.Top,
 	});
-	const point = await page.evaluate((path) => {
-		const element = document.createElementNS(
-			"http://www.w3.org/2000/svg",
-			"path",
-		);
-		element.setAttribute("d", path);
-		const point = element.getPointAtLength(element.getTotalLength() * 0.85);
-		return { x: point.x, y: point.y };
-	}, path);
+	const point = await pathPoint(path, { fraction: 0.85 });
 	await page.mouse.click(point.x, point.y);
 	await page.waitForFunction(
 		(id) =>
@@ -234,8 +243,9 @@ try {
 				.edges.some((e) => e.target === id && e.selected),
 		created.id,
 	);
+	// A pin press starts a new wire; the wire's end corridor moves the existing one.
 	await drag(
-		await center(`ref_in_${created.id}`),
+		await pathPoint(path, { fromEnd: 18 }),
 		await center("ref_in_ref-c"),
 	);
 	await refs(["ref-c"]);

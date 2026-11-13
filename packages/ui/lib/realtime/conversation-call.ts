@@ -12,6 +12,22 @@ export const CALL_FIELD = "call";
 const CALL_ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/;
 const PEER_ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/;
 
+/** A participant's request to stop a bot that another device is speaking. */
+export interface InterruptRequest {
+	botId: string;
+	at: number;
+}
+
+/** What the device playing a bot's voice reports after cutting it off. */
+export interface InterruptedSpeechRecord {
+	message_id: string;
+	heard_chars: number;
+	spoken_chars: number;
+	at: number;
+}
+
+export const MAX_SPOKEN_CHARS = 64_000;
+
 export interface CallPresence {
 	id: string;
 	joined: boolean;
@@ -22,6 +38,8 @@ export interface CallPresence {
 	screen?: string;
 	voiceBots?: readonly string[];
 	speakingBot?: string;
+	interruptBot?: InterruptRequest;
+	interruptedSpeech?: InterruptedSpeechRecord;
 }
 
 export interface CallParticipant {
@@ -35,6 +53,8 @@ export interface CallParticipant {
 	screen?: string;
 	voiceBots?: readonly string[];
 	speakingBot?: string;
+	interruptBot?: InterruptRequest;
+	interruptedSpeech?: InterruptedSpeechRecord;
 }
 
 export interface LiveCall {
@@ -48,6 +68,43 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function streamId(value: unknown): value is string {
 	return typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+}
+
+function timestamp(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function sanitizeInterruptBot(value: unknown): InterruptRequest | undefined {
+	if (!isRecord(value)) return undefined;
+	const { botId, at } = value;
+	return typeof botId === "string" &&
+		/^[A-Za-z0-9:_-]{1,160}$/.test(botId) &&
+		timestamp(at)
+		? { botId, at }
+		: undefined;
+}
+
+function sanitizeInterruptedSpeech(
+	value: unknown,
+): InterruptedSpeechRecord | undefined {
+	if (!isRecord(value)) return undefined;
+	const { message_id, heard_chars, spoken_chars, at } = value;
+	return typeof message_id === "string" &&
+		CALL_ID_PATTERN.test(message_id) &&
+		Number.isSafeInteger(heard_chars) &&
+		Number.isSafeInteger(spoken_chars) &&
+		(spoken_chars as number) > 0 &&
+		(spoken_chars as number) <= MAX_SPOKEN_CHARS &&
+		(heard_chars as number) >= 0 &&
+		(heard_chars as number) <= (spoken_chars as number) &&
+		timestamp(at)
+		? {
+				message_id,
+				heard_chars: heard_chars as number,
+				spoken_chars: spoken_chars as number,
+				at,
+			}
+		: undefined;
 }
 
 export function sanitizeCallPresence(value: unknown): CallPresence | null {
@@ -67,6 +124,8 @@ export function sanitizeCallPresence(value: unknown): CallPresence | null {
 				.slice(0, 64)
 				.sort()
 		: [];
+	const interruptBot = sanitizeInterruptBot(value.interruptBot);
+	const interruptedSpeech = sanitizeInterruptedSpeech(value.interruptedSpeech);
 	return {
 		id,
 		joined: joined === true,
@@ -80,6 +139,8 @@ export function sanitizeCallPresence(value: unknown): CallPresence | null {
 		voiceBots.includes(value.speakingBot)
 			? { speakingBot: value.speakingBot }
 			: {}),
+		...(interruptBot ? { interruptBot } : {}),
+		...(interruptedSpeech ? { interruptedSpeech } : {}),
 	};
 }
 
@@ -111,6 +172,8 @@ function candidatesOf(
 			screen: presence.screen,
 			voiceBots: presence.voiceBots,
 			speakingBot: presence.speakingBot,
+			interruptBot: presence.interruptBot,
+			interruptedSpeech: presence.interruptedSpeech,
 		});
 	}
 	return found.sort((a, b) => a.clientId - b.clientId);
@@ -265,16 +328,25 @@ export interface CallPeerLike {
 		newTrack: MediaStreamTrack | null,
 		stream: MediaStream,
 	): void;
-	on(event: "stream" | "close", listener: (stream?: MediaStream) => void): void;
+	on(
+		event: "stream" | "close" | "connect",
+		listener: (stream?: MediaStream) => void,
+	): void;
 	off(
-		event: "stream" | "close",
+		event: "stream" | "close" | "connect",
 		listener: (stream?: MediaStream) => void,
 	): void;
 }
 
+/** A y-webrtc connection to one peer of the room. */
+export interface CallConnLike {
+	peer?: unknown;
+	connected?: boolean;
+}
+
 export interface CallProviderLike {
 	room?: {
-		webrtcConns: Map<string, { peer?: unknown }>;
+		webrtcConns: Map<string, CallConnLike>;
 	} | null;
 	on(event: "peers", listener: (change: unknown) => void): void;
 	off(event: "peers", listener: (change: unknown) => void): void;
@@ -308,6 +380,23 @@ interface Tracked {
 	remote: Map<MediaStream, () => void>;
 	onStream: (stream?: MediaStream) => void;
 	onClose: () => void;
+	onConnect: () => void;
+}
+
+/**
+ * y-webrtc settles two simultaneous first offers by comparing tokens taken from
+ * each machine's clock, and keeps comparing on every later offer. A connected
+ * peer has one side that offers, so nothing is left to settle; between machines
+ * whose clocks differ the comparison drops every renegotiation, and two people
+ * show in the call without hearing each other. An offer without a token is
+ * never dropped, by this client or an older one.
+ */
+function retireGlareToken(conn: CallConnLike) {
+	Object.defineProperty(conn, "glareToken", {
+		configurable: true,
+		get: () => undefined,
+		set: () => {},
+	});
 }
 
 /** Reattaches all active streams when ICE credentials replace a peer connection. */
@@ -384,6 +473,7 @@ export function createCallEngine(provider: CallProviderLike): CallEngine {
 	const detach = (peer: CallPeerLike, entry: Tracked) => {
 		peer.off("stream", entry.onStream);
 		peer.off("close", entry.onClose);
+		peer.off("connect", entry.onConnect);
 		for (const cleanup of entry.remote.values()) cleanup();
 		entry.remote.clear();
 		for (const stream of entry.local) {
@@ -394,7 +484,7 @@ export function createCallEngine(provider: CallProviderLike): CallEngine {
 		entry.local.clear();
 		tracked.delete(peer);
 	};
-	const track = (peerId: string, peer: CallPeerLike) => {
+	const track = (peerId: string, peer: CallPeerLike, conn: CallConnLike) => {
 		const existing = tracked.get(peer);
 		if (existing) {
 			swap(peer, existing);
@@ -434,10 +524,13 @@ export function createCallEngine(provider: CallProviderLike): CallEngine {
 				detach(peer, entry);
 				emit();
 			},
+			onConnect: () => retireGlareToken(conn),
 		};
 		tracked.set(peer, entry);
 		peer.on("stream", entry.onStream);
 		peer.on("close", entry.onClose);
+		if (conn.connected) retireGlareToken(conn);
+		else peer.on("connect", entry.onConnect);
 		swap(peer, entry);
 	};
 	const sync = () => {
@@ -450,7 +543,7 @@ export function createCallEngine(provider: CallProviderLike): CallEngine {
 			}
 		}
 		for (const [id, conn] of conns ?? [])
-			if (isPeerLike(conn.peer)) track(id, conn.peer);
+			if (isPeerLike(conn.peer)) track(id, conn.peer, conn);
 	};
 	const setLocalStreams = (streams: readonly MediaStream[]) => {
 		if (disposed) return;

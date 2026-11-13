@@ -176,6 +176,7 @@ fn model_bit(
     let parameters = json::to_value(LLMParameters {
         context_length,
         model_classification: BitModelClassification::default(),
+        data_classification: None,
         provider: ModelProvider {
             provider_name: kind.provider_name().into(),
             model_id: Some(model_id.clone()),

@@ -22,6 +22,11 @@ import type {
 } from "../../state/backend-state/inbox-state";
 import { IdentityAvatar } from "../identity/identity-avatar";
 import { LocalBadge } from "./bot-labels";
+import {
+	NO_HIDDEN_BOTS,
+	botVisibilityKey,
+	shownBots,
+} from "./bot-visibility-model";
 import { isSelfPrincipal, matchesSearch } from "./crew-model";
 import type { CrewDirectory } from "./use-crew-directory";
 
@@ -43,12 +48,14 @@ function PickerOption({
 	selected,
 	multiple,
 	disabled,
+	unavailable,
 	onPick,
 }: Readonly<{
 	row: PickerRow;
 	selected: boolean;
 	multiple: boolean;
 	disabled: boolean;
+	unavailable?: string;
 	onPick: (row: PickerRow) => void;
 }>) {
 	const { t } = useTranslation("bots");
@@ -57,7 +64,7 @@ function PickerOption({
 			<button
 				type="button"
 				aria-pressed={multiple ? selected : undefined}
-				disabled={disabled && !selected}
+				disabled={(disabled || Boolean(unavailable)) && !selected}
 				onClick={() => onPick(row)}
 				className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
 			>
@@ -67,9 +74,9 @@ function PickerOption({
 						<span className="truncate text-sm font-medium">{row.label}</span>
 						{row.bot?.local && <LocalBadge className="shrink-0" />}
 					</span>
-					{row.detail && (
+					{(unavailable ?? row.detail) && (
 						<span className="truncate text-xs text-muted-foreground">
-							{row.detail}
+							{unavailable ?? row.detail}
 						</span>
 					)}
 				</span>
@@ -106,6 +113,7 @@ function PickerGroup({
 	selected: ReadonlySet<string>;
 	multiple: boolean;
 	full: boolean;
+	unavailable?: (row: PickerRow) => string | undefined;
 	onPick: (row: PickerRow) => void;
 }>) {
 	if (rows.length === 0) return null;
@@ -122,6 +130,7 @@ function PickerGroup({
 						selected={option.selected.has(row.id)}
 						multiple={option.multiple}
 						disabled={option.full}
+						unavailable={option.unavailable?.(row)}
 						onPick={option.onPick}
 					/>
 				))}
@@ -172,6 +181,8 @@ function useDebounced(value: string, delayMs: number) {
 export interface PickerSource {
 	me?: string | null;
 	bots: readonly IBot[];
+	/** Visibility keys of the bots the current profile hides; they are not offered. */
+	hiddenBots?: ReadonlySet<string>;
 	recentPeopleIds: readonly string[];
 	directory: CrewDirectory;
 	/** People need an account; without one only your bots on this computer can be picked. */
@@ -188,6 +199,7 @@ export function PrincipalPicker({
 	multiple,
 	full = false,
 	serverRule,
+	unavailable,
 	onPick,
 }: Readonly<{
 	source: PickerSource;
@@ -204,11 +216,14 @@ export function PrincipalPicker({
 		memberIds?: readonly string[];
 		invitedIds?: readonly string[];
 	};
+	/** The reason a principal can't be picked right now; their row is shown but disabled. */
+	unavailable?: (principal: PickedPrincipal) => string | undefined;
 	onPick: (principal: PickedPrincipal) => void;
 }>) {
 	const { t } = useTranslation("bots");
 	const botLabels = useBotLabels();
 	const { me, bots, recentPeopleIds, directory, people } = source;
+	const hiddenBots = source.hiddenBots ?? NO_HIDDEN_BOTS;
 	const [query, setQuery] = useState("");
 	const ruled = Boolean(serverRule) && people;
 	const search = useProjectUserSearch(undefined, query, people);
@@ -226,7 +241,13 @@ export function PrincipalPicker({
 	const ruledRows = useMemo<PickerRow[]>(
 		() =>
 			(invitable.data ?? [])
-				.filter((entry) => entry.state !== "member")
+				.filter((entry) => {
+					const own = ownBots.get(entry.principal_id);
+					return (
+						entry.state !== "member" &&
+						!(own && hiddenBots.has(botVisibilityKey(own)))
+					);
+				})
 				.map((entry) => {
 					const own = ownBots.get(entry.principal_id);
 					const looked = lookups.get(entry.principal_id) ?? null;
@@ -249,12 +270,21 @@ export function PrincipalPicker({
 						mode: entry.mode,
 					};
 				}),
-		[invitable.data, ownBots, lookups, botLabels, lookupName, unknown, t],
+		[
+			invitable.data,
+			ownBots,
+			hiddenBots,
+			lookups,
+			botLabels,
+			lookupName,
+			unknown,
+			t,
+		],
 	);
 
 	const botRows = useMemo<PickerRow[]>(
 		() =>
-			(ruled ? bots.filter((bot) => bot.local) : bots)
+			shownBots(ruled ? bots.filter((bot) => bot.local) : bots, hiddenBots)
 				.map((bot) => {
 					const labels = botLabels(bot);
 					return {
@@ -266,7 +296,7 @@ export function PrincipalPicker({
 					};
 				})
 				.filter((row) => matchesSearch(query, [row.label, row.detail])),
-		[bots, botLabels, query, ruled],
+		[bots, hiddenBots, botLabels, query, ruled],
 	);
 
 	const peopleRows = useMemo<PickerRow[]>(() => {
@@ -361,6 +391,7 @@ export function PrincipalPicker({
 					selected={selected}
 					multiple={multiple}
 					full={full}
+					unavailable={unavailable}
 					onPick={onPick}
 				/>
 				<PickerGroup
@@ -369,6 +400,7 @@ export function PrincipalPicker({
 					selected={selected}
 					multiple={multiple}
 					full={full}
+					unavailable={unavailable}
 					onPick={onPick}
 				/>
 				<PickerGroup
@@ -377,6 +409,7 @@ export function PrincipalPicker({
 					selected={selected}
 					multiple={multiple}
 					full={full}
+					unavailable={unavailable}
 					onPick={onPick}
 				/>
 				{nothing && people && (

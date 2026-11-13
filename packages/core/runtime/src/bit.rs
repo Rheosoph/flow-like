@@ -945,6 +945,9 @@ pub struct LLMParameters {
     pub context_length: u32,
     pub provider: ModelProvider,
     pub model_classification: BitModelClassification,
+    /// The most sensitive data this model may process; `None` means untagged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_classification: Option<flow_like_types::data_classification::DataClassification>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
@@ -952,6 +955,9 @@ pub struct VLMParameters {
     pub context_length: u32,
     pub provider: ModelProvider,
     pub model_classification: BitModelClassification,
+    /// The most sensitive data this model may process; `None` means untagged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_classification: Option<flow_like_types::data_classification::DataClassification>,
 }
 
 /// A model that answers typed questions about a state through the SystemOne API.
@@ -2719,6 +2725,7 @@ mod tests {
                 params: Some(params),
             },
             model_classification: BitModelClassification::default(),
+            data_classification: None,
         };
 
         Bit {
@@ -2790,12 +2797,14 @@ mod tests {
                 context_length: 8192,
                 provider,
                 model_classification: BitModelClassification::default(),
+                data_classification: None,
             })
             .unwrap(),
             _ => flow_like_types::json::to_value(LLMParameters {
                 context_length: 8192,
                 provider,
                 model_classification: BitModelClassification::default(),
+                data_classification: None,
             })
             .unwrap(),
         };
@@ -3449,6 +3458,7 @@ mod tests {
                 params: None,
             },
             model_classification: BitModelClassification::default(),
+            data_classification: None,
         };
         Bit {
             id: id.to_string(),
@@ -3527,6 +3537,7 @@ mod tests {
                 params: None,
             },
             model_classification: BitModelClassification::default(),
+            data_classification: None,
         };
         let mut bit = Bit {
             bit_type: BitTypes::Llm,

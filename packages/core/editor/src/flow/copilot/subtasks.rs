@@ -28,13 +28,15 @@ use serde_json::{Value, json};
 use super::bot_run::{BotRunContext, BotToolBridge, BotToolHost, BotToolset, bot_system_prompt};
 use super::bot_talk::ASK_BOT_TOOL;
 use super::platform::{
-    IncompleteWork, PlatformCopilot, PlatformSurface, PlatformToolBridge, WorkStopReason,
+    Clearance, IncompleteWork, PlatformCopilot, PlatformSurface, PlatformToolBridge, WebAccess,
+    WorkStopReason,
 };
 use super::tool_spec::{
     MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL, PlatformToolSpec, ToolApprovalSpec,
     resolve_tool_approval_timing,
 };
 use super::turn_label::{LabelBridge, TurnCompute, TurnLabel};
+use super::vision_reader::ImageDetour;
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
 
@@ -75,7 +77,7 @@ const CHILD_EXCLUDED_CAPABILITIES: [BotCapability; 8] = [
 
 /// Tools a sub-task is refused by name, whatever its capabilities: they ask a person, park the
 /// turn, reach other bots, people or channels, or delegate again.
-const CHILD_REFUSED_TOOLS: [&str; 18] = [
+const CHILD_REFUSED_TOOLS: [&str; 19] = [
     "user_context_available",
     "user_context_request",
     "user_context_set_status",
@@ -91,6 +93,7 @@ const CHILD_REFUSED_TOOLS: [&str; 18] = [
     "schedule_task",
     "list_tasks",
     "cancel_task",
+    "update_task",
     "email_send",
     "email_reply",
     "navigate_view",
@@ -157,6 +160,8 @@ pub struct ChildTurn {
     pub tool_rounds: usize,
     pub bridge: Arc<dyn PlatformToolBridge>,
     pub on_token: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    /// The parent turn's data label, for the outbound tools the child's loop runs itself.
+    pub label: Arc<TurnLabel>,
 }
 
 /// Runs a child's turn and returns its final text.
@@ -174,6 +179,8 @@ pub struct ModelSubtaskRunner {
     pub subtask_model: Option<String>,
     pub thinking: Option<HistoryThinking>,
     pub token: Option<String>,
+    web_access: WebAccess,
+    vision: Option<Arc<ImageDetour>>,
     chosen: tokio::sync::OnceCell<Option<String>>,
 }
 
@@ -206,30 +213,56 @@ impl ModelSubtaskRunner {
             subtask_model,
             thinking,
             token,
+            web_access: WebAccess::default(),
+            vision: None,
             chosen: Default::default(),
         }
     }
 
+    /// The owner's own search and page readers, for children that research.
+    pub fn with_web_access(mut self, web_access: WebAccess) -> Self {
+        self.web_access = web_access;
+        self
+    }
+
+    /// The parent turn's image detour, so children share its budget.
+    pub(super) fn with_vision(mut self, vision: Option<Arc<ImageDetour>>) -> Self {
+        self.vision = vision;
+        self
+    }
+
     async fn model(&self) -> Option<String> {
         self.chosen
-            .get_or_init(|| async {
-                let runnable = match (&self.subtask_model, &self.profile) {
-                    (Some(model), Some(profile)) => {
-                        super::bot_run::runnable_completion_model(&self.state, profile, model)
-                            .await
-                            .is_some()
-                    }
-                    _ => false,
-                };
-                child_model(
+            .get_or_init(|| {
+                resolve_subtask_model(
+                    &self.state,
+                    self.profile.as_deref(),
                     self.subtask_model.as_deref(),
-                    runnable,
                     self.model_id.as_deref(),
                 )
             })
             .await
             .clone()
     }
+}
+
+/// The model a bot's sub-tasks and assistants run on: its sub-task model when this host can run
+/// it, else the turn's own.
+pub async fn resolve_subtask_model(
+    state: &Arc<FlowLikeState>,
+    profile: Option<&Profile>,
+    subtask_model: Option<&str>,
+    turn_model: Option<&str>,
+) -> Option<String> {
+    let runnable = match (subtask_model, profile) {
+        (Some(model), Some(profile)) => {
+            super::bot_run::runnable_completion_model(state, profile, model)
+                .await
+                .is_some()
+        }
+        _ => false,
+    };
+    child_model(subtask_model, runnable, turn_model)
 }
 
 #[async_trait]
@@ -239,15 +272,19 @@ impl SubtaskRunner for ModelSubtaskRunner {
         let copilot = PlatformCopilot::new(self.state.clone(), self.profile.clone())
             .with_thinking(self.thinking)
             .with_tool_specs(child.tool_specs)
-            .with_tool_rounds(child.tool_rounds);
+            .with_tool_rounds(child.tool_rounds)
+            .with_web_access(self.web_access.clone())
+            .with_vision(self.vision.clone())
+            .with_turn_label(child.label);
         // Output-schema repair is a single tool-free completion.
         let copilot = if child.tool_rounds > 0 {
             copilot.with_long_running()
         } else {
             copilot
         };
-        copilot
-            .chat(
+        let stable_prompt = child.system_prompt.clone();
+        let reply: futures::future::BoxFuture<'_, flow_like_types::Result<String>> =
+            Box::pin(copilot.chat(
                 PlatformSurface::Subtask,
                 child.system_prompt,
                 child.user_prompt,
@@ -258,7 +295,8 @@ impl SubtaskRunner for ModelSubtaskRunner {
                 child.bridge,
                 None,
                 on_token,
-            )
+            ));
+        flow_like_model_provider::llm::prompt_cache::with_stable_system_prefix(stable_prompt, reply)
             .await
     }
 }
@@ -370,6 +408,10 @@ impl PlatformToolBridge for LazySurface {
         self.inner.call(tool_name, arguments).await
     }
 
+    async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
+        self.inner.clearance(tool_name, arguments).await
+    }
+
     async fn drain_steering(&self) -> Vec<String> {
         self.inner.drain_steering().await
     }
@@ -416,6 +458,13 @@ impl PlatformToolBridge for SubtaskBridge {
             None
         };
         self.inner.call(tool_name, arguments).await
+    }
+
+    async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
+        if tool_name == SPAWN_SUBTASKS_TOOL {
+            return Clearance::Clear;
+        }
+        self.inner.clearance(tool_name, arguments).await
     }
 
     async fn drain_steering(&self) -> Vec<String> {
@@ -752,6 +801,13 @@ impl PlatformToolBridge for ChildGuard {
         output
     }
 
+    async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
+        match child_name_refusal(tool_name) {
+            Some(message) => Clearance::Refused(refusal_json(tool_name, &message)),
+            None => self.inner.clearance(tool_name, arguments).await,
+        }
+    }
+
     async fn is_cancelled(&self) -> bool {
         self.inner.is_cancelled().await
     }
@@ -772,6 +828,13 @@ impl PlatformToolBridge for ApprovalGate {
             return refusal_json(tool_name, &message);
         }
         self.inner.call(tool_name, arguments).await
+    }
+
+    async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
+        match child_approval_refusal(tool_name, arguments) {
+            Some(message) => Clearance::Refused(refusal_json(tool_name, &message)),
+            None => self.inner.clearance(tool_name, arguments).await,
+        }
     }
 
     async fn is_cancelled(&self) -> bool {
@@ -1081,11 +1144,13 @@ impl SubtaskBridge {
         meter: &Arc<ChildMeter>,
         parent_request: &str,
         request_id: &str,
+        usage_id: &str,
     ) -> Arc<dyn Fn(String) + Send + Sync> {
         let meter = meter.clone();
         let events = self.env.on_token.clone();
         let parent_request = parent_request.to_string();
         let request_id = request_id.to_string();
+        let usage_id = usage_id.to_string();
         Arc::new(move |frame: String| {
             meter.observe_frame(&frame);
             if let Some(sink) = &events {
@@ -1093,6 +1158,7 @@ impl SubtaskBridge {
                     json!({
                         "type": "native_specialist_event",
                         "requestId": request_id,
+                        "usageId": usage_id,
                         "parentRequestId": parent_request,
                         "toolName": SPAWN_SUBTASKS_TOOL,
                         "frame": frame,
@@ -1133,7 +1199,7 @@ impl SubtaskBridge {
             }),
             meter: meter.clone(),
         });
-        let sink = self.sink_for(meter, parent_request, request_id);
+        let sink = self.sink_for(meter, parent_request, request_id, request_id);
         let first = ChildTurn {
             system_prompt: child_system_prompt(&child),
             user_prompt: child_user_prompt(task, can_read_files),
@@ -1141,6 +1207,7 @@ impl SubtaskBridge {
             tool_rounds: CHILD_ROUNDS,
             bridge: guard.clone(),
             on_token: Some(sink.clone()),
+            label: self.env.label.clone(),
         };
         let text = match self.limited(limit, self.env.runner.run(first)).await {
             Limited::Finished(Ok(text)) => text,
@@ -1169,7 +1236,13 @@ impl SubtaskBridge {
             tool_specs: Vec::new(),
             tool_rounds: 0,
             bridge: guard,
-            on_token: Some(sink),
+            on_token: Some(self.sink_for(
+                meter,
+                parent_request,
+                request_id,
+                &format!("{request_id}:repair"),
+            )),
+            label: self.env.label.clone(),
         };
         let repaired = match self.limited(left, self.env.runner.run(repair)).await {
             Limited::Finished(Ok(text)) => text,
@@ -1410,6 +1483,17 @@ mod tests {
                 user_prompt: child.user_prompt.clone(),
                 tool_rounds: child.tool_rounds,
             });
+            // A surface worker counts as running once it holds the shared surface.
+            let mut behavior = (self.behavior)(&child.user_prompt);
+            let surface_tool = ["browser_snapshot", "computer_windows"]
+                .into_iter()
+                .find(|tool| child.tool_specs.iter().any(|spec| spec.name == *tool))
+                .unwrap_or("browser_snapshot");
+            while let Behavior::Surface(next) = behavior {
+                let output = child.bridge.call(surface_tool, json!({})).await;
+                locked(&self.calls).push((surface_tool.to_string(), output));
+                behavior = *next;
+            }
             let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
             struct Running<'a>(&'a AtomicU64);
             impl Drop for Running<'_> {
@@ -1420,11 +1504,6 @@ mod tests {
             let _running = Running(&self.running);
             self.peak.fetch_max(now, Ordering::SeqCst);
             self.started.notify_one();
-            let mut behavior = (self.behavior)(&child.user_prompt);
-            while let Behavior::Surface(next) = behavior {
-                child.bridge.call("browser_snapshot", json!({})).await;
-                behavior = *next;
-            }
             let result = match behavior {
                 Behavior::Reply(text) => Ok(text),
                 Behavior::Fail => Err(flow_like_types::anyhow!("model unavailable")),
@@ -1782,6 +1861,7 @@ mod tests {
         let mut bot = parent_bot();
         bot.capabilities
             .extend([BotCapability::BrowserUse, BotCapability::ComputerUse]);
+        bot.host_tools = HostTools::linked().with_local_machine();
         bot
     }
 
@@ -1807,6 +1887,9 @@ mod tests {
             for task in result["results"].as_array().unwrap() {
                 assert_eq!(task["status"], "done", "{task}");
             }
+        }
+        for (tool, output) in locked(&runner.calls).iter() {
+            assert!(output.contains(r#""status":"ok""#), "{tool}: {output}");
         }
         assert_eq!(runner.peak.load(Ordering::SeqCst), 1);
         assert_eq!(locked(&runner.seen).len(), 3);
@@ -1874,7 +1957,7 @@ mod tests {
             let call = rig.bridge.call("computer_windows", json!({}));
             tokio::pin!(call);
             assert!(futures::poll!(&mut call).is_pending());
-            assert!(locked(&rig.parent.calls).is_empty());
+            assert_eq!(*locked(&rig.parent.calls), ["browser_snapshot"]);
             release.notify_one();
             call.await;
             assert_eq!(runner.running.load(Ordering::SeqCst), 0);
@@ -1890,13 +1973,15 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(*locked(&rig.parent.calls), ["computer_windows"]);
+        assert_eq!(
+            *locked(&rig.parent.calls),
+            ["browser_snapshot", "computer_windows"]
+        );
     }
 
     #[tokio::test]
     async fn cancellation_drops_the_surface_owner_and_its_waiting_workers() {
-        let runner =
-            FakeRunner::new(|_| Behavior::Surface(Box::new(Behavior::UntilCancelled)));
+        let runner = FakeRunner::new(|_| Behavior::Surface(Box::new(Behavior::UntilCancelled)));
         let rig = rig_with(
             interactive_bot(),
             runner.clone(),
@@ -1935,13 +2020,14 @@ mod tests {
 
     #[tokio::test]
     async fn queued_surface_workers_use_the_remaining_turn_budget() {
-        let runner =
-            FakeRunner::new(|_| Behavior::Surface(Box::new(Behavior::Sleep(Duration::from_secs(10)))));
+        let runner = FakeRunner::new(|_| {
+            Behavior::Surface(Box::new(Behavior::Sleep(Duration::from_secs(10))))
+        });
         let rig = rig_with(
             interactive_bot(),
             runner.clone(),
             ParentBridge::new(),
-            Duration::from_millis(250),
+            Duration::from_secs(1),
             CHILD_TIME_LIMIT,
         );
         let result = spawn(&rig, tasks(2)).await;
@@ -1974,7 +2060,10 @@ mod tests {
         assert_eq!(time_until(180_000, 0), Duration::from_secs(180));
         assert_eq!(time_until(10, 50), Duration::ZERO);
         let runner = FakeRunner::replying("x");
-        let env = rig_env(runner, Some(chrono::Utc::now().timestamp_millis() + 180_000));
+        let env = rig_env(
+            runner,
+            Some(chrono::Utc::now().timestamp_millis() + 180_000),
+        );
         assert!(env.turn_budget <= Duration::from_secs(180));
         assert!(env.turn_budget > Duration::from_secs(170));
         let past = rig_env(

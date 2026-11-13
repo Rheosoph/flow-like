@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, test, vi } from "vitest";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import type { WebBackendRef } from "./api-utils";
 import { WebUserState } from "./user-state";
 
@@ -150,7 +150,8 @@ describe("account reads in one synchronous fan-out", () => {
 		await Promise.resolve();
 		const second = state.getProfiles();
 		const third = state.getProfiles();
-		expect(request).toHaveBeenCalledTimes(2);
+		// The session is prepared asynchronously before each request goes out.
+		await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
 		old.resolve(Response.json([profile]));
 		fresh.resolve(Response.json([{ ...profile, name: "Updated" }]));
 		expect((await first)[0].name).toBe("Workspace");

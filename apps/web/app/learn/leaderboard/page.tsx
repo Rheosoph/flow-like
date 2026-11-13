@@ -8,6 +8,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { publicNameFromClaims } from "@flow-like/flow-like-ui/lib/user-display";
 import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
@@ -48,8 +49,9 @@ export default function LeaderboardPage() {
 		if (myOptInQuery.data) {
 			setDisplayName(myOptInQuery.data.display_name ?? "");
 			setOptedIn(Boolean(myOptInQuery.data.is_opted_in));
-		} else if (auth.user?.profile?.preferred_username) {
-			setDisplayName(String(auth.user.profile.preferred_username));
+		} else {
+			const name = publicNameFromClaims(auth.user?.profile);
+			if (name) setDisplayName(name);
 		}
 	}, [myOptInQuery.data, auth.user]);
 

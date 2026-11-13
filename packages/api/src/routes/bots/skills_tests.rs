@@ -1,6 +1,6 @@
 use super::skills::{
-    Origin, SKILLS_CAPABILITY, active_index, create_in, delete_in, list_in, set_status_in,
-    update_in,
+    Origin, SKILLS_CAPABILITY, active_index, create_in, delete_in, list_in, package_skill_in,
+    set_status_in, update_in,
 };
 use crate::{
     entity::{bot, bot_skill},
@@ -8,7 +8,7 @@ use crate::{
 };
 use axum::http::StatusCode;
 use chrono::Utc;
-use flow_like_types::bot_skill::{CreateBotSkill, SkillStatus, UpdateBotSkill};
+use flow_like_types::bot_skill::{CreateBotSkill, SkillSource, SkillStatus, UpdateBotSkill};
 use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseConnection, EntityTrait, Set};
 
 async fn database() -> DatabaseConnection {
@@ -176,4 +176,46 @@ async fn skills_need_the_capability_and_only_active_ones_are_indexed() {
         names(active_index(&db, "bot-a").await.unwrap()),
         ["owned", "proposed"]
     );
+}
+
+async fn from_package(db: &DatabaseConnection, row: bot_skill::Model, status: SkillStatus) {
+    let mut active: bot_skill::ActiveModel = row.into();
+    active.source = Set(SkillSource::Package {
+        id: "acme.tools".into(),
+        version: "1.0.0".into(),
+    }
+    .stored());
+    active.status = Set(status.stored().to_string());
+    active.update(db).await.unwrap();
+}
+
+#[tokio::test]
+async fn only_an_active_package_skill_of_the_callers_bot_names_a_package() {
+    let db = database().await;
+    skilled_bot(&db, "bot-a", "user-a").await;
+    let now = Utc::now().fixed_offset();
+    let made =
+        |name: &'static str| create_in(&db, "user-a", "bot-a", skill(name), Origin::owner(), now);
+    let tools = made("tools").await.unwrap();
+    let pending = made("pending").await.unwrap();
+    let plain = made("plain").await.unwrap();
+    from_package(&db, tools.clone(), SkillStatus::Active).await;
+    from_package(&db, pending.clone(), SkillStatus::Pending).await;
+
+    let (skill, package_id) = package_skill_in(&db, "user-a", "bot-a", &tools.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        (skill.name.as_str(), package_id.as_str()),
+        ("tools", "acme.tools")
+    );
+
+    for (owner, id, expected) in [
+        ("user-a", &pending.id, StatusCode::NOT_FOUND),
+        ("user-a", &plain.id, StatusCode::BAD_REQUEST),
+        ("user-b", &tools.id, StatusCode::NOT_FOUND),
+    ] {
+        let refused = package_skill_in(&db, owner, "bot-a", id).await.unwrap_err();
+        assert_eq!(refused.status(), expected, "{owner} {id}");
+    }
 }

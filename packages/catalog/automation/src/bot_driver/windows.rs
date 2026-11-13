@@ -3,9 +3,11 @@ use std::io::Cursor;
 use enigo::{Axis, Button, Coordinate, Direction, Mouse};
 use image::{DynamicImage, ImageFormat};
 
+use super::permission;
 use super::computer::{
     BotComputer, BotPointerButton, BotScreen, CapturedDesktop, CapturedSurface, WindowState, now_ms,
 };
+use crate::capabilities::AutomationCapability;
 use crate::computer::keyboard::parse_key_chord;
 use crate::computer::native::{self, gestures};
 use crate::computer::window::{WindowInfo, capture_window, launch_application, pick_window};
@@ -90,7 +92,18 @@ async fn primary_point(fx: f64, fy: f64) -> flow_like_types::Result<(i32, i32)> 
 
 impl BotComputer {
     pub async fn windows(&self) -> flow_like_types::Result<Vec<WindowInfo>> {
+        permission::require(AutomationCapability::Accessibility).await?;
         native::windows_async().await
+    }
+
+    /// The windows a model should see: no ghosts, and without `include_offscreen` only those
+    /// on screen or minimized.
+    pub async fn listed_windows(
+        &self,
+        include_offscreen: bool,
+    ) -> flow_like_types::Result<Vec<WindowInfo>> {
+        permission::require(AutomationCapability::Accessibility).await?;
+        native::listed_windows_async(include_offscreen).await
     }
 
     pub async fn screenshot_window(&self, query: &str) -> flow_like_types::Result<BotScreen> {

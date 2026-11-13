@@ -289,8 +289,33 @@ fn transcription_responses_parse_per_provider() {
 }
 
 #[test]
-fn transcription_errors_cover_empty_and_malformed_bodies() {
-    assert!(parse(OpenAi, json!({"text":"  "})).is_err());
+fn transcription_without_speech_is_an_empty_transcript() {
+    let silent = parse(
+        OpenRouter,
+        json!({"text":"  ","usage":{"seconds":1.5,"cost":0.0003}}),
+    )
+    .unwrap();
+    assert_eq!(silent.transcription.text, "");
+    assert_eq!(silent.billed_seconds, Some(1.5));
+    assert_eq!(silent.provider_cost_usd, Some(0.0003));
+    assert_eq!(
+        parse(OpenAi, json!({"text":""}))
+            .unwrap()
+            .transcription
+            .text,
+        ""
+    );
+    let gemini = parse(
+        Gemini,
+        json!({"candidates":[{"content":{"parts":[{"text":""}]}}]}),
+    )
+    .unwrap();
+    assert_eq!(gemini.transcription.text, "");
+}
+
+#[test]
+fn transcription_errors_cover_missing_text_and_malformed_bodies() {
+    assert!(parse(OpenAi, json!({"text":null})).is_err());
     assert!(parse(OpenAi, json!({"other":1})).is_err());
     assert!(parse(Gemini, json!({"candidates":[]})).is_err());
     assert!(parse(OpenRouter, json!({"choices":[]})).is_err());
@@ -428,4 +453,55 @@ async fn instance_audio_uses_exact_paths_fresh_proofs_and_grant_attribution() {
     }
     authorizer.0.store(2, std::sync::atomic::Ordering::SeqCst);
     assert!(client.build_request("speech", &speech()).await.is_err());
+}
+
+#[test]
+fn streamed_speech_requires_the_pcm_format() {
+    for format in [None, Some("mp3"), Some("wav")] {
+        let mut request = speech();
+        request.stream = true;
+        request.format = format.map(str::to_owned);
+        assert!(request.validate().is_err(), "{format:?}");
+    }
+    let mut request = speech();
+    request.stream = true;
+    request.format = Some("pcm".into());
+    request.validate().unwrap();
+    assert!(
+        !serde_json::to_value(speech())
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("stream")
+    );
+    let parsed: HostedSpeechRequest = serde_json::from_value(
+        json!({"bit_id": "tts", "text": "Hi", "format": "pcm", "stream": true}),
+    )
+    .unwrap();
+    assert!(parsed.stream);
+}
+
+#[test]
+fn only_raw_pcm_providers_can_stream() {
+    for provider in HostedAudioProvider::ALL {
+        let expected = matches!(provider, OpenAi | OpenRouter).then_some(24_000);
+        assert_eq!(
+            provider.stream_pcm_sample_rate("openai/gpt-4o-mini-tts"),
+            expected,
+            "{provider:?}"
+        );
+    }
+    assert_eq!(OpenAi.stream_pcm_sample_rate("tts-1"), Some(24_000));
+    assert_eq!(
+        OpenRouter.stream_pcm_sample_rate("hexgrad/kokoro-82m"),
+        None
+    );
+    let mut request = speech();
+    request.format = Some("pcm".into());
+    request.stream = true;
+    for provider in [OpenAi, OpenRouter] {
+        assert_eq!(provider.speech_format(&request), "pcm");
+        let upstream = speech_request(provider, "tts-model", &request).unwrap();
+        assert_eq!(json_body(&upstream)["response_format"], "pcm");
+    }
 }

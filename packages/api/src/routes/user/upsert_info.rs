@@ -4,18 +4,28 @@ use crate::{
     middleware::jwt::AppUser,
     routes::{
         profile::media::{cleanup_upload, finalize_upload, mutation_matches, prepare_upload},
-        user::identity::sanitize_display_name,
+        user::{
+            handle::{free_handle, handle_taken, is_unique_violation},
+            identity::{handle_problem, handle_slug, is_email_like, sanitize_display_name},
+        },
     },
     state::AppState,
 };
 use axum::{Extension, Json, extract::State};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait,
+    QueryFilter,
+};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use utoipa::ToSchema;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, ToSchema)]
 pub struct UpsertInfoBody {
     pub name: Option<String>,
+    /// Your username: 3 to 30 letters, digits, dots, hyphens or underscores, starting and
+    /// ending with a letter or digit. Unique without regard to case.
+    pub preferred_username: Option<String>,
     pub description: Option<String>,
     pub avatar_extension: Option<String>,
     /// Complete an uploaded image. The existing avatar remains until validation succeeds.
@@ -23,6 +33,9 @@ pub struct UpsertInfoBody {
     pub accepted_terms_version: Option<String>,
     pub tutorial_completed: Option<bool>,
     pub dev_mode: Option<bool>,
+    /// Show your email address to other people on your profile and in search results.
+    /// It stays hidden until you turn this on.
+    pub share_email: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, ToSchema)]
@@ -39,8 +52,10 @@ pub struct UpsertInfoResponse {
     request_body = UpsertInfoBody,
     responses(
         (status = 200, description = "User info updated successfully", body = UpsertInfoResponse),
+        (status = 400, description = "The display name or username is not allowed"),
         (status = 401, description = "Unauthorized"),
-        (status = 404, description = "User not found")
+        (status = 404, description = "User not found"),
+        (status = 409, description = "Another account already uses that username")
     ),
     security(
         ("bearer_auth" = [])
@@ -65,7 +80,21 @@ pub async fn upsert_info(
         .map(|name| {
             let name = sanitize_display_name(name)
                 .ok_or_else(|| ApiError::bad_request("Display name is required"))?;
+            if is_email_like(&name) {
+                return Err(ApiError::bad_request(
+                    "A display name cannot be an email address. Turn on email sharing in your account settings to show yours",
+                ));
+            }
             Ok::<_, ApiError>(name)
+        })
+        .transpose()?;
+    let handle = payload
+        .preferred_username
+        .as_deref()
+        .map(str::trim)
+        .map(|handle| match handle_problem(handle) {
+            Some(problem) => Err(ApiError::bad_request(problem)),
+            None => Ok(handle.to_string()),
         })
         .transpose()?;
     let mut response = UpsertInfoResponse::default();
@@ -73,6 +102,13 @@ pub async fn upsert_info(
         .one(&state.db)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
+    let handle =
+        handle.filter(|handle| current_user.preferred_username.as_deref() != Some(handle.as_str()));
+    if let Some(handle) = &handle
+        && handle_taken(&state.db, handle, &sub).await?
+    {
+        return Err(taken(&state.db, handle, &sub).await);
+    }
 
     let published_avatar = if let Some(upload_id) = &payload.avatar_upload_id {
         match finalize_upload(
@@ -99,7 +135,6 @@ pub async fn upsert_info(
     let info = user.user_info(&state).await?;
 
     let email = info.email.clone();
-    let preferred_username = info.preferred_username.clone();
 
     let mut updated_user: user::ActiveModel = current_user.clone().into();
 
@@ -109,10 +144,8 @@ pub async fn upsert_info(
         updated_user.email = Set(Some(email));
     }
 
-    if let Some(preferred_username) = preferred_username
-        && current_user.preferred_username != Some(preferred_username.clone())
-    {
-        updated_user.preferred_username = Set(Some(preferred_username));
+    if let Some(handle) = &handle {
+        updated_user.preferred_username = Set(Some(handle.clone()));
     }
 
     if let Some(name) = name {
@@ -147,6 +180,9 @@ pub async fn upsert_info(
     if let Some(dev_mode) = payload.dev_mode {
         updated_user.dev_mode = Set(dev_mode);
     }
+    if let Some(share_email) = payload.share_email {
+        updated_user.share_email = Set(Some(share_email));
+    }
     updated_user.updated_at = Set(chrono::Utc::now().fixed_offset());
     if payload.avatar_upload_id.is_some() {
         let expected_avatar = match &current_user.avatar {
@@ -159,7 +195,11 @@ pub async fn upsert_info(
             .filter(user::Column::Id.eq(&sub))
             .filter(expected_avatar)
             .exec(&state.db)
-            .await?;
+            .await;
+        let result = match result {
+            Ok(result) => result,
+            Err(err) => return Err(handle_conflict(&state.db, err, handle.as_deref(), &sub).await),
+        };
         if result.rows_affected != 1 {
             let latest = user::Entity::find_by_id(&sub)
                 .one(&state.db)
@@ -174,9 +214,37 @@ pub async fn upsert_info(
         if let Some(upload_id) = &payload.avatar_upload_id {
             cleanup_upload(&state, &sub, upload_id, current_user.avatar.as_deref()).await;
         }
-    } else {
-        updated_user.update(&state.db).await?;
+    } else if let Err(err) = updated_user.update(&state.db).await {
+        return Err(handle_conflict(&state.db, err, handle.as_deref(), &sub).await);
     }
 
     Ok(Json(response))
+}
+
+/// Refuses a username another account uses, naming the first free spelling of it.
+async fn taken<C: ConnectionTrait>(db: &C, handle: &str, owner: &str) -> ApiError {
+    let free = match handle_slug(handle) {
+        Some(base) => free_handle(db, &base, owner, &HashSet::new())
+            .await
+            .ok()
+            .flatten(),
+        None => None,
+    };
+    ApiError::conflict(match free {
+        Some(free) => format!("The username '{handle}' is taken. '{free}' is free."),
+        None => format!("The username '{handle}' is taken."),
+    })
+}
+
+/// A save that loses the username to another account between the check and the write.
+async fn handle_conflict<C: ConnectionTrait>(
+    db: &C,
+    err: DbErr,
+    handle: Option<&str>,
+    owner: &str,
+) -> ApiError {
+    match handle {
+        Some(handle) if is_unique_violation(&err) => taken(db, handle, owner).await,
+        _ => err.into(),
+    }
 }

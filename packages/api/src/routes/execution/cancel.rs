@@ -18,7 +18,7 @@ use crate::{
         ChannelClaims,
         state::{ExecutionRunRecord, ExecutionStateStore, PostgresStateStore, RunMode, RunStatus},
     },
-    middleware::jwt::AppUser,
+    middleware::jwt::{AppPermissionResponse, AppUser, BotUser},
     permission::role_permission::RolePermissions,
     state::AppState,
 };
@@ -69,19 +69,9 @@ pub async fn cancel_run(
     Extension(user): Extension<AppUser>,
 ) -> Result<Json<CancelRunResponse>, ApiError> {
     let caller = user.sub()?;
-    let store = super::progress::get_state_store(&state).await?;
-    let run = store
-        .get_run(&run_id)
-        .await
-        .map_err(|error| ApiError::internal_error(anyhow!("Cannot load execution: {error}")))?
-        .ok_or(ApiError::NOT_FOUND)?;
+    let (store, run) = stored_run(&state, &run_id).await?;
     let permission = user.app_permission_fresh(&run.app_id, &state).await?;
-    let can_execute = permission.has_permission(if run.event_id.is_some() {
-        RolePermissions::ExecuteEvents
-    } else {
-        RolePermissions::ExecuteBoards
-    });
-    if !can_execute
+    if !runs_this_kind(&permission, &run)
         || !cancellation_authorized(
             run.user_id.as_deref(),
             &caller,
@@ -93,6 +83,52 @@ pub async fn cancel_run(
     Ok(Json(
         cancel_authorized_run(&state, store.as_ref(), &run, &caller).await?,
     ))
+}
+
+/// A bot stops a run it started itself: the run's technical user is the bot, and the bot may
+/// still run the app's Events (or boards). Its owner's other runs stay out of reach.
+pub(crate) async fn cancel_bot_run(
+    state: &AppState,
+    bot: &BotUser,
+    run_id: &str,
+) -> Result<CancelRunResponse, ApiError> {
+    let (store, run) = stored_run(state, run_id).await?;
+    let permission = AppUser::Bot(bot.clone())
+        .app_permission_fresh(&run.app_id, state)
+        .await?;
+    if !bot_cancellation_authorized(
+        run.technical_user_id.as_deref(),
+        &bot.bot_id,
+        runs_this_kind(&permission, &run),
+    ) {
+        return Err(ApiError::FORBIDDEN);
+    }
+    cancel_authorized_run(state, store.as_ref(), &run, &bot.bot_id).await
+}
+
+fn bot_cancellation_authorized(run_technical_user: Option<&str>, bot_id: &str, runs: bool) -> bool {
+    runs && run_technical_user == Some(bot_id)
+}
+
+async fn stored_run(
+    state: &AppState,
+    run_id: &str,
+) -> Result<(Arc<dyn ExecutionStateStore>, ExecutionRunRecord), ApiError> {
+    let store = super::progress::get_state_store(state).await?;
+    let run = store
+        .get_run(run_id)
+        .await
+        .map_err(|error| ApiError::internal_error(anyhow!("Cannot load execution: {error}")))?
+        .ok_or(ApiError::NOT_FOUND)?;
+    Ok((store, run))
+}
+
+fn runs_this_kind(permission: &AppPermissionResponse, run: &ExecutionRunRecord) -> bool {
+    permission.has_permission(if run.event_id.is_some() {
+        RolePermissions::ExecuteEvents
+    } else {
+        RolePermissions::ExecuteBoards
+    })
 }
 
 /// Anonymous hosted subjects are retained by admission, while the run's user
@@ -394,6 +430,14 @@ mod tests {
         assert!(!cancellation_authorized(Some("user-a"), "user-b", false));
         assert!(!cancellation_authorized(None, "user-b", false));
         assert!(cancellation_authorized(None, "admin", true));
+    }
+
+    #[test]
+    fn a_bot_cancels_only_runs_it_started_and_may_still_run() {
+        assert!(bot_cancellation_authorized(Some("bot_a"), "bot_a", true));
+        assert!(!bot_cancellation_authorized(Some("bot_a"), "bot_a", false));
+        assert!(!bot_cancellation_authorized(Some("bot_b"), "bot_a", true));
+        assert!(!bot_cancellation_authorized(None, "bot_a", true));
     }
 
     #[test]

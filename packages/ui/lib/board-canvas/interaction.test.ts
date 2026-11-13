@@ -86,31 +86,34 @@ function pin(index: BoardHitIndex, nodeId: string, direction: "in" | "out") {
 }
 
 describe("native canvas connection gestures", () => {
-	test("DOM comments and media cancel drops instead of opening the palette or disconnecting", () => {
+	test("new wires dropped on DOM comments, media and node bodies open the palette", () => {
 		const index = new BoardHitIndex(scene(), [
 			{ id: "comment", x: 700, y: 100, width: 200, height: 100 },
 		]);
-		for (const reconnect of [
-			undefined,
-			{ edgeId: "a-b", end: "target" as const },
-		]) {
+		for (const point of [
+			{ x: 750, y: 150 },
+			{ x: 950, y: 150 },
+			{ x: 500, y: 280 },
+		])
 			expect(
-				new ConnectionGesture(endpoint("a", "out"), reconnect).drop(
+				new ConnectionGesture(endpoint("a", "out")).drop(
 					index,
-					{ x: 750, y: 150 },
+					point,
 					1,
 					allow,
 				),
-			).toEqual({ kind: "cancel" });
-		}
+			).toEqual({ kind: "palette", pin: pin(index, "a", "out") });
+	});
+	test("a moved wire end dropped on a DOM comment keeps the wire", () => {
+		const index = new BoardHitIndex(scene(), [
+			{ id: "comment", x: 700, y: 100, width: 200, height: 100 },
+		]);
 		expect(
-			new ConnectionGesture(endpoint("a", "out")).drop(
-				index,
-				{ x: 950, y: 150 },
-				1,
-				allow,
-			).kind,
-		).toBe("palette");
+			new ConnectionGesture(endpoint("a", "out"), {
+				edgeId: "a-b",
+				end: "target",
+			}).drop(index, { x: 750, y: 150 }, 1, allow),
+		).toEqual({ kind: "cancel" });
 	});
 	test("input and output drags produce the same normalized connection", () => {
 		const graph = scene();

@@ -2,7 +2,7 @@
 
 use super::runtime::steering_messages;
 use async_trait::async_trait;
-use flow_like::flow::copilot::platform::PlatformToolBridge;
+use flow_like::flow::copilot::platform::{Clearance, PlatformToolBridge};
 use flow_like_types::{channel::Channel as _, tokio_util::sync::CancellationToken};
 use std::time::Duration;
 
@@ -101,8 +101,55 @@ pub(super) struct DesktopPlatformBridge {
     pub(super) steerable: bool,
 }
 
+impl DesktopPlatformBridge {
+    /// The spec that authorizes a call on this surface; `Err` is the call's result when it may
+    /// not run here.
+    fn checked_spec(
+        &self,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) -> Result<flow_like::flow::copilot::tool_spec::PlatformToolSpec, String> {
+        if let Some(error) = global_orchestrator_tool_scope_error(self.tool_set, tool_name) {
+            return Err(error);
+        }
+        let Some(spec) = frontend_platform_tool_spec_for_bot(
+            self.tool_set,
+            tool_name,
+            self.bridge.bot_context(),
+        ) else {
+            return Err(serde_json::json!({
+                "status": "error",
+                "code": "platform_tool_not_advertised",
+                "tool": tool_name,
+                "retryable": false,
+                "message": "This tool is unavailable in the active FlowPilot surface and was not executed."
+            })
+            .to_string());
+        };
+        // Reject calls with missing required arguments before any approval dialog or dispatch,
+        // so the model retries with complete arguments (same guard as the SDK/MCP backends).
+        if let Some(error) =
+            flow_like::flow::copilot::tool_spec::missing_required_args(&spec, arguments)
+        {
+            return Err(serde_json::json!({ "status": "error", "error": error }).to_string());
+        }
+        Ok(spec)
+    }
+}
+
 #[async_trait]
 impl PlatformToolBridge for DesktopPlatformBridge {
+    async fn clearance(&self, tool_name: &str, arguments: &serde_json::Value) -> Clearance {
+        let Ok(spec) = self.checked_spec(tool_name, arguments) else {
+            return Clearance::Clear;
+        };
+        let approval =
+            crate::functions::ai::copilot_sdk_tools::approval_from_spec(&spec, arguments);
+        self.bridge
+            .clearance(tool_name, arguments.clone(), approval)
+            .await
+    }
+
     async fn drain_steering(&self) -> Vec<String> {
         if !self.steerable {
             return Vec::new();
@@ -114,9 +161,13 @@ impl PlatformToolBridge for DesktopPlatformBridge {
         self.cancellation.is_cancelled() || self.bridge.channel().is_cancelled().await
     }
 
+    async fn bot_secret(&self, name: &str) -> Option<String> {
+        self.bridge.bot_secret(name).await
+    }
+
     async fn call(&self, tool_name: &str, arguments: serde_json::Value) -> String {
         use crate::functions::ai::copilot_sdk_tools::approval_from_spec;
-        use flow_like::flow::copilot::tool_spec::{HTTP_REQUEST_TOOL, missing_required_args};
+        use flow_like::flow::copilot::tool_spec::HTTP_REQUEST_TOOL;
 
         // Do not even enqueue a frontend event after the owning model run has ended. Cancellation
         // is checked again inside the blocking bridge scope to close the race after this preflight.
@@ -128,29 +179,10 @@ impl PlatformToolBridge for DesktopPlatformBridge {
             })
             .to_string();
         }
-        if let Some(error) = global_orchestrator_tool_scope_error(self.tool_set, tool_name) {
-            return error;
-        }
-        let Some(spec) = frontend_platform_tool_spec_for_bot(
-            self.tool_set,
-            tool_name,
-            self.bridge.bot_context(),
-        ) else {
-            return serde_json::json!({
-                "status": "error",
-                "code": "platform_tool_not_advertised",
-                "tool": tool_name,
-                "retryable": false,
-                "message": "This tool is unavailable in the active FlowPilot surface and was not executed."
-            })
-            .to_string();
+        let spec = match self.checked_spec(tool_name, &arguments) {
+            Ok(spec) => spec,
+            Err(refusal) => return refusal,
         };
-
-        // Reject calls with missing required arguments before any approval dialog or dispatch,
-        // so the model retries with complete arguments (same guard as the SDK/MCP backends).
-        if let Some(error) = missing_required_args(&spec, &arguments) {
-            return serde_json::json!({ "status": "error", "error": error }).to_string();
-        }
 
         // Approval + timeout come from the shared platform tool spec, so the Bits path enforces
         // exactly the same policy as the Copilot SDK / MCP backends.
@@ -162,10 +194,11 @@ impl PlatformToolBridge for DesktopPlatformBridge {
         let name = tool_name.to_string();
         let cancellation = self.cancellation.clone();
         let http_arguments = (tool_name == HTTP_REQUEST_TOOL).then(|| arguments.clone());
+        let call = crate::functions::ai::frontend_tool_bridge::current_call_scope();
         match tokio::task::spawn_blocking(move || {
-            crate::functions::ai::frontend_tool_bridge::with_frontend_tool_execution_scope(
+            crate::functions::ai::frontend_tool_bridge::with_frontend_tool_call_scope(
                 cancellation,
-                None,
+                call,
                 || bridge.call_with_timeout(name, arguments, approval, timeout),
             )
         })

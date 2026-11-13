@@ -132,6 +132,8 @@ pub struct HostedSpeechRequest {
     pub voice: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stream: bool,
 }
 
 impl HostedSpeechRequest {
@@ -159,6 +161,10 @@ impl HostedSpeechRequest {
                 .as_deref()
                 .is_none_or(|format| SPEECH_FORMATS.contains(&format)),
             "Speech format must be one of mp3, wav, opus, aac, flac, or pcm"
+        );
+        ensure!(
+            !self.stream || self.format.as_deref() == Some("pcm"),
+            "Streamed speech requires the pcm format"
         );
         Ok(())
     }
@@ -270,6 +276,17 @@ impl HostedAudioProvider {
         match self {
             Self::Gemini => ("x-goog-api-key", key.to_owned()),
             _ => ("authorization", format!("Bearer {key}")),
+        }
+    }
+
+    /// Sample rate of the signed 16-bit little-endian mono PCM `model` returns as its raw response
+    /// body for `format: "pcm"`. `None`: the response cannot be passed through as PCM of a known
+    /// rate. OpenRouter serves speech models of several vendors, so only its OpenAI models count.
+    pub fn stream_pcm_sample_rate(self, model: &str) -> Option<u32> {
+        match self {
+            Self::OpenAi => Some(24_000),
+            Self::OpenRouter => model.starts_with("openai/").then_some(24_000),
+            Self::Groq | Self::Mistral | Self::Together | Self::Xai | Self::Gemini => None,
         }
     }
 
@@ -645,6 +662,7 @@ pub fn parse_transcription_response(
 ) -> Result<ParsedTranscription> {
     let value: Value = serde_json::from_slice(body)
         .with_context(|| format!("{} transcription returned invalid JSON", provider.label()))?;
+    // Audio without speech comes back as blank text; only a missing text field is a failure.
     let text = match provider {
         HostedAudioProvider::Gemini => gemini_text(&value),
         _ => ["text", "transcript", "transcription"]
@@ -653,7 +671,6 @@ pub fn parse_transcription_response(
             .map(str::to_owned),
     }
     .map(|text| text.trim().to_owned())
-    .filter(|text| !text.is_empty())
     .with_context(|| format!("{} transcription contained no text", provider.label()))?;
     let billed_seconds = non_negative(value.get("duration"))
         .or_else(|| non_negative(value.pointer("/usage/seconds")));

@@ -2,6 +2,7 @@
 
 import AppWindow from "lucide-react/dist/esm/icons/app-window.js";
 import ChevronDown from "lucide-react/dist/esm/icons/chevron-down.js";
+import ChevronRight from "lucide-react/dist/esm/icons/chevron-right.js";
 import Database from "lucide-react/dist/esm/icons/database.js";
 import ExternalLink from "lucide-react/dist/esm/icons/external-link.js";
 import FileText from "lucide-react/dist/esm/icons/file-text.js";
@@ -10,10 +11,15 @@ import Search from "lucide-react/dist/esm/icons/search.js";
 import SquareTerminal from "lucide-react/dist/esm/icons/square-terminal.js";
 import Workflow from "lucide-react/dist/esm/icons/workflow.js";
 import Wrench from "lucide-react/dist/esm/icons/wrench.js";
+import Zap from "lucide-react/dist/esm/icons/zap.js";
 import { type ReactNode, useId, useState } from "react";
+import { useInvoke } from "../../../hooks/use-invoke";
 import { cn } from "../../../lib/utils";
+import { useBackend } from "../../../state/backend-state";
 import { getToolActivityLabel } from "../../../state/global-chat/tool-step-activity";
 import { BotExchangeCard } from "../../global-chat/bot-exchange-card";
+import { ComputerPermissionCard } from "../../global-chat/computer-permission-card";
+import { AppReferenceChip } from "./app-references";
 import type { IPlanStep, IToolActivityDetail } from "./chat-db";
 import { ReasoningBody } from "./reasoning-viewer";
 import { TerminalCard } from "./tool-terminal";
@@ -100,6 +106,70 @@ function ContextChip({ text, isQuery }: { text: string; isQuery: boolean }) {
 			<span className="min-w-0 truncate font-medium text-foreground/80">
 				{text}
 			</span>
+		</span>
+	);
+}
+
+const SAVED_APP_ID = /^[a-z][a-z0-9]{23,31}$/;
+
+/** Steps saved before `app` existed kept the raw app id as their target. */
+function activityApp(detail: IToolActivityDetail): IToolActivityDetail["app"] {
+	if (detail.app) return detail.app;
+	return detail.category === "apps" &&
+		detail.target &&
+		SAVED_APP_ID.test(detail.target)
+		? { id: detail.target }
+		: undefined;
+}
+
+function humanize(value: string): string {
+	const text = value.replace(/[_-]+/g, " ").trim();
+	return text ? text[0].toUpperCase() + text.slice(1) : value;
+}
+
+/** The app's event by name; an MCP call adds the tool it ran on that server. */
+function AppActionChip({
+	appId,
+	eventId,
+	eventName,
+	eventType,
+	mcpTool,
+}: Readonly<{
+	appId: string;
+	eventId: string;
+	eventName?: string;
+	eventType?: string;
+	mcpTool?: string;
+}>) {
+	const backend = useBackend();
+	const event = useInvoke(
+		backend.eventState.getEvent,
+		backend.eventState,
+		[appId, eventId],
+		true,
+	);
+	const name =
+		event.data?.name?.trim() ||
+		eventName ||
+		(eventType ? humanize(eventType) : "Action");
+	const description = event.data?.description?.trim();
+	return (
+		<span className={CHIP_CLASS} title={description || name}>
+			<Zap className="size-3 shrink-0 opacity-70" aria-hidden="true" />
+			<span className="min-w-0 truncate font-medium text-foreground/80">
+				{name}
+			</span>
+			{mcpTool && (
+				<>
+					<ChevronRight
+						className="size-3 shrink-0 opacity-50"
+						aria-hidden="true"
+					/>
+					<span className="min-w-0 truncate font-mono text-[10px]">
+						{mcpTool}
+					</span>
+				</>
+			)}
 		</span>
 	);
 }
@@ -198,6 +268,7 @@ function activityNote(
 	description: string | undefined,
 	shown: (string | undefined)[],
 ) {
+	if (detail.permission) return undefined;
 	if (detail.outcome) return detail.outcome;
 	return description && !shown.includes(description) ? description : undefined;
 }
@@ -222,14 +293,16 @@ export function ToolActivityRow({
 	const Icon = ACTIVITY_ICONS[detail.category] ?? Wrench;
 	const reasoningId = useId();
 	const hasReasoning = Boolean(step.reasoning?.trim());
-	const context = detail.query ?? detail.target;
+	const app = activityApp(detail);
+	const context =
+		detail.query ?? (app?.id === detail.target ? undefined : detail.target);
 	const title = stepActivityTitle(step);
 	const note = activityNote(detail, step.description?.trim(), [
 		context,
 		title,
 		detail.label,
 	]);
-	const hasChips = Boolean(context || detail.sources?.length);
+	const hasChips = Boolean(app || context || detail.sources?.length);
 	const hasMeta = Boolean(detail.method || note || hasReasoning);
 	return (
 		<div
@@ -268,6 +341,22 @@ export function ToolActivityRow({
 					</div>
 					{hasChips && (
 						<div className="flex min-w-0 flex-wrap gap-1.5">
+							{app && (
+								<AppReferenceChip
+									appId={app.id}
+									fallbackName={app.name}
+									variant="inline"
+								/>
+							)}
+							{app?.eventId && (
+								<AppActionChip
+									appId={app.id}
+									eventId={app.eventId}
+									eventName={app.eventName}
+									eventType={app.eventType}
+									mcpTool={app.mcpTool}
+								/>
+							)}
 							{context && (
 								<ContextChip
 									text={context}
@@ -281,6 +370,9 @@ export function ToolActivityRow({
 					)}
 					{detail.terminal && <TerminalCard terminal={detail.terminal} />}
 					{detail.exchange && <BotExchangeCard exchange={detail.exchange} />}
+					{detail.permission && (
+						<ComputerPermissionCard need={detail.permission} />
+					)}
 					{hasMeta && (
 						<div className="flex min-w-0 items-center gap-2 pt-0.5 text-[11px] text-muted-foreground/80">
 							{detail.method && (
@@ -289,7 +381,15 @@ export function ToolActivityRow({
 								</span>
 							)}
 							{note && (
-								<span className="min-w-0 truncate" title={note}>
+								<span
+									className={cn(
+										"min-w-0",
+										step.status === "failed"
+											? "line-clamp-2 break-words"
+											: "truncate",
+									)}
+									title={note}
+								>
 									{note}
 								</span>
 							)}

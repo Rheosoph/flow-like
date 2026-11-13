@@ -88,13 +88,15 @@ impl NodeLogic for FilterLocalDatabaseNode {
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
         let filter: String = context.evaluate_pin("filter").await?;
         let filter = params::bind_lance_filter(context, &filter).await?;
-        let limit: i64 = context.evaluate_pin("limit").await?;
-        let offset: i64 = context.evaluate_pin("offset").await?;
+        let limit = super::non_negative("limit", context.evaluate_pin("limit").await?)?;
+        let offset = super::non_negative("offset", context.evaluate_pin("offset").await?)?;
         let cached_db = database.load(context).await?;
         let database = cached_db.flushed_read().await?;
-        let results = database
-            .filter(&filter, None, limit as usize, offset as usize)
-            .await?;
+        let results = if filter.trim().is_empty() {
+            database.list(None, limit, offset).await?
+        } else {
+            database.filter(&filter, None, limit, offset).await?
+        };
         context.set_pin_value("values", json!(results)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())

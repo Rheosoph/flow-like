@@ -12,24 +12,27 @@ use flow_like_types::{
     bot_message::ApprovalRequest,
     bot_turn::BotTurn,
     device_bot::{
-        DeviceHeartbeatRequest, DeviceHeartbeatResponse, DevicePollResponse, DeviceReleaseRequest,
-        DeviceReplyRequest, DeviceSilentRequest, DeviceToken, DeviceTurnGrant, DeviceUsageGrant,
-        DeviceUsageReport, MAX_POLL_MS,
+        DeviceBotInfo, DeviceHeartbeatRequest, DeviceHeartbeatResponse, DevicePollResponse,
+        DeviceReleaseRequest, DeviceReplyRequest, DeviceSilentRequest, DeviceToken,
+        DeviceTurnGrant, DeviceUsageGrant, DeviceUsageReport, MAX_POLL_MS,
     },
 };
 use reqwest::Method;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::{
         Arc, Mutex, PoisonError,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
+use tokio::sync::Notify;
 
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+/// The hub waits up to 570 s for an app's run to end before it answers an app tool call.
+const APP_TOOL_TIMEOUT: Duration = Duration::from_secs(630);
 const MIN_POLL_MS: u64 = 500;
 
 #[async_trait]
@@ -66,6 +69,8 @@ impl DeviceApi for crate::enrollment::DeviceSession {
 
 /// The credentials of one claimed turn; heartbeats replace them before they expire.
 pub struct TurnCreds {
+    bot_id: String,
+    conversation_id: String,
     delivery_only: bool,
     bot: Mutex<DeviceToken>,
     executor: Mutex<Option<DeviceToken>>,
@@ -81,6 +86,8 @@ fn locked<T>(cell: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 impl TurnCreds {
     pub fn new(grant: &DeviceTurnGrant) -> Self {
         Self {
+            bot_id: grant.turn.bot_id.clone(),
+            conversation_id: grant.turn.conversation_id.clone(),
             delivery_only: grant.delivery_only,
             bot: Mutex::new(grant.bot_token.clone()),
             executor: Mutex::new(
@@ -102,6 +109,12 @@ impl TurnCreds {
 
     pub fn bot_expires_at(&self) -> i64 {
         locked(&self.bot).expires_at
+    }
+
+    /// The bot token outlived its expiry: heartbeats stopped renewing it, so the hub no longer
+    /// accepts this device for the turn (revoked, signed out) or cannot be reached.
+    pub fn session_lapsed(&self) -> bool {
+        self.bot_expires_at() <= unix_now()
     }
 
     pub fn executor_expires_at(&self) -> Option<i64> {
@@ -145,6 +158,8 @@ struct Shared {
     host_id: String,
     turns: Mutex<HashMap<String, Arc<TurnCreds>>>,
     next_poll_ms: AtomicU64,
+    bots: Mutex<Vec<DeviceBotInfo>>,
+    bots_changed: Notify,
 }
 
 #[derive(Clone)]
@@ -176,6 +191,8 @@ impl DeviceTurnHub {
                 host_id,
                 turns: Mutex::default(),
                 next_poll_ms: AtomicU64::new(flow_like_types::device_bot::IDLE_POLL_MS),
+                bots: Mutex::default(),
+                bots_changed: Notify::new(),
             }),
             bearer: None,
         }
@@ -183,6 +200,42 @@ impl DeviceTurnHub {
 
     pub fn host_id(&self) -> &str {
         &self.shared.host_id
+    }
+
+    /// The bots bound to this device as the last poll listed them.
+    pub fn device_bots(&self) -> Vec<DeviceBotInfo> {
+        locked(&self.shared.bots).clone()
+    }
+
+    /// Resolves once a poll lists the device's bots differently than the one before.
+    pub async fn bots_changed(&self) {
+        self.shared.bots_changed.notified().await;
+    }
+
+    /// Publishes the public inbox key of a bot bound to this device, as the device.
+    pub async fn publish_inbox_key(&self, key: Value) -> Result<Value, HubFailure> {
+        self.device_call(Method::POST, "inbox-keys", Some(key))
+            .await
+    }
+
+    /// The hub as `bot_id` during the turn this device holds in `conversation_id`.
+    pub fn as_bot_in(&self, bot_id: &str, conversation_id: &str) -> Option<Self> {
+        let creds = locked(&self.shared.turns)
+            .values()
+            .find(|creds| creds.bot_id == bot_id && creds.conversation_id == conversation_id)
+            .cloned()?;
+        Some(Self {
+            shared: self.shared.clone(),
+            bearer: Some(creds),
+        })
+    }
+
+    fn remember_bots(&self, bots: Vec<DeviceBotInfo>) {
+        let mut known = locked(&self.shared.bots);
+        if *known != bots {
+            *known = bots;
+            self.shared.bots_changed.notify_one();
+        }
     }
 
     fn device_path(&self, tail: &str) -> String {
@@ -227,6 +280,19 @@ impl DeviceTurnHub {
         query: &[(&str, String)],
         body: Option<Value>,
     ) -> Result<Value, HubFailure> {
+        self.bearer_call_within(method, path, query, body, None)
+            .await
+    }
+
+    /// `timeout` replaces the client's default for a call the hub answers only once a run ends.
+    async fn bearer_call_within(
+        &self,
+        method: Method,
+        path: &str,
+        query: &[(&str, String)],
+        body: Option<Value>,
+        timeout: Option<Duration>,
+    ) -> Result<Value, HubFailure> {
         let Some(creds) = &self.bearer else {
             return Err(HubFailure::answered(
                 401,
@@ -246,6 +312,9 @@ impl DeviceTurnHub {
             .bearer_auth(creds.bot_token());
         if let Some(body) = &body {
             request = request.json(body);
+        }
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
         }
         let response = request
             .send()
@@ -290,18 +359,21 @@ impl DeviceTurnHub {
         host_id: &str,
         code: &str,
         retry: bool,
-    ) -> Result<(), HubFailure> {
+    ) -> Result<bool, HubFailure> {
         let request = DeviceReleaseRequest {
             host_id: host_id.to_owned(),
             error_code: code.to_owned(),
             retry,
             usage: self.usage_of(turn_id),
         };
-        let _: Value = self
+        let answered: Value = self
             .device_post(&format!("turns/{turn_id}/release"), request)
             .await?;
         self.end_turn(turn_id);
-        Ok(())
+        Ok(answered
+            .get("requeued")
+            .and_then(Value::as_bool)
+            .unwrap_or(true))
     }
 
     /// Tells the hub this host is gone so the device's bots stop reading online.
@@ -327,9 +399,11 @@ impl DeviceTurnHub {
     }
 }
 
+/// A sealed failure report names its code beside the envelopes; a plain one in its body.
 fn failure_code_of(message: &Value) -> Option<String> {
-    message["envelope"]["body"]["error"]["code"]
+    message["failure_code"]
         .as_str()
+        .or_else(|| message["envelope"]["body"]["error"]["code"].as_str())
         .map(str::to_owned)
 }
 
@@ -414,6 +488,7 @@ impl TurnHub for DeviceTurnHub {
             polled.next_poll_ms.clamp(MIN_POLL_MS, MAX_POLL_MS),
             Ordering::Relaxed,
         );
+        self.remember_bots(polled.bots);
         Ok(polled.turns)
     }
 
@@ -472,12 +547,14 @@ impl TurnHub for DeviceTurnHub {
         Ok(beat.turn)
     }
 
-    async fn release(&self, turn_id: &str, host_id: &str, code: &str) -> Result<(), HubFailure> {
+    async fn release(&self, turn_id: &str, host_id: &str, code: &str) -> Result<bool, HubFailure> {
         self.give_up(turn_id, host_id, code, true).await
     }
 
     async fn abandon(&self, turn_id: &str, host_id: &str, code: &str) -> Result<(), HubFailure> {
-        self.give_up(turn_id, host_id, code, false).await
+        self.give_up(turn_id, host_id, code, false)
+            .await
+            .map(|_| ())
     }
 
     async fn silent(&self, turn_id: &str, host_id: &str) -> Result<(), HubFailure> {
@@ -541,20 +618,28 @@ impl TurnHub for DeviceTurnHub {
         turn_id: &str,
         host_id: &str,
     ) -> Result<(), HubFailure> {
-        let (Some(message_id), Some(envelope)) = (
-            message["message_id"].as_str(),
-            message
-                .get("envelope")
-                .filter(|envelope| !envelope.is_null()),
-        ) else {
-            return Err(HubFailure::offline(format!(
-                "a reply to conversation {conversation_id} has no plain envelope; sealed replies are not supported on devices"
-            )));
+        let given = |field: &str| message.get(field).filter(|value| !value.is_null());
+        let malformed = |why: &str| {
+            HubFailure::offline(format!("the reply to conversation {conversation_id} {why}"))
         };
+        let message_id = message["message_id"]
+            .as_str()
+            .ok_or_else(|| malformed("has no message_id"))?;
+        let envelopes: Option<BTreeMap<String, Value>> = given("envelopes")
+            .map(|sealed| serde_json::from_value(sealed.clone()))
+            .transpose()
+            .map_err(|_| malformed("has envelopes that are not a map of member ids"))?;
+        let envelope = given("envelope").cloned();
+        if envelope.is_some() == envelopes.is_some() {
+            return Err(malformed(
+                "needs either one plain envelope or sealed envelopes, one per member",
+            ));
+        }
         let request = DeviceReplyRequest {
             host_id: host_id.to_owned(),
             message_id: message_id.to_owned(),
-            envelope: envelope.clone(),
+            envelope: envelope.unwrap_or(Value::Null),
+            envelopes,
             failure_code: failure_code_of(&message),
             usage: self.usage_of(turn_id),
         };
@@ -655,6 +740,24 @@ impl TurnHub for DeviceTurnHub {
         Ok(removed.get("deleted").and_then(Value::as_bool) == Some(true))
     }
 
+    async fn app_tool(
+        &self,
+        bot_id: &str,
+        turn_id: &str,
+        tool: &str,
+        args: Value,
+    ) -> Result<String, HubFailure> {
+        self.bearer_call_within(
+            Method::POST,
+            &format!("bots/{bot_id}/turns/{turn_id}/app-tools/{tool}"),
+            &[("host_id", self.shared.host_id.clone())],
+            Some(args),
+            Some(APP_TOOL_TIMEOUT),
+        )
+        .await
+        .map(|result| result.to_string())
+    }
+
     async fn read(
         &self,
         path: &str,
@@ -680,6 +783,16 @@ impl TurnHub for DeviceTurnHub {
         body: Value,
     ) -> Result<Value, HubFailure> {
         self.bearer_call(Method::PUT, path, &query, Some(body))
+            .await
+    }
+
+    async fn patch(
+        &self,
+        path: &str,
+        query: Vec<(&'static str, String)>,
+        body: Value,
+    ) -> Result<Value, HubFailure> {
+        self.bearer_call(Method::PATCH, path, &query, Some(body))
             .await
     }
 
@@ -899,15 +1012,64 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_sealed_reply_is_refused_before_any_request() {
+    async fn a_reply_without_exactly_one_envelope_form_is_refused_before_any_request() {
         let api = FakeApi::answering([]);
-        let message = json!({ "message_id": "re-1", "kind": "message", "envelopes": [] });
-        let failure = hub(&api)
-            .send("bot", "conv", message, "bt_1", "device:dev1")
-            .await
-            .unwrap_err();
-        assert!(failure.message.contains("sealed replies"));
+        let plain = flow_like_types::inbox::plain_envelope(json!({ "text": "hi" }));
+        for message in [
+            json!({ "message_id": "re-1", "kind": "message" }),
+            json!({ "message_id": "re-1", "kind": "message", "envelopes": [] }),
+            json!({ "message_id": "re-1", "envelope": plain, "envelopes": { "owner": plain } }),
+            json!({ "kind": "message", "envelope": plain }),
+        ] {
+            let failure = hub(&api)
+                .send("bot", "conv", message.clone(), "bt_1", "device:dev1")
+                .await
+                .unwrap_err();
+            assert!(failure.message.contains("conversation conv"), "{message}");
+        }
         assert!(api.requests().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_sealed_reply_carries_only_the_envelopes_and_the_failure_code() {
+        let api = FakeApi::answering([
+            (200, grant("bt_1")),
+            (
+                200,
+                json!({ "turn": turn("bt_1"), "message_id": "rf-1", "posted": true }),
+            ),
+        ]);
+        let hub = hub(&api);
+        hub.claim_turn("bt_1", "device:dev1").await.unwrap();
+        let sealed = json!({ "v": 1, "enc": "hpke-x25519-sha256-chacha20poly1305", "ct": "c2VhbGVk", "keys": [] });
+        let message = json!({
+            "message_id": "rf-1",
+            "kind": "message",
+            "envelopes": { "owner": sealed, "bot": sealed },
+            "failure_code": "BOT_TURN_MODEL_ERROR",
+        });
+        hub.send("bot", "conv", message, "bt_1", "device:dev1")
+            .await
+            .unwrap();
+        let body = api.requests().remove(1).2.unwrap();
+        assert!(body.get("envelope").is_none(), "{body}");
+        assert_eq!(body["envelopes"]["owner"], sealed);
+        assert_eq!(body["envelopes"]["bot"], sealed);
+        assert_eq!(body["failure_code"], "BOT_TURN_MODEL_ERROR");
+        let request: DeviceReplyRequest = serde_json::from_value(body).unwrap();
+        assert!(request.envelope.is_null());
+    }
+
+    #[tokio::test]
+    async fn a_held_turn_lends_its_bot_token_for_that_bot_and_conversation_only() {
+        let api = FakeApi::answering([(200, grant("bt_1"))]);
+        let hub = hub(&api);
+        assert!(hub.as_bot_in("bot", "conv").is_none());
+        hub.claim_turn("bt_1", "device:dev1").await.unwrap();
+        let lent = hub.as_bot_in("bot", "conv").unwrap();
+        assert_eq!(lent.bearer.unwrap().bot_token(), "bot-1");
+        assert!(hub.as_bot_in("bot", "other").is_none());
+        assert!(hub.as_bot_in("other", "conv").is_none());
     }
 
     #[tokio::test]
@@ -930,6 +1092,49 @@ mod tests {
             requests[1].2.as_ref().unwrap()["error_code"],
             "BOT_ENCRYPTED"
         );
+    }
+
+    #[tokio::test]
+    async fn release_reports_whether_the_hub_queued_the_turn_again() {
+        let api = FakeApi::answering([
+            (200, json!({ "turn": turn("bt_1"), "requeued": false })),
+            (200, json!({ "turn": turn("bt_2"), "requeued": true })),
+            (200, json!({ "turn": turn("bt_3") })),
+        ]);
+        let hub = hub(&api);
+        assert!(
+            !hub.release("bt_1", "device:dev1", "BOT_TURN_FAILED")
+                .await
+                .unwrap()
+        );
+        assert!(
+            hub.release("bt_2", "device:dev1", "BOT_TURN_FAILED")
+                .await
+                .unwrap()
+        );
+        assert!(
+            hub.release("bt_3", "device:dev1", "BOT_TURN_FAILED")
+                .await
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn the_session_lapses_once_the_bot_token_has_expired_unrenewed() {
+        let mut value = grant("bt_1");
+        value["bot_token"] = json!({ "token": "bot-1", "expires_at": unix_now() + 300 });
+        let grant: DeviceTurnGrant = serde_json::from_value(value).unwrap();
+        let creds = TurnCreds::new(&grant);
+        assert!(!creds.session_lapsed());
+        creds.refresh(&DeviceHeartbeatResponse {
+            turn: grant.turn.clone(),
+            bot_token: Some(DeviceToken {
+                token: "stale".into(),
+                expires_at: unix_now() - 1,
+            }),
+            executor_token: None,
+        });
+        assert!(creds.session_lapsed());
     }
 
     #[tokio::test]
@@ -963,7 +1168,10 @@ mod tests {
                 }
                 1 => hub.silent("bt_1", "device:dev1").await,
                 2 => hub.park("bt_1", "device:dev1", &card).await,
-                _ => hub.release("bt_1", "device:dev1", "BOT_TURN_FAILED").await,
+                _ => hub
+                    .release("bt_1", "device:dev1", "BOT_TURN_FAILED")
+                    .await
+                    .map(|_| ()),
             }
             .unwrap();
             let (_, path, body) = api.requests().remove(1);

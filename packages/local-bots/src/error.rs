@@ -14,6 +14,7 @@ pub mod codes {
     /// The local copy changed after the snapshot a conditional forget names; nothing was deleted.
     pub const LOCAL_CHANGED: &str = "LOCAL_CHANGED";
     pub const BOT_LIMIT_REACHED: &str = "BOT_LIMIT_REACHED";
+    pub const BOT_EXECUTION_MODE_LOCATION: &str = "BOT_EXECUTION_MODE_LOCATION";
     /// `flowpilot` is never switched on or off, and a bot that holds it keeps its capabilities.
     pub const BOT_CAPABILITIES_FIXED: &str = "BOT_CAPABILITIES_FIXED";
     /// Assistant and Flux stay; their edits can be undone instead.

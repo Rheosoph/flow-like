@@ -36,6 +36,37 @@ def merge(records, cloud="all"):
 
 
 class MatrixTests(unittest.TestCase):
+    def test_build_batches_preserve_every_selected_image_once(self):
+        for cloud in containers.CLOUDS:
+            with self.subTest(cloud=cloud):
+                expected = containers.matrix(cloud)["include"]
+                jobs = containers.build_matrix(cloud)["include"]
+                expanded = []
+                for job in jobs:
+                    if job["workload"] == "helpers":
+                        helpers = [containers.TARGET_BY_ID[target] for target in job["targets"]]
+                        self.assertTrue(helpers)
+                        self.assertTrue(all(entry["workload"] in containers.HELPER_WORKLOADS for entry in helpers))
+                        self.assertEqual({entry["platform"] for entry in helpers}, {job["platform"]})
+                        self.assertEqual({entry["runner"] for entry in helpers}, {job["runner"]})
+                        expanded.extend(helpers)
+                    else:
+                        self.assertNotIn(job["workload"], containers.HELPER_WORKLOADS)
+                        expanded.append(job)
+                self.assertEqual(sorted(expanded, key=lambda entry: entry["id"]), expected)
+                records = [containers.record(entry["id"], OWNER, SOURCE_SHA, DIGEST, RUN_ID, RUN_ATTEMPT)
+                           for entry in expanded]
+                self.assertEqual(merge(records, cloud), merge(make_records(cloud), cloud))
+        jobs = containers.build_matrix("all")["include"]
+        self.assertEqual(len(jobs), 51)
+        self.assertEqual(sum(len(job["targets"]) for job in jobs if job["workload"] == "helpers"), 15)
+
+    def test_build_matrix_cli_emits_batched_jobs(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(containers.main(["build-matrix", "--cloud", "all"]), 0)
+        self.assertEqual(json.loads(output.getvalue()), containers.build_matrix("all"))
+
     def test_matrix_covers_portable_targets_and_real_recipes(self):
         entries = containers.matrix("all")["include"]
         self.assertEqual(len(entries), 64)

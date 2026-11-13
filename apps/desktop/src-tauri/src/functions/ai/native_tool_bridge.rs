@@ -35,6 +35,7 @@ pub(crate) const BACKGROUND_INTERACTION_UNAVAILABLE: &str = "background_interact
 
 #[derive(Clone, Default)]
 pub struct NativeRunOptions {
+    pub usage: flow_like::flow::copilot::bot_usage::BotUsage,
     pub recovery: Option<Arc<dyn flow_like::flow::copilot::run_recovery::BotRunRecovery>>,
     /// A native background host can select a profile without changing the active window.
     /// Foreground commands leave this unset and capture the active profile once.
@@ -64,6 +65,10 @@ pub struct NativeRunOptions {
     pub bot_memory: Option<flow_like::flow::copilot::MemoryTurnSource>,
     /// The bot's notes in this turn's inbox conversation; never set for sealed conversations.
     pub notes: Option<flow_like::flow::copilot::bot_notes::NotesHandle>,
+    /// The turn's tool trail; set only in the owner's direct conversation with the bot.
+    pub trail: Option<flow_like::flow::copilot::ToolTrail>,
+    /// Collects the files the bot attaches to its reply; set by hosts that store the reply.
+    pub reply_files: Option<flow_like::flow::copilot::ReplyFiles>,
     /// Shared or unreadable interactive conversation metadata forbids legacy memory writes.
     pub legacy_memory_read_only: bool,
     /// An interactive inbox run's explicit owner-memory permission. Missing metadata denies
@@ -78,8 +83,16 @@ pub struct NativeRunOptions {
     pub requester: Option<flow_like::flow::copilot::TurnRequester>,
     /// A brief call listening cue, rendered without tools.
     pub acknowledgement: bool,
+    /// The turn answers an utterance in a live call: a fast model, no thinking, a short spoken reply.
+    pub live_call: bool,
+    /// Holds a bot turn's tool calls until the host's participation decision lets it act.
+    pub tool_gate: Option<flow_like::flow::copilot::tool_gate::ToolGate>,
     /// Set from the authenticated inbox trigger, never from model arguments.
     pub ephemeral_user_context: bool,
+    /// What the turn's history puts into its turn label before the first tool call.
+    pub seed_taint: flow_like_types::data_classification::DataSensitivity,
+    /// Session snapshots of user context for a turn whose history comes from memory.
+    pub shared_context: Option<String>,
     /// The host owns event delivery, including owner notifications.
     pub suppress_owner_notifications: bool,
     /// The question whose late answer woke a headless bot turn: the turn's follow-ups to that
@@ -88,6 +101,8 @@ pub struct NativeRunOptions {
     /// The bot turn an interactive chat answers; a headless turn's comes from its gate. An
     /// account bot's tools read its secrets for this turn.
     pub bot_turn_id: Option<String>,
+    /// A headless live-call turn's reply as the model writes it, for the call on this computer.
+    pub reply_stream: Option<flow_like::flow::copilot::reply_stream::ReplySink>,
 }
 
 impl NativeRunOptions {
@@ -407,6 +422,10 @@ pub(crate) fn auto_mode_announcement(id: &str, webview: &str) -> Option<Value> {
             "generation":run.generation, "auto_mode_revision":revision,
         })
     })
+}
+
+pub(crate) fn run_model_announcement(run_id: &str, model_id: &str) -> Value {
+    serde_json::json!({ "type":"native_run_model", "run_id":run_id, "model_id":model_id })
 }
 
 #[derive(serde::Serialize)]
@@ -832,6 +851,14 @@ mod tests {
         first.await.unwrap();
         second.await.unwrap();
         assert_eq!(execution_profile_id(), None);
+    }
+
+    #[test]
+    fn the_run_model_frame_names_the_run_and_the_bit() {
+        assert_eq!(
+            run_model_announcement("run-1", "bit-1"),
+            serde_json::json!({ "type":"native_run_model", "run_id":"run-1", "model_id":"bit-1" })
+        );
     }
 
     #[test]

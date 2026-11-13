@@ -52,6 +52,19 @@ impl Buckets {
         }
     }
 
+    /// The index of the bucket holding `day`, `None` outside the window.
+    pub(crate) fn index_of(&self, day: NaiveDate) -> Option<i64> {
+        let index = if self.monthly {
+            i64::from(day.year() * 12 + day.month() as i32)
+                - i64::from(self.start.year() * 12 + self.start.month() as i32)
+        } else {
+            (day - self.start).num_days()
+        };
+        (0..self.keys.len() as i64)
+            .contains(&index)
+            .then_some(index)
+    }
+
     fn created_at_index(&self) -> SimpleExpr {
         let sqlite = self.backend == DbBackend::Sqlite;
         if self.monthly {
@@ -182,5 +195,30 @@ mod tests {
 
         assert!(sql.contains("(11), (12)) AS \"bucket_values\""), "{sql}");
         assert!(sql.contains("AS INTEGER) - 24310"), "{sql}");
+    }
+
+    #[test]
+    fn index_of_matches_the_sql_bucket_and_rejects_days_outside() {
+        let days = Buckets::new(
+            DbBackend::Postgres,
+            day(2026, 9, 21),
+            day(2026, 9, 23),
+            false,
+        );
+        assert_eq!(days.index_of(day(2026, 9, 21)), Some(0));
+        assert_eq!(days.index_of(day(2026, 9, 23)), Some(2));
+        assert_eq!(days.index_of(day(2026, 9, 20)), None);
+        assert_eq!(days.index_of(day(2026, 9, 24)), None);
+
+        let months = Buckets::new(
+            DbBackend::Postgres,
+            day(2025, 10, 21),
+            day(2026, 10, 21),
+            true,
+        );
+        assert_eq!(months.index_of(day(2025, 10, 1)), Some(0));
+        assert_eq!(months.index_of(day(2026, 1, 15)), Some(3));
+        assert_eq!(months.index_of(day(2026, 10, 30)), Some(12));
+        assert_eq!(months.index_of(day(2026, 11, 1)), None);
     }
 }
