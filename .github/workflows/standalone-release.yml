@@ -276,8 +276,38 @@ jobs:
             ${{ needs.prepare.outputs.image }}:sequence-${{ needs.prepare.outputs.sequence }}
             ${{ needs.prepare.outputs.image }}:sequence-${{ needs.prepare.outputs.sequence }}-playground
 
+  worker-smoke:
+    needs: [prepare, container]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: namespace-profile-linux-amd-large-24
+          - platform: linux/arm64
+            runner: namespace-profile-linux-arm-large-24
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Exercise the complete worker image without a hub
+        env:
+          RELEASE_IMAGE: ${{ needs.prepare.outputs.image }}@${{ needs.container.outputs.digest }}
+          RELEASE_PLATFORM: ${{ matrix.platform }}
+        run: python3 .github/scripts/standalone_worker_smoke.py --image "$RELEASE_IMAGE" --platform "$RELEASE_PLATFORM"
+
   signed-bundle:
-    needs: [prepare, binaries, container]
+    needs: [prepare, binaries, container, worker-smoke]
     runs-on: namespace-profile-linux-amd-small-24
     environment: standalone-release
     steps:

@@ -42,7 +42,7 @@ You answer with:
 
 Review and revoke standing approvals in the bot's details under **Allowed actions**. Cards waiting for you collect under **Needs you** and arrive as push notifications.
 
-**Some actions always ask.** A bot changing its own settings and a bot asking you for a secret can't be allowed for good, and Auto mode never approves them. Deleting a table, dropping a knowledge index and deleting files are never approved by inference.
+**Some actions always ask.** A bot changing its own settings, Flux creating, changing or deleting one of your bots, a bot asking you for a secret or inviting someone into a room can't be allowed for good, and Auto mode never approves them. Deleting a table, dropping a knowledge index and deleting files are never approved by inference.
 
 **Auto mode.** In a chat you're watching, Auto mode runs tools and applies changes without asking each time, except for the actions above. Use it when you'll review the result afterwards.
 
@@ -87,6 +87,8 @@ Because the server can't read encrypted conversations:
 - Calls in an encrypted chat need a speech-to-text model installed on your device. Hosted speech models run behind the server, so an app without its own model shows no call there, and bots speak only with a voice installed on the device. What is said is sealed like a message. The server only learns that a call started and ended, so it can ring the others.
 - Secrets sealed for a bot's host can't be used by turns that run in the cloud.
 
+A bot that answers with a hosted model sends each turn through the server to that model, so the model's provider reads what the bot sends it. Bots on a device always use hosted models. Encryption keeps their chats unreadable in the server's storage and inbox, not from the model.
+
 ## Limits that keep costs in check
 
 | Limit | Default |
@@ -99,3 +101,11 @@ Because the server can't read encrypted conversations:
 | Generated images | 50 per bot a day |
 
 The **Usage & limits** view shows each bot's AI cost, calls and runtime against monthly limits, overall and per room. Lower them any time; limits set by your organization apply on top.
+
+### Read a reply's model usage
+
+Select the usage badge below a reply to inspect its model calls. **Prompt cache** shows input tokens read from the provider's cache and tokens written for later reuse. Cached tokens are already included in input usage. The percentage covers calls with reported cache counts; missing measurements stay marked **Not reported**.
+
+**Context window** shows the latest request's input size and the room reserved for output. It uses the provider's input count when available and labels estimates. **Compaction** shows when the bot summarized earlier context, its estimated size before and after, and how long the work took. Summary and memory model calls are included in reported usage. Background memory work appears with the next reply after it finishes.
+
+For hosted calls, **Cost and token details** in your account's usage view also shows the provider's cache counts alongside the operation's costs. A cache write prepares content for reuse; it does not by itself establish a saving.

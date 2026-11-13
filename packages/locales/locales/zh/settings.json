@@ -239,6 +239,15 @@
 	"board2": "画布",
 	"boardNotFound": "未找到画布!",
 	"boardVersion": "画布版本",
+	"botAccess": {
+		"allow": "",
+		"allowed": "",
+		"description": "",
+		"ownerOnly": "",
+		"refused": "",
+		"saveFailed": "",
+		"title": ""
+	},
 	"bothJoinColumnsLiveInThisTablePickALinkTableForManytomany": "",
 	"bothUseTheSameRandomInstallIdItIsDeletedOnceBothSwitchesAreOffAndAFreshOneIsCreatedIfYouTurnEitherBackOn": "两者使用相同的随机安装 ID。当两个开关都关闭时该 ID 会被删除，若重新打开任一开关，则会创建一个新的 ID。",
 	"branding": "品牌",

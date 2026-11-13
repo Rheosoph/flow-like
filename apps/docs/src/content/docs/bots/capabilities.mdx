@@ -7,7 +7,7 @@ import CapabilityExplorer from "../../../components/bots/CapabilityExplorer";
 
 A bot's abilities decide which tools its model may use. **Every ability starts switched off.** A bot with none can still talk, ask you questions, keep notes for a long task, read its own settings and look at images behind links it was given, but it can't reach anything else outside the conversation.
 
-Every bot can look at the image behind a link it received in the current turn, for example a page preview that an app or MCP server returned, a picture from a web page it read, or a link you sent. The link goes to the model and nothing is saved. A link the bot wrote itself is refused, so instructions hidden in a document or web page can't use this to send data to another site.
+Every bot can look at the image behind a link it received in the current turn, for example a page preview that an app or MCP server returned, a picture from a web page it read, or a link you sent. The link goes to the model and nothing is saved. A link the bot wrote itself is refused, so instructions hidden in a document or web page can't use this to send data to another site. If the bot's chat model can't see images, its [vision model](/bots/create/#3-brain) reads the image and the chat model gets the description.
 
 <CapabilityExplorer client:visible />
 

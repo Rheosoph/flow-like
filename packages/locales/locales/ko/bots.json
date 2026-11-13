@@ -236,7 +236,19 @@
 		"focus": "",
 		"actionRunning": "",
 		"actionFailed": "",
-		"actionCompleted": ""
+		"actionCompleted": "",
+		"permission": {
+			"accessibility": "",
+			"accessibilityReason": "",
+			"afterAllow": "",
+			"elsewhere": "",
+			"open": "",
+			"restartHint": "",
+			"restartTitle": "",
+			"screenReason": "",
+			"screenRecording": "",
+			"title": ""
+		}
 	},
 	"connectors": {
 		"account": {
@@ -300,11 +312,48 @@
 			"always": "",
 			"answeredAlways": "",
 			"answeredDeny": "",
+			"answeredElsewhere": "",
 			"answeredOnce": "",
 			"askEveryTime": "",
+			"batch": {
+				"allowAllOnce": "",
+				"alwaysAllowAll": "",
+				"answered": "",
+				"answeredUniform_one": "",
+				"answeredUniform_other": "",
+				"back": "",
+				"callAnswer": "",
+				"choose": "",
+				"count_one": "",
+				"count_other": "",
+				"denyAll": "",
+				"groupAnswer_one": "",
+				"groupAnswer_other": "",
+				"label_one": "",
+				"label_other": "",
+				"mixed": "",
+				"notRememberable": "",
+				"optionAlways": "",
+				"optionDeny": "",
+				"optionOnce": "",
+				"secretFirst": "",
+				"send": "",
+				"showAll_one": "",
+				"showAll_other": "",
+				"showAllGroups_one": "",
+				"showAllGroups_other": "",
+				"showCalls": "",
+				"showFewer": "",
+				"tally": "",
+				"title_one": "",
+				"title_other": ""
+			},
 			"botFallback": "",
+			"cancelled": "",
 			"configurationChanges": "",
 			"clearValue": "",
+			"expired": "",
+			"expiredHint": "",
 			"fields": {
 				"name": "",
 				"description": "",
@@ -318,8 +367,11 @@
 				"vision_model": "",
 				"subtask_model": "",
 				"look": "",
+				"classification": "",
 				"location": "",
-				"app_ids": ""
+				"device_id": "",
+				"app_ids": "",
+				"app_restrictions": ""
 			},
 			"deny": "",
 			"failed": "",
@@ -336,6 +388,8 @@
 				"save": "",
 				"saved": "",
 				"saving": "",
+				"seal": "",
+				"sealHint": "",
 				"title": "",
 				"tooLarge": "",
 				"valueLabel": ""
@@ -357,6 +411,36 @@
 				"requestTitle": "",
 				"hint": "",
 				"target": ""
+			},
+			"deleteBot": {
+				"title": "",
+				"requestTitle": "",
+				"hint": "",
+				"approve": "",
+				"reject": "",
+				"approved": "",
+				"rejected": ""
+			},
+			"classification": {
+				"level": "",
+				"unset": "",
+				"pii": "",
+				"piiYes": "",
+				"piiNo": ""
+			},
+			"webContent": {
+				"badge": "",
+				"hint": "",
+				"noAlways": "",
+				"notice": ""
+			},
+			"invite": {
+				"allow": "",
+				"because": "",
+				"next": "",
+				"nextInRoom": "",
+				"title": "",
+				"why": ""
 			}
 		},
 		"botSettings": "",
@@ -552,6 +636,8 @@
 			"unmute": ""
 		},
 		"needs": {
+			"approvalBatchMeta_one": "",
+			"approvalBatchMeta_other": "",
 			"approvalMeta": "",
 			"assistantMeta": "",
 			"assistantTitle": "",
@@ -856,6 +942,7 @@
 			"appsFailed": "",
 			"appsLeft": "",
 			"appsNoMatch": "",
+			"appsRefusesBots": "",
 			"appsRole": "",
 			"appsSearch": "",
 			"appsUntitled": "",
@@ -986,6 +1073,7 @@
 		"duplicated": "",
 		"errors": {
 			"appLimit": "",
+			"appRefusesBots": "",
 			"capabilityLocation": "",
 			"createFailed": "",
 			"deleteFailed": "",
@@ -1126,7 +1214,12 @@
 		"person": "",
 		"personUnknown": "",
 		"table": "",
-		"tool": ""
+		"tool": "",
+		"webPrivateRead": "",
+		"webPrivateWrite": "",
+		"webRead": "",
+		"webSecret": "",
+		"webWrite": ""
 	},
 	"history": {
 		"busy": "",

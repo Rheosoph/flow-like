@@ -57,6 +57,23 @@ message. Receivers may read only their own marker and cannot write it. Event
 payloads remain in the authorized HTTP replay response, and active HTTP
 execution streams continue to carry their own output.
 
+During a live voice call the API also writes the bot's reply as it is being
+written to the sibling node `/realtime/{account-scope}/reply`, one message of
+at most 4096 bytes at a time, and removes the node once the reply is complete or
+dropped. That node carries conversation text, so the rules give it exactly the
+read rule of `wake` and no client write:
+
+```json
+"reply": {
+  ".read": "auth != null && auth.token.role === 'realtime' && auth.token.realtime_scope === $scope && auth.token.realtime_until > now",
+  ".write": false
+}
+```
+
+Redeploy the rules file when you upgrade. Until then clients cannot read the
+reply node: calls wait for the stored reply as before, and wakeups are not
+affected.
+
 Receiver grants include a fixed `realtime_until` deadline checked against the
 database server's `now`. This check matters because Firebase sessions can
 outlive the custom token used to sign in. Renewing an ID token cannot extend

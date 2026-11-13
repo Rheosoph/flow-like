@@ -140,6 +140,7 @@
 	"modelSetupChooseAnother": "",
 	"modelSetupLabel": "",
 	"modelSetupReady": "",
+	"modelSetupResending": "",
 	"modelsUsed": "使用的模型",
 	"modelUsage": "模型使用情况",
 	"needsAnAnswer": "需要回答",

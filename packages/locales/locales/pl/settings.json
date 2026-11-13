@@ -239,6 +239,15 @@
 	"board2": "",
 	"boardNotFound": "",
 	"boardVersion": "",
+	"botAccess": {
+		"allow": "",
+		"allowed": "",
+		"description": "",
+		"ownerOnly": "",
+		"refused": "",
+		"saveFailed": "",
+		"title": ""
+	},
 	"bothJoinColumnsLiveInThisTablePickALinkTableForManytomany": "",
 	"bothUseTheSameRandomInstallIdItIsDeletedOnceBothSwitchesAreOffAndAFreshOneIsCreatedIfYouTurnEitherBackOn": "",
 	"branding": "",

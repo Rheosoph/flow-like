@@ -236,7 +236,19 @@
 		"focus": "",
 		"actionRunning": "",
 		"actionFailed": "",
-		"actionCompleted": ""
+		"actionCompleted": "",
+		"permission": {
+			"accessibility": "",
+			"accessibilityReason": "",
+			"afterAllow": "",
+			"elsewhere": "",
+			"open": "",
+			"restartHint": "",
+			"restartTitle": "",
+			"screenReason": "",
+			"screenRecording": "",
+			"title": ""
+		}
 	},
 	"connectors": {
 		"account": {
@@ -300,11 +312,62 @@
 			"always": "",
 			"answeredAlways": "",
 			"answeredDeny": "",
+			"answeredElsewhere": "",
 			"answeredOnce": "",
 			"askEveryTime": "",
+			"batch": {
+				"allowAllOnce": "",
+				"alwaysAllowAll": "",
+				"answered": "",
+				"answeredUniform_one": "",
+				"answeredUniform_few": "",
+				"answeredUniform_many": "",
+				"answeredUniform_other": "",
+				"back": "",
+				"callAnswer": "",
+				"choose": "",
+				"count_one": "",
+				"count_few": "",
+				"count_many": "",
+				"count_other": "",
+				"denyAll": "",
+				"groupAnswer_one": "",
+				"groupAnswer_few": "",
+				"groupAnswer_many": "",
+				"groupAnswer_other": "",
+				"label_one": "",
+				"label_few": "",
+				"label_many": "",
+				"label_other": "",
+				"mixed": "",
+				"notRememberable": "",
+				"optionAlways": "",
+				"optionDeny": "",
+				"optionOnce": "",
+				"secretFirst": "",
+				"send": "",
+				"showAll_one": "",
+				"showAll_few": "",
+				"showAll_many": "",
+				"showAll_other": "",
+				"showAllGroups_one": "",
+				"showAllGroups_few": "",
+				"showAllGroups_many": "",
+				"showAllGroups_other": "",
+				"showCalls": "",
+				"showFewer": "",
+				"tally": "",
+				"title_one": "",
+				"title_few": "",
+				"title_many": "",
+				"title_other": ""
+			},
 			"botFallback": "",
+			"cancelled": "",
 			"configurationChanges": "",
 			"clearValue": "",
+			"expired": "",
+			"expiredHint": "",
 			"fields": {
 				"name": "",
 				"description": "",
@@ -318,8 +381,11 @@
 				"vision_model": "",
 				"subtask_model": "",
 				"look": "",
+				"classification": "",
 				"location": "",
-				"app_ids": ""
+				"device_id": "",
+				"app_ids": "",
+				"app_restrictions": ""
 			},
 			"deny": "",
 			"failed": "",
@@ -336,6 +402,8 @@
 				"save": "",
 				"saved": "",
 				"saving": "",
+				"seal": "",
+				"sealHint": "",
 				"title": "",
 				"tooLarge": "",
 				"valueLabel": ""
@@ -357,6 +425,36 @@
 				"requestTitle": "",
 				"hint": "",
 				"target": ""
+			},
+			"deleteBot": {
+				"title": "",
+				"requestTitle": "",
+				"hint": "",
+				"approve": "",
+				"reject": "",
+				"approved": "",
+				"rejected": ""
+			},
+			"classification": {
+				"level": "",
+				"unset": "",
+				"pii": "",
+				"piiYes": "",
+				"piiNo": ""
+			},
+			"webContent": {
+				"badge": "",
+				"hint": "",
+				"noAlways": "",
+				"notice": ""
+			},
+			"invite": {
+				"allow": "",
+				"because": "",
+				"next": "",
+				"nextInRoom": "",
+				"title": "",
+				"why": ""
 			}
 		},
 		"botSettings": "",
@@ -554,6 +652,10 @@
 			"unmute": ""
 		},
 		"needs": {
+			"approvalBatchMeta_one": "",
+			"approvalBatchMeta_few": "",
+			"approvalBatchMeta_many": "",
+			"approvalBatchMeta_other": "",
 			"approvalMeta": "",
 			"assistantMeta": "",
 			"assistantTitle": "",
@@ -880,6 +982,7 @@
 			"appsFailed": "",
 			"appsLeft": "",
 			"appsNoMatch": "",
+			"appsRefusesBots": "",
 			"appsRole": "",
 			"appsSearch": "",
 			"appsUntitled": "",
@@ -1014,6 +1117,7 @@
 		"duplicated": "",
 		"errors": {
 			"appLimit": "",
+			"appRefusesBots": "",
 			"capabilityLocation": "",
 			"createFailed": "",
 			"deleteFailed": "",
@@ -1154,7 +1258,12 @@
 		"person": "",
 		"personUnknown": "",
 		"table": "",
-		"tool": ""
+		"tool": "",
+		"webPrivateRead": "",
+		"webPrivateWrite": "",
+		"webRead": "",
+		"webSecret": "",
+		"webWrite": ""
 	},
 	"history": {
 		"busy": "",

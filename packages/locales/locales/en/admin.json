@@ -1306,6 +1306,7 @@
 	"botFailureTimeout": "Timed out",
 	"botFailureQuota": "Budget or quota reached",
 	"botFailureSetup": "Bot setup incomplete",
+	"botFailureNoModel": "No language model",
 	"botFailureReplyRefused": "Reply refused",
 	"botFailureUnreadable": "Message unreadable",
 	"botFailureExpired": "Expired before it ran",

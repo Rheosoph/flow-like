@@ -239,6 +239,15 @@
 	"board2": "Board",
 	"boardNotFound": "- Das ist nicht gut.",
 	"boardVersion": "Board-Version",
+	"botAccess": {
+		"allow": "",
+		"allowed": "",
+		"description": "",
+		"ownerOnly": "",
+		"refused": "",
+		"saveFailed": "",
+		"title": ""
+	},
 	"bothJoinColumnsLiveInThisTablePickALinkTableForManytomany": "Beide Verknüpfungsspalten befinden sich in dieser Tabelle. Wähle für Viele-zu-viele-Beziehungen eine Verknüpfungstabelle.",
 	"bothUseTheSameRandomInstallIdItIsDeletedOnceBothSwitchesAreOffAndAFreshOneIsCreatedIfYouTurnEitherBackOn": "Beide verwenden dieselbe zufällige Installations-ID. Die ID wird gelöscht, sobald beide Schalter deaktiviert sind. Wenn du einen der Schalter wieder aktivierst, wird eine neue ID erstellt.",
 	"branding": "Brandmarken",
