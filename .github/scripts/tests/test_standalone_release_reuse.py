@@ -1,4 +1,4 @@
-"""Artifact reuse must preserve compiled inputs and require completed original builds."""
+"""Artifact recovery must identify its original source and require completed builds."""
 
 import copy
 from datetime import datetime, timezone
@@ -19,6 +19,7 @@ SPEC.loader.exec_module(release_reuse)
 REPOSITORY = "Example/Flow-Like"
 RUN_ID = 123456
 SHA = "a" * 40
+METADATA = {"source_sha": SHA, "packaging_sha": "c" * 40, "version": "1.2.3", "epoch": "1780000000"}
 WORKFLOW = """env:
   CARGO_PROFILE_RELEASE_DEBUG: '0'
 
@@ -157,11 +158,11 @@ class SourceRunTests(unittest.TestCase):
         api = release_reuse.GitHub(REPOSITORY, "test-token")
         with patch.object(api, "get", return_value=run_fixture()), \
                 patch.object(api, "collection", side_effect=[jobs_fixture(), artifacts_fixture()]), \
-                patch.object(release_reuse, "source_epoch", return_value="1780000000") as epoch:
-            outputs = release_reuse.reuse(api, RUN_ID, Path("/checkout"))
+                patch.object(release_reuse, "source_metadata", return_value=METADATA) as epoch:
+            outputs = release_reuse.reuse(api, RUN_ID, Path("/checkout"), "1.2.3")
         self.assertEqual(outputs, {
             "reuse_run_id": str(RUN_ID), "binary_artifact_ids": "1,2,3", "linux_artifact_ids": "1,2",
-            "runtime_artifact_ids": "4,5,6,7,8", "epoch": "1780000000",
+            "runtime_artifact_ids": "4,5,6,7,8", **METADATA,
         })
         epoch.assert_called_once_with(SHA, Path("/checkout"), REPOSITORY)
 
@@ -171,23 +172,39 @@ class SourceRunTests(unittest.TestCase):
             summary = Path(folder) / "summary"
             with patch.object(api, "get", return_value=run_fixture()), \
                     patch.object(api, "collection", side_effect=[jobs_fixture(), artifacts_fixture()]), \
-                    patch.object(release_reuse, "source_epoch", return_value="1780000000"):
-                release_reuse.reuse(api, RUN_ID, Path("/checkout"), summary)
+                    patch.object(release_reuse, "source_metadata", return_value=METADATA):
+                release_reuse.reuse(api, RUN_ID, Path("/checkout"), "1.2.3", summary)
             text = summary.read_text()
         self.assertIn(f"https://github.com/{REPOSITORY}/actions/runs/{RUN_ID}", text)
         self.assertIn(SHA, text)
         self.assertIn("original build epoch `1780000000`", text)
         self.assertIn("still gate publication", text)
+        self.assertIn("Binaries, embedded frontend and runtime packs remain at source commit", text)
+        self.assertIn("Later source changes are not included", text)
+        self.assertIn(METADATA["packaging_sha"], text)
+        self.assertIn("version `1.2.3`", text)
         for artifact in artifacts_fixture():
             self.assertIn(f"| {artifact['name']} | {artifact['id']} |", text)
+
+    def test_mismatched_agent_version_stops_before_writing_summary_or_outputs(self):
+        api = release_reuse.GitHub(REPOSITORY, "test-token")
+        with tempfile.TemporaryDirectory() as folder:
+            summary = Path(folder) / "summary"
+            with patch.object(api, "get", return_value=run_fixture()) as get, \
+                    patch.object(api, "collection", side_effect=[jobs_fixture(), artifacts_fixture()]), \
+                    patch.object(release_reuse, "source_metadata", return_value=METADATA), \
+                    self.assertRaisesRegex(ValueError, "agent version 1.2.3.*expects 2.0.0"):
+                release_reuse.reuse(api, RUN_ID, Path("/checkout"), "2.0.0", summary)
+            self.assertFalse(summary.exists())
+            self.assertEqual(get.call_count, 1)
 
     def test_a_source_rerun_during_validation_is_rejected(self):
         api = release_reuse.GitHub(REPOSITORY, "test-token")
         with patch.object(api, "get", side_effect=[run_fixture(), {**run_fixture(), "run_attempt": 2}]), \
                 patch.object(api, "collection", side_effect=[jobs_fixture(), artifacts_fixture()]), \
-                patch.object(release_reuse, "source_epoch", return_value="1780000000"), \
+                patch.object(release_reuse, "source_metadata", return_value=METADATA), \
                 self.assertRaisesRegex(ValueError, "changed"):
-            release_reuse.reuse(api, RUN_ID, Path("/checkout"))
+            release_reuse.reuse(api, RUN_ID, Path("/checkout"), "1.2.3")
 
 
 class GitInputTests(unittest.TestCase):
@@ -200,7 +217,8 @@ class GitInputTests(unittest.TestCase):
         self.git("config", "user.email", "release-tests@example.invalid")
         self.git("config", "commit.gpgsign", "false")
         self.git("config", "core.hooksPath", "/dev/null")
-        self.write("Cargo.lock", "compiled dependency versions\n")
+        self.write("apps/standalone/Cargo.toml", '[package]\nname = "flow-like-standalone"\nversion = "1.2.3"\n')
+        self.write("Cargo.lock", 'version = 4\n[[package]]\nname = "flow-like-standalone"\nversion = "1.2.3"\n')
         self.write("apps/standalone/src/main.rs", "fn main() {}\n")
         self.write("apps/standalone/packaging/Dockerfile.playground", "FROM debian\n")
         self.write(release_reuse.WORKFLOW, WORKFLOW)
@@ -220,51 +238,68 @@ class GitInputTests(unittest.TestCase):
         self.git("add", ".")
         self.git("commit", "--quiet", "-m", "fixture")
 
-    def test_packaging_changes_keep_source_epoch_and_ignore_uncommitted_work(self):
-        self.write("apps/standalone/packaging/Dockerfile.playground", "FROM debian\nRUN install-egl\n")
-        self.write(".github/scripts/tests/test_standalone_release_reuse.py", "# release validation\n")
+    def test_current_source_workflow_and_version_changes_keep_the_selected_build_metadata(self):
+        changes = {
+            "apps/standalone/packaging/Dockerfile.playground": "FROM debian\nRUN install-egl\n",
+            "apps/standalone/src/main.rs": "fn main() { changed(); }\n",
+            "packages/ui/components/interfaces/chat-default/chat.tsx": "new chat behavior\n",
+            "packages/locales/locales/en/bots.json": '{"bots": "updated"}\n',
+            "apps/standalone/Cargo.toml": '[package]\nversion = "9.9.9"\n',
+            "Cargo.lock": 'version = 4\n[[package]]\nname = "flow-like-standalone"\nversion = "9.9.9"\n',
+            release_reuse.WORKFLOW: WORKFLOW.replace("--features frontend", "--features frontend,experimental"),
+        }
+        for name, contents in changes.items():
+            self.write(name, contents)
         self.commit()
+        current = self.git("rev-parse", "HEAD").strip()
         self.write("Cargo.lock", "an unrelated worktree edit\n")
-        self.assertEqual(release_reuse.source_epoch(self.sha, self.root, REPOSITORY), self.epoch)
+        self.assertEqual(release_reuse.source_metadata(self.sha, self.root, REPOSITORY), {
+            "source_sha": self.sha, "packaging_sha": current, "version": "1.2.3", "epoch": self.epoch,
+        })
 
-    def test_compiled_source_dependency_and_unknown_changes_require_a_fresh_build(self):
-        for name in ("Cargo.lock", "apps/standalone/src/main.rs", "new-build-input"):
-            with self.subTest(name=name):
-                self.write(name, "changed\n")
+    def test_source_version_must_be_a_bounded_literal(self):
+        manifests = ['invalid = [', '[package]\n', 'version = "1.2.3"\n']
+        manifests += [f'[package]\nname = "flow-like-standalone"\nversion = {json.dumps(value)}\n'
+                      for value in ("", "1.2.3\nspoofed=value", "x" * 65, "1.2.3/path", 123)]
+        manifests += ['[package]\nname = "flow-like-standalone"\n[package.version]\nworkspace = true\n',
+                      '[package]\nname = "other"\nversion = "1.2.3"\n']
+        for manifest in manifests:
+            with self.subTest(manifest=manifest):
+                self.write("apps/standalone/Cargo.toml", manifest)
                 self.commit()
-                with self.assertRaisesRegex(ValueError, "Compiled inputs differ"):
-                    release_reuse.source_epoch(self.sha, self.root, REPOSITORY)
+                invalid_sha = self.git("rev-parse", "HEAD").strip()
+                with self.assertRaisesRegex(ValueError, "Source"):
+                    release_reuse.source_metadata(invalid_sha, self.root, REPOSITORY)
                 self.git("reset", "--hard", self.sha)
 
-    def test_renaming_source_into_an_allowed_path_cannot_hide_its_deletion(self):
-        self.git("mv", "apps/standalone/src/main.rs", ".github-workflow-temp")
-        self.write(".github/workflows/standalone-release.yml", "fn main() {}\n")
-        (self.root / ".github-workflow-temp").unlink()
-        self.commit()
-        with self.assertRaisesRegex(ValueError, "apps/standalone/src/main.rs"):
-            release_reuse.source_epoch(self.sha, self.root, REPOSITORY)
-
-    def test_build_job_scheduling_changes_can_reuse_artifacts(self):
-        workflow = WORKFLOW.replace("    needs: prepare\n", "    needs: [prepare, container-check]\n    if: inputs.reuse_run_id == ''\n")
-        workflow = workflow.replace("    needs: [prepare, frontend]\n", "    needs: [prepare, frontend, container-check]\n    if: inputs.reuse_run_id == ''\n")
-        self.write(release_reuse.WORKFLOW, workflow)
-        self.commit()
-        self.assertEqual(release_reuse.source_epoch(self.sha, self.root, REPOSITORY), self.epoch)
-
-    def test_workflow_build_flags_runners_environments_and_steps_cannot_change(self):
-        changes = [
-            ("--features frontend", "--features frontend,experimental"),
-            ("binary-runner", "different-runner"), ("CC: clang", "CC: gcc"),
-            ("CARGO_PROFILE_RELEASE_DEBUG: '0'", "CARGO_PROFILE_RELEASE_DEBUG: '1'"),
-            ("bun run build:frontend", "bun run build:different"), ("build-runtime", "build-different-runtime"),
-        ]
-        for old, new in changes:
-            with self.subTest(change=new):
-                self.write(release_reuse.WORKFLOW, WORKFLOW.replace(old, new))
+    def test_source_lock_must_match_the_agent_version_once(self):
+        entry = '[[package]]\nname = "flow-like-standalone"\nversion = "1.2.3"\n'
+        locks = ["invalid = [", "version = 4\n", "[package]\n", entry + entry,
+                 entry.replace("1.2.3", "1.2.4"), entry.replace("flow-like-standalone", "other"),
+                 entry + 'source = "registry+https://example.invalid"\n']
+        for lock in locks:
+            with self.subTest(lock=lock):
+                self.write("Cargo.lock", lock)
                 self.commit()
-                with self.assertRaisesRegex(ValueError, "workflow build inputs differ"):
-                    release_reuse.source_epoch(self.sha, self.root, REPOSITORY)
+                invalid_sha = self.git("rev-parse", "HEAD").strip()
+                with self.assertRaisesRegex(ValueError, "Source"):
+                    release_reuse.source_metadata(invalid_sha, self.root, REPOSITORY)
                 self.git("reset", "--hard", self.sha)
+
+    def test_source_metadata_never_falls_back_to_files_from_current_checkout(self):
+        (self.root / "apps/standalone/Cargo.toml").unlink()
+        self.commit()
+        missing_sha = self.git("rev-parse", "HEAD").strip()
+        self.git("reset", "--hard", self.sha)
+        with self.assertRaisesRegex(ValueError, "Source commit must contain valid"):
+            release_reuse.source_metadata(missing_sha, self.root, REPOSITORY)
+
+    def test_source_sha_is_validated_before_running_git(self):
+        for sha in ("dev", "HEAD", "--help", "a" * 39, "a" * 40 + "\n"):
+            with self.subTest(sha=sha), patch.object(release_reuse.subprocess, "run") as run, \
+                    self.assertRaisesRegex(ValueError, "exact Git commit"):
+                release_reuse.source_metadata(sha, self.root, REPOSITORY)
+            run.assert_not_called()
 
 
 class GitHubMetadataTests(unittest.TestCase):

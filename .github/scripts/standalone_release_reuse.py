@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import tomllib
 from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
@@ -15,16 +16,6 @@ WORKFLOW = ".github/workflows/standalone-release.yml"
 TARGETS = ("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "aarch64-apple-darwin")
 PACKS = ("llamacpp-macos-arm64-metal", "llamacpp-linux-x64-cpu", "llamacpp-linux-x64-vulkan",
          "llamacpp-linux-arm64-cpu", "mlx-macos-arm64-metal")
-# These files change packaging and its validation without changing compiled inputs.
-PACKAGING_CHANGES = frozenset({
-    WORKFLOW,
-    "apps/standalone/packaging/Dockerfile.playground",
-    ".github/scripts/check-standalone-container-deps.sh",
-    ".github/scripts/standalone_release_reuse.py",
-    ".github/scripts/tests/test_standalone_release_workflow.py",
-    ".github/scripts/tests/test_standalone_release_reuse.py",
-    ".github/scripts/tests/test_runtime_packs.py",
-})
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
 
@@ -150,59 +141,53 @@ def select_artifacts(artifacts, run, now=None):
     return selected
 
 
-def workflow_build_inputs(text):
-    environment = re.search(r"^env:\n(.*?)(?=^[^ \n]|\Z)", text, re.MULTILINE | re.DOTALL)
-    if environment is None:
-        raise ValueError("Release workflow must retain its global build environment")
-    inputs = {"env": environment.group(1)}
-    for name in ("frontend", "binaries", "runtime-packs"):
-        job = re.search(rf"^  {name}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)", text, re.MULTILINE | re.DOTALL)
-        if job is None:
-            raise ValueError(f"Release workflow must retain the {name} build job")
-        # Reuse changes job scheduling; runner, toolchain, flags and steps remain build inputs.
-        inputs[name] = re.sub(r"^    (?:needs|if):[^\n]*\n", "", job.group(1), flags=re.MULTILINE)
-    return inputs
-
-
-def validate_workflow_build_inputs(source, current):
-    before, after = workflow_build_inputs(source), workflow_build_inputs(current)
-    changed = [name for name in before if before[name] != after[name]]
-    if changed:
-        raise ValueError("Release workflow build inputs differ from the source run; start a fresh build: " + ", ".join(changed))
-
-
-def source_epoch(sha, directory, repository):
+def source_metadata(sha, directory, repository):
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise ValueError("Source run must identify an exact Git commit")
     exists = subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=directory,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
     if exists.returncode:
         subprocess.run(["git", "-c", "credential.helper=", "-c", "http.extraHeader=", "fetch",
                         "--no-tags", "--depth=1", f"https://github.com/{repository}.git", sha],
                        cwd=directory, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, check=True, timeout=300)
-    changed = subprocess.check_output(
-        ["git", "diff", "--no-ext-diff", "--name-only", "-z", "--no-renames", sha, "HEAD", "--"], cwd=directory,
-    ).decode().split("\0")
-    refused = sorted(set(changed) - PACKAGING_CHANGES - {""})
-    if refused:
-        raise ValueError("Compiled inputs differ from the source run; start a fresh build: " + ", ".join(refused))
-    if WORKFLOW in changed:
-        try:
-            workflows = [subprocess.check_output(["git", "show", f"{ref}:{WORKFLOW}"], cwd=directory, text=True)
-                         for ref in (sha, "HEAD")]
-        except subprocess.CalledProcessError:
-            raise ValueError("Both release commits must contain the release workflow") from None
-        validate_workflow_build_inputs(*workflows)
+    # Recovery releases the selected run's binaries, including its embedded frontend.
+    # Read their version from that commit even when the packaging checkout has moved on.
+    try:
+        manifest, lock = [tomllib.loads(subprocess.check_output(
+            ["git", "show", f"{sha}:{name}"], cwd=directory, text=True, stderr=subprocess.PIPE,
+        )) for name in ("apps/standalone/Cargo.toml", "Cargo.lock")]
+    except (subprocess.CalledProcessError, tomllib.TOMLDecodeError):
+        raise ValueError("Source commit must contain valid standalone Cargo.toml and Cargo.lock files") from None
+    package = manifest.get("package")
+    if not isinstance(package, dict) or package.get("name") != "flow-like-standalone":
+        raise ValueError("Source apps/standalone/Cargo.toml must describe flow-like-standalone")
+    version = package.get("version")
+    if not isinstance(version, str) or not re.fullmatch(r"[0-9A-Za-z.+-]{1,64}", version):
+        raise ValueError("Source apps/standalone/Cargo.toml must state the agent version as a literal")
+    packages = lock.get("package")
+    if not isinstance(packages, list) or any(not isinstance(package, dict) for package in packages):
+        raise ValueError("Source Cargo.lock must contain a package list")
+    versions = [package.get("version") for package in packages
+                if package.get("name") == "flow-like-standalone" and "source" not in package]
+    if versions != [version]:
+        raise ValueError(f"Source Cargo.lock must contain exactly one flow-like-standalone {version} entry")
     epoch = subprocess.check_output(["git", "show", "-s", "--format=%ct", sha], cwd=directory, text=True).strip()
     if not re.fullmatch(r"[0-9]+", epoch):
         raise ValueError("Source commit has no valid build epoch")
-    return epoch
+    packaging_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=directory, text=True).strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", packaging_sha):
+        raise ValueError("Packaging checkout must identify an exact Git commit")
+    return {"source_sha": sha, "packaging_sha": packaging_sha, "version": version, "epoch": epoch}
 
 
-def reuse(api, run_id, directory, summary=None):
+def reuse(api, run_id, directory, expected_version, summary=None):
     run = api.get(f"actions/runs/{run_id}")
     sha = validate_run(run, api.repository, run_id)
     validate_jobs(api.collection(f"actions/runs/{run_id}/jobs?filter=latest", "jobs"))
     artifacts = select_artifacts(api.collection(f"actions/runs/{run_id}/artifacts", "artifacts"), run)
-    epoch = source_epoch(sha, directory, api.repository)
+    metadata = source_metadata(sha, directory, api.repository)
+    if metadata["version"] != expected_version:
+        raise ValueError(f"Source run contains agent version {metadata['version']}, but this release expects {expected_version}; select a matching run or build a fresh release")
     latest = api.get(f"actions/runs/{run_id}")
     if validate_run(latest, api.repository, run_id) != sha or latest.get("run_attempt") != run.get("run_attempt"):
         raise ValueError("Source run changed while checking reuse")
@@ -210,7 +195,8 @@ def reuse(api, run_id, directory, summary=None):
     if summary:
         rows = ["### Reused standalone build artifacts", "",
                 f"Source: [run {run_id}](https://github.com/{api.repository}/actions/runs/{run_id}), commit `{sha}`.", "",
-                f"The original build epoch `{epoch}` is retained. New containers, worker checks and signed manifests still gate publication.", "",
+                f"Binaries, embedded frontend and runtime packs remain at source commit `{sha}`, version `{metadata['version']}`. Later source changes are not included.", "",
+                f"Packaging checkout: `{metadata['packaging_sha']}`. The original build epoch `{metadata['epoch']}` is retained. New containers, worker checks and signed manifests still gate publication.", "",
                 "| Artifact | ID |", "| --- | --- |"]
         rows.extend(f"| {name} | {artifact_id} |" for name, artifact_id in artifacts.items())
         with Path(summary).open("a") as output:
@@ -219,18 +205,19 @@ def reuse(api, run_id, directory, summary=None):
         "reuse_run_id": str(run_id), "binary_artifact_ids": ",".join(binary_ids),
         "linux_artifact_ids": ",".join(binary_ids[:2]),
         "runtime_artifact_ids": ",".join(str(artifacts[f"runtime-pack-{pack}"]) for pack in PACKS),
-        "epoch": epoch,
+        **metadata,
     }
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id", required=True)
+    parser.add_argument("--expected-version", required=True)
     args = parser.parse_args()
     if not re.fullmatch(r"[1-9][0-9]{0,19}", args.run_id):
         parser.error("--run-id must be a positive GitHub Actions run ID")
     api = GitHub(os.environ["GITHUB_REPOSITORY"], os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"))
-    outputs = reuse(api, int(args.run_id), Path.cwd(), os.environ.get("GITHUB_STEP_SUMMARY"))
+    outputs = reuse(api, int(args.run_id), Path.cwd(), args.expected_version, os.environ.get("GITHUB_STEP_SUMMARY"))
     for name, value in outputs.items():
         print(f"{name}={value}")
 
