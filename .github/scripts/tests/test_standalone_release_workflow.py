@@ -58,7 +58,92 @@ def triggers(workflow):
     return re.findall(r"^  ([a-z_]+):", block, re.MULTILINE)
 
 
+def allows_job(name, results, reuse_run_id="", cancelled=False):
+    """Evaluate the release's job gates with explicit dependency outcomes."""
+    body = job_body(name)
+    match = re.search(r"^    if: (.*?)(?=^    [a-z]|\Z)", body, re.MULTILINE | re.DOTALL)
+    condition = match.group(1).strip()
+    if condition.startswith(">-"):
+        condition = condition[2:].strip()
+    condition = condition.removeprefix("${{").removesuffix("}}").strip()
+    condition = condition.replace("needs.prepare.outputs.reuse_run_id", repr(reuse_run_id))
+    condition = re.sub(r"needs\.([a-z-]+)\.result", lambda value: repr(results[value[1]]), condition)
+    condition = condition.replace("!cancelled()", repr(not cancelled))
+    condition = condition.replace("&&", " and ").replace("||", " or ")
+    condition = " ".join(condition.split())
+    return eval(condition, {"__builtins__": {}}, {})
+
+
 class StandaloneReleaseWorkflowTests(unittest.TestCase):
+    def test_container_dependencies_gate_every_expensive_build(self):
+        check = job_body("container-check")
+        self.assertIn("needs: prepare", check)
+        self.assertIn("runs-on: namespace-profile-linux-amd-small-24", check)
+        self.assertIn("check-standalone-container-deps.sh linux/amd64,linux/arm64", check)
+        for job in ["frontend", "runtime-packs"]:
+            self.assertIn("needs: [prepare, container-check]", job_body(job))
+        self.assertIn("needs: [prepare, frontend]", job_body("binaries"))
+
+    def test_artifact_reuse_skips_compilation_and_keeps_all_release_gates(self):
+        results = dict.fromkeys([
+            "prepare", "container-check", "binaries", "runtime-packs", "container",
+            "worker-smoke", "signed-bundle", "runtime-manifest", "runtime-publish",
+        ], "success")
+        downstream = ["container", "worker-smoke", "signed-bundle", "runtime-manifest", "runtime-publish", "publish"]
+        for reuse in ["", "43471505292"]:
+            for job in ["frontend", "binaries", "runtime-packs"]:
+                self.assertEqual(allows_job(job, results, reuse), not bool(reuse))
+            results.update(binaries="skipped" if reuse else "success",
+                           **{"runtime-packs": "skipped" if reuse else "success"})
+            for job in downstream:
+                with self.subTest(reuse=reuse, job=job):
+                    self.assertTrue(allows_job(job, results, reuse))
+                    self.assertFalse(allows_job(job, results, reuse, cancelled=True))
+                    # Explicit status checks allow skipped build ancestors only in reuse mode.
+                    self.assertIn("!cancelled()", job_body(job))
+        for job, prerequisite in [
+            ("container", "prepare"), ("container", "container-check"), ("container", "binaries"),
+            ("worker-smoke", "container"), ("signed-bundle", "worker-smoke"),
+            ("runtime-manifest", "container-check"), ("runtime-manifest", "runtime-packs"),
+            ("runtime-publish", "runtime-manifest"), ("publish", "signed-bundle"),
+            ("publish", "runtime-publish"),
+        ]:
+            for outcome in ["failure", "cancelled"]:
+                with self.subTest(job=job, prerequisite=prerequisite, outcome=outcome):
+                    self.assertFalse(allows_job(job, {**results, prerequisite: outcome}, "43471505292"))
+        for job in ["container", "signed-bundle", "runtime-manifest"]:
+            self.assertFalse(allows_job(job, results), "Skipped builds require validated reuse")
+
+    def test_recovery_downloads_only_the_validated_artifact_ids_from_the_source_run(self):
+        self.assertIn("actions: read", WORKFLOW.read_text().split("jobs:")[0])
+        validate = step("prepare", "id: reuse")
+        self.assertIn("--run-id \"$RELEASE_REUSE_RUN_ID\"", validate)
+        for job, output in [("container", "linux_artifact_ids"), ("signed-bundle", "binary_artifact_ids"),
+                            ("runtime-manifest", "runtime_artifact_ids")]:
+            download = step(job, "uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093")
+            self.assertIn(f"artifact-ids: ${{{{ needs.prepare.outputs.{output} }}}}", download)
+            self.assertIn("run-id: ${{ needs.prepare.outputs.reuse_run_id || github.run_id }}", download)
+            self.assertIn("github-token: ${{ github.token }}", download)
+
+    def test_incomplete_or_duplicate_runtime_downloads_cannot_reach_signing(self):
+        check = step("runtime-manifest", "name: Require the complete runtime pack set before signing")
+        job = job_body("runtime-manifest")
+        self.assertLess(job.index(check), job.index("name: Build the runtime manifest signer"))
+        packs = [
+            {"runtime": "llamacpp", "target": "aarch64-apple-darwin", "backend": "metal"},
+            {"runtime": "llamacpp", "target": "x86_64-unknown-linux-gnu", "backend": "cpu"},
+            {"runtime": "llamacpp", "target": "x86_64-unknown-linux-gnu", "backend": "vulkan"},
+            {"runtime": "llamacpp", "target": "aarch64-unknown-linux-gnu", "backend": "cpu"},
+            {"runtime": "mlx", "target": "aarch64-apple-darwin", "backend": "metal"},
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            (directory / "runtime-bundle").mkdir()
+            for entries in [packs, [], *[packs[:i] + packs[i + 1:] for i in range(len(packs))], packs + packs[:1]]:
+                (directory / "runtime-bundle/test.json").write_text(json.dumps({"packs": entries}))
+                result = run_script(script(check), directory, {"PYTHONPATH": str(REPOSITORY / ".github/scripts")})
+                self.assertEqual(result.returncode == 0, entries == packs, result.stdout + result.stderr)
+
     def test_native_worker_smokes_gate_signing_the_exact_published_digest(self):
         job = job_body("worker-smoke")
         self.assertIn("needs: [prepare, container]", job)

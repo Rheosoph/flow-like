@@ -184,11 +184,11 @@ export function LocalBadge({ className }: Readonly<{ className?: string }>) {
 			className={cn(PILL, "bg-muted text-muted-foreground", className)}
 			title={t(
 				"local.badgeHint",
-				"Lives only on this computer until you move it to an account.",
+				"Not connected to your account. Only bots saved on this computer can communicate with it.",
 			)}
 		>
 			<HardDriveIcon className="size-3" aria-hidden />
-			{t("local.badge", "On this device")}
+			{t("local.badge", "Local only")}
 		</span>
 	);
 }

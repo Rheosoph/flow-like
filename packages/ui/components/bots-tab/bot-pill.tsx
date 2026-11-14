@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { HardDriveIcon, Loader2Icon, ShieldQuestionIcon } from "lucide-react";
+import { Loader2Icon, ShieldQuestionIcon } from "lucide-react";
 import { botPresence, useBotPresence } from "../../hooks/use-bot-presence";
 import { useRunningBotTurn } from "../../hooks/use-bot-turn";
 import {
@@ -9,13 +9,13 @@ import {
 	GlobalChatBotAvatar,
 } from "../global-chat/chat-bot-avatar";
 import type { GlobalChatBotView } from "../global-chat/use-global-chat-bot";
-import { useBotPresenceText, useBotStatusText } from "./bot-labels";
+import { LocalBadge, useBotPresenceText, useBotStatusText } from "./bot-labels";
 import { subjectSystem } from "./bot-panel-tabs";
 import { StatusDot } from "./crew-section";
 
 /**
- * A bot working on a turn shows a spinner and a bot on this device the drive; every other a dot,
- * lit while it is online (the built-in and cloud bots always are).
+ * A working bot shows a spinner. Account bots otherwise show a presence dot; local bots have
+ * their own visible badge beside the name.
  */
 function BotPresence({ view }: Readonly<{ view: GlobalChatBotView }>) {
 	const { t } = useTranslation("bots");
@@ -51,17 +51,7 @@ function BotPresence({ view }: Readonly<{ view: GlobalChatBotView }>) {
 			</>
 		);
 	}
-	if (view.bot?.local) {
-		return (
-			<>
-				<HardDriveIcon
-					className="size-3.5 shrink-0 text-muted-foreground"
-					aria-hidden
-				/>
-				<span className="sr-only">{t("local.badge", "On this device")}</span>
-			</>
-		);
-	}
+	if (view.bot?.local) return null;
 	const presence = botPresence(bot, reports);
 	if (presence && !subjectSystem(view)) {
 		return (
@@ -124,6 +114,7 @@ export function BotPill({
 			<span data-slot="bot-pill-name" className="min-w-0 truncate">
 				{view.name}
 			</span>
+			{view.bot?.local && <LocalBadge className="shrink-0" />}
 			<BotPresence view={view} />
 		</button>
 	);

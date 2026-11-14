@@ -131,6 +131,50 @@ try {
 		await page.evaluate(() => window.botCallTest.dispose());
 		return state;
 	}
+	async function interruptSecondChunk(interrupt) {
+		await page.waitForFunction(() => {
+			const state = window.botCallTest.snapshot();
+			return (
+				state.activePlaybacks === 1 &&
+				state.playbackEvents.at(-1)?.kind === "start" &&
+				state.playbackEvents.at(-1)?.id === 2
+			);
+		});
+		const before = await snapshot();
+		assert.deepEqual(before.playbackEvents.slice(0, 3), [
+			{ kind: "start", id: 1 },
+			{ kind: "end", id: 1 },
+			{ kind: "start", id: 2 },
+		]);
+		await page.evaluate(() =>
+			window.botCallTest.setReplyText("I will follow your correction."),
+		);
+		await interrupt();
+		await page.waitForFunction(
+			() =>
+				window.botCallTest
+					.snapshot()
+					.sent.filter((entry) => entry.kind === "transcript").length === 2,
+		);
+		const after = await snapshot();
+		const interrupted = transcripts(after)[1].envelope.body.interrupted;
+		assert.equal(
+			interrupted?.message_id,
+			after.entries.find((entry) => entry.kind === "message").message_id,
+			"speech over the second audio chunk interrupts the original reply",
+		);
+		assert.ok(
+			interrupted.heard_chars >= Array.from(before.speech[0].text).length &&
+				interrupted.heard_chars < interrupted.spoken_chars,
+			"the first chunk was heard and the remainder was interrupted",
+		);
+		assert.ok(
+			!after.playbackEvents.some(
+				(event) => event.kind === "start" && event.id === 3,
+			),
+			"the third prefetched chunk never plays after the interruption",
+		);
+	}
 
 	await start("group", "default");
 	await say("Scout, summarize this conversation");
@@ -408,6 +452,22 @@ try {
 		screenshot: resolve(output, "streamed-call.png"),
 	});
 
+	await start("direct", "default");
+	await page.evaluate(
+		(text) => window.botCallTest.setReplyText(text),
+		longReply,
+	);
+	await say("Explain the full plan");
+	await interruptSecondChunk(() =>
+		page.evaluate(() =>
+			window.botCallTest.utterance("Stop, I meant something else"),
+		),
+	);
+	results.push({
+		scenario: "talking over a consecutive audio chunk interrupts the bot",
+		...(await leave()),
+	});
+
 	await start("direct", "none");
 	await say("Answer in text please");
 	await reply("Scout heard: Answer in text please");
@@ -461,6 +521,10 @@ try {
 		const clips = {
 			question: await recording("question", question),
 			yes: await recording("yes", "Ja."),
+			interruption: await recording(
+				"interruption",
+				"Stopp, ich meine etwas anderes.",
+			),
 		};
 		const latency = [];
 		page.on("console", (message) => {
@@ -566,6 +630,33 @@ try {
 			),
 		);
 		const speechState = await leave();
+		await start("direct", "default", "on");
+		await page.waitForFunction(() => window.botCallTest.models().speech, {
+			timeout: 120_000,
+		});
+		await page.evaluate(
+			(text) => window.botCallTest.setReplyText(text),
+			longReply,
+		);
+		await page.evaluate(
+			({ text, clip }) => window.botCallTest.speakRecording(text, clip, 0),
+			{ text: question, clip: clips.question },
+		);
+		await interruptSecondChunk(() =>
+			page.evaluate(
+				(clip) =>
+					window.botCallTest.speakRecording(
+						"Stopp, ich meine etwas anderes.",
+						clip,
+						1700,
+					),
+				clips.interruption,
+			),
+		);
+		results.push({
+			scenario: "recorded speech interrupts a consecutive audio chunk with VAD",
+			...(await leave()),
+		});
 		// The page gives the models up 30 s after its last call and the workers end a second later;
 		// a worker nobody disconnected from would only go after a minute or two.
 		const left = Date.now();

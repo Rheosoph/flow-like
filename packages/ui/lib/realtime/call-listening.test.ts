@@ -674,11 +674,18 @@ describe("createUtteranceSegmenter with a voice-activity model", () => {
 });
 
 describe("createBargeInDetector with a voice-activity model", () => {
-	const detect = (signal: Float32Array, probability?: number) => {
+	const detect = (
+		signal: Float32Array,
+		probability?: number | ((chunk: Float32Array) => number),
+	) => {
 		const detector = createBargeInDetector();
 		const hits: Float32Array[][] = [];
 		for (let at = 0; at < signal.length; at += CHUNK) {
-			const hit = detector.push(signal.subarray(at, at + CHUNK), probability);
+			const chunk = signal.subarray(at, at + CHUNK);
+			const hit = detector.push(
+				chunk,
+				typeof probability === "function" ? probability(chunk) : probability,
+			);
 			if (hit) hits.push(hit);
 		}
 		return hits;
@@ -693,8 +700,31 @@ describe("createBargeInDetector with a voice-activity model", () => {
 		expect(detect(tone(3000, 0.4), 0.3)).toEqual([]);
 	});
 
-	test("speech the model hears but that is below the barge threshold does not", () => {
-		expect(detect(tone(3000, 0.04), 0.95)).toEqual([]);
+	test.each([0.004, 0.01, 0.04, 0.4])(
+		"sustained speech at amplitude %s is independent of microphone gain",
+		(amplitude) => {
+			expect(detect(tone(200, amplitude), 0.95)).toEqual([]);
+			expect(detect(tone(300, amplitude), 0.95)).toHaveLength(1);
+		},
+	);
+
+	test("short speech separated by long pauses never accumulates into an interruption", () => {
+		const signal = join(
+			tone(100, 0.01),
+			silence(1000),
+			tone(100, 0.01),
+			silence(1000),
+		);
+		expect(detect(signal, (chunk) => (rms(chunk) > 0 ? 0.95 : 0.02))).toEqual(
+			[],
+		);
+	});
+
+	test("short gaps between syllables preserve a quiet interruption", () => {
+		const signal = join(tone(200, 0.01), silence(100), tone(100, 0.01));
+		expect(
+			detect(signal, (chunk) => (rms(chunk) > 0 ? 0.95 : 0.02)),
+		).toHaveLength(1);
 	});
 
 	test("the window is 500 ms", () => {
@@ -704,7 +734,7 @@ describe("createBargeInDetector with a voice-activity model", () => {
 			tone(100, 0.4),
 			silence(600),
 		);
-		expect(detect(gap, 0.9)).toEqual([]);
+		expect(detect(gap, (chunk) => (rms(chunk) > 0 ? 0.9 : 0.02))).toEqual([]);
 	});
 
 	test("without a probability the loud-only rule applies", () => {

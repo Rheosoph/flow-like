@@ -5,8 +5,8 @@ import type {
 import type { ISpeechStream } from "../../state/backend-state/audio-state";
 import type { IInboxEntry } from "../../state/backend-state/inbox-state";
 import { compareInboxCursors } from "../inbox-cursor";
-import { plainMarkdownLines } from "../markdown-text";
 import { type CallLatencyTrace, callLatency } from "./call-latency";
+import { callSpeechText } from "./call-speech-text";
 
 export interface BotSpeechVoice {
 	bitId: string;
@@ -60,7 +60,9 @@ interface LiveReply {
 	reply: Reply;
 	source: SpeechSource;
 	state: "open" | "ended" | "dropped";
+	rawText: string;
 	text: string;
+	/** Offset in the speech text, after links and code have been removed. */
 	handed: number;
 	flushed: boolean;
 	textSeen: boolean;
@@ -588,7 +590,7 @@ export function createBotCallSpeech({
 					continue;
 				}
 				if (!reply.live) {
-					const spoken = [...plainMarkdownLines(reply.text)].join("\n").trim();
+					const spoken = callSpeechText(reply.text);
 					source.pieces = callSpeechChunks(
 						spoken,
 						reply.voice.maxInputCharacters,
@@ -640,10 +642,8 @@ export function createBotCallSpeech({
 			});
 			if (!next) break;
 			live.handed = next.handed;
-			const spoken = [...plainMarkdownLines(next.text)].join("\n").trim();
-			if (!spoken) continue;
-			source.pieces.push({ text: spoken });
-			source.spokenChars += charCount(spoken);
+			source.pieces.push({ text: next.text });
+			source.spokenChars += charCount(next.text);
 			if (current?.source === source) current.ahead?.();
 		}
 		wakeSource(source);
@@ -681,6 +681,7 @@ export function createBotCallSpeech({
 				wake: null,
 			},
 			state: "open",
+			rawText: "",
 			text: "",
 			handed: 0,
 			flushed: false,
@@ -702,9 +703,10 @@ export function createBotCallSpeech({
 	const handleOf = (live: LiveReply): StreamedReply => ({
 		update(text) {
 			if (live.state !== "open") return;
-			live.text = text;
+			live.rawText = text;
+			live.text = callSpeechText(text, { streaming: true });
 			noteText(live);
-			if (live.flushed && text.slice(live.handed).trim()) {
+			if (live.flushed && live.text.slice(live.handed).trim()) {
 				live.flushed = false;
 				stopCue(live);
 			}
@@ -720,7 +722,8 @@ export function createBotCallSpeech({
 		},
 		end(text) {
 			if (live.state !== "open") return;
-			if (text !== undefined) live.text = text;
+			if (text !== undefined) live.rawText = text;
+			live.text = callSpeechText(live.rawText);
 			noteText(live);
 			live.state = "ended";
 			stopCue(live);

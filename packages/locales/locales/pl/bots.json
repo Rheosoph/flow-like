@@ -1307,8 +1307,13 @@
 		"yourBot": ""
 	},
 	"local": {
-		"badge": "",
-		"badgeHint": "",
+		"accountNotice": {
+			"description": "Ten bot jest zapisany tylko na tym komputerze. Boty na Twoim koncie nie mogą go znaleźć ani wysyłać do niego wiadomości.",
+			"moveHint": "Przenieś go na swoje konto, aby mógł komunikować się z Twoimi pozostałymi botami. Nadal będzie działał w aplikacji komputerowej.",
+			"title": "Nie jest połączony z Twoim kontem"
+		},
+		"badge": "Tylko lokalnie",
+		"badgeHint": "Nie jest połączony z Twoim kontem. Mogą się z nim komunikować tylko boty zapisane na tym komputerze.",
 		"conversationHint": "",
 		"conversationSubtitle": "",
 		"location": {
@@ -1445,8 +1450,8 @@
 		"action_one": "",
 		"action_other": "",
 		"banner": {
-			"action": "",
-			"description": "",
+			"action": "Sprawdź i przenieś",
+			"description": "Te boty nie są połączone z Twoim kontem, więc boty na Twoim koncie nie mogą ich znaleźć ani wysyłać do nich wiadomości. Po przeniesieniu nadal będą działały w aplikacji komputerowej.",
 			"label": "",
 			"title_few": "",
 			"title_many": "",

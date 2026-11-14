@@ -504,15 +504,16 @@ describe("the pill and the bot's panel", () => {
 		expect(getWorkspace).not.toHaveBeenCalled();
 	});
 
-	test("a bot on this device shows the drive in its pill and where it lives in Details", async () => {
-		await click(buttonContaining("Pebble", "On this device"));
+	test("a local bot shows its account communication limit in Details", async () => {
+		await click(buttonContaining("Pebble", "Local only"));
 		expect(pillName()).toBe("Pebble");
-		expect(pill()?.textContent).toContain("On this device");
+		expect(pill()?.textContent).toContain("Local only");
 		await click(pill());
 		expect(tabs()).toEqual(["Details", "Files", "Memory"]);
 		expect(panelText()).toContain("Where it runs");
+		expect(panelText()).toContain("Not connected to your account");
 		expect(panelText()).toContain(
-			"Lives only on this computer until you move it to an account.",
+			"This bot is saved only on this computer. Bots in your account can't find or message it.",
 		);
 		expect(panelButton("Move to your account") === undefined).toBe(true);
 	});

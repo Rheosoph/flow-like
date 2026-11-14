@@ -1263,8 +1263,13 @@
 		"yourBot": ""
 	},
 	"local": {
-		"badge": "",
-		"badgeHint": "",
+		"accountNotice": {
+			"description": "このボットは、このコンピューターにのみ保存されています。アカウント内のボットは、このボットを見つけたり、メッセージを送ったりできません。",
+			"moveHint": "アカウントに移動すると、他のボットとやり取りできるようになります。移動後もデスクトップアプリで動作します。",
+			"title": "アカウントに接続されていません"
+		},
+		"badge": "ローカルのみ",
+		"badgeHint": "アカウントに接続されていません。このコンピューターに保存されているボットだけが、このボットとやり取りできます。",
 		"conversationHint": "",
 		"conversationSubtitle": "",
 		"location": {
@@ -1391,8 +1396,8 @@
 		"action_one": "",
 		"action_other": "",
 		"banner": {
-			"action": "",
-			"description": "",
+			"action": "確認して移動",
+			"description": "これらのボットはアカウントに接続されていないため、アカウント内のボットから見つけたり、メッセージを送ったりできません。移動後もデスクトップアプリで動作します。",
 			"label": "",
 			"title_one": "",
 			"title_other": ""

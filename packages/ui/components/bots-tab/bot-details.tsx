@@ -107,11 +107,11 @@ export function WhereItRuns({ bot }: Readonly<{ bot: IBot }>) {
 				icon={HardDriveIcon}
 				label={label}
 				hint={t(
-					"local.badgeHint",
-					"Lives only on this computer until you move it to an account.",
+					"local.location.description",
+					"Runs in the desktop app on this computer while the app is open",
 				)}
 			>
-				{t("local.badge", "On this device")}
+				{t("local.location.label", "This computer")}
 			</DetailRow>
 		);
 	}
@@ -126,6 +126,51 @@ export function WhereItRuns({ bot }: Readonly<{ bot: IBot }>) {
 		>
 			{location.label}
 		</DetailRow>
+	);
+}
+
+function LocalAccountNotice({
+	bot,
+	onMove,
+}: Readonly<{ bot: IBot; onMove: BotPanelActions["onMove"] }>) {
+	const { t } = useTranslation("bots");
+	const title = t("local.accountNotice.title", "Not connected to your account");
+	return (
+		<section aria-label={title} className="rounded-xl border bg-muted/40 p-3.5">
+			<div className="flex items-start gap-2">
+				<HardDriveIcon
+					className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+					aria-hidden
+				/>
+				<div className="min-w-0 space-y-1.5">
+					<p className="text-sm font-medium">{title}</p>
+					<p className="text-xs leading-relaxed text-muted-foreground">
+						{t(
+							"local.accountNotice.description",
+							"This bot is saved only on this computer. Bots in your account can't find or message it.",
+						)}
+					</p>
+					<p className="text-xs leading-relaxed text-muted-foreground">
+						{t(
+							"local.accountNotice.moveHint",
+							"Move it to your account to connect it with your other bots. It will still run in the desktop app.",
+						)}
+					</p>
+					{onMove && (
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							className="mt-1 h-auto min-h-8 whitespace-normal text-left"
+							onClick={() => onMove(bot)}
+						>
+							<CloudUploadIcon aria-hidden />
+							{t("move.intro.action", "Move to your account")}
+						</Button>
+					)}
+				</div>
+			</div>
+		</section>
 	);
 }
 
@@ -358,7 +403,7 @@ function BotActions({
 		setDuplicating(false);
 		if (copy) actions.onDuplicated?.(copy);
 	};
-	const { onEdit, onMove } = actions;
+	const { onEdit } = actions;
 	return (
 		<div className="flex flex-wrap gap-2">
 			{!bot.local && (
@@ -396,17 +441,6 @@ function BotActions({
 						: t("editor.actions.duplicate", "Duplicate")}
 				</Button>
 			)}
-			{bot.local && onMove && (
-				<Button
-					type="button"
-					variant="outline"
-					size="sm"
-					onClick={() => onMove(bot)}
-				>
-					<CloudUploadIcon aria-hidden />
-					{t("move.intro.action", "Move to your account")}
-				</Button>
-			)}
 		</div>
 	);
 }
@@ -419,6 +453,7 @@ export function BotDetails({
 	const { bot } = view;
 	return (
 		<div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto overscroll-contain px-5 pt-1 pb-6">
+			{bot?.local && <LocalAccountNotice bot={bot} onMove={actions.onMove} />}
 			{view.description && (
 				<p className="text-sm leading-relaxed whitespace-pre-line text-muted-foreground">
 					{view.description}

@@ -1263,8 +1263,13 @@
 		"yourBot": ""
 	},
 	"local": {
-		"badge": "",
-		"badgeHint": "",
+		"accountNotice": {
+			"description": "此机器人仅保存在此电脑上。你账户中的机器人无法找到它或向它发送消息。",
+			"moveHint": "将它移至你的账户，即可与其他机器人通信。移动后，它仍会在桌面应用中运行。",
+			"title": "未连接到你的账户"
+		},
+		"badge": "仅限本地",
+		"badgeHint": "未连接到你的账户。只有保存在此电脑上的机器人才能与它通信。",
 		"conversationHint": "",
 		"conversationSubtitle": "",
 		"location": {
@@ -1391,8 +1396,8 @@
 		"action_one": "",
 		"action_other": "",
 		"banner": {
-			"action": "",
-			"description": "",
+			"action": "检查并移动",
+			"description": "这些机器人未连接到你的账户，因此你账户中的机器人无法找到它们或向它们发送消息。移动后，它们仍会在桌面应用中运行。",
 			"label": "",
 			"title_one": "",
 			"title_other": ""
