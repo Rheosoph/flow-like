@@ -118,12 +118,48 @@ class StandaloneReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("actions: read", WORKFLOW.read_text().split("jobs:")[0])
         validate = step("prepare", "id: reuse")
         self.assertIn("--run-id \"$RELEASE_REUSE_RUN_ID\"", validate)
+        self.assertIn('--expected-version "$RELEASE_EXPECTED_VERSION"', validate)
+        self.assertIn("RELEASE_EXPECTED_VERSION: ${{ steps.inputs.outputs.version }}", validate)
         for job, output in [("container", "linux_artifact_ids"), ("signed-bundle", "binary_artifact_ids"),
                             ("runtime-manifest", "runtime_artifact_ids")]:
             download = step(job, "uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093")
             self.assertIn(f"artifact-ids: ${{{{ needs.prepare.outputs.{output} }}}}", download)
             self.assertIn("run-id: ${{ needs.prepare.outputs.reuse_run_id || github.run_id }}", download)
             self.assertIn("github-token: ${{ github.token }}", download)
+
+    def test_recovered_image_labels_identify_original_source_and_current_packaging(self):
+        prepare = job_body("prepare")
+        self.assertIn("source_sha: ${{ steps.reuse.outputs.source_sha || github.sha }}", prepare)
+        self.assertIn("version: ${{ steps.reuse.outputs.version || steps.inputs.outputs.version }}", prepare)
+        for label in [
+            "org.opencontainers.image.revision=${{ needs.prepare.outputs.source_sha }}",
+            "org.opencontainers.image.version=${{ needs.prepare.outputs.version }}",
+            "io.flow-like.packaging.revision=${{ github.sha }}",
+        ]:
+            self.assertEqual(job_body("container").count(label), 2)
+
+    def test_each_binary_version_must_match_the_selected_source_before_signing(self):
+        check = step("signed-bundle", "name: Verify binary versions against the selected source before signing")
+        job = job_body("signed-bundle")
+        self.assertLess(job.index(check), job.index("name: Bind binary hashes and exact container digest"))
+        self.assertIn("RELEASE_VERSION: ${{ needs.prepare.outputs.version }}", check)
+        targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "aarch64-apple-darwin"]
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            bundle = directory / "release-bundle"
+            bundle.mkdir()
+            for bad_target in [None, *targets]:
+                for target in targets:
+                    (bundle / f"{target}.json").write_text(json.dumps({"version": "1.2.4" if target == bad_target else "1.2.3"}))
+                result = run_script(script(check), directory, {
+                    "PYTHONPATH": str(REPOSITORY / ".github/scripts"), "RELEASE_VERSION": "1.2.3",
+                })
+                self.assertEqual(result.returncode == 0, bad_target is None, result.stdout + result.stderr)
+            (bundle / f"{targets[0]}.json").unlink()
+            result = run_script(script(check), directory, {
+                "PYTHONPATH": str(REPOSITORY / ".github/scripts"), "RELEASE_VERSION": "1.2.3",
+            })
+            self.assertNotEqual(result.returncode, 0)
 
     def test_incomplete_or_duplicate_runtime_downloads_cannot_reach_signing(self):
         check = step("runtime-manifest", "name: Require the complete runtime pack set before signing")
@@ -294,7 +330,7 @@ class StandaloneReleaseValidityTests(unittest.TestCase):
         self.assertIn('--validity-days "$RELEASE_VALIDITY_DAYS"', step("signed-bundle", "name: Bind binary hashes and exact container digest"))
         self.assertIn("RELEASE_VALIDITY_DAYS: ${{ needs.prepare.outputs.validity_days }}", job_body("signed-bundle"))
         preflight = step("prepare", "name: Refuse a sequence that is already published or partly uploaded, and an agent version that was not bumped")
-        self.assertIn("RELEASE_VERSION: ${{ steps.inputs.outputs.version }}", preflight)
+        self.assertIn("RELEASE_VERSION: ${{ steps.reuse.outputs.version || steps.inputs.outputs.version }}", preflight)
         self.assertIn('--release-version "$RELEASE_VERSION"', preflight)
 
     def test_prepare_refuses_a_stale_or_missing_agent_lock_entry_before_anything_is_built(self):
@@ -322,6 +358,23 @@ class StandaloneReleaseValidityTests(unittest.TestCase):
             result, outputs = self.prepare(days)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(reason, result.stderr)
+            self.assertEqual(outputs, {})
+
+    def test_prepare_rejects_a_lifetime_the_original_agent_cannot_accept(self):
+        repository = self.directory()
+        for name in ["apps/standalone/Cargo.toml", "Cargo.lock", ".github/scripts/standalone_release.py"]:
+            destination = repository / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if name.endswith(".py"):
+                destination.write_bytes((REPOSITORY / name).read_bytes())
+            elif name == "Cargo.lock":
+                destination.write_text('version = 4\n[[package]]\nname = "flow-like-standalone"\nversion = "0.1.0"\n')
+            else:
+                destination.write_text('[package]\nname = "flow-like-standalone"\nversion = "0.1.0"\n')
+        for days in ["31", "365"]:
+            result, outputs = self.prepare(days, repository)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Agents of release 0.1.0 accept at most 30 validity days", result.stderr)
             self.assertEqual(outputs, {})
 
     def test_signing_workflows_start_only_by_hand_and_never_run_together(self):

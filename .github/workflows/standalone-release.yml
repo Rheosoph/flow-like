@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       sequence:
-        description: Unused sequence greater than every published release and runtime sequence; also bump the agent version in apps/standalone/Cargo.toml and update Cargo.lock
+        description: Unused sequence greater than every published release and runtime sequence; the selected agent version must not already be published
         required: true
         type: string
       validity_days:
@@ -17,7 +17,7 @@ on:
         required: false
         type: string
       reuse_run_id:
-        description: Optional completed release run whose binaries and runtime packs can be reused when only release packaging changed; still requires a new sequence
+        description: Optional completed run to recover with its original binaries, embedded frontend and runtime packs. Excludes later code changes; requires the same agent version and a new sequence
         required: false
         type: string
 
@@ -47,6 +47,8 @@ jobs:
       base: ${{ steps.inputs.outputs.base }}
       image: ${{ steps.inputs.outputs.image }}
       validity_days: ${{ steps.inputs.outputs.validity_days }}
+      version: ${{ steps.reuse.outputs.version || steps.inputs.outputs.version }}
+      source_sha: ${{ steps.reuse.outputs.source_sha || github.sha }}
       reuse_run_id: ${{ steps.reuse.outputs.reuse_run_id }}
       binary_artifact_ids: ${{ steps.reuse.outputs.binary_artifact_ids }}
       linux_artifact_ids: ${{ steps.reuse.outputs.linux_artifact_ids }}
@@ -89,6 +91,9 @@ jobs:
           locked_versions = [p['version'] for p in locked_packages if p['name'] == 'flow-like-standalone' and 'source' not in p]
           if locked_versions != [version]:
               raise SystemExit(f'Cargo.lock must contain flow-like-standalone {version}; run cargo update --workspace and commit Cargo.lock with apps/standalone/Cargo.toml before releasing')
+          lifetime_cap = release.AGENT_LIFETIME_CAP_DAYS.get(version, release.MAX_RELEASE_LIFETIME_DAYS)
+          if validity_days > lifetime_cap:
+              raise SystemExit(f'Agents of release {version} accept at most {lifetime_cap} validity days')
           base = os.environ['RELEASE_ARTIFACT_BASE']
           parsed = urlsplit(base)
           if base != os.environ['RELEASE_CONFIGURED_BASE'] or not base:
@@ -112,17 +117,18 @@ jobs:
           PY
       - run: python3 -m unittest discover -s .github/scripts/tests -p 'test_standalone_release*.py'
       - id: reuse
-        name: Validate the source run and unchanged build inputs before reusing artifacts
+        name: Validate and identify the original release artifacts
         if: inputs.reuse_run_id != ''
         env:
           RELEASE_REUSE_RUN_ID: ${{ inputs.reuse_run_id }}
+          RELEASE_EXPECTED_VERSION: ${{ steps.inputs.outputs.version }}
           GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/standalone_release_reuse.py --run-id "$RELEASE_REUSE_RUN_ID" >> "$GITHUB_OUTPUT"
+        run: python3 .github/scripts/standalone_release_reuse.py --run-id "$RELEASE_REUSE_RUN_ID" --expected-version "$RELEASE_EXPECTED_VERSION" >> "$GITHUB_OUTPUT"
       - name: Refuse a sequence that is already published or partly uploaded, and an agent version that was not bumped
         env:
           RELEASE_BASE: ${{ steps.inputs.outputs.base }}
           RELEASE_SEQUENCE: ${{ steps.inputs.outputs.sequence }}
-          RELEASE_VERSION: ${{ steps.inputs.outputs.version }}
+          RELEASE_VERSION: ${{ steps.reuse.outputs.version || steps.inputs.outputs.version }}
           RELEASE_PUBLIC_KEYS: ${{ vars.STANDALONE_RELEASE_PUBLIC_KEYS }}
         run: python3 .github/scripts/standalone_release.py preflight --base-url "$RELEASE_BASE" --sequence "$RELEASE_SEQUENCE" --public-keys "$RELEASE_PUBLIC_KEYS" --release-version "$RELEASE_VERSION"
 
@@ -298,6 +304,10 @@ jobs:
           push: true
           provenance: false
           build-args: SOURCE_DATE_EPOCH=${{ needs.prepare.outputs.epoch }}
+          labels: |
+            org.opencontainers.image.revision=${{ needs.prepare.outputs.source_sha }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            io.flow-like.packaging.revision=${{ github.sha }}
           tags: ${{ needs.prepare.outputs.image }}:sequence-${{ needs.prepare.outputs.sequence }}-minimal
       - name: Build and push the playground variant (virtual display, Chromium)
         id: playground
@@ -309,6 +319,10 @@ jobs:
           push: true
           provenance: false
           build-args: SOURCE_DATE_EPOCH=${{ needs.prepare.outputs.epoch }}
+          labels: |
+            org.opencontainers.image.revision=${{ needs.prepare.outputs.source_sha }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            io.flow-like.packaging.revision=${{ github.sha }}
           tags: |
             ${{ needs.prepare.outputs.image }}:sequence-${{ needs.prepare.outputs.sequence }}
             ${{ needs.prepare.outputs.image }}:sequence-${{ needs.prepare.outputs.sequence }}-playground
@@ -365,6 +379,20 @@ jobs:
           github-token: ${{ github.token }}
           path: release-bundle
           merge-multiple: true
+      - name: Verify binary versions against the selected source before signing
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, '.github/scripts')
+          import standalone_release
+          for target in standalone_release.TARGETS:
+              metadata = json.loads(Path(f'release-bundle/{target}.json').read_text())
+              if metadata['version'] != os.environ['RELEASE_VERSION']:
+                  raise SystemExit(f'{target} binary version differs from the selected source version {os.environ["RELEASE_VERSION"]}')
+          PY
       - uses: ./.github/actions/setup-rust
       - name: Bind binary hashes and exact container digest
         env:
