@@ -313,7 +313,7 @@ test("Duplicate opens the copy on the Bots tab", async () => {
 test("a bot on this computer moves through the Bots tab's review", async () => {
 	await show("bot:bot_pebble");
 	await click(pill());
-	expect(panel()?.textContent).toContain("On this device");
+	expect(panel()?.textContent).toContain("Not connected to your account");
 	await click(panelButton("Move to your account"));
 	expect(controls.push).toHaveBeenLastCalledWith(
 		"/bots?bot=bot_pebble&move=local",

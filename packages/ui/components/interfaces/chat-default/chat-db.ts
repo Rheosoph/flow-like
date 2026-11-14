@@ -317,6 +317,8 @@ export interface IMessage {
 	debug_report?: IAgentDebugReport;
 	/** How this assistant turn was executed. Global chat only; see {@link IChatRunContext}. */
 	run_context?: IChatRunContext;
+	/** Assistant run this user message steered, so its instruction stays before the answer. */
+	steered_run_id?: string;
 	/**
 	 * Thinking level a user turn was sent with: `off`/`low`/`mid`/`high`, or an agent backend's
 	 * native effort id. Absent when the provider chose (FlowPilot "Auto") or for older messages.

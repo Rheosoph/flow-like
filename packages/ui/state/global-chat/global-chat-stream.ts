@@ -57,6 +57,7 @@ import {
 } from "./global-chat-run-control";
 import {
 	type GlobalChatAgentSelection,
+	type GlobalChatSteer,
 	LAST_CONVERSATION_KEY,
 	LAST_FLUX_CONVERSATION_KEY,
 	beginGlobalChatTurnSelection,
@@ -915,7 +916,9 @@ export async function driveGlobalChatStream({
 		const conversationId =
 			store.getState().runs[runId]?.conversationId ?? responseMessage.sessionId;
 		if (isTauri()) {
+			const steers = store.getState().runs[runId]?.steers ?? [];
 			void takeUnconsumedSteering(runId).then((leftovers) => {
+				void clearUnconsumedSteeringLinks(runId, steers, leftovers);
 				const target = currentConversationId(conversationId);
 				for (const content of leftovers) {
 					store.getState().enqueueMessage({ conversationId: target, content });
@@ -1025,9 +1028,47 @@ export async function steerGlobalChatRun(
 		trimmed,
 		store.getState().runs[runId]?.conversationId ?? run.conversationId,
 	);
+	steerMessage.id = steerId;
+	if (store.getState().runs[runId]) steerMessage.steered_run_id = runId;
 	store.getState().appendMessage(steerMessage);
 	void persistGlobalChatMessage(steerMessage);
 	return true;
+}
+
+/** Unconsumed steering becomes another turn, so the finished answer does not own it. */
+export async function clearUnconsumedSteeringLinks(
+	runId: string,
+	steers: readonly GlobalChatSteer[],
+	leftovers: readonly string[],
+) {
+	const remaining = new Map<string, number>();
+	for (const content of leftovers) {
+		remaining.set(content, (remaining.get(content) ?? 0) + 1);
+	}
+	const ids = new Set<string>();
+	// An earlier copy of the same instruction may already have been consumed.
+	for (const steer of [...steers].reverse()) {
+		const count = remaining.get(steer.content) ?? 0;
+		if (count === 0 || steer.status === "failed") continue;
+		ids.add(steer.id);
+		remaining.set(steer.content, count - 1);
+	}
+	if (ids.size === 0) return;
+	useGlobalChatStore.setState((state) => ({
+		messages: state.messages.map((message) => {
+			if (!ids.has(message.id) || message.steered_run_id !== runId)
+				return message;
+			return { ...message, steered_run_id: undefined };
+		}),
+	}));
+	await globalChatDb.messages
+		.where("id")
+		.anyOf([...ids])
+		.filter((message) => message.steered_run_id === runId)
+		.modify((message) => {
+			message.steered_run_id = undefined;
+		})
+		.catch(() => undefined);
 }
 
 /**

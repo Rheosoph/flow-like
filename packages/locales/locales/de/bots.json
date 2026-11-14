@@ -1291,8 +1291,13 @@
 		"yourBot": "Dein Bot"
 	},
 	"local": {
-		"badge": "Auf diesem Gerät",
-		"badgeHint": "Lebt nur auf diesem Computer, bis du ihn in ein Konto verschiebst.",
+		"accountNotice": {
+			"description": "Dieser Bot ist nur auf diesem Computer gespeichert. Bots in deinem Konto können ihn weder finden noch anschreiben.",
+			"moveHint": "Verschiebe ihn in dein Konto, damit er mit deinen anderen Bots kommunizieren kann. Er läuft weiterhin in der Desktop-App.",
+			"title": "Nicht mit deinem Konto verbunden"
+		},
+		"badge": "Nur lokal",
+		"badgeHint": "Nicht mit deinem Konto verbunden. Nur Bots, die auf diesem Computer gespeichert sind, können mit ihm kommunizieren.",
 		"conversationHint": "Dieser Chat liegt nur auf diesem Computer.",
 		"conversationSubtitle": "{{subtitle}} · Auf diesem Gerät",
 		"location": {
@@ -1419,8 +1424,8 @@
 		"action_one": "{{count}} Bot verschieben",
 		"action_other": "{{count}} Bots verschieben",
 		"banner": {
-			"action": "Prüfen",
-			"description": "Verschiebe sie in dein Konto, dann hast du sie samt ihrer Chats überall, wo du dich anmeldest.",
+			"action": "Prüfen und verschieben",
+			"description": "Diese Bots sind nicht mit deinem Konto verbunden. Bots in deinem Konto können sie deshalb weder finden noch anschreiben. Nach dem Verschieben laufen sie weiterhin in der Desktop-App.",
 			"label": "Bots auf diesem Computer",
 			"title_one": "{{count}} Bot lebt nur auf diesem Computer",
 			"title_other": "{{count}} Bots leben nur auf diesem Computer"

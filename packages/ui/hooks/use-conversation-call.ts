@@ -179,6 +179,7 @@ const SPEAKING_POLL_MS = 150;
 const BOT_ECHO_TAIL_MS = 350;
 const INTERRUPT_CARRY_MS = 30_000;
 const BARGE_HOLD_MS = 5000;
+const BARGE_IN_PROBE_TIMEOUT_MS = 2000;
 const MAX_TIMINGS = 16;
 const NO_SPEAKERS: ReadonlySet<string> = new Set();
 const NO_STARTS: ReadonlyMap<string, number> = new Map();
@@ -304,9 +305,18 @@ function stopOutput(output: Output) {
 	output.audio.srcObject = null;
 }
 
+function releaseBargeIn(session: Session) {
+	session.bargeToken++;
+	const paused = session.bargePaused;
+	session.bargePaused = false;
+	if (paused) session.speechControl?.resume?.();
+	session.speechOutput?.duck(false);
+}
+
 function stopListening(session: Session) {
 	session.listeningGeneration++;
 	session.listening = false;
+	releaseBargeIn(session);
 	session.transcripts?.close();
 	session.transcripts = null;
 	session.listener?.stop();
@@ -360,6 +370,7 @@ function holdingBargeIn(session: Session): boolean {
 
 function guardWhileBotSpeaks(session: Session, bot: string) {
 	session.guardBot = bot;
+	const wasInEchoTail = session.botEchoTimer !== null;
 	if (session.botEchoTimer !== null) clearTimeout(session.botEchoTimer);
 	session.botEchoTimer = null;
 	if (!session.botSpeaking) {
@@ -367,6 +378,8 @@ function guardWhileBotSpeaks(session: Session, bot: string) {
 		session.transcripts?.resetPartial();
 	}
 	if (!holdingBargeIn(session)) session.listener?.setGuarded(true);
+	// A new speech chunk cancels the echo tail and must restore microphone capture.
+	if (wasInEchoTail) session.listener?.setPaused(session.muted);
 }
 
 /** What the guarded bot is saying, to tell its echo from a person talking over it. */
@@ -979,10 +992,7 @@ export function useConversationCall(
 		}
 		const tail = session.botEchoTimer !== null;
 		session.listener?.setPaused(session.muted || tail);
-		if (session.muted) {
-			session.bargeToken++;
-			session.speechOutput?.duck(false);
-		}
+		if (session.muted) releaseBargeIn(session);
 		if (session.muted || tail) session.transcripts?.resetPartial();
 		publish(session);
 	}, []);
@@ -1229,19 +1239,33 @@ export function useConversationCall(
 					Date.now() - (final ? END_SILENCE_MS : 0) - utterance.durationMs,
 			});
 			const heardInProbe = async (probe: Utterance) => {
+				let timeout: ReturnType<typeof setTimeout> | undefined;
 				try {
-					return await transcripts.probe(captured(probe, false));
+					return await Promise.race([
+						transcripts.probe(captured(probe, false)),
+						new Promise<null>((resolve) => {
+							timeout = setTimeout(
+								() => resolve(null),
+								BARGE_IN_PROBE_TIMEOUT_MS,
+							);
+						}),
+					]);
 				} catch (cause) {
 					console.warn("Checking a barge-in failed", cause);
-					return "";
+					return null;
+				} finally {
+					clearTimeout(timeout);
 				}
 			};
 			const confirmBargeIn = async (probe: Utterance, token: number) => {
 				const text = await heardInProbe(probe);
 				if (!isCurrent() || session.bargeToken !== token || session.muted)
 					return;
+				if (text === "" && session.listener?.retryBargeIn()) return;
 				const confirmed =
-					text !== "" && !isBotEcho(text, guardedSpeech(session));
+					text !== null &&
+					text !== "" &&
+					!isBotEcho(text, guardedSpeech(session));
 				if (confirmed) {
 					session.bargeHold = Date.now() + BARGE_HOLD_MS;
 					interruptSession(session);

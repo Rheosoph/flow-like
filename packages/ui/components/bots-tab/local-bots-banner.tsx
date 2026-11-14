@@ -28,7 +28,7 @@ export function LocalBotsBanner({
 				<p className="text-xs text-muted-foreground">
 					{t(
 						"move.banner.description",
-						"Move them to your account to keep them, with their chats, wherever you sign in.",
+						"These bots aren't connected to your account, so your account's bots can't find or message them. They'll still run in the desktop app after you move them.",
 					)}
 				</p>
 			</div>
@@ -39,7 +39,7 @@ export function LocalBotsBanner({
 				className="rounded-[9px]"
 				onClick={onReview}
 			>
-				{t("move.banner.action", "Review")}
+				{t("move.banner.action", "Review and move")}
 			</Button>
 		</section>
 	);

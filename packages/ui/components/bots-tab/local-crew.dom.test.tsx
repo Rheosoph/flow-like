@@ -286,7 +286,7 @@ describe("BotsView signed out on the desktop", () => {
 		expect(text).toContain("Scout lives here");
 		expect(text).toContain("Writer lives here");
 		expect(text).toContain("4 bots");
-		expect(text.split("On this device").length - 1).toBe(2);
+		expect(text.split("Local only").length - 1).toBe(2);
 		expect(text.split("Built in").length - 1).toBe(2);
 		expect(text).not.toContain("Sign in to create bots");
 		expect(text).not.toContain("live only on this computer");
@@ -343,14 +343,18 @@ describe("BotsView signed out on the desktop", () => {
 		expect(
 			pill?.querySelector("[data-slot='bot-pill-name']")?.textContent,
 		).toBe("Scout");
-		expect(pill?.textContent).toContain("On this device");
+		expect(pill?.textContent).toContain("Local only");
 		expect(lookOf(pill ?? undefined)).toBe("mochi");
 		await click(pill);
 		const details =
 			container.querySelector("aside section[aria-label='About Scout']")
 				?.textContent ?? "";
 		expect(details).toContain("Scout lives here");
-		expect(details).toContain("On this device");
+		expect(details).toContain("This computer");
+		expect(details).toContain("Not connected to your account");
+		expect(details).toContain(
+			"This bot is saved only on this computer. Bots in your account can't find or message it.",
+		);
 		expect(details).toContain("Internet");
 		expect(details).not.toContain("Move to your account");
 		expect(details).not.toContain("runtime is live");
@@ -375,7 +379,7 @@ describe("BotsView signed out on the desktop", () => {
 		await click(buttonContaining("Scout", "You: Hi Scout"));
 		const dock = dockText();
 		expect(dock).toContain("Scout");
-		expect(dock).toContain("On this device");
+		expect(dock).toContain("Local only");
 		expect(dock).not.toContain("Direct message");
 		await click(
 			container.querySelector<HTMLElement>(

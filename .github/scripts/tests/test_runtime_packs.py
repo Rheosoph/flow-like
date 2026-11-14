@@ -982,7 +982,7 @@ class WorkflowTests(unittest.TestCase):
         for pack, spec in runtime.LLAMACPP_PACKS.items():
             self.assertEqual(matrix[pack], runners[spec["target"]], pack)
         self.assertEqual(matrix["mlx-macos-arm64-metal"], "namespace-profile-mac-large")
-        self.assertIn("needs: prepare\n", job)
+        self.assertIn("needs: [prepare, container-check]\n", job)
         self.assertNotIn("secrets.", job)
         self.assertNotIn("environment:", job)
 

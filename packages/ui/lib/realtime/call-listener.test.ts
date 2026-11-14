@@ -40,6 +40,7 @@ function context() {
 }
 
 afterEach(() => {
+	vi.useRealTimers();
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
 });
@@ -310,6 +311,84 @@ describe("call microphone capture", () => {
 			expect(h.onBargeInStart).toHaveBeenCalledTimes(2);
 		});
 
+		test("one empty transcript can request a longer probe without discarding the utterance", async () => {
+			const h = await guardedListener();
+			expect(h.listener.retryBargeIn()).toBe(false);
+			h.blocks(4, 0.1);
+			expect(h.onBargeInProbe).toHaveBeenCalledOnce();
+			const first = h.onBargeInProbe.mock.calls[0][0];
+			expect(h.listener.retryBargeIn()).toBe(true);
+			h.blocks(3, 0.1);
+			expect(h.onBargeInProbe).toHaveBeenCalledOnce();
+			h.blocks(1, 0.1);
+			expect(h.onBargeInProbe).toHaveBeenCalledTimes(2);
+			const second = h.onBargeInProbe.mock.calls[1][0];
+			expect(second.durationMs).toBeGreaterThanOrEqual(1000);
+			expect(second.capturedAt).toBe(first.capturedAt);
+			expect(second.samples.slice(0, first.samples.length)).toEqual(
+				first.samples,
+			);
+			expect(h.listener.retryBargeIn()).toBe(false);
+			h.blocks(4, 0);
+			h.listener.endBargeIn(true);
+			expect(h.onUtterance).toHaveBeenCalledOnce();
+			expect(h.onBargeInStart).toHaveBeenCalledOnce();
+			h.listener.stop();
+		});
+
+		test("a slow first transcript retries immediately with the audio captured while waiting", async () => {
+			const h = await guardedListener();
+			h.blocks(10, 0.1);
+			expect(h.onBargeInProbe).toHaveBeenCalledOnce();
+			expect(h.listener.retryBargeIn()).toBe(true);
+			expect(h.onBargeInProbe).toHaveBeenCalledTimes(2);
+			expect(h.onBargeInProbe.mock.calls[1][0].durationMs).toBe(1280);
+			h.listener.endBargeIn(false);
+			expect(h.listener.retryBargeIn()).toBe(false);
+			h.listener.stop();
+		});
+
+		test("a retry still completes if microphone frames stop arriving", async () => {
+			vi.useFakeTimers();
+			const h = await guardedListener();
+			h.blocks(4, 0.1);
+			expect(h.listener.retryBargeIn()).toBe(true);
+			vi.advanceTimersByTime(1000);
+			expect(h.onBargeInProbe).toHaveBeenCalledTimes(2);
+			expect(h.listener.retryBargeIn()).toBe(false);
+			h.listener.stop();
+		});
+
+		test("capture stalling before the first probe cannot leave confirmation waiting forever", async () => {
+			vi.useFakeTimers();
+			const h = await guardedListener();
+			h.blocks(3, 0.1);
+			expect(h.onBargeInStart).toHaveBeenCalledOnce();
+			expect(h.onBargeInProbe).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(500);
+			expect(h.onBargeInProbe).toHaveBeenCalledOnce();
+			expect(h.onBargeInProbe.mock.calls[0][0].durationMs).toBe(384);
+			h.listener.endBargeIn(false);
+			h.listener.stop();
+		});
+
+		test.each(["mute", "reject", "stop"])(
+			"%s discards a pending probe retry",
+			async (action) => {
+				vi.useFakeTimers();
+				const h = await guardedListener();
+				h.blocks(4, 0.1);
+				expect(h.listener.retryBargeIn()).toBe(true);
+				if (action === "mute") h.listener.setPaused(true);
+				else if (action === "reject") h.listener.endBargeIn(false);
+				else h.listener.stop();
+				vi.advanceTimersByTime(2000);
+				expect(h.onBargeInProbe).toHaveBeenCalledOnce();
+				expect(h.listener.retryBargeIn()).toBe(false);
+				h.listener.stop();
+			},
+		);
+
 		test("pausing ends a barge-in, so a muted person never interrupts", async () => {
 			const h = await guardedListener();
 			h.listener.setPaused(true);
@@ -378,18 +457,21 @@ describe("call microphone capture with voice-activity and turn models", () => {
 		vi.spyOn(Date, "now").mockImplementation(() => now);
 		const onUtterance = vi.fn();
 		const onBargeInStart = vi.fn();
+		const onBargeInProbe = vi.fn();
 		const onPartial = vi.fn();
 		const listener = await startCallListener({} as MediaStream, onUtterance, {
 			context: audio.context,
 			detector,
 			onPartial,
 			onBargeInStart,
+			onBargeInProbe,
 			guarded: extra.guarded,
 		});
 		return {
 			listener,
 			onUtterance,
 			onBargeInStart,
+			onBargeInProbe,
 			onPartial,
 			push(level: number) {
 				now += 128;
@@ -528,6 +610,42 @@ describe("call microphone capture with voice-activity and turn models", () => {
 			expect(h.onBargeInStart).not.toHaveBeenCalled();
 			await h.blocks(1, 0.3);
 			expect(h.onBargeInStart).toHaveBeenCalledOnce();
+		});
+
+		test("attenuated speech reaches confirmation and preserves the entire interruption", async () => {
+			const m = models();
+			const h = await listen(m.detector, { guarded: true });
+			await h.blocks(1, 0.01, m.setLevel);
+			expect(h.onBargeInStart).not.toHaveBeenCalled();
+			await h.blocks(1, 0.01, m.setLevel);
+			expect(h.onBargeInStart).toHaveBeenCalledOnce();
+			expect(h.onBargeInProbe).not.toHaveBeenCalled();
+			await h.blocks(2, 0.01, m.setLevel);
+			expect(h.onBargeInProbe).toHaveBeenCalledOnce();
+			const probe = h.onBargeInProbe.mock.calls[0][0];
+			expect(probe.capturedAt).toBe(10_000);
+			expect(probe.samples.length).toBe(4 * 2048);
+			await h.blocks(2, 0.01, m.setLevel);
+			await h.blocks(4, 0, m.setLevel);
+			expect(h.onUtterance).not.toHaveBeenCalled();
+			h.listener.endBargeIn(true);
+			expect(h.onUtterance).toHaveBeenCalledOnce();
+			const utterance = h.onUtterance.mock.calls[0][0];
+			expect(utterance.capturedAt).toBe(probe.capturedAt);
+			expect(utterance.samples.slice(0, 6 * 2048)).toEqual(
+				new Float32Array(6 * 2048).fill(0.01),
+			);
+			h.listener.stop();
+		});
+
+		test("a short quiet speech burst cannot pause the bot", async () => {
+			const m = models();
+			const h = await listen(m.detector, { guarded: true });
+			await h.blocks(1, 0.01, m.setLevel);
+			await h.blocks(6, 0, m.setLevel);
+			expect(h.onBargeInStart).not.toHaveBeenCalled();
+			expect(h.onBargeInProbe).not.toHaveBeenCalled();
+			h.listener.stop();
 		});
 
 		test("without models the loud-only rule still needs 300 ms", async () => {

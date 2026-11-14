@@ -1263,8 +1263,13 @@
 		"yourBot": ""
 	},
 	"local": {
-		"badge": "",
-		"badgeHint": "",
+		"accountNotice": {
+			"description": "이 봇은 이 컴퓨터에만 저장되어 있습니다. 계정에 있는 봇은 이 봇을 찾거나 메시지를 보낼 수 없습니다.",
+			"moveHint": "계정으로 옮기면 다른 봇과 대화할 수 있습니다. 옮긴 후에도 데스크톱 앱에서 실행됩니다.",
+			"title": "계정에 연결되어 있지 않습니다"
+		},
+		"badge": "로컬 전용",
+		"badgeHint": "계정에 연결되어 있지 않습니다. 이 컴퓨터에 저장된 봇만 이 봇과 대화할 수 있습니다.",
 		"conversationHint": "",
 		"conversationSubtitle": "",
 		"location": {
@@ -1391,8 +1396,8 @@
 		"action_one": "",
 		"action_other": "",
 		"banner": {
-			"action": "",
-			"description": "",
+			"action": "검토 후 옮기기",
+			"description": "이 봇들은 계정에 연결되어 있지 않아 계정에 있는 봇이 찾거나 메시지를 보낼 수 없습니다. 옮긴 후에도 데스크톱 앱에서 실행됩니다.",
 			"label": "",
 			"title_one": "",
 			"title_other": ""

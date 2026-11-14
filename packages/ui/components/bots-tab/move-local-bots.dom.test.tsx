@@ -440,9 +440,9 @@ describe("moving bots from this computer to the account", () => {
 	test("the banner opens a review of every bot on this computer", async () => {
 		const text = container.textContent ?? "";
 		expect(text).toContain("4 bots live only on this computer");
-		expect(text.split("On this device").length - 1).toBe(4);
+		expect(text.split("Local only").length - 1).toBe(4);
 
-		await click(buttonIn(container, "Review"));
+		await click(buttonIn(container, "Review and move"));
 		const review = dialog();
 		expect(review?.textContent).toContain("Move bots to your account");
 		expect(review?.textContent).toContain("Signed in as felix@example.com");
@@ -656,11 +656,17 @@ describe("moving bots from this computer to the account", () => {
 		const pill = container.querySelector<HTMLButtonElement>(
 			"aside [data-slot='bot-pill']",
 		);
-		expect(pill?.textContent).toContain("On this device");
+		expect(pill?.textContent).toContain("Local only");
 		expect(
 			container.querySelector("aside [data-testid='global-chat']"),
 		).not.toBeNull();
 		await click(pill);
+		expect(
+			container.querySelector("aside section[aria-label^='About']")
+				?.textContent,
+		).toContain(
+			"Move it to your account to connect it with your other bots. It will still run in the desktop app.",
+		);
 		await click(
 			buttonIn(
 				container.querySelector("aside section[aria-label^='About']"),

@@ -1285,8 +1285,13 @@
 		"yourBot": ""
 	},
 	"local": {
-		"badge": "",
-		"badgeHint": "",
+		"accountNotice": {
+			"description": "Ce bot est enregistré uniquement sur cet ordinateur. Les bots de votre compte ne peuvent ni le trouver ni lui envoyer de messages.",
+			"moveHint": "Déplacez-le vers votre compte pour le connecter à vos autres bots. Il continuera à fonctionner dans l’application de bureau.",
+			"title": "Non connecté à votre compte"
+		},
+		"badge": "En local uniquement",
+		"badgeHint": "Non connecté à votre compte. Seuls les bots enregistrés sur cet ordinateur peuvent communiquer avec lui.",
 		"conversationHint": "",
 		"conversationSubtitle": "",
 		"location": {
@@ -1418,8 +1423,8 @@
 		"action_one": "",
 		"action_other": "",
 		"banner": {
-			"action": "",
-			"description": "",
+			"action": "Vérifier et déplacer",
+			"description": "Ces bots ne sont pas connectés à votre compte. Les bots de votre compte ne peuvent donc ni les trouver ni leur envoyer de messages. Ils continueront à fonctionner dans l’application de bureau après leur déplacement.",
 			"label": "",
 			"title_many": "",
 			"title_one": "",

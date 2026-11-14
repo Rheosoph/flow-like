@@ -248,7 +248,7 @@ function card(local: boolean) {
 		(button) =>
 			button.textContent?.includes("Assistant") &&
 			button.textContent.includes("Built in") &&
-			button.textContent.includes("On this device") === local,
+			button.textContent.includes("Local only") === local,
 	);
 }
 
@@ -256,7 +256,7 @@ function currentCards() {
 	return Array.from(
 		container.querySelectorAll("button[aria-current='true']"),
 	).map((button) =>
-		button.textContent?.includes("On this device") ? "local" : "account",
+		button.textContent?.includes("Local only") ? "local" : "account",
 	);
 }
 
@@ -319,7 +319,8 @@ describe("the Assistant on this computer beside the account's", () => {
 		expect(activeConversation()).toBe(`bot:${LOCAL_ASSISTANT}`);
 		expect(currentCards()).toEqual(["local"]);
 		await openPanel();
-		expect(panel()?.textContent).toContain("On this device");
+		expect(panel()?.textContent).toContain("This computer");
+		expect(panel()?.textContent).toContain("Not connected to your account");
 		expect(panelButton("Move to your account")).toBeDefined();
 		await click(panelButton("Edit"));
 		expect(editor).toEqual({ open: true, botId: LOCAL_ASSISTANT });
@@ -330,6 +331,7 @@ describe("the Assistant on this computer beside the account's", () => {
 		expect(activeConversation()).toBe(`bot:${ACCOUNT_ASSISTANT}`);
 		expect(currentCards()).toEqual(["account"]);
 		await openPanel();
+		expect(panel()?.textContent).not.toContain("Not connected to your account");
 		expect(hasPanelButton("Move to your account")).toBe(false);
 		await click(panelButton("Edit"));
 		expect(editor).toEqual({ open: true, botId: ACCOUNT_ASSISTANT });

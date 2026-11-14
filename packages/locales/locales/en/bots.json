@@ -1319,8 +1319,13 @@
 		"yourBot": "Your bot"
 	},
 	"local": {
-		"badge": "On this device",
-		"badgeHint": "Lives only on this computer until you move it to an account.",
+		"accountNotice": {
+			"description": "This bot is saved only on this computer. Bots in your account can't find or message it.",
+			"moveHint": "Move it to your account to connect it with your other bots. It will still run in the desktop app.",
+			"title": "Not connected to your account"
+		},
+		"badge": "Local only",
+		"badgeHint": "Not connected to your account. Only bots saved on this computer can communicate with it.",
 		"conversationHint": "This chat lives only on this computer.",
 		"conversationSubtitle": "{{subtitle}} · On this device",
 		"location": {
@@ -1447,8 +1452,8 @@
 		"action_one": "Move {{count}} bot",
 		"action_other": "Move {{count}} bots",
 		"banner": {
-			"action": "Review",
-			"description": "Move them to your account to keep them, with their chats, wherever you sign in.",
+			"action": "Review and move",
+			"description": "These bots aren't connected to your account, so your account's bots can't find or message them. They'll still run in the desktop app after you move them.",
 			"label": "Bots on this computer",
 			"title_one": "{{count}} bot lives only on this computer",
 			"title_other": "{{count}} bots live only on this computer"
