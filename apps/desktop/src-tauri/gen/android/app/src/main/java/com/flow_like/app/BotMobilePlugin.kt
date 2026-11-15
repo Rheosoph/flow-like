@@ -68,6 +68,37 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    private fun hostingCommand(invoke: Invoke, block: () -> Unit) = activity.runOnUiThread {
+        try { block() }
+        catch (_: Exception) { invoke.reject("Android could not complete this request. Open Flow-Like and try again.") }
+    }
+
+    @Command fun backgroundHostingStatus(invoke: Invoke) = hostingCommand(invoke) {
+        invoke.resolve(JSObject(BackgroundHostingService.status(activity).toString()))
+    }
+
+    @Command fun setBackgroundHosting(invoke: Invoke) = hostingCommand(invoke) {
+        if (invoke.getArgs().getBoolean("enabled")) {
+            BackgroundHostingService.start(activity) { status, error ->
+                if (error != null) invoke.reject(error)
+                else invoke.resolve(JSObject(requireNotNull(status).toString()))
+            }
+        } else {
+            BackgroundHostingService.stop(activity)
+            invoke.resolve(JSObject(BackgroundHostingService.status(activity).toString()))
+        }
+    }
+
+    @Command fun openBackgroundHostingBatterySettings(invoke: Invoke) = hostingCommand(invoke) {
+        BackgroundHostingService.openBatterySettings(activity)
+        invoke.resolve(JSObject(BackgroundHostingService.status(activity).toString()))
+    }
+
+    @Command fun openBackgroundHostingNotificationSettings(invoke: Invoke) = hostingCommand(invoke) {
+        BackgroundHostingService.openNotificationSettings(activity)
+        invoke.resolve(JSObject(BackgroundHostingService.status(activity).toString()))
+    }
+
     @Command fun capabilities(invoke: Invoke) = execute(invoke) {
         BotCapabilities.create(
             Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).resolveActivity(activity.packageManager) != null,
@@ -370,7 +401,7 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
         }
         if (intent.action != Intent.ACTION_SEND && intent.action != Intent.ACTION_SEND_MULTIPLE) return
         // Remove the launch payload after capturing it so activity recreation cannot send twice.
-        if (activity.intent === intent) activity.intent = Intent(activity, MainActivity::class.java)
+        if (activity.intent === intent) activity.intent = Intent(activity, RuntimeActivity::class.java)
         worker.execute {
             try {
                 val snapshot = store.snapshot() ?: throw IllegalStateException("Open your bot workspace before sharing")

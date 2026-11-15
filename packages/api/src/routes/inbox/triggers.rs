@@ -22,6 +22,7 @@ pub(crate) fn trigger_outgoing(message_id: &str, body: &TriggerBody) -> Result<O
         kind: InboxEntryKind::Trigger,
         content: Content::Plain(envelope),
         links,
+        interactive: None,
     })
 }
 

@@ -61,13 +61,28 @@ open class BuildTask : DefaultTask() {
         val ortLibDir = if (ortAbiDir != null) {
             File(tauriRoot, "thirdparty/onnxruntime/android/$ortAbiDir")
         } else null
+        val inheritedOrtLibLocation = project.providers.environmentVariable("ORT_LIB_LOCATION").orNull
+        val ortLibLocation = if (inheritedOrtLibLocation != null) {
+            val inheritedDir = File(inheritedOrtLibLocation)
+            if (!inheritedDir.isAbsolute || !inheritedDir.isDirectory ||
+                !File(inheritedDir, "libonnxruntime.so").isFile) {
+                throw GradleException(
+                    "ORT_LIB_LOCATION must be an absolute directory containing libonnxruntime.so. " +
+                        "Correct it or unset it to use the bundled Android library."
+                )
+            }
+            // ort-sys tracks the exact environment string, including any parent segments.
+            inheritedOrtLibLocation
+        } else {
+            ortLibDir?.takeIf { it.isDirectory }?.canonicalPath
+        }
 
         project.exec {
             workingDir(File(project.projectDir, rootDirRel))
             executable(executable)
             args(args)
-            if (ortLibDir != null && ortLibDir.exists()) {
-                environment("ORT_LIB_LOCATION", ortLibDir.absolutePath)
+            if (ortLibLocation != null) {
+                environment("ORT_LIB_LOCATION", ortLibLocation)
                 environment("ORT_PREFER_DYNAMIC_LINK", "1")
             }
             if (project.logger.isEnabled(LogLevel.DEBUG)) {

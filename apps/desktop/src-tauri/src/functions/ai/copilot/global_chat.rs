@@ -447,6 +447,9 @@ pub async fn global_chat(
     {
         let guard =
             crate::bot_host::interactive::begin(Some(&app_handle), bot, run.conversation_id());
+        // Context reads can outlast the initial grace period. Keep the turn reserved while
+        // loading them so a background host cannot claim it before generation starts.
+        let hold = run.hold();
         inbox_conversation_id = Some(run.conversation_id().to_owned());
         ephemeral_user_context = run.ephemeral_user_context().await?;
         live_call = run.live_call().await?;
@@ -471,7 +474,6 @@ pub async fn global_chat(
             reply_files = Some(run.reply_files());
         }
         usage = run.usage.clone();
-        let hold = run.hold();
         finish = Some(crate::bot_host::interactive::Finish {
             memory: bot_memory.clone(),
             run,
@@ -487,7 +489,9 @@ pub async fn global_chat(
             &trigger_files,
         ))
     };
-    let result = global_chat_native(
+    // Tauri moves this command's future through its dispatcher on the iOS main thread.
+    // Keep the chat loop on the heap so those moves fit within the main thread's stack.
+    let result = Box::pin(global_chat_native(
         app_handle,
         Some(webview.label().to_owned()),
         state,
@@ -529,7 +533,7 @@ pub async fn global_chat(
             ..Default::default()
         },
         bot_id,
-    )
+    ))
     .await;
     if let Some(finish) = finish {
         match &result {
@@ -1310,10 +1314,11 @@ pub async fn global_chat_native(
                     }
                     _ => flowpilot_thinking(reasoning_effort.as_deref()),
                 });
+                // Model and tool state must not inflate the enclosing native run's future.
                 let platform_chat = async {
                     match bot {
                         Some(bot) => {
-                            run_bot_chat_with_talk(
+                            Box::pin(run_bot_chat_with_talk(
                                 model_state.clone(),
                                 profile,
                                 bot.context,
@@ -1328,11 +1333,11 @@ pub async fn global_chat_native(
                                 memory,
                                 Some(on_token),
                                 talk,
-                            )
+                            ))
                             .await
                         }
                         None => {
-                            run_platform_chat(
+                            Box::pin(run_platform_chat(
                                 model_state.clone(),
                                 profile,
                                 context,
@@ -1345,7 +1350,7 @@ pub async fn global_chat_native(
                                 bridge,
                                 memory,
                                 Some(on_token),
-                            )
+                            ))
                             .await
                         }
                     }
@@ -1469,6 +1474,42 @@ pub async fn global_chat_delete_memory(
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+
+    // Inspect the concrete async return type without constructing a Tauri app or polling it.
+    macro_rules! future_size {
+        ($function:path; $($argument:ident),+ $(,)?) => {{
+            const fn size<$($argument,)+ F: std::future::Future>(
+                _: fn($($argument),+) -> F,
+            ) -> usize {
+                std::mem::size_of::<F>()
+            }
+            size($function)
+        }};
+    }
+
+    // Evaluate this during `cargo check --tests`, without linking the desktop test app.
+    const _: () = {
+        // Leave room for UIKit and Tauri's repeated by-value moves on iOS's 1 MiB main stack.
+        const COMMAND: usize = future_size!(
+            global_chat;
+            A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10,
+            A11, A12, A13, A14, A15, A16, A17, A18, A19, A20, A21,
+        );
+        const NATIVE: usize = future_size!(
+            global_chat_native;
+            A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10,
+            A11, A12, A13, A14, A15, A16, A17, A18, A19,
+        );
+        assert!(
+            COMMAND <= 16 * 1024,
+            "global_chat future exceeds the iOS stack budget"
+        );
+        // The native run is boxed before dispatch. Bound its construction on the worker separately.
+        assert!(
+            NATIVE <= 64 * 1024,
+            "global_chat_native future exceeds its worker stack budget"
+        );
+    };
 
     #[test]
     fn nested_bots_need_an_authoritative_source_for_private_memory() {

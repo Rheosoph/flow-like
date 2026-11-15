@@ -5,8 +5,8 @@ use super::{
     ledger::{
         BOT_TURN_LEASE_LOST, BOT_TURN_NOT_RETRYABLE, ClaimRequest, DESKTOP_HANDOFF_SECS,
         ERROR_LEFT_ROOM, Refusal, RetryRelease, cancel_left_room_in, claim_in, enqueue_in,
-        fail_held_in, hand_back_in, heartbeat_in, hold_in, mark_failed_after_reply_in, next_head,
-        queued_heads, queues_turn, recover_in, release_for_retry_in, retry_in, take_in,
+        fail_held_in, fold_into, hand_back_in, heartbeat_in, hold_in, mark_failed_after_reply_in,
+        next_head, queued_heads, queues_turn, recover_in, release_for_retry_in, retry_in, take_in,
         watched_turn,
     },
 };
@@ -387,6 +387,81 @@ async fn a_claim_takes_the_newest_queued_turn_and_folds_the_older_ones_into_it()
         claim(&db, "bot_1", "m2", "h2", at(11)).await.unwrap_err(),
         Refusal::NotQueued(TurnStatus::Cancelled)
     );
+}
+
+#[tokio::test]
+async fn a_claim_leaves_older_and_newer_interactive_turns_with_their_chats() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", "SERVER").await;
+    for (n, trigger) in ["due", "held_older", "lead", "held_newer"]
+        .into_iter()
+        .enumerate()
+    {
+        queue(
+            &db,
+            "bot_1",
+            "user-a",
+            SERVER,
+            "c1",
+            trigger,
+            at(n as i64 + 1),
+        )
+        .await;
+    }
+    for trigger in ["held_older", "held_newer"] {
+        assert!(
+            hold_in(&db, &turn_id("bot_1", trigger), "user-a", at(5))
+                .await
+                .unwrap()
+        );
+    }
+
+    let claimed = claim(&db, "bot_1", "due", "h1", at(10)).await.unwrap();
+    assert_eq!(claimed.turn.trigger_message_id, "lead");
+    assert_eq!(claimed.batched, ["due"]);
+    for trigger in ["held_older", "held_newer"] {
+        let held = row(&db, "bot_1", trigger).await;
+        assert_eq!(held.status, STORED_QUEUED);
+        assert!(held.lease_until.is_some_and(|until| until > at(10)));
+        assert!(held.reply_message_id.is_none());
+        assert!(hold_in(&db, &held.id, "user-a", at(11)).await.unwrap());
+    }
+}
+
+#[tokio::test]
+async fn batching_preserves_a_new_message_and_a_hold_renewed_after_the_lead_is_selected() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", "SERVER").await;
+    for (n, trigger) in ["due", "renewed", "lead"].into_iter().enumerate() {
+        queue(
+            &db,
+            "bot_1",
+            "user-a",
+            SERVER,
+            "c1",
+            trigger,
+            at(n as i64 + 1),
+        )
+        .await;
+    }
+    let lead = next_head(&db, "bot_1", "c1", TurnHostKind::Server, at(10))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(lead.trigger_message_id, "lead");
+    assert!(take_in(&db, &lead.id, "h1", at(10)).await.unwrap());
+
+    assert!(
+        hold_in(&db, &turn_id("bot_1", "renewed"), "user-a", at(11))
+            .await
+            .unwrap()
+    );
+    queue(&db, "bot_1", "user-a", SERVER, "c1", "newer", at(11)).await;
+
+    assert_eq!(fold_into(&db, &lead, at(12)).await.unwrap(), ["due"]);
+    assert_eq!(row(&db, "bot_1", "renewed").await.status, STORED_QUEUED);
+    assert_eq!(row(&db, "bot_1", "newer").await.status, STORED_QUEUED);
+    assert_eq!(row(&db, "bot_1", "due").await.status, STORED_CANCELLED);
 }
 
 #[tokio::test]

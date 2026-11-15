@@ -3013,6 +3013,48 @@ mod code {
     }
 
     #[tokio::test]
+    async fn unsupported_process_errors_explain_recovery_and_keep_the_traceback() {
+        let env = FakeEnv::new().await;
+        let traceback = "Traceback (most recent call last):\n  File \"<flow_code>\", line 2, in <module>\nOSError: [Errno 58] wasi does not support processes.\n";
+        for (status, detail, expects_hint) in [
+            (RunStatus::Error, traceback, true),
+            (RunStatus::Timeout, traceback, false),
+            (
+                RunStatus::Error,
+                "OSError: [Errno 58] another unsupported operation",
+                false,
+            ),
+            (
+                RunStatus::Error,
+                "ValueError: wasi does not support processes",
+                false,
+            ),
+        ] {
+            env.sandbox()
+                .respond(status, "partial output", Some(detail));
+            let outcome = call(
+                &env,
+                "code_run",
+                json!({ "language": "python", "code": "import subprocess\nsubprocess.run(['python3', '-V'])" }),
+            )
+            .await;
+            let envelope = outcome.envelope();
+            let message = envelope["error"]["message"].as_str().expect("message");
+            assert_eq!(
+                message.contains("cannot start child processes"),
+                expects_hint
+            );
+            assert!(message.ends_with(detail));
+            assert_eq!(envelope["stdout"], "partial output");
+            assert_eq!(envelope["stderr"], "trace");
+            if expects_hint {
+                assert_eq!(err_code(&outcome), "code_error");
+                assert!(message.contains("'code'") && message.contains("'packages'"));
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn long_output_keeps_head_and_tail() {
         let env = FakeEnv::new().await;
         let long = format!("START{}END", "x".repeat(60_000));

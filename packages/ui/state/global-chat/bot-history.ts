@@ -128,6 +128,7 @@ export function sendInteractive(
 	return inbox.sendEntry(target.conversationId, {
 		message_id: message.id,
 		kind: message.transcript ? "transcript" : "message",
+		interactive: { client_run_id: message.clientRunId },
 		envelope: message.transcript
 			? transcriptEnvelope(
 					message.text,

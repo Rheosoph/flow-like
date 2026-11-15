@@ -389,6 +389,8 @@ export interface ISendInboxEntryRequest {
 	/** Chosen by the sender; sending the same id again returns the first result. */
 	message_id: string;
 	kind: Exclude<InboxEntryKind, "member" | "trigger" | "activity" | "room">;
+	/** Reserves the bot's turn for this chat even when the message body is encrypted. */
+	interactive?: { client_run_id: string };
 	/** Plain conversations. */
 	envelope?: IInboxPlainEnvelope;
 	/** End-to-end encrypted conversations: one sealed envelope per active member. */

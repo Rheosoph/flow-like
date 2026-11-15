@@ -890,8 +890,6 @@ export function GlobalChatBody({
 				// message would stay on this device only.
 				await ensureBotTarget(sessionId);
 				checkCurrent();
-				void persistGlobalChatMessage(userMessage);
-				void persistGlobalChatSession(sessionId, sessionTitle);
 			}
 
 			const responseMessage = makeGlobalChatMessage(
@@ -954,8 +952,6 @@ export function GlobalChatBody({
 			}
 			if (nativeRequest) {
 				appendMessage(userMessage);
-				void persistGlobalChatMessage(userMessage);
-				void persistGlobalChatSession(sessionId, sessionTitle);
 			}
 			const authUser = authRef.current?.user;
 			const userContext = publicNameFromClaims(authUser?.profile);
@@ -1016,6 +1012,10 @@ export function GlobalChatBody({
 				allFiles,
 			);
 			checkCurrent();
+			// Resolving the inbox imports saved history. Save this message only after sending it,
+			// or an import can consume its id without creating the interactive turn it needs.
+			void persistGlobalChatMessage(userMessage);
+			void persistGlobalChatSession(sessionId, sessionTitle);
 			// Without its stored transcript the host could not tell the run is a live call; the
 			// call posts the utterance itself and a host answers it.
 			if (voice && !interactive) return;

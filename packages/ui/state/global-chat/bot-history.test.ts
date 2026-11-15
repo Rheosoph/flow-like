@@ -489,6 +489,7 @@ describe("sending from the interactive chat", () => {
 			{
 				message_id: "msg_cuid",
 				kind: "message",
+				interactive: { client_run_id: "run_9" },
 				envelope: {
 					v: 1,
 					enc: "none",
@@ -521,6 +522,7 @@ describe("sending from the interactive chat", () => {
 			{
 				message_id: "msg_voice",
 				kind: "transcript",
+				interactive: { client_run_id: "run_v" },
 				envelope: {
 					v: 1,
 					enc: "none",

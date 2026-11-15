@@ -9,11 +9,10 @@ import java.io.File
 @Keep
 internal object BotCredentialBroker {
     @Volatile private var application: Context? = null
-    @Volatile private var loaded = false
 
     @Synchronized fun init(context: Context) {
         application = context.applicationContext
-        if (!loaded) { System.loadLibrary("app"); loaded = true }
+        NativeRuntimeInstaller.ensureNativeLoaded(context)
     }
 
     fun accessToken(context: Context, scope: String, rejectedToken: String? = null): String? = try {

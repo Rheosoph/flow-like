@@ -1,3 +1,5 @@
 include ':app'
+include ':runtime'
+include ':editors'
 
 apply from: 'tauri.settings.gradle'

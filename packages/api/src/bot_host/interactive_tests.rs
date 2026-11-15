@@ -309,6 +309,7 @@ async fn a_marked_transcript_is_held_for_the_chat_and_the_chats_reply_ends_the_t
         kind: flow_like_types::inbox::InboxEntryKind::Transcript,
         envelope: Some(envelope),
         envelopes: None,
+        interactive: None,
         turn: None,
     };
     let stored = validate_send(request(transcript_envelope())).expect("the mark is accepted");

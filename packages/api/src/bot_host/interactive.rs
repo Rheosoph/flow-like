@@ -204,6 +204,7 @@ impl InteractiveTurn {
             kind: InboxEntryKind::Message,
             envelope: Some(plain_envelope(body)),
             envelopes: None,
+            interactive: None,
             turn: None,
         }
     }

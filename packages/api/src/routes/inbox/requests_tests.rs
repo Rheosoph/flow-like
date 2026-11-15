@@ -722,10 +722,10 @@ async fn a_transcript_naming_a_stranger_is_refused() {
     assert!(copies(&db, "t_1").await.is_empty());
 }
 
-fn sealed_entry(message_id: &str, kind: InboxEntryKind, members: &[&str]) -> Outgoing {
+fn sealed_request(message_id: &str, kind: InboxEntryKind, members: &[&str]) -> SendEntryRequest {
     let envelope =
         json!({ "v": 1, "enc": "hpke", "key_id": "k1", "enc_key": "ZQ==", "ct": "Yw==" });
-    validate_send(SendEntryRequest {
+    SendEntryRequest {
         message_id: message_id.into(),
         kind,
         envelope: None,
@@ -735,9 +735,188 @@ fn sealed_entry(message_id: &str, kind: InboxEntryKind, members: &[&str]) -> Out
                 .map(|member| (member.to_string(), envelope.clone()))
                 .collect(),
         ),
+        interactive: None,
         turn: None,
-    })
-    .unwrap()
+    }
+}
+
+fn sealed_entry(message_id: &str, kind: InboxEntryKind, members: &[&str]) -> Outgoing {
+    validate_send(sealed_request(message_id, kind, members)).unwrap()
+}
+
+fn interactive_mark() -> flow_like_types::bot_message::InteractiveMark {
+    flow_like_types::bot_message::InteractiveMark {
+        client_run_id: "run_1".into(),
+    }
+}
+
+#[tokio::test]
+async fn encrypted_interactive_messages_and_transcripts_keep_their_turns_until_the_grace_expires() {
+    use crate::bot_host::ledger::{ClaimRequest, Refusal, claim_in};
+    use flow_like_types::bot_turn::{INTERACTIVE_GRACE_SECS, STORED_QUEUED, TurnHostKind};
+    for kind in [InboxEntryKind::Message, InboxEntryKind::Transcript] {
+        let db = world().await;
+        insert_bot(&db, "bot_d", "user-a", "DESKTOP").await;
+        let chat = start_direct_as(
+            &db,
+            "user-a",
+            &bot_principal("bot_d"),
+            ConversationEncryption::E2e,
+            false,
+            at(1),
+        )
+        .await
+        .unwrap();
+        let mut request = sealed_request("interactive", kind, &["user-a", "bot_d"]);
+        request.interactive = Some(interactive_mark());
+        let expected = request.envelopes.clone().unwrap();
+        let outgoing = validate_send(request).unwrap();
+        let sent = send_in(&db, &chat, "user-a", &outgoing, at(2))
+            .await
+            .unwrap();
+        assert!(sent.bots[0].interactive);
+        for copy in copies(&db, "interactive").await {
+            assert_eq!(copy.envelope, expected[&copy.inbox_id]);
+            assert!(copy.envelope.get("interactive").is_none());
+        }
+        let id = flow_like_types::bot_turn::turn_id("bot_d", "interactive");
+        let turn = bot_turn::Entity::find_by_id(&id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(turn.status, STORED_QUEUED);
+        assert_eq!(
+            turn.lease_until,
+            Some(turn.created_at + chrono::Duration::seconds(INTERACTIVE_GRACE_SECS))
+        );
+        let mut claim = ClaimRequest {
+            turn_id: id,
+            owner_id: Some("user-a".into()),
+            host_kind: TurnHostKind::Desktop,
+            host_id: "background".into(),
+            now: turn.created_at + chrono::Duration::seconds(1),
+        };
+        assert_eq!(
+            claim_in(&db, &claim).await.unwrap().unwrap_err(),
+            Refusal::NotYet
+        );
+        claim.now = turn.lease_until.unwrap() + chrono::Duration::seconds(1);
+        assert!(claim_in(&db, &claim).await.unwrap().is_ok());
+    }
+}
+
+#[tokio::test]
+async fn explicit_interactive_reservations_refuse_groups_foreign_bots_and_bot_senders_before_writing()
+ {
+    let db = world().await;
+    insert_bot(&db, "bot_d", "user-a", "DESKTOP").await;
+    let own = start_direct_as(
+        &db,
+        "user-a",
+        &bot_principal("bot_d"),
+        ConversationEncryption::E2e,
+        false,
+        at(1),
+    )
+    .await
+    .unwrap();
+    let foreign = start_direct_as(
+        &db,
+        "user-a",
+        &bot_principal("bot_b"),
+        ConversationEncryption::E2e,
+        false,
+        at(1),
+    )
+    .await
+    .unwrap();
+    let plan = NewConversation {
+        kind: ConversationKind::Group,
+        title: None,
+        members: Vec::new(),
+        encryption: ConversationEncryption::E2e,
+    };
+    start_group(
+        &db,
+        "crew",
+        "user-a",
+        &plan,
+        &[user("user-b"), bot_principal("bot_d")],
+        at(1),
+    )
+    .await
+    .unwrap();
+    for (id, room, sender, members) in [
+        ("group", "crew", "user-a", vec!["user-a", "user-b", "bot_d"]),
+        (
+            "foreign",
+            foreign.as_str(),
+            "user-a",
+            vec!["user-a", "bot_b"],
+        ),
+        ("bot_sender", own.as_str(), "bot_d", vec!["user-a", "bot_d"]),
+    ] {
+        let mut request = sealed_request(id, InboxEntryKind::Message, &members);
+        request.interactive = Some(interactive_mark());
+        let error = send_in(&db, room, sender, &validate_send(request).unwrap(), at(2))
+            .await
+            .unwrap_err();
+        assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+        assert!(says(&error, "interactive"));
+        assert!(copies(&db, id).await.is_empty());
+    }
+    assert_eq!(turns(&db).await, 0);
+}
+
+#[test]
+fn explicit_interactive_reservations_require_a_valid_run_and_person_message_kind() {
+    for id in [
+        "".to_string(),
+        "has space".into(),
+        "control\n".into(),
+        "x".repeat(129),
+    ] {
+        let mut request = sealed_request("m1", InboxEntryKind::Message, &["user-a", "bot_d"]);
+        request.interactive =
+            Some(flow_like_types::bot_message::InteractiveMark { client_run_id: id });
+        assert!(validate_send(request).is_err());
+    }
+    let mut request = sealed_request("m1", InboxEntryKind::Topic, &["user-a", "bot_d"]);
+    request.interactive = Some(interactive_mark());
+    assert!(validate_send(request.clone()).is_err());
+    request.kind = InboxEntryKind::Message;
+    request.turn = Some(super::model::TurnClaim {
+        id: "turn".into(),
+        host_id: "host".into(),
+    });
+    assert!(validate_send(request).is_err());
+}
+
+#[tokio::test]
+async fn plain_group_messages_keep_the_legacy_interactive_body_mark() {
+    let db = world().await;
+    launch_room(&db).await;
+    let outgoing = outgoing(
+        "legacy",
+        InboxEntryKind::Message,
+        json!({
+            "text": "hi", "mentions": ["bot_a"], "interactive": { "client_run_id": "run_1" },
+        }),
+    );
+    let sent = send_in(&db, "room", "user-a", &outgoing, at(2))
+        .await
+        .unwrap();
+    assert!(sent.bots[0].interactive);
+    let turn = bot_turn::Entity::find_by_id(flow_like_types::bot_turn::turn_id("bot_a", "legacy"))
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        turn.lease_until
+            .is_some_and(|until| until > turn.created_at)
+    );
 }
 
 #[tokio::test]
@@ -827,6 +1006,26 @@ async fn a_sealed_line_spoken_to_a_bot_alone_wakes_it_and_one_in_a_room_names_no
         "a line said to a bot alone is for it"
     );
     assert_eq!(turns(&db).await, 1);
+
+    let turn = bot_turn::Entity::find_by_id(flow_like_types::bot_turn::turn_id("bot_d", "t_1"))
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(turn.lease_until.is_none());
+    let claim = crate::bot_host::ledger::ClaimRequest {
+        turn_id: turn.id,
+        owner_id: Some("user-a".into()),
+        host_kind: flow_like_types::bot_turn::TurnHostKind::Desktop,
+        host_id: "background".into(),
+        now: turn.created_at,
+    };
+    assert!(
+        crate::bot_host::ledger::claim_in(&db, &claim)
+            .await
+            .unwrap()
+            .is_ok()
+    );
 
     let plan = NewConversation {
         kind: ConversationKind::Group,

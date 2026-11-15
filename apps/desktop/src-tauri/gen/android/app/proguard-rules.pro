@@ -19,3 +19,7 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# The release instrumentation runner calls these shared classes by name.
+-keep class androidx.tracing.** { *; }
+-keep class kotlin.Lazy* { *; }

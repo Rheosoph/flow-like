@@ -5,10 +5,17 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode, type Ref, act } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { getApiOrigin } from "../../lib/api-url";
 import { DEFAULT_CHAT_AI_DISCLOSURE } from "../../lib/chat-appearance";
 import { IRole } from "../../lib/schema/llm/history";
 import { useAuthStatusStore, useBackendStore } from "../../state/backend-state";
 import type { IBot } from "../../state/backend-state/bot-state";
+import type {
+	IInboxImportEntry,
+	IInboxState,
+	ISendInboxEntryRequest,
+} from "../../state/backend-state/inbox-state";
+import { registerBotInbox } from "../../state/global-chat/bot-inbox";
 import {
 	type IMessage,
 	globalChatDb,
@@ -268,8 +275,9 @@ function liveRun(runId: string, conversationId: string): GlobalChatRun {
 }
 
 /** A backend whose profile offers `models` as its own chat models. */
-function backendWith(models: unknown[]) {
+function backendWith(models: unknown[], inboxState?: IInboxState) {
 	return {
+		inboxState,
 		botState: { listBots: async () => BOTS },
 		userState: {
 			getSettingsProfile: async () => ({
@@ -299,6 +307,8 @@ beforeEach(async () => {
 	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 	await globalChatDb.messages.clear();
 	await globalChatDb.sessions.clear();
+	await globalChatDb.markers.clear();
+	registerBotInbox(null);
 	harness.send = undefined;
 	harness.upload = undefined;
 	harness.bodies = [];
@@ -342,6 +352,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+	registerBotInbox(null);
 	useChatPreparationStore.setState({ replies: {} });
 	await act(async () => root.unmount());
 	host.remove();
@@ -349,6 +360,82 @@ afterEach(async () => {
 		toolPrompt: null,
 		runs: {},
 		conversationLoading: false,
+	});
+});
+
+describe("a fresh bot message reaches the turn queue", () => {
+	test.each(["chat", "native"] as const)(
+		"%s resolves inbox history before saving the outgoing message",
+		async (source) => {
+			const imported: string[] = [];
+			const queued: string[] = [];
+			const inbox = {
+				async createConversation() {
+					return { id: "conv_atlas" };
+				},
+				async importHistory(
+					_bot: string,
+					_conversation: string,
+					entries: IInboxImportEntry[],
+				) {
+					imported.push(...entries.map((entry) => entry.message_id));
+					return { imported: entries.length, skipped: 0 };
+				},
+				async sendEntry(
+					_conversation: string,
+					request: ISendInboxEntryRequest,
+				) {
+					// The API returns an imported copy by id without queueing a new turn.
+					if (!imported.includes(request.message_id)) {
+						queued.push(request.message_id);
+					}
+					return { message_id: request.message_id };
+				},
+			} as unknown as IInboxState;
+			await act(async () => {
+				useBackendStore.getState().setBackend(backendWith([], inbox));
+			});
+
+			await act(async () => {
+				if (source === "chat") {
+					await harness.send?.("Hello again");
+				} else {
+					useGlobalChatStore.setState({
+						draft: {
+							prompt: "Hello again",
+							botId: "bot_atlas",
+							nativeRequest: {
+								id: "inbox-native-message",
+								scope: JSON.stringify([getApiOrigin(), "profile-1", "me"]),
+							},
+						},
+					});
+				}
+			});
+			await settle();
+			const question = useGlobalChatStore
+				.getState()
+				.messages.find((message) => message.inner.role === IRole.User);
+			expect(question?.inner.content).toBe("Hello again");
+			expect(imported).not.toContain(question?.id);
+			expect(queued).toEqual([question?.id]);
+			expect(harness.bodies[0]?.interactive).toMatchObject({
+				conversation_id: "conv_atlas",
+				trigger_message_id: question?.id,
+			});
+		},
+	);
+
+	test("keeps the outgoing message locally when no inbox can be resolved", async () => {
+		await act(async () => {
+			await harness.send?.("Keep this question");
+		});
+		await settle();
+		expect(
+			(await globalChatDb.messages.toArray())
+				.filter((message) => message.inner.role === IRole.User)
+				.map((message) => message.inner.content),
+		).toEqual(["Keep this question"]);
 	});
 });
 

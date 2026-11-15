@@ -223,6 +223,7 @@ fn send_request(
         kind,
         envelope,
         envelopes,
+        interactive: None,
         turn: None,
     }
 }

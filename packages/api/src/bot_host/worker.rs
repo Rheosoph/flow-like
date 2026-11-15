@@ -561,6 +561,7 @@ pub(crate) fn reply_request(
         kind: InboxEntryKind::Message,
         envelope: Some(plain_envelope(body)),
         envelopes: None,
+        interactive: None,
         turn: None,
     }
 }

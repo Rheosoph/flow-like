@@ -128,7 +128,9 @@
 						"/thirdparty/callback",
 						"/trigger",
 						"/store",
-						"/join"
+						"/join",
+						"/bots",
+						"/inbox"
 					],
 					"appLink": true
 				},
