@@ -49,6 +49,8 @@ pub struct BrowserSettings {
     kind: ConnectionKind,
     headless: bool,
     page_load_timeout: Mutex<Duration>,
+    eager_load: Arc<AtomicBool>,
+    hidden_runtime: AtomicBool,
 }
 
 impl BrowserSettings {
@@ -61,6 +63,8 @@ impl BrowserSettings {
             kind,
             headless,
             page_load_timeout: Mutex::new(page_load_timeout),
+            eager_load: Arc::default(),
+            hidden_runtime: AtomicBool::default(),
         }
     }
 
@@ -84,6 +88,33 @@ impl BrowserSettings {
             .page_load_timeout
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = timeout;
+    }
+
+    /// chromedriver's eager page load strategy: a navigation is done at `DOMContentLoaded`, not
+    /// at `load`. Every page reads it live.
+    pub fn eager_load(&self) -> bool {
+        self.eager_load.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn eager_flag(&self) -> Arc<AtomicBool> {
+        self.eager_load.clone()
+    }
+
+    pub fn set_eager_load(&self, eager: bool) {
+        self.eager_load.store(eager, Ordering::Release);
+    }
+
+    /// Pages attached after this is switched on keep the `Runtime` domain off, so no page can
+    /// tell an inspector is attached: scripts reach their world through contexts the engine
+    /// creates and looks up itself, and console messages and exceptions are not collected. A
+    /// launch with [`crate::launch::AutomationNotice::Withheld`] starts with it on, so the first
+    /// tab is set up that way too; an attached browser switches it on before its first page.
+    pub fn hidden_runtime(&self) -> bool {
+        self.hidden_runtime.load(Ordering::Acquire)
+    }
+
+    pub fn set_hidden_runtime(&self, hidden: bool) {
+        self.hidden_runtime.store(hidden, Ordering::Release);
     }
 }
 
@@ -127,6 +158,7 @@ pub(crate) struct BrowserInner {
 struct Construction {
     kind: ConnectionKind,
     headless: bool,
+    hidden_runtime: bool,
     page_load_timeout: Duration,
     process: Option<BrowserProcess>,
     staging: Option<PathBuf>,
@@ -138,6 +170,7 @@ impl Construction {
         Self {
             kind,
             headless: false,
+            hidden_runtime: false,
             page_load_timeout: DEFAULT_PAGE_LOAD_TIMEOUT,
             process: None,
             staging: None,
@@ -306,6 +339,7 @@ impl Browser {
         let construction = Construction {
             kind: ConnectionKind::Launched,
             headless: options.headless,
+            hidden_runtime: options.automation_notice == crate::launch::AutomationNotice::Withheld,
             page_load_timeout: options.page_load_timeout,
             staging: process.staging_dir().map(Path::to_path_buf),
             process: Some(process),
@@ -360,6 +394,7 @@ impl Browser {
         let construction = Construction {
             kind,
             headless,
+            hidden_runtime: false,
             page_load_timeout,
             process,
             staging,
@@ -383,6 +418,7 @@ impl Browser {
             construction.headless,
             construction.page_load_timeout,
         ));
+        settings.set_hidden_runtime(construction.hidden_runtime);
         let inner = Arc::new_cyclic(|browser| BrowserInner {
             targets: TargetManager::new(connection.clone(), settings.clone(), browser.clone()),
             downloads: DownloadTracker::new(construction.kind, construction.staging),

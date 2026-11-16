@@ -14,11 +14,11 @@ use flow_like::flow::copilot::tool_grants::{
 use flow_like::flow::copilot::tool_spec::{ToolEffect, resolve_tool_approval, resolve_tool_effect};
 use flow_like::flow::copilot::{HostTools, find_bot_tool_spec, tool_outcome_output};
 use flow_like_bot_tools::MemorySessions;
+use flow_like_bot_tools::files::conversation_files;
 use flow_like_bot_tools_host::{
     AppAccess, ConversationFiles, HostEnv, JobConnector, JobFile, JobModels, JobScope, JobSecrets,
     ModelSource, SecretSource, ToolJob,
 };
-use flow_like_types::bot_message::CONVERSATION_FILE_APP_PREFIX;
 use flow_like_types::tokio::sync::OnceCell;
 use flow_like_types::{bot_message::ApprovalRequest, tool_grant::ApprovalDecision};
 use serde_json::{Value, json};
@@ -45,35 +45,6 @@ pub(crate) trait TurnFiles: ConversationFiles {
         conversation_id: &str,
         path: &str,
     ) -> flow_like_types::Result<Option<JobFile>>;
-}
-
-/// The conversation files `args` name by handle, as `(conversation id, path)`.
-fn conversation_handles(args: &Value) -> Vec<(String, String)> {
-    fn collect(value: &Value, found: &mut Vec<(String, String)>) {
-        match value {
-            Value::Object(fields) => {
-                let conversation_id = fields
-                    .get("app_id")
-                    .and_then(Value::as_str)
-                    .and_then(|app_id| app_id.strip_prefix(CONVERSATION_FILE_APP_PREFIX));
-                let path = fields.get("path").and_then(Value::as_str);
-                if let (Some(conversation_id), Some(path), true) =
-                    (conversation_id, path, fields.contains_key("sha256"))
-                {
-                    let handle = (conversation_id.to_string(), path.to_string());
-                    if !found.contains(&handle) {
-                        found.push(handle);
-                    }
-                }
-                fields.values().for_each(|value| collect(value, found));
-            }
-            Value::Array(items) => items.iter().for_each(|item| collect(item, found)),
-            _ => {}
-        }
-    }
-    let mut found = Vec::new();
-    collect(args, &mut found);
-    found
 }
 
 /// What the owner holds, resolved when the first tool runs: which apps the bot reaches with
@@ -218,7 +189,7 @@ impl BotToolsHost {
             return Ok(Vec::new());
         };
         let mut linked = Vec::new();
-        for (conversation_id, path) in conversation_handles(args).into_iter().take(MAX_JOB_FILES) {
+        for (conversation_id, path) in conversation_files(args).into_iter().take(MAX_JOB_FILES) {
             let link = files
                 .link(&conversation_id, &path)
                 .await

@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use flow_like_bot_tools::browser::{
-    BrowserBackend, BrowserScreen, BrowserStep, Download, PageState, SnapshotRequest, SnapshotView,
+    BrowserBackend, BrowserScreen, BrowserStep, Challenge, Download, OpenOptions, PageState,
+    SnapshotRequest, SnapshotView,
 };
 use flow_like_bot_tools::computer::{
     ComputerAction, ComputerBackend, Screen, WindowBounds, WindowOp, WindowSummary,
@@ -44,6 +45,15 @@ struct OpenParams {
     #[serde(default)]
     conv: Option<String>,
     url: String,
+    #[serde(flatten)]
+    options: OpenOptions,
+}
+
+#[derive(Deserialize)]
+struct TokenParams {
+    #[serde(default)]
+    conv: Option<String>,
+    token: String,
 }
 
 #[derive(Deserialize)]
@@ -102,7 +112,7 @@ async fn dispatch(playground: &dyn Playground, method: &str, value: Value) -> Re
         "ping" => json!("pong"),
         "browser.open" => {
             let p: OpenParams = params(method, value)?;
-            page_json(browser(p.conv).open(&p.url).await?)
+            page_json(browser(p.conv).open(&p.url, &p.options).await?)
         }
         "browser.snapshot" => {
             let p: SnapshotParams = params(method, value)?;
@@ -146,6 +156,18 @@ async fn dispatch(playground: &dyn Playground, method: &str, value: Value) -> Re
                     .map(|file| json!({ "name": file.name, "data": encode(&file.bytes) }))
                     .collect::<Vec<_>>()
             )
+        }
+        "browser.challenge" => {
+            let p: ConvParams = params(method, value)?;
+            json!(browser(p.conv).challenge().await?)
+        }
+        "browser.challenge_press" => {
+            let p: ConvParams = params(method, value)?;
+            json!(browser(p.conv).press_challenge().await?)
+        }
+        "browser.challenge_token" => {
+            let p: TokenParams = params(method, value)?;
+            json!(browser(p.conv).apply_challenge_token(&p.token).await?)
         }
         "browser.close" => {
             let p: ConvParams = params(method, value)?;
@@ -532,8 +554,27 @@ impl RemoteBrowser {
 
 #[async_trait]
 impl BrowserBackend for RemoteBrowser {
-    async fn open(&self, url: &str) -> Result<PageState> {
-        page_of(self.call("browser.open", json!({ "url": url })).await?)
+    async fn open(&self, url: &str, options: &OpenOptions) -> Result<PageState> {
+        let mut params = json!(options);
+        params["url"] = json!(url);
+        page_of(self.call("browser.open", params).await?)
+    }
+
+    async fn challenge(&self) -> Result<Option<Challenge>> {
+        let value = self.call("browser.challenge", json!({})).await?;
+        serde_json::from_value(value).map_err(|e| anyhow!("Bad bot check from the device: {e}"))
+    }
+
+    async fn press_challenge(&self) -> Result<Option<Challenge>> {
+        let value = self.call("browser.challenge_press", json!({})).await?;
+        serde_json::from_value(value).map_err(|e| anyhow!("Bad bot check from the device: {e}"))
+    }
+
+    async fn apply_challenge_token(&self, token: &str) -> Result<String> {
+        let value = self
+            .call("browser.challenge_token", json!({ "token": token }))
+            .await?;
+        serde_json::from_value(value).map_err(|e| anyhow!("Bad answer from the device: {e}"))
     }
 
     async fn snapshot(&self, request: SnapshotRequest) -> Result<SnapshotView> {

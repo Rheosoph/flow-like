@@ -133,21 +133,21 @@ to a Java properties file containing `storeFile`, `storePassword`, `keyAlias`,
 and `keyPassword`; use an absolute path for `storeFile`. Back up the key and its
 credentials because later releases must use the same signing identity.
 
-From `apps/desktop`, run:
+From the repository root, run:
 
 ```bash
-bun run build:android:release
+mise run build:android:release
 ```
 
 This builds ARM64 release artifacts through the shared Cargo queue. The Play
-bundle is `src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab`.
+bundle is `apps/desktop/src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab`.
 Its small base opens a setup screen that downloads the `runtime` and `editors`
 feature modules from Google Play before starting the app. The installed modules
 remain available offline; features that connect to online services still need
 internet access.
 
 For installation without Google Play, use
-`src-tauri/gen/android/app/build/outputs/apk/standalone/release/app-standalone-release.apk`.
+`apps/desktop/src-tauri/gen/android/app/build/outputs/apk/standalone/release/app-standalone-release.apk`.
 It includes both modules and skips the download. An APK produced by the ordinary
 Gradle app assembly task contains only the base and cannot replace this complete
 APK. Development builds continue to bundle their native runtime directly.

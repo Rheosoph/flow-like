@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import { mergeBitParameters, upsertLlmModel } from "./db";
+import {
+	assertIntelligenceIndexVersionUpdate,
+	mergeBitParameters,
+	upsertLlmModel,
+} from "./db";
 import type { AAModel, ModelClassification } from "./types";
 
 const classification: ModelClassification = {
@@ -62,4 +66,81 @@ test("AA refresh never upserts a catalog estimate record", async () => {
 			Reflect.deleteProperty(process.env, "DATABASE_URL");
 		else process.env.DATABASE_URL = previous;
 	}
+});
+
+test("rejects stale or unversioned feeds before replacing a current evaluation", () => {
+	const current = {
+		artificial_analysis_intelligence_index_version: "5.0.1",
+		artificial_analysis_intelligence_index: 42.891,
+		benchmark_source: "https://artificialanalysis.ai/models/qwen4-max",
+	};
+	for (const version of [
+		undefined,
+		null,
+		"",
+		"4.3.2",
+		"5.0",
+		"5.0.0",
+		"invalid",
+	]) {
+		expect(() =>
+			assertIntelligenceIndexVersionUpdate(
+				current,
+				{ artificial_analysis_intelligence_index_version: version },
+				"qwen4-max",
+			),
+		).toThrow("Refusing to replace qwen4-max Intelligence Index v5.0.1");
+	}
+	expect(current.artificial_analysis_intelligence_index).toBe(42.891);
+	expect(current.benchmark_source).toBe(
+		"https://artificialanalysis.ai/models/qwen4-max",
+	);
+});
+
+test("protects versioned missing scores and compares all version components", () => {
+	const existing = {
+		artificial_analysis_intelligence_index_version: "v5.10.2",
+		artificial_analysis_intelligence_index: null,
+	};
+	expect(() =>
+		assertIntelligenceIndexVersionUpdate(
+			existing,
+			{ artificial_analysis_intelligence_index_version: "5.9.9" },
+			"missing-current-score",
+		),
+	).toThrow("Refusing to replace");
+	for (const version of ["5.10.2", "v5.10.3", "5.11", "6.0", 6]) {
+		expect(() =>
+			assertIntelligenceIndexVersionUpdate(
+				existing,
+				{ artificial_analysis_intelligence_index_version: version },
+				"missing-current-score",
+			),
+		).not.toThrow();
+	}
+});
+
+test("allows new records, legacy refreshes, and upgrading to the current version", () => {
+	for (const existing of [
+		undefined,
+		null,
+		{},
+		{ artificial_analysis_intelligence_index_version: "4.3.2" },
+	]) {
+		for (const incoming of [
+			{},
+			{ artificial_analysis_intelligence_index_version: "5.0.1" },
+		]) {
+			expect(() =>
+				assertIntelligenceIndexVersionUpdate(existing, incoming, "legacy"),
+			).not.toThrow();
+		}
+	}
+	expect(() =>
+		assertIntelligenceIndexVersionUpdate(
+			{ artificial_analysis_intelligence_index_version: "6.0" },
+			{ artificial_analysis_intelligence_index_version: "5.0.1" },
+			"future-version",
+		),
+	).toThrow("Refusing to replace");
 });

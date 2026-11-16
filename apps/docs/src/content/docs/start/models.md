@@ -29,6 +29,48 @@ account. The exact models shown depend on the current catalog and Profile.
 Once assigned, select the model from compatible nodes in
 [Studio](/studio/overview/) or from FlowPilot's model picker.
 
+## Compare model quality
+
+Language and vision model cards show **AA v5.0.1** when Artificial Analysis has
+evaluated the model on that version of its Intelligence Index. **Est. AA v5.0.1**
+marks an estimate calibrated from models with scores on both the older and current
+versions. Open its details for the estimated range, evidence, and uncertainty.
+The legacy catalog mixed index versions, so these estimates are not exact v4.3
+conversions.
+Models without a measured or calibrated result show **Not evaluated** or
+**No matching model**. Older scores and unversioned estimates are not comparable.
+Open the model to inspect individual benchmarks, the evaluated reasoning effort,
+and the source. The benchmark's reasoning effort describes the evaluated
+configuration; your provider settings may differ.
+
+The index combines weighted benchmark tasks. Its task selection, languages, and
+weights affect rankings, so use it alongside results that match your work.
+See the [Artificial Analysis methodology](https://artificialanalysis.ai/methodology/intelligence-benchmarking)
+for the scope of the evaluation. A score is not a universal measure of model quality.
+
+Speech, embedding, image/video generation, forecasting, and decision model
+cards can show a **Quality** rating from 0 to 100 for that category.
+The **≈** symbol marks an estimate.
+Compare speech-to-text models with other speech-to-text
+models, for example. These editorial ratings describe expected output quality;
+they are not accuracy percentages or measurements of performance on your
+device. The detail view explains the criteria, estimated range, and language
+or task limitations. When browsing one supported category, select
+**Rating** in the sort menu to order its models by rating.
+
+## Compare model prices
+
+Hosted OpenRouter models show a **Provider price reference** with its check date,
+source, and example workload. Image prices include the output resolution or
+megapixel count. Speech prices distinguish characters from UTF-8 bytes, while
+transcription prices use audio minutes. Provider list prices can differ from
+Flow-Like plan usage and platform fees.
+
+Read the routing notes for presets and models with several providers. A listed
+price does not establish current availability. Unverified presets can show a
+labeled reference for their linked model. When that model's current price or
+billing unit cannot be verified, the catalog leaves the price unavailable.
+
 ## Custom API request parameters
 
 For a custom HTTP chat or decision model, open **Connection → Advanced options**

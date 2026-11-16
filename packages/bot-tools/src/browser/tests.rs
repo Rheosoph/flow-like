@@ -128,6 +128,12 @@ pub(crate) struct FakeBrowser {
     pub body_override: Mutex<Option<String>>,
     pub has_owner_browser: Mutex<bool>,
     pub owner_opened: Mutex<Vec<String>>,
+    pub modes: Mutex<Vec<BrowserMode>>,
+    pub proxies: Mutex<Vec<Option<String>>>,
+    /// The page's bot check on each `challenge` call in turn; the last one stays.
+    pub challenges: Mutex<Vec<Option<Challenge>>>,
+    pub pressed: Mutex<u32>,
+    pub tokens: Mutex<Vec<String>>,
 }
 
 impl FakeBrowser {
@@ -162,7 +168,9 @@ impl FakeBrowser {
 
 #[async_trait]
 impl BrowserBackend for FakeBrowser {
-    async fn open(&self, url: &str) -> Result<PageState> {
+    async fn open(&self, url: &str, options: &OpenOptions) -> Result<PageState> {
+        self.modes.lock().unwrap().push(options.mode);
+        self.proxies.lock().unwrap().push(options.proxy.clone());
         self.opened.lock().unwrap().push(url.to_string());
         let landed = self
             .redirects
@@ -175,7 +183,8 @@ impl BrowserBackend for FakeBrowser {
         Ok(self.state(landed))
     }
 
-    async fn open_in_owner_browser(&self, url: &str) -> Result<PageState> {
+    async fn open_in_owner_browser(&self, url: &str, options: &OpenOptions) -> Result<PageState> {
+        self.modes.lock().unwrap().push(options.mode);
         if !*self.has_owner_browser.lock().unwrap() {
             return Err(anyhow!("this host has no owner browser"));
         }
@@ -228,6 +237,25 @@ impl BrowserBackend for FakeBrowser {
 
     async fn current(&self) -> Result<Option<PageState>> {
         Ok(self.here().map(|url| self.state(url)))
+    }
+
+    async fn challenge(&self) -> Result<Option<Challenge>> {
+        let mut states = self.challenges.lock().unwrap();
+        Ok(match states.len() {
+            0 => None,
+            1 => states[0].clone(),
+            _ => states.remove(0),
+        })
+    }
+
+    async fn press_challenge(&self) -> Result<Option<Challenge>> {
+        *self.pressed.lock().unwrap() += 1;
+        self.challenge().await
+    }
+
+    async fn apply_challenge_token(&self, token: &str) -> Result<String> {
+        self.tokens.lock().unwrap().push(token.to_owned());
+        Ok("callback".into())
     }
 
     async fn leave(&self) -> Result<()> {
@@ -378,6 +406,40 @@ async fn a_click_that_lands_on_a_new_site_is_refused_and_left() {
 }
 
 #[tokio::test]
+async fn human_mode_holds_for_the_session_until_switched_back() {
+    let (browser, env) = shop().await;
+    let human = call(
+        &env,
+        "browser_open",
+        json!({ "url": "https://shop.example/", "mode": "human" }),
+    )
+    .await;
+    assert_eq!(ok(&human).result["mode"], "human");
+    let kept = call(
+        &env,
+        "browser_open",
+        json!({ "url": "https://partner.example/" }),
+    )
+    .await;
+    assert_eq!(ok(&kept).result["mode"], "human");
+    let back = call(
+        &env,
+        "browser_open",
+        json!({ "url": "https://shop.example/", "mode": "standard" }),
+    )
+    .await;
+    assert_eq!(ok(&back).result["mode"], "standard");
+    assert_eq!(
+        *browser.modes.lock().unwrap(),
+        vec![
+            BrowserMode::Human,
+            BrowserMode::Human,
+            BrowserMode::Standard
+        ]
+    );
+}
+
+#[tokio::test]
 async fn opening_the_new_site_approves_it_for_the_session() {
     let (browser, env) = shop().await;
     call(
@@ -493,8 +555,8 @@ async fn a_backend_without_the_owners_browser_says_it_is_not_supported() {
 
     #[async_trait]
     impl BrowserBackend for OwnOnly {
-        async fn open(&self, url: &str) -> Result<PageState> {
-            self.0.open(url).await
+        async fn open(&self, url: &str, options: &OpenOptions) -> Result<PageState> {
+            self.0.open(url, options).await
         }
         async fn snapshot(&self, request: SnapshotRequest) -> Result<SnapshotView> {
             self.0.snapshot(request).await
@@ -694,4 +756,197 @@ fn opening_asks_and_the_rest_do_not() {
     assert!(specs.iter().all(|s| s.capability == Some("browser_use")));
     let act = specs.iter().find(|s| s.name == BROWSER_ACT).unwrap();
     assert!(act.input_schema.to_string().contains("\"ref\""));
+}
+
+fn check(kind: &str, pressable: bool) -> Option<Challenge> {
+    Some(Challenge {
+        kind: kind.into(),
+        site_key: Some("0x4AAAAAAAkey".into()),
+        action: None,
+        data: None,
+        solved: false,
+        puzzle: false,
+        pressable,
+        url: "https://shop.example/".into(),
+    })
+}
+
+#[tokio::test]
+async fn a_bot_check_is_reported_then_ticked_until_it_passes() {
+    let (browser, env) = shop().await;
+    *browser.challenges.lock().unwrap() = vec![
+        check("turnstile", true),
+        check("turnstile", true),
+        check("turnstile", true),
+        None,
+    ];
+    let opened = call(
+        &env,
+        "browser_open",
+        json!({ "url": "https://shop.example/" }),
+    )
+    .await;
+    let opened = ok(&opened);
+    assert_eq!(opened.result["challenge"]["kind"], "turnstile");
+    assert!(
+        opened.result["challenge_advice"]
+            .as_str()
+            .unwrap()
+            .contains("browser_challenge")
+    );
+    let passed = call(&env, "browser_challenge", json!({})).await;
+    let passed = ok(&passed);
+    assert_eq!(passed.result["passed"], true);
+    assert!(passed.result.get("challenge").is_none());
+    assert_eq!(*browser.pressed.lock().unwrap(), 1);
+    assert!(browser.tokens.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn human_mode_waits_out_a_check_page_that_decides_by_itself() {
+    let (browser, env) = shop().await;
+    *browser.challenges.lock().unwrap() =
+        vec![check("akamai", false), check("akamai", false), None];
+    let opened = call(
+        &env,
+        "browser_open",
+        json!({ "url": "https://shop.example/", "mode": "human" }),
+    )
+    .await;
+    assert!(ok(&opened).result.get("challenge").is_none());
+    *browser.challenges.lock().unwrap() = vec![check("akamai", false)];
+    let standard = call(
+        &env,
+        "browser_open",
+        json!({ "url": "https://shop.example/", "mode": "standard" }),
+    )
+    .await;
+    let standard = ok(&standard);
+    assert_eq!(standard.result["challenge"]["kind"], "akamai");
+    assert!(
+        standard.result["challenge_advice"]
+            .as_str()
+            .unwrap()
+            .contains("mode: human")
+    );
+}
+
+#[tokio::test]
+async fn the_owners_proxy_reaches_the_browser_and_never_the_result() {
+    let (browser, env) = shop().await;
+    env.inner.secrets.lock().unwrap().insert(
+        PROXY_SECRET.into(),
+        "http://bot:hunter2@proxy.example:8080".into(),
+    );
+    let opened = call(
+        &env,
+        "browser_open",
+        json!({ "url": "https://shop.example/" }),
+    )
+    .await;
+    let opened = ok(&opened);
+    assert_eq!(opened.result["proxy"], true);
+    assert!(!opened.result.to_string().contains("hunter2"));
+    assert_eq!(
+        browser.proxies.lock().unwrap().last().unwrap().as_deref(),
+        Some("http://bot:hunter2@proxy.example:8080")
+    );
+}
+
+async fn solver_stub() -> (String, Arc<Mutex<Vec<String>>>) {
+    use flow_like_types::tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = flow_like_types::tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    flow_like_types::tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let read = stream.read(&mut chunk).await.unwrap_or(0);
+                request.extend_from_slice(&chunk[..read]);
+                let text = String::from_utf8_lossy(&request).to_string();
+                let complete = text.split_once("\r\n\r\n").is_some_and(|(head, body)| {
+                    let length = head
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())?
+                        })
+                        .unwrap_or(0);
+                    body.len() >= length
+                });
+                if read == 0 || complete {
+                    break;
+                }
+            }
+            let request = String::from_utf8_lossy(&request).to_string();
+            let body = if request.starts_with("POST /createTask") {
+                r#"{"errorId":0,"taskId":7}"#
+            } else {
+                r#"{"errorId":0,"status":"ready","solution":{"token":"solved-token"}}"#
+            };
+            log.lock().unwrap().push(request);
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(reply.as_bytes()).await;
+        }
+    });
+    (address, seen)
+}
+
+#[tokio::test]
+async fn a_solving_service_answer_goes_into_the_page() {
+    let (browser, env) = shop().await;
+    call(
+        &env,
+        "browser_open",
+        json!({ "url": "https://shop.example/" }),
+    )
+    .await;
+    *browser.challenges.lock().unwrap() = vec![check("turnstile", true), None];
+    let missing = call(
+        &env,
+        "browser_challenge",
+        json!({ "solving_service": true }),
+    )
+    .await;
+    assert!(
+        missing.error.unwrap().message.contains(SOLVER_KEY_SECRET),
+        "without a key the bot learns which secret to ask for"
+    );
+    let (address, seen) = solver_stub().await;
+    {
+        let mut secrets = env.inner.secrets.lock().unwrap();
+        secrets.insert(SOLVER_KEY_SECRET.into(), "service-key".into());
+        secrets.insert(SOLVER_SECRET.into(), address);
+    }
+    *browser.challenges.lock().unwrap() = vec![check("turnstile", true), None];
+    let solved = call(
+        &env,
+        "browser_challenge",
+        json!({ "solving_service": true }),
+    )
+    .await;
+    let solved = ok(&solved);
+    assert_eq!(solved.result["passed"], true);
+    assert_eq!(solved.result["answer"], "callback");
+    assert_eq!(
+        *browser.tokens.lock().unwrap(),
+        vec!["solved-token".to_owned()]
+    );
+    assert_eq!(*browser.pressed.lock().unwrap(), 0);
+    let requests = seen.lock().unwrap().clone();
+    assert!(requests[0].contains("\"type\":\"TurnstileTaskProxyless\""));
+    assert!(requests[0].contains("\"websiteKey\":\"0x4AAAAAAAkey\""));
+    assert!(!solved.result.to_string().contains("service-key"));
 }

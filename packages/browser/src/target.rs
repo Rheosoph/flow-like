@@ -957,13 +957,18 @@ fn frame_session_commands(page: &Page, role: SessionRole) -> Vec<SetupCommand> {
             json!({"enabled": true}),
             Step::Optional,
         ),
-        command("Runtime.enable", json!({}), Step::Essential),
-        command(
-            "Page.addScriptToEvaluateOnNewDocument",
-            json!({"source": "", "worldName": UTIL_WORLD}),
-            Step::Optional,
-        ),
     ];
+    // A hidden runtime finds its contexts on demand (`element::hidden_context`).
+    if !page.inner.settings.hidden_runtime() {
+        commands.extend([
+            command("Runtime.enable", json!({}), Step::Essential),
+            command(
+                "Page.addScriptToEvaluateOnNewDocument",
+                json!({"source": "", "worldName": UTIL_WORLD}),
+                Step::Optional,
+            ),
+        ]);
+    }
     if role == SessionRole::Page {
         commands.push(command(
             "Emulation.setFocusEmulationEnabled",
@@ -1137,6 +1142,7 @@ async fn setup_worker(page: &Page, session: &SessionId) -> crate::Result<()> {
     let worker = connection.session(Some(session.clone()));
     let pending: Vec<(String, crate::Result<PendingReply>)> = crate::fetch::session_commands(page)
         .into_iter()
+        .chain(crate::emulation::worker_commands(page))
         .map(|(method, params)| {
             let reply = worker.enqueue(&method, params, None);
             (method, reply)
@@ -1169,6 +1175,29 @@ async fn setup_worker(page: &Page, session: &SessionId) -> crate::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_hidden_runtime_never_enables_the_runtime_domain() {
+        let harness = crate::testing::PageHarness::new().await;
+        let methods = |page: &Page, role| -> Vec<String> {
+            frame_session_commands(page, role)
+                .into_iter()
+                .map(|command| command.method)
+                .collect()
+        };
+        for role in [SessionRole::Page, SessionRole::Iframe] {
+            assert!(methods(&harness.page, role).contains(&"Runtime.enable".to_owned()));
+        }
+        harness.page.inner.settings.set_hidden_runtime(true);
+        for role in [SessionRole::Page, SessionRole::Iframe] {
+            let sent = methods(&harness.page, role);
+            assert!(
+                !sent.iter().any(|method| method.starts_with("Runtime.")),
+                "{sent:?}"
+            );
+            assert!(sent.contains(&"Page.enable".to_owned()));
+        }
+    }
     use crate::browser::Browser;
     use crate::navigation::LoadState;
     use crate::test_hooks::TestSetup;

@@ -105,6 +105,29 @@ pub(crate) fn replay_commands(page: &Page) -> Vec<(String, serde_json::Value)> {
     page.inner.lock_state().emulation.commands()
 }
 
+/// What a worker of the page takes over: the user agent override, through the `Network` domain
+/// (workers have no `Emulation` domain), so a worker's `navigator.userAgent`, its client hints
+/// and its requests match the page's.
+pub(crate) fn worker_commands(page: &Page) -> Vec<(String, serde_json::Value)> {
+    let state = page.inner.lock_state();
+    let agent = [
+        "Network.setUserAgentOverride",
+        "Emulation.setUserAgentOverride",
+    ]
+    .iter()
+    .find_map(|method| {
+        state
+            .emulation
+            .entries
+            .iter()
+            .find(|(recorded, _)| recorded == method)
+    });
+    agent
+        .map(|(_, params)| ("Network.setUserAgentOverride".to_owned(), params.clone()))
+        .into_iter()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

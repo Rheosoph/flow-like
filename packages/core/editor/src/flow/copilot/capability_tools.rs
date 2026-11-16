@@ -241,6 +241,7 @@ registered_tools!(
     "browser_act",
     "browser_screenshot",
     "browser_close",
+    "browser_challenge",
     "computer_screenshot",
     "computer_act",
     "computer_wait",
@@ -288,6 +289,7 @@ const LOCAL_MACHINE_TOOLS: &[&str] = &[
     "browser_act",
     "browser_screenshot",
     "browser_close",
+    "browser_challenge",
     "computer_screenshot",
     "computer_act",
     "computer_wait",
@@ -619,6 +621,7 @@ mod tests {
             "browser_act",
             "browser_screenshot",
             "browser_close",
+            "browser_challenge",
         ] {
             assert_eq!(
                 tool_capability(name),

@@ -301,6 +301,9 @@ pub(crate) async fn world_context(
     world: World,
     stamp: &FrameStamp,
 ) -> crate::Result<ContextRef> {
+    if frame.page.inner.settings.hidden_runtime() {
+        return hidden_context(frame, session, world, stamp).await;
+    }
     let id = &frame.id;
     let owner = &stamp.session;
     let lookup = |state: &PageState| match world {
@@ -326,6 +329,95 @@ pub(crate) async fn world_context(
         .ok_or_else(|| {
             BrowserError::protocol("DOM.resolveNode", -32000, format!("{missing} (frame {id})"))
         })
+}
+
+/// The hidden runtime's contexts. The isolated world comes from `Page.createIsolatedWorld`; the
+/// page's own world is found through the document node resolved into it, whose remote object id
+/// carries the context id. Neither needs the `Runtime` domain, and no script runs in the page.
+async fn hidden_context(
+    frame: &Frame,
+    session: &Session,
+    world: World,
+    stamp: &FrameStamp,
+) -> crate::Result<ContextRef> {
+    let (id, owner, document) = (&frame.id, &stamp.session, &stamp.loader);
+    let known = |main| {
+        let state = frame.page.inner.lock_state();
+        state.contexts.hidden(id, owner, document, main)
+    };
+    let main = world == World::Main;
+    if let Some(context) = known(main) {
+        return Ok(context);
+    }
+    let util = match known(false) {
+        Some(context) => context,
+        None => {
+            let method = "Page.createIsolatedWorld";
+            let params =
+                json!({"frameId": id, "worldName": UTIL_WORLD, "grantUniveralAccess": true});
+            let reply = session.send(method, params).await?;
+            let context_id = reply["executionContextId"].as_i64().ok_or_else(|| {
+                crate::input::unexpected_reply(method, "executionContextId", &reply)
+            })?;
+            let mut state = frame.page.inner.lock_state();
+            state
+                .contexts
+                .remember_hidden(id, owner, document, false, context_id)
+        }
+    };
+    if !main {
+        return Ok(util);
+    }
+    let context_id = match main_world_id(session, &util).await {
+        Ok(found) => found,
+        Err(error) => {
+            tracing::debug!(frame = %id, %error, "the page's world was not found; its scripts run isolated");
+            util.id
+        }
+    };
+    let mut state = frame.page.inner.lock_state();
+    Ok(state
+        .contexts
+        .remember_hidden(id, owner, document, true, context_id))
+}
+
+const MAIN_LOOKUP_GROUP: &str = "flowlike-world-lookup";
+
+async fn main_world_id(session: &Session, util: &ContextRef) -> crate::Result<i64> {
+    let lookup = async {
+        let method = "Runtime.evaluate";
+        let params = json!({"expression": "document", "contextId": util.id, "objectGroup": MAIN_LOOKUP_GROUP});
+        let reply = session.send(method, params).await?;
+        let object_id = reply["result"]["objectId"]
+            .as_str()
+            .ok_or_else(|| crate::input::unexpected_reply(method, "result.objectId", &reply))?;
+        let method = "DOM.describeNode";
+        let reply = session.send(method, json!({"objectId": object_id})).await?;
+        let node = reply["node"]["backendNodeId"]
+            .as_i64()
+            .ok_or_else(|| crate::input::unexpected_reply(method, "node.backendNodeId", &reply))?;
+        let method = "DOM.resolveNode";
+        let params = json!({"backendNodeId": node, "objectGroup": MAIN_LOOKUP_GROUP});
+        let reply = session.send(method, params).await?;
+        reply["object"]["objectId"]
+            .as_str()
+            .and_then(context_of_object)
+            .ok_or_else(|| crate::input::unexpected_reply(method, "object.objectId", &reply))
+    }
+    .await;
+    let release = json!({"objectGroup": MAIN_LOOKUP_GROUP});
+    if let Err(error) = session.send_nowait("Runtime.releaseObjectGroup", release) {
+        tracing::debug!(%error, "the world lookup objects were not released");
+    }
+    lookup
+}
+
+/// Chrome's remote object ids read `<isolate>.<context>.<object>`.
+fn context_of_object(object_id: &str) -> Option<i64> {
+    let mut parts = object_id.split('.');
+    let (_, context, _) = (parts.next()?, parts.next()?, parts.next()?);
+    parts.next().is_none().then_some(())?;
+    context.parse().ok()
 }
 
 fn unexpected(what: &str, expected: &str, value: &Value) -> BrowserError {
@@ -1215,6 +1307,63 @@ pub(crate) fn mint_elements(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_hidden_runtime_finds_both_worlds_without_the_runtime_domain() {
+        let harness = PageHarness::new().await;
+        harness.page.inner.settings.set_hidden_runtime(true);
+        harness
+            .control
+            .set_auto_reply(|command| match command.method.as_str() {
+                "Page.createIsolatedWorld" => Some(json!({"executionContextId": 77})),
+                "Runtime.evaluate" if command.params["contextId"] == 77 => {
+                    Some(json!({"result": {"type": "object", "objectId": "9.77.1"}}))
+                }
+                "DOM.describeNode" => Some(json!({"node": {"backendNodeId": 5}})),
+                "DOM.resolveNode" => {
+                    Some(json!({"object": {"type": "object", "objectId": "9.3.2"}}))
+                }
+                _ => default_auto_reply(command),
+            });
+        let frame = harness.page.main_frame();
+        let stamp = frame.stamp().unwrap();
+        let session = frame.session().unwrap();
+        let main = world_context(&frame, &session, World::Main, &stamp)
+            .await
+            .unwrap();
+        let util = world_context(&frame, &session, World::Util, &stamp)
+            .await
+            .unwrap();
+        assert_eq!((main.id, util.id), (3, 77));
+        let again = world_context(&frame, &session, World::Main, &stamp)
+            .await
+            .unwrap();
+        assert_eq!(again.unique_id, main.unique_id);
+        let seen = harness.control.commands_seen();
+        let created = seen
+            .iter()
+            .filter(|command| command.method == "Page.createIsolatedWorld")
+            .count();
+        assert_eq!(created, 1, "each document gets one isolated world");
+        assert!(
+            seen.iter()
+                .all(|command| command.method != "Runtime.enable")
+        );
+        let resolve = seen
+            .iter()
+            .find(|command| command.method == "DOM.resolveNode")
+            .unwrap();
+        assert!(resolve.params.get("executionContextId").is_none());
+    }
+
+    #[test]
+    fn a_remote_object_id_names_its_context_in_the_middle() {
+        assert_eq!(context_of_object("-1234567.42.7"), Some(42));
+        assert_eq!(context_of_object("3.1.0"), Some(1));
+        assert_eq!(context_of_object("3.1"), None);
+        assert_eq!(context_of_object("3.1.0.9"), None);
+        assert_eq!(context_of_object("{\"injectedScriptId\":3,\"id\":7}"), None);
+    }
     use crate::testing::{PageHarness, default_auto_reply};
     use crate::transport::memory::SentCommand;
     use crate::types::LoaderId;

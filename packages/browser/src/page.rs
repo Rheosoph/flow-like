@@ -145,7 +145,7 @@ impl PageInner {
         let state = PageState {
             frames: crate::frames::FrameTree::new(main_frame.clone(), session.clone()),
             contexts: crate::frames::ExecutionContexts::new(),
-            navigation: crate::navigation::NavigationTracker::new(),
+            navigation: crate::navigation::NavigationTracker::with_eager(settings.eager_flag()),
             dialog: crate::dialogs::DialogState::new(),
             emulation: crate::emulation::EmulationState::new(),
             input: crate::input::InputState::new(),

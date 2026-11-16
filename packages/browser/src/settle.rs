@@ -923,8 +923,7 @@ fn load_end(
     let idle_after_commit = committed.is_some()
         && committed.as_ref() != previous
         && !navigation.is_pending(main, main, Instant::now());
-    (navigation.lifecycle_reached(main, loader, "load") || idle_after_commit)
-        .then_some(LoadEnd::Loaded)
+    (navigation.settled_at(main, loader) || idle_after_commit).then_some(LoadEnd::Loaded)
 }
 
 /// URL parsing (WHATWG and GURL) drops leading C0 controls and spaces and removes every tab and

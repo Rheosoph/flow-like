@@ -33,8 +33,9 @@ import { type StreamValue, createStreamSplitter } from "./stream";
  * once, cached by its source text, so an unchanged component keeps its object
  * identity across tokens and the renderer re-renders only what changed. The
  * policy keeps the component types and actions listed in the manifest's `chat`
- * section, drops custom CSS escapes, admits only https/data:image media and
- * forces links to http(s) URLs that open outside the app.
+ * section, drops custom CSS escapes, admits only https/data:image backgrounds
+ * and forces links to http(s) URLs that open outside the app. Media `src`
+ * values are left to the renderer's resolver (editor/ui/chat-asset-resolver.ts).
  */
 
 export const MAX_CHAT_COMPONENTS = 120;
@@ -305,9 +306,15 @@ function responsiveGrid(props: Props): Props {
 	};
 }
 
-/** A reply never knows the reader's width: grids shed columns and rows wrap unless told not to. */
+/**
+ * A reply never knows the reader's width: grids shed columns and rows wrap unless told not to.
+ * Cards respond to the pointer unless told not to.
+ */
 function chatLayout(type: string, props: Props): Props {
 	if (type === "grid") return responsiveGrid(props);
+	if (type === "card" && props.hoverable === undefined) {
+		return { ...props, hoverable: { literalBool: true } };
+	}
 	if (type !== "row" || props.wrap !== undefined) return props;
 	return { ...props, wrap: { literalBool: true } };
 }

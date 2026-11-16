@@ -15,8 +15,8 @@ use crate::outcome::ToolOutput;
 use crate::spec::{Approval, ToolSpec, schema_of};
 
 pub use reference::{
-    FileRef, Located, ResolvedFile, guess_mime, handle_for, locate, markdown_url,
-    require_storage_read, resolve, sha256_hex, workspace_of,
+    FileRef, Located, ResolvedFile, conversation_files, guess_mime, handle_for, locate,
+    markdown_url, require_storage_read, resolve, sha256_hex, workspace_of,
 };
 
 pub const FILE_LIST: &str = "file_list";

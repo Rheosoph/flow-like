@@ -189,6 +189,10 @@ run = "bun run --cwd ./apps/desktop build:xcode"
 description = "Build Android app"
 run = "bun run --cwd ./apps/desktop build:android"
 
+[tasks."build:android:release"]
+description = "Build signed ARM64 Android App Bundle and standalone APK"
+run = "bun run --cwd ./apps/desktop build:android:release"
+
 # ── Deploy ───────────────────────────────────
 
 [tasks."deploy:website"]

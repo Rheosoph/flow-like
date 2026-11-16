@@ -25,7 +25,7 @@ import { FlowPilotBubbleOrb } from "../../global-chat/flowpilot-bubble-orb";
 import { appPairs } from "../../library/library-types";
 import { AppTypeMark } from "../../ui/app-type-mark";
 import { Button } from "../../ui/button";
-import { ModelDetailSheet } from "../../ui/model-detail-sheet";
+import { ModelDetailDialog } from "../../ui/model-detail-dialog";
 import { ModalityFlow, ProviderGlyph, providerLabel } from "../../ui/model-kit";
 import { useHomeLibrary } from "./collections";
 import {
@@ -1058,7 +1058,7 @@ export function HomeModelSpotlight({ widget, editing }: HomeContentProps) {
 				</>
 			)}
 			{!editing && detailOpen && bit && (
-				<ModelDetailSheet
+				<ModelDetailDialog
 					bit={bit}
 					queryScope={scope}
 					open={detailOpen}

@@ -59,6 +59,7 @@ vi.mock("../lib/web-states", async () => {
 				"WebApiKeyState",
 				"WebApiState",
 				"WebAppState",
+				"WebAudioState",
 				"WebBoardState",
 				"WebDatabaseState",
 				"WebEventState",
@@ -107,6 +108,7 @@ vi.mock("../../../packages/ui/hooks/use-invoke", async () => {
 				queryKey: [fn.name, ...args],
 				queryFn: () => fn.apply(state, args),
 			}),
+		useInvalidateInvoke: () => async () => {},
 	};
 });
 vi.mock(
@@ -229,8 +231,8 @@ describe("web model downloads", () => {
 		if (!backend) throw new Error("Web backend was not initialized");
 		expect(useDownloadManager.getState().backend).toBe(backend);
 		const downloadBit = vi.spyOn(backend.bitState, "downloadBit");
-		const addButton = [...container.querySelectorAll("button")].find((button) =>
-			button.textContent?.includes("Add to profile"),
+		const addButton = container.querySelector<HTMLButtonElement>(
+			'button[aria-pressed="false"]',
 		);
 		expect(addButton).toBeDefined();
 		if (!addButton) throw new Error("Add to profile button was not rendered");

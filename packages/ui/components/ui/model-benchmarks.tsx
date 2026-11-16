@@ -7,23 +7,27 @@ import {
 	CodeIcon,
 	DollarSignIcon,
 	ExternalLinkIcon,
+	GaugeIcon,
 	TimerIcon,
 	WrenchIcon,
 	ZapIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
+import {
+	MODEL_QUALITY_CATEGORIES,
+	type ModelQualityEstimate,
+	modelQualityEstimate,
+} from "../../lib/bit/model-quality";
+import {
+	AA_INTELLIGENCE_VERSION,
+	type IntelligenceEstimate,
+	currentIntelligenceEstimate,
+	currentIntelligenceIndex,
+	isScore,
+} from "../../lib/bit/model-rating";
+import { IBitTypes } from "../../lib/schema/bit/bit";
 import { Badge } from "./badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./tooltip";
-
-interface IntelligenceEstimate {
-	score: number;
-	low: number;
-	high: number;
-	confidence: "low" | "medium";
-	reasoning: string;
-	sources: string[];
-	updated_at: string;
-}
 
 interface ReportedBenchmark {
 	name: string;
@@ -36,9 +40,27 @@ interface ReportedBenchmark {
 }
 
 interface AAEvaluations {
+	quality_estimate?: ModelQualityEstimate | null;
 	artificial_analysis_intelligence_index?: number | null;
+	artificial_analysis_intelligence_index_version?: string | null;
+	benchmark_source_url?: string | null;
+	benchmark_verified_at?: string | null;
+	benchmark_reasoning_effort?: string | null;
+	benchmark_status?:
+		| "measured"
+		| "estimated"
+		| "not_evaluated"
+		| "unmatched"
+		| null;
+	legacy_evaluations?: Record<string, unknown> | null;
 	intelligence_estimate?: IntelligenceEstimate | null;
 	reported_benchmarks?: ReportedBenchmark[] | null;
+	hle_diamond?: number | null;
+	critpt_agentic_hard?: number | null;
+	frontiercode_v2_0?: number | null;
+	terminalbench_science_v0_1?: number | null;
+	gdp_pdf_all_pass?: number | null;
+	aa_briefcase_elo?: number | null;
 	artificial_analysis_coding_index?: number | null;
 	artificial_analysis_math_index?: number | null;
 	mmlu_pro?: number | null;
@@ -57,6 +79,7 @@ interface AAEvaluations {
 	tau2?: number | null;
 	tau_banking?: number | null;
 	automationbench_aa?: number | null;
+	artificial_analysis_omniscience?: number | null;
 	artificial_analysis_omniscience_accuracy?: number | null;
 	artificial_analysis_omniscience_hallucination_rate?: number | null;
 	writing_benchmark_estimated_win_chance?: number | null;
@@ -66,6 +89,10 @@ interface AAEvaluations {
 	writing_benchmark_source_model_name?: string | null;
 	writing_benchmark_version?: string | null;
 }
+
+const AA_VERSION = AA_INTELLIGENCE_VERSION;
+const AA_METHODOLOGY_URL =
+	"https://artificialanalysis.ai/methodology/intelligence-benchmarking";
 
 interface AAPricing {
 	price_1m_blended_3_to_1?: number | null;
@@ -177,45 +204,27 @@ interface BenchmarkDef {
 
 const BENCHMARKS: BenchmarkDef[] = [
 	{
-		key: "gpqa",
-		label: "GPQA Diamond",
-		description: "Graduate-level scientific reasoning",
+		key: "hle_diamond",
+		label: "HLE-Diamond",
+		description: "Humanity's Last Exam Diamond",
 		category: "reasoning",
 	},
 	{
-		key: "hle",
-		label: "HLE",
-		description: "Humanity's Last Exam",
+		key: "critpt_agentic_hard",
+		label: "CritPt v2 (Hard Subset)",
+		description: "Research-level physics problems with tool use",
 		category: "reasoning",
 	},
 	{
-		key: "ifbench",
-		label: "IFBench",
-		description: "Instruction-following benchmark",
-		category: "reasoning",
+		key: "frontiercode_v2_0",
+		label: "FrontierCode-AA 2.0",
+		description: "Advanced coding tasks",
+		category: "coding",
 	},
 	{
-		key: "math_500",
-		label: "MATH 500",
-		description: "Competition-level mathematics",
-		category: "reasoning",
-	},
-	{
-		key: "aime",
-		label: "AIME 2024",
-		description: "American Invitational Mathematics Exam",
-		category: "reasoning",
-	},
-	{
-		key: "aime_25",
-		label: "AIME 2025",
-		description: "American Invitational Mathematics Exam 2025",
-		category: "reasoning",
-	},
-	{
-		key: "scicode",
-		label: "SciCode",
-		description: "Python programming for scientific computing",
+		key: "terminalbench_science_v0_1",
+		label: "Terminal-Bench-Science 0.1",
+		description: "Scientific tasks in a terminal environment",
 		category: "coding",
 	},
 	{
@@ -225,33 +234,9 @@ const BENCHMARKS: BenchmarkDef[] = [
 		category: "coding",
 	},
 	{
-		key: "terminalbench_v2_1",
-		label: "Terminal-Bench 2.1",
-		description: "Agentic coding and terminal use",
-		category: "coding",
-	},
-	{
-		key: "terminalbench_hard",
-		label: "Terminal-Bench Hard",
-		description: "Agentic coding & terminal use",
-		category: "coding",
-	},
-	{
-		key: "livecodebench",
-		label: "LiveCodeBench",
-		description: "Live competitive programming benchmark",
-		category: "coding",
-	},
-	{
-		key: "tau2",
-		label: "TAU-2",
-		description: "Tool use & agentic behavior",
-		category: "tools",
-	},
-	{
-		key: "tau_banking",
-		label: "TAU-Banking",
-		description: "Tool use in banking customer-service tasks",
+		key: "gdp_pdf_all_pass",
+		label: "GDP.pdf",
+		description: "PDF document tasks scored with the all-pass metric",
 		category: "tools",
 	},
 	{
@@ -261,26 +246,14 @@ const BENCHMARKS: BenchmarkDef[] = [
 		category: "tools",
 	},
 	{
-		key: "mmlu_pro",
-		label: "MMLU Pro",
-		description: "Massive Multitask Language Understanding (professional)",
-		category: "knowledge",
-	},
-	{
-		key: "lcr",
-		label: "AA-LCR",
-		description: "Long-context reasoning",
-		category: "knowledge",
-	},
-	{
 		key: "artificial_analysis_omniscience_accuracy",
-		label: "AA-Omniscience Accuracy",
+		label: "AA-Omniscience v1.1 Accuracy",
 		description: "Accuracy on factual knowledge questions",
 		category: "knowledge",
 	},
 	{
 		key: "artificial_analysis_omniscience_hallucination_rate",
-		label: "AA-Omniscience Non-Hallucination Rate",
+		label: "AA-Omniscience v1.1 Non-Hallucination Rate",
 		description:
 			"One minus the hallucination rate on factual knowledge questions",
 		category: "knowledge",
@@ -399,31 +372,17 @@ function formatLatency(val: number | null | undefined): string {
 	return `${val.toFixed(2)}s`;
 }
 
-function isScore(value: unknown): value is number {
-	return typeof value === "number" && Number.isFinite(value) && value >= 0;
-}
-
-function intelligenceEstimate(value: unknown): IntelligenceEstimate | null {
-	if (!value || typeof value !== "object") return null;
-	const estimate = value as Partial<IntelligenceEstimate>;
-	if (
-		!isScore(estimate.score) ||
-		!isScore(estimate.low) ||
-		!isScore(estimate.high) ||
-		estimate.high > 100 ||
-		estimate.low > estimate.score ||
-		estimate.score > estimate.high ||
-		!["low", "medium"].includes(estimate.confidence ?? "") ||
-		typeof estimate.reasoning !== "string" ||
-		!estimate.reasoning.trim() ||
-		!Array.isArray(estimate.sources) ||
-		!estimate.sources.every((source) => typeof source === "string") ||
-		typeof estimate.updated_at !== "string" ||
-		!Number.isFinite(Date.parse(estimate.updated_at))
-	) {
-		return null;
-	}
-	return estimate as IntelligenceEstimate;
+function IntelligenceUnavailable({
+	evals,
+}: Readonly<{ evals: AAEvaluations }>) {
+	const { t } = useTranslation("common");
+	return evals.benchmark_status === "unmatched"
+		? t("aaModelUnmatched", "No matching AA v{{version}} model", {
+				version: AA_VERSION,
+			})
+		: t("aaModelNotEvaluated", "Not evaluated in AA v{{version}}", {
+				version: AA_VERSION,
+			});
 }
 
 function benchmarkSourceUrl(value: string | null | undefined): string | null {
@@ -569,30 +528,83 @@ function EstimateDetails({
 	);
 }
 
+function QualityEstimateDetails({
+	estimate,
+	showSources = false,
+}: Readonly<{ estimate: ModelQualityEstimate; showSources?: boolean }>) {
+	const { t } = useTranslation("common");
+	return (
+		<div className="space-y-2 text-xs">
+			<p className="font-medium">
+				{MODEL_QUALITY_CATEGORIES[estimate.category]}
+			</p>
+			<p>{estimate.criteria}</p>
+			<p className="text-muted-foreground">
+				{t(
+					"modelQualityCategoryScope",
+					"Scores compare models within the same category on a 0–100 scale.",
+				)}
+			</p>
+			<EstimateDetails estimate={estimate} showSources={showSources} />
+		</div>
+	);
+}
+
 export function ModelBenchmarks({
 	evaluation,
-}: Readonly<{ evaluation: IModelEvaluation }>) {
+	type,
+	hideRating = false,
+}: Readonly<{
+	evaluation: IModelEvaluation;
+	type?: IBitTypes;
+	/** Leaves out the headline score and list prices when the surrounding view shows them. */
+	hideRating?: boolean;
+}>) {
 	const { t } = useTranslation("common");
-	const evals = evaluation.evaluations as AAEvaluations | null | undefined;
+	const evals = (evaluation.evaluations ?? {}) as AAEvaluations;
 	const pricing = evaluation.pricing as AAPricing | null | undefined;
-	if (!evals) return null;
-
-	const intelligenceIndex = evals.artificial_analysis_intelligence_index;
-	const codingIndex = evals.artificial_analysis_coding_index;
-	const mathIndex = evals.artificial_analysis_math_index;
-	const estimate = isScore(intelligenceIndex)
-		? null
-		: intelligenceEstimate(evals.intelligence_estimate);
-
-	const hasAAIndices = [intelligenceIndex, codingIndex, mathIndex].some(
-		isScore,
-	);
-	const hasIndices = hasAAIndices || estimate !== null;
-
+	const quality = modelQualityEstimate(evals.quality_estimate, type);
+	const isCurrentVersion =
+		evals.artificial_analysis_intelligence_index_version === AA_VERSION;
+	const intelligenceIndex = currentIntelligenceIndex(evals);
+	const estimate = currentIntelligenceEstimate(evals);
+	const displayedIntelligenceIndex =
+		intelligenceIndex ?? estimate?.score ?? null;
+	const showIntelligence =
+		type === IBitTypes.Llm ||
+		type === IBitTypes.Vlm ||
+		"artificial_analysis_intelligence_index" in evals ||
+		"artificial_analysis_intelligence_index_version" in evals ||
+		"intelligence_estimate" in evals;
+	const reasoningEffort =
+		isCurrentVersion && typeof evals.benchmark_reasoning_effort === "string"
+			? evals.benchmark_reasoning_effort.trim()
+			: null;
+	const verifiedAt =
+		isCurrentVersion &&
+		typeof evals.benchmark_verified_at === "string" &&
+		Number.isFinite(Date.parse(evals.benchmark_verified_at))
+			? new Date(evals.benchmark_verified_at).toISOString().slice(0, 10)
+			: null;
+	const aaSource = isCurrentVersion
+		? (httpsSourceUrl(evals.benchmark_source_url) ??
+			(!evaluation.slug.startsWith("flow-like-estimate-") &&
+			evals.benchmark_status !== "unmatched"
+				? `https://artificialanalysis.ai/models/${encodeURIComponent(evaluation.slug)}`
+				: null))
+		: null;
 	const availableBenchmarks = BENCHMARKS.filter((b) => {
 		const val = evals[b.key];
-		return isScore(val) && val <= 1;
+		return isCurrentVersion && isScore(val) && val <= 1;
 	});
+	const briefcaseElo = isCurrentVersion ? evals.aa_briefcase_elo : null;
+	const omniscienceIndex = isCurrentVersion
+		? evals.artificial_analysis_omniscience
+		: null;
+	const hasBriefcaseElo =
+		typeof briefcaseElo === "number" && Number.isFinite(briefcaseElo);
+	const hasOmniscienceIndex =
+		typeof omniscienceIndex === "number" && Number.isFinite(omniscienceIndex);
 
 	const reasoningBenchmarks = availableBenchmarks.filter(
 		(b) => b.category === "reasoning",
@@ -614,13 +626,18 @@ export function ModelBenchmarks({
 	const writingSource = hasWritingBenchmark
 		? benchmarkSourceUrl(evals.writing_benchmark_source_url)
 		: null;
-	const hasAABenchmarks = hasAAIndices || availableBenchmarks.length > 0;
+	const hasAABenchmarks =
+		intelligenceIndex !== null ||
+		availableBenchmarks.length > 0 ||
+		hasBriefcaseElo ||
+		hasOmniscienceIndex;
 	const publisherBenchmarks = reportedBenchmarks(evals.reported_benchmarks);
 
 	if (
 		!hasAABenchmarks &&
 		!hasWritingBenchmark &&
-		!estimate &&
+		!showIntelligence &&
+		(!quality || hideRating) &&
 		publisherBenchmarks.length === 0
 	) {
 		return null;
@@ -629,64 +646,113 @@ export function ModelBenchmarks({
 	return (
 		<div className="space-y-4">
 			<div className="flex items-center justify-between">
-				<h4 className="text-sm font-medium">{t("benchmarks", "Benchmarks")}</h4>
-				{hasAABenchmarks &&
-					!evaluation.slug.startsWith("flow-like-estimate-") && (
-						<a
-							href={`https://artificialanalysis.ai/models/${encodeURIComponent(evaluation.slug)}`}
-							target="_blank"
-							rel="noopener noreferrer"
-							className="text-[10px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
-						>
-							{t("artificialAnalysis", "Artificial Analysis")}
-							<ExternalLinkIcon className="h-2.5 w-2.5" />
-						</a>
-					)}
+				<h4 className="text-sm font-medium">
+					{quality && !hideRating
+						? t("qualityAndBenchmarks", "Quality and benchmarks")
+						: t("benchmarks", "Benchmarks")}
+				</h4>
+				{aaSource && (showIntelligence || hasAABenchmarks) && (
+					<a
+						href={aaSource}
+						target="_blank"
+						rel="noopener noreferrer"
+						className="text-[10px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
+					>
+						{t("artificialAnalysis", "Artificial Analysis")}
+						<ExternalLinkIcon className="h-2.5 w-2.5" />
+					</a>
+				)}
 			</div>
 
-			{hasIndices && (
-				<div className="grid grid-cols-3 gap-2">
-					{isScore(intelligenceIndex) && (
-						<IndexCard
-							label="Intelligence"
-							value={intelligenceIndex}
-							icon={<BrainIcon className="h-4 w-4" />}
-							color="text-emerald-600 dark:text-emerald-400"
-							bgColor="bg-emerald-500/5 border-emerald-500/20"
-						/>
-					)}
-					{estimate && (
-						<IndexCard
-							label={t("estimatedIntelligence", "Estimated intelligence")}
-							value={estimate.score}
-							icon={<BrainIcon className="h-4 w-4" />}
-							color="text-amber-600 dark:text-amber-400"
-							bgColor="bg-amber-500/5 border-amber-500/20 border-dashed"
-						/>
-					)}
-					{isScore(codingIndex) && (
-						<IndexCard
-							label="Coding"
-							value={codingIndex}
-							icon={<CodeIcon className="h-4 w-4" />}
-							color="text-blue-600 dark:text-blue-400"
-							bgColor="bg-blue-500/5 border-blue-500/20"
-						/>
-					)}
-					{isScore(mathIndex) && (
-						<IndexCard
-							label="Math"
-							value={mathIndex}
-							icon={<span className="text-sm font-bold">∑</span>}
-							color="text-violet-600 dark:text-violet-400"
-							bgColor="bg-violet-500/5 border-violet-500/20"
-						/>
-					)}
+			{quality && !hideRating && (
+				<div className="rounded-lg border border-dashed p-3 space-y-3 bg-amber-500/5">
+					<div className="flex items-center justify-between gap-3">
+						<h5 className="text-xs font-medium">
+							{t("estimatedQuality", "Estimated quality")}
+						</h5>
+						<span className="font-bold tabular-nums text-amber-700 dark:text-amber-400">
+							{quality.score.toFixed(0)}/100
+						</span>
+					</div>
+					<QualityEstimateDetails estimate={quality} showSources />
 				</div>
 			)}
-			{estimate && (
-				<div className="rounded-lg border border-dashed p-3 bg-amber-500/5">
-					<EstimateDetails estimate={estimate} showSources />
+			{showIntelligence && (
+				<div className="rounded-lg border p-3 space-y-3">
+					{!hideRating && displayedIntelligenceIndex !== null && (
+						<IndexCard
+							label={`${estimate ? "Estimated " : ""}AA v${AA_VERSION} Intelligence Index`}
+							value={displayedIntelligenceIndex}
+							icon={<BrainIcon className="h-4 w-4" />}
+							color={
+								estimate
+									? "text-amber-600 dark:text-amber-400"
+									: "text-emerald-600 dark:text-emerald-400"
+							}
+							bgColor={
+								estimate
+									? "bg-amber-500/5 border-amber-500/20 border-dashed"
+									: "bg-emerald-500/5 border-emerald-500/20"
+							}
+						/>
+					)}
+					{displayedIntelligenceIndex === null && (
+						<p className="text-xs font-medium text-muted-foreground">
+							<IntelligenceUnavailable evals={evals} />
+						</p>
+					)}
+					{estimate && !hideRating && (
+						<EstimateDetails estimate={estimate} showSources />
+					)}
+					{isCurrentVersion && evals.benchmark_status === "measured" && (
+						<p className="text-xs text-muted-foreground">
+							{t("benchmarkReasoningEffort", "Evaluated reasoning effort:")}{" "}
+							{reasoningEffort || t("notSpecified", "Not specified")}
+						</p>
+					)}
+					{verifiedAt && (
+						<p className="text-[10px] text-muted-foreground">
+							{t("benchmarkVerifiedAt", "Source checked {{date}}", {
+								date: verifiedAt,
+							})}
+						</p>
+					)}
+					<p className="text-xs text-muted-foreground">
+						{t(
+							"aaIntelligenceScope",
+							"This index combines weighted benchmark tasks. It is not a universal measure of model quality; language, task and reasoning effort affect results.",
+						)}{" "}
+						<a
+							href={AA_METHODOLOGY_URL}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="underline hover:text-foreground"
+						>
+							{t("benchmarkMethodology", "Methodology")}
+						</a>
+					</p>
+				</div>
+			)}
+			{(hasBriefcaseElo || hasOmniscienceIndex) && (
+				<div className="grid grid-cols-2 gap-2">
+					{hasBriefcaseElo && (
+						<IndexCard
+							label="AA-Briefcase v1.1 (Elo)"
+							value={briefcaseElo}
+							icon={<WrenchIcon className="h-4 w-4" />}
+							color="text-cyan-600 dark:text-cyan-400"
+							bgColor="bg-cyan-500/5"
+						/>
+					)}
+					{hasOmniscienceIndex && (
+						<IndexCard
+							label="AA-Omniscience v1.1 Index"
+							value={omniscienceIndex}
+							icon={<BookOpenIcon className="h-4 w-4" />}
+							color="text-amber-600 dark:text-amber-400"
+							bgColor="bg-amber-500/5"
+						/>
+					)}
 				</div>
 			)}
 
@@ -808,7 +874,7 @@ export function ModelBenchmarks({
 					{t("benchmarkSources", "Benchmark sources:")}{" "}
 					{hasAABenchmarks && (
 						<a
-							href="https://artificialanalysis.ai/"
+							href={aaSource ?? AA_METHODOLOGY_URL}
 							target="_blank"
 							rel="noopener noreferrer"
 							className="underline hover:text-foreground transition-colors"
@@ -871,21 +937,31 @@ export function IntelligenceIndexBadge({
 	evaluation,
 }: Readonly<{ evaluation?: IModelEvaluation | null }>) {
 	const { t } = useTranslation("common");
-	if (!evaluation?.evaluations) return null;
-	const evals = evaluation.evaluations as AAEvaluations;
-	const measuredIndex = evals.artificial_analysis_intelligence_index;
-	const estimate = isScore(measuredIndex)
-		? null
-		: intelligenceEstimate(evals.intelligence_estimate);
-	const idx = isScore(measuredIndex) ? measuredIndex : estimate?.score;
-	if (idx === undefined) return null;
+	const evals = (evaluation?.evaluations ?? {}) as AAEvaluations;
+	const estimate = currentIntelligenceEstimate(evals);
+	const idx = currentIntelligenceIndex(evals) ?? estimate?.score ?? null;
+	if (idx === null) {
+		return (
+			<Badge
+				variant="outline"
+				className="text-[10px] px-1.5 py-0 min-h-5 text-muted-foreground border-dashed whitespace-normal"
+			>
+				<IntelligenceUnavailable evals={evals} />
+			</Badge>
+		);
+	}
 
 	const style = intelligenceBadgeStyle(idx);
 	const label = estimate
-		? t("estimatedIntelligence", "Estimated intelligence")
+		? t(
+				"estimatedVersionedArtificialAnalysisIntelligenceIndex",
+				"Estimated AA v{{version}} Intelligence Index",
+				{ version: AA_VERSION },
+			)
 		: t(
-				"artificialAnalysisIntelligenceIndex",
-				"Artificial Analysis Intelligence Index",
+				"versionedArtificialAnalysisIntelligenceIndex",
+				"Artificial Analysis Intelligence Index v{{version}}",
+				{ version: AA_VERSION },
 			);
 
 	return (
@@ -897,8 +973,7 @@ export function IntelligenceIndexBadge({
 					className={`text-[10px] px-1.5 py-0 h-5 tabular-nums gap-0.5 ${style.bg} ${style.text} ${style.border}`}
 				>
 					<BrainIcon className="h-2.5 w-2.5" />
-					{estimate && t("estimatedScorePrefix", "Est.")}
-					{estimate && " "}
+					{estimate && `${t("estimatedScorePrefix", "Est.")} `}AA v{AA_VERSION}{" "}
 					{idx.toFixed(1)}
 				</Badge>
 			</TooltipTrigger>
@@ -908,6 +983,41 @@ export function IntelligenceIndexBadge({
 			>
 				<p className="text-xs">{label}</p>
 				{estimate && <EstimateDetails estimate={estimate} />}
+			</TooltipContent>
+		</Tooltip>
+	);
+}
+
+export function ModelScoreBadge({
+	evaluation,
+	type,
+}: Readonly<{ evaluation?: IModelEvaluation | null; type: IBitTypes }>) {
+	const { t } = useTranslation("common");
+	if (type === IBitTypes.Llm || type === IBitTypes.Vlm) {
+		return <IntelligenceIndexBadge evaluation={evaluation} />;
+	}
+	const quality = modelQualityEstimate(
+		evaluation?.evaluations?.quality_estimate,
+		type,
+	);
+	if (!quality) return null;
+	const label = t("estimatedQuality", "Estimated quality");
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Badge
+					variant="outline"
+					aria-label={`${label}: ${quality.score.toFixed(0)}/100 (${MODEL_QUALITY_CATEGORIES[quality.category]})`}
+					className="text-[10px] px-1.5 py-0 h-5 tabular-nums gap-1 border-dashed bg-amber-500/5 text-amber-700 dark:text-amber-400 border-amber-500/30"
+				>
+					<GaugeIcon className="h-2.5 w-2.5" />
+					{t("estimatedQualityShort", "Est. quality")}{" "}
+					{quality.score.toFixed(0)}/100
+				</Badge>
+			</TooltipTrigger>
+			<TooltipContent side="top" className="max-w-80 space-y-2">
+				<p className="text-xs font-medium">{label}</p>
+				<QualityEstimateDetails estimate={quality} />
 			</TooltipContent>
 		</Tooltip>
 	);

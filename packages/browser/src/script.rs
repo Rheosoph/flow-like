@@ -169,21 +169,21 @@ struct WorldScope {
 
 enum SearchRoot {
     Scope(String),
-    Document(String),
+    Document(crate::frames::ContextRef),
 }
 
 impl SearchRoot {
     fn call_params(self, declaration: &str, selector: &str, group: &str) -> Value {
         let (key, target) = match self {
-            SearchRoot::Scope(object) => ("objectId", object),
-            SearchRoot::Document(context) => ("uniqueContextId", context),
+            SearchRoot::Scope(object) => ("objectId", Value::String(object)),
+            SearchRoot::Document(context) => context.address(),
         };
         let mut params = json!({
             "functionDeclaration": declaration,
             "arguments": [{"value": selector}],
             "objectGroup": group,
         });
-        params[key] = Value::String(target);
+        params[key] = target;
         params
     }
 }
@@ -532,11 +532,12 @@ impl Frame {
         declaration: &str,
     ) -> crate::Result<Value> {
         let scope = self.world_scope(world).await?;
-        let params = json!({
+        let mut params = json!({
             "functionDeclaration": declaration,
-            "uniqueContextId": &*scope.context.unique_id,
             "returnByValue": true,
         });
+        let (key, target) = scope.context.address();
+        params[key] = target;
         let reply = scope.session.send(CALL_METHOD, params).await?;
         evaluation_result(reply, true)
     }
@@ -745,8 +746,7 @@ impl Frame {
     ) -> crate::Result<(Session, SearchRoot)> {
         let Some(scope) = scope else {
             let util = self.world_scope(World::Util).await?;
-            let context = util.context.unique_id.to_string();
-            return Ok((util.session, SearchRoot::Document(context)));
+            return Ok((util.session, SearchRoot::Document(util.context)));
         };
         self.check_owns(scope)?;
         let node = scope
@@ -763,14 +763,15 @@ async fn call_wrapper(
     arguments: Vec<Value>,
 ) -> crate::Result<Value> {
     let group = ObjectGroup::new("call");
-    let params = json!({
+    let mut params = json!({
         "functionDeclaration": CALL_WRAPPER,
-        "uniqueContextId": &*scope.context.unique_id,
         "arguments": arguments,
         "awaitPromise": true,
         "objectGroup": group.on(&scope.session),
         "serializationOptions": {"serialization": "deep"},
     });
+    let (key, target) = scope.context.address();
+    params[key] = target;
     let now = tokio::time::Instant::now();
     let budget = SCRIPT_TIMEOUT.min(attempt.deadline.saturating_duration_since(now));
     let call = scope.session.send(CALL_METHOD, params);

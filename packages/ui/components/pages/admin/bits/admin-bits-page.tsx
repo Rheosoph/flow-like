@@ -21,6 +21,7 @@ import { bitMetadata, record } from "../../../bits/bit-editor-model";
 import { Badge } from "../../../ui/badge";
 import { Button } from "../../../ui/button";
 import { Input } from "../../../ui/input";
+import { BitRatingBadge } from "../../../ui/model-rating";
 import { Skeleton } from "../../../ui/skeleton";
 
 export function AdminBitsPage() {
@@ -216,6 +217,7 @@ export function AdminBitsPage() {
 												<Badge variant="secondary" className="text-[10px]">
 													{bit.type}
 												</Badge>
+												<BitRatingBadge bit={bit} />
 											</div>
 											<p className="mt-1 truncate text-xs text-muted-foreground">
 												{meta.description || bit.id}

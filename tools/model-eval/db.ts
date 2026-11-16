@@ -133,6 +133,40 @@ export async function updateBitParameters(
 	});
 }
 
+function intelligenceIndexVersion(evaluations: unknown): {
+	label: string;
+	parts: number[];
+} | null {
+	if (!evaluations || typeof evaluations !== "object") return null;
+	const value = (evaluations as Record<string, unknown>)
+		.artificial_analysis_intelligence_index_version;
+	if (typeof value !== "string" && typeof value !== "number") return null;
+	const label = String(value).trim();
+	const match = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?$/i.exec(label);
+	if (!match) return null;
+	const parts = match.slice(1).map((part) => Number(part ?? 0));
+	return parts.every(Number.isSafeInteger) ? { label, parts } : null;
+}
+
+/** Keep older feeds from replacing a current score or its provenance. */
+export function assertIntelligenceIndexVersionUpdate(
+	existingEvaluations: unknown,
+	incomingEvaluations: unknown,
+	slug: string,
+): void {
+	const current = intelligenceIndexVersion(existingEvaluations);
+	if (!current || current.parts[0] < 5) return;
+	const incoming = intelligenceIndexVersion(incomingEvaluations);
+	const downgradeError = new Error(
+		`Refusing to replace ${slug} Intelligence Index v${current.label.replace(/^v/i, "")} with ${incoming ? `v${incoming.label.replace(/^v/i, "")}` : "an unversioned or invalid evaluation"}. Refresh current scores through refresh-aa-v5.ts.`,
+	);
+	if (!incoming) throw downgradeError;
+	for (let index = 0; index < current.parts.length; index++) {
+		if (incoming.parts[index] > current.parts[index]) return;
+		if (incoming.parts[index] < current.parts[index]) throw downgradeError;
+	}
+}
+
 export async function upsertLlmModel(aaModel: AAModel): Promise<void> {
 	// These catalog records are maintained from research, outside the AA feed.
 	if (isCatalogEstimateSlug(aaModel.slug)) return;
@@ -149,9 +183,24 @@ export async function upsertLlmModel(aaModel: AAModel): Promise<void> {
 		medianTimeToFirstAnswerToken: aaModel.median_time_to_first_answer_token,
 	};
 
-	await db.llmModel.upsert({
-		where: { slug: aaModel.slug },
-		create: { slug: aaModel.slug, ...data },
-		update: data,
-	});
+	// A concurrent refresh must not insert a newer score between the check and write.
+	await db.$transaction(
+		async (transaction) => {
+			const existing = await transaction.llmModel.findUnique({
+				where: { slug: aaModel.slug },
+				select: { evaluations: true },
+			});
+			assertIntelligenceIndexVersionUpdate(
+				existing?.evaluations,
+				aaModel.evaluations,
+				aaModel.slug,
+			);
+			await transaction.llmModel.upsert({
+				where: { slug: aaModel.slug },
+				create: { slug: aaModel.slug, ...data },
+				update: data,
+			});
+		},
+		{ isolationLevel: "Serializable" },
+	);
 }

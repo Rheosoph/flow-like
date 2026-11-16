@@ -2,7 +2,7 @@
 use std::ffi::OsString;
 use std::path::Path;
 
-use crate::launch::{Executable, Flavor, LaunchOptions};
+use crate::launch::{AutomationNotice, Executable, Flavor, LaunchOptions};
 
 const DISABLED_FEATURES: &str = "--disable-features=IgnoreDuplicateNavs,Prewarm";
 
@@ -30,6 +30,11 @@ const BASE_SWITCHES: &[&str] = &[
     "--use-mock-keychain",
     "--remote-debugging-port=0",
 ];
+
+/// Left out when the automation notice is withheld: both are visible to pages.
+const DECLARED_ONLY: &[&str] = &["--enable-automation", "--disable-popup-blocking"];
+/// The debugging port alone sets `navigator.webdriver`; this clears it.
+const WITHHELD_SWITCH: &str = "--disable-blink-features=AutomationControlled";
 
 const LIFELINE_SWITCH: &str = "--remote-debugging-pipe";
 const PROXY_RULE_SELECTORS: &[&str] = &["http", "https", "ftp", "socks"];
@@ -95,8 +100,10 @@ fn args_for(
     temporary: bool,
     os: HostOs,
 ) -> Vec<OsString> {
+    let withheld = options.automation_notice == AutomationNotice::Withheld;
     let mut args: Vec<OsString> = BASE_SWITCHES
         .iter()
+        .filter(|switch| !(withheld && DECLARED_ONLY.contains(switch)))
         .map(|switch| {
             if os == HostOs::Macos && *switch == DISABLED_FEATURES {
                 // Chrome's startup clone hard-links its installed executable, triggering
@@ -108,6 +115,9 @@ fn args_for(
             }
         })
         .collect();
+    if withheld {
+        args.push(WITHHELD_SWITCH.into());
+    }
     let mut user_data_dir = OsString::from("--user-data-dir=");
     user_data_dir.push(profile_dir.as_os_str());
     args.push(user_data_dir);
@@ -226,7 +236,37 @@ mod tests {
             cache_dir: PathBuf::from("/cache"),
             page_load_timeout: Duration::from_secs(300),
             launch_timeout: Duration::from_secs(30),
+            automation_notice: AutomationNotice::Declared,
         }
+    }
+
+    #[test]
+    fn a_withheld_notice_drops_the_page_visible_switches_and_hides_webdriver() {
+        let mut options = options();
+        options.headless = false;
+        options.automation_notice = AutomationNotice::Withheld;
+        let args = rendered(&args_for(
+            Flavor::Chrome,
+            &options,
+            Path::new("/profiles/bot"),
+            false,
+            HostOs::Unix,
+        ));
+        let expected: Vec<String> = BASE_SWITCHES
+            .iter()
+            .filter(|switch| !DECLARED_ONLY.contains(switch))
+            .chain(&[
+                WITHHELD_SWITCH,
+                "--user-data-dir=/profiles/bot",
+                "--window-size=1920,1080",
+                "--remote-debugging-pipe",
+            ])
+            .map(|arg| (*arg).to_owned())
+            .collect();
+        assert_eq!(args, expected);
+        assert!(!args.iter().any(|arg| arg == "--enable-automation"));
+        assert!(!args.iter().any(|arg| arg == "--disable-popup-blocking"));
+        assert!(args.iter().any(|arg| arg == "--remote-debugging-port=0"));
     }
 
     fn rendered(args: &[OsString]) -> Vec<String> {

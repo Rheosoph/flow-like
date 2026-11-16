@@ -257,7 +257,6 @@ const PROP_SHAPES: &[(&str, &str, &str)] = &[
 
 /// Props the renderers ignore today. They stay valid on the wire but are left out of prompts.
 const UNRENDERED_PROPS: &[(&str, &str)] = &[
-    ("card", "headerImage"),
     ("card", "headerIcon"),
     ("image", "aspectRatio"),
     ("markdown", "allowHtml"),
@@ -368,10 +367,7 @@ const CHAT_PROMPT_PROPS: &[(&str, &[&str])] = &[
         ],
     ),
     ("link", &["href", "label", "variant", "underline"]),
-    (
-        "card",
-        &["title", "description", "footer", "variant", "padding"],
-    ),
+    ("card", &["title", "description", "headerImage", "footer"]),
     (
         "button",
         &[
@@ -909,19 +905,23 @@ fn prop_signature(prop: &PropSpec) -> String {
 }
 
 const CHAT_UI_PROMPT_RULES: &str = r#"### Interactive UI (`a2ui` fence)
-Reach for an `a2ui` fence whenever the reader will scan rather than read: key figures (weather, prices, KPIs, status), options to compare or pick from, a plan or timeline, a small dashboard, or a short form whose values feed your next turn. Lead with one sentence of prose, then the fence; keep explanations and single facts in Markdown. Tag the fence `a2ui`, never `json`.
+Build an `a2ui` fence whenever the reader will scan or choose rather than read: several items that share attributes (products, models, places, offers, results), key figures (prices, weather, KPIs, status), pictures, a plan or timeline, a small dashboard, or a short form whose values feed your next turn. It replaces the Markdown list or table; don't repeat its content in prose. Lead with one sentence, then the fence; explanations and single facts stay Markdown. Tag the fence `a2ui`, never `json`.
+Make it look finished: one card per item in a `grid`, its picture as `headerImage`, the key figure in large semibold text, a `row` of badges for facts, and a button for the next step.
 
 One JSON object per line, root first: `{"id":"…","type":"…",…props}`. Values are plain JSON; `children` lists child ids; `style.className` takes Tailwind theme classes (bg-card, bg-muted, text-muted-foreground, border, rounded-xl, p-4, gap-3, w-full). Cards do not space their children: give a card one `column` child with a `gap`. Finish each line before the next and close the fence before prose; lines render as they arrive.
 ```a2ui
 {"id":"root","type":"column","gap":"12px","children":["title","cards"]}
 {"id":"title","type":"text","content":"Recipe Remix","variant":"heading","size":"xl"}
 {"id":"cards","type":"grid","columns":2,"gap":"12px","children":["c1"]}
-{"id":"c1","type":"card","title":"Bean & Rice Skillet","description":"25 min · serves 2","children":["c1-body"]}
-{"id":"c1-body","type":"column","gap":"8px","children":["c1-tag","c1-go"]}
-{"id":"c1-tag","type":"badge","content":"Vegetarian","variant":"secondary"}
+{"id":"c1","type":"card","title":"Bean & Rice Skillet","description":"25 min · serves 2","headerImage":"https://example.com/skillet.jpg","children":["c1-body"]}
+{"id":"c1-body","type":"column","gap":"10px","children":["c1-cost","c1-tags","c1-go"]}
+{"id":"c1-cost","type":"text","content":"€3.40 per serving","size":"lg","weight":"semibold"}
+{"id":"c1-tags","type":"row","gap":"6px","children":["c1-veg","c1-fast"]}
+{"id":"c1-veg","type":"badge","content":"Vegetarian"}
+{"id":"c1-fast","type":"badge","content":"One pan","variant":"secondary"}
 {"id":"c1-go","type":"button","label":"Remix this","action":{"name":"send_message","context":{"message":"Remix the bean skillet"}}}
 ```
-Actions: `send_message` posts `context.message` as the user's next message (`{{id}}` inserts that input's value); `external_link` opens `context.url`. Nothing else runs. Use only verified https image/link URLs.
+Actions: `send_message` posts `context.message` as the user's next message (`{{id}}` inserts that input's value); `external_link` opens `context.url`. Nothing else runs. Pictures (`headerImage`, image `src`): a verified https URL, or a stored file's `storage://` link exactly as a tool returned it; leave them out rather than guess. Links: verified https only.
 Components (`*` required, `(a|b)` values, `[…]` item fields):"#;
 
 /// The prompt section that teaches a model the `a2ui` chat fence: rules, one example and the
@@ -1561,7 +1561,7 @@ mod tests {
         assert_eq!(section.matches("```a2ui").count(), 1);
         assert!(section.contains("columns*=[{id,header,accessor}]"));
         for hidden in [
-            "headerImage",
+            "headerIcon",
             "allowHtml",
             "searchable",
             "listStyle",

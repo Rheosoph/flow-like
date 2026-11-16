@@ -238,6 +238,7 @@ mod harness {
             cache_dir: std::env::temp_dir().join("flow-like-lifecycle-cache"),
             page_load_timeout: Duration::from_secs(30),
             launch_timeout: Duration::from_secs(10),
+            automation_notice: Default::default(),
         }
     }
 

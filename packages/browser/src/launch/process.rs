@@ -1221,6 +1221,7 @@ mod tests {
             cache_dir: PathBuf::from("/nonexistent/cache"),
             page_load_timeout: Duration::from_secs(30),
             launch_timeout: Duration::from_secs(30),
+            automation_notice: Default::default(),
         }
     }
 
