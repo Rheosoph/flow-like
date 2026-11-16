@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { IRole } from "../../lib/schema/llm/history";
 import {
 	ASSISTANT_BOT_ID,
+	answersInThisChat,
 	botConversationId,
 	conversationBotId,
 	desktopChatBotArgs,
@@ -418,6 +419,34 @@ describe("the chat's loading state while a conversation is read", () => {
 		} finally {
 			reads.spy.mockRestore();
 		}
+	});
+});
+
+describe("where a bot's turn runs", () => {
+	const bot = (location: "server" | "desktop" | "device", extra = {}) => ({
+		location,
+		system: null,
+		...extra,
+	});
+
+	test("server and built-in bots answer in any chat", () => {
+		expect(answersInThisChat(bot("server"), false)).toBe(true);
+		expect(answersInThisChat(bot("server"), true)).toBe(true);
+		expect(
+			answersInThisChat(bot("server", { system: "flux" as const }), false),
+		).toBe(true);
+		expect(answersInThisChat(undefined, false)).toBe(true);
+	});
+
+	test("a desktop bot answers in the owner's app, never in the browser", () => {
+		expect(answersInThisChat(bot("desktop"), true)).toBe(true);
+		expect(answersInThisChat(bot("desktop"), false)).toBe(false);
+		expect(answersInThisChat(bot("desktop", { local: true }), true)).toBe(true);
+	});
+
+	test("a device bot answers only on its device", () => {
+		expect(answersInThisChat(bot("device"), true)).toBe(false);
+		expect(answersInThisChat(bot("device"), false)).toBe(false);
 	});
 });
 

@@ -9,6 +9,7 @@ import {
 
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
+import { useQueryClient } from "@tanstack/react-query";
 import { FileCode2Icon, WorkflowIcon } from "lucide-react";
 import {
 	type ReactNode,
@@ -20,6 +21,7 @@ import {
 } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
+import { inboxKeys } from "../../hooks/use-inbox";
 import {
 	IBitTypes,
 	IRole,
@@ -54,11 +56,13 @@ import {
 	desktopInteractiveArgs,
 	ensureBotTarget,
 	registerBotInbox,
+	sendHostedMessage,
 	sendInteractiveMessage,
 	webInteractiveBody,
 } from "../../state/global-chat/bot-inbox";
 import {
 	ASSISTANT_BOT_ID,
+	answersInThisChat,
 	conversationBotId,
 	currentConversationId,
 	desktopChatBotArgs,
@@ -85,7 +89,6 @@ import {
 	useChatPreparationStore,
 } from "../../state/global-chat/global-chat-preparation";
 import {
-	AGENT_MODEL_KEY,
 	type GlobalChatRun,
 	type InlineAppChat,
 	type InlineAppPage,
@@ -149,7 +152,10 @@ import type {
 	ChatBoxThinking,
 	ISendMessageFunction,
 } from "../interfaces/chat-default/chatbox";
-import type { MessageInlineContent } from "../interfaces/chat-default/message";
+import {
+	type MessageInlineContent,
+	ThinkingIndicator,
+} from "../interfaces/chat-default/message";
 import { submitInteractionResponse } from "../interfaces/chat-default/respond-interaction";
 import { useStorageAttachSource } from "../storage/use-storage-attach-source";
 import {
@@ -168,7 +174,11 @@ import { InlineAppChatCard } from "./inline-app-chat-card";
 import { InlineAppPageCard } from "./inline-app-page-card";
 import { InlineAppSurfaceCard } from "./inline-app-surface-card";
 import { InlineToolPrompt, ToolPromptElsewhere } from "./inline-tool-prompt";
-import { resolveModelSelection, selectedModelLabel } from "./model-selection";
+import {
+	rememberedModelForProvider,
+	resolveModelSelection,
+	selectedModelLabel,
+} from "./model-selection";
 import { PendingComponentsCard } from "./pending-components-card";
 import { useHydrateAgentSelection } from "./use-agent-persistence";
 import {
@@ -176,6 +186,7 @@ import {
 	useGlobalChatBot,
 } from "./use-global-chat-bot";
 import { useGlobalChatRunWidgetAction } from "./use-global-widget-action";
+import { useHostedBotTurnText } from "./use-hosted-bot-turn";
 import { useOpenAppId } from "./use-open-app-id";
 import { usePageSnapshotSource } from "./use-page-snapshot-source";
 
@@ -359,6 +370,15 @@ export function GlobalChatBody({
 	const chatBot = useGlobalChatBot();
 	const chatBotNameRef = useRef(chatBot.name);
 	chatBotNameRef.current = chatBot.name;
+	const answersHere = answersInThisChat(chatBot.bot, isTauri());
+	const answersHereRef = useRef(answersHere);
+	answersHereRef.current = answersHere;
+	const hostedTurnText = useHostedBotTurnText(
+		activeConversationId,
+		chatBot,
+		!answersHere,
+	);
+	const queryClient = useQueryClient();
 	const chatConfig = useBotChatConfig(chatBot);
 	const noteBotId = chatBot.bot?.id ?? chatBot.botId;
 	const botNotes = useMemo<IChatGroup | undefined>(
@@ -635,15 +655,10 @@ export function GlobalChatBody({
 		copilotSDK.start,
 	]);
 
-	// Pick a sensible default model whenever the model list for the active provider
-	// changes — but re-apply the user's remembered pick the moment the catalog that
-	// offers it loads, so a slow/fallback catalog can't strand them on another model.
-	// Uses the plain setter throughout: none of this is a new user choice.
+	// Explicit Bits remain selected while local and remote catalogs catch up.
+	// Automatic defaults use the plain setter to leave the saved choice intact.
 	useEffect(() => {
-		let remembered: string | null = null;
-		try {
-			remembered = localStorage.getItem(AGENT_MODEL_KEY);
-		} catch {}
+		const remembered = rememberedModelForProvider(normalizedProvider);
 		if (isAgent) {
 			const models = copilotSDK.models;
 			const nextModelId = resolveModelSelection({
@@ -655,17 +670,17 @@ export function GlobalChatBody({
 			if (nextModelId !== null) setSelectedModelId(nextModelId);
 			return;
 		}
-		if (!llmBits.data) return;
-		if (bitsModels.length === 0) {
-			if (selectedModelId) setSelectedModelId("");
+		// A successful listing can still contain only the local cache. An explicit
+		// Bit choice stays exact; the native resolver reports if it is unavailable.
+		if (remembered) {
+			if (remembered !== selectedModelId) setSelectedModelId(remembered);
 			return;
 		}
-		if (
-			remembered &&
-			remembered !== selectedModelId &&
-			bitsModels.some((bit) => bit.id === remembered)
-		) {
-			setSelectedModelId(remembered);
+		// A profile catalog can arrive before the custom library. Keep the user's
+		// selected Bit until both sources can establish whether it is available.
+		if (!llmBits.isSuccess || !customBits.isSuccess) return;
+		if (bitsModels.length === 0) {
+			if (selectedModelId) setSelectedModelId("");
 			return;
 		}
 		if (!bitsModels.some((bit) => bit.id === selectedModelId)) {
@@ -674,9 +689,11 @@ export function GlobalChatBody({
 		}
 	}, [
 		isAgent,
+		normalizedProvider,
 		copilotSDK.models,
 		copilotSDK.hasLoadedModelCatalog,
-		llmBits.data,
+		llmBits.isSuccess,
+		customBits.isSuccess,
 		bitsModels,
 		selectedModelId,
 		setSelectedModelId,
@@ -764,6 +781,7 @@ export function GlobalChatBody({
 			// move it, fill it from another chat's limit or name it after another bot.
 			const sessionId = state.activeConversationId;
 			const botName = chatBotNameRef.current;
+			const answersHere = answersHereRef.current;
 			// Concurrency is allowed up to the cap; past it the message is queued rather than
 			// dropped, and drains as soon as a turn finishes.
 			const atCapacity = () =>
@@ -884,14 +902,38 @@ export function GlobalChatBody({
 				isAgentBackendProvider(normalizeAIProvider(agentSelection.provider)),
 				agentSelection.reasoningEffort,
 			);
+			if (!answersHere) {
+				if (nativeRequest)
+					throw new Error(
+						`${botName} answers on its own computer, not in this chat.`,
+					);
+				appendMessage(userMessage);
+				const inboxConversation = await sendHostedMessage(
+					sessionId,
+					{ id: userMessage.id, text: trimmed },
+					allFiles,
+				);
+				void persistGlobalChatMessage(userMessage);
+				void persistGlobalChatSession(sessionId, sessionTitle);
+				preparation?.finish();
+				if (inboxConversation)
+					void queryClient.invalidateQueries({
+						queryKey: inboxKeys.turns(inboxConversation),
+					});
+				else
+					toast.error(
+						t("hostedBotNotReached", "{{name}} didn't get your message.", {
+							name: botName,
+						}),
+					);
+				return undefined;
+			}
 			if (!nativeRequest) {
 				appendMessage(userMessage);
 				// A bot chat lives in the inbox once its target resolves; saved before that, the
 				// message would stay on this device only.
 				await ensureBotTarget(sessionId);
 				checkCurrent();
-				void persistGlobalChatMessage(userMessage);
-				void persistGlobalChatSession(sessionId, sessionTitle);
 			}
 
 			const responseMessage = makeGlobalChatMessage(
@@ -954,8 +996,6 @@ export function GlobalChatBody({
 			}
 			if (nativeRequest) {
 				appendMessage(userMessage);
-				void persistGlobalChatMessage(userMessage);
-				void persistGlobalChatSession(sessionId, sessionTitle);
 			}
 			const authUser = authRef.current?.user;
 			const userContext = publicNameFromClaims(authUser?.profile);
@@ -1016,6 +1056,10 @@ export function GlobalChatBody({
 				allFiles,
 			);
 			checkCurrent();
+			// Resolving the inbox imports saved history. Save this message only after sending it,
+			// or an import can consume its id without creating the interactive turn it needs.
+			void persistGlobalChatMessage(userMessage);
+			void persistGlobalChatSession(sessionId, sessionTitle);
 			// Without its stored transcript the host could not tell the run is a live call; the
 			// call posts the utterance itself and a host answers it.
 			if (voice && !interactive) return;
@@ -1057,7 +1101,7 @@ export function GlobalChatBody({
 				// Desktop drives the run over a Tauri Channel (resumable via the Rust registry); the
 				// browser drives the same run over HTTP+SSE, with tool requests routed to the mounted
 				// tool bridge via the registry. Both feed the shared parser identically.
-				start: async (onChunk) => {
+				start: async (onChunk, onModel) => {
 					await backend.prepareFlowpilotRun?.();
 					// Lazy transport imports must not open a race after the final identity check.
 					checkCurrent();
@@ -1147,18 +1191,19 @@ export function GlobalChatBody({
 										...webInteractiveBody(interactive),
 									},
 								})
-					)(onChunk);
+					)(onChunk, onModel);
 				},
 			});
 			return responseMessage;
 		},
-		[appendMessage, backend, variant, getNativeScope, t],
+		[appendMessage, backend, variant, getNativeScope, t, queryClient],
 	);
 	useEffect(() => {
 		if (!dockBotId) return;
 		const canTake = () => {
 			const state = useGlobalChatStore.getState();
 			return (
+				answersHereRef.current &&
 				conversationBotId(state.activeConversationId) === dockBotId &&
 				botHasInboxHistory(dockBotId) &&
 				!isGlobalChatAtRunCapacity(state, state.activeConversationId)
@@ -1837,7 +1882,14 @@ export function GlobalChatBody({
 								showAiDisclosure
 								inlineContent={inlineArtifacts}
 								messageInlineContent={inlineCards.byMessage}
-								inlinePrompt={promptSlot}
+								inlinePrompt={
+									promptSlot ??
+									(hostedTurnText ? (
+										<output aria-live="polite" className="block px-1">
+											<ThinkingIndicator text={hostedTurnText} />
+										</output>
+									) : undefined)
+								}
 								group={botNotes}
 							/>
 						</BotFileAssets>

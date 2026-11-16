@@ -1,3 +1,5 @@
+import type { IBot } from "../backend-state/bot-state";
+
 /**
  * Every bot keeps one continuous conversation in the global chat, addressed by the bot's id, so the
  * id alone says which bot a conversation, and every turn sent in it, belongs to. Every other
@@ -23,6 +25,19 @@ export function conversationBotId(conversationId: string): string | null {
 
 export function isBotConversation(conversationId: string): boolean {
 	return conversationBotId(conversationId) !== null;
+}
+
+/**
+ * Whether this chat runs the bot's turns itself. A desktop bot runs in its owner's apps, a device
+ * bot only on its device; anywhere else its own host answers what the chat writes to its inbox,
+ * with that machine's models, network and keys.
+ */
+export function answersInThisChat(
+	bot: Pick<IBot, "local" | "system" | "location"> | undefined,
+	appHost: boolean,
+): boolean {
+	if (!bot || bot.local || bot.system || bot.location === "server") return true;
+	return bot.location === "desktop" && appHost;
 }
 
 /** The desktop `global_chat` argument naming a turn's bot; Flux's turns name Flux. */

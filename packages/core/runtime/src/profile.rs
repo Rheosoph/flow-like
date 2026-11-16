@@ -501,6 +501,64 @@ impl Profile {
             .await
     }
 
+    /// Resolve a model the user explicitly selected for this run. An unavailable selection is
+    /// reported to the caller; saved preferences and automatic selection keep their fallback path.
+    /// Custom models may come from the user's hydrated library without profile activation.
+    pub async fn resolve_explicit_completion_model(
+        &self,
+        model_id: &str,
+        capabilities: CompletionModelCapabilities,
+        devices: Option<&DeviceModelProbe>,
+        http_client: Arc<HTTPClient>,
+    ) -> Result<Bit> {
+        let bit = self.find_bit(model_id, http_client).await?;
+        if !matches!(bit.bit_type, BitTypes::Llm | BitTypes::Vlm) {
+            return Err(anyhow!(
+                "Selected model `{model_id}` is not a completion model. Choose a language model."
+            ));
+        }
+        let provider = bit.try_to_provider().ok_or_else(|| {
+            anyhow!(
+                "Selected model `{model_id}` has invalid completion parameters. Check its model settings."
+            )
+        })?;
+        let devices = devices.map(DeviceModelProbe::for_selection);
+        if let Some(devices) = &devices
+            && let Some(available) = devices.availability(&bit).await
+        {
+            return if available {
+                Ok(bit)
+            } else {
+                Err(anyhow!(
+                    "Selected model `{model_id}` is unavailable on its device. Connect that device or choose another model."
+                ))
+            };
+        }
+        if bit.is_device_model() {
+            return Err(anyhow!(
+                "Selected model `{model_id}` needs a device connection. Connect that device or choose another model."
+            ));
+        }
+        if flow_like_model_provider::llm::external::ExternalProvider::from_provider_name(
+            &provider.provider_name,
+        )
+        .is_some()
+        {
+            flow_like_model_provider::llm::external::check_available(
+                &provider,
+                capabilities.local_credentials,
+            )
+            .await
+            .map_err(|error| anyhow!("Selected model `{model_id}` is unavailable: {error}"))?;
+        } else if !Self::can_execute_completion_model(&bit, capabilities) {
+            return Err(NoRunnableModel::Named {
+                model_id: model_id.to_string(),
+            }
+            .into());
+        }
+        Ok(bit)
+    }
+
     /// Honor a chat choice only while it remains an active, executable completion model.
     /// Stale browser selections use the same profile fallback as automatic selection.
     pub async fn resolve_chat_completion_model(
@@ -1300,6 +1358,107 @@ mod tests {
                 assert_eq!(selected.id, "fallback", "provider {provider}");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn explicit_run_selection_reports_unavailable_claude_without_falling_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut claude = completion_bit("chosen-claude", "custom:claude-code");
+        claude.parameters["provider"]["params"] = flow_like_types::json::json!({
+            "executable": dir.path().join("missing-claude"),
+        });
+        let profile =
+            profile_with_models(vec![claude, completion_bit("fallback", "hosted:openai")]);
+        let capabilities = CompletionModelCapabilities {
+            local_credentials: true,
+            ..Default::default()
+        };
+        let client = Arc::new(HTTPClient::new_without_refetch());
+
+        let error = profile
+            .resolve_explicit_completion_model("chosen-claude", capabilities, None, client.clone())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("chosen-claude"), "{error}");
+        assert!(error.contains("Claude Code executable"), "{error}");
+
+        let automatic = profile
+            .resolve_completion_model(
+                None,
+                &BitModelPreference::default(),
+                false,
+                capabilities,
+                None,
+                client,
+            )
+            .await
+            .unwrap();
+        assert_eq!(automatic.id, "fallback");
+    }
+
+    #[tokio::test]
+    async fn explicit_run_selection_resolves_a_custom_model_outside_profile_membership() {
+        let mut profile = profile_with_models(vec![
+            completion_bit("active", "hosted:openai"),
+            completion_bit("library-choice", "custom:openai"),
+        ]);
+        profile.bits = vec!["active".into()];
+
+        let selected = profile
+            .resolve_explicit_completion_model(
+                "library-choice",
+                CompletionModelCapabilities::default(),
+                None,
+                Arc::new(HTTPClient::new_without_refetch()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(selected.id, "library-choice");
+        assert_eq!(profile.bits, ["active"]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn explicit_run_selection_keeps_an_authenticated_claude_library_model() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cli = dir.path().join("claude");
+        std::fs::write(
+            &cli,
+            "#!/bin/sh\n[ \"$1\" = auth ] && [ \"$2\" = status ] || exit 2\nprintf '{\"loggedIn\":true}'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut claude = completion_bit("chosen-claude", "custom:claude-code");
+        claude.parameters["provider"]["params"] = flow_like_types::json::json!({
+            "executable": cli,
+            "model_id": "sonnet",
+        });
+        let mut profile =
+            profile_with_models(vec![claude, completion_bit("active", "hosted:openai")]);
+        profile.bits = vec!["active".into()];
+
+        let selected = profile
+            .resolve_explicit_completion_model(
+                "chosen-claude",
+                CompletionModelCapabilities {
+                    local_credentials: true,
+                    ..Default::default()
+                },
+                None,
+                Arc::new(HTTPClient::new_without_refetch()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(selected.id, "chosen-claude");
+        assert_eq!(
+            selected.parameters["provider"]["params"]["model_id"],
+            "sonnet"
+        );
     }
 
     #[tokio::test]

@@ -129,6 +129,12 @@ pub struct ReasoningEffortOption {
 pub struct CopilotModelInfo {
     pub id: String,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_vision: Option<bool>,
     #[serde(default)]
     pub supported_reasoning_efforts: Vec<ReasoningEffortOption>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -142,6 +148,9 @@ impl CopilotModelInfo {
         Self {
             id: id.into(),
             name: name.into(),
+            description: None,
+            context_window: None,
+            supports_vision: None,
             supported_reasoning_efforts: Vec::new(),
             default_reasoning_effort: None,
             is_default: false,

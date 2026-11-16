@@ -1,0 +1,3 @@
+# The website's bot emotion worker loads ONNX Runtime WASM from the CDN; the bundled copy
+# is never requested and exceeds the 25 MiB Workers asset limit.
+ort-wasm-*.wasm

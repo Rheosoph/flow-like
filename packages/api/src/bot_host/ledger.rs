@@ -826,9 +826,9 @@ pub(crate) async fn take_in<C: ConnectionTrait>(
     Ok(taken.rows_affected > 0)
 }
 
-/// The queued turns of the lead's bot in its conversation, which the lead answers too: they end
-/// `CANCELLED` with [`ERROR_BATCHED`] and the lead's reply id. Returns their trigger messages.
-async fn fold_into<C: ConnectionTrait>(
+/// The older, due turns of the lead's bot in its conversation, which the lead answers too: they
+/// end `CANCELLED` with [`ERROR_BATCHED`] and the lead's reply id. Returns their trigger messages.
+pub(super) async fn fold_into<C: ConnectionTrait>(
     db: &C,
     lead: &bot_turn::Model,
     now: DateTime<FixedOffset>,
@@ -841,26 +841,9 @@ async fn fold_into<C: ConnectionTrait>(
     {
         return Ok(Vec::new());
     }
-    let older = bot_turn::Entity::find()
-        .filter(bot_turn::Column::BotId.eq(lead.bot_id.as_str()))
-        .filter(bot_turn::Column::ConversationId.eq(lead.conversation_id.as_str()))
-        .filter(bot_turn::Column::HostKind.eq(lead.host_kind.as_str()))
-        .filter(bot_turn::Column::Status.eq(STORED_QUEUED))
-        .filter(bot_turn::Column::Id.ne(lead.id.as_str()))
-        .filter(
-            Condition::any()
-                .add(bot_turn::Column::ErrorCode.is_null())
-                .add(bot_turn::Column::ErrorCode.ne(ERROR_RESUMING)),
-        )
-        .filter(bot_turn::Column::Id.not_in_subquery(checkpoint_turns()))
-        .order_by_asc(bot_turn::Column::CreatedAt)
-        .order_by_asc(bot_turn::Column::Id)
-        .all(db)
-        .await?;
-    if older.is_empty() {
-        return Ok(Vec::new());
-    }
-    bot_turn::Entity::update_many()
+    // Check eligibility in the update so a renewed interactive hold or a newly queued message
+    // cannot be cancelled using a sibling list read before that change.
+    let mut older = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_CANCELLED))
         .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
         .col_expr(bot_turn::Column::ErrorCode, Expr::value(ERROR_BATCHED))
@@ -873,10 +856,29 @@ async fn fold_into<C: ConnectionTrait>(
             Expr::value(None::<DateTime<FixedOffset>>),
         )
         .col_expr(bot_turn::Column::UpdatedAt, Expr::value(now))
-        .filter(bot_turn::Column::Id.is_in(older.iter().map(|turn| turn.id.clone())))
+        .filter(bot_turn::Column::BotId.eq(lead.bot_id.as_str()))
+        .filter(bot_turn::Column::ConversationId.eq(lead.conversation_id.as_str()))
+        .filter(bot_turn::Column::HostKind.eq(lead.host_kind.as_str()))
         .filter(bot_turn::Column::Status.eq(STORED_QUEUED))
-        .exec(db)
+        .filter(ready(now))
+        .filter(
+            Condition::any()
+                .add(bot_turn::Column::CreatedAt.lt(lead.created_at))
+                .add(
+                    Condition::all()
+                        .add(bot_turn::Column::CreatedAt.eq(lead.created_at))
+                        .add(bot_turn::Column::Id.lt(lead.id.as_str())),
+                ),
+        )
+        .filter(
+            Condition::any()
+                .add(bot_turn::Column::ErrorCode.is_null())
+                .add(bot_turn::Column::ErrorCode.ne(ERROR_RESUMING)),
+        )
+        .filter(bot_turn::Column::Id.not_in_subquery(checkpoint_turns()))
+        .exec_with_returning(db)
         .await?;
+    older.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
     Ok(older
         .into_iter()
         .map(|turn| turn.trigger_message_id)
@@ -1005,6 +1007,26 @@ pub(crate) async fn hold_in<C: ConnectionTrait>(
         .exec(db)
         .await?;
     Ok(held.rows_affected > 0)
+}
+
+/// Ends an interactive chat's hold on a turn it won't answer, so the bot's own host claims it
+/// now instead of after the grace. `false` when no queued turn of `owner_id` matched.
+pub(crate) async fn hand_to_host_in<C: ConnectionTrait>(
+    db: &C,
+    turn_id: &str,
+    owner_id: &str,
+    now: DateTime<FixedOffset>,
+) -> Result<bool, DbErr> {
+    let released = bot_turn::Entity::update_many()
+        .col_expr(bot_turn::Column::LeaseUntil, Expr::value(now))
+        .col_expr(bot_turn::Column::UpdatedAt, Expr::value(now))
+        .filter(bot_turn::Column::Id.eq(turn_id))
+        .filter(bot_turn::Column::OwnerId.eq(owner_id))
+        .filter(bot_turn::Column::Status.eq(STORED_QUEUED))
+        .filter(bot_turn::Column::HostId.is_null())
+        .exec(db)
+        .await?;
+    Ok(released.rows_affected > 0)
 }
 
 /// Extends the lease of a turn the host holds. A turn that isn't the host's, or whose lease ran

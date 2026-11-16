@@ -28,18 +28,6 @@ const ROOT_DIR = resolve(import.meta.dir, "../..");
 
 config({ path: resolve(ROOT_DIR, ".env") });
 
-const apiKey = process.env.ARTIFICIAL_ANALYSIS ?? "";
-if (!apiKey) {
-	console.error("Missing ARTIFICIAL_ANALYSIS in .env");
-	process.exit(1);
-}
-
-const dbUrl = process.env.DATABASE_URL;
-if (!dbUrl) {
-	console.error("Missing DATABASE_URL in .env");
-	process.exit(1);
-}
-
 const TODO_PATH = resolve(import.meta.dir, "todo.json");
 const CLASSIFICATION_KEYS: (keyof ModelClassification)[] = [
 	"coding",
@@ -153,7 +141,7 @@ async function loadExistingTodos(): Promise<
 	return overrides;
 }
 
-async function main() {
+async function runLegacyDatabase(apiKey: string) {
 	if (DRY_RUN) {
 		console.log(
 			`${BOLD}${YELLOW}=== Model Evaluation Pipeline (DRY RUN) ===${RESET}\n`,
@@ -365,8 +353,33 @@ async function main() {
 	);
 }
 
-main().catch((err) => {
-	console.error("Fatal error:", err);
-	disconnect().catch(() => {});
-	process.exit(1);
-});
+async function main() {
+	if (DRY_RUN && process.argv.includes("--apply")) {
+		throw new Error("Use either --dry-run or --apply, not both.");
+	}
+	if (!process.argv.includes("--legacy-database")) {
+		const { main: refreshCurrentScores } = await import("./refresh-aa-v5");
+		await refreshCurrentScores();
+		return;
+	}
+	if (process.argv.includes("--help")) {
+		console.log(
+			"Usage: bun tools/model-eval/index.ts --legacy-database [--dry-run]\nUses DATABASE_URL and the legacy Artificial Analysis feed. Use --dry-run to preview without database writes. Omit --legacy-database to preview current v5 scores through the deployed API.",
+		);
+		return;
+	}
+	const apiKey = process.env.ARTIFICIAL_ANALYSIS ?? "";
+	if (!apiKey) throw new Error("Missing ARTIFICIAL_ANALYSIS in .env");
+	if (!process.env.DATABASE_URL) {
+		throw new Error("Missing DATABASE_URL in .env");
+	}
+	await runLegacyDatabase(apiKey);
+}
+
+if (import.meta.main) {
+	main().catch(async (err) => {
+		console.error("Fatal error:", err);
+		await disconnect().catch(() => {});
+		process.exitCode = 1;
+	});
+}

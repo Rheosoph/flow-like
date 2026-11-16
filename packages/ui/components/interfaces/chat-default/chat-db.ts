@@ -217,6 +217,8 @@ export interface IChatRunContext {
 	 * the backend.
 	 */
 	effective_model_id?: string;
+	/** Present only when the transport reports the model the backend actually selected. */
+	backend_model_id?: string;
 	reasoning_effort?: string;
 	auto_mode?: boolean;
 	memory_enabled?: boolean;
@@ -317,6 +319,8 @@ export interface IMessage {
 	debug_report?: IAgentDebugReport;
 	/** How this assistant turn was executed. Global chat only; see {@link IChatRunContext}. */
 	run_context?: IChatRunContext;
+	/** Assistant run this user message steered, so its instruction stays before the answer. */
+	steered_run_id?: string;
 	/**
 	 * Thinking level a user turn was sent with: `off`/`low`/`mid`/`high`, or an agent backend's
 	 * native effort id. Absent when the provider chose (FlowPilot "Auto") or for older messages.

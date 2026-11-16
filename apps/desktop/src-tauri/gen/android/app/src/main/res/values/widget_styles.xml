@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="FlowLikeWidgetText">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:textColor">@color/setup_text</item>
+    </style>
+    <style name="FlowLikeWidgetTitle" parent="FlowLikeWidgetText">
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textSize">16sp</item>
+    </style>
+    <style name="FlowLikeWidgetRowTitle" parent="FlowLikeWidgetTitle">
+        <item name="android:textSize">14sp</item>
+    </style>
+    <style name="FlowLikeWidgetCaption" parent="FlowLikeWidgetText">
+        <item name="android:textColor">@color/setup_muted</item>
+        <item name="android:textSize">12sp</item>
+    </style>
+</resources>

@@ -15,8 +15,9 @@ export default function OnboardingLayout({
 		<div
 			className={[
 				styles.shell,
-				isSetupStep &&
-					"flex flex-col items-center justify-start md:justify-center px-4",
+				isSetupStep
+					? "flex flex-col items-center justify-start md:justify-center px-4"
+					: styles.landingShell,
 			]
 				.filter(Boolean)
 				.join(" ")}

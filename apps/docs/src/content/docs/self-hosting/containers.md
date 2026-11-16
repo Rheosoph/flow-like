@@ -204,6 +204,12 @@ local defaults use `http://localhost:3001`. Update this value when moving the
 web application to another domain and restart the API. If `FRONTEND_BASE_URL`
 is unset or blank, the API can reuse a configured `FRONTEND_URL`.
 
+Link previews use the App's name, description and thumbnail or icon, including
+routes that require sign-in. The API must reach the web deployment's generic
+`/a` HTML shell to add this metadata. `FRONTEND_SHELL_URL` can point to that
+shell through an internal service address; it does not change the public link.
+The container deployments configure this internal address automatically.
+
 ### Browser access and sign-in
 
 Keep the web origin in the API's `CORS_ALLOWED_ORIGINS`, preserving desktop and
@@ -233,10 +239,20 @@ page contract; hosted chat does not execute raw board widget actions.
 
 ### Static routes and API front doors
 
-The web export includes `_redirects` rules for hosts that support that format.
-Both container web images include equivalent Nginx routing. On other static
-hosts, rewrite these request paths to the corresponding export file while
-preserving the requested browser URL and query string:
+Both container web images proxy `/a/<app-id>/<route>` to the API's
+`/frontend/document/<app-id>/<route>` endpoint, which adds App metadata to the
+static shell. The web container uses `FLOW_LIKE_WEB_HOSTED_API_URL` for this
+internal request, falling back to `FLOW_LIKE_WEB_API_URL`. Keep the generic
+`/a` and `/a.html` routes static so the API can read the shell.
+For an API outside the Helm release, allow its destination through
+`networkPolicy.webExtraEgress` when network policies are enabled.
+
+Cloudflare Pages uses the Function in `apps/web/functions`. Deploy it with the
+export and set its `FLOW_LIKE_WEB_API_URL` binding to the same API as the browser
+bundle. Other hosts can proxy the document endpoint too. Hosts serving only
+static files can use these rewrites, but direct web links then retain the
+generic preview. Links copied from the editor still carry App metadata through
+the API. Preserve the requested browser URL and query string:
 
 | Web host request | Export file |
 | --- | --- |
@@ -260,15 +276,15 @@ event-only links remain `/use?id=my-app&eventId=event`. Legacy
 web application through browser history replacement. Desktop uses the same
 path format and resolves deep links through its bundled assets.
 
-With **separate API and web origins**, the API's `/a/*` shortlinks redirect to
-the same path on the web origin. Forward those API shortlinks to the API along
+With **separate API and web origins**, the API's `/a/*` shortlinks serve preview
+HTML and open the same path on the web origin. Forward those shortlinks to the API along
 with `/frontend/*`, `/api/v1/*`, `/r/*` and `/m/*`. The bundled Compose API
 proxy and default Helm API ingress already forward every API path.
 
 With **one shared origin**, route `/a` and `/use`, including their subpaths,
 directly to the **web** service. Route `/frontend/*`, `/api/v1/*`, `/r/*` and
 `/m/*` to the **API** service. The Helm values include this path-based example.
-Sending the shared origin's `/a/*` paths to the API would redirect them back to
+Sending the shared origin's `/a/*` paths to the API would send visitors back to
 themselves.
 
 For API requests, preserve `Authorization`, `X-Flow-Like-Session`, query strings

@@ -75,6 +75,7 @@ pub(crate) async fn adopted(
         kind: outgoing.kind,
         envelope: Some(envelope),
         envelopes: None,
+        interactive: outgoing.interactive.clone(),
         turn: None,
     })
     .map(Arc::new)

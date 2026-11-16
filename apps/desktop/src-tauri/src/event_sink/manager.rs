@@ -1262,10 +1262,7 @@ impl EventSinkManager {
         } else if Self::runs_on_hub(event) {
             Some("event runs remotely")
         } else {
-            Self::platform_blocker(
-                &event.event_type,
-                cfg!(any(target_os = "ios", target_os = "macos")),
-            )
+            Self::platform_blocker(&event.event_type, std::env::consts::OS)
         }
     }
 
@@ -1281,9 +1278,9 @@ impl EventSinkManager {
             && !Self::forwards_to_hub(&event.event_type)
     }
 
-    fn platform_blocker(event_type: &str, apple: bool) -> Option<&'static str> {
-        (event_type == "geolocation" && !apple)
-            .then_some("location triggers need iOS or macOS on this device")
+    fn platform_blocker(event_type: &str, target_os: &str) -> Option<&'static str> {
+        (event_type == "geolocation" && !matches!(target_os, "ios" | "android" | "macos"))
+            .then_some("location triggers need iOS, Android, or macOS on this device")
     }
 
     /// Whether a registration of `event` on this device is stale regardless of
@@ -2411,7 +2408,11 @@ mod tests {
     }
 
     const REGION: &[u8] = br#"{"latitude":52.5,"longitude":13.4,"radius":200,"trigger_on":"Both"}"#;
-    const APPLE: bool = cfg!(any(target_os = "ios", target_os = "macos"));
+    const NATIVE_GEOFENCING: bool = cfg!(any(
+        target_os = "ios",
+        target_os = "android",
+        target_os = "macos"
+    ));
 
     fn region_event(execution_mode: EventExecutionMode) -> Event {
         let mut event = flow_event("geolocation", true, execution_mode);
@@ -2675,7 +2676,7 @@ mod tests {
         let region = region_event(EventExecutionMode::Remote);
         assert!(EventSinkManager::forwards_to_hub("geolocation"));
         assert!(!EventSinkManager::registration_is_stale(&region));
-        if APPLE {
+        if NATIVE_GEOFENCING {
             let config = EventSinkManager::local_sink_config(&region);
             assert!(
                 matches!(config, Ok(EventConfig::GeoLocation(_))),
@@ -2690,19 +2691,25 @@ mod tests {
     }
 
     #[test]
-    fn geolocation_is_blocked_off_apple_platforms() {
-        assert_eq!(
-            EventSinkManager::platform_blocker("geolocation", false),
-            Some("location triggers need iOS or macOS on this device")
-        );
-        assert_eq!(
-            EventSinkManager::platform_blocker("geolocation", true),
-            None
-        );
-        assert_eq!(EventSinkManager::platform_blocker("cron", false), None);
+    fn geolocation_requires_a_platform_with_native_region_monitoring() {
+        for target_os in ["ios", "android", "macos"] {
+            assert_eq!(
+                EventSinkManager::platform_blocker("geolocation", target_os),
+                None,
+                "{target_os}"
+            );
+        }
+        for target_os in ["linux", "windows", "freebsd"] {
+            assert_eq!(
+                EventSinkManager::platform_blocker("geolocation", target_os),
+                Some("location triggers need iOS, Android, or macOS on this device"),
+                "{target_os}"
+            );
+            assert_eq!(EventSinkManager::platform_blocker("cron", target_os), None);
+        }
         assert_eq!(
             blocker(&region_event(EventExecutionMode::Local)).is_some(),
-            !APPLE
+            !NATIVE_GEOFENCING
         );
     }
 
@@ -3213,7 +3220,7 @@ mod tests {
             .unwrap()
             .expect("a refusal keeps a working token");
         assert_eq!(stashed.personal_access_token.as_deref(), Some("pat_1"));
-        if APPLE {
+        if NATIVE_GEOFENCING {
             let event = region_event(EventExecutionMode::Remote);
             assert_eq!(
                 manager

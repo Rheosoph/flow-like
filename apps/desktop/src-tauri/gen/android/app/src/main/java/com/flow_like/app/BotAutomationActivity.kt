@@ -8,7 +8,9 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.widget.*
+import android.view.View
+import android.widget.LinearLayout
+import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -34,7 +36,7 @@ class BotAutomationActivity : Activity() {
     private var requestId: String? = null
     private var returned = false
     private var destroyed = false
-    private lateinit var status: TextView
+    private lateinit var page: NativePage
     private lateinit var controls: LinearLayout
     private val poll = object : Runnable {
         override fun run() {
@@ -56,29 +58,37 @@ class BotAutomationActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = BotNativeStore(this)
-        controls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32,32,32,32) }
-        status = TextView(this).apply { textSize = 18f }
-        controls.addView(status)
-        setContentView(ScrollView(this).apply { addView(controls) })
+        page = NativeUi.page(this, "Run an automation", "Choose an action, then review it before running.")
+        page.root.tag = "automation_page"
+        controls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        NativeUi.add(page.content, controls, top = 0)
         if (getSystemService(KeyguardManager::class.java).isDeviceLocked) {
-            status.text = "Unlock the device to run an automation."
+            showScreen("Unlock your device", "Unlock the device, then open this automation again.")
             addButton("Close") { finish() }; return
         }
         val snapshot = store.snapshot()
-        if (snapshot == null) { status.text = "Open Flow Like and select a workspace first."; addButton("Open Flow Like") { startActivity(Intent(this,MainActivity::class.java)); finish() }; return }
+        if (snapshot == null) {
+            showScreen("Choose a workspace first", "Open Flow-Like and select the workspace for this automation.")
+            addButton("Open Flow-Like", primary = true) { startActivity(Intent(this, MainActivity::class.java)); finish() }
+            addButton("Close") { finish() }; return
+        }
         scope = snapshot.getString("scope")
         val expected = savedInstanceState?.getString("scope") ?: intent.getStringExtra("scope")
-        if (expected != null && expected != scope) { status.text = "This action belongs to another workspace."; addButton("Close") { finish() }; return }
+        if (expected != null && expected != scope) {
+            showScreen("Workspace changed", "This action belongs to another workspace. Open it there to continue.")
+            addButton("Close") { finish() }; return
+        }
         requestId = savedInstanceState?.getString("request_id")
         if (requestId != null) { showWaiting(); handler.post(poll); return }
-        status.text = "Run in this workspace\n${JSONArray(scope).optString(0)}"
-        callingPackage?.let { controls.addView(TextView(this).apply { text = "The result will be returned to $it." }) }
         val supplied = intent.getStringExtra("action_json")
         if (supplied != null) {
             try {
                 require(supplied.toByteArray().size <= 128 * 1024)
                 showInput(snapshot, JSONObject(supplied), intent.getStringExtra("response_mode") ?: "text")
-            } catch (_: Exception) { status.text = "This automation request is invalid."; addButton("Close") { finish() } }
+            } catch (_: Exception) {
+                showScreen("Cannot open this automation", "This automation request is invalid.")
+                addButton("Close") { finish() }
+            }
         } else showChoices(snapshot)
     }
 
@@ -88,35 +98,56 @@ class BotAutomationActivity : Activity() {
     }
 
     private fun showChoices(snapshot: JSONObject) {
+        showScreen("Run an automation", "Choose an action. You can review its input before running it.")
+        showWorkspace()
+        section("Assistant")
         addButton("Ask FlowPilot") { showInput(snapshot,JSONObject().put("kind","flowpilot"),"text") }
-        entries(snapshot,"bots").filter { it.optBoolean("enabled",true) }.forEach { bot ->
+        val bots = entries(snapshot,"bots").filter { it.optBoolean("enabled",true) }
+        if (bots.isNotEmpty()) section("Bots")
+        bots.forEach { bot ->
             addButton("Ask ${bot.optString("title","Bot")}") { showInput(snapshot,JSONObject().put("kind","ask_bot").put("botId",bot.getString("id")),"text") }
         }
-        entries(snapshot,"botTasks").filter { it.optBoolean("enabled") }.forEach { task ->
+        val tasks = entries(snapshot,"botTasks").filter { it.optBoolean("enabled") }
+        if (tasks.isNotEmpty()) section("Bot tasks")
+        tasks.forEach { task ->
             addButton("Run task: ${task.optString("title","Task")}") { showInput(snapshot,JSONObject().put("kind","run_bot_task").put("botId",task.getString("botId")).put("taskId",task.getString("id")),"text") }
         }
-        entries(snapshot,"events").filter { event ->
+        val events = entries(snapshot,"events").filter { event ->
             val surfaces = event.optJSONArray("surfaces") ?: JSONArray()
             (0 until surfaces.length()).any { surfaces.optString(it) in listOf("siri","shortcuts") }
-        }.forEach { event ->
+        }
+        if (events.isNotEmpty()) section("Events")
+        events.forEach { event ->
             val action = event.optJSONObject("action") ?: return@forEach
             addButton("${if(event.optString("eventType")=="simple_chat") "Ask app" else "Run Event"}: ${event.optString("title")}") { showInput(snapshot,JSONObject(action.toString()),"text") }
             if (event.optString("eventType") != "simple_chat") addButton("Event JSON: ${event.optString("title")}") { showInput(snapshot,JSONObject(action.toString()),"result") }
         }
+        addButton("Cancel") { finish() }
     }
 
     private fun showInput(snapshot: JSONObject, action: JSONObject, mode: String) {
-        while (controls.childCount > 1) controls.removeViewAt(1)
         val title = when(action.optString("kind")) {
             "ask_bot", "run_bot_task" -> entries(snapshot,"bots").firstOrNull { it.optString("id")==action.optString("botId") }?.optString("title") ?: "Bot"
             "flowpilot" -> "FlowPilot"
             else -> entries(snapshot,"events").firstOrNull { it.optString("eventId")==action.optString("eventId") && it.optString("appId")==action.optString("appId") }?.optString("title") ?: "Event"
         }
-        status.text = "$title\n${JSONArray(scope).optString(0)}"
-        callingPackage?.let { controls.addView(TextView(this).apply { text = "Return the result to $it." }) }
-        val input = EditText(this).apply { minLines=3; hint="Question or input"; setText(action.optString("prompt").ifBlank { action.optString("text") }) }
-        if (action.optString("kind") != "run_bot_task") controls.addView(input)
-        addButton(if(action.optString("kind")=="run_bot_task") "Run task" else "Run and return ${if(mode=="result") "Text / JSON" else "text"}") {
+        val isTask = action.optString("kind") == "run_bot_task"
+        showScreen(title, if (isTask) "Review this task before running it." else "Review the message before sending it to this automation.")
+        showWorkspace()
+        val input = NativeUi.input(this, "Question or input",
+            text = action.optString("prompt").ifBlank { action.optString("text") }, minLines = 3).apply {
+            tag = "automation_input"
+        }
+        if (!isTask) {
+            NativeUi.add(controls, NativeUi.text(this, "Question or input", size = 14f, emphasized = true), top = 20)
+            NativeUi.add(controls, input, top = 8)
+        } else {
+            val taskTitle = entries(snapshot, "botTasks").firstOrNull {
+                it.optString("botId") == action.optString("botId") && it.optString("id") == action.optString("taskId")
+            }?.optString("title")
+            if (!taskTitle.isNullOrBlank()) NativeUi.add(controls, NativeUi.text(this, taskTitle, emphasized = true), top = 20)
+        }
+        addButton(if (isTask) "Run task" else "Run and return ${if(mode=="result") "Text / JSON" else "text"}", primary = true) {
             try {
                 if (action.optString("kind") != "run_bot_task") action.put("text",input.text.toString()).remove("prompt")
                 val request=store.enqueueAutomation(action,scope,mode)
@@ -131,12 +162,32 @@ class BotAutomationActivity : Activity() {
     }
 
     private fun showWaiting() {
-        while(controls.childCount>1) controls.removeViewAt(1)
-        status.text="Waiting for Flow Like. This request expires after 90 seconds."
+        showScreen("Waiting for Flow-Like", "This request expires after 90 seconds. You can cancel it while waiting.")
+        showWorkspace()
         addButton("Cancel automation") { cancelAndFinish() }
     }
 
-    private fun addButton(title: String, onClick: ()->Unit) = controls.addView(Button(this).apply { text=title; setOnClickListener { onClick() } })
+    private fun showScreen(title: String, description: String) {
+        page.heading.text = title
+        page.description.text = description
+        page.description.visibility = View.VISIBLE
+        controls.removeAllViews()
+        page.root.scrollTo(0, 0)
+    }
+
+    private fun showWorkspace() {
+        NativeUi.add(controls, NativeUi.text(this, "Workspace", size = 12f, muted = true), top = 0)
+        NativeUi.add(controls, NativeUi.text(this, JSONArray(scope).optString(0), size = 14f, emphasized = true), top = 4)
+        callingPackage?.let {
+            NativeUi.add(controls, NativeUi.text(this, "The result will be returned to $it.", size = 14f, muted = true))
+        }
+    }
+
+    private fun section(title: String) = NativeUi.add(controls,
+        NativeUi.text(this, title, size = 14f, emphasized = true), top = 24)
+
+    private fun addButton(title: String, primary: Boolean = false, onClick: () -> Unit) =
+        NativeUi.add(controls, NativeUi.button(this, title, primary = primary, onClick = onClick))
     private fun finishOutcome(result: JSONObject) {
         if (returned) return
         returned=true
@@ -145,8 +196,17 @@ class BotAutomationActivity : Activity() {
         for(key in listOf("text","json","error")) if(result.has(key)) data.putExtra(key,result.optString(key))
         setResult(if(result.optString("status")=="success") RESULT_OK else RESULT_CANCELED,data)
         if(callingPackage!=null) { requestId?.let { store.automationResult(it,scope,true) }; finish(); return }
-        while(controls.childCount>1) controls.removeViewAt(1)
-        status.text=when(result.optString("status")) { "success" -> result.optString("text").ifBlank { result.optString("json") }; else -> result.optString("error","This request needs attention in Flow Like.") }
+        val success = result.optString("status") == "success"
+        showScreen(if (success) "Automation finished" else "Automation stopped",
+            if (success) "Your result is ready." else "The automation could not finish.")
+        val response = if (success) result.optString("text").ifBlank { result.optString("json") }
+            .ifBlank { "Completed without a text response." }
+            else result.optString("error", "This request needs attention in Flow-Like.")
+        NativeUi.add(controls, NativeUi.text(this, response).apply {
+            tag = "automation_result"
+            setTextIsSelectable(true)
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }, top = 0)
         addButton("Close") { requestId?.let { store.automationResult(it,scope,true) }; finish() }
     }
     private fun cancelAndFinish() {

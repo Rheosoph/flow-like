@@ -11,6 +11,21 @@ const fallbackModels = [{ id: "default" }];
 const liveModels = [{ id: "gpt-5.6-terra" }, { id: "gpt-5.6-sol" }];
 
 describe("resolveModelSelection", () => {
+	test.each([{ models: [] }, { models: [{ id: "custom-qwen" }] }])(
+		"keeps an explicit Bit missing from a local catalog %j",
+		({ models }) => {
+			expect(
+				resolveModelSelection({
+					models,
+					selectedModelId: "custom-claude-code",
+					rememberedModelId: "custom-claude-code",
+					canReplaceInvalidSelection: true,
+					preserveRememberedModel: true,
+				}),
+			).toBeNull();
+		},
+	);
+
 	test("does not let a fallback catalog overwrite a live selection", () => {
 		expect(
 			resolveModelSelection({
@@ -20,6 +35,18 @@ describe("resolveModelSelection", () => {
 				canReplaceInvalidSelection: false,
 			}),
 		).toBeNull();
+	});
+
+	test("restores an explicit Board Bit when returning from another provider before its catalog loads", () => {
+		expect(
+			resolveModelSelection({
+				models: [],
+				selectedModelId: "default",
+				rememberedModelId: "custom-claude-code",
+				canReplaceInvalidSelection: false,
+				preserveRememberedModel: true,
+			}),
+		).toBe("custom-claude-code");
 	});
 
 	test("lets a fallback catalog initialize an empty selection", () => {

@@ -20,6 +20,7 @@ import {
 	loadLatest,
 	loadOlder,
 	sendInteractive,
+	sendToHost,
 	startNewTopic,
 } from "./bot-history";
 import { useBotHistoryStore } from "./bot-history-store";
@@ -172,24 +173,61 @@ export async function sendInteractiveMessage(
 	transcript?: VoiceTranscript,
 	files: readonly File[] = [],
 ): Promise<InteractiveRef | null> {
+	const target = await storeInInbox(
+		conversationId,
+		transcript ? [] : files,
+		(backend, target, parts) =>
+			sendInteractive(backend, target, {
+				...message,
+				clientRunId,
+				transcript,
+				parts,
+			}),
+	);
+	return target
+		? {
+				conversationId: target.conversationId,
+				triggerMessageId: message.id,
+				clientRunId,
+			}
+		: null;
+}
+
+/**
+ * Writes the user's message to the bot's inbox for the bot's own host to answer; its reply
+ * arrives like any pushed entry. Returns the inbox conversation, null where the chat has no inbox
+ * history or the write failed.
+ */
+export async function sendHostedMessage(
+	conversationId: string,
+	message: { id: string; text: string },
+	files: readonly File[] = [],
+): Promise<string | null> {
+	const target = await storeInInbox(
+		conversationId,
+		files,
+		(backend, target, parts) =>
+			sendToHost(backend, target, { ...message, parts }),
+	);
+	return target?.conversationId ?? null;
+}
+
+async function storeInInbox(
+	conversationId: string,
+	files: readonly File[],
+	write: (
+		backend: IInboxState,
+		target: BotHistoryTarget,
+		parts: IInboxAttachmentPart[],
+	) => Promise<unknown>,
+): Promise<BotHistoryTarget | null> {
 	const target = await ensureBotTarget(conversationId);
 	const backend = inbox;
 	if (!target || !backend) return null;
 	try {
-		const parts = transcript
-			? []
-			: await storedParts(backend, target.conversationId, files);
-		await sendInteractive(backend, target, {
-			...message,
-			clientRunId,
-			transcript,
-			parts,
-		});
-		return {
-			conversationId: target.conversationId,
-			triggerMessageId: message.id,
-			clientRunId,
-		};
+		const parts = await storedParts(backend, target.conversationId, files);
+		await write(backend, target, parts);
+		return target;
 	} catch (error) {
 		console.warn(
 			"[BotChat] The message could not be stored in the inbox:",

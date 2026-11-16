@@ -394,7 +394,9 @@ impl NotesBridge {
             return Err(refusal(
                 tool,
                 "note_key_invalid",
-                format!("'{raw_key}' is no note key: use lowercase letters, digits and hyphens, like 'learning-path'."),
+                format!(
+                    "'{raw_key}' is no note key: use lowercase letters, digits and hyphens, like 'learning-path'."
+                ),
             ));
         }
         let notes = self.handle.store().list().await.map_err(|error| {
@@ -408,13 +410,26 @@ impl NotesBridge {
     }
 
     async fn store(&self, tool: &str, key: &str, change: NoteChange) -> String {
-        match self.handle.store().write(key, &change, &self.author()).await {
+        match self
+            .handle
+            .store()
+            .write(key, &change, &self.author())
+            .await
+        {
             Ok(note) => {
                 self.handle.touch(&note);
                 if change.status.is_some()
-                    && let Err(error) = self.handle.store().turn_status(note.status.as_deref()).await
+                    && let Err(error) = self
+                        .handle
+                        .store()
+                        .turn_status(note.status.as_deref())
+                        .await
                 {
-                    tracing::warn!(tool, key, "Updating the turn's live status failed: {error:#}");
+                    tracing::warn!(
+                        tool,
+                        key,
+                        "Updating the turn's live status failed: {error:#}"
+                    );
                 }
                 json!({ "status": "ok", "note": summary(&note) }).to_string()
             }
@@ -690,7 +705,9 @@ mod tests {
     #[test]
     fn at_most_three_notes_show_in_full_and_owner_edits_are_marked() {
         let now = 10_000;
-        let mut notes: Vec<BotNote> = (0..5).map(|i| note(&format!("n{i}"), now - i, "x")).collect();
+        let mut notes: Vec<BotNote> = (0..5)
+            .map(|i| note(&format!("n{i}"), now - i, "x"))
+            .collect();
         notes[0].updated_by = "user_1".into();
         let (section, _) = render_section(&notes, "bot_a", None, now);
         assert_eq!(section.matches("\n### n").count(), 3);
@@ -732,7 +749,10 @@ mod tests {
             )
             .await;
         let touched = handle.touched().unwrap();
-        assert_eq!((touched.version, touched.status.as_deref()), (2, Some("Lesson 2")));
+        assert_eq!(
+            (touched.version, touched.status.as_deref()),
+            (2, Some("Lesson 2"))
+        );
         assert_eq!(
             *store.statuses.lock().unwrap(),
             vec![Some("Lesson 1".to_string()), Some("Lesson 2".to_string())]
@@ -794,10 +814,17 @@ mod tests {
         secret.sensitivity = confidential();
         store.notes.lock().unwrap().push(secret);
         let (bridge, _, label) = bridge(store);
-        let read = parsed(&bridge.call(NOTES_READ_TOOL, json!({ "key": "budget" })).await);
+        let read = parsed(
+            &bridge
+                .call(NOTES_READ_TOOL, json!({ "key": "budget" }))
+                .await,
+        );
         assert_eq!(read["note"]["body"], "Budget: 4k");
         assert_eq!(label.get(), confidential());
-        assert_eq!(bridge.call("web_search", json!({})).await, "inner:web_search");
+        assert_eq!(
+            bridge.call("web_search", json!({})).await,
+            "inner:web_search"
+        );
         assert!(bridge.supports_tool(NOTES_READ_TOOL));
     }
 }

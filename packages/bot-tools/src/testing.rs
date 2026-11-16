@@ -409,7 +409,11 @@ impl ToolEnv for FakeEnv {
     }
 
     fn handle_granted(&self, handle: &WorkspaceHandle) -> bool {
-        self.granted.lock().expect("granted").contains(handle)
+        self.granted
+            .lock()
+            .expect("granted")
+            .iter()
+            .any(|granted| granted.app_id == handle.app_id && granted.path == handle.path)
     }
 
     async fn app_tables(&self, app_id: &str) -> Result<AppTables> {

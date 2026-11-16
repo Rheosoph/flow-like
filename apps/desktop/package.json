@@ -12,6 +12,7 @@
 		"dev:android-studio": "ORT_LIB_LOCATION=$PWD/src-tauri/thirdparty/onnxruntime/android/arm64-v8a ORT_PREFER_DYNAMIC_LINK=1 bun tauri android dev --open",
 		"build:xcode": "bun tauri ios build --open ",
 		"build:android": "ORT_LIB_LOCATION=$PWD/src-tauri/thirdparty/onnxruntime/android/arm64-v8a ORT_PREFER_DYNAMIC_LINK=1 bun tauri android build --target aarch64 --open",
+		"build:android:release": "bun ./scripts/build-android-release.ts",
 		"dev": "node ../../packages/board-canvas/build-web.mjs --dev && node ../../packages/craft-viewers/build-web.mjs --dev && dotenv -- next dev --turbopack -H 0.0.0.0",
 		"dev:all": "dotenv -- bun run tauri dev",
 		"dev:ios": "dotenv -- bun run tauri ios dev 'iPhone 16' ",

@@ -23,12 +23,15 @@ export interface CallListener {
 	 * that starts a barge-in, which `endBargeIn` then confirms or drops.
 	 */
 	setGuarded(guarded: boolean): void;
+	/** Requests one longer probe after an empty first transcript; false if no retry remains. */
+	retryBargeIn(): boolean;
 	/** Confirmed barge-ins carry on as a normal utterance; rejected ones are dropped and not retried for a while. */
 	endBargeIn(confirmed: boolean): void;
 	stop(): void;
 }
 
 const BLOCK_SAMPLES = 2048;
+const BARGE_IN_RETRY_MS = 1000;
 export const VAD_WAIT_MS = 150;
 export const VAD_MAX_BACKLOG = 4;
 
@@ -184,9 +187,16 @@ export async function startCallListener(
 		parts: Float32Array[];
 		length: number;
 		probed: boolean;
+		retried: boolean;
+		probeAfter: number;
 		startedAt: number;
 		held: Utterance[];
 	} | null = null;
+	let probeTimer: ReturnType<typeof setTimeout> | undefined;
+	const clearProbeTimer = () => {
+		clearTimeout(probeTimer);
+		probeTimer = undefined;
+	};
 	let cooldownUntil = 0;
 	const detector = createBargeInDetector({
 		sampleRate: LISTEN_SAMPLE_RATE,
@@ -239,9 +249,13 @@ export async function startCallListener(
 			parts: [],
 			length: 0,
 			probed: false,
+			retried: false,
+			probeAfter: (BARGE_IN_CONFIRM_MS * LISTEN_SAMPLE_RATE) / 1000,
 			startedAt: arrivedAt,
 			held: [],
 		};
+		// Start the confirmation even if capture stalls before enough audio arrives.
+		probeTimer = setTimeout(() => probeBargeIn(true), BARGE_IN_CONFIRM_MS);
 		options.onBargeInStart?.();
 		for (const chunk of chunks) trackBarge(chunk);
 	};
@@ -250,11 +264,15 @@ export async function startCallListener(
 		bargeIn.parts.push(chunk);
 		bargeIn.length += chunk.length;
 		feed(chunk);
+		probeBargeIn();
+	};
+	const probeBargeIn = (force = false) => {
 		if (
 			bargeIn &&
 			!bargeIn.probed &&
-			bargeIn.length >= (BARGE_IN_CONFIRM_MS * LISTEN_SAMPLE_RATE) / 1000
+			(force || bargeIn.length >= bargeIn.probeAfter)
 		) {
+			clearProbeTimer();
 			bargeIn.probed = true;
 			const samples = new Float32Array(bargeIn.length);
 			let at = 0;
@@ -366,6 +384,7 @@ export async function startCallListener(
 			if (stopped || next === paused) return;
 			paused = next;
 			if (next) {
+				clearProbeTimer();
 				segmenter.reset();
 				detector.reset();
 				turns?.resetSpeech(speechStream);
@@ -379,15 +398,31 @@ export async function startCallListener(
 			guarded = next;
 			detector.reset();
 			if (next) {
+				clearProbeTimer();
 				segmenter.reset();
 				bargeIn = null;
 				clockOrigin = null;
 				options.onReset?.();
 			}
 		},
+		retryBargeIn() {
+			const current = bargeIn;
+			if (stopped || paused || !current?.probed || current.retried)
+				return false;
+			current.retried = true;
+			current.probed = false;
+			current.probeAfter = (BARGE_IN_RETRY_MS * LISTEN_SAMPLE_RATE) / 1000;
+			// A stopped microphone must not leave playback waiting for more samples forever.
+			probeTimer = setTimeout(() => {
+				if (bargeIn === current) probeBargeIn(true);
+			}, BARGE_IN_RETRY_MS);
+			probeBargeIn();
+			return true;
+		},
 		endBargeIn(confirmed) {
 			const current = bargeIn;
 			if (stopped || !current) return;
+			clearProbeTimer();
 			bargeIn = null;
 			if (!confirmed) {
 				segmenter.reset();
@@ -401,6 +436,7 @@ export async function startCallListener(
 		},
 		stop() {
 			if (stopped) return;
+			clearProbeTimer();
 			for (const item of backlog.splice(0)) {
 				handleBlock(item.samples, item.arrivedAt);
 			}

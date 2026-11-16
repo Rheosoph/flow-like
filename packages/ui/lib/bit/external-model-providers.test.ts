@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
+	type ExternalModelOption,
 	discoverExternalModelCatalog,
+	externalModelMetadata,
 	externalModelProviders,
 	providerFieldValues,
 	specificExternalModels,
@@ -117,6 +119,16 @@ describe("external model connection setup", () => {
 				(field) => field.key === "access_token",
 			)?.required,
 		).toBe(false);
+		expect(
+			provider("codex", false).fields.find(
+				(field) => field.key === "access_token",
+			)?.advanced,
+		).toBe(false);
+		expect(
+			provider("codex", true).fields.find(
+				(field) => field.key === "access_token",
+			)?.advanced,
+		).toBe(true);
 	});
 
 	test("Codex credentials travel as secrets while its exact model and account remain configured", () => {
@@ -230,4 +242,156 @@ test("native discovery excludes generic defaults, deduplicates IDs and supplies 
 		{ id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
 	]);
 	expect(specificExternalModels([])).toEqual([]);
+});
+
+describe("external model metadata", () => {
+	test("normalization preserves reported metadata and trims labels and reasoning efforts", () => {
+		expect(
+			specificExternalModels([
+				{
+					id: " runtime-model ",
+					name: " Runtime model ",
+					description: " Reported description. ",
+					contextWindow: 128_000,
+					supportsVision: false,
+					supportedReasoningEfforts: [
+						{ id: " low ", name: " Low ", description: " Less reasoning. " },
+						{ id: "", name: "Invalid" },
+						{ id: "high", name: " " },
+						{ id: "low", name: "Duplicate" },
+					],
+					defaultReasoningEffort: " high ",
+					isDefault: true,
+				},
+			]),
+		).toEqual([
+			{
+				id: "runtime-model",
+				name: "Runtime model",
+				description: "Reported description.",
+				contextWindow: 128_000,
+				supportsVision: false,
+				supportedReasoningEfforts: [
+					{ id: "low", name: "Low", description: "Less reasoning." },
+					{ id: "high", name: "high" },
+				],
+				defaultReasoningEffort: "high",
+				isDefault: true,
+			},
+		]);
+	});
+
+	test.each([
+		0,
+		-1,
+		1.5,
+		Number.NaN,
+		Number.POSITIVE_INFINITY,
+		Number.NEGATIVE_INFINITY,
+		"128000",
+		null,
+	])("ignores invalid context window %s", (contextWindow) => {
+		const model = {
+			id: "runtime-model",
+			name: "Runtime model",
+			contextWindow,
+		} as unknown as ExternalModelOption;
+		expect(specificExternalModels([model])).toEqual([
+			{ id: "runtime-model", name: "Runtime model" },
+		]);
+		expect(externalModelMetadata("codex", model)).not.toHaveProperty(
+			"contextLength",
+		);
+	});
+
+	test("omits absent and invalid metadata instead of coercing it", () => {
+		const base = { id: "runtime-model", name: "Runtime model" };
+		expect(specificExternalModels([base])).toEqual([base]);
+		expect(
+			specificExternalModels([
+				{
+					...base,
+					description: " ",
+					supportsVision: "true",
+					supportedReasoningEfforts: "high",
+					defaultReasoningEffort: 1,
+					isDefault: 1,
+				} as unknown as ExternalModelOption,
+			]),
+		).toEqual([base]);
+		expect(
+			specificExternalModels([
+				{ ...base, isDefault: false, supportedReasoningEfforts: [] },
+			]),
+		).toEqual([{ ...base, isDefault: false, supportedReasoningEfforts: [] }]);
+	});
+
+	test("Codex metadata uses reported names, descriptions, limits and capabilities", () => {
+		expect(
+			externalModelMetadata("codex", {
+				id: "runtime-model",
+				name: "Runtime model",
+				description: "The runtime describes this model.",
+				contextWindow: 128_000,
+				supportsVision: true,
+				supportedReasoningEfforts: [{ id: "high", name: "High" }],
+			}),
+		).toEqual({
+			name: "Runtime model",
+			description: "The runtime describes this model.",
+			icon: "/provider/gpt.webp",
+			tags: ["codex", "chat", "reasoning", "vision"],
+			contextLength: 128_000,
+			vision: true,
+		});
+	});
+
+	test("Claude Code metadata stays text-only even when its runtime reports vision", () => {
+		expect(
+			externalModelMetadata("claude-code", {
+				id: "runtime-model",
+				name: "Runtime model",
+				contextWindow: 200_000,
+				supportsVision: true,
+				supportedReasoningEfforts: [{ id: "high", name: "High" }],
+			}),
+		).toEqual({
+			name: "Runtime model",
+			description: "Runtime model via Claude Code.",
+			icon: "/provider/anthropic.webp",
+			tags: ["claude-code", "chat", "reasoning"],
+			contextLength: 200_000,
+			vision: false,
+		});
+	});
+
+	test("sparse catalogs supply provider descriptions without inventing model capabilities", () => {
+		const model = { id: "runtime-model", name: "Runtime model" };
+		expect(externalModelMetadata("codex", model)).toEqual({
+			name: "Runtime model",
+			description: "Runtime model via Codex.",
+			icon: "/provider/gpt.webp",
+			tags: ["codex", "chat"],
+		});
+		expect(externalModelMetadata("claude-code", model)).toEqual({
+			name: "Runtime model",
+			description: "Runtime model via Claude Code.",
+			icon: "/provider/anthropic.webp",
+			tags: ["claude-code", "chat"],
+			vision: false,
+		});
+		expect(
+			externalModelMetadata("codex", {
+				...model,
+				supportsVision: false,
+				supportedReasoningEfforts: [],
+			}),
+		).toEqual({
+			name: "Runtime model",
+			description: "Runtime model via Codex.",
+			icon: "/provider/gpt.webp",
+			tags: ["codex", "chat"],
+			vision: false,
+		});
+	});
 });

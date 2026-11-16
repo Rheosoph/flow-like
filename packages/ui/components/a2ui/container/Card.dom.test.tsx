@@ -7,9 +7,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CardComponent } from "../types";
 
 const actions = vi.hoisted(() => ({ trigger: vi.fn() }));
+const assets = vi.hoisted(() => ({
+	signed: new Map<string, string>(),
+	pending: new Set<string>(),
+}));
 
 vi.mock("../ActionHandler", () => ({
 	useComponentEventTrigger: () => actions.trigger,
+}));
+vi.mock("../hooks/use-asset-url", () => ({
+	useAssetUrl: (source: string) => ({
+		url: assets.signed.get(source),
+		isLoading: assets.pending.has(source),
+		refresh: () => {},
+	}),
 }));
 vi.mock("../DataContext", () => ({
 	useData: () => ({
@@ -136,6 +147,33 @@ describe("A2UI clickable card semantics", () => {
 		await renderCard(card(), controls);
 		await act(async () => {});
 		expect(element.getAttribute("role")).toBe("group");
+	});
+
+	it("shows a header image edge to edge, holds its slot while signing and drops it when it cannot load", async () => {
+		assets.signed.set("bot/ix3.png", "https://signed.test/ix3.png");
+		const withImage = (source: string): CardComponent =>
+			({
+				...card("iX3"),
+				headerImage: { literalString: source },
+			}) as CardComponent;
+
+		const element = await renderCard(withImage("bot/ix3.png"), controls);
+		const media = element.firstElementChild;
+		expect(media?.getAttribute("data-slot")).toBe("card-media");
+		expect(media?.querySelector("img")?.getAttribute("src")).toBe(
+			"https://signed.test/ix3.png",
+		);
+		expect(media?.querySelector("img")?.getAttribute("alt")).toBe("iX3");
+		expect(element.className).toContain("pt-0");
+
+		assets.pending.add("bot/i3.png");
+		await renderCard(withImage("bot/i3.png"), controls);
+		expect(element.querySelector("[data-slot='card-media']")).not.toBeNull();
+		expect(element.querySelector("[data-slot='card-media'] img")).toBeNull();
+
+		assets.pending.delete("bot/i3.png");
+		await renderCard(withImage("bot/i3.png"), controls);
+		expect(element.querySelector("[data-slot='card-media']")).toBeNull();
 	});
 
 	it("runs the card action when an ancestor outside the card is a button", async () => {

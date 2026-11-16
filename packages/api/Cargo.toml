@@ -114,6 +114,7 @@ aws-sdk-cognitoidentityprovider = {version="1.89.0", default-features=false, fea
 # ----- Mail dependencies ----
 lettre = {workspace = true, optional=true}
 reqwest = {workspace = true}
+regex.workspace = true
 async-stream = "0.3"
 eventsource-stream = "0.2"
 # -----

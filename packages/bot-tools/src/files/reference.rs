@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use flow_like_types::bot_message::WorkspaceHandle;
+use flow_like_types::bot_message::{CONVERSATION_FILE_APP_PREFIX, WorkspaceHandle};
 use flow_like_types::data_classification::DataClassification;
 use flow_like_types::{Bytes, mime_guess};
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
@@ -24,6 +24,11 @@ pub enum FileRef {
 impl FileRef {
     pub fn parse(text: &str) -> ToolResult<Self> {
         let text = text.trim();
+        if text.starts_with('{')
+            && let Ok(value @ Value::Object(_)) = serde_json::from_str::<Value>(text)
+        {
+            return Self::from_value(&value);
+        }
         if let Some(rest) = text.strip_prefix('#') {
             return Self::attachment(rest);
         }
@@ -69,11 +74,21 @@ impl FileRef {
         }
     }
 
-    pub fn from_value(value: Value) -> ToolResult<Self> {
+    /// The conversation file this names, as `(conversation id, path)`.
+    pub fn conversation_file(&self) -> Option<(&str, &str)> {
+        let (app_id, path) = match self {
+            Self::App { app_id, path } => (app_id, path),
+            Self::Handle(handle) => (&handle.app_id, &handle.path),
+            Self::Workspace(_) | Self::Attachment { .. } => return None,
+        };
+        Some((app_id.strip_prefix(CONVERSATION_FILE_APP_PREFIX)?, path))
+    }
+
+    pub fn from_value(value: &Value) -> ToolResult<Self> {
         match value {
-            Value::String(text) => Self::parse(&text),
-            Value::Object(ref fields) if fields.contains_key("sha256") => {
-                serde_json::from_value::<WorkspaceHandle>(value)
+            Value::String(text) => Self::parse(text),
+            Value::Object(fields) if fields.contains_key("sha256") => {
+                WorkspaceHandle::deserialize(value)
                     .map(Self::Handle)
                     .map_err(|error| {
                         ToolError::invalid(format!(
@@ -112,8 +127,33 @@ impl serde::Serialize for FileRef {
 impl<'de> Deserialize<'de> for FileRef {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = Value::deserialize(deserializer)?;
-        Self::from_value(value).map_err(|error| serde::de::Error::custom(error.message))
+        Self::from_value(&value).map_err(|error| serde::de::Error::custom(error.message))
     }
+}
+
+/// Every conversation file `args` names in a form the file tools read, as
+/// `(conversation id, path)`: a handle, `{app_id, path}`, `app:<app_id>/<path>` or a handle sent
+/// as JSON text.
+pub fn conversation_files(args: &Value) -> Vec<(String, String)> {
+    fn collect(value: &Value, found: &mut Vec<(String, String)>) {
+        if matches!(value, Value::String(_) | Value::Object(_))
+            && let Ok(reference) = FileRef::from_value(value)
+            && let Some((conversation_id, path)) = reference.conversation_file()
+        {
+            let file = (conversation_id.to_string(), path.to_string());
+            if !found.contains(&file) {
+                found.push(file);
+            }
+        }
+        match value {
+            Value::Object(fields) => fields.values().for_each(|value| collect(value, found)),
+            Value::Array(items) => items.iter().for_each(|item| collect(item, found)),
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    collect(args, &mut found);
+    found
 }
 
 impl JsonSchema for FileRef {
@@ -237,6 +277,29 @@ pub fn require_storage_read(env: &dyn ToolEnv, app_id: &str) -> ToolResult<()> {
     )))
 }
 
+/// A file the host grants needs no app scope, such as a conversation file, whose membership the
+/// host checks when it reads it.
+fn require_handle_read(env: &dyn ToolEnv, handle: &WorkspaceHandle) -> ToolResult<()> {
+    if env.handle_granted(handle) {
+        return Ok(());
+    }
+    require_storage_read(env, &handle.app_id)
+}
+
+/// A file named by app and path is granted the way its handle would be.
+fn require_app_read(env: &dyn ToolEnv, app_id: &str, path: &str) -> ToolResult<()> {
+    require_handle_read(
+        env,
+        &WorkspaceHandle {
+            app_id: app_id.to_string(),
+            path: path.to_string(),
+            bytes: 0,
+            sha256: String::new(),
+            mime: String::new(),
+        },
+    )
+}
+
 async fn read_whole(
     env: &dyn ToolEnv,
     app_id: &str,
@@ -283,7 +346,7 @@ pub async fn resolve(
             Ok(resolved(&workspace, path, data))
         }
         FileRef::App { app_id, path } => {
-            require_storage_read(env, app_id)?;
+            require_app_read(env, app_id, path)?;
             let data = read_whole(env, app_id, path, max_bytes).await?;
             Ok(resolved(app_id, path, data))
         }
@@ -317,13 +380,11 @@ pub async fn locate(env: &dyn ToolEnv, reference: &FileRef) -> ToolResult<Locate
             Ok(Located::new(&workspace, path, file_name(path)))
         }
         FileRef::App { app_id, path } => {
-            require_storage_read(env, app_id)?;
+            require_app_read(env, app_id, path)?;
             Ok(Located::new(app_id, path, file_name(path)))
         }
         FileRef::Handle(handle) => {
-            if !env.handle_granted(handle) {
-                require_storage_read(env, &handle.app_id)?;
-            }
+            require_handle_read(env, handle)?;
             Ok(Located::new(
                 &handle.app_id,
                 &handle.path,
@@ -358,9 +419,7 @@ async fn resolve_handle(
     handle: &WorkspaceHandle,
     max_bytes: u64,
 ) -> ToolResult<ResolvedFile> {
-    if !env.handle_granted(handle) {
-        require_storage_read(env, &handle.app_id)?;
-    }
+    require_handle_read(env, handle)?;
     let data = read_whole(env, &handle.app_id, &handle.path, max_bytes).await?;
     if !handle.sha256.is_empty() && sha256_hex(&data.bytes) != handle.sha256.to_lowercase() {
         return Err(ToolError::new(

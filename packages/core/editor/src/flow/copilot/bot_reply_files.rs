@@ -46,7 +46,9 @@ impl ReplyFiles {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<ReplyFile>> {
-        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Adds `file` unless the reply has it already; `Err` when the reply is full.
@@ -300,15 +302,13 @@ fn refusal(code: &str, message: impl Into<String>) -> String {
 }
 
 fn valid_name(name: &str) -> bool {
-    (1..=MAX_FILE_NAME_CHARS).contains(&name.chars().count())
-        && !name.chars().any(char::is_control)
+    (1..=MAX_FILE_NAME_CHARS).contains(&name.chars().count()) && !name.chars().any(char::is_control)
 }
 
 /// A complete handle of a file in the bot's own workspace.
 fn own_handle(file: &Value, workspace: Option<&str>) -> Option<WorkspaceHandle> {
     let handle = serde_json::from_value::<WorkspaceHandle>(file.clone()).ok()?;
-    (Some(handle.app_id.as_str()) == workspace && is_workspace_path(&handle.path))
-        .then_some(handle)
+    (Some(handle.app_id.as_str()) == workspace && is_workspace_path(&handle.path)).then_some(handle)
 }
 
 fn linked(url: &str, name: Option<String>, mime: Option<String>) -> Result<ReplyFile, String> {
@@ -448,7 +448,12 @@ mod tests {
     fn harness(
         workspace: Option<&str>,
         label: Arc<TurnLabel>,
-    ) -> (ReplyFilesBridge, ReplyFiles, Arc<Host>, Arc<Mutex<Vec<String>>>) {
+    ) -> (
+        ReplyFilesBridge,
+        ReplyFiles,
+        Arc<Host>,
+        Arc<Mutex<Vec<String>>>,
+    ) {
         let files = ReplyFiles::new();
         let host = Arc::new(Host {
             calls: Mutex::new(Vec::new()),
@@ -459,7 +464,9 @@ mod tests {
             files.clone(),
             workspace.map(str::to_string),
             label,
-            Some(Arc::new(move |frame: String| sink.lock().unwrap().push(frame))),
+            Some(Arc::new(move |frame: String| {
+                sink.lock().unwrap().push(frame)
+            })),
             host.clone(),
         );
         (bridge, files, host, frames)
@@ -502,7 +509,10 @@ mod tests {
         let (bridge, files, host, frames) = harness(Some("ws1"), label(None));
         let own = handle("ws1", "bot/renders/offer.pdf");
         let output = bridge
-            .call(FILE_ATTACH_TOOL, json!({ "file": own, "name": "Angebot.pdf" }))
+            .call(
+                FILE_ATTACH_TOOL,
+                json!({ "file": own, "name": "Angebot.pdf" }),
+            )
             .await;
         assert_eq!(status(&output).0, "ok");
         assert!(host.calls.lock().unwrap().is_empty());
@@ -512,12 +522,18 @@ mod tests {
             .await;
         assert_eq!(status(&output).0, "ok");
         let calls = host.calls.lock().unwrap().clone();
-        assert_eq!(calls, [("file_save".to_string(), json!({ "file": "#12.a1" }))]);
+        assert_eq!(
+            calls,
+            [("file_save".to_string(), json!({ "file": "#12.a1" }))]
+        );
 
         let attached = files.files();
         assert_eq!(attached[0].name, "Angebot.pdf");
         assert_eq!(attached[1].name, "scan.pdf");
-        assert_eq!(attached[1].handle.as_ref().unwrap().path, "bot/files/scan.pdf");
+        assert_eq!(
+            attached[1].handle.as_ref().unwrap().path,
+            "bot/files/scan.pdf"
+        );
         assert!(frames.lock().unwrap()[0].contains("storage://apps/ws1/app/bot/renders/offer.pdf"));
 
         let foreign = handle("other-app", "report.pdf");
@@ -561,7 +577,10 @@ mod tests {
         assert_eq!(files.files().len(), 1);
         for index in 1..MAX_REPLY_FILES {
             let output = bridge
-                .call(FILE_ATTACH_TOOL, json!({ "url": format!("https://h/{index}.pdf") }))
+                .call(
+                    FILE_ATTACH_TOOL,
+                    json!({ "url": format!("https://h/{index}.pdf") }),
+                )
                 .await;
             assert_eq!(status(&output).0, "ok");
         }
@@ -573,13 +592,17 @@ mod tests {
 
     #[tokio::test]
     async fn a_turn_above_the_bots_level_may_not_attach_links() {
-        let (bridge, files, _, _) = harness(Some("ws1"), label(Some(DataClassification::Confidential)));
+        let (bridge, files, _, _) =
+            harness(Some("ws1"), label(Some(DataClassification::Confidential)));
         let output = bridge
             .call(FILE_ATTACH_TOOL, json!({ "url": "https://h/a.pdf" }))
             .await;
         assert_eq!(status(&output).1, "turn_label_outbound_refused");
         let output = bridge
-            .call(FILE_ATTACH_TOOL, json!({ "file": handle("ws1", "bot/a.pdf") }))
+            .call(
+                FILE_ATTACH_TOOL,
+                json!({ "file": handle("ws1", "bot/a.pdf") }),
+            )
             .await;
         assert_eq!(status(&output).0, "ok");
         assert_eq!(files.files().len(), 1);

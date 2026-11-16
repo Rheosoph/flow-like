@@ -10,6 +10,10 @@ mod android_bot_runtime;
 #[cfg(target_os = "android")]
 mod android_mobile;
 mod bot_host;
+#[cfg(debug_assertions)]
+mod custom_bit_e2e;
+#[cfg(debug_assertions)]
+mod custom_bit_e2e_workflows;
 #[cfg(feature = "code-sandbox")]
 mod code_sandbox;
 mod deeplink;
@@ -1164,6 +1168,14 @@ pub fn run() {
             e2e_runtime::attest_intake_e2e_runtime,
             e2e_runtime::read_intake_e2e_outcomes,
             e2e_runtime::intake_e2e_runtime_status,
+            #[cfg(debug_assertions)]
+            custom_bit_e2e::custom_bit_e2e_seed,
+            #[cfg(debug_assertions)]
+            custom_bit_e2e::custom_bit_e2e_run_bot,
+            #[cfg(debug_assertions)]
+            custom_bit_e2e::custom_bit_e2e_run_workflows,
+            #[cfg(debug_assertions)]
+            custom_bit_e2e::custom_bit_e2e_apply_review,
             restart_app,
             deeplink::deeplink_replay_pending,
             #[cfg(debug_assertions)]
@@ -1185,6 +1197,10 @@ pub fn run() {
             functions::native::native_read_private_clipboard,
             functions::native::native_automation_current,
             functions::native::native_get_location,
+            functions::native::native_background_hosting_status,
+            functions::native::native_set_background_hosting,
+            functions::native::native_open_background_hosting_battery_settings,
+            functions::native::native_open_background_hosting_notification_settings,
             functions::native::native_cancel_location,
             functions::native::native_geofence_permission,
             functions::file::get_path_meta,

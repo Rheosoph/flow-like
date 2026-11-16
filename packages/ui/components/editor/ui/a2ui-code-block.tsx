@@ -6,6 +6,7 @@ import {
 	type CSSProperties,
 	memo,
 	useCallback,
+	useContext,
 	useEffect,
 	useId,
 	useMemo,
@@ -16,6 +17,7 @@ import {
 	type AssetSourceResolver,
 	AssetSourceResolverContext,
 } from "../../../hooks/use-asset-source";
+import { useBackend } from "../../../state/backend-state";
 import {
 	ExecutionServiceContext,
 	type ExecutionServiceContextValue,
@@ -31,15 +33,17 @@ import {
 	createChatSurfaceBuilder,
 	formatChatInputValue,
 	interpolateChatMessage,
-	isAllowedChatAssetSource,
 	openExternalUrl,
 } from "../../a2ui/authoring";
 import type { A2UIClientMessage, Surface } from "../../a2ui/types";
 import { useChatFollowUp } from "../../interfaces/chat-default/chat-follow-up";
 import { Button } from "../../ui/button";
 import { Skeleton } from "../../ui/skeleton";
+import { EditorAssetResolverContext } from "../asset-resolver-context";
 import { IsStreamingMarkdownContext } from "../renderer-presentation";
+import { useEditorUpload } from "../upload-context";
 import { A2UIFenceContext } from "./a2ui-fence-context";
+import { createChatAssetResolver } from "./chat-asset-resolver";
 
 /** Fixed positioning, z-index and overflow from model-authored classes stay inside the bubble. */
 const SANDBOX_STYLE: CSSProperties = {
@@ -64,14 +68,17 @@ const NO_EXECUTION: ExecutionServiceContextValue = {
 	executeEventDirect: rejectExecution,
 };
 
-const resolveChatAsset: AssetSourceResolver = (source) =>
-	isAllowedChatAssetSource(source)
-		? Promise.resolve(source.trim())
-		: Promise.reject(
-				new Error(
-					"A chat reply's interface loads media from https or inline images only.",
-				),
-			);
+/** The reply's media resolves through the same storage as the Markdown around it. */
+function useChatAssetResolver(): AssetSourceResolver {
+	const { storageState } = useBackend();
+	const { appId, scope } = useEditorUpload();
+	const host = useContext(EditorAssetResolverContext);
+	return useMemo(
+		() =>
+			createChatAssetResolver({ host, storage: storageState, appId, scope }),
+		[host, storageState, appId, scope],
+	);
+}
 
 const ignoreNavigation = () => {};
 
@@ -82,11 +89,12 @@ const ChatSurface = memo(function ChatSurface({
 	surface: Surface;
 	onMessage: (message: A2UIClientMessage) => void;
 }>) {
+	const resolveAsset = useChatAssetResolver();
 	return (
 		<IsStreamingMarkdownContext.Provider value={false}>
 			<A2UIFenceContext.Provider value={true}>
 				<ExecutionServiceContext.Provider value={NO_EXECUTION}>
-					<AssetSourceResolverContext.Provider value={resolveChatAsset}>
+					<AssetSourceResolverContext.Provider value={resolveAsset}>
 						<div data-fl-a2ui-surface="" style={SANDBOX_STYLE}>
 							<A2UIRenderer
 								surface={surface}
@@ -262,6 +270,7 @@ export default function A2UICodeBlock({
 	return (
 		<section
 			data-fl-a2ui-fence=""
+			data-streaming={isStreaming || undefined}
 			data-source-open={showSource || unrenderable || undefined}
 			aria-busy={busy || undefined}
 			aria-label={t("interactiveAnswer", "Interactive answer")}

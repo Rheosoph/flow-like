@@ -357,6 +357,7 @@ export class InboxEndToEnd {
 		return {
 			message_id: request.message_id,
 			kind: request.kind,
+			...(request.interactive ? { interactive: request.interactive } : {}),
 			envelopes,
 		};
 	}

@@ -193,6 +193,7 @@ let speechModel: { bitId: string; route: "remote" } | null;
 let listener: {
 	setPaused: ReturnType<typeof vi.fn>;
 	setGuarded: ReturnType<typeof vi.fn>;
+	retryBargeIn: ReturnType<typeof vi.fn>;
 	endBargeIn: ReturnType<typeof vi.fn>;
 	stop: ReturnType<typeof vi.fn>;
 };
@@ -215,6 +216,7 @@ beforeEach(() => {
 	listener = {
 		setPaused: vi.fn(),
 		setGuarded: vi.fn(),
+		retryBargeIn: vi.fn(() => false),
 		endBargeIn: vi.fn(),
 		stop: vi.fn(),
 	};
@@ -585,6 +587,7 @@ describe("call transcription delivery", () => {
 		const oldListener = {
 			setPaused: vi.fn(),
 			setGuarded: vi.fn(),
+			retryBargeIn: vi.fn(() => false),
 			endBargeIn: vi.fn(),
 			stop: vi.fn(),
 		};
@@ -693,6 +696,58 @@ describe("conversation call bot audio", () => {
 		expect(listener.setPaused).toHaveBeenLastCalledWith(false);
 		expect(latest.listening).toBe(true);
 		expect(mocks.transcribe).not.toHaveBeenCalled();
+	});
+
+	test.each([false, true])(
+		"the next local speech chunk restores capture after the echo tail, muted=%s",
+		async (muted) => {
+			await joined();
+			await listen();
+			if (muted) await act(async () => latest.toggleMute());
+			const first = await play();
+			await act(async () => {
+				first.source.onended?.();
+				await first.playback;
+			});
+			expect(listener.setPaused).toHaveBeenLastCalledWith(true);
+			await act(async () => vi.advanceTimersByTime(100));
+			await play();
+			expect(listener.setGuarded).toHaveBeenLastCalledWith(true);
+			expect(listener.setPaused).toHaveBeenLastCalledWith(muted);
+			await act(async () => vi.advanceTimersByTime(350));
+			expect(listener.setGuarded).toHaveBeenLastCalledWith(true);
+			expect(listener.setPaused).toHaveBeenLastCalledWith(muted);
+		},
+	);
+
+	test("the next remote speech chunk restores capture before the echo tail expires", async () => {
+		const presence = await joined();
+		await listen();
+		const remote = {
+			id: "call-one",
+			joined: true,
+			muted: false,
+			peer: "remote-peer",
+			voiceBots: ["bot"],
+		};
+		const speaking = async (bot: string | null) => {
+			await act(async () => {
+				presence.states.set(2, {
+					sub: "other",
+					call: { ...remote, speakingBot: bot },
+				});
+				presence.changed();
+			});
+		};
+		await speaking("bot");
+		await speaking(null);
+		expect(listener.setPaused).toHaveBeenLastCalledWith(true);
+		await act(async () => vi.advanceTimersByTime(100));
+		await speaking("bot");
+		expect(listener.setPaused).toHaveBeenLastCalledWith(false);
+		await act(async () => vi.advanceTimersByTime(350));
+		expect(listener.setGuarded).toHaveBeenLastCalledWith(true);
+		expect(listener.setPaused).toHaveBeenLastCalledWith(false);
 	});
 
 	test("remote bot speech pauses only transcription and resumes after its echo tail", async () => {
@@ -849,6 +904,7 @@ describe("interrupting bot speech", () => {
 			"The plan has three steps",
 		);
 		expect(speech.interrupt).not.toHaveBeenCalled();
+		expect(listener.retryBargeIn).not.toHaveBeenCalled();
 		expect(listener.endBargeIn).toHaveBeenCalledWith(false);
 		await say("Hello", 0);
 		expect(bodyOf(0).interrupted).toBeUndefined();
@@ -1177,6 +1233,92 @@ describe("streaming voice turns", () => {
 		expect(mocks.cancelRun).not.toHaveBeenCalled();
 		expect(streamed.cancel).not.toHaveBeenCalled();
 	});
+
+	test("an empty initial probe keeps speech paused while a longer probe confirms the interruption", async () => {
+		const streamed = reply();
+		const speech = control(streamed);
+		sender();
+		await ready(speech);
+		await say("Hello");
+		const capture = mocks.startCallListener.mock.calls[0][2];
+		await act(async () => capture.onBargeInStart());
+		listener.retryBargeIn.mockReturnValueOnce(true);
+		mocks.transcribe.mockResolvedValueOnce({ text: "" });
+		await act(async () =>
+			capture.onBargeInProbe({ ...utterance, durationMs: 500 }),
+		);
+		expect(listener.retryBargeIn).toHaveBeenCalledOnce();
+		expect(listener.endBargeIn).not.toHaveBeenCalled();
+		expect(speech.resume).not.toHaveBeenCalled();
+		expect(speech.interrupt).not.toHaveBeenCalled();
+		mocks.transcribe.mockResolvedValueOnce({ text: "wait, stop" });
+		await act(async () =>
+			capture.onBargeInProbe({ ...utterance, durationMs: 1000 }),
+		);
+		expect(listener.endBargeIn).toHaveBeenCalledWith(true);
+		expect(speech.interrupt).toHaveBeenCalledOnce();
+		expect(speech.resume).not.toHaveBeenCalled();
+		expect(mocks.cancelRun).toHaveBeenCalledWith("run-1");
+		expect(streamed.cancel).toHaveBeenCalledOnce();
+	});
+
+	test("a stalled probe resumes speech after two seconds and ignores a late transcription", async () => {
+		const streamed = reply();
+		const speech = control(streamed);
+		sender();
+		await ready(speech);
+		await say("Hello");
+		const capture = mocks.startCallListener.mock.calls[0][2];
+		await act(async () => capture.onBargeInStart());
+		const probe = Promise.withResolvers<{ text: string }>();
+		mocks.transcribe.mockReturnValueOnce(probe.promise);
+		await act(async () =>
+			capture.onBargeInProbe({ ...utterance, durationMs: 500 }),
+		);
+		await act(async () => vi.advanceTimersByTime(1999));
+		expect(speech.resume).not.toHaveBeenCalled();
+		expect(listener.endBargeIn).not.toHaveBeenCalled();
+		await act(async () => vi.advanceTimersByTime(1));
+		expect(speech.resume).toHaveBeenCalledOnce();
+		expect(listener.endBargeIn).toHaveBeenCalledWith(false);
+		expect(listener.retryBargeIn).not.toHaveBeenCalled();
+		await act(async () => probe.resolve({ text: "wait, stop" }));
+		expect(speech.resume).toHaveBeenCalledOnce();
+		expect(listener.endBargeIn).toHaveBeenCalledOnce();
+		expect(speech.interrupt).not.toHaveBeenCalled();
+		expect(mocks.cancelRun).not.toHaveBeenCalled();
+		expect(streamed.cancel).not.toHaveBeenCalled();
+	});
+
+	test.each(["mute", "stop listening"])(
+		"%s releases a pending barge-in pause and ignores its late confirmation",
+		async (action) => {
+			const streamed = reply();
+			const speech = control(streamed);
+			sender();
+			await ready(speech);
+			await say("Hello");
+			const capture = mocks.startCallListener.mock.calls[0][2];
+			await act(async () => capture.onBargeInStart());
+			expect(speech.pause).toHaveBeenCalledOnce();
+			const probe = Promise.withResolvers<{ text: string }>();
+			mocks.transcribe.mockReturnValueOnce(probe.promise);
+			await act(async () =>
+				capture.onBargeInProbe({ ...utterance, durationMs: 700 }),
+			);
+			await act(async () => {
+				if (action === "mute") latest.toggleMute();
+				else latest.setListening(false);
+			});
+			expect(speech.resume).toHaveBeenCalledOnce();
+			await act(async () => probe.resolve({ text: "wait, stop" }));
+			expect(speech.resume).toHaveBeenCalledOnce();
+			expect(speech.interrupt).not.toHaveBeenCalled();
+			expect(listener.endBargeIn).not.toHaveBeenCalled();
+			expect(mocks.cancelRun).not.toHaveBeenCalled();
+			expect(streamed.cancel).not.toHaveBeenCalled();
+		},
+	);
 
 	test("the manual interrupt cancels an unfinished run", async () => {
 		const streamed = reply();

@@ -29,7 +29,7 @@ export function parseHttpUrl(value: unknown): string | undefined {
 	}
 }
 
-/** Chat surfaces load media only from https and inline images. */
+/** A chat surface source that loads as written: https or an inline image. */
 export function isAllowedChatAssetSource(value: unknown): value is string {
 	if (typeof value !== "string") return false;
 	const source = value.trim();

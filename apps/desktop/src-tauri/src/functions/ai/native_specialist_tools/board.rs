@@ -183,6 +183,13 @@ pub(super) async fn execute(
         .await
         .map_err(|e| e.to_string())?;
     }
+    // Hub snapshots are cached without opening an editor. Compile against the registered draft
+    // after loading its native node metadata so the later review validates the same graph.
+    let app = app::get_app(session.app_handle.clone(), app_id.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+    let live_board = copilot::open_board_for_commit(&app, &board_id).await?;
+    let board = (*live_board.snapshot()).clone();
     let context = nested_context(
         session,
         request_id,

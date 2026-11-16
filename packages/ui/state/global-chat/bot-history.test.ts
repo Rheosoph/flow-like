@@ -21,6 +21,7 @@ import {
 	loadOlder,
 	pushedTranscript,
 	sendInteractive,
+	sendToHost,
 	startNewTopic,
 	transcriptOf,
 } from "./bot-history";
@@ -477,6 +478,20 @@ describe("entries the realtime feed pushes", () => {
 	});
 });
 
+describe("sending to a bot that answers on its own host", () => {
+	test("writes a plain message without the interactive mark", async () => {
+		const { inbox, sent } = fakeInbox(2);
+		await sendToHost(inbox, target, { id: "msg_host", text: "Digest please" });
+		expect(sent).toEqual([
+			{
+				message_id: "msg_host",
+				kind: "message",
+				envelope: { v: 1, enc: "none", body: { text: "Digest please" } },
+			},
+		]);
+	});
+});
+
 describe("sending from the interactive chat", () => {
 	test("writes the inbox entry with the interactive mark and the chat's message id", async () => {
 		const { inbox, sent } = fakeInbox(2);
@@ -489,6 +504,7 @@ describe("sending from the interactive chat", () => {
 			{
 				message_id: "msg_cuid",
 				kind: "message",
+				interactive: { client_run_id: "run_9" },
 				envelope: {
 					v: 1,
 					enc: "none",
@@ -521,6 +537,7 @@ describe("sending from the interactive chat", () => {
 			{
 				message_id: "msg_voice",
 				kind: "transcript",
+				interactive: { client_run_id: "run_v" },
 				envelope: {
 					v: 1,
 					enc: "none",

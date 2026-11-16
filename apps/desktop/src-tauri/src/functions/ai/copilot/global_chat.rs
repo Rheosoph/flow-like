@@ -62,6 +62,42 @@ pub(super) const GLOBAL_CHAT_RUN_MAX_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 
 pub(super) const GLOBAL_CHAT_RUN_MAX_CHUNKS: usize = 8_192;
 
+struct RootModelAnnouncement {
+    run_id: Option<String>,
+    announced: std::sync::atomic::AtomicBool,
+}
+
+impl RootModelAnnouncement {
+    fn new(run_id: Option<String>) -> Self {
+        Self {
+            run_id,
+            announced: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    fn from_resolution(&self, frame: &str) -> Option<String> {
+        let run_id = self.run_id.as_deref()?;
+        let body = frame
+            .strip_prefix("<model_resolved>")?
+            .strip_suffix("</model_resolved>")?;
+        let identity: serde_json::Value = serde_json::from_str(body).ok()?;
+        let bit_id = identity["bit_id"]
+            .as_str()
+            .filter(|id| !id.trim().is_empty())?;
+        // The root resolves before any delegated model. Later specialist frames must not replace it.
+        if self
+            .announced
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            return None;
+        }
+        Some(
+            crate::functions::ai::native_tool_bridge::run_model_announcement(run_id, bit_id)
+                .to_string(),
+        )
+    }
+}
+
 #[derive(Default)]
 pub(super) struct GlobalChatRunBuffer {
     pub(super) chunks: Vec<String>,
@@ -447,6 +483,9 @@ pub async fn global_chat(
     {
         let guard =
             crate::bot_host::interactive::begin(Some(&app_handle), bot, run.conversation_id());
+        // Context reads can outlast the initial grace period. Keep the turn reserved while
+        // loading them so a background host cannot claim it before generation starts.
+        let hold = run.hold();
         inbox_conversation_id = Some(run.conversation_id().to_owned());
         ephemeral_user_context = run.ephemeral_user_context().await?;
         live_call = run.live_call().await?;
@@ -471,7 +510,6 @@ pub async fn global_chat(
             reply_files = Some(run.reply_files());
         }
         usage = run.usage.clone();
-        let hold = run.hold();
         finish = Some(crate::bot_host::interactive::Finish {
             memory: bot_memory.clone(),
             run,
@@ -487,7 +525,9 @@ pub async fn global_chat(
             &trigger_files,
         ))
     };
-    let result = global_chat_native(
+    // Tauri moves this command's future through its dispatcher on the iOS main thread.
+    // Keep the chat loop on the heap so those moves fit within the main thread's stack.
+    let result = Box::pin(global_chat_native(
         app_handle,
         Some(webview.label().to_owned()),
         state,
@@ -529,7 +569,7 @@ pub async fn global_chat(
             ..Default::default()
         },
         bot_id,
-    )
+    ))
     .await;
     if let Some(finish) = finish {
         match &result {
@@ -864,10 +904,10 @@ pub async fn global_chat_native(
         .as_ref()
         .and_then(|bot| bot.admit_workspace(run_id.as_deref().expect("native run id")));
     // A capabilities bot always runs on the Bits path, on the model its policy and this desktop
-    // allow. Flux runs on its own model when it has a runnable one, else on the chat's selection.
+    // allow. Flux uses its configured primary/fallback list, or the chat selection when unset.
     let bot_model = match (&bot, &profile) {
-        (Some(bot), Some(profile)) if bot.runs_flowpilot() => {
-            bot_chat::own_model(&model_state, profile, bot).await
+        (Some(bot), profile) if bot.runs_flowpilot() => {
+            bot_chat::flowpilot_model(&model_state, profile.as_deref(), bot).await?
         }
         (Some(bot), Some(profile)) => Some(
             bot_chat::bot_model(
@@ -1296,8 +1336,12 @@ pub async fn global_chat_native(
                         .unwrap_or_default(),
                 );
                 let token_timing = call_timing.clone();
+                let model_announcement = RootModelAnnouncement::new(run_id.clone());
                 let on_token = move |token: String| {
                     token_timing.first_token(call_started);
+                    if let Some(announcement) = model_announcement.from_resolution(&token) {
+                        let _ = sink.send(announcement);
+                    }
                     if let Some(reply) = &reply_stream {
                         reply.push(&token);
                     }
@@ -1310,10 +1354,11 @@ pub async fn global_chat_native(
                     }
                     _ => flowpilot_thinking(reasoning_effort.as_deref()),
                 });
+                // Model and tool state must not inflate the enclosing native run's future.
                 let platform_chat = async {
                     match bot {
                         Some(bot) => {
-                            run_bot_chat_with_talk(
+                            Box::pin(run_bot_chat_with_talk(
                                 model_state.clone(),
                                 profile,
                                 bot.context,
@@ -1328,11 +1373,11 @@ pub async fn global_chat_native(
                                 memory,
                                 Some(on_token),
                                 talk,
-                            )
+                            ))
                             .await
                         }
                         None => {
-                            run_platform_chat(
+                            Box::pin(run_platform_chat(
                                 model_state.clone(),
                                 profile,
                                 context,
@@ -1345,7 +1390,7 @@ pub async fn global_chat_native(
                                 bridge,
                                 memory,
                                 Some(on_token),
-                            )
+                            ))
                             .await
                         }
                     }
@@ -1469,6 +1514,84 @@ pub async fn global_chat_delete_memory(
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+
+    #[test]
+    fn explicit_model_selection_announces_resolved_root_bit_once() {
+        let announcement = RootModelAnnouncement::new(Some("run-1".into()));
+        for frame in [
+            "ordinary text",
+            "<model_resolved>invalid</model_resolved>",
+            "<model_resolved>{\"bit_id\":\"\"}</model_resolved>",
+        ] {
+            assert!(announcement.from_resolution(frame).is_none());
+        }
+        let resolved = |bit_id: &str| {
+            flow_like::flow::copilot::stream::stream_frame(
+                "model_resolved",
+                &serde_json::json!({
+                    "bit_id": bit_id,
+                    "provider_name": "custom:claude-code",
+                    "configured_model_id": "opus",
+                    "model_id": "opus",
+                }),
+            )
+        };
+        let frame = announcement
+            .from_resolution(&resolved("actual-bit"))
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&frame).unwrap(),
+            serde_json::json!({
+                "type": "native_run_model", "run_id": "run-1", "model_id": "actual-bit",
+            }),
+        );
+        assert!(
+            announcement
+                .from_resolution(&resolved("nested-bit"))
+                .is_none()
+        );
+        assert!(
+            RootModelAnnouncement::new(None)
+                .from_resolution(&resolved("actual-bit"))
+                .is_none()
+        );
+    }
+
+    // Inspect the concrete async return type without constructing a Tauri app or polling it.
+    macro_rules! future_size {
+        ($function:path; $($argument:ident),+ $(,)?) => {{
+            const fn size<$($argument,)+ F: std::future::Future>(
+                _: fn($($argument),+) -> F,
+            ) -> usize {
+                std::mem::size_of::<F>()
+            }
+            size($function)
+        }};
+    }
+
+    // Evaluate this during `cargo check --tests`, without linking the desktop test app.
+    const _: () = {
+        // Leave room for UIKit and Tauri's repeated by-value moves on iOS's 1 MiB main stack.
+        const COMMAND: usize = future_size!(
+            global_chat;
+            A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10,
+            A11, A12, A13, A14, A15, A16, A17, A18, A19, A20, A21,
+        );
+        const NATIVE: usize = future_size!(
+            global_chat_native;
+            A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10,
+            A11, A12, A13, A14, A15, A16, A17, A18, A19,
+        );
+        assert!(
+            COMMAND <= 16 * 1024,
+            "global_chat future exceeds the iOS stack budget"
+        );
+        // The native run is boxed before dispatch. Bound its construction on the worker separately.
+        assert!(
+            NATIVE <= 64 * 1024,
+            "global_chat_native future exceeds its worker stack budget"
+        );
+    };
 
     #[test]
     fn nested_bots_need_an_authoritative_source_for_private_memory() {

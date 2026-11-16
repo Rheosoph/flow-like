@@ -443,7 +443,7 @@ describe("whether a desktop or device bot is online", () => {
 		await visit("bot=bot_writer");
 		expect(pill()?.querySelector("[class*='bg-primary']") !== null).toBe(true);
 		await visit("bot=bot_pebble");
-		expect(pill()?.textContent).toContain("On this device");
+		expect(pill()?.textContent).toContain("Local only");
 		expect(card("Pebble")).not.toContain("Online");
 	});
 

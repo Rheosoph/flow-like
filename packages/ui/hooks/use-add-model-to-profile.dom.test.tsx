@@ -8,6 +8,10 @@ import type { IBit } from "../lib/schema/bit/bit";
 const mocks = vi.hoisted(() => ({
 	addBit: vi.fn(),
 	all: vi.fn(),
+	getInfo: vi.fn(),
+	getSettingsProfile: vi.fn(),
+	signedIn: vi.fn(),
+	invoke: vi.fn(),
 }));
 
 const ACTIVE = { hub_profile: { id: "active", bits: [] } };
@@ -21,12 +25,13 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 vi.mock("../state/backend-state", () => ({
+	useSignedIn: mocks.signedIn,
 	useBackend: () => ({
 		bitState: { addBit: mocks.addBit, getBitSize: async () => 0 },
 		userState: {
-			getSettingsProfile: vi.fn(),
+			getSettingsProfile: mocks.getSettingsProfile,
 			getProfile: vi.fn(),
-			getInfo: vi.fn(),
+			getInfo: mocks.getInfo,
 			getAllSettingsProfiles: mocks.all,
 		},
 	}),
@@ -41,7 +46,7 @@ vi.mock("../state/upgrade-dialog-state", () => ({
 vi.mock("./use-hub", () => ({ useHub: () => ({ hub: undefined }) }));
 vi.mock("./use-invoke", () => ({
 	useInvalidateInvoke: () => async () => undefined,
-	useInvoke: () => ({ data: ACTIVE }),
+	useInvoke: mocks.invoke,
 }));
 
 import { useAddModelToProfile } from "./use-add-model-to-profile";
@@ -61,6 +66,10 @@ beforeEach(() => {
 		globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 	).IS_REACT_ACT_ENVIRONMENT = true;
 	vi.clearAllMocks();
+	mocks.signedIn.mockReturnValue(true);
+	mocks.invoke.mockImplementation((fn) => ({
+		data: fn === mocks.getSettingsProfile ? ACTIVE : undefined,
+	}));
 	mocks.all.mockResolvedValue([ACTIVE, OTHER]);
 	host = document.createElement("div");
 	root = createRoot(host);
@@ -89,4 +98,42 @@ test("a bot's own profile gets the model, not the active one", async () => {
 		await add(BIT);
 	});
 	expect(mocks.addBit).toHaveBeenCalledExactlyOnceWith(BIT, OTHER);
+});
+
+test("signed-out profiles disable remote account info while allowing local model adds", async () => {
+	mocks.signedIn.mockReturnValue(false);
+	await mount();
+	expect(mocks.invoke).toHaveBeenCalledWith(
+		mocks.getInfo,
+		expect.anything(),
+		[],
+		false,
+		[],
+	);
+	expect(mocks.invoke).toHaveBeenCalledWith(
+		mocks.getSettingsProfile,
+		expect.anything(),
+		[],
+		true,
+		[],
+	);
+	await act(async () => {
+		expect(await add(BIT)).toBe(true);
+	});
+	expect(mocks.addBit).toHaveBeenCalledExactlyOnceWith(BIT, ACTIVE);
+});
+
+test("signing in enables account info for hosted model tier checks", async () => {
+	mocks.signedIn.mockReturnValue(false);
+	await mount();
+	mocks.invoke.mockClear();
+	mocks.signedIn.mockReturnValue(true);
+	await mount();
+	expect(mocks.invoke).toHaveBeenCalledWith(
+		mocks.getInfo,
+		expect.anything(),
+		[],
+		true,
+		[],
+	);
 });

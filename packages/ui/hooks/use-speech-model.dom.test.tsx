@@ -11,7 +11,10 @@ import {
 	type QueryStorageBackend,
 	createSmartQueryPersister,
 } from "../lib/query-persister";
-import { STT_LOCAL_PROVIDER } from "../lib/realtime/call-listening";
+import {
+	STT_LOCAL_PROVIDER,
+	type SttChoice,
+} from "../lib/realtime/call-listening";
 import { type IBit, IBitTypes } from "../lib/schema/bit/bit";
 import { useBackendStore } from "../state/backend-state";
 import { type SpeechModelState, useSpeechModelState } from "./use-speech-model";
@@ -40,7 +43,7 @@ const hosted = {
 	type: IBitTypes.Stt,
 	parameters: { provider: { provider_name: "hosted:openrouter" } },
 } as IBit;
-const localChoice = { bitId: "hub.example:whisper", route: "local" };
+const localChoice: SttChoice = { bitId: "hub.example:whisper", route: "local" };
 const installedKey = ["speech-model-installed", "v2", [local.id]];
 
 function memoryStorage(): QueryStorageBackend & { map: Map<string, string> } {
@@ -139,7 +142,7 @@ test("persisted installation IDs retain local speech after a reload", async () =
 	const persister = createSmartQueryPersister({ backend: storage });
 	const first = await mount(persister);
 	expect(first.state()?.choice).toEqual(localChoice);
-	expect(first.client.getQueryData(installedKey)).toEqual([local.id]);
+	expect(first.client.getQueryData<string[]>(installedKey)).toEqual([local.id]);
 	await persister.persistQueryByKey(installedKey, first.client);
 	const saved = [...storage.map.values()]
 		.map((value) => JSON.parse(value))

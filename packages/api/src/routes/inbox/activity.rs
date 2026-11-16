@@ -25,6 +25,7 @@ pub(crate) fn activity_outgoing(
         kind: InboxEntryKind::Activity,
         content: Content::Plain(envelope),
         links,
+        interactive: None,
     })
 }
 

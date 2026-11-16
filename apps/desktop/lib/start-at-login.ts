@@ -43,7 +43,7 @@ async function offer(hostedHere: () => Promise<boolean>): Promise<void> {
 			duration: OFFER_TOAST_DURATION_MS,
 			description: i18n.t(
 				"startAtLoginOfferDescription",
-				"Flow-Like can start without a window when you log in, so scheduled tasks of bots on this computer still run after a restart. You can change this in Settings > System.",
+				"Flow-Like can start without a window when you log in, so scheduled tasks of bots on this computer still run after a restart. You can change this in Settings > Background hosting.",
 			),
 			action: {
 				label: i18n.t("startAtLoginOfferAction", "Start at login"),

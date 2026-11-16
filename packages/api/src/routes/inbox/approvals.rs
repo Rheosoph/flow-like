@@ -107,6 +107,7 @@ fn message(message_id: String, body: Value) -> SendEntryRequest {
         kind: InboxEntryKind::Message,
         envelope: Some(plain_envelope(body)),
         envelopes: None,
+        interactive: None,
         turn: None,
     }
 }

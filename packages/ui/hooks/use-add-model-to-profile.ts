@@ -6,7 +6,7 @@ import { useCallback } from "react";
 import { toast } from "sonner";
 import type { IBit } from "../lib/schema/bit/bit";
 import type { IHub } from "../lib/schema/hub/hub";
-import { useBackend } from "../state/backend-state";
+import { useBackend, useSignedIn } from "../state/backend-state";
 import type { IUserState } from "../state/backend-state/user-state";
 import { useDownloadManager } from "../state/download-manager";
 import {
@@ -76,6 +76,7 @@ export function useAddModelToProfile(
 ) {
 	const { t } = useTranslation("common");
 	const backend = useBackend();
+	const signedIn = useSignedIn();
 	const queryClient = useQueryClient();
 	const invalidate = useInvalidateInvoke();
 	const download = useDownloadManager((s) => s.download);
@@ -91,7 +92,7 @@ export function useAddModelToProfile(
 		backend.userState.getInfo,
 		backend.userState,
 		[],
-		true,
+		signedIn,
 		queryScope,
 	);
 	const tiers = hub?.tiers;

@@ -70,7 +70,7 @@ mock.module("./message", () => ({
 			anchoredContent: props.anchoredContent,
 			pending: props.pending,
 		});
-		return null;
+		return <span data-rendered-message={props.message.id} />;
 	},
 }));
 mock.module("./use-answer-playback", () => ({
@@ -309,6 +309,82 @@ describe("Chat wait before the first answer event", () => {
 
 			await act(async () => root.unmount());
 			window.close();
+		},
+		TIMEOUT_MS,
+	);
+});
+
+describe("Chat reply order", () => {
+	test(
+		"keeps a reply below its restored question when streaming finishes",
+		async () => {
+			const window = new Window();
+			Object.assign(globalThis, {
+				document: window.document,
+				HTMLElement: window.HTMLElement,
+				Node: window.Node,
+				navigator: window.navigator,
+				requestAnimationFrame: window.requestAnimationFrame.bind(window),
+				cancelAnimationFrame: window.cancelAnimationFrame.bind(window),
+				window,
+				IS_REACT_ACT_ENVIRONMENT: true,
+			});
+			const { Chat } = await import("./chat");
+			const question: IMessage = {
+				id: "question",
+				appId: "app",
+				sessionId: "s1",
+				files: [],
+				timestamp: 150,
+				inner: {
+					role: "user",
+					content: "Schedule a test",
+				} as IMessage["inner"],
+			};
+			const answer: IMessage = {
+				...question,
+				id: "answer",
+				timestamp: 101,
+				inner: { role: "assistant", content: "Scheduled" } as IMessage["inner"],
+				run_context: {
+					schema: "flowpilot.run-context/v1",
+					user_message_id: question.id,
+				},
+			};
+			const ref = { current: null as IChatRef | null };
+			const container = document.createElement("div");
+			document.body.append(container);
+			const root = createRoot(container);
+			const render = (messages: IMessage[]) =>
+				root.render(
+					<Chat
+						ref={ref}
+						sessionId="s1"
+						messages={messages}
+						onSendMessage={async () => {}}
+					/>,
+				);
+			const order = () =>
+				Array.from(
+					container.querySelectorAll("[data-rendered-message]"),
+					(element) => element.getAttribute("data-rendered-message"),
+				);
+			try {
+				await act(async () => render([question]));
+				await act(async () => {
+					ref.current?.pushCurrentMessageUpdate(answer);
+					await new Promise((resolve) => setTimeout(resolve, 50));
+				});
+				expect(order()).toEqual(["question", "answer"]);
+				await act(async () => {
+					render([answer, question]);
+					ref.current?.clearCurrentMessageUpdate();
+				});
+				expect(order()).toEqual(["question", "answer"]);
+			} finally {
+				await act(async () => root.unmount());
+				window.close();
+			}
 		},
 		TIMEOUT_MS,
 	);

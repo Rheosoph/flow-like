@@ -60,6 +60,7 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "./dropdown-menu";
+import { BitRatingBadge } from "./model-rating";
 
 export function BitCard({
 	bit,
@@ -473,7 +474,7 @@ export function BitCard({
 								)}
 							</div>
 
-							<div className="flex items-center space-x-2">
+							<div className="flex flex-wrap items-center gap-2">
 								<Badge
 									variant="secondary"
 									className="text-xs font-medium text-secondary-foreground"
@@ -484,6 +485,7 @@ export function BitCard({
 									/>
 									{bitTypeToText(bit.type)}
 								</Badge>
+								<BitRatingBadge bit={bit} />
 
 								<Badge
 									variant={isInstalled.data ? "default" : "outline"}

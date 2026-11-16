@@ -853,6 +853,173 @@ test("a streamed reply speaks piece by piece in order while its text grows", asy
 	h.controller.dispose();
 });
 
+test("streaming A2UI fences stay silent across chunks and tool flushes", async () => {
+	for (const fence of ["```", "~~~", "````"]) {
+		const h = streamHarness();
+		const stream = h.controller.stream("spoken", "bot");
+		const before = "Hier ist die Übersicht.";
+		const after = "Die wichtigsten Punkte stehen im Chat.";
+		const components = Array.from({ length: 12 }, (_, i) =>
+			JSON.stringify({
+				id: `item-${i}`,
+				type: "text",
+				text: "Dieser Inhalt gehört zur Oberfläche und darf nicht erklingen.",
+			}),
+		).join("\n");
+		const opening = `${before}\n${fence}a2ui\n`;
+		const unfinished = `${opening}${components}`;
+		for (let end = opening.length; end < unfinished.length; end += 83) {
+			stream?.update(unfinished.slice(0, end));
+			stream?.flush();
+			await settle();
+			expect(h.spoken.join(" ")).toBe(before);
+		}
+		stream?.update(unfinished);
+		stream?.flush();
+		await settle();
+		expect(h.spoken.join(" ")).toBe(before);
+		stream?.end(`${unfinished}\n${fence}\n${after}`);
+		await settle();
+		expect(h.played.join(" ").replace(/\s+/g, " ")).toBe(`${before} ${after}`);
+		expect(h.errors).toEqual([]);
+		h.controller.dispose();
+	}
+});
+
+test("streamed links speak their label once without a long or nested destination", async () => {
+	const h = streamHarness();
+	const stream = h.controller.stream("spoken", "bot");
+	const before = "Die Antwort ist bereit.";
+	const label = "Anleitung. Mit Beispielen";
+	const destination = `https://example.test/guide_(advanced)/${"part/".repeat(90)}?step=2`;
+	const unfinished = `${before}\n[${label}](${destination}`;
+	for (let end = before.length + 2; end < unfinished.length; end += 47) {
+		stream?.update(unfinished.slice(0, end));
+		stream?.flush();
+		await settle();
+		expect(h.spoken.join(" ")).toBe(before);
+	}
+	stream?.end(`${unfinished}) hilft dir weiter.`);
+	await settle();
+	expect(h.played.join(" ").replace(/\s+/g, " ")).toBe(
+		`${before} ${label} hilft dir weiter.`,
+	);
+	expect(h.errors).toEqual([]);
+	h.controller.dispose();
+});
+
+test("bare URLs never reach speech in stored replies or growing streams", async () => {
+	const text =
+		"Die Anleitung ist im Chat.\nhttps://example.test/guide_(advanced)?step=2\nwww.example.test/docs\nDanach geht es weiter.";
+	const expected = "Die Anleitung ist im Chat. Danach geht es weiter.";
+	const stored = harness();
+	stored.controller.update(snapshot([transcript, reply("links", 2, text)]));
+	await settle();
+	expect(stored.played.join(" ").replace(/\s+/g, " ")).toBe(expected);
+	stored.controller.dispose();
+
+	const live = streamHarness();
+	const stream = live.controller.stream("spoken", "bot");
+	for (let end = 1; end <= text.length; end++) {
+		stream?.update(text.slice(0, end));
+		await settle();
+	}
+	stream?.end();
+	await settle();
+	expect(live.played.join(" ").replace(/\s+/g, " ")).toBe(expected);
+	expect(live.errors).toEqual([]);
+	live.controller.dispose();
+});
+
+test("replies containing only code or destinations never start synthesis", async () => {
+	for (const text of [
+		'```a2ui\n{"id":"result","type":"text","text":"Anzeige"}\n```',
+		'~~~json\n{"destination":"https://example.test"}\n~~~',
+		"````js\nconst answer = 42;\n```\nconsole.log(answer);\n````",
+		"https://example.test/a_(b)?value=1\nwww.example.test/docs",
+	]) {
+		const h = streamHarness();
+		const stream = h.controller.stream("spoken", "bot");
+		for (let end = 1; end <= text.length; end++) {
+			stream?.update(text.slice(0, end));
+			await settle();
+		}
+		stream?.flush();
+		stream?.end();
+		await settle();
+		expect(h.spoken).toEqual([]);
+		expect(h.played).toEqual([]);
+		expect(h.errors).toEqual([]);
+		h.controller.dispose();
+
+		const stored = harness();
+		stored.controller.update(snapshot([transcript, reply("silent", 2, text)]));
+		await settle();
+		expect(stored.spoken).toEqual([]);
+		stored.controller.dispose();
+	}
+});
+
+test("a tool flush holds an unfinished link until its label can be spoken", async () => {
+	const h = streamHarness();
+	const stream = h.controller.stream("spoken", "bot");
+	stream?.update("Ich prüfe das kurz:\n[Die Anleitung");
+	stream?.flush();
+	await settle();
+	expect(h.spoken).toEqual(["Ich prüfe das kurz:"]);
+	stream?.update("Ich prüfe das kurz:\n[Die Anleitung](https://example.test/");
+	stream?.flush();
+	await settle();
+	expect(h.spoken).toEqual(["Ich prüfe das kurz:"]);
+	stream?.end(
+		"Ich prüfe das kurz:\n[Die Anleitung](https://example.test/guide) ist verfügbar.",
+	);
+	await settle();
+	expect(h.played.join(" ").replace(/\s+/g, " ")).toBe(
+		"Ich prüfe das kurz: Die Anleitung ist verfügbar.",
+	);
+	h.controller.dispose();
+});
+
+test("character-by-character markdown speaks the final prose exactly once", async () => {
+	const h = streamHarness();
+	const stream = h.controller.stream("spoken", "bot");
+	const text = [
+		"# Ergebnis",
+		"**Alles ist bereit.** Hier ist die [Anleitung](https://example.test/guide_(new)).",
+		"```a2ui",
+		'{"id":"summary","type":"text","text":"Nur auf dem Bildschirm."}',
+		"```",
+		"Danach geht es weiter.",
+	].join("\n");
+	for (let end = 1; end <= text.length; end++) {
+		stream?.update(text.slice(0, end));
+		await settle();
+	}
+	stream?.end();
+	await settle();
+	h.controller.update(snapshot([transcript, reply("final", 2, text)]));
+	await settle();
+	expect(h.played.join(" ").replace(/\s+/g, " ")).toBe(
+		"Ergebnis Alles ist bereit. Hier ist die Anleitung. Danach geht es weiter.",
+	);
+	expect(h.errors).toEqual([]);
+	h.controller.dispose();
+});
+
+test("flushing a partial parenthesized URL keeps the following prose intact", async () => {
+	const h = streamHarness();
+	const stream = h.controller.stream("spoken", "bot");
+	stream?.update("Mehr Infos (https");
+	stream?.flush();
+	await settle();
+	expect(h.spoken).toEqual(["Mehr Infos"]);
+	stream?.end("Mehr Infos (https://example.test) stehen im Chat.");
+	await settle();
+	expect(h.played.join(" ")).toBe("Mehr Infos stehen im Chat.");
+	h.controller.dispose();
+});
+
 test("the next piece is synthesized while the previous one plays", async () => {
 	const playing = deferred<void>();
 	const h = streamHarness({ play: () => playing.promise });

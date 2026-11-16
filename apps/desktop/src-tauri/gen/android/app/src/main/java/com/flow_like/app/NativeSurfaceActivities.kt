@@ -11,12 +11,9 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.text.Editable
+import android.text.InputType
 import android.text.TextWatcher
-import android.widget.Button
-import android.widget.EditText
 import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONObject
 
@@ -98,25 +95,36 @@ class NativeWidgetConfigureActivity : NativeUnlockedActivity() {
         setResult(RESULT_CANCELED, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId))
         try {
             val snapshot = BotNativeStore(this).snapshot() ?: return unavailable()
-            val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 32, 28, 24) }
-            layout.addView(TextView(this).apply { text = "Choose widget content"; textSize = 24f })
-            val search = EditText(this).apply { hint = "Find a bot, app, Event, or widget"; setSingleLine() }
-            layout.addView(search)
+            val page = NativeUi.page(this, "Choose widget content", "Choose what appears on your home screen. You can change it from the widget later.")
+            page.root.tag = "widget_configuration_page"
+        val search = NativeUi.input(this, "Search content").apply {
+                tag = "widget_content_search"
+                setSingleLine()
+            }
+            NativeUi.add(page.content, search, top = 0)
+            val count = NativeUi.text(this, "", size = 12f, muted = true)
+            NativeUi.add(page.content, count)
             val choices = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            val scroll = ScrollView(this).apply { addView(choices) }
-            layout.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-            val share = Button(this).apply { text = "Continue on another device"; setOnClickListener {
-                try { NativeSurfaceLauncher.shareCurrentPage(this@NativeWidgetConfigureActivity) }
-                catch (_: Exception) { Toast.makeText(context, "Open a bot conversation or app page first.", Toast.LENGTH_LONG).show() }
-            } }
-            layout.addView(share)
+            NativeUi.add(page.content, choices, top = 0)
             val all = NativeSurfacePolicy.choices(snapshot)
             fun populate(filter: String) {
                 choices.removeAllViews()
-                for (choice in all.filter { it.title.contains(filter, true) || it.kind.contains(filter, true) }) {
-                    choices.addView(Button(this).apply {
-                        text = "${choice.title} · ${choice.kind.replace('_', ' ')}"
-                        setOnClickListener { if (choice.kind == "app") choosePath(snapshot, choice) else save(snapshot, choice) }
+                val matches = all.filter { it.title.contains(filter, true) || it.kind.contains(filter, true) }
+                count.text = if (matches.size == 1) "1 option" else "${matches.size} options"
+                if (matches.isEmpty()) {
+                    NativeUi.add(choices, NativeUi.text(this@NativeWidgetConfigureActivity, "No matching content", emphasized = true))
+                    NativeUi.add(choices, NativeUi.text(this@NativeWidgetConfigureActivity, "Try another name or search for a bot, app, Event, or widget.", muted = true), top = 8)
+                }
+                for (choice in matches) {
+                    val type = when (choice.kind) {
+                        "bot" -> "Bot"
+                        "app" -> "App"
+                        "event" -> "Event"
+                        "custom" -> "App widget"
+                        else -> "Workspace view"
+                    }
+                    NativeUi.add(choices, NativeUi.button(this@NativeWidgetConfigureActivity, "${choice.title} · $type") {
+                        if (choice.kind == "app") choosePath(snapshot, choice) else save(snapshot, choice)
                     })
                 }
             }
@@ -125,12 +133,24 @@ class NativeWidgetConfigureActivity : NativeUnlockedActivity() {
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { populate(s?.toString() ?: "") }
                 override fun afterTextChanged(s: Editable?) {}
             })
-            populate(""); setContentView(layout)
+            NativeUi.add(page.content, NativeUi.button(this, "Continue on another device") {
+                try { NativeSurfaceLauncher.shareCurrentPage(this) }
+                catch (_: Exception) { Toast.makeText(this, "Open a bot conversation or app page first.", Toast.LENGTH_LONG).show() }
+            }, top = 24)
+            NativeUi.add(page.content, NativeUi.button(this, "Cancel") { finish() })
+            populate("")
         } catch (_: Exception) { unavailable() }
     }
     private fun choosePath(snapshot: JSONObject, choice: NativeSurfaceChoice) {
-        val path = EditText(this).apply { hint = "Optional path, for example /orders?status=open"; setSingleLine() }
-        val dialog = AlertDialog.Builder(this).setTitle(choice.title).setView(path).setPositiveButton("Use app", null).setNegativeButton("Cancel", null).create()
+        val path = NativeUi.input(this, "/orders?status=open").apply {
+            tag = "widget_app_path"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            contentDescription = "App path (optional)"
+            setSingleLine()
+        }
+        val dialog = NativeUi.dialog(this).setTitle(choice.title)
+            .setMessage("Open a specific page in this app, or leave the path empty to open its home page.")
+            .setView(path).setPositiveButton("Use app", null).setNegativeButton("Cancel", null).create()
         dialog.setOnShowListener { dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
             val value = path.text.toString().trim()
             if (value.isEmpty() || NativeSurfacePolicy.validPath(value)) { dialog.dismiss(); save(snapshot, choice, value.takeIf { it.isNotEmpty() }) }
@@ -174,19 +194,49 @@ class NativeSearchActivity : NativeUnlockedActivity() {
             }
             val kind = intent.getStringExtra("selection_kind")
             val eligible = NativeSurfacePolicy.choices(snapshot).filter { it.kind in listOf("app", "bot", "event") && (kind == null || it.kind == kind) }
-            val items = eligible.map { it.title } + listOf("Continue on another device")
-            AlertDialog.Builder(this).setTitle(if (kind == "event") "Choose an Event" else if (kind == "bot") "Choose a bot" else "Open in Flow-Like")
-                .setItems(items.toTypedArray()) { _, index ->
-                    try {
-                        if (index == eligible.size) { NativeSurfaceLauncher.shareCurrentPage(this); finish() }
-                        else {
-                            val latest = BotNativeStore(this).snapshot() ?: return@setItems unavailable()
+            val title = if (kind == "event") "Choose an Event" else if (kind == "bot") "Choose a bot" else "Open in Flow-Like"
+            val page = NativeUi.page(this, title, "Choose from the current workspace.")
+            page.root.tag = "native_search_page"
+            val search = NativeUi.input(this, if (kind == "event") "Find an Event" else if (kind == "bot") "Find a bot" else "Find an app, bot, or Event").apply {
+                tag = "native_search_input"
+                setSingleLine()
+            }
+            NativeUi.add(page.content, search, top = 0)
+            val results = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            NativeUi.add(page.content, results, top = 0)
+            fun populate(filter: String) {
+                results.removeAllViews()
+                val matches = eligible.filter { it.title.contains(filter, true) }
+                if (matches.isEmpty()) {
+                    NativeUi.add(results, NativeUi.text(this@NativeSearchActivity,
+                        if (filter.isBlank()) "Nothing available yet" else "No matches found", emphasized = true))
+                    NativeUi.add(results, NativeUi.text(this@NativeSearchActivity,
+                        if (filter.isBlank()) "Open Flow-Like to review the bots, apps, and Events in this workspace." else "Try a different name.", muted = true), top = 8)
+                }
+                matches.forEach { choice ->
+                    NativeUi.add(results, NativeUi.button(this@NativeSearchActivity, choice.title) {
+                        try {
+                            val latest = BotNativeStore(this@NativeSearchActivity).snapshot() ?: return@button unavailable()
                             require(latest.getString("scope") == scope)
-                            val action = NativeSurfacePolicy.action(latest, eligible[index]) ?: return@setItems unavailable()
-                            NativeSurfaceLauncher.dispatch(this, latest, action)
-                        }
-                    } catch (_: Exception) { unavailable() }
-                }.setNegativeButton("Cancel") { _, _ -> finish() }.setOnCancelListener { finish() }.show()
+                            val action = NativeSurfacePolicy.action(latest, choice) ?: return@button unavailable()
+                            NativeSurfaceLauncher.dispatch(this@NativeSearchActivity, latest, action)
+                        } catch (_: Exception) { unavailable() }
+                    })
+                }
+            }
+            search.addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { populate(s?.toString() ?: "") }
+                override fun afterTextChanged(s: Editable?) {}
+            })
+            NativeUi.add(page.content, NativeUi.button(this, "Continue on another device") {
+                try {
+                    NativeSurfaceLauncher.shareCurrentPage(this)
+                    finish()
+                } catch (_: Exception) { unavailable() }
+            }, top = 24)
+            NativeUi.add(page.content, NativeUi.button(this, "Cancel") { finish() })
+            populate("")
         } catch (_: Exception) { unavailable() }
     }
 }

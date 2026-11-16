@@ -6,14 +6,16 @@ import {
 	Boxes,
 	Brain,
 	ChartNoAxesCombined,
+	ChevronRight,
+	CloudIcon,
 	Code2,
 	Cpu,
-	DollarSign,
 	FileSearchIcon,
-	Filter,
 	Globe,
-	Grid3X3,
 	ImageIcon,
+	KeyRound,
+	LaptopMinimal,
+	LayoutGrid,
 	LayoutList,
 	Lightbulb,
 	ListChecks,
@@ -25,6 +27,7 @@ import {
 	RefreshCw,
 	Search,
 	Shield,
+	SlidersHorizontal,
 	Sparkles,
 	Type,
 	Video,
@@ -32,7 +35,7 @@ import {
 	X,
 	Zap,
 } from "lucide-react";
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useInvalidateInvoke, useInvoke } from "../../../hooks/index";
 import { useIsMobile } from "../../../hooks/use-mobile";
@@ -41,13 +44,27 @@ import { Bit } from "../../../lib/bit/bit";
 import { filterHostableLlmModels } from "../../../lib/bit/local-model-filter";
 import { isMlxModelBit } from "../../../lib/bit/mlx-model-pack";
 import {
+	compareModelCapability,
+	meetsModelCapabilityMinimum,
+} from "../../../lib/bit/model-capabilities";
+import {
+	MODEL_BIT_TYPES,
 	listableModels,
 	searchAllBitsOfType,
 } from "../../../lib/bit/model-listing";
+import {
+	type ModelPrice,
+	type PriceDeployment,
+	bitPrice,
+	priceTiers,
+	priceValue,
+} from "../../../lib/bit/model-pricing";
+import { bitRating, compareRating } from "../../../lib/bit/model-rating";
 import { asArray } from "../../../lib/response-shape";
 import type { IBit } from "../../../lib/schema/bit/bit";
 import { IBitTypes } from "../../../lib/schema/bit/bit";
 import type { ILlmParameters } from "../../../lib/schema/bit/bit/llm-parameters";
+import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
 import {
 	AlertDialog,
@@ -60,128 +77,66 @@ import {
 	AlertDialogTitle,
 	Button,
 	Input,
+	type Modality,
 	ModelCard,
-	ModelDetailSheet,
-	ProviderGlyph,
+	ModelDetailDialog,
+	RATING_TONE,
 	Select,
 	SelectContent,
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
 	Slider,
+	bitModalities,
 	formatContextLength,
-	providerLabel,
+	supportsRemoteEmbeddingExecution,
 } from "../../ui";
-import { Checkbox } from "../../ui/checkbox";
-import {
-	Sheet,
-	SheetContent,
-	SheetDescription,
-	SheetHeader,
-	SheetTitle,
-} from "../../ui/sheet";
+import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { Skeleton } from "../../ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { AddCustomModelDialog } from "./add-custom-model-dialog";
 
 type SortOption =
-	| "name"
 	| "updated"
+	| "name"
+	| "rating"
+	| "price"
 	| "context"
 	| "speed"
-	| "cost"
 	| "reasoning"
 	| "coding";
 type ViewMode = "grid" | "list";
-type InputModality = "text" | "image" | "speech" | "series";
-const ALL_INPUT_MODALITIES: InputModality[] = [
-	"text",
-	"image",
-	"speech",
-	"series",
+type RunFilter = "hosted" | "local" | "ownKey";
+type PriceFilter = "any" | "free" | "low";
+type RatingFilter = "any" | "good" | "top";
+type InputFilter = Extract<Modality, "text" | "image" | "audio" | "series">;
+
+const ALL = "all";
+const CAPABILITIES: { key: string; icon: LucideIcon; color: string }[] = [
+	{ key: "reasoning", icon: Brain, color: "text-orange-500" },
+	{ key: "coding", icon: Code2, color: "text-blue-500" },
+	{ key: "speed", icon: Zap, color: "text-amber-500" },
+	{ key: "cost", icon: Sparkles, color: "text-green-500" },
+	{ key: "creativity", icon: Lightbulb, color: "text-yellow-500" },
+	{ key: "factuality", icon: Shield, color: "text-emerald-500" },
+	{ key: "function_calling", icon: Wand2, color: "text-purple-500" },
+	{ key: "multilinguality", icon: Globe, color: "text-cyan-500" },
 ];
-type OutputModality =
-	| "text"
-	| "embedding"
-	| "speech"
-	| "image"
-	| "video"
-	| "decision"
-	| "forecast";
-const ALL_OUTPUT_MODALITIES: OutputModality[] = [
-	"decision",
-	"forecast",
-	"text",
-	"embedding",
-	"speech",
-	"image",
-	"video",
-];
-
-function getBitModality(type: IBitTypes): {
-	input: InputModality;
-	output: OutputModality;
-} {
-	switch (type) {
-		case IBitTypes.Forecasting:
-			return { input: "series", output: "forecast" };
-		case IBitTypes.SystemOne:
-			return { input: "text", output: "decision" };
-		case IBitTypes.Llm:
-			return { input: "text", output: "text" };
-		case IBitTypes.Vlm:
-			return { input: "image", output: "text" };
-		case IBitTypes.Tts:
-			return { input: "text", output: "speech" };
-		case IBitTypes.Stt:
-			return { input: "speech", output: "text" };
-		case IBitTypes.Embedding:
-			return { input: "text", output: "embedding" };
-		case IBitTypes.ImageEmbedding:
-			return { input: "image", output: "embedding" };
-		case IBitTypes.ImageGeneration:
-			return { input: "text", output: "image" };
-		case IBitTypes.VideoGeneration:
-			return { input: "text", output: "video" };
-		default:
-			return { input: "text", output: "text" };
-	}
-}
-
-interface CapabilityInfo {
-	icon: LucideIcon;
-	label: string;
-	color: string;
-}
-
-const capabilityIcons: Record<string, CapabilityInfo> = {
-	coding: { icon: Code2, label: "Coding", color: "text-blue-500" },
-	cost: { icon: DollarSign, label: "Cost Efficiency", color: "text-green-500" },
-	creativity: {
-		icon: Lightbulb,
-		label: "Creativity",
-		color: "text-yellow-500",
-	},
-	factuality: { icon: Shield, label: "Factuality", color: "text-emerald-500" },
-	function_calling: {
-		icon: Wand2,
-		label: "Function Calling",
-		color: "text-purple-500",
-	},
-	multilinguality: {
-		icon: Globe,
-		label: "Multilingual",
-		color: "text-cyan-500",
-	},
-	reasoning: { icon: Brain, label: "Reasoning", color: "text-orange-500" },
-	speed: { icon: Zap, label: "Speed", color: "text-amber-500" },
-};
+const NO_CAPABILITY_FILTERS: Record<string, number> = Object.fromEntries(
+	CAPABILITIES.map((capability) => [capability.key, 0]),
+);
 
 const LLM_LIKE_TYPES = new Set([IBitTypes.Llm, IBitTypes.Vlm]);
 
+function providerName(bit: IBit): string {
+	return (
+		(bit.parameters as ILlmParameters | undefined)?.provider?.provider_name ??
+		""
+	);
+}
+
 function isHostedModel(bit: IBit): boolean {
-	if (bit.parameters?.provider?.provider_name === "custom:claude-code")
-		return false;
+	if (providerName(bit) === "custom:claude-code") return false;
 	// An MLX root looks artifact-free but downloads its inline manifest locally,
 	// so it is never hosted — and never runnable in the browser.
 	if (isMlxModelBit(bit)) return false;
@@ -191,84 +146,73 @@ function isHostedModel(bit: IBit): boolean {
 	);
 }
 
+/** The catalog's own view of where a model runs, before a card resolves its pack size. */
+function catalogDeployment(bit: IBit): PriceDeployment {
+	if (bit.type === IBitTypes.Forecasting) return "native";
+	if (isHostedModel(bit) || supportsRemoteEmbeddingExecution(bit))
+		return "hosted";
+	return "local";
+}
+
+function runKind(bit: IBit, price: ModelPrice): RunFilter {
+	if (price.kind === "ownKey") return "ownKey";
+	return catalogDeployment(bit) === "hosted" ? "hosted" : "local";
+}
+
 interface AIModelPageProps {
 	webMode?: boolean;
+}
+
+interface Rail {
+	id: string;
+	tab: string;
+	title: string;
+	icon: LucideIcon;
+	color: string;
+	preview: number;
+	match: (bit: IBit) => boolean;
 }
 
 export function AIModelPage({ webMode = false }: AIModelPageProps) {
 	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
+	const isMobile = useIsMobile();
 	const profile = useInvoke(
 		backend.userState.getProfile,
 		backend.userState,
 		[],
 	);
-	const isMobile = useIsMobile();
 	const [customDialogOpen, setCustomDialogOpen] = useState(false);
 	const [editingCustomBit, setEditingCustomBit] = useState<IBit | null>(null);
 	const [deleteCustomTarget, setDeleteCustomTarget] = useState<IBit | null>(
 		null,
 	);
+	const [selectedModel, setSelectedModel] = useState<IBit | null>(null);
 	const [searchTerm, setSearchTerm] = useState("");
 	const [blacklist, setBlacklist] = useState(new Set<string>());
+	const [installedBits, setInstalledBits] = useState<Set<string>>(new Set());
 	const [viewMode, setViewMode] = useState<ViewMode>("grid");
 	const [sortBy, setSortBy] = useState<SortOption>("updated");
-	const [filtersExpanded, setFiltersExpanded] = useState(false);
-	const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
-	const [providerFilter, setProviderFilter] = useState("all");
+	const [activeTab, setActiveTab] = useState<string>(ALL);
+	const [showInProfileOnly, setShowInProfileOnly] = useState(false);
+	const [showDownloadedOnly, setShowDownloadedOnly] = useState(false);
+	const [runFilters, setRunFilters] = useState<Set<RunFilter>>(new Set());
+	const [priceFilter, setPriceFilter] = useState<PriceFilter>("any");
+	const [ratingFilter, setRatingFilter] = useState<RatingFilter>("any");
+	const [inputFilters, setInputFilters] = useState<Set<InputFilter>>(new Set());
+	const [providerFilter, setProviderFilter] = useState(ALL);
 	const [contextLengthFilter, setContextLengthFilter] = useState<
 		[number, number]
 	>([0, 2000000]);
-	const [showInProfileOnly, setShowInProfileOnly] = useState(false);
-	const [showDownloadedOnly, setShowDownloadedOnly] = useState(false);
-	const [selectedModel, setSelectedModel] = useState<IBit | null>(null);
-	const [inputModalities, setInputModalities] = useState<Set<InputModality>>(
-		new Set(ALL_INPUT_MODALITIES),
-	);
-	const [outputModalities, setOutputModalities] = useState<Set<OutputModality>>(
-		new Set(ALL_OUTPUT_MODALITIES),
-	);
-	const [capabilityFilters, setCapabilityFilters] = useState<
-		Record<string, number>
-	>({
-		reasoning: 0,
-		coding: 0,
-		speed: 0,
-		cost: 0,
-		creativity: 0,
-		factuality: 0,
-	});
-
-	const checkInstalled = useCallback(
-		async (bit: IBit) => {
-			try {
-				const result = await backend.bitState.isBitInstalled(bit);
-				return result;
-			} catch {
-				return false;
-			}
-		},
-		[backend.bitState],
+	const [capabilityFilters, setCapabilityFilters] = useState(
+		NO_CAPABILITY_FILTERS,
 	);
 
 	const foundBits = useInvoke(
 		searchAllBitsOfType,
 		backend.bitState,
-		[
-			[
-				IBitTypes.Llm,
-				IBitTypes.Vlm,
-				IBitTypes.SystemOne,
-				IBitTypes.Forecasting,
-				IBitTypes.Tts,
-				IBitTypes.Stt,
-				IBitTypes.Embedding,
-				IBitTypes.ImageEmbedding,
-				IBitTypes.ImageGeneration,
-				IBitTypes.VideoGeneration,
-			],
-		],
+		[MODEL_BIT_TYPES],
 		typeof profile.data !== "undefined",
 		[profile.data?.id ?? ""],
 	);
@@ -293,6 +237,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		for (const bit of asArray(customBits.data)) merged.set(bit.id, bit);
 		return Array.from(merged.values());
 	}, [foundBits.data, customBits.data]);
+
 	const {
 		canHostLlamaCPP,
 		canHostMLX,
@@ -317,37 +262,98 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		],
 	);
 
-	const imageBlacklist = useCallback(async () => {
+	useEffect(() => {
 		if (!foundBits.data) return;
+		let cancelled = false;
 		// Best effort: a model whose dependencies cannot be resolved must not
 		// take down the whole catalog page with an unhandled rejection.
-		const dependencies = await Promise.allSettled(
+		void Promise.allSettled(
 			asArray(foundBits.data)
 				.filter((bit) => bit.type === IBitTypes.ImageEmbedding)
 				.map((bit) =>
 					Bit.fromObject(bit).setBackend(backend).fetchDependencies(),
 				),
-		);
-		const bl = new Set<string>(
-			dependencies.flatMap((result) => {
-				if (result.status === "rejected") {
-					console.warn(
-						"Failed to resolve image embedding dependencies",
-						result.reason,
-					);
-					return [];
-				}
-				return (result.value.bits ?? [])
-					.filter((bit) => bit.type !== IBitTypes.ImageEmbedding)
-					.map((bit) => bit.id);
-			}),
-		);
-		setBlacklist(bl);
+		).then((dependencies) => {
+			if (cancelled) return;
+			setBlacklist(
+				new Set(
+					dependencies.flatMap((result) => {
+						if (result.status === "rejected") {
+							console.warn(
+								"Failed to resolve image embedding dependencies",
+								result.reason,
+							);
+							return [];
+						}
+						return (result.value.bits ?? [])
+							.filter((bit) => bit.type !== IBitTypes.ImageEmbedding)
+							.map((bit) => bit.id);
+					}),
+				),
+			);
+		});
+		return () => {
+			cancelled = true;
+		};
 	}, [backend, foundBits.data]);
 
-	const [installedBits, setInstalledBits] = useState<Set<string>>(new Set());
+	useEffect(() => {
+		if (hostableBits.length === 0 || !profile.data) return;
+		let cancelled = false;
+		const checkInstalledAll = async () => {
+			const installed = new Set<string>();
+			for (const bit of hostableBits) {
+				const isInstalled = await backend.bitState
+					.isBitInstalled(bit)
+					.catch(() => false);
+				if (isInstalled) installed.add(bit.id);
+			}
+			if (!cancelled) setInstalledBits(installed);
+		};
+		void checkInstalledAll();
+		return () => {
+			cancelled = true;
+		};
+	}, [hostableBits, profile.data, backend.bitState]);
 
-	const searchedBits = useSearch(hostableBits, searchTerm, {
+	const catalogBits = useMemo(
+		() =>
+			hostableBits.filter((bit) => {
+				if (blacklist.has(bit.id) || bit.meta?.en === undefined) return false;
+				// The web app only lists chat and decision models it can host.
+				if (
+					webMode &&
+					(LLM_LIKE_TYPES.has(bit.type) || bit.type === IBitTypes.SystemOne)
+				)
+					return isHostedModel(bit);
+				return true;
+			}),
+		[hostableBits, blacklist, webMode],
+	);
+
+	const prices = useMemo(
+		() =>
+			new Map(
+				catalogBits.map((bit) => [
+					bit.id,
+					bitPrice(bit, catalogDeployment(bit)),
+				]),
+			),
+		[catalogBits],
+	);
+	const tiers = useMemo(
+		() =>
+			priceTiers(
+				catalogBits.map((bit) => ({
+					id: bit.id,
+					type: bit.type,
+					price: prices.get(bit.id) ?? { kind: "unlisted" },
+				})),
+			),
+		[catalogBits, prices],
+	);
+
+	const searchedBits = useSearch(catalogBits, searchTerm, {
 		fields: [
 			"meta.en.name",
 			"meta.en.description",
@@ -371,49 +377,28 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		},
 	});
 
-	useEffect(() => {
-		if (!foundBits.data) return;
-		imageBlacklist();
-	}, [foundBits.data, imageBlacklist]);
+	const providers = useMemo(
+		() =>
+			Array.from(new Set(catalogBits.map(providerName).filter(Boolean))).sort(),
+		[catalogBits],
+	);
 
-	useEffect(() => {
-		if (hostableBits.length === 0 || !profile.data || !checkInstalled) return;
-		const checkInstalledAll = async () => {
-			const installedSet = new Set<string>();
-			for (const bit of hostableBits) {
-				const isInstalled = await checkInstalled(bit);
-				if (isInstalled) installedSet.add(bit.id);
-			}
-			setInstalledBits(installedSet);
-		};
-		checkInstalledAll();
-	}, [hostableBits, profile.data, checkInstalled]);
-
-	const providers = useMemo(() => {
-		const providerSet = new Set<string>();
-		for (const model of hostableBits) {
-			const params = model.parameters as ILlmParameters | undefined;
-			if (params?.provider?.provider_name) {
-				providerSet.add(params.provider.provider_name);
-			}
-		}
-		return Array.from(providerSet).sort();
-	}, [hostableBits]);
-
-	const maxContextLength = useMemo(() => {
-		if (hostableBits.length === 0) return 2000000;
-		return Math.max(
-			...hostableBits.map(
-				(m) =>
-					(m.parameters as ILlmParameters | undefined)?.context_length ?? 0,
+	const maxContextLength = useMemo(
+		() =>
+			Math.max(
+				128000,
+				...catalogBits.map(
+					(bit) =>
+						(bit.parameters as ILlmParameters | undefined)?.context_length ?? 0,
+				),
 			),
-			128000,
-		);
-	}, [hostableBits]);
+		[catalogBits],
+	);
 
-	const profileBitIds = useMemo(() => {
-		return new Set(profile.data?.bits?.map((id) => id.split(":").pop()) ?? []);
-	}, [profile.data]);
+	const profileBitIds = useMemo(
+		() => new Set(profile.data?.bits?.map((id) => id.split(":").pop()) ?? []),
+		[profile.data],
+	);
 
 	/**
 	 * Custom bits are a user-owned library — the whole catalog lists them so
@@ -426,75 +411,51 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 	);
 
 	const filteredModels = useMemo(() => {
-		let models = searchedBits;
-		models = models.filter((bit) => !blacklist.has(bit.id));
-		models = models.filter((bit) => bit.meta?.en !== undefined);
-
-		// In web mode, filter LLM/VLM to only show hosted models
-		if (webMode) {
-			models = models.filter((bit) => {
-				if (LLM_LIKE_TYPES.has(bit.type) || bit.type === IBitTypes.SystemOne) {
-					return isHostedModel(bit);
-				}
-				return true;
-			});
-		}
-
-		if (
-			inputModalities.size < ALL_INPUT_MODALITIES.length ||
-			outputModalities.size < ALL_OUTPUT_MODALITIES.length
-		) {
-			models = models.filter((m) => {
-				const bitModality = getBitModality(m.type);
-				const inputMatch =
-					inputModalities.size === 0 || inputModalities.has(bitModality.input);
-				const outputMatch =
-					outputModalities.size === 0 ||
-					outputModalities.has(bitModality.output);
-				return inputMatch && outputMatch;
-			});
-		}
-
-		if (showInProfileOnly)
-			models = models.filter((m) => profileBitIds.has(m.id));
-		if (showDownloadedOnly)
-			models = models.filter((m) => installedBits.has(m.id));
-
-		if (providerFilter !== "all") {
-			models = models.filter((m) => {
-				const params = m.parameters as ILlmParameters | undefined;
-				return params?.provider?.provider_name === providerFilter;
-			});
-		}
-
-		models = models.filter((m) => {
-			const params = m.parameters as ILlmParameters | undefined;
-			const contextLength = params?.context_length ?? 0;
-			return (
-				contextLength >= contextLengthFilter[0] &&
-				contextLength <= contextLengthFilter[1]
-			);
-		});
-
-		models = models.filter((m) => {
-			const params = m.parameters as ILlmParameters | undefined;
-			const classification = params?.model_classification;
-			if (!classification) return true;
-			for (const [key, minValue] of Object.entries(capabilityFilters)) {
-				if (minValue > 0) {
-					const modelValue =
-						classification[key as keyof typeof classification] ?? 0;
-					if (modelValue < minValue) return false;
-				}
+		const models = searchedBits.filter((bit) => {
+			if (showInProfileOnly && !profileBitIds.has(bit.id)) return false;
+			if (showDownloadedOnly && !installedBits.has(bit.id)) return false;
+			const price = prices.get(bit.id) ?? { kind: "unlisted" };
+			if (runFilters.size > 0 && !runFilters.has(runKind(bit, price)))
+				return false;
+			if (priceFilter === "free" && price.kind !== "free") return false;
+			if (
+				priceFilter === "low" &&
+				price.kind !== "free" &&
+				tiers.get(bit.id) !== 1
+			)
+				return false;
+			if (ratingFilter !== "any") {
+				const tier = bitRating(bit)?.tier;
+				if (!tier || tier > (ratingFilter === "top" ? 1 : 2)) return false;
 			}
-			return true;
+			if (inputFilters.size > 0) {
+				const inputs = bitModalities(bit.type).inputs;
+				for (const input of inputFilters)
+					if (!inputs.includes(input)) return false;
+			}
+			if (providerFilter !== ALL && providerName(bit) !== providerFilter)
+				return false;
+			const contextLength =
+				(bit.parameters as ILlmParameters | undefined)?.context_length ?? 0;
+			if (
+				contextLength < contextLengthFilter[0] ||
+				contextLength > contextLengthFilter[1]
+			)
+				return false;
+			return Object.entries(capabilityFilters).every(([key, minValue]) =>
+				meetsModelCapabilityMinimum(bit.parameters, key, minValue),
+			);
 		});
 
 		// A live query already orders by relevance; only an explicitly picked
 		// sort ("updated" is the untouched default) overrides it.
 		if (searchTerm.trim() && sortBy === "updated") return models;
 
-		models.sort((a, b) => {
+		const priceOrder = (bit: IBit) => {
+			const value = priceValue(prices.get(bit.id) ?? { kind: "unlisted" });
+			return value ?? Number.POSITIVE_INFINITY;
+		};
+		return [...models].sort((a, b) => {
 			const aParams = a.parameters as ILlmParameters | undefined;
 			const bParams = b.parameters as ILlmParameters | undefined;
 			switch (sortBy) {
@@ -504,262 +465,267 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 					);
 				case "updated":
 					return Date.parse(b.updated) - Date.parse(a.updated);
+				case "rating":
+					return compareRating(a, b);
+				case "price":
+					return priceOrder(a) - priceOrder(b);
 				case "context":
 					return (
 						(bParams?.context_length ?? 0) - (aParams?.context_length ?? 0)
 					);
-				case "speed":
-					return (
-						(bParams?.model_classification?.speed ?? 0) -
-						(aParams?.model_classification?.speed ?? 0)
-					);
-				case "cost":
-					return (
-						(bParams?.model_classification?.cost ?? 0) -
-						(aParams?.model_classification?.cost ?? 0)
-					);
-				case "reasoning":
-					return (
-						(bParams?.model_classification?.reasoning ?? 0) -
-						(aParams?.model_classification?.reasoning ?? 0)
-					);
-				case "coding":
-					return (
-						(bParams?.model_classification?.coding ?? 0) -
-						(aParams?.model_classification?.coding ?? 0)
-					);
 				default:
-					return 0;
+					return compareModelCapability(aParams, bParams, sortBy);
 			}
 		});
-
-		return models;
 	}, [
 		searchedBits,
 		searchTerm,
-		inputModalities,
-		outputModalities,
-		providerFilter,
-		contextLengthFilter,
 		showInProfileOnly,
 		showDownloadedOnly,
 		profileBitIds,
 		installedBits,
-		blacklist,
-		sortBy,
+		prices,
+		tiers,
+		runFilters,
+		priceFilter,
+		ratingFilter,
+		inputFilters,
+		providerFilter,
+		contextLengthFilter,
 		capabilityFilters,
-		webMode,
+		sortBy,
 	]);
 
-	const rails = useMemo(() => {
-		const defs: {
-			id: string;
-			label: string;
-			icon: LucideIcon;
-			color: string;
-			match: (bit: IBit) => boolean;
-		}[] = [
+	const railDefs = useMemo<Rail[]>(
+		() => [
 			{
-				id: "rail-chat",
-				label: t("chatReasoning", "Chat & reasoning"),
+				id: "chat",
+				tab: t("chatReasoning", "Chat & reasoning"),
+				title: t("chatReasoning", "Chat & reasoning"),
 				icon: MessageSquare,
 				color: "var(--m-chat)",
+				preview: 8,
 				match: (b) => LLM_LIKE_TYPES.has(b.type),
 			},
 			{
-				id: "rail-decisions",
-				label: "Decisions",
-				icon: ListChecks,
-				color: "var(--m-embed)",
-				match: (b) => b.type === IBitTypes.SystemOne,
-			},
-			{
-				id: "rail-forecasting",
-				label: "Forecasting",
-				icon: ChartNoAxesCombined,
-				color: "var(--m-embed)",
-				match: (b) => b.type === IBitTypes.Forecasting,
-			},
-			{
-				id: "rail-stt",
-				label: t("speechtotext", "Speech-to-text"),
-				icon: Mic,
-				color: "var(--m-audio)",
-				match: (b) => b.type === IBitTypes.Stt,
-			},
-			{
-				id: "rail-tts",
-				label: t("texttospeech", "Text-to-speech"),
-				icon: AudioLines,
-				color: "var(--m-speech)",
-				match: (b) => b.type === IBitTypes.Tts,
-			},
-			{
-				id: "rail-image-generation",
-				label: t("imageGeneration", "Image generation"),
+				id: "image",
+				tab: t("catalogTabImages", "Images"),
+				title: t("imageGeneration", "Image generation"),
 				icon: ImageIcon,
 				color: "var(--m-image)",
+				preview: 4,
 				match: (b) => b.type === IBitTypes.ImageGeneration,
 			},
 			{
-				id: "rail-video-generation",
-				label: t("videoGeneration", "Video generation"),
-				icon: Video,
-				color: "var(--m-video)",
-				match: (b) => b.type === IBitTypes.VideoGeneration,
+				id: "tts",
+				tab: t("texttospeech", "Text-to-speech"),
+				title: t("texttospeech", "Text-to-speech"),
+				icon: AudioLines,
+				color: "var(--m-speech)",
+				preview: 4,
+				match: (b) => b.type === IBitTypes.Tts,
 			},
 			{
-				id: "rail-embed",
-				label: t("embeddings", "Embeddings"),
+				id: "stt",
+				tab: t("speechtotext", "Speech-to-text"),
+				title: t("speechtotext", "Speech-to-text"),
+				icon: Mic,
+				color: "var(--m-audio)",
+				preview: 4,
+				match: (b) => b.type === IBitTypes.Stt,
+			},
+			{
+				id: "embed",
+				tab: t("embeddings", "Embeddings"),
+				title: t("embeddings", "Embeddings"),
 				icon: FileSearchIcon,
 				color: "var(--m-embed)",
+				preview: 4,
 				match: (b) =>
 					b.type === IBitTypes.Embedding || b.type === IBitTypes.ImageEmbedding,
 			},
-		];
-		const claimed = new Set<string>();
-		const built = defs.map((def) => {
-			const items = filteredModels.filter((bit) => {
-				if (!def.match(bit)) return false;
-				claimed.add(bit.id);
-				return true;
-			});
-			return { ...def, items };
-		});
-		const rest = filteredModels.filter((bit) => !claimed.has(bit.id));
-		if (rest.length > 0) {
-			built.push({
-				id: "rail-other",
-				label: t("otherModels", "Other models"),
+			{
+				id: "video",
+				tab: t("catalogTabVideo", "Video"),
+				title: t("videoGeneration", "Video generation"),
+				icon: Video,
+				color: "var(--m-video)",
+				preview: 4,
+				match: (b) => b.type === IBitTypes.VideoGeneration,
+			},
+			{
+				id: "decisions",
+				tab: t("catalogTabDecisions", "Decisions"),
+				title: t("catalogTabDecisions", "Decisions"),
+				icon: ListChecks,
+				color: "var(--m-embed)",
+				preview: 4,
+				match: (b) => b.type === IBitTypes.SystemOne,
+			},
+			{
+				id: "forecasting",
+				tab: t("catalogTabForecasting", "Forecasting"),
+				title: t("catalogTabForecasting", "Forecasting"),
+				icon: ChartNoAxesCombined,
+				color: "var(--m-embed)",
+				preview: 4,
+				match: (b) => b.type === IBitTypes.Forecasting,
+			},
+			{
+				id: "other",
+				tab: t("otherModels", "Other models"),
+				title: t("otherModels", "Other models"),
 				icon: Sparkles,
 				color: "var(--m-video)",
+				preview: 4,
 				match: () => true,
-				items: rest,
-			});
-		}
-		return built;
-	}, [filteredModels, t]);
-
-	const populatedRails = useMemo(
-		() => rails.filter((rail) => rail.items.length > 0),
-		[rails],
-	);
-
-	const profileModels = useMemo(
-		() => filteredModels.filter(isMine),
-		[filteredModels, isMine],
-	);
-
-	const profileGlyphModels = useMemo(
-		() => hostableBits.filter(isMine),
-		[hostableBits, isMine],
-	);
-
-	const [activeRail, setActiveRail] = useState<string>("rail-profile");
-	const railIds = useMemo(
-		() => [
-			"rail-profile",
-			...rails.filter((r) => r.items.length).map((r) => r.id),
+			},
 		],
-		[rails],
+		[t],
 	);
+
+	const railOf = useCallback(
+		(bit: IBit) => railDefs.find((rail) => rail.match(bit))?.id ?? "other",
+		[railDefs],
+	);
+
+	const rails = useMemo(() => {
+		const catalogCounts = new Map<string, number>();
+		for (const bit of catalogBits) {
+			const id = railOf(bit);
+			catalogCounts.set(id, (catalogCounts.get(id) ?? 0) + 1);
+		}
+		return railDefs
+			.map((rail) => ({
+				...rail,
+				items: filteredModels.filter((bit) => railOf(bit) === rail.id),
+			}))
+			.filter((rail) => (catalogCounts.get(rail.id) ?? 0) > 0);
+	}, [railDefs, railOf, catalogBits, filteredModels]);
 
 	useEffect(() => {
-		const sections = railIds
-			.map((id) => document.getElementById(id))
-			.filter((el): el is HTMLElement => el !== null);
-		if (sections.length === 0) return;
-		const observer = new IntersectionObserver(
-			(entries) => {
-				for (const entry of entries) {
-					if (entry.isIntersecting) setActiveRail(entry.target.id);
-				}
-			},
-			{ rootMargin: `-140px 0px -58% 0px`, threshold: 0 },
-		);
-		for (const section of sections) observer.observe(section);
-		return () => observer.disconnect();
-	}, [railIds]);
+		if (activeTab !== ALL && !rails.some((rail) => rail.id === activeTab))
+			setActiveTab(ALL);
+	}, [activeTab, rails]);
 
-	const jumpToRail = useCallback((id: string) => {
-		setActiveRail(id);
-		document.getElementById(id)?.scrollIntoView({
-			behavior: "smooth",
-			block: "start",
-		});
-	}, []);
+	const visibleRails = useMemo(
+		() =>
+			rails.filter(
+				(rail) =>
+					rail.items.length > 0 && (activeTab === ALL || rail.id === activeTab),
+			),
+		[rails, activeTab],
+	);
 
-	const modalityCounts = useMemo(() => {
-		const counts = { text: 0, image: 0, embedding: 0, speech: 0, total: 0 };
-		const validBits = hostableBits.filter((bit) => !blacklist.has(bit.id));
-		counts.total = validBits.length;
-		for (const bit of validBits) {
-			const modality = getBitModality(bit.type);
-			if (modality.input === "text") counts.text++;
-			if (modality.input === "image") counts.image++;
-			if (modality.input === "speech") counts.speech++;
-			if (modality.output === "embedding") counts.embedding++;
-			if (modality.output === "speech") counts.speech++;
-		}
-		return counts;
-	}, [hostableBits, blacklist]);
+	const profileCount = useMemo(
+		() => catalogBits.filter(isMine).length,
+		[catalogBits, isMine],
+	);
 
-	const activeFilterCount = useMemo(() => {
-		let count = 0;
-		if (providerFilter !== "all") count++;
-		if (showInProfileOnly) count++;
-		if (showDownloadedOnly) count++;
+	const resetFilters = useCallback(() => {
+		setShowDownloadedOnly(false);
+		setRunFilters(new Set());
+		setPriceFilter("any");
+		setRatingFilter("any");
+		setInputFilters(new Set());
+		setProviderFilter(ALL);
+		setContextLengthFilter([0, maxContextLength]);
+		setCapabilityFilters(NO_CAPABILITY_FILTERS);
+	}, [maxContextLength]);
+
+	const activeFilters = useMemo(() => {
+		const chips: { id: string; label: string; clear: () => void }[] = [];
+		const runLabels: Record<RunFilter, string> = {
+			hosted: t("runHosted", "Hosted"),
+			local: t("runOnDevice", "On this device"),
+			ownKey: t("runOwnKey", "Your API key"),
+		};
+		for (const run of runFilters)
+			chips.push({
+				id: `run-${run}`,
+				label: runLabels[run],
+				clear: () =>
+					setRunFilters((prev) => {
+						const next = new Set(prev);
+						next.delete(run);
+						return next;
+					}),
+			});
+		if (showDownloadedOnly)
+			chips.push({
+				id: "downloaded",
+				label: t("downloaded", "Downloaded"),
+				clear: () => setShowDownloadedOnly(false),
+			});
+		if (priceFilter !== "any")
+			chips.push({
+				id: "price",
+				label:
+					priceFilter === "free"
+						? t("priceFreeOnly", "Free")
+						: t("priceLowCost", "Low cost"),
+				clear: () => setPriceFilter("any"),
+			});
+		if (ratingFilter !== "any")
+			chips.push({
+				id: "rating",
+				label:
+					ratingFilter === "top"
+						? t("ratingTopOnly", "Top tier only")
+						: t("ratingStrongAndUp", "Rated strong and up"),
+				clear: () => setRatingFilter("any"),
+			});
+		for (const input of inputFilters)
+			chips.push({
+				id: `input-${input}`,
+				label: t("acceptsModality", "Accepts {{modality}}", {
+					modality: inputLabel(input, t),
+				}),
+				clear: () =>
+					setInputFilters((prev) => {
+						const next = new Set(prev);
+						next.delete(input);
+						return next;
+					}),
+			});
+		if (providerFilter !== ALL)
+			chips.push({
+				id: "provider",
+				label: providerFilter,
+				clear: () => setProviderFilter(ALL),
+			});
 		if (contextLengthFilter[0] > 0 || contextLengthFilter[1] < maxContextLength)
-			count++;
-		if (inputModalities.size < ALL_INPUT_MODALITIES.length) count++;
-		if (outputModalities.size < ALL_OUTPUT_MODALITIES.length) count++;
-		if (Object.values(capabilityFilters).some((v) => v > 0)) count++;
-		return count;
+			chips.push({
+				id: "context",
+				label: `${formatContextLength(contextLengthFilter[0])} – ${formatContextLength(contextLengthFilter[1])}`,
+				clear: () => setContextLengthFilter([0, maxContextLength]),
+			});
+		if (Object.values(capabilityFilters).some((value) => value > 0))
+			chips.push({
+				id: "capabilities",
+				label: t("capabilities", "Capabilities"),
+				clear: () => setCapabilityFilters(NO_CAPABILITY_FILTERS),
+			});
+		return chips;
 	}, [
-		providerFilter,
-		showInProfileOnly,
+		t,
+		runFilters,
 		showDownloadedOnly,
+		priceFilter,
+		ratingFilter,
+		inputFilters,
+		providerFilter,
 		contextLengthFilter,
 		maxContextLength,
-		inputModalities,
-		outputModalities,
 		capabilityFilters,
 	]);
 
-	const toggleInputModality = useCallback((modality: InputModality) => {
-		setInputModalities((prev) => {
-			const next = new Set(prev);
-			if (next.has(modality)) next.delete(modality);
-			else next.add(modality);
-			return next;
-		});
+	const pickTab = useCallback((id: string) => {
+		setActiveTab(id);
+		document
+			.getElementById("model-catalog-top")
+			?.scrollIntoView({ block: "start" });
 	}, []);
-
-	const toggleOutputModality = useCallback((modality: OutputModality) => {
-		setOutputModalities((prev) => {
-			const next = new Set(prev);
-			if (next.has(modality)) next.delete(modality);
-			else next.add(modality);
-			return next;
-		});
-	}, []);
-
-	const resetFilters = useCallback(() => {
-		setProviderFilter("all");
-		setShowInProfileOnly(false);
-		setShowDownloadedOnly(false);
-		setContextLengthFilter([0, maxContextLength]);
-		setInputModalities(new Set(ALL_INPUT_MODALITIES));
-		setOutputModalities(new Set(ALL_OUTPUT_MODALITIES));
-		setCapabilityFilters({
-			reasoning: 0,
-			coding: 0,
-			speed: 0,
-			cost: 0,
-			creativity: 0,
-			factuality: 0,
-		});
-	}, [maxContextLength]);
 
 	const openAddCustomModel = useCallback(() => {
 		setEditingCustomBit(null);
@@ -781,7 +747,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 				invalidate(backend.bitState.listCustomBits, []),
 				invalidate(backend.bitState.getProfileBits, []),
 			]);
-			toast.success("Custom model deleted");
+			toast.success(t("customModelDeleted", "Custom model deleted"));
 		} catch (error) {
 			toast.error(
 				t("failedToDeleteModelVal", "Failed to delete model: {{val}}", {
@@ -789,7 +755,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 				}),
 			);
 		}
-	}, [deleteCustomTarget, backend.bitState, invalidate]);
+	}, [deleteCustomTarget, backend.bitState, invalidate, t]);
 
 	const renderCard = useCallback(
 		(bit: IBit) => {
@@ -800,456 +766,317 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 					bit={bit}
 					variant={viewMode}
 					isCustom={custom}
+					priceTier={tiers.get(bit.id)}
 					onClick={() => setSelectedModel(bit)}
 					onEdit={custom ? openEditCustomModel : undefined}
 					onDelete={custom ? setDeleteCustomTarget : undefined}
 				/>
 			);
 		},
-		[customBitIds, openEditCustomModel, viewMode],
+		[customBitIds, openEditCustomModel, viewMode, tiers],
 	);
 
-	const filterContent = (
-		<div className="space-y-5">
-			<div className="space-y-2">
-				<p className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-					{t("status", "Status")}
-				</p>
-				<div className="space-y-1.5">
-					<FilterCheckbox
-						checked={showInProfileOnly}
-						onCheckedChange={(c) => setShowInProfileOnly(!!c)}
-						icon={Sparkles}
-						iconColor="text-primary"
-						label={t("inProfile", "In Profile")}
-					/>
-					{!webMode && (
-						<FilterCheckbox
-							checked={showDownloadedOnly}
-							onCheckedChange={(c) => setShowDownloadedOnly(!!c)}
-							icon={PackageCheck}
-							iconColor="text-emerald-500"
-							label={t("downloaded", "Downloaded")}
-						/>
-					)}
-				</div>
-			</div>
-
-			{providers.length > 0 && (
-				<div className="space-y-2">
-					<p className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-						{t("provider", "Provider")}
-					</p>
-					<Select value={providerFilter} onValueChange={setProviderFilter}>
-						<SelectTrigger className="h-8 text-xs">
-							<SelectValue placeholder={t("allProviders", "All providers")} />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectItem value="all">
-								{t("allProviders", "All providers")}
-							</SelectItem>
-							{providers.map((provider) => (
-								<SelectItem key={provider} value={provider}>
-									{provider}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
-				</div>
-			)}
-
-			<div className="space-y-2">
-				<div className="flex items-center justify-between">
-					<p className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60 flex items-center gap-2">
-						<Cpu className="h-3 w-3" />
-						{t("context", "Context")}
-					</p>
-					<span className="text-[10px] text-muted-foreground/40">
-						{formatContextLength(contextLengthFilter[0])} –{" "}
-						{formatContextLength(contextLengthFilter[1])}
-					</span>
-				</div>
-				<Slider
-					value={contextLengthFilter}
-					onValueChange={(v) => setContextLengthFilter(v as [number, number])}
-					min={0}
-					max={maxContextLength}
-					step={1000}
-				/>
-			</div>
-
-			<div className="space-y-3">
-				<p className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60 flex items-center gap-2">
-					<Brain className="h-3 w-3" />
-					{t("capabilities", "Capabilities")}
-				</p>
-				<div className="space-y-4">
-					{Object.entries(capabilityIcons)
-						.slice(0, 6)
-						.map(([key, info]) => {
-							const Icon = info.icon;
-							const value = capabilityFilters[key] ?? 0;
-							return (
-								<div key={key} className="space-y-1.5">
-									<div className="flex items-center justify-between text-xs">
-										<div className={`flex items-center gap-1.5 ${info.color}`}>
-											<Icon className="h-3 w-3" />
-											<span>{info.label}</span>
-										</div>
-										<span className="text-muted-foreground/40">
-											{value > 0 ? `\u2265${Math.round(value * 100)}%` : "Any"}
-										</span>
-									</div>
-									<Slider
-										value={[value]}
-										onValueChange={([v]) =>
-											setCapabilityFilters((prev) => ({
-												...prev,
-												[key]: v,
-											}))
-										}
-										min={0}
-										max={1}
-										step={0.1}
-										className="h-1"
-									/>
-								</div>
-							);
-						})}
-				</div>
-			</div>
-
-			{activeFilterCount > 0 && (
-				<button
-					type="button"
-					onClick={resetFilters}
-					className="text-xs text-muted-foreground/40 hover:text-foreground transition-colors"
-				>
-					{t(
-						"clearActivefiltercountFilter",
-						"Clear {{activeFilterCount}} filter",
-						{ activeFilterCount },
-					)}
-					{activeFilterCount !== 1 ? "s" : ""}
-				</button>
-			)}
-		</div>
+	const narrowed =
+		!!searchTerm.trim() || activeFilters.length > 0 || showInProfileOnly;
+	const shownCount = visibleRails.reduce(
+		(count, rail) =>
+			count +
+			(activeTab === ALL
+				? Math.min(rail.preview, rail.items.length)
+				: rail.items.length),
+		0,
 	);
 
-	// -m-4 cancels the settings shell padding so the sticky header spans the full
-	// width; the rows below re-add their own gutters.
 	return (
+		// -m-4 cancels the settings shell padding so the sticky header spans the full
+		// width; the rows below re-add their own gutters.
 		<main className="-m-4 flex min-h-0 flex-1 flex-col overflow-y-auto">
+			<span id="model-catalog-top" className="block h-0 scroll-mt-0" />
 			{/* Opaque: WebKit disables backdrop-filter, so a blur-only header
 			    would let the cards scroll straight through it */}
-			<div className="sticky top-0 z-30 border-b border-border/60 bg-background">
+			<header className="sticky top-0 z-30 border-b border-border/60 bg-background">
 				<div
-					className={`mx-auto flex w-full max-w-[1240px] flex-wrap items-center gap-x-3 gap-y-2 pt-4 pb-2.5 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
+					className={cn(
+						"mx-auto flex w-full max-w-310 flex-col gap-3 pt-4",
+						isMobile ? "px-4" : "px-4 sm:px-8",
+					)}
 				>
-					<div className="mr-auto flex min-w-0 items-center gap-2.5">
-						<span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-border bg-muted text-foreground/70">
-							<Boxes className="h-4.25 w-4.25" />
-						</span>
-						<span className="flex min-w-0 flex-col leading-tight">
-							<span className="text-[15px] font-semibold tracking-tight">
-								{t("models", "Models")}
+					<div className="flex flex-wrap items-center gap-2.5">
+						<div className="mr-auto flex min-w-0 items-center gap-3">
+							<span className="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] bg-muted text-foreground">
+								<Boxes className="h-4.5 w-4.5" />
 							</span>
-							<span className="text-[11.5px] text-muted-foreground">
-								{t("lengthAvailableMiddot", "{{length}} available ·", {
-									length: hostableBits.length,
-								})}{" "}
-								{t("lengthInYourProfile", "{{length}} in your profile", {
-									length: profileGlyphModels.length,
-								})}
-							</span>
-						</span>
-					</div>
-
-					<ProfileToggle
-						models={profileGlyphModels}
-						active={showInProfileOnly}
-						onToggle={() => setShowInProfileOnly((v) => !v)}
-					/>
-					<Button
-						variant="outline"
-						size="sm"
-						className="h-8 shrink-0 gap-1.5 text-xs"
-						disabled={foundBits.isFetching}
-						onClick={() => void foundBits.refetch()}
-					>
-						<RefreshCw
-							className={`size-3.5 ${foundBits.isFetching ? "animate-spin" : ""}`}
-						/>
-						{t("refreshModels", "Refresh models")}
-					</Button>
-
-					<Button
-						onClick={openAddCustomModel}
-						size="sm"
-						className="h-8 shrink-0 gap-1.5 px-3 text-xs"
-					>
-						<Plus className="h-3.5 w-3.5" />
-						<span className="hidden sm:inline">
-							{t("addCustomModel", "Add custom model")}
-						</span>
-						<span className="sm:hidden">{t("add", "Add")}</span>
-					</Button>
-				</div>
-
-				<div
-					className={`mx-auto flex w-full max-w-[1240px] items-center gap-2 pb-2.5 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
-				>
-					<div className="relative min-w-0 flex-1">
-						<Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/60 pointer-events-none" />
-						<Input
-							placeholder={t(
-								"searchModelsProvidersCapabilities",
-								"Search models, providers, capabilities…",
-							)}
-							value={searchTerm}
-							onChange={(e) => setSearchTerm(e.target.value)}
-							className="h-9 pl-10 text-sm bg-muted/40 border-border/60 focus:bg-background"
-						/>
-						{searchTerm && (
-							<button
-								type="button"
-								aria-label={t("clearSearch", "Clear search")}
-								onClick={() => setSearchTerm("")}
-								className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/60 hover:text-foreground transition-colors"
+							<div className="min-w-0">
+								<h1 className="m-0 text-lg font-semibold leading-tight tracking-tight">
+									{t("models", "Models")}
+								</h1>
+								<p className="m-0 text-[12.5px] text-muted-foreground">
+									{t("catalogModelCount", "{{count}} models", {
+										count: catalogBits.length,
+									})}
+									{" · "}
+									{t("catalogInProfileCount", "{{count}} in your profile", {
+										count: profileCount,
+									})}
+								</p>
+							</div>
+						</div>
+						<fieldset
+							aria-label={t("whichModelsToShow", "Which models to show")}
+							className="m-0 flex rounded-[9px] border bg-background p-0.75"
+						>
+							<SegmentButton
+								active={!showInProfileOnly}
+								onClick={() => setShowInProfileOnly(false)}
 							>
-								<X className="h-4 w-4" />
-							</button>
-						)}
+								{t("allModels", "All models")}
+							</SegmentButton>
+							<SegmentButton
+								active={showInProfileOnly}
+								onClick={() => setShowInProfileOnly(true)}
+							>
+								<Sparkles className="h-3.5 w-3.5" />
+								{t("inProfile", "In profile")}
+								<span className="font-mono text-[11px] tabular-nums">
+									{profileCount}
+								</span>
+							</SegmentButton>
+						</fieldset>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									variant="outline"
+									size="icon"
+									className="h-8.5 w-8.5"
+									aria-label={t("refreshModels", "Refresh models")}
+									disabled={foundBits.isFetching}
+									onClick={() => void foundBits.refetch()}
+								>
+									<RefreshCw
+										className={cn(
+											"h-4 w-4",
+											foundBits.isFetching && "animate-spin",
+										)}
+									/>
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent>
+								{t("refreshModels", "Refresh models")}
+							</TooltipContent>
+						</Tooltip>
+						<Button
+							onClick={openAddCustomModel}
+							className="h-8.5 gap-1.5 px-3 text-[13px]"
+						>
+							<Plus className="h-4 w-4" />
+							<span className="hidden sm:inline">
+								{t("addCustomModel", "Add custom model")}
+							</span>
+							<span className="sm:hidden">{t("add", "Add")}</span>
+						</Button>
 					</div>
 
-					<div className="flex items-center gap-1">
+					<div className="flex flex-wrap items-center gap-2">
+						<div className="relative min-w-0 flex-[1_1_18rem]">
+							<Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+							<Input
+								aria-label={t("searchModels", "Search models")}
+								placeholder={t(
+									"searchModelsProvidersCapabilities",
+									"Search models, providers, capabilities…",
+								)}
+								value={searchTerm}
+								onChange={(e) => setSearchTerm(e.target.value)}
+								className="h-9 border-border/60 bg-muted/40 pr-9 pl-9 text-sm focus:bg-background"
+							/>
+							{searchTerm && (
+								<button
+									type="button"
+									aria-label={t("clearSearch", "Clear search")}
+									onClick={() => setSearchTerm("")}
+									className="absolute top-1/2 right-2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded text-muted-foreground transition-colors hover:text-foreground"
+								>
+									<X className="h-4 w-4" />
+								</button>
+							)}
+						</div>
 						<Select
 							value={sortBy}
 							onValueChange={(v) => setSortBy(v as SortOption)}
 						>
-							<SelectTrigger className="h-9 w-auto gap-1.5 rounded-md border-border/60 bg-transparent px-3 text-xs text-muted-foreground hover:text-foreground focus:ring-0">
+							<SelectTrigger
+								aria-label={t("sortModels", "Sort models")}
+								className="h-9 w-auto gap-1.5 border-border/60 px-3 text-[13px]"
+							>
+								<span className="text-muted-foreground">
+									{t("sortLabel", "Sort")}
+								</span>
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
 								<SelectItem value="updated">{t("recent", "Recent")}</SelectItem>
-								<SelectItem value="name">Name</SelectItem>
+								<SelectItem value="rating">
+									{t("sortRating", "Rating")}
+								</SelectItem>
+								<SelectItem value="price">
+									{t("sortLowestPrice", "Lowest price")}
+								</SelectItem>
+								<SelectItem value="name">{t("sortName", "Name")}</SelectItem>
 								<SelectItem value="context">
 									{t("context", "Context")}
 								</SelectItem>
 								<SelectItem value="speed">{t("speed", "Speed")}</SelectItem>
-								<SelectItem value="cost">{t("cost", "Cost")}</SelectItem>
 								<SelectItem value="reasoning">
 									{t("reasoning", "Reasoning")}
 								</SelectItem>
 								<SelectItem value="coding">{t("coding", "Coding")}</SelectItem>
 							</SelectContent>
 						</Select>
-
-						<Tooltip>
-							<TooltipTrigger asChild>
+						<Popover>
+							<PopoverTrigger asChild>
 								<Button
 									variant="outline"
-									size="icon"
-									className={`h-9 w-9 rounded-md border-border/60 ${
-										viewMode === "list"
-											? "bg-muted text-foreground"
-											: "text-muted-foreground hover:text-foreground"
-									}`}
-									onClick={() =>
-										setViewMode((v) => (v === "grid" ? "list" : "grid"))
-									}
-								>
-									{viewMode === "grid" ? (
-										<Grid3X3 className="h-4 w-4" />
-									) : (
-										<LayoutList className="h-4 w-4" />
+									className={cn(
+										"h-9 gap-1.5 border-border/60 px-3 text-[13px]",
+										activeFilters.length > 0 &&
+											"border-primary/40 bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
 									)}
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent>
-								{viewMode === "grid"
-									? t("switchToList", "Switch to list")
-									: t("switchToGrid", "Switch to grid")}
-							</TooltipContent>
-						</Tooltip>
-
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button
-									variant="outline"
-									size="icon"
-									className={`relative h-9 w-9 rounded-md border-border/60 ${
-										filtersExpanded || activeFilterCount > 0
-											? "bg-muted text-foreground"
-											: "text-muted-foreground hover:text-foreground"
-									}`}
-									onClick={() => {
-										if (isMobile) {
-											setMobileFiltersOpen(true);
-										} else {
-											setFiltersExpanded((v) => !v);
-										}
-									}}
 								>
-									<Filter className="h-4 w-4" />
-									{activeFilterCount > 0 && !filtersExpanded && (
-										<span className="absolute -top-0.5 -right-0.5 h-3.5 w-3.5 rounded-full bg-primary text-[9px] text-primary-foreground flex items-center justify-center">
-											{activeFilterCount}
+									<SlidersHorizontal className="h-4 w-4" />
+									{t("filters", "Filters")}
+									{activeFilters.length > 0 && (
+										<span className="grid h-4.5 min-w-4.5 place-items-center rounded-full bg-primary px-1 font-mono text-[10.5px] text-primary-foreground">
+											{activeFilters.length}
 										</span>
 									)}
 								</Button>
-							</TooltipTrigger>
-							<TooltipContent>
-								{filtersExpanded ? "Hide filters" : "Show filters"}
-							</TooltipContent>
-						</Tooltip>
+							</PopoverTrigger>
+							<PopoverContent
+								align="end"
+								className="max-h-[min(70vh,600px)] w-[min(380px,calc(100vw-2rem))] overflow-y-auto p-4"
+							>
+								<FilterPanel
+									webMode={webMode}
+									runFilters={runFilters}
+									onToggleRun={(run) =>
+										setRunFilters((prev) => toggled(prev, run))
+									}
+									showDownloadedOnly={showDownloadedOnly}
+									onToggleDownloaded={() => setShowDownloadedOnly((v) => !v)}
+									priceFilter={priceFilter}
+									onPriceFilter={setPriceFilter}
+									ratingFilter={ratingFilter}
+									onRatingFilter={setRatingFilter}
+									inputFilters={inputFilters}
+									onToggleInput={(input) =>
+										setInputFilters((prev) => toggled(prev, input))
+									}
+									providers={providers}
+									providerFilter={providerFilter}
+									onProviderFilter={setProviderFilter}
+									contextLengthFilter={contextLengthFilter}
+									maxContextLength={maxContextLength}
+									onContextLengthFilter={setContextLengthFilter}
+									capabilityFilters={capabilityFilters}
+									onCapabilityFilter={(key, value) =>
+										setCapabilityFilters((prev) => ({ ...prev, [key]: value }))
+									}
+									onReset={resetFilters}
+									resultCount={filteredModels.length}
+								/>
+							</PopoverContent>
+						</Popover>
+						<fieldset
+							aria-label={t("layout", "Layout")}
+							className="m-0 flex rounded-[9px] border bg-background p-0.75"
+						>
+							<SegmentButton
+								active={viewMode === "grid"}
+								onClick={() => setViewMode("grid")}
+								label={t("switchToGrid", "Switch to grid")}
+							>
+								<LayoutGrid className="h-4 w-4" />
+							</SegmentButton>
+							<SegmentButton
+								active={viewMode === "list"}
+								onClick={() => setViewMode("list")}
+								label={t("switchToList", "Switch to list")}
+							>
+								<LayoutList className="h-4 w-4" />
+							</SegmentButton>
+						</fieldset>
 					</div>
-				</div>
 
-				{/* Jump links earn their row only once the page is long enough to scroll */}
-				{populatedRails.length > 2 && (
 					<nav
-						aria-label={t("jumpToACapability", "Jump to a capability")}
-						className={`mx-auto flex w-full max-w-[1240px] gap-1.5 overflow-x-auto pb-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
+						aria-label={t("modelTypes", "Model types")}
+						className="-mx-2.5 flex overflow-x-auto [mask-image:linear-gradient(90deg,#000_calc(100%-28px),transparent)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
 					>
-						<RailChip
-							icon={Sparkles}
-							label={t("yourProfile", "Your profile")}
-							count={profileModels.length}
-							owned={profileModels.length}
-							active={activeRail === "rail-profile"}
-							onClick={() => jumpToRail("rail-profile")}
-						/>
-						{populatedRails.map((rail) => (
-							<RailChip
-								key={rail.id}
-								icon={rail.icon}
-								label={rail.label}
-								count={rail.items.length}
-								owned={rail.items.filter(isMine).length}
-								active={activeRail === rail.id}
-								onClick={() => jumpToRail(rail.id)}
+						<div className="flex gap-0.5 pr-7">
+							<TypeTab
+								active={activeTab === ALL}
+								onClick={() => pickTab(ALL)}
+								label={t("allTab", "All")}
+								count={filteredModels.length}
 							/>
-						))}
+							{rails.map((rail) => (
+								<TypeTab
+									key={rail.id}
+									active={activeTab === rail.id}
+									onClick={() => pickTab(rail.id)}
+									label={rail.tab}
+									count={rail.items.length}
+								/>
+							))}
+						</div>
 					</nav>
-				)}
-			</div>
-
-			<div
-				className={`mx-auto w-full max-w-[1240px] pt-4 pb-3 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
-			>
-				{/* Modality filters, labelled so the two rows of chips can't be confused */}
-				<div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-					<div className="flex items-center gap-1.5">
-						<FilterGroupLabel>{t("accepts", "Accepts")}</FilterGroupLabel>
-						<ModalityChip
-							active={inputModalities.has("series")}
-							onClick={() => toggleInputModality("series")}
-							icon={ChartNoAxesCombined}
-							label="Time series"
-						/>
-						<ModalityChip
-							active={inputModalities.has("text")}
-							onClick={() => toggleInputModality("text")}
-							icon={Type}
-							label="Text"
-						/>
-						<ModalityChip
-							active={inputModalities.has("image")}
-							onClick={() => toggleInputModality("image")}
-							icon={ImageIcon}
-							label="Image"
-						/>
-						<ModalityChip
-							active={inputModalities.has("speech")}
-							onClick={() => toggleInputModality("speech")}
-							icon={Mic}
-							label={t("audio", "Audio")}
-						/>
-					</div>
-
-					<span className="hidden h-4 w-px bg-border sm:block" />
-
-					<div className="flex flex-wrap items-center gap-1.5">
-						<FilterGroupLabel>{t("produces", "Produces")}</FilterGroupLabel>
-						<ModalityChip
-							active={outputModalities.has("forecast")}
-							onClick={() => toggleOutputModality("forecast")}
-							icon={ChartNoAxesCombined}
-							label="Forecast"
-						/>
-						<ModalityChip
-							active={outputModalities.has("decision")}
-							onClick={() => toggleOutputModality("decision")}
-							icon={ListChecks}
-							label="Decisions"
-						/>
-						<ModalityChip
-							active={outputModalities.has("text")}
-							onClick={() => toggleOutputModality("text")}
-							icon={MessageSquare}
-							label="Chat"
-						/>
-						<ModalityChip
-							active={outputModalities.has("embedding")}
-							onClick={() => toggleOutputModality("embedding")}
-							icon={FileSearchIcon}
-							label="Embedding"
-						/>
-						<ModalityChip
-							active={outputModalities.has("speech")}
-							onClick={() => toggleOutputModality("speech")}
-							icon={AudioLines}
-							label="Speech"
-						/>
-						<ModalityChip
-							active={outputModalities.has("image")}
-							onClick={() => toggleOutputModality("image")}
-							icon={ImageIcon}
-							label={t("image", "Image")}
-						/>
-						<ModalityChip
-							active={outputModalities.has("video")}
-							onClick={() => toggleOutputModality("video")}
-							icon={Video}
-							label={t("video", "Video")}
-						/>
-					</div>
-
-					<span className="ml-auto font-mono text-[11px] tabular-nums text-muted-foreground">
-						{t("lengthModel", "{{length}} model", {
-							length: filteredModels.length,
-						})}
-						{filteredModels.length !== 1 ? "s" : ""}
-					</span>
 				</div>
 
-				{/* Expanded filter panel (desktop) */}
-				{filtersExpanded && (
-					<div className="pt-3 border-t border-border/10">{filterContent}</div>
+				{activeFilters.length > 0 && (
+					<div className="border-t border-border/60">
+						<div
+							className={cn(
+								"mx-auto flex w-full max-w-310 flex-wrap items-center gap-1.5 py-2.5",
+								isMobile ? "px-4" : "px-4 sm:px-8",
+							)}
+						>
+							<span className="mr-0.5 text-xs text-muted-foreground">
+								{t("filteredBy", "Filtered by")}
+							</span>
+							{activeFilters.map((chip) => (
+								<button
+									key={chip.id}
+									type="button"
+									onClick={chip.clear}
+									aria-label={t(
+										"removeFilterLabel",
+										"Remove filter: {{label}}",
+										{
+											label: chip.label,
+										},
+									)}
+									className="inline-flex h-6.5 items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-2.5 text-xs text-primary transition-colors hover:bg-primary/15"
+								>
+									{chip.label}
+									<X className="h-3 w-3" />
+								</button>
+							))}
+							<button
+								type="button"
+								onClick={resetFilters}
+								className="ml-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+							>
+								{t("clearAll", "Clear all")}
+							</button>
+						</div>
+					</div>
 				)}
-			</div>
+			</header>
 
-			{/* Mobile Filter Sheet */}
-			<Sheet open={mobileFiltersOpen} onOpenChange={setMobileFiltersOpen}>
-				<SheetContent side="left" className="w-72 p-0">
-					<SheetHeader className="p-4 border-b border-border/10">
-						<SheetTitle className="text-sm font-medium">
-							{t("filters", "Filters")}
-						</SheetTitle>
-						<SheetDescription className="text-xs text-muted-foreground/50">
-							{t("totalModelsAvailable", "{{total}} models available", {
-								total: modalityCounts.total,
-							})}
-						</SheetDescription>
-					</SheetHeader>
-					<div className="p-4 overflow-y-auto">{filterContent}</div>
-				</SheetContent>
-			</Sheet>
-
-			{/* Catalog */}
 			<div
-				className={`mx-auto flex w-full max-w-[1240px] flex-1 flex-col gap-7 pb-12 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
+				className={cn(
+					"mx-auto flex w-full max-w-310 flex-1 flex-col gap-9 pt-6 pb-16",
+					isMobile ? "px-4" : "px-4 sm:px-8",
+				)}
 			>
 				{foundBits.error && (
 					<p
@@ -1262,7 +1089,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 				)}
 				{foundBits.isLoading ? (
 					<ModelCatalogSkeleton />
-				) : filteredModels.length === 0 ? (
+				) : visibleRails.length === 0 ? (
 					<div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-24 text-center">
 						<Search className="mb-3 h-6 w-6 text-muted-foreground/50" />
 						<p className="text-sm font-medium">
@@ -1279,17 +1106,18 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 						</p>
 						<p className="mt-1 text-xs text-muted-foreground">
 							{t(
-								"widenTheModalityOrCapabilityFiltersToSeeMore",
-								"Widen the modality or capability filters to see more.",
+								"catalogEmptyHint",
+								"Try another name, or clear the filters to see the whole catalog.",
 							)}
 						</p>
-						{(searchTerm || activeFilterCount > 0) && (
+						{narrowed && (
 							<Button
 								variant="outline"
 								size="sm"
 								className="mt-4 h-8 text-xs"
 								onClick={() => {
 									setSearchTerm("");
+									setShowInProfileOnly(false);
 									resetFilters();
 								}}
 							>
@@ -1299,43 +1127,41 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 					</div>
 				) : (
 					<>
-						{/* State summary first, catalog detail below */}
-						<ProfileSummary
-							id="rail-profile"
-							models={profileGlyphModels}
-							onSelect={setSelectedModel}
-							onAdd={openAddCustomModel}
-						/>
-
-						{populatedRails.map((rail) => (
+						{visibleRails.map((rail) => (
 							<ModelSection
 								key={rail.id}
-								id={rail.id}
-								label={rail.label}
-								icon={rail.icon}
-								color={rail.color}
-								items={rail.items}
-								owned={rail.items.filter(isMine).length}
+								rail={rail}
+								items={
+									activeTab === ALL
+										? rail.items.slice(0, rail.preview)
+										: rail.items
+								}
+								total={rail.items.length}
+								owned={showInProfileOnly ? 0 : rail.items.filter(isMine).length}
 								view={viewMode}
+								onSeeAll={
+									activeTab === ALL ? () => pickTab(rail.id) : undefined
+								}
 								renderCard={renderCard}
 							/>
 						))}
-
-						<footer className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border/60 pt-4 text-xs text-muted-foreground">
-							<span className="font-mono tabular-nums">
-								{t("lengthOfLength2", "{{length}} of {{length2}}", {
-									length: filteredModels.length,
-									length2: hostableBits.length,
-								})}
-							</span>
-							<span>{t("modelsShown", "models shown")}</span>
+						<footer className="border-t border-border/60 pt-4 text-xs text-muted-foreground">
+							{activeTab === ALL && shownCount < filteredModels.length
+								? t(
+										"catalogShowingPreview",
+										"Showing the first models of each type. Pick a type or “See all” for the full list.",
+									)
+								: t("catalogShowingCount", "Showing {{count}} models.", {
+										count: shownCount,
+									})}
 						</footer>
 					</>
 				)}
 			</div>
 
-			<ModelDetailSheet
+			<ModelDetailDialog
 				bit={selectedModel}
+				priceTier={selectedModel ? tiers.get(selectedModel.id) : undefined}
 				onEdit={
 					selectedModel && customBitIds.has(selectedModel.id)
 						? (bit) => {
@@ -1385,60 +1211,466 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 	);
 }
 
-/** One capability group of the catalog, as a grid that fills the row. */
-function ModelSection({
-	id,
+function toggled<T>(set: Set<T>, value: T): Set<T> {
+	const next = new Set(set);
+	if (next.has(value)) next.delete(value);
+	else next.add(value);
+	return next;
+}
+
+function inputLabel(
+	input: InputFilter,
+	t: ReturnType<typeof useTranslation>["t"],
+): string {
+	switch (input) {
+		case "text":
+			return t("settings:inputText", "text");
+		case "image":
+			return t("settings:inputImages", "images");
+		case "audio":
+			return t("settings:inputAudio", "audio");
+		default:
+			return t("settings:inputTimeSeries", "time series");
+	}
+}
+
+function SegmentButton({
+	active,
+	onClick,
 	label,
-	icon: Icon,
-	color,
+	children,
+}: Readonly<{
+	active: boolean;
+	onClick: () => void;
+	label?: string;
+	children: React.ReactNode;
+}>) {
+	return (
+		<button
+			type="button"
+			aria-pressed={active}
+			aria-label={label}
+			title={label}
+			onClick={onClick}
+			className={cn(
+				"inline-flex h-6.5 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[12.5px] font-medium transition-colors",
+				active
+					? "bg-muted text-foreground"
+					: "text-muted-foreground hover:text-foreground",
+			)}
+		>
+			{children}
+		</button>
+	);
+}
+
+function TypeTab({
+	active,
+	onClick,
+	label,
+	count,
+}: Readonly<{
+	active: boolean;
+	onClick: () => void;
+	label: string;
+	count: number;
+}>) {
+	return (
+		<button
+			type="button"
+			aria-pressed={active}
+			onClick={onClick}
+			className={cn(
+				"relative inline-flex h-10.5 items-center gap-1.5 whitespace-nowrap px-2.5 text-[13px] font-medium transition-colors",
+				active
+					? "text-foreground after:absolute after:inset-x-2.5 after:-bottom-px after:h-0.5 after:rounded-full after:bg-primary after:content-['']"
+					: "text-muted-foreground hover:text-foreground",
+			)}
+		>
+			{label}
+			<span
+				className={cn(
+					"font-mono text-[11px] tabular-nums",
+					count === 0 ? "text-muted-foreground/50" : "text-muted-foreground",
+				)}
+			>
+				{count}
+			</span>
+		</button>
+	);
+}
+
+function FilterGroup({
+	title,
+	children,
+}: Readonly<{ title: string; children: React.ReactNode }>) {
+	return (
+		<div className="space-y-2">
+			<p className="text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">
+				{title}
+			</p>
+			<div className="flex flex-wrap gap-1.5">{children}</div>
+		</div>
+	);
+}
+
+function FilterChip({
+	active,
+	onClick,
+	children,
+}: Readonly<{
+	active: boolean;
+	onClick: () => void;
+	children: React.ReactNode;
+}>) {
+	return (
+		<button
+			type="button"
+			aria-pressed={active}
+			onClick={onClick}
+			className={cn(
+				"inline-flex h-7.5 items-center gap-1.5 whitespace-nowrap rounded-full border px-3 text-[12.5px] transition-colors",
+				active
+					? "border-primary/40 bg-primary/10 text-primary"
+					: "text-foreground/80 hover:border-foreground/30 hover:text-foreground",
+			)}
+		>
+			{children}
+		</button>
+	);
+}
+
+function FilterPanel({
+	webMode,
+	runFilters,
+	onToggleRun,
+	showDownloadedOnly,
+	onToggleDownloaded,
+	priceFilter,
+	onPriceFilter,
+	ratingFilter,
+	onRatingFilter,
+	inputFilters,
+	onToggleInput,
+	providers,
+	providerFilter,
+	onProviderFilter,
+	contextLengthFilter,
+	maxContextLength,
+	onContextLengthFilter,
+	capabilityFilters,
+	onCapabilityFilter,
+	onReset,
+	resultCount,
+}: Readonly<{
+	webMode: boolean;
+	runFilters: Set<RunFilter>;
+	onToggleRun: (run: RunFilter) => void;
+	showDownloadedOnly: boolean;
+	onToggleDownloaded: () => void;
+	priceFilter: PriceFilter;
+	onPriceFilter: (value: PriceFilter) => void;
+	ratingFilter: RatingFilter;
+	onRatingFilter: (value: RatingFilter) => void;
+	inputFilters: Set<InputFilter>;
+	onToggleInput: (input: InputFilter) => void;
+	providers: string[];
+	providerFilter: string;
+	onProviderFilter: (value: string) => void;
+	contextLengthFilter: [number, number];
+	maxContextLength: number;
+	onContextLengthFilter: (value: [number, number]) => void;
+	capabilityFilters: Record<string, number>;
+	onCapabilityFilter: (key: string, value: number) => void;
+	onReset: () => void;
+	resultCount: number;
+}>) {
+	const { t } = useTranslation("settings");
+	const runs: { id: RunFilter; label: string; icon: LucideIcon }[] = [
+		{ id: "hosted", label: t("runHosted", "Hosted"), icon: CloudIcon },
+		{
+			id: "local",
+			label: t("runOnDevice", "On this device"),
+			icon: LaptopMinimal,
+		},
+		{ id: "ownKey", label: t("runOwnKey", "Your API key"), icon: KeyRound },
+	];
+	const inputs: { id: InputFilter; icon: LucideIcon }[] = [
+		{ id: "text", icon: Type },
+		{ id: "image", icon: ImageIcon },
+		{ id: "audio", icon: Mic },
+		{ id: "series", icon: ChartNoAxesCombined },
+	];
+	const capabilityLabels: Record<string, string> = {
+		reasoning: t("reasoning", "Reasoning"),
+		coding: t("coding", "Coding"),
+		speed: t("speed", "Speed"),
+		cost: t("costEfficiency", "Cost efficiency"),
+		creativity: t("creativity", "Creativity"),
+		factuality: t("factuality", "Factuality"),
+		function_calling: t("functionCalling", "Function calling"),
+		multilinguality: t("multilingual", "Multilingual"),
+	};
+
+	return (
+		<div className="space-y-5">
+			<FilterGroup title={t("filterWhereItRuns", "Where it runs")}>
+				{runs.map((run) => (
+					<FilterChip
+						key={run.id}
+						active={runFilters.has(run.id)}
+						onClick={() => onToggleRun(run.id)}
+					>
+						<run.icon className="h-3.5 w-3.5" />
+						{run.label}
+					</FilterChip>
+				))}
+				{!webMode && (
+					<FilterChip active={showDownloadedOnly} onClick={onToggleDownloaded}>
+						<PackageCheck className="h-3.5 w-3.5" />
+						{t("downloaded", "Downloaded")}
+					</FilterChip>
+				)}
+			</FilterGroup>
+
+			<FilterGroup title={t("filterPrice", "Price")}>
+				{(
+					[
+						["any", t("priceAny", "Any price")],
+						["free", t("priceFreeOnly", "Free")],
+						["low", t("priceLowCost", "Low cost")],
+					] as const
+				).map(([id, label]) => (
+					<FilterChip
+						key={id}
+						active={priceFilter === id}
+						onClick={() => onPriceFilter(id)}
+					>
+						{label}
+					</FilterChip>
+				))}
+			</FilterGroup>
+
+			<div className="space-y-2">
+				<FilterGroup title={t("filterRating", "Rating")}>
+					{(
+						[
+							["any", t("ratingAny", "Any rating"), null],
+							["good", t("ratingStrongAndUp", "Rated strong and up"), 2],
+							["top", t("ratingTopOnly", "Top tier only"), 1],
+						] as const
+					).map(([id, label, tier]) => (
+						<FilterChip
+							key={id}
+							active={ratingFilter === id}
+							onClick={() => onRatingFilter(id)}
+						>
+							{tier && (
+								<span
+									aria-hidden="true"
+									className={cn("h-2 w-2 rounded-full", RATING_TONE[tier].fill)}
+								/>
+							)}
+							{label}
+						</FilterChip>
+					))}
+				</FilterGroup>
+				<p className="text-[11.5px] leading-relaxed text-muted-foreground">
+					{t(
+						"ratingFilterHint",
+						"Chat models are rated by the intelligence index. Every other type has an estimated 0–100 quality score within its type.",
+					)}
+				</p>
+				<div className="flex flex-wrap gap-x-3 gap-y-1 text-[11.5px] text-muted-foreground">
+					{(
+						[
+							[1, t("ratingLegendTop", "Top tier")],
+							[2, t("ratingLegendStrong", "Strong")],
+							[3, t("ratingLegendFair", "Fair")],
+							[4, t("ratingLegendBasic", "Basic")],
+						] as const
+					).map(([tier, label]) => (
+						<span key={tier} className="inline-flex items-center gap-1.5">
+							<span
+								aria-hidden="true"
+								className={cn("h-2 w-2 rounded-full", RATING_TONE[tier].fill)}
+							/>
+							{label}
+						</span>
+					))}
+				</div>
+			</div>
+
+			<FilterGroup title={t("accepts", "Accepts")}>
+				{inputs.map((input) => (
+					<FilterChip
+						key={input.id}
+						active={inputFilters.has(input.id)}
+						onClick={() => onToggleInput(input.id)}
+					>
+						<input.icon className="h-3.5 w-3.5" />
+						{inputLabel(input.id, t)}
+					</FilterChip>
+				))}
+			</FilterGroup>
+
+			{providers.length > 0 && (
+				<div className="space-y-2">
+					<p className="text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">
+						{t("provider", "Provider")}
+					</p>
+					<Select value={providerFilter} onValueChange={onProviderFilter}>
+						<SelectTrigger className="h-8 text-xs">
+							<SelectValue placeholder={t("allProviders", "All providers")} />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value={ALL}>
+								{t("allProviders", "All providers")}
+							</SelectItem>
+							{providers.map((provider) => (
+								<SelectItem key={provider} value={provider}>
+									{provider}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+				</div>
+			)}
+
+			<div className="space-y-2">
+				<div className="flex items-center justify-between">
+					<p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">
+						<Cpu className="h-3 w-3" />
+						{t("context", "Context")}
+					</p>
+					<span className="text-[11px] text-muted-foreground">
+						{formatContextLength(contextLengthFilter[0])} –{" "}
+						{formatContextLength(contextLengthFilter[1])}
+					</span>
+				</div>
+				<Slider
+					value={contextLengthFilter}
+					onValueChange={(v) => onContextLengthFilter(v as [number, number])}
+					min={0}
+					max={maxContextLength}
+					step={1000}
+				/>
+			</div>
+
+			<div className="space-y-3">
+				<p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">
+					<Brain className="h-3 w-3" />
+					{t("capabilities", "Capabilities")}
+				</p>
+				{CAPABILITIES.map((capability) => {
+					const value = capabilityFilters[capability.key] ?? 0;
+					return (
+						<div key={capability.key} className="space-y-1.5">
+							<div className="flex items-center justify-between text-xs">
+								<span
+									className={cn("flex items-center gap-1.5", capability.color)}
+								>
+									<capability.icon className="h-3 w-3" />
+									{capabilityLabels[capability.key]}
+								</span>
+								<span className="text-muted-foreground">
+									{value > 0
+										? `≥${Math.round(value * 100)}%`
+										: t("anyValue", "Any")}
+								</span>
+							</div>
+							<Slider
+								value={[value]}
+								onValueChange={([v]) => onCapabilityFilter(capability.key, v)}
+								min={0}
+								max={1}
+								step={0.1}
+							/>
+						</div>
+					);
+				})}
+			</div>
+
+			<div className="flex items-center justify-between border-t pt-3">
+				<button
+					type="button"
+					onClick={onReset}
+					className="text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+				>
+					{t("resetFilters", "Reset")}
+				</button>
+				<span className="text-xs text-muted-foreground">
+					{t("catalogMatchingCount", "{{count}} matching models", {
+						count: resultCount,
+					})}
+				</span>
+			</div>
+		</div>
+	);
+}
+
+/** One model type: a preview row on "All", the full grid on its own tab. */
+function ModelSection({
+	rail,
 	items,
+	total,
 	owned,
 	view,
+	onSeeAll,
 	renderCard,
 }: Readonly<{
-	id: string;
-	label: string;
-	icon: LucideIcon;
-	color: string;
+	rail: Rail;
 	items: IBit[];
+	total: number;
 	owned: number;
 	view: ViewMode;
+	onSeeAll?: () => void;
 	renderCard: (bit: IBit) => React.ReactNode;
 }>) {
 	const { t } = useTranslation("settings");
+	const Icon = rail.icon;
+	const headingId = `rail-${rail.id}-heading`;
 	return (
-		<section id={id} aria-labelledby={`${id}-heading`} className="scroll-mt-32">
-			<div className="mb-3 flex items-center gap-2.5 border-b border-border/60 pb-2">
+		<section aria-labelledby={headingId} className="flex flex-col gap-3">
+			<div className="flex min-h-7 items-center gap-2.5">
 				<span
-					style={{ "--rc": color } as React.CSSProperties}
-					className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-[color-mix(in_srgb,var(--rc)_14%,transparent)] text-(--rc)"
+					style={{ "--rc": rail.color } as React.CSSProperties}
+					className="grid h-6.5 w-6.5 shrink-0 place-items-center rounded-[7px] bg-[color-mix(in_srgb,var(--rc)_16%,transparent)] text-(--rc)"
 				>
 					<Icon className="h-3.5 w-3.5" />
 				</span>
-				<h2
-					id={`${id}-heading`}
-					className="m-0 text-[12px] font-semibold uppercase tracking-[0.12em] text-muted-foreground"
-				>
-					{label}
+				<h2 id={headingId} className="m-0 text-[15px] font-semibold">
+					{rail.title}
 				</h2>
-				<span className="font-mono text-[11px] tabular-nums text-muted-foreground/70">
-					{items.length}
+				<span className="font-mono text-xs tabular-nums text-muted-foreground">
+					{total}
 				</span>
 				{owned > 0 && (
-					<span className="ml-auto text-[11px] text-muted-foreground">
-						<span className="font-mono tabular-nums">{owned}</span>{" "}
-						{t("inYourProfile", "in your profile")}
+					<span className="text-xs text-muted-foreground">
+						·{" "}
+						{t("catalogInProfileCount", "{{count}} in your profile", {
+							count: owned,
+						})}
 					</span>
+				)}
+				{onSeeAll && total > items.length && (
+					<button
+						type="button"
+						onClick={onSeeAll}
+						className="ml-auto inline-flex items-center gap-1 text-[12.5px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+					>
+						{t("seeAllCount", "See all {{count}}", { count: total })}
+						<ChevronRight className="h-3.5 w-3.5" />
+					</button>
 				)}
 			</div>
 			<ul
-				className={`m-0 grid list-none p-0 ${view === "list" ? "gap-1.5" : "gap-3"}`}
-				style={{
-					gridTemplateColumns:
-						view === "list"
-							? "minmax(0, 1fr)"
-							: "repeat(auto-fill, minmax(258px, 1fr))",
-				}}
+				className={cn(
+					"m-0 grid list-none p-0",
+					view === "list"
+						? "grid-cols-1 gap-1.5"
+						: "grid-cols-[repeat(auto-fill,minmax(272px,1fr))] gap-3",
+				)}
 			>
 				{items.map((bit) => (
 					<li key={bit.id} className="min-w-0">
@@ -1450,265 +1682,17 @@ function ModelSection({
 	);
 }
 
-/**
- * What the profile currently runs on, as a compact strip — the same models
- * still appear as full cards in their capability group below, so this stays a
- * summary and never repeats the detail.
- */
-function ProfileSummary({
-	id,
-	models,
-	onSelect,
-	onAdd,
-}: Readonly<{
-	id: string;
-	models: IBit[];
-	onSelect: (bit: IBit) => void;
-	onAdd: () => void;
-}>) {
-	const { t } = useTranslation("settings");
-	return (
-		<section
-			id={id}
-			aria-labelledby={`${id}-heading`}
-			className="scroll-mt-32 rounded-xl border border-border bg-muted/40 p-3.5 dark:border-white/10"
-		>
-			<div className="mb-2.5 flex items-center gap-2.5">
-				<Sparkles className="h-3.5 w-3.5 shrink-0 text-primary" />
-				<h2
-					id={`${id}-heading`}
-					className="m-0 text-[12px] font-semibold uppercase tracking-[0.12em] text-muted-foreground"
-				>
-					{t("inYourProfile2", "In your profile")}
-				</h2>
-				<span className="ml-auto text-[11px] text-muted-foreground">
-					{t(
-						"availableToEveryFlowInThisWorkspace",
-						"Available to every flow in this workspace",
-					)}
-				</span>
-			</div>
-
-			{models.length === 0 ? (
-				<div className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
-					<span>
-						{t(
-							"noModelsYetAddOneBelowOrConnectYourOwnProvider",
-							"No models yet — add one below, or connect your own provider.",
-						)}
-					</span>
-					<Button
-						variant="outline"
-						size="sm"
-						onClick={onAdd}
-						className="h-7 gap-1.5 bg-background text-xs"
-					>
-						<Plus className="h-3.5 w-3.5" />
-						{t("addCustomModel", "Add custom model")}
-					</Button>
-				</div>
-			) : (
-				<ul className="m-0 flex list-none flex-wrap gap-1.5 p-0">
-					{models.map((bit) => (
-						<li key={bit.id}>
-							<button
-								type="button"
-								onClick={() => onSelect(bit)}
-								title={`${bit.meta?.en?.name ?? bit.id} — ${providerLabel(bit)}`}
-								className="flex h-8 max-w-60 items-center gap-2 rounded-lg border border-border bg-background pl-1.5 pr-2.5 text-left transition-colors hover:border-primary/40 hover:bg-primary/5 dark:border-white/10"
-							>
-								<ProviderGlyph bit={bit} size={20} className="rounded-[5px]" />
-								<span className="truncate text-[12.5px] font-medium">
-									{bit.meta?.en?.name ?? bit.id}
-								</span>
-								<span className="shrink-0 truncate text-[11px] text-muted-foreground">
-									{providerLabel(bit)}
-								</span>
-							</button>
-						</li>
-					))}
-				</ul>
-			)}
-		</section>
-	);
-}
-
-/** Header control: who is in the profile, and a shortcut to filter down to them. */
-function ProfileToggle({
-	models,
-	active,
-	onToggle,
-}: Readonly<{ models: IBit[]; active: boolean; onToggle: () => void }>) {
-	const { t } = useTranslation("settings");
-	const shown = models.slice(0, 4);
-	const rest = models.length - shown.length;
-	return (
-		<button
-			type="button"
-			onClick={onToggle}
-			aria-pressed={active}
-			aria-label={
-				active
-					? t("showTheWholeCatalog", "Show the whole catalog")
-					: t(
-							"showOnlyTheLengthModelsInYourProfile",
-							"Show only the {{length}} models in your profile",
-							{ length: models.length },
-						)
-			}
-			className={`flex h-8 shrink-0 items-center gap-2 rounded-md border px-2.5 text-xs font-medium transition-colors ${
-				active
-					? "border-primary/40 bg-primary/10 text-primary"
-					: "border-border text-muted-foreground hover:bg-muted hover:text-foreground dark:border-white/10"
-			}`}
-		>
-			<Sparkles className="h-3.5 w-3.5 shrink-0" />
-			{shown.length > 0 && (
-				<span className="flex items-center pl-1" aria-hidden="true">
-					{shown.map((bit) => (
-						<ProviderGlyph
-							key={bit.id}
-							bit={bit}
-							size={18}
-							className="-ml-1 rounded-[5px] ring-2 ring-background"
-						/>
-					))}
-					{rest > 0 && (
-						<span className="-ml-1 grid h-4.5 min-w-4.5 place-items-center rounded-[5px] bg-muted px-1 font-mono text-[9px] font-semibold tabular-nums text-muted-foreground ring-2 ring-background">{`+${rest}`}</span>
-					)}
-				</span>
-			)}
-			<span className="whitespace-nowrap">{t("inProfile2", "In profile")}</span>
-		</button>
-	);
-}
-
-/** Capability jump chip with a dot when you already own models in that group. */
-function RailChip({
-	icon: Icon,
-	label,
-	count,
-	owned,
-	active,
-	onClick,
-}: Readonly<{
-	icon: LucideIcon;
-	label: string;
-	count: number;
-	owned: number;
-	active: boolean;
-	onClick: () => void;
-}>) {
-	const { t } = useTranslation("settings");
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			aria-pressed={active}
-			className={`flex h-7 shrink-0 snap-start items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[12px] font-medium transition-colors ${
-				active
-					? "border-foreground/20 bg-muted text-foreground"
-					: "border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-			}`}
-		>
-			<Icon className="h-3.5 w-3.5" />
-			<span>{label}</span>
-			{owned > 0 && (
-				<span
-					title={t("ownedInYourProfile", "{{owned}} in your profile", {
-						owned,
-					})}
-					className="h-1.5 w-1.5 rounded-full bg-primary"
-				/>
-			)}
-			<span className="font-mono text-[10px] tabular-nums opacity-60">
-				{count}
-			</span>
-		</button>
-	);
-}
-
-function FilterGroupLabel({
-	children,
-}: Readonly<{ children: React.ReactNode }>) {
-	return (
-		<span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/70">
-			{children}
-		</span>
-	);
-}
-
-function ModalityChip({
-	active,
-	onClick,
-	icon: Icon,
-	label,
-}: {
-	active: boolean;
-	onClick: () => void;
-	icon: LucideIcon;
-	label: string;
-}) {
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			aria-pressed={active}
-			className={`flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs transition-colors ${
-				active
-					? "border-border bg-muted text-foreground dark:border-white/10"
-					: "border-transparent text-muted-foreground/60 hover:bg-muted/50 hover:text-foreground"
-			}`}
-		>
-			<Icon className="h-3 w-3" />
-			{label}
-		</button>
-	);
-}
-
-function FilterCheckbox({
-	checked,
-	onCheckedChange,
-	icon: Icon,
-	iconColor,
-	label,
-}: {
-	checked: boolean;
-	onCheckedChange: (checked: boolean | "indeterminate") => void;
-	icon: LucideIcon;
-	iconColor: string;
-	label: string;
-}) {
-	const id = useId();
-	return (
-		<label
-			htmlFor={id}
-			className="flex items-center gap-2.5 text-sm cursor-pointer text-muted-foreground/70 hover:text-foreground transition-colors"
-		>
-			<Checkbox id={id} checked={checked} onCheckedChange={onCheckedChange} />
-			<Icon className={`h-3.5 w-3.5 ${iconColor}`} />
-			<span>{label}</span>
-		</label>
-	);
-}
-
 function ModelCatalogSkeleton() {
 	return (
-		<div className="flex flex-col gap-7">
-			<Skeleton className="h-19 rounded-xl" />
+		<div className="flex flex-col gap-9">
 			{[0, 1].map((section) => (
 				<div key={`skel-section-${section}`} className="flex flex-col gap-3">
-					<Skeleton className="h-4 w-40" />
-					<div
-						className="grid gap-3"
-						style={{
-							gridTemplateColumns: "repeat(auto-fill, minmax(258px, 1fr))",
-						}}
-					>
+					<Skeleton className="h-5 w-48" />
+					<div className="grid grid-cols-[repeat(auto-fill,minmax(272px,1fr))] gap-3">
 						{Array.from({ length: 4 }).map((_, i) => (
 							<Skeleton
 								key={`skel-model-${section}-${i.toString()}`}
-								className="h-46 rounded-xl"
+								className="h-52 rounded-xl"
 							/>
 						))}
 					</div>

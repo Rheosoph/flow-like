@@ -1,8 +1,29 @@
 export type ExternalModelProvider = "claude-code" | "codex";
 
+export interface ExternalReasoningEffortOption {
+	id: string;
+	name: string;
+	description?: string;
+}
+
 export interface ExternalModelOption {
 	id: string;
 	name: string;
+	description?: string;
+	contextWindow?: number;
+	supportsVision?: boolean;
+	supportedReasoningEfforts?: ExternalReasoningEffortOption[];
+	defaultReasoningEffort?: string;
+	isDefault?: boolean;
+}
+
+export interface ExternalModelMetadata {
+	name: string;
+	description: string;
+	icon: string;
+	tags: string[];
+	contextLength?: number;
+	vision?: boolean;
 }
 
 export interface ExternalModelCatalog {
@@ -137,6 +158,7 @@ export function externalModelProviders(
 				{
 					...accessTokenField,
 					required: !nativeAvailable,
+					advanced: nativeAvailable,
 					description: nativeAvailable
 						? "Leave empty to read existing Codex credentials from auth.json on this device. Keychain-only sign-in and token refresh are not supported."
 						: "Provide a ChatGPT access token for execution on the server.",
@@ -246,9 +268,81 @@ export function specificExternalModels(
 ): ExternalModelOption[] {
 	const unique = new Map<string, ExternalModelOption>();
 	for (const model of models) {
-		const id = model.id.trim();
-		if (!id || id.toLowerCase() === "default") continue;
-		unique.set(id, { id, name: model.name.trim() || id });
+		const normalized = normalizeExternalModel(model);
+		if (!normalized.id || normalized.id.toLowerCase() === "default") continue;
+		unique.set(normalized.id, normalized);
 	}
 	return [...unique.values()];
+}
+
+function normalizeExternalModel(
+	model: ExternalModelOption,
+): ExternalModelOption {
+	const id = typeof model.id === "string" ? model.id.trim() : "";
+	const name = typeof model.name === "string" ? model.name.trim() : "";
+	const normalized: ExternalModelOption = { id, name: name || id };
+	if (typeof model.description === "string" && model.description.trim()) {
+		normalized.description = model.description.trim();
+	}
+	if (
+		typeof model.contextWindow === "number" &&
+		Number.isInteger(model.contextWindow) &&
+		model.contextWindow > 0
+	) {
+		normalized.contextWindow = model.contextWindow;
+	}
+	if (typeof model.supportsVision === "boolean") {
+		normalized.supportsVision = model.supportsVision;
+	}
+	if (Array.isArray(model.supportedReasoningEfforts)) {
+		const efforts = new Map<string, ExternalReasoningEffortOption>();
+		for (const effort of model.supportedReasoningEfforts) {
+			if (!effort || typeof effort.id !== "string") continue;
+			const id = effort.id.trim();
+			if (!id || efforts.has(id)) continue;
+			const name = typeof effort.name === "string" ? effort.name.trim() : "";
+			const option: ExternalReasoningEffortOption = { id, name: name || id };
+			if (typeof effort.description === "string" && effort.description.trim()) {
+				option.description = effort.description.trim();
+			}
+			efforts.set(id, option);
+		}
+		normalized.supportedReasoningEfforts = [...efforts.values()];
+	}
+	if (
+		typeof model.defaultReasoningEffort === "string" &&
+		model.defaultReasoningEffort.trim()
+	) {
+		normalized.defaultReasoningEffort = model.defaultReasoningEffort.trim();
+	}
+	if (typeof model.isDefault === "boolean") {
+		normalized.isDefault = model.isDefault;
+	}
+	return normalized;
+}
+
+export function externalModelMetadata(
+	provider: ExternalModelProvider,
+	model: ExternalModelOption,
+): ExternalModelMetadata {
+	const normalized = normalizeExternalModel(model);
+	const providerName = provider === "claude-code" ? "Claude Code" : "Codex";
+	const vision = provider === "claude-code" ? false : normalized.supportsVision;
+	const tags: string[] = [provider, "chat"];
+	if (normalized.supportedReasoningEfforts?.length) tags.push("reasoning");
+	if (vision === true) tags.push("vision");
+	return {
+		name: normalized.name,
+		description:
+			normalized.description ?? `${normalized.name} via ${providerName}.`,
+		icon:
+			provider === "claude-code"
+				? "/provider/anthropic.webp"
+				: "/provider/gpt.webp",
+		tags,
+		...(normalized.contextWindow !== undefined && {
+			contextLength: normalized.contextWindow,
+		}),
+		...(vision !== undefined && { vision }),
+	};
 }

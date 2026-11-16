@@ -1,6 +1,6 @@
 {
 	"productName": "Flow Like",
-	"version": "0.1.14",
+	"version": "0.1.16",
 	"identifier": "com.flow-like.app",
 	"build": {
 		"beforeDevCommand": "bun run dev",
@@ -128,7 +128,9 @@
 						"/thirdparty/callback",
 						"/trigger",
 						"/store",
-						"/join"
+						"/join",
+						"/bots",
+						"/inbox"
 					],
 					"appLink": true
 				},

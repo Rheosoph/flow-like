@@ -93,6 +93,89 @@ class RuntimeConfigTests(unittest.TestCase):
             self.assertEqual(output.read_text(), expected)
             self.assertEqual(list(output.parent.iterdir()), [output])
 
+    def test_hosted_proxy_preserves_api_prefix_and_quotes_configuration_syntax(self):
+        with tempfile.TemporaryDirectory() as directory:
+            resolvers = Path(directory) / "resolv.conf"
+            resolvers.write_text("search internal.example\nnameserver 127.0.0.11\nnameserver 2001:db8::1\n")
+            config = runtime.build_config({
+                "FLOW_LIKE_WEB_API_URL": 'https://api.example.test/prefix/$http_cookie";{}/café',
+            })
+            proxy = runtime.render_hosted_proxy(config, resolvers)
+            self.assertIn("resolver 127.0.0.11 [2001:db8::1] valid=30s;", proxy)
+            self.assertIn('proxy_pass "https://api.example.test/prefix/%24http_cookie%22%3B%7B%7D/caf%C3%A9/frontend/document$flowlike_hosted_document";', proxy)
+            self.assertNotIn("$http_cookie", proxy)
+            self.assertIn('proxy_ssl_name "api.example.test";', proxy)
+            self.assertIn("proxy_ssl_verify on;", proxy)
+
+    def test_hosted_proxy_uses_literal_ip_without_dns_and_supports_ipv6(self):
+        for api, expected in [
+            ("http://127.0.0.1:8080/hub", "http://127.0.0.1:8080/hub/frontend/document"),
+            ("http://[::1]:8080", "http://[::1]:8080/frontend/document"),
+        ]:
+            with self.subTest(api=api):
+                config = runtime.build_config({"FLOW_LIKE_WEB_API_URL": api})
+                proxy = runtime.render_hosted_proxy(config, Path("/missing/resolv.conf"))
+                self.assertIn(f'proxy_pass "{expected}$flowlike_hosted_document";', proxy)
+                self.assertNotIn("resolver ", proxy)
+                self.assertNotIn("proxy_ssl", proxy)
+
+    def test_hosted_proxy_rejects_missing_dns_before_replacing_public_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "runtime-config.js"
+            proxy = Path(directory) / "hosted-proxy.conf"
+            resolvers = Path(directory) / "resolv.conf"
+            resolvers.write_text("nameserver invalid;\nnameserver 127.0.0.11;\n")
+            output.write_text("existing config")
+            with self.assertRaises(ValueError):
+                runtime.write_config(output, {"FLOW_LIKE_WEB_API_URL": "https://api.example.test"}, proxy, resolvers)
+            self.assertEqual(output.read_text(), "existing config")
+            self.assertFalse(proxy.exists())
+
+    def test_cli_can_write_proxy_include_beside_public_runtime_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "runtime-config.js"
+            proxy = Path(directory) / "hosted-proxy.conf"
+            result = subprocess.run([
+                sys.executable, "-B", str(GENERATOR), "--output", str(output),
+                "--nginx-output", str(proxy),
+            ], env={**os.environ, "FLOW_LIKE_WEB_API_URL": "http://127.0.0.1:8080/hub"}, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('proxy_pass "http://127.0.0.1:8080/hub/frontend/document$flowlike_hosted_document";', proxy.read_text())
+            self.assertIn('"apiUrl":"http://127.0.0.1:8080/hub"', output.read_text())
+            self.assertEqual(proxy.stat().st_mode & 0o777, 0o644)
+
+    def test_internal_hosted_api_stays_out_of_browser_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "runtime-config.js"
+            proxy = Path(directory) / "hosted-proxy.conf"
+            runtime.write_config(output, {
+                "FLOW_LIKE_WEB_API_URL": "https://api.example.test/public",
+                "FLOW_LIKE_WEB_HOSTED_API_URL": "http://127.0.0.1:8080/internal",
+            }, proxy, Path("/missing/resolv.conf"))
+            self.assertIn('"apiUrl":"https://api.example.test/public"', output.read_text())
+            self.assertNotIn("127.0.0.1", output.read_text())
+            self.assertIn('proxy_pass "http://127.0.0.1:8080/internal/frontend/document$flowlike_hosted_document";', proxy.read_text())
+            with self.assertRaises(ValueError):
+                runtime.write_config(output, {
+                    "FLOW_LIKE_WEB_API_URL": "https://api.example.test",
+                    "FLOW_LIKE_WEB_HOSTED_API_URL": "https://secret@example.test",
+                }, proxy)
+
+    def test_nginx_routes_query_links_without_forwarding_other_query_parameters(self):
+        compose = GENERATOR.parent / "nginx.conf"
+        kubernetes = GENERATOR.parents[2] / "kubernetes/web/nginx.conf"
+        source = compose.read_text()
+        self.assertEqual(source, kubernetes.read_text())
+        self.assertIn('default "?app=$arg_app&route=$arg_route";', source)
+        self.assertIn('~^/a/([^?]+) /$1;', source)
+        self.assertIn('map $arg_app $flowlike_hosted_shell {\n    "" /a.html;\n    default "";\n}', source)
+        for route in ("/a", "/a/"):
+            self.assertIn(f"location = {route} {{ try_files $flowlike_hosted_shell @hosted_document; }}", source)
+        proxy = source.split("location @hosted_document {", 1)[1].split("\n    }", 1)[0]
+        self.assertIn("proxy_pass_request_headers off;", proxy)
+        self.assertNotIn("$args", proxy)
+        self.assertNotIn("$request_uri", proxy)
+
 
 if __name__ == "__main__":
     unittest.main()

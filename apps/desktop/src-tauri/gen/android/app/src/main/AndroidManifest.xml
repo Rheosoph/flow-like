@@ -1,7 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
@@ -15,15 +21,21 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
     <uses-feature android:name="android.hardware.location.network" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
     <application
+        android:name=".FlowLikeApplication"
+        android:hasCode="true"
+        tools:replace="android:hasCode"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.flow_like_desktop"
         android:usesCleartextTraffic="${usesCleartextTraffic}">
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
-            android:launchMode="singleTask"
+            android:launchMode="singleTop"
             android:label="@string/main_activity_title"
             android:name=".MainActivity"
             android:exported="true">
@@ -46,6 +58,8 @@
             <!-- DEEP LINK PLUGIN. AUTO-GENERATED. DO NOT REMOVE. -->
             <intent-filter android:autoVerify="true" >
                 <action android:name="android.intent.action.VIEW" />
+                <!-- ChromeOS ARC++ uses a different action for deep links -->
+                <action android:name="org.chromium.arc.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" />
@@ -63,6 +77,8 @@
             </intent-filter>
             <intent-filter >
                 <action android:name="android.intent.action.VIEW" />
+                <!-- ChromeOS ARC++ uses a different action for deep links -->
+                <action android:name="org.chromium.arc.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="flow-like" />
@@ -95,6 +111,12 @@
 
             <!-- tauri-file-associations. AUTO-GENERATED. DO NOT REMOVE. -->
         </activity>
+        <activity
+            android:name=".RuntimeActivity"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+            android:launchMode="singleTask"
+            android:label="@string/main_activity_title"
+            android:exported="false" />
         <activity android:name=".BotActionActivity" android:exported="false" android:excludeFromRecents="true" />
         <activity android:name=".BotDocumentActivity" android:exported="false" android:excludeFromRecents="true" />
         <activity android:name=".NativeGeofencePermissionActivity" android:exported="false" android:excludeFromRecents="true" />
@@ -110,51 +132,9 @@
                 <action android:name="com.flow_like.app.AUTOMATE" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
-            <!-- tauri-file-associations. AUTO-GENERATED. DO NOT REMOVE. -->
-            <intent-filter>
-                <action android:name="android.intent.action.SEND" />
-                <action android:name="android.intent.action.SEND_MULTIPLE" />
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:mimeType="application/vnd.flow-like.app" />
-                <data android:pathPattern=".*\\.flow-app" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.SEND" />
-                <action android:name="android.intent.action.SEND_MULTIPLE" />
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:mimeType="application/vnd.flow-like.flow" />
-                <data android:pathPattern=".*\\.flow" />
-            </intent-filter>
-
-            <!-- tauri-file-associations. AUTO-GENERATED. DO NOT REMOVE. -->
         </activity>
         <activity android:name=".NativeWidgetConfigureActivity" android:exported="true" android:label="Configure Flow-Like widget">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" /></intent-filter>
-            <!-- tauri-file-associations. AUTO-GENERATED. DO NOT REMOVE. -->
-            <intent-filter>
-                <action android:name="android.intent.action.SEND" />
-                <action android:name="android.intent.action.SEND_MULTIPLE" />
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:mimeType="application/vnd.flow-like.app" />
-                <data android:pathPattern=".*\\.flow-app" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.SEND" />
-                <action android:name="android.intent.action.SEND_MULTIPLE" />
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:mimeType="application/vnd.flow-like.flow" />
-                <data android:pathPattern=".*\\.flow" />
-            </intent-filter>
-
-            <!-- tauri-file-associations. AUTO-GENERATED. DO NOT REMOVE. -->
         </activity>
         <activity android:name=".NativeSurfaceActionActivity" android:exported="false" />
         <activity android:name=".NativeSearchActivity" android:exported="true">
@@ -164,27 +144,6 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="flow-like" android:host="native-search" />
             </intent-filter>
-            <!-- tauri-file-associations. AUTO-GENERATED. DO NOT REMOVE. -->
-            <intent-filter>
-                <action android:name="android.intent.action.SEND" />
-                <action android:name="android.intent.action.SEND_MULTIPLE" />
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:mimeType="application/vnd.flow-like.app" />
-                <data android:pathPattern=".*\\.flow-app" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.SEND" />
-                <action android:name="android.intent.action.SEND_MULTIPLE" />
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:mimeType="application/vnd.flow-like.flow" />
-                <data android:pathPattern=".*\\.flow" />
-            </intent-filter>
-
-            <!-- tauri-file-associations. AUTO-GENERATED. DO NOT REMOVE. -->
         </activity>
         <activity android:name=".NativeContinueActivity" android:exported="true">
             <intent-filter>
@@ -193,28 +152,11 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="flow-like" android:host="continue" />
             </intent-filter>
-            <!-- tauri-file-associations. AUTO-GENERATED. DO NOT REMOVE. -->
-            <intent-filter>
-                <action android:name="android.intent.action.SEND" />
-                <action android:name="android.intent.action.SEND_MULTIPLE" />
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:mimeType="application/vnd.flow-like.app" />
-                <data android:pathPattern=".*\\.flow-app" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.SEND" />
-                <action android:name="android.intent.action.SEND_MULTIPLE" />
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:mimeType="application/vnd.flow-like.flow" />
-                <data android:pathPattern=".*\\.flow" />
-            </intent-filter>
-
-            <!-- tauri-file-associations. AUTO-GENERATED. DO NOT REMOVE. -->
         </activity>
+        <service android:name=".BackgroundHostingService" android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started hosting session for bots and workflow Events that serve network endpoints, handle incoming messages, and run scheduled or continuous tasks while the app is in the background. The user can turn off background mode from its ongoing notification." />
+        </service>
         <service android:name=".FlowBotTileService" android:label="Bots" android:icon="@drawable/ic_notification" android:exported="true" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
         </service>

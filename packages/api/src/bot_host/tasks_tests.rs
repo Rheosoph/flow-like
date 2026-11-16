@@ -580,6 +580,7 @@ fn a_trigger_is_not_sendable_by_clients() {
             .envelope(),
         ),
         envelopes: None,
+        interactive: None,
         turn: None,
     };
     assert!(crate::routes::inbox::entries::validate_send(request).is_err());

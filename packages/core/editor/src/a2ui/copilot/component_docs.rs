@@ -1136,7 +1136,7 @@ mod tests {
         }
         assert!(reference.contains("\n- text: content*, variant(body|heading|label|caption|code)"));
         assert!(
-            !reference.contains("headerImage"),
+            !reference.contains("headerIcon"),
             "props the renderer ignores stay out of prompts"
         );
         assert!(get_full_documentation().contains(&reference));

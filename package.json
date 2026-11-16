@@ -12,6 +12,7 @@
 		"workflow:screenshot": "bun apps/desktop/scripts/workflow-screenshot.ts",
 		"docs:nodes": "cargo run --locked -p flow-like-catalog --no-default-features --features all-metadata --bin generate_node_docs",
 		"flowpilot:e2e": "bun apps/desktop/scripts/flowpilot-e2e.ts",
+		"flowpilot:e2e:custom-bits": "bun apps/desktop/scripts/custom-bit-e2e.ts",
 		"university": "bun apps/desktop/scripts/university.ts",
 		"university:check": "bun apps/desktop/scripts/university-check.ts",
 		"icons:lint": "bun scripts/sync-node-icons.ts --check",

@@ -43,6 +43,12 @@ impl FrameLoad {
         }
     }
 
+    fn content_loaded(&self) -> bool {
+        self.pending_loader()
+            .and_then(|loader| self.lifecycle.get(loader))
+            .is_some_and(|names| names.contains("DOMContentLoaded"))
+    }
+
     fn is_pending(&self, now: Instant) -> bool {
         match self.state {
             LoadState::Idle => false,
@@ -99,6 +105,9 @@ impl FrameLoad {
 pub(crate) struct NavigationTracker {
     frames: HashMap<FrameId, FrameLoad>,
     gone: bool,
+    /// A loading document counts as settled once it reached `DOMContentLoaded`; shared with
+    /// the browser's settings.
+    pub(crate) eager: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 fn page_session(frames: &FrameTree) -> Option<&SessionId> {
@@ -108,10 +117,16 @@ fn page_session(frames: &FrameTree) -> Option<&SessionId> {
 }
 
 impl NavigationTracker {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
+        Self::with_eager(Default::default())
+    }
+
+    pub(crate) fn with_eager(eager: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
         Self {
             frames: HashMap::new(),
             gone: false,
+            eager,
         }
     }
 
@@ -336,9 +351,21 @@ impl NavigationTracker {
     }
 
     pub(crate) fn is_pending(&self, frame: &FrameId, main: &FrameId, now: Instant) -> bool {
-        [frame, main]
-            .into_iter()
-            .any(|id| self.frames.get(id).is_some_and(|load| load.is_pending(now)))
+        [frame, main].into_iter().any(|id| {
+            self.frames.get(id).is_some_and(|load| {
+                load.is_pending(now) && !(self.is_eager() && load.content_loaded())
+            })
+        })
+    }
+
+    /// Whether the document `loader` of `frame` is far enough to end a navigation wait.
+    pub(crate) fn settled_at(&self, frame: &FrameId, loader: &LoaderId) -> bool {
+        self.lifecycle_reached(frame, loader, "load")
+            || (self.is_eager() && self.lifecycle_reached(frame, loader, "DOMContentLoaded"))
+    }
+
+    fn is_eager(&self) -> bool {
+        self.eager.load(std::sync::atomic::Ordering::Acquire)
     }
 
     pub(crate) fn lifecycle_reached(&self, frame: &FrameId, loader: &LoaderId, name: &str) -> bool {
@@ -554,6 +581,25 @@ mod tests {
             fixture.frames.committed_loader(&id(MAIN)),
             Some(loader("L1"))
         );
+    }
+
+    #[test]
+    fn an_eager_tracker_settles_at_dom_content_loaded() {
+        for eager in [false, true] {
+            let mut fixture = Fixture::new();
+            fixture
+                .tracker
+                .eager
+                .store(eager, std::sync::atomic::Ordering::Release);
+            fixture.started(PAGE, MAIN, "L2", "differentDocument");
+            fixture.navigated(PAGE, MAIN, "L2");
+            assert!(fixture.pending(MAIN));
+            fixture.lifecycle(PAGE, MAIN, "L2", "DOMContentLoaded");
+            assert_eq!(fixture.pending(MAIN), !eager, "eager {eager}");
+            assert_eq!(fixture.tracker.settled_at(&id(MAIN), &loader("L2")), eager);
+            fixture.lifecycle(PAGE, MAIN, "L2", "load");
+            assert!(fixture.tracker.settled_at(&id(MAIN), &loader("L2")));
+        }
     }
 
     #[test]

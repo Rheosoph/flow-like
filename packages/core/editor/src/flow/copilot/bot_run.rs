@@ -1204,10 +1204,10 @@ fn app_inventory_unreadable_with(failed: &Value) -> String {
     result.to_string()
 }
 
-/// A conversation file's handle names its conversation where a workspace file names its app. The
-/// host that reads it checks the bot's membership there.
+/// A conversation file names its conversation where a workspace file names its app, by handle or
+/// by `{app_id, path}`. The host that reads it checks the bot's membership there.
 fn is_conversation_file_handle(object: &serde_json::Map<String, Value>) -> bool {
-    object.contains_key("sha256")
+    object.get("path").is_some_and(Value::is_string)
         && object
             .get("app_id")
             .and_then(Value::as_str)
@@ -1943,7 +1943,7 @@ fn reply_closing(offered: &[&str]) -> String {
         ""
     };
     format!(
-        "Visual answers, in order of preference: {apps}an `a2ui` fence built from the data you gathered, whenever it reads better than prose; else Markdown. Inline `a2ui` UI lives in this message only; pages and widgets your owner keeps are Flux's work.\n\nUse supported formats, `a2ui` fences, and ordinary Markdown; never arbitrary HTML/CSS, scripts, or JSX expressions for chat layout."
+        "Visual answers, in order of preference: {apps}an `a2ui` fence built from the data you gathered; else Markdown. When you present several items, options, results or figures, show them as `a2ui` cards with their pictures and next-step buttons instead of a bulleted list. Inline `a2ui` UI lives in this message only; pages and widgets your owner keeps are Flux's work.\n\nUse supported formats, `a2ui` fences, and ordinary Markdown; never arbitrary HTML/CSS, scripts, or JSX expressions for chat layout."
     )
 }
 
@@ -2356,6 +2356,8 @@ async fn attach_notes(
     ));
 }
 
+const REPLY_FILES_SECTION: &str = "## FILES IN YOUR REPLY\nWhen this turn creates, exports, converts or downloads a file for the person you answer (a PDF, document, spreadsheet, slide deck, archive or image they asked for), attach it with `file_attach` before you answer, without waiting to be asked: a path or link in your text is not a delivered file. Attach only the finished version and name it in a short sentence instead of pasting its path. Pictures shown inside your answer can stay inline (Markdown or an `a2ui` image with their `storage://` link); attach them only when they are the deliverable.";
+
 /// Offers `file_attach`, answered in core, collecting into the host's `files`.
 fn offer_reply_files(
     turn: &mut BotTurn,
@@ -2364,6 +2366,8 @@ fn offer_reply_files(
     label: Arc<TurnLabel>,
     frames: Option<Arc<dyn Fn(String) + Send + Sync>>,
 ) {
+    turn.system_prompt.push_str("\n\n");
+    turn.system_prompt.push_str(REPLY_FILES_SECTION);
     turn.tool_specs.push(file_attach_spec());
     turn.bridge = Arc::new(ReplyFilesBridge::new(
         files.clone(),
@@ -2490,7 +2494,21 @@ async fn acknowledgement(
         let profile = profile.ok_or_else(|| {
             flow_like_types::anyhow!("An acknowledgement requires the bot's model profile")
         })?;
-        let bit = resolve_host_completion_model(state, profile, model_id).await?;
+        let bit = match model_id {
+            Some(model_id) => {
+                let capabilities = FlowLikeState::completion_model_capabilities(state).await;
+                let devices = state.device_model_probe(Interaction::Allowed { run_label: None });
+                profile
+                    .resolve_explicit_completion_model(
+                        model_id,
+                        capabilities,
+                        devices.as_ref(),
+                        state.http_client.clone(),
+                    )
+                    .await?
+            }
+            None => resolve_host_completion_model(state, profile, None).await?,
+        };
         let model = state
             .model_factory
             .build(&bit, state.clone(), token, None)
@@ -2783,6 +2801,35 @@ mod tests {
         );
         assert_eq!(reply, "Verstanden.");
         assert_eq!(*emitted.lock().unwrap(), vec!["Verstanden."]);
+    }
+
+    #[tokio::test]
+    async fn explicit_model_selection_does_not_replace_acknowledgement_claude_with_qwen() {
+        let (state, profile) =
+            super::super::runtime_bridge_tests::explicit_model_selection_fixture();
+        let automatic = resolve_host_completion_model(&state, &profile, None)
+            .await
+            .unwrap();
+        assert_eq!(automatic.id, "fallback-qwen");
+
+        let error = acknowledgement(
+            &state,
+            Some(&profile),
+            Some("chosen-claude"),
+            None,
+            "Danke für die Erklärung.",
+        )
+        .await
+        .expect_err("an explicit unavailable Claude Bit must fail before acknowledgement");
+        let message = error.to_string();
+        assert!(message.contains("chosen-claude"), "{message}");
+        assert!(message.contains("Claude Code executable"), "{message}");
+
+        let emitted = Mutex::new(Vec::new());
+        let reply =
+            acknowledgement_reply(Err(error), Some(|text| emitted.lock().unwrap().push(text)));
+        assert_eq!(reply, SILENT_REPLY);
+        assert!(emitted.lock().unwrap().is_empty());
     }
 
     struct AcknowledgementModel {
@@ -3807,7 +3854,7 @@ mod tests {
     }
 
     #[test]
-    fn a_conversation_file_handle_passes_the_app_guard_and_an_app_handle_does_not() {
+    fn a_conversation_file_passes_the_app_guard_and_an_app_handle_does_not() {
         let reader = hosted(&[BotCapability::Storage], HostTools::linked());
         let handle = |app_id: &str| {
             json!({
@@ -3824,13 +3871,18 @@ mod tests {
             .prepare_tool_call("file_read", json!({ "file": handle("app-other") }))
             .unwrap_err();
         assert_eq!(code(&foreign), "bot_app_out_of_scope");
-        let unhashed = reader
+        let unhashed = json!({ "file": { "app_id": "conversation_room1", "path": "f1.pdf" } });
+        assert_eq!(
+            reader.prepare_tool_call("file_read", unhashed.clone()),
+            Ok(unhashed)
+        );
+        let pathless = reader
             .prepare_tool_call(
                 "file_read",
-                json!({ "file": { "app_id": "conversation_room1", "path": "f1.pdf" } }),
+                json!({ "file": { "app_id": "conversation_room1" } }),
             )
             .unwrap_err();
-        assert_eq!(code(&unhashed), "bot_app_out_of_scope");
+        assert_eq!(code(&pathless), "bot_app_out_of_scope");
     }
 
     #[test]
@@ -4507,6 +4559,28 @@ mod tests {
         );
         let next = prepare_bot_turn(bot, "## CONTEXT\nIt is 09:31.", false, host, None).await;
         assert_eq!(next.stable_prompt, turn.stable_prompt);
+    }
+
+    #[tokio::test]
+    async fn offering_reply_files_tells_the_bot_to_deliver_what_it_made() {
+        let host = Arc::new(RecordingBridge::default());
+        let bot = Arc::new(BotRunContext::general());
+        let mut turn = prepare_bot_turn(bot.clone(), "", false, host, None).await;
+        assert!(!turn.system_prompt.contains(REPLY_FILES_SECTION));
+        offer_reply_files(
+            &mut turn,
+            &ReplyFiles::new(),
+            &bot,
+            TurnLabel::new(&bot, None),
+            None,
+        );
+        assert!(turn.system_prompt.ends_with(REPLY_FILES_SECTION));
+        assert!(!turn.stable_prompt.contains(REPLY_FILES_SECTION));
+        assert!(
+            turn.tool_specs
+                .iter()
+                .any(|spec| spec.name == file_attach_spec().name)
+        );
     }
 
     #[tokio::test]

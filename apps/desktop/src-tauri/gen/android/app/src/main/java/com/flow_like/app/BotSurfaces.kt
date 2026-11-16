@@ -13,7 +13,6 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.Bundle
-import android.widget.EditText
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -301,13 +300,11 @@ class BotActionActivity : Activity() {
             val value = store.resolveAction(id) ?: throw IllegalStateException()
             val action = value.getJSONObject("action")
             if (action.optBoolean("requiresReview")) {
-                val input = EditText(this).apply {
-                    setText(action.optString("text"))
-                    minLines = 3
+                val input = NativeUi.input(this, "", action.optString("text"), minLines = 3).apply {
                     maxLines = 10
                     filters = arrayOf(android.text.InputFilter.LengthFilter(16000))
                 }
-                val dialog = AlertDialog.Builder(this).setTitle("Review bot message")
+                val dialog = NativeUi.dialog(this).setTitle("Review bot message")
                     .setMessage("Review the message before sending it to your bot.")
                     .setView(input).setNegativeButton("Cancel") { _, _ -> finish() }
                     .setPositiveButton("Send", null).setOnCancelListener { finish() }.create()

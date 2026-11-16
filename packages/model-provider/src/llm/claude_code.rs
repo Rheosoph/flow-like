@@ -204,17 +204,28 @@ impl ClaudeCodeCompletion {
         &self,
         request: CompletionRequest,
     ) -> Result<CompletionResponse<ClaudeCodeResponse>> {
-        validate_request(&request)?;
         #[cfg(target_family = "wasm")]
-        bail!("Claude Code requires a native executor with the Claude CLI installed");
+        {
+            validate_request(&request)?;
+            bail!("Claude Code requires a native executor with the Claude CLI installed");
+        }
         #[cfg(not(target_family = "wasm"))]
         {
-            let model = request.model.as_deref().unwrap_or(&self.model);
-            let prompt = serde_json::to_vec(&request)?;
-            if prompt.len() > MAX_PROMPT_BYTES {
-                bail!("Claude Code request exceeds the 8 MiB input limit");
-            }
-            let args = completion_args(model, &request)?;
+            let default_model = self.model.clone();
+            // JSON Schema's cold meta-validator needs stack space that a nested async poll
+            // cannot reliably leave available. Keep both validation phases off that stack.
+            let (request, model, prompt, args) = tokio::task::spawn_blocking(move || {
+                validate_request(&request)?;
+                let model = request.model.clone().unwrap_or(default_model);
+                let prompt = serde_json::to_vec(&request)?;
+                if prompt.len() > MAX_PROMPT_BYTES {
+                    bail!("Claude Code request exceeds the 8 MiB input limit");
+                }
+                let args = completion_args(&model, &request)?;
+                Ok::<_, anyhow::Error>((request, model, prompt, args))
+            })
+            .await
+            .context("Claude Code request validation worker failed")??;
             let output = run_process(
                 &self.client.executable,
                 &args,
@@ -230,7 +241,9 @@ impl ClaudeCodeCompletion {
                         .map_or_else(|| "signal".into(), |code| code.to_string())
                 );
             }
-            parse_response(&output.stdout, &request, model)
+            tokio::task::spawn_blocking(move || parse_response(&output.stdout, &request, &model))
+                .await
+                .context("Claude Code response validation worker failed")?
         }
     }
 }
@@ -506,6 +519,38 @@ fn parse_response(
 
 #[cfg(not(target_family = "wasm"))]
 fn resolve_executable(provider: &ModelProvider) -> Result<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from);
+    let mut dirs = std::env::var_os("PATH")
+        .map(|path| {
+            std::env::split_paths(&path)
+                .filter(|path| path.is_absolute())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if let Some(home) = &home {
+        dirs.push(home.join(".local/bin"));
+    }
+    dirs.extend([
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+    ]);
+    resolve_executable_with_paths(
+        provider,
+        std::env::var_os("CLAUDE_CODE_CLI_PATH").as_deref(),
+        &dirs,
+        home.as_deref(),
+    )
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn resolve_executable_with_paths(
+    provider: &ModelProvider,
+    executable_override: Option<&std::ffi::OsStr>,
+    dirs: &[PathBuf],
+    home: Option<&std::path::Path>,
+) -> Result<PathBuf> {
     let explicit = provider
         .params
         .as_ref()
@@ -521,34 +566,82 @@ fn resolve_executable(provider: &ModelProvider) -> Result<PathBuf> {
         }
         return Ok(path);
     }
-    if let Some(path) = std::env::var_os("CLAUDE_CODE_CLI_PATH") {
+    if let Some(path) = executable_override {
         let path = PathBuf::from(path);
         if path.is_absolute() && is_executable(&path) {
             return Ok(path);
         }
         bail!("CLAUDE_CODE_CLI_PATH must identify an executable file by absolute path");
     }
-    let mut dirs = std::env::var_os("PATH")
-        .map(|path| {
-            std::env::split_paths(&path)
-                .filter(|path| path.is_absolute())
-                .collect::<Vec<_>>()
+    dirs.iter()
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join(claude_binary_name()))
+        .find(|path| is_executable(path))
+        .or_else(|| {
+            home.filter(|home| home.is_absolute())
+                .and_then(|home| claude_ide_extension_binaries(home).into_iter().next())
         })
-        .unwrap_or_default();
-    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-        dirs.push(PathBuf::from(home).join(".local/bin"));
-    }
-    dirs.extend([
-        PathBuf::from("/opt/homebrew/bin"),
-        PathBuf::from("/usr/local/bin"),
-    ]);
-    let name = if cfg!(windows) {
+        .ok_or_else(|| anyhow!("Claude Code CLI was not found. Install it on the executor or configure an absolute executable path"))
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn claude_binary_name() -> &'static str {
+    if cfg!(windows) {
         "claude.exe"
     } else {
         "claude"
-    };
-    dirs.into_iter().map(|dir| dir.join(name)).find(|path| is_executable(path))
-        .ok_or_else(|| anyhow!("Claude Code CLI was not found. Install it on the executor or configure an absolute executable path"))
+    }
+}
+
+/// Native Claude Code executables from installed IDE extensions, newest version first.
+/// Shared with desktop CLI discovery so custom Bits can use an extension-only installation.
+#[cfg(not(target_family = "wasm"))]
+pub fn claude_ide_extension_binaries(home: &std::path::Path) -> Vec<PathBuf> {
+    let mut extension_dirs = Vec::new();
+    for editor in [
+        ".vscode",
+        ".vscode-insiders",
+        ".vscode-oss",
+        ".cursor",
+        ".windsurf",
+    ] {
+        let Ok(entries) = std::fs::read_dir(home.join(editor).join("extensions")) else {
+            continue;
+        };
+        extension_dirs.extend(entries.flatten().map(|entry| entry.path()).filter(|path| {
+            path.is_dir()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("anthropic.claude-code-"))
+        }));
+    }
+    // Compare numeric versions across editors: 2.1.204 is newer than 2.1.9.
+    extension_dirs.sort_by_key(|dir| std::cmp::Reverse(claude_extension_version_key(dir)));
+    extension_dirs
+        .into_iter()
+        .map(|dir| {
+            dir.join("resources/native-binary")
+                .join(claude_binary_name())
+        })
+        .filter(|path| is_executable(path))
+        .collect()
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn claude_extension_version_key(path: &std::path::Path) -> Vec<u64> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix("anthropic.claude-code-"))
+        .map(|rest| {
+            rest.split('-')
+                .next()
+                .unwrap_or_default()
+                .split('.')
+                .map(|part| part.parse::<u64>().unwrap_or(0))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -858,6 +951,132 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    fn write_discovery_executable(path: &std::path::Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn executable_discovery_uses_newest_extension_after_standalone_paths() {
+        let home = WorkingDirectory::new().unwrap();
+        let extension_binary = |editor: &str, version: &str| {
+            home.0
+                .join(editor)
+                .join("extensions")
+                .join(format!("anthropic.claude-code-{version}"))
+                .join("resources/native-binary")
+                .join(claude_binary_name())
+        };
+        let older = extension_binary(".vscode", "2.1.9");
+        let newest = extension_binary(".cursor", "2.1.204");
+        write_discovery_executable(&older);
+        write_discovery_executable(&newest);
+        // An incomplete extension install and an unrelated extension are not CLI candidates.
+        std::fs::create_dir_all(extension_binary(".vscode", "99.0.0")).unwrap();
+        write_discovery_executable(
+            &home
+                .0
+                .join(".vscode/extensions/other.extension/resources/native-binary")
+                .join(claude_binary_name()),
+        );
+        assert_eq!(
+            claude_ide_extension_binaries(&home.0),
+            vec![newest.clone(), older]
+        );
+        let provider = ModelProvider {
+            provider_name: "custom:claude-code".into(),
+            model_id: Some("sonnet".into()),
+            version: None,
+            api_surface: None,
+            params: None,
+        };
+        let standalone_dir = home.0.join(".local/bin");
+        let dirs = [standalone_dir.clone()];
+        assert_eq!(
+            resolve_executable_with_paths(&provider, None, &dirs, Some(&home.0)).unwrap(),
+            newest
+        );
+        let standalone = standalone_dir.join(claude_binary_name());
+        write_discovery_executable(&standalone);
+        assert_eq!(
+            resolve_executable_with_paths(&provider, None, &dirs, Some(&home.0)).unwrap(),
+            standalone
+        );
+        assert!(resolve_executable_with_paths(&provider, None, &[], None).is_err());
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn explicit_executable_and_environment_override_remain_authoritative() {
+        let home = WorkingDirectory::new().unwrap();
+        let standalone = home.0.join(claude_binary_name());
+        let selected = home.0.join("selected").join(claude_binary_name());
+        write_discovery_executable(&standalone);
+        write_discovery_executable(&selected);
+        let mut provider = ModelProvider {
+            provider_name: "custom:claude-code".into(),
+            model_id: Some("sonnet".into()),
+            version: None,
+            api_surface: None,
+            params: None,
+        };
+        let dirs = [home.0.clone()];
+        assert_eq!(
+            resolve_executable_with_paths(
+                &provider,
+                Some(selected.as_os_str()),
+                &dirs,
+                Some(&home.0)
+            )
+            .unwrap(),
+            selected
+        );
+        let missing = home.0.join("missing");
+        assert!(
+            resolve_executable_with_paths(
+                &provider,
+                Some(missing.as_os_str()),
+                &dirs,
+                Some(&home.0)
+            )
+            .is_err()
+        );
+        provider.params = Some(std::collections::HashMap::from([(
+            "executable".into(),
+            json!(selected),
+        )]));
+        assert_eq!(
+            resolve_executable_with_paths(
+                &provider,
+                Some(standalone.as_os_str()),
+                &dirs,
+                Some(&home.0)
+            )
+            .unwrap(),
+            selected
+        );
+        provider.params = Some(std::collections::HashMap::from([(
+            "executable".into(),
+            json!(missing),
+        )]));
+        assert!(
+            resolve_executable_with_paths(
+                &provider,
+                Some(standalone.as_os_str()),
+                &dirs,
+                Some(&home.0)
+            )
+            .is_err()
+        );
+    }
+
     #[cfg(unix)]
     fn fake_cli(script: &str) -> (WorkingDirectory, ClaudeCodeClient) {
         use std::os::unix::fs::PermissionsExt;
@@ -872,6 +1091,117 @@ mod tests {
                 timeout: Duration::from_secs(5),
             },
         )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cold_schema_validation_fits_default_async_worker_stack() {
+        const CHILD: &str = "FLOW_LIKE_CLAUDE_SCHEMA_STACK_TEST";
+        if std::env::var_os(CHILD).as_deref() != Some(std::ffi::OsStr::new("1")) {
+            // Other tests warm jsonschema's global meta-validator. A fresh process keeps this
+            // first-completion regression independent of test order and confines a stack abort.
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "llm::claude_code::tests::cold_schema_validation_fits_default_async_worker_stack",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .env_remove("RUST_MIN_STACK")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "Cold Claude schema validation failed on a 2 MiB async worker:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            return;
+        }
+
+        #[inline(never)]
+        fn poll_with_application_stack<F: std::future::Future>(
+            future: std::pin::Pin<&mut F>,
+            context: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<F::Output> {
+            // Flux reaches the provider through nested agent, tool and stream polls.
+            let caller_stack = [0_u8; 1024 * 1024];
+            std::hint::black_box(&caller_stack);
+            let result = future.poll(context);
+            std::hint::black_box(&caller_stack);
+            result
+        }
+
+        async fn nested_completion(
+            model: &ClaudeCodeCompletion,
+            request: CompletionRequest,
+        ) -> std::result::Result<CompletionResponse<ClaudeCodeResponse>, CompletionError> {
+            let mut future = Box::pin(model.completion(request));
+            std::future::poll_fn(|context| poll_with_application_stack(future.as_mut(), context))
+                .await
+        }
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_stack_size(2 * 1024 * 1024)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            tokio::spawn(async {
+                let arguments = json!({"app_id":"fixture_app", "detail":{"include":["boards"]}});
+                let valid = String::from_utf8(tool_result(
+                    "get_app_detail", "stack_call", &arguments.to_string(),
+                )).unwrap();
+                let invalid = String::from_utf8(tool_result(
+                    "get_app_detail", "stack_call", r#"{"app_id":1,"detail":{}}"#,
+                )).unwrap();
+                let (_dir, client) = fake_cli(&format!(r#"input=$(cat)
+printf '%s\n' called >> "$0.calls"
+case "$input" in
+  *invalid_arguments*) printf '%s' '{invalid}' ;;
+  *) printf '%s' '{valid}' ;;
+esac"#));
+                let model = client.completion_model("selected-stack-test-model");
+                let request = |prompt: &str| model.completion_request(prompt).tools(vec![ToolDefinition {
+                    name: "get_app_detail".into(),
+                    description: "Read an app and its requested details".into(),
+                    parameters: json!({
+                        "$schema":"https://json-schema.org/draft/2020-12/schema",
+                        "$defs":{"details":{
+                            "type":"object", "additionalProperties":false,
+                            "properties":{"include":{"type":"array", "items":{"enum":["boards","metadata"]}}}
+                        }},
+                        "type":"object", "additionalProperties":false,
+                        "properties":{
+                            "app_id":{"type":"string", "pattern":"^[a-z][a-z_]+$"},
+                            "detail":{"$ref":"#/$defs/details"}
+                        },
+                        "required":["app_id","detail"]
+                    }),
+                }]).build();
+                let response = nested_completion(&model, request("Read fixture_app")).await.unwrap();
+                let AssistantContent::ToolCall(call) = response.choice.first() else {
+                    panic!("validated host tool call expected")
+                };
+                assert_eq!(call.function.name, "get_app_detail");
+                assert_eq!(call.function.arguments, arguments);
+                assert_eq!(response.raw_response.model, "selected-stack-test-model");
+                assert_eq!(response.usage.output_tokens, 5);
+
+                let error = nested_completion(&model, request("invalid_arguments"))
+                    .await.err().unwrap().to_string();
+                assert!(error.contains("do not match the registered tool schema"), "{error}");
+                let mut malformed = request("invalid_schema");
+                malformed.tools[0].parameters["type"] = json!("not_a_json_schema_type");
+                let error = nested_completion(&model, malformed).await.err().unwrap().to_string();
+                assert!(error.contains("Invalid parameter schema"), "{error}");
+                let calls = std::fs::read_to_string(client.executable.with_extension("calls")).unwrap();
+                assert_eq!(calls.lines().count(), 2, "Invalid schemas must fail before invoking the CLI");
+            }).await.unwrap();
+        });
     }
 
     #[cfg(unix)]
@@ -953,7 +1283,9 @@ mod tests {
     #[tokio::test]
     async fn availability_requires_affirmative_authentication_json() {
         for output in [r#"{"loggedIn":false}"#, "", "{}", "not-json"] {
-            let (_dir, client) = fake_cli(&format!("printf '%s' '{output}'"));
+            let (_dir, client) = fake_cli(&format!(
+                "if [ \"$1\" = auth ] && [ \"$2\" = status ]; then printf '%s' '{output}'; else touch \"$0.completion\"; fi"
+            ));
             let provider = ModelProvider {
                 provider_name: "custom:claude-code".into(),
                 model_id: None,
@@ -965,12 +1297,18 @@ mod tests {
                 )])),
             };
             assert!(check_available(&provider).await.is_err());
+            assert!(
+                super::super::external::build(&provider, true)
+                    .await
+                    .is_err()
+            );
+            assert!(!client.executable.with_extension("completion").exists());
         }
     }
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn rig_executes_host_tool_and_replays_its_result_on_the_next_turn() {
+    async fn custom_provider_keeps_selected_model_across_host_tool_turns() {
         use rig::completion::Prompt;
         use std::sync::{
             Arc,
@@ -998,30 +1336,72 @@ mod tests {
         let first =
             String::from_utf8(tool_result("weather", "weather_1", r#"{"city":"Berlin"}"#)).unwrap();
         let second = json!({"subtype":"success", "structured_output":{"text":"It is sunny in Berlin.","tool_calls":[]}}).to_string();
-        let (_dir, client) = fake_cli(&format!(
-            "input=$(cat)\nprintf '%s\\n' \"$input\" >> \"$0.turns\"\ncase \"$input\" in\n*HOST_WEATHER_RESULT_SUNNY*) printf '%s' '{second}' ;;\n*) printf '%s' '{first}' ;;\nesac"
-        ));
-        let count = Arc::new(AtomicUsize::new(0));
-        let agent = client
-            .agent("sonnet")
-            .tool(WeatherTool(count.clone()))
-            .build();
-        let reply = agent
-            .prompt("What is the weather in Berlin?")
-            .max_turns(2)
-            .await
-            .unwrap();
-        assert_eq!(reply, "It is sunny in Berlin.");
-        assert_eq!(count.load(Ordering::SeqCst), 1);
-        let turns =
-            std::fs::read_to_string(format!("{}.turns", client.executable.display())).unwrap();
-        let turns: Vec<Value> = turns
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
-        assert_eq!(turns.len(), 2);
-        let replayed = &turns[1]["chat_history"];
-        assert!(replayed.to_string().contains("weather_1"));
-        assert!(replayed.to_string().contains("HOST_WEATHER_RESULT_SUNNY"));
+        let selected_model = "selected-custom-claude-model";
+        for model_in_params in [false, true] {
+            let (_dir, client) = fake_cli(&format!(
+                r#"if [ "$1" = auth ] && [ "$2" = status ]; then
+  printf '%s' '{{"loggedIn":true}}'
+  exit 0
+fi
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --model ]; then
+    shift
+    printf '%s\n' "$1" >> "$0.models"
+  fi
+  shift
+done
+input=$(cat)
+printf '%s\n' "$input" >> "$0.turns"
+case "$input" in
+  *HOST_WEATHER_RESULT_SUNNY*) printf '%s' '{second}' ;;
+  *) printf '%s' '{first}' ;;
+esac"#
+            ));
+            let mut params = std::collections::HashMap::from([
+                ("executable".into(), json!(client.executable)),
+                ("timeout_seconds".into(), json!(5)),
+            ]);
+            if model_in_params {
+                params.insert("model_id".into(), json!(selected_model));
+            }
+            let provider = ModelProvider {
+                provider_name: "custom:claude-code".into(),
+                model_id: (!model_in_params).then(|| selected_model.to_owned()),
+                version: None,
+                api_surface: None,
+                params: Some(params),
+            };
+            let loaded = super::super::external::build(&provider, true)
+                .await
+                .unwrap();
+            let model_id = loaded.default_model().await.unwrap();
+            assert_eq!(model_id, selected_model);
+            let constructor = loaded.provider().await.unwrap();
+            let count = Arc::new(AtomicUsize::new(0));
+            let agent = constructor
+                .client()
+                .agent(&model_id)
+                .tool(WeatherTool(count.clone()))
+                .build();
+            let reply = agent
+                .prompt("What is the weather in Berlin?")
+                .max_turns(2)
+                .await
+                .unwrap();
+            assert_eq!(reply, "It is sunny in Berlin.");
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+            let models =
+                std::fs::read_to_string(client.executable.with_extension("models")).unwrap();
+            assert_eq!(models.lines().collect::<Vec<_>>(), [selected_model; 2]);
+            let turns = std::fs::read_to_string(client.executable.with_extension("turns")).unwrap();
+            let turns: Vec<Value> = turns
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(turns.len(), 2);
+            let replayed = &turns[1]["chat_history"];
+            assert!(replayed.to_string().contains("weather_1"));
+            assert!(replayed.to_string().contains("HOST_WEATHER_RESULT_SUNNY"));
+        }
     }
 }

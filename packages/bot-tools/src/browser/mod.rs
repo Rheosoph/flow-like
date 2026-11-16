@@ -3,11 +3,15 @@
 //! approved it (`browser_open` asks per site), a page that lands elsewhere is left, downloads
 //! go to the workspace, and `{{secret:NAME}}` is filled in by the host and never shown back.
 //!
+//! `browser_open` can switch the session to human input ([`BrowserMode::Human`]) when a site
+//! turns automated browsing away; the mode holds until another `browser_open` changes it.
+//!
 //! `browser_open` can also ask for a tab in the owner's own browser ([`BrowserChoice::Owner`]).
 //! That is approved apart from the bot's browser: its grants are `owner_browser:<site>`, and a
 //! site approved for one browser is not approved for the other.
 
 mod backend;
+mod solver;
 #[cfg(test)]
 pub(crate) mod tests;
 
@@ -30,15 +34,25 @@ use crate::secret_text::{Scrubber, fill_secrets};
 use crate::spec::{Approval, ToolSpec, schema_of};
 
 pub use backend::{
-    BrowserBackend, BrowserScreen, BrowserStep, Download, PageState, ScrollTo, SnapshotRequest,
-    SnapshotView, no_owner_browser,
+    BrowserBackend, BrowserMode, BrowserScreen, BrowserStep, Challenge, Download, OpenOptions,
+    PageState, ScrollTo, SnapshotRequest, SnapshotView, no_challenges, no_owner_browser,
 };
+pub use solver::{SOLVER_KEY_SECRET, SOLVER_SECRET};
 
 pub const BROWSER_OPEN: &str = "browser_open";
 pub const BROWSER_SNAPSHOT: &str = "browser_snapshot";
 pub const BROWSER_ACT: &str = "browser_act";
 pub const BROWSER_SCREENSHOT: &str = "browser_screenshot";
 pub const BROWSER_CLOSE: &str = "browser_close";
+pub const BROWSER_CHALLENGE: &str = "browser_challenge";
+
+/// The owner's proxy for the bot's own browser, such as `http://user:secret@proxy.example:8080`.
+pub const PROXY_SECRET: &str = "BROWSER_PROXY";
+/// How long a check may take to decide after it was pressed or answered.
+const CHALLENGE_PATIENCE: Duration = Duration::from_secs(25);
+/// How long `browser_open` in human mode waits for a check page that decides by itself.
+const INTERSTITIAL_PATIENCE: Duration = Duration::from_secs(20);
+const CHALLENGE_POLL: Duration = Duration::from_secs(1);
 
 pub const DOWNLOADS_DIR: &str = "bot/downloads";
 pub const DEFAULT_SNAPSHOT_CHARS: usize = 12_000;
@@ -65,6 +79,14 @@ pub struct BrowserOpenArgs {
     /// their browser asks them once more.
     #[serde(default)]
     pub browser: Option<BrowserChoice>,
+    /// `human` makes your input look like a person's: the mouse travels to what you click,
+    /// typing and scrolling keep a person's pace, the pointer moves now and then while you
+    /// think, and your own browser restarts without the switches that announce automation
+    /// (its logins stay). Slower. Use it when a site blocks, challenges or keeps turning you
+    /// away, and reach deep pages by clicking from the site's start page rather than opening
+    /// them directly. `standard` switches back. Left out, the session keeps its mode.
+    #[serde(default)]
+    pub mode: Option<BrowserMode>,
 }
 
 /// Whether a `browser_open` call asks for the owner's browser.
@@ -132,6 +154,16 @@ pub struct BrowserActArgs {
 pub struct BrowserScreenshotArgs {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct BrowserChallengeArgs {
+    /// Left out, you deal with the bot check the way a person does: tick its box or press and
+    /// hold its button, then wait while it decides. `true` sends the page address and the
+    /// check's site key to the solving service the owner set up and puts its answer into the
+    /// page (Turnstile and reCAPTCHA only); the owner approves that.
+    #[serde(default)]
+    pub solving_service: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct BrowserCloseArgs {}
 
 pub fn specs() -> Vec<ToolSpec> {
@@ -148,7 +180,7 @@ pub fn specs() -> Vec<ToolSpec> {
     vec![
         browser(
             BROWSER_OPEN,
-            "Open a web page in your own browser. The owner approves each new site first. Then take a browser_snapshot to see the page. A site that turns your browser away as automated can be opened in the owner's browser instead (browser: owner).",
+            "Open a web page in your own browser. The owner approves each new site first. Then take a browser_snapshot to see the page. A site that turns your browser away as automated: open its start page again with mode: human; if it still refuses, open it in the owner's browser (browser: owner). A result with 'challenge' shows a bot check: use browser_challenge.",
             Approval::Ask,
             true,
             schema_of::<BrowserOpenArgs>(),
@@ -174,6 +206,16 @@ pub fn specs() -> Vec<ToolSpec> {
             false,
             schema_of::<BrowserScreenshotArgs>(),
         ),
+        ToolSpec {
+            name: BROWSER_CHALLENGE,
+            description: "Deal with the bot check the current page shows (a result's 'challenge'): tick its box or hold its button like a person and wait for it to pass, or with solving_service: true let the owner's CAPTCHA solving service answer it. An image task needs the owner or the service.",
+            capability: Some("browser_use"),
+            module: "browser",
+            approval: Approval::None,
+            approval_args: &["solving_service"],
+            mutating: true,
+            input_schema: schema_of::<BrowserChallengeArgs>(),
+        },
         browser(
             BROWSER_CLOSE,
             "Close your browser and the tab you opened in the owner's browser. Open pages and unsaved form input are lost; your own browser's cookies stay for the next session.",
@@ -185,8 +227,8 @@ pub fn specs() -> Vec<ToolSpec> {
 }
 
 /// What the tools remember of one browser session: the sites the owner approved for each
-/// browser, which browser the session is in, and the names of the secrets typed, so later
-/// output can be cleaned of them.
+/// browser, which browser the session is in and in which mode, and the names of the secrets
+/// typed, so later output can be cleaned of them.
 #[derive(Default)]
 pub struct BrowserState {
     inner: Mutex<StateInner>,
@@ -197,6 +239,7 @@ struct StateInner {
     sites: BTreeSet<String>,
     owner_sites: BTreeSet<String>,
     current: BrowserChoice,
+    mode: BrowserMode,
     secrets: BTreeSet<String>,
 }
 
@@ -225,6 +268,14 @@ impl BrowserState {
 
     pub fn current(&self) -> BrowserChoice {
         self.lock().current
+    }
+
+    pub fn mode(&self) -> BrowserMode {
+        self.lock().mode
+    }
+
+    pub fn set_mode(&self, mode: BrowserMode) {
+        self.lock().mode = mode;
     }
 
     /// Whether the owner approved `site` for the browser the session is in.
@@ -362,7 +413,7 @@ async fn save_downloads(
             continue;
         }
         let name = sanitize_name(&download.name);
-        let path = format!("{DOWNLOADS_DIR}/{}-{name}", &hash_prefix(&download.bytes));
+        let path = format!("{DOWNLOADS_DIR}/{}-{name}", hash_prefix(&download.bytes));
         let mime = crate::files::guess_mime(&name);
         env.write_workspace(&path, download.bytes.clone(), &mime)
             .await
@@ -380,22 +431,98 @@ fn hash_prefix(bytes: &Bytes) -> String {
     crate::files::sha256_hex(bytes).chars().take(8).collect()
 }
 
+async fn owner_proxy(env: &dyn ToolEnv) -> ToolResult<Option<String>> {
+    Ok(env
+        .secret(PROXY_SECRET)
+        .await
+        .map_err(ToolError::from)?
+        .filter(|proxy| !proxy.trim().is_empty()))
+}
+
+/// Asks the page about its bot check every second until it is gone, solved or shows a task,
+/// or `patience` ran out; the last state it saw. Between asks the browser is free, so in human
+/// mode the hand moves while the check watches.
+async fn settle_challenge(backend: &dyn BrowserBackend, patience: Duration) -> Option<Challenge> {
+    let deadline = flow_like_types::tokio::time::Instant::now() + patience;
+    let mut last = None;
+    loop {
+        flow_like_types::tokio::time::sleep(CHALLENGE_POLL).await;
+        if let Ok(found) = backend.challenge().await {
+            last = found;
+        }
+        match &last {
+            None => return None,
+            Some(found) if found.solved || found.puzzle => return last,
+            Some(_) => {}
+        }
+        if flow_like_types::tokio::time::Instant::now() >= deadline {
+            return last;
+        }
+    }
+}
+
+fn challenge_advice(found: &Challenge, mode: BrowserMode) -> &'static str {
+    if found.puzzle {
+        "An image or slider task is showing. Ask the owner to solve it in the browser window on their screen, or call browser_challenge with solving_service: true (Turnstile and reCAPTCHA only)."
+    } else if found.pressable {
+        "Call browser_challenge to tick the box or hold the button like a person."
+    } else if mode == BrowserMode::Standard {
+        "The site checks for automation. Open its start page again with mode: human."
+    } else {
+        "The check is still deciding. Call browser_challenge to wait for it, or open the site in the owner's browser (browser: owner)."
+    }
+}
+
+/// Adds an open bot check and what to do about it to a result.
+fn report_challenge(result: &mut Value, challenge: Option<Challenge>, mode: BrowserMode) {
+    let Some(found) = challenge.filter(|found| !found.solved) else {
+        return;
+    };
+    result["challenge_advice"] = json!(challenge_advice(&found, mode));
+    result["challenge"] = json!(found);
+}
+
 pub async fn browser_open(env: &dyn ToolEnv, args: BrowserOpenArgs) -> ToolResult<ToolOutput> {
     let backend = backend_of(env)?;
     let state = state_of(env);
     let (url, site) = checked_url(&args.url)?;
     let browser = args.browser.unwrap_or_default();
+    let mode = args.mode.unwrap_or_else(|| state.mode());
+    let proxy = match browser {
+        BrowserChoice::Own => owner_proxy(env).await?,
+        BrowserChoice::Owner => None,
+    };
+    let options = OpenOptions { mode, proxy };
     state.approve(browser, &site);
-    let page = match browser {
-        BrowserChoice::Own => backend.open(url.as_str()).await,
-        BrowserChoice::Owner => backend.open_in_owner_browser(url.as_str()).await,
+    let mut page = match browser {
+        BrowserChoice::Own => backend.open(url.as_str(), &options).await,
+        BrowserChoice::Owner => backend.open_in_owner_browser(url.as_str(), &options).await,
     }
     .map_err(ToolError::from)?;
     state.enter(browser);
+    state.set_mode(mode);
+    let challenge = match backend.challenge().await.ok().flatten() {
+        // A check page that decides by itself watches a person for a while, then moves on.
+        Some(found)
+            if mode == BrowserMode::Human && !found.pressable && !found.puzzle && !found.solved =>
+        {
+            let settled = settle_challenge(backend.as_ref(), INTERSTITIAL_PATIENCE).await;
+            if let Ok(Some(current)) = backend.current().await {
+                page = current;
+            }
+            settled
+        }
+        other => other,
+    };
     enforce_site(backend.as_ref(), &state, &page).await?;
     let scrubber = Scrubber::load(env, &state.secret_names()).await;
     let mut result = page_json(&page);
     result["browser"] = json!(browser);
+    result["mode"] = json!(mode);
+    if options.proxy.is_some() {
+        result["proxy"] = json!(true);
+    }
+    report_challenge(&mut result, challenge, mode);
     let output = save_downloads(env, backend.as_ref(), ToolOutput::new(result)).await;
     finish(output, &scrubber)
 }
@@ -429,13 +556,15 @@ pub async fn browser_snapshot(
         } else {
             view.text
         };
-        Ok(ToolOutput::new(json!({
+        let mut result = json!({
             "url": view.page.url,
             "title": view.page.title,
             "snapshot": text,
             "observation": backend.observation().await.ok().flatten(),
-        }))
-        .truncated(view.truncated || cut))
+        });
+        let challenge = backend.challenge().await.ok().flatten();
+        report_challenge(&mut result, challenge, state.mode());
+        Ok(ToolOutput::new(result).truncated(view.truncated || cut))
     }
     .await;
     finish(result, &scrubber)
@@ -556,6 +685,8 @@ async fn act_inner(
             json!("Take a new browser_snapshot before using more references"),
         );
     }
+    let challenge = backend.challenge().await.ok().flatten();
+    report_challenge(&mut result, challenge, state.mode());
     save_downloads(env, backend, ToolOutput::new(result)).await
 }
 
@@ -590,6 +721,70 @@ pub async fn browser_screenshot(
     });
     output.images.extend(annotated.images);
     Ok(output)
+}
+
+pub async fn browser_challenge(
+    env: &dyn ToolEnv,
+    args: BrowserChallengeArgs,
+) -> ToolResult<ToolOutput> {
+    let backend = backend_of(env)?;
+    let state = state_of(env);
+    let page = backend
+        .current()
+        .await
+        .map_err(ToolError::from)?
+        .ok_or_else(no_page)?;
+    enforce_site(backend.as_ref(), &state, &page).await?;
+    let open = backend
+        .challenge()
+        .await
+        .map_err(ToolError::from)?
+        .filter(|found| !found.solved);
+    let Some(found) = open else {
+        let mut result = page_json(&page);
+        result["passed"] = json!(true);
+        result["note"] = json!("The page shows no open bot check");
+        return Ok(ToolOutput::new(result));
+    };
+    let mut answer = None;
+    if args.solving_service {
+        let token = solver::solve(env, &found).await?;
+        answer = Some(
+            backend
+                .apply_challenge_token(&token)
+                .await
+                .map_err(ToolError::from)?,
+        );
+    } else if found.puzzle {
+        let mut result = page_json(&page);
+        result["passed"] = json!(false);
+        report_challenge(&mut result, Some(found), state.mode());
+        return Ok(ToolOutput::new(result));
+    } else if found.pressable {
+        backend.press_challenge().await.map_err(ToolError::from)?;
+    }
+    let settled = settle_challenge(backend.as_ref(), CHALLENGE_PATIENCE).await;
+    let page = backend
+        .current()
+        .await
+        .map_err(ToolError::from)?
+        .ok_or_else(no_page)?;
+    enforce_site(backend.as_ref(), &state, &page).await?;
+    let passed = settled.as_ref().is_none_or(|found| found.solved);
+    let mut result = page_json(&page);
+    result["passed"] = json!(passed);
+    if let Some(answer) = &answer {
+        result["answer"] = json!(answer);
+    }
+    result["note"] = json!(match (passed, answer.as_deref()) {
+        (true, Some("fields")) => {
+            "The answer is in the page: press the form's button to go on, then take a browser_snapshot"
+        }
+        (true, _) => "The check passed; take a browser_snapshot",
+        (false, _) => "The check did not pass",
+    });
+    report_challenge(&mut result, settled, state.mode());
+    Ok(ToolOutput::new(result))
 }
 
 pub async fn browser_close(env: &dyn ToolEnv, _args: BrowserCloseArgs) -> ToolResult<ToolOutput> {

@@ -11,6 +11,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { useAssetImage } from "../../../hooks/use-asset-image";
 import { cn } from "../../../lib/utils";
 import {
 	CardContent,
@@ -25,6 +26,7 @@ import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import { resolveChildSpecs } from "../children";
+import { useAssetUrl } from "../hooks/use-asset-url";
 import type { BoundValue, CardComponent } from "../types";
 
 const CONTROL_SELECTOR =
@@ -62,6 +64,43 @@ function useContainsControl(
 	return enabled && containsControl;
 }
 
+/** Edge-to-edge cover picture; keeps its slot while signing and leaves the card when it cannot load. */
+function CardMedia({
+	source,
+	alt,
+	zoom,
+}: Readonly<{ source: string; alt: string; zoom: boolean }>) {
+	const { url, isLoading, refresh } = useAssetUrl(source);
+	const image = useAssetImage(url);
+	const onError = useCallback(() => {
+		image.onError();
+		refresh();
+	}, [image.onError, refresh]);
+	if (!image.canRender && !isLoading) return null;
+	return (
+		<div
+			data-slot="card-media"
+			className="relative aspect-video w-full overflow-hidden bg-muted"
+		>
+			{image.canRender && (
+				<img
+					ref={image.imgRef}
+					src={image.src}
+					alt={alt}
+					loading="lazy"
+					onLoad={image.onLoad}
+					onError={onError}
+					className={cn(
+						"size-full object-cover transition-[opacity,scale] duration-500 ease-out",
+						image.loaded ? "opacity-100" : "opacity-0",
+						zoom && "motion-safe:group-hover/card:scale-[1.04]",
+					)}
+				/>
+			)}
+		</div>
+	);
+}
+
 export function A2UICard({
 	elementRef,
 	component,
@@ -74,6 +113,9 @@ export function A2UICard({
 	const title = useResolved<string>(component.title);
 	const description = useResolved<string>(component.description);
 	const footer = useResolved<string>(component.footer);
+	const rawHeaderImage = useResolved<unknown>(component.headerImage);
+	const headerImage =
+		typeof rawHeaderImage === "string" ? rawHeaderImage.trim() : undefined;
 	const hoverable = useResolved<boolean>(component.hoverable);
 	const clickable = useResolved<boolean>(component.clickable);
 	const titleId = useId();
@@ -124,8 +166,10 @@ export function A2UICard({
 		<ShadCard
 			ref={setCardRef}
 			className={cn(
+				"group/card",
+				headerImage && "overflow-hidden pt-0",
 				resolveStyle(style),
-				hoverable && "hover:shadow-lg transition-shadow",
+				hoverable && "hover:shadow-lg motion-safe:hover:-translate-y-0.5",
 				clickable && "cursor-pointer",
 			)}
 			style={resolveInlineStyle(style)}
@@ -135,6 +179,13 @@ export function A2UICard({
 			aria-labelledby={actionMode === "title" ? titleId : undefined}
 			tabIndex={actionMode === "card" ? 0 : undefined}
 		>
+			{headerImage && (
+				<CardMedia
+					source={headerImage}
+					alt={title ?? ""}
+					zoom={Boolean(hoverable || clickable)}
+				/>
+			)}
 			{(title || description) && (
 				<CardHeader>
 					{title && (

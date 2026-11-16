@@ -43,6 +43,8 @@ pub struct CodeRunArgs {
     pub language: String,
     /// The program. It finds `inputs` (a dict) and fills `outputs` (a JSON-serialisable dict); it runs in
     /// `/flow/out` and reads the given files from `/flow/in/<name>`. Print to see results.
+    /// Write Python directly here. WASI cannot start child processes: no subprocess, os.system,
+    /// shell commands, or launching another interpreter. Use `packages` for bundled libraries.
     pub code: String,
     /// Files to stage under `/flow/in/<file name>`: workspace paths, attachments, handles, other apps' files.
     #[serde(default)]
@@ -50,7 +52,9 @@ pub struct CodeRunArgs {
     /// Hosts the program may reach. None (the default) means no network at all. Needs the owner's approval.
     #[serde(default)]
     pub network_hosts: Vec<String>,
-    /// Python only: library sets to load, e.g. `["numpy", "pandas"]` (also scipy, scikit-learn, matplotlib, ...). The first use downloads a large runtime.
+    /// Python only: bundled library sets to load, e.g. `["numpy", "pandas"]` (also scipy, scikit-learn, matplotlib, ...).
+    /// Import these libraries directly in `code`; do not use pip, micropip, or Pyodide to install them.
+    /// This selects a prebuilt runtime, not arbitrary PyPI packages. The first use downloads a large runtime.
     #[serde(default)]
     pub packages: Vec<String>,
 }
@@ -58,7 +62,7 @@ pub struct CodeRunArgs {
 pub fn specs() -> Vec<ToolSpec> {
     vec![ToolSpec {
         name: CODE_RUN,
-        description: "Run a Python or JavaScript program in a sandbox (no network, no host files). Staged input files are under /flow/in, the working directory is /flow/out; files you write there (csv, json, png, ...) are saved in the workspace and returned as handles, and png/jpg/gif/webp images are shown to you. Python has `inputs`/`outputs` dicts; for numpy, pandas or matplotlib pass packages.",
+        description: "Run Python or JavaScript directly in a WASI sandbox with no child processes or host files; network access requires approved network_hosts. Do not use subprocess, os.system, shell commands, pip, micropip, or Pyodide. For bundled Python libraries such as numpy, pandas or matplotlib, pass packages and import them directly. Python has `inputs`/`outputs` dicts. Staged inputs are under /flow/in and the working directory is /flow/out. Files written there are saved in the workspace and returned as handles; png/jpg/gif/webp images are also shown to you.",
         capability: Some("code_execution"),
         module: "code",
         approval: Approval::None,
@@ -257,13 +261,21 @@ fn failure(status: RunStatus, response: &RunResponse, budget: usize) -> ToolErro
         _ => (code::CODE_ERROR, "The program failed"),
     };
     let detail = response.error.as_deref().unwrap_or_default();
-    ToolError::new(
-        code,
+    let message = if status == RunStatus::Error
+        && detail.lines().last().is_some_and(|line| {
+            line.starts_with("OSError:") && line.contains("wasi does not support processes")
+        }) {
+        format!(
+            "{headline}: this WASI sandbox cannot start child processes. \
+             Put Python directly in 'code'; use 'packages' for bundled libraries \
+             instead of pip or micropip.\n{detail}"
+        )
+    } else {
         format!("{headline}: {detail}")
             .trim_end_matches([':', ' '])
-            .to_string(),
-    )
-    .with_details(json!({
+            .to_string()
+    };
+    ToolError::new(code, message).with_details(json!({
         "stdout": trimmed(&response.stdout, budget).0,
         "stderr": trimmed(&response.stderr, budget).0,
         "duration_ms": response.duration_ms,

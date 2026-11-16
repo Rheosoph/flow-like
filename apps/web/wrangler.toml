@@ -1,3 +1,7 @@
 name = "flow-like-web-app"
 compatibility_date = "2024-08-29"
 pages_build_output_dir="./out"
+
+[vars]
+# Match the API used by this deployment's browser bundle.
+FLOW_LIKE_WEB_API_URL = "https://api.flow-like.com"

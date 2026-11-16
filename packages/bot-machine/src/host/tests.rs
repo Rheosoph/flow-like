@@ -3,7 +3,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use flow_like_bot_tools::browser::{
-    BrowserBackend, BrowserScreen, BrowserStep, Download, PageState, SnapshotRequest, SnapshotView,
+    BrowserBackend, BrowserMode, BrowserScreen, BrowserStep, Download, OpenOptions, PageState,
+    SnapshotRequest, SnapshotView,
 };
 use flow_like_bot_tools::computer::{
     ComputerAction, ComputerBackend, PointerButton, Screen, WindowBounds, WindowOp, WindowSummary,
@@ -50,11 +51,15 @@ fn page(url: &str) -> PageState {
 
 #[async_trait]
 impl BrowserBackend for FakeBrowser {
-    async fn open(&self, url: &str) -> Result<PageState> {
-        self.opened.lock().unwrap().push(url.into());
+    async fn open(&self, url: &str, options: &OpenOptions) -> Result<PageState> {
+        let opened = match options.mode {
+            BrowserMode::Standard => url.to_owned(),
+            BrowserMode::Human => format!("human:{url}"),
+        };
+        self.opened.lock().unwrap().push(opened);
         Ok(page(url))
     }
-    async fn open_in_owner_browser(&self, url: &str) -> Result<PageState> {
+    async fn open_in_owner_browser(&self, url: &str, _options: &OpenOptions) -> Result<PageState> {
         self.opened.lock().unwrap().push(format!("owner:{url}"));
         Ok(page(url))
     }
@@ -210,7 +215,12 @@ async fn while_taken_over_every_computer_and_browser_call_is_refused_and_the_not
             .unwrap_err()
     ));
     assert!(taken(computer.launch("x", &[]).await.unwrap_err()));
-    assert!(taken(browser.open("https://a.example/").await.unwrap_err()));
+    assert!(taken(
+        browser
+            .open("https://a.example/", &OpenOptions::default())
+            .await
+            .unwrap_err()
+    ));
     assert!(taken(
         browser
             .act(&BrowserStep::Click {
@@ -241,12 +251,22 @@ async fn an_open_in_the_owners_browser_passes_the_same_takeover_guard() {
     let browser = host.machine("b", None, true, false).browser.unwrap();
     let url = "https://a.example/";
     host.take_over("b").unwrap();
-    let refused = browser.open_in_owner_browser(url).await.unwrap_err();
+    let refused = browser
+        .open_in_owner_browser(url, &OpenOptions::default())
+        .await
+        .unwrap_err();
     assert_eq!(ToolError::from(refused).code, code::TAKEN_OVER);
     assert!(playground.browser.opened.lock().unwrap().is_empty());
 
     host.hand_back("b").unwrap();
-    assert_eq!(browser.open_in_owner_browser(url).await.unwrap().url, url);
+    assert_eq!(
+        browser
+            .open_in_owner_browser(url, &OpenOptions::default())
+            .await
+            .unwrap()
+            .url,
+        url
+    );
     assert_eq!(
         *playground.browser.opened.lock().unwrap(),
         [format!("owner:{url}")]
@@ -404,7 +424,7 @@ async fn a_machine_without_a_display_says_what_to_install() {
         machine
             .browser
             .unwrap()
-            .open("https://a.example/")
+            .open("https://a.example/", &OpenOptions::default())
             .await
             .is_ok()
     );
@@ -539,8 +559,23 @@ async fn the_worker_protocol_round_trips_browser_and_computer_calls() {
     assert_eq!(spawner.spawned.load(Ordering::SeqCst), 0);
 
     assert_eq!(
-        browser.open("https://a.example/").await.unwrap().url,
+        browser
+            .open(
+                "https://a.example/",
+                &OpenOptions {
+                    mode: BrowserMode::Human,
+                    proxy: None,
+                },
+            )
+            .await
+            .unwrap()
+            .url,
         "https://a.example/"
+    );
+    assert_eq!(
+        playground.browser.opened.lock().unwrap().last().unwrap(),
+        "human:https://a.example/",
+        "the mode crosses the wire"
     );
     let view = browser
         .snapshot(SnapshotRequest {

@@ -37,7 +37,7 @@ use axum::{
 use chrono::{DateTime, FixedOffset};
 use flow_like_types::{
     Value,
-    bot_message::MessageBody,
+    bot_message::{InteractiveMark, MAX_NAME_CHARS, MessageBody},
     bot_turn::is_interactive_host,
     inbox::{
         ActivityBody, CallBody, ConversationEncryption, ConversationKind, EntryCursor,
@@ -283,6 +283,7 @@ pub(crate) struct Outgoing {
     pub kind: InboxEntryKind,
     pub content: Content,
     pub links: Links,
+    pub interactive: Option<InteractiveMark>,
 }
 
 pub(crate) fn validate_send(request: SendEntryRequest) -> Result<Outgoing, ApiError> {
@@ -297,6 +298,27 @@ pub(crate) fn validate_send(request: SendEntryRequest) -> Result<Outgoing, ApiEr
             "Member entries are written by the server when members join or leave",
         ));
     }
+    if let Some(mark) = &request.interactive {
+        if !matches!(
+            request.kind,
+            InboxEntryKind::Message | InboxEntryKind::Transcript
+        ) || request.turn.is_some()
+        {
+            return Err(ApiError::bad_request(
+                "interactive reserves only a person's message or transcript",
+            ));
+        }
+        if !(1..=MAX_NAME_CHARS).contains(&mark.client_run_id.chars().count())
+            || mark
+                .client_run_id
+                .chars()
+                .any(|char| char.is_whitespace() || char.is_control())
+        {
+            return Err(ApiError::bad_request(format!(
+                "interactive.client_run_id must be 1 to {MAX_NAME_CHARS} characters without spaces or control characters",
+            )));
+        }
+    }
     let content = content_of(request.envelope, request.envelopes)?;
     let links = match &content {
         Content::Plain(envelope) => plain_links(request.kind, envelope)?,
@@ -307,6 +329,7 @@ pub(crate) fn validate_send(request: SendEntryRequest) -> Result<Outgoing, ApiEr
         kind: request.kind,
         content,
         links,
+        interactive: request.interactive,
     })
 }
 
@@ -640,6 +663,19 @@ pub(super) async fn fan_out<C: ConnectionTrait>(
 ) -> Result<Sent, ApiError> {
     let (conversation, members, mut envelopes) =
         checked_envelopes(txn, conversation_id, sender, outgoing).await?;
+    let principals: Vec<Principal> = members.iter().map(Principal::from).collect();
+    let bots = live_bots(txn, &principals).await?;
+    if outgoing.interactive.is_some()
+        && (ConversationKind::parse(&conversation.kind) != Some(ConversationKind::Direct)
+            || members.len() != 2
+            || bots.len() != 1
+            || bots[0].owner_id != sender
+            || bots[0].id == sender)
+    {
+        return Err(ApiError::bad_request(
+            "interactive requires your direct conversation with a bot you own",
+        ));
+    }
     let approved_status = super::user_context::validate(
         txn,
         &conversation,
@@ -696,8 +732,6 @@ pub(super) async fn fan_out<C: ConnectionTrait>(
     if let Some(approved) = approved_status {
         crate::routes::user::availability::apply_approved(txn, sender, approved).await?;
     }
-    let principals: Vec<Principal> = members.iter().map(Principal::from).collect();
-    let bots = live_bots(txn, &principals).await?;
     let delivered = if derived_request.is_some() {
         Vec::new()
     } else {
@@ -882,7 +916,8 @@ async fn recipients_of<'e, C: ConnectionTrait>(
             reacted_bot: reacted_bot.as_deref(),
             hops,
             replied_hops,
-            interactive: matches!(&outgoing.content, Content::Plain(envelope) if super::delivery::is_interactive(envelope)),
+            interactive: outgoing.interactive.is_some()
+                || matches!(&outgoing.content, Content::Plain(envelope) if super::delivery::is_interactive(envelope)),
         },
     ))
 }

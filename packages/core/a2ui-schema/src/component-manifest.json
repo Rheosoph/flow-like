@@ -2233,7 +2233,7 @@
         {
           "name": "headerImage",
           "kind": "bound",
-          "unrendered": true
+          "description": "Cover picture shown edge to edge above the title: an https URL or a stored file's path."
         },
         {
           "name": "headerIcon",

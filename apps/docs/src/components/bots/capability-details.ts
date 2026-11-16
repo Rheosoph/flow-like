@@ -62,10 +62,11 @@ export const CAPABILITY_DETAILS: Readonly<
 			"browser_snapshot",
 			"browser_act",
 			"browser_screenshot",
+			"browser_challenge",
 			"browser_close",
 		],
-		asks: "Before it opens a new site.",
-		note: "A real browser on the bot's desktop or device. Watch or take over from the Computer tab.",
+		asks: "Before it opens a new site, and before it sends a bot check to your CAPTCHA solving service.",
+		note: "A real browser on the bot's desktop or device. Watch or take over from the Computer tab. When a site turns automated browsing away, the bot can switch to human mode: the mouse travels to what it clicks, typing and scrolling keep a person's pace, and its browser stops announcing automation. It ticks check boxes like a person; for image tasks it asks you, or uses a solving service whose key you store as the secret CAPTCHA_SOLVER_KEY. A proxy stored as the secret BROWSER_PROXY carries the bot's own browser traffic.",
 	},
 	email: {
 		tools: ["email_send", "email_reply"],

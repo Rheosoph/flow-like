@@ -9,39 +9,42 @@ import {
 } from "../lib/init-idb-sqlite";
 
 /**
- * Blocks the app tree on first launch after the SQLite-IndexedDB switch
- * while native IndexedDB data is copied over. Renders children immediately
- * on every later launch (the check is a synchronous localStorage read).
+ * Keeps data consumers unmounted until the browser checks whether native
+ * IndexedDB data needs copying into SQLite and any required migration settles.
  */
 export function IdbMigrationGate({
 	children,
 }: Readonly<{ children: React.ReactNode }>) {
 	const { t } = useTranslation("common");
-	const [migrating, setMigrating] = useState(
-		() => typeof window !== "undefined" && needsSqliteIdbMigration(),
+	const [phase, setPhase] = useState<"checking" | "migrating" | "ready">(
+		"checking",
 	);
 
 	useEffect(() => {
-		if (!migrating) return;
 		let active = true;
-		runSqliteIdbMigration().finally(() => {
-			if (active) setMigrating(false);
-		});
+		const finish = () => {
+			if (active) setPhase("ready");
+		};
+		if (needsSqliteIdbMigration()) {
+			setPhase("migrating");
+			void runSqliteIdbMigration().then(finish, finish);
+		} else {
+			finish();
+		}
 		return () => {
 			active = false;
 		};
-	}, [migrating]);
+	}, []);
 
-	if (migrating) {
+	if (phase !== "ready") {
 		return (
-			<div
-				className="flex h-screen w-screen flex-col items-center justify-center gap-3 bg-background"
-				suppressHydrationWarning
-			>
+			<div className="flex h-screen w-screen flex-col items-center justify-center gap-3 bg-background">
 				<Loader2 className="size-6 animate-spin text-muted-foreground" />
-				<p className="text-sm text-muted-foreground">
-					{t("upgradingLocalStorage", "Upgrading local storage…")}
-				</p>
+				{phase === "migrating" && (
+					<p className="text-sm text-muted-foreground">
+						{t("upgradingLocalStorage", "Upgrading local storage…")}
+					</p>
+				)}
 			</div>
 		);
 	}

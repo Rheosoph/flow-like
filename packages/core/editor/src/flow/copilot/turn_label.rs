@@ -23,7 +23,7 @@ use super::platform::{Clearance, PlatformToolBridge};
 /// Tools that send what they were given out of the platform or to another principal: mail,
 /// web and connector requests, images, a person or another bot, a shell, code, a browser, the
 /// computer and skills that run their own tools.
-const OUTBOUND_TOOLS: [&str; 21] = [
+const OUTBOUND_TOOLS: [&str; 22] = [
     "email_send",
     "email_reply",
     "connector_call",
@@ -36,6 +36,7 @@ const OUTBOUND_TOOLS: [&str; 21] = [
     "code_run",
     "browser_open",
     "browser_act",
+    "browser_challenge",
     "computer_act",
     "computer_launch",
     "skill_call",
@@ -416,7 +417,11 @@ mod tests {
                     .refusal(name, &json!({ "url": "https://h/a.pdf" }))
                     .is_some()
             );
-            assert!(label.refusal(name, &json!({ "file": "bot/a.pdf" })).is_none());
+            assert!(
+                label
+                    .refusal(name, &json!({ "file": "bot/a.pdf" }))
+                    .is_none()
+            );
             assert!(label.refusal(name, &json!({ "url": " " })).is_none());
         }
     }
@@ -452,7 +457,11 @@ mod tests {
             }
         );
         assert!(label.refusal("email_send", &json!({})).is_some());
-        assert!(TurnLabel::new(&BotRunContext::general(), None).get().is_empty());
+        assert!(
+            TurnLabel::new(&BotRunContext::general(), None)
+                .get()
+                .is_empty()
+        );
     }
 
     #[test]

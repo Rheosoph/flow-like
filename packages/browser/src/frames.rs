@@ -603,6 +603,22 @@ pub(crate) struct ContextRef {
     pub session: SessionId,
     pub id: i64,
     pub unique_id: Arc<str>,
+    /// Whether `unique_id` is Chrome's (from `Runtime.executionContextCreated`) rather than the
+    /// engine's key for a context the hidden runtime looked up itself.
+    pub reported: bool,
+}
+
+impl ContextRef {
+    /// How a `Runtime` call names this context: by Chrome's unique id, which never names
+    /// another context; a hidden-runtime context has none and goes by its numeric id, which its
+    /// document keeps for as long as the engine uses it (lookups are per document).
+    pub(crate) fn address(&self) -> (&'static str, Value) {
+        if self.reported {
+            ("uniqueContextId", Value::from(&*self.unique_id))
+        } else {
+            ("executionContextId", Value::from(self.id))
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -616,6 +632,9 @@ struct ContextEntry {
     frame: FrameId,
     world: World,
     order: u64,
+    /// The document of a context the engine looked up itself (hidden runtime); `None` for the
+    /// contexts Chrome reports.
+    document: Option<LoaderId>,
 }
 
 pub(crate) struct ExecutionContexts {
@@ -674,13 +693,73 @@ impl ExecutionContexts {
                 session: session.clone(),
                 id,
                 unique_id: unique_id.clone(),
+                reported: true,
             },
             frame: FrameId::from(frame),
             world,
             order: self.created,
+            document: None,
         };
         self.entries.insert(unique_id, entry);
         true
+    }
+
+    /// A context of the hidden runtime for `document` of `frame`; `main` is the page's world.
+    pub(crate) fn hidden(
+        &self,
+        frame: &FrameId,
+        owner: &SessionId,
+        document: &LoaderId,
+        main: bool,
+    ) -> Option<ContextRef> {
+        let world = if main { World::Main } else { World::Util };
+        self.entries
+            .values()
+            .find(|entry| {
+                entry.world == world
+                    && entry.frame == *frame
+                    && entry.context.session == *owner
+                    && entry.document.as_ref() == Some(document)
+            })
+            .map(|entry| entry.context.clone())
+    }
+
+    /// Remembers a hidden-runtime context of `document`; those of the frame's earlier documents
+    /// are gone with them and are dropped.
+    pub(crate) fn remember_hidden(
+        &mut self,
+        frame: &FrameId,
+        owner: &SessionId,
+        document: &LoaderId,
+        main: bool,
+        id: i64,
+    ) -> ContextRef {
+        self.entries.retain(|_, entry| {
+            entry.document.is_none()
+                || entry.frame != *frame
+                || entry.context.session != *owner
+                || entry.document.as_ref() == Some(document)
+        });
+        self.forget_dead_atoms();
+        let world = if main { World::Main } else { World::Util };
+        let unique_id: Arc<str> =
+            Arc::from(format!("hidden:{world:?}:{owner}:{frame}:{document}:{id}"));
+        self.created += 1;
+        let context = ContextRef {
+            session: owner.clone(),
+            id,
+            unique_id: unique_id.clone(),
+            reported: false,
+        };
+        let entry = ContextEntry {
+            context: context.clone(),
+            frame: frame.clone(),
+            world,
+            order: self.created,
+            document: Some(document.clone()),
+        };
+        self.entries.insert(unique_id, entry);
+        context
     }
 
     fn remove(&mut self, unique_id: &str) -> bool {

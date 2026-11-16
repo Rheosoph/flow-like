@@ -7,7 +7,6 @@ import { toast } from "sonner";
 import type { ConversationItem } from "../components/bots-tab/fold-entries";
 import type { CrewDirectory } from "../components/bots-tab/use-crew-directory";
 import { isHostedAudioProvider } from "../lib/bit/hosted-audio";
-import { plainMarkdownLines } from "../lib/markdown-text";
 import {
 	type BotSpeechVoice,
 	createBotCallSpeech,
@@ -15,6 +14,7 @@ import {
 	speechCharacterLimit,
 } from "../lib/realtime/bot-call-speech";
 import type { CallSpeechOutput } from "../lib/realtime/call-speech-output";
+import { callSpeechText } from "../lib/realtime/call-speech-text";
 import { followPushedReplies } from "../lib/realtime/pushed-reply-speech";
 import { watchReplyStreams } from "../lib/realtime/reply-streams";
 import { asArray } from "../lib/response-shape";
@@ -65,7 +65,7 @@ function latestSpokenText(
 			item.senderId === botId &&
 			item.content.kind === "text"
 		)
-			return [...plainMarkdownLines(item.content.text)].join("\n");
+			return callSpeechText(item.content.text);
 	}
 	return null;
 }

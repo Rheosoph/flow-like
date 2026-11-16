@@ -15,6 +15,8 @@
 //!   the server's realtime reply ([`flow_like_bot_host::live_reply`]).
 //! - Mobile: the host lives in the app process. While the OS suspends the app no turn runs and
 //!   the bot is offline; the startup scan answers what waited, once the app runs again.
+//!   Android offers an opt-in foreground service for Home and screen-lock sessions. It ends
+//!   when the Activity is destroyed; battery restrictions can still interrupt networking.
 
 mod account;
 mod approvals;

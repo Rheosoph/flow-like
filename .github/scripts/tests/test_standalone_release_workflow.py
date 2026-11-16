@@ -58,7 +58,128 @@ def triggers(workflow):
     return re.findall(r"^  ([a-z_]+):", block, re.MULTILINE)
 
 
+def allows_job(name, results, reuse_run_id="", cancelled=False):
+    """Evaluate the release's job gates with explicit dependency outcomes."""
+    body = job_body(name)
+    match = re.search(r"^    if: (.*?)(?=^    [a-z]|\Z)", body, re.MULTILINE | re.DOTALL)
+    condition = match.group(1).strip()
+    if condition.startswith(">-"):
+        condition = condition[2:].strip()
+    condition = condition.removeprefix("${{").removesuffix("}}").strip()
+    condition = condition.replace("needs.prepare.outputs.reuse_run_id", repr(reuse_run_id))
+    condition = re.sub(r"needs\.([a-z-]+)\.result", lambda value: repr(results[value[1]]), condition)
+    condition = condition.replace("!cancelled()", repr(not cancelled))
+    condition = condition.replace("&&", " and ").replace("||", " or ")
+    condition = " ".join(condition.split())
+    return eval(condition, {"__builtins__": {}}, {})
+
+
 class StandaloneReleaseWorkflowTests(unittest.TestCase):
+    def test_container_dependencies_gate_every_expensive_build(self):
+        check = job_body("container-check")
+        self.assertIn("needs: prepare", check)
+        self.assertIn("runs-on: namespace-profile-linux-amd-small-24", check)
+        self.assertIn("check-standalone-container-deps.sh linux/amd64,linux/arm64", check)
+        for job in ["frontend", "runtime-packs"]:
+            self.assertIn("needs: [prepare, container-check]", job_body(job))
+        self.assertIn("needs: [prepare, frontend]", job_body("binaries"))
+
+    def test_artifact_reuse_skips_compilation_and_keeps_all_release_gates(self):
+        results = dict.fromkeys([
+            "prepare", "container-check", "binaries", "runtime-packs", "container",
+            "worker-smoke", "signed-bundle", "runtime-manifest", "runtime-publish",
+        ], "success")
+        downstream = ["container", "worker-smoke", "signed-bundle", "runtime-manifest", "runtime-publish", "publish"]
+        for reuse in ["", "43471505292"]:
+            for job in ["frontend", "binaries", "runtime-packs"]:
+                self.assertEqual(allows_job(job, results, reuse), not bool(reuse))
+            results.update(binaries="skipped" if reuse else "success",
+                           **{"runtime-packs": "skipped" if reuse else "success"})
+            for job in downstream:
+                with self.subTest(reuse=reuse, job=job):
+                    self.assertTrue(allows_job(job, results, reuse))
+                    self.assertFalse(allows_job(job, results, reuse, cancelled=True))
+                    # Explicit status checks allow skipped build ancestors only in reuse mode.
+                    self.assertIn("!cancelled()", job_body(job))
+        for job, prerequisite in [
+            ("container", "prepare"), ("container", "container-check"), ("container", "binaries"),
+            ("worker-smoke", "container"), ("signed-bundle", "worker-smoke"),
+            ("runtime-manifest", "container-check"), ("runtime-manifest", "runtime-packs"),
+            ("runtime-publish", "runtime-manifest"), ("publish", "signed-bundle"),
+            ("publish", "runtime-publish"),
+        ]:
+            for outcome in ["failure", "cancelled"]:
+                with self.subTest(job=job, prerequisite=prerequisite, outcome=outcome):
+                    self.assertFalse(allows_job(job, {**results, prerequisite: outcome}, "43471505292"))
+        for job in ["container", "signed-bundle", "runtime-manifest"]:
+            self.assertFalse(allows_job(job, results), "Skipped builds require validated reuse")
+
+    def test_recovery_downloads_only_the_validated_artifact_ids_from_the_source_run(self):
+        self.assertIn("actions: read", WORKFLOW.read_text().split("jobs:")[0])
+        validate = step("prepare", "id: reuse")
+        self.assertIn("--run-id \"$RELEASE_REUSE_RUN_ID\"", validate)
+        self.assertIn('--expected-version "$RELEASE_EXPECTED_VERSION"', validate)
+        self.assertIn("RELEASE_EXPECTED_VERSION: ${{ steps.inputs.outputs.version }}", validate)
+        for job, output in [("container", "linux_artifact_ids"), ("signed-bundle", "binary_artifact_ids"),
+                            ("runtime-manifest", "runtime_artifact_ids")]:
+            download = step(job, "uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093")
+            self.assertIn(f"artifact-ids: ${{{{ needs.prepare.outputs.{output} }}}}", download)
+            self.assertIn("run-id: ${{ needs.prepare.outputs.reuse_run_id || github.run_id }}", download)
+            self.assertIn("github-token: ${{ github.token }}", download)
+
+    def test_recovered_image_labels_identify_original_source_and_current_packaging(self):
+        prepare = job_body("prepare")
+        self.assertIn("source_sha: ${{ steps.reuse.outputs.source_sha || github.sha }}", prepare)
+        self.assertIn("version: ${{ steps.reuse.outputs.version || steps.inputs.outputs.version }}", prepare)
+        for label in [
+            "org.opencontainers.image.revision=${{ needs.prepare.outputs.source_sha }}",
+            "org.opencontainers.image.version=${{ needs.prepare.outputs.version }}",
+            "io.flow-like.packaging.revision=${{ github.sha }}",
+        ]:
+            self.assertEqual(job_body("container").count(label), 2)
+
+    def test_each_binary_version_must_match_the_selected_source_before_signing(self):
+        check = step("signed-bundle", "name: Verify binary versions against the selected source before signing")
+        job = job_body("signed-bundle")
+        self.assertLess(job.index(check), job.index("name: Bind binary hashes and exact container digest"))
+        self.assertIn("RELEASE_VERSION: ${{ needs.prepare.outputs.version }}", check)
+        targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "aarch64-apple-darwin"]
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            bundle = directory / "release-bundle"
+            bundle.mkdir()
+            for bad_target in [None, *targets]:
+                for target in targets:
+                    (bundle / f"{target}.json").write_text(json.dumps({"version": "1.2.4" if target == bad_target else "1.2.3"}))
+                result = run_script(script(check), directory, {
+                    "PYTHONPATH": str(REPOSITORY / ".github/scripts"), "RELEASE_VERSION": "1.2.3",
+                })
+                self.assertEqual(result.returncode == 0, bad_target is None, result.stdout + result.stderr)
+            (bundle / f"{targets[0]}.json").unlink()
+            result = run_script(script(check), directory, {
+                "PYTHONPATH": str(REPOSITORY / ".github/scripts"), "RELEASE_VERSION": "1.2.3",
+            })
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_incomplete_or_duplicate_runtime_downloads_cannot_reach_signing(self):
+        check = step("runtime-manifest", "name: Require the complete runtime pack set before signing")
+        job = job_body("runtime-manifest")
+        self.assertLess(job.index(check), job.index("name: Build the runtime manifest signer"))
+        packs = [
+            {"runtime": "llamacpp", "target": "aarch64-apple-darwin", "backend": "metal"},
+            {"runtime": "llamacpp", "target": "x86_64-unknown-linux-gnu", "backend": "cpu"},
+            {"runtime": "llamacpp", "target": "x86_64-unknown-linux-gnu", "backend": "vulkan"},
+            {"runtime": "llamacpp", "target": "aarch64-unknown-linux-gnu", "backend": "cpu"},
+            {"runtime": "mlx", "target": "aarch64-apple-darwin", "backend": "metal"},
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            (directory / "runtime-bundle").mkdir()
+            for entries in [packs, [], *[packs[:i] + packs[i + 1:] for i in range(len(packs))], packs + packs[:1]]:
+                (directory / "runtime-bundle/test.json").write_text(json.dumps({"packs": entries}))
+                result = run_script(script(check), directory, {"PYTHONPATH": str(REPOSITORY / ".github/scripts")})
+                self.assertEqual(result.returncode == 0, entries == packs, result.stdout + result.stderr)
+
     def test_native_worker_smokes_gate_signing_the_exact_published_digest(self):
         job = job_body("worker-smoke")
         self.assertIn("needs: [prepare, container]", job)
@@ -209,7 +330,7 @@ class StandaloneReleaseValidityTests(unittest.TestCase):
         self.assertIn('--validity-days "$RELEASE_VALIDITY_DAYS"', step("signed-bundle", "name: Bind binary hashes and exact container digest"))
         self.assertIn("RELEASE_VALIDITY_DAYS: ${{ needs.prepare.outputs.validity_days }}", job_body("signed-bundle"))
         preflight = step("prepare", "name: Refuse a sequence that is already published or partly uploaded, and an agent version that was not bumped")
-        self.assertIn("RELEASE_VERSION: ${{ steps.inputs.outputs.version }}", preflight)
+        self.assertIn("RELEASE_VERSION: ${{ steps.reuse.outputs.version || steps.inputs.outputs.version }}", preflight)
         self.assertIn('--release-version "$RELEASE_VERSION"', preflight)
 
     def test_prepare_refuses_a_stale_or_missing_agent_lock_entry_before_anything_is_built(self):
@@ -237,6 +358,23 @@ class StandaloneReleaseValidityTests(unittest.TestCase):
             result, outputs = self.prepare(days)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(reason, result.stderr)
+            self.assertEqual(outputs, {})
+
+    def test_prepare_rejects_a_lifetime_the_original_agent_cannot_accept(self):
+        repository = self.directory()
+        for name in ["apps/standalone/Cargo.toml", "Cargo.lock", ".github/scripts/standalone_release.py"]:
+            destination = repository / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if name.endswith(".py"):
+                destination.write_bytes((REPOSITORY / name).read_bytes())
+            elif name == "Cargo.lock":
+                destination.write_text('version = 4\n[[package]]\nname = "flow-like-standalone"\nversion = "0.1.0"\n')
+            else:
+                destination.write_text('[package]\nname = "flow-like-standalone"\nversion = "0.1.0"\n')
+        for days in ["31", "365"]:
+            result, outputs = self.prepare(days, repository)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Agents of release 0.1.0 accept at most 30 validity days", result.stderr)
             self.assertEqual(outputs, {})
 
     def test_signing_workflows_start_only_by_hand_and_never_run_together(self):

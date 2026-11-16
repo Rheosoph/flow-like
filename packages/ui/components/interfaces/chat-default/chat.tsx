@@ -46,6 +46,7 @@ import { Interaction, InteractionGroup } from "./interaction";
 import { MainWidgetPane } from "./main-widget-pane";
 import { resolveMainChatWidget } from "./main-widget-state";
 import { MessageComponent, type MessageInlineContent } from "./message";
+import { sortChatMessages } from "./message-order";
 import { MessageReference } from "./message-reference";
 import { MessageShell } from "./message-shell";
 import {
@@ -412,14 +413,13 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 				liveIds.size > 0
 					? localMessages.filter((msg) => !liveIds.has(msg.id))
 					: localMessages;
-			return filtered
+			return sortChatMessages(filtered)
 				.filter(isVisibleChatMessage)
 				.map((msg) => ({
 					type: "message" as const,
 					data: msg,
 					timestamp: msg.timestamp,
-				}))
-				.sort((a, b) => a.timestamp - b.timestamp);
+				}));
 		}, [localMessages, currentMessages]);
 
 		// Pending interactions stay at the bottom where the user answers them; settled ones fold

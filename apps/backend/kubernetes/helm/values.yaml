@@ -54,6 +54,8 @@ api:
   publicUrl: ""
   # Existing Flow-Like web origin. setup-config.py uses PUBLIC_WEB_URL.
   frontendBaseUrl: "http://localhost:3001"
+  # Optional full shell URL; otherwise the API reads /a from the web service.
+  frontendShellUrl: ""
   # Keys: SINK_TOKEN_ENCRYPTION_KEY, SINK_SECRET, MAINTENANCE_TOKEN, and optionally
   # AUDIT_ENTRY_KEY and AUDIT_ENTRY_KEY_PREVIOUS (see audit below).
   existingSecret: ""
@@ -77,6 +79,8 @@ api:
 web:
   enabled: true
   replicaCount: 1
+  # Optional internal API origin for hosted page metadata. Defaults to the API service.
+  hostedApiUrl: ""
   # Public browser settings, applied at container startup, never secrets.
   # apiUrl defaults to api.publicUrl. A missing API URL fails startup.
   # Empty redirects use the browser origin with /callback and / respectively.
@@ -759,6 +763,9 @@ networkPolicy:
   #             kubernetes.io/metadata.name: vault
   #     ports: [{protocol: TCP, port: 8200}]
   controlPlaneExtraEgress: []
+  # Permit the web server to reach a custom web.hostedApiUrl, including an
+  # external API when api.enabled is false. Its default rule allows the chart API only.
+  webExtraEgress: []
   executionGatewayExtraEgress: []
   trustedExecutorExtraEgress: []
 

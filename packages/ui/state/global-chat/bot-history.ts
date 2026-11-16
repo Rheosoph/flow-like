@@ -128,6 +128,7 @@ export function sendInteractive(
 	return inbox.sendEntry(target.conversationId, {
 		message_id: message.id,
 		kind: message.transcript ? "transcript" : "message",
+		interactive: { client_run_id: message.clientRunId },
 		envelope: message.transcript
 			? transcriptEnvelope(
 					message.text,
@@ -135,6 +136,27 @@ export function sendInteractive(
 					message.transcript,
 				)
 			: interactiveEnvelope(message.text, message.clientRunId, message.parts),
+	});
+}
+
+/** Writes the user's message into the bot's inbox without the mark, for the bot's own host to answer. */
+export function sendToHost(
+	inbox: IInboxState,
+	target: BotHistoryTarget,
+	message: {
+		id: string;
+		text: string;
+		parts?: readonly IInboxAttachmentPart[];
+	},
+): Promise<IInboxEntry> {
+	const parts = message.parts ?? [];
+	return inbox.sendEntry(target.conversationId, {
+		message_id: message.id,
+		kind: "message",
+		envelope: plainEnvelope({
+			text: message.text,
+			...(parts.length > 0 ? { parts: [...parts] } : {}),
+		}),
 	});
 }
 

@@ -218,6 +218,11 @@ pub struct SendEntryRequest {
     /// Principal id to `{ v: 1, enc, key_id, enc_key, ct }`, each at most 64 KiB.
     #[schema(value_type = Option<Object>)]
     pub envelopes: Option<BTreeMap<String, Value>>,
+    /// Reserve the turn for your foreground chat with a bot you own. Kept outside sealed
+    /// envelopes so the hub can delay background hosts without reading the message.
+    #[serde(default)]
+    #[schema(value_type = Option<Object>, example = json!({ "client_run_id": "run_1" }))]
+    pub interactive: Option<flow_like_types::bot_message::InteractiveMark>,
     /// Sending as a bot (`?as=`): the turn its host claimed and answers with this message.
     pub turn: Option<TurnClaim>,
 }

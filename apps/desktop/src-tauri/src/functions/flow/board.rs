@@ -696,14 +696,26 @@ pub async fn close_board(handler: AppHandle, board_id: String) -> Result<(), Tau
     let board_state = TauriFlowLikeState::construct(&handler).await?;
     let store = TauriFlowLikeState::get_project_meta_store(&handler).await?;
 
-    let board = { board_state.remove_board(&board_id)? };
+    close_registered_board(&board_state.board_registry, &board_id, store).await
+}
 
-    if let Some(board) = board {
-        board.write().await.save(Some(store.clone())).await?;
-        return Ok(());
-    }
+async fn close_registered_board(
+    registry: &DashMap<String, Arc<BoardCell>>,
+    board_id: &str,
+    store: Arc<dyn ObjectStore>,
+) -> Result<(), TauriFunctionError> {
+    let board = registry
+        .get(board_id)
+        .map(|entry| entry.value().clone())
+        .ok_or_else(|| TauriFunctionError::new("Board not found"))?;
+    board.write().await.save(Some(store)).await?;
 
-    Err(TauriFunctionError::new("Board not found"))
+    // Keep the shared writer lock reachable while saving and while another operation owns it.
+    // With only the registry and this close holding the cell, a later opener can safely reload.
+    registry.remove_if(board_id, |_, registered| {
+        Arc::ptr_eq(registered, &board) && Arc::strong_count(registered) == 2
+    });
+    Ok(())
 }
 
 #[tauri::command(async)]
@@ -1156,6 +1168,87 @@ fn validate_remote_command_batch_size_with_limits(
 mod tests {
     use super::*;
     use flow_like::flow::board::commands::nodes::copy_paste::CopyPasteCommand;
+
+    #[tokio::test]
+    async fn close_board_keeps_a_concurrent_reopen_on_the_same_writer() {
+        use flow_like::{
+            bit::Metadata,
+            flow_like_storage::{
+                Path,
+                files::store::FlowLikeStore,
+                object_store::{
+                    memory::InMemory,
+                    throttle::{ThrottleConfig, ThrottledStore},
+                },
+            },
+            state::{FlowLikeConfig, FlowLikeState},
+            utils::http::HTTPClient,
+        };
+        use std::time::Duration;
+
+        let store = Arc::new(ThrottledStore::new(
+            InMemory::new(),
+            ThrottleConfig::default(),
+        ));
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(FlowLikeStore::Other(store.clone())),
+            HTTPClient::new_without_refetch(),
+        ));
+        let app = App::new(
+            Some("closing-app".into()),
+            Metadata::default(),
+            Vec::new(),
+            state.clone(),
+        )
+        .await
+        .unwrap();
+        let board_id = "closing-board";
+        let board_dir = Path::from("apps").join(app.id.clone());
+        let board = Board::new(Some(board_id.into()), board_dir.clone(), state.clone());
+        board.save(None).await.unwrap();
+        let live = Arc::new(BoardCell::new(board));
+        state.register_board(board_id, live.clone(), None).unwrap();
+        live.write().await.name = "Unsaved editor content".into();
+        store.config_mut(|config| config.wait_put_per_call = Duration::from_millis(25));
+
+        {
+            let mut closing = std::pin::pin!(close_registered_board(
+                &state.board_registry,
+                board_id,
+                store.clone(),
+            ));
+            assert!(futures::poll!(closing.as_mut()).is_pending());
+            let reopened = app
+                .open_board(board_id.into(), Some(true), None)
+                .await
+                .unwrap();
+            assert!(Arc::ptr_eq(&reopened, &live));
+            assert_eq!(reopened.snapshot().name, "Unsaved editor content");
+
+            let mut applying = std::pin::pin!(async {
+                let mut board = reopened.write().await;
+                board.name = "Applied after closing".into();
+                board.save(Some(store.clone())).await.unwrap();
+            });
+            assert!(futures::poll!(applying.as_mut()).is_pending());
+            closing.await.unwrap();
+            assert!(Arc::ptr_eq(
+                &state.get_board(board_id, None).unwrap(),
+                &reopened
+            ));
+            applying.await;
+        }
+
+        let saved = Board::load_proto(store.clone(), &board_dir, board_id, None)
+            .await
+            .unwrap();
+        assert_eq!(saved.name, "Applied after closing");
+        drop(live);
+        close_registered_board(&state.board_registry, board_id, store)
+            .await
+            .unwrap();
+        assert!(state.get_board(board_id, None).is_err());
+    }
 
     #[tokio::test]
     async fn failed_geometry_save_restores_the_cached_board_and_allows_the_next_edit() {

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       sequence:
-        description: Unused sequence greater than every published release and runtime sequence; also bump the agent version in apps/standalone/Cargo.toml and update Cargo.lock
+        description: Unused sequence greater than every published release and runtime sequence; the selected agent version must not already be published
         required: true
         type: string
       validity_days:
@@ -16,9 +16,14 @@ on:
         description: Optional override matching STANDALONE_RELEASE_PUBLIC_BASE_URL
         required: false
         type: string
+      reuse_run_id:
+        description: Optional completed run to recover with its original binaries, embedded frontend and runtime packs. Excludes later code changes; requires the same agent version and a new sequence
+        required: false
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: standalone-release
@@ -37,11 +42,17 @@ jobs:
     if: github.ref == 'refs/heads/dev'
     runs-on: namespace-profile-linux-amd-small-24
     outputs:
-      epoch: ${{ steps.inputs.outputs.epoch }}
+      epoch: ${{ steps.reuse.outputs.epoch || steps.inputs.outputs.epoch }}
       sequence: ${{ steps.inputs.outputs.sequence }}
       base: ${{ steps.inputs.outputs.base }}
       image: ${{ steps.inputs.outputs.image }}
       validity_days: ${{ steps.inputs.outputs.validity_days }}
+      version: ${{ steps.reuse.outputs.version || steps.inputs.outputs.version }}
+      source_sha: ${{ steps.reuse.outputs.source_sha || github.sha }}
+      reuse_run_id: ${{ steps.reuse.outputs.reuse_run_id }}
+      binary_artifact_ids: ${{ steps.reuse.outputs.binary_artifact_ids }}
+      linux_artifact_ids: ${{ steps.reuse.outputs.linux_artifact_ids }}
+      runtime_artifact_ids: ${{ steps.reuse.outputs.runtime_artifact_ids }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -80,6 +91,9 @@ jobs:
           locked_versions = [p['version'] for p in locked_packages if p['name'] == 'flow-like-standalone' and 'source' not in p]
           if locked_versions != [version]:
               raise SystemExit(f'Cargo.lock must contain flow-like-standalone {version}; run cargo update --workspace and commit Cargo.lock with apps/standalone/Cargo.toml before releasing')
+          lifetime_cap = release.AGENT_LIFETIME_CAP_DAYS.get(version, release.MAX_RELEASE_LIFETIME_DAYS)
+          if validity_days > lifetime_cap:
+              raise SystemExit(f'Agents of release {version} accept at most {lifetime_cap} validity days')
           base = os.environ['RELEASE_ARTIFACT_BASE']
           parsed = urlsplit(base)
           if base != os.environ['RELEASE_CONFIGURED_BASE'] or not base:
@@ -102,16 +116,36 @@ jobs:
               output.write(f'epoch={epoch}\nsequence={sequence}\nbase={base}\nimage={image}\nvalidity_days={validity_days}\nversion={version}\n')
           PY
       - run: python3 -m unittest discover -s .github/scripts/tests -p 'test_standalone_release*.py'
+      - id: reuse
+        name: Validate and identify the original release artifacts
+        if: inputs.reuse_run_id != ''
+        env:
+          RELEASE_REUSE_RUN_ID: ${{ inputs.reuse_run_id }}
+          RELEASE_EXPECTED_VERSION: ${{ steps.inputs.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/standalone_release_reuse.py --run-id "$RELEASE_REUSE_RUN_ID" --expected-version "$RELEASE_EXPECTED_VERSION" >> "$GITHUB_OUTPUT"
       - name: Refuse a sequence that is already published or partly uploaded, and an agent version that was not bumped
         env:
           RELEASE_BASE: ${{ steps.inputs.outputs.base }}
           RELEASE_SEQUENCE: ${{ steps.inputs.outputs.sequence }}
-          RELEASE_VERSION: ${{ steps.inputs.outputs.version }}
+          RELEASE_VERSION: ${{ steps.reuse.outputs.version || steps.inputs.outputs.version }}
           RELEASE_PUBLIC_KEYS: ${{ vars.STANDALONE_RELEASE_PUBLIC_KEYS }}
         run: python3 .github/scripts/standalone_release.py preflight --base-url "$RELEASE_BASE" --sequence "$RELEASE_SEQUENCE" --public-keys "$RELEASE_PUBLIC_KEYS" --release-version "$RELEASE_VERSION"
 
-  frontend:
+  container-check:
     needs: prepare
+    runs-on: namespace-profile-linux-amd-small-24
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Check playground native libraries on both architectures before compiling
+        run: bash .github/scripts/check-standalone-container-deps.sh linux/amd64,linux/arm64
+
+  frontend:
+    needs: [prepare, container-check]
+    if: needs.prepare.outputs.reuse_run_id == ''
     runs-on: namespace-profile-linux-amd-large-24
     timeout-minutes: 30
     env:
@@ -125,7 +159,7 @@ jobs:
           bun-version: 1.4.4
       - name: Build embedded frontend
         env:
-          NODE_OPTIONS: --max-old-space-size=4096
+          NODE_OPTIONS: --max-old-space-size=8192
         run: |
           bun install --frozen-lockfile
           bun test ./.github/scripts/tests/standalone-package.test.ts
@@ -142,6 +176,7 @@ jobs:
 
   binaries:
     needs: [prepare, frontend]
+    if: needs.prepare.outputs.reuse_run_id == ''
     strategy:
       fail-fast: false
       matrix:
@@ -225,10 +260,15 @@ jobs:
           if-no-files-found: error
 
   container:
-    needs: [prepare, binaries]
+    needs: [prepare, container-check, binaries]
+    if: >-
+      ${{ !cancelled() && needs.prepare.result == 'success' && needs.container-check.result == 'success' &&
+          (needs.binaries.result == 'success' ||
+           (needs.prepare.outputs.reuse_run_id != '' && needs.binaries.result == 'skipped')) }}
     runs-on: namespace-profile-linux-amd-small-24
     permissions:
       contents: read
+      actions: read
       packages: write
     outputs:
       digest: ${{ steps.playground.outputs.digest }}
@@ -239,6 +279,9 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: standalone-*-unknown-linux-gnu
+          artifact-ids: ${{ needs.prepare.outputs.linux_artifact_ids }}
+          run-id: ${{ needs.prepare.outputs.reuse_run_id || github.run_id }}
+          github-token: ${{ github.token }}
           path: downloaded
           merge-multiple: true
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
@@ -261,6 +304,10 @@ jobs:
           push: true
           provenance: false
           build-args: SOURCE_DATE_EPOCH=${{ needs.prepare.outputs.epoch }}
+          labels: |
+            org.opencontainers.image.revision=${{ needs.prepare.outputs.source_sha }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            io.flow-like.packaging.revision=${{ github.sha }}
           tags: ${{ needs.prepare.outputs.image }}:sequence-${{ needs.prepare.outputs.sequence }}-minimal
       - name: Build and push the playground variant (virtual display, Chromium)
         id: playground
@@ -272,12 +319,17 @@ jobs:
           push: true
           provenance: false
           build-args: SOURCE_DATE_EPOCH=${{ needs.prepare.outputs.epoch }}
+          labels: |
+            org.opencontainers.image.revision=${{ needs.prepare.outputs.source_sha }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            io.flow-like.packaging.revision=${{ github.sha }}
           tags: |
             ${{ needs.prepare.outputs.image }}:sequence-${{ needs.prepare.outputs.sequence }}
             ${{ needs.prepare.outputs.image }}:sequence-${{ needs.prepare.outputs.sequence }}-playground
 
   worker-smoke:
     needs: [prepare, container]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.container.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -308,6 +360,11 @@ jobs:
 
   signed-bundle:
     needs: [prepare, binaries, container, worker-smoke]
+    if: >-
+      ${{ !cancelled() && needs.prepare.result == 'success' && needs.container.result == 'success' &&
+          needs.worker-smoke.result == 'success' &&
+          (needs.binaries.result == 'success' ||
+           (needs.prepare.outputs.reuse_run_id != '' && needs.binaries.result == 'skipped')) }}
     runs-on: namespace-profile-linux-amd-small-24
     environment: standalone-release
     steps:
@@ -317,8 +374,25 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: standalone-*
+          artifact-ids: ${{ needs.prepare.outputs.binary_artifact_ids }}
+          run-id: ${{ needs.prepare.outputs.reuse_run_id || github.run_id }}
+          github-token: ${{ github.token }}
           path: release-bundle
           merge-multiple: true
+      - name: Verify binary versions against the selected source before signing
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, '.github/scripts')
+          import standalone_release
+          for target in standalone_release.TARGETS:
+              metadata = json.loads(Path(f'release-bundle/{target}.json').read_text())
+              if metadata['version'] != os.environ['RELEASE_VERSION']:
+                  raise SystemExit(f'{target} binary version differs from the selected source version {os.environ["RELEASE_VERSION"]}')
+          PY
       - uses: ./.github/actions/setup-rust
       - name: Bind binary hashes and exact container digest
         env:
@@ -357,6 +431,9 @@ jobs:
 
   publish:
     needs: [prepare, signed-bundle, runtime-publish]
+    if: >-
+      ${{ !cancelled() && needs.prepare.result == 'success' &&
+          needs.signed-bundle.result == 'success' && needs.runtime-publish.result == 'success' }}
     runs-on: namespace-profile-linux-amd-small-24
     environment: standalone-release
     permissions:
@@ -424,7 +501,8 @@ jobs:
   # Runtime packs (llama.cpp, MLX) that agents install on demand. Every pack is started on its
   # own platform before packing; a failed pack keeps the whole set unsigned.
   runtime-packs:
-    needs: prepare
+    needs: [prepare, container-check]
+    if: needs.prepare.outputs.reuse_run_id == ''
     strategy:
       fail-fast: false
       matrix:
@@ -523,7 +601,11 @@ jobs:
           if-no-files-found: error
 
   runtime-manifest:
-    needs: [prepare, runtime-packs]
+    needs: [prepare, container-check, runtime-packs]
+    if: >-
+      ${{ !cancelled() && needs.prepare.result == 'success' && needs.container-check.result == 'success' &&
+          (needs.runtime-packs.result == 'success' ||
+           (needs.prepare.outputs.reuse_run_id != '' && needs.runtime-packs.result == 'skipped')) }}
     runs-on: namespace-profile-linux-amd-small-24
     environment: standalone-release
     steps:
@@ -534,6 +616,9 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: runtime-pack-*
+          artifact-ids: ${{ needs.prepare.outputs.runtime_artifact_ids }}
+          run-id: ${{ needs.prepare.outputs.reuse_run_id || github.run_id }}
+          github-token: ${{ github.token }}
           path: runtime-bundle
           merge-multiple: true
       - name: Bind every pack's archive and file digests into one unsigned manifest per target
@@ -542,6 +627,23 @@ jobs:
           RELEASE_SEQUENCE: ${{ needs.prepare.outputs.sequence }}
           RELEASE_VALIDITY_DAYS: ${{ needs.prepare.outputs.validity_days }}
         run: python3 .github/scripts/runtime_packs.py manifest --packs runtime-bundle --base-url "$ARTIFACT_BASE/releases/$RELEASE_SEQUENCE/runtimes" --sequence "$RELEASE_SEQUENCE" --validity-days "$RELEASE_VALIDITY_DAYS" --output runtime-bundle
+      - name: Require the complete runtime pack set before signing
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          from pathlib import Path
+          sys.path.insert(0, '.github/scripts')
+          import runtime_packs
+          expected = [('llamacpp', pack['target'], pack['backend']) for pack in runtime_packs.LLAMACPP_PACKS.values()]
+          expected.append(('mlx', 'aarch64-apple-darwin', 'metal'))
+          actual = [
+              (pack['runtime'], pack['target'], pack['backend'])
+              for path in Path('runtime-bundle').glob('*.json')
+              for pack in json.loads(path.read_text())['packs']
+          ]
+          if sorted(actual) != sorted(expected):
+              raise SystemExit(f'Incomplete or duplicate runtime pack set: expected {sorted(expected)}, got {sorted(actual)}')
+          PY
       - uses: ./.github/actions/setup-rust
       # Build scripts and proc macros run here, before any key material exists on the runner.
       - name: Build the runtime manifest signer
@@ -575,6 +677,7 @@ jobs:
   # Publish the matching runtimes before agents adopt this release's rollback floor.
   runtime-publish:
     needs: [prepare, runtime-manifest]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.runtime-manifest.result == 'success' }}
     runs-on: namespace-profile-linux-amd-small-24
     environment: standalone-release
     permissions:

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="background_hosting_channel">Background hosting</string>
+    <string name="background_hosting_title">Background hosting is on</string>
+    <string name="background_hosting_description">Keeping enabled bots and Events running.</string>
+    <string name="background_hosting_turn_off">Turn off</string>
+</resources>

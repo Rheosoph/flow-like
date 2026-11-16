@@ -325,10 +325,9 @@ export function createUtteranceSegmenter(options: SegmenterOptions = {}) {
 }
 
 /**
- * Detects a person talking over a bot: enough loud audio, gaps tolerated, within a short window.
- * With a voice-activity probability per chunk, the audio must also be speech, which needs less
- * of it and a shorter window. On detection it returns the window's chunks, starting just before
- * the first loud one.
+ * Detects a possible interruption from sustained speech within a short window, allowing gaps
+ * between syllables. Without a voice-activity model it requires loud audio instead. Returns
+ * audio starting just before the onset for the listener's separate transcript and echo check.
  */
 export function createBargeInDetector(
 	options: {
@@ -378,9 +377,12 @@ export function createBargeInDetector(
 		push(chunk: Float32Array, probability?: number): Float32Array[] | null {
 			const { minLoud, window: windowSamples } =
 				probability === undefined ? limits.energy : limits.vad;
+			// Echo cancellation and microphone gain can attenuate real speech below the energy
+			// fallback's threshold. A model answer must not also pass that absolute volume gate.
 			const loud =
-				rms(chunk) >= threshold &&
-				(probability === undefined || probability >= vadProbability);
+				probability === undefined
+					? rms(chunk) >= threshold
+					: probability >= vadProbability;
 			entries.push({ chunk, loud });
 			total += chunk.length;
 			if (loud) loudTotal += chunk.length;

@@ -1,6 +1,20 @@
 import type { IBitState } from "../../state/backend-state/bit-state";
-import type { IBit, IBitTypes } from "../schema";
+import { type IBit, IBitTypes } from "../schema/bit/bit";
 import type { IBitSearchQuery } from "../schema/hub/bit-search-query";
+
+export const MODEL_BIT_TYPES: IBitTypes[] = [
+	IBitTypes.Llm,
+	IBitTypes.Vlm,
+	IBitTypes.SystemOne,
+	IBitTypes.Forecasting,
+	IBitTypes.Tts,
+	IBitTypes.Stt,
+	IBitTypes.Embedding,
+	IBitTypes.ImageEmbedding,
+	IBitTypes.ImageGeneration,
+	IBitTypes.VideoGeneration,
+	IBitTypes.ObjectDetection,
+];
 
 /** The hub answers at most this many rows per search, whatever the caller asks. */
 const PAGE_SIZE = 100;
