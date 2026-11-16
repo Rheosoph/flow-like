@@ -3,6 +3,7 @@
 //! the claim returned. Both token kinds are refreshed from heartbeats.
 
 use async_trait::async_trait;
+use flow_like::flow::copilot::REPLY_OUTPUT_FIELD;
 use flow_like_bot_host::hub::{
     CODE_SIGNED_OUT, Claimed, ENTRIES, HubFailure, TurnHub, TurnSession, WaitOutcome, answer,
     decode, entries_of,
@@ -750,7 +751,10 @@ impl TurnHub for DeviceTurnHub {
         self.bearer_call_within(
             Method::POST,
             &format!("bots/{bot_id}/turns/{turn_id}/app-tools/{tool}"),
-            &[("host_id", self.shared.host_id.clone())],
+            &[
+                ("host_id", self.shared.host_id.clone()),
+                (REPLY_OUTPUT_FIELD, "true".to_string()),
+            ],
             Some(args),
             Some(APP_TOOL_TIMEOUT),
         )

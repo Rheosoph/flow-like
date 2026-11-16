@@ -3,6 +3,7 @@ import {
 	type IConversationFileReady,
 	type IInboxAttachmentPart,
 	type IInboxFileHandle,
+	type IInboxMessagePart,
 	MAX_CONVERSATION_FILE_BYTES,
 } from "../state/backend-state/inbox-state";
 
@@ -52,11 +53,12 @@ export async function putSignedFile(url: string, file: File): Promise<void> {
 /** The attachment parts for uploaded files, numbered after the `existing` attachments. */
 export function attachmentParts(
 	files: readonly IConversationFileReady[],
-	existing: readonly IInboxAttachmentPart[] = [],
+	existing: readonly IInboxMessagePart[] = [],
 ): IInboxAttachmentPart[] {
+	const numbered = existing.filter((part) => part.kind === "attachment").length;
 	return files.map((file, index) => ({
 		kind: "attachment",
-		id: `a${existing.length + index + 1}`,
+		id: `a${numbered + index + 1}`,
 		name: file.name,
 		handle: {
 			app_id: file.app_id,

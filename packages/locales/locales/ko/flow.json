@@ -634,6 +634,7 @@
 	"deleteWithContents": "",
 	"describeThePurposeOfThisFlow": "이 플로우의 목적을 설명하세요...",
 	"description": "설명",
+	"designANewFlowForYourApplication": "",
 	"detectedImport": "",
 	"devModeJsonEditor": "개발자 모드 (JSON 에디터)",
 	"devModeRawJsonEditor": "개발자 모드 - 원본 JSON 에디터",

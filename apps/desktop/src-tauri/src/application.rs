@@ -30,6 +30,8 @@ mod event_sink;
 mod execution_credentials;
 mod execution_identity;
 mod frontend_assets;
+#[cfg(target_os = "macos")]
+mod fullscreen_hide;
 mod functions;
 mod local_page_actions;
 #[cfg(any(test, not(debug_assertions)))]

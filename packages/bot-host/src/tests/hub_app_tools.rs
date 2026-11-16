@@ -1,7 +1,7 @@
 use super::*;
 use crate::{bridge::ToolEnvBridge, gate::ApprovalGate};
 use flow_like::flow::copilot::{
-    HostTools,
+    HostTools, ReplyFiles,
     platform::PlatformToolBridge,
     tool_grants::{GrantKey, GrantStore},
 };
@@ -82,6 +82,36 @@ async fn a_hub_failure_reads_as_a_final_tool_error() {
     let value = serde_json::from_str::<Value>(&output).unwrap();
     assert_eq!(value["code"], "bot_tool_hub_failed");
     assert_eq!(value["retryable"], false);
+}
+
+#[tokio::test]
+async fn what_the_hub_says_an_app_run_showed_goes_to_the_reply_not_the_model() {
+    let output = json!([{
+        "origin": { "app_id": "orders", "board_id": "board", "event_id": "event" },
+        "source": "Report",
+        "files": [{ "url": "https://f.test/r.pdf" }],
+        "widgets": [],
+    }]);
+    let hub = Arc::new(DeviceHub {
+        app_tool_reply_output: Some(output),
+        ..Default::default()
+    });
+    let reply = ReplyFiles::new();
+    let mutating = Arc::new(AtomicBool::new(false));
+    let bridge = ToolEnvBridge::new(
+        Arc::new(|_| panic!("a hub app tool builds no local tool environment")),
+        HostTools::none().with_reply_files(reply.clone()),
+        ApprovalGate::new(Arc::new(NoGrants), "turn_1"),
+        mutating,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .with_hub_apps(hub, "bot_1", "turn_1");
+    let result = bridge.call("list_apps", json!({})).await;
+    let result = serde_json::from_str::<Value>(&result).unwrap();
+    assert!(result.get("reply_output").is_none());
+    let shown = reply.take_app_output();
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown[0].origin.app_id, "orders");
 }
 
 #[tokio::test]

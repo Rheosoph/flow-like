@@ -16,12 +16,23 @@ export const APPROVAL_WAIT_MS = 7 * 24 * 60 * 60 * 1000;
 export const TURN_NOT_WAITING = "BOT_TURN_NOT_WAITING";
 export const APPROVAL_EXPIRED = "BOT_APPROVAL_EXPIRED";
 
-/** A summary without the core's "The bot wants to" and its closing full stop. */
+/** The stand-in subjects core summaries open with, whichever bot makes the call. */
+const CORE_SUBJECT =
+	/^(?:the bot|flowpilot|the data studio agent) wants to\s+/i;
+
+/** A summary without the core's subject ("The bot wants to") and its closing full stop. */
 function bare(summary: string): string {
 	return summary
 		.trim()
-		.replace(/^the bot wants to\s+/i, "")
+		.replace(CORE_SUBJECT, "")
 		.replace(/[.!]+$/, "");
+}
+
+/** What a summary's stand-in subject wants to do, verbatim; undefined when it names none. */
+export function wantedAction(summary: string): string | undefined {
+	const text = summary.trim();
+	const subject = CORE_SUBJECT.exec(text);
+	return subject ? text.slice(subject[0].length) : undefined;
 }
 
 /** The summary as the end of "{{name}} wants to …". */

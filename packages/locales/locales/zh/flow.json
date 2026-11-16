@@ -634,6 +634,7 @@
 	"deleteWithContents": "",
 	"describeThePurposeOfThisFlow": "描述此流程的用途…",
 	"description": "描述",
+	"designANewFlowForYourApplication": "",
 	"detectedImport": "",
 	"devModeJsonEditor": "开发者模式（JSON 编辑器）",
 	"devModeRawJsonEditor": "开发者模式 - 原始 JSON 编辑器",

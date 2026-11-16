@@ -57,6 +57,7 @@ describe("model pricing", () => {
 					],
 				},
 			}),
+			"hosted",
 		);
 		expect(price.reference?.providers.map((provider) => provider.name)).toEqual(
 			[

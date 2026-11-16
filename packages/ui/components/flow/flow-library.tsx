@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import { createId } from "@paralleldrive/cuid2";
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
 	AlertTriangle,
@@ -10,6 +11,7 @@ import {
 	DollarSign,
 	ExternalLink,
 	FileText,
+	LoaderCircleIcon,
 	LockKeyhole,
 	Monitor,
 	PlusCircleIcon,
@@ -22,9 +24,11 @@ import {
 	WorkflowIcon,
 } from "lucide-react";
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { type ReactNode, useCallback, useRef, useState } from "react";
+import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
 import { cn, formatRelativeTime } from "../../lib";
+import { getErrorMessage } from "../../lib/error-message";
 import { asArray } from "../../lib/response-shape";
 import { IExecutionMode } from "../../lib/schema/flow/board";
 import type { IBoardSummary } from "../../lib/schema/flow/board-summary";
@@ -65,7 +69,7 @@ interface FlowLibraryHeaderProps {
 	setBoardCreation: React.Dispatch<
 		React.SetStateAction<FlowLibraryBoardCreationState>
 	>;
-	onCreateBoard: () => Promise<void>;
+	onCreateBoard: (boardId: string) => Promise<void>;
 }
 
 interface FlowLibraryBoardsSectionProps {
@@ -131,6 +135,10 @@ const SCORE_CONFIGS: ScoreConfig[] = [
 	},
 	{ key: "cost", label: "Cost", icon: <DollarSign className="h-3 w-3" /> },
 ];
+
+function stopPropagation(event: { stopPropagation: () => void }) {
+	event.stopPropagation();
+}
 
 function getScoreColor(score: number): string {
 	if (score >= 8) return "bg-emerald-500";
@@ -251,17 +259,64 @@ export function FlowLibraryHeader({
 	);
 }
 
+/**
+ * One board id per dialog session: a retry after a failed or timed-out create reuses it, so the
+ * idempotent `PUT /apps/{app_id}/board/{board_id}` cannot leave a second, empty board behind.
+ */
+function useBoardCreationSubmit(
+	onCreateBoard: FlowLibraryHeaderProps["onCreateBoard"],
+) {
+	const { t } = useTranslation("flow");
+	const draftBoardId = useRef<string | null>(null);
+	const inFlight = useRef(false);
+	const [creating, setCreating] = useState(false);
+
+	const submit = useCallback(async () => {
+		if (inFlight.current) return;
+		inFlight.current = true;
+		setCreating(true);
+		draftBoardId.current ??= createId();
+		try {
+			await onCreateBoard(draftBoardId.current);
+			draftBoardId.current = null;
+		} catch (error) {
+			toast.error(
+				t("common:templateFlowCreateFailed", {
+					message: getErrorMessage(error),
+				}),
+			);
+		} finally {
+			inFlight.current = false;
+			setCreating(false);
+		}
+	}, [onCreateBoard, t]);
+
+	const discardDraft = useCallback(() => {
+		if (!inFlight.current) draftBoardId.current = null;
+	}, []);
+
+	return { creating, submit, discardDraft };
+}
+
 export function FlowLibraryCreateDialog({
 	boardCreation,
 	setBoardCreation,
 	onCreateBoard,
 }: Readonly<FlowLibraryHeaderProps>) {
 	const { t } = useTranslation("flow");
+	const { creating, submit, discardDraft } =
+		useBoardCreationSubmit(onCreateBoard);
+
+	const handleOpenChange = useCallback(
+		(open: boolean) => {
+			if (!open) discardDraft();
+			setBoardCreation((old) => ({ ...old, open }));
+		},
+		[discardDraft, setBoardCreation],
+	);
+
 	return (
-		<Dialog
-			open={boardCreation.open}
-			onOpenChange={(open) => setBoardCreation({ ...boardCreation, open })}
-		>
+		<Dialog open={boardCreation.open} onOpenChange={handleOpenChange}>
 			<DialogTrigger asChild>
 				<Button
 					size="lg"
@@ -277,7 +332,10 @@ export function FlowLibraryCreateDialog({
 						{t("createNewFlow", "Create New Flow")}
 					</DialogTitle>
 					<DialogDescription className="text-base">
-						{`Design a new flow for your application`}
+						{t(
+							"designANewFlowForYourApplication",
+							"Design a new flow for your application",
+						)}
 					</DialogDescription>
 				</DialogHeader>
 				<div className="space-y-4 py-4">
@@ -290,6 +348,7 @@ export function FlowLibraryCreateDialog({
 							id="name"
 							placeholder={t("enterFlowName", "Enter flow name...")}
 							className="h-11"
+							disabled={creating}
 							onChange={(event) => {
 								setBoardCreation((old) => ({
 									...old,
@@ -309,7 +368,8 @@ export function FlowLibraryCreateDialog({
 								"describeThePurposeOfThisFlow",
 								"Describe the purpose of this flow...",
 							)}
-							className="min-h-[100px] resize-none"
+							className="min-h-25 resize-none"
+							disabled={creating}
 							onChange={(event) => {
 								setBoardCreation((old) => ({
 									...old,
@@ -320,17 +380,23 @@ export function FlowLibraryCreateDialog({
 					</div>
 				</div>
 				<DialogFooter className="gap-3">
-					<Button
-						variant="outline"
-						onClick={() => setBoardCreation({ ...boardCreation, open: false })}
-					>
+					<Button variant="outline" onClick={() => handleOpenChange(false)}>
 						{t("cancel", "Cancel")}
 					</Button>
 					<Button
-						onClick={onCreateBoard}
-						className="bg-linear-to-r from-primary to-primary/80"
+						onClick={submit}
+						disabled={creating}
+						aria-busy={creating}
+						className="gap-2 bg-linear-to-r from-primary to-primary/80"
 					>
-						{t("createBoard", "Create Board")}
+						{creating ? (
+							<>
+								<LoaderCircleIcon aria-hidden className="size-4 animate-spin" />
+								{t("common:creating", "Creating...")}
+							</>
+						) : (
+							t("createBoard", "Create Board")
+						)}
 					</Button>
 				</DialogFooter>
 			</DialogContent>
@@ -389,11 +455,16 @@ export function FlowLibraryBoardsSection({
 	);
 }
 
+const BOARD_SKELETON_KEYS = Array.from(
+	{ length: 6 },
+	(_, slot) => `board-skeleton-${slot}`,
+);
+
 export function FlowLibraryBoardsSkeleton() {
 	return (
 		<div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6 pb-6">
-			{[...Array(6)].map((_, index) => (
-				<Card key={`${index}-skeleton`} className="border-0 shadow-md">
+			{BOARD_SKELETON_KEYS.map((key) => (
+				<Card key={key} className="border-0 shadow-md">
 					<CardHeader>
 						<Skeleton className="h-6 w-3/4" />
 						<Skeleton className="h-4 w-1/2" />
@@ -498,7 +569,8 @@ export function FlowLibraryBoardCard({
 								{aggregatedScores && (
 									<div
 										className="relative z-10 shrink-0"
-										onClick={(event) => event.stopPropagation()}
+										onClick={stopPropagation}
+										onKeyDown={stopPropagation}
 									>
 										<FlowLibraryScoreBar scores={aggregatedScores} />
 									</div>
@@ -543,7 +615,8 @@ export function FlowLibraryBoardCard({
 									<HoverCardTrigger asChild>
 										<span
 											className="inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-muted/50 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer relative z-10"
-											onClick={(event) => event.stopPropagation()}
+											onClick={stopPropagation}
+											onKeyDown={stopPropagation}
 										>
 											+{pageList.length - 4} more
 										</span>

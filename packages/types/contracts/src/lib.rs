@@ -2,6 +2,8 @@
 
 use std::any::Any;
 
+#[cfg(feature = "app-chat")]
+pub mod app_chat;
 pub mod authorization;
 pub mod egress;
 pub mod interaction;

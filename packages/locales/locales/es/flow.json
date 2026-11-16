@@ -681,6 +681,7 @@
 	"deleteWithContents": "",
 	"describeThePurposeOfThisFlow": "Describe el propósito de este flujo...",
 	"description": "Descripción",
+	"designANewFlowForYourApplication": "",
 	"detectedImport": "",
 	"devModeJsonEditor": "Modo desarrollador (editor JSON)",
 	"devModeRawJsonEditor": "Modo desarrollador: editor JSON sin procesar",

@@ -681,6 +681,17 @@ pub async fn collect_generic_result_outcome(
     db: Option<ExecutionAuditContext>,
     timeout: Duration,
 ) -> Result<serde_json::Value, MissingResult> {
+    collect_generic_result_observed(stream, run_id, db, timeout, |_| {}).await
+}
+
+/// [`collect_generic_result_outcome`] that also hands every event it reads to `observe`.
+pub async fn collect_generic_result_observed(
+    stream: ByteStream,
+    run_id: String,
+    db: Option<ExecutionAuditContext>,
+    timeout: Duration,
+    mut observe: impl FnMut(&serde_json::Value) + Send,
+) -> Result<serde_json::Value, MissingResult> {
     enum Ended {
         Completed(MissingResult),
         Closed,
@@ -706,6 +717,7 @@ pub async fn collect_generic_result_outcome(
                 Ok(v) => v,
                 Err(_) => continue,
             };
+            observe(&parsed);
 
             let event_type = parsed
                 .get("event_type")
@@ -1276,6 +1288,35 @@ mod tests {
         assert_eq!(text.matches("event: chunk").count(), 16);
         assert!(text.contains("Response stream timed out"));
         assert_eq!(text.matches("event: error").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_observer_sees_every_event_while_the_result_is_collected() {
+        let bytes = Box::pin(futures_util::stream::iter([
+            Ok(executor_event(
+                "chat_stream_partial",
+                serde_json::json!({"attachments": ["https://f/a"]}),
+            )),
+            Ok(executor_event(
+                "generic_result",
+                serde_json::json!({"answer": 42}),
+            )),
+            Ok(executor_event(
+                "completed",
+                serde_json::json!({"status": "completed"}),
+            )),
+        ]));
+        let mut seen = Vec::new();
+        let result = collect_generic_result_observed(
+            bytes,
+            "run-observed-test".into(),
+            None,
+            Duration::from_secs(1),
+            |event| seen.push(event["event_type"].as_str().unwrap_or("").to_string()),
+        )
+        .await;
+        assert_eq!(result, Ok(serde_json::json!({"answer": 42})));
+        assert_eq!(seen, ["chat_stream_partial", "generic_result", "completed"]);
     }
 
     #[tokio::test]

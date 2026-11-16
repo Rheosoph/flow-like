@@ -660,7 +660,8 @@
 			"save": "Save",
 			"sending": "Sending…",
 			"sentByEmail": "Sent by email to {{recipients}}",
-			"unsupported": "Message this app can't show"
+			"unsupported": "Message this app can't show",
+			"widgetActionFailed": "The app couldn't run this action for you."
 		},
 		"mute": {
 			"mute": "Mute notifications",

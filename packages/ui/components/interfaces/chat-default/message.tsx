@@ -69,7 +69,7 @@ import {
 } from "./inline-segments";
 import { MessageReactionPicker, MessageReactions } from "./message-reactions";
 import { MessageReference } from "./message-reference";
-import { MessageWidgets } from "./message-widgets";
+import { MessageWidgetDocuments, MessageWidgets } from "./message-widgets";
 import {
 	type PendingAsk,
 	askRuleColor,
@@ -1154,6 +1154,16 @@ export const MessageComponent = memo(
 								snapshots={widgetSnapshots}
 							/>
 						)}
+						{message.widget_documents?.length ? (
+							<MessageWidgetDocuments
+								documents={message.widget_documents}
+								readOnly={message.widget_actions === false}
+								appId={appId}
+								boardId={boardId}
+								eventId={eventId}
+								snapshots={widgetSnapshots}
+							/>
+						) : null}
 						{message.approval && (
 							<ChatApprovalCard approval={message.approval} />
 						)}
@@ -1351,6 +1361,8 @@ export const MessageComponent = memo(
 			prev.message.debug_report === next.message.debug_report &&
 			prev.message.app_refs === next.message.app_refs &&
 			prev.message.widgets === next.message.widgets &&
+			prev.message.widget_documents === next.message.widget_documents &&
+			prev.message.widget_actions === next.message.widget_actions &&
 			prev.message.error === next.message.error &&
 			prev.message.approval === next.message.approval &&
 			prev.message.userContext === next.message.userContext &&

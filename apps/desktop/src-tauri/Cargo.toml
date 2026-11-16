@@ -175,6 +175,9 @@ cocoa = "0.26"
 macos-app-nap = "0.0.1"
 core-graphics = "0.25"
 objc2 = "0.6.3"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSNotification", "NSOperation", "NSObject", "NSString"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSWindow"] }
+block2 = "0.6.2"
 
 [target."cfg(windows)".dependencies]
 flow-like-catalog = { workspace = true, default-features = false, features = ["desktop", "draft-testing"] }

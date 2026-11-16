@@ -172,7 +172,7 @@ export interface FlowsOverviewPageProps {
 	setBoardCreation: React.Dispatch<
 		React.SetStateAction<FlowLibraryBoardCreationState>
 	>;
-	onCreateBoard: () => Promise<void>;
+	onCreateBoard: (boardId: string) => Promise<void>;
 	onOpenBoard: (boardId: string) => Promise<void>;
 	onDeleteBoard: (boardId: string) => Promise<void>;
 	boardHref?: (boardId: string) => string;

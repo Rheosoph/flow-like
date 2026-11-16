@@ -307,7 +307,9 @@ fn bot_acknowledgements_do_not_wake_a_local_bot_or_satisfy_a_participant_wait() 
             "bot",
             &[entry.clone()],
             since,
-            false, false)
+            false,
+            false
+        )
         .is_none()
     );
     assert!(
@@ -329,7 +331,8 @@ fn bot_acknowledgements_do_not_wake_a_local_bot_or_satisfy_a_participant_wait() 
             "bot",
             &[entry.clone()],
             since,
-            false, false
+            false,
+            false
         )
         .is_some()
     );
@@ -362,7 +365,17 @@ fn a_named_bot_reply_wakes_without_a_mention_and_respects_the_checkpoint() {
     message.seq = Some(2);
     let entries = [message];
     let since = (Utc::now() - chrono::Duration::hours(1)).fixed_offset();
-    assert!(crate::rule::waiting(ConversationKind::Group, "bot", &entries, since, false, false).is_none());
+    assert!(
+        crate::rule::waiting(
+            ConversationKind::Group,
+            "bot",
+            &entries,
+            since,
+            false,
+            false
+        )
+        .is_none()
+    );
     let found = crate::rule::waiting_participant(
         ConversationKind::Group,
         "bot",
@@ -417,9 +430,11 @@ async fn live_call_is_set_for_transcript_turns_only() {
 async fn the_reply_starts_with_the_decision_for_direct_or_addressed_utterances_only() {
     let (_, runner, _) = classified_turn(true, Some(Decision::AnswerNow), None).await;
     assert!(!runner.gated.load(Ordering::SeqCst));
-    let (_, runner, _) =
-        classified_entry(true, Some(Decision::AnswerNow), None, spoken(&[])).await;
-    assert!(!runner.gated.load(Ordering::SeqCst), "an unaddressed group utterance stays sequential");
+    let (_, runner, _) = classified_entry(true, Some(Decision::AnswerNow), None, spoken(&[])).await;
+    assert!(
+        !runner.gated.load(Ordering::SeqCst),
+        "an unaddressed group utterance stays sequential"
+    );
     for (room, mentions) in [(false, vec![]), (true, vec!["bot"])] {
         let (hub, runner, status) =
             classified_entry(room, Some(Decision::AnswerNow), None, spoken(&mentions)).await;
@@ -501,6 +516,9 @@ fn history_cuts_an_interrupted_reply_at_the_heard_share() {
     .unwrap();
     let heard = &found.history[0].content;
     assert!(heard.starts_with("The"), "{heard}");
-    assert!(!heard.contains("tomorrow") && !heard.contains("sunny"), "{heard}");
+    assert!(
+        !heard.contains("tomorrow") && !heard.contains("sunny"),
+        "{heard}"
+    );
     assert!(heard.contains("cut off"), "{heard}");
 }

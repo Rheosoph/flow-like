@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { callMcpAppTool, describeMcpAppInterface } from "./app-mcp-interface";
+import {
+	MCP_CHAT_EVENTS_META,
+	callMcpAppTool,
+	describeMcpAppInterface,
+	extractMcpChatEvents,
+} from "./app-mcp-interface";
 
 function fixture(result: Record<string, unknown>) {
 	const calls: unknown[][] = [];
@@ -7,7 +12,14 @@ function fixture(result: Record<string, unknown>) {
 		calls,
 		state: {
 			async invokeMcp(
-				...args: [string, string, string, Record<string, unknown>?]
+				...args: [
+					string,
+					string,
+					string,
+					Record<string, unknown>?,
+					(() => void)?,
+					boolean?,
+				]
 			) {
 				calls.push(args);
 				return result;
@@ -122,5 +134,47 @@ describe("FlowPilot MCP app interfaces", () => {
 		await expect(describeMcpAppInterface({}, "app", "event")).rejects.toThrow(
 			"unavailable",
 		);
+	});
+
+	test("requests chat events only when asked and strips them from the result", async () => {
+		const events = [{ event_type: "chat_stream_partial", payload: { x: 1 } }];
+		const response = {
+			content: [{ type: "text", text: "done" }],
+			_meta: {
+				[MCP_CHAT_EVENTS_META]: { events, truncated: false },
+				other: "kept",
+			},
+		};
+		const f = fixture(response);
+		const withEvents = await callMcpAppTool(
+			f.state,
+			"app",
+			"event",
+			{ mcp_tool: "t" },
+			undefined,
+			{ chatEvents: true },
+		);
+		expect(f.calls[0]?.[5]).toBe(true);
+		expect(withEvents.chatEvents).toEqual(events);
+		expect(withEvents.result).toEqual({
+			content: response.content,
+			_meta: { other: "kept" },
+		});
+		await callMcpAppTool(f.state, "app", "event", { mcp_tool: "t" });
+		expect(f.calls[1]).toHaveLength(4);
+	});
+
+	test("drops an empty _meta and tolerates results without events", () => {
+		expect(
+			extractMcpChatEvents({
+				ok: true,
+				_meta: { [MCP_CHAT_EVENTS_META]: { events: [], truncated: true } },
+			}),
+		).toEqual({ result: { ok: true }, chatEvents: [] });
+		const plain = { ok: true };
+		expect(extractMcpChatEvents(plain)).toEqual({
+			result: plain,
+			chatEvents: [],
+		});
 	});
 });

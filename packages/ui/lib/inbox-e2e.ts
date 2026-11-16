@@ -161,7 +161,10 @@ function sealedFilesOf(
 
 function carriesSealedFile(body: unknown): boolean {
 	const parts = (body as Partial<IInboxMessageBody> | null)?.parts;
-	return Array.isArray(parts) && parts.some((part) => Boolean(part?.sealed));
+	return (
+		Array.isArray(parts) &&
+		parts.some((part) => part?.kind === "attachment" && Boolean(part.sealed))
+	);
 }
 
 /** Members of an encrypted conversation who have no device key yet, so nothing can reach them. */

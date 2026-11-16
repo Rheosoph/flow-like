@@ -954,9 +954,9 @@ impl MessagePart {
         }
         match self.handle() {
             Some(handle) => {
-                if handle.is_conversation_file() && !matches!(self, Self::Attachment(_)) {
+                if handle.is_conversation_file() && matches!(self, Self::Tool(_)) {
                     return refuse(format!(
-                        "{field}.handle is a conversation file; only attachments point at one"
+                        "{field}.handle is a conversation file; only attachments and ui parts point at one"
                     ));
                 }
                 handle.check(&format!("{field}.handle"))
@@ -1533,7 +1533,7 @@ mod conversation_file_tests {
     }
 
     #[test]
-    fn only_attachments_point_at_conversation_files() {
+    fn tool_parts_never_point_at_conversation_files() {
         let raw = serde_json::to_value(handle()).unwrap();
         let tool = json!({ "parts": [{ "kind": "tool", "id": "t1", "call_id": "c", "name": "x", "handle": raw }] });
         let error = MessageBody::parse(&tool).unwrap_err().to_string();

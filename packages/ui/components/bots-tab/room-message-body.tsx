@@ -1,4 +1,5 @@
 import type { IChatMessageError } from "../../lib/flowpilot/chat-error";
+import { messageWidgetsOf } from "../../lib/inbox-ui-part";
 import { IRole } from "../../lib/schema/llm/history";
 import { GLOBAL_CHAT_APP_ID } from "../../state/global-chat/global-chat-db";
 import type { IMessage } from "../interfaces/chat-default/chat-db";
@@ -100,6 +101,7 @@ export function roomChatMessage(
 		...(message.content.kind === "text" ? { source_text: text } : {}),
 		...(interaction ? { interaction } : {}),
 		files: options.files ?? [],
+		...messageWidgetsOf(message.ui, { actions: options.ownBot ?? false }),
 		tools: [],
 		actions: [],
 		timestamp: message.time,

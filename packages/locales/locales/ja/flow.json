@@ -634,6 +634,7 @@
 	"deleteWithContents": "",
 	"describeThePurposeOfThisFlow": "このフローの目的を説明してください...",
 	"description": "説明",
+	"designANewFlowForYourApplication": "",
 	"detectedImport": "",
 	"devModeJsonEditor": "開発モード(JSONエディタ)",
 	"devModeRawJsonEditor": "開発モード - 生JSONエディタ",

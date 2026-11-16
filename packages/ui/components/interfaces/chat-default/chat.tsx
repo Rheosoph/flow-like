@@ -1080,19 +1080,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								<div aria-hidden="true" />
 							</div>
 
-							{inlinePrompt && (
-								<div
-									className="mx-auto w-full shrink-0 px-3 pt-2 pb-2"
-									style={{
-										maxWidth:
-											"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
-									}}
-								>
-									{inlinePrompt}
-								</div>
-							)}
-
-							{/* ChatBox */}
+							{/* ChatBox. A pinned prompt sits in the dock so corner overlays rise above its buttons too. */}
 							<div
 								ref={cornerObstacleRef}
 								className="mx-auto w-full space-y-2 px-3"
@@ -1104,6 +1092,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 										"calc(var(--fl-chat-pad-bottom, 0.75rem) + var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px)))",
 								}}
 							>
+								{inlinePrompt && <div className="pt-2">{inlinePrompt}</div>}
 								{replyTarget && (
 									<MessageReference
 										reference={replyTarget}

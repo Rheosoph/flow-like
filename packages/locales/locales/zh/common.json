@@ -2028,6 +2028,8 @@
 	"modelActions": "模型操作",
 	"modelCategory": "模型类别",
 	"modelClassification": "模型分类",
+	"modelDataClassification": "",
+	"modelDataClassificationHint": "",
 	"modelExploreOperateAndShareProjectData": "建模、浏览、操作并共享项目数据",
 	"modelId": "模型 ID",
 	"modelIdentity": "模型标识",
