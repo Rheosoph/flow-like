@@ -40,7 +40,10 @@ class BotDocumentActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        NativeUi.page(this, "Preparing document scanner…")
+        val page = NativeUi.page(this, "Scan a document", "Capture pages and attach them as a PDF.")
+        NativeUi.add(page.content, NativeUi.loading(this, "Preparing scanner…",
+            "Google Play is preparing the document scanner on this device."), top = 0)
+        NativeUi.add(page.content, NativeUi.button(this, "Cancel") { finish() })
         if (savedInstanceState != null) return
         val options = GmsDocumentScannerOptions.Builder().setGalleryImportAllowed(true).setPageLimit(10)
             .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_PDF)

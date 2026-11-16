@@ -38,6 +38,7 @@ export interface LiveReport {
 	runId: string;
 	passed: boolean;
 	cases: LiveCase[];
+	progress?: { stage: string; caseId?: string };
 }
 
 export function validateReport(
@@ -182,8 +183,15 @@ export async function main(args: string[]) {
 					`${JSON.stringify(report, null, 2)}\n`,
 					{ mode: 0o600 },
 				);
+				const stage = final
+					? "Result"
+					: report.progress
+						? [report.progress.caseId, report.progress.stage]
+								.filter(Boolean)
+								.join(" ")
+						: "Progress";
 				console.error(
-					`${final ? "Result" : "Progress"}: ${report.cases.filter((item) => item.passed).length}/${report.cases.length} passed`,
+					`${stage}: ${report.cases.filter((item) => item.passed).length}/${report.cases.length} completed checks passed`,
 				);
 				if (final) settle(report);
 				return Response.json({ accepted: true }, { headers });
@@ -217,7 +225,11 @@ export async function main(args: string[]) {
 				],
 				{
 					cwd: desktopDir,
-					env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" },
+					env: {
+						...process.env,
+						NEXT_TELEMETRY_DISABLED: "1",
+						FLOWPILOT_E2E_NO_DISK_CACHE: "1",
+					},
 					stdio: ["ignore", frontendLog.fd, frontendLog.fd],
 				},
 			);

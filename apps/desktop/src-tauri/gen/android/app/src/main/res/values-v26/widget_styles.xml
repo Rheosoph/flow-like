@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="FlowLikeWidgetText">
+        <item name="android:fontFamily">@font/flow_inter_regular</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:textColor">@color/setup_text</item>
+    </style>
+    <style name="FlowLikeWidgetTitle" parent="FlowLikeWidgetText">
+        <item name="android:fontFamily">@font/flow_inter_medium</item>
+        <item name="android:textSize">16sp</item>
+    </style>
+</resources>

@@ -85,7 +85,7 @@ import { UsageStats } from "./usage-stats";
 /** Lines of a sent message shown before it collapses behind "Show more". */
 const COLLAPSED_ASK_LINES = 6;
 
-function ThinkingIndicator({ text }: { text?: string }) {
+export function ThinkingIndicator({ text }: { text?: string }) {
 	const { t } = useTranslation("chat");
 	return (
 		<div className="flex items-center gap-1.5 py-1">

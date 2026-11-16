@@ -144,11 +144,18 @@ androidComponents.onVariants { variant ->
         outputDirectory.set(layout.buildDirectory.dir("generated/nativeLoader/${variant.name}"))
     }
     variant.sources.java?.addGeneratedSourceDirectory(prepareNativeLoader, PrepareAndroidNativeLoader::outputDirectory)
+    val prepareWebDialogs = tasks.register<PrepareAndroidWebDialogs>("prepare${variantName}WebDialogs") {
+        dependsOn("rustBuild$variantName")
+        originalSource.set(layout.projectDirectory.file("src/main/java/com/flow_like/app/generated/RustWebChromeClient.kt"))
+        outputDirectory.set(layout.buildDirectory.dir("generated/webDialogs/${variant.name}"))
+    }
+    variant.sources.java?.addGeneratedSourceDirectory(prepareWebDialogs, PrepareAndroidWebDialogs::outputDirectory)
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
     // The prepared copy lives under com/flow_like/app/Rust.kt, outside this pattern.
     exclude("**/generated/Rust.kt")
+    exclude("**/generated/RustWebChromeClient.kt")
 }
 
 androidComponents.onVariants(androidComponents.selector().withBuildType("debug")) { variant ->

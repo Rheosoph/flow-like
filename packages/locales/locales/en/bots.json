@@ -301,6 +301,8 @@
 	"crew": {
 		"activity": {
 			"queued": "Waiting for {{name}}",
+			"queuedDesktopOffline": "{{name}} answers once your desktop app is online",
+			"queuedDeviceOffline": "{{name}} answers once its device is online",
 			"running": "{{name}} is answering",
 			"runningStatus": "{{name}} · {{status}}",
 			"typingMany": "Several people are typing",

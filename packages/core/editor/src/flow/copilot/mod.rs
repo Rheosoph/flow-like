@@ -438,11 +438,13 @@ impl CopilotToolAccess {
         {
             // A first Board turn can initialize JSON Schema before the provider runs. Give
             // its synchronous compiler a fresh stack instead of the nested chat poll stack.
-            tokio::task::spawn_blocking(move || Self::from_definitions(definitions))
-                .await
-                .map_err(|error| {
-                    flow_like_types::anyhow!("Board tool schema validation worker failed: {error}")
-                })?
+            flow_like_types::tokio::task::spawn_blocking(move || {
+                Self::from_definitions(definitions)
+            })
+            .await
+            .map_err(|error| {
+                flow_like_types::anyhow!("Board tool schema validation worker failed: {error}")
+            })?
         }
         #[cfg(target_family = "wasm")]
         {

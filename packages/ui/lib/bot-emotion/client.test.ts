@@ -390,3 +390,50 @@ describe("emotion worker connection", () => {
 		expect(createEmotionWorkerPort()).toBeInstanceOf(DedicatedWorker);
 	});
 });
+
+describe("emotion client on iOS", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.resetModules();
+	});
+
+	async function clientFor(userAgent: string, maxTouchPoints = 0) {
+		vi.resetModules();
+		vi.stubGlobal("navigator", { userAgent, maxTouchPoints });
+		const Worker = vi.fn();
+		vi.stubGlobal("Worker", Worker);
+		vi.stubGlobal("SharedWorker", Worker);
+		const { getBotEmotionClient } = await import("./client");
+		return { client: getBotEmotionClient(), Worker };
+	}
+
+	it.each([
+		[
+			"iPhone",
+			"Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+			0,
+		],
+		[
+			"iPadOS",
+			"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15",
+			5,
+		],
+	])("never starts the model on %s", async (_, userAgent, touchPoints) => {
+		const { client, Worker } = await clientFor(userAgent, touchPoints);
+		const states: string[] = [];
+		client.subscribe((state) => states.push(state.status));
+		client.warmup();
+		expect(await client.predict({}, { draft: "yay", messages: [] })).toBeNull();
+		expect(states).toEqual(["unavailable"]);
+		expect(Worker).not.toHaveBeenCalled();
+	});
+
+	it("keeps the model on a Mac without touch", async () => {
+		const { client } = await clientFor(
+			"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15",
+		);
+		expect(client).toBeInstanceOf(
+			(await import("./client")).BrowserEmotionClient,
+		);
+	});
+});

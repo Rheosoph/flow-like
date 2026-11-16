@@ -21,6 +21,7 @@ import {
 	loadOlder,
 	pushedTranscript,
 	sendInteractive,
+	sendToHost,
 	startNewTopic,
 	transcriptOf,
 } from "./bot-history";
@@ -474,6 +475,20 @@ describe("entries the realtime feed pushes", () => {
 		const pushed = [reply(3, "Assistant says it's doing well.", "m1")];
 		const { messages } = pushedTranscript(pushed, BOT, sessionId, onScreen);
 		expect(messages.map((message) => message.id)).toEqual(["m3"]);
+	});
+});
+
+describe("sending to a bot that answers on its own host", () => {
+	test("writes a plain message without the interactive mark", async () => {
+		const { inbox, sent } = fakeInbox(2);
+		await sendToHost(inbox, target, { id: "msg_host", text: "Digest please" });
+		expect(sent).toEqual([
+			{
+				message_id: "msg_host",
+				kind: "message",
+				envelope: { v: 1, enc: "none", body: { text: "Digest please" } },
+			},
+		]);
 	});
 });
 

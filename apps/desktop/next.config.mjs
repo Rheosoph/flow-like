@@ -51,6 +51,8 @@ export default (phase) => {
 			...nextConfig.experimental,
 			// Avoid the child-process pool stall when compiling CSS in development.
 			turbopackPluginRuntimeStrategy: "workerThreads",
+			turbopackFileSystemCacheForDev:
+				process.env.FLOWPILOT_E2E_NO_DISK_CACHE !== "1",
 		},
 		// Keep /use/ distinct from an Event-only /use link during development.
 		skipTrailingSlashRedirect: true,

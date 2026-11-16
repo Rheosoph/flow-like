@@ -21,7 +21,7 @@ use flow_like::{
 };
 use flow_like_types::{
     Value,
-    bot::{BotCapability, BotModelPolicy, BotSystemKind},
+    bot::{BotCapability, BotLocation, BotModelPolicy, BotSystemKind},
 };
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect};
 use std::{collections::BTreeSet, sync::Arc};
@@ -35,6 +35,8 @@ use std::{collections::BTreeSet, sync::Arc};
 pub(crate) struct ChatBot {
     pub(crate) context: BotRunContext,
     pub(crate) model: BotModelPolicy,
+    /// Where the bot's turns run; only a server bot answers in the browser's chat.
+    pub(crate) location: BotLocation,
 }
 
 /// Bot ids are `bot_` plus a cuid; anything longer than this can't name one.
@@ -99,6 +101,7 @@ pub(super) async fn load_chat_bot<C: ConnectionTrait>(
         return Ok((bot_id == GENERAL_BOT_ID).then(|| ChatBot {
             context: BotRunContext::general(),
             model: BotModelPolicy::default(),
+            location: BotLocation::Server,
         }));
     };
     let system = row.system_key.as_deref().and_then(BotSystemKind::parse);
@@ -166,7 +169,7 @@ pub(super) async fn load_chat_bot<C: ConnectionTrait>(
             workspace_app_id: None,
             embedding_model: settings.embedding_model,
             decision_model: settings.model.decision.clone(),
-            decision_hosted_only: settings.location != flow_like_types::bot::BotLocation::Desktop,
+            decision_hosted_only: settings.location != BotLocation::Desktop,
             acknowledgement: false,
             live_call: false,
             spoken_drafts: false,
@@ -190,6 +193,7 @@ pub(super) async fn load_chat_bot<C: ConnectionTrait>(
             seed_taint: Default::default(),
         },
         model: settings.model,
+        location: settings.location,
     }))
 }
 

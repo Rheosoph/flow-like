@@ -1,7 +1,9 @@
 use super::{
     fixture::{assert_code, at, conversation, database, delivery, insert_bot, message, recipient},
     interactive::InteractiveTurn,
-    ledger::{self, ClaimRequest, Refusal, claim_in, enqueue_in, hold_in, queued_heads},
+    ledger::{
+        self, ClaimRequest, Refusal, claim_in, enqueue_in, hand_to_host_in, hold_in, queued_heads,
+    },
 };
 use crate::{
     entity::{bot_turn, inbox_entry},
@@ -172,6 +174,32 @@ async fn holding_pushes_the_grace_on_until_a_host_claims() {
         !hold_in(&db, &id, "user-a", at(400)).await.unwrap(),
         "a claimed turn is no longer held"
     );
+}
+
+#[tokio::test]
+async fn a_chat_that_wont_answer_hands_its_turn_to_the_host_at_once() {
+    let db = database().await;
+    chat(&db).await;
+    queue(&db, true, at(100)).await;
+    let id = turn_id("bot_1", "m1");
+
+    assert!(
+        !hand_to_host_in(&db, &id, "user-b", at(101)).await.unwrap(),
+        "only the owner's chat hands its turn on"
+    );
+    assert_eq!(waiting(&db, at(102)).await, 0);
+
+    assert!(hand_to_host_in(&db, &id, "user-a", at(102)).await.unwrap());
+    assert_eq!(waiting(&db, at(102)).await, 1);
+    claim_in(&db, &claim("host", at(102)))
+        .await
+        .unwrap()
+        .expect("the host takes the turn without waiting for the grace");
+    assert!(
+        !hand_to_host_in(&db, &id, "user-a", at(103)).await.unwrap(),
+        "a claimed turn stays with its host"
+    );
+    assert_eq!(turn(&db).await.status, STORED_RUNNING);
 }
 
 #[tokio::test]

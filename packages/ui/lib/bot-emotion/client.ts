@@ -1,3 +1,4 @@
+import { isIOS } from "../platform";
 import {
 	type WorkerPort,
 	portFromSharedWorker as sharedWorkerPort,
@@ -227,10 +228,31 @@ export class BrowserEmotionClient implements EmotionClient {
 	}
 }
 
-let client: BrowserEmotionClient | undefined;
+const UNAVAILABLE: EmotionLoadState = { status: "unavailable" };
 
+/** Never loads the model; the controller falls back to keyword cues. */
+export class UnavailableEmotionClient implements EmotionClient {
+	warmup() {}
+
+	predict(): Promise<ExpressionScores | null> {
+		return Promise.resolve(null);
+	}
+
+	cancel() {}
+
+	subscribe(listener: (state: EmotionLoadState) => void) {
+		listener(UNAVAILABLE);
+		return () => {};
+	}
+}
+
+let client: EmotionClient | undefined;
+
+/** iOS WebKit kills the page while the model loads, which reloads the app, so iOS never loads it. */
 export function getBotEmotionClient(): EmotionClient {
-	client ??= new BrowserEmotionClient(createEmotionWorkerPort);
+	client ??= isIOS()
+		? new UnavailableEmotionClient()
+		: new BrowserEmotionClient(createEmotionWorkerPort);
 	return client;
 }
 

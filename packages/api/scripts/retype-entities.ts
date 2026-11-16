@@ -150,7 +150,10 @@ export function removeStaleEntities(entitiesDir: string): string[] {
 }
 
 function parseArgs(argv: string[]): { entities: string; map: string } {
-	const options = { entities: "entity/src/generated", map: "scripts/entity-typemap.tsv" };
+	const options = {
+		entities: "entity/src/generated",
+		map: "scripts/entity-typemap.tsv",
+	};
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		if (arg === "--entities") options.entities = argv[++i];

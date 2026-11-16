@@ -9,6 +9,7 @@ import {
 
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
+import { useQueryClient } from "@tanstack/react-query";
 import { FileCode2Icon, WorkflowIcon } from "lucide-react";
 import {
 	type ReactNode,
@@ -20,6 +21,7 @@ import {
 } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
+import { inboxKeys } from "../../hooks/use-inbox";
 import {
 	IBitTypes,
 	IRole,
@@ -54,11 +56,13 @@ import {
 	desktopInteractiveArgs,
 	ensureBotTarget,
 	registerBotInbox,
+	sendHostedMessage,
 	sendInteractiveMessage,
 	webInteractiveBody,
 } from "../../state/global-chat/bot-inbox";
 import {
 	ASSISTANT_BOT_ID,
+	answersInThisChat,
 	conversationBotId,
 	currentConversationId,
 	desktopChatBotArgs,
@@ -148,7 +152,10 @@ import type {
 	ChatBoxThinking,
 	ISendMessageFunction,
 } from "../interfaces/chat-default/chatbox";
-import type { MessageInlineContent } from "../interfaces/chat-default/message";
+import {
+	type MessageInlineContent,
+	ThinkingIndicator,
+} from "../interfaces/chat-default/message";
 import { submitInteractionResponse } from "../interfaces/chat-default/respond-interaction";
 import { useStorageAttachSource } from "../storage/use-storage-attach-source";
 import {
@@ -179,6 +186,7 @@ import {
 	useGlobalChatBot,
 } from "./use-global-chat-bot";
 import { useGlobalChatRunWidgetAction } from "./use-global-widget-action";
+import { useHostedBotTurnText } from "./use-hosted-bot-turn";
 import { useOpenAppId } from "./use-open-app-id";
 import { usePageSnapshotSource } from "./use-page-snapshot-source";
 
@@ -362,6 +370,15 @@ export function GlobalChatBody({
 	const chatBot = useGlobalChatBot();
 	const chatBotNameRef = useRef(chatBot.name);
 	chatBotNameRef.current = chatBot.name;
+	const answersHere = answersInThisChat(chatBot.bot, isTauri());
+	const answersHereRef = useRef(answersHere);
+	answersHereRef.current = answersHere;
+	const hostedTurnText = useHostedBotTurnText(
+		activeConversationId,
+		chatBot,
+		!answersHere,
+	);
+	const queryClient = useQueryClient();
 	const chatConfig = useBotChatConfig(chatBot);
 	const noteBotId = chatBot.bot?.id ?? chatBot.botId;
 	const botNotes = useMemo<IChatGroup | undefined>(
@@ -764,6 +781,7 @@ export function GlobalChatBody({
 			// move it, fill it from another chat's limit or name it after another bot.
 			const sessionId = state.activeConversationId;
 			const botName = chatBotNameRef.current;
+			const answersHere = answersHereRef.current;
 			// Concurrency is allowed up to the cap; past it the message is queued rather than
 			// dropped, and drains as soon as a turn finishes.
 			const atCapacity = () =>
@@ -884,6 +902,32 @@ export function GlobalChatBody({
 				isAgentBackendProvider(normalizeAIProvider(agentSelection.provider)),
 				agentSelection.reasoningEffort,
 			);
+			if (!answersHere) {
+				if (nativeRequest)
+					throw new Error(
+						`${botName} answers on its own computer, not in this chat.`,
+					);
+				appendMessage(userMessage);
+				const inboxConversation = await sendHostedMessage(
+					sessionId,
+					{ id: userMessage.id, text: trimmed },
+					allFiles,
+				);
+				void persistGlobalChatMessage(userMessage);
+				void persistGlobalChatSession(sessionId, sessionTitle);
+				preparation?.finish();
+				if (inboxConversation)
+					void queryClient.invalidateQueries({
+						queryKey: inboxKeys.turns(inboxConversation),
+					});
+				else
+					toast.error(
+						t("hostedBotNotReached", "{{name}} didn't get your message.", {
+							name: botName,
+						}),
+					);
+				return undefined;
+			}
 			if (!nativeRequest) {
 				appendMessage(userMessage);
 				// A bot chat lives in the inbox once its target resolves; saved before that, the
@@ -1152,13 +1196,14 @@ export function GlobalChatBody({
 			});
 			return responseMessage;
 		},
-		[appendMessage, backend, variant, getNativeScope, t],
+		[appendMessage, backend, variant, getNativeScope, t, queryClient],
 	);
 	useEffect(() => {
 		if (!dockBotId) return;
 		const canTake = () => {
 			const state = useGlobalChatStore.getState();
 			return (
+				answersHereRef.current &&
 				conversationBotId(state.activeConversationId) === dockBotId &&
 				botHasInboxHistory(dockBotId) &&
 				!isGlobalChatAtRunCapacity(state, state.activeConversationId)
@@ -1837,7 +1882,14 @@ export function GlobalChatBody({
 								showAiDisclosure
 								inlineContent={inlineArtifacts}
 								messageInlineContent={inlineCards.byMessage}
-								inlinePrompt={promptSlot}
+								inlinePrompt={
+									promptSlot ??
+									(hostedTurnText ? (
+										<output aria-live="polite" className="block px-1">
+											<ThinkingIndicator text={hostedTurnText} />
+										</output>
+									) : undefined)
+								}
 								group={botNotes}
 							/>
 						</BotFileAssets>

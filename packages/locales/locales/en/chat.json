@@ -113,6 +113,7 @@
 	"hide": "Hide",
 	"hideTheFlowscriptWorkspace": "Hide the FlowScript workspace",
 	"history": "History",
+	"hostedBotNotReached": "{{name}} didn't get your message.",
 	"includeChatHistoryWithFeedback": "Include chat history with feedback",
 	"initializingMicrophone": "Initializing microphone…",
 	"input": "Input",

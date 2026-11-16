@@ -261,6 +261,7 @@ export class TauriBackend implements IBackendState {
 		this.audioState = new AudioState(this);
 		this.analyticsState = new AnalyticsState(this);
 		this.offlineWritesState = new OfflineWritesState(this);
+		this.syncSignInStatus();
 	}
 
 	get auth(): AuthContextProps | undefined {
@@ -335,12 +336,17 @@ export class TauriBackend implements IBackendState {
 		this.refreshRemoteCatalogQueries();
 	}
 
-	private syncHubAuthConsumers() {
+	private syncSignInStatus() {
 		const auth = this.auth;
-		this._apiState.setAuth(auth ?? null);
 		useAuthStatusStore
 			.getState()
 			.setSignedIn(Boolean(auth?.isAuthenticated && auth.user?.access_token));
+	}
+
+	private syncHubAuthConsumers() {
+		const auth = this.auth;
+		this._apiState.setAuth(auth ?? null);
+		this.syncSignInStatus();
 		const token = auth?.user?.access_token ?? null;
 		this.registryAuthUpdate = this.registryAuthUpdate
 			.then(() => this.registryState.setAuthToken?.(token))

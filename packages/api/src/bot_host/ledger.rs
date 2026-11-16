@@ -1009,6 +1009,26 @@ pub(crate) async fn hold_in<C: ConnectionTrait>(
     Ok(held.rows_affected > 0)
 }
 
+/// Ends an interactive chat's hold on a turn it won't answer, so the bot's own host claims it
+/// now instead of after the grace. `false` when no queued turn of `owner_id` matched.
+pub(crate) async fn hand_to_host_in<C: ConnectionTrait>(
+    db: &C,
+    turn_id: &str,
+    owner_id: &str,
+    now: DateTime<FixedOffset>,
+) -> Result<bool, DbErr> {
+    let released = bot_turn::Entity::update_many()
+        .col_expr(bot_turn::Column::LeaseUntil, Expr::value(now))
+        .col_expr(bot_turn::Column::UpdatedAt, Expr::value(now))
+        .filter(bot_turn::Column::Id.eq(turn_id))
+        .filter(bot_turn::Column::OwnerId.eq(owner_id))
+        .filter(bot_turn::Column::Status.eq(STORED_QUEUED))
+        .filter(bot_turn::Column::HostId.is_null())
+        .exec(db)
+        .await?;
+    Ok(released.rows_affected > 0)
+}
+
 /// Extends the lease of a turn the host holds. A turn that isn't the host's, or whose lease ran
 /// out, is [`BOT_TURN_LEASE_LOST`]; one that isn't `owner_id`'s reads as missing.
 pub(crate) async fn heartbeat_in<C: ConnectionTrait>(

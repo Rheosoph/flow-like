@@ -15,15 +15,14 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.core.content.ContextCompat
-import androidx.core.content.res.ResourcesCompat
 import androidx.core.view.ViewCompat
 import com.google.android.material.button.MaterialButton
 import java.text.NumberFormat
 
 /** Kept in the base module so setup has the app's identity before the tools arrive. */
 class NativeSetupView(context: Context) : ScrollView(context) {
-    private val regular = ResourcesCompat.getFont(context, R.font.flow_inter_regular)
-    private val medium = ResourcesCompat.getFont(context, R.font.flow_inter_medium)
+    private val regular = NativeUi.font(context)
+    private val medium = NativeUi.font(context, emphasized = true)
     private val textColors = mutableListOf<Pair<TextView, Int>>()
     private val steps = mutableListOf<TextView>()
     private val stages = LinearLayout(context)
@@ -159,9 +158,9 @@ class NativeSetupView(context: Context) : ScrollView(context) {
             setId(1, android.R.id.progress)
         }
         progress.indeterminateTintList = ColorStateList.valueOf(color(R.color.setup_accent))
-        styleButton(primary, filled = true)
-        styleButton(secondary, filled = false)
-        styleButton(storage, filled = false)
+        NativeUi.styleButton(primary, primary = true)
+        NativeUi.styleButton(secondary, primary = false)
+        NativeUi.styleButton(storage, primary = false)
         showStage(currentStage)
     }
 
@@ -188,18 +187,6 @@ class NativeSetupView(context: Context) : ScrollView(context) {
         setPadding(dp(16), dp(14), dp(16), dp(14))
         stateListAnimator = null
         elevation = 0f
-    }
-
-    private fun styleButton(button: MaterialButton, filled: Boolean) {
-        val fill = color(if (filled) R.color.setup_accent else R.color.setup_surface)
-        val text = color(if (filled) R.color.setup_on_accent else R.color.setup_text)
-        val states = arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf())
-        button.backgroundTintList = ColorStateList(states,
-            intArrayOf(color(R.color.setup_track), fill))
-        button.setTextColor(ColorStateList(states, intArrayOf(color(R.color.setup_muted), text)))
-        button.strokeWidth = if (filled) 0 else dp(1)
-        button.strokeColor = ColorStateList.valueOf(color(R.color.setup_border))
-        button.rippleColor = ColorStateList.valueOf((text and 0x00FFFFFF) or 0x22000000)
     }
 
     private fun row(top: Int = 0) = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(top) }

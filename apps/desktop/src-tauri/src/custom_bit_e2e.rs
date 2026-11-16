@@ -319,6 +319,53 @@ fn stream_payload(chunk: &str) -> Option<Value> {
     Some(value)
 }
 
+fn app_read_start_id<'a>(frame: &'a Value, app_id: &str) -> Option<&'a str> {
+    if frame["type"] != "tool_start" || frame["tool"] != "get_app_detail" {
+        return None;
+    }
+    let arguments: Value = serde_json::from_str(frame["arguments_preview"].as_str()?).ok()?;
+    if arguments
+        .get("app_id")
+        .or_else(|| arguments.get("appId"))?
+        .as_str()?
+        != app_id
+    {
+        return None;
+    }
+    frame["tool_call_id"].as_str().filter(|id| !id.is_empty())
+}
+
+fn successful_app_read(frames: &[Value], app_id: &str, nonce: &str) -> Option<String> {
+    for (index, start) in frames.iter().enumerate() {
+        let Some(call_id) = app_read_start_id(start, app_id) else {
+            continue;
+        };
+        for end in &frames[index + 1..] {
+            if end["type"] != "tool_end"
+                || end["tool"] != "get_app_detail"
+                || end["tool_call_id"] != call_id
+                || end["status"] != "done"
+                || end["terminal_status"] != "ok"
+            {
+                continue;
+            }
+            let result = end["result_preview"]
+                .as_str()
+                .and_then(|preview| serde_json::from_str::<Value>(preview).ok());
+            if result.is_some_and(|result| {
+                result["status"] == "ok"
+                    && result["app"]["app_id"] == app_id
+                    && result["app"]["description"]
+                        .as_str()
+                        .is_some_and(|description| description.contains(nonce))
+            }) {
+                return Some(call_id.to_string());
+            }
+        }
+    }
+    None
+}
+
 #[tauri::command]
 pub async fn custom_bit_e2e_run_bot(
     app_handle: AppHandle,
@@ -356,7 +403,9 @@ pub async fn custom_bit_e2e_run_bot(
     );
     let response = tokio::time::timeout(
         RUN_TIMEOUT,
-        copilot::global_chat_native(
+        // Match the rendered chat entry point: keep the large native chat future on the
+        // heap while this command and its timeout move through Tauri's dispatcher.
+        Box::pin(copilot::global_chat_native(
             app_handle.clone(),
             None,
             app_handle.state::<TauriFlowLikeState>(),
@@ -381,7 +430,7 @@ pub async fn custom_bit_e2e_run_bot(
                 ..Default::default()
             },
             Some(fixture.bot_id.clone()),
-        ),
+        )),
     )
     .await;
     let response = match response {
@@ -401,14 +450,23 @@ pub async fn custom_bit_e2e_run_bot(
         .filter_map(|frame| frame["model_id"].as_str())
         .collect();
     let model_matches = !models.is_empty() && models.iter().all(|model| *model == fixture.bit_id);
+    let model_resolutions: Vec<_> = frames
+        .iter()
+        .filter(|frame| frame["type"] == "model_resolved")
+        .collect();
+    let provider_name = format!("custom:{}", fixture.provider);
+    let resolved_model_matches = !model_resolutions.is_empty()
+        && model_resolutions.iter().all(|identity| {
+            identity["bit_id"] == fixture.bit_id
+                && identity["provider_name"] == provider_name
+                && identity["configured_model_id"] == fixture.model_id
+                && identity["model_id"] == fixture.model_id
+        });
     let tool_called = frames
         .iter()
-        .any(|frame| frame["type"] == "tool_start" && frame["tool"] == "get_app_detail");
-    let tool_returned = frames.iter().any(|frame| {
-        frame["type"] == "tool_end"
-            && frame["tool"] == "get_app_detail"
-            && frame["status"] == "done"
-    });
+        .any(|frame| app_read_start_id(frame, &fixture.app_id).is_some());
+    let verified_tool_call = successful_app_read(&frames, &fixture.app_id, &seed.nonce);
+    let tool_returned = verified_tool_call.is_some();
     let nonce_matches = response.message.contains(&seed.nonce);
     let completion_models: Vec<_> = frames
         .iter()
@@ -429,9 +487,11 @@ pub async fn custom_bit_e2e_run_bot(
             .all(|model| *model == fixture.model_id);
     Ok(json!({
         "schema": SCHEMA, "provider": provider, "runId": run_id, "bitId": fixture.bit_id,
-        "modelId": fixture.model_id, "providerName": format!("custom:{}", fixture.provider),
-        "passed": model_matches && completion_models_match && output_tokens > 0 && tool_called && tool_returned && nonce_matches,
+        "modelId": fixture.model_id, "providerName": provider_name,
+        "passed": model_matches && resolved_model_matches && completion_models_match && output_tokens > 0 && tool_called && tool_returned && nonce_matches,
         "modelMatches": model_matches, "toolCalled": tool_called, "toolReturned": tool_returned,
+        "resolvedModelMatches": resolved_model_matches, "nativeModelResolution": model_resolutions,
+        "verifiedToolCallId": verified_tool_call,
         "nonceMatches": nonce_matches, "usageObserved": usage_observed,
         "outputTokens": output_tokens,
         "completionModelsMatch": completion_models_match, "completionModels": completion_models,
@@ -560,22 +620,110 @@ pub async fn custom_bit_e2e_apply_review(
         .open_board(fixture.board_id.clone(), Some(false), None)
         .await
         .map_err(failure)?;
-    let fingerprint = copilot::persisted_board_graph_fingerprint(&board.snapshot())?;
+    let snapshot = board.snapshot();
+    let fingerprint = copilot::persisted_board_graph_fingerprint(&snapshot)?;
     let persisted_matches = resolution.job.persisted_board_fingerprint.as_deref()
         == Some(readback.graph_fingerprint.as_str())
         && fingerprint == readback.graph_fingerprint;
     let nonce_persisted = readback.flowscript.contains(&seed.nonce);
-    let applied = resolution
-        .job
-        .result
-        .as_ref()
-        .is_some_and(|result| result.status == "applied");
+    let variable_name = format!("e2e_{}", provider.replace('-', "_"));
+    let variable_matches = snapshot.variables.len() == fixture.board.variables.len() + 1
+        && snapshot.variables.values().any(|variable| {
+            variable.name == variable_name
+                && variable.data_type == flow_like::flow::variable::VariableType::String
+                && variable.value_type == flow_like::flow::pin::ValueType::Normal
+                && variable
+                    .default_value
+                    .as_deref()
+                    .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok())
+                    == Some(Value::String(seed.nonce.clone()))
+        });
+    let nodes_unchanged = serde_json::to_value(&snapshot.nodes).map_err(failure)?
+        == serde_json::to_value(&fixture.board.nodes).map_err(failure)?;
+    let comments_unchanged = serde_json::to_value(&snapshot.comments).map_err(failure)?
+        == serde_json::to_value(&fixture.board.comments).map_err(failure)?;
+    let layers_unchanged = serde_json::to_value(&snapshot.layers).map_err(failure)?
+        == serde_json::to_value(&fixture.board.layers).map_err(failure)?;
+    let board_metadata_unchanged =
+        snapshot.name == fixture.board.name && snapshot.description == fixture.board.description;
+    // Successful jobs retain the fingerprint, while the board owns the full apply receipt.
+    let applied = matches!(
+        resolution.job.phase,
+        copilot::BoardEditJobPhase::AppliedPendingDelivery | copilot::BoardEditJobPhase::Applied
+    ) && replay.status == "applied";
     Ok(json!({
         "schema": SCHEMA, "provider": provider, "appId": fixture.app_id, "boardId": fixture.board_id,
-        "passed": create_reopened && apply_reopened && persisted_matches && nonce_persisted && applied && replay.replayed,
+        "passed": create_reopened && apply_reopened && persisted_matches && nonce_persisted && variable_matches && nodes_unchanged && comments_unchanged && layers_unchanged && board_metadata_unchanged && applied && replay.replayed,
         "closedBeforeCreate": true, "createReopened": create_reopened, "closedBeforeApply": true,
         "applyReopened": apply_reopened, "persistedMatches": persisted_matches,
         "noncePersisted": nonce_persisted,
+        "variableMatches": variable_matches, "nodesUnchanged": nodes_unchanged,
+        "commentsUnchanged": comments_unchanged, "layersUnchanged": layers_unchanged,
+        "boardMetadataUnchanged": board_metadata_unchanged,
+        "applied": applied, "replayStatus": replay.status,
         "idempotentReplay": replay.replayed, "job": resolution.job, "board": board.snapshot(), "readback": readback,
     }))
+}
+
+#[cfg(test)]
+mod evidence_tests {
+    use super::*;
+
+    #[test]
+    fn bot_read_receipt_requires_own_app_matching_call_and_successful_nonce_result() {
+        let result = json!({
+            "status": "ok", "app": {"app_id": "owned-app", "description": "nonce-123"},
+        });
+        let frames = vec![
+            json!({
+                "type": "tool_start", "tool": "get_app_detail", "tool_call_id": "call-1",
+                "arguments_preview": json!({"app_id": "owned-app"}).to_string(),
+            }),
+            json!({
+                "type": "tool_end", "tool": "get_app_detail", "tool_call_id": "call-1",
+                "status": "done", "terminal_status": "ok", "result_preview": result.to_string(),
+            }),
+        ];
+        assert_eq!(
+            successful_app_read(&frames, "owned-app", "nonce-123"),
+            Some("call-1".into())
+        );
+        for (index, field, value) in [
+            (
+                0,
+                "arguments_preview",
+                json!({"app_id": "other-app"}).to_string(),
+            ),
+            (1, "tool_call_id", "other-call".into()),
+            (1, "terminal_status", "forbidden".into()),
+            (1, "status", "error".into()),
+            (
+                1,
+                "result_preview",
+                json!({"status": "ok", "app": {"app_id": "other-app", "description": "nonce-123"}})
+                    .to_string(),
+            ),
+            (
+                1,
+                "result_preview",
+                json!({"status": "ok", "app": {"app_id": "owned-app", "description": "unrelated"}})
+                    .to_string(),
+            ),
+        ] {
+            let mut invalid = frames.clone();
+            invalid[index][field] = json!(value);
+            assert!(
+                successful_app_read(&invalid, "owned-app", "nonce-123").is_none(),
+                "accepted invalid {field}"
+            );
+        }
+        assert!(
+            successful_app_read(
+                &[frames[1].clone(), frames[0].clone()],
+                "owned-app",
+                "nonce-123"
+            )
+            .is_none()
+        );
+    }
 }

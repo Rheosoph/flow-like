@@ -63,6 +63,7 @@ use flow_like::flow::copilot::{
 };
 use flow_like::models::llm::ModelUsageContext;
 use flow_like::profile::Profile;
+use flow_like_types::bot::BotLocation;
 use flow_like_types::channel::{Channel, ChannelOutcome, PollingChannel};
 use flow_like_types::tokio::sync::{mpsc, oneshot};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
@@ -1742,6 +1743,25 @@ pub(crate) async fn settle_assistant_usage(
 }
 
 const RUN_CANCELLED: &str = "Run cancelled";
+const BOT_ANSWERS_ON_ITS_HOST: &str = "BOT_ANSWERS_ON_ITS_HOST";
+
+/// A desktop or device bot runs where it lives, with that machine's models, network and tools;
+/// this server never answers for it.
+fn answers_on_its_host(bot: &crate::routes::bots::runtime::ChatBot) -> ApiError {
+    let host = match bot.location {
+        BotLocation::Desktop => "your desktop app",
+        BotLocation::Device => "its device",
+        BotLocation::Server => "the server",
+    };
+    ApiError::coded(
+        axum::http::StatusCode::CONFLICT,
+        BOT_ANSWERS_ON_ITS_HOST,
+        format!(
+            "{} runs on {host}, so it answers there and not in the browser. Your message waits for it in the conversation.",
+            bot.context.name
+        ),
+    )
+}
 
 pub async fn global_chat(
     State(state): State<AppState>,
@@ -1794,6 +1814,12 @@ pub(crate) async fn run_global_chat(
         return Err(ApiError::not_found(
             "The bot conversation turn is unavailable",
         ));
+    }
+    if let Some(bot) = bot.as_ref().filter(|bot| bot.location != BotLocation::Server) {
+        if let Some(interactive) = &interactive_turn {
+            interactive.hand_to_host(&state).await;
+        }
+        return Err(answers_on_its_host(bot));
     }
     let mut live_call = false;
     if let (Some(bot), Some(interactive)) = (&mut bot, &mut interactive_turn) {

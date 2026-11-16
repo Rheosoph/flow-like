@@ -184,6 +184,24 @@ impl InteractiveTurn {
         })
     }
 
+    /// Gives the turn back to the bot's own host, which claims it at once.
+    pub(crate) async fn hand_to_host(&self, state: &AppState) {
+        let handed = ledger::hand_to_host_in(
+            &state.db,
+            &self.turn.id,
+            &self.turn.owner_id,
+            now_millis(),
+        )
+        .await;
+        if let Err(error) = handed {
+            tracing::warn!(
+                %error,
+                turn_id = %self.turn.id,
+                "Interactive chat: the turn stays held until its grace ends"
+            );
+        }
+    }
+
     pub(crate) fn request(&self, text: &str, error_code: Option<&str>) -> SendEntryRequest {
         let mut body = json!({
             "text": text,

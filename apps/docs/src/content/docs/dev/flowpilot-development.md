@@ -177,6 +177,10 @@ commit is a failed check, never a skip. Exit codes are `0` for all checks passin
 checks, and `2` for startup or transport failure. These checks cover the saved Bit's execution;
 the model-store form itself remains covered by the separate dialog suite below.
 
+The UI driver uses DOM events. WebKit can reject Monaco's automatic clipboard writes during
+these synthetic clicks because they lack trusted user activation. Clipboard permissions and
+native widget delivery need separate desktop interaction tests.
+
 ```sh
 node packages/ui/scripts/run-tests.mjs components/flowpilot/FlowPilot.dom.test.tsx components/global-chat/global-chat-body.dom.test.tsx components/global-chat/use-agent-persistence.dom.test.tsx components/global-chat/model-selection.test.ts
 node packages/ui/scripts/run-tests.mjs components/settings/model-catalog/add-custom-model-dialog.dom.test.tsx lib/bit/external-model-providers.test.ts
