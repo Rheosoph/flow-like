@@ -35,8 +35,8 @@ import { type Mentionable, inlineMentions, mentionedIn } from "./mentions";
 import { MessageMarkLine, MessageMenu } from "./message-marks";
 import { roomChatMessage } from "./room-message-body";
 import { useRoomAttachments } from "./use-room-attachments";
+import { useRoomRunWidgetAction } from "./use-room-widget-action";
 
-const noWidgetAction = async () => undefined;
 const NO_BOTS: ConversationActivity["bots"] = [];
 const NO_TYPING: ConversationActivity["typing"] = [];
 
@@ -93,6 +93,7 @@ export function ConversationChat({
 		[blocks],
 	);
 	const attachments = useRoomAttachments(conversationId, allMessages);
+	const runWidgetAction = useRoomRunWidgetAction();
 	const encrypted = thread.conversation.encryption === "e2e";
 	const chatConfig = useMemo(
 		() => ({ allow_file_upload: !readOnly && !encrypted }),
@@ -390,7 +391,7 @@ export function ConversationChat({
 					<ChatSurface
 						chatRef={chatRef}
 						loading={history.isLoading}
-						runWidgetAction={noWidgetAction}
+						runWidgetAction={runWidgetAction}
 						sessionId={conversationId}
 						config={chatConfig}
 						messages={[...messages, ...pendingMessages]}

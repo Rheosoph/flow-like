@@ -4,6 +4,7 @@ import type { IChatUsageStat } from "../../../lib/llm/usage";
 import type { IHistoryMessage } from "../../../lib/schema/llm/history";
 import { installRuntimeHistoryGuard } from "../../../lib/service-runtime/history-guard";
 import type { IBotNoteRef } from "../../../state/backend-state/bot-state";
+import type { IInboxFileHandle } from "../../../state/backend-state/inbox-state";
 import type { IAgentDebugReport } from "../../../state/global-chat/agent-debug-report";
 import type {
 	ConversationApproval,
@@ -328,6 +329,10 @@ export interface IMessage {
 	thinking?: string;
 	/** a2ui widgets embedded in this message (from the Push Widget node). */
 	widgets?: IChatWidget[];
+	/** Stored app widget documents too large to inline; loaded and shown after `widgets`. */
+	widget_documents?: IInboxFileHandle[];
+	/** `false`: the loaded `widget_documents` show read-only (another person's bot sent them). */
+	widget_actions?: false;
 	/** Latest main widget state at this turn; absent means this turn did not change it. */
 	main_widget?: IChatMainWidget;
 	/**

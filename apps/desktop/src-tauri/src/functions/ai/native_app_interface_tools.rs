@@ -5,7 +5,7 @@ use super::super::{
     native_tool_bridge::{self, run_options},
 };
 use super::{NativePlatformSession, app_events, required, segment, string};
-use flow_like::flow::copilot::AttachmentManifestEntry;
+use flow_like::flow::copilot::{AppOrigin, AppOutput, AttachmentManifestEntry};
 use flow_like_types::app_chat::{
     CHAT_EVENTS_QUERY, ChatFold, each_envelope, is_chat_event, take_chat_events,
 };
@@ -110,14 +110,10 @@ pub(super) async fn execute(
             )
             .await?;
             let origin = chat_origin(session, &app, event);
-            return Ok(mcp_outcome(
-                session.context.as_ref(),
-                &origin,
-                &app,
-                &id,
-                name,
-                result,
-            ));
+            let (outcome, fold) =
+                mcp_outcome(session.context.as_ref(), &origin, &app, &id, name, result);
+            show_on_reply(session, &app, event, &fold);
+            return Ok(outcome);
         }
         if args.get("mcp_tool").is_some() {
             return Err(format!(
@@ -152,9 +148,9 @@ pub(super) async fn execute(
         )
         .await?;
         runtime["event_type"] = json!(event_type);
-        fold.lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .describe_pushed(&mut runtime);
+        let fold = fold.lock().unwrap_or_else(|e| e.into_inner());
+        fold.describe_pushed(&mut runtime);
+        show_on_reply(session, &app, event, &fold);
         return Ok(runtime);
     }
     let message = string(args, "message", "prompt").ok_or("call_app_chat requires a message.")?;
@@ -283,6 +279,7 @@ pub(super) async fn execute(
     );
     copy_execution_outcome(&mut result, &execution_result);
     folded.describe_pushed(&mut result);
+    show_on_reply(session, &app, event, &folded);
     if !forwarded.is_empty() {
         result["forwarded_files"] = json!(
             forwarded
@@ -448,7 +445,7 @@ fn mcp_outcome(
     event_id: &str,
     tool: &str,
     mut result: Value,
-) -> Value {
+) -> (Value, ChatFold) {
     let pushed = take_chat_events(&mut result);
     let mut fold = ChatFold::default();
     for event in &pushed.events {
@@ -467,7 +464,24 @@ fn mcp_outcome(
     if pushed.truncated {
         outcome["pushed_truncated"] = json!(true);
     }
-    outcome
+    (outcome, fold)
+}
+
+/// Hands what the app run pushed to the turn's reply, when the turn keeps one.
+fn show_on_reply(session: &NativePlatformSession, app: &str, event: &Value, fold: &ChatFold) {
+    let Some(reply) = run_options(session.context.as_ref()).reply_files else {
+        return;
+    };
+    let text = |key: &str| event[key].as_str().unwrap_or_default().to_string();
+    reply.push_app_output(AppOutput::from_fold(
+        AppOrigin {
+            app_id: app.to_string(),
+            board_id: text("board_id"),
+            event_id: text("id"),
+        },
+        event["name"].as_str().unwrap_or(app).to_string(),
+        fold,
+    ));
 }
 
 #[cfg(test)]
@@ -603,7 +617,8 @@ mod tests {
             "widgets":[{"instance_id":"w1"}]
         }}));
         log.attach(&mut result);
-        let outcome = mcp_outcome(None, &json!({}), "app", "event", "report", result);
+        let (outcome, fold) = mcp_outcome(None, &json!({}), "app", "event", "report", result);
+        assert_eq!(fold.widget_count(), 1);
         assert_eq!(outcome["status"], "ok");
         assert_eq!(outcome["mcp_tool"], "report");
         assert!(outcome["result"].get("_meta").is_none());
@@ -613,7 +628,7 @@ mod tests {
     #[test]
     fn an_mcp_tool_without_pushes_keeps_its_old_outcome() {
         let result = json!({"content":[],"isError":true});
-        let outcome = mcp_outcome(None, &json!({}), "app", "event", "t", result.clone());
+        let (outcome, _) = mcp_outcome(None, &json!({}), "app", "event", "t", result.clone());
         assert_eq!(
             outcome,
             json!({"status":"error","app_id":"app","event_id":"event","event_type":"mcp","mcp_tool":"t","result":result})

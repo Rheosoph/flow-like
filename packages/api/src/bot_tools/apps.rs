@@ -15,7 +15,10 @@ use axum::{
     http::HeaderMap,
     response::Response,
 };
-use flow_like::flow::{copilot::BotRunContext, event::Event};
+use flow_like::flow::{
+    copilot::{AppOrigin, AppOutput, BotRunContext},
+    event::Event,
+};
 use flow_like_storage::contracts::database::DatabaseSelector;
 use flow_like_types::{app_chat::ChatFold, tokio};
 use futures::StreamExt;
@@ -388,8 +391,8 @@ async fn read_events(
     Ok(RunRead::Streamed { timed_out })
 }
 
-/// The run's outcome, with the files and widgets it pushed to the chat.
-async fn read_run(response: Response) -> ToolResult {
+/// The run's outcome, with the files and widgets it pushed to the chat, and those pushes.
+async fn read_run(response: Response) -> Result<(Value, ChatFold), String> {
     let mut run = RunFold::default();
     let mut chat = ChatFold::default();
     let read = read_events(response, |envelope| {
@@ -398,14 +401,15 @@ async fn read_run(response: Response) -> ToolResult {
         Ok(run.finished())
     })
     .await?;
-    Ok(match read {
+    let outcome = match read {
         RunRead::Plain(answer) => plain_outcome(answer),
         RunRead::Streamed { timed_out } => {
             let mut outcome = run.outcome(timed_out);
             chat.describe_pushed(&mut outcome);
             outcome
         }
-    })
+    };
+    Ok((outcome, chat))
 }
 
 impl AppTools {
@@ -713,11 +717,27 @@ impl AppTools {
         )
         .await
         .map_err(failed)?;
-        let mut outcome = read_run(response).await?;
+        let (mut outcome, chat) = read_run(response).await?;
+        self.show_on_reply(app_id, &event, &chat);
         outcome["app_id"] = json!(app_id);
         outcome["event_id"] = json!(event_id);
         outcome["event_type"] = json!(event.event_type);
         Ok(outcome)
+    }
+
+    /// Hands what the app run pushed to the turn's reply, when the turn keeps one.
+    fn show_on_reply(&self, app_id: &str, event: &Event, chat: &ChatFold) {
+        if let Some(reply) = self.bot.host_tools.reply_files() {
+            reply.push_app_output(AppOutput::from_fold(
+                AppOrigin {
+                    app_id: app_id.to_string(),
+                    board_id: event.board_id.clone(),
+                    event_id: event.id.clone(),
+                },
+                event.name.clone(),
+                chat,
+            ));
+        }
     }
 
     async fn database(&self, args: &Value) -> ToolResult {
@@ -923,7 +943,7 @@ mod tests {
     #[tokio::test]
     async fn an_event_run_reports_what_it_pushed_to_the_chat_until_it_completes() {
         let file = json!({ "url": "https://f/r.pdf", "name": "r.pdf", "type": "application/pdf" });
-        let outcome = read_run(streamed(&[
+        let (outcome, chat) = read_run(streamed(&[
             envelope("run_initiated", json!({ "run_id": "run-1" })),
             envelope(
                 "chat_stream_partial",
@@ -942,11 +962,12 @@ mod tests {
         assert_eq!(outcome["result"], json!({ "ok": true }));
         assert_eq!(outcome["attachments"], json!([file]));
         assert_eq!(outcome["pushed_widget_count"], 1);
+        assert_eq!(chat.widget_count(), 1);
     }
 
     #[tokio::test]
     async fn an_event_run_that_pushed_nothing_reports_only_the_run() {
-        let outcome = read_run(streamed(&[
+        let (outcome, _) = read_run(streamed(&[
             envelope("generic_result", json!(1)),
             envelope("completed", json!({ "status": "completed" })),
         ]))

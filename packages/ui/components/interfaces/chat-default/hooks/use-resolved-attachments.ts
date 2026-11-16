@@ -9,6 +9,7 @@ import { conversationOfApp } from "../../../../lib/conversation-files";
 import { parseWorkspaceFileUrl } from "../../../../lib/workspace-file-url";
 import { useBackend, useBackendReady } from "../../../../state/backend-state";
 import type { IInboxState } from "../../../../state/backend-state/inbox-state";
+import type { IStorageState } from "../../../../state/backend-state/storage-state";
 import { mimeTypeForName } from "../../../storage/storage-attach-limits";
 import type { ProcessedAttachment } from "../attachment";
 
@@ -57,6 +58,18 @@ async function conversationFileLink(
 	};
 }
 
+/** A signed link to a stored file: a conversation file through its inbox, any other through storage. */
+export function storedFileLink(
+	target: { appId: string; path: string },
+	storageState: IStorageState,
+	inboxState: IInboxState | undefined,
+): Promise<ResolvedAssetUrl> {
+	const conversationId = conversationOfApp(target.appId);
+	return conversationId
+		? conversationFileLink(inboxState, conversationId, target.path)
+		: resolveAssetUrl(target.appId, target.path, storageState);
+}
+
 /**
  * Signs the `storage://` files of a strip and keeps the links alive. `url` carries the signed link
  * so every consumer works unchanged; `sourceUrl` keeps the stored address as the file's identity.
@@ -92,17 +105,10 @@ export function useResolvedAttachments(
 			sources.map(async (source) => {
 				const target = parseWorkspaceFileUrl(source);
 				if (!target) return [source, FAILED] as const;
-				const conversationId = conversationOfApp(target.appId);
 				try {
 					return [
 						source,
-						conversationId
-							? await conversationFileLink(
-									inboxState,
-									conversationId,
-									target.path,
-								)
-							: await resolveAssetUrl(target.appId, target.path, storageState),
+						await storedFileLink(target, storageState, inboxState),
 					] as const;
 				} catch {
 					return [source, FAILED] as const;

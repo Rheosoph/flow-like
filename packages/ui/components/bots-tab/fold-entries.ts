@@ -1,5 +1,6 @@
 import { compareInboxCursors } from "../../hooks/use-inbox";
 import { isHttpUrl } from "../../lib/inbox-attachment-part";
+import { isInboxUiPart } from "../../lib/inbox-ui-part";
 import { type IChatUsageStat, readUsageStat } from "../../lib/llm/usage";
 import { isRecord } from "../../lib/response-shape";
 import type { IBotNoteRef } from "../../state/backend-state/bot-state";
@@ -10,6 +11,7 @@ import type {
 	IInboxAttachmentPart,
 	IInboxEntry,
 	IInboxFileHandle,
+	IInboxUiPart,
 } from "../../state/backend-state/inbox-state";
 import {
 	type ApprovalDecision,
@@ -130,6 +132,11 @@ function attachmentsOf(entry: IInboxEntry): IInboxAttachmentPart[] {
 	);
 }
 
+function uiPartsOf(entry: IInboxEntry): IInboxUiPart[] {
+	const parts = plainBody(entry)?.parts;
+	return Array.isArray(parts) ? parts.filter(isInboxUiPart) : [];
+}
+
 function errorCodeOf(entry: IInboxEntry): string | undefined {
 	const error = plainBody(entry)?.error;
 	return isRecord(error) && typeof error.code === "string"
@@ -168,6 +175,8 @@ export interface ConversationMessage {
 	mentions: string[];
 	errorCode?: string;
 	attachments?: IInboxAttachmentPart[];
+	/** App widgets on the message, inline or as stored documents. */
+	ui?: IInboxUiPart[];
 	approval?: ConversationApproval;
 	userContext?: UserContextCardData;
 	userContextDerived?: boolean;
@@ -563,6 +572,7 @@ export function foldInboxEntries(
 			const contextRequest = userContextRequestOf(entry);
 			const mailedTo = mailedToOf(entry);
 			const note = noteRefOf(entry);
+			const ui = uiPartsOf(entry);
 			const rawUsage = plainBody(entry)?.usage_stats;
 			const usageStats = Array.isArray(rawUsage)
 				? rawUsage
@@ -591,6 +601,7 @@ export function foldInboxEntries(
 				...(attachmentsOf(entry).length > 0
 					? { attachments: attachmentsOf(entry) }
 					: {}),
+				...(ui.length > 0 ? { ui } : {}),
 				...(replyTo ? { replyTo } : {}),
 				...(note ? { note } : {}),
 				...(mailedTo.length > 0 ? { mailedTo } : {}),

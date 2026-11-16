@@ -3,6 +3,7 @@ import { createCopilotStreamParser } from "../../components/flowpilot/copilot-st
 import {
 	applyStreamEvent,
 	createStreamAccumulator,
+	readReplyWidget,
 	toolEndPlanStepStatus,
 } from "./copilot-stream-steps";
 
@@ -365,5 +366,78 @@ describe("tool activity lifecycle", () => {
 			lane: "workflow",
 			target: "Order processing",
 		});
+	});
+});
+
+describe("reply widget frames", () => {
+	const frame = {
+		origin: { app_id: "app1", board_id: "b1", event_id: "e1" },
+		widget: {
+			instance_id: "w1",
+			widget_id: "chart",
+			surface_id: "s1",
+			component: { widgetInstance: { widgetId: "chart" } },
+			updates: [{ kind: "set" }],
+		},
+	};
+
+	test("a valid frame becomes a widget bound to its app run", () => {
+		expect(readReplyWidget(frame)).toEqual({
+			instance_id: "w1",
+			widget_id: "chart",
+			surface_id: "s1",
+			component: { widgetInstance: { widgetId: "chart" } },
+			updates: [{ kind: "set" }],
+			origin: { appId: "app1", boardId: "b1", eventId: "e1" },
+		});
+		expect(
+			readReplyWidget({
+				origin: { app_id: "app1" },
+				widget: { ...frame.widget, updates: undefined },
+			}),
+		).toEqual({
+			instance_id: "w1",
+			widget_id: "chart",
+			surface_id: "s1",
+			component: { widgetInstance: { widgetId: "chart" } },
+			origin: { appId: "app1" },
+		});
+	});
+
+	test("junk is rejected", () => {
+		expect(readReplyWidget(undefined)).toBeNull();
+		expect(readReplyWidget("widget")).toBeNull();
+		expect(readReplyWidget({ widget: frame.widget })).toBeNull();
+		expect(readReplyWidget({ ...frame, origin: { app_id: "" } })).toBeNull();
+		expect(
+			readReplyWidget({
+				...frame,
+				widget: { ...frame.widget, instance_id: "" },
+			}),
+		).toBeNull();
+		expect(
+			readReplyWidget({ ...frame, widget: { ...frame.widget, component: [] } }),
+		).toBeNull();
+		expect(
+			readReplyWidget({ ...frame, widget: { ...frame.widget, updates: {} } }),
+		).toBeNull();
+	});
+
+	test("the parser emits a frame split across chunks and the accumulator ignores it", () => {
+		const parser = createCopilotStreamParser();
+		const acc = createStreamAccumulator();
+		const raw = `Here it is.<reply_widget>${JSON.stringify(frame)}</reply_widget> Done.`;
+		const events = [
+			...parser.push(raw.slice(0, 16)),
+			...parser.push(raw.slice(16, 60)),
+			...parser.push(raw.slice(60)),
+			...parser.flush(),
+		];
+		for (const event of events) applyStreamEvent(acc, event);
+		const widgets = events.filter((event) => event.type === "reply_widget");
+		expect(widgets).toHaveLength(1);
+		expect(readReplyWidget(widgets[0].data)?.instance_id).toBe("w1");
+		expect(acc.content).toBe("Here it is. Done.");
+		expect(acc.steps.size).toBe(0);
 	});
 });

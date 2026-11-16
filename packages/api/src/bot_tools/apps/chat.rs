@@ -81,7 +81,7 @@ fn forwarded_names(args: &Value) -> Vec<&str> {
     names
 }
 
-async fn read_chat(response: Response) -> ToolResult {
+async fn read_chat(response: Response) -> Result<(Value, ChatFold), String> {
     let mut run = RunFold::default();
     let mut chat = ChatFold::default();
     let read = read_events(response, |envelope| {
@@ -99,18 +99,19 @@ async fn read_chat(response: Response) -> ToolResult {
     })
     .await?;
     let timed_out = match read {
-        RunRead::Plain(answer) => return Ok(plain_outcome(answer)),
+        RunRead::Plain(answer) => return Ok((plain_outcome(answer), chat)),
         RunRead::Streamed { timed_out } => timed_out,
     };
     let (run_id, interactions) = (run.run_id.clone(), chat.interactions);
     let finished = run.finished();
     let mut outcome = run.outcome(timed_out);
     describe(&chat, &mut outcome);
-    Ok(if interactions > 0 && !finished {
+    let outcome = if interactions > 0 && !finished {
         interaction_unavailable(outcome, run_id.as_deref(), interactions)
     } else {
         outcome
-    })
+    };
+    Ok((outcome, chat))
 }
 
 impl AppTools {
@@ -159,7 +160,8 @@ impl AppTools {
         )
         .await
         .map_err(failed)?;
-        let mut outcome = read_chat(response).await?;
+        let (mut outcome, chat) = read_chat(response).await?;
+        self.show_on_reply(app_id, &event, &chat);
         if outcome["run_status"] == INTERACTION_RUN_STATUS
             && let Some(run_id) = outcome["run_id"].as_str().map(str::to_owned)
         {

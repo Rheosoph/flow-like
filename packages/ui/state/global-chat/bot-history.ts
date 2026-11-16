@@ -9,6 +9,7 @@ import { triggerModelText } from "../../components/bots-tab/note-facts";
 import type { IMessage } from "../../components/interfaces/chat-default/chat-db";
 import { storedAttachmentOf } from "../../lib/inbox-attachment-part";
 import { compareInboxCursors } from "../../lib/inbox-cursor";
+import { messageWidgetsOf } from "../../lib/inbox-ui-part";
 import { IRole } from "../../lib/schema/llm/history";
 import type {
 	IConversationSegment,
@@ -248,6 +249,7 @@ function messageOf(
 			const attachment = storedAttachmentOf(part);
 			return attachment ? [attachment] : [];
 		}),
+		...messageWidgetsOf(item.ui),
 		tools: [],
 		actions: [],
 		timestamp: item.time,

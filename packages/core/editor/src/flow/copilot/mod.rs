@@ -72,7 +72,7 @@ pub use behavioral_evaluation::*;
 pub use behavioral_state::*;
 pub use benchmark_cases::workflow_benchmark_cases;
 pub use bot_notes::{NotesHandle, NotesStore, notes_tool_specs};
-pub use bot_reply_files::ReplyFiles;
+pub use bot_reply_files::{AppOrigin, AppOutput, REPLY_OUTPUT_FIELD, ReplyFiles};
 pub use bot_run::{
     BotRunContext, BotToolHost, BotToolset, EffectivePermissions, FLUX_BOT_ID, FLUX_BOT_NAME,
     GENERAL_BOT_DESCRIPTION, GENERAL_BOT_ID, GENERAL_BOT_NAME, ReactionNote, SILENT_REPLY,

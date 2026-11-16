@@ -14,8 +14,6 @@ pub const CHAT_EVENTS_META: &str = "flow-like.com/chat_events";
 pub const MAX_CAPTURED_CHAT_BYTES: usize = 4 * 1024 * 1024;
 /// A fold stops reading pushes beyond this many payload bytes.
 pub const MAX_FOLDED_CHAT_BYTES: usize = 16 * 1024 * 1024;
-/// Told to the model next to the files an app pushed.
-pub const PUSHED_FILES_NOTE: &str = "The app pushed these files for the user. They reach the user only as attachments of your reply: attach the ones the user should get with file_attach (url).";
 
 /// An event an app run sends to the chat it answers.
 pub fn is_chat_event(kind: &str) -> bool {
@@ -125,6 +123,8 @@ pub struct ChatMessage {
     pub attachments: Vec<Value>,
     pub widgets: Vec<Value>,
     choices: Vec<Value>,
+    /// How many [`ChatFold::a2ui`] payloads had arrived when each widget was pushed.
+    pushed_at: Vec<usize>,
 }
 
 /// What a run's events pushed to the chat, folded as they arrive.
@@ -136,6 +136,8 @@ pub struct ChatFold {
     pub done: bool,
     pub interactions: usize,
     pub surfaces: HashSet<String>,
+    /// Every a2ui payload in order, so widgets can take the updates sent after their push.
+    pub a2ui: Vec<Value>,
     /// The pushes passed [`MAX_FOLDED_CHAT_BYTES`]; later ones are ignored.
     pub overflow: bool,
     bytes: usize,
@@ -157,7 +159,12 @@ impl ChatFold {
                     .map(str::to_owned);
             }
             "interaction_request" => self.interactions += 1,
-            "a2ui" => self.track_surface(payload),
+            "a2ui" => {
+                self.track_surface(payload);
+                if self.counts(payload) {
+                    self.a2ui.push(payload.clone());
+                }
+            }
             "chat_stream_partial" | "chat_stream" | "chat_out" | "chat_usage_stat"
                 if !self.done && !self.overflow =>
             {
@@ -201,12 +208,23 @@ impl ChatFold {
         current
     }
 
-    fn fold_chat(&mut self, kind: &str, payload: &Value) {
+    /// Adds the payload to the folded size; false once the fold is over its limit.
+    fn counts(&mut self, payload: &Value) -> bool {
+        if self.overflow {
+            return false;
+        }
         self.bytes = self.bytes.saturating_add(payload.to_string().len());
         if self.bytes > MAX_FOLDED_CHAT_BYTES {
             self.overflow = true;
+        }
+        !self.overflow
+    }
+
+    fn fold_chat(&mut self, kind: &str, payload: &Value) {
+        if !self.counts(payload) {
             return;
         }
+        let pushed_at = self.a2ui.len();
         let message_id = payload["message_id"].as_str().filter(|id| !id.is_empty());
         let current = self.current(message_id);
         if kind == "chat_stream_partial" {
@@ -255,6 +273,7 @@ impl ChatFold {
                     .any(|known| known["instance_id"] == *id)
             {
                 current.widgets.push(widget.clone());
+                current.pushed_at.push(pushed_at);
             }
         }
         if kind == "chat_out" {
@@ -284,6 +303,16 @@ impl ChatFold {
             .collect()
     }
 
+    /// Every pushed widget with the number of a2ui payloads that had arrived before its push.
+    pub fn widgets(&self) -> impl Iterator<Item = (&Value, usize)> {
+        self.messages.iter().flat_map(|message| {
+            message
+                .widgets
+                .iter()
+                .zip(message.pushed_at.iter().copied())
+        })
+    }
+
     pub fn widget_count(&self) -> usize {
         self.messages
             .iter()
@@ -296,7 +325,6 @@ impl ChatFold {
         let attachments = self.attachments();
         if !attachments.is_empty() {
             outcome["attachments"] = json!(attachments);
-            outcome["attachments_note"] = json!(PUSHED_FILES_NOTE);
         }
         let widgets = self.widget_count();
         if widgets > 0 {
@@ -538,7 +566,6 @@ mod tests {
             outcome["attachments"],
             json!([{ "url": "https://f/r.pdf", "name": "r.pdf", "type": "application/pdf" }])
         );
-        assert_eq!(outcome["attachments_note"], PUSHED_FILES_NOTE);
         assert_eq!(outcome["pushed_widget_count"], 2);
         assert!(outcome.get("response").is_none());
 

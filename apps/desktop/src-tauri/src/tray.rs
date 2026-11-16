@@ -905,7 +905,7 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
         };
         match close_action(keep, hosted, reachable_when_hidden(&app)) {
             CloseAction::Hide => {
-                if let Err(error) = window.hide() {
+                if let Err(error) = hide_window(&window).await {
                     tracing::warn!(%error, "Keep-alive: hiding the main window failed; closing it");
                     let _ = window.destroy();
                     return;
@@ -917,6 +917,16 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
             }
         }
     });
+}
+
+#[cfg(target_os = "macos")]
+async fn hide_window(window: &tauri::Window) -> tauri::Result<()> {
+    crate::fullscreen_hide::hide(window).await
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn hide_window(window: &tauri::Window) -> tauri::Result<()> {
+    window.hide()
 }
 
 async fn announce_keep_alive(app_handle: &AppHandle) {

@@ -2,7 +2,8 @@
 
 import { useTranslation } from "@flow-like/locales";
 import Maximize2 from "lucide-react/dist/esm/icons/maximize-2.js";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { readOnlyWidget } from "../../../lib/inbox-ui-part";
 import { isRuntimeNamespace } from "../../../lib/service-runtime/session-scope";
 import { cn } from "../../../lib/utils";
 import {
@@ -11,6 +12,7 @@ import {
 	unregisterWidgetSnapshotSource,
 	widgetSnapshotAttribute,
 } from "../../../lib/widget-snapshot";
+import type { IInboxFileHandle } from "../../../state/backend-state/inbox-state";
 import { A2UIRenderer } from "../../a2ui/A2UIRenderer";
 import {
 	applyA2UIMessage,
@@ -23,6 +25,7 @@ import type {
 } from "../../a2ui/types";
 import { Dialog, DialogContent, DialogTitle } from "../../ui/dialog";
 import type { IChatWidget } from "./chat-db";
+import { useWidgetDocuments } from "./hooks/use-widget-documents";
 
 function buildSurface(widget: IChatWidget): Surface {
 	const componentId = widget.instance_id;
@@ -325,4 +328,21 @@ export const MessageWidgets = memo(function MessageWidgets({
 			))}
 		</div>
 	);
+});
+
+/** Widgets stored as documents, shown after the message's own widgets as each one loads. */
+export const MessageWidgetDocuments = memo(function MessageWidgetDocuments({
+	documents,
+	readOnly = false,
+	...props
+}: Omit<MessageWidgetsProps, "widgets"> & {
+	documents: readonly IInboxFileHandle[];
+	readOnly?: boolean;
+}) {
+	const loaded = useWidgetDocuments(documents);
+	const widgets = useMemo(
+		() => (readOnly ? loaded.map(readOnlyWidget) : loaded),
+		[loaded, readOnly],
+	);
+	return <MessageWidgets widgets={widgets} {...props} />;
 });

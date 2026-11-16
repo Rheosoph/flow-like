@@ -22,8 +22,8 @@ const HOST: &str = "device:test";
 
 mod approval_batch;
 mod checkpoint_encryption;
-mod hub_app_tools;
 mod events;
+mod hub_app_tools;
 mod live_reply;
 mod no_model;
 mod participation;
@@ -51,6 +51,7 @@ struct DeviceHub {
     checkpoint_calls: Mutex<Vec<(String, String, String, u32)>>,
     app_tool_calls: Mutex<Vec<(String, String, String, Value)>>,
     app_tool_failure: bool,
+    app_tool_reply_output: Option<Value>,
     checkpoint_lease_lost: bool,
     release_refused: bool,
     release_spent: bool,
@@ -382,7 +383,11 @@ impl TurnHub for DeviceHub {
             tool.to_owned(),
             args,
         ));
-        Ok(json!({ "status": "ok", "tool": tool }).to_string())
+        let mut result = json!({ "status": "ok", "tool": tool });
+        if let Some(output) = &self.app_tool_reply_output {
+            result["reply_output"] = output.clone();
+        }
+        Ok(result.to_string())
     }
 
     async fn cancel_turn(&self, _: &str, _: &str) -> Result<(), HubFailure> {
@@ -516,7 +521,8 @@ fn an_answered_local_call_transcript_does_not_start_another_turn() {
             "bot",
             &[answer, line],
             at,
-            false, false,
+            false,
+            false,
         )
         .is_none()
     );
@@ -1052,7 +1058,8 @@ fn a_trigger_addresses_a_bot_in_a_group() {
         "bot",
         &[trigger.clone()],
         trigger.created_at,
-        true, false,
+        true,
+        false,
     );
     assert!(found.is_some_and(|waiting| waiting.addressed));
 }

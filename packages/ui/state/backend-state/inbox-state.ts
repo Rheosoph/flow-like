@@ -71,6 +71,33 @@ export interface IInboxAttachmentPart {
 	sealed?: IInboxSealedFile;
 }
 
+/** A widget an app run pushed while the bot answered, with the run it came from. */
+export interface IInboxAppWidgetDocument {
+	type: "app_widget";
+	origin: { app_id: string; board_id?: string; event_id?: string };
+	widget: {
+		instance_id: string;
+		widget_id: string;
+		surface_id: string;
+		component: Record<string, unknown>;
+		updates?: unknown[];
+	};
+}
+
+export interface IInboxUiPart {
+	kind: "ui";
+	/** `ui1`, `ui2` ... numbered in order within the message. */
+	id: string;
+	/** What the block shows, in one line. */
+	summary?: string;
+	/** The document, when it fits the message. */
+	a2ui?: IInboxAppWidgetDocument;
+	/** A JSON file holding the document, when it does not; a conversation file in a room. */
+	handle?: IInboxFileHandle;
+}
+
+export type IInboxMessagePart = IInboxAttachmentPart | IInboxUiPart;
+
 export interface IInboxSealedFile {
 	/** `xchacha20poly1305-stream-64k-v1`. */
 	alg: string;
@@ -105,8 +132,8 @@ export interface IInboxMessageBody {
 	text: string;
 	usage_stats?: IChatUsageStat[];
 	reply_to?: string;
-	/** Attachments, numbered `a1`, `a2` ... in order. */
-	parts?: IInboxAttachmentPart[];
+	/** Attachments (`a1`, `a2` ...) and UI blocks (`ui1`, `ui2` ...), in order. */
+	parts?: IInboxMessagePart[];
 	/** People and bots the message names; a mentioned bot in the room wakes. */
 	mentions?: string[];
 	/** Set by a chat that answers this message itself; hosts leave it alone meanwhile. */

@@ -9,11 +9,16 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use flow_like_bot_tools as tools;
+use flow_like_types::app_chat::ChatFold;
 use flow_like_types::bot_message::{
-    MAX_FILE_NAME_CHARS, WorkspaceHandle, is_file_link, is_mime, is_workspace_path,
+    MAX_FILE_NAME_CHARS, MAX_SUMMARY_CHARS, WorkspaceHandle, is_file_link, is_mime,
+    is_workspace_path,
 };
-use flow_like_types::bot_reply_files::{MAX_REPLY_FILES, ReplyFile, attach_reply_files};
-use serde::Deserialize;
+use flow_like_types::bot_reply_files::{
+    MAX_INLINE_WIDGET_BYTES, MAX_REPLY_FILES, MAX_REPLY_WIDGETS, ReplyFile, ReplyWidget,
+    app_widget_doc, attach_reply_files, attach_reply_widgets,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::platform::{Clearance, PlatformToolBridge};
@@ -24,12 +29,69 @@ use super::turn_label::TurnLabel;
 pub const FILE_ATTACH_TOOL: &str = "file_attach";
 /// The stream frame that shows an attached file on the reply while the turn runs.
 pub const REPLY_ATTACHMENT_FRAME: &str = "reply_attachment";
+/// The stream frame that shows an app widget on the reply while the turn runs.
+pub const REPLY_WIDGET_FRAME: &str = "reply_widget";
+/// The query flag and result field through which the hub hands a device turn the [`AppOutput`]
+/// of an app tool it ran for the device.
+pub const REPLY_OUTPUT_FIELD: &str = "reply_output";
 
 const TOOL_TIMEOUT_SECS: u64 = 180;
+/// The tools whose app runs push [`AppOutput`]; only their results carry it to the reply, so a
+/// call that runs alongside never takes another call's output.
+const APP_OUTPUT_TOOLS: [&str; 2] = ["call_app_event", "call_app_chat"];
+/// A widget document beyond this is shown while the turn runs but never stored.
+const MAX_WIDGET_DOC_BYTES: usize = 2 * 1024 * 1024;
+const WIDGET_DIR: &str = "chat-widgets";
+const ON_REPLY_NOTE: &str = "These are on your reply already, shown to the person you answer. Mention them in your text; don't attach them again or paste their links.";
 
-/// The files of one turn's reply, in the order they were attached.
+/// The app event whose board pushed a widget, and so runs the widget's actions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppOrigin {
+    pub app_id: String,
+    pub board_id: String,
+    pub event_id: String,
+}
+
+/// What one app call pushed to the chat: its files and its finished widgets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppOutput {
+    pub origin: AppOrigin,
+    /// Names the source in the widgets' summaries, such as the event's name.
+    pub source: String,
+    #[serde(default)]
+    pub files: Vec<Value>,
+    #[serde(default)]
+    pub widgets: Vec<Value>,
+}
+
+impl AppOutput {
+    /// The files and widgets a run pushed, the widgets with the updates sent after their push.
+    pub fn from_fold(origin: AppOrigin, source: String, fold: &ChatFold) -> Self {
+        Self {
+            origin,
+            source,
+            files: fold.attachments(),
+            widgets: crate::a2ui::chat_widget::finished_widgets(fold),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty() && self.widgets.is_empty()
+    }
+}
+
+#[derive(Default)]
+struct Reply {
+    files: Vec<ReplyFile>,
+    widgets: Vec<ReplyWidget>,
+    pending: Vec<AppOutput>,
+}
+
+/// The files and app widgets of one turn's reply, in the order they joined it. App tools push
+/// what an app showed with [`ReplyFiles::push_app_output`]; [`ReplyFilesBridge`] puts it on the
+/// reply when the call returns.
 #[derive(Clone, Default)]
-pub struct ReplyFiles(Arc<Mutex<Vec<ReplyFile>>>);
+pub struct ReplyFiles(Arc<Mutex<Reply>>);
 
 impl ReplyFiles {
     pub fn new() -> Self {
@@ -37,15 +99,36 @@ impl ReplyFiles {
     }
 
     pub fn files(&self) -> Vec<ReplyFile> {
-        self.lock().clone()
+        self.lock().files.clone()
     }
 
-    /// Puts the turn's files on its reply `body` as attachment parts.
+    pub fn widgets(&self) -> Vec<ReplyWidget> {
+        self.lock().widgets.clone()
+    }
+
+    /// Puts the turn's files and widgets on its reply `body` as attachment and ui parts.
     pub fn attach(&self, body: &mut Value) {
-        attach_reply_files(body, &self.files());
+        let (files, widgets) = {
+            let reply = self.lock();
+            (reply.files.clone(), reply.widgets.clone())
+        };
+        attach_reply_files(body, &files);
+        attach_reply_widgets(body, &widgets);
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<ReplyFile>> {
+    /// Queues what an app call showed, for the reply once the call returns.
+    pub fn push_app_output(&self, output: AppOutput) {
+        if !output.is_empty() {
+            self.lock().pending.push(output);
+        }
+    }
+
+    /// The app output queued since the last take.
+    pub fn take_app_output(&self) -> Vec<AppOutput> {
+        std::mem::take(&mut self.lock().pending)
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Reply> {
         self.0
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -53,7 +136,7 @@ impl ReplyFiles {
 
     /// Adds `file` unless the reply has it already; `Err` when the reply is full.
     fn add(&self, file: ReplyFile) -> Result<usize, String> {
-        let mut files = self.lock();
+        let files = &mut self.lock().files;
         if files.iter().any(|known| known.same_file(&file)) {
             return Ok(files.len());
         }
@@ -65,12 +148,34 @@ impl ReplyFiles {
         files.push(file);
         Ok(files.len())
     }
+
+    /// Adds `widget`, replacing an earlier push of the same instance; `Err` when the reply is full.
+    fn add_widget(&self, widget: ReplyWidget) -> Result<(), String> {
+        let widgets = &mut self.lock().widgets;
+        let instance = &widget.doc["widget"]["instance_id"];
+        if let Some(known) = widgets
+            .iter_mut()
+            .find(|known| !instance.is_null() && known.doc["widget"]["instance_id"] == *instance)
+        {
+            *known = widget;
+            return Ok(());
+        }
+        if widgets.len() >= MAX_REPLY_WIDGETS {
+            return Err(format!(
+                "this reply already carries {MAX_REPLY_WIDGETS} widgets, the most one reply can hold"
+            ));
+        }
+        widgets.push(widget);
+        Ok(())
+    }
 }
 
 impl fmt::Debug for ReplyFiles {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let reply = self.lock();
         f.debug_struct("ReplyFiles")
-            .field("files", &self.lock().len())
+            .field("files", &reply.files.len())
+            .field("widgets", &reply.widgets.len())
             .finish()
     }
 }
@@ -216,6 +321,150 @@ impl ReplyFilesBridge {
         Ok(ReplyFile::stored(name, handle))
     }
 
+    /// Puts what app calls pushed on the reply and says what joined it.
+    async fn show(&self, outputs: Vec<AppOutput>) -> Value {
+        if let Some(refused) = self
+            .label
+            .refusal(FILE_ATTACH_TOOL, &json!({ "url": "app output" }))
+        {
+            let reason = serde_json::from_str::<Value>(&refused)
+                .ok()
+                .and_then(|refused| refused["message"].as_str().map(str::to_string))
+                .unwrap_or_default();
+            return json!({ "withheld": reason });
+        }
+        let mut attached = Vec::new();
+        let mut widgets = 0usize;
+        let mut live_only = 0usize;
+        let mut left_out = Vec::new();
+        for output in outputs {
+            for file in &output.files {
+                match self.attach_pushed_file(file) {
+                    Ok(name) => attached.push(name),
+                    Err(reason) => left_out.push(reason),
+                }
+            }
+            let origin = json!(output.origin);
+            for widget in &output.widgets {
+                match self
+                    .attach_pushed_widget(&origin, &output.source, widget)
+                    .await
+                {
+                    Ok(true) => widgets += 1,
+                    Ok(false) => live_only += 1,
+                    Err(reason) => left_out.push(reason),
+                }
+            }
+        }
+        let mut note = json!({ "note": ON_REPLY_NOTE });
+        if !attached.is_empty() {
+            note["attached_files"] = json!(attached);
+        }
+        if widgets > 0 {
+            note["widgets"] = json!(widgets);
+        }
+        if live_only > 0 {
+            note["widgets_shown_only_now"] = json!(live_only);
+            note["widgets_shown_only_now_reason"] = json!(
+                "too large to keep on the stored reply; the person sees it only while this reply is open"
+            );
+        }
+        if !left_out.is_empty() {
+            note["left_out"] = json!(left_out);
+        }
+        note
+    }
+
+    fn attach_pushed_file(&self, file: &Value) -> Result<String, String> {
+        let url = file
+            .as_str()
+            .or_else(|| file["url"].as_str())
+            .unwrap_or_default()
+            .trim();
+        let name = file["name"]
+            .as_str()
+            .map(str::trim)
+            .filter(|name| valid_name(name))
+            .map(str::to_string);
+        let mime = file["type"]
+            .as_str()
+            .map(|mime| mime.trim().to_ascii_lowercase())
+            .filter(|mime| is_mime(mime));
+        let unusable = || {
+            format!(
+                "a file whose link is not an http(s) address ({})",
+                shown_link(url)
+            )
+        };
+        let file = linked(url, name, mime).map_err(|_| unusable())?;
+        self.files.add(file.clone())?;
+        if let Some(frames) = &self.frames {
+            frames(stream_frame(REPLY_ATTACHMENT_FRAME, &frame_of(&file)));
+        }
+        Ok(file.name)
+    }
+
+    /// `Ok(true)` when the widget is kept on the stored reply, `Ok(false)` when it is only shown.
+    async fn attach_pushed_widget(
+        &self,
+        origin: &Value,
+        source: &str,
+        widget: &Value,
+    ) -> Result<bool, String> {
+        let doc = app_widget_doc(origin, widget);
+        let size = doc.to_string().len();
+        if size > MAX_WIDGET_DOC_BYTES {
+            return Err(format!(
+                "a widget of {size} bytes, more than a reply can show ({MAX_WIDGET_DOC_BYTES})"
+            ));
+        }
+        let handle = if size > MAX_INLINE_WIDGET_BYTES {
+            self.saved_widget(&doc).await
+        } else {
+            None
+        };
+        let kept = size <= MAX_INLINE_WIDGET_BYTES || handle.is_some();
+        let summary: String = format!("Widget from {source}")
+            .chars()
+            .take(MAX_SUMMARY_CHARS)
+            .collect();
+        self.files.add_widget(ReplyWidget {
+            summary,
+            doc,
+            handle,
+        })?;
+        if let Some(frames) = &self.frames {
+            frames(stream_frame(
+                REPLY_WIDGET_FRAME,
+                &json!({ "origin": origin, "widget": widget }),
+            ));
+        }
+        Ok(kept)
+    }
+
+    /// The widget document as a file of the bot's workspace; `None` without one.
+    async fn saved_widget(&self, doc: &Value) -> Option<WorkspaceHandle> {
+        self.workspace.as_ref()?;
+        let path = format!("{WIDGET_DIR}/{}.json", flow_like_types::create_id());
+        let output = self
+            .inner
+            .call(
+                tools::files::FILE_WRITE,
+                json!({ "path": path, "content": doc.to_string(), "mime": "application/json" }),
+            )
+            .await;
+        let result: Value = serde_json::from_str(&output).ok()?;
+        if result.get("status").and_then(Value::as_str) != Some("ok") {
+            tracing::warn!(
+                path,
+                error = %result,
+                "a reply widget could not be stored in the bot's workspace"
+            );
+            return None;
+        }
+        serde_json::from_value(result.get("handle")?.clone()).ok()
+    }
+
     async fn saved_copy(&self, file: Value) -> Result<WorkspaceHandle, String> {
         if self.workspace.is_none() {
             return Err(refusal(
@@ -259,7 +508,17 @@ impl PlatformToolBridge for ReplyFilesBridge {
         if tool_name == FILE_ATTACH_TOOL {
             return self.attach(arguments).await;
         }
-        self.inner.call(tool_name, arguments).await
+        let output = self.inner.call(tool_name, arguments).await;
+        if !APP_OUTPUT_TOOLS.contains(&tool_name) {
+            return output;
+        }
+        let shown = self.files.take_app_output();
+        if shown.is_empty() {
+            return output;
+        }
+        self.label.observe(&output);
+        let note = self.show(shown).await;
+        with_reply_note(output, note)
     }
 
     async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
@@ -299,6 +558,17 @@ fn refusal(code: &str, message: impl Into<String>) -> String {
         "message": message.into(),
     })
     .to_string()
+}
+
+/// Adds `note` to an object result as `reply`; any other result stays as it is.
+fn with_reply_note(output: String, note: Value) -> String {
+    match serde_json::from_str::<Value>(&output) {
+        Ok(Value::Object(mut result)) => {
+            result.insert("reply".to_string(), note);
+            Value::Object(result).to_string()
+        }
+        _ => output,
+    }
 }
 
 fn valid_name(name: &str) -> bool {
@@ -606,5 +876,182 @@ mod tests {
             .await;
         assert_eq!(status(&output).0, "ok");
         assert_eq!(files.files().len(), 1);
+    }
+
+    /// An app tool that, like the hosts' app tools, pushes what the app run showed.
+    struct AppHost {
+        files: ReplyFiles,
+        output: AppOutput,
+        writes: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl PlatformToolBridge for AppHost {
+        async fn call(&self, tool_name: &str, arguments: Value) -> String {
+            match tool_name {
+                "call_app_event" => {
+                    self.files.push_app_output(self.output.clone());
+                    json!({ "status": "ok", "result": "done" }).to_string()
+                }
+                "file_write" => {
+                    let path = arguments["path"].as_str().unwrap().to_string();
+                    self.writes.lock().unwrap().push(path.clone());
+                    json!({ "status": "ok", "handle": WorkspaceHandle {
+                        mime: "application/json".into(),
+                        ..handle("ws1", &path)
+                    } })
+                    .to_string()
+                }
+                _ => json!({ "status": "ok" }).to_string(),
+            }
+        }
+    }
+
+    fn app_output(widget_bytes: &[usize]) -> AppOutput {
+        AppOutput {
+            origin: AppOrigin {
+                app_id: "orders".into(),
+                board_id: "board".into(),
+                event_id: "event".into(),
+            },
+            source: "Order report".into(),
+            files: vec![
+                json!({ "url": "https://f.test/r.pdf?sig=1", "name": "Report.pdf", "type": "application/pdf" }),
+                json!("storage://apps/orders/app/raw.csv"),
+            ],
+            widgets: widget_bytes
+                .iter()
+                .enumerate()
+                .map(|(index, bytes)| {
+                    json!({ "instance_id": format!("w{index}"), "component": { "blob": "x".repeat(*bytes) } })
+                })
+                .collect(),
+        }
+    }
+
+    fn app_harness(
+        workspace: Option<&str>,
+        label: Arc<TurnLabel>,
+        output: AppOutput,
+    ) -> (
+        ReplyFilesBridge,
+        ReplyFiles,
+        Arc<AppHost>,
+        Arc<Mutex<Vec<String>>>,
+    ) {
+        let files = ReplyFiles::new();
+        let host = Arc::new(AppHost {
+            files: files.clone(),
+            output,
+            writes: Mutex::new(Vec::new()),
+        });
+        let frames = Arc::new(Mutex::new(Vec::new()));
+        let sink = frames.clone();
+        let bridge = ReplyFilesBridge::new(
+            files.clone(),
+            workspace.map(str::to_string),
+            label,
+            Some(Arc::new(move |frame: String| {
+                sink.lock().unwrap().push(frame)
+            })),
+            host.clone(),
+        );
+        (bridge, files, host, frames)
+    }
+
+    #[tokio::test]
+    async fn what_an_app_call_pushed_joins_the_reply_and_the_result_says_so() {
+        let (bridge, files, host, frames) = app_harness(
+            Some("ws1"),
+            label(None),
+            app_output(&[100, MAX_INLINE_WIDGET_BYTES + 10]),
+        );
+        let output = bridge.call("call_app_event", json!({})).await;
+        let result: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(result["result"], "done");
+        assert_eq!(result["reply"]["attached_files"], json!(["Report.pdf"]));
+        assert_eq!(result["reply"]["widgets"], 2);
+        assert_eq!(result["reply"]["left_out"].as_array().unwrap().len(), 1);
+        assert_eq!(host.writes.lock().unwrap().len(), 1);
+
+        let frames = frames.lock().unwrap().clone();
+        assert_eq!(frames.len(), 3);
+        assert!(frames[0].starts_with("<reply_attachment>"));
+        assert!(frames[1].starts_with("<reply_widget>"));
+        assert!(frames[1].contains("\"board_id\":\"board\""));
+
+        let mut body = json!({ "text": "Here is the report" });
+        files.attach(&mut body);
+        let parsed = MessageBody::parse(&body).expect("valid body");
+        let kinds: Vec<_> = parsed
+            .parts
+            .iter()
+            .map(|part| part.id().to_string())
+            .collect();
+        assert_eq!(kinds, ["a1", "ui1", "ui2"]);
+        assert_eq!(body["parts"][1]["a2ui"]["origin"]["app_id"], "orders");
+        assert!(
+            body["parts"][2]["handle"]["path"]
+                .as_str()
+                .unwrap()
+                .starts_with("chat-widgets/")
+        );
+
+        let again = bridge.call("other_tool", json!({})).await;
+        assert!(
+            serde_json::from_str::<Value>(&again)
+                .unwrap()
+                .get("reply")
+                .is_none()
+        );
+
+        files.push_app_output(app_output(&[10]));
+        let unrelated = bridge.call("list_apps", json!({})).await;
+        let unrelated: Value = serde_json::from_str(&unrelated).unwrap();
+        assert!(unrelated.get("reply").is_none());
+        assert_eq!(files.take_app_output().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_large_widget_without_a_workspace_is_shown_but_not_kept() {
+        let (bridge, files, host, _) = app_harness(
+            None,
+            label(None),
+            app_output(&[MAX_INLINE_WIDGET_BYTES + 10]),
+        );
+        let output = bridge.call("call_app_event", json!({})).await;
+        let result: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(result["reply"]["widgets_shown_only_now"], 1);
+        assert!(host.writes.lock().unwrap().is_empty());
+        let mut body = json!({ "text": "x" });
+        files.attach(&mut body);
+        assert_eq!(
+            body["parts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|part| part["kind"] == "ui")
+                .count(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn a_turn_above_the_bots_level_keeps_app_output_off_the_reply() {
+        let (bridge, files, _, frames) = app_harness(
+            Some("ws1"),
+            label(Some(DataClassification::Confidential)),
+            app_output(&[100]),
+        );
+        let output = bridge.call("call_app_event", json!({})).await;
+        let result: Value = serde_json::from_str(&output).unwrap();
+        assert!(
+            result["reply"]["withheld"]
+                .as_str()
+                .unwrap()
+                .contains("confidential")
+        );
+        assert!(files.files().is_empty() && files.widgets().is_empty());
+        assert!(frames.lock().unwrap().is_empty());
     }
 }

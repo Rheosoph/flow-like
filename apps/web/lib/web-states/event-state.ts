@@ -775,10 +775,11 @@ export class WebEventState implements IEventState {
 		method: string,
 		params?: Record<string, unknown>,
 		beforeDispatch?: () => void,
+		chatEvents?: boolean,
 	): Promise<Record<string, unknown>> {
 		beforeDispatch?.();
 		return apiPost<Record<string, unknown>>(
-			`apps/${appId}/events/${eventId}/mcp-operation`,
+			`apps/${appId}/events/${eventId}/mcp-operation${chatEvents ? "?chat_events=true" : ""}`,
 			{ method, params: params ?? {}, profile_id: this.backend.profile?.id },
 			this.backend.auth,
 		);

@@ -6,7 +6,7 @@
 use crate::{gate::ApprovalGate, hub::TurnHub};
 use async_trait::async_trait;
 use flow_like::flow::copilot::{
-    BotToolHost, HostTools, find_bot_tool_spec,
+    AppOutput, BotToolHost, HostTools, REPLY_OUTPUT_FIELD, find_bot_tool_spec,
     platform::{Clearance, PlatformToolBridge},
     tool_outcome_output,
     tool_spec::{MEMORY_STORE_TOOL, ToolEffect, resolve_tool_approval},
@@ -88,13 +88,29 @@ impl ToolEnvBridge {
             .app_tool(&apps.bot_id, &apps.turn_id, tool, args)
             .await
         {
-            Ok(output) => output,
+            Ok(output) => self.kept_reply_output(output),
             Err(failure) => refusal(
                 tool,
                 "bot_tool_hub_failed",
                 &format!("The hub could not run '{tool}' for this turn: {failure}"),
             ),
         }
+    }
+
+    /// Hands what the app run showed to the turn's reply and keeps it out of the model's result.
+    fn kept_reply_output(&self, output: String) -> String {
+        let Ok(Value::Object(mut result)) = serde_json::from_str::<Value>(&output) else {
+            return output;
+        };
+        let Some(shown) = result.remove(REPLY_OUTPUT_FIELD) else {
+            return output;
+        };
+        if let Some(reply) = self.host_tools.reply_files() {
+            for item in serde_json::from_value::<Vec<AppOutput>>(shown).unwrap_or_default() {
+                reply.push_app_output(item);
+            }
+        }
+        Value::Object(result).to_string()
     }
 
     async fn run_allowed(&self, tool: &str, args: Value) -> String {

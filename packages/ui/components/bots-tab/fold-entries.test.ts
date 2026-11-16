@@ -1092,3 +1092,64 @@ describe("attachment parts", () => {
 		expect(folded.attachments?.map((part) => part.id)).toEqual(["a1", "a2"]);
 	});
 });
+
+describe("ui parts", () => {
+	test("keeps app widgets inline or stored and drops malformed ones", () => {
+		const a2ui = {
+			type: "app_widget",
+			origin: { app_id: "app1", board_id: "b1", event_id: "e1" },
+			widget: {
+				instance_id: "w1",
+				widget_id: "chart",
+				surface_id: "s1",
+				component: { widgetInstance: {} },
+				updates: [],
+			},
+		};
+		const handle = {
+			app_id: "conversation_c1",
+			path: "ui/w2.json",
+			bytes: 9,
+			sha256: "s",
+			mime: "application/json",
+		};
+		const [folded] = messages(
+			foldInboxEntries(
+				[
+					entry(
+						"message",
+						"bot",
+						{
+							text: "here",
+							parts: [
+								{ kind: "attachment", id: "a1", name: "x.pdf", handle },
+								{ kind: "ui", id: "ui1", summary: "Chart", a2ui },
+								{ kind: "ui", id: "ui2", handle },
+								{ kind: "ui", id: "ui3", a2ui: { ...a2ui, type: "page" } },
+								{
+									kind: "ui",
+									id: "ui4",
+									a2ui: { ...a2ui, widget: { instance_id: "w4" } },
+								},
+								{ kind: "ui", id: "ui5", handle: { app_id: "app1" } },
+								{ kind: "ui", id: "ui6" },
+								{ kind: "ui", a2ui },
+							],
+						},
+						0,
+					),
+				],
+				"me",
+			),
+		);
+		expect(folded.ui?.map((part) => part.id)).toEqual(["ui1", "ui2"]);
+		expect(folded.attachments?.map((part) => part.id)).toEqual(["a1"]);
+	});
+
+	test("a message without ui parts carries none", () => {
+		const [folded] = messages(
+			foldInboxEntries([entry("message", "bot", { text: "hi" }, 0)], "me"),
+		);
+		expect(folded.ui).toBeUndefined();
+	});
+});
