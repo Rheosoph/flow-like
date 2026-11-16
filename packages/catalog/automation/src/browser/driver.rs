@@ -72,6 +72,16 @@ impl PageContext {
         self.run_script(body, args, ScriptOptions::PROBE).await
     }
 
+    /// [`PageContext::probe`] in the engine's isolated world: the page's own scripts can neither
+    /// see the call nor change what the DOM methods return to it.
+    pub async fn inspect(
+        &self,
+        body: &str,
+        args: Vec<ScriptArg>,
+    ) -> flow_like_types::Result<ScriptValue> {
+        self.run_script(body, args, ScriptOptions::INTERNAL).await
+    }
+
     /// An element argument pins the script to the frame of that element; without one the
     /// script runs in the replayed current frame.
     pub(crate) fn script_frame(&self, args: &[ScriptArg]) -> flow_like_types::Result<Frame> {
@@ -216,6 +226,20 @@ pub(crate) async fn key_chord(
     let modifiers = parse_modifiers(modifiers)?;
     let key = browser_key(key)?;
     ctx.page.key_chord(key, modifiers).await?;
+    Ok(())
+}
+
+/// [`key_chord`] with each key event after the pause `pacing` gives it.
+#[cfg(feature = "execute")]
+pub(crate) async fn key_chord_paced(
+    ctx: &PageContext,
+    key: &str,
+    modifiers: &[String],
+    pacing: &dyn flow_like_browser::input::paced::Pacing,
+) -> flow_like_types::Result<()> {
+    let modifiers = parse_modifiers(modifiers)?;
+    let key = browser_key(key)?;
+    ctx.page.key_chord_paced(key, modifiers, pacing).await?;
     Ok(())
 }
 

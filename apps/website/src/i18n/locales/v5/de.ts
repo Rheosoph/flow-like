@@ -265,14 +265,9 @@ export default {
 
 	"v5.bots.eyebrow": "BOTS + FLOWPILOT",
 	"v5.bots.cta": "Stell deine Crew zusammen",
-	"v5.bots.demo.label": "BOT-SPIELPLATZ / ANIMIERTE BEISPIELE",
 	"v5.bots.demo.title": "Ein kleines Team mit großen Aufgaben.",
-	"v5.bots.demo.hint":
-		"Wähle eine Aufgabe und schau der Crew bei der Arbeit zu.",
 	"v5.bots.demo.pause": "Bots pausieren",
 	"v5.bots.demo.resume": "Bots animieren",
-	"v5.bots.demo.working": "Bei der Arbeit",
-	"v5.bots.demo.done": "Gut gemacht!",
 	"v5.bots.demo.result": "DAS KANNST DU UMSETZEN",
 	"v5.bots.role.scout": "Recherche",
 	"v5.bots.role.byte": "Daten",

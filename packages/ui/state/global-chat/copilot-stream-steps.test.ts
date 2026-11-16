@@ -1,9 +1,33 @@
 import { describe, expect, test } from "bun:test";
+import { createCopilotStreamParser } from "../../components/flowpilot/copilot-stream-parser";
 import {
 	applyStreamEvent,
 	createStreamAccumulator,
 	toolEndPlanStepStatus,
 } from "./copilot-stream-steps";
+
+test("split native model identity frames remain metadata and never enter assistant prose", () => {
+	const parser = createCopilotStreamParser();
+	const acc = createStreamAccumulator();
+	const identity = {
+		bit_id: "claude-bit",
+		provider_name: "custom:claude-code",
+		configured_model_id: "claude-sonnet",
+		model_id: "claude-sonnet",
+	};
+	const events = [
+		...parser.push("The board is ready.<model_res"),
+		...parser.push(`olved>${JSON.stringify(identity)}</model_`),
+		...parser.push("resolved> Review the changes."),
+		...parser.flush(),
+	];
+	for (const event of events) applyStreamEvent(acc, event);
+	expect(events.find((event) => event.type === "model_resolved")?.data).toEqual(
+		identity,
+	);
+	expect(acc.content).toBe("The board is ready. Review the changes.");
+	expect(acc.steps.size).toBe(0);
+});
 
 test("cumulative usage snapshots replace the previous total for the same stream step", () => {
 	const acc = createStreamAccumulator();

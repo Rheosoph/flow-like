@@ -690,6 +690,7 @@ export async function driveGlobalChatStream({
 			schema: RUN_CONTEXT_SCHEMA,
 			provider: "bits",
 			effective_model_id: modelId,
+			backend_model_id: modelId,
 		};
 		syncMessage();
 	};

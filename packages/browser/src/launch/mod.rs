@@ -45,6 +45,18 @@ pub struct ProxyConfig {
     pub bypass: Vec<String>,
 }
 
+/// Whether the browser tells the pages it shows that it is automated.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AutomationNotice {
+    /// chromedriver's flags: `navigator.webdriver` is true, the infobar shows and popups are
+    /// never blocked.
+    #[default]
+    Declared,
+    /// `navigator.webdriver` is false and popups follow the user's settings, as in a browser a
+    /// person started.
+    Withheld,
+}
+
 #[derive(Clone, Debug)]
 pub struct LaunchOptions {
     pub kind: BrowserKind,
@@ -59,6 +71,7 @@ pub struct LaunchOptions {
     pub cache_dir: std::path::PathBuf,
     pub page_load_timeout: std::time::Duration,
     pub launch_timeout: std::time::Duration,
+    pub automation_notice: AutomationNotice,
 }
 
 const CACHE_DIR_ENV: &str = "FLOW_LIKE_BROWSER_CACHE_DIR";

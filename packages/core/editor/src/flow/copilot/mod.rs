@@ -71,13 +71,17 @@ pub use assistant::{
 pub use behavioral_evaluation::*;
 pub use behavioral_state::*;
 pub use benchmark_cases::workflow_benchmark_cases;
+pub use bot_notes::{NotesHandle, NotesStore, notes_tool_specs};
+pub use bot_reply_files::ReplyFiles;
 pub use bot_run::{
     BotRunContext, BotToolHost, BotToolset, EffectivePermissions, FLUX_BOT_ID, FLUX_BOT_NAME,
     GENERAL_BOT_DESCRIPTION, GENERAL_BOT_ID, GENERAL_BOT_NAME, ReactionNote, SILENT_REPLY,
     TurnRequester, bot_model_preference, bot_persona_section, bot_platform_context,
-    bot_system_prompt, bot_thinking, find_bot_tool_spec, resolve_bot_model, resolve_host_completion_model, resolve_host_completion_model_preferring, run_bot_chat,
+    bot_system_prompt, bot_thinking, find_bot_tool_spec, resolve_bot_model,
+    resolve_host_completion_model, resolve_host_completion_model_preferring, run_bot_chat,
     run_bot_chat_with_talk, runnable_completion_model,
 };
+pub use bot_trail::ToolTrail;
 pub use capability_tools::{HostTools, bot_tool_spec, linked_tool_names, tool_outcome_output};
 pub use configuration_models::{
     model_changes_need_catalogue, profile_models, validate_model_changes,
@@ -122,9 +126,6 @@ pub use manifest::{
     ManifestCatalogNode, ManifestCatalogPin, ManifestError, ManifestSource, ManifestSourceStatus,
     default_flowscript_module_templates,
 };
-pub use bot_notes::{NotesHandle, NotesStore, notes_tool_specs};
-pub use bot_reply_files::ReplyFiles;
-pub use bot_trail::ToolTrail;
 pub use memory_tools::{HeadlessMemory, MemoryHandle, MemoryTurnSource, memory_tool_specs};
 pub use provider::{CatalogProvider, node_to_metadata, pin_to_metadata};
 /// Re-export of the rig tool trait so non-rig adapter crates can bound on it (e.g. to derive
@@ -432,6 +433,25 @@ struct CopilotToolAccess {
 }
 
 impl CopilotToolAccess {
+    async fn prepare(definitions: Vec<rig::completion::ToolDefinition>) -> Result<Self> {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            // A first Board turn can initialize JSON Schema before the provider runs. Give
+            // its synchronous compiler a fresh stack instead of the nested chat poll stack.
+            flow_like_types::tokio::task::spawn_blocking(move || {
+                Self::from_definitions(definitions)
+            })
+            .await
+            .map_err(|error| {
+                flow_like_types::anyhow!("Board tool schema validation worker failed: {error}")
+            })?
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            Self::from_definitions(definitions)
+        }
+    }
+
     fn from_definitions(definitions: Vec<rig::completion::ToolDefinition>) -> Result<Self> {
         let validators = definitions
             .into_iter()
@@ -1072,7 +1092,15 @@ impl Copilot {
             publisher.publish();
         }
 
-        let (model_name, completion_client, thinking) = self.get_model(model_id, token).await?;
+        let (model_name, completion_client, thinking) = self
+            .get_model(
+                model_id,
+                token,
+                on_token
+                    .as_ref()
+                    .map(|callback| callback as &(dyn Fn(String) + Send + Sync)),
+            )
+            .await?;
 
         // Build a compact system prompt
         let tool_surface = CopilotToolSurface::for_mode(self.read_only);
@@ -1277,9 +1305,8 @@ impl Copilot {
         }
 
         let agent = agent_builder.build();
-        let tool_access = CopilotToolAccess::from_definitions(
-            agent.tool_server_handle.get_tool_defs(None).await?,
-        )?;
+        let tool_access =
+            CopilotToolAccess::prepare(agent.tool_server_handle.get_tool_defs(None).await?).await?;
 
         let prompt = user_prompt.clone();
 
@@ -2172,7 +2199,10 @@ impl Copilot {
                             Self::strip_tag_block(&mut compacted, "flowscript_workspace");
                             UserContent::ToolResult(RigToolResult {
                                 id: tool_id.clone(),
-                                call_id: None,
+                                call_id: tool_calls
+                                    .iter()
+                                    .find(|call| call.id == *tool_id)
+                                    .and_then(|call| call.call_id.clone()),
                                 content: OneOrMany::one(ToolResultContent::text(compacted)),
                             })
                         })
@@ -2449,6 +2479,12 @@ impl Copilot {
             Err(denied) => return denied,
         };
         match name {
+            "plan_board_scope" => match serde_json::from_value::<PlanBoardScopeArgs>(arguments) {
+                Ok(args) => rig::tool::Tool::call(&PlanBoardScopeTool, args)
+                    .await
+                    .unwrap_or_else(|error| format!("Failed to plan board scope: {error}")),
+                Err(error) => format!("Failed to parse board scope plan: {error}"),
+            },
             "think" => {
                 if let Ok(args) = serde_json::from_value::<ThinkingArgs>(arguments) {
                     format!("Thinking: {}", args.thought)
@@ -2987,6 +3023,7 @@ impl Copilot {
         &self,
         model_id: Option<String>,
         token: Option<String>,
+        on_token: Option<&(dyn Fn(String) + Send + Sync)>,
     ) -> Result<(
         String,
         Box<dyn CompletionClientDyn + Send + Sync + 'a>,
@@ -3004,16 +3041,34 @@ impl Copilot {
                     .as_ref()
                     .and_then(|context| context.run_id.clone()),
             });
-            profile
-                .resolve_completion_model(
-                    model_id.as_deref(),
-                    &preference,
-                    false,
-                    capabilities,
-                    devices.as_ref(),
-                    self.state.http_client.clone(),
-                )
-                .await?
+            match model_id.as_deref() {
+                Some(model_id) => {
+                    profile
+                        .resolve_explicit_completion_model(
+                            model_id,
+                            capabilities,
+                            devices.as_ref(),
+                            self.state.http_client.clone(),
+                        )
+                        .await?
+                }
+                None => {
+                    profile
+                        .resolve_completion_model(
+                            None,
+                            &preference,
+                            false,
+                            capabilities,
+                            devices.as_ref(),
+                            self.state.http_client.clone(),
+                        )
+                        .await?
+                }
+            }
+        } else if let Some(model_id) = model_id.as_deref() {
+            return Err(flow_like_types::anyhow!(
+                "Selected model `{model_id}` cannot be resolved because its profile is unavailable. Reload the profile and try again."
+            ));
         } else {
             Bit {
                 id: "gpt-4o".to_string(),
@@ -3045,6 +3100,19 @@ impl Copilot {
             .and_then(|thinking| thinking_params(model.as_ref(), &default_model, thinking));
         let provider = model.provider().await?;
         let completion = provider.into_client();
+
+        if let Some(callback) = on_token {
+            let configured_provider = bit.try_to_provider();
+            callback(stream::stream_frame(
+                "model_resolved",
+                &json!({
+                    "bit_id": bit.id,
+                    "provider_name": configured_provider.as_ref().map(|provider| &provider.provider_name),
+                    "configured_model_id": configured_provider.as_ref().and_then(|provider| provider.model_id.as_ref()),
+                    "model_id": default_model,
+                }),
+            ));
+        }
 
         Ok((default_model, completion, thinking))
     }
@@ -4325,6 +4393,130 @@ mod runtime_bridge_tests {
 
     struct UnusedCatalog;
 
+    pub(super) fn explicit_model_selection_fixture() -> (Arc<FlowLikeState>, Arc<Profile>) {
+        let model = |id: &str, provider_name: &str, params| Bit {
+            id: id.to_string(),
+            bit_type: BitTypes::Llm,
+            parameters: serde_json::to_value(LLMParameters {
+                context_length: 20_000,
+                model_classification: Default::default(),
+                data_classification: None,
+                provider: ModelProvider {
+                    provider_name: provider_name.to_string(),
+                    model_id: Some(id.to_string()),
+                    version: None,
+                    api_surface: None,
+                    params: Some(params),
+                },
+            })
+            .unwrap(),
+            ..Default::default()
+        };
+        let profile = Profile {
+            bits: vec!["chosen-claude".into(), "fallback-qwen".into()],
+            custom_bits: vec![
+                crate::profile::ProfileCustomBit(model(
+                    "chosen-claude",
+                    "custom:claude-code",
+                    HashMap::from([("executable".into(), json!(std::env::temp_dir()))]),
+                )),
+                crate::profile::ProfileCustomBit(model(
+                    "fallback-qwen",
+                    "custom:openai",
+                    HashMap::from([
+                        ("api_key".into(), json!("test-key")),
+                        ("endpoint".into(), json!("http://127.0.0.1:1/v1")),
+                        ("model_id".into(), json!("qwen-upstream")),
+                    ]),
+                )),
+            ],
+            ..Default::default()
+        };
+        let mut state = FlowLikeState::new(
+            crate::state::FlowLikeConfig::new(),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        );
+        state.execution_environment = crate::flow::execution::ExecutionEnvironment::Desktop;
+        (Arc::new(state), Arc::new(profile))
+    }
+
+    #[tokio::test]
+    async fn explicit_model_selection_does_not_replace_board_claude_with_qwen() {
+        let (state, profile) = explicit_model_selection_fixture();
+        let copilot = Copilot::new(state, Arc::new(UnusedCatalog), Some(profile), None, None)
+            .await
+            .unwrap();
+        let frames = Mutex::new(Vec::new());
+        let callback = |frame| frames.lock().unwrap().push(frame);
+
+        let error = copilot
+            .get_model(Some("chosen-claude".into()), None, Some(&callback))
+            .await
+            .err()
+            .expect("an explicit unavailable Claude Bit must fail")
+            .to_string();
+        assert!(error.contains("chosen-claude"), "{error}");
+        assert!(error.contains("Claude Code executable"), "{error}");
+        assert!(frames.lock().unwrap().is_empty());
+
+        let (automatic, _, _) = copilot.get_model(None, None, None).await.unwrap();
+        assert_eq!(automatic, "qwen-upstream");
+    }
+
+    #[tokio::test]
+    async fn explicit_model_selection_reports_resolved_board_bit_and_provider() {
+        let (state, profile) = explicit_model_selection_fixture();
+        let copilot = Copilot::new(state, Arc::new(UnusedCatalog), Some(profile), None, None)
+            .await
+            .unwrap();
+        let frames = Mutex::new(Vec::new());
+        let callback = |frame| frames.lock().unwrap().push(frame);
+
+        let (model, _, _) = copilot
+            .get_model(Some("fallback-qwen".into()), None, Some(&callback))
+            .await
+            .unwrap();
+        let frames = frames.lock().unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(stream::frame_tag(&frames[0]), Some("model_resolved"));
+        let identity: serde_json::Value = serde_json::from_str(
+            frames[0]
+                .strip_prefix("<model_resolved>")
+                .unwrap()
+                .strip_suffix("</model_resolved>")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(model, "qwen-upstream");
+        assert_eq!(
+            identity,
+            json!({
+                "bit_id": "fallback-qwen",
+                "provider_name": "custom:openai",
+                "configured_model_id": "fallback-qwen",
+                "model_id": "qwen-upstream",
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_model_selection_requires_a_board_model_profile() {
+        let (state, _) = explicit_model_selection_fixture();
+        let copilot = Copilot::new(state, Arc::new(UnusedCatalog), None, None, None)
+            .await
+            .unwrap();
+
+        let error = copilot
+            .get_model(Some("chosen-claude".into()), None, None)
+            .await
+            .err()
+            .expect("a missing profile must not change an explicit model selection")
+            .to_string();
+
+        assert!(error.contains("chosen-claude"), "{error}");
+        assert!(error.contains("profile is unavailable"), "{error}");
+    }
+
     #[async_trait::async_trait]
     impl CatalogProvider for UnusedCatalog {
         async fn search(&self, _: &str) -> Vec<NodeMetadata> {
@@ -4359,6 +4551,87 @@ mod runtime_bridge_tests {
         .unwrap()
         .with_read_only(true)
         .with_runtime_bridge(bridge)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn cold_board_tool_schemas_fit_default_async_worker_stack() {
+        const CHILD: &str = "FLOW_LIKE_BOARD_SCHEMA_STACK_TEST";
+        if std::env::var_os(CHILD).as_deref() != Some(std::ffi::OsStr::new("1")) {
+            // A preceding Flux turn or unit test can warm the shared meta-validator.
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "flow::copilot::runtime_bridge_tests::cold_board_tool_schemas_fit_default_async_worker_stack",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .env_remove("RUST_MIN_STACK")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "Cold Board schema preparation failed on a 2 MiB async worker:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            return;
+        }
+
+        #[inline(never)]
+        fn poll_with_chat_stack<F: std::future::Future>(
+            future: std::pin::Pin<&mut F>,
+            context: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<F::Output> {
+            let caller_stack = [0_u8; 1024 * 1024];
+            std::hint::black_box(&caller_stack);
+            let result = future.poll(context);
+            std::hint::black_box(&caller_stack);
+            result
+        }
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_stack_size(2 * 1024 * 1024)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            tokio::spawn(async {
+                let definitions = tool_spec::workflow_context_tool_specs()
+                    .into_iter()
+                    .chain(tool_spec::runtime_execution_tool_specs())
+                    .map(|spec| spec.to_tool_definition())
+                    .collect::<Vec<_>>();
+                let mut prepare = Box::pin(CopilotToolAccess::prepare(definitions.clone()));
+                let access = std::future::poll_fn(|context| {
+                    poll_with_chat_stack(prepare.as_mut(), context)
+                })
+                .await
+                .unwrap();
+                assert_eq!(
+                    access.prepare_arguments(
+                        "execute_node",
+                        json!({"appId":"app", "boardId":"board", "nodeId":"node", "streamState":false}),
+                    ).unwrap(),
+                    json!({"app_id":"app", "board_id":"board", "node_id":"node", "stream_state":false}),
+                );
+                assert!(access.prepare_arguments(
+                    "execute_node", json!({"board_id":"board", "node_id":42}),
+                ).is_err());
+                assert!(access.prepare_arguments(
+                    "database_tool", json!({"operation":"drop_table", "table":"records"}),
+                ).is_err());
+                assert!(access.prepare_arguments("unadvertised_tool", json!({})).is_err());
+
+                let mut malformed = definitions;
+                malformed[0].parameters["type"] = json!("not_a_json_schema_type");
+                let error = CopilotToolAccess::prepare(malformed).await.err().expect("invalid schemas must still fail");
+                assert!(error.to_string().contains("Invalid schema for board tool"));
+            }).await.unwrap();
+        });
     }
 
     #[test]
@@ -4460,6 +4733,51 @@ mod runtime_bridge_tests {
                 .prepare_arguments("commit_flowscript", json!({}))
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn manual_dispatch_executes_advertised_board_scope_plan() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let copilot = guarded_test_copilot(bridge.clone()).await;
+        let access = CopilotToolAccess::from_definitions(vec![
+            PlanBoardScopeTool.definition(String::new()).await,
+        ])
+        .unwrap();
+        let board = empty_test_board();
+        let context = prepare_context(&board, &[]).unwrap();
+        let store = Arc::new(ir_tools::FlowIrDraftStore::new());
+        for (segments, expected_status) in [
+            (
+                json!([{
+                    "id": "variable",
+                    "title": "Add the requested variable",
+                    "behavior": "Add one string variable named e2e_check with the requested value to the current board.",
+                    "board_ref": "current",
+                }]),
+                "scope_plan_accepted",
+            ),
+            (json!([]), "scope_plan_rejected"),
+        ] {
+            let output = copilot
+                .execute_tool(
+                    &access,
+                    "plan_board_scope",
+                    json!({"strategy": "single", "segments": segments}),
+                    None,
+                    &context,
+                    &board,
+                    &store,
+                    None,
+                )
+                .await;
+            let result: serde_json::Value = serde_json::from_str(&output).unwrap();
+            assert_eq!(result["status"], expected_status, "{output}");
+            if expected_status == "scope_plan_accepted" {
+                assert_eq!(result["next_action"], "write_flowscript");
+                assert_eq!(result["active_segment"]["id"], "variable");
+            }
+        }
+        assert!(bridge.calls.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

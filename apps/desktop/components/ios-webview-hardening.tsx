@@ -5,7 +5,7 @@ import { resolveMobileViewportHeight } from "../lib/mobile-viewport";
 import { isMobileDevice, isTauriRuntime } from "../lib/platform";
 
 const MOBILE_VIEWPORT_CONTENT =
-	"width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content";
+	"width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content";
 const MAX_SAFE_TOP_PX = 96;
 const MAX_SAFE_BOTTOM_PX = 64;
 /** Input types that never raise the soft keyboard. */

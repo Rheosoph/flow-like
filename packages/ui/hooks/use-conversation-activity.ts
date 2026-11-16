@@ -20,9 +20,9 @@ import type {
 	IConversation,
 	IConversationTurn,
 } from "../state/backend-state/inbox-state";
+import { invalidateBotConfiguration } from "./use-bots";
 import type { ConversationRoom } from "./use-conversation-room";
 import { inboxKeys } from "./use-inbox";
-import { invalidateBotConfiguration } from "./use-bots";
 
 export type { ConversationBotActivity };
 export type { ConversationTurnStatus };
@@ -85,14 +85,40 @@ function useConversationBots(
 	conversation: IConversation,
 	newestEntryKey: string | undefined,
 ): readonly ConversationBotActivity[] {
+	const botIds = useMemo(
+		() =>
+			new Set(
+				conversation.members
+					.filter((member) => member.kind === "bot")
+					.map((member) => member.principal_id),
+			),
+		[conversation.members],
+	);
+	return useBotTurnActivity(
+		conversation.local ? null : conversation.id,
+		botIds,
+		newestEntryKey,
+	);
+}
+
+/**
+ * What `botIds` are doing in an account conversation, polled while a turn is active and read again
+ * when `newestEntryKey` changes; empty without a conversation.
+ */
+export function useBotTurnActivity(
+	conversationId: string | null,
+	botIds: ReadonlySet<string>,
+	newestEntryKey: string | undefined,
+): readonly ConversationBotActivity[] {
 	const inbox = useBackend().inboxState;
 	const listTurns = inbox?.listConversationTurns?.bind(inbox);
-	const enabled = !conversation.local && listTurns !== undefined;
-	const live = useLiveConversationTurns(conversation.id);
+	const id = conversationId ?? "";
+	const enabled = conversationId !== null && listTurns !== undefined;
+	const live = useLiveConversationTurns(id);
 
 	const query = useQuery({
-		queryKey: inboxKeys.turns(conversation.id),
-		queryFn: () => listTurns?.(conversation.id) ?? Promise.resolve([]),
+		queryKey: inboxKeys.turns(id),
+		queryFn: () => listTurns?.(id) ?? Promise.resolve([]),
 		enabled,
 		refetchInterval: (current) =>
 			hasActiveTurn(current.state.data ?? NO_TURNS) ? TURN_POLL_MS : false,
@@ -106,22 +132,13 @@ function useConversationBots(
 		if (enabled) void refetch();
 	}, [newestEntryKey, enabled, refetch]);
 
-	const botIds = useMemo(
-		() =>
-			new Set(
-				conversation.members
-					.filter((member) => member.kind === "bot")
-					.map((member) => member.principal_id),
-			),
-		[conversation.members],
-	);
 	const apiTurns = enabled ? (query.data ?? NO_TURNS) : NO_TURNS;
 	const queryClient = useQueryClient();
 	const previousActivity = useRef<{
 		conversation: string;
 		bots: ReadonlySet<string>;
 	}>({
-		conversation: conversation.id,
+		conversation: id,
 		bots: new Set(),
 	});
 	const activity = useMemo(
@@ -131,13 +148,13 @@ function useConversationBots(
 	useEffect(() => {
 		const next = new Set(activity.map((bot) => bot.botId));
 		const previous = previousActivity.current;
-		if (previous.conversation === conversation.id) {
+		if (previous.conversation === id) {
 			for (const botId of previous.bots) {
 				if (!next.has(botId)) invalidateBotConfiguration(queryClient, botId);
 			}
 		}
-		previousActivity.current = { conversation: conversation.id, bots: next };
-	}, [activity, conversation.id, queryClient]);
+		previousActivity.current = { conversation: id, bots: next };
+	}, [activity, id, queryClient]);
 
 	return activity;
 }

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="setup_background">#FBFAF9</color>
+    <color name="setup_surface">#FFFFFF</color>
+    <color name="setup_text">#121216</color>
+    <color name="setup_muted">#666670</color>
+    <color name="setup_border">#E2DAD5</color>
+    <color name="setup_accent">#C2410C</color>
+    <color name="setup_on_accent">#FFFFFF</color>
+    <color name="setup_track">#EFEAE7</color>
+</resources>

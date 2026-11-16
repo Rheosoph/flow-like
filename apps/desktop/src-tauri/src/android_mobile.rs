@@ -146,6 +146,26 @@ async fn call_async(command: &str, payload: Value) -> Result<Value, String> {
         .map_err(|error| error.to_string())
 }
 
+pub async fn background_hosting_status() -> Result<Value, String> {
+    call_async("backgroundHostingStatus", json!({})).await
+}
+
+pub async fn set_background_hosting(enabled: bool) -> Result<Value, String> {
+    call_async("setBackgroundHosting", json!({"enabled": enabled})).await
+}
+
+pub async fn open_background_hosting_battery_settings() -> Result<(), String> {
+    call_async("openBackgroundHostingBatterySettings", json!({}))
+        .await
+        .map(drop)
+}
+
+pub async fn open_background_hosting_notification_settings() -> Result<(), String> {
+    call_async("openBackgroundHostingNotificationSettings", json!({}))
+        .await
+        .map(drop)
+}
+
 pub async fn location_request(request_id: String, options: Value) -> Result<Value, String> {
     unwrap_reply(
         call_async(

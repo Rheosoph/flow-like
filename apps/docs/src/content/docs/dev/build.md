@@ -122,6 +122,36 @@ mise run build:desktop
 Tauri writes binaries and installers below `target/release/`; the precise
 bundle directory and extension depend on the platform.
 
+### Build an Android release
+
+Install Android Studio, SDK platform 36, NDK `29.0.14206865`, and the
+`aarch64-linux-android` Rust target. Set `JAVA_HOME` to a JDK 21 installation,
+`ANDROID_HOME` to the SDK, and `NDK_HOME` to that NDK directory.
+
+Keep the release keystore outside the repository. Set `ANDROID_KEY_PROPERTIES`
+to a Java properties file containing `storeFile`, `storePassword`, `keyAlias`,
+and `keyPassword`; use an absolute path for `storeFile`. Back up the key and its
+credentials because later releases must use the same signing identity.
+
+From the repository root, run:
+
+```bash
+mise run build:android:release
+```
+
+This builds ARM64 release artifacts through the shared Cargo queue. The Play
+bundle is `apps/desktop/src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab`.
+Its small base opens a setup screen that downloads the `runtime` and `editors`
+feature modules from Google Play before starting the app. The installed modules
+remain available offline; features that connect to online services still need
+internet access.
+
+For installation without Google Play, use
+`apps/desktop/src-tauri/gen/android/app/build/outputs/apk/standalone/release/app-standalone-release.apk`.
+It includes both modules and skips the download. An APK produced by the ordinary
+Gradle app assembly task contains only the base and cannot replace this complete
+APK. Development builds continue to bundle their native runtime directly.
+
 ### Maintain desktop release tooling
 
 The frontend release job installs the full workspace and exports its assets

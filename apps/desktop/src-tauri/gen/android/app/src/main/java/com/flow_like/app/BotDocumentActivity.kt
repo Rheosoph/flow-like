@@ -2,11 +2,9 @@ package com.flow_like.app
 
 import android.app.Activity
 import android.app.ActivityManager
-import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
-import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -42,7 +40,10 @@ class BotDocumentActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(TextView(this).apply { text = "Preparing document scanner…"; setPadding(32, 64, 32, 32) })
+        val page = NativeUi.page(this, "Scan a document", "Capture pages and attach them as a PDF.")
+        NativeUi.add(page.content, NativeUi.loading(this, "Preparing scanner…",
+            "Google Play is preparing the document scanner on this device."), top = 0)
+        NativeUi.add(page.content, NativeUi.button(this, "Cancel") { finish() })
         if (savedInstanceState != null) return
         val options = GmsDocumentScannerOptions.Builder().setGalleryImportAllowed(true).setPageLimit(10)
             .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_PDF)
@@ -56,7 +57,7 @@ class BotDocumentActivity : ComponentActivity() {
 
     private fun fallback() {
         if (isFinishing || isDestroyed) return
-        AlertDialog.Builder(this).setTitle("Document scanner unavailable")
+        NativeUi.dialog(this).setTitle("Document scanner unavailable")
             .setMessage("Choose an existing document to attach instead.")
             .setPositiveButton("Choose document") { _, _ -> picker.launch(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE); type = "*/*"

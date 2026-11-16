@@ -66,9 +66,17 @@ fn sync_files(source: &Path, destination: &Path, files: &[PathBuf]) -> io::Resul
 
 /// Keep bulky payloads in the signed app bundle, outside the Mach-O __TEXT limit.
 pub fn stage(source: &Path, embedded: &Path, resources: &Path) -> io::Result<StagedFrontend> {
+    stage_selected(source, embedded, resources, is_bundled_payload)
+}
+
+pub fn stage_selected(
+    source: &Path,
+    embedded: &Path,
+    resources: &Path,
+    select: impl Fn(&Path) -> bool,
+) -> io::Result<StagedFrontend> {
     let files = files_under(source)?;
-    let (bundled, frontend): (Vec<_>, Vec<_>) =
-        files.into_iter().partition(|p| is_bundled_payload(p));
+    let (bundled, frontend): (Vec<_>, Vec<_>) = files.into_iter().partition(|p| select(p));
     let mut bundled_paths = Vec::with_capacity(bundled.len());
     let mut bundled_bytes = 0;
     for path in &bundled {

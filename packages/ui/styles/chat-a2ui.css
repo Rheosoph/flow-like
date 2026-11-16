@@ -32,7 +32,6 @@
 		kbd,
 		samp,
 		figure,
-		button,
 		input,
 		.slate-p,
 		.slate-hr,
@@ -69,6 +68,26 @@
 	scrollbar-color: revert-layer;
 }
 
+/* Buttons only need the chat focus outline reset. Reverting their padding makes
+   WebKit discard Tailwind's logical padding, leaving labels against the edges. */
+[data-fl-renderer] [data-fl-a2ui-surface][data-fl-a2ui-surface] button {
+	outline: revert-layer;
+	outline-offset: revert-layer;
+}
+
+/* Cards rise in as a streaming reply builds them. Settled replies (history, reloads)
+   never carry `data-streaming`, so scrolling back does not replay it. */
+@keyframes fl-a2ui-card-in {
+	from {
+		opacity: 0;
+		transform: translateY(8px) scale(0.985);
+	}
+}
+
+[data-fl-a2ui-fence][data-streaming] [data-slot="card"] {
+	animation: fl-a2ui-card-in 380ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
 [data-fl-a2ui-fence] [data-slot="a2ui-fence-actions"] {
 	opacity: 0;
 	transition: opacity 200ms cubic-bezier(0.2, 0.7, 0.2, 1);
@@ -89,5 +108,9 @@
 @media (prefers-reduced-motion: reduce) {
 	[data-fl-a2ui-fence] [data-slot="a2ui-fence-actions"] {
 		transition: none;
+	}
+
+	[data-fl-a2ui-fence][data-streaming] [data-slot="card"] {
+		animation: none;
 	}
 }

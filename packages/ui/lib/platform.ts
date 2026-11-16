@@ -10,8 +10,22 @@
  */
 export const isTauri = (): boolean => {
 	if (typeof window === "undefined") return false;
-	const w = window as any;
+	const w = window as Window & {
+		__TAURI__?: unknown;
+		__TAURI_IPC__?: unknown;
+		__TAURI_INTERNALS__?: unknown;
+	};
 	return !!(w.__TAURI__ || w.__TAURI_IPC__ || w.__TAURI_INTERNALS__);
+};
+
+/** iPhone, iPod and iPad, including iPadOS which reports a Mac user agent. Covers Safari, home-screen web apps and the iOS app's WKWebView. */
+export const isIOS = (): boolean => {
+	if (typeof navigator === "undefined") return false;
+	const ua = navigator.userAgent ?? "";
+	return (
+		/iPad|iPhone|iPod/.test(ua) ||
+		(/Macintosh/.test(ua) && (navigator.maxTouchPoints ?? 0) > 1)
+	);
 };
 
 let _webkitLite: boolean | undefined;

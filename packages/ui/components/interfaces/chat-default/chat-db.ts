@@ -217,6 +217,8 @@ export interface IChatRunContext {
 	 * the backend.
 	 */
 	effective_model_id?: string;
+	/** Present only when the transport reports the model the backend actually selected. */
+	backend_model_id?: string;
 	reasoning_effort?: string;
 	auto_mode?: boolean;
 	memory_enabled?: boolean;

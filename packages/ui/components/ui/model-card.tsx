@@ -2,31 +2,18 @@
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
-	ArrowRightIcon,
-	AudioLinesIcon,
-	BrainIcon,
-	CameraIcon,
-	ChartNoAxesCombinedIcon,
 	CheckIcon,
 	ClockIcon,
 	DownloadCloudIcon,
 	ExternalLinkIcon,
-	FileSearch,
-	ImageIcon,
-	ListChecksIcon,
 	LockIcon,
-	MicIcon,
-	MoreVerticalIcon,
+	MoreHorizontalIcon,
 	PencilIcon,
 	PlusIcon,
-	ScanEyeIcon,
-	SparklesIcon,
 	TrashIcon,
-	TypeIcon,
-	VideoIcon,
 	XIcon,
 } from "lucide-react";
-import type { JSX, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -35,16 +22,21 @@ import {
 } from "../../hooks/use-add-model-to-profile";
 import { useInvoke } from "../../hooks/use-invoke";
 import { isMlxModelBit } from "../../lib/bit/mlx-model-pack";
+import { bitPreviewMedia } from "../../lib/bit/model-media";
+import {
+	type PriceDeployment,
+	type PriceTier,
+	bitPrice,
+} from "../../lib/bit/model-pricing";
+import { bitRating } from "../../lib/bit/model-rating";
 import { type IBit, IBitTypes } from "../../lib/schema/bit/bit";
 import type { IEmbeddingModelParameters } from "../../lib/schema/bit/bit/embedding-model-parameters";
 import type { ILlmParameters } from "../../lib/schema/bit/bit/llm-parameters";
-import { humanFileSize } from "../../lib/utils";
+import { cn, humanFileSize } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import { useDownloadManager } from "../../state/download-manager";
 import type { ISettingsProfile } from "../../types";
 import { DeviceBitBadge } from "../settings/devices/models/use/device-model-badge";
-import { Avatar, AvatarFallback, AvatarImage } from "./avatar";
-import { Badge } from "./badge";
 import { Button } from "./button";
 import {
 	DropdownMenu,
@@ -53,14 +45,16 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "./dropdown-menu";
-import { IntelligenceIndexBadge } from "./model-benchmarks";
-import type { IModelEvaluation } from "./model-benchmarks";
 import {
+	type Deployment,
 	DeploymentLabel,
 	ModalityFlow,
 	ProviderGlyph,
 	providerLabel,
 } from "./model-kit";
+import { AudioSample, AudioSampleButton, MediaStrip } from "./model-media";
+import { PriceTierMark, usePriceText } from "./model-price";
+import { ModelRatingBadge } from "./model-rating";
 import { Progress } from "./progress";
 
 export type ModelCardVariant = "grid" | "list";
@@ -76,6 +70,38 @@ export interface ModelCardProps {
 	isCustom?: boolean;
 	onEdit?: (bit: IBit) => void;
 	onDelete?: (bit: IBit) => void;
+	/** Where the price sits among models of the same type, from the surrounding catalog. */
+	priceTier?: PriceTier;
+}
+
+const LOCAL_PROVIDER_LABEL = "On-device";
+
+/**
+ * Who makes the model. Local runtimes are labelled "On-device" as their provider,
+ * which the deployment label already says, so name the authors instead.
+ */
+export function modelSourceLabel(bit: IBit): string {
+	const provider = providerLabel(bit);
+	if (provider !== LOCAL_PROVIDER_LABEL) return provider;
+	return (
+		bit.authors
+			?.map((author) => author.trim())
+			.filter(Boolean)
+			.join(", ") || provider
+	);
+}
+
+/** How a model runs, as the catalog shows it. */
+export function modelDeployment(
+	bit: IBit,
+	isHosted: boolean,
+): { kind: Deployment; price: PriceDeployment } {
+	if (bit.type === IBitTypes.Forecasting)
+		return { kind: "native", price: "native" };
+	if (isHosted) return { kind: "hosted", price: "hosted" };
+	if (supportsRemoteEmbeddingExecution(bit))
+		return { kind: "remote", price: "hosted" };
+	return { kind: "local", price: "local" };
 }
 
 export function ModelCard({
@@ -87,6 +113,7 @@ export function ModelCard({
 	isCustom = false,
 	onEdit,
 	onDelete,
+	priceTier,
 }: Readonly<ModelCardProps>) {
 	const { t } = useTranslation("common");
 	const backend = useBackend();
@@ -266,458 +293,379 @@ export function ModelCard({
 		if (bit.repository) window.open(bit.repository, "_blank");
 	}, [bit.repository]);
 
+	const rating = useMemo(() => bitRating(bit), [bit]);
+	const media = useMemo(() => bitPreviewMedia(bit), [bit]);
+
 	if (bit.meta.en === undefined) return null;
 
-	const isInProfile = isBitInProfile(currentProfile.data, bit.id);
-
-	const modality = getModelModality(bit);
-	const params = bit.parameters as ILlmParameters | IEmbeddingModelParameters;
-	const contextLength = (params as ILlmParameters)?.context_length;
 	const isHosted =
 		bit.type !== IBitTypes.Forecasting && (bitSize.data === 0 || isVirtualBit);
-	const canRunRemotely = supportsRemoteEmbeddingExecution(bit);
-	const isEmbeddingModel =
-		isEmbeddingBit(bit) ||
-		bit.type === IBitTypes.Tts ||
-		bit.type === IBitTypes.Stt ||
-		bit.type === IBitTypes.Forecasting ||
-		((bit.type === IBitTypes.ImageGeneration ||
-			bit.type === IBitTypes.VideoGeneration) &&
-			bit.parameters?.provider?.provider_name === "local:stablediffusion" &&
-			!bit.parameters?.provider?.params?.stablediffusion?.endpoint);
+	const deployment = modelDeployment(bit, isHosted);
+	const size = !isVirtualBit && bitSize.data ? humanFileSize(bitSize.data) : "";
 
-	if (variant === "list") {
-		return (
-			<ModelCardListVariant
-				bit={bit}
-				modality={modality}
-				contextLength={contextLength}
-				canRunRemotely={canRunRemotely}
-				isEmbeddingModel={isEmbeddingModel}
+	const view: ModelCardView = {
+		bit,
+		isCustom,
+		isInstalled: !!isInstalled.data,
+		isInProfile: isBitInProfile(currentProfile.data, bit.id),
+		deployment: deployment.kind,
+		price: bitPrice(bit, deployment.price),
+		priceTier,
+		rating,
+		media,
+		size,
+		contextLength: (bit.parameters as ILlmParameters | undefined)
+			?.context_length,
+		requiredTier: tierInfo.isRestricted ? tierInfo.requiredTier : null,
+		description:
+			bit.meta.en.description?.trim() ||
+			(isCustom
+				? t("customModelOnYourKey", "Custom model on your {{provider}} key.", {
+						provider: providerLabel(bit),
+					})
+				: ""),
+		overlay:
+			progress !== undefined && !isVirtualBit ? (
+				<DownloadOverlay progress={progress} queued={isQueuedState} />
+			) : null,
+		menu: (
+			<ModelCardDropdown
+				name={bit.meta.en.name}
+				canDownload={!isVirtualBit}
 				isInstalled={!!isInstalled.data}
-				isInProfile={isInProfile}
-				isHosted={isHosted}
-				isRestricted={tierInfo.isRestricted}
-				requiredTier={tierInfo.requiredTier}
+				isInProfile={isBitInProfile(currentProfile.data, bit.id)}
+				hasRepository={!!bit.repository}
 				bitSize={bitSize.data ?? 0}
-				progress={progress}
-				isQueuedState={isQueuedState}
-				isVirtualBit={isVirtualBit}
-				onCardClick={() => onClick?.(bit)}
 				onToggleDownload={toggleDownload}
 				onToggleProfile={toggleProfile}
 				onOpenRepository={openRepository}
 				onEdit={onEdit ? () => onEdit(bit) : undefined}
 				onDelete={onDelete ? () => onDelete(bit) : undefined}
 			/>
-		);
-	}
+		),
+		onOpen: () => onClick?.(bit),
+		onToggleProfile: toggleProfile,
+	};
 
-	return (
-		<ModelCardGridVariant
-			bit={bit}
-			modality={modality}
-			contextLength={contextLength}
-			canRunRemotely={canRunRemotely}
-			isEmbeddingModel={isEmbeddingModel}
-			isInstalled={!!isInstalled.data}
-			isInProfile={isInProfile}
-			isHosted={isHosted}
-			isRestricted={tierInfo.isRestricted}
-			requiredTier={tierInfo.requiredTier}
-			bitSize={bitSize.data ?? 0}
-			progress={progress}
-			isQueuedState={isQueuedState}
-			isVirtualBit={isVirtualBit}
-			isCustom={isCustom}
-			onCardClick={() => onClick?.(bit)}
-			onToggleDownload={toggleDownload}
-			onToggleProfile={toggleProfile}
-			onOpenRepository={openRepository}
-			onEdit={onEdit ? () => onEdit(bit) : undefined}
-			onDelete={onDelete ? () => onDelete(bit) : undefined}
-		/>
+	return variant === "list" ? (
+		<ModelCardRow {...view} />
+	) : (
+		<ModelCardTile {...view} />
 	);
 }
 
-interface ModelCardVariantProps {
+interface ModelCardView {
 	bit: IBit;
-	modality: string;
-	contextLength?: number;
-	canRunRemotely: boolean;
-	isEmbeddingModel: boolean;
+	isCustom: boolean;
 	isInstalled: boolean;
 	isInProfile: boolean;
-	isHosted: boolean;
-	isRestricted: boolean;
+	deployment: Deployment;
+	price: ReturnType<typeof bitPrice>;
+	priceTier?: PriceTier;
+	rating: ReturnType<typeof bitRating>;
+	media: ReturnType<typeof bitPreviewMedia>;
+	size: string;
+	contextLength?: number;
 	requiredTier: string | null;
-	bitSize: number;
-	progress?: number;
-	isQueuedState: boolean;
-	isVirtualBit: boolean;
-	isCustom?: boolean;
-	onCardClick: () => void;
-	onToggleDownload: () => void;
+	description: string;
+	overlay: ReactNode;
+	menu: ReactNode;
+	onOpen: () => void;
 	onToggleProfile: () => void;
-	onOpenRepository: () => void;
-	onEdit?: () => void;
-	onDelete?: () => void;
 }
 
-function ModelCardGridVariant({
-	bit,
-	contextLength,
-	canRunRemotely,
-	isEmbeddingModel,
-	isInstalled,
-	isInProfile,
-	isHosted,
-	isRestricted,
-	requiredTier,
-	bitSize,
+function DownloadOverlay({
 	progress,
-	isQueuedState,
-	isVirtualBit,
-	isCustom,
-	onCardClick,
-	onToggleDownload,
-	onToggleProfile,
-	onOpenRepository,
-	onEdit,
-	onDelete,
-}: Readonly<ModelCardVariantProps>) {
+	queued,
+}: Readonly<{ progress: number; queued: boolean }>) {
 	const { t } = useTranslation("common");
-	const meta = bit.meta.en;
-	if (!meta) return null;
+	return (
+		<div className="absolute inset-0 z-30 flex items-center justify-center rounded-[inherit] bg-background/90 backdrop-blur-sm">
+			{queued ? (
+				<div className="flex items-center gap-2">
+					<ClockIcon className="h-4 w-4 animate-pulse text-primary" />
+					<span className="text-sm text-muted-foreground">
+						{t("queued", "Queued")}
+					</span>
+				</div>
+			) : (
+				<div className="flex items-center gap-3">
+					<Progress value={progress} className="h-1.5 w-24" />
+					<span className="text-sm tabular-nums text-muted-foreground">{`${progress}%`}</span>
+				</div>
+			)}
+		</div>
+	);
+}
 
-	const description = meta.description?.trim();
+/** The name doubles as the open-details button; its overlay makes the whole card clickable. */
+function OpenDetailsButton({
+	name,
+	onOpen,
+	className,
+}: Readonly<{ name: string; onOpen: () => void; className?: string }>) {
+	const { t } = useTranslation("common");
+	return (
+		<button
+			type="button"
+			onClick={onOpen}
+			title={name}
+			aria-label={t("viewModelDetails", "View details of {{name}}", { name })}
+			className={cn(
+				"block max-w-full truncate rounded text-left after:absolute after:inset-0 after:z-[1] after:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+				className,
+			)}
+		>
+			{name}
+		</button>
+	);
+}
+
+function ModelSpecs({ view }: Readonly<{ view: ModelCardView }>) {
+	const { t } = useTranslation("common");
+	const specs: string[] = [];
+	if (view.contextLength) specs.push(formatContextLength(view.contextLength));
+	const embedding = view.bit.parameters as
+		| IEmbeddingModelParameters
+		| undefined;
+	if (
+		(view.bit.type === IBitTypes.Embedding ||
+			view.bit.type === IBitTypes.ImageEmbedding) &&
+		embedding?.vector_length
+	)
+		specs.push(
+			t("vectorDimensions", "{{count}} dims", {
+				count: embedding.vector_length,
+			}),
+		);
+	if (view.deployment === "local" && view.isInstalled && view.size)
+		specs.push(`${view.size} ${t("onDisk", "on disk")}`);
+	return (
+		<>
+			{specs.map((spec) => (
+				<span key={spec} className="font-mono tabular-nums">
+					{spec}
+				</span>
+			))}
+			{view.requiredTier && (
+				<span className="font-semibold text-amber-600 dark:text-amber-400">
+					{t("requiredtierPlan", "{{requiredTier}} plan", {
+						requiredTier: view.requiredTier,
+					})}
+				</span>
+			)}
+		</>
+	);
+}
+
+function PriceSummary({
+	view,
+	compact = false,
+}: Readonly<{ view: ModelCardView; compact?: boolean }>) {
+	const priceText = usePriceText()(
+		view.price,
+		view.deployment === "local" && !view.isInstalled ? view.size : undefined,
+	);
+	return (
+		<div className="min-w-0 flex-1">
+			<div className="flex min-w-0 items-baseline gap-2">
+				<span
+					className={cn(
+						"truncate font-mono font-semibold tabular-nums",
+						compact ? "text-[12.5px]" : "text-[13px]",
+						priceText.free && "text-emerald-600 dark:text-emerald-400",
+					)}
+				>
+					{priceText.main}
+				</span>
+				{view.priceTier && (
+					<PriceTierMark tier={view.priceTier} type={view.bit.type} />
+				)}
+			</div>
+			{priceText.sub && (
+				<p className="truncate text-[11.5px] text-muted-foreground">
+					{priceText.sub}
+				</p>
+			)}
+		</div>
+	);
+}
+
+function ProfileButton({ view }: Readonly<{ view: ModelCardView }>) {
+	const { t } = useTranslation("common");
+	const name = view.bit.meta.en?.name ?? view.bit.id;
+	return (
+		<Button
+			variant="outline"
+			size="sm"
+			aria-pressed={view.isInProfile}
+			aria-label={
+				view.isInProfile
+					? t("removeNameFromProfile", "Remove {{name}} from your profile", {
+							name,
+						})
+					: t("addNameToProfile", "Add {{name}} to your profile", { name })
+			}
+			onClick={view.onToggleProfile}
+			className={cn(
+				"relative z-10 h-8 shrink-0 gap-1.5 px-2.5 text-xs font-semibold",
+				view.isInProfile &&
+					"border-primary/40 bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
+			)}
+		>
+			{view.isInProfile ? (
+				<CheckIcon className="h-3.5 w-3.5" />
+			) : (
+				<PlusIcon className="h-3.5 w-3.5" />
+			)}
+			{view.isInProfile ? t("modelInProfile", "In profile") : t("add", "Add")}
+		</Button>
+	);
+}
+
+function ProviderLine({
+	view,
+	className,
+}: Readonly<{ view: ModelCardView; className?: string }>) {
+	const { t } = useTranslation("common");
+	const source = modelSourceLabel(view.bit);
+	return (
+		<p
+			className={cn(
+				"flex min-w-0 items-center gap-1.5 text-[11.5px] text-muted-foreground",
+				className,
+			)}
+		>
+			<span className="truncate">{source}</span>
+			{view.isCustom && (
+				<LockIcon
+					className="h-3 w-3 shrink-0"
+					aria-label={t("privateToYou", "Private to you")}
+				/>
+			)}
+			{source !== LOCAL_PROVIDER_LABEL && (
+				<DeploymentLabel kind={view.deployment} className="shrink-0" />
+			)}
+			<DeviceBitBadge bit={view.bit} />
+		</p>
+	);
+}
+
+function ModelCardTile(view: Readonly<ModelCardView>) {
+	const { t } = useTranslation("common");
+	const meta = view.bit.meta.en;
+	if (!meta) return null;
+	const audio = view.media.audio[0];
 
 	return (
 		<article
-			onClick={onCardClick}
-			onKeyDown={(event) => {
-				if (event.target !== event.currentTarget) return;
-				if (event.key === "Enter" || event.key === " ") {
-					event.preventDefault();
-					onCardClick();
-				}
-			}}
-			className={`group relative flex h-full min-w-0 cursor-pointer flex-col gap-3 overflow-hidden rounded-xl border bg-card p-3.5 transition-colors hover:border-foreground/25 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary dark:border-white/10 dark:hover:border-white/20 ${
-				isInProfile ? "border-primary/40 dark:border-primary/40" : ""
-			}`}
+			className={cn(
+				"group relative flex h-full min-w-0 flex-col overflow-hidden rounded-xl border bg-card transition-colors hover:border-foreground/25 hover:bg-muted/20 dark:border-white/10 dark:hover:border-white/20",
+				view.isInProfile && "border-primary/45 dark:border-primary/45",
+			)}
 		>
-			{/* Download Overlay */}
-			{progress !== undefined && !isVirtualBit && (
-				<div className="absolute inset-0 z-30 flex items-center justify-center rounded-xl bg-background/90 backdrop-blur-sm">
-					{isQueuedState ? (
-						<div className="flex items-center gap-2">
-							<ClockIcon className="h-4 w-4 animate-pulse text-primary" />
-							<span className="text-sm text-muted-foreground">
-								{t("queued", "Queued")}
-							</span>
-						</div>
-					) : (
-						<div className="flex items-center gap-3">
-							<Progress value={progress} className="h-1.5 w-24" />
-							<span className="text-sm tabular-nums text-muted-foreground">{`${progress}%`}</span>
-						</div>
-					)}
-				</div>
-			)}
+			{view.overlay}
+			<MediaStrip images={view.media.images} videos={view.media.video} />
 
-			<div className="flex items-start gap-2.5">
-				<ProviderGlyph bit={bit} size={32} className="shrink-0" />
-				<div className="min-w-0 flex-1">
-					<button
-						type="button"
-						onClick={(event) => {
-							event.stopPropagation();
-							onCardClick();
-						}}
-						aria-label={`View ${meta.name} model details`}
-						className="block max-w-full truncate rounded text-left text-[14px] font-semibold tracking-tight focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-						title={meta.name}
-					>
-						{meta.name}
-					</button>
-					<div className="mt-0.5 flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
-						<span className="truncate">{providerLabel(bit)}</span>
-						{isCustom && (
-							<LockIcon
-								className="h-3 w-3 shrink-0"
-								aria-label={t("privateToYou", "Private to you")}
-							/>
-						)}
-						<DeviceBitBadge bit={bit} />
+			<div className="flex flex-1 flex-col gap-2.5 p-3.5 pb-3">
+				<div className="flex items-start gap-2.5">
+					<ProviderGlyph bit={view.bit} size={36} className="shrink-0" />
+					<div className="min-w-0 flex-1">
+						<h3 className="m-0 text-[14px] font-semibold leading-snug tracking-tight">
+							<OpenDetailsButton name={meta.name} onOpen={view.onOpen} />
+						</h3>
+						<ProviderLine view={view} className="mt-0.5" />
 					</div>
+					<div className="relative z-10 -mt-1 -mr-1.5">{view.menu}</div>
 				</div>
-				{onEdit && (
-					<Button
-						variant="ghost"
-						size="sm"
-						aria-label={`Edit ${meta.name}`}
-						onClick={(event) => {
-							event.stopPropagation();
-							onEdit();
-						}}
-					>
-						<PencilIcon className="size-3.5" />
-						{t("edit", "Edit")}
-					</Button>
+
+				{audio && (
+					<AudioSample
+						src={audio}
+						label={meta.name}
+						caption={
+							view.media.audio.length > 1
+								? t("audioSampleCount", "{{count}} samples", {
+										count: view.media.audio.length,
+									})
+								: t("audioSampleOne", "Listen to a sample")
+						}
+						className="relative z-10"
+					/>
 				)}
-				<ModelCardDropdown
-					canDownload={!isVirtualBit}
-					isInstalled={isInstalled}
-					isInProfile={isInProfile}
-					hasRepository={!!bit.repository}
-					bitSize={bitSize}
-					onToggleDownload={onToggleDownload}
-					onToggleProfile={onToggleProfile}
-					onOpenRepository={onOpenRepository}
-					onEdit={onEdit}
-					onDelete={onDelete}
-				/>
+
+				{view.description && (
+					<p className="line-clamp-2 text-[12.5px] leading-relaxed text-muted-foreground">
+						{view.description}
+					</p>
+				)}
+
+				<div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1.5 text-[11.5px] text-muted-foreground">
+					<ModelRatingBadge
+						rating={view.rating}
+						type={view.bit.type}
+						className="relative z-10"
+					/>
+					<ModalityFlow type={view.bit.type} compact />
+					<ModelSpecs view={view} />
+				</div>
 			</div>
 
-			{description && (
-				<p className="line-clamp-2 text-[12.5px] leading-relaxed text-muted-foreground">
-					{description}
-				</p>
-			)}
-
-			{/* One quiet spec line: what it takes in, what it returns, how big, where it runs */}
-			<div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-muted-foreground">
-				<ModalityFlow type={bit.type} plain />
-				<span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
-				{contextLength ? (
-					<>
-						<span className="font-mono tabular-nums">
-							{formatContextLength(contextLength)}
-						</span>
-						<span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
-					</>
-				) : null}
-				<DeploymentLabel
-					kind={
-						bit.type === IBitTypes.Forecasting
-							? "native"
-							: isHosted
-								? "hosted"
-								: canRunRemotely
-									? "remote"
-									: "local"
-					}
-				/>
-				{!isHosted && isInstalled && (
-					<>
-						<span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
-						<span className="font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
-							{humanFileSize(bitSize)} {t("onDisk", "on disk")}
-						</span>
-					</>
-				)}
-				{isRestricted && requiredTier && (
-					<>
-						<span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
-						<span className="font-semibold text-amber-600 dark:text-amber-400">
-							{t("requiredtierPlan", "{{requiredTier}} plan", { requiredTier })}
-						</span>
-					</>
-				)}
+			<div className="flex items-center gap-2.5 border-t px-3.5 py-2.5 dark:border-white/10">
+				<PriceSummary view={view} />
+				<ProfileButton view={view} />
 			</div>
-
-			{bit.model_evaluation ? (
-				<IntelligenceIndexBadge
-					evaluation={bit.model_evaluation as IModelEvaluation | undefined}
-				/>
-			) : null}
-
-			<Button
-				variant="outline"
-				size="sm"
-				onClick={(e) => {
-					e.stopPropagation();
-					onToggleProfile();
-				}}
-				className={`h-8 w-full gap-1.5 rounded-lg text-xs font-semibold ${
-					isInProfile
-						? "border-primary/40 bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary"
-						: ""
-				}`}
-			>
-				{isInProfile ? (
-					<CheckIcon className="h-3.5 w-3.5" />
-				) : (
-					<PlusIcon className="h-3.5 w-3.5" />
-				)}
-				{isInProfile ? "In profile" : t("addToProfile2", "Add to profile")}
-			</Button>
 		</article>
 	);
 }
 
-function ModelCardListVariant({
-	bit,
-	modality,
-	contextLength,
-	canRunRemotely,
-	isEmbeddingModel,
-	isInstalled,
-	isInProfile,
-	isHosted,
-	isRestricted,
-	requiredTier,
-	bitSize,
-	progress,
-	isQueuedState,
-	isVirtualBit,
-	onCardClick,
-	onToggleDownload,
-	onToggleProfile,
-	onOpenRepository,
-	onEdit,
-	onDelete,
-}: Readonly<ModelCardVariantProps>) {
-	const { t } = useTranslation("common");
-	const meta = bit.meta.en;
+function ModelCardRow(view: Readonly<ModelCardView>) {
+	const meta = view.bit.meta.en;
 	if (!meta) return null;
+	const audio = view.media.audio[0];
 
 	return (
 		<div
-			onClick={onCardClick}
-			onKeyDown={(event) => {
-				if (event.target !== event.currentTarget) return;
-				if (event.key === "Enter" || event.key === " ") {
-					event.preventDefault();
-					onCardClick();
-				}
-			}}
-			className="group relative flex min-w-0 flex-wrap items-center gap-3 rounded-lg border bg-card px-3 py-2 cursor-pointer transition-all hover:bg-accent/50 hover:border-primary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+			className={cn(
+				"group relative flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border bg-card px-3 py-2 transition-colors hover:bg-muted/30 dark:border-white/10 md:grid md:grid-cols-[minmax(0,2.4fr)_minmax(0,1.4fr)_12.5rem_minmax(0,1.4fr)_11rem]",
+				view.isInProfile && "border-primary/40 dark:border-primary/40",
+			)}
 		>
-			{/* Download Overlay */}
-			{progress !== undefined && !isVirtualBit && (
-				<div className="absolute inset-0 bg-background/90 backdrop-blur-sm z-30 flex items-center justify-center rounded-lg">
-					{isQueuedState ? (
-						<div className="flex items-center gap-2">
-							<ClockIcon className="h-4 w-4 text-primary animate-pulse" />
-							<span className="text-sm text-muted-foreground">
-								{t("queued", "Queued")}
-							</span>
-						</div>
-					) : (
-						<div className="flex items-center gap-3">
-							<Progress value={progress} className="w-24 h-1.5" />
-							<span className="text-sm text-muted-foreground tabular-nums">{`${progress}%`}</span>
-						</div>
-					)}
+			{view.overlay}
+			<div className="flex min-w-0 flex-1 items-center gap-2.5">
+				<ProviderGlyph bit={view.bit} size={30} className="shrink-0" />
+				<div className="min-w-0">
+					<OpenDetailsButton
+						name={meta.name}
+						onOpen={view.onOpen}
+						className="text-[13.5px] font-semibold"
+					/>
+					<ProviderLine view={view} />
 				</div>
-			)}
-
-			{/* Icon */}
-			<Avatar className="h-8 w-8 shrink-0 border border-border/50">
-				<AvatarImage src={meta.icon ?? "/app-logo.webp"} />
-				<AvatarFallback className="bg-muted text-xs">
-					<ModelTypeIcon type={bit.type} className="h-4 w-4" />
-				</AvatarFallback>
-			</Avatar>
-
-			{/* Name + Modality */}
-			<div className="min-w-24 flex-1">
-				<div className="flex items-center gap-1.5">
-					<button
-						type="button"
-						onClick={(event) => {
-							event.stopPropagation();
-							onCardClick();
-						}}
-						aria-label={`View ${meta.name} model details`}
-						className="truncate rounded text-left text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-					>
-						{meta.name}
-					</button>
-					{isInProfile && (
-						<SparklesIcon className="h-3.5 w-3.5 text-primary shrink-0" />
-					)}
-				</div>
-				<ModalityIcons type={bit.type} />
 			</div>
-
-			{/* Badges */}
-			<div className="flex max-w-full flex-wrap items-center gap-1.5">
-				<DeviceBitBadge bit={bit} />
-				<ModelStatusBadge
-					isInstalled={isInstalled}
-					isHosted={isHosted}
-					bitSize={bitSize}
-				/>
-				<IntelligenceIndexBadge
-					evaluation={bit.model_evaluation as IModelEvaluation | undefined}
-				/>
-				{contextLength && (
-					<Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5">
-						{formatContextLength(contextLength)}
-					</Badge>
-				)}
-				{canRunRemotely && (
-					<Badge
-						variant="outline"
-						className="text-[10px] px-1.5 py-0 h-5 bg-cyan-500/10 text-cyan-700 border-cyan-500/30"
-					>
-						{t("remote", "Remote")}
-					</Badge>
-				)}
-				{isEmbeddingModel && !canRunRemotely && (
-					<Badge
-						variant="outline"
-						className="text-[10px] px-1.5 py-0 h-5 bg-zinc-500/10 text-zinc-600 border-zinc-500/30"
-					>
-						{bit.type === IBitTypes.Forecasting
-							? "Workflow runtime"
-							: t("localOnly", "Local only")}
-					</Badge>
-				)}
-				{isRestricted && requiredTier && (
-					<Badge
-						variant="outline"
-						className="text-[10px] px-1.5 py-0 h-5 bg-amber-500/10 text-amber-600 border-amber-500/30"
-					>
-						{requiredTier}
-					</Badge>
-				)}
+			<div className="flex min-w-0 flex-wrap items-center gap-2 text-[11.5px] text-muted-foreground">
+				<ModalityFlow type={view.bit.type} compact />
+				<ModelSpecs view={view} />
 			</div>
-
-			{/* Menu */}
-			{onEdit && (
-				<Button
-					variant="ghost"
-					size="sm"
-					aria-label={`Edit ${meta.name}`}
-					onClick={(event) => {
-						event.stopPropagation();
-						onEdit();
-					}}
-				>
-					<PencilIcon className="size-3.5" />
-					{t("edit", "Edit")}
-				</Button>
-			)}
-			<ModelCardDropdown
-				canDownload={!isVirtualBit}
-				isInstalled={isInstalled}
-				isInProfile={isInProfile}
-				hasRepository={!!bit.repository}
-				bitSize={bitSize}
-				onToggleDownload={onToggleDownload}
-				onToggleProfile={onToggleProfile}
-				onOpenRepository={onOpenRepository}
-				onEdit={onEdit}
-				onDelete={onDelete}
-			/>
+			<div>
+				<ModelRatingBadge
+					rating={view.rating}
+					type={view.bit.type}
+					className="relative z-10"
+				/>
+			</div>
+			<PriceSummary view={view} compact />
+			<div className="relative z-10 flex items-center justify-end gap-1.5">
+				{audio && <AudioSampleButton src={audio} label={meta.name} />}
+				<ProfileButton view={view} />
+				{view.menu}
+			</div>
 		</div>
 	);
 }
 
 interface ModelCardDropdownProps {
+	name: string;
 	canDownload: boolean;
 	isInstalled: boolean;
 	isInProfile: boolean;
@@ -732,6 +680,7 @@ interface ModelCardDropdownProps {
 }
 
 function ModelCardDropdown({
+	name,
 	canDownload,
 	isInstalled,
 	isInProfile,
@@ -750,14 +699,27 @@ function ModelCardDropdown({
 				<Button
 					size="sm"
 					variant="ghost"
-					aria-label={t("modelActions", "Model actions")}
-					className="h-7 w-7 shrink-0 p-0 text-muted-foreground/60 transition-colors hover:text-foreground"
+					aria-label={t("modelActionsFor", "More actions for {{name}}", {
+						name,
+					})}
+					className="h-7 w-7 shrink-0 p-0 text-muted-foreground/70 transition-colors hover:text-foreground"
 					onClick={(e) => e.stopPropagation()}
 				>
-					<MoreVerticalIcon className="h-4 w-4" />
+					<MoreHorizontalIcon className="h-4 w-4" />
 				</Button>
 			</DropdownMenuTrigger>
-			<DropdownMenuContent align="end" className="w-48">
+			<DropdownMenuContent align="end" className="w-52">
+				{onEdit && (
+					<DropdownMenuItem
+						onClick={(e) => {
+							e.stopPropagation();
+							onEdit();
+						}}
+					>
+						<PencilIcon className="h-4 w-4 mr-2" />
+						{t("editModel", "Edit model")}
+					</DropdownMenuItem>
+				)}
 				{canDownload && (
 					<DropdownMenuItem
 						onClick={(e) => {
@@ -768,7 +730,7 @@ function ModelCardDropdown({
 						{isInstalled ? (
 							<>
 								<TrashIcon className="h-4 w-4 mr-2" />
-								{t("remove", "Remove")}
+								{t("removeDownload", "Remove Download")}
 							</>
 						) : (
 							<>
@@ -789,7 +751,7 @@ function ModelCardDropdown({
 					{isInProfile ? (
 						<>
 							<XIcon className="h-4 w-4 mr-2" />
-							Remove from Profile
+							{t("removeFromProfile", "Remove from profile")}
 						</>
 					) : (
 						<>
@@ -812,199 +774,24 @@ function ModelCardDropdown({
 						</DropdownMenuItem>
 					</>
 				)}
-				{(onEdit || onDelete) && <DropdownMenuSeparator />}
-				{onEdit && (
-					<DropdownMenuItem
-						onClick={(e) => {
-							e.stopPropagation();
-							onEdit();
-						}}
-					>
-						<PencilIcon className="h-4 w-4 mr-2" />
-						{t("editModel", "Edit model")}
-					</DropdownMenuItem>
-				)}
 				{onDelete && (
-					<DropdownMenuItem
-						variant="destructive"
-						onClick={(e) => {
-							e.stopPropagation();
-							onDelete();
-						}}
-					>
-						<TrashIcon className="h-4 w-4 mr-2" />
-						{t("deleteModel", "Delete model")}
-					</DropdownMenuItem>
+					<>
+						<DropdownMenuSeparator />
+						<DropdownMenuItem
+							variant="destructive"
+							onClick={(e) => {
+								e.stopPropagation();
+								onDelete();
+							}}
+						>
+							<TrashIcon className="h-4 w-4 mr-2" />
+							{t("deleteModel", "Delete model")}
+						</DropdownMenuItem>
+					</>
 				)}
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);
-}
-
-function ModelStatusBadge({
-	isInstalled,
-	isHosted,
-	bitSize,
-}: Readonly<{ isInstalled: boolean; isHosted: boolean; bitSize: number }>) {
-	const { t } = useTranslation("common");
-	if (isHosted) {
-		return (
-			<Badge
-				variant="outline"
-				className="text-[10px] px-1.5 py-0 h-5 bg-sky-500/10 text-sky-600 border-sky-500/30"
-			>
-				{t("hosted", "Hosted")}
-			</Badge>
-		);
-	}
-	if (isInstalled) {
-		return (
-			<Badge
-				variant="outline"
-				className="text-[10px] px-1.5 py-0 h-5 bg-emerald-500/10 text-emerald-600 border-emerald-500/30"
-			>
-				<CheckIcon className="h-3 w-3 mr-0.5" />
-				{humanFileSize(bitSize)}
-			</Badge>
-		);
-	}
-	return (
-		<Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5">
-			{humanFileSize(bitSize)}
-		</Badge>
-	);
-}
-
-export function ModelTypeIcon({
-	type,
-	className = "",
-}: Readonly<{ type: IBitTypes; className?: string }>): JSX.Element {
-	const { t } = useTranslation("common");
-	const cn = `h-4 w-4 ${className}`;
-	switch (type) {
-		case IBitTypes.Forecasting:
-			return <ChartNoAxesCombinedIcon className={cn} />;
-		case IBitTypes.SystemOne:
-			return <ListChecksIcon className={cn} />;
-		case IBitTypes.Llm:
-			return <BrainIcon className={cn} />;
-		case IBitTypes.Vlm:
-			return <CameraIcon className={cn} />;
-		case IBitTypes.Tts:
-			return <AudioLinesIcon className={cn} />;
-		case IBitTypes.Stt:
-			return <MicIcon className={cn} />;
-		case IBitTypes.Embedding:
-			return <FileSearch className={cn} />;
-		case IBitTypes.ImageEmbedding:
-			return <ScanEyeIcon className={cn} />;
-		case IBitTypes.ImageGeneration:
-			return <ImageIcon className={cn} />;
-		case IBitTypes.VideoGeneration:
-			return <VideoIcon className={cn} />;
-		default:
-			return <BrainIcon className={cn} />;
-	}
-}
-
-export function ModalityIcons({
-	type,
-}: Readonly<{ type: IBitTypes }>): JSX.Element {
-	const { t } = useTranslation("common");
-	const iconClass = "h-3 w-3";
-	const arrowClass = "h-2.5 w-2.5 text-foreground";
-
-	switch (type) {
-		case IBitTypes.ImageGeneration:
-		case IBitTypes.VideoGeneration:
-		case IBitTypes.Forecasting:
-		case IBitTypes.SystemOne:
-			return <ModalityFlow type={type} compact />;
-		case IBitTypes.Llm:
-			return (
-				<div className="flex items-center gap-1 text-muted-foreground">
-					<TypeIcon className={`${iconClass} text-blue-500`} />
-					<ArrowRightIcon className={arrowClass} />
-					<TypeIcon className={`${iconClass} text-emerald-500`} />
-				</div>
-			);
-		case IBitTypes.Vlm:
-			return (
-				<div className="flex items-center gap-1 text-muted-foreground">
-					<TypeIcon className={`${iconClass} text-blue-500`} />
-					<ImageIcon className={`${iconClass} text-purple-500`} />
-					<ArrowRightIcon className={arrowClass} />
-					<TypeIcon className={`${iconClass} text-emerald-500`} />
-				</div>
-			);
-		case IBitTypes.Tts:
-			return (
-				<div className="flex items-center gap-1 text-muted-foreground">
-					<TypeIcon className={`${iconClass} text-blue-500`} />
-					<ArrowRightIcon className={arrowClass} />
-					<AudioLinesIcon className={`${iconClass} text-rose-500`} />
-				</div>
-			);
-		case IBitTypes.Stt:
-			return (
-				<div className="flex items-center gap-1 text-muted-foreground">
-					<AudioLinesIcon className={`${iconClass} text-rose-500`} />
-					<ArrowRightIcon className={arrowClass} />
-					<TypeIcon className={`${iconClass} text-emerald-500`} />
-				</div>
-			);
-		case IBitTypes.Embedding:
-			return (
-				<div className="flex items-center gap-1 text-muted-foreground">
-					<TypeIcon className={`${iconClass} text-blue-500`} />
-					<ArrowRightIcon className={arrowClass} />
-					<FileSearch className={`${iconClass} text-amber-500`} />
-				</div>
-			);
-		case IBitTypes.ImageEmbedding:
-			return (
-				<div className="flex items-center gap-1 text-muted-foreground">
-					<ImageIcon className={`${iconClass} text-purple-500`} />
-					<ArrowRightIcon className={arrowClass} />
-					<FileSearch className={`${iconClass} text-amber-500`} />
-				</div>
-			);
-		default:
-			return (
-				<div className="flex items-center gap-1 text-muted-foreground">
-					<TypeIcon className={`${iconClass} text-muted-foreground`} />
-					<ArrowRightIcon className={arrowClass} />
-					<TypeIcon className={`${iconClass} text-muted-foreground`} />
-				</div>
-			);
-	}
-}
-
-export function getModelModality(bit: IBit): string {
-	switch (bit.type) {
-		case IBitTypes.Forecasting:
-			return "Time series → Forecast";
-		case IBitTypes.SystemOne:
-			return "Text → Decisions";
-		case IBitTypes.Llm:
-			return i18next.t("textText", "Text → Text");
-		case IBitTypes.Vlm:
-			return i18next.t("imageText", "Image → Text");
-		case IBitTypes.Tts:
-			return i18next.t("textSpeech", "Text → Speech");
-		case IBitTypes.Stt:
-			return i18next.t("speechText", "Speech → Text");
-		case IBitTypes.Embedding:
-			return i18next.t("textEmbedding", "Text → Embedding");
-		case IBitTypes.ImageEmbedding:
-			return i18next.t("imageEmbedding", "Image → Embedding");
-		case IBitTypes.ImageGeneration:
-			return i18next.t("textImage", "Text → Image");
-		case IBitTypes.VideoGeneration:
-			return i18next.t("textVideo", "Text → Video");
-		default:
-			return "Unknown";
-	}
 }
 
 interface IRemoteExecutionConfig {

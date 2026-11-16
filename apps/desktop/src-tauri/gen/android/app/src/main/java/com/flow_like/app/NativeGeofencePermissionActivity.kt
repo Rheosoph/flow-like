@@ -2,7 +2,6 @@ package com.flow_like.app
 
 import android.Manifest
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -109,8 +108,8 @@ class NativeGeofencePermissionActivity : ComponentActivity() {
         if (!NativeGeofencePermissions.current(this, id)) { done(); return }
         if (!background || !granted(Manifest.permission.ACCESS_FINE_LOCATION) || Build.VERSION.SDK_INT < 29 || granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION)) { done(); return }
         if (Build.VERSION.SDK_INT == 29) { backgroundPermission.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION); return }
-        AlertDialog.Builder(this).setTitle("Allow background location Events")
-            .setMessage("To run the arrival and departure Events you enable while Flow Like is closed, choose Allow all the time in Android's location settings. You can turn these Events off at any time.")
+        NativeUi.dialog(this).setTitle("Allow background location Events")
+            .setMessage("Flow Like uses your location to detect arrival and departure for the Events you enable, even when the app is closed or not in use. You can turn these Events off at any time. To allow this, choose Allow all the time in Android's location settings.")
             .setPositiveButton("Open settings") { _, _ ->
                 if (NativeGeofencePermissions.current(this, id)) settings.launch(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) else done()
             }

@@ -52,10 +52,30 @@ pub struct Observation {
 
 impl Page {
     pub async fn enable_basic_auth(&self, origin: &str, decider: AuthDecider) -> crate::Result<()> {
+        self.enable_auth(format!("{origin}/*"), decider).await
+    }
+
+    /// Signs in to the proxy the browser was started with: every request of the page, its
+    /// frames and its workers passes the `Fetch` domain so the proxy's challenge can be answered.
+    /// A site's own sign-in is left to the browser.
+    pub async fn enable_proxy_auth(&self, username: &str, password: &str) -> crate::Result<()> {
+        let (username, password) = (username.to_owned(), password.to_owned());
+        let decider: AuthDecider = Arc::new(move |challenge, first| {
+            if challenge["source"] == "Proxy" && first {
+                json!({"response": "ProvideCredentials", "username": username, "password": password})
+            } else if challenge["source"] == "Proxy" {
+                json!({"response": "CancelAuth"})
+            } else {
+                json!({"response": "Default"})
+            }
+        });
+        self.enable_auth("*".to_owned(), decider).await
+    }
+
+    async fn enable_auth(&self, url_pattern: String, decider: AuthDecider) -> crate::Result<()> {
         let updates = self.inner.lock_state().fetch.updates.clone();
         let _serialized = updates.lock().await;
         self.serve_fetch_route();
-        let url_pattern = format!("{origin}/*");
         let params = enable_params(&url_pattern);
         let previous = self.inner.lock_state().fetch.auth.replace(BasicAuth {
             url_pattern,

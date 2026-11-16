@@ -1,5 +1,13 @@
 import "fake-indexeddb/auto";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import {
+	type MockInstance,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	test,
+	vi,
+} from "vitest";
 import { IRole } from "../../lib/schema/llm/history";
 import { globalChatDb } from "./global-chat-db";
 import {
@@ -62,7 +70,7 @@ describe("steering message ownership", () => {
 	const sessionId = "steering-order";
 	const runId = "steered-run";
 	const otherRunId = "other-run";
-	let put: ReturnType<typeof vi.spyOn<typeof globalChatDb.messages, "put">>;
+	let put: MockInstance<typeof globalChatDb.messages.put>;
 
 	beforeEach(async () => {
 		await globalChatDb.messages.clear();
@@ -83,6 +91,7 @@ describe("steering message ownership", () => {
 				selection: beginGlobalChatTurnSelection(id),
 				label: id,
 				message: reply,
+				sourceAttachments: [],
 			});
 		}
 	});

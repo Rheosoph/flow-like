@@ -23,6 +23,23 @@ to the model. The network is off unless the owner approves named hosts. Wall tim
 memory are limited per run (server: 120 s and 512 MiB by default; the scientific
 build raises the memory floor to 1 GiB).
 
+Python runs directly from the `code` argument. WASI cannot start child processes
+through `subprocess.run`, `os.system`, shell commands or another interpreter.
+The sandbox does not support installing packages with pip, micropip or Pyodide.
+Select bundled libraries with `packages`, then import them directly:
+
+```json
+{
+  "language": "python",
+  "packages": ["pandas"],
+  "code": "import pandas as pd\noutputs['total'] = int(pd.Series([1, 2, 3]).sum())"
+}
+```
+
+If a run reports `wasi does not support processes`, remove the process-launching
+code and perform the work in the current interpreter. Adding network hosts does
+not enable child processes or package installation.
+
 ### Licences
 
 CPython: PSF. QuickJS-NG: MIT. wasi-python: Apache-2.0. The scientific build carries

@@ -22,6 +22,7 @@ pub(crate) fn message_outgoing(message_id: &str, body: Value) -> Result<Outgoing
         kind: InboxEntryKind::Message,
         envelope: Some(plain_envelope(body)),
         envelopes: None,
+        interactive: None,
         turn: None,
     })
 }
@@ -224,6 +225,7 @@ fn reply_for_origin(
         kind: outgoing.kind,
         envelope: Some(envelope),
         envelopes: None,
+        interactive: None,
         turn: None,
     })
 }

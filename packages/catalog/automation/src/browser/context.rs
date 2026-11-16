@@ -308,6 +308,7 @@ fn launch_options_from_pins(pins: &OpenPins) -> flow_like_types::Result<LaunchOp
         cache_dir: default_cache_dir(),
         page_load_timeout: Duration::from_secs(page_load_timeout),
         launch_timeout: LAUNCH_TIMEOUT,
+        automation_notice: Default::default(),
     })
 }
 

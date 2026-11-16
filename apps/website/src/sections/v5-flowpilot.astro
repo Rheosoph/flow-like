@@ -15,13 +15,9 @@ const crewCopy = (prefix: string): BotCrewCopy["roles"] => [
   t(`${prefix}.loop`),
 ];
 const copy: BotCrewCopy = {
-  label: t("v5.bots.demo.label"),
   title: t("v5.bots.demo.title"),
-  hint: t("v5.bots.demo.hint"),
   pause: t("v5.bots.demo.pause"),
   resume: t("v5.bots.demo.resume"),
-  statusWorking: t("v5.bots.demo.working"),
-  statusDone: t("v5.bots.demo.done"),
   resultLabel: t("v5.bots.demo.result"),
   roles: crewCopy("v5.bots.role"),
   missions: ["research", "data", "build"].map((mission) => ({

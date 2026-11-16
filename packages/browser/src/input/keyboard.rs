@@ -8,6 +8,7 @@ use crate::element::{Atom, Element, TEXT_CONTROL_TYPES, mint_elements};
 use crate::error::BrowserError;
 use crate::input::keys::{KeyEvent, Modifiers, convert_keys};
 use crate::input::mouse::{Dispatch, await_or_dialog, committed_error, element_stamp};
+use crate::input::paced::{Pacing, pause};
 use crate::input::{
     ActionOutcome, InputEvent, InputGuard, dialog_outcome, record_sent, unexpected_reply,
 };
@@ -124,6 +125,44 @@ pub(crate) async fn dispatch_key_events(
     finished(await_or_dialog(page, attempt, dialogs, pending).await?)
 }
 
+/// Sends `events` one by one, each after the pause `pacing` gives it, and waits for every reply
+/// so a dialog opened mid-sequence stops the rest.
+pub(crate) async fn dispatch_key_events_paced(
+    page: &Page,
+    attempt: &OpAttempt,
+    events: Vec<KeyEvent>,
+    pacing: &dyn Pacing,
+) -> crate::Result<ActionOutcome> {
+    let session = page.session();
+    let page_session = page.inner.session.clone();
+    let mut previous: Option<&KeyEvent> = None;
+    for event in &events {
+        pause(pacing.key_wait(previous, event), attempt).await;
+        let dialogs = page.dialog_count();
+        if let Some(dialog) = page.pending_dialog() {
+            return Ok(dialog_outcome(dialog));
+        }
+        let input = InputEvent::Key(event.clone());
+        let pending = match session.enqueue(input.method(), input.params(), None) {
+            Ok(pending) => pending,
+            Err(error) => return finished(committed_error(attempt, error)?),
+        };
+        attempt.commit();
+        record_sent(
+            page,
+            &page_session,
+            &input,
+            pending.ticket(),
+            attempt.deadline,
+        );
+        match await_or_dialog(page, attempt, dialogs, pending).await? {
+            Dispatch::Acknowledged => previous = Some(event),
+            other => return finished(other),
+        }
+    }
+    Ok(ActionOutcome::Completed)
+}
+
 fn finished(dispatch: Dispatch) -> crate::Result<ActionOutcome> {
     Ok(match dispatch {
         Dispatch::Dialog(dialog) => dialog_outcome(dialog),
@@ -133,13 +172,30 @@ fn finished(dispatch: Dispatch) -> crate::Result<ActionOutcome> {
 
 impl Element {
     pub async fn send_keys(&self, text: &str) -> crate::Result<ActionOutcome> {
+        self.send_keys_with(text, None).await
+    }
+
+    /// [`Element::send_keys`] with every key event after the pause `pacing` gives it.
+    pub async fn send_keys_paced(
+        &self,
+        text: &str,
+        pacing: &dyn Pacing,
+    ) -> crate::Result<ActionOutcome> {
+        self.send_keys_with(text, Some(pacing)).await
+    }
+
+    async fn send_keys_with(
+        &self,
+        text: &str,
+        pacing: Option<&dyn Pacing>,
+    ) -> crate::Result<ActionOutcome> {
         let mut sticky = Modifiers::NONE;
         let events = convert_keys(text, &mut sticky, true)?;
         let _guard = InputGuard::new(&self.frame.page);
         let outcome = self
             .run(OpSpec::INPUT, |attempt| {
                 let events = events.clone();
-                async move { self.send_keys_in(&attempt, text, events).await }
+                async move { self.send_keys_in(&attempt, text, events, pacing).await }
             })
             .await?;
         Ok(outcome.or_else(dialog_outcome))
@@ -150,6 +206,7 @@ impl Element {
         attempt: &OpAttempt,
         text: &str,
         events: Vec<KeyEvent>,
+        pacing: Option<&dyn Pacing>,
     ) -> crate::Result<ActionOutcome> {
         let target = self.key_target_in(attempt).await?;
         if target.is_input("file") {
@@ -162,7 +219,12 @@ impl Element {
             return Ok(ActionOutcome::Completed);
         }
         self.prepare_typing_in(attempt, target).await?;
-        dispatch_key_events(&self.frame.page, attempt, events).await
+        match pacing {
+            Some(pacing) => {
+                dispatch_key_events_paced(&self.frame.page, attempt, events, pacing).await
+            }
+            None => dispatch_key_events(&self.frame.page, attempt, events).await,
+        }
     }
 
     async fn prepare_typing_in(&self, attempt: &OpAttempt, target: KeyTarget) -> crate::Result<()> {

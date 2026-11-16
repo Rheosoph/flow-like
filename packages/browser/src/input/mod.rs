@@ -13,6 +13,7 @@ use crate::types::{DialogType, SessionId};
 pub(crate) mod keyboard;
 pub mod keys;
 pub(crate) mod mouse;
+pub mod paced;
 pub(crate) mod us_layout;
 
 use keys::{Key, KeyEvent, KeyEventKind, Modifiers};
@@ -82,6 +83,7 @@ pub(crate) enum MouseEventKind {
     Moved,
     Pressed,
     Released,
+    Wheel,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -92,6 +94,9 @@ pub(crate) struct MouseEvent {
     pub buttons: u8,
     pub click_count: u8,
     pub modifiers: u32,
+    /// Sent as `force`, which pages read as the pointer's pressure; CDP's default is 0.
+    pub force: Option<f64>,
+    pub delta: (f64, f64),
 }
 
 impl MouseEvent {
@@ -103,6 +108,8 @@ impl MouseEvent {
             buttons: held.map_or(0, MouseButton::mask),
             click_count: 0,
             modifiers,
+            force: None,
+            delta: (0.0, 0.0),
         }
     }
 
@@ -119,6 +126,8 @@ impl MouseEvent {
             buttons: button.mask(),
             click_count,
             modifiers,
+            force: None,
+            delta: (0.0, 0.0),
         }
     }
 
@@ -135,6 +144,28 @@ impl MouseEvent {
             buttons: 0,
             click_count,
             modifiers,
+            force: None,
+            delta: (0.0, 0.0),
+        }
+    }
+
+    pub(crate) fn wheel(point: (f64, f64), delta: (f64, f64)) -> Self {
+        Self {
+            kind: MouseEventKind::Wheel,
+            point,
+            button: None,
+            buttons: 0,
+            click_count: 0,
+            modifiers: 0,
+            force: None,
+            delta,
+        }
+    }
+
+    pub(crate) fn with_force(self, force: f64) -> Self {
+        Self {
+            force: Some(force),
+            ..self
         }
     }
 
@@ -143,8 +174,9 @@ impl MouseEvent {
             MouseEventKind::Moved => "mouseMoved",
             MouseEventKind::Pressed => "mousePressed",
             MouseEventKind::Released => "mouseReleased",
+            MouseEventKind::Wheel => "mouseWheel",
         };
-        json!({
+        let mut params = json!({
             "type": kind,
             "x": self.point.0,
             "y": self.point.1,
@@ -152,7 +184,15 @@ impl MouseEvent {
             "button": self.button.as_ref().map_or("none", MouseButton::wire_name),
             "buttons": self.buttons,
             "clickCount": self.click_count,
-        })
+        });
+        if let Some(force) = self.force {
+            params["force"] = json!(force);
+        }
+        if self.kind == MouseEventKind::Wheel {
+            params["deltaX"] = json!(self.delta.0);
+            params["deltaY"] = json!(self.delta.1);
+        }
+        params
     }
 }
 
@@ -217,6 +257,8 @@ pub(crate) struct InputState {
     modifiers: Modifiers,
     buttons: Vec<PressedButton>,
     pending_release: Option<PendingRelease>,
+    /// Where the last mouse event sent to the page's own session put the pointer.
+    pointer: Option<(f64, f64)>,
 }
 
 impl InputState {
@@ -225,6 +267,7 @@ impl InputState {
             modifiers: Modifiers::NONE,
             buttons: Vec::new(),
             pending_release: None,
+            pointer: None,
         }
     }
 
@@ -292,6 +335,7 @@ impl InputState {
                     }
                 }
             }
+            MouseEventKind::Wheel => {}
         }
     }
 
@@ -342,10 +386,13 @@ pub(crate) fn record_sent(
     ticket: &WriteTicket,
     deadline: tokio::time::Instant,
 ) {
-    page.inner
-        .lock_state()
-        .input
-        .record(session, event, ticket, deadline);
+    let mut state = page.inner.lock_state();
+    if let InputEvent::Mouse(mouse) = event
+        && *session == page.inner.session
+    {
+        state.input.pointer = Some(mouse.point);
+    }
+    state.input.record(session, event, ticket, deadline);
 }
 
 fn send_effects(page: &Page, effects: Vec<PageEffect>) -> crate::Result<()> {

@@ -5,11 +5,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use flow_like_bot_tools::browser::{
-    BrowserBackend, BrowserScreen, BrowserStep, Download, PageState, SnapshotRequest, SnapshotView,
+    BrowserBackend, BrowserScreen, BrowserStep, Challenge, Download, OpenOptions, PageState,
+    SnapshotRequest, SnapshotView,
 };
 use flow_like_bot_tools::computer::{
-    ComputerAction, ComputerBackend, DisplaySummary, Screen, WindowBounds, WindowOp,
-    WindowSummary,
+    ComputerAction, ComputerBackend, DisplaySummary, Screen, WindowBounds, WindowOp, WindowSummary,
 };
 use flow_like_bot_tools::error::{ToolError, code};
 use flow_like_types::Result;
@@ -76,12 +76,28 @@ impl GuardedBrowser {
 
 #[async_trait]
 impl BrowserBackend for GuardedBrowser {
-    async fn open(&self, url: &str) -> Result<PageState> {
-        self.opened(self.inner.open(url)).await
+    async fn open(&self, url: &str, options: &OpenOptions) -> Result<PageState> {
+        self.opened(self.inner.open(url, options)).await
     }
 
-    async fn open_in_owner_browser(&self, url: &str) -> Result<PageState> {
-        self.opened(self.inner.open_in_owner_browser(url)).await
+    async fn open_in_owner_browser(&self, url: &str, options: &OpenOptions) -> Result<PageState> {
+        self.opened(self.inner.open_in_owner_browser(url, options))
+            .await
+    }
+
+    async fn challenge(&self) -> Result<Option<Challenge>> {
+        self.guard()?;
+        self.inner.challenge().await
+    }
+
+    async fn press_challenge(&self) -> Result<Option<Challenge>> {
+        self.guard()?;
+        self.inner.press_challenge().await
+    }
+
+    async fn apply_challenge_token(&self, token: &str) -> Result<String> {
+        self.guard()?;
+        self.inner.apply_challenge_token(token).await
     }
 
     async fn snapshot(&self, request: SnapshotRequest) -> Result<SnapshotView> {

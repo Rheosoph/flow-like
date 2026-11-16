@@ -12,7 +12,7 @@ use tauri::{
     },
 };
 
-#[cfg(any(target_os = "ios", test))]
+#[cfg(any(target_os = "ios", android_frontend_split, test))]
 #[path = "../frontend_payload.rs"]
 mod frontend_payload;
 
@@ -34,7 +34,13 @@ pub(crate) fn register<R: Runtime>(builder: Builder<R>, context: &Context<R>) ->
         "/frontend-bundle-manifest.json"
     )))
     .expect("valid bundled frontend manifest");
-    #[cfg(target_os = "ios")]
+    #[cfg(android_frontend_split)]
+    let bundled: HashSet<String> = serde_json::from_str(include_str!(concat!(
+        env!("OUT_DIR"),
+        "/frontend-android-bundle-manifest.json"
+    )))
+    .expect("valid Android editor frontend manifest");
+    #[cfg(any(target_os = "ios", android_frontend_split))]
     let exported = exported
         .into_iter()
         .chain(bundled.iter().map(|path| format!("/{path}")))
@@ -77,6 +83,32 @@ pub(crate) fn register<R: Runtime>(builder: Builder<R>, context: &Context<R>) ->
                 Err(status) => asset_error_response(status, &origin, headers),
             };
         }
+        #[cfg(android_frontend_split)]
+        if let Some(resource) = android_bundled_path(&path, &bundled) {
+            let headers = app.config().app.security.headers.as_ref();
+            return match resource {
+                Ok((relative_path, mime_type)) => match read_android_asset(&relative_path) {
+                    Ok(bytes) => asset_response(bytes, mime_type, None, &origin, headers)
+                        .unwrap_or_else(|_| {
+                            asset_error_response(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                &origin,
+                                headers,
+                            )
+                        }),
+                    Err(error) => {
+                        let status = if error.kind() == std::io::ErrorKind::NotFound {
+                            StatusCode::NOT_FOUND
+                        } else {
+                            StatusCode::INTERNAL_SERVER_ERROR
+                        };
+                        tracing::error!("Failed to read Android editor asset {relative_path}: {error}");
+                        asset_error_response(status, &origin, headers)
+                    }
+                },
+                Err(status) => asset_error_response(status, &origin, headers),
+            };
+        }
         // Tauri resolves the chosen document, retaining CSP hashes, nonces,
         // MIME detection, and ordinary exported-file fallbacks.
         match app
@@ -101,6 +133,23 @@ fn bundled_path(
     path: &str,
     manifest: &HashSet<String>,
 ) -> Option<Result<(String, &'static str), StatusCode>> {
+    bundled_path_matching(path, manifest, frontend_payload::bundled_mime_type)
+}
+
+#[cfg(any(android_frontend_split, test))]
+fn android_bundled_path(
+    path: &str,
+    manifest: &HashSet<String>,
+) -> Option<Result<(String, &'static str), StatusCode>> {
+    bundled_path_matching(path, manifest, frontend_payload::android_editor_mime_type)
+}
+
+#[cfg(any(target_os = "ios", android_frontend_split, test))]
+fn bundled_path_matching(
+    path: &str,
+    manifest: &HashSet<String>,
+    mime_type: impl Fn(&str) -> Option<&'static str>,
+) -> Option<Result<(String, &'static str), StatusCode>> {
     let valid_encoding = path.bytes().enumerate().all(|(index, byte)| {
         byte != b'%'
             || path
@@ -116,7 +165,7 @@ fn bundled_path(
         Err(_) => return Some(Err(StatusCode::BAD_REQUEST)),
     };
     // Tauri falls back to index.html, so a missing bundled file must stay a 404.
-    let mime_type = frontend_payload::bundled_mime_type(decoded.trim_end_matches('/'))?;
+    let mime_type = mime_type(decoded.trim_end_matches('/'))?;
     let Some(relative_path) = decoded.strip_prefix('/') else {
         return Some(Err(StatusCode::BAD_REQUEST));
     };
@@ -132,6 +181,87 @@ fn bundled_path(
         return Some(Err(StatusCode::NOT_FOUND));
     }
     Some(Ok((relative_path.to_owned(), mime_type)))
+}
+
+#[cfg(android_frontend_split)]
+fn read_android_asset(relative_path: &str) -> std::io::Result<Vec<u8>> {
+    use jni::{JavaVM, objects::JObject};
+    use std::{ffi::CString, io, ptr::NonNull};
+
+    struct NativeAsset(NonNull<ndk_sys::AAsset>);
+    impl Drop for NativeAsset {
+        fn drop(&mut self) {
+            // This request owns its asset stream and closes it before its Java manager.
+            unsafe { ndk_sys::AAsset_close(self.0.as_ptr()) };
+        }
+    }
+
+    let path = CString::new(format!(
+        "{}/{relative_path}",
+        frontend_payload::RESOURCE_DIR
+    ))
+    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    let context = ndk_context::android_context();
+    // Tao retains this application's GlobalRef and JavaVM for the runtime's lifetime.
+    let vm = unsafe { JavaVM::from_raw(context.vm().cast()) }.map_err(io::Error::other)?;
+    let mut env = vm.attach_current_thread().map_err(io::Error::other)?;
+    let result = (|| {
+        let application = unsafe { JObject::from_raw(context.context().cast()) };
+        let manager = env
+            .call_method(
+                &application,
+                "getFrontendAssets",
+                "()Landroid/content/res/AssetManager;",
+                &[],
+            )
+            .and_then(|value| value.l())
+            .map_err(io::Error::other)?;
+        let manager = env.auto_local(manager);
+        // Use the retained feature manager without replacing WebView's framework assets.
+        // Native reads avoid dispatching this synchronous protocol callback to the UI.
+        let native_manager = unsafe {
+            ndk_sys::AAssetManager_fromJava(env.get_native_interface(), manager.as_raw())
+        };
+        let native_manager = NonNull::new(native_manager)
+            .ok_or_else(|| io::Error::other("Android AssetManager is unavailable"))?;
+        let asset = unsafe {
+            ndk_sys::AAssetManager_open(
+                native_manager.as_ptr(),
+                path.as_ptr(),
+                ndk_sys::AASSET_MODE_STREAMING as i32,
+            )
+        };
+        let asset = NativeAsset(NonNull::new(asset).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "editor asset is not installed")
+        })?);
+        let length = usize::try_from(unsafe { ndk_sys::AAsset_getLength64(asset.0.as_ptr()) })
+            .map_err(|_| io::Error::other("invalid Android asset length"))?;
+        let mut bytes = vec![0; length];
+        let mut offset = 0;
+        while offset < length {
+            let count = (length - offset).min(i32::MAX as usize);
+            let read = unsafe {
+                ndk_sys::AAsset_read(asset.0.as_ptr(), bytes[offset..].as_mut_ptr().cast(), count)
+            };
+            if read <= 0 {
+                return Err(io::Error::new(
+                    if read == 0 {
+                        io::ErrorKind::UnexpectedEof
+                    } else {
+                        io::ErrorKind::Other
+                    },
+                    "Android editor asset could not be read completely",
+                ));
+            }
+            offset += read as usize;
+        }
+        Ok(bytes)
+    })();
+    if result.is_err() && env.exception_check().unwrap_or(false) {
+        // Do not leave a Java exception pending on a WebView-owned request thread.
+        let _ = env.exception_clear();
+    }
+    result
 }
 
 #[cfg(any(target_os = "ios", test))]
@@ -160,7 +290,7 @@ fn bundled_response(
     }
 }
 
-#[cfg(any(target_os = "ios", test))]
+#[cfg(any(target_os = "ios", android_frontend_split, test))]
 fn asset_error_response(
     status: StatusCode,
     origin: &str,
@@ -239,6 +369,62 @@ fn unavailable_response(origin: &str) -> Response<Vec<u8>> {
 mod tests {
     use super::*;
     use tauri::utils::config::HeaderSource;
+
+    #[test]
+    fn android_editor_urls_require_the_manifest_and_leave_base_assets_embedded() {
+        let manifest = ["craft/pdfcraft/craft.wasm.gz.000".to_owned()].into();
+        for path in [
+            "/craft/pdfcraft/craft.wasm.gz.000",
+            "/craft/%70dfcraft/craft.wasm.gz.000",
+        ] {
+            assert_eq!(
+                android_bundled_path(path, &manifest),
+                Some(Ok((
+                    "craft/pdfcraft/craft.wasm.gz.000".into(),
+                    "application/octet-stream"
+                )))
+            );
+        }
+        assert_eq!(
+            android_bundled_path("/craft/pdfcraft/craft.wasm.gz.001", &manifest),
+            Some(Err(StatusCode::NOT_FOUND))
+        );
+        for path in [
+            "/craft/pdfcraft/runtime.json",
+            "/craft/pdfcraft/licenses/sources/krilla.tar.gz",
+            "/wordcraft/licenses/LICENSE",
+            "/board_canvas.wasm",
+            "/ort-wasm-simd-threaded.wasm",
+            "/_next/static/media/inter.woff2",
+        ] {
+            assert!(android_bundled_path(path, &manifest).is_none(), "{path}");
+        }
+        for path in [
+            "//craft/pdfcraft/craft.wasm.gz.000",
+            "/craft/pdfcraft/craft.wasm.gz.000/",
+            "craft/pdfcraft/craft.wasm.gz.000",
+            "/craft/%GGpdfcraft/craft.wasm.gz.000",
+        ] {
+            let malformed_manifest = [path.trim_start_matches('/').to_owned()].into();
+            assert_eq!(
+                android_bundled_path(path, &malformed_manifest),
+                Some(Err(StatusCode::BAD_REQUEST)),
+                "{path}"
+            );
+        }
+        for path in [
+            "/craft/pdfcraft/../craft.wasm.gz.000",
+            "/craft/pdfcraft/%2E%2E/craft.wasm.gz.000",
+            "/craft/pdfcraft%5Ccraft.wasm.gz.000",
+            "/craft/pdfcraft/%00craft.wasm.gz.000",
+        ] {
+            let malformed_manifest = [path.trim_start_matches('/').to_owned()].into();
+            assert!(
+                !matches!(android_bundled_path(path, &malformed_manifest), Some(Ok(_))),
+                "{path}"
+            );
+        }
+    }
 
     fn exported() -> HashSet<String> {
         [

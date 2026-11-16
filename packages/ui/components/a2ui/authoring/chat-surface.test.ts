@@ -395,6 +395,21 @@ describe("chat policy", () => {
 		expect(props(surface, "r").wrap).toEqual({ literalBool: true });
 		expect(props(surface, "nowrap").wrap).toEqual({ literalBool: false });
 	});
+
+	test("cards respond to the pointer unless the reply says otherwise", () => {
+		const surface = surfaceOf(
+			lines(
+				{ id: "root", type: "column", children: ["c", "still"] },
+				{ id: "c", type: "card", title: "iX3", headerImage: "bot/ix3.png" },
+				{ id: "still", type: "card", title: "i3", hoverable: false },
+			),
+		);
+		expect(props(surface, "c").hoverable).toEqual({ literalBool: true });
+		expect(props(surface, "c").headerImage).toEqual({
+			literalString: "bot/ix3.png",
+		});
+		expect(props(surface, "still").hoverable).toEqual({ literalBool: false });
+	});
 });
 
 describe("sanitizeChatStyle", () => {

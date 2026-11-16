@@ -568,6 +568,57 @@ mod files {
     }
 
     #[tokio::test]
+    async fn a_granted_file_is_reachable_however_the_bot_names_it() {
+        let env = FakeEnv::new().await;
+        env.signs_links.store(true, Ordering::SeqCst);
+        let handle = handle_for("conversation_c1", "f1.png", b"png", "image/png");
+        env.put("conversation_c1", "f1.png", b"png", "image/png");
+        env.granted.lock().expect("granted").push(handle.clone());
+
+        let as_text = serde_json::to_string(&handle).expect("handle json");
+        let saved = call(&env, "file_save", json!({ "file": as_text })).await;
+        assert_eq!(ok(&saved).saved[0].path, "bot/files/f1.png");
+
+        for file in [
+            json!("app:conversation_c1/f1.png"),
+            json!({ "app_id": "conversation_c1", "path": "f1.png" }),
+        ] {
+            let linked = call(&env, "file_link", json!({ "file": file })).await;
+            assert_eq!(
+                ok(&linked).result["url"],
+                "https://files.test/conversation_c1/f1.png"
+            );
+        }
+
+        env.put(OTHER_APP, "d.txt", b"x", "text/plain");
+        let foreign = serde_json::to_string(&handle_for(OTHER_APP, "d.txt", b"x", "text/plain"))
+            .expect("handle json");
+        let refused = call(&env, "file_link", json!({ "file": foreign })).await;
+        assert_eq!(err_code(&refused), "scope_refused");
+    }
+
+    #[test]
+    fn conversation_files_are_found_in_every_form_a_file_tool_reads() {
+        let handle = handle_for("conversation_c1", "f1.png", b"png", "image/png");
+        let args = json!({
+            "file": serde_json::to_string(&handle).expect("handle json"),
+            "files": [
+                handle,
+                { "app_id": "conversation_c2", "path": "f2.pdf" },
+                "app:conversation_c3/f3.txt",
+                "bot/notes/a.md",
+                format!("app:{OTHER_APP}/d.txt"),
+            ],
+            "content": "conversation_c4/f4.txt",
+        });
+        assert_eq!(
+            crate::files::conversation_files(&args),
+            [("c1", "f1.png"), ("c2", "f2.pdf"), ("c3", "f3.txt")]
+                .map(|(id, path)| (id.to_string(), path.to_string()))
+        );
+    }
+
+    #[tokio::test]
     async fn a_link_follows_the_read_rules_and_says_when_none_can_be_made() {
         let env = FakeEnv::new().await;
         env.put(OTHER_APP, "docs/plan.md", b"plan", "text/markdown");
@@ -3010,6 +3061,48 @@ mod code {
             );
         }
         assert!(env.get(WORKSPACE, "bot/code").is_none());
+    }
+
+    #[tokio::test]
+    async fn unsupported_process_errors_explain_recovery_and_keep_the_traceback() {
+        let env = FakeEnv::new().await;
+        let traceback = "Traceback (most recent call last):\n  File \"<flow_code>\", line 2, in <module>\nOSError: [Errno 58] wasi does not support processes.\n";
+        for (status, detail, expects_hint) in [
+            (RunStatus::Error, traceback, true),
+            (RunStatus::Timeout, traceback, false),
+            (
+                RunStatus::Error,
+                "OSError: [Errno 58] another unsupported operation",
+                false,
+            ),
+            (
+                RunStatus::Error,
+                "ValueError: wasi does not support processes",
+                false,
+            ),
+        ] {
+            env.sandbox()
+                .respond(status, "partial output", Some(detail));
+            let outcome = call(
+                &env,
+                "code_run",
+                json!({ "language": "python", "code": "import subprocess\nsubprocess.run(['python3', '-V'])" }),
+            )
+            .await;
+            let envelope = outcome.envelope();
+            let message = envelope["error"]["message"].as_str().expect("message");
+            assert_eq!(
+                message.contains("cannot start child processes"),
+                expects_hint
+            );
+            assert!(message.ends_with(detail));
+            assert_eq!(envelope["stdout"], "partial output");
+            assert_eq!(envelope["stderr"], "trace");
+            if expects_hint {
+                assert_eq!(err_code(&outcome), "code_error");
+                assert!(message.contains("'code'") && message.contains("'packages'"));
+            }
+        }
     }
 
     #[tokio::test]

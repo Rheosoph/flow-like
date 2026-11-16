@@ -58,6 +58,8 @@ open class RustPlugin : Plugin<Project> {
                 }
 
                 tasks["mergeUniversal${profileCapitalized}JniLibFolders"].dependsOn(buildTask)
+                // Cargo also rewrites generated Kotlin and intent filters before Android compiles them.
+                tasks["preUniversal${profileCapitalized}Build"].dependsOn(buildTask)
 
                 for (targetPair in targetsList.withIndex()) {
                     val targetName = targetPair.value
@@ -78,6 +80,7 @@ open class RustPlugin : Plugin<Project> {
                     tasks["merge$targetArchCapitalized${profileCapitalized}JniLibFolders"].dependsOn(
                         targetBuildTask
                     )
+                    tasks["pre$targetArchCapitalized${profileCapitalized}Build"].dependsOn(targetBuildTask)
                 }
             }
         }

@@ -28,7 +28,9 @@ impl std::error::Error for MissingPermission {}
 #[cfg(any(target_os = "macos", test))]
 fn pane(capability: AutomationCapability) -> (&'static str, &'static str) {
     match capability {
-        AutomationCapability::ScreenCapture => ("screen_recording", "Screen & System Audio Recording"),
+        AutomationCapability::ScreenCapture => {
+            ("screen_recording", "Screen & System Audio Recording")
+        }
         _ => ("accessibility", "Accessibility"),
     }
 }
@@ -99,7 +101,11 @@ fn started_with(capability: AutomationCapability) -> bool {
 pub async fn require(capability: AutomationCapability) -> flow_like_types::Result<()> {
     #[cfg(target_os = "macos")]
     {
-        let bit = if capability == AutomationCapability::ScreenCapture { 1 } else { 2 };
+        let bit = if capability == AutomationCapability::ScreenCapture {
+            1
+        } else {
+            2
+        };
         if !granted(capability) {
             if REQUESTED.fetch_or(bit, Ordering::AcqRel) & bit == 0 {
                 let _ = request_capability(capability).await;

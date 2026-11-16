@@ -278,6 +278,7 @@ pub(crate) fn request(message_id: &str, kind: InboxEntryKind, body: Value) -> Se
         kind,
         envelope: plain(body),
         envelopes: None,
+        interactive: None,
         turn: None,
     }
 }

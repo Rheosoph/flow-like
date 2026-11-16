@@ -21,6 +21,7 @@ export type CopilotStreamEventType =
 	| "components"
 	| "canvas_settings"
 	| "usage_stat"
+	| "model_resolved"
 	| "ui_draft"
 	| "reply_attachment";
 
@@ -45,6 +46,7 @@ const TAG_TYPES: CopilotStreamEventType[] = [
 	"components",
 	"canvas_settings",
 	"usage_stat",
+	"model_resolved",
 	"ui_draft",
 	"reply_attachment",
 ];

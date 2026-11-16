@@ -261,6 +261,7 @@ impl E2e {
             cache_dir: cache_dir(),
             page_load_timeout: PAGE_LOAD_TIMEOUT,
             launch_timeout: LAUNCH_TIMEOUT,
+            automation_notice: Default::default(),
         }
     }
 

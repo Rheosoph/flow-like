@@ -24,8 +24,11 @@ import {
 } from "../../../lib/bit/custom-request-params";
 import {
 	type ExternalModelCatalog,
+	type ExternalModelMetadata,
+	type ExternalModelOption,
 	type IProviderDef,
 	type IProviderField,
+	externalModelMetadata,
 	externalModelProviders,
 	providerFieldValues,
 	specificExternalModels,
@@ -40,22 +43,21 @@ import {
 	validateHuggingFacePinnedGgufDownloadUrl,
 } from "../../../lib/bit/huggingface-model-import";
 import { validateSystemOneParameters } from "../../../lib/bit/systemone-model";
+import {
+	type DataClassification,
+	parseDataClassification,
+} from "../../../lib/data-classification";
 import type { IBit, IMetadata } from "../../../lib/schema/bit/bit";
 import { IBitTypes } from "../../../lib/schema/bit/bit";
 import {
 	type ILlmParameters,
 	IModelApiSurface,
 } from "../../../lib/schema/bit/bit/llm-parameters";
-import {
-	type DataClassification,
-	parseDataClassification,
-} from "../../../lib/data-classification";
 import { humanFileSize } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
 import { useDownloadManager } from "../../../state/download-manager";
 import { BitEditorDialog } from "../../bits/bit-editor-dialog";
 import {
-	DataClassificationSelect,
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
@@ -64,6 +66,7 @@ import {
 	Collapsible,
 	CollapsibleContent,
 	CollapsibleTrigger,
+	DataClassificationSelect,
 	Dialog,
 	DialogContent,
 	DialogDescription,
@@ -694,7 +697,14 @@ export function AddCustomModelDialog(
 	props: Readonly<AddCustomModelDialogProps>,
 ) {
 	const [forecasting, setForecasting] = useState(false);
-	if (props.existingBit) {
+	const backend = useBackend();
+	const canEditRuntimeModel =
+		props.existingBit &&
+		!!providerDefForBit(props.existingBit)?.discoveryProvider &&
+		!props.webMode &&
+		backend.capabilities().canUseNativeAgentProviders &&
+		!!backend.bitState.listExternalModels;
+	if (props.existingBit && !canEditRuntimeModel) {
 		return (
 			<BitEditorDialog
 				bit={props.existingBit}
@@ -766,6 +776,10 @@ function AddCustomModelWizard({
 	const [description, setDescription] = useState("");
 	const [icon, setIcon] = useState("");
 	const [tags, setTags] = useState("");
+	const [runtimeModel, setRuntimeModel] = useState<ExternalModelOption | null>(
+		null,
+	);
+	const editedMetadata = useRef(new Set<string>());
 	const [classification, setClassification] = useState<Record<string, number>>(
 		defaultClassification,
 	);
@@ -806,6 +820,8 @@ function AddCustomModelWizard({
 
 	useEffect(() => {
 		if (!open) return;
+		setRuntimeModel(null);
+		editedMetadata.current.clear();
 		hfInspectionSequence.current += 1;
 		setSaving(false);
 		setDetectingSize(false);
@@ -842,6 +858,14 @@ function AddCustomModelWizard({
 		}
 
 		const params = existingBit.parameters as ILlmParameters | undefined;
+		// Saved metadata belongs to the user. Discovery must not overwrite it.
+		if (existingBit.meta?.en?.name) editedMetadata.current.add("name");
+		if (existingBit.meta?.en?.description)
+			editedMetadata.current.add("description");
+		if (existingBit.meta?.en?.tags?.length) editedMetadata.current.add("tags");
+		if (existingBit.meta?.en?.icon) editedMetadata.current.add("icon");
+		if (params?.context_length) editedMetadata.current.add("context");
+		editedMetadata.current.add("vision");
 		const localProviderName = params?.provider?.provider_name;
 		const isLocal =
 			localProviderName === LOCAL_PROVIDER_NAME ||
@@ -913,15 +937,60 @@ function AddCustomModelWizard({
 		setMmprojSize(projection.size ? String(projection.size) : "");
 	}, [open, existingBit, canHostLlamaCPP]);
 
-	const setFieldValue = useCallback((key: string, value: string) => {
-		setFieldValues((prev) => ({ ...prev, [key]: value }));
-	}, []);
+	const applyExternalMetadata = useCallback(
+		(metadata: ExternalModelMetadata) => {
+			if (!editedMetadata.current.has("name")) setDisplayName(metadata.name);
+			if (!editedMetadata.current.has("description"))
+				setDescription(metadata.description);
+			if (!editedMetadata.current.has("tags"))
+				setTags(metadata.tags.join(", "));
+			if (!editedMetadata.current.has("icon")) setIcon(metadata.icon);
+			if (!editedMetadata.current.has("context"))
+				setContextLength(
+					String(metadata.contextLength ?? DEFAULT_CONTEXT_LENGTH),
+				);
+			if (!editedMetadata.current.has("vision"))
+				setIsVision(metadata.vision ?? false);
+		},
+		[],
+	);
+
+	const setFieldValue = useCallback(
+		(key: string, value: string) => {
+			setFieldValues((prev) => ({ ...prev, [key]: value }));
+			if (key !== "model_id" || value === fieldValues.model_id) return;
+			setRuntimeModel(null);
+			if (providerDef?.discoveryProvider) {
+				// A manual ID has no reported capabilities from the previous model.
+				applyExternalMetadata(
+					externalModelMetadata(providerDef.discoveryProvider, {
+						id: value,
+						name: value,
+					}),
+				);
+			}
+		},
+		[fieldValues.model_id, providerDef, applyExternalMetadata],
+	);
+
+	const applyRuntimeModel = useCallback(
+		(model: ExternalModelOption) => {
+			if (!providerDef?.discoveryProvider) return;
+			setRuntimeModel(model);
+			applyExternalMetadata(
+				externalModelMetadata(providerDef.discoveryProvider, model),
+			);
+		},
+		[providerDef, applyExternalMetadata],
+	);
 
 	const pickProvider = useCallback(
 		(key: string) => {
 			// A pending repository inspection must not replace this provider's metadata or type.
 			hfInspectionSequence.current += 1;
 			setInspectingHf(false);
+			setHfImport(null);
+			setHfImportError(null);
 			setSource("provider");
 			setProviderKey(key);
 			const def = availableProviders.find((provider) => provider.key === key);
@@ -931,6 +1000,12 @@ function AddCustomModelWizard({
 			}
 			setFieldValues(seeded);
 			setRequestParamsText("");
+			setRuntimeModel(null);
+			editedMetadata.current.clear();
+			setContextLength(DEFAULT_CONTEXT_LENGTH);
+			setDescription("");
+			setIcon("");
+			setTags("");
 			setIsVision(false);
 			setDataClassification(undefined);
 			setClassification({
@@ -944,11 +1019,21 @@ function AddCustomModelWizard({
 	);
 
 	const pickHuggingFace = useCallback(() => {
+		setRuntimeModel(null);
+		editedMetadata.current.clear();
+		if (providerDef?.discoveryProvider) {
+			setDisplayName("");
+			setDescription("");
+			setTags("");
+			setIcon("");
+			setContextLength(DEFAULT_CONTEXT_LENGTH);
+			setIsVision(false);
+		}
 		setSource("huggingface");
 		setLocalFormat(canHostLlamaCPP ? "gguf" : "mlx");
 		setProviderKey(null);
 		setStep("form");
-	}, [canHostLlamaCPP]);
+	}, [canHostLlamaCPP, providerDef]);
 
 	const applyImportedMetadata = useCallback(
 		(imported: HuggingFaceModelImport, kind: "llm" | "vlm") => {
@@ -1101,6 +1186,7 @@ function AddCustomModelWizard({
 			}
 		},
 		[
+			t,
 			hfReference,
 			canHostLlamaCPP,
 			canHostMLX,
@@ -1150,7 +1236,7 @@ function AddCustomModelWizard({
 				);
 			}
 		},
-		[hfImport, ggufProjectorPath, ggufVariantId, applyGgufSelection],
+		[t, hfImport, ggufProjectorPath, ggufVariantId, applyGgufSelection],
 	);
 
 	const applyHfUrl = useCallback((url: string) => {
@@ -1368,6 +1454,7 @@ function AddCustomModelWizard({
 		}
 		return providerDef.validate?.(fieldValues, isEdit) ?? null;
 	}, [
+		t,
 		step,
 		displayName,
 		contextLength,
@@ -1555,6 +1642,28 @@ function AddCustomModelWizard({
 				created: existingBit?.created ?? now,
 				updated: now,
 			};
+			if (existingBit && providerDef?.discoveryProvider) {
+				// The setup form owns connection and metadata fields, not other Bit settings.
+				const configuredParameters = bit.parameters as ILlmParameters;
+				bit = {
+					...existingBit,
+					type: bit.type,
+					meta: bit.meta,
+					updated: now,
+					parameters: {
+						...existingParameters,
+						...configuredParameters,
+						data_classification: dataClassification ?? null,
+						provider: {
+							...existingProvider,
+							...configuredParameters.provider,
+							version:
+								(existingBit.parameters as ILlmParameters).provider?.version ??
+								null,
+						},
+					},
+				};
+			}
 
 			if (bit.type === IBitTypes.SystemOne) {
 				const error = validateSystemOneParameters(bit.parameters, "custom");
@@ -1645,6 +1754,7 @@ function AddCustomModelWizard({
 			setSaving(false);
 		}
 	}, [
+		t,
 		validationError,
 		existingBit,
 		displayName,
@@ -1683,7 +1793,7 @@ function AddCustomModelWizard({
 		return source === "huggingface"
 			? "HuggingFace model"
 			: (providerDef?.label ?? "Configure model");
-	}, [isEdit, step, source, providerDef]);
+	}, [t, isEdit, step, source, providerDef]);
 
 	const subtitle = useMemo(() => {
 		if (isEdit)
@@ -1707,7 +1817,7 @@ function AddCustomModelWizard({
 						"Reference GGUF weights and run them locally with llama.cpp.",
 					)
 			: (providerDef?.description ?? "");
-	}, [isEdit, step, source, localFormat, providerDef]);
+	}, [t, isEdit, step, source, localFormat, providerDef]);
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -1763,9 +1873,8 @@ function AddCustomModelWizard({
 								requestParamsError={requestParams.error}
 								isEdit={isEdit}
 								canDiscover={canUseNativeProviders}
-								onModelSelected={(name) =>
-									setDisplayName((current) => current || name)
-								}
+								active={open}
+								onModelSelected={applyRuntimeModel}
 							/>
 						)}
 						{source === "huggingface" && (
@@ -1907,20 +2016,48 @@ function AddCustomModelWizard({
 						<ModelSettingsSection
 							textOnly={source === "provider" && providerDef?.textOnly}
 							contextLength={contextLength}
-							onContextLengthChange={setContextLength}
+							onContextLengthChange={(value) => {
+								editedMetadata.current.add("context");
+								setContextLength(value);
+							}}
 							isVision={isVision}
-							onVisionChange={changeVisionModel}
+							onVisionChange={(value) => {
+								editedMetadata.current.add("vision");
+								changeVisionModel(value);
+							}}
 						/>
+						{runtimeModel && (
+							<p className="text-xs text-muted-foreground">
+								Model details are filled in automatically and remain editable.
+								{!runtimeModel.contextWindow &&
+									" The runtime did not report a context limit. Review the editable context length before saving."}
+								{!providerDef?.textOnly &&
+									runtimeModel.supportsVision === undefined &&
+									" Vision support was not reported. Enable it only if this model accepts images."}
+							</p>
+						)}
 
 						<MetadataSection
 							name={displayName}
-							onNameChange={setDisplayName}
+							onNameChange={(value) => {
+								editedMetadata.current.add("name");
+								setDisplayName(value);
+							}}
 							description={description}
-							onDescriptionChange={setDescription}
+							onDescriptionChange={(value) => {
+								editedMetadata.current.add("description");
+								setDescription(value);
+							}}
 							icon={icon}
-							onIconChange={setIcon}
+							onIconChange={(value) => {
+								editedMetadata.current.add("icon");
+								setIcon(value);
+							}}
 							tags={tags}
-							onTagsChange={setTags}
+							onTagsChange={(value) => {
+								editedMetadata.current.add("tags");
+								setTags(value);
+							}}
 							parsedTags={parsedTags}
 						/>
 
@@ -2158,7 +2295,7 @@ function LocalFormatSelector({
 					}`}
 				>
 					<div className="flex items-center justify-between gap-2">
-						<p className="text-sm font-medium">{`GGUF`}</p>
+						<p className="text-sm font-medium">GGUF</p>
 						<Badge variant="outline">llama.cpp</Badge>
 					</div>
 					<p className="mt-1 text-xs text-muted-foreground">
@@ -2460,6 +2597,7 @@ function ProviderConnectionSection({
 	requestParamsError,
 	isEdit,
 	canDiscover,
+	active,
 	onModelSelected,
 }: Readonly<{
 	def: IProviderDef;
@@ -2470,23 +2608,20 @@ function ProviderConnectionSection({
 	requestParamsError: string | null;
 	isEdit: boolean;
 	canDiscover: boolean;
-	onModelSelected: (name: string) => void;
+	active: boolean;
+	onModelSelected: (model: ExternalModelOption) => void;
 }>) {
 	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const [showAdvanced, setShowAdvanced] = useState(false);
+	const [showManualId, setShowManualId] = useState(false);
 	const showRequestParams = supportsCustomRequestParams(def.providerName);
+	const hasDiscovery = canDiscover && !!def.discoveryProvider;
 	const [catalog, setCatalog] = useState<ExternalModelCatalog | null>(null);
 	const [loadingModels, setLoadingModels] = useState(false);
 	const [discoveryError, setDiscoveryError] = useState<string | null>(null);
 	const discoverySequence = useRef(0);
-	useEffect(
-		() => () => {
-			discoverySequence.current += 1;
-		},
-		[],
-	);
-	const discoverModels = async () => {
+	const discoverModels = useCallback(async () => {
 		if (!def.discoveryProvider || !backend.bitState.listExternalModels) return;
 		const sequence = ++discoverySequence.current;
 		setLoadingModels(true);
@@ -2499,15 +2634,28 @@ function ProviderConnectionSection({
 			setCatalog({ ...result, models: specificExternalModels(result.models) });
 		} catch (error) {
 			if (sequence !== discoverySequence.current) return;
-			setCatalog(null);
 			setDiscoveryError(error instanceof Error ? error.message : String(error));
 		} finally {
 			if (sequence === discoverySequence.current) setLoadingModels(false);
 		}
-	};
+	}, [backend.bitState, def.discoveryProvider]);
+	useEffect(() => {
+		if (active && hasDiscovery) void discoverModels();
+		return () => {
+			discoverySequence.current += 1;
+		};
+	}, [active, hasDiscovery, discoverModels]);
+	const selectedId = values.model_id ?? "";
+	const models = catalog?.models ?? [];
+	const selectedModel = models.find((model) => model.id === selectedId);
 	const basicFields = useMemo(
-		() => def.fields.filter((f) => !f.advanced),
-		[def],
+		() =>
+			def.fields.filter(
+				(field) =>
+					!field.advanced &&
+					(field.key !== "model_id" || !hasDiscovery || showManualId),
+			),
+		[def, hasDiscovery, showManualId],
 	);
 	const advancedFields = useMemo(
 		() => def.fields.filter((f) => f.advanced),
@@ -2524,8 +2672,39 @@ function ProviderConnectionSection({
 					</Badge>
 				)}
 			</div>
-			{canDiscover && def.discoveryProvider && (
+			{hasDiscovery && (
 				<div className="space-y-2 rounded-lg border p-3">
+					<div className="space-y-1.5">
+						<Label htmlFor="discovered-model">Model</Label>
+						<select
+							id="discovered-model"
+							className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+							value={selectedId}
+							disabled={loadingModels || models.length === 0}
+							aria-busy={loadingModels}
+							onChange={(event) => {
+								const model = models.find(
+									(item) => item.id === event.target.value,
+								);
+								if (!model) return;
+								onChange("model_id", model.id);
+								onModelSelected(model);
+							}}
+						>
+							<option value="" disabled>
+								{loadingModels ? "Detecting models…" : "Choose a model"}
+							</option>
+							{selectedId && !selectedModel && (
+								<option value={selectedId}>{selectedId}</option>
+							)}
+							{models.map((model) => (
+								<option key={model.id} value={model.id}>
+									{model.name} ({model.id})
+									{model.isDefault ? " · Runtime default" : ""}
+								</option>
+							))}
+						</select>
+					</div>
 					<Button
 						type="button"
 						variant="outline"
@@ -2536,14 +2715,17 @@ function ProviderConnectionSection({
 						{loadingModels && (
 							<Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
 						)}
-						{loadingModels
-							? "Checking local sign-in…"
-							: "Discover models on this device"}
+						Refresh models
 					</Button>
+					{loadingModels && (
+						<output className="block text-xs text-muted-foreground">
+							Checking local sign-in and detecting models…
+						</output>
+					)}
 					<p className="text-xs text-muted-foreground">
 						{def.discoveryProvider === "codex"
-							? "Uses the installed Codex account for discovery. A supplied access token may have different model access."
-							: "Uses the installed Claude Code account. Sign in with Claude Code before discovering models."}
+							? "Models come from your local Codex account. Execution uses cached auth.json credentials or an access token in Advanced options. Keychain-only sign-in is not supported. A supplied token may have different model access."
+							: "Uses Claude Code signed in on this device. Choose a model to fill in its metadata."}
 					</p>
 					{values.executable?.trim() && (
 						<p className="text-xs text-muted-foreground">
@@ -2564,44 +2746,40 @@ function ProviderConnectionSection({
 										: "The runtime returned no specific models. Enter a model ID from your account."}
 						</output>
 					)}
+					{catalog?.available && !catalog.authenticated && (
+						<p className="text-xs text-muted-foreground">
+							Run{" "}
+							<code>
+								{def.discoveryProvider === "codex"
+									? "codex login"
+									: "claude auth login"}
+							</code>{" "}
+							in a terminal, then refresh models.
+						</p>
+					)}
+					{catalog && selectedId && !selectedModel && (
+						<p className="text-xs text-muted-foreground">
+							The selected model was not returned by this discovery. Its ID is
+							kept until you choose another model.
+						</p>
+					)}
 					{discoveryError && (
 						<p role="alert" className="text-xs text-destructive">
 							{discoveryError}
 						</p>
 					)}
-					{!!catalog?.models.length && (
-						<div className="space-y-1.5">
-							<Label htmlFor="discovered-model" className="text-xs">
-								Available models
-							</Label>
-							<select
-								id="discovered-model"
-								className="h-9 w-full rounded-md border bg-background px-3 text-sm"
-								value={
-									catalog.models.some((model) => model.id === values.model_id)
-										? values.model_id
-										: ""
-								}
-								onChange={(event) => {
-									const model = catalog.models.find(
-										(model) => model.id === event.target.value,
-									);
-									if (!model) return;
-									onChange("model_id", model.id);
-									onModelSelected(model.name);
-								}}
-							>
-								<option value="" disabled>
-									Choose a model
-								</option>
-								{catalog.models.map((model) => (
-									<option key={model.id} value={model.id}>
-										{model.name} ({model.id})
-									</option>
-								))}
-							</select>
-						</div>
-					)}
+					<Button
+						type="button"
+						variant="link"
+						size="sm"
+						className="h-auto p-0 text-xs"
+						aria-expanded={showManualId}
+						onClick={() => setShowManualId((current) => !current)}
+					>
+						{showManualId
+							? "Hide manual model ID"
+							: "Enter a model ID manually"}
+					</Button>
 				</div>
 			)}
 			{def.fixedModelId && (

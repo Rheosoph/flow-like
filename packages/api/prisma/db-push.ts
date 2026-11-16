@@ -47,7 +47,14 @@ export async function pushPostgresSchema(
 		await prePush();
 		return await run(
 			"bunx",
-			["prisma", "db", "push", "--schema", "prisma-postgres-mirror/schema", ...args],
+			[
+				"prisma",
+				"db",
+				"push",
+				"--schema",
+				"prisma-postgres-mirror/schema",
+				...args,
+			],
 			environment,
 		);
 	} finally {
@@ -68,9 +75,14 @@ async function main(): Promise<number> {
 	);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+	process.argv[1] &&
+	import.meta.url === pathToFileURL(process.argv[1]).href
+) {
 	main().then(
-		(status) => { process.exitCode = status; },
+		(status) => {
+			process.exitCode = status;
+		},
 		(error) => {
 			console.error(error instanceof Error ? error.message : String(error));
 			process.exitCode = 1;

@@ -674,9 +674,6 @@ function ProfileCard({
 						<Layers3 size={40} strokeWidth={1} aria-hidden="true" />
 					</div>
 				)}
-				<span className={styles.selectIndicator} aria-hidden="true">
-					{active ? <Check size={14} strokeWidth={3} /> : <Plus size={14} />}
-				</span>
 				<span className={styles.profileType}>
 					{hasLocalModels ? (
 						<>
@@ -696,6 +693,9 @@ function ProfileCard({
 					)}
 				</span>
 			</div>
+			<span className={styles.selectIndicator} aria-hidden="true">
+				{active ? <Check size={14} strokeWidth={3} /> : <Plus size={14} />}
+			</span>
 			<div className={styles.cardBody}>
 				<div className={styles.cardTitle}>
 					<h3 id={`${cardId}-name`}>{profile.name}</h3>

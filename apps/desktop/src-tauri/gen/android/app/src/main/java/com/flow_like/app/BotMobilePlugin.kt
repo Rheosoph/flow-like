@@ -2,7 +2,6 @@ package com.flow_like.app
 
 import android.Manifest
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -12,7 +11,6 @@ import android.speech.RecognizerIntent
 import android.util.Base64
 import android.webkit.WebView
 import android.widget.Toast
-import android.widget.EditText
 import androidx.activity.result.ActivityResult
 import androidx.core.content.FileProvider
 import app.tauri.annotation.ActivityCallback
@@ -66,6 +64,37 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
             try { invoke.resolve(JSObject(block().toString())) }
             catch (_: Exception) { invoke.reject("The native bot operation could not complete. Unlock the device and retry.") }
         }
+    }
+
+    private fun hostingCommand(invoke: Invoke, block: () -> Unit) = activity.runOnUiThread {
+        try { block() }
+        catch (_: Exception) { invoke.reject("Android could not complete this request. Open Flow-Like and try again.") }
+    }
+
+    @Command fun backgroundHostingStatus(invoke: Invoke) = hostingCommand(invoke) {
+        invoke.resolve(JSObject(BackgroundHostingService.status(activity).toString()))
+    }
+
+    @Command fun setBackgroundHosting(invoke: Invoke) = hostingCommand(invoke) {
+        if (invoke.getArgs().getBoolean("enabled")) {
+            BackgroundHostingService.start(activity) { status, error ->
+                if (error != null) invoke.reject(error)
+                else invoke.resolve(JSObject(requireNotNull(status).toString()))
+            }
+        } else {
+            BackgroundHostingService.stop(activity)
+            invoke.resolve(JSObject(BackgroundHostingService.status(activity).toString()))
+        }
+    }
+
+    @Command fun openBackgroundHostingBatterySettings(invoke: Invoke) = hostingCommand(invoke) {
+        BackgroundHostingService.openBatterySettings(activity)
+        invoke.resolve(JSObject(BackgroundHostingService.status(activity).toString()))
+    }
+
+    @Command fun openBackgroundHostingNotificationSettings(invoke: Invoke) = hostingCommand(invoke) {
+        BackgroundHostingService.openNotificationSettings(activity)
+        invoke.resolve(JSObject(BackgroundHostingService.status(activity).toString()))
     }
 
     @Command fun capabilities(invoke: Invoke) = execute(invoke) {
@@ -170,7 +199,7 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
                         val result = BotLocalAi.process(activity, options)
                         if (result.optBoolean("downloadable") && !options.optBoolean("downloadModel")) {
                             activity.runOnUiThread {
-                                AlertDialog.Builder(activity).setTitle("Download the on-device model?")
+                                NativeUi.dialog(activity).setTitle("Download the on-device model?")
                                     .setMessage("This feature needs a model download. Your text is processed on this device.")
                                     .setPositiveButton("Download") { _, _ -> modelWorker.execute {
                                         try {
@@ -221,8 +250,8 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
     @ActivityCallback fun voiceResult(invoke: Invoke, result: ActivityResult) {
         if (result.resultCode != Activity.RESULT_OK) { finishRequest(invoke, JSONObject().put("cancelled", true)); return }
         val text = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
-        val input = EditText(activity).apply { setText(text ?: ""); minLines = 2 }
-        AlertDialog.Builder(activity).setTitle("Use this message?").setView(input)
+        val input = NativeUi.input(activity, "", text ?: "", minLines = 2)
+        NativeUi.dialog(activity).setTitle("Use this message?").setView(input)
             .setPositiveButton("Use message") { _, _ -> finishRequest(invoke, JSONObject().put("text", input.text.toString())) }
             .setNegativeButton("Cancel") { _, _ -> finishRequest(invoke, JSONObject().put("cancelled", true)) }
             .setOnCancelListener { finishRequest(invoke, JSONObject().put("cancelled", true)) }.show()
@@ -230,7 +259,7 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command fun captureDocument(invoke: Invoke) {
         if (invoke.getArgs().optJSONObject("options")?.optString("operation") == "document" && BotDocumentActivity.scannerAvailable(activity)) {
-            AlertDialog.Builder(activity).setTitle("Add a document")
+            NativeUi.dialog(activity).setTitle("Add a document")
                 .setItems(arrayOf("Scan a document", "Choose a document")) { _, which ->
                     if (which == 0) startActivityForResult(invoke, Intent(activity, BotDocumentActivity::class.java), "documentResult")
                     else chooseDocument(invoke)
@@ -252,7 +281,7 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
             captureDocument(invoke)
             return
         }
-        AlertDialog.Builder(activity).setTitle("Add a photo")
+        NativeUi.dialog(activity).setTitle("Add a photo")
             .setItems(arrayOf("Take a photo", "Choose a photo")) { _, which ->
                 if (which == 1) captureDocument(invoke) else {
                     try {
@@ -370,7 +399,7 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
         }
         if (intent.action != Intent.ACTION_SEND && intent.action != Intent.ACTION_SEND_MULTIPLE) return
         // Remove the launch payload after capturing it so activity recreation cannot send twice.
-        if (activity.intent === intent) activity.intent = Intent(activity, MainActivity::class.java)
+        if (activity.intent === intent) activity.intent = Intent(activity, RuntimeActivity::class.java)
         worker.execute {
             try {
                 val snapshot = store.snapshot() ?: throw IllegalStateException("Open your bot workspace before sharing")
@@ -388,7 +417,7 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
                     if (bots.length() == 0) {
                         Toast.makeText(activity, "Create a bot before sharing", Toast.LENGTH_LONG).show()
                         deleteFiles(files)
-                    } else AlertDialog.Builder(activity).setTitle("Send to bot")
+                    } else NativeUi.dialog(activity).setTitle("Send to bot")
                         .setItems(Array(bots.length()) { bots.getJSONObject(it).getString("title") }) { _, which ->
                             worker.execute {
                                 try {

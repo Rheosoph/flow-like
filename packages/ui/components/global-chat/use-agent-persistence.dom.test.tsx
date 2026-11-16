@@ -62,6 +62,58 @@ test("opening another chat surface keeps the current memory selection", async ()
 	expect(first.useGlobalChatStore.getState().embeddingModelId).toBe("embed-b");
 });
 
+test("restores a custom Claude Bit as a Profile selection after reload", async () => {
+	const before = await session();
+	before.useGlobalChatStore.getState().selectProvider("bits");
+	before.useGlobalChatStore.getState().selectModel("custom-claude-code");
+	vi.resetModules();
+	const after = await session();
+	after.useGlobalChatStore.getState().setProvider("claude-code");
+	after.useGlobalChatStore.getState().setSelectedModelId("default");
+	await act(async () => root.render(<after.Hydrate />));
+	expect(after.useGlobalChatStore.getState()).toMatchObject({
+		provider: "bits",
+		selectedModelId: "custom-claude-code",
+	});
+	await act(async () => root.render(null));
+	after.useGlobalChatStore.getState().selectModel("another-custom-bit");
+	await act(async () => root.render(<after.Hydrate />));
+	expect(after.useGlobalChatStore.getState().selectedModelId).toBe(
+		"another-custom-bit",
+	);
+});
+
+test.each(["current", "legacy"])(
+	"a provider switch cannot hydrate the previous provider's Bit from %s preferences",
+	async (preferences) => {
+		const before = await session();
+		before.useGlobalChatStore.getState().selectProvider("bits");
+		before.useGlobalChatStore.getState().selectModel("custom-claude-code");
+		if (preferences === "legacy") {
+			localStorage.removeItem(before.AGENT_MODEL_PROVIDER_KEY);
+		}
+		before.useGlobalChatStore.getState().selectProvider("codex");
+		vi.resetModules();
+		const after = await session();
+		await act(async () => root.render(<after.Hydrate />));
+		expect(after.useGlobalChatStore.getState()).toMatchObject({
+			provider: "codex",
+			selectedModelId: "",
+		});
+	},
+);
+
+test("hydrates a legacy provider and model preference without a model-provider key", async () => {
+	const current = await session();
+	localStorage.setItem(current.AGENT_PROVIDER_KEY, "bits");
+	localStorage.setItem(current.AGENT_MODEL_KEY, "legacy-custom-claude");
+	await act(async () => root.render(<current.Hydrate />));
+	expect(current.useGlobalChatStore.getState()).toMatchObject({
+		provider: "bits",
+		selectedModelId: "legacy-custom-claude",
+	});
+});
+
 test("memory selection still works when browser storage is unavailable", async () => {
 	const { useGlobalChatStore, Hydrate } = await session();
 	vi.spyOn(localStorage, "setItem").mockImplementation(() => {

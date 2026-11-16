@@ -524,10 +524,16 @@ impl App {
         version: Option<(u32, u32, u32)>,
     ) -> flow_like_types::Result<Arc<BoardCell>> {
         let storage_root = Path::from("apps").join(self.id.clone());
+        let registry_key = match version {
+            Some((major, minor, patch)) => format!("{board_id}-{major}-{minor}-{patch}"),
+            None => board_id.clone(),
+        };
         if let Some(app_state) = &self.app_state {
-            let board = app_state.get_board(&board_id, version);
-
-            if let Ok(board) = board {
+            let board = app_state
+                .board_registry
+                .get(&registry_key)
+                .map(|entry| entry.value().clone());
+            if let Some(board) = board {
                 board.snapshot().ensure_supported_format()?;
                 return Ok(board);
             }
@@ -542,7 +548,16 @@ impl App {
         let board_ref = Arc::new(BoardCell::new(board));
         let register = register.unwrap_or(false);
         if register && let Some(app_state) = &self.app_state {
-            app_state.register_board(&board_id, board_ref.clone(), version)?;
+            // Another opener may have registered and edited the board while storage was read.
+            // All registered callers must share its writer lock and published snapshot.
+            let board = app_state
+                .board_registry
+                .entry(registry_key)
+                .or_insert(board_ref)
+                .value()
+                .clone();
+            board.snapshot().ensure_supported_format()?;
+            return Ok(board);
         }
 
         Ok(board_ref)
@@ -1421,6 +1436,79 @@ mod tests {
         let http_client = HTTPClient::new_without_refetch();
         let flow_like_state = crate::state::FlowLikeState::new(config, http_client);
         Arc::new(flow_like_state)
+    }
+
+    #[tokio::test]
+    async fn opening_a_board_preserves_a_cell_registered_during_load() {
+        use crate::flow::board::BoardCell;
+        use object_store::throttle::{ThrottleConfig, ThrottledStore};
+        use std::time::Duration;
+
+        let store = Arc::new(ThrottledStore::new(
+            object_store::memory::InMemory::new(),
+            ThrottleConfig::default(),
+        ));
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::with_default_store(FlowLikeStore::Other(store.clone())),
+            HTTPClient::new_without_refetch(),
+        ));
+        let app = super::App::new(
+            Some("board-open-concurrency".to_string()),
+            Metadata::default(),
+            Vec::new(),
+            state.clone(),
+        )
+        .await
+        .unwrap();
+        let mut saved = Board::new(
+            Some("board-1".to_string()),
+            Path::from("apps").join(app.id.clone()),
+            state.clone(),
+        );
+        saved.name = "Saved content".to_string();
+        store.config_mut(|config| config.wait_get_per_call = Duration::from_millis(25));
+
+        for version in [None, Some((1, 2, 3))] {
+            saved.version = version.unwrap_or_default();
+            crate::utils::compression::compress_to_file(
+                store.clone(),
+                Board::proto_path(&saved.board_dir, &saved.id, version),
+                &saved.to_proto(),
+            )
+            .await
+            .unwrap();
+
+            let mut opening = std::pin::pin!(app.open_board(saved.id.clone(), Some(true), version));
+            assert!(futures::poll!(opening.as_mut()).is_pending());
+
+            let mut edited = saved.clone();
+            edited.name = format!("Unsaved content for {version:?}");
+            let registered = Arc::new(BoardCell::new(edited));
+            state
+                .register_board(&saved.id, registered.clone(), version)
+                .unwrap();
+
+            let opened = opening.await.unwrap();
+            assert!(Arc::ptr_eq(&opened, &registered));
+            assert_eq!(
+                opened.snapshot().name,
+                format!("Unsaved content for {version:?}")
+            );
+            assert!(Arc::ptr_eq(
+                &state.get_board(&saved.id, version).unwrap(),
+                &registered
+            ));
+            let reopened = app
+                .open_board(saved.id.clone(), Some(true), version)
+                .await
+                .unwrap();
+            assert!(Arc::ptr_eq(&reopened, &registered));
+        }
+
+        assert!(!Arc::ptr_eq(
+            &state.get_board(&saved.id, None).unwrap(),
+            &state.get_board(&saved.id, Some((1, 2, 3))).unwrap()
+        ));
     }
 
     #[tokio::test]

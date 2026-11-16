@@ -3,10 +3,10 @@ use std::io::Cursor;
 use enigo::{Axis, Button, Coordinate, Direction, Mouse};
 use image::{DynamicImage, ImageFormat};
 
-use super::permission;
 use super::computer::{
     BotComputer, BotPointerButton, BotScreen, CapturedDesktop, CapturedSurface, WindowState, now_ms,
 };
+use super::permission;
 use crate::capabilities::AutomationCapability;
 use crate::computer::keyboard::parse_key_chord;
 use crate::computer::native::{self, gestures};

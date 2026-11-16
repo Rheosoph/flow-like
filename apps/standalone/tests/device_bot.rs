@@ -2,7 +2,7 @@ mod support;
 
 use async_trait::async_trait;
 use flow_like_bot_tools::browser::{
-    BrowserBackend, BrowserStep, Download, PageState, SnapshotRequest, SnapshotView,
+    BrowserBackend, BrowserStep, Download, OpenOptions, PageState, SnapshotRequest, SnapshotView,
 };
 use flow_like_device_crypto::inbox::{InboxKeyVault, InboxKeyring, Scope};
 use flow_like_standalone::bot_host::{
@@ -42,7 +42,7 @@ struct NoBrowser;
 
 #[async_trait]
 impl BrowserBackend for NoBrowser {
-    async fn open(&self, url: &str) -> flow_like_types::Result<PageState> {
+    async fn open(&self, url: &str, _options: &OpenOptions) -> flow_like_types::Result<PageState> {
         panic!("the turn must park before opening {url}")
     }
     async fn snapshot(&self, _: SnapshotRequest) -> flow_like_types::Result<SnapshotView> {

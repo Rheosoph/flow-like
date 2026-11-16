@@ -1,7 +1,68 @@
 use std::{fs, path::PathBuf};
 
+mod android_frontend;
+mod android_manifest;
 mod frontend_payload;
 mod ios_frontend;
+
+fn stage_android_frontend(project: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").ok_or("OUT_DIR is missing")?);
+    let manifest = out.join("frontend-android-bundle-manifest.json");
+    if std::env::var("PROFILE").as_deref() != Ok("release") || tauri_build::is_dev() {
+        android_frontend::write_if_changed(&manifest, b"[]")?;
+        return Ok(());
+    }
+
+    let package = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let config: serde_json::Value = serde_json::from_slice(&fs::read("tauri.conf.json")?)?;
+    let mut frontend_dist = config.pointer("/build/frontendDist").cloned();
+    if let Ok(platform) = fs::read("tauri.android.conf.json") {
+        println!("cargo:rerun-if-changed=tauri.android.conf.json");
+        let platform: serde_json::Value = serde_json::from_slice(&platform)?;
+        if let Some(value) = platform.pointer("/build/frontendDist") {
+            frontend_dist = Some(value.clone());
+        }
+    }
+    let mut overrides: serde_json::Value =
+        serde_json::from_str(&std::env::var("TAURI_CONFIG").unwrap_or_else(|_| "{}".into()))?;
+    if let Some(value) = overrides.pointer("/build/frontendDist") {
+        frontend_dist = Some(value.clone());
+    }
+    let Some(frontend_dist) = frontend_dist.filter(|value| !value.is_null()) else {
+        android_frontend::write_if_changed(&manifest, b"[]")?;
+        return Ok(());
+    };
+    let frontend_dist = frontend_dist
+        .as_str()
+        .ok_or("Android frontendDist must be a directory or URL")?;
+    if frontend_dist.contains("://") {
+        android_frontend::write_if_changed(&manifest, b"[]")?;
+        return Ok(());
+    }
+    let source = package.join(frontend_dist);
+    let embedded = out.join("frontend-android-embedded");
+    let module_assets = project.join("editors/build/generated/frontendAssets");
+    println!("cargo:rerun-if-changed={}", source.display());
+    let staged = android_frontend::stage(&source, &embedded, &module_assets)?;
+    // Gradle clean removes generated module assets even when Cargo is cached.
+    println!("cargo:rerun-if-changed={}", module_assets.display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        module_assets
+            .join(android_frontend::INSTALL_MARKER)
+            .display()
+    );
+    android_frontend::write_if_changed(&manifest, &serde_json::to_vec(&staged.bundled_paths)?)?;
+    overrides["build"]["frontendDist"] = serde_json::to_value(&embedded)?;
+    println!("cargo:rustc-env=TAURI_CONFIG={overrides}");
+    println!("cargo:rustc-cfg=android_frontend_split");
+    println!(
+        "cargo:warning=Android delivers {} editor WASM chunks ({} bytes) in the editors module",
+        staged.bundled_paths.len(),
+        staged.bundled_bytes
+    );
+    Ok(())
+}
 
 fn stage_ios_frontend() -> Result<(), Box<dyn std::error::Error>> {
     let out = PathBuf::from(std::env::var_os("OUT_DIR").ok_or("OUT_DIR is missing")?);
@@ -479,6 +540,21 @@ fn main() {
     }
 
     tauri_build::build();
+    println!("cargo:rustc-check-cfg=cfg(android_frontend_split)");
+
+    if target_os == "android" {
+        println!("cargo:rerun-if-changed=android_frontend.rs");
+        println!("cargo:rerun-if-changed=frontend_payload.rs");
+        println!("cargo:rerun-if-changed=ios_frontend.rs");
+        println!("cargo:rerun-if-changed=android_manifest.rs");
+        println!("cargo:rerun-if-env-changed=TAURI_ANDROID_PROJECT_PATH");
+        let project = std::env::var_os("TAURI_ANDROID_PROJECT_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("gen/android"));
+        android_manifest::update(&project.join("app/src/main/AndroidManifest.xml"))
+            .expect("failed to keep Android app links and file associations on MainActivity");
+        stage_android_frontend(&project).expect("failed to stage Android editor resources");
+    }
 
     if target_os == "ios" {
         stage_ios_frontend().expect("failed to stage iOS frontend resources");

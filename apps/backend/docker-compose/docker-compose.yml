@@ -404,6 +404,7 @@ services:
       METRICS_PORT: "9090"
       PUBLIC_API_URL: ${PUBLIC_API_URL:?Set the browser-reachable API origin}
       FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:3001}
+      FRONTEND_SHELL_URL: ${FRONTEND_SHELL_URL:-http://web:3001/a}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?Set allowed browser origins}
       EXECUTION_QUEUE_MAX_DEPTH: ${EXECUTION_QUEUE_MAX_DEPTH:-10000}
       EXECUTION_QUEUE_MAX_WAIT_SECONDS: ${EXECUTION_QUEUE_MAX_WAIT_SECONDS:-300}
@@ -764,6 +765,7 @@ services:
     # Existing setup-env.py values now configure the same prebuilt artifact.
     environment:
       FLOW_LIKE_WEB_API_URL: ${FLOW_LIKE_WEB_API_URL:-${NEXT_PUBLIC_API_URL:-http://localhost:8080}}
+      FLOW_LIKE_WEB_HOSTED_API_URL: ${FLOW_LIKE_WEB_HOSTED_API_URL:-http://api:8080}
       FLOW_LIKE_WEB_REDIRECT_URL: ${FLOW_LIKE_WEB_REDIRECT_URL:-${NEXT_PUBLIC_REDIRECT_URL:-}}
       FLOW_LIKE_WEB_LOGOUT_URL: ${FLOW_LIKE_WEB_LOGOUT_URL:-${NEXT_PUBLIC_REDIRECT_LOGOUT_URL:-}}
     healthcheck:

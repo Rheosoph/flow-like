@@ -1008,6 +1008,7 @@ pub struct CardProps {
     pub variant: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub padding: Option<BoundValue>,
+    /// Cover picture shown edge to edge above the title: an https URL or a stored file's path.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub header_image: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]

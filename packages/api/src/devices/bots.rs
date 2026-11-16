@@ -995,6 +995,7 @@ pub(crate) fn checked_reply(
         kind: InboxEntryKind::Message,
         envelope: (!body.envelope.is_null()).then_some(body.envelope),
         envelopes: body.envelopes,
+        interactive: None,
         turn: None,
     };
     validate_send(request.clone())?;

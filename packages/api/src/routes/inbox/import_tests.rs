@@ -870,6 +870,7 @@ async fn a_message_id_naming_another_event_is_taken() {
         kind: InboxEntryKind::Message,
         envelope: Some(json!({ "v": 1, "enc": "none", "body": { "text": "Hi" } })),
         envelopes: None,
+        interactive: None,
         turn: None,
     })
     .unwrap();
@@ -927,6 +928,7 @@ async fn imported_history_takes_positions_in_the_order_sent() {
         kind: InboxEntryKind::Message,
         envelope: Some(json!({ "v": 1, "enc": "none", "body": { "text": "Hi" } })),
         envelopes: None,
+        interactive: None,
         turn: None,
     })
     .unwrap();

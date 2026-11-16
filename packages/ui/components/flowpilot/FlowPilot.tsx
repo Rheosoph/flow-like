@@ -80,6 +80,7 @@ import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import { toolEndPlanStepStatus } from "../../state/global-chat/copilot-stream-steps";
 import { AskUserQuestions } from "../global-chat/ask-user-questions";
+import { resolveModelSelection } from "../global-chat/model-selection";
 
 import {
 	ChatAiDisclosure,
@@ -580,6 +581,7 @@ function FlowPilotImpl({
 	const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
 	const [userScrolledUp, setUserScrolledUp] = useState(false);
 	const [selectedModelId, setSelectedModelId] = useState("");
+	const [explicitBitsModelId, setExplicitBitsModelId] = useState<string>();
 	const [selectedReasoningEffort, setSelectedReasoningEffort] = useState("");
 
 	// Provider state
@@ -587,6 +589,13 @@ function FlowPilotImpl({
 		normalizeAIProvider(forceProvider ?? defaultProvider),
 	);
 	const normalizedProvider = normalizeAIProvider(provider);
+	const selectModel = useCallback(
+		(modelId: string) => {
+			if (normalizedProvider === "bits") setExplicitBitsModelId(modelId);
+			setSelectedModelId(modelId);
+		},
+		[normalizedProvider],
+	);
 	const activeAgentBackend: AgentBackendProvider = isAgentBackendProvider(
 		normalizedProvider,
 	)
@@ -1665,7 +1674,25 @@ function FlowPilotImpl({
 
 	// Set default model when models are loaded or provider changes
 	useEffect(() => {
+		if (normalizedProvider === "bits" && explicitBitsModelId) {
+			const next = resolveModelSelection<{ id: string }>({
+				models: currentModels,
+				selectedModelId,
+				rememberedModelId: explicitBitsModelId,
+				canReplaceInvalidSelection: false,
+				preserveRememberedModel: true,
+			});
+			if (next !== null) setSelectedModelId(next);
+			previousModelProviderRef.current = normalizedProvider;
+			return;
+		}
 		if (currentModels.length === 0) return;
+		if (
+			!isAgentBackendProvider(normalizedProvider) &&
+			(!foundBits.isSuccess || !customBits.isSuccess)
+		) {
+			return;
+		}
 
 		const providerChanged =
 			previousModelProviderRef.current !== normalizedProvider;
@@ -1702,7 +1729,15 @@ function FlowPilotImpl({
 			const defaultModel = hostedModel || gpt4o || bitsModels[0];
 			setSelectedModelId(defaultModel?.id || "");
 		}
-	}, [currentModels, selectedModelId, normalizedProvider, bitsModels]);
+	}, [
+		currentModels,
+		selectedModelId,
+		explicitBitsModelId,
+		normalizedProvider,
+		bitsModels,
+		foundBits.isSuccess,
+		customBits.isSuccess,
+	]);
 
 	// Effort capabilities belong to a specific provider/model pair. Keep an
 	// explicit choice only while it still fits; an empty value means the agent
@@ -3238,7 +3273,8 @@ function FlowPilotImpl({
 						}
 						return;
 					}
-					if (event.type === "usage_stat") return;
+					if (event.type === "usage_stat" || event.type === "model_resolved")
+						return;
 					if (event.type === "ui_draft") {
 						const frame = readUiDraftFrame(event.data);
 						if (frame && draftsComponents) uiDraft.pushFrame(frame);
@@ -4037,7 +4073,7 @@ function FlowPilotImpl({
 				// Model props
 				bitsModels={bitsModels}
 				selectedModelId={selectedModelId}
-				setSelectedModelId={setSelectedModelId}
+				setSelectedModelId={selectModel}
 				hasWorkspace={hasFlowScriptWorkspace}
 				showWorkspace={showWorkspace}
 				onToggleWorkspace={() => setShowWorkspace((value) => !value)}

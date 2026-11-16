@@ -4,5 +4,18 @@
         <item name="android:windowLayoutInDisplayCutoutMode" tools:targetApi="o_mr1">shortEdges</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">@color/setup_background</item>
+        <item name="android:fontFamily">@font/flow_inter_regular</item>
+        <item name="fontFamily">@font/flow_inter_regular</item>
+        <item name="colorPrimary">@color/setup_accent</item>
+        <item name="colorPrimaryVariant">@color/setup_accent</item>
+        <item name="colorSecondary">@color/setup_accent</item>
+        <item name="colorOnPrimary">@color/setup_on_accent</item>
+        <item name="colorSurface">@color/setup_surface</item>
+        <item name="colorOnSurface">@color/setup_text</item>
+        <item name="android:colorAccent">@color/setup_accent</item>
+        <item name="android:textColorPrimary">@color/setup_text</item>
+        <item name="android:textColorSecondary">@color/setup_muted</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.FlowLike.AlertDialog</item>
     </style>
 </resources>

@@ -24,7 +24,7 @@ import { PackageCard } from "../../store/package-card";
 import { AppCard, SpotlightCard } from "../../ui/app-card";
 import { AppTypeMark } from "../../ui/app-type-mark";
 import { ModelCard } from "../../ui/model-card";
-import { ModelDetailSheet } from "../../ui/model-detail-sheet";
+import { ModelDetailDialog } from "../../ui/model-detail-dialog";
 import {
 	type HomeContentProps,
 	homeAppRendering,
@@ -550,7 +550,7 @@ export function HomeModels({ widget, editing }: HomeContentProps) {
 				))}
 			</div>
 			{!editing && selectedModel && (
-				<ModelDetailSheet
+				<ModelDetailDialog
 					bit={selectedModel}
 					queryScope={scope}
 					onProfileChange={refreshModels}

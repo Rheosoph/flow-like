@@ -98,9 +98,22 @@ class DeploymentTest(unittest.TestCase):
                 _, config = self.render(compose_file=compose_file)
                 api = config["services"]["api"]["environment"]
                 self.assertEqual(api["FRONTEND_BASE_URL"], frontend)
+                self.assertEqual(api["FRONTEND_SHELL_URL"], "http://web:3001/a")
                 self.assertEqual(api["CORS_ALLOWED_ORIGINS"], frontend)
                 web = config["services"]["web"]["environment"]
                 self.assertEqual(web["FLOW_LIKE_WEB_REDIRECT_URL"], frontend + "/callback")
+                self.assertEqual(web["FLOW_LIKE_WEB_HOSTED_API_URL"], "http://api:8080")
+
+    def test_hosted_page_internal_addresses_can_be_overridden(self):
+        changes = {
+            "FRONTEND_SHELL_URL": "http://shell.internal:3001/a",
+            "FLOW_LIKE_WEB_HOSTED_API_URL": "http://hub.internal:8080/prefix",
+        }
+        for compose_file in [None, "docker-stack.yml"]:
+            with self.subTest(compose_file=compose_file):
+                _, config = self.render(changes, compose_file)
+                self.assertEqual(config["services"]["api"]["environment"]["FRONTEND_SHELL_URL"], changes["FRONTEND_SHELL_URL"])
+                self.assertEqual(config["services"]["web"]["environment"]["FLOW_LIKE_WEB_HOSTED_API_URL"], changes["FLOW_LIKE_WEB_HOSTED_API_URL"])
 
     def test_nats_grants_and_broker_trust_stay_separate(self):
         for compose_file in ("docker-compose.yml", "docker-stack.yml"):

@@ -23,11 +23,11 @@ abstract class PrepareAndroidResources @Inject constructor(
         files.sync {
             from(inputDirectory)
             into(outputDirectory)
-            // Tauri icon generation can leave PNGs alongside Android Studio's WebP icons.
+            // Prefer Tauri's generated PNGs over older Android Studio WebP copies.
             exclude {
                 val file = it.file
                 file.parentFile.name.startsWith("mipmap-") && file.name.startsWith("ic_launcher") &&
-                    file.extension == "png" && file.resolveSibling("${file.nameWithoutExtension}.webp").isFile
+                    file.extension == "webp" && file.resolveSibling("${file.nameWithoutExtension}.png").isFile
             }
         }
     }

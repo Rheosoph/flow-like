@@ -209,6 +209,47 @@ pub fn setup(app: &AppHandle) {
 }
 
 #[tauri::command]
+pub async fn native_background_hosting_status() -> Result<Value, String> {
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::background_hosting_status().await;
+    #[cfg(not(target_os = "android"))]
+    Ok(json!({
+        "supported": false,
+        "enabled": false,
+        "running": false,
+        "batteryOptimized": false,
+        "notificationsEnabled": false
+    }))
+}
+
+#[tauri::command]
+pub async fn native_set_background_hosting(enabled: bool) -> Result<Value, String> {
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::set_background_hosting(enabled).await;
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = enabled;
+        Err("Background hosting sessions are only available on Android".into())
+    }
+}
+
+#[tauri::command]
+pub async fn native_open_background_hosting_battery_settings() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::open_background_hosting_battery_settings().await;
+    #[cfg(not(target_os = "android"))]
+    Err("Background hosting battery settings are only available on Android".into())
+}
+
+#[tauri::command]
+pub async fn native_open_background_hosting_notification_settings() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::open_background_hosting_notification_settings().await;
+    #[cfg(not(target_os = "android"))]
+    Err("Background hosting notification settings are only available on Android".into())
+}
+
+#[tauri::command]
 pub async fn native_get_location(
     app: AppHandle,
     request_id: String,

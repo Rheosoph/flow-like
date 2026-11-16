@@ -295,6 +295,46 @@ describe("withEndToEnd", () => {
 		]);
 	});
 
+	test.each(["message", "transcript"] as const)(
+		"an interactive %s keeps its turn reservation outside the sealed body",
+		async (kind) => {
+			const fake = fakeInbox("e2e");
+			const inbox = withEndToEnd(fake.inbox, fakeCrypto([]), () => ME);
+			const interactive = { client_run_id: "run_1" };
+			const body = {
+				text: "hello",
+				interactive,
+				...(kind === "transcript"
+					? { call: "call_1", offset_ms: 0, duration_ms: 900 }
+					: {}),
+			};
+			const entry = await inbox.sendEntry("conv", {
+				message_id: "m1",
+				kind,
+				interactive,
+				envelope: { v: 1, enc: "none", body },
+			});
+
+			expect(fake.sent[0]?.interactive).toEqual(interactive);
+			expect(fake.sent[0]?.envelope).toBeUndefined();
+			expect(Object.keys(fake.sent[0] ?? {}).sort()).toEqual([
+				"envelopes",
+				"interactive",
+				"kind",
+				"message_id",
+			]);
+			for (const member of [ME, BOT]) {
+				const envelope = fake.sent[0]?.envelopes?.[member];
+				expect(envelope?.enc).toBe(INBOX_KEY_ALGORITHM);
+				expect(JSON.parse(envelope?.ct ?? "null")).toEqual({
+					to: member,
+					body,
+				});
+			}
+			expect(entry.envelope).toEqual({ v: 1, enc: "none", body });
+		},
+	);
+
 	test("a member without a key stops the send and is named", async () => {
 		const fake = fakeInbox("e2e");
 		fake.setKeys([key(ME, "k-device")]);
@@ -312,9 +352,13 @@ describe("withEndToEnd", () => {
 		const inbox = withEndToEnd(fake.inbox, fakeCrypto([]), () => ME);
 		await inbox.listConversations();
 		fake.setEncryption("e2e");
-		await inbox.sendEntry("conv", message("m1"));
+		await inbox.sendEntry("conv", {
+			...message("m1"),
+			interactive: { client_run_id: "run_1" },
+		});
 		expect(fake.sent).toHaveLength(1);
 		expect(fake.sent[0]?.envelopes).toBeDefined();
+		expect(fake.sent[0]?.interactive).toEqual({ client_run_id: "run_1" });
 	});
 
 	test("entries open where this device holds a key and stay sealed elsewhere", async () => {

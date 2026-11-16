@@ -44,3 +44,11 @@ export function isMobileDevice(): boolean {
 export function isIosTauriRuntime(): boolean {
 	return isTauriRuntime() && isIOSDevice();
 }
+
+export type BackgroundHostingPlatform = "android" | "desktop";
+
+export function getBackgroundHostingPlatform(): BackgroundHostingPlatform | null {
+	if (!isTauriRuntime()) return null;
+	if (isAndroidDevice()) return "android";
+	return isMobileDevice() ? null : "desktop";
+}

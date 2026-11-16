@@ -5,15 +5,20 @@ mod browser;
 #[cfg(feature = "execute")]
 mod computer;
 #[cfg(feature = "execute")]
+pub mod human;
+#[cfg(feature = "execute")]
 mod permission;
 #[cfg(feature = "execute")]
 mod windows;
 
 #[cfg(feature = "execute")]
-pub use browser::{BotBrowser, BotBrowserOptions, BotDownload, BotScroll, BotSnapshot, BotStep};
+pub use browser::{
+    BotBrowser, BotBrowserOptions, BotChallenge, BotDownload, BotProxy, BotScroll, BotSnapshot,
+    BotStep,
+};
 #[cfg(feature = "execute")]
 pub use computer::{BotComputer, BotDisplay, BotPointerButton, BotScreen, BotScrollDirection};
 #[cfg(feature = "execute")]
-pub use windows::{BotInput, BotWindowOp};
-#[cfg(feature = "execute")]
 pub use permission::MissingPermission;
+#[cfg(feature = "execute")]
+pub use windows::{BotInput, BotWindowOp};

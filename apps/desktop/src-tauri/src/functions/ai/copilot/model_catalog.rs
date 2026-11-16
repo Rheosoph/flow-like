@@ -220,6 +220,28 @@ fn optional_non_empty_string(value: Option<&serde_json::Value>) -> Option<String
         .map(str::to_string)
 }
 
+fn model_context_window(entry: &serde_json::Value) -> Option<u64> {
+    // Catalog protocols may omit limits. Do not infer one from the model name.
+    entry
+        .get("contextWindow")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|limit| *limit > 0)
+}
+
+fn model_supports_vision(entry: &serde_json::Value) -> Option<bool> {
+    entry
+        .get("supportsVision")
+        .and_then(serde_json::Value::as_bool)
+        .or_else(|| {
+            let modalities = entry.get("inputModalities")?.as_array()?;
+            let modalities = modalities
+                .iter()
+                .map(serde_json::Value::as_str)
+                .collect::<Option<Vec<_>>>()?;
+            Some(modalities.contains(&"image"))
+        })
+}
+
 /// Convert a `model/list` `data` array into FlowPilot model options, skipping
 /// hidden entries and preserving Codex's ordering (recommended model first).
 pub(super) fn parse_codex_model_catalog(entries: &[serde_json::Value]) -> Vec<CopilotModelInfo> {
@@ -252,6 +274,9 @@ pub(super) fn parse_codex_model_catalog(entries: &[serde_json::Value]) -> Vec<Co
         models.push(CopilotModelInfo {
             id,
             name,
+            description: optional_non_empty_string(entry.get("description")),
+            context_window: model_context_window(entry),
+            supports_vision: model_supports_vision(entry),
             supported_reasoning_efforts: parse_reasoning_effort_options(
                 entry.get("supportedReasoningEfforts"),
             ),
@@ -273,6 +298,9 @@ pub(super) fn codex_models_with_configured_default(
     let mut configured_default = CopilotModelInfo::basic("default", "Codex configured default");
     configured_default.is_default = true;
     if let Some(runtime_default) = discovered.iter().find(|model| model.is_default) {
+        configured_default.description = runtime_default.description.clone();
+        configured_default.context_window = runtime_default.context_window;
+        configured_default.supports_vision = runtime_default.supports_vision;
         configured_default.supported_reasoning_efforts =
             runtime_default.supported_reasoning_efforts.clone();
         configured_default.default_reasoning_effort =
@@ -460,6 +488,9 @@ pub(super) fn parse_claude_model_catalog(entries: &[serde_json::Value]) -> Vec<C
                 .unwrap_or(id == "default"),
             id,
             name,
+            description: optional_non_empty_string(entry.get("description")),
+            context_window: model_context_window(entry),
+            supports_vision: model_supports_vision(entry),
             supported_reasoning_efforts,
             default_reasoning_effort: optional_non_empty_string(
                 entry

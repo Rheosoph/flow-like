@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { createI18n } from "@flow-like/locales";
 import { renderToStaticMarkup } from "react-dom/server";
+import { bitRating } from "../../lib/bit/model-rating";
+import { type IBit, IBitTypes } from "../../lib/schema/bit/bit";
 import {
 	type IModelEvaluation,
 	IntelligenceIndexBadge,
 	ModelBenchmarks,
+	ModelScoreBadge,
 } from "./model-benchmarks";
+import { ModelRatingBadge, ModelRatingPanel } from "./model-rating";
 
 createI18n({ language: "en" });
 
@@ -21,6 +25,11 @@ function evaluation(
 	};
 }
 
+const currentVersion = {
+	artificial_analysis_intelligence_index_version: "5.0.1",
+	benchmark_status: "measured" as const,
+};
+
 const estimate = {
 	score: 23,
 	low: 18,
@@ -29,6 +38,12 @@ const estimate = {
 	reasoning: "Estimated from the model card and comparable models.",
 	sources: ["https://huggingface.co/example/model"],
 	updated_at: "2026-10-27",
+};
+
+const currentEstimate = {
+	...estimate,
+	version: "5.0.1",
+	method: "paired-version-calibration",
 };
 
 const reportedBenchmark = {
@@ -41,11 +56,108 @@ const reportedBenchmark = {
 	direction: "higher" as const,
 };
 
+const qualityEstimate = {
+	...estimate,
+	category: IBitTypes.Tts as const,
+	criteria: "Speech naturalness, intelligibility and pronunciation.",
+	score: 85,
+	low: 75,
+	high: 90,
+};
+
 describe("model benchmarks", () => {
+	test("shows category quality estimates with their scale, evidence and uncertainty", () => {
+		const model = evaluation({ quality_estimate: qualityEstimate });
+		const markup = renderToStaticMarkup(
+			<ModelBenchmarks evaluation={model} type={IBitTypes.Tts} />,
+		);
+		for (const text of [
+			"Estimated quality",
+			"85/100",
+			"Text to speech",
+			"Scores compare models within the same category",
+			"Range: 75.0 to 90.0",
+			"Low confidence",
+			qualityEstimate.criteria,
+			qualityEstimate.reasoning,
+		]) {
+			expect(markup).toContain(text);
+		}
+		expect(markup).toContain('href="https://huggingface.co/example/model"');
+		expect(markup).not.toContain("Artificial Analysis");
+		expect(markup).not.toContain("Estimated intelligence");
+		const badge = renderToStaticMarkup(
+			<ModelScoreBadge evaluation={model} type={IBitTypes.Tts} />,
+		);
+		expect(badge).toContain("Est. quality 85/100");
+		expect(badge).toContain(
+			'aria-label="Estimated quality: 85/100 (Text to speech)"',
+		);
+	});
+
+	test("keeps quality categories and intelligence scores separate", () => {
+		const model = evaluation({
+			quality_estimate: qualityEstimate,
+			...currentVersion,
+			artificial_analysis_intelligence_index: 45.1,
+		});
+		expect(
+			renderToStaticMarkup(
+				<ModelScoreBadge evaluation={model} type={IBitTypes.Llm} />,
+			),
+		).toContain("45.1");
+		expect(
+			renderToStaticMarkup(
+				<ModelScoreBadge evaluation={model} type={IBitTypes.Stt} />,
+			),
+		).toBe("");
+		const ttsBadge = renderToStaticMarkup(
+			<ModelScoreBadge evaluation={model} type={IBitTypes.Tts} />,
+		);
+		expect(ttsBadge).toContain("85/100");
+		expect(ttsBadge).not.toContain("45.1");
+		expect(
+			renderToStaticMarkup(
+				<ModelBenchmarks
+					evaluation={evaluation({ quality_estimate: qualityEstimate })}
+					type={IBitTypes.Stt}
+				/>,
+			),
+		).toBe("");
+	});
+
+	test("retains raw publisher benchmarks beside category estimates", () => {
+		const markup = renderToStaticMarkup(
+			<ModelBenchmarks
+				evaluation={evaluation({
+					quality_estimate: qualityEstimate,
+					reported_benchmarks: [
+						{
+							...reportedBenchmark,
+							name: "Word error rate",
+							score: 2.4,
+							unit: "% WER",
+							direction: "lower",
+						},
+					],
+				})}
+			/>,
+		);
+		expect(markup).toContain("Estimated quality");
+		expect(markup).toContain("2.4 % WER");
+		expect(markup).toContain("Lower is better");
+	});
+
 	test("renders current coding, tool-use, and factuality benchmarks", () => {
 		const markup = renderToStaticMarkup(
 			<ModelBenchmarks
 				evaluation={evaluation({
+					...currentVersion,
+					hle_diamond: 0.21,
+					critpt_agentic_hard: 0.41,
+					frontiercode_v2_0: 0.31,
+					terminalbench_science_v0_1: 0.61,
+					gdp_pdf_all_pass: 0.51,
 					terminalbench_v4_0: 0.6717,
 					terminalbench_v2_1: 0.764,
 					tau_banking: 0.23,
@@ -57,14 +169,19 @@ describe("model benchmarks", () => {
 		);
 		for (const label of [
 			"Terminal-Bench 4.0",
-			"Terminal-Bench 2.1",
-			"TAU-Banking",
+			"HLE-Diamond",
+			"CritPt v2 (Hard Subset)",
+			"FrontierCode-AA 2.0",
+			"Terminal-Bench-Science 0.1",
+			"GDP.pdf",
 			"AutomationBench-AA",
-			"AA-Omniscience Accuracy",
-			"AA-Omniscience Non-Hallucination Rate",
+			"AA-Omniscience v1.1 Accuracy",
+			"AA-Omniscience v1.1 Non-Hallucination Rate",
 		]) {
 			expect(markup).toContain(label);
 		}
+		expect(markup).not.toContain("Terminal-Bench 2.1");
+		expect(markup).not.toContain("TAU-Banking");
 		expect(markup).toContain("67.2%");
 		expect(markup).toContain("73.3%");
 		expect(markup).toContain("56.1%");
@@ -76,7 +193,11 @@ describe("model benchmarks", () => {
 	test("shows measured zero results without presenting missing benchmarks", () => {
 		const markup = renderToStaticMarkup(
 			<ModelBenchmarks
-				evaluation={evaluation({ terminalbench_v4_0: 0, scicode: null })}
+				evaluation={evaluation({
+					...currentVersion,
+					terminalbench_v4_0: 0,
+					scicode: null,
+				})}
 			/>,
 		);
 		expect(markup).toContain("Terminal-Bench 4.0");
@@ -85,7 +206,10 @@ describe("model benchmarks", () => {
 		expect(
 			renderToStaticMarkup(
 				<IntelligenceIndexBadge
-					evaluation={evaluation({ artificial_analysis_intelligence_index: 0 })}
+					evaluation={evaluation({
+						...currentVersion,
+						artificial_analysis_intelligence_index: 0,
+					})}
 				/>,
 			),
 		).toContain("0.0");
@@ -145,60 +269,72 @@ describe("model benchmarks", () => {
 		expect(markup).not.toContain("Benchmark sources:");
 	});
 
-	test("omits missing and invalid results", () => {
+	test("never displays invalid current indices as scores", () => {
 		for (const value of [
 			undefined,
 			null,
 			Number.NaN,
 			Number.POSITIVE_INFINITY,
 			-1,
+			101,
 		]) {
-			expect(
-				renderToStaticMarkup(
-					<ModelBenchmarks
-						evaluation={evaluation({ terminalbench_v4_0: value })}
-					/>,
-				),
-			).toBe("");
-			expect(
-				renderToStaticMarkup(
-					<IntelligenceIndexBadge
-						evaluation={evaluation({
-							artificial_analysis_intelligence_index: value,
-						})}
-					/>,
-				),
-			).toBe("");
+			const model = evaluation({
+				...currentVersion,
+				artificial_analysis_intelligence_index: value,
+				intelligence_estimate: estimate,
+			});
+			for (const markup of [
+				renderToStaticMarkup(<ModelBenchmarks evaluation={model} />),
+				renderToStaticMarkup(<IntelligenceIndexBadge evaluation={model} />),
+			]) {
+				expect(markup).toContain("Not evaluated in AA v5.0.1");
+				expect(markup).not.toContain("Estimated intelligence");
+				expect(markup).not.toContain("NaN");
+				expect(markup).not.toContain("Infinity");
+			}
 		}
 	});
 
-	test("labels an intelligence estimate with its evidence and uncertainty", () => {
-		const model = evaluation({ intelligence_estimate: estimate });
-		const markup = renderToStaticMarkup(<ModelBenchmarks evaluation={model} />);
-		expect(markup).toContain("Estimated intelligence");
-		expect(markup).toContain("23.0");
-		expect(markup).toContain("Range: 18.0 to 28.0");
-		expect(markup).toContain("Low confidence");
-		expect(markup).toContain(estimate.reasoning);
-		expect(markup).toContain("Estimated 2026-10-27");
-		expect(markup).toContain('href="https://huggingface.co/example/model"');
-		expect(markup).toContain("Estimate sources:");
-		expect(markup).not.toContain("Artificial Analysis");
-		expect(markup).not.toContain("artificialanalysis.ai");
-
-		const badge = renderToStaticMarkup(
-			<IntelligenceIndexBadge evaluation={model} />,
-		);
-		expect(badge).toContain("Est. 23.0");
-		expect(badge).toContain('aria-label="Estimated intelligence: 23.0"');
-		expect(badge).not.toContain("Artificial Analysis");
+	test("requires an exact current version and measured status for headline scores", () => {
+		for (const version of [undefined, "4.0", "5.0", "5.0.0"]) {
+			const model = evaluation({
+				...currentVersion,
+				artificial_analysis_intelligence_index_version: version,
+				artificial_analysis_intelligence_index: 55.1,
+				artificial_analysis_coding_index: 78.2,
+				intelligence_estimate: estimate,
+				terminalbench_v4_0: 0.6,
+			});
+			for (const markup of [
+				renderToStaticMarkup(<ModelBenchmarks evaluation={model} />),
+				renderToStaticMarkup(<IntelligenceIndexBadge evaluation={model} />),
+			]) {
+				expect(markup).toContain("Not evaluated in AA v5.0.1");
+				expect(markup).not.toContain("55.1");
+				expect(markup).not.toContain("78.2");
+				expect(markup).not.toContain("23.0");
+				expect(markup).not.toContain("Terminal-Bench");
+			}
+		}
+		for (const status of [undefined, "not_evaluated", "unmatched"] as const) {
+			const model = evaluation({
+				...currentVersion,
+				benchmark_status: status,
+				artificial_analysis_intelligence_index: 55.1,
+			});
+			expect(
+				renderToStaticMarkup(<IntelligenceIndexBadge evaluation={model} />),
+			).not.toContain("55.1");
+		}
 	});
 
-	test("prefers a measured index over estimates, including measured zero", () => {
+	test("shows measured zero and the exact index version without legacy estimates", () => {
 		for (const score of [0, 45.1]) {
 			const model = evaluation({
+				...currentVersion,
 				artificial_analysis_intelligence_index: score,
 				intelligence_estimate: estimate,
+				legacy_evaluations: { artificial_analysis_intelligence_index: 55.1 },
 			});
 			const markup = renderToStaticMarkup(
 				<ModelBenchmarks evaluation={model} />,
@@ -208,71 +344,200 @@ describe("model benchmarks", () => {
 			);
 			for (const output of [markup, badge]) {
 				expect(output).toContain(score.toFixed(1));
-				expect(output).toContain("Artificial Analysis");
+				expect(output).toContain("AA v5.0.1");
 				expect(output).not.toContain("Estimated intelligence");
 				expect(output).not.toContain(estimate.reasoning);
-				expect(output).not.toContain("Est.");
+				expect(output).not.toContain("55.1");
+			}
+			expect(badge).toContain(
+				`aria-label="Artificial Analysis Intelligence Index v5.0.1: ${score.toFixed(1)}"`,
+			);
+		}
+	});
+
+	test("explains missing and unmatched current results without reusing legacy estimates", () => {
+		for (const status of ["not_evaluated", "unmatched"] as const) {
+			const model = evaluation({
+				...currentVersion,
+				benchmark_status: status,
+				artificial_analysis_intelligence_index: null,
+				intelligence_estimate: estimate,
+				legacy_evaluations: { artificial_analysis_intelligence_index: 55.1 },
+			});
+			const expected =
+				status === "unmatched"
+					? "No matching AA v5.0.1 model"
+					: "Not evaluated in AA v5.0.1";
+			for (const markup of [
+				renderToStaticMarkup(<ModelBenchmarks evaluation={model} />),
+				renderToStaticMarkup(<IntelligenceIndexBadge evaluation={model} />),
+			]) {
+				expect(markup).toContain(expected);
+				expect(markup).not.toContain("23.0");
+				expect(markup).not.toContain("55.1");
+			}
+		}
+		expect(
+			renderToStaticMarkup(<ModelScoreBadge type={IBitTypes.Llm} />),
+		).toContain("Not evaluated in AA v5.0.1");
+	});
+
+	test("labels calibrated current estimates with their range and provenance", () => {
+		const model = evaluation({
+			...currentVersion,
+			benchmark_status: "estimated",
+			artificial_analysis_intelligence_index: null,
+			intelligence_estimate: currentEstimate,
+		});
+		const markup = renderToStaticMarkup(<ModelBenchmarks evaluation={model} />);
+		expect(markup).toContain("Estimated AA v5.0.1 Intelligence Index");
+		expect(markup).toContain("23.0");
+		expect(markup).toContain("Range: 18.0 to 28.0");
+		expect(markup).toContain("Low confidence");
+		expect(markup).toContain(estimate.reasoning);
+		expect(markup).toContain('href="https://huggingface.co/example/model"');
+		expect(markup).not.toContain("Evaluated reasoning effort:");
+		expect(
+			renderToStaticMarkup(<IntelligenceIndexBadge evaluation={model} />),
+		).toContain("Est. AA v5.0.1 23.0");
+	});
+
+	test("labels the shared card rating and detail panel with the current version", () => {
+		for (const estimated of [false, true]) {
+			const model = evaluation({
+				...currentVersion,
+				benchmark_status: estimated ? "estimated" : "measured",
+				artificial_analysis_intelligence_index: estimated ? null : 42.9,
+				intelligence_estimate: estimated ? currentEstimate : undefined,
+			});
+			const rating = bitRating({
+				type: IBitTypes.Llm,
+				model_evaluation: model,
+			} as IBit);
+			if (!rating) throw new Error("Expected a current rating");
+			const badge = renderToStaticMarkup(
+				<ModelRatingBadge rating={rating} type={IBitTypes.Llm} />,
+			);
+			const panel = renderToStaticMarkup(
+				<ModelRatingPanel rating={rating} type={IBitTypes.Llm} />,
+			);
+			expect(badge).toContain(estimated ? "Est. AA v5.0.1" : "AA v5.0.1");
+			expect(panel).toContain(
+				estimated
+					? "Estimated AA v5.0.1 Intelligence Index"
+					: "AA v5.0.1 Intelligence Index",
+			);
+			expect(panel).toContain("points");
+			expect(panel).not.toContain("/ 100");
+		}
+		expect(
+			renderToStaticMarkup(
+				<ModelRatingBadge rating={null} type={IBitTypes.Vlm} />,
+			),
+		).toContain("Not evaluated in AA v5.0.1");
+	});
+
+	test("keeps provenance and methodology when the detail panel owns the score", () => {
+		const markup = renderToStaticMarkup(
+			<ModelBenchmarks
+				hideRating
+				evaluation={evaluation({
+					...currentVersion,
+					artificial_analysis_intelligence_index: 42.9,
+					benchmark_reasoning_effort: "xhigh",
+					benchmark_verified_at: "2026-11-16",
+				})}
+			/>,
+		);
+		expect(markup).not.toContain("42.9");
+		expect(markup).toContain("xhigh");
+		expect(markup).toContain("Source checked 2026-11-16");
+		expect(markup).toContain("weighted benchmark tasks");
+		expect(
+			renderToStaticMarkup(
+				<ModelBenchmarks
+					hideRating
+					evaluation={evaluation({ quality_estimate: qualityEstimate })}
+				/>,
+			),
+		).toBe("");
+	});
+
+	test("rejects unversioned, uncalibrated and malformed current estimates", () => {
+		for (const invalid of [
+			estimate,
+			{ ...currentEstimate, version: "5.0" },
+			{ ...currentEstimate, method: "catalog-estimate" },
+			{ ...currentEstimate, low: 24 },
+			{ ...currentEstimate, high: 22 },
+			{ ...currentEstimate, score: Number.NaN },
+			{ ...currentEstimate, updated_at: "invalid" },
+		]) {
+			const model = evaluation({
+				...currentVersion,
+				benchmark_status: "estimated",
+				intelligence_estimate: invalid,
+			});
+			for (const markup of [
+				renderToStaticMarkup(<ModelBenchmarks evaluation={model} />),
+				renderToStaticMarkup(<IntelligenceIndexBadge evaluation={model} />),
+			]) {
+				expect(markup).toContain("Not evaluated in AA v5.0.1");
+				expect(markup).not.toContain("23.0");
 			}
 		}
 	});
 
-	test("shows valid zero estimates and falls back from invalid measured indices", () => {
-		const model = evaluation({
-			artificial_analysis_intelligence_index: Number.NaN,
-			intelligence_estimate: {
-				...estimate,
-				score: 0,
-				low: 0,
-				high: 5,
-				confidence: "medium",
-			},
-		});
-		const markup = renderToStaticMarkup(<ModelBenchmarks evaluation={model} />);
-		expect(markup).toContain("Range: 0.0 to 5.0");
-		expect(markup).toContain("Medium confidence");
-		expect(markup).not.toContain("Artificial Analysis");
-		expect(
-			renderToStaticMarkup(<IntelligenceIndexBadge evaluation={model} />),
-		).toContain("Est. 0.0");
+	test("exposes the evaluated effort, source date and methodology", () => {
+		const markup = renderToStaticMarkup(
+			<ModelBenchmarks
+				evaluation={evaluation({
+					...currentVersion,
+					artificial_analysis_intelligence_index: 42.8914543,
+					benchmark_reasoning_effort: "xhigh",
+					benchmark_verified_at: "2026-11-16T13:20:00Z",
+					benchmark_source_url:
+						"https://artificialanalysis.ai/models/qwen4-max",
+				})}
+			/>,
+		);
+		expect(markup).toContain("42.9");
+		expect(markup).toContain("Evaluated reasoning effort:");
+		expect(markup).toContain("xhigh");
+		expect(markup).toContain("Source checked 2026-11-16");
+		expect(markup).toContain(
+			'href="https://artificialanalysis.ai/models/qwen4-max"',
+		);
+		expect(markup).toContain("weighted benchmark tasks");
+		expect(markup).toContain(
+			'href="https://artificialanalysis.ai/methodology/intelligence-benchmarking"',
+		);
 	});
 
-	test("ignores malformed estimates and invalid or inverted ranges", () => {
-		const invalidEstimates = [
-			null,
-			"23",
-			{},
-			{ ...estimate, score: -1 },
-			{ ...estimate, score: Number.NaN },
-			{ ...estimate, score: Number.POSITIVE_INFINITY },
-			{ ...estimate, score: "23" },
-			{ ...estimate, low: 24 },
-			{ ...estimate, low: -1 },
-			{ ...estimate, high: 22 },
-			{ ...estimate, high: 101 },
-			{ ...estimate, high: Number.POSITIVE_INFINITY },
-			{ ...estimate, confidence: "high" },
-			{ ...estimate, reasoning: " " },
-			{ ...estimate, sources: [null] },
-			{ ...estimate, sources: "https://example.com" },
-			{ ...estimate, updated_at: "unknown" },
-		];
-		for (const invalid of invalidEstimates) {
-			const model = evaluation({
-				intelligence_estimate: invalid as typeof estimate,
-			});
-			expect(renderToStaticMarkup(<ModelBenchmarks evaluation={model} />)).toBe(
-				"",
-			);
-			expect(
-				renderToStaticMarkup(<IntelligenceIndexBadge evaluation={model} />),
-			).toBe("");
-		}
+	test("keeps raw Elo and signed Omniscience scores off percentage bars", () => {
+		const markup = renderToStaticMarkup(
+			<ModelBenchmarks
+				evaluation={evaluation({
+					...currentVersion,
+					aa_briefcase_elo: 1432.7,
+					artificial_analysis_omniscience: -12.4,
+				})}
+			/>,
+		);
+		expect(markup).toContain("AA-Briefcase v1.1 (Elo)");
+		expect(markup).toContain("1432.7");
+		expect(markup).toContain("AA-Omniscience v1.1 Index");
+		expect(markup).toContain("-12.4");
+		expect(markup).not.toContain("%");
+		expect(markup).not.toContain("style=");
 	});
 
 	test("only renders unique HTTPS evidence links without credentials", () => {
 		const model = evaluation({
+			...currentVersion,
+			benchmark_status: "estimated",
 			intelligence_estimate: {
-				...estimate,
+				...currentEstimate,
 				sources: [
 					"javascript:alert(1)",
 					"data:text/html,unsafe",
@@ -286,7 +551,9 @@ describe("model benchmarks", () => {
 		});
 		const markup = renderToStaticMarkup(<ModelBenchmarks evaluation={model} />);
 		expect(markup).toContain(estimate.reasoning);
-		expect(markup.match(/href=/g)).toHaveLength(1);
+		expect(
+			markup.match(/href="https:\/\/huggingface.co\/example\/model"/g),
+		).toHaveLength(1);
 		expect(markup).toContain('href="https://huggingface.co/example/model"');
 		expect(markup).not.toContain("javascript:");
 		expect(markup).not.toContain("data:text");
@@ -311,11 +578,12 @@ describe("model benchmarks", () => {
 		expect(markup).not.toContain("artificialanalysis.ai");
 	});
 
-	test("keeps publisher results alongside estimated and measured intelligence", () => {
+	test("keeps publisher results alongside current intelligence and missing results", () => {
 		for (const measured of [false, true]) {
 			const markup = renderToStaticMarkup(
 				<ModelBenchmarks
 					evaluation={evaluation({
+						...currentVersion,
 						intelligence_estimate: estimate,
 						artificial_analysis_intelligence_index: measured ? 45.1 : null,
 						reported_benchmarks: [reportedBenchmark],
@@ -329,9 +597,9 @@ describe("model benchmarks", () => {
 				expect(markup).toContain("artificialanalysis.ai/models/kimi-k3-1-pro");
 				expect(markup).not.toContain("Estimated intelligence");
 			} else {
-				expect(markup).toContain("Estimated intelligence");
-				expect(markup).toContain("Range: 18.0 to 28.0");
-				expect(markup).not.toContain("artificialanalysis.ai");
+				expect(markup).toContain("Not evaluated in AA v5.0.1");
+				expect(markup).not.toContain("Estimated intelligence");
+				expect(markup).not.toContain("Range: 18.0 to 28.0");
 			}
 		}
 	});
@@ -452,7 +720,7 @@ describe("model benchmarks", () => {
 			/>,
 		);
 		expect(markup).toContain("Publisher benchmarks");
-		expect(markup).toContain("Estimated intelligence");
+		expect(markup).toContain("Not evaluated in AA v5.0.1");
 		expect(markup).not.toContain("artificialanalysis.ai/models/");
 	});
 });

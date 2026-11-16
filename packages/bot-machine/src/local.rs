@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use flow_like_bot_tools::browser::{
-    BrowserBackend, BrowserScreen, BrowserStep, Download, PageState, ScrollTo, SnapshotRequest,
-    SnapshotView, no_owner_browser,
+    BrowserBackend, BrowserMode, BrowserScreen, BrowserStep, Challenge, Download, OpenOptions,
+    PageState, ScrollTo, SnapshotRequest, SnapshotView, no_owner_browser,
 };
 use flow_like_bot_tools::computer::{
     ComputerAction, ComputerBackend, DisplaySummary, PointerButton, Screen, ScrollDirection,
@@ -18,8 +18,8 @@ use flow_like_bot_tools::computer::{
 };
 use flow_like_bot_tools::error::{ToolError, code};
 use flow_like_catalog_automation::bot_driver::{
-    BotBrowser, BotBrowserOptions, BotComputer, BotInput, BotPointerButton, BotScroll,
-    BotScrollDirection, BotStep, BotWindowOp, MissingPermission,
+    BotBrowser, BotBrowserOptions, BotChallenge, BotComputer, BotInput, BotPointerButton, BotProxy,
+    BotScroll, BotScrollDirection, BotStep, BotWindowOp, MissingPermission,
 };
 use flow_like_catalog_automation::computer::window::WindowInfo;
 use flow_like_types::interaction_observation::InteractionObservation;
@@ -90,7 +90,7 @@ impl LocalPlayground {
             let Some(running) = browser.running().await else {
                 continue;
             };
-            let Ok((png, observation)) = running.screenshot_with_observation().await else {
+            let Ok((png, observation)) = running.live_view().await else {
                 continue;
             };
             let caption = running
@@ -288,16 +288,29 @@ impl LocalBrowser {
         self.slot().lock().await.clone().filter(|b| b.is_alive())
     }
 
-    async fn launched(&self) -> Result<Arc<BotBrowser>> {
+    /// The bot's own Chrome for `options`. Human mode needs a Chrome started without the
+    /// automation switches, and a proxy is a launch switch, so a running Chrome that does not
+    /// fit is restarted; the profile keeps its cookies and logins. Back in standard mode the
+    /// running Chrome stays as it is.
+    async fn launched(&self, options: &OpenOptions) -> Result<Arc<BotBrowser>> {
+        let conceal = options.mode == BrowserMode::Human;
+        let proxy = options.proxy.as_deref().map(BotProxy::parse).transpose()?;
         let mut slot = self.own.lock().await;
         if let Some(browser) = slot.clone().filter(|b| b.is_alive()) {
-            return Ok(browser);
+            let flags_fit = !(conceal && browser.declares_automation());
+            if flags_fit && browser.proxy() == proxy.as_ref() {
+                return Ok(browser);
+            }
+            browser.close().await;
+            *slot = None;
         }
         let browser = Arc::new(
             BotBrowser::launch(BotBrowserOptions {
                 profile_dir: self.profile_dir.clone(),
                 download_dir: self.download_dir.clone(),
                 headless: self.surface == Surface::Hidden,
+                conceal_automation: conceal,
+                proxy,
             })
             .await?,
         );
@@ -305,12 +318,14 @@ impl LocalBrowser {
         Ok(browser)
     }
 
-    async fn attached(&self) -> Result<Arc<BotBrowser>> {
+    /// The bot's tab in the owner's browser. Its first `open` decides whether the tab keeps the
+    /// `Runtime` domain off (human mode); asking for another connection would ask the owner again.
+    async fn attached(&self, mode: BrowserMode) -> Result<Arc<BotBrowser>> {
         let mut slot = self.owner_tab.lock().await;
         if let Some(browser) = slot.clone().filter(|b| b.is_alive()) {
             return Ok(browser);
         }
-        let browser = Arc::new(BotBrowser::attach_owner().await?);
+        let browser = Arc::new(BotBrowser::attach_owner(mode == BrowserMode::Human).await?);
         *slot = Some(browser.clone());
         Ok(browser)
     }
@@ -339,6 +354,19 @@ impl LocalBrowser {
             }
         }
         self.in_owner_browser.store(false, Ordering::Release);
+    }
+}
+
+fn challenge_of(found: BotChallenge) -> Challenge {
+    Challenge {
+        pressable: found.pressable(),
+        kind: found.kind,
+        site_key: found.site_key,
+        action: found.action,
+        data: found.data,
+        solved: found.solved,
+        puzzle: found.puzzle,
+        url: found.url,
     }
 }
 
@@ -377,20 +405,22 @@ fn step_of(step: &BrowserStep) -> BotStep {
 
 #[async_trait]
 impl BrowserBackend for LocalBrowser {
-    async fn open(&self, url: &str) -> Result<PageState> {
+    async fn open(&self, url: &str, options: &OpenOptions) -> Result<PageState> {
         self.touch();
-        let browser = self.launched().await?;
+        let browser = self.launched(options).await?;
+        browser.set_human(options.mode == BrowserMode::Human);
         let page = Self::opened(&browser, url).await?;
         self.in_owner_browser.store(false, Ordering::Release);
         Ok(page)
     }
 
-    async fn open_in_owner_browser(&self, url: &str) -> Result<PageState> {
+    async fn open_in_owner_browser(&self, url: &str, options: &OpenOptions) -> Result<PageState> {
         if self.surface != Surface::OwnerScreen {
             return Err(no_owner_browser());
         }
         self.touch();
-        let browser = self.attached().await?;
+        let browser = self.attached(options.mode).await?;
+        browser.set_human(options.mode == BrowserMode::Human);
         self.touch();
         let page = Self::opened(&browser, url).await?;
         self.in_owner_browser.store(true, Ordering::Release);
@@ -445,6 +475,22 @@ impl BrowserBackend for LocalBrowser {
     async fn leave(&self) -> Result<()> {
         self.needed().await?.leave().await?;
         Ok(())
+    }
+
+    async fn challenge(&self) -> Result<Option<Challenge>> {
+        let Some(browser) = self.running().await else {
+            return Ok(None);
+        };
+        Ok(browser.challenge().await?.map(challenge_of))
+    }
+
+    async fn press_challenge(&self) -> Result<Option<Challenge>> {
+        let pressed = self.needed().await?.press_challenge().await?;
+        Ok(pressed.map(challenge_of))
+    }
+
+    async fn apply_challenge_token(&self, token: &str) -> Result<String> {
+        self.needed().await?.apply_challenge_token(token).await
     }
 
     async fn take_downloads(&self) -> Result<Vec<Download>> {
@@ -621,10 +667,7 @@ impl ComputerBackend for LocalComputer {
     async fn screenshot_window(&self, window: &str) -> Result<Screen> {
         self.touch();
         Ok(screen(
-            self.inner
-                .screenshot_window(window)
-                .await
-                .map_err(typed)?,
+            self.inner.screenshot_window(window).await.map_err(typed)?,
         ))
     }
 

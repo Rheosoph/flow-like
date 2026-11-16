@@ -11,7 +11,7 @@ use flow_like::{
     app::{App, AppVisibility},
     copilot::FlowIrCommitToken,
     flow::{
-        board::{Board, commands::GenericCommand},
+        board::{Board, BoardCell, commands::GenericCommand},
         copilot::{BoardCommand, board_fingerprint},
     },
     flow_like_storage::object_store::path::Path,
@@ -20,7 +20,7 @@ use flow_like_types::{FromProto, ToProto};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    sync::{LazyLock, Mutex as StdMutex},
+    sync::{Arc, LazyLock, Mutex as StdMutex},
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Manager};
@@ -76,6 +76,28 @@ pub struct FlowIrCommitReadback {
     /// The original algorithm remains available for receipts issued before graph fingerprint v2.
     pub legacy_graph_fingerprint: String,
     pub flowscript: String,
+}
+
+/// Reviews also originate outside the editor and survive desktop restarts. Reuse the open draft
+/// or load it from the owning app so review and Apply share the same native board write lock.
+pub(crate) async fn open_board_for_commit(
+    app: &App,
+    board_id: &str,
+) -> Result<Arc<BoardCell>, String> {
+    if !app.boards.iter().any(|id| id == board_id) {
+        return Err("The review board does not belong to the requested app.".to_string());
+    }
+    let board = app
+        .open_board(board_id.to_string(), Some(true), None)
+        .await
+        .map_err(|error| format!("The review board could not be loaded: {error}"))?;
+    let snapshot = board.snapshot();
+    if snapshot.id != board_id || snapshot.board_dir != Path::from("apps").join(app.id.clone()) {
+        return Err(
+            "The loaded review board does not match the requested app and board.".to_string(),
+        );
+    }
+    Ok(board)
 }
 
 /// Hash the storage representation, including every node/pin identity and connection. FlowScript
@@ -618,12 +640,32 @@ pub(super) async fn flowpilot_apply_flow_ir_commit_with_recovery(
         );
     };
     let flow_like_state = managed_state.0.clone();
-    let Ok(live_board) = flow_like_state.get_board(&token.board_id, None) else {
+    let app = match App::load(app_id.clone(), flow_like_state.clone()).await {
+        Ok(app) => app,
+        Err(error) => {
+            return ApplyFlowIrCommitResult::empty(
+                "error",
+                "IR_COMMIT_APP_UNAVAILABLE",
+                format!("The target app could not be loaded; nothing was applied: {error}"),
+            );
+        }
+    };
+    if app.id != app_id || !app.boards.contains(&token.board_id) {
         return ApplyFlowIrCommitResult::empty(
-            "error",
-            "IR_COMMIT_BOARD_UNAVAILABLE",
-            "The review board is not open in this desktop process; nothing was applied.",
+            "stale",
+            "IR_COMMIT_APP_BOARD_MISMATCH",
+            "The review board does not belong to the requested app; nothing was applied.",
         );
+    }
+    let live_board = match open_board_for_commit(&app, &token.board_id).await {
+        Ok(board) => board,
+        Err(error) => {
+            return ApplyFlowIrCommitResult::empty(
+                "error",
+                "IR_COMMIT_BOARD_UNAVAILABLE",
+                format!("{error} Nothing was applied."),
+            );
+        }
     };
     {
         let board = live_board.write().await;
@@ -660,23 +702,6 @@ pub(super) async fn flowpilot_apply_flow_ir_commit_with_recovery(
             );
         }
     };
-    let app = match App::load(app_id.clone(), flow_like_state.clone()).await {
-        Ok(app) => app,
-        Err(error) => {
-            return ApplyFlowIrCommitResult::empty(
-                "error",
-                "IR_COMMIT_APP_UNAVAILABLE",
-                format!("The target app could not be loaded; nothing was applied: {error}"),
-            );
-        }
-    };
-    if !app.boards.contains(&token.board_id) {
-        return ApplyFlowIrCommitResult::empty(
-            "stale",
-            "IR_COMMIT_APP_BOARD_MISMATCH",
-            "The review board does not belong to the requested app; nothing was applied.",
-        );
-    }
     let allowed_packages = app.packages.keys().cloned().collect::<HashSet<_>>();
     let app_catalog = all_nodes
         .into_iter()

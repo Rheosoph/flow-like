@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
 import { type ReactNode, createElement } from "react";
+import type { IBackendState } from "../../../state/backend-state";
 import { installStageDom } from "../../interfaces/form-workbench/stage/dom-setup";
 import {
 	click,
@@ -16,6 +17,7 @@ const [
 	uiState,
 	{ AppRouterContext },
 	{ PathnameContext },
+	{ BackendContext },
 ] = await Promise.all([
 	import("./a2ui-code-block"),
 	import("../../ui/streaming-text-editor"),
@@ -24,6 +26,7 @@ const [
 	import("../../../db/ui-state-db"),
 	import("next/dist/shared/lib/app-router-context.shared-runtime"),
 	import("next/dist/shared/lib/hooks-client-context.shared-runtime"),
+	import("../../../state/backend-state"),
 ]);
 
 const spies = [
@@ -239,6 +242,64 @@ describe("a2ui chat fence", () => {
 		expect(
 			document.querySelector("[data-fl-a2ui-surface] pre")?.textContent,
 		).toContain('"id":"inner"');
+	});
+
+	test("stored files' storage links show as signed images", async () => {
+		const signed: [string, string[]][] = [];
+		const backend = {
+			eventState: { alwaysRemote: false },
+			storageState: {
+				downloadStorageItems: async (appId: string, paths: string[]) => {
+					signed.push([appId, paths]);
+					return [{ prefix: paths[0], url: `https://signed.test/${paths[0]}` }];
+				},
+			},
+		} as unknown as IBackendState;
+		await dom.render(
+			createElement(
+				BackendContext.Provider,
+				{ value: backend },
+				inApp(
+					block(
+						lines(
+							{
+								id: "root",
+								type: "card",
+								title: "iX3",
+								headerImage: "storage://apps/ws1/app/bot/images/ix3-front.png",
+								children: ["photo"],
+							},
+							{
+								id: "photo",
+								type: "image",
+								src: "storage://apps/ws1/app/bot/images/ix3.png",
+								alt: "BMW iX3",
+							},
+						),
+					),
+					() => {},
+				),
+			),
+		);
+		await settle();
+		await settle();
+		expect(signed.map(([app, paths]) => [app, ...paths]).sort()).toEqual([
+			["ws1", "bot/images/ix3-front.png"],
+			["ws1", "bot/images/ix3.png"],
+		]);
+		expect(
+			document.querySelector("img[alt='BMW iX3']")?.getAttribute("src"),
+		).toBe("https://signed.test/bot/images/ix3.png");
+		expect(
+			document
+				.querySelector("[data-slot='card-media'] img")
+				?.getAttribute("src"),
+		).toBe("https://signed.test/bot/images/ix3-front.png");
+		expect(
+			document
+				.querySelector("[data-fl-a2ui-fence]")
+				?.hasAttribute("data-streaming"),
+		).toBe(false);
 	});
 
 	test("shows the source when nothing renders", async () => {

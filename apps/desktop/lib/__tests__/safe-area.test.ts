@@ -19,6 +19,11 @@ describe("iOS safe-area contract", () => {
 		expect(layout).toMatch(/viewportFit:\s*"cover"/);
 	});
 
+	it("locks the page scale so the mobile shells cannot zoom the UI", () => {
+		expect(layout).toMatch(/maximumScale:\s*1,/);
+		expect(layout).toMatch(/userScalable:\s*false/);
+	});
+
 	it("keeps the root layout a Server Component so the viewport export applies", () => {
 		expect(layout).toMatch(/export const viewport/);
 		// Next.js silently ignores `viewport` exports from "use client" modules.

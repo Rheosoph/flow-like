@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/native_widget_row"
-    android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:paddingTop="5dp" android:paddingBottom="5dp">
+    android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="56dp"
+    android:layout_marginTop="6dp" android:orientation="vertical" android:gravity="center_vertical"
+    android:paddingStart="12dp" android:paddingEnd="12dp" android:paddingTop="8dp" android:paddingBottom="8dp"
+    android:background="@drawable/native_widget_row_background">
     <TextView android:id="@+id/native_widget_row_title" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:textColor="#FFFFFF" android:textSize="14sp" android:maxLines="1" android:ellipsize="end" />
+        style="@style/FlowLikeWidgetRowTitle" android:maxLines="1" android:ellipsize="end" />
     <TextView android:id="@+id/native_widget_row_detail" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:textColor="#BBBBCC" android:textSize="11sp" android:maxLines="1" android:ellipsize="end" />
+        style="@style/FlowLikeWidgetCaption" android:layout_marginTop="3dp" android:maxLines="1" android:ellipsize="end" />
 </LinearLayout>

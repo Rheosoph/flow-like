@@ -50,52 +50,56 @@
 	scrollbar-color: var(--fl-scrollbar-thumb) var(--fl-scrollbar-track);
 }
 
-*::-webkit-scrollbar {
-	width: 10px;
-	height: 10px;
-}
+/* Touch-only devices keep the platform's thin, auto-hiding overlay indicators;
+   any ::-webkit-scrollbar rule would swap them for permanent gutters. */
+@media not all and (hover: none) and (pointer: coarse) {
+	*::-webkit-scrollbar {
+		width: 10px;
+		height: 10px;
+	}
 
-*::-webkit-scrollbar-track {
-	border: 2px solid transparent;
-	border-radius: 999px;
-	background: var(--fl-scrollbar-track);
-	background-clip: padding-box;
-}
+	*::-webkit-scrollbar-track {
+		border: 2px solid transparent;
+		border-radius: 999px;
+		background: var(--fl-scrollbar-track);
+		background-clip: padding-box;
+	}
 
-*::-webkit-scrollbar-thumb {
-	min-width: 28px;
-	min-height: 28px;
-	border: 2px solid transparent;
-	border-radius: 999px;
-	background: linear-gradient(
-		var(--fl-scrollbar-direction, 180deg),
-		var(--fl-scrollbar-tip),
-		var(--fl-scrollbar-thumb)
-	);
-	background-clip: padding-box;
-}
+	*::-webkit-scrollbar-thumb {
+		min-width: 28px;
+		min-height: 28px;
+		border: 2px solid transparent;
+		border-radius: 999px;
+		background: linear-gradient(
+			var(--fl-scrollbar-direction, 180deg),
+			var(--fl-scrollbar-tip),
+			var(--fl-scrollbar-thumb)
+		);
+		background-clip: padding-box;
+	}
 
-*::-webkit-scrollbar-thumb:horizontal {
-	--fl-scrollbar-direction: 90deg;
-}
+	*::-webkit-scrollbar-thumb:horizontal {
+		--fl-scrollbar-direction: 90deg;
+	}
 
-*::-webkit-scrollbar-thumb:hover {
-	border-radius: 999px;
-	background: linear-gradient(
-		var(--fl-scrollbar-direction, 180deg),
-		var(--fl-scrollbar-accent),
-		var(--fl-scrollbar-tip)
-	);
-	background-clip: padding-box;
-}
+	*::-webkit-scrollbar-thumb:hover {
+		border-radius: 999px;
+		background: linear-gradient(
+			var(--fl-scrollbar-direction, 180deg),
+			var(--fl-scrollbar-accent),
+			var(--fl-scrollbar-tip)
+		);
+		background-clip: padding-box;
+	}
 
-*::-webkit-scrollbar-thumb:active {
-	background: var(--fl-scrollbar-accent);
-	background-clip: padding-box;
-}
+	*::-webkit-scrollbar-thumb:active {
+		background: var(--fl-scrollbar-accent);
+		background-clip: padding-box;
+	}
 
-*::-webkit-scrollbar-corner {
-	background: transparent;
+	*::-webkit-scrollbar-corner {
+		background: transparent;
+	}
 }
 
 /* Radix keeps its existing drag target and native viewport hiding. */

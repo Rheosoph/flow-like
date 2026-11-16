@@ -271,6 +271,7 @@ pub(crate) async fn write_outbound_in<C: ConnectionTrait>(
         kind: InboxEntryKind::Message,
         content: Content::Plain(envelope),
         links,
+        interactive: None,
     };
     if let Some(sent) = repeat_of(txn, conversation_id, bot_id, message_id).await? {
         return Ok(sent);

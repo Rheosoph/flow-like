@@ -6,6 +6,7 @@ use crate::connection::PendingReply;
 use crate::dialogs::Dialog;
 use crate::element::{Atom, Element, ResolvedNode};
 use crate::error::{BrowserError, ErrorClass};
+use crate::input::paced::{PRESSED, Pacing, PointerStep, pause, whole};
 use crate::input::{
     ActionOutcome, ClickOptions, InputEvent, InputGuard, MouseButton, MouseEvent, dialog_outcome,
     record_sent, unexpected_reply,
@@ -80,7 +81,7 @@ pub(crate) enum Dispatch {
 }
 
 impl Dispatch {
-    fn finished(self) -> Option<ActionOutcome> {
+    pub(crate) fn finished(self) -> Option<ActionOutcome> {
         match self {
             Dispatch::Acknowledged => None,
             Dispatch::Dialog(dialog) => Some(dialog_outcome(dialog)),
@@ -109,9 +110,9 @@ impl ClickTarget {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Viewport {
-    width: f64,
-    height: f64,
+pub(crate) struct Viewport {
+    pub(crate) width: f64,
+    pub(crate) height: f64,
     scroll: (f64, f64),
 }
 
@@ -127,6 +128,173 @@ impl Viewport {
     fn document_point(self, (x, y): (f64, f64)) -> (f64, f64) {
         (x + self.scroll.0, y + self.scroll.1)
     }
+
+    pub(crate) fn inside(self, (x, y): (f64, f64)) -> (f64, f64) {
+        (
+            x.clamp(0.0, (self.width - 1.0).max(0.0)),
+            y.clamp(0.0, (self.height - 1.0).max(0.0)),
+        )
+    }
+}
+
+/// Moves the pointer along `pacing`'s path from where it last was to `target`, in top-level
+/// viewport pixels. Every move goes to the page's own session, as a real mouse's events reach
+/// the browser: Chrome routes them into frames and gives events in cross-origin frames the
+/// window's screen coordinates (an iframe's own session would report iframe-relative ones).
+/// `Some` when a dialog ended the action.
+async fn approach(
+    page: &Page,
+    attempt: &OpAttempt,
+    pacing: &dyn Pacing,
+    target: (f64, f64),
+    size: (f64, f64),
+) -> crate::Result<Option<ActionOutcome>> {
+    let top = page.session();
+    let viewport = layout_viewport(&top).await?;
+    let mut steps = pacing.reach(
+        page.pointer(),
+        target,
+        size,
+        (viewport.width, viewport.height),
+    );
+    let arrival = steps
+        .pop()
+        .map_or(std::time::Duration::ZERO, |step| step.wait);
+    for step in steps {
+        pause(step.wait, attempt).await;
+        let at = whole(viewport.inside(step.point));
+        let moved = InputEvent::Mouse(MouseEvent::moved(at, None, 0));
+        if let Some(outcome) = stream_move(page, attempt, &top, &moved)? {
+            return Ok(Some(outcome));
+        }
+    }
+    pause(arrival, attempt).await;
+    let moved = InputEvent::Mouse(MouseEvent::moved(target, None, 0));
+    Ok(dispatch_or_dialog(page, attempt, &top, &moved)
+        .await?
+        .finished())
+}
+
+/// Presses the left button where the pointer is, keeps it down while `held` moves it (or for
+/// `pacing`'s hold), and releases it. On the page's own session, like [`approach`].
+async fn press_paced(
+    page: &Page,
+    attempt: &OpAttempt,
+    pacing: &dyn Pacing,
+    at: (f64, f64),
+    held: &[PointerStep],
+) -> crate::Result<ActionOutcome> {
+    let top = page.session();
+    let pressed = MouseEvent::pressed(at, MouseButton::Left, 1, 0).with_force(PRESSED);
+    let sent = dispatch_or_dialog(page, attempt, &top, &InputEvent::Mouse(pressed)).await?;
+    if let Some(outcome) = sent.finished() {
+        return Ok(outcome);
+    }
+    let mut last = at;
+    if held.is_empty() {
+        pause(pacing.hold(), attempt).await;
+    }
+    for step in held {
+        pause(step.wait, attempt).await;
+        last = whole(step.point);
+        let dragged = MouseEvent::moved(last, Some(MouseButton::Left), 0).with_force(PRESSED);
+        if let Some(outcome) = stream_move(page, attempt, &top, &InputEvent::Mouse(dragged))? {
+            return Ok(outcome);
+        }
+    }
+    let released = MouseEvent::released(last, MouseButton::Left, 1, 0);
+    dispatch_all(page, attempt, &top, &[InputEvent::Mouse(released)]).await
+}
+
+impl Page {
+    /// The visible box of the frame element in the top document whose own document's address
+    /// contains `needle`, in top-level viewport pixels as `(x, y, width, height)`. It reaches a
+    /// widget's cross-origin frame that a closed shadow root hides from page scripts. `None`
+    /// when no such frame is attached or it is not in view.
+    pub async fn frame_box(&self, needle: &str) -> crate::Result<Option<(f64, f64, f64, f64)>> {
+        let found = {
+            let state = self.inner.lock_state();
+            let main = state.frames.main_id().clone();
+            state
+                .frames
+                .get(&main)
+                .and_then(|node| {
+                    node.children.iter().find(|child| {
+                        state
+                            .frames
+                            .get(child)
+                            .is_some_and(|frame| frame.url.contains(needle))
+                    })
+                })
+                .cloned()
+        };
+        let Some(frame) = found else {
+            return Ok(None);
+        };
+        let top = self.session();
+        let owner = frame_owner(&top, &frame).await?;
+        let (quads, viewport) = local_quads(&top, owner).await?;
+        let Ok(quad) = visible_quad(&quads, viewport) else {
+            return Ok(None);
+        };
+        let xs = quad.map(|(x, _)| x);
+        let ys = quad.map(|(_, y)| y);
+        let left = xs.iter().copied().fold(f64::INFINITY, f64::min);
+        let top_edge = ys.iter().copied().fold(f64::INFINITY, f64::min);
+        let right = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let bottom = ys.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        Ok(Some((left, top_edge, right - left, bottom - top_edge)))
+    }
+
+    /// A paced click at `point` (top-level viewport pixels) on a target `size` pixels large that
+    /// the engine cannot address as an element, such as a checkbox inside a cross-origin frame
+    /// or a closed shadow root. `held` moves the pointer while the button is down (a
+    /// press-and-hold); empty, the button is held for `pacing`'s hold time.
+    pub async fn click_paced_at(
+        &self,
+        point: (f64, f64),
+        size: (f64, f64),
+        pacing: &dyn Pacing,
+        held: &[PointerStep],
+    ) -> crate::Result<ActionOutcome> {
+        let _guard = InputGuard::new(self);
+        let main = self.main_frame().id;
+        let target = whole(point);
+        let outcome = self
+            .run_op(&main, OpSpec::INPUT, |attempt| async move {
+                if let Some(outcome) = approach(self, &attempt, pacing, target, size).await? {
+                    return Ok(outcome);
+                }
+                pause(pacing.settle(), &attempt).await;
+                press_paced(self, &attempt, pacing, target, held).await
+            })
+            .await?;
+        Ok(outcome.or_else(dialog_outcome))
+    }
+}
+
+/// Sends a move without waiting for Chrome's reply. Chrome answers a move only once a frame
+/// handled it, so awaiting every reply delivers each move in a frame of its own; streamed,
+/// moves closer together than a frame arrive coalesced, as a real mouse's do. `Some` when a
+/// dialog or a target that went away ended the action.
+pub(crate) fn stream_move(
+    page: &Page,
+    attempt: &OpAttempt,
+    session: &Session,
+    event: &InputEvent,
+) -> crate::Result<Option<ActionOutcome>> {
+    if let Some(dialog) = page.pending_dialog() {
+        return Ok(Some(dialog_outcome(dialog)));
+    }
+    let ticket = match session.send_nowait(event.method(), event.params()) {
+        Ok(ticket) => ticket,
+        Err(error) => return committed_error(attempt, error).map(Dispatch::finished),
+    };
+    attempt.commit();
+    if let Some(id) = session.id() {
+        record_sent(page, id, event, &ticket, attempt.deadline);
+    }
+    Ok(None)
 }
 
 pub(crate) fn element_stamp(element: &Element) -> crate::Result<FrameStamp> {
@@ -254,7 +422,7 @@ fn area(quad: &[(f64, f64); 4]) -> f64 {
     (twice / 2.0).abs()
 }
 
-fn quad_centre(reply: &Value, viewport: Viewport) -> crate::Result<(f64, f64)> {
+fn visible_quad(reply: &Value, viewport: Viewport) -> crate::Result<[(f64, f64); 4]> {
     let sized: Vec<_> = quads_of(reply)
         .into_iter()
         .filter(|quad| area(quad) > MIN_QUAD_AREA)
@@ -262,15 +430,35 @@ fn quad_centre(reply: &Value, viewport: Viewport) -> crate::Result<(f64, f64)> {
     if sized.is_empty() {
         return Err(not_interactable(NO_LAYOUT));
     }
-    let visible = sized
+    sized
         .into_iter()
         .map(|quad| viewport.clip(quad))
         .find(|quad| area(quad) > MIN_QUAD_AREA)
-        .ok_or_else(|| not_interactable(OUTSIDE_VIEWPORT))?;
+        .ok_or_else(|| not_interactable(OUTSIDE_VIEWPORT))
+}
+
+fn quad_centre(reply: &Value, viewport: Viewport) -> crate::Result<(f64, f64)> {
+    let visible = visible_quad(reply, viewport)?;
     let (x, y) = visible.iter().fold((0.0, 0.0), |(x, y), point| {
         (x + point.0 / 4.0, y + point.1 / 4.0)
     });
     Ok((x, y))
+}
+
+/// The point at fractions `(u, v)` of a quad's width and height, corners in content-quad order.
+fn quad_point(quad: &[(f64, f64); 4], (u, v): (f64, f64)) -> (f64, f64) {
+    let (u, v) = (u.clamp(0.0, 1.0), v.clamp(0.0, 1.0));
+    let weights = [(1.0 - u) * (1.0 - v), u * (1.0 - v), u * v, (1.0 - u) * v];
+    quad.iter()
+        .zip(weights)
+        .fold((0.0, 0.0), |(x, y), (corner, weight)| {
+            (x + corner.0 * weight, y + corner.1 * weight)
+        })
+}
+
+fn quad_size(quad: &[(f64, f64); 4]) -> (f64, f64) {
+    let length = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).hypot(a.1 - b.1);
+    (length(quad[0], quad[1]), length(quad[1], quad[2]))
 }
 
 fn not_interactable(message: &str) -> BrowserError {
@@ -300,7 +488,7 @@ fn node_error(error: BrowserError) -> BrowserError {
     }
 }
 
-async fn layout_viewport(session: &Session) -> crate::Result<Viewport> {
+pub(crate) async fn layout_viewport(session: &Session) -> crate::Result<Viewport> {
     let method = "Page.getLayoutMetrics";
     let metrics = session.send(method, json!({})).await?;
     let viewport = &metrics["cssLayoutViewport"];
@@ -546,14 +734,18 @@ async fn await_presented_frame(node: &ResolvedNode) {
 }
 
 async fn local_centre(session: &Session, backend_node_id: i64) -> crate::Result<(f64, f64)> {
+    let (quads, viewport) = local_quads(session, backend_node_id).await?;
+    quad_centre(&quads, viewport)
+}
+
+async fn local_quads(session: &Session, backend_node_id: i64) -> crate::Result<(Value, Viewport)> {
     let quads = async {
         let quads = session
             .send(QUADS, json!({"backendNodeId": backend_node_id}))
             .await;
         quads.map_err(node_error)
     };
-    let (quads, viewport) = tokio::try_join!(quads, layout_viewport(session))?;
-    quad_centre(&quads, viewport)
+    tokio::try_join!(quads, layout_viewport(session))
 }
 
 async fn top_point(
@@ -757,7 +949,111 @@ impl Element {
             InputEvent::Mouse(MouseEvent::released(point.local, MouseButton::Left, 1, 0)),
         ];
         let outcome = dispatch_all(&self.frame.page, attempt, &point.session, &events).await?;
+        if attempt.is_committed() {
+            self.frame.page.set_pointer(point.top);
+        }
         Ok((outcome, attempt.is_committed().then_some(point.top)))
+    }
+
+    /// Like [`Element::element_click_with_point`], at a person's pace: the pointer travels from
+    /// where it last was to a spot `pacing` picks inside the element, rests, and the button is
+    /// held down for a moment with a pressure of 0.5.
+    pub async fn click_paced(
+        &self,
+        pacing: &dyn Pacing,
+    ) -> crate::Result<(ActionOutcome, Option<(f64, f64)>)> {
+        let _guard = InputGuard::new(&self.frame.page);
+        let outcome = self
+            .run(OpSpec::INPUT, |attempt| async move {
+                self.paced_click_in(&attempt, pacing).await
+            })
+            .await?;
+        Ok(outcome.or_else(|dialog| (dialog_outcome(dialog), None)))
+    }
+
+    /// Moves the pointer onto the element at a person's pace without pressing.
+    pub async fn hover_paced(&self, pacing: &dyn Pacing) -> crate::Result<ActionOutcome> {
+        let outcome = self
+            .run(OpSpec::INPUT, |attempt| async move {
+                let (point, size) = self.aimed_point_in(&attempt, "element", pacing).await?;
+                let target = whole(point.top);
+                let arrived = approach(&self.frame.page, &attempt, pacing, target, size).await?;
+                Ok(arrived.unwrap_or(ActionOutcome::Completed))
+            })
+            .await?;
+        Ok(outcome.or_else(dialog_outcome))
+    }
+
+    async fn paced_click_in(
+        &self,
+        attempt: &OpAttempt,
+        pacing: &dyn Pacing,
+    ) -> crate::Result<(ActionOutcome, Option<(f64, f64)>)> {
+        let probed = self
+            .call_function_in(attempt, World::Util, CLICK_TARGET_PROBE, Vec::new(), true)
+            .await?;
+        let target = ClickTarget::deserialize(&probed).unwrap_or_default();
+        if target.tag == "option" {
+            return self
+                .element_click_option_in(attempt)
+                .await
+                .map(|outcome| (outcome, None));
+        }
+        if target.is_file_input() {
+            return Err(BrowserError::InvalidArgument {
+                message: "element click on a file input is not allowed; use Upload File".to_owned(),
+            });
+        }
+        let page = &self.frame.page;
+        let (point, size) = self.aimed_point_in(attempt, &target.tag, pacing).await?;
+        let at = whole(point.top);
+        if let Some(outcome) = approach(page, attempt, pacing, at, size).await? {
+            return Ok((outcome, None));
+        }
+        pause(pacing.settle(), attempt).await;
+        // The page had time to change under the pointer (a hover menu, a late overlay).
+        check_hit_chain(self, attempt, &point, &target.tag).await?;
+        let outcome = press_paced(page, attempt, pacing, at, &[]).await?;
+        Ok((outcome, Some(at)))
+    }
+
+    /// A hit-checked spot inside the element where `pacing` aims, in whole pixels, and the size
+    /// of the element's visible box. A covered spot falls back to the checked centre.
+    async fn aimed_point_in(
+        &self,
+        attempt: &OpAttempt,
+        tag: &str,
+        pacing: &dyn Pacing,
+    ) -> crate::Result<(ClickPoint, (f64, f64))> {
+        let node = self.resolve_in(attempt, World::Util).await?;
+        let chain = element_chain(self)?;
+        scroll_into_view(&node.session, self.backend_node_id).await?;
+        if self.local_root != *self.frame.page.target_id() || self.frame.page.has_oopifs() {
+            await_presented_frame(&node).await;
+        }
+        let (quads, viewport) = local_quads(&node.session, self.backend_node_id).await?;
+        let quad = visible_quad(&quads, viewport)?;
+        let size = quad_size(&quad);
+        let local = whole(quad_point(&quad, pacing.aim(size)));
+        let (top, boundaries) = top_point(&self.frame.page, &chain, local).await?;
+        unchanged(&self.frame, &chain, QUADS)?;
+        let point = ClickPoint {
+            session: node.session,
+            local,
+            top,
+            boundaries,
+        };
+        match check_hit_chain(self, attempt, &point, tag).await {
+            Ok(()) => {
+                unchanged(&self.frame, &chain, HIT_TEST)?;
+                Ok((point, size))
+            }
+            Err(BrowserError::ClickIntercepted { .. }) => {
+                let centre = self.hit_checked_point_in(attempt, tag).await?;
+                Ok((centre, size))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     async fn hit_checked_point_in(
@@ -1777,6 +2073,96 @@ mod tests {
         );
         assert!(!resolved_nodes(&harness).contains(&json!(80)));
         assert!(input_events(&harness.control).is_empty());
+    }
+
+    struct Scripted;
+
+    impl Pacing for Scripted {
+        fn aim(&self, size: (f64, f64)) -> (f64, f64) {
+            assert_eq!(size, (88.5, 21.0));
+            (0.25, 0.75)
+        }
+
+        fn reach(
+            &self,
+            from: Option<(f64, f64)>,
+            to: (f64, f64),
+            _size: (f64, f64),
+            viewport: (f64, f64),
+        ) -> Vec<crate::input::paced::PointerStep> {
+            assert_eq!(from, None);
+            assert_eq!(viewport, (1280.0, 720.0));
+            [(10.4, 5.6), (2000.0, 50.0), to]
+                .into_iter()
+                .map(|point| crate::input::paced::PointerStep {
+                    point,
+                    wait: std::time::Duration::ZERO,
+                })
+                .collect()
+        }
+
+        fn settle(&self) -> std::time::Duration {
+            std::time::Duration::ZERO
+        }
+
+        fn hold(&self) -> std::time::Duration {
+            std::time::Duration::ZERO
+        }
+
+        fn key_wait(
+            &self,
+            _previous: Option<&crate::input::keys::KeyEvent>,
+            _next: &crate::input::keys::KeyEvent,
+        ) -> std::time::Duration {
+            std::time::Duration::ZERO
+        }
+    }
+
+    #[tokio::test]
+    async fn a_paced_click_stays_on_the_page_session_and_presses_where_it_aimed() {
+        let harness = scene::page_with_oopif().await;
+        harness.control.set_auto_reply(|command| {
+            (declaration(command) == CLICK_TARGET_PROBE)
+                .then(|| value(json!({"tag": "button", "type": ""})))
+                .flatten()
+                .or_else(|| scene::reply(command))
+        });
+        let button = element(&harness, "F2", TARGET);
+        let (outcome, point) = button.click_paced(&Scripted).await.unwrap();
+        assert_eq!(outcome, ActionOutcome::Completed);
+        // The S2 quad starts at (20, 50) and measures 88.5 × 21, so the aim lands on (42, 66) in
+        // the frame; the frame sits at (51, 297.5), and the page session takes whole pixels.
+        let top = (93.0, 364.0);
+        assert_eq!(point, Some(top));
+        assert_eq!(
+            mouse_events(&harness),
+            vec![
+                at("S1", "moved", (10.0, 6.0)),
+                at("S1", "moved", (1279.0, 50.0)),
+                at("S1", "moved", top),
+                at("S1", "pressed", top),
+                at("S1", "released", top),
+            ],
+            "a real mouse reaches a cross-origin frame through the page"
+        );
+        let events = input_events(&harness.control);
+        assert_eq!(events[3].params["force"], json!(0.5));
+        assert!(events[4].params.get("force").is_none());
+        assert_eq!(harness.page.pointer(), Some(top));
+        assert_eq!(
+            sent_on(&harness, "DOM.getNodeForLocation").len(),
+            4,
+            "the frame and its owner are hit-tested on arrival and again before pressing"
+        );
+    }
+
+    #[test]
+    fn quad_points_interpolate_between_the_corners() {
+        let quad = [(20.0, 50.0), (108.5, 50.0), (108.5, 71.0), (20.0, 71.0)];
+        assert_eq!(quad_point(&quad, (0.5, 0.5)), (64.25, 60.5));
+        assert_eq!(quad_point(&quad, (0.0, 1.0)), (20.0, 71.0));
+        assert_eq!(quad_point(&quad, (2.0, -1.0)), (108.5, 50.0));
+        assert_eq!(quad_size(&quad), (88.5, 21.0));
     }
 
     #[tokio::test]

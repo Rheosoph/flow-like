@@ -5,16 +5,24 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode, type Ref, act } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { getApiOrigin } from "../../lib/api-url";
 import { DEFAULT_CHAT_AI_DISCLOSURE } from "../../lib/chat-appearance";
 import { IRole } from "../../lib/schema/llm/history";
 import { useAuthStatusStore, useBackendStore } from "../../state/backend-state";
 import type { IBot } from "../../state/backend-state/bot-state";
+import type {
+	IInboxImportEntry,
+	IInboxState,
+	ISendInboxEntryRequest,
+} from "../../state/backend-state/inbox-state";
+import { registerBotInbox } from "../../state/global-chat/bot-inbox";
 import {
 	type IMessage,
 	globalChatDb,
 } from "../../state/global-chat/global-chat-db";
 import { useChatPreparationStore } from "../../state/global-chat/global-chat-preparation";
 import {
+	AGENT_MODEL_KEY,
 	type GlobalChatRun,
 	type GlobalToolPrompt,
 	MAX_CONCURRENT_GLOBAL_CHAT_RUNS,
@@ -23,6 +31,7 @@ import {
 import type { IChatConcurrency } from "../interfaces/chat-default/chat";
 import type { ISendMessageFunction } from "../interfaces/chat-default/chatbox";
 import { GlobalChatBody } from "./global-chat-body";
+import { useAgentSelection } from "./hero-variants/use-agent-selection";
 
 const harness = vi.hoisted(() => ({
 	send: undefined as ISendMessageFunction | undefined,
@@ -32,6 +41,7 @@ const harness = vi.hoisted(() => ({
 		  }
 		| undefined,
 	bodies: [] as Record<string, unknown>[],
+	announcedModel: undefined as string | undefined,
 	uploads: [] as { resolve: (attachments: unknown[]) => void }[],
 	disclosure: undefined as string | undefined,
 	pushed: [] as unknown[],
@@ -161,8 +171,13 @@ vi.mock(
 			typeof import("../../state/global-chat/global-chat-web-transport")
 		>()),
 		webGlobalChatStart:
-			(options: { body: Record<string, unknown> }) => async () => {
+			(options: { body: Record<string, unknown> }) =>
+			async (
+				_onChunk: (chunk: string) => void,
+				onModel?: (modelId: string) => void,
+			) => {
 				harness.bodies.push(options.body);
+				if (harness.announcedModel) onModel?.(harness.announcedModel);
 				if (harness.holdStream)
 					await new Promise<void>((resolve) => {
 						harness.stream = { resolve };
@@ -268,8 +283,9 @@ function liveRun(runId: string, conversationId: string): GlobalChatRun {
 }
 
 /** A backend whose profile offers `models` as its own chat models. */
-function backendWith(models: unknown[]) {
+function backendWith(models: unknown[], inboxState?: IInboxState) {
 	return {
+		inboxState,
 		botState: { listBots: async () => BOTS },
 		userState: {
 			getSettingsProfile: async () => ({
@@ -297,11 +313,15 @@ async function settle() {
 
 beforeEach(async () => {
 	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+	localStorage.clear();
 	await globalChatDb.messages.clear();
 	await globalChatDb.sessions.clear();
+	await globalChatDb.markers.clear();
+	registerBotInbox(null);
 	harness.send = undefined;
 	harness.upload = undefined;
 	harness.bodies = [];
+	harness.announcedModel = undefined;
 	harness.uploads = [];
 	harness.pushed = [];
 	harness.concurrency = undefined;
@@ -315,6 +335,8 @@ beforeEach(async () => {
 	useAuthStatusStore.getState().setSignedIn(true);
 	useBackendStore.getState().setBackend(backendWith([]));
 	useGlobalChatStore.setState({
+		provider: "bits",
+		selectedModelId: "",
 		activeConversationId: "bot:bot_atlas",
 		messages: [],
 		runs: {},
@@ -342,13 +364,212 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+	registerBotInbox(null);
 	useChatPreparationStore.setState({ replies: {} });
 	await act(async () => root.unmount());
 	host.remove();
+	localStorage.clear();
 	useGlobalChatStore.setState({
 		toolPrompt: null,
 		runs: {},
 		conversationLoading: false,
+	});
+});
+
+test("a transport-announced model is retained separately from the requested selection", async () => {
+	harness.announcedModel = "resolved-bot-bit";
+	await act(async () => {
+		useGlobalChatStore.getState().selectProvider("bits");
+		useGlobalChatStore.getState().selectModel("requested-bit");
+	});
+	await act(async () => {
+		await harness.send?.("Check model identity");
+	});
+	expect(harness.bodies.at(-1)?.model_id).toBe("requested-bit");
+	const assistant = useGlobalChatStore
+		.getState()
+		.messages.findLast((message) => message.inner.role === IRole.Assistant);
+	expect(assistant?.run_context).toMatchObject({
+		model_id: "requested-bit",
+		effective_model_id: "resolved-bot-bit",
+		backend_model_id: "resolved-bot-bit",
+	});
+});
+
+test.each(["pending", "local-cache"] as const)(
+	"Flux and the hero preserve a custom Claude Bit and send its id with a %s library",
+	async (catalogState) => {
+		await act(async () => root.render(null));
+		const selectedBit = {
+			id: "custom-claude-code",
+			type: "Llm",
+			meta: { en: { name: "My Claude Code" } },
+			parameters: { provider: { provider_name: "custom:claude-code" } },
+		};
+		const otherBit = {
+			id: "custom-qwen",
+			type: "Llm",
+			meta: { en: { name: "Custom Qwen" } },
+			parameters: { provider: { provider_name: "custom:openai" } },
+		};
+		let resolveCustomBits!: (bits: unknown[]) => void;
+		const customBits = new Promise<unknown[]>((resolve) => {
+			resolveCustomBits = resolve;
+		});
+		const libraryReads = vi.fn();
+		async function listCustomBits() {
+			libraryReads();
+			return catalogState === "local-cache" ? [] : customBits;
+		}
+		const searchBits = vi.fn(async () => [otherBit]);
+		await act(async () => {
+			useBackendStore.getState().setBackend({
+				botState: { listBots: async () => BOTS },
+				userState: {
+					getSettingsProfile: async () => ({
+						hub_profile: { id: "custom-bit-profile", bits: [otherBit.id] },
+					}),
+					getProfile: async () => ({ id: "custom-bit-profile" }),
+				},
+				bitState: {
+					searchBits,
+					listCustomBits,
+					getProfileBits: async () => [],
+				},
+				capabilities: () => ({ canUseNativeAgentProviders: true }),
+			} as never);
+			useGlobalChatStore.getState().selectProvider("bits");
+			useGlobalChatStore.getState().selectModel(selectedBit.id);
+			useGlobalChatStore.getState().loadConversation("flux-custom-bit", []);
+		});
+		function HeroSelection() {
+			const selection = useAgentSelection();
+			return <span data-testid="hero-model">{selection.selectedModelId}</span>;
+		}
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		await act(async () => {
+			root.render(
+				<QueryClientProvider client={client}>
+					<HeroSelection />
+					<GlobalChatBody variant="overlay" />
+				</QueryClientProvider>,
+			);
+		});
+		await settle();
+		expect(searchBits).toHaveBeenCalled();
+		expect(libraryReads).toHaveBeenCalled();
+		expect(useGlobalChatStore.getState().selectedModelId).toBe(selectedBit.id);
+		expect(host.querySelector("[data-testid='hero-model']")?.textContent).toBe(
+			selectedBit.id,
+		);
+		expect(localStorage.getItem(AGENT_MODEL_KEY)).toBe(selectedBit.id);
+
+		await act(async () => {
+			await harness.send?.("Use my selected model");
+		});
+		expect(harness.bodies.at(-1)?.model_id).toBe(selectedBit.id);
+		await act(async () => {
+			resolveCustomBits([selectedBit]);
+			if (catalogState === "local-cache") {
+				client.setQueriesData({ queryKey: ["listCustomBits"] }, [selectedBit]);
+			}
+		});
+		await settle();
+		expect(useGlobalChatStore.getState().selectedModelId).toBe(selectedBit.id);
+		// The browser chat only offers Bits; exercise provider changes in the chooser.
+		await act(async () => {
+			root.render(
+				<QueryClientProvider client={client}>
+					<HeroSelection />
+				</QueryClientProvider>,
+			);
+		});
+		await act(async () => {
+			useGlobalChatStore.getState().selectProvider("codex");
+		});
+		expect(useGlobalChatStore.getState().selectedModelId).toBe("default");
+		await act(async () => {
+			useGlobalChatStore.getState().selectProvider("bits");
+		});
+		expect(useGlobalChatStore.getState().selectedModelId).toBe(selectedBit.id);
+	},
+);
+
+describe("a fresh bot message reaches the turn queue", () => {
+	test.each(["chat", "native"] as const)(
+		"%s resolves inbox history before saving the outgoing message",
+		async (source) => {
+			const imported: string[] = [];
+			const queued: string[] = [];
+			const inbox = {
+				async createConversation() {
+					return { id: "conv_atlas" };
+				},
+				async importHistory(
+					_bot: string,
+					_conversation: string,
+					entries: IInboxImportEntry[],
+				) {
+					imported.push(...entries.map((entry) => entry.message_id));
+					return { imported: entries.length, skipped: 0 };
+				},
+				async sendEntry(
+					_conversation: string,
+					request: ISendInboxEntryRequest,
+				) {
+					// The API returns an imported copy by id without queueing a new turn.
+					if (!imported.includes(request.message_id)) {
+						queued.push(request.message_id);
+					}
+					return { message_id: request.message_id };
+				},
+			} as unknown as IInboxState;
+			await act(async () => {
+				useBackendStore.getState().setBackend(backendWith([], inbox));
+			});
+
+			await act(async () => {
+				if (source === "chat") {
+					await harness.send?.("Hello again");
+				} else {
+					useGlobalChatStore.setState({
+						draft: {
+							prompt: "Hello again",
+							botId: "bot_atlas",
+							nativeRequest: {
+								id: "inbox-native-message",
+								scope: JSON.stringify([getApiOrigin(), "profile-1", "me"]),
+							},
+						},
+					});
+				}
+			});
+			await settle();
+			const question = useGlobalChatStore
+				.getState()
+				.messages.find((message) => message.inner.role === IRole.User);
+			expect(question?.inner.content).toBe("Hello again");
+			expect(imported).not.toContain(question?.id);
+			expect(queued).toEqual([question?.id]);
+			expect(harness.bodies[0]?.interactive).toMatchObject({
+				conversation_id: "conv_atlas",
+				trigger_message_id: question?.id,
+			});
+		},
+	);
+
+	test("keeps the outgoing message locally when no inbox can be resolved", async () => {
+		await act(async () => {
+			await harness.send?.("Keep this question");
+		});
+		await settle();
+		expect(
+			(await globalChatDb.messages.toArray())
+				.filter((message) => message.inner.role === IRole.User)
+				.map((message) => message.inner.content),
+		).toEqual(["Keep this question"]);
 	});
 });
 

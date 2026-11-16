@@ -148,6 +148,9 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
             browser::browser_screenshot(env, parse_args(tool, args)?).await
         }
         browser::BROWSER_CLOSE => browser::browser_close(env, parse_args(tool, args)?).await,
+        browser::BROWSER_CHALLENGE => {
+            browser::browser_challenge(env, parse_args(tool, args)?).await
+        }
         computer::COMPUTER_SCREENSHOT => {
             computer::computer_screenshot(env, parse_args(tool, args)?).await
         }

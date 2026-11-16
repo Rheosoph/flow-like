@@ -1,17 +1,23 @@
 import { BotAvatar } from "@flow-like/flow-like-ui/components/bots/bot-avatar";
-import { type CSSProperties, useEffect, useId, useRef, useState } from "react";
+import {
+	type CSSProperties,
+	type FocusEvent,
+	type KeyboardEvent,
+	type RefObject,
+	useCallback,
+	useEffect,
+	useId,
+	useRef,
+	useState,
+} from "react";
 import "./bot-crew-showcase.css";
 
 type CrewStrings = readonly [string, string, string, string, string];
 
 export interface BotCrewCopy {
-	label: string;
 	title: string;
-	hint: string;
 	pause: string;
 	resume: string;
-	statusWorking: string;
-	statusDone: string;
 	resultLabel: string;
 	roles: CrewStrings;
 	missions: readonly {
@@ -29,6 +35,26 @@ const crew = [
 	{ name: "Post", kind: "mochi", color: "#c6a8ed", prop: "inbox" },
 	{ name: "Loop", kind: "orbi", color: "#efd28e", prop: "routine" },
 ] as const;
+
+const motes = Array.from({ length: 9 }, (_, index) => ({
+	id: `mote-${index}`,
+	style: {
+		"--particle-x": `${7 + index * 10.5}%`,
+		"--particle-y": `${24 + (index % 3) * 20}%`,
+		"--particle-delay": `${index * -1.7}s`,
+	} as CSSProperties,
+}));
+
+const STEP_MS = 2300;
+const RESULT_STEP = crew.length;
+const MISSION_MS = STEP_MS * (RESULT_STEP + 1.6);
+
+type StationState = "idle" | "working" | "done";
+
+function stationState(index: number, phase: number): StationState {
+	if (index < phase) return "done";
+	return index === phase ? "working" : "idle";
+}
 
 function WorkProp({ kind }: { kind: (typeof crew)[number]["prop"] }) {
 	return (
@@ -57,7 +83,15 @@ function WorkProp({ kind }: { kind: (typeof crew)[number]["prop"] }) {
 							strokeWidth="4"
 							strokeLinecap="round"
 						/>
-						<rect className="bot-crew-scan" x="59" y="20" width="53" height="10" rx="2" fill="#91bc7370" />
+						<rect
+							className="bot-crew-scan"
+							x="59"
+							y="20"
+							width="53"
+							height="10"
+							rx="2"
+							fill="#91bc7370"
+						/>
 					</g>
 					<g className="bot-crew-glass">
 						<circle
@@ -113,9 +147,22 @@ function WorkProp({ kind }: { kind: (typeof crew)[number]["prop"] }) {
 							fill={index === 3 ? "#d2f4ff" : "#72add1"}
 						/>
 					))}
-					<g className="bot-crew-trend" fill="#dff7ff" stroke="#dff7ff" strokeWidth="2">
-						<path d="m40 54 29-21 29 8 32-26" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-						<circle cx="40" cy="54" r="3" /><circle cx="69" cy="33" r="3" /><circle cx="98" cy="41" r="3" /><circle cx="130" cy="15" r="3" />
+					<g
+						className="bot-crew-trend"
+						fill="#dff7ff"
+						stroke="#dff7ff"
+						strokeWidth="2"
+					>
+						<path
+							d="m40 54 29-21 29 8 32-26"
+							fill="none"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+						/>
+						<circle cx="40" cy="54" r="3" />
+						<circle cx="69" cy="33" r="3" />
+						<circle cx="98" cy="41" r="3" />
+						<circle cx="130" cy="15" r="3" />
 					</g>
 					<path
 						d="M79 85v9m24-9v9M65 95h52"
@@ -142,11 +189,65 @@ function WorkProp({ kind }: { kind: (typeof crew)[number]["prop"] }) {
 					<circle cx="42" cy="12" r="2" fill="#ebc487" />
 					<circle cx="50" cy="12" r="2" fill="#9ac4a2" />
 					<g className="bot-crew-code" strokeWidth="1.5">
-						<path className="bot-crew-flow-wire" d="M58 48h10q5 0 5-5v-5h13m-13 7v13h13m22-20h10q5 0 5 5v6h9m-24 9h10q5 0 5-5v-4" fill="none" stroke="#d9a6a0" />
-						<g className="bot-crew-flow-node bot-crew-flow-node--one"><rect x="36" y="36" width="22" height="24" rx="4" fill="#9d5140" stroke="#ffb39a" /><path d="m46 42-3 7h7l-4 6" fill="none" stroke="#ffe0c8" strokeWidth="2" /></g>
-						<g className="bot-crew-flow-node bot-crew-flow-node--two"><rect x="86" y="28" width="22" height="18" rx="4" fill="#544c73" stroke="#c0aae6" /><path d="M92 34h10m-10 5h7" stroke="#d9cef2" strokeLinecap="round" /></g>
-						<g className="bot-crew-flow-node bot-crew-flow-node--three"><rect x="86" y="50" width="22" height="18" rx="4" fill="#355b56" stroke="#a2d4ad" /><path d="m92 59 3 3 7-7" fill="none" stroke="#d2edcf" /></g>
-						<circle className="bot-crew-flow-output" cx="137" cy="49" r="7" fill="#e7c284" /><path d="m134 49 2 2 4-4" stroke="#684c2f" fill="none" />
+						<path
+							className="bot-crew-flow-wire"
+							d="M58 48h10q5 0 5-5v-5h13m-13 7v13h13m22-20h10q5 0 5 5v6h9m-24 9h10q5 0 5-5v-4"
+							fill="none"
+							stroke="#d9a6a0"
+						/>
+						<g className="bot-crew-flow-node bot-crew-flow-node--one">
+							<rect
+								x="36"
+								y="36"
+								width="22"
+								height="24"
+								rx="4"
+								fill="#9d5140"
+								stroke="#ffb39a"
+							/>
+							<path
+								d="m46 42-3 7h7l-4 6"
+								fill="none"
+								stroke="#ffe0c8"
+								strokeWidth="2"
+							/>
+						</g>
+						<g className="bot-crew-flow-node bot-crew-flow-node--two">
+							<rect
+								x="86"
+								y="28"
+								width="22"
+								height="18"
+								rx="4"
+								fill="#544c73"
+								stroke="#c0aae6"
+							/>
+							<path
+								d="M92 34h10m-10 5h7"
+								stroke="#d9cef2"
+								strokeLinecap="round"
+							/>
+						</g>
+						<g className="bot-crew-flow-node bot-crew-flow-node--three">
+							<rect
+								x="86"
+								y="50"
+								width="22"
+								height="18"
+								rx="4"
+								fill="#355b56"
+								stroke="#a2d4ad"
+							/>
+							<path d="m92 59 3 3 7-7" fill="none" stroke="#d2edcf" />
+						</g>
+						<circle
+							className="bot-crew-flow-output"
+							cx="137"
+							cy="49"
+							r="7"
+							fill="#e7c284"
+						/>
+						<path d="m134 49 2 2 4-4" stroke="#684c2f" fill="none" />
 					</g>
 					<path d="M24 81 8 91q-2 5 8 5h148q10 0 8-5l-15-10" fill="#5b4650" />
 					<path d="M73 83h35l5 5H68z" fill="#a88180" />
@@ -238,197 +339,276 @@ function WorkProp({ kind }: { kind: (typeof crew)[number]["prop"] }) {
 	);
 }
 
-export default function BotCrewShowcase({ copy }: { copy: BotCrewCopy }) {
-	const root = useRef<HTMLDivElement>(null);
-	const panelId = useId();
-	const [missionIndex, setMissionIndex] = useState(0);
-	const [phase, setPhase] = useState(0);
+function MotionIcon({ paused }: { paused: boolean }) {
+	return (
+		<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+			{paused ? (
+				<path d="M5 3.5v9l7-4.5z" fill="currentColor" />
+			) : (
+				<path
+					d="M5.5 3.5v9m5-9v9"
+					stroke="currentColor"
+					strokeWidth="2"
+					strokeLinecap="round"
+				/>
+			)}
+		</svg>
+	);
+}
+
+function useMotionGate(root: RefObject<HTMLElement | null>) {
+	const [visible, setVisible] = useState(false);
+	const [reducedMotion, setReducedMotion] = useState(false);
 	const [paused, setPaused] = useState(false);
-	const [motionAllowed, setMotionAllowed] = useState(false);
-	const [selectedBot, setSelectedBot] = useState<number | null>(null);
-	const [hoveredBot, setHoveredBot] = useState<number | null>(null);
-	const spotlight = hoveredBot ?? selectedBot;
-	const running = motionAllowed && !paused;
-	const mission = copy.missions[missionIndex] ?? copy.missions[0];
-
-	useEffect(() => {
-		const syncPause = () => setPaused(document.documentElement.dataset.botMotionPaused === "true");
-		syncPause();
-		window.addEventListener("flowlike:bot-motion", syncPause);
-		return () => window.removeEventListener("flowlike:bot-motion", syncPause);
-	}, []);
-
-	const togglePause = () => {
-		const next = !paused;
-		document.documentElement.dataset.botMotionPaused = String(next);
-		window.dispatchEvent(new CustomEvent("flowlike:bot-motion", { detail: { paused: next } }));
-	};
 
 	useEffect(() => {
 		const media = window.matchMedia("(prefers-reduced-motion: reduce)");
-		let visible = false;
-		const update = () =>
-			setMotionAllowed(visible && !document.hidden && !media.matches);
+		let inView = false;
+		const update = () => {
+			setVisible(inView && !document.hidden);
+			setReducedMotion(media.matches);
+		};
+		const syncPause = () =>
+			setPaused(document.documentElement.dataset.botMotionPaused === "true");
 		const observer = new IntersectionObserver(
 			([entry]) => {
-				visible = entry.isIntersecting;
+				inView = entry.isIntersecting;
 				update();
 			},
 			{ threshold: 0.1 },
 		);
 		if (root.current) observer.observe(root.current);
+		update();
+		syncPause();
 		media.addEventListener("change", update);
 		document.addEventListener("visibilitychange", update);
+		window.addEventListener("flowlike:bot-motion", syncPause);
 		return () => {
 			observer.disconnect();
 			media.removeEventListener("change", update);
 			document.removeEventListener("visibilitychange", update);
+			window.removeEventListener("flowlike:bot-motion", syncPause);
 		};
+	}, [root]);
+
+	const togglePause = useCallback(() => {
+		const next = document.documentElement.dataset.botMotionPaused !== "true";
+		document.documentElement.dataset.botMotionPaused = String(next);
+		window.dispatchEvent(
+			new CustomEvent("flowlike:bot-motion", { detail: { paused: next } }),
+		);
 	}, []);
+
+	return {
+		paused,
+		reducedMotion,
+		running: visible && !reducedMotion && !paused,
+		togglePause,
+	};
+}
+
+export default function BotCrewShowcase({ copy }: { copy: BotCrewCopy }) {
+	const root = useRef<HTMLDivElement>(null);
+	const progress = useRef<HTMLElement | null>(null);
+	const tabs = useRef<(HTMLButtonElement | null)[]>([]);
+	const elapsed = useRef(0);
+	const autoplay = useRef(true);
+	const focusHold = useRef(false);
+	const baseId = useId();
+	const [missionIndex, setMissionIndex] = useState(0);
+	const [phase, setPhase] = useState(0);
+	const [greeted, setGreeted] = useState<number | null>(null);
+	const { paused, reducedMotion, running, togglePause } = useMotionGate(root);
+	const missionCount = copy.missions.length;
+	const mission = copy.missions[missionIndex] ?? copy.missions[0];
+	const shownPhase = reducedMotion ? RESULT_STEP : phase;
 
 	useEffect(() => {
 		if (!running) return;
-		const interval = window.setInterval(
-			() => setPhase((current) => (current + 1) % 4),
-			2600,
-		);
-		return () => window.clearInterval(interval);
-	}, [running]);
+		let last = performance.now();
+		let frame = 0;
+		const tick = (now: number) => {
+			elapsed.current += Math.max(0, now - last);
+			last = now;
+			if (elapsed.current >= MISSION_MS) {
+				elapsed.current = 0;
+				if (autoplay.current && !focusHold.current)
+					setMissionIndex((current) => (current + 1) % missionCount);
+			}
+			progress.current?.style.setProperty(
+				"transform",
+				`scaleX(${elapsed.current / MISSION_MS})`,
+			);
+			setPhase(Math.min(Math.floor(elapsed.current / STEP_MS), RESULT_STEP));
+			frame = requestAnimationFrame(tick);
+		};
+		frame = requestAnimationFrame(tick);
+		return () => cancelAnimationFrame(frame);
+	}, [running, missionCount]);
+
+	const selectMission = (index: number) => {
+		autoplay.current = false;
+		elapsed.current = 0;
+		progress.current?.style.setProperty("transform", "scaleX(0)");
+		setPhase(0);
+		setMissionIndex(index);
+	};
+
+	const onTabKey = (event: KeyboardEvent<HTMLButtonElement>) => {
+		const moves: Record<string, number> = {
+			ArrowRight: missionIndex + 1,
+			ArrowLeft: missionIndex - 1,
+			Home: 0,
+			End: missionCount - 1,
+		};
+		const target = moves[event.key];
+		if (target === undefined) return;
+		event.preventDefault();
+		const next = (target + missionCount) % missionCount;
+		selectMission(next);
+		tabs.current[next]?.focus();
+	};
+
+	const onFocusCapture = (event: FocusEvent<HTMLDivElement>) => {
+		focusHold.current = event.target.matches(":focus-visible");
+	};
+
+	const onBlurCapture = (event: FocusEvent<HTMLDivElement>) => {
+		if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+			focusHold.current = false;
+	};
 
 	if (!mission) return null;
 
 	return (
-		<div ref={root} className="bot-crew" data-running={running}>
-			<header className="bot-crew-toolbar">
-				<span className="bot-crew-label">
-					<i aria-hidden="true" />
-					{copy.label}
-				</span>
-				<button
-					className="bot-crew-pause"
-					type="button"
-					onClick={togglePause}
-					aria-pressed={paused}
-				>
-					<span aria-hidden="true">{paused ? "▷" : "Ⅱ"}</span>
-					{paused ? copy.resume : copy.pause}
-				</button>
-			</header>
-			<div className="bot-crew-intro">
-				<p>{copy.title}</p>
-				<span>{copy.hint}</span>
-			</div>
-			<div className="bot-crew-missions" role="group" aria-label={copy.title}>
-				{copy.missions.map((item, index) => (
-					<button
-						type="button"
-						key={item.label}
-						aria-pressed={missionIndex === index}
-						aria-controls={panelId}
-						onClick={() => {
-							setMissionIndex(index);
-							setPhase(0);
-						}}
-					>
-						<span aria-hidden="true">0{index + 1}</span>
-						{item.label}
-						<i aria-hidden="true">↗</i>
-					</button>
-				))}
-			</div>
-			<div id={panelId} className="bot-crew-scene" data-spotlight={spotlight !== null}>
-				<div className="bot-crew-atmosphere" aria-hidden="true">
-					{Array.from({ length: 9 }, (_, index) => <i key={index} style={{ "--particle-x": `${7 + index * 10.5}%`, "--particle-y": `${24 + (index % 3) * 20}%`, "--particle-delay": `${index * -1.7}s` } as CSSProperties} />)}
-				</div>
-				<div className="bot-crew-prompt">
-					<span aria-hidden="true">✳</span>
-					<p>{mission.prompt}</p>
-				</div>
-				<div className="bot-crew-floor" aria-hidden="true">
-					<i />
-					<i />
-					<i />
-					<i />
-					<i />
-				</div>
-				<div className="bot-crew-workshop">
-					{crew.map((bot, index) => {
-						const done = (phase + index) % 4 === 3;
-						const greeted = spotlight === index;
+		<div
+			ref={root}
+			className="bot-crew"
+			data-running={running}
+			onFocusCapture={onFocusCapture}
+			onBlurCapture={onBlurCapture}
+		>
+			<div className="bot-crew-header">
+				<div className="bot-crew-tabs" role="tablist" aria-label={copy.title}>
+					{copy.missions.map((item, index) => {
+						const selected = index === missionIndex;
 						return (
-							<div
-								className={`bot-crew-station bot-crew-station--${bot.prop}`}
-								key={bot.name}
-								data-spotlight={greeted}
-								style={
-									{
-										"--crew-color": bot.color,
-										"--crew-delay": `${index * -0.7}s`,
-									} as CSSProperties
-								}
+							<button
+								type="button"
+								role="tab"
+								key={item.label}
+								id={`${baseId}-tab-${index}`}
+								ref={(element) => {
+									tabs.current[index] = element;
+								}}
+								className="bot-crew-tab"
+								aria-selected={selected}
+								aria-controls={`${baseId}-panel`}
+								tabIndex={selected ? 0 : -1}
+								onClick={() => selectMission(index)}
+								onKeyDown={onTabKey}
 							>
-								<div className="bot-crew-status" data-done={done}>
-									<i aria-hidden="true">{done ? "✓" : "···"}</i>
-									{done ? copy.statusDone : copy.statusWorking}
-								</div>
-								<button
-									className="bot-crew-character"
-									type="button"
-									aria-label={`${bot.name}: ${copy.roles[index]}`}
-									aria-pressed={selectedBot === index}
-									onClick={() => setSelectedBot((current) => current === index ? null : index)}
-									onPointerEnter={() => setHoveredBot(index)}
-									onPointerLeave={() => setHoveredBot(null)}
-									onFocus={() => setHoveredBot(index)}
-									onBlur={() => setHoveredBot(null)}
-								>
-									<BotAvatar
-										appearance={{
-											kind: bot.kind,
-											dark: true,
-											backdrop: "none",
-											frame: "square",
-										}}
-										agentState={
-											done ? "done" : index === phase ? "idea" : "working"
-										}
-										expression={greeted ? "happy" : undefined}
-										expressionOverridesState={greeted}
-										animated={running}
-										size={index === 2 ? 190 : 156}
-										decorative
-										className="bot-crew-avatar"
-									/>
-								</button>
-								<div className="bot-crew-desk">
-									<WorkProp kind={bot.prop} />
-									<div className="bot-crew-desk-bits" aria-hidden="true">
-										{index % 2 === 0 ? <span className="bot-crew-cup"><i /><i /></span> : <span className="bot-crew-notes"><i /><i /><i /></span>}
-									</div>
-									<span className="bot-crew-desktop" />
-									<i className="bot-crew-desk-light" />
-								</div>
-								<div className="bot-crew-bot-label">
-									<strong>{bot.name}</strong>
-									<span>{copy.roles[index]}</span>
-								</div>
-								<p className="bot-crew-task">{mission.tasks[index]}</p>
-							</div>
+								{item.label}
+								<span className="bot-crew-tab-track" aria-hidden="true">
+									{selected && <i ref={progress} />}
+								</span>
+							</button>
 						);
 					})}
 				</div>
+				<button
+					className="bot-crew-motion"
+					type="button"
+					onClick={togglePause}
+					aria-label={paused ? copy.resume : copy.pause}
+					title={paused ? copy.resume : copy.pause}
+				>
+					<MotionIcon paused={paused} />
+				</button>
 			</div>
-			<div className="bot-crew-result" aria-live="polite" aria-atomic="true">
-				<span className="bot-crew-result-icon" aria-hidden="true">
-					↳
-				</span>
-				<p>
-					<span>{copy.resultLabel}</span>
-					<strong>{mission.result}</strong>
-				</p>
-				<span className="bot-crew-result-spark" aria-hidden="true">
-					✦
-				</span>
+			<div
+				id={`${baseId}-panel`}
+				role="tabpanel"
+				aria-labelledby={`${baseId}-tab-${missionIndex}`}
+			>
+				<div className="bot-crew-scene">
+					<div className="bot-crew-atmosphere" aria-hidden="true">
+						{motes.map((mote) => (
+							<i key={mote.id} style={mote.style} />
+						))}
+					</div>
+					<div className="bot-crew-prompt">
+						<span aria-hidden="true">✳</span>
+						<p>{mission.prompt}</p>
+					</div>
+					<div className="bot-crew-floor" aria-hidden="true">
+						<i />
+						<i />
+						<i />
+					</div>
+					<ul className="bot-crew-workshop">
+						{crew.map((bot, index) => {
+							const state = stationState(index, shownPhase);
+							const happy = greeted === index;
+							return (
+								<li
+									className={`bot-crew-station bot-crew-station--${bot.prop}`}
+									key={bot.name}
+									data-state={state}
+									data-greeted={happy}
+									onPointerEnter={() => setGreeted(index)}
+									onPointerLeave={() => setGreeted(null)}
+									style={
+										{
+											"--crew-color": bot.color,
+											"--crew-delay": `${index * -0.7}s`,
+										} as CSSProperties
+									}
+								>
+									<div className="bot-crew-character">
+										<BotAvatar
+											appearance={{
+												kind: bot.kind,
+												dark: true,
+												backdrop: "none",
+												frame: "square",
+											}}
+											agentState={state}
+											expression={happy ? "happy" : undefined}
+											expressionOverridesState={happy}
+											animated={running}
+											size={index === 2 ? 190 : 156}
+											decorative
+											className="bot-crew-avatar"
+										/>
+									</div>
+									<div className="bot-crew-desk" aria-hidden="true">
+										<WorkProp kind={bot.prop} />
+										<span className="bot-crew-desktop" />
+										<i className="bot-crew-desk-light" />
+									</div>
+									<p className="bot-crew-bot-label">
+										<strong>{bot.name}</strong>
+										<span>{copy.roles[index]}</span>
+									</p>
+									<p className="bot-crew-task">{mission.tasks[index]}</p>
+								</li>
+							);
+						})}
+					</ul>
+				</div>
+				<div
+					className="bot-crew-result"
+					data-ready={shownPhase === RESULT_STEP}
+				>
+					<span className="bot-crew-result-icon" aria-hidden="true">
+						↳
+					</span>
+					<p>
+						<span>{copy.resultLabel}</span>
+						<strong>{mission.result}</strong>
+					</p>
+				</div>
 			</div>
 		</div>
 	);

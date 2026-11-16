@@ -1,5 +1,5 @@
-import { prepareMapLibreAssets } from "../../packages/ui/scripts/prepare-maplibre.mjs";
 import { PHASE_DEVELOPMENT_SERVER } from "next/constants.js";
+import { prepareMapLibreAssets } from "../../packages/ui/scripts/prepare-maplibre.mjs";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -29,10 +29,9 @@ const nextConfig = {
 	reactCompiler: true,
 	experimental: {
 		serverComponentsHmrCache: true,
-		// PostCSS and other Node-backed Turbopack plugins otherwise run in child
-		// processes connected over sockets. Worker threads avoid the process-pool
-		// stall seen while compiling dependency CSS and keep the work parallel.
-		turbopackPluginRuntimeStrategy: "workerThreads",
+		// This app's Next.js 16.4.3 build emits socket-based PostCSS helpers.
+		// Worker threads do not supply the IPC port those helpers expect.
+		turbopackPluginRuntimeStrategy: "childProcesses",
 		turbopackRustReactCompiler: true,
 		webpackMemoryOptimizations: true,
 		preloadEntriesOnStart: false,
@@ -48,6 +47,13 @@ export default (phase) => {
 	return {
 		...nextConfig,
 		output: undefined,
+		experimental: {
+			...nextConfig.experimental,
+			// Avoid the child-process pool stall when compiling CSS in development.
+			turbopackPluginRuntimeStrategy: "workerThreads",
+			turbopackFileSystemCacheForDev:
+				process.env.FLOWPILOT_E2E_NO_DISK_CACHE !== "1",
+		},
 		// Keep /use/ distinct from an Event-only /use link during development.
 		skipTrailingSlashRedirect: true,
 		// Production serves these paths through the static host or Tauri assets.

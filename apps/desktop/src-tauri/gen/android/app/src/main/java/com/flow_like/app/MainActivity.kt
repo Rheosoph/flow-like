@@ -1,180 +1,350 @@
 package com.flow_like.app
 
-import android.os.Build
+import android.content.Intent
+import android.content.res.Configuration
 import android.os.Bundle
 import android.provider.Settings
-import android.system.Os
-import android.util.Log
-import android.webkit.JavascriptInterface
-import android.webkit.WebView
-import androidx.activity.enableEdgeToEdge
+import android.text.format.Formatter
+import android.view.View
+import android.widget.Button
+import android.widget.ProgressBar
+import android.widget.TextView
+import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
-import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import com.google.android.play.core.splitcompat.SplitCompat
+import com.google.android.play.core.splitinstall.SplitInstallException
+import com.google.android.play.core.splitinstall.SplitInstallManager
+import com.google.android.play.core.splitinstall.SplitInstallManagerFactory
+import com.google.android.play.core.splitinstall.SplitInstallRequest
+import com.google.android.play.core.splitinstall.SplitInstallSessionState
+import com.google.android.play.core.splitinstall.SplitInstallStateUpdatedListener
+import com.google.android.play.core.splitinstall.model.SplitInstallErrorCode
+import com.google.android.play.core.splitinstall.model.SplitInstallSessionStatus
 
-class MainActivity : TauriActivity() {
-  private var lastTopPx = 0
-  private var lastBottomPx = 0
-  private var bridgeAttached = false
+/** The exported launcher stays usable before any Rust code is installed. */
+class MainActivity : AppCompatActivity() {
+    private lateinit var manager: SplitInstallManager
+    private lateinit var setup: NativeSetupView
+    private lateinit var message: TextView
+    private lateinit var detail: TextView
+    private lateinit var progress: ProgressBar
+    private lateinit var primary: Button
+    private lateinit var secondary: Button
+    private lateinit var storage: Button
+    private var sessionId = 0
+    private var confirmationSession = 0
+    private var autoRequest = true
+    private var requesting = false
+    private var loading = false
+    private var prepared = false
+    private var forwarded = false
+    private var resumed = false
+    private var lastState: SplitInstallSessionState? = null
 
-  override fun onCreate(savedInstanceState: Bundle?) {
-    // Set HOME, TMPDIR, and CACHE_DIR *before* super.onCreate() triggers the
-    // native Rust runtime.  Tauri/tao/wry do NOT set HOME on Android, so
-    // dirs_next and our own path resolution would otherwise fall back to
-    // relative paths rooted at "/" (read-only).
-    try {
-      val home = filesDir.absolutePath          // e.g. /data/user/0/com.flow_like.app/files
-      val cache = cacheDir.absolutePath          // e.g. /data/user/0/com.flow_like.app/cache
-      // TMPDIR must live under filesDir so that temp-file → data-file renames
-      // stay on the same filesystem/SELinux context (LanceDB commits use
-      // std::fs::rename via object_store, which fails across different dirs).
-      val tmpDir = java.io.File(filesDir, "tmp")
-      tmpDir.mkdirs()
-      val tmp = tmpDir.absolutePath
-      Os.setenv("HOME", home, true)
-      Os.setenv("TMPDIR", tmp, true)
-      Os.setenv("LANCE_CACHE_DIR", tmp, true)    // Lance internal temp/cache directory
-      Os.setenv("CACHE_DIR", cache, true)        // picked up by get_cache_dir() in core
-      Log.d("FlowLike", "setenv HOME=$home  TMPDIR=$tmp  LANCE_CACHE_DIR=$tmp  CACHE_DIR=$cache")
-    } catch (e: Exception) {
-      Log.e("FlowLike", "Failed to set env vars", e)
+    private val confirmation = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+        confirmationSession = 0
+        if (result.resultCode == RESULT_OK) refresh() else cancelDownload()
+    }
+    private val listener = SplitInstallStateUpdatedListener { state ->
+        if (state.sessionId() == sessionId || (sessionId == 0 && relevant(state))) accept(state)
     }
 
-    // Stable per-install device id used by the push-target dedup key on the
-    // backend. ANDROID_ID is scoped to (signing key, user, device) since
-    // Android 8.0 and survives uninstall/reinstall — exactly the property we
-    // need so a reinstall reuses the existing PushNotificationTarget row
-    // instead of superseding it.
-    try {
-      val androidId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
-      if (!androidId.isNullOrBlank()) {
-        Os.setenv("FL_STABLE_DEVICE_ID", androidId, true)
-      }
-    } catch (e: Exception) {
-      Log.e("FlowLike", "Failed to read ANDROID_ID", e)
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        SplitCompat.installActivity(this)
+        updateSystemBars(resources.configuration)
+        manager = SplitInstallManagerFactory.create(applicationContext)
+        sessionId = savedInstanceState?.getInt("installSession") ?: 0
+        confirmationSession = savedInstanceState?.getInt("confirmationSession") ?: 0
+        autoRequest = savedInstanceState?.getBoolean("autoRequest") ?: true
+        createContent()
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (lastState?.let { phase(it).active } == true) manager.cancelInstall(sessionId)
+                finish()
+            }
+        })
     }
 
-    enableEdgeToEdge()
-    super.onCreate(savedInstanceState)
-
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-      window.attributes.layoutInDisplayCutoutMode =
-        android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+    override fun onStart() {
+        super.onStart()
+        manager.registerListener(listener)
+        refresh()
     }
 
-    val rootView = window.decorView
-    ViewCompat.setOnApplyWindowInsetsListener(rootView) { _, windowInsets ->
-      val systemBars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
-      val cutout = windowInsets.getInsets(WindowInsetsCompat.Type.displayCutout())
-
-      val top = maxOf(systemBars.top, cutout.top)
-      val bottom = maxOf(systemBars.bottom, cutout.bottom)
-
-      if (top > 0 || bottom > 0) {
-        lastTopPx = top
-        lastBottomPx = bottom
-        // Retry injection: WebView may not be ready yet during initial layout
-        scheduleInsetInjection(top, bottom)
-      }
-
-      windowInsets
+    override fun onResume() {
+        super.onResume()
+        resumed = true
+        if (prepared) { forwardToRuntime(); return }
+        lastState?.takeIf { phase(it) == NativeInstallPhase.CONFIRMATION }?.let { requestConfirmation(it) }
     }
 
-    // Attach the JS bridge so the web page can read insets synchronously.
-    // This eliminates the race between evaluateJavascript and page load.
-    attachJsBridge()
-  }
+    override fun onPause() { resumed = false; super.onPause() }
+    override fun onStop() { manager.unregisterListener(listener); super.onStop() }
 
-  inner class InsetBridge {
-    @JavascriptInterface
-    fun getTopPx(): Int = lastTopPx
-
-    @JavascriptInterface
-    fun getBottomPx(): Int = lastBottomPx
-  }
-
-  private fun attachJsBridge() {
-    if (bridgeAttached) return
-    val webView = findWebView(window.decorView)
-    if (webView != null) {
-      webView.addJavascriptInterface(InsetBridge(), "FlowLikeInsets")
-      bridgeAttached = true
-      tuneWebView(webView)
-      Log.d("FlowLike", "JS inset bridge attached")
-    } else {
-      window.decorView.postDelayed({ attachJsBridge() }, 50)
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        updateSystemBars(newConfig)
+        setup.applyPalette()
     }
-  }
 
-  private fun tuneWebView(webView: WebView) {
-    webView.settings.apply {
-      domStorageEnabled = true
-      databaseEnabled = true
-      cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
-      // Allow mixed content so asset:// and https:// resources work together
-      mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+    private fun updateSystemBars(configuration: Configuration) {
+        NativeUi.systemBars(this, configuration)
     }
-    // Request high-priority rendering for this webview
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
-    }
-    // Ensure hardware acceleration is enabled on the webview layer
-    webView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
-  }
 
-  override fun onResume() {
-    super.onResume()
-    if (lastTopPx > 0 || lastBottomPx > 0) {
-      scheduleInsetInjection(lastTopPx, lastBottomPx)
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        refresh()
     }
-  }
 
-  override fun onWindowFocusChanged(hasFocus: Boolean) {
-    super.onWindowFocusChanged(hasFocus)
-    if (hasFocus && (lastTopPx > 0 || lastBottomPx > 0)) {
-      scheduleInsetInjection(lastTopPx, lastBottomPx)
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt("installSession", sessionId)
+        outState.putInt("confirmationSession", confirmationSession)
+        outState.putBoolean("autoRequest", autoRequest)
+        super.onSaveInstanceState(outState)
     }
-  }
 
-  private fun scheduleInsetInjection(top: Int, bottom: Int) {
-    val delays = longArrayOf(0, 100, 300, 600, 1200, 2500)
-    for (delay in delays) {
-      window.decorView.postDelayed({
-        injectSafeAreaInsets(top, bottom)
-      }, delay)
+    private fun createContent() {
+        setup = NativeSetupView(this)
+        message = setup.message
+        detail = setup.detail
+        progress = setup.progress
+        primary = setup.primary
+        secondary = setup.secondary.apply { setOnClickListener { finish() } }
+        storage = setup.storage.apply {
+            setOnClickListener {
+                try { startActivity(Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS)) }
+                catch (_: Exception) { detail.text = "Open Android Settings to free up storage, then retry the download." }
+            }
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(setup) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
+        setContentView(setup)
     }
-  }
 
-  private fun injectSafeAreaInsets(topPhysical: Int, bottomPhysical: Int) {
-    val webView = findWebView(window.decorView)
-    if (webView == null) {
-      Log.d("FlowLike", "injectSafeAreaInsets: WebView not found yet")
-      return
+    private fun refresh() {
+        if (isFinishing || isDestroyed || loading || forwarded || requesting) return
+        val missing = try { NativeRuntimeInstaller.missingModules(this) }
+        catch (_: Exception) { showError("Android could not check the installed tools. Close Flow-Like and try again."); return }
+        if (missing.isEmpty()) { openRuntime(); return }
+        manager.sessionStates.addOnSuccessListener(this) { states ->
+            if (isFinishing || loading || forwarded) return@addOnSuccessListener
+            val selected = NativeInstallPolicy.selectSession(states.map {
+                NativeInstallSession(it.sessionId(), it.moduleNames().toSet(), phase(it))
+            }, sessionId)
+            val state = states.firstOrNull { it.sessionId() == selected?.id }
+            if (state != null) accept(state)
+            else if (autoRequest) requestDownload()
+            else showPaused()
+        }.addOnFailureListener(this) { error -> showPlayError(error) }
     }
-    Log.d("FlowLike", "injectSafeAreaInsets: top=${topPhysical}px bottom=${bottomPhysical}px")
-    val js = """
-      (function(){
-        var dpr=window.devicePixelRatio||1;
-        var top=Math.ceil(${topPhysical}/dpr);
-        var bottom=Math.ceil(${bottomPhysical}/dpr);
-        var d=document.documentElement;
-        d.style.setProperty('--fl-native-safe-top',top+'px');
-        d.style.setProperty('--fl-native-safe-bottom',bottom+'px');
-        window.__FL_NATIVE_SAFE_TOP=top;
-        window.__FL_NATIVE_SAFE_BOTTOM=bottom;
-      })();
-    """.trimIndent()
-    webView.evaluateJavascript(js, null)
-  }
 
-  private fun findWebView(view: android.view.View): WebView? {
-    if (view is WebView) return view
-    if (view is android.view.ViewGroup) {
-      for (i in 0 until view.childCount) {
-        val found = findWebView(view.getChildAt(i))
-        if (found != null) return found
-      }
+    private fun requestDownload() {
+        if (requesting || loading || forwarded) return
+        autoRequest = false
+        sessionId = 0
+        confirmationSession = 0
+        val missing = try { NativeRuntimeInstaller.missingModules(this) }
+        catch (_: Exception) { showError("Android could not check the installed tools. Close Flow-Like and try again."); return }
+        if (missing.isEmpty()) { openRuntime(); return }
+        requesting = true
+        lastState = null
+        showWorking("Starting download…", "Google Play will download the tools required for this device.")
+        secondary.isEnabled = false
+        val request = SplitInstallRequest.newBuilder().apply { missing.forEach { addModule(it) } }.build()
+        manager.startInstall(request).addOnSuccessListener { id ->
+            requesting = false
+            if (isFinishing) { manager.cancelInstall(id); return@addOnSuccessListener }
+            if (isDestroyed) return@addOnSuccessListener
+            sessionId = id
+            if (id == 0) refresh()
+            else manager.getSessionState(id).addOnSuccessListener(this) { accept(it) }
+                .addOnFailureListener(this) { showPlayError(it) }
+        }.addOnFailureListener { error ->
+            requesting = false
+            if (!isDestroyed && !isFinishing) showPlayError(error)
+        }
     }
-    return null
-  }
+
+    private fun accept(state: SplitInstallSessionState) {
+        if (isFinishing || isDestroyed || forwarded || loading) return
+        sessionId = state.sessionId()
+        lastState = state
+        autoRequest = false
+        when (phase(state)) {
+            NativeInstallPhase.WAITING -> showWorking("Waiting for Google Play…", "The download will start when Google Play is ready.")
+            NativeInstallPhase.CONFIRMATION -> {
+                showWorking("Confirm the download", "Google Play needs your permission to download these tools.")
+                primary.visibility = View.VISIBLE
+                primary.text = "Continue"
+                primary.setOnClickListener { confirmationSession = 0; requestConfirmation(state) }
+                requestConfirmation(state)
+            }
+            NativeInstallPhase.DOWNLOADING -> {
+                val total = state.totalBytesToDownload()
+                val downloaded = state.bytesDownloaded()
+                val percent = NativeInstallPolicy.progress(downloaded, total)
+                val amount = if (total > 0)
+                    "${Formatter.formatFileSize(this, downloaded)} of ${Formatter.formatFileSize(this, total)}"
+                    else Formatter.formatFileSize(this, downloaded)
+                showWorking(if (percent == 100) "Download complete" else "Downloading tools…",
+                    if (percent == 100) "$amount\nWaiting for Google Play to begin installation." else amount,
+                    percent = percent)
+            }
+            NativeInstallPhase.INSTALLING -> {
+                showWorking("Installing tools…", "Android is preparing Flow-Like. This can take a few minutes.", stage = 1)
+                secondary.visibility = View.GONE
+            }
+            NativeInstallPhase.INSTALLED -> {
+                try {
+                    if (NativeRuntimeInstaller.missingModules(this).isEmpty()) openRuntime() else requestDownload()
+                } catch (_: Exception) { showError("Android could not open the downloaded tools. Restart Flow-Like and try again.") }
+            }
+            NativeInstallPhase.CANCELING -> {
+                showWorking("Canceling download…", "Waiting for Google Play to stop the download.")
+                secondary.isEnabled = false
+            }
+            NativeInstallPhase.CANCELED -> showPaused()
+            NativeInstallPhase.FAILED -> showPlayError(state.errorCode())
+            NativeInstallPhase.UNKNOWN -> showError("Google Play could not report download progress. Close Flow-Like and try again.")
+        }
+    }
+
+    private fun requestConfirmation(state: SplitInstallSessionState) {
+        if (!resumed || confirmationSession == state.sessionId() || isFinishing) return
+        confirmationSession = state.sessionId()
+        try {
+            if (!manager.startConfirmationDialogForResult(state, confirmation)) {
+                confirmationSession = 0
+                showError("Google Play could not open the download confirmation. Retry the download.")
+            }
+        } catch (_: Exception) {
+            confirmationSession = 0
+            showError("Google Play could not open the download confirmation. Retry the download.")
+        }
+    }
+
+    private fun cancelDownload() {
+        autoRequest = false
+        confirmationSession = 0
+        if (sessionId == 0) { showPaused(); return }
+        secondary.isEnabled = false
+        manager.cancelInstall(sessionId).addOnSuccessListener(this) { showPaused() }
+            .addOnFailureListener(this) { showPlayError(it) }
+    }
+
+    private fun showWorking(title: String, description: String, stage: Int = 0, percent: Int? = null) {
+        if (message.text.toString() != title) message.text = title
+        detail.accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_NONE
+        detail.text = description
+        progress.visibility = View.VISIBLE
+        setup.showStage(stage)
+        setup.showProgress(percent)
+        primary.visibility = View.GONE
+        storage.visibility = View.GONE
+        secondary.visibility = View.VISIBLE
+        secondary.isEnabled = true
+        secondary.text = "Cancel download"
+        secondary.setOnClickListener { cancelDownload() }
+    }
+
+    private fun showPaused() = showError("Setup is paused. Download the tools to start using Flow-Like.", "Continue setup")
+
+    private fun showError(description: String, action: String = "Retry") {
+        autoRequest = false
+        message.text = "Finish setting up Flow-Like"
+        detail.accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        detail.text = description
+        setup.showStage(null)
+        setup.showProgress(null)
+        progress.visibility = View.GONE
+        primary.visibility = View.VISIBLE
+        primary.isEnabled = true
+        primary.text = action
+        primary.setOnClickListener { requestDownload() }
+        storage.visibility = View.GONE
+        secondary.visibility = View.VISIBLE
+        secondary.isEnabled = true
+        secondary.text = "Close"
+        secondary.setOnClickListener { finish() }
+    }
+
+    private fun showPlayError(error: Exception) = showPlayError((error as? SplitInstallException)?.errorCode ?: SplitInstallErrorCode.INTERNAL_ERROR)
+
+    private fun showPlayError(code: Int) {
+        val description = when (code) {
+            SplitInstallErrorCode.NETWORK_ERROR -> "Check your internet connection, then retry. The first setup needs a download from Google Play."
+            SplitInstallErrorCode.INSUFFICIENT_STORAGE -> "Android needs more free storage to download and install these tools. Free up space, then retry."
+            SplitInstallErrorCode.APP_NOT_OWNED -> "Install Flow-Like from Google Play with your current Google account, or use the complete APK. This small installer cannot download tools on its own."
+            SplitInstallErrorCode.PLAY_STORE_NOT_FOUND -> "Google Play is needed to download these tools. Install or enable Google Play, or install the complete Flow-Like APK."
+            SplitInstallErrorCode.MODULE_UNAVAILABLE -> "These tools are unavailable for this app version. Update Flow-Like in Google Play, or install the complete APK."
+            SplitInstallErrorCode.API_NOT_AVAILABLE -> "Google Play cannot install these tools on this device. Update Google Play, or install the complete Flow-Like APK."
+            SplitInstallErrorCode.ACTIVE_SESSIONS_LIMIT_EXCEEDED -> "Google Play is finishing another download. Wait a moment, then retry."
+            SplitInstallErrorCode.ACCESS_DENIED -> "Google Play could not start the download. Keep Flow-Like open and retry."
+            else -> "Google Play could not finish setup (error $code). Check your connection and available storage, then retry."
+        }
+        showError(description)
+        storage.visibility = if (code == SplitInstallErrorCode.INSUFFICIENT_STORAGE) View.VISIBLE else View.GONE
+    }
+
+    private fun openRuntime() {
+        if (loading || forwarded) return
+        loading = true
+        showWorking("Opening Flow-Like…", "Preparing the tools on this device.", stage = 2)
+        secondary.visibility = View.GONE
+        Thread({
+            val error = try {
+                NativeRuntimeInstaller.requireFrontendAssets(applicationContext)
+                NativeRuntimeInstaller.ensureNativeLoaded(applicationContext)
+                null
+            }
+                catch (failure: Exception) { failure.message ?: "Flow-Like could not open its runtime. Restart the app and try again." }
+            runOnUiThread {
+                loading = false
+                if (isDestroyed || isFinishing) return@runOnUiThread
+                if (error != null) { showError(error); return@runOnUiThread }
+                prepared = true
+                forwardToRuntime()
+            }
+        }, "flow-like-runtime-loader").start()
+    }
+
+    private fun forwardToRuntime() {
+        if (!resumed || forwarded || isFinishing || isDestroyed) return
+        forwarded = true
+        // Copy the full payload, including share ClipData, MIME type, and URI grants.
+        val launch = Intent(intent).apply {
+            selector = null
+            setClass(this@MainActivity, RuntimeActivity::class.java)
+            flags = (flags and URI_GRANTS) or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        startActivity(launch)
+        finish()
+    }
+
+    private fun relevant(state: SplitInstallSessionState): Boolean = state.moduleNames().any { it in NativeInstallPolicy.modules }
+
+    private fun phase(state: SplitInstallSessionState): NativeInstallPhase = when (state.status()) {
+        SplitInstallSessionStatus.PENDING -> NativeInstallPhase.WAITING
+        SplitInstallSessionStatus.REQUIRES_USER_CONFIRMATION -> NativeInstallPhase.CONFIRMATION
+        SplitInstallSessionStatus.DOWNLOADING -> NativeInstallPhase.DOWNLOADING
+        SplitInstallSessionStatus.DOWNLOADED, SplitInstallSessionStatus.INSTALLING -> NativeInstallPhase.INSTALLING
+        SplitInstallSessionStatus.INSTALLED -> NativeInstallPhase.INSTALLED
+        SplitInstallSessionStatus.CANCELING -> NativeInstallPhase.CANCELING
+        SplitInstallSessionStatus.CANCELED -> NativeInstallPhase.CANCELED
+        SplitInstallSessionStatus.FAILED -> NativeInstallPhase.FAILED
+        else -> NativeInstallPhase.UNKNOWN
+    }
+
+    companion object {
+        private const val URI_GRANTS = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+    }
 }

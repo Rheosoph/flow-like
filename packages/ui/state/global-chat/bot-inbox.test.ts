@@ -231,6 +231,7 @@ describe("a bot chat on its inbox history", () => {
 			text: "Hello again",
 			interactive: { client_run_id: "run_1" },
 		});
+		expect(sent[0].interactive).toEqual({ client_run_id: "run_1" });
 		expect(desktopInteractiveArgs(ref)).toEqual({ interactive: ref });
 		expect(webInteractiveBody(ref)).toEqual({
 			interactive: {
@@ -248,6 +249,7 @@ describe("a bot chat on its inbox history", () => {
 			{ call: "c", offset_ms: 0, duration_ms: 500, mentions: [] },
 		);
 		expect(sent[1].kind).toBe("transcript");
+		expect(sent[1].interactive).toEqual({ client_run_id: "run_2" });
 		expect(sent[1].envelope?.body).toEqual({
 			call: "c",
 			offset_ms: 0,

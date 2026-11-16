@@ -266,13 +266,9 @@ export default {
 
 	"v5.bots.eyebrow": "BOTS + FLOWPILOT",
 	"v5.bots.cta": "Crea la tua squadra",
-	"v5.bots.demo.label": "LABORATORIO BOT / ESEMPI ANIMATI",
 	"v5.bots.demo.title": "Una piccola squadra con tanto da fare.",
-	"v5.bots.demo.hint": "Scegli un compito e guarda la squadra all’opera.",
 	"v5.bots.demo.pause": "Metti in pausa i bot",
 	"v5.bots.demo.resume": "Anima i bot",
-	"v5.bots.demo.working": "Al lavoro",
-	"v5.bots.demo.done": "Ottimo lavoro!",
 	"v5.bots.demo.result": "COSA PUOI CREARE",
 	"v5.bots.role.scout": "Ricerca",
 	"v5.bots.role.byte": "Dati",

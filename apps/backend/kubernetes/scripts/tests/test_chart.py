@@ -260,7 +260,7 @@ class ChartTest(unittest.TestCase):
 
     def test_web_runtime_config_is_public_and_keeps_read_only_filesystem(self):
         env = self.env("web")
-        self.assertEqual(set(env), {"FLOW_LIKE_WEB_API_URL", "FLOW_LIKE_WEB_REDIRECT_URL", "FLOW_LIKE_WEB_LOGOUT_URL"})
+        self.assertEqual(set(env), {"FLOW_LIKE_WEB_API_URL", "FLOW_LIKE_WEB_HOSTED_API_URL", "FLOW_LIKE_WEB_REDIRECT_URL", "FLOW_LIKE_WEB_LOGOUT_URL"})
         self.assertEqual(env["FLOW_LIKE_WEB_API_URL"]["value"], self.values["api"]["publicUrl"])
         self.assertEqual(env["FLOW_LIKE_WEB_REDIRECT_URL"]["value"], "")
         self.assertEqual(env["FLOW_LIKE_WEB_LOGOUT_URL"]["value"], "")
@@ -280,10 +280,53 @@ class ChartTest(unittest.TestCase):
 
     def test_hosted_frontend_destination_is_configurable_and_chart_managed(self):
         self.assertEqual(self.env("api")["FRONTEND_BASE_URL"]["value"], "http://localhost:3001")
+        self.assertEqual(self.env("api")["FRONTEND_SHELL_URL"]["value"], "http://flow-like-web:3001/a")
+        self.assertEqual(self.env("web")["FLOW_LIKE_WEB_HOSTED_API_URL"]["value"], "http://flow-like-api:8080")
         docs = self.render("--set-string", "api.frontendBaseUrl=https://app.example.test")
         self.assertEqual(self.env("api", docs)["FRONTEND_BASE_URL"]["value"], "https://app.example.test")
         error = self.render("--set-string", "api.env[0].name=FRONTEND_BASE_URL,api.env[0].value=https://other.example.test", valid=False)
         self.assertIn("api.env cannot override chart-managed FRONTEND_BASE_URL", error)
+
+    def test_hosted_page_internal_addresses_use_service_ports_and_allow_overrides(self):
+        docs = self.render("--set", "api.service.port=8181,web.service.port=3131")
+        self.assertEqual(self.env("api", docs)["FRONTEND_SHELL_URL"]["value"], "http://flow-like-web:3131/a")
+        self.assertEqual(self.env("web", docs)["FLOW_LIKE_WEB_HOSTED_API_URL"]["value"], "http://flow-like-api:8181")
+        docs = self.render("--set-string", "api.frontendShellUrl=http://shell.internal/a,web.hostedApiUrl=http://hub.internal/prefix")
+        self.assertEqual(self.env("api", docs)["FRONTEND_SHELL_URL"]["value"], "http://shell.internal/a")
+        self.assertEqual(self.env("web", docs)["FLOW_LIKE_WEB_HOSTED_API_URL"]["value"], "http://hub.internal/prefix")
+        error = self.render("--set-string", "api.env[0].name=FRONTEND_SHELL_URL,api.env[0].value=http://other.internal/a", valid=False)
+        self.assertIn("api.env cannot override chart-managed FRONTEND_SHELL_URL", error)
+
+    def test_hosted_page_network_policy_allows_web_and_api_to_exchange_html(self):
+        api_access = self.resource("NetworkPolicy", "api-access")["spec"]["ingress"][0]
+        self.assertIn("web", api_access["from"][0]["podSelector"]["matchExpressions"][0]["values"])
+        web_access = self.resource("NetworkPolicy", "web-access")["spec"]["ingress"][0]
+        self.assertEqual(web_access["from"][0]["podSelector"]["matchExpressions"][0]["values"], ["api"])
+        policy = self.resource("NetworkPolicy", "web-hosted-pages")["spec"]
+        self.assertEqual(policy["podSelector"]["matchLabels"]["app.kubernetes.io/component"], "web")
+        self.assertEqual(len(policy["egress"]), 1)
+        self.assertEqual(policy["egress"][0]["to"][0]["podSelector"]["matchLabels"]["app.kubernetes.io/component"], "api")
+        self.assertEqual(policy["egress"][0]["ports"], [{"protocol": "TCP", "port": 8080}])
+
+    def test_custom_hosted_api_egress_applies_only_to_the_web_server(self):
+        rule = {
+            "to": [{"ipBlock": {"cidr": "203.0.113.40/32"}}],
+            "ports": [{"protocol": "TCP", "port": 443}],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "hosted-api.json"
+            path.write_text(json.dumps({
+                "api": {"enabled": False},
+                "web": {"hostedApiUrl": "https://external-api.example.test"},
+                "networkPolicy": {"webExtraEgress": [rule]},
+            }))
+            docs = self.render("-f", str(path))
+        self.assertEqual(self.env("web", docs)["FLOW_LIKE_WEB_HOSTED_API_URL"]["value"], "https://external-api.example.test")
+        policy = self.resource("NetworkPolicy", "web-hosted-pages", docs)["spec"]
+        self.assertEqual(policy["podSelector"]["matchLabels"]["app.kubernetes.io/component"], "web")
+        self.assertEqual(policy["egress"][1:], [rule])
+        control = self.resource("NetworkPolicy", "control-plane-egress", docs)["spec"]
+        self.assertNotIn(rule, control["egress"])
 
     def test_shared_origin_ingress_example_serves_frontends_from_web(self):
         text = (BASE / "helm/values.yaml").read_text()

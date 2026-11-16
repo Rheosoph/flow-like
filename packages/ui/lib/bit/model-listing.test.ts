@@ -4,10 +4,12 @@ import { type IBit, IBitTypes } from "../schema/bit/bit";
 import type { IBitSearchQuery } from "../schema/hub/bit-search-query";
 import {
 	DEPRECATED_TAG,
+	MODEL_BIT_TYPES,
 	isDeprecated,
 	listableModels,
 	searchAllBitsOfType,
 } from "./model-listing";
+import { MODEL_QUALITY_CATEGORIES } from "./model-quality";
 
 function bit(overrides: Partial<IBit> & { id: string }): IBit {
 	return {
@@ -22,6 +24,27 @@ function named(id: string, name: string, tags: string[] = []): IBit {
 }
 
 describe("searchAllBitsOfType", () => {
+	test("queries every scored model category and excludes supporting assets", async () => {
+		const requested: IBitTypes[] = [];
+		const state = {
+			async searchBits(query: IBitSearchQuery) {
+				requested.push(...(query.bit_types ?? []));
+				return [];
+			},
+		} as unknown as IBitState;
+		await searchAllBitsOfType.call(state, MODEL_BIT_TYPES);
+		expect(new Set(requested)).toEqual(
+			new Set([
+				IBitTypes.Llm,
+				IBitTypes.Vlm,
+				...(Object.keys(MODEL_QUALITY_CATEGORIES) as IBitTypes[]),
+			]),
+		);
+		expect(requested).toContain(IBitTypes.ObjectDetection);
+		expect(requested).not.toContain(IBitTypes.File);
+		expect(requested).not.toContain(IBitTypes.Tokenizer);
+	});
+
 	test("keeps small model families visible beside a paginated chat catalog", async () => {
 		const chat = Array.from({ length: 125 }, (_, i) =>
 			bit({ id: `chat-${i}`, type: IBitTypes.Llm }),
