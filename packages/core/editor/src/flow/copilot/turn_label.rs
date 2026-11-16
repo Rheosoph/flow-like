@@ -416,7 +416,11 @@ mod tests {
                     .refusal(name, &json!({ "url": "https://h/a.pdf" }))
                     .is_some()
             );
-            assert!(label.refusal(name, &json!({ "file": "bot/a.pdf" })).is_none());
+            assert!(
+                label
+                    .refusal(name, &json!({ "file": "bot/a.pdf" }))
+                    .is_none()
+            );
             assert!(label.refusal(name, &json!({ "url": " " })).is_none());
         }
     }
@@ -452,7 +456,11 @@ mod tests {
             }
         );
         assert!(label.refusal("email_send", &json!({})).is_some());
-        assert!(TurnLabel::new(&BotRunContext::general(), None).get().is_empty());
+        assert!(
+            TurnLabel::new(&BotRunContext::general(), None)
+                .get()
+                .is_empty()
+        );
     }
 
     #[test]

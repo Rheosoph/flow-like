@@ -39,7 +39,10 @@ import { Providers } from "./providers";
  * `cover` means the web content renders full-bleed with zero insets — i.e. the
  * header lands under the Dynamic Island and the bottom nav under the home
  * indicator. This export is the only thing that puts it in the shipped HTML;
- * `viewport.test.ts` guards it.
+ * `lib/__tests__/safe-area.test.ts` guards it.
+ *
+ * `maximumScale` + `userScalable` stop pinch, double-tap and input-focus zoom in
+ * the mobile shells. WKWebView honours them (only Safari ignores them).
  *
  * Requires this file to stay a Server Component — Next.js ignores `viewport`
  * exports from "use client" modules. Client providers live in ./providers.tsx.
@@ -47,6 +50,8 @@ import { Providers } from "./providers";
 export const viewport: Viewport = {
 	width: "device-width",
 	initialScale: 1,
+	maximumScale: 1,
+	userScalable: false,
 	viewportFit: "cover",
 	interactiveWidget: "resizes-content",
 };

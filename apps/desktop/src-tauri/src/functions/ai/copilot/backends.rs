@@ -184,6 +184,9 @@ impl FlowPilotAgentBackend for GithubCopilotBackend {
             .map(|m| CopilotModelInfo {
                 id: m.id.clone(),
                 name: m.name.clone(),
+                description: None,
+                context_window: None,
+                supports_vision: None,
                 supported_reasoning_efforts: if m.capabilities.supports.reasoning_effort {
                     m.supported_reasoning_efforts
                         .clone()

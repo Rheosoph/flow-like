@@ -31,6 +31,7 @@ import {
 	Bot,
 	ExternalLink,
 	Package,
+	Radio,
 	Server,
 	Users,
 } from "lucide-react";
@@ -40,6 +41,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { type IShortcut, appsDB } from "../lib/apps-db";
+import { getBackgroundHostingPlatform } from "../lib/platform";
 import {
 	type ITelemetrySettings,
 	getTelemetrySettings,
@@ -85,9 +87,14 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 	const { developerMode } = useDeveloperMode();
 	const invalidate = useInvalidateInvoke();
 	const [crashReportOpen, setCrashReportOpen] = useState(false);
+	const [hostingAvailable, setHostingAvailable] = useState(false);
 	const [telemetrySettings, setTelemetrySettings] = useState<
 		ITelemetrySettings | undefined
 	>();
+
+	useEffect(() => {
+		setHostingAvailable(getBackgroundHostingPlatform() !== null);
+	}, []);
 
 	useEffect(() => {
 		getTelemetrySettings()
@@ -370,6 +377,30 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 
 	const additionalItems = useMemo<SpotlightItem[]>(() => {
 		const items: SpotlightItem[] = [...openBoardItems];
+
+		if (hostingAvailable) {
+			items.push({
+				id: "nav-background-hosting",
+				type: "navigation",
+				label: t("backgroundHosting", "Background hosting"),
+				description: t(
+					"backgroundHostingSettingsDescription",
+					"Keep bots and Events running on this device",
+				),
+				icon: Radio,
+				group: "navigation",
+				keywords: [
+					"hosting",
+					"background",
+					"bots",
+					"events",
+					"startup",
+					"login",
+				],
+				priority: 80,
+				action: () => router.push("/settings/hosting"),
+			});
+		}
 
 		items.push({
 			id: "nav-devices",
@@ -706,6 +737,7 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 		return items;
 	}, [
 		openBoardItems,
+		hostingAvailable,
 		auth,
 		router,
 		isCurrentPageShortcut,

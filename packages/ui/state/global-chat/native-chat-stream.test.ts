@@ -151,7 +151,14 @@ test("the model the host reports lands on the persisted run context", async () =
 		provider: "bits",
 		model_id: "picker-model",
 		effective_model_id: "bot-own-bit",
+		backend_model_id: "bot-own-bit",
 	});
+});
+
+test("a run without a backend model announcement does not invent one", async () => {
+	const message = await driveReporting(async () => ({ message: "done" }));
+	expect(message.run_context?.model_id).toBe("picker-model");
+	expect(message.run_context?.backend_model_id).toBeUndefined();
 });
 
 test("a run that fails after the report still names the model", async () => {
@@ -162,6 +169,7 @@ test("a run that fails after the report still names the model", async () => {
 	expect(message.run_context).toMatchObject({
 		provider: "bits",
 		effective_model_id: "bot-own-bit",
+		backend_model_id: "bot-own-bit",
 	});
 });
 

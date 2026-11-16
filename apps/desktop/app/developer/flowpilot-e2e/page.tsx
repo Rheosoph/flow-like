@@ -94,6 +94,7 @@ import {
 	readRetrievalSeedHash,
 } from "../../../lib/flowpilot-e2e/retrieval-seed";
 
+import { CustomBitE2ERunner } from "../../../lib/flowpilot-e2e/custom-bit-runner";
 import {
 	type IntakeReliabilitySetup,
 	finalizeIntakeReliabilityEvents,
@@ -824,6 +825,17 @@ function StatusIcon({ phase }: { phase: RunPhase }) {
 }
 
 export default function FlowPilotE2EPage() {
+	const [customBits, setCustomBits] = useState<boolean>();
+	useEffect(() => {
+		setCustomBits(
+			new URLSearchParams(window.location.search).get("customBits") === "1",
+		);
+	}, []);
+	if (customBits === undefined) return null;
+	return customBits ? <CustomBitE2ERunner /> : <FlowPilotBenchmarkPage />;
+}
+
+function FlowPilotBenchmarkPage() {
 	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const codex = useCopilotSDK("codex");

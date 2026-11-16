@@ -20,6 +20,7 @@ import {
 	Globe,
 	HardDrive,
 	type LucideIcon,
+	Radio,
 	Scroll,
 	Server,
 	ShieldCheck,
@@ -29,7 +30,10 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { isMobileDevice } from "../../lib/platform";
+import {
+	getBackgroundHostingPlatform,
+	isMobileDevice,
+} from "../../lib/platform";
 
 interface SettingsCard {
 	title: string;
@@ -39,6 +43,7 @@ interface SettingsCard {
 	external?: boolean;
 	devOnly?: boolean;
 	desktopOnly?: boolean;
+	requiresBackgroundHosting?: boolean;
 }
 
 interface SettingsSection {
@@ -51,6 +56,30 @@ function buildSettingsSections(
 	t: (key: string, defaultValue: string) => string,
 ): SettingsSection[] {
 	return [
+		{
+			label: t("hostingAndDevices", "Hosting & devices"),
+			cards: [
+				{
+					title: t("backgroundHosting", "Background hosting"),
+					description: t(
+						"backgroundHostingSettingsDescription",
+						"Keep bots and Events running on this device",
+					),
+					href: "/settings/hosting",
+					icon: Radio,
+					requiresBackgroundHosting: true,
+				},
+				{
+					title: t("devices", "Devices"),
+					description: t(
+						"devicesSettingsDescription",
+						"Manage your device fleet, deployments, health, and certificates",
+					),
+					href: "/settings/devices",
+					icon: Server,
+				},
+			],
+		},
 		{
 			label: t("personalization", "Personalization"),
 			cards: [
@@ -100,15 +129,6 @@ function buildSettingsSections(
 		{
 			label: t("extensionsAmpIntegrations", "Extensions & Integrations"),
 			cards: [
-				{
-					title: t("devices", "Devices"),
-					description: t(
-						"devicesSettingsDescription",
-						"Manage your device fleet, deployments, health, and certificates",
-					),
-					href: "/settings/devices",
-					icon: Server,
-				},
 				{
 					title: t("automation", "Automation"),
 					description: t(
@@ -225,8 +245,12 @@ export default function SettingsPage() {
 	const { t } = useTranslation("common");
 	const { developerMode } = useDeveloperMode();
 	const [mobile, setMobile] = useState(false);
+	const [hostingAvailable, setHostingAvailable] = useState(false);
 
-	useEffect(() => setMobile(isMobileDevice()), []);
+	useEffect(() => {
+		setMobile(isMobileDevice());
+		setHostingAvailable(getBackgroundHostingPlatform() !== null);
+	}, []);
 
 	const sections = useMemo(
 		() =>
@@ -235,11 +259,13 @@ export default function SettingsPage() {
 					...section,
 					cards: section.cards.filter(
 						(card) =>
-							(developerMode || !card.devOnly) && !(mobile && card.desktopOnly),
+							(developerMode || !card.devOnly) &&
+							!(mobile && card.desktopOnly) &&
+							(hostingAvailable || !card.requiresBackgroundHosting),
 					),
 				}))
 				.filter((section) => section.cards.length > 0),
-		[developerMode, mobile, t],
+		[developerMode, mobile, hostingAvailable, t],
 	);
 
 	return (

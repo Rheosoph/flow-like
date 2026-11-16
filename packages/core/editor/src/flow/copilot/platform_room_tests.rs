@@ -109,6 +109,44 @@ fn tool() -> Vec<RawStreamingChoice<()>> {
     ]
 }
 
+#[tokio::test]
+async fn tool_results_preserve_the_provider_call_id_across_a_real_platform_round() {
+    let rounds = vec![
+        vec![RawStreamingChoice::ToolCall(RawStreamingToolCall {
+            id: "fc_item_id".into(),
+            internal_call_id: "rig_internal_id".into(),
+            call_id: Some("call_provider_id".into()),
+            name: "list_apps".into(),
+            arguments: json!({}),
+            ..RawStreamingToolCall::empty()
+        })],
+        text("Read the app."),
+    ];
+    let (answer, _, requests, calls) = run(rounds, usize::MAX, 1).await;
+    assert_eq!(answer, "Read the app.");
+    assert_eq!(calls, 1);
+    assert_eq!(requests.len(), 2);
+    let request = rig::providers::openai::responses_api::CompletionRequest::try_from((
+        "gpt-test".to_string(),
+        requests[1].clone(),
+    ))
+    .expect("the next actual request must retain Responses tool correlation");
+    let wire = serde_json::to_value(request).unwrap();
+    let input = wire["input"].as_array().unwrap();
+    let call = input
+        .iter()
+        .find(|item| item["type"] == "function_call")
+        .unwrap();
+    let result = input
+        .iter()
+        .find(|item| item["type"] == "function_call_output")
+        .unwrap();
+    assert_eq!(call["id"], "fc_item_id");
+    assert_eq!(call["call_id"], "call_provider_id");
+    assert_eq!(result["call_id"], "call_provider_id");
+    assert_eq!(result["output"], "completed tool work");
+}
+
 async fn run(
     rounds: Vec<Vec<RawStreamingChoice<()>>>,
     update_round: usize,

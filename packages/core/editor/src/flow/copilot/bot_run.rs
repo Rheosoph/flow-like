@@ -2490,7 +2490,21 @@ async fn acknowledgement(
         let profile = profile.ok_or_else(|| {
             flow_like_types::anyhow!("An acknowledgement requires the bot's model profile")
         })?;
-        let bit = resolve_host_completion_model(state, profile, model_id).await?;
+        let bit = match model_id {
+            Some(model_id) => {
+                let capabilities = FlowLikeState::completion_model_capabilities(state).await;
+                let devices = state.device_model_probe(Interaction::Allowed { run_label: None });
+                profile
+                    .resolve_explicit_completion_model(
+                        model_id,
+                        capabilities,
+                        devices.as_ref(),
+                        state.http_client.clone(),
+                    )
+                    .await?
+            }
+            None => resolve_host_completion_model(state, profile, None).await?,
+        };
         let model = state
             .model_factory
             .build(&bit, state.clone(), token, None)
@@ -2783,6 +2797,35 @@ mod tests {
         );
         assert_eq!(reply, "Verstanden.");
         assert_eq!(*emitted.lock().unwrap(), vec!["Verstanden."]);
+    }
+
+    #[tokio::test]
+    async fn explicit_model_selection_does_not_replace_acknowledgement_claude_with_qwen() {
+        let (state, profile) =
+            super::super::runtime_bridge_tests::explicit_model_selection_fixture();
+        let automatic = resolve_host_completion_model(&state, &profile, None)
+            .await
+            .unwrap();
+        assert_eq!(automatic.id, "fallback-qwen");
+
+        let error = acknowledgement(
+            &state,
+            Some(&profile),
+            Some("chosen-claude"),
+            None,
+            "Danke für die Erklärung.",
+        )
+        .await
+        .expect_err("an explicit unavailable Claude Bit must fail before acknowledgement");
+        let message = error.to_string();
+        assert!(message.contains("chosen-claude"), "{message}");
+        assert!(message.contains("Claude Code executable"), "{message}");
+
+        let emitted = Mutex::new(Vec::new());
+        let reply =
+            acknowledgement_reply(Err(error), Some(|text| emitted.lock().unwrap().push(text)));
+        assert_eq!(reply, SILENT_REPLY);
+        assert!(emitted.lock().unwrap().is_empty());
     }
 
     struct AcknowledgementModel {

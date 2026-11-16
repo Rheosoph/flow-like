@@ -2,7 +2,6 @@ package com.flow_like.app
 
 import android.Manifest
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -12,7 +11,6 @@ import android.speech.RecognizerIntent
 import android.util.Base64
 import android.webkit.WebView
 import android.widget.Toast
-import android.widget.EditText
 import androidx.activity.result.ActivityResult
 import androidx.core.content.FileProvider
 import app.tauri.annotation.ActivityCallback
@@ -201,7 +199,7 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
                         val result = BotLocalAi.process(activity, options)
                         if (result.optBoolean("downloadable") && !options.optBoolean("downloadModel")) {
                             activity.runOnUiThread {
-                                AlertDialog.Builder(activity).setTitle("Download the on-device model?")
+                                NativeUi.dialog(activity).setTitle("Download the on-device model?")
                                     .setMessage("This feature needs a model download. Your text is processed on this device.")
                                     .setPositiveButton("Download") { _, _ -> modelWorker.execute {
                                         try {
@@ -252,8 +250,8 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
     @ActivityCallback fun voiceResult(invoke: Invoke, result: ActivityResult) {
         if (result.resultCode != Activity.RESULT_OK) { finishRequest(invoke, JSONObject().put("cancelled", true)); return }
         val text = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
-        val input = EditText(activity).apply { setText(text ?: ""); minLines = 2 }
-        AlertDialog.Builder(activity).setTitle("Use this message?").setView(input)
+        val input = NativeUi.input(activity, "", text ?: "", minLines = 2)
+        NativeUi.dialog(activity).setTitle("Use this message?").setView(input)
             .setPositiveButton("Use message") { _, _ -> finishRequest(invoke, JSONObject().put("text", input.text.toString())) }
             .setNegativeButton("Cancel") { _, _ -> finishRequest(invoke, JSONObject().put("cancelled", true)) }
             .setOnCancelListener { finishRequest(invoke, JSONObject().put("cancelled", true)) }.show()
@@ -261,7 +259,7 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command fun captureDocument(invoke: Invoke) {
         if (invoke.getArgs().optJSONObject("options")?.optString("operation") == "document" && BotDocumentActivity.scannerAvailable(activity)) {
-            AlertDialog.Builder(activity).setTitle("Add a document")
+            NativeUi.dialog(activity).setTitle("Add a document")
                 .setItems(arrayOf("Scan a document", "Choose a document")) { _, which ->
                     if (which == 0) startActivityForResult(invoke, Intent(activity, BotDocumentActivity::class.java), "documentResult")
                     else chooseDocument(invoke)
@@ -283,7 +281,7 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
             captureDocument(invoke)
             return
         }
-        AlertDialog.Builder(activity).setTitle("Add a photo")
+        NativeUi.dialog(activity).setTitle("Add a photo")
             .setItems(arrayOf("Take a photo", "Choose a photo")) { _, which ->
                 if (which == 1) captureDocument(invoke) else {
                     try {
@@ -419,7 +417,7 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
                     if (bots.length() == 0) {
                         Toast.makeText(activity, "Create a bot before sharing", Toast.LENGTH_LONG).show()
                         deleteFiles(files)
-                    } else AlertDialog.Builder(activity).setTitle("Send to bot")
+                    } else NativeUi.dialog(activity).setTitle("Send to bot")
                         .setItems(Array(bots.length()) { bots.getJSONObject(it).getString("title") }) { _, which ->
                             worker.execute {
                                 try {

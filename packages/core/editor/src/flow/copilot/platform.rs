@@ -974,6 +974,7 @@ impl PlatformCopilot {
         &self,
         model_id: Option<String>,
         token: Option<String>,
+        on_token: Option<&(dyn Fn(String) + Send + Sync)>,
     ) -> Result<(
         String,
         Box<dyn CompletionClientDyn + Send + Sync + 'a>,
@@ -989,16 +990,34 @@ impl PlatformCopilot {
             let devices = self
                 .state
                 .device_model_probe(Interaction::Allowed { run_label: None });
-            profile
-                .resolve_completion_model(
-                    model_id.as_deref(),
-                    &preference,
-                    false,
-                    capabilities,
-                    devices.as_ref(),
-                    self.state.http_client.clone(),
-                )
-                .await?
+            match model_id.as_deref() {
+                Some(model_id) => {
+                    profile
+                        .resolve_explicit_completion_model(
+                            model_id,
+                            capabilities,
+                            devices.as_ref(),
+                            self.state.http_client.clone(),
+                        )
+                        .await?
+                }
+                None => {
+                    profile
+                        .resolve_completion_model(
+                            None,
+                            &preference,
+                            false,
+                            capabilities,
+                            devices.as_ref(),
+                            self.state.http_client.clone(),
+                        )
+                        .await?
+                }
+            }
+        } else if let Some(model_id) = model_id.as_deref() {
+            return Err(flow_like_types::anyhow!(
+                "Selected model `{model_id}` cannot be resolved because its profile is unavailable. Reload the profile and try again."
+            ));
         } else {
             Bit {
                 id: "gpt-4o".to_string(),
@@ -1038,12 +1057,20 @@ impl PlatformCopilot {
             sees_images: bit.is_multimodal(),
         };
         let provider = model.provider().await?;
-        Ok((
-            default_model,
-            provider.into_client(),
-            thinking,
-            model_context,
-        ))
+        let completion = provider.into_client();
+        if let Some(callback) = on_token {
+            let configured_provider = bit.try_to_provider();
+            callback(super::stream::stream_frame(
+                "model_resolved",
+                &json!({
+                    "bit_id": bit.id,
+                    "provider_name": configured_provider.as_ref().map(|provider| &provider.provider_name),
+                    "configured_model_id": configured_provider.as_ref().and_then(|provider| provider.model_id.as_ref()),
+                    "model_id": default_model,
+                }),
+            ));
+        }
+        Ok((default_model, completion, thinking, model_context))
     }
 
     /// Run the platform assistant loop for a profile model, dispatching platform tools through the
@@ -1086,8 +1113,15 @@ impl PlatformCopilot {
             }
             return Ok(answer.output);
         }
-        let (model_name, completion_client, thinking, model_context) =
-            self.resolve_model(model_id, token).await?;
+        let (model_name, completion_client, thinking, model_context) = self
+            .resolve_model(
+                model_id,
+                token,
+                on_token
+                    .as_ref()
+                    .map(|callback| callback as &(dyn Fn(String) + Send + Sync)),
+            )
+            .await?;
         self.chat_with_model(
             surface,
             system_prompt,
@@ -1376,7 +1410,8 @@ impl PlatformCopilot {
         // Accumulated token usage of the whole assistant session (one call entry per iteration),
         // streamed to the frontend as a `<usage_stat>` frame at the end so the chat shows the
         // agent's own model usage alongside any stats reported by apps it called.
-        let mut session_stats = context::UsageReport::new(self.initial_usage.clone(), on_token.as_ref());
+        let mut session_stats =
+            context::UsageReport::new(self.initial_usage.clone(), on_token.as_ref());
         let mut current_prompt = prompt_message;
         // The run's own searches and page reads, when its toolset holds the public-web tools.
         let mut web_research_session = Arc::new(WebResearchSession::new(&user_prompt));
@@ -2635,7 +2670,10 @@ impl PlatformCopilot {
             for (tool_id, name, tool_output, images) in &tool_results {
                 tool_result_contents.push(UserContent::ToolResult(RigToolResult {
                     id: tool_id.clone(),
-                    call_id: None,
+                    call_id: tool_calls
+                        .iter()
+                        .find(|call| call.id == *tool_id)
+                        .and_then(|call| call.call_id.clone()),
                     content: OneOrMany::one(ToolResultContent::text(if long_running {
                         context::bounded_tool_output(tool_output, tool_results.len())
                     } else {
@@ -4323,6 +4361,79 @@ mod vision_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn explicit_model_selection_does_not_replace_platform_claude_with_qwen() {
+        let (state, profile) =
+            super::super::runtime_bridge_tests::explicit_model_selection_fixture();
+        let copilot = PlatformCopilot::new(state, Some(profile));
+        let frames = Mutex::new(Vec::new());
+        let callback = |frame| frames.lock().unwrap().push(frame);
+
+        let error = copilot
+            .resolve_model(Some("chosen-claude".into()), None, Some(&callback))
+            .await
+            .err()
+            .expect("an explicit unavailable Claude Bit must fail")
+            .to_string();
+        assert!(error.contains("chosen-claude"), "{error}");
+        assert!(error.contains("Claude Code executable"), "{error}");
+        assert!(frames.lock().unwrap().is_empty());
+
+        let (automatic, _, _, _) = copilot.resolve_model(None, None, None).await.unwrap();
+        assert_eq!(automatic, "qwen-upstream");
+    }
+
+    #[tokio::test]
+    async fn explicit_model_selection_reports_resolved_platform_bit_and_provider() {
+        let (state, profile) =
+            super::super::runtime_bridge_tests::explicit_model_selection_fixture();
+        let copilot = PlatformCopilot::new(state, Some(profile));
+        for selected in [Some("fallback-qwen".into()), None] {
+            let frames = Mutex::new(Vec::new());
+            let callback = |frame| frames.lock().unwrap().push(frame);
+            let (model, _, _, _) = copilot
+                .resolve_model(selected, None, Some(&callback))
+                .await
+                .unwrap();
+            let frames = frames.lock().unwrap();
+            assert_eq!(model, "qwen-upstream");
+            assert_eq!(frames.len(), 1);
+            let identity: Value = serde_json::from_str(
+                frames[0]
+                    .strip_prefix("<model_resolved>")
+                    .unwrap()
+                    .strip_suffix("</model_resolved>")
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                identity,
+                json!({
+                    "bit_id": "fallback-qwen",
+                    "provider_name": "custom:openai",
+                    "configured_model_id": "fallback-qwen",
+                    "model_id": "qwen-upstream",
+                }),
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_model_selection_requires_a_platform_model_profile() {
+        let (state, _) = super::super::runtime_bridge_tests::explicit_model_selection_fixture();
+        let copilot = PlatformCopilot::new(state, None);
+
+        let error = copilot
+            .resolve_model(Some("chosen-claude".into()), None, None)
+            .await
+            .err()
+            .expect("a missing profile must not change an explicit model selection")
+            .to_string();
+
+        assert!(error.contains("chosen-claude"), "{error}");
+        assert!(error.contains("profile is unavailable"), "{error}");
+    }
 
     #[test]
     fn room_updates_follow_tool_results_without_losing_steering() {

@@ -1,11 +1,38 @@
-import type { GlobalChatAgentSelection } from "../../state/global-chat/global-chat-store";
 import {
+	AGENT_MODEL_KEY,
+	AGENT_MODEL_PROVIDER_KEY,
+	AGENT_PROVIDER_KEY,
+	type GlobalChatAgentSelection,
+} from "../../state/global-chat/global-chat-store";
+import {
+	type AIProvider,
 	flowPilotModelIdForProvider,
 	normalizeAIProvider,
 } from "../flowpilot/types";
 
 export interface SelectableModel {
 	id: string;
+}
+
+/** A remembered model belongs to the provider selected when the user chose it. */
+export function rememberedModelForProvider(
+	provider: AIProvider,
+): string | null {
+	try {
+		const modelProvider =
+			localStorage.getItem(AGENT_MODEL_PROVIDER_KEY) ??
+			localStorage.getItem(AGENT_PROVIDER_KEY);
+		if (
+			normalizeAIProvider(
+				(modelProvider ?? undefined) as AIProvider | undefined,
+			) !== normalizeAIProvider(provider)
+		) {
+			return null;
+		}
+		return localStorage.getItem(AGENT_MODEL_KEY);
+	} catch {
+		return null;
+	}
 }
 
 /**
@@ -48,6 +75,8 @@ interface ResolveModelSelectionOptions<TModel extends SelectableModel> {
 	 * loaded the authoritative catalog and selected one of its models.
 	 */
 	canReplaceInvalidSelection: boolean;
+	/** Bit listings may answer from a partial local cache before the remote library arrives. */
+	preserveRememberedModel?: boolean;
 }
 
 /**
@@ -59,7 +88,11 @@ export function resolveModelSelection<TModel extends SelectableModel>({
 	selectedModelId,
 	rememberedModelId,
 	canReplaceInvalidSelection,
+	preserveRememberedModel = false,
 }: ResolveModelSelectionOptions<TModel>): string | null {
+	if (preserveRememberedModel && rememberedModelId) {
+		return rememberedModelId === selectedModelId ? null : rememberedModelId;
+	}
 	if (models.length === 0) return null;
 
 	if (

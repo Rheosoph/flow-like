@@ -85,7 +85,6 @@ import {
 	useChatPreparationStore,
 } from "../../state/global-chat/global-chat-preparation";
 import {
-	AGENT_MODEL_KEY,
 	type GlobalChatRun,
 	type InlineAppChat,
 	type InlineAppPage,
@@ -168,7 +167,11 @@ import { InlineAppChatCard } from "./inline-app-chat-card";
 import { InlineAppPageCard } from "./inline-app-page-card";
 import { InlineAppSurfaceCard } from "./inline-app-surface-card";
 import { InlineToolPrompt, ToolPromptElsewhere } from "./inline-tool-prompt";
-import { resolveModelSelection, selectedModelLabel } from "./model-selection";
+import {
+	rememberedModelForProvider,
+	resolveModelSelection,
+	selectedModelLabel,
+} from "./model-selection";
 import { PendingComponentsCard } from "./pending-components-card";
 import { useHydrateAgentSelection } from "./use-agent-persistence";
 import {
@@ -635,15 +638,10 @@ export function GlobalChatBody({
 		copilotSDK.start,
 	]);
 
-	// Pick a sensible default model whenever the model list for the active provider
-	// changes — but re-apply the user's remembered pick the moment the catalog that
-	// offers it loads, so a slow/fallback catalog can't strand them on another model.
-	// Uses the plain setter throughout: none of this is a new user choice.
+	// Explicit Bits remain selected while local and remote catalogs catch up.
+	// Automatic defaults use the plain setter to leave the saved choice intact.
 	useEffect(() => {
-		let remembered: string | null = null;
-		try {
-			remembered = localStorage.getItem(AGENT_MODEL_KEY);
-		} catch {}
+		const remembered = rememberedModelForProvider(normalizedProvider);
 		if (isAgent) {
 			const models = copilotSDK.models;
 			const nextModelId = resolveModelSelection({
@@ -655,17 +653,17 @@ export function GlobalChatBody({
 			if (nextModelId !== null) setSelectedModelId(nextModelId);
 			return;
 		}
-		if (!llmBits.data) return;
-		if (bitsModels.length === 0) {
-			if (selectedModelId) setSelectedModelId("");
+		// A successful listing can still contain only the local cache. An explicit
+		// Bit choice stays exact; the native resolver reports if it is unavailable.
+		if (remembered) {
+			if (remembered !== selectedModelId) setSelectedModelId(remembered);
 			return;
 		}
-		if (
-			remembered &&
-			remembered !== selectedModelId &&
-			bitsModels.some((bit) => bit.id === remembered)
-		) {
-			setSelectedModelId(remembered);
+		// A profile catalog can arrive before the custom library. Keep the user's
+		// selected Bit until both sources can establish whether it is available.
+		if (!llmBits.isSuccess || !customBits.isSuccess) return;
+		if (bitsModels.length === 0) {
+			if (selectedModelId) setSelectedModelId("");
 			return;
 		}
 		if (!bitsModels.some((bit) => bit.id === selectedModelId)) {
@@ -674,9 +672,11 @@ export function GlobalChatBody({
 		}
 	}, [
 		isAgent,
+		normalizedProvider,
 		copilotSDK.models,
 		copilotSDK.hasLoadedModelCatalog,
-		llmBits.data,
+		llmBits.isSuccess,
+		customBits.isSuccess,
 		bitsModels,
 		selectedModelId,
 		setSelectedModelId,
@@ -1057,7 +1057,7 @@ export function GlobalChatBody({
 				// Desktop drives the run over a Tauri Channel (resumable via the Rust registry); the
 				// browser drives the same run over HTTP+SSE, with tool requests routed to the mounted
 				// tool bridge via the registry. Both feed the shared parser identically.
-				start: async (onChunk) => {
+				start: async (onChunk, onModel) => {
 					await backend.prepareFlowpilotRun?.();
 					// Lazy transport imports must not open a race after the final identity check.
 					checkCurrent();
@@ -1147,7 +1147,7 @@ export function GlobalChatBody({
 										...webInteractiveBody(interactive),
 									},
 								})
-					)(onChunk);
+					)(onChunk, onModel);
 				},
 			});
 			return responseMessage;

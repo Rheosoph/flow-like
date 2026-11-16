@@ -205,6 +205,10 @@ spec:
               value: {{ .Values.api.publicUrl | quote }}
             - name: FRONTEND_BASE_URL
               value: {{ .Values.api.frontendBaseUrl | quote }}
+            {{- if or .Values.api.frontendShellUrl .Values.web.enabled }}
+            - name: FRONTEND_SHELL_URL
+              value: {{ default (printf "http://%s-web:%d/a" (include "flow-like.fullname" .) (int .Values.web.service.port)) .Values.api.frontendShellUrl | quote }}
+            {{- end }}
             - name: EXECUTION_BACKEND
               value: {{ .Values.execution.backend | quote }}
             - name: ASYNC_EXECUTION_BACKEND

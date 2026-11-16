@@ -10,6 +10,10 @@ mod android_bot_runtime;
 #[cfg(target_os = "android")]
 mod android_mobile;
 mod bot_host;
+#[cfg(debug_assertions)]
+mod custom_bit_e2e;
+#[cfg(debug_assertions)]
+mod custom_bit_e2e_workflows;
 #[cfg(feature = "code-sandbox")]
 mod code_sandbox;
 mod deeplink;
@@ -1164,6 +1168,14 @@ pub fn run() {
             e2e_runtime::attest_intake_e2e_runtime,
             e2e_runtime::read_intake_e2e_outcomes,
             e2e_runtime::intake_e2e_runtime_status,
+            #[cfg(debug_assertions)]
+            custom_bit_e2e::custom_bit_e2e_seed,
+            #[cfg(debug_assertions)]
+            custom_bit_e2e::custom_bit_e2e_run_bot,
+            #[cfg(debug_assertions)]
+            custom_bit_e2e::custom_bit_e2e_run_workflows,
+            #[cfg(debug_assertions)]
+            custom_bit_e2e::custom_bit_e2e_apply_review,
             restart_app,
             deeplink::deeplink_replay_pending,
             #[cfg(debug_assertions)]

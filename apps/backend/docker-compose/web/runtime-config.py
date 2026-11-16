@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import sys
 import tempfile
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 
 def public_url(value, name, *, required=False, api=False):
@@ -75,14 +75,55 @@ def render_script(config):
     return f"window.__FLOW_LIKE_PUBLIC_CONFIG__=Object.freeze({payload});\n"
 
 
-def write_config(output, environment):
-    script = render_script(build_config(environment))
+def render_hosted_proxy(config, resolv_conf=Path("/etc/resolv.conf"), hosted_api_url=None):
+    parsed = urlsplit(hosted_api_url or config["apiUrl"])
+    hostname = parsed.hostname.encode("idna").decode("ascii")
+    authority = f"[{hostname}]" if ":" in hostname else hostname
+    if parsed.port is not None:
+        authority += f":{parsed.port}"
+    # Percent-encode configuration syntax, including nginx's variable marker.
+    prefix = quote(parsed.path.rstrip("/"), safe="/%")
+    destination = f"{parsed.scheme}://{authority}{prefix}/frontend/document"
+    lines = []
+    try:
+        ipaddress.ip_address(hostname)
+    except ValueError:
+        resolvers = []
+        for line in resolv_conf.read_text().splitlines():
+            fields = line.split()
+            if len(fields) < 2 or fields[0] != "nameserver":
+                continue
+            try:
+                address = ipaddress.ip_address(fields[1])
+            except ValueError:
+                continue
+            if "%" in str(address):
+                continue
+            resolvers.append(f"[{address}]" if address.version == 6 else str(address))
+        if not resolvers:
+            raise ValueError("Hosted page proxy requires a DNS server in resolv.conf")
+        lines.extend([
+            f"resolver {' '.join(resolvers)} valid=30s;",
+            "resolver_timeout 3s;",
+        ])
+    lines.append(f'proxy_pass "{destination}$flowlike_hosted_document";')
+    if parsed.scheme == "https":
+        lines.extend([
+            "proxy_ssl_server_name on;",
+            f'proxy_ssl_name "{hostname}";',
+            "proxy_ssl_verify on;",
+            "proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;",
+        ])
+    return "\n".join(lines) + "\n"
+
+
+def write_public_file(output, content):
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output.parent, prefix=".runtime-config-", delete=False) as stream:
             temporary = Path(stream.name)
-            stream.write(script)
+            stream.write(content)
         temporary.chmod(0o644)
         temporary.replace(output)
     finally:
@@ -90,12 +131,23 @@ def write_config(output, environment):
             temporary.unlink(missing_ok=True)
 
 
+def write_config(output, environment, nginx_output=None, resolv_conf=Path("/etc/resolv.conf")):
+    config = build_config(environment)
+    script = render_script(config)
+    hosted_api_url = public_url(environment.get("FLOW_LIKE_WEB_HOSTED_API_URL"), "FLOW_LIKE_WEB_HOSTED_API_URL", api=True)
+    proxy = render_hosted_proxy(config, resolv_conf, hosted_api_url) if nginx_output is not None else None
+    write_public_file(output, script)
+    if nginx_output is not None:
+        write_public_file(nginx_output, proxy)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("/tmp/flow-like-web/runtime-config.js"))
+    parser.add_argument("--nginx-output", type=Path)
     arguments = parser.parse_args()
     try:
-        write_config(arguments.output, os.environ)
+        write_config(arguments.output, os.environ, arguments.nginx_output)
     except (ValueError, OSError) as error:
         print(f"Web runtime configuration failed: {error}", file=sys.stderr)
         return 1

@@ -177,8 +177,13 @@ requires visitors to sign in by default.
 5. Save the Event, then copy **Link to this route**.
 
 The editor includes the API host in the link. With separate API and web hosts,
-the API redirects visitors to the same path on the existing web application.
+the API serves a link preview and opens the same path on the existing web application.
 With a shared host, the path opens directly in the web application.
+
+Shared links show the App's name, description and thumbnail, falling back to its
+icon when no thumbnail is set. This branding is visible before sign-in for
+every published hosted route. Page content and workflow execution still follow
+the route's access settings.
 
 Navigation between pages keeps visitors on the same App link and changes only
 the route. A navigation target works when its Event is published too and uses
@@ -219,7 +224,7 @@ applies to runs in progress. A hosted run can notify only members of the App.
 
 Self-hosted installations use their existing web deployment and login callback.
 See [Host chat, form and page frontends](/self-hosting/containers/#host-chat-form-and-page-frontends)
-for static route and API redirect configuration.
+for static route and link-preview configuration.
 
 ### Quick actions and forms on a device
 

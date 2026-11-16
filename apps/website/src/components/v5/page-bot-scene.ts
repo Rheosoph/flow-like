@@ -7,6 +7,8 @@ import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 
 export type BotKind = "pip" | "mochi" | "flux" | "chip" | "orbi";
+/** What a helper does once it stops walking: one readable, chest-high activity per character. */
+export type BotActivity = "build" | "juggle" | "plane" | "scout" | "read";
 
 export interface BotFrame {
 	id: string;
@@ -15,7 +17,7 @@ export interface BotFrame {
 	width: number;
 	height: number;
 	kind: BotKind;
-	tool: "wrench" | "cable" | "driver" | "inspect" | "pencil";
+	activity: BotActivity;
 	walk: number;
 	work: number;
 	reach: number;
@@ -23,6 +25,34 @@ export interface BotFrame {
 	lookY: number;
 	lean: number;
 	time: number;
+}
+
+interface ActivityInput {
+	readonly time: number;
+	readonly reach: number;
+	readonly contact: number;
+	readonly rightIdle: THREE.Vector3;
+}
+
+/** Hand targets are in body space; the rig blends them in by `reach`. */
+interface ActivityPose {
+	readonly left: THREE.Vector3;
+	readonly right: THREE.Vector3;
+	lookX: number;
+	lookY: number;
+	yaw: number;
+	squint: number;
+}
+
+type ActivityRig = (input: ActivityInput, pose: ActivityPose) => void;
+
+interface RigParts {
+	readonly id: string;
+	readonly body: THREE.Group;
+	readonly head: THREE.Group;
+	readonly headOffset: number;
+	readonly rightEye: THREE.Vector3;
+	readonly palette: BotPalette;
 }
 
 interface BotRig {
@@ -36,15 +66,13 @@ interface BotRig {
 	leftHand: THREE.Group;
 	rightHand: THREE.Group;
 	feet: [THREE.Group, THREE.Group];
-	tool: THREE.Group;
-	bolt: THREE.Group;
-	sparks: THREE.Mesh[];
 	shadow: THREE.Mesh;
+	activity: ActivityRig;
 	previousWalk: number;
 	previousTime: number;
 	walking: number;
 	kind: BotKind;
-	toolKind: BotFrame["tool"];
+	activityKind: BotActivity;
 }
 
 /** How each character's flat silhouette becomes a solid: its box in the avatar's 100-unit space. */
@@ -97,10 +125,23 @@ const BODY_BASE = 0.24;
 const SKIN_GLOW = 0.22;
 /** Faces drawn for 200 px avatars need a little more weight at sprite size. */
 const FEATURE = 1.2;
-const WORK_X = 0.92;
+const TAU = Math.PI * 2;
 
 const clamp = (value: number, min = 0, max = 1) =>
 	Math.min(max, Math.max(min, value));
+const mix = (from: number, to: number, amount: number) =>
+	from + (to - from) * amount;
+const smooth = (value: number) => {
+	const t = clamp(value);
+	return t * t * (3 - 2 * t);
+};
+const fract = (value: number) => value - Math.floor(value);
+const quaternion = (
+	x: number,
+	y: number,
+	z: number,
+	order: THREE.EulerOrder = "XYZ",
+) => new THREE.Quaternion().setFromEuler(new THREE.Euler(x, y, z, order));
 
 function shapeOf(kind: BotKind): BotShapeDefinition {
 	return (
@@ -169,6 +210,16 @@ export function createPageBotScene(canvas: HTMLCanvasElement) {
 	const rigs = new Map<string, BotRig>();
 	const textures: THREE.Texture[] = [];
 	const front = new THREE.Vector3(0, 0, 1);
+	const idleLeft = new THREE.Vector3();
+	const idleRight = new THREE.Vector3();
+	const pose: ActivityPose = {
+		left: new THREE.Vector3(),
+		right: new THREE.Vector3(),
+		lookX: 0,
+		lookY: 0,
+		yaw: 0,
+		squint: 0,
+	};
 	let currentWidth = 0;
 	let currentHeight = 0;
 	let currentDpr = 0;
@@ -191,17 +242,23 @@ export function createPageBotScene(canvas: HTMLCanvasElement) {
 		"cylinder",
 		() => new THREE.CylinderGeometry(1, 1, 1, 10),
 	);
-	const cone = geometry("cone", () => new THREE.ConeGeometry(1, 1, 8));
-	const hexagon = geometry("hex", () => new THREE.CylinderGeometry(1, 1, 1, 6));
-	const sparkGeometry = geometry(
-		"spark",
-		() => new THREE.OctahedronGeometry(1, 0),
-	);
-	const ring = (radius: number, tube: number, arc = Math.PI * 2) =>
-		geometry(
-			`ring-${radius}-${tube}-${arc}`,
-			() => new THREE.TorusGeometry(radius, tube, 5, 16, arc),
+	const paperPlane = geometry("paper-plane", () => {
+		const nose = [0.19, 0, 0];
+		const keel = [-0.14, 0, 0];
+		const fin = [-0.12, -0.065, 0];
+		const leftTip = [-0.15, 0.035, -0.15];
+		const rightTip = [-0.15, 0.035, 0.15];
+		const result = new THREE.BufferGeometry();
+		result.setAttribute(
+			"position",
+			new THREE.Float32BufferAttribute(
+				[nose, keel, leftTip, nose, rightTip, keel, nose, fin, keel].flat(),
+				3,
+			),
 		);
+		result.computeVertexNormals();
+		return result;
+	});
 	function material(
 		name: string,
 		options: THREE.MeshStandardMaterialParameters,
@@ -211,39 +268,65 @@ export function createPageBotScene(canvas: HTMLCanvasElement) {
 			result = new THREE.MeshStandardMaterial(options);
 			materials.set(name, result);
 		}
-		return result;
+		return result as THREE.MeshStandardMaterial;
 	}
-	const charcoal = material("charcoal", {
-		color: 0x272b34,
-		roughness: 0.42,
-		metalness: 0.2,
-	});
-	const rubber = material("rubber", { color: 0x35313a, roughness: 0.8 });
 	const silver = material("silver", {
 		color: 0xc5cbd2,
 		roughness: 0.25,
 		metalness: 0.42,
 	});
-	const visor = material("visor", {
+	const glass = material("glass", {
 		color: 0x111e2a,
 		roughness: 0.16,
 		metalness: 0.25,
 	});
-	const reflection = material("reflection", {
-		color: 0xcde4ee,
-		transparent: true,
-		opacity: 0.2,
-		depthWrite: false,
-		roughness: 0.2,
+	const brass = material("brass", {
+		color: 0xe0ad5a,
+		roughness: 0.32,
+		metalness: 0.25,
 	});
-	const warmLight = material("light", {
-		color: 0xffd5a0,
-		emissive: 0xffb45f,
-		emissiveIntensity: 0.8,
+	const brassDark = material("brass-dark", {
+		color: 0xa8763c,
+		roughness: 0.4,
+		metalness: 0.25,
 	});
 	const paper = material("paper", { color: 0xf4e7d2, roughness: 0.9 });
+	const folded = material("paper-folded", {
+		color: 0xd6e9ff,
+		emissive: 0xb9d6ff,
+		emissiveIntensity: 0.3,
+		roughness: 0.8,
+		side: THREE.DoubleSide,
+	});
+	const trailPaint = material("plane-trail", {
+		color: 0xb9d6ff,
+		emissive: 0xb9d6ff,
+		emissiveIntensity: 0.4,
+		transparent: true,
+		opacity: 0.7,
+	});
 	const graphite = material("graphite", { color: 0x62534c, roughness: 0.9 });
-	const yellow = material("yellow", { color: 0xeab65e, roughness: 0.36 });
+	const holoGlass = material("holo-glass", {
+		color: 0x2b2530,
+		emissive: 0x3a2a30,
+		emissiveIntensity: 0.5,
+		roughness: 0.3,
+		transparent: true,
+		opacity: 0.9,
+	});
+	const holoRim = material("holo-rim", {
+		color: 0xffb39a,
+		emissive: 0xff987a,
+		emissiveIntensity: 0.9,
+	});
+	const dataCubes = [0x87c8ed, 0xdff7ff, 0xa8d8a2].map((hex) =>
+		material(`data-${hex}`, {
+			color: hex,
+			emissive: hex,
+			emissiveIntensity: 0.45,
+			roughness: 0.35,
+		}),
+	);
 
 	const shadowPixels = new Uint8Array(32 * 32 * 4);
 	for (let y = 0; y < 32; y++) {
@@ -299,87 +382,370 @@ export function createPageBotScene(canvas: HTMLCanvasElement) {
 		});
 	}
 
-	function toolFor(kind: BotFrame["tool"], trim: THREE.Material) {
-		const tool = new THREE.Group();
-		if (kind === "wrench") {
-			mesh(tool, rounded, silver, 0, -0.12, 0.12, 0.07, 0.32, 0.045);
-			mesh(
-				tool,
-				ring(0.075, 0.032, Math.PI * 1.5),
-				silver,
-				0,
-				-0.33,
-				0.12,
-			).rotation.z = -Math.PI / 4;
-			mesh(tool, ring(0.033, 0.015), silver, 0, 0.055, 0.12);
-		} else if (kind === "driver") {
-			mesh(tool, rounded, trim, 0, -0.035, 0.11, 0.12, 0.2, 0.12);
-			mesh(tool, rounded, rubber, 0, -0.035, 0.17, 0.035, 0.14, 0.025);
-			mesh(tool, cylinder, silver, 0, -0.24, 0.11, 0.023, 0.25, 0.023);
-			mesh(tool, rounded, silver, 0, -0.375, 0.11, 0.048, 0.035, 0.02);
-		} else if (kind === "cable") {
-			const curve = geometry(
-				"cable",
-				() =>
-					new THREE.TubeGeometry(
-						new THREE.CatmullRomCurve3([
-							new THREE.Vector3(0, -0.19, 0.1),
-							new THREE.Vector3(-0.17, -0.1, 0.1),
-							new THREE.Vector3(-0.25, -0.29, 0.1),
-							new THREE.Vector3(-0.12, -0.41, 0.1),
-						]),
-						12,
-						0.024,
-						5,
-						false,
-					),
-			);
-			mesh(tool, curve, trim, 0, 0, 0);
-			mesh(tool, rounded, charcoal, 0, -0.23, 0.11, 0.15, 0.15, 0.12);
-			mesh(tool, rounded, silver, 0, -0.34, 0.11, 0.08, 0.09, 0.06);
-			mesh(tool, rounded, warmLight, 0, -0.22, 0.18, 0.07, 0.025, 0.01);
-		} else if (kind === "inspect") {
-			mesh(tool, cylinder, trim, 0, -0.1, 0.12, 0.04, 0.22, 0.04);
-			mesh(tool, ring(0.12, 0.025), silver, 0, -0.3, 0.12);
-			const lens = material("lens", {
-				color: 0x8ad0df,
-				transparent: true,
-				opacity: 0.35,
-				roughness: 0.08,
-				depthWrite: false,
+	/** Flux taps a floating flow panel; its nodes light up and wire together, then it starts over. */
+	function buildActivity({ id, body }: RigParts): ActivityRig {
+		const panel = new THREE.Group();
+		panel.position.set(0.72, 0.68, 0.8);
+		panel.rotation.set(-0.2, -0.2, 0);
+		body.add(panel);
+		mesh(panel, rounded, holoGlass, 0, 0, 0, 0.82, 0.54, 0.035);
+		mesh(panel, rounded, holoRim, 0, 0.245, 0.02, 0.72, 0.018, 0.01);
+		const nodes = [
+			{ x: -0.25, y: -0.03, hex: 0xff987a },
+			{ x: 0.02, y: 0.1, hex: 0xc0aae6 },
+			{ x: 0.02, y: -0.15, hex: 0xa2d4ad },
+			{ x: 0.27, y: -0.03, hex: 0xefd28e },
+		];
+		const lit = (name: string, hex: number) => {
+			const result = new THREE.MeshStandardMaterial({
+				color: hex,
+				emissive: hex,
+				emissiveIntensity: 0.1,
+				roughness: 0.4,
 			});
-			mesh(tool, ball, lens, 0, -0.3, 0.12, 0.105, 0.105, 0.014);
+			materials.set(`${id}-${name}`, result);
+			return result;
+		};
+		const nodePaint = nodes.map((node, index) => {
+			const result = lit(`node-${index}`, node.hex);
+			mesh(panel, rounded, result, node.x, node.y, 0.032, 0.15, 0.11, 0.04);
+			return result;
+		});
+		const links = [
+			[0, 1],
+			[0, 2],
+			[1, 3],
+			[2, 3],
+		] as const;
+		const wirePaint = links.map(([from, to], index) => {
+			const result = lit(`wire-${index}`, 0xffb39a);
+			const dx = nodes[to].x - nodes[from].x;
+			const dy = nodes[to].y - nodes[from].y;
 			mesh(
-				tool,
+				panel,
 				rounded,
-				reflection,
-				-0.04,
-				-0.265,
-				0.14,
-				0.04,
-				0.075,
-				0.01,
-			).rotation.z = -0.5;
-		} else {
-			mesh(tool, cylinder, yellow, 0, -0.1, 0.12, 0.036, 0.33, 0.036);
-			mesh(tool, cylinder, silver, 0, 0.045, 0.12, 0.038, 0.05, 0.038);
-			mesh(tool, ball, trim, 0, 0.075, 0.12, 0.037, 0.04, 0.037);
-			mesh(tool, cone, paper, 0, -0.31, 0.12, 0.036, 0.09, 0.036).rotation.z =
-				Math.PI;
-			mesh(
-				tool,
-				cone,
-				graphite,
-				0,
-				-0.36,
-				0.12,
-				0.012,
-				0.035,
-				0.012,
-			).rotation.z = Math.PI;
-		}
-		return tool;
+				result,
+				(nodes[from].x + nodes[to].x) / 2,
+				(nodes[from].y + nodes[to].y) / 2,
+				0.022,
+				Math.hypot(dx, dy),
+				0.02,
+				0.008,
+			).rotation.z = Math.atan2(dy, dx);
+			return result;
+		});
+		panel.updateMatrix();
+		const stops = [
+			...nodes.map((node) =>
+				new THREE.Vector3(node.x, node.y, 0.1).applyMatrix4(panel.matrix),
+			),
+			new THREE.Vector3(0.95, 0.5, 0.5),
+		];
+		return ({ time, reach }, pose) => {
+			const shown = smooth(reach * 1.5 - 0.3);
+			panel.visible = shown > 0.01;
+			panel.scale.setScalar(Math.max(0.001, shown));
+			const beat = time / 0.8;
+			const step = Math.floor(beat) % stops.length;
+			const local = fract(beat);
+			for (let index = 0; index < nodePaint.length; index++)
+				nodePaint[index].emissiveIntensity =
+					index < step
+						? 0.75
+						: index === step
+							? 0.1 + 0.8 * smooth(local * 3 - 0.9)
+							: 0.1;
+			for (let index = 0; index < links.length; index++)
+				wirePaint[index].emissiveIntensity =
+					links[index][1] < step || (links[index][1] === step && local > 0.45)
+						? 0.95
+						: 0.04;
+			const from = stops[(step + stops.length - 1) % stops.length];
+			const to = stops[step];
+			const travel = smooth(local / 0.35);
+			const press =
+				step < nodes.length
+					? Math.sin(clamp((local - 0.3) / 0.3) * Math.PI)
+					: 0;
+			pose.right.lerpVectors(from, to, travel);
+			pose.right.z -= press * 0.07;
+			pose.left.set(-0.8, 0.64 + Math.sin(time * 1.6) * 0.015, 0.26);
+			pose.lookX = 0.6;
+			pose.lookY = 0.55;
+			pose.yaw = 0.16;
+		};
 	}
+
+	/** Byte juggles three data cubes in a cascade: catch outside, carry in, throw across. */
+	function juggleActivity({ body }: RigParts): ActivityRig {
+		const cubeSize = 0.2;
+		const cubes = dataCubes.map((paint) =>
+			mesh(body, rounded, paint, 0, 0, 0, cubeSize),
+		);
+		const rate = 0.55;
+		const handY = 0.9;
+		const handZ = 0.44;
+		const inner = 0.32;
+		const outer = 0.62;
+		const held = new THREE.Vector3();
+		const juggled = new THREE.Vector3();
+		const handAt = (phase: number, side: number, out: THREE.Vector3) => {
+			if (phase >= 0.7) {
+				const carry = (phase - 0.7) / 0.3;
+				return out.set(
+					side * mix(outer, inner, smooth(carry)),
+					handY - 0.08 * Math.sin(carry * Math.PI),
+					handZ,
+				);
+			}
+			const back = phase / 0.7;
+			return out.set(
+				side * mix(inner, outer, smooth(back)),
+				handY + 0.03 * Math.sin(back * Math.PI),
+				handZ,
+			);
+		};
+		return ({ time, reach, rightIdle }, pose) => {
+			const beat = fract(time * rate * 3);
+			handAt(beat, 1, pose.right);
+			handAt(fract(beat + 0.5), -1, pose.left);
+			let highest = Number.NEGATIVE_INFINITY;
+			let watchX = 0;
+			for (let index = 0; index < cubes.length; index++) {
+				const cube = cubes[index];
+				const phase = fract(time * rate + index / 3);
+				if (phase < 0.4 || (phase >= 0.5 && phase < 0.9)) {
+					const leftward = phase < 0.4;
+					const flight = leftward ? phase / 0.4 : (phase - 0.5) / 0.4;
+					juggled.set(
+						leftward ? mix(inner, -outer, flight) : mix(-inner, outer, flight),
+						handY + 0.12 + 4 * flight * (1 - flight),
+						handZ + (leftward ? 0.05 : -0.03),
+					);
+				} else {
+					juggled.copy(phase < 0.5 ? pose.left : pose.right);
+					juggled.y += 0.12;
+				}
+				held.copy(rightIdle);
+				held.y += 0.15;
+				held.z += 0.05;
+				cube.position.lerpVectors(held, juggled, reach);
+				const size =
+					index === 0 ? cubeSize : cubeSize * smooth(reach * 1.5 - 0.3);
+				cube.visible = size > 0.004;
+				cube.scale.setScalar(Math.max(0.001, size));
+				cube.rotation.set(time * 2.1 + index, time * 1.6 + index * 2, 0);
+				if (juggled.y > highest) {
+					highest = juggled.y;
+					watchX = juggled.x;
+				}
+			}
+			pose.lookX = clamp(watchX / 0.45, -1, 1);
+			pose.lookY = -0.75;
+		};
+	}
+
+	/** Post throws a paper plane that loops once around it, then catches it again. */
+	function planeActivity({ body }: RigParts): ActivityRig {
+		const plane = mesh(body, paperPlane, folded, 0, 0, 0, 1.7);
+		const trail = Array.from({ length: 4 }, (_, index) =>
+			mesh(body, ball, trailPaint, 0, 0, 0, 0.03 - index * 0.005),
+		);
+		const orbitAt = (lap: number, out: THREE.Vector3) => {
+			const angle = lap * TAU;
+			return out.set(
+				0.95 * Math.cos(angle),
+				1.22 + 0.42 * Math.sin(lap * Math.PI),
+				0.74 * Math.sin(angle),
+			);
+		};
+		const period = 5.4;
+		const rest = new THREE.Vector3(0.84, 1, 0.3);
+		const windUp = new THREE.Vector3(0.84, 1.12, -0.02);
+		const release = new THREE.Vector3(0.86, 0.94, 0.4);
+		const catching = new THREE.Vector3(0.9, 1.14, 0.06);
+		const held = new THREE.Vector3();
+		const orbit = new THREE.Vector3();
+		const holdTurn = quaternion(0.15, -0.6, 0.25, "YXZ");
+		const flightTurn = new THREE.Quaternion();
+		const heading = new THREE.Euler(0, 0, 0, "YXZ");
+		return ({ time, reach, contact, rightIdle }, pose) => {
+			const cycle = fract(time / period);
+			let flight = 0;
+			let lap = 0;
+			if (cycle < 0.14) {
+				pose.right.lerpVectors(rest, windUp, smooth(cycle / 0.14));
+			} else if (cycle < 0.86) {
+				lap = (cycle - 0.14) / 0.72;
+				flight = smooth(lap / 0.06) * (1 - smooth((lap - 0.94) / 0.06));
+				const angle = lap * TAU;
+				orbitAt(lap, orbit);
+				heading.set(
+					0.45,
+					Math.atan2(-0.74 * Math.cos(angle), -0.95 * Math.sin(angle)),
+					0.14 * Math.cos(lap * Math.PI),
+				);
+				flightTurn.setFromEuler(heading);
+				if (lap < 0.25)
+					pose.right.lerpVectors(windUp, release, smooth(lap / 0.12));
+				else
+					pose.right.lerpVectors(release, catching, smooth((lap - 0.72) / 0.2));
+			} else {
+				pose.right.lerpVectors(catching, rest, smooth((cycle - 0.86) / 0.14));
+			}
+			held.lerpVectors(rightIdle, pose.right, reach);
+			held.x += 0.05;
+			held.y += 0.1;
+			held.z += 0.06;
+			const airborne = flight * contact;
+			plane.position.lerpVectors(held, orbit, airborne);
+			plane.quaternion.slerpQuaternions(holdTurn, flightTurn, airborne);
+			for (let index = 0; index < trail.length; index++) {
+				const behind = lap - (index + 1) * 0.035;
+				trail[index].visible = airborne > 0.6 && behind > 0.04;
+				if (trail[index].visible) orbitAt(behind, trail[index].position);
+			}
+			pose.lookX = mix(0.35, clamp(orbit.x / 0.85, -1, 1), airborne);
+			pose.lookY = mix(0.1, -0.45, airborne);
+		};
+	}
+
+	/** Scout scans the horizon through a spyglass and squints with the other eye. */
+	function scoutActivity({
+		head,
+		headOffset,
+		rightEye,
+	}: RigParts): ActivityRig {
+		const scope = new THREE.Group();
+		head.add(scope);
+		const tube = (
+			parent: THREE.Object3D,
+			radius: number,
+			length: number,
+			start: number,
+			paint: THREE.Material,
+		) => {
+			mesh(
+				parent,
+				cylinder,
+				paint,
+				start + length / 2,
+				0,
+				0,
+				radius,
+				length,
+				radius,
+			).rotation.z = -Math.PI / 2;
+		};
+		tube(scope, 0.052, 0.18, -0.02, brassDark);
+		tube(scope, 0.062, 0.03, 0.13, silver);
+		const middle = new THREE.Group();
+		scope.add(middle);
+		tube(middle, 0.068, 0.22, 0, brass);
+		tube(middle, 0.077, 0.03, 0.2, silver);
+		const objective = new THREE.Group();
+		scope.add(objective);
+		tube(objective, 0.088, 0.24, 0, brass);
+		tube(objective, 0.098, 0.035, 0.22, brassDark);
+		tube(objective, 0.078, 0.01, 0.25, glass);
+		const lookout = rightEye.clone().add(new THREE.Vector3(0.02, 0, 0.08));
+		const aimed = quaternion(0, -0.5, 0.2);
+		const carried = quaternion(0, -0.3, -1.25);
+		const axis = new THREE.Vector3(1, 0, 0).applyQuaternion(aimed);
+		const grip = lookout.clone().addScaledVector(axis, 0.3);
+		grip.y += headOffset - 0.07;
+		const sweep = [0.04, 0.3, 0.14, 0.36];
+		const carry = new THREE.Vector3();
+		return ({ time, reach, rightIdle }, pose) => {
+			const extend = smooth(reach * 1.4 - 0.3);
+			middle.position.x = mix(0.02, 0.15, extend);
+			objective.position.x = mix(0.04, 0.36, extend);
+			carry.copy(rightIdle);
+			carry.y -= headOffset;
+			carry.z += 0.04;
+			scope.position.lerpVectors(carry, lookout, reach);
+			scope.quaternion.slerpQuaternions(carried, aimed, reach);
+			const beat = time / 1.7;
+			const step = Math.floor(beat);
+			pose.yaw = mix(
+				sweep[(step + sweep.length - 1) % sweep.length],
+				sweep[step % sweep.length],
+				smooth(fract(beat) / 0.4),
+			);
+			pose.right.copy(grip);
+			pose.left.set(-0.82, 0.58 + Math.sin(time * 1.6) * 0.015, 0.2);
+			pose.lookX = 0.95;
+			pose.lookY = -0.2;
+			pose.squint = 1;
+		};
+	}
+
+	/** Loop reads an open book, eyes running along the lines, and turns a page now and then. */
+	function readActivity({ body, palette }: RigParts): ActivityRig {
+		const book = new THREE.Group();
+		book.scale.setScalar(1.3);
+		body.add(book);
+		const cover = paint(palette.accent, { roughness: 0.55 });
+		const half = (side: number) => {
+			const group = new THREE.Group();
+			book.add(group);
+			mesh(group, rounded, cover, side * 0.165, -0.012, 0, 0.33, 0.022, 0.42);
+			mesh(group, rounded, paper, side * 0.155, 0.008, 0, 0.3, 0.022, 0.38);
+			for (let line = 0; line < 4; line++)
+				mesh(
+					group,
+					rounded,
+					graphite,
+					side * (line === 3 ? 0.12 : 0.155),
+					0.021,
+					-0.12 + line * 0.075,
+					line === 3 ? 0.14 : 0.21,
+					0.004,
+					0.016,
+				);
+			return group;
+		};
+		const left = half(-1);
+		const right = half(1);
+		const leaf = new THREE.Group();
+		book.add(leaf);
+		mesh(leaf, rounded, paper, 0.152, 0.026, 0, 0.29, 0.008, 0.37);
+		const carried = quaternion(0, Math.PI / 2, -0.15);
+		const reading = quaternion(0.62, 0, 0);
+		const lap = new THREE.Vector3(0, 0.56, 1.12);
+		const carry = new THREE.Vector3();
+		return ({ time, reach, rightIdle }, pose) => {
+			const spread = mix(Math.PI / 2 - 0.03, 0.2, smooth(reach * 1.3 - 0.2));
+			right.rotation.z = spread;
+			left.rotation.z = -spread;
+			const turn = smooth((fract(time / 3.8) - 0.55) / 0.3);
+			leaf.visible = reach > 0.9 && turn > 0.001 && turn < 0.999;
+			leaf.rotation.z = mix(spread, Math.PI - spread, turn);
+			carry.copy(rightIdle);
+			carry.y += 0.06;
+			carry.z += 0.08;
+			book.position.lerpVectors(carry, lap, reach);
+			book.quaternion.slerpQuaternions(carried, reading, reach);
+			pose.left.set(-0.5, 0.52, 1.12);
+			pose.right.set(0.5, 0.52, 1.12);
+			const line = fract(time * 0.42);
+			pose.lookX =
+				line < 0.85
+					? mix(-0.45, 0.45, line / 0.85)
+					: mix(0.45, -0.45, (line - 0.85) / 0.15);
+			pose.lookY = 0.65;
+		};
+	}
+
+	const activities: Readonly<
+		Record<BotActivity, (parts: RigParts) => ActivityRig>
+	> = {
+		build: buildActivity,
+		juggle: juggleActivity,
+		plane: planeActivity,
+		scout: scoutActivity,
+		read: readActivity,
+	};
 
 	function bodyGeometry(kind: BotKind, model: BodyModel, palette: BotPalette) {
 		const frame = bodyFrame(model);
@@ -769,8 +1135,6 @@ export function createPageBotScene(canvas: HTMLCanvasElement) {
 		};
 		const leftHand = hand();
 		const rightHand = hand();
-		const tool = toolFor(frame.tool, handPaint);
-		rightHand.add(tool);
 
 		const feet = [-1, 1].map((side) => {
 			const foot = new THREE.Group();
@@ -780,30 +1144,18 @@ export function createPageBotScene(canvas: HTMLCanvasElement) {
 			return foot;
 		}) as [THREE.Group, THREE.Group];
 
-		const bolt = new THREE.Group();
-		bolt.position.set(WORK_X, 0.018, 0.18);
-		group.add(bolt);
-		if (frame.tool === "pencil") {
-			mesh(bolt, rounded, paper, 0, 0, 0, 0.43, 0.02, 0.34).rotation.y = -0.2;
-			for (let index = 0; index < 3; index++)
-				mesh(
-					bolt,
-					rounded,
-					graphite,
-					-0.03,
-					0.014,
-					-0.08 + index * 0.07,
-					0.18 - index * 0.035,
-					0.006,
-					0.009,
-				);
-		} else if (frame.tool === "cable") {
-			mesh(bolt, rounded, silver, 0, 0.02, 0, 0.22, 0.09, 0.18);
-			mesh(bolt, rounded, visor, 0, 0.07, 0, 0.12, 0.02, 0.08);
-		} else {
-			mesh(bolt, hexagon, silver, 0, 0.015, 0, 0.105, 0.055, 0.105);
-			mesh(bolt, rounded, charcoal, 0, 0.046, 0, 0.105, 0.012, 0.018);
-		}
+		group.updateMatrixWorld(true);
+		const rightEye = head.worldToLocal(
+			(eyes[1] ?? eyes[0] ?? head).getWorldPosition(new THREE.Vector3()),
+		);
+		const activity = activities[frame.activity]({
+			id: frame.id,
+			body,
+			head,
+			headOffset: bodyFrameInfo.middle,
+			rightEye,
+			palette,
+		});
 		const shadow = mesh(
 			group,
 			geometry("plane", () => new THREE.PlaneGeometry(1, 1)),
@@ -816,21 +1168,6 @@ export function createPageBotScene(canvas: HTMLCanvasElement) {
 			1,
 		);
 		shadow.rotation.x = -Math.PI / 2;
-		const sparks = Array.from({ length: 4 }, () => {
-			const particle = mesh(
-				group,
-				sparkGeometry,
-				warmLight,
-				0,
-				0,
-				0,
-				0.018,
-				0.055,
-				0.018,
-			);
-			particle.visible = false;
-			return particle;
-		});
 		group.visible = false;
 		scene.add(group);
 		return {
@@ -844,15 +1181,13 @@ export function createPageBotScene(canvas: HTMLCanvasElement) {
 			leftHand,
 			rightHand,
 			feet,
-			tool,
-			bolt,
-			sparks,
 			shadow,
+			activity,
 			previousWalk: frame.walk,
 			previousTime: frame.time,
 			walking: 0,
 			kind: frame.kind,
-			toolKind: frame.tool,
+			activityKind: frame.activity,
 		};
 	}
 
@@ -868,22 +1203,44 @@ export function createPageBotScene(canvas: HTMLCanvasElement) {
 			rig.previousTime = frame.time;
 		}
 		// Repainting a paused frame must retain the exact pose, including a lifted foot.
-		const walking = rig.walking * (1 - contact * 0.95);
+		const walking = rig.walking * (1 - reach * 0.95);
 		const stride = Math.sin(frame.walk);
-		const bob = Math.abs(stride) * 0.05 * walking * (1 - contact);
-		const squash =
-			(Math.abs(Math.cos(frame.walk)) * 0.035 * walking + contact * 0.02) *
-			(1 - 0.5 * reach);
-		const tilt = clamp(frame.lean, -1, 1) * 0.1;
-		const lookX = clamp(frame.lookX, -1, 1);
-		const lookY = clamp(frame.lookY, -1, 1);
+		const bob = Math.abs(stride) * 0.05 * walking;
+		const squash = Math.abs(Math.cos(frame.walk)) * 0.035 * walking;
+		const lean = clamp(frame.lean, -1, 1);
+		const tilt = lean * 0.1 * (1 - reach * 0.7);
+		const swing = Math.sin(frame.time * 1.6) * 0.015;
+		idleLeft.set(
+			-0.84,
+			0.72 + Math.max(0, stride) * 0.12 * walking + swing,
+			0.18 + stride * 0.12 * walking,
+		);
+		idleRight.set(
+			0.84,
+			0.72 + Math.max(0, -stride) * 0.12 * walking - swing,
+			0.18 - stride * 0.12 * walking,
+		);
+		pose.left.copy(idleLeft);
+		pose.right.copy(idleRight);
+		pose.lookX = 0;
+		pose.lookY = 0;
+		pose.yaw = 0;
+		pose.squint = 0;
+		rig.activity(
+			{ time: frame.time, reach, contact, rightIdle: idleRight },
+			pose,
+		);
+		rig.leftHand.position.lerpVectors(idleLeft, pose.left, reach);
+		rig.rightHand.position.lerpVectors(idleRight, pose.right, reach);
+		const focus = contact * 0.85;
+		const lookX = mix(clamp(frame.lookX, -1, 1), pose.lookX, focus);
+		const lookY = mix(clamp(frame.lookY, -1, 1), pose.lookY, focus);
 		rig.body.position.y = bob;
 		rig.body.rotation.z = tilt;
-		rig.body.rotation.y =
-			clamp(frame.lean, -1, 1) * walking * (1 - reach) * 0.38;
+		rig.body.rotation.y = lean * walking * 0.38 + pose.yaw * contact;
 		rig.head.scale.set(1 + squash, 1 - squash, 1 + squash * 0.5);
 		rig.head.rotation.y = lookX * 0.26;
-		rig.head.rotation.x = lookY * 0.12 + reach * 0.14;
+		rig.head.rotation.x = lookY * 0.12;
 		rig.head.rotation.z = Math.sin(frame.time * 1.3) * 0.025 * (1 - work);
 		for (const pupil of rig.pupils) {
 			pupil.position.x = lookX * 0.03;
@@ -891,6 +1248,7 @@ export function createPageBotScene(canvas: HTMLCanvasElement) {
 		}
 		const blink = (frame.time + frame.id.length * 0.47) % 5.3;
 		for (const eye of rig.eyes) eye.scale.y = blink < 0.11 ? 0.15 : 1;
+		if (rig.eyes[0]) rig.eyes[0].scale.y *= mix(1, 0.25, pose.squint * contact);
 		if (rig.moon) {
 			const angle = frame.time * 0.9;
 			rig.moon.position.set(
@@ -903,50 +1261,7 @@ export function createPageBotScene(canvas: HTMLCanvasElement) {
 		rig.feet[1].rotation.x = -stride * 0.32 * walking;
 		rig.feet[0].position.y = 0.2 + Math.max(0, stride) * 0.07 * walking;
 		rig.feet[1].position.y = 0.2 + Math.max(0, -stride) * 0.07 * walking;
-		rig.leftHand.position.set(
-			-0.84 - reach * 0.04,
-			0.72 +
-				Math.max(0, stride) * 0.12 * walking +
-				Math.sin(frame.time * 1.6) * 0.015,
-			0.18 + stride * 0.12 * walking,
-		);
-
-		const writing =
-			frame.tool === "pencil" ? Math.sin(frame.time * 6) * 0.035 * contact : 0;
-		const handX = 0.86 + reach * 0.06 + writing;
-		const handY =
-			0.66 - reach * 0.3 + Math.sin(frame.time * 8) * 0.012 * contact;
-		// Inverse body lean keeps the working tip on the page surface.
-		const localX = handX * Math.cos(tilt) + (handY - bob) * Math.sin(tilt);
-		const localY = -handX * Math.sin(tilt) + (handY - bob) * Math.cos(tilt);
-		rig.rightHand.position.set(localX, localY, 0.16);
-		rig.rightHand.rotation.z = -tilt + (1 - reach) * -0.25;
-		rig.tool.rotation.y =
-			frame.tool === "driver" || frame.tool === "wrench"
-				? Math.sin(frame.time * 7) * 0.32 * contact
-				: 0;
-		rig.bolt.rotation.y =
-			frame.tool === "wrench" || frame.tool === "driver"
-				? Math.sin(frame.time * 7) * 0.08 * contact
-				: 0;
 		rig.shadow.scale.x = 1.75 - bob;
-		const canSpark =
-			contact > 0.65 && ["wrench", "driver", "cable"].includes(frame.tool);
-		for (let index = 0; index < rig.sparks.length; index++) {
-			const particle = rig.sparks[index];
-			const progress = (frame.time * 2.8 + index * 0.19) % 1;
-			particle.visible = canSpark && progress < 0.52;
-			if (!particle.visible) continue;
-			const angle = index * 1.7 + 0.4;
-			particle.position.set(
-				WORK_X + Math.cos(angle) * progress * 0.28,
-				0.065 + Math.sin(progress * Math.PI) * 0.18,
-				0.2 + Math.sin(angle) * progress * 0.17,
-			);
-			particle.rotation.z = -angle;
-			particle.scale.setScalar(0.025 * (1 - progress));
-			particle.scale.y *= 2.7;
-		}
 	}
 
 	return {
@@ -990,7 +1305,11 @@ export function createPageBotScene(canvas: HTMLCanvasElement) {
 				)
 					continue;
 				let rig = rigs.get(frame.id);
-				if (!rig || rig.kind !== frame.kind || rig.toolKind !== frame.tool) {
+				if (
+					!rig ||
+					rig.kind !== frame.kind ||
+					rig.activityKind !== frame.activity
+				) {
 					if (rig) scene.remove(rig.group);
 					rig = createRig(frame);
 					rigs.set(frame.id, rig);

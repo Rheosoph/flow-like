@@ -1,6 +1,7 @@
 //! Platform-aware CLI discovery and executable search paths.
 
 use super::backend_types::FlowPilotAgentBackendKind;
+pub(super) use flow_like::flow_like_model_provider::llm::claude_code::claude_ide_extension_binaries;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
@@ -45,14 +46,6 @@ impl CliResolution {
 
 pub(super) fn codex_binary_name() -> &'static str {
     if cfg!(windows) { "codex.exe" } else { "codex" }
-}
-
-fn claude_binary_name() -> &'static str {
-    if cfg!(windows) {
-        "claude.exe"
-    } else {
-        "claude"
-    }
 }
 
 pub(super) fn codex_target() -> Option<(&'static str, &'static str)> {
@@ -251,68 +244,6 @@ fn collect_codex_cli_dirs(root: &std::path::Path, depth: usize, out: &mut Vec<st
             collect_codex_cli_dirs(&path, depth - 1, out);
         }
     }
-}
-
-/// Numeric version key from an `anthropic.claude-code-<version>-<platform>`
-/// extension directory name (e.g. `[2, 1, 204]`), for newest-first ordering.
-fn claude_extension_version_key(path: &Path) -> Vec<u64> {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .and_then(|name| name.strip_prefix("anthropic.claude-code-"))
-        .map(|rest| {
-            rest.split('-')
-                .next()
-                .unwrap_or_default()
-                .split('.')
-                .map(|part| part.parse::<u64>().unwrap_or(0))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Locate `claude` executables bundled inside IDE extensions, newest first.
-///
-/// The Claude Code editor extension ships the native CLI at
-/// `<editor>/extensions/anthropic.claude-code-<version>-<platform>/resources/native-binary/claude`.
-/// Desktop apps launched from Finder/Dock don't inherit `claude` on PATH, so this
-/// lets FlowPilot reuse the CLI the user already installed via that extension.
-pub(super) fn claude_ide_extension_binaries(home: &Path) -> Vec<PathBuf> {
-    let mut binaries = Vec::new();
-    for root in [
-        home.join(".vscode/extensions"),
-        home.join(".vscode-insiders/extensions"),
-        home.join(".vscode-oss/extensions"),
-        home.join(".cursor/extensions"),
-        home.join(".windsurf/extensions"),
-    ] {
-        let Ok(entries) = std::fs::read_dir(&root) else {
-            continue;
-        };
-        let mut extension_dirs: Vec<PathBuf> = entries
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.is_dir()
-                    && path
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .is_some_and(|name| name.starts_with("anthropic.claude-code-"))
-            })
-            .collect();
-        // Sort by parsed version (numeric, newest first) — a lexical sort would
-        // rank "2.1.9" above "2.1.204".
-        extension_dirs.sort_by_key(|dir| std::cmp::Reverse(claude_extension_version_key(dir)));
-        for dir in extension_dirs {
-            let candidate = dir
-                .join("resources")
-                .join("native-binary")
-                .join(claude_binary_name());
-            if is_executable_file(&candidate) {
-                binaries.push(candidate);
-            }
-        }
-    }
-    binaries
 }
 
 /// Resolve the Copilot CLI path, searching beyond the (possibly limited) bundled-app PATH.

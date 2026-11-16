@@ -3,12 +3,12 @@
 import { useEffect } from "react";
 import {
 	AGENT_EMBEDDING_MODEL_KEY,
-	AGENT_MODEL_KEY,
 	AGENT_PROVIDER_KEY,
 	AGENT_REASONING_KEY,
 	useGlobalChatStore,
 } from "../../state/global-chat/global-chat-store";
 import type { AIProvider } from "../flowpilot/types";
+import { rememberedModelForProvider } from "./model-selection";
 
 // Restored once per session rather than per surface: the hero, the Bots tab and the
 // docked overlay all share one store, so whichever mounts first hydrates it.
@@ -33,7 +33,9 @@ export function useHydrateAgentSelection() {
 		hydrated = true;
 		try {
 			const provider = localStorage.getItem(AGENT_PROVIDER_KEY);
-			const model = localStorage.getItem(AGENT_MODEL_KEY);
+			const model = rememberedModelForProvider(
+				(provider ?? "bits") as AIProvider,
+			);
 			const effort = localStorage.getItem(AGENT_REASONING_KEY);
 			const embedding = localStorage.getItem(AGENT_EMBEDDING_MODEL_KEY);
 			if (provider) setProvider(provider as AIProvider);

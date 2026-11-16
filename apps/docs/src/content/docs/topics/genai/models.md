@@ -39,11 +39,15 @@ Browse [Generative model provider nodes](/nodes/ai/generative/provider/) for the
 
 ## Add models from an agent account
 
-In the model catalog, choose **Add model**, select the provider, and enter a model ID and its credentials. Save the model and activate it in the profile you run workflows with. These entries are ordinary model Bits, so they connect to **Invoke Model** and **Agent from Model** through the existing Model pin. Provider nodes can also build a Bit directly and report whether its provider is available.
+In the model catalog, choose **Add model** and select the provider. On desktop, Claude Code and Codex automatically check local sign-in and load a **Model** dropdown from the installed runtime. Choose a model to fill in its name, description, provider icon, tags, and reported capabilities. Review the editable context length when the runtime does not supply a limit. Changes you make to the metadata survive later model selections.
+
+Use **Refresh models** after signing in or changing accounts. Refreshing keeps your selected ID, including when the runtime no longer lists it. **Enter a model ID manually** is available if discovery fails or you use a custom executable. Editing an existing Claude Code or Codex Bit on desktop uses the same setup and preserves its saved metadata.
+
+Other providers ask for a model ID and credentials. Saving a new model also activates it in the current profile. These entries are ordinary model Bits, so they connect to **Invoke Model** and **Agent from Model** through the existing Model pin. Provider nodes can also build a Bit directly and report whether its provider is available.
 
 | Provider | Setup and execution |
 |----------|---------------------|
-| Claude Code | Desktop only. Install and sign in to the Claude CLI, then select a discovered model or enter its ID. Flow-Like launches the CLI for each completion; an open terminal is unnecessary. |
+| Claude Code | Desktop only. Install and sign in to Claude Code, then choose a detected model. Flow-Like finds supported IDE installations as well as the CLI. This Bit adapter supports text conversations and launches Claude Code for each completion; an open terminal is unnecessary. |
 | Codex (ChatGPT) | Supply a ChatGPT access token, or use the desktop's cached Codex `auth.json` credentials. Local credential lookup does not refresh tokens or read OS keychain storage. |
 | GitHub Copilot | Supply a GitHub token authorized for Copilot, or an already exchanged Copilot API token. This model provider does not reuse FlowPilot's Copilot SDK session. |
 | Microsoft 365 Copilot | Supply a delegated Microsoft Graph token with Copilot Chat access. The provider selects its own underlying model. This adapter supports text conversations and streaming, without caller-defined tools or model sampling controls. |

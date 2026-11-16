@@ -1,8 +1,167 @@
 use super::super::{
-    board_commits::flow_ir_durable_receipt_ref_key,
+    board_commits::{flow_ir_durable_receipt_ref_key, open_board_for_commit},
     board_jobs::{board_edit_job_dismissal_receipt, recover_board_edit_job_dismissal_receipt},
 };
 use super::*;
+
+async fn board_commit_test_app() -> (App, String) {
+    use flow_like::{
+        bit::Metadata,
+        flow_like_storage::{files::store::FlowLikeStore, object_store::memory::InMemory},
+        state::{FlowLikeConfig, FlowLikeState},
+        utils::http::HTTPClient,
+    };
+
+    let state = Arc::new(FlowLikeState::new(
+        FlowLikeConfig::with_default_store(FlowLikeStore::Other(Arc::new(InMemory::new()))),
+        HTTPClient::new_without_refetch(),
+    ));
+    let mut app = App::new(
+        Some("review-app".into()),
+        Metadata::default(),
+        Vec::new(),
+        state,
+    )
+    .await
+    .unwrap();
+    let board_id = app
+        .create_board(Some("review-board".into()), None)
+        .await
+        .unwrap()
+        .board_id;
+    app.save().await.unwrap();
+    (app, board_id)
+}
+
+#[tokio::test]
+async fn board_commit_opens_and_registers_a_persisted_board_without_an_editor() {
+    let (app, board_id) = board_commit_test_app().await;
+    let state = app.app_state.as_ref().unwrap();
+    assert!(state.get_board(&board_id, None).is_err());
+
+    let board = open_board_for_commit(&app, &board_id).await.unwrap();
+
+    assert_eq!(board.snapshot().id, board_id);
+    assert_eq!(board.snapshot().board_dir.as_ref(), "apps/review-app");
+    assert!(Arc::ptr_eq(
+        &board,
+        &state.get_board(&board_id, None).unwrap()
+    ));
+}
+
+#[tokio::test]
+async fn board_commit_preserves_unsaved_edits_in_the_registered_board() {
+    let (app, board_id) = board_commit_test_app().await;
+    let live = app
+        .open_board(board_id.clone(), Some(true), None)
+        .await
+        .unwrap();
+    live.write().await.description = "Unsaved editor changes".into();
+
+    let board = open_board_for_commit(&app, &board_id).await.unwrap();
+
+    assert!(Arc::ptr_eq(&board, &live));
+    assert_eq!(board.snapshot().description, "Unsaved editor changes");
+    let saved = app.open_board_authoritative(board_id, None).await.unwrap();
+    assert_ne!(saved.snapshot().description, board.snapshot().description);
+}
+
+#[tokio::test]
+async fn board_commit_reopens_the_saved_board_after_registry_removal() {
+    let (app, board_id) = board_commit_test_app().await;
+    let state = app.app_state.as_ref().unwrap();
+    let original = open_board_for_commit(&app, &board_id).await.unwrap();
+    {
+        let mut board = original.write().await;
+        board.description = "Saved before closing".into();
+        board.save(None).await.unwrap();
+    }
+    state.remove_board(&board_id).unwrap();
+
+    let reopened = open_board_for_commit(&app, &board_id).await.unwrap();
+
+    assert!(!Arc::ptr_eq(&reopened, &original));
+    assert_eq!(reopened.snapshot().description, "Saved before closing");
+    assert!(Arc::ptr_eq(
+        &reopened,
+        &state.get_board(&board_id, None).unwrap()
+    ));
+}
+
+#[tokio::test]
+async fn board_commit_rejects_a_board_outside_the_apps_membership() {
+    let (mut app, board_id) = board_commit_test_app().await;
+    let state = app.app_state.as_ref().unwrap().clone();
+    app.boards.clear();
+
+    assert!(open_board_for_commit(&app, &board_id).await.is_err());
+    assert!(state.get_board(&board_id, None).is_err());
+
+    let live = app
+        .open_board(board_id.clone(), Some(true), None)
+        .await
+        .unwrap();
+    assert!(open_board_for_commit(&app, &board_id).await.is_err());
+    assert!(Arc::ptr_eq(
+        &live,
+        &state.get_board(&board_id, None).unwrap()
+    ));
+}
+
+#[tokio::test]
+async fn board_commit_rejects_a_registered_board_from_another_app() {
+    use flow_like::flow::board::BoardCell;
+
+    let (app, board_id) = board_commit_test_app().await;
+    let state = app.app_state.as_ref().unwrap();
+    let foreign = Arc::new(BoardCell::new(Board::new(
+        Some(board_id.clone()),
+        "apps/another-app".into(),
+        state.clone(),
+    )));
+    state
+        .register_board(&board_id, foreign.clone(), None)
+        .unwrap();
+
+    assert!(open_board_for_commit(&app, &board_id).await.is_err());
+    assert!(Arc::ptr_eq(
+        &foreign,
+        &state.get_board(&board_id, None).unwrap()
+    ));
+}
+
+#[tokio::test]
+async fn board_commit_opens_latest_without_reusing_a_pinned_version() {
+    use flow_like::flow::board::BoardCell;
+
+    let (app, board_id) = board_commit_test_app().await;
+    let state = app.app_state.as_ref().unwrap();
+    let version = (1, 2, 3);
+    let mut pinned = Board::new(
+        Some(board_id.clone()),
+        "apps/review-app".into(),
+        state.clone(),
+    );
+    pinned.version = version;
+    pinned.description = "Pinned release".into();
+    let pinned = Arc::new(BoardCell::new(pinned));
+    state
+        .register_board(&board_id, pinned.clone(), Some(version))
+        .unwrap();
+
+    let latest = open_board_for_commit(&app, &board_id).await.unwrap();
+
+    assert!(!Arc::ptr_eq(&latest, &pinned));
+    assert_ne!(latest.snapshot().description, "Pinned release");
+    assert!(Arc::ptr_eq(
+        &latest,
+        &state.get_board(&board_id, None).unwrap()
+    ));
+    assert!(Arc::ptr_eq(
+        &pinned,
+        &state.get_board(&board_id, Some(version)).unwrap()
+    ));
+}
 
 #[test]
 fn board_edit_review_is_deterministic_and_host_derived() {

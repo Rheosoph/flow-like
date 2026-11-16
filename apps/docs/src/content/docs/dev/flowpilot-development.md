@@ -136,6 +136,57 @@ A generic queued response alone does not establish successful compilation or app
 The focused Vitest suite tests case construction and artifact evaluation without
 invoking a model.
 
+### Check model selection
+
+The app-generation benchmark pins Codex and does not cover custom Claude Code Bits. Separate
+regressions check that delayed and partial custom-model catalogs preserve the selected Bit through
+the rendered Flux and board panels and their outgoing requests. An unavailable explicit selection
+reports an error instead of running another Bit. A configured Flux model can use only its declared fallback
+list; an unconfigured Flux uses the chat's selection.
+
+The Claude Code tests cover discovery of IDE extension installations and use a local fake CLI to
+verify the configured model on each host-tool turn. They do not verify a live Claude account or
+model access.
+
+The model-store dialog suite covers automatic Claude/Codex discovery, metadata defaults, manual
+overrides, saving the exact selected model, refresh failures, and late responses after closing or
+changing providers. It uses the real form and save handler with a mocked backend. Native catalog
+tests verify the metadata sent by that backend; neither suite proves live account access.
+
+To test live Claude Code and Codex custom Bits, sign in to both installed CLIs and run:
+
+```sh
+bun run flowpilot:e2e:custom-bits
+```
+
+This runner discovers each provider's model catalog, creates custom Bits in a fresh isolated
+desktop profile, and executes twelve checks. Each provider runs through rendered Flux, a rendered
+bot conversation, board FlowPilot, saved use-case selection, Invoke Model, and Agent from Model.
+The workflow checks execute the production catalog nodes. Flux and bot conversations must read
+a fixture app through a real tool call and return its verification nonce. FlowPilot stages a
+variable change, then reviews and applies it after the board has been closed. The runner checks
+the persisted result and repeat application of the same review.
+
+Live runs spend model budget. The runner uses local CLI authentication, keeps desktop settings
+and generated apps in a private temporary directory, and prints the locations of its logs and
+JSON results. It builds through the shared Cargo queue using the `ci` profile and starts Next on
+port 3415. Pass `--frontend-url http://localhost:3000` to reuse a development frontend. Use
+`--skip-build` only when the existing `target/ci/flow-like-desktop` binary was built by this runner
+for that frontend URL. A missing provider, failed model call, identity mismatch, or failed board
+commit is a failed check, never a skip. Exit codes are `0` for all checks passing, `1` for failed
+checks, and `2` for startup or transport failure. These checks cover the saved Bit's execution;
+the model-store form itself remains covered by the separate dialog suite below.
+
+```sh
+node packages/ui/scripts/run-tests.mjs components/flowpilot/FlowPilot.dom.test.tsx components/global-chat/global-chat-body.dom.test.tsx components/global-chat/use-agent-persistence.dom.test.tsx components/global-chat/model-selection.test.ts
+node packages/ui/scripts/run-tests.mjs components/settings/model-catalog/add-custom-model-dialog.dom.test.tsx lib/bit/external-model-providers.test.ts
+tools/cargo-queue/bin/cargo test -p flow-like-desktop --bin flow-like-desktop model_catalog
+tools/cargo-queue/bin/cargo test -p flow-like-runtime --no-default-features --features flow-metadata profile::tests::explicit_run_selection
+tools/cargo-queue/bin/cargo test -p flow-like-editor --features flow-runtime explicit_model_selection
+tools/cargo-queue/bin/cargo test -p flow-like-model-provider --no-default-features llm::claude_code::tests
+tools/cargo-queue/bin/cargo test -p flow-like-desktop --bin flow-like-desktop functions::ai::copilot::global_chat::bot_chat::tests::flowpilot_model_
+```
+
 ## Isolated FlowScript draft tests
 
 `test_flowscript` checks a retained source revision, applies its exact compiler commands to a

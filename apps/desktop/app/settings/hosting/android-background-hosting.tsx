@@ -99,7 +99,10 @@ export function AndroidBackgroundHosting() {
 		>
 			<div className="flex items-start justify-between gap-4">
 				<div className="space-y-1">
-					<h2 id="android-background-hosting-title" className="font-medium">
+					<h2
+						id="android-background-hosting-title"
+						className="text-base font-medium leading-snug"
+					>
 						{t(
 							"androidBackgroundHostingTitle",
 							"Keep bots and Events active in the background",

@@ -153,6 +153,7 @@ function readPersistedOverlayAutoOpenDismissed() {
  * fallback can never overwrite the remembered choice. */
 export const AGENT_PROVIDER_KEY = "flowpilot.hero.provider";
 export const AGENT_MODEL_KEY = "flowpilot.hero.model";
+export const AGENT_MODEL_PROVIDER_KEY = "flowpilot.hero.model-provider";
 export const AGENT_REASONING_KEY = "flowpilot.hero.reasoning-effort";
 export const AGENT_EMBEDDING_MODEL_KEY = "flowpilot.memory.embedding-model";
 
@@ -1104,11 +1105,27 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 	setSelectedModelId: (selectedModelId) => set({ selectedModelId }),
 	setReasoningEffort: (reasoningEffort) => set({ reasoningEffort }),
 	selectProvider: (provider) => {
+		// Bind legacy model preferences before changing their saved provider.
+		try {
+			if (
+				localStorage.getItem(AGENT_MODEL_KEY) &&
+				!localStorage.getItem(AGENT_MODEL_PROVIDER_KEY)
+			) {
+				persistAgentPref(
+					AGENT_MODEL_PROVIDER_KEY,
+					localStorage.getItem(AGENT_PROVIDER_KEY) ?? get().provider,
+				);
+			}
+		} catch {}
 		persistAgentPref(AGENT_PROVIDER_KEY, provider);
-		set({ provider });
+		set({
+			provider,
+			...(provider !== get().provider && { selectedModelId: "" }),
+		});
 	},
 	selectModel: (selectedModelId) => {
 		persistAgentPref(AGENT_MODEL_KEY, selectedModelId);
+		persistAgentPref(AGENT_MODEL_PROVIDER_KEY, get().provider);
 		set({ selectedModelId });
 	},
 	selectReasoningEffort: (reasoningEffort) => {

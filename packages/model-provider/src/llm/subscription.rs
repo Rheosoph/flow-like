@@ -1,5 +1,6 @@
 //! Subscription-backed model adapters. Authentication never starts an interactive login.
 
+mod codex;
 mod microsoft;
 
 use super::{ModelConstructor, ModelLogic, responses_tools::NonStrictToolsClient};
@@ -161,11 +162,11 @@ fn rig_http_client() -> Result<reqwest_rig::Client> {
 
 fn codex_client_builder(
     provider: &ModelProvider,
-) -> Result<chatgpt::ClientBuilder<reqwest_rig::Client>> {
+) -> Result<chatgpt::ClientBuilder<codex::CodexHttpClient>> {
     Ok(chatgpt::Client::builder()
         .api_key(codex_auth(provider)?)
         .originator("flow-like")
-        .http_client(rig_http_client()?))
+        .http_client(codex::CodexHttpClient(rig_http_client()?)))
 }
 
 async fn github_auth(provider: &ModelProvider) -> Result<(String, String)> {
@@ -266,7 +267,7 @@ async fn check_github_model(provider: &ModelProvider) -> Result<()> {
 }
 
 enum Client {
-    Codex(chatgpt::Client),
+    Codex(chatgpt::Client<codex::CodexHttpClient>),
     GitHub(copilot::Client),
 }
 

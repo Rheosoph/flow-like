@@ -3,7 +3,7 @@
 use super::board_commits::{
     ApplyFlowIrCommitResult, FlowIrCommitDisposition, RecoveredBoardEditBatch,
     flow_ir_durable_receipt_ref_key, flowpilot_apply_flow_ir_commit_with_recovery,
-    flowpilot_flow_ir_commit_disposition, replay_flow_ir_applied_receipt,
+    flowpilot_flow_ir_commit_disposition, open_board_for_commit, replay_flow_ir_applied_receipt,
     replay_flow_ir_applied_receipt_from_board, retain_flow_ir_applied_receipt,
     typed_commit_destructive_review_items,
 };
@@ -673,12 +673,10 @@ pub async fn flowpilot_create_board_edit_job(
     let app = App::load(app_id.clone(), flow_like_state.clone())
         .await
         .map_err(|error| format!("The review app could not be loaded: {error}"))?;
-    if !app.boards.contains(&token.board_id) {
+    if app.id != app_id || !app.boards.contains(&token.board_id) {
         return Err("The review board does not belong to the requested app.".to_string());
     }
-    let live_board = flow_like_state
-        .get_board(&token.board_id, None)
-        .map_err(|_| "The review board is not open in this desktop process.".to_string())?;
+    let live_board = open_board_for_commit(&app, &token.board_id).await?;
     let board = live_board.write().await;
     let (commands, replacement_mode) = store
         .pending_commit_payload_if_current(

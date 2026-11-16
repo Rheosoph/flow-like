@@ -4,12 +4,12 @@ import "./page-bot-helpers.css";
 
 /** The crew from the bots showcase: Flux, Byte, Post, Scout and Loop. */
 const helpers = {
-	hero: { kind: "flux", tool: "wrench" },
-	apps: { kind: "chip", tool: "cable" },
-	platform: { kind: "mochi", tool: "driver" },
-	control: { kind: "pip", tool: "inspect" },
-	book: { kind: "orbi", tool: "pencil" },
-} as const satisfies Record<string, Pick<BotFrame, "kind" | "tool">>;
+	hero: { kind: "flux", activity: "build" },
+	apps: { kind: "chip", activity: "juggle" },
+	platform: { kind: "mochi", activity: "plane" },
+	control: { kind: "pip", activity: "scout" },
+	book: { kind: "orbi", activity: "read" },
+} as const satisfies Record<string, Pick<BotFrame, "kind" | "activity">>;
 
 type HelperName = keyof typeof helpers;
 interface Anchor {
@@ -366,7 +366,7 @@ export default function PageBotHelpers() {
 					width: anchor.width,
 					height: anchor.height,
 					kind: helper.kind,
-					tool: helper.tool,
+					activity: helper.activity,
 					walk: anchor.walk,
 					work: anchor.work,
 					reach: anchor.reach,

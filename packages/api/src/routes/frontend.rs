@@ -10,7 +10,7 @@ use axum::{
     Json, Router,
     extract::{Path, Query, RawQuery, State},
     http::{HeaderMap, header},
-    response::{IntoResponse, Redirect, Response},
+    response::{Html, IntoResponse, Response},
     routing::{delete, get, post},
 };
 use flow_like::{
@@ -53,6 +53,9 @@ use crate::{
     utils::event_alias,
 };
 
+mod document;
+mod metadata;
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FrontendHosting {
@@ -82,6 +85,12 @@ struct RouteQuery {
     route: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct DocumentQuery {
+    app: String,
+    route: Option<String>,
+}
+
 impl RouteQuery {
     fn path(&self) -> String {
         normalize_route_path(self.route.as_deref().unwrap_or("/"))
@@ -99,7 +108,41 @@ struct FrontendResponse {
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route(
+            "/document",
+            get(
+                |State(state): State<AppState>, Query(query): Query<DocumentQuery>| async move {
+                    document::document(state, query.app, query.route.as_deref().unwrap_or("/")).await
+                },
+            ),
+        )
+        .route(
+            "/document/{app_id}",
+            get(
+                |State(state): State<AppState>, Path(app_id): Path<String>| async move {
+                    document::document(state, app_id, "/").await
+                },
+            ),
+        )
+        .route(
+            "/document/{app_id}/",
+            get(
+                |State(state): State<AppState>, Path(app_id): Path<String>| async move {
+                    document::document(state, app_id, "/").await
+                },
+            ),
+        )
+        .route(
+            "/document/{app_id}/{*route}",
+            get(
+                |State(state): State<AppState>,
+                 Path((app_id, route)): Path<(String, String)>| async move {
+                    document::document(state, app_id, &route).await
+                },
+            ),
+        )
         .route("/a/{app_id}", get(bootstrap))
+        .route("/a/{app_id}/metadata", get(metadata::get))
         .route("/a/{app_id}/invoke", post(invoke))
         .route("/a/{app_id}/runs/{run_id}", delete(cancel))
         .route("/a/{app_id}/prerun", get(prerun).post(prerun_page))
@@ -112,6 +155,16 @@ pub fn link_routes() -> Router<AppState> {
     Router::new()
         .route(
             "/a/{app_id}",
+            get(
+                |State(state): State<AppState>,
+                 Path(app_id): Path<String>,
+                 RawQuery(query): RawQuery| async move {
+                    frontend_link(state, app_id, "/", query).await
+                },
+            ),
+        )
+        .route(
+            "/a/{app_id}/",
             get(
                 |State(state): State<AppState>,
                  Path(app_id): Path<String>,
@@ -185,14 +238,19 @@ async fn frontend_link(
     query: Option<String>,
 ) -> Result<Response, ApiError> {
     let route = normalize_route_path(route);
-    load_route(&state, &app_id, &route).await?;
+    let metadata = metadata::load(&state, &app_id, &route).await?;
     let hosted_base = std::env::var("FRONTEND_BASE_URL").ok();
     let web_base = std::env::var("FRONTEND_URL").ok();
     let base = frontend_base_url(hosted_base.as_deref(), web_base.as_deref())?;
     let location = frontend_location(base, &app_id, &route, query.as_deref())?;
+    let canonical = frontend_location(base, &app_id, &route, None)?;
     Ok((
-        [(header::CACHE_CONTROL, "no-store")],
-        Redirect::temporary(&location),
+        [
+            (header::CACHE_CONTROL, "no-store"),
+            (header::REFERRER_POLICY, "no-referrer"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        Html(document::render_redirect(&metadata, &location, &canonical)),
     )
         .into_response())
 }

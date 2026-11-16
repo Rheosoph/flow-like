@@ -32,7 +32,6 @@
 		kbd,
 		samp,
 		figure,
-		button,
 		input,
 		.slate-p,
 		.slate-hr,
@@ -67,6 +66,13 @@
 	outline-offset: revert-layer;
 	scrollbar-width: revert-layer;
 	scrollbar-color: revert-layer;
+}
+
+/* Buttons only need the chat focus outline reset. Reverting their padding makes
+   WebKit discard Tailwind's logical padding, leaving labels against the edges. */
+[data-fl-renderer] [data-fl-a2ui-surface][data-fl-a2ui-surface] button {
+	outline: revert-layer;
+	outline-offset: revert-layer;
 }
 
 [data-fl-a2ui-fence] [data-slot="a2ui-fence-actions"] {

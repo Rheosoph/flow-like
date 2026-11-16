@@ -33,6 +33,8 @@ spec:
           env:
             - name: FLOW_LIKE_WEB_API_URL
               value: {{ default .Values.api.publicUrl .Values.web.runtimeConfig.apiUrl | quote }}
+            - name: FLOW_LIKE_WEB_HOSTED_API_URL
+              value: {{ if .Values.web.hostedApiUrl }}{{ .Values.web.hostedApiUrl | quote }}{{ else if .Values.api.enabled }}{{ printf "http://%s-api:%d" (include "flow-like.fullname" .) (int .Values.api.service.port) | quote }}{{ else }}{{ default .Values.api.publicUrl .Values.web.runtimeConfig.apiUrl | quote }}{{ end }}
             - name: FLOW_LIKE_WEB_REDIRECT_URL
               value: {{ .Values.web.runtimeConfig.redirectUrl | quote }}
             - name: FLOW_LIKE_WEB_LOGOUT_URL

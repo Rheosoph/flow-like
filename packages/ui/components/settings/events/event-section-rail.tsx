@@ -75,9 +75,19 @@ export function EventSectionRail({
 	useEffect(() => {
 		const nav = navRef.current;
 		if (!nav || nav.scrollWidth <= nav.clientWidth) return;
-		nav
-			.querySelector(`[data-section="${active}"]`)
-			?.scrollIntoView({ block: "nearest", inline: "center" });
+		const section = nav.querySelector<HTMLElement>(
+			`[data-section="${active}"]`,
+		);
+		if (!section) return;
+		const railBounds = nav.getBoundingClientRect();
+		const sectionBounds = section.getBoundingClientRect();
+		// scrollIntoView also scrolls the app's clipped ancestors. Move only the
+		// chip strip so selecting a section cannot shift the page or its shell.
+		nav.scrollLeft +=
+			sectionBounds.left -
+			railBounds.left -
+			nav.clientLeft -
+			(nav.clientWidth - sectionBounds.width) / 2;
 	}, [active]);
 
 	return (

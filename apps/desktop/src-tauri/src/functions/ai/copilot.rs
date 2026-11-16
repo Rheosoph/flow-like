@@ -115,7 +115,6 @@ pub use backend_types::{
     CopilotAuthStatus, CopilotModelInfo, FlowPilotAgentBackendKind, FlowPilotAgentCapabilitySet,
     FlowPilotAgentTransportKind, FlowPilotBackendStatus, ReasoningEffortOption,
 };
-pub(crate) use board_commits::persisted_board_graph_fingerprint;
 pub use board_commits::{
     __cmd__flowpilot_apply_flow_ir_commit, __cmd__flowpilot_flow_ir_commit_disposition,
     __cmd__flowpilot_read_flow_ir_commit_board,
@@ -125,6 +124,7 @@ pub use board_commits::{
     FlowIrCommitDisposition, FlowIrCommitDispositionResult, flowpilot_apply_flow_ir_commit,
     flowpilot_flow_ir_commit_disposition, flowpilot_read_flow_ir_commit_board,
 };
+pub(crate) use board_commits::{open_board_for_commit, persisted_board_graph_fingerprint};
 pub(crate) use board_jobs::ensure_board_mutation_not_reserved_by_flowpilot;
 pub use board_jobs::{
     __cmd__flowpilot_ack_board_edit_job_delivery, __cmd__flowpilot_claim_board_edit_job_delivery,

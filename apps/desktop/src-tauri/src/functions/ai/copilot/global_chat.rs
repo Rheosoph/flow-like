@@ -62,6 +62,42 @@ pub(super) const GLOBAL_CHAT_RUN_MAX_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 
 pub(super) const GLOBAL_CHAT_RUN_MAX_CHUNKS: usize = 8_192;
 
+struct RootModelAnnouncement {
+    run_id: Option<String>,
+    announced: std::sync::atomic::AtomicBool,
+}
+
+impl RootModelAnnouncement {
+    fn new(run_id: Option<String>) -> Self {
+        Self {
+            run_id,
+            announced: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    fn from_resolution(&self, frame: &str) -> Option<String> {
+        let run_id = self.run_id.as_deref()?;
+        let body = frame
+            .strip_prefix("<model_resolved>")?
+            .strip_suffix("</model_resolved>")?;
+        let identity: serde_json::Value = serde_json::from_str(body).ok()?;
+        let bit_id = identity["bit_id"]
+            .as_str()
+            .filter(|id| !id.trim().is_empty())?;
+        // The root resolves before any delegated model. Later specialist frames must not replace it.
+        if self
+            .announced
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            return None;
+        }
+        Some(
+            crate::functions::ai::native_tool_bridge::run_model_announcement(run_id, bit_id)
+                .to_string(),
+        )
+    }
+}
+
 #[derive(Default)]
 pub(super) struct GlobalChatRunBuffer {
     pub(super) chunks: Vec<String>,
@@ -868,10 +904,10 @@ pub async fn global_chat_native(
         .as_ref()
         .and_then(|bot| bot.admit_workspace(run_id.as_deref().expect("native run id")));
     // A capabilities bot always runs on the Bits path, on the model its policy and this desktop
-    // allow. Flux runs on its own model when it has a runnable one, else on the chat's selection.
+    // allow. Flux uses its configured primary/fallback list, or the chat selection when unset.
     let bot_model = match (&bot, &profile) {
-        (Some(bot), Some(profile)) if bot.runs_flowpilot() => {
-            bot_chat::own_model(&model_state, profile, bot).await
+        (Some(bot), profile) if bot.runs_flowpilot() => {
+            bot_chat::flowpilot_model(&model_state, profile.as_deref(), bot).await?
         }
         (Some(bot), Some(profile)) => Some(
             bot_chat::bot_model(
@@ -1300,8 +1336,12 @@ pub async fn global_chat_native(
                         .unwrap_or_default(),
                 );
                 let token_timing = call_timing.clone();
+                let model_announcement = RootModelAnnouncement::new(run_id.clone());
                 let on_token = move |token: String| {
                     token_timing.first_token(call_started);
+                    if let Some(announcement) = model_announcement.from_resolution(&token) {
+                        let _ = sink.send(announcement);
+                    }
                     if let Some(reply) = &reply_stream {
                         reply.push(&token);
                     }
@@ -1474,6 +1514,48 @@ pub async fn global_chat_delete_memory(
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+
+    #[test]
+    fn explicit_model_selection_announces_resolved_root_bit_once() {
+        let announcement = RootModelAnnouncement::new(Some("run-1".into()));
+        for frame in [
+            "ordinary text",
+            "<model_resolved>invalid</model_resolved>",
+            "<model_resolved>{\"bit_id\":\"\"}</model_resolved>",
+        ] {
+            assert!(announcement.from_resolution(frame).is_none());
+        }
+        let resolved = |bit_id: &str| {
+            flow_like::flow::copilot::stream::stream_frame(
+                "model_resolved",
+                &serde_json::json!({
+                    "bit_id": bit_id,
+                    "provider_name": "custom:claude-code",
+                    "configured_model_id": "opus",
+                    "model_id": "opus",
+                }),
+            )
+        };
+        let frame = announcement
+            .from_resolution(&resolved("actual-bit"))
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&frame).unwrap(),
+            serde_json::json!({
+                "type": "native_run_model", "run_id": "run-1", "model_id": "actual-bit",
+            }),
+        );
+        assert!(
+            announcement
+                .from_resolution(&resolved("nested-bit"))
+                .is_none()
+        );
+        assert!(
+            RootModelAnnouncement::new(None)
+                .from_resolution(&resolved("actual-bit"))
+                .is_none()
+        );
+    }
 
     // Inspect the concrete async return type without constructing a Tauri app or polling it.
     macro_rules! future_size {

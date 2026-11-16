@@ -1,3 +1,4 @@
+use super::super::backend_types::CopilotModelInfo;
 use super::*;
 
 #[test]
@@ -271,6 +272,8 @@ fn parse_codex_model_catalog_maps_and_filters() {
         serde_json::json!({
             "id": "gpt-5.5",
             "displayName": "GPT-5.5",
+            "description": " Runtime model description ",
+            "inputModalities": ["text", "image"],
             "hidden": false,
             "isDefault": true,
             "supportedReasoningEfforts": [
@@ -295,6 +298,12 @@ fn parse_codex_model_catalog_maps_and_filters() {
     assert_eq!(models.len(), 2, "hidden and id-less entries are dropped");
     assert_eq!(models[0].id, "gpt-5.5");
     assert_eq!(models[0].name, "GPT-5.5");
+    assert_eq!(
+        models[0].description.as_deref(),
+        Some("Runtime model description")
+    );
+    assert_eq!(models[0].supports_vision, Some(true));
+    assert_eq!(models[0].context_window, None);
     assert!(models[0].is_default);
     assert_eq!(models[0].default_reasoning_effort.as_deref(), Some("low"));
     assert_eq!(
@@ -313,6 +322,8 @@ fn parse_codex_model_catalog_maps_and_filters() {
         ]
     );
     assert_eq!(models[1].id, "gpt-5.4-mini");
+    assert_eq!(models[1].description, None);
+    assert_eq!(models[1].supports_vision, None);
     assert_eq!(
         models[1].name, "gpt-5.4-mini",
         "displayName falls back to the model id"
@@ -322,10 +333,16 @@ fn parse_codex_model_catalog_maps_and_filters() {
     assert!(serialized.get("supportedReasoningEfforts").is_some());
     assert_eq!(serialized["defaultReasoningEffort"], "low");
     assert_eq!(serialized["isDefault"], true);
+    assert_eq!(serialized["description"], "Runtime model description");
+    assert_eq!(serialized["supportsVision"], true);
+    assert!(serialized.get("contextWindow").is_none());
     assert!(serialized.get("supported_reasoning_efforts").is_none());
 
     let with_default = codex_models_with_configured_default(models);
     assert_eq!(with_default[0].id, "default");
+    assert_eq!(with_default[0].description, with_default[1].description);
+    assert_eq!(with_default[0].supports_vision, Some(true));
+    assert_eq!(with_default[0].context_window, None);
     assert_eq!(
         with_default[0].default_reasoning_effort.as_deref(),
         Some("low")
@@ -349,6 +366,7 @@ fn parse_claude_model_catalog_maps_and_dedupes() {
         serde_json::json!({
             "value": "sonnet",
             "displayName": "Sonnet",
+            "description": " Balanced runtime option ",
             "supportsEffort": true,
             "supportedEffortLevels": ["low", "high"]
         }),
@@ -381,6 +399,12 @@ fn parse_claude_model_catalog_maps_and_dedupes() {
     );
     assert_eq!(models[1].id, "sonnet");
     assert_eq!(
+        models[1].description.as_deref(),
+        Some("Balanced runtime option")
+    );
+    assert_eq!(models[1].context_window, None);
+    assert_eq!(models[1].supports_vision, None);
+    assert_eq!(
         models[1]
             .supported_reasoning_efforts
             .iter()
@@ -396,10 +420,56 @@ fn parse_claude_model_catalog_maps_and_dedupes() {
         models[2].name, "claude-fable-5[1m]",
         "displayName falls back to the value"
     );
+    assert_eq!(
+        models[2].context_window, None,
+        "a model suffix is not a reported limit"
+    );
     assert!(
         models[2].supported_reasoning_efforts.is_empty(),
         "supportsEffort=false must suppress stale level metadata"
     );
+}
+
+#[test]
+fn model_catalog_metadata_requires_explicit_valid_runtime_values() {
+    for parse in [
+        parse_codex_model_catalog as fn(&[serde_json::Value]) -> Vec<CopilotModelInfo>,
+        parse_claude_model_catalog,
+    ] {
+        let entries = vec![
+            serde_json::json!({
+                "id": "reported", "value": "reported",
+                "contextWindow": 24576, "supportsVision": false,
+                "inputModalities": ["text", "image"]
+            }),
+            serde_json::json!({
+                "id": "text-only", "value": "text-only",
+                "inputModalities": ["text"], "contextWindow": 0
+            }),
+            serde_json::json!({
+                "id": "invalid", "value": "invalid",
+                "description": " ", "contextWindow": -1,
+                "supportsVision": "true", "inputModalities": ["text", 7]
+            }),
+            serde_json::json!({
+                "id": "not-a-number", "value": "not-a-number",
+                "contextWindow": "24576"
+            }),
+        ];
+        let models = parse(&entries);
+        assert_eq!(models[0].context_window, Some(24576));
+        assert_eq!(models[0].supports_vision, Some(false));
+        let serialized = serde_json::to_value(&models[0]).unwrap();
+        assert_eq!(serialized["contextWindow"], 24576);
+        assert_eq!(serialized["supportsVision"], false);
+        assert_eq!(models[1].supports_vision, Some(false));
+        for model in &models[1..] {
+            assert_eq!(model.context_window, None);
+        }
+        assert_eq!(models[2].description, None);
+        assert_eq!(models[2].supports_vision, None);
+        assert_eq!(models[3].supports_vision, None);
+    }
 }
 
 #[test]

@@ -11,10 +11,7 @@ import {
 	useInvoke,
 } from "../../../index";
 import { isTauri } from "../../../lib/platform";
-import {
-	AGENT_MODEL_KEY,
-	useGlobalChatStore,
-} from "../../../state/global-chat/global-chat-store";
+import { useGlobalChatStore } from "../../../state/global-chat/global-chat-store";
 import type {
 	AgentBackendProvider,
 	NormalizedAIProvider,
@@ -24,7 +21,10 @@ import {
 	normalizeAIProvider,
 } from "../../flowpilot/types";
 import { isValidReasoningEffort } from "../../thinking/thinking-options";
-import { resolveModelSelection } from "../model-selection";
+import {
+	rememberedModelForProvider,
+	resolveModelSelection,
+} from "../model-selection";
 import { useHydrateAgentSelection } from "../use-agent-persistence";
 
 export interface AgentReasoningEffortOption {
@@ -175,20 +175,19 @@ export function useAgentSelection() {
 		}));
 	}, [isAgent, copilotSDK.models, bitsModels]);
 
-	// Keep a usable model selected as the catalog loads/changes — but prefer the
-	// user's remembered pick the moment the catalog that offers it appears, so a
-	// transient/fallback list can't strand them on the wrong model (and, because
-	// this uses the raw setter, it never rewrites the remembered value).
+	// Remembered Bits stay selected through partial local responses and remote
+	// refreshes. Automatic defaults never rewrite the user's saved choice.
 	useEffect(() => {
-		let remembered: string | null = null;
-		try {
-			remembered = localStorage.getItem(AGENT_MODEL_KEY);
-		} catch {}
+		// The custom library loads separately. Its absence from a partial catalog
+		// does not invalidate a selection made in another chat surface.
+		if (!isAgent && (!llmBits.isSuccess || !customBits.isSuccess)) return;
+		const remembered = rememberedModelForProvider(normalizedProvider);
 		const nextModelId = resolveModelSelection({
 			models,
 			selectedModelId,
 			rememberedModelId: remembered,
 			canReplaceInvalidSelection: !isAgent || copilotSDK.hasLoadedModelCatalog,
+			preserveRememberedModel: !isAgent,
 		});
 		if (nextModelId !== null) setSelectedModelId(nextModelId);
 	}, [
@@ -196,7 +195,10 @@ export function useAgentSelection() {
 		selectedModelId,
 		setSelectedModelId,
 		isAgent,
+		normalizedProvider,
 		copilotSDK.hasLoadedModelCatalog,
+		llmBits.isSuccess,
+		customBits.isSuccess,
 	]);
 
 	const selectedModel = models.find((model) => model.id === selectedModelId);

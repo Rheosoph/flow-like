@@ -962,6 +962,60 @@ pub(super) async fn own_model(
     .await
 }
 
+/// Flux inherits the chat's selection only when it has no configured model. Its explicit primary
+/// and fallback list bound the alternatives that may answer a run.
+pub(super) async fn flowpilot_model(
+    state: &Arc<FlowLikeState>,
+    profile: Option<&Profile>,
+    bot: &DesktopBot,
+) -> Result<Option<String>, String> {
+    let candidates = {
+        let mut candidates = Vec::new();
+        let mut seen = BTreeSet::new();
+        for model_id in bot.model.primary.iter().chain(&bot.model.fallbacks) {
+            let model_id = model_id.trim().to_owned();
+            if !model_id.is_empty() && seen.insert(model_id.clone()) {
+                candidates.push(model_id);
+            }
+        }
+        candidates
+    };
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    let profile = profile.ok_or_else(|| {
+        format!(
+            "Bot '{}' cannot resolve its configured model because its profile is unavailable. Reload the profile and try again.",
+            bot.context.name
+        )
+    })?;
+    let capabilities = FlowLikeState::completion_model_capabilities(state).await;
+    let devices = state
+        .device_model_probe(flow_like::models::device::Interaction::Allowed { run_label: None });
+    let mut first_error = None;
+    for model_id in candidates {
+        match profile
+            .resolve_explicit_completion_model(
+                &model_id,
+                capabilities,
+                devices.as_ref(),
+                state.http_client.clone(),
+            )
+            .await
+        {
+            Ok(bit) => return Ok(Some(bit.id)),
+            Err(error) => {
+                first_error.get_or_insert_with(|| error.to_string());
+            }
+        }
+    }
+    Err(format!(
+        "Bot '{}' cannot use its configured models: {}",
+        bot.context.name,
+        first_error.expect("at least one configured model was checked")
+    ))
+}
+
 /// The model a capabilities bot runs on here: its own, else the chat's Bits model, else the
 /// profile's best runnable language model.
 pub(super) async fn bot_model(
@@ -1054,6 +1108,107 @@ mod tests {
 
     fn record(value: serde_json::Value) -> BotRecord {
         serde_json::from_value(value).unwrap()
+    }
+
+    fn flowpilot_model_fixture() -> (Arc<FlowLikeState>, Profile, DesktopBot) {
+        use flow_like::flow_like_model_provider::provider::ModelProvider;
+        use flow_like::{
+            bit::{Bit, BitTypes, LLMParameters},
+            flow::execution::ExecutionEnvironment,
+            profile::ProfileCustomBit,
+            state::FlowLikeConfig,
+            utils::http::HTTPClient,
+        };
+
+        let model = |id: &str, provider_name: &str| Bit {
+            id: id.into(),
+            bit_type: BitTypes::Llm,
+            parameters: serde_json::to_value(LLMParameters {
+                context_length: 20_000,
+                model_classification: Default::default(),
+                data_classification: None,
+                provider: ModelProvider {
+                    provider_name: provider_name.into(),
+                    model_id: Some(id.into()),
+                    version: None,
+                    api_surface: None,
+                    params: None,
+                },
+            })
+            .unwrap(),
+            ..Default::default()
+        };
+        let mut claude = model("chosen-claude", "custom:claude-code");
+        claude.parameters["provider"]["params"] = json!({
+            "executable": std::env::temp_dir(),
+        });
+        let profile = Profile {
+            bits: vec!["chosen-claude".into(), "custom-qwen".into()],
+            custom_bits: vec![
+                ProfileCustomBit(claude),
+                ProfileCustomBit(model("custom-qwen", "custom:openai")),
+            ],
+            ..Default::default()
+        };
+        let mut state =
+            FlowLikeState::new(FlowLikeConfig::new(), HTTPClient::new_without_refetch());
+        state.execution_environment = ExecutionEnvironment::Desktop;
+        let bot = desktop_bot(
+            record(json!({
+                "id": "bot_flux",
+                "system": "flux",
+                "model": { "primary": "chosen-claude", "fallbacks": [] }
+            })),
+            Vec::new(),
+            BTreeSet::new(),
+            BotToolHost::Chat,
+        );
+        (Arc::new(state), profile, bot)
+    }
+
+    #[tokio::test]
+    async fn flowpilot_model_does_not_replace_configured_claude_with_another_profile_bit() {
+        let (state, profile, bot) = flowpilot_model_fixture();
+        assert!(bot.runs_flowpilot());
+
+        let error = flowpilot_model(&state, Some(&profile), &bot)
+            .await
+            .unwrap_err();
+
+        assert!(error.contains("chosen-claude"), "{error}");
+        assert!(error.contains("Claude Code executable"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn flowpilot_model_uses_only_a_configured_fallback_when_claude_is_unavailable() {
+        let (state, profile, mut bot) = flowpilot_model_fixture();
+        bot.model.primary = Some(" chosen-claude ".into());
+        bot.model.fallbacks = vec!["chosen-claude".into(), " ".into(), " custom-qwen ".into()];
+
+        let selected = flowpilot_model(&state, Some(&profile), &bot).await.unwrap();
+
+        assert_eq!(selected.as_deref(), Some("custom-qwen"));
+    }
+
+    #[tokio::test]
+    async fn flowpilot_model_inherits_the_chat_selection_only_when_unconfigured() {
+        let (state, profile, mut bot) = flowpilot_model_fixture();
+        bot.model = BotModelPolicy::default();
+
+        assert_eq!(
+            flowpilot_model(&state, Some(&profile), &bot).await,
+            Ok(None)
+        );
+        assert_eq!(flowpilot_model(&state, None, &bot).await, Ok(None));
+    }
+
+    #[tokio::test]
+    async fn flowpilot_model_requires_a_profile_for_its_configured_selection() {
+        let (state, _, bot) = flowpilot_model_fixture();
+
+        let error = flowpilot_model(&state, None, &bot).await.unwrap_err();
+
+        assert!(error.contains("profile is unavailable"), "{error}");
     }
 
     #[test]

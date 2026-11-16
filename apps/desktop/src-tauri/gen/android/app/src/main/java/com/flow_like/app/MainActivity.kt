@@ -5,12 +5,9 @@ import android.content.res.Configuration
 import android.os.Bundle
 import android.provider.Settings
 import android.text.format.Formatter
-import android.view.Gravity
 import android.view.View
 import android.widget.Button
-import android.widget.LinearLayout
 import android.widget.ProgressBar
-import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
@@ -31,6 +28,7 @@ import com.google.android.play.core.splitinstall.model.SplitInstallSessionStatus
 /** The exported launcher stays usable before any Rust code is installed. */
 class MainActivity : AppCompatActivity() {
     private lateinit var manager: SplitInstallManager
+    private lateinit var setup: NativeSetupView
     private lateinit var message: TextView
     private lateinit var detail: TextView
     private lateinit var progress: ProgressBar
@@ -91,6 +89,7 @@ class MainActivity : AppCompatActivity() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         updateSystemBars(newConfig)
+        setup.applyPalette()
     }
 
     private fun updateSystemBars(configuration: Configuration) {
@@ -115,48 +114,24 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun createContent() {
-        val density = resources.displayMetrics.density
-        fun dp(value: Int) = (value * density).toInt()
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(28), dp(32), dp(28), dp(32))
-        }
-        content.addView(TextView(this).apply { text = "Set up Flow-Like"; textSize = 28f })
-        content.addView(TextView(this).apply {
-            text = "Download the tools for bots, Events, and editing. They stay on this device for offline use after setup."
-            textSize = 16f
-            setPadding(0, dp(16), 0, dp(28))
-        })
-        message = TextView(this).apply { text = "Checking installed tools…"; textSize = 18f }
-        content.addView(message)
-        progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100; isIndeterminate = true }
-        content.addView(progress, LinearLayout.LayoutParams(-1, dp(24)))
-        detail = TextView(this).apply {
-            setPadding(0, dp(8), 0, dp(20))
-            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
-        }
-        content.addView(detail)
-        primary = Button(this).apply { visibility = View.GONE }
-        secondary = Button(this).apply { text = "Close"; setOnClickListener { finish() } }
-        storage = Button(this).apply {
-            text = "Manage storage"
-            visibility = View.GONE
+        setup = NativeSetupView(this)
+        message = setup.message
+        detail = setup.detail
+        progress = setup.progress
+        primary = setup.primary
+        secondary = setup.secondary.apply { setOnClickListener { finish() } }
+        storage = setup.storage.apply {
             setOnClickListener {
                 try { startActivity(Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS)) }
                 catch (_: Exception) { detail.text = "Open Android Settings to free up storage, then retry the download." }
             }
         }
-        content.addView(primary)
-        content.addView(storage)
-        content.addView(secondary)
-        val scroll = ScrollView(this).apply { isFillViewport = true; addView(content) }
-        ViewCompat.setOnApplyWindowInsetsListener(scroll) { view, insets ->
+        ViewCompat.setOnApplyWindowInsetsListener(setup) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
             insets
         }
-        setContentView(scroll)
+        setContentView(setup)
     }
 
     private fun refresh() {
@@ -220,15 +195,16 @@ class MainActivity : AppCompatActivity() {
             NativeInstallPhase.DOWNLOADING -> {
                 val total = state.totalBytesToDownload()
                 val downloaded = state.bytesDownloaded()
-                showWorking("Downloading tools…", if (total > 0)
-                    "${Formatter.formatFileSize(this, downloaded)} of ${Formatter.formatFileSize(this, total)}"
-                    else Formatter.formatFileSize(this, downloaded))
                 val percent = NativeInstallPolicy.progress(downloaded, total)
-                progress.isIndeterminate = percent == null
-                if (percent != null) progress.progress = percent
+                val amount = if (total > 0)
+                    "${Formatter.formatFileSize(this, downloaded)} of ${Formatter.formatFileSize(this, total)}"
+                    else Formatter.formatFileSize(this, downloaded)
+                showWorking(if (percent == 100) "Download complete" else "Downloading tools…",
+                    if (percent == 100) "$amount\nWaiting for Google Play to begin installation." else amount,
+                    percent = percent)
             }
             NativeInstallPhase.INSTALLING -> {
-                showWorking("Installing tools…", "Android is preparing Flow-Like. This can take a few minutes.")
+                showWorking("Installing tools…", "Android is preparing Flow-Like. This can take a few minutes.", stage = 1)
                 secondary.visibility = View.GONE
             }
             NativeInstallPhase.INSTALLED -> {
@@ -269,11 +245,13 @@ class MainActivity : AppCompatActivity() {
             .addOnFailureListener(this) { showPlayError(it) }
     }
 
-    private fun showWorking(title: String, description: String) {
-        message.text = title
+    private fun showWorking(title: String, description: String, stage: Int = 0, percent: Int? = null) {
+        if (message.text.toString() != title) message.text = title
+        detail.accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_NONE
         detail.text = description
         progress.visibility = View.VISIBLE
-        progress.isIndeterminate = true
+        setup.showStage(stage)
+        setup.showProgress(percent)
         primary.visibility = View.GONE
         storage.visibility = View.GONE
         secondary.visibility = View.VISIBLE
@@ -287,7 +265,10 @@ class MainActivity : AppCompatActivity() {
     private fun showError(description: String, action: String = "Retry") {
         autoRequest = false
         message.text = "Finish setting up Flow-Like"
+        detail.accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         detail.text = description
+        setup.showStage(null)
+        setup.showProgress(null)
         progress.visibility = View.GONE
         primary.visibility = View.VISIBLE
         primary.isEnabled = true
@@ -321,7 +302,7 @@ class MainActivity : AppCompatActivity() {
     private fun openRuntime() {
         if (loading || forwarded) return
         loading = true
-        showWorking("Opening Flow-Like…", "Preparing the tools on this device.")
+        showWorking("Opening Flow-Like…", "Preparing the tools on this device.", stage = 2)
         secondary.visibility = View.GONE
         Thread({
             val error = try {
