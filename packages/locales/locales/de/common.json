@@ -1853,6 +1853,8 @@
 	"modelActionsFor": "Weitere Aktionen für {{name}}",
 	"modelCategory": "Musterkategorie",
 	"modelClassification": "Modellklassifikation",
+	"modelDataClassification": "Sensibelste Daten, die das Modell verarbeiten darf",
+	"modelDataClassificationHint": "Vorerst nur eine Markierung. Das ändert nichts daran, welches Modell verwendet wird.",
 	"modelExploreOperateAndShareProjectData": "Modelliere, erkunde, betreibe und teile Projektdaten",
 	"modelId": "Modell ID",
 	"modelIdentity": "Modellidentität",

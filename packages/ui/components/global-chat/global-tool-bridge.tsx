@@ -1505,6 +1505,10 @@ function promptForDialog(
 			request.context?.appId ||
 			request.context?.app_id ||
 			undefined,
+		eventId:
+			argString(request.arguments, "event_id") ||
+			argString(request.arguments, "eventId") ||
+			undefined,
 		respond: bound,
 	};
 }

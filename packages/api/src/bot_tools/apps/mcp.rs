@@ -1,4 +1,5 @@
 use flow_like::flow::event::Event;
+use flow_like_types::app_chat::{ChatFold, take_chat_events};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, json};
 
@@ -80,16 +81,26 @@ fn inventory(app_id: &str, event_id: &str, result: Value) -> Result<Value, Strin
     }))
 }
 
-fn call_outcome(app_id: &str, event_id: &str, tool: &str, result: Value) -> Value {
+fn call_outcome(app_id: &str, event_id: &str, tool: &str, mut result: Value) -> Value {
+    let pushed = take_chat_events(&mut result);
     let failed = result.get("isError").and_then(Value::as_bool) == Some(true);
-    json!({
+    let mut outcome = json!({
         "status": if failed { "error" } else { "ok" },
         "app_id": app_id,
         "event_id": event_id,
         "event_type": "mcp",
         "mcp_tool": tool,
         "result": result,
-    })
+    });
+    let mut chat = ChatFold::default();
+    for event in &pushed.events {
+        chat.push(event);
+    }
+    chat.describe_pushed(&mut outcome);
+    if pushed.truncated {
+        outcome["pushed_truncated"] = json!(true);
+    }
+    outcome
 }
 
 #[cfg(test)]
@@ -149,5 +160,25 @@ mod tests {
         assert_eq!(failed["event_type"], "mcp");
         assert_eq!(failed["mcp_tool"], "t");
         assert_eq!(failed["result"], json!({"isError": true}));
+    }
+
+    #[test]
+    fn what_the_tool_pushed_to_the_chat_is_reported_and_kept_from_the_result() {
+        let mut result = json!({"content": [{"type": "text", "text": "done"}], "isError": false});
+        let mut log = flow_like_types::app_chat::ChatEventLog::default();
+        log.push(&json!({
+            "event_type": "chat_stream_partial",
+            "payload": {
+                "attachments": [{"url": "https://f/r.pdf", "name": "r.pdf", "type": "application/pdf"}],
+                "widgets": [{"instance_id": "w1"}],
+            },
+        }));
+        log.attach(&mut result);
+        let outcome = call_outcome("a1", "e1", "report", result);
+        assert_eq!(outcome["status"], "ok");
+        assert!(outcome["result"].get("_meta").is_none());
+        assert_eq!(outcome["attachments"][0]["name"], "r.pdf");
+        assert_eq!(outcome["pushed_widget_count"], 1);
+        assert!(outcome.get("pushed_truncated").is_none());
     }
 }

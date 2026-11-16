@@ -562,6 +562,7 @@
 	"deleteWithContents": "Delete with contents",
 	"describeThePurposeOfThisFlow": "Describe the purpose of this flow...",
 	"description": "Description",
+	"designANewFlowForYourApplication": "Design a new flow for your application",
 	"detectedImport": "{{source}} · {{name}}",
 	"devModeApplyFailed": "Could not apply changes. Check the JSON syntax and include a components array with an id and component for each item.",
 	"devModeChangesApplied": "Changes applied",

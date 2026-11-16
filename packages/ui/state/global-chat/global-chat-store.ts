@@ -328,6 +328,8 @@ export interface GlobalToolPrompt {
 	 * resolve the raw id to the app's name + icon instead of showing the opaque id.
 	 */
 	appId?: string;
+	/** Event of `appId` the action targets, so the card can show its name instead of its id. */
+	eventId?: string;
 	/** A gate that must never be answered without the user (e.g. the FlowScript deletion
 	 * re-apply). Auto mode skips these — waiving permission never extends to deletions. */
 	destructive?: boolean;

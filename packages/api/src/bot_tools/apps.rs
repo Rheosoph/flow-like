@@ -17,7 +17,7 @@ use axum::{
 };
 use flow_like::flow::{copilot::BotRunContext, event::Event};
 use flow_like_storage::contracts::database::DatabaseSelector;
-use flow_like_types::tokio;
+use flow_like_types::{app_chat::ChatFold, tokio};
 use futures::StreamExt;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{Map, Value, json};
@@ -334,7 +334,21 @@ impl RunFold {
     }
 }
 
-async fn read_run(response: Response) -> ToolResult {
+/// How a run answered: its JSON when it was not streamed, else whether reading timed out.
+enum RunRead {
+    Plain(Value),
+    Streamed { timed_out: bool },
+}
+
+fn plain_outcome(answer: Value) -> Value {
+    json!({ "status": "ok", "run_status": "started", "run": answer })
+}
+
+/// Hands each event of a streamed run to `seen` until it returns `true` or the stream ends.
+async fn read_events(
+    response: Response,
+    mut seen: impl FnMut(Value) -> Result<bool, String>,
+) -> Result<RunRead, String> {
     let streamed = response
         .headers()
         .get(axum::http::header::CONTENT_TYPE)
@@ -350,18 +364,16 @@ async fn read_run(response: Response) -> ToolResult {
             }
         }
         let answer = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
-        return Ok(json!({ "status": "ok", "run_status": "started", "run": answer }));
+        return Ok(RunRead::Plain(answer));
     }
     let mut decoder = SseDecoder::default();
-    let mut fold = RunFold::default();
     let reading = async {
         while let Some(chunk) = body.next().await {
             let chunk = chunk.map_err(|error| error.to_string())?;
             for envelope in decoder.push(&chunk)? {
-                fold.push(envelope);
-            }
-            if fold.finished() {
-                break;
+                if seen(envelope)? {
+                    return Ok(());
+                }
             }
         }
         Ok::<(), String>(())
@@ -373,7 +385,27 @@ async fn read_run(response: Response) -> ToolResult {
         }
         Err(_) => true,
     };
-    Ok(fold.outcome(timed_out))
+    Ok(RunRead::Streamed { timed_out })
+}
+
+/// The run's outcome, with the files and widgets it pushed to the chat.
+async fn read_run(response: Response) -> ToolResult {
+    let mut run = RunFold::default();
+    let mut chat = ChatFold::default();
+    let read = read_events(response, |envelope| {
+        chat.push(&envelope);
+        run.push(envelope);
+        Ok(run.finished())
+    })
+    .await?;
+    Ok(match read {
+        RunRead::Plain(answer) => plain_outcome(answer),
+        RunRead::Streamed { timed_out } => {
+            let mut outcome = run.outcome(timed_out);
+            chat.describe_pushed(&mut outcome);
+            outcome
+        }
+    })
 }
 
 impl AppTools {
@@ -875,6 +907,53 @@ mod tests {
         let logs = outcome["logs"].as_array().unwrap();
         assert_eq!(logs.len(), MAX_LOG_EVENTS);
         assert!(logs.iter().any(|log| log["payload_truncated"] == true));
+    }
+
+    fn streamed(envelopes: &[Value]) -> Response {
+        let body: String = envelopes
+            .iter()
+            .map(|envelope| format!("data: {envelope}\n\n"))
+            .collect();
+        Response::builder()
+            .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
+            .body(axum::body::Body::from(body))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_event_run_reports_what_it_pushed_to_the_chat_until_it_completes() {
+        let file = json!({ "url": "https://f/r.pdf", "name": "r.pdf", "type": "application/pdf" });
+        let outcome = read_run(streamed(&[
+            envelope("run_initiated", json!({ "run_id": "run-1" })),
+            envelope(
+                "chat_stream_partial",
+                json!({ "attachments": [file], "widgets": [{ "instance_id": "w1" }] }),
+            ),
+            envelope("generic_result", json!({ "ok": true })),
+            envelope("completed", json!({ "status": "completed" })),
+            envelope(
+                "chat_stream_partial",
+                json!({ "attachments": ["https://f/late"] }),
+            ),
+        ]))
+        .await
+        .unwrap();
+        assert_eq!(outcome["status"], "ok");
+        assert_eq!(outcome["result"], json!({ "ok": true }));
+        assert_eq!(outcome["attachments"], json!([file]));
+        assert_eq!(outcome["pushed_widget_count"], 1);
+    }
+
+    #[tokio::test]
+    async fn an_event_run_that_pushed_nothing_reports_only_the_run() {
+        let outcome = read_run(streamed(&[
+            envelope("generic_result", json!(1)),
+            envelope("completed", json!({ "status": "completed" })),
+        ]))
+        .await
+        .unwrap();
+        assert!(outcome.get("attachments").is_none());
+        assert!(outcome.get("pushed_widget_count").is_none());
     }
 
     #[test]

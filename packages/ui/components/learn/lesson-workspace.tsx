@@ -1,6 +1,5 @@
 "use client";
 import { useTranslation } from "@flow-like/locales";
-import { createId } from "@paralleldrive/cuid2";
 import { isEqual } from "lodash-es";
 import {
 	ArrowLeft,
@@ -784,18 +783,21 @@ function AppFlowsPane({
 		}
 	}, [appId, boards.data, parentRegister]);
 
-	const handleCreateBoard = useCallback(async () => {
-		await backend.boardState.upsertBoard(
-			appId,
-			createId(),
-			boardCreation.name,
-			boardCreation.description,
-			ILogLevel.Debug,
-			IExecutionStage.Dev,
-		);
-		await Promise.allSettled([boards.refetch(), app.refetch()]);
-		setBoardCreation({ open: false, name: "", description: "" });
-	}, [appId, app, backend.boardState, boardCreation, boards]);
+	const handleCreateBoard = useCallback(
+		async (boardId: string) => {
+			await backend.boardState.upsertBoard(
+				appId,
+				boardId,
+				boardCreation.name,
+				boardCreation.description,
+				ILogLevel.Debug,
+				IExecutionStage.Dev,
+			);
+			await Promise.allSettled([boards.refetch(), app.refetch()]);
+			setBoardCreation({ open: false, name: "", description: "" });
+		},
+		[appId, app, backend.boardState, boardCreation, boards],
+	);
 
 	return (
 		<div className="h-full overflow-auto p-6">

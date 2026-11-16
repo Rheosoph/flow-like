@@ -137,6 +137,13 @@ beforeEach(() => {
 				return { name };
 			},
 		},
+		eventState: {
+			getEvent: async (appId: string, eventId: string) => {
+				if (appId !== "app_social" || eventId !== "evt_cards")
+					throw new Error("Event not found");
+				return { id: eventId, name: "Flashcards" };
+			},
+		},
 	} as never);
 	host = document.createElement("div");
 	document.body.append(host);
@@ -231,6 +238,35 @@ describe('what "Don\'t ask again" covers', () => {
 		await act(async () => approve?.click());
 		expect(respond).toHaveBeenCalledWith({ approved: true, remember: true });
 	});
+});
+
+test("the asking bot, not FlowPilot, wants it, and the app and event read by name", async () => {
+	await show(
+		approval({
+			toolName: "interact_app_page",
+			title: "Approve app page interaction",
+			eventId: "evt_cards",
+			description:
+				"FlowPilot wants to interact with app 'app_social', event 'evt_cards': trigger 'requestQueue' on component 'cards_ID'. This may run workflows connected to those controls.",
+		}),
+	);
+	expect(host.textContent).toContain(
+		"Medi wants to interact with app 'Social Desk', event 'Flashcards': trigger 'requestQueue' on component 'cards_ID'. This may run workflows connected to those controls.",
+	);
+	expect(host.textContent).not.toContain("FlowPilot");
+	expect(host.textContent).not.toContain("evt_cards");
+});
+
+test("an event the app can't name keeps its id", async () => {
+	await show(
+		approval({
+			eventId: "evt_gone",
+			description: "FlowPilot wants to execute an event of app 'app_social'.",
+		}),
+	);
+	expect(host.textContent).toContain(
+		"Medi wants to execute an event of app 'Social Desk'.",
+	);
 });
 
 test("a call asked again after web content says why and offers no Don't ask again", async () => {

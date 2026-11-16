@@ -2080,6 +2080,8 @@
 	"modelActions": "",
 	"modelCategory": "",
 	"modelClassification": "",
+	"modelDataClassification": "",
+	"modelDataClassificationHint": "",
 	"modelExploreOperateAndShareProjectData": "",
 	"modelId": "",
 	"modelIdentity": "",

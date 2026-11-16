@@ -2028,6 +2028,8 @@
 	"modelActions": "모델 작업",
 	"modelCategory": "모델 카테고리",
 	"modelClassification": "모델 분류",
+	"modelDataClassification": "",
+	"modelDataClassificationHint": "",
 	"modelExploreOperateAndShareProjectData": "프로젝트 데이터를 모델링, 탐색, 운영, 공유하세요",
 	"modelId": "모델 ID",
 	"modelIdentity": "모델 ID 정보",

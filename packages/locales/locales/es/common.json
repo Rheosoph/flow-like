@@ -2080,6 +2080,8 @@
 	"modelActions": "Acciones del modelo",
 	"modelCategory": "Categoría del modelo",
 	"modelClassification": "Clasificación del modelo",
+	"modelDataClassification": "",
+	"modelDataClassificationHint": "",
 	"modelExploreOperateAndShareProjectData": "Modela, explora, opera y comparte los datos del proyecto",
 	"modelId": "ID del modelo",
 	"modelIdentity": "Identidad del modelo",

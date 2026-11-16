@@ -55,10 +55,9 @@ use crate::{
     error::ApiError,
     execution::{
         ByteStream, DispatchRequest, DispatchTrigger, ExecutionBackend, ExecutionJwtError,
-        ExecutionJwtParams, MissingResult, TokenType, collect_generic_result_outcome,
-        executor_response_bytes,
-        is_jwt_configured, rejection, resolve_wasm_packages, sign_execution_jwt,
-        sign_unattended_execution_jwt, stream_http_response,
+        ExecutionJwtParams, MissingResult, TokenType, collect_generic_result_observed,
+        executor_response_bytes, is_jwt_configured, rejection, resolve_wasm_packages,
+        sign_execution_jwt, sign_unattended_execution_jwt, stream_http_response,
         variant::{self, ResolvedTarget, STABLE_VARIANT, SplitKey, dispatch_event_json},
         wants_http_event_stream,
     },
@@ -109,6 +108,9 @@ pub(crate) struct ProxyCallerContext {
     /// but carries the bot: its credentials, its technical user and an executor token bound to
     /// it. It borrows nothing from the event's sink and never takes a person's profile.
     bot: Option<std::sync::Arc<BotFlowRun>>,
+    /// A first-party caller that shows what an MCP tool run pushed to the chat: the run's chat
+    /// events ride under the result's `_meta`. Public MCP never sets it.
+    chat_events: bool,
 }
 
 #[derive(Clone)]
@@ -145,6 +147,7 @@ impl ProxyCallerContext {
             user_context: Some(user_context),
             member: app.person().map(MemberExecutionIdentity::person),
             bot: None,
+            chat_events: false,
         }
     }
 
@@ -240,6 +243,7 @@ const MCP_BROWSER_INSPECTOR_TEMPLATE: &str = include_str!("../../../../assets/mc
 /// NOTE: the MCP CORS `Access-Control-Allow-Headers` list in
 /// `mcp_options_response` must include this header name verbatim.
 pub(crate) use flow_like_types::PROXY_EVENT_AUTHORIZATION_HEADER;
+use flow_like_types::app_chat::ChatEventLog;
 
 pub fn rest_routes() -> Router<AppState> {
     Router::new()
@@ -1359,6 +1363,7 @@ pub(crate) async fn dispatch_member_mcp_operation(
     params: Value,
     member: MemberExecutionIdentity,
     user_context: UserExecutionContext,
+    chat_events: bool,
 ) -> Result<Value, ApiError> {
     let client = json!({
         "protocol": "mcp",
@@ -1367,6 +1372,7 @@ pub(crate) async fn dispatch_member_mcp_operation(
     let caller = ProxyCallerContext {
         member: Some(member),
         user_context: Some(user_context),
+        chat_events,
         ..Default::default()
     };
     dispatch_mcp_operation(state, event_row, method, params, client, &caller).await
@@ -1393,6 +1399,7 @@ pub(crate) async fn dispatch_bot_mcp_operation(
     let caller = ProxyCallerContext {
         user_context: Some(permission.to_user_context()),
         bot: Some(std::sync::Arc::new(run)),
+        chat_events: true,
         ..Default::default()
     };
     dispatch_mcp_operation(state, event_row, method, params, client, &caller).await
@@ -2823,7 +2830,8 @@ async fn dispatch_rest_fn(
             rest_stream_result,
         ))
     } else {
-        let mut response = materialize_response(collect_inbound_result(bytes, run_id, db).await?);
+        let mut response =
+            materialize_response(collect_inbound_result(bytes, run_id, db, |_| {}).await?);
         response.headers_mut().append(
             axum::http::header::VARY,
             axum::http::HeaderValue::from_static("Accept"),
@@ -2852,20 +2860,28 @@ async fn dispatch_event_collect(
     target_node_id: String,
     payload: Option<Value>,
     caller: &ProxyCallerContext,
+    observe: impl FnMut(&Value) + Send,
 ) -> Result<Value, ApiError> {
     let (bytes, run_id, db) =
         dispatch_event_stream(state, event_row, target, target_node_id, payload, caller).await?;
-    collect_inbound_result(bytes, run_id, db).await
+    collect_inbound_result(bytes, run_id, db, observe).await
 }
 
 async fn collect_inbound_result(
     bytes: ByteStream,
     run_id: String,
     db: crate::audit::ExecutionAuditContext,
+    observe: impl FnMut(&Value) + Send,
 ) -> Result<Value, ApiError> {
-    collect_generic_result_outcome(bytes, run_id.clone(), Some(db), INBOUND_RESULT_TIMEOUT)
-        .await
-        .map_err(|missing| missing_result_error(&run_id, missing))
+    collect_generic_result_observed(
+        bytes,
+        run_id.clone(),
+        Some(db),
+        INBOUND_RESULT_TIMEOUT,
+        observe,
+    )
+    .await
+    .map_err(|missing| missing_result_error(&run_id, missing))
 }
 
 fn missing_result_error(run_id: &str, missing: MissingResult) -> ApiError {
@@ -3998,33 +4014,35 @@ async fn mcp_tool_call_response(
         payload_with_client(normalized_arguments, client),
     );
     args.insert("_client".to_string(), client.clone());
-    match dispatch_event_collect(
+    let mut chat = caller.chat_events.then(ChatEventLog::default);
+    let collected = dispatch_event_collect(
         state,
         event_row,
         target,
         tool.node_id,
         Some(Value::Object(args)),
         caller,
+        |event| {
+            if let Some(chat) = chat.as_mut() {
+                chat.push(event);
+            }
+        },
     )
-    .await
-    {
-        Ok(value) => Ok(Some(json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": {
-                "content": [{"type": "text", "text": result_text(&value)}],
-                "isError": false
-            }
-        }))),
-        Err(err) => Ok(Some(json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": {
-                "content": [{"type": "text", "text": mcp_error_text(&err)}],
-                "isError": true
-            }
-        }))),
+    .await;
+    let mut result = match collected {
+        Ok(value) => json!({
+            "content": [{"type": "text", "text": result_text(&value)}],
+            "isError": false
+        }),
+        Err(err) => json!({
+            "content": [{"type": "text", "text": mcp_error_text(&err)}],
+            "isError": true
+        }),
+    };
+    if let Some(chat) = chat {
+        chat.attach(&mut result);
     }
+    Ok(Some(json!({"jsonrpc": "2.0", "id": id, "result": result})))
 }
 
 async fn mcp_tools_for_event(
@@ -5331,6 +5349,16 @@ mod tests {
         let context = super::UserExecutionContext::connected_app("app-a", Default::default())
             .with_on_behalf_of(app.sub.clone());
         ProxyCallerContext::through_connection(&app, context)
+    }
+
+    #[test]
+    fn only_first_party_callers_get_chat_events_on_an_mcp_result() {
+        assert!(!ProxyCallerContext::default().chat_events);
+        assert!(!connection(Some("ada"), None).chat_events);
+        assert!(
+            !ProxyCallerContext::signed_in("ada", super::UserExecutionContext::new("ada"))
+                .chat_events
+        );
     }
 
     fn executor_params(sub: &str) -> super::ExecutionJwtParams {
