@@ -1,3 +1,4 @@
+import type { IBot } from "../../state/backend-state/bot-state";
 import type { IConversation } from "../../state/backend-state/inbox-state";
 import {
 	conversationBotId,
@@ -7,6 +8,12 @@ import {
 	selectToolPromptConversationId,
 	type useGlobalChatStore,
 } from "../../state/global-chat/global-chat-store";
+import {
+	DEFAULT_DOCK_SELECTION,
+	type DockSelection,
+	dockSelectionForBot,
+	dockSelectionForChatBot,
+} from "../bots-tab/dock-selection";
 import type { BotAgentState } from "../bots/types";
 import { type BotChatActivity, botMessageActivity } from "./bots-nav-history";
 
@@ -40,9 +47,34 @@ export function latestInboxBotActivity(
 				: undefined);
 		const at = Date.parse(entry.created_at);
 		if (!bot || !Number.isFinite(at) || at <= 0) continue;
-		latest = latestBotActivity(latest, { botId: bot.principal_id, at });
+		latest = latestBotActivity(latest, {
+			botId: bot.principal_id,
+			at,
+			conversationId: conversation.id,
+		});
 	}
 	return latest;
+}
+
+/**
+ * Where the Bots button leads: where the bot it shows last talked. An inbox conversation opens
+ * itself (the Bots tab shows a direct chat with your own bot as that bot's chat); global chat
+ * activity opens the bot's chat; no activity yet opens the Assistant.
+ */
+export function botsNavSelection(
+	activity: BotChatActivity | null,
+	bots: readonly IBot[] | undefined,
+): DockSelection {
+	if (!activity) return DEFAULT_DOCK_SELECTION;
+	if (activity.conversationId)
+		return { type: "conversation", conversationId: activity.conversationId };
+	const bot =
+		activity.botId === null
+			? undefined
+			: bots?.find((item) => item.id === activity.botId);
+	return bot
+		? dockSelectionForBot(bot, bots)
+		: dockSelectionForChatBot(activity.botId);
 }
 
 /** Includes background turns, without treating merely opening a chat as activity. */

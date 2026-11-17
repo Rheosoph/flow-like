@@ -74,6 +74,18 @@ export function NativeRealtimeBridge() {
 	const signedIn = auth.isAuthenticated && !auth.isLoading;
 	const localIds = useRef<ReadonlyMap<string, string>>(new Map());
 
+	// The poll carries entries as the server stores them; an encrypted chat's arrive sealed.
+	useEffect(() => {
+		const inbox = backend.inboxState;
+		desktopConversationFeed.setOpener(
+			inbox?.openEntries
+				? async (entries, as) =>
+						(await inbox.openEntries?.(entries, as)) ?? entries
+				: undefined,
+		);
+		return () => desktopConversationFeed.setOpener(undefined);
+	}, [backend]);
+
 	// A host on this computer answered the call: its reply joins the replies the server pushes.
 	useEffect(
 		() =>

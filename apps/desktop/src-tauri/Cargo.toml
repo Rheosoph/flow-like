@@ -138,6 +138,13 @@ flow-like-catalog-automation = { workspace = true, features = ["execute"] }
 flow-like-bot-machine.workspace = true
 flow-like-device-client.workspace = true
 flow-like-device-crypto.workspace = true
+aes-gcm.workspace = true
+bytes.workspace = true
+tokio-util = "0.7"
+webrtc = "=0.20.5"
+hkdf = "0.12"
+hmac = "0.12"
+gethostname = "1.1"
 tauri-plugin-single-instance = { version = "2.5.4", features = ["deep-link"] }
 tauri-plugin-window-state = "2.5.0"
 tauri-plugin-updater = "2.14.0"

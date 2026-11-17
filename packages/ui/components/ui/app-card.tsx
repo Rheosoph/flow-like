@@ -16,6 +16,7 @@ import { createPortal } from "react-dom";
 import { useAssetImage } from "../../hooks/use-asset-image";
 import { hashToGradient, useThemeInfo } from "../../hooks/use-theme-gradient";
 import { useAppCategoryLabel } from "../../lib/app-category";
+import { appDenProps } from "../../lib/bot-den/app-targets";
 import { categoryColor } from "../../lib/category-meta";
 import { type IApp, IAppVisibility } from "../../lib/schema/app/app";
 import type { IMetadata } from "../../lib/schema/bit/bit";
@@ -60,6 +61,21 @@ interface AppCardProps {
 	className?: string;
 	isOwned?: boolean;
 	href?: string;
+}
+
+function ownedAppDenProps(
+	app: IApp,
+	metadata: IMetadata | undefined,
+	isOwned: boolean | undefined,
+) {
+	return isOwned
+		? appDenProps({
+				kind: "app",
+				appId: app.id,
+				id: app.id,
+				label: metadata?.name,
+			})
+		: {};
 }
 
 export function AppCard({
@@ -273,6 +289,7 @@ function SmallAppCard({
 				tabIndex={onClick ? 0 : undefined}
 				onClick={onClick}
 				onKeyDown={handleCardKeyDown}
+				{...ownedAppDenProps(app, metadata, isOwned)}
 				data-href={href}
 				data-title={metadata?.name ?? app.id}
 				className={cn(
@@ -448,6 +465,7 @@ function ExtendedAppCard({
 				tabIndex={onClick ? 0 : undefined}
 				onClick={onClick}
 				onKeyDown={handleCardKeyDown}
+				{...ownedAppDenProps(app, metadata, isOwned)}
 				data-href={href}
 				data-title={metadata?.name ?? app.id}
 				className={cn(

@@ -384,6 +384,20 @@ describe("withEndToEnd", () => {
 		expect(asBot.entries[0]?.envelope).toEqual(mine.envelope);
 	});
 
+	test("entries the realtime feed pushes open like listed ones", async () => {
+		const fake = fakeInbox("e2e");
+		const mine = sealedEntry("e1", { text: "pushed reply" });
+		const theirs = sealedEntry("e2", { text: "for the bot" }, BOT);
+		const inbox = withEndToEnd(fake.inbox, fakeCrypto([]), () => ME);
+		const opened = await inbox.openEntries?.([mine, theirs]);
+		expect(opened?.[0]?.envelope).toEqual({
+			v: 1,
+			enc: "none",
+			body: { text: "pushed reply" },
+		});
+		expect(opened?.[1]?.envelope).toEqual(theirs.envelope);
+	});
+
 	test("signed out, nothing is opened and other calls pass through", async () => {
 		const fake = fakeInbox("e2e");
 		fake.setEntries([sealedEntry("e1", { text: "x" })]);
@@ -391,6 +405,30 @@ describe("withEndToEnd", () => {
 		const page = await inbox.listEntries("conv");
 		expect(page.entries[0]?.envelope.enc).toBe(INBOX_KEY_ALGORITHM);
 		expect(await inbox.markRead("conv")).toEqual({ last_read_at: "now" });
+	});
+});
+
+describe("sealEntry", () => {
+	const request: ISendInboxEntryRequest = {
+		message_id: "ar-1",
+		kind: "message",
+		envelope: { v: 1, enc: "none", body: { text: "" } },
+	};
+
+	test("seals for every member of an encrypted conversation without sending", async () => {
+		const fake = fakeInbox("e2e");
+		const inbox = withEndToEnd(fake.inbox, fakeCrypto([]), () => ME);
+		const sealed = await inbox.sealEntry?.("conv", request);
+		expect(sealed?.envelope).toBeUndefined();
+		expect(Object.keys(sealed?.envelopes ?? {}).sort()).toEqual([BOT, ME]);
+		expect(sealed?.message_id).toBe("ar-1");
+		expect(fake.sent).toEqual([]);
+	});
+
+	test("hands a plain conversation's request back unchanged", async () => {
+		const fake = fakeInbox("plain");
+		const inbox = withEndToEnd(fake.inbox, fakeCrypto([]), () => ME);
+		expect(await inbox.sealEntry?.("conv", request)).toEqual(request);
 	});
 });
 

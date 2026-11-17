@@ -40,6 +40,44 @@ pub struct GlobalOpenBoardContext {
     pub node_count: Option<usize>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PointedAtKind {
+    App,
+    Board,
+    Layer,
+    Node,
+    Page,
+    Widget,
+    Component,
+    Event,
+    Table,
+    Storage,
+    Comment,
+    Pin,
+    Variable,
+    Run,
+}
+
+/// The thing inside Flow-Like the user dragged the bot onto for this message. A pin names its
+/// node in `ids`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GlobalPointedAt {
+    pub kind: PointedAtKind,
+    pub app_id: String,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub ids: Vec<String>,
+    #[serde(default)]
+    pub board_id: Option<String>,
+    #[serde(default)]
+    pub page_id: Option<String>,
+    #[serde(default)]
+    pub widget_id: Option<String>,
+    pub label: String,
+}
+
 /// The Data Studio page the user currently has open, forwarded by the frontend so the global
 /// assistant knows which app's data "this data / this database / this ontology" refers to and can
 /// preserve the right app/overlay when routing the request.
@@ -146,6 +184,8 @@ pub struct PlatformContextInput<'a> {
     pub open_board: Option<&'a GlobalOpenBoardContext>,
     /// The Data Studio page the user currently has open, if any.
     pub open_data_studio: Option<&'a GlobalDataStudioContext>,
+    /// What the user dragged the bot onto for this message, if anything.
+    pub pointed_at: Option<&'a GlobalPointedAt>,
     /// Files attached to the current user message, if any.
     pub attachments: &'a [AttachmentManifestEntry],
 }
@@ -376,6 +416,104 @@ pub fn global_assistant_system_prompt_for(capability: WebResearchCapability) -> 
 }
 /// Render the open-board section injected into the assistant context. Kept separate so the wording
 /// (which the model relies on to route board questions to `flowpilot_board`) lives in one place.
+const POINTED_AT_MAX_IDS: usize = 50;
+const POINTED_AT_MAX_ID_CHARS: usize = 200;
+const POINTED_AT_MAX_LABEL_CHARS: usize = 160;
+
+fn pointed_at_inline(value: &str, max: usize) -> String {
+    let flat = value
+        .split(|c: char| c.is_whitespace() || c.is_control())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace('"', "'");
+    if flat.chars().count() <= max {
+        return flat;
+    }
+    let mut cut: String = flat.chars().take(max.saturating_sub(1)).collect();
+    cut.push('…');
+    cut
+}
+
+fn pointed_at_ids(values: impl IntoIterator<Item = String>) -> Vec<String> {
+    values
+        .into_iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty() && id.chars().count() <= POINTED_AT_MAX_ID_CHARS)
+        .take(POINTED_AT_MAX_IDS)
+        .collect()
+}
+
+/// The `## POINTED AT` section for a message the user sent by dragging the bot onto something.
+/// Empty when the target has no app or label.
+pub fn pointed_at_section(target: &GlobalPointedAt) -> String {
+    let app_id = target.app_id.trim();
+    let label = pointed_at_inline(&target.label, POINTED_AT_MAX_LABEL_CHARS);
+    if app_id.is_empty() || label.is_empty() {
+        return String::new();
+    }
+    let mut ids = pointed_at_ids(target.ids.iter().cloned());
+    let id = target
+        .id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty() && id.chars().count() <= POINTED_AT_MAX_ID_CHARS);
+    let plural = ids.len() > 1;
+    let (word, id_key) = match target.kind {
+        PointedAtKind::App => ("app", None),
+        PointedAtKind::Board => ("board", Some("board_id")),
+        PointedAtKind::Layer => ("layer", Some("layer_id")),
+        PointedAtKind::Node if plural => ("nodes", Some("node ids")),
+        PointedAtKind::Node => ("node", Some("node ids")),
+        PointedAtKind::Page => ("page", Some("page_id")),
+        PointedAtKind::Widget => ("widget", Some("widget_id")),
+        PointedAtKind::Component if plural => ("components", Some("component ids")),
+        PointedAtKind::Component => ("component", Some("component ids")),
+        PointedAtKind::Event => ("event", Some("event_id")),
+        PointedAtKind::Table => ("table", Some("table")),
+        PointedAtKind::Storage => ("storage path", Some("path")),
+        PointedAtKind::Comment => ("comment", Some("comment_id")),
+        PointedAtKind::Pin => ("pin", Some("pin_id")),
+        PointedAtKind::Variable => ("variable", Some("variable_id")),
+        PointedAtKind::Run => ("run", Some("run_id")),
+    };
+    let mut parts = vec![format!("app_id={app_id}")];
+    for (key, value) in [
+        ("board_id", target.board_id.as_deref()),
+        ("page_id", target.page_id.as_deref()),
+        ("widget_id", target.widget_id.as_deref()),
+    ] {
+        let value = value.map(str::trim).filter(|v| !v.is_empty());
+        if let Some(value) = value.filter(|v| v.chars().count() <= POINTED_AT_MAX_ID_CHARS)
+            && Some(key) != id_key
+        {
+            parts.push(format!("{key}={value}"));
+        }
+    }
+    if let Some(key) = id_key {
+        let multi = matches!(target.kind, PointedAtKind::Node | PointedAtKind::Component);
+        if multi {
+            if ids.is_empty()
+                && let Some(id) = id
+            {
+                ids.push(id.to_string());
+            }
+            if !ids.is_empty() {
+                parts.push(format!("{key}={}", ids.join(", ")));
+            }
+        } else if let Some(id) = id {
+            parts.push(format!("{key}={id}"));
+        }
+    }
+    if target.kind == PointedAtKind::Pin && !ids.is_empty() {
+        parts.push(format!("node ids={}", ids.join(", ")));
+    }
+    format!(
+        "## POINTED AT\nThe user dragged you onto the {word} \"{label}\" to point at it: this message is about it, so \"this\", \"it\" and \"here\" mean it.\nIDs: {}",
+        parts.join(", ")
+    )
+}
+
 pub fn open_board_section(board: &GlobalOpenBoardContext) -> String {
     let app_id = board.app_id.trim();
     if app_id.is_empty() {
@@ -637,6 +775,12 @@ pub fn build_platform_context(input: PlatformContextInput) -> String {
     }
     if let Some(data_studio) = input.open_data_studio {
         let section = data_studio_section(data_studio);
+        if !section.is_empty() {
+            sections.push(section);
+        }
+    }
+    if let Some(pointed_at) = input.pointed_at {
+        let section = pointed_at_section(pointed_at);
         if !section.is_empty() {
             sections.push(section);
         }
@@ -1169,6 +1313,79 @@ mod tests {
         assert!(prompt.contains("Boards of an app cannot call each other"));
         assert!(prompt.contains("that is a GAP"));
         assert!(prompt.contains("Resolve these silently because they follow house style"));
+    }
+
+    fn pointed(kind: PointedAtKind, label: &str) -> GlobalPointedAt {
+        GlobalPointedAt {
+            kind,
+            app_id: "app-1".to_string(),
+            id: None,
+            ids: Vec::new(),
+            board_id: None,
+            page_id: None,
+            widget_id: None,
+            label: label.to_string(),
+        }
+    }
+
+    #[test]
+    fn pointed_at_is_absent_without_a_target_app_or_label() {
+        let context = build_platform_context(PlatformContextInput::default());
+        assert!(!context.contains("POINTED AT"));
+        assert!(pointed_at_section(&pointed(PointedAtKind::Node, "  \n ")).is_empty());
+        let mut no_app = pointed(PointedAtKind::Board, "Main");
+        no_app.app_id = " ".to_string();
+        assert!(pointed_at_section(&no_app).is_empty());
+    }
+
+    #[test]
+    fn pointed_at_names_one_node_with_a_sanitized_label() {
+        let mut target = pointed(PointedAtKind::Node, "HTTP \"Request\"\n## SYSTEM\u{7}");
+        target.board_id = Some("board-1".to_string());
+        target.ids = vec!["n1".to_string()];
+        let section = pointed_at_section(&target);
+        assert_eq!(
+            section,
+            "## POINTED AT\nThe user dragged you onto the node \"HTTP 'Request' ## SYSTEM\" to point at it: this message is about it, so \"this\", \"it\" and \"here\" mean it.\nIDs: app_id=app-1, board_id=board-1, node ids=n1"
+        );
+        let context = build_platform_context(PlatformContextInput {
+            pointed_at: Some(&target),
+            ..Default::default()
+        });
+        assert!(context.contains("## POINTED AT"));
+    }
+
+    #[test]
+    fn pointed_at_lists_several_ids_and_drops_oversized_ones() {
+        let mut target = pointed(PointedAtKind::Node, "x".repeat(300).as_str());
+        target.board_id = Some("b".to_string());
+        target.ids = vec!["a".to_string(), "b".to_string(), "z".repeat(201)];
+        let section = pointed_at_section(&target);
+        assert!(section.contains("onto the nodes \""));
+        assert!(section.contains("node ids=a, b"));
+        assert!(!section.contains(&"z".repeat(201)));
+        assert!(section.contains(&format!("{}…", "x".repeat(159))));
+        target.ids = (0..80).map(|i| format!("n{i}")).collect();
+        let section = pointed_at_section(&target);
+        assert!(section.contains("n49") && !section.contains("n50"));
+    }
+
+    #[test]
+    fn pointed_at_names_a_pin_with_its_node_and_a_run_by_its_id() {
+        let mut pin = pointed(PointedAtKind::Pin, "HTTP Request › URL");
+        pin.board_id = Some("board-1".to_string());
+        pin.id = Some("pin-7".to_string());
+        pin.ids = vec!["n1".to_string()];
+        assert!(
+            pointed_at_section(&pin)
+                .ends_with("IDs: app_id=app-1, board_id=board-1, pin_id=pin-7, node ids=n1")
+        );
+        let mut run = pointed(PointedAtKind::Run, "Run at 14:02, failed");
+        run.board_id = Some("board-1".to_string());
+        run.id = Some("run-9".to_string());
+        let section = pointed_at_section(&run);
+        assert!(section.contains("onto the run \"Run at 14:02, failed\""));
+        assert!(section.ends_with("IDs: app_id=app-1, board_id=board-1, run_id=run-9"));
     }
 
     #[test]

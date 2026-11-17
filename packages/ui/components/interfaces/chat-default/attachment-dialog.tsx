@@ -17,9 +17,16 @@ import SearchIcon from "lucide-react/dist/esm/icons/search.js";
 import VideoIcon from "lucide-react/dist/esm/icons/video.js";
 import XIcon from "lucide-react/dist/esm/icons/x.js";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { useIsMobile } from "../../../hooks/use-mobile";
-import { openImagePreview } from "../../../lib/open-image-preview";
+import { openExternalUrl } from "../../../lib/open-external";
+import { isTauri } from "../../../lib/platform";
 import { cn, humanFileSize } from "../../../lib/utils";
+import {
+	fetchFileBlob,
+	saveBlobAsFile,
+	shareFileOnIOS,
+} from "../../storage/save-download";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
 import {
@@ -109,33 +116,46 @@ export const canPreviewFile = (file: ProcessedAttachment) => {
 	return canPreview(file.url, file.name || undefined);
 };
 
-export async function downloadFile(file: ProcessedAttachment): Promise<void> {
-	const isTauriEnv =
-		typeof window !== "undefined" &&
-		!!(
-			(window as any).__TAURI__ ||
-			(window as any).__TAURI_IPC__ ||
-			(window as any).__TAURI_INTERNALS__
-		);
+async function fetchAttachment(
+	file: ProcessedAttachment,
+	fileName: string,
+): Promise<Blob | null> {
+	const preparing = file.isDataUrl
+		? undefined
+		: toast.loading(
+				i18next.t("common:preparingDownload", "Preparing download…"),
+			);
+	try {
+		return await fetchFileBlob(file.url, fileName);
+	} catch (error) {
+		console.warn("Fetching the attachment failed:", error);
+		if (!/^https?:/i.test(file.url)) throw error;
+		await openExternalUrl(file.url);
+		return null;
+	} finally {
+		if (preparing !== undefined) toast.dismiss(preparing);
+	}
+}
 
-	if (isTauriEnv) {
+async function saveAttachment(file: ProcessedAttachment): Promise<void> {
+	const fileName = file.name || "file";
+	const blob = await fetchAttachment(file, fileName);
+	if (!blob) return;
+
+	if (await shareFileOnIOS(blob, fileName)) return;
+
+	if (isTauri()) {
 		try {
 			const { save } = await import("@tauri-apps/plugin-dialog");
 			const { writeFile } = await import("@tauri-apps/plugin-fs");
-
-			const response = await fetch(file.url);
-			const blob = await response.blob();
-			const arrayBuffer = await blob.arrayBuffer();
-
 			const filePath = await save({
-				defaultPath: file.name,
+				defaultPath: fileName,
 				filters: [
 					{ name: i18next.t("allFiles", "All Files"), extensions: ["*"] },
 				],
 			});
-
 			if (filePath) {
-				await writeFile(filePath, new Uint8Array(arrayBuffer));
+				await writeFile(filePath, new Uint8Array(await blob.arrayBuffer()));
 			}
 			return;
 		} catch (e) {
@@ -143,22 +163,32 @@ export async function downloadFile(file: ProcessedAttachment): Promise<void> {
 		}
 	}
 
-	// Browser fallback - fetch and trigger download
-	try {
-		const response = await fetch(file.url);
-		const blob = await response.blob();
-		const blobUrl = URL.createObjectURL(blob);
+	saveBlobAsFile(blob, fileName);
+}
 
-		const link = document.createElement("a");
-		link.href = blobUrl;
-		link.download = file.name || "file";
-		document.body.appendChild(link);
-		link.click();
-		document.body.removeChild(link);
-		URL.revokeObjectURL(blobUrl);
-	} catch (e) {
-		// Ultimate fallback - open in new tab
-		window.open(file.url, "_blank", "noopener,noreferrer");
+/** Saves the file: the share sheet on iOS, a save dialog in the desktop app, a download in browsers. Never throws. */
+export async function downloadFile(file: ProcessedAttachment): Promise<void> {
+	try {
+		await saveAttachment(file);
+	} catch (error) {
+		console.error("Saving the attachment failed:", error);
+		toast.error(i18next.t("common:downloadFailed", "Download failed"));
+	}
+}
+
+const opensAsLink = (file: ProcessedAttachment) => file.type === "website";
+
+/**
+ * The action button beside a file. It never previews: the dialog already does
+ * that, and the chat's click handler would only re-select the open file.
+ */
+async function openOrSaveFile(file: ProcessedAttachment): Promise<void> {
+	if (file.access) return;
+	if (!opensAsLink(file)) return downloadFile(file);
+	try {
+		await openExternalUrl(file.url);
+	} catch (error) {
+		console.error("Opening the link failed:", error);
 	}
 }
 
@@ -188,11 +218,20 @@ const FileActionIcon = ({
 	file: ProcessedAttachment;
 	className?: string;
 }) =>
-	file.isDataUrl ? (
-		<Download className={className} />
-	) : (
+	opensAsLink(file) ? (
 		<ExternalLink className={className} />
+	) : (
+		<Download className={className} />
 	);
+
+function useFileActionLabel() {
+	const { t } = useTranslation("common");
+	return useCallback(
+		(file: ProcessedAttachment) =>
+			opensAsLink(file) ? t("open", "Open") : t("download", "Download"),
+		[t],
+	);
+}
 
 export function FileDialog({
 	files,
@@ -223,6 +262,7 @@ export function FileDialog({
 	);
 	const [isPreviewMaximized, setIsPreviewMaximized] = useState(false);
 	const isMobile = useIsMobile();
+	const actionLabel = useFileActionLabel();
 
 	const isControlled = controlledOpen !== undefined;
 	const isOpen = isControlled ? controlledOpen : internalOpen;
@@ -284,9 +324,9 @@ export function FileDialog({
 
 	const fileTypeCount = useMemo(() => {
 		const counts: Record<string, number> = {};
-		filteredFiles.forEach((file) => {
+		for (const file of filteredFiles) {
 			counts[file.type] = (counts[file.type] || 0) + 1;
-		});
+		}
 		return counts;
 	}, [filteredFiles]);
 
@@ -314,7 +354,10 @@ export function FileDialog({
 	);
 
 	const defaultTrigger = (
-		<button className="text-muted-foreground hover:text-foreground transition-colors">
+		<button
+			type="button"
+			className="text-muted-foreground hover:text-foreground transition-colors"
+		>
 			<Badge
 				variant="secondary"
 				className="cursor-pointer hover:bg-secondary/80 transition-colors gap-1 text-xs h-6 rounded-full"
@@ -335,7 +378,6 @@ export function FileDialog({
 			viewMode={viewMode}
 			selectedFile={isMobile ? null : selectedFile}
 			onFileSelect={handleFileSelect}
-			handleFileClick={handleFileClick}
 			canPreview={canPreview}
 		/>
 	);
@@ -399,12 +441,11 @@ export function FileDialog({
 										variant="ghost"
 										size="icon"
 										className="size-10 shrink-0"
-										onClick={() => handleFileClick(selectedFile)}
+										disabled={!!selectedFile.access}
+										onClick={() => void openOrSaveFile(selectedFile)}
 									>
 										<FileActionIcon file={selectedFile} className="size-4" />
-										<span className="sr-only">
-											{selectedFile.isDataUrl ? "Download" : "Open"}
-										</span>
+										<span className="sr-only">{actionLabel(selectedFile)}</span>
 									</Button>
 								)}
 								<DialogClose asChild>
@@ -686,7 +727,6 @@ interface FileListProps {
 	viewMode: "grid" | "list";
 	selectedFile: ProcessedAttachment | null;
 	onFileSelect: (file: ProcessedAttachment) => void;
-	handleFileClick: (file: ProcessedAttachment) => void;
 	canPreview: (file: ProcessedAttachment) => boolean;
 }
 
@@ -695,7 +735,6 @@ function FileList({
 	viewMode,
 	selectedFile,
 	onFileSelect,
-	handleFileClick,
 	canPreview,
 }: FileListProps) {
 	const { t } = useTranslation("chat");
@@ -714,17 +753,16 @@ function FileList({
 		<div
 			className={`grid gap-2 ${viewMode === "grid" ? "grid-cols-2 md:grid-cols-3 lg:grid-cols-4" : "grid-cols-1"}`}
 		>
-			{files.map((file, index) => (
+			{files.map((file) => (
 				<FileItem
 					grid={viewMode === "grid"}
-					key={index}
+					key={attachmentKey(file)}
 					file={file}
 					isSelected={
 						selectedFile !== null &&
 						attachmentKey(selectedFile) === attachmentKey(file)
 					}
 					onSelect={onFileSelect}
-					handleFileClick={handleFileClick}
 					canPreview={canPreview}
 				/>
 			))}
@@ -737,7 +775,6 @@ interface FileItemProps {
 	file: ProcessedAttachment;
 	isSelected: boolean;
 	onSelect: (file: ProcessedAttachment) => void;
-	handleFileClick: (file: ProcessedAttachment) => void;
 	canPreview: (file: ProcessedAttachment) => boolean;
 }
 
@@ -824,9 +861,9 @@ function FileItem({
 	file,
 	isSelected,
 	onSelect,
-	handleFileClick,
 	canPreview,
 }: Readonly<FileItemProps>) {
+	const actionLabel = useFileActionLabel()(file);
 	const previewable = canPreview(file);
 	const cardClasses = cn(
 		"group relative w-full rounded-lg border border-border/50 bg-linear-to-r from-background to-muted/10 transition-all duration-200",
@@ -836,7 +873,8 @@ function FileItem({
 
 	// Touch devices never get :hover, so the action button stays visible there and
 	// only fades in on pointer devices.
-	const actionVisibility = `opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100`;
+	const actionVisibility =
+		"opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100";
 
 	if (grid) {
 		return (
@@ -864,9 +902,10 @@ function FileItem({
 				<Button
 					variant="outline"
 					size="icon"
+					disabled={!!file.access}
 					onClick={(e) => {
 						e.stopPropagation();
-						handleFileClick(file);
+						void openOrSaveFile(file);
 					}}
 					className={cn(
 						"absolute top-1 right-1 size-8 md:top-2 md:right-2 md:size-7",
@@ -874,9 +913,7 @@ function FileItem({
 					)}
 				>
 					<FileActionIcon file={file} />
-					<span className="sr-only">
-						{file.isDataUrl ? "Download" : "Open"}
-					</span>
+					<span className="sr-only">{actionLabel}</span>
 				</Button>
 			</div>
 		);
@@ -906,19 +943,16 @@ function FileItem({
 			<Button
 				variant="outline"
 				size="sm"
+				disabled={!!file.access}
 				onClick={(e) => {
 					e.stopPropagation();
-					handleFileClick(file);
+					void openOrSaveFile(file);
 				}}
 				className={cn("h-9 shrink-0 gap-1 px-2.5 md:h-8", actionVisibility)}
 			>
 				<FileActionIcon file={file} />
-				<span className="hidden sm:inline">
-					{file.isDataUrl ? "Download" : "Open"}
-				</span>
-				<span className="sr-only sm:hidden">
-					{file.isDataUrl ? "Download" : "Open"}
-				</span>
+				<span className="hidden sm:inline">{actionLabel}</span>
+				<span className="sr-only sm:hidden">{actionLabel}</span>
 			</Button>
 		</div>
 	);
@@ -931,28 +965,31 @@ interface FileDialogPreviewProps {
 
 export function FileDialogPreview({ file }: Readonly<FileDialogPreviewProps>) {
 	const { t } = useTranslation("chat");
-	const handleFileClick = (file: ProcessedAttachment) => {
-		if (file.isDataUrl) {
-			if (file.type === "image") {
-				openImagePreview(file.url);
-			} else {
-				const link = document.createElement("a");
-				link.href = file.url;
-				link.download = file.name ?? "file";
-				document.body.appendChild(link);
-				link.click();
-				document.body.removeChild(link);
-			}
-		} else {
-			window.open(file.url, "_blank", "noopener,noreferrer");
-		}
-	};
+	const actionLabel = useFileActionLabel()(file);
 
-	const imageClasses = `max-w-full max-h-full object-contain rounded-md`;
-	const videoClasses = `max-w-full max-h-full rounded-md`;
+	const imageClasses = "max-w-full max-h-full object-contain rounded-md";
+	const videoClasses = "max-w-full max-h-full rounded-md";
 	const showTextPreview = isText(file.url) || isCode(file.url);
-	const fallbackClasses =
-		"flex flex-col items-center justify-center gap-4 h-full p-4 text-center md:p-8";
+	const noPreview = (
+		<div className="flex flex-col items-center justify-center gap-4 h-full p-4 text-center md:p-8">
+			{getFileIcon(file.type)}
+			<p className="text-sm text-muted-foreground">
+				{t(
+					"previewNotAvailableForThisFileType",
+					"Preview not available for this file type",
+				)}
+			</p>
+			<Button
+				variant="outline"
+				disabled={!!file.access}
+				onClick={() => void openOrSaveFile(file)}
+				className="gap-2"
+			>
+				<FileActionIcon file={file} className="w-4 h-4" />
+				{actionLabel}
+			</Button>
+		</div>
+	);
 
 	switch (file.type) {
 		case "image":
@@ -964,6 +1001,7 @@ export function FileDialogPreview({ file }: Readonly<FileDialogPreviewProps>) {
 		case "video":
 			return (
 				<div className="flex justify-center items-center h-full p-2 md:p-4">
+					{/* biome-ignore lint/a11y/useMediaCaption: chat attachments carry no caption track */}
 					<video controls className={videoClasses} poster={file.thumbnailUrl}>
 						<source src={file.url} />
 						Your browser does not support the video tag.
@@ -977,6 +1015,7 @@ export function FileDialogPreview({ file }: Readonly<FileDialogPreviewProps>) {
 					<p className="text-base font-medium text-center break-all md:text-lg">
 						{getDisplayFileName(file.name)}
 					</p>
+					{/* biome-ignore lint/a11y/useMediaCaption: chat attachments carry no caption track */}
 					<audio controls className="w-full max-w-md">
 						<source src={file.url} />
 						Your browser does not support the audio tag.
@@ -1002,44 +1041,8 @@ export function FileDialogPreview({ file }: Readonly<FileDialogPreviewProps>) {
 					</div>
 				);
 			}
-			return (
-				<div className={fallbackClasses}>
-					{getFileIcon(file.type)}
-					<p className="text-sm text-muted-foreground">
-						{t(
-							"previewNotAvailableForThisFileType",
-							"Preview not available for this file type",
-						)}
-					</p>
-					<Button
-						variant="outline"
-						onClick={() => handleFileClick(file)}
-						className="gap-2"
-					>
-						<FileActionIcon file={file} className="w-4 h-4" />
-						{file.isDataUrl ? "Download" : "Open"}
-					</Button>
-				</div>
-			);
+			return noPreview;
 		default:
-			return (
-				<div className={fallbackClasses}>
-					{getFileIcon(file.type)}
-					<p className="text-sm text-muted-foreground">
-						{t(
-							"previewNotAvailableForThisFileType",
-							"Preview not available for this file type",
-						)}
-					</p>
-					<Button
-						variant="outline"
-						onClick={() => handleFileClick(file)}
-						className="gap-2"
-					>
-						<FileActionIcon file={file} className="w-4 h-4" />
-						{file.isDataUrl ? "Download" : "Open"}
-					</Button>
-				</div>
-			);
+			return noPreview;
 	}
 }

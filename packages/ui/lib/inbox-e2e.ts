@@ -571,6 +571,9 @@ export function withEndToEnd(
 			const page: IStarredMessagesPage = await inbox.listStars(query);
 			return { ...page, stars: await e2e.openMarks(page.stars) };
 		},
+		openEntries: (entries, as) => e2e.open(entries, as),
+		sealEntry: (conversationId, request) =>
+			e2e.prepare(conversationId, request),
 		sealBotSecret: async (botId, name, value) => {
 			const keys = botSecretKeys(botId, await inbox.getKeys([botId]));
 			if (keys.length === 0) {

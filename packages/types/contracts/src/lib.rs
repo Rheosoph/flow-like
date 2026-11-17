@@ -21,9 +21,9 @@ pub mod bot_connector;
 #[cfg(feature = "bot")]
 pub mod bot_effective;
 #[cfg(feature = "bot")]
-pub mod bot_skill;
-#[cfg(feature = "bot")]
 pub mod bot_restrictions;
+#[cfg(feature = "bot")]
+pub mod bot_skill;
 
 #[cfg(feature = "inbox")]
 pub mod bot_message;
@@ -43,14 +43,14 @@ pub mod bot_turn;
 pub mod bot_user_context;
 #[cfg(feature = "inbox")]
 pub mod bot_workspace_links;
-#[cfg(feature = "inbox")]
-pub mod user_availability;
 #[cfg(feature = "device-bot")]
 pub mod device_bot;
 #[cfg(feature = "inbox")]
 pub mod inbox;
 #[cfg(feature = "inbox")]
 pub mod tool_grant;
+#[cfg(feature = "inbox")]
+pub mod user_availability;
 
 #[cfg(feature = "geometry")]
 pub mod geometry;

@@ -12,6 +12,8 @@ import {
 export interface BotChatActivity {
 	botId: string | null;
 	at: number;
+	/** The inbox conversation it happened in; global chat activity has none. */
+	conversationId?: string;
 }
 
 function validTime(value: unknown): value is number {

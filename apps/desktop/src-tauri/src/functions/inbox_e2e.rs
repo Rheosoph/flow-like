@@ -20,6 +20,13 @@ impl Default for PersonKeys {
     }
 }
 
+impl PersonKeys {
+    #[cfg(desktop)]
+    pub(crate) fn ring(&self) -> Arc<InboxKeyring> {
+        self.0.clone()
+    }
+}
+
 /// A sealed entry addressed to the reader.
 #[derive(Deserialize)]
 pub struct SealedEntry {

@@ -1517,6 +1517,7 @@
 	"filename": "파일 이름",
 	"fileName": "파일 이름",
 	"fileNamespanClassnametextdestructiveSpan": "파일 이름<1> *</1>",
+	"fileReadyToSave": "",
 	"files": "파일",
 	"fileSizeBytesspanClassnametextdestructiveSpan": "파일 크기(바이트)<1> *</1>",
 	"filesStayOnDisk": "",

@@ -1555,6 +1555,7 @@ async fn attempt_with(
             switchable_profiles: &[],
             open_board: None,
             open_data_studio: None,
+            pointed_at: None,
             attachments: &[],
         },
     );

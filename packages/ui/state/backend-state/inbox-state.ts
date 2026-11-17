@@ -138,6 +138,8 @@ export interface IInboxMessageBody {
 	mentions?: string[];
 	/** Set by a chat that answers this message itself; hosts leave it alone meanwhile. */
 	interactive?: { client_run_id: string };
+	/** The window or browser tab the person pointed the bot at; an edit's `target` is something else. */
+	pointed_at?: IInboxDesktopTarget;
 	approval?: IInboxApproval;
 	approval_response?: IInboxApprovalResponse;
 	user_context_request?: IUserContextRequest;
@@ -145,6 +147,19 @@ export interface IInboxMessageBody {
 	user_context_revoke?: IUserContextRevoke;
 	/** The note a bot reply wrote or changed; the text is only the owner's to read. */
 	note?: IBotNoteRef;
+}
+
+/** One window, or the active tab of a browser window, on the computer whose bot host is `host_id`. */
+export interface IInboxDesktopTarget {
+	kind: "window" | "tab";
+	host_id: string;
+	/** The id `computer_windows` reports. */
+	window_id: string;
+	app: string;
+	/** The window's title; for a tab, the tab's. */
+	title?: string;
+	/** The tab's address, when the browser told it. */
+	url?: string;
 }
 
 export type UserContextField =
@@ -744,6 +759,19 @@ export interface IInboxState {
 		name: string,
 		value: string,
 	): Promise<IInboxSealedEnvelope>;
+	/**
+	 * Entries that arrived outside `listEntries` (the realtime feed) as this device reads them: the
+	 * sealed ones it can open in their plain form.
+	 */
+	openEntries?(entries: IInboxEntry[], as?: string): Promise<IInboxEntry[]>;
+	/**
+	 * `request` as the conversation takes it: sealed to every member's keys when it is end-to-end
+	 * encrypted, unchanged otherwise.
+	 */
+	sealEntry?(
+		conversationId: string,
+		request: ISendInboxEntryRequest,
+	): Promise<ISendInboxEntryRequest>;
 	/** Unfinished bot turns in an account conversation, oldest first; local conversations have none. */
 	listConversationTurns?(conversationId: string): Promise<IConversationTurn[]>;
 	/** Signaling credentials for the conversation's peer room; account conversations only. */

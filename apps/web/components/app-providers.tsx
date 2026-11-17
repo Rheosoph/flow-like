@@ -35,9 +35,9 @@ import { WebProvider } from "../components/web-provider";
 // of whether the overlay is open.
 const ChatActivityProvider = dynamic(
 	() =>
-		import(
-			"@flow-like/flow-like-ui/components/global-chat/chat-activity"
-		).then((module) => module.ChatActivityProvider),
+		import("@flow-like/flow-like-ui/components/global-chat/chat-activity").then(
+			(module) => module.ChatActivityProvider,
+		),
 	{ ssr: false },
 );
 const GlobalChatOverlay = dynamic(
@@ -54,11 +54,11 @@ const GlobalToolBridge = dynamic(
 		).then((module) => module.GlobalToolBridge),
 	{ ssr: false },
 );
-const FlowPilotBubbleButton = dynamic(
+const BotDen = dynamic(
 	() =>
-		import(
-			"@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-button"
-		).then((module) => module.FlowPilotBubbleButton),
+		import("@flow-like/flow-like-ui/components/bot-den/bot-den").then(
+			(module) => module.BotDen,
+		),
 	{ ssr: false },
 );
 
@@ -138,7 +138,7 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
 																<ChatActivityProvider />
 																<GlobalToolBridge />
 																<GlobalChatOverlay />
-																<FlowPilotBubbleButton />
+																<BotDen />
 																<GlobalUpgradeDialog />
 															</TelemetryProvider>
 														</SpotlightWrapper>

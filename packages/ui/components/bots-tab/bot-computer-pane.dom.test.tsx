@@ -15,10 +15,25 @@ mock.module("@flow-like/locales", () => ({
 	useTranslation: () => ({ t: translate, i18n: fakeI18n }),
 }));
 
+const backend: { computer?: unknown } = {};
+const actualBackend = { ...(await import("../../state/backend-state")) };
+mock.module("../../state/backend-state", () => ({
+	...actualBackend,
+	useBackend: () => ({ botState: { computer: backend.computer } }),
+}));
+const actualDevicePane = { ...(await import("./device-computer-pane")) };
+mock.module("./device-computer-pane", () => ({
+	...actualDevicePane,
+	DeviceComputerPane: ({ deviceId }: { deviceId: string }) =>
+		createElement("p", null, `device pane ${deviceId}`),
+}));
+
 const { createRoot } = await import("react-dom/client");
-const { ComputerDesktopOnly, ComputerStage, computerStageState } = await import(
-	"./bot-computer-pane"
+const { QueryClient, QueryClientProvider } = await import(
+	"@tanstack/react-query"
 );
+const { BotComputerPane } = await import("./bot-computer-pane");
+const { ComputerStage, computerStageState } = await import("./computer-stage");
 
 const active: IBotComputerView = {
 	state: "active",
@@ -43,6 +58,8 @@ beforeAll(() => {
 });
 afterAll(() => {
 	mock.module("@flow-like/locales", () => actual.locales);
+	mock.module("../../state/backend-state", () => actualBackend);
+	mock.module("./device-computer-pane", () => actualDevicePane);
 	restoreDomGlobals();
 });
 
@@ -152,7 +169,9 @@ async function showControls(
 }
 
 const labels = () =>
-	[...container.querySelectorAll("button")].map((b) => b.textContent?.trim());
+	[...container.querySelectorAll("button")]
+		.map((b) => b.textContent?.trim())
+		.filter(Boolean);
 
 describe("taking over a bot's screen", () => {
 	test("a controllable screen offers Take over and Stop", async () => {
@@ -295,18 +314,217 @@ describe("taking over a bot's screen", () => {
 	});
 });
 
-describe("the web app", () => {
-	test("a device bot's screen points to the desktop app", async () => {
-		container = window.document.createElement("div") as unknown as HTMLElement;
-		window.document.body.appendChild(container as never);
-		root = createRoot(container);
+const bot = (over: Record<string, unknown> = {}) =>
+	({ id: "b1", location: "desktop", device_id: null, ...over }) as never;
+
+async function showPane(botValue: unknown) {
+	container = window.document.createElement("div") as unknown as HTMLElement;
+	window.document.body.appendChild(container as never);
+	root = createRoot(container);
+	const client = new QueryClient();
+	await act(async () => {
+		root.render(
+			createElement(
+				QueryClientProvider,
+				{ client },
+				createElement(BotComputerPane, {
+					bot: botValue as never,
+					name: "Scout",
+				}),
+			),
+		);
+	});
+}
+
+describe("the pane", () => {
+	test("a device bot without a device host opens the device pane", async () => {
+		backend.computer = { view: mock(async () => asleep) };
+		await showPane(bot({ location: "device", device_id: "dev1" }));
+		expect(container.textContent).toContain("device pane dev1");
+		await hide();
+	});
+
+	test("a pushed update renders without polling; unsubscribes on unmount", async () => {
+		let push: (update: unknown) => void = () => {};
+		const unsubscribe = mock(() => {});
+		const view = mock(async () => asleep);
+		backend.computer = {
+			view,
+			watch: (_b: string, _d: unknown, listener: (u: unknown) => void) => {
+				push = listener;
+				return unsubscribe;
+			},
+			retry: mock(() => {}),
+			stop: async () => {},
+			takeOver: async () => {},
+			handBack: async () => {},
+			input: async () => {},
+		};
+		await showPane(bot());
+		await act(async () => push({ status: "live", view: active }));
+		expect(container.querySelector("img")?.getAttribute("src")).toBe(
+			active.image,
+		);
+		expect(view).not.toHaveBeenCalled();
+		await hide();
+		expect(unsubscribe).toHaveBeenCalledTimes(1);
+	});
+
+	test("unreachable shows failed and Try again calls host.retry", async () => {
+		let push: (update: unknown) => void = () => {};
+		const retry = mock(() => {});
+		backend.computer = {
+			view: mock(async () => asleep),
+			watch: (_b: string, _d: unknown, listener: (u: unknown) => void) => {
+				push = listener;
+				return () => {};
+			},
+			retry,
+		};
+		await showPane(bot());
+		await act(async () => push({ status: "unreachable" }));
+		expect(container.textContent).toContain("Couldn't reach");
 		await act(async () =>
-			root.render(createElement(ComputerDesktopOnly, { name: "Scout" })),
+			(container.querySelector("button") as HTMLElement).click(),
 		);
-		expect(container.textContent).toContain(
-			"Watch and take over in the desktop app",
+		expect(retry).toHaveBeenCalledWith("b1", null);
+		await hide();
+	});
+
+	test("an unpaired update shows the pairing stage and pairs through the host", async () => {
+		let push: (update: unknown) => void = () => {};
+		const pairScreen = mock(async () => {});
+		backend.computer = {
+			view: mock(async () => asleep),
+			watch: (_b: string, _d: unknown, listener: (u: unknown) => void) => {
+				push = listener;
+				return () => {};
+			},
+			pairScreen,
+		};
+		await showPane(bot());
+		await act(async () =>
+			push({ status: "unpaired", host_label: "Studio Mac" }),
 		);
-		expect(container.querySelector("button")).toBeNull();
+		expect(container.textContent).toContain("Pair this device with Studio Mac");
+		expect(container.textContent).not.toContain("Scan QR code");
+		const input = container.querySelector("input") as HTMLInputElement;
+		await act(async () => {
+			Object.getOwnPropertyDescriptor(
+				window.HTMLInputElement.prototype,
+				"value",
+			)?.set?.call(input, "flowlike://pair-screen?v=1");
+			input.dispatchEvent(
+				new window.Event("input", { bubbles: true }) as never,
+			);
+		});
+		await act(async () => {
+			container
+				.querySelector("form")
+				?.dispatchEvent(
+					new window.Event("submit", {
+						bubbles: true,
+						cancelable: true,
+					}) as never,
+				);
+		});
+		expect(pairScreen).toHaveBeenCalledWith("b1", "flowlike://pair-screen?v=1");
+		await hide();
+	});
+
+	test("Watch on another device shows only where the host can pair others", async () => {
+		backend.computer = { view: mock(async () => active) };
+		await showPane(bot());
+		expect(container.textContent).not.toContain("Watch on another device");
+		await hide();
+		backend.computer = {
+			view: mock(async () => active),
+			pairing: {
+				start: async () => ({}),
+				list: async () => [],
+				remove: async () => {},
+				onPaired: () => () => {},
+			},
+		};
+		await showPane(bot());
+		expect(container.textContent).toContain("Watch on another device");
+		await hide();
+	});
+
+	test("a host without watch is polled", async () => {
+		const view = mock(async () => active);
+		backend.computer = { view };
+		await showPane(bot());
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		});
+		expect(view).toHaveBeenCalled();
+		expect(container.querySelector("img")).not.toBeNull();
+		await hide();
+	});
+});
+
+describe("maximizing the stage", () => {
+	const toggle = () =>
+		window.document.querySelector(
+			'button[aria-label="Maximize"], button[aria-label="Restore size"]',
+		) as unknown as HTMLElement;
+	const layer = () => window.document.querySelector(".fixed.inset-0");
+	const esc = (target: unknown) =>
+		(target as HTMLElement).dispatchEvent(
+			new window.KeyboardEvent("keydown", {
+				key: "Escape",
+				bubbles: true,
+			}) as never,
+		);
+
+	test("the button opens a full-window layer and restores", async () => {
+		await showControls(device, { onTakeOver: () => {}, onHandBack: () => {} });
+		expect(layer()).toBeNull();
+		await act(async () => toggle().click());
+		expect(layer()?.querySelector("img")).not.toBeNull();
+		expect(layer()?.textContent).toContain("Stop");
+		expect(toggle().getAttribute("aria-label")).toBe("Restore size");
+		await act(async () => toggle().click());
+		expect(layer()).toBeNull();
+		await hide();
+	});
+
+	test("Esc restores when focus is outside the control surface", async () => {
+		await showControls(device, { onTakeOver: () => {} });
+		await act(async () => toggle().click());
+		await act(async () => esc(window.document.body));
+		expect(layer()).toBeNull();
+		await hide();
+	});
+
+	test("Esc inside the control surface stays with the remote screen", async () => {
+		await showControls(
+			{ ...device, taken_over: true },
+			{ onHandBack: () => {}, onInput: () => {} },
+		);
+		await act(async () => toggle().click());
+		const surface = layer()?.querySelector('[role="application"]') as unknown;
+		await act(async () => esc(surface));
+		expect(layer()).not.toBeNull();
+		await hide();
+	});
+
+	test("going asleep resets the maximized state", async () => {
+		await showControls(device, {});
+		await act(async () => toggle().click());
+		await act(async () => {
+			root.render(
+				createElement(ComputerStage, {
+					state: "asleep",
+					view: asleep,
+					name: "Scout",
+					onStop: () => {},
+					onRetry: () => {},
+				}),
+			);
+		});
+		expect(layer()).toBeNull();
 		await hide();
 	});
 });

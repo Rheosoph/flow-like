@@ -7,6 +7,7 @@ import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useId, useState } from "react";
 import { toast } from "sonner";
+import { NotchSettingsSection } from "../../../components/bot-notch/notch-settings";
 import {
 	type BackgroundHostingPlatform,
 	getBackgroundHostingPlatform,
@@ -106,6 +107,7 @@ function DesktopBackgroundHosting() {
 					"Flow-Like opens without a window when you log in to this computer, so bots hosted here keep answering after a restart. Open the window from the tray icon or the Dock. It starts this way even when no bot runs here.",
 				)}
 			/>
+			<NotchSettingsSection />
 		</div>
 	);
 }

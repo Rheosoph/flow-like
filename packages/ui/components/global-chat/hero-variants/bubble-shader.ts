@@ -1,8 +1,8 @@
 // Shared soap-film bubble shader + theme/token helpers.
 //
 // The iridescent WebGL bubble is the visual signature of the FlowPilot composer on the start page.
-// It is reused verbatim by the small round launcher (flowpilot-bubble-button) shown on every other
-// page, so both render the exact same film — tune the shader here and both stay 1:1.
+// It is reused verbatim by the round FlowPilot orb (flowpilot-bubble-orb) on Home, so both render
+// the exact same film — tune the shader here and both stay 1:1.
 
 export const VERT =
 	"attribute vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }";

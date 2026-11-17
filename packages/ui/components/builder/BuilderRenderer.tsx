@@ -53,6 +53,12 @@ import {
 } from "./BuilderDndContext";
 import { ROOT_ID } from "./WidgetBuilder";
 import {
+	BuilderDenContext,
+	builderComponentTarget,
+	componentDisplayName,
+	setDenTargetAttributes,
+} from "./builder-den";
+import {
 	canAcceptComponentChildren,
 	canReorderComponent,
 	findComponentParent,
@@ -318,7 +324,17 @@ function BuilderComponent({
 		paste,
 		components,
 		actionContext,
+		getWidgetRef,
 	} = useBuilder();
+	const denScope = useContext(BuilderDenContext);
+	const denTarget = useMemo(() => {
+		if (!denScope || componentId === ROOT_ID) return null;
+		const label = componentDisplayName(
+			component as { type: string } & Record<string, unknown>,
+			(instanceId) => getWidgetRef(instanceId)?.name,
+		);
+		return builderComponentTarget(denScope, componentId, label);
+	}, [denScope, componentId, component, getWidgetRef]);
 	const { activeId } = useBuilderDnd();
 	const { isHidden, isRuntimeHidden } = useCanvasVisibility(
 		componentId,
@@ -369,6 +385,7 @@ function BuilderComponent({
 				node.setAttribute("data-component-type", component.type);
 				node.toggleAttribute("data-builder-empty", isEmpty);
 				node.toggleAttribute("data-builder-runtime-hidden", isRuntimeHidden);
+				setDenTargetAttributes(node, denTarget);
 			}
 			setElement(node);
 			setDragRef(node as HTMLElement | null);
@@ -379,6 +396,7 @@ function BuilderComponent({
 			component?.type,
 			isEmpty,
 			isRuntimeHidden,
+			denTarget,
 			setDragRef,
 			setDropRef,
 		],
@@ -391,6 +409,7 @@ function BuilderComponent({
 		element.setAttribute("data-component-type", component.type);
 		element.toggleAttribute("data-builder-empty", isEmpty);
 		element.toggleAttribute("data-builder-runtime-hidden", isRuntimeHidden);
+		setDenTargetAttributes(element, denTarget);
 		const handleClick = (event: MouseEvent) => {
 			const target = event.target as Element | null;
 			if (target?.closest?.("[data-builder-component]") !== element) return;
@@ -419,11 +438,13 @@ function BuilderComponent({
 			element.removeAttribute("data-component-type");
 			element.removeAttribute("data-builder-empty");
 			element.removeAttribute("data-builder-runtime-hidden");
+			setDenTargetAttributes(element, null);
 		};
 	}, [
 		element,
 		componentId,
 		component.type,
+		denTarget,
 		isEmpty,
 		isRuntimeHidden,
 		selectComponent,

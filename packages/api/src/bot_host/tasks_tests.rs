@@ -77,9 +77,17 @@ fn request(kind: TaskKind) -> CreateBotTask {
 }
 
 async fn make(db: &DatabaseConnection, kind: TaskKind) -> bot_task::Model {
-    create_in(db, OWNER, BOT, request(kind), TaskCreator::Owner, None, now())
-        .await
-        .unwrap()
+    create_in(
+        db,
+        OWNER,
+        BOT,
+        request(kind),
+        TaskCreator::Owner,
+        None,
+        now(),
+    )
+    .await
+    .unwrap()
 }
 
 async fn make_due(
@@ -168,9 +176,7 @@ async fn monitoring_opt_in_roundtrips_and_fires_as_trusted_schedule_metadata() {
     .await
     .unwrap();
     assert_eq!(task.monitoring, Some(true));
-    assert!(
-        BotTaskInfo::of(list_in(&db, OWNER, BOT).await.unwrap().remove(0), None).monitoring
-    );
+    assert!(BotTaskInfo::of(list_in(&db, OWNER, BOT).await.unwrap().remove(0), None).monitoring);
     let renamed = update_in(
         &db,
         OWNER,
@@ -495,9 +501,17 @@ async fn schedules_are_validated_when_saved() {
             ..request(TaskKind::Once)
         },
     ] {
-        let error = create_in(&db, OWNER, BOT, bad.clone(), TaskCreator::Owner, None, now())
-            .await
-            .unwrap_err();
+        let error = create_in(
+            &db,
+            OWNER,
+            BOT,
+            bad.clone(),
+            TaskCreator::Owner,
+            None,
+            now(),
+        )
+        .await
+        .unwrap_err();
         assert_eq!(
             error.status(),
             axum::http::StatusCode::BAD_REQUEST,
@@ -742,7 +756,9 @@ async fn turns_in_the_owner_chat_or_woken_by_a_bot_keep_tasks_in_the_owner_chat(
         );
     }
     assert_eq!(
-        origin_of_turn(&db, MEMBER, BOT, "turn-owner").await.unwrap(),
+        origin_of_turn(&db, MEMBER, BOT, "turn-owner")
+            .await
+            .unwrap(),
         None
     );
     assert_eq!(

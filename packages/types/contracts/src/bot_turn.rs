@@ -390,7 +390,10 @@ mod tests {
         assert!(cut.ends_with(notes));
         assert!(cut.starts_with("xxx"));
         let crowded = clip_keeping_tail(&text, keep, 10);
-        assert_eq!(crowded, format!("{}{notes}", "x".repeat(MIN_CLIPPED_HEAD_CHARS)));
+        assert_eq!(
+            crowded,
+            format!("{}{notes}", "x".repeat(MIN_CLIPPED_HEAD_CHARS))
+        );
         assert_eq!(clip_keeping_tail(&text, 0, 5), "xxxxx");
     }
 

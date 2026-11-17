@@ -1,7 +1,8 @@
 use super::{
     approvals::{
-        BOT_APPROVAL_UNKNOWN, BOT_TURN_NOT_WAITING, Expired, GrantRows, answer_in, cancel_in,
-        expire_in, grant_in, list_grants, park_in, revoke_in, sweep_grants,
+        BOT_APPROVAL_UNKNOWN, BOT_TURN_NOT_WAITING, Expired, GrantRows, SealedAnswer, answer_in,
+        answer_sealed_in, cancel_in, expire_in, grant_in, list_grants, park_in, park_sealed_in,
+        revoke_in, sweep_grants,
     },
     fixture::{
         assert_code, at, conversation, database, delivery, insert_bot, participant_wait, recipient,
@@ -10,7 +11,7 @@ use super::{
 };
 use crate::{
     entity::{bot_decision_wait, bot_tool_grant, bot_turn, inbox_entry},
-    routes::inbox::now_millis,
+    routes::inbox::{approvals::sealed_owner_chat, now_millis},
 };
 use axum::http::StatusCode;
 use chrono::{DateTime, Duration, FixedOffset};
@@ -24,7 +25,8 @@ use flow_like_types::{
     inbox::{ConversationKind, direct_pair_key},
     tool_grant::{
         APPROVAL_WAIT_DAYS, ApprovalAnswer, ApprovalDecision, ERROR_APPROVAL_EXPIRED,
-        ERROR_APPROVAL_ITEM_UNKNOWN, ToolGrantKey, args_hash,
+        ERROR_APPROVAL_ITEM_UNKNOWN, SealedApprovalCard, ToolGrantKey, args_hash,
+        sealed_approval_response_message_id,
     },
 };
 use sea_orm::{
@@ -32,7 +34,7 @@ use sea_orm::{
     sea_query::Expr,
 };
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 const OWNER: &str = "user-a";
 const BOT: &str = "bot_1";
@@ -896,4 +898,188 @@ async fn an_unknown_item_is_refused() {
     assert!(list_grants(&db, OWNER, BOT, true).await.unwrap().is_empty());
     let waiting = ledger::find(&db, &turn.id, None).await.unwrap().unwrap();
     assert_eq!(waiting.status, STORED_WAITING);
+}
+
+fn sealed_envelopes() -> BTreeMap<String, Value> {
+    [OWNER, BOT]
+        .iter()
+        .map(|member| {
+            (
+                member.to_string(),
+                json!({ "v": 1, "enc": "hpke", "key_id": format!("k_{member}"), "enc_key": "ZQ==", "ct": "Yw==" }),
+            )
+        })
+        .collect()
+}
+
+/// [`parked`] in the owner's end-to-end encrypted chat: the host sealed the card.
+async fn parked_sealed() -> (DatabaseConnection, bot_turn::Model, ApprovalRequest) {
+    let (db, turn) = running().await;
+    db.execute_unprepared(
+        r#"UPDATE public."Conversation" SET "encryption" = 'E2E' WHERE "id" = 'c1'"#,
+    )
+    .await
+    .unwrap();
+    let card = card(&turn);
+    let chat = sealed_owner_chat(&db, OWNER, BOT, &turn.conversation_id)
+        .await
+        .unwrap()
+        .expect("the turn runs in the owner's encrypted chat");
+    let sealed = SealedApprovalCard {
+        approval_id: card.id.clone(),
+        envelopes: sealed_envelopes(),
+    };
+    park_sealed_in(&db, &turn, HOST, &sealed, &chat, now_millis())
+        .await
+        .unwrap();
+    let turn = ledger::find(&db, &turn.id, None).await.unwrap().unwrap();
+    (db, turn, card)
+}
+
+fn opened(card: &ApprovalRequest) -> SealedAnswer {
+    SealedAnswer {
+        card: card.clone(),
+        envelopes: sealed_envelopes(),
+    }
+}
+
+async fn resolve_sealed(
+    db: &DatabaseConnection,
+    turn: &bot_turn::Model,
+    sealed: &SealedAnswer,
+    decision: ApprovalDecision,
+) -> Result<bot_turn::Model, crate::error::ApiError> {
+    answer_sealed_in(
+        db,
+        OWNER,
+        BOT,
+        &turn.id,
+        &answer(&sealed.card, decision),
+        "c1",
+        sealed,
+        now_millis(),
+    )
+    .await
+    .map(|(turn, _)| turn)
+}
+
+#[tokio::test]
+async fn a_sealed_card_parks_the_turn_and_is_posted_unread_in_the_encrypted_owner_chat() {
+    let (db, turn, card) = parked_sealed().await;
+    assert_eq!(turn.status, STORED_WAITING);
+    assert_eq!(turn.reply_message_id.as_deref(), Some(card.id.as_str()));
+    assert!(turn.lease_until.is_none());
+    let copy = inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::InboxId.eq(OWNER))
+        .filter(inbox_entry::Column::MessageId.eq(card.id.as_str()))
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(copy.sender_id, BOT);
+    assert_eq!(copy.envelope["enc"], "hpke");
+    assert!(copy.envelope.get("body").is_none());
+}
+
+#[tokio::test]
+async fn only_the_owners_encrypted_direct_chat_takes_a_sealed_card() {
+    let (db, turn) = running().await;
+    assert!(
+        sealed_owner_chat(&db, OWNER, BOT, &turn.conversation_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    conversation(&db, "room", "GROUP", "E2E", &[OWNER, BOT]).await;
+    assert!(
+        sealed_owner_chat(&db, OWNER, BOT, "room")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn a_sealed_answer_settles_from_the_opened_card_and_posts_the_sealed_answer() {
+    let (db, turn, card) = parked_sealed().await;
+    let queued = resolve_sealed(&db, &turn, &opened(&card), ApprovalDecision::Always)
+        .await
+        .unwrap();
+    assert_eq!(queued.status, STORED_QUEUED);
+    assert!(queued.reply_message_id.is_none());
+    let grants = list_grants(&db, OWNER, BOT, false).await.unwrap();
+    assert_eq!(
+        grants
+            .iter()
+            .map(|g| (g.tool.as_str(), g.scope.as_str()))
+            .collect::<Vec<_>>(),
+        [("knowledge_drop", "table:notes")]
+    );
+    let response = inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::InboxId.eq(OWNER))
+        .filter(inbox_entry::Column::SenderId.eq(OWNER))
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        response.message_id,
+        sealed_approval_response_message_id(&card.id)
+    );
+    assert_eq!(response.envelope["enc"], "hpke");
+}
+
+#[tokio::test]
+async fn a_sealed_answer_refuses_a_card_its_id_does_not_name() {
+    let (db, turn, card) = parked_sealed().await;
+    let mut forged = card.clone();
+    forged.args_hash = args_hash("knowledge_drop", &json!({ "index": "other" }));
+    let refused = resolve_sealed(&db, &turn, &opened(&forged), ApprovalDecision::Always)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let mut elsewhere = card.clone();
+    elsewhere.turn_id = "bt_other".into();
+    let refused = resolve_sealed(&db, &turn, &opened(&elsewhere), ApprovalDecision::Always)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert!(list_grants(&db, OWNER, BOT, true).await.unwrap().is_empty());
+    let waiting = ledger::find(&db, &turn.id, None).await.unwrap().unwrap();
+    assert_eq!(waiting.status, STORED_WAITING);
+}
+
+#[tokio::test]
+async fn a_sealed_answer_needs_the_bots_card_in_the_chat() {
+    let (db, turn) = running().await;
+    db.execute_unprepared(
+        r#"UPDATE public."Conversation" SET "encryption" = 'E2E' WHERE "id" = 'c1'"#,
+    )
+    .await
+    .unwrap();
+    let card = card(&turn);
+    wait_without_card(&db, &turn, &card).await;
+    let turn = ledger::find(&db, &turn.id, None).await.unwrap().unwrap();
+    let refused = resolve_sealed(&db, &turn, &opened(&card), ApprovalDecision::Once)
+        .await
+        .unwrap_err();
+    assert_code(&refused, StatusCode::CONFLICT, BOT_APPROVAL_UNKNOWN);
+}
+
+/// A turn waiting on `card` whose card never reached the chat.
+async fn wait_without_card(
+    db: &DatabaseConnection,
+    turn: &bot_turn::Model,
+    card: &ApprovalRequest,
+) {
+    bot_turn::Entity::update_many()
+        .col_expr(bot_turn::Column::Status, Expr::value(STORED_WAITING))
+        .col_expr(
+            bot_turn::Column::ReplyMessageId,
+            Expr::value(card.id.as_str()),
+        )
+        .filter(bot_turn::Column::Id.eq(turn.id.as_str()))
+        .exec(db)
+        .await
+        .unwrap();
 }

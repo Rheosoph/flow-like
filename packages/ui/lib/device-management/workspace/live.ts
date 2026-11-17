@@ -173,6 +173,10 @@ export interface LiveConnection {
 	openModelGateway?(options?: {
 		signal?: AbortSignal;
 	}): Promise<DeviceServiceStream>;
+	openBotPlayground?(
+		botId: string,
+		options?: { signal?: AbortSignal },
+	): Promise<DeviceServiceStream>;
 	detachDataTunnel?(): DeviceTunnelDataClient | undefined;
 	adoptDataTunnel?(client: DeviceTunnelDataClient): void;
 	close(): void;
@@ -460,6 +464,25 @@ class LiveManager implements LiveSessionManagerImpl {
 					"Update the device agent to send requests to its models.",
 				);
 			return connection.openModelGateway(options);
+		});
+	}
+	/** Only for agents with `bot_playground`: an older one closes the whole tunnel on the unknown target. */
+	openBotPlayground(
+		deviceId: string,
+		botId: string,
+		options: { signal?: AbortSignal } = {},
+	): Promise<DeviceServiceStream> {
+		const entry = this.entry(deviceId);
+		return this.openStream(deviceId, options.signal, (connection) => {
+			if (!connection.openBotPlayground)
+				throw new Error("Update Studio to watch bots on devices.");
+			const features = entry.inspection?.value.features;
+			if (features && features.bot_playground !== 1)
+				throw new LiveCallError(
+					"rejected_unsupported",
+					"Update the device agent to watch its bots.",
+				);
+			return connection.openBotPlayground(botId, options);
 		});
 	}
 	/** One stream of the session; its demand holds the session until the stream closes. */

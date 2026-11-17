@@ -17,6 +17,7 @@ import type {
 	IBotPermissions,
 	IBotPresence,
 	IBotRestrictions,
+	IBotScreenAccess,
 	IBotSecretInfo,
 	IBotSkill,
 	IBotState,
@@ -40,16 +41,19 @@ import type {
 	IUpsertBotSecretRequest,
 } from "@flow-like/flow-like-ui";
 import { getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
+import { createScreenSealing } from "@flow-like/flow-like-ui/lib/bot-screens/screen-sealing";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { IAppVisibility } from "@flow-like/flow-like-ui/lib/schema/app/app";
 import {
 	type IBotApprovalItemDecision,
+	type ISealedApprovalAnswer,
 	approvalAnswerBody,
 } from "@flow-like/flow-like-ui/state/backend-state/bot-state";
 import { invoke } from "@tauri-apps/api/core";
 import { del, get, patch, post, put } from "../../lib/api";
 import { appsDB } from "../../lib/apps-db";
+import { tauriInboxCrypto } from "../../lib/inbox-e2e";
 import {
 	AccountListReads,
 	type IAccountRoute,
@@ -65,7 +69,7 @@ import {
 	localTasks,
 	localToolGrants,
 } from "../../lib/local-bots/commands";
-import { BotComputerHost } from "../../lib/local-bots/computer";
+import { createComputerHost } from "../../lib/local-bots/computer";
 import { localConnectors } from "../../lib/local-bots/connectors";
 import { BotEncryptionHost } from "../../lib/local-bots/encryption";
 import { mergeBots } from "../../lib/local-bots/merge";
@@ -183,10 +187,17 @@ export class BotState implements IBotState {
 	readonly local: ILocalBotHost;
 	readonly turns: IBotTurnHost;
 	readonly encryption: IBotEncryptionHost = new BotEncryptionHost();
-	readonly computer: IBotComputerHost = new BotComputerHost();
+	readonly computer: IBotComputerHost;
 	private readonly accountBots = new AccountListReads<IBot>();
 
 	constructor(private readonly backend: TauriBackend) {
+		this.computer = createComputerHost({
+			access: () => this.getScreenAccess(),
+			sealing: createScreenSealing({
+				crypto: tauriInboxCrypto,
+				sub: () => accountSession(backend)?.sub,
+			}),
+		});
 		this.local = new LocalBotMover(backend);
 		this.turns = new BotTurnHost(
 			async (botId) => (await this.accountFor(botId)) === undefined,
@@ -557,6 +568,21 @@ export class BotState implements IBotState {
 			secretPath(account.id, name),
 			undefined,
 			account.auth,
+		);
+	}
+
+	async getScreenAccess(): Promise<IBotScreenAccess> {
+		const session = accountSession(this.backend);
+		if (!session) {
+			throw new Error(
+				"Sign in to watch a bot's computer from this device: the live view runs through your account",
+			);
+		}
+		return post<IBotScreenAccess>(
+			session.profile,
+			"realtime/bot-screens",
+			undefined,
+			session.auth,
 		);
 	}
 
@@ -1033,6 +1059,7 @@ export class BotState implements IBotState {
 		approvalId: string,
 		decision: BotApprovalDecision,
 		items?: readonly IBotApprovalItemDecision[],
+		sealed?: ISealedApprovalAnswer,
 	): Promise<void> {
 		const account = await this.accountFor(botId);
 		if (!account) {
@@ -1049,7 +1076,7 @@ export class BotState implements IBotState {
 		await post<unknown>(
 			account.profile,
 			`${botPath(account.id)}/turns/${encodeURIComponent(turnId)}/approval`,
-			approvalAnswerBody(approvalId, decision, items),
+			approvalAnswerBody(approvalId, decision, items, sealed),
 			account.auth,
 		);
 	}

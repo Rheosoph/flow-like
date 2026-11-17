@@ -7,10 +7,7 @@ import { useAuth } from "react-oidc-context";
 import { getApiOrigin } from "../../lib/api-url";
 import type { IProfile } from "../../lib/schema/profile/profile";
 import { useBackend, useBackendReady } from "../../state/backend-state";
-import {
-	useRequestFabBubble,
-	useSuppressFabBubble,
-} from "../../state/fab-bubble";
+import { useRequestBotDen } from "../../state/bot-den";
 import { Button } from "../ui/button";
 import { Skeleton } from "../ui/skeleton";
 import { createDefaultHomeLayout } from "./catalog";
@@ -136,13 +133,12 @@ export function HomePage() {
 		defaults.data,
 		bundled,
 	);
-	useRequestFabBubble(
+	useRequestBotDen(
 		!editing &&
 			!resolved.layout.widgets.some((widget) =>
 				["flowpilot", "bot-chat"].includes(widget.type),
 			),
 	);
-	useSuppressFabBubble(editing);
 	const save = async (layout: IHomeLayout | null) => {
 		const id = profile.data?.id;
 		if (!id) throw new Error("Choose a profile before saving your home.");

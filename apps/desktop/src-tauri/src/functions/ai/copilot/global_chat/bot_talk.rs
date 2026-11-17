@@ -296,6 +296,7 @@ async fn answer_turn(
             None,
             None,
             None,
+            None,
             Some(run_id),
             Channel::<String>::new(|_| Ok(())),
             options,

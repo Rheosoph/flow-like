@@ -22,6 +22,7 @@ import {
 import Link from "next/link";
 import type { IApp, IBoardListing } from "../../../lib";
 import { IAppVisibility, RolePermissions } from "../../../lib";
+import { appDenProps } from "../../../lib/bot-den/app-targets";
 import { formatDuration, formatRelativeTime } from "../../../lib/date";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
@@ -330,6 +331,12 @@ export function MissionControl({
 										<Link
 											key={board.id}
 											href={`/flow?id=${board.id}&app=${appId}`}
+											{...appDenProps({
+												kind: "board",
+												appId,
+												id: board.id,
+												label: board.name,
+											})}
 											className="group flex items-center gap-3 rounded-md px-2 py-2 transition-colors hover:bg-muted/60"
 										>
 											<StateDot

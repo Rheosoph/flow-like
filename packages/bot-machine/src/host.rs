@@ -125,6 +125,15 @@ impl MachineHost {
             .clone()
     }
 
+    pub fn in_process(&self) -> bool {
+        self.inner.in_process
+    }
+
+    /// The latest frame, without creating an entry for a bot that never ran here.
+    pub fn latest_frame(&self, bot_id: &str) -> Option<Frame> {
+        self.existing(bot_id)?.channel.frames.latest()
+    }
+
     fn existing(&self, bot_id: &str) -> Option<Arc<BotEntry>> {
         self.inner.bots.get(bot_id).map(|entry| entry.clone())
     }

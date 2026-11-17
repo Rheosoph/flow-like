@@ -1199,6 +1199,15 @@ export class DeviceManagementConnection {
 			);
 		return this.bulk().openModelGateway(options);
 	}
+	/** Only for agents with `bot_playground`: an older one closes the whole tunnel on the unknown target. */
+	openBotPlayground(
+		botId: string,
+		options: { signal?: AbortSignal } = {},
+	): Promise<DeviceServiceStream> {
+		if (!this.supportsServiceTunnel)
+			throw new Error("Update the device agent to watch its bots.");
+		return this.bulk().openBotPlayground(botId, options);
+	}
 	detachDataTunnel(): DeviceTunnelDataClient | undefined {
 		const client = this.dataClient;
 		this.dataClient = undefined;

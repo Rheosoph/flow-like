@@ -43,8 +43,9 @@ use flow_like::{
         board::Board,
         copilot::{
             AttachmentManifestEntry, CatalogProvider, GlobalDataStudioContext,
-            GlobalOpenBoardContext, PlatformContextInput, PlatformSpecialist, RunContext,
-            build_platform_context, platform::PlatformToolBridge, run_specialist_chat_with_access,
+            GlobalOpenBoardContext, GlobalPointedAt, PlatformContextInput, PlatformSpecialist,
+            RunContext, build_platform_context, platform::PlatformToolBridge,
+            run_specialist_chat_with_access,
         },
         node::Node,
     },
@@ -1057,6 +1058,7 @@ pub(super) async fn build_global_agent_context(
     user_context: Option<&str>,
     open_board: Option<&GlobalOpenBoardContext>,
     open_data_studio: Option<&GlobalDataStudioContext>,
+    pointed_at: Option<&GlobalPointedAt>,
     attachments: &[AttachmentManifestEntry],
 ) -> String {
     let switchable: Vec<String> =
@@ -1081,6 +1083,7 @@ pub(super) async fn build_global_agent_context(
         switchable_profiles: &switchable,
         open_board,
         open_data_studio,
+        pointed_at,
         attachments,
     })
 }

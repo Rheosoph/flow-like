@@ -119,20 +119,31 @@ function CodeOutline({
 	);
 }
 
-/** A live camera view that outlines every code it reads; the shutter hands back photo and codes. */
+/**
+ * A live camera view that outlines every code it reads; the shutter hands back photo and codes.
+ * With `onCode` a code is taken as soon as it is read and accepted, without the shutter.
+ */
 export function BarcodeScannerDialog({
 	open,
 	detect,
 	onCapture,
 	onCancel,
+	onCode,
+	title,
+	hint,
 }: {
 	readonly open: boolean;
 	readonly detect: BarcodeDetect;
 	readonly onCapture: (capture: BarcodeCapture) => void;
 	readonly onCancel: () => void;
+	readonly onCode?: (text: string) => boolean;
+	readonly title?: string;
+	readonly hint?: string;
 }) {
 	const { t } = useTranslation();
 	const videoRef = useRef<HTMLVideoElement>(null);
+	const onCodeRef = useRef(onCode);
+	onCodeRef.current = onCode;
 	const [ready, setReady] = useState(false);
 	const [error, setError] = useState<string>();
 	const [live, setLive] = useState<LiveCodes>();
@@ -171,6 +182,7 @@ export function BarcodeScannerDialog({
 						luma = frame.luma;
 						const codes = await detect(frame, false).catch(() => []);
 						if (stopped) break;
+						if (codes.some((code) => onCodeRef.current?.(code.text))) break;
 						setLive((previous) => ({
 							width: frame.width,
 							height: frame.height,
@@ -243,12 +255,15 @@ export function BarcodeScannerDialog({
 		>
 			<DialogContent className="h-[calc(100dvh-2rem-var(--fl-safe-top,0px)-var(--fl-safe-bottom,0px))] gap-0 overflow-hidden p-0 sm:max-w-3xl">
 				<DialogHeader className="px-4 pt-4 pb-3 pr-12">
-					<DialogTitle>{t("scanBarcodes", "Scan barcodes")}</DialogTitle>
+					<DialogTitle>
+						{title ?? t("scanBarcodes", "Scan barcodes")}
+					</DialogTitle>
 					<DialogDescription>
-						{t(
-							"barcodeScannerHint",
-							"Point the camera at the codes. Every code that is read gets outlined; press the shutter to add the photo and the codes to your message.",
-						)}
+						{hint ??
+							t(
+								"barcodeScannerHint",
+								"Point the camera at the codes. Every code that is read gets outlined; press the shutter to add the photo and the codes to your message.",
+							)}
 					</DialogDescription>
 				</DialogHeader>
 				<div className="relative min-h-0 flex-1 bg-muted">

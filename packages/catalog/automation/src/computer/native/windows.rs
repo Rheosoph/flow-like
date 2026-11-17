@@ -28,6 +28,9 @@ impl Drop for Com {
 fn hwnd(window: &xcap::Window) -> Result<HWND> {
     Ok(HWND(window.id()? as usize as *mut std::ffi::c_void))
 }
+pub(super) fn window_exists(id: u32) -> bool {
+    unsafe { IsWindow(Some(HWND(id as usize as *mut std::ffi::c_void))).as_bool() }
+}
 fn automation() -> Result<IUIAutomation> {
     Ok(unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)? })
 }

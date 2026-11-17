@@ -5,6 +5,7 @@ import { ArrowRightIcon, GlobeIcon } from "lucide-react";
 import Link from "next/link";
 import { useMemo } from "react";
 import type { IEvent } from "../../../lib";
+import { appDenProps } from "../../../lib/bot-den/app-targets";
 import { formatRelativeTime } from "../../../lib/date";
 import { formatEventTypeLabel } from "../../../lib/event-type-label";
 import { RolePermissions } from "../../../lib/permission/role-permission";
@@ -22,6 +23,7 @@ export interface ProjectSurface {
 	id: string;
 	name: string;
 	kind: string;
+	den: { kind: "event" | "page"; id: string };
 	entry: string | null;
 	active: boolean;
 	runs: number;
@@ -63,6 +65,7 @@ export function useProjectSurfaces(
 				id: event.id,
 				name: event.name,
 				kind: formatEventTypeLabel(event.event_type),
+				den: { kind: "event", id: event.id },
 				entry: routePath ?? page?.name ?? null,
 				active: event.active,
 				runs: health?.total ?? 0,
@@ -77,6 +80,7 @@ export function useProjectSurfaces(
 				id: `page-${page.pageId}`,
 				name: page.name,
 				kind: "Page",
+				den: { kind: "page", id: page.pageId },
 				entry: null,
 				active: true,
 				runs: 0,
@@ -202,6 +206,12 @@ export function SurfacesTable({
 							{shown.map((surface) => (
 								<tr
 									key={surface.id}
+									{...appDenProps({
+										kind: surface.den.kind,
+										appId,
+										id: surface.den.id,
+										label: surface.name,
+									})}
 									className="border-b last:border-0 hover:bg-muted/50"
 								>
 									<td className="px-4 py-2">

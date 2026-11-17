@@ -18,6 +18,7 @@ use crate::{
     routes::{
         bots::{
             presence::{forget_device_in, report_device_in},
+            tool_grants::ParkCard,
             turns::{TurnHostRequest, checked_host_id},
             workspace::live_workspace,
         },
@@ -953,8 +954,15 @@ pub(crate) async fn park(
     .await?;
     let host_id = host(body.host_id.clone())?;
     let turn = held_turn(&state.db, &owner, &id, &turn_id).await?;
-    checked_card(&turn, &body.approval)?;
-    approvals::park_held(&state, &turn, &host_id, &body.approval).await?;
+    match ParkCard::of(body.approval, body.sealed)? {
+        ParkCard::Plain(card) => {
+            checked_card(&turn, &card)?;
+            approvals::park_held(&state, &turn, &host_id, &card).await?;
+        }
+        ParkCard::Sealed(sealed) => {
+            approvals::park_sealed(&state, &turn, &host_id, &sealed).await?;
+        }
+    }
     bots_grant::settle(&state, &owner, body.usage.as_ref(), true).await;
     Ok(Json(turn_state(&state.db, &owner, &turn_id).await?))
 }

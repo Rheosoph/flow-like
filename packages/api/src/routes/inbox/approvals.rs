@@ -25,6 +25,7 @@ use flow_like_types::{
 };
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 /// Whether the event is the owner's answer to one of their bot's cards: the sender owns a bot
 /// of the conversation, the message id is the one the card's answer has, and the sender's copy
@@ -87,6 +88,26 @@ pub(crate) async fn open_conversation<C: ConnectionTrait>(
     Ok(plain.then_some(id))
 }
 
+/// The turn's conversation when it is the owner's end-to-end encrypted direct chat with the bot:
+/// the one place a host-sealed card can go. `None` for any other conversation.
+pub(crate) async fn sealed_owner_chat<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    bot_id: &str,
+    turn_conversation_id: &str,
+) -> Result<Option<String>, ApiError> {
+    let key = pair_key(owner_id, bot_id);
+    Ok(conversation::Entity::find_by_id(turn_conversation_id)
+        .one(db)
+        .await?
+        .filter(|row| {
+            row.direct_key.as_deref() == Some(key.as_str())
+                && ConversationEncryption::parse(&row.encryption)
+                    == Some(ConversationEncryption::E2e)
+        })
+        .map(|row| row.id))
+}
+
 /// Whether `conversation_id` is the direct conversation of `owner_id` and `bot_id`.
 pub(crate) async fn is_owner_chat<C: ConnectionTrait>(
     db: &C,
@@ -125,13 +146,52 @@ pub(crate) async fn post_card_in<C: ConnectionTrait>(
     if let Some(sent) = repeat_of(txn, conversation_id, bot_id, &card.id).await? {
         return Ok(sent);
     }
-    let body = json!({
-        "text": format!("I need your approval: {}", card.summary),
-        "hops": hops,
-        "approval": card,
-    });
-    let outgoing = validate_send(message(card.id.clone(), body))?;
+    let outgoing = validate_send(message(card.id.clone(), card.message_body(hops)))?;
     fan_out(txn, conversation_id, bot_id, hops, &outgoing, now).await
+}
+
+/// Posts a message a device sealed in an end-to-end encrypted chat (a host's card, the owner's
+/// answer to it) without reading it. A repeat returns the first copy.
+pub(crate) async fn post_sealed_in<C: ConnectionTrait>(
+    txn: &C,
+    conversation_id: &str,
+    sender: &str,
+    hops: u32,
+    message_id: &str,
+    envelopes: &BTreeMap<String, Value>,
+    now: DateTime<FixedOffset>,
+) -> Result<Sent, ApiError> {
+    if let Some(sent) = repeat_of(txn, conversation_id, sender, message_id).await? {
+        return Ok(sent);
+    }
+    let outgoing = validate_send(SendEntryRequest {
+        message_id: message_id.to_string(),
+        kind: InboxEntryKind::Message,
+        envelope: None,
+        envelopes: Some(envelopes.clone()),
+        interactive: None,
+        turn: None,
+    })?;
+    fan_out(txn, conversation_id, sender, hops, &outgoing, now).await
+}
+
+/// Whether the owner's copy of `conversation_id` holds the bot's sealed card `approval_id`.
+pub(crate) async fn holds_sealed_card<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    bot_id: &str,
+    conversation_id: &str,
+    approval_id: &str,
+) -> Result<bool, ApiError> {
+    Ok(inbox_entry::Entity::find()
+        .filter(super::deletion::visible_entries())
+        .filter(inbox_entry::Column::InboxId.eq(owner_id))
+        .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
+        .filter(inbox_entry::Column::SenderId.eq(bot_id))
+        .filter(inbox_entry::Column::MessageId.eq(approval_id))
+        .one(db)
+        .await?
+        .is_some())
 }
 
 /// Posts the owner's answer to a card; it replies to the card and wakes nobody.

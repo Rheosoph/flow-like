@@ -30,7 +30,7 @@ use flow_like::{
     },
     flow::copilot::{
         AttachmentManifestEntry, BotToolHost, GlobalDataStudioContext, GlobalOpenBoardContext,
-        PlatformContextInput, bot_platform_context,
+        GlobalPointedAt, PlatformContextInput, bot_platform_context,
         memory::{AssistantMemory, MemoryEntry, MemoryScope, MemoryStatus},
         platform::{PlatformToolBridge, RoomUpdatesBridge},
         run_bot_chat_with_talk, run_platform_chat,
@@ -446,6 +446,7 @@ pub async fn global_chat(
     board_context: Option<GlobalOpenBoardContext>,
     // The Data Studio page the user currently has open, so the assistant defaults data work to it.
     data_studio_context: Option<GlobalDataStudioContext>,
+    pointed_at: Option<GlobalPointedAt>,
     // Frontend-generated id (the assistant message id) under which this run is registered so a
     // reloaded webview can re-attach via `global_chat_resume`. `None` disables resumability.
     run_id: Option<String>,
@@ -544,6 +545,7 @@ pub async fn global_chat(
         attachments_manifest,
         board_context,
         data_studio_context,
+        pointed_at,
         run_id,
         channel,
         crate::functions::ai::native_tool_bridge::NativeRunOptions {
@@ -690,6 +692,7 @@ pub async fn global_chat_native(
     board_context: Option<GlobalOpenBoardContext>,
     // The Data Studio page the user currently has open, so the assistant defaults data work to it.
     data_studio_context: Option<GlobalDataStudioContext>,
+    pointed_at: Option<GlobalPointedAt>,
     // Frontend-generated id (the assistant message id) under which this run is registered so a
     // reloaded webview can re-attach via `global_chat_resume`. `None` disables resumability.
     run_id: Option<String>,
@@ -1005,6 +1008,7 @@ pub async fn global_chat_native(
                 switchable_profiles: &[],
                 open_board: board_context.as_ref(),
                 open_data_studio: data_studio_context.as_ref(),
+                pointed_at: pointed_at.as_ref(),
                 attachments: &with_chat_file_handles(&attachments_manifest),
             },
         ),
@@ -1015,6 +1019,7 @@ pub async fn global_chat_native(
                 user_context.as_deref(),
                 board_context.as_ref(),
                 data_studio_context.as_ref(),
+                pointed_at.as_ref(),
                 &attachments_manifest,
             )
             .await
@@ -1575,12 +1580,12 @@ mod lifecycle_tests {
         const COMMAND: usize = future_size!(
             global_chat;
             A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10,
-            A11, A12, A13, A14, A15, A16, A17, A18, A19, A20, A21,
+            A11, A12, A13, A14, A15, A16, A17, A18, A19, A20, A21, A22,
         );
         const NATIVE: usize = future_size!(
             global_chat_native;
             A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10,
-            A11, A12, A13, A14, A15, A16, A17, A18, A19,
+            A11, A12, A13, A14, A15, A16, A17, A18, A19, A20,
         );
         assert!(
             COMMAND <= 16 * 1024,

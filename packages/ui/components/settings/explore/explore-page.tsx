@@ -57,7 +57,7 @@ import type {
 	NodeLabelMapping,
 	UpdateOntologyObjectPayload,
 } from "@flow-like/flow-like-ui/state/backend-state/graph-state";
-import { useRequestFabBubble } from "@flow-like/flow-like-ui/state/fab-bubble";
+import { useRequestBotDen } from "@flow-like/flow-like-ui/state/bot-den";
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	AlertTriangle,
@@ -88,7 +88,14 @@ import {
 	useSearchParams,
 } from "next/navigation";
 import type React from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type RefObject,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import {
 	databaseSelectorFromParams,
@@ -180,8 +187,13 @@ const ScrollableTabStrip: React.FC<{
 	);
 };
 
-const StudioRoot: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-	<div className="@container/ds h-full min-h-0 min-w-0">{children}</div>
+const StudioRoot: React.FC<{
+	children: React.ReactNode;
+	rootRef?: RefObject<HTMLDivElement | null>;
+}> = ({ children, rootRef }) => (
+	<div ref={rootRef} className="@container/ds h-full min-h-0 min-w-0">
+		{children}
+	</div>
 );
 
 export const ExploreDataPage: React.FC<ExploreDataPageProps> = ({ appId }) => {
@@ -266,11 +278,12 @@ export const ExploreDataPage: React.FC<ExploreDataPageProps> = ({ appId }) => {
 
 	// The ontology and table views are what FlowPilot actually works on here, so they get the
 	// launcher; DatabaseOverview decides for itself per tab.
-	useRequestFabBubble(!!overlayParam || !!table);
+	const studioRootRef = useRef<HTMLDivElement>(null);
+	useRequestBotDen(!!overlayParam || !!table, studioRootRef);
 
 	if (overlayParam) {
 		return (
-			<StudioRoot>
+			<StudioRoot rootRef={studioRootRef}>
 				<OverlayView
 					appId={appId}
 					overlayId={overlayParam}
@@ -287,7 +300,7 @@ export const ExploreDataPage: React.FC<ExploreDataPageProps> = ({ appId }) => {
 	}
 
 	return (
-		<StudioRoot>
+		<StudioRoot rootRef={studioRootRef}>
 			{table ? (
 				<TableView
 					table={table}
@@ -444,6 +457,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		? requestedView
 		: "overview";
 	const [activeView, setActiveViewState] = useState<DataStudioView>(urlView);
+	const overviewRootRef = useRef<HTMLDivElement>(null);
 
 	// Keep back/forward navigation and copied deep links authoritative. Tab clicks
 	// update this same state synchronously below so the controlled Radix tabs do
@@ -453,7 +467,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 	}, [urlView]);
 
 	// The overview tab is a landing page with its own primary actions — the launcher only crowds it.
-	useRequestFabBubble(activeView !== "overview");
+	useRequestBotDen(activeView !== "overview", overviewRootRef);
 
 	// Every read on this page is `ReadFiles` OR `ReadDatabase`; the board,
 	// connection and action surfaces add one permission each. A denial used to
@@ -1276,7 +1290,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 	}
 
 	return (
-		<div className="flex flex-col h-full min-w-0">
+		<div ref={overviewRootRef} className="flex flex-col h-full min-w-0">
 			<div className="p-4 pb-0 @xl/ds:p-6 @xl/ds:pb-0">
 				<header className="flex flex-col gap-3 @xl/ds:flex-row @xl/ds:items-center @xl/ds:justify-between @xl/ds:gap-4">
 					<div className="flex min-w-0 items-center gap-3">
@@ -1581,6 +1595,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 						onChange={setFacet}
 					/>
 					<SourceGrid
+						appId={appId}
 						entries={filteredAndSortedTables}
 						loading={tableSummaries.isLoading || userTableSummaries.isLoading}
 						searchQuery={query}

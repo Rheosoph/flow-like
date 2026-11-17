@@ -402,6 +402,19 @@ export class DeviceServiceTunnel {
 			options.signal,
 		);
 	}
+	/** The live view of one bot's screen; only agents with `bot_playground` know the target. */
+	openBotPlayground(
+		botId: string,
+		options: { signal?: AbortSignal } = {},
+	): Promise<DeviceServiceStream> {
+		if (!/^[A-Za-z0-9_:.-]{1,128}$/.test(botId))
+			throw new Error("A valid bot id is required to watch a bot.");
+		return this.openStream(
+			TunnelKind.Open,
+			{ target: { bot_playground: { bot_id: botId, observations: true } } },
+			options.signal,
+		);
+	}
 	openData(
 		input: TunnelDataOpen,
 		signal?: AbortSignal,

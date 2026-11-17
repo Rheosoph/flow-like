@@ -53,6 +53,7 @@ import {
 	upsertLayerCommand,
 	upsertVariableCommand,
 } from "../../../lib";
+import { appDenProps } from "../../../lib/bot-den/app-targets";
 import {
 	MAIN_FILE_LABEL,
 	activeModuleId,
@@ -671,6 +672,13 @@ export function VariablesMenu({
 						outputs={pinCount(item.layer, "Output")}
 						tint={tint}
 						focused={focused}
+						denProps={appDenProps({
+							kind: "layer",
+							appId,
+							boardId: board.id,
+							id: item.layer.id,
+							label: item.layer.name,
+						})}
 						onOpen={() => setEditingFunction(item.layer ?? null)}
 					/>
 				) : item.variable ? (
@@ -679,6 +687,13 @@ export function VariablesMenu({
 						uses={item.uses}
 						tint={tint}
 						focused={focused}
+						denProps={appDenProps({
+							kind: "variable",
+							appId,
+							boardId: board.id,
+							id: item.variable.id,
+							label: item.variable.name,
+						})}
 						onOpen={() => setEditingVariable(item.variable ?? null)}
 					/>
 				) : null}

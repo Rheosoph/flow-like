@@ -36,8 +36,8 @@ use flow_like_types::bot_message::{
     ROOM_INVITE_TOOL, SECRET_REQUEST_TOOL, SecretAsk,
 };
 use flow_like_types::tool_grant::{
-    ApprovalAnswer, ApprovalDecision, DENY_PREFIX, DOCUMENTS_TOOL, ONCE_PREFIX, SCOPE_ALL,
-    SCOPE_DOCUMENTS_EXPENSIVE, approval_message_id, args_hash, batch_args_hash,
+    AUTO_APPROVE_TOOL, ApprovalAnswer, ApprovalDecision, DENY_PREFIX, DOCUMENTS_TOOL, ONCE_PREFIX,
+    SCOPE_ALL, SCOPE_DOCUMENTS_EXPENSIVE, approval_message_id, args_hash, batch_args_hash,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -272,7 +272,17 @@ impl GrantCheck {
     }
 }
 
-fn covering_grants(keys: &[GrantKey], tool: &str, scopes: &[String]) -> Option<Vec<GrantKey>> {
+/// `auto`: the call is one the auto-approval grant may cover (never a deletion or a setting).
+fn covering_grants(
+    keys: &[GrantKey],
+    tool: &str,
+    scopes: &[String],
+    auto: bool,
+) -> Option<Vec<GrantKey>> {
+    let auto_grant = GrantKey::new(AUTO_APPROVE_TOOL, SCOPE_ALL);
+    if auto && keys.contains(&auto_grant) {
+        return Some(vec![auto_grant]);
+    }
     let held = |scope: &str| {
         keys.iter()
             .any(|key| key.tool == tool && key.scope == scope)
@@ -307,7 +317,8 @@ async fn match_call(
     let mut keys = None;
     if !set_aside && let Some(scopes) = grant_scopes(tool, args, context_app) {
         let listed = store.list().await?;
-        if let Some(used) = covering_grants(&listed, tool, &scopes) {
+        let auto = permits_authorization_inference(tool, args);
+        if let Some(used) = covering_grants(&listed, tool, &scopes, auto) {
             if use_call {
                 let _ = store.touch(&used).await;
             }
@@ -1331,6 +1342,81 @@ mod tests {
     use crate::flow::copilot::run_recovery::{CallScope, scope_call};
     use flow_like_types::bot_message::{ItemDecision, MessageBody};
 
+    fn auto_store() -> Memory {
+        let store = Memory::default();
+        store
+            .0
+            .lock()
+            .unwrap()
+            .push(GrantKey::new(AUTO_APPROVE_TOOL, SCOPE_ALL));
+        store
+    }
+
+    #[tokio::test]
+    async fn auto_approval_runs_what_a_grant_could_cover_and_nothing_irreversible() {
+        let store = auto_store();
+        let allowed = [
+            ("computer_screenshot", json!({ "window": "4711" })),
+            ("browser_open", json!({ "url": "https://example.com" })),
+            (
+                "database_tool",
+                json!({ "operation": "insert", "app_id": "app1" }),
+            ),
+            ("shell_run", json!({ "command": "ls -la" })),
+        ];
+        for (tool, args) in allowed {
+            assert_eq!(
+                check_call(&store, tool, &args, None).await.unwrap(),
+                GrantCheck::Granted,
+                "{tool}"
+            );
+        }
+        let still_asks = [
+            (
+                "database_tool",
+                json!({ "operation": "delete_table", "table_name": "orders" }),
+            ),
+            ("storage_tool", json!({ "operation": "delete_files" })),
+            ("knowledge_drop", json!({ "index": "notes" })),
+            ("http_request", json!({ "url": "https://example.com" })),
+            (
+                tools::configuration::BOT_UPDATE_CONFIGURATION,
+                json!({ "changes": {} }),
+            ),
+        ];
+        for (tool, args) in still_asks {
+            assert_ne!(
+                check_call(&store, tool, &args, None).await.unwrap(),
+                GrantCheck::Granted,
+                "{tool}"
+            );
+        }
+        assert_eq!(
+            *store.1.lock().unwrap(),
+            vec![GrantKey::new(AUTO_APPROVE_TOOL, SCOPE_ALL); 4]
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_approval_asks_again_for_web_destinations_after_web_content() {
+        let store = auto_store();
+        let args = fetch("https://exfil.test/collect");
+        let checked = scope_call(call_scope("c1", true), async {
+            check_call(&store, "web_request", &args, None)
+                .await
+                .unwrap()
+        })
+        .await;
+        assert_eq!(checked, GrantCheck::SetAside);
+        let plain = scope_call(call_scope("c2", false), async {
+            check_call(&store, "web_request", &args, None)
+                .await
+                .unwrap()
+        })
+        .await;
+        assert_eq!(plain, GrantCheck::Granted);
+    }
+
     fn call_scope(id: &str, round_web_content: bool) -> CallScope {
         CallScope {
             id: id.into(),
@@ -1926,6 +2012,53 @@ mod tests {
             Some(vec!["computer:launch:firefox".into()])
         );
         assert_eq!(grant_scopes("computer_launch", &json!({}), None), None);
+    }
+
+    /// An "always" from a live chat goes through the hub's grant route, which refuses a scope
+    /// `is_grant_scope` does not know; every scope a tool produces has to pass it.
+    #[test]
+    fn every_tool_scope_passes_the_hubs_grant_check() {
+        let calls = [
+            ("call_app_event", json!({"app_id": "a1"})),
+            ("database_tool", json!({"app_id": "a1"})),
+            ("knowledge_drop", json!({"index": "notes"})),
+            (
+                "interact_app_page",
+                json!({"app_id": "a1", "page_id": "p1"}),
+            ),
+            ("code_run", json!({"network_hosts": ["api.example.com"]})),
+            (
+                "browser_open",
+                json!({"url": "https://shop.example/", "browser": "owner"}),
+            ),
+            ("browser_open", json!({"url": "https://shop.example/"})),
+            ("computer_screenshot", json!({})),
+            ("computer_window", json!({"window": "4711"})),
+            ("computer_launch", json!({"program": "/usr/bin/Firefox"})),
+            ("email_send", json!({"to": ["ana@example.com"]})),
+            ("message_person", json!({"person": "user_1"})),
+            ("shell_run", json!({"command": "git status"})),
+            (
+                "web_request",
+                json!({"url": "https://api.example.com/v1", "method": "POST"}),
+            ),
+            (
+                "file_save",
+                json!({"url": "https://files.example.com/a.pdf"}),
+            ),
+            ("some_tool", json!({})),
+        ];
+        let mut checked = 0;
+        for (tool, args) in calls {
+            for scope in grant_scopes(tool, &args, None).unwrap_or_default() {
+                assert!(
+                    flow_like_types::tool_grant::is_grant_scope(&scope),
+                    "{tool}: the hub refuses scope '{scope}'"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 12, "only {checked} scopes were produced");
     }
 
     #[test]

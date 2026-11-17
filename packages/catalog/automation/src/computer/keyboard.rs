@@ -868,7 +868,7 @@ impl NodeLogic for ComputerTypeSecretNode {
         let mut input = session.create_enigo(context).await?;
         tokio::task::spawn_blocking(move || -> flow_like_types::Result<()> {
             if paste {
-                paste_secret(&mut input, &secret)
+                paste_text(&mut input, &secret, true)
             } else {
                 input
                     .text(&secret)
@@ -898,53 +898,123 @@ enum PreviousClipboard {
     Empty,
 }
 
+/// The modifier of the platform's clipboard and select-all shortcuts: Command on macOS.
 #[cfg(feature = "execute")]
-fn paste_secret(
-    input: &mut super::native::input::DesktopInput,
-    secret: &str,
-) -> flow_like_types::Result<()> {
-    let mut clipboard = arboard::Clipboard::new()
-        .map_err(|e| flow_like_types::anyhow!("Clipboard unavailable for secret paste: {}", e))?;
-    let previous = match clipboard.get_text() {
+pub(crate) fn primary_modifier() -> enigo::Key {
+    if cfg!(target_os = "macos") {
+        enigo::Key::Meta
+    } else {
+        enigo::Key::Control
+    }
+}
+
+#[cfg(feature = "execute")]
+fn take_clipboard(clipboard: &mut arboard::Clipboard) -> PreviousClipboard {
+    match clipboard.get_text() {
         Ok(text) => PreviousClipboard::Text(text),
         Err(_) => clipboard
             .get_image()
             .map(PreviousClipboard::Image)
             .unwrap_or(PreviousClipboard::Empty),
-    };
+    }
+}
+
+#[cfg(feature = "execute")]
+fn restore_clipboard(
+    clipboard: &mut arboard::Clipboard,
+    previous: PreviousClipboard,
+) -> Result<(), arboard::Error> {
+    match previous {
+        PreviousClipboard::Text(text) => clipboard.set_text(text),
+        PreviousClipboard::Image(image) => clipboard.set_image(image),
+        PreviousClipboard::Empty => clipboard.clear(),
+    }
+}
+
+#[cfg(feature = "execute")]
+fn open_clipboard() -> flow_like_types::Result<arboard::Clipboard> {
+    arboard::Clipboard::new()
+        .map_err(|e| flow_like_types::anyhow!("The clipboard is unavailable: {}", e))
+}
+
+/// Pastes `text` at the caret through the clipboard, then puts back what the clipboard held.
+/// `private` keeps it out of clipboard history and clipboard monitors where the platform can.
+#[cfg(feature = "execute")]
+pub(crate) fn paste_text(
+    input: &mut super::native::input::DesktopInput,
+    text: &str,
+    private: bool,
+) -> flow_like_types::Result<()> {
+    let mut clipboard = open_clipboard()?;
+    let previous = take_clipboard(&mut clipboard);
     let set = clipboard.set();
     #[cfg(target_os = "macos")]
     let set = {
         use arboard::SetExtApple;
-        set.exclude_from_history()
+        if private {
+            set.exclude_from_history()
+        } else {
+            set
+        }
     };
     #[cfg(target_os = "windows")]
     let set = {
         use arboard::SetExtWindows;
-        set.exclude_from_monitoring()
+        if private {
+            set.exclude_from_monitoring()
+        } else {
+            set
+        }
     };
-    set.text(secret).map_err(|e| {
-        flow_like_types::anyhow!("Failed to place the secret on the clipboard: {}", e)
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = private;
+    set.text(text).map_err(|e| {
+        flow_like_types::anyhow!("Failed to place the text on the clipboard: {}", e)
     })?;
-    let primary = if cfg!(target_os = "macos") {
-        enigo::Key::Meta
-    } else {
-        enigo::Key::Control
-    };
-    let pasted = press_chord(input, &[primary], enigo::Key::Unicode('v'));
-    std::thread::sleep(std::time::Duration::from_millis(250));
-    let restored = match previous {
-        PreviousClipboard::Text(text) => clipboard.set_text(text),
-        PreviousClipboard::Image(image) => clipboard.set_image(image),
-        PreviousClipboard::Empty => clipboard.clear(),
-    };
-    pasted.map_err(|e| flow_like_types::anyhow!("Failed to paste the secret: {}", e))?;
+    let pasted = press_chord(input, &[primary_modifier()], enigo::Key::Unicode('v'));
+    let settle = 250 + (text.len() as u64 / 400).min(1_250);
+    std::thread::sleep(std::time::Duration::from_millis(settle));
+    let restored = restore_clipboard(&mut clipboard, previous);
+    pasted.map_err(|e| flow_like_types::anyhow!("Failed to paste: {}", e))?;
     restored.map_err(|e| {
         flow_like_types::anyhow!(
-            "The secret was pasted but the previous clipboard could not be restored: {}",
+            "The text was pasted but the previous clipboard could not be restored: {}",
             e
         )
     })
+}
+
+/// Copies the selection through the clipboard, then puts back what the clipboard held. None when
+/// the app copied no text.
+#[cfg(feature = "execute")]
+pub(crate) fn copy_selection(
+    input: &mut super::native::input::DesktopInput,
+) -> flow_like_types::Result<Option<String>> {
+    let mut clipboard = open_clipboard()?;
+    let previous = take_clipboard(&mut clipboard);
+    clipboard.clear().map_err(|e| {
+        flow_like_types::anyhow!("Failed to clear the clipboard before copying: {}", e)
+    })?;
+    let copied = press_chord(input, &[primary_modifier()], enigo::Key::Unicode('c'));
+    let mut text = None;
+    if copied.is_ok() {
+        for _ in 0..25 {
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            if let Ok(found) = clipboard.get_text() {
+                text = Some(found);
+                break;
+            }
+        }
+    }
+    let restored = restore_clipboard(&mut clipboard, previous);
+    copied.map_err(|e| flow_like_types::anyhow!("Failed to copy: {}", e))?;
+    restored.map_err(|e| {
+        flow_like_types::anyhow!(
+            "The text was copied but the previous clipboard could not be restored: {}",
+            e
+        )
+    })?;
+    Ok(text)
 }
 
 #[cfg(test)]

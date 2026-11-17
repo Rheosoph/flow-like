@@ -1,5 +1,7 @@
 import type { BotAppearance } from "../../components/bots/types";
+import type { BarcodeDetect } from "../../components/interfaces/chat-default/chatbox/barcode-frames";
 import type { IDataSensitivity } from "../../lib/data-classification";
+import type { IInboxApproval } from "./inbox-state";
 
 /** Wire ids, in the order the settings list them. New bots start with `memory`; the rest stays off until switched on. */
 export const BOT_CAPABILITIES = [
@@ -392,16 +394,27 @@ export interface IBotApprovalItemDecision {
 	decision: BotApprovalDecision;
 }
 
+/**
+ * What an end-to-end encrypted chat needs to take an answer: the card as this device opened it,
+ * and the answer entry sealed to every member, because the server can read neither.
+ */
+export interface ISealedApprovalAnswer {
+	card: IInboxApproval;
+	envelopes: Record<string, unknown>;
+}
+
 /** The request body that answers a card; it lists `items` only when some call's answer differs. */
 export function approvalAnswerBody(
 	approvalId: string,
 	decision: BotApprovalDecision,
 	items?: readonly IBotApprovalItemDecision[],
+	sealed?: ISealedApprovalAnswer,
 ) {
 	return {
 		approval_id: approvalId,
 		decision,
 		...(items?.length ? { items } : {}),
+		...(sealed ? { card: sealed.card, envelopes: sealed.envelopes } : {}),
 	};
 }
 
@@ -582,13 +595,98 @@ export type IBotInputEvent =
 	| { type: "key"; chord: string }
 	| { type: "text"; text: string };
 
+/** Credentials to watch a bot's computer over the hub's signaling server (`POST realtime/bot-screens`). */
+export interface IBotScreenAccess {
+	jwt: string;
+	room: string;
+	topic: string;
+	/** Newest first; the first key seals, any listed key opens. */
+	keys: { id: string; key: string }[];
+	signaling_servers: string[];
+	ice_servers?: {
+		urls: string | string[];
+		username?: string;
+		credential?: string;
+	}[];
+	/** Unix seconds. */
+	ice_expires_at?: number;
+	/** Unix seconds; the JWT ends here. */
+	expires_at: number;
+}
+
+/** How far a live connection to a bot's computer has come. */
+export type IBotComputerStatus =
+	| "connecting"
+	| "live"
+	| "asleep"
+	| "unreachable"
+	/** Desktop computers answered, but none was paired with this device by QR code. */
+	| "unpaired";
+
+export interface IBotComputerUpdate {
+	status: IBotComputerStatus;
+	/** Absent while connecting or unreachable. */
+	view?: IBotComputerView;
+	/** Why the computer is unreachable, when known. */
+	error?: string;
+	/** For `unpaired`: the computer this device was paired with before it forgot this one. */
+	host_label?: string;
+}
+
+/** A pairing code the desktop shows for another device to scan. */
+export interface IBotScreenPairingCode {
+	link: string;
+	/** Unix seconds. */
+	expires_at: number;
+	host_label: string;
+}
+
+/** A device that may watch this desktop's bots. */
+export interface IBotPairedScreenDevice {
+	key_id: string;
+	label: string;
+	fingerprint: string;
+	/** Unix seconds. */
+	paired_at: number;
+}
+
+/** Pairing other devices with the desktop that runs the bots (QR code). */
+export interface IBotScreenPairing {
+	start(): Promise<IBotScreenPairingCode>;
+	list(): Promise<IBotPairedScreenDevice[]>;
+	remove(keyId: string): Promise<void>;
+	/** Calls back when a device completes pairing; returns the unsubscribe. */
+	onPaired(
+		listener: (device: { key_id: string; label: string }) => void,
+	): () => void;
+}
+
 /**
- * Desktop only: the browser and screen of the bots that run here, and of device bots over the
- * encrypted device tunnel (pass the bot's `device_id`). A local bot's owner uses their own mouse
- * and keyboard while taken over; only device bots take `input`.
+ * The browser and screen of a bot: read straight from this computer's bots (desktop), over a live
+ * connection to the desktop app that runs the bot (any app), and, on the desktop, device bots over
+ * the encrypted device tunnel (pass the bot's `device_id`). Only device bots and bots watched
+ * remotely take `input`; a local bot's owner uses their own mouse and keyboard while taken over.
  */
 export interface IBotComputerHost {
+	/** True when the host reaches device bots itself; otherwise the pane shows device bots as desktop only. */
+	readonly devices?: boolean;
 	view(botId: string, deviceId?: string | null): Promise<IBotComputerView>;
+	/** Pushes the view and connection status as they change; hosts without it are polled with `view`. */
+	watch?(
+		botId: string,
+		deviceId: string | null | undefined,
+		listener: (update: IBotComputerUpdate) => void,
+	): () => void;
+	/** Asks a watched bot's connection to look again now instead of at its next scheduled try. */
+	retry?(botId: string, deviceId?: string | null): void;
+	/** Pins the computer of a pairing link (QR) so this device may watch the bot there. */
+	pairScreen?(botId: string, link: string): Promise<void>;
+	/** Forgets the computer this device watches the bot on, so it has to be paired again. */
+	forgetScreen?(botId: string): Promise<void>;
+	/** Present where this app runs the bots: lets other devices pair with it. */
+	readonly pairing?: IBotScreenPairing;
+	/** Reads QR codes natively where the webview has no `BarcodeDetector`. */
+	readonly scanBarcodes?: BarcodeDetect;
 	/** Closes the bot's browser and stops the mouse and keyboard action in flight. */
 	stop(botId: string, deviceId?: string | null): Promise<void>;
 	/** Pauses the bot's computer calls; they fail with `taken_over` until `handBack`. */
@@ -863,8 +961,10 @@ export interface IBotState {
 	readonly turns?: IBotTurnHost;
 	/** Present on the desktop, which holds the keys of its encryption bots. */
 	readonly encryption?: IBotEncryptionHost;
-	/** Present on the desktop, which can show what its bots do in a browser or on the screen. */
+	/** Shows what a bot does in a browser or on the screen: the desktop reads its own bots, any app watches a desktop bot live. */
 	readonly computer?: IBotComputerHost;
+	/** Credentials to watch a bot's computer live; absent where the app has no account session. */
+	getScreenAccess?(): Promise<IBotScreenAccess>;
 	/** Per bot id, for the account's bots. Absent where the hub has no presence. */
 	getPresence?(): Promise<Record<string, IBotPresence>>;
 	/** Standing grants of one bot: whom it may ask and who may ask it. */
@@ -893,6 +993,7 @@ export interface IBotState {
 		approvalId: string,
 		decision: BotApprovalDecision,
 		items?: readonly IBotApprovalItemDecision[],
+		sealed?: ISealedApprovalAnswer,
 	): Promise<void>;
 	/** Scheduled tasks of a bot with the scheduling capability, soonest first. */
 	listTasks?(botId: string): Promise<IBotTask[]>;

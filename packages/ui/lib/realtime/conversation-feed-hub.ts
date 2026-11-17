@@ -13,6 +13,12 @@ interface HubWatcher {
 	cursor?: string;
 }
 
+/** Turns delivered entries into the form listeners read, e.g. opens sealed ones. */
+export type FeedEntryOpener = (
+	entries: IInboxEntry[],
+	as?: string,
+) => Promise<IInboxEntry[]>;
+
 /**
  * Bookkeeping shared by the bridges that back a feed: watchers with their own cursors, the merged
  * set of targets, and routing of delivered entries. `changed` fires once per microtask batch of
@@ -21,8 +27,19 @@ interface HubWatcher {
 export class ConversationFeedHub implements ConversationFeed {
 	private readonly watchers = new Set<HubWatcher>();
 	private scheduled = false;
+	private opener?: FeedEntryOpener;
+	private delivering: Promise<void> = Promise.resolve();
 
 	constructor(private readonly changed: () => void) {}
+
+	/**
+	 * Listeners get entries through `opener` from now on (end-to-end encrypted chats arrive
+	 * sealed). Deliveries then wait for it in arrival order, so a slow open never lets a later
+	 * batch move a cursor past an earlier one.
+	 */
+	setOpener(opener: FeedEntryOpener | undefined): void {
+		this.opener = opener;
+	}
 
 	watch(
 		target: ConversationWatch,
@@ -78,6 +95,27 @@ export class ConversationFeedHub implements ConversationFeed {
 
 	/** Entries oldest first; without `as` every reader of the conversation receives them. */
 	deliver(
+		conversationId: string,
+		entries: readonly IInboxEntry[],
+		reader?: { as?: string },
+	): void {
+		const opener = this.opener;
+		if (!opener) {
+			this.route(conversationId, entries, reader);
+			return;
+		}
+		this.delivering = this.delivering.then(async () => {
+			let opened: readonly IInboxEntry[] = entries;
+			try {
+				opened = await opener([...entries], reader?.as);
+			} catch (error) {
+				console.warn("Opening delivered conversation entries failed", error);
+			}
+			this.route(conversationId, opened, reader);
+		});
+	}
+
+	private route(
 		conversationId: string,
 		entries: readonly IInboxEntry[],
 		reader?: { as?: string },

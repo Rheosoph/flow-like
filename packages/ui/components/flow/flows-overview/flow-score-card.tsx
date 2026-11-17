@@ -13,6 +13,7 @@ import {
 	LOW_COVERAGE_RATIO,
 	SCORE_CATEGORIES,
 } from "../../../lib/board-metrics";
+import { appDenProps } from "../../../lib/bot-den/app-targets";
 import { cn } from "../../../lib/utils";
 import type { PageListItem } from "../../../state/backend-state/page-state";
 import type { SurfaceRunHealth } from "../../settings/dashboard/use-project-runs";
@@ -467,6 +468,8 @@ function BlockTitle({
 }
 
 export interface FlowScoreCardProps {
+	/** The app the board belongs to; with it a bot can be dropped on the card. */
+	appId?: string;
 	row: IFlowRow;
 	expanded: boolean;
 	highlighted: boolean;
@@ -482,6 +485,7 @@ export interface FlowScoreCardProps {
 }
 
 export function FlowScoreCard({
+	appId,
 	row,
 	expanded,
 	highlighted,
@@ -514,6 +518,12 @@ export function FlowScoreCard({
 	return (
 		<Card
 			ref={(element) => registerCard?.(row.board.id, element)}
+			{...appDenProps({
+				kind: "board",
+				appId,
+				id: row.board.id,
+				label: row.board.name,
+			})}
 			className={cn(
 				"relative gap-0 overflow-hidden border-border/60 bg-card/80 py-0 backdrop-blur-sm transition-colors duration-150 motion-reduce:transition-none",
 				"dark:border-white/10 dark:bg-muted/40",

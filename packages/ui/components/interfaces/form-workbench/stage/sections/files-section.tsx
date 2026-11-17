@@ -3,6 +3,7 @@
 import { useTranslation } from "@flow-like/locales";
 import { Download, ExternalLink, Image as ImageIcon } from "lucide-react";
 import { Suspense, lazy, memo, useState } from "react";
+import { openExternalUrl } from "../../../../../lib/open-external";
 import { cx } from "../../../../settings/devices/primitives/tone";
 import { FileTypeIcon } from "../../../../ui/file-type-visuals";
 import {
@@ -29,8 +30,7 @@ async function openFile(
 	const { canPreviewFile, downloadFile } = await import(
 		"../../../chat-default/attachment-dialog"
 	);
-	if (file.type === "website")
-		window.open(file.url, "_blank", "noopener,noreferrer");
+	if (file.type === "website") await openExternalUrl(file.url);
 	else if (canPreviewFile(file)) preview(file);
 	else await downloadFile(file);
 }
@@ -183,8 +183,11 @@ export const FilesSection = memo(function FilesSection({
 	);
 	const tiles = files.filter((file) => file.type === "image");
 	const rows = files.filter((file) => file.type !== "image");
-	const open = (file: ProcessedAttachment) =>
-		void openFile(file, setPreviewing);
+	const open = (file: ProcessedAttachment) => {
+		openFile(file, setPreviewing).catch((error) =>
+			console.error("Opening the file failed:", error),
+		);
+	};
 	return (
 		<Section
 			id="files"

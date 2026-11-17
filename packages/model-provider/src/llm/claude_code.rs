@@ -234,12 +234,19 @@ impl ClaudeCodeCompletion {
             )
             .await?;
             if !output.success {
-                bail!(
-                    "Claude Code completion failed (exit {}). Check CLI authentication, model access, and support for --json-schema",
-                    output
-                        .code
-                        .map_or_else(|| "signal".into(), |code| code.to_string())
-                );
+                let code = output
+                    .code
+                    .map_or_else(|| "signal".into(), |code| code.to_string());
+                match cli_failure_detail(&output.stdout, &output.stderr) {
+                    Some(detail) => {
+                        bail!(
+                            "Claude Code completion failed (exit {code}, model {model}): {detail}"
+                        )
+                    }
+                    None => bail!(
+                        "Claude Code completion failed (exit {code}, model {model}) without output. Check CLI authentication, model access, and support for --json-schema"
+                    ),
+                }
             }
             tokio::task::spawn_blocking(move || parse_response(&output.stdout, &request, &model))
                 .await
@@ -376,6 +383,55 @@ fn validate_request(request: &CompletionRequest) -> Result<()> {
     Ok(())
 }
 
+const MAX_FAILURE_DETAIL_CHARS: usize = 800;
+
+/// The CLI's own reason for a failed run: the result's subtype, text and errors from stdout, then
+/// the end of stderr.
+fn cli_failure_detail(stdout: &[u8], stderr: &[u8]) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Ok(result) = serde_json::from_slice::<Value>(stdout) {
+        if let Some(kind) = result
+            .get("subtype")
+            .and_then(Value::as_str)
+            .filter(|kind| *kind != "success")
+        {
+            parts.push(kind.to_owned());
+        }
+        if let Some(text) = result.get("result").and_then(Value::as_str) {
+            parts.push(text.trim().to_owned());
+        }
+        if let Some(errors) = result.get("errors").and_then(Value::as_array) {
+            parts.extend(errors.iter().map(|error| match error {
+                Value::String(text) => text.trim().to_owned(),
+                other => other.to_string(),
+            }));
+        }
+    } else {
+        let text = String::from_utf8_lossy(stdout);
+        parts.push(text.trim().to_owned());
+    }
+    let stderr = String::from_utf8_lossy(stderr);
+    let stderr = stderr.trim();
+    if !stderr.is_empty() {
+        let skip = stderr
+            .chars()
+            .count()
+            .saturating_sub(MAX_FAILURE_DETAIL_CHARS);
+        parts.push(stderr.chars().skip(skip).collect());
+    }
+    parts.retain(|part| !part.is_empty());
+    if parts.is_empty() {
+        return None;
+    }
+    let detail = parts.join(" | ");
+    if detail.chars().count() <= MAX_FAILURE_DETAIL_CHARS {
+        return Some(detail);
+    }
+    let mut cut: String = detail.chars().take(MAX_FAILURE_DETAIL_CHARS).collect();
+    cut.push('…');
+    Some(cut)
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AssistantTurn {
@@ -404,7 +460,8 @@ fn parse_response(
             .and_then(Value::as_str)
             .is_some_and(|kind| kind != "success")
     {
-        bail!("Claude Code returned a failed result; no tool calls were accepted");
+        let detail = cli_failure_detail(stdout, &[]).unwrap_or_else(|| "no reason given".into());
+        bail!("Claude Code returned a failed result ({detail}); no tool calls were accepted");
     }
     let turn: AssistantTurn = serde_json::from_value(response.get("structured_output").cloned()
         .ok_or_else(|| anyhow!("Claude Code returned no structured_output; update the CLI to a version supporting --json-schema"))?)
@@ -668,6 +725,7 @@ struct ProcessOutput {
     success: bool,
     code: Option<i32>,
     stdout: Vec<u8>,
+    stderr: Vec<u8>,
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -766,7 +824,7 @@ async fn run_process(
             Ok::<_, anyhow::Error>(())
         };
         let wait = async { child.wait().await.map_err(anyhow::Error::from) };
-        let (_, stdout, _, status) = tokio::try_join!(
+        let (_, stdout, stderr, status) = tokio::try_join!(
             write,
             read_bounded(stdout, MAX_OUTPUT_BYTES),
             read_bounded(stderr, MAX_ERROR_BYTES),
@@ -776,6 +834,7 @@ async fn run_process(
             success: status.success(),
             code: status.code(),
             stdout,
+            stderr,
         })
     };
     match tokio::time::timeout(timeout, exchange).await {
@@ -823,6 +882,39 @@ mod tests {
             "structured_output":{"text":"", "tool_calls":[{"id":id,"name":name,"arguments_json":arguments}]},
             "usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":3,"cache_creation_input_tokens":2}
         })).unwrap()
+    }
+
+    #[test]
+    fn failed_runs_carry_the_cli_reason() {
+        let max_turns = serde_json::to_vec(&json!({
+            "type":"result", "subtype":"error_max_turns", "is_error":true,
+            "errors":["Reached maximum number of turns (3)"]
+        }))
+        .unwrap();
+        assert_eq!(
+            cli_failure_detail(&max_turns, b"").as_deref(),
+            Some("error_max_turns | Reached maximum number of turns (3)")
+        );
+        let too_long = serde_json::to_vec(&json!({
+            "type":"result", "subtype":"success", "is_error":true, "result":"Prompt is too long"
+        }))
+        .unwrap();
+        assert_eq!(
+            cli_failure_detail(&too_long, b"").as_deref(),
+            Some("Prompt is too long")
+        );
+        assert_eq!(
+            cli_failure_detail(b"", b"error: unknown option '--json-schema'\n").as_deref(),
+            Some("error: unknown option '--json-schema'")
+        );
+        assert_eq!(cli_failure_detail(b"", b"  \n"), None);
+        let noisy = "x".repeat(5_000);
+        let detail = cli_failure_detail(b"", noisy.as_bytes()).unwrap();
+        assert_eq!(detail.chars().count(), MAX_FAILURE_DETAIL_CHARS);
+        let Err(error) = parse_response(&too_long, &request(), "sonnet") else {
+            panic!("a failed result must not be accepted");
+        };
+        assert!(error.to_string().contains("Prompt is too long"), "{error}");
     }
 
     #[test]

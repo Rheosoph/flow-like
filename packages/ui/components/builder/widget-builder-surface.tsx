@@ -542,6 +542,7 @@ export function WidgetBuilderSurface({
 						fitContent
 						initialComponents={widget.components}
 						widgetId={widget.id}
+						surfaceName={widget.name}
 						surfaceId={`widget-${widget.id}`}
 						onSave={handleSave}
 						onChange={handleChange}

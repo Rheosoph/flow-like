@@ -17,6 +17,7 @@ use flow_like_types::{
         DeviceReleaseRequest, DeviceReplyRequest, DeviceSilentRequest, DeviceToken,
         DeviceTurnGrant, DeviceUsageGrant, DeviceUsageReport, MAX_POLL_MS,
     },
+    tool_grant::SealedApprovalCard,
 };
 use reqwest::Method;
 use serde::Serialize;
@@ -347,6 +348,26 @@ impl DeviceTurnHub {
         locked(&self.shared.turns).remove(turn_id);
     }
 
+    async fn park_with(
+        &self,
+        turn_id: &str,
+        host_id: &str,
+        approval: Option<ApprovalRequest>,
+        sealed: Option<SealedApprovalCard>,
+    ) -> Result<(), HubFailure> {
+        let request = flow_like_types::device_bot::DeviceParkRequest {
+            host_id: host_id.to_owned(),
+            approval,
+            sealed,
+            usage: self.usage_of(turn_id),
+        };
+        let _: Value = self
+            .device_post(&format!("turns/{turn_id}/park"), request)
+            .await?;
+        self.end_turn(turn_id);
+        Ok(())
+    }
+
     fn remember_turn(&self, turn_id: &str, creds: Arc<TurnCreds>) {
         let now = unix_now();
         let mut turns = locked(&self.shared.turns);
@@ -599,16 +620,18 @@ impl TurnHub for DeviceTurnHub {
         host_id: &str,
         card: &ApprovalRequest,
     ) -> Result<(), HubFailure> {
-        let request = flow_like_types::device_bot::DeviceParkRequest {
-            host_id: host_id.to_owned(),
-            approval: card.clone(),
-            usage: self.usage_of(turn_id),
-        };
-        let _: Value = self
-            .device_post(&format!("turns/{turn_id}/park"), request)
-            .await?;
-        self.end_turn(turn_id);
-        Ok(())
+        self.park_with(turn_id, host_id, Some(card.clone()), None)
+            .await
+    }
+
+    async fn park_sealed(
+        &self,
+        turn_id: &str,
+        host_id: &str,
+        sealed: &SealedApprovalCard,
+    ) -> Result<(), HubFailure> {
+        self.park_with(turn_id, host_id, None, Some(sealed.clone()))
+            .await
     }
 
     async fn send(

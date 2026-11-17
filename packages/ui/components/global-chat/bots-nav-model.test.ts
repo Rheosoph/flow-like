@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { IRole } from "../../lib/schema/llm/history";
+import type { IBot } from "../../state/backend-state/bot-state";
 import type {
 	IConversation,
 	IConversationMember,
@@ -14,7 +15,9 @@ import type {
 	GlobalChatRun,
 	GlobalToolPrompt,
 } from "../../state/global-chat/global-chat-store";
+import { DEFAULT_DOCK_SELECTION } from "../bots-tab/dock-selection";
 import {
+	botsNavSelection,
 	latestBotActivity,
 	latestInboxBotActivity,
 	latestLiveBotActivity,
@@ -127,11 +130,13 @@ describe("navigation bot recency", () => {
 		expect(latestInboxBotActivity([old, outgoing])).toEqual({
 			botId: "bot_new",
 			at: at(2),
+			conversationId: "conversation-bot_new",
 		});
 		const reply = conversation("bot_old", entry("bot_old", 3));
 		expect(latestInboxBotActivity([outgoing, reply])).toEqual({
 			botId: "bot_old",
 			at: at(3),
+			conversationId: "conversation-bot_old",
 		});
 	});
 
@@ -156,7 +161,11 @@ describe("navigation bot recency", () => {
 				invalid,
 				valid,
 			]),
-		).toEqual({ botId: "bot_valid", at: at(1) });
+		).toEqual({
+			botId: "bot_valid",
+			at: at(1),
+			conversationId: "conversation-bot_valid",
+		});
 	});
 
 	test("uses the bot who wrote in a group and ignores ambiguous human recipients", () => {
@@ -167,6 +176,7 @@ describe("navigation bot recency", () => {
 		expect(latestInboxBotActivity([group])).toEqual({
 			botId: "bot_b",
 			at: at(2),
+			conversationId: "conversation-bot_a",
 		});
 		expect(
 			latestInboxBotActivity([{ ...group, last_entry: entry("me", 3) }]),
@@ -241,5 +251,43 @@ describe("navigation bot state", () => {
 		expect(navBotAgentState(state, "bot_other")).toBe("idle");
 		state.toolPrompt = prompt();
 		expect(navBotAgentState(state, "bot_other")).toBe("needs-you");
+	});
+});
+
+describe("navigation bot target", () => {
+	const bots = [
+		{ id: "bot_scout", system: null },
+		{ id: "row_assistant", system: "general" },
+		{ id: "row_flux", system: "flux" },
+	] as unknown as IBot[];
+
+	test("opens the Assistant before any activity", () => {
+		expect(botsNavSelection(null, bots)).toEqual(DEFAULT_DOCK_SELECTION);
+	});
+
+	test("opens the inbox conversation the shown bot last wrote in", () => {
+		expect(
+			botsNavSelection(
+				{ botId: "bot_scout", at: at(1), conversationId: "room" },
+				bots,
+			),
+		).toEqual({ type: "conversation", conversationId: "room" });
+	});
+
+	test("opens the chat of the bot from global chat activity, built-ins by key", () => {
+		expect(botsNavSelection({ botId: "bot_scout", at: at(1) }, bots)).toEqual({
+			type: "bot",
+			botId: "bot_scout",
+		});
+		expect(
+			botsNavSelection({ botId: "row_assistant", at: at(1) }, bots),
+		).toEqual({ type: "system", system: "general" });
+		expect(botsNavSelection({ botId: null, at: at(1) }, bots)).toEqual({
+			type: "system",
+			system: "flux",
+		});
+		expect(
+			botsNavSelection({ botId: "bot_unlisted", at: at(1) }, undefined),
+		).toEqual({ type: "bot", botId: "bot_unlisted" });
 	});
 });

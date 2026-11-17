@@ -90,7 +90,9 @@ type DataTunnel = Pick<
 	DeviceServiceTunnel,
 	"openData" | "connected" | "close" | "kind"
 > &
-	Partial<Pick<DeviceServiceTunnel, "open" | "openModelGateway">>;
+	Partial<
+		Pick<DeviceServiceTunnel, "open" | "openModelGateway" | "openBotPlayground">
+	>;
 type Connector = (options: TunnelConnectOptions) => Promise<DataTunnel>;
 
 /** Owned by the live device session, including its management-connection replacements. */
@@ -153,6 +155,17 @@ export class DeviceTunnelDataClient {
 			if (!tunnel.openModelGateway)
 				throw new Error("Model gateway streams are unavailable.");
 			return tunnel.openModelGateway({ signal });
+		});
+	}
+	/** The live view of one bot's screen. */
+	openBotPlayground(
+		botId: string,
+		options: { signal?: AbortSignal } = {},
+	): Promise<DeviceServiceStream> {
+		return this.openStream(options.signal, (tunnel, signal) => {
+			if (!tunnel.openBotPlayground)
+				throw new Error("Bot playground streams are unavailable.");
+			return tunnel.openBotPlayground(botId, { signal });
 		});
 	}
 	/** Opens one stream with `open`; a cancel from the caller or the session resets it. */

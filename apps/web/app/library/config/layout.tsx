@@ -59,6 +59,7 @@ import {
 } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
 import { VisibilityUpgradeDialog } from "@flow-like/flow-like-ui/components/settings/visibility-status/visibility-upgrade-dialog";
 import { useQuickAction } from "@flow-like/flow-like-ui/hooks/use-quick-action";
+import { appDenProps } from "@flow-like/flow-like-ui/lib/bot-den/app-targets";
 import {
 	type INavigationItem,
 	type INavigationItemState,
@@ -70,6 +71,7 @@ import {
 	configRouteFillsHeight,
 	configRouteOpensMaximized,
 } from "@flow-like/flow-like-ui/lib/config-route";
+import { useRequestBotDen } from "@flow-like/flow-like-ui/state/bot-den";
 import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -90,7 +92,14 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import {
+	Suspense,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { appsDB } from "../../../lib/apps-db";
 import { EVENT_CONFIG } from "../../../lib/event-config";
@@ -103,6 +112,8 @@ export default function Id({
 	const executionService = useExecutionService();
 	const searchParams = useSearchParams();
 	const id = searchParams.get("id");
+	const contentRef = useRef<HTMLDivElement>(null);
+	useRequestBotDen(true, contentRef);
 	const online = useLiveQuery(
 		() =>
 			appsDB.visibility
@@ -518,7 +529,15 @@ export default function Id({
 									</BreadcrumbItem>
 									<BreadcrumbSeparator />
 									<BreadcrumbItem>
-										<BreadcrumbPage className="font-medium flex flex-row items-center gap-2">
+										<BreadcrumbPage
+											className="font-medium flex flex-row items-center gap-2"
+											{...appDenProps({
+												kind: "app",
+												appId: id,
+												id,
+												label: metadata.data?.name,
+											})}
+										>
 											{workspaceBot && (
 												<BotWorkspaceAvatar bot={workspaceBot} size={22} />
 											)}
@@ -964,6 +983,7 @@ export default function Id({
 					)}
 
 					<Card
+						ref={contentRef}
 						className={`relative h-full max-h-full flex flex-col grow overflow-hidden min-h-0 transition-all duration-300 bg-transparent border-0 rounded-none py-0 shadow-none backdrop-blur-none md:border md:rounded-xl md:py-6 md:shadow-sm md:backdrop-blur-sm ${isMaximized ? "md:shadow-2xl" : ""} order-1 md:order-2`}
 					>
 						<div className="pointer-events-none absolute right-4 top-4 z-20 hidden md:block">

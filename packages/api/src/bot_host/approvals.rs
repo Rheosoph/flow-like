@@ -13,7 +13,8 @@ use crate::{
         bots::owned_bot,
         inbox::{
             approvals::{
-                card_in, lock, open_conversation, post_answer_in, post_card_in, post_notice_in,
+                card_in, holds_sealed_card, lock, open_conversation, post_answer_in, post_card_in,
+                post_notice_in, post_sealed_in, sealed_owner_chat,
             },
             entries::Sent,
             now_millis, wake,
@@ -30,11 +31,12 @@ use flow_like_types::{
     bot_notify::{chat_link, group_key},
     bot_turn::{STORED_CANCELLED, STORED_QUEUED, STORED_RUNNING, STORED_WAITING},
     create_id,
-    inbox::direct_pair_key,
+    inbox::{ConversationEncryption, direct_pair_key, is_valid_message_id},
     tool_grant::{
         APPROVAL_WAIT_DAYS, ApprovalAnswer, DENY_PREFIX, ERROR_APPROVAL_EXPIRED,
         ERROR_APPROVAL_ITEM_UNKNOWN, GRANT_SLIDE_HOURS, GRANT_TTL_DAYS, ONCE_PREFIX,
-        TOKEN_TTL_HOURS, ToolGrant, ToolGrantKey, check_key, is_token_scope,
+        SealedApprovalCard, TOKEN_TTL_HOURS, ToolGrant, ToolGrantKey, card_matches_id, check_key,
+        is_token_scope, sealed_approval_response_message_id,
     },
 };
 use sea_orm::{
@@ -42,7 +44,8 @@ use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
     sea_query::{Expr, OnConflict},
 };
-use std::ops::Deref;
+use serde_json::Value;
+use std::{collections::BTreeMap, ops::Deref};
 
 pub(crate) const BOT_TURN_NOT_WAITING: &str = "BOT_TURN_NOT_WAITING";
 pub(crate) const BOT_APPROVAL_UNKNOWN: &str = "BOT_APPROVAL_UNKNOWN";
@@ -335,11 +338,56 @@ async fn park_transaction(
     .ok_or_else(|| {
         conflict(
             BOT_APPROVAL_UNREACHABLE,
-            "The owner's conversation with this bot is end-to-end encrypted: the server cannot post an approval card into it".to_string(),
+            "The owner's conversation with this bot is end-to-end encrypted: the server cannot post an approval card into it, so the bot's host has to seal the card itself (update the app that runs the bot)".to_string(),
         )
     })?;
     lock(txn, &conversation).await?;
     park_in(txn, turn, host_id, card, &conversation, now).await
+}
+
+async fn park_sealed_transaction(
+    txn: &sea_orm::DatabaseTransaction,
+    turn: &bot_turn::Model,
+    host_id: &str,
+    sealed: &SealedApprovalCard,
+) -> Result<Sent, ApiError> {
+    let now = now_millis();
+    let conversation = sealed_owner_chat(txn, &turn.owner_id, &turn.bot_id, &turn.conversation_id)
+        .await?
+        .ok_or_else(|| {
+            conflict(
+                BOT_APPROVAL_UNREACHABLE,
+                format!(
+                    "Turn '{}' does not run in the owner's end-to-end encrypted direct chat with the bot, the only place a sealed approval card can go",
+                    turn.id
+                ),
+            )
+        })?;
+    lock(txn, &conversation).await?;
+    park_sealed_in(txn, turn, host_id, sealed, &conversation, now).await
+}
+
+/// Sets the turn `host_id` holds `WAITING` and posts the sealed card in `conversation`, the
+/// owner's encrypted chat whose lock the caller holds.
+pub(crate) async fn park_sealed_in<C: ConnectionTrait>(
+    txn: &C,
+    turn: &bot_turn::Model,
+    host_id: &str,
+    sealed: &SealedApprovalCard,
+    conversation: &str,
+    now: DateTime<FixedOffset>,
+) -> Result<Sent, ApiError> {
+    wait_in(txn, turn, host_id, &sealed.approval_id, now).await?;
+    post_sealed_in(
+        txn,
+        conversation,
+        &turn.bot_id,
+        u32::try_from(turn.hops).unwrap_or(0),
+        &sealed.approval_id,
+        &sealed.envelopes,
+        now,
+    )
+    .await
 }
 
 /// The card with whose message woke the turn and the room it runs in, so the owner knows who
@@ -375,6 +423,26 @@ pub(crate) async fn park_in<C: ConnectionTrait>(
     now: DateTime<FixedOffset>,
 ) -> Result<Sent, ApiError> {
     let card = &named_requester(txn, turn, card).await?;
+    wait_in(txn, turn, host_id, &card.id, now).await?;
+    post_card_in(
+        txn,
+        conversation,
+        &turn.bot_id,
+        u32::try_from(turn.hops).unwrap_or(0),
+        card,
+        now,
+    )
+    .await
+}
+
+/// Sets the turn `host_id` holds `WAITING` behind the card `approval_id`, without a lease.
+async fn wait_in<C: ConnectionTrait>(
+    txn: &C,
+    turn: &bot_turn::Model,
+    host_id: &str,
+    approval_id: &str,
+    now: DateTime<FixedOffset>,
+) -> Result<(), ApiError> {
     let parked = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_WAITING))
         .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
@@ -383,10 +451,7 @@ pub(crate) async fn park_in<C: ConnectionTrait>(
             bot_turn::Column::LeaseUntil,
             Expr::value(None::<DateTime<FixedOffset>>),
         )
-        .col_expr(
-            bot_turn::Column::ReplyMessageId,
-            Expr::value(card.id.as_str()),
-        )
+        .col_expr(bot_turn::Column::ReplyMessageId, Expr::value(approval_id))
         .col_expr(bot_turn::Column::ErrorCode, Expr::value(None::<String>))
         .col_expr(bot_turn::Column::UpdatedAt, Expr::value(now))
         .filter(bot_turn::Column::Id.eq(turn.id.as_str()))
@@ -401,15 +466,7 @@ pub(crate) async fn park_in<C: ConnectionTrait>(
             format!("Turn '{}' is not running under host '{host_id}'", turn.id),
         ));
     }
-    post_card_in(
-        txn,
-        conversation,
-        &turn.bot_id,
-        u32::try_from(turn.hops).unwrap_or(0),
-        card,
-        now,
-    )
-    .await
+    Ok(())
 }
 
 /// Parks the turn `host_id` holds: posts the card as the bot, sets the turn `WAITING` without a
@@ -427,13 +484,70 @@ pub(crate) async fn park_held(
         })
         .await?;
     wake(state, sent.wake).await;
-    notify_owner(state, turn, card).await;
+    notify_owner(state, turn, &CardNotice::of(card)).await;
     Ok(())
 }
 
+/// Parks the turn `host_id` holds behind a card the host sealed for the owner's end-to-end
+/// encrypted chat: the envelopes are posted as the bot's message unread, and the push says only
+/// that the bot is waiting.
+pub(crate) async fn park_sealed(
+    state: &AppState,
+    turn: &bot_turn::Model,
+    host_id: &str,
+    sealed: &SealedApprovalCard,
+) -> Result<(), ApiError> {
+    if !sealed.approval_id.starts_with("ap-") || !is_valid_message_id(&sealed.approval_id) {
+        return Err(ApiError::bad_request(format!(
+            "sealed.approval_id '{}' must be a card id ('ap-' and its hash)",
+            sealed.approval_id.chars().take(80).collect::<String>()
+        )));
+    }
+    let sent = state
+        .transaction(|txn| {
+            let (turn, host_id, sealed) = (turn.clone(), host_id.to_string(), sealed.clone());
+            Box::pin(async move { park_sealed_transaction(txn, &turn, &host_id, &sealed).await })
+        })
+        .await?;
+    wake(state, sent.wake).await;
+    notify_owner(state, turn, &CardNotice::sealed(&sealed.approval_id)).await;
+    Ok(())
+}
+
+/// What the "needs your approval" push may say about a card.
+struct CardNotice<'a> {
+    id: &'a str,
+    /// The card's line; `None` for a sealed card the server can't read.
+    summary: Option<&'a str>,
+    /// Only the card itself can answer it, not the lock screen.
+    review_only: bool,
+}
+
+impl<'a> CardNotice<'a> {
+    /// A secret, a batch, a call asked again after web content or several identical calls need
+    /// the card itself; only a plain card for one call can be answered from the lock screen.
+    fn of(card: &'a ApprovalRequest) -> Self {
+        Self {
+            id: &card.id,
+            summary: Some(&card.summary),
+            review_only: card.secret.is_some() || !card.items.is_empty(),
+        }
+    }
+
+    fn sealed(id: &'a str) -> Self {
+        Self {
+            id,
+            summary: None,
+            review_only: true,
+        }
+    }
+}
+
+const SEALED_CARD_PREVIEW: &str = "Open the chat to see what it asks";
+
 /// The card waits in the owner's chat with the bot, so the push opens that chat and groups
 /// under the bot like its other notifications.
-async fn notify_owner(state: &AppState, turn: &bot_turn::Model, card: &ApprovalRequest) {
+async fn notify_owner(state: &AppState, turn: &bot_turn::Model, card: &CardNotice<'_>) {
     let name = bot::Entity::find_by_id(&turn.bot_id)
         .one(&state.db)
         .await
@@ -444,7 +558,7 @@ async fn notify_owner(state: &AppState, turn: &bot_turn::Model, card: &ApprovalR
     let entry = inbox_entry::Entity::find()
         .filter(inbox_entry::Column::InboxId.eq(&turn.owner_id))
         .filter(inbox_entry::Column::SenderId.eq(&turn.bot_id))
-        .filter(inbox_entry::Column::MessageId.eq(&card.id))
+        .filter(inbox_entry::Column::MessageId.eq(card.id))
         .one(&state.db)
         .await
         .ok()
@@ -453,9 +567,11 @@ async fn notify_owner(state: &AppState, turn: &bot_turn::Model, card: &ApprovalR
         .as_ref()
         .map_or_else(now_millis, |entry| entry.created_at)
         + Duration::days(APPROVAL_WAIT_DAYS);
-    // A secret, a batch, a call asked again after web content or several identical calls need
-    // the card itself; only a plain card for one call can be answered from the lock screen.
-    let review_only = card.secret.is_some() || !card.items.is_empty();
+    let encryption = if card.summary.is_some() {
+        ConversationEncryption::Plain
+    } else {
+        ConversationEncryption::E2e
+    };
     let sent = dispatch_notification_idempotent(
         state,
         &format!("botapproval_{}", card.id),
@@ -463,25 +579,25 @@ async fn notify_owner(state: &AppState, turn: &bot_turn::Model, card: &ApprovalR
             notification_priority: Default::default(),
             bot_context: Some(flow_like_types::bot_notify::BotNotificationContext {
                 bot_id: turn.bot_id.clone(),
-                review_only,
+                review_only: card.review_only,
                 turn_id: Some(turn.id.clone()),
-                approval_id: (!review_only).then(|| card.id.clone()),
+                approval_id: (!card.review_only).then(|| card.id.to_string()),
                 conversation_id: entry.as_ref().map(|entry| entry.conversation_id.clone()),
-                conversation_encryption: Some("plain".into()),
-                message_id: Some(card.id.clone()),
+                conversation_encryption: Some(encryption.as_str().to_string()),
+                message_id: Some(card.id.to_string()),
                 expires_at: Some(expires_at.to_rfc3339()),
                 ..Default::default()
             }),
             user_id: turn.owner_id.clone(),
             app_id: None,
             title: format!("{name} needs your approval"),
-            description: Some(card.summary.clone()),
+            description: Some(card.summary.unwrap_or(SEALED_CARD_PREVIEW).to_string()),
             icon: None,
             image: None,
             link: Some(chat_link(&turn.bot_id)),
             notification_type: crate::entity::sea_orm_active_enums::NotificationType::System,
             source_run_id: Some(group_key(&turn.bot_id)),
-            source_node_id: Some(card.id.clone()),
+            source_node_id: Some(card.id.to_string()),
         },
     )
     .await;
@@ -496,6 +612,7 @@ async fn answer_transaction(
     bot_id: &str,
     turn_id: &str,
     answer: &ApprovalAnswer,
+    sealed: Option<&SealedAnswer>,
 ) -> Result<(bot_turn::Model, Sent), ApiError> {
     let now = now_millis();
     owned_bot(txn, owner_id, bot_id).await?;
@@ -503,9 +620,29 @@ async fn answer_transaction(
         .await?
         .filter(|turn| turn.bot_id == bot_id)
         .ok_or_else(|| ApiError::not_found(format!("Turn '{turn_id}' not found")))?;
-    let conversation = open_conversation(txn, owner_id, bot_id, &turn.conversation_id, now)
-        .await?
-        .ok_or_else(|| unknown_approval(turn_id, &answer.approval_id))?;
+    let (conversation, source) = match open_conversation(
+        txn,
+        owner_id,
+        bot_id,
+        &turn.conversation_id,
+        now,
+    )
+    .await?
+    {
+        Some(conversation) => (conversation, CardSource::Posted),
+        None => {
+            let conversation = sealed_owner_chat(txn, owner_id, bot_id, &turn.conversation_id)
+                .await?
+                .ok_or_else(|| unknown_approval(turn_id, &answer.approval_id))?;
+            let sealed = sealed.ok_or_else(|| {
+                    ApiError::bad_request(format!(
+                        "Approval '{}' waits in an end-to-end encrypted chat: answer it from a device that opened the card, sending `card` and the sealed answer in `envelopes`",
+                        answer.approval_id
+                    ))
+                })?;
+            (conversation, CardSource::Sealed(sealed))
+        }
+    };
     let origin = super::talk::turn_origin_conversation(txn, &turn).await?;
     let mut rooms = vec![conversation.as_str(), origin.as_str()];
     rooms.sort_unstable();
@@ -513,7 +650,36 @@ async fn answer_transaction(
     for room in rooms {
         lock(txn, room).await?;
     }
-    answer_in(txn, owner_id, bot_id, turn_id, answer, &conversation, now).await
+    settle_in(
+        txn,
+        owner_id,
+        bot_id,
+        turn_id,
+        answer,
+        &conversation,
+        source,
+        now,
+    )
+    .await
+}
+
+/// What the owner's device sends beside an answer to a card in an end-to-end encrypted chat.
+#[derive(Debug, Clone)]
+pub(crate) struct SealedAnswer {
+    /// The card as the device opened it; the server checks it against the card id.
+    pub card: ApprovalRequest,
+    /// The answer entry sealed to every member's keys, under
+    /// [`sealed_approval_response_message_id`].
+    pub envelopes: BTreeMap<String, Value>,
+}
+
+/// Where the card an answer settles comes from.
+#[derive(Clone, Copy)]
+enum CardSource<'a> {
+    /// The server posted it in a plain chat: read back from the owner's copy.
+    Posted,
+    /// A host sealed it: the copy the owner's device opened and sent.
+    Sealed(&'a SealedAnswer),
 }
 
 fn unknown_approval(turn_id: &str, approval_id: &str) -> ApiError {
@@ -532,6 +698,84 @@ pub(crate) async fn answer_in<C: ConnectionTrait + Send + Sync>(
     turn_id: &str,
     answer: &ApprovalAnswer,
     conversation: &str,
+    now: DateTime<FixedOffset>,
+) -> Result<(bot_turn::Model, Sent), ApiError> {
+    settle_in(
+        txn,
+        owner_id,
+        bot_id,
+        turn_id,
+        answer,
+        conversation,
+        CardSource::Posted,
+        now,
+    )
+    .await
+}
+
+/// [`answer_in`] for a card a host sealed in the owner's end-to-end encrypted chat.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn answer_sealed_in<C: ConnectionTrait + Send + Sync>(
+    txn: &C,
+    owner_id: &str,
+    bot_id: &str,
+    turn_id: &str,
+    answer: &ApprovalAnswer,
+    conversation: &str,
+    sealed: &SealedAnswer,
+    now: DateTime<FixedOffset>,
+) -> Result<(bot_turn::Model, Sent), ApiError> {
+    settle_in(
+        txn,
+        owner_id,
+        bot_id,
+        turn_id,
+        answer,
+        conversation,
+        CardSource::Sealed(sealed),
+        now,
+    )
+    .await
+}
+
+/// The sealed card the owner's device sent, when it is the bot's card the turn waits on.
+async fn opened_card<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    turn: &bot_turn::Model,
+    approval_id: &str,
+    conversation: &str,
+    sealed: &SealedAnswer,
+) -> Result<ApprovalRequest, ApiError> {
+    let card = &sealed.card;
+    if card.id != approval_id || !card_matches_id(card, &turn.id) {
+        return Err(ApiError::bad_request(format!(
+            "The card sent with the answer is not approval '{approval_id}' of turn '{}': its id must follow from the turn and its calls",
+            turn.id
+        )));
+    }
+    flow_like_types::bot_message::MessageBody {
+        approval: Some(card.clone()),
+        ..Default::default()
+    }
+    .check()
+    .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    if !holds_sealed_card(db, owner_id, &turn.bot_id, conversation, approval_id).await? {
+        return Err(unknown_approval(&turn.id, approval_id));
+    }
+    Ok(card.clone())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn settle_in<C: ConnectionTrait + Send + Sync>(
+    txn: &C,
+    owner_id: &str,
+    bot_id: &str,
+    turn_id: &str,
+    answer: &ApprovalAnswer,
+    conversation: &str,
+    source: CardSource<'_>,
     now: DateTime<FixedOffset>,
 ) -> Result<(bot_turn::Model, Sent), ApiError> {
     owned_bot(txn, owner_id, bot_id).await?;
@@ -557,10 +801,23 @@ pub(crate) async fn answer_in<C: ConnectionTrait + Send + Sync>(
             "This approval has expired".to_string(),
         ));
     }
-    let card = card_in(txn, owner_id, conversation, &answer.approval_id)
-        .await?
-        .filter(|card| card.turn_id == turn.id)
-        .ok_or_else(|| unknown_approval(turn_id, &answer.approval_id))?;
+    let card = match source {
+        CardSource::Posted => card_in(txn, owner_id, conversation, &answer.approval_id)
+            .await?
+            .filter(|card| card.turn_id == turn.id)
+            .ok_or_else(|| unknown_approval(turn_id, &answer.approval_id))?,
+        CardSource::Sealed(sealed) => {
+            opened_card(
+                txn,
+                owner_id,
+                &turn,
+                &answer.approval_id,
+                conversation,
+                sealed,
+            )
+            .await?
+        }
+    };
     card.decisions(answer.decision, &answer.items)
         .map_err(|message| {
             ApiError::coded(
@@ -573,7 +830,21 @@ pub(crate) async fn answer_in<C: ConnectionTrait + Send + Sync>(
     let response = record_batch_answer(&store, &card, answer)
         .await
         .map_err(|error| ApiError::internal(error.to_string()))?;
-    let sent = post_answer_in(txn, conversation, owner_id, &response, now).await?;
+    let sent = match source {
+        CardSource::Posted => post_answer_in(txn, conversation, owner_id, &response, now).await?,
+        CardSource::Sealed(sealed) => {
+            post_sealed_in(
+                txn,
+                conversation,
+                owner_id,
+                0,
+                &sealed_approval_response_message_id(&answer.approval_id),
+                &sealed.envelopes,
+                now,
+            )
+            .await?
+        }
+    };
     let queued = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_QUEUED))
         .col_expr(bot_turn::Column::StatusText, Expr::value(None::<String>))
@@ -614,16 +885,20 @@ pub(crate) async fn answer(
     bot_id: &str,
     turn_id: &str,
     body: &ApprovalAnswer,
+    sealed: Option<&SealedAnswer>,
 ) -> Result<bot_turn::Model, ApiError> {
     let (turn, sent) = state
         .transaction(|txn| {
-            let (owner, bot, turn, body) = (
+            let (owner, bot, turn, body, sealed) = (
                 owner_id.to_string(),
                 bot_id.to_string(),
                 turn_id.to_string(),
                 body.clone(),
+                sealed.cloned(),
             );
-            Box::pin(async move { answer_transaction(txn, &owner, &bot, &turn, &body).await })
+            Box::pin(async move {
+                answer_transaction(txn, &owner, &bot, &turn, &body, sealed.as_ref()).await
+            })
         })
         .await?;
     wake(state, sent.wake).await;

@@ -244,8 +244,28 @@ export function deriveConversationTopic(conversationId: unknown): string {
 	return `inbox:${conversationId}:room-v1`;
 }
 
-/** A token names either a board or a conversation; one naming both is refused. */
+const BOT_SCREENS_ROOM_PATTERN = /^[0-9a-f]{32}$/;
+
+export function deriveBotScreensTopic(room: unknown): string {
+	if (typeof room !== "string" || !BOT_SCREENS_ROOM_PATTERN.test(room)) {
+		throw new RealtimeAuthError();
+	}
+	return `bot-screens:${room}:v1`;
+}
+
+/** A token names a board, a conversation or a bot-screens room; mixing kinds is refused. */
 export function deriveTopicForClaims(claims: Record<string, unknown>): string {
+	if (claims.bot_screens !== undefined) {
+		if (
+			claims.conversation_id !== undefined ||
+			claims.app_id !== undefined ||
+			claims.board_id !== undefined ||
+			claims.board_format_version !== undefined
+		) {
+			throw new RealtimeAuthError();
+		}
+		return deriveBotScreensTopic(claims.bot_screens);
+	}
 	if (claims.conversation_id === undefined) {
 		return deriveRealtimeTopic(
 			claims.app_id,

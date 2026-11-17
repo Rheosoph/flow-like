@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { IInboxApproval } from "../../state/backend-state/inbox-state";
 import {
 	alwaysBlock,
 	approvalItems,
@@ -216,6 +217,8 @@ test("a card for one call is its own single item", () => {
 	expect(
 		approvalItems({
 			id: "ap-1",
+			conversationId: "c1",
+			card: {} as IInboxApproval,
 			turnId: "t",
 			tool: "shell_run",
 			summary: "Run git",

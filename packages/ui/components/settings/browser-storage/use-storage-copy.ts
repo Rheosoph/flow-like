@@ -218,6 +218,13 @@ export function useStorageCopy(): StorageCopy {
 						"Encrypted keys for managing your devices.",
 					),
 				},
+				screenTrust: {
+					label: t("bots:computer.pairing.storeLabel", "Paired computers"),
+					description: t(
+						"bots:computer.pairing.storeDescription",
+						"The desktop computers this browser paired with by QR code to watch bots live. Without them, you pair again.",
+					),
+				},
 				inboxKeys: {
 					label: t("storageStoreInboxKeys", "Message keys"),
 					description: t(

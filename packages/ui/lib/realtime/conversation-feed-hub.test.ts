@@ -43,4 +43,38 @@ describe("ConversationFeedHub", () => {
 		hub.deliver("c", [entry(4)]);
 		expect(b).toEqual(["e2", "e3"]);
 	});
+
+	test("hands listeners opened entries in arrival order, even when an earlier open is slower", async () => {
+		const hub = new ConversationFeedHub(() => {});
+		const seen: string[] = [];
+		hub.watch({ conversationId: "c" }, (e) =>
+			seen.push(...e.map((x) => `${x.id}:${x.kind}`)),
+		);
+		const delays = [20, 0];
+		hub.setOpener(async (entries) => {
+			await new Promise((done) => setTimeout(done, delays.shift() ?? 0));
+			return entries.map((x) => ({ ...x, kind: "message" }) as IInboxEntry);
+		});
+		hub.deliver("c", [entry(1)]);
+		hub.deliver("c", [entry(2)]);
+		expect(seen).toEqual([]);
+		await new Promise((done) => setTimeout(done, 40));
+		expect(seen).toEqual(["e1:message", "e2:message"]);
+	});
+
+	test("delivers entries as they came when opening them fails", async () => {
+		const hub = new ConversationFeedHub(() => {});
+		const seen: string[] = [];
+		hub.watch({ conversationId: "c" }, (e) => seen.push(...e.map((x) => x.id)));
+		hub.setOpener(() => Promise.reject(new Error("no key")));
+		const warn = console.warn;
+		console.warn = () => {};
+		try {
+			hub.deliver("c", [entry(1)]);
+			await new Promise((done) => setTimeout(done, 0));
+		} finally {
+			console.warn = warn;
+		}
+		expect(seen).toEqual(["e1"]);
+	});
 });

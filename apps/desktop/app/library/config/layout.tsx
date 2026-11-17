@@ -56,6 +56,7 @@ import {
 } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
 import { VisibilityUpgradeDialog } from "@flow-like/flow-like-ui/components/settings/visibility-status/visibility-upgrade-dialog";
 import { useQuickAction } from "@flow-like/flow-like-ui/hooks/use-quick-action";
+import { appDenProps } from "@flow-like/flow-like-ui/lib/bot-den/app-targets";
 import {
 	type INavigationItem,
 	type INavigationItemState,
@@ -68,6 +69,7 @@ import {
 	configRouteOpensMaximized,
 } from "@flow-like/flow-like-ui/lib/config-route";
 import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
+import { useRequestBotDen } from "@flow-like/flow-like-ui/state/bot-den";
 import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -154,6 +156,8 @@ export default function Id({
 	const [lockedItem, setLockedItem] = useState<INavigationItemState | null>(
 		null,
 	);
+	const contentRef = useRef<HTMLDivElement>(null);
+	useRequestBotDen(true, contentRef);
 	const touchStartRef = useRef<{ x: number; y: number } | null>(null);
 
 	const permissions = useAppPermissions(id);
@@ -499,7 +503,15 @@ export default function Id({
 									</BreadcrumbItem>
 									<BreadcrumbSeparator />
 									<BreadcrumbItem>
-										<BreadcrumbPage className="font-medium flex flex-row items-center gap-2">
+										<BreadcrumbPage
+											className="font-medium flex flex-row items-center gap-2"
+											{...appDenProps({
+												kind: "app",
+												appId: id,
+												id,
+												label: metadata.data?.name,
+											})}
+										>
 											{workspaceBot && (
 												<BotWorkspaceAvatar bot={workspaceBot} size={22} />
 											)}
@@ -896,6 +908,7 @@ export default function Id({
 					)}
 
 					<Card
+						ref={contentRef}
 						className={`relative h-full max-h-full flex-col grow overflow-hidden min-h-0 transition-all duration-300 bg-transparent flex border-0 shadow-none md:border md:shadow-sm ${isMaximized ? "shadow-2xl" : ""} order-1 md:order-2`}
 					>
 						<div className="pointer-events-none absolute right-4 top-4 z-20 hidden md:block">

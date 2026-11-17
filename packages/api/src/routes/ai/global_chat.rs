@@ -57,9 +57,9 @@ use flow_like::flow::copilot::tool_spec::{
 };
 use flow_like::flow::copilot::{
     AttachmentManifestEntry, BotToolset, ChatMessage, GlobalDataStudioContext,
-    GlobalOpenBoardContext, PlatformContextInput, PlatformSpecialist, bot_platform_context,
-    bot_talk::BotTalk, build_platform_context, find_bot_tool_spec, run_bot_chat_with_talk,
-    run_platform_chat,
+    GlobalOpenBoardContext, GlobalPointedAt, PlatformContextInput, PlatformSpecialist,
+    bot_platform_context, bot_talk::BotTalk, build_platform_context, find_bot_tool_spec,
+    run_bot_chat_with_talk, run_platform_chat,
 };
 use flow_like::models::llm::ModelUsageContext;
 use flow_like::profile::Profile;
@@ -205,6 +205,9 @@ pub struct GlobalChatRequest {
     /// The Data Studio page the user currently has open, if any.
     #[serde(default)]
     pub data_studio_context: Option<GlobalDataStudioContext>,
+    /// What the user dragged the bot onto for this message, if anything.
+    #[serde(default)]
+    pub pointed_at: Option<GlobalPointedAt>,
     /// Reported back in the response's `active_scope`. Defaults to `Board`.
     #[serde(default)]
     pub scope: CopilotScope,
@@ -1815,7 +1818,10 @@ pub(crate) async fn run_global_chat(
             "The bot conversation turn is unavailable",
         ));
     }
-    if let Some(bot) = bot.as_ref().filter(|bot| bot.location != BotLocation::Server) {
+    if let Some(bot) = bot
+        .as_ref()
+        .filter(|bot| bot.location != BotLocation::Server)
+    {
         if let Some(interactive) = &interactive_turn {
             interactive.hand_to_host(&state).await;
         }
@@ -2111,6 +2117,7 @@ pub(crate) async fn run_global_chat(
         switchable_profiles: &[],
         open_board: payload.board_context.as_ref(),
         open_data_studio: payload.data_studio_context.as_ref(),
+        pointed_at: payload.pointed_at.as_ref(),
         attachments: &attachments_manifest,
     };
     let context = match &bot {
