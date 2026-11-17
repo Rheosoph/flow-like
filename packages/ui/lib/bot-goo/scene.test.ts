@@ -366,6 +366,98 @@ describe("motion", () => {
 		expect(scene.frame().blobs).toHaveLength(3);
 	});
 
+	it("keeps a held bot under the pointer, leaning and trailing as it moves", () => {
+		const scene = new DenScene();
+		scene.setInput(input());
+		settle(scene);
+		const gaps: number[] = [];
+		let tail = false;
+		for (let frame = 0; frame < 60; frame++) {
+			const pointer = { x: 790 + frame * 12, y: 60 + frame * 6 };
+			scene.setInput(input({ a: { kind: "drag", ...pointer } }));
+			scene.step(1 / 60);
+			const current = scene.frame();
+			const bot = current.bots.get("a");
+			if (frame > 20)
+				gaps.push(
+					Math.hypot((bot?.x ?? 0) - pointer.x, (bot?.y ?? 0) - pointer.y),
+				);
+			tail ||=
+				frame > 20 && current.blobs.some((blob) => blob.to && blob.y > 100);
+		}
+		expect(Math.max(...gaps)).toBeLessThan(1);
+		expect(tail).toBe(true);
+		expect(scene.frame().bots.get("a")?.tilt ?? 0).toBeGreaterThan(1);
+	});
+
+	it("splashes and spreads its foot when the bot touches down, not when it is let go", () => {
+		const scene = new DenScene();
+		scene.setInput(input({ a: { kind: "drag", x: 400, y: 520 } }));
+		settle(scene);
+		const droplets = () =>
+			scene
+				.frame()
+				.blobs.filter((blob) => !blob.to && blob.hw < 5 && blob.hw === blob.hh);
+		const foot = () =>
+			scene.frame().blobs.find((blob) => blob.hh === 2.5 && blob.hw > 2.5);
+		scene.setInput(input({ a: perch() }));
+		scene.step(1 / 60);
+		expect(droplets()).toHaveLength(0);
+		expect(foot()).toBeUndefined();
+		let landed = false;
+		for (let frame = 0; frame < 60 && !landed; frame++) {
+			scene.step(1 / 60);
+			landed = droplets().length > 0;
+			if (landed)
+				expect(
+					Math.abs((scene.frame().bots.get("a")?.y ?? 0) - 287),
+				).toBeLessThan(6);
+		}
+		expect(landed).toBe(true);
+		settle(scene);
+		expect(foot()?.hw).toBeCloseTo(15, 1);
+	});
+
+	it("swells the den under a hovered bot instead of popping a bulge out", () => {
+		const scene = new DenScene();
+		scene.setInput(input());
+		settle(scene);
+		const bulge = () =>
+			scene
+				.frame()
+				.blobs.find(
+					(blob) => !blob.to && blob.x === 784 && blob.hw === blob.hh,
+				);
+		scene.setInput(input({}, { hoverBot: "a" }));
+		scene.step(1 / 60);
+		expect(bulge()?.hw ?? 0).toBeLessThan(6);
+		settle(scene);
+		expect(bulge()?.hw).toBeCloseTo(11, 1);
+		scene.setInput(input());
+		settle(scene);
+		expect(bulge()).toBeUndefined();
+	});
+
+	it("draws the moons of a bot that stops working back into it", () => {
+		const scene = new DenScene();
+		const working = new Map([["a", "working" as const]]);
+		scene.setInput(input({ a: perch() }, { activity: working }));
+		settle(scene);
+		const moons = () =>
+			scene
+				.frame()
+				.blobs.filter(
+					(blob) =>
+						!blob.to && blob.hw === blob.hh && blob.hw > 0 && blob.hw < 6,
+				);
+		const busy = moons().length;
+		scene.setInput(input({ a: perch() }));
+		steps(scene, 0.05);
+		expect(moons().length).toBe(busy);
+		settle(scene);
+		expect(moons()).toHaveLength(0);
+	});
+
 	it("bulges the den toward a pointer close to it", () => {
 		const scene = new DenScene();
 		scene.setInput(input());

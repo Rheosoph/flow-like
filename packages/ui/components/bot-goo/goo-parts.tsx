@@ -28,6 +28,8 @@ export interface BotHandlers {
 	onPointerMove: (event: PointerEvent<HTMLElement>) => void;
 	onPointerUp: (event: PointerEvent<HTMLElement>) => void;
 	onPointerCancel: (event: PointerEvent<HTMLElement>) => void;
+	/** The press lost its pointer without a release (window switch, element replaced). */
+	onLostPointerCapture: (event: PointerEvent<HTMLElement>) => void;
 	onPointerEnter: () => void;
 	onPointerLeave: () => void;
 	onContextMenu: (event: MouseEvent<HTMLElement>) => void;
@@ -76,6 +78,7 @@ export function GooBotNode({
 			<BotAvatar
 				appearance={appearance}
 				size={PERCH_AVATAR}
+				pose={gaze ? "track" : "idle"}
 				agentState={activity.agentState}
 				mood={activity.mood}
 				gx={gaze?.x}

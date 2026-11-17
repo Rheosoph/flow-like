@@ -9,7 +9,8 @@ use flow_like_bot_tools::browser::{
     SnapshotRequest, SnapshotView,
 };
 use flow_like_bot_tools::computer::{
-    ComputerAction, ComputerBackend, DisplaySummary, Screen, WindowBounds, WindowOp, WindowSummary,
+    ComputerAction, ComputerBackend, DisplaySummary, ReadText, Screen, TextSource, WindowBounds,
+    WindowOp, WindowSummary,
 };
 use flow_like_bot_tools::error::{ToolError, code};
 use flow_like_types::Result;
@@ -277,6 +278,11 @@ impl ComputerBackend for GuardedComputer {
             None => done,
         })
     }
+
+    async fn read_text(&self, source: TextSource, at: Option<(f64, f64)>) -> Result<ReadText> {
+        self.enter_fresh().await?;
+        self.inner.read_text(source, at).await
+    }
 }
 
 /// The computer of a machine with no display: every call says what to install.
@@ -311,6 +317,10 @@ impl ComputerBackend for NoDisplay {
     }
 
     async fn launch(&self, _program: &str, _args: &[String]) -> Result<String> {
+        self.error()
+    }
+
+    async fn read_text(&self, _source: TextSource, _at: Option<(f64, f64)>) -> Result<ReadText> {
         self.error()
     }
 }

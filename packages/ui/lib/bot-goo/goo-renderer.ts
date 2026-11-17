@@ -40,7 +40,8 @@ export interface GooSurface {
 	dispose(): void;
 }
 
-export const MAX_BLOBS = 32;
+/** A busy crew outgrows 32 bodies (a thrown, working bot alone draws a dozen); 64 stays well within WebGL 2's guaranteed 224 fragment uniform vectors. */
+export const MAX_BLOBS = 64;
 /** How far apart two bodies start to flow into each other. */
 const MELT = 16;
 /** Reach of the melt, the shoulders and the drop shadow around the bodies, in CSS pixels. */

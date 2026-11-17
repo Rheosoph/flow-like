@@ -213,7 +213,7 @@ pub fn grant_scopes(tool: &str, args: &Value, context_app: Option<&str>) -> Opti
         "browser_open" => one(clean(arg(args, "url", "url"))
             .and_then(|url| tools::browser::site_of(&url))
             .map(|site| format!("{}:{site}", tools::browser::grant_prefix(args)))),
-        "computer_screenshot" | "computer_act" | "computer_window" => {
+        "computer_screenshot" | "computer_act" | "computer_window" | "computer_read_text" => {
             Some(vec!["computer:session".to_string()])
         }
         "computer_launch" => one(clean(arg(args, "program", "program"))
@@ -1997,7 +1997,12 @@ mod tests {
             None
         );
         assert_eq!(grant_scopes("browser_open", &json!({}), None), None);
-        for tool in ["computer_act", "computer_screenshot", "computer_window"] {
+        for tool in [
+            "computer_act",
+            "computer_screenshot",
+            "computer_window",
+            "computer_read_text",
+        ] {
             assert_eq!(
                 grant_scopes(tool, &json!({"action": "click"}), None),
                 Some(vec!["computer:session".into()])

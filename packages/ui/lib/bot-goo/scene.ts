@@ -115,11 +115,30 @@ const SPLASH_LIFE = 0.55;
 /** The pointer bulges the den once it comes this close. */
 const BUMP_REACH = 70;
 const HEARTBEAT = 1.25;
+/** A held bot's offset from the pointer closes this fast after the pick-up, without overshoot. */
+const GRAB = { stiffness: 900, damping: 60 };
+/** How quickly a held bot's velocity follows the pointer's, in seconds. */
+const POINTER_SMOOTHING = 0.05;
+/** A flying bot touches down this close to its spot, or after this long in the air. */
+const TOUCHDOWN = 4;
+const MAX_FLIGHT = 0.8;
 
 type PlaceKind = BotPlace["kind"] | "home";
 
+/** A bot on its way somewhere: its landing waits until it gets there. */
+interface Flight {
+	since: number;
+	/** It was let go from a drag: it squashes when it touches down. */
+	thrown: boolean;
+}
+
 interface BotSprings {
 	pos: Spring2;
+	/** While held: its offset from the pointer, closing after the pick-up. */
+	grab: Spring2;
+	/** The pointer at the last step of a drag, for the bot's velocity. */
+	held: GooPoint | null;
+	flight: Flight | null;
 	/** 0 in the den, 1 out in the open. */
 	out: Spring;
 	/** 0 a round blob, 1 the prompt pill. */
@@ -131,6 +150,14 @@ interface BotSprings {
 	lift: Spring;
 	/** 1 while a neck ties it to the den, 0 once that neck snapped back. */
 	tether: Spring;
+	/** 1 while the pointer is on it at home: the den swells under it. */
+	hover: Spring;
+	/** 1 while its moons circle it; they melt back into it as it settles. */
+	busy: Spring;
+	/** What the moons show, kept while they melt away. */
+	orbit: GooMotion | null;
+	/** 1 once it stands on its target's edge: the foot it stands on spreads out. */
+	seat: Spring;
 	/** Seconds on the scene clock when it pops in during the intro; 0 once it has. */
 	appearAt: number;
 	/** The droplets a landing sprays out. */
@@ -298,6 +325,8 @@ export class DenScene {
 	private readonly pull = new Spring2(0, 0, BOUNCY);
 	/** x: where along the edge the pointer bulges the den, y: how much. */
 	private readonly bump = new Spring2(0, 0, SMOOTH);
+	/** 1 while a bead runs along the den. */
+	private readonly bead = new Spring(0, SMOOTH);
 	private readonly bots = new Map<string, BotSprings>();
 	private input: SceneInput | null = null;
 	private started = false;
@@ -320,6 +349,10 @@ export class DenScene {
 			pulled ? TIGHT : BOUNCY,
 		);
 		this.aimBump(input, edge);
+		const busy = [...(input.activity?.values() ?? [])].some(
+			(motion) => motion !== "waiting",
+		);
+		this.bead.set(busy && !input.tucked ? 1 : 0);
 
 		const known = new Set<string>();
 		input.den.slots.forEach((slot, index) => {
@@ -372,12 +405,19 @@ export class DenScene {
 			const intro = introIndex !== null && !place;
 			springs = {
 				pos: new Spring2(slot.x, slot.y),
+				grab: new Spring2(0, 0, GRAB),
+				held: null,
+				flight: place ? { since: this.clock, thrown: false } : null,
 				out: new Spring(0),
 				morph: new Spring(0),
 				fade: new Spring(intro ? 0 : 1),
 				impact: new Spring(0, JELLY),
 				lift: new Spring(0),
 				tether: new Spring(0, TETHER),
+				hover: new Spring(0),
+				busy: new Spring(0, SMOOTH),
+				orbit: null,
+				seat: new Spring(0),
 				appearAt: intro ? INTRO_DELAY + (introIndex ?? 0) * INTRO_STAGGER : 0,
 				splash: [],
 				phase: this.bots.size * 0.37,
@@ -386,6 +426,11 @@ export class DenScene {
 			this.bots.set(botId, springs);
 		}
 		this.react(springs, kind, place);
+		const motion = input.activity?.get(botId);
+		const orbiting = motion === "working" || motion === "thinking";
+		if (orbiting) springs.orbit = motion;
+		springs.busy.set(orbiting ? 1 : 0);
+		springs.hover.set(input.hoverBot === botId && !place ? 1 : 0);
 		springs.morph.set(input.pill?.botId === botId ? 1 : 0, BOUNCY);
 		springs.out.set(place ? 1 : 0, BOUNCY);
 		springs.lift.set(kind === "drag" ? 1 : 0, BOUNCY);
@@ -401,27 +446,71 @@ export class DenScene {
 	}
 
 	/**
-	 * A bot that leaves the den makes it recoil, one that returns gulps; a landing squashes it and
-	 * sprays a few droplets that fall back into it.
+	 * A bot that leaves the den makes it recoil at once. Everything a bot does on arrival (the den
+	 * gulping it back, the squash and spray of a throw) waits until it touches down.
 	 */
 	private react(springs: BotSprings, kind: PlaceKind, place?: BotPlace): void {
 		const was = springs.place;
 		if (was === kind) return;
 		if (was === "home") this.depth.velocity -= DEN_KICK;
-		if (kind === "home") this.depth.velocity += DEN_KICK * 0.6;
-		if (was === "drag") {
-			springs.impact.velocity += LANDING_KICK;
-			if (place && kind !== "drag") this.spray(springs, place);
-		}
 		springs.place = kind;
+		if (kind === "drag") {
+			springs.flight = null;
+			springs.held = null;
+			springs.grab.snap(
+				springs.pos.x.value - (place?.x ?? springs.pos.x.value),
+				springs.pos.y.value - (place?.y ?? springs.pos.y.value),
+			);
+			springs.grab.set(0, 0);
+			return;
+		}
+		springs.flight = { since: this.clock, thrown: was === "drag" };
 	}
 
-	private spray(springs: BotSprings, place: { x: number; y: number }): void {
+	/** A held bot sits under the pointer; its velocity is the pointer's, smoothed, for its tail and lean. */
+	private follow(springs: BotSprings, seconds: number): boolean {
+		const pointer = { x: springs.pos.x.target, y: springs.pos.y.target };
+		const grabbing = springs.grab.step(seconds);
+		let moving = false;
+		if (seconds > 0) {
+			const held = springs.held ?? pointer;
+			const dt = Math.min(seconds, 0.05);
+			const blend = 1 - Math.exp(-dt / POINTER_SMOOTHING);
+			const vx = lerp(springs.pos.x.velocity, (pointer.x - held.x) / dt, blend);
+			const vy = lerp(springs.pos.y.velocity, (pointer.y - held.y) / dt, blend);
+			moving = Math.hypot(vx, vy) >= 1;
+			springs.pos.x.velocity = moving ? vx : 0;
+			springs.pos.y.velocity = moving ? vy : 0;
+			springs.held = pointer;
+		}
+		springs.pos.x.value = pointer.x + springs.grab.x.value;
+		springs.pos.y.value = pointer.y + springs.grab.y.value;
+		return grabbing || moving;
+	}
+
+	/** Lands a flying bot once it reaches its spot. */
+	private touchdown(springs: BotSprings): void {
+		const flight = springs.flight;
+		if (!flight) return;
+		const away = Math.hypot(
+			springs.pos.x.target - springs.pos.x.value,
+			springs.pos.y.target - springs.pos.y.value,
+		);
+		if (away > TOUCHDOWN && this.clock - flight.since < MAX_FLIGHT) return;
+		springs.flight = null;
+		if (springs.place === "home") this.depth.velocity += DEN_KICK * 0.6;
+		if (!flight.thrown) return;
+		springs.impact.velocity += LANDING_KICK;
+		if (springs.place !== "home")
+			this.spray(springs, { x: springs.pos.x.value, y: springs.pos.y.value });
+	}
+
+	private spray(springs: BotSprings, at: GooPoint): void {
 		this.landings += 1;
 		const seed = this.landings * 7.31;
 		springs.splash = [-1, 0, 1].map((side, index) => ({
-			x: place.x + side * 6,
-			y: place.y + PERCH_BLOB * 0.3,
+			x: at.x + side * 6,
+			y: at.y + PERCH_BLOB * 0.3,
 			vx: side * 125 + jitter(seed + index) * 30,
 			vy: -190 - Math.abs(side - 0.5) * 20 + jitter(seed + index + 3) * 35,
 			radius: 3.6 + jitter(seed + index + 5) * 0.7,
@@ -464,6 +553,7 @@ export class DenScene {
 		moving = this.depth.step(seconds) || moving;
 		moving = this.pull.step(seconds) || moving;
 		moving = this.bump.step(seconds) || moving;
+		moving = this.bead.step(seconds) || moving;
 		for (const springs of this.bots.values()) {
 			if (springs.appearAt > 0) {
 				moving = true;
@@ -473,13 +563,24 @@ export class DenScene {
 					springs.impact.velocity -= 7;
 				}
 			}
-			moving = springs.pos.step(seconds) || moving;
+			moving =
+				(springs.place === "drag"
+					? this.follow(springs, seconds)
+					: springs.pos.step(seconds)) || moving;
+			this.touchdown(springs);
+			if (springs.flight) moving = true;
+			springs.seat.set(springs.place === "perch" && !springs.flight ? 1 : 0);
+			moving = springs.seat.step(seconds) || moving;
 			moving = springs.out.step(seconds) || moving;
 			moving = springs.morph.step(seconds) || moving;
 			moving = springs.fade.step(seconds) || moving;
 			moving = springs.impact.step(seconds) || moving;
 			moving = springs.lift.step(seconds) || moving;
 			moving = springs.tether.step(seconds) || moving;
+			moving = springs.hover.step(seconds) || moving;
+			moving = springs.busy.step(seconds) || moving;
+			if (springs.busy.value === 0 && springs.busy.target === 0)
+				springs.orbit = null;
 			if (springs.splash.length > 0) {
 				moving = true;
 				const dt = Math.min(seconds, 0.05);
@@ -568,14 +669,12 @@ export class DenScene {
 			const at = edge.point(this.bump.x.value, depth - 4 + 5 * bump);
 			blobs.push(circle(at.x, at.y, 8 * bump));
 		}
-		const busy = [...(input.activity?.values() ?? [])].some(
-			(motion) => motion !== "waiting",
-		);
-		if (busy && !input.tucked) {
+		const bead = this.bead.value;
+		if (bead > 0.02) {
 			const half = Math.max(0, length / 2 - 16);
 			const along = center + half * Math.sin(this.clock * 1.7);
 			const at = edge.point(along, depth - 1.5);
-			blobs.push(circle(at.x, at.y, 4.6));
+			blobs.push(circle(at.x, at.y, 4.6 * bead));
 		}
 		return blobs;
 	}
@@ -600,9 +699,10 @@ export class DenScene {
 		const vy = springs.pos.y.velocity;
 		const speed = Math.hypot(vx, vy);
 		const place = input.places.get(botId);
-		const motion = input.activity?.get(botId);
 		const beat =
-			motion === "waiting" ? heartbeat(this.clock, springs.phase) : 0;
+			input.activity?.get(botId) === "waiting"
+				? heartbeat(this.clock, springs.phase)
+				: 0;
 		const size = lerp(DEN_AVATAR, PERCH_AVATAR, out) * (0.4 + 0.6 * fade);
 		const pose = {
 			scaleX:
@@ -614,9 +714,10 @@ export class DenScene {
 		};
 		const slotAlong = edge.along(slot);
 
-		if (input.hoverBot === botId && out < 0.5) {
+		const hover = Math.max(0, springs.hover.value);
+		if (hover > 0.02 && out < 0.5) {
 			const bulge = edge.point(slotAlong, depth - 3);
-			blobs.push(circle(bulge.x, bulge.y, 11));
+			blobs.push(circle(bulge.x, bulge.y, 11 * hover));
 		}
 		if (beat > 0.02 && out < 0.5 && !input.tucked) {
 			const bulge = edge.point(slotAlong, depth - 2);
@@ -698,19 +799,22 @@ export class DenScene {
 					),
 				);
 			}
-			if (place?.kind === "perch" && place.edgeY !== null)
+			const seat = Math.max(0, springs.seat.value);
+			if (place?.kind === "perch" && place.edgeY !== null && seat > 0.02)
 				blobs.push({
 					x,
 					y: place.edgeY + 1.5,
-					hw: (15 + 6 * Math.max(0, impact)) * fade,
+					hw: (15 + 6 * Math.max(0, impact)) * fade * seat,
 					hh: 2.5,
 					radius: 2.5,
 				});
 		}
-		if (motion === "working" || motion === "thinking") {
-			const orbit = (radius > 0.5 ? radius : DEN_AVATAR / 2) + 3;
+		const busy = Math.max(0, springs.busy.value);
+		if (springs.orbit && busy > 0.02) {
+			const body = radius > 0.5 ? radius : DEN_AVATAR / 2;
+			const orbit = lerp(body * 0.4, body + 3, Math.min(1, busy));
 			const moons =
-				motion === "working"
+				springs.orbit === "working"
 					? [
 							{ speed: 3.1, size: 5.2, offset: 0 },
 							{ speed: -2.2, size: 4, offset: Math.PI },
@@ -724,7 +828,7 @@ export class DenScene {
 					circle(
 						cx + Math.cos(angle) * orbit,
 						cy + Math.sin(angle) * orbit,
-						moon.size * Math.max(fade, radius > 0.5 ? 0 : 1),
+						moon.size * busy * Math.max(fade, radius > 0.5 ? 0 : 1),
 					),
 				);
 			}

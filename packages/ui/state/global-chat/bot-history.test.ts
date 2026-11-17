@@ -492,7 +492,13 @@ describe("sending to a bot that answers on its own host", () => {
 	});
 
 	test("keeps a window target but never sends a Flow-Like target to the inbox", async () => {
-		const window = { kind: "window" as const, app: "Code", title: "main.rs" };
+		const window = {
+			kind: "window" as const,
+			host_id: "desktop:h1",
+			window_id: "42",
+			app: "Code",
+			title: "main.rs",
+		};
 		const kept = fakeInbox(2);
 		await sendToHost(kept.inbox, target, {
 			id: "msg_w",

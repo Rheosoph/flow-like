@@ -12,7 +12,8 @@ use flow_like_bot_tools::browser::{
     SnapshotRequest, SnapshotView,
 };
 use flow_like_bot_tools::computer::{
-    ComputerAction, ComputerBackend, Screen, WindowBounds, WindowOp, WindowSummary,
+    ComputerAction, ComputerBackend, ReadText, Screen, TextSource, WindowBounds, WindowOp,
+    WindowSummary,
 };
 use flow_like_types::{Bytes, Result, anyhow};
 use serde::Deserialize;
@@ -88,6 +89,13 @@ struct WindowParams {
 struct LaunchParams {
     program: String,
     args: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ReadTextParams {
+    source: TextSource,
+    #[serde(default)]
+    at: Option<(f64, f64)>,
 }
 
 #[derive(Deserialize)]
@@ -199,6 +207,10 @@ async fn dispatch(playground: &dyn Playground, method: &str, value: Value) -> Re
         "computer.launch" => {
             let p: LaunchParams = params(method, value)?;
             json!(playground.computer().launch(&p.program, &p.args).await?)
+        }
+        "computer.read_text" => {
+            let p: ReadTextParams = params(method, value)?;
+            json!(playground.computer().read_text(p.source, p.at).await?)
         }
         "capture" => match playground.capture().await? {
             Some(shot) => {
@@ -714,5 +726,13 @@ impl ComputerBackend for RemoteComputer {
             )
             .await?;
         serde_json::from_value(value).map_err(|e| anyhow!("Bad answer to computer.launch: {e}"))
+    }
+
+    async fn read_text(&self, source: TextSource, at: Option<(f64, f64)>) -> Result<ReadText> {
+        let value = self
+            .remote
+            .call("computer.read_text", json!({ "source": source, "at": at }))
+            .await?;
+        serde_json::from_value(value).map_err(|e| anyhow!("Bad answer to computer.read_text: {e}"))
     }
 }

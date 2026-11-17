@@ -19,8 +19,8 @@ import {
 } from "../../lib/bot-goo/scene";
 
 const HITBOX_MARGIN = 6;
-/** Busy bots animate on their own; 30 frames a second is enough for that and spares the GPU. */
-const AMBIENT_FRAME_MS = 33;
+/** Busy bots animate on their own; 60 frames a second keeps their moons smooth and spares a 120 Hz GPU half its work. */
+const AMBIENT_FRAME_MS = 16;
 const HITBOX_INTERVAL_MS = 33;
 const CARD_GAP = 10;
 
@@ -318,19 +318,36 @@ export function useGooStage(hitboxSink: HitboxSink | null = null): {
 	const stage = useRef<GooStage | null>(null);
 	if (!stage.current) stage.current = new GooStage(hitboxSink);
 	const refs = useRef(new Map<string, (node: HTMLElement | null) => void>());
+	const unwatchCanvas = useRef<(() => void) | null>(null);
 
 	const canvasRef = useCallback((canvas: HTMLCanvasElement | null) => {
 		const current = stage.current;
+		unwatchCanvas.current?.();
+		unwatchCanvas.current = null;
 		if (!current) return;
 		if (!canvas) {
 			current.attach(null);
 			return;
 		}
 		const host = canvas.parentElement;
-		current.attach(
-			createWebGlGoo(canvas) ?? (host ? createCssGoo(host) : null),
-		);
-		current.resize(window.innerWidth, window.innerHeight);
+		const plain = () => (host ? createCssGoo(host) : null);
+		const connect = () => {
+			current.attach(createWebGlGoo(canvas) ?? plain());
+			current.resize(window.innerWidth, window.innerHeight);
+		};
+		// The GPU process can drop the context (sleep, driver reset, too many contexts): plain
+		// shapes stand in until the browser restores it.
+		const lost = (event: Event) => {
+			event.preventDefault();
+			current.attach(plain());
+		};
+		canvas.addEventListener("webglcontextlost", lost);
+		canvas.addEventListener("webglcontextrestored", connect);
+		unwatchCanvas.current = () => {
+			canvas.removeEventListener("webglcontextlost", lost);
+			canvas.removeEventListener("webglcontextrestored", connect);
+		};
+		connect();
 	}, []);
 
 	const nodeRef = useCallback((id: string) => {
@@ -346,9 +363,24 @@ export function useGooStage(hitboxSink: HitboxSink | null = null): {
 		const current = stage.current;
 		const onResize = () =>
 			current?.resize(window.innerWidth, window.innerHeight);
+		// Moving the window to a display with another scale fires no resize.
+		let scale: MediaQueryList | null = null;
+		const watchScale = () => {
+			scale?.removeEventListener("change", onScale);
+			scale = window.matchMedia(
+				`(resolution: ${window.devicePixelRatio || 1}dppx)`,
+			);
+			scale.addEventListener("change", onScale);
+		};
+		const onScale = () => {
+			onResize();
+			watchScale();
+		};
+		watchScale();
 		window.addEventListener("resize", onResize);
 		return () => {
 			window.removeEventListener("resize", onResize);
+			scale?.removeEventListener("change", onScale);
 			current?.stop();
 		};
 	}, []);

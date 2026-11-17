@@ -1812,7 +1812,7 @@ const CAPABILITY_TOOL_LINES: [(BotCapability, &str, &str); 16] = [
     (
         BotCapability::ComputerUse,
         "Computer",
-        "see and operate this device's screen. A message pointed at a window on this computer names its window id: pass it as `window` to `computer_screenshot` and `computer_window` (focus it before you act, since input goes to the window in front)",
+        "see and operate this device's screen. A message pointed at a window on this computer names its window id: pass it as `window` to `computer_screenshot` and `computer_window` (focus it before you act, since input goes to the window in front). Read the text of a field or a selection with `computer_read_text` rather than from screenshots; enter long text with `computer_act` `paste` rather than `type`; select with `select_all`, `triple_click` or `drag`",
     ),
     (
         BotCapability::Connectors,

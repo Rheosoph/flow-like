@@ -103,6 +103,8 @@ interface Press {
 	kind: "bot" | "den";
 	key: string | null;
 	pointerId: number;
+	/** What holds the pointer capture. */
+	element: HTMLElement;
 	start: GooPoint;
 	dragging: boolean;
 }
@@ -393,8 +395,19 @@ function Den({
 				current?.x === next?.x && current?.y === next?.y ? current : next,
 			);
 		};
+		// The den hugs an edge, so the pointer often leaves the window right past it.
+		const onLeave = () => {
+			setPointer(null);
+			setHoverBot(null);
+		};
 		window.addEventListener("pointermove", onMove, { passive: true });
-		return () => window.removeEventListener("pointermove", onMove);
+		window.addEventListener("blur", onLeave);
+		document.documentElement.addEventListener("pointerleave", onLeave);
+		return () => {
+			window.removeEventListener("pointermove", onMove);
+			window.removeEventListener("blur", onLeave);
+			document.documentElement.removeEventListener("pointerleave", onLeave);
+		};
 	}, [restRect]);
 
 	const cancelPrompt = useCallback(
@@ -511,6 +524,7 @@ function Den({
 			kind,
 			key,
 			pointerId: event.pointerId,
+			element: event.currentTarget,
 			start: { x: event.clientX, y: event.clientY },
 			dragging: false,
 		};
@@ -519,6 +533,10 @@ function Den({
 	const movePress = (event: PointerEvent<HTMLElement>) => {
 		const current = press.current;
 		if (current?.pointerId !== event.pointerId) return;
+		if (event.pointerType === "mouse" && event.buttons === 0) {
+			abandonPress(takePress(event.pointerId));
+			return;
+		}
 		const point = { x: event.clientX, y: event.clientY };
 		if (current.kind === "den") {
 			stage.setPull({
@@ -543,17 +561,22 @@ function Den({
 		trackDrag(current, key, point);
 	};
 
-	const releasePress = (event: PointerEvent<HTMLElement>): Press | null => {
+	/** Ends the press (only `pointerId`'s, when given) and hands its pointer back. */
+	const takePress = (pointerId?: number): Press | null => {
 		const current = press.current;
-		if (current?.pointerId !== event.pointerId) return null;
+		if (
+			!current ||
+			(pointerId !== undefined && current.pointerId !== pointerId)
+		)
+			return null;
 		press.current = null;
-		if (event.currentTarget.hasPointerCapture(event.pointerId))
-			event.currentTarget.releasePointerCapture(event.pointerId);
+		if (current.element.hasPointerCapture(current.pointerId))
+			current.element.releasePointerCapture(current.pointerId);
 		return current;
 	};
 
 	const endPress = (event: PointerEvent<HTMLElement>) => {
-		const current = releasePress(event);
+		const current = takePress(event.pointerId);
 		if (!current) return;
 		const point = { x: event.clientX, y: event.clientY };
 		if (current.kind === "den") {
@@ -578,8 +601,8 @@ function Den({
 		drop(key, point, view);
 	};
 
-	const cancelPress = (event: PointerEvent<HTMLElement>) => {
-		const current = releasePress(event);
+	/** A press that ends without a release: a dragged bot goes back where it was. */
+	const abandonPress = (current: Press | null) => {
 		if (!current) return;
 		stage.setPull(null);
 		if (current.key && current.dragging) {
@@ -594,12 +617,29 @@ function Den({
 			);
 		}
 	};
+	const cancelPress = (event: PointerEvent<HTMLElement>) =>
+		abandonPress(takePress(event.pointerId));
+	const abandonRef = useRef(() => abandonPress(takePress()));
+	abandonRef.current = () => abandonPress(takePress());
+	useEffect(() => {
+		const abandon = () => abandonRef.current();
+		const onKey = (event: KeyboardEvent) => {
+			if (event.key === "Escape" && press.current?.dragging) abandon();
+		};
+		window.addEventListener("blur", abandon);
+		window.addEventListener("keydown", onKey);
+		return () => {
+			window.removeEventListener("blur", abandon);
+			window.removeEventListener("keydown", onKey);
+		};
+	}, []);
 
 	const handlersFor = (key: string): BotHandlers => ({
 		onPointerDown: (event) => beginPress(event, "bot", key),
 		onPointerMove: movePress,
 		onPointerUp: endPress,
 		onPointerCancel: cancelPress,
+		onLostPointerCapture: cancelPress,
 		onPointerEnter: () => setHoverBot(key),
 		onPointerLeave: () =>
 			setHoverBot((current) => (current === key ? null : current)),
@@ -678,6 +718,7 @@ function Den({
 				onPointerMove={movePress}
 				onPointerUp={endPress}
 				onPointerCancel={cancelPress}
+				onLostPointerCapture={cancelPress}
 				onContextMenu={(event) => {
 					event.preventDefault();
 					setOpen({

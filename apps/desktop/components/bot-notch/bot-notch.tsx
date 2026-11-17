@@ -60,8 +60,8 @@ import { useNotchTasks } from "./use-notch-tasks";
 import { usePerches } from "./use-perches";
 
 const DRAG_START = 5;
-/** How close the pointer must come before the notch starts to notice it. */
-const PROXIMITY = 56;
+/** How close the pointer must come before the notch notices it: its bots look up from here. */
+const PROXIMITY = 120;
 const HOVER_QUERY_MS = 70;
 const DEN_DROP_MARGIN = 28;
 const DEN_HOVER_MARGIN = 22;
@@ -79,6 +79,8 @@ interface Press {
 	kind: "bot" | "den";
 	botId: string | null;
 	pointerId: number;
+	/** What holds the pointer capture. */
+	element: HTMLElement;
 	start: NotchPoint;
 	dragging: boolean;
 	lastQuery: number;
@@ -98,6 +100,8 @@ interface DragView {
 }
 
 const LANDING_STEP = 6;
+/** The pointer still counts as on a bot this far outside its avatar. */
+const HOVER_SLACK = 8;
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
 	return Promise.race([
@@ -255,13 +259,39 @@ export function BotNotch() {
 
 	useEffect(() => stage.kick());
 
+	const abandonRef = useRef<() => void>(() => undefined);
 	useEffect(() => {
-		const close = () => setOpen(null);
+		const close = () => {
+			abandonRef.current();
+			setOpen(null);
+		};
+		const onKey = (event: KeyboardEvent) => {
+			if (event.key === "Escape" && press.current?.dragging)
+				abandonRef.current();
+		};
 		window.addEventListener("blur", close);
-		return () => window.removeEventListener("blur", close);
+		window.addEventListener("keydown", onKey);
+		return () => {
+			window.removeEventListener("blur", close);
+			window.removeEventListener("keydown", onKey);
+		};
 	}, []);
 
+	const overBot = (botId: string, point: NotchPoint) => {
+		const bot = stage.frame()?.bots.get(botId);
+		return Boolean(
+			bot &&
+				Math.hypot(point.x - bot.x, point.y - bot.y) <=
+					bot.size / 2 + HOVER_SLACK,
+		);
+	};
+
 	useTauriEvent<NotchPointer>(NOTCH_EVENTS.pointer, (point) => {
+		// The window turns click-through once the pointer leaves the shapes, and WebKit then sends
+		// no pointerleave: the pointer stream ends a hover that is over.
+		setHoverBot((current) =>
+			current && (!point.near || !overBot(current, point)) ? null : current,
+		);
 		if (!point.near) {
 			setPointer(null);
 			return;
@@ -415,6 +445,7 @@ export function BotNotch() {
 			kind,
 			botId,
 			pointerId: event.pointerId,
+			element: event.currentTarget,
 			start: { x: event.clientX, y: event.clientY },
 			dragging: false,
 			lastQuery: 0,
@@ -426,6 +457,10 @@ export function BotNotch() {
 	const movePress = (event: PointerEvent<HTMLElement>) => {
 		const current = press.current;
 		if (current?.pointerId !== event.pointerId) return;
+		if (event.pointerType === "mouse" && event.buttons === 0) {
+			abandonPress(takePress(event.pointerId));
+			return;
+		}
 		const point = { x: event.clientX, y: event.clientY };
 		if (current.kind === "den") {
 			stage.setPull({
@@ -450,18 +485,26 @@ export function BotNotch() {
 		trackHover(current, point);
 	};
 
-	const releasePress = (event: PointerEvent<HTMLElement>): Press | null => {
+	/**
+	 * Ends the press (only `pointerId`'s, when given), hands its pointer back and lets the window
+	 * click through again: a capture left on would block every click under the notch window.
+	 */
+	const takePress = (pointerId?: number): Press | null => {
 		const current = press.current;
-		if (current?.pointerId !== event.pointerId) return null;
+		if (
+			!current ||
+			(pointerId !== undefined && current.pointerId !== pointerId)
+		)
+			return null;
 		press.current = null;
-		if (event.currentTarget.hasPointerCapture(event.pointerId))
-			event.currentTarget.releasePointerCapture(event.pointerId);
+		if (current.element.hasPointerCapture(current.pointerId))
+			current.element.releasePointerCapture(current.pointerId);
 		stage.setCapture(false);
 		return current;
 	};
 
 	const endPress = (event: PointerEvent<HTMLElement>) => {
-		const current = releasePress(event);
+		const current = takePress(event.pointerId);
 		if (!current) return;
 		const point = { x: event.clientX, y: event.clientY };
 		if (current.kind === "den") {
@@ -486,8 +529,8 @@ export function BotNotch() {
 		void dropBot(botId, point, current.hover);
 	};
 
-	const cancelPress = (event: PointerEvent<HTMLElement>) => {
-		const current = releasePress(event);
+	/** A press that ends without a release: a dragged bot goes back where it was. */
+	const abandonPress = (current: Press | null) => {
 		if (!current) return;
 		stage.setPull(null);
 		if (current.botId && current.dragging) {
@@ -495,12 +538,16 @@ export function BotNotch() {
 			stage.land(current.botId, places.get(current.botId) ?? null);
 		}
 	};
+	const cancelPress = (event: PointerEvent<HTMLElement>) =>
+		abandonPress(takePress(event.pointerId));
+	abandonRef.current = () => abandonPress(takePress());
 
 	const handlersFor = (botId: string): BotHandlers => ({
 		onPointerDown: (event) => beginPress(event, "bot", botId),
 		onPointerMove: movePress,
 		onPointerUp: endPress,
 		onPointerCancel: cancelPress,
+		onLostPointerCapture: cancelPress,
 		onPointerEnter: () => setHoverBot(botId),
 		onPointerLeave: () =>
 			setHoverBot((current) => (current === botId ? null : current)),
@@ -659,6 +706,7 @@ export function BotNotch() {
 				onPointerMove={movePress}
 				onPointerUp={endPress}
 				onPointerCancel={cancelPress}
+				onLostPointerCapture={cancelPress}
 				onContextMenu={(event) => {
 					event.preventDefault();
 					setOpen({
