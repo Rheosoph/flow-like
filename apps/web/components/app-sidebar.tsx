@@ -66,9 +66,15 @@ import { AccountMenu } from "@flow-like/flow-like-ui/components/account/account-
 import { AccountMenuProvider } from "@flow-like/flow-like-ui/components/account/account-menu-context";
 import { UsernamePrompt } from "@flow-like/flow-like-ui/components/account/username-prompt";
 import { BOTS_ROUTE } from "@flow-like/flow-like-ui/components/bots-tab/dock-selection";
-import { BotsNavAvatar } from "@flow-like/flow-like-ui/components/global-chat/bots-nav-avatar";
+import {
+	BotsNavAvatar,
+	BotsNavBotAvatar,
+	type BotsNavTarget,
+	useBotsNavTarget,
+} from "@flow-like/flow-like-ui/components/global-chat/bots-nav-avatar";
 import { ChatActivityBadge } from "@flow-like/flow-like-ui/components/global-chat/chat-activity";
 import { ProfileAvatar } from "@flow-like/flow-like-ui/components/profile/profile-avatar";
+import { appDenProps } from "@flow-like/flow-like-ui/lib/bot-den/app-targets";
 import { ownsWindowChrome } from "@flow-like/flow-like-ui/lib/chrome-route";
 import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
 import { clearPageSurfaceCache } from "@flow-like/flow-like-ui/lib/page-surface-cache";
@@ -710,7 +716,8 @@ function isItemActive(item: INavItem, pathname: string): boolean {
 function NavFlatItem({
 	item,
 	pathname,
-}: Readonly<{ item: INavItem; pathname: string }>) {
+	bots,
+}: Readonly<{ item: INavItem; pathname: string; bots?: BotsNavTarget }>) {
 	const active = isItemActive(item, pathname);
 	return (
 		<SidebarMenuItem>
@@ -719,20 +726,20 @@ function NavFlatItem({
 				isActive={active}
 				tooltip={item.title}
 				className={
-					item.url === BOTS_ROUTE
+					bots
 						? "overflow-visible pr-9 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0!"
 						: undefined
 				}
 			>
 				<MotionLink
-					href={item.url}
+					href={bots?.href ?? item.url}
 					aria-current={active ? "page" : undefined}
 					initial="initial"
 					whileHover="hover"
 				>
-					{item.url === BOTS_ROUTE ? (
+					{bots ? (
 						<div className="flex size-4 shrink-0 items-center justify-center">
-							<BotsNavAvatar />
+							<BotsNavBotAvatar botId={bots.botId} />
 						</div>
 					) : (
 						item.icon && (
@@ -743,19 +750,32 @@ function NavFlatItem({
 					)}
 					<span
 						className={
-							item.url === BOTS_ROUTE
-								? "group-data-[collapsible=icon]:sr-only"
-								: undefined
+							bots ? "group-data-[collapsible=icon]:sr-only" : undefined
 						}
 					>
 						{item.title}
 					</span>
 				</MotionLink>
 			</SidebarMenuButton>
-			{item.url === BOTS_ROUTE && (
+			{bots && (
 				<ChatActivityBadge className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 group-data-[collapsible=icon]:right-0 group-data-[collapsible=icon]:top-0 group-data-[collapsible=icon]:translate-y-0" />
 			)}
 		</SidebarMenuItem>
+	);
+}
+
+/** The Bots entry opens the bot its avatar shows. */
+function BotsNavFlatItem(
+	props: Readonly<{ item: INavItem; pathname: string }>,
+) {
+	return <NavFlatItem {...props} bots={useBotsNavTarget()} />;
+}
+
+function NavEntry(props: Readonly<{ item: INavItem; pathname: string }>) {
+	return props.item.url === BOTS_ROUTE ? (
+		<BotsNavFlatItem {...props} />
+	) : (
+		<NavFlatItem {...props} />
 	);
 }
 
@@ -894,7 +914,7 @@ function NavMain({
 									onNavigate={router.push}
 								/>
 							) : (
-								<NavFlatItem key={item.title} item={item} pathname={pathname} />
+								<NavEntry key={item.title} item={item} pathname={pathname} />
 							),
 						)}
 				</SidebarMenu>
@@ -915,7 +935,7 @@ function NavMain({
 									onNavigate={router.push}
 								/>
 							) : (
-								<NavFlatItem key={item.title} item={item} pathname={pathname} />
+								<NavEntry key={item.title} item={item} pathname={pathname} />
 							),
 						)}
 					</SidebarMenu>
@@ -1169,7 +1189,15 @@ function Flows() {
 						<CollapsibleContent>
 							<SidebarMenuSub>
 								{openBoards.data?.map(([appId, boardId, boardName]) => (
-									<SidebarMenuSubItem key={boardId}>
+									<SidebarMenuSubItem
+										key={boardId}
+										{...appDenProps({
+											kind: "board",
+											appId,
+											id: boardId,
+											label: boardName,
+										})}
+									>
 										<SidebarMenuSubButton
 											asChild
 											isActive={

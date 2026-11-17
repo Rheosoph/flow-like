@@ -1,9 +1,11 @@
 import type { CopilotStreamEvent } from "../../components/flowpilot/copilot-stream-parser";
+import { appWidgetOf } from "../../lib/inbox-ui-part";
 import { readUsageStat } from "../../lib/llm/usage";
 export { mergeUsageStats, readUsageStat } from "../../lib/llm/usage";
 import type {
 	IAttachment,
 	IChatUsageStat,
+	IChatWidget,
 	IPlanStep,
 	PlanStepStatus,
 } from "../../components/interfaces/chat-default/chat-db";
@@ -231,6 +233,11 @@ export function readReplyAttachment(data: unknown): IAttachment | null {
 			: {}),
 		...(typeof record.bytes === "number" ? { size: record.bytes } : {}),
 	};
+}
+
+/** Narrow a `<reply_widget>` payload (`{origin, widget}`) to a widget bound to its app run. */
+export function readReplyWidget(data: unknown): IChatWidget | null {
+	return appWidgetOf(data);
 }
 
 export function applyStreamEvent(

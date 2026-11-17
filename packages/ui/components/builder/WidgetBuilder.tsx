@@ -12,6 +12,7 @@ import {
 import {
 	type RefObject,
 	useCallback,
+	useContext,
 	useEffect,
 	useId,
 	useMemo,
@@ -20,14 +21,15 @@ import {
 } from "react";
 import { useAssetSource } from "../../hooks/use-asset-source";
 import { cn } from "../../lib";
+import { denTargetProps, useDenResolver } from "../../lib/bot-den/targets";
 import {
 	type AssistantWidgetSurface,
 	useAssistantSurface,
 } from "../../state/assistant-surface";
 import { useBackend } from "../../state/backend-state";
 import type { IWidgetRef } from "../../state/backend-state/page-state";
+import { useRequestBotDen } from "../../state/bot-den";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
-import { useRequestFabBubble } from "../../state/fab-bubble";
 import { A2UIRenderer } from "../a2ui/A2UIRenderer";
 import { applyA2UIMessage } from "../a2ui/apply-a2ui-message";
 import { collectRunElements } from "../a2ui/collect-run-elements";
@@ -68,6 +70,11 @@ import { Inspector } from "./Inspector";
 import { ResponsivePreview } from "./ResponsivePreview";
 import { Toolbar } from "./Toolbar";
 import { A2UICopilot } from "./a2ui-copilot";
+import {
+	BuilderDenContext,
+	type BuilderDenScope,
+	builderSurfaceTarget,
+} from "./builder-den";
 import { useBuilderKeyboardShortcuts } from "./useBuilderKeyboardShortcuts";
 export {
 	createDefaultComponent,
@@ -141,6 +148,8 @@ export interface WidgetBuilderProps {
 	initialComponents?: SurfaceComponent[];
 	initialWidgetRefs?: Record<string, IWidgetRef>;
 	widgetId?: string;
+	/** What the person calls the page or widget being built; names it when a bot is dropped on it. */
+	surfaceName?: string;
 	surfaceId?: string;
 	onSave?: (
 		components: SurfaceComponent[],
@@ -223,6 +232,7 @@ export function WidgetBuilder({
 	initialWidgetRefs,
 	widgetId,
 	surfaceId = "builder-surface",
+	surfaceName,
 	onSave,
 	onExport,
 	onChange,
@@ -235,9 +245,6 @@ export function WidgetBuilder({
 	externalAssistant = false,
 	handleRef,
 }: WidgetBuilderProps) {
-	// Without an in-interface FlowPilot button the floating bubble is this builder's only way into
-	// the assistant, so ask for it exactly when we drop our own.
-	useRequestFabBubble(externalAssistant);
 	const [mode, setMode] = useState<"edit" | "preview">("edit");
 	const [leftTab, setLeftTab] = useState<"palette" | "hierarchy">("palette");
 	const [copilotOpen, setCopilotOpen] = useState(false);
@@ -268,6 +275,7 @@ export function WidgetBuilder({
 				fitContent={fitContent}
 				surfaceId={surfaceId}
 				widgetId={widgetId}
+				surfaceName={surfaceName}
 				mode={mode}
 				setMode={setMode}
 				leftTab={leftTab}
@@ -292,6 +300,7 @@ interface WidgetBuilderContentProps {
 	fitContent: boolean;
 	surfaceId: string;
 	widgetId?: string;
+	surfaceName?: string;
 	mode: "edit" | "preview";
 	setMode: (mode: "edit" | "preview") => void;
 	leftTab: "palette" | "hierarchy";
@@ -328,6 +337,7 @@ function WidgetBuilderContent({
 	fitContent,
 	surfaceId,
 	widgetId,
+	surfaceName,
 	mode,
 	setMode,
 	leftTab,
@@ -369,6 +379,25 @@ function WidgetBuilderContent({
 
 	// Ref for capturing screenshots of the canvas
 	const canvasContainerRef = useRef<HTMLDivElement>(null);
+	useRequestBotDen(externalAssistant, canvasContainerRef);
+
+	const denAppId = actionContext?.appId;
+	const denPageId = actionContext?.pageId ?? currentPageId;
+	const denScope = useMemo<BuilderDenScope | null>(() => {
+		if (!denAppId) return null;
+		const pageName = actionContext?.pages?.find(
+			(page) => page.id === denPageId,
+		)?.name;
+		return {
+			appId: denAppId,
+			pageId: denPageId,
+			widgetId: denPageId ? undefined : widgetId,
+			surfaceLabel:
+				surfaceName ??
+				pageName ??
+				(denPageId ? t("page", "Page") : t("widget", "Widget")),
+		};
+	}, [denAppId, denPageId, widgetId, surfaceName, actionContext?.pages, t]);
 
 	// Screenshot capture function for FlowPilot
 	const captureScreenshot = useCallback(async (): Promise<string | null> => {
@@ -536,7 +565,7 @@ function WidgetBuilderContent({
 	]);
 
 	return (
-		<>
+		<BuilderDenContext.Provider value={denScope}>
 			<div
 				ref={builderRootRef}
 				data-builder-root={builderId}
@@ -713,7 +742,7 @@ function WidgetBuilderContent({
 				{/* Dev Mode JSON Editor */}
 				<DevModePanel />
 			</div>
-		</>
+		</BuilderDenContext.Provider>
 	);
 }
 
@@ -775,12 +804,27 @@ function VisualCanvas({
 		components,
 		selection,
 		selectComponent,
+		setSelection,
 		canvasSettings,
 		actionContext,
 	} = useBuilder();
 	const { activeId } = useBuilderDnd();
 	const isDragging = activeId !== null;
 	const canvasRef = useRef<HTMLDivElement>(null);
+	const denScope = useContext(BuilderDenContext);
+	const surfaceDenProps = useMemo(
+		() => (denScope ? denTargetProps(builderSurfaceTarget(denScope)) : {}),
+		[denScope],
+	);
+	useDenResolver(canvasRef, {
+		at: () => null,
+		rectOf: () => null,
+		focus: (target) => {
+			if (target.kind !== "component" || !target.ids) return;
+			const ids = target.ids.filter((id) => components.has(id));
+			if (ids.length > 0) setSelection({ componentIds: ids });
+		},
+	});
 	const canvasId = useId();
 	// Components carry storage paths and resolve their own artwork, so the canvas
 	// renders them as they are. Only the background has no component to do that.
@@ -890,6 +934,7 @@ function VisualCanvas({
 				onClick={handleCanvasClick}
 				onKeyDown={(e) => e.key === "Escape" && handleCanvasClick(e as never)}
 				data-canvas-background="true"
+				{...surfaceDenProps}
 				className={cn(
 					"flex-1 overflow-auto p-4 min-w-0 min-h-0",
 					isOver && "bg-primary/5",

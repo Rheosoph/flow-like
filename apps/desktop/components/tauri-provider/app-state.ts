@@ -206,6 +206,9 @@ async function mirrorRemoteAppPackages(
 }
 
 export class AppState implements IAppState {
+	/** The server record each local copy was last mirrored from, so an unchanged app is not rewritten. */
+	private readonly mirrored = new Map<string, string>();
+
 	constructor(private readonly backend: TauriBackend) {}
 
 	private getRemoteAuth() {
@@ -664,21 +667,26 @@ export class AppState implements IAppState {
 		localIds: ReadonlySet<string>,
 	): Promise<void> {
 		for (const [app, meta] of entries) {
+			const signature = JSON.stringify([app, meta ?? null]);
+			if (localIds.has(app.id) && this.mirrored.get(app.id) === signature)
+				continue;
+			this.mirrored.set(app.id, signature);
+			const forget = () => this.mirrored.delete(app.id);
 			appsDB.visibility
 				.put({
 					visibility: app.visibility ?? IAppVisibility.Private,
 					appId: app.id,
 				})
-				.catch(() => {});
+				.catch(forget);
 
 			if (localIds.has(app.id)) {
-				invoke("update_app", { app }).catch(() => {});
+				invoke("update_app", { app }).catch(forget);
 				if (meta)
 					invoke("push_app_meta", {
 						appId: app.id,
 						metadata: meta,
 						preserveUpdatedAt: true,
-					}).catch(() => {});
+					}).catch(forget);
 				continue;
 			}
 
@@ -693,6 +701,7 @@ export class AppState implements IAppState {
 				// Keep the server's visibility and timestamps after creating the local copy.
 				await invoke("update_app", { app });
 			} catch (error) {
+				forget();
 				console.warn(`Failed to cache remote app ${app.id} locally:`, error);
 			}
 		}

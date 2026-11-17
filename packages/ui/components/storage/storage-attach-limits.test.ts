@@ -23,6 +23,9 @@ describe("storage attach limits", () => {
 		expect(mimeTypeForName("a.PDF")).toBe("application/pdf");
 		expect(mimeTypeForName("a.png", "image/webp")).toBe("image/webp");
 		expect(mimeTypeForName("a.unknown")).toBe("application/octet-stream");
+		expect(mimeTypeForName("a.pdf", "binary/octet-stream")).toBe(
+			"application/pdf",
+		);
 	});
 
 	test("fetches files from the signed storage URL keeping name and type", async () => {

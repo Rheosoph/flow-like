@@ -34,9 +34,14 @@ import type {
 	IUpdateBotTaskRequest,
 	IUpsertBotSecretRequest,
 } from "@flow-like/flow-like-ui";
+import { RemoteBotComputerHost } from "@flow-like/flow-like-ui/lib/bot-screens/remote-computer-host";
+import { createScreenSealing } from "@flow-like/flow-like-ui/lib/bot-screens/screen-sealing";
+import { browserInboxCrypto } from "@flow-like/flow-like-ui/lib/inbox-e2e-browser";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import {
 	type IBotApprovalItemDecision,
+	type IBotScreenAccess,
+	type ISealedApprovalAnswer,
 	approvalAnswerBody,
 } from "@flow-like/flow-like-ui/state/backend-state/bot-state";
 import {
@@ -136,7 +141,25 @@ function expectTask(response: unknown): IBotTask {
 }
 
 export class WebBotState implements IBotState {
-	constructor(private readonly backend: WebBackendRef) {}
+	readonly computer: RemoteBotComputerHost;
+
+	constructor(private readonly backend: WebBackendRef) {
+		this.computer = new RemoteBotComputerHost({
+			access: () => this.getScreenAccess(),
+			sealing: createScreenSealing({
+				crypto: browserInboxCrypto,
+				sub: () => backend.auth?.user?.profile?.sub,
+			}),
+		});
+	}
+
+	getScreenAccess(): Promise<IBotScreenAccess> {
+		return apiPost<IBotScreenAccess>(
+			"realtime/bot-screens",
+			undefined,
+			this.backend.auth,
+		);
+	}
 
 	/** Created on first use; the hub answers a repeat with the same app. */
 	async getWorkspace(botId: string): Promise<IBotWorkspace> {
@@ -284,10 +307,11 @@ export class WebBotState implements IBotState {
 		approvalId: string,
 		decision: BotApprovalDecision,
 		items?: readonly IBotApprovalItemDecision[],
+		sealed?: ISealedApprovalAnswer,
 	): Promise<void> {
 		await apiPost(
 			`${botPath(botId)}/turns/${encodeURIComponent(turnId)}/approval`,
-			approvalAnswerBody(approvalId, decision, items),
+			approvalAnswerBody(approvalId, decision, items, sealed),
 			this.backend.auth,
 		);
 	}

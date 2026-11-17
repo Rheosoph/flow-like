@@ -247,6 +247,7 @@ import {
 } from "../../lib/flow-auto-layout";
 import {
 	type PendingEdgeEdit,
+	type UnconfirmedMove,
 	edgeEditApplied,
 	getFunctionReferenceNodeIdsFromEdge,
 	handleConnection,
@@ -257,7 +258,6 @@ import {
 	keepUnconfirmedPositions,
 	pendingEdgeEdit,
 	removeFunctionReferenceCommandForEdge,
-	type UnconfirmedMove,
 	withPendingEdges,
 } from "../../lib/flow-board-helpers";
 import {
@@ -329,7 +329,7 @@ import {
 	boardTestSummary,
 	useBoardTestsStore,
 } from "../../state/board-tests-state";
-import { useRequestFabBubble } from "../../state/fab-bubble";
+import { useRequestBotDen } from "../../state/bot-den";
 import { useFlowBoardParentState } from "../../state/flow-board-parent-state";
 import { useRunExecutionStore } from "../../state/run-execution-state";
 import {
@@ -376,6 +376,7 @@ import { LayerInnerNode } from "./layer-inner-node";
 import { LayerNode } from "./layer-node";
 import { NodeSuggestionGhost } from "./node-suggestion-ghost";
 import { RuntimeVariablesPrompt } from "./runtime-variables-prompt";
+import { useBoardDenTargets } from "./use-board-den-targets";
 import { WasmSandboxWarningDialog } from "./wasm-sandbox-warning-dialog";
 
 /** The board root. Always open, because the canvas is always showing something. */
@@ -564,9 +565,10 @@ function FlowBoardContent({
 	};
 }>) {
 	const { t } = useTranslation("flow");
-	// Without an in-interface FlowPilot button the floating bubble is this board's only way into the
-	// assistant, so ask for it exactly when we drop our own.
-	useRequestFabBubble(externalAssistant);
+	// Without an in-interface FlowPilot button the bot den is this board's way into the assistant,
+	// so ask for it exactly when we drop our own. It hugs the canvas's right edge.
+	const denAnchorRef = useRef<HTMLDivElement>(null);
+	useRequestBotDen(externalAssistant, denAnchorRef);
 	const { pushCommand, pushCommands, pushCommandsOnce, withHistoryLock } =
 		useUndoRedo(appId, boardId);
 	useRetainBoardHistory(appId, boardId);
@@ -4964,6 +4966,18 @@ function FlowBoardContent({
 		[applyFlowIrCommit],
 	);
 
+	const boardDenProps = useBoardDenTargets({
+		anchor: denAnchorRef,
+		appId,
+		boardId,
+		board: board.data,
+		currentLayer,
+		readOnly: typeof version !== "undefined" || Boolean(documentTab),
+		selectedNodeIds,
+		selectNodes,
+		highlightNodes: highlightNodesOnCanvas,
+	});
+
 	// Publish the live board surface for the global assistant while this board is
 	// mounted (old versions are read-only, so they never register).
 	useEffect(() => {
@@ -5828,6 +5842,7 @@ function FlowBoardContent({
 				tabs={
 					board.data ? (
 						<FlowEditorTabs
+							appId={appId}
 							board={board.data}
 							tabs={openTabs}
 							activeKey={activeTabKey}
@@ -6137,7 +6152,11 @@ function FlowBoardContent({
 					// the xyflow store and makes the next `saveViewport` write a stale viewport
 					// under the old key; `display:none` collapses it to zero and breaks the
 					// restore on the way back. `visibility` keeps it measured and inert.
-					<div className="relative flex h-full min-h-0 flex-col">
+					<div
+						ref={denAnchorRef}
+						className="relative flex h-full min-h-0 flex-col"
+						{...boardDenProps}
+					>
 						<div
 							className={cn(
 								"flex h-full min-h-0 flex-col",

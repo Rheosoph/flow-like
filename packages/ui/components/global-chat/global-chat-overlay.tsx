@@ -13,6 +13,7 @@ import {
 	useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { DEN_AVOID_ATTRIBUTE } from "../../lib/bot-den/targets";
 import { PAGE_SNAPSHOT_IGNORE_ATTRIBUTE } from "../../lib/page-snapshot";
 import { cn } from "../../lib/utils";
 import { useAssistantSurface } from "../../state/assistant-surface";
@@ -361,6 +362,7 @@ export function GlobalChatOverlay() {
 								"--fl-chat-pad-bottom": "0.75rem",
 							} as CSSProperties
 						}
+						{...{ [DEN_AVOID_ATTRIBUTE]: "" }}
 						className={`pointer-events-auto relative flex max-h-[calc(100vh-3rem)] max-w-[calc(100vw-3rem)] flex-col overflow-hidden rounded-xl border border-border/70 bg-background shadow-2xl shadow-black/25 ring-1 ring-black/5 dark:border-white/10 dark:ring-white/10 ${dragging ? "select-none" : ""}`}
 					>
 						{/* hairline top sheen for a bit of glass depth */}

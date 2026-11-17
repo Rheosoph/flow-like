@@ -23,7 +23,8 @@ export type CopilotStreamEventType =
 	| "usage_stat"
 	| "model_resolved"
 	| "ui_draft"
-	| "reply_attachment";
+	| "reply_attachment"
+	| "reply_widget";
 
 export interface CopilotStreamEvent {
 	type: CopilotStreamEventType;
@@ -49,6 +50,7 @@ const TAG_TYPES: CopilotStreamEventType[] = [
 	"model_resolved",
 	"ui_draft",
 	"reply_attachment",
+	"reply_widget",
 ];
 const OPEN_TAGS = TAG_TYPES.map((type) => ({ type, tag: `<${type}>` }));
 

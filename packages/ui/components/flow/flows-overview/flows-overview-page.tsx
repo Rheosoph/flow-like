@@ -172,7 +172,7 @@ export interface FlowsOverviewPageProps {
 	setBoardCreation: React.Dispatch<
 		React.SetStateAction<FlowLibraryBoardCreationState>
 	>;
-	onCreateBoard: () => Promise<void>;
+	onCreateBoard: (boardId: string) => Promise<void>;
 	onOpenBoard: (boardId: string) => Promise<void>;
 	onDeleteBoard: (boardId: string) => Promise<void>;
 	boardHref?: (boardId: string) => string;
@@ -462,6 +462,7 @@ export function FlowsOverviewPage({
 										{bandRows.map((row) => (
 											<FlowScoreCard
 												key={row.board.id}
+												appId={appId}
 												row={row}
 												expanded={expandedId === row.board.id}
 												highlighted={highlightedId === row.board.id}

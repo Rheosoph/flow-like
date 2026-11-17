@@ -191,6 +191,22 @@
 		"asleep": "",
 		"asleepHint": "",
 		"browser": "",
+		"device": {
+			"accountFailed": "",
+			"accountFailedHint": "",
+			"connecting": "",
+			"loading": "",
+			"locked": "",
+			"lockedHint": "",
+			"noKeys": "",
+			"noKeysHint": "",
+			"retry": "",
+			"signIn": "",
+			"signInButton": "",
+			"signInHint": "",
+			"thisDevice": "",
+			"unlock": ""
+		},
 		"failed": "",
 		"handBack": "",
 		"inControl": "",
@@ -200,8 +216,35 @@
 		"stop": "",
 		"takeOver": "",
 		"watchOnly": "",
-		"webOnlyDesktop": "",
-		"webOnlyDesktopHint": "",
+		"maximize": "",
+		"restore": "",
+		"pairing": {
+			"copied": "",
+			"copy": "",
+			"devices": "",
+			"dialogHint": "",
+			"dialogTitle": "",
+			"expired": "",
+			"expiresIn": "",
+			"hint": "",
+			"linkLabel": "",
+			"linkPlaceholder": "",
+			"newCode": "",
+			"noCode": "",
+			"noDevices": "",
+			"open": "",
+			"pair": "",
+			"paired": "",
+			"qrLabel": "",
+			"remove": "",
+			"scan": "",
+			"storeDescription": "",
+			"storeLabel": "",
+			"title": "",
+			"titleUnknown": "",
+			"scanTitle": "",
+			"scanHint": ""
+		},
 		"action": {
 			"chord": "",
 			"click": "",
@@ -788,6 +831,13 @@
 			"people_one": "",
 			"people_other": "",
 			"theyWrote": "",
+			"timeline": {
+				"older": "",
+				"pinned": "",
+				"showAll": "",
+				"showFewer": "",
+				"week": ""
+			},
 			"title": "",
 			"youWrote": ""
 		},
@@ -1534,6 +1584,48 @@
 			"title_other": ""
 		}
 	},
+	"notch": {
+		"allowAlways": "",
+		"allowOnce": "",
+		"autoApprove": "",
+		"autoApproveOn": "",
+		"batch": "",
+		"browserOnly": "",
+		"deny": "",
+		"dismiss": "",
+		"done": "",
+		"dontAskAgain": "",
+		"failed": "",
+		"failedLabel": "",
+		"hide": "",
+		"hideNotch": "",
+		"needsYou": "",
+		"openBots": "",
+		"openChat": "",
+		"pointedAt": "",
+		"prompt": "",
+		"promptHere": "",
+		"promptLabel": "",
+		"send": "",
+		"sendFailed": "",
+		"sendHome": "",
+		"settings": {
+			"browser": "",
+			"computer": "",
+			"computerAndBrowser": "",
+			"description": "",
+			"none": "",
+			"show": "",
+			"toggle": ""
+		},
+		"stop": "",
+		"thinking": "",
+		"wantsTo": "",
+		"working": ""
+	},
+	"den": {
+		"hint": ""
+	},
 	"notes": {
 		"body": "",
 		"cancel": "",
@@ -1580,6 +1672,10 @@
 			"waiting": ""
 		},
 		"grants": {
+			"auto": {
+				"description": "",
+				"title": ""
+			},
 			"none": "",
 			"revoke": "",
 			"title": ""

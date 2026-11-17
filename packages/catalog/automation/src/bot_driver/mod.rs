@@ -17,7 +17,10 @@ pub use browser::{
     BotStep,
 };
 #[cfg(feature = "execute")]
-pub use computer::{BotComputer, BotDisplay, BotPointerButton, BotScreen, BotScrollDirection};
+pub use computer::{
+    BotComputer, BotDisplay, BotPointerButton, BotScreen, BotScrollDirection, BotText,
+    BotTextMethod,
+};
 #[cfg(feature = "execute")]
 pub use permission::MissingPermission;
 #[cfg(feature = "execute")]

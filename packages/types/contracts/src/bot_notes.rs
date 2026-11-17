@@ -198,7 +198,10 @@ pub fn normalize_key(raw: &str) -> String {
         }
         key.push(mapped);
     }
-    key.trim_end_matches('-').chars().take(MAX_KEY_CHARS).collect()
+    key.trim_end_matches('-')
+        .chars()
+        .take(MAX_KEY_CHARS)
+        .collect()
 }
 
 fn check_key(key: &str) -> Result<(), NoteError> {
@@ -255,7 +258,12 @@ impl BotNote {
 
     fn create(key: &str, change: &NoteChange, author: &NoteAuthor) -> Result<Self, NoteError> {
         check_key(key)?;
-        let Some(title) = change.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) else {
+        let Some(title) = change
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        else {
             return refuse(format!("note '{key}' is new, so it needs a title"));
         };
         Ok(Self {
@@ -316,7 +324,10 @@ impl BotNote {
         }
         check_body(&self.body)?;
         if self.version == 0 {
-            return refuse(format!("note '{}' has version 0; versions start at 1", self.key));
+            return refuse(format!(
+                "note '{}' has version 0; versions start at 1",
+                self.key
+            ));
         }
         if self.updated_by.trim().is_empty() {
             return refuse(format!("note '{}' names nobody in updated_by", self.key));
@@ -377,7 +388,10 @@ impl NoteRef {
             check_line("status", status, 1, MAX_STATUS_CHARS)?;
         }
         if self.version == 0 {
-            return refuse(format!("note '{}' has version 0; versions start at 1", self.key));
+            return refuse(format!(
+                "note '{}' has version 0; versions start at 1",
+                self.key
+            ));
         }
         Ok(())
     }
@@ -494,7 +508,10 @@ mod tests {
         .unwrap();
         assert_eq!(owner_edit.sensitivity, confidential());
         assert_eq!(owner_edit.updated_by, "user_1");
-        assert_eq!(owner_edit.at_version(1).unwrap().status.as_deref(), Some("Lesson 1 of 6"));
+        assert_eq!(
+            owner_edit.at_version(1).unwrap().status.as_deref(),
+            Some("Lesson 1 of 6")
+        );
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! This crate has no dependency on the Flow runtime, model providers, or storage clients.
 
 pub mod authoring;
+pub mod chat_widget;
 pub mod component;
 pub mod components;
 pub mod data;

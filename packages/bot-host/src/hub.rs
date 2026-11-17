@@ -5,7 +5,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, FixedOffset};
 use flow_like::flow::copilot::tool_grants::{GrantKey, GrantStore};
 use flow_like_local_bots::InboxEntry;
-use flow_like_types::{bot_message::ApprovalRequest, bot_turn::BotTurn, inbox::InboxEntryKind};
+use flow_like_types::{
+    bot_message::ApprovalRequest, bot_turn::BotTurn, inbox::InboxEntryKind,
+    tool_grant::SealedApprovalCard,
+};
 use serde::Deserialize;
 use serde_json::Value;
 use std::{any::Any, sync::Arc, time::Duration};
@@ -292,6 +295,18 @@ pub trait TurnHub: Send + Sync + 'static {
         _card: &ApprovalRequest,
     ) -> Result<(), HubFailure> {
         Err(HubFailure::offline("This hub cannot park turns"))
+    }
+    /// Parks the turn this host holds behind a card it sealed for the owner's end-to-end
+    /// encrypted chat with the bot; the hub posts the envelopes unread.
+    async fn park_sealed(
+        &self,
+        _turn_id: &str,
+        _host_id: &str,
+        _sealed: &SealedApprovalCard,
+    ) -> Result<(), HubFailure> {
+        Err(HubFailure::offline(
+            "This hub cannot park turns in end-to-end encrypted chats",
+        ))
     }
     /// Ends the turn this host holds `done` without a reply: the bot read along and stayed silent.
     async fn silent(&self, _turn_id: &str, _host_id: &str) -> Result<(), HubFailure> {

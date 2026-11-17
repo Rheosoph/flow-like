@@ -7,7 +7,11 @@ import { IRole } from "../../lib/schema/llm/history";
 import type { IConversation } from "../../state/backend-state/inbox-state";
 import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
 import type { BotAvatarProps } from "../bots/types";
-import { BotsNavAvatar } from "./bots-nav-avatar";
+import {
+	BotsNavAvatar,
+	BotsNavBotAvatar,
+	useBotsNavTarget,
+} from "./bots-nav-avatar";
 
 const source = vi.hoisted(() => ({
 	conversations: [] as IConversation[],
@@ -36,6 +40,7 @@ vi.mock("../../hooks/use-user-lookup", () => ({
 	},
 }));
 vi.mock("./use-global-chat-bot", () => ({
+	useChatBotList: () => ({ data: undefined }),
 	useChatBotView: (id: string | null) => ({
 		bot: id === "shared" ? undefined : { id },
 		appearance: { kind: id === null ? "flux" : id },
@@ -162,4 +167,28 @@ test("uses the selected shared bot's directory appearance and avoids signed-out 
 	source.signedIn = false;
 	await render();
 	expect(source.lookup).toHaveBeenLastCalledWith(undefined);
+});
+
+function BotsLink() {
+	const target = useBotsNavTarget();
+	return (
+		<a href={target.href}>
+			<BotsNavBotAvatar botId={target.botId} />
+		</a>
+	);
+}
+
+test("the link opens where the shown bot last talked, the Assistant before any", async () => {
+	const link = () => host.querySelector("a");
+	await act(async () => root.render(<BotsLink />));
+	expect(link()?.getAttribute("href")).toBe("/bots");
+	expect(link()?.firstElementChild?.getAttribute("data-kind")).toBe("general");
+	source.conversations = [conversation("scout", 2000)];
+	await act(async () => root.render(<BotsLink />));
+	expect(link()?.getAttribute("href")).toBe("/bots?conversation=scout");
+	expect(link()?.firstElementChild?.getAttribute("data-kind")).toBe("scout");
+	source.history = { botId: null, at: 3000 };
+	await act(async () => root.render(<BotsLink />));
+	expect(link()?.getAttribute("href")).toBe("/bots?bot=flux");
+	expect(link()?.firstElementChild?.getAttribute("data-kind")).toBe("flux");
 });

@@ -101,6 +101,29 @@ pub enum ScrollDirection {
     Right,
 }
 
+/// Which text `read_text` returns: the whole focused field, or what is selected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TextSource {
+    #[default]
+    Field,
+    Selection,
+}
+
+/// How the text was read: straight from the app's accessibility tree, or by copying it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextMethod {
+    Accessibility,
+    Clipboard,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReadText {
+    pub text: String,
+    pub method: TextMethod,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ComputerAction {
     Click {
@@ -124,6 +147,21 @@ pub enum ComputerAction {
         y: f64,
         direction: ScrollDirection,
         ticks: u32,
+    },
+    /// Inserts `text` through the clipboard, which is restored afterwards; `replace_all` replaces
+    /// the focused field's whole text instead of inserting at the caret.
+    Paste {
+        text: String,
+        replace_all: bool,
+    },
+    /// Selects everything in the focused field or document, after a click at `at` when given.
+    SelectAll {
+        at: Option<(f64, f64)>,
+    },
+    Drag {
+        from: (f64, f64),
+        to: (f64, f64),
+        button: PointerButton,
     },
 }
 
@@ -170,5 +208,10 @@ pub trait ComputerBackend: Send + Sync {
     /// Starts a program on the computer's display; `args` are passed as they are, never through a shell.
     async fn launch(&self, _program: &str, _args: &[String]) -> Result<String> {
         Err(not_supported("start programs"))
+    }
+
+    /// The text of the focused field or of the selection, after a click at `at` when given.
+    async fn read_text(&self, _source: TextSource, _at: Option<(f64, f64)>) -> Result<ReadText> {
+        Err(not_supported("read text from the screen"))
     }
 }

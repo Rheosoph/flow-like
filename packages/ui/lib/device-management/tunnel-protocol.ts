@@ -159,7 +159,7 @@ function validateOpen(value: Record<string, unknown>) {
 	const mode = Object.hasOwn(value, "mode") ? ["mode"] : [];
 	if (Object.hasOwn(value, "target")) {
 		exactFields(value, ["target", ...mode]);
-		if (value.target !== "model_gateway")
+		if (value.target !== "model_gateway" && !botPlaygroundTarget(value.target))
 			throw new Error("Invalid device tunnel target.");
 	} else {
 		exactFields(value, ["placement_id", "service_id", ...mode]);
@@ -168,6 +168,29 @@ function validateOpen(value: Record<string, unknown>) {
 	}
 	if (value.mode !== undefined && value.mode !== "tcp" && value.mode !== "http")
 		throw new Error("Invalid device tunnel service.");
+}
+
+function botPlaygroundTarget(target: unknown): boolean {
+	if (!target || typeof target !== "object" || Array.isArray(target))
+		return false;
+	const keys = Object.keys(target);
+	if (keys.length !== 1 || keys[0] !== "bot_playground") return false;
+	const playground = (target as Record<string, unknown>).bot_playground;
+	if (
+		!playground ||
+		typeof playground !== "object" ||
+		Array.isArray(playground)
+	)
+		return false;
+	const fields = playground as Record<string, unknown>;
+	const observations = Object.hasOwn(fields, "observations")
+		? ["observations"]
+		: [];
+	exactFields(fields, ["bot_id", ...observations]);
+	return (
+		identifier(fields.bot_id) &&
+		(fields.observations === undefined || fields.observations === true)
+	);
 }
 
 function validateDataOpen(value: Record<string, unknown>): void {

@@ -5,12 +5,15 @@ import type {
 	IInboxEntry,
 } from "../../state/backend-state/inbox-state";
 import {
+	type TimelineBucket,
 	activityTimeKind,
 	awaitingAnswer,
 	conversationComposition,
+	conversationTimeline,
 	crewSummaryLine,
 	directPartnerId,
 	findDirectConversation,
+	foldTimeline,
 	isSelfPrincipal,
 	matchesSearch,
 	otherMemberIds,
@@ -424,5 +427,106 @@ describe("person chat badge and pending state", () => {
 				pending: [{ status: "pending" } as never],
 			}),
 		).toBe(false);
+	});
+});
+
+describe("conversationTimeline", () => {
+	const now = new Date(2026, 10, 17, 12, 0);
+	const daysAgo = (days: number, hour = 9) =>
+		new Date(2026, 10, 17 - days, hour, 0).toISOString();
+	const shape = (groups: ReturnType<typeof conversationTimeline>) =>
+		groups.map((group) => [
+			group.bucket,
+			group.conversations.map((conversation) => conversation.id),
+		]);
+
+	test("groups rooms and direct chats by day of their newest activity, newest first", () => {
+		const groups = conversationTimeline(
+			[
+				conversation("room_old", { last_activity_at: daysAgo(12) }),
+				conversation("room_today", { last_activity_at: daysAgo(0, 8) }),
+				conversation("bot_today", {
+					kind: "direct",
+					last_activity_at: daysAgo(0, 10),
+				}),
+				conversation("bot_yesterday", {
+					kind: "direct",
+					last_activity_at: daysAgo(1),
+				}),
+				conversation("person_week", {
+					kind: "direct",
+					last_activity_at: daysAgo(4),
+				}),
+			],
+			now,
+		);
+		expect(shape(groups)).toEqual([
+			["today", ["bot_today", "room_today"]],
+			["yesterday", ["bot_yesterday"]],
+			["week", ["person_week"]],
+			["older", ["room_old"]],
+		]);
+	});
+
+	test("keeps pinned conversations in their own group first, whatever their age", () => {
+		const groups = conversationTimeline(
+			[
+				conversation("bot_today", {
+					kind: "direct",
+					last_activity_at: daysAgo(0),
+				}),
+				conversation("room_pinned", {
+					last_activity_at: daysAgo(30),
+					pinned_at: daysAgo(2),
+				}),
+			],
+			now,
+		);
+		expect(shape(groups)).toEqual([
+			["pinned", ["room_pinned"]],
+			["today", ["bot_today"]],
+		]);
+	});
+
+	test("puts an unreadable activity time with the oldest", () => {
+		const groups = conversationTimeline(
+			[conversation("broken", { last_activity_at: "not a date" })],
+			now,
+		);
+		expect(shape(groups)).toEqual([["older", ["broken"]]]);
+	});
+});
+
+describe("foldTimeline", () => {
+	const group = (
+		bucket: TimelineBucket,
+		ids: readonly string[],
+		unread: readonly string[] = [],
+	) => ({
+		bucket,
+		conversations: ids.map((id) =>
+			conversation(id, { unread_count: unread.includes(id) ? 1 : 0 }),
+		),
+	});
+	const unread = (item: IConversation) => item.unread_count > 0;
+
+	test("fills the list with older conversations up to the minimum, keeping unread ones", () => {
+		const { groups, hidden } = foldTimeline(
+			[group("today", ["a", "b"]), group("older", ["c", "d", "e", "f"], ["f"])],
+			3,
+			unread,
+		);
+		expect(groups[1].conversations.map(({ id }) => id)).toEqual(["c", "f"]);
+		expect(hidden).toBe(2);
+	});
+
+	test("hides nothing in a short list", () => {
+		const { groups, hidden } = foldTimeline(
+			[group("older", ["a", "b"])],
+			8,
+			unread,
+		);
+		expect(groups[0].conversations).toHaveLength(2);
+		expect(hidden).toBe(0);
 	});
 });

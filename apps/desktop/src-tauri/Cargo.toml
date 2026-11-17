@@ -138,6 +138,13 @@ flow-like-catalog-automation = { workspace = true, features = ["execute"] }
 flow-like-bot-machine.workspace = true
 flow-like-device-client.workspace = true
 flow-like-device-crypto.workspace = true
+aes-gcm.workspace = true
+bytes.workspace = true
+tokio-util = "0.7"
+webrtc = "=0.20.5"
+hkdf = "0.12"
+hmac = "0.12"
+gethostname = "1.1"
 tauri-plugin-single-instance = { version = "2.5.4", features = ["deep-link"] }
 tauri-plugin-window-state = "2.5.0"
 tauri-plugin-updater = "2.14.0"
@@ -175,6 +182,9 @@ cocoa = "0.26"
 macos-app-nap = "0.0.1"
 core-graphics = "0.25"
 objc2 = "0.6.3"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSNotification", "NSOperation", "NSObject", "NSString"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSWindow"] }
+block2 = "0.6.2"
 
 [target."cfg(windows)".dependencies]
 flow-like-catalog = { workspace = true, default-features = false, features = ["desktop", "draft-testing"] }

@@ -11,7 +11,10 @@ const mocks = vi.hoisted(() => ({
 	del: vi.fn(),
 }));
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
+vi.mock("@tauri-apps/api/core", () => ({
+	invoke: mocks.invoke,
+	isTauri: () => false,
+}));
 vi.mock("../../../lib/api", () => ({
 	get: mocks.get,
 	post: mocks.post,
@@ -158,6 +161,22 @@ describe("tool grants and approvals of an account bot", () => {
 			auth,
 		);
 		expect(mocks.invoke).not.toHaveBeenCalled();
+	});
+
+	test("an answer in an encrypted chat carries the card and the sealed entry", async () => {
+		const state = await signedIn();
+		const card = { id: "ap-1", turn_id: "turn_1", tool: "shell_run" };
+		const envelopes = { u1: { enc: "x" } };
+		await state.answerApproval("bot_a", "turn_1", "ap-1", "once", undefined, {
+			card: card as never,
+			envelopes,
+		});
+		expect(mocks.post).toHaveBeenLastCalledWith(
+			profile,
+			"bots/bot_a/turns/turn_1/approval",
+			{ approval_id: "ap-1", decision: "once", card, envelopes },
+			auth,
+		);
 	});
 
 	test("a batch answer carries the calls whose answer differs", async () => {

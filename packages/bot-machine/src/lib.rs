@@ -11,6 +11,7 @@ mod input;
 mod local;
 mod playground;
 mod rpc;
+pub mod stream;
 mod takeover;
 mod wire;
 mod worker;

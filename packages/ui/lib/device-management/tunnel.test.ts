@@ -175,6 +175,18 @@ describe("bounded multiplexed service streams", () => {
 			mode: "http",
 		});
 	});
+	test("a bot playground open serializes like the Rust TunnelOpen and rejects bad ids", async () => {
+		const peer = new Peer();
+		const tunnel = peer.connect();
+		const stream = await tunnel.openBotPlayground("bot-1");
+		const open = peer.sent.find((frame) => frame.kind === TunnelKind.Open);
+		expect(open?.stream).toBe(stream.id);
+		expect(new TextDecoder().decode(open?.body)).toBe(
+			'{"target":{"bot_playground":{"bot_id":"bot-1","observations":true}}}',
+		);
+		for (const bad of ["", "bad id", "x".repeat(129), "a/b"])
+			expect(() => tunnel.openBotPlayground(bad)).toThrow("valid bot id");
+	});
 	test("a blocked writer does not block another stream, and reads replenish only consumed bytes", async () => {
 		const peer = new Peer();
 		const tunnel = peer.connect();

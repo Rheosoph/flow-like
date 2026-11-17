@@ -9,7 +9,7 @@ use crate::{
 };
 use axum::{
     Extension, Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
@@ -21,6 +21,15 @@ pub struct McpOperationRequest {
     pub method: String,
     pub params: Option<Value>,
     pub profile_id: Option<String>,
+}
+
+/// In the query, not the body: a server that predates a body field refuses it, while every
+/// server ignores a query parameter it does not know.
+#[derive(Debug, Deserialize, Default)]
+pub struct McpOperationQuery {
+    /// Also return what a `tools/call` run pushed to the chat, under the result's `_meta`.
+    #[serde(default)]
+    pub chat_events: bool,
 }
 
 fn operation_params(method: &str, params: Option<Value>) -> Result<Value, ApiError> {
@@ -82,6 +91,7 @@ pub async fn invoke_mcp_operation(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((app_id, event_id)): Path<(String, String)>,
+    Query(query): Query<McpOperationQuery>,
     Json(body): Json<McpOperationRequest>,
 ) -> Result<Json<Value>, ApiError> {
     ensure_member_caller(&user)?;
@@ -107,6 +117,7 @@ pub async fn invoke_mcp_operation(
         params,
         identity,
         permission.to_user_context(),
+        query.chat_events && body.method == "tools/call",
     )
     .await
     .map(Json)
@@ -114,7 +125,7 @@ pub async fn invoke_mcp_operation(
 
 #[cfg(test)]
 mod tests {
-    use super::{McpOperationRequest, ensure_member_caller, operation_params};
+    use super::{McpOperationQuery, McpOperationRequest, ensure_member_caller, operation_params};
     use crate::middleware::jwt::{AppUser, ConnectedAppUser, OpenIDUser};
     use axum::http::StatusCode;
     use serde_json::json;
@@ -152,6 +163,19 @@ mod tests {
             }))
             .is_err()
         );
+    }
+
+    #[test]
+    fn chat_events_are_asked_for_in_the_query_and_unknown_parameters_pass() {
+        let read = |uri: &str| {
+            axum::extract::Query::<McpOperationQuery>::try_from_uri(&uri.parse().unwrap())
+                .unwrap()
+                .0
+                .chat_events
+        };
+        assert!(!read("/mcp-operation"));
+        assert!(read("/mcp-operation?chat_events=true&later=1"));
+        assert!(!read("/mcp-operation?chat_events=false"));
     }
 
     #[test]

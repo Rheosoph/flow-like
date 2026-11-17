@@ -14,7 +14,10 @@ use image::{DynamicImage, ImageFormat};
 
 use super::permission;
 use crate::capabilities::AutomationCapability;
-use crate::computer::keyboard::{ChordModifier, parse_key_chord};
+use crate::computer::keyboard::{
+    ChordModifier, copy_selection, parse_key_chord, paste_text, primary_modifier,
+};
+use crate::computer::mouse::{check_cancellation, interruptible_sleep, perform_drag};
 use crate::computer::native::input::{DesktopInput, observed_cursor_position};
 use crate::computer::native::{self, gestures};
 use crate::computer::window::WindowInfo;
@@ -24,6 +27,55 @@ use crate::types::screen_frame::{
 };
 
 const CLICK_DELAY_MS: u64 = 80;
+const DRAG_MS: u64 = 450;
+/// A click into a field lands before the app moves the focus to it.
+const FOCUS_SETTLE_MS: u64 = 120;
+
+/// How `read_text` got its text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BotTextMethod {
+    Accessibility,
+    Clipboard,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BotText {
+    pub text: String,
+    pub method: BotTextMethod,
+}
+
+fn select_all_keys(
+    input: &mut DesktopInput,
+    cancel: Option<&CancellationToken>,
+) -> flow_like_types::Result<()> {
+    gestures::press(
+        input,
+        &[primary_modifier()],
+        enigo::Key::Unicode('a'),
+        1,
+        cancel,
+    )
+}
+
+fn focus_click(
+    input: &mut DesktopInput,
+    point: Option<(i32, i32)>,
+    cancel: Option<&CancellationToken>,
+) -> flow_like_types::Result<()> {
+    let Some(point) = point else {
+        return Ok(());
+    };
+    gestures::click(
+        input,
+        point,
+        enigo::Button::Left,
+        1,
+        "",
+        CLICK_DELAY_MS,
+        cancel,
+    )?;
+    interruptible_sleep(FOCUS_SETTLE_MS, cancel)
+}
 const PRIMARY_DISPLAY: i64 = -1;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -611,6 +663,122 @@ impl BotComputer {
         self.finish_action(&result);
         result?;
         Ok(format!("Typed {count} characters"))
+    }
+
+    /// Inserts `text` through the clipboard, which is restored afterwards. `replace_all` replaces
+    /// the focused field's text: through accessibility where the field allows it, else by
+    /// selecting all and pasting over it.
+    pub async fn paste(&self, text: &str, replace_all: bool) -> flow_like_types::Result<String> {
+        let _operation = self.operation.lock().await;
+        let (captured, _) = self.prepare_action("paste", None)?;
+        let count = text.chars().count();
+        let text = text.to_string();
+        let result = self
+            .with_checked_input(captured, move |input, cancel| {
+                check_cancellation(cancel)?;
+                if replace_all {
+                    if native::set_focused_text(&text).is_ok() {
+                        return Ok(true);
+                    }
+                    select_all_keys(input, cancel)?;
+                }
+                paste_text(input, &text, false)?;
+                Ok(false)
+            })
+            .await;
+        self.finish_action(&result);
+        Ok(match (result?, replace_all) {
+            (true, _) => format!("Replaced the focused field's text with {count} characters"),
+            (false, true) => {
+                format!("Selected the field's text and pasted {count} characters over it")
+            }
+            (false, false) => format!("Pasted {count} characters"),
+        })
+    }
+
+    /// Selects everything in the focused field or document, after a click at `at` when given.
+    pub async fn select_all(&self, at: Option<(f64, f64)>) -> flow_like_types::Result<String> {
+        let _operation = self.operation.lock().await;
+        let (captured, point) = self.prepare_action("select_all", at)?;
+        let result = self
+            .with_checked_input(captured, move |input, cancel| {
+                focus_click(input, point, cancel)?;
+                select_all_keys(input, cancel)
+            })
+            .await;
+        self.finish_action(&result);
+        result?;
+        Ok(match at {
+            Some((x, y)) => format!("Clicked at ({x}, {y}) and selected all"),
+            None => "Selected all".to_string(),
+        })
+    }
+
+    pub async fn drag(
+        &self,
+        from: (f64, f64),
+        to: (f64, f64),
+        button: BotPointerButton,
+    ) -> flow_like_types::Result<String> {
+        let _operation = self.operation.lock().await;
+        let (captured, start) = self.prepare_action("drag", Some(from))?;
+        let start = start.expect("drag has a start point");
+        let end = match captured.frame.pixel_to_input(to.0, to.1) {
+            Ok(end) => end,
+            Err(error) => {
+                let failed: flow_like_types::Result<()> = Err(error);
+                self.finish_action(&failed);
+                return Err(failed.unwrap_err());
+            }
+        };
+        let enigo_button = match button {
+            BotPointerButton::Left => enigo::Button::Left,
+            BotPointerButton::Right => enigo::Button::Right,
+            BotPointerButton::Middle => enigo::Button::Middle,
+        };
+        let result = self
+            .with_checked_input(captured, move |input, cancel| {
+                perform_drag(input, start, end, enigo_button, DRAG_MS, cancel)
+            })
+            .await;
+        self.finish_action(&result);
+        result?;
+        Ok(format!(
+            "Dragged {button:?} from ({}, {}) to ({}, {})",
+            from.0, from.1, to.0, to.1
+        ))
+    }
+
+    /// The focused field's whole text, or the selected text, after a click at `at` when given:
+    /// through accessibility where the app tells it, else copied through the clipboard (which is
+    /// restored; copying a whole field selects its text first).
+    pub async fn read_text(
+        &self,
+        selection: bool,
+        at: Option<(f64, f64)>,
+    ) -> flow_like_types::Result<BotText> {
+        let _operation = self.operation.lock().await;
+        let (captured, point) = self.prepare_action("read_text", at)?;
+        let result = self
+            .with_checked_input(captured, move |input, cancel| {
+                focus_click(input, point, cancel)?;
+                if let Some(text) = native::focused_text(selection) {
+                    return Ok(BotText {
+                        text,
+                        method: BotTextMethod::Accessibility,
+                    });
+                }
+                if !selection {
+                    select_all_keys(input, cancel)?;
+                }
+                Ok(BotText {
+                    text: copy_selection(input)?.unwrap_or_default(),
+                    method: BotTextMethod::Clipboard,
+                })
+            })
+            .await;
+        self.finish_action(&result);
+        result
     }
 
     pub async fn press(&self, chord: &str) -> flow_like_types::Result<String> {

@@ -2,7 +2,10 @@
 
 import { cn, useSidebar } from "@flow-like/flow-like-ui";
 import { BOTS_ROUTE } from "@flow-like/flow-like-ui/components/bots-tab/dock-selection";
-import { BotsNavAvatar } from "@flow-like/flow-like-ui/components/global-chat/bots-nav-avatar";
+import {
+	BotsNavBotAvatar,
+	useBotsNavTarget,
+} from "@flow-like/flow-like-ui/components/global-chat/bots-nav-avatar";
 import { BotsNavBadge } from "@flow-like/flow-like-ui/components/global-chat/bots-nav-badge";
 import { useTranslation } from "@flow-like/locales";
 import {
@@ -71,6 +74,7 @@ export function MobileBottomNav() {
 	const { t } = useTranslation("common");
 	const pathname = usePathname();
 	const { toggleSidebar } = useSidebar();
+	const bots = useBotsNavTarget();
 	const botsActive =
 		pathname === BOTS_ROUTE || pathname.startsWith(`${BOTS_ROUTE}/`);
 
@@ -84,7 +88,7 @@ export function MobileBottomNav() {
 				<NavCell dest={DESTINATIONS[1]} pathname={pathname} />
 
 				<Link
-					href={BOTS_ROUTE}
+					href={bots.href}
 					aria-label={t("nav:bots", "Bots")}
 					aria-current={botsActive ? "page" : undefined}
 					className="flex flex-1 flex-col items-center justify-center gap-0.5 outline-none"
@@ -96,7 +100,7 @@ export function MobileBottomNav() {
 								"ring-2 ring-primary/40 ring-offset-1 ring-offset-background",
 						)}
 					>
-						<BotsNavAvatar size={36} />
+						<BotsNavBotAvatar botId={bots.botId} size={36} />
 						<BotsNavBadge className="absolute -right-1 -top-1" />
 					</span>
 					<span

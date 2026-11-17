@@ -1987,6 +1987,7 @@ export class EventState implements IEventState {
 		method: string,
 		params?: Record<string, unknown>,
 		beforeDispatch?: () => void,
+		chatEvents?: boolean,
 	): Promise<Record<string, unknown>> {
 		beforeDispatch?.();
 		if (
@@ -2000,7 +2001,7 @@ export class EventState implements IEventState {
 		}
 		const result = await fetcher<Record<string, unknown>>(
 			this.backend.profile,
-			`apps/${appId}/events/${eventId}/mcp-operation`,
+			`apps/${appId}/events/${eventId}/mcp-operation${chatEvents ? "?chat_events=true" : ""}`,
 			{
 				method: "POST",
 				body: JSON.stringify({

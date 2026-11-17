@@ -28,7 +28,7 @@ pub(crate) mod e2e_vault;
 pub(crate) mod gate;
 pub(crate) mod grant_commands;
 mod host;
-mod hub;
+pub(crate) mod hub;
 pub(crate) mod interactive;
 mod memory;
 mod notes;
@@ -97,7 +97,7 @@ impl ReplyOutlet for UiReplies {
 }
 
 /// One id per installation, kept next to the app's data so the hub tells hosts apart.
-fn host_id(app: &AppHandle) -> String {
+pub(crate) fn host_id(app: &AppHandle) -> String {
     let path = app
         .path()
         .app_data_dir()
@@ -124,17 +124,33 @@ fn host_id(app: &AppHandle) -> String {
     id
 }
 
+const WITHDRAW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// Stops reporting the account bots this desktop runs (sign-out, exit); never waits long.
 pub async fn withdraw(app: &AppHandle) {
     let Some(account) = app.try_state::<AccountHost>() else {
         return;
     };
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(3), account.withdraw()).await;
+    let _ = tokio::time::timeout(WITHDRAW_TIMEOUT, account.withdraw()).await;
+}
+
+/// The exit path runs on the main thread and waits on a plain channel: a runtime whose workers
+/// are stuck (one blocked on the main thread is enough) never fires the timeout inside
+/// `withdraw`, and blocking on the runtime there hung quitting until macOS killed the app.
+pub fn withdraw_before_exit(app: &AppHandle) {
+    let (done, finished) = std::sync::mpsc::sync_channel(1);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        withdraw(&app).await;
+        let _ = done.send(());
+    });
+    let _ = finished.recv_timeout(WITHDRAW_TIMEOUT);
 }
 
 /// Manages the hosts and starts them; call once the local bots are managed. The local host runs
 /// the bots of this device; the account host those of the signed-in account that live here.
 pub fn start(app: &AppHandle) {
+    flow_like_bot_host::transcript::register_host(&host_id(app));
     let events = Arc::new(UiEvents(app.clone(), notify::Seen::default()));
     let runner = Arc::new(runner::NativeRunner(app.clone()));
     let (host, dispatcher) = BotHost::new(
@@ -164,6 +180,8 @@ pub fn start(app: &AppHandle) {
     tauri::async_runtime::spawn(account.run());
     tauri::async_runtime::spawn(expire_waits(app.clone()));
     tauri::async_runtime::spawn(task_tick::run_local(app.clone()));
+    #[cfg(desktop)]
+    crate::bot_screens::start(app);
 }
 
 /// Ends the local waits older than seven days, once an hour.

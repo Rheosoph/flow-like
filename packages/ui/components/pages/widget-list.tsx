@@ -31,6 +31,7 @@ import {
 	nowSystemTime,
 	useSetQueryParams,
 } from "../../lib";
+import { appDenProps } from "../../lib/bot-den/app-targets";
 import { asArray } from "../../lib/response-shape";
 import { useBackend } from "../../state/backend-state";
 import type { IWidget } from "../../state/backend-state/widget-state";
@@ -425,6 +426,7 @@ function WidgetTile({
 	return (
 		<div
 			ref={ref}
+			{...appDenProps({ kind: "widget", appId, id: widgetId, label: name })}
 			className="group relative flex flex-col overflow-hidden rounded-lg border bg-card transition-colors hover:border-primary/50"
 		>
 			<button

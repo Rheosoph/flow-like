@@ -19,6 +19,7 @@ use std::{
 mod execution_logs;
 mod model_access;
 mod models;
+#[cfg(feature = "playground")]
 pub(crate) mod playground_stream;
 pub mod run_queue;
 pub(crate) mod tunnel;

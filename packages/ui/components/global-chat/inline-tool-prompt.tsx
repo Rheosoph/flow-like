@@ -28,6 +28,7 @@ import {
 } from "../../state/global-chat/global-chat-store";
 import { restoreGlobalChatConversation } from "../../state/global-chat/global-chat-stream";
 import { WebContentNotice } from "../bots-tab/approval-batch";
+import { wantedAction } from "../bots-tab/approval-batch-model";
 import {
 	BotConfigurationChanges,
 	useBotSettingsApprovalText,
@@ -79,13 +80,15 @@ function AskingBotMark({
 
 /**
  * Resolves an approval's target app id to its name + icon so the card shows the app's identity
- * instead of the opaque id.
+ * instead of the opaque id, and names the targeted event the same way.
  */
 function ApprovalAppIdentity({
 	appId,
+	eventId,
 	description,
 }: {
 	appId: string;
+	eventId?: string;
 	description?: string;
 }) {
 	const backend = useBackend();
@@ -95,9 +98,20 @@ function ApprovalAppIdentity({
 		[appId],
 		!!appId,
 	);
+	const event = useInvoke(
+		backend.eventState.getEvent,
+		backend.eventState,
+		[appId, eventId ?? ""],
+		!!appId && !!eventId,
+	);
 	const name = meta.data?.name || appId;
 	const icon = meta.data?.icon ?? meta.data?.thumbnail;
-	const resolvedDescription = description?.replace(appId, name);
+	const eventName = event.data?.name;
+	const withAppName = description?.replace(appId, name);
+	const resolvedDescription =
+		eventId && eventName
+			? withAppName?.replace(eventId, eventName)
+			: withAppName;
 
 	return (
 		<>
@@ -315,6 +329,16 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 		: !isApproval && prompt.description
 			? prompt.description
 			: prompt.title;
+	const wanted =
+		isApproval && prompt.description
+			? wantedAction(prompt.description)
+			: undefined;
+	const description = wanted
+		? t("bots:crew.approval.title", "{{name}} wants to {{summary}}", {
+				name: asking.name,
+				summary: wanted,
+			})
+		: prompt.description;
 
 	const submit = () => {
 		if (!canSend) return;
@@ -376,12 +400,13 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 						{prompt.appId ? (
 							<ApprovalAppIdentity
 								appId={prompt.appId}
-								description={isApproval ? prompt.description : undefined}
+								eventId={prompt.eventId}
+								description={isApproval ? description : undefined}
 							/>
 						) : (
 							isApproval &&
 							!isConfiguration &&
-							prompt.description && <RequestDetails text={prompt.description} />
+							description && <RequestDetails text={description} />
 						)}
 						{!isApproval && (
 							<AskUserQuestions

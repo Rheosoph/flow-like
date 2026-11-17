@@ -52,7 +52,6 @@ import {
 	hasBotsHostedElsewhere,
 	matchesSearch,
 	otherMemberIds,
-	splitConversations,
 } from "./crew-model";
 import { CrewSection } from "./crew-section";
 import { CrewSplitLayout, type DockPanelLayout } from "./crew-split-layout";
@@ -332,22 +331,22 @@ function CrewLayout(data: Readonly<CrewData>) {
 						text.entryText(item.conversation.last_entry),
 					]),
 	);
-	const { rooms, direct } = splitConversations(conversations);
-	const visibleRooms = rooms.filter((conversation) =>
-		matchesSearch(query, [
-			text.title(conversation),
-			...otherMemberIds(conversation, me).map((id) => directory(id).name),
-		]),
-	);
-	const visibleDirect = direct.filter((conversation) =>
-		matchesSearch(query, [text.title(conversation)]),
+	const visibleConversations = conversations.filter((conversation) =>
+		matchesSearch(
+			query,
+			conversation.kind === "group"
+				? [
+						text.title(conversation),
+						...otherMemberIds(conversation, me).map((id) => directory(id).name),
+					]
+				: [text.title(conversation)],
+		),
 	);
 	const nothingFound =
 		Boolean(query) &&
 		visibleCrew.length === 0 &&
 		visibleNeeds.length === 0 &&
-		visibleRooms.length === 0 &&
-		visibleDirect.length === 0;
+		visibleConversations.length === 0;
 
 	let summary: string;
 	if (mode === "account") {
@@ -547,8 +546,7 @@ function CrewLayout(data: Readonly<CrewData>) {
 					)}
 					{hasCrew && (
 						<RoomsSection
-							rooms={visibleRooms}
-							direct={visibleDirect}
+							conversations={visibleConversations}
 							context={{
 								me,
 								text,

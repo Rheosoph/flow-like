@@ -124,6 +124,25 @@ describe("what a bot may do without asking on the web", () => {
 		);
 	});
 
+	test("an answer in an encrypted chat carries the card and the sealed entry", async () => {
+		mocks.apiPost.mockResolvedValue({});
+		const card = { id: "ap-1", turn_id: "turn_1", tool: "shell_run" };
+		const envelopes = { u1: { enc: "x" } };
+		await new WebBotState({ auth } as never).answerApproval(
+			"bot_a",
+			"turn_1",
+			"ap-1",
+			"once",
+			undefined,
+			{ card: card as never, envelopes },
+		);
+		expect(mocks.apiPost).toHaveBeenLastCalledWith(
+			"bots/bot_a/turns/turn_1/approval",
+			{ approval_id: "ap-1", decision: "once", card, envelopes },
+			auth,
+		);
+	});
+
 	test("a batch answer lists the calls whose answer differs", async () => {
 		mocks.apiPost.mockResolvedValue({});
 		await new WebBotState({ auth } as never).answerApproval(

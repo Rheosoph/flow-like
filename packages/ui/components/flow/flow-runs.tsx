@@ -29,6 +29,8 @@ import {
 	formatDuration,
 	formatRelativeTime,
 } from "../../lib";
+import { appDenProps } from "../../lib/bot-den/app-targets";
+import { useDenResolver } from "../../lib/bot-den/targets";
 import { getErrorMessage } from "../../lib/error-message";
 import { logLevelFromNumber, logLevelToNumber } from "../../lib/log-level";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
@@ -344,6 +346,21 @@ const FlowRunsComponent = ({
 		],
 	);
 
+	const rootRef = useRef<HTMLDivElement>(null);
+	const runsRef = useRef(currentLogs);
+	runsRef.current = currentLogs;
+	const attachedRunId = currentMetadata?.run_id;
+	useDenResolver(rootRef, {
+		at: () => null,
+		rectOf: () => null,
+		focus: (target) => {
+			if (target.kind !== "run" || target.board_id !== boardId) return;
+			if (target.id === attachedRunId) return;
+			const run = runsRef.current?.find((entry) => entry.run_id === target.id);
+			if (run) void handleRunSelection(run);
+		},
+	});
+
 	// Cloud only — the promote route grades the recorded run server-side. Runs
 	// with no event id (test starts, direct board invokes) have no suite to
 	// join, so the item is hidden for them.
@@ -565,6 +582,7 @@ const FlowRunsComponent = ({
 
 	return (
 		<div
+			ref={rootRef}
 			className={cn(
 				"flex flex-col bg-background grow h-full max-h-full overflow-hidden",
 				panel ? "gap-1.5 p-2" : "gap-2 p-4",
@@ -616,6 +634,13 @@ const FlowRunsComponent = ({
 				{currentLogs?.map((run) => (
 					<div
 						key={run.run_id}
+						{...appDenProps({
+							kind: "run",
+							appId,
+							boardId,
+							id: run.run_id,
+							label: runName(run),
+						})}
 						className={`flex shrink-0 flex-row gap-2 items-center justify-between border p-2 rounded-md ${currentMetadata?.run_id === run.run_id ? "bg-muted/50" : "hover:bg-muted/50"}`}
 					>
 						<button

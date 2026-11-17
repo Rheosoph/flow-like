@@ -10847,6 +10847,7 @@ dependencies = [
  "dashmap 6.1.0",
  "flow-like-bot-tools",
  "flow-like-catalog-automation",
+ "flow-like-device-protocol",
  "flow-like-types",
  "image",
  "libc",
@@ -11946,12 +11947,15 @@ dependencies = [
 name = "flow-like-desktop"
 version = "0.0.2"
 dependencies = [
+ "aes-gcm 0.10.3",
  "anyhow",
  "arboard",
  "async-trait",
  "atspi",
  "axum 0.8.8",
  "blake3",
+ "block2 0.6.2",
+ "bytes",
  "chacha20poly1305",
  "chrono",
  "chrono-tz",
@@ -11982,6 +11986,9 @@ dependencies = [
  "flow-like-types",
  "flow-like-wasm",
  "futures 0.3.32",
+ "gethostname 1.1.0",
+ "hkdf 0.12.4",
+ "hmac 0.12.1",
  "iana-time-zone",
  "icu_collator",
  "image",
@@ -11996,6 +12003,7 @@ dependencies = [
  "ndk-context",
  "ndk-sys",
  "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "once_cell",
  "plist",
@@ -12032,6 +12040,7 @@ dependencies = [
  "teloxide",
  "tokio",
  "tokio-tungstenite 0.28.0",
+ "tokio-util",
  "toml 0.9.12+spec-1.1.0",
  "toml_edit 0.23.10+spec-1.0.0",
  "tower",
@@ -12042,6 +12051,7 @@ dependencies = [
  "urlencoding",
  "uuid 1.27.0",
  "webp",
+ "webrtc",
  "webview2-com",
  "windows 0.62.2",
  "xcap",
@@ -12683,7 +12693,7 @@ dependencies = [
 
 [[package]]
 name = "flow-like-standalone"
-version = "0.1.14"
+version = "0.1.17"
 dependencies = [
  "anyhow",
  "argon2",

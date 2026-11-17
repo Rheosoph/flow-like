@@ -13,6 +13,7 @@ import {
 	humanFileSize,
 	storageDisplayName,
 } from "../../lib";
+import { appDenProps } from "../../lib/bot-den/app-targets";
 import { buildStoragePathNodes } from "../../lib/storage-path-nodes";
 import { useBackend } from "../../state/backend-state";
 import {
@@ -82,6 +83,13 @@ export function FileOrFolder({
 		return { scope: "app" as const, path: segments.join("/") };
 	}, [file.location]);
 
+	const denProps = appDenProps({
+		kind: "storage",
+		appId: relative.scope === "app" ? appId : undefined,
+		id: relative.path,
+		label: file.location.split("/").filter(Boolean).pop(),
+	});
+
 	const backend = useBackend();
 	const catalog = useInvoke(backend.boardState.getCatalog, backend.boardState, [
 		appId,
@@ -106,6 +114,7 @@ export function FileOrFolder({
 	if (file.is_dir) {
 		return (
 			<div
+				{...denProps}
 				className={`group relative rounded-lg border border-border/50 p-3 w-full transition-all duration-200 hover:border-primary/50 hover:shadow-md bg-linear-to-r from-background to-muted/20 ${
 					highlight ? "border-primary bg-primary/5 shadow-sm" : ""
 				}`}
@@ -203,6 +212,7 @@ export function FileOrFolder({
 
 	return (
 		<div
+			{...denProps}
 			className={`group relative rounded-lg border border-border/50 p-3 w-full transition-all duration-200 bg-linear-to-r from-background to-muted/10 ${
 				highlight ? "border-primary bg-primary/5 shadow-sm" : ""
 			} ${

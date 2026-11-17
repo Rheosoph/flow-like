@@ -60,7 +60,6 @@ import type {
 	IFlowScriptDiagnostic,
 	IFlowScriptSourceSpan,
 } from "../../../state/backend-state/board-state";
-import { useSuppressFabBubble } from "../../../state/fab-bubble";
 import { useLogAggregation } from "../../../state/log-aggregation-state";
 import { useRunExecutionStore } from "../../../state/run-execution-state";
 import {
@@ -401,9 +400,6 @@ export function FlowScriptPanel({
 	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const { resolvedTheme } = useTheme();
-	// This panel's footer (Apply/Reset) sits exactly where the global FlowPilot bubble floats;
-	// suppress the bubble while the panel is open so they don't overlap.
-	useSuppressFabBubble();
 
 	const [text, setText] = useState("");
 	const [baseline, setBaseline] = useState("");

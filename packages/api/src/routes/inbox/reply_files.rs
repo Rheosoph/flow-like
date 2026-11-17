@@ -115,6 +115,8 @@ async fn adopt_envelope(
     }
 }
 
+/// The reply's parts that point into the bot's workspace: attachments, and the documents of
+/// app widgets too large to sit in the reply.
 pub(super) fn workspace_attachments(body: &Value) -> Vec<Shared> {
     let Some(parts) = body.get("parts").and_then(Value::as_array) else {
         return Vec::new();
@@ -122,11 +124,14 @@ pub(super) fn workspace_attachments(body: &Value) -> Vec<Shared> {
     parts
         .iter()
         .enumerate()
-        .filter(|(_, part)| part.get("kind").and_then(Value::as_str) == Some("attachment"))
         .filter_map(|(index, part)| {
             let handle =
                 serde_json::from_value::<WorkspaceHandle>(part.get("handle")?.clone()).ok()?;
-            let name = part.get("name")?.as_str()?.to_string();
+            let name = match part.get("kind").and_then(Value::as_str)? {
+                "attachment" => part.get("name")?.as_str()?.to_string(),
+                "ui" => handle.path.rsplit('/').next()?.to_string(),
+                _ => return None,
+            };
             (!handle.is_conversation_file()).then_some(Shared {
                 index,
                 name,

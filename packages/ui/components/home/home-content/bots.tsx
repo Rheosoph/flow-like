@@ -12,6 +12,7 @@ import type { IBot } from "../../../state/backend-state/bot-state";
 import type { IConversation } from "../../../state/backend-state/inbox-state";
 import { useGlobalChatStore } from "../../../state/global-chat/global-chat-store";
 import { useBotStatusText } from "../../bots-tab/bot-labels";
+import type { ConversationListContext } from "../../bots-tab/conversation-timeline";
 import {
 	type CrewData,
 	CrewDataScope,
@@ -48,7 +49,6 @@ import { NewMessageDialog } from "../../bots-tab/new-message-dialog";
 import { NewRoomDialog } from "../../bots-tab/new-room-dialog";
 import {
 	ConversationRow,
-	type RoomCardContext,
 	RoomsSection,
 	type RoomsStatus,
 	RoomsStatusLine,
@@ -505,7 +505,7 @@ function BotMessages({
 		},
 		[bots, openConversation, openDock],
 	);
-	const context: RoomCardContext = {
+	const context: ConversationListContext = {
 		me,
 		text,
 		directory,
@@ -591,8 +591,7 @@ function BotMessages({
 			<CrewStage widget={widget}>
 				<RoomsSection
 					title={title}
-					rooms={listed}
-					direct={[]}
+					conversations={listed}
 					context={context}
 					status={status}
 					onNewRoom={() => setDialog("room")}

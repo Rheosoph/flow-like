@@ -54,7 +54,10 @@ pub fn reads_of(
         reads.recorded = reads.recorded.combine(recorded(body));
         if entry.kind == InboxEntryKind::Trigger {
             reads.external_trigger |= TriggerBody::parse(body).is_ok_and(|trigger| {
-                matches!(trigger.source, TriggerSource::Email | TriggerSource::Webhook)
+                matches!(
+                    trigger.source,
+                    TriggerSource::Email | TriggerSource::Webhook
+                )
             });
         }
         let sender = entry.sender_id.as_str();
@@ -105,7 +108,11 @@ mod tests {
                 InboxEntryKind::Message,
                 json!({ "text": "hi", TAINT_FIELD: { "classification": "confidential" } }),
             ),
-            entry(LOCAL_OWNER_ID, InboxEntryKind::Message, json!({ "text": "and?" })),
+            entry(
+                LOCAL_OWNER_ID,
+                InboxEntryKind::Message,
+                json!({ "text": "and?" }),
+            ),
         ];
         assert_eq!(bot_senders(&entries, "me"), vec!["peer".to_owned()]);
         let reads = reads_of(&entries, "me", &labels);
@@ -138,7 +145,11 @@ mod tests {
                 json!({ "text": "old", TAINT_FIELD: { "classification": "restricted" } }),
             ),
             entry(LOCAL_OWNER_ID, InboxEntryKind::Topic, json!({})),
-            entry(LOCAL_OWNER_ID, InboxEntryKind::Message, json!({ "text": "new" })),
+            entry(
+                LOCAL_OWNER_ID,
+                InboxEntryKind::Message,
+                json!({ "text": "new" }),
+            ),
         ];
         assert!(reads_of(&entries, "me", &HashMap::new()).seed().is_empty());
     }

@@ -411,6 +411,12 @@ export interface LiveSessionManager {
 		deviceId: string,
 		options?: { signal?: AbortSignal },
 	): Promise<DeviceServiceStream>;
+	/** The live view of one bot's screen; only for agents with `bot_playground`. */
+	openBotPlayground(
+		deviceId: string,
+		botId: string,
+		options?: { signal?: AbortSignal },
+	): Promise<DeviceServiceStream>;
 	state(deviceId: string): LiveState;
 	subscribe(listener: () => void): () => void;
 	/** Ref-counted demand: while > 0 and unlocked, keep a session open, renew and reconnect. */

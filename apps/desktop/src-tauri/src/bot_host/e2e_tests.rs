@@ -3,7 +3,7 @@ use super::{
     e2e::{CODE_E2E_MEMBER_KEY, CODE_E2E_UNAVAILABLE, CODE_E2E_UNREADABLE, E2eHost, is_sealed},
     host::TurnEvents,
     hub::{HubFailure, TurnHub},
-    tests::{FakeRunner, Recorded, settle, until},
+    tests::{FakeRunner, Mode, Recorded, settle, until},
 };
 use async_trait::async_trait;
 use chrono::Utc;
@@ -12,8 +12,10 @@ use flow_like_device_crypto::inbox::{
 };
 use flow_like_local_bots::InboxEntry;
 use flow_like_types::{
+    bot_message::ApprovalRequest,
     bot_turn::{BotTurn, TurnHostKind, TurnStatus},
     inbox::InboxEntryKind,
+    tool_grant::{SealedApprovalCard, card_matches_id},
 };
 use serde_json::{Value, json};
 use std::{
@@ -66,10 +68,27 @@ struct Hub {
     writes: Mutex<Vec<String>>,
     puts: Mutex<Vec<Value>>,
     deletes: Mutex<Vec<(String, Vec<(&'static str, String)>)>>,
+    plain_parks: Mutex<Vec<ApprovalRequest>>,
+    sealed_parks: Mutex<Vec<SealedApprovalCard>>,
 }
 
 #[async_trait]
 impl TurnHub for Hub {
+    async fn park(&self, _: &str, _: &str, card: &ApprovalRequest) -> Result<(), HubFailure> {
+        self.plain_parks.lock().unwrap().push(card.clone());
+        Ok(())
+    }
+
+    async fn park_sealed(
+        &self,
+        _: &str,
+        _: &str,
+        sealed: &SealedApprovalCard,
+    ) -> Result<(), HubFailure> {
+        self.sealed_parks.lock().unwrap().push(sealed.clone());
+        Ok(())
+    }
+
     async fn list(&self) -> Result<Vec<BotTurn>, HubFailure> {
         Ok(std::mem::take(&mut *self.turns.lock().unwrap()))
     }
@@ -393,6 +412,44 @@ async fn the_bot_opens_the_sealed_message_and_seals_its_reply_to_every_member() 
             .is_err()
     );
     assert_eq!(f.alice_key.algorithm, f.bob_key.algorithm);
+}
+
+#[tokio::test]
+async fn an_encrypted_turn_that_asks_parks_behind_a_card_sealed_to_every_member() {
+    let f = Fixture::start(&["encryption"], true).await;
+    *f.runner.mode.lock().unwrap() = Mode::Ask;
+    *f.hub.entries.lock().unwrap() = vec![f.sealed_entry(1, "m1", "drop my notes")];
+    f.hub.turns.lock().unwrap().push(turn("bt_1"));
+    tokio::spawn(f.host.clone().run());
+    until("the turn parks", || {
+        !f.hub.sealed_parks.lock().unwrap().is_empty()
+    })
+    .await;
+    settle().await;
+
+    assert!(f.hub.plain_parks.lock().unwrap().is_empty());
+    assert!(f.hub.sent.lock().unwrap().is_empty());
+    let sealed = f.hub.sealed_parks.lock().unwrap()[0].clone();
+    let mut members: Vec<_> = sealed.envelopes.keys().map(String::as_str).collect();
+    members.sort_unstable();
+    assert_eq!(members, [ALICE, BOB, BOT]);
+    let open = |ring: &InboxKeyring, who: &str| -> Value {
+        let plaintext = ring
+            .open(
+                who,
+                &scope(&sealed.approval_id, BOT),
+                &sealed.envelopes[who],
+            )
+            .unwrap();
+        serde_json::from_slice(&plaintext).unwrap()
+    };
+    let body = open(&f.bob, BOB);
+    let card: ApprovalRequest = serde_json::from_value(body["approval"].clone()).unwrap();
+    assert_eq!(card.id, sealed.approval_id);
+    assert_eq!(card.tool, "knowledge_drop");
+    assert_eq!(card.requester_id.as_deref(), Some("owner"));
+    assert!(card_matches_id(&card, "bt_1"));
+    assert_eq!(open(&f.alice, ALICE), body);
 }
 
 #[tokio::test]

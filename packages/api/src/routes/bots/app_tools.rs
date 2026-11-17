@@ -6,10 +6,10 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use flow_like::flow::copilot::{BotToolHost, BotToolset};
+use flow_like::flow::copilot::{BotToolHost, BotToolset, REPLY_OUTPUT_FIELD, ReplyFiles};
 use sea_orm::ConnectionTrait;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use utoipa::IntoParams;
 
 use super::{owned_bot, turns::checked_host_id};
@@ -29,6 +29,10 @@ pub struct AppToolQuery {
     /// The device host that holds the turn.
     #[param(example = "device:7f3c1a")]
     pub host_id: String,
+    /// Also return the files and widgets the app run showed, under `reply_output`, for the
+    /// device to put on its reply.
+    #[serde(default)]
+    pub reply_output: bool,
 }
 
 /// The bot row of a turn that `host_id` holds right now, for a call that names `tool`. Only the
@@ -123,14 +127,30 @@ pub async fn run_app_tool(
         )));
     }
     chat.context.tool_host = BotToolHost::Hosted;
+    let reply = query.reply_output.then(ReplyFiles::new);
+    if let Some(reply) = &reply {
+        chat.context.host_tools =
+            std::mem::take(&mut chat.context.host_tools).with_reply_files(reply.clone());
+    }
     let result = AppTools::new(&state, principal, &chat.context)
         .run(&tool, args)
         .await;
-    Ok(Json(serde_json::from_str(&result).map_err(|error| {
+    let mut result: Value = serde_json::from_str(&result).map_err(|error| {
         ApiError::internal(format!(
             "App tool '{tool}' returned unreadable JSON: {error}"
         ))
-    })?))
+    })?;
+    with_reply_output(&mut result, reply);
+    Ok(Json(result))
+}
+
+fn with_reply_output(result: &mut Value, reply: Option<ReplyFiles>) {
+    let output = reply
+        .map(|reply| reply.take_app_output())
+        .unwrap_or_default();
+    if let (false, Some(result)) = (output.is_empty(), result.as_object_mut()) {
+        result.insert(REPLY_OUTPUT_FIELD.to_string(), json!(output));
+    }
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@ static CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
 
 /// Product binaries link both ring and aws-lc-rs, so rustls cannot choose a process
 /// default. Every TLS client in this crate passes this config explicitly.
-pub(crate) fn client_config() -> Result<Arc<ClientConfig>> {
+pub fn client_config() -> Result<Arc<ClientConfig>> {
     if let Some(config) = CONFIG.get() {
         return Ok(config.clone());
     }

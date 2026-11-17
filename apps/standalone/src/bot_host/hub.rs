@@ -3,6 +3,7 @@
 //! the claim returned. Both token kinds are refreshed from heartbeats.
 
 use async_trait::async_trait;
+use flow_like::flow::copilot::REPLY_OUTPUT_FIELD;
 use flow_like_bot_host::hub::{
     CODE_SIGNED_OUT, Claimed, ENTRIES, HubFailure, TurnHub, TurnSession, WaitOutcome, answer,
     decode, entries_of,
@@ -16,6 +17,7 @@ use flow_like_types::{
         DeviceReleaseRequest, DeviceReplyRequest, DeviceSilentRequest, DeviceToken,
         DeviceTurnGrant, DeviceUsageGrant, DeviceUsageReport, MAX_POLL_MS,
     },
+    tool_grant::SealedApprovalCard,
 };
 use reqwest::Method;
 use serde::Serialize;
@@ -346,6 +348,26 @@ impl DeviceTurnHub {
         locked(&self.shared.turns).remove(turn_id);
     }
 
+    async fn park_with(
+        &self,
+        turn_id: &str,
+        host_id: &str,
+        approval: Option<ApprovalRequest>,
+        sealed: Option<SealedApprovalCard>,
+    ) -> Result<(), HubFailure> {
+        let request = flow_like_types::device_bot::DeviceParkRequest {
+            host_id: host_id.to_owned(),
+            approval,
+            sealed,
+            usage: self.usage_of(turn_id),
+        };
+        let _: Value = self
+            .device_post(&format!("turns/{turn_id}/park"), request)
+            .await?;
+        self.end_turn(turn_id);
+        Ok(())
+    }
+
     fn remember_turn(&self, turn_id: &str, creds: Arc<TurnCreds>) {
         let now = unix_now();
         let mut turns = locked(&self.shared.turns);
@@ -598,16 +620,18 @@ impl TurnHub for DeviceTurnHub {
         host_id: &str,
         card: &ApprovalRequest,
     ) -> Result<(), HubFailure> {
-        let request = flow_like_types::device_bot::DeviceParkRequest {
-            host_id: host_id.to_owned(),
-            approval: card.clone(),
-            usage: self.usage_of(turn_id),
-        };
-        let _: Value = self
-            .device_post(&format!("turns/{turn_id}/park"), request)
-            .await?;
-        self.end_turn(turn_id);
-        Ok(())
+        self.park_with(turn_id, host_id, Some(card.clone()), None)
+            .await
+    }
+
+    async fn park_sealed(
+        &self,
+        turn_id: &str,
+        host_id: &str,
+        sealed: &SealedApprovalCard,
+    ) -> Result<(), HubFailure> {
+        self.park_with(turn_id, host_id, None, Some(sealed.clone()))
+            .await
     }
 
     async fn send(
@@ -750,7 +774,10 @@ impl TurnHub for DeviceTurnHub {
         self.bearer_call_within(
             Method::POST,
             &format!("bots/{bot_id}/turns/{turn_id}/app-tools/{tool}"),
-            &[("host_id", self.shared.host_id.clone())],
+            &[
+                ("host_id", self.shared.host_id.clone()),
+                (REPLY_OUTPUT_FIELD, "true".to_string()),
+            ],
             Some(args),
             Some(APP_TOOL_TIMEOUT),
         )

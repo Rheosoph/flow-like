@@ -105,6 +105,17 @@ fn only_workspace_handles_are_copied() {
     );
 }
 
+#[test]
+fn a_widget_document_in_the_workspace_is_copied_like_an_attachment() {
+    let body = json!({ "text": "x", "parts": [
+        { "kind": "ui", "id": "ui1", "summary": "Widget from Orders", "a2ui": { "type": "app_widget" } },
+        { "kind": "ui", "id": "ui2", "summary": "Widget from Orders", "handle": workspace_handle("chat-widgets/w1.json") },
+    ] });
+    let shared = workspace_attachments(&body);
+    assert_eq!(shared.len(), 1);
+    assert_eq!((shared[0].index, shared[0].name.as_str()), (1, "w1.json"));
+}
+
 #[tokio::test]
 async fn a_copied_workspace_file_is_the_bots_upload_and_every_member_reads_it() {
     let db = database().await;

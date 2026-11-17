@@ -2,11 +2,12 @@ use flow_like::flow::{
     board::Board,
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic},
-    pin::schemas_are_compatible,
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait};
 use std::{collections::HashMap, sync::Arc};
+
+use super::wire_survives_retype;
 
 #[crate::register_node]
 #[derive(Default)]
@@ -145,23 +146,9 @@ impl NodeLogic for GetVariable {
         let mut connected = immutable_value.connected_to.clone();
 
         connected.retain(|conn| {
-            board.get_pin_by_id(conn).is_some_and(|pin| {
-                // Check type and value_type match
-                if pin.data_type != mut_value.data_type || pin.value_type != mut_value.value_type {
-                    return false;
-                }
-                if mut_value.data_type == VariableType::Geometry
-                    || pin.data_type == VariableType::Geometry
-                {
-                    return flow_like::flow::pin::geometry_pins_are_compatible(
-                        mut_value,
-                        pin,
-                        &board.refs,
-                    )
-                    .unwrap_or(false);
-                }
-                schemas_are_compatible(mut_value.schema.as_deref(), pin.schema.as_deref())
-            })
+            board
+                .get_pin_by_id(conn)
+                .is_some_and(|pin| wire_survives_retype(mut_value, pin, board))
         });
 
         mut_value.connected_to = connected;

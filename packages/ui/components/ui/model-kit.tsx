@@ -15,6 +15,7 @@ import {
 	VideoIcon,
 } from "lucide-react";
 import { useMemo } from "react";
+import { providerDisplayName } from "../../lib/bit/model-display-name";
 import { type IBit, IBitTypes } from "../../lib/schema/bit/bit";
 import { cn } from "../../lib/utils";
 
@@ -314,41 +315,6 @@ export function ProviderGlyph({
 	);
 }
 
-/** Providers write their own names — title-casing them reads as a typo. */
-const PROVIDER_NAMES: Record<string, string> = {
-	"local:stablediffusion": "stable-diffusion.cpp",
-	"local:forecast": "Native forecasting",
-	anthropic: "Anthropic",
-	azure: "Azure OpenAI",
-	bedrock: "Amazon Bedrock",
-	cohere: "Cohere",
-	cloudflare: "Cloudflare Workers AI",
-	typesafe: "TypeSafe",
-	systemone: "SystemOne endpoint",
-	systemone_compatible: "SystemOne endpoint",
-	deepseek: "DeepSeek",
-	galadriel: "Galadriel",
-	gemini: "Google Gemini",
-	groq: "Groq",
-	huggingface: "Hugging Face",
-	hyperbolic: "Hyperbolic",
-	lmstudio: "LM Studio",
-	local: "On-device",
-	mlx: "On-device",
-	mira: "Mira",
-	mistral: "Mistral",
-	moonshot: "Moonshot",
-	mozilla: "Mozilla",
-	ollama: "Ollama",
-	openai: "OpenAI",
-	openrouter: "OpenRouter",
-	perplexity: "Perplexity",
-	together: "Together AI",
-	vertex: "Vertex AI",
-	voyageai: "Voyage AI",
-	xai: "xAI",
-};
-
 /** Human-readable provider label for the byline under a model name. */
 export function providerLabel(bit: IBit): string {
 	if (bit.type === IBitTypes.Forecasting)
@@ -368,8 +334,5 @@ export function providerLabel(bit: IBit): string {
 		.replace(/^hosted:?/i, "")
 		.trim();
 	if (!cleaned) return "Hosted";
-	return (
-		PROVIDER_NAMES[cleaned.toLowerCase()] ??
-		cleaned.charAt(0).toUpperCase() + cleaned.slice(1)
-	);
+	return providerDisplayName(cleaned);
 }

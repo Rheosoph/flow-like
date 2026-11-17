@@ -12,7 +12,6 @@ import {
 	useInvoke,
 } from "@flow-like/flow-like-ui";
 import { useTranslation } from "@flow-like/locales";
-import { createId } from "@paralleldrive/cuid2";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -58,7 +57,7 @@ export default function Page() {
 			description: "",
 		});
 
-	const handleCreateBoard = async () => {
+	const handleCreateBoard = async (boardId: string) => {
 		if (!id) return;
 		if (!canWriteBoards) {
 			toast.error(
@@ -71,7 +70,7 @@ export default function Page() {
 		}
 		await backend.boardState.upsertBoard(
 			id,
-			createId(),
+			boardId,
 			boardCreation.name,
 			boardCreation.description,
 			ILogLevel.Debug,

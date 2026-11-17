@@ -1,3 +1,4 @@
+pub use flow_like_types_contracts::app_chat;
 pub use flow_like_types_contracts::authorization;
 pub use flow_like_types_contracts::bot;
 pub use flow_like_types_contracts::bot_connector;

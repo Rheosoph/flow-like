@@ -46,6 +46,7 @@ interface Sent {
 class FakeConn implements LiveConnection {
 	openService?: LiveConnection["openService"];
 	openModelGateway?: LiveConnection["openModelGateway"];
+	openBotPlayground?: LiveConnection["openBotPlayground"];
 	requestData?: LiveConnection["requestData"];
 	uploadArtifact?: LiveConnection["uploadArtifact"];
 	pushModelAsset?: LiveConnection["pushModelAsset"];
@@ -601,6 +602,38 @@ describe("renewal", () => {
 		expect((older as Error).message).toBe(
 			"Update Studio to send requests to models on devices.",
 		);
+		manager.dispose();
+	});
+
+	test("a bot playground stream is refused before opening for an agent without bot_playground", async () => {
+		const { stream } = serviceStream();
+		const opened: string[] = [];
+		let features: Record<string, number> = { task_health: 1 };
+		const { env, manager } = setup((env) => {
+			env.handler = (command, conn) =>
+				command.type === "inspect_page"
+					? completed({ ...inspectPage().result, features })
+					: defaultHandler(command, conn);
+			env.configureConnection = (conn) => {
+				if (conn.serial > 1) return;
+				conn.openBotPlayground = async (botId) => {
+					opened.push(botId);
+					return stream;
+				};
+			};
+		});
+		const release = manager.acquire(DEVICE, "view");
+		await env.advance(0);
+		const refused = await manager
+			.openBotPlayground(DEVICE, "bot-1")
+			.catch((error: unknown) => error);
+		expect(refused).toBeInstanceOf(LiveCallError);
+		expect(opened).toEqual([]);
+		features = { task_health: 1, bot_playground: 1 };
+		await manager.refreshInspection(DEVICE);
+		expect(await manager.openBotPlayground(DEVICE, "bot-1")).toBe(stream);
+		expect(opened).toEqual(["bot-1"]);
+		release();
 		manager.dispose();
 	});
 

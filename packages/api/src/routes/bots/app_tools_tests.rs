@@ -70,3 +70,33 @@ async fn a_token_of_another_turn_or_bot_is_refused() {
         .unwrap_err();
     assert_eq!(other_bot.status(), StatusCode::FORBIDDEN);
 }
+
+#[test]
+fn the_reply_output_rides_along_only_when_asked_and_present() {
+    use flow_like::flow::copilot::{AppOrigin, AppOutput};
+    let output = AppOutput {
+        origin: AppOrigin {
+            app_id: "orders".into(),
+            board_id: "board".into(),
+            event_id: "event".into(),
+        },
+        source: "Report".into(),
+        files: vec![json!({ "url": "https://f.test/r.pdf" })],
+        widgets: Vec::new(),
+    };
+    let mut unasked = json!({ "status": "ok" });
+    with_reply_output(&mut unasked, None);
+    assert_eq!(unasked, json!({ "status": "ok" }));
+
+    let reply = ReplyFiles::new();
+    let mut quiet = json!({ "status": "ok" });
+    with_reply_output(&mut quiet, Some(reply.clone()));
+    assert_eq!(quiet, json!({ "status": "ok" }));
+
+    reply.push_app_output(output.clone());
+    let mut asked = json!({ "status": "ok" });
+    with_reply_output(&mut asked, Some(reply));
+    let returned: Vec<AppOutput> =
+        serde_json::from_value(asked[REPLY_OUTPUT_FIELD].clone()).unwrap();
+    assert_eq!(returned, [output]);
+}

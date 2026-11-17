@@ -1215,6 +1215,7 @@
 	"filename": "Filename",
 	"fileName": "File Name",
 	"fileNamespanClassnametextdestructiveSpan": "File name<1> *</1>",
+	"fileReadyToSave": "{{name}} is ready",
 	"files": "Files",
 	"fileSizeBytesspanClassnametextdestructiveSpan": "File size (bytes)<1> *</1>",
 	"filesStayOnDisk": "Files stay on disk",

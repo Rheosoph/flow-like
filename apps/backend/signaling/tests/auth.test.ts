@@ -4,6 +4,7 @@ import {
 	REALTIME_PROTOCOL,
 	REALTIME_TOKEN_PROTOCOL_PREFIX,
 	createRealtimeAuthenticator,
+	deriveBotScreensTopic,
 	deriveConversationTopic,
 	deriveRealtimeTopic,
 	deriveTopicForClaims,
@@ -140,9 +141,15 @@ describe("realtime signaling authentication", () => {
 			`${REALTIME_PROTOCOL}, ${REALTIME_TOKEN_PROTOCOL_PREFIX}${token}`,
 		);
 		expect(authorization.allowedTopic).toBe(`inbox:${roomId}:room-v1`);
-		expect(authorization.allowedTopic).not.toBe(deriveConversationTopic("conv_123"));
-		expect(authorization.allowedTopic).not.toBe(deriveConversationTopic("meeting-call_123-1"));
-		expect(authorization.allowedTopic).not.toBe(deriveConversationTopic("meeting-other_call-2"));
+		expect(authorization.allowedTopic).not.toBe(
+			deriveConversationTopic("conv_123"),
+		);
+		expect(authorization.allowedTopic).not.toBe(
+			deriveConversationTopic("meeting-call_123-1"),
+		);
+		expect(authorization.allowedTopic).not.toBe(
+			deriveConversationTopic("meeting-other_call-2"),
+		);
 	});
 
 	test("rejects a token naming a conversation and a board", async () => {
@@ -190,6 +197,71 @@ describe("realtime signaling authentication", () => {
 		expect(deriveTopicForClaims({ conversation_id: "board_456" })).toBe(
 			conversation,
 		);
+	});
+
+	test("gives a bot-screens token only its account topic", async () => {
+		const room = "0123456789abcdef0123456789abcdef";
+		const { config, token } = await claimsFixture({ bot_screens: room });
+		const authenticate = await createRealtimeAuthenticator(config);
+		const authorization = await authenticate(
+			origin,
+			`${REALTIME_PROTOCOL}, ${REALTIME_TOKEN_PROTOCOL_PREFIX}${token}`,
+		);
+		expect(authorization.allowedTopic).toBe(`bot-screens:${room}:v1`);
+		expect(authorization.subject).toBe("user_789");
+	});
+
+	test("rejects a bot-screens token that also names another kind", async () => {
+		const room = "0123456789abcdef0123456789abcdef";
+		for (const extra of [
+			{ conversation_id: "conv_123" },
+			{ app_id: "app_123", board_id: "board_456" },
+			{ app_id: "app_123" },
+			{ board_id: "board_456" },
+			{ board_format_version: 1 },
+		]) {
+			const { config, token } = await claimsFixture({
+				bot_screens: room,
+				...extra,
+			});
+			const authenticate = await createRealtimeAuthenticator(config);
+			await expect(
+				authenticate(
+					origin,
+					`${REALTIME_PROTOCOL}, ${REALTIME_TOKEN_PROTOCOL_PREFIX}${token}`,
+				),
+			).rejects.toThrow("Realtime authorization failed");
+		}
+	});
+
+	test("rejects malformed bot-screens rooms", async () => {
+		for (const bot_screens of [
+			"",
+			"0123456789ABCDEF0123456789abcdef",
+			"0123456789abcdef0123456789abcde",
+			"0123456789abcdef0123456789abcdef0",
+			"0123456789abcdef0123456789abcdeg",
+			7,
+			null,
+		]) {
+			const { config, token } = await claimsFixture({ bot_screens });
+			const authenticate = await createRealtimeAuthenticator(config);
+			await expect(
+				authenticate(
+					origin,
+					`${REALTIME_PROTOCOL}, ${REALTIME_TOKEN_PROTOCOL_PREFIX}${token}`,
+				),
+			).rejects.toThrow("Realtime authorization failed");
+			expect(() => deriveBotScreensTopic(bot_screens)).toThrow();
+		}
+	});
+
+	test("keeps bot-screens, conversation and board topics apart", () => {
+		const room = "0123456789abcdef0123456789abcdef";
+		const topic = deriveTopicForClaims({ bot_screens: room });
+		expect(topic).toBe(`bot-screens:${room}:v1`);
+		expect(topic).not.toBe(deriveConversationTopic(room));
+		expect(topic).not.toBe(deriveRealtimeTopic("bot-screens", room));
 	});
 
 	test("rejects the same token from an unlisted browser origin", async () => {

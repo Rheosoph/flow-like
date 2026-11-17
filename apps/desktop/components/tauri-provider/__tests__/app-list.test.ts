@@ -150,4 +150,48 @@ describe("desktop app listing", () => {
 		expect(warning).toHaveBeenCalled();
 		client.clear();
 	});
+
+	test("rewrites a local copy only when its server record changed", async () => {
+		const local = [entry("a"), entry("b")];
+		let remote: AppEntry[] = [entry("a"), entry("b")];
+		mocks.fetcher.mockImplementation(() => Promise.resolve(remote));
+		mocks.invoke.mockImplementation((command) =>
+			Promise.resolve(command === "get_apps" ? local : undefined),
+		);
+		const { state, client, background } = fixture();
+		const writes = () =>
+			mocks.invoke.mock.calls.filter(([command]) =>
+				["update_app", "push_app_meta"].includes(command as string),
+			).length;
+		const list = async () => {
+			await client.fetchQuery({
+				queryKey: ["getApps"],
+				queryFn: () => state.getApps(),
+				staleTime: 0,
+			});
+			await vi.waitFor(() => expect(background.length).toBeGreaterThan(0));
+			await Promise.all(background.splice(0));
+			await Promise.all(background.splice(0));
+		};
+		try {
+			await list();
+			expect(writes()).toBe(4);
+			await list();
+			await list();
+			expect(mocks.fetcher).toHaveBeenCalledTimes(3);
+			expect(writes()).toBe(4);
+			expect(mocks.visibilityPut).toHaveBeenCalledTimes(2);
+
+			remote = [entry("a", IAppVisibility.Public), entry("b")];
+			await list();
+			expect(writes()).toBe(6);
+			expect(mocks.invoke).toHaveBeenLastCalledWith(
+				"push_app_meta",
+				expect.objectContaining({ appId: "a", preserveUpdatedAt: true }),
+			);
+		} finally {
+			await Promise.all(background);
+			client.clear();
+		}
+	});
 });

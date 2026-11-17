@@ -562,6 +562,7 @@
 	"deleteWithContents": "Mit Inhalt löschen",
 	"describeThePurposeOfThisFlow": "Beschreibe den Zweck dieses Flows …",
 	"description": "Beschreibung",
+	"designANewFlowForYourApplication": "Entwirf einen neuen Flow für deine App",
 	"detectedImport": "{{source}} · {{name}}",
 	"devModeApplyFailed": "",
 	"devModeChangesApplied": "",

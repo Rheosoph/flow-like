@@ -62,17 +62,18 @@ pub mod web_providers;
 mod work_plan;
 
 pub use assistant::{
-    AttachmentManifestEntry, GlobalDataStudioContext, GlobalOpenBoardContext, PlatformContextInput,
-    PlatformSpecialist, TURN_FILES, WebResearchCapability, build_platform_context,
-    data_studio_section, global_assistant_system_prompt, global_assistant_system_prompt_for,
-    open_board_section, run_ontology_query_chat, run_platform_chat, run_specialist_chat,
+    AttachmentManifestEntry, GlobalDataStudioContext, GlobalOpenBoardContext, GlobalPointedAt,
+    PlatformContextInput, PlatformSpecialist, PointedAtKind, TURN_FILES, WebResearchCapability,
+    build_platform_context, data_studio_section, global_assistant_system_prompt,
+    global_assistant_system_prompt_for, open_board_section, pointed_at_section,
+    run_ontology_query_chat, run_platform_chat, run_specialist_chat,
     run_specialist_chat_with_access, with_stored_files,
 };
 pub use behavioral_evaluation::*;
 pub use behavioral_state::*;
 pub use benchmark_cases::workflow_benchmark_cases;
 pub use bot_notes::{NotesHandle, NotesStore, notes_tool_specs};
-pub use bot_reply_files::ReplyFiles;
+pub use bot_reply_files::{AppOrigin, AppOutput, REPLY_OUTPUT_FIELD, ReplyFiles};
 pub use bot_run::{
     BotRunContext, BotToolHost, BotToolset, EffectivePermissions, FLUX_BOT_ID, FLUX_BOT_NAME,
     GENERAL_BOT_DESCRIPTION, GENERAL_BOT_ID, GENERAL_BOT_NAME, ReactionNote, SILENT_REPLY,

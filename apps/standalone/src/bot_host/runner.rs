@@ -692,6 +692,7 @@ impl TurnRunner for DeviceRunner {
                 switchable_profiles: &[],
                 open_board: None,
                 open_data_studio: None,
+                pointed_at: None,
                 attachments: &[],
             },
         );

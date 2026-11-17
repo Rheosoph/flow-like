@@ -19,7 +19,9 @@ pub struct CallTrace {
     model_ms: Option<u64>,
 }
 
-pub fn decision_label<E>(decision: &Result<Result<Decision, E>, tokio::time::error::Elapsed>) -> &'static str {
+pub fn decision_label<E>(
+    decision: &Result<Result<Decision, E>, tokio::time::error::Elapsed>,
+) -> &'static str {
     match decision {
         Ok(Ok(Decision::AnswerNow)) => "answer_now",
         Ok(Ok(Decision::NoAnswer)) => "no_answer",
@@ -53,7 +55,9 @@ impl CallTrace {
     }
 
     pub fn queued_at(rfc3339: &str) -> Option<DateTime<Utc>> {
-        DateTime::parse_from_rfc3339(rfc3339).ok().map(|at| at.to_utc())
+        DateTime::parse_from_rfc3339(rfc3339)
+            .ok()
+            .map(|at| at.to_utc())
     }
 
     pub fn decision_started(&mut self) {

@@ -9,6 +9,8 @@ import { triggerModelText } from "../../components/bots-tab/note-facts";
 import type { IMessage } from "../../components/interfaces/chat-default/chat-db";
 import { storedAttachmentOf } from "../../lib/inbox-attachment-part";
 import { compareInboxCursors } from "../../lib/inbox-cursor";
+import { messageWidgetsOf } from "../../lib/inbox-ui-part";
+import { type IPointedAt, isAppPointedAt } from "../../lib/pointed-at";
 import { IRole } from "../../lib/schema/llm/history";
 import type {
 	IConversationSegment,
@@ -147,6 +149,8 @@ export function sendToHost(
 		id: string;
 		text: string;
 		parts?: readonly IInboxAttachmentPart[];
+		/** The window or tab the person pointed the bot at; a target inside Flow-Like never goes to an inbox. */
+		pointedAt?: IPointedAt;
 	},
 ): Promise<IInboxEntry> {
 	const parts = message.parts ?? [];
@@ -156,6 +160,9 @@ export function sendToHost(
 		envelope: plainEnvelope({
 			text: message.text,
 			...(parts.length > 0 ? { parts: [...parts] } : {}),
+			...(message.pointedAt && !isAppPointedAt(message.pointedAt)
+				? { pointed_at: message.pointedAt }
+				: {}),
 		}),
 	});
 }
@@ -236,6 +243,7 @@ function messageOf(
 			? { userContextDerivedFrom: item.userContextDerivedFrom }
 			: {}),
 		...(item.note ? { note: item.note } : {}),
+		...(item.pointedAt ? { pointedAt: item.pointedAt } : {}),
 		...(approval ? { approval: { ...approval, botId: item.senderId } } : {}),
 		id: item.id,
 		appId: GLOBAL_CHAT_APP_ID,
@@ -248,6 +256,7 @@ function messageOf(
 			const attachment = storedAttachmentOf(part);
 			return attachment ? [attachment] : [];
 		}),
+		...messageWidgetsOf(item.ui),
 		tools: [],
 		actions: [],
 		timestamp: item.time,

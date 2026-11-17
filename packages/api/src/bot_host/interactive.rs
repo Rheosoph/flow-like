@@ -186,13 +186,9 @@ impl InteractiveTurn {
 
     /// Gives the turn back to the bot's own host, which claims it at once.
     pub(crate) async fn hand_to_host(&self, state: &AppState) {
-        let handed = ledger::hand_to_host_in(
-            &state.db,
-            &self.turn.id,
-            &self.turn.owner_id,
-            now_millis(),
-        )
-        .await;
+        let handed =
+            ledger::hand_to_host_in(&state.db, &self.turn.id, &self.turn.owner_id, now_millis())
+                .await;
         if let Err(error) = handed {
             tracing::warn!(
                 %error,

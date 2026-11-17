@@ -10,6 +10,10 @@ mod android_bot_runtime;
 #[cfg(target_os = "android")]
 mod android_mobile;
 mod bot_host;
+#[cfg(desktop)]
+mod bot_notch;
+#[cfg(desktop)]
+mod bot_screens;
 #[cfg(debug_assertions)]
 mod custom_bit_e2e;
 #[cfg(debug_assertions)]
@@ -30,6 +34,8 @@ mod event_sink;
 mod execution_credentials;
 mod execution_identity;
 mod frontend_assets;
+#[cfg(target_os = "macos")]
+mod fullscreen_hide;
 mod functions;
 mod local_page_actions;
 #[cfg(any(test, not(debug_assertions)))]
@@ -656,6 +662,8 @@ pub fn run() {
                 realtime::close_window(window.label());
                 if window.label() == "main" {
                     device_tunnels::close_all();
+                    #[cfg(desktop)]
+                    bot_notch::shutdown(window.app_handle());
                 }
             }
         });
@@ -961,6 +969,7 @@ pub fn run() {
                     tray::spawn_tray_refresh(relay_handle.clone());
                 }
                 tray::reveal_unreachable_hidden_start(&relay_handle);
+                bot_notch::init(&relay_handle);
             }
 
             #[cfg(any(target_os = "linux", windows))]
@@ -1227,6 +1236,36 @@ pub fn run() {
             tray::set_start_at_login,
             #[cfg(desktop)]
             tray::claim_start_at_login_offer,
+            #[cfg(desktop)]
+            bot_screens::bot_screens_host_id,
+            #[cfg(desktop)]
+            bot_screens::bot_screens_pairing_start,
+            #[cfg(desktop)]
+            bot_screens::bot_screens_paired,
+            #[cfg(desktop)]
+            bot_screens::bot_screens_unpair,
+            #[cfg(desktop)]
+            bot_notch::bot_notch_layout,
+            #[cfg(desktop)]
+            bot_notch::bot_notch_settings,
+            #[cfg(desktop)]
+            bot_notch::bot_notch_set_enabled,
+            #[cfg(desktop)]
+            bot_notch::bot_notch_set_hidden_bots,
+            #[cfg(desktop)]
+            bot_notch::bot_notch_set_visible,
+            #[cfg(desktop)]
+            bot_notch::bot_notch_set_hitboxes,
+            #[cfg(desktop)]
+            bot_notch::bot_notch_window_at,
+            #[cfg(desktop)]
+            bot_notch::bot_notch_active_tab,
+            #[cfg(desktop)]
+            bot_notch::bot_notch_set_perches,
+            #[cfg(desktop)]
+            bot_notch::bot_notch_focus_window,
+            #[cfg(desktop)]
+            bot_notch::bot_notch_host_id,
             #[cfg(not(desktop))]
             tray_update_state,
             functions::download::init::init_downloads,
@@ -1767,7 +1806,7 @@ pub fn run() {
     app.run(|_app, _event| {
         if matches!(_event, tauri::RunEvent::Exit) {
             device_tunnels::close_all();
-            tauri::async_runtime::block_on(bot_host::withdraw(_app));
+            bot_host::withdraw_before_exit(_app);
             #[cfg(desktop)]
             device_models::lock_all();
         }

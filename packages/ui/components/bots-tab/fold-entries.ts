@@ -1,5 +1,6 @@
 import { compareInboxCursors } from "../../hooks/use-inbox";
 import { isHttpUrl } from "../../lib/inbox-attachment-part";
+import { isInboxUiPart } from "../../lib/inbox-ui-part";
 import { type IChatUsageStat, readUsageStat } from "../../lib/llm/usage";
 import { isRecord } from "../../lib/response-shape";
 import type { IBotNoteRef } from "../../state/backend-state/bot-state";
@@ -8,14 +9,17 @@ import type {
 	IInboxApprovalInvite,
 	IInboxApprovalSecret,
 	IInboxAttachmentPart,
+	IInboxDesktopTarget,
 	IInboxEntry,
 	IInboxFileHandle,
+	IInboxUiPart,
 } from "../../state/backend-state/inbox-state";
 import {
 	type ApprovalDecision,
 	approvalOf,
 	approvalResponseOf,
 	plainBody,
+	rawApprovalOf,
 } from "./approval-entry";
 import { noteRefOf } from "./bot-note-entry";
 import { isSelfPrincipal } from "./crew-model";
@@ -54,6 +58,9 @@ export interface ConversationApprovalItem {
 /** A bot's request to run a call, with the owner's answer once there is one. */
 export interface ConversationApproval {
 	id: string;
+	conversationId: string;
+	/** The card as the entry carries it. */
+	card: IInboxApproval;
 	turnId: string;
 	tool: string;
 	summary: string;
@@ -79,10 +86,14 @@ export interface ConversationApproval {
 
 function conversationApproval(
 	approval: IInboxApproval,
+	card: IInboxApproval,
+	conversationId: string,
 	postedAt: number,
 ): ConversationApproval {
 	return {
 		id: approval.id,
+		conversationId,
+		card,
 		turnId: approval.turn_id,
 		tool: approval.tool,
 		summary: approval.summary,
@@ -130,11 +141,45 @@ function attachmentsOf(entry: IInboxEntry): IInboxAttachmentPart[] {
 	);
 }
 
+function uiPartsOf(entry: IInboxEntry): IInboxUiPart[] {
+	const parts = plainBody(entry)?.parts;
+	return Array.isArray(parts) ? parts.filter(isInboxUiPart) : [];
+}
+
 function errorCodeOf(entry: IInboxEntry): string | undefined {
 	const error = plainBody(entry)?.error;
 	return isRecord(error) && typeof error.code === "string"
 		? error.code
 		: undefined;
+}
+
+const optionalText = (value: unknown): string | undefined =>
+	typeof value === "string" && value.length > 0 ? value : undefined;
+
+/** The window or browser tab a message was pointed at, when its body names a readable one. */
+export function pointedAtOf(
+	entry: IInboxEntry,
+): IInboxDesktopTarget | undefined {
+	const target = plainBody(entry)?.pointed_at;
+	if (!isRecord(target)) return undefined;
+	const { kind, host_id, window_id, app } = target;
+	if (
+		(kind !== "window" && kind !== "tab") ||
+		typeof host_id !== "string" ||
+		typeof window_id !== "string" ||
+		typeof app !== "string"
+	)
+		return undefined;
+	const title = optionalText(target.title);
+	const url = kind === "tab" ? optionalText(target.url) : undefined;
+	return {
+		kind,
+		host_id,
+		window_id,
+		app,
+		...(title ? { title } : {}),
+		...(url ? { url } : {}),
+	};
 }
 
 function stringsOf(value: unknown): string[] {
@@ -168,11 +213,15 @@ export interface ConversationMessage {
 	mentions: string[];
 	errorCode?: string;
 	attachments?: IInboxAttachmentPart[];
+	/** App widgets on the message, inline or as stored documents. */
+	ui?: IInboxUiPart[];
 	approval?: ConversationApproval;
 	userContext?: UserContextCardData;
 	userContextDerived?: boolean;
 	userContextDerivedFrom?: string;
 	note?: IBotNoteRef;
+	/** The window or browser tab the sender pointed the bot at. */
+	pointedAt?: IInboxDesktopTarget;
 	/** Recipients of the email this message was sent as. */
 	mailedTo?: string[];
 	edited: boolean;
@@ -563,6 +612,8 @@ export function foldInboxEntries(
 			const contextRequest = userContextRequestOf(entry);
 			const mailedTo = mailedToOf(entry);
 			const note = noteRefOf(entry);
+			const pointedAt = pointedAtOf(entry);
+			const ui = uiPartsOf(entry);
 			const rawUsage = plainBody(entry)?.usage_stats;
 			const usageStats = Array.isArray(rawUsage)
 				? rawUsage
@@ -591,11 +642,20 @@ export function foldInboxEntries(
 				...(attachmentsOf(entry).length > 0
 					? { attachments: attachmentsOf(entry) }
 					: {}),
+				...(ui.length > 0 ? { ui } : {}),
 				...(replyTo ? { replyTo } : {}),
 				...(note ? { note } : {}),
+				...(pointedAt ? { pointedAt } : {}),
 				...(mailedTo.length > 0 ? { mailedTo } : {}),
 				...(approval
-					? { approval: conversationApproval(approval, entryTime(entry)) }
+					? {
+							approval: conversationApproval(
+								approval,
+								rawApprovalOf(entry) ?? approval,
+								entry.conversation_id,
+								entryTime(entry),
+							),
+						}
 					: {}),
 				edited: false,
 				reactions: [],

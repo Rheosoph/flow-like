@@ -8,7 +8,11 @@ use flow_like_types::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "macos")]
+mod keyboard_layout_macos;
+#[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod main_queue_macos;
 #[cfg(target_os = "macos")]
 use macos as platform;
 #[cfg(target_os = "macos")]
@@ -25,12 +29,109 @@ mod linux;
 use linux as platform;
 #[cfg(target_os = "macos")]
 mod ocr_macos;
-#[cfg(target_os = "macos")]
-pub(crate) mod screen_capture_macos;
 #[cfg(any(target_os = "linux", test))]
 pub(crate) mod ocr_tesseract;
 #[cfg(target_os = "windows")]
 mod ocr_windows;
+#[cfg(target_os = "macos")]
+pub(crate) mod screen_capture_macos;
+
+/// A visible window in the stacking order. macOS bounds are global points; Windows and Linux
+/// bounds are physical pixels.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StackedWindow {
+    pub id: u32,
+    pub pid: u32,
+    pub app_name: String,
+    pub title: Option<String>,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+fn usable_size(width: f64, height: f64) -> bool {
+    width >= 2.0 && height >= 2.0
+}
+
+/// On-screen windows, front-most first, without ghosts or system UI. Needs no permission on macOS.
+#[cfg(target_os = "macos")]
+pub fn stacked_windows() -> Result<Vec<StackedWindow>> {
+    macos::stacked_windows()
+}
+
+/// xcap enumerates top-level windows in stacking order (the order `Window::z` is derived from).
+#[cfg(not(target_os = "macos"))]
+pub fn stacked_windows() -> Result<Vec<StackedWindow>> {
+    Ok(NativeWindow::all()?
+        .iter()
+        .filter(|w| !w.is_minimized().unwrap_or(false))
+        .filter_map(|w| {
+            let (width, height) = (w.width().ok()? as f64, w.height().ok()? as f64);
+            if !usable_size(width, height) {
+                return None;
+            }
+            Some(StackedWindow {
+                id: w.id().ok()?,
+                pid: w.pid().unwrap_or_default(),
+                app_name: w.app_name().unwrap_or_default(),
+                title: w.title().ok().filter(|title| !title.is_empty()),
+                x: w.x().ok()? as f64,
+                y: w.y().ok()? as f64,
+                width,
+                height,
+            })
+        })
+        .collect())
+}
+
+/// The window still exists, though maybe minimized or on another desktop and so not stacked.
+pub fn window_exists(id: u32) -> bool {
+    #[cfg(target_os = "macos")]
+    return macos::window_exists(id);
+    #[cfg(target_os = "windows")]
+    return windows::window_exists(id);
+    #[cfg(target_os = "linux")]
+    return NativeWindow::all().is_ok_and(|all| all.iter().any(|w| w.id().is_ok_and(|n| n == id)));
+}
+
+/// The accessible title when Accessibility is granted, else the window-server name.
+pub fn window_title(id: u32) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    return macos::window_title(id);
+    #[cfg(not(target_os = "macos"))]
+    return NativeWindow::all()
+        .ok()?
+        .into_iter()
+        .find(|w| w.id().is_ok_and(|n| n == id))
+        .and_then(|w| w.title().ok())
+        .filter(|title| !title.is_empty());
+}
+
+/// The focused text field's whole text, or its selection, read through accessibility. None where
+/// the platform or the field doesn't tell; the caller copies the text instead.
+pub fn focused_text(selection: bool) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    return macos::focused_text(selection);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = selection;
+        None
+    }
+}
+
+/// Replaces the focused text field's text through accessibility.
+pub fn set_focused_text(text: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    return macos::set_focused_text(text);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = text;
+        Err(anyhow!(
+            "Replacing a field's text directly needs macOS accessibility"
+        ))
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ElementLocator {
@@ -281,6 +382,13 @@ mod tests {
             focused,
             visible,
         }
+    }
+
+    #[test]
+    fn usable_size_rejects_slivers() {
+        assert!(usable_size(2.0, 2.0));
+        assert!(!usable_size(1.9, 400.0));
+        assert!(!usable_size(400.0, 0.0));
     }
 
     #[test]

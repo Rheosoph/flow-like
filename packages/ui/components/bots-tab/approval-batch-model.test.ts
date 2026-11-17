@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { IInboxApproval } from "../../state/backend-state/inbox-state";
 import {
 	alwaysBlock,
 	approvalItems,
@@ -10,6 +11,7 @@ import {
 	isPastWait,
 	refusalCode,
 	tallyOf,
+	wantedAction,
 } from "./approval-batch-model";
 import type { ApprovalDecision } from "./approval-entry";
 import type { ConversationApprovalItem } from "./fold-entries";
@@ -215,6 +217,8 @@ test("a card for one call is its own single item", () => {
 	expect(
 		approvalItems({
 			id: "ap-1",
+			conversationId: "c1",
+			card: {} as IInboxApproval,
 			turnId: "t",
 			tool: "shell_run",
 			summary: "Run git",
@@ -241,6 +245,18 @@ test("summaries drop the core's opening and read as a line or a phrase", () => {
 		"run a program called git",
 	);
 	expect(callPhrase("GET cisa.gov")).toBe("GET cisa.gov");
+});
+
+test("a FlowPilot tool's summary drops its stand-in subject too", () => {
+	const summary =
+		"FlowPilot wants to interact with app 'Lern-App'. This may run workflows.";
+	expect(callPhrase(summary)).toBe(
+		"interact with app 'Lern-App'. This may run workflows",
+	);
+	expect(wantedAction(summary)).toBe(
+		"interact with app 'Lern-App'. This may run workflows.",
+	);
+	expect(wantedAction("Send a GET request to cisa.gov")).toBeUndefined();
 });
 
 test("refusal codes come from the error or its message", () => {

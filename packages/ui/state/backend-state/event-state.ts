@@ -608,6 +608,7 @@ export interface IEventState {
 		method: string,
 		params?: Record<string, unknown>,
 		beforeDispatch?: () => void,
+		chatEvents?: boolean,
 	): Promise<Record<string, unknown>>;
 
 	cancelExecution(runId: string): Promise<void>;

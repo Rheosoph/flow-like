@@ -1,4 +1,5 @@
 use flow_like::flow::event::Event;
+use flow_like_types::app_chat::{ChatFold, take_chat_events};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, json};
 
@@ -31,7 +32,9 @@ impl AppTools {
                 json!({"name": name, "arguments": arguments}),
             )
             .await?;
-        Ok(call_outcome(app_id, &event.id, name, result))
+        let (outcome, chat) = call_outcome(app_id, &event.id, name, result);
+        self.show_on_reply(app_id, event, &chat);
+        Ok(outcome)
     }
 
     async fn mcp_operation(
@@ -80,16 +83,26 @@ fn inventory(app_id: &str, event_id: &str, result: Value) -> Result<Value, Strin
     }))
 }
 
-fn call_outcome(app_id: &str, event_id: &str, tool: &str, result: Value) -> Value {
+fn call_outcome(app_id: &str, event_id: &str, tool: &str, mut result: Value) -> (Value, ChatFold) {
+    let pushed = take_chat_events(&mut result);
     let failed = result.get("isError").and_then(Value::as_bool) == Some(true);
-    json!({
+    let mut outcome = json!({
         "status": if failed { "error" } else { "ok" },
         "app_id": app_id,
         "event_id": event_id,
         "event_type": "mcp",
         "mcp_tool": tool,
         "result": result,
-    })
+    });
+    let mut chat = ChatFold::default();
+    for event in &pushed.events {
+        chat.push(event);
+    }
+    chat.describe_pushed(&mut outcome);
+    if pushed.truncated {
+        outcome["pushed_truncated"] = json!(true);
+    }
+    (outcome, chat)
 }
 
 #[cfg(test)]
@@ -140,14 +153,35 @@ mod tests {
 
     #[test]
     fn a_tool_result_is_an_error_only_when_the_server_says_so() {
-        let ok = call_outcome("a1", "e1", "t", json!({"content": [], "isError": false}));
+        let (ok, _) = call_outcome("a1", "e1", "t", json!({"content": [], "isError": false}));
         assert_eq!(ok["status"], "ok");
-        let missing = call_outcome("a1", "e1", "t", json!({"content": []}));
+        let (missing, _) = call_outcome("a1", "e1", "t", json!({"content": []}));
         assert_eq!(missing["status"], "ok");
-        let failed = call_outcome("a1", "e1", "t", json!({"isError": true}));
+        let (failed, _) = call_outcome("a1", "e1", "t", json!({"isError": true}));
         assert_eq!(failed["status"], "error");
         assert_eq!(failed["event_type"], "mcp");
         assert_eq!(failed["mcp_tool"], "t");
         assert_eq!(failed["result"], json!({"isError": true}));
+    }
+
+    #[test]
+    fn what_the_tool_pushed_to_the_chat_is_reported_and_kept_from_the_result() {
+        let mut result = json!({"content": [{"type": "text", "text": "done"}], "isError": false});
+        let mut log = flow_like_types::app_chat::ChatEventLog::default();
+        log.push(&json!({
+            "event_type": "chat_stream_partial",
+            "payload": {
+                "attachments": [{"url": "https://f/r.pdf", "name": "r.pdf", "type": "application/pdf"}],
+                "widgets": [{"instance_id": "w1"}],
+            },
+        }));
+        log.attach(&mut result);
+        let (outcome, chat) = call_outcome("a1", "e1", "report", result);
+        assert_eq!(chat.widget_count(), 1);
+        assert_eq!(outcome["status"], "ok");
+        assert!(outcome["result"].get("_meta").is_none());
+        assert_eq!(outcome["attachments"][0]["name"], "r.pdf");
+        assert_eq!(outcome["pushed_widget_count"], 1);
+        assert!(outcome.get("pushed_truncated").is_none());
     }
 }

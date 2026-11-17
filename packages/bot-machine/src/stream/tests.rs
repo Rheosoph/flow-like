@@ -85,7 +85,7 @@ impl Playground for Fake {
 
     async fn inject(&self, _: &str, event: PlaygroundInput) -> Result<()> {
         if self.0.lock().unwrap().refuse_input {
-            anyhow::bail!("watch only");
+            flow_like_types::bail!("watch only");
         }
         self.note(format!("inject:{}", serde_json::to_string(&event).unwrap()));
         Ok(())
@@ -360,7 +360,7 @@ async fn an_oversized_observation_is_dropped_and_the_stream_survives() {
     let host = Fake::default();
     host.show(b"big overlay");
     let mut huge = observation(1000);
-    huge.focus = Some(flow_like_types_contracts::interaction::InteractionFocus {
+    huge.focus = Some(flow_like_types::interaction_observation::InteractionFocus {
         label: "x".repeat(PLAYGROUND_MAX_JSON * 2),
         bounds: None,
     });

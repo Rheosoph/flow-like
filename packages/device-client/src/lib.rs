@@ -34,6 +34,7 @@ pub use hub::{AccessToken, HttpHubClient, HubClient};
 pub use keys::ControllerKeys;
 pub use proxy::{LoopbackPort, LoopbackProxy, ProxyActivity};
 pub use stream::TunnelStream;
+pub use tls::client_config as tls_client_config;
 
 pub(crate) fn unix_now() -> i64 {
     std::time::SystemTime::now()

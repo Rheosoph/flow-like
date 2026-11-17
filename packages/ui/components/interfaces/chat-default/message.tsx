@@ -25,6 +25,7 @@ import {
 import { toast } from "sonner";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../../lib/flowpilot-debug";
 import { observeResize } from "../../../lib/observe-resize";
+import { openExternalUrl } from "../../../lib/open-external";
 import { IRole } from "../../../lib/schema/llm/history";
 import { cn } from "../../../lib/utils";
 import { ChatApprovalCard } from "../../bots-tab/approval-card";
@@ -69,7 +70,7 @@ import {
 } from "./inline-segments";
 import { MessageReactionPicker, MessageReactions } from "./message-reactions";
 import { MessageReference } from "./message-reference";
-import { MessageWidgets } from "./message-widgets";
+import { MessageWidgetDocuments, MessageWidgets } from "./message-widgets";
 import {
 	type PendingAsk,
 	askRuleColor,
@@ -77,6 +78,7 @@ import {
 } from "./pending-ask";
 import { PendingAskRule, PendingAskStatus } from "./pending-ask-status";
 import { InlineStepGroup, PlanSteps } from "./plan-steps";
+import { PointedAtChip } from "./pointed-at-chip";
 import { extractThinkBlocks } from "./reasoning-format";
 import { ReasoningViewer } from "./reasoning-viewer";
 import { RoomMessageActions } from "./room-message-actions";
@@ -636,7 +638,9 @@ export const MessageComponent = memo(
 			// A cited page is a destination, not a file — downloading its markup is
 			// never what the external-link affordance promised.
 			if (file.type === "website") {
-				window.open(file.url, "_blank", "noopener,noreferrer");
+				openExternalUrl(file.url).catch((error) =>
+					console.error("Opening the cited page failed:", error),
+				);
 			} else if (canPreviewFile(file)) {
 				// Open file dialog with this file selected
 				setDialogSelectedFile(file);
@@ -982,6 +986,9 @@ export const MessageComponent = memo(
 								{message.thinking && <ThinkingStamp value={message.thinking} />}
 							</span>
 						)}
+						{isUser && message.pointedAt && (
+							<PointedAtChip target={message.pointedAt} />
+						)}
 						{!isUser && !stepsInline && planSteps.length > 0 && (
 							<PlanSteps
 								steps={planSteps}
@@ -1154,6 +1161,16 @@ export const MessageComponent = memo(
 								snapshots={widgetSnapshots}
 							/>
 						)}
+						{message.widget_documents?.length ? (
+							<MessageWidgetDocuments
+								documents={message.widget_documents}
+								readOnly={message.widget_actions === false}
+								appId={appId}
+								boardId={boardId}
+								eventId={eventId}
+								snapshots={widgetSnapshots}
+							/>
+						) : null}
 						{message.approval && (
 							<ChatApprovalCard approval={message.approval} />
 						)}
@@ -1351,6 +1368,8 @@ export const MessageComponent = memo(
 			prev.message.debug_report === next.message.debug_report &&
 			prev.message.app_refs === next.message.app_refs &&
 			prev.message.widgets === next.message.widgets &&
+			prev.message.widget_documents === next.message.widget_documents &&
+			prev.message.widget_actions === next.message.widget_actions &&
 			prev.message.error === next.message.error &&
 			prev.message.approval === next.message.approval &&
 			prev.message.userContext === next.message.userContext &&

@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import type React from "react";
 import { useCallback, useMemo, useState } from "react";
+import { appDenProps } from "../../../lib/bot-den/app-targets";
 import { cn } from "../../../lib/utils";
 import type {
 	IColumnFamily,
@@ -249,6 +250,7 @@ const Metric: React.FC<{
 );
 
 interface SourceCardProps {
+	appId?: string;
 	entry: SourceEntry;
 	loading: boolean;
 	onSelect: () => void;
@@ -257,6 +259,7 @@ interface SourceCardProps {
 }
 
 const SourceCard: React.FC<SourceCardProps> = ({
+	appId,
 	entry,
 	loading,
 	onSelect,
@@ -320,6 +323,12 @@ const SourceCard: React.FC<SourceCardProps> = ({
 
 	return (
 		<Card
+			{...appDenProps({
+				kind: "table",
+				appId: entry.userScoped ? undefined : appId,
+				id: entry.name,
+				label: entry.name,
+			})}
 			className={cn(
 				"group relative overflow-hidden border p-0 transition-colors duration-200 hover:border-primary/50",
 				unmapped && "border-dashed",
@@ -565,6 +574,7 @@ const SourceCard: React.FC<SourceCardProps> = ({
 };
 
 export interface SourceGridProps {
+	appId?: string;
 	entries: SourceEntry[];
 	loading: boolean;
 	searchQuery: string;
@@ -575,6 +585,7 @@ export interface SourceGridProps {
 }
 
 export const SourceGrid: React.FC<SourceGridProps> = ({
+	appId,
 	entries,
 	loading,
 	searchQuery,
@@ -625,6 +636,7 @@ export const SourceGrid: React.FC<SourceGridProps> = ({
 		<div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))] gap-3.5">
 			{entries.map((entry) => (
 				<SourceCard
+					appId={appId}
 					key={`${entry.userScoped ? "user:" : ""}${entry.name}`}
 					entry={entry}
 					loading={loading}

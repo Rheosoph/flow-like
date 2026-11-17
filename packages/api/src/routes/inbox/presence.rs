@@ -135,7 +135,7 @@ pub(crate) async fn active_turns_in<C: ConnectionTrait>(
     Ok(turns.into_iter().map(ConversationTurn::from).collect())
 }
 
-fn length_prefixed(hasher: &mut blake3::Hasher, part: &str) {
+pub(crate) fn length_prefixed(hasher: &mut blake3::Hasher, part: &str) {
     hasher.update(&(part.len() as u64).to_le_bytes());
     hasher.update(part.as_bytes());
 }

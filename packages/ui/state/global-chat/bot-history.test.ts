@@ -490,6 +490,38 @@ describe("sending to a bot that answers on its own host", () => {
 			},
 		]);
 	});
+
+	test("keeps a window target but never sends a Flow-Like target to the inbox", async () => {
+		const window = {
+			kind: "window" as const,
+			host_id: "desktop:h1",
+			window_id: "42",
+			app: "Code",
+			title: "main.rs",
+		};
+		const kept = fakeInbox(2);
+		await sendToHost(kept.inbox, target, {
+			id: "msg_w",
+			text: "Look",
+			pointedAt: window,
+		});
+		expect(kept.sent[0].envelope).toEqual({
+			v: 1,
+			enc: "none",
+			body: { text: "Look", pointed_at: window },
+		});
+		const dropped = fakeInbox(2);
+		await sendToHost(dropped.inbox, target, {
+			id: "msg_n",
+			text: "Look",
+			pointedAt: { kind: "node", app_id: "a", ids: ["n1"], label: "HTTP" },
+		});
+		expect(dropped.sent[0].envelope).toEqual({
+			v: 1,
+			enc: "none",
+			body: { text: "Look" },
+		});
+	});
 });
 
 describe("sending from the interactive chat", () => {
@@ -744,5 +776,62 @@ describe("the import of the IndexedDB chat", () => {
 				size: 5,
 			},
 		]);
+	});
+});
+
+describe("app widgets on stored replies", () => {
+	test("an inline widget part becomes a widget bound to its app run, a stored one a document", () => {
+		const widget = {
+			instance_id: "w1",
+			widget_id: "chart",
+			surface_id: "s1",
+			component: { widgetInstance: {} },
+			updates: [{ op: "set" }],
+		};
+		const handle = {
+			app_id: "bot_ada",
+			path: "reply/ui2.json",
+			bytes: 50_000,
+			sha256: "abc",
+			mime: "application/json",
+		};
+		const reply = entry(1, BOT, "Here is the chart.", {
+			envelope: {
+				v: 1,
+				enc: "none",
+				body: {
+					text: "Here is the chart.",
+					parts: [
+						{
+							kind: "ui",
+							id: "ui1",
+							summary: "Widget from app app1",
+							a2ui: {
+								type: "app_widget",
+								origin: { app_id: "app1", board_id: "b1", event_id: "e1" },
+								widget,
+							},
+						},
+						{ kind: "ui", id: "ui2", summary: "Widget from app app1", handle },
+						{ kind: "ui", id: "ui3", a2ui: { type: "app_widget" } },
+					],
+				},
+			},
+		});
+		const [message] = transcriptOf([reply], BOT, "bot:bot_ada").messages;
+		expect(message.widgets).toEqual([
+			{ ...widget, origin: { appId: "app1", boardId: "b1", eventId: "e1" } },
+		]);
+		expect(message.widget_documents).toEqual([handle]);
+	});
+
+	test("a reply without ui parts has no widgets", () => {
+		const [message] = transcriptOf(
+			[entry(1, BOT, "plain")],
+			BOT,
+			"bot:bot_ada",
+		).messages;
+		expect(message.widgets).toBeUndefined();
+		expect(message.widget_documents).toBeUndefined();
 	});
 });

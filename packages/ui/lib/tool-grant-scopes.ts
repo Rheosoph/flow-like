@@ -1,6 +1,19 @@
 export const SCOPE_ALL = "*";
 export const DOCUMENTS_TOOL = "documents";
 export const SCOPE_DOCUMENTS_EXPENSIVE = "documents.expensive";
+/**
+ * The tool of the auto-approval grant `(*, *)`: everything a grant could cover runs without
+ * asking. Deleting data, changing settings, cost checks and web destinations after web content
+ * still ask.
+ */
+export const AUTO_APPROVE_TOOL = "*";
+
+export function isAutoApproveGrant(grant: {
+	tool: string;
+	scope: string;
+}): boolean {
+	return grant.tool === AUTO_APPROVE_TOOL && grant.scope === SCOPE_ALL;
+}
 
 const MAX_SCOPE_CHARS = 200;
 
@@ -169,6 +182,7 @@ export function grantScopes(
 			return single(site ? `${prefix}:${site}` : undefined);
 		}
 		case "computer_screenshot":
+		case "computer_window":
 		case "computer_act":
 			return ["computer:session"];
 		case "email_send":

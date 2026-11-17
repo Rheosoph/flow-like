@@ -232,6 +232,19 @@ pub enum WireAction {
         direction: WireDirection,
         ticks: u32,
     },
+    Paste {
+        text: String,
+        replace_all: bool,
+    },
+    SelectAll {
+        #[serde(default)]
+        at: Option<(f64, f64)>,
+    },
+    Drag {
+        from: (f64, f64),
+        to: (f64, f64),
+        button: PointerButton,
+    },
 }
 
 impl From<&ComputerAction> for WireAction {
@@ -268,6 +281,16 @@ impl From<&ComputerAction> for WireAction {
                     ScrollDirection::Right => WireDirection::Right,
                 },
                 ticks: *ticks,
+            },
+            ComputerAction::Paste { text, replace_all } => Self::Paste {
+                text: text.clone(),
+                replace_all: *replace_all,
+            },
+            ComputerAction::SelectAll { at } => Self::SelectAll { at: *at },
+            ComputerAction::Drag { from, to, button } => Self::Drag {
+                from: *from,
+                to: *to,
+                button: *button,
             },
         }
     }
@@ -306,6 +329,9 @@ impl From<WireAction> for ComputerAction {
                 },
                 ticks,
             },
+            WireAction::Paste { text, replace_all } => Self::Paste { text, replace_all },
+            WireAction::SelectAll { at } => Self::SelectAll { at },
+            WireAction::Drag { from, to, button } => Self::Drag { from, to, button },
         }
     }
 }
@@ -313,6 +339,29 @@ impl From<WireAction> for ComputerAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_actions_cross_the_wire_unchanged() {
+        for action in [
+            ComputerAction::Paste {
+                text: "first\nsecond".into(),
+                replace_all: true,
+            },
+            ComputerAction::SelectAll {
+                at: Some((1.0, 2.0)),
+            },
+            ComputerAction::SelectAll { at: None },
+            ComputerAction::Drag {
+                from: (1.0, 2.0),
+                to: (3.5, 4.0),
+                button: PointerButton::Right,
+            },
+        ] {
+            let wire = serde_json::to_value(WireAction::from(&action)).unwrap();
+            let back: WireAction = serde_json::from_value(wire).unwrap();
+            assert_eq!(ComputerAction::from(back), action);
+        }
+    }
 
     #[test]
     fn coded_errors_keep_their_code_across_the_wire_and_others_become_plain() {

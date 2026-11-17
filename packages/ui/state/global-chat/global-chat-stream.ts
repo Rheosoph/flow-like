@@ -34,6 +34,7 @@ import {
 	createStreamAccumulator,
 	orderedSteps,
 	readReplyAttachment,
+	readReplyWidget,
 } from "./copilot-stream-steps";
 import {
 	addressedNow,
@@ -679,6 +680,9 @@ export async function driveGlobalChatStream({
 			if (event.type === "reply_attachment") {
 				const attachment = readReplyAttachment(event.data);
 				if (attachment) store.getState().addSubAttachments(runId, [attachment]);
+			} else if (event.type === "reply_widget") {
+				const widget = readReplyWidget(event.data);
+				if (widget) store.getState().addSubWidgets(runId, [widget]);
 			}
 		}
 		syncMessage();

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 use flow_like_types::tokio::time::sleep;
-use tauri::menu::{IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_notification::NotificationExt;
@@ -26,6 +26,7 @@ const MENU_ACCOUNT: &str = "tray_account";
 const MENU_OPEN_LOGS: &str = "tray_open_logs";
 const MENU_REPORT_ISSUE: &str = "tray_report_issue";
 const MENU_LOCK_DEVICES: &str = "tray_lock_devices";
+const MENU_BOT_NOTCH: &str = "tray_bot_notch";
 const MENU_QUIT: &str = "tray_quit";
 
 const RUN_MENU_PREFIX: &str = "tray_run:";
@@ -78,6 +79,7 @@ pub struct TrayData {
     pub signed_in: bool,
     /// Devices whose keys the app holds for model access, local ports or transfers.
     pub unlocked_devices: usize,
+    pub bot_notch_enabled: bool,
 }
 
 impl Default for TrayData {
@@ -93,6 +95,7 @@ impl Default for TrayData {
             background_failures: Vec::new(),
             signed_in: false,
             unlocked_devices: 0,
+            bot_notch_enabled: true,
         }
     }
 }
@@ -127,6 +130,7 @@ struct TrayMenuHandles {
     failures_item: Option<(MenuItem<Wry>, String)>,
     sync_item: Option<(MenuItem<Wry>, String)>,
     lock_devices_item: Option<(MenuItem<Wry>, String)>,
+    bot_notch_item: CheckMenuItem<Wry>,
     notifications_item: (MenuItem<Wry>, String),
     account_item: (MenuItem<Wry>, String),
 }
@@ -346,6 +350,17 @@ pub async fn tray_update_state(
     Ok(())
 }
 
+/// The bot notch was switched on or off; the menu shows its state.
+pub fn show_bot_notch(app_handle: &AppHandle, enabled: bool) {
+    let app_handle = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = update_tray_data(&app_handle, move |data| {
+            data.bot_notch_enabled = enabled;
+        })
+        .await;
+    });
+}
+
 /// The device keys the app holds changed; the menu offers "Lock All Devices" while there are any.
 pub fn show_device_keys(app_handle: &AppHandle, unlocked: usize) {
     let app_handle = app_handle.clone();
@@ -497,6 +512,8 @@ fn lock_devices_label(data: &TrayData) -> String {
 
 fn update_dynamic_labels(handles: &mut TrayMenuHandles, data: &TrayData) {
     let now_ms = current_time_ms();
+
+    let _ = handles.bot_notch_item.set_checked(data.bot_notch_enabled);
 
     if let Some((item, last_label)) = handles.lock_devices_item.as_mut() {
         let label = lock_devices_label(data);
@@ -677,6 +694,15 @@ fn build_tray_menu(
         MenuItem::with_id(app_handle, MENU_ACCOUNT, &account_text, true, None::<&str>)?;
     items.push(Box::new(account_item.clone()));
 
+    let bot_notch_item = CheckMenuItem::with_id(
+        app_handle,
+        MENU_BOT_NOTCH,
+        "Bot notch",
+        true,
+        data.bot_notch_enabled,
+        None::<&str>,
+    )?;
+    items.push(Box::new(bot_notch_item.clone()));
     items.push(Box::new(MenuItem::with_id(
         app_handle,
         MENU_OPEN_LOGS,
@@ -711,6 +737,7 @@ fn build_tray_menu(
             failures_item,
             sync_item,
             lock_devices_item,
+            bot_notch_item,
             notifications_item: (notifications_item, notifications_text),
             account_item: (account_item, account_text),
         },
@@ -749,6 +776,16 @@ fn handle_menu_event(app_handle: &AppHandle, id: &str) {
             let app = app_handle.clone();
             tauri::async_runtime::spawn(async move {
                 crate::device_tunnels::lock_all_devices(&app).await;
+            });
+        }
+        MENU_BOT_NOTCH => {
+            let app = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let enabled = crate::bot_notch::is_enabled(&app).await;
+                if let Err(error) = crate::bot_notch::set_enabled(&app, !enabled).await {
+                    tracing::warn!(%error, "Bot notch: the tray toggle failed");
+                    show_bot_notch(&app, enabled);
+                }
             });
         }
         MENU_OPEN_NOTIFICATIONS => {
@@ -825,6 +862,13 @@ fn open_run(app_handle: &AppHandle, run_id: String) {
             None => open_main_window(&app),
         }
     });
+}
+
+#[cfg(target_os = "macos")]
+fn main_window_shown(app_handle: &AppHandle) -> bool {
+    app_handle.get_webview_window("main").is_some_and(|main| {
+        main.is_visible().unwrap_or(false) && !main.is_minimized().unwrap_or(false)
+    })
 }
 
 pub(crate) fn open_main_window(app_handle: &AppHandle) {
@@ -905,7 +949,7 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
         };
         match close_action(keep, hosted, reachable_when_hidden(&app)) {
             CloseAction::Hide => {
-                if let Err(error) = window.hide() {
+                if let Err(error) = hide_window(&window).await {
                     tracing::warn!(%error, "Keep-alive: hiding the main window failed; closing it");
                     let _ = window.destroy();
                     return;
@@ -917,6 +961,16 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
             }
         }
     });
+}
+
+#[cfg(target_os = "macos")]
+async fn hide_window(window: &tauri::Window) -> tauri::Result<()> {
+    crate::fullscreen_hide::hide(window).await
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn hide_window(window: &tauri::Window) -> tauri::Result<()> {
+    window.hide()
 }
 
 async fn announce_keep_alive(app_handle: &AppHandle) {
@@ -944,11 +998,7 @@ async fn announce_keep_alive(app_handle: &AppHandle) {
 
 #[cfg(target_os = "macos")]
 pub fn on_run_event(app_handle: &AppHandle, event: &tauri::RunEvent) {
-    if let tauri::RunEvent::Reopen {
-        has_visible_windows: false,
-        ..
-    } = event
-    {
+    if matches!(event, tauri::RunEvent::Reopen { .. }) && !main_window_shown(app_handle) {
         open_main_window(app_handle);
     }
 }

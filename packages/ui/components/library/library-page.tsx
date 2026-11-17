@@ -15,7 +15,7 @@ import {
 	X,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
 import { useIsMobile } from "../../hooks/use-mobile";
@@ -25,6 +25,7 @@ import { asArray, isRecord } from "../../lib/response-shape";
 import type { IProfileApp } from "../../lib/schema/profile/profile";
 import { nowSystemTime } from "../../lib/time/now";
 import { useBackend } from "../../state/backend-state";
+import { useRequestBotDen } from "../../state/bot-den";
 import { CreateFlowDialog } from "../create-flow-dialog";
 import { Button } from "../ui/button";
 import { EmptyState } from "../ui/empty-state";
@@ -96,6 +97,8 @@ export function LibraryPage({
 		window.localStorage.setItem("library.sortMode", sortMode);
 	}, [sortMode]);
 	const isMobile = useIsMobile();
+	const mainRef = useRef<HTMLElement>(null);
+	useRequestBotDen(true, mainRef);
 
 	// Navigating away used to invalidate the entire query cache. The library is
 	// still mounted while the router transitions, so it immediately refetched
@@ -441,7 +444,7 @@ export function LibraryPage({
 		setSortMode((s) => (s === "recent" ? "alpha" : "recent"));
 
 	return (
-		<main className="flex flex-col w-full flex-1 min-h-0">
+		<main ref={mainRef} className="flex flex-col w-full flex-1 min-h-0">
 			<div
 				className={`pt-5 pb-3 space-y-3 ${isMobile ? "px-4" : "px-4 sm:px-8 pb-4"}`}
 			>

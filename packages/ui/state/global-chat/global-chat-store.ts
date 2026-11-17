@@ -21,6 +21,7 @@ import type { AskUserChoice, AskUserForm } from "../../lib/ask-user";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../lib/flowpilot-debug";
 import { mergeUsageStats } from "../../lib/llm/usage";
 import type { NativeActionRequest } from "../../lib/native-action-result";
+import type { IAppPointedAt } from "../../lib/pointed-at";
 import type { IInteractionRequest } from "../../lib/schema/interaction";
 import {
 	type AgentDebugReportMetadata,
@@ -214,6 +215,8 @@ export interface GlobalChatDraft {
 	files?: File[];
 	/** The chat bot it is written to, as the dock names it; unset (FlowPilot entry points) is Flux. */
 	botId?: string | null;
+	/** What the person dragged the bot onto: carried by this one message only. */
+	pointedAt?: IAppPointedAt;
 }
 
 /** Provider-neutral model configuration captured once when a global assistant turn starts. */
@@ -292,6 +295,7 @@ export interface GlobalChatQueuedMessage {
 	/** Raw browser files, held until the send actually happens (they are uploaded at send time). */
 	files?: File[];
 	nativeRequest?: NativeActionRequest;
+	pointedAt?: IAppPointedAt;
 	createdAt: number;
 }
 
@@ -328,6 +332,8 @@ export interface GlobalToolPrompt {
 	 * resolve the raw id to the app's name + icon instead of showing the opaque id.
 	 */
 	appId?: string;
+	/** Event of `appId` the action targets, so the card can show its name instead of its id. */
+	eventId?: string;
 	/** A gate that must never be answered without the user (e.g. the FlowScript deletion
 	 * re-apply). Auto mode skips these — waiving permission never extends to deletions. */
 	destructive?: boolean;

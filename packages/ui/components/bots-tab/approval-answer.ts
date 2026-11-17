@@ -54,6 +54,8 @@ export function useApprovalAnswer(
 		botId,
 		turnId: approval.turnId,
 		approvalId: approval.id,
+		conversationId: approval.conversationId,
+		card: approval.card,
 		decision,
 		items,
 	});

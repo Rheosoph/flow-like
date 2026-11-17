@@ -4,6 +4,7 @@
   "description": "Capability for all windows including dynamically created ones",
   "windows": [
     "main",
+    "bot-notch",
     "sidebar-*",
     "window-*"
   ],

@@ -322,10 +322,15 @@ pub struct DeviceWaitResponse {
 }
 
 /// `POST …/turns/{turn}/park`: the turn needs its owner's approval and sleeps until answered.
+/// Exactly one of `approval` (posted by the hub in a plain chat) and `sealed` (the owner's
+/// end-to-end encrypted chat) is set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceParkRequest {
     pub host_id: String,
-    pub approval: ApprovalRequest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<ApprovalRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sealed: Option<crate::tool_grant::SealedApprovalCard>,
     #[serde(default)]
     pub usage: Option<DeviceUsageReport>,
 }

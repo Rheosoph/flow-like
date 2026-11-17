@@ -45,6 +45,7 @@ import { toast } from "sonner";
 import type { IOAuthConsentStore } from "../../../db/oauth-db";
 import { useInvalidateInvoke, useInvoke } from "../../../hooks/use-invoke";
 import { useSearch } from "../../../hooks/use-search-index";
+import { appDenProps } from "../../../lib/bot-den/app-targets";
 import { describeEventEntry } from "../../../lib/event-entry";
 import { getEventTypeGlyph } from "../../../lib/event-sections";
 import { isDeviceEventSource } from "../../../lib/event-source";
@@ -1615,10 +1616,15 @@ function EventRow({ row, busy, handlers }: Readonly<RowActionProps>) {
 	const runsFailed = row.health?.failed ?? 0;
 
 	return (
-		// biome-ignore lint/a11y/useKeyWithClickEvents: the name button inside is the keyboard way in; the row is a pointer shortcut
 		<div
 			id={eventRowId(event.id)}
 			data-event-target={run.targeted || undefined}
+			{...appDenProps({
+				kind: "event",
+				appId: handlers.appId,
+				id: event.id,
+				label: event.name,
+			})}
 			onClick={(click) => {
 				if (isRowSurfaceClick(click)) handlers.onEdit(event);
 			}}

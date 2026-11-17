@@ -161,6 +161,9 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         }
         computer::COMPUTER_WINDOW => computer::computer_window(env, parse_args(tool, args)?).await,
         computer::COMPUTER_LAUNCH => computer::computer_launch(env, parse_args(tool, args)?).await,
+        computer::COMPUTER_READ_TEXT => {
+            computer::computer_read_text(env, parse_args(tool, args)?).await
+        }
         shell::SHELL_RUN => shell::shell_run(env, parse_args(tool, args)?).await,
         secrets::SECRET_LIST => secrets::secret_list(env, parse_args(tool, args)?).await,
         secrets::SECRET_REQUEST => secrets::secret_request(env, parse_args(tool, args)?).await,
