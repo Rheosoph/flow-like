@@ -9,6 +9,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../../../hooks";
+import { appDenProps } from "../../../../lib/bot-den/app-targets";
 import { asArray } from "../../../../lib/response-shape";
 import { useBackend, useBackendReady } from "../../../../state/backend-state";
 import { Button } from "../../../ui/button";
@@ -131,6 +132,12 @@ export function WidgetsRoot({
 								depth={0}
 								icon={<SquareDashedBottomCodeIcon />}
 								label={name}
+								{...appDenProps({
+									kind: "widget",
+									appId,
+									id: widgetId,
+									label: name,
+								})}
 								labelClassName="font-sans font-medium text-foreground"
 								onSelect={() => onOpenWidget(widgetId)}
 							/>

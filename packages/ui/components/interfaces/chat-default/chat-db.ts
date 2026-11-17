@@ -1,6 +1,7 @@
 import Dexie, { type EntityTable } from "dexie";
 import type { IChatMessageError } from "../../../lib/flowpilot/chat-error";
 import type { IChatUsageStat } from "../../../lib/llm/usage";
+import type { IPointedAt } from "../../../lib/pointed-at";
 import type { IHistoryMessage } from "../../../lib/schema/llm/history";
 import { installRuntimeHistoryGuard } from "../../../lib/service-runtime/history-guard";
 import type { IBotNoteRef } from "../../../state/backend-state/bot-state";
@@ -273,6 +274,8 @@ export interface IMessage {
 	notice?: IMessageNotice;
 	/** The bot note this reply was written with, from the bot's inbox. */
 	note?: IBotNoteRef;
+	/** The window or tab (bot notch) or the thing in Flow-Like (bot den) the person pointed the bot at. */
+	pointedAt?: IPointedAt;
 	id: string;
 	/** Original response slot, shared by every message emitted in one run. */
 	stream_root_id?: string;

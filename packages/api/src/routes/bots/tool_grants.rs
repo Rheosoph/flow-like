@@ -26,10 +26,11 @@ use axum::{
 use flow_like::flow::copilot::tool_grants::GrantStore;
 use flow_like_types::{
     bot_message::{ApprovalRequest, ItemDecision},
-    tool_grant::{ApprovalAnswer, ApprovalDecision, ToolGrantKey},
+    tool_grant::{ApprovalAnswer, ApprovalDecision, SealedApprovalCard, ToolGrantKey},
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use serde_json::Value;
+use std::{collections::BTreeMap, sync::Arc};
 use utoipa::{IntoParams, ToSchema};
 
 const MAX_TOUCHED_GRANTS: usize = 50;
@@ -112,6 +113,17 @@ pub struct BotApprovalAnswer {
     #[serde(default)]
     #[schema(value_type = Vec<Object>)]
     pub items: Vec<ItemDecision>,
+    /// End-to-end encrypted chat only: the card as your device opened it. The server can't read
+    /// the sealed card, so it settles your answer from this copy after checking that its id
+    /// follows from the turn and its calls.
+    #[serde(default)]
+    #[schema(value_type = Option<Object>)]
+    pub card: Option<ApprovalRequest>,
+    /// End-to-end encrypted chat only: your answer entry sealed to every member's keys, under the
+    /// message id `ar-` followed by the card id without its `ap-`.
+    #[serde(default)]
+    #[schema(value_type = Option<Object>)]
+    pub envelopes: Option<BTreeMap<String, Value>>,
 }
 
 #[derive(Debug, Default, Deserialize, IntoParams)]
@@ -275,7 +287,7 @@ pub async fn delete_tool_grant(
     request_body = BotApprovalAnswer,
     responses(
         (status = 200, description = "Your answer is recorded in the conversation and the turn is queued again: `once` lets this one call run, `always` also stores a grant, `deny` tells the bot you refused.", body = BotTurn),
-        (status = 400, description = "BOT_APPROVAL_ITEM_UNKNOWN: `items` names a call that is not on the card, or one call twice"),
+        (status = 400, description = "BOT_APPROVAL_ITEM_UNKNOWN: `items` names a call that is not on the card, or one call twice; a card in an end-to-end encrypted chat needs `card` and `envelopes`, and the card must match its id"),
         (status = 401, description = "Not signed in"),
         (status = 404, description = "You have no such bot or turn"),
         (status = 409, description = "BOT_TURN_NOT_WAITING: the turn is not waiting for an approval (answered already, cancelled or finished); BOT_APPROVAL_UNKNOWN: the turn waits for another card")
@@ -293,12 +305,21 @@ pub async fn answer_approval(
     Json(body): Json<BotApprovalAnswer>,
 ) -> Result<Json<BotTurn>, ApiError> {
     let sub = user.sub()?;
+    let sealed = match (body.card, body.envelopes) {
+        (Some(card), Some(envelopes)) => Some(approvals::SealedAnswer { card, envelopes }),
+        (None, None) => None,
+        _ => {
+            return Err(ApiError::bad_request(
+                "`card` and `envelopes` go together: both for an end-to-end encrypted chat, neither otherwise",
+            ));
+        }
+    };
     let answer = ApprovalAnswer {
         approval_id: body.approval_id,
         decision: body.decision,
         items: body.items,
     };
-    let turn = approvals::answer(&state, &sub, &bot_id, &turn_id, &answer).await?;
+    let turn = approvals::answer(&state, &sub, &bot_id, &turn_id, &answer, sealed.as_ref()).await?;
     audit!(
         state,
         user,
@@ -310,14 +331,42 @@ pub async fn answer_approval(
     Ok(Json(ledger::turn_json(&turn, Vec::new()).into()))
 }
 
-/// A desktop host parks the turn it holds behind an approval card.
+/// A desktop host parks the turn it holds behind an approval card: `approval` for a plain chat,
+/// `sealed` for your end-to-end encrypted chat with the bot.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct ParkTurnRequest {
     /// The host holding the turn's lease.
     pub host_id: String,
     /// The card to post; `id` is `ap-` and a hash of the turn and the call.
-    #[schema(value_type = Object)]
-    pub approval: ApprovalRequest,
+    #[serde(default)]
+    #[schema(value_type = Option<Object>)]
+    pub approval: Option<ApprovalRequest>,
+    /// The card the host sealed for your end-to-end encrypted chat with the bot:
+    /// `{ approval_id, envelopes }`. The server posts it unread.
+    #[serde(default)]
+    #[schema(value_type = Option<Object>)]
+    pub sealed: Option<SealedApprovalCard>,
+}
+
+/// What a host parks a turn behind, checked: exactly one of a plain card and a sealed one.
+pub(crate) enum ParkCard {
+    Plain(ApprovalRequest),
+    Sealed(SealedApprovalCard),
+}
+
+impl ParkCard {
+    pub(crate) fn of(
+        approval: Option<ApprovalRequest>,
+        sealed: Option<SealedApprovalCard>,
+    ) -> Result<Self, ApiError> {
+        match (approval, sealed) {
+            (Some(card), None) => Ok(Self::Plain(card)),
+            (None, Some(sealed)) => Ok(Self::Sealed(sealed)),
+            _ => Err(ApiError::bad_request(
+                "Send exactly one of `approval` (plain chat) and `sealed` (end-to-end encrypted chat)",
+            )),
+        }
+    }
 }
 
 #[utoipa::path(
@@ -331,7 +380,7 @@ pub struct ParkTurnRequest {
         (status = 400, description = "The card or host_id is malformed"),
         (status = 401, description = "Not signed in"),
         (status = 404, description = "You have no such turn"),
-        (status = 409, description = "BOT_TURN_LEASE_LOST: the turn isn't running under this host; BOT_APPROVAL_UNREACHABLE: your conversation with the bot is end-to-end encrypted")
+        (status = 409, description = "BOT_TURN_LEASE_LOST: the turn isn't running under this host; BOT_APPROVAL_UNREACHABLE: a plain card for your end-to-end encrypted chat with the bot (seal it instead), or a sealed card for a turn outside that chat")
     ),
     security(("bearer_auth" = []))
 )]
@@ -354,17 +403,23 @@ pub async fn park_turn(
         .await?
         .ok_or_else(|| ledger::Refusal::NotFound.into_api(&turn_id))?;
     owned_bot(&state.db, &sub, &turn.bot_id).await?;
-    let card = body.approval;
-    flow_like_types::bot_message::MessageBody {
-        approval: Some(card.clone()),
-        ..Default::default()
+    match ParkCard::of(body.approval, body.sealed)? {
+        ParkCard::Plain(card) => {
+            flow_like_types::bot_message::MessageBody {
+                approval: Some(card.clone()),
+                ..Default::default()
+            }
+            .check()
+            .map_err(|error| ApiError::bad_request(error.to_string()))?;
+            if card.turn_id != turn.id {
+                return Err(ApiError::bad_request("approval.turn_id must be this turn"));
+            }
+            approvals::park_held(&state, &turn, &host_id, &card).await?;
+        }
+        ParkCard::Sealed(sealed) => {
+            approvals::park_sealed(&state, &turn, &host_id, &sealed).await?;
+        }
     }
-    .check()
-    .map_err(|error| ApiError::bad_request(error.to_string()))?;
-    if card.turn_id != turn.id {
-        return Err(ApiError::bad_request("approval.turn_id must be this turn"));
-    }
-    approvals::park_held(&state, &turn, &host_id, &card).await?;
     wake(&state, [sub.clone()]).await;
     let parked = ledger::find(&state.db, &turn_id, Some(&sub))
         .await?

@@ -1,7 +1,8 @@
 import { type IBot, LOCAL_OWNER_ID } from "../../state/backend-state/bot-state";
-import type {
-	IConversation,
-	IInvitation,
+import {
+	type IConversation,
+	type IInvitation,
+	compareConversations,
 } from "../../state/backend-state/inbox-state";
 import { isApprovalCard } from "./approval-entry";
 
@@ -261,4 +262,68 @@ export function activityTimeKind(
 	if (days === 1) return "yesterday";
 	if (days < 7) return "week";
 	return "older";
+}
+
+export type TimelineBucket = "pinned" | ActivityTimeKind;
+
+const TIMELINE_ORDER: readonly TimelineBucket[] = [
+	"pinned",
+	"today",
+	"yesterday",
+	"week",
+	"older",
+];
+
+export interface TimelineGroup {
+	bucket: TimelineBucket;
+	conversations: IConversation[];
+}
+
+/**
+ * Conversations as a timeline: pinned ones first, then one group per day range of their newest
+ * activity, newest first within each. Empty groups are left out.
+ */
+export function conversationTimeline(
+	conversations: readonly IConversation[],
+	now: Date,
+): TimelineGroup[] {
+	const groups = new Map<TimelineBucket, IConversation[]>();
+	for (const conversation of [...conversations].sort(compareConversations)) {
+		const bucket: TimelineBucket = conversation.pinned_at
+			? "pinned"
+			: (activityTimeKind(Date.parse(conversation.last_activity_at), now) ??
+				"older");
+		const group = groups.get(bucket);
+		if (group) group.push(conversation);
+		else groups.set(bucket, [conversation]);
+	}
+	return TIMELINE_ORDER.flatMap((bucket) => {
+		const group = groups.get(bucket);
+		return group ? [{ bucket, conversations: group }] : [];
+	});
+}
+
+/**
+ * The timeline with its older group folded: older conversations fill the list up to `minimum`
+ * rows, and any that `keep` names (unread, open) stay. `hidden` counts what the fold leaves out.
+ */
+export function foldTimeline(
+	groups: readonly TimelineGroup[],
+	minimum: number,
+	keep: (conversation: IConversation) => boolean,
+): { groups: TimelineGroup[]; hidden: number } {
+	const newer = groups
+		.filter((group) => group.bucket !== "older")
+		.reduce((count, group) => count + group.conversations.length, 0);
+	const room = Math.max(0, minimum - newer);
+	let hidden = 0;
+	const folded = groups.map((group) => {
+		if (group.bucket !== "older") return group;
+		const shown = group.conversations.filter(
+			(conversation, index) => index < room || keep(conversation),
+		);
+		hidden = group.conversations.length - shown.length;
+		return { ...group, conversations: shown };
+	});
+	return { groups: folded, hidden };
 }

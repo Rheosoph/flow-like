@@ -27,9 +27,12 @@ const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
 	pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 };
 
+/** S3 serves objects stored without a Content-Type as `binary/octet-stream`. */
+const UNTYPED = new Set(["application/octet-stream", "binary/octet-stream"]);
+
 export function mimeTypeForName(name: string, fallback = ""): string {
 	const declared = fallback.split(";")[0].trim();
-	if (declared && declared !== "application/octet-stream") return declared;
+	if (declared && !UNTYPED.has(declared)) return declared;
 	const extension = name.split(".").pop()?.toLowerCase() ?? "";
 	return MIME_BY_EXTENSION[extension] ?? "application/octet-stream";
 }

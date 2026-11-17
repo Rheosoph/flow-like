@@ -22,6 +22,7 @@ import { toast } from "sonner";
 import { useInvoke } from "../../../hooks";
 import type { PeerUserInfo } from "../../../hooks/use-peer-users";
 import type { IGenericCommand } from "../../../lib";
+import { appDenProps } from "../../../lib/bot-den/app-targets";
 import {
 	FLOWSCRIPT_KEYWORDS,
 	type IModuleNameError,
@@ -364,6 +365,13 @@ export function BoardExplorer({
 				depth={depth}
 				icon={<FileCode2Icon />}
 				label={`${layer.name}${MODULE_FILE_EXTENSION}`}
+				{...appDenProps({
+					kind: "layer",
+					appId,
+					boardId,
+					id: layer.id,
+					label: layer.name,
+				})}
 				active={isActive}
 				onSelect={() => onSelectFile(layer.id)}
 				trailing={withPresence(
@@ -528,6 +536,12 @@ export function BoardExplorer({
 				depth={0}
 				icon={<FileCode2Icon />}
 				label={MAIN_FILE_LABEL}
+				{...appDenProps({
+					kind: "board",
+					appId,
+					id: boardId,
+					label: board?.name,
+				})}
 				active={currentFileId === MAIN_FILE_ID}
 				onSelect={() => onSelectFile(null)}
 				trailing={withPresence(
@@ -608,6 +622,12 @@ export function BoardExplorer({
 						depth={0}
 						icon={<LayoutTemplateIcon />}
 						label={page.name}
+						{...appDenProps({
+							kind: "page",
+							appId,
+							id: page.pageId,
+							label: page.name,
+						})}
 						description={page.description}
 						labelClassName="font-sans font-medium text-foreground"
 						muted

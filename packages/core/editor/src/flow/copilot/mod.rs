@@ -62,10 +62,11 @@ pub mod web_providers;
 mod work_plan;
 
 pub use assistant::{
-    AttachmentManifestEntry, GlobalDataStudioContext, GlobalOpenBoardContext, PlatformContextInput,
-    PlatformSpecialist, TURN_FILES, WebResearchCapability, build_platform_context,
-    data_studio_section, global_assistant_system_prompt, global_assistant_system_prompt_for,
-    open_board_section, run_ontology_query_chat, run_platform_chat, run_specialist_chat,
+    AttachmentManifestEntry, GlobalDataStudioContext, GlobalOpenBoardContext, GlobalPointedAt,
+    PlatformContextInput, PlatformSpecialist, PointedAtKind, TURN_FILES, WebResearchCapability,
+    build_platform_context, data_studio_section, global_assistant_system_prompt,
+    global_assistant_system_prompt_for, open_board_section, pointed_at_section,
+    run_ontology_query_chat, run_platform_chat, run_specialist_chat,
     run_specialist_chat_with_access, with_stored_files,
 };
 pub use behavioral_evaluation::*;

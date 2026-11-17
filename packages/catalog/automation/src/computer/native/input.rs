@@ -304,6 +304,7 @@ impl Keyboard for DesktopInput {
     }
     fn key(&mut self, key: Key, direction: Direction) -> InputResult<()> {
         self.ready()?;
+        let key = layout_key(key)?;
         let tracked = track_press(&mut self.keys, key, direction);
         let result = self.call(move |i| i.key(key, direction));
         untrack_release(&mut self.keys, key, direction, tracked, result.is_ok());
@@ -363,6 +364,26 @@ impl Drop for DesktopInput {
             start()
         });
     }
+}
+
+/// A character key as the keycode the current layout types it with. macOS reads the layout only on
+/// the main thread, and enigo would read it on the input worker and trap; the held-key list then
+/// holds the keycode, so a later release never reads the layout either.
+#[cfg(target_os = "macos")]
+fn layout_key(key: Key) -> InputResult<Key> {
+    match key {
+        Key::Unicode(character) if character != '\0' => {
+            super::keyboard_layout_macos::keycode_for(character)
+                .map(|keycode| Key::Other(u32::from(keycode)))
+                .map_err(enigo::InputError::Mapping)
+        }
+        other => Ok(other),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn layout_key(key: Key) -> InputResult<Key> {
+    Ok(key)
 }
 
 /// Tracks a press before it is sent, so a press whose outcome is unknown (timeout, dropped
@@ -565,6 +586,28 @@ mod tests {
         assert!(input.worker.alive.load(Ordering::Acquire));
         drop(input);
         assert_eq!(worker.join().unwrap(), 1);
+    }
+
+    #[test]
+    fn named_keys_reach_the_backend_unchanged() {
+        for key in [Key::Return, Key::Meta, Key::Shift, Key::Other(36)] {
+            assert_eq!(layout_key(key).unwrap(), key);
+        }
+    }
+
+    /// enigo reads the layout for `Key::Unicode` on the input worker, which traps on macOS. A test
+    /// thread is not the main thread and nothing drains the main queue here, so the key is refused
+    /// after the timeout instead.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_character_key_never_reaches_enigo_on_macos() {
+        match layout_key(Key::Unicode('a')) {
+            Ok(Key::Other(_)) => {}
+            Err(enigo::InputError::Mapping(message)) => {
+                assert!(message.contains("main thread"), "{message}")
+            }
+            other => panic!("a character key must not reach enigo as {other:?}"),
+        }
     }
 
     #[test]

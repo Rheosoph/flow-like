@@ -8,6 +8,7 @@ description = "The browser and computer of a bot on a device: local backends, on
 async-trait.workspace = true
 dashmap.workspace = true
 flow-like-bot-tools.workspace = true
+flow-like-device-protocol.workspace = true
 flow-like-catalog-automation = { workspace = true, features = ["execute"] }
 flow-like-types.workspace = true
 image.workspace = true

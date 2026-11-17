@@ -44,9 +44,8 @@ vi.mock("../../state/backend-state", () => {
 		useBackend: () => ({ profile: fixture.profile, userState }),
 	};
 });
-vi.mock("../../state/fab-bubble", () => ({
-	useRequestFabBubble: () => {},
-	useSuppressFabBubble: () => {},
+vi.mock("../../state/bot-den", () => ({
+	useRequestBotDen: () => {},
 }));
 
 // Keep the real page and QueryClient so focus events and failed reads exercise

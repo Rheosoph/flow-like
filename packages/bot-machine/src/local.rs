@@ -13,13 +13,13 @@ use flow_like_bot_tools::browser::{
     PageState, ScrollTo, SnapshotRequest, SnapshotView, no_owner_browser,
 };
 use flow_like_bot_tools::computer::{
-    ComputerAction, ComputerBackend, DisplaySummary, PointerButton, Screen, ScrollDirection,
-    WindowBounds, WindowOp, WindowSummary,
+    ComputerAction, ComputerBackend, DisplaySummary, PointerButton, ReadText, Screen,
+    ScrollDirection, TextMethod, TextSource, WindowBounds, WindowOp, WindowSummary,
 };
 use flow_like_bot_tools::error::{ToolError, code};
 use flow_like_catalog_automation::bot_driver::{
     BotBrowser, BotBrowserOptions, BotChallenge, BotComputer, BotInput, BotPointerButton, BotProxy,
-    BotScroll, BotScrollDirection, BotStep, BotWindowOp, MissingPermission,
+    BotScroll, BotScrollDirection, BotStep, BotTextMethod, BotWindowOp, MissingPermission,
 };
 use flow_like_catalog_automation::computer::window::WindowInfo;
 use flow_like_types::interaction_observation::InteractionObservation;
@@ -657,6 +657,13 @@ impl ComputerBackend for LocalComputer {
                 direction: toward,
                 ticks,
             } => self.inner.scroll(*x, *y, direction(*toward), *ticks).await,
+            ComputerAction::Paste { text, replace_all } => {
+                self.inner.paste(text, *replace_all).await
+            }
+            ComputerAction::SelectAll { at } => self.inner.select_all(*at).await,
+            ComputerAction::Drag { from, to, button } => {
+                self.inner.drag(*from, *to, pointer(*button)).await
+            }
         };
         done.map_err(|error| match typed(error) {
             error if error.downcast_ref::<ToolError>().is_some() => error,
@@ -700,6 +707,22 @@ impl ComputerBackend for LocalComputer {
     async fn launch(&self, program: &str, args: &[String]) -> Result<String> {
         self.touch();
         self.inner.launch(program, args).await
+    }
+
+    async fn read_text(&self, source: TextSource, at: Option<(f64, f64)>) -> Result<ReadText> {
+        self.touch();
+        let read = self
+            .inner
+            .read_text(source == TextSource::Selection, at)
+            .await
+            .map_err(typed)?;
+        Ok(ReadText {
+            text: read.text,
+            method: match read.method {
+                BotTextMethod::Accessibility => TextMethod::Accessibility,
+                BotTextMethod::Clipboard => TextMethod::Clipboard,
+            },
+        })
     }
 }
 

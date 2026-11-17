@@ -47,6 +47,7 @@ import {
 	runNativeAction,
 } from "../../lib/native-action-result";
 import { isTauri } from "../../lib/platform";
+import type { IAppPointedAt } from "../../lib/pointed-at";
 import type { IEventPayloadChat } from "../../lib/schema/flow/event-payload-chat";
 import { publicNameFromClaims } from "../../lib/user-display";
 import { captureWidgetSnapshots } from "../../lib/widget-snapshot";
@@ -747,6 +748,7 @@ export function GlobalChatBody({
 			previouslyAcceptedReaction = false,
 			preparation?: PreparingChatReply,
 			voice?: VoiceSend,
+			pointedAt?: IAppPointedAt,
 		): Promise<IMessage | undefined> => {
 			let reactionAccepted = previouslyAcceptedReaction;
 			const acceptReaction = async (conversationId: string) => {
@@ -799,6 +801,7 @@ export function GlobalChatBody({
 					nativeRequest,
 					interaction,
 					reactionAccepted,
+					pointedAt,
 				});
 			};
 			if (atCapacity()) {
@@ -897,6 +900,7 @@ export function GlobalChatBody({
 			if (voice) userMessage.id = voice.messageId;
 			userMessage.files = attachments;
 			userMessage.interaction = interaction;
+			if (pointedAt) userMessage.pointedAt = pointedAt;
 			if (interaction?.type === "reaction") await acceptReaction(sessionId);
 			userMessage.thinking = turnThinking(
 				isAgentBackendProvider(normalizeAIProvider(agentSelection.provider)),
@@ -1135,6 +1139,7 @@ export function GlobalChatBody({
 										userContext: userContext ?? undefined,
 										boardContext,
 										dataStudioContext,
+										pointedAt,
 										runId: responseMessage.id,
 										autoApprove: selectAutoMode(
 											useGlobalChatStore.getState(),
@@ -1175,6 +1180,7 @@ export function GlobalChatBody({
 										user_context: userContext ?? undefined,
 										board_context: boardContext,
 										data_studio_context: dataStudioContext,
+										pointed_at: pointedAt,
 										// Signed tmp-upload URLs (from fileToAttachment) for image vision only; the
 										// server fetches them.
 										attachment_urls:
@@ -1230,6 +1236,7 @@ export function GlobalChatBody({
 			nativeRequest?: NativeActionRequest,
 			interaction?: IChatMessageInteraction,
 			reactionAccepted = false,
+			pointedAt?: IAppPointedAt,
 		) => {
 			if (!content.trim() && !files?.length) return;
 			const state = useGlobalChatStore.getState();
@@ -1244,6 +1251,8 @@ export function GlobalChatBody({
 					interaction,
 					reactionAccepted,
 					preparation,
+					undefined,
+					pointedAt,
 				);
 			} finally {
 				preparation?.finish();
@@ -1287,6 +1296,7 @@ export function GlobalChatBody({
 			reactionAccepted?: boolean;
 			nativeRequest?: NativeActionRequest;
 			nativeScope?: string;
+			pointedAt?: IAppPointedAt;
 		}) => {
 			const request =
 				draft.nativeRequest ??
@@ -1300,6 +1310,7 @@ export function GlobalChatBody({
 					undefined,
 					draft.interaction,
 					draft.reactionAccepted,
+					draft.pointedAt,
 				);
 				return;
 			}
@@ -1312,6 +1323,7 @@ export function GlobalChatBody({
 						request,
 						draft.interaction,
 						draft.reactionAccepted,
+						draft.pointedAt,
 					);
 					return message ? nativeChatOutcome(message) : undefined;
 				},
@@ -1452,6 +1464,7 @@ export function GlobalChatBody({
 				nativeRequest: next.nativeRequest,
 				interaction: next.interaction,
 				reactionAccepted: next.reactionAccepted,
+				pointedAt: next.pointedAt,
 			});
 		else {
 			void sendRef.current(
@@ -1460,6 +1473,7 @@ export function GlobalChatBody({
 				undefined,
 				next.interaction,
 				next.reactionAccepted,
+				next.pointedAt,
 			);
 		}
 	}, []);

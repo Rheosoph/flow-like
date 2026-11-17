@@ -17,9 +17,21 @@ use flow_like_types::{
         body_target, is_tombstone, net_reactions,
     },
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::OnceLock};
 
 pub const HISTORY_ENTRIES: usize = 32;
+
+static THIS_HOST: OnceLock<String> = OnceLock::new();
+
+/// Names the bot host this process runs, once: a message pointed at a window on another computer
+/// then reads as out of reach. A process that never registers reads every window as elsewhere.
+pub fn register_host(host_id: &str) {
+    let _ = THIS_HOST.set(host_id.to_owned());
+}
+
+fn this_host() -> Option<&'static str> {
+    THIS_HOST.get().map(String::as_str)
+}
 const MAX_PROMPT_CHARS: usize = 20_000;
 const MAX_HISTORY_MESSAGE_CHARS: usize = 8_000;
 
@@ -79,11 +91,17 @@ fn addressed_to(lines: &[Line], bot_id: &str) -> bool {
     })
 }
 
-/// The message's text with a line for each UI block and file it carries, and how many characters
-/// at its end those lines take.
+/// The message's text with a line for the window it points at and for each UI block and file it
+/// carries, and how many characters at its end those lines take.
 fn render(body: &MessageBody) -> (String, usize) {
     let mut text = body.text.clone();
     let written = text.chars().count();
+    if let Some(pointed_at) = &body.pointed_at {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&pointed_at.note(this_host()));
+    }
     for part in &body.parts {
         let note = match part {
             MessagePart::Ui(ui) => ui
@@ -735,7 +753,9 @@ mod tests {
                 "other-bot",
                 &[card.clone()],
                 card.created_at,
-                false, false)
+                false,
+                false
+            )
             .is_none()
         );
         let answer = entry(
@@ -750,7 +770,8 @@ mod tests {
                 "bot",
                 &[answer.clone()],
                 answer.created_at,
-                false, false
+                false,
+                false
             )
             .is_some()
         );
@@ -760,7 +781,8 @@ mod tests {
                 "other-bot",
                 &[answer.clone()],
                 answer.created_at,
-                false, false
+                false,
+                false
             )
             .is_none()
         );
@@ -776,7 +798,8 @@ mod tests {
                 "other-bot",
                 &[reply.clone()],
                 reply.created_at,
-                false, false
+                false,
+                false
             )
             .is_none()
         );
@@ -808,8 +831,67 @@ mod tests {
         .unwrap();
         assert!(turn.prompt.contains(&note), "{}", turn.prompt);
 
-        let history = render_history("other", ConversationKind::Group, &entries, &names, "owner", 8);
+        let history = render_history(
+            "other",
+            ConversationKind::Group,
+            &entries,
+            &names,
+            "owner",
+            8,
+        );
         assert!(history[0].content.contains(&note), "{}", history[0].content);
+    }
+
+    #[test]
+    fn a_message_pointed_at_a_window_names_it_in_the_prompt_and_the_history() {
+        register_host("desktop:here");
+        let target = |host: &str| {
+            json!({
+                "kind": "window",
+                "host_id": host,
+                "window_id": "4711",
+                "app": "Code",
+                "title": "main.rs"
+            })
+        };
+        let entries = vec![
+            entry(
+                "earlier",
+                "owner",
+                InboxEntryKind::Message,
+                json!({ "text": "tidy this", "pointed_at": target("desktop:elsewhere") }),
+            ),
+            entry(
+                "answer",
+                "bot",
+                InboxEntryKind::Message,
+                json!({ "text": "Done." }),
+            ),
+            entry(
+                "ask",
+                "owner",
+                InboxEntryKind::Message,
+                json!({ "text": "fix this", "pointed_at": target("desktop:here") }),
+            ),
+        ];
+        let turn = transcript(
+            "bot",
+            ConversationKind::Direct,
+            "ask",
+            &entries,
+            &HashMap::new(),
+            "owner",
+        )
+        .unwrap();
+        assert_eq!(
+            turn.prompt,
+            "fix this\n[Pointed at the window \"main.rs\" of Code on this computer, window id 4711: the message is about that window]"
+        );
+        assert!(
+            turn.history[0].content.contains("on another computer"),
+            "{}",
+            turn.history[0].content
+        );
     }
 
     #[test]
@@ -830,12 +912,27 @@ mod tests {
                 InboxEntryKind::Message,
                 json!({ "text": "x".repeat(9_000), "parts": parts }),
             ),
-            entry("later", "owner", InboxEntryKind::Message, json!({ "text": "thanks" })),
+            entry(
+                "later",
+                "owner",
+                InboxEntryKind::Message,
+                json!({ "text": "thanks" }),
+            ),
         ];
-        let history = render_history("reader", ConversationKind::Group, &entries, &HashMap::new(), "owner", 8);
+        let history = render_history(
+            "reader",
+            ConversationKind::Group,
+            &entries,
+            &HashMap::new(),
+            "owner",
+            8,
+        );
         let content = &history[0].content;
         for n in 1..=6 {
-            assert!(content.contains(&format!("[file: {n}.pdf (link: {})]", link(n))), "link {n} was cut");
+            assert!(
+                content.contains(&format!("[file: {n}.pdf (link: {})]", link(n))),
+                "link {n} was cut"
+            );
         }
         assert!(content.starts_with(&room_message("maker", false, "xxx")));
     }

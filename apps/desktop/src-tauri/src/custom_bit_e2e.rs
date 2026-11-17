@@ -422,6 +422,7 @@ pub async fn custom_bit_e2e_run_bot(
             None,
             None,
             None,
+            None,
             Some(run_id.clone()),
             channel,
             NativeRunOptions {

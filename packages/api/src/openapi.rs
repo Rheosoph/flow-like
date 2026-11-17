@@ -717,6 +717,7 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         // Realtime board routes
         crate::routes::realtime::poll,
         crate::routes::realtime::connect,
+        crate::routes::realtime::bot_screens::bot_screens,
         crate::routes::app::board::realtime::jwks,
         crate::routes::app::board::realtime::access,
         // Invoke presign
@@ -1432,6 +1433,8 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         // Realtime
         crate::routes::app::board::realtime::RealtimeParams,
         crate::realtime_ice::RealtimeIceServer,
+        crate::routes::realtime::bot_screens::BotScreenAccess,
+        crate::routes::realtime::bot_screens::BotScreenKey,
         // Data
         crate::routes::app::data::upload_files::UploadFilesPayload,
         crate::routes::app::data::download_files::DownloadFilesPayload,

@@ -185,6 +185,7 @@ const ROWS: Row[] = [
 		null,
 	],
 	["computer_act", "computer_act", {}, undefined, ["computer:session"]],
+	["computer_window", "computer_window", {}, undefined, ["computer:session"]],
 	[
 		"computer_screenshot",
 		"computer_screenshot",

@@ -490,6 +490,38 @@ describe("sending to a bot that answers on its own host", () => {
 			},
 		]);
 	});
+
+	test("keeps a window target but never sends a Flow-Like target to the inbox", async () => {
+		const window = {
+			kind: "window" as const,
+			host_id: "desktop:h1",
+			window_id: "42",
+			app: "Code",
+			title: "main.rs",
+		};
+		const kept = fakeInbox(2);
+		await sendToHost(kept.inbox, target, {
+			id: "msg_w",
+			text: "Look",
+			pointedAt: window,
+		});
+		expect(kept.sent[0].envelope).toEqual({
+			v: 1,
+			enc: "none",
+			body: { text: "Look", pointed_at: window },
+		});
+		const dropped = fakeInbox(2);
+		await sendToHost(dropped.inbox, target, {
+			id: "msg_n",
+			text: "Look",
+			pointedAt: { kind: "node", app_id: "a", ids: ["n1"], label: "HTTP" },
+		});
+		expect(dropped.sent[0].envelope).toEqual({
+			v: 1,
+			enc: "none",
+			body: { text: "Look" },
+		});
+	});
 });
 
 describe("sending from the interactive chat", () => {

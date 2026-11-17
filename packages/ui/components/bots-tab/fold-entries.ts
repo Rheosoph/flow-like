@@ -9,6 +9,7 @@ import type {
 	IInboxApprovalInvite,
 	IInboxApprovalSecret,
 	IInboxAttachmentPart,
+	IInboxDesktopTarget,
 	IInboxEntry,
 	IInboxFileHandle,
 	IInboxUiPart,
@@ -18,6 +19,7 @@ import {
 	approvalOf,
 	approvalResponseOf,
 	plainBody,
+	rawApprovalOf,
 } from "./approval-entry";
 import { noteRefOf } from "./bot-note-entry";
 import { isSelfPrincipal } from "./crew-model";
@@ -56,6 +58,9 @@ export interface ConversationApprovalItem {
 /** A bot's request to run a call, with the owner's answer once there is one. */
 export interface ConversationApproval {
 	id: string;
+	conversationId: string;
+	/** The card as the entry carries it. */
+	card: IInboxApproval;
 	turnId: string;
 	tool: string;
 	summary: string;
@@ -81,10 +86,14 @@ export interface ConversationApproval {
 
 function conversationApproval(
 	approval: IInboxApproval,
+	card: IInboxApproval,
+	conversationId: string,
 	postedAt: number,
 ): ConversationApproval {
 	return {
 		id: approval.id,
+		conversationId,
+		card,
 		turnId: approval.turn_id,
 		tool: approval.tool,
 		summary: approval.summary,
@@ -144,6 +153,35 @@ function errorCodeOf(entry: IInboxEntry): string | undefined {
 		: undefined;
 }
 
+const optionalText = (value: unknown): string | undefined =>
+	typeof value === "string" && value.length > 0 ? value : undefined;
+
+/** The window or browser tab a message was pointed at, when its body names a readable one. */
+export function pointedAtOf(
+	entry: IInboxEntry,
+): IInboxDesktopTarget | undefined {
+	const target = plainBody(entry)?.pointed_at;
+	if (!isRecord(target)) return undefined;
+	const { kind, host_id, window_id, app } = target;
+	if (
+		(kind !== "window" && kind !== "tab") ||
+		typeof host_id !== "string" ||
+		typeof window_id !== "string" ||
+		typeof app !== "string"
+	)
+		return undefined;
+	const title = optionalText(target.title);
+	const url = kind === "tab" ? optionalText(target.url) : undefined;
+	return {
+		kind,
+		host_id,
+		window_id,
+		app,
+		...(title ? { title } : {}),
+		...(url ? { url } : {}),
+	};
+}
+
 function stringsOf(value: unknown): string[] {
 	return Array.isArray(value)
 		? value.filter((item): item is string => typeof item === "string")
@@ -182,6 +220,8 @@ export interface ConversationMessage {
 	userContextDerived?: boolean;
 	userContextDerivedFrom?: string;
 	note?: IBotNoteRef;
+	/** The window or browser tab the sender pointed the bot at. */
+	pointedAt?: IInboxDesktopTarget;
 	/** Recipients of the email this message was sent as. */
 	mailedTo?: string[];
 	edited: boolean;
@@ -572,6 +612,7 @@ export function foldInboxEntries(
 			const contextRequest = userContextRequestOf(entry);
 			const mailedTo = mailedToOf(entry);
 			const note = noteRefOf(entry);
+			const pointedAt = pointedAtOf(entry);
 			const ui = uiPartsOf(entry);
 			const rawUsage = plainBody(entry)?.usage_stats;
 			const usageStats = Array.isArray(rawUsage)
@@ -604,9 +645,17 @@ export function foldInboxEntries(
 				...(ui.length > 0 ? { ui } : {}),
 				...(replyTo ? { replyTo } : {}),
 				...(note ? { note } : {}),
+				...(pointedAt ? { pointedAt } : {}),
 				...(mailedTo.length > 0 ? { mailedTo } : {}),
 				...(approval
-					? { approval: conversationApproval(approval, entryTime(entry)) }
+					? {
+							approval: conversationApproval(
+								approval,
+								rawApprovalOf(entry) ?? approval,
+								entry.conversation_id,
+								entryTime(entry),
+							),
+						}
 					: {}),
 				edited: false,
 				reactions: [],

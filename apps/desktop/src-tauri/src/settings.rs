@@ -68,6 +68,23 @@ impl Default for BackgroundSettings {
     }
 }
 
+/// The bot notch overlay of this device: whether it is shown and which bots the person hid in it.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BotNotchSettings {
+    pub enabled: bool,
+    pub hidden_bots: Vec<String>,
+}
+
+impl Default for BotNotchSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            hidden_bots: Vec::new(),
+        }
+    }
+}
+
 // Mobile-only centralized, sandbox-safe roots (iOS + Android).
 #[cfg(target_os = "ios")]
 fn app_data_root() -> PathBuf {
@@ -274,6 +291,8 @@ pub struct Settings {
     pub telemetry: TelemetrySettings,
     #[serde(default)]
     pub background: BackgroundSettings,
+    #[serde(default)]
+    pub bot_notch: BotNotchSettings,
     pub profiles: HashMap<String, UserProfile>,
     /// User-wide library of custom model bits. Definitions (and their
     /// credentials) are configured once here; each profile activates the ones
@@ -352,6 +371,7 @@ impl Settings {
             log_retention: LogRetentionSettings::default(),
             telemetry: TelemetrySettings::default(),
             background: BackgroundSettings::default(),
+            bot_notch: BotNotchSettings::default(),
             profiles: HashMap::new(),
             custom_bits: Vec::new(),
             created: SystemTime::now(),
@@ -385,6 +405,7 @@ impl Settings {
                 anon_id: None,
             },
             background: BackgroundSettings::default(),
+            bot_notch: BotNotchSettings::default(),
             profiles: HashMap::from([(profile.hub_profile.id.clone(), profile)]),
             custom_bits: Vec::new(),
             created: SystemTime::now(),
@@ -649,6 +670,7 @@ mod profile_selection_tests {
             log_retention: LogRetentionSettings::default(),
             telemetry: TelemetrySettings::default(),
             background: BackgroundSettings::default(),
+            bot_notch: BotNotchSettings::default(),
             profiles: HashMap::from([
                 ("foreground".into(), profile("foreground")),
                 ("background".into(), profile("background")),

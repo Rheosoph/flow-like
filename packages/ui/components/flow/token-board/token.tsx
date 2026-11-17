@@ -21,6 +21,7 @@ interface ITokenShellProps {
 	title: string;
 	tabIndex: number;
 	itemId: string;
+	denProps?: Record<string, string>;
 	onOpen: () => void;
 	children: React.ReactNode;
 	draggable: {
@@ -41,6 +42,7 @@ function TokenShell({
 	title,
 	tabIndex,
 	itemId,
+	denProps,
 	onOpen,
 	children,
 	draggable,
@@ -55,6 +57,7 @@ function TokenShell({
 				draggable.setNodeRef(element);
 			}}
 			data-token-id={itemId}
+			{...denProps}
 			className={cn(
 				"fl-tok",
 				className,
@@ -130,6 +133,7 @@ export interface IVariableTokenProps {
 	tint?: boolean;
 	selected?: boolean;
 	focused?: boolean;
+	denProps?: Record<string, string>;
 	onOpen: () => void;
 }
 
@@ -139,6 +143,7 @@ export function VariableToken({
 	tint = true,
 	selected,
 	focused,
+	denProps,
 	onOpen,
 }: Readonly<IVariableTokenProps>) {
 	const { t } = useTranslation("flow");
@@ -215,6 +220,7 @@ export function VariableToken({
 			})}
 			tabIndex={focused ? 0 : -1}
 			itemId={variable.id}
+			denProps={denProps}
 			onOpen={onOpen}
 			draggable={{ setNodeRef, listeners, attributes, isDragging }}
 		>
@@ -242,6 +248,7 @@ export interface IFunctionTokenProps {
 	tint?: boolean;
 	selected?: boolean;
 	focused?: boolean;
+	denProps?: Record<string, string>;
 	onOpen: () => void;
 }
 
@@ -253,6 +260,7 @@ export function FunctionToken({
 	tint = true,
 	selected,
 	focused,
+	denProps,
 	onOpen,
 }: Readonly<IFunctionTokenProps>) {
 	const { t } = useTranslation("flow");
@@ -294,6 +302,7 @@ export function FunctionToken({
 			)}
 			tabIndex={focused ? 0 : -1}
 			itemId={layer.id}
+			denProps={denProps}
 			onOpen={onOpen}
 			draggable={{ setNodeRef, listeners, attributes, isDragging }}
 		>

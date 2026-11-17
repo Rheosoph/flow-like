@@ -1517,6 +1517,7 @@
 	"filename": "ファイル名",
 	"fileName": "ファイル名",
 	"fileNamespanClassnametextdestructiveSpan": "ファイル名<1> *</1>",
+	"fileReadyToSave": "",
 	"files": "ファイル",
 	"fileSizeBytesspanClassnametextdestructiveSpan": "ファイルサイズ(バイト)<1> *</1>",
 	"filesStayOnDisk": "",

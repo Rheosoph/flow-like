@@ -78,6 +78,8 @@ import {
 
 const FOCUS_REFRESH_MS = 60_000;
 const PERIODIC_REFRESH_MS = 10 * 60_000;
+const QUERY_REFRESH_DELAY_MS = 1000;
+const QUERY_REFRESH_GAP_MS = 10_000;
 
 export function NativeIntegrationProvider() {
 	const queryClient = useQueryClient();
@@ -810,19 +812,27 @@ export function NativeIntegrationProvider() {
 			})
 			.catch(() => {});
 		let botRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+		// Bot and inbox queries settle every few seconds while a chat is open. A full snapshot reads
+		// the whole library, so new data refreshes it at most every QUERY_REFRESH_GAP_MS, with the
+		// last change still landing after the gap.
 		const unsubscribeQueries = queryClient
 			.getQueryCache()
 			.subscribe((event) => {
 				if (
 					event.type !== "updated" ||
+					event.action.type !== "success" ||
 					!["bots", "inbox"].includes(String(event.query.queryKey[0]))
 				)
 					return;
 				if (botRefreshTimer) return;
+				const wait = Math.max(
+					QUERY_REFRESH_DELAY_MS,
+					lastRefreshAt + QUERY_REFRESH_GAP_MS - Date.now(),
+				);
 				botRefreshTimer = setTimeout(() => {
 					botRefreshTimer = undefined;
 					void refresh();
-				}, 1000);
+				}, wait);
 			});
 		window.addEventListener("native-bot-input", onBotInput);
 		window.addEventListener("flow-like-native-action", onFocus);

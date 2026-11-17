@@ -82,10 +82,7 @@ pub(crate) fn trigger_for(task: &bot_task::Model) -> TriggerBody {
         text: truncated(&task.instruction, TRIGGER_TEXT_MAX_CHARS),
         payload: None,
         payload_handle: None,
-        bot_id: task
-            .conversation_id
-            .as_ref()
-            .map(|_| task.bot_id.clone()),
+        bot_id: task.conversation_id.as_ref().map(|_| task.bot_id.clone()),
     }
 }
 
@@ -168,7 +165,9 @@ async fn place_of<C: ConnectionTrait>(
     };
     let present = conversation_member::Entity::find()
         .filter(conversation_member::Column::ConversationId.eq(conversation_id))
-        .filter(conversation_member::Column::PrincipalId.is_in([task.bot_id.as_str(), sender_of(task)]))
+        .filter(
+            conversation_member::Column::PrincipalId.is_in([task.bot_id.as_str(), sender_of(task)]),
+        )
         .filter(active_member())
         .count(db)
         .await?;
@@ -256,7 +255,8 @@ pub(crate) async fn fire(state: &AppState, task: &bot_task::Model) -> Result<boo
             Box::pin(async move { fire_in(txn, &task, now).await })
         })
         .await?;
-    let ends = TaskKind::parse(&task.kind) == Some(TaskKind::Once) || matches!(fired, Fired::Paused);
+    let ends =
+        TaskKind::parse(&task.kind) == Some(TaskKind::Once) || matches!(fired, Fired::Paused);
     if !matches!(fired, Fired::Lost) && ends {
         super::task_schedules::remove(state, &task.id).await;
     }

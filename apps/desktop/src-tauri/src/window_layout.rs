@@ -109,7 +109,9 @@ pub(crate) fn register<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                         | StateFlags::MAXIMIZED
                         | StateFlags::FULLSCREEN,
                 )
-                .with_filter(move |_| tracking_enabled.load(Ordering::Acquire))
+                .with_filter(move |label| {
+                    label != crate::bot_notch::WINDOW_LABEL && tracking_enabled.load(Ordering::Acquire)
+                })
                 .build(),
         )
 }

@@ -3797,3 +3797,57 @@ async fn tool_descriptions_in_module_functions_keep_agent_references() {
     assert_reference(&board);
     assert_round_trips(&board);
 }
+
+/// The hub and redo replay an apply's command batch verbatim, in ONE `execute_commands`. The new
+/// `variable_set` is typed by `on_update` only at the end of that batch, while the `struct_get`
+/// feeding it is still `Generic`; that wire must survive the retype.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_replayed_apply_keeps_a_member_read_wired_into_a_new_variable_write() {
+    let mut board = board_from(
+        r#"let quizLanguage: string = "de"
+
+eventsSimple run() {
+    log::info({ message: "loaded", toast: false })
+}
+"#,
+    )
+    .await;
+    let original = board.clone();
+    let text = anchored(&board);
+    let log_line = body_line(&text, "loaded");
+    let edited = text.replacen(
+        &log_line,
+        &format!("    quizLanguage = struct::make().language\n{log_line}"),
+        1,
+    );
+    assert_ne!(text, edited, "{text}");
+    let applied = apply_edit(&mut board, &edited).await;
+
+    let wired = |board: &Board| {
+        let nodes = all_nodes(board);
+        let reads = nodes
+            .iter()
+            .filter(|node| node.name == "struct_get")
+            .filter_map(|node| node.get_pin_by_name("value"))
+            .map(|pin| pin.id.clone())
+            .collect::<Vec<_>>();
+        nodes
+            .iter()
+            .filter(|node| node.name == "variable_set")
+            .filter_map(|node| node.get_pin_by_name("value_in"))
+            .any(|pin| pin.depends_on.iter().any(|source| reads.contains(source)))
+    };
+    assert!(wired(&board), "the apply wires the member read");
+
+    let mut replay = original.clone();
+    replay
+        .execute_commands(applied.commands.clone(), catalog_state().await)
+        .await
+        .expect("the applied batch replays");
+    assert!(wired(&replay), "the replay must keep the member read wired");
+    assert_eq!(
+        flow_like_types::json::to_value(&replay.nodes).unwrap(),
+        flow_like_types::json::to_value(&board.nodes).unwrap(),
+        "replay must reproduce the edited graph"
+    );
+}

@@ -2,13 +2,58 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { Loader2Icon, XIcon } from "lucide-react";
-import { useBotToolGrants, useRevokeBotToolGrant } from "../../hooks/use-bots";
+import { useId } from "react";
+import {
+	botAutoApproves,
+	useBotToolGrants,
+	useRevokeBotToolGrant,
+	useSetBotAutoApprove,
+} from "../../hooks/use-bots";
+import { isAutoApproveGrant } from "../../lib/tool-grant-scopes";
 import type { IBot, IBotToolGrant } from "../../state/backend-state/bot-state";
 import { Button } from "../ui/button";
+import { Switch } from "../ui/switch";
 import { useGrantLabel } from "./grant-labels";
 
 const isStanding = (grant: IBotToolGrant) =>
-	!grant.scope.startsWith("once:") && !grant.scope.startsWith("deny:");
+	!grant.scope.startsWith("once:") &&
+	!grant.scope.startsWith("deny:") &&
+	!isAutoApproveGrant(grant);
+
+/** The bot's auto approval: everything a grant could allow, without asking. */
+function AutoApproveSwitch({
+	bot,
+	name,
+	enabled,
+}: Readonly<{ bot: IBot; name: string; enabled: boolean }>) {
+	const { t } = useTranslation("bots");
+	const id = useId();
+	const { mutate, isPending } = useSetBotAutoApprove();
+	return (
+		<div className="flex items-start justify-between gap-3 rounded-lg bg-muted/60 px-3 py-2.5">
+			<div className="flex min-w-0 flex-col gap-0.5">
+				<label htmlFor={id} className="text-sm font-medium">
+					{t("panel.grants.auto.title", "Approve automatically")}
+				</label>
+				<p className="text-xs text-muted-foreground">
+					{t(
+						"panel.grants.auto.description",
+						"{{name}} acts without asking you first. Deleting data, changing settings and sending data to a site after reading the web still ask.",
+						{ name },
+					)}
+				</p>
+			</div>
+			<Switch
+				id={id}
+				checked={enabled}
+				disabled={isPending}
+				onCheckedChange={(checked) =>
+					mutate({ botId: bot.id, enabled: checked })
+				}
+			/>
+		</div>
+	);
+}
 
 /** What the bot may do without asking you, from your "Always allow" answers; each can be taken back. */
 export function BotToolGrants({
@@ -28,6 +73,11 @@ export function BotToolGrants({
 			<h3 className="text-xs text-muted-foreground">
 				{t("panel.grants.title", "Allowed actions")}
 			</h3>
+			<AutoApproveSwitch
+				bot={bot}
+				name={name}
+				enabled={botAutoApproves(grants.data)}
+			/>
 			{standing.length === 0 ? (
 				<p className="text-sm text-muted-foreground">
 					{t(

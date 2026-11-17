@@ -8,6 +8,7 @@ use flow_like_types::{
     bot::{BotCapability, BotLocation},
     bot_message::ApprovalRequest,
     bot_turn::BotTurn,
+    tool_grant::SealedApprovalCard,
 };
 use reqwest::Method;
 use serde::Deserialize;
@@ -519,6 +520,22 @@ impl TurnHub for ProfileHub {
         .map(drop)
     }
 
+    async fn park_sealed(
+        &self,
+        turn_id: &str,
+        host_id: &str,
+        sealed: &SealedApprovalCard,
+    ) -> Result<(), HubFailure> {
+        self.call(
+            Method::POST,
+            &format!("bots/turns/{turn_id}/park"),
+            &[],
+            Some(json!({ "host_id": host_id, "sealed": sealed })),
+        )
+        .await
+        .map(drop)
+    }
+
     async fn read(
         &self,
         path: &str,
@@ -572,5 +589,21 @@ impl ProfileHub {
         body: Option<Value>,
     ) -> Result<Value, HubFailure> {
         self.call(method, path, &[], body).await
+    }
+}
+
+#[cfg(desktop)]
+impl ProfileHub {
+    /// The topic, keys and signaling servers this account's bot screens use.
+    pub(crate) async fn bot_screen_access(&self) -> Result<Value, HubFailure> {
+        self.call(Method::POST, "realtime/bot-screens", &[], None)
+            .await
+    }
+
+    /// The account signed in to the current profile, read from the local session without a call.
+    pub(crate) async fn signed_in_subject(&self) -> Result<Option<String>, String> {
+        identity(&self.app, None)
+            .await
+            .map(|identity| identity.subject)
     }
 }

@@ -270,6 +270,7 @@ impl TurnRunner for NativeRunner {
                 None,
                 None,
                 None,
+                None,
                 Some(job.run_id.clone()),
                 Channel::<String>::new(|_| Ok(())),
                 options,

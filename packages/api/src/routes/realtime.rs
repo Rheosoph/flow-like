@@ -2,6 +2,8 @@
 //! Notification revisions fingerprint the account's inbox; run cursors acknowledge only
 //! events actually returned to this consumer.
 
+pub mod bot_screens;
+
 use crate::{
     entity::{
         bot_turn, conversation_member, inbox_entry, invitation, notification,
@@ -105,6 +107,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/poll", post(poll))
         .route("/connect", post(connect))
+        .route("/bot-screens", post(bot_screens::bot_screens))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
 }
 

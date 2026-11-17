@@ -462,6 +462,7 @@ export function FlowsOverviewPage({
 										{bandRows.map((row) => (
 											<FlowScoreCard
 												key={row.board.id}
+												appId={appId}
 												row={row}
 												expanded={expandedId === row.board.id}
 												highlighted={highlightedId === row.board.id}

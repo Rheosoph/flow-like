@@ -22,8 +22,8 @@ use crate::secret_text::{Scrubber, fill_secrets};
 use crate::spec::{Approval, ToolSpec, schema_of};
 
 pub use backend::{
-    ComputerAction, ComputerBackend, DisplaySummary, PointerButton, Screen, ScrollDirection,
-    WindowBounds, WindowOp, WindowSummary, not_supported,
+    ComputerAction, ComputerBackend, DisplaySummary, PointerButton, ReadText, Screen,
+    ScrollDirection, TextMethod, TextSource, WindowBounds, WindowOp, WindowSummary, not_supported,
 };
 
 pub const COMPUTER_SCREENSHOT: &str = "computer_screenshot";
@@ -32,11 +32,15 @@ pub const COMPUTER_WAIT: &str = "computer_wait";
 pub const COMPUTER_WINDOWS: &str = "computer_windows";
 pub const COMPUTER_WINDOW: &str = "computer_window";
 pub const COMPUTER_LAUNCH: &str = "computer_launch";
+pub const COMPUTER_READ_TEXT: &str = "computer_read_text";
 
 const MAX_WAIT_MS: u64 = 10_000;
 const MAX_TICKS: u32 = 30;
 const DEFAULT_TICKS: u32 = 5;
 const MAX_TYPED_CHARS: usize = 4_000;
+const MAX_PASTED_CHARS: usize = 100_000;
+const DEFAULT_READ_CHARS: usize = 20_000;
+const MAX_READ_CHARS: usize = 100_000;
 const MAX_LAUNCH_ARGS: usize = 32;
 const MAX_LAUNCH_CHARS: usize = 2_000;
 
@@ -92,7 +96,16 @@ pub struct ComputerLaunchArgs {
 pub enum ComputerActionKind {
     Click,
     DoubleClick,
+    /// Selects a whole line or paragraph of text.
+    TripleClick,
     Type,
+    /// Inserts 'text' at once through the clipboard: use it for long text.
+    Paste,
+    /// Selects everything in the focused field, after clicking at 'x'/'y' when given.
+    SelectAll,
+    /// Presses at 'x'/'y', moves to 'to_x'/'to_y' and releases: selects a range of text or moves
+    /// something.
+    Drag,
     Key,
     Scroll,
     Move,
@@ -101,23 +114,49 @@ pub enum ComputerActionKind {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ComputerActArgs {
     pub action: ComputerActionKind,
-    /// Horizontal pixel of the latest screenshot (click, double_click, move, scroll).
+    /// Horizontal pixel of the latest screenshot (click, double_click, triple_click, move,
+    /// scroll, the start of a drag; optional for select_all).
     #[serde(default)]
     pub x: Option<f64>,
     /// Vertical pixel of the latest screenshot.
     #[serde(default)]
     pub y: Option<f64>,
-    /// `type`: the text to type, `{{secret:NAME}}` for a stored secret (its value is filled in
-    /// and never shown). `key`: a chord such as Enter, Control+c or Meta+Shift+4. `scroll`: up,
-    /// down, left or right.
+    /// Drag: where to release, a horizontal pixel of the latest screenshot.
+    #[serde(default)]
+    pub to_x: Option<f64>,
+    /// Drag: where to release, a vertical pixel of the latest screenshot.
+    #[serde(default)]
+    pub to_y: Option<f64>,
+    /// `type` and `paste`: the text, `{{secret:NAME}}` for a stored secret (its value is filled
+    /// in and never shown). `key`: a chord such as Enter, Control+c or Meta+Shift+4. `scroll`:
+    /// up, down, left or right.
     #[serde(default)]
     pub text: Option<String>,
+    /// `paste`: replace the focused field's whole text instead of inserting at the caret.
+    #[serde(default)]
+    pub replace_all: bool,
     /// Mouse button for click (default left).
     #[serde(default)]
     pub button: Option<PointerButton>,
     /// Scroll ticks (default 5, at most 30).
     #[serde(default)]
     pub amount: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ComputerReadTextArgs {
+    /// field (default): the focused text field's whole text. selection: only the selected text.
+    #[serde(default)]
+    pub source: TextSource,
+    /// Click here first to focus the field: a horizontal pixel of the latest screenshot.
+    #[serde(default)]
+    pub x: Option<f64>,
+    /// Click here first to focus the field: a vertical pixel of the latest screenshot.
+    #[serde(default)]
+    pub y: Option<f64>,
+    /// Most characters to return (default 20000, at most 100000); longer text is cut.
+    #[serde(default)]
+    pub max_chars: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -147,7 +186,7 @@ pub fn specs() -> Vec<ToolSpec> {
         ),
         computer(
             COMPUTER_ACT,
-            "Click, double-click, move the pointer, type, press a key or scroll on the computer, then see the result. Use the latest screenshot's pixels. The owner approves unless they gave you the session.",
+            "Click, double- or triple-click, drag, move the pointer, type, paste, select all, press a key or scroll on the computer, then see the result. Use the latest screenshot's pixels. Paste long text instead of typing it. The owner approves unless they gave you the session.",
             Approval::Ask,
             true,
             schema_of::<ComputerActArgs>(),
@@ -179,6 +218,13 @@ pub fn specs() -> Vec<ToolSpec> {
             Approval::Ask,
             true,
             schema_of::<ComputerLaunchArgs>(),
+        ),
+        computer(
+            COMPUTER_READ_TEXT,
+            "Read the text of the focused text field, or the selected text, as text instead of from a screenshot: exact, and complete even where the field scrolls. Give 'x'/'y' to click into the field first. Reads through the app's accessibility where it can, else copies the text and restores the clipboard; copying a whole field selects its text. The owner approves unless they gave you the session.",
+            Approval::Ask,
+            false,
+            schema_of::<ComputerReadTextArgs>(),
         ),
     ]
 }
@@ -356,13 +402,29 @@ pub async fn computer_launch(
     Ok(ToolOutput::new(json!({ "did": done })))
 }
 
-fn point(args: &ComputerActArgs) -> ToolResult<(f64, f64)> {
-    match (args.x, args.y) {
-        (Some(x), Some(y)) if x.is_finite() && y.is_finite() && x >= 0.0 && y >= 0.0 => Ok((x, y)),
-        _ => Err(ToolError::invalid(
-            "This action needs 'x' and 'y', pixels of the latest screenshot",
-        )),
+fn pixel(x: Option<f64>, y: Option<f64>) -> Option<(f64, f64)> {
+    match (x, y) {
+        (Some(x), Some(y)) if x.is_finite() && y.is_finite() && x >= 0.0 && y >= 0.0 => {
+            Some((x, y))
+        }
+        _ => None,
     }
+}
+
+fn point(args: &ComputerActArgs) -> ToolResult<(f64, f64)> {
+    pixel(args.x, args.y).ok_or_else(|| {
+        ToolError::invalid("This action needs 'x' and 'y', pixels of the latest screenshot")
+    })
+}
+
+/// A point given only partly, or not as pixels, is a mistake; none at all is fine.
+fn optional_point(x: Option<f64>, y: Option<f64>) -> ToolResult<Option<(f64, f64)>> {
+    if x.is_none() && y.is_none() {
+        return Ok(None);
+    }
+    pixel(x, y).map(Some).ok_or_else(|| {
+        ToolError::invalid("Give both 'x' and 'y', pixels of the latest screenshot, or neither")
+    })
 }
 
 fn scroll_direction(text: Option<&str>) -> ToolResult<ScrollDirection> {
@@ -385,19 +447,50 @@ async fn build_action(
 ) -> ToolResult<ComputerAction> {
     let button = args.button.unwrap_or(PointerButton::Left);
     Ok(match args.action {
-        ComputerActionKind::Click | ComputerActionKind::DoubleClick => {
+        ComputerActionKind::Click
+        | ComputerActionKind::DoubleClick
+        | ComputerActionKind::TripleClick => {
             let (x, y) = point(args)?;
             ComputerAction::Click {
                 x,
                 y,
                 button,
-                count: if args.action == ComputerActionKind::DoubleClick {
-                    2
-                } else {
-                    1
+                count: match args.action {
+                    ComputerActionKind::DoubleClick => 2,
+                    ComputerActionKind::TripleClick => 3,
+                    _ => 1,
                 },
             }
         }
+        ComputerActionKind::Paste => {
+            let text = args
+                .text
+                .clone()
+                .filter(|text| !text.is_empty())
+                .ok_or_else(|| ToolError::invalid("Pasting needs 'text'"))?;
+            let text = fill_secrets(env, &text, scrubber, used).await?;
+            if text.chars().count() > MAX_PASTED_CHARS {
+                return Err(ToolError::invalid(format!(
+                    "Paste at most {MAX_PASTED_CHARS} characters per call"
+                )));
+            }
+            ComputerAction::Paste {
+                text,
+                replace_all: args.replace_all,
+            }
+        }
+        ComputerActionKind::SelectAll => ComputerAction::SelectAll {
+            at: optional_point(args.x, args.y)?,
+        },
+        ComputerActionKind::Drag => ComputerAction::Drag {
+            from: point(args)?,
+            to: pixel(args.to_x, args.to_y).ok_or_else(|| {
+                ToolError::invalid(
+                    "A drag needs 'to_x' and 'to_y', where to release, pixels of the latest screenshot",
+                )
+            })?,
+            button,
+        },
         ComputerActionKind::Move => {
             let (x, y) = point(args)?;
             ComputerAction::Move { x, y }
@@ -457,6 +550,93 @@ pub async fn computer_act(env: &dyn ToolEnv, args: ComputerActArgs) -> ToolResul
             Ok(output)
         }
         Err(error) => Err(scrubber.scrub_error(error)),
+    }
+}
+
+/// Cuts `text` to `max` characters on a character boundary; true when it cut.
+fn cut(text: &str, max: usize) -> (String, bool) {
+    match text.char_indices().nth(max) {
+        Some((end, _)) => (text[..end].to_string(), true),
+        None => (text.to_string(), false),
+    }
+}
+
+pub async fn computer_read_text(
+    env: &dyn ToolEnv,
+    args: ComputerReadTextArgs,
+) -> ToolResult<ToolOutput> {
+    let backend = backend_of(env)?;
+    let at = optional_point(args.x, args.y)?;
+    let max = args
+        .max_chars
+        .unwrap_or(DEFAULT_READ_CHARS)
+        .clamp(1, MAX_READ_CHARS);
+    let read = backend
+        .read_text(args.source, at)
+        .await
+        .map_err(ToolError::from)?;
+    let chars = read.text.chars().count();
+    let (text, truncated) = cut(&read.text, max);
+    let mut result = json!({
+        "source": args.source,
+        "method": read.method,
+        "chars": chars,
+        "text": text,
+    });
+    if truncated {
+        result["truncated"] = json!(true);
+        result["note"] = json!(format!(
+            "Only the first {max} of {chars} characters; raise 'max_chars' (at most {MAX_READ_CHARS}) for more"
+        ));
+    }
+    if chars == 0 {
+        result["note"] = json!(match args.source {
+            TextSource::Selection => "Nothing is selected",
+            TextSource::Field => "The focused field is empty, or no text field has focus",
+        });
+    }
+    Ok(ToolOutput::new(result))
+}
+
+fn preview(text: &str) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let (shown, cut_off) = cut(&flat, 80);
+    if cut_off {
+        format!("{shown}…")
+    } else {
+        shown
+    }
+}
+
+/// What the owner is asked before reading or pasting text; other computer calls keep the
+/// generic question.
+pub fn ask_message(tool: &str, args: &serde_json::Value) -> Option<String> {
+    match tool {
+        COMPUTER_READ_TEXT => Some(
+            match args.get("source").and_then(serde_json::Value::as_str) {
+                Some("selection") => "The bot wants to read the selected text on your screen.",
+                _ => "The bot wants to read the text of the focused field on your screen.",
+            }
+            .to_string(),
+        ),
+        COMPUTER_ACT if args.get("action").and_then(serde_json::Value::as_str) == Some("paste") => {
+            let text = args
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let count = text.chars().count();
+            let how = if args.get("replace_all").and_then(serde_json::Value::as_bool) == Some(true)
+            {
+                "replace the focused field's text with"
+            } else {
+                "paste"
+            };
+            Some(format!(
+                "The bot wants to {how} {count} characters: “{}”",
+                preview(text)
+            ))
+        }
+        _ => None,
     }
 }
 

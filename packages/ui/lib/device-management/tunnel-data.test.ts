@@ -77,6 +77,14 @@ class Tunnel {
 		this.gatewayStreams.push(stream);
 		return stream.asStream();
 	}
+	playgroundStreams: Stream[] = [];
+	playgroundBots: string[] = [];
+	async openBotPlayground(botId: string, _options?: { signal?: AbortSignal }) {
+		const stream = new Stream();
+		this.playgroundStreams.push(stream);
+		this.playgroundBots.push(botId);
+		return stream.asStream();
+	}
 	make: (input: TunnelDataOpen) => Stream | Promise<Stream> = (input) => {
 		const stream = new Stream();
 		const reply =
@@ -186,6 +194,22 @@ describe("production tunnel data adapter", () => {
 		expect(tunnel.serviceStreams[0].resetCalled).toBe(false);
 		data.close();
 		await service.closed;
+	});
+
+	test("a bot playground stream shares the tunnel and a caller cancel resets only it", async () => {
+		const { data, tunnel, connects } = client();
+		const abort = new AbortController();
+		const playground = await data.openBotPlayground("bot-1", {
+			signal: abort.signal,
+		});
+		await data.openService("placement", "hosting");
+		expect(connects()).toBe(1);
+		expect(tunnel.playgroundBots).toEqual(["bot-1"]);
+		abort.abort();
+		await playground.closed;
+		expect(tunnel.playgroundStreams[0].resetCalled).toBe(true);
+		expect(tunnel.serviceStreams[0].resetCalled).toBe(false);
+		data.close();
 	});
 
 	test("cancelled service opens reset a stream that arrives after cancellation", async () => {

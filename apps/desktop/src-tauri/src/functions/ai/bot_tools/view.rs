@@ -32,6 +32,12 @@ pub(crate) fn machine_host(app: &tauri::AppHandle) -> MachineHost {
     .clone()
 }
 
+/// The in-process machine host if a bot has already used it.
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+pub(crate) fn running_machine_host() -> Option<MachineHost> {
+    HOST.get().cloned()
+}
+
 #[derive(Serialize, Debug, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ViewState {

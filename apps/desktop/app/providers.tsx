@@ -24,9 +24,11 @@ import {
 import { UseNavigationProvider } from "@flow-like/flow-like-ui/lib/use-navigation-provider";
 import { I18nProvider } from "@flow-like/locales";
 import dynamic from "next/dynamic";
+import { usePathname } from "next/navigation";
 import { Suspense, useEffect } from "react";
 import { AppSidebar } from "../components/app-sidebar";
 import { DesktopAuthProvider } from "../components/auth-provider";
+import { BotNotchBridge } from "../components/bot-notch-bridge";
 import { ComposerBarcodeScanner } from "../components/composer-barcode-scanner";
 import { DeeplinkNavigationHandler } from "../components/deeplink-navigation-handler";
 import { DeviceModelUnlockProvider } from "../components/device-model-unlock-provider";
@@ -52,6 +54,7 @@ import { ThemeLoader } from "../components/theme-loader";
 import ToastProvider from "../components/toast-provider";
 import TrayProvider from "../components/tray-provider";
 import { UpdateProvider } from "../components/update-provider";
+import { NOTCH_ROUTE } from "../lib/bot-notch/protocol";
 import { initBlobOffload } from "../lib/init-blob-offload";
 
 // Keep the always-mounted chat surfaces out of the synchronous root-layout chunk. The bridge is
@@ -78,11 +81,11 @@ const GlobalToolBridge = dynamic(
 		).then((module) => module.GlobalToolBridge),
 	{ ssr: false },
 );
-const FlowPilotBubbleButton = dynamic(
+const BotDen = dynamic(
 	() =>
-		import(
-			"@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-button"
-		).then((module) => module.FlowPilotBubbleButton),
+		import("@flow-like/flow-like-ui/components/bot-den/bot-den").then(
+			(module) => module.BotDen,
+		),
 	{ ssr: false },
 );
 
@@ -145,11 +148,22 @@ function NetworkAwareProvider({ children }: { children: React.ReactNode }) {
 	return <>{children}</>;
 }
 
+/**
+ * The bot notch window draws and handles gestures only; the main window feeds it bots and runs
+ * its commands, so none of the app's sessions, bridges or chrome run a second time in it.
+ */
+function NotchProviders({ children }: Readonly<{ children: React.ReactNode }>) {
+	return <I18nProvider>{children}</I18nProvider>;
+}
+
 export function Providers({
 	children,
 }: Readonly<{
 	children: React.ReactNode;
 }>) {
+	const pathname = usePathname();
+	if (pathname?.replace(/(\.html|\/)$/, "") === NOTCH_ROUTE)
+		return <NotchProviders>{children}</NotchProviders>;
 	return (
 		<UseNavigationProvider routeMode="query">
 			<IdbMigrationGate>
@@ -195,12 +209,13 @@ export function Providers({
 																				<Suspense fallback={null}>
 																					<NativeIntegrationProvider />
 																				</Suspense>
+																				<BotNotchBridge />
 																				<ComposerBarcodeScanner />
 																				<AppSidebar>{children}</AppSidebar>
 																				<ChatActivityProvider />
 																				<GlobalToolBridge />
 																				<GlobalChatOverlay />
-																				<FlowPilotBubbleButton />
+																				<BotDen />
 																				<GlobalUpgradeDialog />
 																			</AppLocalPrincipals>
 																		</TelemetryProvider>

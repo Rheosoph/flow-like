@@ -1214,6 +1214,7 @@
 	"filename": "Dateiname",
 	"fileName": "Dateiname",
 	"fileNamespanClassnametextdestructiveSpan": "Dateiname<1> *</1>",
+	"fileReadyToSave": "",
 	"files": "Dateien",
 	"fileSizeBytesspanClassnametextdestructiveSpan": "Dateigröße (Bytes)<1> *</1>",
 	"filesStayOnDisk": "Dateien bleiben auf der Festplatte",

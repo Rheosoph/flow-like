@@ -8,6 +8,10 @@ use serde_json::Value;
 
 /// The scope that covers every call of a tool.
 pub const SCOPE_ALL: &str = "*";
+/// The tool of the auto-approval grant `(*, *)`: the bot runs every call a grant could cover
+/// without asking. Irreversible deletions, configuration changes, cost checks and web
+/// destinations after web content still ask.
+pub const AUTO_APPROVE_TOOL: &str = "*";
 /// The scope of the document cost check; its grant belongs to [`DOCUMENTS_TOOL`].
 pub const SCOPE_DOCUMENTS_EXPENSIVE: &str = "documents.expensive";
 /// The tool name a `documents.expensive` grant is stored under.
@@ -32,13 +36,23 @@ pub const ERROR_APPROVAL_ITEM_UNKNOWN: &str = "BOT_APPROVAL_ITEM_UNKNOWN";
 /// Longest tool name or scope.
 pub const MAX_KEY_CHARS: usize = 256;
 
-const SCOPE_PREFIXES: [&str; 6] = [
+/// Every prefix a tool's grant scopes start with (core `tool_grants::grant_scopes`, the bot-tools
+/// scope helpers and the `ask_bot` gate).
+pub const SCOPE_PREFIXES: [&str; 14] = [
     "app:",
     "host:",
     "connection:",
     "table:",
     "target:",
     "connector:",
+    "browser:",
+    "owner_browser:",
+    "computer:",
+    "email:",
+    "person:",
+    "command:",
+    "web:",
+    "bot:",
 ];
 
 /// A grant as the owner lists it.
@@ -116,8 +130,9 @@ pub fn check_key(key: &ToolGrantKey) -> Result<(), String> {
     }
     if !is_grant_scope(&key.scope) && !is_token(&key.scope) {
         return Err(format!(
-            "scope '{}' must be '*', 'documents.expensive' or start with app:, host:, connection:, table: or target:",
-            key.scope.chars().take(80).collect::<String>()
+            "scope '{}' must be '*', 'documents.expensive' or start with one of {}",
+            key.scope.chars().take(80).collect::<String>(),
+            SCOPE_PREFIXES.join(", ")
         ));
     }
     Ok(())
@@ -209,6 +224,38 @@ pub fn approval_response_message_id(approval_id: &str) -> String {
     digest("ar-", &[approval_id])
 }
 
+/// The message id of the owner's answer to a card in an end-to-end encrypted chat. The owner's
+/// device seals the answer under it, so it is derived without a hash the browser lacks: the
+/// card id with the answer prefix.
+pub fn sealed_approval_response_message_id(approval_id: &str) -> String {
+    format!(
+        "ar-{}",
+        approval_id.strip_prefix("ap-").unwrap_or(approval_id)
+    )
+}
+
+/// Whether `card` is the one its id names: `turn_id` and the hash of its calls give the id, and a
+/// batch card's hash is its items' hashes. The server checks a card the owner's device opened
+/// from an encrypted chat with this before settling an answer from it.
+pub fn card_matches_id(card: &crate::bot_message::ApprovalRequest, turn_id: &str) -> bool {
+    let calls_match = card.items.is_empty()
+        || card.args_hash == batch_args_hash(card.items.iter().map(|item| item.args_hash.as_str()));
+    card.turn_id == turn_id
+        && calls_match
+        && approval_message_id(turn_id, &card.args_hash) == card.id
+}
+
+/// An approval card a host sealed for the owner's end-to-end encrypted chat with the bot. The
+/// server parks the turn behind `approval_id` and posts the envelopes as the bot's message
+/// without reading them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SealedApprovalCard {
+    /// The card's id (`ap-…`), also its message id.
+    pub approval_id: String,
+    /// The card message sealed to every member's keys, by member id.
+    pub envelopes: std::collections::BTreeMap<String, Value>,
+}
+
 /// The `args_hash` of a batch card: its items' hashes in any order, so parking the same calls
 /// again names the same card.
 pub fn batch_args_hash<'a>(hashes: impl IntoIterator<Item = &'a str>) -> String {
@@ -254,6 +301,15 @@ mod tests {
             "connection:postgres:h:5432:db",
             "table:orders",
             "target:a:event:e",
+            "computer:session",
+            "computer:launch:finder",
+            "command:git",
+            "email:example.com",
+            "person:u1",
+            "web:example.com:read",
+            "browser:example.com",
+            "owner_browser:example.com",
+            "bot:b1",
         ] {
             assert!(is_grant_scope(ok), "{ok}");
         }
@@ -272,6 +328,58 @@ mod tests {
         assert!(check_key(&key("code_run", "host:a.com")).is_ok());
         assert!(check_key(&key("code run", "*")).is_err());
         assert!(check_key(&key("code_run", "bogus")).is_err());
+    }
+
+    #[test]
+    fn a_sealed_answer_id_is_the_card_hash_with_the_answer_prefix() {
+        let id = approval_message_id("bt_1", "h");
+        let answer = sealed_approval_response_message_id(&id);
+        assert_eq!(answer, format!("ar-{}", &id[3..]));
+        assert_ne!(answer, approval_response_message_id(&id));
+        assert!(crate::inbox::is_valid_message_id(&answer));
+    }
+
+    #[test]
+    fn a_card_matches_its_id_only_with_its_own_turn_and_calls() {
+        let item = |hash: &str| crate::bot_message::ApprovalItem {
+            args_hash: hash.into(),
+            tool: "computer_screenshot".into(),
+            summary: "Look".into(),
+            scope: "computer:session".into(),
+            calls: 1,
+            after_web_content: false,
+            secret: None,
+            invite: None,
+        };
+        let single = crate::bot_message::ApprovalRequest {
+            id: approval_message_id("bt_1", "h1"),
+            turn_id: "bt_1".into(),
+            tool: "computer_screenshot".into(),
+            summary: "Look".into(),
+            scope: "computer:session".into(),
+            args_hash: "h1".into(),
+            requester_id: None,
+            requester_name: None,
+            room: None,
+            secret: None,
+            invite: None,
+            configuration_changes: None,
+            items: Vec::new(),
+        };
+        assert!(card_matches_id(&single, "bt_1"));
+        assert!(!card_matches_id(&single, "bt_2"));
+        let mut forged = single.clone();
+        forged.args_hash = "h2".into();
+        assert!(!card_matches_id(&forged, "bt_1"));
+
+        let hash = batch_args_hash(["a", "b"]);
+        let mut batch = single.clone();
+        batch.args_hash = hash.clone();
+        batch.id = approval_message_id("bt_1", &hash);
+        batch.items = vec![item("a"), item("b")];
+        assert!(card_matches_id(&batch, "bt_1"));
+        batch.items.push(item("c"));
+        assert!(!card_matches_id(&batch, "bt_1"));
     }
 
     #[test]

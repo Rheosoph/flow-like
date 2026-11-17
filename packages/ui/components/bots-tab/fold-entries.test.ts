@@ -604,6 +604,8 @@ describe("approval cards", () => {
 		);
 		expect(card.approval).toEqual({
 			id: "ap-1",
+			conversationId: "c1",
+			card: approval,
 			turnId: "turn_1",
 			tool: "shell_run",
 			summary: "Run git status",

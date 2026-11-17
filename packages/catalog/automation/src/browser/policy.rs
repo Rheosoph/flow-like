@@ -562,7 +562,8 @@ mod tests {
 
     #[test]
     fn metadata_check_blocks_link_local_and_keeps_localhost_and_lan() {
-        let blocked = |url: &str| NavigationPolicy::check_metadata_static(&Url::parse(url).unwrap());
+        let blocked =
+            |url: &str| NavigationPolicy::check_metadata_static(&Url::parse(url).unwrap());
         for url in [
             "http://169.254.169.254/latest/meta-data/",
             "http://169.254.1.1/",

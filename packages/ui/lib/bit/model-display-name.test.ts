@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { IBit } from "../schema";
-import { bitModelName, isBitIdLike, modelLabel } from "./model-display-name";
+import {
+	bitModelName,
+	describeModel,
+	isBitIdLike,
+	matchModelBit,
+	modelLabel,
+	providerDisplayName,
+} from "./model-display-name";
 
 function bit(partial: Record<string, unknown>): IBit {
 	return { id: "bit", hub: "hub", meta: {}, ...partial } as unknown as IBit;
@@ -98,5 +105,139 @@ describe("modelLabel", () => {
 		expect(modelLabel("").label).toBe("Unknown Model");
 		expect(modelLabel(undefined).label).toBe("Unknown Model");
 		expect(modelLabel("unknown").label).toBe("Unknown Model");
+	});
+});
+
+function modelBit(id: string, name: string, provider: string, modelId: string) {
+	return bit({
+		id,
+		meta: { en: { name } },
+		parameters: { provider: { provider_name: provider, model_id: modelId } },
+	});
+}
+
+describe("providerDisplayName", () => {
+	test("keeps provider spellings and title-cases unknown keys", () => {
+		expect(providerDisplayName("openai")).toBe("OpenAI");
+		expect(providerDisplayName("LOCAL")).toBe("On-device");
+		expect(providerDisplayName("fireworks")).toBe("Fireworks");
+	});
+});
+
+describe("describeModel", () => {
+	test("splits provider prefix and pinned snapshot off an unmatched model", () => {
+		expect(describeModel("anthropic/claude-sonnet-4-5-20250929")).toMatchObject(
+			{
+				name: "claude-sonnet-4-5",
+				provider: "Anthropic",
+				snapshot: "2025-09-29",
+				known: false,
+				opaque: false,
+			},
+		);
+		expect(describeModel("gpt-4o-2024-08-06")).toMatchObject({
+			name: "gpt-4o",
+			provider: undefined,
+			snapshot: "2024-08-06",
+		});
+		expect(describeModel("claude-3-5-sonnet@20240620").snapshot).toBe(
+			"2024-06-20",
+		);
+	});
+
+	test("leaves names without a valid date alone", () => {
+		expect(describeModel("qwen3-8b")).toMatchObject({
+			name: "qwen3-8b",
+			snapshot: undefined,
+		});
+		expect(describeModel("model-2024-13-40")).toMatchObject({
+			name: "model-2024-13-40",
+			snapshot: undefined,
+		});
+		expect(describeModel("mlx-community/Qwen3-8B-4bit")).toMatchObject({
+			name: "Qwen3-8B-4bit",
+			provider: undefined,
+		});
+	});
+
+	test("uses the matched bit's catalog name, provider and location", () => {
+		const local = modelBit(
+			"tz4a98xxat96iws9zmbrgj3a",
+			"Ling 3.0 Tiny",
+			"Local",
+			"",
+		);
+		expect(describeModel("tz4a98xxat96iws9zmbrgj3a", local)).toMatchObject({
+			name: "Ling 3.0 Tiny",
+			provider: "On-device",
+			onDevice: true,
+			known: true,
+		});
+		const hosted = modelBit(
+			"b1",
+			"Claude Sonnet 4.5",
+			"anthropic",
+			"claude-sonnet-4-5",
+		);
+		expect(describeModel("claude-sonnet-4-5-20250929", hosted)).toMatchObject({
+			name: "Claude Sonnet 4.5",
+			provider: "Anthropic",
+			snapshot: "2025-09-29",
+			onDevice: false,
+		});
+	});
+
+	test("marks unresolved ids and missing models", () => {
+		expect(describeModel("9f8b7c6d5e4f3a2b1c0d9e8f")).toMatchObject({
+			name: "9f8b7c6d…",
+			opaque: true,
+		});
+		expect(describeModel("unknown").missing).toBe(true);
+		expect(describeModel(undefined).missing).toBe(true);
+	});
+});
+
+describe("matchModelBit", () => {
+	const sonnetDirect = modelBit(
+		"b1",
+		"Claude Sonnet 4.5",
+		"anthropic",
+		"claude-sonnet-4-5",
+	);
+	const sonnetRouter = modelBit(
+		"b2",
+		"Claude Sonnet 4.5",
+		"openrouter",
+		"anthropic/claude-sonnet-4-5",
+	);
+	const gpt = modelBit("b3", "GPT-4o", "openai", "gpt-4o");
+
+	test("matches by bit id first", () => {
+		expect(matchModelBit("b3", [sonnetDirect, gpt])).toBe(gpt);
+	});
+
+	test("matches the provider model id across snapshot dates and prefixes", () => {
+		expect(matchModelBit("gpt-4o-2024-08-06", [sonnetDirect, gpt])).toBe(gpt);
+		expect(matchModelBit("openai/gpt-4o", [sonnetDirect, gpt])).toBe(gpt);
+	});
+
+	test("prefers the exact model id when several bits serve the same model", () => {
+		expect(
+			matchModelBit("anthropic/claude-sonnet-4-5", [
+				sonnetDirect,
+				sonnetRouter,
+			]),
+		).toBe(sonnetRouter);
+		expect(
+			matchModelBit("anthropic/claude-sonnet-4-5-20250929", [
+				sonnetRouter,
+				sonnetDirect,
+			]),
+		).toBe(sonnetDirect);
+	});
+
+	test("returns nothing for unknown models", () => {
+		expect(matchModelBit("mistral-large", [sonnetDirect, gpt])).toBeUndefined();
+		expect(matchModelBit("", [gpt])).toBeUndefined();
 	});
 });

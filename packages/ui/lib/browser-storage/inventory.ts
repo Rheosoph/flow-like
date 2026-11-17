@@ -55,6 +55,7 @@ export type BrowserStoreId =
 	| "oauth"
 	| "deviceVault"
 	| "inboxKeys"
+	| "screenTrust"
 	| "pendingSync";
 
 interface DatabasePart {
@@ -197,6 +198,11 @@ const STORE_DEFINITIONS: readonly StoreDefinition[] = [
 		id: "inboxKeys",
 		category: "protected",
 		databases: [{ name: "flow-like-inbox-keys" }],
+	},
+	{
+		id: "screenTrust",
+		category: "protected",
+		databases: [{ name: "flow-like-screen-trust" }],
 	},
 	{
 		id: "pendingSync",

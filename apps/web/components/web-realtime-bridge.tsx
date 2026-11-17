@@ -43,6 +43,13 @@ export function WebRealtimeBridge({ enabled }: { enabled: boolean }) {
 		let retryTimer: ReturnType<typeof setTimeout> | undefined;
 		let failures = 0;
 		const feedHub = new ConversationFeedHub(() => syncSubscriptions());
+		const inbox = backend.inboxState;
+		// The poll carries entries as the server stores them; an encrypted chat's arrive sealed.
+		if (inbox?.openEntries)
+			feedHub.setOpener(
+				async (entries, as) =>
+					(await inbox.openEntries?.(entries, as)) ?? entries,
+			);
 		const syncSubscriptions = () =>
 			client?.setSubscriptions({
 				notifications: true,

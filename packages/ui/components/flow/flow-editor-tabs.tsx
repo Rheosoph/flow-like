@@ -19,6 +19,7 @@ import {
 import type { ComponentProps, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { IGenericCommand } from "../../lib";
+import { appDenProps } from "../../lib/bot-den/app-targets";
 import {
 	FLOWSCRIPT_KEYWORDS,
 	type IModuleNameError,
@@ -276,6 +277,33 @@ function EditorTabLane({
 	);
 }
 
+function tabDenProps(
+	appId: string | undefined,
+	board: IBoard,
+	tab: IEditorTab,
+	label: string,
+): Record<string, string> {
+	const { doc } = tab;
+	switch (doc.kind) {
+		case "board":
+			return doc.fileId === MAIN_FILE_ID
+				? appDenProps({ kind: "board", appId, id: board.id, label: board.name })
+				: appDenProps({
+						kind: "layer",
+						appId,
+						boardId: board.id,
+						id: doc.fileId,
+						label: board.layers?.[doc.fileId]?.name ?? label,
+					});
+		case "page":
+			return appDenProps({ kind: "page", appId, id: doc.pageId, label });
+		case "widget":
+			return appDenProps({ kind: "widget", appId, id: doc.widgetId, label });
+		default:
+			return {};
+	}
+}
+
 // Extra props (and ref) must reach the root span so `ContextMenuTrigger asChild`
 // can attach its right-click handler.
 function EditorTabButton({
@@ -430,6 +458,7 @@ function EditorTab({
 	closable,
 	readOnly,
 	actions,
+	denProps,
 }: Readonly<{
 	tab: IEditorTab;
 	label: string;
@@ -437,6 +466,7 @@ function EditorTab({
 	closable: boolean;
 	readOnly: boolean;
 	actions: IEditorTabActions;
+	denProps?: Record<string, string>;
 }>) {
 	const { t } = useTranslation("flow");
 	const isBoard = tab.doc.kind === "board";
@@ -447,6 +477,7 @@ function EditorTab({
 		<ContextMenu>
 			<ContextMenuTrigger asChild>
 				<EditorTabButton
+					{...denProps}
 					tab={tab}
 					label={label}
 					active={active}
@@ -512,6 +543,7 @@ function EditorTab({
  * why the same file can be open twice: two tabs, two layer paths, one canvas.
  */
 export function FlowEditorTabs({
+	appId,
 	board,
 	tabs,
 	activeKey,
@@ -527,6 +559,7 @@ export function FlowEditorTabs({
 	reservedRoots = FLOWSCRIPT_KEYWORDS,
 	trailing,
 }: Readonly<{
+	appId?: string;
 	board: IBoard;
 	tabs: readonly IEditorTab[];
 	activeKey: string | null;
@@ -675,6 +708,7 @@ export function FlowEditorTabs({
 				key={tab.key}
 				tab={tab}
 				label={resolveLabel(tab)}
+				denProps={tabDenProps(appId, board, tab, resolveLabel(tab))}
 				active={activeKey === tab.key}
 				closable={isTabClosable(tabs, tab.key)}
 				readOnly={readOnly}

@@ -1,7 +1,28 @@
+use super::main_queue_macos::on_main_queue;
 use super::*;
 use crate::computer::accessibility::AccessibilityBounds;
 use std::ffi::{CString, c_char, c_void};
+use std::time::Duration;
 type Ref = *const c_void;
+const OWN_APP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Accessibility calls on Flow Like's own windows never leave the process: AppKit answers them on
+/// the calling thread and traps off the main thread (a bot minimizing a Flow Like window crashed
+/// the app). Other apps answer over IPC from any thread.
+fn in_app<T: Send + 'static>(
+    pid: u32,
+    work: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    if pid != std::process::id() {
+        return work();
+    }
+    on_main_queue(OWN_APP_TIMEOUT, work).unwrap_or_else(|| {
+        Err(anyhow!(
+            "Flow Like's main thread did not take the accessibility request for its own window within {} s",
+            OWN_APP_TIMEOUT.as_secs()
+        ))
+    })
+}
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 struct Point {
@@ -28,6 +49,7 @@ unsafe extern "C" {
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
     fn AXUIElementCreateApplication(pid: i32) -> Ref;
+    fn AXUIElementCreateSystemWide() -> Ref;
     fn AXUIElementCopyAttributeValue(element: Ref, attribute: Ref, value: *mut Ref) -> i32;
     fn AXUIElementSetAttributeValue(element: Ref, attribute: Ref, value: Ref) -> i32;
     fn AXUIElementCopyActionNames(element: Ref, actions: *mut Ref) -> i32;
@@ -173,6 +195,210 @@ fn dictionary_number(dictionary: Ref, name: &str) -> Option<i64> {
     }
 }
 
+fn dictionary_f64(dictionary: Ref, name: &str) -> Option<f64> {
+    let value = dictionary_value(dictionary, name)?;
+    let mut number = 0f64;
+    if unsafe {
+        CFGetTypeID(value) == CFNumberGetTypeID()
+            && CFNumberGetValue(value, 6, (&mut number as *mut f64).cast())
+    } {
+        Some(number)
+    } else {
+        None
+    }
+}
+
+const SYSTEM_OWNERS: &[&str] = &[
+    "Window Server",
+    "Dock",
+    "SystemUIServer",
+    "Control Center",
+    "Notification Center",
+    "loginwindow",
+    "TextInputMenuAgent",
+];
+
+fn stacked_entry(entry: Ref) -> Option<StackedWindow> {
+    if dictionary_number(entry, "kCGWindowLayer") != Some(0)
+        || dictionary_f64(entry, "kCGWindowAlpha").is_some_and(|alpha| alpha <= 0.0)
+    {
+        return None;
+    }
+    let id = u32::try_from(dictionary_number(entry, "kCGWindowNumber")?).ok()?;
+    let pid = u32::try_from(dictionary_number(entry, "kCGWindowOwnerPID")?)
+        .ok()
+        .filter(|pid| *pid > 0)?;
+    let app_name = dictionary_value(entry, "kCGWindowOwnerName")
+        .and_then(text)
+        .unwrap_or_default();
+    if SYSTEM_OWNERS.contains(&app_name.as_str()) {
+        return None;
+    }
+    let mut rect = Rect::default();
+    let bounds = dictionary_value(entry, "kCGWindowBounds")?;
+    if !unsafe { CGRectMakeWithDictionaryRepresentation(bounds, &mut rect) } {
+        return None;
+    }
+    let (width, height) = (rect.size.width, rect.size.height);
+    if !usable_size(width, height) {
+        return None;
+    }
+    Some(StackedWindow {
+        id,
+        pid,
+        app_name,
+        title: dictionary_value(entry, "kCGWindowName")
+            .and_then(text)
+            .filter(|title| !title.is_empty()),
+        x: rect.origin.x,
+        y: rect.origin.y,
+        width,
+        height,
+    })
+}
+
+fn on_screen_entries() -> Result<Owned> {
+    // OnScreenOnly | ExcludeDesktopElements; the list is ordered front to back.
+    let metadata = Owned(unsafe { CGWindowListCopyWindowInfo(1 | (1 << 4), 0) });
+    if metadata.0.is_null() {
+        return Err(anyhow!(
+            "Window metadata is unavailable in this desktop session"
+        ));
+    }
+    Ok(metadata)
+}
+
+pub fn stacked_windows() -> Result<Vec<StackedWindow>> {
+    let metadata = on_screen_entries()?;
+    Ok(array(metadata.0)
+        .iter()
+        .filter_map(|entry| stacked_entry(entry.0))
+        .collect())
+}
+
+/// The window exists, on screen or not: another Space and the Dock (minimized) count too.
+pub fn window_exists(id: u32) -> bool {
+    // kCGWindowListOptionIncludingWindow lists only that window, wherever it is.
+    let metadata = Owned(unsafe { CGWindowListCopyWindowInfo(1 << 3, id) });
+    !metadata.0.is_null()
+        && array(metadata.0)
+            .iter()
+            .any(|entry| dictionary_number(entry.0, "kCGWindowNumber") == Some(i64::from(id)))
+}
+
+/// Runs `work` on the element with keyboard focus. The frontmost window's app is asked where it
+/// answers: Flow Like's own fields on the main queue, like its windows (see `in_app`).
+fn with_focused<T: Send + 'static>(
+    work: impl FnOnce(Ref) -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let pid = stacked_windows()?.first().map_or(0, |window| window.pid);
+    in_app(pid, move || {
+        let system = Owned(unsafe { AXUIElementCreateSystemWide() });
+        if system.0.is_null() {
+            return Err(anyhow!("Accessibility is unavailable"));
+        }
+        let focused = attr(system.0, "AXFocusedUIElement")
+            .ok_or_else(|| anyhow!("No element has keyboard focus"))?;
+        work(focused.0)
+    })
+}
+
+/// The focused text element's whole text, or its selected text; None when it holds no text.
+pub fn focused_text(selection: bool) -> Option<String> {
+    let key = if selection {
+        "AXSelectedText"
+    } else {
+        "AXValue"
+    };
+    with_focused(move |element| Ok(attribute_text(element, key)))
+        .ok()
+        .flatten()
+}
+
+/// Replaces the focused text element's text. Fails for elements without text and for fields
+/// that refuse it (secure fields), so the caller can paste instead.
+pub fn set_focused_text(text: &str) -> Result<()> {
+    let text = text.to_string();
+    with_focused(move |element| {
+        if attribute_text(element, "AXValue").is_none() {
+            return Err(anyhow!("The focused element holds no text"));
+        }
+        let value = string(&text)?;
+        set(element, "AXValue", value.0)
+    })
+}
+
+pub fn window_title(id: u32) -> Option<String> {
+    let entry = stacked_windows().ok()?.into_iter().find(|w| w.id == id)?;
+    let accessible = NativeWindow {
+        id: entry.id,
+        pid: entry.pid,
+        app_name: entry.app_name.clone(),
+        cg_title: entry.title.clone(),
+        title: None,
+        bounds: (entry.x, entry.y, entry.width, entry.height),
+        focused: false,
+        minimized: false,
+        onscreen: true,
+        transparent: false,
+    };
+    in_app(accessible.pid, move || {
+        Ok(window_element(&accessible)
+            .ok()
+            .and_then(|(_, element)| attribute_text(element.0, "AXTitle")))
+    })
+    .ok()
+    .flatten()
+    .filter(|title| !title.is_empty())
+    .or(entry.title)
+}
+
+struct AccessibleState {
+    title: Option<String>,
+    minimized: bool,
+    focused: bool,
+}
+
+fn accessible_state(window: &NativeWindow) -> Option<AccessibleState> {
+    let (app, element) = window_element(window).ok()?;
+    Some(AccessibleState {
+        title: attribute_text(element.0, "AXTitle"),
+        minimized: boolean(element.0, "AXMinimized"),
+        focused: boolean(app.0, "AXFrontmost")
+            && attr(app.0, "AXFocusedWindow")
+                .is_some_and(|focused| unsafe { CFEqual(focused.0, element.0) }),
+    })
+}
+
+/// Reads every window's accessible state; Flow Like's own windows in one main-queue hop.
+fn accessible_states(windows: &[NativeWindow]) -> Vec<Option<AccessibleState>> {
+    let own_pid = std::process::id();
+    let own: Vec<NativeWindow> = windows
+        .iter()
+        .filter(|window| window.pid == own_pid)
+        .cloned()
+        .collect();
+    let mut own_states = if own.is_empty() {
+        Vec::new()
+    } else {
+        in_app(own_pid, move || {
+            Ok(own.iter().map(accessible_state).collect())
+        })
+        .unwrap_or_default()
+    }
+    .into_iter();
+    windows
+        .iter()
+        .map(|window| {
+            if window.pid == own_pid {
+                own_states.next().flatten()
+            } else {
+                accessible_state(window)
+            }
+        })
+        .collect()
+}
+
 /// Window identity and geometry do not require screen capture. Titles and state come from AX.
 #[derive(Clone)]
 pub struct NativeWindow {
@@ -228,7 +454,7 @@ impl NativeWindow {
             {
                 continue;
             }
-            let mut window = Self {
+            windows.push(Self {
                 id,
                 pid,
                 app_name: dictionary_value(entry.0, "kCGWindowOwnerName")
@@ -250,15 +476,15 @@ impl NativeWindow {
                         CFGetTypeID(value) == CFBooleanGetTypeID() && CFBooleanGetValue(value)
                     },
                 ),
-            };
-            if let Ok((app, element)) = window_element(&window) {
-                window.title = attribute_text(element.0, "AXTitle");
-                window.minimized = boolean(element.0, "AXMinimized");
-                window.focused = boolean(app.0, "AXFrontmost")
-                    && attr(app.0, "AXFocusedWindow")
-                        .is_some_and(|focused| unsafe { CFEqual(focused.0, element.0) });
+            });
+        }
+        let states = accessible_states(&windows);
+        for (window, state) in windows.iter_mut().zip(states) {
+            if let Some(state) = state {
+                window.title = state.title;
+                window.minimized = state.minimized;
+                window.focused = state.focused;
             }
-            windows.push(window);
         }
         Ok(windows)
     }
@@ -303,15 +529,6 @@ impl NativeWindow {
     /// Helper surfaces that are not windows a person sees: invisible, tiny, nameless, or owned
     /// by system UI processes.
     pub fn is_ghost(&self) -> bool {
-        const SYSTEM_OWNERS: &[&str] = &[
-            "Window Server",
-            "Dock",
-            "SystemUIServer",
-            "Control Center",
-            "Notification Center",
-            "loginwindow",
-            "TextInputMenuAgent",
-        ];
         self.transparent
             || self.bounds.2 < 2.0
             || self.bounds.3 < 2.0
@@ -369,19 +586,29 @@ fn activate_app(pid: u32) {
     }
 }
 
-fn window_element_across_spaces(w: &NativeWindow) -> Result<(Owned, Owned)> {
-    let first = match window_element(w) {
-        Ok(found) => return Ok(found),
+fn reachable(w: &NativeWindow) -> Result<()> {
+    let probe = w.clone();
+    in_app(w.pid, move || window_element(&probe).map(drop))
+}
+
+/// Waits off the main thread, so an activation of Flow Like itself can take effect meanwhile.
+fn reveal_across_spaces(w: &NativeWindow) -> Result<()> {
+    let first = match reachable(w) {
+        Ok(()) => return Ok(()),
         Err(error) => error,
     };
     if w.onscreen {
         return Err(first);
     }
-    activate_app(w.pid);
+    let pid = w.pid;
+    in_app(pid, move || {
+        activate_app(pid);
+        Ok(())
+    })?;
     for _ in 0..8 {
-        std::thread::sleep(std::time::Duration::from_millis(250));
-        if let Ok(found) = window_element(w) {
-            return Ok(found);
+        std::thread::sleep(Duration::from_millis(250));
+        if reachable(w).is_ok() {
+            return Ok(());
         }
     }
     Err(anyhow!(
@@ -541,14 +768,10 @@ pub async fn tree(id: &str, depth: usize) -> Result<AccessibilityNode> {
     let id = id.to_owned();
     tokio::task::spawn_blocking(move || {
         let w = select_window(&id, "", "", true)?.ok_or_else(|| anyhow!("Window not found"))?;
-        let (_app, element) = window_element(&w)?;
-        Ok(walk(
-            element.0,
-            &w.id()?.to_string(),
-            vec![],
-            depth,
-            &mut 2000,
-        ))
+        in_app(w.pid, move || {
+            let (_app, element) = window_element(&w)?;
+            Ok(walk(element.0, &w.id.to_string(), vec![], depth, &mut 2000))
+        })
     })
     .await?
 }
@@ -564,52 +787,67 @@ pub async fn action(
     tokio::task::spawn_blocking(move || {
         let w = select_window(&locator.window_id, "", "", true)?
             .ok_or_else(|| anyhow!("Window not found"))?;
-        let (_app, mut element) = window_element(&w)?;
-        for i in &locator.path {
-            element = children(element.0)
-                .into_iter()
-                .nth(*i)
-                .ok_or_else(|| anyhow!("Element no longer exists"))?;
-        }
-        let current = node(element.0);
-        verify(&current, &locator)?;
-        if cancellation
-            .as_ref()
-            .is_some_and(|token| token.is_cancelled())
-        {
-            return Err(anyhow!("Automation cancelled"));
-        }
-        match action.as_str() {
-            "invoke" => perform(
-                element.0,
-                ["AXPress", "AXConfirm", "AXOpen", "AXPick"]
-                    .into_iter()
-                    .find(|name| current.actions.iter().any(|a| a == name))
-                    .unwrap_or("AXPress"),
-            ),
-            "focus" => set(element.0, "AXFocused", unsafe { kCFBooleanTrue }),
-            "select" => set(element.0, "AXSelected", unsafe { kCFBooleanTrue }),
-            "expand" => set(element.0, "AXExpanded", unsafe { kCFBooleanTrue }),
-            "collapse" => set(element.0, "AXExpanded", unsafe { kCFBooleanFalse }),
-            "set_value" => {
-                let value = string(&value)?;
-                set(element.0, "AXValue", value.0)
-            }
-            _ => Err(anyhow!("Unsupported accessibility action: {}", action)),
-        }
+        in_app(w.pid, move || {
+            act(&w, &locator, &action, &value, cancellation)
+        })
     })
     .await?
+}
+fn act(
+    w: &NativeWindow,
+    locator: &ElementLocator,
+    action: &str,
+    value: &str,
+    cancellation: Option<flow_like_types::tokio_util::sync::CancellationToken>,
+) -> Result<()> {
+    let (_app, mut element) = window_element(w)?;
+    for i in &locator.path {
+        element = children(element.0)
+            .into_iter()
+            .nth(*i)
+            .ok_or_else(|| anyhow!("Element no longer exists"))?;
+    }
+    let current = node(element.0);
+    verify(&current, locator)?;
+    if cancellation
+        .as_ref()
+        .is_some_and(|token| token.is_cancelled())
+    {
+        return Err(anyhow!("Automation cancelled"));
+    }
+    match action {
+        "invoke" => perform(
+            element.0,
+            ["AXPress", "AXConfirm", "AXOpen", "AXPick"]
+                .into_iter()
+                .find(|name| current.actions.iter().any(|a| a == name))
+                .unwrap_or("AXPress"),
+        ),
+        "focus" => set(element.0, "AXFocused", unsafe { kCFBooleanTrue }),
+        "select" => set(element.0, "AXSelected", unsafe { kCFBooleanTrue }),
+        "expand" => set(element.0, "AXExpanded", unsafe { kCFBooleanTrue }),
+        "collapse" => set(element.0, "AXExpanded", unsafe { kCFBooleanFalse }),
+        "set_value" => {
+            let value = string(value)?;
+            set(element.0, "AXValue", value.0)
+        }
+        _ => Err(anyhow!("Unsupported accessibility action: {}", action)),
+    }
 }
 pub fn operate_window(
     w: &NativeWindow,
     operation: &str,
     bounds: Option<(i32, i32, i32, i32)>,
 ) -> Result<()> {
-    let (app, window) = if operation == "focus" {
-        window_element_across_spaces(w)?
-    } else {
-        window_element(w)?
-    };
+    if operation == "focus" {
+        reveal_across_spaces(w)?;
+    }
+    let window = w.clone();
+    let operation = operation.to_owned();
+    in_app(w.pid, move || operate(&window, &operation, bounds))
+}
+fn operate(w: &NativeWindow, operation: &str, bounds: Option<(i32, i32, i32, i32)>) -> Result<()> {
+    let (app, window) = window_element(w)?;
     match operation {
         "focus" => {
             set(app.0, "AXFrontmost", unsafe { kCFBooleanTrue })?;

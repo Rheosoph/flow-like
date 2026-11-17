@@ -1517,6 +1517,7 @@
 	"filename": "文件名",
 	"fileName": "文件名称",
 	"fileNamespanClassnametextdestructiveSpan": "文件名称<1> *</1>",
+	"fileReadyToSave": "",
 	"files": "文件",
 	"fileSizeBytesspanClassnametextdestructiveSpan": "文件大小（字节）<1> *</1>",
 	"filesStayOnDisk": "",

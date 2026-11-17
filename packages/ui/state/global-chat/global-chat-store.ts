@@ -21,6 +21,7 @@ import type { AskUserChoice, AskUserForm } from "../../lib/ask-user";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../lib/flowpilot-debug";
 import { mergeUsageStats } from "../../lib/llm/usage";
 import type { NativeActionRequest } from "../../lib/native-action-result";
+import type { IAppPointedAt } from "../../lib/pointed-at";
 import type { IInteractionRequest } from "../../lib/schema/interaction";
 import {
 	type AgentDebugReportMetadata,
@@ -214,6 +215,8 @@ export interface GlobalChatDraft {
 	files?: File[];
 	/** The chat bot it is written to, as the dock names it; unset (FlowPilot entry points) is Flux. */
 	botId?: string | null;
+	/** What the person dragged the bot onto: carried by this one message only. */
+	pointedAt?: IAppPointedAt;
 }
 
 /** Provider-neutral model configuration captured once when a global assistant turn starts. */
@@ -292,6 +295,7 @@ export interface GlobalChatQueuedMessage {
 	/** Raw browser files, held until the send actually happens (they are uploaded at send time). */
 	files?: File[];
 	nativeRequest?: NativeActionRequest;
+	pointedAt?: IAppPointedAt;
 	createdAt: number;
 }
 

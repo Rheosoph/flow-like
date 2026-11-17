@@ -145,6 +145,9 @@ fn ask_message(tool: &str, args: &Value) -> String {
     if let Some(message) = tools::browser::ask_message(tool, args) {
         return message;
     }
+    if let Some(message) = tools::computer::ask_message(tool, args) {
+        return message;
+    }
     let target = ["index", "path", "name", "url"]
         .iter()
         .find_map(|key| args.get(key).and_then(Value::as_str))
@@ -248,6 +251,7 @@ registered_tools!(
     "computer_windows",
     "computer_window",
     "computer_launch",
+    "computer_read_text",
     "email_send",
     "email_reply",
     "image_generate",
@@ -296,6 +300,7 @@ const LOCAL_MACHINE_TOOLS: &[&str] = &[
     "computer_windows",
     "computer_window",
     "computer_launch",
+    "computer_read_text",
 ];
 
 pub const TOOL_IMAGES_FIELD: &str = PLATFORM_TOOL_IMAGE_URLS_FIELD;
@@ -600,6 +605,7 @@ mod tests {
                         | "computer_act"
                         | "computer_window"
                         | "computer_launch"
+                        | "computer_read_text"
                         | "email_send"
                         | "email_reply"
                         | "message_person"
@@ -636,6 +642,7 @@ mod tests {
             "computer_windows",
             "computer_window",
             "computer_launch",
+            "computer_read_text",
         ] {
             assert_eq!(
                 tool_capability(name),

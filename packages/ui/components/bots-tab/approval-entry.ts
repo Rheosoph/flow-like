@@ -8,6 +8,7 @@ import type {
 	IInboxApprovalItem,
 	IInboxApprovalResponse,
 	IInboxEntry,
+	ISendInboxEntryRequest,
 } from "../../state/backend-state/inbox-state";
 
 export type ApprovalDecision = IInboxApprovalResponse["decision"];
@@ -63,6 +64,43 @@ function itemsOf(value: unknown): IInboxApprovalItem[] {
 		seen.add(item.args_hash);
 		return [item];
 	});
+}
+
+/** The id of the answer entry sealed into an end-to-end encrypted chat for card `approvalId`. */
+export function sealedApprovalResponseMessageId(approvalId: string): string {
+	return `ar-${approvalId.replace(/^ap-/, "")}`;
+}
+
+/** The answer entry of card `approvalId`, as an end-to-end encrypted chat seals it. */
+export function approvalResponseRequest(
+	approvalId: string,
+	decision: ApprovalDecision,
+	items: readonly IBotApprovalItemDecision[] = [],
+): ISendInboxEntryRequest {
+	return {
+		message_id: sealedApprovalResponseMessageId(approvalId),
+		kind: "message",
+		envelope: {
+			v: 1,
+			enc: "none",
+			body: {
+				text: "",
+				reply_to: approvalId,
+				approval_response: {
+					approval_id: approvalId,
+					decision,
+					...(items.length ? { items } : {}),
+				},
+			},
+		},
+	};
+}
+
+/** The card exactly as the entry carries it, for the server to check a sealed answer against. */
+export function rawApprovalOf(entry: IInboxEntry): IInboxApproval | undefined {
+	return approvalOf(entry)
+		? (plainBody(entry)?.approval as IInboxApproval)
+		: undefined;
 }
 
 /**

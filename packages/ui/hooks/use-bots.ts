@@ -9,7 +9,13 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
+import { approvalResponseRequest } from "../components/bots-tab/approval-entry";
 import { botSecretRequest } from "../lib/bot-secret-sealing";
+import {
+	AUTO_APPROVE_TOOL,
+	SCOPE_ALL,
+	isAutoApproveGrant,
+} from "../lib/tool-grant-scopes";
 import { useBackend } from "../state/backend-state";
 import type {
 	BotApprovalDecision,
@@ -26,12 +32,17 @@ import type {
 	ICreateBotSkillRequest,
 	ICreateBotTaskRequest,
 	IIssuedBotWebhook,
+	ISealedApprovalAnswer,
 	IUpdateBotConnectorRequest,
 	IUpdateBotRequest,
 	IUpdateBotSkillRequest,
 	IUpdateBotTaskRequest,
 	IUpsertBotSecretRequest,
 } from "../state/backend-state/bot-state";
+import type {
+	IInboxApproval,
+	IInboxState,
+} from "../state/backend-state/inbox-state";
 import { inboxKeys } from "./use-inbox";
 
 export const botKeys = {
@@ -437,27 +448,96 @@ export function useRevokeBotToolGrant() {
 	});
 }
 
-/** Answers an approval card in a bot's chat; the chat reads the answer back from the inbox. */
-export function useAnswerBotApproval() {
+/** Whether the bot holds the auto-approval grant. */
+export function botAutoApproves(
+	grants: readonly { tool: string; scope: string }[] | undefined,
+): boolean {
+	return grants?.some(isAutoApproveGrant) ?? false;
+}
+
+/** Switches the bot's auto approval: one standing grant that every host honours. */
+export function useSetBotAutoApprove() {
 	const state = useBackend().botState;
 	const queryClient = useQueryClient();
 	return useMutation({
-		mutationFn: ({
+		mutationFn: async ({
+			botId,
+			enabled,
+		}: {
+			botId: string;
+			enabled: boolean;
+		}) => {
+			const bots = requireBotState(state);
+			if (!bots.putToolGrant || !bots.deleteToolGrant)
+				throw new Error("This backend keeps no tool grants");
+			if (enabled) await bots.putToolGrant(botId, AUTO_APPROVE_TOOL, SCOPE_ALL);
+			else await bots.deleteToolGrant(botId, AUTO_APPROVE_TOOL, SCOPE_ALL);
+		},
+		onSettled: (_, __, { botId }) =>
+			queryClient.invalidateQueries({ queryKey: botKeys.toolGrants(botId) }),
+	});
+}
+
+async function sealedAnswer(
+	inbox: IInboxState | undefined,
+	conversationId: string | undefined,
+	card: IInboxApproval | undefined,
+	approvalId: string,
+	decision: BotApprovalDecision,
+	items: readonly IBotApprovalItemDecision[] | undefined,
+): Promise<ISealedApprovalAnswer | undefined> {
+	if (!inbox?.sealEntry || !conversationId || !card) return undefined;
+	const request = await inbox.sealEntry(
+		conversationId,
+		approvalResponseRequest(approvalId, decision, items),
+	);
+	return request.envelopes ? { card, envelopes: request.envelopes } : undefined;
+}
+
+/** Answers an approval card in a bot's chat; the chat reads the answer back from the inbox. */
+export function useAnswerBotApproval() {
+	const { botState: state, inboxState: inbox } = useBackend();
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: async ({
 			botId,
 			turnId,
 			approvalId,
 			decision,
 			items,
+			conversationId,
+			card,
 		}: {
 			botId: string;
 			turnId: string;
 			approvalId: string;
+			/** With `card`, an end-to-end encrypted chat gets the answer sealed. */
+			conversationId?: string;
+			card?: IInboxApproval;
 			decision: BotApprovalDecision;
 			/** Calls of a batch whose answer differs from `decision`. */
 			items?: readonly IBotApprovalItemDecision[];
 		}) => {
 			const answer = requireBotState(state).answerApproval;
 			if (!answer) throw new Error("This backend cannot answer approvals");
+			const sealed = await sealedAnswer(
+				inbox,
+				conversationId,
+				card,
+				approvalId,
+				decision,
+				items,
+			);
+			if (sealed)
+				return answer.call(
+					state,
+					botId,
+					turnId,
+					approvalId,
+					decision,
+					items,
+					sealed,
+				);
 			return items?.length
 				? answer.call(state, botId, turnId, approvalId, decision, items)
 				: answer.call(state, botId, turnId, approvalId, decision);

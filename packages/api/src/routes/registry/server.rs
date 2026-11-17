@@ -2803,7 +2803,9 @@ impl ServerRegistry {
                     update_model.wasm_path = Set(latest.wasm_path.clone());
                     update_model.wasm_hash = Set(latest.wasm_hash.clone());
                     update_model.wasm_size = Set(latest.wasm_size);
-                    if let Some((nodes, permissions)) = approved_node_catalog(&pkg.permissions, latest) {
+                    if let Some((nodes, permissions)) =
+                        approved_node_catalog(&pkg.permissions, latest)
+                    {
                         update_model.nodes = Set(nodes);
                         if let Some(permissions) = permissions {
                             update_model.permissions = Set(permissions);

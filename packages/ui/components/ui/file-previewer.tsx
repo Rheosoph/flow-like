@@ -1,6 +1,7 @@
 "use client";
 import { useTranslation } from "@flow-like/locales";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { isIOS } from "../../lib/platform";
 import { cn } from "../../lib/utils";
 import { AudioPreview } from "./audio-preview";
 import { MonacoFileEditor } from "./monaco-file-editor";
@@ -255,13 +256,26 @@ function NativePdfFrame({
 		);
 	}
 
+	const viewerSrc = `${src.split("#")[0]}${pdfViewerFragment(page)}`;
+	const frameClassName = cn(
+		"w-full h-full border-0 max-h-full max-w-full",
+		className,
+	);
+	const title = t("pdfPreviewVal", "PDF Preview: {{val}}", {
+		val: rawFileName(url, filename),
+	});
+
+	if (isIOS()) {
+		return (
+			<IosPdfEmbed src={viewerSrc} className={frameClassName} title={title} />
+		);
+	}
+
 	return (
 		<iframe
-			src={`${src.split("#")[0]}${pdfViewerFragment(page)}`}
-			className={cn("w-full h-full border-0 max-h-full max-w-full", className)}
-			title={t("pdfPreviewVal", "PDF Preview: {{val}}", {
-				val: rawFileName(url, filename),
-			})}
+			src={viewerSrc}
+			className={frameClassName}
+			title={title}
 			loading={loading}
 		>
 			<p>
@@ -275,6 +289,40 @@ function NativePdfFrame({
 				instead.
 			</p>
 		</iframe>
+	);
+}
+
+/**
+ * iOS WebKit leaves a PDF `<iframe>` blank inside the app's WKWebView (Safari
+ * renders it); `<embed>` gets the inline viewer in both. Unlike an iframe, its
+ * touches reach the page, where a modal's scroll lock (react-remove-scroll)
+ * cancels every `touchmove` on an element it cannot see scrolling, which
+ * freezes the viewer, so they stop at the wrapper.
+ */
+function IosPdfEmbed({
+	src,
+	className,
+	title,
+}: Readonly<{ src: string; className: string; title: string }>) {
+	const wrapperRef = useRef<HTMLDivElement>(null);
+
+	useEffect(() => {
+		const wrapper = wrapperRef.current;
+		if (!wrapper) return;
+		const keepTouchInViewer = (event: TouchEvent) => event.stopPropagation();
+		wrapper.addEventListener("touchmove", keepTouchInViewer, { passive: true });
+		return () => wrapper.removeEventListener("touchmove", keepTouchInViewer);
+	}, []);
+
+	return (
+		<div ref={wrapperRef} className="h-full w-full">
+			<embed
+				src={src}
+				type="application/pdf"
+				title={title}
+				className={className}
+			/>
+		</div>
 	);
 }
 

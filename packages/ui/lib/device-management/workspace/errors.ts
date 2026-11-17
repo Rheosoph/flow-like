@@ -249,6 +249,10 @@ const TRANSPORT_MESSAGES: Record<string, Filed> = {
 		"reading_services",
 		"rejected_unsupported",
 	],
+	"Update the device agent to watch its bots.": [
+		"reading_services",
+		"rejected_unsupported",
+	],
 };
 
 const INSPECTION_REJECTED =

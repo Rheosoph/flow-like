@@ -758,6 +758,7 @@ export function PageBuilderSurface({
 						initialComponents={page.components}
 						initialWidgetRefs={page.widgetRefs}
 						widgetId={page.id}
+						surfaceName={page.name}
 						surfaceId={`page-${page.id}`}
 						onSave={handleSave}
 						onChange={handleComponentsChange}

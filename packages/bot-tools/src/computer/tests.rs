@@ -15,6 +15,8 @@ struct FakeScreen {
     fail_act: Mutex<Option<String>>,
     window_ops: Mutex<Vec<(String, WindowOp, WindowBounds)>>,
     launches: Mutex<Vec<(String, Vec<String>)>>,
+    reads: Mutex<Vec<(TextSource, Option<(f64, f64)>)>>,
+    text: Mutex<String>,
 }
 
 #[async_trait]
@@ -67,6 +69,14 @@ impl ComputerBackend for FakeScreen {
             .unwrap()
             .push((program.into(), args.to_vec()));
         Ok("started".into())
+    }
+
+    async fn read_text(&self, source: TextSource, at: Option<(f64, f64)>) -> Result<ReadText> {
+        self.reads.lock().unwrap().push((source, at));
+        Ok(ReadText {
+            text: self.text.lock().unwrap().clone(),
+            method: TextMethod::Accessibility,
+        })
     }
 }
 
@@ -167,6 +177,7 @@ async fn a_host_without_a_computer_refuses_every_tool_and_touches_nothing() {
             json!({ "action": "focus", "window": "Notes" }),
         ),
         ("computer_launch", json!({ "program": "notes" })),
+        ("computer_read_text", json!({})),
     ] {
         let outcome = call(&env, tool, args).await;
         assert_eq!(outcome.status, Status::Error, "{tool}");
@@ -183,6 +194,11 @@ async fn bad_actions_never_reach_the_screen() {
         json!({ "action": "type" }),
         json!({ "action": "key", "text": "  " }),
         json!({ "action": "scroll", "x": 1, "y": 1, "text": "diagonal" }),
+        json!({ "action": "paste" }),
+        json!({ "action": "drag", "x": 1, "y": 1 }),
+        json!({ "action": "drag", "x": 1, "y": 1, "to_x": 5 }),
+        json!({ "action": "select_all", "x": 4 }),
+        json!({ "action": "triple_click", "y": 4 }),
     ] {
         let outcome = call(&env, "computer_act", args.clone()).await;
         assert_eq!(
@@ -397,4 +413,138 @@ async fn waiting_while_the_owner_is_at_the_computer_succeeds_without_a_picture()
     assert_eq!(outcome.result["taken_over"], true);
     let act = call(&env, "computer_screenshot", json!({})).await;
     assert_eq!(act.error.unwrap().code, crate::error::code::TAKEN_OVER);
+}
+
+#[tokio::test]
+async fn text_actions_reach_the_screen_as_meant() {
+    let (screen, env) = setup().await;
+    for args in [
+        json!({ "action": "triple_click", "x": 10, "y": 20 }),
+        json!({ "action": "paste", "text": "Dear team,\nhere is the report." }),
+        json!({ "action": "paste", "text": "fresh", "replace_all": true }),
+        json!({ "action": "select_all" }),
+        json!({ "action": "select_all", "x": 3, "y": 4 }),
+        json!({ "action": "drag", "x": 1, "y": 2, "to_x": 30, "to_y": 2 }),
+    ] {
+        let outcome = call(&env, "computer_act", args.clone()).await;
+        assert!(outcome.is_ok(), "{args}: {:?}", outcome.error);
+    }
+    assert_eq!(
+        *screen.actions.lock().unwrap(),
+        vec![
+            ComputerAction::Click {
+                x: 10.0,
+                y: 20.0,
+                button: PointerButton::Left,
+                count: 3
+            },
+            ComputerAction::Paste {
+                text: "Dear team,\nhere is the report.".into(),
+                replace_all: false
+            },
+            ComputerAction::Paste {
+                text: "fresh".into(),
+                replace_all: true
+            },
+            ComputerAction::SelectAll { at: None },
+            ComputerAction::SelectAll {
+                at: Some((3.0, 4.0))
+            },
+            ComputerAction::Drag {
+                from: (1.0, 2.0),
+                to: (30.0, 2.0),
+                button: PointerButton::Left
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn pasted_secrets_are_filled_and_long_text_is_refused() {
+    let (screen, env) = setup().await;
+    env.inner
+        .secrets
+        .lock()
+        .unwrap()
+        .insert("TOKEN".into(), "s3cr3t-value".into());
+    let outcome = call(
+        &env,
+        "computer_act",
+        json!({ "action": "paste", "text": "key={{secret:TOKEN}}" }),
+    )
+    .await;
+    assert!(outcome.is_ok(), "{:?}", outcome.error);
+    assert_eq!(
+        screen.actions.lock().unwrap()[0],
+        ComputerAction::Paste {
+            text: "key=s3cr3t-value".into(),
+            replace_all: false
+        }
+    );
+    assert!(!outcome.envelope().to_string().contains("s3cr3t-value"));
+    let long = call(
+        &env,
+        "computer_act",
+        json!({ "action": "paste", "text": "x".repeat(MAX_PASTED_CHARS + 1) }),
+    )
+    .await;
+    assert_eq!(
+        long.error.map(|e| e.code),
+        Some(crate::error::code::INVALID_ARGS)
+    );
+}
+
+#[tokio::test]
+async fn reading_text_returns_it_whole_or_cut_and_says_how() {
+    let (screen, env) = setup().await;
+    *screen.text.lock().unwrap() = "äbc".repeat(10);
+    let whole = call(&env, "computer_read_text", json!({ "x": 5, "y": 6 })).await;
+    assert!(whole.is_ok(), "{:?}", whole.error);
+    assert_eq!(whole.result["text"], "äbc".repeat(10));
+    assert_eq!(whole.result["chars"], 30);
+    assert_eq!(whole.result["method"], "accessibility");
+    assert!(whole.result.get("truncated").is_none());
+    assert!(whole.images.is_empty());
+
+    let cut = call(
+        &env,
+        "computer_read_text",
+        json!({ "source": "selection", "max_chars": 4 }),
+    )
+    .await;
+    assert_eq!(cut.result["text"], "äbcä");
+    assert_eq!(cut.result["truncated"], true);
+    assert_eq!(
+        *screen.reads.lock().unwrap(),
+        vec![
+            (TextSource::Field, Some((5.0, 6.0))),
+            (TextSource::Selection, None)
+        ]
+    );
+
+    screen.text.lock().unwrap().clear();
+    let empty = call(&env, "computer_read_text", json!({ "source": "selection" })).await;
+    assert_eq!(empty.result["note"], "Nothing is selected");
+}
+
+#[test]
+fn reading_and_pasting_tell_the_owner_what_happens() {
+    assert_eq!(
+        ask_message(COMPUTER_READ_TEXT, &json!({ "source": "selection" })).as_deref(),
+        Some("The bot wants to read the selected text on your screen.")
+    );
+    let paste = ask_message(
+        COMPUTER_ACT,
+        &json!({ "action": "paste", "text": "Hello\n  world", "replace_all": true }),
+    )
+    .unwrap();
+    assert_eq!(
+        paste,
+        "The bot wants to replace the focused field's text with 13 characters: “Hello world”"
+    );
+    assert!(ask_message(COMPUTER_ACT, &json!({ "action": "click" })).is_none());
+    let specs = super::specs();
+    let read = specs.iter().find(|s| s.name == COMPUTER_READ_TEXT).unwrap();
+    assert_eq!(read.approval, crate::Approval::Ask);
+    assert!(!read.mutating);
 }

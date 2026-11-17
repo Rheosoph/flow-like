@@ -198,9 +198,11 @@ async fn an_approval_gated_tool_without_a_grant_parks_the_turn() {
     let park = hub.calls("/park");
     assert_eq!(park.len(), 1);
     let park: DeviceParkRequest = serde_json::from_value(park[0].body.clone()).unwrap();
-    assert_eq!(park.approval.tool, "browser_open");
-    assert_eq!(park.approval.turn_id, turn_id(BOT_ID, TRIGGER_ID));
-    assert_eq!(park.approval.scope, "browser:example.org");
+    assert!(park.sealed.is_none());
+    let approval = park.approval.expect("a plain chat parks with a plain card");
+    assert_eq!(approval.tool, "browser_open");
+    assert_eq!(approval.turn_id, turn_id(BOT_ID, TRIGGER_ID));
+    assert_eq!(approval.scope, "browser:example.org");
     assert_eq!(park.usage.unwrap().operation_id, OPERATION_ID);
     assert_eq!(count(&hub, "/reply"), 0);
     assert_eq!(count(&hub, "/release"), 0);

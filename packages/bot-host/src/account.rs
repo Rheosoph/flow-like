@@ -40,6 +40,7 @@ use flow_like_types::{
         failure_message_id, reply_message_id,
     },
     inbox::{ConversationKind, InboxEntryKind, plain_envelope},
+    tool_grant::SealedApprovalCard,
 };
 use serde_json::json;
 use std::{
@@ -1528,7 +1529,8 @@ impl Inner {
         }))
     }
 
-    /// Asks the hub to park the turn this host holds; the hub posts the card as the bot.
+    /// Asks the hub to park the turn this host holds; the hub posts the card as the bot. In an
+    /// encrypted chat the host seals the card first, since the hub can't write there.
     async fn park(
         &self,
         key: &Key,
@@ -1541,7 +1543,21 @@ impl Inner {
         if let Some(reason) = *cancel.borrow() {
             return End::by(reason);
         }
-        match hub.park(&lead.id, &self.config.host_id, card).await {
+        let parked = if sealed {
+            match self.sealed_card(lead, card).await {
+                Ok(sealed_card) => {
+                    hub.park_sealed(&lead.id, &self.config.host_id, &sealed_card)
+                        .await
+                }
+                Err(failure) => {
+                    tracing::warn!(code = failure.code, message = %failure.message, "Bot host: an approval card could not be sealed");
+                    return self.abandon(lead, failure.code).await;
+                }
+            }
+        } else {
+            hub.park(&lead.id, &self.config.host_id, card).await
+        };
+        match parked {
             Ok(()) => End {
                 status: TurnStatus::Waiting,
                 error_code: String::new(),
@@ -1694,6 +1710,38 @@ impl Inner {
             });
         };
         e2e.open_entries(bot_id, trigger_message_id, entries).await
+    }
+
+    /// The card sealed for the turn's encrypted chat under its own id, naming whose message woke
+    /// the turn as the hub does for a plain card.
+    async fn sealed_card(
+        &self,
+        lead: &BotTurn,
+        card: &ApprovalRequest,
+    ) -> Result<SealedApprovalCard, e2e::E2eFailure> {
+        let Some(e2e) = self.e2e.get() else {
+            return Err(e2e::E2eFailure {
+                code: e2e::CODE_E2E_UNAVAILABLE,
+                message: "End-to-end encryption is not enabled on this host".into(),
+            });
+        };
+        let mut card = card.clone();
+        if let Some(requester) = &lead.requester_id {
+            card.requester_id = Some(requester.clone());
+            card.requester_name = lead.requester_name.clone();
+        }
+        let envelopes = e2e
+            .seal(
+                &lead.bot_id,
+                &lead.conversation_id,
+                &card.id,
+                &card.message_body(lead.hops),
+            )
+            .await?;
+        Ok(SealedApprovalCard {
+            approval_id: card.id,
+            envelopes,
+        })
     }
 
     /// The sealed send of `body`. A failure report names its code beside the envelopes, because

@@ -25,6 +25,7 @@ import {
 import { toast } from "sonner";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../../lib/flowpilot-debug";
 import { observeResize } from "../../../lib/observe-resize";
+import { openExternalUrl } from "../../../lib/open-external";
 import { IRole } from "../../../lib/schema/llm/history";
 import { cn } from "../../../lib/utils";
 import { ChatApprovalCard } from "../../bots-tab/approval-card";
@@ -77,6 +78,7 @@ import {
 } from "./pending-ask";
 import { PendingAskRule, PendingAskStatus } from "./pending-ask-status";
 import { InlineStepGroup, PlanSteps } from "./plan-steps";
+import { PointedAtChip } from "./pointed-at-chip";
 import { extractThinkBlocks } from "./reasoning-format";
 import { ReasoningViewer } from "./reasoning-viewer";
 import { RoomMessageActions } from "./room-message-actions";
@@ -636,7 +638,9 @@ export const MessageComponent = memo(
 			// A cited page is a destination, not a file — downloading its markup is
 			// never what the external-link affordance promised.
 			if (file.type === "website") {
-				window.open(file.url, "_blank", "noopener,noreferrer");
+				openExternalUrl(file.url).catch((error) =>
+					console.error("Opening the cited page failed:", error),
+				);
 			} else if (canPreviewFile(file)) {
 				// Open file dialog with this file selected
 				setDialogSelectedFile(file);
@@ -981,6 +985,9 @@ export const MessageComponent = memo(
 								</span>
 								{message.thinking && <ThinkingStamp value={message.thinking} />}
 							</span>
+						)}
+						{isUser && message.pointedAt && (
+							<PointedAtChip target={message.pointedAt} />
 						)}
 						{!isUser && !stepsInline && planSteps.length > 0 && (
 							<PlanSteps
