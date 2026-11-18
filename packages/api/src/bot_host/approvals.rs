@@ -264,6 +264,7 @@ pub(crate) async fn list_grants<C: ConnectionTrait>(
 ) -> Result<Vec<ToolGrant>, ApiError> {
     owned_bot(db, owner_id, bot_id).await?;
     let now = now_millis();
+    let cutoff = token_cutoff(now);
     let rows = bot_tool_grant::Entity::find()
         .filter(bot_tool_grant::Column::BotId.eq(bot_id))
         .filter(bot_tool_grant::Column::OwnerId.eq(owner_id))
@@ -274,7 +275,7 @@ pub(crate) async fn list_grants<C: ConnectionTrait>(
     Ok(rows
         .into_iter()
         .filter(|row| live(row, now))
-        .filter(|row| with_tokens || !is_token_scope(&row.scope))
+        .filter(|row| !is_token_scope(&row.scope) || (with_tokens && row.granted_at >= cutoff))
         .map(grant_of)
         .collect())
 }

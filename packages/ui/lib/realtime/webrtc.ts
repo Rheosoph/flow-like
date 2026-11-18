@@ -16,11 +16,16 @@ interface RealtimePeerConfiguration extends Record<string, unknown> {
 	iceServers?: IRealtimeIceServer[];
 }
 
+interface RetirableConnection {
+	peer?: unknown;
+	destroy?: () => void;
+}
+
 interface IceConfigurableProvider {
 	peerOpts?: RealtimePeerOptions;
 	room?: {
 		webrtcConns?: {
-			values: () => Iterable<{ destroy?: () => void }>;
+			values: () => Iterable<RetirableConnection>;
 		};
 	} | null;
 }
@@ -82,9 +87,18 @@ export function peerOptsForIceServers(
 		: { config: { iceServers: cloneIceServers(iceServers) } };
 }
 
-/** Apply freshly minted ICE credentials to future peer connections. Active
- * peer connections keep the configuration captured at construction, so they
- * are recycled when the effective server list changes. */
+/** Expiry of an access's ICE credentials in epoch milliseconds, when it names one. */
+export function realtimeIceExpiryMs(access: IRealtimeAccess): number | null {
+	return typeof access.ice_expires_at === "number" &&
+		Number.isFinite(access.ice_expires_at) &&
+		access.ice_expires_at > 0
+		? access.ice_expires_at * 1000
+		: null;
+}
+
+/** Hand freshly minted ICE servers to the peer connections opened from now on.
+ * Every access carries its own relay credentials, so a live connection is never
+ * closed for a new list: it keeps running on the one it was built with. */
 export function applyRealtimeIceServers(
 	provider: IceConfigurableProvider,
 	iceServers: IRealtimeIceServer[] | undefined,
@@ -115,20 +129,71 @@ export function applyRealtimeIceServers(
 		};
 	}
 	provider.peerOpts = nextPeerOpts;
-
-	const connections = provider.room?.webrtcConns?.values();
-	if (connections) {
-		for (const connection of Array.from(connections)) {
-			try {
-				connection.destroy?.();
-			} catch (error) {
-				console.error("[WebRTC] Failed to recycle a peer connection:", error);
-			}
-		}
-	}
-
 	return true;
 }
+
+type StatsReport = Record<string, unknown>;
+
+interface StatsSource {
+	getStats(): Promise<{ forEach(visit: (report: StatsReport) => void): void }>;
+}
+
+/** Whether this side of the connection sends through a TURN relay. */
+export async function usesRelay(connection: StatsSource): Promise<boolean> {
+	const reports = new Map<unknown, StatsReport>();
+	// biome-ignore lint/complexity/noForEach: forEach is all an RTCStatsReport is typed to offer
+	(await connection.getStats()).forEach((report) => {
+		reports.set(report.id, report);
+	});
+	const all = [...reports.values()];
+	const transport = all.find(
+		(report) =>
+			report.type === "transport" &&
+			report.selectedCandidatePairId !== undefined,
+	);
+	const pair = transport
+		? reports.get(transport.selectedCandidatePairId)
+		: all.find(
+				(report) =>
+					report.type === "candidate-pair" &&
+					(report.selected === true ||
+						(report.nominated === true && report.state === "succeeded")),
+			);
+	return reports.get(pair?.localCandidateId)?.candidateType === "relay";
+}
+
+function liveConnections(
+	provider: IceConfigurableProvider,
+): RetirableConnection[] {
+	return [...(provider.room?.webrtcConns?.values() ?? [])];
+}
+
+/**
+ * A relayed connection runs on the credential it was built with and ends when
+ * that lapses, so it is closed shortly before and y-webrtc reconnects it on the
+ * current one. A direct connection holds no credential and stays.
+ */
+export async function retireRelayedConnections(
+	provider: IceConfigurableProvider,
+	connections: readonly RetirableConnection[],
+): Promise<void> {
+	for (const connection of connections) {
+		const source = (connection.peer as { _pc?: StatsSource } | undefined)?._pc;
+		if (!source || !liveConnections(provider).includes(connection)) continue;
+		try {
+			if (
+				(await usesRelay(source)) &&
+				liveConnections(provider).includes(connection)
+			) {
+				connection.destroy?.();
+			}
+		} catch (error) {
+			console.warn("[WebRTC] Could not retire a relayed connection:", error);
+		}
+	}
+}
+
+const RELAY_RETIRE_MARGIN_MS = 60_000;
 
 const AUTH_REFRESH_MIN_MS = 2_000;
 const AUTH_REFRESH_MAX_MS = 60_000;
@@ -195,10 +260,19 @@ interface RoomRegistryEntry {
 	statusCheckInterval: ReturnType<typeof setInterval> | null;
 	statusCheckTimeout: ReturnType<typeof setTimeout> | null;
 	lastStatus: Exclude<RealtimeStatus, "reconnecting"> | undefined;
+	/** When the ICE credentials new connections are built with lapse. */
+	iceExpiresAt: number | null;
+	retirements: Set<ReturnType<typeof setTimeout>>;
+	/** Settles when the last consumer let go and the room closed. */
+	released: Promise<void>;
+	markReleased: () => void;
 }
 
 // Global registry to prevent duplicate Y.Doc instances for the same room
 const roomRegistry = new Map<string, RoomRegistryEntry>();
+// Two consumers opening one room at once must end up sharing it, so openings queue per room.
+const roomOpenings = new Map<string, Promise<unknown>>();
+const ROOM_REKEY_WAIT_MS = 3_000;
 
 function emitStatus(entry: RoomRegistryEntry, status: RealtimeStatus): void {
 	for (const listener of entry.statusListeners) listener(status);
@@ -214,6 +288,24 @@ function refreshRegistryEntry(
 		);
 	}
 	entry.refreshAccess(access);
+}
+
+/**
+ * Peers on two room keys cannot reach each other. A consumer that arrives with
+ * another key asks whoever holds the room to fetch its access again: a holder
+ * on the older key rebuilds, and its letting go lets this opening go ahead on
+ * the new key. A holder that keeps the room leaves the arrival on the stale one.
+ */
+async function awaitRekey(entry: RoomRegistryEntry): Promise<void> {
+	for (const listener of [...entry.authFailureListeners]) listener();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	await Promise.race([
+		entry.released,
+		new Promise<void>((resolve) => {
+			timer = setTimeout(resolve, ROOM_REKEY_WAIT_MS);
+		}),
+	]);
+	clearTimeout(timer);
 }
 
 function createRoomRelease(
@@ -239,6 +331,8 @@ function createRoomRelease(
 		if (entry.statusCheckTimeout !== null) {
 			clearTimeout(entry.statusCheckTimeout);
 		}
+		for (const timer of entry.retirements) clearTimeout(timer);
+		entry.retirements.clear();
 
 		try {
 			entry.provider.disconnect();
@@ -252,21 +346,46 @@ function createRoomRelease(
 			console.error("Doc destroy error:", error);
 		}
 		entry.disposeAuthentication();
+		entry.markReleased();
 	};
 }
 
-export async function createRealtimeSession(args: {
+interface RealtimeSessionArgs {
 	room: string;
 	access: IRealtimeAccess;
 	/** The authenticated user's sub (subject) from the auth token */
 	sub?: string;
 	signalingServers?: string[];
 	onStatusChange?: RealtimeStatusListener;
-	/** Invoked when a signaling socket is rejected or closed for a stale
-	 *  credential, so the caller can re-fetch access and call refreshAccess. */
+	/** Invoked when the access went stale: a signaling socket was rejected or
+	 *  closed for its credential, or another consumer brought a newer room key.
+	 *  The caller re-fetches access and calls refreshAccess or rebuilds. */
 	onAuthFailure?: () => void;
-}): Promise<RealtimeSession> {
+}
+
+export function createRealtimeSession(
+	args: RealtimeSessionArgs,
+): Promise<RealtimeSession> {
+	const opening = (roomOpenings.get(args.room) ?? Promise.resolve())
+		.catch(() => undefined)
+		.then(() => openRealtimeSession(args));
+	roomOpenings.set(args.room, opening);
+	const settled = () => {
+		if (roomOpenings.get(args.room) === opening) {
+			roomOpenings.delete(args.room);
+		}
+	};
+	opening.then(settled, settled);
+	return opening;
+}
+
+async function openRealtimeSession(
+	args: RealtimeSessionArgs,
+): Promise<RealtimeSession> {
 	const { room, access, sub, onStatusChange } = args;
+
+	const held = roomRegistry.get(room);
+	if (held && held.keyId !== access.key_id) await awaitRekey(held);
 
 	// Check if a session already exists for this room
 	const existing = roomRegistry.get(room);
@@ -441,15 +560,33 @@ export async function createRealtimeSession(args: {
 		}
 	};
 
+	let markReleased = () => {};
+	const released = new Promise<void>((resolve) => {
+		markReleased = resolve;
+	});
 	registryEntry = {
 		doc,
 		provider,
+		released,
+		markReleased,
 		keyId: access.key_id,
 		refCount: 1,
 		disposeAuthentication: authenticatedSignaling.dispose,
 		refreshAccess: (nextAccess: IRealtimeAccess) => {
 			authenticatedSignaling.rotate(nextAccess.jwt);
-			applyRealtimeIceServers(provider, nextAccess.ice_servers);
+			const outgoing = liveConnections(provider);
+			const lapsesAt = registryEntry.iceExpiresAt;
+			if (!applyRealtimeIceServers(provider, nextAccess.ice_servers)) return;
+			registryEntry.iceExpiresAt = realtimeIceExpiryMs(nextAccess);
+			if (lapsesAt === null || outgoing.length === 0) return;
+			const timer = setTimeout(
+				() => {
+					registryEntry.retirements.delete(timer);
+					void retireRelayedConnections(provider, outgoing);
+				},
+				Math.max(lapsesAt - RELAY_RETIRE_MARGIN_MS - Date.now(), 0),
+			);
+			registryEntry.retirements.add(timer);
 		},
 		reconnect,
 		statusListeners,
@@ -457,6 +594,8 @@ export async function createRealtimeSession(args: {
 		statusCheckInterval: null,
 		statusCheckTimeout: null,
 		lastStatus: undefined,
+		iceExpiresAt: realtimeIceExpiryMs(access),
+		retirements: new Set(),
 	};
 	roomRegistry.set(room, registryEntry);
 	registryEntry.statusCheckInterval = setInterval(checkConnectionStatus, 5000);

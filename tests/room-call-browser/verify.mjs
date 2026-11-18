@@ -6,11 +6,12 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import puppeteer from "puppeteer";
 
-// Calls between people in a room, in real Chrome profiles over the real signaling server:
+// Calls between people in a room, in real browser profiles over the real signaling server:
 // each person is a separate profile, so presence and audio only arrive over the network.
 // Needs bun (signaling) and Chrome; ROOM_CALL_TEST_VERBOSE=1 prints the pages' consoles.
+// ROOM_CALL_TEST_BROWSER=webkit runs the engine of the macOS and iOS apps instead of Chrome.
+const engine = process.env.ROOM_CALL_TEST_BROWSER ?? "chrome";
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const port = Number(process.env.ROOM_CALL_TEST_PORT ?? 4401);
 const apiPort = port + 1;
@@ -129,7 +130,15 @@ const hub = createServer(async (request, response) => {
 				.update(json.conversation)
 				.digest("base64"),
 			key_id: "2026-11-11.fixture",
-			ice_servers: [],
+			// As in production, every answer carries relay credentials minted for it alone.
+			ice_servers: [
+				{
+					urls: ["turn:127.0.0.1:9?transport=udp"],
+					username: `fixture-${inbox.accessRequests}`,
+					credential: randomUUID(),
+				},
+			],
+			ice_expires_at: Math.floor(Date.now() / 1000) + 4 * 60 * 60,
 		});
 	}
 	if (url.pathname === "/fixture/entries" && request.method === "POST")
@@ -206,6 +215,72 @@ async function reachable(url, child, name) {
 	}
 }
 
+const viewport = { width: 900, height: 700 };
+const skewClock = (ahead) => {
+	const now = Date.now.bind(Date);
+	Date.now = () => now() + ahead;
+};
+
+/** The two drivers differ in how a profile opens, a page waits and a button is pressed. */
+async function launch() {
+	if (engine === "webkit") {
+		const { webkit } = await import("playwright");
+		const instance = await webkit.launch({ headless: true });
+		return {
+			close: () => instance.close(),
+			async newPage(clockAheadMs) {
+				const context = await instance.newContext({ viewport });
+				const page = await context.newPage();
+				await page.addInitScript(skewClock, clockAheadMs);
+				return page;
+			},
+			waitForFunction: (page, check, argument, options) =>
+				page.waitForFunction(check, argument, options),
+			// WebKit starts audio only from a real press, as it does in the apps. An incoming
+			// call's dialog is modal and comes last, so its button is the one that can be pressed.
+			clickText: (page, text) =>
+				page
+					.locator("button")
+					.filter({ hasText: new RegExp(`^\\s*${text}\\s*$`) })
+					.last()
+					.click(),
+		};
+	}
+	const { default: puppeteer } = await import("puppeteer");
+	const instance = await puppeteer.launch({
+		headless: true,
+		executablePath:
+			process.env.CHROME_PATH ??
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+		args: [
+			"--use-fake-ui-for-media-stream",
+			"--autoplay-policy=no-user-gesture-required",
+			"--disable-background-timer-throttling",
+			"--disable-renderer-backgrounding",
+			"--disable-backgrounding-occluded-windows",
+			"--disable-features=WebRtcHideLocalIpsWithMdns",
+		],
+	});
+	return {
+		close: () => instance.close(),
+		async newPage(clockAheadMs) {
+			const context = await instance.createBrowserContext();
+			const page = await context.newPage();
+			await page.setViewport(viewport);
+			await page.evaluateOnNewDocument(skewClock, clockAheadMs);
+			return page;
+		},
+		waitForFunction: (page, check, argument, options) =>
+			page.waitForFunction(check, options, argument),
+		clickText: (page, text) =>
+			page.evaluate((value) => {
+				[...document.querySelectorAll("button")]
+					.find((button) => button.textContent?.trim() === value)
+					?.click();
+			}, text),
+	};
+}
+
 let browser;
 const errors = [];
 const pages = new Map();
@@ -213,14 +288,12 @@ const snapshot = (page) => page.evaluate(() => window.roomCallTest.snapshot());
 
 /** Each person gets their own browser profile, so tabs cannot reach each other without the network. */
 async function open(person, conversation, clockAheadMs = 0) {
-	const context = await browser.createBrowserContext();
-	const page = await context.newPage();
-	await page.setViewport({ width: 900, height: 700 });
-	await page.evaluateOnNewDocument((ahead) => {
-		const now = Date.now.bind(Date);
-		Date.now = () => now() + ahead;
-	}, clockAheadMs);
-	page.on("pageerror", (error) => errors.push(`${person}: ${error}`));
+	const page = await browser.newPage(clockAheadMs);
+	page.on("pageerror", (error) => {
+		// WebKit reports a send to a peer whose page just closed as an error; y-webrtc expects it.
+		if (engine === "webkit" && /RTCDataChannel/.test(String(error))) return;
+		errors.push(`${person}: ${error}`);
+	});
 	page.on("console", (message) => {
 		if (process.env.ROOM_CALL_TEST_VERBOSE)
 			console.log(`[${person}] ${message.text()}`);
@@ -236,7 +309,10 @@ async function open(person, conversation, clockAheadMs = 0) {
 async function waitFor(page, check, what, argument, timeout = 30_000) {
 	await page.bringToFront();
 	try {
-		await page.waitForFunction(check, { timeout, polling: 100 }, argument);
+		await browser.waitForFunction(page, check, argument, {
+			timeout,
+			polling: 100,
+		});
 	} catch (cause) {
 		throw new Error(
 			`${what} never happened: ${JSON.stringify(await snapshot(page))}`,
@@ -286,11 +362,7 @@ async function clickText(page, text) {
 		`a "${text}" button`,
 		text,
 	);
-	await page.evaluate((value) => {
-		[...document.querySelectorAll("button")]
-			.find((button) => button.textContent?.trim() === value)
-			?.click();
-	}, text);
+	await browser.clickText(page, text);
 }
 const policyCloses = async (page) =>
 	(await snapshot(page)).sockets.closes.filter((close) => close.code === 1008);
@@ -304,21 +376,8 @@ try {
 			"signaling",
 		),
 	]);
-	browser = await puppeteer.launch({
-		headless: true,
-		executablePath:
-			process.env.CHROME_PATH ??
-			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-		args: [
-			"--use-fake-ui-for-media-stream",
-			"--autoplay-policy=no-user-gesture-required",
-			"--disable-background-timer-throttling",
-			"--disable-renderer-backgrounding",
-			"--disable-backgrounding-occluded-windows",
-			"--disable-features=WebRtcHideLocalIpsWithMdns",
-		],
-	});
-	const report = {};
+	browser = await launch();
+	const report = { engine };
 
 	// Everyone has the room open: one starts, the others see it and join.
 	const alice = await open("alice", ROOM);
@@ -352,6 +411,41 @@ try {
 	await hearing(bob, "carol");
 	await carol.screenshot({ path: resolve(output, "three-in-call.png") });
 	report.mesh = "three people hear each other";
+
+	// Another part of the app opens the room mid-call, as the incoming-call check does. Its
+	// access carries new relay credentials, and nobody's connection may be rebuilt for them.
+	const inRoom = [
+		["alice", alice],
+		["bob", bob],
+		["carol", carol],
+	];
+	const connectionsOf = async () =>
+		Object.fromEntries(
+			await Promise.all(
+				inRoom.map(async ([person, page]) => [
+					person,
+					(await snapshot(page)).peerConnections,
+				]),
+			),
+		);
+	const connections = await connectionsOf();
+	const asked = (await snapshot(bob)).accessRequests.length;
+	await bob.evaluate((room) => window.roomCallTest.openAgain(room), ROOM);
+	await waitFor(
+		bob,
+		(count) => window.roomCallTest.snapshot().accessRequests.length > count,
+		"bob's second access to the room",
+		asked,
+	);
+	await new Promise((done) => setTimeout(done, 2_000));
+	assert.deepEqual(
+		await connectionsOf(),
+		connections,
+		"new relay credentials rebuilt the call's connections",
+	);
+	await hearing(alice, "bob");
+	await hearing(bob, "alice");
+	report.secondAccess = `the call kept its connections: ${JSON.stringify(connections)}`;
 
 	for (const page of [carol, bob, alice])
 		await click(page, 'button[aria-label="Leave call"]');

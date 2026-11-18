@@ -4,6 +4,9 @@ import {
 	applyRealtimeIceServers,
 	createAuthFailureGate,
 	peerOptsForIceServers,
+	realtimeIceExpiryMs,
+	retireRelayedConnections,
+	usesRelay,
 } from "./webrtc";
 
 const initialIceServers: IRealtimeIceServer[] = [
@@ -14,6 +17,38 @@ const initialIceServers: IRealtimeIceServer[] = [
 		credential: "first-password",
 	},
 ];
+
+type Report = Record<string, unknown>;
+
+/** A peer connection's statistics, as the browsers report them. */
+function statsOf(reports: Report[]) {
+	return {
+		getStats: async () => ({
+			forEach(visit: (report: Report) => void) {
+				for (const report of reports) visit(report);
+			},
+		}),
+	};
+}
+
+const pairOver = (candidateType: string): Report[] => [
+	{ id: "local", type: "local-candidate", candidateType },
+	{ id: "remote", type: "remote-candidate", candidateType: "srflx" },
+	{
+		id: "pair",
+		type: "candidate-pair",
+		localCandidateId: "local",
+		remoteCandidateId: "remote",
+		nominated: true,
+		state: "succeeded",
+	},
+];
+
+const chromeStats = (candidateType: string) =>
+	statsOf([
+		...pairOver(candidateType),
+		{ id: "transport", type: "transport", selectedCandidatePairId: "pair" },
+	]);
 
 describe("realtime ICE configuration", () => {
 	test("preserves simple-peer defaults when the API omits ICE servers", () => {
@@ -36,34 +71,16 @@ describe("realtime ICE configuration", () => {
 		});
 	});
 
-	test("updates options before recycling active peers", () => {
-		let optionsAtDestroy: unknown;
-		let disconnectCalls = 0;
-		let connectCalls = 0;
+	test("new credentials reach future connections and leave live ones running", () => {
+		let destroyCalls = 0;
 		const provider = {
 			peerOpts: peerOptsForIceServers(initialIceServers),
 			room: {
 				webrtcConns: new Map([
-					[
-						"peer-1",
-						{
-							destroy: () => {
-								optionsAtDestroy = provider.peerOpts;
-							},
-						},
-					],
-					[
-						"peer-2",
-						{
-							destroy: () => {
-								optionsAtDestroy = provider.peerOpts;
-							},
-						},
-					],
+					["peer-1", { destroy: () => destroyCalls++ }],
+					["peer-2", { destroy: () => destroyCalls++ }],
 				]),
 			},
-			disconnect: () => disconnectCalls++,
-			connect: () => connectCalls++,
 		};
 		const refreshed = [
 			initialIceServers[0],
@@ -75,56 +92,16 @@ describe("realtime ICE configuration", () => {
 		];
 
 		expect(applyRealtimeIceServers(provider, refreshed)).toBe(true);
-		expect(optionsAtDestroy).toEqual({
-			config: { iceServers: refreshed },
-		});
-		expect(disconnectCalls).toBe(0);
-		expect(connectCalls).toBe(0);
+		expect(provider.peerOpts).toEqual({ config: { iceServers: refreshed } });
+		expect(destroyCalls).toBe(0);
 	});
 
-	test("continues recycling when one peer fails to close", () => {
-		const errorLog = spyOn(console, "error").mockImplementation(
-			() => undefined,
-		);
-		let destroyCalls = 0;
-		const provider = {
-			peerOpts: peerOptsForIceServers(initialIceServers),
-			room: {
-				webrtcConns: new Map([
-					[
-						"peer-1",
-						{
-							destroy: () => {
-								throw new Error("already closed");
-							},
-						},
-					],
-					["peer-2", { destroy: () => destroyCalls++ }],
-				]),
-			},
-		};
-		const refreshed = structuredClone(initialIceServers);
-		refreshed[1].credential = "refreshed-password";
-
-		expect(applyRealtimeIceServers(provider, refreshed)).toBe(true);
-		expect(destroyCalls).toBe(1);
-		expect(errorLog).toHaveBeenCalledTimes(1);
-		errorLog.mockRestore();
-	});
-
-	test("does not recycle peers when the ICE configuration is unchanged", () => {
-		let destroyCalls = 0;
-		const provider = {
-			peerOpts: peerOptsForIceServers(initialIceServers),
-			room: {
-				webrtcConns: new Map([["peer-1", { destroy: () => destroyCalls++ }]]),
-			},
-		};
+	test("an unchanged ICE configuration is reported as unchanged", () => {
+		const provider = { peerOpts: peerOptsForIceServers(initialIceServers) };
 
 		expect(
 			applyRealtimeIceServers(provider, structuredClone(initialIceServers)),
 		).toBe(false);
-		expect(destroyCalls).toBe(0);
 	});
 
 	test("restores simple-peer defaults when a later response omits ICE", () => {
@@ -138,7 +115,106 @@ describe("realtime ICE configuration", () => {
 
 		expect(applyRealtimeIceServers(provider, undefined)).toBe(true);
 		expect(provider.peerOpts).toEqual({});
-		expect(destroyCalls).toBe(1);
+		expect(destroyCalls).toBe(0);
+	});
+
+	test("reads the ICE expiry of an access in milliseconds", () => {
+		const access = { jwt: "", encryption_key: "", key_id: "" };
+		expect(
+			realtimeIceExpiryMs({ ...access, ice_expires_at: 1_800_000_000 }),
+		).toBe(1_800_000_000_000);
+		expect(realtimeIceExpiryMs(access)).toBeNull();
+		expect(realtimeIceExpiryMs({ ...access, ice_expires_at: 0 })).toBeNull();
+	});
+});
+
+describe("relayed connections at the end of their credential", () => {
+	test("a connection is relayed when its own selected candidate is a relay", async () => {
+		expect(await usesRelay(chromeStats("relay"))).toBe(true);
+		expect(await usesRelay(chromeStats("host"))).toBe(false);
+		expect(await usesRelay(chromeStats("srflx"))).toBe(false);
+	});
+
+	test("the other side's relay does not count", async () => {
+		const stats = statsOf([
+			{ id: "local", type: "local-candidate", candidateType: "host" },
+			{ id: "remote", type: "remote-candidate", candidateType: "relay" },
+			{
+				id: "pair",
+				type: "candidate-pair",
+				localCandidateId: "local",
+				remoteCandidateId: "remote",
+			},
+			{ id: "transport", type: "transport", selectedCandidatePairId: "pair" },
+		]);
+
+		expect(await usesRelay(stats)).toBe(false);
+	});
+
+	test("without a transport report the nominated or selected pair decides", async () => {
+		expect(await usesRelay(statsOf(pairOver("relay")))).toBe(true);
+		expect(await usesRelay(statsOf(pairOver("host")))).toBe(false);
+		const firefox = pairOver("relay").map((report) =>
+			report.type === "candidate-pair"
+				? { ...report, nominated: undefined, state: undefined, selected: true }
+				: report,
+		);
+		expect(await usesRelay(statsOf(firefox))).toBe(true);
+		expect(await usesRelay(statsOf([]))).toBe(false);
+	});
+
+	test("only relayed connections that are still open are closed", async () => {
+		const closed: string[] = [];
+		const connection = (name: string, candidateType: string) => ({
+			peer: { _pc: chromeStats(candidateType) },
+			destroy: () => closed.push(name),
+		});
+		const relayed = connection("relayed", "relay");
+		const direct = connection("direct", "host");
+		const gone = connection("gone", "relay");
+		const provider = {
+			room: {
+				webrtcConns: new Map([
+					["relayed", relayed],
+					["direct", direct],
+				]),
+			},
+		};
+
+		await retireRelayedConnections(provider, [relayed, direct, gone]);
+		expect(closed).toEqual(["relayed"]);
+	});
+
+	test("a connection whose statistics fail is left alone", async () => {
+		const warning = spyOn(console, "warn").mockImplementation(() => undefined);
+		const closed: string[] = [];
+		const broken = {
+			peer: {
+				_pc: {
+					getStats: async () => {
+						throw new Error("closed");
+					},
+				},
+			},
+			destroy: () => closed.push("broken"),
+		};
+		const relayed = {
+			peer: { _pc: chromeStats("relay") },
+			destroy: () => closed.push("relayed"),
+		};
+		const provider = {
+			room: {
+				webrtcConns: new Map([
+					["broken", broken],
+					["relayed", relayed],
+				]),
+			},
+		};
+
+		await retireRelayedConnections(provider, [broken, relayed]);
+		expect(closed).toEqual(["relayed"]);
+		expect(warning).toHaveBeenCalledTimes(1);
+		warning.mockRestore();
 	});
 });
 

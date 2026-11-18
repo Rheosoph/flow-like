@@ -1507,6 +1507,7 @@
 		"banner": {
 			"action": "Review and move",
 			"description": "These bots aren't connected to your account, so your account's bots can't find or message them. They'll still run in the desktop app after you move them.",
+			"dismiss": "Hide",
 			"label": "Bots on this computer",
 			"title_one": "{{count}} bot lives only on this computer",
 			"title_other": "{{count}} bots live only on this computer"

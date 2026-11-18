@@ -63,7 +63,7 @@ import {
 	resolveDockSelection,
 } from "./dock-selection";
 import { BotEditorDialog } from "./editor";
-import { LocalBotsBanner } from "./local-bots-banner";
+import { LocalBotsBanner, useLocalBotsBanner } from "./local-bots-banner";
 import { requestMessageJump } from "./message-jump";
 import { StarredMessagesDialog } from "./message-marks";
 import { MoveLocalBotsDialog } from "./move-local-bots-dialog";
@@ -228,6 +228,7 @@ function CrewLayout(data: Readonly<CrewData>) {
 		[bots],
 	);
 	const move = useMoveReview(canMove);
+	const localBanner = useLocalBotsBanner(canMove ? me : null, localBots);
 	const { items: needs, invitations } = useNeedsYou(conversations, {
 		me,
 		myBotIds,
@@ -453,10 +454,11 @@ function CrewLayout(data: Readonly<CrewData>) {
 						onShowChat={dockOpen ? undefined : showDockChat}
 						onManageVisibility={hasCrew && bots ? showVisibility : undefined}
 					/>
-					{canMove && localBots.length > 0 && (
+					{localBanner.shown && (
 						<LocalBotsBanner
 							count={localBots.length}
 							onReview={() => showMove(null)}
+							onDismiss={localBanner.hide}
 						/>
 					)}
 					{data.botsFailed && (

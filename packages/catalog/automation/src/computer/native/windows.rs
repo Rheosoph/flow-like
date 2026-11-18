@@ -1,7 +1,8 @@
 use super::*;
 use crate::computer::accessibility::AccessibilityBounds;
 use ::windows::Win32::{
-    Foundation::{HWND, LPARAM, WPARAM},
+    Foundation::{HWND, LPARAM, RECT, WPARAM},
+    Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute},
     System::Com::{
         CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
         CoUninitialize,
@@ -30,6 +31,44 @@ fn hwnd(window: &xcap::Window) -> Result<HWND> {
 }
 pub(super) fn window_exists(id: u32) -> bool {
     unsafe { IsWindow(Some(HWND(id as usize as *mut std::ffi::c_void))).as_bool() }
+}
+/// The frame as it is drawn, in physical pixels: `(x, y, width, height)`. The client rectangle
+/// leaves out a title bar and the window rectangle adds invisible resize borders.
+pub(super) fn frame_bounds(id: u32) -> Option<(f64, f64, f64, f64)> {
+    let mut rect = RECT::default();
+    unsafe {
+        DwmGetWindowAttribute(
+            HWND(id as usize as *mut std::ffi::c_void),
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            std::ptr::from_mut(&mut rect).cast(),
+            std::mem::size_of::<RECT>() as u32,
+        )
+    }
+    .ok()?;
+    let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+    (width > 0 && height > 0).then_some((
+        f64::from(rect.left),
+        f64::from(rect.top),
+        f64::from(width),
+        f64::from(height),
+    ))
+}
+pub(super) fn raise_topmost(window: isize) -> bool {
+    unsafe {
+        SetWindowPos(
+            HWND(window as *mut std::ffi::c_void),
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
+        )
+        .is_ok()
+    }
+}
+pub(super) fn foreground_window() -> isize {
+    unsafe { GetForegroundWindow().0 as isize }
 }
 fn automation() -> Result<IUIAutomation> {
     Ok(unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)? })
@@ -259,6 +298,18 @@ pub async fn action(
     })
     .await?
 }
+/// Restores the window only out of the taskbar: restoring a maximized one would shrink it.
+unsafe fn bring_forward(hwnd: HWND) -> Result<()> {
+    unsafe {
+        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+        }
+        if !SetForegroundWindow(hwnd).as_bool() {
+            return Err(anyhow!("Windows denied foreground activation"));
+        }
+    }
+    Ok(())
+}
 pub fn operate_window(
     w: &xcap::Window,
     operation: &str,
@@ -267,12 +318,7 @@ pub fn operate_window(
     let hwnd = hwnd(w)?;
     unsafe {
         match operation {
-            "focus" => {
-                let _ = ShowWindow(hwnd, SW_RESTORE);
-                if !SetForegroundWindow(hwnd).as_bool() {
-                    return Err(anyhow!("Windows denied foreground activation"));
-                }
-            }
+            "focus" => bring_forward(hwnd)?,
             "minimize" => {
                 let _ = ShowWindow(hwnd, SW_MINIMIZE);
             }

@@ -133,6 +133,21 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual({entry["image_suffix"] for entry in entries}, {"flow-like-aws-api-ecs"})
         self.assertEqual({entry["dockerfile"] for entry in entries}, {"apps/backend/aws/api-ecs/Dockerfile"})
 
+    def test_api_consumers_receive_serial_builds_across_clouds(self):
+        entries = {entry["id"]: entry for entry in containers.build_matrix("all")["include"]}
+        expected = {
+            "aws-api", "aws-api-ecs-amd64", "aws-api-ecs-arm64", "aws-audit-worker",
+            "azure-api", "azure-audit-worker", "gcp-api", "gcp-audit-worker",
+            *{f"docker-compose-{workload}-{arch}"
+              for workload in ("api", "audit-worker", "runtime") for arch in ("amd64", "arm64")},
+            "kubernetes-api-amd64", "kubernetes-api-arm64",
+        }
+        self.assertEqual({key for key, entry in entries.items() if entry.get("cargo_build_jobs") == 1}, expected)
+        # Serial compilation also selects the existing 8 GiB swap step.
+        workflow = (containers.REPOSITORY_ROOT / ".github/workflows/containers.yml").read_text()
+        self.assertIn("if: matrix.workload == 'web' || matrix.cargo_build_jobs == 1", workflow)
+        self.assertIn("CARGO_BUILD_JOBS=${{ matrix.cargo_build_jobs }}", workflow)
+
     def test_dedicated_audit_workers_bind_their_cloud_features(self):
         entries = {entry["id"]: entry for entry in containers.matrix("all")["include"]}
         expected = {"docker-compose-audit-worker-amd64": ("flow-like-audit-worker", "aws,azure,gcp"),

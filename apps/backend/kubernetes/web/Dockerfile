@@ -21,6 +21,11 @@ COPY . .
 RUN rm -rf apps/web/public/device-crypto apps/desktop/public/device-crypto \
     apps/web/public/wordcraft apps/desktop/public/wordcraft \
     apps/web/public/craft apps/desktop/public/craft
+# Build one editor at a time to reduce peak memory across browser bundles.
+ARG CARGO_BUILD_JOBS=2
+ARG CRAFT_BUILD_CONCURRENCY=1
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} \
+    CRAFT_BUILD_CONCURRENCY=${CRAFT_BUILD_CONCURRENCY}
 RUN --mount=type=cache,target=/cargo-home,id=cargo-home-rust-beta-2026-09-27,sharing=shared \
     --mount=type=cache,target=/app/target,id=cargo-target-device-crypto-web-rust-beta-2026-09-27,sharing=locked \
     CARGO_HOME=/cargo-home node packages/device-crypto/build-web.mjs && \

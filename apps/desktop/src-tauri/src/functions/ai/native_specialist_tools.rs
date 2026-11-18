@@ -375,7 +375,17 @@ async fn run_specialist_with_selection(
         }
         Ok(())
     });
-    let assistant_model = model_id.clone();
+    let assistant_model = {
+        let bot = context.bot.as_deref();
+        assistant_model_note(
+            model_id.as_deref(),
+            model_id
+                .as_deref()
+                .and_then(|id| custom_bit_name(&session.profile, id.trim())),
+            bot.and_then(|bot| bot.context.subtask_model.as_deref()),
+            bot.is_some_and(|bot| bot.assistant_model_id == model_id),
+        )
+    };
     let response = copilot::copilot_chat_native(
         session.app_handle.clone(),
         None,
@@ -415,11 +425,48 @@ async fn run_specialist_with_selection(
     Ok(response)
 }
 
-fn name_assistant_model(error: String, model_id: Option<&str>) -> String {
-    match model_id.map(str::trim).filter(|id| !id.is_empty()) {
-        Some(id) => format!("{error} (assistant model: {id})"),
+fn name_assistant_model(error: String, note: Option<&str>) -> String {
+    match note {
+        Some(note) => format!("{error} ({note})"),
         None => error,
     }
+}
+
+/// Which Bit a failed assistant ran on and which setting chose it, so the id is not read as a
+/// model the bot's settings never named. `from_bot`: the bot's turn chose the Bit, not the chat.
+fn assistant_model_note(
+    model_id: Option<&str>,
+    name: Option<&str>,
+    subtask_model: Option<&str>,
+    from_bot: bool,
+) -> Option<String> {
+    let model_id = model_id.map(str::trim).filter(|id| !id.is_empty())?;
+    let source = match subtask_model.map(str::trim) {
+        Some(subtask) if subtask == model_id => "the bot's Sub-tasks model".to_owned(),
+        Some(subtask) if from_bot && !subtask.is_empty() => format!(
+            "the bot's own model because its Sub-tasks model {subtask} cannot run on this host"
+        ),
+        _ if from_bot => "the bot's own model".to_owned(),
+        _ => "the chat's model".to_owned(),
+    };
+    Some(match name {
+        Some(name) => format!("assistant ran on Bit {model_id} \"{name}\", {source}"),
+        None => format!("assistant ran on Bit {model_id}, {source}"),
+    })
+}
+
+/// The name the profile gives one of its custom Bits. Hub Bits are not looked up here.
+fn custom_bit_name<'a>(profile: &'a flow_like::profile::Profile, bit_id: &str) -> Option<&'a str> {
+    let bit = &profile
+        .custom_bits
+        .iter()
+        .find(|custom| custom.0.id == bit_id)?
+        .0;
+    bit.meta
+        .get("en")
+        .or_else(|| bit.meta.values().next())
+        .map(|meta| meta.name.trim())
+        .filter(|name| !name.is_empty())
 }
 
 async fn target_lock(key: String) -> OwnedMutexGuard<()> {
@@ -496,15 +543,38 @@ pub(crate) fn contract_key_order(left: &str, right: &str) -> std::cmp::Ordering 
 
 #[cfg(test)]
 mod assistant_model_tests {
-    use super::name_assistant_model;
+    use super::{assistant_model_note, name_assistant_model};
 
     #[test]
-    fn a_failed_assistant_names_its_model() {
-        assert_eq!(
-            name_assistant_model("rate limited".into(), Some("bit-3")),
-            "rate limited (assistant model: bit-3)"
+    fn a_failed_assistant_names_its_model_and_the_setting_that_chose_it() {
+        let note = assistant_model_note(
+            Some("bit-3"),
+            Some("Claude Code (Sonnet)"),
+            Some("bit-3"),
+            true,
         );
-        assert_eq!(name_assistant_model("rate limited".into(), None), "rate limited");
-        assert_eq!(name_assistant_model("rate limited".into(), Some(" ")), "rate limited");
+        assert_eq!(
+            name_assistant_model("rate limited".into(), note.as_deref()),
+            "rate limited (assistant ran on Bit bit-3 \"Claude Code (Sonnet)\", the bot's Sub-tasks model)"
+        );
+        assert_eq!(
+            assistant_model_note(Some("bit-1"), None, Some("bit-3"), true).as_deref(),
+            Some(
+                "assistant ran on Bit bit-1, the bot's own model because its Sub-tasks model bit-3 cannot run on this host"
+            )
+        );
+        assert_eq!(
+            assistant_model_note(Some("bit-1"), None, None, true).as_deref(),
+            Some("assistant ran on Bit bit-1, the bot's own model")
+        );
+        assert_eq!(
+            assistant_model_note(Some("bit-9"), None, None, false).as_deref(),
+            Some("assistant ran on Bit bit-9, the chat's model")
+        );
+        assert_eq!(assistant_model_note(Some(" "), None, None, true), None);
+        assert_eq!(
+            name_assistant_model("rate limited".into(), None),
+            "rate limited"
+        );
     }
 }

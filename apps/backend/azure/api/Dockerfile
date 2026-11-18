@@ -14,7 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY . .
 
-ENV CARGO_BUILD_JOBS=2
+ARG CARGO_BUILD_JOBS=1
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 
 # Shared images embed the reviewed public default. Deployments replace it at
 # startup with FLOW_LIKE_CONFIG_JSON, FLOW_LIKE_CONFIG_FILE, or
@@ -33,9 +34,9 @@ RUN --mount=type=secret,id=flow_like_config,target=/tmp/flow-like.azure.config.j
         && grep -Eq '"provider"[[:space:]]*:[[:space:]]*"azure"' /tmp/flow-like.azure.config.json \
         && cp /tmp/flow-like.azure.config.json /app/flow-like.config.json; \
     else test -z "$FLOW_LIKE_CONFIG_SHA256"; fi \
-    && CARGO_HOME=/cargo-home cargo build --locked --release --package azure-api \
-    && strip -s /app/target/release/azure-api \
-    && cp /app/target/release/azure-api /tmp/azure-api \
+    && CARGO_HOME=/cargo-home cargo build --locked --profile server --package azure-api \
+    && strip -s /app/target/server/azure-api \
+    && cp /app/target/server/azure-api /tmp/azure-api \
     && rm /app/flow-like.config.json
 
 FROM debian:bookworm-slim AS runtime

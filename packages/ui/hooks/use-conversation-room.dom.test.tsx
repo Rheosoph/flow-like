@@ -5,6 +5,7 @@ import {
 	describe,
 	expect,
 	mock,
+	spyOn,
 	test,
 } from "bun:test";
 import { act, createElement } from "react";
@@ -36,13 +37,16 @@ const created: {
 	room: string;
 	sub?: string;
 	signalingServers?: string[];
+	onAuthFailure?: () => void;
 	dispose: ReturnType<typeof mock>;
 	awareness: ConversationRoom["awareness"];
 	provider: ConversationRoom["provider"];
 }[] = [];
 const roots: Root[] = [];
+const seen: (ConversationRoom | undefined)[] = [];
 let latest: ConversationRoom | undefined;
 let signaling: string[] = ["wss://example.test"];
+let refusal: Error | null = null;
 
 beforeAll(() => {
 	installDomGlobals();
@@ -61,6 +65,11 @@ beforeAll(() => {
 			sub?: string;
 			signalingServers?: string[];
 		}) => {
+			if (refusal) {
+				const cause = refusal;
+				refusal = null;
+				throw cause;
+			}
 			const session = {
 				...options,
 				dispose: mock(() => {}),
@@ -89,6 +98,8 @@ afterEach(async () => {
 		for (const root of roots.splice(0)) root.unmount();
 	});
 	created.length = 0;
+	seen.length = 0;
+	refusal = null;
 	getAccess.mockClear();
 	latest = undefined;
 	signaling = ["wss://example.test"];
@@ -137,6 +148,7 @@ async function setup() {
 		enabled,
 	}: { item: IConversation; me: string | null; enabled: boolean }) {
 		latest = useConversationRoom(item, me, enabled);
+		seen.push(latest);
 		return null;
 	}
 	const container = document.createElement("div");
@@ -321,5 +333,198 @@ describe("conversation room eligibility", () => {
 		expect(latest).toBeUndefined();
 		expect(created[0]?.dispose).toHaveBeenCalledTimes(1);
 		expect(getAccess).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("a conversation room on a new key", () => {
+	const nextKey = { jwt: "jwt", encryption_key: "key-2", key_id: "epoch-2" };
+
+	/** The access went stale, as a refused socket or a newer key elsewhere reports it. */
+	async function staleAccess() {
+		await act(async () => created[0]?.onAuthFailure?.());
+		await settle();
+	}
+
+	test("the room is swapped in place, so a call in it carries over", async () => {
+		const render = await setup();
+		await render(conversation([person("me"), person("other")]));
+		const first = latest;
+		expect(first?.provider).toBe(created[0]?.provider);
+
+		getAccess.mockImplementationOnce(async () => nextKey);
+		await staleAccess();
+		expect(created).toHaveLength(2);
+		expect(created[0]?.dispose).toHaveBeenCalledTimes(1);
+		expect(latest?.provider).toBe(created[1]?.provider);
+		expect(seen.slice(seen.indexOf(first))).not.toContain(undefined);
+	});
+
+	test("the same key keeps the room and only refreshes its access", async () => {
+		const render = await setup();
+		await render(conversation([person("me"), person("other")]));
+		const first = latest;
+
+		await staleAccess();
+		expect(getAccess).toHaveBeenCalledTimes(2);
+		expect(created).toHaveLength(1);
+		expect(created[0]?.dispose).not.toHaveBeenCalled();
+		expect(latest).toBe(first);
+	});
+
+	test("a rebuild that fails closes the room instead of leaving a dead one", async () => {
+		const warning = spyOn(console, "warn").mockImplementation(() => undefined);
+		const render = await setup();
+		await render(conversation([person("me"), person("other")]));
+		expect(latest).toBeDefined();
+
+		getAccess.mockImplementationOnce(async () => nextKey);
+		refusal = new Error("signaling refused");
+		await staleAccess();
+		expect(created).toHaveLength(1);
+		expect(created[0]?.dispose).toHaveBeenCalledTimes(1);
+		expect(latest).toBeUndefined();
+		warning.mockRestore();
+	});
+
+	test("someone joining swaps the room in place instead of closing it", async () => {
+		const render = await setup();
+		await render(conversation([person("me"), person("other")]));
+		const first = latest;
+
+		getAccess.mockImplementationOnce(async () => nextKey);
+		await render(
+			conversation([person("me"), person("other"), person("third")]),
+		);
+		expect(getAccess).toHaveBeenCalledTimes(2);
+		expect(created).toHaveLength(2);
+		expect(latest?.provider).toBe(created[1]?.provider);
+		expect(seen.slice(seen.indexOf(first))).not.toContain(undefined);
+	});
+
+	test("the same members in another order ask for nothing", async () => {
+		const render = await setup();
+		await render(conversation([person("me"), person("other")]));
+		await render(conversation([person("other"), person("me")]));
+		expect(getAccess).toHaveBeenCalledTimes(1);
+		expect(created).toHaveLength(1);
+	});
+
+	test("someone joining while the room still opens is answered once it stands", async () => {
+		let answer!: (access: typeof nextKey) => void;
+		getAccess.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					answer = resolve;
+				}),
+		);
+		const render = await setup();
+		await render(conversation([person("me"), person("other")]));
+		await render(
+			conversation([person("me"), person("other"), person("third")]),
+		);
+		expect(created).toHaveLength(0);
+
+		getAccess.mockImplementationOnce(async () => nextKey);
+		await act(async () =>
+			answer({ jwt: "jwt", encryption_key: "key", key_id: "epoch-1" }),
+		);
+		await settle();
+		expect(getAccess).toHaveBeenCalledTimes(2);
+		expect(created).toHaveLength(2);
+		expect(latest?.provider).toBe(created[1]?.provider);
+	});
+});
+
+describe("when a room's access is fetched again", () => {
+	const MINUTE = 60_000;
+	const HOUR = 60 * MINUTE;
+	const midnight = Date.UTC(2026, 10, 19);
+	const idle = { tokenExpiresAt: null, iceExpiresAt: null, keyRollsAt: null };
+	type Hook = typeof import("./use-conversation-room");
+	let roomKeyRollsAt: Hook["roomKeyRollsAt"];
+	let roomAccessClock: Hook["roomAccessClock"];
+	let roomAccessDue: Hook["roomAccessDue"];
+	let roomAccessRefreshAt: Hook["roomAccessRefreshAt"];
+	beforeAll(async () => {
+		({ roomKeyRollsAt, roomAccessClock, roomAccessDue, roomAccessRefreshAt } =
+			await import("./use-conversation-room"));
+	});
+
+	test("a room key rolls at the end of the UTC day in its id", () => {
+		expect(roomKeyRollsAt("2026-11-18.0123456789abcdef")).toBe(midnight);
+		expect(roomKeyRollsAt("2026-12-31.0123456789abcdef")).toBe(
+			Date.UTC(2027, 0, 1),
+		);
+		expect(roomKeyRollsAt("epoch-1")).toBeNull();
+		expect(roomKeyRollsAt("")).toBeNull();
+	});
+
+	test("an access names what runs out in it", () => {
+		const payload = btoa(JSON.stringify({ exp: 1_800_000_000 }));
+		expect(
+			roomAccessClock({
+				jwt: `header.${payload}.signature`,
+				encryption_key: "key",
+				key_id: "2026-11-18.0123456789abcdef",
+				ice_expires_at: 1_800_003_600,
+			}),
+		).toEqual({
+			tokenExpiresAt: 1_800_000_000_000,
+			iceExpiresAt: 1_800_003_600_000,
+			keyRollsAt: midnight,
+		});
+	});
+
+	test("the earliest of token, relay credentials and key decides", () => {
+		const now = midnight - 10 * HOUR;
+		const clock = {
+			tokenExpiresAt: now + 3 * HOUR,
+			iceExpiresAt: now + 4 * HOUR,
+			keyRollsAt: midnight,
+		};
+		expect(roomAccessRefreshAt(clock, now)).toBe(now + 3 * HOUR - 5 * MINUTE);
+		expect(
+			roomAccessRefreshAt({ ...clock, tokenExpiresAt: now + 12 * HOUR }, now),
+		).toBe(now + 4 * HOUR - 2 * MINUTE);
+		expect(roomAccessRefreshAt(idle, now)).toBeNull();
+	});
+
+	test("the key is fetched again as its day turns", () => {
+		const evening = midnight - 30 * MINUTE;
+		const clock = {
+			tokenExpiresAt: evening + 3 * HOUR,
+			iceExpiresAt: evening + 4 * HOUR,
+			keyRollsAt: midnight,
+		};
+		expect(roomAccessRefreshAt(clock, evening, 2_000)).toBe(midnight + 2_000);
+		expect(roomAccessDue(clock, midnight - 1)).toBe(false);
+		expect(roomAccessDue(clock, midnight)).toBe(true);
+	});
+
+	test("a refresh is never planned sooner than a minute ahead", () => {
+		const now = midnight - 10_000;
+		const clock = { ...idle, tokenExpiresAt: now + HOUR, keyRollsAt: midnight };
+		expect(roomAccessRefreshAt(clock, now)).toBe(now + MINUTE);
+	});
+
+	test("a hub still on the old day is asked again, but only for ten minutes", () => {
+		const clock = {
+			tokenExpiresAt: midnight + 3 * HOUR,
+			iceExpiresAt: null,
+			keyRollsAt: midnight,
+		};
+		const justAfter = midnight + 5_000;
+		expect(roomAccessDue(clock, justAfter)).toBe(true);
+		expect(roomAccessRefreshAt(clock, justAfter)).toBe(justAfter + MINUTE);
+
+		const later = midnight + 10 * MINUTE;
+		expect(roomAccessDue(clock, later)).toBe(false);
+		expect(roomAccessRefreshAt(clock, later)).toBe(
+			midnight + 3 * HOUR - 5 * MINUTE,
+		);
+	});
+
+	test("an access without an expiring token is due at once", () => {
+		expect(roomAccessDue(idle, midnight)).toBe(true);
 	});
 });

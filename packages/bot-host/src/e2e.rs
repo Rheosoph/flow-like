@@ -8,8 +8,8 @@
 use crate::hub::{HubFailure, TurnHub};
 use flow_like_bot_tools::{ToolError, error::code};
 use flow_like_device_crypto::inbox::{
-    ALGORITHM, InboxKeyVault, InboxKeyring, MAX_ENVELOPE_KEYS, Member, PublicInboxKey, Recipient,
-    RecipientKey, Scope, SecretScope, envelope_key_ids, open_secret_with, seal_all,
+    ALGORITHM, InboxKeyVault, InboxKeyring, InboxSecret, MAX_ENVELOPE_KEYS, Member, PublicInboxKey,
+    RecipientKey, Scope, SecretScope, envelope_key_ids, open_secret_with, seal_all, seal_member,
 };
 use flow_like_local_bots::InboxEntry;
 use flow_like_types::bot_turn::BotRunCheckpoint;
@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     sync::{Arc, Mutex, PoisonError},
+    time::{Duration, Instant},
 };
 
 pub const CODE_E2E_UNAVAILABLE: &str = "BOT_E2E_UNAVAILABLE";
@@ -26,6 +27,7 @@ pub const CODE_E2E_UNREADABLE: &str = "BOT_E2E_UNREADABLE";
 pub const CODE_E2E_MEMBER_KEY: &str = "BOT_E2E_MEMBER_KEY";
 const ENCRYPTION_CAPABILITY: &str = "encryption";
 const KEY_LOOKUP_LIMIT: usize = 50;
+const HOST_KEYS_TTL: Duration = Duration::from_secs(60);
 
 /// Why a turn in an encrypted conversation can't continue; nothing is posted for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,10 +82,17 @@ pub struct E2eHost {
     location: &'static str,
     enabled: Mutex<Option<HashSet<String>>>,
     published: Mutex<HashSet<(String, String)>>,
+    host_keys: Mutex<HashMap<String, (Instant, Vec<RecipientKey>)>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn names_held_key(held: &[InboxSecret], envelope: &Value) -> bool {
+    let named = envelope_key_ids(envelope);
+    held.iter()
+        .any(|secret| named.contains(&secret.public().key_id.as_str()))
 }
 
 impl E2eHost {
@@ -95,6 +104,7 @@ impl E2eHost {
             location: "desktop",
             enabled: Mutex::new(None),
             published: Mutex::default(),
+            host_keys: Mutex::default(),
         }
     }
 
@@ -292,8 +302,92 @@ impl E2eHost {
         serde_json::from_slice(&plaintext).ok()
     }
 
-    /// Keep recovery state readable only by this bot's retained inbox keys. The authenticated
-    /// scope separates checkpoints from messages and prevents moving one to another turn.
+    /// The keys `principals` published, oldest first, as `bot_id` reads them in the conversation.
+    async fn published_keys(
+        &self,
+        bot_id: &str,
+        conversation_id: &str,
+        principals: &[String],
+    ) -> Result<HashMap<String, Vec<RecipientKey>>, HubFailure> {
+        let listed = self
+            .hub
+            .read(
+                "inbox/keys",
+                vec![
+                    ("principals", principals.join(",")),
+                    ("as", bot_id.to_owned()),
+                    ("conversation_id", conversation_id.to_owned()),
+                ],
+            )
+            .await?;
+        let mut keys: HashMap<String, Vec<RecipientKey>> = HashMap::new();
+        for key in listed
+            .get("keys")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let field = |name: &str| key.get(name).and_then(Value::as_str);
+            let (Some(principal), Some(key_id), Some(public_key), Some(ALGORITHM)) = (
+                field("principal_id"),
+                field("key_id"),
+                field("public_key"),
+                field("algorithm"),
+            ) else {
+                continue;
+            };
+            if !principals.iter().any(|wanted| wanted == principal) {
+                continue;
+            }
+            let held = keys.entry(principal.to_owned()).or_default();
+            if !held.iter().any(|known| known.key_id == key_id) {
+                held.push(RecipientKey {
+                    key_id: key_id.to_owned(),
+                    public_key: public_key.to_owned(),
+                });
+            }
+        }
+        Ok(keys)
+    }
+
+    /// The keys a checkpoint of `bot_id` is sealed to: `own`, and the key of every other host
+    /// that runs the bot. Each host keeps a key of its own and a turn may continue on another
+    /// one, as when a phone starts an answer and the desktop finishes it. The hub's list is read
+    /// once a minute; while the hub doesn't answer, the last one stands.
+    async fn checkpoint_keys(
+        &self,
+        bot_id: &str,
+        conversation_id: &str,
+        own: &RecipientKey,
+    ) -> Vec<RecipientKey> {
+        let cached = lock(&self.host_keys).get(bot_id).cloned();
+        let mut keys = match cached {
+            Some((read_at, keys)) if read_at.elapsed() < HOST_KEYS_TTL => keys,
+            stale => match self
+                .published_keys(bot_id, conversation_id, &[bot_id.to_owned()])
+                .await
+            {
+                Ok(mut listed) => {
+                    let keys = listed.remove(bot_id).unwrap_or_default();
+                    lock(&self.host_keys).insert(bot_id.to_owned(), (Instant::now(), keys.clone()));
+                    keys
+                }
+                Err(failure) => {
+                    tracing::debug!(%failure, bot_id, "Bot host: the keys of the bot's other hosts could not be read");
+                    stale.map(|(_, keys)| keys).unwrap_or_default()
+                }
+            },
+        };
+        keys.retain(|key| key.key_id != own.key_id);
+        let skip = (keys.len() + 1).saturating_sub(MAX_ENVELOPE_KEYS);
+        keys.drain(..skip);
+        keys.push(own.clone());
+        keys
+    }
+
+    /// Keep recovery state readable only by this bot's inbox keys: those of every host that runs
+    /// it, so the host that continues the turn can open it. The authenticated scope separates
+    /// checkpoints from messages and prevents moving one to another turn.
     pub async fn seal_checkpoint(
         &self,
         bot_id: &str,
@@ -313,10 +407,13 @@ impl E2eHost {
             .active(bot_id)
             .map_err(|_| unavailable())?
             .ok_or_else(unavailable)?;
-        let recipient = Recipient {
-            principal_id: bot_id.to_owned(),
+        let own = RecipientKey {
             key_id: key.key_id,
             public_key: key.public_key,
+        };
+        let hosts = |keys| Member {
+            principal_id: bot_id.to_owned(),
+            keys,
         };
         let message_id = format!("bot-checkpoint:{turn_id}:{}", checkpoint.revision);
         let scope = Scope {
@@ -325,7 +422,10 @@ impl E2eHost {
             sender_id: bot_id,
         };
         let plaintext = serde_json::to_vec(checkpoint).map_err(|_| unavailable())?;
-        let envelope = flow_like_device_crypto::inbox::seal(&scope, &recipient, &plaintext)
+        let every_host = hosts(self.checkpoint_keys(bot_id, conversation_id, &own).await);
+        // A key another host published that doesn't seal must not cost this host its checkpoint.
+        let envelope = seal_member(&scope, &every_host, &plaintext)
+            .or_else(|_| seal_member(&scope, &hosts(vec![own]), &plaintext))
             .map_err(|_| unavailable())?;
         let sealed = BotRunCheckpoint {
             state: json!({"sealed_checkpoint": 1, "envelope": envelope}),
@@ -366,10 +466,17 @@ impl E2eHost {
             message_id: &message_id,
             sender_id: bot_id,
         };
-        let plaintext = self
-            .keyring
-            .open(bot_id, &scope, envelope)
-            .map_err(|_| unreadable())?;
+        let plaintext = self.keyring.open(bot_id, &scope, envelope).map_err(|_| {
+            let held = self.keyring.secrets(bot_id).unwrap_or_default();
+            if names_held_key(&held, envelope) {
+                unreadable()
+            } else {
+                E2eFailure::new(
+                    CODE_E2E_UNREADABLE,
+                    "The recovery checkpoint was saved on another device that runs this bot, and this one holds no key for it",
+                )
+            }
+        })?;
         let mut opened: BotRunCheckpoint =
             serde_json::from_slice(&plaintext).map_err(|_| unreadable())?;
         opened.validate().map_err(|_| unreadable())?;
@@ -397,10 +504,7 @@ impl E2eHost {
                 ),
             )
         })?;
-        let named = envelope_key_ids(envelope);
-        let holds_key = held
-            .iter()
-            .any(|secret| named.contains(&secret.public().key_id.as_str()));
+        let holds_key = names_held_key(&held, envelope);
         let scope = SecretScope { bot_id, name };
         open_secret_with(&held, &scope, envelope)
             .ok()
@@ -442,44 +546,10 @@ impl E2eHost {
                 format!("The conversation lists {} members", members.len()),
             ));
         }
-        let listed = self
-            .hub
-            .read(
-                "inbox/keys",
-                vec![
-                    ("principals", members.join(",")),
-                    ("as", bot_id.to_owned()),
-                    ("conversation_id", conversation_id.to_owned()),
-                ],
-            )
+        let mut keys = self
+            .published_keys(bot_id, conversation_id, &members)
             .await
             .map_err(hub)?;
-        let mut keys: HashMap<&str, Vec<RecipientKey>> = HashMap::new();
-        for key in listed
-            .get("keys")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            let field = |name: &str| key.get(name).and_then(Value::as_str);
-            let (Some(principal), Some(key_id), Some(public_key), Some(ALGORITHM)) = (
-                field("principal_id"),
-                field("key_id"),
-                field("public_key"),
-                field("algorithm"),
-            ) else {
-                continue;
-            };
-            if let Some(member) = members.iter().find(|member| member.as_str() == principal) {
-                let held = keys.entry(member).or_default();
-                if !held.iter().any(|known| known.key_id == key_id) {
-                    held.push(RecipientKey {
-                        key_id: key_id.to_owned(),
-                        public_key: public_key.to_owned(),
-                    });
-                }
-            }
-        }
         members
             .iter()
             .map(|member| match keys.remove(member.as_str()) {

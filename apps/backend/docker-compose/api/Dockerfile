@@ -22,14 +22,15 @@ ARG FLOW_LIKE_CONFIG=apps/backend/docker-compose/flow-like.config.example.json
 RUN cp "$FLOW_LIKE_CONFIG" /app/flow-like.config.json
 
 # Limit build parallelism to reduce memory pressure during lance compilation
-ARG CARGO_BUILD_JOBS=2
+ARG CARGO_BUILD_JOBS=1
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 
 # Use BuildKit cache mounts for faster rebuilds
 RUN --mount=type=cache,target=/cargo-home,id=cargo-home-rust-beta-2026-09-27,sharing=shared \
     --mount=type=cache,target=/app/target,id=cargo-target-api-rust-beta-2026-09-27,sharing=locked \
-    CARGO_HOME=/cargo-home cargo build --locked --release --package docker-compose-api && \
-    cp /app/target/release/docker-compose-api /tmp/docker-compose-api
+    CARGO_HOME=/cargo-home cargo build --locked --profile server --package docker-compose-api && \
+    cp /app/target/server/docker-compose-api /tmp/docker-compose-api && \
+    strip --strip-all /tmp/docker-compose-api
 
 # ============================================================
 # Stage 2: Runtime

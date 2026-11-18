@@ -1477,6 +1477,7 @@
 		"banner": {
 			"action": "Revisar e mover",
 			"description": "Estes bots não estão conectados à sua conta, por isso os bots da sua conta não podem encontrá-los nem enviar mensagens para eles. Eles continuarão funcionando no aplicativo para desktop depois de serem movidos.",
+			"dismiss": "",
 			"label": "",
 			"title_many": "",
 			"title_one": "",

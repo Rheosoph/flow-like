@@ -1,7 +1,7 @@
 import { createI18n } from "@flow-like/locales";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AuthProvider } from "react-oidc-context";
 import {
@@ -93,9 +93,20 @@ if (NativeSharedWorker) {
 	};
 }
 
+// A call must keep the peer connections it has, so every one a page opens is counted.
+let peerConnections = 0;
+const NativePeerConnection = window.RTCPeerConnection;
+window.RTCPeerConnection = class extends NativePeerConnection {
+	constructor(configuration?: RTCConfiguration) {
+		super(configuration);
+		peerConnections++;
+	}
+};
+
 // Only the device boundary is synthetic: a steady tone stands in for a voice.
 const microphones: MediaStream[] = [];
-Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
+// On the prototype: WebKit can drop a property set on the `navigator.mediaDevices` wrapper.
+Object.defineProperty(MediaDevices.prototype, "getUserMedia", {
 	configurable: true,
 	value: async () => {
 		const context = new AudioContext();
@@ -188,8 +199,22 @@ function Dock({ conversationId }: Readonly<{ conversationId: string }>) {
 	);
 }
 
+/** A second part of the app opening a room that is already open, as the incoming-call check does. */
+function SecondConsumer({
+	conversationId,
+}: Readonly<{ conversationId: string }>) {
+	useConversationRoom(conversationOf(conversationId), me);
+	return null;
+}
+
+let openAgain: (id: string) => void = () => {};
+
 function Shell() {
 	const selected = useSearchParams().get("conversation");
+	const [reopened, setReopened] = useState<readonly string[]>([]);
+	useEffect(() => {
+		openAgain = (id) => setReopened((open) => [...open, id]);
+	}, []);
 	return (
 		<main>
 			<h1>{me}</h1>
@@ -198,6 +223,10 @@ function Shell() {
 			) : (
 				<p data-testid="no-dock">No conversation open</p>
 			)}
+			{reopened.map((id, index) => (
+				// biome-ignore lint/suspicious/noArrayIndexKey: the list only grows
+				<SecondConsumer key={index} conversationId={id} />
+			))}
 			<IncomingCallProvider scope="room-call-fixture" userId={me} />
 		</main>
 	);
@@ -209,9 +238,31 @@ function connectedPeers(room: ConversationRoom | undefined): string[] {
 		.map(([id]) => id);
 }
 
+interface PeerConnectionLike {
+	iceConnectionState?: string;
+	connectionState?: string;
+	signalingState?: string;
+	iceGatheringState?: string;
+}
+
+/** Where each peer connection stands, so a failed run says how far it got. */
+function connectionStates(room: ConversationRoom | undefined): string[] {
+	return [...(room?.provider.room?.webrtcConns ?? [])].map(([, conn]) => {
+		const pc = (conn.peer as { _pc?: PeerConnectionLike } | undefined)?._pc;
+		return [
+			pc?.connectionState,
+			pc?.iceConnectionState,
+			pc?.iceGatheringState,
+			pc?.signalingState,
+		].join("/");
+	});
+}
+
 window.roomCallTest = {
+	openAgain: (id: string) => openAgain(id),
 	snapshot: () => ({
 		me,
+		peerConnections,
 		sockets: { opened: sockets.opened, closes: [...sockets.closes] },
 		accessRequests: [...accessRequests],
 		rooms: Object.fromEntries(
@@ -220,6 +271,7 @@ window.roomCallTest = {
 				{
 					up: room !== undefined,
 					peers: connectedPeers(room).length,
+					connections: connectionStates(room),
 					subs: [...(room?.awareness.getStates().values() ?? [])]
 						.map((state) => (state as { sub?: unknown }).sub)
 						.filter((sub): sub is string => typeof sub === "string")
@@ -235,7 +287,7 @@ window.roomCallTest = {
 };
 declare global {
 	interface Window {
-		roomCallTest: { snapshot(): object };
+		roomCallTest: { snapshot(): object; openAgain(id: string): void };
 	}
 }
 

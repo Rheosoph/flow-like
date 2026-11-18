@@ -76,6 +76,8 @@ struct DeviceHub {
     grants: Mutex<Vec<(String, String)>>,
     writes: Mutex<std::collections::HashMap<String, Result<Value, HubFailure>>>,
     cards: Mutex<Vec<ApprovalRequest>>,
+    published_keys: Mutex<Option<Vec<Value>>>,
+    key_reads: Mutex<usize>,
 }
 
 impl DeviceHub {
@@ -271,6 +273,12 @@ impl TurnHub for DeviceHub {
             return Ok(
                 json!({"entries": self.original_trigger.lock().unwrap().clone().into_iter().collect::<Vec<_>>() }),
             );
+        }
+        if path == "inbox/keys"
+            && let Some(keys) = self.published_keys.lock().unwrap().clone()
+        {
+            *self.key_reads.lock().unwrap() += 1;
+            return Ok(json!({ "keys": keys }));
         }
         if path == "inbox/conversations/conv/memory" && self.memory_ready {
             return Ok(json!({
