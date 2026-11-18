@@ -5,17 +5,19 @@ COPY rust-toolchain.toml /rust-toolchain.toml
 
 ARG TARGETARCH
 ARG ONNXRUNTIME_VERSION=1.24.2
-ARG ONNXRUNTIME_SHA256_AMD64=43725474ba5663642e17684717946693850e2005efbd724ac72da278fead25e6
-ARG ONNXRUNTIME_SHA256_ARM64=6715b3d19965a2a6981e78ed4ba24f17a8c30d2d26420dbed10aac7ceca0085e
+ARG ONNXRUNTIME_NUPKG_SHA256=782564d3d68e87269ea1812cc94710ad06fe014faf093f01a6f89d0bd58719d3
 ARG PROTOC_VERSION=25.3
 
 WORKDIR /app
 
 # Vendored OpenSSL needs make and full Perl core modules; librdkafka uses CMake.
+# ONNX Runtime comes from Microsoft's signed NuGet package: the GitHub release
+# assets 404 since 2026-11-17. The package ships a bare libonnxruntime.so, so the
+# SONAME chain the linker and loader expect is recreated here.
 RUN set -eu && \
     case "$TARGETARCH" in \
-        amd64) onnx_arch=x64; onnx_sha="$ONNXRUNTIME_SHA256_AMD64"; protoc_arch=x86_64 ;; \
-        arm64) onnx_arch=aarch64; onnx_sha="$ONNXRUNTIME_SHA256_ARM64"; protoc_arch=aarch_64 ;; \
+        amd64) onnx_arch=x64; protoc_arch=x86_64 ;; \
+        arm64) onnx_arch=arm64; protoc_arch=aarch_64 ;; \
         *) echo "Unsupported TARGETARCH: ${TARGETARCH:-unset}" >&2; exit 1 ;; \
     esac && \
     yum update -y && \
@@ -40,12 +42,16 @@ RUN set -eu && \
     unzip "protoc-${PROTOC_VERSION}-linux-${protoc_arch}.zip" -d /usr/local && \
     rm "protoc-${PROTOC_VERSION}-linux-${protoc_arch}.zip" && \
     curl -fsSL --retry 3 \
-        "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-${onnx_arch}-${ONNXRUNTIME_VERSION}.tgz" \
-        -o /tmp/onnxruntime.tgz && \
-    echo "${onnx_sha}  /tmp/onnxruntime.tgz" | sha256sum -c - && \
-    mkdir -p /opt/onnxruntime && \
-    tar -xzf /tmp/onnxruntime.tgz --strip-components=1 -C /opt/onnxruntime && \
-    rm /tmp/onnxruntime.tgz && \
+        "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/${ONNXRUNTIME_VERSION}/microsoft.ml.onnxruntime.${ONNXRUNTIME_VERSION}.nupkg" \
+        -o /tmp/onnxruntime.nupkg && \
+    echo "${ONNXRUNTIME_NUPKG_SHA256}  /tmp/onnxruntime.nupkg" | sha256sum -c - && \
+    mkdir -p /opt/onnxruntime/lib && \
+    unzip -q /tmp/onnxruntime.nupkg LICENSE ThirdPartyNotices.txt -d /opt/onnxruntime && \
+    unzip -qj /tmp/onnxruntime.nupkg "runtimes/linux-${onnx_arch}/native/*" -d /opt/onnxruntime/lib && \
+    mv /opt/onnxruntime/lib/libonnxruntime.so "/opt/onnxruntime/lib/libonnxruntime.so.${ONNXRUNTIME_VERSION}" && \
+    ln -s "libonnxruntime.so.${ONNXRUNTIME_VERSION}" /opt/onnxruntime/lib/libonnxruntime.so.1 && \
+    ln -s libonnxruntime.so.1 /opt/onnxruntime/lib/libonnxruntime.so && \
+    rm /tmp/onnxruntime.nupkg && \
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none && \
     /root/.cargo/bin/rustup toolchain install && \
     yum remove -y xz && \
