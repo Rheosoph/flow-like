@@ -33,6 +33,7 @@ import {
 	acceptsTarget,
 	botActivity,
 	contains,
+	denCalledOut,
 	denShape,
 	perchAnchor,
 	perchCenter,
@@ -72,6 +73,8 @@ const TAB_WAIT_MS = 3_000;
 /** The flight to the edge and the splat get their moment before the prompt stretches out. */
 const LANDING_MS = 420;
 const SETTLE_TICK_MS = 1_000;
+/** In a fullscreen Space the den stays out this long after the pointer left it. */
+const TUCK_DELAY_MS = 700;
 const GAZE_GRID = 8;
 const IDLE: BotActivity = { agentState: "idle", turn: null };
 
@@ -132,6 +135,26 @@ const sendHitboxes: HitboxSink = (rects, capture) =>
 			console.warn("[BotNotch] The notch's hitboxes were refused:", error),
 		);
 
+/** True while `active`, and for `ms` after it ended. */
+function useLingering(active: boolean, ms: number): boolean {
+	const [held, setHeld] = useState(active);
+	useEffect(() => {
+		if (active) {
+			setHeld(true);
+			return;
+		}
+		const timer = window.setTimeout(() => setHeld(false), ms);
+		return () => window.clearTimeout(timer);
+	}, [active, ms]);
+	return active || held;
+}
+
+/** In a fullscreen Space the den hides in the top edge until it is called out, and a moment after. */
+function useTucked(fullscreen: boolean, calledOut: boolean): boolean {
+	const out = useLingering(fullscreen && calledOut, TUCK_DELAY_MS);
+	return fullscreen && !out;
+}
+
 function settling(turn: { finished_at?: string | null }, now: number): boolean {
 	if (!turn.finished_at) return false;
 	const finished = Date.parse(turn.finished_at);
@@ -182,6 +205,8 @@ export function BotNotch() {
 	const [open, setOpen] = useState<Open | null>(null);
 	const [hoverBot, setHoverBot] = useState<string | null>(null);
 	const [pointer, setPointer] = useState<NotchPoint | null>(null);
+	const [atEdge, setAtEdge] = useState(false);
+	const [pressing, setPressing] = useState(false);
 	const [drag, setDrag] = useState<DragView | null>(null);
 	const [hearts, setHearts] = useState(0);
 	const dismissHearts = useCallback(() => setHearts(0), []);
@@ -215,9 +240,18 @@ export function BotNotch() {
 			layout &&
 			contains(denShape(layout, botIds, false).rect, pointer, DEN_HOVER_MARGIN),
 	);
+	const tucked = useTucked(
+		layout?.fullscreen === true,
+		denCalledOut(
+			[atEdge, denHover, dragging, pressing, hearts > 0],
+			[...cards.keys(), open?.botId, hoverBot ?? undefined],
+			perches,
+		),
+	);
 	const den = useMemo(
-		() => (layout ? denShape(layout, botIds, denHover || dragging) : null),
-		[layout, botIds, denHover, dragging],
+		() =>
+			layout ? denShape(layout, botIds, denHover || dragging, tucked) : null,
+		[layout, botIds, denHover, dragging, tucked],
 	);
 
 	const places = useMemo(() => {
@@ -292,6 +326,7 @@ export function BotNotch() {
 		setHoverBot((current) =>
 			current && (!point.near || !overBot(current, point)) ? null : current,
 		);
+		setAtEdge(Boolean(point.edge));
 		if (!point.near) {
 			setPointer(null);
 			return;
@@ -327,6 +362,7 @@ export function BotNotch() {
 			pill: promptBot ? { botId: promptBot, width: pillWidth } : null,
 			hoverBot,
 			screenWidth: layout.width,
+			tucked,
 			activity: motions,
 			pointer,
 		});
@@ -338,6 +374,7 @@ export function BotNotch() {
 		promptBot,
 		pillWidth,
 		hoverBot,
+		tucked,
 		motions,
 		pointer,
 	]);
@@ -451,6 +488,7 @@ export function BotNotch() {
 			lastQuery: 0,
 			hover: null,
 		};
+		setPressing(true);
 		stage.setCapture(true);
 	};
 
@@ -499,6 +537,7 @@ export function BotNotch() {
 		press.current = null;
 		if (current.element.hasPointerCapture(current.pointerId))
 			current.element.releasePointerCapture(current.pointerId);
+		setPressing(false);
 		stage.setCapture(false);
 		return current;
 	};
@@ -700,7 +739,7 @@ export function BotNotch() {
 			/>
 			<div
 				ref={nodeRef("den")}
-				className="absolute left-0 top-0 cursor-grab touch-none active:cursor-grabbing"
+				className={`absolute left-0 top-0 touch-none ${tucked ? "pointer-events-none" : "cursor-grab active:cursor-grabbing"}`}
 				style={{ willChange: "transform" }}
 				onPointerDown={(event) => beginPress(event, "den", null)}
 				onPointerMove={movePress}
@@ -718,7 +757,7 @@ export function BotNotch() {
 				aria-hidden
 			/>
 			{den.slots.map((slot) =>
-				perches.has(slot.botId) && drag?.botId !== slot.botId ? (
+				!tucked && perches.has(slot.botId) && drag?.botId !== slot.botId ? (
 					<span
 						key={`socket:${slot.botId}`}
 						className="pointer-events-none absolute size-2 rounded-full border border-muted-foreground/60"

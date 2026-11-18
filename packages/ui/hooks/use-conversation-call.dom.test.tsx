@@ -361,6 +361,58 @@ test("a call ending during microphone permission does not leave an orphaned call
 	expect(contexts[0].close).toHaveBeenCalledOnce();
 });
 
+test("a call carries over when its room is rebuilt and announces the new room's peer", async () => {
+	const roomOf = (
+		presence: ReturnType<typeof awareness>,
+		peerId: string,
+	): ConversationRoom => ({
+		awareness: presence.api,
+		provider: {
+			room: { peerId, webrtcConns: new Map() },
+			on() {},
+			off() {},
+		},
+	});
+	const callIn = (presence: ReturnType<typeof awareness>) =>
+		(presence.states.get(1) as { call?: unknown }).call;
+	const before = awareness();
+	const after = awareness();
+	let room = roomOf(before, "old-peer");
+	function Probe() {
+		latest = useConversationCall(
+			conversation,
+			"me",
+			room,
+			undefined,
+			undefined,
+			{
+				stableCallId: "call-one",
+			},
+		);
+		return null;
+	}
+	const container = document.createElement("div");
+	document.body.append(container);
+	const mountedRoot = createRoot(container);
+	root = mountedRoot;
+	await act(async () => mountedRoot.render(createElement(Probe)));
+	await act(async () => {
+		await latest.join();
+	});
+	expect(callIn(before)).toMatchObject({ id: "call-one", peer: "old-peer" });
+
+	room = roomOf(after, "new-peer");
+	await act(async () => mountedRoot.render(createElement(Probe)));
+	expect(latest.joined).toBe(true);
+	expect(microphone.track.stop).not.toHaveBeenCalled();
+	expect(callIn(after)).toMatchObject({
+		id: "call-one",
+		joined: true,
+		peer: "new-peer",
+	});
+	expect(mocks.sendEntry).not.toHaveBeenCalled();
+});
+
 async function listen() {
 	await act(async () => {
 		latest.setListening(true);

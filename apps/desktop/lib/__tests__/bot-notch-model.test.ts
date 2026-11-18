@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	acceptsTarget,
 	botActivity,
+	denCalledOut,
 	denShape,
 	notchBotsOf,
 	notchEligible,
@@ -43,6 +44,7 @@ const plainScreen: NotchLayout = {
 	scale: 2,
 	menuBarHeight: 24,
 	notch: null,
+	fullscreen: false,
 	platform: "macos",
 };
 
@@ -173,6 +175,29 @@ describe("den", () => {
 		const hover = denShape(plainScreen, ["a"], true);
 		expect(hover.rect.height).toBeGreaterThan(rest.rect.height);
 		expect(hover.slots[0].y).toBe(rest.slots[0].y);
+	});
+
+	it("lies flat in the top edge when tucked, its bots above the screen", () => {
+		for (const screen of [plainScreen, notchedScreen]) {
+			const rest = denShape(screen, ["a", "b"], false);
+			const tucked = denShape(screen, ["a", "b"], true, true);
+			expect(tucked.rect.height).toBe(0);
+			expect(tucked.rect.x).toBe(rest.rect.x);
+			expect(tucked.rect.width).toBe(rest.rect.width);
+			expect(tucked.slots.map((slot) => slot.x)).toEqual(
+				rest.slots.map((slot) => slot.x),
+			);
+			for (const slot of tucked.slots) expect(slot.y).toBeLessThan(0);
+		}
+	});
+
+	it("is called out by the pointer, a gesture or a bot at home, never by a bot on a window", () => {
+		const perched = new Set(["on_window"]);
+		expect(denCalledOut([false, false], [], perched)).toBe(false);
+		expect(denCalledOut([false, true], [], perched)).toBe(true);
+		expect(denCalledOut([], ["at_home"], perched)).toBe(true);
+		expect(denCalledOut([], [null], perched)).toBe(true);
+		expect(denCalledOut([], ["on_window", undefined], perched)).toBe(false);
 	});
 });
 

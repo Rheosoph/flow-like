@@ -131,15 +131,20 @@ function denHeight(layout: NotchLayout, hover: boolean): number {
 	return band + (hover ? DEN_HOVER_GROW : 0);
 }
 
-/** The den's outline and where each bot sits in it. */
+/**
+ * The den's outline and where each bot sits in it. Tucked, it lies flat in the top edge and its
+ * bots are above the screen with it.
+ */
 export function denShape(
 	layout: NotchLayout,
 	botIds: readonly string[],
 	hover: boolean,
+	tucked = false,
 ): DenShape {
-	const height = denHeight(layout, hover);
-	const grow = hover ? 4 : 0;
-	const cy = denHeight(layout, false) / 2 + 0.5;
+	const resting = denHeight(layout, false);
+	const height = tucked ? 0 : denHeight(layout, hover);
+	const grow = hover && !tucked ? 4 : 0;
+	const cy = resting / 2 + 0.5 - (tucked ? resting : 0);
 	const notch = layout.notch;
 	if (notch) {
 		const right = Math.ceil(botIds.length / 2);
@@ -177,6 +182,21 @@ export function denShape(
 		})),
 		wrapsNotch: false,
 	};
+}
+
+/**
+ * Whether something calls a hidden den out of the top edge: one of `signals` (the pointer at the
+ * edge, a gesture), or a bot at home that is `attended` with a card, a prompt, a menu or the
+ * pointer. `null` attends the den itself; a bot on a window leaves the den where it is.
+ */
+export function denCalledOut(
+	signals: readonly boolean[],
+	attended: readonly (string | null | undefined)[],
+	perched: { has(botId: string): boolean },
+): boolean {
+	const atHome = (botId: string | null | undefined) =>
+		botId === null || (botId !== undefined && !perched.has(botId));
+	return signals.some(Boolean) || attended.some(atHome);
 }
 
 export function contains(rect: NotchRect, point: NotchPoint, margin = 0) {

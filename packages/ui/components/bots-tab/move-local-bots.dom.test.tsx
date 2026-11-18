@@ -9,6 +9,7 @@ import type {
 	IUpdateBotRequest,
 } from "../../state/backend-state/bot-state";
 import type { IConversation } from "../../state/backend-state/inbox-state";
+import { BANNER_HIDDEN_KEY } from "./local-bots-banner-model";
 import {
 	fakeI18n,
 	installDomGlobals,
@@ -696,5 +697,26 @@ describe("moving bots from this computer to the account", () => {
 
 		serverFull.delete(HELPER);
 		await click(buttonIn(dialog(), "Close"));
+	});
+
+	test("hiding the banner keeps it away on the next visit", async () => {
+		const banner = () =>
+			container.querySelector("section[aria-label='Bots on this computer']");
+		try {
+			await click(
+				banner()?.querySelector<HTMLButtonElement>("button[aria-label='Hide']"),
+			);
+			expect(banner()).toBeNull();
+
+			await act(async () => root.render(null));
+			await act(async () => root.render(view()));
+			await settle();
+			await settle(100);
+			expect(container.textContent).toContain("Local only");
+			expect(banner()).toBeNull();
+			expect(reviewOpen()).toBe(false);
+		} finally {
+			localStorage.removeItem(BANNER_HIDDEN_KEY);
+		}
 	});
 });

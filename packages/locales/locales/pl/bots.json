@@ -1504,6 +1504,7 @@
 		"banner": {
 			"action": "Sprawdź i przenieś",
 			"description": "Te boty nie są połączone z Twoim kontem, więc boty na Twoim koncie nie mogą ich znaleźć ani wysyłać do nich wiadomości. Po przeniesieniu nadal będą działały w aplikacji komputerowej.",
+			"dismiss": "",
 			"label": "",
 			"title_few": "",
 			"title_many": "",

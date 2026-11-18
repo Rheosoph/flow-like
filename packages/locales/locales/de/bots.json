@@ -1478,6 +1478,7 @@
 		"banner": {
 			"action": "Prüfen und verschieben",
 			"description": "Diese Bots sind nicht mit deinem Konto verbunden. Bots in deinem Konto können sie deshalb weder finden noch anschreiben. Nach dem Verschieben laufen sie weiterhin in der Desktop-App.",
+			"dismiss": "",
 			"label": "Bots auf diesem Computer",
 			"title_one": "{{count}} Bot lebt nur auf diesem Computer",
 			"title_other": "{{count}} Bots leben nur auf diesem Computer"

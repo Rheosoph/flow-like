@@ -43,6 +43,8 @@ export interface NotchPoint {
 /** `bot-notch://pointer`: the cursor near the notch's shapes; `near: false` once it left. */
 export interface NotchPointer extends NotchPoint {
 	near: boolean;
+	/** The cursor touches the display's top edge while the den hides in a fullscreen Space. */
+	edge: boolean;
 }
 
 export interface NotchLayout {
@@ -52,6 +54,8 @@ export interface NotchLayout {
 	menuBarHeight: number;
 	/** The hardware notch: no pixels exist between `left` and `right` above `height`. */
 	notch: { left: number; right: number; height: number } | null;
+	/** The display shows a fullscreen Space: the den hides until the cursor reaches the top edge. */
+	fullscreen: boolean;
 	platform: "macos" | "windows" | "linux";
 }
 

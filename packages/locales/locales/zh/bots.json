@@ -1450,6 +1450,7 @@
 		"banner": {
 			"action": "检查并移动",
 			"description": "这些机器人未连接到你的账户，因此你账户中的机器人无法找到它们或向它们发送消息。移动后，它们仍会在桌面应用中运行。",
+			"dismiss": "",
 			"label": "",
 			"title_one": "",
 			"title_other": ""

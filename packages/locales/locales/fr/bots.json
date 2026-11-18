@@ -1477,6 +1477,7 @@
 		"banner": {
 			"action": "Vérifier et déplacer",
 			"description": "Ces bots ne sont pas connectés à votre compte. Les bots de votre compte ne peuvent donc ni les trouver ni leur envoyer de messages. Ils continueront à fonctionner dans l’application de bureau après leur déplacement.",
+			"dismiss": "",
 			"label": "",
 			"title_many": "",
 			"title_one": "",
