@@ -19,13 +19,14 @@ use reqwest::Url;
 /// Where a model client built from a Bit's own endpoint may connect.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ProviderEgress {
-    /// No restriction: desktop runs, executors and hosted models.
+    /// No restriction: desktop runs, local executors and hosted models.
     #[default]
     Open,
     /// HTTPS only, and every address publicly routable.
     Public,
-    /// HTTP or HTTPS and private ranges, for self-hosted deployments. Loopback, link-local,
-    /// metadata and other host-plane addresses stay refused.
+    /// HTTP or HTTPS and private ranges, for self-hosted deployments and for the Bits a board
+    /// builds on a server executor. Loopback, link-local, metadata and other host-plane
+    /// addresses stay refused.
     Private,
 }
 

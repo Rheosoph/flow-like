@@ -16,6 +16,7 @@ use flow_like::flow::event::Event;
 use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
 use flow_like::flow::execution::{ExecutionEnvironment, InternalRun, LogLevel, RunPayload};
 use flow_like::flow::oauth::OAuthToken;
+use flow_like::flow_like_model_provider::egress::ProviderEgress;
 use flow_like::flow_like_model_provider::provider::ModelProviderConfiguration;
 use flow_like::hub::retry_after;
 use flow_like::profile::Profile;
@@ -333,6 +334,18 @@ pub(crate) fn validate_executor_request_claims(
 /// meta grant — and `with_default_store` would otherwise alias the meta slot
 /// to the content bucket, letting any stray meta read land on the wrong data.
 /// Leaving it `None` makes such a read fail loudly instead.
+/// Puts `state` in the executor's `environment`. A board builds Bits that name their own
+/// endpoint and key, so on a server their clients get the reach of HTTP nodes: private
+/// networks, never the executor's own network plane.
+pub(crate) fn enter_environment(state: &mut FlowLikeState, environment: ExecutionEnvironment) {
+    state.execution_environment = environment;
+    state.model_egress = if environment == ExecutionEnvironment::Server {
+        ProviderEgress::Private
+    } else {
+        ProviderEgress::Open
+    };
+}
+
 pub(crate) async fn build_flow_state(
     credentials: &flow_like::credentials::SharedCredentials,
     hub: Option<HubAccess>,
@@ -375,7 +388,7 @@ pub(crate) async fn build_flow_state(
     let http_client = HTTPClient::new_without_refetch();
     let mut state =
         FlowLikeState::new_with_model_config(flow_config, http_client, model_provider_config);
-    state.execution_environment = ExecutionEnvironment::server_default();
+    enter_environment(&mut state, ExecutionEnvironment::server_default());
     if let Some(hub) = hub {
         hub.register_on(&mut state).await;
     }
@@ -2232,6 +2245,132 @@ fn ensure_terminal_acknowledgement(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod model_egress_tests {
+    use super::*;
+    use flow_like::bit::{Bit, BitModelClassification, BitTypes, LLMParameters};
+    use flow_like::flow_like_model_provider::history::{History, HistoryMessage, Role};
+    use flow_like::flow_like_model_provider::llm::ModelLogic;
+    use flow_like::flow_like_model_provider::provider::{ModelApiSurface, ModelProvider};
+    use flow_like::models::llm::ModelFactory;
+    use std::net::SocketAddr;
+    use std::sync::atomic::AtomicUsize;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// A Bit as a provider node builds it: its own key and endpoint.
+    fn board_built_bit(endpoint: &str) -> Bit {
+        let params = [
+            ("api_key", "board-key"),
+            ("endpoint", endpoint),
+            ("model_id", "upstream-model"),
+        ];
+        Bit {
+            id: "board-built".to_string(),
+            bit_type: BitTypes::Llm,
+            parameters: serde_json::to_value(LLMParameters {
+                context_length: 8_192,
+                model_classification: BitModelClassification::default(),
+                data_classification: None,
+                provider: ModelProvider {
+                    api_surface: Some(ModelApiSurface::ChatCompletions),
+                    provider_name: "custom:openai".to_string(),
+                    model_id: Some("upstream-model".to_string()),
+                    version: None,
+                    params: Some(
+                        params
+                            .into_iter()
+                            .map(|(name, value)| (name.to_string(), serde_json::json!(value)))
+                            .collect(),
+                    ),
+                },
+            })
+            .unwrap(),
+            ..Bit::default()
+        }
+    }
+
+    /// A loopback listener that answers every connection and counts them.
+    async fn loopback_endpoint() -> (SocketAddr, Arc<AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let served = Arc::new(AtomicUsize::new(0));
+        let count = served.clone();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                count.fetch_add(1, Ordering::SeqCst);
+                let mut request = [0u8; 8192];
+                let _ = socket.read(&mut request).await;
+                let _ = socket
+                    .write_all(b"HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                    .await;
+                let _ = socket.shutdown().await;
+            }
+        });
+        (address, served)
+    }
+
+    /// The connections a loopback endpoint sees from one call of a board-built Bit.
+    async fn loopback_connections_from(environment: ExecutionEnvironment) -> usize {
+        let (address, served) = loopback_endpoint().await;
+        let mut state =
+            FlowLikeState::new(FlowLikeConfig::new(), HTTPClient::new_without_refetch());
+        enter_environment(&mut state, environment);
+        let model = ModelFactory::new()
+            .build(
+                &board_built_bit(&format!("http://{address}/v1")),
+                Arc::new(state),
+                None,
+                None,
+            )
+            .await
+            .expect("the endpoint is checked when a request is sent");
+        let history = History::new(
+            "upstream-model".to_string(),
+            vec![HistoryMessage::from_string(Role::User, "Hello")],
+        );
+        assert!(
+            model.invoke(&history, None).await.is_err(),
+            "{environment:?}"
+        );
+        served.load(Ordering::SeqCst)
+    }
+
+    #[tokio::test]
+    async fn a_server_executor_keeps_board_built_bits_off_its_own_network_plane() {
+        assert_eq!(
+            loopback_connections_from(ExecutionEnvironment::Server).await,
+            0,
+            "a server executor never connects to loopback for a Bit's endpoint"
+        );
+        assert!(
+            loopback_connections_from(ExecutionEnvironment::Local).await > 0,
+            "a local executor reaches the endpoint, so the server refusal is the guard's"
+        );
+    }
+
+    #[test]
+    fn only_server_executors_confine_board_built_bits() {
+        for (environment, expected) in [
+            (ExecutionEnvironment::Server, ProviderEgress::Private),
+            (ExecutionEnvironment::Local, ProviderEgress::Open),
+            (ExecutionEnvironment::Desktop, ProviderEgress::Open),
+        ] {
+            let mut state =
+                FlowLikeState::new(FlowLikeConfig::new(), HTTPClient::new_without_refetch());
+            enter_environment(&mut state, environment);
+            assert_eq!(state.execution_environment, environment);
+            assert_eq!(state.model_egress, expected, "{environment:?}");
+            let allows = |address: &str| state.model_egress.allows_ip(address.parse().unwrap());
+            assert!(allows("10.0.0.5"), "{environment:?}");
+            assert_eq!(
+                allows("169.254.169.254"),
+                environment != ExecutionEnvironment::Server,
+                "{environment:?}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

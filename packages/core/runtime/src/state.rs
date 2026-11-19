@@ -623,7 +623,8 @@ pub struct FlowLikeState {
     #[cfg(feature = "model")]
     pub custom_bit_relay: Option<Arc<CustomBitRelay>>,
     /// Where clients built from a private Bit's own endpoint may connect. A host that calls
-    /// those endpoints for its users (the API) confines them; desktops and executors stay open.
+    /// those endpoints for its users (the API) confines them, a server executor keeps them off
+    /// its own network plane, and desktops stay open.
     #[cfg(feature = "model")]
     pub model_egress: ProviderEgress,
 

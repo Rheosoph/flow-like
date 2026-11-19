@@ -275,7 +275,11 @@ use governed by available memory, disk and existing format and compiler limits.
 
 Server runs never receive the key of a private (`custom:*`) Bit. Executors
 reach the private Bits of a run's profile through the API's model relay, which
-loads the Bit for its owner and calls the provider itself. Subscription Bits
+loads the Bit for its owner and calls the provider itself. A Bit that a board
+builds itself, with a provider node's own key and endpoint, is called by the
+executor directly, with the reach of its HTTP nodes: private address ranges are
+allowed and host-plane addresses are refused. Those calls follow no redirect and
+ignore proxy settings. Subscription Bits
 (Claude Code, Codex, GitHub Copilot and Microsoft 365 Copilot) run only on
 their owner's desktop. The API's calls to private model endpoints use
 guarded egress: public HTTPS only, unless the operator sets
