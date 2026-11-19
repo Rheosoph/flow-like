@@ -312,6 +312,43 @@ import Testing
     #expect(first.scope == "é:alice")
 }
 
+@Test func sharedContainerLocksRunOnlyInsideGrantedBackgroundTime() throws {
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".lock")
+    defer { try? FileManager.default.removeItem(at: file) }
+    let denied = LockProbe()
+    #expect(throws: NativeIntegrationError.unavailable) {
+        try NativeFileLock.exclusive(file, failure: NativeIntegrationError.unavailable, lifetime: { nil }) { denied.ran = true }
+    }
+    #expect(!denied.ran)
+
+    let granted = LockProbe()
+    let value = try NativeFileLock.exclusive(file, failure: NativeIntegrationError.unavailable, lifetime: {
+        granted.began = true
+        return { granted.unlockedBeforeRelease = LockProbe.isUnlocked(file) }
+    }) {
+        granted.ran = granted.began && !LockProbe.isUnlocked(file)
+        return 7
+    }
+    #expect(value == 7)
+    #expect(granted.ran)
+    #expect(granted.unlockedBeforeRelease)
+}
+
+private final class LockProbe: @unchecked Sendable {
+    var began = false
+    var ran = false
+    var unlockedBeforeRelease = false
+
+    static func isUnlocked(_ file: URL) -> Bool {
+        let descriptor = open(file.path, O_RDWR)
+        guard descriptor >= 0 else { return false }
+        defer { close(descriptor) }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { return false }
+        flock(descriptor, LOCK_UN)
+        return true
+    }
+}
+
 private func snapshot(scope: String, expires: Date = Date().addingTimeInterval(3600), apps: [[String: Any]] = []) throws -> Data {
     try JSONSerialization.data(withJSONObject: [
         "version": 1, "scope": scope, "generatedAt": ISO8601DateFormatter().string(from: Date()),

@@ -8,6 +8,7 @@
 
 use std::{fmt, time::Duration};
 
+use flow_like::flow::execution::ExecutionEnvironment;
 use flow_like::flow_like_model_provider::egress::{EgressRefused, ProviderEgress};
 use flow_like_storage::{Path, files::store::FlowLikeStore};
 use flow_like_types::reqwest::{self, Client, ClientBuilder, Response, Url, redirect};
@@ -120,7 +121,21 @@ impl Route {
     }
 }
 
-fn guarded_client(egress: ProviderEgress, builder: ClientBuilder) -> reqwest::Result<Client> {
+/// The guard for links the API fetches on a caller's behalf outside a model request: public
+/// HTTPS on servers, no restriction when the operator runs the API as a local environment.
+pub(crate) fn server_link_egress() -> ProviderEgress {
+    if ExecutionEnvironment::server_default() == ExecutionEnvironment::Server {
+        ProviderEgress::Public
+    } else {
+        ProviderEgress::Open
+    }
+}
+
+/// `builder` with `egress` installed, following up to [`MAX_REDIRECTS`] redirects that pass it.
+pub(crate) fn guarded_client(
+    egress: ProviderEgress,
+    builder: ClientBuilder,
+) -> reqwest::Result<Client> {
     egress
         .guard(builder)
         .redirect(redirect::Policy::custom(move |attempt| {

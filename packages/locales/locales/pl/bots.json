@@ -68,6 +68,10 @@
 			"description": "",
 			"label": ""
 		},
+		"location": {
+			"description": "",
+			"label": ""
+		},
 		"memory": {
 			"description": "",
 			"label": ""
@@ -1139,7 +1143,8 @@
 		},
 		"delete": {
 			"action": "",
-			"confirm": ""
+			"confirm": "",
+			"confirmCopy": ""
 		},
 		"deleted": "",
 		"describe": {
@@ -1834,7 +1839,18 @@
 			"monitoringLabel": "",
 			"placeDirect": "",
 			"placeGroup": "",
-			"placeUnnamedGroup": ""
+			"placeUnnamedGroup": "",
+			"expired": "",
+			"watching": "",
+			"place": {
+				"both": "",
+				"enter": "",
+				"exit": "",
+				"hint": "",
+				"once": "",
+				"repeat": "",
+				"until": ""
+			}
 		},
 		"waitingForYou": "",
 		"webhooks": {

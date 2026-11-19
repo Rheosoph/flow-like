@@ -144,9 +144,18 @@ export const localBots = {
 		);
 	},
 
-	/** Deletes the bot with its workspace and memory. */
-	async delete(botId: string): Promise<void> {
-		await run(`delete local bot ${botId}`, "local_bots_delete", { botId });
+	/**
+	 * Deletes the bot with its workspace and memory. Assistant or Flux goes only when
+	 * `accountBuiltIns`, the built-ins the signed-in account holds, has its kind.
+	 */
+	async delete(
+		botId: string,
+		accountBuiltIns: readonly NonNullable<IBot["system"]>[] = [],
+	): Promise<void> {
+		await run(`delete local bot ${botId}`, "local_bots_delete", {
+			botId,
+			...(accountBuiltIns.length ? { accountBuiltIns } : {}),
+		});
 	},
 
 	/** The app holding the bot's files and databases, made on first use; refused for Flux. */

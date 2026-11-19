@@ -7,6 +7,7 @@
 use super::{lock_bot, owned_bot};
 use crate::{
     bot_host::{
+        place_tasks::{self, holds_location},
         task_authority::{TaskAuthor, TaskEdit, author_of_turn},
         task_schedules,
         tasks::{self as firing, SCHEDULING_CAPABILITY},
@@ -24,8 +25,8 @@ use axum::{
 use chrono::{DateTime, FixedOffset, Utc};
 use flow_like_types::{
     bot_task::{
-        self as contract, CreateBotTask, MAX_TASKS_PER_BOT, TaskConversation, TaskKind,
-        TaskSchedule, UpdateBotTask,
+        self as contract, CreateBotTask, MAX_TASKS_PER_BOT, MAX_WATCHED_PLACES, PlaceCrossing,
+        TaskConversation, TaskKind, TaskPlace, TaskSchedule, UpdateBotTask,
     },
     inbox::{ConversationEncryption, ConversationKind},
 };
@@ -40,6 +41,8 @@ use utoipa::ToSchema;
 pub(crate) const TASK_CAPABILITY_OFF: &str = "BOT_TASK_CAPABILITY_OFF";
 pub(crate) const TASK_LIMIT_REACHED: &str = "BOT_TASK_LIMIT_REACHED";
 pub(crate) const TASK_CONVERSATION_ENCRYPTED: &str = "BOT_TASK_CONVERSATION_ENCRYPTED";
+pub(crate) const PLACE_OWNER_CHAT_ONLY: &str = "BOT_PLACE_OWNER_CHAT_ONLY";
+pub(crate) const PLACE_LIMIT_REACHED: &str = "BOT_PLACE_LIMIT";
 
 /// Where a task a bot schedules in a turn fires: that turn's group or chat, sent as the person
 /// who asked, so the run has that person's rights and never the owner's.
@@ -69,12 +72,67 @@ impl From<TaskConversation> for BotTaskConversation {
     }
 }
 
+/// The place a place task watches.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct BotTaskPlace {
+    pub latitude: f64,
+    pub longitude: f64,
+    /// Radius of the watched circle in meters, 100 to 100,000.
+    pub radius_m: f64,
+    /// `enter`, `exit` or `both`.
+    pub on: String,
+    /// What the place is in your words, such as "Home".
+    pub label: String,
+    /// Fires on every crossing, at most once per 10 minutes; otherwise on the first one only.
+    #[serde(default)]
+    pub repeat: bool,
+    /// RFC 3339 time after which phones stop watching the place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
+}
+
+impl From<TaskPlace> for BotTaskPlace {
+    fn from(place: TaskPlace) -> Self {
+        Self {
+            latitude: place.latitude,
+            longitude: place.longitude,
+            radius_m: place.radius_m,
+            on: place.on.as_str().to_string(),
+            label: place.label,
+            repeat: place.repeat,
+            until: place.until,
+        }
+    }
+}
+
+impl TryFrom<BotTaskPlace> for TaskPlace {
+    type Error = ApiError;
+
+    fn try_from(place: BotTaskPlace) -> Result<Self, ApiError> {
+        let on = PlaceCrossing::parse(&place.on).ok_or_else(|| {
+            bad_request(format!(
+                "place 'on' value '{}' is not enter, exit or both",
+                place.on
+            ))
+        })?;
+        Ok(Self {
+            latitude: place.latitude,
+            longitude: place.longitude,
+            radius_m: place.radius_m,
+            on,
+            label: place.label,
+            repeat: place.repeat,
+            until: place.until,
+        })
+    }
+}
+
 /// A task as its owner sees it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct BotTaskInfo {
     pub id: String,
     pub bot_id: String,
-    /// `once` or `cron`.
+    /// `once`, `cron` or `place`.
     pub kind: String,
     /// RFC 3339 time of a once task.
     pub at: Option<String>,
@@ -93,10 +151,13 @@ pub struct BotTaskInfo {
     pub created_at: DateTime<FixedOffset>,
     /// The group or chat the task fires in; none fires in your chat with the bot.
     pub conversation: Option<BotTaskConversation>,
+    /// The place a place task watches; it fires when your phone crosses it.
+    pub place: Option<BotTaskPlace>,
 }
 
 impl BotTaskInfo {
     pub(crate) fn of(row: bot_task::Model, conversation: Option<TaskConversation>) -> Self {
+        let place = place_tasks::place_of(&row).map(BotTaskPlace::from);
         Self {
             id: row.id,
             bot_id: row.bot_id,
@@ -113,6 +174,7 @@ impl BotTaskInfo {
             created_by: row.created_by.to_ascii_lowercase(),
             created_at: row.created_at,
             conversation: conversation.map(BotTaskConversation::from),
+            place,
         }
     }
 }
@@ -305,7 +367,7 @@ pub struct CreateBotTaskRequest {
     /// Check for useful changes; routine successful runs may stay quiet.
     #[serde(default)]
     pub monitoring: bool,
-    /// `once` or `cron`.
+    /// `once`, `cron` or `place`.
     pub kind: String,
     /// RFC 3339 time of a once task, in the future.
     pub at: Option<String>,
@@ -318,6 +380,10 @@ pub struct CreateBotTaskRequest {
     pub instruction: String,
     /// A short name for the task; the start of the instruction when missing.
     pub title: Option<String>,
+    /// The place of a place task, which fires when your phone crosses it. Needs the bot's
+    /// location capability and your own chat with the bot.
+    #[serde(default)]
+    pub place: Option<BotTaskPlace>,
     /// The bot's turn that asked for the task, sent by the device running that turn. The task
     /// then fires in that turn's group or chat, as the person who asked. A bot's own token always
     /// uses its turn. A device sends it for every task a bot schedules, empty when the hub does
@@ -337,6 +403,9 @@ pub struct UpdateBotTaskRequest {
     pub title: Option<String>,
     /// Pausing keeps the task; resuming computes its next run from now.
     pub enabled: Option<bool>,
+    /// A new place for a place task; the task is armed again.
+    #[serde(default)]
+    pub place: Option<BotTaskPlace>,
     /// The bot's turn that asks for the change, sent by the device running that turn. The change
     /// then reaches only the tasks of that turn's group or chat. A bot's own token always uses its
     /// turn. As on creation, only a change without it is your own.
@@ -385,22 +454,71 @@ fn bad_request(message: String) -> ApiError {
     ApiError::bad_request(message)
 }
 
-fn refuse_without_capability(bot: &bot::Model) -> Result<(), ApiError> {
-    if bot
-        .capabilities
-        .iter()
-        .any(|id| id == SCHEDULING_CAPABILITY)
-    {
+fn refuse_without_capability(bot: &bot::Model, kind: TaskKind) -> Result<(), ApiError> {
+    let (held, name) = match kind {
+        TaskKind::Place => (holds_location(bot), "location"),
+        _ => (
+            bot.capabilities
+                .iter()
+                .any(|id| id == SCHEDULING_CAPABILITY),
+            "scheduling",
+        ),
+    };
+    if held {
         return Ok(());
     }
     Err(ApiError::coded(
         StatusCode::FORBIDDEN,
         TASK_CAPABILITY_OFF,
         format!(
-            "Bot '{}' doesn't have the scheduling capability switched on",
+            "Bot '{}' doesn't have the {name} capability switched on",
             bot.id
         ),
     ))
+}
+
+fn place_limit_error(owner_id: &str) -> ApiError {
+    ApiError::coded(
+        StatusCode::CONFLICT,
+        PLACE_LIMIT_REACHED,
+        format!(
+            "Owner '{owner_id}' already has {MAX_WATCHED_PLACES} watched places across their bots; delete or finish one first"
+        ),
+    )
+}
+
+/// Refuses when the owner's phones already watch [`MAX_WATCHED_PLACES`] places, not counting
+/// `except`.
+async fn ensure_room_for_place<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    except: Option<&str>,
+    now: DateTime<FixedOffset>,
+) -> Result<(), ApiError> {
+    let watched = place_tasks::watched_in(db, owner_id, utc(now))
+        .await?
+        .into_iter()
+        .filter(|(row, _)| Some(row.id.as_str()) != except)
+        .count();
+    if watched >= MAX_WATCHED_PLACES {
+        return Err(place_limit_error(owner_id));
+    }
+    Ok(())
+}
+
+fn set_place(task: &mut bot_task::ActiveModel, place: Option<&TaskPlace>) {
+    task.place_latitude = Set(place.map(|place| place.latitude));
+    task.place_longitude = Set(place.map(|place| place.longitude));
+    task.place_radius_m = Set(place.map(|place| place.radius_m));
+    task.place_on = Set(place.map(|place| place.on.stored()));
+    task.place_label = Set(place.map(|place| place.label.clone()));
+    task.place_repeat = Set(place.map(|place| place.repeat));
+    task.place_until = Set(place.and_then(|place| {
+        place
+            .until
+            .as_deref()
+            .and_then(|until| DateTime::parse_from_rfc3339(until).ok())
+    }));
 }
 
 pub(crate) async fn list_in<C: ConnectionTrait>(
@@ -490,18 +608,10 @@ pub(crate) async fn create_in<C: ConnectionTrait>(
 ) -> Result<bot_task::Model, ApiError> {
     let author = author.into();
     let bot = owned_bot(db, owner_id, bot_id).await?;
-    refuse_without_capability(&bot)?;
     let kind = request
         .kind
-        .ok_or_else(|| bad_request("A task needs a kind, once or cron".into()))?;
-    let schedule = TaskSchedule::parse(
-        kind,
-        request.at.as_deref(),
-        request.cron.as_deref(),
-        request.tz.as_deref(),
-        utc(now),
-    )
-    .map_err(bad_request)?;
+        .ok_or_else(|| bad_request("A task needs a kind, once, cron or place".into()))?;
+    refuse_without_capability(&bot, kind)?;
     let (title, instruction) = contract::check_text(request.title.as_deref(), &request.instruction)
         .map_err(bad_request)?;
     let count = bot_task::Entity::find()
@@ -515,18 +625,63 @@ pub(crate) async fn create_in<C: ConnectionTrait>(
             format!("Bot '{bot_id}' already has {MAX_TASKS_PER_BOT} tasks; delete one first"),
         ));
     }
-    let (run_at, cron, timezone) = parts_of(&schedule);
+    let (run_at, cron, timezone, next_run_at, place) = if kind == TaskKind::Place {
+        if request.at.is_some() || request.cron.is_some() || request.tz.is_some() {
+            return Err(bad_request(
+                "A place task fires on a crossing of its place; it takes no 'at', 'cron' or 'tz'"
+                    .into(),
+            ));
+        }
+        if let Some(origin) = origin {
+            return Err(ApiError::coded(
+                StatusCode::CONFLICT,
+                PLACE_OWNER_CHAT_ONLY,
+                format!(
+                    "A place task fires only in the owner's own chat with the bot, not in conversation '{}': everyone there would learn when the owner arrives somewhere",
+                    origin.conversation_id
+                ),
+            ));
+        }
+        let place = request
+            .place
+            .clone()
+            .ok_or_else(|| bad_request("A place task needs a 'place'".into()))?
+            .check(utc(now))
+            .map_err(bad_request)?;
+        if request.enabled.unwrap_or(true) {
+            ensure_room_for_place(db, owner_id, None, now).await?;
+        }
+        (None, None, None, None, Some(place))
+    } else {
+        if request.place.is_some() {
+            return Err(bad_request(format!(
+                "A {} task takes no 'place'",
+                kind.as_str()
+            )));
+        }
+        let schedule = TaskSchedule::parse(
+            kind,
+            request.at.as_deref(),
+            request.cron.as_deref(),
+            request.tz.as_deref(),
+            utc(now),
+        )
+        .map_err(bad_request)?;
+        let (run_at, cron, timezone) = parts_of(&schedule);
+        let next = schedule.first_run(utc(now)).map(|at| at.fixed_offset());
+        (run_at, cron, timezone, next, None)
+    };
     let mut task = bot_task::ActiveModel {
         id: Set(format!("task_{}", uuid::Uuid::new_v4().simple())),
         bot_id: Set(bot_id.to_string()),
         owner_id: Set(owner_id.to_string()),
-        kind: Set(schedule.kind().stored()),
+        kind: Set(kind.stored()),
         run_at: Set(run_at),
         cron: Set(cron),
         timezone: Set(timezone),
         instruction: Set(instruction),
         title: Set(title),
-        next_run_at: Set(schedule.first_run(utc(now)).map(|at| at.fixed_offset())),
+        next_run_at: Set(next_run_at),
         last_run_at: Set(None),
         enabled: Set(request.enabled.unwrap_or(true)),
         monitoring: Set(Some(request.monitoring)),
@@ -537,6 +692,7 @@ pub(crate) async fn create_in<C: ConnectionTrait>(
         requested_by: Set(origin.map(|origin| origin.requested_by.clone())),
         ..Default::default()
     };
+    set_place(&mut task, place.as_ref());
     author.mark(&mut task);
     Ok(task.insert(db).await?)
 }
@@ -599,7 +755,32 @@ pub(crate) async fn update_scoped_in<C: ConnectionTrait>(
     let moves = request.at.is_some() || request.cron.is_some() || request.tz.is_some();
     let resumes = request.enabled == Some(true) && !row.enabled;
     let mut active: bot_task::ActiveModel = row.clone().into();
-    if moves || resumes {
+    if kind == TaskKind::Place {
+        if moves {
+            return Err(bad_request(format!(
+                "Task '{task_id}' is a place task; it takes a 'place', not 'at', 'cron' or 'tz'"
+            )));
+        }
+        let place = request
+            .place
+            .clone()
+            .map(|place| place.check(utc(now)).map_err(bad_request))
+            .transpose()?;
+        let enabled = request.enabled.unwrap_or(row.enabled);
+        if enabled && (place.is_some() || resumes) {
+            ensure_room_for_place(db, owner_id, Some(task_id), now).await?;
+        }
+        if let Some(place) = &place {
+            set_place(&mut active, Some(place));
+            active.last_run_at = Set(None);
+        }
+        active.enabled = Set(enabled);
+    } else if request.place.is_some() {
+        return Err(bad_request(format!(
+            "Task '{task_id}' is a {} task; its kind can't change, so it takes no 'place'",
+            kind.as_str()
+        )));
+    } else if moves || resumes {
         let at = request
             .at
             .clone()
@@ -672,8 +853,12 @@ pub(crate) async fn delete_scoped_in<C: ConnectionTrait>(
 }
 
 fn kind_of(request: &CreateBotTaskRequest) -> Result<TaskKind, ApiError> {
-    TaskKind::parse(&request.kind)
-        .ok_or_else(|| bad_request(format!("kind '{}' is not once or cron", request.kind)))
+    TaskKind::parse(&request.kind).ok_or_else(|| {
+        bad_request(format!(
+            "kind '{}' is not once, cron or place",
+            request.kind
+        ))
+    })
 }
 
 /// The bot turn a call is made for: a bot token's own, else the one the owner's device names.
@@ -723,9 +908,9 @@ pub async fn list_bot_tasks(
         (status = 201, description = "A new task: the bot runs its instruction at the scheduled time and answers in your chat, or in the group or chat of the turn that asked for it.", body = BotTaskInfo),
         (status = 400, description = "The schedule or text is invalid, or a cron runs more often than every 5 minutes"),
         (status = 401, description = "Not signed in"),
-        (status = 403, description = "BOT_TASK_CAPABILITY_OFF: switch the bot's scheduling capability on first"),
+        (status = 403, description = "BOT_TASK_CAPABILITY_OFF: switch the bot's scheduling capability (location for a place task) on first"),
         (status = 404, description = "You have no bot with this id"),
-        (status = 409, description = "BOT_TASK_LIMIT_REACHED: a bot has at most 50 tasks. BOT_TASK_CONVERSATION_ENCRYPTED: the turn's conversation is end-to-end encrypted, so the task could never fire there")
+        (status = 409, description = "BOT_TASK_LIMIT_REACHED: a bot has at most 50 tasks. BOT_TASK_CONVERSATION_ENCRYPTED: the turn's conversation is end-to-end encrypted, so the task could never fire there. BOT_PLACE_OWNER_CHAT_ONLY: a place task can only be set up in your own chat with the bot. BOT_PLACE_LIMIT: your phones watch at most 20 places across all your bots")
     ),
     security(("bearer_auth" = []))
 )]
@@ -747,6 +932,7 @@ pub async fn create_bot_task(
         title: body.title,
         enabled: None,
         monitoring: body.monitoring,
+        place: body.place.map(TaskPlace::try_from).transpose()?,
     };
     let row = state
         .transaction(|txn| {
@@ -782,10 +968,11 @@ pub async fn create_bot_task(
     ),
     request_body = UpdateBotTaskRequest,
     responses(
-        (status = 200, description = "The updated task. Moving the schedule or resuming a paused task computes its next run from now.", body = BotTaskInfo),
-        (status = 400, description = "The schedule or text is invalid"),
+        (status = 200, description = "The updated task. Moving the schedule or resuming a paused task computes its next run from now; a new place arms a place task again.", body = BotTaskInfo),
+        (status = 400, description = "The schedule, place or text is invalid, or the change would turn a time task into a place task or the other way round"),
         (status = 401, description = "Not signed in"),
-        (status = 404, description = "You have no such bot or task")
+        (status = 404, description = "You have no such bot or task"),
+        (status = 409, description = "BOT_PLACE_LIMIT: your phones watch at most 20 places across all your bots")
     ),
     security(("bearer_auth" = []))
 )]
@@ -807,6 +994,7 @@ pub async fn update_bot_task(
         title: body.title,
         enabled: body.enabled,
         monitoring: body.monitoring,
+        place: body.place.map(TaskPlace::try_from).transpose()?,
     };
     let row = state
         .transaction(|txn| {
@@ -896,6 +1084,7 @@ pub async fn fire_bot_task(
     let bot = owned_bot(&state.db, &sub, &bot_id).await?;
     let task = owned_task(&state.db, &sub, &bot_id, &task_id).await?;
     let due = firing::holds_capability(&bot)
+        && TaskKind::parse(&task.kind) != Some(TaskKind::Place)
         && task.enabled
         && task.next_run_at.is_some_and(|at| at <= Utc::now());
     let fired = due && firing::fire(&state, &task).await?;

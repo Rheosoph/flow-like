@@ -30,8 +30,8 @@ mod fetch;
 #[cfg(test)]
 pub(crate) mod tests;
 
-pub(crate) use fetch::fetch_get;
 use fetch::{ReadError, pinned_client, read_capped};
+pub(crate) use fetch::{fetch_get, fetch_get_as};
 
 pub const WEB_REQUEST: &str = "web_request";
 

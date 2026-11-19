@@ -451,7 +451,9 @@ fn at_most_fifty_bots_live_on_a_device() {
         .unwrap_err();
     assert_eq!(error.code(), codes::BOT_LIMIT_REACHED);
     assert!(error.message().contains("50"), "{error}");
-    f.store.delete_bot(&bots[0].id).unwrap();
+    f.store
+        .delete_bot(&bots[0].id, &crate::BuiltInDeletion::Refuse)
+        .unwrap();
     f.bot("Room again");
 }
 
@@ -912,7 +914,9 @@ fn a_duplicate_counts_toward_the_fifty_bots_of_a_device() {
     let bots: Vec<Bot> = (0..50).map(|n| f.bot(&format!("Bot {n}"))).collect();
     let error = f.store.clone_bot(&bots[0].id).unwrap_err();
     assert_eq!(error.code(), codes::BOT_LIMIT_REACHED);
-    f.store.delete_bot(&bots[1].id).unwrap();
+    f.store
+        .delete_bot(&bots[1].id, &crate::BuiltInDeletion::Refuse)
+        .unwrap();
     f.store.clone_bot(&bots[0].id).unwrap();
 }
 
@@ -1059,7 +1063,10 @@ fn built_ins_take_edits_a_null_name_brings_the_default_back_and_flux_keeps_flowp
 fn built_ins_cant_be_deleted_dont_count_and_come_back_after_a_move_forgets_them() {
     let f = fixture();
     let (general, flux) = built_ins(&f);
-    let error = f.store.delete_bot(&general.id).unwrap_err();
+    let error = f
+        .store
+        .delete_bot(&general.id, &crate::BuiltInDeletion::Refuse)
+        .unwrap_err();
     assert_eq!(error.code(), codes::BOT_SYSTEM_UNDELETABLE);
     assert!(error.message().contains("general"), "{error}");
     assert_eq!(f.store.get_bot(&general.id).unwrap(), Some(general.clone()));
@@ -1102,7 +1109,11 @@ fn a_duplicate_of_a_built_in_is_the_persons_own_with_its_default_name() {
         general_copy.capabilities,
         [BotCapability::Internet, BotCapability::Memory]
     );
-    assert_eq!(f.store.delete_bot(&flux_copy.id), Ok(None));
+    assert_eq!(
+        f.store
+            .delete_bot(&flux_copy.id, &crate::BuiltInDeletion::Refuse),
+        Ok(None)
+    );
 }
 
 #[test]

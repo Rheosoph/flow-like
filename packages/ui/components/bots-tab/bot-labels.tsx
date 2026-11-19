@@ -123,6 +123,7 @@ export function useBotCapabilityLabel() {
 				"Notify you",
 			),
 			scheduling: t("capabilities.scheduling.label", "Scheduling"),
+			location: t("capabilities.location.label", "Location"),
 			memory: t("capabilities.memory.label", "Memory"),
 			documents: t("capabilities.documents.label", "Documents"),
 			barcodes: t("capabilities.barcodes.label", "Barcodes"),

@@ -68,6 +68,11 @@ export class AccountListReads<T> {
 	private readonly last = new Map<string, T[]>();
 	private readonly revisions = new Map<string, number>();
 
+	/** The list as last read, without asking the hub; empty before a first read. */
+	known(key: string): readonly T[] {
+		return this.last.get(key) ?? [];
+	}
+
 	/** A successful deletion also removes the item from the offline fallback. */
 	remove(key: string, matches: (item: T) => boolean): void {
 		this.last.set(

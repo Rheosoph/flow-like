@@ -3,7 +3,12 @@
 import { useTranslation } from "@flow-like/locales";
 import { ChevronLeft, ChevronRight, Copy, Trash2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
-import { useBotLabels } from "../../../hooks/use-bots";
+import {
+	isBuiltInCopy,
+	isDeletableBot,
+	useBotLabels,
+	useBots,
+} from "../../../hooks/use-bots";
 import { Button } from "../../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { useBotProblemMessage } from "./bot-editor-copy";
@@ -66,6 +71,7 @@ function FooterStatus({
 	const { t } = useTranslation("bots");
 	const problemMessage = useBotProblemMessage();
 	const labels = useBotLabels();
+	const { data: bots = [] } = useBots();
 	const [confirmingDelete, setConfirmingDelete] = useState(false);
 	const bot = editor.original;
 	if (discard.requested)
@@ -82,7 +88,11 @@ function FooterStatus({
 	if (confirmingDelete && bot)
 		return (
 			<Confirm
-				message={t("editor.delete.confirm", { name: labels(bot).name })}
+				message={
+					isBuiltInCopy(bot, bots)
+						? t("editor.delete.confirmCopy", { name: labels(bot).name })
+						: t("editor.delete.confirm", { name: labels(bot).name })
+				}
 				cancelLabel={t("editor.actions.cancel")}
 				confirmLabel={
 					submit.deleting
@@ -132,7 +142,7 @@ function FooterStatus({
 					unsaved={editor.dirty}
 				/>
 			)}
-			{!bot.system && (
+			{isDeletableBot(bot, bots) && (
 				<Button
 					variant="ghost"
 					size="sm"

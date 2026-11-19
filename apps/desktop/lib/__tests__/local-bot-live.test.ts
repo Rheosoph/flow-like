@@ -12,7 +12,10 @@ const mocks = vi.hoisted(() => ({
 	del: vi.fn(),
 }));
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
+vi.mock("@tauri-apps/api/core", () => ({
+	invoke: mocks.invoke,
+	isTauri: () => false,
+}));
 vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen }));
 vi.mock("../api", () => ({
 	get: mocks.get,

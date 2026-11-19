@@ -1477,6 +1477,7 @@ fn capability_label(capability: BotCapability) -> &'static str {
         BotCapability::Email => "Email",
         BotCapability::PushNotifications => "Push notifications",
         BotCapability::Scheduling => "Scheduling",
+        BotCapability::Location => "Location",
         BotCapability::Storage => "Files",
         BotCapability::DataStudio => "Data Studio",
         BotCapability::Memory => "Memory",
@@ -1498,7 +1499,7 @@ fn capability_label(capability: BotCapability) -> &'static str {
 }
 
 /// Capabilities backed by bot-tools tools, which only some hosts run.
-const HOST_TOOL_CAPABILITIES: [BotCapability; 16] = [
+const HOST_TOOL_CAPABILITIES: [BotCapability; 17] = [
     BotCapability::UserContext,
     BotCapability::WebRequests,
     BotCapability::Knowledge,
@@ -1508,6 +1509,7 @@ const HOST_TOOL_CAPABILITIES: [BotCapability; 16] = [
     BotCapability::DataConnections,
     BotCapability::ImageGeneration,
     BotCapability::Scheduling,
+    BotCapability::Location,
     BotCapability::PushNotifications,
     BotCapability::Email,
     BotCapability::Channels,
@@ -1738,7 +1740,7 @@ fn skills_ability_line(bot: &BotRunContext, offered: &[&str]) -> Option<String> 
     Some(line)
 }
 
-const CAPABILITY_TOOL_LINES: [(BotCapability, &str, &str); 16] = [
+const CAPABILITY_TOOL_LINES: [(BotCapability, &str, &str); 17] = [
     (
         BotCapability::UserContext,
         "User context",
@@ -1783,6 +1785,11 @@ const CAPABILITY_TOOL_LINES: [(BotCapability, &str, &str); 16] = [
         BotCapability::Scheduling,
         "Scheduling",
         "schedule work for yourself; a task fires in the conversation you scheduled it in, where you get its instruction as a message from whoever asked for it and answer there. In a group everyone reads the instruction, so keep your owner's private details out of it. Proactively schedule a one-time follow-up when an ongoing topic has a useful next action at a known future time, such as checking an expected reply or revisiting a deadline. Respect your owner's reminder preferences and check `list_tasks` for an existing follow-up before creating one. Prefer `schedule_task` with `at` or `in_minutes`; use `cron` only for an established recurring need. Resolve relative dates from the current time and use your owner's time zone for clock times; if a clock time's zone is unknown, clarify it before scheduling. Put the topic, relevant context, memory pointers and next action in the instruction so you can resume later. Keep `monitoring` false for reminders; use true for checks that should stay quiet when nothing changed. Say what you scheduled and when only after the tool succeeds",
+    ),
+    (
+        BotCapability::Location,
+        "Location",
+        "watch places for your owner and wake when their phone arrives at or leaves one, in your owner's chat only. `watch_place` works only from your owner's own chat and is refused in groups; never mention where your owner is or was in a group. Use `find_place` to turn an address or place name into coordinates and ask your owner which candidate when several fit. Check `list_places` before adding a place so you do not duplicate one. A place is one-time by default; use `repeat` only when your owner wants every visit, and `until` for errands that only matter for a while. Your owner's phone does the watching and needs location access set to Always, so say so when you set a place up. Write the instruction for yourself with the errand and context. From a scheduled task you may read a table and call `watch_place` once per row with an `until`. Confirm a place only after the tool succeeds",
     ),
     (
         BotCapability::PushNotifications,
@@ -4338,6 +4345,7 @@ mod tests {
             BotCapability::Email,
             BotCapability::PushNotifications,
             BotCapability::Scheduling,
+            BotCapability::Location,
             BotCapability::CommandLine,
             BotCapability::Encryption,
             BotCapability::Webhook,

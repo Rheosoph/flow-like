@@ -6,7 +6,10 @@ const mocks = vi.hoisted(() => ({
 	post: vi.fn(),
 }));
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
+vi.mock("@tauri-apps/api/core", () => ({
+	invoke: mocks.invoke,
+	isTauri: () => false,
+}));
 vi.mock("../../../lib/api", () => ({
 	get: vi.fn(),
 	post: mocks.post,

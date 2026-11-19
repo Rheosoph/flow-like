@@ -84,6 +84,7 @@ impl Scheduler for HubScheduler {
             "instruction": request.instruction,
             "title": request.title,
             "monitoring": request.monitoring,
+            "place": request.place,
         });
         let created = self
             .0

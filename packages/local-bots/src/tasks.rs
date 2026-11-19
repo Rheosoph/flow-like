@@ -14,8 +14,8 @@ use crate::{
 use chrono::{DateTime, TimeZone, Utc};
 use flow_like_types::{
     bot_task::{
-        self as contract, BotTask, CreateBotTask, MAX_TASKS_PER_BOT, TaskConversation,
-        TaskCreator, TaskKind, TaskSchedule, UpdateBotTask, fire_message_id,
+        self as contract, BotTask, CreateBotTask, MAX_TASKS_PER_BOT, TaskConversation, TaskCreator,
+        TaskKind, TaskSchedule, UpdateBotTask, fire_message_id,
     },
     bot_turn::turn_id,
     create_id,
@@ -27,6 +27,7 @@ use flow_like_types::{
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 const SCHEDULING_CAPABILITY: &str = "scheduling";
+pub const NO_LOCAL_PLACE_TASKS: &str = "Location triggers need a bot on your account; your phone can't watch a bot that only lives on this computer.";
 const COLUMNS: &str = "t.id, t.bot_id, t.kind, t.run_at, t.cron, t.timezone, t.instruction,
     t.title, t.next_run_at, t.last_run_at, t.enabled, t.created_by, t.created_at, t.monitoring,
     t.conversation_id, c.kind, c.title";
@@ -80,6 +81,7 @@ fn read_task(row: &Row<'_>) -> rusqlite::Result<Stored> {
             monitoring: row.get::<_, i64>(13)? != 0,
             created_by: TaskCreator::parse(&created_by).unwrap_or(TaskCreator::Owner),
             created_at: timestamp(row.get(12)?).to_rfc3339(),
+            place: None,
         },
     })
 }
@@ -95,6 +97,7 @@ fn schedule_of(task: &BotTask) -> Option<TaskSchedule> {
             expr: task.cron.clone()?,
             tz: task.tz.clone()?,
         }),
+        TaskKind::Place => None,
     }
 }
 
@@ -149,7 +152,8 @@ fn scope_group(db: &Connection, conversation_id: Option<&str>) -> Result<Option<
         .prepare_cached("SELECT kind FROM conversations WHERE id = ?1")?
         .query_row([id], |row| row.get(0))
         .optional()?;
-    let is_group = kind.as_deref().and_then(ConversationKind::parse) == Some(ConversationKind::Group);
+    let is_group =
+        kind.as_deref().and_then(ConversationKind::parse) == Some(ConversationKind::Group);
     Ok(is_group.then(|| id.to_string()))
 }
 
@@ -433,6 +437,9 @@ impl LocalBotStore {
             let kind = request
                 .kind
                 .ok_or_else(|| Error::invalid("A task needs a kind, once or cron"))?;
+            if kind == TaskKind::Place || request.place.is_some() {
+                return Err(Error::invalid(NO_LOCAL_PLACE_TASKS));
+            }
             let schedule = TaskSchedule::parse(
                 kind,
                 request.at.as_deref(),
@@ -541,6 +548,9 @@ impl LocalBotStore {
         self.write(|tx, _changes| {
             let group = scope_group(tx, conversation_id)?;
             let task = find_in_scope(tx, bot_id, task_id, group.as_deref())?;
+            if request.place.is_some() {
+                return Err(Error::invalid(NO_LOCAL_PLACE_TASKS));
+            }
             let now = now_micros();
             let moves = request.at.is_some() || request.cron.is_some() || request.tz.is_some();
             let resumes = request.enabled == Some(true) && !task.enabled;
@@ -609,13 +619,16 @@ impl LocalBotStore {
             let Some(task) = lookup(db, bot_id, task_id)? else {
                 return Ok(None);
             };
-            let (owner_written, conversation_id, message_id): (i64, Option<String>, Option<String>) =
-                db.query_row(
-                    "SELECT owner_written, request_conversation_id, request_message_id
+            let (owner_written, conversation_id, message_id): (
+                i64,
+                Option<String>,
+                Option<String>,
+            ) = db.query_row(
+                "SELECT owner_written, request_conversation_id, request_message_id
                      FROM tasks WHERE id = ?1",
-                    [task_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )?;
+                [task_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
             let request = match (conversation_id, message_id) {
                 (Some(conversation_id), Some(message_id)) => Some(TaskRequest {
                     entries: message_with_changes(db, &conversation_id, &message_id)?,

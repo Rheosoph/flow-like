@@ -67,8 +67,62 @@ export function taskRequest(
 	};
 }
 
-/** "Once, Nov 4, 9:00" or "0 9 * * 1-5 (Europe/Berlin)". */
-export function describeSchedule(task: IBotTask, locale?: string): string {
+export type TaskTranslate = (
+	key: string,
+	fallback: string,
+	options?: Record<string, unknown>,
+) => string;
+
+const englishText: TaskTranslate = (_key, fallback, options) =>
+	fallback.replace(/{{(\w+)}}/g, (_, name) => String(options?.[name] ?? ""));
+
+function formatMoment(value: string, locale?: string): string | undefined {
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) return;
+	return new Intl.DateTimeFormat(locale, {
+		dateStyle: "medium",
+		timeStyle: "short",
+	}).format(date);
+}
+
+/** "When you arrive at Home · every time · until Nov 4, 9:00". */
+export function describePlace(
+	task: IBotTask,
+	locale?: string,
+	t: TaskTranslate = englishText,
+): string {
+	const place = task.place;
+	if (!place) return "";
+	const options = { place: place.label };
+	const trigger =
+		place.on === "enter"
+			? t("panel.tasks.place.enter", "When you arrive at {{place}}", options)
+			: place.on === "exit"
+				? t("panel.tasks.place.exit", "When you leave {{place}}", options)
+				: t(
+						"panel.tasks.place.both",
+						"When you arrive at or leave {{place}}",
+						options,
+					);
+	const parts = [
+		trigger,
+		place.repeat
+			? t("panel.tasks.place.repeat", "every time")
+			: t("panel.tasks.place.once", "once"),
+	];
+	const until = place.until ? formatMoment(place.until, locale) : undefined;
+	if (until)
+		parts.push(t("panel.tasks.place.until", "until {{when}}", { when: until }));
+	return parts.join(" · ");
+}
+
+/** "Once, Nov 4, 9:00", "0 9 * * 1-5 (Europe/Berlin)" or a place description. */
+export function describeSchedule(
+	task: IBotTask,
+	locale?: string,
+	t?: TaskTranslate,
+): string {
+	if (task.kind === "place") return describePlace(task, locale, t);
 	if (task.kind === "cron") {
 		return `${task.cron ?? ""} (${task.tz ?? "UTC"})`;
 	}
@@ -80,8 +134,16 @@ export function describeSchedule(task: IBotTask, locale?: string): string {
 	}).format(at);
 }
 
-/** Paused tasks and finished once tasks have no next run. */
-export function taskState(task: IBotTask): "active" | "paused" | "done" {
+export type TaskState = "active" | "paused" | "done" | "expired";
+
+/** Paused tasks and finished once tasks have no next run; a place task past its end is expired. */
+export function taskState(task: IBotTask, now: number = Date.now()): TaskState {
+	const place = task.kind === "place" ? task.place : undefined;
+	if (place) {
+		if (!place.repeat && task.last_run_at) return "done";
+		const until = place.until ? new Date(place.until).getTime() : Number.NaN;
+		if (!Number.isNaN(until) && until <= now) return "expired";
+	}
 	if (task.enabled) return "active";
 	return task.kind === "once" && task.last_run_at ? "done" : "paused";
 }

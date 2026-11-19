@@ -162,7 +162,14 @@ impl LocalBotStore {
                     "UPDATE tool_grants SET expires_at = ?1
                      WHERE bot_id = ?2 AND tool = ?3 AND scope = ?4
                        AND (expires_at IS NULL OR (expires_at > ?5 AND expires_at < ?6))",
-                    params![grant_expiry(now), bot_id, tool, scope, now, slide_threshold(now)],
+                    params![
+                        grant_expiry(now),
+                        bot_id,
+                        tool,
+                        scope,
+                        now,
+                        slide_threshold(now)
+                    ],
                 )?;
             }
             Ok(())

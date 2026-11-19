@@ -30,7 +30,7 @@ use axum::{
 use flow_like::flow::{
     board::Board,
     event::Event as CoreEvent,
-    execution::UserExecutionContext,
+    execution::{ExecutionEnvironment, UserExecutionContext, egress::GuardedHttpClient},
     node::Node,
     pin::{Pin, PinType, ValueType},
     variable::VariableType,
@@ -2193,7 +2193,25 @@ static JWKS_CACHE: std::sync::LazyLock<
 
 const JWKS_TTL: Duration = Duration::from_secs(300);
 
-async fn get_jwks(jwks_url: &str) -> Result<jsonwebtoken::jwk::JwkSet, ApiError> {
+/// GET to an identity-provider URL from a board's auth config. Server-side the
+/// guarded client refuses loopback, link-local and cloud metadata hosts on the
+/// URL, at DNS resolution and on every redirect; private networks stay
+/// reachable for self-hosted identity providers.
+fn identity_provider_get(
+    environment: ExecutionEnvironment,
+    url: &str,
+    purpose: &str,
+) -> Result<flow_like_types::reqwest::RequestBuilder, ApiError> {
+    GuardedHttpClient::new(environment)
+        .and_then(|client| client.get(url))
+        .map(|request| request.timeout(Duration::from_secs(10)))
+        .map_err(|e| ApiError::internal(format!("{purpose} refused: {e}")))
+}
+
+async fn get_jwks(
+    environment: ExecutionEnvironment,
+    jwks_url: &str,
+) -> Result<jsonwebtoken::jwk::JwkSet, ApiError> {
     {
         let cache = JWKS_CACHE.lock().await;
         if let Some((fetched_at, jwks)) = cache.get(jwks_url)
@@ -2202,9 +2220,7 @@ async fn get_jwks(jwks_url: &str) -> Result<jsonwebtoken::jwk::JwkSet, ApiError>
             return Ok(jwks.clone());
         }
     }
-    let resp = reqwest::Client::new()
-        .get(jwks_url)
-        .timeout(Duration::from_secs(10))
+    let resp = identity_provider_get(environment, jwks_url, "jwks fetch")?
         .send()
         .await
         .map_err(|e| ApiError::internal(format!("jwks fetch failed: {e}")))?;
@@ -2308,10 +2324,11 @@ fn cacheable_jwks_uri(uri: &str) -> bool {
     })
 }
 
-async fn fetch_oidc_discovery(disco: String) -> Result<OidcDiscovery, ApiError> {
-    let resp = reqwest::Client::new()
-        .get(&disco)
-        .timeout(Duration::from_secs(10))
+async fn fetch_oidc_discovery(
+    environment: ExecutionEnvironment,
+    disco: String,
+) -> Result<OidcDiscovery, ApiError> {
+    let resp = identity_provider_get(environment, &disco, "oidc discovery fetch")?
         .send()
         .await
         .map_err(|e| ApiError::internal(format!("oidc discovery fetch failed: {e}")))?;
@@ -2342,8 +2359,9 @@ async fn fetch_oidc_discovery(disco: String) -> Result<OidcDiscovery, ApiError> 
 async fn resolve_jwks_url(
     cache: &crate::cache::CacheBackendHandle,
     cfg: &Value,
+    environment: ExecutionEnvironment,
 ) -> Result<String, ApiError> {
-    resolve_jwks_url_with(cache, cfg, fetch_oidc_discovery).await
+    resolve_jwks_url_with(cache, cfg, |disco| fetch_oidc_discovery(environment, disco)).await
 }
 
 async fn resolve_jwks_url_with<F, Fut>(
@@ -2437,8 +2455,9 @@ async fn oauth_jwks(state: &AppState, cfg: &Value) -> Result<jsonwebtoken::jwk::
             .map_err(|e| ApiError::internal(format!("jwks_flow_path parse failed: {e}")));
     }
 
-    let jwks_url = resolve_jwks_url(&state.cache, cfg).await?;
-    get_jwks(&jwks_url).await
+    let environment = ExecutionEnvironment::server_default();
+    let jwks_url = resolve_jwks_url(&state.cache, cfg, environment).await?;
+    get_jwks(environment, &jwks_url).await
 }
 
 async fn verify_oauth_bearer(
@@ -4800,7 +4819,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn identity_discovery_preserves_private_http_and_large_documents() {
+    async fn identity_discovery_accepts_plain_http_and_large_documents_locally() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -4814,11 +4833,44 @@ mod tests {
             socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes()).await.unwrap();
             socket.write_all(body.as_bytes()).await.unwrap();
         });
-        let result = super::fetch_oidc_discovery(format!("http://{address}/discovery"))
-            .await
-            .unwrap();
+        let result = super::fetch_oidc_discovery(
+            super::ExecutionEnvironment::Local,
+            format!("http://{address}/discovery"),
+        )
+        .await
+        .unwrap();
         assert_eq!(result.jwks_uri, expected);
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn identity_provider_fetches_refuse_host_plane_destinations_server_side() {
+        use super::ExecutionEnvironment::Server;
+        use std::time::Duration;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        for url in [
+            format!("http://{address}/keys"),
+            format!("http://localhost:{}/keys", address.port()),
+            "http://169.254.169.254/latest/meta-data/".to_string(),
+            "http://[::ffff:169.254.169.254]/latest/meta-data/".to_string(),
+            "http://metadata.google.internal/computeMetadata/v1/".to_string(),
+        ] {
+            assert!(super::get_jwks(Server, &url).await.is_err(), "{url}");
+            assert!(
+                super::fetch_oidc_discovery(Server, url.clone())
+                    .await
+                    .is_err(),
+                "{url}"
+            );
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "no request may reach the loopback listener"
+        );
     }
 
     #[test]

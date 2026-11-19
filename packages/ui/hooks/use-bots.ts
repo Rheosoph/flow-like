@@ -244,6 +244,25 @@ export function useUpdateBot() {
 	});
 }
 
+/**
+ * This computer's Assistant or Flux listed beside the account's own: a second copy, which may
+ * go. The account's built-ins never do.
+ */
+export function isBuiltInCopy(bot: IBot, bots: readonly IBot[]): boolean {
+	return (
+		Boolean(bot.system && bot.local) &&
+		bots.some(
+			(other) =>
+				other.id !== bot.id && !other.local && other.system === bot.system,
+		)
+	);
+}
+
+/** Custom bots, and a built-in that is a second copy; a built-in that is the only one stays. */
+export function isDeletableBot(bot: IBot, bots: readonly IBot[]): boolean {
+	return !bot.system || isBuiltInCopy(bot, bots);
+}
+
 export function useDeleteBot() {
 	const state = useBackend().botState;
 	const queryClient = useQueryClient();

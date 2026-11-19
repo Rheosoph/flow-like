@@ -1032,7 +1032,9 @@ async fn entries_from_senders_outside_the_chat_and_the_account_stay_out_and_are_
         json!({ "text": "old" }),
     );
     w.f.store.remove_member(&w.team, &old.id).unwrap();
-    w.f.store.delete_bot(&gone.id).unwrap();
+    w.f.store
+        .delete_bot(&gone.id, &crate::BuiltInDeletion::Refuse)
+        .unwrap();
     moved_earlier(&w.f, &old, "bot_old");
     w.hub.add_bot("bot_old");
 

@@ -74,6 +74,7 @@ fn schedule_of(task: &bot_task::Model, now: DateTime<Utc>) -> Option<CronSinkCon
             scheduled_for: None,
             active: true,
         }),
+        TaskKind::Place => None,
     }
 }
 
@@ -238,6 +239,13 @@ mod tests {
             owner_written: None,
             request_conversation_id: None,
             request_message_id: None,
+            place_latitude: None,
+            place_longitude: None,
+            place_radius_m: None,
+            place_on: None,
+            place_label: None,
+            place_repeat: None,
+            place_until: None,
         }
     }
 
@@ -274,6 +282,7 @@ mod tests {
         let mut paused = task("CRON", Some(now), Some("*/5 * * * *"));
         paused.enabled = false;
         assert!(schedule_of(&paused, now).is_none());
+        assert!(schedule_of(&task("PLACE", None, None), now).is_none());
     }
 
     async fn stored_bot(location: &str, capabilities: &[&str]) -> bot::Model {

@@ -118,7 +118,9 @@ fn every_event_takes_the_next_position_and_a_retry_keeps_its_first() {
         "a leave and a re-join take the next two"
     );
 
-    f.store.delete_bot(&ada.id).unwrap();
+    f.store
+        .delete_bot(&ada.id, &crate::BuiltInDeletion::Refuse)
+        .unwrap();
     assert_eq!(
         stored_seqs(&f, &group.id),
         (1..=10).collect::<Vec<_>>(),
@@ -1374,7 +1376,9 @@ fn a_direct_conversations_segments_default_to_its_bot_and_go_with_it() {
             .unwrap()
     };
     assert_eq!(count(&f), 1);
-    f.store.delete_bot(&ada.id).unwrap();
+    f.store
+        .delete_bot(&ada.id, &crate::BuiltInDeletion::Refuse)
+        .unwrap();
     assert_eq!(count(&f), 0, "a deleted bot's summaries go with it");
 
     let other = f.direct(&bee);

@@ -4,6 +4,7 @@ import { useTranslation } from "@flow-like/locales";
 import {
 	AlarmClockIcon,
 	Loader2Icon,
+	MapPinIcon,
 	PauseIcon,
 	PlayIcon,
 	PlusIcon,
@@ -39,7 +40,10 @@ import {
 
 /** Whether the Details tab offers tasks for this bot. */
 export function offersTasks(bot: IBot): boolean {
-	return bot.capabilities.includes("scheduling");
+	return (
+		bot.capabilities.includes("scheduling") ||
+		bot.capabilities.includes("location")
+	);
 }
 
 function NewTask({
@@ -192,28 +196,49 @@ function TaskRow({
 	const { t, i18n } = useTranslation("bots");
 	const place = useTaskPlace(task);
 	const state = taskState(task);
+	const isPlace = task.kind === "place";
 	const fallback =
 		state === "done"
 			? t("panel.tasks.done", "Done")
-			: t("panel.tasks.paused", "Paused");
+			: state === "expired"
+				? t("panel.tasks.expired", "Expired")
+				: state === "active"
+					? t("panel.tasks.watching", "Watching")
+					: t("panel.tasks.paused", "Paused");
 	return (
 		<li
 			data-slot="bot-task"
 			data-state={state}
 			className="flex items-center gap-2 rounded-lg bg-muted/60 py-1.5 pr-1.5 pl-3"
 		>
+			{isPlace && (
+				<MapPinIcon
+					className="size-4 shrink-0 text-muted-foreground"
+					aria-hidden
+				/>
+			)}
 			<div className="min-w-0 flex-1">
 				<p className="truncate text-sm font-medium">{task.title}</p>
 				<p className="truncate text-xs text-muted-foreground">
 					{place && `${place} · `}
 					{task.monitoring &&
 						`${t("panel.tasks.monitoringLabel", "Monitoring")} · `}
-					{describeSchedule(task, i18n?.language)}
+					{describeSchedule(task, i18n?.language, t)}
 					{" · "}
-					{nextRun(task, t("panel.tasks.next", "Next"), fallback)}
+					{isPlace && state === "active"
+						? fallback
+						: nextRun(task, t("panel.tasks.next", "Next"), fallback)}
 				</p>
+				{isPlace && state === "active" && (
+					<p className="text-xs text-muted-foreground">
+						{t(
+							"panel.tasks.place.hint",
+							"Your phone watches this place. Location access must be set to Always.",
+						)}
+					</p>
+				)}
 			</div>
-			{state !== "done" && (
+			{state !== "done" && state !== "expired" && (
 				<Button
 					type="button"
 					variant="ghost"

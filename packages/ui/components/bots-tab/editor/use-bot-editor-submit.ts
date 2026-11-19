@@ -4,7 +4,9 @@ import { useTranslation } from "@flow-like/locales";
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
+	isDeletableBot,
 	useBotLabels,
+	useBots,
 	useCloneBot,
 	useCreateBot,
 	useDeleteBot,
@@ -100,8 +102,8 @@ export function useDuplicateBot():
 }
 
 /**
- * Creates or saves the bot, attaches apps picked before it existed, deletes custom bots and
- * duplicates saved ones.
+ * Creates or saves the bot, attaches apps picked before it existed, deletes custom bots and a
+ * built-in listed twice (this computer's copy beside the account's), and duplicates saved ones.
  */
 export function useBotEditorSubmit(
 	editor: BotEditor,
@@ -115,6 +117,8 @@ export function useBotEditorSubmit(
 	const { mutateAsync: deleteBot } = useDeleteBot();
 	const { mutateAsync: setBotApp } = useSetBotApp();
 	const { mutateAsync: setAppRestrictions } = useSetBotAppRestrictions();
+	const { data: bots = [] } = useBots();
+	const labels = useBotLabels();
 	const [error, setError] = useState<string | null>(null);
 	const { task, begin, release } = useBotEditorTask();
 
@@ -187,7 +191,7 @@ export function useBotEditorSubmit(
 
 	const remove = async () => {
 		const bot = editor.original;
-		if (!bot || bot.system || !begin("deleting")) return;
+		if (!bot || !isDeletableBot(bot, bots) || !begin("deleting")) return;
 		setError(null);
 		try {
 			await deleteBot(bot.id);
@@ -197,7 +201,7 @@ export function useBotEditorSubmit(
 			return;
 		}
 		void forgetBotChat(bot.id);
-		toast.success(t("editor.deleted", { name: bot.name ?? "" }));
+		toast.success(t("editor.deleted", { name: labels(bot).name }));
 		close();
 	};
 

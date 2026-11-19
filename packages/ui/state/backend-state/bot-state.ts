@@ -15,6 +15,7 @@ export const BOT_CAPABILITIES = [
 	"email",
 	"push_notifications",
 	"scheduling",
+	"location",
 	"storage",
 	"data_studio",
 	"memory",
@@ -873,7 +874,9 @@ export interface IBotTask {
 	monitoring?: boolean;
 	id: string;
 	bot_id: string;
-	kind: "once" | "cron";
+	kind: "once" | "cron" | "place";
+	/** The circle a place task watches; set only when `kind` is `place`. */
+	place?: IBotTaskPlace | null;
 	/** RFC 3339 time of a once task. */
 	at?: string | null;
 	/** Five-field cron expression of a cron task. */
@@ -889,6 +892,19 @@ export interface IBotTask {
 	created_at: string;
 	/** The group or chat the task fires in; none fires in the owner's chat with the bot. */
 	conversation?: IBotTaskConversation | null;
+}
+
+/** What a place task watches: the owner's phone reports arriving at or leaving the circle. */
+export interface IBotTaskPlace {
+	latitude: number;
+	longitude: number;
+	radius_m: number;
+	on: "enter" | "exit" | "both";
+	label: string;
+	/** True fires on every crossing; false fires once. */
+	repeat: boolean;
+	/** RFC 3339 time after which the place is no longer watched. */
+	until?: string | null;
 }
 
 /** Where a task scheduled outside the owner's chat fires. */

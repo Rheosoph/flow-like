@@ -436,18 +436,95 @@ public struct NativeStore: Sendable {
 
     private func withLock<T>(_ body: (URL) throws -> T) throws -> T {
         let directory = try root()
-        let descriptor = open(directory.appendingPathComponent("native.lock").path, O_CREAT | O_RDWR, 0o600)
-        guard descriptor >= 0 else { throw NativeIntegrationError.unavailable }
-        defer { close(descriptor) }
-        #if os(iOS)
-        try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
-                                             ofItemAtPath: directory.appendingPathComponent("native.lock").path)
-        #endif
-        guard flock(descriptor, LOCK_EX) == 0 else { throw NativeIntegrationError.unavailable }
-        defer { flock(descriptor, LOCK_UN) }
-        return try body(directory)
+        let lock = directory.appendingPathComponent("native.lock")
+        return try NativeFileLock.exclusive(lock, failure: NativeIntegrationError.unavailable) {
+            #if os(iOS)
+            try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                                                 ofItemAtPath: lock.path)
+            #endif
+            return try body(directory)
+        }
     }
 }
+
+/// iOS kills a process that is suspended while it holds a file lock in the App Group container
+/// (RUNNINGBOARD 0xdead10cc). After launch the app holds a background task for as long as it owns
+/// a lock, and takes no lock once iOS grants no more background time.
+enum NativeFileLock {
+    typealias Lifetime = @Sendable () -> (@Sendable () -> Void)?
+
+    private static let state = NSLock()
+    private static var appLifetime: Lifetime?
+
+    static func installed() -> Lifetime? {
+        state.lock()
+        defer { state.unlock() }
+        return appLifetime
+    }
+
+    static func exclusive<T>(_ file: URL, failure: @autoclosure () -> Error,
+                             lifetime: Lifetime? = NativeFileLock.installed(), _ body: () throws -> T) throws -> T {
+        var release: (@Sendable () -> Void)?
+        if let lifetime {
+            guard let end = lifetime() else { throw failure() }
+            release = end
+        }
+        defer { release?() }
+        let descriptor = open(file.path, O_CREAT | O_RDWR, 0o600)
+        guard descriptor >= 0 else { throw failure() }
+        defer { close(descriptor) }
+        guard flock(descriptor, LOCK_EX) == 0 else { throw failure() }
+        defer { flock(descriptor, LOCK_UN) }
+        return try body()
+    }
+}
+
+#if os(iOS)
+extension NativeFileLock {
+    @available(iOSApplicationExtension, unavailable)
+    @MainActor static func installAppLifetime() {
+        let application = UIApplication.shared
+        state.lock()
+        appLifetime = { NativeLockBackgroundTask.begin(application) }
+        state.unlock()
+    }
+}
+
+@available(iOSApplicationExtension, unavailable)
+private final class NativeLockBackgroundTask: @unchecked Sendable {
+    private let application: UIApplication
+    private let lock = NSLock()
+    private var identifier = UIBackgroundTaskIdentifier.invalid
+    private var ended = false
+
+    private init(application: UIApplication) {
+        self.application = application
+    }
+
+    static func begin(_ application: UIApplication) -> (@Sendable () -> Void)? {
+        let task = NativeLockBackgroundTask(application: application)
+        let identifier = application.beginBackgroundTask(withName: "Flow Like shared storage") { task.end() }
+        task.lock.lock()
+        let expired = task.ended
+        task.identifier = identifier
+        task.lock.unlock()
+        guard identifier != .invalid, !expired else {
+            task.end()
+            return nil
+        }
+        return { task.end() }
+    }
+
+    func end() {
+        lock.lock()
+        ended = true
+        let identifier = self.identifier
+        self.identifier = .invalid
+        lock.unlock()
+        if identifier != .invalid { application.endBackgroundTask(identifier) }
+    }
+}
+#endif
 
 #if os(iOS)
 @available(iOSApplicationExtension, unavailable)

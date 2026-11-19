@@ -5,7 +5,7 @@
 
 use crate::{
     LocalBotStore,
-    bots::{StoredBot, required_bot},
+    bots::{BuiltInDeletion, StoredBot, required_bot},
     error::{Error, Result, codes},
 };
 use flow_like_types::bot::BotSystemKind;
@@ -173,17 +173,26 @@ impl LocalBotStore {
         held
     }
 
-    /// Deletes the bot with its workspace app and memory; Assistant and Flux stay. The app and
-    /// the memory go first, so a failure there keeps the bot and deleting it again finishes the
-    /// job; a workspace a first use made meanwhile goes once the bot is gone.
+    /// Deletes the bot with its workspace app and memory; Assistant and Flux go only as
+    /// `built_ins` allows. The app and the memory go first, so a failure there keeps the bot
+    /// and deleting it again finishes the job; a workspace a first use made meanwhile goes once
+    /// the bot is gone.
     pub async fn delete_bot_with_workspace<H: WorkspaceHost>(
         self: &Arc<Self>,
         host: &H,
         bot_id: &str,
+        built_ins: BuiltInDeletion,
     ) -> Result<()> {
-        let held = blocking(self, bot_id, Self::deletable_bot).await?;
+        let check = built_ins.clone();
+        let held = blocking(self, bot_id, move |store, bot_id| {
+            store.deletable_bot(bot_id, &check)
+        })
+        .await?;
         clear(host, bot_id, held.as_deref()).await?;
-        let held = blocking(self, bot_id, Self::delete_bot).await?;
+        let held = blocking(self, bot_id, move |store, bot_id| {
+            store.delete_bot(bot_id, &built_ins)
+        })
+        .await?;
         clear(host, bot_id, held.as_deref()).await
     }
 }

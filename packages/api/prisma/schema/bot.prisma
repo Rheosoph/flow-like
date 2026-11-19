@@ -331,7 +331,7 @@ model BotTask {
   botId       String
   bot         Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
   ownerId     String
-  /// ONCE | CRON
+  /// ONCE | CRON | PLACE
   kind        String
   runAt       DateTime? @db.Timestamptz(3)
   cron        String?
@@ -358,8 +358,19 @@ model BotTask {
   requestConversationId String?
   requestMessageId      String?
 
+  /// A place task's circle: center, radius in meters, the crossing that fires it (ENTER | EXIT | BOTH),
+  /// what the owner calls the place, whether it repeats, and when phones stop watching it.
+  placeLatitude  Float?
+  placeLongitude Float?
+  placeRadiusM   Float?
+  placeOn        String?
+  placeLabel     String?
+  placeRepeat    Boolean? @default(false)
+  placeUntil     DateTime? @db.Timestamptz(3)
+
   @@index([botId])
   @@index([enabled, nextRunAt])
+  @@index([ownerId, kind, enabled])
 }
 
 /// A room decision waiting for one participant's next message.

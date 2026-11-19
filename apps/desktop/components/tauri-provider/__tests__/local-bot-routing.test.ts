@@ -11,7 +11,10 @@ const mocks = vi.hoisted(() => ({
 	del: vi.fn(),
 }));
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
+vi.mock("@tauri-apps/api/core", () => ({
+	invoke: mocks.invoke,
+	isTauri: () => false,
+}));
 vi.mock("../../../lib/api", () => ({
 	get: mocks.get,
 	post: mocks.post,
@@ -474,6 +477,44 @@ describe("bots signed in", () => {
 			"local_bots_delete",
 			"local_bots_get",
 		]);
+	});
+
+	test("deleting this computer's built-in names the built-ins the account holds", async () => {
+		const localFlux = {
+			...bot("bot_flux_here", true),
+			system: "flux",
+			created_at: "2026-11-01T00:00:00Z",
+			updated_at: "2026-11-02T00:00:00Z",
+		} as IBot;
+		const accountFlux = { ...bot("bot_flux"), system: "flux" } as IBot;
+		const accountGeneral = { ...bot("bot_general"), system: "general" } as IBot;
+		localStore({
+			local_bots_list: () => [localFlux],
+			local_bots_delete: () => null,
+		});
+		mocks.get.mockResolvedValue({ bots: [accountGeneral, accountFlux] });
+		const state = new BotState(signedIn());
+
+		expect((await state.listBots()).map((shown) => shown.id)).toEqual([
+			"bot_general",
+			"bot_flux",
+			"bot_flux_here",
+		]);
+		await state.deleteBot("bot_flux_here");
+
+		expect(mocks.invoke).toHaveBeenLastCalledWith("local_bots_delete", {
+			botId: "bot_flux_here",
+			accountBuiltIns: ["general", "flux"],
+		});
+		expect(mocks.del).not.toHaveBeenCalled();
+	});
+
+	test("signed out, a local delete names no account built-ins", async () => {
+		localStore({ local_bots_delete: () => null });
+		await new BotState(signedOut()).deleteBot("bot_local");
+		expect(mocks.invoke).toHaveBeenCalledWith("local_bots_delete", {
+			botId: "bot_local",
+		});
 	});
 });
 

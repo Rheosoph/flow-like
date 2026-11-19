@@ -237,7 +237,13 @@ impl LocalBotStore {
             tx.execute(
                 "UPDATE skills SET description = ?1, body = ?2, source = ?3, status = 'PENDING',
                      updated_at = ?4 WHERE id = ?5",
-                params![description, body, SkillSource::Import.stored(), now_micros(), existing.id],
+                params![
+                    description,
+                    body,
+                    SkillSource::Import.stored(),
+                    now_micros(),
+                    existing.id
+                ],
             )?;
             find(tx, bot_id, &existing.id)
         })

@@ -5,6 +5,7 @@ use super::mirror_cache::{self, MirroredArtifact};
 use crate::{
     entity::{bit, bit_tree_cache},
     error::ApiError,
+    media_links,
     middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
     state::AppState,
@@ -442,14 +443,23 @@ async fn download_and_hash(
         None => return Ok(()),
     };
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60 * 60 * 2))
-        .connect_timeout(std::time::Duration::from_secs(30))
-        .pool_idle_timeout(std::time::Duration::from_secs(90))
-        .pool_max_idle_per_host(1)
-        .http2_keep_alive_interval(Some(std::time::Duration::from_secs(30)))
-        .http2_keep_alive_timeout(std::time::Duration::from_secs(60))
-        .build()?;
+    // The body is published to the CDN, so an internal target would hand its response back.
+    let egress = media_links::server_link_egress();
+    let parsed = reqwest::Url::parse(&url)
+        .map_err(|e| flow_like_types::anyhow!("Bit download link is not a valid URL: {e}"))?;
+    egress
+        .check_url(&parsed)
+        .map_err(|refused| flow_like_types::anyhow!("Bit download link refused: {refused}"))?;
+    let client = media_links::guarded_client(
+        egress,
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60 * 60 * 2))
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .pool_max_idle_per_host(1)
+            .http2_keep_alive_interval(Some(std::time::Duration::from_secs(30)))
+            .http2_keep_alive_timeout(std::time::Duration::from_secs(60)),
+    )?;
 
     let response =
         successful_upstream_response(client.head(&url).send().await?, "HEAD").map_err(|error| {
