@@ -131,6 +131,26 @@ impl ProviderEgress {
             .https_only(self == Self::Public)
     }
 
+    /// [`Self::guard`] for a client that fetches content, where links redirect: follows up to
+    /// `max_redirects` hops whose target passes [`Self::check_url`]. Under `Open` every target
+    /// passes and only the hop limit applies.
+    pub fn guard_following_redirects(
+        self,
+        builder: reqwest::ClientBuilder,
+        max_redirects: usize,
+    ) -> reqwest::ClientBuilder {
+        self.guard(builder)
+            .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+                if attempt.previous().len() >= max_redirects {
+                    return attempt.error("too many redirects");
+                }
+                match self.check_url(attempt.url()) {
+                    Ok(()) => attempt.follow(),
+                    Err(refused) => attempt.error(refused),
+                }
+            }))
+    }
+
     /// [`Self::guard`] for the reqwest 0.13 clients Rig's providers run on.
     pub(crate) fn guard_rig(
         self,

@@ -2252,7 +2252,6 @@ mod model_egress_tests {
     use super::*;
     use flow_like::bit::{Bit, BitModelClassification, BitTypes, LLMParameters};
     use flow_like::flow_like_model_provider::history::{History, HistoryMessage, Role};
-    use flow_like::flow_like_model_provider::llm::ModelLogic;
     use flow_like::flow_like_model_provider::provider::{ModelApiSurface, ModelProvider};
     use flow_like::models::llm::ModelFactory;
     use std::net::SocketAddr;
@@ -2303,7 +2302,7 @@ mod model_egress_tests {
                 let mut request = [0u8; 8192];
                 let _ = socket.read(&mut request).await;
                 let _ = socket
-                    .write_all(b"HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                    .write_all(b"HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
                     .await;
                 let _ = socket.shutdown().await;
             }

@@ -137,16 +137,7 @@ pub(crate) fn guarded_client(
     builder: ClientBuilder,
 ) -> reqwest::Result<Client> {
     egress
-        .guard(builder)
-        .redirect(redirect::Policy::custom(move |attempt| {
-            if attempt.previous().len() >= MAX_REDIRECTS {
-                return attempt.error("too many redirects");
-            }
-            match egress.check_url(attempt.url()) {
-                Ok(()) => attempt.follow(),
-                Err(refused) => attempt.error(refused),
-            }
-        }))
+        .guard_following_redirects(builder, MAX_REDIRECTS)
         .build()
 }
 
@@ -214,7 +205,10 @@ pub(crate) async fn fetch(
 }
 
 /// Reads the body chunk by chunk and gives up as soon as it passes `max_bytes`.
-async fn read_capped(mut response: Response, max_bytes: usize) -> Result<Vec<u8>, FetchError> {
+pub(crate) async fn read_capped(
+    mut response: Response,
+    max_bytes: usize,
+) -> Result<Vec<u8>, FetchError> {
     if response
         .content_length()
         .is_some_and(|length| length > max_bytes as u64)

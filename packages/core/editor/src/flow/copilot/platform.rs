@@ -2462,13 +2462,10 @@ impl PlatformCopilot {
                             .iter()
                             .chain(std::iter::once(&current_prompt))
                             .collect();
+                        let links = crate::models::llm::media_links(&self.state).await;
                         Err(context::cancellable(
                             &bridge,
-                            run_image_view(
-                                &tool_call.function.arguments,
-                                &messages,
-                                self.state.execution_environment,
-                            ),
+                            run_image_view(&tool_call.function.arguments, &messages, &links),
                         )
                         .await?)
                     }

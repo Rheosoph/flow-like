@@ -35,6 +35,7 @@ use flow_like::flow::{
     pin::{Pin, PinType, ValueType},
     variable::VariableType,
 };
+use flow_like::flow_like_model_provider::egress::ProviderEgress;
 use jsonwebtoken::{
     Algorithm,
     jwk::{AlgorithmParameters, Jwk, JwkSet, KeyAlgorithm, KeyOperations, PublicKeyUse},
@@ -61,6 +62,7 @@ use crate::{
         variant::{self, ResolvedTarget, STABLE_VARIANT, SplitKey, dispatch_event_json},
         wants_http_event_stream,
     },
+    media_links,
     middleware::jwt::{AppUser, BotUser, ConnectedAppUser, OpenIDUser},
     permission::role_permission::RolePermissions,
     routes::{
@@ -2192,24 +2194,189 @@ static JWKS_CACHE: std::sync::LazyLock<
 > = std::sync::LazyLock::new(|| flow_like_types::tokio::sync::Mutex::new(HashMap::new()));
 
 const JWKS_TTL: Duration = Duration::from_secs(300);
+const IDENTITY_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+const IDENTITY_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a failed identity-provider fetch is remembered.
+const IDENTITY_FAILURE_TTL: Duration = Duration::from_secs(30);
+/// The largest JWKS or discovery document an identity provider may answer with.
+const IDENTITY_DOCUMENT_MAX_BYTES: usize = 4 * 1024 * 1024;
+/// Hosts of identity providers on this server's own network that inbound endpoints may fetch
+/// keys from, separated by commas or whitespace.
+const IDENTITY_PROVIDER_HOSTS_ENV: &str = "IDENTITY_PROVIDER_HOSTS";
+const OAUTH_KEYS_UNCONFIGURED: &str =
+    "oauth_bearer auth requires `jwks_url`, `jwks_flow_path`, or `oidc_discovery_url`";
 
-/// GET to an identity-provider URL from a board's auth config. Server-side the
-/// guarded client refuses loopback, link-local and cloud metadata hosts on the
-/// URL, at DNS resolution and on every redirect; private networks stay
-/// reachable for self-hosted identity providers.
-fn identity_provider_get(
-    environment: ExecutionEnvironment,
+/// How an inbound endpoint fetches the identity-provider documents its auth config names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IdentityFetch {
+    /// A host the operator trusts, or a local environment: the reach of HTTP nodes, which
+    /// server-side refuses loopback, link-local and cloud metadata hosts and no other.
+    Trusted(ExecutionEnvironment),
+    /// Any other host on a server: public HTTPS only, on every redirect too, so the author of
+    /// an endpoint cannot point the API at its own network.
+    Public,
+}
+
+impl IdentityFetch {
+    /// The fetch for the URL an endpoint's author configured. A document that URL leads to, the
+    /// `jwks_uri` of a discovery document, is fetched the same way.
+    fn of(
+        environment: ExecutionEnvironment,
+        trusted_hosts: &std::collections::HashSet<String>,
+        configured: &str,
+    ) -> Self {
+        let trusted = flow_like_types::reqwest::Url::parse(configured)
+            .ok()
+            .and_then(|url| url.host_str().map(normalized_host))
+            .is_some_and(|host| trusted_hosts.contains(&host));
+        if trusted || environment != ExecutionEnvironment::Server {
+            Self::Trusted(environment)
+        } else {
+            Self::Public
+        }
+    }
+}
+
+fn normalized_host(host: &str) -> String {
+    host.trim().trim_end_matches('.').to_ascii_lowercase()
+}
+
+/// The hosts of `configured` URLs and the hosts an operator lists in `setting`.
+fn identity_hosts<'a>(
+    configured: impl IntoIterator<Item = &'a str>,
+    setting: Option<&str>,
+) -> std::collections::HashSet<String> {
+    let configured = configured
+        .into_iter()
+        .filter_map(|url| flow_like_types::reqwest::Url::parse(url).ok())
+        .filter_map(|url| url.host_str().map(normalized_host));
+    let listed = setting
+        .unwrap_or_default()
+        .split(|separator: char| separator == ',' || separator.is_whitespace())
+        .map(normalized_host)
+        .filter(|host| !host.is_empty());
+    configured.chain(listed).collect()
+}
+
+/// The identity-provider hosts the operator vouches for: the platform's own OpenID provider,
+/// its OAuth providers, and the hosts listed in `IDENTITY_PROVIDER_HOSTS`.
+fn trusted_identity_hosts(state: &AppState) -> std::collections::HashSet<String> {
+    let openid = state
+        .platform_config
+        .authentication
+        .as_ref()
+        .and_then(|authentication| authentication.openid.as_ref());
+    let own = openid.into_iter().flat_map(|openid| {
+        [
+            openid.issuer.as_deref(),
+            openid.authority.as_deref(),
+            openid.discovery_url.as_deref(),
+            openid.user_info_url.as_deref(),
+            Some(openid.jwks_url.as_str()),
+        ]
+    });
+    let oauth = state.oauth_providers.values().flat_map(|provider| {
+        [
+            Some(provider.token_url.as_str()),
+            provider.revoke_url.as_deref(),
+            provider.userinfo_url.as_deref(),
+            provider.device_auth_url.as_deref(),
+        ]
+    });
+    identity_hosts(
+        own.chain(oauth).flatten(),
+        std::env::var(IDENTITY_PROVIDER_HOSTS_ENV).ok().as_deref(),
+    )
+}
+
+/// Starts the GET of the identity-provider document `what` names in errors.
+async fn identity_provider_get(
+    fetch: IdentityFetch,
     url: &str,
-    purpose: &str,
+    what: &str,
 ) -> Result<flow_like_types::reqwest::RequestBuilder, ApiError> {
-    GuardedHttpClient::new(environment)
-        .and_then(|client| client.get(url))
-        .map(|request| request.timeout(Duration::from_secs(10)))
-        .map_err(|e| ApiError::internal(format!("{purpose} refused: {e}")))
+    let request = match fetch {
+        IdentityFetch::Trusted(environment) => GuardedHttpClient::new(environment)
+            .and_then(|client| client.get(url))
+            .map_err(|e| ApiError::internal(format!("{what} fetch refused: {e}")))?,
+        IdentityFetch::Public => {
+            let parsed = flow_like_types::reqwest::Url::parse(url)
+                .map_err(|_| ApiError::internal(format!("{what} fetch refused: invalid URL")))?;
+            let allowed = flow_like_types::tokio::time::timeout(
+                IDENTITY_LOOKUP_TIMEOUT,
+                ProviderEgress::Public.ensure_endpoint_allowed(url),
+            )
+            .await
+            .is_ok_and(|checked| checked.is_ok());
+            if !allowed {
+                return Err(ApiError::internal(format!(
+                    "{what} fetch refused: '{}' is not a public HTTPS host. An operator can list \
+                     an identity provider on this server's own network in \
+                     {IDENTITY_PROVIDER_HOSTS_ENV}",
+                    parsed.host_str().unwrap_or_default()
+                )));
+            }
+            media_links::guarded_client(
+                ProviderEgress::Public,
+                flow_like_types::reqwest::Client::builder(),
+            )
+            .map_err(|e| ApiError::internal(format!("{what} fetch client failed: {e}")))?
+            .get(parsed)
+        }
+    };
+    Ok(request.timeout(IDENTITY_FETCH_TIMEOUT))
+}
+
+/// The JSON document of an identity provider's answer, refused past the size limit.
+async fn identity_document<T: serde::de::DeserializeOwned>(
+    response: flow_like_types::reqwest::Response,
+    what: &str,
+) -> Result<T, ApiError> {
+    let body = media_links::read_capped(response, IDENTITY_DOCUMENT_MAX_BYTES)
+        .await
+        .map_err(|e| ApiError::internal(format!("{what} read failed: {e}")))?;
+    serde_json::from_slice(&body)
+        .map_err(|e| ApiError::internal(format!("{what} parse failed: {e}")))
+}
+
+/// Identity-provider URLs whose fetch failed within [`IDENTITY_FAILURE_TTL`].
+static IDENTITY_FAILURES: std::sync::LazyLock<
+    std::sync::Mutex<HashMap<String, std::time::Instant>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Runs `fetch` for the documents behind `source` unless it failed moments ago. A request needs
+/// no valid token to start that fetch, so a failing one is not repeated for every request.
+async fn remembering_failure<T, Fut>(
+    source: &str,
+    fetch: impl FnOnce() -> Fut,
+) -> Result<T, ApiError>
+where
+    Fut: std::future::Future<Output = Result<T, ApiError>>,
+{
+    let failures = || {
+        IDENTITY_FAILURES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
+    let failed_recently = failures()
+        .get(source)
+        .is_some_and(|failed_at| failed_at.elapsed() < IDENTITY_FAILURE_TTL);
+    if failed_recently {
+        return Err(ApiError::internal(
+            "identity provider keys could not be fetched moments ago; the fetch is retried shortly",
+        ));
+    }
+    let result = fetch().await;
+    if result.is_err() {
+        let mut failures = failures();
+        failures.retain(|_, failed_at| failed_at.elapsed() < IDENTITY_FAILURE_TTL);
+        failures.insert(source.to_owned(), std::time::Instant::now());
+    }
+    result
 }
 
 async fn get_jwks(
-    environment: ExecutionEnvironment,
+    fetch: IdentityFetch,
     jwks_url: &str,
 ) -> Result<jsonwebtoken::jwk::JwkSet, ApiError> {
     {
@@ -2220,20 +2387,18 @@ async fn get_jwks(
             return Ok(jwks.clone());
         }
     }
-    let resp = identity_provider_get(environment, jwks_url, "jwks fetch")?
+    let resp = identity_provider_get(fetch, jwks_url, "jwks")
+        .await?
         .send()
         .await
-        .map_err(|e| ApiError::internal(format!("jwks fetch failed: {e}")))?;
+        .map_err(|e| ApiError::internal(format!("jwks fetch failed: {}", e.without_url())))?;
     if !resp.status().is_success() {
         return Err(ApiError::internal(format!(
             "jwks fetch returned status {}",
             resp.status()
         )));
     }
-    let jwks: jsonwebtoken::jwk::JwkSet = resp
-        .json()
-        .await
-        .map_err(|e| ApiError::internal(format!("jwks parse failed: {e}")))?;
+    let jwks: jsonwebtoken::jwk::JwkSet = identity_document(resp, "jwks").await?;
     let mut cache = JWKS_CACHE.lock().await;
     cache.retain(|_, (at, _)| at.elapsed() < JWKS_TTL);
     cache.insert(
@@ -2325,13 +2490,16 @@ fn cacheable_jwks_uri(uri: &str) -> bool {
 }
 
 async fn fetch_oidc_discovery(
-    environment: ExecutionEnvironment,
+    fetch: IdentityFetch,
     disco: String,
 ) -> Result<OidcDiscovery, ApiError> {
-    let resp = identity_provider_get(environment, &disco, "oidc discovery fetch")?
+    let resp = identity_provider_get(fetch, &disco, "oidc discovery")
+        .await?
         .send()
         .await
-        .map_err(|e| ApiError::internal(format!("oidc discovery fetch failed: {e}")))?;
+        .map_err(|e| {
+            ApiError::internal(format!("oidc discovery fetch failed: {}", e.without_url()))
+        })?;
     if !resp.status().is_success() {
         return Err(ApiError::internal(format!(
             "oidc discovery returned status {}",
@@ -2339,10 +2507,7 @@ async fn fetch_oidc_discovery(
         )));
     }
     let cache_ttl = oidc_discovery_cache_ttl(resp.headers());
-    let doc: Value = resp
-        .json()
-        .await
-        .map_err(|e| ApiError::internal(format!("oidc discovery parse failed: {e}")))?;
+    let doc: Value = identity_document(resp, "oidc discovery").await?;
     let jwks_uri = doc
         .get("jwks_uri")
         .and_then(Value::as_str)
@@ -2359,9 +2524,16 @@ async fn fetch_oidc_discovery(
 async fn resolve_jwks_url(
     cache: &crate::cache::CacheBackendHandle,
     cfg: &Value,
-    environment: ExecutionEnvironment,
+    fetch: IdentityFetch,
 ) -> Result<String, ApiError> {
-    resolve_jwks_url_with(cache, cfg, |disco| fetch_oidc_discovery(environment, disco)).await
+    resolve_jwks_url_with(cache, cfg, |disco| fetch_oidc_discovery(fetch, disco)).await
+}
+
+/// The identity-provider URL an endpoint's author configured, in the order it is resolved.
+fn configured_identity_url(cfg: &Value) -> Option<&str> {
+    ["jwks_url", "oidc_discovery_url"]
+        .into_iter()
+        .find_map(|key| cfg.get(key).and_then(Value::as_str))
 }
 
 async fn resolve_jwks_url_with<F, Fut>(
@@ -2408,9 +2580,7 @@ where
         }
         return Ok(discovered.jwks_uri);
     }
-    Err(ApiError::internal(
-        "oauth_bearer auth requires `jwks_url`, `jwks_flow_path`, or `oidc_discovery_url`",
-    ))
+    Err(ApiError::internal(OAUTH_KEYS_UNCONFIGURED))
 }
 
 fn jwks_object_path(cfg: &Value) -> Result<Option<flow_like_storage::Path>, ApiError> {
@@ -2455,9 +2625,19 @@ async fn oauth_jwks(state: &AppState, cfg: &Value) -> Result<jsonwebtoken::jwk::
             .map_err(|e| ApiError::internal(format!("jwks_flow_path parse failed: {e}")));
     }
 
-    let environment = ExecutionEnvironment::server_default();
-    let jwks_url = resolve_jwks_url(&state.cache, cfg, environment).await?;
-    get_jwks(environment, &jwks_url).await
+    let Some(source) = configured_identity_url(cfg) else {
+        return Err(ApiError::internal(OAUTH_KEYS_UNCONFIGURED));
+    };
+    let fetch = IdentityFetch::of(
+        ExecutionEnvironment::server_default(),
+        &trusted_identity_hosts(state),
+        source,
+    );
+    remembering_failure(source, || async {
+        let jwks_url = resolve_jwks_url(&state.cache, cfg, fetch).await?;
+        get_jwks(fetch, &jwks_url).await
+    })
+    .await
 }
 
 async fn verify_oauth_bearer(
@@ -4834,7 +5014,7 @@ mod tests {
             socket.write_all(body.as_bytes()).await.unwrap();
         });
         let result = super::fetch_oidc_discovery(
-            super::ExecutionEnvironment::Local,
+            super::IdentityFetch::Trusted(super::ExecutionEnvironment::Local),
             format!("http://{address}/discovery"),
         )
         .await
@@ -4845,7 +5025,7 @@ mod tests {
 
     #[tokio::test]
     async fn identity_provider_fetches_refuse_host_plane_destinations_server_side() {
-        use super::ExecutionEnvironment::Server;
+        use super::{ExecutionEnvironment::Server, IdentityFetch};
         use std::time::Duration;
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4857,12 +5037,52 @@ mod tests {
             "http://[::ffff:169.254.169.254]/latest/meta-data/".to_string(),
             "http://metadata.google.internal/computeMetadata/v1/".to_string(),
         ] {
-            assert!(super::get_jwks(Server, &url).await.is_err(), "{url}");
+            for fetch in [IdentityFetch::Trusted(Server), IdentityFetch::Public] {
+                assert!(super::get_jwks(fetch, &url).await.is_err(), "{url}");
+                assert!(
+                    super::fetch_oidc_discovery(fetch, url.clone())
+                        .await
+                        .is_err(),
+                    "{url}"
+                );
+            }
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "no request may reach the loopback listener"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_untrusted_identity_provider_must_be_public_https() {
+        use super::IdentityFetch;
+        use std::time::Duration;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        for url in [
+            format!("https://{address}/keys"),
+            "https://10.0.0.5/keys".to_string(),
+            "https://192.168.1.20:8443/realms/main/certs".to_string(),
+            "https://[fd00::5]/keys".to_string(),
+            "http://login.example.com/keys".to_string(),
+        ] {
+            let started = std::time::Instant::now();
             assert!(
-                super::fetch_oidc_discovery(Server, url.clone())
+                super::get_jwks(IdentityFetch::Public, &url).await.is_err(),
+                "{url}"
+            );
+            assert!(
+                super::fetch_oidc_discovery(IdentityFetch::Public, url.clone())
                     .await
                     .is_err(),
                 "{url}"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "{url} is refused before any connection is tried"
             );
         }
         assert!(
@@ -4870,6 +5090,119 @@ mod tests {
                 .await
                 .is_err(),
             "no request may reach the loopback listener"
+        );
+    }
+
+    #[test]
+    fn only_operator_named_identity_providers_keep_the_reach_of_http_nodes() {
+        use super::{ExecutionEnvironment, IdentityFetch, identity_hosts};
+
+        let trusted = identity_hosts(
+            [
+                "https://Login.Corp.Example/realms/main",
+                "http://keycloak.internal:8080/realms/main/protocol/openid-connect/certs",
+                "not a url",
+            ],
+            Some(" idp.lan, 10.20.0.7\tAuth.Corp.Example. "),
+        );
+        assert_eq!(
+            trusted,
+            std::collections::HashSet::from(
+                [
+                    "login.corp.example",
+                    "keycloak.internal",
+                    "idp.lan",
+                    "10.20.0.7",
+                    "auth.corp.example"
+                ]
+                .map(String::from)
+            )
+        );
+        assert!(identity_hosts([], None).is_empty());
+
+        let server = ExecutionEnvironment::Server;
+        for url in [
+            "http://keycloak.internal:8080/realms/main/protocol/openid-connect/certs",
+            "https://LOGIN.corp.example./.well-known/openid-configuration",
+            "http://10.20.0.7/keys",
+        ] {
+            assert_eq!(
+                IdentityFetch::of(server, &trusted, url),
+                IdentityFetch::Trusted(server),
+                "{url}"
+            );
+        }
+        for url in [
+            "http://intranet.corp.example/keys",
+            "https://login.corp.example.attacker.test/keys",
+            "https://10.20.0.8/keys",
+            "not a url",
+        ] {
+            assert_eq!(
+                IdentityFetch::of(server, &trusted, url),
+                IdentityFetch::Public,
+                "{url}"
+            );
+        }
+        let local = ExecutionEnvironment::Local;
+        assert_eq!(
+            IdentityFetch::of(local, &trusted, "http://intranet.corp.example/keys"),
+            IdentityFetch::Trusted(local),
+            "a local environment keeps every host"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_identity_fetch_is_not_repeated_for_the_next_request() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let fetches = AtomicUsize::new(0);
+        let fetch = |source: &'static str, succeed: bool| {
+            let fetches = &fetches;
+            super::remembering_failure(source, move || async move {
+                fetches.fetch_add(1, Ordering::SeqCst);
+                if succeed {
+                    Ok(())
+                } else {
+                    Err(super::ApiError::internal("identity provider is down"))
+                }
+            })
+        };
+        let failing = "https://failing-identity-provider.test/keys";
+        assert!(fetch(failing, false).await.is_err());
+        assert!(fetch(failing, true).await.is_err(), "remembered");
+        assert_eq!(fetches.load(Ordering::SeqCst), 1);
+
+        let working = "https://working-identity-provider.test/keys";
+        assert!(fetch(working, true).await.is_ok());
+        assert!(fetch(working, true).await.is_ok());
+        assert_eq!(
+            fetches.load(Ordering::SeqCst),
+            3,
+            "a success is not remembered"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_identity_document_past_the_size_limit_is_refused() {
+        let response = |bytes: usize| {
+            let mut body = br#"{"keys":[],"padding":""#.to_vec();
+            body.resize(bytes - 2, b'x');
+            body.extend_from_slice(br#""}"#);
+            flow_like_types::reqwest::Response::from(axum::http::Response::new(
+                flow_like_types::reqwest::Body::from(body),
+            ))
+        };
+        let limit = super::IDENTITY_DOCUMENT_MAX_BYTES;
+        assert!(
+            super::identity_document::<super::Value>(response(limit), "jwks")
+                .await
+                .is_ok()
+        );
+        assert!(
+            super::identity_document::<super::Value>(response(limit + 1), "jwks")
+                .await
+                .is_err()
         );
     }
 
