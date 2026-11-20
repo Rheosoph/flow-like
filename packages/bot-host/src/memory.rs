@@ -358,6 +358,20 @@ pub fn hub_owner_direct(conversation: &Value, bot_id: &str) -> bool {
             .any(|(_, kind)| kind.eq_ignore_ascii_case("user"))
 }
 
+/// Whether the hub's conversation is `owner_id`'s own direct chat with `bot_id`: a direct chat
+/// of the bot with someone else is not.
+pub fn hub_owner_chat(conversation: &Value, bot_id: &str, owner_id: &str) -> bool {
+    hub_owner_direct(conversation, bot_id)
+        && conversation["members"].as_array().is_some_and(|members| {
+            members.iter().any(|member| {
+                member["principal_id"].as_str() == Some(owner_id)
+                    && member["kind"]
+                        .as_str()
+                        .is_some_and(|kind| kind.eq_ignore_ascii_case("user"))
+            })
+        })
+}
+
 fn hub_memory_room(conversation: &Value, bot_id: &str, owner_id: Option<&str>) -> Option<bool> {
     let members = conversation.get("members")?.as_array()?;
     if hub_owner_direct(conversation, bot_id) {

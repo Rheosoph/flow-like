@@ -1,0 +1,131 @@
+{
+	"bits": [
+		{
+			"ref": "lfm2-5-embedding-350m-config",
+			"type": "Config",
+			"file_name": "config.json",
+			"download_link": "https://huggingface.co/dsaad68/LFM2.5-Embedding-350M-ONNX-int8/resolve/52d8f4fef5f2ba01b62f08ca9410870a0a31bcf7/config.json",
+			"size": 1404,
+			"license": "lfm1.0",
+			"meta": {
+				"en": {
+					"name": "LFM2.5 Embedding 350M configuration",
+					"description": "Model configuration for the pinned LFM2.5 Embedding 350M ONNX conversion."
+				}
+			}
+		},
+		{
+			"ref": "lfm2-5-embedding-350m-tokenizer",
+			"type": "Tokenizer",
+			"file_name": "tokenizer.json",
+			"download_link": "https://huggingface.co/dsaad68/LFM2.5-Embedding-350M-ONNX-int8/resolve/52d8f4fef5f2ba01b62f08ca9410870a0a31bcf7/tokenizer.json",
+			"size": 4733275,
+			"license": "lfm1.0",
+			"meta": {
+				"en": {
+					"name": "LFM2.5 Embedding 350M tokenizer",
+					"description": "Tokenizer for the pinned LFM2.5 Embedding 350M ONNX conversion."
+				}
+			}
+		},
+		{
+			"ref": "lfm2-5-embedding-350m-tokenizer-config",
+			"type": "TokenizerConfig",
+			"file_name": "tokenizer_config.json",
+			"download_link": "https://huggingface.co/dsaad68/LFM2.5-Embedding-350M-ONNX-int8/raw/52d8f4fef5f2ba01b62f08ca9410870a0a31bcf7/tokenizer_config.json",
+			"size": 92067,
+			"license": "lfm1.0",
+			"meta": {
+				"en": {
+					"name": "LFM2.5 Embedding 350M tokenizer configuration",
+					"description": "Tokenizer settings for the pinned LFM2.5 Embedding 350M ONNX conversion."
+				}
+			}
+		},
+		{
+			"ref": "lfm2-5-embedding-350m-special-tokens",
+			"type": "SpecialTokensMap",
+			"file_name": "special_tokens_map.json",
+			"download_link": "https://huggingface.co/dsaad68/LFM2.5-Embedding-350M-ONNX-int8/resolve/52d8f4fef5f2ba01b62f08ca9410870a0a31bcf7/special_tokens_map.json",
+			"size": 434,
+			"license": "lfm1.0",
+			"meta": {
+				"en": {
+					"name": "LFM2.5 Embedding 350M special tokens",
+					"description": "Special-token mapping for the pinned LFM2.5 Embedding 350M ONNX conversion."
+				}
+			}
+		},
+		{
+			"ref": "lfm2-5-embedding-350m-license",
+			"type": "File",
+			"file_name": "LICENSE",
+			"download_link": "https://huggingface.co/dsaad68/LFM2.5-Embedding-350M-ONNX-int8/raw/52d8f4fef5f2ba01b62f08ca9410870a0a31bcf7/LICENSE",
+			"size": 10574,
+			"license": "lfm1.0",
+			"meta": {
+				"en": {
+					"name": "LFM Open License v1.0",
+					"description": "License terms distributed with LFM2.5 Embedding 350M."
+				}
+			}
+		},
+		{
+			"ref": "lfm2-5-embedding-350m",
+			"id": "ora74bc4566508062969718d",
+			"type": "Embedding",
+			"authors": ["Liquid AI", "dsaad68 (ONNX conversion)"],
+			"repository": "https://huggingface.co/dsaad68/LFM2.5-Embedding-350M-ONNX-int8",
+			"version": "52d8f4fef5f2ba01b62f08ca9410870a0a31bcf7",
+			"download_link": "https://huggingface.co/dsaad68/LFM2.5-Embedding-350M-ONNX-int8/resolve/52d8f4fef5f2ba01b62f08ca9410870a0a31bcf7/onnx/model.onnx",
+			"file_name": "onnx/model.onnx",
+			"size": 356201240,
+			"license": "lfm1.0",
+			"model_slug": "flow-like-estimate-quality-liquid-lfm-2-5-embedding-350m-free",
+			"dependencies": [
+				"@lfm2-5-embedding-350m-config",
+				"@lfm2-5-embedding-350m-tokenizer",
+				"@lfm2-5-embedding-350m-tokenizer-config",
+				"@lfm2-5-embedding-350m-special-tokens",
+				"@lfm2-5-embedding-350m-license"
+			],
+			"parameters": {
+				"provider": {
+					"provider_name": "Local",
+					"model_id": "dsaad68/LFM2.5-Embedding-350M-ONNX-int8",
+					"version": "52d8f4fef5f2ba01b62f08ca9410870a0a31bcf7"
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "liquid/lfm-2.5-embedding-350m:free",
+					"supports_dimensions": false
+				},
+				"pooling": "CLS",
+				"prefix": {
+					"query": "query: ",
+					"paragraph": "document: "
+				},
+				"languages": ["en", "es", "de", "fr", "it", "pt", "ar", "sv", "no", "ja", "ko"],
+				"input_length": 512,
+				"vector_length": 1024,
+				"pricing": {
+					"request_micro_usd": 0,
+					"input_micro_usd_per_million_tokens": 0,
+					"output_micro_usd_per_million_tokens": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "LFM2.5 Embedding 350M",
+					"description": "Search short passages across eleven languages with a local 354M-parameter model.",
+					"long_description": "Embed short passages in eleven languages with Liquid AI's 354M-parameter retrieval model. This Bit downloads a pinned community ONNX conversion by dsaad68, with dynamically quantized int8 weights. It produces 1,024-dimensional normalized vectors and uses a 512-token input window. Query and document prefixes are applied automatically.\n\nCompatible local hosts run the model on the device. The OpenRouter fallback remains configured, but OpenRouter currently lists no active endpoint for this model. Hosted execution is unavailable until a provider restores that endpoint. If restored, the remote provider may retain successful requests and embeddings and use them to train Liquid models.\n\nQuantization can change vectors across CPU architectures and batch sizes. Keep an index on the same execution path, and rebuild it when changing models or switching between local and hosted inference.\n\nModel weights use the LFM Open License v1.0. The license includes a commercial revenue threshold; review the bundled terms before deployment.",
+					"tags": ["embeddings", "local", "onnx", "int8", "multilingual", "openrouter"],
+					"use_case": "Local semantic search over short passages, FAQs, product descriptions, and notes.",
+					"icon": "https://cdn.flow-like.com/bits/avatars/openrouter/liquid/47560632f45a20a45c6fcc6d7a8bafb6cb0ee17c2df576baa49f30430aca26d9.webp",
+					"website": "https://huggingface.co/LiquidAI/LFM2.5-Embedding-350M",
+					"docs_url": "https://huggingface.co/dsaad68/LFM2.5-Embedding-350M-ONNX-int8"
+				}
+			}
+		}
+	]
+}

@@ -28,6 +28,7 @@ const PROTECTED_APP_ROUTE_SEGMENTS = new Set([
 	"comments",
 	"connections",
 	"data",
+	"data-sources",
 	"db",
 	"events",
 	"flowpilot-builds",

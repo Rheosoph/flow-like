@@ -113,7 +113,7 @@ fn ontology_columns(node: &Value) -> Vec<Value> {
 }
 
 /// SQL literals and comments cannot add parameters to a saved query's Home contract.
-fn parameters(sql: &str) -> Vec<String> {
+pub(super) fn parameters(sql: &str) -> Vec<String> {
     let bytes = sql.as_bytes();
     let mut i = 0;
     let mut result = Vec::new();
@@ -694,6 +694,10 @@ pub(super) async fn validate_references(
                 }
             }
         }
+        if kind == "data" && text(config, "sourceKind") == "sql" {
+            issues.extend(sql_issues(config, &path, &visible));
+            continue;
+        }
         let app = text(config, "appId").trim();
         if app.is_empty() || !visible.contains(app) {
             continue;
@@ -724,6 +728,71 @@ pub(super) async fn validate_references(
     }
     session.assert_current_profile().await?;
     Ok(issues)
+}
+fn sql_issues(config: &Value, path: &str, visible: &HashSet<String>) -> Vec<Value> {
+    let mut issues = Vec::new();
+    let mut aliases = HashSet::new();
+    for (index, source) in list(&config["sources"]).iter().take(8).enumerate() {
+        let app = text(source, "appId").trim();
+        let alias = text(source, "alias");
+        let source_path = format!("{path}.sources[{index}]");
+        if app.is_empty() || !visible.contains(app) {
+            issues.push(issue(
+                "error",
+                "home_sql_source_app_missing",
+                &format!("{source_path}.appId"),
+                format!("App '{app}' is not available in the current profile."),
+            ));
+        }
+        let mut chars = alias.chars();
+        let valid = alias.len() <= 63
+            && chars
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+            && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+        if !valid || ["public", "information_schema"].contains(&alias) {
+            issues.push(issue(
+                "error",
+                "home_sql_alias_invalid",
+                &format!("{source_path}.alias"),
+                format!("'{alias}' is not a valid schema name. Use lowercase letters, digits, and _, starting with a letter or _; public and information_schema are reserved."),
+            ));
+        } else if !aliases.insert(alias) {
+            issues.push(issue(
+                "error",
+                "home_sql_alias_duplicate",
+                &format!("{source_path}.alias"),
+                format!("The schema name '{alias}' is used twice."),
+            ));
+        }
+    }
+    let params = config["queryParams"].as_object();
+    for parameter in parameters(text(config, "sql")) {
+        if parameter.starts_with("__home_") {
+            issues.push(issue(
+                "error",
+                "home_query_parameter_reserved",
+                &format!("{path}.sql"),
+                format!("SQL uses reserved parameter '{parameter}'."),
+            ));
+        } else if !params.is_some_and(|p| p.contains_key(&parameter)) {
+            issues.push(issue(
+                "error",
+                "home_query_parameter_missing",
+                &format!("{path}.queryParams.{parameter}"),
+                format!("SQL requires parameter '{parameter}'."),
+            ));
+        }
+    }
+    if !field_references(config).is_empty() {
+        issues.push(issue(
+            "warning",
+            "home_query_result_fields_unverified",
+            path,
+            "Cross-app SQL result fields cannot be verified before the query runs.",
+        ));
+    }
+    issues
 }
 async fn validate_data(
     session: &NativePlatformSession,
@@ -865,6 +934,44 @@ mod tests {
             ),
             vec!["viewer", "2", "__home_bad"]
         );
+    }
+    #[test]
+    fn sql_widget_checks_sources_aliases_and_parameters() {
+        let visible: HashSet<String> = ["crm".to_owned()].into();
+        let config = json!({
+            "sourceKind":"sql",
+            "sql":"select * from crm.a join x.b on a.id = b.id where a.o = $owner and $__home_x",
+            "sources":[
+                {"alias":"crm","appId":"crm"},
+                {"alias":"crm","appId":"crm"},
+                {"alias":"Bad","appId":"gone"}
+            ],
+            "queryParams":{}
+        });
+        let codes: Vec<String> = sql_issues(&config, "$.c", &visible)
+            .iter()
+            .map(|i| text(i, "code").to_owned())
+            .collect();
+        assert_eq!(
+            codes,
+            vec![
+                "home_sql_alias_duplicate",
+                "home_sql_source_app_missing",
+                "home_sql_alias_invalid",
+                "home_query_parameter_missing",
+                "home_query_parameter_reserved"
+            ]
+        );
+    }
+    #[test]
+    fn sql_widget_with_valid_config_has_no_issues() {
+        let visible: HashSet<String> = ["crm".to_owned()].into();
+        let config = json!({
+            "sourceKind":"sql","sql":"select 1 from crm.a where o = $owner",
+            "sources":[{"alias":"crm","appId":"crm"}],
+            "queryParams":{"owner":"$viewer.id"}
+        });
+        assert!(sql_issues(&config, "$.c", &visible).is_empty());
     }
     #[test]
     fn embed_missing_route_never_uses_default() {

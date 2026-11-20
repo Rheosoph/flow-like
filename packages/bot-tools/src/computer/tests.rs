@@ -103,6 +103,76 @@ async fn a_screenshot_is_an_image_with_its_size() {
     );
 }
 
+#[tokio::test]
+async fn a_kept_screenshot_is_saved_in_the_workspace_and_returned_as_a_file() {
+    let (_, env) = setup().await;
+    let outcome = call(&env, "computer_screenshot", json!({ "keep": true })).await;
+    assert!(outcome.is_ok());
+    assert_eq!(outcome.images.len(), 1);
+    assert_eq!(outcome.saved.len(), 1);
+    let kept = &outcome.saved[0];
+    assert!(is_kept_screenshot(&kept.path), "{}", kept.path);
+    assert_eq!(kept.mime, "image/png");
+    assert_eq!(outcome.result["file"]["path"], json!(kept.path));
+    let plain = call(&env, "computer_screenshot", json!({})).await;
+    assert!(plain.saved.is_empty() && plain.result.get("file").is_none());
+}
+
+#[tokio::test]
+async fn a_room_show_takes_no_picture_and_accepts_only_kept_screenshots() {
+    let (screen, env) = setup().await;
+    let kept = call(&env, "computer_screenshot", json!({ "keep": true })).await;
+    let file = kept.saved[0].clone();
+    let shots = *screen.shots.lock().unwrap();
+    let shown = call(
+        &env,
+        COMPUTER_SCREENSHOT,
+        show_in_room_args(&file, Some("Team")),
+    )
+    .await;
+    assert!(shown.is_ok());
+    assert!(shown.images.is_empty());
+    assert_eq!(*screen.shots.lock().unwrap(), shots);
+    let mut other = file.clone();
+    other.path = "bot/files/secret.png".into();
+    let refused = call(&env, COMPUTER_SCREENSHOT, show_in_room_args(&other, None)).await;
+    assert!(!refused.is_ok());
+    let mut foreign = file;
+    foreign.app_id = "another-app".into();
+    let refused = call(&env, COMPUTER_SCREENSHOT, show_in_room_args(&foreign, None)).await;
+    assert!(!refused.is_ok());
+}
+
+#[test]
+fn kept_screenshots_live_directly_in_their_folder_and_the_card_names_the_room() {
+    assert!(is_kept_screenshot("bot/screenshots/a.png"));
+    for path in [
+        "bot/screenshots",
+        "bot/screenshots/",
+        "bot/screenshots/x/a.png",
+        "bot/screenshotsx/a.png",
+        "bot/files/a.png",
+    ] {
+        assert!(!is_kept_screenshot(path), "{path}");
+    }
+    let file = flow_like_types::bot_message::WorkspaceHandle {
+        app_id: "ws".into(),
+        path: "bot/screenshots/a.png".into(),
+        bytes: 4,
+        sha256: "0".repeat(64),
+        mime: "image/png".into(),
+    };
+    let args = show_in_room_args(&file, Some("Team"));
+    assert_eq!(room_show(COMPUTER_SCREENSHOT, &args).unwrap().file, file);
+    assert!(room_show(COMPUTER_ACT, &args).is_none());
+    assert!(
+        ask_message(COMPUTER_SCREENSHOT, &args)
+            .unwrap()
+            .contains("the people in “Team”")
+    );
+    assert!(ask_message(COMPUTER_SCREENSHOT, &json!({ "keep": true })).is_none());
+}
+
 #[test]
 fn feedback_keeps_clean_pixels_and_explains_the_annotation_in_model_json() {
     use flow_like_types::image::{DynamicImage, ImageFormat, RgbaImage};

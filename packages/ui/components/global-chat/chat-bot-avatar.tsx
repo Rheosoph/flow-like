@@ -80,13 +80,27 @@ export interface DraftRelay {
 	draft: string;
 }
 
-/** Hands the composer's draft to the pill's avatar without re-rendering the chat on every keystroke. */
+/** Quiet after which the words of a draft reach the bot's face. */
+export const DRAFT_PAUSE_MS = 700;
+
+/**
+ * Hands the composer's draft to the pill's avatar without re-rendering the chat on every keystroke.
+ * The face reacts when writing starts and when the draft is cleared or sent; the words in between
+ * reach it once the writer pauses, so typing never re-renders the avatar per key.
+ */
 export function useDraftRelay() {
 	const listener = useRef<DraftRelay>({ current: null, draft: "" }).current;
+	const pending = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	useEffect(() => () => clearTimeout(pending.current), []);
 	const report = useCallback(
 		(draft: string) => {
-			listener.draft = draft;
-			listener.current?.(draft);
+			clearTimeout(pending.current);
+			const deliver = () => {
+				listener.draft = draft;
+				listener.current?.(draft);
+			};
+			if (!draft.trim() || !listener.draft.trim()) deliver();
+			else pending.current = setTimeout(deliver, DRAFT_PAUSE_MS);
 		},
 		[listener],
 	);

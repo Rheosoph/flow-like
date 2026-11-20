@@ -22,6 +22,7 @@ pub mod cache;
 pub mod comments;
 pub mod connection;
 pub mod data;
+pub mod data_sources;
 pub mod db;
 pub mod device_metadata;
 pub mod events;
@@ -162,6 +163,7 @@ pub fn routes() -> Router<AppState> {
         .nest("/{app_id}/locked", locked::routes())
         .nest("/{app_id}/invoke", invoke::routes())
         .nest("/{app_id}/db", db::routes())
+        .nest("/{app_id}/data-sources", data_sources::routes())
         .nest("/{app_id}/graph", graph::routes())
         .nest("/{app_id}/api", api::routes())
         .nest("/{app_id}/routes", route::routes())

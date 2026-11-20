@@ -24,7 +24,9 @@ use crate::{
     validation,
 };
 use flow_like_types::bot::{BotLocation, BotSystemKind};
-use flow_like_types::bot_connector::{BotConnector, ConnectorAuth, CreateBotConnector};
+use flow_like_types::bot_connector::{
+    BotConnector, ConnectorAuth, ConnectorKind, CreateBotConnector,
+};
 use requests::{
     AccountIds, BotSettingsRequest, ImportBotRequest, PositionMap, count_messages, entries_to_move,
     foreign_handles, import_conversation_requests, segment_requests, split_conversations,
@@ -198,8 +200,16 @@ impl fmt::Display for MoveError {
 
 impl std::error::Error for MoveError {}
 
+/// An OAuth sign-in stays on this device; a CalDAV calendar the hub cannot reach over https
+/// (a server on this network) stays too.
 fn is_unmovable(connector: &BotConnector) -> bool {
-    matches!(connector.auth, ConnectorAuth::Oauth { .. })
+    match connector.kind {
+        ConnectorKind::Caldav => !connector
+            .url
+            .as_deref()
+            .is_some_and(|url| url.trim().starts_with("https://")),
+        _ => matches!(connector.auth, ConnectorAuth::Oauth { .. }),
+    }
 }
 
 /// Connectors whose OAuth sign-in cannot leave this device; the move reports them.
@@ -762,7 +772,8 @@ impl<'a, H: AccountHub> BotMove<'a, H> {
 
     /// Creates the connectors the account bot lacks (by label). A connector signed in by an
     /// account's OAuth grant stays behind: the grant is sealed on this device and the move
-    /// reports it as a warning. A secret named in `auth` moved with the secrets.
+    /// reports it as a warning. A secret named in `auth` moved with the secrets; a CalDAV
+    /// calendar takes its password along and the hub finds its calendars again.
     async fn move_connectors(&mut self, bundle: &LocalBotBundle) -> Result<(), MoveError> {
         let movable: Vec<&BotConnector> = bundle
             .connectors
@@ -787,14 +798,28 @@ impl<'a, H: AccountHub> BotMove<'a, H> {
             if present.contains(&connector.label.to_lowercase()) {
                 continue;
             }
+            let grant = match connector.kind {
+                ConnectorKind::Caldav => {
+                    let (bot_id, connector_id) = (self.bot_id.to_string(), connector.id.clone());
+                    Some(
+                        self.local(
+                            &format!("read the password of connector {}", connector.label),
+                            move |store| store.connector_password(&bot_id, &connector_id),
+                        )
+                        .await?,
+                    )
+                }
+                _ => None,
+            };
             let request = serde_json::json!(CreateBotConnector {
                 kind: connector.kind,
                 label: connector.label.clone(),
                 url: connector.url.clone(),
                 auth: connector.auth.clone(),
-                grant: None,
+                grant,
                 scopes: connector.scopes.clone(),
                 default_policy: Some(connector.default_policy),
+                calendar_url: connector.calendar_url.clone(),
             });
             self.call(
                 &format!("move connector {} of bot {}", connector.label, self.bot_id),

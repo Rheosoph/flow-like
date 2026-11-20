@@ -29,6 +29,147 @@ fn stored(id: &str, hub: &str) -> Bit {
     }
 }
 
+fn embedding(id: &str, artifacts: Value) -> Value {
+    json!({
+        "id": id,
+        "ref": id,
+        "type": "Embedding",
+        "parameters": {
+            "provider": {"provider_name": "Local"},
+            "embedding": {
+                "schema_version": 1,
+                "adapter": "sentence_transformer",
+                "space_id": "test-embedding-space",
+                "dimensions": 2048,
+                "max_tokens": 4096,
+                "artifacts": artifacts
+            }
+        }
+    })
+}
+
+#[test]
+fn embedding_artifacts_follow_returned_ids_and_preserve_external_hubs() {
+    let planned = plan(
+        &Spec {
+            bits: vec![
+                embedding(
+                    "model",
+                    json!({
+                        "config": {"bit": "@config", "path": "config.json"},
+                        "backbone": {"bit": "other.example:weights", "path": "onnx/model.onnx"},
+                        "tokenizer": {"bit": "existing-tokenizer", "path": "tokenizer.json"}
+                    }),
+                ),
+                config(),
+            ],
+        },
+        HUB,
+    )
+    .unwrap();
+    assert_eq!(planned[0].id, "config-plan");
+    let payload = planned[1]
+        .push_payload(
+            &BTreeMap::from([(
+                "config-plan".into(),
+                stored("deduplicated-config", "canonical.example"),
+            )]),
+            HUB,
+        )
+        .unwrap();
+    let artifacts = &payload["parameters"]["embedding"]["artifacts"];
+    assert_eq!(
+        artifacts["config"]["bit"],
+        "canonical.example:deduplicated-config"
+    );
+    assert_eq!(artifacts["config"]["path"], "config.json");
+    assert_eq!(artifacts["backbone"]["bit"], "other.example:weights");
+    assert_eq!(
+        artifacts["tokenizer"]["bit"],
+        "models.example:existing-tokenizer"
+    );
+    assert_eq!(
+        payload["dependencies"],
+        json!([
+            "other.example:weights",
+            "canonical.example:deduplicated-config",
+            "models.example:existing-tokenizer"
+        ])
+    );
+}
+
+#[test]
+fn embedding_artifact_aliases_round_trip_without_capturing_foreign_ids() {
+    let config = Bit {
+        bit_type: BitTypes::Config,
+        ..stored("old-config", HUB)
+    };
+    let mut root = stored("old-model", HUB);
+    root.bit_type = BitTypes::Embedding;
+    root.dependencies = vec![
+        "models.example:old-config".into(),
+        "foreign.example:old-config".into(),
+    ];
+    root.parameters = embedding(
+        "old-model",
+        json!({
+            "config": {"bit": "models.example:old-config", "path": "config.json"},
+            "backbone": {"bit": "foreign.example:old-config", "path": "model.onnx"}
+        }),
+    )["parameters"]
+        .clone();
+    let exported = from_bits(&[config, root]);
+    assert_eq!(
+        exported.bits[1]["dependencies"],
+        json!(["@config-0", "foreign.example:old-config"])
+    );
+    let artifacts = &exported.bits[1]["parameters"]["embedding"]["artifacts"];
+    assert_eq!(artifacts["config"]["bit"], "@config-0");
+    assert_eq!(artifacts["backbone"]["bit"], "foreign.example:old-config");
+    let planned = plan(&exported, HUB).unwrap();
+    let payload = planned[1]
+        .push_payload(
+            &BTreeMap::from([("old-config".into(), stored("new-config", HUB))]),
+            HUB,
+        )
+        .unwrap();
+    assert_eq!(
+        payload["parameters"]["embedding"]["artifacts"]["config"]["bit"],
+        "models.example:new-config"
+    );
+    assert_eq!(
+        payload["parameters"]["embedding"]["artifacts"]["backbone"]["bit"],
+        "foreign.example:old-config"
+    );
+    assert_eq!(
+        payload["dependencies"],
+        json!(["models.example:new-config", "foreign.example:old-config"])
+    );
+}
+
+#[test]
+fn invalid_embedding_artifacts_fail_before_publication() {
+    for artifacts in [
+        json!({"config": {"bit": "@missing", "path": "config.json"}}),
+        json!({"config": {"bit": "@model", "path": "config.json"}}),
+        json!({"config": {"bit": "config", "path": "../config.json"}}),
+        json!({
+            "config": {"bit": "config", "path": "config.json"},
+            "tokenizer": {"bit": "tokenizer", "path": "config.json"}
+        }),
+    ] {
+        assert!(
+            plan(
+                &Spec {
+                    bits: vec![embedding("model", artifacts)]
+                },
+                HUB
+            )
+            .is_err()
+        );
+    }
+}
+
 #[test]
 fn hosted_deduplication_refreshes_parameters_at_the_returned_id() {
     let bundle = Spec {
@@ -118,14 +259,14 @@ fn hosted_refresh_does_not_change_artifact_or_custom_provider_deduplication() {
 }
 
 #[test]
-fn openrouter_catalog_contains_publishable_hosted_media_and_embeddings() {
+fn openrouter_catalog_contains_publishable_hosted_media() {
     let bundle = load(
         &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("specs/hosted-openrouter.json"),
     )
     .unwrap();
     let planned = plan(&bundle, HUB).unwrap();
     let repeated = plan(&bundle, HUB).unwrap();
-    assert_eq!(planned.len(), 127);
+    assert_eq!(planned.len(), 89);
     assert_eq!(
         planned.iter().map(|entry| &entry.id).collect::<Vec<_>>(),
         repeated.iter().map(|entry| &entry.id).collect::<Vec<_>>(),
@@ -154,19 +295,6 @@ fn openrouter_catalog_contains_publishable_hosted_media_and_embeddings() {
         *kinds.entry(entry.bit_type.clone()).or_default() += 1;
 
         let model_id = match bit.bit_type {
-            BitTypes::Embedding => {
-                assert!(bit.try_to_embedding().is_some());
-                let remote = &bit.parameters["remote"];
-                assert_eq!(remote["implementation"], "OpenRouter");
-                assert!(remote.get("secret_name").is_none_or(Value::is_null));
-                assert!(remote.get("endpoint").is_none_or(Value::is_null));
-                assert!(
-                    bit.parameters["pricing"]["input_micro_usd_per_million_tokens"]
-                        .as_u64()
-                        .is_some()
-                );
-                remote["model_id"].as_str().unwrap()
-            }
             BitTypes::ImageGeneration => {
                 assert_eq!(provider["provider_name"], "hosted:openrouter");
                 let pricing = bit.parameters["pricing"].as_object().unwrap();
@@ -207,11 +335,34 @@ fn openrouter_catalog_contains_publishable_hosted_media_and_embeddings() {
     assert_eq!(
         kinds,
         BTreeMap::from([
-            ("Embedding".into(), 38),
             ("ImageGeneration".into(), 31),
             ("Stt".into(), 27),
             ("Tts".into(), 31),
         ])
+    );
+}
+
+#[test]
+fn hosted_only_catalog_excludes_embeddings_that_require_local_files() {
+    let bundle = load(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("specs/hosted-openrouter.json"),
+    )
+    .unwrap();
+    let embeddings = bundle
+        .bits
+        .iter()
+        .filter(|bit| {
+            matches!(
+                bit.get("type").and_then(Value::as_str),
+                Some("Embedding" | "ImageEmbedding")
+            )
+        })
+        .map(|bit| bit["id"].as_str().unwrap_or("unnamed"))
+        .collect::<Vec<_>>();
+    assert!(
+        embeddings.is_empty(),
+        "Embedding Bits require local model files. Publish them in a local artifact bundle, \
+         with optional hosted fallback, instead of the hosted-only catalog: {embeddings:?}"
     );
 }
 

@@ -53,6 +53,7 @@ export interface ConversationApprovalItem {
 	afterWebContent: boolean;
 	secret?: IInboxApprovalSecret;
 	invite?: IInboxApprovalInvite;
+	picture?: IInboxFileHandle;
 }
 
 /** A bot's request to run a call, with the owner's answer once there is one. */
@@ -70,6 +71,8 @@ export interface ConversationApproval {
 	room?: string;
 	secret?: IInboxApprovalSecret;
 	invite?: IInboxApprovalInvite;
+	/** A picture the bot asks to show in the room. */
+	picture?: IInboxFileHandle;
 	configurationChanges?: Record<string, unknown>;
 	/** On a card for one call: its standing grant was set aside after web content. */
 	afterWebContent?: boolean;
@@ -103,6 +106,7 @@ function conversationApproval(
 		configurationChanges: approval.configuration_changes,
 		...(approval.secret ? { secret: approval.secret } : {}),
 		...(approval.invite ? { invite: approval.invite } : {}),
+		...(approval.picture ? { picture: approval.picture } : {}),
 		...(approval.after_web_content ? { afterWebContent: true } : {}),
 		...(approval.items
 			? {
@@ -115,6 +119,7 @@ function conversationApproval(
 						afterWebContent: item.after_web_content === true,
 						...(item.secret ? { secret: item.secret } : {}),
 						...(item.invite ? { invite: item.invite } : {}),
+						...(item.picture ? { picture: item.picture } : {}),
 					})),
 				}
 			: {}),

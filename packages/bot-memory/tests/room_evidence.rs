@@ -200,6 +200,17 @@ async fn evidence_selection_rejects_deleted_future_missing_and_nonmessage_entrie
         json!({ "text": "A live statement.", "evidence_seq": 1 }),
     )
     .await;
-    assert_eq!(response["status"], "needs_confirmation", "{response}");
-    assert!(!toolbox.wrote());
+    assert_eq!(response["status"], "ok", "{response}");
+    assert!(toolbox.wrote());
+    let facts = room
+        .session
+        .engine()
+        .stores()
+        .facts
+        .all(&FactFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].source, FactSource::ToolUntrusted);
+    assert_eq!(facts[0].evidence[0].speaker.as_ref().unwrap().id, "alice");
 }

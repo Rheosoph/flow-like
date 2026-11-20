@@ -1,4 +1,5 @@
 use super::{
+    calendar_tasks,
     fixture::{assert_code, at, database as inbox_database, insert_bot},
     place_tasks::{Crossed, Dropped, fire_crossing_locked_in, place_task_of, watched_list_in},
     tasks::{Fired, due_in, fire_locked_in, schedule_of},
@@ -7,10 +8,11 @@ use crate::{
     entity::{bot, bot_task, bot_turn, conversation_member, inbox_entry},
     routes::{
         bots::tasks::{
-            BotTaskConversation, BotTaskInfo, CreateBotTaskRequest, PLACE_LIMIT_REACHED,
-            PLACE_OWNER_CHAT_ONLY, TASK_CAPABILITY_OFF, TASK_CONVERSATION_ENCRYPTED, TaskOrigin,
-            TaskScope, UpdateBotTaskRequest, create_in, delete_in, delete_scoped_in, infos_of,
-            list_in, list_scoped_in, origin_of_turn, scope_of_turn, update_in, update_scoped_in,
+            BotTaskConversation, BotTaskInfo, CALENDAR_OWNER_CHAT_ONLY, CreateBotTaskRequest,
+            EVENT_LIMIT_REACHED, PLACE_LIMIT_REACHED, PLACE_OWNER_CHAT_ONLY, TASK_CAPABILITY_OFF,
+            TASK_CONVERSATION_ENCRYPTED, TaskOrigin, TaskScope, UpdateBotTaskRequest, create_in,
+            delete_in, delete_scoped_in, infos_of, list_in, list_scoped_in, origin_of_turn,
+            scope_of_turn, update_in, update_scoped_in,
         },
         inbox::{
             fixture::{bot_principal, group, running_turn, user},
@@ -20,6 +22,10 @@ use crate::{
 };
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use flow_like_types::{
+    bot_calendar::{
+        CalendarWake, EventWake, ExternalEventRef, MAX_EVENTS_PER_BOT, TaskEvent,
+        UpdateCalendarWake, WAKE_NOTE_PREFIX,
+    },
     bot_task::{
         CreateBotTask, MAX_TASKS_PER_BOT, MAX_WATCHED_PLACES, PlaceCrossing, TaskCreator, TaskKind,
         TaskPlace, UpdateBotTask, fire_message_id,
@@ -76,6 +82,7 @@ fn request(kind: TaskKind) -> CreateBotTask {
         enabled: None,
         monitoring: false,
         place: None,
+        event: None,
     }
 }
 
@@ -1417,4 +1424,479 @@ async fn a_task_keeps_its_kind_and_a_new_place_arms_it_again() {
     .await
     .unwrap_err();
     assert_code(&error, axum::http::StatusCode::BAD_REQUEST, "BAD_REQUEST");
+}
+
+fn event_at(starts: DateTime<Utc>) -> TaskEvent {
+    TaskEvent {
+        starts_at: starts.to_rfc3339(),
+        ends_at: None,
+        all_day: false,
+        location: Some("Room 4".into()),
+        wake: None,
+        wake_offsets: Vec::new(),
+        external: None,
+        link: None,
+    }
+}
+
+fn event_request(event: TaskEvent) -> CreateBotTask {
+    CreateBotTask {
+        kind: Some(TaskKind::Event),
+        instruction: String::new(),
+        title: Some("Dentist".into()),
+        event: Some(event),
+        ..Default::default()
+    }
+}
+
+fn external(event_id: &str) -> ExternalEventRef {
+    ExternalEventRef {
+        connector_id: "conn".into(),
+        provider: "google".into(),
+        calendar_id: "primary".into(),
+        event_id: event_id.into(),
+    }
+}
+
+async fn allow_calendar(db: &DatabaseConnection, bot_id: &str, scheduling: bool) {
+    let mut capabilities = vec!["calendar".to_string()];
+    if scheduling {
+        capabilities.push("scheduling".to_string());
+    }
+    bot::ActiveModel {
+        id: Set(bot_id.into()),
+        capabilities: Set(capabilities.into()),
+        ..Default::default()
+    }
+    .update(db)
+    .await
+    .unwrap();
+}
+
+async fn wake_on(db: &DatabaseConnection, offsets: Vec<u32>) {
+    let bot = bot::Entity::find_by_id(BOT).one(db).await.unwrap().unwrap();
+    calendar_tasks::apply_in(
+        db,
+        &bot,
+        UpdateCalendarWake {
+            enabled: Some(true),
+            offsets_minutes: Some(offsets),
+            ..Default::default()
+        },
+        now(),
+    )
+    .await
+    .unwrap();
+}
+
+async fn make_event(
+    db: &DatabaseConnection,
+    event: TaskEvent,
+    author: TaskCreator,
+) -> bot_task::Model {
+    create_in(db, OWNER, BOT, event_request(event), author, None, now())
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn an_event_task_needs_the_calendar_capability_and_the_owners_own_chat() {
+    let db = database().await;
+    let event = event_at(Utc::now() + Duration::hours(5));
+    let error = create_in(
+        &db,
+        OWNER,
+        BOT,
+        event_request(event.clone()),
+        TaskCreator::Owner,
+        None,
+        now(),
+    )
+    .await
+    .unwrap_err();
+    assert_code(
+        &error,
+        axum::http::StatusCode::FORBIDDEN,
+        TASK_CAPABILITY_OFF,
+    );
+
+    allow_calendar(&db, BOT, true).await;
+    team(&db, ConversationEncryption::Plain).await;
+    asked_in(&db, "turn-team", "team", MEMBER).await;
+    let origin = origin_of_turn(&db, OWNER, BOT, "turn-team")
+        .await
+        .unwrap()
+        .unwrap();
+    let error = create_in(
+        &db,
+        OWNER,
+        BOT,
+        event_request(event.clone()),
+        TaskCreator::Bot,
+        Some(&origin),
+        now(),
+    )
+    .await
+    .unwrap_err();
+    assert_code(
+        &error,
+        axum::http::StatusCode::CONFLICT,
+        CALENDAR_OWNER_CHAT_ONLY,
+    );
+
+    let task = make_event(&db, event, TaskCreator::Owner).await;
+    assert_eq!(task.kind, "EVENT");
+    assert!(task.conversation_id.is_none());
+}
+
+#[tokio::test]
+async fn an_event_task_refuses_at_place_and_a_missing_event() {
+    let db = database().await;
+    allow_calendar(&db, BOT, false).await;
+    let event = event_at(Utc::now() + Duration::hours(5));
+    let mut with_at = event_request(event.clone());
+    with_at.at = Some((Utc::now() + Duration::hours(1)).to_rfc3339());
+    let mut without_event = event_request(event);
+    without_event.event = None;
+    let mut untitled = without_event.clone();
+    untitled.event = Some(event_at(Utc::now() + Duration::hours(5)));
+    untitled.title = None;
+    for request in [with_at, without_event, untitled] {
+        let error = create_in(&db, OWNER, BOT, request, TaskCreator::Owner, None, now())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.status(),
+            axum::http::StatusCode::BAD_REQUEST,
+            "{error:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_events_wake_ups_come_from_the_bots_settings_and_its_own_override() {
+    let db = database().await;
+    allow_calendar(&db, BOT, false).await;
+    let start = Utc::now() + Duration::hours(5);
+    let quiet = make_event(&db, event_at(start), TaskCreator::Owner).await;
+    assert_eq!(quiet.next_run_at, None);
+    assert!(!quiet.enabled);
+
+    let mut own = event_at(start);
+    own.wake = Some(EventWake {
+        enabled: true,
+        offsets_minutes: vec![60],
+    });
+    let own = make_event(&db, own, TaskCreator::Owner).await;
+    let stored = calendar_tasks::event_of(&own).unwrap();
+    assert_eq!(stored.wake_offsets, vec![60]);
+    assert_eq!(
+        own.next_run_at.unwrap().timestamp(),
+        (start - Duration::minutes(60)).timestamp()
+    );
+    assert!(own.enabled);
+
+    wake_on(&db, vec![30]).await;
+    let quiet = reload(&db, &quiet.id).await;
+    assert_eq!(
+        quiet.next_run_at.unwrap().timestamp(),
+        (start - Duration::minutes(30)).timestamp()
+    );
+    assert!(quiet.enabled);
+    assert_eq!(quiet.monitoring, Some(true));
+    let own = reload(&db, &own.id).await;
+    assert_eq!(
+        own.next_run_at.unwrap().timestamp(),
+        (start - Duration::minutes(60)).timestamp()
+    );
+}
+
+#[tokio::test]
+async fn an_event_of_a_connected_calendar_is_one_bot_written_row() {
+    let db = database().await;
+    allow_calendar(&db, BOT, false).await;
+    wake_on(&db, vec![15]).await;
+    let start = Utc::now() + Duration::hours(5);
+    let mut event = event_at(start);
+    event.external = Some(external("evt-1"));
+    let first = make_event(&db, event.clone(), TaskCreator::Owner).await;
+    assert_eq!(first.created_by, "BOT");
+    assert_eq!(first.owner_written, Some(false));
+    assert!(first.request_message_id.is_none());
+
+    let mut moved = event_at(start + Duration::hours(1));
+    moved.external = Some(external("evt-1"));
+    let second = make_event(&db, moved, TaskCreator::Owner).await;
+    assert_eq!(second.id, first.id);
+    assert_eq!(
+        second.next_run_at.unwrap().timestamp(),
+        (start + Duration::hours(1) - Duration::minutes(15)).timestamp()
+    );
+    let rows = calendar_tasks::rows_of(&db, BOT).await.unwrap();
+    assert_eq!(rows.len(), 1);
+
+    let mut other = event_at(start);
+    other.external = Some(external("evt-2"));
+    make_event(&db, other, TaskCreator::Bot).await;
+    assert_eq!(calendar_tasks::rows_of(&db, BOT).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn events_have_their_own_cap_and_do_not_use_up_the_task_cap() {
+    let db = database().await;
+    allow_calendar(&db, BOT, true).await;
+    let start = Utc::now() + Duration::hours(5);
+    let rows = (0..MAX_EVENTS_PER_BOT).map(|index| bot_task::ActiveModel {
+        id: Set(format!("event-{index}")),
+        bot_id: Set(BOT.into()),
+        owner_id: Set(OWNER.into()),
+        kind: Set("EVENT".into()),
+        instruction: Set(String::new()),
+        title: Set(format!("Event {index}")),
+        enabled: Set(false),
+        created_by: Set("OWNER".into()),
+        created_at: Set(now()),
+        updated_at: Set(now()),
+        event: Set(Some(serde_json::to_value(event_at(start)).unwrap())),
+        ..Default::default()
+    });
+    bot_task::Entity::insert_many(rows).exec(&db).await.unwrap();
+
+    let error = create_in(
+        &db,
+        OWNER,
+        BOT,
+        event_request(event_at(start)),
+        TaskCreator::Owner,
+        None,
+        now(),
+    )
+    .await
+    .unwrap_err();
+    assert_code(
+        &error,
+        axum::http::StatusCode::CONFLICT,
+        EVENT_LIMIT_REACHED,
+    );
+    for _ in 0..MAX_TASKS_PER_BOT {
+        make(&db, TaskKind::Once).await;
+    }
+}
+
+#[tokio::test]
+async fn moving_an_event_arms_it_again_and_an_unmoved_one_keeps_its_runs() {
+    let db = database().await;
+    allow_calendar(&db, BOT, false).await;
+    wake_on(&db, vec![15]).await;
+    let start = Utc::now() + Duration::hours(5);
+    let task = make_event(&db, event_at(start), TaskCreator::Owner).await;
+    bot_task::ActiveModel {
+        id: Set(task.id.clone()),
+        last_run_at: Set(Some(now())),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+
+    let renamed = update_in(
+        &db,
+        OWNER,
+        BOT,
+        &task.id,
+        UpdateBotTask {
+            title: Some("Dentist, 2nd visit".into()),
+            ..Default::default()
+        },
+        now(),
+    )
+    .await
+    .unwrap();
+    assert!(renamed.last_run_at.is_some());
+    assert_eq!(renamed.title, "Dentist, 2nd visit");
+
+    let later = start + Duration::hours(2);
+    let moved = update_in(
+        &db,
+        OWNER,
+        BOT,
+        &task.id,
+        UpdateBotTask {
+            event: Some(event_at(later)),
+            ..Default::default()
+        },
+        now(),
+    )
+    .await
+    .unwrap();
+    assert!(moved.last_run_at.is_none());
+    assert_eq!(
+        moved.next_run_at.unwrap().timestamp(),
+        (later - Duration::minutes(15)).timestamp()
+    );
+    assert!(moved.enabled);
+
+    let error = update_in(
+        &db,
+        OWNER,
+        BOT,
+        &task.id,
+        UpdateBotTask {
+            at: Some((Utc::now() + Duration::hours(1)).to_rfc3339()),
+            ..Default::default()
+        },
+        now(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn an_event_wake_up_writes_the_wake_text_and_moves_to_the_next_wake() {
+    let db = database().await;
+    allow_calendar(&db, BOT, false).await;
+    wake_on(&db, vec![15]).await;
+    let start = Utc::now() + Duration::days(1);
+    let task = create_in(
+        &db,
+        OWNER,
+        BOT,
+        CreateBotTask {
+            cron: Some("0 9 * * *".into()),
+            tz: Some("Europe/Berlin".into()),
+            ..event_request(event_at(start))
+        },
+        TaskCreator::Owner,
+        None,
+        now(),
+    )
+    .await
+    .unwrap();
+    let due = Utc::now() - Duration::minutes(1);
+    let task = bot_task::ActiveModel {
+        id: Set(task.id),
+        next_run_at: Set(Some(due.fixed_offset())),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+
+    let when = now();
+    assert!(matches!(fire(&db, &task, when).await, Fired::Sent(..)));
+    let entries = triggers(&db).await;
+    assert_eq!(entries.len(), 1);
+    let text = entries[0].envelope["body"]["text"].as_str().unwrap();
+    assert!(text.starts_with(WAKE_NOTE_PREFIX), "{text}");
+    assert!(text.contains(&task.id), "{text}");
+    let after = reload(&db, &task.id).await;
+    assert!(after.last_run_at.is_some());
+    assert!(after.next_run_at.is_some_and(|next| next > when));
+    assert!(after.enabled);
+}
+
+#[tokio::test]
+async fn a_one_off_event_is_done_after_its_last_wake_up() {
+    let db = database().await;
+    allow_calendar(&db, BOT, false).await;
+    wake_on(&db, vec![15]).await;
+    let task = make_event(
+        &db,
+        event_at(Utc::now() + Duration::minutes(10)),
+        TaskCreator::Owner,
+    )
+    .await;
+    let task = bot_task::ActiveModel {
+        id: Set(task.id),
+        next_run_at: Set(Some((Utc::now() - Duration::seconds(5)).fixed_offset())),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+    assert!(matches!(fire(&db, &task, now()).await, Fired::Sent(..)));
+    let after = reload(&db, &task.id).await;
+    assert_eq!(after.next_run_at, None);
+    assert!(!after.enabled);
+}
+
+#[tokio::test]
+async fn the_sweep_fires_event_tasks_of_bots_that_hold_calendar_only() {
+    let db = database().await;
+    allow_calendar(&db, BOT, false).await;
+    wake_on(&db, vec![15]).await;
+    let task = make_event(
+        &db,
+        event_at(Utc::now() + Duration::hours(3)),
+        TaskCreator::Owner,
+    )
+    .await;
+    bot_task::ActiveModel {
+        id: Set(task.id.clone()),
+        next_run_at: Set(Some(at(0))),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+    let due = due_in(&db, now()).await.unwrap();
+    assert_eq!(due.len(), 1);
+    let bot_row = bot::Entity::find_by_id(BOT)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(super::tasks::can_fire(&bot_row, &due[0]));
+
+    allow_scheduling(&db, BOT).await;
+    let bot_row = bot::Entity::find_by_id(BOT)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!super::tasks::can_fire(&bot_row, &due[0]));
+    assert!(super::tasks::can_fire(
+        &bot_row,
+        &make(&db, TaskKind::Once).await
+    ));
+}
+
+#[tokio::test]
+async fn changing_the_calendar_settings_works_every_event_out_again() {
+    let db = database().await;
+    allow_calendar(&db, BOT, false).await;
+    let start = Utc::now() + Duration::hours(5);
+    let mut skipped = event_at(start);
+    skipped.all_day = true;
+    let plain = make_event(&db, event_at(start), TaskCreator::Owner).await;
+    let all_day = make_event(&db, skipped, TaskCreator::Owner).await;
+    assert!(!plain.enabled && !all_day.enabled);
+
+    let bot_row = bot::Entity::find_by_id(BOT)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    let (wake, changed) = calendar_tasks::apply_in(
+        &db,
+        &bot_row,
+        UpdateCalendarWake {
+            enabled: Some(true),
+            ..Default::default()
+        },
+        now(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        wake,
+        CalendarWake {
+            enabled: true,
+            ..CalendarWake::default()
+        }
+    );
+    assert_eq!(changed.len(), 1);
+    assert!(reload(&db, &plain.id).await.enabled);
+    assert!(!reload(&db, &all_day.id).await.enabled);
 }

@@ -170,7 +170,7 @@ function MediaTile({
 				<span className="absolute inset-0 grid place-content-center justify-items-center bg-black/65 text-white">
 					<span className="text-lg font-semibold leading-none">{`+${overflowCount}`}</span>
 					<span className="mt-0.5 text-[9px] font-medium uppercase tracking-widest opacity-85">
-						more
+						{t("common:more", "More")}
 					</span>
 				</span>
 			) : (
@@ -348,6 +348,7 @@ function FileChip({
 	file: ProcessedAttachment;
 	onOpen: (file: ProcessedAttachment) => void;
 }>) {
+	const { t } = useTranslation("chat");
 	const host = file.type === "website" ? getAttachmentHost(file.url) : "";
 	const ActionIcon =
 		file.type === "website"
@@ -383,7 +384,9 @@ function FileChip({
 			)}
 			{file.pageNumber !== undefined && (
 				<span className="shrink-0 font-mono text-[10px] text-muted-foreground">
-					p.{file.pageNumber}
+					{t("common:pagePagenumber", "Page {{pageNumber}}", {
+						pageNumber: file.pageNumber,
+					})}
 				</span>
 			)}
 			<ActionIcon className="size-3.5 shrink-0 text-muted-foreground opacity-40 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
@@ -391,7 +394,9 @@ function FileChip({
 	);
 }
 
-const KIND_LABEL: Record<ProcessedAttachment["type"], string> = {
+type AttachmentKind = "image" | "video" | "recording" | "file" | "link";
+
+const ATTACHMENT_KIND: Record<ProcessedAttachment["type"], AttachmentKind> = {
 	image: "image",
 	video: "video",
 	audio: "recording",
@@ -401,14 +406,17 @@ const KIND_LABEL: Record<ProcessedAttachment["type"], string> = {
 	other: "file",
 };
 
-function summariseKinds(files: ProcessedAttachment[]) {
-	const counts = new Map<string, number>();
+function summariseKinds(
+	files: ProcessedAttachment[],
+	label: (kind: AttachmentKind, count: number) => string,
+) {
+	const counts = new Map<AttachmentKind, number>();
 	for (const file of files) {
-		const label = KIND_LABEL[file.type];
+		const label = ATTACHMENT_KIND[file.type];
 		counts.set(label, (counts.get(label) ?? 0) + 1);
 	}
 	return [...counts.entries()]
-		.map(([label, count]) => `${count} ${label}${count > 1 ? "s" : ""}`)
+		.map(([kind, count]) => label(kind, count))
 		.join(" · ");
 }
 
@@ -422,6 +430,17 @@ function AttachmentManifest({
 	onExpand: () => void;
 }>) {
 	const { t } = useTranslation("chat");
+	const kindLabel = (kind: AttachmentKind, count: number) => {
+		const labels = {
+			image: t("attachments.imageCount", { count }),
+			video: t("attachments.videoCount", { count }),
+			recording: t("attachments.recordingCount", { count }),
+			file: t("attachments.fileCount", { count }),
+			link: t("attachments.linkCount", { count }),
+		};
+		return labels[kind];
+	};
+
 	return (
 		<button
 			type="button"
@@ -444,7 +463,7 @@ function AttachmentManifest({
 								className="size-full object-cover"
 							/>
 						) : (
-							(file.ext || KIND_LABEL[file.type]).slice(0, 3)
+							(file.ext || t("common:file", "File")).slice(0, 3)
 						)}
 					</span>
 				))}
@@ -456,7 +475,7 @@ function AttachmentManifest({
 					})}
 				</span>
 				<span className="truncate font-mono text-[10px] text-muted-foreground">
-					{summariseKinds(files)}
+					{summariseKinds(files, kindLabel)}
 					{totalSize > 0 ? ` · ${humanFileSize(totalSize, true)}` : ""}
 				</span>
 			</span>

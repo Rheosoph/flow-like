@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import nemotronSpec from "../../apps/utils/bit-cli/specs/local-embeddings-nemotron.json";
 import { type CareCopyBit, getCatalogCopyPatch } from "./catalog-care-copy";
 
 function embedding(overrides: Partial<CareCopyBit> = {}): CareCopyBit {
@@ -23,6 +24,12 @@ function embedding(overrides: Partial<CareCopyBit> = {}): CareCopyBit {
 }
 
 describe("catalog copy care", () => {
+	test("preserves the migrated local Nemotron bundle and its fallback notes", () => {
+		const bit = nemotronSpec.bits.find((entry) => entry.type === "Embedding");
+		expect(bit).toBeDefined();
+		expect(getCatalogCopyPatch(bit as CareCopyBit)).toBeNull();
+	});
+
 	test("ignores support files and unknown model identities", () => {
 		expect(getCatalogCopyPatch(embedding({ type: "File" }))).toBeNull();
 		expect(getCatalogCopyPatch(embedding({ id: "unreviewed" }))).toBeNull();

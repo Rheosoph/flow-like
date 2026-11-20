@@ -263,6 +263,8 @@ export interface IMessageNotice {
 }
 
 export interface IMessage {
+	/** A reply a host is still writing: it renders as a streaming bubble until the stored message replaces it. */
+	live?: boolean;
 	/** Set on a bot's approval card: the message renders as the card, not as text. */
 	approval?: IMessageApproval;
 	userContext?: UserContextCardData;

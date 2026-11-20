@@ -15,6 +15,9 @@ use tauri::AppHandle;
 
 use super::graph::graph_connection;
 use crate::functions::TauriFunctionError;
+use flow_like::flow_like_storage::databases::workbench::{
+    parameter_options_answer, parameter_options_query,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct SavedQueryInput {
@@ -352,6 +355,102 @@ pub async fn query_saved_delete(
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DescribeQueryInput {
+    pub sql: String,
+    pub surface: String,
+    #[serde(default)]
+    pub overlay_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct QueryOptionsInput {
+    pub table: String,
+    pub column: String,
+    #[serde(default)]
+    pub search: Option<String>,
+    #[serde(default)]
+    pub range: bool,
+    pub surface: String,
+    #[serde(default)]
+    pub overlay_id: Option<String>,
+}
+
+/// The tables a statement on `surface` sees, with the saved views registered on it.
+async fn workbench_surface(
+    conn: &Connection,
+    surface: &str,
+    overlay_id: Option<&str>,
+) -> flow_like_types::Result<(WorkbenchSurface, Vec<WorkbenchView>)> {
+    match parse_surface(surface)? {
+        SavedQuerySurface::Native => {
+            let views = collect_views(conn, SavedQuerySurface::Native, None).await?;
+            Ok((WorkbenchSurface::Native, views))
+        }
+        SavedQuerySurface::Overlay => {
+            let overlay_id = overlay_id.ok_or_else(|| {
+                flow_like_types::anyhow!("An overlay id is required for the overlay surface")
+            })?;
+            let overlay = lancegraph::load_overlay(conn, overlay_id).await?;
+            let views = collect_views(conn, SavedQuerySurface::Overlay, Some(overlay_id)).await?;
+            Ok((WorkbenchSurface::Overlay(overlay), views))
+        }
+    }
+}
+
+/// Output columns and `$parameters` of a local app's workbench SQL, without running it.
+#[tauri::command(async)]
+pub async fn query_describe_sql(
+    app_handle: AppHandle,
+    app_id: String,
+    payload: DescribeQueryInput,
+    user_scoped: Option<bool>,
+) -> Result<serde_json::Value, TauriFunctionError> {
+    let conn = graph_connection(&app_handle, &app_id, user_scoped.unwrap_or(false)).await?;
+    let (surface, views) =
+        workbench_surface(&conn, &payload.surface, payload.overlay_id.as_deref()).await?;
+    let description = workbench::describe_workbench_query(
+        &conn,
+        surface,
+        views,
+        &payload.sql,
+        &ColumnReader::Unrestricted,
+        &[],
+    )
+    .await?;
+    serde_json::to_value(description).map_err(|e| e.into())
+}
+
+/// Values (or the range) a workbench `$parameter` bound to `table.column` can take.
+#[tauri::command(async)]
+pub async fn query_sql_parameter_options(
+    app_handle: AppHandle,
+    app_id: String,
+    payload: QueryOptionsInput,
+    user_scoped: Option<bool>,
+) -> Result<serde_json::Value, TauriFunctionError> {
+    let options = parameter_options_query(
+        &payload.table,
+        &payload.column,
+        payload.search.as_deref(),
+        payload.range,
+    )?;
+    let conn = graph_connection(&app_handle, &app_id, user_scoped.unwrap_or(false)).await?;
+    let (surface, views) =
+        workbench_surface(&conn, &payload.surface, payload.overlay_id.as_deref()).await?;
+    let result = workbench::execute_readonly_sql(
+        &conn,
+        surface,
+        views,
+        &options.sql,
+        &options.params,
+        Some(options.rows),
+        &ColumnReader::Unrestricted,
+    )
+    .await?;
+    Ok(parameter_options_answer(result, payload.range))
+}
+
 #[tauri::command(async)]
 pub async fn query_execute_sql(
     app_handle: AppHandle,
@@ -361,21 +460,8 @@ pub async fn query_execute_sql(
 ) -> Result<serde_json::Value, TauriFunctionError> {
     let conn = graph_connection(&app_handle, &app_id, user_scoped.unwrap_or(false)).await?;
     let params = payload.params.unwrap_or(Value::Null);
-
-    let (surface, views) = match parse_surface(&payload.surface)? {
-        SavedQuerySurface::Native => {
-            let views = collect_views(&conn, SavedQuerySurface::Native, None).await?;
-            (WorkbenchSurface::Native, views)
-        }
-        SavedQuerySurface::Overlay => {
-            let overlay_id = payload.overlay_id.as_deref().ok_or_else(|| {
-                flow_like_types::anyhow!("An overlay id is required for the overlay surface")
-            })?;
-            let overlay = lancegraph::load_overlay(&conn, overlay_id).await?;
-            let views = collect_views(&conn, SavedQuerySurface::Overlay, Some(overlay_id)).await?;
-            (WorkbenchSurface::Overlay(overlay), views)
-        }
-    };
+    let (surface, views) =
+        workbench_surface(&conn, &payload.surface, payload.overlay_id.as_deref()).await?;
 
     let result = workbench::execute_readonly_sql(
         &conn,

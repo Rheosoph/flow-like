@@ -84,6 +84,7 @@ pub mod billing;
 pub mod bits;
 pub mod bootstrap;
 pub mod contacts;
+pub mod data_query;
 pub mod get_invites;
 pub mod groups;
 pub mod handle;
@@ -154,6 +155,15 @@ pub fn routes() -> Router<AppState> {
         .route("/invites", get(get_invites::get_invites))
         .route("/templates", get(templates::get_templates))
         .route("/schedules", get(schedules::get_schedules))
+        .route("/data/query", post(data_query::data_query))
+        .route(
+            "/data/query/describe",
+            post(data_query::parameters::describe_data_query),
+        )
+        .route(
+            "/data/query/options",
+            post(data_query::parameters::data_query_options),
+        )
         .route("/groups", get(groups::get_user_groups))
         .route("/widgets", get(widgets::get_widgets))
         .route("/notifications", get(notifications::get_notifications))

@@ -13,7 +13,7 @@ use flow_like_types_contracts::dispatch::DispatchPayloadRef;
 use lambda_runtime::{Context, Error};
 use std::time::{Duration, SystemTime};
 
-const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(840);
+const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(1740);
 
 pub async fn execute(payload: DispatchPayloadRef, context: &Context) -> Result<(), Error> {
     // Tenant routing is supplied by AWS, never inferred from unverified input.

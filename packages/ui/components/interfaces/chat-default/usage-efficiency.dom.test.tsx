@@ -13,6 +13,7 @@ vi.mock("../../../hooks/use-model-names", () => ({
 }));
 vi.mock("@flow-like/locales", () => ({
 	useTranslation: () => ({
+		i18n: { language: "en" },
 		t: (_key: string, fallback: string, values: Record<string, unknown> = {}) =>
 			fallback.replace(/\{\{(\w+)\}\}/g, (_, key) =>
 				String(values[key] ?? key),

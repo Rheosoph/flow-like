@@ -1254,7 +1254,7 @@ async fn attempt_with(
             }
         }
         let instruction = if decision_event::monitoring(event) {
-            decision_event::MONITOR_INSTRUCTION
+            decision_event::monitoring_instruction(event)
         } else {
             event_delivery
                 .map(EventDecision::instruction)
@@ -1643,8 +1643,10 @@ async fn attempt_with(
         ancestors,
         batch.clone(),
     ));
-    // A call hears the reply while it is written when the turn answers in its own conversation.
-    let streams_reply = live_call && answered_round.is_none() && asker.is_none();
+    // The people of the conversation see (or, in a call, hear) the reply while it is written when
+    // the turn answers in its own conversation. An end-to-end encrypted conversation never gets
+    // here: the server refuses it above, so no plaintext of one is ever published.
+    let streams_reply = answered_round.is_none() && asker.is_none();
     let talk = match asker {
         Some(asked_by) => BotTalk::resumed(
             talk_host.clone(),
@@ -1659,7 +1661,7 @@ async fn attempt_with(
     let acknowledgement = bot.context.acknowledgement;
     let sub_task_compute = bot.context.compute.clone();
     let reply_stream = streams_reply
-        .then(|| ReplyStream::open(state, turn, bot.context.tool_gate.clone()))
+        .then(|| ReplyStream::open(state, turn, bot.context.tool_gate.clone(), live_call))
         .flatten();
     let reply_sink = reply_stream.as_ref().map(ReplyStream::sink);
     let usage_stats = flow_like::flow::copilot::bot_usage::BotUsage::default();

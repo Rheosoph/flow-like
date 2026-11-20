@@ -70,7 +70,7 @@ function NeedsYouCard({
 						type="button"
 						variant="outline"
 						size="sm"
-						className="rounded-[9px]"
+						className="rounded-[9px] active:scale-[0.97]"
 						onClick={onOpen}
 					>
 						{t("crew.openChat", "Open chat")}

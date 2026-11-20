@@ -8,7 +8,7 @@ import {
 	RefreshCwIcon,
 	Trash2Icon,
 } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import {
 	useBotConnectorAction,
@@ -20,10 +20,12 @@ import { useBackend } from "../../state/backend-state";
 import type {
 	BotConnectorPolicy,
 	IBotConnector,
+	IBotConnectorCalendar,
 	IConnectedAccount,
 } from "../../state/backend-state/bot-state";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Label } from "../ui/label";
 import {
 	Select,
 	SelectContent,
@@ -33,8 +35,15 @@ import {
 } from "../ui/select";
 import {
 	ACCOUNT_POLICY_KEYS,
+	CALDAV_PRESETS,
 	CONNECTOR_POLICIES,
+	type CalDavPresetId,
 	accountPolicy,
+	calDavCreateRequest,
+	calDavFormReady,
+	caldavPreset,
+	chosenCalendar,
+	isCalDavSignInError,
 	isDrifted,
 	normalizeMcpUrl,
 	readsWriteTool,
@@ -203,6 +212,7 @@ function ConnectorItem({
 	const { t } = useTranslation("bots");
 	const action = useBotConnectorAction();
 	const mcp = connector.kind === "mcp";
+	const caldav = connector.kind === "caldav";
 	const fail = (error: unknown) =>
 		toast.error(
 			error instanceof Error
@@ -220,14 +230,14 @@ function ConnectorItem({
 				<PlugZapIcon className="size-4 text-muted-foreground" aria-hidden />
 				<span className="text-sm font-medium">{connector.label}</span>
 				<BotTag>
-					{mcp
-						? t("connectors.kind.mcp", "MCP server")
-						: t("connectors.kind.oauth", "Account")}
+					{mcp && t("connectors.kind.mcp", "MCP server")}
+					{caldav && t("connectors.kind.caldav", "Calendar (CalDAV)")}
+					{!mcp && !caldav && t("connectors.kind.oauth", "Account")}
 				</BotTag>
 				<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-					{mcp ? connector.url : connector.provider_id}
+					{mcp || caldav ? connector.url : connector.provider_id}
 				</span>
-				{mcp && (
+				{(mcp || caldav) && (
 					<Button
 						type="button"
 						variant="ghost"
@@ -240,7 +250,9 @@ function ConnectorItem({
 						) : (
 							<RefreshCwIcon aria-hidden />
 						)}
-						{t("connectors.refresh", "Refresh tools")}
+						{caldav
+							? t("connectors.caldav.refresh", "Refresh calendars")
+							: t("connectors.refresh", "Refresh tools")}
 					</Button>
 				)}
 				<Button
@@ -257,23 +269,37 @@ function ConnectorItem({
 					<Trash2Icon aria-hidden />
 				</Button>
 			</div>
-			<div className="flex items-center gap-2 text-xs">
-				<span className="flex-1 text-muted-foreground">
-					{t("connectors.default", "Tools without a hint of their own")}
-				</span>
-				<PolicySelect
-					label={t("connectors.defaultPolicy", "Default access")}
-					value={connector.default_policy}
-					disabled={action.isPending}
-					onChange={(next) =>
+			{caldav ? (
+				<CalendarPicker
+					connector={connector}
+					busy={action.isPending}
+					onPick={(url) =>
 						run({
 							type: "update",
 							connectorId: connector.id,
-							request: { default_policy: next },
+							request: { calendar_url: url },
 						})
 					}
 				/>
-			</div>
+			) : (
+				<div className="flex items-center gap-2 text-xs">
+					<span className="flex-1 text-muted-foreground">
+						{t("connectors.default", "Tools without a hint of their own")}
+					</span>
+					<PolicySelect
+						label={t("connectors.defaultPolicy", "Default access")}
+						value={connector.default_policy}
+						disabled={action.isPending}
+						onChange={(next) =>
+							run({
+								type: "update",
+								connectorId: connector.id,
+								request: { default_policy: next },
+							})
+						}
+					/>
+				</div>
+			)}
 			{mcp ? (
 				connector.tools_snapshot.length === 0 ? (
 					<p className="text-xs text-muted-foreground">
@@ -322,6 +348,61 @@ function ConnectorItem({
 				/>
 			)}
 		</li>
+	);
+}
+
+function CalendarPicker({
+	connector,
+	busy,
+	onPick,
+}: Readonly<{
+	connector: IBotConnector;
+	busy: boolean;
+	onPick: (url: string) => void;
+}>) {
+	const { t } = useTranslation("bots");
+	const calendars = connector.calendars ?? [];
+	if (calendars.length === 0) {
+		return (
+			<p className="text-xs text-muted-foreground">
+				{t(
+					"connectors.caldav.noCalendars",
+					"No calendars found. Refresh to look again.",
+				)}
+			</p>
+		);
+	}
+	const chosen = chosenCalendar(connector);
+	return (
+		<div className="flex items-center gap-2 text-xs">
+			<span className="flex-1 text-muted-foreground">
+				{t("connectors.caldav.calendar", "Calendar the bot uses")}
+			</span>
+			<Select value={chosen?.url ?? ""} onValueChange={onPick} disabled={busy}>
+				<SelectTrigger
+					aria-label={t("connectors.caldav.pick", "Calendar")}
+					className="h-8 w-56 text-xs"
+				>
+					<SelectValue
+						placeholder={t(
+							"connectors.caldav.pickPlaceholder",
+							"Pick a calendar",
+						)}
+					/>
+				</SelectTrigger>
+				<SelectContent>
+					{calendars.map((calendar: IBotConnectorCalendar) => (
+						<SelectItem key={calendar.url} value={calendar.url}>
+							{calendar.writable
+								? calendar.name
+								: t("connectors.caldav.readOnlyName", "{{name}} (read only)", {
+										name: calendar.name,
+									})}
+						</SelectItem>
+					))}
+				</SelectContent>
+			</Select>
+		</div>
 	);
 }
 
@@ -583,13 +664,284 @@ function AddAccount({
 	);
 }
 
+function CalDavField({
+	id,
+	label,
+	children,
+}: Readonly<{ id: string; label: string; children: ReactNode }>) {
+	return (
+		<div className="flex flex-col gap-1">
+			<Label htmlFor={id} className="text-xs text-muted-foreground">
+				{label}
+			</Label>
+			{children}
+		</div>
+	);
+}
+
+function CalDavHelp({ preset }: Readonly<{ preset: CalDavPresetId }>) {
+	const { t } = useTranslation("bots");
+	const help: Record<CalDavPresetId, string> = {
+		icloud: t(
+			"connectors.caldav.help.icloud",
+			"Use your Apple ID email and an app-specific password, not your Apple ID password. Create one at account.apple.com under Sign-In and Security, App-Specific Passwords.",
+		),
+		nextcloud: t(
+			"connectors.caldav.help.nextcloud",
+			"Replace <host> with your Nextcloud address. Create an app password under Settings, Security, Devices & sessions.",
+		),
+		fastmail: t(
+			"connectors.caldav.help.fastmail",
+			"Use your Fastmail address and an app password with CalDAV access from Settings, Privacy & Security.",
+		),
+		mailbox: t(
+			"connectors.caldav.help.mailbox",
+			"Use your mailbox.org address. With two-factor sign-in on, create an app password first.",
+		),
+		posteo: t(
+			"connectors.caldav.help.posteo",
+			"Use your Posteo address and password.",
+		),
+		synology: t(
+			"connectors.caldav.help.synology",
+			"Replace <nas> with your NAS address. Port 5001 is the default for the Calendar package.",
+		),
+		radicale: t(
+			"connectors.caldav.help.radicale",
+			"Only works for a bot on your computer when the server runs there or in your network.",
+		),
+		other: t(
+			"connectors.caldav.help.other",
+			"Enter the CalDAV address your provider lists. The bot finds your calendars from it.",
+		),
+	};
+	return <p className="text-xs text-muted-foreground">{help[preset]}</p>;
+}
+
+type CalDavStep = { stage: "form" } | { stage: "connected"; id: string };
+
+function AddCalDav({
+	botId,
+	onDone,
+}: Readonly<{ botId: string; onDone: () => void }>) {
+	const { t } = useTranslation("bots");
+	const action = useBotConnectorAction();
+	const connectors = useBotConnectors(botId);
+	const [step, setStep] = useState<CalDavStep>({ stage: "form" });
+	const [preset, setPreset] = useState<CalDavPresetId>("icloud");
+	const [label, setLabel] = useState("iCloud");
+	const [address, setAddress] = useState(caldavPreset("icloud").address);
+	const [username, setUsername] = useState("");
+	const [password, setPassword] = useState("");
+	const [error, setError] = useState<string | null>(null);
+	const form = { label, address, username, password };
+	const choose = (id: CalDavPresetId) => {
+		const next = caldavPreset(id);
+		setPreset(id);
+		setAddress(next.address);
+		if (next.name) setLabel(next.name);
+	};
+	const connect = () => {
+		setError(null);
+		action.mutate(
+			{
+				botId,
+				action: { type: "create", request: calDavCreateRequest(form) },
+			},
+			{
+				onSuccess: (created) => {
+					setPassword("");
+					action.reset();
+					if (created) setStep({ stage: "connected", id: created.id });
+					else onDone();
+				},
+				onError: (failure) => {
+					setError(failure.message);
+					action.reset();
+				},
+			},
+		);
+	};
+	if (step.stage === "connected") {
+		const connector = (connectors.data ?? []).find(
+			(item) => item.id === step.id,
+		);
+		return (
+			<div className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-3">
+				{connector && (
+					<>
+						<CalendarPicker
+							connector={connector}
+							busy={action.isPending}
+							onPick={(url) =>
+								action.mutate(
+									{
+										botId,
+										action: {
+											type: "update",
+											connectorId: connector.id,
+											request: { calendar_url: url },
+										},
+									},
+									{ onError: (failure) => toast.error(failure.message) },
+								)
+							}
+						/>
+						<AccountRows
+							connector={connector}
+							busy={action.isPending}
+							onChange={(policies) =>
+								action.mutate(
+									{
+										botId,
+										action: {
+											type: "update",
+											connectorId: connector.id,
+											request: { tool_policies: policies },
+										},
+									},
+									{ onError: (failure) => toast.error(failure.message) },
+								)
+							}
+						/>
+					</>
+				)}
+				<div className="flex justify-end">
+					<Button type="button" size="sm" onClick={onDone}>
+						{t("connectors.caldav.done", "Done")}
+					</Button>
+				</div>
+			</div>
+		);
+	}
+	return (
+		<form
+			className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-3"
+			onSubmit={(event) => {
+				event.preventDefault();
+				if (calDavFormReady(form) && !action.isPending) connect();
+			}}
+		>
+			<CalDavField
+				id="caldav-service"
+				label={t("connectors.caldav.service", "Service")}
+			>
+				<Select
+					value={preset}
+					onValueChange={(id) => choose(id as CalDavPresetId)}
+				>
+					<SelectTrigger
+						id="caldav-service"
+						aria-label={t("connectors.caldav.service", "Service")}
+						className="h-8 text-sm"
+					>
+						<SelectValue />
+					</SelectTrigger>
+					<SelectContent>
+						{CALDAV_PRESETS.map((item) => (
+							<SelectItem key={item.id} value={item.id}>
+								{item.id === "other"
+									? t("connectors.caldav.other", "Other CalDAV server")
+									: item.name}
+							</SelectItem>
+						))}
+					</SelectContent>
+				</Select>
+			</CalDavField>
+			<CalDavHelp preset={preset} />
+			<CalDavField
+				id="caldav-label"
+				label={t("connectors.caldav.label", "Name")}
+			>
+				<Input
+					id="caldav-label"
+					value={label}
+					onChange={(event) => setLabel(event.target.value)}
+					className="h-8 text-sm"
+				/>
+			</CalDavField>
+			<CalDavField
+				id="caldav-address"
+				label={t("connectors.caldav.address", "Server address")}
+			>
+				<Input
+					id="caldav-address"
+					value={address}
+					onChange={(event) => setAddress(event.target.value)}
+					placeholder="https://calendar.example.com/dav/"
+					autoComplete="off"
+					className="h-8 font-mono text-sm"
+				/>
+			</CalDavField>
+			<CalDavField
+				id="caldav-user"
+				label={t("connectors.caldav.user", "User name")}
+			>
+				<Input
+					id="caldav-user"
+					value={username}
+					onChange={(event) => setUsername(event.target.value)}
+					autoComplete="off"
+					className="h-8 text-sm"
+				/>
+			</CalDavField>
+			<CalDavField
+				id="caldav-password"
+				label={t("connectors.caldav.password", "Password")}
+			>
+				<Input
+					id="caldav-password"
+					type="password"
+					value={password}
+					onChange={(event) => setPassword(event.target.value)}
+					autoComplete="new-password"
+					className="h-8 text-sm"
+				/>
+			</CalDavField>
+			<p className="text-xs text-muted-foreground">
+				{t(
+					"connectors.caldav.passwordNote",
+					"Stored sealed and never shown again. Use an app password where your service offers one.",
+				)}
+			</p>
+			{error && (
+				<p role="alert" className="text-xs text-destructive">
+					{error}
+					{isCalDavSignInError(error) &&
+						` ${t(
+							"connectors.caldav.signInHint",
+							"Check the user name and the password. Most services need an app password, not your normal one.",
+						)}`}
+				</p>
+			)}
+			<div className="flex justify-end gap-2">
+				<Button type="button" variant="ghost" size="sm" onClick={onDone}>
+					{t("connectors.cancel", "Cancel")}
+				</Button>
+				<Button
+					type="submit"
+					size="sm"
+					disabled={!calDavFormReady(form) || action.isPending}
+				>
+					{action.isPending && (
+						<Loader2Icon className="animate-spin" aria-hidden />
+					)}
+					{t("connectors.caldav.connect", "Connect")}
+				</Button>
+			</div>
+		</form>
+	);
+}
+
 /** The MCP servers and accounts the bot may use, with what each tool may do unasked. */
 export function BotConnectorsCard({
 	botId,
 }: Readonly<{ botId: string | null }>) {
 	const { t } = useTranslation("bots");
 	const connectors = useBotConnectors(botId);
-	const [adding, setAdding] = useState<"mcp" | "account" | null>(null);
+	const [adding, setAdding] = useState<"mcp" | "account" | "caldav" | null>(
+		null,
+	);
 	if (!botId) {
 		return (
 			<p className="text-xs text-muted-foreground">
@@ -626,6 +978,9 @@ export function BotConnectorsCard({
 			{adding === "account" && (
 				<AddAccount botId={botId} onDone={() => setAdding(null)} />
 			)}
+			{adding === "caldav" && (
+				<AddCalDav botId={botId} onDone={() => setAdding(null)} />
+			)}
 			{adding === null && (
 				<div className="flex flex-wrap gap-2">
 					<Button
@@ -645,6 +1000,15 @@ export function BotConnectorsCard({
 					>
 						<PlusIcon aria-hidden />
 						{t("connectors.addAccount", "Add account")}
+					</Button>
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						onClick={() => setAdding("caldav")}
+					>
+						<PlusIcon aria-hidden />
+						{t("connectors.addCalDav", "Add calendar (CalDAV)")}
 					</Button>
 				</div>
 			)}

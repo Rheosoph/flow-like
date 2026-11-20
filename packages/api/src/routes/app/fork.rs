@@ -8,8 +8,10 @@ pub mod begin_offline;
 pub mod begin_online;
 pub mod finalize_online;
 pub mod jobs;
+pub mod offline_files;
 pub mod online_fork;
 pub mod preview;
+pub mod upload_online;
 
 /// Per-app fork endpoints. Mounted under `/apps/{app_id}/fork`.
 pub fn routes() -> Router<AppState> {
@@ -21,6 +23,9 @@ pub fn routes() -> Router<AppState> {
                 super::board::capabilities::negotiate_board_format,
             )),
         )
+        .route("/offline/files", get(offline_files::offline_fork_files))
+        .route("/online/upload-urls", post(upload_online::upload_urls))
+        .route("/online/adopt", post(upload_online::adopt_upload))
         .route(
             "/online/finalize",
             post(finalize_online::finalize_online_fork),
@@ -33,6 +38,11 @@ pub fn routes() -> Router<AppState> {
 /// the desktop.
 pub fn root_routes() -> Router<AppState> {
     Router::new()
-        .route("/fork/online/begin", post(begin_online::begin_online_fork))
+        .route(
+            "/fork/online/begin",
+            post(begin_online::begin_online_fork).layer(axum::extract::DefaultBodyLimit::max(
+                begin_online::BEGIN_BODY_LIMIT,
+            )),
+        )
         .route("/fork/jobs/{job_id}", get(jobs::get_fork_job))
 }

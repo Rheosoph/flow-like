@@ -1,0 +1,34 @@
+/// An external database an app's queries read as `<alias>.<table>`. The connection settings
+/// are plain JSON; the credentials are sealed by `data_source_secrets.rs` and never returned.
+model AppDataSource {
+  id String @id @default(cuid())
+
+  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String
+
+  name   String
+  /// SQL schema name: lowercase letters, digits and _, unique per app.
+  alias  String
+  /// `postgres`, `mysql`, `clickhouse`, `bigquery` or `athena`.
+  driver String
+  /// The driver's non-secret settings (host, port, database, schema, ssl_mode, project_id, …).
+  config Json   @default("{}")
+
+  /// `v1:<provider>:<key id>:<ciphertext>`; null while no credentials are stored.
+  secret       String?
+  /// `<provider>:<key id>` of the sealer that wrote `secret`, so a job can find and re-wrap records.
+  sealedBy     String?
+  /// Names of the sealed fields (`username`, `password`, …), never their values.
+  secretFields Json    @default("[]")
+
+  createdBy String
+
+  lastCheckedAt   DateTime? @db.Timestamptz(3)
+  /// `ok`, or the error of the last connection check.
+  lastCheckStatus String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([appId, alias])
+}

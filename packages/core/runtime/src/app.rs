@@ -207,13 +207,21 @@ pub struct App {
     #[serde(default)]
     pub allow_forking: bool,
 
-    /// For forked apps: the source app's id (for lineage / attribution).
+    /// For forked apps: the app this one was forked from. Duplicating or
+    /// uploading a fork keeps it, so it names where upstream changes come from.
     #[serde(default)]
     pub forked_from: Option<String>,
 
     /// For forked apps: when the fork was created.
     #[serde(default)]
     pub forked_at: Option<SystemTime>,
+
+    /// For forked apps: the [`remap::derive_id`] seeds that carried the ids
+    /// of `forked_from` into this app, oldest first (see
+    /// [`remap::derive_lineage_id`]). `Some(vec![])` means the ids were
+    /// copied unchanged; `None` means the mapping was never recorded.
+    #[serde(default)]
+    pub fork_id_seeds: Option<Vec<String>>,
 
     /// Set on a bot's workspace: the id of the bot it belongs to. App lists hide such apps.
     #[serde(default)]
@@ -261,6 +269,7 @@ impl Clone for App {
             allow_forking: self.allow_forking,
             forked_from: self.forked_from.clone(),
             forked_at: self.forked_at,
+            fork_id_seeds: self.fork_id_seeds.clone(),
             bot_id: self.bot_id.clone(),
             refuse_bots: self.refuse_bots,
         }
@@ -312,6 +321,7 @@ impl App {
             allow_forking: false,
             forked_from: None,
             forked_at: None,
+            fork_id_seeds: None,
             bot_id: None,
             refuse_bots: false,
             app_state: Some(app_state.clone()),
@@ -494,6 +504,36 @@ impl App {
             board_id: board.id,
             pages,
         })
+    }
+
+    /// Add `board` under the board, node, pin and layer ids it already carries. Only for graphs
+    /// whose ids the caller minted itself, like an upload the server re-keyed with
+    /// [`remap::remap_board`]; a graph straight from a client goes through
+    /// [`Self::create_board`], which mints fresh ids.
+    pub async fn create_board_with_ids(
+        &mut self,
+        mut board: Board,
+    ) -> flow_like_types::Result<String> {
+        if self.boards.contains(&board.id) {
+            return Err(flow_like_types::anyhow!(
+                "board {} already exists in app {}",
+                board.id,
+                self.id
+            ));
+        }
+        board.ensure_supported_format()?;
+        board.validate_geometry_contracts()?;
+        board.app_state = Some(
+            self.app_state
+                .clone()
+                .ok_or(flow_like_types::anyhow!("App state not found"))?,
+        );
+        board.board_dir = Path::from("apps").join(self.id.clone());
+        board.mark_changed();
+        board.save(None).await?;
+        self.boards.push(board.id.clone());
+        self.updated_at = SystemTime::now();
+        Ok(board.id)
     }
 
     pub async fn boards_configured(&self) -> bool {
@@ -1543,8 +1583,9 @@ mod tests {
             page_ids: vec![],
             packages: std::collections::HashMap::new(),
             allow_forking: false,
-            forked_from: None,
+            forked_from: Some("source".to_string()),
             forked_at: None,
+            fork_id_seeds: Some(vec!["seed_a".to_string(), "seed_b".to_string()]),
             bot_id: Some("bot_workspace".to_string()),
             refuse_bots: true,
         };
@@ -1556,6 +1597,25 @@ mod tests {
         assert_eq!(app.id, deser.id);
         assert_eq!(app.bot_id, deser.bot_id);
         assert!(deser.refuse_bots);
+        assert_eq!(app.forked_from, deser.forked_from);
+        assert_eq!(app.fork_id_seeds, deser.fork_id_seeds);
+    }
+
+    /// Absent and empty seeds mean different things — "mapping unknown"
+    /// versus "ids copied unchanged" — so both must survive a save.
+    #[test]
+    fn fork_id_seeds_keep_absent_apart_from_empty() {
+        for seeds in [None, Some(vec![])] {
+            let proto = flow_like_types::proto::App {
+                fork_id_seeds: seeds.clone().map(|seeds| flow_like_types::proto::ForkIdSeeds { seeds }),
+                ..Default::default()
+            };
+            let mut buf = Vec::new();
+            proto.encode(&mut buf).unwrap();
+            let deser =
+                super::App::from_proto(flow_like_types::proto::App::decode(&buf[..]).unwrap());
+            assert_eq!(deser.fork_id_seeds, seeds);
+        }
     }
 
     /// The `frontend` slot shipped for a long time without ever surviving a
@@ -1969,6 +2029,63 @@ mod tests {
 
         assert!(created.pages.is_empty());
         assert_eq!(board.page_ids, vec!["page-one", "page-two"]);
+    }
+
+    /// The offline-to-online upload once the server re-keys it: the board keeps the ids the remap
+    /// minted, so an event naming one of its nodes still validates and lands on the minted id.
+    #[tokio::test]
+    async fn create_board_with_ids_keeps_remapped_ids_for_events() {
+        use crate::app::remap::{ForkIdMap, derive_id, remap_board, remap_event};
+        use crate::flow::event::Event;
+
+        let (mut app, _state) = page_test_app("upload-remap-test-app").await;
+        let mut device = Board::new_detached(Some("device-board".to_string()), Path::from("unused"));
+        let node = Node::new("events_simple", "Simple Event", "", "Events");
+        let device_node = node.id.clone();
+        device.nodes.insert(device_node.clone(), node);
+
+        let mut maps = ForkIdMap {
+            source_app_id: "device-app".to_string(),
+            app_id: app.id.clone(),
+            seed: "upload-job".to_string(),
+            ..Default::default()
+        };
+        maps.nodes
+            .insert(device_node.clone(), maps.mint(&device_node));
+        let remapped = remap_board(device.to_proto(), &mut maps).unwrap();
+        let board_id = app
+            .create_board_with_ids(Board::from_proto(remapped.clone()))
+            .await
+            .unwrap();
+        assert_eq!(board_id, derive_id("upload-job", "device-board"));
+        assert!(
+            app.create_board_with_ids(Board::from_proto(remapped))
+                .await
+                .is_err(),
+            "an existing board is never replaced"
+        );
+
+        let mut event = flow_like_types::proto::Event {
+            id: "device-event".to_string(),
+            board_id: "device-board".to_string(),
+            node_id: device_node.clone(),
+            active: true,
+            event_type: "simple".to_string(),
+            ..Default::default()
+        };
+        remap_event(&mut event, &maps);
+        let saved = app
+            .upsert_event(Event::from_proto(event), None, Some(true))
+            .await
+            .unwrap();
+        assert_eq!(saved.id, derive_id("upload-job", "device-event"));
+        assert_eq!(saved.node_id, derive_id("upload-job", &device_node));
+        let stored = app
+            .open_board(board_id, Some(false), None)
+            .await
+            .unwrap()
+            .snapshot();
+        assert!(stored.nodes.contains_key(&saved.node_id));
     }
 
     /// `Page.id` is a global primary key, so page ids that belong to a different board must never

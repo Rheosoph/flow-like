@@ -5,7 +5,9 @@ edition = "2024"
 
 [dependencies]
 flow-like = { workspace = true, features = ["app-runtime"] }
-flow-like-api = { workspace = true, features = ["kubernetes", "redis", "cosmos", "azure", "smtp", "sendgrid", "forecasting"] }
+flow-like-api = { workspace = true, features = ["kubernetes", "redis", "cosmos", "azure", "smtp", "sendgrid", "query-in-process"] }
+# Local runs the query service in-process, forecasts included; the API itself never runs the engine.
+flow-like-query = { workspace = true, features = ["forecast"] }
 flow-like-secrets.workspace = true
 flow-like-types.workspace = true
 flow-like-storage.workspace = true

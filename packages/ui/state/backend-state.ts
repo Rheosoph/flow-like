@@ -32,6 +32,7 @@ import type {
 	IScopedFlowScriptResponse,
 } from "./backend-state/board-state";
 import type { IBotState } from "./backend-state/bot-state";
+import type { IDataSourceState } from "./backend-state/data-source-state";
 import type { IDatabaseState } from "./backend-state/db-state";
 import {
 	EmptyAIState,
@@ -40,6 +41,7 @@ import {
 	EmptyAppState,
 	EmptyBitState,
 	EmptyBoardState,
+	EmptyDataSourceState,
 	EmptyDatabaseState,
 	EmptyEventState,
 	EmptyGraphState,
@@ -234,6 +236,7 @@ export type {
 	IPrerunEventResponse,
 	IUserLookup,
 } from "./backend-state/types";
+export * from "./backend-state/data-source-state";
 export * from "./backend-state/db-state";
 export * from "./backend-state/graph-state";
 export * from "./backend-state/query-state";
@@ -278,6 +281,8 @@ export interface IBackendState {
 	dbState: IDatabaseState;
 	graphState: IGraphState;
 	queryState: IQueryState;
+	/** External databases an app's queries read; online apps only. */
+	dataSourceState: IDataSourceState;
 	widgetState: IWidgetState;
 	pageState: IPageState;
 	routeState: IAppRouteState;
@@ -370,6 +375,7 @@ const serverBackend: IBackendState = {
 	dbState: new EmptyDatabaseState(),
 	graphState: new EmptyGraphState(),
 	queryState: new EmptyQueryState(),
+	dataSourceState: new EmptyDataSourceState(),
 	widgetState: new Proxy(
 		{},
 		{

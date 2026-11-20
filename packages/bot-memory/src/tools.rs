@@ -1,6 +1,7 @@
 //! The bot's memory tools: read the history around a pointer, open a stored part, search the
 //! history and the memory, expand a summary, save and forget facts. Every output is capped and
-//! paginated; writes wait for the user's confirmation while untrusted content is in context.
+//! paginated. While untrusted content is in context, saved facts keep tool trust, and profile
+//! facts, preferences and forgetting wait for the user's confirmation.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -692,8 +693,9 @@ pub async fn summary_expand(
     })
 }
 
-/// Whether a write may go ahead now. Tool, web or mail content in the context could have asked
-/// for it, so then the user confirms first.
+/// Whether a write may go ahead with the evidence's own trust. Tool, web or mail content in the
+/// context could have asked for it: a save then keeps tool trust, while profile facts,
+/// preferences and forgetting wait for the user to confirm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WriteGate {
     pub untrusted_in_context: bool,
@@ -745,6 +747,8 @@ pub enum WriteOutcome<T> {
 
 /// Saves a fact the conversation asked to remember, with `evidence` (normally the user's last
 /// message) as its pointer. Only the user's own words can become profile facts or preferences.
+/// Behind a closed gate other facts are still saved, as tool content: a background turn that
+/// read the web can keep its own notes without a user there to confirm them.
 /// The write runs under the engine's lease: it waits for the engine's other memory work and
 /// retries for up to 30 seconds while another engine holds the lease.
 pub async fn memory_save(
@@ -787,7 +791,7 @@ pub async fn memory_save(
         .as_deref()
         .and_then(FactKind::parse)
         .unwrap_or(FactKind::Knowledge);
-    let source = evidence.role.trust();
+    let mut source = evidence.role.trust();
     let participant = (evidence.role == Role::External)
         .then_some(evidence.speaker.as_ref())
         .flatten();
@@ -800,7 +804,10 @@ pub async fn memory_save(
         });
     }
     if !gate.allows() {
-        return Ok(WriteOutcome::NeedsConfirmation { preview: text });
+        if kind.is_personal() {
+            return Ok(WriteOutcome::NeedsConfirmation { preview: text });
+        }
+        source = FactSource::ToolUntrusted;
     }
     let subject = normalize_subject(args.subject.as_deref().unwrap_or("user"));
     let (text, subject) = match participant {

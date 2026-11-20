@@ -155,6 +155,44 @@ compiler:
   tolerations: []
   affinity: {}
 
+# Query service: runs every data read (SQL, graph, table browsing) outside the API.
+# It holds no storage or database credentials; the API sends short-lived scoped ones per request.
+query:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ghcr.io/rheosoph/flow-like-docker-compose-query
+    tag: dev
+    digest: ""
+    pullPolicy: Always
+  service:
+    port: 8090
+  maxRows: 10000
+  maxTimeoutMs: 50000
+  # 60 % of resources.limits.memory (4Gi); sorts and aggregates spill to the emptyDir before this is reached.
+  memoryBytes: 2576980377
+  spillMaxBytes: 4294967296
+  spillSizeLimit: 4Gi
+  # Forecasting checkpoints, downloaded once per pod; the emptyDir leaves room for one download in flight.
+  modelCacheMaxBytes: 4294967296
+  modelCacheSizeLimit: 5Gi
+  # Self-hosted databases usually sit on private networks; public-only egress otherwise.
+  allowPrivateNetworks: true
+  # Extra NetworkPolicy egress rules for external data sources on private networks (when networkPolicy.enabled).
+  extraEgress: []
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "4Gi"
+      cpu: "2"
+  autoscaling:
+    enabled: false
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # Run reply channels. setup-config.py creates separate broker trust and API signer Secrets.
 channels:
   transport: nats
@@ -1000,7 +1038,7 @@ rustfs:
       requests: {cpu: "100m", memory: "128Mi"}
       limits: {cpu: "500m", memory: "256Mi"}
   gateway:
-    image: nginx:1.30.4-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
+    image: nginx:1.30.7-alpine@sha256:caf4e1e032a20f9c3c5e28fc7f25ffd768ad8677b4975c54193075997b3a97e3
     replicaCount: 2
     resources:
       requests: {cpu: "50m", memory: "32Mi"}

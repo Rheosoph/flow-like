@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 #[cfg(feature = "aws")]
@@ -10,6 +11,7 @@ use flow_like::flow::execution::ExecutionEnvironment;
 use flow_like::flow_like_model_provider::egress::ProviderEgress;
 use flow_like::flow_like_storage::files::store::FlowLikeStore;
 use flow_like::state::FlowLikeState;
+use flow_like_storage::lance::session::Session as LanceSession;
 use flow_like_storage::lancedb::connection::ConnectBuilder;
 use flow_like_types::Result;
 use flow_like_types::async_trait;
@@ -34,6 +36,16 @@ pub mod local_credentials;
 pub mod mixed_credentials;
 #[cfg(feature = "r2")]
 pub mod r2_credentials;
+
+/// One Lance session for every table this process opens, so a warm instance
+/// keeps manifests, file metadata and indexes between requests. Object stores
+/// stay keyed by their storage options, so each credential keeps its own client,
+/// and every open still resolves the latest table version from storage.
+fn process_lance_session() -> Arc<LanceSession> {
+    static SESSION: LazyLock<Arc<LanceSession>> =
+        LazyLock::new(|| FlowLikeState::retained_lance_session(None));
+    SESSION.clone()
+}
 
 /// Validates that a path component (sub, app_id) does not contain path traversal
 /// or injection characters. Allows alphanumeric, hyphens, underscores, and dots.
@@ -393,7 +405,7 @@ impl RuntimeCredentials {
     }
 
     pub async fn to_db(&self, app_id: &str) -> Result<ConnectBuilder> {
-        match self {
+        let builder = match self {
             #[cfg(feature = "aws")]
             RuntimeCredentials::Aws(aws) => aws.to_db(app_id).await,
             #[cfg(feature = "azure")]
@@ -403,11 +415,12 @@ impl RuntimeCredentials {
             #[cfg(feature = "r2")]
             RuntimeCredentials::R2(r2) => r2.to_db(app_id).await,
             RuntimeCredentials::Mixed(mixed) => mixed.to_db(app_id).await,
-        }
+        }?;
+        Ok(builder.session(process_lance_session()))
     }
 
     pub async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
-        match self {
+        let builder = match self {
             #[cfg(feature = "aws")]
             RuntimeCredentials::Aws(aws) => aws.to_db_scoped(sub, app_id).await,
             #[cfg(feature = "azure")]
@@ -417,7 +430,8 @@ impl RuntimeCredentials {
             #[cfg(feature = "r2")]
             RuntimeCredentials::R2(r2) => r2.to_db_scoped(sub, app_id).await,
             RuntimeCredentials::Mixed(mixed) => mixed.to_db_scoped(sub, app_id).await,
-        }
+        }?;
+        Ok(builder.session(process_lance_session()))
     }
 
     #[instrument(skip(self, state), level = "debug")]

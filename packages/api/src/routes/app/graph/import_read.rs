@@ -1,8 +1,9 @@
 use crate::{
     ensure_any_permission,
     error::ApiError,
-    middleware::jwt::AppUser,
+    middleware::jwt::{AppPermissionResponse, AppUser},
     permission::role_permission::RolePermissions,
+    query::{self, LanceRead, QueryRows},
     routes::app::db::{ScopeParams, resolve_connection},
     state::AppState,
 };
@@ -11,15 +12,14 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like_catalog_core::DEFAULT_GRAPH_SAMPLE_SIZE;
+use flow_like_query::{Operation, QueryShape, SurfaceSpec, graph::GraphOperation};
 use flow_like_storage::contracts::column_metadata::ColumnReader;
 use flow_like_storage::databases::graph::lancegraph::{self, RemoteOntologyImportDef};
-use flow_like_storage::databases::workbench::{self, WorkbenchSurface};
-use flow_like_storage::lancedb::Connection;
 use flow_like_types::Value;
 use utoipa::ToSchema;
 
-/// Resolves an installed remote ontology and opens a read connection to the
-/// producing project.
+/// Resolves an installed remote ontology and the columns the consumer may read
+/// of the producing project.
 ///
 /// The consumer never receives raw producer coordinates; access is authorized
 /// through the pinned import record. Both the active connection and the source's
@@ -31,7 +31,7 @@ async fn open_import_target(
     user: &AppUser,
     app_id: &str,
     import_id: &str,
-) -> Result<(RemoteOntologyImportDef, Connection, ColumnReader), ApiError> {
+) -> Result<(RemoteOntologyImportDef, ColumnReader), ApiError> {
     let local = resolve_connection(state, user, app_id, &ScopeParams::default()).await?;
     let import = lancegraph::find_ontology_import(&local, import_id)
         .await?
@@ -70,7 +70,22 @@ async fn open_import_target(
         ));
     }
 
-    Ok((import, target, reader))
+    Ok((import, reader))
+}
+
+/// The producing project's database, read under the consumer's principal with the columns
+/// the connection grants.
+fn producer_read(
+    import: &RemoteOntologyImportDef,
+    permission: &AppPermissionResponse,
+    reader: ColumnReader,
+) -> LanceRead {
+    LanceRead {
+        app_id: import.target_app_id.clone(),
+        principal: permission.identifier(),
+        owner: None,
+        reader,
+    }
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -97,9 +112,12 @@ fn default_n() -> usize {
     ),
     responses(
         (status = 200, description = "Sample rows from the remote object", body = Vec<flow_like_types::Value>),
+        (status = 400, description = "The label is not part of the contract, or the sample failed"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Bindings disabled or exposure revoked"),
-        (status = 404, description = "Installed ontology or label not found")
+        (status = 404, description = "Installed ontology not found"),
+        (status = 503, description = "The query service is unavailable"),
+        (status = 504, description = "The sample ran out of time")
     ),
     security(
         ("bearer_auth" = []),
@@ -117,7 +135,7 @@ pub async fn sample_import(
     Path((app_id, import_id)): Path<(String, String)>,
     Query(params): Query<ImportSampleParams>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    ensure_any_permission!(
+    let permission = ensure_any_permission!(
         user,
         &app_id,
         &state,
@@ -125,10 +143,19 @@ pub async fn sample_import(
         RolePermissions::ReadDatabase
     );
 
-    let (import, target, reader) = open_import_target(&state, &user, &app_id, &import_id).await?;
-    let contract = lancegraph::restrict_overlay(&target, import.contract, &reader).await?;
-    let results =
-        lancegraph::sample_overlay(&target, &contract, &params.label, params.n.min(500)).await?;
+    let (import, reader) = open_import_target(&state, &user, &app_id, &import_id).await?;
+    let read = producer_read(&import, &permission, reader);
+    let results = super::read_graph(
+        &state,
+        &user,
+        &read,
+        GraphOperation::Sample {
+            overlay: Box::new(import.contract),
+            label: params.label,
+            n: params.n.min(super::MAX_SAMPLE_ROWS),
+        },
+    )
+    .await?;
 
     Ok(Json(results))
 }
@@ -174,8 +201,8 @@ pub async fn query_import(
     Extension(user): Extension<AppUser>,
     Path((app_id, import_id)): Path<(String, String)>,
     Json(payload): Json<ImportQueryPayload>,
-) -> Result<Json<workbench::SqlQueryResult>, ApiError> {
-    ensure_any_permission!(
+) -> Result<Json<QueryRows>, ApiError> {
+    let permission = ensure_any_permission!(
         user,
         &app_id,
         &state,
@@ -183,18 +210,23 @@ pub async fn query_import(
         RolePermissions::ReadDatabase
     );
 
-    let (import, target, reader) = open_import_target(&state, &user, &app_id, &import_id).await?;
-    let params = payload.params.unwrap_or(Value::Null);
-    let result = workbench::execute_readonly_sql(
-        &target,
-        WorkbenchSurface::RemoteOverlay(import.contract),
-        Vec::new(),
-        &payload.sql,
-        &params,
-        payload.limit,
-        &reader,
-    )
-    .await?;
-
-    Ok(Json(result))
+    let (import, reader) = open_import_target(&state, &user, &app_id, &import_id).await?;
+    let read = producer_read(&import, &permission, reader);
+    let request = query::request(
+        vec![state.query.lance_source(&state, &read, None).await?],
+        query::workbench_rows(payload.limit),
+        Operation::Sql {
+            sql: payload.sql,
+            params: payload.params.unwrap_or(Value::Null),
+            shape: QueryShape::Workbench {
+                surface: SurfaceSpec::RemoteOverlay {
+                    overlay: Box::new(import.contract),
+                },
+                views: Vec::new(),
+            },
+            reuse_if_unchanged: None,
+        },
+    );
+    let response = state.query.run(&query::subject(&user), &request).await?;
+    Ok(Json(QueryRows::from_response(&response)?))
 }

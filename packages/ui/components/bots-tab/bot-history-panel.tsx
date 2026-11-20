@@ -21,9 +21,9 @@ function segmentsKey(botId: string) {
 	return ["bot-history", "segments", botId] as const;
 }
 
-function formatRange(from: number, to: number): string {
-	const first = new Date(from).toLocaleDateString();
-	const last = new Date(to).toLocaleDateString();
+function formatRange(from: number, to: number, locale: string): string {
+	const first = new Date(from).toLocaleDateString(locale);
+	const last = new Date(to).toLocaleDateString(locale);
 	return first === last ? first : `${first} – ${last}`;
 }
 
@@ -35,7 +35,8 @@ export function BotHistoryPanel({
 	botId,
 	name,
 }: Readonly<{ botId: string; name: string }>) {
-	const { t } = useTranslation("bots");
+	const { t, i18n } = useTranslation("bots");
+	const locale = i18n.resolvedLanguage ?? i18n.language;
 	const queryClient = useQueryClient();
 	const [busy, setBusy] = useState(false);
 	const windowed = useBotHistoryStore((state) => state.views[botId]?.windowed);
@@ -51,7 +52,7 @@ export function BotHistoryPanel({
 	const rows = useMemo(() => {
 		const summarised = jumpList(segments.data ?? [], (from) =>
 			t("history.untitled", "Chat of {{date}}", {
-				date: from.toLocaleDateString(),
+				date: from.toLocaleDateString(locale),
 			}),
 		);
 		const fresh = (topics ?? [])
@@ -65,7 +66,7 @@ export function BotHistoryPanel({
 				to: mark.at,
 			}));
 		return [...fresh.reverse(), ...summarised];
-	}, [segments.data, topics, t]);
+	}, [segments.data, topics, t, locale]);
 
 	const run = useCallback(
 		async (action: () => Promise<boolean>) => {
@@ -161,7 +162,7 @@ export function BotHistoryPanel({
 							>
 								<span className="line-clamp-1 text-sm">{row.title}</span>
 								<span className="text-[11px] text-muted-foreground">
-									{formatRange(row.from, row.to)} · #{row.seqFrom}
+									{formatRange(row.from, row.to, locale)} · #{row.seqFrom}
 								</span>
 							</button>
 						</li>

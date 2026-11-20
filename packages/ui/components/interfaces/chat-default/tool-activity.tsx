@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
+import type { TFunction } from "i18next";
 import AppWindow from "lucide-react/dist/esm/icons/app-window.js";
 import ChevronDown from "lucide-react/dist/esm/icons/chevron-down.js";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right.js";
@@ -22,6 +24,7 @@ import { ComputerPermissionCard } from "../../global-chat/computer-permission-ca
 import { AppReferenceChip } from "./app-references";
 import type { IPlanStep, IToolActivityDetail } from "./chat-db";
 import { ReasoningBody } from "./reasoning-viewer";
+import { translateToolActivityLabel } from "./tool-activity-i18n";
 import { TerminalCard } from "./tool-terminal";
 
 export type ActivitySource = NonNullable<
@@ -39,7 +42,10 @@ const ACTIVITY_ICONS = {
 	tool: Wrench,
 };
 
-export function stepActivityTitle(step: IPlanStep): string {
+export function stepActivityTitle(
+	step: IPlanStep,
+	t: TFunction<"chat">,
+): string {
 	const title = step.title.replace(/^(?:↳\s*)+/, "");
 	const isToolLabel =
 		title === `Using ${step.toolName}` ||
@@ -49,11 +55,12 @@ export function stepActivityTitle(step: IPlanStep): string {
 		title === "Step" ||
 		title === "Working";
 	if (step.title && !isToolLabel) return step.title;
-	if (step.detail?.kind === "tool_activity") return step.detail.label;
+	if (step.detail?.kind === "tool_activity")
+		return translateToolActivityLabel(step.detail.label, t);
 	if (step.toolName) {
-		return getToolActivityLabel(step.toolName);
+		return translateToolActivityLabel(getToolActivityLabel(step.toolName), t);
 	}
-	return step.title;
+	return translateToolActivityLabel(step.title, t);
 }
 
 /** Use only a public hostname for the icon service, never the request path or query. */
@@ -141,6 +148,7 @@ function AppActionChip({
 	eventType?: string;
 	mcpTool?: string;
 }>) {
+	const { t } = useTranslation("chat");
 	const backend = useBackend();
 	const event = useInvoke(
 		backend.eventState.getEvent,
@@ -151,7 +159,7 @@ function AppActionChip({
 	const name =
 		event.data?.name?.trim() ||
 		eventName ||
-		(eventType ? humanize(eventType) : "Action");
+		(eventType ? humanize(eventType) : t("toolActivity.action", "Action"));
 	const description = event.data?.description?.trim();
 	return (
 		<span className={CHIP_CLASS} title={description || name}>
@@ -232,6 +240,7 @@ const SITE_ICON_LIMIT = 4;
 
 /** Keep the sites visible even after the completed activity group folds away. */
 export function ActivitySources({ steps }: { steps: IPlanStep[] }) {
+	const { t } = useTranslation("chat");
 	const sites = new Map<string, ActivitySource>();
 	for (const step of steps) {
 		if (step.detail?.kind !== "tool_activity") continue;
@@ -256,7 +265,11 @@ export function ActivitySources({ steps }: { steps: IPlanStep[] }) {
 				))}
 			</span>
 			<span className="truncate tabular-nums">
-				{sites.size} {sites.size === 1 ? "website" : "websites"}
+				{t("toolActivity.websites", {
+					count: sites.size,
+					defaultValue_one: "{{count}} website",
+					defaultValue_other: "{{count}} websites",
+				})}
 			</span>
 		</span>
 	);
@@ -290,13 +303,14 @@ export function ToolActivityRow({
 	statusIcon: ReactNode;
 	duration: string | null;
 }) {
+	const { t } = useTranslation("chat");
 	const Icon = ACTIVITY_ICONS[detail.category] ?? Wrench;
 	const reasoningId = useId();
 	const hasReasoning = Boolean(step.reasoning?.trim());
 	const app = activityApp(detail);
 	const context =
 		detail.query ?? (app?.id === detail.target ? undefined : detail.target);
-	const title = stepActivityTitle(step);
+	const title = stepActivityTitle(step, t);
 	const note = activityNote(detail, step.description?.trim(), [
 		context,
 		title,
@@ -401,7 +415,7 @@ export function ToolActivityRow({
 									aria-controls={reasoningId}
 									className="ml-auto flex shrink-0 items-center gap-1 rounded text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
 								>
-									Details
+									{t("common:details", "Details")}
 									<ChevronDown
 										className={cn(
 											"size-3 transition-transform",

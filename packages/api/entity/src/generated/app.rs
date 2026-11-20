@@ -71,6 +71,8 @@ pub struct Model {
     #[sea_orm(has_many)]
     pub app_board_scores: HasMany<super::app_board_score::Entity>,
     #[sea_orm(has_many)]
+    pub app_data_sources: HasMany<super::app_data_source::Entity>,
+    #[sea_orm(has_many)]
     pub app_discounts: HasMany<super::app_discount::Entity>,
     #[sea_orm(has_many)]
     pub app_groups: HasMany<super::app_group::Entity>,

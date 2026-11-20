@@ -477,7 +477,7 @@ describe("the pill and the bot's panel", () => {
 		expect(pill()?.getAttribute("aria-expanded")).toBe("true");
 		expect(pill()?.getAttribute("aria-controls")).toBe(panel()?.id);
 		expect(panel()?.querySelector("h2")?.textContent).toBe("Assistant");
-		expect(tabs()).toEqual(["Details", "Memory"]);
+		expect(tabs()).toEqual(["Details", "Memory", "Calendar"]);
 		expect(activeTab()).toBe("Details");
 		expect(chatCovered()).toBe(true);
 
@@ -493,13 +493,13 @@ describe("the pill and the bot's panel", () => {
 		expect(pillName()).toBe("Scout");
 		expect(pill()?.textContent).toContain("Runs in the cloud");
 		await click(pill());
-		expect(tabs()).toEqual(["Details", "Files", "Data", "Memory"]);
+		expect(tabs()).toEqual(["Details", "Files", "Data", "Memory", "Calendar"]);
 		expect(panelButton("Open workspace") === undefined).toBe(false);
 
 		await click(buttonContaining("Writer", "Runs in the cloud"));
 		expect(panelOpen()).toBe(false);
 		await click(pill());
-		expect(tabs()).toEqual(["Details", "Memory"]);
+		expect(tabs()).toEqual(["Details", "Memory", "Calendar"]);
 		expect(panelButton("Open workspace") === undefined).toBe(true);
 		expect(getWorkspace).not.toHaveBeenCalled();
 	});
@@ -509,7 +509,7 @@ describe("the pill and the bot's panel", () => {
 		expect(pillName()).toBe("Pebble");
 		expect(pill()?.textContent).toContain("Local only");
 		await click(pill());
-		expect(tabs()).toEqual(["Details", "Files", "Memory"]);
+		expect(tabs()).toEqual(["Details", "Files", "Memory", "Calendar"]);
 		expect(panelText()).toContain("Where it runs");
 		expect(panelText()).toContain("Not connected to your account");
 		expect(panelText()).toContain(

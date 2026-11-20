@@ -16,6 +16,7 @@ export const BOT_PANEL_TABS = [
 	"data",
 	"computer",
 	"memory",
+	"calendar",
 	"mail",
 ] as const;
 export type BotPanelTab = (typeof BOT_PANEL_TABS)[number];
@@ -82,7 +83,38 @@ function usesComputer(capabilities: readonly BotCapability[]): boolean {
 	);
 }
 
-/** Details always; Files and Data need the ability and a workspace, Computer a browser or computer ability, Memory the ability. */
+/** What the Calendar tab can lay over each other for a bot row. */
+export interface BotCalendarReach {
+	/** Its own events and the connected calendars. */
+	events: boolean;
+	tasks: boolean;
+	/** The dates it remembers, kept in its workspace. */
+	memories: boolean;
+}
+
+export function botCalendarReach(bot: IBot): BotCalendarReach {
+	const subject = { botId: bot.id, bot };
+	return {
+		events: bot.capabilities.includes("calendar"),
+		tasks: bot.capabilities.includes("scheduling"),
+		memories:
+			subjectRemembers(subject) &&
+			hasBotWorkspace(bot) &&
+			subjectMemoryBotId(subject) !== ASSISTANT_BOT_ID,
+	};
+}
+
+/** A bot row other than Flux with a calendar, tasks or memories has something to put in a calendar. */
+function offersCalendar(bot: IBot | undefined): boolean {
+	if (!bot || bot.system === "flux") return false;
+	const reach = botCalendarReach(bot);
+	return reach.events || reach.tasks || reach.memories;
+}
+
+/**
+ * Details always; Files and Data need the ability and a workspace, Computer a browser or computer
+ * ability, Memory the ability, Calendar a calendar, tasks or memories.
+ */
 export function botPanelTabs(subject: BotPanelSubject): BotPanelTab[] {
 	const capabilities = subjectCapabilities(subject);
 	const workspace = subject.bot !== undefined && hasBotWorkspace(subject.bot);
@@ -91,6 +123,7 @@ export function botPanelTabs(subject: BotPanelSubject): BotPanelTab[] {
 	if (workspace && capabilities.includes("data_studio")) tabs.push("data");
 	if (usesComputer(capabilities)) tabs.push("computer");
 	if (subjectRemembers(subject)) tabs.push("memory");
+	if (offersCalendar(subject.bot)) tabs.push("calendar");
 	if (subject.bot && offersEmail(subject.bot)) tabs.push("mail");
 	return tabs;
 }

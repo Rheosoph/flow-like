@@ -3,7 +3,10 @@
 //! (source `schedule`) into the bot's conversation with its owner and moving `next_run_at` on; a
 //! task that was missed while its host was away fires once when the host is back, never once per
 //! missed run. A place task has no `next_run_at`: the hub fires it when a phone reports a crossing.
+//! An event task is a calendar event; its `next_run_at` is its next wake-up (see
+//! [`crate::bot_calendar`]).
 
+use crate::bot_calendar::{EventSchedule, TaskEvent};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use chrono_tz::Tz;
 use cron::Schedule;
@@ -22,6 +25,7 @@ pub const MAX_INSTRUCTION_CHARS: usize = 4_000;
 pub const STORED_ONCE: &str = "ONCE";
 pub const STORED_CRON: &str = "CRON";
 pub const STORED_PLACE: &str = "PLACE";
+pub const STORED_EVENT: &str = "EVENT";
 pub const STORED_BOT: &str = "BOT";
 pub const STORED_OWNER: &str = "OWNER";
 pub const DEFAULT_TIMEZONE: &str = "UTC";
@@ -62,6 +66,7 @@ task_enum!(
         Once => "once",
         Cron => "cron",
         Place => "place",
+        Event => "event",
     }
 );
 
@@ -119,6 +124,9 @@ pub struct BotTask {
     /// The place a place task watches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub place: Option<TaskPlace>,
+    /// The calendar event of an event task. Its `cron` and `tz` make it repeat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<TaskEvent>,
 }
 
 /// The conversation a task was scheduled in and fires in. Its trigger comes from the person who
@@ -133,7 +141,8 @@ pub struct TaskConversation {
 }
 
 /// Creates a task. A once task needs `at`, a cron task `cron` (and optionally `tz`, UTC when
-/// missing), a place task `place`.
+/// missing), a place task `place`, an event task `event` (a `cron` makes it repeat; `tz` names
+/// its time zone).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CreateBotTask {
     pub kind: Option<TaskKind>,
@@ -153,6 +162,8 @@ pub struct CreateBotTask {
     pub monitoring: bool,
     #[serde(default)]
     pub place: Option<TaskPlace>,
+    #[serde(default)]
+    pub event: Option<TaskEvent>,
 }
 
 /// Changes a task; what is missing stays. Moving the schedule or the place re-arms the task.
@@ -175,6 +186,9 @@ pub struct UpdateBotTask {
     /// A new place for a place task.
     #[serde(default)]
     pub place: Option<TaskPlace>,
+    /// The whole new event of an event task. Moving its start re-arms its wake-ups.
+    #[serde(default)]
+    pub event: Option<TaskEvent>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -197,8 +211,15 @@ pub fn fire_message_id(task_id: &str, run_at: DateTime<Utc>) -> String {
 /// When a task runs, checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskSchedule {
-    Once { at: DateTime<Utc> },
-    Cron { expr: String, tz: String },
+    Once {
+        at: DateTime<Utc>,
+    },
+    Cron {
+        expr: String,
+        tz: String,
+    },
+    /// An event's wake-ups; built with [`EventSchedule::of`], never by [`TaskSchedule::parse`].
+    Event(EventSchedule),
 }
 
 const WEEKDAYS: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
@@ -282,13 +303,17 @@ fn parse_schedule(expr: &str) -> Result<Schedule, String> {
     Schedule::from_str(&normalized).map_err(|error| format!("cron '{}': {error}", expr.trim()))
 }
 
-fn parse_tz(tz: &str) -> Result<Tz, String> {
+pub(crate) fn parse_tz(tz: &str) -> Result<Tz, String> {
     tz.trim()
         .parse::<Tz>()
         .map_err(|_| format!("'{tz}' is not an IANA time zone such as Europe/Berlin"))
 }
 
-fn next_cron(expr: &str, tz: &str, after: DateTime<Utc>) -> Result<Option<DateTime<Utc>>, String> {
+pub(crate) fn next_cron(
+    expr: &str,
+    tz: &str,
+    after: DateTime<Utc>,
+) -> Result<Option<DateTime<Utc>>, String> {
     let (schedule, tz) = (parse_schedule(expr)?, parse_tz(tz)?);
     Ok(schedule
         .after(&tz.from_utc_datetime(&after.naive_utc()))
@@ -296,7 +321,7 @@ fn next_cron(expr: &str, tz: &str, after: DateTime<Utc>) -> Result<Option<DateTi
         .map(|next| next.with_timezone(&Utc)))
 }
 
-fn check_gaps(expr: &str, tz: &str, from: DateTime<Utc>) -> Result<(), String> {
+pub(crate) fn check_gaps(expr: &str, tz: &str, from: DateTime<Utc>) -> Result<(), String> {
     let mut previous = from;
     for probe in 0..INTERVAL_PROBES {
         let Some(next) = next_cron(expr, tz, previous)? else {
@@ -355,6 +380,9 @@ impl TaskSchedule {
             TaskKind::Place => {
                 Err("a place task fires on a crossing of its place, not on a schedule".into())
             }
+            TaskKind::Event => Err(
+                "an event task wakes from its event and the bot's calendar settings; build its schedule with EventSchedule::of".into(),
+            ),
         }
     }
 
@@ -362,6 +390,7 @@ impl TaskSchedule {
         match self {
             Self::Once { .. } => TaskKind::Once,
             Self::Cron { .. } => TaskKind::Cron,
+            Self::Event(_) => TaskKind::Event,
         }
     }
 
@@ -370,15 +399,18 @@ impl TaskSchedule {
         match self {
             Self::Once { at } => Some(*at),
             Self::Cron { expr, tz } => next_cron(expr, tz, now).ok().flatten(),
+            Self::Event(event) => event.next_wake(now, None),
         }
     }
 
     /// When the task runs after it fired at `now`: the first cron time after `now`, so any
-    /// number of missed runs collapse into the one that fired; none for a once task.
+    /// number of missed runs collapse into the one that fired; none for a once task. An event
+    /// wakes next at the first of its wake-ups after `now`.
     pub fn after_fire(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
         match self {
             Self::Once { .. } => None,
             Self::Cron { expr, tz } => next_cron(expr, tz, now).ok().flatten(),
+            Self::Event(event) => event.next_wake(now, Some(now)),
         }
     }
 }
@@ -407,6 +439,32 @@ pub fn check_text(title: Option<&str>, instruction: &str) -> Result<(String, Str
         ));
     }
     Ok((title, instruction.to_string()))
+}
+
+/// The text fields of an event task: a title is required, the instruction (what the bot should
+/// do when the event wakes it) may be empty.
+pub fn check_event_text(
+    title: Option<&str>,
+    instruction: &str,
+) -> Result<(String, String), String> {
+    let title = title.map(str::trim).unwrap_or_default();
+    if title.is_empty() {
+        return Err("an event needs a title".to_string());
+    }
+    let chars = title.chars().count();
+    if chars > MAX_TITLE_CHARS {
+        return Err(format!(
+            "a title has at most {MAX_TITLE_CHARS} characters; this one has {chars}"
+        ));
+    }
+    let instruction = instruction.trim();
+    let chars = instruction.chars().count();
+    if chars > MAX_INSTRUCTION_CHARS {
+        return Err(format!(
+            "an instruction has at most {MAX_INSTRUCTION_CHARS} characters; this one has {chars}"
+        ));
+    }
+    Ok((title.to_string(), instruction.to_string()))
 }
 
 pub const MIN_PLACE_RADIUS_M: f64 = 100.0;

@@ -1,0 +1,53 @@
+[package]
+name = "flow-like-query"
+version = "0.1.0"
+edition = "2024"
+description = "Wire protocol, client and service that run data reads outside the API process"
+license-file = "../../LICENSE"
+
+[features]
+default = []
+client = ["dep:reqwest"]
+server = [
+    "dep:axum",
+    "dep:jsonwebtoken",
+    "dep:flow-like-catalog-data",
+    "flow-like-runtime/flow-runtime",
+    "flow-like-runtime/flow-metadata",
+]
+postgres = ["server", "flow-like-catalog-data/postgres"]
+mysql = ["server", "flow-like-catalog-data/mysql"]
+clickhouse = ["server", "flow-like-catalog-data/clickhouse"]
+bigquery = ["server", "flow-like-catalog-data/bigquery"]
+athena = ["server", "flow-like-catalog-data/athena"]
+all-drivers = ["postgres", "mysql", "clickhouse", "bigquery", "athena"]
+forecast = ["server", "dep:flow-like-catalog-ml", "tokio/fs", "tokio/io-util"]
+
+[dependencies]
+flow-like-types.workspace = true
+flow-like-runtime.workspace = true
+flow-like-storage = { workspace = true, features = ["database-runtime", "graph"] }
+flow-like-storage-contracts.workspace = true
+arrow-ipc = { version = "=58.4.0", features = ["lz4"] }
+async-trait.workspace = true
+base64.workspace = true
+bytes.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
+tracing.workspace = true
+zeroize.workspace = true
+reqwest = { workspace = true, optional = true, features = ["stream"] }
+axum = { workspace = true, optional = true }
+jsonwebtoken = { workspace = true, optional = true }
+flow-like-catalog-data = { workspace = true, optional = true, features = ["execute"] }
+flow-like-catalog-ml = { workspace = true, optional = true, features = ["forecasting"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread", "macros"] }
+p256 = { version = "0.13", features = ["pkcs8", "pem"] }
+getrandom.workspace = true
+tower = { workspace = true, features = ["util"] }

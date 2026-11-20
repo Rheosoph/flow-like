@@ -127,11 +127,12 @@ pub(super) async fn load_chat_bot<C: ConnectionTrait>(
     } else {
         BTreeSet::new()
     };
-    let connectors = if settings.has(BotCapability::Connectors) {
-        crate::bot_tools::connectors::rules_of(db, &row.id).await?
-    } else {
-        Vec::new()
-    };
+    let connectors =
+        if settings.has(BotCapability::Connectors) || settings.has(BotCapability::Calendar) {
+            crate::bot_tools::connectors::rules_of(db, &row.id).await?
+        } else {
+            Vec::new()
+        };
     let owner_mail_addresses = if settings.has(BotCapability::Email) {
         crate::mail_ingress::owner_addresses::account_address(db, &row)
             .await?

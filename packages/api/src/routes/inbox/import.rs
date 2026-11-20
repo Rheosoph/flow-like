@@ -573,6 +573,9 @@ pub(super) async fn import_in<C: ConnectionTrait>(
             .exec(db)
             .await?
             .rows_affected;
+        if updated > 0 {
+            super::summary::refresh(db, &conversation_id, &[caller.to_string()]).await?;
+        }
         if updated > 0 || fresh.iter().any(|event| event.cleared_for_owner) {
             history_cleared = true;
             let member = conversation_member::Entity::find_by_id((

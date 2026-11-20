@@ -595,6 +595,8 @@ fn stored_rows_read_back_as_the_settings_that_wrote_them() {
         image_model: None,
         vision_model: None,
         subtask_model: None,
+        calendar_wake: None,
+        calendar_synced_at: None,
     };
     assert_eq!(model.location, "DESKTOP");
     assert_eq!(*model.capabilities, ["computer_use", "webhook"]);

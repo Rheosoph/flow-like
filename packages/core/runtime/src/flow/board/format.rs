@@ -4,13 +4,16 @@
 //! load and persistence boundary to the client's supported version. The runtime also applies its
 //! own ceiling when an executor or local editor operates without an HTTP request.
 
-use std::{collections::HashMap, future::Future};
+use std::future::Future;
 
 use flow_like_types::{Result, proto, tokio};
 use serde_json::Value;
 
 use super::Board;
-use crate::flow::{pin::resolve_schema, variable::VariableType};
+use crate::flow::{
+    pin::{SchemaRefs, resolve_schema},
+    variable::VariableType,
+};
 
 pub const LEGACY_BOARD_FORMAT_VERSION: u32 = 1;
 pub const CURRENT_BOARD_FORMAT_VERSION: u32 = 2;
@@ -65,7 +68,7 @@ pub fn ensure_supported(required: u32) -> Result<()> {
     Ok(())
 }
 
-fn schema_requires_geometry(schema: Option<&str>, refs: &HashMap<String, String>) -> bool {
+fn schema_requires_geometry(schema: Option<&str>, refs: &impl SchemaRefs) -> bool {
     let Some(schema) = schema.and_then(|schema| resolve_schema(schema, refs).ok()) else {
         return false;
     };
@@ -93,7 +96,7 @@ fn schema_requires_geometry(schema: Option<&str>, refs: &HashMap<String, String>
 pub(crate) fn required_version<'a>(
     declared: u32,
     types: impl Iterator<Item = (bool, Option<&'a str>)>,
-    refs: &HashMap<String, String>,
+    refs: &impl SchemaRefs,
 ) -> u32 {
     let mut required = declared.max(LEGACY_BOARD_FORMAT_VERSION);
     if required >= CURRENT_BOARD_FORMAT_VERSION {

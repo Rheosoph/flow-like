@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "@flow-like/locales";
 import ArrowUpRight from "lucide-react/dist/esm/icons/arrow-up-right.js";
 import Check from "lucide-react/dist/esm/icons/check.js";
 import CircleMinus from "lucide-react/dist/esm/icons/circle-minus.js";
@@ -119,17 +120,17 @@ function collectResearch(steps: IPlanStep[]) {
 	return { queries, sources: [...sources.values()] };
 }
 
-const SOURCE_LABELS: Record<SourceState, string> = {
-	found: "Found",
-	reading: "Reading",
-	checking: "Checking",
-	read: "Read",
-	checked: "Checked",
-	unavailable: "Unavailable",
-	queued: "Queued",
-};
-
 function SourceCard({ source }: { source: ResearchSource }) {
+	const { t } = useTranslation("chat");
+	const sourceLabels: Record<SourceState, string> = {
+		found: t("research.state.found", "Found"),
+		reading: t("research.state.reading", "Reading"),
+		checking: t("research.state.checking", "Checking"),
+		read: t("research.state.read", "Read"),
+		checked: t("research.state.checked", "Checked"),
+		unavailable: t("research.state.unavailable", "Unavailable"),
+		queued: t("research.state.queued", "Queued"),
+	};
 	const pending = source.state === "reading" || source.state === "checking";
 	const className = cn(
 		"group/source relative flex min-w-0 flex-col gap-2 rounded-lg border bg-background/70 p-3 transition-colors",
@@ -168,7 +169,7 @@ function SourceCard({ source }: { source: ResearchSource }) {
 					{source.state === "unavailable" && (
 						<CircleMinus className="size-3" aria-hidden="true" />
 					)}
-					{SOURCE_LABELS[source.state]}
+					{sourceLabels[source.state]}
 				</span>
 			</span>
 			{source.title && (
@@ -246,6 +247,7 @@ function useFoldAnchor(expanded: boolean) {
 }
 
 export function ResearchActivity({ steps }: { steps: IPlanStep[] }) {
+	const { t } = useTranslation("chat");
 	const [showAllQueries, setShowAllQueries] = useState(false);
 	const [showAllSources, setShowAllSources] = useState(false);
 	const sourceFold = useFoldAnchor(showAllSources);
@@ -263,18 +265,20 @@ export function ResearchActivity({ steps }: { steps: IPlanStep[] }) {
 	const activeRead = sources.findLast((source) => source.state === "reading");
 	const activeQuery = queries.findLast((query) => query.status === "progress");
 	const summary = activeRead
-		? `Reading ${activeRead.hostname.replace(/^www\./, "")}`
+		? t("research.readingHost", "Reading {{host}}", {
+				host: activeRead.hostname.replace(/^www\./, ""),
+			})
 		: activeQuery
-			? "Searching the web"
+			? t("research.searchingWeb", "Searching the web")
 			: running
 				? sources.length
-					? "Researching sources"
-					: "Planning the search"
-				: "Research activity";
+					? t("research.researchingSources", "Researching sources")
+					: t("research.planningSearch", "Planning the search")
+				: t("research.activity", "Research activity");
 	return (
 		<section
 			className="relative my-1 min-w-0 overflow-hidden rounded-xl border border-border/70 bg-gradient-to-br from-primary/[0.04] via-background/70 to-background"
-			aria-label="Web research"
+			aria-label={t("research.label", "Web research")}
 			data-research-activity
 		>
 			{running && (
@@ -296,7 +300,7 @@ export function ResearchActivity({ steps }: { steps: IPlanStep[] }) {
 				</span>
 				<div className="min-w-0 flex-1">
 					<div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-						Research trail
+						{t("research.trail", "Research trail")}
 					</div>
 					<output className="mt-0.5 block truncate text-sm font-medium">
 						{summary}
@@ -305,43 +309,64 @@ export function ResearchActivity({ steps }: { steps: IPlanStep[] }) {
 				{running && (
 					<span className="flex shrink-0 items-center gap-1.5 rounded-full border border-primary/20 bg-primary/5 px-2 py-1 text-[9px] font-semibold tracking-wider text-primary">
 						<span className="size-1.5 rounded-full bg-primary motion-safe:animate-pulse" />
-						LIVE
+						{t("research.live", "LIVE")}
 					</span>
 				)}
 			</div>
 			<div className="mx-4 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/60 pb-3 text-[11px] text-muted-foreground">
 				<span>
-					<strong className="font-semibold tabular-nums text-foreground/85">
-						{queries.length}
-					</strong>{" "}
-					{queries.length === 1 ? "search" : "searches"}
+					<Trans
+						t={t}
+						i18nKey="research.searchCount"
+						count={queries.length}
+						components={[
+							<strong
+								key="count"
+								className="font-semibold tabular-nums text-foreground/85"
+							/>,
+						]}
+					/>
 				</span>
 				<span
 					className="size-0.5 rounded-full bg-muted-foreground/40"
 					aria-hidden="true"
 				/>
 				<span>
-					<strong className="font-semibold tabular-nums text-foreground/85">
-						{sources.length}
-					</strong>{" "}
-					{sources.length === 1 ? "page" : "pages"}
+					<Trans
+						t={t}
+						i18nKey="research.pageCount"
+						count={sources.length}
+						components={[
+							<strong
+								key="count"
+								className="font-semibold tabular-nums text-foreground/85"
+							/>,
+						]}
+					/>
 				</span>
 				<span
 					className="size-0.5 rounded-full bg-muted-foreground/40"
 					aria-hidden="true"
 				/>
 				<span>
-					<strong className="font-semibold tabular-nums text-foreground/85">
-						{websites}
-					</strong>{" "}
-					{websites === 1 ? "website" : "websites"}
+					<Trans
+						t={t}
+						i18nKey="research.websiteCount"
+						count={websites}
+						components={[
+							<strong
+								key="count"
+								className="font-semibold tabular-nums text-foreground/85"
+							/>,
+						]}
+					/>
 				</span>
 			</div>
 			{queries.length > 0 && (
 				<div className="px-4 pt-3">
 					<div className="mb-2 flex items-center justify-between gap-2">
 						<h4 className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-							Searches
+							{t("research.searches", "Searches")}
 						</h4>
 						{earlierQueries > 0 && (
 							<button
@@ -351,13 +376,13 @@ export function ResearchActivity({ steps }: { steps: IPlanStep[] }) {
 								className="rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
 							>
 								{showAllQueries
-									? "Hide earlier searches"
-									: `Show ${earlierQueries} earlier ${earlierQueries === 1 ? "search" : "searches"}`}
+									? t("research.hideEarlier", "Hide earlier searches")
+									: t("research.showEarlier", { count: earlierQueries })}
 							</button>
 						)}
 					</div>
 					<ol
-						aria-label="Search queries"
+						aria-label={t("research.queries", "Search queries")}
 						start={queryOffset + 1}
 						className="space-y-1"
 					>
@@ -377,12 +402,12 @@ export function ResearchActivity({ steps }: { steps: IPlanStep[] }) {
 									className="mt-0.5 shrink-0"
 									aria-label={
 										query.status === "progress"
-											? "Searching"
+											? t("research.searching", "Searching")
 											: query.status === "failed"
-												? "Search failed"
+												? t("research.searchFailed", "Search failed")
 												: query.status === "planned"
-													? "Queued"
-													: "Search complete"
+													? t("research.queued", "Queued")
+													: t("research.searchComplete", "Search complete")
 									}
 								>
 									{query.status === "progress" ? (
@@ -404,12 +429,14 @@ export function ResearchActivity({ steps }: { steps: IPlanStep[] }) {
 				<div className="px-4 pt-3 pb-4">
 					<div className="mb-2 flex flex-wrap items-center justify-between gap-1 text-[10px] text-muted-foreground">
 						<h4 className="text-[10px] font-medium uppercase tracking-wider">
-							Sources
+							{t("research.sources", "Sources")}
 						</h4>
-						<span>Search results and opened pages</span>
+						<span>
+							{t("research.sourcesHint", "Search results and opened pages")}
+						</span>
 					</div>
 					<section
-						aria-label="Sources"
+						aria-label={t("research.sources", "Sources")}
 						className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-2"
 					>
 						{visibleSources.map((source) => (
@@ -428,8 +455,8 @@ export function ResearchActivity({ steps }: { steps: IPlanStep[] }) {
 							className="mt-2 w-full rounded-md py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
 						>
 							{showAllSources
-								? "Show fewer pages"
-								: `Show all ${sources.length} pages`}
+								? t("research.showFewer", "Show fewer pages")
+								: t("research.showAllPages", { count: sources.length })}
 						</button>
 					)}
 				</div>
@@ -437,8 +464,11 @@ export function ResearchActivity({ steps }: { steps: IPlanStep[] }) {
 			{!sources.length && (
 				<p className="px-4 py-4 text-xs text-muted-foreground">
 					{running
-						? "Pages will appear here as the search progresses."
-						: "No source pages were returned."}
+						? t(
+								"research.pendingPages",
+								"Pages will appear here as the search progresses.",
+							)
+						: t("research.noPages", "No source pages were returned.")}
 				</p>
 			)}
 		</section>

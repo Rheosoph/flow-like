@@ -57,6 +57,7 @@ pub(crate) mod requests;
 pub mod retirement;
 pub mod segments;
 pub mod stars;
+mod summary;
 mod targets;
 mod text_links;
 pub(crate) mod triggers;
@@ -98,6 +99,8 @@ mod presence_tests;
 mod reply_files_tests;
 #[cfg(test)]
 mod requests_tests;
+#[cfg(test)]
+mod summary_tests;
 #[cfg(test)]
 mod tests;
 
@@ -498,23 +501,25 @@ async fn allocate_seqs<C: ConnectionTrait>(
     Ok(last - count + 1)
 }
 
-/// Inserts the copies of one or more events. A message id that already exists in one of the
-/// inboxes fails the whole fan-out with [`INBOX_MESSAGE_ID_TAKEN`].
+/// Inserts the copies of one or more events and keeps their members' unread counts and newest
+/// messages. A message id that already exists in one of the inboxes fails the whole fan-out with
+/// [`INBOX_MESSAGE_ID_TAKEN`].
 async fn insert_copies<C: ConnectionTrait>(
     txn: &C,
     copies: Vec<inbox_entry::Model>,
 ) -> Result<(), ApiError> {
+    let delivered = summary::Delivered::of(&copies);
     let rows = copies
         .into_iter()
         .map(|copy| inbox_entry::ActiveModel::from(copy).reset_all())
         .collect::<Vec<_>>();
     crate::db::insert_chunked_in_txn(txn, rows, ENTRY_INSERT_CHUNK)
         .await
-        .map(|_| ())
         .map_err(|error| match error.sql_err() {
             Some(SqlErr::UniqueConstraintViolation(_)) => message_id_taken(),
             _ => error.into(),
-        })
+        })?;
+    delivered.apply(txn).await.map_err(ApiError::from)
 }
 
 fn message_id_taken() -> ApiError {

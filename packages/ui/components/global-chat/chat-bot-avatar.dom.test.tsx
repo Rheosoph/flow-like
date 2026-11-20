@@ -9,6 +9,7 @@ import {
 } from "../../state/global-chat/global-chat-store";
 import {
 	ChatBotAvatar,
+	DRAFT_PAUSE_MS,
 	GlobalChatBotAvatar,
 	useDraftRelay,
 } from "./chat-bot-avatar";
@@ -181,8 +182,35 @@ test("keeps drafts reported before the header subscribes or while it is remounti
 	await act(async () =>
 		root.render(<RemountableAvatar draft="I'm worried" show />),
 	);
+	await act(() => pause(DRAFT_PAUSE_MS + 50));
 	expect(reaction.use).toHaveBeenLastCalledWith(
 		expect.objectContaining({ draft: "I'm worried" }),
+	);
+});
+
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("the face notices writing at once, reads the words on a pause and lets go on send", async () => {
+	await act(async () => root.render(<RemountableAvatar draft="" show />));
+	await act(async () => root.render(<RemountableAvatar draft="P" show />));
+	expect(reaction.use).toHaveBeenLastCalledWith(
+		expect.objectContaining({ draft: "P" }),
+	);
+	for (const draft of ["Pl", "Pla", "Plan", "Plan my"]) {
+		await act(async () =>
+			root.render(<RemountableAvatar draft={draft} show />),
+		);
+	}
+	expect(reaction.use).toHaveBeenLastCalledWith(
+		expect.objectContaining({ draft: "P" }),
+	);
+	await act(() => pause(DRAFT_PAUSE_MS + 50));
+	expect(reaction.use).toHaveBeenLastCalledWith(
+		expect.objectContaining({ draft: "Plan my" }),
+	);
+	await act(async () => root.render(<RemountableAvatar draft="" show />));
+	expect(reaction.use).toHaveBeenLastCalledWith(
+		expect.objectContaining({ draft: "" }),
 	);
 });
 

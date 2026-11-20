@@ -1,4 +1,5 @@
-//! A live-call reply as its model writes it, for the devices that will speak it. It only shortens
+//! A bot reply as its model writes it, for the devices that speak it (live call) or show it as a
+//! live bubble (text). It only shortens
 //! the wait: the stored reply stays authoritative, and every exit that posts no reply ends the
 //! stream as dropped. A draft the room replaced after devices heard part of it is dropped there,
 //! and the rewrite follows as the reply's next draft. Where the messages go is the host's
@@ -26,8 +27,19 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Messages of one reply go out at most this often; the newest text wins.
-const MIN_INTERVAL: Duration = Duration::from_millis(100);
+/// Messages of a live call's reply go out at most this often; the newest text wins.
+pub const CALL_INTERVAL: Duration = Duration::from_millis(100);
+/// A written reply is read, not spoken: fewer messages are enough, the client smooths between them.
+pub const TEXT_INTERVAL: Duration = Duration::from_millis(280);
+
+/// The gap between two messages of the reply of a turn that is (or is not) a live call.
+pub fn interval_for(live_call: bool) -> Duration {
+    if live_call {
+        CALL_INTERVAL
+    } else {
+        TEXT_INTERVAL
+    }
+}
 /// Nothing changes while a tool runs; a repeat tells devices the reply is still coming.
 const REPEAT_EVERY: Duration = Duration::from_secs(5);
 /// How long a finished turn waits for its last message before it moves on.
@@ -199,13 +211,21 @@ impl Publisher {
     }
 }
 
-#[derive(Default)]
 struct Shared {
     draft: Mutex<Draft>,
     changed: Notify,
+    interval: Duration,
 }
 
 impl Shared {
+    fn new(interval: Duration) -> Self {
+        Self {
+            draft: Mutex::default(),
+            changed: Notify::new(),
+            interval,
+        }
+    }
+
     fn draft(&self) -> MutexGuard<'_, Draft> {
         self.draft.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -224,7 +244,7 @@ impl Shared {
         }
         let ending = self.draft().posted.is_some();
         if let (false, Some(at)) = (ending, published_at) {
-            sleep(MIN_INTERVAL.saturating_sub(at.elapsed())).await;
+            sleep(self.interval.saturating_sub(at.elapsed())).await;
         }
         published_at.is_some_and(|at| at.elapsed() >= REPEAT_EVERY)
     }
@@ -354,9 +374,9 @@ pub struct ReplyStream {
 
 impl ReplyStream {
     /// Starts publishing to `outbox`. With a `gate`, nothing goes out before the turn's
-    /// participation decision lets it answer.
-    pub fn start(outbox: impl ReplyOutbox, gate: Option<ToolGate>) -> Self {
-        let shared = Arc::new(Shared::default());
+    /// participation decision lets it answer. Messages go out at most every `interval`.
+    pub fn start(outbox: impl ReplyOutbox, gate: Option<ToolGate>, interval: Duration) -> Self {
+        let shared = Arc::new(Shared::new(interval));
         let task = tokio::spawn(publish(outbox, gate, shared.clone(), Instant::now()));
         Self {
             shared,

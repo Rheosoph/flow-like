@@ -292,6 +292,8 @@ model Notification {
 
   @@index([userId, createdAt])
   @@index([userId, read])
+  // The realtime poll's newest read time per user.
+  @@index([userId, readAt])
   @@index([appId, createdAt])
 }
 
@@ -500,6 +502,8 @@ model App {
 
   aiActAssessments       AiActAssessment[]
   aiActModelObservations AiActModelObservation[]
+
+  dataSources AppDataSource[]
 
   createdAt               DateTime                 @default(now()) @db.Timestamptz(3)
   updatedAt               DateTime                 @updatedAt @db.Timestamptz(3)
@@ -1632,6 +1636,10 @@ model Bot {
   visionModel     String?
   /// Bit id of the model the bot's sub-tasks run on; null uses the bot's own.
   subtaskModel    String?
+  /// CalendarWake settings: which calendar events wake the bot and how long before; null uses the defaults.
+  calendarWake    Json?
+  /// When a host last planned the wake-ups of the bot's connected calendars.
+  calendarSyncedAt DateTime? @db.Timestamptz(3)
   permissionsFrom BotPermission[]       @relation("BotPermissionFrom")
   permissionsTo   BotPermission[]       @relation("BotPermissionTo")
   hostHeartbeats  BotHostHeartbeat[]
@@ -1646,6 +1654,7 @@ model Bot {
   skills          BotSkill[]
   segments        ConversationSegment[]
   notes           BotNote[]
+  calendarFeed    BotCalendarFeed?
 
   @@unique([ownerId, systemKey])
   @@unique([ownerId, importKey])
@@ -1696,12 +1705,12 @@ model BotConnector {
   id              String   @id
   botId           String
   bot             Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
-  /// MCP | OAUTH
+  /// MCP | OAUTH | CALDAV
   kind            String
   label           String
   providerId      String?
   url             String?
-  /// NONE | SECRET | OAUTH
+  /// NONE | SECRET | OAUTH | BASIC
   authKind        String   @default("NONE")
   authRef         String?
   grantEncrypted  String?
@@ -1714,6 +1723,10 @@ model BotConnector {
   toolsSnapshot   Json     @default("[]")
   /// Tool name to the `schema_hash` it had when the owner set or confirmed its policy.
   confirmedHashes Json     @default("{}")
+  /// CALDAV: the calendar collection the bot reads and writes, one of `calendars`.
+  calendarUrl     String?
+  /// CALDAV: `[{url, name, color, writable, zone}]` from the last discovery.
+  calendars       Json?
   createdAt       DateTime @default(now()) @db.Timestamptz(3)
   updatedAt       DateTime @updatedAt @db.Timestamptz(3)
 
@@ -1838,6 +1851,8 @@ model BotTurn {
   @@unique([botId, triggerMessageId])
   @@index([status, leaseUntil])
   @@index([ownerId, status])
+  // The realtime poll's newest turn per owner.
+  @@index([ownerId, updatedAt])
   @@index([botId, requesterId, createdAt])
   checkpoint       BotTurnCheckpoint?
 }
@@ -1888,6 +1903,27 @@ model BotTurnCheckpoint {
 }
 
 
+/// A bot's private iCalendar subscription: `GET /calendar-feeds/{token}.ics` serves its events, tasks
+/// and optionally memories. The row keeps the token's hash for lookup and a sealed copy so the owner
+/// can see the link again.
+model BotCalendarFeed {
+  id               String    @id
+  botId            String    @unique
+  bot              Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
+  ownerId          String
+  /// blake3 of the token, lowercase hex.
+  tokenHash        String    @unique
+  /// The token, encrypted like a bot secret (`v1:` + base64).
+  tokenEncrypted   String
+  includeEvents    Boolean   @default(true)
+  includeTasks     Boolean   @default(true)
+  includeMemories  Boolean   @default(false)
+  includeNotes     Boolean   @default(false)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @db.Timestamptz(3)
+  lastFetchedAt    DateTime? @db.Timestamptz(3)
+}
+
 /// A public URL that wakes a bot: `POST /bots/hooks/{id}` with the secret (or an HMAC signature
 /// keyed by its hash) writes a `trigger` entry with `instruction` and the payload into the bot's
 /// conversation with its owner. The secret is shown once; only its hash is stored.
@@ -1920,7 +1956,7 @@ model BotTask {
   botId       String
   bot         Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
   ownerId     String
-  /// ONCE | CRON | PLACE
+  /// ONCE | CRON | PLACE | EVENT
   kind        String
   runAt       DateTime? @db.Timestamptz(3)
   cron        String?
@@ -1956,6 +1992,9 @@ model BotTask {
   placeLabel     String?
   placeRepeat    Boolean? @default(false)
   placeUntil     DateTime? @db.Timestamptz(3)
+
+  /// An event task's TaskEvent (start, end, location, wake override, resolved offsets, external reference).
+  event          Json?
 
   @@index([botId])
   @@index([enabled, nextRunAt])
@@ -2081,6 +2120,42 @@ model ComputeAttemptRevision {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([attemptId, createdAt])
+}
+
+// ---- data-source.prisma
+/// An external database an app's queries read as `<alias>.<table>`. The connection settings
+/// are plain JSON; the credentials are sealed by `data_source_secrets.rs` and never returned.
+model AppDataSource {
+  id String @id @default(cuid())
+
+  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String
+
+  name   String
+  /// SQL schema name: lowercase letters, digits and _, unique per app.
+  alias  String
+  /// `postgres`, `mysql`, `clickhouse`, `bigquery` or `athena`.
+  driver String
+  /// The driver's non-secret settings (host, port, database, schema, ssl_mode, project_id, …).
+  config Json   @default("{}")
+
+  /// `v1:<provider>:<key id>:<ciphertext>`; null while no credentials are stored.
+  secret       String?
+  /// `<provider>:<key id>` of the sealer that wrote `secret`, so a job can find and re-wrap records.
+  sealedBy     String?
+  /// Names of the sealed fields (`username`, `password`, …), never their values.
+  secretFields Json    @default("[]")
+
+  createdBy String
+
+  lastCheckedAt   DateTime? @db.Timestamptz(3)
+  /// `ok`, or the error of the last connection check.
+  lastCheckStatus String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([appId, alias])
 }
 
 // ---- device_archives.prisma
@@ -3023,9 +3098,17 @@ model ConversationMember {
   clearedLegacyAt DateTime? @db.Timestamptz(3)
   clearedSeq      BigInt?
 
+  /// Visible messages from others after `lastReadAt` in this principal's copy. Null until a write
+  /// computes it; the conversation list counts live meanwhile.
+  unreadCount     Int?
+  /// This principal's newest visible message copy; only meaningful once `unreadCount` is set.
+  lastEntryId     String?
+
   @@id([conversationId, principalId])
   @@index([principalId, leftAt])
   @@index([principalId, status])
+  // The realtime poll's read, clear and hide aggregates per principal, from the index alone.
+  @@index([principalId, lastReadAt, clearedAt, hiddenAt], map: "ConversationMember_principalId_markers_idx")
 }
 
 /// One principal's copy of one conversation event. Pages are ordered by (createdAt, id).

@@ -1,8 +1,9 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
+import { i18n, useTranslation } from "@flow-like/locales";
 import {
 	type QueryClient,
+	keepPreviousData,
 	useMutation,
 	useQueries,
 	useQuery,
@@ -27,6 +28,9 @@ import type {
 	IBotSkill,
 	IBotState,
 	IBotWebhook,
+	ICalendarFeed,
+	ICalendarRange,
+	ICalendarWake,
 	ICreateBotConnectorRequest,
 	ICreateBotRequest,
 	ICreateBotSkillRequest,
@@ -37,6 +41,8 @@ import type {
 	IUpdateBotRequest,
 	IUpdateBotSkillRequest,
 	IUpdateBotTaskRequest,
+	IUpdateCalendarFeed,
+	IUpdateCalendarWake,
 	IUpsertBotSecretRequest,
 } from "../state/backend-state/bot-state";
 import type {
@@ -58,6 +64,13 @@ export const botKeys = {
 	presence: () => [...botKeys.all, "presence"] as const,
 	webhooks: (botId: string) => [...botKeys.all, "webhooks", botId] as const,
 	tasks: (botId: string) => [...botKeys.all, "tasks", botId] as const,
+	calendar: (botId: string) => [...botKeys.all, "calendar", botId] as const,
+	calendarWake: (botId: string) =>
+		[...botKeys.calendar(botId), "wake"] as const,
+	calendarFeed: (botId: string) =>
+		[...botKeys.calendar(botId), "feed"] as const,
+	calendarRange: (botId: string, from: string, to: string) =>
+		[...botKeys.calendar(botId), "range", from, to] as const,
 	skills: (botId: string) => [...botKeys.all, "skills", botId] as const,
 	connectors: (botId: string) => [...botKeys.all, "connectors", botId] as const,
 	connectedAccounts: () => [...botKeys.all, "connected-accounts"] as const,
@@ -74,13 +87,24 @@ export const botKeys = {
 const BOT_STALE_TIME = 30_000;
 
 function requireBotState(state: IBotState | undefined): IBotState {
-	if (!state) throw new Error("Bots need a signed-in Flow-Like account");
+	if (!state)
+		throw new Error(
+			i18n.t(
+				"bots:errors.signInRequired",
+				"Bots need a signed-in Flow-Like account",
+			),
+		);
 	return state;
 }
 
 function unsupported<T>(): Promise<T> {
 	return Promise.reject(
-		new Error("This backend does not support that bot action"),
+		new Error(
+			i18n.t(
+				"bots:errors.unsupportedAction",
+				"This backend does not support that bot action",
+			),
+		),
 	);
 }
 
@@ -222,7 +246,13 @@ export function useCloneBot() {
 	return useMutation({
 		mutationFn: async (botId: string) => {
 			if (!state?.cloneBot)
-				throw new Error(`Bot ${botId} can't be duplicated on this host`);
+				throw new Error(
+					i18n.t(
+						"bots:errors.cloneUnsupported",
+						"Bot {{botId}} can't be duplicated on this host",
+						{ botId },
+					),
+				);
 			return state.cloneBot(botId);
 		},
 		onSuccess: (bot) => storeBot(queryClient, bot),
@@ -459,7 +489,13 @@ export function useRevokeBotToolGrant() {
 			scope: string;
 		}) => {
 			const revoke = requireBotState(state).deleteToolGrant;
-			if (!revoke) throw new Error("This backend keeps no tool grants");
+			if (!revoke)
+				throw new Error(
+					i18n.t(
+						"bots:errors.noToolGrants",
+						"This backend keeps no tool grants",
+					),
+				);
 			return revoke.call(state, botId, tool, scope);
 		},
 		onSettled: (_, __, { botId }) =>
@@ -488,7 +524,12 @@ export function useSetBotAutoApprove() {
 		}) => {
 			const bots = requireBotState(state);
 			if (!bots.putToolGrant || !bots.deleteToolGrant)
-				throw new Error("This backend keeps no tool grants");
+				throw new Error(
+					i18n.t(
+						"bots:errors.noToolGrants",
+						"This backend keeps no tool grants",
+					),
+				);
 			if (enabled) await bots.putToolGrant(botId, AUTO_APPROVE_TOOL, SCOPE_ALL);
 			else await bots.deleteToolGrant(botId, AUTO_APPROVE_TOOL, SCOPE_ALL);
 		},
@@ -538,7 +579,13 @@ export function useAnswerBotApproval() {
 			items?: readonly IBotApprovalItemDecision[];
 		}) => {
 			const answer = requireBotState(state).answerApproval;
-			if (!answer) throw new Error("This backend cannot answer approvals");
+			if (!answer)
+				throw new Error(
+					i18n.t(
+						"bots:errors.approvalsUnsupported",
+						"This backend cannot answer approvals",
+					),
+				);
 			const sealed = await sealedAnswer(
 				inbox,
 				conversationId,
@@ -611,6 +658,14 @@ export function useBotTasks(botId?: string | null) {
 	});
 }
 
+/** Tasks show in the calendar, and its events are tasks: a change to either refreshes both. */
+function invalidateBotSchedule(queryClient: QueryClient, botId: string) {
+	return Promise.all([
+		queryClient.invalidateQueries({ queryKey: botKeys.tasks(botId) }),
+		queryClient.invalidateQueries({ queryKey: botKeys.calendar(botId) }),
+	]);
+}
+
 export function useCreateBotTask() {
 	const state = useBackend().botState;
 	const queryClient = useQueryClient();
@@ -620,8 +675,7 @@ export function useCreateBotTask() {
 			request,
 		}: { botId: string; request: ICreateBotTaskRequest }) =>
 			requireBotState(state).createTask?.(botId, request) ?? unsupported(),
-		onSettled: (_, __, { botId }) =>
-			queryClient.invalidateQueries({ queryKey: botKeys.tasks(botId) }),
+		onSettled: (_, __, { botId }) => invalidateBotSchedule(queryClient, botId),
 	});
 }
 
@@ -636,8 +690,7 @@ export function useUpdateBotTask() {
 		}: { botId: string; taskId: string; request: IUpdateBotTaskRequest }) =>
 			requireBotState(state).updateTask?.(botId, taskId, request) ??
 			unsupported(),
-		onSettled: (_, __, { botId }) =>
-			queryClient.invalidateQueries({ queryKey: botKeys.tasks(botId) }),
+		onSettled: (_, __, { botId }) => invalidateBotSchedule(queryClient, botId),
 	});
 }
 
@@ -647,8 +700,115 @@ export function useDeleteBotTask() {
 	return useMutation({
 		mutationFn: ({ botId, taskId }: { botId: string; taskId: string }) =>
 			requireBotState(state).deleteTask?.(botId, taskId) ?? unsupported(),
-		onSettled: (_, __, { botId }) =>
-			queryClient.invalidateQueries({ queryKey: botKeys.tasks(botId) }),
+		onSettled: (_, __, { botId }) => invalidateBotSchedule(queryClient, botId),
+	});
+}
+
+/** Which calendar events wake the bot. */
+export function useBotCalendarWake(botId?: string | null) {
+	const state = useBackend().botState;
+	return useQuery({
+		queryKey: botKeys.calendarWake(botId ?? ""),
+		queryFn: () =>
+			requireBotState(state).getCalendarWake?.(botId as string) ??
+			unsupported<ICalendarWake>(),
+		enabled: Boolean(state?.getCalendarWake && botId),
+		staleTime: BOT_STALE_TIME,
+	});
+}
+
+/** Saving re-plans every event's wake-ups, so the calendar and the task list are read again. */
+export function useSetBotCalendarWake() {
+	const state = useBackend().botState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			botId,
+			update,
+		}: { botId: string; update: IUpdateCalendarWake }) =>
+			requireBotState(state).setCalendarWake?.(botId, update) ??
+			unsupported<ICalendarWake>(),
+		onSuccess: (wake, { botId }) => {
+			queryClient.setQueryData(botKeys.calendarWake(botId), wake);
+			void queryClient.invalidateQueries({ queryKey: botKeys.detail(botId) });
+		},
+		onSettled: (_, __, { botId }) => invalidateBotSchedule(queryClient, botId),
+	});
+}
+
+/** The bot's calendar subscription link; null while there is none. */
+export function useBotCalendarFeed(botId?: string | null) {
+	const state = useBackend().botState;
+	return useQuery({
+		queryKey: botKeys.calendarFeed(botId ?? ""),
+		queryFn: () =>
+			requireBotState(state).getCalendarFeed?.(botId as string) ??
+			unsupported<ICalendarFeed | null>(),
+		enabled: Boolean(state?.getCalendarFeed && botId),
+		staleTime: BOT_STALE_TIME,
+	});
+}
+
+/** Turns the link on or changes what it shows. */
+export function useUpdateBotCalendarFeed() {
+	const state = useBackend().botState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			botId,
+			update,
+		}: { botId: string; update: IUpdateCalendarFeed }) =>
+			requireBotState(state).updateCalendarFeed?.(botId, update) ??
+			unsupported<ICalendarFeed>(),
+		onSuccess: (feed, { botId }) =>
+			queryClient.setQueryData(botKeys.calendarFeed(botId), feed),
+	});
+}
+
+/** A new link; the old one stops working. */
+export function useRotateBotCalendarFeed() {
+	const state = useBackend().botState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (botId: string) =>
+			requireBotState(state).rotateCalendarFeed?.(botId) ??
+			unsupported<ICalendarFeed>(),
+		onSuccess: (feed, botId) =>
+			queryClient.setQueryData(botKeys.calendarFeed(botId), feed),
+	});
+}
+
+/** Turns the link off. */
+export function useDeleteBotCalendarFeed() {
+	const state = useBackend().botState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (botId: string) =>
+			requireBotState(state).deleteCalendarFeed?.(botId) ?? unsupported(),
+		onSuccess: (_, botId) =>
+			queryClient.setQueryData(botKeys.calendarFeed(botId), null),
+	});
+}
+
+/** The bot's own and connected calendars between two RFC 3339 times; the last window stays while the next loads. */
+export function useBotCalendar(
+	botId: string | null | undefined,
+	from: string | null,
+	to: string | null,
+) {
+	const state = useBackend().botState;
+	return useQuery({
+		queryKey: botKeys.calendarRange(botId ?? "", from ?? "", to ?? ""),
+		queryFn: () =>
+			requireBotState(state).listCalendar?.(
+				botId as string,
+				from as string,
+				to as string,
+			) ?? unsupported<ICalendarRange>(),
+		enabled: Boolean(state?.listCalendar && botId && from && to),
+		placeholderData: keepPreviousData,
+		staleTime: BOT_STALE_TIME,
+		retry: false,
 	});
 }
 

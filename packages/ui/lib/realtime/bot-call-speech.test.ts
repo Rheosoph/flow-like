@@ -1428,6 +1428,17 @@ test("a pushed stream is refused for a message already seen or a transcript that
 	for (const h of [history, stored, first]) h.controller.dispose();
 });
 
+test("a streamed text reply, which answers a typed message, is never spoken", () => {
+	const h = streamHarness();
+	expect(
+		h.controller.stream("typed-message", "bot", { messageId: "reply-typed" }),
+	).toBeNull();
+	expect(
+		h.controller.stream("spoken", "bot", { messageId: "reply-spoken" }),
+	).not.toBeNull();
+	h.controller.dispose();
+});
+
 test("a pushed stream speaks as text grows and the stored entry is not spoken again", async () => {
 	const h = streamHarness();
 	const stream = h.controller.stream("spoken", "bot", { messageId: "r1" });

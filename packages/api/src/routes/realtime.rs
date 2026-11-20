@@ -1948,6 +1948,8 @@ mod tests {
                 cleared_at: Set(None),
                 cleared_legacy_at: Set(None),
                 cleared_seq: Set(None),
+                unread_count: Set(None),
+                last_entry_id: Set(None),
             }
             .insert(db)
             .await

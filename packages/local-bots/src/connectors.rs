@@ -1,27 +1,31 @@
-//! Connectors of local bots: the MCP servers and OAuth accounts the person attached. The same
-//! rules as the API's, except the URL may be http and point anywhere (this is the person's own
-//! machine) and the account's sign-in stays in the desktop's native OAuth store, so no grant is
-//! kept here.
+//! Connectors of local bots: the MCP servers, OAuth accounts and CalDAV calendars the person
+//! attached. The same rules as the API's, except the URL may be http and point anywhere (this is
+//! the person's own machine) and the account's sign-in stays in the desktop's native OAuth store,
+//! so no grant is kept here. A CalDAV password is sealed with the bot secrets' key; its
+//! calendars come from the desktop's discovery ([`LocalBotStore::set_connector_calendars`]).
 
 use std::collections::BTreeMap;
 
 use crate::{
     LocalBotStore,
-    bots::{bot_exists, bot_not_found},
+    bots::{bot_exists, bot_not_found, sealing_refused},
+    cipher,
     error::{Error, Result},
     store::{now_micros, timestamp},
 };
 use flow_like_types::{
     bot_connector::{
-        BotConnector, ConnectorAuth, ConnectorKind, ConnectorPolicy, ConnectorToolInfo,
-        CreateBotConnector, MAX_CONNECTORS_PER_BOT, MAX_SCOPES, MAX_TOOLS_SNAPSHOT, MAX_URL_CHARS,
-        UpdateBotConnector, validate_label, validate_tool_policies,
+        BotConnector, CALDAV_PROVIDER, CalDavCalendarInfo, ConnectorAuth, ConnectorKind,
+        ConnectorPolicy, ConnectorToolInfo, CreateBotConnector, MAX_CALDAV_CALENDARS,
+        MAX_CONNECTORS_PER_BOT, MAX_SCOPES, MAX_TOOLS_SNAPSHOT, MAX_URL_CHARS, UpdateBotConnector,
+        choose_calendar, validate_label, validate_tool_policies, validate_username,
     },
     create_id,
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-const COLUMNS: &str = "id, bot_id, kind, label, provider_id, url, auth, scopes, default_policy, tool_policies, tools_snapshot, updated_at, confirmed_hashes";
+const COLUMNS: &str = "id, bot_id, kind, label, provider_id, url, auth, scopes, default_policy, tool_policies, tools_snapshot, updated_at, confirmed_hashes, calendar_url, calendars, password IS NOT NULL";
+const MAX_PASSWORD_CHARS: usize = 1024;
 
 fn json_or_default<T: serde::de::DeserializeOwned + Default>(stored: &str) -> T {
     serde_json::from_str(stored).unwrap_or_default()
@@ -42,14 +46,49 @@ fn read_connector(row: &Row<'_>) -> rusqlite::Result<BotConnector> {
         provider_id: row.get(4)?,
         url: row.get(5)?,
         auth: json_or_default::<ConnectorAuth>(&auth),
-        has_grant: false,
+        has_grant: row.get(15)?,
         scopes: json_or_default::<Vec<String>>(&scopes),
         default_policy: ConnectorPolicy::from_column(&policy).unwrap_or(ConnectorPolicy::Ask),
         tool_policies: json_or_default::<BTreeMap<String, ConnectorPolicy>>(&policies),
         tools_snapshot: json_or_default::<Vec<ConnectorToolInfo>>(&tools),
         updated_at: timestamp(row.get(11)?).to_rfc3339(),
         confirmed_hashes: json_or_default::<BTreeMap<String, String>>(&row.get::<_, String>(12)?),
+        calendar_url: row.get(13)?,
+        calendars: json_or_default::<Vec<CalDavCalendarInfo>>(&row.get::<_, String>(14)?),
     })
+}
+
+/// How many values this device keeps sealed with the secrets' key: bot secrets and CalDAV
+/// passwords. A key is only made while there are none.
+pub(crate) fn sealed_values(db: &Connection) -> Result<i64> {
+    Ok(db.query_row(
+        "SELECT (SELECT COUNT(*) FROM bot_secrets)
+              + (SELECT COUNT(*) FROM bot_connectors WHERE password IS NOT NULL)",
+        [],
+        |row| row.get(0),
+    )?)
+}
+
+/// The name a CalDAV password is sealed under.
+fn password_name(connector_id: &str) -> String {
+    format!("connector:{connector_id}")
+}
+
+/// A CalDAV password as the person typed it; never trimmed, never echoed.
+fn checked_password(grant: Option<&str>) -> Result<&str> {
+    let password = grant
+        .filter(|password| !password.trim().is_empty())
+        .ok_or_else(|| {
+            Error::invalid(
+                "A CalDAV calendar needs its password (for iCloud an app-specific password)",
+            )
+        })?;
+    if password.chars().count() > MAX_PASSWORD_CHARS || password.chars().any(char::is_control) {
+        return Err(Error::invalid(format!(
+            "The password has at most {MAX_PASSWORD_CHARS} characters and no control characters"
+        )));
+    }
+    Ok(password)
 }
 
 fn require_bot(db: &Connection, bot_id: &str) -> Result<()> {
@@ -124,7 +163,27 @@ impl LocalBotStore {
         if request.scopes.len() > MAX_SCOPES {
             return Err(Error::invalid(format!("At most {MAX_SCOPES} scopes")));
         }
+        let mut auth = request.auth.clone();
         let (url, provider_id) = match (request.kind, &request.auth) {
+            (ConnectorKind::Caldav, ConnectorAuth::Basic { username }) => {
+                auth = ConnectorAuth::Basic {
+                    username: validate_username(username).map_err(Error::invalid)?,
+                };
+                let url = checked_url(request.url.as_deref().ok_or_else(|| {
+                    Error::invalid("A CalDAV calendar needs the address of its server")
+                })?)?;
+                (Some(url), Some(CALDAV_PROVIDER.to_string()))
+            }
+            (ConnectorKind::Caldav, _) => {
+                return Err(Error::invalid(
+                    "A CalDAV calendar signs in with a user name and password: use auth type basic",
+                ));
+            }
+            (_, ConnectorAuth::Basic { .. }) => {
+                return Err(Error::invalid(
+                    "Only a CalDAV calendar signs in with a user name and password",
+                ));
+            }
             (ConnectorKind::Mcp, auth) => {
                 let url = checked_url(
                     request
@@ -152,6 +211,15 @@ impl LocalBotStore {
         {
             return Err(Error::invalid("The secret name is invalid"));
         }
+        let id = format!("bc_{}", create_id());
+        let password = match request.kind {
+            ConnectorKind::Caldav => Some(self.seal_password(
+                bot_id,
+                &id,
+                checked_password(request.grant.as_deref())?,
+            )?),
+            _ => None,
+        };
         self.write(|tx, _changes| {
             require_bot(tx, bot_id)?;
             let count: i64 = tx.query_row(
@@ -165,12 +233,11 @@ impl LocalBotStore {
                 )));
             }
             label_free(tx, bot_id, &label, None)?;
-            let id = format!("bc_{}", create_id());
             let now = now_micros();
             tx.execute(
                 "INSERT INTO bot_connectors (id, bot_id, kind, label, provider_id, url, auth, scopes,
-                     default_policy, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+                     default_policy, created_at, updated_at, password)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11)",
                 params![
                     id,
                     bot_id,
@@ -178,16 +245,88 @@ impl LocalBotStore {
                     label,
                     provider_id,
                     url,
-                    serde_json::to_string(&request.auth).unwrap_or_default(),
+                    serde_json::to_string(&auth).unwrap_or_default(),
                     serde_json::json!(request.scopes).to_string(),
                     request
                         .default_policy
                         .unwrap_or(ConnectorPolicy::Ask)
                         .column(),
-                    now
+                    now,
+                    password
                 ],
             )?;
             find(tx, bot_id, &id)
+        })
+    }
+
+    /// Seals a CalDAV password with the secrets' key, making the key while nothing is sealed.
+    fn seal_password(&self, bot_id: &str, connector_id: &str, password: &str) -> Result<Vec<u8>> {
+        let stored = self.read(sealed_values)?;
+        let key = self
+            .secret_key(stored == 0)
+            .map_err(|error| sealing_refused(error, stored))?;
+        cipher::seal(&key, bot_id, &password_name(connector_id), password)
+    }
+
+    /// The password of a CalDAV connector, opened with this device's key.
+    pub fn connector_password(&self, bot_id: &str, connector_id: &str) -> Result<String> {
+        let sealed: Option<Vec<u8>> = self.read(|db| {
+            find(db, bot_id, connector_id)?;
+            Ok(db.query_row(
+                "SELECT password FROM bot_connectors WHERE id = ?1 AND bot_id = ?2",
+                params![connector_id, bot_id],
+                |row| row.get(0),
+            )?)
+        })?;
+        let lost = || {
+            Error::invalid(format!(
+                "The password of connector '{connector_id}' can't be read on this device; enter it again"
+            ))
+        };
+        let sealed = sealed.ok_or_else(lost)?;
+        let key = self
+            .secret_key(false)
+            .map_err(|error| sealing_refused(error, 1))?;
+        cipher::open(&key, bot_id, &password_name(connector_id), &sealed)
+            .map(|password| password.to_string())
+            .map_err(|_| lost())
+    }
+
+    /// Keeps the calendars a CalDAV discovery found. `wanted` picks the calendar (it must be one
+    /// of them); without it the current one stays while it is listed, else the first writable.
+    pub fn set_connector_calendars(
+        &self,
+        bot_id: &str,
+        connector_id: &str,
+        mut calendars: Vec<CalDavCalendarInfo>,
+        wanted: Option<&str>,
+    ) -> Result<BotConnector> {
+        calendars.truncate(MAX_CALDAV_CALENDARS);
+        self.write(|tx, _changes| {
+            let current = find(tx, bot_id, connector_id)?;
+            if current.kind != ConnectorKind::Caldav {
+                return Err(Error::invalid("Only a CalDAV connector has calendars"));
+            }
+            let chosen = match wanted.map(str::trim).filter(|wanted| !wanted.is_empty()) {
+                Some(wanted) => {
+                    Some(choose_calendar(&calendars, Some(wanted)).map_err(Error::invalid)?)
+                }
+                None => current
+                    .calendar_url
+                    .filter(|url| calendars.iter().any(|calendar| &calendar.url == url))
+                    .or_else(|| choose_calendar(&calendars, None).ok()),
+            };
+            tx.execute(
+                "UPDATE bot_connectors SET calendars = ?1, calendar_url = ?2, updated_at = ?3
+                 WHERE id = ?4",
+                params![
+                    serde_json::json!(calendars).to_string(),
+                    chosen,
+                    now_micros(),
+                    connector_id
+                ],
+            )?;
+            find(tx, bot_id, connector_id)
         })
     }
 
@@ -197,8 +336,34 @@ impl LocalBotStore {
         connector_id: &str,
         request: UpdateBotConnector,
     ) -> Result<BotConnector> {
+        let kind = self.read(|db| find(db, bot_id, connector_id))?.kind;
+        let password = match (kind, request.grant.as_deref()) {
+            (ConnectorKind::Caldav, Some(grant)) if !grant.trim().is_empty() => {
+                Some(self.seal_password(bot_id, connector_id, checked_password(Some(grant))?)?)
+            }
+            _ => None,
+        };
         self.write(|tx, _changes| {
             let current = find(tx, bot_id, connector_id)?;
+            if let Some(password) = &password {
+                tx.execute(
+                    "UPDATE bot_connectors SET password = ?1 WHERE id = ?2",
+                    params![password, connector_id],
+                )?;
+            }
+            if let Some(wanted) = request.calendar_url.as_deref() {
+                if current.kind != ConnectorKind::Caldav {
+                    return Err(Error::invalid(
+                        "Only a CalDAV connector has a calendar to choose",
+                    ));
+                }
+                let chosen =
+                    choose_calendar(&current.calendars, Some(wanted)).map_err(Error::invalid)?;
+                tx.execute(
+                    "UPDATE bot_connectors SET calendar_url = ?1 WHERE id = ?2",
+                    params![chosen, connector_id],
+                )?;
+            }
             let label = match &request.label {
                 Some(label) => {
                     let label = validate_label(label).map_err(Error::invalid)?;

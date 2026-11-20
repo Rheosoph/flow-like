@@ -17,6 +17,7 @@ import {
 	type IBoardState,
 	type IBotState,
 	type ICapabilities,
+	type IDataSourceState,
 	type IDatabaseState,
 	type IEventState,
 	type IGenericCommand,
@@ -111,6 +112,7 @@ import { BitState } from "./tauri-provider/bit-state";
 import { BoardState } from "./tauri-provider/board-state";
 import { BotState } from "./tauri-provider/bot-state";
 import type { CommandSyncRemoteIdentity } from "./tauri-provider/command-sync";
+import { DataSourceState } from "./tauri-provider/data-source-state";
 import { DatabaseState } from "./tauri-provider/db-state";
 import { EventState } from "./tauri-provider/event-state";
 import { GraphState } from "./tauri-provider/graph-state";
@@ -190,6 +192,7 @@ export class TauriBackend implements IBackendState {
 	dbState: IDatabaseState;
 	graphState: IGraphState;
 	queryState: IQueryState;
+	dataSourceState: IDataSourceState;
 	widgetState: IWidgetState;
 	pageState: IPageState;
 	registryState: IRegistryState;
@@ -245,6 +248,7 @@ export class TauriBackend implements IBackendState {
 		this.dbState = new DatabaseState(this);
 		this.graphState = new GraphState(this);
 		this.queryState = new QueryState(this);
+		this.dataSourceState = new DataSourceState(this);
 		this.widgetState = new WidgetState(this);
 		this.pageState = new PageState(this);
 		this.registryState = new RegistryState(this);

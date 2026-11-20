@@ -1,24 +1,35 @@
+use std::time::Duration;
+
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
 use flow_like::bit::{Bit, BitTypes, ForecastingAssetRef};
+use flow_like::state::FlowLikeState;
 use flow_like_catalog_ml::inspection::forecasting::studio::{
     self, StudioForecastRequest, StudioForecastResult,
 };
-use flow_like_storage::databases::workbench::{WorkbenchSurface, saved_query::SavedQuerySurface};
+use flow_like_catalog_ml::inspection::forecasting_bit::{self, ForecastCheckpoint};
+use flow_like_query::forecast::{ForecastModelSpec, ForecastOperation, ModelFile};
+use flow_like_query::{Operation, QueryShape, SurfaceSpec, ViewSpec};
+use flow_like_storage::databases::workbench::saved_query::SavedQuerySurface;
+use flow_like_storage::{files::store::FlowLikeStore, object_store::ObjectStoreExt};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde::Deserialize;
 
-use super::{ScopeParams, column_reader, resolve_connection};
+use super::{ScopeParams, resolve_connection};
 use crate::{
     ensure_any_permission,
     entity::{bit, profile, user_bit},
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
+    query::{self, LanceRead},
     state::AppState,
 };
+
+/// Signed checkpoint URLs only have to outlive one forecast request.
+const CHECKPOINT_URL_LIFETIME: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Deserialize)]
 pub struct ForecastQueryPayload {
@@ -144,6 +155,84 @@ async fn authorized_model(
     Ok(resolved)
 }
 
+/// Same rule as the Bit downloader: legacy roots (`hash == id`) and source-derived identities
+/// carry no content digest, so their bytes are trusted on first use.
+fn verifiable(asset: &Bit) -> bool {
+    asset.hash != asset.id && !asset.has_matching_user_source_artifact_identity()
+}
+
+/// A short-lived signed URL when the Bit store holds exactly this file, else the Bit's own
+/// download link (already signed for published Bits on private CDNs).
+async fn checkpoint_url(store: &FlowLikeStore, asset: &Bit, size: u64) -> Result<String, ApiError> {
+    let file_name = asset.file_name.as_deref().ok_or_else(|| {
+        ApiError::internal(format!("Forecast asset {} has no file name", asset.id))
+    })?;
+    let path = flow_like_storage::Path::from(asset.hash.as_str()).join(file_name);
+    let installed = store
+        .as_generic()
+        .head(&path)
+        .await
+        .is_ok_and(|metadata| metadata.size == size);
+    if installed {
+        let url = store.sign("GET", &path, CHECKPOINT_URL_LIFETIME).await?;
+        return Ok(url.to_string());
+    }
+    asset.download_link.clone().ok_or_else(|| {
+        ApiError::internal(format!(
+            "Forecast asset {} is neither in the Bit store nor downloadable",
+            asset.id
+        ))
+    })
+}
+
+/// The authorized model as the query service fetches it: family, provenance and every
+/// checkpoint file with its size, content hash and a URL the service may read.
+async fn model_spec(state: &AppState, model: &Bit) -> Result<ForecastModelSpec, ApiError> {
+    let master = state.master_state(state).await?;
+    let ForecastCheckpoint {
+        family,
+        repository,
+        revision,
+        files,
+    } = forecasting_bit::resolve_checkpoint(
+        master.clone(),
+        model,
+        studio::MAXIMUM_CHECKPOINT_BYTES,
+    )
+    .await?;
+    let store = FlowLikeState::bit_store(&master).await?;
+    let mut checkpoint = Vec::with_capacity(files.len());
+    for (name, asset) in files {
+        let size = asset.size.ok_or_else(|| {
+            ApiError::internal(format!("Forecast asset {} has no size", asset.id))
+        })?;
+        checkpoint.push(ModelFile {
+            url: checkpoint_url(&store, &asset, size).await?,
+            verify: verifiable(&asset),
+            hash: asset.hash,
+            name,
+            size,
+        });
+    }
+    Ok(ForecastModelSpec {
+        bit_id: model.id.clone(),
+        family: family_name(family)?,
+        repository,
+        revision,
+        files: checkpoint,
+    })
+}
+
+/// A forecast family under the name the engine (de)serializes it with.
+fn family_name(family: impl serde::Serialize) -> Result<String, ApiError> {
+    match serde_json::to_value(family)? {
+        serde_json::Value::String(name) => Ok(name),
+        other => Err(ApiError::internal(format!(
+            "Forecast family serialized as {other}"
+        ))),
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/apps/{app_id}/db/queries/forecast",
@@ -156,12 +245,15 @@ async fn authorized_model(
     request_body = serde_json::Value,
     responses(
         (status = 200, description = "Forecast points and metadata"),
-        (status = 400, description = "Invalid mapping or forecast request"),
+        (status = 400, description = "Invalid mapping, SQL or forecast request"),
         (status = 403, description = "App database or model access denied"),
-        (status = 503, description = "Native forecasting is unavailable in this API build")
+        (status = 413, description = "The model's checkpoint is larger than the query service can stage"),
+        (status = 503, description = "The query service is unavailable, busy with another forecast, or built without forecasting"),
+        (status = 504, description = "The forecast ran out of time")
     ),
     security(("bearer_auth" = []), ("api_key" = []), ("pat" = []))
 )]
+#[tracing::instrument(name = "POST /apps/{app_id}/db/queries/forecast", skip_all)]
 pub async fn forecast_query(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -183,32 +275,39 @@ pub async fn forecast_query(
     {
         return Err(ApiError::bad_request("scope must be 'user' or 'project'"));
     }
-    let bit = authorized_model(&state, &user.sub()?, &payload).await?;
-    if !studio::inference_available() {
-        return Err(ApiError::service_unavailable(
-            "Native forecasting is unavailable in this API build. Use a server built with the forecasting feature.",
-        ));
-    }
+    let model = authorized_model(&state, &user.sub()?, &payload).await?;
+    let model = model_spec(&state, &model).await?;
     let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
     let views =
         super::saved_queries::collect_views(&connection, SavedQuerySurface::Native, None).await?;
-    let flow_state = state.master_state(&state).await?;
-    let result = studio::run_forecast(
-        flow_state,
-        bit,
-        &connection,
-        WorkbenchSurface::Native,
-        views,
-        &column_reader(&permission, &scope),
-        payload.request,
-    )
-    .await
-    .map_err(|error| {
-        if let Some(message) = studio::input_error_message(&error) {
-            ApiError::bad_request(message)
-        } else {
-            super::table_input_error(error)
-        }
+    let read = LanceRead::scoped(&user, &permission, &app_id, &scope)?;
+    let source = state.query.lance_source(&state, &read, None).await?;
+    let operation = Operation::Forecast {
+        forecast: ForecastOperation::Run {
+            request: serde_json::to_value(&payload.request)?,
+            shape: QueryShape::Workbench {
+                surface: SurfaceSpec::Native,
+                views: views
+                    .into_iter()
+                    .map(|view| ViewSpec {
+                        name: view.name,
+                        sql: view.sql,
+                    })
+                    .collect(),
+            },
+            model,
+        },
+    };
+    let response = state
+        .query
+        .run(
+            &query::subject(&user),
+            &query::request(vec![source], 1, operation),
+        )
+        .await?;
+    let result = serde_json::from_value(query::json_answer(response)?).map_err(|error| {
+        tracing::warn!(%error, "The query service sent a forecast the API cannot read");
+        ApiError::bad_gateway("The query service sent an invalid forecast")
     })?;
     Ok(Json(result))
 }
@@ -216,9 +315,11 @@ pub async fn forecast_query(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flow_like_storage::object_store::memory::InMemory;
     use sea_orm::{
         ActiveValue::Set, ConnectOptions, ConnectionTrait, Database, Schema, sea_query::Table,
     };
+    use std::sync::Arc;
 
     #[test]
     fn model_activation_checks_ids_and_hubs_without_accepting_client_bits() {
@@ -310,5 +411,75 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.status(), axum::http::StatusCode::FORBIDDEN);
+    }
+
+    fn asset(hash: &str) -> Bit {
+        Bit {
+            id: "weights".into(),
+            hash: hash.into(),
+            file_name: Some("model.safetensors".into()),
+            size: Some(4),
+            download_link: Some("https://hub.example/model.safetensors".into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn only_content_hashes_are_verified() {
+        assert!(verifiable(&asset(&"a".repeat(64))));
+        assert!(!verifiable(&asset("weights")));
+    }
+
+    #[test]
+    fn families_travel_under_their_engine_names() {
+        for name in ["chronos2", "timesfm2_5", "tiny_time_mixer"] {
+            let model: studio::StudioForecastModel = serde_json::from_value(serde_json::json!({
+                "bit_id": "model",
+                "family": name,
+                "repository": null,
+                "revision": null,
+            }))
+            .unwrap();
+            assert_eq!(family_name(model.family).unwrap(), name);
+        }
+    }
+
+    #[tokio::test]
+    async fn installed_files_are_signed_and_others_use_their_download_link() {
+        let store = FlowLikeStore::Memory(Arc::new(InMemory::new()));
+        let missing = asset(&"b".repeat(64));
+        assert_eq!(
+            checkpoint_url(&store, &missing, 4).await.unwrap(),
+            "https://hub.example/model.safetensors"
+        );
+
+        let installed = asset(&"c".repeat(64));
+        store
+            .as_generic()
+            .put(
+                &flow_like_storage::Path::from(installed.hash.as_str()).join("model.safetensors"),
+                vec![1_u8; 4].into(),
+            )
+            .await
+            .unwrap();
+        let signed = checkpoint_url(&store, &installed, 4).await.unwrap();
+        assert_ne!(signed, "https://hub.example/model.safetensors");
+        assert_eq!(
+            checkpoint_url(&store, &installed, 5).await.unwrap(),
+            "https://hub.example/model.safetensors",
+            "a file of another size is not the checkpoint file"
+        );
+
+        let unreachable = Bit {
+            download_link: None,
+            ..asset(&"d".repeat(64))
+        };
+        assert_eq!(
+            checkpoint_url(&store, &unreachable, 4)
+                .await
+                .unwrap_err()
+                .status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 }

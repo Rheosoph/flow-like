@@ -4,25 +4,34 @@
 //! concurrency semaphore, and adapter construction as the graph SQL surface.
 
 pub mod cross_app;
+pub mod external;
+pub mod parameters;
+pub mod prepared;
 pub mod saved_query;
 pub mod source_access;
 
 pub use cross_app::{
-    CrossAppQueryResult, WorkbenchLimits, WorkbenchSchema, execute_readonly_sql_across_apps,
+    CachedCrossAppResult, CrossAppQueryResult, CrossAppSources, WorkbenchLimits, WorkbenchSchema,
+    describe_cross_app_query, execute_readonly_sql_across_apps, prepare_cross_app_query,
+    tables_unchanged,
 };
+pub use external::{ExternalSchema, ExternalTableResolver, referenced_schemas};
+pub use parameters::{
+    PARAMETER_OPTION_VALUES, ParameterBinding, ParameterOptionsQuery, SqlParameter,
+    describe_parameters, parameter_options_answer, parameter_options_query,
+};
+pub use prepared::{BatchStream, ExecutionBudget, PreparedQuery, SpillConfig};
 
-use crate::arrow_utils::record_batch_to_value;
 use crate::databases::graph::lancegraph::{
     CypherSafetyConfig, GraphOverlayDef, global_query_semaphore, open_table_adapter,
     validate_readonly_sql,
 };
-use datafusion::common::ParamValues;
-use datafusion::prelude::{DataFrame, SessionContext};
+use datafusion::prelude::SessionContext;
 use flow_like_storage_contracts::column_metadata::ColumnReader;
 use flow_like_types::{Result, Value, anyhow};
 use lancedb::Connection;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Parameter binding is shared with the DataFusion catalog nodes and the graph SQL
 /// surface; see [`crate::databases::sql_params`] for the placeholder/binding contract.
@@ -55,6 +64,13 @@ pub struct SqlQueryResult {
     pub rows: Vec<Value>,
     pub row_count: usize,
     pub truncated: bool,
+}
+
+/// What a statement returns and which `$parameters` it takes, without running it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryDescription {
+    pub columns: Vec<SqlColumn>,
+    pub parameters: Vec<SqlParameter>,
 }
 
 /// Which set of base tables a workbench query runs against.
@@ -131,17 +147,18 @@ fn referenced_table_names(
     Some(wanted)
 }
 
+/// A session for `sql` on `surface`, with the external sources it names registered under their
+/// schemas. Returns the external `schema.table` names it opened.
 async fn build_context(
     connection: &Connection,
     surface: &WorkbenchSurface,
     views: &[WorkbenchView],
     sql: &str,
     reader: &ColumnReader,
-) -> Result<SessionContext> {
-    let ctx = SessionContext::new_with_state(
-        crate::databases::df_provider::with_lance_order_pushdown(SessionContext::new().state()),
-    );
-    crate::databases::register_sql_functions(&ctx);
+    externals: &[ExternalSchema],
+    budget: Option<&ExecutionBudget>,
+) -> Result<(SessionContext, Vec<String>)> {
+    let ctx = prepared::budgeted_session(budget)?;
     let mut base_tables: HashSet<String> = HashSet::new();
 
     match surface {
@@ -198,8 +215,12 @@ async fn build_context(
         }
     }
 
+    let statements: Vec<&str> = std::iter::once(sql)
+        .chain(views.iter().map(|view| view.sql.as_str()))
+        .collect();
+    let external_tables = external::register_external_tables(&ctx, &statements, externals).await?;
     register_views(&ctx, views, &base_tables).await?;
-    Ok(ctx)
+    Ok((ctx, external_tables))
 }
 
 /// Registers saved views as virtual tables in dependency order. Views may
@@ -327,20 +348,106 @@ pub async fn execute_readonly_sql(
     limit: Option<usize>,
     reader: &ColumnReader,
 ) -> Result<SqlQueryResult> {
-    let safety = CypherSafetyConfig::default();
-    let limit = row_limit(limit, &safety);
-    let semaphore = global_query_semaphore(safety.max_concurrent);
-    let _permit = semaphore
-        .acquire()
+    let budget = ExecutionBudget::from_limits(WorkbenchLimits {
+        rows: limit,
+        memory_bytes: None,
+    });
+    prepare_workbench_query(
+        connection,
+        surface,
+        views,
+        sql,
+        params,
+        reader,
+        &[],
+        &budget,
+    )
+    .await?
+    .collect()
+    .await
+}
+
+/// Plans one read-only statement on an app's workbench surface without reading rows. External
+/// sources are reachable as `<schema>.<table>` next to the surface's bare tables.
+#[allow(clippy::too_many_arguments)]
+pub async fn prepare_workbench_query(
+    connection: &Connection,
+    surface: WorkbenchSurface,
+    views: Vec<WorkbenchView>,
+    sql: &str,
+    params: &Value,
+    reader: &ColumnReader,
+    externals: &[ExternalSchema],
+    budget: &ExecutionBudget,
+) -> Result<PreparedQuery> {
+    let deadline = tokio::time::Instant::now() + budget.timeout;
+    let timeout_ms = budget.timeout.as_millis();
+    let permit = global_query_semaphore(CypherSafetyConfig::default().max_concurrent)
+        .acquire_owned()
         .await
         .map_err(|e| anyhow!("Semaphore acquire failed: {}", e))?;
 
     validate_readonly_sql(sql)?;
     let param_values = bind_params(params)?;
 
-    let ctx = build_context(connection, &surface, &views, sql, reader).await?;
-    let df = plan_bounded(&ctx, sql, param_values, limit, &safety).await?;
-    collect_bounded(df, limit, &safety).await
+    let (ctx, unversioned_tables) = tokio::time::timeout_at(
+        deadline,
+        build_context(
+            connection,
+            &surface,
+            &views,
+            sql,
+            reader,
+            externals,
+            Some(budget),
+        ),
+    )
+    .await
+    .map_err(|_| anyhow!("Opening the tables of the query timed out after {timeout_ms}ms"))??;
+    let df = tokio::time::timeout_at(deadline, ctx.sql(sql))
+        .await
+        .map_err(|_| anyhow!("SQL planning timed out after {timeout_ms}ms"))??
+        .with_param_values(param_values)?
+        // One sentinel row beyond the cap, so an exact-size result is not reported truncated.
+        .limit(0, Some(budget.rows.saturating_add(1)))?;
+    let (tables, sensitivity) = cross_app::scanned_sources(&df.clone().into_optimized_plan()?)?;
+    Ok(PreparedQuery {
+        columns: prepared::columns_of(&df),
+        df,
+        tables,
+        versions: BTreeMap::new(),
+        unversioned_tables,
+        sensitivity,
+        rows: budget.rows,
+        deadline,
+        timeout: budget.timeout,
+        permit,
+    })
+}
+
+/// Output columns and `$parameters` of a statement on an app's workbench surface, planned
+/// without reading rows or binding values.
+pub async fn describe_workbench_query(
+    connection: &Connection,
+    surface: WorkbenchSurface,
+    views: Vec<WorkbenchView>,
+    sql: &str,
+    reader: &ColumnReader,
+    externals: &[ExternalSchema],
+) -> Result<QueryDescription> {
+    validate_readonly_sql(sql)?;
+    let timeout = query_timeout(&CypherSafetyConfig::default());
+    let (ctx, _) = tokio::time::timeout(
+        timeout,
+        build_context(connection, &surface, &views, sql, reader, externals, None),
+    )
+    .await
+    .map_err(|_| anyhow!("Opening the tables of the query timed out"))??;
+    let df = ctx.sql(sql).await?;
+    Ok(QueryDescription {
+        columns: prepared::columns_of(&df),
+        parameters: describe_parameters(df.logical_plan())?,
+    })
 }
 
 fn row_limit(limit: Option<usize>, safety: &CypherSafetyConfig) -> usize {
@@ -353,66 +460,10 @@ fn query_timeout(safety: &CypherSafetyConfig) -> std::time::Duration {
     std::time::Duration::from_millis(safety.timeout_ms)
 }
 
-async fn plan_bounded(
-    ctx: &SessionContext,
-    sql: &str,
-    param_values: ParamValues,
-    limit: usize,
-    safety: &CypherSafetyConfig,
-) -> Result<DataFrame> {
-    Ok(tokio::time::timeout(query_timeout(safety), ctx.sql(sql))
-        .await
-        .map_err(|_| anyhow!("SQL planning timed out after {}ms", safety.timeout_ms))??
-        .with_param_values(param_values)?
-        // Fetch one sentinel row beyond the caller's cap so an exact-size
-        // result is not falsely reported as truncated.
-        .limit(0, Some(limit.saturating_add(1)))?)
-}
-
-async fn collect_bounded(
-    df: DataFrame,
-    limit: usize,
-    safety: &CypherSafetyConfig,
-) -> Result<SqlQueryResult> {
-    let columns: Vec<SqlColumn> = df
-        .schema()
-        .fields()
-        .iter()
-        .enumerate()
-        .map(|(position, field)| SqlColumn {
-            name: field.name().to_string(),
-            type_name: field.data_type().to_string(),
-            position,
-            metadata: field.metadata().clone(),
-        })
-        .collect();
-
-    let batches = tokio::time::timeout(query_timeout(safety), df.collect())
-        .await
-        .map_err(|_| anyhow!("SQL query timed out after {}ms", safety.timeout_ms))??;
-
-    let mut rows = Vec::new();
-    for batch in &batches {
-        rows.extend(record_batch_to_value(batch)?);
-        if rows.len() > limit {
-            break;
-        }
-    }
-
-    let truncated = rows.len() > limit;
-    rows.truncate(limit);
-    let row_count = rows.len();
-    Ok(SqlQueryResult {
-        columns,
-        rows,
-        row_count,
-        truncated,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow_utils::record_batch_to_value;
 
     #[test]
     fn readonly_validation_allows_select_and_cte() {

@@ -164,6 +164,7 @@ const STORE_DEFINITIONS: readonly StoreDefinition[] = [
 			{ name: "flow-like-global-state" },
 			{ name: "flow-like-element-values" },
 			{ name: "flow-like-routes" },
+			{ name: "flow-like-home-widget-params" },
 		],
 		clear: "stores",
 	},

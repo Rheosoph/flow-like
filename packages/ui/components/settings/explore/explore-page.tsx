@@ -34,6 +34,7 @@ import {
 	OntologyModelPanel,
 	OntologySharingPanel,
 } from "@flow-like/flow-like-ui/components/settings/data-studio/data-studio-panels";
+import { ExternalDatabasesSection } from "@flow-like/flow-like-ui/components/settings/data-studio/external-databases";
 import { ForecastWorkspace } from "@flow-like/flow-like-ui/components/settings/data-studio/forecasting/forecast-workspace";
 import {
 	type DataStudioTableInfo,
@@ -1639,6 +1640,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 							</div>
 						</div>
 					)}
+					<ExternalDatabasesSection appId={appId} />
 				</TabsContent>
 				<TabsContent value="queries" className="min-h-0 flex-1 p-0">
 					<QueryWorkbench

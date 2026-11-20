@@ -1,5 +1,6 @@
 use super::{preparation::*, *};
 use crate::inspection::auto_training_tables::TemporalUnit;
+use crate::inspection::forecasting::tables::preparation::PreparedForecast;
 use flow_like::{
     bit::{Bit, BitTypes},
     state::FlowLikeState,
@@ -13,12 +14,13 @@ use flow_like_storage_contracts::column_metadata::ColumnReader;
 use flow_like_types::{Result, anyhow, bail};
 use std::{
     collections::BTreeMap,
+    path::Path,
     sync::{Arc, OnceLock},
     time::Duration,
 };
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-const MAXIMUM_CHECKPOINT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const SLOT_WAIT: Duration = Duration::from_secs(30);
 
 fn input_error(error: impl std::fmt::Display) -> flow_like_types::Error {
     StudioForecastInputError(error.to_string()).into()
@@ -69,6 +71,12 @@ pub(super) async fn query(
     )
     .await
     .map_err(|_| anyhow!("Forecast SQL preparation or execution exceeded 60 seconds"))??;
+    checked_rows(result, budget)
+}
+
+/// Forecast input rows that are complete, nonempty and within the byte budget; anything else is
+/// an input error.
+pub fn checked_rows(result: SqlQueryResult, budget: &TableBudget) -> Result<SqlQueryResult> {
     if result.truncated {
         return Err(input_error(format!(
             "Forecast SQL returned more than {} rows; filter or aggregate the complete series before forecasting",
@@ -80,6 +88,27 @@ pub(super) async fn query(
     }
     validate_serialized_size(&result.rows, budget.maximum_bytes).map_err(input_error)?;
     Ok(result)
+}
+
+/// The request's row, byte and tensor limits; a malformed request is an input error.
+pub fn forecast_budget(request: &StudioForecastRequest) -> Result<TableBudget> {
+    budget(request).map_err(input_error)
+}
+
+/// One forecast per process at a time: checkpoint loading and CPU inference bound memory and
+/// cores across every app. Hold the permit until inference returns, even if the caller left.
+pub async fn forecast_slot(wait: Duration) -> Result<OwnedSemaphorePermit> {
+    static CONCURRENCY: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    tokio::time::timeout(
+        wait,
+        CONCURRENCY
+            .get_or_init(|| Arc::new(Semaphore::new(1)))
+            .clone()
+            .acquire_owned(),
+    )
+    .await
+    .map_err(|_| anyhow!("Forecasting is busy; retry after the active forecast completes"))?
+    .map_err(|_| anyhow!("Forecast service is unavailable"))
 }
 
 fn numeric_type(kind: &DataType) -> bool {
@@ -177,60 +206,24 @@ pub(super) fn temporal_units(
     Ok(units)
 }
 
-pub(super) async fn run(
-    state: Arc<FlowLikeState>,
-    bit: Bit,
-    connection: &Connection,
-    surface: WorkbenchSurface,
-    views: Vec<WorkbenchView>,
-    reader: &ColumnReader,
+/// A forecast whose rows are read and validated, waiting for its checkpoint.
+pub struct PreparedStudioForecast {
     request: StudioForecastRequest,
-) -> Result<StudioForecastResult> {
-    if bit.id != request.model_bit_id || bit.bit_type != BitTypes::Forecasting {
-        return Err(input_error(
-            "The selected model must resolve to an authorized Forecasting Bit",
-        ));
-    }
-    let budget = budget(&request).map_err(input_error)?;
-    // Keep the permit through blocking work even if the HTTP caller disconnects.
-    // This bounds checkpoint loading and CPU inference across all app surfaces.
-    static CONCURRENCY: OnceLock<Arc<Semaphore>> = OnceLock::new();
-    let permit = tokio::time::timeout(
-        Duration::from_secs(30),
-        CONCURRENCY
-            .get_or_init(|| Arc::new(Semaphore::new(1)))
-            .clone()
-            .acquire_owned(),
-    )
-    .await
-    .map_err(|_| anyhow!("Forecasting is busy; retry after the active forecast completes"))?
-    .map_err(|_| anyhow!("Forecast service is unavailable"))?;
-    let history = query(
-        connection,
-        &surface,
-        &views,
-        reader,
-        &request.sql,
-        &request.params,
-        &budget,
-    )
-    .await?;
+    budget: TableBudget,
+    prepared: PreparedForecast,
+    held: Option<PreparedForecast>,
+    input_rows: usize,
+}
+
+/// Model inputs and the optional holdout from the rows of the request's SQL and future SQL,
+/// before any checkpoint is fetched.
+pub fn prepare_forecast(
+    request: StudioForecastRequest,
+    budget: TableBudget,
+    history: SqlQueryResult,
+    future: Option<SqlQueryResult>,
+) -> Result<PreparedStudioForecast> {
     let units = temporal_units(&history, &request.mapping, false).map_err(input_error)?;
-    let future = match &request.future_sql {
-        Some(sql) => Some(
-            query(
-                connection,
-                &surface,
-                &views,
-                reader,
-                sql,
-                &request.future_params,
-                &budget,
-            )
-            .await?,
-        ),
-        None => None,
-    };
     let future_units = future
         .as_ref()
         .map(|result| temporal_units(result, &request.mapping, true))
@@ -247,19 +240,32 @@ pub(super) async fn run(
     .map_err(input_error)?;
     let held = backtest(&prepared, request.backtest_horizon, request.backtest_offset)
         .map_err(input_error)?;
-    let staged =
-        crate::inspection::forecasting_bit::stage_bit(state, &bit, MAXIMUM_CHECKPOINT_BYTES, None)
-            .await?;
-    let provenance = StudioForecastModel {
-        bit_id: bit.id,
-        family: staged.handle.family,
-        repository: staged.handle.repository,
-        revision: staged.handle.revision,
-    };
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let model = flow_like_ml_forecast::load_cpu(provenance.family, staged.directory.path())?;
-        let capabilities = model.capabilities();
+    Ok(PreparedStudioForecast {
+        request,
+        budget,
+        prepared,
+        held,
+        input_rows,
+    })
+}
+
+impl PreparedStudioForecast {
+    /// Loads the checkpoint in `directory` as `model.family`, runs the holdout and the forecast.
+    /// CPU-bound: call it on a blocking thread.
+    pub fn forecast(
+        self,
+        directory: &Path,
+        model: StudioForecastModel,
+    ) -> Result<StudioForecastResult> {
+        let Self {
+            request,
+            budget,
+            prepared,
+            held,
+            input_rows,
+        } = self;
+        let loaded = flow_like_ml_forecast::load_cpu(model.family, directory)?;
+        let capabilities = loaded.capabilities();
         validate_capabilities(&prepared.request, &capabilities, &budget).map_err(input_error)?;
         validate_chart_budget(
             &prepared,
@@ -277,12 +283,12 @@ pub(super) async fn run(
         }
         let holdout = match held {
             Some(held) => {
-                let predicted = model.forecast(&held.request).map_err(prediction_error)?;
+                let predicted = loaded.forecast(&held.request).map_err(prediction_error)?;
                 Some((held, predicted))
             }
             None => None,
         };
-        let result = model
+        let result = loaded
             .forecast(&prepared.request)
             .map_err(prediction_error)?;
         finish(
@@ -290,12 +296,69 @@ pub(super) async fn run(
             prepared,
             result,
             holdout,
-            provenance,
+            model,
             capabilities,
             input_rows,
             &budget,
         )
         .map_err(input_error)
+    }
+}
+
+pub(super) async fn run(
+    state: Arc<FlowLikeState>,
+    bit: Bit,
+    connection: &Connection,
+    surface: WorkbenchSurface,
+    views: Vec<WorkbenchView>,
+    reader: &ColumnReader,
+    request: StudioForecastRequest,
+) -> Result<StudioForecastResult> {
+    if bit.id != request.model_bit_id || bit.bit_type != BitTypes::Forecasting {
+        return Err(input_error(
+            "The selected model must resolve to an authorized Forecasting Bit",
+        ));
+    }
+    let budget = forecast_budget(&request)?;
+    let permit = forecast_slot(SLOT_WAIT).await?;
+    let history = query(
+        connection,
+        &surface,
+        &views,
+        reader,
+        &request.sql,
+        &request.params,
+        &budget,
+    )
+    .await?;
+    let future = match &request.future_sql {
+        Some(sql) => Some(
+            query(
+                connection,
+                &surface,
+                &views,
+                reader,
+                sql,
+                &request.future_params,
+                &budget,
+            )
+            .await?,
+        ),
+        None => None,
+    };
+    let prepared = prepare_forecast(request, budget, history, future)?;
+    let staged =
+        crate::inspection::forecasting_bit::stage_bit(state, &bit, MAXIMUM_CHECKPOINT_BYTES, None)
+            .await?;
+    let model = StudioForecastModel {
+        bit_id: bit.id,
+        family: staged.handle.family,
+        repository: staged.handle.repository,
+        revision: staged.handle.revision,
+    };
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        prepared.forecast(staged.directory.path(), model)
     })
     .await?
 }

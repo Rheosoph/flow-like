@@ -70,6 +70,11 @@ import {
 } from "./inline-segments";
 import { MessageReactionPicker, MessageReactions } from "./message-reactions";
 import { MessageReference } from "./message-reference";
+import {
+	MessageTouchMenu,
+	useLongPress,
+	useTouchOnly,
+} from "./message-touch-menu";
 import { MessageWidgetDocuments, MessageWidgets } from "./message-widgets";
 import {
 	type PendingAsk,
@@ -746,6 +751,14 @@ export const MessageComponent = memo(
 			onReply(message, selectedText);
 		}, [message, onReply, interactionDisabled]);
 
+		const bubbleRef = useRef<HTMLDivElement | null>(null);
+		const touchOnly = useTouchOnly();
+		const [touchMenuOpen, setTouchMenuOpen] = useState(false);
+		const openTouchMenu = useCallback(() => {
+			setTouchMenuOpen(true);
+		}, []);
+		useLongPress(bubbleRef, touchOnly && !loading, openTouchMenu);
+
 		const handleFeedbackSubmit = useCallback(
 			async (data: {
 				comment: string;
@@ -914,6 +927,7 @@ export const MessageComponent = memo(
 					}}
 				>
 					<div
+						ref={bubbleRef}
 						className={cn(
 							"relative min-w-0 whitespace-break-spaces transition-all duration-300 ease-in-out",
 							room
@@ -1188,6 +1202,31 @@ export const MessageComponent = memo(
 						)}
 						{FLOWPILOT_DEBUG_ENABLED && !isUser && message.debug_report && (
 							<AgentDebugReport report={message.debug_report} />
+						)}
+						{touchOnly && !loading && touchMenuOpen && (
+							<MessageTouchMenu
+								anchorRef={bubbleRef}
+								open={touchMenuOpen}
+								onOpenChange={setTouchMenuOpen}
+								align={isUser ? "end" : "start"}
+								reactions={message.reactions}
+								onToggleReaction={
+									onReaction && !interactionDisabled
+										? toggleReaction
+										: undefined
+								}
+								disabled={savingReaction || interactionDisabled}
+								onReply={
+									onReply && !interactionDisabled ? replyToMessage : undefined
+								}
+								onCopy={copyToClipboard}
+								onEdit={
+									onMessageUpdate && (editable ?? !isUser)
+										? () => setShowEditDialog(true)
+										: undefined
+								}
+								extra={renderMenu?.(message)}
+							/>
 						)}
 						{room && !loading && (
 							<RoomMessageActions

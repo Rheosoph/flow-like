@@ -87,7 +87,7 @@ RUN --mount=type=cache,id=flow-like-next-node24-next16-${TARGETARCH},target=/app
 # ============================================================
 # Stage 3: Runtime (nginx to serve static files)
 # ============================================================
-FROM nginx:1.30.4-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
+FROM nginx:1.30.7-alpine@sha256:caf4e1e032a20f9c3c5e28fc7f25ffd768ad8677b4975c54193075997b3a97e3
 
 # Copy custom nginx configuration
 COPY apps/backend/kubernetes/web/nginx-main.conf /etc/nginx/nginx.conf

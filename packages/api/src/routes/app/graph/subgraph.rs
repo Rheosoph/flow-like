@@ -1,17 +1,14 @@
 use crate::{
-    ensure_any_permission,
-    error::ApiError,
-    middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions,
-    routes::app::db::{ScopeParams, column_reader},
-    state::AppState,
+    ensure_any_permission, error::ApiError, middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions, routes::app::db::ScopeParams, state::AppState,
 };
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
 use flow_like_catalog_core::DEFAULT_GRAPH_QUERY_LIMIT;
-use flow_like_storage::databases::graph::{GraphStore, SubgraphResult, lancegraph};
+use flow_like_query::graph::{GraphOperation, ObjectRef};
+use flow_like_storage::databases::graph::SubgraphResult;
 use utoipa::ToSchema;
 
 #[derive(Debug, serde::Deserialize, ToSchema)]
@@ -45,9 +42,11 @@ fn default_depth() -> usize {
     request_body = SubgraphPayload,
     responses(
         (status = 200, description = "Subgraph result", body = Object),
-        (status = 400, description = "Bad request"),
+        (status = 400, description = "Bad request, or the extraction failed"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden")
+        (status = 403, description = "Forbidden"),
+        (status = 503, description = "The query service is unavailable"),
+        (status = 504, description = "The extraction ran out of time")
     ),
     security(
         ("bearer_auth" = []),
@@ -74,26 +73,30 @@ pub async fn subgraph(
         RolePermissions::ReadDatabase
     );
 
-    let (connection, overlay) =
-        super::load_scoped_overlay(&state, &user, &app_id, &overlay_id, &scope).await?;
-    let store = lancegraph::LanceGraphStore::new_for(
-        connection,
-        overlay,
-        None,
-        column_reader(&permission, &scope),
+    let seeds: Vec<ObjectRef> = payload
+        .seeds
+        .into_iter()
+        .map(|seed| ObjectRef {
+            label: seed.label,
+            id: seed.id,
+        })
+        .collect();
+
+    let result = super::read_overlay(
+        &state,
+        &user,
+        &permission,
+        &app_id,
+        &overlay_id,
+        &scope,
+        |overlay| GraphOperation::Subgraph {
+            overlay: Box::new(overlay),
+            seeds,
+            depth: payload.depth,
+            limit: payload.limit.unwrap_or(DEFAULT_GRAPH_QUERY_LIMIT),
+        },
     )
     .await?;
-
-    let seeds: Vec<(String, flow_like_types::Value)> =
-        payload.seeds.into_iter().map(|s| (s.label, s.id)).collect();
-
-    let result = store
-        .subgraph(
-            seeds,
-            payload.depth,
-            Some(payload.limit.unwrap_or(DEFAULT_GRAPH_QUERY_LIMIT)),
-        )
-        .await?;
 
     Ok(Json(result))
 }

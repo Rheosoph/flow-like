@@ -47,6 +47,7 @@ Paths are relative to your hub's API, for example `https://api.flow-like.com/api
 | `POST` | `/bots/{id}/tasks/{task_id}/fire` | Run a task now. |
 | `GET`, `POST` | `/bots/{id}/webhooks` | List or create webhooks. |
 | `PATCH`, `DELETE` | `/bots/{id}/webhooks/{hook_id}` | Change or delete a webhook; `POST .../rotate` issues a new secret. |
+| `GET`, `PUT`, `DELETE` | `/bots/{id}/calendar/feed` | Read, create or change, or remove the bot's [calendar subscription link](/bots/capabilities/#show-a-bots-calendar-in-your-calendar-app); `POST .../rotate` issues a new link. Owner only. |
 | `POST` | `/bots/hooks/{hook_id}` | The public webhook URL. |
 | `POST` | `/bots/{id}/turns/{turn_id}/approval` | Answer an approval card. |
 | `GET`, `DELETE` | `/bots/{id}/tool-grants` | List and revoke standing approvals. |

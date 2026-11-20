@@ -22,6 +22,9 @@ import type {
 	IBotToolGrant,
 	IBotWebhook,
 	IBotWorkspace,
+	ICalendarFeed,
+	ICalendarRange,
+	ICalendarWake,
 	IConnectedAccount,
 	ICreateBotConnectorRequest,
 	ICreateBotRequest,
@@ -32,8 +35,16 @@ import type {
 	IUpdateBotRequest,
 	IUpdateBotSkillRequest,
 	IUpdateBotTaskRequest,
+	IUpdateCalendarFeed,
+	IUpdateCalendarWake,
 	IUpsertBotSecretRequest,
 } from "@flow-like/flow-like-ui";
+import {
+	expectCalendarFeed,
+	expectCalendarRange,
+	expectCalendarWake,
+	isNoCalendarFeed,
+} from "@flow-like/flow-like-ui/lib/bot-calendar-shape";
 import { RemoteBotComputerHost } from "@flow-like/flow-like-ui/lib/bot-screens/remote-computer-host";
 import { createScreenSealing } from "@flow-like/flow-like-ui/lib/bot-screens/screen-sealing";
 import { browserInboxCrypto } from "@flow-like/flow-like-ui/lib/inbox-e2e-browser";
@@ -450,6 +461,85 @@ export class WebBotState implements IBotState {
 		await apiDelete(
 			`${botPath(botId)}/tasks/${encodeURIComponent(taskId)}`,
 			this.backend.auth,
+		);
+	}
+
+	async getCalendarFeed(botId: string): Promise<ICalendarFeed | null> {
+		try {
+			return expectCalendarFeed(
+				await apiGet<unknown>(
+					`${botPath(botId)}/calendar/feed`,
+					this.backend.auth,
+				),
+				`read the calendar link of bot ${botId}`,
+			);
+		} catch (error) {
+			if (isNoCalendarFeed(error)) return null;
+			throw error;
+		}
+	}
+
+	async updateCalendarFeed(
+		botId: string,
+		update: IUpdateCalendarFeed,
+	): Promise<ICalendarFeed> {
+		return expectCalendarFeed(
+			await apiPut<unknown>(
+				`${botPath(botId)}/calendar/feed`,
+				update,
+				this.backend.auth,
+			),
+			`change the calendar link of bot ${botId}`,
+		);
+	}
+
+	async rotateCalendarFeed(botId: string): Promise<ICalendarFeed> {
+		return expectCalendarFeed(
+			await apiPost<unknown>(
+				`${botPath(botId)}/calendar/feed/rotate`,
+				undefined,
+				this.backend.auth,
+			),
+			`replace the calendar link of bot ${botId}`,
+		);
+	}
+
+	async deleteCalendarFeed(botId: string): Promise<void> {
+		await apiDelete(`${botPath(botId)}/calendar/feed`, this.backend.auth);
+	}
+
+	async getCalendarWake(botId: string): Promise<ICalendarWake> {
+		return expectCalendarWake(
+			await apiGet<unknown>(`${botPath(botId)}/calendar`, this.backend.auth),
+			`read the calendar wake-ups of bot ${botId}`,
+		);
+	}
+
+	async setCalendarWake(
+		botId: string,
+		update: IUpdateCalendarWake,
+	): Promise<ICalendarWake> {
+		return expectCalendarWake(
+			await apiPut<unknown>(
+				`${botPath(botId)}/calendar`,
+				update,
+				this.backend.auth,
+			),
+			`change the calendar wake-ups of bot ${botId}`,
+		);
+	}
+
+	async listCalendar(
+		botId: string,
+		from: string,
+		to: string,
+	): Promise<ICalendarRange> {
+		return expectCalendarRange(
+			await apiGet<unknown>(
+				`${botPath(botId)}/calendar/events?${new URLSearchParams({ from, to })}`,
+				this.backend.auth,
+			),
+			`list the calendar of bot ${botId}`,
 		);
 	}
 

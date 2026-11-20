@@ -1,0 +1,341 @@
+{
+	"bits": [
+		{
+			"ref": "nemotron-3-1b-backbone",
+			"type": "File",
+			"authors": [
+				"NVIDIA",
+				"kzzalews"
+			],
+			"repository": "https://huggingface.co/kzzalews/Nemotron-3-Embed-1B-BF16-onnx",
+			"version": "d1a7e40269d80090791bdc37166f4cbf708153b0",
+			"download_link": "https://huggingface.co/kzzalews/Nemotron-3-Embed-1B-BF16-onnx/resolve/d1a7e40269d80090791bdc37166f4cbf708153b0/fp16/model.onnx",
+			"file_name": "model.onnx",
+			"size": 2207360,
+			"license": "openmdw-1.1",
+			"meta": {
+				"en": {
+					"name": "Nemotron 3 Embed 1B: onnx/model.onnx",
+					"description": "Pinned onnx/model.onnx for the Nemotron 3 Embed 1B local embedding bundle.",
+					"icon": "https://cdn.flow-like.com/bits/avatars/openrouter/nvidia/24c21375cca347d2f3e86b9bd27d7fdf4774ca7bd5d59482251723cb6dea82b0.png"
+				}
+			}
+		},
+		{
+			"ref": "nemotron-3-1b-backbone-weights",
+			"type": "File",
+			"authors": [
+				"NVIDIA",
+				"kzzalews"
+			],
+			"repository": "https://huggingface.co/kzzalews/Nemotron-3-Embed-1B-BF16-onnx",
+			"version": "d1a7e40269d80090791bdc37166f4cbf708153b0",
+			"download_link": "https://huggingface.co/kzzalews/Nemotron-3-Embed-1B-BF16-onnx/resolve/d1a7e40269d80090791bdc37166f4cbf708153b0/fp16/model.onnx.data",
+			"file_name": "model.onnx.data",
+			"size": 2818707456,
+			"license": "openmdw-1.1",
+			"meta": {
+				"en": {
+					"name": "Nemotron 3 Embed 1B: onnx/model.onnx.data",
+					"description": "Pinned onnx/model.onnx.data for the Nemotron 3 Embed 1B local embedding bundle.",
+					"icon": "https://cdn.flow-like.com/bits/avatars/openrouter/nvidia/24c21375cca347d2f3e86b9bd27d7fdf4774ca7bd5d59482251723cb6dea82b0.png"
+				}
+			}
+		},
+		{
+			"ref": "nemotron-3-1b-config",
+			"type": "Config",
+			"authors": [
+				"NVIDIA",
+				"kzzalews"
+			],
+			"repository": "https://huggingface.co/kzzalews/Nemotron-3-Embed-1B-BF16-onnx",
+			"version": "d1a7e40269d80090791bdc37166f4cbf708153b0",
+			"download_link": "https://huggingface.co/kzzalews/Nemotron-3-Embed-1B-BF16-onnx/raw/d1a7e40269d80090791bdc37166f4cbf708153b0/config.json",
+			"file_name": "config.json",
+			"size": 1117,
+			"license": "openmdw-1.1",
+			"meta": {
+				"en": {
+					"name": "Nemotron 3 Embed 1B: config.json",
+					"description": "Pinned config.json for the Nemotron 3 Embed 1B local embedding bundle.",
+					"icon": "https://cdn.flow-like.com/bits/avatars/openrouter/nvidia/24c21375cca347d2f3e86b9bd27d7fdf4774ca7bd5d59482251723cb6dea82b0.png"
+				}
+			}
+		},
+		{
+			"ref": "nemotron-3-1b-tokenizer",
+			"type": "Tokenizer",
+			"authors": [
+				"NVIDIA",
+				"kzzalews"
+			],
+			"repository": "https://huggingface.co/kzzalews/Nemotron-3-Embed-1B-BF16-onnx",
+			"version": "d1a7e40269d80090791bdc37166f4cbf708153b0",
+			"download_link": "https://huggingface.co/kzzalews/Nemotron-3-Embed-1B-BF16-onnx/resolve/d1a7e40269d80090791bdc37166f4cbf708153b0/tokenizer.json",
+			"file_name": "tokenizer.json",
+			"size": 17077833,
+			"license": "openmdw-1.1",
+			"meta": {
+				"en": {
+					"name": "Nemotron 3 Embed 1B: tokenizer.json",
+					"description": "Pinned tokenizer.json for the Nemotron 3 Embed 1B local embedding bundle.",
+					"icon": "https://cdn.flow-like.com/bits/avatars/openrouter/nvidia/24c21375cca347d2f3e86b9bd27d7fdf4774ca7bd5d59482251723cb6dea82b0.png"
+				}
+			}
+		},
+		{
+			"ref": "nemotron-3-1b-tokenizer-config",
+			"type": "TokenizerConfig",
+			"authors": [
+				"NVIDIA",
+				"kzzalews"
+			],
+			"repository": "https://huggingface.co/kzzalews/Nemotron-3-Embed-1B-BF16-onnx",
+			"version": "d1a7e40269d80090791bdc37166f4cbf708153b0",
+			"download_link": "https://huggingface.co/kzzalews/Nemotron-3-Embed-1B-BF16-onnx/raw/d1a7e40269d80090791bdc37166f4cbf708153b0/tokenizer_config.json",
+			"file_name": "tokenizer_config.json",
+			"size": 21139,
+			"license": "openmdw-1.1",
+			"meta": {
+				"en": {
+					"name": "Nemotron 3 Embed 1B: tokenizer_config.json",
+					"description": "Pinned tokenizer_config.json for the Nemotron 3 Embed 1B local embedding bundle.",
+					"icon": "https://cdn.flow-like.com/bits/avatars/openrouter/nvidia/24c21375cca347d2f3e86b9bd27d7fdf4774ca7bd5d59482251723cb6dea82b0.png"
+				}
+			}
+		},
+		{
+			"ref": "nemotron-3-1b-special-tokens",
+			"type": "SpecialTokensMap",
+			"authors": [
+				"NVIDIA",
+				"kzzalews"
+			],
+			"repository": "https://huggingface.co/kzzalews/Nemotron-3-Embed-1B-BF16-onnx",
+			"version": "d1a7e40269d80090791bdc37166f4cbf708153b0",
+			"download_link": "https://huggingface.co/kzzalews/Nemotron-3-Embed-1B-BF16-onnx/raw/d1a7e40269d80090791bdc37166f4cbf708153b0/special_tokens_map.json",
+			"file_name": "special_tokens_map.json",
+			"size": 71,
+			"license": "openmdw-1.1",
+			"meta": {
+				"en": {
+					"name": "Nemotron 3 Embed 1B: special_tokens_map.json",
+					"description": "Pinned special_tokens_map.json for the Nemotron 3 Embed 1B local embedding bundle.",
+					"icon": "https://cdn.flow-like.com/bits/avatars/openrouter/nvidia/24c21375cca347d2f3e86b9bd27d7fdf4774ca7bd5d59482251723cb6dea82b0.png"
+				}
+			}
+		},
+		{
+			"ref": "nemotron-3-1b-license",
+			"type": "File",
+			"authors": [
+				"NVIDIA"
+			],
+			"repository": "https://huggingface.co/nvidia/Nemotron-3-Embed-1B-BF16",
+			"version": "c0c9fea93ea424587517f2c59e20db9f1d6bf615",
+			"download_link": "https://huggingface.co/nvidia/Nemotron-3-Embed-1B-BF16/raw/c0c9fea93ea424587517f2c59e20db9f1d6bf615/LICENSE",
+			"file_name": "LICENSE",
+			"size": 2796,
+			"license": "openmdw-1.1",
+			"meta": {
+				"en": {
+					"name": "Nemotron 3 Embed 1B: LICENSE",
+					"description": "Pinned LICENSE for the Nemotron 3 Embed 1B local embedding bundle.",
+					"icon": "https://cdn.flow-like.com/bits/avatars/openrouter/nvidia/24c21375cca347d2f3e86b9bd27d7fdf4774ca7bd5d59482251723cb6dea82b0.png"
+				}
+			}
+		},
+		{
+			"ref": "nemotron-3-1b-notice",
+			"type": "File",
+			"authors": [
+				"NVIDIA"
+			],
+			"repository": "https://huggingface.co/nvidia/Nemotron-3-Embed-1B-BF16",
+			"version": "c0c9fea93ea424587517f2c59e20db9f1d6bf615",
+			"download_link": "https://huggingface.co/nvidia/Nemotron-3-Embed-1B-BF16/raw/c0c9fea93ea424587517f2c59e20db9f1d6bf615/NOTICE",
+			"file_name": "NOTICE",
+			"size": 1381,
+			"license": "openmdw-1.1",
+			"meta": {
+				"en": {
+					"name": "Nemotron 3 Embed 1B: NOTICE",
+					"description": "Pinned NOTICE for the Nemotron 3 Embed 1B local embedding bundle.",
+					"icon": "https://cdn.flow-like.com/bits/avatars/openrouter/nvidia/24c21375cca347d2f3e86b9bd27d7fdf4774ca7bd5d59482251723cb6dea82b0.png"
+				}
+			}
+		},
+		{
+			"ref": "nemotron-3-1b-third-party-notices",
+			"type": "File",
+			"authors": [
+				"NVIDIA"
+			],
+			"repository": "https://huggingface.co/nvidia/Nemotron-3-Embed-1B-BF16",
+			"version": "c0c9fea93ea424587517f2c59e20db9f1d6bf615",
+			"download_link": "https://huggingface.co/nvidia/Nemotron-3-Embed-1B-BF16/raw/c0c9fea93ea424587517f2c59e20db9f1d6bf615/THIRD_PARTY_NOTICES.md",
+			"file_name": "THIRD_PARTY_NOTICES.md",
+			"size": 24774,
+			"license": "openmdw-1.1",
+			"meta": {
+				"en": {
+					"name": "Nemotron 3 Embed 1B: THIRD_PARTY_NOTICES.md",
+					"description": "Pinned THIRD_PARTY_NOTICES.md for the Nemotron 3 Embed 1B local embedding bundle.",
+					"icon": "https://cdn.flow-like.com/bits/avatars/openrouter/nvidia/24c21375cca347d2f3e86b9bd27d7fdf4774ca7bd5d59482251723cb6dea82b0.png"
+				}
+			}
+		},
+		{
+			"ref": "nemotron-3-embed-1b",
+			"id": "orb01857baeebd6d70ba8934",
+			"type": "Embedding",
+			"authors": [
+				"NVIDIA",
+				"kzzalews"
+			],
+			"repository": "https://huggingface.co/nvidia/Nemotron-3-Embed-1B-BF16",
+			"version": "d1a7e40269d80090791bdc37166f4cbf708153b0",
+			"license": "openmdw-1.1",
+			"model_slug": "flow-like-estimate-quality-nvidia-nemotron-3-embed-1b-free",
+			"parameters": {
+				"provider": {
+					"provider_name": "Local",
+					"model_id": "kzzalews/Nemotron-3-Embed-1B-BF16-onnx",
+					"version": "d1a7e40269d80090791bdc37166f4cbf708153b0"
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "nvidia/nemotron-3-embed-1b:free",
+					"supports_dimensions": false
+				},
+				"prefix": {
+					"query": "query: ",
+					"paragraph": "passage: "
+				},
+				"pooling": "Mean",
+				"input_length": 4096,
+				"vector_length": 2048,
+				"languages": [
+					"en",
+					"ar",
+					"as",
+					"bn",
+					"bg",
+					"zh",
+					"da",
+					"nl",
+					"fi",
+					"fr",
+					"de",
+					"hi",
+					"id",
+					"it",
+					"ja",
+					"ko",
+					"ms",
+					"mr",
+					"ne",
+					"no",
+					"fa",
+					"pt",
+					"ro",
+					"ru",
+					"es",
+					"sw",
+					"sv",
+					"ta",
+					"te",
+					"th",
+					"uk",
+					"ur",
+					"vi"
+				],
+				"pricing": {
+					"request_micro_usd": 0,
+					"input_micro_usd_per_million_tokens": 0,
+					"output_micro_usd_per_million_tokens": 0
+				},
+				"embedding": {
+					"schema_version": 1,
+					"adapter": "sentence_transformer",
+					"adapter_version": 1,
+					"space_id": "nemotron-3-embed-1b-onnx-fp16-d1a7e40269d80090791bdc37166f4cbf708153b0",
+					"dimensions": 2048,
+					"supported_dimensions": [
+						2048
+					],
+					"max_tokens": 4096,
+					"pooling": "mean",
+					"task_profiles": {
+						"query": {
+							"prefix": "query: ",
+							"suffix": ""
+						},
+						"document": {
+							"prefix": "passage: ",
+							"suffix": ""
+						}
+					},
+					"artifacts": {
+						"backbone": {
+							"bit": "@nemotron-3-1b-backbone",
+							"path": "onnx/model.onnx"
+						},
+						"backbone_weights": {
+							"bit": "@nemotron-3-1b-backbone-weights",
+							"path": "onnx/model.onnx.data"
+						},
+						"config": {
+							"bit": "@nemotron-3-1b-config",
+							"path": "config.json"
+						},
+						"tokenizer": {
+							"bit": "@nemotron-3-1b-tokenizer",
+							"path": "tokenizer.json"
+						},
+						"tokenizer_config": {
+							"bit": "@nemotron-3-1b-tokenizer-config",
+							"path": "tokenizer_config.json"
+						},
+						"special_tokens": {
+							"bit": "@nemotron-3-1b-special-tokens",
+							"path": "special_tokens_map.json"
+						},
+						"license": {
+							"bit": "@nemotron-3-1b-license",
+							"path": "LICENSE"
+						},
+						"notice": {
+							"bit": "@nemotron-3-1b-notice",
+							"path": "NOTICE"
+						},
+						"third_party_notices": {
+							"bit": "@nemotron-3-1b-third-party-notices",
+							"path": "THIRD_PARTY_NOTICES.md"
+						}
+					}
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Nemotron 3 Embed 1B",
+					"description": "Embed multilingual text locally with NVIDIA's Nemotron 3 model. Produces 2,048-dimensional vectors with an optional matching OpenRouter fallback.",
+					"long_description": "Embed text queries and documents with the local ONNX FP16 conversion of NVIDIA's Nemotron 3 Embed 1B model. The model files and tokenizer require about 2.84 GB of disk space. This Bit accepts up to 4,096 tokens per input, including its query or passage prefix, and returns normalized 2,048-dimensional vectors. Mobile runtimes cap the local context at 2,048 tokens.\n\nThe ONNX conversion is published by kzzalews and pinned to revision d1a7e40269d80090791bdc37166f4cbf708153b0. NVIDIA's OpenMDW 1.1 license and notices accompany the bundle.\n\nHosts without local execution can use nvidia/nemotron-3-embed-1b:free through OpenRouter when that endpoint is available. Free endpoint availability depends on the provider. Local and hosted execution have separate embedding-space identities. Use one execution mode for each index and re-embed documents when changing modes.",
+					"tags": [
+						"embeddings",
+						"local",
+						"onnx",
+						"multilingual",
+						"nvidia",
+						"nemotron"
+					],
+					"website": "https://huggingface.co/nvidia/Nemotron-3-Embed-1B-BF16",
+					"docs_url": "https://huggingface.co/nvidia/Nemotron-3-Embed-1B-BF16",
+					"icon": "https://cdn.flow-like.com/bits/avatars/openrouter/nvidia/24c21375cca347d2f3e86b9bd27d7fdf4774ca7bd5d59482251723cb6dea82b0.png",
+					"use_case": "Retrieve multilingual passages and source code with local model files."
+				}
+			}
+		}
+	]
+}

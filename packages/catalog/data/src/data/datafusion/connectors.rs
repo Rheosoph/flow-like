@@ -13,11 +13,18 @@ use flow_like::flow::execution::{ExecutionEnvironment, egress};
 use flow_like_storage::datafusion::catalog::TableProvider;
 use flow_like_types::Result;
 use flow_like_types::egress::is_public_ip;
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 #[cfg(any(feature = "postgres", feature = "mysql", feature = "clickhouse"))]
 use datafusion_table_providers::util::secrets::to_secret_map;
+#[cfg(feature = "clickhouse")]
+use datafusion_table_providers::{
+    clickhouse::ClickHouseTableFactory,
+    sql::db_connection_pool::clickhousepool::ClickHouseConnectionPool,
+};
 #[cfg(feature = "mysql")]
 use datafusion_table_providers::{
     mysql::MySQLTableFactory, sql::db_connection_pool::mysqlpool::MySQLConnectionPool,
@@ -135,6 +142,64 @@ pub struct FileDatabaseSource {
     pub staged_root: Option<PathBuf>,
 }
 
+/// A BigQuery dataset. Queries run as jobs billed to `project_id`.
+#[derive(Clone)]
+pub struct BigquerySource {
+    pub project_id: String,
+    pub dataset: String,
+    /// Where jobs run, such as `EU` or `europe-west1`; BigQuery finds the dataset's when unset.
+    pub location: Option<String>,
+    /// A Google service account key; its tokens are limited to read-only access.
+    pub service_account_json: String,
+    pub table: String,
+    /// Statements still running then fail as timed out; unset, they get five minutes.
+    pub deadline: Option<Instant>,
+}
+
+impl fmt::Debug for BigquerySource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BigquerySource")
+            .field("project_id", &self.project_id)
+            .field("dataset", &self.dataset)
+            .field("location", &self.location)
+            .field("table", &self.table)
+            .finish_non_exhaustive()
+    }
+}
+
+/// An Athena database, read with the source's own access keys.
+#[derive(Clone)]
+pub struct AthenaSource {
+    pub region: String,
+    pub database: String,
+    /// Defaults to `AwsDataCatalog`.
+    pub catalog: Option<String>,
+    /// Defaults to the account's `primary` workgroup.
+    pub workgroup: Option<String>,
+    /// `s3://…` for query results; the workgroup's setting applies when unset.
+    pub output_location: Option<String>,
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: Option<String>,
+    pub table: String,
+    /// Queries still running then are stopped and fail as timed out; unset, they get five
+    /// minutes.
+    pub deadline: Option<Instant>,
+}
+
+impl fmt::Debug for AthenaSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AthenaSource")
+            .field("region", &self.region)
+            .field("database", &self.database)
+            .field("catalog", &self.catalog)
+            .field("workgroup", &self.workgroup)
+            .field("output_location", &self.output_location)
+            .field("table", &self.table)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum ConnectorSource {
     Postgres(PostgresSource),
@@ -145,6 +210,8 @@ pub enum ConnectorSource {
     Oracle(OracleSource),
     Sqlite(FileDatabaseSource),
     Duckdb(FileDatabaseSource),
+    Bigquery(BigquerySource),
+    Athena(AthenaSource),
 }
 
 /// A live provider for `source`, after the egress checks of `environment`.
@@ -162,6 +229,8 @@ pub async fn connect_table(
         ConnectorSource::Sqlite(source) => sqlite_provider(source, policy.environment).await,
         ConnectorSource::Oracle(source) => oracle_provider(source, policy).await,
         ConnectorSource::Duckdb(source) => duckdb_provider(source, policy.environment).await,
+        ConnectorSource::Bigquery(source) => bigquery_provider(source, policy).await,
+        ConnectorSource::Athena(source) => athena_provider(source, policy).await,
     }
 }
 
@@ -333,7 +402,7 @@ async fn ensure_odbc_allowed(policy: ConnectPolicy, connection_string: &str) -> 
     ensure_connection_allowed(policy, "ODBC", &host, port.unwrap_or(0)).await
 }
 
-fn not_enabled(driver: &str, feature: &str) -> flow_like_types::Error {
+pub(super) fn not_enabled(driver: &str, feature: &str) -> flow_like_types::Error {
     flow_like_types::anyhow!(
         "{driver} support is not enabled. Rebuild with the '{feature}' feature flag."
     )
@@ -357,8 +426,20 @@ pub async fn postgres_provider(
 
 #[cfg(feature = "postgres")]
 async fn connect_postgres(source: &PostgresSource) -> Result<Provider> {
-    use flow_like_storage::datafusion::common::TableReference;
+    let pool = postgres_pool(source).await?;
+    postgres_table(
+        pool,
+        &source.database,
+        &source.schema,
+        &source.table,
+        source.readonly,
+    )
+    .await
+}
 
+/// A pool on the database `source` names; its table is not used.
+#[cfg(feature = "postgres")]
+pub(super) async fn postgres_pool(source: &PostgresSource) -> Result<Arc<PostgresConnectionPool>> {
     let params = std::collections::HashMap::from([
         ("host".to_string(), source.host.clone()),
         ("port".to_string(), source.port.to_string()),
@@ -369,17 +450,26 @@ async fn connect_postgres(source: &PostgresSource) -> Result<Provider> {
     ]);
 
     ensure_crypto_provider();
-    let pool = PostgresConnectionPool::new(to_secret_map(params))
+    PostgresConnectionPool::new(to_secret_map(params))
         .await
-        .map_err(|e| flow_like_types::anyhow!("PostgreSQL connection failed: {}", e))?;
+        .map(Arc::new)
+        .map_err(|e| flow_like_types::anyhow!("PostgreSQL connection failed: {}", e))
+}
 
-    let factory = PostgresTableFactory::new(Arc::new(pool));
-    let table_ref = TableReference::full(
-        source.database.clone(),
-        source.schema.clone(),
-        source.table.clone(),
-    );
-    let provider = if source.readonly {
+#[cfg(feature = "postgres")]
+pub(super) async fn postgres_table(
+    pool: Arc<PostgresConnectionPool>,
+    database: &str,
+    schema: &str,
+    table: &str,
+    readonly: bool,
+) -> Result<Provider> {
+    use flow_like_storage::datafusion::common::TableReference;
+
+    let factory = PostgresTableFactory::new(pool);
+    let table_ref =
+        TableReference::full(database.to_string(), schema.to_string(), table.to_string());
+    let provider = if readonly {
         factory.table_provider(table_ref).await
     } else {
         factory.read_write_table_provider(table_ref).await
@@ -390,10 +480,7 @@ async fn connect_postgres(source: &PostgresSource) -> Result<Provider> {
     // as a table without columns instead of an error.
     if provider.schema().fields().is_empty() {
         return Err(flow_like_types::anyhow!(
-            "PostgreSQL table '{}.{}' was not found in database '{}', or none of its columns has a supported type",
-            source.schema,
-            source.table,
-            source.database
+            "PostgreSQL table '{schema}.{table}' was not found in database '{database}', or none of its columns has a supported type"
         ));
     }
     Ok(provider)
@@ -414,8 +501,13 @@ pub async fn mysql_provider(
 
 #[cfg(feature = "mysql")]
 async fn connect_mysql(source: &MysqlSource) -> Result<Provider> {
-    use flow_like_storage::datafusion::common::TableReference;
+    let pool = mysql_pool(source).await?;
+    mysql_table(pool, &source.table, source.readonly).await
+}
 
+/// A pool bound to the database `source` names; its table is not used.
+#[cfg(feature = "mysql")]
+pub(super) async fn mysql_pool(source: &MysqlSource) -> Result<Arc<MySQLConnectionPool>> {
     let params = std::collections::HashMap::from([
         ("host".to_string(), source.host.clone()),
         ("tcp_port".to_string(), source.port.to_string()),
@@ -426,15 +518,25 @@ async fn connect_mysql(source: &MysqlSource) -> Result<Provider> {
     ]);
 
     ensure_crypto_provider();
-    let pool = MySQLConnectionPool::new(to_secret_map(params))
+    MySQLConnectionPool::new(to_secret_map(params))
         .await
-        .map_err(|e| flow_like_types::anyhow!("MySQL connection failed: {}", e))?;
+        .map(Arc::new)
+        .map_err(|e| flow_like_types::anyhow!("MySQL connection failed: {}", e))
+}
+
+#[cfg(feature = "mysql")]
+pub(super) async fn mysql_table(
+    pool: Arc<MySQLConnectionPool>,
+    table: &str,
+    readonly: bool,
+) -> Result<Provider> {
+    use flow_like_storage::datafusion::common::TableReference;
 
     // The pool is already bound to the database, and the provider's writer resolves
     // the table by its full display name, so only a bare name reads and writes.
-    let factory = MySQLTableFactory::new(Arc::new(pool));
-    let table_ref = TableReference::bare(source.table.clone());
-    if source.readonly {
+    let factory = MySQLTableFactory::new(pool);
+    let table_ref = TableReference::bare(table.to_string());
+    if readonly {
         factory.table_provider(table_ref).await
     } else {
         factory.read_write_table_provider(table_ref).await
@@ -457,9 +559,15 @@ pub async fn clickhouse_provider(
 
 #[cfg(feature = "clickhouse")]
 async fn connect_clickhouse(source: &ClickhouseSource) -> Result<Provider> {
-    use datafusion_table_providers::clickhouse::ClickHouseTableFactory;
-    use datafusion_table_providers::sql::db_connection_pool::clickhousepool::ClickHouseConnectionPool;
+    let pool = clickhouse_pool(source).await?;
+    clickhouse_table(pool, &source.database, &source.table).await
+}
 
+/// A pool on the database `source` names; its table is not used.
+#[cfg(feature = "clickhouse")]
+pub(super) async fn clickhouse_pool(
+    source: &ClickhouseSource,
+) -> Result<Arc<ClickHouseConnectionPool>> {
     let mut params = std::collections::HashMap::from([
         (
             "url".to_string(),
@@ -478,14 +586,23 @@ async fn connect_clickhouse(source: &ClickhouseSource) -> Result<Provider> {
         params.insert("password".to_string(), source.password.clone());
     }
 
-    let pool = ClickHouseConnectionPool::new(to_secret_map(params))
+    ClickHouseConnectionPool::new(to_secret_map(params))
         .await
-        .map_err(|e| flow_like_types::anyhow!("ClickHouse connection failed: {}", e))?;
+        .map(Arc::new)
+        .map_err(|e| flow_like_types::anyhow!("ClickHouse connection failed: {}", e))
+}
+
+#[cfg(feature = "clickhouse")]
+pub(super) async fn clickhouse_table(
+    pool: Arc<ClickHouseConnectionPool>,
+    database: &str,
+    table: &str,
+) -> Result<Provider> {
     let table_ref = flow_like_storage::datafusion::common::TableReference::partial(
-        source.database.clone(),
-        source.table.clone(),
+        database.to_string(),
+        table.to_string(),
     );
-    ClickHouseTableFactory::new(Arc::new(pool))
+    ClickHouseTableFactory::new(pool)
         .table_provider(table_ref, None)
         .await
         .map_err(|e| flow_like_types::anyhow!("Failed to create ClickHouse table provider: {}", e))
@@ -766,6 +883,88 @@ async fn connect_duckdb(source: &FileDatabaseSource) -> Result<Provider> {
 #[cfg(not(feature = "duckdb"))]
 async fn connect_duckdb(_source: &FileDatabaseSource) -> Result<Provider> {
     Err(not_enabled("DuckDB", "duckdb"))
+}
+
+/// A provider for `source.table` that pushes projections, exact filters and limits into
+/// BigQuery, after the egress checks of `policy`.
+#[cfg(feature = "bigquery")]
+pub async fn bigquery_provider(
+    source: &BigquerySource,
+    policy: impl Into<ConnectPolicy>,
+) -> Result<Provider> {
+    super::bigquery_table::BigqueryDatabase::open(source, policy)
+        .await?
+        .table(&source.table)
+        .await
+}
+
+#[cfg(not(feature = "bigquery"))]
+pub async fn bigquery_provider(
+    _source: &BigquerySource,
+    _policy: impl Into<ConnectPolicy>,
+) -> Result<Provider> {
+    Err(not_enabled("BigQuery", "bigquery"))
+}
+
+/// The tables and views of the source's dataset, sorted.
+#[cfg(feature = "bigquery")]
+pub async fn bigquery_tables(
+    source: &BigquerySource,
+    policy: impl Into<ConnectPolicy>,
+) -> Result<Vec<String>> {
+    super::bigquery_table::BigqueryDatabase::open(source, policy)
+        .await?
+        .tables()
+        .await
+}
+
+#[cfg(not(feature = "bigquery"))]
+pub async fn bigquery_tables(
+    _source: &BigquerySource,
+    _policy: impl Into<ConnectPolicy>,
+) -> Result<Vec<String>> {
+    Err(not_enabled("BigQuery", "bigquery"))
+}
+
+/// A provider for `source.table` that pushes projections, exact filters and limits into
+/// Athena, after the egress checks of `policy`.
+#[cfg(feature = "athena")]
+pub async fn athena_provider(
+    source: &AthenaSource,
+    policy: impl Into<ConnectPolicy>,
+) -> Result<Provider> {
+    super::athena_table::AthenaDatabase::open(source, policy)
+        .await?
+        .table(&source.table)
+        .await
+}
+
+#[cfg(not(feature = "athena"))]
+pub async fn athena_provider(
+    _source: &AthenaSource,
+    _policy: impl Into<ConnectPolicy>,
+) -> Result<Provider> {
+    Err(not_enabled("Athena", "athena"))
+}
+
+/// The tables and views of the source's database, sorted.
+#[cfg(feature = "athena")]
+pub async fn athena_tables(
+    source: &AthenaSource,
+    policy: impl Into<ConnectPolicy>,
+) -> Result<Vec<String>> {
+    super::athena_table::AthenaDatabase::open(source, policy)
+        .await?
+        .tables()
+        .await
+}
+
+#[cfg(not(feature = "athena"))]
+pub async fn athena_tables(
+    _source: &AthenaSource,
+    _policy: impl Into<ConnectPolicy>,
+) -> Result<Vec<String>> {
+    Err(not_enabled("Athena", "athena"))
 }
 
 #[cfg(feature = "execute")]

@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
+import type { TFunction } from "i18next";
 import { useEffect, useId, useState } from "react";
 import { BotPaintDefs, getBotPaintId } from "./bot-paints";
 import {
@@ -22,15 +24,17 @@ import type {
 } from "./types";
 import "./bot-color-picker.css";
 
-const ROLE_LABELS: Record<BotColorSlot, string> = {
-	body: "Body",
-	accent: "Accent",
-	background: "Background",
-	ink: "Face details",
-	sclera: "Eye whites",
-	cheek: "Cheeks",
-	clothing: "Clothing",
-};
+function getRoleLabels(t: TFunction<"bots">): Record<BotColorSlot, string> {
+	return {
+		body: t("appearance.body"),
+		accent: t("appearance.accent"),
+		background: t("appearance.background"),
+		ink: t("appearance.faceDetails"),
+		sclera: t("appearance.eyeWhites"),
+		cheek: t("appearance.cheeks"),
+		clothing: t("appearance.clothing"),
+	};
+}
 
 export interface BotColorPickerProps {
 	shape: BotShapeDefinition;
@@ -95,6 +99,8 @@ function CustomHex({
 	initialColor: string;
 	onChange: (selection: BotColorSelection) => void;
 }) {
+	const { t } = useTranslation("bots");
+	const ROLE_LABELS = getRoleLabels(t);
 	const [draft, setDraft] = useState(initialColor);
 	const id = useId();
 	const normalized = normalizeBotHex(draft);
@@ -108,20 +114,24 @@ function CustomHex({
 	return (
 		<div className="fl-bot-color-custom">
 			<label className="fl-bot-color-native">
-				<span>Pick a color</span>
+				<span>{t("appearance.pickAColor")}</span>
 				<input
 					type="color"
-					aria-label={`Pick custom color for ${ROLE_LABELS[slot]}`}
+					aria-label={t("appearance.pickCustomColor", {
+						slot: ROLE_LABELS[slot],
+					})}
 					value={normalized ?? initialColor}
 					onChange={(event) => apply(event.target.value)}
 				/>
 			</label>
 			<label className="fl-bot-color-hex" htmlFor={`${id}-hex`}>
-				<span>Hex color</span>
+				<span>{t("appearance.hexColor")}</span>
 				<input
 					id={`${id}-hex`}
 					type="text"
-					aria-label={`Hex color for ${ROLE_LABELS[slot]}`}
+					aria-label={t("appearance.hexColorForSlot", {
+						slot: ROLE_LABELS[slot],
+					})}
 					aria-describedby={`${id}-help`}
 					aria-invalid={!normalized}
 					autoComplete="off"
@@ -143,12 +153,12 @@ function CustomHex({
 				disabled={!normalized}
 				onClick={() => apply()}
 			>
-				Apply custom color
+				{t("appearance.applyCustomColor")}
 			</button>
 			<p id={`${id}-help`} className="fl-bot-color-help">
 				{normalized
-					? "Use #RGB or #RRGGBB."
-					: "Enter a valid 3- or 6-digit hex color."}
+					? t("appearance.useRGBOrRRGGBB")
+					: t("appearance.enterAValid3Or6DigitHexColor")}
 			</p>
 		</div>
 	);
@@ -164,6 +174,8 @@ export function BotColorPicker({
 	onRequestPack,
 	disabled = false,
 }: BotColorPickerProps) {
+	const { t } = useTranslation("bots");
+	const ROLE_LABELS = getRoleLabels(t);
 	const slots = getBotCustomizableColorSlots(shape);
 	const packs = Object.values(catalog.colorPacks ?? {});
 	const [openSlot, setOpenSlot] = useState<BotColorSlot | undefined>(slots[0]);
@@ -199,8 +211,9 @@ export function BotColorPicker({
 		<div className="fl-bot-color-picker">
 			<div className="fl-bot-color-heading">
 				<p>
-					Choose a color for each part. Shared colors also tint matching details
-					and equipment.
+					{t(
+						"appearance.chooseAColorForEachPartSharedColorsAlsoTintMatchingDetailsAndEquipment",
+					)}
 				</p>
 				<button
 					type="button"
@@ -208,12 +221,12 @@ export function BotColorPicker({
 					disabled={!Object.keys(value ?? {}).length}
 					onClick={onReset}
 				>
-					Reset colors
+					{t("appearance.resetColors")}
 				</button>
 			</div>
 			{!slots.length && (
 				<p className="fl-bot-color-help">
-					This character keeps its original colors.
+					{t("appearance.thisCharacterKeepsItsOriginalColors")}
 				</p>
 			)}
 			<div className="fl-bot-color-roles">
@@ -233,7 +246,9 @@ export function BotColorPicker({
 							: undefined;
 					const label =
 						selectedSwatch?.label ??
-						(selected?.kind === "hex" ? selected.value : "Original");
+						(selected?.kind === "hex"
+							? selected.value
+							: t("appearance.original"));
 					const previewOnly =
 						!!selected && !canUseBotColor(selected, catalog, ownedPackIds);
 					const expanded = activeSlot === slot;
@@ -250,7 +265,9 @@ export function BotColorPicker({
 								<button
 									type="button"
 									className="fl-bot-color-role-toggle"
-									aria-label={`Edit ${ROLE_LABELS[slot]} color`}
+									aria-label={t("appearance.editColor", {
+										slot: ROLE_LABELS[slot],
+									})}
 									aria-expanded={expanded}
 									aria-controls={`${id}-${slot}`}
 									onClick={() => toggle(slot)}
@@ -261,8 +278,9 @@ export function BotColorPicker({
 									<span className="fl-bot-color-role-name">
 										<strong>{ROLE_LABELS[slot]}</strong>
 										<small>
-											{label}
-											{previewOnly ? " · Preview only" : ""}
+											{previewOnly
+												? t("appearance.previewColor", { label })
+												: label}
 										</small>
 									</span>
 									<span aria-hidden="true" className="fl-bot-color-expand">
@@ -272,22 +290,26 @@ export function BotColorPicker({
 								<button
 									type="button"
 									className="fl-bot-color-original"
-									aria-label={`Reset ${ROLE_LABELS[slot]} color`}
+									aria-label={t("appearance.resetColor", {
+										slot: ROLE_LABELS[slot],
+									})}
 									disabled={!selected}
 									onClick={() => onChange(slot, undefined)}
 								>
-									Original
+									{t("appearance.original")}
 								</button>
 							</div>
 							{expanded && (
 								<section
 									id={`${id}-${slot}`}
 									className="fl-bot-color-editor"
-									aria-label={`${ROLE_LABELS[slot]} colors`}
+									aria-label={t("appearance.slotColors", {
+										slot: ROLE_LABELS[slot],
+									})}
 								>
 									<fieldset
 										className="fl-bot-color-packs"
-										aria-label="Color packs"
+										aria-label={t("appearance.colorPacks")}
 									>
 										{packs.map((pack) => {
 											const owned =
@@ -297,7 +319,9 @@ export function BotColorPicker({
 												<button
 													key={pack.id}
 													type="button"
-													aria-label={`${pack.label} color pack`}
+													aria-label={t("appearance.namedColorPack", {
+														label: pack.label,
+													})}
 													aria-pressed={activePack?.id === pack.id}
 													onClick={() => setPackId(pack.id)}
 												>
@@ -325,10 +349,10 @@ export function BotColorPicker({
 														<small>
 															{ownedPackIds === undefined ||
 															pack.access === "included"
-																? "Included"
+																? t("appearance.included")
 																: owned
-																	? "Owned"
-																	: "Premium"}
+																	? t("appearance.owned")
+																	: t("appearance.premium")}
 														</small>
 													</span>
 												</button>
@@ -343,20 +367,29 @@ export function BotColorPicker({
 													<button
 														type="button"
 														className="fl-bot-studio-pack-link"
-														aria-label={`View ${activePack.label} color pack`}
+														aria-label={t("appearance.viewNamedColorPack", {
+															label: activePack.label,
+														})}
 														onClick={() => onRequestPack(activePack)}
 													>
-														View pack <span aria-hidden="true">↗</span>
+														{t("appearance.viewPack")}{" "}
+														<span aria-hidden="true">↗</span>
 													</button>
 												)}
 											</div>
 											{!packOwned && (
 												<p className="fl-bot-color-lock-note">
 													{hasAvailableColors
-														? "Preview every color. Unlock the pack to save colors marked Preview only."
+														? t(
+																"appearance.previewEveryColorUnlockThePackToSaveColorsMarkedPreviewOnly",
+															)
 														: activePack.allowsCustomHex
-															? "Try any custom color. Unlock this pack to save it."
-															: "Preview every color in this pack. Unlock it to save your choices."}
+															? t(
+																	"appearance.tryAnyCustomColorUnlockThisPackToSaveIt",
+																)
+															: t(
+																	"appearance.previewEveryColorInThisPackUnlockItToSaveYourChoices",
+																)}
 												</p>
 											)}
 											{activePack.colorIds.length > 0 && (
@@ -382,7 +415,10 @@ export function BotColorPicker({
 															<button
 																key={colorId}
 																type="button"
-																aria-label={`Choose ${swatch.label} for ${ROLE_LABELS[slot]}`}
+																aria-label={t("appearance.chooseSlotColor", {
+																	label: swatch.label,
+																	slot: ROLE_LABELS[slot],
+																})}
 																aria-pressed={
 																	selected?.kind === "swatch" &&
 																	selected.colorId === colorId
@@ -395,7 +431,9 @@ export function BotColorPicker({
 																	<BotColorSwatch paint={swatch.paint} />
 																</span>
 																<span>{swatch.label}</span>
-																{!canSave && <small>Preview only</small>}
+																{!canSave && (
+																	<small>{t("appearance.previewOnly")}</small>
+																)}
 															</button>,
 														];
 													})}

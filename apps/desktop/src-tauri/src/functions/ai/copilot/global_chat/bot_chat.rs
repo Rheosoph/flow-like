@@ -517,7 +517,10 @@ pub(super) async fn load_bot(
     } else {
         Vec::new()
     };
-    let connectors = if record.capabilities().contains(&BotCapability::Connectors) {
+    let capabilities = record.capabilities();
+    let connectors = if capabilities.contains(&BotCapability::Connectors)
+        || capabilities.contains(&BotCapability::Calendar)
+    {
         connector_rules(app, signed_in, &record.id).await
     } else {
         Vec::new()
@@ -1618,6 +1621,7 @@ mod tests {
             subtask_model: None,
             classification: DataSensitivity::default(),
             capabilities: vec![BotCapability::SelectedApps, BotCapability::Storage],
+            calendar_wake: Default::default(),
             profile_id: None,
             location: flow_like_types::bot::BotLocation::Desktop,
             device_id: None,

@@ -911,9 +911,7 @@ impl RenewableSharedCredentials {
     }
 
     fn session(&self) -> Result<Arc<flow_like_storage::lance::session::Session>> {
-        Ok(Arc::new(flow_like_storage::lance::session::Session::new(
-            flow_like_storage::lance::dataset::DEFAULT_INDEX_CACHE_SIZE,
-            flow_like_storage::lance::dataset::DEFAULT_METADATA_CACHE_SIZE,
+        Ok(crate::state::FlowLikeState::retained_lance_session(Some(
             self.lance_registry()?,
         )))
     }

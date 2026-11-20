@@ -369,6 +369,7 @@ mod tests {
             created_at: Utc::now().to_rfc3339(),
             conversation: None,
             place,
+            event: None,
         }
     }
 

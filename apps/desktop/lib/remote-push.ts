@@ -1,4 +1,8 @@
-import type { IPushNotificationsConfig } from "@flow-like/flow-like-ui";
+import type {
+	IPushNotificationsConfig,
+	IPushTargetStatus,
+	IUserState,
+} from "@flow-like/flow-like-ui";
 import { invoke } from "@tauri-apps/api/core";
 import { isAndroidDevice, isIOSDevice, isTauriRuntime } from "./platform";
 
@@ -35,6 +39,8 @@ export type RemotePushApi = {
 const DEVICE_ID_STORAGE_KEY = "flow-like-push-device-id";
 const DEVICE_ID_FILE = "push-device-id.txt";
 const REMOTE_PUSH_ENABLED_STORAGE_KEY = "flow-like-remote-push-enabled";
+const REMOTE_PUSH_PROMPT_DECLINED_STORAGE_KEY =
+	"flow-like-remote-push-prompt-declined";
 
 export const REMOTE_PUSH_PREFERENCE_EVENT =
 	"flow-like:remote-push-preference-changed";
@@ -219,4 +225,124 @@ export function setRemotePushPreference(enabled: boolean): void {
 			detail: { enabled },
 		}),
 	);
+}
+
+export type RemotePushPromptReason = "permission" | "disabled";
+
+export interface RemotePushPromptState {
+	/** OS permission before this launch could ask: false = refused, null = never asked. */
+	permissionAtLaunch: boolean | null;
+	preferenceEnabled: boolean;
+	status: IPushTargetStatus | null;
+}
+
+export function remotePushPromptReason({
+	permissionAtLaunch,
+	preferenceEnabled,
+	status,
+}: RemotePushPromptState): RemotePushPromptReason | null {
+	if (permissionAtLaunch === false) return "permission";
+	if (!preferenceEnabled) return "disabled";
+	if (status?.registered && !status.push_enabled) return "disabled";
+	return null;
+}
+
+export function hasDeclinedRemotePushPrompt(): boolean {
+	try {
+		return (
+			window.localStorage.getItem(REMOTE_PUSH_PROMPT_DECLINED_STORAGE_KEY) ===
+			"true"
+		);
+	} catch {
+		return false;
+	}
+}
+
+export function declineRemotePushPrompt(): void {
+	try {
+		window.localStorage.setItem(
+			REMOTE_PUSH_PROMPT_DECLINED_STORAGE_KEY,
+			"true",
+		);
+	} catch {
+		// Without storage the prompt may return next launch; nothing else breaks.
+	}
+}
+
+export function openNotificationSettings(): Promise<void> {
+	return invoke<void>("native_open_notification_settings");
+}
+
+export class RemotePushPermissionDeniedError extends Error {
+	constructor() {
+		super(
+			"Allow notifications for Flow Like in your device Settings, then try again.",
+		);
+		this.name = "RemotePushPermissionDeniedError";
+	}
+}
+
+export interface EnableRemotePushOptions {
+	userState: IUserState;
+	pushConfig: IPushNotificationsConfig | undefined;
+	deviceId: string;
+	source: "settings" | "prompt";
+}
+
+function requireRemotePushPlatform(
+	pushConfig: IPushNotificationsConfig | undefined,
+) {
+	const platform = detectPushPlatform();
+	if (!platform) {
+		throw new Error("Push platform could not be detected.");
+	}
+	if (!canUseRemotePushForPlatform(pushConfig, platform)) {
+		throw new Error("Remote push is not enabled for this platform.");
+	}
+	return platform;
+}
+
+async function acquireGrantedPushToken() {
+	const remotePushApi = await loadRemotePushPlugin();
+	if (!remotePushApi) {
+		throw new Error("Remote push plugin is not available.");
+	}
+	const permission = await remotePushApi.requestPermission();
+	if (!permission.granted) {
+		throw new RemotePushPermissionDeniedError();
+	}
+	const token = await remotePushApi.getToken();
+	if (!token) {
+		throw new Error("Remote push returned an empty token.");
+	}
+	return token;
+}
+
+/** Asks for the OS permission, registers this device and switches server delivery on. */
+export async function enableRemotePush({
+	userState,
+	pushConfig,
+	deviceId,
+	source,
+}: EnableRemotePushOptions): Promise<IPushTargetStatus> {
+	const platform = requireRemotePushPlatform(pushConfig);
+	const token = await acquireGrantedPushToken();
+
+	await userState.registerPushTarget({
+		device_id: deviceId,
+		platform,
+		token,
+		device_name:
+			typeof navigator !== "undefined" ? navigator.userAgent : undefined,
+		channel_id: pushConfig?.channel_id ?? undefined,
+		metadata: {
+			source,
+			platform,
+			provider: pushConfig?.provider,
+		},
+	});
+
+	const status = await userState.setPushTargetEnabled(deviceId, true);
+	setRemotePushPreference(true);
+	return status;
 }

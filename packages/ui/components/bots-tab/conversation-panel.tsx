@@ -45,6 +45,7 @@ import type {
 } from "../../state/backend-state/inbox-state";
 import { Button } from "../ui/button";
 import { Skeleton } from "../ui/skeleton";
+import type { BotPanelActions } from "./bot-details";
 import {
 	CallButton,
 	ConversationCallBar,
@@ -62,6 +63,7 @@ import {
 	isSelfPrincipal,
 	otherMemberIds,
 } from "./crew-model";
+import { useDockCompact } from "./crew-split-layout";
 import { DockHeader } from "./dock-header";
 import {
 	type ConversationItem,
@@ -69,6 +71,7 @@ import {
 	groupConversationItems,
 } from "./fold-entries";
 import { useLocalPrincipals } from "./local-principals";
+import { MemberInfoPanel } from "./member-info-panel";
 import { MemberStack } from "./member-stack";
 import { callMentions, mentionablesOf } from "./mentions";
 import { requestMessageJump, useMessageJump } from "./message-jump";
@@ -92,6 +95,7 @@ import type { PickerSource } from "./principal-picker";
 import { RoomAvatar } from "./room-avatar";
 import { ConnectedRoomMeetings } from "./room-meetings";
 import { RoomMembersDialog } from "./room-members-dialog";
+import { SwipeBackLayer } from "./swipe-back-layer";
 import {
 	type ConversationText,
 	useConversationText,
@@ -352,18 +356,49 @@ function MuteButton({
 	);
 }
 
+const NO_ACTIONS: BotPanelActions = {};
+
+/** The one other member a direct conversation is with, or the room's members for a group. */
+function useHeaderDetails(
+	conversation: IConversation,
+	me: string | null | undefined,
+	manageable: boolean,
+	showMember: (principalId: string) => void,
+	showMembers: () => void,
+) {
+	const { t } = useTranslation("bots");
+	if (conversation.kind === "direct") {
+		const partner = otherMemberIds(conversation, me)[0];
+		return partner
+			? {
+					label: t("crew.memberInfo.show", "Who this is"),
+					open: () => showMember(partner),
+				}
+			: null;
+	}
+	return manageable
+		? {
+				label: t("roomMembers.open", "Members and invitations"),
+				open: showMembers,
+			}
+		: null;
+}
+
 function ConversationView({
 	conversation,
 	me,
 	bots,
+	panelActions,
 	onClose,
 }: Readonly<{
 	conversation: IConversation;
 	me?: string | null;
 	bots?: readonly IBot[];
+	panelActions: BotPanelActions;
 	onClose: () => void;
 }>) {
 	const { t } = useTranslation("bots");
+	const compact = useDockCompact();
 	const meetingClient = useBackend().meetingClient;
 	const entriesQuery = useInboxEntries(conversation.id);
 	const pages = entriesQuery.data?.pages;
@@ -407,6 +442,16 @@ function ConversationView({
 	);
 	const manageable = conversation.kind === "group" && !conversation.local;
 	const personChat = canMuteConversation(conversation);
+	const [memberShown, setMemberShown] = useState<string | null>(null);
+	const closeMember = useCallback(() => setMemberShown(null), []);
+	const showMembers = useCallback(() => setMembersOpen(true), []);
+	const headerDetails = useHeaderDetails(
+		conversation,
+		me,
+		manageable,
+		setMemberShown,
+		showMembers,
+	);
 	useMarkReadWhileOpen(conversation.id, entries, me);
 	useRefreshOnRoomChange(conversation.id, entries);
 	const room = useConversationRoom(conversation, me, !blocked);
@@ -486,11 +531,13 @@ function ConversationView({
 	const composerPlaceholder =
 		requestHint ??
 		(mentionables.some((option) => option.kind === "bot")
-			? t(
-					"crew.composer.placeholderBots",
-					"Message {{name}} · @mention a bot to make sure it answers",
-					{ name: heading.title },
-				)
+			? compact
+				? t("crew.composer.placeholderBotsShort", "@mention a bot to ask it")
+				: t(
+						"crew.composer.placeholderBots",
+						"Message {{name}} · @mention a bot to make sure it answers",
+						{ name: heading.title },
+					)
 			: t("crew.composer.placeholder", "Message {{name}}", {
 					name: heading.title,
 				}));
@@ -586,138 +633,163 @@ function ConversationView({
 		marks: threadMarks.marks,
 		readOnly: blocked,
 		call: threadCall,
+		onShowMember: setMemberShown,
 	};
 
 	return (
-		<>
-			<DockHeader
-				avatar={
-					conversation.kind === "group" && conversation.image_url ? (
-						<RoomAvatar
-							roomId={conversation.id}
-							title={heading.title}
-							principalIds={otherMemberIds(conversation, me)}
-							imageUrl={conversation.image_url}
-							size={34}
-						/>
-					) : (
-						<MemberStack
-							principalIds={otherMemberIds(conversation, me)}
-							max={3}
-							size={34}
-							hoverCards
-						/>
-					)
-				}
-				title={heading.title}
-				subtitle={heading.subtitle}
-				encrypted={encrypted}
-				actions={
-					<>
-						<ConversationMenu
-							conversation={conversation}
-							me={me}
-							onLeave={onClose}
-							blockTarget={blockTarget}
-							defaultTitle={text.title({ ...conversation, title: null })}
-							onShowStarred={() => setStarsOpen(true)}
-						/>
-						{call.available && !blocked && callsOffered && (
-							<CallButton call={call} />
-						)}
-						{!conversation.local && !blocked && me && meetingClient && (
-							<ConnectedRoomMeetings
-								conversationId={conversation.id}
-								client={meetingClient}
+		<div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+			<div
+				className="flex min-h-0 min-w-0 flex-1 flex-col"
+				inert={memberShown !== null || undefined}
+			>
+				<DockHeader
+					avatar={
+						conversation.kind === "group" &&
+						(conversation.image_url || compact) ? (
+							<RoomAvatar
+								roomId={conversation.id}
+								title={heading.title}
+								principalIds={otherMemberIds(conversation, me)}
+								imageUrl={conversation.image_url}
+								size={compact ? 30 : 34}
+							/>
+						) : (
+							<MemberStack
+								principalIds={otherMemberIds(conversation, me)}
+								max={compact ? 2 : 3}
+								size={compact ? 30 : 34}
+								hoverCards={!compact}
+							/>
+						)
+					}
+					title={heading.title}
+					subtitle={heading.subtitle}
+					encrypted={encrypted}
+					detailsLabel={headerDetails?.label}
+					onOpenDetails={headerDetails?.open}
+					actions={
+						<>
+							<ConversationMenu
+								conversation={conversation}
 								me={me}
+								onLeave={onClose}
+								blockTarget={blockTarget}
+								defaultTitle={text.title({ ...conversation, title: null })}
+								onShowStarred={() => setStarsOpen(true)}
+								withMute={compact && personChat}
+								onShowMembers={compact && manageable ? showMembers : undefined}
 							/>
-						)}
-						{personChat && (
-							<MuteButton
-								conversationId={conversation.id}
-								muted={Boolean(conversation.muted)}
-							/>
-						)}
-						{manageable && (
-							<Button
-								type="button"
-								variant="ghost"
-								size="icon"
-								className="shrink-0 text-muted-foreground"
-								onClick={() => setMembersOpen(true)}
-								aria-label={t("roomMembers.open", "Members and invitations")}
-								title={t("roomMembers.open", "Members and invitations")}
-							>
-								<UsersIcon aria-hidden />
-							</Button>
-						)}
-					</>
-				}
-				onClose={onClose}
-			/>
-			{(callsOffered || call.joined) && (
-				<ConversationCallBar call={call} me={me} directory={directory} />
-			)}
-			<PinnedMessagesBar
-				conversationId={conversation.id}
-				pins={threadMarks.pins}
-				text={text}
-				onJump={jump}
-			/>
-			<StarredMessagesDialog
-				open={starsOpen}
-				onOpenChange={setStarsOpen}
-				conversationId={conversation.id}
-				text={text}
-				onOpen={(_, messageId) => jump(messageId)}
-			/>
-			{manageable && (
-				<RoomMembersDialog
-					open={membersOpen}
-					onOpenChange={setMembersOpen}
-					conversation={conversation}
-					directory={directory}
-					source={pickerSource}
-					me={me}
-					onLeave={onClose}
+							{call.available && !blocked && callsOffered && (
+								<CallButton call={call} />
+							)}
+							{!conversation.local && !blocked && me && meetingClient && (
+								<ConnectedRoomMeetings
+									conversationId={conversation.id}
+									client={meetingClient}
+									me={me}
+								/>
+							)}
+							{personChat && !compact && (
+								<MuteButton
+									conversationId={conversation.id}
+									muted={Boolean(conversation.muted)}
+								/>
+							)}
+							{manageable && !compact && (
+								<Button
+									type="button"
+									variant="ghost"
+									size="icon"
+									className="shrink-0 text-muted-foreground"
+									onClick={showMembers}
+									aria-label={t("roomMembers.open", "Members and invitations")}
+									title={t("roomMembers.open", "Members and invitations")}
+								>
+									<UsersIcon aria-hidden />
+								</Button>
+							)}
+						</>
+					}
+					onClose={onClose}
 				/>
+				{(callsOffered || call.joined) && (
+					<ConversationCallBar call={call} me={me} directory={directory} />
+				)}
+				<PinnedMessagesBar
+					conversationId={conversation.id}
+					pins={threadMarks.pins}
+					text={text}
+					onJump={jump}
+				/>
+				<StarredMessagesDialog
+					open={starsOpen}
+					onOpenChange={setStarsOpen}
+					conversationId={conversation.id}
+					text={text}
+					onOpen={(_, messageId) => jump(messageId)}
+				/>
+				{manageable && (
+					<RoomMembersDialog
+						open={membersOpen}
+						onOpenChange={setMembersOpen}
+						conversation={conversation}
+						directory={directory}
+						source={pickerSource}
+						me={me}
+						onLeave={onClose}
+						onShowMember={setMemberShown}
+					/>
+				)}
+				<ConversationChat
+					blocks={blocks}
+					pending={pending.visible}
+					thread={thread}
+					history={{
+						isLoading: entriesQuery.isPending,
+						loadError: entriesQuery.isError && !pages,
+						hasOlder: Boolean(entriesQuery.hasNextPage),
+						loadingOlder: entriesQuery.isFetchingNextPage,
+						onLoadOlder: () => void entriesQuery.fetchNextPage(),
+						onRetry: () => void entriesQuery.refetch(),
+					}}
+					sends={pending.actions}
+					placeholder={composerPlaceholder}
+					disabledReason={
+						blocked
+							? t(
+									"crew.blocks.composer",
+									"This conversation is blocked. Manage your blocked users and bots to allow messages again.",
+								)
+							: null
+					}
+					mentionables={mentionables}
+					activity={activity}
+					onSend={(body, mentions, replyTo, files) =>
+						void pending.send(body, mentions, undefined, replyTo, files)
+					}
+				/>
+				<DeleteMessageDialog
+					open={deleteTarget !== null}
+					onOpenChange={(open) => {
+						if (!open) setDeleteTarget(null);
+					}}
+					onConfirm={confirmDelete}
+				/>
+			</div>
+			{memberShown !== null && (
+				<SwipeBackLayer key={memberShown} onBack={closeMember}>
+					{(back) => (
+						<MemberInfoPanel
+							principalId={memberShown}
+							me={me}
+							bots={bots}
+							actions={panelActions}
+							onClose={back}
+						/>
+					)}
+				</SwipeBackLayer>
 			)}
-			<ConversationChat
-				blocks={blocks}
-				pending={pending.visible}
-				thread={thread}
-				history={{
-					isLoading: entriesQuery.isPending,
-					loadError: entriesQuery.isError && !pages,
-					hasOlder: Boolean(entriesQuery.hasNextPage),
-					loadingOlder: entriesQuery.isFetchingNextPage,
-					onLoadOlder: () => void entriesQuery.fetchNextPage(),
-					onRetry: () => void entriesQuery.refetch(),
-				}}
-				sends={pending.actions}
-				placeholder={composerPlaceholder}
-				disabledReason={
-					blocked
-						? t(
-								"crew.blocks.composer",
-								"This conversation is blocked. Manage your blocked users and bots to allow messages again.",
-							)
-						: null
-				}
-				mentionables={mentionables}
-				activity={activity}
-				onSend={(body, mentions, replyTo, files) =>
-					void pending.send(body, mentions, undefined, replyTo, files)
-				}
-			/>
-			<DeleteMessageDialog
-				open={deleteTarget !== null}
-				onOpenChange={(open) => {
-					if (!open) setDeleteTarget(null);
-				}}
-				onConfirm={confirmDelete}
-			/>
-		</>
+		</div>
 	);
 }
 
@@ -780,11 +852,14 @@ export function ConversationPanel({
 	conversationId,
 	me,
 	bots,
+	actions = NO_ACTIONS,
 	onClose,
 }: Readonly<{
 	conversationId: string;
 	me?: string | null;
 	bots?: readonly IBot[];
+	/** What a member's bot overview can start, as from the bot's own chat. */
+	actions?: BotPanelActions;
 	onClose: () => void;
 }>) {
 	const query = useConversation(conversationId);
@@ -807,6 +882,7 @@ export function ConversationPanel({
 			conversation={query.data}
 			me={me}
 			bots={bots}
+			panelActions={actions}
 			onClose={onClose}
 		/>
 	);

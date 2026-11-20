@@ -69,6 +69,10 @@ pub struct Model {
     pub vision_model: Option<String>,
     #[sea_orm(column_name = "subtaskModel", column_type = "Text", nullable)]
     pub subtask_model: Option<String>,
+    #[sea_orm(column_name = "calendarWake", column_type = "JsonBinary", nullable)]
+    pub calendar_wake: Option<Json>,
+    #[sea_orm(column_name = "calendarSyncedAt", nullable)]
+    pub calendar_synced_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(has_many)]
     pub bot_host_heartbeats: HasMany<super::bot_host_heartbeat::Entity>,
     #[sea_orm(has_many)]
@@ -89,6 +93,8 @@ pub struct Model {
     pub bot_connectors: HasMany<super::bot_connector::Entity>,
     #[sea_orm(has_many)]
     pub bot_webhooks: HasMany<super::bot_webhook::Entity>,
+    #[sea_orm(has_one)]
+    pub bot_calendar_feed: HasOne<super::bot_calendar_feed::Entity>,
     #[sea_orm(has_many)]
     pub conversation_segments: HasMany<super::conversation_segment::Entity>,
     #[sea_orm(

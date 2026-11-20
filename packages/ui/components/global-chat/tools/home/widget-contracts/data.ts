@@ -1,4 +1,9 @@
-import { DEFAULT_HOME_DATA_CONFIG } from "../../../../home/home-data-query";
+import {
+	DEFAULT_HOME_DATA_CONFIG,
+	HOME_DATA_CACHE_MAX_SECONDS,
+	HOME_DATA_SQL_MAX_CHARS,
+	HOME_DATA_SQL_MAX_SOURCES,
+} from "../../../../home/home-data-query";
 import {
 	filterItem,
 	measureItem,
@@ -13,18 +18,50 @@ import {
 	EITHER_MODE_VISUALIZATIONS,
 	RECORD_ONLY_VISUALIZATIONS,
 } from "./options";
-import type { HomeWidgetConfigContract } from "./types";
+import type {
+	HomeWidgetConfigContract,
+	HomeWidgetObjectContract,
+} from "./types";
+
+const sqlSourceItem: HomeWidgetObjectContract = {
+	additional_properties: false,
+	fields: {
+		id: text("Optional stable source id."),
+		alias: text(
+			"Schema name used as <alias>.<table> in the SQL. Lowercase letters, digits, and _, starting with a letter or _; unique; not public or information_schema.",
+			{ pattern: "^[a-z_][a-z0-9_]{0,62}$" },
+		),
+		appId: text(
+			"App from the current profile whose tables this alias exposes.",
+			{
+				reference: reference("profile_app_id", "list_apps"),
+			},
+		),
+		scope: text("Project or current-user personal data.", {
+			default: DEFAULT_HOME_DATA_CONFIG.scope,
+			enum: ["project", "personal"],
+		}),
+		sourceId: text(
+			"Optional id of one of the app's external databases, read instead of the app's own tables as project data. Keep an existing value unchanged; omit it otherwise.",
+		),
+	},
+	required: ["alias", "appId"],
+	unique_by: "alias",
+};
 
 export const HOME_DATA_WIDGET_CONFIG_CONTRACT = {
-	description: "A table, ontology, or saved-query visualization.",
+	description:
+		"A table, ontology, saved-query, or cross-app SQL visualization.",
 	additional_properties: false,
 	fields: {
 		sourceKind: text("Data source kind.", {
 			default: DEFAULT_HOME_DATA_CONFIG.sourceKind,
-			enum: ["table", "ontology", "query"],
+			enum: ["table", "ontology", "query", "sql"],
 		}),
 		appId: text("App from the current profile that owns the source.", {
-			reference: reference("profile_app_id", "list_apps"),
+			reference: reference("profile_app_id", "list_apps", {
+				when: { field: "sourceKind", not_equals: "sql" },
+			}),
 		}),
 		scope: text("Project or current-user personal data.", {
 			default: DEFAULT_HOME_DATA_CONFIG.scope,
@@ -64,12 +101,39 @@ export const HOME_DATA_WIDGET_CONFIG_CONTRACT = {
 		}),
 		queryParams: {
 			type: "object",
-			description: "Saved-query parameters. Values may use $viewer.id.",
+			description:
+				"Saved-query or SQL $name parameters. Values may use $viewer.id.",
 			reference: reference("saved_query_parameters", "list_home_data_sources", {
 				source_field: "queryId",
 				when: { field: "sourceKind", equals: "query" },
 			}),
 		},
+		paramControls: {
+			type: "object",
+			description:
+				"Per SQL $name parameter: { interactive?: boolean (viewers may change the value), label?: string, control?: text | number | toggle | date | datetime | select | combobox | multi-select }. Viewer choices are stored per viewer, not in the layout; queryParams holds the defaults.",
+		},
+		sql: text(
+			`One read-only SELECT or WITH statement over the sources, at most ${HOME_DATA_SQL_MAX_CHARS} characters. Address tables as <alias>.<table>; use $name parameters filled from queryParams. Names starting with __home_ are reserved. Result fields cannot be verified.`,
+			{ default: DEFAULT_HOME_DATA_CONFIG.sql },
+		),
+		sources: {
+			type: "object_list",
+			description: `Apps queried by the SQL, up to ${HOME_DATA_SQL_MAX_SOURCES}.`,
+			max_items: HOME_DATA_SQL_MAX_SOURCES,
+			item: sqlSourceItem,
+		},
+		cacheSeconds: number(
+			"Server cache lifetime for cross-app SQL results. Zero disables caching.",
+			{
+				default: DEFAULT_HOME_DATA_CONFIG.cacheSeconds,
+				integer: true,
+				ranges: [
+					{ minimum: 0, maximum: 0 },
+					{ minimum: 30, maximum: HOME_DATA_CACHE_MAX_SECONDS },
+				],
+			},
+		),
 		visualization: text("Data presentation.", {
 			default: DEFAULT_HOME_DATA_CONFIG.visualization,
 			enum: DATA_VISUALIZATIONS,
@@ -120,7 +184,7 @@ export const HOME_DATA_WIDGET_CONFIG_CONTRACT = {
 			default: DEFAULT_HOME_DATA_CONFIG.limit,
 			integer: true,
 			minimum: 1,
-			maximum: 500,
+			maximum: 5000,
 		}),
 		refreshSeconds: number(
 			"Refresh interval. Zero disables periodic refresh.",
@@ -177,6 +241,7 @@ export const HOME_DATA_WIDGET_CONFIG_CONTRACT = {
 		{
 			code: "data_source_missing_app",
 			message: "Choose an app from the current profile.",
+			when: { field: "sourceKind", in: ["table", "ontology", "query"] },
 			non_empty: ["appId"],
 		},
 		{
@@ -196,6 +261,12 @@ export const HOME_DATA_WIDGET_CONFIG_CONTRACT = {
 			message: "Choose an available saved query.",
 			when: { field: "sourceKind", equals: "query" },
 			non_empty: ["queryId"],
+		},
+		{
+			code: "data_sql_missing",
+			message: "Write the SQL statement and add at least one source app.",
+			when: { field: "sourceKind", equals: "sql" },
+			non_empty: ["sql", "sources"],
 		},
 		{
 			code: "data_target_missing",

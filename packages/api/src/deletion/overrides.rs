@@ -373,6 +373,11 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                 ),
                 keep("Conversation", "createdBy", "attribution"),
                 keep(
+                    "AppDataSource",
+                    "createdBy",
+                    "an external database belongs to its app; the creator id is attribution",
+                ),
+                keep(
                     "ConversationFile",
                     "uploaderId",
                     "a file belongs to its conversation and stays readable for the members who remain",

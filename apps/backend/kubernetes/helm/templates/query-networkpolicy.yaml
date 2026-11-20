@@ -1,0 +1,14 @@
+{{- if and .Values.query.enabled .Values.networkPolicy.enabled .Values.query.extraEgress }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "flow-like.fullname" . }}-query-external-sources
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "flow-like.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: query
+  policyTypes: [Egress]
+  egress:
+    {{- toYaml .Values.query.extraEgress | nindent 4 }}
+{{- end }}

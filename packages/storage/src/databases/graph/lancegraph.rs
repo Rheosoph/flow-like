@@ -19,6 +19,7 @@ use super::{
 use crate::arrow_utils::record_batch_to_value;
 use crate::databases::column_access::{hidden_columns, is_hidden, restrict_provider};
 use crate::databases::df_provider::lance_table_provider;
+use crate::databases::workbench::prepared::{ExecutionBudget, budgeted_session};
 use datafusion::catalog::TableProvider;
 use datafusion::prelude::SessionContext;
 use flow_like_storage_contracts::column_metadata::ColumnReader;
@@ -27,6 +28,7 @@ use futures::TryStreamExt;
 use lance_graph::{CypherQuery, GraphConfig};
 use lancedb::Connection;
 use lancedb::query::{ExecutableQuery, QueryBase};
+use lancedb::table::Table;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
@@ -347,6 +349,7 @@ pub struct LanceGraphStore {
     safety: CypherSafetyConfig,
     semaphore: Arc<tokio::sync::Semaphore>,
     column_reader: ColumnReader,
+    budget: Option<ExecutionBudget>,
 }
 
 impl LanceGraphStore {
@@ -379,7 +382,15 @@ impl LanceGraphStore {
             safety,
             semaphore,
             column_reader: reader,
+            budget: None,
         })
+    }
+
+    /// Cypher and SQL then run under `budget`'s memory pool and spill to its directory, as
+    /// workbench statements do.
+    pub fn with_budget(mut self, budget: ExecutionBudget) -> Self {
+        self.budget = Some(budget);
+        self
     }
 
     pub fn overlay(&self) -> &GraphOverlayDef {
@@ -934,10 +945,7 @@ impl LanceGraphStore {
     }
 
     async fn build_cypher_context(&self) -> Result<SessionContext> {
-        let ctx = SessionContext::new_with_state(
-            crate::databases::df_provider::with_lance_order_pushdown(SessionContext::new().state()),
-        );
-        crate::databases::register_sql_functions(&ctx);
+        let ctx = budgeted_session(self.budget.as_ref())?;
         let mut adapters: HashMap<String, Arc<dyn TableProvider>> = HashMap::new();
         let mut registered_labels = HashSet::new();
 
@@ -972,10 +980,7 @@ impl LanceGraphStore {
     }
 
     async fn build_query_context(&self, include_edges: bool) -> Result<SessionContext> {
-        let ctx = SessionContext::new_with_state(
-            crate::databases::df_provider::with_lance_order_pushdown(SessionContext::new().state()),
-        );
-        crate::databases::register_sql_functions(&ctx);
+        let ctx = budgeted_session(self.budget.as_ref())?;
         let mut adapters: HashMap<String, Arc<dyn TableProvider>> = HashMap::new();
         let mut registered_tables = HashSet::new();
 
@@ -1504,11 +1509,42 @@ pub(crate) async fn open_table_adapter(
     table_name: &str,
     reader: &ColumnReader,
 ) -> Result<Arc<dyn TableProvider>> {
-    let table = connection
+    let table = open_lance_table(connection, table_name).await?;
+    table_adapter(table, table_name, reader).await
+}
+
+/// An adapter pinned to the version the table has now, and that version, so a
+/// result can later be checked against the table's newest version.
+pub(crate) async fn open_pinned_table_adapter(
+    connection: &Connection,
+    table_name: &str,
+    reader: &ColumnReader,
+) -> Result<(Arc<dyn TableProvider>, u64)> {
+    let table = open_lance_table(connection, table_name).await?;
+    let table = match table.checkout_current().await {
+        Ok(pinned) => pinned,
+        Err(_) => table,
+    };
+    let version = table
+        .version()
+        .await
+        .map_err(|e| anyhow!("Failed to read the version of '{}': {}", table_name, e))?;
+    Ok((table_adapter(table, table_name, reader).await?, version))
+}
+
+pub(crate) async fn open_lance_table(connection: &Connection, table_name: &str) -> Result<Table> {
+    connection
         .open_table(table_name)
         .execute()
         .await
-        .map_err(|e| anyhow!("Failed to open table '{}': {}", table_name, e))?;
+        .map_err(|e| anyhow!("Failed to open table '{}': {}", table_name, e))
+}
+
+async fn table_adapter(
+    table: Table,
+    table_name: &str,
+    reader: &ColumnReader,
+) -> Result<Arc<dyn TableProvider>> {
     let hidden = if reader.is_unrestricted() {
         Vec::new()
     } else {

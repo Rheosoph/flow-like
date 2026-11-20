@@ -62,6 +62,8 @@ pub struct Model {
     pub place_repeat: Option<bool>,
     #[sea_orm(column_name = "placeUntil", nullable)]
     pub place_until: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub event: Option<Json>,
     #[sea_orm(
         belongs_to,
         from = "bot_id",

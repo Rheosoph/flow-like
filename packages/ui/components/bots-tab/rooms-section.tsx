@@ -57,7 +57,7 @@ export function ConversationRow({
 				onClick={() => context.onOpen(conversation.id)}
 				className={crewCardClass(
 					selected,
-					"flex size-full min-w-0 items-center gap-3 px-3.5 py-3 @max-[520px]/crew:rounded-xl @max-[520px]/crew:px-3 @max-[520px]/crew:py-2.5",
+					"flex size-full min-w-0 items-center gap-3 active:scale-[0.98] active:bg-muted/60 px-3.5 py-3 @max-[520px]/crew:rounded-xl @max-[520px]/crew:px-3 @max-[520px]/crew:py-2.5",
 				)}
 			>
 				<ConversationAvatar

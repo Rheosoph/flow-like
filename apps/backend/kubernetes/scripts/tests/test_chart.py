@@ -621,11 +621,11 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(env["K8S_EXECUTOR_IMAGE"]["value"], "ghcr.io/rheosoph/flow-like-kubernetes-executor:dev")
         self.assertEqual(env["K8S_IMAGE_PULL_SECRETS"]["value"], "")
         digest = "sha256:" + "d" * 64
-        pins = ",".join(f"{key}.image.digest={digest}" for key in ["api", "audit", "web", "executor", "database.migration", "executionManager", "executionManager.queueBridge", "rustfs.bootstrap", "compiler", "signaling", "executorPool", "sinkServices"])
+        pins = ",".join(f"{key}.image.digest={digest}" for key in ["api", "audit", "web", "executor", "database.migration", "executionManager", "executionManager.queueBridge", "rustfs.bootstrap", "compiler", "query", "signaling", "executorPool", "sinkServices"])
         docs = self.render("--set-string", pins + ",global.imageRegistry=mirror.example.com/", "--set", "compiler.enabled=true,signaling.enabled=true")
         images = {c["image"] for d in docs if d["kind"] in ("Deployment", "Job") for c in d["spec"]["template"]["spec"].get("containers", []) + d["spec"]["template"]["spec"].get("initContainers", [])}
         first_party = {i for i in images if "flow-like-" in i}
-        self.assertEqual(len(first_party), 9, first_party)
+        self.assertEqual(len(first_party), 10, first_party)
         for image in first_party:
             self.assertTrue(image.startswith("mirror.example.com/ghcr.io/rheosoph/flow-like-"), image)
             self.assertTrue(image.endswith("@" + digest), image)

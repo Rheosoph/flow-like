@@ -101,6 +101,162 @@ it expires. Your browser caches the image according to the storage provider's
 HTTP cache settings. If a storage image fails to load, check your connection and
 file permissions, then choose **Try again**.
 
+## Query several Apps with SQL
+
+A data widget normally reads one table, ontology, or saved query of one App.
+Choose the source **SQL across apps** to run one read-only SQL statement across
+the tables of several Apps. The widget's measures, grouping, filters, and
+visualization then apply on top of the SQL result, as they do for a saved query.
+
+1. In **Customize**, add or select a **Data** widget and set its **Source** to
+   **SQL across apps**.
+2. Under **Apps**, choose each App you want to query, up to 8. For each, pick
+   **Project data**, **Viewer's personal data**, or one of the App's
+   [external databases](/apps/data-studio/#external-databases), and check its
+   **Schema name**. The tables you can use appear below each App, for example
+   `crm.customers`.
+3. Write the statement in **SQL** and refer to tables as `<alias>.<table>`.
+4. Give every `$name` parameter a default value, then choose how long to
+   **Reuse results for**. See [Parameters](#parameters) for the controls
+   Flow-Like suggests and for letting viewers change a value.
+5. Pick the measures, grouping, and visualization, then **Save**.
+
+### Schema names
+
+Every App is addressed by its alias, as in `crm.customers`. An alias must:
+
+- use lowercase letters, digits, and `_`, start with a letter or `_`, and be at
+  most 63 characters;
+- be unique within the widget;
+- not be `public` or `information_schema`.
+
+Flow-Like suggests an alias from the App's name. The Apps must belong to the
+active Profile.
+
+### SQL you can use
+
+The statement is one read-only `SELECT` or `WITH` query of at most 20,000
+characters. Joins, CTEs, aggregates, window functions, `UNION`, and subqueries
+across Apps work. Statements that change data are rejected.
+
+Pass values with `$name` placeholders. Each placeholder gets a row below the SQL
+where you choose **Text**, **Number**, **True or false**, or **Current user's
+ID** and enter the value. Values are bound to the query, never pasted into the
+SQL. **Current user's ID** passes the id of the person viewing Home. Names
+starting with `__home_` are reserved.
+
+Result column names cannot be checked before the query runs. Give computed
+columns an explicit alias, such as `SUM(o.total) AS revenue`, and use those
+names in the widget's fields.
+
+### Parameters
+
+Flow-Like analyzes the statement without running it and lists every `$name`
+parameter with its detected type and the table column it is compared with. For
+each parameter you get a matching control for its default value:
+
+- true or false parameters use a switch, dates and timestamps a date or date
+  and time field, and numbers a number field;
+- a text parameter compared with `=` or `<>` offers the values found in that
+  column. For columns with many values you search instead of scrolling;
+- a parameter used with `IN`, or a list, lets you choose several values;
+- text compared with `LIKE` or `ILIKE`, or a parameter that is not compared with
+  a column, stays a plain text field.
+
+Text parameters can also use **Current user's ID**. You can give a parameter a
+**Label** or pick another **Control**. If the statement cannot be analyzed, the
+parameters appear as plain text, number, and true or false rows with the reason.
+
+Turn on **Viewers can change this** for a parameter to show it as a filter above
+the widget. A pair of parameters on one column (`>= $from` and `<= $to`) shows
+as a range. A viewer's choices belong to that viewer and that widget. They are
+stored in the browser, never change the saved layout, and **Reset** returns to
+your defaults. Because a choice is part of the request, viewers who pick the
+same values share one cached result.
+
+### Caching and refresh
+
+**Reuse results for** sets how long an identical request may reuse a result:
+from 1 minute to 1 day, 5 minutes by default, or **Don't reuse results**. People
+whose access to the queried Apps is identical share one cached result. The
+widget footer shows when the result was computed and whether it came from the
+cache.
+
+Before reusing a cached result, Flow-Like checks the version of every table the
+query read. A write to any of those tables makes the query run again, so a
+cached result never hides newer data in a table it read. The widget's refresh
+button always skips the cache. Results larger than 256 KiB are not cached.
+
+When the reuse time ends, a result whose tables are all unchanged is renewed
+without running the query again. Queries that use the current time or chance,
+such as `now()`, `current_date()` or `random()`, always run again, so date
+windows keep moving. Results that read an external database have no table
+versions to check and are reused until their reuse time ends.
+
+If a refresh fails, the widget keeps showing the last result and says it
+couldn't refresh. When the server answers a failed refresh with an earlier
+cached result, the footer says so. Soft limits that were passed, such as a very
+large result or many Apps, show as notes in the footer. A result older than its reuse time is marked as possibly out
+of date until the next refresh.
+
+### Permissions and limits
+
+- On every request, the viewer needs permission to read each source App (read
+  files or read the database). Each App's column restrictions apply, so a person
+  only sees the columns their role may read. An external database needs
+  permission to read the App's database, and a removed one stops answering, even
+  from the cache.
+- A widget queries at most 8 Apps and returns up to 5,000 rows (20 by default).
+  Above 500 rows the **Result limit** field warns that large results slow down
+  Home; aggregate in SQL where you can.
+- A query stops after a time limit (50 seconds by default) and its operators
+  have bounded memory, spilling large sorts and aggregates to disk first. Filter
+  and aggregate in SQL rather than returning large tables.
+- Widgets fail independently: one failing query does not affect the rest of
+  Home.
+
+On the web, queries run on the hub's query service. On desktop, the query runs
+on the hub when every source App is online, and locally when every source App is
+local-only. A widget that mixes online and local-only Apps shows an error;
+choose Apps of one kind. External databases belong to online Apps only.
+
+### Examples
+
+Revenue by customer region, joining two Apps and aggregating:
+
+```sql
+SELECT c.region, SUM(o.total) AS revenue
+FROM crm.customers c
+JOIN shop.orders o ON o.customer_id = c.id
+GROUP BY c.region
+```
+
+A combined KPI across Apps, using a CTE and `UNION ALL`. Use the `label` column
+as the group and `value` as the measure field:
+
+```sql
+WITH open_tickets AS (
+  SELECT COUNT(*) AS n FROM support.tickets WHERE status = 'open'
+),
+new_leads AS (
+  SELECT COUNT(*) AS n FROM crm.leads
+  WHERE CAST(created_at AS TIMESTAMP) >= CAST(now() AS TIMESTAMP) - INTERVAL '7 days'
+)
+SELECT 'Open tickets' AS label, n AS value FROM open_tickets
+UNION ALL
+SELECT 'New leads this week' AS label, n AS value FROM new_leads
+```
+
+Only the viewer's own records, with the `$owner` parameter set to **Current
+user's ID**:
+
+```sql
+SELECT t.status, COUNT(*) AS tasks
+FROM planner.tasks t
+WHERE t.owner_id = $owner
+GROUP BY t.status
+```
+
 ## Understand defaults
 
 Home uses the first available layout in this order:

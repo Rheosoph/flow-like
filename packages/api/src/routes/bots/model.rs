@@ -6,6 +6,7 @@ use chrono::{DateTime, FixedOffset};
 use flow_like_types::{
     Value,
     bot::{BotCapability, BotExecutionMode, BotLocation, BotModelPolicy, BotSystemKind},
+    bot_calendar::CalendarWake,
     data_classification::{DataClassification, DataSensitivity},
 };
 use sea_orm::ActiveValue::Set;
@@ -66,6 +67,10 @@ pub struct Bot {
     pub execution_mode: BotExecutionMode,
     /// The managed device a `device` bot runs on.
     pub device_id: Option<String>,
+    /// Which calendar events wake the bot and how long before they start; off until you or the
+    /// bot switch it on.
+    #[schema(value_type = Object, example = json!({ "enabled": false, "offsets_minutes": [15] }))]
+    pub calendar_wake: CalendarWake,
     /// The `local_id` the bot was moved from a device with (`POST /bots/import`); null for bots
     /// made in the account.
     #[schema(example = "bot_tz4a98xxat96iws9zmbrgj3a")]
@@ -306,6 +311,7 @@ impl BotSettings {
 impl From<bot::Model> for Bot {
     fn from(row: bot::Model) -> Self {
         let settings = BotSettings::from_row(&row);
+        let calendar_wake = crate::bot_host::calendar_tasks::wake_of(&row);
         Self {
             system: row.system_key.as_deref().and_then(BotSystemKind::parse),
             preset_id: row.preset_id,
@@ -326,6 +332,7 @@ impl From<bot::Model> for Bot {
             location: settings.location,
             execution_mode: settings.execution_mode,
             device_id: settings.device_id,
+            calendar_wake,
             import_key: row.import_key,
             id: row.id,
             owner_id: row.owner_id,

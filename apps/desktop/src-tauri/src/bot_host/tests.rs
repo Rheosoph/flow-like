@@ -1861,6 +1861,7 @@ mod grants {
             after_web_content: false,
             secret: None,
             invite: None,
+            picture: None,
         }
     }
 
@@ -1891,6 +1892,7 @@ mod grants {
             room: None,
             secret: None,
             invite: None,
+            picture: None,
             configuration_changes: None,
             items,
         };

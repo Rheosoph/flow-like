@@ -164,6 +164,8 @@ pub(super) fn member_row(
         cleared_at: Set(None),
         cleared_legacy_at: Set(None),
         cleared_seq: Set(None),
+        unread_count: Set(None),
+        last_entry_id: Set(None),
     }
 }
 

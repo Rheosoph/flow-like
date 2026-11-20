@@ -3,14 +3,24 @@ import DatabaseIcon from "lucide-react/dist/esm/icons/database.js";
 import FoldVerticalIcon from "lucide-react/dist/esm/icons/fold-vertical.js";
 import type { UsageEfficiency } from "./usage-efficiency";
 
-const number = (value: number) => Math.round(value).toLocaleString();
-const percent = (value: number) => `${Math.round(value * 100)}%`;
-const duration = (value: number) =>
-	value < 1_000 ? `${Math.round(value)} ms` : `${(value / 1_000).toFixed(1)} s`;
 const bounded = (value: number) => Math.min(100, Math.max(0, value));
 
 export function UsageEfficiencyPanel({ data }: { data: UsageEfficiency }) {
-	const { t } = useTranslation("chat");
+	const { t, i18n } = useTranslation("chat");
+	const locale = i18n.resolvedLanguage ?? i18n.language;
+	const number = (value: number) => Math.round(value).toLocaleString(locale);
+	const percent = (value: number) =>
+		value.toLocaleString(locale, {
+			style: "percent",
+			maximumFractionDigits: 0,
+		});
+	const duration = (value: number) =>
+		value < 1_000
+			? `${number(value)} ms`
+			: `${(value / 1_000).toLocaleString(locale, {
+					minimumFractionDigits: 1,
+					maximumFractionDigits: 1,
+				})} s`;
 	const unknown = t("usageEfficiency.notReported", "Not reported");
 	const readShare = data.cacheShare;
 	const context = data.context;

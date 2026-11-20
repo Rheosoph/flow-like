@@ -31,6 +31,9 @@ pub enum BotCapability {
     PushNotifications,
     /// One-time and recurring runs.
     Scheduling,
+    /// Keeps the bot's own calendar, reads and writes the owner's connected Google and Microsoft
+    /// calendars, and wakes the bot before events.
+    Calendar,
     /// Runs when the owner's phone arrives at or leaves a place the bot watches, and looks up
     /// addresses with OpenStreetMap.
     Location,
@@ -73,7 +76,7 @@ pub enum BotCapability {
 
 impl BotCapability {
     /// Every capability, in the order the settings list them.
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 29] = [
         Self::Internet,
         Self::WebRequests,
         Self::ProfileApps,
@@ -84,6 +87,7 @@ impl BotCapability {
         Self::Email,
         Self::PushNotifications,
         Self::Scheduling,
+        Self::Calendar,
         Self::Location,
         Self::Storage,
         Self::DataStudio,
@@ -116,6 +120,7 @@ impl BotCapability {
             Self::Email => "email",
             Self::PushNotifications => "push_notifications",
             Self::Scheduling => "scheduling",
+            Self::Calendar => "calendar",
             Self::Location => "location",
             Self::Storage => "storage",
             Self::DataStudio => "data_studio",
@@ -310,6 +315,7 @@ mod tests {
                 "email",
                 "push_notifications",
                 "scheduling",
+                "calendar",
                 "location",
                 "storage",
                 "data_studio",

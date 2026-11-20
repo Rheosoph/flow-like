@@ -140,6 +140,14 @@ pub const fn inference_available() -> bool {
     cfg!(any(feature = "inference", feature = "forecasting"))
 }
 
+/// Largest checkpoint a forecast stages.
+pub const MAXIMUM_CHECKPOINT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+#[cfg(any(feature = "inference", feature = "forecasting"))]
+pub use execution::{
+    PreparedStudioForecast, checked_rows, forecast_budget, forecast_slot, prepare_forecast,
+};
+
 #[cfg(any(
     feature = "studio",
     any(feature = "inference", feature = "forecasting")

@@ -7,10 +7,17 @@ import {
 	homeDataNumber,
 } from "./home-data-presentation";
 import {
+	HOME_DATA_SQL_MAX_CHARS,
+	HOME_DATA_SQL_MAX_SOURCES,
 	buildHomeDataQuery,
 	extractHomeQueryParameters,
 	homeDataColumns,
+	homeDataCrossAppPayload,
 	homeDataMeasureTitle,
+	homeDataSqlAlias,
+	homeDataSqlConfigError,
+	homeDataSqlSchemaQuery,
+	homeDataSqlSourcesPayload,
 	homeDataUsesDates,
 	homeSavedQuerySchemaQuery,
 	homeSavedQuerySql,
@@ -122,13 +129,32 @@ describe("home data query boundaries", () => {
 			measures: Array.from({ length: 50 }, () => ({ aggregation: "count" })),
 		});
 		expect(config.scope).toBe("personal");
-		expect(config.limit).toBe(500);
+		expect(config.limit).toBe(5000);
 		expect(config.refreshSeconds).toBe(30);
 		expect(config.measures).toHaveLength(6);
 		expect(
 			base({ limit: Number.NaN, refreshSeconds: Number.POSITIVE_INFINITY })
 				.limit,
 		).toBe(20);
+	});
+	test("keeps limits up to 5,000 rows and normalizes parameter controls", () => {
+		expect(base({ limit: 4000 }).limit).toBe(4000);
+		expect(
+			buildHomeDataQuery(base({ sourceKind: "table", limit: 4000 })).limit,
+		).toBe(4000);
+		const config = base({
+			paramControls: {
+				region: { interactive: true, label: "  Region ", control: "select" },
+				empty: { interactive: false, label: " ", control: "nope" },
+				year: { control: "number", extra: 1 },
+				bad: 5,
+			},
+		});
+		expect(config.paramControls).toEqual({
+			region: { interactive: true, label: "Region", control: "select" },
+			year: { control: "number" },
+		});
+		expect(base().paramControls).toEqual({});
 	});
 	test("uses distinct object identity for ontology counts without joining edges", () => {
 		const query = buildHomeDataQuery(
@@ -461,6 +487,202 @@ describe("home data presentation preserves meaning", () => {
 		expect(graph.links).toEqual([
 			{ source: "a", target: "b" },
 			{ source: "b", target: "a" },
+		]);
+	});
+});
+
+describe("cross-app SQL sources", () => {
+	const sql = (overrides: Record<string, unknown> = {}) =>
+		normalizeHomeDataConfig({
+			sourceKind: "sql",
+			sql: "SELECT c.region, o.total, o.placed_at, o.owner FROM crm.customers c JOIN shop.orders o ON o.customer_id = c.id",
+			sources: [
+				{ id: "a", alias: "crm", appId: "app-crm", scope: "project" },
+				{ id: "b", alias: "shop", appId: "app-shop", scope: "personal" },
+			],
+			...overrides,
+		});
+
+	test("normalizes sources, cache lifetime, and unknown values", () => {
+		const config = normalizeHomeDataConfig({
+			sourceKind: "sql",
+			sources: [
+				{ alias: "crm", appId: "a", scope: "team" },
+				"nope",
+				...Array.from({ length: 10 }, (_, index) => ({ alias: `s${index}` })),
+			],
+			cacheSeconds: 5,
+		});
+		expect(config.sources).toHaveLength(HOME_DATA_SQL_MAX_SOURCES);
+		expect(config.sources[0]).toEqual({
+			id: "source-0",
+			alias: "crm",
+			appId: "a",
+			scope: "project",
+		});
+		expect(config.sources[1].alias).toBe("");
+		expect(config.cacheSeconds).toBe(30);
+		expect(normalizeHomeDataConfig({}).cacheSeconds).toBe(300);
+		expect(normalizeHomeDataConfig({ cacheSeconds: 0 }).cacheSeconds).toBe(0);
+		expect(
+			normalizeHomeDataConfig({ cacheSeconds: 999_999 }).cacheSeconds,
+		).toBe(86_400);
+	});
+
+	test("derives unique schema names from app names", () => {
+		expect(homeDataSqlAlias("CRM — Europe")).toBe("crm_europe");
+		expect(homeDataSqlAlias("Café Orders")).toBe("cafe_orders");
+		expect(homeDataSqlAlias("2026 Budget")).toBe("app_2026_budget");
+		expect(homeDataSqlAlias("Public")).toBe("public_app");
+		expect(homeDataSqlAlias("…")).toBe("app");
+		expect(homeDataSqlAlias("CRM", ["crm", "crm_2"])).toBe("crm_3");
+	});
+
+	test("explains why a query cannot run yet", () => {
+		expect(homeDataSqlConfigError(sql())).toBeNull();
+		expect(homeDataSqlConfigError(sql({ sources: [] }))).toContain(
+			"at least one app",
+		);
+		expect(
+			homeDataSqlConfigError(sql({ sources: [{ alias: "crm", appId: "" }] })),
+		).toContain("Choose an app");
+		for (const alias of ["CRM", "1crm", "crm-eu", ""])
+			expect(
+				homeDataSqlConfigError(sql({ sources: [{ alias, appId: "a" }] })),
+			).toContain("not a valid schema name");
+		expect(
+			homeDataSqlConfigError(
+				sql({ sources: [{ alias: "information_schema", appId: "a" }] }),
+			),
+		).toContain("reserved");
+		expect(
+			homeDataSqlConfigError(
+				sql({
+					sources: [
+						{ alias: "crm", appId: "a" },
+						{ alias: "crm", appId: "b" },
+					],
+				}),
+			),
+		).toContain("used twice");
+		expect(homeDataSqlConfigError(sql({ sql: "  " }))).toContain("Write");
+		expect(
+			homeDataSqlConfigError(
+				sql({ sql: "x".repeat(HOME_DATA_SQL_MAX_CHARS + 1) }),
+			),
+		).toContain("longer than");
+	});
+
+	test("wraps the SQL like a saved query and needs no top-level app", () => {
+		const query = buildHomeDataQuery(
+			sql({
+				groupBy: "region",
+				measures: [{ aggregation: "sum", field: "total" }],
+			}),
+			{},
+		);
+		expect(query.sql).toContain(
+			'FROM (\nSELECT c.region, o.total, o.placed_at, o.owner FROM crm.customers c JOIN shop.orders o ON o.customer_id = c.id\n) AS "__home_source"',
+		);
+		expect(query.sql).toContain('SUM("total") AS "__measure_0"');
+		expect(() => buildHomeDataQuery(sql({ sources: [] }))).toThrow(
+			"at least one app",
+		);
+	});
+
+	test("requires every parameter and resolves the viewer", () => {
+		const parametrized = sql({
+			sql: "SELECT * FROM shop.orders WHERE owner = $owner AND total > $minimum",
+			queryParams: { owner: "$viewer.id" },
+		});
+		expect(() =>
+			buildHomeDataQuery(parametrized, { viewerId: "alice" }),
+		).toThrow("Enter a value for the query parameter “minimum”");
+		const query = buildHomeDataQuery(
+			{ ...parametrized, queryParams: { owner: "$viewer.id", minimum: 10 } },
+			{ viewerId: "alice" },
+		);
+		expect(query.params).toEqual({ owner: "alice", minimum: 10 });
+		expect(() =>
+			buildHomeDataQuery(sql({ sql: "SELECT $__home_start" })),
+		).toThrow("cannot start");
+	});
+
+	test("windows dates on now() so identical loads share a cache key", () => {
+		const config = sql({ dateRange: "7d", dateField: "placed_at" });
+		const first = buildHomeDataQuery(config, {
+			now: new Date("2026-09-05T12:00:00Z"),
+		});
+		const later = buildHomeDataQuery(config, {
+			now: new Date("2026-09-05T12:03:17Z"),
+		});
+		expect(first).toEqual(later);
+		expect(first.params).toEqual({});
+		expect(first.sql).toContain(
+			`CAST("placed_at" AS TIMESTAMP) >= CAST(now() AS TIMESTAMP) - INTERVAL '7 days'`,
+		);
+		expect(first.sql).toContain(
+			`CAST("placed_at" AS TIMESTAMP) <= CAST(now() AS TIMESTAMP)`,
+		);
+		expect(
+			buildHomeDataQuery(sql({ dateRange: "year", dateField: "placed_at" }))
+				.sql,
+		).toContain("DATE_TRUNC('year', CAST(now() AS TIMESTAMP))");
+	});
+
+	test("sends sources, cache lifetime, and refresh intent", () => {
+		const config = sql({ cacheSeconds: 900 });
+		const query = buildHomeDataQuery(config);
+		expect(homeDataCrossAppPayload(config, query)).toEqual({
+			sql: query.sql,
+			params: query.params,
+			limit: query.limit,
+			sources: [
+				{ alias: "crm", app_id: "app-crm", scope: "project" },
+				{ alias: "shop", app_id: "app-shop", scope: "personal" },
+			],
+			cache_seconds: 900,
+			fresh: false,
+		});
+		expect(homeDataCrossAppPayload(config, query, { fresh: true }).fresh).toBe(
+			true,
+		);
+		const probe = homeDataSqlSchemaQuery(config, {});
+		expect(probe.cache_seconds).toBe(0);
+		expect(probe.limit).toBe(1);
+		expect(probe.sql).toContain('AS "__home_schema" WHERE false');
+	});
+
+	test("external databases read project data and name their source", () => {
+		const config = normalizeHomeDataConfig({
+			sourceKind: "sql",
+			sources: [
+				{
+					id: "w",
+					alias: "warehouse",
+					appId: "app-crm",
+					scope: "personal",
+					sourceId: "db-1",
+				},
+				{ id: "c", alias: "crm", appId: "app-crm", sourceId: "" },
+			],
+		});
+		expect(config.sources[0]).toEqual({
+			id: "w",
+			alias: "warehouse",
+			appId: "app-crm",
+			scope: "project",
+			sourceId: "db-1",
+		});
+		expect(config.sources[1].sourceId).toBeUndefined();
+		expect(homeDataSqlSourcesPayload(config.sources)).toEqual([
+			{
+				alias: "warehouse",
+				app_id: "app-crm",
+				scope: "project",
+				source_id: "db-1",
+			},
+			{ alias: "crm", app_id: "app-crm", scope: "project" },
 		]);
 	});
 });

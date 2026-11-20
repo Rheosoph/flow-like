@@ -3,6 +3,8 @@
 import { useTranslation } from "@flow-like/locales";
 import { type ReactNode, useCallback, useMemo, useRef } from "react";
 import type { ConversationActivity } from "../../hooks/use-conversation-activity";
+import { useConversationReplyDrafts } from "../../hooks/use-conversation-reply-drafts";
+import { useSmoothTexts } from "../../hooks/use-smooth-text";
 import { IRole } from "../../lib/schema/llm/history";
 import { GLOBAL_CHAT_APP_ID } from "../../state/global-chat/global-chat-db";
 import {
@@ -40,6 +42,62 @@ import { useRoomRunWidgetAction } from "./use-room-widget-action";
 const NO_BOTS: ConversationActivity["bots"] = [];
 const NO_TYPING: ConversationActivity["typing"] = [];
 
+interface DraftShell {
+	messageId: string;
+	senderId: string;
+	replyTo: string;
+}
+
+const shellKey = (drafts: readonly DraftShell[]) =>
+	drafts
+		.map(({ messageId, senderId, replyTo }) =>
+			[messageId, senderId, replyTo].join("\u0000"),
+		)
+		.join("\n");
+
+/**
+ * The blocks with every reply a host is still writing appended as a message of its sender. The
+ * group key is the one the stored message will get, so the speaker line stays mounted when the
+ * stored message takes the draft's place.
+ */
+function withDrafts(
+	blocks: readonly ConversationBlock[],
+	drafts: readonly DraftShell[],
+	lastTime: number,
+): readonly ConversationBlock[] {
+	if (drafts.length === 0) return blocks;
+	const out = [...blocks];
+	drafts.forEach(({ messageId, senderId, replyTo }, index) => {
+		const time = lastTime + 1 + index;
+		const message: ConversationMessage = {
+			type: "message",
+			id: messageId,
+			senderId,
+			mine: false,
+			createdAt: new Date(time).toISOString(),
+			time,
+			content: { kind: "text", text: "" },
+			...(replyTo ? { replyTo } : {}),
+			mentions: [],
+			edited: false,
+			reactions: [],
+		};
+		const last = out.at(-1);
+		if (last?.type === "group" && last.senderId === senderId && !last.mine) {
+			out[out.length - 1] = { ...last, messages: [...last.messages, message] };
+		} else {
+			out.push({
+				type: "group",
+				key: `group:${messageId}`,
+				senderId,
+				mine: false,
+				messages: [message],
+			});
+		}
+	});
+	return out;
+}
+
 /**
  * A room or exchange on the standard chat surface: the same list, message components, composer and
  * hover actions as a bot's own chat. What a group adds rides in `IChatGroup`: a speaker line where
@@ -47,7 +105,7 @@ const NO_TYPING: ConversationActivity["typing"] = [];
  * `@` picker.
  */
 export function ConversationChat({
-	blocks,
+	blocks: storedBlocks,
 	pending,
 	thread,
 	history,
@@ -78,6 +136,56 @@ export function ConversationChat({
 	const chatRef = useRef<IChatRef>(null);
 	const { directory, actions, marks, readOnly } = thread;
 	const conversationId = thread.conversation.id;
+
+	const drafts = useConversationReplyDrafts(conversationId);
+	const { live, lastTime } = useMemo(() => {
+		const stored = new Set<string>();
+		let latest = 0;
+		for (const block of storedBlocks) {
+			if (block.type !== "group") continue;
+			for (const message of block.messages) {
+				stored.add(message.id);
+				latest = Math.max(latest, message.time);
+			}
+		}
+		return {
+			live: drafts.filter((draft) => !stored.has(draft.messageId)),
+			lastTime: latest,
+		};
+	}, [storedBlocks, drafts]);
+	const liveKey = shellKey(live);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the key says when a shell changes; the text of a draft does not
+	const liveShells = useMemo(
+		() =>
+			live.map(({ messageId, senderId, replyTo }) => ({
+				messageId,
+				senderId,
+				replyTo,
+			})),
+		[liveKey],
+	);
+	const blocks = useMemo(
+		() => withDrafts(storedBlocks, liveShells, lastTime),
+		[storedBlocks, liveShells, lastTime],
+	);
+	const draftIds = useMemo(
+		() => new Set(liveShells.map((shell) => shell.messageId)),
+		[liveShells],
+	);
+	const draftSenders = useMemo(
+		() => new Set(liveShells.map((shell) => shell.senderId)),
+		[liveShells],
+	);
+	const writing = useMemo(
+		() =>
+			new Map(
+				live
+					.filter((draft) => draft.state !== "done")
+					.map((draft) => [draft.messageId, draft.text]),
+			),
+		[live],
+	);
+	const smooth = useSmoothTexts(writing);
 
 	const errorTitle = t("crew.messages.errorTitle", "Couldn't answer");
 	const sealed = t("crew.messages.encrypted", "Encrypted message");
@@ -186,6 +294,23 @@ export function ConversationChat({
 			t,
 		]);
 
+	const shownMessages = useMemo(() => {
+		if (live.length === 0) return messages;
+		const drafted = new Map(live.map((draft) => [draft.messageId, draft]));
+		return messages.map((message) => {
+			const draft = drafted.get(message.id);
+			if (!draft) return message;
+			const text =
+				draft.state === "done" ? draft.text : (smooth.get(message.id) ?? "");
+			return {
+				...message,
+				live: draft.state !== "done",
+				inner: { ...message.inner, content: text },
+				source_text: text,
+			};
+		});
+	}, [messages, live, smooth]);
+
 	const pendingMessages = useMemo<IMessage[]>(
 		() =>
 			pending.map((send, index) => {
@@ -288,7 +413,7 @@ export function ConversationChat({
 				? undefined
 				: (message) => {
 						const source = byId.get(message.id);
-						if (!source) return null;
+						if (!source || draftIds.has(message.id)) return null;
 						const starred = marks.starred.has(source.id);
 						const pinned = marks.pinnedBy.has(source.id);
 						return (
@@ -321,6 +446,7 @@ export function ConversationChat({
 			olderButton,
 			readOnly,
 			byId,
+			draftIds,
 			actions,
 			marks,
 			thread.text,
@@ -394,7 +520,7 @@ export function ConversationChat({
 						runWidgetAction={runWidgetAction}
 						sessionId={conversationId}
 						config={chatConfig}
-						messages={[...messages, ...pendingMessages]}
+						messages={[...shownMessages, ...pendingMessages]}
 						onSendMessage={send}
 						onMessageReaction={readOnly ? undefined : react}
 						onMessageUpdate={readOnly ? undefined : update}
@@ -403,6 +529,7 @@ export function ConversationChat({
 							<ConversationActivityLine
 								bots={activity?.bots ?? NO_BOTS}
 								typing={activity?.typing ?? NO_TYPING}
+								drafting={draftSenders}
 								directory={directory}
 							/>
 						}

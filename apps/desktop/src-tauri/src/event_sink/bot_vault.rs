@@ -27,26 +27,37 @@ impl Keychain {
 }
 
 #[cfg(all(not(test), not(target_os = "android")))]
+static TOKENS: crate::keychain_cache::KeychainCache = crate::keychain_cache::KeychainCache::new();
+
+#[cfg(all(not(test), not(target_os = "android")))]
 impl Vault for Keychain {
     fn get(&self, account: &str) -> Result<Option<String>> {
-        match Self::entry(account)?.get_password() {
-            Ok(secret) => Ok(Some(secret)),
+        let token = TOKENS.read(account, || match Self::entry(account)?.get_password() {
+            Ok(secret) => Ok(Some(zeroize::Zeroizing::new(secret.into_bytes()))),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(_) => bail!("The system credential store is unavailable or locked"),
-        }
+        })?;
+        token
+            .map(|token| String::from_utf8(token.to_vec()))
+            .transpose()
+            .context("The bot token in the system credential store is not text")
     }
 
     fn set(&self, account: &str, secret: &str) -> Result<()> {
-        Self::entry(account)?
-            .set_password(secret)
-            .context("Cannot save the bot token in the system credential store")
+        TOKENS.write(account, secret.as_bytes(), || {
+            Self::entry(account)?
+                .set_password(secret)
+                .context("Cannot save the bot token in the system credential store")
+        })
     }
 
     fn delete(&self, account: &str) -> Result<()> {
-        match Self::entry(account)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(_) => bail!("The system credential store is unavailable or locked"),
-        }
+        TOKENS.delete(account, || {
+            match Self::entry(account)?.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                Err(_) => bail!("The system credential store is unavailable or locked"),
+            }
+        })
     }
 }
 

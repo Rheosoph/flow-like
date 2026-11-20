@@ -11,6 +11,7 @@ use crate::{
         sink_rebind::{rebind_latest_sinks, try_rebind_latest_sinks},
     },
     state::{AppState, BoardMutationGuard},
+    utils::fork::upload::upload_id_map,
 };
 use axum::{
     Extension, Json,
@@ -19,12 +20,16 @@ use axum::{
 };
 use flow_like::{
     a2ui::widget::Page,
-    app::App,
+    app::{
+        App,
+        remap::{ForkIdMap, remap_board},
+    },
     flow::{
         board::{Board, ExecutionMode, ExecutionStage},
         execution::LogLevel,
     },
 };
+use flow_like_types::{FromProto, ToProto};
 use sea_orm::{ActiveValue::Set, sea_query::OnConflict};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
@@ -134,6 +139,13 @@ fn ensure_template_targets_new_board(
     ))
 }
 
+/// A board pushed by an offline → online upload: the upload's id map and the board id the
+/// desktop knows it by.
+struct UploadedBoard<'a> {
+    maps: &'a mut ForkIdMap,
+    source_board_id: &'a str,
+}
+
 /// Creates `board_id` when the app does not list it yet. Returns whether it was instantiated from
 /// `template`, in which case the caller hands the exact server-minted graph back.
 async fn create_missing_board(
@@ -142,6 +154,7 @@ async fn create_missing_board(
     app_id: &str,
     board_id: &str,
     template: Option<Board>,
+    upload: Option<UploadedBoard<'_>>,
     mutation_guard: &BoardMutationGuard,
 ) -> Result<bool, ApiError> {
     let created_board = !app.boards.iter().any(|id| id == board_id);
@@ -150,15 +163,28 @@ async fn create_missing_board(
     if !created_board {
         return Ok(false);
     }
-    // Instantiate through the same core path as offline boards. Besides remapping node/pin
-    // IDs, this runs catalog schema migrations and keeps compact schema refs resolvable before
-    // the first board snapshot is saved.
-    let created = app
-        .create_board(Some(board_id.to_string()), template)
-        .await?;
+    let pages = match (upload, template) {
+        // Pasting would mint random node ids that the upload's events and pages cannot know, so
+        // an upload is re-keyed into its own id space and kept as is.
+        (Some(upload), Some(mut template)) => {
+            template.id = upload.source_board_id.to_string();
+            let remapped = remap_board(template.to_proto(), upload.maps)?;
+            app.create_board_with_ids(Board::from_proto(remapped))
+                .await?;
+            Vec::new()
+        }
+        // Instantiate through the same core path as offline boards. Besides remapping node/pin
+        // IDs, this runs catalog schema migrations and keeps compact schema refs resolvable
+        // before the first board snapshot is saved.
+        (_, template) => {
+            app.create_board(Some(board_id.to_string()), template)
+                .await?
+                .pages
+        }
+    };
     mutation_guard.ensure_held()?;
     app.save().await?;
-    persist_instantiated_pages(state, app_id, &created.board_id, &created.pages).await?;
+    persist_instantiated_pages(state, app_id, board_id, &pages).await?;
     Ok(has_template)
 }
 
@@ -221,6 +247,12 @@ pub async fn upsert_board(
 ) -> Result<Json<UpsertBoardResponse>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
     let sub = permission.sub()?;
+    let mut upload = upload_id_map(&state, &app_id).await?;
+    let source_board_id = board_id;
+    let board_id = upload.as_ref().map_or_else(
+        || source_board_id.clone(),
+        |maps| maps.mint(&source_board_id),
+    );
     let mutation_guard = state.board_mutation_guard(&app_id, &board_id).await?;
 
     let mut app = state.master_app(&sub, &app_id, &state).await?;
@@ -232,6 +264,10 @@ pub async fn upsert_board(
         &app_id,
         &board_id,
         template,
+        upload.as_mut().map(|maps| UploadedBoard {
+            maps,
+            source_board_id: &source_board_id,
+        }),
         &mutation_guard,
     )
     .await?;

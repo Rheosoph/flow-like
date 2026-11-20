@@ -576,6 +576,32 @@ const RETAINED_LANCE_METADATA_CACHE_BYTES: usize =
         256 * 1024 * 1024
     };
 
+/// Index and metadata cache bytes for a Lance session. On Lambda the configured
+/// memory is the whole process budget, so the caches take an eighth and a
+/// sixteenth of it; elsewhere the retained caps apply.
+#[cfg(feature = "flow-runtime")]
+fn lance_cache_capacity() -> (usize, usize) {
+    let lambda_memory = std::env::var("AWS_LAMBDA_FUNCTION_MEMORY_SIZE")
+        .ok()
+        .and_then(|mib| mib.trim().parse::<usize>().ok())
+        .map(|mib| mib.saturating_mul(1024 * 1024));
+    lance_cache_capacity_for(lambda_memory)
+}
+
+#[cfg(feature = "flow-runtime")]
+fn lance_cache_capacity_for(process_memory: Option<usize>) -> (usize, usize) {
+    match process_memory {
+        Some(memory) => (
+            (memory / 8).min(RETAINED_LANCE_INDEX_CACHE_BYTES),
+            (memory / 16).min(RETAINED_LANCE_METADATA_CACHE_BYTES),
+        ),
+        None => (
+            RETAINED_LANCE_INDEX_CACHE_BYTES,
+            RETAINED_LANCE_METADATA_CACHE_BYTES,
+        ),
+    }
+}
+
 // TODO: implement dashmap
 #[derive(Clone)]
 pub struct FlowLikeState {
@@ -683,7 +709,7 @@ impl FlowLikeState {
             request_authorizer: None,
             service_tls_provider: None,
             #[cfg(feature = "flow-runtime")]
-            lance_session: Arc::new(LanceSession::default()),
+            lance_session: Self::retained_lance_session(None),
             #[cfg(feature = "flow-metadata")]
             execution_environment: ExecutionEnvironment::default(),
 
@@ -740,7 +766,7 @@ impl FlowLikeState {
             request_authorizer: None,
             service_tls_provider: None,
             #[cfg(feature = "flow-runtime")]
-            lance_session: Arc::new(LanceSession::default()),
+            lance_session: Self::retained_lance_session(None),
             #[cfg(feature = "flow-metadata")]
             execution_environment: ExecutionEnvironment::default(),
 
@@ -835,22 +861,21 @@ impl FlowLikeState {
         &mut self,
         registry: Arc<flow_like_storage::lance_io::object_store::ObjectStoreRegistry>,
     ) {
-        self.lance_session = Arc::new(LanceSession::new(
-            flow_like_storage::lance::dataset::DEFAULT_INDEX_CACHE_SIZE,
-            flow_like_storage::lance::dataset::DEFAULT_METADATA_CACHE_SIZE,
-            registry,
-        ));
+        self.lance_session = Self::retained_lance_session(Some(registry));
     }
 
-    /// A session the desktop keeps across runs. Lance's defaults (6 GiB index,
-    /// 1 GiB metadata) would stay resident long after the run that filled them.
+    /// A session sized for a process that keeps it across runs or requests.
+    /// Lance's defaults (6 GiB index, 1 GiB metadata) exceed the memory of most
+    /// hosts, so the caches would grow until the process is killed instead of
+    /// evicting.
     #[cfg(feature = "flow-runtime")]
     pub fn retained_lance_session(
         registry: Option<Arc<flow_like_storage::lance_io::object_store::ObjectStoreRegistry>>,
     ) -> Arc<LanceSession> {
+        let (index_cache_bytes, metadata_cache_bytes) = lance_cache_capacity();
         Arc::new(LanceSession::new(
-            RETAINED_LANCE_INDEX_CACHE_BYTES,
-            RETAINED_LANCE_METADATA_CACHE_BYTES,
+            index_cache_bytes,
+            metadata_cache_bytes,
             registry.unwrap_or_default(),
         ))
     }
@@ -1605,6 +1630,26 @@ mod tests {
 
         let retained = FlowLikeState::retained_lance_session(Some(registry.clone()));
         assert!(Arc::ptr_eq(&registry, &retained.store_registry()));
+    }
+
+    #[test]
+    #[cfg(feature = "flow-runtime")]
+    fn lance_caches_follow_lambda_memory_and_never_exceed_the_retained_caps() {
+        const MIB: usize = 1024 * 1024;
+        assert_eq!(
+            super::lance_cache_capacity_for(Some(1280 * MIB)),
+            (160 * MIB, 80 * MIB)
+        );
+        assert_eq!(
+            super::lance_cache_capacity_for(Some(2048 * MIB)),
+            (256 * MIB, 128 * MIB)
+        );
+        let retained = (
+            super::RETAINED_LANCE_INDEX_CACHE_BYTES,
+            super::RETAINED_LANCE_METADATA_CACHE_BYTES,
+        );
+        assert_eq!(super::lance_cache_capacity_for(Some(10240 * MIB)), retained);
+        assert_eq!(super::lance_cache_capacity_for(None), retained);
     }
 
     #[test]

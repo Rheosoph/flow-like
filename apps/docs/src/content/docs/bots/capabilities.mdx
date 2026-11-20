@@ -1,6 +1,6 @@
 ---
 title: Capabilities
-description: The 26 abilities a bot can have, what each one unlocks, which ones ask you first, and which need the desktop app or a device.
+description: The 29 abilities a bot can have, what each one unlocks, which ones ask you first, and which need the desktop app or a device.
 ---
 
 import CapabilityExplorer from "../../../components/bots/CapabilityExplorer";
@@ -43,6 +43,7 @@ With several keys stored, search uses the first one in the order Tavily, Brave, 
 - **Run code** runs Python 3.12, a scientific Python build (numpy, pandas, scipy, scikit-learn, matplotlib and more) or JavaScript in a WebAssembly sandbox. Each run starts fresh, sees only its own input and output folders, and has no network unless you approve named hosts. Results land in the bot's workspace. Operators can mirror the runtimes; see [Bot code runtimes](/self-hosting/code-runtimes/).
 - **Computer use**, **Browser** and **Command line** work on the bot's own desktop or device. Watch the bot, take over with your own mouse and keyboard (hold Esc for a second to hand back) or stop it from its **Computer** tab.
 - **Computer use** reads the text of a field or of a selection as text rather than from a screenshot, and pastes long text in one step instead of typing it. On macOS it reads and replaces a field's text through the app's accessibility. Elsewhere it copies or pastes through the clipboard and then restores what your clipboard held. Each read and each paste asks you first unless you gave the bot the session.
+- **Computer use** can keep a screenshot in the bot's workspace (`bot/screenshots`) and attach it to the bot's reply, so you see what the bot saw. In a group chat the bot asks you before others see it. The approval card shows the picture, and "Always allow" is not offered, not even when you gave the bot the session.
 - **Browser** gives the bot a Chrome of its own with a separate profile, so it never sees your logins, cookies or history. In the desktop app that Chrome is a window on your screen. Some sites turn automated browsers away. A desktop bot can then ask to open such a site in a new tab of your own Chrome or Edge, signed in as you. You approve this per site, apart from the bot's own browser, and your browser asks you once more before it lets the bot in. It needs Chrome or Edge 144 or newer with **Allow remote debugging for this browser instance** switched on at `chrome://inspect/#remote-debugging`. The bot works only in its own tab, which closes when the bot closes its browser or has left it idle for ten minutes. Files it downloads there stay in your browser's download folder.
 - **Skills** are instructions and scripts the bot follows for recurring jobs. It only sees skills you approved, and can propose new ones for you to review.
 - **Delegation** splits big jobs into parallel sub-tasks on the subtask model. Sub-tasks can't ask you questions, schedule, send mail or message people.
@@ -66,6 +67,37 @@ With several keys stored, search uses the first one in the order Tavily, Brave, 
 - **Knowledge** builds searchable indexes over your files.
 - **Data connections** attach external databases such as Postgres, MySQL or ODBC sources.
 - **Scheduling** lets the bot run once at a set time or on a cron schedule.
+- **Calendar** gives the bot a calendar of its own and lets it read and change the main calendar of each Google or Microsoft account you connected to it under **Connectors**, and one calendar of each CalDAV account you added there (see [Connect a CalDAV calendar](#connect-a-caldav-calendar)). It lists events, adds, moves and deletes them, and finds free times. Changes to a connected calendar ask you first, under that connector's policy; its own calendar never asks. It works with your events only in your 1:1 chat. In a group it can only look up free times, without any details. The bot can also wake up a set time before an event starts; see [Triggers](/bots/triggers/#calendar-wake-ups). The **Calendar** tab of the bot shows its events, your connected calendars, its tasks and the dates it remembers side by side. Bots that live only on your computer while you're signed out have their own calendar and can use CalDAV calendars, but not Google or Microsoft accounts.
+
+### Connect a CalDAV calendar
+
+Under **Connectors** in the bot's settings, choose **Add calendar (CalDAV)**, pick your service, enter your user name and password, and choose **Connect**. Flow-Like checks the sign-in, lists your calendars and uses the first one you can change; pick another one in the connector if you like. Calendars your server marks read only are shown as such. The password is stored sealed, never shown again, and sent only to the server you entered. To change it, remove the connector and add it again.
+
+| Service | Address | Sign in with |
+| --- | --- | --- |
+| iCloud | `https://caldav.icloud.com/` | Apple ID email and an app-specific password |
+| Nextcloud | `https://<your host>/remote.php/dav/` | User name and an app password |
+| Fastmail | `https://caldav.fastmail.com/` | Fastmail address and an app password |
+| mailbox.org | `https://dav.mailbox.org/` | mailbox.org address and password |
+| Posteo | `https://posteo.de:8443/` | Posteo address and password |
+| Synology | `https://<your NAS>:5001/caldav/` | DSM user name and password |
+| Radicale | `http://localhost:5232/` | User name and password |
+| Other | the CalDAV address your provider lists | as your provider says |
+
+**iCloud needs an app-specific password.** Your Apple ID password does not work. Open account.apple.com, choose **Sign-In and Security**, then **App-Specific Passwords**, create one for Flow-Like and paste it as the password. If you see a sign-in error, check the user name and create a new app password.
+
+Reading never asks; adding, moving and deleting events ask you first, like the other connected calendars. A bot hosted by Flow-Like reaches only public servers, so a calendar in your home network or on `localhost` works for a bot on your computer only.
+
+On a self-hosted server, connected calendars (Google, Microsoft and CalDAV) are read and changed by the executor, never by the API itself, and connecting a CalDAV account needs it too. A server without an executor shows connected calendars as unreadable; each bot's own calendar and its wake-ups keep working.
+
+### Show a bot's calendar in your calendar app
+
+The **Calendar** tab has a **Show in your calendar** button for bots on your account that hold Calendar, Scheduling or Memory. It creates a private link that Apple Calendar, Google Calendar, Outlook, Thunderbird and other calendar apps can subscribe to, so the bot's calendar appears next to yours as its own calendar, for example "Secretary · Flow-Like". The calendar is read only.
+
+- **What it shows**: the bot's own events and its scheduled tasks by default. You can add dated memories, and the instructions of events and tasks as notes. Your connected Google and Microsoft calendars are never included, as they are already in your calendar app. The feed covers the last 30 days and the next 180, at most 2,000 entries.
+- **Privacy**: the link is the only secret and needs no sign-in. Anyone who has it, and services such as Google that fetch it for you, can read what it shows. Memories and notes are off by default for that reason. Memories are available for bots hosted by Flow-Like, not for bots on your desktop or a device.
+- **Control**: **New link** replaces the link and stops calendars subscribed to the old one. **Turn off** removes it. Bots that live only on your computer have no link, as it needs your account.
+- **Refresh**: Apple Calendar and Thunderbird refresh about every 15 minutes. Google and Outlook only refresh subscribed calendars every few hours, and you can't change that.
 
 ## Security
 

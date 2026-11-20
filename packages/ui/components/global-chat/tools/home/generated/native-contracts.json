@@ -1445,14 +1445,14 @@
 			},
 			"data": {
 				"type": "data",
-				"description": "A table, ontology, or saved-query visualization.",
+				"description": "A table, ontology, saved-query, or cross-app SQL visualization.",
 				"additional_properties": false,
 				"fields": {
 					"sourceKind": {
 						"type": "string",
 						"description": "Data source kind.",
 						"default": "table",
-						"enum": ["table", "ontology", "query"]
+						"enum": ["table", "ontology", "query", "sql"]
 					},
 					"appId": {
 						"type": "string",
@@ -1461,7 +1461,11 @@
 							"kind": "profile_app_id",
 							"provenance": "current_profile",
 							"validation": "reference",
-							"discover_with": "list_apps"
+							"discover_with": "list_apps",
+							"when": {
+								"field": "sourceKind",
+								"not_equals": "sql"
+							}
 						}
 					},
 					"scope": {
@@ -1540,7 +1544,7 @@
 					},
 					"queryParams": {
 						"type": "object",
-						"description": "Saved-query parameters. Values may use $viewer.id.",
+						"description": "Saved-query or SQL $name parameters. Values may use $viewer.id.",
 						"reference": {
 							"kind": "saved_query_parameters",
 							"provenance": "home_data_source",
@@ -1552,6 +1556,72 @@
 								"equals": "query"
 							}
 						}
+					},
+					"paramControls": {
+						"type": "object",
+						"description": "Per SQL $name parameter: { interactive?: boolean (viewers may change the value), label?: string, control?: text | number | toggle | date | datetime | select | combobox | multi-select }. Viewer choices are stored per viewer, not in the layout; queryParams holds the defaults."
+					},
+					"sql": {
+						"type": "string",
+						"description": "One read-only SELECT or WITH statement over the sources, at most 20000 characters. Address tables as <alias>.<table>; use $name parameters filled from queryParams. Names starting with __home_ are reserved. Result fields cannot be verified.",
+						"default": ""
+					},
+					"sources": {
+						"type": "object_list",
+						"description": "Apps queried by the SQL, up to 8.",
+						"max_items": 8,
+						"item": {
+							"additional_properties": false,
+							"fields": {
+								"id": {
+									"type": "string",
+									"description": "Optional stable source id."
+								},
+								"alias": {
+									"type": "string",
+									"description": "Schema name used as <alias>.<table> in the SQL. Lowercase letters, digits, and _, starting with a letter or _; unique; not public or information_schema.",
+									"pattern": "^[a-z_][a-z0-9_]{0,62}$"
+								},
+								"appId": {
+									"type": "string",
+									"description": "App from the current profile whose tables this alias exposes.",
+									"reference": {
+										"kind": "profile_app_id",
+										"provenance": "current_profile",
+										"validation": "reference",
+										"discover_with": "list_apps"
+									}
+								},
+								"scope": {
+									"type": "string",
+									"description": "Project or current-user personal data.",
+									"default": "project",
+									"enum": ["project", "personal"]
+								},
+								"sourceId": {
+									"type": "string",
+									"description": "Optional id of one of the app's external databases, read instead of the app's own tables as project data. Keep an existing value unchanged; omit it otherwise."
+								}
+							},
+							"required": ["alias", "appId"],
+							"unique_by": "alias"
+						}
+					},
+					"cacheSeconds": {
+						"type": "number",
+						"description": "Server cache lifetime for cross-app SQL results. Zero disables caching.",
+						"default": 300,
+						"integer": true,
+						"ranges": [
+							{
+								"minimum": 0,
+								"maximum": 0
+							},
+							{
+								"minimum": 30,
+								"maximum": 86400
+							}
+						]
 					},
 					"visualization": {
 						"type": "string",
@@ -1814,7 +1884,7 @@
 						"default": 20,
 						"integer": true,
 						"minimum": 1,
-						"maximum": 500
+						"maximum": 5000
 					},
 					"refreshSeconds": {
 						"type": "number",
@@ -1914,6 +1984,10 @@
 					{
 						"code": "data_source_missing_app",
 						"message": "Choose an app from the current profile.",
+						"when": {
+							"field": "sourceKind",
+							"in": ["table", "ontology", "query"]
+						},
 						"non_empty": ["appId"]
 					},
 					{
@@ -1942,6 +2016,15 @@
 							"equals": "query"
 						},
 						"non_empty": ["queryId"]
+					},
+					{
+						"code": "data_sql_missing",
+						"message": "Write the SQL statement and add at least one source app.",
+						"when": {
+							"field": "sourceKind",
+							"equals": "sql"
+						},
+						"non_empty": ["sql", "sources"]
 					},
 					{
 						"code": "data_target_missing",

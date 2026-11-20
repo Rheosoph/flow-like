@@ -29,6 +29,7 @@ REPOSITORIES = {
     "sink-trigger": "flow-like-kubernetes-sink-trigger",
     "runtime": "flow-like-docker-compose-runtime",
     "compiler": "flow-like-docker-compose-compiler",
+    "query": "flow-like-docker-compose-query",
     "signaling": "flow-like-docker-compose-signaling",
     "object-store-init": "flow-like-docker-compose-object-store-init",
     "audit-worker": "flow-like-audit-worker",
@@ -43,10 +44,11 @@ IMAGE_PATHS = {
     "sink-trigger": [("sinkServices", "image")],
     "runtime": [("executionManager", "queueBridge", "image")],
     "compiler": [("compiler", "image")],
+    "query": [("query", "image")],
     "signaling": [("signaling", "image")],
     "object-store-init": [("rustfs", "bootstrap", "image")],
 }
-NODE_SELECTOR_PATHS = [("audit",), ("api",), ("web",), ("compiler",), ("signaling",), ("executionManager",), ("executionManager", "sandbox"), ("monitoring", "prometheus"), ("monitoring", "grafana")]
+NODE_SELECTOR_PATHS = [("audit",), ("api",), ("web",), ("compiler",), ("query",), ("signaling",), ("executionManager",), ("executionManager", "sandbox"), ("monitoring", "prometheus"), ("monitoring", "grafana")]
 
 
 def split_registry(registry):

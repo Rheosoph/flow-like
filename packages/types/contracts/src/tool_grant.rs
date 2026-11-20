@@ -350,6 +350,7 @@ mod tests {
             after_web_content: false,
             secret: None,
             invite: None,
+            picture: None,
         };
         let single = crate::bot_message::ApprovalRequest {
             id: approval_message_id("bt_1", "h1"),
@@ -363,6 +364,7 @@ mod tests {
             room: None,
             secret: None,
             invite: None,
+            picture: None,
             configuration_changes: None,
             items: Vec::new(),
         };

@@ -1,6 +1,6 @@
 "use client";
 
-import { i18n as i18next, useTranslation } from "@flow-like/locales";
+import { useTranslation } from "@flow-like/locales";
 import Bug from "lucide-react/dist/esm/icons/bug.js";
 import Check from "lucide-react/dist/esm/icons/check.js";
 import ChevronDown from "lucide-react/dist/esm/icons/chevron-down.js";
@@ -22,13 +22,6 @@ import {
 	CollapsibleTrigger,
 } from "../../ui/collapsible";
 
-function durationLabel(duration?: number) {
-	if (duration === undefined) return "running";
-	if (duration < 1_000)
-		return i18next.t("valMs", "{{val}} ms", { val: Math.round(duration) });
-	return `${(duration / 1_000).toFixed(duration < 10_000 ? 1 : 0)} s`;
-}
-
 function outcomeClass(outcome: IAgentDebugReport["outcome"]) {
 	if (outcome === "ok") return "text-emerald-500";
 	if (outcome === "running") return "text-primary";
@@ -37,7 +30,31 @@ function outcomeClass(outcome: IAgentDebugReport["outcome"]) {
 }
 
 export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
-	const { t } = useTranslation("chat");
+	const { t, i18n } = useTranslation("chat");
+	const locale = i18n.resolvedLanguage ?? i18n.language;
+	const durationLabel = (duration?: number) => {
+		if (duration === undefined) return t("debugReport.running", "Running");
+		if (duration < 1_000)
+			return t("debugReport.milliseconds", "{{value}} ms", {
+				value: Math.round(duration).toLocaleString(locale),
+			});
+		const digits = duration < 10_000 ? 1 : 0;
+		return t("debugReport.seconds", "{{value}} s", {
+			value: (duration / 1_000).toLocaleString(locale, {
+				minimumFractionDigits: digits,
+				maximumFractionDigits: digits,
+			}),
+		});
+	};
+	const outcomes: Record<IAgentDebugReport["outcome"], string> = {
+		running: t("debugReport.running", "Running"),
+		ok: t("debugReport.ok", "Completed"),
+		partial: t("debugReport.partial", "Partially completed"),
+		error: t("debugReport.failed", "Failed"),
+		cancelled: t("debugReport.cancelled", "Cancelled"),
+		timeout: t("debugReport.timeout", "Timed out"),
+		interrupted: t("debugReport.interrupted", "Interrupted"),
+	};
 	const { developerMode } = useDeveloperMode();
 	const [open, setOpen] = useState(false);
 	const [copied, setCopied] = useState<"json" | "markdown" | null>(null);
@@ -72,20 +89,30 @@ export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 						className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-primary/40"
 					>
 						<Bug className="size-3.5 text-muted-foreground" />
-						<span className="font-medium">{`Debug report`}</span>
+						<span className="font-medium">
+							{t("debugReport.title", "Debug report")}
+						</span>
 						<span
 							className={cn(
 								"font-medium capitalize",
 								outcomeClass(report.outcome),
 							)}
 						>
-							{report.outcome}
+							{outcomes[report.outcome]}
 						</span>
 						<span className="text-muted-foreground">
-							{durationLabel(report.duration_ms)} · {report.events.length}{" "}
-							events
+							{durationLabel(report.duration_ms)} ·{" "}
+							{t("debugReport.events", {
+								defaultValue_one: "{{count}} event",
+								defaultValue_other: "{{count}} events",
+								count: report.events.length,
+							})}
 							{report.truncation?.events_dropped
-								? ` · ${report.truncation.events_dropped} omitted`
+								? ` · ${t("debugReport.omitted", {
+										defaultValue_one: "{{count}} omitted",
+										defaultValue_other: "{{count}} omitted",
+										count: report.truncation.events_dropped,
+									})}`
 								: ""}
 						</span>
 						{open ? (
@@ -101,7 +128,11 @@ export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 							<span title={report.model}>
 								{[report.provider, modelName, report.reasoning_effort]
 									.filter(Boolean)
-									.join(" · ") || `Provider metadata unavailable`}
+									.join(" · ") ||
+									t(
+										"debugReport.providerUnavailable",
+										"Provider metadata unavailable",
+									)}
 							</span>
 							{report.terminal_code && (
 								<span className="font-mono">{report.terminal_code}</span>
@@ -111,27 +142,27 @@ export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 									type="button"
 									onClick={() => void copy("json")}
 									className="inline-flex items-center gap-1 rounded px-1.5 py-1 hover:bg-muted"
-									title={`Copy JSON report`}
+									title={t("debugReport.copyJson", "Copy JSON report")}
 								>
 									{copied === "json" ? (
 										<Check className="size-3" />
 									) : (
 										<Copy className="size-3" />
 									)}
-									{`JSON`}
+									JSON
 								</button>
 								<button
 									type="button"
 									onClick={() => void copy("markdown")}
 									className="inline-flex items-center gap-1 rounded px-1.5 py-1 hover:bg-muted"
-									title={`Copy Markdown report`}
+									title={t("debugReport.copyMarkdown", "Copy Markdown report")}
 								>
 									{copied === "markdown" ? (
 										<Check className="size-3" />
 									) : (
 										<FileText className="size-3" />
 									)}
-									{`Markdown`}
+									Markdown
 								</button>
 							</div>
 						</div>
@@ -144,7 +175,9 @@ export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 							<div className="mb-2 space-y-1 rounded bg-background/50 px-2 py-1.5 font-mono text-[10px]">
 								{report.input_preview && (
 									<div>
-										<span className="text-muted-foreground">{`Run input`}</span>
+										<span className="text-muted-foreground">
+											{t("debugReport.runInput", "Run input")}
+										</span>
 										<pre className="mt-0.5 whitespace-pre-wrap break-words">
 											{report.input_preview}
 										</pre>
@@ -152,7 +185,9 @@ export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 								)}
 								{report.output_preview && (
 									<div>
-										<span className="text-muted-foreground">{`Run output`}</span>
+										<span className="text-muted-foreground">
+											{t("debugReport.runOutput", "Run output")}
+										</span>
 										<pre className="mt-0.5 whitespace-pre-wrap break-words text-muted-foreground">
 											{report.output_preview}
 										</pre>
@@ -168,7 +203,7 @@ export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 								>
 									<div className="flex flex-wrap items-center gap-x-2">
 										<span className="text-muted-foreground">
-											{new Date(event.timestamp_ms).toLocaleTimeString()}
+											{new Date(event.timestamp_ms).toLocaleTimeString(locale)}
 										</span>
 										<span>{event.stage}</span>
 										{event.name && (
@@ -187,14 +222,25 @@ export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 									</div>
 									{(event.request_id || event.parent_request_id) && (
 										<p className="mt-1 break-all text-muted-foreground">
-											{event.request_id && `request: ${event.request_id}`}
-											{event.request_id && event.parent_request_id && ` · `}
+											{event.request_id &&
+												t("debugReport.request", "Request: {{id}}", {
+													id: event.request_id,
+												})}
+											{event.request_id && event.parent_request_id && " · "}
 											{event.parent_request_id &&
-												`parent: ${event.parent_request_id}`}
+												t("debugReport.parent", "Parent request: {{id}}", {
+													id: event.parent_request_id,
+												})}
 										</p>
 									)}
 									{event.terminal_status && (
-										<p className="mt-1 break-all text-muted-foreground">{`terminal status: ${event.terminal_status}`}</p>
+										<p className="mt-1 break-all text-muted-foreground">
+											{t(
+												"debugReport.terminalStatus",
+												"Terminal status: {{status}}",
+												{ status: event.terminal_status },
+											)}
+										</p>
 									)}
 									{event.summary && (
 										<p className="mt-1 whitespace-pre-wrap text-muted-foreground">
@@ -204,7 +250,9 @@ export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 									{event.arguments_preview && (
 										<div className="mt-1">
 											<span className="text-muted-foreground">
-												{event.kind === "nested" ? "Nested input" : "Input"}
+												{event.kind === "nested"
+													? t("debugReport.nestedInput", "Nested input")
+													: t("debugReport.input", "Input")}
 											</span>
 											<pre className="mt-0.5 whitespace-pre-wrap break-words">
 												{event.arguments_preview}
@@ -212,12 +260,18 @@ export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 										</div>
 									)}
 									{event.result_summary && (
-										<p className="mt-1 break-all">{`result: ${event.result_summary}`}</p>
+										<p className="mt-1 break-all">
+											{t("debugReport.result", "Result: {{result}}", {
+												result: event.result_summary,
+											})}
+										</p>
 									)}
 									{event.result_preview && (
 										<div className="mt-1">
 											<span className="text-muted-foreground">
-												{event.kind === "nested" ? "Nested output" : "Output"}
+												{event.kind === "nested"
+													? t("debugReport.nestedOutput", "Nested output")
+													: t("debugReport.output", "Output")}
 											</span>
 											<pre className="mt-0.5 whitespace-pre-wrap break-words text-muted-foreground">
 												{event.result_preview}
@@ -225,10 +279,20 @@ export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 										</div>
 									)}
 									{event.reasoning && (
-										<p className="mt-1 whitespace-pre-wrap text-muted-foreground">{`surfaced reasoning: ${event.reasoning}`}</p>
+										<p className="mt-1 whitespace-pre-wrap text-muted-foreground">
+											{t(
+												"debugReport.reasoning",
+												"Surfaced reasoning: {{reasoning}}",
+												{ reasoning: event.reasoning },
+											)}
+										</p>
 									)}
 									{event.error && (
-										<p className="mt-1 break-all text-red-500">{`error: ${event.error}`}</p>
+										<p className="mt-1 break-all text-red-500">
+											{t("debugReport.error", "Error: {{error}}", {
+												error: event.error,
+											})}
+										</p>
 									)}
 								</div>
 							))}

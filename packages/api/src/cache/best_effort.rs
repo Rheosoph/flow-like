@@ -67,7 +67,7 @@ pub async fn get<T: DeserializeOwned>(
 
 // Count serialized bytes without allocating an oversized buffer. The platform
 // cache bypasses app-route limits, so every metadata write needs its own bound.
-fn fits<T: Serialize>(value: &T) -> bool {
+pub fn fits<T: Serialize>(value: &T) -> bool {
     struct BoundedSize(usize);
     impl io::Write for BoundedSize {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {

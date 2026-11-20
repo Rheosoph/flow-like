@@ -14,7 +14,7 @@ use flow_like_bot_memory::compaction::{
     CompactionConfig, CompactionPlan, PlannerInput, Trigger, TurnPhase, plan_compaction,
 };
 use flow_like_bot_memory::engine::{CompactionInput, CompactionOutcome, MemoryEngine};
-use flow_like_bot_memory::facts::{Evidence, Fact, FactKind, integrate_facts};
+use flow_like_bot_memory::facts::{Evidence, Fact, FactKind, UpdateAction, integrate_facts};
 use flow_like_bot_memory::llm::{Embedder, LlmRequest, LlmTask, MemoryLlm};
 use flow_like_bot_memory::model::{FactSource, HistoryItem, Seq, SeqSpan};
 use flow_like_bot_memory::pointer::PartRef;
@@ -1302,19 +1302,43 @@ async fn a_slow_save_reconciles_again_after_a_newer_fact_is_saved() {
         .await
         .expect("a newer save finishes while the first model call waits")
         .unwrap();
-        assert!(matches!(rome_saved, WriteOutcome::Done(_)));
+        let WriteOutcome::Done((rome, _)) = rome_saved else {
+            panic!("{rome_saved:?}");
+        };
         llm.release.notify_one();
         let paris_saved = tokio::time::timeout(Duration::from_secs(10), paris_save)
             .await
             .expect("the older save reconciles against the newer memory")
             .unwrap()
             .unwrap();
-        assert!(matches!(paris_saved, WriteOutcome::Done(_)));
+        let WriteOutcome::Done((_, paris_action)) = paris_saved else {
+            panic!("{paris_saved:?}");
+        };
+        // Prepared against the old revision, Paris would supersede Berlin a second time. Against
+        // Rome it is older, and an explicit save stays visible instead of being superseded.
+        assert_eq!(
+            paris_action,
+            UpdateAction::Add,
+            "separate_engine={separate_engine}"
+        );
         let persisted = MemoryStores::open_local(dir.path(), hash()).await.unwrap();
-        let active = persisted.facts.all(&FactFilter::default()).await.unwrap();
-        assert_eq!(active.len(), 1, "{active:?}");
-        assert_eq!(active[0].text, "The user's city is Rome.");
-        assert_eq!(active[0].evidence[0].seq, rome_seq);
+        let replaced = persisted.facts.get(&berlin.id).await.unwrap().unwrap();
+        assert_eq!(replaced.superseded_by.as_deref(), Some(rome.id.as_str()));
+        let mut active: Vec<String> = persisted
+            .facts
+            .all(&FactFilter::default())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|fact| fact.text)
+            .collect();
+        active.sort();
+        assert_eq!(
+            active,
+            ["The user's city is Paris.", "The user's city is Rome."]
+        );
+        let current = persisted.facts.get(&rome.id).await.unwrap().unwrap();
+        assert_eq!(current.evidence[0].seq, rome_seq);
         assert!(persisted.state.load().await.unwrap().lease.is_none());
     }
 }

@@ -29,6 +29,7 @@ use image::ImageReader;
 use serde::Deserialize;
 use serde_json::Value;
 use tauri::AppHandle;
+pub mod cross_app_query;
 pub mod device_export;
 pub mod duplicate;
 pub mod flowpilot_builds;
@@ -357,6 +358,9 @@ fn preserve_local_manifest_fields(app: &mut App, existing: App) {
     }
     if app.forked_at.is_none() && existing.forked_at.is_some() {
         app.forked_at = existing.forked_at;
+    }
+    if app.fork_id_seeds.is_none() && existing.fork_id_seeds.is_some() {
+        app.fork_id_seeds = existing.fork_id_seeds;
     }
     if app.bot_id.is_none() && existing.bot_id.is_some() {
         app.bot_id = existing.bot_id;

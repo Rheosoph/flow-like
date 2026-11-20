@@ -518,7 +518,12 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		// FILTERED by session rather than cleared: the store-side mirror may have already pushed the
 		// new session's bubbles (or a stale RAF may still fire afterwards) — filtering makes every
 		// interleaving converge on "only this session's bubbles" instead of racing a blind clear.
+		// Not on mount: the state already belongs to this session, and resetting there undid the
+		// first-paint pin, so a chat opened on its history stopped following new content.
+		const shownSession = useRef(sessionId);
 		useEffect(() => {
+			if (shownSession.current === sessionId) return;
+			shownSession.current = sessionId;
 			const belongsToSession = (message: IMessage) =>
 				!message.sessionId || message.sessionId === sessionId;
 			if (pendingMessagesRef.current) {
@@ -737,6 +742,23 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 
 		// A reply's `send_message` takes the composer's send path: it starts a turn or queues
 		// like a typed message, and is unavailable whenever Send is disabled.
+		// The composer growing a line, its tray opening or the keyboard rising shrinks the feed from
+		// below; a reader at the end stays at the end instead of losing the last lines under it.
+		const followEndRef = useRef(shouldAutoScroll);
+		followEndRef.current = shouldAutoScroll;
+		useEffect(() => {
+			const container = scrollContainerRef.current;
+			if (!container || typeof ResizeObserver === "undefined") return;
+			let height = container.clientHeight;
+			const observer = new ResizeObserver(() => {
+				const next = container.clientHeight;
+				if (next < height && followEndRef.current) scrollMessagesToEnd();
+				height = next;
+			});
+			observer.observe(container);
+			return () => observer.disconnect();
+		}, [scrollMessagesToEnd]);
+
 		const handleSendMessageRef = useRef(handleSendMessage);
 		handleSendMessageRef.current = handleSendMessage;
 		const sendFollowUp = useCallback((content: string) => {
@@ -940,6 +962,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 												>
 													<MessageComponent
 														message={item.data as IMessage}
+														loading={item.data.live}
 														onMessageUpdate={onMessageUpdate}
 														onReply={handleReply}
 														editable={group?.editable?.(item.data as IMessage)}
@@ -1007,7 +1030,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 									)}
 								{visibleLiveMessages.map((liveMessage) => (
 									<div
-										className="w-full px-4 animate-in fade-in slide-in-from-top-1 duration-300"
+										className="w-full px-1 animate-in fade-in slide-in-from-top-1 duration-300 sm:px-4"
 										key={`msg-${liveMessage.id}`}
 										style={{
 											maxWidth:
@@ -1092,7 +1115,11 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 										"calc(var(--fl-chat-pad-bottom, 0.75rem) + var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px)))",
 								}}
 							>
-								{inlinePrompt && <div className="pt-2">{inlinePrompt}</div>}
+								{inlinePrompt && (
+									<div data-fl-chat-inline-prompt className="pt-2">
+										{inlinePrompt}
+									</div>
+								)}
 								{replyTarget && (
 									<MessageReference
 										reference={replyTarget}

@@ -151,6 +151,8 @@ impl From<app::Model> for App {
                 SystemTime::UNIX_EPOCH
                     + std::time::Duration::from_secs(date_time.timestamp() as u64)
             }),
+            // Kept only in the app's manifest; the row cannot say.
+            fork_id_seeds: None,
             bot_id: model.bot_id,
             refuse_bots: model.refuse_bots.unwrap_or(false),
         }

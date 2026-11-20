@@ -1049,7 +1049,7 @@ impl Inner {
                 ),
             }
             let instruction = if decision_event::monitoring(event) {
-                decision_event::MONITOR_INSTRUCTION
+                decision_event::monitoring_instruction(event)
             } else {
                 event_delivery
                     .map(EventDecision::instruction)

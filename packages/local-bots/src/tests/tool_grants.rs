@@ -26,6 +26,7 @@ fn card(turn_id: &str) -> ApprovalRequest {
         room: None,
         secret: None,
         invite: None,
+        picture: None,
         configuration_changes: None,
         items: Vec::new(),
     }

@@ -730,6 +730,7 @@ impl Duplication {
         manifest.avg_rating = None;
         manifest.relevance_score = None;
         manifest.bot_id = None;
+        record_lineage(&mut manifest, maps, now);
 
         self.write_proto("manifest.app", &manifest).await
     }
@@ -831,6 +832,23 @@ async fn copy_object(
             Err(anyhow!("Failed to copy {} to {to}: {error}", meta.location))
         }
     }
+}
+
+/// A copy of a fork keeps the fork's original, so upstream stays where it
+/// was and this copy's seed extends the chain; a copy of any other app names
+/// that app as its original.
+fn record_lineage(manifest: &mut proto::App, maps: &ForkIdMap, now: Timestamp) {
+    if manifest.forked_from.is_some() {
+        if let Some(ids) = manifest.fork_id_seeds.as_mut() {
+            ids.seeds.push(maps.seed.clone());
+        }
+        return;
+    }
+    manifest.forked_from = Some(maps.source_app_id.clone());
+    manifest.forked_at = Some(now);
+    manifest.fork_id_seeds = Some(proto::ForkIdSeeds {
+        seeds: vec![maps.seed.clone()],
+    });
 }
 
 fn allocate<'a>(
@@ -1016,7 +1034,7 @@ mod tests {
         let main = proto::Board {
             id: "board_main".into(),
             page_ids: vec!["page_home".into(), "page_missing".into()],
-            nodes: HashMap::from([
+            nodes: BTreeMap::from([
                 (
                     "node_event".into(),
                     node("node_event", vec![pin("pin_out", &["pin_in"], None)]),
@@ -1032,12 +1050,12 @@ mod tests {
                     ),
                 ),
             ]),
-            variables: HashMap::from([("api_key".into(), secret(b"shh"))]),
+            variables: BTreeMap::from([("api_key".into(), secret(b"shh"))]),
             ..Default::default()
         };
         let helper = proto::Board {
             id: "board_helper".into(),
-            nodes: HashMap::from([("node_helper".into(), node("node_helper", vec![]))]),
+            nodes: BTreeMap::from([("node_helper".into(), node("node_helper", vec![]))]),
             ..Default::default()
         };
         put_proto(meta, "board_main.board", &main).await;
@@ -1112,7 +1130,7 @@ mod tests {
             page_ids: vec!["page_home".into()],
             widget_ids: vec!["widget_card".into()],
             templates: vec!["template_a".into()],
-            route_mappings: HashMap::from([("/".into(), "event_run".into())]),
+            route_mappings: BTreeMap::from([("/".into(), "event_run".into())]),
             ..Default::default()
         };
         put_proto(meta, "manifest.app", &manifest).await;
@@ -1232,6 +1250,12 @@ mod tests {
         assert_eq!(event.default_page_id.as_deref(), Some(page_id.as_str()));
         assert_eq!(manifest.route_mappings["/"], event_id);
 
+        assert_eq!(manifest.forked_from.as_deref(), Some(SRC));
+        assert!(manifest.forked_at.is_some());
+        let seeds = manifest.fork_id_seeds.clone().unwrap().seeds;
+        assert_eq!(remap::derive_lineage_id(&seeds, "board_main"), main_id);
+        assert_eq!(remap::derive_lineage_id(&seeds, "event_run"), event_id);
+
         let copied_meta = keys(&meta, dst).await;
         assert!(copied_meta.contains(&format!("versions/{main_id}/1_0_0.board")));
         assert!(
@@ -1306,6 +1330,43 @@ mod tests {
         assert!(report.warnings.iter().any(|w| w.contains("board_gone")));
         assert!(report.warnings.iter().any(|w| w.contains("event_orphan")));
         assert!(report.warnings.iter().any(|w| w.contains("page_missing")));
+    }
+
+    #[test]
+    fn a_copy_of_a_fork_keeps_its_original_and_extends_the_seed_chain() {
+        let maps = ForkIdMap {
+            source_app_id: "local_fork".into(),
+            app_id: "copy".into(),
+            seed: "copy".into(),
+            ..Default::default()
+        };
+        let forked_at = Timestamp::from(SystemTime::UNIX_EPOCH);
+        let mut known = proto::App {
+            forked_from: Some("upstream".into()),
+            forked_at: Some(forked_at),
+            fork_id_seeds: Some(proto::ForkIdSeeds {
+                seeds: vec!["fork_job".into()],
+            }),
+            ..Default::default()
+        };
+        record_lineage(&mut known, &maps, Timestamp::from(SystemTime::now()));
+        assert_eq!(known.forked_from.as_deref(), Some("upstream"));
+        assert_eq!(known.forked_at, Some(forked_at));
+        assert_eq!(
+            known.fork_id_seeds.unwrap().seeds,
+            vec!["fork_job".to_string(), "copy".to_string()]
+        );
+
+        let mut unknown = proto::App {
+            forked_from: Some("upstream".into()),
+            ..Default::default()
+        };
+        record_lineage(&mut unknown, &maps, Timestamp::from(SystemTime::now()));
+        assert_eq!(unknown.forked_from.as_deref(), Some("upstream"));
+        assert!(
+            unknown.fork_id_seeds.is_none(),
+            "an unrecorded mapping stays unknown"
+        );
     }
 
     #[tokio::test]

@@ -1,5 +1,9 @@
 import { safeHomeHref } from "../../../../home/home-content/config";
-import { normalizeHomeDataConfig } from "../../../../home/home-data-query";
+import {
+	HOME_DATA_SQL_MAX_CHARS,
+	extractHomeQueryParameters,
+	normalizeHomeDataConfig,
+} from "../../../../home/home-data-query";
 import { isHomeStorageImagePath } from "../../../../home/home-image-config";
 import { HOME_WIDGET_CONFIG_CONTRACTS } from "./definitions";
 import { APP_EMBED_RESERVED_QUERY_KEYS } from "./options";
@@ -470,9 +474,36 @@ export function validateKnownHomeWidgetConfig(
 					issues,
 					"data_query_parameter_reserved",
 					`${path}.queryParams.${key}`,
-					"Saved-query parameter names cannot start with __home_.",
+					"Query parameter names cannot start with __home_.",
 				);
 			}
+		}
+		if (normalized.sourceKind === "sql") {
+			if (normalized.sql.length > HOME_DATA_SQL_MAX_CHARS)
+				pushIssue(
+					issues,
+					"data_sql_too_long",
+					`${path}.sql`,
+					`SQL must be at most ${HOME_DATA_SQL_MAX_CHARS} characters.`,
+				);
+			for (const parameter of extractHomeQueryParameters(normalized.sql)) {
+				if (!parameter.startsWith("__home_")) continue;
+				pushIssue(
+					issues,
+					"data_query_parameter_reserved",
+					`${path}.sql`,
+					`SQL parameter '${parameter}' is reserved; names cannot start with __home_.`,
+				);
+			}
+			normalized.sources.forEach((source, index) => {
+				if (!["public", "information_schema"].includes(source.alias)) return;
+				pushIssue(
+					issues,
+					"data_sql_alias_reserved",
+					`${path}.sources[${index}].alias`,
+					`Alias '${source.alias}' is reserved.`,
+				);
+			});
 		}
 	}
 

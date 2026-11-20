@@ -32,11 +32,19 @@ impl ToProto<flow_like_types::proto::App> for App {
             updated_at: Some(Timestamp::from(self.updated_at)),
             widget_ids: self.widget_ids.clone(),
             page_ids: self.page_ids.clone(),
-            route_mappings: std::collections::HashMap::new(),
-            packages: self.packages.clone(),
+            route_mappings: Default::default(),
+            packages: self
+                .packages
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
             allow_forking: Some(self.allow_forking),
             forked_from: self.forked_from.clone(),
             forked_at: self.forked_at.map(Timestamp::from),
+            fork_id_seeds: self
+                .fork_id_seeds
+                .clone()
+                .map(|seeds| flow_like_types::proto::ForkIdSeeds { seeds }),
             frontend: self.frontend.as_ref().map(|frontend| frontend.to_proto()),
             bot_id: self.bot_id.clone(),
             refuse_bots: self.refuse_bots.then_some(true),
@@ -78,10 +86,11 @@ impl FromProto<flow_like_types::proto::App> for App {
                 .unwrap_or(SystemTime::UNIX_EPOCH),
             widget_ids: proto.widget_ids,
             page_ids: proto.page_ids,
-            packages: proto.packages,
+            packages: proto.packages.into_iter().collect(),
             allow_forking: proto.allow_forking.unwrap_or(false),
             forked_from: proto.forked_from,
             forked_at: proto.forked_at.and_then(|t| SystemTime::try_from(t).ok()),
+            fork_id_seeds: proto.fork_id_seeds.map(|ids| ids.seeds),
             bot_id: proto.bot_id,
             refuse_bots: proto.refuse_bots.unwrap_or(false),
             app_state: None,

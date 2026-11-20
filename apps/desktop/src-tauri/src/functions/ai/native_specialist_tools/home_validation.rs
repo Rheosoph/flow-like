@@ -650,8 +650,47 @@ fn special_config(kind: &str, config: &Value, path: &str, issues: &mut Vec<Value
                     issues,
                     "data_query_parameter_reserved",
                     &format!("{path}.queryParams.{key}"),
-                    "Saved-query parameter names cannot start with __home_.",
+                    "Query parameter names cannot start with __home_.",
                 );
+            }
+        }
+        if config["sourceKind"] == "sql" {
+            let sql = config["sql"].as_str().unwrap_or("");
+            if sql.chars().count() > 20_000 {
+                push(
+                    issues,
+                    "data_sql_too_long",
+                    &format!("{path}.sql"),
+                    "SQL must be at most 20000 characters.",
+                );
+            }
+            for parameter in super::home_references::parameters(sql) {
+                if parameter.starts_with("__home_") {
+                    push(
+                        issues,
+                        "data_query_parameter_reserved",
+                        &format!("{path}.sql"),
+                        &format!(
+                            "SQL parameter '{parameter}' is reserved; names cannot start with __home_."
+                        ),
+                    );
+                }
+            }
+            for (index, source) in config["sources"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                let alias = source["alias"].as_str().unwrap_or("");
+                if ["public", "information_schema"].contains(&alias) {
+                    push(
+                        issues,
+                        "data_sql_alias_reserved",
+                        &format!("{path}.sources[{index}].alias"),
+                        &format!("Alias '{alias}' is reserved."),
+                    );
+                }
             }
         }
     }

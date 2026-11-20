@@ -11,6 +11,7 @@ import {
 	type IBoardState,
 	type IBotState,
 	type ICapabilities,
+	type IDataSourceState,
 	type IDatabaseState,
 	type IEventState,
 	type IGenericCommand,
@@ -57,6 +58,7 @@ import {
 	WebAudioState,
 	WebBitState,
 	WebBoardState,
+	WebDataSourceState,
 	WebDatabaseState,
 	WebEventState,
 	WebGraphState,
@@ -101,6 +103,7 @@ export class WebBackend implements IBackendState {
 	dbState: IDatabaseState;
 	graphState: IGraphState;
 	queryState: IQueryState;
+	dataSourceState: IDataSourceState;
 	widgetState: IWidgetState;
 	pageState: IPageState;
 	registryState: IRegistryState;
@@ -141,6 +144,7 @@ export class WebBackend implements IBackendState {
 		this.dbState = new WebDatabaseState(this.backendRef);
 		this.graphState = new WebGraphState(this.backendRef);
 		this.queryState = new WebQueryState(this.backendRef);
+		this.dataSourceState = new WebDataSourceState(this.backendRef);
 		this.widgetState = new WebWidgetState(this.backendRef);
 		this.pageState = new WebPageState(this.backendRef);
 		this.registryState = new WebRegistryState(this.backendRef);

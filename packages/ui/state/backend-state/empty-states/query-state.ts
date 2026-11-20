@@ -1,11 +1,16 @@
 import type {
 	CreateSavedQueryPayload,
 	CreateStudioForecastPayload,
+	CrossAppSqlPayload,
+	CrossAppSqlResult,
 	ExecuteSqlPayload,
 	ExecuteSqlResult,
 	IQueryState,
 	SavedQuery,
 	SavedStudioForecast,
+	SqlParameterOptions,
+	SqlParameterOptionsRequest,
+	SqlQueryDescription,
 	StudioForecastPayload,
 	StudioForecastResult,
 	StudioForecastSummary,
@@ -61,6 +66,34 @@ export class EmptyQueryState implements IQueryState {
 		payload: ExecuteSqlPayload,
 		userScoped?: boolean,
 	): Promise<ExecuteSqlResult> {
+		throw new Error("Method not implemented.");
+	}
+	executeCrossAppSql(_payload: CrossAppSqlPayload): Promise<CrossAppSqlResult> {
+		throw new Error("Method not implemented.");
+	}
+	describeCrossAppSql(
+		_payload: Pick<CrossAppSqlPayload, "sql" | "sources">,
+	): Promise<SqlQueryDescription> {
+		throw new Error("Method not implemented.");
+	}
+	crossAppSqlParameterOptions(
+		_payload: Pick<CrossAppSqlPayload, "sources"> & SqlParameterOptionsRequest,
+	): Promise<SqlParameterOptions> {
+		throw new Error("Method not implemented.");
+	}
+	describeSql(
+		_appId: string,
+		_payload: Pick<ExecuteSqlPayload, "sql" | "surface" | "overlay_id">,
+		_userScoped?: boolean,
+	): Promise<SqlQueryDescription> {
+		throw new Error("Method not implemented.");
+	}
+	sqlParameterOptions(
+		_appId: string,
+		_payload: Pick<ExecuteSqlPayload, "surface" | "overlay_id"> &
+			SqlParameterOptionsRequest,
+		_userScoped?: boolean,
+	): Promise<SqlParameterOptions> {
 		throw new Error("Method not implemented.");
 	}
 	listSavedQueries(appId: string, userScoped?: boolean): Promise<SavedQuery[]> {

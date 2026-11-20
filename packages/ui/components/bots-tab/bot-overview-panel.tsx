@@ -9,6 +9,7 @@ import { useChatBotReaction } from "../global-chat/chat-bot-reaction";
 import type { GlobalChatBotView } from "../global-chat/use-global-chat-bot";
 import { Button } from "../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
+import { BotCalendarPane } from "./bot-calendar";
 import { BotComputerPane } from "./bot-computer-pane";
 import { BotDetails, type BotPanelActions } from "./bot-details";
 import { BotMailPane } from "./bot-mail";
@@ -30,12 +31,25 @@ function BotPanelPane({
 	tab,
 	view,
 	actions,
+	onTab,
 }: Readonly<{
 	tab: BotPanelTab;
 	view: GlobalChatBotView;
 	actions: BotPanelActions;
+	onTab: (tab: BotPanelTab) => void;
 }>) {
 	const { bot, name } = view;
+	if (tab === "calendar" && bot) {
+		return (
+			<BotCalendarPane
+				key={bot.id}
+				bot={bot}
+				name={name}
+				onEdit={actions.onEdit}
+				onTab={onTab}
+			/>
+		);
+	}
 	if (tab === "memory") {
 		return (
 			<BotMemoryPane
@@ -93,6 +107,7 @@ export function BotOverviewPanel({
 		data: t("workspace.tabs.data", "Data"),
 		computer: t("workspace.tabs.computer", "Computer"),
 		memory: t("workspace.tabs.memory", "Memory"),
+		calendar: t("workspace.tabs.calendar", "Calendar"),
 		mail: t("workspace.tabs.mail", "Mail"),
 	};
 	const sheet = layout === "sheet";
@@ -160,7 +175,7 @@ export function BotOverviewPanel({
 					aria-label={t("panel.tabs", "{{name}}'s details", {
 						name: view.name,
 					})}
-					className="mx-auto mb-3 h-auto shrink-0 gap-1 bg-transparent p-0"
+					className="mx-auto mb-3 h-auto shrink-0 flex-wrap gap-1 bg-transparent p-0"
 				>
 					{tabs.list.map((item) => (
 						<TabsTrigger
@@ -180,7 +195,12 @@ export function BotOverviewPanel({
 						className="flex min-h-0 flex-col"
 					>
 						{item === tabs.shown && (
-							<BotPanelPane tab={item} view={view} actions={actions} />
+							<BotPanelPane
+								tab={item}
+								view={view}
+								actions={actions}
+								onTab={tabs.onChange}
+							/>
 						)}
 					</TabsContent>
 				))}

@@ -54,7 +54,12 @@ impl ToProto<flow_like_types::proto::Event> for Event {
             is_default: self.is_default,
             execution_mode: Some(self.execution_mode.as_str().to_string()),
             exposure: Some(self.exposure.as_str().to_string()),
-            correlation_mappings: self.correlation_mappings.clone().unwrap_or_default(),
+            correlation_mappings: self
+                .correlation_mappings
+                .iter()
+                .flatten()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
             variants: self.variants.iter().map(|v| v.to_proto()).collect(),
         }
     }
@@ -262,7 +267,7 @@ impl FromProto<flow_like_types::proto::Event> for Event {
             correlation_mappings: if proto.correlation_mappings.is_empty() {
                 None
             } else {
-                Some(proto.correlation_mappings)
+                Some(proto.correlation_mappings.into_iter().collect())
             },
             variants: proto
                 .variants

@@ -250,6 +250,27 @@ pub async fn native_open_background_hosting_notification_settings() -> Result<()
 }
 
 #[tauri::command]
+pub async fn native_open_notification_settings(app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = app;
+        crate::android_mobile::open_background_hosting_notification_settings().await
+    }
+    #[cfg(target_os = "ios")]
+    {
+        use tauri_plugin_opener::OpenerExt;
+        app.opener()
+            .open_url("app-settings:", None::<&str>)
+            .map_err(|error| format!("Failed to open iOS settings for Flow-Like: {error}"))
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = app;
+        Err("System notification settings can only be opened on iOS and Android".into())
+    }
+}
+
+#[tauri::command]
 pub async fn native_get_location(
     app: AppHandle,
     request_id: String,

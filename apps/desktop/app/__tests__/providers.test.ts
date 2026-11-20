@@ -145,6 +145,9 @@ vi.mock("../../components/native-realtime-bridge", () => ({
 vi.mock("../../components/notification-provider", () => ({
 	default: () => null,
 }));
+vi.mock("../../components/remote-push-prompt", () => ({
+	default: () => null,
+}));
 vi.mock("../../components/oauth-callback-handler", () => ({
 	OAuthCallbackHandler: ({ children }: Children) => children,
 }));

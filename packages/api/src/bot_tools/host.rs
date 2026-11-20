@@ -690,6 +690,13 @@ impl BotToolsHost {
             .into_iter()
             .filter(chosen)
         {
+            if entry.kind == ConnectorKind::Caldav {
+                connectors.push(JobConnector {
+                    authorization: None,
+                    entry,
+                });
+                continue;
+            }
             let credential = source
                 .credential(&entry.rule.id)
                 .await

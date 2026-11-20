@@ -385,6 +385,7 @@ export function createServiceBackend(
 		dbState: restricted(),
 		graphState: restricted(),
 		queryState: restricted(),
+		dataSourceState: restricted(),
 		eventState,
 		userState: restricted<IBackendState["userState"]>({
 			getProfile: async () => ({

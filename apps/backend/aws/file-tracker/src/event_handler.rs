@@ -44,7 +44,9 @@ struct Batch {
 }
 
 impl Batch {
-    fn parse(records: &[SqsMessage]) -> Self {
+    /// Events inside a Lance dataset become one observation of the dataset directory, stamped
+    /// with `dataset_sequencer` so the whole batch is answered by a single measurement.
+    fn parse(records: &[SqsMessage], dataset_sequencer: &str) -> Self {
         let mut batch = Self {
             observations: Vec::new(),
             messages: Vec::new(),
@@ -64,7 +66,7 @@ impl Batch {
                 }
             };
             for s3_record in &event.records {
-                match observe(s3_record) {
+                match observe(s3_record, dataset_sequencer) {
                     Ok(Some(observation)) => {
                         batch.observations.push(observation);
                         batch.messages.push(message);
@@ -117,8 +119,11 @@ pub(crate) async fn function_handler(
     dialect: DbDialect,
 ) -> Result<SqsBatchResponse, Error> {
     let records = event.payload.records;
-    let batch = Batch::parse(&records);
-    // HEAD runs outside SQL transactions. Accounting checks its object snapshot
+    let batch = Batch::parse(
+        &records,
+        &accounting::measurement_sequencer(std::time::SystemTime::now()),
+    );
+    // HEAD and LIST run outside SQL transactions. Accounting checks its object snapshot
     // before committing and samples again if another event changed that snapshot.
     let results = accounting::apply_batch(
         &db,
@@ -146,11 +151,38 @@ pub(crate) async fn function_handler(
             }
         },
         |observation| {
-            head_size(
-                s3.clone(),
-                observation.bucket.clone(),
-                observation.key.clone(),
-            )
+            let dynamo = dynamo.clone();
+            let legacy = legacy.clone();
+            let observation = observation.clone();
+            async move {
+                read_legacy_files(
+                    &dynamo,
+                    legacy.as_ref(),
+                    &observation.bucket,
+                    &observation.app_id,
+                    &observation.key,
+                )
+                .await
+                .map_err(|error| {
+                    DbErr::Custom(format!(
+                        "legacy file sizes under {} could not be read: {error}",
+                        observation.key
+                    ))
+                })
+            }
+        },
+        |observation| {
+            let s3 = s3.clone();
+            let dataset = observation.is_dataset();
+            let bucket = observation.bucket.clone();
+            let key = observation.key.clone();
+            async move {
+                if dataset {
+                    list_size(s3, bucket, key).await
+                } else {
+                    head_size(s3, bucket, key).await
+                }
+            }
         },
     )
     .await;
@@ -159,7 +191,7 @@ pub(crate) async fn function_handler(
     })
 }
 
-fn observe(event: &S3EventRecord) -> Result<Option<Observation>, Error> {
+fn observe(event: &S3EventRecord, dataset_sequencer: &str) -> Result<Option<Observation>, Error> {
     let name = event.event_name.as_deref().ok_or("Event name is missing")?;
     if !name.starts_with("ObjectCreated:") && !name.starts_with("ObjectRemoved:") {
         return Ok(None);
@@ -176,10 +208,14 @@ fn observe(event: &S3EventRecord) -> Result<Option<Observation>, Error> {
     if key.starts_with("device-archives/") {
         return Ok(None);
     }
-    observation(event, key).map(Some)
+    observation(event, key, dataset_sequencer).map(Some)
 }
 
-fn observation(event: &S3EventRecord, key: String) -> Result<Observation, Error> {
+fn observation(
+    event: &S3EventRecord,
+    key: String,
+    dataset_sequencer: &str,
+) -> Result<Observation, Error> {
     let bucket = event
         .s3
         .bucket
@@ -187,6 +223,16 @@ fn observation(event: &S3EventRecord, key: String) -> Result<Observation, Error>
         .clone()
         .ok_or("Object bucket is missing")?;
     let (user_id, app_id) = parse_key_identity(&key)?;
+    if let Some(dataset) = accounting::dataset_prefix(&key) {
+        return Ok(Observation {
+            bucket,
+            key: dataset.to_owned(),
+            app_id,
+            user_id,
+            sequencer: dataset_sequencer.to_owned(),
+            legacy_size: 0,
+        });
+    }
     let sequencer = event
         .s3
         .object
@@ -225,6 +271,35 @@ async fn head_size(s3: S3Client, bucket: String, key: String) -> Result<i64, DbE
     }
 }
 
+/// Total bytes stored under a dataset directory, including the files of versions Lance has not
+/// cleaned up yet: what the bucket bills for.
+async fn list_size(s3: S3Client, bucket: String, prefix: String) -> Result<i64, DbErr> {
+    let mut pages = s3
+        .list_objects_v2()
+        .bucket(&bucket)
+        .prefix(&prefix)
+        .into_paginator()
+        .send();
+    let mut total = 0_i64;
+    loop {
+        let page = tokio::time::timeout(std::time::Duration::from_secs(8), pages.next())
+            .await
+            .map_err(|_| DbErr::Custom(format!("S3 LIST of {prefix} timed out")))?;
+        let Some(page) = page else {
+            return Ok(total);
+        };
+        let page =
+            page.map_err(|error| DbErr::Custom(format!("S3 LIST of {prefix} failed: {error}")))?;
+        for object in page.contents() {
+            total = total
+                .checked_add(object.size().unwrap_or(0))
+                .ok_or_else(|| {
+                    DbErr::Custom(format!("S3 LIST of {prefix} overflowed the byte total"))
+                })?;
+        }
+    }
+}
+
 async fn read_legacy_size(
     dynamo: &DynamoClient,
     baseline: Option<&LegacyBaseline>,
@@ -243,9 +318,45 @@ async fn read_legacy_size(
         .consistent_read(true)
         .send()
         .await?;
-    let Some(item) = result.item else {
-        return Ok(0);
+    result.item.as_ref().map_or(Ok(0), legacy_item_size)
+}
+
+/// Legacy rows of every file under a dataset directory, as (object key, size).
+async fn read_legacy_files(
+    dynamo: &DynamoClient,
+    baseline: Option<&LegacyBaseline>,
+    bucket: &str,
+    app_id: &str,
+    prefix: &str,
+) -> Result<Vec<(String, i64)>, Error> {
+    let Some(baseline) = baseline.filter(|baseline| baseline.bucket == bucket) else {
+        return Ok(Vec::new());
     };
+    let mut items = dynamo
+        .query()
+        .table_name(&baseline.table)
+        .key_condition_expression("pk = :app AND begins_with(sk, :prefix)")
+        .expression_attribute_values(":app", AttributeValue::S(app_id.to_owned()))
+        .expression_attribute_values(":prefix", AttributeValue::S(prefix.to_owned()))
+        .consistent_read(true)
+        .into_paginator()
+        .items()
+        .send();
+    let mut files = Vec::new();
+    while let Some(item) = items.next().await {
+        let item = item?;
+        let key = match item.get("sk") {
+            Some(AttributeValue::S(key)) => key.clone(),
+            _ => return Err("legacy object accounting row has no object key".into()),
+        };
+        files.push((key, legacy_item_size(&item)?));
+    }
+    Ok(files)
+}
+
+fn legacy_item_size(
+    item: &std::collections::HashMap<String, AttributeValue>,
+) -> Result<i64, Error> {
     let size = match item.get("size") {
         Some(AttributeValue::S(value) | AttributeValue::N(value)) => value.parse::<i64>()?,
         _ => return Err("legacy object accounting row has no valid size".into()),
@@ -297,10 +408,10 @@ mod tests {
             event.s3.bucket.name = Some("content".into());
             event.s3.object.key = Some("device-archives%2Fowner%2Farchive.json".into());
             // A missing sequencer would fail accounting.
-            assert!(observe(&event).unwrap().is_none());
+            assert!(observe(&event, "1").unwrap().is_none());
 
             event.s3.object.key = Some("device-archives-other/owner/archive.json".into());
-            assert!(observe(&event).is_err());
+            assert!(observe(&event, "1").is_err());
         }
     }
 
@@ -332,7 +443,7 @@ mod tests {
                 ],
             ),
         ];
-        let batch = Batch::parse(&records);
+        let batch = Batch::parse(&records, "ff");
         assert_eq!(batch.messages, vec![0, 3, 3, 4]);
         assert_eq!(
             batch
@@ -378,5 +489,62 @@ mod tests {
         );
         assert!(parse_key_identity("users/u/other/a/file").is_err());
         assert!(parse_key_identity("apps//file").is_err());
+    }
+
+    #[test]
+    fn dataset_files_become_one_observation_of_their_directory_at_the_batch_sequencer() {
+        let table = "users/u/apps/a/storage/db/notes.lance/";
+        let records = vec![
+            message(
+                "commit",
+                vec![
+                    record("ObjectCreated:Put", &format!("{table}data/f1.lance"), "07"),
+                    record(
+                        "ObjectCreated:Put",
+                        &format!("{table}_versions/2.manifest"),
+                        "09",
+                    ),
+                ],
+            ),
+            message(
+                "cleanup",
+                vec![record(
+                    "ObjectRemoved:Delete",
+                    &format!("{table}data/f0.lance"),
+                    "08",
+                )],
+            ),
+            message(
+                "file",
+                vec![record(
+                    "ObjectCreated:Put",
+                    "apps/a/storage/report.pdf",
+                    "0a",
+                )],
+            ),
+        ];
+        let batch = Batch::parse(&records, "18a0");
+        assert_eq!(batch.messages, vec![0, 0, 1, 2]);
+        let observed = batch
+            .observations
+            .iter()
+            .map(|observation| {
+                (
+                    observation.key.as_str(),
+                    observation.sequencer.as_str(),
+                    observation.user_id.as_deref(),
+                    observation.is_dataset(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            observed,
+            vec![
+                (table, "18a0", Some("u"), true),
+                (table, "18a0", Some("u"), true),
+                (table, "18a0", Some("u"), true),
+                ("apps/a/storage/report.pdf", "a", None, false),
+            ]
+        );
     }
 }

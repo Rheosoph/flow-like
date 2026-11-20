@@ -189,14 +189,31 @@ pub fn schemas_are_compatible(output: Option<&str>, input: Option<&str>) -> bool
     }
 }
 
+/// A board's schema-ref table, held as a `HashMap` by the runtime and a `BTreeMap` by its protobuf.
+pub trait SchemaRefs {
+    fn schema_ref(&self, key: &str) -> Option<&str>;
+}
+
+impl SchemaRefs for std::collections::HashMap<String, String> {
+    fn schema_ref(&self, key: &str) -> Option<&str> {
+        self.get(key).map(String::as_str)
+    }
+}
+
+impl SchemaRefs for std::collections::BTreeMap<String, String> {
+    fn schema_ref(&self, key: &str) -> Option<&str> {
+        self.get(key).map(String::as_str)
+    }
+}
+
 /// Resolve compact schema references before interpreting a subtype marker.
 pub fn resolve_schema<'a>(
     schema: &'a str,
-    refs: &'a std::collections::HashMap<String, String>,
+    refs: &'a impl SchemaRefs,
 ) -> flow_like_types::Result<&'a str> {
     let mut schema = schema;
     let mut seen = std::collections::HashSet::new();
-    while let Some(resolved) = refs.get(schema) {
+    while let Some(resolved) = refs.schema_ref(schema) {
         if !seen.insert(schema) {
             return Err(flow_like_types::anyhow!("Cyclic schema reference"));
         }

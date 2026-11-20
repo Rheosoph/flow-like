@@ -15,7 +15,7 @@ import {
 } from "../../ui/popover";
 import type { IReactionSummary } from "./chat-db";
 
-const COMMON_REACTIONS = [
+export const COMMON_REACTIONS = [
 	"👍",
 	"❤️",
 	"😂",
@@ -50,7 +50,7 @@ interface ReactionProps {
 
 const PICKER_CLASS = "w-80 max-w-[calc(100vw-2rem)] space-y-2 p-3";
 
-function EmojiChoices({
+export function EmojiChoices({
 	reactions,
 	onSelect,
 	disabled,

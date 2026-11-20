@@ -833,7 +833,7 @@ impl AppTools {
                 let offset = bounded(args, "offset", 0, MAX_OFFSET);
                 let payload = serde_json::from_value(query)
                     .map_err(|error| format!("The query is not valid: {error}"))?;
-                let rows = query_table(
+                let rows = match query_table(
                     state,
                     user,
                     path(),
@@ -843,7 +843,11 @@ impl AppTools {
                 )
                 .await
                 .map_err(failed)?
-                .0;
+                .0
+                {
+                    Value::Array(rows) => rows,
+                    _ => return Err("The table query did not answer a list of rows.".to_string()),
+                };
                 let mut answer = json!({
                     "status": "ok",
                     "table_name": table,

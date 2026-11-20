@@ -579,22 +579,37 @@ async fn synthetic_injection_never_becomes_preference() {
     let user_message = find_message(&harness.transcript.items(), "newsletter")
         .unwrap()
         .clone();
-    let gated = memory_save(
+    let untrusted = WriteGate {
+        untrusted_in_context: true,
+        confirmed: false,
+    };
+    let held = memory_save(
         &harness.engine,
-        &save(true),
+        &save(false),
         &user_message,
-        WriteGate {
-            untrusted_in_context: true,
-            confirmed: false,
-        },
+        untrusted,
         harness.transcript.now(),
     )
     .await
     .unwrap();
     assert!(
-        matches!(gated, WriteOutcome::NeedsConfirmation { .. }),
-        "{gated:?}"
+        matches!(held, WriteOutcome::NeedsConfirmation { .. }),
+        "{held:?}"
     );
+    let gated = memory_save(
+        &harness.engine,
+        &save(true),
+        &user_message,
+        untrusted,
+        harness.transcript.now(),
+    )
+    .await
+    .unwrap();
+    let WriteOutcome::Done((noted, _)) = gated else {
+        panic!("{gated:?}");
+    };
+    assert_ne!(noted.source, FactSource::UserStated, "{noted:?}");
+    assert!(!noted.kind.is_personal(), "{noted:?}");
 
     let prompt = harness
         .prompt(

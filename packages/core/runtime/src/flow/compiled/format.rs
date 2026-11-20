@@ -71,7 +71,11 @@ impl CompiledBoard {
         format::required_version(
             self.board_format_version,
             types,
-            &self.refs.iter().cloned().collect(),
+            &self
+                .refs
+                .iter()
+                .cloned()
+                .collect::<std::collections::HashMap<_, _>>(),
         )
     }
 

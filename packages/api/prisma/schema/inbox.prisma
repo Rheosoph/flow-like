@@ -144,9 +144,17 @@ model ConversationMember {
   clearedLegacyAt DateTime? @db.Timestamptz(3)
   clearedSeq      BigInt?
 
+  /// Visible messages from others after `lastReadAt` in this principal's copy. Null until a write
+  /// computes it; the conversation list counts live meanwhile.
+  unreadCount     Int?
+  /// This principal's newest visible message copy; only meaningful once `unreadCount` is set.
+  lastEntryId     String?
+
   @@id([conversationId, principalId])
   @@index([principalId, leftAt])
   @@index([principalId, status])
+  // The realtime poll's read, clear and hide aggregates per principal, from the index alone.
+  @@index([principalId, lastReadAt, clearedAt, hiddenAt], map: "ConversationMember_principalId_markers_idx")
 }
 
 /// One principal's copy of one conversation event. Pages are ordered by (createdAt, id).
