@@ -36,7 +36,6 @@ pub mod flowpilot_builds;
 pub mod forecasting;
 pub mod fork;
 pub mod graph;
-mod parameter_options;
 pub mod saved_forecasts;
 pub mod saved_queries;
 pub mod sharing;

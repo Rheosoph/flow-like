@@ -365,6 +365,11 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     // bot's wake-up settings are the CalendarWake JSON; NULL is the default.
     "ALTER TABLE tasks ADD COLUMN event TEXT;
     ALTER TABLE bots ADD COLUMN calendar_wake TEXT;",
+    // A CalDAV connector: the calendar it uses, the calendars its last discovery found (JSON) and
+    // its password, sealed with the bot secrets' key.
+    "ALTER TABLE bot_connectors ADD COLUMN calendar_url TEXT;
+    ALTER TABLE bot_connectors ADD COLUMN calendars TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE bot_connectors ADD COLUMN password BLOB;",
 ];
 
 pub(crate) fn open(path: &Path) -> Result<Connection> {

@@ -1070,6 +1070,7 @@ async fn a_move_carries_connectors_and_leaves_oauth_grants_behind_with_a_warning
         grant: grant.map(str::to_string),
         scopes: Vec::new(),
         default_policy: None,
+        calendar_url: None,
     };
     for request in [
         connector("Docs", ConnectorAuth::None, None),

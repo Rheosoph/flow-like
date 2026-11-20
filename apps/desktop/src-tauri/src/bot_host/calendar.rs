@@ -1,27 +1,34 @@
 //! The bot calendar on this desktop: the commands behind the calendar view and the wake-up
 //! settings of local bots, and the periodic sync that plans wake-ups for the connected-calendar
-//! events of the account bots that live here (the hub syncs those of server and device bots).
+//! events of the account bots that live here (the hub syncs those of server and device bots)
+//! and of the local bots' CalDAV calendars.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use flow_like_bot_tools::Scheduler;
 use flow_like_bot_tools::calendar::{SyncReport, list_range, sync_wakes};
+use flow_like_bot_tools::services::{
+    CallAudit, CallBudget, ConnectorEntry, ConnectorSource, Credential,
+};
 use flow_like_types::{
     Result, anyhow,
+    bot::BotCapability,
     bot_calendar::{
         CALENDAR_SYNC_EVERY_SECS, CalendarRange, CalendarWake, UpdateCalendarWake, check_range,
     },
+    bot_connector::ConnectorKind,
     bot_task::TaskKind,
 };
 use reqwest::Method;
 use serde_json::Value;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use super::hub::{ProfileHub, TurnHub};
 use crate::functions::ai::bot_tools::{
-    connectors::{DesktopConnectors, SecretReader},
+    connectors::{DesktopConnectors, LocalSecrets, SecretReader},
     held_locally,
     schedule::{AccountScheduler, LocalScheduler, TaskApi},
 };
@@ -54,6 +61,62 @@ impl SecretReader for NoSecrets {
     async fn secret(&self, _name: &str) -> Result<Option<String>> {
         Ok(None)
     }
+}
+
+/// A local bot never calls the hub.
+struct Offline;
+
+#[async_trait]
+impl TaskApi for Offline {
+    async fn request(
+        &self,
+        _method: Method,
+        path: &str,
+        _body: Option<&Value>,
+    ) -> std::result::Result<Value, String> {
+        Err(format!(
+            "A local bot's calendar does not call the hub ({path})"
+        ))
+    }
+}
+
+/// A local bot's connected calendars: its CalDAV connectors only, since Google and Microsoft
+/// calendars need a signed-in account.
+struct LocalCalendars(DesktopConnectors);
+
+#[async_trait]
+impl ConnectorSource for LocalCalendars {
+    async fn entries(&self) -> Result<Vec<ConnectorEntry>> {
+        Ok(self
+            .0
+            .entries()
+            .await?
+            .into_iter()
+            .filter(|entry| entry.kind == ConnectorKind::Caldav)
+            .collect())
+    }
+
+    async fn credential(&self, connector_id: &str) -> Result<Credential> {
+        self.0.credential(connector_id).await
+    }
+
+    fn budget(&self) -> &CallBudget {
+        self.0.budget()
+    }
+
+    fn audit(&self, entry: &CallAudit) {
+        self.0.audit(entry);
+    }
+}
+
+async fn local_calendars(app: &AppHandle, bot_id: &str) -> LocalCalendars {
+    let secrets = LocalSecrets {
+        app: app.clone(),
+        bot_id: bot_id.to_string(),
+    };
+    LocalCalendars(
+        DesktopConnectors::new(app, None, "", bot_id, Arc::new(Offline), Arc::new(secrets)).await,
+    )
 }
 
 /// An account bot's calendar surfaces on this desktop: its connectors and its hub-side tasks.
@@ -116,9 +179,9 @@ async fn session_api(app: &AppHandle) -> std::result::Result<Arc<SessionApi>, St
         .map(|session| Arc::new(SessionApi(session)))
 }
 
-/// The bot's calendar between `from` and `to` (RFC 3339): a local bot's from the store, a
-/// desktop-hosted account bot's with the sign-ins of this device, any other account bot's from
-/// the hub.
+/// The bot's calendar between `from` and `to` (RFC 3339): a local bot's from the store and its
+/// CalDAV calendars, a desktop-hosted account bot's with the sign-ins of this device, any other
+/// account bot's from the hub.
 #[tauri::command]
 pub async fn bot_calendar_events(
     app: AppHandle,
@@ -130,7 +193,8 @@ pub async fn bot_calendar_events(
     let now = Utc::now();
     if held_locally(&app, &bot_id).await {
         let scheduler = LocalScheduler::unbound(&app, &bot_id);
-        return list_range(None, &scheduler, start, end, now)
+        let calendars = local_calendars(&app, &bot_id).await;
+        return list_range(Some(&calendars), &scheduler, start, end, now)
             .await
             .map_err(|error| error.to_string());
     }
@@ -189,15 +253,17 @@ async fn holds_calendar(api: &dyn TaskApi, bot_id: &str) -> Result<bool> {
     Ok(bot
         .get("capabilities")
         .and_then(Value::as_array)
-        .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(CALENDAR_CAPABILITY))))
+        .is_some_and(|ids| {
+            ids.iter()
+                .any(|id| id.as_str() == Some(CALENDAR_CAPABILITY))
+        }))
 }
 
-async fn plans_external_wakes(calendar: &AccountCalendar) -> Result<bool> {
-    use flow_like_bot_tools::Scheduler;
-    if calendar.scheduler.calendar_wake().await?.syncs_external() {
+async fn plans_external_wakes(scheduler: &dyn Scheduler) -> Result<bool> {
+    if scheduler.calendar_wake().await?.syncs_external() {
         return Ok(true);
     }
-    Ok(calendar.scheduler.list().await?.iter().any(|task| {
+    Ok(scheduler.list().await?.iter().any(|task| {
         task.kind == TaskKind::Event
             && task
                 .event
@@ -215,7 +281,7 @@ async fn sync_bot(
         return Ok(None);
     }
     let calendar = account_calendar(app, session, bot_id).await;
-    if !plans_external_wakes(&calendar).await? {
+    if !plans_external_wakes(&calendar.scheduler).await? {
         return Ok(None);
     }
     sync_wakes(&calendar.connectors, &calendar.scheduler, Utc::now())
@@ -223,7 +289,52 @@ async fn sync_bot(
         .map(Some)
 }
 
+/// Whether a local bot holds `calendar` and a CalDAV connector with a chosen calendar.
+async fn local_bot_syncs(bots: &LocalBots, bot_id: &str) -> bool {
+    let id = bot_id.to_string();
+    on_store(bots, move |store| {
+        let holds = store
+            .get_bot(&id)?
+            .is_some_and(|bot| bot.capabilities.contains(&BotCapability::Calendar));
+        Ok(holds
+            && store.connectors(&id)?.iter().any(|connector| {
+                connector.kind == ConnectorKind::Caldav && connector.calendar_url.is_some()
+            }))
+    })
+    .await
+    .unwrap_or(false)
+}
+
+/// Plans the wake-ups of the local bots' CalDAV calendars; their own events need no sync.
+async fn sync_local(app: &AppHandle) {
+    let Some(bots) = app.try_state::<LocalBots>() else {
+        return;
+    };
+    let Ok(listed) = on_store(&bots, |store| store.list_bots()).await else {
+        return;
+    };
+    for bot in listed {
+        if !local_bot_syncs(&bots, &bot.id).await {
+            continue;
+        }
+        let scheduler = LocalScheduler::unbound(app, &bot.id);
+        if !plans_external_wakes(&scheduler).await.unwrap_or(false) {
+            continue;
+        }
+        let calendars = local_calendars(app, &bot.id).await;
+        match sync_wakes(&calendars, &scheduler, Utc::now()).await {
+            Ok(report) => {
+                tracing::info!(bot_id = %bot.id, ?report, "Bot calendar: synced local wake-ups");
+            }
+            Err(error) => {
+                tracing::warn!(%error, bot_id = %bot.id, "Bot calendar: the local sync failed");
+            }
+        }
+    }
+}
+
 async fn sync_all(app: &AppHandle, hub: &ProfileHub) {
+    sync_local(app).await;
     let Ok(bots) = hub.desktop_bots().await else {
         return;
     };

@@ -32,6 +32,8 @@ pub use channel_jwt::{
     ChannelClaims, ChannelJwtError, ChannelJwtParams, sign_channel_responder,
     verify_channel_responder,
 };
+#[cfg(feature = "pubsub")]
+pub(crate) use dispatch::gcp_id_token;
 pub use dispatch::{
     ArtifactEnsurer, ByteStream, DispatchConfig, DispatchError, DispatchRequest, DispatchResponse,
     DispatchTrigger, Dispatcher, ExecutionBackend, StreamChunk, ToolTarget,

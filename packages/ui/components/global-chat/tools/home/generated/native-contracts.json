@@ -1597,6 +1597,10 @@
 									"description": "Project or current-user personal data.",
 									"default": "project",
 									"enum": ["project", "personal"]
+								},
+								"sourceId": {
+									"type": "string",
+									"description": "Optional id of one of the app's external databases, read instead of the app's own tables as project data. Keep an existing value unchanged; omit it otherwise."
 								}
 							},
 							"required": ["alias", "appId"],

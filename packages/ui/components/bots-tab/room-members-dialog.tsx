@@ -63,26 +63,48 @@ function PersonRow({
 	id,
 	directory,
 	note,
+	onShow,
 	children,
 }: Readonly<{
 	id: string;
 	directory: CrewDirectory;
 	note?: string;
+	/** Opens who they are. */
+	onShow?: (principalId: string) => void;
 	children?: React.ReactNode;
 }>) {
-	return (
-		<li className="flex items-center gap-3 py-1.5">
-			<IdentityHoverCard subject={id} className="shrink-0">
-				<IdentityAvatar subject={id} size={28} />
-			</IdentityHoverCard>
-			<span className="flex min-w-0 flex-1 flex-col">
-				<span className="truncate text-sm font-medium">
-					{directory(id).name}
-				</span>
+	const { t } = useTranslation("bots");
+	const name = directory(id).name;
+	const who = (
+		<>
+			<IdentityAvatar subject={id} size={28} className="shrink-0" />
+			<span className="flex min-w-0 flex-1 flex-col text-left">
+				<span className="truncate text-sm font-medium">{name}</span>
 				{note && (
 					<span className="truncate text-xs text-muted-foreground">{note}</span>
 				)}
 			</span>
+		</>
+	);
+	return (
+		<li className="flex items-center gap-3 py-1.5">
+			{onShow ? (
+				<button
+					type="button"
+					onClick={() => onShow(id)}
+					aria-label={t("crew.memberInfo.label", "About {{name}}", { name })}
+					className="-mx-1.5 flex min-w-0 flex-1 touch-manipulation items-center gap-3 rounded-lg px-1.5 py-1 outline-none transition-[background-color,transform] duration-100 hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] active:bg-muted"
+				>
+					{who}
+				</button>
+			) : (
+				<IdentityHoverCard
+					subject={id}
+					className="flex min-w-0 flex-1 items-center gap-3"
+				>
+					{who}
+				</IdentityHoverCard>
+			)}
 			{children}
 		</li>
 	);
@@ -95,6 +117,7 @@ function MembersList({
 	me,
 	onEditLimits,
 	onRemove,
+	onShowMember,
 }: Readonly<{
 	conversation: IConversation;
 	directory: CrewDirectory;
@@ -102,6 +125,7 @@ function MembersList({
 	me?: string | null;
 	onEditLimits: (member: IConversationMember) => void;
 	onRemove: (member: IConversationMember) => void;
+	onShowMember?: (principalId: string) => void;
 }>) {
 	const { t } = useTranslation("bots");
 	const isMember = conversation.members.some(
@@ -120,6 +144,11 @@ function MembersList({
 					id={member.principal_id}
 					directory={directory}
 					note={member.kind === "bot" ? t("roomMembers.bot", "Bot") : undefined}
+					onShow={
+						onShowMember && !isSelfPrincipal(member.principal_id, me)
+							? onShowMember
+							: undefined
+					}
 				>
 					{member.kind === "bot" &&
 						conversation.kind === "group" &&
@@ -505,6 +534,7 @@ export function RoomMembersDialog({
 	source,
 	me,
 	onLeave,
+	onShowMember,
 }: Readonly<{
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
@@ -513,6 +543,8 @@ export function RoomMembersDialog({
 	source: PickerSource;
 	me?: string | null;
 	onLeave?: () => void;
+	/** Closes the dialog and opens who the member is. */
+	onShowMember?: (principalId: string) => void;
 }>) {
 	const { t } = useTranslation("bots");
 	const bots = useBots();
@@ -552,6 +584,13 @@ export function RoomMembersDialog({
 							me={me}
 							onEditLimits={setEditing}
 							onRemove={setRemoving}
+							onShowMember={
+								onShowMember &&
+								((principalId) => {
+									onOpenChange(false);
+									onShowMember(principalId);
+								})
+							}
 						/>
 						<PendingList
 							conversation={conversation}

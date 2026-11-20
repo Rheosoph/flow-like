@@ -3,6 +3,7 @@ import type { IBackendState } from "../../state/backend-state";
 import type { GraphOverlay } from "../../state/backend-state/graph-state";
 import type {
 	CrossAppSqlPayload,
+	CrossAppSqlSource,
 	ExecuteSqlPayload,
 	QueryColumn,
 	SavedQuery,
@@ -122,6 +123,8 @@ export interface HomeDataSqlSource {
 	alias: string;
 	appId: string;
 	scope: "project" | "personal";
+	/** One of the app's external databases instead of its own tables; always project scope. */
+	sourceId?: string;
 }
 export const HOME_DATA_MAX_LIMIT = 5000;
 export const HOME_DATA_LIMIT_WARNING = 500;
@@ -309,11 +312,16 @@ export function normalizeHomeDataConfig(
 		sources: Array.isArray(raw.sources)
 			? raw.sources.slice(0, HOME_DATA_SQL_MAX_SOURCES).map((value, index) => {
 					const item = object(value);
+					const sourceId = string(item.sourceId);
 					return {
 						id: string(item.id, `source-${index}`),
 						alias: string(item.alias),
 						appId: string(item.appId),
-						scope: option(item.scope, ["project", "personal"], "project"),
+						...(sourceId
+							? { scope: "project" as const, sourceId }
+							: {
+									scope: option(item.scope, ["project", "personal"], "project"),
+								}),
 					};
 				})
 			: [],
@@ -449,6 +457,18 @@ export function homeDataSqlConfigError(
 	return null;
 }
 
+/** The widget's sources as every cross-app request names them. */
+export function homeDataSqlSourcesPayload(
+	sources: readonly HomeDataSqlSource[],
+): CrossAppSqlSource[] {
+	return sources.map(({ alias, appId, scope, sourceId }) => ({
+		alias,
+		app_id: appId,
+		scope,
+		...(sourceId ? { source_id: sourceId } : {}),
+	}));
+}
+
 /** The request that runs a built widget query over the widget's cross-app sources. */
 export function homeDataCrossAppPayload(
 	config: Pick<HomeDataConfig, "sources" | "cacheSeconds">,
@@ -459,11 +479,7 @@ export function homeDataCrossAppPayload(
 		sql: query.sql,
 		params: query.params,
 		limit: query.limit,
-		sources: config.sources.map(({ alias, appId, scope }) => ({
-			alias,
-			app_id: appId,
-			scope,
-		})),
+		sources: homeDataSqlSourcesPayload(config.sources),
 		cache_seconds: options.cached === false ? 0 : config.cacheSeconds,
 		fresh: options.fresh ?? false,
 	};

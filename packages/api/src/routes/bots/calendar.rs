@@ -1,6 +1,7 @@
 //! A bot's calendar: its wake-up settings and a listing of its events (its own and those of the
 //! owner's connected calendars). Events themselves are event tasks (see `tasks`); changing the
-//! settings works every event task out again (see `bot_host::calendar_tasks`).
+//! settings works every event task out again (see `bot_host::calendar_tasks`). Connected
+//! calendars are read by a job on the executor (`bot_tools::calendar_jobs`), never here.
 
 use super::{
     lock_bot, owned_bot,

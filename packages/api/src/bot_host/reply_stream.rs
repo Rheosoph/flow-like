@@ -1,4 +1,4 @@
-//! A live-call reply as its model writes it, published to the devices of the conversation's
+//! A bot reply as its model writes it, published to the devices of the conversation's
 //! people over the realtime connection they already hold. What goes out and when is decided in
 //! [`flow_like::flow::copilot::reply_stream`], shared with the hosts on the caller's computer;
 //! this module finds the people and publishes.
@@ -39,6 +39,7 @@ struct Outbox {
     route: ReplyRoute,
     recipients: Option<Vec<String>>,
     messages: u32,
+    live_call: bool,
 }
 
 #[async_trait]
@@ -65,15 +66,28 @@ impl ReplyOutbox for Outbox {
         if self.messages == 0 {
             return;
         }
-        tracing::info!(
-            target: "bot_call_latency",
-            turn_id = %self.turn_id,
-            first_text_ms,
-            messages = self.messages,
-            people = self.recipients.as_ref().map_or(0, Vec::len),
-            total_ms = opened.elapsed().as_millis() as u64,
-            "voice call reply stream"
-        );
+        let people = self.recipients.as_ref().map_or(0, Vec::len);
+        let total_ms = opened.elapsed().as_millis() as u64;
+        if self.live_call {
+            tracing::info!(
+                target: "bot_call_latency",
+                turn_id = %self.turn_id,
+                first_text_ms,
+                messages = self.messages,
+                people,
+                total_ms,
+                "live reply stream"
+            );
+        } else {
+            tracing::info!(
+                turn_id = %self.turn_id,
+                first_text_ms,
+                messages = self.messages,
+                people,
+                total_ms,
+                "live reply stream"
+            );
+        }
     }
 }
 
@@ -87,6 +101,7 @@ impl ReplyStream {
         state: &AppState,
         turn: &bot_turn::Model,
         gate: Option<ToolGate>,
+        live_call: bool,
     ) -> Option<Self> {
         if !state.channels.carries_realtime_replies() {
             return None;
@@ -101,8 +116,13 @@ impl ReplyStream {
             ),
             recipients: None,
             messages: 0,
+            live_call,
         };
-        Some(Self(reply_stream::ReplyStream::start(outbox, gate)))
+        Some(Self(reply_stream::ReplyStream::start(
+            outbox,
+            gate,
+            reply_stream::interval_for(live_call),
+        )))
     }
 
     pub(crate) fn sink(&self) -> ReplySink {

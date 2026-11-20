@@ -1705,12 +1705,12 @@ model BotConnector {
   id              String   @id
   botId           String
   bot             Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
-  /// MCP | OAUTH
+  /// MCP | OAUTH | CALDAV
   kind            String
   label           String
   providerId      String?
   url             String?
-  /// NONE | SECRET | OAUTH
+  /// NONE | SECRET | OAUTH | BASIC
   authKind        String   @default("NONE")
   authRef         String?
   grantEncrypted  String?
@@ -1723,6 +1723,10 @@ model BotConnector {
   toolsSnapshot   Json     @default("[]")
   /// Tool name to the `schema_hash` it had when the owner set or confirmed its policy.
   confirmedHashes Json     @default("{}")
+  /// CALDAV: the calendar collection the bot reads and writes, one of `calendars`.
+  calendarUrl     String?
+  /// CALDAV: `[{url, name, color, writable, zone}]` from the last discovery.
+  calendars       Json?
   createdAt       DateTime @default(now()) @db.Timestamptz(3)
   updatedAt       DateTime @updatedAt @db.Timestamptz(3)
 

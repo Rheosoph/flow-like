@@ -3,6 +3,7 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { useBackend } from "../../state/backend-state";
+import type { ExternalDataSource } from "../../state/backend-state/data-source-state";
 import type { SqlParameterInfo } from "../../state/backend-state/query-state";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -89,7 +90,13 @@ const PARAMETER_DEFAULTS: Record<ParameterKind, unknown> = {
 function useSourceTables(sources: readonly HomeDataSqlSource[]) {
 	const backend = useBackend();
 	const signature = JSON.stringify(
-		[...new Set(sources.map((source) => `${source.scope}:${source.appId}`))]
+		[
+			...new Set(
+				sources
+					.filter((source) => !source.sourceId)
+					.map((source) => `${source.scope}:${source.appId}`),
+			),
+		]
 			.filter((key) => !key.endsWith(":"))
 			.sort(),
 	);
@@ -119,6 +126,71 @@ function useSourceTables(sources: readonly HomeDataSqlSource[]) {
 		};
 	}, [signature, backend.dbState]);
 	return tables;
+}
+
+/** The external databases of every chosen app; an app whose list cannot load offers none. */
+function useExternalDatabases(sources: readonly HomeDataSqlSource[]) {
+	const backend = useBackend();
+	const signature = JSON.stringify(
+		[...new Set(sources.map((source) => source.appId))].filter(Boolean).sort(),
+	);
+	const [databases, setDatabases] = useState<
+		Record<string, ExternalDataSource[]>
+	>({});
+	useEffect(() => {
+		let active = true;
+		const appIds = JSON.parse(signature) as string[];
+		void Promise.all(
+			appIds.map(async (appId) => {
+				try {
+					const listed = await backend.dataSourceState.listDataSources(appId);
+					return [appId, listed] as const;
+				} catch {
+					return [appId, [] as ExternalDataSource[]] as const;
+				}
+			}),
+		).then((entries) => {
+			if (active) setDatabases(Object.fromEntries(entries));
+		});
+		return () => {
+			active = false;
+		};
+	}, [signature, backend.dataSourceState]);
+	return databases;
+}
+
+const EXTERNAL_CHOICE = "external:";
+
+function dataChoice(source: HomeDataSqlSource): string {
+	return source.sourceId
+		? `${EXTERNAL_CHOICE}${source.sourceId}`
+		: source.scope;
+}
+
+function dataChoices(
+	source: HomeDataSqlSource,
+	databases: readonly ExternalDataSource[] | undefined,
+): readonly (readonly [string, string])[] {
+	const choices: (readonly [string, string])[] = [
+		["project", "Project data"],
+		["personal", "Viewer’s personal data"],
+		...(databases ?? []).map(
+			(database) =>
+				[
+					`${EXTERNAL_CHOICE}${database.id}`,
+					`${database.name} (external database)`,
+				] as const,
+		),
+	];
+	if (
+		source.sourceId &&
+		!databases?.some((database) => database.id === source.sourceId)
+	)
+		choices.push([
+			dataChoice(source),
+			databases ? "External database (removed)" : "External database",
+		]);
+	return choices;
 }
 
 function SourceTables({
@@ -367,6 +439,7 @@ export function HomeDataSqlSettings({
 	patch: (updates: Partial<HomeDataConfig>) => void;
 }) {
 	const tables = useSourceTables(config.sources);
+	const databases = useExternalDatabases(config.sources);
 	const appName = (appId: string) =>
 		apps.find(([id]) => id === appId)?.[1] ?? appId;
 	const updateSource = (index: number, changes: Partial<HomeDataSqlSource>) =>
@@ -386,9 +459,36 @@ export function HomeDataSqlSettings({
 				source.alias === homeDataSqlAlias(appName(source.appId), others));
 		updateSource(index, {
 			appId,
+			sourceId: undefined,
 			...(derived && appId
 				? { alias: homeDataSqlAlias(appName(appId), others) }
 				: {}),
+		});
+	};
+	const chooseData = (index: number, choice: string) => {
+		if (!choice.startsWith(EXTERNAL_CHOICE)) {
+			updateSource(index, {
+				scope: choice as HomeDataSqlSource["scope"],
+				sourceId: undefined,
+			});
+			return;
+		}
+		const source = config.sources[index];
+		const sourceId = choice.slice(EXTERNAL_CHOICE.length);
+		const others = config.sources
+			.filter((_, position) => position !== index)
+			.map((item) => item.alias);
+		const suggested = (name: string) => homeDataSqlAlias(name, others);
+		const listed = databases[source.appId] ?? [];
+		const derived =
+			!source.alias ||
+			source.alias === suggested(appName(source.appId)) ||
+			listed.some((database) => suggested(database.alias) === source.alias);
+		const database = listed.find((item) => item.id === sourceId);
+		updateSource(index, {
+			scope: "project",
+			sourceId,
+			...(derived && database ? { alias: suggested(database.alias) } : {}),
 		});
 	};
 	const problem = homeDataSqlConfigError(config);
@@ -443,19 +543,22 @@ export function HomeDataSqlSettings({
 							</Field>
 							<Choice
 								label="Data"
-								value={source.scope}
-								options={[
-									["project", "Project data"],
-									["personal", "Viewer’s personal data"],
-								]}
-								onChange={(scope) =>
-									updateSource(index, {
-										scope: scope as HomeDataSqlSource["scope"],
-									})
-								}
+								value={dataChoice(source)}
+								options={dataChoices(source, databases[source.appId])}
+								onChange={(choice) => chooseData(index, choice)}
 							/>
 						</div>
-						{source.appId && (
+						{source.appId && source.sourceId && (
+							<p className="text-xs text-muted-foreground">
+								Address its tables as{" "}
+								<span className="font-mono">
+									{source.alias || "schema"}.table
+								</span>
+								. Results are reused until they expire, since an external
+								database has no table versions to compare.
+							</p>
+						)}
+						{source.appId && !source.sourceId && (
 							<SourceTables
 								alias={source.alias}
 								tables={tables[`${source.scope}:${source.appId}`]}

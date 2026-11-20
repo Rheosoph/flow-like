@@ -34,8 +34,11 @@ import { toast } from "sonner";
 import {
 	type PushTargetPlatform,
 	REMOTE_PUSH_REGISTRATION_EVENT,
+	RemotePushPermissionDeniedError,
 	canUseRemotePushForPlatform,
+	declineRemotePushPrompt,
 	detectPushPlatform,
+	enableRemotePush,
 	getPushDeviceId,
 	getRemotePushPermission,
 	isRemotePushPreferenceEnabled,
@@ -300,56 +303,23 @@ export default function NotificationsSettingsPage() {
 				setLocalEnabled(false);
 			}
 			try {
+				let nextStatus: IPushTargetStatus;
 				if (enabled) {
-					const nextPlatform = detectPushPlatform();
-					if (!nextPlatform) {
-						throw new Error("Push platform could not be detected.");
-					}
-					if (!canUseRemotePushForPlatform(pushConfig, nextPlatform)) {
-						throw new Error("Remote push is not enabled for this platform.");
-					}
-
-					const remotePushApi = await loadRemotePushPlugin();
-					if (!remotePushApi) {
-						throw new Error("Remote push plugin is not available.");
-					}
-
-					const permission = await remotePushApi.requestPermission();
-					if (!permission.granted) {
-						setPermissionState("denied");
-						throw new Error(
-							"Allow notifications for Flow Like in your device Settings, then try again.",
-						);
-					}
-					setPermissionState("granted");
-
-					const token = await remotePushApi.getToken();
-					if (!token) {
-						throw new Error("Remote push returned an empty token.");
-					}
-
-					await backend.userState.registerPushTarget({
-						device_id: deviceId,
-						platform: nextPlatform,
-						token,
-						device_name:
-							typeof navigator !== "undefined"
-								? navigator.userAgent
-								: undefined,
-						channel_id: pushConfig?.channel_id ?? undefined,
-						metadata: {
-							source: "settings",
-							platform: nextPlatform,
-							provider: pushConfig?.provider,
-						},
+					nextStatus = await enableRemotePush({
+						userState: backend.userState,
+						pushConfig,
+						deviceId,
+						source: "settings",
 					});
+					setPermissionState("granted");
+				} else {
+					nextStatus = await backend.userState.setPushTargetEnabled(
+						deviceId,
+						false,
+					);
+					setRemotePushPreference(false);
+					declineRemotePushPrompt();
 				}
-
-				const nextStatus = await backend.userState.setPushTargetEnabled(
-					deviceId,
-					enabled,
-				);
-				setRemotePushPreference(enabled);
 				setLocalEnabled(enabled);
 				setStatus(nextStatus);
 				toast.success(
@@ -358,6 +328,9 @@ export default function NotificationsSettingsPage() {
 						: t("pushNotificationsDisabled", "Push notifications disabled"),
 				);
 			} catch (error) {
+				if (error instanceof RemotePushPermissionDeniedError) {
+					setPermissionState("denied");
+				}
 				if (!enabled) {
 					setRemotePushPreference(previousPreference);
 					setLocalEnabled(previousPreference);

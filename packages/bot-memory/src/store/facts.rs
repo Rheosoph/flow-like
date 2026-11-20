@@ -484,13 +484,18 @@ impl FactStore {
         self.table.ensure_nullable_columns(&METADATA_COLUMNS).await
     }
 
-    /// A table the owning room has not migrated yet holds no recallable facts for others.
+    /// A table the owning room has not migrated yet holds no recallable facts for others. A
+    /// handle that still holds the old schema checks the latest version before deciding.
     async fn readable(&self) -> Result<bool> {
         self.ensure_metadata().await?;
         if self.migrates {
             return Ok(true);
         }
         let names: Vec<&str> = METADATA_COLUMNS.iter().map(|(name, _)| *name).collect();
+        if self.table.has_columns(&names).await? {
+            return Ok(true);
+        }
+        self.table.refresh().await?;
         self.table.has_columns(&names).await
     }
 

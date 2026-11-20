@@ -19,6 +19,8 @@ mock.module("@flow-like/locales", () => ({
 }));
 
 const mutate = mock((_: unknown, __?: unknown) => {});
+const reset = mock(() => {});
+let connectorList: IBotConnector[] = [];
 const docs: IBotConnector = {
 	id: "bc_docs",
 	bot_id: "bot_1",
@@ -53,10 +55,10 @@ const docs: IBotConnector = {
 };
 mock.module("../../hooks/use-bots", () => ({
 	...actual.hooks,
-	useBotConnectors: () => ({ data: [docs] }),
+	useBotConnectors: () => ({ data: connectorList }),
 	useBotSecrets: () => ({ data: [] }),
 	useConnectedAccounts: () => ({ data: [] }),
-	useBotConnectorAction: () => ({ mutate, isPending: false }),
+	useBotConnectorAction: () => ({ mutate, reset, isPending: false }),
 }));
 
 const { createRoot } = await import("react-dom/client");
@@ -70,6 +72,7 @@ afterAll(() => {
 });
 
 async function render(botId: string | null) {
+	connectorList = [docs];
 	const container = window.document.createElement("div");
 	window.document.body.appendChild(container);
 	const root = createRoot(container as unknown as Element);
@@ -78,6 +81,7 @@ async function render(botId: string | null) {
 	);
 	return {
 		container,
+		rerender: () => root.render(createElement(BotConnectorsCard, { botId })),
 		cleanup: async () => {
 			await act(async () => root.unmount());
 			container.remove();
@@ -153,6 +157,144 @@ test("adding an MCP server opens the form with a sign-in choice", async () => {
 			(b) => b.textContent === "Add server",
 		);
 		expect((add as unknown as HTMLButtonElement).disabled).toBe(true);
+	} finally {
+		await view.cleanup();
+	}
+});
+
+const apple: IBotConnector = {
+	id: "bc_cal",
+	bot_id: "bot_1",
+	kind: "caldav",
+	label: "iCloud",
+	url: "https://caldav.icloud.com/",
+	auth: { type: "basic", username: "ann@example.com" },
+	has_grant: true,
+	scopes: [],
+	default_policy: "ask",
+	tool_policies: {},
+	tools_snapshot: [],
+	calendar_url: "https://p01/work/",
+	calendars: [
+		{ url: "https://p01/work/", name: "Work", writable: true },
+		{ url: "https://p01/holidays/", name: "Holidays", writable: false },
+	],
+	updated_at: "2026-11-20T10:00:00Z",
+};
+
+function setValue(input: Element, value: string) {
+	const el = input as unknown as HTMLInputElement;
+	const setter = Object.getOwnPropertyDescriptor(
+		Object.getPrototypeOf(el),
+		"value",
+	)?.set;
+	setter?.call(el, value);
+	el.dispatchEvent(
+		new window.Event("input", { bubbles: true }) as unknown as Event,
+	);
+}
+
+async function openCalDav(view: Awaited<ReturnType<typeof render>>) {
+	await act(async () =>
+		Array.from(view.container.querySelectorAll("button"))
+			.find((b) => b.textContent?.includes("Add calendar (CalDAV)"))
+			?.click(),
+	);
+}
+
+async function fillAndConnect(view: Awaited<ReturnType<typeof render>>) {
+	await act(async () => {
+		setValue(
+			view.container.querySelector("#caldav-user") as Element,
+			"ann@example.com",
+		);
+		setValue(
+			view.container.querySelector("#caldav-password") as Element,
+			"abcd-efgh",
+		);
+	});
+	await act(async () =>
+		(
+			view.container.querySelector("form") as unknown as HTMLFormElement
+		).dispatchEvent(
+			new window.Event("submit", {
+				bubbles: true,
+				cancelable: true,
+			}) as unknown as Event,
+		),
+	);
+}
+
+test("a CalDAV connector shows its address, the chosen calendar and read-only marks", async () => {
+	const view = await render("bot_1");
+	try {
+		connectorList = [apple];
+		await act(async () => view.rerender());
+		const text = view.container.textContent ?? "";
+		expect(text).toContain("Calendar (CalDAV)");
+		expect(text).toContain("https://caldav.icloud.com/");
+		expect(text).toContain("Refresh calendars");
+		expect(text).toContain("Reading (GET, HEAD)");
+	} finally {
+		await view.cleanup();
+	}
+});
+
+test("connecting a CalDAV calendar sends the password as the grant, then offers the calendars", async () => {
+	mutate.mockClear();
+	reset.mockClear();
+	const view = await render("bot_1");
+	try {
+		await openCalDav(view);
+		const password = view.container.querySelector("#caldav-password");
+		expect(password?.getAttribute("type")).toBe("password");
+		expect(password?.getAttribute("autocomplete")).toBe("new-password");
+		await fillAndConnect(view);
+		const call = mutate.mock.calls[0];
+		expect(call?.[0]).toEqual({
+			botId: "bot_1",
+			action: {
+				type: "create",
+				request: {
+					kind: "caldav",
+					label: "iCloud",
+					url: "https://caldav.icloud.com/",
+					auth: { type: "basic", username: "ann@example.com" },
+					grant: "abcd-efgh",
+				},
+			},
+		});
+		connectorList = [apple];
+		await act(async () =>
+			(call?.[1] as { onSuccess: (c: IBotConnector) => void }).onSuccess(apple),
+		);
+		expect(reset).toHaveBeenCalled();
+		expect(view.container.querySelector("#caldav-password")).toBeNull();
+		const text = view.container.textContent ?? "";
+		expect(text).toContain("Calendar the bot uses");
+		expect(text).toContain("Reading (GET, HEAD)");
+		expect(view.container.textContent).not.toContain("abcd-efgh");
+	} finally {
+		await view.cleanup();
+	}
+});
+
+test("a failed discovery shows the server's message with the sign-in hint", async () => {
+	mutate.mockClear();
+	const view = await render("bot_1");
+	try {
+		await openCalDav(view);
+		await fillAndConnect(view);
+		const call = mutate.mock.calls[0];
+		await act(async () =>
+			(call?.[1] as { onError: (e: Error) => void }).onError(
+				new Error("PROPFIND caldav.icloud.com answered 401"),
+			),
+		);
+		const alert = view.container.querySelector("[role=alert]");
+		expect(alert?.textContent).toContain("answered 401");
+		expect(alert?.textContent).toContain("app password");
+		expect(view.container.querySelector("#caldav-user")).not.toBeNull();
 	} finally {
 		await view.cleanup();
 	}

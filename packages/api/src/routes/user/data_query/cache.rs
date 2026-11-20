@@ -1,9 +1,11 @@
-//! The shared result cache of cross-app queries. A fresh entry is served as it is. An expired
-//! entry whose tables all have versions is offered back to the query service, which answers
-//! `unchanged` without running when none of them moved. Entries that read external tables expire
-//! by time only. Every entry stays one more day after it expires, to stand in when a refresh fails.
+//! The shared result cache of cross-app queries. A fresh entry is served once its Lance tables
+//! are confirmed at the versions it read. An expired entry whose tables all have versions is
+//! offered back to the query service, which answers `unchanged` without running when none of
+//! them moved and the statement does not depend on the time of the run. Entries that read
+//! external tables expire by time only. Every entry stays one more day after it expires, to stand
+//! in when a refresh fails.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use flow_like_query::QueryResponse;
@@ -62,9 +64,21 @@ impl CachedQuery {
     }
 
     /// The versions to offer the service, when every table this entry read has one.
-    fn reusable_versions(&self) -> Option<BTreeMap<String, u64>> {
+    pub(super) fn reusable_versions(&self) -> Option<BTreeMap<String, u64>> {
         (self.unversioned_tables.is_empty() && !self.versions.is_empty())
             .then(|| self.versions.clone())
+    }
+
+    /// The schemas whose Lance tables must still be at the recorded versions before a fresh
+    /// entry is served; `None` when it read an external table (time alone decides) or no table.
+    pub(super) fn probed_schemas(&self) -> Option<BTreeSet<&str>> {
+        self.reusable_versions()?;
+        Some(
+            self.versions
+                .keys()
+                .filter_map(|name| name.split_once('.').map(|(schema, _)| schema))
+                .collect(),
+        )
     }
 
     /// The tables are still at the versions this entry read: it is as good as a new run.
@@ -264,6 +278,23 @@ mod tests {
             panic!("an expired entry is refreshed");
         };
         assert_eq!(reuse, None, "a statement over no table is simply run again");
+    }
+
+    #[test]
+    fn fresh_entries_name_the_schemas_to_probe() {
+        let mut trailer = versioned();
+        trailer.tables.push("crm.customers".to_string());
+        trailer.versions.insert("crm.customers".to_string(), 3);
+        assert_eq!(
+            entry(trailer, 1_000).probed_schemas(),
+            Some(BTreeSet::from(["crm", "shop"]))
+        );
+        assert_eq!(
+            entry(external(), 1_000).probed_schemas(),
+            None,
+            "rows of an external table expire by time"
+        );
+        assert_eq!(entry(Trailer::default(), 1_000).probed_schemas(), None);
     }
 
     #[test]

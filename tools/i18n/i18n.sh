@@ -18,4 +18,6 @@ if [ ! -x "$BIN" ]; then
 fi
 
 cd "$REPO_ROOT"
+# The root config imports defineConfig from this isolated installation too.
+export NODE_PATH="$TOOL_DIR/node_modules${NODE_PATH:+:$NODE_PATH}"
 exec "$BIN" "$@"

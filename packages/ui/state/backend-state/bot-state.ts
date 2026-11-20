@@ -714,12 +714,21 @@ export interface IBotAvatar {
 	url: string | null;
 }
 
-export type BotConnectorKind = "mcp" | "oauth";
+export type BotConnectorKind = "mcp" | "oauth" | "caldav";
 export type BotConnectorPolicy = "read" | "ask" | "never";
 export type BotConnectorAuth =
 	| { type: "none" }
 	| { type: "secret"; name: string }
-	| { type: "oauth"; provider_id: string };
+	| { type: "oauth"; provider_id: string }
+	| { type: "basic"; username: string };
+
+/** One calendar a CalDAV account offers, as the last discovery saw it. */
+export interface IBotConnectorCalendar {
+	url: string;
+	name: string;
+	color?: string | null;
+	writable: boolean;
+}
 
 /** One tool of an MCP server as the last refresh saw it. */
 export interface IBotConnectorTool {
@@ -747,6 +756,10 @@ export interface IBotConnector {
 	tools_snapshot: IBotConnectorTool[];
 	/** Each tool's `schema_hash` when the owner last set or confirmed its policy. */
 	confirmed_hashes?: Record<string, string>;
+	/** CalDAV: the calendar the bot uses. */
+	calendar_url?: string | null;
+	/** CalDAV: the calendars the last discovery found. */
+	calendars?: IBotConnectorCalendar[];
 	updated_at: string;
 }
 
@@ -755,14 +768,17 @@ export interface ICreateBotConnectorRequest {
 	label: string;
 	url?: string;
 	auth?: BotConnectorAuth;
-	/** The stored sign-in handle of an account (`fl_oauth_…`), never a token. */
+	/** The stored sign-in handle of an account (`fl_oauth_…`), or a CalDAV password; never returned. */
 	grant?: string;
 	scopes?: string[];
+	/** CalDAV: the calendar to use; the host picks the first writable one when absent. */
+	calendar_url?: string;
 	default_policy?: BotConnectorPolicy;
 }
 
 export interface IUpdateBotConnectorRequest {
 	label?: string;
+	calendar_url?: string;
 	default_policy?: BotConnectorPolicy;
 	tool_policies?: Record<string, BotConnectorPolicy>;
 	grant?: string;

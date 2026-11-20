@@ -221,6 +221,8 @@ struct FakeSource {
     entries: Vec<ConnectorEntry>,
     budget: CallBudget,
     audits: Mutex<Vec<CallAudit>>,
+    jobs: Option<std::sync::Arc<dyn CalendarJobs>>,
+    credentials: std::sync::atomic::AtomicUsize,
 }
 
 #[async_trait]
@@ -230,6 +232,7 @@ impl crate::services::ConnectorSource for FakeSource {
     }
 
     async fn credential(&self, _connector_id: &str) -> Result<Credential> {
+        self.credentials.fetch_add(1, Ordering::SeqCst);
         Ok(Credential::from_secret(TOKEN))
     }
 
@@ -239,6 +242,10 @@ impl crate::services::ConnectorSource for FakeSource {
 
     fn audit(&self, entry: &CallAudit) {
         self.audits.lock().unwrap().push(entry.clone());
+    }
+
+    fn calendar_jobs(&self) -> Option<&dyn CalendarJobs> {
+        self.jobs.as_deref()
     }
 }
 
@@ -254,6 +261,7 @@ fn account(id: &str, label: &str, provider: &str, host: &str) -> ConnectorEntry 
         url: None,
         provider_id: Some(provider.into()),
         api_hosts: vec![host.into()],
+        calendar: None,
     }
 }
 
@@ -1425,4 +1433,656 @@ fn an_external_event_becomes_a_checked_wake_up_row() {
         Duration::days(31),
         utc("2026-12-22T10:00:00Z") - utc("2026-11-21T10:00:00Z")
     );
+}
+
+/// One job as it was sent: the call and each connector id with its `Authorization`.
+type SentJob = (Value, Vec<(String, Option<String>)>);
+
+/// What a server's executor does with a calendar job, run here: the job's connectors as a
+/// `StaticSource` and the providers answering from `transport`.
+struct InProcessJobs<T> {
+    transport: T,
+    refused: Option<crate::error::ToolError>,
+    calls: Mutex<Vec<SentJob>>,
+}
+
+impl<T> InProcessJobs<T> {
+    fn new(transport: T) -> Self {
+        Self {
+            transport,
+            refused: None,
+            calls: Mutex::default(),
+        }
+    }
+}
+
+#[async_trait]
+impl<T: Transport> CalendarJobs for InProcessJobs<T> {
+    fn ready(&self) -> crate::error::ToolResult<()> {
+        self.refused.clone().map_or(Ok(()), Err)
+    }
+
+    async fn run(
+        &self,
+        call: &CalendarCall,
+        connectors: Vec<JobCalendar>,
+    ) -> crate::error::ToolResult<String> {
+        let wire = serde_json::to_value(call).unwrap();
+        let sent = connectors
+            .iter()
+            .map(|connector| {
+                (
+                    connector.entry.rule.id.clone(),
+                    connector.credential.header().map(str::to_string),
+                )
+            })
+            .collect();
+        self.calls.lock().unwrap().push((wire.clone(), sent));
+        let env = FakeEnv::new().await;
+        *env.connectors.lock().unwrap() =
+            Some(std::sync::Arc::new(crate::services::StaticSource::new(
+                connectors
+                    .into_iter()
+                    .map(|connector| (connector.entry, connector.credential))
+                    .collect(),
+            )));
+        let call: CalendarCall = serde_json::from_value(wire).unwrap();
+        let outcome = match jobs::run_job(&env, &self.transport, call).await {
+            Ok(output) => crate::ToolOutcome::from_output(CALENDAR_JOB, output, MAX_REPLY_BYTES),
+            Err(error) => crate::ToolOutcome::from_error(CALENDAR_JOB, error),
+        };
+        Ok(outcome.envelope().to_string())
+    }
+}
+
+/// A job whose output is fixed: what a misbehaving executor could send.
+struct CannedJobs(String);
+
+#[async_trait]
+impl CalendarJobs for CannedJobs {
+    async fn run(
+        &self,
+        _call: &CalendarCall,
+        _connectors: Vec<JobCalendar>,
+    ) -> crate::error::ToolResult<String> {
+        Ok(self.0.clone())
+    }
+}
+
+fn canned(reply: &JobReply) -> String {
+    let output = crate::ToolOutput::new(json!({ "calendar": reply }));
+    crate::ToolOutcome::from_output(CALENDAR_JOB, output, MAX_REPLY_BYTES)
+        .envelope()
+        .to_string()
+}
+
+fn delegated(entries: Vec<ConnectorEntry>, jobs: std::sync::Arc<dyn CalendarJobs>) -> FakeSource {
+    FakeSource {
+        entries,
+        jobs: Some(jobs),
+        ..FakeSource::default()
+    }
+}
+
+fn job_event(id: &str, title: &str) -> ExternalEvent {
+    ExternalEvent {
+        event_id: id.into(),
+        title: title.into(),
+        starts_at: utc("2030-01-07T09:00:00Z"),
+        ends_at: None,
+        all_day: false,
+        location: None,
+        notes: None,
+        link: None,
+        recurring: false,
+        busy: true,
+    }
+}
+
+#[tokio::test]
+async fn a_server_listing_reads_every_calendar_in_one_job_and_never_calls_a_provider_itself() {
+    let scheduler = FakeScheduler::with_wake(enabled_wake());
+    scheduler.add(standup());
+    let provider = FakeTransport::default()
+        .route(
+            "GET",
+            GOOGLE_EVENTS,
+            200,
+            json!({ "items": [google_event("g2", "Dentist", "2026-11-25T12:00:00Z", "2026-11-25T13:00:00Z")] }),
+        )
+        .route(
+            "GET",
+            GRAPH_VIEW,
+            403,
+            json!({ "error": { "message": "Access is denied." } }),
+        );
+    let jobs = std::sync::Arc::new(InProcessJobs::new(provider));
+    let source = delegated(vec![google(), microsoft()], jobs.clone());
+    let here = FakeTransport::default();
+    let client = Client::new(&source, &here);
+    assert!(client.delegates());
+    let (from, to) = (utc("2026-11-22T00:00:00Z"), utc("2026-12-01T00:00:00Z"));
+    let range = listing::collect(Some(&client), &scheduler, from, to, from)
+        .await
+        .unwrap()
+        .range(from, to);
+    assert!(here.seen.lock().unwrap().is_empty());
+    {
+        let calls = jobs.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].0,
+            json!({ "op": "list", "from": "2026-11-22T00:00:00Z", "to": "2026-12-01T00:00:00Z" })
+        );
+        let bearer = format!("Bearer {TOKEN}");
+        let sent: Vec<(&str, Option<&str>)> = calls[0]
+            .1
+            .iter()
+            .map(|(id, header)| (id.as_str(), header.as_deref()))
+            .collect();
+        assert_eq!(
+            sent,
+            [
+                ("c-google", Some(bearer.as_str())),
+                ("c-ms", Some(bearer.as_str()))
+            ]
+        );
+    }
+    let dentist = range
+        .entries
+        .iter()
+        .find(|entry| entry.title == "Dentist")
+        .unwrap();
+    assert_eq!(dentist.source, CalendarEntrySource::External);
+    assert_eq!(dentist.calendar.as_deref(), Some("Work"));
+    assert_eq!(dentist.wake.as_ref().unwrap().offsets_minutes, vec![15]);
+    assert_eq!(range.sources[0].error, None);
+    let denied = range.sources[1].error.as_deref().unwrap();
+    assert!(denied.contains("Access is denied"), "{denied}");
+    let audits = source.audits.lock().unwrap();
+    let recorded: Vec<(&str, &str, bool)> = audits
+        .iter()
+        .map(|audit| (audit.label.as_str(), audit.operation.as_str(), audit.ok))
+        .collect();
+    assert_eq!(
+        recorded,
+        [
+            ("Work", "GET www.googleapis.com", true),
+            ("Outlook", "GET graph.microsoft.com", false)
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_server_sync_plans_wake_ups_from_one_job() {
+    let scheduler = FakeScheduler::with_wake(enabled_wake());
+    let soon = Utc::now() + Duration::hours(3);
+    let provider = FakeTransport::default().route(
+        "GET",
+        GOOGLE_EVENTS,
+        200,
+        json!({ "items": [google_event(
+            "g1",
+            "Review",
+            &provider::rfc3339(soon),
+            &provider::rfc3339(soon + Duration::hours(1)),
+        )] }),
+    );
+    let jobs = std::sync::Arc::new(InProcessJobs::new(provider));
+    let source = delegated(vec![google()], jobs.clone());
+    let here = FakeTransport::default();
+    let report = sync::run(&Client::new(&source, &here), &scheduler, Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(report.created, 1, "{report:?}");
+    assert!(here.seen.lock().unwrap().is_empty());
+    assert_eq!(jobs.calls.lock().unwrap().len(), 1);
+    let created = scheduler.created.lock().unwrap()[0].clone();
+    assert_eq!(
+        created.event.unwrap().external,
+        Some(reference("c-google", "google", "g1"))
+    );
+}
+
+#[tokio::test]
+async fn server_writes_send_typed_calls_and_keep_the_wake_up_here() {
+    let provider = FakeTransport::default()
+        .route(
+            "POST",
+            GOOGLE_EVENTS,
+            200,
+            google_event(
+                "new1",
+                "Dentist",
+                "2030-01-07T09:00:00Z",
+                "2030-01-07T10:00:00Z",
+            ),
+        )
+        .route("DELETE", &format!("{GOOGLE_EVENTS}/new1"), 410, Value::Null);
+    let jobs = std::sync::Arc::new(InProcessJobs::new(provider));
+    let scheduler = std::sync::Arc::new(FakeScheduler::default());
+    let env = FakeEnv::new().await;
+    *env.scheduler.lock().unwrap() = Some(scheduler.clone());
+    *env.connectors.lock().unwrap() =
+        Some(std::sync::Arc::new(delegated(vec![google()], jobs.clone())));
+    let here = FakeTransport::default();
+    let output = create_with(
+        &env,
+        &here,
+        create_args(json!({
+            "title": "Dentist",
+            "starts_at": "2030-01-07T10:00",
+            "tz": "Europe/Berlin",
+            "calendar": "Work",
+            "wake": { "enabled": true, "offsets_minutes": [30] },
+        })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(output.result["event"]["title"], "Dentist");
+    assert_eq!(output.result["event"]["wake"]["own"], true);
+    let create = jobs.calls.lock().unwrap()[0].0.clone();
+    assert_eq!(create["op"], "create");
+    assert_eq!(create["draft"]["title"], "Dentist");
+    assert_eq!(create["draft"]["tz"], "Europe/Berlin");
+    assert_eq!(create["draft"]["starts_at"], "2030-01-07T09:00:00Z");
+    assert_eq!(scheduler.created.lock().unwrap().len(), 1);
+    let deleted = delete_with(
+        &env,
+        &here,
+        CalendarDeleteArgs {
+            id: reference("c-google", "google", "new1").encode(),
+            calendar: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(deleted.result["deleted"], true);
+    assert_eq!(
+        jobs.calls.lock().unwrap()[1].0,
+        json!({ "op": "delete", "event_id": "new1" })
+    );
+    assert!(here.seen.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn without_an_executor_connected_calendars_are_refused_before_any_sign_in() {
+    let mut jobs = InProcessJobs::new(FakeTransport::default());
+    jobs.refused = Some(crate::error::ToolError::new(
+        code::NOT_YET,
+        "This server has no executor for calendar calls",
+    ));
+    let jobs = std::sync::Arc::new(jobs);
+    let scheduler = FakeScheduler::with_wake(enabled_wake());
+    scheduler.add(standup());
+    let source = delegated(vec![google()], jobs.clone());
+    let here = FakeTransport::default();
+    let client = Client::new(&source, &here);
+    let (from, to) = (utc("2026-11-22T00:00:00Z"), utc("2026-12-01T00:00:00Z"));
+    let range = listing::collect(Some(&client), &scheduler, from, to, from)
+        .await
+        .unwrap()
+        .range(from, to);
+    assert!(!range.entries.is_empty());
+    assert!(
+        range
+            .entries
+            .iter()
+            .all(|entry| entry.source == CalendarEntrySource::Bot)
+    );
+    assert!(
+        range.sources[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("no executor")
+    );
+    let calendars = provider::calendars(&source).await.unwrap();
+    let refused = client.get(&calendars[0], "g1").await.unwrap_err();
+    assert_eq!(refused.code, code::NOT_YET);
+    assert_eq!(source.credentials.load(Ordering::SeqCst), 0);
+    assert!(jobs.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn answers_of_a_job_are_bounded_before_the_host_keeps_them() {
+    let mut events: Vec<ExternalEvent> = (0..1_200)
+        .map(|n| job_event(&format!("e{n}"), "Slot"))
+        .collect();
+    events[0] = ExternalEvent {
+        title: "t".repeat(5_000),
+        notes: Some("n".repeat(9_000)),
+        link: Some("javascript:alert(1)".into()),
+        ..job_event("e0", "")
+    };
+    events[1].event_id = "x".repeat(flow_like_types::bot_calendar::MAX_EXTERNAL_ID_CHARS + 1);
+    let reply = JobReply {
+        answer: JobAnswer::Listed {
+            listings: vec![
+                JobListing {
+                    connector_id: "c-google".into(),
+                    listed: Some(provider::Listed {
+                        events,
+                        complete: true,
+                        unreadable: 0,
+                    }),
+                    error: None,
+                },
+                JobListing {
+                    connector_id: "c-stranger".into(),
+                    listed: Some(provider::Listed::default()),
+                    error: None,
+                },
+            ],
+        },
+        audits: (0..100)
+            .map(|n| JobAudit {
+                connector_id: if n % 2 == 0 { "c-google" } else { "c-stranger" }.into(),
+                operation: "GET www.googleapis.com".into(),
+                write: false,
+                ok: true,
+            })
+            .collect(),
+    };
+    let source = delegated(
+        vec![google(), microsoft()],
+        std::sync::Arc::new(CannedJobs(canned(&reply))),
+    );
+    let here = FakeTransport::default();
+    let client = Client::new(&source, &here);
+    let calendars = provider::calendars(&source).await.unwrap();
+    let results = client
+        .list_all(
+            &calendars,
+            utc("2030-01-01T00:00:00Z"),
+            utc("2030-02-01T00:00:00Z"),
+        )
+        .await;
+    let listed = results[0].as_ref().unwrap();
+    assert_eq!(listed.events.len(), MAX_JOB_EVENTS - 1);
+    assert_eq!(listed.unreadable, 1);
+    assert!(!listed.complete);
+    let first = listed
+        .events
+        .iter()
+        .find(|event| event.event_id == "e0")
+        .unwrap();
+    assert_eq!(first.title.chars().count(), 200);
+    assert_eq!(
+        first.notes.as_deref().map(|notes| notes.chars().count()),
+        Some(provider::MAX_NOTES_CHARS)
+    );
+    assert_eq!(first.link, None);
+    let missing = results[1].as_ref().unwrap_err();
+    assert!(missing.message.contains("'Outlook'"), "{}", missing.message);
+    let audits = source.audits.lock().unwrap();
+    assert_eq!(audits.len(), 32);
+    assert!(audits.iter().all(|audit| audit.connector_id == "c-google"));
+}
+
+#[tokio::test]
+async fn a_job_answer_that_is_too_large_cut_failed_or_off_topic_is_refused() {
+    let missing = JobReply {
+        answer: JobAnswer::Failed {
+            error: JobError {
+                code: "not_found".into(),
+                message: "'Work' has no such event (HTTP 404)".into(),
+                http_status: Some(404),
+            },
+        },
+        audits: Vec::new(),
+    };
+    let deleted = JobReply {
+        answer: JobAnswer::Deleted,
+        audits: Vec::new(),
+    };
+    let cases = [
+        ("x".repeat(MAX_REPLY_BYTES + 1), code::TOO_LARGE, "more than"),
+        (
+            json!({ "status": "ok", "truncated": true, "calendar": {} }).to_string(),
+            code::FAILED,
+            "cut short",
+        ),
+        (
+            json!({ "status": "error", "error": { "code": "made_up", "message": "boom" } })
+                .to_string(),
+            code::FAILED,
+            "boom",
+        ),
+        (
+            json!({ "status": "error", "error": { "code": "rate_limited", "message": "slow down" } })
+                .to_string(),
+            code::RATE_LIMITED,
+            "slow down",
+        ),
+        ("not json".to_string(), code::FAILED, "unreadable"),
+        (canned(&deleted), code::FAILED, "'deleted' to a get call"),
+        (canned(&missing), code::NOT_FOUND, "no such event"),
+    ];
+    let here = FakeTransport::default();
+    for (output, wanted, text) in cases {
+        let source = delegated(vec![google()], std::sync::Arc::new(CannedJobs(output)));
+        let client = Client::new(&source, &here);
+        let calendars = provider::calendars(&source).await.unwrap();
+        let error = client.get(&calendars[0], "g1").await.unwrap_err();
+        assert_eq!(error.code, wanted, "{text}: {}", error.message);
+        assert!(error.message.contains(text), "{}", error.message);
+        if wanted == code::NOT_FOUND {
+            assert_eq!(error.details, Some(json!({ "http_status": 404 })));
+        }
+    }
+}
+
+#[test]
+fn a_job_cuts_its_listing_to_the_reply_limit() {
+    let events: Vec<ExternalEvent> = (0..1_500)
+        .map(|n| ExternalEvent {
+            notes: Some("n".repeat(1_000)),
+            ..job_event(&format!("e{n:04}"), "Slot")
+        })
+        .collect();
+    let mut reply = JobReply {
+        answer: JobAnswer::Listed {
+            listings: vec![JobListing {
+                connector_id: "c-google".into(),
+                listed: Some(provider::Listed {
+                    events,
+                    complete: true,
+                    unreadable: 0,
+                }),
+                error: None,
+            }],
+        },
+        audits: Vec::new(),
+    };
+    jobs::fit(&mut reply, 200_000);
+    assert!(serde_json::to_vec(&reply).unwrap().len() <= 200_000);
+    let JobAnswer::Listed { listings } = &reply.answer else {
+        panic!("{:?}", reply.answer);
+    };
+    let listed = listings[0].listed.as_ref().unwrap();
+    assert!(!listed.complete);
+    assert!(!listed.events.is_empty() && listed.events.len() < 200);
+    assert_eq!(listed.events[0].event_id, "e0000");
+}
+
+#[tokio::test]
+async fn a_calendar_job_runs_one_call_with_the_credential_it_carries() {
+    let provider = FakeTransport::default().route(
+        "GET",
+        &format!("{GOOGLE_EVENTS}/g1"),
+        200,
+        google_event(
+            "g1",
+            "Review",
+            "2030-01-07T09:00:00Z",
+            "2030-01-07T10:00:00Z",
+        ),
+    );
+    let env = FakeEnv::new().await;
+    *env.connectors.lock().unwrap() = Some(std::sync::Arc::new(
+        crate::services::StaticSource::new(vec![(google(), Credential::from_secret(TOKEN))]),
+    ));
+    let output = jobs::run_job(
+        &env,
+        &provider,
+        CalendarCall::Get {
+            event_id: "g1".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let reply: JobReply = serde_json::from_value(output.result["calendar"].clone()).unwrap();
+    match &reply.answer {
+        JobAnswer::Event { event } => assert_eq!(event.title, "Review"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        reply.audits,
+        [JobAudit {
+            connector_id: "c-google".into(),
+            operation: "GET www.googleapis.com".into(),
+            write: false,
+            ok: true,
+        }]
+    );
+    *env.connectors.lock().unwrap() = Some(std::sync::Arc::new(
+        crate::services::StaticSource::new(vec![
+            (google(), Credential::from_secret(TOKEN)),
+            (microsoft(), Credential::from_secret(TOKEN)),
+        ]),
+    ));
+    let two = jobs::run_job(
+        &env,
+        &provider,
+        CalendarCall::Delete {
+            event_id: "g1".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let reply: JobReply = serde_json::from_value(two.result["calendar"].clone()).unwrap();
+    match &reply.answer {
+        JobAnswer::Failed { error } => {
+            assert_eq!(error.code, code::INVALID_ARGS);
+            assert!(error.message.contains("exactly one"), "{}", error.message);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(
+        provider
+            .methods()
+            .iter()
+            .all(|method| method.starts_with("GET"))
+    );
+    let bare = FakeEnv::new().await;
+    let refused = crate::run(CALENDAR_JOB, json!({ "op": "discover" }), &bare).await;
+    assert_eq!(refused.error.unwrap().code, code::INVALID_ARGS);
+    assert!(crate::spec(CALENDAR_JOB).is_none());
+}
+
+/// A host whose CalDAV servers refuse every sign-in.
+struct RefusingDav;
+
+#[async_trait]
+impl Transport for RefusingDav {
+    async fn send(
+        &self,
+        _method: &str,
+        _url: Url,
+        _credential: &Credential,
+        _body: Option<Value>,
+    ) -> std::result::Result<RestResponse, String> {
+        Err("no REST calls here".into())
+    }
+
+    fn dav(&self) -> &dyn caldav::DavTransport {
+        self
+    }
+}
+
+#[async_trait]
+impl caldav::DavTransport for RefusingDav {
+    async fn send(
+        &self,
+        _request: &caldav::DavRequest,
+        credential: &Credential,
+    ) -> std::result::Result<caldav::DavResponse, String> {
+        assert!(credential.header().unwrap().starts_with("Basic "));
+        Ok(caldav::DavResponse {
+            status: 401,
+            ..caldav::DavResponse::default()
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_discovery_job_reports_a_refused_sign_in_without_the_password() {
+    let password = "s3cret-app-password";
+    let jobs = InProcessJobs::new(RefusingDav);
+    let error = discover_with(
+        &jobs,
+        "iCloud",
+        "https://caldav.icloud.com/",
+        caldav::basic_credential("me@icloud.com", password),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("401"), "{error}");
+    assert!(!error.contains(password));
+    let (call, sent) = jobs.calls.lock().unwrap()[0].clone();
+    assert_eq!(call, json!({ "op": "discover" }));
+    assert_eq!(sent[0].0, "caldav-discovery");
+
+    let found = JobReply {
+        answer: JobAnswer::Calendars {
+            calendars: vec![
+                flow_like_types::bot_connector::CalDavCalendarInfo {
+                    url: "https://p52-caldav.icloud.com/1/calendars/home/".into(),
+                    name: "h".repeat(500),
+                    color: Some("#ff0000ff".repeat(10)),
+                    writable: true,
+                    zone: Some("Mars/Olympus".into()),
+                },
+                flow_like_types::bot_connector::CalDavCalendarInfo {
+                    url: "javascript:alert(1)".into(),
+                    name: "x".into(),
+                    color: None,
+                    writable: false,
+                    zone: None,
+                },
+            ],
+        },
+        audits: Vec::new(),
+    };
+    let calendars = discover_with(
+        &CannedJobs(canned(&found)),
+        "iCloud",
+        "https://caldav.icloud.com/",
+        caldav::basic_credential("me@icloud.com", password),
+    )
+    .await
+    .unwrap();
+    assert_eq!(calendars.len(), 1);
+    assert_eq!(calendars[0].name.chars().count(), 200);
+    assert_eq!(calendars[0].color.as_deref().map(str::len), Some(32));
+    assert_eq!(calendars[0].zone, None);
+}
+
+#[test]
+fn a_calendar_call_travels_as_a_tagged_object() {
+    let call = CalendarCall::Patch {
+        event_id: "g1".into(),
+        draft: provider::EventDraft {
+            title: Some("Moved".into()),
+            tz: Some("Europe/Berlin".parse().unwrap()),
+            ..provider::EventDraft::default()
+        },
+    };
+    let wire = serde_json::to_value(&call).unwrap();
+    assert_eq!(wire["op"], "patch");
+    assert_eq!(wire["draft"]["tz"], "Europe/Berlin");
+    assert_eq!(serde_json::from_value::<CalendarCall>(wire).unwrap(), call);
+    let unknown = json!({ "op": "patch", "event_id": "g1", "draft": { "tz": "Mars/Olympus" } });
+    assert!(serde_json::from_value::<CalendarCall>(unknown).is_err());
 }

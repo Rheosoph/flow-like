@@ -324,7 +324,8 @@
 		"failed": "The connector could not be changed.",
 		"kind": {
 			"mcp": "MCP server",
-			"oauth": "Account"
+			"oauth": "Account",
+			"caldav": "Calendar (CalDAV)"
 		},
 		"mcp": {
 			"add": "Add server",
@@ -347,7 +348,36 @@
 		"refresh": "Refresh tools",
 		"remove": "Remove {{label}}",
 		"toolPolicy": "Access for {{name}}",
-		"writeWarning": "This tool can change things and will run without asking."
+		"writeWarning": "This tool can change things and will run without asking.",
+		"caldav": {
+			"refresh": "Refresh calendars",
+			"noCalendars": "No calendars found. Refresh to look again.",
+			"calendar": "Calendar the bot uses",
+			"pick": "Calendar",
+			"pickPlaceholder": "Pick a calendar",
+			"readOnlyName": "{{name}} (read only)",
+			"help": {
+				"icloud": "Use your Apple ID email and an app-specific password, not your Apple ID password. Create one at account.apple.com under Sign-In and Security, App-Specific Passwords.",
+				"nextcloud": "Replace <host> with your Nextcloud address. Create an app password under Settings, Security, Devices & sessions.",
+				"fastmail": "Use your Fastmail address and an app password with CalDAV access from Settings, Privacy & Security.",
+				"mailbox": "Use your mailbox.org address. With two-factor sign-in on, create an app password first.",
+				"posteo": "Use your Posteo address and password.",
+				"synology": "Replace <nas> with your NAS address. Port 5001 is the default for the Calendar package.",
+				"radicale": "Only works for a bot on your computer when the server runs there or in your network.",
+				"other": "Enter the CalDAV address your provider lists. The bot finds your calendars from it."
+			},
+			"done": "Done",
+			"service": "Service",
+			"other": "Other CalDAV server",
+			"label": "Name",
+			"address": "Server address",
+			"user": "User name",
+			"password": "Password",
+			"passwordNote": "Stored sealed and never shown again. Use an app password where your service offers one.",
+			"signInHint": "Check the user name and the password. Most services need an app password, not your normal one.",
+			"connect": "Connect"
+		},
+		"addCalDav": "Add calendar (CalDAV)"
 	},
 	"crew": {
 		"activity": {
@@ -606,6 +636,7 @@
 			"mentionHint": "Bots here read along and answer when they have something to add. @mention one to make sure it answers.",
 			"placeholder": "Message {{name}}",
 			"placeholderBots": "Message {{name}} · @mention a bot to make sure it answers",
+			"placeholderBotsShort": "@mention a bot to ask it",
 			"to": "To {{name}}"
 		},
 		"conversationMenu": {
@@ -1028,6 +1059,13 @@
 			"title": "Leave this room?",
 			"description": "You and your bots in this room will leave and stop receiving its messages.",
 			"failed": "Couldn't leave the room. Try again."
+		},
+		"memberInfo": {
+			"label": "About {{name}}",
+			"message": "Message",
+			"messageFailed": "Couldn't open the conversation. Try again.",
+			"openChat": "Chat with {{name}}",
+			"show": "Who this is"
 		}
 	},
 	"deviceHost": {
@@ -2214,7 +2252,7 @@
 		},
 		"layersLabel": "Show in the calendar",
 		"loadFailed": "Couldn't load {{name}}'s calendar: {{error}}",
-		"noSources": "No calendar connected. Add a Google or Microsoft account under Connectors in {{name}}'s settings.",
+		"noSources": "No calendar connected. Add a Google or Microsoft account, or a CalDAV calendar such as iCloud or Nextcloud, under Connectors in {{name}}'s settings.",
 		"openSettings": "Open settings",
 		"repeats": {
 			"custom": "Custom ({{cron}})",
@@ -2261,5 +2299,376 @@
 		},
 		"wakeButton": "Wake-ups",
 		"wakeOff": "off"
+	},
+	"errors": {
+		"signInRequired": "Bots need a signed-in Flow-Like account",
+		"unsupportedAction": "This backend does not support that bot action",
+		"noToolGrants": "This backend keeps no tool grants",
+		"approvalsUnsupported": "This backend cannot answer approvals",
+		"cloneUnsupported": "Bot {{botId}} can't be duplicated on this host"
+	},
+	"appearance": {
+		"crew": "Crew",
+		"findYourCharacter": "Find your character",
+		"outfit": "Outfit",
+		"giveThemAStyle": "Give them a style",
+		"colors": "Colors",
+		"makeThePaletteYours": "Make the palette yours",
+		"finish": "Finish",
+		"addALittlePersonality": "Add a little personality",
+		"skills": "Skills",
+		"showWhatTheyDo": "Show what they do",
+		"clothing": "Clothing",
+		"eyewear": "Eyewear",
+		"handAccessory": "Hand accessory",
+		"headwear": "Headwear",
+		"pattern": "Pattern",
+		"none": "None",
+		"gradient": "Gradient",
+		"dots": "Dots",
+		"stripes": "Stripes",
+		"waves": "Waves",
+		"rays": "Rays",
+		"stars": "Stars",
+		"confetti": "Confetti",
+		"ring": "Ring",
+		"flow": "Flow",
+		"gold": "Gold",
+		"aurora": "Aurora",
+		"pulse": "Pulse",
+		"orbit": "Orbit",
+		"effect": "Effect",
+		"frame": "Frame",
+		"circle": "Circle",
+		"squircle": "Squircle",
+		"square": "Square",
+		"emote": "Emote",
+		"heart": "Heart",
+		"musicNote": "Music note",
+		"spark": "Spark",
+		"exclamation": "Exclamation",
+		"question": "Question",
+		"drop": "Drop",
+		"sleep": "Sleep",
+		"rain": "Rain",
+		"anger": "Anger",
+		"working": "Working",
+		"idea": "Idea",
+		"done": "Done",
+		"error": "Error",
+		"idle": "Idle",
+		"followCursor": "Follow cursor",
+		"character": "Character",
+		"preview": "Preview",
+		"locked": "Locked",
+		"shuffleShown": "Shuffle shown",
+		"shuffle": "Shuffle",
+		"essentials": "Essentials",
+		"lcd": "LCD",
+		"blueprint": "Blueprint",
+		"thermal": "Thermal",
+		"owned": "Owned",
+		"viewPack": "View pack",
+		"yourBotPreview": "Your bot preview",
+		"yourBOT": "YOUR BOT",
+		"custom": "Custom",
+		"makeThisCharacterYourOwn": "Make this character your own.",
+		"resetBot": "Reset bot",
+		"reset": "Reset",
+		"randomizeBot": "Randomize bot",
+		"randomizeRest": "Randomize rest",
+		"randomize": "Randomize",
+		"keepWhenRandomizing": "Keep when randomizing",
+		"pausePreviewAnimation": "Pause preview animation",
+		"playPreviewAnimation": "Play preview animation",
+		"pause": "Pause",
+		"play": "Play",
+		"previewPose": "Preview pose",
+		"previewExpression": "Preview expression",
+		"expression": "Expression",
+		"moodOrStatus": "Mood or status",
+		"previewOnly": "Preview only",
+		"previewMoodOrStatus": "Preview mood or status",
+		"customExpression": "Custom expression",
+		"agentStatus": "Agent status",
+		"add": "Add",
+		"removeUnavailableItemsAndUnlockRequiredPacksToSaveThisBot": "Remove unavailable items and unlock required packs to save this bot.",
+		"removeUnavailableItemsToSaveThisBot": "Remove unavailable items to save this bot.",
+		"unlockRequiredPacksToSaveThisBot": "Unlock required packs to save this bot.",
+		"saveRequirements": "Save requirements",
+		"faceDetails": "Face details",
+		"eyeWhites": "Eye whites",
+		"or": "or",
+		"unavailablePack": "Unavailable pack",
+		"removeOrReplaceThisUnavailableItem": "Remove or replace this unavailable item.",
+		"removeUnavailableItems": "Remove unavailable items",
+		"saveBot": "Save bot",
+		"saving": "Saving…",
+		"yourLatestEditsAreNotPartOfThisSave": "Your latest edits are not part of this save.",
+		"couldNotSaveThisBotTryAgain": "Could not save this bot. Try again.",
+		"thePreviousDraftCouldNotBeSavedSaveYourLatestChangesToTryAgain": "The previous draft could not be saved. Save your latest changes to try again.",
+		"customizationSections": "Customization sections",
+		"browseByThemeThenTrySomethingOn": "Browse by theme, then try something on.",
+		"mixColorsGradientsAndPatternsForEachPart": "Mix colors, gradients, and patterns for each part.",
+		"seeEachDetailBeforeYouChoose": "See each detail before you choose.",
+		"chooseTheSkillsYourBotRepresents": "Choose the skills your bot represents.",
+		"resetOutfit": "Reset outfit",
+		"searchCrew": "Search crew",
+		"searchByNameOrPersonality": "Search by name or personality…",
+		"filterCharacters": "Filter characters",
+		"allPacks": "All packs",
+		"otherCharacters": "Other characters",
+		"characterSeries": "Character series",
+		"all": "All",
+		"other": "Other",
+		"characterPacks": "Character packs",
+		"theWHOLECREW": "THE WHOLE CREW",
+		"showSelected": "Show selected",
+		"availableIndividuallyOutsideACharacterPack": "Available individually, outside a character pack.",
+		"noCharactersMatchYourSearch": "No characters match your search.",
+		"clearFilters": "Clear filters",
+		"exploreThePacksForTheseCharacters": "Explore the packs for these characters",
+		"searchOutfits": "Search outfits",
+		"searchClothesAccessoriesOrCollections": "Search clothes, accessories, or collections…",
+		"equipmentSlots": "Equipment slots",
+		"equipped": "Equipped",
+		"filterOutfits": "Filter outfits",
+		"allCollections": "All collections",
+		"outfitCollections": "Outfit collections",
+		"chooseNone": "Choose None",
+		"colorIdeasAppearOnHoverOrKeyboardFocus": "Color ideas appear on hover or keyboard focus.",
+		"noItemsMatchTheseFiltersInThisSlot": "No items match these filters in this slot.",
+		"noItemsForThisCharacterInThisSlotYet": "No items for this character in this slot yet.",
+		"clearOutfitFilters": "Clear outfit filters",
+		"thisEffectSetsTheColorsOfYourBotAndOutfitRemoveItToUseYourChosenColors": "This effect sets the colors of your bot and outfit. Remove it to use your chosen colors.",
+		"removeColorEffect": "Remove color effect",
+		"resetLegacyFinish": "Reset legacy finish",
+		"finishCategories": "Finish categories",
+		"darkBackground": "Dark background",
+		"thisEffectSetsItsOwnBackground": "This effect sets its own background.",
+		"aDeeperCanvasForYourBot": "A deeper canvas for your bot.",
+		"skillBADGES": "SKILL BADGES",
+		"yourSelectedSkillsAppearBesideYourBotExtraBadgesFoldIntoACountAtSmallerSizes": "Your selected skills appear beside your bot. Extra badges fold into a count at smaller sizes.",
+		"body": "Body",
+		"accent": "Accent",
+		"background": "Background",
+		"cheeks": "Cheeks",
+		"pickAColor": "Pick a color",
+		"hexColor": "Hex color",
+		"applyCustomColor": "Apply custom color",
+		"useRGBOrRRGGBB": "Use #RGB or #RRGGBB.",
+		"enterAValid3Or6DigitHexColor": "Enter a valid 3- or 6-digit hex color.",
+		"chooseAColorForEachPartSharedColorsAlsoTintMatchingDetailsAndEquipment": "Choose a color for each part. Shared colors also tint matching details and equipment.",
+		"resetColors": "Reset colors",
+		"thisCharacterKeepsItsOriginalColors": "This character keeps its original colors.",
+		"original": "Original",
+		"colorPacks": "Color packs",
+		"included": "Included",
+		"premium": "Premium",
+		"previewEveryColorUnlockThePackToSaveColorsMarkedPreviewOnly": "Preview every color. Unlock the pack to save colors marked Preview only.",
+		"tryAnyCustomColorUnlockThisPackToSaveIt": "Try any custom color. Unlock this pack to save it.",
+		"previewEveryColorInThisPackUnlockItToSaveYourChoices": "Preview every color in this pack. Unlock it to save your choices.",
+		"hoverOrFocusForColorIdeasChooseYourColorsInTheColorsTab": "Hover or focus for color ideas. Choose your colors in the Colors tab.",
+		"characterPacksHeading": "CHARACTER PACKS",
+		"otherCharactersHeading": "OTHER CHARACTERS",
+		"chooseItem": "Choose {{label}}",
+		"shufflePart": {
+			"crew": "Shuffle character",
+			"outfit": "Shuffle outfit",
+			"colors": "Shuffle colors",
+			"finish": "Shuffle finish"
+		},
+		"unlockPart": {
+			"crew": "Unlock character to shuffle it",
+			"outfit": "Unlock outfit to shuffle it",
+			"colors": "Unlock colors to shuffle it",
+			"finish": "Unlock finish to shuffle it"
+		},
+		"lockPart": {
+			"crew": "Lock character",
+			"outfit": "Lock outfit",
+			"colors": "Lock colors",
+			"finish": "Lock finish"
+		},
+		"shuffleShownCharacters": "Picks from the characters shown",
+		"shuffleShownCollection": "Picks from the collection shown",
+		"namedPack": "{{label}} pack",
+		"viewNamedPack": "View {{label}} pack",
+		"characterPreview": "{{label}} preview",
+		"selectedCharacter": "Your bot is still {{label}}.",
+		"editEquipment": {
+			"neck": "Edit clothing: {{item}}",
+			"eyes": "Edit eyewear: {{item}}",
+			"hand": "Edit hand accessory: {{item}}",
+			"head": "Edit headwear: {{item}}"
+		},
+		"noEquipment": {
+			"neck": "No clothing",
+			"eyes": "No eyewear",
+			"hand": "No hand accessory",
+			"head": "No headwear"
+		},
+		"characterCount_one": "{{count}} character",
+		"characterCount_other": "{{count}} characters",
+		"packCount_one": "{{count}} character pack",
+		"packCount_other": "{{count}} character packs",
+		"outfitItemCount_one": "{{count}} outfit item",
+		"outfitItemCount_other": "{{count}} outfit items",
+		"itemCount_one": "{{count}} item",
+		"itemCount_other": "{{count}} items",
+		"themeCount_one": "{{count}} theme",
+		"themeCount_other": "{{count}} themes",
+		"packContents": "{{characters}} · {{outfits}}",
+		"crewContents": "{{packs}} · {{characters}}",
+		"chooseCharacterCount_one": "{{count}} character. One that's yours.",
+		"chooseCharacterCount_other": "{{count}} characters. One that's yours.",
+		"outfitContents": "{{items}} · {{themes}}",
+		"namedOutfits": "{{label}} outfits",
+		"effectControlsPalette": "{{effect}} controls this palette",
+		"savedFinishActive": "A saved {{finish}} finish is active. Choosing a color restores the original finish.",
+		"variants": {
+			"original": "original",
+			"shiny": "shiny",
+			"midnight": "midnight",
+			"gold": "gold",
+			"pastel": "pastel",
+			"holo": "holographic"
+		},
+		"selectedCount": "{{count}} selected",
+		"colorRoles": {
+			"body": "Body",
+			"accent": "Accent",
+			"background": "Background",
+			"ink": "Face details",
+			"sclera": "Eye whites",
+			"cheek": "Cheeks",
+			"clothing": "Clothing"
+		},
+		"slotColor": "{{slot}} color",
+		"expressions": {
+			"neutral": "Neutral",
+			"happy": "Happy",
+			"concerned": "Concerned",
+			"surprised": "Surprised",
+			"curious": "Curious",
+			"sad": "Sad",
+			"wink": "Wink",
+			"love": "Love",
+			"angry": "Angry",
+			"focused": "Focused",
+			"oops": "Oops"
+		},
+		"moods": {
+			"likes-you": "Likes you",
+			"cheerful": "Good mood",
+			"love": "In love",
+			"wink": "Winking",
+			"surprised": "Surprised",
+			"thinking": "Thinking",
+			"sad": "Sad",
+			"angry": "Angry",
+			"oops": "Oops",
+			"sleeping": "Sleeping"
+		},
+		"agentStates": {
+			"idle": "Idle",
+			"working": "Working",
+			"idea": "Has an idea",
+			"done": "Done",
+			"error": "Error",
+			"needs-you": "Needs you",
+			"offline": "Offline"
+		},
+		"effects": {
+			"pixel": {
+				"label": "Pixel",
+				"description": "24 × 24 grid, flat colors, crisp edges"
+			},
+			"lcd": {
+				"label": "LCD",
+				"description": "Four green tones and a screen grid"
+			},
+			"crt": {
+				"label": "CRT",
+				"description": "RGB offset, scanlines, and glow"
+			},
+			"glitch": {
+				"label": "Glitch",
+				"description": "Color shifts and little jumps"
+			},
+			"thermal": {
+				"label": "Thermal",
+				"description": "Heat colors on a night background"
+			},
+			"riso": {
+				"label": "Riso",
+				"description": "Three ink tones and grain"
+			},
+			"raster": {
+				"label": "Raster",
+				"description": "Dots like newspaper print"
+			},
+			"comic": {
+				"label": "Comic",
+				"description": "Ink outlines and halftone dots"
+			},
+			"watercolor": {
+				"label": "Watercolor",
+				"description": "Paper grain and pigment edges"
+			},
+			"blueprint": {
+				"label": "Blueprint",
+				"description": "Blue tones and a drafting grid"
+			},
+			"sticker": {
+				"label": "Sticker",
+				"description": "White outline and a soft shadow"
+			},
+			"vinyl": {
+				"label": "Vinyl",
+				"description": "Glossy highlights and a toy finish"
+			},
+			"neon": {
+				"label": "Neon",
+				"description": "Glowing outlines after dark"
+			},
+			"none": {
+				"label": "None",
+				"description": "Original colors and shapes"
+			},
+			"offline": {
+				"label": "Offline",
+				"description": "Gray and gently dimmed"
+			}
+		},
+		"effectGroups": {
+			"screen": {
+				"label": "Retro & Screen",
+				"description": "Old screens and cameras"
+			},
+			"print": {
+				"label": "Print & Paper",
+				"description": "Ink, texture, and handmade edges"
+			},
+			"pop": {
+				"label": "Pop",
+				"description": "Toys, stickers, and glowing signs"
+			},
+			"status": {
+				"label": "Status",
+				"description": "The original look and a quieter presence"
+			}
+		},
+		"namedEffects": "{{label}} effects",
+		"pickCustomColor": "Pick custom color for {{slot}}",
+		"hexColorForSlot": "Hex color for {{slot}}",
+		"editColor": "Edit {{slot}} color",
+		"resetColor": "Reset {{slot}} color",
+		"slotColors": "{{slot}} colors",
+		"namedColorPack": "{{label}} color pack",
+		"viewNamedColorPack": "View {{label}} color pack",
+		"chooseSlotColor": "Choose {{label}} for {{slot}}",
+		"previewColor": "{{label}} · Preview only",
+		"moodsLabel": "Moods"
 	}
 }

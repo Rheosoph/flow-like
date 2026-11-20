@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tracing_subscriber::{EnvFilter, prelude::*};
 
 // DataFusion runs one task per partition; a multi-threaded runtime lets them use every vCPU.
-#[flow_like_types::tokio::main]
+#[tokio::main]
 async fn main() -> Result<(), Error> {
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new("warn")
@@ -37,7 +37,13 @@ async fn main() -> Result<(), Error> {
     let app = query_router(Arc::new(ServiceConfig::from_env()), verifier);
     let handler = service_fn(move |request: Request| {
         let app = app.clone();
-        async move { Ok::<_, Error>(app.oneshot(request).await.expect("Axum routers are infallible")) }
+        async move {
+            Ok::<_, Error>(
+                app.oneshot(request)
+                    .await
+                    .expect("Axum routers are infallible"),
+            )
+        }
     });
 
     run_with_streaming_response(handler).await

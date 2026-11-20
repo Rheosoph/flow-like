@@ -173,7 +173,7 @@ backend-runtime-local
 backend-runtime-docker
 api-remote-catalog
 api-aws-catalog
-api-aws-forecasting
+query-forecasting
 api-local-ml-catalog
 EOF
 }
@@ -319,7 +319,7 @@ if [ "${#BOUNDARIES[@]}" -eq 0 ]; then
         backend-runtime-docker
         api-remote-catalog
         api-aws-catalog
-        api-aws-forecasting
+        query-forecasting
         api-local-ml-catalog
     )
 fi
@@ -896,30 +896,33 @@ configure_boundary() {
         api-remote-catalog)
             # Azure and GCP APIs publish the same catalog as their remote-only
             # executors, so clients never receive ONNX nodes and see automation
-            # only as offline metadata.
+            # only as offline metadata. Forecasts run on the query service, so
+            # the API links no Burn engine.
             DEPENDENCY_ONLY=1
             CHECK_ARGS=(--package azure-api --package gcp-api)
-            FORBIDDEN=(flow-like-catalog-onnx "${AUTOMATION_EXECUTE_PACKAGES[@]}" ort face_id wgpu cudarc cubecl-cuda cubecl-hip cubecl-wgpu burn-cuda burn-rocm)
-            REQUIRED=(flow-like-ml-forecast burn burn-flex)
+            FORBIDDEN=(flow-like-catalog-onnx "${AUTOMATION_EXECUTE_PACKAGES[@]}" ort face_id wgpu cudarc cubecl-cuda cubecl-hip cubecl-wgpu burn burn-flex burn-cuda burn-rocm)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(remote-metadata package-std package-data package-web runtime-catalog local-only-metadata)
             FORBIDDEN_FEATURES=(package-onnx local-ml portable-execute ml-inference)
             ;;
         api-aws-catalog)
             # AWS APIs advertise ONNX metadata to match their local-ML
-            # executors. Data Studio uses CPU forecasting without ONNX execution.
+            # executors. Data Studio forecasts run on the query service, so the
+            # API links no Burn engine.
             DEPENDENCY_ONLY=1
             CHECK_ARGS=(--package aws-api --package aws-api-ecs)
-            FORBIDDEN=("${AUTOMATION_EXECUTE_PACKAGES[@]}" ort ort-sys face_id tract-tflite wgpu cudarc cubecl-cuda cubecl-hip cubecl-wgpu burn-cuda burn-rocm)
-            REQUIRED=(flow-like-catalog-onnx flow-like-ml-forecast burn burn-flex)
+            FORBIDDEN=("${AUTOMATION_EXECUTE_PACKAGES[@]}" ort ort-sys face_id tract-tflite wgpu cudarc cubecl-cuda cubecl-hip cubecl-wgpu burn burn-flex burn-cuda burn-rocm)
+            REQUIRED=(flow-like-catalog-onnx)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(server-local-metadata remote-metadata package-onnx runtime-catalog local-only-metadata)
             FORBIDDEN_FEATURES=(local-ml portable-execute ml-inference)
             ;;
-        api-aws-forecasting)
-            # Keep Lambda isolated: ECS feature unification must not hide a missing runtime.
+        query-forecasting)
+            # The query service runs Data Studio forecasts on the CPU engine. Check
+            # the Lambda alone so the container's feature unification cannot hide
+            # a missing runtime.
             DEPENDENCY_ONLY=1
-            CHECK_ARGS=(--package aws-api)
+            CHECK_ARGS=(--package aws-query)
             FORBIDDEN=(ort ort-sys wgpu cudarc cubecl-cuda cubecl-hip cubecl-wgpu burn-cuda burn-rocm)
             REQUIRED=(flow-like-ml-forecast burn burn-flex)
             FEATURE_PACKAGE="flow-like-catalog-ml"
@@ -929,10 +932,12 @@ configure_boundary() {
         api-local-ml-catalog)
             # Local, Kubernetes, and Docker APIs mirror executors that support
             # local ONNX and list desktop automation only as offline metadata.
+            # Only the local API links the forecast engine, through its
+            # in-process query service.
             DEPENDENCY_ONLY=1
             CHECK_ARGS=(--package local-api --package k8s-api --package docker-compose-api)
             FORBIDDEN=(ort ort-sys face_id tract-tflite "${AUTOMATION_EXECUTE_PACKAGES[@]}" flow-like-browser wgpu cudarc cubecl-cuda cubecl-hip cubecl-wgpu burn-cuda burn-rocm)
-            REQUIRED=(flow-like-catalog-onnx flow-like-ml-forecast burn burn-flex)
+            REQUIRED=(flow-like-catalog-onnx)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(executor-local-metadata server-local-metadata remote-metadata package-onnx runtime-catalog local-only-metadata)
             FORBIDDEN_FEATURES=(local-ml portable-execute ml-inference)

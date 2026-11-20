@@ -13,7 +13,7 @@ const feed = {
 
 describe("feedFlags", () => {
 	test("a bot with none of calendar, scheduling and memory has no feed", () => {
-		expect(feedFlags({ capabilities: ["web", "storage"] })).toBeNull();
+		expect(feedFlags({ capabilities: ["internet", "storage"] })).toBeNull();
 	});
 
 	test("each capability adds its layer, notes always follow", () => {

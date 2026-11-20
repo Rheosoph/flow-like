@@ -1,7 +1,8 @@
 //! Occurrences of a repeating VEVENT, for servers that answer the series instead of expanding
 //! it. RRULE goes through the `rrule` crate in the event's own zone (so a weekly 09:00 stays at
 //! 09:00 across DST); whole days repeat in UTC dates. `UNTIL` is applied here, in UTC, because
-//! calendars write it in every form.
+//! calendars write it in every form. A series is walked from its start for at most
+//! [`MAX_STEPS`] occurrences, so no rule a server sends can keep the host busy.
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
@@ -11,11 +12,15 @@ use super::ical::When;
 use super::zones::Zone;
 use crate::calendar::provider::local_time;
 
+/// Occurrences one series is walked through, from its start, before it is cut short.
+pub const MAX_STEPS: usize = 50_000;
+
 /// Occurrence starts of one series inside a window, at most `limit`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Starts {
     pub starts: Vec<When>,
-    /// More occurrences fell in the window than `limit`.
+    /// More occurrences fell in the window than `limit`, or the window lies beyond
+    /// [`MAX_STEPS`] occurrences.
     pub limited: bool,
 }
 
@@ -115,20 +120,26 @@ pub fn rule_starts(
     let set = parsed
         .build(first)
         .map_err(|error| format!("RRULE '{rule}' is not valid: {error}"))?
-        .after(after.with_timezone(&RuleZone::UTC))
-        .before(before.with_timezone(&RuleZone::UTC));
-    let result = set.all(limit);
-    let mut starts: Vec<When> = result
-        .dates
-        .iter()
-        .map(|time| {
-            if dates {
-                When::Date(time.with_timezone(&Utc).date_naive())
+        .limit();
+    let mut starts: Vec<When> = Vec::new();
+    let mut limited = false;
+    for (step, time) in (&set).into_iter().enumerate() {
+        let time = time.with_timezone(&Utc);
+        if time > before {
+            break;
+        }
+        if step >= MAX_STEPS || starts.len() == usize::from(limit) {
+            limited = true;
+            break;
+        }
+        if time >= after {
+            starts.push(if dates {
+                When::Date(time.date_naive())
             } else {
-                When::Utc(time.with_timezone(&Utc))
-            }
-        })
-        .collect();
+                When::Utc(time)
+            });
+        }
+    }
     let first_utc = first.with_timezone(&Utc);
     if first_utc >= after && first_utc <= before {
         let own = if dates { start } else { When::Utc(first_utc) };
@@ -136,8 +147,5 @@ pub fn rule_starts(
             starts.insert(0, own);
         }
     }
-    Ok(Starts {
-        starts,
-        limited: result.limited,
-    })
+    Ok(Starts { starts, limited })
 }

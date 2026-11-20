@@ -1,10 +1,12 @@
 //! What a statement's `$name` placeholders stand for, so a caller can offer a fitting input:
 //! the type the planner inferred, and every table column a placeholder is compared with.
 
+use super::SqlQueryResult;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::logical_expr::expr::{Between, InList, Like, ScalarFunction};
 use datafusion::logical_expr::{BinaryExpr, Expr, LogicalPlan, Operator};
-use flow_like_types::Result;
+use flow_like_types::json::json;
+use flow_like_types::{Result, Value, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -236,6 +238,96 @@ pub fn describe_parameters(plan: &LogicalPlan) -> Result<Vec<SqlParameter>> {
     Ok(parameters.into_values().collect())
 }
 
+/// Distinct values a parameter options statement lists at most.
+pub const PARAMETER_OPTION_VALUES: usize = 200;
+/// Longest identifier or search text an options statement takes.
+const MAX_OPTION_NAME_CHARS: usize = 256;
+
+/// The statement listing what a parameter compared with `table.column` can take.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParameterOptionsQuery {
+    pub sql: String,
+    pub params: Value,
+    pub rows: usize,
+}
+
+fn quote_option_name(identifier: &str) -> Result<String> {
+    if identifier.is_empty()
+        || identifier.contains('\0')
+        || identifier.chars().count() > MAX_OPTION_NAME_CHARS
+    {
+        return Err(anyhow!("'{identifier}' is not a valid identifier"));
+    }
+    Ok(format!("\"{}\"", identifier.replace('"', "\"\"")))
+}
+
+/// `schema.table` or `table`, quoted part by part.
+fn quote_option_table(table: &str) -> Result<String> {
+    match table.split_once('.') {
+        Some((schema, name)) => Ok(format!(
+            "{}.{}",
+            quote_option_name(schema)?,
+            quote_option_name(name)?
+        )),
+        None => quote_option_name(table),
+    }
+}
+
+/// Up to [`PARAMETER_OPTION_VALUES`] distinct non-null values of `table.column`, only those
+/// containing `search` when it is given, or the column's minimum and maximum with `range`. Every
+/// identifier part is quoted, so no name can change the statement.
+pub fn parameter_options_query(
+    table: &str,
+    column: &str,
+    search: Option<&str>,
+    range: bool,
+) -> Result<ParameterOptionsQuery> {
+    let source = quote_option_table(table)?;
+    let field = quote_option_name(column)?;
+    if range {
+        return Ok(ParameterOptionsQuery {
+            sql: format!("SELECT MIN({field}) AS \"min\", MAX({field}) AS \"max\" FROM {source}"),
+            params: Value::Null,
+            rows: 1,
+        });
+    }
+    let search = search.filter(|text| !text.is_empty());
+    if search.is_some_and(|text| text.chars().count() > MAX_OPTION_NAME_CHARS) {
+        return Err(anyhow!(
+            "The search text is longer than {MAX_OPTION_NAME_CHARS} characters"
+        ));
+    }
+    let filter = if search.is_some() {
+        format!(" AND strpos(lower(CAST({field} AS VARCHAR)), lower($__search)) > 0")
+    } else {
+        String::new()
+    };
+    Ok(ParameterOptionsQuery {
+        sql: format!(
+            "SELECT DISTINCT {field} AS \"value\" FROM {source} \
+             WHERE {field} IS NOT NULL{filter} ORDER BY 1"
+        ),
+        params: search.map_or(Value::Null, |text| json!({ "__search": text })),
+        rows: PARAMETER_OPTION_VALUES,
+    })
+}
+
+/// The rows of a [`parameter_options_query`] as answered: `{values, truncated}`, or the
+/// `{min, max}` row for a range.
+pub fn parameter_options_answer(result: SqlQueryResult, range: bool) -> Value {
+    if range {
+        return result.rows.into_iter().next().unwrap_or(Value::Null);
+    }
+    json!({
+        "values": result
+            .rows
+            .into_iter()
+            .map(|row| row.get("value").cloned().unwrap_or(Value::Null))
+            .collect::<Vec<_>>(),
+        "truncated": result.truncated,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,5 +434,61 @@ mod tests {
             vec![binding("orders", "region", "like")]
         );
         assert!(find(&parameters, "label").bindings.is_empty());
+    }
+
+    #[test]
+    fn option_statements_quote_every_identifier_part() {
+        let distinct =
+            parameter_options_query("crm.customers", "re\"gion", Some("we"), false).unwrap();
+        assert_eq!(
+            distinct.sql,
+            "SELECT DISTINCT \"re\"\"gion\" AS \"value\" FROM \"crm\".\"customers\" \
+             WHERE \"re\"\"gion\" IS NOT NULL AND strpos(lower(CAST(\"re\"\"gion\" AS VARCHAR)), \
+             lower($__search)) > 0 ORDER BY 1"
+        );
+        assert_eq!(distinct.params, json!({ "__search": "we" }));
+        assert_eq!(distinct.rows, PARAMETER_OPTION_VALUES);
+
+        let unfiltered = parameter_options_query("orders", "region", Some(""), false).unwrap();
+        assert!(!unfiltered.sql.contains("strpos"));
+        assert_eq!(unfiltered.params, Value::Null);
+
+        let range = parameter_options_query("orders", "total", None, true).unwrap();
+        assert_eq!(
+            range.sql,
+            "SELECT MIN(\"total\") AS \"min\", MAX(\"total\") AS \"max\" FROM \"orders\""
+        );
+        assert_eq!(range.rows, 1);
+
+        assert!(parameter_options_query("crm.", "region", None, false).is_err());
+        assert!(parameter_options_query("orders", "", None, false).is_err());
+        assert!(parameter_options_query("orders", "a\0b", None, false).is_err());
+        let long = "s".repeat(MAX_OPTION_NAME_CHARS + 1);
+        assert!(parameter_options_query("orders", "region", Some(&long), false).is_err());
+        assert!(parameter_options_query("orders", &long, None, false).is_err());
+    }
+
+    #[test]
+    fn option_answers_list_values_or_the_range_row() {
+        let result = |rows: Vec<Value>, truncated| SqlQueryResult {
+            columns: Vec::new(),
+            row_count: rows.len(),
+            rows,
+            truncated,
+        };
+        assert_eq!(
+            parameter_options_answer(
+                result(
+                    vec![json!({ "value": "East" }), json!({ "value": "West" })],
+                    true
+                ),
+                false
+            ),
+            json!({ "values": ["East", "West"], "truncated": true })
+        );
+        assert_eq!(
+            parameter_options_answer(result(vec![json!({ "min": 1, "max": 9 })], false), true),
+            json!({ "min": 1, "max": 9 })
+        );
     }
 }

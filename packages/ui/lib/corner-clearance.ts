@@ -45,7 +45,11 @@ function cornerInset(element: HTMLElement): number {
 	return inCorner ? Math.max(0, Math.ceil(innerHeight - rect.top)) : 0;
 }
 
-/** Re-measures on size changes, and after animations that move the element without resizing it. */
+/**
+ * Re-measures on size changes, and after animations that move the element without resizing it.
+ * The first measure waits a frame too: reading layout while a chat mounts forces a layout of the
+ * whole transcript in the middle of the commit.
+ */
 function observeLayout(element: HTMLElement, measure: () => void) {
 	let frame = 0;
 	const schedule = () => {
@@ -55,7 +59,7 @@ function observeLayout(element: HTMLElement, measure: () => void) {
 			measure();
 		});
 	};
-	measure();
+	schedule();
 	const observer =
 		typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
 	observer?.observe(element);

@@ -27,12 +27,15 @@ use serde::Serialize;
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 
-pub(crate) use sources::LanceRead;
+pub(crate) use sources::{LanceRead, external_source};
 
 /// Name of the query Lambda the API invokes (AWS deployments, feature `lambda`).
 pub const LAMBDA_FUNCTION_ENV: &str = "QUERY_LAMBDA_FUNCTION";
 /// Base URL of the query service container (every other deployment).
 pub const SERVICE_URL_ENV: &str = "QUERY_SERVICE_URL";
+/// `gcp_id_token` when the container sits behind Cloud Run IAM (GCP).
+pub const AUTH_ENV: &str = "QUERY_AUTH";
+const GCP_ID_TOKEN: &str = "gcp_id_token";
 
 const NOT_CONFIGURED: &str =
     "The query service is not configured (set QUERY_LAMBDA_FUNCTION or QUERY_SERVICE_URL)";
@@ -88,9 +91,7 @@ async fn build_transport(choice: TransportChoice) -> Result<Arc<dyn QueryTranspo
         }
         #[cfg(not(feature = "lambda"))]
         TransportChoice::Lambda(_) => Err(LAMBDA_UNSUPPORTED.to_string()),
-        TransportChoice::Http(url) => HttpTransport::new(&url)
-            .map(|transport| Arc::new(transport) as Arc<dyn QueryTransport>)
-            .map_err(|error| format!("{SERVICE_URL_ENV} cannot be used: {error}")),
+        TransportChoice::Http(url) => http_transport(&url, std::env::var(AUTH_ENV).ok().as_deref()),
         #[cfg(feature = "query-in-process")]
         TransportChoice::InProcess => {
             Ok(Arc::new(flow_like_query::server::InProcessTransport::new(
@@ -100,6 +101,64 @@ async fn build_transport(choice: TransportChoice) -> Result<Arc<dyn QueryTranspo
         #[cfg(not(feature = "query-in-process"))]
         TransportChoice::InProcess => Err(NOT_CONFIGURED.to_string()),
         TransportChoice::Unavailable(message) => Err(message.to_string()),
+    }
+}
+
+fn requires_gcp_id_token(auth: Option<&str>) -> bool {
+    auth.map(str::trim)
+        .is_some_and(|value| value.eq_ignore_ascii_case(GCP_ID_TOKEN))
+}
+
+/// The container at `url`; with `QUERY_AUTH=gcp_id_token` each request also carries a Google ID
+/// token for that URL, which Cloud Run demands from callers it admits through IAM.
+fn http_transport(url: &str, auth: Option<&str>) -> Result<Arc<dyn QueryTransport>, String> {
+    let transport = HttpTransport::new(url)
+        .map_err(|error| format!("{SERVICE_URL_ENV} cannot be used: {error}"))?;
+    if requires_gcp_id_token(auth) {
+        return gcp_authorized(transport, url);
+    }
+    Ok(Arc::new(transport))
+}
+
+#[cfg(feature = "pubsub")]
+fn gcp_authorized(transport: HttpTransport, url: &str) -> Result<Arc<dyn QueryTransport>, String> {
+    let parsed = reqwest::Url::parse(url.trim())
+        .map_err(|error| format!("{SERVICE_URL_ENV} '{url}' is not a URL: {error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(format!(
+            "{SERVICE_URL_ENV} '{url}' must be an http(s) URL to be the audience of an ID token"
+        ));
+    }
+    let audience = parsed.origin().ascii_serialization();
+    Ok(Arc::new(transport.with_platform_authorizer(Arc::new(
+        GoogleIdToken { audience },
+    ))))
+}
+
+#[cfg(not(feature = "pubsub"))]
+fn gcp_authorized(
+    _transport: HttpTransport,
+    _url: &str,
+) -> Result<Arc<dyn QueryTransport>, String> {
+    Err(format!(
+        "{AUTH_ENV}=gcp_id_token needs an API built with the 'pubsub' feature, which mints Google ID tokens"
+    ))
+}
+
+/// A Google-signed ID token from the metadata server, cached until shortly before it expires.
+#[cfg(feature = "pubsub")]
+struct GoogleIdToken {
+    audience: String,
+}
+
+#[cfg(feature = "pubsub")]
+#[async_trait::async_trait]
+impl flow_like_query::client::PlatformAuthorizer for GoogleIdToken {
+    async fn authorization(&self) -> Result<String, QueryError> {
+        crate::execution::gcp_id_token::fetch_id_token(&self.audience)
+            .await
+            .map(|token| format!("Bearer {token}"))
+            .map_err(QueryError::Transport)
     }
 }
 

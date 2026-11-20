@@ -61,6 +61,39 @@ pub(crate) fn external_references(
     Ok(wanted)
 }
 
+/// The schema qualifier of every table `statements` read, as the planner resolves it, so a
+/// caller can send only the external sources a statement names. A statement that cannot be
+/// parsed adds nothing; running it fails with the parser's own error.
+pub fn referenced_schemas(statements: &[&str]) -> BTreeSet<String> {
+    let ctx = SessionContext::new();
+    let state = ctx.state();
+    let options = state.config().options();
+    let default_catalog = options.catalog.default_catalog.clone();
+    let mut schemas = BTreeSet::new();
+    for sql in statements {
+        let Ok(statement) = state.sql_to_statement(sql, &options.sql_parser.dialect) else {
+            continue;
+        };
+        let Ok(references) = state.resolve_table_references(&statement) else {
+            continue;
+        };
+        for reference in references {
+            match &reference {
+                TableReference::Partial { schema, .. } => {
+                    schemas.insert(schema.to_string());
+                }
+                TableReference::Full {
+                    catalog, schema, ..
+                } if catalog.as_ref() == default_catalog => {
+                    schemas.insert(schema.to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+    schemas
+}
+
 /// Registers every referenced table of `externals` in `ctx` and returns their `schema.table`
 /// names. Only named tables are opened, so an unused external source costs nothing.
 pub(crate) async fn register_external_tables(
@@ -101,4 +134,29 @@ pub(crate) async fn register_external_tables(
         }
     }
     Ok(registered)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::referenced_schemas;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn statements_name_the_schemas_they_read() {
+        let schemas = referenced_schemas(&[
+            "SELECT o.id FROM Warehouse.orders o JOIN crm.customers c ON o.customer = c.id",
+            "WITH recent AS (SELECT * FROM events) SELECT * FROM recent, datafusion.billing.invoices",
+            "SELECT * FROM other_catalog.ledger.entries",
+            "this is not sql",
+        ]);
+        assert_eq!(
+            schemas,
+            BTreeSet::from([
+                "billing".to_string(),
+                "crm".to_string(),
+                "warehouse".to_string()
+            ]),
+            "unquoted names are lowercased, other catalogs and unparsable statements add nothing"
+        );
+    }
 }

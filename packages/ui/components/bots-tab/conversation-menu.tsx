@@ -12,6 +12,7 @@ import {
 	PinOffIcon,
 	StarIcon,
 	Trash2Icon,
+	UsersIcon,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -66,6 +67,7 @@ export function ConversationMenu({
 	defaultTitle,
 	withMute = false,
 	onShowStarred,
+	onShowMembers,
 	me,
 	onLeave,
 	blockTarget,
@@ -76,6 +78,8 @@ export function ConversationMenu({
 	defaultTitle?: string;
 	withMute?: boolean;
 	onShowStarred?: () => void;
+	/** Adds the room's members and invitations, for headers too narrow for their own button. */
+	onShowMembers?: () => void;
 	me?: string | null;
 	/** Closes the conversation after leaving or deleting it. */
 	onLeave?: () => void;
@@ -144,6 +148,12 @@ export function ConversationMenu({
 							{muted
 								? t("crew.mute.unmute", "Unmute notifications")
 								: t("crew.mute.mute", "Mute notifications")}
+						</DropdownMenuItem>
+					)}
+					{onShowMembers && (
+						<DropdownMenuItem onSelect={onShowMembers}>
+							<UsersIcon aria-hidden />
+							{t("roomMembers.open", "Members and invitations")}
 						</DropdownMenuItem>
 					)}
 					{onShowStarred && (

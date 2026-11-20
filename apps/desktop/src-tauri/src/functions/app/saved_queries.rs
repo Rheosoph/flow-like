@@ -14,8 +14,10 @@ use serde::Deserialize;
 use tauri::AppHandle;
 
 use super::graph::graph_connection;
-use super::parameter_options::{options_answer, options_query};
 use crate::functions::TauriFunctionError;
+use flow_like::flow_like_storage::databases::workbench::{
+    parameter_options_answer, parameter_options_query,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct SavedQueryInput {
@@ -427,7 +429,7 @@ pub async fn query_sql_parameter_options(
     payload: QueryOptionsInput,
     user_scoped: Option<bool>,
 ) -> Result<serde_json::Value, TauriFunctionError> {
-    let options = options_query(
+    let options = parameter_options_query(
         &payload.table,
         &payload.column,
         payload.search.as_deref(),
@@ -446,7 +448,7 @@ pub async fn query_sql_parameter_options(
         &ColumnReader::Unrestricted,
     )
     .await?;
-    Ok(options_answer(result, payload.range))
+    Ok(parameter_options_answer(result, payload.range))
 }
 
 #[tauri::command(async)]

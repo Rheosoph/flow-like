@@ -949,9 +949,7 @@ mod tests {
     async fn a_kept_screenshot_attaches_without_asking_outside_a_group_chat() {
         let (bridge, files, host, _) = harness(Some("ws1"), label(None));
         let shot = screenshot("bot/screenshots/a.png");
-        let output = bridge
-            .call(FILE_ATTACH_TOOL, json!({ "file": shot }))
-            .await;
+        let output = bridge.call(FILE_ATTACH_TOOL, json!({ "file": shot })).await;
         assert_eq!(status(&output).0, "ok");
         assert!(host.calls.lock().unwrap().is_empty());
         assert_eq!(files.files().len(), 1);
@@ -1037,9 +1035,16 @@ mod tests {
                 ("computer_screenshot".to_string(), show),
             ]
         );
-        assert_eq!(files.files().len(), 1, "the same picture joins the reply once");
         assert_eq!(
-            files.files()[0].handle.as_ref().map(|file| file.path.as_str()),
+            files.files().len(),
+            1,
+            "the same picture joins the reply once"
+        );
+        assert_eq!(
+            files.files()[0]
+                .handle
+                .as_ref()
+                .map(|file| file.path.as_str()),
             Some("bot/screenshots/a.png")
         );
         assert_eq!(

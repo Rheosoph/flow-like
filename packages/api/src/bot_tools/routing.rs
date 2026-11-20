@@ -1,7 +1,9 @@
 use flow_like::flow::copilot::HostTools;
 use serde_json::Value;
 
-/// Tools the API runs itself: they touch Lance tables and read objects, nothing heavy.
+/// Tools the API runs itself: they touch Lance tables and read objects, nothing heavy. The
+/// calendar tools keep the bot's own event rows here; their calls to connected calendars run as
+/// calendar jobs on the executor (`super::calendar_jobs`).
 const IN_PROCESS: [&str; 45] = [
     "bot_configuration",
     "bot_models",
@@ -256,6 +258,18 @@ mod tests {
             route("connector_tools", &json!({}), true),
             Some(Route::InProcess)
         );
+    }
+
+    #[test]
+    fn internal_jobs_are_never_offered_or_routed_as_bot_tools() {
+        for internal in [
+            flow_like_bot_tools::calendar::CALENDAR_JOB,
+            flow_like_bot_tools::services::CONNECTOR_REFRESH,
+            flow_like_bot_tools::skills::SKILL_IMPORT,
+        ] {
+            assert_eq!(route(internal, &json!({ "op": "list" }), true), None);
+            assert!(!host_tools(true, &[]).runs(internal), "{internal}");
+        }
     }
 
     #[test]

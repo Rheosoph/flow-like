@@ -18,7 +18,9 @@ server = [
 postgres = ["server", "flow-like-catalog-data/postgres"]
 mysql = ["server", "flow-like-catalog-data/mysql"]
 clickhouse = ["server", "flow-like-catalog-data/clickhouse"]
-all-drivers = ["postgres", "mysql", "clickhouse"]
+bigquery = ["server", "flow-like-catalog-data/bigquery"]
+athena = ["server", "flow-like-catalog-data/athena"]
+all-drivers = ["postgres", "mysql", "clickhouse", "bigquery", "athena"]
 forecast = ["server", "dep:flow-like-catalog-ml", "tokio/fs", "tokio/io-util"]
 
 [dependencies]

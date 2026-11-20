@@ -36,6 +36,7 @@ pub mod memory;
 pub mod memory_open;
 pub mod memory_tools;
 pub mod platform;
+mod platform_guide;
 mod provider;
 pub mod public_web;
 pub mod reply_stream;

@@ -45,6 +45,7 @@ import { OAuthCallbackHandler } from "../components/oauth-callback-handler";
 import { OAuthExecutionProvider } from "../components/oauth-execution-provider";
 import { OfflineWritesNotifier } from "../components/offline-writes-notifier";
 import { PendingInviteRedeemer } from "../components/pending-invite-redeemer";
+import RemotePushPrompt from "../components/remote-push-prompt";
 import { RpaPermissionProvider } from "../components/rpa";
 import { RuntimeVariablesProviderComponent } from "../components/runtime-variables-provider";
 import { SpotlightWrapper } from "../components/spotlight-wrapper";
@@ -197,6 +198,7 @@ export function Providers({
 														<PendingInviteRedeemer />
 														<DeviceModelUnlockProvider />
 														<NotificationProvider />
+														<RemotePushPrompt />
 														<NativeRealtimeBridge />
 														<LocalBotsBridge />
 														<RuntimeVariablesProviderComponent>

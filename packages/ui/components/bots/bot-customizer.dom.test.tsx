@@ -222,6 +222,41 @@ async function mount(
 }
 
 describe("BotCustomizer", () => {
+	it("updates German controls, counts and effect names when the language changes", async () => {
+		const { i18n } = await import("@flow-like/locales");
+		await mount({ kind: "round" });
+		expect(button("Reset bot")).toBeTruthy();
+		try {
+			await act(async () => {
+				await i18n.changeLanguage("de");
+			});
+			expect(button("Bot zurücksetzen")).toBeTruthy();
+			expect(button("Figur beibehalten")).toBeTruthy();
+			expect(button("Round bot auswählen")).toBeTruthy();
+			expect(container.textContent).toContain("3 Figuren");
+			const selectSection = async (label: string) => {
+				const tab = [
+					...group("Bereiche zur Anpassung").querySelectorAll("button"),
+				].find((element) => element.textContent?.endsWith(label));
+				expect(tab).toBeTruthy();
+				await act(async () => tab?.click());
+			};
+			await selectSection("Farben");
+			expect(button("Farbe für Körper bearbeiten")).toBeTruthy();
+			await selectSection("Details");
+			await click("Effekt");
+			expect(button("Aquarell auswählen")).toBeTruthy();
+			expect(container.textContent).toContain(
+				"Papierkörnung und Pigmentränder",
+			);
+		} finally {
+			await act(async () => {
+				await i18n.changeLanguage("en");
+			});
+		}
+		expect(button("Choose Watercolor")).toBeTruthy();
+	});
+
 	it("keeps crew artwork unchanged during randomization but updates expression previews", async () => {
 		await mount({ kind: "round" });
 		const avatar = vi.mocked(BotAvatar);

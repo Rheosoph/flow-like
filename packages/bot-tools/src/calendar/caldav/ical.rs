@@ -270,7 +270,7 @@ fn fold(line: &str, out: &mut String) {
     out.push_str("\r\n");
 }
 
-fn close(stack: &mut Vec<Component>, done: Component, root: &mut Option<Component>) {
+fn close(stack: &mut [Component], done: Component, root: &mut Option<Component>) {
     match stack.last_mut() {
         Some(parent) => parent.push_child(done),
         None => {

@@ -185,3 +185,183 @@ describe("remote push native bridge", () => {
 		expect(mocks.invoke).not.toHaveBeenCalled();
 	});
 });
+
+function stubWindow() {
+	const store = new Map<string, string>();
+	const dispatchEvent = vi.fn();
+	vi.stubGlobal("window", {
+		localStorage: {
+			getItem: (key: string) => store.get(key) ?? null,
+			setItem: (key: string, value: string) => store.set(key, value),
+		},
+		dispatchEvent,
+	});
+	return { store, dispatchEvent };
+}
+
+const enabledStatus = {
+	device_id: "device",
+	registered: true,
+	push_enabled: true,
+	eligible: true,
+	stale: false,
+};
+
+const PROMPT_CASES = [
+	[
+		"a refusal from an earlier launch",
+		{ permissionAtLaunch: false, preferenceEnabled: true, status: null },
+		"permission",
+	],
+	[
+		"a refusal while this device's switch is off",
+		{ permissionAtLaunch: false, preferenceEnabled: false, status: null },
+		"permission",
+	],
+	[
+		"this device's switch being off",
+		{ permissionAtLaunch: true, preferenceEnabled: false, status: null },
+		"disabled",
+	],
+	[
+		"a registered target the server keeps off",
+		{
+			permissionAtLaunch: true,
+			preferenceEnabled: true,
+			status: { ...enabledStatus, push_enabled: false },
+		},
+		"disabled",
+	],
+	[
+		"a permission the OS has not asked for yet",
+		{ permissionAtLaunch: null, preferenceEnabled: true, status: null },
+		null,
+	],
+	[
+		"an enabled target",
+		{
+			permissionAtLaunch: true,
+			preferenceEnabled: true,
+			status: enabledStatus,
+		},
+		null,
+	],
+	[
+		"a device that is not registered yet",
+		{
+			permissionAtLaunch: true,
+			preferenceEnabled: true,
+			status: { ...enabledStatus, registered: false, push_enabled: false },
+		},
+		null,
+	],
+] as const;
+
+describe("remote push re-prompt", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it.each(PROMPT_CASES)(
+		"for %s gives reason %s",
+		async (_, state, expected) => {
+			const { remotePushPromptReason } = await import("../remote-push");
+			expect(remotePushPromptReason(state)).toBe(expected);
+		},
+	);
+
+	it("remembers a declined prompt", async () => {
+		stubWindow();
+		const { declineRemotePushPrompt, hasDeclinedRemotePushPrompt } =
+			await import("../remote-push");
+		expect(hasDeclinedRemotePushPrompt()).toBe(false);
+		declineRemotePushPrompt();
+		expect(hasDeclinedRemotePushPrompt()).toBe(true);
+	});
+
+	it("treats missing storage as not declined", async () => {
+		const { declineRemotePushPrompt, hasDeclinedRemotePushPrompt } =
+			await import("../remote-push");
+		expect(() => declineRemotePushPrompt()).not.toThrow();
+		expect(hasDeclinedRemotePushPrompt()).toBe(false);
+	});
+
+	it("opens the system notification settings natively", async () => {
+		mocks.invoke.mockResolvedValue(undefined);
+		const { openNotificationSettings } = await import("../remote-push");
+		await openNotificationSettings();
+		expect(mocks.invoke).toHaveBeenCalledExactlyOnceWith(
+			"native_open_notification_settings",
+		);
+	});
+});
+
+describe("enableRemotePush", () => {
+	const pushConfig = {
+		enabled: true,
+		provider: "fcm",
+		allow_mobile: true,
+		channel_id: "default",
+	} as never;
+
+	function userState() {
+		return {
+			registerPushTarget: vi.fn().mockResolvedValue({ success: true }),
+			setPushTargetEnabled: vi.fn().mockResolvedValue(enabledStatus),
+		};
+	}
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("registers the token, switches delivery on and saves the preference", async () => {
+		const { store, dispatchEvent } = stubWindow();
+		mocks.requestPermission.mockResolvedValue({ granted: true });
+		mocks.invoke.mockResolvedValue("ios-token");
+		const state = userState();
+		const { enableRemotePush } = await import("../remote-push");
+
+		await expect(
+			enableRemotePush({
+				userState: state as never,
+				pushConfig,
+				deviceId: "device-1",
+				source: "prompt",
+			}),
+		).resolves.toBe(enabledStatus);
+
+		expect(state.registerPushTarget).toHaveBeenCalledWith(
+			expect.objectContaining({
+				device_id: "device-1",
+				platform: "IOS",
+				token: "ios-token",
+				channel_id: "default",
+				metadata: expect.objectContaining({ source: "prompt" }),
+			}),
+		);
+		expect(state.setPushTargetEnabled).toHaveBeenCalledWith("device-1", true);
+		expect(store.get("flow-like-remote-push-enabled")).toBe("true");
+		expect(dispatchEvent).toHaveBeenCalledTimes(1);
+	});
+
+	it("stops with a permission error before touching the server", async () => {
+		stubWindow();
+		mocks.requestPermission.mockResolvedValue({ granted: false });
+		const state = userState();
+		const { enableRemotePush, RemotePushPermissionDeniedError } = await import(
+			"../remote-push"
+		);
+
+		await expect(
+			enableRemotePush({
+				userState: state as never,
+				pushConfig,
+				deviceId: "device-1",
+				source: "prompt",
+			}),
+		).rejects.toBeInstanceOf(RemotePushPermissionDeniedError);
+		expect(state.registerPushTarget).not.toHaveBeenCalled();
+		expect(state.setPushTargetEnabled).not.toHaveBeenCalled();
+	});
+});

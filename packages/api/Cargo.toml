@@ -146,7 +146,6 @@ benchmark-stack = [
     "tokio/full",
     "reqwest/rustls-tls-native-roots",
 ]
-forecasting = ["flow-like-catalog-ml/forecasting"]
 # Runs the query service inside the API process when neither QUERY_LAMBDA_FUNCTION nor
 # QUERY_SERVICE_URL is set: tests and single-process local development only.
 query-in-process = ["flow-like-query/server"]

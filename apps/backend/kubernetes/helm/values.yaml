@@ -173,6 +173,9 @@ query:
   memoryBytes: 2576980377
   spillMaxBytes: 4294967296
   spillSizeLimit: 4Gi
+  # Forecasting checkpoints, downloaded once per pod; the emptyDir leaves room for one download in flight.
+  modelCacheMaxBytes: 4294967296
+  modelCacheSizeLimit: 5Gi
   # Self-hosted databases usually sit on private networks; public-only egress otherwise.
   allowPrivateNetworks: true
   # Extra NetworkPolicy egress rules for external data sources on private networks (when networkPolicy.enabled).
@@ -1035,7 +1038,7 @@ rustfs:
       requests: {cpu: "100m", memory: "128Mi"}
       limits: {cpu: "500m", memory: "256Mi"}
   gateway:
-    image: nginx:1.30.4-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
+    image: nginx:1.30.7-alpine@sha256:caf4e1e032a20f9c3c5e28fc7f25ffd768ad8677b4975c54193075997b3a97e3
     replicaCount: 2
     resources:
       requests: {cpu: "50m", memory: "32Mi"}

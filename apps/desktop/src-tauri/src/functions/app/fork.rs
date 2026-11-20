@@ -651,7 +651,13 @@ mod tests {
         for path in ["manifest.app", "upload/a b/c.csv", "storage/db/t.lance/x"] {
             assert!(is_plain_relative(path), "{path}");
         }
-        for path in ["", "../other/manifest.app", "upload/../../x", "upload//x", "./x"] {
+        for path in [
+            "",
+            "../other/manifest.app",
+            "upload/../../x",
+            "upload//x",
+            "./x",
+        ] {
             assert!(!is_plain_relative(path), "{path}");
         }
     }

@@ -19,8 +19,10 @@ use serde_json::json;
 use tauri::AppHandle;
 
 use super::graph::graph_connection;
-use super::parameter_options::{options_answer, options_query};
 use crate::functions::TauriFunctionError;
+use flow_like::flow_like_storage::databases::workbench::{
+    parameter_options_answer, parameter_options_query,
+};
 
 const SOFT_SOURCES: usize = 8;
 const MAX_SOURCES: usize = 32;
@@ -41,6 +43,9 @@ pub struct CrossAppSourceInput {
     pub app_id: String,
     #[serde(default)]
     pub scope: Option<String>,
+    /// External databases are read by the hub's query service, never by a local-only app.
+    #[serde(default)]
+    pub source_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -127,6 +132,12 @@ fn validate_sources(
     }
     for source in sources {
         personal(source)?;
+        if source.source_id.is_some() {
+            return Err(flow_like_types::anyhow!(
+                "App source '{}' reads an external database, which only online apps can query",
+                source.alias
+            ));
+        }
     }
     if sources.len() > SOFT_SOURCES {
         warnings.push(format!(
@@ -316,7 +327,7 @@ pub async fn query_cross_app_parameter_options(
 ) -> Result<serde_json::Value, TauriFunctionError> {
     validate_sources(&payload.sources, &mut Vec::new())?;
     let source = option_source(&payload.sources, &payload.table)?;
-    let options = options_query(
+    let options = parameter_options_query(
         &payload.table,
         &payload.column,
         payload.search.as_deref(),
@@ -333,7 +344,7 @@ pub async fn query_cross_app_parameter_options(
         },
     )
     .await?;
-    Ok(options_answer(outcome.result, payload.range))
+    Ok(parameter_options_answer(outcome.result, payload.range))
 }
 
 #[cfg(test)]
@@ -349,6 +360,7 @@ mod tests {
                     alias: alias.to_string(),
                     app_id: app_id.to_string(),
                     scope: scope.map(str::to_string),
+                    source_id: None,
                 })
                 .collect(),
             params: None,
@@ -366,6 +378,10 @@ mod tests {
         let mut long = input(vec![("crm", "a", None)]);
         long.sql = "x".repeat(MAX_SQL_BYTES + 1);
         assert!(validate(&long).is_err());
+        let mut external = input(vec![("warehouse", "a", None)]);
+        external.sources[0].source_id = Some("source-1".to_string());
+        let error = validate(&external).unwrap_err().to_string();
+        assert!(error.contains("only online apps"), "{error}");
     }
 
     #[test]

@@ -17,6 +17,7 @@ import {
 	homeDataSqlAlias,
 	homeDataSqlConfigError,
 	homeDataSqlSchemaQuery,
+	homeDataSqlSourcesPayload,
 	homeDataUsesDates,
 	homeSavedQuerySchemaQuery,
 	homeSavedQuerySql,
@@ -650,5 +651,38 @@ describe("cross-app SQL sources", () => {
 		expect(probe.cache_seconds).toBe(0);
 		expect(probe.limit).toBe(1);
 		expect(probe.sql).toContain('AS "__home_schema" WHERE false');
+	});
+
+	test("external databases read project data and name their source", () => {
+		const config = normalizeHomeDataConfig({
+			sourceKind: "sql",
+			sources: [
+				{
+					id: "w",
+					alias: "warehouse",
+					appId: "app-crm",
+					scope: "personal",
+					sourceId: "db-1",
+				},
+				{ id: "c", alias: "crm", appId: "app-crm", sourceId: "" },
+			],
+		});
+		expect(config.sources[0]).toEqual({
+			id: "w",
+			alias: "warehouse",
+			appId: "app-crm",
+			scope: "project",
+			sourceId: "db-1",
+		});
+		expect(config.sources[1].sourceId).toBeUndefined();
+		expect(homeDataSqlSourcesPayload(config.sources)).toEqual([
+			{
+				alias: "warehouse",
+				app_id: "app-crm",
+				scope: "project",
+				source_id: "db-1",
+			},
+			{ alias: "crm", app_id: "app-crm", scope: "project" },
+		]);
 	});
 });

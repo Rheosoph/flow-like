@@ -60,7 +60,8 @@ RUN strip --strip-all /app/aws-query
 FROM public.ecr.aws/lambda/provided:al2023
 
 COPY LICENSE /usr/share/licenses/flow-like/LICENSE
-RUN dnf install -y unixODBC && dnf clean all
+# ca-certificates: BigQuery token requests trust the system roots.
+RUN dnf install -y unixODBC ca-certificates && dnf clean all
 COPY --from=build /app/aws-query ${LAMBDA_RUNTIME_DIR}/bootstrap
 
 RUN chmod +x ${LAMBDA_RUNTIME_DIR}/bootstrap

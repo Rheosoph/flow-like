@@ -40,15 +40,19 @@ spec:
             - name: RUST_LOG
               value: "info"
             - name: QUERY_MAX_ROWS
-              value: {{ .Values.query.maxRows | quote }}
+              value: {{ .Values.query.maxRows | int64 | quote }}
             - name: QUERY_MAX_TIMEOUT_MS
-              value: {{ .Values.query.maxTimeoutMs | quote }}
+              value: {{ .Values.query.maxTimeoutMs | int64 | quote }}
             - name: QUERY_MEMORY_BYTES
-              value: {{ .Values.query.memoryBytes | quote }}
+              value: {{ .Values.query.memoryBytes | int64 | quote }}
             - name: QUERY_SPILL_DIR
               value: /spill
             - name: QUERY_SPILL_MAX_BYTES
-              value: {{ .Values.query.spillMaxBytes | quote }}
+              value: {{ .Values.query.spillMaxBytes | int64 | quote }}
+            - name: QUERY_MODEL_CACHE_DIR
+              value: /var/lib/flow-like/query-models
+            - name: QUERY_MODEL_CACHE_MAX_BYTES
+              value: {{ .Values.query.modelCacheMaxBytes | int64 | quote }}
             - name: QUERY_ALLOW_PRIVATE_NETWORKS
               value: {{ .Values.query.allowPrivateNetworks | quote }}
             - name: BACKEND_PUB
@@ -63,6 +67,8 @@ spec:
               mountPath: /tmp
             - name: spill
               mountPath: /spill
+            - name: models
+              mountPath: /var/lib/flow-like/query-models
           ports:
             - containerPort: {{ .Values.query.service.port }}
               name: http
@@ -89,6 +95,9 @@ spec:
         - name: spill
           emptyDir:
             sizeLimit: {{ .Values.query.spillSizeLimit }}
+        - name: models
+          emptyDir:
+            sizeLimit: {{ .Values.query.modelCacheSizeLimit }}
       {{- with .Values.query.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

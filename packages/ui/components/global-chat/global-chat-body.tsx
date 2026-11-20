@@ -188,6 +188,7 @@ import {
 } from "./use-global-chat-bot";
 import { useGlobalChatRunWidgetAction } from "./use-global-widget-action";
 import { useHostedBotTurnText } from "./use-hosted-bot-turn";
+import { useHostedReplyDrafts } from "./use-hosted-reply-drafts";
 import { useOpenAppId } from "./use-open-app-id";
 import { usePageSnapshotSource } from "./use-page-snapshot-source";
 
@@ -355,13 +356,26 @@ export function GlobalChatBody({
 }: GlobalChatBodyProps) {
 	const { t, i18n } = useTranslation("chat");
 	const chatRef = useRef<IChatRef | null>(null);
+	const hostedDraftsRef = useRef<readonly IMessage[]>([]);
+	/** The replies this chat streams itself, then the drafts a bot's own host is writing. */
+	const pushLiveMessages = useCallback(
+		(
+			streaming = useGlobalChatStore.getState().streamingMessages,
+			drafts = hostedDraftsRef.current,
+		) =>
+			chatRef.current?.pushCurrentMessageUpdate(
+				drafts.length > 0 ? [...streaming, ...drafts] : streaming,
+			),
+		[],
+	);
 	// The transcript mounts once the welcome gives way, after the replies it must show started.
-	const attachChat = useCallback((chat: IChatRef | null) => {
-		chatRef.current = chat;
-		chat?.pushCurrentMessageUpdate(
-			useGlobalChatStore.getState().streamingMessages,
-		);
-	}, []);
+	const attachChat = useCallback(
+		(chat: IChatRef | null) => {
+			chatRef.current = chat;
+			pushLiveMessages();
+		},
+		[pushLiveMessages],
+	);
 
 	const messages = useGlobalChatStore((s) => s.messages);
 	const activeConversationId = useGlobalChatStore(
@@ -374,11 +388,21 @@ export function GlobalChatBody({
 	const answersHere = answersInThisChat(chatBot.bot, isTauri());
 	const answersHereRef = useRef(answersHere);
 	answersHereRef.current = answersHere;
-	const hostedTurnText = useHostedBotTurnText(
+	const hostedDrafts = useHostedReplyDrafts(
+		activeConversationId,
+		answersHere ? null : (chatBot.bot?.id ?? null),
+	);
+	hostedDraftsRef.current = hostedDrafts;
+	useEffect(() => {
+		pushLiveMessages(undefined, hostedDrafts);
+	}, [hostedDrafts, pushLiveMessages]);
+	const waitingText = useHostedBotTurnText(
 		activeConversationId,
 		chatBot,
 		!answersHere,
 	);
+	// The draft bubble already shows the bot answering.
+	const hostedTurnText = hostedDrafts.length > 0 ? null : waitingText;
 	const queryClient = useQueryClient();
 	const chatConfig = useBotChatConfig(chatBot);
 	const noteBotId = chatBot.bot?.id ?? chatBot.botId;
@@ -532,10 +556,10 @@ export function GlobalChatBody({
 		() =>
 			useGlobalChatStore.subscribe((state, prev) => {
 				if (state.streamingMessages !== prev.streamingMessages) {
-					chatRef.current?.pushCurrentMessageUpdate(state.streamingMessages);
+					pushLiveMessages(state.streamingMessages);
 				}
 			}),
-		[],
+		[pushLiveMessages],
 	);
 
 	// Restore the last explicit provider/model/effort. The Bots tab is often the first

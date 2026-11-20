@@ -80,5 +80,6 @@ export FLOW_LIKE_API_URL=https://your-api.example.com
 ## Quick Links
 
 - [Execution Backends](/self-hosting/execution-backends/) - Understanding job isolation and choosing the right backend
+- [Query service](/self-hosting/query-service/) - The service that runs every data read, its limits and its network access
 - [Docker Compose](/self-hosting/docker-compose/overview/) - Installation and operation on one Linux host
 - [Kubernetes](/self-hosting/kubernetes/overview/) - Cluster deployment, Helm configuration, and autoscaling options

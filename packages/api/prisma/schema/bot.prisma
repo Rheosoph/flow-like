@@ -103,20 +103,22 @@ model BotSecret {
   @@id([botId, name])
 }
 
-/// A service the owner attached to a bot: an MCP server (`kind` MCP, `url`) or an OAuth account
-/// (`kind` OAUTH, `providerId`). `grantEncrypted` is the sealed OAuth handle (like
-/// `EventSink.oauthTokensEncrypted`); no response or prompt carries it. `authKind` NONE | SECRET |
-/// OAUTH with `authRef` the secret name or provider id.
+/// A service the owner attached to a bot: an MCP server (`kind` MCP, `url`), an OAuth account
+/// (`kind` OAUTH, `providerId`) or a CalDAV calendar (`kind` CALDAV, `providerId` caldav, `url`
+/// the address discovery starts at). `grantEncrypted` is the sealed OAuth handle (like
+/// `EventSink.oauthTokensEncrypted`) or the sealed CalDAV password; no response or prompt carries
+/// it. `authKind` NONE | SECRET | OAUTH | BASIC with `authRef` the secret name, provider id or
+/// CalDAV user name.
 model BotConnector {
   id               String   @id
   botId            String
   bot              Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
-  /// MCP | OAUTH
+  /// MCP | OAUTH | CALDAV
   kind             String
   label            String
   providerId       String?
   url              String?
-  /// NONE | SECRET | OAUTH
+  /// NONE | SECRET | OAUTH | BASIC
   authKind         String   @default("NONE")
   authRef          String?
   grantEncrypted   String?
@@ -129,6 +131,10 @@ model BotConnector {
   toolsSnapshot    Json     @default("[]")
   /// Tool name to the `schema_hash` it had when the owner set or confirmed its policy.
   confirmedHashes  Json     @default("{}")
+  /// CALDAV: the calendar collection the bot reads and writes, one of `calendars`.
+  calendarUrl      String?
+  /// CALDAV: `[{url, name, color, writable, zone}]` from the last discovery.
+  calendars        Json?
   createdAt        DateTime @default(now()) @db.Timestamptz(3)
   updatedAt        DateTime @updatedAt @db.Timestamptz(3)
 

@@ -1,7 +1,9 @@
 import type {
 	BotConnectorPolicy,
 	IBotConnector,
+	IBotConnectorCalendar,
 	IBotConnectorTool,
+	ICreateBotConnectorRequest,
 } from "../../state/backend-state/bot-state";
 
 export const CONNECTOR_POLICIES: readonly BotConnectorPolicy[] = [
@@ -80,4 +82,106 @@ export function normalizeMcpUrl(input: string): string {
 	return /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
 		? trimmed
 		: `https://${trimmed}`;
+}
+
+export type CalDavPresetId =
+	| "icloud"
+	| "nextcloud"
+	| "fastmail"
+	| "mailbox"
+	| "posteo"
+	| "synology"
+	| "radicale"
+	| "other";
+
+export interface CalDavPreset {
+	id: CalDavPresetId;
+	name: string;
+	/** Prefilled address; `<…>` marks the part the owner must replace. */
+	address: string;
+}
+
+export const CALDAV_PRESETS: readonly CalDavPreset[] = [
+	{ id: "icloud", name: "iCloud", address: "https://caldav.icloud.com/" },
+	{
+		id: "nextcloud",
+		name: "Nextcloud",
+		address: "https://<host>/remote.php/dav/",
+	},
+	{ id: "fastmail", name: "Fastmail", address: "https://caldav.fastmail.com/" },
+	{ id: "mailbox", name: "mailbox.org", address: "https://dav.mailbox.org/" },
+	{ id: "posteo", name: "Posteo", address: "https://posteo.de:8443/" },
+	{
+		id: "synology",
+		name: "Synology",
+		address: "https://<nas>:5001/caldav/",
+	},
+	{ id: "radicale", name: "Radicale", address: "http://localhost:5232/" },
+	{ id: "other", name: "", address: "" },
+];
+
+export function caldavPreset(id: CalDavPresetId): CalDavPreset {
+	return CALDAV_PRESETS.find((preset) => preset.id === id) as CalDavPreset;
+}
+
+/** A CalDAV address the owner finished typing: http(s), a host, no `<placeholder>` left. */
+export function normalizeCalDavAddress(input: string): string {
+	const trimmed = input.trim();
+	if (!trimmed || /[<>]/.test(trimmed)) return "";
+	const address = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+		? trimmed
+		: `https://${trimmed}`;
+	try {
+		const url = new URL(address);
+		if (url.protocol !== "https:" && url.protocol !== "http:") return "";
+		if (url.username || url.password || !url.hostname) return "";
+		return address;
+	} catch {
+		return "";
+	}
+}
+
+export interface CalDavForm {
+	label: string;
+	address: string;
+	username: string;
+	password: string;
+}
+
+export function calDavFormReady(form: CalDavForm): boolean {
+	return (
+		form.label.trim() !== "" &&
+		form.username.trim() !== "" &&
+		form.password !== "" &&
+		normalizeCalDavAddress(form.address) !== ""
+	);
+}
+
+/** The create request of a CalDAV account; the password travels as the grant only. */
+export function calDavCreateRequest(
+	form: CalDavForm,
+): ICreateBotConnectorRequest {
+	return {
+		kind: "caldav",
+		label: form.label.trim(),
+		url: normalizeCalDavAddress(form.address),
+		auth: { type: "basic", username: form.username.trim() },
+		grant: form.password,
+	};
+}
+
+/** The calendar the bot uses: the stored choice, else the first writable one. */
+export function chosenCalendar(
+	connector: Pick<IBotConnector, "calendar_url" | "calendars">,
+): IBotConnectorCalendar | undefined {
+	const calendars = connector.calendars ?? [];
+	return (
+		calendars.find((calendar) => calendar.url === connector.calendar_url) ??
+		calendars.find((calendar) => calendar.writable)
+	);
+}
+
+/** The discovery error means the server refused the sign-in. */
+export function isCalDavSignInError(message: string): boolean {
+	return /\b401\b|unauthori[sz]ed|password|credentials/i.test(message);
 }

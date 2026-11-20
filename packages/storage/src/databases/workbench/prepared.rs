@@ -5,12 +5,14 @@ use super::{SqlColumn, SqlQueryResult};
 use crate::arrow_utils::record_batch_to_value;
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::logical_expr::{Expr, LogicalPlan, Volatility};
 use datafusion::prelude::{DataFrame, SessionConfig, SessionContext};
 use flow_like_storage_contracts::column_metadata::DataSensitivity;
 use flow_like_types::{Result, anyhow};
@@ -130,6 +132,15 @@ impl PreparedQuery {
         Arc::new(self.df.schema().as_arrow().clone())
     }
 
+    /// Whether a result read at `versions` is still this statement's answer: it read the same
+    /// Lance tables at the same versions, no external table, and nothing that differs per run.
+    pub fn answers_like(&self, versions: &BTreeMap<String, u64>) -> bool {
+        !versions.is_empty()
+            && self.unversioned_tables.is_empty()
+            && self.versions == *versions
+            && !varies_between_runs(self.df.logical_plan())
+    }
+
     pub async fn stream(self) -> Result<BatchStream> {
         let schema = self.schema();
         let timeout_ms = self.timeout.as_millis();
@@ -163,6 +174,26 @@ impl PreparedQuery {
             rows,
         })
     }
+}
+
+/// Whether `plan` calls a function that may answer differently on the next run while every
+/// table stays the same, such as `now()`, `current_date()` or `random()`.
+pub fn varies_between_runs(plan: &LogicalPlan) -> bool {
+    let mut varies = false;
+    let _ = plan.apply_with_subqueries(|node| {
+        node.apply_expressions(|expr| {
+            expr.apply(|inner| {
+                if let Expr::ScalarFunction(function) = inner
+                    && function.func.signature().volatility != Volatility::Immutable
+                {
+                    varies = true;
+                    return Ok(TreeNodeRecursion::Stop);
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+        })
+    });
+    varies
 }
 
 /// Batches of a prepared query, cut at its row limit. The plan reads one sentinel row past the
@@ -225,5 +256,38 @@ impl BatchStream {
             return self.with_schema(kept).map(Some);
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::varies_between_runs;
+    use datafusion::prelude::SessionContext;
+
+    async fn varies(sql: &str) -> bool {
+        let plan = SessionContext::new()
+            .state()
+            .create_logical_plan(sql)
+            .await
+            .unwrap_or_else(|error| panic!("{sql}: {error}"));
+        varies_between_runs(&plan)
+    }
+
+    #[tokio::test]
+    async fn statements_reading_the_clock_or_chance_vary_between_runs() {
+        assert!(!varies("SELECT 1 + 1 AS n").await);
+        assert!(!varies("SELECT upper('a') AS s, abs(-2) AS a").await);
+        assert!(varies("SELECT now() AS t").await);
+        assert!(varies("SELECT CAST(now() AS TIMESTAMP) - INTERVAL '7 days' AS since").await);
+        assert!(varies("SELECT current_date() AS d").await);
+        assert!(varies("SELECT random() AS r").await);
+        assert!(
+            varies(
+                "SELECT n FROM (VALUES (1)) AS t(n) \
+                 WHERE n IN (SELECT CAST(random() * 0 AS BIGINT) + 1)"
+            )
+            .await,
+            "a subquery's functions count"
+        );
     }
 }

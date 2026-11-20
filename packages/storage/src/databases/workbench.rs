@@ -15,8 +15,11 @@ pub use cross_app::{
     describe_cross_app_query, execute_readonly_sql_across_apps, prepare_cross_app_query,
     tables_unchanged,
 };
-pub use external::{ExternalSchema, ExternalTableResolver};
-pub use parameters::{ParameterBinding, SqlParameter, describe_parameters};
+pub use external::{ExternalSchema, ExternalTableResolver, referenced_schemas};
+pub use parameters::{
+    PARAMETER_OPTION_VALUES, ParameterBinding, ParameterOptionsQuery, SqlParameter,
+    describe_parameters, parameter_options_answer, parameter_options_query,
+};
 pub use prepared::{BatchStream, ExecutionBudget, PreparedQuery, SpillConfig};
 
 use crate::databases::graph::lancegraph::{
@@ -460,6 +463,7 @@ fn query_timeout(safety: &CypherSafetyConfig) -> std::time::Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow_utils::record_batch_to_value;
 
     #[test]
     fn readonly_validation_allows_select_and_cte() {

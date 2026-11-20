@@ -7,8 +7,12 @@ import type {
 	SqlParameterOptions,
 	SqlQueryDescription,
 } from "../../state/backend-state/query-state";
-import { homeDataSourcePayload } from "./home-data-params";
-import { type HomeDataConfig, homeDataSqlConfigError } from "./home-data-query";
+
+import {
+	type HomeDataConfig,
+	homeDataSqlConfigError,
+	homeDataSqlSourcesPayload,
+} from "./home-data-query";
 
 const MAX_DESCRIPTIONS = 50;
 const descriptions = new Map<string, SqlQueryDescription>();
@@ -35,7 +39,10 @@ export function useHomeSqlDescription(
 ): SqlDescriptionState {
 	const backend = useBackend();
 	const { debounceMs = 0, enabled = true } = options;
-	const sources = useMemo(() => homeDataSourcePayload(config), [config]);
+	const sources = useMemo(
+		() => homeDataSqlSourcesPayload(config.sources),
+		[config.sources],
+	);
 	const key = JSON.stringify([config.sql, sources]);
 	const active =
 		enabled &&
@@ -103,7 +110,10 @@ export function useHomeParamOptionsLoader(
 	config: Pick<HomeDataConfig, "sources">,
 ) {
 	const backend = useBackend();
-	const sources = useMemo(() => homeDataSourcePayload(config), [config]);
+	const sources = useMemo(
+		() => homeDataSqlSourcesPayload(config.sources),
+		[config.sources],
+	);
 	return useMemo(
 		() =>
 			(

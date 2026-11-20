@@ -44,6 +44,7 @@ use super::image_view::{IMAGE_VIEW_TOOL, image_view_tool_spec};
 use super::memory::{AssistantMemory, MemoryScope};
 use super::memory_tools::{MemoryBridge, memory_tool_specs};
 use super::platform::{Clearance, PlatformCopilot, PlatformSurface, PlatformToolBridge, WebAccess};
+use super::platform_guide;
 use super::subtasks::{
     ModelSubtaskRunner, SPAWN_SUBTASKS_TOOL, SubtaskEnv, ability_line as subtasks_ability_line,
     attach as attach_subtasks, offered_to as offers_subtasks, spawn_subtasks_tool_spec,
@@ -2138,6 +2139,9 @@ pub(super) fn bot_stable_system_prompt(bot: &BotRunContext) -> String {
     sections.push(
         "## LEAVE TO FLUX\nBuilding, changing or debugging apps, workflows, boards, pages, widgets, Events, FlowScript or the Home page, creating a bot and changing another bot's settings are Flux's work. When your owner asks for that, say so and suggest asking Flux; never claim you built or changed one.".to_string(),
     );
+    if bot.system == Some(BotSystemKind::General) {
+        sections.push(platform_guide::section(&offered));
+    }
     sections.push(format!(
         "## DATA\n{}",
         classification_note(&bot.classification)
@@ -3431,6 +3435,34 @@ mod tests {
             .filter(|capability| *capability != BotCapability::Flowpilot)
             .collect();
         assert_eq!(BotToolset::of(&others), BotToolset::Capabilities);
+    }
+
+    #[test]
+    fn only_the_assistant_carries_the_flow_like_guide() {
+        let assistant = bot_system_prompt(&BotRunContext::general());
+        assert!(assistant.contains("## FLOW-LIKE GUIDE"));
+        assert!(assistant.contains("search for it with `internet_search`"));
+        assert!(
+            assistant.find("## LEAVE TO FLUX").unwrap()
+                < assistant.find("## FLOW-LIKE GUIDE").unwrap()
+        );
+
+        let renamed = BotRunContext {
+            name: "Pip".into(),
+            capabilities: vec![BotCapability::Memory],
+            ..BotRunContext::general()
+        };
+        let prompt = bot_system_prompt(&renamed);
+        assert!(prompt.contains("## FLOW-LIKE GUIDE"));
+        assert!(!prompt.contains("`internet_search`"));
+
+        assert!(!bot_system_prompt(&bot(&[BotCapability::Internet])).contains("FLOW-LIKE GUIDE"));
+        let flux = BotRunContext {
+            system: Some(BotSystemKind::Flux),
+            toolset: BotToolset::FlowPilot,
+            ..BotRunContext::general()
+        };
+        assert!(!bot_system_prompt(&flux).contains("FLOW-LIKE GUIDE"));
     }
 
     #[test]

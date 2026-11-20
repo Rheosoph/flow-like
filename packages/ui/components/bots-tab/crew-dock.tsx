@@ -181,6 +181,7 @@ export function CrewDock({
 			conversationId={selection.conversationId}
 			me={account.me}
 			bots={account.bots}
+			actions={chat.actions}
 			onClose={chat.onClose}
 		/>
 	);

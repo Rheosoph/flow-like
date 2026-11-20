@@ -13,6 +13,7 @@ import {
 } from "./bot-panel-tabs";
 import { BotPill } from "./bot-pill";
 import { BOT_PANEL_WIDTH, useDockPanelLayout } from "./crew-split-layout";
+import { SwipeBackLayer } from "./swipe-back-layer";
 
 /** The open tab of a bot's panel (`null` while it is closed) and how to change it. */
 export interface BotPanelControl {
@@ -69,17 +70,19 @@ export function BotChatFrame({
 	const tabs = botPanelTabs(view);
 	const tab = shownBotPanelTab(panel.tab, tabs);
 	const covered = tab !== null && layout === "sheet";
-	const overview = tab && (
-		<BotOverviewPanel
-			id={panelId}
-			view={view}
-			layout={layout}
-			tabs={{ list: tabs, shown: tab, onChange: panel.onTabChange }}
-			actions={actions}
-			trailing={covered ? end : undefined}
-			onClose={() => panel.onTabChange(null)}
-		/>
-	);
+	const closePanel = () => panel.onTabChange(null);
+	const overview = (onClose: () => void) =>
+		tab && (
+			<BotOverviewPanel
+				id={panelId}
+				view={view}
+				layout={layout}
+				tabs={{ list: tabs, shown: tab, onChange: panel.onTabChange }}
+				actions={actions}
+				trailing={covered ? end : undefined}
+				onClose={onClose}
+			/>
+		);
 	return (
 		<div className="relative flex min-h-0 min-w-0 flex-1">
 			<div
@@ -103,18 +106,16 @@ export function BotChatFrame({
 					}
 				/>
 			</div>
-			{overview && !covered && (
+			{tab && !covered && (
 				<div
 					className="flex min-h-0 shrink-0 flex-col border-l"
 					style={{ width: BOT_PANEL_WIDTH }}
 				>
-					{overview}
+					{overview(closePanel)}
 				</div>
 			)}
 			{covered && (
-				<div className="absolute inset-0 z-30 flex flex-col animate-in fade-in slide-in-from-right-4 duration-200">
-					{overview}
-				</div>
+				<SwipeBackLayer onBack={closePanel}>{overview}</SwipeBackLayer>
 			)}
 		</div>
 	);

@@ -5,6 +5,7 @@
 
 mod access;
 pub(crate) mod apps;
+pub(crate) mod calendar_jobs;
 mod configuration;
 pub(crate) mod connectors;
 mod crew;
@@ -138,6 +139,8 @@ pub(crate) async fn turn_host(
     let files: std::sync::Arc<dyn host::TurnFiles> = std::sync::Arc::new(
         turn_files::ApiTurnFiles::new(state, &bot.bot_id, context_conversation, attached),
     );
+    let connectors = connectors::ApiConnectors::new(state, owner, &bot.bot_id)
+        .in_turn(principal.clone(), &workspace);
     let host = BotToolsHost::new(TurnDeps {
         owner: owner.to_string(),
         bot: principal.clone(),
@@ -167,11 +170,7 @@ pub(crate) async fn turn_host(
         executor: executor_for(state),
         grants,
         secrets: std::sync::Arc::new(secrets::ServerSecrets::new(state, &bot.bot_id)),
-        connectors: Some(std::sync::Arc::new(connectors::ApiConnectors::new(
-            state,
-            owner,
-            &bot.bot_id,
-        ))),
+        connectors: Some(std::sync::Arc::new(connectors)),
     })
     .with_configuration(std::sync::Arc::new(configuration::ApiConfiguration::new(
         state,

@@ -41,6 +41,9 @@ const sqlSourceItem: HomeWidgetObjectContract = {
 			default: DEFAULT_HOME_DATA_CONFIG.scope,
 			enum: ["project", "personal"],
 		}),
+		sourceId: text(
+			"Optional id of one of the app's external databases, read instead of the app's own tables as project data. Keep an existing value unchanged; omit it otherwise.",
+		),
 	},
 	required: ["alias", "appId"],
 	unique_by: "alias",

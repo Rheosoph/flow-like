@@ -272,7 +272,7 @@ impl<'a> DavClient<'a> {
             401 => ToolError::new(
                 code::FAILED,
                 format!(
-                    "'{label}' refused the sign-in to {operation} at {host} (HTTP 401{detail}); ask your owner to check the user name and the (app-specific) password"
+                    "'{label}' refused the sign-in to {operation} at {host} (HTTP 401{detail}): the user name or the password is wrong (iCloud and Fastmail need an app-specific password)"
                 ),
             ),
             403 => ToolError::new(

@@ -74,22 +74,6 @@ import {
 type SortKey = "name" | "type" | "size";
 type FilterKey = ProcessedAttachment["type"] | "all";
 
-const SORT_OPTIONS: readonly { key: SortKey; label: string }[] = [
-	{ key: "name", label: "Name" },
-	{ key: "type", label: "Type" },
-	{ key: "size", label: "Size" },
-];
-
-const FILTER_OPTIONS: readonly { key: FilterKey; label: string }[] = [
-	{ key: "all", label: "All Files" },
-	{ key: "image", label: "Images" },
-	{ key: "video", label: "Videos" },
-	{ key: "audio", label: "Audio" },
-	{ key: "pdf", label: "PDFs" },
-	{ key: "document", label: "Documents" },
-	{ key: "website", label: "Websites" },
-];
-
 interface FileDialogProps {
 	files: ProcessedAttachment[];
 	handleFileClick: (file: ProcessedAttachment) => void;
@@ -242,6 +226,21 @@ export function FileDialog({
 	trigger,
 }: Readonly<FileDialogProps>) {
 	const { t } = useTranslation("chat");
+	const sortOptions: readonly { key: SortKey; label: string }[] = [
+		{ key: "name", label: t("attachments.sort.name", "Name") },
+		{ key: "type", label: t("attachments.sort.type", "Type") },
+		{ key: "size", label: t("attachments.sort.size", "Size") },
+	];
+	const filterOptions: readonly { key: FilterKey; label: string }[] = [
+		{ key: "all", label: t("attachments.filter.all", "All files") },
+		{ key: "image", label: t("attachments.filter.image", "Images") },
+		{ key: "video", label: t("attachments.filter.video", "Videos") },
+		{ key: "audio", label: t("attachments.filter.audio", "Audio") },
+		{ key: "pdf", label: t("attachments.filter.pdf", "PDFs") },
+		{ key: "document", label: t("attachments.filter.document", "Documents") },
+		{ key: "website", label: t("attachments.filter.website", "Websites") },
+	];
+
 	const [internalOpen, setInternalOpen] = useState(false);
 	const [searchQuery, setSearchQuery] = useState("");
 	const [viewMode, setViewMode] = useState<"grid" | "list">("list");
@@ -528,7 +527,7 @@ export function FileDialog({
 											</Button>
 										</DropdownMenuTrigger>
 										<DropdownMenuContent align="end">
-											{SORT_OPTIONS.map(({ key, label }) => (
+											{sortOptions.map(({ key, label }) => (
 												<DropdownMenuItem
 													key={key}
 													onClick={() => toggleSort(key)}
@@ -562,14 +561,22 @@ export function FileDialog({
 													<GridIcon className="h-4 w-4" />
 												)}
 												<span className="sr-only">
-													{t("switchTo", "Switch to")}{" "}
-													{viewMode === "grid" ? "list" : "grid"} view
+													{viewMode === "grid"
+														? t(
+																"attachments.switchToList",
+																"Switch to list view",
+															)
+														: t(
+																"attachments.switchToGrid",
+																"Switch to grid view",
+															)}
 												</span>
 											</Button>
 										</TooltipTrigger>
 										<TooltipContent>
-											{t("switchTo", "Switch to")}{" "}
-											{viewMode === "grid" ? "list" : "grid"} view
+											{viewMode === "grid"
+												? t("attachments.switchToList", "Switch to list view")
+												: t("attachments.switchToGrid", "Switch to grid view")}
 										</TooltipContent>
 									</Tooltip>
 
@@ -597,7 +604,7 @@ export function FileDialog({
 												{t("filterByType", "Filter by Type")}
 											</DropdownMenuLabel>
 											<DropdownMenuSeparator />
-											{FILTER_OPTIONS.map(({ key, label }) => (
+											{filterOptions.map(({ key, label }) => (
 												<DropdownMenuItem
 													key={key}
 													onClick={() => setFilterType(key)}

@@ -293,8 +293,9 @@ pub enum QueryShape {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Operation {
-    /// Rows of one read-only statement. With `reuse_if_unchanged`, the service first compares
-    /// those `schema.table` versions and answers `unchanged` without running when all match.
+    /// Rows of one read-only statement. With `reuse_if_unchanged`, the service plans the statement
+    /// and answers `unchanged` without running it when it reads exactly those `schema.table`
+    /// versions, no external table, and no function such as `now()` that differs per run.
     Sql {
         sql: String,
         #[serde(default)]

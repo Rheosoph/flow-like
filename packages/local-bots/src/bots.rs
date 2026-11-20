@@ -572,7 +572,7 @@ fn store_secret(
 
 /// Why no key seals a new secret. While secrets are stored, a missing key is never replaced:
 /// a second key would leave them sealed under the lost one for good.
-fn sealing_refused(error: KeyError, stored: i64) -> Error {
+pub(crate) fn sealing_refused(error: KeyError, stored: i64) -> Error {
     let message = match error {
         KeyError::Missing(reason) if stored > 0 => format!(
             "{reason}, so the secrets saved before ({stored} on this device) can't be opened; delete the old secrets first"
@@ -930,7 +930,7 @@ impl LocalBotStore {
             .transpose()?;
         let stored: i64 = self.read(|db| {
             require_bot(db, bot_id)?;
-            Ok(db.query_row("SELECT COUNT(*) FROM bot_secrets", [], |row| row.get(0))?)
+            crate::connectors::sealed_values(db)
         })?;
         let ciphertext = {
             let key = self

@@ -226,7 +226,7 @@ function SourceNotices({
 			<p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
 				{t(
 					"calendar.noSources",
-					"No calendar connected. Add a Google or Microsoft account under Connectors in {{name}}'s settings.",
+					"No calendar connected. Add a Google or Microsoft account, or a CalDAV calendar such as iCloud or Nextcloud, under Connectors in {{name}}'s settings.",
 					{ name },
 				)}
 				{onSettings && (

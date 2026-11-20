@@ -275,6 +275,7 @@ mod tests {
         async fn resolver(
             &self,
             _source: &ExternalSource,
+            _deadline: Option<std::time::Instant>,
         ) -> Result<Arc<dyn ExternalTableResolver>, WireError> {
             Ok(Arc::new(Fixture))
         }

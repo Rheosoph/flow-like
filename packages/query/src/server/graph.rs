@@ -77,21 +77,19 @@ pub(super) async fn execute(
     started: Instant,
 ) -> Result<(), WireError> {
     let (connection, reader) = workbench_source(opened)?;
-    let mut answer = tokio::time::timeout(
-        budget.timeout,
-        read(connection, reader, operation, budget.rows),
-    )
-    .await
-    .map_err(|_| {
-        WireError::new(
-            ErrorCode::Timeout,
-            format!(
-                "The graph read timed out after {} ms",
-                budget.timeout.as_millis()
-            ),
-        )
-    })?
-    .map_err(failed)?;
+    let mut answer =
+        tokio::time::timeout(budget.timeout, read(connection, reader, operation, budget))
+            .await
+            .map_err(|_| {
+                WireError::new(
+                    ErrorCode::Timeout,
+                    format!(
+                        "The graph read timed out after {} ms",
+                        budget.timeout.as_millis()
+                    ),
+                )
+            })?
+            .map_err(failed)?;
     answer.note(&warnings);
     let trailer = Trailer {
         row_count: answer.row_count(),
@@ -103,12 +101,18 @@ pub(super) async fn execute(
     send_json(sink, &answer, trailer).await
 }
 
+/// A store whose Cypher and SQL run under the request's memory budget and spill directory.
 async fn store(
     connection: &Connection,
     reader: &ColumnReader,
     overlay: Box<GraphOverlayDef>,
+    budget: &ExecutionBudget,
 ) -> flow_like_types::Result<LanceGraphStore> {
-    LanceGraphStore::new_for(connection.clone(), *overlay, None, reader.clone()).await
+    Ok(
+        LanceGraphStore::new_for(connection.clone(), *overlay, None, reader.clone())
+            .await?
+            .with_budget(budget.clone()),
+    )
 }
 
 /// Runs one read with the same storage calls the API made in-process, every result-size limit
@@ -117,8 +121,9 @@ async fn read(
     connection: &Connection,
     reader: &ColumnReader,
     operation: GraphOperation,
-    rows: usize,
+    budget: &ExecutionBudget,
 ) -> flow_like_types::Result<GraphAnswer> {
+    let rows = budget.rows;
     let cap = |limit: usize| Some(limit.min(rows));
     Ok(match operation {
         GraphOperation::Cypher {
@@ -127,7 +132,7 @@ async fn read(
             params,
             limit,
         } => GraphAnswer::Rows(
-            store(connection, reader, overlay)
+            store(connection, reader, overlay, budget)
                 .await?
                 .cypher_with_metadata(&query, params, cap(limit))
                 .await?,
@@ -138,7 +143,7 @@ async fn read(
             params,
             limit,
         } => GraphAnswer::Rows(
-            store(connection, reader, overlay)
+            store(connection, reader, overlay, budget)
                 .await?
                 .sql_with_metadata(&query, params, cap(limit))
                 .await?,
@@ -151,7 +156,7 @@ async fn read(
             limit,
             edge_labels,
         } => GraphAnswer::Subgraph(
-            store(connection, reader, overlay)
+            store(connection, reader, overlay, budget)
                 .await?
                 .neighbors(
                     &object.label,
@@ -168,7 +173,7 @@ async fn read(
             object,
             limit,
         } => GraphAnswer::Subgraph(
-            store(connection, reader, overlay)
+            store(connection, reader, overlay, budget)
                 .await?
                 .overlay_children(&object.label, object.id, cap(limit))
                 .await?,
@@ -179,7 +184,7 @@ async fn read(
             depth,
             limit,
         } => GraphAnswer::Subgraph(
-            store(connection, reader, overlay)
+            store(connection, reader, overlay, budget)
                 .await?
                 .subgraph(
                     seeds.into_iter().map(ObjectRef::into_pair).collect(),
@@ -195,7 +200,7 @@ async fn read(
             max_depth,
             limit,
         } => GraphAnswer::Paths(
-            store(connection, reader, overlay)
+            store(connection, reader, overlay, budget)
                 .await?
                 .shortest_paths(from.into_pair(), to.into_pair(), max_depth, cap(limit))
                 .await?,
@@ -204,7 +209,7 @@ async fn read(
             overlay,
             edge_limit,
         } => GraphAnswer::Analytics(
-            store(connection, reader, overlay)
+            store(connection, reader, overlay, budget)
                 .await?
                 .analytics(edge_limit)
                 .await?,
@@ -214,7 +219,7 @@ async fn read(
             query,
             limit,
         } => GraphAnswer::Nodes(
-            store(connection, reader, overlay)
+            store(connection, reader, overlay, budget)
                 .await?
                 .search_nodes(&query, cap(limit))
                 .await?,
@@ -223,9 +228,12 @@ async fn read(
             let overlay = restrict_overlay(connection, *overlay, reader).await?;
             GraphAnswer::Sample(sample_overlay(connection, &overlay, &label, n.min(rows)).await?)
         }
-        GraphOperation::Schema { overlay } => {
-            GraphAnswer::Schema(store(connection, reader, overlay).await?.schema().await?)
-        }
+        GraphOperation::Schema { overlay } => GraphAnswer::Schema(
+            store(connection, reader, overlay, budget)
+                .await?
+                .schema()
+                .await?,
+        ),
     })
 }
 

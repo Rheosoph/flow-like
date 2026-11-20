@@ -1,6 +1,8 @@
 //! The connected calendars of a bot: the primary calendar of each Google and Microsoft OAuth
-//! connector, read and written through a [`Transport`] with the host allowlist, call budget,
-//! audit and credential handling of `connector_request`.
+//! connector and the chosen calendar of each CalDAV connector, read and written through a
+//! [`Transport`] with the host allowlist, call budget, audit and credential handling of
+//! `connector_request`, or through the host's [`super::CalendarJobs`] where it runs them
+//! elsewhere.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc};
@@ -9,11 +11,17 @@ use flow_like_types::bot_calendar::{
     CalendarEntry, CalendarEntrySource, CalendarSource, ExternalEventRef, MAX_EVENT_DAYS,
     MAX_EVENT_LINK_CHARS, MAX_EVENT_LOCATION_CHARS, TaskEvent, WakeSubject,
 };
-use flow_like_types::bot_connector::{CallPolicy, ConnectorKind};
+use flow_like_types::bot_connector::{CALDAV_PROVIDER, CallPolicy, ConnectorKind};
 use flow_like_types::bot_task::MAX_TITLE_CHARS;
 use flow_like_types::reqwest::Url;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use super::caldav::{
+    DavAccount, DavCalendar, DavClient, DavRequest, DavResponse, DavTransport, HttpDavTransport,
+    Scope,
+};
+use super::jobs::Delegate;
 use super::{google, microsoft};
 use crate::env::Environment;
 use crate::error::{ToolError, ToolResult, code};
@@ -33,6 +41,7 @@ const UNTITLED: &str = "(no title)";
 pub enum Provider {
     Google,
     Microsoft,
+    Caldav,
 }
 
 impl Provider {
@@ -40,6 +49,7 @@ impl Provider {
         match id.trim().to_ascii_lowercase().as_str() {
             "google" => Some(Self::Google),
             "microsoft" => Some(Self::Microsoft),
+            CALDAV_PROVIDER => Some(Self::Caldav),
             _ => None,
         }
     }
@@ -48,11 +58,30 @@ impl Provider {
         match self {
             Self::Google => "google",
             Self::Microsoft => "microsoft",
+            Self::Caldav => CALDAV_PROVIDER,
         }
     }
 }
 
-/// One connected calendar: a Google or Microsoft account connector whose owner lets the bot read.
+/// The providers reached through a JSON REST API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rest {
+    Google,
+    Microsoft,
+}
+
+impl Rest {
+    fn of(provider: Provider) -> Option<Self> {
+        match provider {
+            Provider::Google => Some(Self::Google),
+            Provider::Microsoft => Some(Self::Microsoft),
+            Provider::Caldav => None,
+        }
+    }
+}
+
+/// One connected calendar: a Google or Microsoft account connector, or a CalDAV connector with a
+/// chosen calendar, whose owner lets the bot read.
 #[derive(Debug, Clone)]
 pub struct Calendar {
     pub entry: ConnectorEntry,
@@ -68,6 +97,15 @@ impl Calendar {
         &self.entry.rule.label
     }
 
+    /// The provider's id of the calendar: [`PRIMARY`] for an account, the collection URL for
+    /// CalDAV.
+    pub fn calendar_id(&self) -> &str {
+        match (self.provider, &self.entry.calendar) {
+            (Provider::Caldav, Some(calendar)) => &calendar.url,
+            _ => PRIMARY,
+        }
+    }
+
     pub fn source(&self, error: Option<String>) -> CalendarSource {
         CalendarSource {
             connector_id: self.id().to_string(),
@@ -81,7 +119,7 @@ impl Calendar {
         ExternalEventRef {
             connector_id: self.id().to_string(),
             provider: self.provider.id().to_string(),
-            calendar_id: PRIMARY.to_string(),
+            calendar_id: self.calendar_id().to_string(),
             event_id: event_id.to_string(),
         }
     }
@@ -92,16 +130,20 @@ impl Calendar {
     }
 }
 
-/// The calendars of the bot's connectors: OAuth accounts of Google or Microsoft whose reads the
-/// owner did not switch off.
+/// The calendars of the bot's connectors whose reads the owner did not switch off: OAuth accounts
+/// of Google or Microsoft, and CalDAV connectors with a chosen calendar.
 pub async fn calendars(source: &dyn ConnectorSource) -> flow_like_types::Result<Vec<Calendar>> {
     Ok(source
         .entries()
         .await?
         .into_iter()
-        .filter(|entry| entry.kind == ConnectorKind::Oauth)
         .filter_map(|entry| {
-            let provider = Provider::parse(entry.provider_id.as_deref()?)?;
+            let provider = match entry.kind {
+                ConnectorKind::Oauth => Provider::parse(entry.provider_id.as_deref()?)
+                    .filter(|provider| *provider != Provider::Caldav)?,
+                ConnectorKind::Caldav if entry.calendar.is_some() => Provider::Caldav,
+                _ => return None,
+            };
             Some(Calendar { entry, provider })
         })
         .filter(|calendar| calendar.allows("GET"))
@@ -133,7 +175,7 @@ pub fn find<'a>(calendars: &'a [Calendar], wanted: &str) -> ToolResult<&'a Calen
 }
 
 /// One event of a connected calendar, as both providers describe it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExternalEvent {
     pub event_id: String,
     pub title: String,
@@ -249,7 +291,7 @@ impl ExternalEvent {
 }
 
 /// What a write sends to a provider; a `None` field stays as it is.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventDraft {
     pub title: Option<String>,
     /// Set together with `ends_at` and `all_day` whenever the time changes.
@@ -259,7 +301,31 @@ pub struct EventDraft {
     pub location: Option<String>,
     pub notes: Option<String>,
     /// The zone the event's times are meant in: whole days are dates there.
+    #[serde(default, with = "zone_name")]
     pub tz: Option<Tz>,
+}
+
+/// A zone as its IANA name.
+mod zone_name {
+    use chrono_tz::Tz;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(zone: &Option<Tz>, serializer: S) -> Result<S::Ok, S::Error> {
+        match zone {
+            Some(zone) => serializer.serialize_some(zone.name()),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Tz>, D::Error> {
+        Option::<String>::deserialize(deserializer)?
+            .map(|name| {
+                name.parse::<Tz>().map_err(|_| {
+                    serde::de::Error::custom(format!("'{name}' is not an IANA time zone"))
+                })
+            })
+            .transpose()
+    }
 }
 
 /// Where the next page of a listing is.
@@ -281,7 +347,7 @@ pub struct Page {
 }
 
 /// The events of one calendar over a span.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Listed {
     pub events: Vec<ExternalEvent>,
     /// Every page was read; false when the page cap stopped the listing.
@@ -348,9 +414,32 @@ pub trait Transport: Send + Sync {
         credential: &Credential,
         body: Option<Value>,
     ) -> Result<RestResponse, String>;
+
+    /// Where CalDAV requests go; a transport without one reaches no CalDAV calendar.
+    fn dav(&self) -> &dyn DavTransport {
+        &NO_DAV
+    }
 }
 
-/// HTTPS with the bounds and egress checks of `connector_request`.
+struct NoDav;
+
+static NO_DAV: NoDav = NoDav;
+
+#[async_trait]
+impl DavTransport for NoDav {
+    async fn send(
+        &self,
+        request: &DavRequest,
+        _credential: &Credential,
+    ) -> Result<DavResponse, String> {
+        Err(format!(
+            "This host cannot reach CalDAV calendars ({})",
+            request.url.host_str().unwrap_or_default()
+        ))
+    }
+}
+
+/// HTTPS with the bounds and egress checks of `connector_request`; CalDAV with the same egress.
 pub struct HttpTransport(pub Environment);
 
 #[async_trait]
@@ -364,6 +453,108 @@ impl Transport for HttpTransport {
     ) -> Result<RestResponse, String> {
         send(self.0, method, url, credential, body).await
     }
+
+    fn dav(&self) -> &dyn DavTransport {
+        self
+    }
+}
+
+#[async_trait]
+impl DavTransport for HttpTransport {
+    async fn send(
+        &self,
+        request: &DavRequest,
+        credential: &Credential,
+    ) -> Result<DavResponse, String> {
+        HttpDavTransport(self.0).send(request, credential).await
+    }
+}
+
+/// The CalDAV requests of one calendar, each audited like a REST call.
+struct Audited<'a> {
+    inner: &'a dyn DavTransport,
+    source: &'a dyn ConnectorSource,
+    calendar: &'a Calendar,
+}
+
+#[async_trait]
+impl DavTransport for Audited<'_> {
+    async fn send(
+        &self,
+        request: &DavRequest,
+        credential: &Credential,
+    ) -> Result<DavResponse, String> {
+        let sent = self.inner.send(request, credential).await;
+        self.source.audit(&CallAudit {
+            connector_id: self.calendar.id().to_string(),
+            label: self.calendar.label().to_string(),
+            kind: ConnectorKind::Caldav,
+            operation: format!(
+                "{} {}",
+                request.method.name(),
+                request.url.host_str().unwrap_or_default()
+            ),
+            effect: if request.method.reads() {
+                "read"
+            } else {
+                "write"
+            },
+            ok: sent
+                .as_ref()
+                .is_ok_and(|response| (200..300).contains(&response.status)),
+        });
+        sent
+    }
+}
+
+/// What one CalDAV operation needs: the account, its chosen calendar and the sign-in.
+struct DavCall<'a> {
+    account: DavAccount,
+    target: DavCalendar,
+    credential: Credential,
+    transport: Audited<'a>,
+}
+
+impl DavCall<'_> {
+    fn client(&self) -> DavClient<'_> {
+        DavClient::new(
+            &self.account,
+            &self.credential,
+            &self.transport,
+            chrono_tz::UTC,
+        )
+    }
+}
+
+fn dav_target(calendar: &Calendar) -> ToolResult<(DavAccount, DavCalendar)> {
+    let label = calendar.label();
+    let unusable = |why: String| {
+        ToolError::new(
+            code::FAILED,
+            format!("'{label}' cannot be used: {why}; ask your owner to check it in its settings"),
+        )
+    };
+    let chosen = calendar
+        .entry
+        .calendar
+        .as_ref()
+        .ok_or_else(|| unusable("no calendar is chosen".to_string()))?;
+    let address = calendar.entry.url.as_deref().unwrap_or(&chosen.url);
+    let account = DavAccount::new(label, address, &calendar.entry.api_hosts).map_err(unusable)?;
+    let url = Url::parse(&chosen.url)
+        .map_err(|error| unusable(format!("its calendar URL is invalid ({error})")))?;
+    Ok((
+        account,
+        DavCalendar {
+            url,
+            name: chosen.name.clone(),
+            color: chosen.color.clone(),
+            ctag: None,
+            sync_token: None,
+            writable: chosen.writable,
+            zone: chosen.zone.as_deref().and_then(|zone| zone.parse().ok()),
+        },
+    ))
 }
 
 fn provider_message(text: &str) -> String {
@@ -379,44 +570,36 @@ fn provider_message(text: &str) -> String {
     clamp(line.unwrap_or_default(), ERROR_TEXT_CHARS)
 }
 
-/// Calls to connected calendars for one turn or one host pass.
-pub struct Client<'a> {
+/// The sign-in of `calendar`, resolved now by the host.
+pub(crate) async fn credential_for(
+    source: &dyn ConnectorSource,
+    calendar: &Calendar,
+) -> ToolResult<Credential> {
+    let credential = source.credential(calendar.id()).await.map_err(|error| {
+        ToolError::new(
+            code::FAILED,
+            format!("Signing in to '{}' failed: {error}", calendar.label()),
+        )
+    })?;
+    if credential.header().is_none() {
+        return Err(ToolError::new(
+            code::FAILED,
+            format!(
+                "'{}' has no sign-in; the owner must reconnect it",
+                calendar.label()
+            ),
+        ));
+    }
+    Ok(credential)
+}
+
+/// Provider calls made from this process.
+struct Direct<'a> {
     source: &'a dyn ConnectorSource,
     transport: &'a dyn Transport,
 }
 
-impl<'a> Client<'a> {
-    pub fn new(source: &'a dyn ConnectorSource, transport: &'a dyn Transport) -> Self {
-        Self { source, transport }
-    }
-
-    pub fn source(&self) -> &'a dyn ConnectorSource {
-        self.source
-    }
-
-    async fn credential(&self, calendar: &Calendar) -> ToolResult<Credential> {
-        let credential = self
-            .source
-            .credential(calendar.id())
-            .await
-            .map_err(|error| {
-                ToolError::new(
-                    code::FAILED,
-                    format!("Signing in to '{}' failed: {error}", calendar.label()),
-                )
-            })?;
-        if credential.header().is_none() {
-            return Err(ToolError::new(
-                code::FAILED,
-                format!(
-                    "'{}' has no sign-in; the owner must reconnect it",
-                    calendar.label()
-                ),
-            ));
-        }
-        Ok(credential)
-    }
-
+impl Direct<'_> {
     async fn request(
         &self,
         calendar: &Calendar,
@@ -489,27 +672,45 @@ impl<'a> Client<'a> {
         }
     }
 
+    async fn dav_call<'b>(&'b self, calendar: &'b Calendar) -> ToolResult<DavCall<'b>> {
+        let credential = credential_for(self.source, calendar).await?;
+        let (account, target) = dav_target(calendar)?;
+        Ok(DavCall {
+            account,
+            target,
+            credential,
+            transport: Audited {
+                inner: self.transport.dav(),
+                source: self.source,
+                calendar,
+            },
+        })
+    }
+
     /// The events of `calendar` overlapping `[from, to)`, earliest first.
-    pub async fn list(
+    async fn list(
         &self,
         calendar: &Calendar,
         from: DateTime<Utc>,
         to: DateTime<Utc>,
     ) -> ToolResult<Listed> {
-        take_call(self.source)?;
-        let credential = self.credential(calendar).await?;
-        let (mut url, mut query) = match calendar.provider {
-            Provider::Google => (google::events_url(PRIMARY), google::list_query(from, to)),
-            Provider::Microsoft => (microsoft::view_url(), microsoft::list_query(from, to)),
+        let Some(rest) = Rest::of(calendar.provider) else {
+            let call = self.dav_call(calendar).await?;
+            return call.client().list(&call.target, from, to).await;
+        };
+        let credential = credential_for(self.source, calendar).await?;
+        let (mut url, mut query) = match rest {
+            Rest::Google => (google::events_url(PRIMARY), google::list_query(from, to)),
+            Rest::Microsoft => (microsoft::view_url(), microsoft::list_query(from, to)),
         };
         let mut listed = Listed::default();
         for _ in 0..MAX_PAGES {
             let body = self
                 .request(calendar, &credential, "GET", &url, &query, None)
                 .await?;
-            let page = match calendar.provider {
-                Provider::Google => google::parse_page(&body),
-                Provider::Microsoft => microsoft::parse_page(&body),
+            let page = match rest {
+                Rest::Google => google::parse_page(&body),
+                Rest::Microsoft => microsoft::parse_page(&body),
             };
             listed.events.extend(page.events);
             listed.unreadable += page.unreadable;
@@ -531,10 +732,10 @@ impl<'a> Client<'a> {
         Ok(listed)
     }
 
-    fn parse_one(calendar: &Calendar, body: &Value) -> ToolResult<ExternalEvent> {
-        let parsed = match calendar.provider {
-            Provider::Google => google::parse_event(body, None),
-            Provider::Microsoft => microsoft::parse_event(body),
+    fn parse_one(calendar: &Calendar, rest: Rest, body: &Value) -> ToolResult<ExternalEvent> {
+        let parsed = match rest {
+            Rest::Google => google::parse_event(body, None),
+            Rest::Microsoft => microsoft::parse_event(body),
         };
         match parsed {
             Ok(Some(event)) => Ok(event),
@@ -552,42 +753,44 @@ impl<'a> Client<'a> {
         }
     }
 
-    fn event_url(calendar: &Calendar, event_id: &str) -> String {
-        match calendar.provider {
-            Provider::Google => google::event_url(PRIMARY, event_id),
-            Provider::Microsoft => microsoft::event_url(event_id),
+    fn event_url(rest: Rest, event_id: &str) -> String {
+        match rest {
+            Rest::Google => google::event_url(PRIMARY, event_id),
+            Rest::Microsoft => microsoft::event_url(event_id),
         }
     }
 
     /// One event of `calendar` as it is now.
-    pub async fn get(&self, calendar: &Calendar, event_id: &str) -> ToolResult<ExternalEvent> {
-        take_call(self.source)?;
-        let credential = self.credential(calendar).await?;
-        let url = Self::event_url(calendar, event_id);
+    async fn get(&self, calendar: &Calendar, event_id: &str) -> ToolResult<ExternalEvent> {
+        let Some(rest) = Rest::of(calendar.provider) else {
+            let call = self.dav_call(calendar).await?;
+            return call.client().get(&call.target, event_id).await;
+        };
+        let credential = credential_for(self.source, calendar).await?;
+        let url = Self::event_url(rest, event_id);
         let body = self
             .request(calendar, &credential, "GET", &url, &Map::new(), None)
             .await?;
-        Self::parse_one(calendar, &body)
+        Self::parse_one(calendar, rest, &body)
     }
 
-    fn body(calendar: &Calendar, draft: &EventDraft) -> Value {
-        match calendar.provider {
-            Provider::Google => google::body(draft),
-            Provider::Microsoft => microsoft::body(draft),
+    fn body(rest: Rest, draft: &EventDraft) -> Value {
+        match rest {
+            Rest::Google => google::body(draft),
+            Rest::Microsoft => microsoft::body(draft),
         }
     }
 
     /// Adds an event to `calendar`; `draft` carries a title and the times.
-    pub async fn create(
-        &self,
-        calendar: &Calendar,
-        draft: &EventDraft,
-    ) -> ToolResult<ExternalEvent> {
-        take_call(self.source)?;
-        let credential = self.credential(calendar).await?;
-        let url = match calendar.provider {
-            Provider::Google => google::events_url(PRIMARY),
-            Provider::Microsoft => microsoft::events_url(),
+    async fn create(&self, calendar: &Calendar, draft: &EventDraft) -> ToolResult<ExternalEvent> {
+        let Some(rest) = Rest::of(calendar.provider) else {
+            let call = self.dav_call(calendar).await?;
+            return call.client().create(&call.target, draft).await;
+        };
+        let credential = credential_for(self.source, calendar).await?;
+        let url = match rest {
+            Rest::Google => google::events_url(PRIMARY),
+            Rest::Microsoft => microsoft::events_url(),
         };
         let body = self
             .request(
@@ -596,22 +799,29 @@ impl<'a> Client<'a> {
                 "POST",
                 &url,
                 &Map::new(),
-                Some(Self::body(calendar, draft)),
+                Some(Self::body(rest, draft)),
             )
             .await?;
-        Self::parse_one(calendar, &body)
+        Self::parse_one(calendar, rest, &body)
     }
 
-    /// Changes what `draft` sets on one event of `calendar`.
-    pub async fn patch(
+    /// Changes what `draft` sets on one event of `calendar`. A CalDAV occurrence of a repeating
+    /// event is refused: only whole CalDAV series change.
+    async fn patch(
         &self,
         calendar: &Calendar,
         event_id: &str,
         draft: &EventDraft,
     ) -> ToolResult<ExternalEvent> {
-        take_call(self.source)?;
-        let credential = self.credential(calendar).await?;
-        let url = Self::event_url(calendar, event_id);
+        let Some(rest) = Rest::of(calendar.provider) else {
+            let call = self.dav_call(calendar).await?;
+            return call
+                .client()
+                .update(&call.target, event_id, draft, Scope::Event)
+                .await;
+        };
+        let credential = credential_for(self.source, calendar).await?;
+        let url = Self::event_url(rest, event_id);
         let body = self
             .request(
                 calendar,
@@ -619,18 +829,24 @@ impl<'a> Client<'a> {
                 "PATCH",
                 &url,
                 &Map::new(),
-                Some(Self::body(calendar, draft)),
+                Some(Self::body(rest, draft)),
             )
             .await?;
-        Self::parse_one(calendar, &body)
+        Self::parse_one(calendar, rest, &body)
     }
 
     /// Deletes one event of `calendar`; one the provider reports as already deleted (HTTP 410)
     /// counts as deleted.
-    pub async fn delete(&self, calendar: &Calendar, event_id: &str) -> ToolResult<()> {
-        take_call(self.source)?;
-        let credential = self.credential(calendar).await?;
-        let url = Self::event_url(calendar, event_id);
+    async fn delete(&self, calendar: &Calendar, event_id: &str) -> ToolResult<()> {
+        let Some(rest) = Rest::of(calendar.provider) else {
+            let call = self.dav_call(calendar).await?;
+            return call
+                .client()
+                .delete(&call.target, event_id, Scope::Event)
+                .await;
+        };
+        let credential = credential_for(self.source, calendar).await?;
+        let url = Self::event_url(rest, event_id);
         match self
             .request(calendar, &credential, "DELETE", &url, &Map::new(), None)
             .await
@@ -647,6 +863,124 @@ impl<'a> Client<'a> {
                 Ok(())
             }
             Err(error) => Err(error),
+        }
+    }
+}
+
+enum Route<'a> {
+    Direct(Direct<'a>),
+    Jobs(Delegate<'a>),
+}
+
+/// Calls to connected calendars for one turn or one host pass: made from this process through
+/// the [`Transport`], or handed to the host's [`super::CalendarJobs`] when it answers
+/// [`ConnectorSource::calendar_jobs`] (the server: its executor). Each listing and each write
+/// takes one unit of the source's call budget.
+pub struct Client<'a> {
+    source: &'a dyn ConnectorSource,
+    route: Route<'a>,
+}
+
+impl<'a> Client<'a> {
+    pub fn new(source: &'a dyn ConnectorSource, transport: &'a dyn Transport) -> Self {
+        let route = match source.calendar_jobs() {
+            Some(jobs) => Route::Jobs(Delegate::new(source, jobs)),
+            None => Route::Direct(Direct { source, transport }),
+        };
+        Self { source, route }
+    }
+
+    pub fn source(&self) -> &'a dyn ConnectorSource {
+        self.source
+    }
+
+    /// Whether the calls leave through the host's [`super::CalendarJobs`].
+    #[cfg(test)]
+    pub fn delegates(&self) -> bool {
+        matches!(self.route, Route::Jobs(_))
+    }
+
+    /// The events of `calendar` overlapping `[from, to)`, earliest first.
+    #[cfg(test)]
+    pub async fn list(
+        &self,
+        calendar: &Calendar,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> ToolResult<Listed> {
+        self.list_all(std::slice::from_ref(calendar), from, to)
+            .await
+            .pop()
+            .unwrap_or_else(|| Ok(Listed::default()))
+    }
+
+    /// The events of each of `calendars` overlapping `[from, to)`, one result per calendar in
+    /// their order; a host that runs the calls elsewhere reads them all in one job.
+    pub async fn list_all(
+        &self,
+        calendars: &[Calendar],
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Vec<ToolResult<Listed>> {
+        match &self.route {
+            Route::Direct(direct) => {
+                let mut results = Vec::with_capacity(calendars.len());
+                for calendar in calendars {
+                    results.push(match take_call(self.source) {
+                        Ok(()) => direct.list(calendar, from, to).await,
+                        Err(error) => Err(error),
+                    });
+                }
+                results
+            }
+            Route::Jobs(jobs) => jobs.list(calendars, from, to).await,
+        }
+    }
+
+    /// One event of `calendar` as it is now.
+    pub async fn get(&self, calendar: &Calendar, event_id: &str) -> ToolResult<ExternalEvent> {
+        take_call(self.source)?;
+        match &self.route {
+            Route::Direct(direct) => direct.get(calendar, event_id).await,
+            Route::Jobs(jobs) => jobs.get(calendar, event_id).await,
+        }
+    }
+
+    /// Adds an event to `calendar`; `draft` carries a title and the times.
+    pub async fn create(
+        &self,
+        calendar: &Calendar,
+        draft: &EventDraft,
+    ) -> ToolResult<ExternalEvent> {
+        take_call(self.source)?;
+        match &self.route {
+            Route::Direct(direct) => direct.create(calendar, draft).await,
+            Route::Jobs(jobs) => jobs.create(calendar, draft).await,
+        }
+    }
+
+    /// Changes what `draft` sets on one event of `calendar`. A CalDAV occurrence of a repeating
+    /// event is refused: only whole CalDAV series change.
+    pub async fn patch(
+        &self,
+        calendar: &Calendar,
+        event_id: &str,
+        draft: &EventDraft,
+    ) -> ToolResult<ExternalEvent> {
+        take_call(self.source)?;
+        match &self.route {
+            Route::Direct(direct) => direct.patch(calendar, event_id, draft).await,
+            Route::Jobs(jobs) => jobs.patch(calendar, event_id, draft).await,
+        }
+    }
+
+    /// Deletes one event of `calendar`; one the provider reports as already deleted (HTTP 410)
+    /// counts as deleted.
+    pub async fn delete(&self, calendar: &Calendar, event_id: &str) -> ToolResult<()> {
+        take_call(self.source)?;
+        match &self.route {
+            Route::Direct(direct) => direct.delete(calendar, event_id).await,
+            Route::Jobs(jobs) => jobs.delete(calendar, event_id).await,
         }
     }
 }

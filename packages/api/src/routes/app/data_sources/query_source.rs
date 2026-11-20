@@ -9,6 +9,7 @@ use crate::{
 };
 use flow_like_query::{ExternalSource, SecretMaterial};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, sea_query::Expr};
+use std::collections::BTreeSet;
 
 const MAX_CHECK_STATUS_CHARS: usize = 1000;
 
@@ -38,6 +39,16 @@ pub(super) fn driver_of(model: &app_data_source::Model) -> Result<DataSourceDriv
     })
 }
 
+/// Answers 404 unless `source_id` is one of `app_id`'s external databases. Cheap enough for every
+/// request, so a deleted source stops answering even from cached results.
+pub async fn ensure_source(
+    state: &AppState,
+    app_id: &str,
+    source_id: &str,
+) -> Result<(), ApiError> {
+    load_source(&state.db, app_id, source_id).await.map(|_| ())
+}
+
 /// The source as the query service connects to it, with its credentials opened. The caller has
 /// already authorized reading `app_id`'s data. The result holds plaintext credentials (wiped on
 /// drop): it goes into a request body and nowhere else.
@@ -49,24 +60,59 @@ pub async fn external_source_for_query(
     opened_source(&state.db, &sealers(state), app_id, source_id).await
 }
 
+/// The app's external databases whose aliases are among `aliases`, opened like
+/// [`external_source_for_query`], each with its alias.
+pub async fn external_sources_named(
+    state: &AppState,
+    app_id: &str,
+    aliases: &BTreeSet<String>,
+) -> Result<Vec<(String, ExternalSource)>, ApiError> {
+    if aliases.is_empty() {
+        return Ok(Vec::new());
+    }
+    let models = app_data_source::Entity::find()
+        .filter(app_data_source::Column::AppId.eq(app_id))
+        .filter(app_data_source::Column::Alias.is_in(aliases.iter().cloned()))
+        .all(&state.db)
+        .await?;
+    let sealers = sealers(state);
+    let mut opened = Vec::with_capacity(models.len());
+    for model in models {
+        let alias = model.alias.clone();
+        opened.push((alias, open_model(&sealers, model).await?));
+    }
+    Ok(opened)
+}
+
 pub(super) async fn opened_source(
     db: &impl ConnectionTrait,
     sealers: &Sealers,
     app_id: &str,
     source_id: &str,
 ) -> Result<ExternalSource, ApiError> {
-    let model = load_source(db, app_id, source_id).await?;
+    open_model(sealers, load_source(db, app_id, source_id).await?).await
+}
+
+async fn open_model(
+    sealers: &Sealers,
+    model: app_data_source::Model,
+) -> Result<ExternalSource, ApiError> {
     let driver = driver_of(&model)?;
     let config = model.config.as_object().cloned().unwrap_or_default();
     let connection = validation::connection(driver, &config).map_err(|error| {
         ApiError::internal(format!(
-            "The stored settings of data source '{source_id}' are invalid: {error}"
+            "The stored settings of data source '{}' are invalid: {error}",
+            model.id
         ))
     })?;
+    let scope = SecretScope {
+        app_id: &model.app_id,
+        source_id: &model.id,
+    };
     let secret = match &model.secret {
         Some(stored) => SecretMaterial::Plain {
             fields: sealers
-                .open_fields(SecretScope { app_id, source_id }, stored)
+                .open_fields(scope, stored)
                 .await
                 .map_err(ApiError::internal_error)?,
         },

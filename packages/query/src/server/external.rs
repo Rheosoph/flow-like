@@ -5,7 +5,8 @@
 use crate::protocol::{ErrorCode, ExternalConnection, ExternalSource, SecretMaterial, WireError};
 use async_trait::async_trait;
 use flow_like_catalog_data::data::datafusion::connectors::{
-    ClickhouseSource, ConnectPolicy, ConnectorSource, MysqlSource, PostgresSource,
+    AthenaSource, BigquerySource, ClickhouseSource, ConnectPolicy, ConnectorSource, MysqlSource,
+    PostgresSource,
 };
 use flow_like_catalog_data::data::datafusion::external_database::{
     ExternalDatabase, connect_database,
@@ -14,15 +15,19 @@ use flow_like_runtime::flow::execution::ExecutionEnvironment;
 use flow_like_storage::databases::workbench::ExternalTableResolver;
 use flow_like_storage::datafusion::catalog::TableProvider;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::OnceCell;
 
 /// Turns a source definition into table providers. Swappable so tests and future drivers do
 /// not need a live database.
 #[async_trait]
 pub trait ExternalConnector: Send + Sync {
+    /// `deadline` ends warehouse statements (BigQuery, Athena) that are still running, so they
+    /// fail as timed out and stop billing before the request itself is cut.
     async fn resolver(
         &self,
         source: &ExternalSource,
+        deadline: Option<Instant>,
     ) -> Result<Arc<dyn ExternalTableResolver>, WireError>;
 
     /// The tables a query can address under the source's schema; connecting proves the
@@ -45,6 +50,8 @@ fn listing_unavailable(source: &ExternalSource) -> WireError {
 /// The built-in drivers.
 pub struct DriverConnector {
     policy: ConnectPolicy,
+    /// ClickHouse is reached over plain HTTP, so only hubs that admit private networks reach it.
+    plaintext_allowed: bool,
 }
 
 impl DriverConnector {
@@ -57,25 +64,52 @@ impl DriverConnector {
             } else {
                 ConnectPolicy::public_only(ExecutionEnvironment::Server)
             },
+            plaintext_allowed: allow_private_networks,
         }
     }
 }
 
+/// The ClickHouse connector speaks plain HTTP: its credentials and rows would cross a public
+/// network unencrypted, so hubs limited to public addresses refuse it.
+fn refuse_plaintext(source: &ExternalSource, plaintext_allowed: bool) -> Result<(), WireError> {
+    if plaintext_allowed || !matches!(source.connection, ExternalConnection::Clickhouse { .. }) {
+        return Ok(());
+    }
+    Err(WireError::new(
+        ErrorCode::InvalidRequest,
+        format!(
+            "External source '{}' is a ClickHouse database, which this query service reaches over \
+             plain HTTP. That would send its credentials unencrypted, so only hubs that allow \
+             private networks (QUERY_ALLOW_PRIVATE_NETWORKS) connect to ClickHouse",
+            source.source_id
+        ),
+    ))
+}
+
+#[derive(Default)]
 struct Credentials {
     username: String,
     password: String,
+    service_account_json: String,
+    access_key_id: String,
+    secret_access_key: String,
+    session_token: String,
 }
 
 fn credentials(source: &ExternalSource) -> Result<Credentials, WireError> {
     match &source.secret {
-        SecretMaterial::Plain { fields } => Ok(Credentials {
-            username: fields.get("username").unwrap_or_default().to_string(),
-            password: fields.get("password").unwrap_or_default().to_string(),
-        }),
-        SecretMaterial::None => Ok(Credentials {
-            username: String::new(),
-            password: String::new(),
-        }),
+        SecretMaterial::Plain { fields } => {
+            let field = |name: &str| fields.get(name).unwrap_or_default().to_string();
+            Ok(Credentials {
+                username: field("username"),
+                password: field("password"),
+                service_account_json: field("service_account_json"),
+                access_key_id: field("access_key_id"),
+                secret_access_key: field("secret_access_key"),
+                session_token: field("session_token"),
+            })
+        }
+        SecretMaterial::None => Ok(Credentials::default()),
         SecretMaterial::Sealed { sealed } => Err(WireError::new(
             ErrorCode::Unavailable,
             format!(
@@ -93,23 +127,28 @@ struct DriverTables {
     connection: ExternalConnection,
     credentials: Credentials,
     policy: ConnectPolicy,
+    deadline: Option<Instant>,
     database: OnceCell<Result<ExternalDatabase, String>>,
 }
 
 impl DriverTables {
-    fn new(source: &ExternalSource, policy: ConnectPolicy) -> Result<Self, WireError> {
+    fn new(
+        source: &ExternalSource,
+        policy: ConnectPolicy,
+        deadline: Option<Instant>,
+    ) -> Result<Self, WireError> {
         Ok(Self {
             source_id: source.source_id.clone(),
             connection: source.connection.clone(),
             credentials: credentials(source)?,
             policy,
+            deadline,
             database: OnceCell::new(),
         })
     }
 
-    /// The source as the catalog connectors take it, without a table; `None` for drivers this
-    /// service cannot read yet.
-    fn connector_source(&self) -> Option<ConnectorSource> {
+    /// The source as the catalog connectors take it, without a table.
+    fn connector_source(&self) -> ConnectorSource {
         let username = || self.credentials.username.clone();
         let password = || self.credentials.password.clone();
         match &self.connection {
@@ -119,7 +158,7 @@ impl DriverTables {
                 database,
                 schema,
                 ssl_mode,
-            } => Some(ConnectorSource::Postgres(PostgresSource {
+            } => ConnectorSource::Postgres(PostgresSource {
                 host: host.clone(),
                 port: *port,
                 database: database.clone(),
@@ -129,13 +168,13 @@ impl DriverTables {
                 table: String::new(),
                 ssl_mode: ssl_mode.clone(),
                 readonly: true,
-            })),
+            }),
             ExternalConnection::Mysql {
                 host,
                 port,
                 database,
                 ssl_mode,
-            } => Some(ConnectorSource::Mysql(MysqlSource {
+            } => ConnectorSource::Mysql(MysqlSource {
                 host: host.clone(),
                 port: *port,
                 database: database.clone(),
@@ -144,20 +183,50 @@ impl DriverTables {
                 table: String::new(),
                 ssl_mode: ssl_mode.clone(),
                 readonly: true,
-            })),
+            }),
             ExternalConnection::Clickhouse {
                 host,
                 port,
                 database,
-            } => Some(ConnectorSource::Clickhouse(ClickhouseSource {
+            } => ConnectorSource::Clickhouse(ClickhouseSource {
                 host: host.clone(),
                 port: *port,
                 database: database.clone(),
                 username: username(),
                 password: password(),
                 table: String::new(),
-            })),
-            ExternalConnection::Bigquery { .. } | ExternalConnection::Athena { .. } => None,
+            }),
+            ExternalConnection::Bigquery {
+                project_id,
+                dataset,
+                location,
+            } => ConnectorSource::Bigquery(BigquerySource {
+                project_id: project_id.clone(),
+                dataset: dataset.clone(),
+                location: location.clone(),
+                service_account_json: self.credentials.service_account_json.clone(),
+                table: String::new(),
+                deadline: self.deadline,
+            }),
+            ExternalConnection::Athena {
+                region,
+                database,
+                catalog,
+                workgroup,
+                output_location,
+            } => ConnectorSource::Athena(AthenaSource {
+                region: region.clone(),
+                database: database.clone(),
+                catalog: catalog.clone(),
+                workgroup: workgroup.clone(),
+                output_location: output_location.clone(),
+                access_key_id: self.credentials.access_key_id.clone(),
+                secret_access_key: self.credentials.secret_access_key.clone(),
+                session_token: Some(self.credentials.session_token.clone())
+                    .filter(|token| !token.is_empty()),
+                table: String::new(),
+                deadline: self.deadline,
+            }),
         }
     }
 
@@ -165,12 +234,7 @@ impl DriverTables {
         let opened = self
             .database
             .get_or_init(|| async {
-                let Some(mut source) = self.connector_source() else {
-                    return Err(format!(
-                        "{} sources are not available on this query service yet",
-                        self.connection.driver()
-                    ));
-                };
+                let mut source = self.connector_source();
                 let database = connect_database(&source, self.policy)
                     .await
                     .map_err(|error| format!("{error:#}"));
@@ -190,6 +254,13 @@ fn wipe_password(source: &mut ConnectorSource) {
         ConnectorSource::Postgres(source) => source.password.zeroize(),
         ConnectorSource::Mysql(source) => source.password.zeroize(),
         ConnectorSource::Clickhouse(source) => source.password.zeroize(),
+        ConnectorSource::Bigquery(source) => source.service_account_json.zeroize(),
+        ConnectorSource::Athena(source) => {
+            source.secret_access_key.zeroize();
+            if let Some(token) = source.session_token.as_mut() {
+                token.zeroize();
+            }
+        }
         _ => {}
     }
 }
@@ -206,18 +277,15 @@ impl ExternalConnector for DriverConnector {
     async fn resolver(
         &self,
         source: &ExternalSource,
+        deadline: Option<Instant>,
     ) -> Result<Arc<dyn ExternalTableResolver>, WireError> {
-        Ok(Arc::new(DriverTables::new(source, self.policy)?))
+        refuse_plaintext(source, self.plaintext_allowed)?;
+        Ok(Arc::new(DriverTables::new(source, self.policy, deadline)?))
     }
 
     async fn tables(&self, source: &ExternalSource) -> Result<Vec<String>, WireError> {
-        let tables = DriverTables::new(source, self.policy)?;
-        if matches!(
-            source.connection,
-            ExternalConnection::Bigquery { .. } | ExternalConnection::Athena { .. }
-        ) {
-            return Err(listing_unavailable(source));
-        }
+        refuse_plaintext(source, self.plaintext_allowed)?;
+        let tables = DriverTables::new(source, self.policy, None)?;
         let failed = |error: flow_like_types::Error| {
             WireError::new(ErrorCode::QueryFailed, format!("{error:#}"))
         };
@@ -232,6 +300,9 @@ impl Drop for Credentials {
     fn drop(&mut self) {
         use zeroize::Zeroize;
         self.password.zeroize();
+        self.service_account_json.zeroize();
+        self.secret_access_key.zeroize();
+        self.session_token.zeroize();
     }
 }
 
@@ -285,7 +356,7 @@ mod tests {
         );
         assert!(!error.message.contains(PASSWORD));
 
-        let resolver = connector.resolver(&source).await.unwrap();
+        let resolver = connector.resolver(&source, None).await.unwrap();
         let error = format!("{:#}", resolver.table("orders").await.unwrap_err());
         assert!(error.contains("not a public address"), "{error}");
         let again = format!("{:#}", resolver.table("customers").await.unwrap_err());
@@ -319,6 +390,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn hosted_deployments_refuse_plaintext_clickhouse() {
+        let connector = DriverConnector::new(false);
+        let clickhouse = source(
+            ExternalConnection::Clickhouse {
+                host: "clickhouse.example.com".to_string(),
+                port: 8123,
+                database: "events".to_string(),
+            },
+            plain(),
+        );
+        let error = connector.tables(&clickhouse).await.unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+        assert!(
+            error.message.contains("plain HTTP") && error.message.contains("src_1"),
+            "{}",
+            error.message
+        );
+        assert!(!error.message.contains(PASSWORD));
+        let error = connector.resolver(&clickhouse, None).await.err().unwrap();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+    }
+
+    #[tokio::test]
     async fn sealed_secrets_are_refused_without_opening_them() {
         let connector = DriverConnector::new(false);
         let sealed = source(
@@ -334,12 +428,12 @@ mod tests {
         let error = connector.tables(&sealed).await.unwrap_err();
         assert_eq!(error.code, ErrorCode::Unavailable);
         assert!(error.message.contains("aws-kms"));
-        let error = connector.resolver(&sealed).await.err().unwrap();
+        let error = connector.resolver(&sealed, None).await.err().unwrap();
         assert_eq!(error.code, ErrorCode::Unavailable);
     }
 
     #[tokio::test]
-    async fn drivers_without_a_reader_say_so() {
+    async fn warehouse_sources_need_their_keys_before_connecting() {
         let connector = DriverConnector::new(false);
         let bigquery = source(
             ExternalConnection::Bigquery {
@@ -350,10 +444,25 @@ mod tests {
             SecretMaterial::None,
         );
         let error = connector.tables(&bigquery).await.unwrap_err();
-        assert_eq!(error.code, ErrorCode::Unavailable);
-        assert!(error.message.contains("bigquery"));
-        let resolver = connector.resolver(&bigquery).await.unwrap();
-        let error = format!("{:#}", resolver.table("orders").await.unwrap_err());
-        assert!(error.contains("not available"), "{error}");
+        assert_eq!(error.code, ErrorCode::QueryFailed);
+        assert!(
+            error.message.contains("service_account_json"),
+            "{}",
+            error.message
+        );
+
+        let athena = source(
+            ExternalConnection::Athena {
+                region: "eu-central-1".to_string(),
+                database: "logs".to_string(),
+                catalog: None,
+                workgroup: None,
+                output_location: None,
+            },
+            SecretMaterial::None,
+        );
+        let error = connector.tables(&athena).await.unwrap_err();
+        assert_eq!(error.code, ErrorCode::QueryFailed);
+        assert!(error.message.contains("access_key_id"), "{}", error.message);
     }
 }

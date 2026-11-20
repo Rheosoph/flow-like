@@ -192,6 +192,7 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         calendar::CALENDAR_WAKE_SETTINGS => {
             calendar::calendar_wake_settings(env, parse_args(tool, args)?).await
         }
+        calendar::CALENDAR_JOB => calendar::calendar_job(env, parse_args(tool, args)?).await,
         skills::SKILL_LOAD => skills::skill_load(env, parse_args(tool, args)?).await,
         skills::SKILL_PROPOSE => skills::skill_propose(env, parse_args(tool, args)?).await,
         skills::SKILL_CALL => skills::skill_call(env, parse_args(tool, args)?).await,
@@ -221,10 +222,15 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
 }
 
 /// Runs one tool against the host's environment. Never panics on bad input: every failure is a
-/// [`Status::Error`] outcome, and the result is capped to the environment's inline limit.
+/// [`Status::Error`] outcome, and the result is capped to the environment's inline limit (an
+/// internal calendar job to [`calendar::MAX_REPLY_BYTES`], which it fits itself).
 pub async fn run(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolOutcome {
     let started = Instant::now();
-    let cap = env.limits().inline_cap_bytes;
+    let cap = if tool == calendar::CALENDAR_JOB {
+        calendar::MAX_REPLY_BYTES
+    } else {
+        env.limits().inline_cap_bytes
+    };
     match dispatch(tool, args, env).await {
         Ok(mut output) => {
             output.usage.cpu_ms = started.elapsed().as_millis() as u64;

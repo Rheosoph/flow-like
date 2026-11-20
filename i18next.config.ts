@@ -52,6 +52,8 @@ export default defineConfig({
 			"payments:accountState.*",
 			"payments:orderState.*",
 			"bots:capabilities.*",
+			"bots:appearance.*",
+			"chat:toolActivity.*",
 			"bots:locations.*",
 			"bots:presets.*",
 			"bots:system.*",

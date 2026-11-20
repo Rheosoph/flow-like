@@ -1,6 +1,8 @@
 //! Planning the wake-ups of the owner's connected calendars. Every [`CALENDAR_SYNC_EVERY_SECS`] a
-//! host reads each server bot's Google and Microsoft calendars and keeps one event task per event
-//! that wakes the bot (see `flow_like_bot_tools::calendar::sync_wakes`). A bot is claimed with a
+//! host reads each server bot's Google, Microsoft and CalDAV calendars, in one job on the executor
+//! per bot (`bot_tools::calendar_jobs`), and keeps one event task per event that wakes the bot
+//! (see `flow_like_bot_tools::calendar::sync_wakes`). Without an executor the connected calendars
+//! read as unreadable and their rows stay as they are. A bot is claimed with a
 //! compare-and-set on `calendarSyncedAt`, so several hosts and sweeps plan each bot once per
 //! period. Desktop bots plan their own calendars on the desktop.
 
@@ -16,6 +18,7 @@ use chrono::{DateTime, Duration, FixedOffset, Utc};
 use flow_like_types::{
     bot::{BotCapability, BotLocation},
     bot_calendar::{CALENDAR_PROVIDERS, CALENDAR_SYNC_EVERY_SECS},
+    bot_connector::ConnectorKind,
     tokio,
 };
 use sea_orm::{
@@ -35,13 +38,16 @@ fn calendar_connectors() -> sea_orm::sea_query::SelectStatement {
     bot_connector::Entity::find()
         .select_only()
         .column(bot_connector::Column::BotId)
-        .filter(bot_connector::Column::Kind.eq("OAUTH"))
+        .filter(bot_connector::Column::Kind.is_in([
+            ConnectorKind::Oauth.column(),
+            ConnectorKind::Caldav.column(),
+        ]))
         .filter(providers)
         .into_query()
 }
 
 /// Bots whose connected calendars are due for planning: live, not desktop bots, holding
-/// `calendar`, with a Google or Microsoft connector, planned never or before `stale`.
+/// `calendar`, with a Google, Microsoft or CalDAV connector, planned never or before `stale`.
 pub(crate) async fn due_in<C: ConnectionTrait>(
     db: &C,
     stale: DateTime<FixedOffset>,

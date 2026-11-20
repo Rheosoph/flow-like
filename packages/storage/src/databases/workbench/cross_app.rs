@@ -830,6 +830,63 @@ mod tests {
         Ok(())
     }
 
+    async fn prepared(schemas: &[WorkbenchSchema], sql: &str) -> Result<PreparedQuery> {
+        prepare_cross_app_query(
+            CrossAppSources {
+                lance: schemas,
+                external: &[],
+            },
+            sql,
+            &Value::Null,
+            &ExecutionBudget::from_limits(limits(10)),
+        )
+        .await
+    }
+
+    /// What the query service checks before answering `unchanged` for an expired cache entry.
+    #[tokio::test]
+    async fn a_prepared_statement_answers_like_an_earlier_run_only_while_nothing_moved()
+    -> Result<()> {
+        let (crm, shop) = crm_and_shop().await?;
+        let schemas = [
+            crm.schema("crm", ColumnReader::Unrestricted),
+            shop.schema("shop", ColumnReader::Unrestricted),
+        ];
+        let count = "SELECT COUNT(*) AS n FROM shop.orders";
+        let versions = prepared(&schemas, count).await?.versions.clone();
+        assert_eq!(versions.keys().collect::<Vec<_>>(), vec!["shop.orders"]);
+        assert!(prepared(&schemas, count).await?.answers_like(&versions));
+        assert!(
+            !prepared(&schemas, count)
+                .await?
+                .answers_like(&BTreeMap::new()),
+            "no versions, nothing to compare"
+        );
+
+        let windowed = prepared(
+            &schemas,
+            "SELECT COUNT(*) AS n FROM shop.orders \
+             WHERE CAST(now() AS TIMESTAMP) > CAST('2000-01-01' AS TIMESTAMP)",
+        )
+        .await?;
+        let window_versions = windowed.versions.clone();
+        assert!(
+            !windowed.answers_like(&window_versions),
+            "a statement that reads the clock runs again"
+        );
+        drop(windowed);
+
+        shop.connection
+            .open_table("orders")
+            .execute()
+            .await?
+            .add(vec![orders()?])
+            .execute()
+            .await?;
+        assert!(!prepared(&schemas, count).await?.answers_like(&versions));
+        Ok(())
+    }
+
     /// The statement shape the Home data widget builds over cross-app SQL: the user's
     /// query as a derived table, and relative windows computed from `now()`.
     #[tokio::test]

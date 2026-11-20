@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { isBotPaletteEffect } from "./appearance";
 import { BotAvatar } from "./bot-avatar";
@@ -41,6 +42,7 @@ export function BotOutfitTile({
 	locked,
 	onSelect,
 }: BotOutfitTileProps) {
+	const { t } = useTranslation("bots");
 	const [hovered, setHovered] = useState(false);
 	const [keyboardFocused, setKeyboardFocused] = useState(false);
 	const [colorIndex, setColorIndex] = useState(0);
@@ -100,7 +102,7 @@ export function BotOutfitTile({
 		<button
 			type="button"
 			className="fl-bot-studio-tile fl-bot-outfit-tile"
-			aria-label={`Choose ${item.label}`}
+			aria-label={t("appearance.chooseItem", { label: item.label })}
 			aria-pressed={selected}
 			aria-describedby={variations.length ? hintId : undefined}
 			data-locked={locked || undefined}
@@ -167,10 +169,16 @@ export function BotOutfitTile({
 			<span className="fl-bot-studio-tile-name">{item.label}</span>
 			{variations.length > 0 && (
 				<span className="fl-bot-outfit-color-hint" id={hintId}>
-					Hover or focus for color ideas. Choose your colors in the Colors tab.
+					{t(
+						"appearance.hoverOrFocusForColorIdeasChooseYourColorsInTheColorsTab",
+					)}
 				</span>
 			)}
-			{locked && <span className="fl-bot-studio-tile-locked">Preview</span>}
+			{locked && (
+				<span className="fl-bot-studio-tile-locked">
+					{t("appearance.preview")}
+				</span>
+			)}
 			{selected && (
 				<span className="fl-bot-studio-tile-check" aria-hidden="true">
 					✓

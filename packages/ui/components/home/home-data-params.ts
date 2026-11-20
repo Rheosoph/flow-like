@@ -1,5 +1,4 @@
 import type {
-	CrossAppSqlSource,
 	SqlParameterBinding,
 	SqlParameterInfo,
 	SqlParameterOptions,
@@ -200,16 +199,6 @@ export function applyParamOverrides(
 	);
 	if (!Object.keys(picked).length) return config;
 	return { ...config, queryParams: { ...config.queryParams, ...picked } };
-}
-
-export function homeDataSourcePayload(
-	config: Pick<HomeDataConfig, "sources">,
-): CrossAppSqlSource[] {
-	return config.sources.map(({ alias, appId, scope }) => ({
-		alias,
-		app_id: appId,
-		scope,
-	}));
 }
 
 export function withParamControl(

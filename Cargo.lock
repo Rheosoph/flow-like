@@ -2267,7 +2267,6 @@ version = "0.1.0"
 dependencies = [
  "axum 0.8.8",
  "flow-like-query",
- "flow-like-types",
  "lambda_http",
  "mimalloc",
  "tokio",
@@ -20047,6 +20046,7 @@ dependencies = [
  "flow-like-api",
  "flow-like-aws-data",
  "flow-like-catalog",
+ "flow-like-query",
  "flow-like-secrets",
  "flow-like-storage",
  "flow-like-types",

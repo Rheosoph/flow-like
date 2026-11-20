@@ -71,6 +71,26 @@ async fn http_transports_are_built_from_the_url() {
     assert_eq!(transport.name(), "http");
 }
 
+#[test]
+fn query_auth_asks_for_a_google_id_token_only_when_named() {
+    assert!(requires_gcp_id_token(Some("gcp_id_token")));
+    assert!(requires_gcp_id_token(Some(" GCP_ID_TOKEN\n")));
+    for other in [None, Some(""), Some("none"), Some("aws_iam")] {
+        assert!(!requires_gcp_id_token(other), "{other:?}");
+    }
+
+    let plain = http_transport("http://query:8090", None).map(|transport| transport.name());
+    assert_eq!(plain, Ok("http"));
+    let google = http_transport("https://query-abc.a.run.app", Some("gcp_id_token"))
+        .map(|transport| transport.name());
+    if cfg!(feature = "pubsub") {
+        assert_eq!(google, Ok("http"));
+        assert!(http_transport("ftp://query", Some("gcp_id_token")).is_err());
+    } else {
+        assert!(google.is_err_and(|error| error.contains("'pubsub' feature")));
+    }
+}
+
 fn describe(sql: &str) -> Operation {
     Operation::Describe {
         sql: sql.to_string(),
@@ -375,6 +395,7 @@ mod in_process {
         async fn resolver(
             &self,
             source: &ExternalSource,
+            _deadline: Option<std::time::Instant>,
         ) -> Result<Arc<dyn ExternalTableResolver>, WireError> {
             let path = self.0.get(&source.source_id).ok_or_else(|| {
                 WireError::new(ErrorCode::InvalidRequest, "no folder for this source")

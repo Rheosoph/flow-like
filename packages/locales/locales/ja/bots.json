@@ -324,7 +324,8 @@
 		"failed": "",
 		"kind": {
 			"mcp": "",
-			"oauth": ""
+			"oauth": "",
+			"caldav": ""
 		},
 		"mcp": {
 			"add": "",
@@ -347,7 +348,36 @@
 		"refresh": "",
 		"remove": "",
 		"toolPolicy": "",
-		"writeWarning": ""
+		"writeWarning": "",
+		"caldav": {
+			"refresh": "",
+			"noCalendars": "",
+			"calendar": "",
+			"pick": "",
+			"pickPlaceholder": "",
+			"readOnlyName": "",
+			"help": {
+				"icloud": "",
+				"nextcloud": "",
+				"fastmail": "",
+				"mailbox": "",
+				"posteo": "",
+				"synology": "",
+				"radicale": "",
+				"other": ""
+			},
+			"done": "",
+			"service": "",
+			"other": "",
+			"label": "",
+			"address": "",
+			"user": "",
+			"password": "",
+			"passwordNote": "",
+			"signInHint": "",
+			"connect": ""
+		},
+		"addCalDav": ""
 	},
 	"crew": {
 		"activity": {
@@ -403,6 +433,34 @@
 			},
 			"botFallback": "",
 			"cancelled": "",
+			"configuration": {
+				"title": "",
+				"requestTitle": "",
+				"hint": "",
+				"approve": "",
+				"reject": "",
+				"approved": "",
+				"rejected": "",
+				"count_one": "",
+				"count_other": "",
+				"capabilitiesHint": "",
+				"noCapabilities": "",
+				"primary": "",
+				"decision": "",
+				"fallbacks": "",
+				"noFallbacks": "",
+				"clearModel": "",
+				"clearDecision": "",
+				"expand": "",
+				"collapse": "",
+				"technicalDetails": "",
+				"noChanges": "",
+				"emptyList": "",
+				"emptyObject": "",
+				"emptyText": "",
+				"enabled": "",
+				"disabled": ""
+			},
 			"configurationChanges": "",
 			"clearValue": "",
 			"expired": "",
@@ -424,7 +482,8 @@
 				"location": "",
 				"device_id": "",
 				"app_ids": "",
-				"app_restrictions": ""
+				"app_restrictions": "",
+				"execution_mode": ""
 			},
 			"deny": "",
 			"failed": "",
@@ -577,6 +636,7 @@
 			"mentionHint": "",
 			"placeholder": "",
 			"placeholderBots": "",
+			"placeholderBotsShort": "",
 			"to": ""
 		},
 		"conversationMenu": {
@@ -688,7 +748,8 @@
 			"save": "",
 			"sending": "",
 			"sentByEmail": "",
-			"unsupported": ""
+			"unsupported": "",
+			"widgetActionFailed": ""
 		},
 		"mute": {
 			"mute": "",
@@ -719,13 +780,18 @@
 			"createInvite": "",
 			"description": "",
 			"encryptionBotNoAbility": "",
+			"encryptionBotNoKey": "",
+			"encryptionCheckFailed": "",
+			"encryptionChecking": "",
 			"encryptionHint": "",
 			"encryptionKeyMissing": "",
 			"encryptionLabel": "",
+			"encryptionMeaning": "",
 			"encryptionNoKey": "",
 			"encryptionNotAllowed": "",
 			"encryptionOnDevice": "",
 			"encryptionServerBot": "",
+			"encryptionWaitsFor": "",
 			"failed": "",
 			"full_one": "",
 			"full_other": "",
@@ -993,6 +1059,13 @@
 			"title": "このルームを退出しますか？",
 			"description": "あなたと、このルームにいるあなたのボットが退出し、ルームのメッセージを受信しなくなります。",
 			"failed": "ルームを退出できませんでした。もう一度お試しください。"
+		},
+		"memberInfo": {
+			"label": "",
+			"message": "",
+			"messageFailed": "",
+			"openChat": "",
+			"show": ""
 		}
 	},
 	"deviceHost": {
@@ -1188,7 +1261,8 @@
 			"lookLocked": "",
 			"nameRequired": "",
 			"nameTooLong": "",
-			"profileRequired": ""
+			"profileRequired": "",
+			"dockerRequiresDevice": ""
 		},
 		"safety": {
 			"encryptionHint": "",
@@ -1249,7 +1323,28 @@
 			"create": "",
 			"edit": ""
 		},
-		"unavailable": ""
+		"unavailable": "",
+		"docker": {
+			"ready": "",
+			"chooseDevice": "",
+			"unknown": "",
+			"offline": "",
+			"notInstalled": "",
+			"unreachable": "",
+			"remoteEndpoint": "",
+			"linuxRequired": "",
+			"imageUnavailable": "",
+			"title": "",
+			"native": "",
+			"nativeDescription": "",
+			"docker": "",
+			"description": "",
+			"deviceOnly": "",
+			"checkFailed": "",
+			"install": "",
+			"recheck": "",
+			"hubUnreachable": ""
+		}
 	},
 	"exchange": {
 		"answered": "",
@@ -1636,7 +1731,8 @@
 			"fallbacks_other": "",
 			"onDevice": "",
 			"runs": "",
-			"status": ""
+			"status": "",
+			"dockerOnDevice": ""
 		},
 		"encryption": {
 			"fingerprint": "",
@@ -1654,6 +1750,7 @@
 				"description": "",
 				"title": ""
 			},
+			"expires": "",
 			"none": "",
 			"revoke": "",
 			"title": ""
@@ -1990,6 +2087,7 @@
 		"cancelFailed": "",
 		"declined": "",
 		"description": "",
+		"encryptedInvite": "",
 		"invite": "",
 		"inviteFailed": "",
 		"limits": "",
@@ -2201,5 +2299,376 @@
 		},
 		"wakeButton": "",
 		"wakeOff": ""
+	},
+	"errors": {
+		"signInRequired": "",
+		"unsupportedAction": "",
+		"noToolGrants": "",
+		"approvalsUnsupported": "",
+		"cloneUnsupported": ""
+	},
+	"appearance": {
+		"crew": "",
+		"findYourCharacter": "",
+		"outfit": "",
+		"giveThemAStyle": "",
+		"colors": "",
+		"makeThePaletteYours": "",
+		"finish": "",
+		"addALittlePersonality": "",
+		"skills": "",
+		"showWhatTheyDo": "",
+		"clothing": "",
+		"eyewear": "",
+		"handAccessory": "",
+		"headwear": "",
+		"pattern": "",
+		"none": "",
+		"gradient": "",
+		"dots": "",
+		"stripes": "",
+		"waves": "",
+		"rays": "",
+		"stars": "",
+		"confetti": "",
+		"ring": "",
+		"flow": "",
+		"gold": "",
+		"aurora": "",
+		"pulse": "",
+		"orbit": "",
+		"effect": "",
+		"frame": "",
+		"circle": "",
+		"squircle": "",
+		"square": "",
+		"emote": "",
+		"heart": "",
+		"musicNote": "",
+		"spark": "",
+		"exclamation": "",
+		"question": "",
+		"drop": "",
+		"sleep": "",
+		"rain": "",
+		"anger": "",
+		"working": "",
+		"idea": "",
+		"done": "",
+		"error": "",
+		"idle": "",
+		"followCursor": "",
+		"character": "",
+		"preview": "",
+		"locked": "",
+		"shuffleShown": "",
+		"shuffle": "",
+		"essentials": "",
+		"lcd": "",
+		"blueprint": "",
+		"thermal": "",
+		"owned": "",
+		"viewPack": "",
+		"yourBotPreview": "",
+		"yourBOT": "",
+		"custom": "",
+		"makeThisCharacterYourOwn": "",
+		"resetBot": "",
+		"reset": "",
+		"randomizeBot": "",
+		"randomizeRest": "",
+		"randomize": "",
+		"keepWhenRandomizing": "",
+		"pausePreviewAnimation": "",
+		"playPreviewAnimation": "",
+		"pause": "",
+		"play": "",
+		"previewPose": "",
+		"previewExpression": "",
+		"expression": "",
+		"moodOrStatus": "",
+		"previewOnly": "",
+		"previewMoodOrStatus": "",
+		"customExpression": "",
+		"agentStatus": "",
+		"add": "",
+		"removeUnavailableItemsAndUnlockRequiredPacksToSaveThisBot": "",
+		"removeUnavailableItemsToSaveThisBot": "",
+		"unlockRequiredPacksToSaveThisBot": "",
+		"saveRequirements": "",
+		"faceDetails": "",
+		"eyeWhites": "",
+		"or": "",
+		"unavailablePack": "",
+		"removeOrReplaceThisUnavailableItem": "",
+		"removeUnavailableItems": "",
+		"saveBot": "",
+		"saving": "",
+		"yourLatestEditsAreNotPartOfThisSave": "",
+		"couldNotSaveThisBotTryAgain": "",
+		"thePreviousDraftCouldNotBeSavedSaveYourLatestChangesToTryAgain": "",
+		"customizationSections": "",
+		"browseByThemeThenTrySomethingOn": "",
+		"mixColorsGradientsAndPatternsForEachPart": "",
+		"seeEachDetailBeforeYouChoose": "",
+		"chooseTheSkillsYourBotRepresents": "",
+		"resetOutfit": "",
+		"searchCrew": "",
+		"searchByNameOrPersonality": "",
+		"filterCharacters": "",
+		"allPacks": "",
+		"otherCharacters": "",
+		"characterSeries": "",
+		"all": "",
+		"other": "",
+		"characterPacks": "",
+		"theWHOLECREW": "",
+		"showSelected": "",
+		"availableIndividuallyOutsideACharacterPack": "",
+		"noCharactersMatchYourSearch": "",
+		"clearFilters": "",
+		"exploreThePacksForTheseCharacters": "",
+		"searchOutfits": "",
+		"searchClothesAccessoriesOrCollections": "",
+		"equipmentSlots": "",
+		"equipped": "",
+		"filterOutfits": "",
+		"allCollections": "",
+		"outfitCollections": "",
+		"chooseNone": "",
+		"colorIdeasAppearOnHoverOrKeyboardFocus": "",
+		"noItemsMatchTheseFiltersInThisSlot": "",
+		"noItemsForThisCharacterInThisSlotYet": "",
+		"clearOutfitFilters": "",
+		"thisEffectSetsTheColorsOfYourBotAndOutfitRemoveItToUseYourChosenColors": "",
+		"removeColorEffect": "",
+		"resetLegacyFinish": "",
+		"finishCategories": "",
+		"darkBackground": "",
+		"thisEffectSetsItsOwnBackground": "",
+		"aDeeperCanvasForYourBot": "",
+		"skillBADGES": "",
+		"yourSelectedSkillsAppearBesideYourBotExtraBadgesFoldIntoACountAtSmallerSizes": "",
+		"body": "",
+		"accent": "",
+		"background": "",
+		"cheeks": "",
+		"pickAColor": "",
+		"hexColor": "",
+		"applyCustomColor": "",
+		"useRGBOrRRGGBB": "",
+		"enterAValid3Or6DigitHexColor": "",
+		"chooseAColorForEachPartSharedColorsAlsoTintMatchingDetailsAndEquipment": "",
+		"resetColors": "",
+		"thisCharacterKeepsItsOriginalColors": "",
+		"original": "",
+		"colorPacks": "",
+		"included": "",
+		"premium": "",
+		"previewEveryColorUnlockThePackToSaveColorsMarkedPreviewOnly": "",
+		"tryAnyCustomColorUnlockThisPackToSaveIt": "",
+		"previewEveryColorInThisPackUnlockItToSaveYourChoices": "",
+		"hoverOrFocusForColorIdeasChooseYourColorsInTheColorsTab": "",
+		"characterPacksHeading": "",
+		"otherCharactersHeading": "",
+		"chooseItem": "",
+		"shufflePart": {
+			"crew": "",
+			"outfit": "",
+			"colors": "",
+			"finish": ""
+		},
+		"unlockPart": {
+			"crew": "",
+			"outfit": "",
+			"colors": "",
+			"finish": ""
+		},
+		"lockPart": {
+			"crew": "",
+			"outfit": "",
+			"colors": "",
+			"finish": ""
+		},
+		"shuffleShownCharacters": "",
+		"shuffleShownCollection": "",
+		"namedPack": "",
+		"viewNamedPack": "",
+		"characterPreview": "",
+		"selectedCharacter": "",
+		"editEquipment": {
+			"neck": "",
+			"eyes": "",
+			"hand": "",
+			"head": ""
+		},
+		"noEquipment": {
+			"neck": "",
+			"eyes": "",
+			"hand": "",
+			"head": ""
+		},
+		"characterCount_one": "",
+		"characterCount_other": "",
+		"packCount_one": "",
+		"packCount_other": "",
+		"outfitItemCount_one": "",
+		"outfitItemCount_other": "",
+		"itemCount_one": "",
+		"itemCount_other": "",
+		"themeCount_one": "",
+		"themeCount_other": "",
+		"packContents": "",
+		"crewContents": "",
+		"chooseCharacterCount_one": "",
+		"chooseCharacterCount_other": "",
+		"outfitContents": "",
+		"namedOutfits": "",
+		"effectControlsPalette": "",
+		"savedFinishActive": "",
+		"variants": {
+			"original": "",
+			"shiny": "",
+			"midnight": "",
+			"gold": "",
+			"pastel": "",
+			"holo": ""
+		},
+		"selectedCount": "",
+		"colorRoles": {
+			"body": "",
+			"accent": "",
+			"background": "",
+			"ink": "",
+			"sclera": "",
+			"cheek": "",
+			"clothing": ""
+		},
+		"slotColor": "",
+		"expressions": {
+			"neutral": "",
+			"happy": "",
+			"concerned": "",
+			"surprised": "",
+			"curious": "",
+			"sad": "",
+			"wink": "",
+			"love": "",
+			"angry": "",
+			"focused": "",
+			"oops": ""
+		},
+		"moods": {
+			"likes-you": "",
+			"cheerful": "",
+			"love": "",
+			"wink": "",
+			"surprised": "",
+			"thinking": "",
+			"sad": "",
+			"angry": "",
+			"oops": "",
+			"sleeping": ""
+		},
+		"agentStates": {
+			"idle": "",
+			"working": "",
+			"idea": "",
+			"done": "",
+			"error": "",
+			"needs-you": "",
+			"offline": ""
+		},
+		"effects": {
+			"pixel": {
+				"label": "",
+				"description": ""
+			},
+			"lcd": {
+				"label": "",
+				"description": ""
+			},
+			"crt": {
+				"label": "",
+				"description": ""
+			},
+			"glitch": {
+				"label": "",
+				"description": ""
+			},
+			"thermal": {
+				"label": "",
+				"description": ""
+			},
+			"riso": {
+				"label": "",
+				"description": ""
+			},
+			"raster": {
+				"label": "",
+				"description": ""
+			},
+			"comic": {
+				"label": "",
+				"description": ""
+			},
+			"watercolor": {
+				"label": "",
+				"description": ""
+			},
+			"blueprint": {
+				"label": "",
+				"description": ""
+			},
+			"sticker": {
+				"label": "",
+				"description": ""
+			},
+			"vinyl": {
+				"label": "",
+				"description": ""
+			},
+			"neon": {
+				"label": "",
+				"description": ""
+			},
+			"none": {
+				"label": "",
+				"description": ""
+			},
+			"offline": {
+				"label": "",
+				"description": ""
+			}
+		},
+		"effectGroups": {
+			"screen": {
+				"label": "",
+				"description": ""
+			},
+			"print": {
+				"label": "",
+				"description": ""
+			},
+			"pop": {
+				"label": "",
+				"description": ""
+			},
+			"status": {
+				"label": "",
+				"description": ""
+			}
+		},
+		"namedEffects": "",
+		"pickCustomColor": "",
+		"hexColorForSlot": "",
+		"editColor": "",
+		"resetColor": "",
+		"slotColors": "",
+		"namedColorPack": "",
+		"viewNamedColorPack": "",
+		"chooseSlotColor": "",
+		"previewColor": "",
+		"moodsLabel": ""
 	}
 }

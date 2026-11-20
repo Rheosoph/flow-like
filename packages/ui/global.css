@@ -424,6 +424,36 @@
 	}
 }
 
+/* Touch: those controls give way to the long-press menu; saved reactions stay. */
+@media not all and (hover: hover) and (pointer: fine) {
+	[data-fl-chat-message-row] [data-fl-chat-hover-action],
+	[data-fl-chat-room-actions] {
+		display: none;
+	}
+
+	[data-fl-chat-message-row] {
+		-webkit-touch-callout: none;
+		-webkit-user-select: none;
+		user-select: none;
+	}
+
+	[data-fl-chat-message-row] :is(input, textarea, [contenteditable="true"]) {
+		-webkit-user-select: text;
+		user-select: text;
+	}
+
+	[data-fl-chat-message][data-fl-pressing] {
+		transform: scale(0.98);
+		transition: transform 120ms ease-out;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	[data-fl-chat-message][data-fl-pressing] {
+		transform: none;
+	}
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.fl-chat-chrome {
 		transition: none;
@@ -2910,6 +2940,15 @@ html[data-engine="webkit"] [class*="backdrop-blur"] {
 	.fl-think-dot {
 		display: none;
 	}
+}
+
+/* The activity line keeps its live region mounted but takes no room while nobody types or answers. */
+[data-fl-conversation-activity]:empty {
+	height: 0;
+}
+
+[data-fl-chat-inline-prompt]:has(> [data-fl-conversation-activity]:empty) {
+	padding-top: 0;
 }
 
 /* A room message's floating actions: hidden until the message is hovered or focused (tap on touch). */

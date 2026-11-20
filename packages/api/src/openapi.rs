@@ -762,6 +762,7 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         crate::routes::app::data_sources::handlers::create_data_source,
         crate::routes::app::data_sources::handlers::update_data_source,
         crate::routes::app::data_sources::handlers::delete_data_source,
+        crate::routes::app::data_sources::check::check_data_source,
         crate::routes::app::db::forecasting::forecast_query,
         crate::routes::app::db::saved_forecasts::list_saved_forecasts,
         crate::routes::app::db::saved_forecasts::get_saved_forecast,

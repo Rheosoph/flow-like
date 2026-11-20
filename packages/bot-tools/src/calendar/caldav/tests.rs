@@ -16,10 +16,14 @@ use super::transport::{
 };
 use super::xml::{self, CALDAV, DAV};
 use super::zones::{self, Zone, Zones};
-use crate::calendar::provider::{EventDraft, ExternalEvent};
+use crate::calendar::provider::{self, EventDraft, ExternalEvent, Provider};
 use crate::env::Environment;
 use crate::error::code;
-use crate::services::Credential;
+use crate::services::rest::RestResponse;
+use crate::services::{ConnectorEntry, Credential, StaticSource};
+use flow_like_types::bot_connector::{
+    CalDavCalendarInfo, ConnectorKind, ConnectorPolicy, ConnectorRule,
+};
 
 const ICLOUD_ROOT: &str = include_str!("fixtures/icloud_root.xml");
 const ICLOUD_PRINCIPAL: &str = include_str!("fixtures/icloud_principal.xml");
@@ -477,6 +481,23 @@ fn until_count_and_cancelled_occurrences_end_a_series() {
     )
     .unwrap();
     assert_eq!(before.starts, [When::Utc(utc(2026, 11, 1, 9, 0))]);
+}
+
+#[test]
+fn a_dense_rule_from_long_ago_is_cut_short() {
+    let started = std::time::Instant::now();
+    let starts = recur::rule_starts(
+        "FREQ=SECONDLY",
+        When::Utc(utc(2000, 1, 1, 0, 0)),
+        Berlin,
+        utc(2026, 11, 1, 0, 0),
+        utc(2026, 11, 2, 0, 0),
+        events::MAX_OCCURRENCES,
+    )
+    .unwrap();
+    assert!(starts.limited);
+    assert!(starts.starts.is_empty());
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
 }
 
 #[test]
@@ -1220,4 +1241,104 @@ async fn read_only_calendars_refuse_writes_without_a_request() {
         code::SCOPE_REFUSED
     );
     assert!(fake.seen().is_empty());
+}
+
+/// A calendar transport that reaches only the fake CalDAV server.
+struct DavOnly(FakeDav);
+
+#[async_trait]
+impl provider::Transport for DavOnly {
+    async fn send(
+        &self,
+        _method: &str,
+        url: Url,
+        _credential: &Credential,
+        _body: Option<serde_json::Value>,
+    ) -> Result<RestResponse, String> {
+        Err(format!("no REST call expected: {url}"))
+    }
+
+    fn dav(&self) -> &dyn DavTransport {
+        &self.0
+    }
+}
+
+fn caldav_entry(id: &str, chosen: bool) -> ConnectorEntry {
+    ConnectorEntry {
+        rule: ConnectorRule {
+            id: id.into(),
+            label: format!("Nextcloud {id}"),
+            kind: Some(ConnectorKind::Caldav),
+            default_policy: Some(ConnectorPolicy::Ask),
+            ..ConnectorRule::default()
+        },
+        kind: ConnectorKind::Caldav,
+        url: Some("https://cloud.example.com/".into()),
+        provider_id: Some("caldav".into()),
+        api_hosts: super::account_hosts("https://cloud.example.com/"),
+        calendar: chosen.then(|| CalDavCalendarInfo {
+            url: NEXTCLOUD_PERSONAL.into(),
+            name: "Personal".into(),
+            color: None,
+            writable: true,
+            zone: Some("Europe/Berlin".into()),
+        }),
+    }
+}
+
+#[tokio::test]
+async fn caldav_connectors_are_calendars_of_the_provider_seam() {
+    let source = StaticSource::new(vec![
+        (caldav_entry("c-dav", true), credential()),
+        (caldav_entry("c-unpicked", false), credential()),
+    ]);
+    let calendars = provider::calendars(&source).await.unwrap();
+    assert_eq!(
+        calendars.len(),
+        1,
+        "a connector without a chosen calendar is left out"
+    );
+    let calendar = &calendars[0];
+    assert_eq!(calendar.provider, Provider::Caldav);
+    assert_eq!(calendar.calendar_id(), NEXTCLOUD_PERSONAL);
+    let transport = DavOnly(FakeDav::default().on(
+        DavMethod::Report,
+        NEXTCLOUD_PERSONAL,
+        207,
+        NEXTCLOUD_REPORT,
+    ));
+    let client = provider::Client::new(&source, &transport);
+    let listed = client
+        .list(calendar, utc(2026, 11, 23, 0, 0), utc(2026, 11, 30, 0, 0))
+        .await
+        .unwrap();
+    assert_eq!(listed.events.len(), 4);
+    let holiday = find(&listed.events, "holiday.ics");
+    assert_eq!(
+        holiday.starts_at,
+        utc(2026, 11, 26, 23, 0),
+        "whole days in the calendar's zone"
+    );
+    let reference = calendar.reference(&holiday.event_id);
+    assert_eq!(reference.provider, "caldav");
+    assert_eq!(reference.calendar_id, NEXTCLOUD_PERSONAL);
+    assert!(reference.clone().check().is_ok());
+    let decoded = flow_like_types::bot_calendar::ExternalEventRef::decode(&reference.encode());
+    assert_eq!(decoded, Some(reference));
+    assert_eq!(
+        transport.0.seen()[0].authorization,
+        credential().header().map(str::to_string)
+    );
+    let error = client
+        .patch(
+            calendar,
+            "/remote.php/dav/calendars/felix/personal/weekly-standup.ics#20261123T080000Z",
+            &EventDraft {
+                title: Some("Renamed".into()),
+                ..EventDraft::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, code::NOT_SUPPORTED);
 }

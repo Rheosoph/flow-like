@@ -111,8 +111,10 @@ visualization then apply on top of the SQL result, as they do for a saved query.
 1. In **Customize**, add or select a **Data** widget and set its **Source** to
    **SQL across apps**.
 2. Under **Apps**, choose each App you want to query, up to 8. For each, pick
-   **Project data** or **Viewer's personal data** and check its **Schema name**.
-   The tables you can use appear below each App, for example `crm.customers`.
+   **Project data**, **Viewer's personal data**, or one of the App's
+   [external databases](/apps/data-studio/#external-databases), and check its
+   **Schema name**. The tables you can use appear below each App, for example
+   `crm.customers`.
 3. Write the statement in **SQL** and refer to tables as `<alias>.<table>`.
 4. Give every `$name` parameter a default value, then choose how long to
    **Reuse results for**. See [Parameters](#parameters) for the controls
@@ -185,6 +187,12 @@ query read. A write to any of those tables makes the query run again, so a
 cached result never hides newer data in a table it read. The widget's refresh
 button always skips the cache. Results larger than 256 KiB are not cached.
 
+When the reuse time ends, a result whose tables are all unchanged is renewed
+without running the query again. Queries that use the current time or chance,
+such as `now()`, `current_date()` or `random()`, always run again, so date
+windows keep moving. Results that read an external database have no table
+versions to check and are reused until their reuse time ends.
+
 If a refresh fails, the widget keeps showing the last result and says it
 couldn't refresh. When the server answers a failed refresh with an earlier
 cached result, the footer says so. Soft limits that were passed, such as a very
@@ -195,7 +203,9 @@ of date until the next refresh.
 
 - On every request, the viewer needs permission to read each source App (read
   files or read the database). Each App's column restrictions apply, so a person
-  only sees the columns their role may read.
+  only sees the columns their role may read. An external database needs
+  permission to read the App's database, and a removed one stops answering, even
+  from the cache.
 - A widget queries at most 8 Apps and returns up to 5,000 rows (20 by default).
   Above 500 rows the **Result limit** field warns that large results slow down
   Home; aggregate in SQL where you can.
@@ -205,10 +215,10 @@ of date until the next refresh.
 - Widgets fail independently: one failing query does not affect the rest of
   Home.
 
-On the web, queries run on the Flow-Like API. On desktop, the query runs on the
-API when every source App is online, and locally when every source App is
+On the web, queries run on the hub's query service. On desktop, the query runs
+on the hub when every source App is online, and locally when every source App is
 local-only. A widget that mixes online and local-only Apps shows an error;
-choose Apps of one kind.
+choose Apps of one kind. External databases belong to online Apps only.
 
 ### Examples
 

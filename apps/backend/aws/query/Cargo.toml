@@ -6,10 +6,9 @@ description = "Flow-Like AWS Lambda query service with streaming responses"
 
 [dependencies]
 flow-like-query = { workspace = true, features = ["server", "client", "all-drivers", "forecast"] }
-flow-like-types.workspace = true
 lambda_http.workspace = true
 mimalloc.workspace = true
 axum.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-tokio = { workspace = true, features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -1,6 +1,6 @@
-//! Connectors: the MCP servers and OAuth accounts a bot's owner attached to it. The settings row
-//! carries policies and a snapshot of the server's tools, never a token: grants stay sealed on the
-//! host that resolves them.
+//! Connectors: the MCP servers, OAuth accounts and CalDAV calendars a bot's owner attached to it.
+//! The settings row carries policies and a snapshot of the server's tools or calendars, never a
+//! token or password: grants stay sealed on the host that resolves them.
 
 use std::collections::BTreeMap;
 
@@ -13,8 +13,13 @@ pub const MAX_URL_CHARS: usize = 2_000;
 pub const MAX_TOOLS_SNAPSHOT: usize = 500;
 pub const MAX_TOOL_POLICIES: usize = 500;
 pub const MAX_SCOPES: usize = 50;
+/// Calendars one CalDAV connector keeps in its snapshot.
+pub const MAX_CALDAV_CALENDARS: usize = 50;
+pub const MAX_USERNAME_CHARS: usize = 320;
 /// Prefix of a connector call's scope in the bot's tool grants: `connector:<id>:<tool>`.
 pub const SCOPE_PREFIX: &str = "connector:";
+/// The `provider_id` of every CalDAV connector, and the calendar provider of its events.
+pub const CALDAV_PROVIDER: &str = "caldav";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -23,6 +28,8 @@ pub enum ConnectorKind {
     Oauth,
     /// An MCP server over Streamable HTTP.
     Mcp,
+    /// A CalDAV calendar (iCloud, Nextcloud, Fastmail, …) signed in with a user name and password.
+    Caldav,
 }
 
 impl ConnectorKind {
@@ -30,14 +37,31 @@ impl ConnectorKind {
         match self {
             Self::Oauth => "OAUTH",
             Self::Mcp => "MCP",
+            Self::Caldav => "CALDAV",
         }
     }
 
     pub fn from_column(value: &str) -> Option<Self> {
-        [Self::Oauth, Self::Mcp]
+        [Self::Oauth, Self::Mcp, Self::Caldav]
             .into_iter()
             .find(|kind| kind.column().eq_ignore_ascii_case(value))
     }
+}
+
+/// One calendar a CalDAV account offers, as the last discovery saw it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CalDavCalendarInfo {
+    /// The calendar collection's URL.
+    pub url: String,
+    pub name: String,
+    #[serde(default)]
+    pub color: Option<String>,
+    /// False when the account may only read it.
+    #[serde(default)]
+    pub writable: bool,
+    /// The calendar's own IANA zone, where its whole days start.
+    #[serde(default)]
+    pub zone: Option<String>,
 }
 
 /// What a connector call may do without asking.
@@ -79,6 +103,8 @@ pub enum ConnectorAuth {
     Secret { name: String },
     /// The owner's OAuth grant for this provider.
     Oauth { provider_id: String },
+    /// HTTP Basic: this user name and the password stored sealed as the connector's grant.
+    Basic { username: String },
 }
 
 /// One tool of an MCP server as the last refresh saw it.
@@ -123,6 +149,12 @@ pub struct BotConnector {
     /// whose schema changed since then asks every time until the owner confirms it again.
     #[serde(default)]
     pub confirmed_hashes: BTreeMap<String, String>,
+    /// CalDAV: the calendar the bot reads and writes, one of `calendars`.
+    #[serde(default)]
+    pub calendar_url: Option<String>,
+    /// CalDAV: the calendars of the account as the last discovery (create or refresh) found them.
+    #[serde(default)]
+    pub calendars: Vec<CalDavCalendarInfo>,
     /// RFC 3339.
     pub updated_at: String,
 }
@@ -139,6 +171,47 @@ impl BotConnector {
             confirmed_hashes: self.confirmed_hashes.clone(),
         }
     }
+
+    /// CalDAV: the chosen calendar as the snapshot knows it.
+    pub fn calendar(&self) -> Option<&CalDavCalendarInfo> {
+        let url = self.calendar_url.as_deref()?;
+        self.calendars.iter().find(|calendar| calendar.url == url)
+    }
+}
+
+/// The calendar a CalDAV connector uses: `wanted` when the account has it, else the first one
+/// the account may write to, else the first one.
+pub fn choose_calendar(
+    calendars: &[CalDavCalendarInfo],
+    wanted: Option<&str>,
+) -> Result<String, String> {
+    if let Some(wanted) = wanted.map(str::trim).filter(|wanted| !wanted.is_empty()) {
+        return calendars
+            .iter()
+            .find(|calendar| calendar.url == wanted)
+            .map(|calendar| calendar.url.clone())
+            .ok_or_else(|| format!("The account has no calendar at '{wanted}'"));
+    }
+    calendars
+        .iter()
+        .find(|calendar| calendar.writable)
+        .or_else(|| calendars.first())
+        .map(|calendar| calendar.url.clone())
+        .ok_or_else(|| "The account has no calendar with events".to_string())
+}
+
+/// Checks a CalDAV user name; the message is for the owner.
+pub fn validate_username(username: &str) -> Result<String, String> {
+    let username = username.trim();
+    if username.is_empty() || username.chars().count() > MAX_USERNAME_CHARS {
+        return Err(format!(
+            "A user name has 1 to {MAX_USERNAME_CHARS} characters"
+        ));
+    }
+    if username.chars().any(char::is_control) || username.contains(':') {
+        return Err("A user name has no control characters and no ':'".to_string());
+    }
+    Ok(username.to_string())
 }
 
 /// `POST /bots/{bot_id}/connectors`.
@@ -150,14 +223,17 @@ pub struct CreateBotConnector {
     pub url: Option<String>,
     #[serde(default)]
     pub auth: ConnectorAuth,
-    /// The `fl_oauth_` handle (or token) of the owner's grant, for `auth: oauth`. Stored sealed;
-    /// never returned.
+    /// The `fl_oauth_` handle (or token) of the owner's grant, for `auth: oauth`; the password for
+    /// `auth: basic`. Stored sealed; never returned.
     #[serde(default)]
     pub grant: Option<String>,
     #[serde(default)]
     pub scopes: Vec<String>,
     #[serde(default)]
     pub default_policy: Option<ConnectorPolicy>,
+    /// CalDAV: the calendar to use; the first writable one the discovery finds when omitted.
+    #[serde(default)]
+    pub calendar_url: Option<String>,
 }
 
 /// `PATCH /bots/{bot_id}/connectors/{connector_id}`; omitted fields stay.
@@ -169,6 +245,7 @@ pub struct UpdateBotConnector {
     pub default_policy: Option<ConnectorPolicy>,
     #[serde(default)]
     pub tool_policies: Option<BTreeMap<String, ConnectorPolicy>>,
+    /// A new sign-in handle (account) or password (CalDAV).
     #[serde(default)]
     pub grant: Option<String>,
     #[serde(default)]
@@ -176,6 +253,9 @@ pub struct UpdateBotConnector {
     /// Tools whose changed schema the owner has looked at and accepts.
     #[serde(default)]
     pub confirm_tools: Vec<String>,
+    /// CalDAV: another calendar of the account's snapshot.
+    #[serde(default)]
+    pub calendar_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -441,6 +521,52 @@ mod tests {
         assert_eq!(rule.call_policy("create"), CallPolicy::Run);
         assert_eq!(rule.call_policy("search"), CallPolicy::Never);
         assert_eq!(rule.call_policy("drop"), CallPolicy::Ask);
+    }
+
+    fn calendar(url: &str, writable: bool) -> CalDavCalendarInfo {
+        CalDavCalendarInfo {
+            url: url.to_string(),
+            name: url.to_string(),
+            color: None,
+            writable,
+            zone: None,
+        }
+    }
+
+    #[test]
+    fn a_caldav_connector_uses_the_chosen_or_first_writable_calendar() {
+        let calendars = [
+            calendar("https://dav/birthdays/", false),
+            calendar("https://dav/home/", true),
+        ];
+        assert_eq!(
+            choose_calendar(&calendars, None).unwrap(),
+            "https://dav/home/"
+        );
+        assert_eq!(
+            choose_calendar(&calendars, Some("https://dav/birthdays/")).unwrap(),
+            "https://dav/birthdays/"
+        );
+        assert!(choose_calendar(&calendars, Some("https://evil/")).is_err());
+        assert!(choose_calendar(&[], None).is_err());
+        assert_eq!(
+            choose_calendar(&calendars[..1], None).unwrap(),
+            "https://dav/birthdays/"
+        );
+        assert_eq!(
+            ConnectorKind::from_column("caldav"),
+            Some(ConnectorKind::Caldav)
+        );
+        let auth: ConnectorAuth =
+            serde_json::from_str(r#"{"type":"basic","username":"me@icloud.com"}"#).unwrap();
+        assert_eq!(
+            auth,
+            ConnectorAuth::Basic {
+                username: "me@icloud.com".into()
+            }
+        );
+        assert!(validate_username("a:b").is_err());
+        assert_eq!(validate_username(" felix ").unwrap(), "felix");
     }
 
     #[test]

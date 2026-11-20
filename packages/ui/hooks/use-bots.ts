@@ -1,6 +1,6 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
+import { i18n, useTranslation } from "@flow-like/locales";
 import {
 	type QueryClient,
 	keepPreviousData,
@@ -87,13 +87,24 @@ export const botKeys = {
 const BOT_STALE_TIME = 30_000;
 
 function requireBotState(state: IBotState | undefined): IBotState {
-	if (!state) throw new Error("Bots need a signed-in Flow-Like account");
+	if (!state)
+		throw new Error(
+			i18n.t(
+				"bots:errors.signInRequired",
+				"Bots need a signed-in Flow-Like account",
+			),
+		);
 	return state;
 }
 
 function unsupported<T>(): Promise<T> {
 	return Promise.reject(
-		new Error("This backend does not support that bot action"),
+		new Error(
+			i18n.t(
+				"bots:errors.unsupportedAction",
+				"This backend does not support that bot action",
+			),
+		),
 	);
 }
 
@@ -235,7 +246,13 @@ export function useCloneBot() {
 	return useMutation({
 		mutationFn: async (botId: string) => {
 			if (!state?.cloneBot)
-				throw new Error(`Bot ${botId} can't be duplicated on this host`);
+				throw new Error(
+					i18n.t(
+						"bots:errors.cloneUnsupported",
+						"Bot {{botId}} can't be duplicated on this host",
+						{ botId },
+					),
+				);
 			return state.cloneBot(botId);
 		},
 		onSuccess: (bot) => storeBot(queryClient, bot),
@@ -472,7 +489,13 @@ export function useRevokeBotToolGrant() {
 			scope: string;
 		}) => {
 			const revoke = requireBotState(state).deleteToolGrant;
-			if (!revoke) throw new Error("This backend keeps no tool grants");
+			if (!revoke)
+				throw new Error(
+					i18n.t(
+						"bots:errors.noToolGrants",
+						"This backend keeps no tool grants",
+					),
+				);
 			return revoke.call(state, botId, tool, scope);
 		},
 		onSettled: (_, __, { botId }) =>
@@ -501,7 +524,12 @@ export function useSetBotAutoApprove() {
 		}) => {
 			const bots = requireBotState(state);
 			if (!bots.putToolGrant || !bots.deleteToolGrant)
-				throw new Error("This backend keeps no tool grants");
+				throw new Error(
+					i18n.t(
+						"bots:errors.noToolGrants",
+						"This backend keeps no tool grants",
+					),
+				);
 			if (enabled) await bots.putToolGrant(botId, AUTO_APPROVE_TOOL, SCOPE_ALL);
 			else await bots.deleteToolGrant(botId, AUTO_APPROVE_TOOL, SCOPE_ALL);
 		},
@@ -551,7 +579,13 @@ export function useAnswerBotApproval() {
 			items?: readonly IBotApprovalItemDecision[];
 		}) => {
 			const answer = requireBotState(state).answerApproval;
-			if (!answer) throw new Error("This backend cannot answer approvals");
+			if (!answer)
+				throw new Error(
+					i18n.t(
+						"bots:errors.approvalsUnsupported",
+						"This backend cannot answer approvals",
+					),
+				);
 			const sealed = await sealedAnswer(
 				inbox,
 				conversationId,

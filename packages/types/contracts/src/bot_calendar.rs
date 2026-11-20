@@ -40,7 +40,7 @@ pub const MAX_CALENDAR_RANGE_DAYS: i64 = 92;
 pub const MAX_EXTERNAL_ID_CHARS: usize = 1024;
 pub const MAX_EVENT_LINK_CHARS: usize = 2048;
 /// Providers whose calendars a bot reads through its connectors.
-pub const CALENDAR_PROVIDERS: [&str; 2] = ["google", "microsoft"];
+pub const CALENDAR_PROVIDERS: [&str; 3] = ["google", "microsoft", "caldav"];
 /// Occurrences of a repeating event scanned for its next wake-up.
 const RECURRENCE_PROBES: usize = 400;
 const EXTERNAL_PREFIX: &str = "ext";
@@ -96,11 +96,11 @@ fn check_offsets(mut offsets: Vec<u32>) -> Result<Vec<u32>, String> {
 /// The event of a connected calendar an event task keeps wake-ups for.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct ExternalEventRef {
-    /// The bot connector (an OAuth account) the calendar is read through.
+    /// The bot connector (an OAuth account or a CalDAV calendar) the calendar is read through.
     pub connector_id: String,
-    /// `google` or `microsoft`.
+    /// `google`, `microsoft` or `caldav`.
     pub provider: String,
-    /// The provider's calendar id (`primary` for Google's main calendar).
+    /// The provider's calendar id (`primary` for Google's and Microsoft's main calendar, the collection URL for CalDAV).
     pub calendar_id: String,
     /// The provider's id of the event, of one occurrence for a repeating event.
     pub event_id: String,
@@ -125,7 +125,7 @@ impl ExternalEventRef {
     pub fn check(self) -> Result<Self, String> {
         if !CALENDAR_PROVIDERS.contains(&self.provider.as_str()) {
             return Err(format!(
-                "'{}' is not a calendar provider; use google or microsoft",
+                "'{}' is not a calendar provider; use google, microsoft or caldav",
                 self.provider
             ));
         }

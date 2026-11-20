@@ -1,5 +1,5 @@
-//! A live-call turn the host answers on the caller's computer feeds the app's reply outlet with
-//! the reply as it is written; other turns, and hosts without an outlet, feed nothing.
+//! A turn the host answers on the caller's computer feeds the app's reply outlet with the reply
+//! as it is written; hosts without an outlet feed nothing.
 
 use super::*;
 use crate::live_reply::ReplyOutlet;
@@ -180,7 +180,7 @@ async fn a_live_call_turn_that_posts_nothing_ends_dropped() {
 }
 
 #[tokio::test]
-async fn a_turn_that_is_not_a_live_call_feeds_nothing() {
+async fn a_text_turn_is_shown_while_it_is_written_too() {
     let heard = Arc::new(Heard::default());
     let runner = Writer::new(&["Hello"], Some("Hello"));
     let host = start(
@@ -190,12 +190,16 @@ async fn a_turn_that_is_not_a_live_call_feeds_nothing() {
     );
     until("the reply", || ended(&host).is_some()).await;
     assert_eq!(ended(&host), Some(TurnStatus::Done));
-    assert_eq!(runner.streamed(), [false]);
-    assert!(heard.replies().is_empty());
+    assert_eq!(runner.streamed(), [true]);
+    let last = heard.replies().pop().expect("the window saw the reply");
+    assert_eq!(
+        (last.state, last.text.as_str()),
+        (RealtimeReplyState::Done, "Hello")
+    );
 }
 
 #[tokio::test]
-async fn a_host_without_an_outlet_streams_no_live_call() {
+async fn a_host_without_an_outlet_streams_nothing() {
     let runner = Writer::new(&["Here is ", "the plan."], Some("Here is the plan."));
     let host = start(spoken(&["bot"]), runner.clone(), Arc::new(Quiet));
     until("the reply", || ended(&host).is_some()).await;

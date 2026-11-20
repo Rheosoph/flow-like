@@ -951,6 +951,7 @@ fn calendar_of<'a>(
         .find(|calendar| {
             calendar.id() == reference.connector_id
                 && calendar.provider.id() == reference.provider
+                && calendar.calendar_id() == reference.calendar_id
         })
         .ok_or_else(|| {
             ToolError::not_found(format!(

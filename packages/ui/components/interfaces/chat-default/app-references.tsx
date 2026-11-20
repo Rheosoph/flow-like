@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import ArrowUpRightIcon from "lucide-react/dist/esm/icons/arrow-up-right.js";
 import LayersIcon from "lucide-react/dist/esm/icons/layers.js";
 import { useRouter } from "next/navigation";
@@ -130,6 +131,7 @@ function AppPreview({
 	isLoading: boolean;
 	onOpen: () => void;
 }>) {
+	const { t } = useTranslation("chat");
 	const description = meta?.description?.trim() || meta?.use_case?.trim();
 	const tags = meta?.tags?.slice(0, 3) ?? [];
 	return (
@@ -164,7 +166,10 @@ function AppPreview({
 					</p>
 				) : !meta ? (
 					<p className="text-xs text-muted-foreground">
-						This app's details aren't available to you.
+						{t(
+							"appReferenceUnavailable",
+							"This app's details aren't available to you.",
+						)}
 					</p>
 				) : null}
 				<Button
@@ -173,7 +178,7 @@ function AppPreview({
 					className="h-7 w-full gap-1.5 text-xs"
 					onClick={onOpen}
 				>
-					Open app
+					{t("openReferencedApp", "Open app")}
 					<ArrowUpRightIcon className="size-3" aria-hidden="true" />
 				</Button>
 			</div>

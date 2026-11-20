@@ -27,11 +27,13 @@ use crate::{
     permission::role_permission::RolePermissions,
     query::{self, LanceRead, QueryRows},
     routes::app::{
+        data_sources::query_source::external_sources_named,
         db::{ScopeParams, resolve_connection, resolve_write_connection, validate_table_name},
         graph::load_scoped_overlay,
     },
     state::AppState,
 };
+use std::collections::BTreeSet;
 
 #[derive(Debug, serde::Deserialize, ToSchema)]
 pub struct CreateSavedQueryPayload {
@@ -258,9 +260,40 @@ pub(super) async fn run_on_surface(
     );
     let shape = workbench_shape(state, user, &target).await?;
     let read = LanceRead::scoped(user, &permission, target.app_id, target.scope)?;
-    let source = state.query.lance_source(state, &read, None).await?;
-    let request = query::request(vec![source], rows, build(shape));
+    let operation = build(shape);
+    let mut sources = vec![state.query.lance_source(state, &read, None).await?];
+    if permission.has_permission(RolePermissions::ReadDatabase) {
+        let named =
+            external_sources_named(state, target.app_id, &named_schemas(&operation)).await?;
+        sources.extend(
+            named
+                .into_iter()
+                .map(|(alias, source)| query::external_source(source, Some(alias))),
+        );
+    }
+    let request = query::request(sources, rows, operation);
     state.query.run(&query::subject(user), &request).await
+}
+
+/// The schemas an operation's statement and the saved views it can reach name, which is where
+/// an app's external databases appear (`<alias>.<table>`). Only those are sent with credentials.
+fn named_schemas(operation: &Operation) -> BTreeSet<String> {
+    let (sql, shape) = match operation {
+        Operation::Sql { sql, shape, .. } | Operation::Describe { sql, shape } => (sql, shape),
+        Operation::ParameterOptions { table, .. } => {
+            return table
+                .split_once('.')
+                .map(|(schema, _)| schema.to_lowercase())
+                .into_iter()
+                .collect();
+        }
+        _ => return BTreeSet::new(),
+    };
+    let mut statements = vec![sql.as_str()];
+    if let QueryShape::Workbench { views, .. } = shape {
+        statements.extend(views.iter().map(|view| view.sql.as_str()));
+    }
+    workbench::referenced_schemas(&statements)
 }
 
 #[utoipa::path(
@@ -579,8 +612,55 @@ pub async fn execute_query(
 
 #[cfg(test)]
 mod tests {
-    use super::UpdateSavedQueryPayload;
+    use super::{UpdateSavedQueryPayload, named_schemas};
+    use flow_like_query::{Operation, QueryShape, SurfaceSpec, ViewSpec};
     use serde_json::json;
+    use std::collections::BTreeSet;
+
+    fn native(views: Vec<ViewSpec>) -> QueryShape {
+        QueryShape::Workbench {
+            surface: SurfaceSpec::Native,
+            views,
+        }
+    }
+
+    fn options(table: &str) -> Operation {
+        Operation::ParameterOptions {
+            table: table.to_string(),
+            column: "status".to_string(),
+            search: None,
+            range: false,
+            shape: native(Vec::new()),
+        }
+    }
+
+    #[test]
+    fn external_databases_are_sent_only_when_a_statement_or_view_names_them() {
+        let late = ViewSpec {
+            name: "late".to_string(),
+            sql: "SELECT * FROM billing.invoices".to_string(),
+        };
+        let run = Operation::Sql {
+            sql: "SELECT * FROM warehouse.orders JOIN customers USING (id)".to_string(),
+            params: json!(null),
+            shape: native(vec![late]),
+            reuse_if_unchanged: None,
+        };
+        assert_eq!(
+            named_schemas(&run),
+            BTreeSet::from(["billing".to_string(), "warehouse".to_string()])
+        );
+        let describe = Operation::Describe {
+            sql: "SELECT * FROM customers".to_string(),
+            shape: native(Vec::new()),
+        };
+        assert!(named_schemas(&describe).is_empty());
+        assert_eq!(
+            named_schemas(&options("Warehouse.orders")),
+            BTreeSet::from(["warehouse".to_string()])
+        );
+        assert!(named_schemas(&options("orders")).is_empty());
+    }
 
     #[test]
     fn nullable_update_fields_distinguish_omission_clear_and_value() {

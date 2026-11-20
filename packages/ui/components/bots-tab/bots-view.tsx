@@ -423,6 +423,7 @@ function CrewLayout(data: Readonly<CrewData>) {
 			<CrewSplitLayout
 				panelOpen={panelOpen}
 				onPanelLayoutChange={setPanelLayout}
+				onCloseDock={closeDock}
 				dock={
 					dockOpen ? (
 						<CrewDock

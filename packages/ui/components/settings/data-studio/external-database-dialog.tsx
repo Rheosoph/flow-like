@@ -51,7 +51,7 @@ export const EXTERNAL_DATABASE_DRIVERS: readonly ExternalDataSourceDriver[] = [
 
 /** Drivers the query service reads today; the others are stored until it does. */
 export const QUERYABLE_DRIVERS: ReadonlySet<ExternalDataSourceDriver> = new Set(
-	["postgres", "mysql", "clickhouse"],
+	["postgres", "mysql", "clickhouse", "bigquery", "athena"],
 );
 
 const ALIAS_PATTERN = /^[a-z_][a-z0-9_]{0,62}$/;

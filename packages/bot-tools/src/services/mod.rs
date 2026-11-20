@@ -19,7 +19,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use flow_like_types::bot_connector::{
-    CallPolicy, ConnectorKind, ConnectorPolicy, ConnectorRule, ConnectorToolInfo,
+    CalDavCalendarInfo, CallPolicy, ConnectorKind, ConnectorPolicy, ConnectorRule,
+    ConnectorToolInfo,
 };
 use flow_like_types::{Bytes, Result};
 use schemars::JsonSchema;
@@ -75,8 +76,12 @@ pub struct ConnectorEntry {
     pub url: Option<String>,
     /// OAuth: the provider's id, for the model's orientation.
     pub provider_id: Option<String>,
-    /// OAuth: the only hosts the token is sent to (exact names, or `*.suffix`).
+    /// OAuth: the only hosts the token is sent to (exact names, or `*.suffix`); CalDAV: the only
+    /// hosts the password is sent to.
     pub api_hosts: Vec<String>,
+    /// CalDAV: the calendar the bot reads and writes.
+    #[serde(default)]
+    pub calendar: Option<CalDavCalendarInfo>,
 }
 
 /// The `Authorization` header value a call carries. It never prints.
@@ -172,6 +177,12 @@ pub trait ConnectorSource: Send + Sync {
     }
 
     fn audit(&self, _entry: &CallAudit) {}
+
+    /// Where calls to connected calendars run: `None` calls the providers from this process; a
+    /// host that keeps untrusted network work elsewhere (the server: its executor) answers how.
+    fn calendar_jobs(&self) -> Option<&dyn crate::calendar::CalendarJobs> {
+        None
+    }
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -490,6 +501,33 @@ fn listed_account(entry: &ConnectorEntry) -> Value {
     })
 }
 
+fn listed_calendar(entry: &ConnectorEntry) -> Value {
+    let access = |method: &str| policy_name(entry.rule.request_call_policy(method));
+    json!({
+        "id": entry.rule.id,
+        "label": entry.rule.label,
+        "kind": "caldav",
+        "calendar": entry.calendar.as_ref().map(|calendar| calendar.name.as_str()),
+        "access": { "read": access("GET"), "write": access("PUT") },
+        "usage": "A CalDAV calendar: read and change it with calendar_list, calendar_create, calendar_update and calendar_delete.",
+    })
+}
+
+/// The refusal for a call that names a connector of another kind.
+fn wrong_kind(entry: &ConnectorEntry, wanted: ConnectorKind) -> ToolError {
+    let what = match entry.kind {
+        ConnectorKind::Mcp => "an MCP server; use connector_call",
+        ConnectorKind::Oauth => "an account; use connector_request",
+        ConnectorKind::Caldav => "a CalDAV calendar; use the calendar tools",
+    };
+    let needed = match wanted {
+        ConnectorKind::Mcp => "an MCP server",
+        ConnectorKind::Oauth => "an account",
+        ConnectorKind::Caldav => "a calendar",
+    };
+    ToolError::invalid(format!("'{}' is {what}, not {needed}", entry.rule.label))
+}
+
 pub async fn connector_tools(
     env: &dyn ToolEnv,
     args: ConnectorToolsArgs,
@@ -511,6 +549,7 @@ pub async fn connector_tools(
                 connectors.push(listed(entry, &live, &args));
             }
             ConnectorKind::Oauth => connectors.push(listed_account(entry)),
+            ConnectorKind::Caldav => connectors.push(listed_calendar(entry)),
         }
     }
     Ok(ToolOutput::new(json!({
@@ -654,10 +693,7 @@ pub async fn connector_call(env: &dyn ToolEnv, args: ConnectorCallArgs) -> ToolR
     let entries = source.entries().await?;
     let entry = find(&entries, &args.connector)?;
     if entry.kind != ConnectorKind::Mcp {
-        return Err(ToolError::invalid(format!(
-            "'{}' is an account, not an MCP server; use connector_request",
-            entry.rule.label
-        )));
+        return Err(wrong_kind(entry, ConnectorKind::Mcp));
     }
     if entry.rule.call_policy(&args.tool) == CallPolicy::Never {
         return Err(ToolError::refused(format!(
@@ -735,10 +771,7 @@ pub async fn connector_request(
     let entries = source.entries().await?;
     let entry = find(&entries, &args.connector)?;
     if entry.kind != ConnectorKind::Oauth {
-        return Err(ToolError::invalid(format!(
-            "'{}' is an MCP server, not an account; use connector_call",
-            entry.rule.label
-        )));
+        return Err(wrong_kind(entry, ConnectorKind::Oauth));
     }
     let method = args.method.trim().to_ascii_uppercase();
     if entry.rule.request_call_policy(&method) == CallPolicy::Never {

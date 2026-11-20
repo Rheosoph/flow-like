@@ -19,6 +19,7 @@ use super::{
 use crate::arrow_utils::record_batch_to_value;
 use crate::databases::column_access::{hidden_columns, is_hidden, restrict_provider};
 use crate::databases::df_provider::lance_table_provider;
+use crate::databases::workbench::prepared::{ExecutionBudget, budgeted_session};
 use datafusion::catalog::TableProvider;
 use datafusion::prelude::SessionContext;
 use flow_like_storage_contracts::column_metadata::ColumnReader;
@@ -348,6 +349,7 @@ pub struct LanceGraphStore {
     safety: CypherSafetyConfig,
     semaphore: Arc<tokio::sync::Semaphore>,
     column_reader: ColumnReader,
+    budget: Option<ExecutionBudget>,
 }
 
 impl LanceGraphStore {
@@ -380,7 +382,15 @@ impl LanceGraphStore {
             safety,
             semaphore,
             column_reader: reader,
+            budget: None,
         })
+    }
+
+    /// Cypher and SQL then run under `budget`'s memory pool and spill to its directory, as
+    /// workbench statements do.
+    pub fn with_budget(mut self, budget: ExecutionBudget) -> Self {
+        self.budget = Some(budget);
+        self
     }
 
     pub fn overlay(&self) -> &GraphOverlayDef {
@@ -935,10 +945,7 @@ impl LanceGraphStore {
     }
 
     async fn build_cypher_context(&self) -> Result<SessionContext> {
-        let ctx = SessionContext::new_with_state(
-            crate::databases::df_provider::with_lance_order_pushdown(SessionContext::new().state()),
-        );
-        crate::databases::register_sql_functions(&ctx);
+        let ctx = budgeted_session(self.budget.as_ref())?;
         let mut adapters: HashMap<String, Arc<dyn TableProvider>> = HashMap::new();
         let mut registered_labels = HashSet::new();
 
@@ -973,10 +980,7 @@ impl LanceGraphStore {
     }
 
     async fn build_query_context(&self, include_edges: bool) -> Result<SessionContext> {
-        let ctx = SessionContext::new_with_state(
-            crate::databases::df_provider::with_lance_order_pushdown(SessionContext::new().state()),
-        );
-        crate::databases::register_sql_functions(&ctx);
+        let ctx = budgeted_session(self.budget.as_ref())?;
         let mut adapters: HashMap<String, Arc<dyn TableProvider>> = HashMap::new();
         let mut registered_tables = HashSet::new();
 

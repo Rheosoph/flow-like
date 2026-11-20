@@ -12,7 +12,8 @@ use bytes::Bytes;
 use flow_like_storage::databases::workbench::{
     CrossAppSources, ExecutionBudget, ExternalSchema, PreparedQuery, QueryDescription,
     WorkbenchSchema, WorkbenchSurface, WorkbenchView, describe_cross_app_query,
-    describe_workbench_query, prepare_cross_app_query, prepare_workbench_query, tables_unchanged,
+    describe_workbench_query, parameter_options_answer, parameter_options_query,
+    prepare_cross_app_query, prepare_workbench_query,
 };
 use flow_like_storage::lancedb::Connection;
 use flow_like_storage_contracts::column_metadata::ColumnReader;
@@ -23,7 +24,9 @@ use tokio::sync::mpsc;
 
 /// Arrow chunks are split so no frame grows near the decoder's limit.
 const ARROW_FRAME_BYTES: usize = 4 * 1024 * 1024;
-const OPTION_VALUES: usize = 200;
+/// Warehouse statements end this long before the request does, so they fail as timed out and
+/// Athena stops its query while the handler still runs.
+const WAREHOUSE_MARGIN: Duration = Duration::from_secs(2);
 
 pub(super) struct FrameSink {
     sender: mpsc::Sender<Bytes>,
@@ -113,7 +116,11 @@ pub(super) struct Opened {
     pub(super) external_sources: Vec<ExternalSource>,
 }
 
-async fn open(config: &ServiceConfig, sources: Vec<SourceSpec>) -> Result<Opened, WireError> {
+async fn open(
+    config: &ServiceConfig,
+    sources: Vec<SourceSpec>,
+    external_deadline: Option<Instant>,
+) -> Result<Opened, WireError> {
     let mut opened = Opened::default();
     for spec in sources {
         match spec.location {
@@ -159,7 +166,10 @@ async fn open(config: &ServiceConfig, sources: Vec<SourceSpec>) -> Result<Opened
                         source.source_id
                     ))
                 })?;
-                let resolver = config.connector.resolver(&source).await?;
+                let resolver = config
+                    .connector
+                    .resolver(&source, external_deadline)
+                    .await?;
                 opened.external.push(ExternalSchema { name, resolver });
                 opened.external_sources.push(source);
             }
@@ -180,7 +190,7 @@ pub(super) fn workbench_source(opened: &Opened) -> Result<&(Connection, ColumnRe
     opened
         .bare
         .as_ref()
-        .ok_or_else(|| invalid("A workbench query needs one app source without a schema"))
+        .ok_or_else(|| invalid("This read needs one app source without a schema"))
 }
 
 async fn prepare(
@@ -249,26 +259,6 @@ async fn describe(
             .map_err(failed)
         }
     }
-}
-
-pub(super) fn quote(identifier: &str) -> Result<String, WireError> {
-    if identifier.is_empty() || identifier.contains('\0') {
-        return Err(invalid(format!("'{identifier}' is not a valid identifier")));
-    }
-    Ok(format!("\"{}\"", identifier.replace('"', "\"\"")))
-}
-
-/// `schema.table` or `table`, quoted part by part.
-pub(super) fn quote_table(table: &str) -> Result<String, WireError> {
-    let parts: Vec<&str> = match table.split_once('.') {
-        Some((schema, name)) => vec![schema, name],
-        None => vec![table],
-    };
-    Ok(parts
-        .into_iter()
-        .map(quote)
-        .collect::<Result<Vec<_>, _>>()?
-        .join("."))
 }
 
 /// One JSON value and the trailer: the response of every non-tabular operation.
@@ -344,7 +334,8 @@ pub(super) async fn execute(
         request.deadline_ms,
         &mut warnings,
     )?;
-    let opened = open(config, request.sources).await?;
+    let external_deadline = (started + budget.timeout).checked_sub(WAREHOUSE_MARGIN);
+    let opened = open(config, request.sources, external_deadline).await?;
     let finished = |warnings: Vec<String>| Trailer {
         warnings,
         elapsed_ms: started.elapsed().as_millis() as u64,
@@ -357,11 +348,10 @@ pub(super) async fn execute(
             shape,
             reuse_if_unchanged,
         } => {
-            if let (QueryShape::CrossApp, Some(versions)) = (&shape, &reuse_if_unchanged)
-                && !versions.is_empty()
-                && tables_unchanged(&opened.lance, versions)
-                    .await
-                    .unwrap_or(false)
+            let prepared = prepare(&opened, shape, &sql, &params, &budget).await?;
+            if reuse_if_unchanged
+                .as_ref()
+                .is_some_and(|versions| prepared.answers_like(versions))
             {
                 let mut trailer = finished(warnings);
                 trailer.unchanged = true;
@@ -369,7 +359,6 @@ pub(super) async fn execute(
                     .send(encode_json_frame(FrameKind::Trailer, &trailer))
                     .await;
             }
-            let prepared = prepare(&opened, shape, &sql, &params, &budget).await?;
             stream_rows(prepared, sink, warnings, started).await
         }
         Operation::Describe { sql, shape } => {
@@ -383,53 +372,18 @@ pub(super) async fn execute(
             range,
             shape,
         } => {
-            let source = quote_table(&table)?;
-            let field = quote(&column)?;
-            let (sql, params, rows) = if range {
-                (
-                    format!(
-                        "SELECT MIN({field}) AS \"min\", MAX({field}) AS \"max\" FROM {source}"
-                    ),
-                    Value::Null,
-                    1,
-                )
-            } else {
-                let filter = if search.as_deref().is_some_and(|text| !text.is_empty()) {
-                    format!(" AND strpos(lower(CAST({field} AS VARCHAR)), lower($__search)) > 0")
-                } else {
-                    String::new()
-                };
-                (
-                    format!(
-                        "SELECT DISTINCT {field} AS \"value\" FROM {source} \
-                         WHERE {field} IS NOT NULL{filter} ORDER BY 1"
-                    ),
-                    if filter.is_empty() {
-                        Value::Null
-                    } else {
-                        json!({ "__search": search })
-                    },
-                    OPTION_VALUES,
-                )
+            let options = parameter_options_query(&table, &column, search.as_deref(), range)
+                .map_err(|error| invalid(format!("{error:#}")))?;
+            let budget = ExecutionBudget {
+                rows: options.rows,
+                ..budget
             };
-            let budget = ExecutionBudget { rows, ..budget };
-            let result = prepare(&opened, shape, &sql, &params, &budget)
+            let result = prepare(&opened, shape, &options.sql, &options.params, &budget)
                 .await?
                 .collect()
                 .await
                 .map_err(failed)?;
-            let value = if range {
-                result.rows.into_iter().next().unwrap_or(Value::Null)
-            } else {
-                json!({
-                    "values": result
-                        .rows
-                        .into_iter()
-                        .map(|row| row.get("value").cloned().unwrap_or(Value::Null))
-                        .collect::<Vec<_>>(),
-                    "truncated": result.truncated,
-                })
-            };
+            let value = parameter_options_answer(result, range);
             send_json(sink, &value, finished(warnings)).await
         }
         Operation::ExternalTables | Operation::ExternalTest => {
@@ -483,16 +437,16 @@ mod tests {
     #[test]
     fn budgets_stay_within_the_service_and_say_so() {
         let mut warnings = Vec::new();
-        let budget = budget(
+        let capped = budget(
             &limits(),
             &requested(5_000, 60_000),
             now_ms() + 120_000,
             &mut warnings,
         )
         .unwrap();
-        assert_eq!(budget.rows, 100);
-        assert_eq!(budget.memory_bytes, Some(64 * 1024 * 1024));
-        assert_eq!(budget.timeout, Duration::from_secs(10));
+        assert_eq!(capped.rows, 100);
+        assert_eq!(capped.memory_bytes, Some(64 * 1024 * 1024));
+        assert_eq!(capped.timeout, Duration::from_secs(10));
         assert_eq!(warnings.len(), 1, "{warnings:?}");
 
         let mut quiet = Vec::new();
@@ -513,19 +467,6 @@ mod tests {
             &mut Vec::new(),
         );
         assert_eq!(late.unwrap_err().code, ErrorCode::Timeout);
-    }
-
-    #[test]
-    fn option_queries_quote_every_identifier_part() {
-        assert_eq!(
-            quote_table("crm.customers").unwrap(),
-            "\"crm\".\"customers\""
-        );
-        assert_eq!(quote_table("orders").unwrap(), "\"orders\"");
-        assert_eq!(quote("we\"ird").unwrap(), "\"we\"\"ird\"");
-        assert!(quote("").is_err());
-        assert!(quote_table("crm.").is_err());
-        assert!(quote("a\0b").is_err());
     }
 
     async fn orders_app(rows: &[(i64, &str)]) -> (std::path::PathBuf, WorkbenchSchema) {

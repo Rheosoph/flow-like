@@ -171,8 +171,9 @@ pub async fn collect(
         } else {
             scheduler.calendar_wake().await.unwrap_or_default()
         };
-        for calendar in &calendars {
-            let listed = match client.list(calendar, from, to).await {
+        let results = client.list_all(&calendars, from, to).await;
+        for (calendar, result) in calendars.iter().zip(results) {
+            let listed = match result {
                 Ok(listed) => listed,
                 Err(error) => {
                     listing.sources.push(calendar.source(Some(error.message)));

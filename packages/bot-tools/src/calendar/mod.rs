@@ -1,10 +1,14 @@
 //! The `calendar` capability: the bot's own calendar (event tasks), the owner's connected Google
-//! and Microsoft calendars read through the bot's OAuth connectors, and wake-ups before events.
-//! Hosts call [`list_range`] for their calendar views and [`sync_wakes`] from their background
-//! loop; both work with any host's [`Scheduler`] and [`ConnectorSource`].
+//! and Microsoft calendars read through the bot's OAuth connectors and CalDAV calendars through
+//! its CalDAV connectors, and wake-ups before events. Hosts call [`list_range`] for their
+//! calendar views and [`sync_wakes`] from their background loop; both work with any host's
+//! [`Scheduler`] and [`ConnectorSource`]. [`caldav::discover`] fills a CalDAV connector's calendars.
+//! A host that keeps provider calls out of its process answers
+//! [`ConnectorSource::calendar_jobs`]; the calls then run as [`CALENDAR_JOB`] jobs elsewhere.
 
-mod caldav;
+pub mod caldav;
 mod google;
+mod jobs;
 mod listing;
 mod microsoft;
 mod provider;
@@ -25,6 +29,12 @@ use crate::schedule::Scheduler;
 use crate::services::ConnectorSource;
 use provider::{Client, HttpTransport};
 
+pub use jobs::{
+    CALENDAR_JOB, CalendarCall, CalendarJobs, JobAnswer, JobAudit, JobCalendar, JobError,
+    JobListing, JobReply, MAX_JOB_EVENTS, MAX_REPLY_BYTES, account_entry, calendar_job,
+    discover_with,
+};
+pub use provider::{EventDraft, ExternalEvent, Listed};
 pub use tools::{
     CALENDAR_CREATE, CALENDAR_DELETE, CALENDAR_FREE_SLOTS, CALENDAR_LIST, CALENDAR_UPDATE,
     CALENDAR_WAKE_SETTINGS, CalendarCreateArgs, CalendarDeleteArgs, CalendarFreeSlotsArgs,

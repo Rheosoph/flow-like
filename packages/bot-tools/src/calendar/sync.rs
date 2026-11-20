@@ -104,8 +104,9 @@ pub async fn run(
     let attached: HashSet<&str> = calendars.iter().map(|calendar| calendar.id()).collect();
     let mut seen_until: HashMap<String, DateTime<Utc>> = HashMap::new();
     let mut listed: Vec<(ExternalEventRef, ExternalEvent)> = Vec::new();
-    for calendar in &calendars {
-        match client.list(calendar, now, until).await {
+    let results = client.list_all(&calendars, now, until).await;
+    for (calendar, result) in calendars.iter().zip(results) {
+        match result {
             Ok(result) => {
                 let read_to = if result.complete {
                     until

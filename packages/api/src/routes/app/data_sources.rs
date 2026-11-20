@@ -3,8 +3,12 @@
 //! stored secret fields, never their values.
 
 use crate::state::AppState;
-use axum::{Router, routing::get};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 
+pub mod check;
 pub mod handlers;
 pub mod model;
 pub mod query_source;
@@ -24,4 +28,5 @@ pub fn routes() -> Router<AppState> {
                 .patch(handlers::update_data_source)
                 .delete(handlers::delete_data_source),
         )
+        .route("/{source_id}/check", post(check::check_data_source))
 }

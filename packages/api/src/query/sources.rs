@@ -2,7 +2,7 @@
 //! may read, and the short-lived read-only credentials the service opens it with.
 
 use flow_like::credentials::SharedCredentials;
-use flow_like_query::{ReaderSpec, SourceLocation, SourceSpec};
+use flow_like_query::{ExternalSource, ReaderSpec, SourceLocation, SourceSpec};
 use flow_like_storage::contracts::column_metadata::ColumnReader;
 
 use super::QueryService;
@@ -57,6 +57,16 @@ impl LanceRead {
                 credentials,
             },
         }
+    }
+}
+
+/// One of an app's external databases as a request source under `schema`. Its opened credentials
+/// travel in this request body only; the service connects with them and keeps nothing.
+pub(crate) fn external_source(source: ExternalSource, schema: Option<String>) -> SourceSpec {
+    SourceSpec {
+        schema,
+        reader: ReaderSpec::Unrestricted,
+        location: SourceLocation::External(source),
     }
 }
 

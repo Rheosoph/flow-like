@@ -1803,7 +1803,7 @@ async fn a_one_off_event_is_done_after_its_last_wake_up() {
     wake_on(&db, vec![15]).await;
     let task = make_event(
         &db,
-        event_at(Utc::now() + Duration::hours(3)),
+        event_at(Utc::now() + Duration::minutes(10)),
         TaskCreator::Owner,
     )
     .await;

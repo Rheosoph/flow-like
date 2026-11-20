@@ -188,9 +188,42 @@ fn harden_ios_webview_scroll(window: &tauri::WebviewWindow) {
                 let _: () = objc2::msg_send![configuration, setDataDetectorTypes: 0u64];
             }
         }
+        hide_ios_keyboard_accessory();
     }) {
         tracing::warn!("Failed to apply iOS webview scroll hardening: {}", err);
     }
+}
+
+/// Drops the ⌃ ⌄ ✓ form bar WebKit puts above the keyboard, which costs a chat composer ~44 pt and
+/// no native app shows. `WKContentView` gets its own `inputAccessoryView` returning nil; replacing
+/// the inherited `UIResponder` method instead would strip every responder's accessory.
+#[cfg(target_os = "ios")]
+fn hide_ios_keyboard_accessory() {
+    use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
+
+    unsafe extern "C-unwind" fn no_accessory(_this: *mut AnyObject, _cmd: Sel) -> *mut AnyObject {
+        std::ptr::null_mut()
+    }
+
+    static HIDDEN: std::sync::Once = std::sync::Once::new();
+    HIDDEN.call_once(|| unsafe {
+        let Some(class) = AnyClass::get(c"WKContentView") else {
+            tracing::warn!("WKContentView not found; the keyboard keeps its form bar");
+            return;
+        };
+        let selector = objc2::sel!(inputAccessoryView);
+        let imp = std::mem::transmute::<
+            unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> *mut AnyObject,
+            Imp,
+        >(no_accessory);
+        let class_ptr = (class as *const AnyClass).cast_mut();
+        if !objc2::ffi::class_addMethod(class_ptr, selector, imp, c"@@:".as_ptr()).as_bool() {
+            let own = objc2::ffi::class_getInstanceMethod(class, selector);
+            if !own.is_null() {
+                objc2::ffi::method_setImplementation(own.cast_mut(), imp);
+            }
+        }
+    });
 }
 
 /// Tune the macOS WKWebView for performance.
@@ -1212,6 +1245,7 @@ pub fn run() {
             functions::native::native_set_background_hosting,
             functions::native::native_open_background_hosting_battery_settings,
             functions::native::native_open_background_hosting_notification_settings,
+            functions::native::native_open_notification_settings,
             functions::native::native_cancel_location,
             functions::native::native_geofence_permission,
             functions::file::get_path_meta,

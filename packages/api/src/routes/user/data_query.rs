@@ -3,8 +3,9 @@
 //! Every source app is authorized on every request, before any cache lookup, and keeps its own
 //! column restrictions. The query service runs the statement with read-only credentials minted
 //! per source. Results are shared by identical requests from callers with identical access:
-//! a fresh result is served as it is, an expired one is reused only after the service confirmed
-//! that none of the tables it read changed, and a failed refresh falls back to the last result.
+//! a fresh result is served while the API finds its tables at the versions it read, an expired
+//! one is reused only after the service confirmed that none of them changed and the statement
+//! does not depend on the time of the run, and a failed refresh falls back to the last result.
 
 mod cache;
 pub mod parameters;
@@ -15,19 +16,20 @@ use std::time::Duration;
 use axum::{Extension, Json, extract::State};
 use flow_like_query::{Operation, QueryShape, SourceSpec};
 use flow_like_storage::contracts::column_metadata::ColumnReader;
-use flow_like_storage::databases::workbench::SqlQueryResult;
+use flow_like_storage::databases::workbench::{SqlQueryResult, WorkbenchSchema, tables_unchanged};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use utoipa::ToSchema;
 
 use crate::{
     cache::best_effort,
-    ensure_any_permission,
+    ensure_any_permission, ensure_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     query::{self, LanceRead},
-    routes::app::db::ScopeParams,
+    routes::app::data_sources::query_source::{ensure_source, external_source_for_query},
+    routes::app::db::{ScopeParams, resolve_connection},
     state::AppState,
 };
 use cache::{CachedQuery, Lookup, STALE_IF_ERROR, Settled};
@@ -43,6 +45,7 @@ pub const MAX_SOURCES: usize = 32;
 pub const MAX_SQL_BYTES: usize = 128 * 1024;
 pub const MAX_PARAMS: usize = 128;
 pub const MAX_CACHE_SECONDS: u64 = 86_400;
+const MAX_SOURCE_ID_BYTES: usize = 128;
 const RESERVED_ALIASES: [&str; 2] = ["public", "information_schema"];
 const TOO_LARGE_TO_CACHE: &str = "The result is too large to cache, every load runs the query";
 
@@ -175,9 +178,20 @@ fn validate_sources(
                 source.alias
             )));
         }
-        source.personal()?;
-        if source.source_id.is_some() {
-            return Err(ApiError::bad_request("External sources are not wired yet"));
+        let personal = source.personal()?;
+        if let Some(source_id) = &source.source_id {
+            if source_id.trim().is_empty() || source_id.len() > MAX_SOURCE_ID_BYTES {
+                return Err(ApiError::bad_request(format!(
+                    "App source '{}' names an invalid external database id",
+                    source.alias
+                )));
+            }
+            if personal {
+                return Err(ApiError::bad_request(format!(
+                    "App source '{}' reads an external database, which has no personal scope",
+                    source.alias
+                )));
+            }
         }
     }
     if sources.len() > SOFT_SOURCES {
@@ -233,30 +247,69 @@ fn reader_identity(reader: &ColumnReader) -> Value {
     }
 }
 
+/// Where the rows of a source live.
+enum SourceRead {
+    /// The app's own tables, or the caller's personal copy of them.
+    Lance(LanceRead),
+    /// One of the app's external databases.
+    External { app_id: String, source_id: String },
+}
+
 /// One source after its permission check.
 struct AuthorizedSource {
     alias: String,
-    read: LanceRead,
+    read: SourceRead,
 }
 
 impl AuthorizedSource {
-    /// What a shared cache key needs: the same app, data owner and column visibility.
+    /// What a shared cache key needs: the same app and database, data owner and column visibility.
     fn identity(&self) -> Value {
-        json!({
-            "alias": self.alias,
-            "app_id": self.read.app_id,
-            "owner": self.read.owner,
-            "reader": reader_identity(&self.read.reader),
-        })
+        match &self.read {
+            SourceRead::Lance(read) => json!({
+                "alias": self.alias,
+                "app_id": read.app_id,
+                "owner": read.owner,
+                "reader": reader_identity(&read.reader),
+            }),
+            SourceRead::External { app_id, source_id } => json!({
+                "alias": self.alias,
+                "app_id": app_id,
+                "source_id": source_id,
+            }),
+        }
+    }
+
+    /// The source as the query service receives it, under its alias.
+    async fn spec(&self, state: &AppState) -> Result<SourceSpec, ApiError> {
+        let schema = Some(self.alias.clone());
+        match &self.read {
+            SourceRead::Lance(read) => state.query.lance_source(state, read, schema).await,
+            SourceRead::External { app_id, source_id } => Ok(query::external_source(
+                external_source_for_query(state, app_id, source_id).await?,
+                schema,
+            )),
+        }
     }
 }
 
-/// Checks the caller may read the app, and which of its columns.
+/// Checks the caller may read the app, and which of its columns. An external database needs
+/// the database read permission, since its stored credentials are the app's, not the caller's.
 async fn authorize_source(
     state: &AppState,
     user: &AppUser,
     source: &DataQuerySource,
 ) -> Result<AuthorizedSource, ApiError> {
+    if let Some(source_id) = &source.source_id {
+        ensure_permission!(user, &source.app_id, state, RolePermissions::ReadDatabase);
+        ensure_source(state, &source.app_id, source_id).await?;
+        return Ok(AuthorizedSource {
+            alias: source.alias.clone(),
+            read: SourceRead::External {
+                app_id: source.app_id.clone(),
+                source_id: source_id.clone(),
+            },
+        });
+    }
     let scope = ScopeParams {
         scope: source.personal()?.then(|| "user".to_string()),
     };
@@ -269,7 +322,12 @@ async fn authorize_source(
     );
     Ok(AuthorizedSource {
         alias: source.alias.clone(),
-        read: LanceRead::scoped(user, &permission, &source.app_id, &scope)?,
+        read: SourceRead::Lance(LanceRead::scoped(
+            user,
+            &permission,
+            &source.app_id,
+            &scope,
+        )?),
     })
 }
 
@@ -291,12 +349,7 @@ async fn source_specs(
     state: &AppState,
     sources: &[AuthorizedSource],
 ) -> Result<Vec<SourceSpec>, ApiError> {
-    futures::future::try_join_all(sources.iter().map(|source| {
-        state
-            .query
-            .lance_source(state, &source.read, Some(source.alias.clone()))
-    }))
-    .await
+    futures::future::try_join_all(sources.iter().map(|source| source.spec(state))).await
 }
 
 fn cache_key(sql: &str, params: &Value, limit: usize, sources: &[AuthorizedSource]) -> String {
@@ -339,7 +392,7 @@ fn respond(settled: Settled, ttl: Duration, mut warnings: Vec<String>) -> DataQu
     post,
     path = "/user/data/query",
     tag = "user",
-    description = "Run one read-only SQL query across the tables of several of your apps, as used by Home data widgets. Results may be reused for identical requests until they expire; an expired result is reused only while none of the tables it read changed, and stands in with a warning when a refresh fails.",
+    description = "Run one read-only SQL query across the tables of several of your apps, as used by Home data widgets. Identical requests reuse a result until it expires or one of the app tables it read changes; results from external databases are reused until they expire. A result stands in with a warning when a refresh fails.",
     request_body = DataQueryPayload,
     responses(
         (status = 200, description = "Query results with when they were computed, whether they came from the cache and any limit warnings", body = DataQueryResponse),
@@ -374,15 +427,22 @@ pub async fn data_query(
         best_effort::get::<CachedQuery>(&state.cache, CACHE_NAMESPACE, &key).await
     };
     let (held, reuse) = match cache::lookup(held, payload.fresh, now) {
-        Lookup::Fresh(entry) => {
-            let settled = Settled {
-                entry,
-                cached: true,
-                failure: None,
-                store: false,
-            };
-            return Ok(Json(respond(settled, ttl, warnings)));
-        }
+        Lookup::Fresh(entry) => match tables_current(&state, &user, &sources, &entry).await {
+            Some(true) => {
+                let settled = Settled {
+                    entry,
+                    cached: true,
+                    failure: None,
+                    store: false,
+                };
+                return Ok(Json(respond(settled, ttl, warnings)));
+            }
+            Some(false) => (Some(entry), None),
+            None => {
+                let reuse = entry.reusable_versions();
+                (Some(entry), reuse)
+            }
+        },
         Lookup::Refresh { held, reuse } => (held, reuse),
     };
 
@@ -414,6 +474,49 @@ pub async fn data_query(
         .await;
     }
     Ok(Json(respond(settled, ttl, warnings)))
+}
+
+/// Whether every Lance table `entry` read is still at the version it was read at. Opening a
+/// table reads its manifest, not its rows, so this stays in the API. `None` when a database or
+/// table could not be opened; the query service then decides.
+async fn tables_current(
+    state: &AppState,
+    user: &AppUser,
+    sources: &[AuthorizedSource],
+    entry: &CachedQuery,
+) -> Option<bool> {
+    let Some(probed) = entry.probed_schemas() else {
+        return Some(true);
+    };
+    let lance = sources.iter().filter_map(|source| match &source.read {
+        SourceRead::Lance(read) if probed.contains(source.alias.as_str()) => {
+            Some((source.alias.clone(), read))
+        }
+        _ => None,
+    });
+    let schemas = futures::future::try_join_all(lance.map(|(name, read)| async move {
+        let scope = ScopeParams {
+            scope: read.owner.is_some().then(|| "user".to_string()),
+        };
+        let connection = resolve_connection(state, user, &read.app_id, &scope).await?;
+        Ok::<_, ApiError>(WorkbenchSchema {
+            name,
+            connection,
+            reader: read.reader.clone(),
+        })
+    }))
+    .await;
+    let checked = match schemas {
+        Ok(schemas) => tables_unchanged(&schemas, &entry.versions)
+            .await
+            .map_err(|error| format!("{error:#}")),
+        Err(error) => Err(format!("{error:?}")),
+    };
+    checked
+        .inspect_err(|error| {
+            tracing::debug!(%error, "Cached cross-app result version check failed");
+        })
+        .ok()
 }
 
 /// Whether `entry` fits the shared cache; a result too large for it is still answered.
@@ -494,7 +597,14 @@ mod tests {
         );
         let mut external = source("warehouse", "a", None);
         external.source_id = Some("source-1".to_string());
-        assert!(rejection(&payload(vec![external])).contains("External sources are not wired yet"));
+        assert!(validate(&payload(vec![external.clone()])).is_ok());
+        external.scope = Some("personal".to_string());
+        assert!(rejection(&payload(vec![external.clone()])).contains("no personal scope"));
+        external.scope = None;
+        for id in [" ".to_string(), "x".repeat(MAX_SOURCE_ID_BYTES + 1)] {
+            external.source_id = Some(id);
+            assert!(rejection(&payload(vec![external.clone()])).contains("invalid external"));
+        }
 
         let mut empty = payload(vec![source("crm", "a", None)]);
         empty.sql = "  ".to_string();
@@ -548,14 +658,28 @@ mod tests {
         );
     }
 
+    fn lance(principal: &str, reader: ColumnReader, owner: Option<&str>) -> SourceRead {
+        SourceRead::Lance(LanceRead {
+            app_id: "a".to_string(),
+            principal: principal.to_string(),
+            owner: owner.map(str::to_string),
+            reader,
+        })
+    }
+
     fn authorized(alias: &str, reader: ColumnReader, owner: Option<&str>) -> AuthorizedSource {
         AuthorizedSource {
             alias: alias.to_string(),
-            read: LanceRead {
+            read: lance("anyone", reader, owner),
+        }
+    }
+
+    fn external(alias: &str, source_id: &str) -> AuthorizedSource {
+        AuthorizedSource {
+            alias: alias.to_string(),
+            read: SourceRead::External {
                 app_id: "a".to_string(),
-                principal: "anyone".to_string(),
-                owner: owner.map(str::to_string),
-                reader,
+                source_id: source_id.to_string(),
             },
         }
     }
@@ -573,7 +697,7 @@ mod tests {
             "identical requests from callers with identical access share a key"
         );
         let mut other_principal = base();
-        other_principal.read.principal = "someone-else".to_string();
+        other_principal.read = lance("someone-else", ColumnReader::Unrestricted, None);
         assert_eq!(
             reference,
             key("SELECT 1", json!({ "a": 1 }), 10, other_principal),
@@ -595,9 +719,20 @@ mod tests {
                 10,
                 authorized("crm", ColumnReader::Unrestricted, Some("user-1")),
             ),
+            key(
+                "SELECT 1",
+                json!({ "a": 1 }),
+                10,
+                external("crm", "source-1"),
+            ),
         ] {
             assert_ne!(reference, other);
         }
+        assert_ne!(
+            key("SELECT 1", Value::Null, 10, external("crm", "source-1")),
+            key("SELECT 1", Value::Null, 10, external("crm", "source-2")),
+            "each external database has its own results"
+        );
         let order = |first: &str, second: &str| {
             cache_key(
                 "SELECT 1",
