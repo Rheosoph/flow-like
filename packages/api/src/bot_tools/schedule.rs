@@ -51,6 +51,7 @@ impl ApiScheduler {
 }
 
 pub(crate) fn to_task(row: bot_task::Model, conversation: Option<TaskConversation>) -> BotTask {
+    let place = crate::bot_host::place_tasks::place_of(&row);
     BotTask {
         kind: TaskKind::parse(&row.kind).unwrap_or(TaskKind::Once),
         created_by: TaskCreator::parse(&row.created_by).unwrap_or(TaskCreator::Owner),
@@ -68,6 +69,7 @@ pub(crate) fn to_task(row: bot_task::Model, conversation: Option<TaskConversatio
         monitoring: row.monitoring.unwrap_or(false),
         created_at: row.created_at.to_rfc3339(),
         conversation,
+        place,
     }
 }
 

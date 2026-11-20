@@ -68,6 +68,10 @@
 			"description": "",
 			"label": ""
 		},
+		"location": {
+			"description": "",
+			"label": ""
+		},
 		"memory": {
 			"description": "",
 			"label": ""
@@ -1123,7 +1127,8 @@
 		},
 		"delete": {
 			"action": "Löschen",
-			"confirm": "{{name}} löschen? Seine bisherigen Nachrichten bleiben erhalten und zeigen ihn als gelöschten Bot."
+			"confirm": "{{name}} löschen? Seine bisherigen Nachrichten bleiben erhalten und zeigen ihn als gelöschten Bot.",
+			"confirmCopy": "{{name}} auf diesem Computer löschen? Seine Chats, sein Gedächtnis und seine Dateien hier verschwinden; {{name}} in deinem Konto bleibt."
 		},
 		"deleted": "{{name}} wurde gelöscht",
 		"describe": {
@@ -1784,7 +1789,18 @@
 			"monitoringLabel": "Beobachtung",
 			"placeDirect": "In einem Chat mit jemand anderem",
 			"placeGroup": "In {{name}}",
-			"placeUnnamedGroup": "In einem Gruppenchat"
+			"placeUnnamedGroup": "In einem Gruppenchat",
+			"expired": "",
+			"watching": "",
+			"place": {
+				"both": "",
+				"enter": "",
+				"exit": "",
+				"hint": "",
+				"once": "",
+				"repeat": "",
+				"until": ""
+			}
 		},
 		"waitingForYou": "",
 		"webhooks": {

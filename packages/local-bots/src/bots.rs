@@ -341,15 +341,35 @@ pub(crate) fn mark_built_in_used(db: &Connection, bot_id: &str) -> Result<bool> 
     Ok(changed > 0)
 }
 
-/// Assistant and Flux stay; the person's edits of them can be undone instead.
-fn refuse_built_in(bot: &StoredBot) -> Result<()> {
-    match bot.system {
-        Some(kind) => Err(Error::new(
-            codes::BOT_SYSTEM_UNDELETABLE,
-            format!("The built-in bot '{}' can't be deleted", kind.as_str()),
-        )),
-        None => Ok(()),
+/// Whether a delete may take this computer's Assistant or Flux.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BuiltInDeletion {
+    /// They stay: this computer's copy may be the person's only one.
+    Refuse,
+    /// The built-ins the signed-in account holds its own of. This computer's copy of one of
+    /// those is a second one and may go; the next list makes a fresh row, which gives way to
+    /// the account's.
+    AccountHolds(Vec<BotSystemKind>),
+}
+
+/// Assistant and Flux stay unless the account holds its own; the person's edits of them can be
+/// undone instead.
+fn refuse_built_in(bot: &StoredBot, built_ins: &BuiltInDeletion) -> Result<()> {
+    let Some(kind) = bot.system else {
+        return Ok(());
+    };
+    if let BuiltInDeletion::AccountHolds(kinds) = built_ins
+        && kinds.contains(&kind)
+    {
+        return Ok(());
     }
+    Err(Error::new(
+        codes::BOT_SYSTEM_UNDELETABLE,
+        format!(
+            "The built-in bot '{}' can't be deleted while it is the only one",
+            kind.as_str()
+        ),
+    ))
 }
 
 /// A change of the bot's apps or secrets moves its `updated_at` like a settings change.
@@ -711,12 +731,16 @@ impl LocalBotStore {
     }
 
     /// Deletes the bot with its apps, secrets and direct conversations; it leaves its groups.
-    /// Assistant and Flux can't be deleted. Returns the workspace app it had, which only the
-    /// host can delete: hosts call [`Self::delete_bot_with_workspace`].
-    pub(crate) fn delete_bot(&self, bot_id: &str) -> Result<Option<String>> {
+    /// Assistant and Flux go only as `built_ins` allows. Returns the workspace app it had,
+    /// which only the host can delete: hosts call [`Self::delete_bot_with_workspace`].
+    pub(crate) fn delete_bot(
+        &self,
+        bot_id: &str,
+        built_ins: &BuiltInDeletion,
+    ) -> Result<Option<String>> {
         self.write(|tx, changes| {
             let bot = required_bot(tx, bot_id)?;
-            refuse_built_in(&bot)?;
+            refuse_built_in(&bot, built_ins)?;
             inbox::retire_bot(tx, bot_id, changes)?;
             tx.execute("DELETE FROM bots WHERE id = ?1", [bot_id])?;
             changes.bot(bot_id);
@@ -727,10 +751,14 @@ impl LocalBotStore {
 
     /// Fails like [`Self::delete_bot`] would, without deleting; otherwise the bot's workspace
     /// app, if it has one.
-    pub(crate) fn deletable_bot(&self, bot_id: &str) -> Result<Option<String>> {
+    pub(crate) fn deletable_bot(
+        &self,
+        bot_id: &str,
+        built_ins: &BuiltInDeletion,
+    ) -> Result<Option<String>> {
         self.read(|db| {
             let bot = required_bot(db, bot_id)?;
-            refuse_built_in(&bot)?;
+            refuse_built_in(&bot, built_ins)?;
             Ok(bot.workspace_app_id)
         })
     }

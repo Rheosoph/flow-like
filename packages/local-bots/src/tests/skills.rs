@@ -27,7 +27,9 @@ fn a_skill_needs_the_capability_and_valid_text() {
     let f = fixture();
     let plain = f
         .store
-        .create_bot(create(json!({ "name": "Plain", "appearance": { "kind": "pip" } })))
+        .create_bot(create(
+            json!({ "name": "Plain", "appearance": { "kind": "pip" } }),
+        ))
         .unwrap();
     let error = f
         .store
@@ -43,7 +45,11 @@ fn a_skill_needs_the_capability_and_valid_text() {
             ..request("ok")
         },
     ] {
-        assert!(f.store.create_skill(&bot.id, bad, SkillOrigin::owner()).is_err());
+        assert!(
+            f.store
+                .create_skill(&bot.id, bad, SkillOrigin::owner())
+                .is_err()
+        );
     }
     assert!(f.store.skills(&bot.id).unwrap().is_empty());
 }
@@ -134,7 +140,11 @@ fn skills_update_delete_and_go_with_their_bot() {
     assert_eq!(updated.body, "changed");
     assert_eq!(updated.tools, ["extract"]);
     assert_eq!(updated.status, SkillStatus::Active);
-    assert!(f.store.update_skill(&bot.id, "missing", UpdateBotSkill::default()).is_err());
+    assert!(
+        f.store
+            .update_skill(&bot.id, "missing", UpdateBotSkill::default())
+            .is_err()
+    );
     assert!(
         f.store
             .update_skill(
@@ -161,7 +171,11 @@ fn another_bots_skill_reads_as_missing() {
         .store
         .create_skill(&one.id, request("pdf"), SkillOrigin::owner())
         .unwrap();
-    assert!(f.store.set_skill_status(&two.id, &skill.id, SkillStatus::Disabled).is_err());
+    assert!(
+        f.store
+            .set_skill_status(&two.id, &skill.id, SkillStatus::Disabled)
+            .is_err()
+    );
     assert!(f.store.delete_skill(&two.id, &skill.id).is_err());
     assert!(f.store.skill_by_name(&two.id, "pdf").unwrap().is_none());
 }
@@ -185,7 +199,10 @@ fn a_bot_takes_its_skills_along_when_it_moves() {
     seen.sort_by_key(|(name, _)| *name);
     assert_eq!(
         seen,
-        [("draft", SkillStatus::Pending), ("mine", SkillStatus::Active)]
+        [
+            ("draft", SkillStatus::Pending),
+            ("mine", SkillStatus::Active)
+        ]
     );
 }
 
@@ -203,7 +220,14 @@ fn a_package_installs_pending_skills_only_when_the_bot_covers_its_tags() {
     let tags = vec!["net.http".to_string(), "storage.node".to_string()];
     let error = f
         .store
-        .install_package_skills(&bot.id, "com.acme.pdf", "1.0.0", vec![package_entry("pdf-forms")], &tags, true)
+        .install_package_skills(
+            &bot.id,
+            "com.acme.pdf",
+            "1.0.0",
+            vec![package_entry("pdf-forms")],
+            &tags,
+            true,
+        )
         .unwrap_err();
     assert!(error.to_string().contains("internet"), "{error}");
     assert!(f.store.skills(&bot.id).unwrap().is_empty());
@@ -218,7 +242,14 @@ fn a_package_installs_pending_skills_only_when_the_bot_covers_its_tags() {
         .unwrap();
     let saved = f
         .store
-        .install_package_skills(&online.id, "com.acme.pdf", "1.0.0", vec![package_entry("pdf-forms")], &tags, true)
+        .install_package_skills(
+            &online.id,
+            "com.acme.pdf",
+            "1.0.0",
+            vec![package_entry("pdf-forms")],
+            &tags,
+            true,
+        )
         .unwrap();
     assert_eq!(saved[0].status, SkillStatus::Pending);
     assert_eq!(saved[0].source.package_id(), Some("com.acme.pdf"));
@@ -241,10 +272,16 @@ fn deleting_the_last_skill_of_a_package_releases_what_this_device_installed() {
         .unwrap();
     let skills = f.store.skills(&bot.id).unwrap();
     f.store.delete_skill(&bot.id, &skills[0].id).unwrap();
-    assert!(!f.store.release_package("com.acme.pdf").unwrap(), "another skill still uses it");
+    assert!(
+        !f.store.release_package("com.acme.pdf").unwrap(),
+        "another skill still uses it"
+    );
     f.store.delete_skill(&bot.id, &skills[1].id).unwrap();
     assert!(f.store.release_package("com.acme.pdf").unwrap());
-    assert!(!f.store.release_package("com.acme.pdf").unwrap(), "released once");
+    assert!(
+        !f.store.release_package("com.acme.pdf").unwrap(),
+        "released once"
+    );
 }
 
 #[test]
@@ -253,7 +290,14 @@ fn a_package_installed_before_is_never_released() {
     let bot = skilled_bot(&f);
     let saved = f
         .store
-        .install_package_skills(&bot.id, "com.acme.pdf", "1.0.0", vec![package_entry("one")], &[], false)
+        .install_package_skills(
+            &bot.id,
+            "com.acme.pdf",
+            "1.0.0",
+            vec![package_entry("one")],
+            &[],
+            false,
+        )
         .unwrap();
     f.store.delete_skill(&bot.id, &saved[0].id).unwrap();
     assert!(!f.store.release_package("com.acme.pdf").unwrap());

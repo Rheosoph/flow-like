@@ -28,6 +28,7 @@ pub mod layout;
 pub mod notify;
 pub mod outcome;
 pub mod people;
+pub mod places;
 pub mod rooms;
 pub mod schedule;
 pub mod secret_text;
@@ -176,6 +177,10 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         schedule::LIST_TASKS => schedule::list_tasks(env, parse_args(tool, args)?).await,
         schedule::CANCEL_TASK => schedule::cancel_task(env, parse_args(tool, args)?).await,
         schedule::UPDATE_TASK => schedule::update_task(env, parse_args(tool, args)?).await,
+        places::FIND_PLACE => places::find_place(env, parse_args(tool, args)?).await,
+        places::WATCH_PLACE => places::watch_place(env, parse_args(tool, args)?).await,
+        places::LIST_PLACES => places::list_places(env, parse_args(tool, args)?).await,
+        places::CANCEL_PLACE => places::cancel_place(env, parse_args(tool, args)?).await,
         skills::SKILL_LOAD => skills::skill_load(env, parse_args(tool, args)?).await,
         skills::SKILL_PROPOSE => skills::skill_propose(env, parse_args(tool, args)?).await,
         skills::SKILL_CALL => skills::skill_call(env, parse_args(tool, args)?).await,

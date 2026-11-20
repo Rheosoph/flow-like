@@ -300,7 +300,9 @@ fn deleting_the_bot_removes_its_saved_execution_state() {
     f.store
         .save_run_checkpoint(&bot.id, &room.id, "original", &checkpoint(1))
         .unwrap();
-    f.store.delete_bot(&bot.id).unwrap();
+    f.store
+        .delete_bot(&bot.id, &crate::BuiltInDeletion::Refuse)
+        .unwrap();
     let count: i64 = f
         .raw()
         .query_row("SELECT COUNT(*) FROM bot_run_checkpoints", [], |row| {

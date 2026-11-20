@@ -1,5 +1,6 @@
 use super::*;
 use crate::{WorkspaceBot, WorkspaceHost, codes};
+use flow_like_types::bot::BotSystemKind;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::atomic::{AtomicUsize, Ordering},
@@ -187,7 +188,9 @@ async fn an_app_made_for_a_bot_deleted_meanwhile_is_deleted_again() {
     let scout = f.bot("Scout");
     let (store, bot_id) = (f.store.clone(), scout.id.clone());
     *host.after_create.lock().unwrap() = Some(Box::new(move || {
-        store.delete_bot(&bot_id).unwrap();
+        store
+            .delete_bot(&bot_id, &crate::BuiltInDeletion::Refuse)
+            .unwrap();
     }));
 
     let error = f.store.workspace(&host, &scout.id).await.unwrap_err();
@@ -271,7 +274,7 @@ async fn an_unknown_bot_has_no_workspace_and_nothing_to_delete() {
     assert_eq!(
         code(
             f.store
-                .delete_bot_with_workspace(&host, "bot_missing")
+                .delete_bot_with_workspace(&host, "bot_missing", crate::BuiltInDeletion::Refuse)
                 .await
         ),
         codes::NOT_FOUND
@@ -292,7 +295,7 @@ async fn deleting_a_bot_deletes_its_workspace_and_memory() {
     f.changes.take();
 
     f.store
-        .delete_bot_with_workspace(&host, &scout.id)
+        .delete_bot_with_workspace(&host, &scout.id, crate::BuiltInDeletion::Refuse)
         .await
         .unwrap();
 
@@ -315,7 +318,7 @@ async fn a_failed_delete_keeps_the_bot_and_deleting_again_finishes() {
     host.break_deletion(&app_id);
     let error = f
         .store
-        .delete_bot_with_workspace(&host, &scout.id)
+        .delete_bot_with_workspace(&host, &scout.id, crate::BuiltInDeletion::Refuse)
         .await
         .unwrap_err();
     assert_eq!(error.code(), codes::BOT_WORKSPACE_FAILED);
@@ -328,7 +331,7 @@ async fn a_failed_delete_keeps_the_bot_and_deleting_again_finishes() {
     host.break_deletion(&scout.id);
     let error = f
         .store
-        .delete_bot_with_workspace(&host, &scout.id)
+        .delete_bot_with_workspace(&host, &scout.id, crate::BuiltInDeletion::Refuse)
         .await
         .unwrap_err();
     assert!(error.message().contains("memory"), "{error}");
@@ -337,7 +340,7 @@ async fn a_failed_delete_keeps_the_bot_and_deleting_again_finishes() {
 
     host.repair();
     f.store
-        .delete_bot_with_workspace(&host, &scout.id)
+        .delete_bot_with_workspace(&host, &scout.id, crate::BuiltInDeletion::Refuse)
         .await
         .unwrap();
     assert_eq!(f.store.get_bot(&scout.id).unwrap(), None);
@@ -365,7 +368,7 @@ async fn a_workspace_made_while_its_bot_is_deleted_goes_too() {
     }));
 
     f.store
-        .delete_bot_with_workspace(&host, &scout.id)
+        .delete_bot_with_workspace(&host, &scout.id, crate::BuiltInDeletion::Refuse)
         .await
         .unwrap();
 
@@ -384,7 +387,7 @@ async fn built_ins_keep_their_workspace_and_memory() {
 
     let error = f
         .store
-        .delete_bot_with_workspace(&host, &general.id)
+        .delete_bot_with_workspace(&host, &general.id, crate::BuiltInDeletion::Refuse)
         .await
         .unwrap_err();
 
@@ -392,4 +395,58 @@ async fn built_ins_keep_their_workspace_and_memory() {
     assert_eq!(host.apps(), [app_id]);
     assert!(host.remembers(&general.id));
     assert_eq!(host.calls().len(), 1, "{:?}", host.calls());
+}
+
+#[tokio::test]
+async fn a_built_in_stays_when_the_account_holds_only_the_other_kind() {
+    let f = fixture();
+    let host = Host::default();
+    f.store.ensure_built_ins().unwrap();
+    let general = f.store.list_bots().unwrap().remove(0);
+
+    let error = f
+        .store
+        .delete_bot_with_workspace(
+            &host,
+            &general.id,
+            crate::BuiltInDeletion::AccountHolds(vec![BotSystemKind::Flux]),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code(), codes::BOT_SYSTEM_UNDELETABLE);
+    assert!(f.store.get_bot(&general.id).unwrap().is_some());
+    assert!(host.calls().is_empty(), "{:?}", host.calls());
+}
+
+#[tokio::test]
+async fn a_built_in_the_account_also_holds_goes_and_comes_back_fresh() {
+    let f = fixture();
+    let host = Host::default();
+    f.store.ensure_built_ins().unwrap();
+    let general = f.store.list_bots().unwrap().remove(0);
+    f.store
+        .update_bot(&general.id, patch(json!({ "name": "Edited here" })))
+        .unwrap();
+    let app_id = f.store.workspace(&host, &general.id).await.unwrap();
+    host.remember(&general.id);
+
+    f.store
+        .delete_bot_with_workspace(
+            &host,
+            &general.id,
+            crate::BuiltInDeletion::AccountHolds(vec![BotSystemKind::General]),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(f.store.get_bot(&general.id).unwrap(), None);
+    assert!(!host.apps().contains(&app_id));
+    assert!(!host.remembers(&general.id));
+    f.store.ensure_built_ins().unwrap();
+    let fresh = f.store.list_bots().unwrap().remove(0);
+    assert_eq!(fresh.system, general.system);
+    assert_ne!(fresh.id, general.id);
+    assert_eq!(fresh.name, None);
+    assert_eq!(fresh.created_at, fresh.updated_at);
 }

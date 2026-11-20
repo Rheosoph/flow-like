@@ -24,6 +24,8 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <!-- ML Kit document scanner locks its delegate activity to portrait, which implies this feature -->
+    <uses-feature android:name="android.hardware.screen.portrait" android:required="false" />
 
     <application
         android:name=".FlowLikeApplication"

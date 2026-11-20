@@ -14,7 +14,7 @@ use url::Url;
 
 use super::platform::PLATFORM_TOOL_IMAGE_URLS_FIELD;
 use super::tool_spec::{PlatformToolSpec, ToolApprovalSpec};
-use crate::flow::execution::{ExecutionEnvironment, egress::GuardedHttpClient};
+use crate::models::media::MediaLinks;
 
 pub const IMAGE_VIEW_TOOL: &str = "image_view";
 
@@ -193,14 +193,15 @@ fn image_type(head: &[u8], declared: Option<&str>) -> Result<&'static str, Strin
 }
 
 /// Checks that the link answers with a model-readable image, reading only its first bytes, so a
-/// dead or wrong link fails this call instead of the model call that would carry it.
-async fn probe(client: &GuardedHttpClient, url: &str) -> Result<Probed, String> {
-    let request = client
-        .get(url)
-        .map_err(|error| error.to_string())?
-        .header(reqwest::header::ACCEPT, "image/*");
+/// dead or wrong link fails this call instead of the model call that would carry it. `links`
+/// reaches what that model call reaches, so a link it would refuse is refused here.
+async fn probe(links: &MediaLinks, url: &str) -> Result<Probed, String> {
     let attempt = async {
-        let mut response = request
+        let mut response = links
+            .get(url)
+            .await
+            .map_err(|error| error.to_string())?
+            .header(reqwest::header::ACCEPT, "image/*")
             .send()
             .await
             .map_err(|error| format!("the request failed: {}", error.without_url()))?;
@@ -303,7 +304,7 @@ fn refusal(url: &str, messages: &[&Message]) -> Option<String> {
 pub(super) async fn run_image_view(
     arguments: &Value,
     messages: &[&Message],
-    environment: ExecutionEnvironment,
+    links: &MediaLinks,
 ) -> String {
     let urls = match requested_urls(arguments) {
         Ok(urls) => urls,
@@ -318,26 +319,12 @@ pub(super) async fn run_image_view(
             .to_string();
         }
     };
-    let client = match GuardedHttpClient::new(environment) {
-        Ok(client) => client,
-        Err(error) => {
-            return json!({
-                "status": "error",
-                "tool": IMAGE_VIEW_TOOL,
-                "code": "image_view_unavailable",
-                "retryable": false,
-                "message": format!("No HTTP client for image links: {error}"),
-            })
-            .to_string();
-        }
-    };
     let outcomes = join_all(urls.iter().map(|url| {
         let refused = refusal(url, messages);
-        let client = &client;
         async move {
             match refused {
                 Some(reason) => Err(reason),
-                None => probe(client, url).await,
+                None => probe(links, url).await,
             }
         }
     }))
@@ -390,11 +377,22 @@ fn image_view_result(urls: &[String], outcomes: Vec<Result<Probed, String>>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::flow::execution::ExecutionEnvironment;
+    use crate::flow_like_model_provider::egress::ProviderEgress;
+    use crate::models::media::OwnStorage;
     use rig::OneOrMany;
     use rig::message::{Text, ToolCall, ToolFunction, ToolResult};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     const SIGNED: &str = "https://bucket.s3.eu-central-1.amazonaws.com/tmp/apps/a/0.jpeg?X-Amz-Expires=900&X-Amz-Signature=abc";
+
+    fn desktop_links() -> MediaLinks {
+        MediaLinks::new(
+            ExecutionEnvironment::Desktop,
+            OwnStorage::default(),
+            ProviderEgress::Open,
+        )
+    }
 
     fn user(text: &str) -> Message {
         Message::User {
@@ -591,12 +589,7 @@ mod tests {
         )
         .await;
         let result = tool_result(&json!({ "pages": [url] }).to_string());
-        let output = run_image_view(
-            &json!({ "urls": [url] }),
-            &[&result],
-            ExecutionEnvironment::Desktop,
-        )
-        .await;
+        let output = run_image_view(&json!({ "urls": [url] }), &[&result], &desktop_links()).await;
         let mut value: Value = serde_json::from_str(&output).unwrap();
         assert_eq!(value["status"], "ok", "{output}");
         let images = super::super::platform::take_platform_tool_image_urls(&mut value);
@@ -608,12 +601,7 @@ mod tests {
     async fn an_expired_link_fails_the_call_with_a_hint() {
         let url = serve_once("HTTP/1.1 403 Forbidden", b"denied").await;
         let result = tool_result(&url);
-        let output = run_image_view(
-            &json!({ "urls": [url] }),
-            &[&result],
-            ExecutionEnvironment::Desktop,
-        )
-        .await;
+        let output = run_image_view(&json!({ "urls": [url] }), &[&result], &desktop_links()).await;
         let value: Value = serde_json::from_str(&output).unwrap();
         assert_eq!(value["status"], "error");
         assert!(
@@ -625,15 +613,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_server_that_confines_its_users_views_public_links_only() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let on_loopback = format!("https://{}/x.png", listener.local_addr().unwrap());
+        let urls = [
+            on_loopback.as_str(),
+            "http://images.example.com/x.png",
+            "https://10.0.0.5/x.png",
+            "https://192.168.1.20:8443/x.png",
+            "https://169.254.169.254/x.png",
+        ];
+        let received = user(&urls.join(" "));
+        let confined = MediaLinks::new(
+            ExecutionEnvironment::Server,
+            OwnStorage::default(),
+            ProviderEgress::Public,
+        );
+        let output = run_image_view(&json!({ "urls": urls }), &[&received], &confined).await;
+        let value: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(value["status"], "error", "{output}");
+        let refused = value["refused"].as_array().unwrap();
+        assert_eq!(refused.len(), urls.len(), "{output}");
+        for entry in refused {
+            let reason = entry["reason"].as_str().unwrap();
+            assert!(reason.contains("public HTTPS"), "{reason}");
+            assert!(!reason.contains("x.png"), "{reason}");
+        }
+        let accepted = tokio::time::timeout(Duration::from_millis(100), listener.accept()).await;
+        assert!(accepted.is_err(), "a refused link was fetched");
+    }
+
+    #[tokio::test]
     async fn an_unreceived_link_is_never_fetched() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/x.png", listener.local_addr().unwrap());
-        let output = run_image_view(
-            &json!({ "urls": [url] }),
-            &[],
-            ExecutionEnvironment::Desktop,
-        )
-        .await;
+        let output = run_image_view(&json!({ "urls": [url] }), &[], &desktop_links()).await;
         let value: Value = serde_json::from_str(&output).unwrap();
         assert_eq!(value["status"], "error");
         let accepted = tokio::time::timeout(Duration::from_millis(100), listener.accept()).await;

@@ -72,6 +72,15 @@ pub(crate) async fn fetch_get(
     url: &Url,
     max_bytes: usize,
 ) -> ToolResult<Fetched> {
+    fetch_get_as(env, url, max_bytes, "Flow-Like-Bot").await
+}
+
+pub(crate) async fn fetch_get_as(
+    env: &dyn ToolEnv,
+    url: &Url,
+    max_bytes: usize,
+    user_agent: &str,
+) -> ToolResult<Fetched> {
     let site = url.host_str().unwrap_or("the site").to_string();
     let reachable = resolve_public(env.environment(), url.as_str())
         .await
@@ -84,7 +93,7 @@ pub(crate) async fn fetch_get(
     let client = pinned_client(&reachable)?;
     let mut response = client
         .get(reachable.url)
-        .header(header::USER_AGENT, "Flow-Like-Bot")
+        .header(header::USER_AGENT, user_agent)
         .send()
         .await
         .map_err(|error| {

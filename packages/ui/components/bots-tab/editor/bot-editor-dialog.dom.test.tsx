@@ -92,6 +92,8 @@ interface Calls {
 
 interface Fixture {
 	existing?: IBot;
+	/** Listed after `existing`. */
+	others?: IBot[];
 	initialApps?: IBotApp[];
 	apps?: { id: string; name: string; visibility?: IAppVisibility }[];
 	secrets?: IBotSecretInfo[];
@@ -120,6 +122,7 @@ function fakeBackend(
 	calls: Calls,
 	{
 		existing,
+		others = [],
 		apps = [],
 		initialApps = [],
 		secrets = [],
@@ -148,7 +151,7 @@ function fakeBackend(
 			});
 		});
 	const botState: Partial<IBotState> = {
-		listBots: async () => (existing ? [existing] : []),
+		listBots: async () => [...(existing ? [existing] : []), ...others],
 		getBot: async () => {
 			if (!existing) throw new Error("No bot");
 			return existing;
@@ -1732,6 +1735,42 @@ describe("BotEditorDialog duplicate", () => {
 		await view.settle();
 		expect(view.calls.cloned).toEqual(["bot_flux"]);
 		expect(view.toastSuccesses()).toEqual(["Duplicated as Flux copy"]);
+	});
+
+	test("this computer's Flux beside the account's can be deleted", async () => {
+		const view = await renderDialog({
+			existing: bot({
+				id: "local_flux",
+				system: "flux",
+				name: null,
+				local: true,
+			}),
+			others: [bot({ id: "bot_flux", system: "flux", name: null })],
+			clone: true,
+		});
+		await view.settle();
+		expect(view.button("Duplicate")).toBeDefined();
+
+		await view.click("Delete bot");
+		expect(view.body.textContent).toContain(
+			"Delete Flux on this computer? Its chats, memory and files here go; Flux in your account stays.",
+		);
+		await view.click("Delete");
+		await view.settle();
+		expect(view.calls.deleted).toEqual(["local_flux"]);
+	});
+
+	test("the account's Flux stays undeletable beside this computer's", async () => {
+		const view = await renderDialog({
+			existing: bot({ id: "bot_flux", system: "flux", name: null }),
+			others: [
+				bot({ id: "local_flux", system: "flux", name: null, local: true }),
+			],
+			clone: true,
+		});
+		await view.settle();
+		expect(() => view.button("Delete bot")).toThrow();
+		expect(view.button("Duplicate")).toBeDefined();
 	});
 
 	test("is hidden where the host can't copy bots", async () => {

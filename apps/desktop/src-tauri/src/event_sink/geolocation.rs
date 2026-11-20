@@ -11,6 +11,7 @@ use std::{
 };
 use tauri::AppHandle;
 
+pub(crate) mod bot_places;
 mod dispatch;
 mod inbox;
 mod model;
@@ -208,7 +209,18 @@ async fn sync_native(app: &AppHandle, db: &DbConnection) -> Result<Scope> {
         current.len() <= MAX_MONITORED_REGIONS,
         "This device's monitored region limit is reached; disable another Location Event first"
     );
-    native::sync(&scope.raw, &current)?;
+    let watched = {
+        let conn = db.lock().unwrap();
+        bot_places::prune(&conn, Some(&scope.raw))?;
+        bot_places::merge(&current, &conn, &scope.raw, now_ms(), MAX_MONITORED_REGIONS)?
+    };
+    if let Err(error) = native::sync(&scope.raw, &watched) {
+        if watched.len() == current.len() {
+            return Err(error);
+        }
+        tracing::warn!(error=%error, "Native geofences refused the bot places, watching app Location Events only");
+        native::sync(&scope.raw, &current)?;
+    }
     Ok(scope)
 }
 
@@ -346,10 +358,18 @@ async fn process(app: &AppHandle, db: &DbConnection) -> Result<()> {
         let raw = native::scope()?;
         if raw.is_empty() {
             inbox::prune(&db.lock().unwrap(), None, now_ms())?;
+            bot_places::prune(&db.lock().unwrap(), None)?;
             return Ok(());
         }
         let scope = sync_native(app, db).await?;
-        let current = registrations(db, &scope)?;
+        let mut current = registrations(db, &scope)?;
+        if bot_places::WATCHES {
+            current.extend(bot_places::live_registrations(
+                &db.lock().unwrap(),
+                &scope.raw,
+                now_ms(),
+            )?);
+        }
         let mut acknowledged = Vec::new();
         for transition in native::peek()?.into_iter().take(model::MAX_PENDING) {
             let valid = current
@@ -367,6 +387,17 @@ async fn process(app: &AppHandle, db: &DbConnection) -> Result<()> {
     for transition in pending {
         if native::scope()? != scope.raw {
             return Ok(());
+        }
+        let place = if bot_places::WATCHES {
+            bot_places::find(&db.lock().unwrap(), &scope.raw, &transition.registration_id)?
+        } else {
+            None
+        };
+        if let Some(place) = place {
+            if !dispatch_bot_place(db, &scope, &place, &transition).await? {
+                break;
+            }
+            continue;
         }
         let row = EventSinkManager::read_registration(db.clone(), &transition.event_id)?;
         let Some(row) = row else {
@@ -444,6 +475,66 @@ async fn process(app: &AppHandle, db: &DbConnection) -> Result<()> {
     Ok(())
 }
 
+fn background_budget() -> Option<f64> {
+    let remaining = native::remaining();
+    if (0.0..=1.0).contains(&remaining) {
+        None
+    } else if remaining < 0.0 {
+        Some(3600.0)
+    } else {
+        Some((remaining - 1.0).min(20.0))
+    }
+}
+
+/// Reports a bot place crossing to the hub. `false` when the background time is used up.
+async fn dispatch_bot_place(
+    db: &DbConnection,
+    scope: &Scope,
+    place: &bot_places::BotPlace,
+    transition: &model::Transition,
+) -> Result<bool> {
+    let now = now_ms();
+    if !transition.matches(&scope.raw, &place.registration(), now)
+        || !transition.deliverable(true, now)
+    {
+        inbox::complete(&db.lock().unwrap(), &transition.id)?;
+        return Ok(true);
+    }
+    let Some(budget) = background_budget() else {
+        return Ok(false);
+    };
+    let cancellation = CancellationToken::new();
+    *ACTIVE.lock().unwrap() = Some((place.task_id.clone(), cancellation.clone()));
+    let result = tokio::select! {
+        result = bot_places::deliver(scope, place, transition) => result,
+        _ = tokio::time::sleep(Duration::from_secs_f64(budget)) => Err(anyhow!("Bot place report exceeded the device's background time budget")),
+        _ = cancellation.cancelled() => Err(anyhow!("Bot place report was interrupted by the operating system or account change")),
+        _ = async {
+            loop {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                if native::scope().ok().as_deref() != Some(&scope.raw)
+                    || (0.0..=1.0).contains(&native::remaining()) { break; }
+            }
+        } => Err(anyhow!("Bot place report stopped because the account or background time changed")),
+    };
+    *ACTIVE.lock().unwrap() = None;
+    if let Err(error) = &result {
+        tracing::warn!(task_id=%place.task_id, error=%error, "Bot place crossing was not delivered");
+    }
+    let conn = db.lock().unwrap();
+    match bot_places::settle(&result, transition.deliverable(true, now_ms())) {
+        bot_places::Settle::Complete => inbox::complete(&conn, &transition.id)?,
+        bot_places::Settle::Forget => {
+            inbox::complete(&conn, &transition.id)?;
+            bot_places::forget_task(&conn, &scope.raw, &place.task_id)?;
+            drop(conn);
+            bot_places::request_refresh();
+        }
+        bot_places::Settle::Retry => inbox::retry(&conn, &transition.id, now_ms())?,
+    }
+    Ok(true)
+}
+
 #[async_trait::async_trait]
 impl EventSink for GeoLocationSink {
     async fn start(&self, app: &AppHandle, db: DbConnection) -> Result<()> {
@@ -452,6 +543,7 @@ impl EventSink for GeoLocationSink {
         #[cfg(any(target_os = "ios", target_os = "macos", target_os = "android"))]
         {
             inbox::initialize(&db.lock().unwrap())?;
+            bot_places::initialize(&db.lock().unwrap())?;
             let token = {
                 let mut worker = WORKER.lock().unwrap();
                 if worker.is_some() {
@@ -464,12 +556,17 @@ impl EventSink for GeoLocationSink {
             native::setup();
             let handle = app.clone();
             tokio::spawn(async move {
+                let mut clock = bot_places::RefreshClock::default();
                 loop {
                     tokio::select! {
                         _ = token.cancelled() => break,
                         result = process(&handle,&db) => {
                             if let Err(error) = result { tracing::warn!(error=%error,"Geofence registration or inbox reconciliation failed"); }
                         }
+                    }
+                    tokio::select! {
+                        _ = token.cancelled() => break,
+                        _ = bot_places::tick(&handle, &db, &mut clock) => {}
                     }
                     tokio::select! {
                         _ = token.cancelled() => break,

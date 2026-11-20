@@ -176,7 +176,7 @@ async fn tool_state(workspace: &SharedCredentials) -> Result<Arc<FlowLikeState>,
         HTTPClient::new_without_refetch(),
         ModelProviderConfiguration::default(),
     );
-    state.execution_environment = ExecutionEnvironment::server_default();
+    crate::execute::enter_environment(&mut state, ExecutionEnvironment::server_default());
     Ok(Arc::new(state))
 }
 

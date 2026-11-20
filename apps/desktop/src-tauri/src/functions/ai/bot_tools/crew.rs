@@ -9,7 +9,7 @@ use flow_like::flow::copilot::{
     model_changes_need_catalogue, profile_models, validate_model_changes,
 };
 use flow_like_bot_tools::crew::{CrewApp, CrewBackend};
-use flow_like_local_bots::{CreateBotRequest, LocalBotStore};
+use flow_like_local_bots::{BuiltInDeletion, CreateBotRequest, LocalBotStore};
 use flow_like_types::{Result, anyhow, bot_restrictions::BotRestrictions};
 use reqwest::Method;
 use serde_json::Value;
@@ -253,9 +253,14 @@ impl CrewBackend for DesktopCrew {
             self.hub(Method::DELETE, &bot_path(bot_id), None).await?;
             return Ok(());
         }
-        delete_local_bot(&self.app, &*self.local_bots()?, bot_id)
-            .await
-            .map_err(|error| anyhow!("Deleting bot '{bot_id}' on this device failed: {error}"))
+        delete_local_bot(
+            &self.app,
+            &*self.local_bots()?,
+            bot_id,
+            BuiltInDeletion::Refuse,
+        )
+        .await
+        .map_err(|error| anyhow!("Deleting bot '{bot_id}' on this device failed: {error}"))
     }
 
     async fn devices(&self) -> Result<Vec<Value>> {

@@ -149,16 +149,19 @@ export async function loadNativeBotCatalog(
 			}
 			const bot = batch[index];
 			catalog.botTasks.push(
-				...result.value.slice(0, 20).map(
-					(task): NativeBotTask => ({
-						id: task.id,
-						botId: bot.id,
-						title: task.title || "Scheduled task",
-						enabled: task.enabled,
-						status: task.enabled ? "scheduled" : "paused",
-						action: { kind: "run_bot_task", botId: bot.id, taskId: task.id },
-					}),
-				),
+				...result.value
+					.filter((task) => task.kind !== "place")
+					.slice(0, 20)
+					.map(
+						(task): NativeBotTask => ({
+							id: task.id,
+							botId: bot.id,
+							title: task.title || "Scheduled task",
+							enabled: task.enabled,
+							status: task.enabled ? "scheduled" : "paused",
+							action: { kind: "run_bot_task", botId: bot.id, taskId: task.id },
+						}),
+					),
 			);
 		});
 	}

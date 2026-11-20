@@ -445,10 +445,20 @@ export class BotState implements IBotState {
 		);
 	}
 
+	/** The built-ins the account's last list held, so this computer's copy of one may go. */
+	private accountBuiltIns(): NonNullable<IBot["system"]>[] {
+		const session = accountSession(this.backend);
+		if (!session) return [];
+		return this.accountBots
+			.known(session.sub)
+			.flatMap((bot) => (bot.system ? [bot.system] : []));
+	}
+
 	async deleteBot(botId: string): Promise<void> {
 		const account = await this.accountFor(botId);
 		if (!account) {
-			await this.here(botId, () => localBots.delete(botId));
+			const accountBuiltIns = this.accountBuiltIns();
+			await this.here(botId, () => localBots.delete(botId, accountBuiltIns));
 			this.ids.forgetLocal(botId);
 			return;
 		}

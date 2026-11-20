@@ -791,7 +791,9 @@ fn deleting_a_bot_removes_its_direct_chats_and_it_leaves_its_groups() {
     f.store.set_secret(&a.id, "API_KEY", "v", None).unwrap();
     f.changes.take();
 
-    f.store.delete_bot(&a.id).unwrap();
+    f.store
+        .delete_bot(&a.id, &crate::BuiltInDeletion::Refuse)
+        .unwrap();
     let mut changes = f.changes.take();
     changes.sort_by_key(|change| format!("{change:?}"));
     let mut expected = vec![
@@ -825,7 +827,10 @@ fn deleting_a_bot_removes_its_direct_chats_and_it_leaves_its_groups() {
             .iter()
             .any(|entry| entry.message_id == "g_1")
     );
-    assert_eq!(code(f.store.delete_bot(&a.id)), codes::NOT_FOUND);
+    assert_eq!(
+        code(f.store.delete_bot(&a.id, &crate::BuiltInDeletion::Refuse)),
+        codes::NOT_FOUND
+    );
 }
 
 #[test]

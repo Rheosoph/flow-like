@@ -159,7 +159,7 @@ pub fn specs() -> Vec<ToolSpec> {
     ]
 }
 
-fn scheduler(env: &dyn ToolEnv) -> ToolResult<Arc<dyn Scheduler>> {
+pub(crate) fn scheduler(env: &dyn ToolEnv) -> ToolResult<Arc<dyn Scheduler>> {
     env.scheduler().ok_or_else(|| {
         ToolError::new(
             code::FAILED,
@@ -220,6 +220,7 @@ pub fn request_from(args: ScheduleTaskArgs) -> ToolResult<CreateBotTask> {
         title: args.title,
         enabled: None,
         monitoring: args.monitoring,
+        place: None,
     })
 }
 
@@ -276,6 +277,7 @@ pub fn update_from(args: UpdateTaskArgs) -> ToolResult<(String, UpdateBotTask)> 
         title: args.title,
         enabled: args.enabled,
         monitoring: args.monitoring,
+        place: None,
     };
     if request == UpdateBotTask::default() {
         return Err(ToolError::invalid(
@@ -286,7 +288,7 @@ pub fn update_from(args: UpdateTaskArgs) -> ToolResult<(String, UpdateBotTask)> 
 }
 
 fn task_json(task: &BotTask) -> serde_json::Value {
-    json!({
+    let mut value = json!({
         "id": task.id,
         "title": task.title,
         "monitoring": task.monitoring,
@@ -299,7 +301,11 @@ fn task_json(task: &BotTask) -> serde_json::Value {
         "last_run_at": task.last_run_at,
         "enabled": task.enabled,
         "created_by": task.created_by,
-    })
+    });
+    if let (Some(place), Some(object)) = (&task.place, value.as_object_mut()) {
+        object.insert("place".into(), json!(place));
+    }
+    value
 }
 
 pub async fn schedule_task(env: &dyn ToolEnv, args: ScheduleTaskArgs) -> ToolResult<ToolOutput> {
@@ -398,6 +404,7 @@ mod tests {
                 created_by: TaskCreator::Bot,
                 created_at: Utc::now().to_rfc3339(),
                 conversation: None,
+                place: request.place.clone(),
             };
             self.tasks.lock().unwrap().push(task.clone());
             Ok(task)

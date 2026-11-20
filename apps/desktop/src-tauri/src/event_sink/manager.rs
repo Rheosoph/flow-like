@@ -2216,6 +2216,9 @@ impl EventSinkManager {
             sink_types.insert(sink_type);
         }
 
+        #[cfg(any(target_os = "ios", target_os = "android"))]
+        sink_types.insert("geolocation");
+
         // Start each unique sink type without blocking the main initialization path
         println!(
             "📋 [SINK_MANAGER] Unique sink types to start: {:?}",

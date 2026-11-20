@@ -9,9 +9,13 @@ use object_store::{ObjectStore, ObjectStoreExt, PutPayload, path::Path};
 use reqwest::Url;
 use std::sync::Arc;
 
-pub async fn put_http(parsed: Url, store: Arc<dyn ObjectStore>) -> Result<(Path, usize)> {
-    let client = reqwest::Client::new();
-    let mut resp = client.get(parsed.clone()).send().await?;
+/// Stores the body of `resp`, the answer to a GET of `parsed`. The caller sends the request, so
+/// its egress policy decides which hosts are reached.
+pub async fn put_http_response(
+    parsed: &Url,
+    mut resp: reqwest::Response,
+    store: Arc<dyn ObjectStore>,
+) -> Result<(Path, usize)> {
     let status = resp.status();
     if !status.is_success() {
         return Err(anyhow!("Attachment download returned HTTP {status}"));
@@ -27,8 +31,8 @@ pub async fn put_http(parsed: Url, store: Arc<dyn ObjectStore>) -> Result<(Path,
 
     // Filename candidates (Content-Disposition first — it's explicitly set by the uploader)
     let mut name = filename_from_content_disposition(&headers)
-        .or_else(|| filename_from_query(&parsed))
-        .or_else(|| filename_from_url_path(&parsed))
+        .or_else(|| filename_from_query(parsed))
+        .or_else(|| filename_from_url_path(parsed))
         .unwrap_or_else(|| hash_name(&body)); // stable name if none present
 
     // Extension candidates
@@ -249,25 +253,21 @@ mod tests {
             }
         });
         let store = Arc::new(object_store::memory::InMemory::new());
-        let (path, size) = put_http(
-            Url::parse(&format!("{base}/complete.txt")).unwrap(),
-            store.clone(),
-        )
-        .await
-        .unwrap();
+        let put = |name: &str| {
+            let url = Url::parse(&format!("{base}/{name}")).unwrap();
+            let store = store.clone();
+            async move {
+                let response = reqwest::get(url.clone()).await?;
+                put_http_response(&url, response, store).await
+            }
+        };
+        let (path, size) = put("complete.txt").await.unwrap();
         assert_eq!(size, 8);
         assert_eq!(
             store.get(&path).await.unwrap().bytes().await.unwrap(),
             "12345678"
         );
-        assert!(
-            put_http(
-                Url::parse(&format!("{base}/partial.txt")).unwrap(),
-                store.clone()
-            )
-            .await
-            .is_err()
-        );
+        assert!(put("partial.txt").await.is_err());
         assert!(store.head(&Path::from("partial.txt")).await.is_err());
         server.await.unwrap();
     }

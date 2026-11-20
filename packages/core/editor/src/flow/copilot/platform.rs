@@ -580,6 +580,49 @@ fn retry_for_room_updates(
     Ok(true)
 }
 
+/// Requests that still offer tools, counting the one about to be sent. A durable run also spends
+/// its budget on model calls that ran no tools, so `reserved_calls` (this one included) bounds it.
+fn tool_rounds_left(
+    max_tool_rounds: usize,
+    iteration: usize,
+    reserved_calls: Option<usize>,
+) -> usize {
+    let by_rounds = max_tool_rounds.saturating_sub(iteration);
+    reserved_calls.map_or(by_rounds, |reserved| {
+        by_rounds.min((max_tool_rounds + 1).saturating_sub(reserved))
+    })
+}
+
+/// The budget a long-running turn has left, stated with every request that offers tools so the
+/// model can pace its work instead of learning about the limit when it is already spent.
+fn turn_budget_note(
+    rounds_left: usize,
+    max_tool_rounds: usize,
+    deadline_in_ms: Option<i64>,
+) -> String {
+    let mut note = if rounds_left <= 1 {
+        format!(
+            "Turn budget: this is the last of {max_tool_rounds} tool rounds; the next request offers no tools."
+        )
+    } else {
+        format!(
+            "Turn budget: {rounds_left} of {max_tool_rounds} tool rounds left, counting this one."
+        )
+    };
+    match deadline_in_ms {
+        Some(ms) if ms < 60_000 => note.push_str(" Less than a minute until the turn deadline."),
+        Some(ms) => {
+            let minutes = (ms as u64).div_ceil(60_000);
+            note.push_str(&format!(
+                " About {minutes} minute{} until the turn deadline.",
+                if minutes == 1 { "" } else { "s" }
+            ));
+        }
+        None => {}
+    }
+    note
+}
+
 /// Whether a platform tool must preserve the model's declared call order within its round.
 ///
 /// Read-only calls can run concurrently, but side-effecting actions must not race each other:
@@ -1811,6 +1854,26 @@ impl PlatformCopilot {
                             plan,
                         );
                     }
+                    if long_running && tools_enabled {
+                        let rounds_left = tool_rounds_left(
+                            max_tool_rounds,
+                            iteration,
+                            recovery
+                                .is_some()
+                                .then(|| model_calls_reserved.saturating_sub(room_drafts_replaced)),
+                        );
+                        merge_room_note_into_prompt(
+                            &mut request_prompt,
+                            &mut request_history,
+                            turn_budget_note(
+                                rounds_left,
+                                max_tool_rounds,
+                                recovery_deadline.map(|deadline| {
+                                    deadline - chrono::Utc::now().timestamp_millis()
+                                }),
+                            ),
+                        );
+                    }
                     session_stats.context = Some(context::request_usage(
                         &system_prompt,
                         &tools_for_round,
@@ -2399,13 +2462,10 @@ impl PlatformCopilot {
                             .iter()
                             .chain(std::iter::once(&current_prompt))
                             .collect();
+                        let links = crate::models::llm::media_links(&self.state).await;
                         Err(context::cancellable(
                             &bridge,
-                            run_image_view(
-                                &tool_call.function.arguments,
-                                &messages,
-                                self.state.execution_environment,
-                            ),
+                            run_image_view(&tool_call.function.arguments, &messages, &links),
                         )
                         .await?)
                     }

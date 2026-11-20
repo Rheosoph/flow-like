@@ -179,6 +179,7 @@ impl Scheduler for AccountScheduler {
             "instruction": request.instruction,
             "title": request.title,
             "monitoring": request.monitoring,
+            "place": request.place,
             "turn_id": self.written_in(),
         });
         let created = self
@@ -294,18 +295,21 @@ mod tests {
             path: &str,
             body: Option<&Value>,
         ) -> std::result::Result<Value, String> {
-            self.0
-                .lock()
-                .unwrap()
-                .push((method, path.to_string(), body.cloned().unwrap_or(Value::Null)));
+            self.0.lock().unwrap().push((
+                method,
+                path.to_string(),
+                body.cloned().unwrap_or(Value::Null),
+            ));
             let task = json!({
                 "id": "task1", "bot_id": "bot1", "kind": "once", "instruction": "x",
                 "title": "t", "enabled": true, "created_by": "bot",
                 "created_at": "2026-11-08T12:00:00Z"
             });
-            Ok(json!({ "tasks": [task.clone()], "id": "task1", "bot_id": "bot1", "kind": "once",
+            Ok(
+                json!({ "tasks": [task.clone()], "id": "task1", "bot_id": "bot1", "kind": "once",
                 "instruction": "x", "title": "t", "enabled": true, "created_by": "bot",
-                "created_at": "2026-11-08T12:00:00Z" }))
+                "created_at": "2026-11-08T12:00:00Z" }),
+            )
         }
     }
 

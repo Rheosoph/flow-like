@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use flow_like::flow::{
-    execution::context::ExecutionContext,
+    execution::{context::ExecutionContext, egress::GuardedHttpClient},
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
@@ -14,7 +14,31 @@ use flow_like_model_provider::history::{Content, History, MessageContent};
 use flow_like_storage::Path;
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_types::Cacheable;
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::reqwest::{self, Url};
+use flow_like_types::{anyhow, async_trait, json::json};
+
+/// Stores what `url` holds: an http(s) link is downloaded through `client`, so the run's egress
+/// policy decides which hosts are reached, and a `data:` URL is decoded.
+async fn store_attachment(
+    client: &GuardedHttpClient,
+    store: &FlowLikeStore,
+    url: &str,
+) -> flow_like_types::Result<Path> {
+    let parsed = Url::parse(url).map_err(|error| anyhow!("Invalid attachment link: {error}"))?;
+    let (path, _len) = match parsed.scheme() {
+        "http" | "https" => {
+            let response = client
+                .get(url)?
+                .send()
+                .await
+                .map_err(reqwest::Error::without_url)?;
+            store.put_response(&parsed, response).await?
+        }
+        "data" => store.put_data_url(url).await?,
+        scheme => return Err(anyhow!("Unsupported scheme: {scheme}")),
+    };
+    Ok(path)
+}
 
 fn ensure_attachment_store(
     cache: &mut ahash::AHashMap<String, Arc<dyn Cacheable>>,
@@ -202,17 +226,14 @@ impl NodeLogic for ExtractAttachments {
         let store = runtime.store;
         let generic_store = store.as_generic();
         let mut used_names: HashMap<String, u32> = HashMap::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         for attachment in &attachments {
-            let (downloaded_path, preferred_name) = match attachment {
-                Attachment::Url(url) => {
-                    let (path, _len) = store.put_from_url(url).await?;
-                    (path, None)
-                }
-                Attachment::Complex(complex) => {
-                    let (path, _len) = store.put_from_url(&complex.url).await?;
-                    (path, complex.name.clone().filter(|n| !n.is_empty()))
-                }
+            let downloaded_path =
+                store_attachment(&client, &store, attachment_url(attachment)).await?;
+            let preferred_name = match attachment {
+                Attachment::Url(_) => None,
+                Attachment::Complex(complex) => complex.name.clone().filter(|n| !n.is_empty()),
             };
 
             let final_path = if let Some(name) = preferred_name {
@@ -365,5 +386,68 @@ mod tests {
             &merged[0],
             Attachment::Complex(complex) if complex.name.as_deref() == Some("recording.mp3")
         ));
+    }
+
+    #[tokio::test]
+    async fn attachment_downloads_follow_the_egress_policy_of_the_run() {
+        use flow_like::flow::execution::ExecutionEnvironment;
+        use flow_like_types::tokio::{
+            self,
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let served = Arc::new(AtomicUsize::new(0));
+        let count = served.clone();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                count.fetch_add(1, Ordering::SeqCst);
+                let mut request = [0u8; 1024];
+                let _ = socket.read(&mut request).await;
+                let _ = socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\nconnection: close\r\n\r\nnotes",
+                    )
+                    .await;
+            }
+        });
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        let stored = |path: Path| {
+            let store = store.as_generic();
+            async move { store.get(&path).await.unwrap().bytes().await.unwrap() }
+        };
+        let link = format!("http://{address}/notes.txt");
+
+        let server = GuardedHttpClient::new(ExecutionEnvironment::Server).unwrap();
+        for refused in [
+            link.as_str(),
+            "http://169.254.169.254/latest/meta-data/",
+            "http://metadata.google.internal/computeMetadata/v1/",
+        ] {
+            let error = store_attachment(&server, &store, refused)
+                .await
+                .expect_err(refused)
+                .to_string();
+            assert!(error.contains("refused"), "{refused}: {error}");
+        }
+        assert_eq!(
+            served.load(Ordering::SeqCst),
+            0,
+            "a refused attachment never reaches the network"
+        );
+        let inline = store_attachment(&server, &store, "data:text/plain;base64,aGk=")
+            .await
+            .unwrap();
+        assert_eq!(stored(inline).await, "hi");
+
+        let local = GuardedHttpClient::new(ExecutionEnvironment::Local).unwrap();
+        let downloaded = store_attachment(&local, &store, &link).await.unwrap();
+        assert_eq!(stored(downloaded).await, "notes");
+        assert_eq!(served.load(Ordering::SeqCst), 1);
     }
 }

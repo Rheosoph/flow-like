@@ -66,6 +66,7 @@ pub(crate) fn schedule_of(task: &bot_task::Model) -> Option<TaskSchedule> {
             expr: task.cron.clone()?,
             tz: task.timezone.clone()?,
         }),
+        TaskKind::Place => None,
     }
 }
 

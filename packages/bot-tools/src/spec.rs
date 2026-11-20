@@ -64,6 +64,7 @@ fn build_specs() -> Vec<ToolSpec> {
     all.extend(crate::rooms::specs());
     all.extend(crate::user_context::specs());
     all.extend(crate::schedule::specs());
+    all.extend(crate::places::specs());
     all.extend(crate::skills::specs());
     all.extend(crate::browser::specs());
     all.extend(crate::computer::specs());

@@ -1,7 +1,9 @@
 //! Scoped execution checkpoints and cancellation fences for local bot turns.
 
 use crate::{Error, InboxEntry, LocalBotStore, Result, store::now_micros};
-use flow_like_types::bot_turn::{BotRunCheckpoint, DEFAULT_TURN_DEADLINE_SECS, failure_message_id, reply_message_id, turn_id};
+use flow_like_types::bot_turn::{
+    BotRunCheckpoint, DEFAULT_TURN_DEADLINE_SECS, failure_message_id, reply_message_id, turn_id,
+};
 use flow_like_types::inbox::{InboxEntryKind, TriggerBody, TriggerSource};
 use rusqlite::{Connection, OptionalExtension, params};
 

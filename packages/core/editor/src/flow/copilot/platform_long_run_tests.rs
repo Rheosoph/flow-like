@@ -294,6 +294,63 @@ async fn extended_bot_turns_execute_more_than_twelve_rounds_and_reserve_synthesi
 }
 
 #[tokio::test]
+async fn every_tool_request_states_the_rounds_left_and_the_answer_request_does_not() {
+    let client = Client::new(vec![
+        call("first", "list_apps", json!({})),
+        call("second", "list_apps", json!({})),
+        call("third", "list_apps", json!({})),
+        text("Verified all pages."),
+    ]);
+    run(&client, 3, false).await.0.unwrap();
+    let requests: Vec<String> = client
+        .0
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| serde_json::to_string(request).unwrap())
+        .collect();
+    assert_eq!(requests.len(), 4);
+    assert!(requests[0].contains("Turn budget: 3 of 3 tool rounds left, counting this one."));
+    assert!(requests[1].contains("Turn budget: 2 of 3 tool rounds left, counting this one."));
+    assert!(requests[2].contains("Turn budget: this is the last of 3 tool rounds"));
+    assert!(!requests[3].contains("Turn budget:"));
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.matches("Turn budget:").count() <= 1),
+        "an earlier budget note stayed in the history"
+    );
+    assert!(!requests[0].contains("until the turn deadline"));
+}
+
+#[test]
+fn durable_runs_count_reserved_model_calls_against_the_rounds_left() {
+    assert_eq!(tool_rounds_left(128, 5, None), 123);
+    assert_eq!(tool_rounds_left(128, 5, Some(8)), 121);
+    assert_eq!(tool_rounds_left(128, 0, Some(128)), 1);
+    assert_eq!(tool_rounds_left(128, 128, None), 0);
+}
+
+#[test]
+fn the_budget_note_rounds_the_deadline_up_to_whole_minutes() {
+    assert_eq!(
+        turn_budget_note(40, 128, Some(12 * 60_000 + 1)),
+        "Turn budget: 40 of 128 tool rounds left, counting this one. About 13 minutes until the turn deadline."
+    );
+    assert!(
+        turn_budget_note(2, 128, Some(60_000)).ends_with("About 1 minute until the turn deadline.")
+    );
+    assert!(
+        turn_budget_note(2, 128, Some(59_999))
+            .ends_with("Less than a minute until the turn deadline.")
+    );
+    assert!(
+        turn_budget_note(1, 128, Some(-5)).ends_with("Less than a minute until the turn deadline.")
+    );
+}
+
+#[tokio::test]
 async fn active_plan_continues_after_progress_text_and_finishes_after_verification() {
     let client = Client::new(vec![
         call("plan", UPDATE_WORK_PLAN_TOOL, plan(0, "active")),

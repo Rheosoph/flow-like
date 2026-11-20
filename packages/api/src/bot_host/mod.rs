@@ -16,6 +16,7 @@ pub(crate) mod ledger;
 pub(crate) mod memory;
 mod monitor_baseline;
 pub(crate) mod notes;
+pub(crate) mod place_tasks;
 pub(crate) mod recovery;
 mod reply_stream;
 mod room_updates;

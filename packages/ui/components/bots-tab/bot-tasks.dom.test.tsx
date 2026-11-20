@@ -243,6 +243,34 @@ describe("BotTasksView", () => {
 		expect(button("Add task").disabled).toBe(false);
 	});
 
+	test("a place task reads as its trigger, keeps pause and delete, and hints at Always", async () => {
+		await show([
+			task({
+				kind: "place",
+				cron: null,
+				tz: null,
+				next_run_at: null,
+				title: "Groceries",
+				place: {
+					latitude: 52.5,
+					longitude: 13.4,
+					radius_m: 150,
+					on: "enter",
+					label: "Home",
+					repeat: false,
+				},
+			}),
+		]);
+		const row = container.querySelector('[data-slot="bot-task"]');
+		expect(row?.getAttribute("data-state")).toBe("active");
+		expect(row?.textContent).toContain("When you arrive at Home");
+		expect(row?.textContent).toContain("Always");
+		await click(button("Pause Groceries"));
+		await click(button("Delete Groceries"));
+		expect(toggled).toHaveLength(1);
+		expect(deleted).toHaveLength(1);
+	});
+
 	test("a bot at its limit offers no new task", async () => {
 		await show(
 			Array.from({ length: 50 }, (_, index) => task({ id: `t${index}` })),

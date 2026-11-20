@@ -68,6 +68,10 @@
 			"description": "Builds searchable indexes over your files",
 			"label": "Knowledge"
 		},
+		"location": {
+			"description": "Runs when your phone arrives at or leaves a place the bot watches. Looks up addresses with OpenStreetMap.",
+			"label": "Location"
+		},
 		"memory": {
 			"description": "Remembers what matters from your chats",
 			"label": "Memory"
@@ -1130,7 +1134,8 @@
 		},
 		"delete": {
 			"action": "Delete",
-			"confirm": "Delete {{name}}? Its past messages stay and show it as a deleted bot."
+			"confirm": "Delete {{name}}? Its past messages stay and show it as a deleted bot.",
+			"confirmCopy": "Delete {{name}} on this computer? Its chats, memory and files here go; {{name}} in your account stays."
 		},
 		"deleted": "{{name}} was deleted",
 		"describe": {
@@ -1815,7 +1820,18 @@
 			"monitoringLabel": "Monitoring",
 			"placeDirect": "In a chat with someone else",
 			"placeGroup": "In {{name}}",
-			"placeUnnamedGroup": "In a group chat"
+			"placeUnnamedGroup": "In a group chat",
+			"expired": "Expired",
+			"watching": "Watching",
+			"place": {
+				"both": "When you arrive at or leave {{place}}",
+				"enter": "When you arrive at {{place}}",
+				"exit": "When you leave {{place}}",
+				"hint": "Your phone watches this place. Location access must be set to Always.",
+				"once": "once",
+				"repeat": "every time",
+				"until": "until {{when}}"
+			}
 		},
 		"waitingForYou": "Waiting for you",
 		"webhooks": {

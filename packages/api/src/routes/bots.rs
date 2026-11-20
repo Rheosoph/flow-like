@@ -31,6 +31,7 @@ pub mod notes;
 pub mod notify;
 pub mod people;
 pub mod permissions;
+pub mod places;
 pub mod presence;
 mod provision;
 pub mod rooms;
@@ -99,6 +100,7 @@ pub fn routes() -> Router<AppState> {
         .route("/import", post(import::import_bot))
         .route("/import/check", post(import::check_bot_import))
         .route("/presence", get(presence::get_presence))
+        .route("/places", get(places::list_places))
         .route("/mobile-status", get(live_activities::mobile_status))
         .route(
             "/hosts/{host_id}",
@@ -277,6 +279,10 @@ pub fn routes() -> Router<AppState> {
             axum::routing::patch(tasks::update_bot_task).delete(tasks::delete_bot_task),
         )
         .route("/{bot_id}/tasks/{task_id}/fire", post(tasks::fire_bot_task))
+        .route(
+            "/{bot_id}/tasks/{task_id}/crossing",
+            post(places::report_crossing),
+        )
         .route("/{bot_id}/turns/{turn_id}/retry", post(turns::retry_turn))
         .route("/{bot_id}/turns/{turn_id}/cancel", post(turns::cancel_turn))
         .route(

@@ -1,7 +1,8 @@
-//! Bot tasks: work a bot schedules for itself, once or on a cron schedule in a time zone. A
-//! host fires a due task by writing a `trigger` entry (source `schedule`) into the bot's
-//! conversation with its owner and moving `next_run_at` on; a task that was missed while its host
-//! was away fires once when the host is back, never once per missed run.
+//! Bot tasks: work a bot schedules for itself, once or on a cron schedule in a time zone, or on
+//! the owner's phone crossing a place. A host fires a due task by writing a `trigger` entry
+//! (source `schedule`) into the bot's conversation with its owner and moving `next_run_at` on; a
+//! task that was missed while its host was away fires once when the host is back, never once per
+//! missed run. A place task has no `next_run_at`: the hub fires it when a phone reports a crossing.
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use chrono_tz::Tz;
@@ -20,6 +21,7 @@ pub const MAX_TITLE_CHARS: usize = 200;
 pub const MAX_INSTRUCTION_CHARS: usize = 4_000;
 pub const STORED_ONCE: &str = "ONCE";
 pub const STORED_CRON: &str = "CRON";
+pub const STORED_PLACE: &str = "PLACE";
 pub const STORED_BOT: &str = "BOT";
 pub const STORED_OWNER: &str = "OWNER";
 pub const DEFAULT_TIMEZONE: &str = "UTC";
@@ -59,6 +61,16 @@ task_enum!(
     TaskKind {
         Once => "once",
         Cron => "cron",
+        Place => "place",
+    }
+);
+
+task_enum!(
+    /// Which crossing of its place fires a place task.
+    PlaceCrossing {
+        Enter => "enter",
+        Exit => "exit",
+        Both => "both",
     }
 );
 
@@ -71,7 +83,7 @@ task_enum!(
 );
 
 /// A scheduled task as the API and the local store show it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct BotTask {
     pub id: String,
     pub bot_id: String,
@@ -104,6 +116,9 @@ pub struct BotTask {
     /// Where the task fires when that is not the owner's chat with the bot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation: Option<TaskConversation>,
+    /// The place a place task watches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<TaskPlace>,
 }
 
 /// The conversation a task was scheduled in and fires in. Its trigger comes from the person who
@@ -118,8 +133,8 @@ pub struct TaskConversation {
 }
 
 /// Creates a task. A once task needs `at`, a cron task `cron` (and optionally `tz`, UTC when
-/// missing).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// missing), a place task `place`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CreateBotTask {
     pub kind: Option<TaskKind>,
     #[serde(default)]
@@ -136,10 +151,12 @@ pub struct CreateBotTask {
     pub enabled: Option<bool>,
     #[serde(default)]
     pub monitoring: bool,
+    #[serde(default)]
+    pub place: Option<TaskPlace>,
 }
 
-/// Changes a task; what is missing stays. Moving the schedule re-arms the task.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// Changes a task; what is missing stays. Moving the schedule or the place re-arms the task.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct UpdateBotTask {
     #[serde(default)]
     pub at: Option<String>,
@@ -155,9 +172,12 @@ pub struct UpdateBotTask {
     pub enabled: Option<bool>,
     #[serde(default)]
     pub monitoring: Option<bool>,
+    /// A new place for a place task.
+    #[serde(default)]
+    pub place: Option<TaskPlace>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct BotTaskList {
     pub tasks: Vec<BotTask>,
 }
@@ -332,6 +352,9 @@ impl TaskSchedule {
                     tz: tz.to_string(),
                 })
             }
+            TaskKind::Place => {
+                Err("a place task fires on a crossing of its place, not on a schedule".into())
+            }
         }
     }
 
@@ -384,6 +407,205 @@ pub fn check_text(title: Option<&str>, instruction: &str) -> Result<(String, Str
         ));
     }
     Ok((title, instruction.to_string()))
+}
+
+pub const MIN_PLACE_RADIUS_M: f64 = 100.0;
+pub const MAX_PLACE_RADIUS_M: f64 = 100_000.0;
+pub const DEFAULT_PLACE_RADIUS_M: f64 = 150.0;
+pub const MAX_PLACE_LABEL_CHARS: usize = 120;
+/// Place tasks one owner's phones watch at once, across all of the owner's bots. iOS monitors 20
+/// regions per app, shared with app Location Events.
+pub const MAX_WATCHED_PLACES: usize = 20;
+/// The shortest gap between two runs of a repeating place task. Crossings inside it, from a
+/// second phone or a jittery fix, are dropped.
+pub const MIN_PLACE_REFIRE_SECS: i64 = 600;
+/// A crossing reported later than this is dropped: the moment it was about has passed.
+pub const MAX_CROSSING_AGE_SECS: i64 = 14 * 60;
+/// How far in the future a phone's clock may put a crossing.
+const CROSSING_CLOCK_SKEW_SECS: i64 = 60;
+
+/// The place a place task watches, and when it fires.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskPlace {
+    pub latitude: f64,
+    pub longitude: f64,
+    /// Radius of the watched circle in meters, 100 to 100,000.
+    pub radius_m: f64,
+    pub on: PlaceCrossing,
+    /// What the place is in the owner's words, such as "Home" or "Rewe Hauptstraße".
+    pub label: String,
+    /// Fires on every crossing, at most once per [`MIN_PLACE_REFIRE_SECS`]. Otherwise it fires on
+    /// the first crossing and is done.
+    #[serde(default)]
+    pub repeat: bool,
+    /// RFC 3339 time after which phones stop watching the place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
+}
+
+fn parse_time(field: &str, text: &str) -> Result<DateTime<Utc>, String> {
+    DateTime::parse_from_rfc3339(text.trim())
+        .map(|time| time.with_timezone(&Utc))
+        .map_err(|_| format!("'{field}' value '{text}' is not an RFC 3339 time"))
+}
+
+impl TaskPlace {
+    /// The place as saved: real coordinates, a radius phones can watch, a label within its limit
+    /// and a future `until`, normalized to UTC.
+    pub fn check(mut self, now: DateTime<Utc>) -> Result<Self, String> {
+        if !self.latitude.is_finite() || !(-90.0..=90.0).contains(&self.latitude) {
+            return Err(format!(
+                "latitude {} is not between -90 and 90",
+                self.latitude
+            ));
+        }
+        if !self.longitude.is_finite() || !(-180.0..=180.0).contains(&self.longitude) {
+            return Err(format!(
+                "longitude {} is not between -180 and 180",
+                self.longitude
+            ));
+        }
+        if !self.radius_m.is_finite()
+            || !(MIN_PLACE_RADIUS_M..=MAX_PLACE_RADIUS_M).contains(&self.radius_m)
+        {
+            return Err(format!(
+                "radius {} m is not between {MIN_PLACE_RADIUS_M} and {MAX_PLACE_RADIUS_M} m",
+                self.radius_m
+            ));
+        }
+        self.label = self.label.trim().to_string();
+        if self.label.is_empty() {
+            return Err("a place needs a label, such as \"Home\"".into());
+        }
+        let chars = self.label.chars().count();
+        if chars > MAX_PLACE_LABEL_CHARS {
+            return Err(format!(
+                "a place label has at most {MAX_PLACE_LABEL_CHARS} characters; this one has {chars}"
+            ));
+        }
+        if let Some(until) = self
+            .until
+            .as_deref()
+            .filter(|until| !until.trim().is_empty())
+        {
+            let until = parse_time("until", until)?;
+            if until <= now {
+                return Err(format!(
+                    "'until' value '{}' is not in the future",
+                    until.to_rfc3339()
+                ));
+            }
+            self.until = Some(until.to_rfc3339());
+        } else {
+            self.until = None;
+        }
+        Ok(self)
+    }
+
+    /// Whether phones watch the place: the task is enabled, `until` has not passed, and it has
+    /// not fired yet unless it repeats.
+    pub fn watched(
+        &self,
+        enabled: bool,
+        last_run_at: Option<DateTime<Utc>>,
+        now: DateTime<Utc>,
+    ) -> bool {
+        let open = self
+            .until
+            .as_deref()
+            .is_none_or(|until| parse_time("until", until).is_ok_and(|until| until > now));
+        enabled && open && (self.repeat || last_run_at.is_none())
+    }
+
+    /// Whether a reported `crossing`, an enter or an exit, fires the task.
+    pub fn fires_on(&self, crossing: PlaceCrossing) -> bool {
+        crossing != PlaceCrossing::Both && (self.on == PlaceCrossing::Both || self.on == crossing)
+    }
+
+    /// Whether a crossing at `occurred_at` may claim the run after the last one: a one-time
+    /// place fires once, a repeating one at most once per [`MIN_PLACE_REFIRE_SECS`].
+    pub fn claimable(
+        &self,
+        last_run_at: Option<DateTime<Utc>>,
+        occurred_at: DateTime<Utc>,
+    ) -> bool {
+        match last_run_at {
+            None => true,
+            Some(last) => {
+                self.repeat && occurred_at - last >= Duration::seconds(MIN_PLACE_REFIRE_SECS)
+            }
+        }
+    }
+
+    /// The line the bot reads above the task's instruction when a crossing fires it.
+    pub fn fire_note(&self, crossing: PlaceCrossing) -> String {
+        match crossing {
+            PlaceCrossing::Exit => format!("Location trigger: your owner left {}.", self.label),
+            _ => format!("Location trigger: your owner arrived at {}.", self.label),
+        }
+    }
+}
+
+/// What a phone reports when the owner crosses a watched place.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PlaceCrossingReport {
+    /// `enter` or `exit`.
+    pub crossing: PlaceCrossing,
+    /// RFC 3339 time the phone saw the crossing.
+    pub occurred_at: String,
+}
+
+impl PlaceCrossingReport {
+    /// The crossing time: an enter or an exit, not in the future and not older than
+    /// [`MAX_CROSSING_AGE_SECS`].
+    pub fn check(&self, now: DateTime<Utc>) -> Result<DateTime<Utc>, String> {
+        if self.crossing == PlaceCrossing::Both {
+            return Err("a crossing is either 'enter' or 'exit'".into());
+        }
+        let occurred = parse_time("occurred_at", &self.occurred_at)?;
+        if occurred > now + Duration::seconds(CROSSING_CLOCK_SKEW_SECS) {
+            return Err(format!(
+                "crossing at {} is in the future",
+                occurred.to_rfc3339()
+            ));
+        }
+        if now - occurred > Duration::seconds(MAX_CROSSING_AGE_SECS) {
+            return Err(format!(
+                "crossing at {} is older than {} minutes",
+                occurred.to_rfc3339(),
+                MAX_CROSSING_AGE_SECS / 60
+            ));
+        }
+        Ok(occurred)
+    }
+}
+
+/// What the hub did with a crossing report. `fired` is false for a crossing it dropped on
+/// purpose, such as a duplicate from a second phone; the phone acknowledges both.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PlaceCrossingOutcome {
+    pub fired: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// A place one of the owner's bots watches, as the owner's phones read it. The label and the
+/// instruction stay on the hub.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct WatchedPlace {
+    pub task_id: String,
+    pub bot_id: String,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub radius_m: f64,
+    pub on: PlaceCrossing,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct WatchedPlaceList {
+    pub places: Vec<WatchedPlace>,
 }
 
 #[cfg(test)]
@@ -542,5 +764,132 @@ mod tests {
         );
         assert!(check_text(None, "  ").is_err());
         assert!(check_text(Some("x".repeat(201).as_str()), "go").is_err());
+    }
+
+    fn place(on: PlaceCrossing, repeat: bool) -> TaskPlace {
+        TaskPlace {
+            latitude: 50.94,
+            longitude: 6.96,
+            radius_m: DEFAULT_PLACE_RADIUS_M,
+            on,
+            label: " Home ".into(),
+            repeat,
+            until: None,
+        }
+    }
+
+    #[test]
+    fn a_place_is_checked_and_normalized_before_it_is_saved() {
+        let now = utc("2026-11-19T12:00:00Z");
+        let checked = TaskPlace {
+            until: Some("2026-11-19T23:00:00+01:00".into()),
+            ..place(PlaceCrossing::Enter, false)
+        }
+        .check(now)
+        .unwrap();
+        assert_eq!(checked.label, "Home");
+        assert_eq!(checked.until.as_deref(), Some("2026-11-19T22:00:00+00:00"));
+        for bad in [
+            TaskPlace {
+                latitude: 91.0,
+                ..place(PlaceCrossing::Enter, false)
+            },
+            TaskPlace {
+                longitude: f64::NAN,
+                ..place(PlaceCrossing::Enter, false)
+            },
+            TaskPlace {
+                radius_m: 50.0,
+                ..place(PlaceCrossing::Enter, false)
+            },
+            TaskPlace {
+                label: "  ".into(),
+                ..place(PlaceCrossing::Enter, false)
+            },
+            TaskPlace {
+                label: "x".repeat(121),
+                ..place(PlaceCrossing::Enter, false)
+            },
+            TaskPlace {
+                until: Some("2026-11-19T11:00:00Z".into()),
+                ..place(PlaceCrossing::Enter, false)
+            },
+        ] {
+            assert!(bad.clone().check(now).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_one_time_place_fires_once_and_a_repeating_one_waits_out_the_gap() {
+        let now = utc("2026-11-19T12:00:00Z");
+        let once = place(PlaceCrossing::Enter, false);
+        assert!(once.claimable(None, now));
+        assert!(!once.claimable(Some(now), now + Duration::hours(5)));
+        assert!(once.watched(true, None, now));
+        assert!(!once.watched(true, Some(now), now));
+        assert!(!once.watched(false, None, now));
+        let repeating = place(PlaceCrossing::Both, true);
+        assert!(!repeating.claimable(
+            Some(now),
+            now + Duration::seconds(MIN_PLACE_REFIRE_SECS - 1)
+        ));
+        assert!(repeating.claimable(Some(now), now + Duration::seconds(MIN_PLACE_REFIRE_SECS)));
+        assert!(repeating.watched(true, Some(now), now));
+        let expired = TaskPlace {
+            until: Some("2026-11-19T11:59:00Z".into()),
+            ..repeating
+        };
+        assert!(!expired.watched(true, None, now));
+    }
+
+    #[test]
+    fn only_the_watched_direction_of_a_crossing_fires() {
+        let enter = place(PlaceCrossing::Enter, false);
+        assert!(enter.fires_on(PlaceCrossing::Enter));
+        assert!(!enter.fires_on(PlaceCrossing::Exit));
+        let both = place(PlaceCrossing::Both, false);
+        assert!(both.fires_on(PlaceCrossing::Exit));
+        assert!(!both.fires_on(PlaceCrossing::Both));
+        let home = TaskPlace {
+            label: "Home".into(),
+            ..place(PlaceCrossing::Both, false)
+        };
+        assert_eq!(
+            home.fire_note(PlaceCrossing::Exit),
+            "Location trigger: your owner left Home."
+        );
+        assert_eq!(
+            home.fire_note(PlaceCrossing::Enter),
+            "Location trigger: your owner arrived at Home."
+        );
+    }
+
+    #[test]
+    fn a_crossing_report_must_be_recent_and_directed() {
+        let now = utc("2026-11-19T12:00:00Z");
+        let report = |crossing, at: &str| PlaceCrossingReport {
+            crossing,
+            occurred_at: at.into(),
+        };
+        assert_eq!(
+            report(PlaceCrossing::Enter, "2026-11-19T11:50:00Z").check(now),
+            Ok(utc("2026-11-19T11:50:00Z"))
+        );
+        assert!(
+            report(PlaceCrossing::Both, "2026-11-19T11:59:00Z")
+                .check(now)
+                .is_err()
+        );
+        assert!(
+            report(PlaceCrossing::Exit, "2026-11-19T11:40:00Z")
+                .check(now)
+                .is_err()
+        );
+        assert!(
+            report(PlaceCrossing::Exit, "2026-11-19T12:05:00Z")
+                .check(now)
+                .is_err()
+        );
+        assert!(report(PlaceCrossing::Exit, "yesterday").check(now).is_err());
     }
 }

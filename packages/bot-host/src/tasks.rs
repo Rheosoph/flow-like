@@ -5,6 +5,7 @@ use serde_json::Value;
 
 fn is_due(task: &Value, now: chrono::DateTime<chrono::Utc>) -> bool {
     task.get("enabled").and_then(Value::as_bool) == Some(true)
+        && task.get("kind").and_then(Value::as_str) != Some("place")
         && task
             .get("next_run_at")
             .and_then(Value::as_str)
@@ -60,6 +61,7 @@ mod tests {
             { "id": "later", "enabled": true, "next_run_at": "2026-11-03T12:00:01Z" },
             { "id": "paused", "enabled": false, "next_run_at": "2026-11-03T11:00:00Z" },
             { "id": "done", "enabled": true, "next_run_at": null },
+            { "id": "place", "kind": "place", "enabled": true, "next_run_at": "2026-11-03T11:00:00Z" },
         ]});
         assert_eq!(due_task_ids(&list, now), ["past", "now"]);
         assert!(due_task_ids(&json!({}), now).is_empty());

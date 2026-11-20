@@ -19,13 +19,14 @@ use reqwest::Url;
 /// Where a model client built from a Bit's own endpoint may connect.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ProviderEgress {
-    /// No restriction: desktop runs, executors and hosted models.
+    /// No restriction: desktop runs, local executors and hosted models.
     #[default]
     Open,
     /// HTTPS only, and every address publicly routable.
     Public,
-    /// HTTP or HTTPS and private ranges, for self-hosted deployments. Loopback, link-local,
-    /// metadata and other host-plane addresses stay refused.
+    /// HTTP or HTTPS and private ranges, for self-hosted deployments and for the Bits a board
+    /// builds on a server executor. Loopback, link-local, metadata and other host-plane
+    /// addresses stay refused.
     Private,
 }
 
@@ -128,6 +129,26 @@ impl ProviderEgress {
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
             .https_only(self == Self::Public)
+    }
+
+    /// [`Self::guard`] for a client that fetches content, where links redirect: follows up to
+    /// `max_redirects` hops whose target passes [`Self::check_url`]. Under `Open` every target
+    /// passes and only the hop limit applies.
+    pub fn guard_following_redirects(
+        self,
+        builder: reqwest::ClientBuilder,
+        max_redirects: usize,
+    ) -> reqwest::ClientBuilder {
+        self.guard(builder)
+            .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+                if attempt.previous().len() >= max_redirects {
+                    return attempt.error("too many redirects");
+                }
+                match self.check_url(attempt.url()) {
+                    Ok(()) => attempt.follow(),
+                    Err(refused) => attempt.error(refused),
+                }
+            }))
     }
 
     /// [`Self::guard`] for the reqwest 0.13 clients Rig's providers run on.
