@@ -1,16 +1,13 @@
 use crate::{
-    ensure_any_permission,
-    error::ApiError,
-    middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions,
-    routes::app::db::{ScopeParams, column_reader},
-    state::AppState,
+    ensure_any_permission, error::ApiError, middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions, routes::app::db::ScopeParams, state::AppState,
 };
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use flow_like_storage::databases::graph::{GraphAnalyticsResult, GraphStore, lancegraph};
+use flow_like_query::graph::GraphOperation;
+use flow_like_storage::databases::graph::GraphAnalyticsResult;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct AnalyticsParams {
@@ -32,9 +29,12 @@ pub struct AnalyticsParams {
     ),
     responses(
         (status = 200, description = "Graph analytics", body = Object),
+        (status = 400, description = "The analytics could not be computed"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
-        (status = 404, description = "Overlay not found")
+        (status = 404, description = "Overlay not found"),
+        (status = 503, description = "The query service is unavailable"),
+        (status = 504, description = "The analytics ran out of time")
     ),
     security(
         ("bearer_auth" = []),
@@ -63,17 +63,19 @@ pub async fn graph_analytics(
     let scope = ScopeParams {
         scope: params.scope.clone(),
     };
-    let (connection, overlay) =
-        super::load_scoped_overlay(&state, &user, &app_id, &overlay_id, &scope).await?;
-    let store = lancegraph::LanceGraphStore::new_for(
-        connection,
-        overlay,
-        None,
-        column_reader(&permission, &scope),
+    let result = super::read_overlay(
+        &state,
+        &user,
+        &permission,
+        &app_id,
+        &overlay_id,
+        &scope,
+        |overlay| GraphOperation::Analytics {
+            overlay: Box::new(overlay),
+            edge_limit: params.limit,
+        },
     )
     .await?;
-
-    let result = store.analytics(params.limit).await?;
 
     Ok(Json(result))
 }

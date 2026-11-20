@@ -53,11 +53,14 @@ fn retention_days_from(value: Option<&str>) -> Option<i64> {
 
 /// Rows a sweep may remove: a deleted object contributes nothing to any total,
 /// so removing its row cannot move one. Live objects keep their row, which is
-/// the baseline every later size delta is measured against.
+/// the baseline every later size delta is measured against. A Lance dataset's
+/// row (key ending in `.lance/`) is kept even when empty: its presence records
+/// that the dataset's file rows and legacy baseline were already adopted.
 fn expired_tombstones(cutoff: chrono::DateTime<chrono::FixedOffset>) -> Condition {
     Condition::all()
         .add(file_accounting_object::Column::Size.eq(0_i64))
         .add(file_accounting_object::Column::UpdatedAt.lt(cutoff))
+        .add(file_accounting_object::Column::ObjectKey.not_like("%.lance/"))
 }
 
 /// Delete tombstones last touched more than `retention_days` ago, in
@@ -100,7 +103,7 @@ mod tests {
     use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait};
 
     #[test]
-    fn sweep_deletes_only_zero_size_rows_past_the_cutoff() {
+    fn sweep_deletes_only_zero_size_rows_past_the_cutoff_and_keeps_dataset_rows() {
         let cutoff = chrono::DateTime::parse_from_rfc3339("2026-08-12T00:00:00Z").unwrap();
         let sql = FileAccountingObject::delete_many()
             .filter(expired_tombstones(cutoff))
@@ -109,7 +112,7 @@ mod tests {
 
         assert_eq!(
             sql,
-            r#"DELETE FROM "public"."FileAccountingObject" WHERE "FileAccountingObject"."size" = 0 AND "FileAccountingObject"."updatedAt" < '2026-08-12 00:00:00.000000 +00:00'"#
+            r#"DELETE FROM "public"."FileAccountingObject" WHERE "FileAccountingObject"."size" = 0 AND "FileAccountingObject"."updatedAt" < '2026-08-12 00:00:00.000000 +00:00' AND "FileAccountingObject"."objectKey" NOT LIKE '%.lance/'"#
         );
     }
 

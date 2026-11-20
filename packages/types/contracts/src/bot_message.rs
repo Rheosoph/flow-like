@@ -233,6 +233,9 @@ pub struct ApprovalRequest {
     /// Set on a `room_invite` card: who the bot wants to bring into the room, and why.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invite: Option<RoomInviteAsk>,
+    /// Set on a card that asks to show a picture in a room: the picture, in the bot's workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture: Option<WorkspaceHandle>,
     /// The full proposed settings patch, shown before approving a bot configuration change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub configuration_changes: Option<Value>,
@@ -278,6 +281,26 @@ pub struct ApprovalItem {
     pub secret: Option<SecretAsk>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invite: Option<RoomInviteAsk>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture: Option<WorkspaceHandle>,
+}
+
+/// A card's picture is an image file of a bot workspace, never a conversation file.
+fn check_picture(field: &str, picture: Option<&WorkspaceHandle>) -> Result<(), BodyError> {
+    let Some(picture) = picture else {
+        return Ok(());
+    };
+    if picture.is_conversation_file() {
+        return refuse(format!("{field} must be a file of the bot's workspace"));
+    }
+    picture.check(field)?;
+    if !picture.mime.starts_with("image/") {
+        return refuse(format!(
+            "{field}.mime '{}' must be an image type",
+            clipped(&picture.mime)
+        ));
+    }
+    Ok(())
 }
 
 impl ApprovalItem {
@@ -302,7 +325,8 @@ impl ApprovalItem {
             return refuse(format!("{field}.calls must be at least 1"));
         }
         self.secret.as_ref().map_or(Ok(()), SecretAsk::check)?;
-        self.invite.as_ref().map_or(Ok(()), RoomInviteAsk::check)
+        self.invite.as_ref().map_or(Ok(()), RoomInviteAsk::check)?;
+        check_picture(&format!("{field}.picture"), self.picture.as_ref())
     }
 }
 
@@ -437,6 +461,7 @@ impl ApprovalRequest {
             after_web_content: false,
             secret: self.secret.clone(),
             invite: self.invite.clone(),
+            picture: self.picture.clone(),
         }]
     }
 
@@ -531,6 +556,7 @@ impl ApprovalRequest {
         }
         self.secret.as_ref().map_or(Ok(()), SecretAsk::check)?;
         self.invite.as_ref().map_or(Ok(()), RoomInviteAsk::check)?;
+        check_picture("body.approval.picture", self.picture.as_ref())?;
         check_item_hashes(
             "body.approval.items",
             self.items.len(),
@@ -1821,6 +1847,40 @@ mod conversation_file_tests {
         }
     }
 
+    #[test]
+    fn a_card_picture_is_an_image_of_a_bot_workspace() {
+        let card = |picture: Value| {
+            json!({ "approval": {
+                "id": "ap-1", "turn_id": "bt_1", "tool": "computer_screenshot",
+                "summary": "Show a screenshot", "scope": "", "args_hash": "h", "picture": picture,
+            } })
+        };
+        let picture = |app_id: &str, mime: &str| {
+            json!({
+                "app_id": app_id, "path": "bot/screenshots/a.png", "bytes": 4,
+                "sha256": "a".repeat(64), "mime": mime,
+            })
+        };
+        let body = MessageBody::parse(&card(picture("ws-1", "image/png"))).unwrap();
+        let approval = body.approval.unwrap();
+        assert_eq!(
+            approval
+                .picture
+                .as_ref()
+                .map(|picture| picture.path.as_str()),
+            Some("bot/screenshots/a.png")
+        );
+        assert_eq!(approval.batch()[0].picture, approval.picture);
+        for picture in [
+            picture("ws-1", "application/pdf"),
+            picture("conversation_c1", "image/png"),
+            json!({ "app_id": "ws-1", "path": "../a.png", "bytes": 4, "sha256": "a".repeat(64), "mime": "image/png" }),
+        ] {
+            let error = MessageBody::parse(&card(picture)).unwrap_err().to_string();
+            assert!(error.contains("approval.picture"), "{error}");
+        }
+    }
+
     fn plain_card() -> ApprovalRequest {
         ApprovalRequest {
             id: "ap-1".into(),
@@ -1834,6 +1894,7 @@ mod conversation_file_tests {
             room: None,
             secret: None,
             invite: None,
+            picture: None,
             configuration_changes: None,
             items: Vec::new(),
         }
@@ -1849,6 +1910,7 @@ mod conversation_file_tests {
             after_web_content: false,
             secret: None,
             invite: None,
+            picture: None,
         }
     }
 
@@ -1916,6 +1978,7 @@ mod conversation_file_tests {
                 after_web_content: false,
                 secret: card.secret.clone(),
                 invite: None,
+                picture: None,
             }
         );
         let parsed: ApprovalResponse =

@@ -1,5 +1,4 @@
 use crate::{
-    credentials::{CredentialsAccess, RuntimeCredentials},
     error::ApiError,
     middleware::jwt::AppUser,
     permission::fork_permission::{ForkTargetKind, check_can_fork},
@@ -9,12 +8,14 @@ use crate::{
         db_schema::ForkTableSchema,
         detect_meta_in_content_store,
         preview::{RemoteTokenSite, detect_remote_token_sites, ensure_fork_within_limits},
+        transfer::{SignedFile, TransferSigner, download_staging_prefix},
     },
 };
 use axum::{
     Extension, Json,
     extract::{Path, State},
 };
+use flow_like_storage::{Path as StorePath, join_object_path, object_store::ObjectStoreExt};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -37,34 +38,17 @@ pub struct BeginOfflineForkResponse {
     pub new_app_id: String,
     /// Opaque session id for tracking + telemetry.
     pub fork_session_id: String,
-    /// Remapped + secret-stripped + token-rewritten inline artifacts
-    /// (manifest, boards, events, widgets, templates, pages,
-    /// versioned forms, DB-backed metadata files, and app metadata
-    /// media). Each
-    /// `MetaBlob.data_b64` is the exact bytes that would have been
-    /// written to disk on a destination — the desktop
-    /// base64-decodes and writes it under
-    /// `apps/{new_app_id}/{relative_path}`, choosing the local meta
-    /// or content store based on the relative path.
-    pub meta_blobs: Vec<MetaBlob>,
-    /// Bucket-relative prefix of the **source** content store the
-    /// desktop should pull from (e.g. `apps/{src_app_id}`). Combined
-    /// with `shared_credentials` this gives prefix-isolated read
-    /// access — list once, download in parallel, no per-object
-    /// signing. The desktop translates `metadata/{widgets|templates|
-    /// pages}/{src_id}/...` paths to their destination ids
-    /// client-side using `id_map` before writing locally.
-    pub source_content_prefix: String,
-    /// Scoped read credentials for `source_content_prefix`. Single
-    /// signature, valid until `expires_at`. The desktop builds an
-    /// `object_store` client from these to list + GET. Does **not**
-    /// grant access to the source's meta store — meta artifacts
-    /// already arrived inline in `meta_blobs`.
-    pub shared_credentials: serde_json::Value,
-    /// Wall-clock timestamp (ISO8601) after which the credentials
-    /// stop working.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// The app being forked. Its content files come page by page from
+    /// `GET /apps/{source_app_id}/fork/offline/files?seed={new_app_id}`.
+    pub source_app_id: String,
+    /// Remapped + secret-stripped + token-rewritten artifacts (manifest,
+    /// boards, events, widgets, templates, pages, versioned forms,
+    /// DB-backed metadata files and app metadata media), each as a signed
+    /// download of the exact bytes to write under
+    /// `apps/{new_app_id}/{path}`. They wait under `tmp/`, which expires.
+    pub meta_files: Vec<SignedFile>,
+    /// When the signed downloads stop working.
+    pub expires_at: chrono::DateTime<chrono::Utc>,
     /// Detected token sites on the source — informational. The
     /// replacement / clearing already happened during the bundle
     /// build step.
@@ -79,14 +63,9 @@ pub struct BeginOfflineForkResponse {
     /// so the operator can investigate.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub content_store_leaks: Vec<String>,
-    /// The source owner's fork policy — display only. The desktop does
-    /// not choose what a fork contains.
+    /// The source owner's fork policy — display only. The server already
+    /// left out what it excludes.
     pub fork_policy: ForkPolicy,
-    /// Prefixes under `source_content_prefix` the desktop must not mirror.
-    /// Advisory: the caller already holds `ReadFiles` on the source, so
-    /// this keeps the fork honest rather than protecting the bytes.
-    #[serde(default)]
-    pub content_exclude_prefixes: Vec<String>,
     /// Arrow schemas for a schema-only database fork. The desktop creates
     /// each table empty in its local project database.
     #[serde(default)]
@@ -98,27 +77,25 @@ pub struct BeginOfflineForkResponse {
 /// What the server does:
 /// 1. Permission + size + token gate (no DB row is created on the
 ///    destination — offline apps live only on the desktop).
-/// 2. Run the fork pipeline in memory, so the remapped + stripped
+/// 2. Run the fork pipeline in memory and stage the remapped + stripped
 ///    manifest, boards, events, widgets, templates, pages, and
-///    DB-backed metadata files can ship inline.
-/// 3. Issue scoped read credentials for the **source content**
-///    prefix; the desktop pulls legacy metadata/, upload/, storage/
-///    directly via `object_store` — no per-object signing, no fan-out
-///    through the API server. Inline DB metadata wins over legacy
-///    metadata files with the same destination path.
-/// 4. Sanity-check that no `.board`/`.event`/`.template`/`.widget`/
+///    DB-backed metadata files under `tmp/`, each with a signed download.
+///    Content files (metadata/, upload/, storage/) follow page by page
+///    from `GET /apps/{app_id}/fork/offline/files`, also signed; staged
+///    DB metadata wins over a content file with the same destination path.
+/// 3. Sanity-check that no `.board`/`.event`/`.template`/`.widget`/
 ///    `.page` files have leaked into the source content store.
 #[utoipa::path(
     post,
     path = "/apps/{app_id}/fork/offline/begin",
     tag = "forking",
-    description = "Compute an offline-bundle fork in memory and return scoped read credentials over the source content prefix.",
+    description = "Prepare a copy of an app for this device and return signed downloads of its re-keyed boards, events and pages.",
     params(
         ("app_id" = String, Path, description = "Source application ID"),
     ),
     request_body = BeginOfflineForkBody,
     responses(
-        (status = 200, description = "Fork computed; pull content via the returned scoped credentials", body = BeginOfflineForkResponse),
+        (status = 200, description = "Fork prepared; fetch its files through the signed downloads", body = BeginOfflineForkResponse),
         (status = 400, description = "Source app exceeds size cap, or remote tokens detected without `remote_event_token`"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
@@ -151,7 +128,6 @@ pub async fn begin_offline_fork(
         AppUser::Unauthorized => None,
         _ => Some(user.sub()?),
     };
-    let credential_subject = forker.as_deref().unwrap_or("anonymous-fork");
     // `body` is currently empty (see `BeginOfflineForkBody` doc) but
     // kept on the signature so adding fields later is non-breaking.
     let _ = body;
@@ -176,48 +152,24 @@ pub async fn begin_offline_fork(
         );
     }
 
-    // Sign read access to the **source content** prefix only — boards
-    // / events / widgets / templates / pages live in the meta bucket
-    // and may carry secrets that we strip server-side before they
-    // ship in `meta_blobs`. `ReadAppContent` deliberately omits the
-    // meta bucket from the policy so a misbehaving client can't
-    // bypass the API by GETting raw `*.board` / `*.event` files.
-    //
-    // The grant is NOT narrowed to match `content_exclude_prefixes`.
-    // Passing `check_can_fork` requires `RolePermissions::ReadFiles`,
-    // which alone guards `/data/list` + `/data/download` (24h presigned
-    // GETs) and satisfies `ensure_any_permission!(ReadFiles, ReadDatabase)`
-    // on every project-DB route, arbitrary SQL included. A forker can
-    // already read everything the policy excludes, so a narrower
-    // credential would cost four provider implementations and protect
-    // nothing. The exclusion list is honored by the desktop client.
-    let scoped = RuntimeCredentials::scoped(
-        credential_subject,
-        &app_id,
-        &state,
-        CredentialsAccess::ReadAppContent,
-    )
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to generate scoped read credentials for fork: {}", e);
-        ApiError::internal("Failed to generate fork content credentials")
-    })?;
-    let expires_at = credentials_expiration(&scoped);
-    let shared_credentials =
-        serde_json::to_value(scoped.into_shared_credentials()).map_err(|e| {
-            tracing::error!("Failed to serialize shared credentials for fork: {}", e);
-            ApiError::internal("Failed to serialize fork content credentials")
-        })?;
-
+    // The re-keyed artifacts wait under `tmp/` for the desktop to fetch
+    // them with signed downloads; content files follow through
+    // `/fork/offline/files`. No storage credential leaves the server.
     let session_id = flow_like_types::create_id();
-    let source_content_prefix = format!("apps/{}", app_id);
+    let signer = TransferSigner::content(&state).await?;
+    let meta_files = stage_meta_blobs(
+        &signer,
+        &download_staging_prefix(&app_id, &session_id),
+        bundle.blobs,
+        &bundle.content_exclude_prefixes,
+    )
+    .await?;
     Ok(Json(BeginOfflineForkResponse {
         new_app_id: bundle.new_app_id,
         fork_session_id: session_id,
-        meta_blobs: bundle.blobs,
-        source_content_prefix,
-        shared_credentials,
-        expires_at,
+        source_app_id: app_id,
+        meta_files,
+        expires_at: signer.expires_at(),
         remote_token_sites: token_sites,
         report: ForkReport {
             id_map: bundle.id_map,
@@ -227,21 +179,48 @@ pub async fn begin_offline_fork(
         },
         content_store_leaks,
         fork_policy: bundle.policy,
-        content_exclude_prefixes: bundle.content_exclude_prefixes,
         db_table_schemas: bundle.db_table_schemas,
     }))
 }
 
-fn credentials_expiration(creds: &RuntimeCredentials) -> Option<chrono::DateTime<chrono::Utc>> {
-    match creds {
-        #[cfg(feature = "aws")]
-        RuntimeCredentials::Aws(aws) => aws.expiration,
-        #[cfg(feature = "azure")]
-        RuntimeCredentials::Azure(azure) => azure.expiration,
-        #[cfg(feature = "gcp")]
-        RuntimeCredentials::Gcp(gcp) => gcp.expiration,
-        #[cfg(feature = "r2")]
-        RuntimeCredentials::R2(r2) => r2.expiration,
-        RuntimeCredentials::Mixed(mixed) => credentials_expiration(&mixed.content),
-    }
+const STAGE_CONCURRENCY: usize = 16;
+
+/// Write each artifact the policy keeps under `staging` and sign its
+/// download. `manifest.app` always travels: without it there is no app.
+async fn stage_meta_blobs(
+    signer: &TransferSigner,
+    staging: &StorePath,
+    blobs: Vec<MetaBlob>,
+    exclude_prefixes: &[String],
+) -> Result<Vec<SignedFile>, ApiError> {
+    use base64::Engine as _;
+    use futures::{StreamExt, TryStreamExt};
+
+    let store = signer.store();
+    futures::stream::iter(blobs.into_iter().filter(|blob| {
+        let path = blob.relative_path.trim_matches('/');
+        path == "manifest.app"
+            || !exclude_prefixes
+                .iter()
+                .any(|prefix| path.starts_with(prefix.as_str()))
+    }))
+    .map(|blob| {
+        let store = store.clone();
+        async move {
+            let path = blob.relative_path.trim_matches('/').to_string();
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(&blob.data_b64)
+                .map_err(|e| ApiError::internal(format!("decode fork artifact {path}: {e}")))?;
+            let size = bytes.len() as u64;
+            let key = join_object_path(staging, &path);
+            store
+                .put(&key, bytes.into())
+                .await
+                .map_err(|e| ApiError::internal(format!("stage fork artifact {path}: {e}")))?;
+            signer.download(path, &key, Some(size)).await
+        }
+    })
+    .buffer_unordered(STAGE_CONCURRENCY)
+    .try_collect()
+    .await
 }

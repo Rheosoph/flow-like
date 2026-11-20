@@ -8,6 +8,7 @@ use crate::{
 };
 use flow_like_types::{
     bot::{BotCapability, BotExecutionMode, BotLocation, BotModelPolicy, BotSystemKind},
+    bot_calendar::CalendarWake,
     data_classification::DataSensitivity,
 };
 use serde_json::{Value, json};
@@ -48,6 +49,7 @@ pub(crate) struct BotSettings {
     pub classification: DataSensitivity,
     pub capabilities: Vec<BotCapability>,
     pub profile_id: Option<String>,
+    pub calendar_wake: CalendarWake,
 }
 
 impl BotSettings {
@@ -78,6 +80,7 @@ pub(crate) fn built_in(kind: BotSystemKind) -> BotSettings {
         classification: DataSensitivity::default(),
         capabilities,
         profile_id: None,
+        calendar_wake: CalendarWake::default(),
     }
 }
 
@@ -107,6 +110,7 @@ pub(crate) fn create_settings(request: CreateBotRequest) -> Result<(Option<Strin
             .transpose()?
             .unwrap_or_default(),
         profile_id: reference_id("profile_id", request.profile_id)?,
+        calendar_wake: CalendarWake::default(),
     };
     keeps_fixed_capabilities(&[], &settings.capabilities)?;
     stays_on_the_desktop(request.location, request.device_id, request.execution_mode)?;
@@ -165,6 +169,11 @@ pub(crate) fn apply_patch(
     }
     if let Some(profile_id) = patch.profile_id {
         next.profile_id = reference_id("profile_id", profile_id)?;
+    }
+    if let Some(update) = patch.calendar_wake {
+        next.calendar_wake = update
+            .apply(current.calendar_wake.clone())
+            .map_err(Error::invalid)?;
     }
     stays_on_the_desktop(
         patch.location,

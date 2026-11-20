@@ -10,13 +10,16 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use flow_like_types::Bytes;
+use flow_like_types::bot_message::WorkspaceHandle;
 use flow_like_types::tokio;
 use schemars::JsonSchema;
-use serde::Deserialize;
-use serde_json::json;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::env::ToolEnv;
 use crate::error::{ToolError, ToolResult, code};
+use crate::files::{handle_for, sha256_hex, workspace_of};
+use crate::layout::SCREENSHOTS_DIR;
 use crate::outcome::{ToolImage, ToolOutput};
 use crate::secret_text::{Scrubber, fill_secrets};
 use crate::spec::{Approval, ToolSpec, schema_of};
@@ -54,6 +57,53 @@ pub struct ComputerScreenshotArgs {
     /// display. Ignored when 'window' is set.
     #[serde(default)]
     pub display: Option<u32>,
+    /// Also save the picture in your workspace and return it as 'file', so you can attach it to
+    /// your reply with file_attach. Default false.
+    #[serde(default)]
+    pub keep: bool,
+    /// Set by the host, never by the model: see [`show_in_room_args`].
+    #[serde(default)]
+    #[schemars(skip)]
+    pub show_in_room: Option<RoomShow>,
+}
+
+/// The argument of a `computer_screenshot` call that takes no picture: it asks the owner to show
+/// a kept screenshot to the people of a room, and a standing grant never covers it.
+pub const SHOW_IN_ROOM: &str = "show_in_room";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoomShow {
+    pub file: WorkspaceHandle,
+    #[serde(default)]
+    pub room: Option<String>,
+}
+
+/// Whether `path` is a picture `keep` saved.
+pub fn is_kept_screenshot(path: &str) -> bool {
+    path.strip_prefix(SCREENSHOTS_DIR)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .is_some_and(|name| !name.is_empty() && !name.contains('/'))
+}
+
+/// The arguments that ask the owner to show the kept screenshot `file` in the room `room`.
+pub fn show_in_room_args(file: &WorkspaceHandle, room: Option<&str>) -> Value {
+    let mut args = serde_json::Map::new();
+    args.insert(
+        SHOW_IN_ROOM.to_string(),
+        json!(RoomShow {
+            file: file.clone(),
+            room: room.map(str::to_string),
+        }),
+    );
+    Value::Object(args)
+}
+
+/// What a call asks to show in a room, when it is such a call.
+pub fn room_show(tool: &str, args: &Value) -> Option<RoomShow> {
+    if tool != COMPUTER_SCREENSHOT {
+        return None;
+    }
+    serde_json::from_value(args.get(SHOW_IN_ROOM)?.clone()).ok()
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -179,7 +229,7 @@ pub fn specs() -> Vec<ToolSpec> {
     vec![
         computer(
             COMPUTER_SCREENSHOT,
-            "Look at the computer's screen (the primary display, or another with 'display'; the result lists the displays), or one window of it with 'window'. Coordinates for computer_act are pixels of this picture. Fails naming the missing permission (screen_recording) when macOS has not granted it.",
+            "Look at the computer's screen (the primary display, or another with 'display'; the result lists the displays), or one window of it with 'window'. Coordinates for computer_act are pixels of this picture. Set 'keep' when the person should see the picture too: it is saved in your workspace and returned as 'file', which you attach with file_attach. In a group chat your owner approves each screenshot you show there. Fails naming the missing permission (screen_recording) when macOS has not granted it.",
             Approval::Ask,
             false,
             schema_of::<ComputerScreenshotArgs>(),
@@ -267,6 +317,9 @@ pub async fn computer_screenshot(
     env: &dyn ToolEnv,
     args: ComputerScreenshotArgs,
 ) -> ToolResult<ToolOutput> {
+    if let Some(show) = args.show_in_room {
+        return shown_in_room(env, &show);
+    }
     let backend = backend_of(env)?;
     let window = args
         .window
@@ -293,7 +346,51 @@ pub async fn computer_screenshot(
             result["display"] = json!(args.display);
         }
     }
-    Ok(screen_output(screen, label, result))
+    let kept = if args.keep {
+        Some(keep_screenshot(env, &screen.png).await)
+    } else {
+        None
+    };
+    let mut output = screen_output(screen, label, result);
+    match kept {
+        Some(Ok(handle)) => {
+            output.result["file"] = json!(handle);
+            output = output.saved(handle);
+        }
+        Some(Err(error)) => output = output.warn(format!("The picture was not kept: {error}")),
+        None => {}
+    }
+    Ok(output)
+}
+
+async fn keep_screenshot(env: &dyn ToolEnv, png: &[u8]) -> ToolResult<WorkspaceHandle> {
+    let workspace = workspace_of(env, "keep screenshots")?;
+    let max = env.limits().max_write_bytes;
+    if png.len() as u64 > max {
+        return Err(ToolError::new(
+            code::TOO_LARGE,
+            format!("{} bytes exceed the {max} byte write limit", png.len()),
+        ));
+    }
+    let path = format!(
+        "{SCREENSHOTS_DIR}/{}-{}.png",
+        chrono::Utc::now().format("%Y-%m-%d_%H-%M-%S"),
+        &sha256_hex(png)[..8]
+    );
+    env.write_workspace(&path, Bytes::copy_from_slice(png), "image/png")
+        .await?;
+    Ok(handle_for(&workspace, &path, png, "image/png"))
+}
+
+/// Takes no picture: the owner's approval of this call is what lets core show `show.file`.
+fn shown_in_room(env: &dyn ToolEnv, show: &RoomShow) -> ToolResult<ToolOutput> {
+    let workspace = workspace_of(env, "show screenshots")?;
+    if show.file.app_id != workspace || !is_kept_screenshot(&show.file.path) {
+        return Err(ToolError::refused(
+            "Only a screenshot you kept with computer_screenshot 'keep' can be shown in a room",
+        ));
+    }
+    Ok(ToolOutput::new(json!({ "shown": show.file.path })))
 }
 
 pub async fn computer_windows(
@@ -611,6 +708,15 @@ fn preview(text: &str) -> String {
 /// What the owner is asked before reading or pasting text; other computer calls keep the
 /// generic question.
 pub fn ask_message(tool: &str, args: &serde_json::Value) -> Option<String> {
+    if let Some(show) = room_show(tool, args) {
+        let people = match show.room.as_deref().map(str::trim) {
+            Some(room) if !room.is_empty() => format!("the people in “{}”", preview(room)),
+            _ => "the people in this group chat".to_string(),
+        };
+        return Some(format!(
+            "The bot wants to show {people} this screenshot of your computer."
+        ));
+    }
     match tool {
         COMPUTER_READ_TEXT => Some(
             match args.get("source").and_then(serde_json::Value::as_str) {

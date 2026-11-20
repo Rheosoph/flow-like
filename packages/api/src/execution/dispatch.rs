@@ -2578,7 +2578,7 @@ fn lambda_invoke_complete_error(
 /// the body of an `application/vnd.awslambda.http-integration-response`
 /// streaming response.
 #[cfg(any(feature = "lambda", test))]
-const LAMBDA_PRELUDE_SEPARATOR: [u8; 8] = [0; 8];
+pub(crate) const LAMBDA_PRELUDE_SEPARATOR: [u8; 8] = [0; 8];
 
 /// A real prelude is a small JSON object (status, headers, cookies). Anything
 /// still unterminated past this many bytes is body data, not a prelude.
@@ -2591,7 +2591,7 @@ const LAMBDA_PRELUDE_ERROR_BODY_CAP: usize = 4 * 1024;
 
 #[cfg(any(feature = "lambda", test))]
 #[derive(Debug, PartialEq, Eq)]
-enum LambdaPreludeScan {
+pub(crate) enum LambdaPreludeScan {
     /// More bytes are needed to decide.
     Incomplete,
     /// The bytes are not the http-integration-response format.
@@ -2601,7 +2601,7 @@ enum LambdaPreludeScan {
 }
 
 #[cfg(any(feature = "lambda", test))]
-fn scan_lambda_http_prelude(buffer: &[u8]) -> LambdaPreludeScan {
+pub(crate) fn scan_lambda_http_prelude(buffer: &[u8]) -> LambdaPreludeScan {
     let Some(first) = buffer.first() else {
         return LambdaPreludeScan::Incomplete;
     };
@@ -2705,18 +2705,32 @@ async fn confirm_lambda_stream_prelude(
 /// Lambda SDK invocation rather than HTTP.
 #[cfg(feature = "lambda")]
 fn wrap_as_apigw_v2_event(path: &str, body: serde_json::Value) -> serde_json::Value {
+    use hyper::http::{HeaderMap, header::CONTENT_TYPE};
+
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+    apigw_v2_event(
+        path,
+        &serde_json::to_vec(&body).unwrap_or_default(),
+        headers,
+    )
+}
+
+/// A `POST` of `body` to `path` with `headers`, as the API Gateway v2 event `lambda_http`
+/// turns back into an HTTP request.
+#[cfg(feature = "lambda")]
+pub(crate) fn apigw_v2_event(
+    path: &str,
+    body: &[u8],
+    headers: hyper::http::HeaderMap,
+) -> serde_json::Value {
     use aws_lambda_events::apigw::{
         ApiGatewayV2httpRequest, ApiGatewayV2httpRequestContext,
         ApiGatewayV2httpRequestContextHttpDescription,
     };
-    use hyper::http::{HeaderMap, Method, header::CONTENT_TYPE};
+    use hyper::http::Method;
 
-    let body_string = serde_json::to_string(&body).unwrap_or_default();
-    let body_base64 =
-        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &body_string);
-
-    let mut headers = HeaderMap::new();
-    headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+    let body_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, body);
 
     let now = chrono::Utc::now();
 

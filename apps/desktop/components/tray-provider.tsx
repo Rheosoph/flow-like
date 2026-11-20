@@ -47,7 +47,7 @@ const TrayProvider: React.FC = () => {
 				? t("cloudSyncActive", "Cloud sync active")
 				: t("waitingForNetwork", "Waiting for network"),
 		}),
-		[isOnline],
+		[isOnline, t],
 	);
 
 	useEffect(() => {
@@ -83,13 +83,28 @@ const TrayProvider: React.FC = () => {
 	}, [overview.data, backend]);
 
 	useEffect(() => {
-		// Still poll so notifications that arrive server-side (no local action to
-		// invalidate the query) surface without waiting for user interaction.
-		const intervalId = setInterval(() => {
-			void overview.refetch();
-		}, NOTIFICATION_POLL_INTERVAL);
+		// A safety poll while the window is shown. Hidden, the realtime bridge's
+		// invalidations still refresh the badge; showing the window catches up once.
+		let intervalId: ReturnType<typeof setInterval> | undefined;
+		const refetch = () => void overview.refetch();
+		const schedule = () => {
+			clearInterval(intervalId);
+			intervalId =
+				document.visibilityState === "visible"
+					? setInterval(refetch, NOTIFICATION_POLL_INTERVAL)
+					: undefined;
+		};
+		const onVisibilityChange = () => {
+			if (document.visibilityState === "visible") refetch();
+			schedule();
+		};
+		schedule();
+		document.addEventListener("visibilitychange", onVisibilityChange);
 
-		return () => clearInterval(intervalId);
+		return () => {
+			clearInterval(intervalId);
+			document.removeEventListener("visibilitychange", onVisibilityChange);
+		};
 	}, [overview.refetch]);
 
 	useEffect(() => {

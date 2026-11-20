@@ -93,8 +93,8 @@ impl MemoryToolbox {
         TOOL_NAMES.contains(&name)
     }
 
-    /// Another tool ran in this turn: web or tool content is in the context, so writes wait
-    /// for the user to confirm in a later turn.
+    /// Another tool ran in this turn: web or tool content is in the context, so saves keep
+    /// tool trust, and profile facts, preferences and forgetting wait for the user to confirm.
     pub fn note_foreign_call(&self) {
         self.foreign_calls.store(true, Ordering::SeqCst);
     }
@@ -213,19 +213,14 @@ impl MemoryToolbox {
             }
             None => self.trigger.clone(),
         };
-        let mut gate = self.gate();
-        // A room participant may contribute an attributed statement. Outside tool content
-        // still waits for confirmation, and forgetting remains restricted to the owner.
-        if evidence.role == Role::External
-            && evidence.speaker.is_some()
-            && (self.trigger.role == Role::User
-                || (self.trigger.role == Role::External && self.trigger.speaker.is_some()))
-            && !self.foreign_calls.load(Ordering::SeqCst)
-        {
-            gate.untrusted_in_context = false;
-        }
-        let outcome =
-            tools::memory_save(self.session.engine(), &arguments, &evidence, gate, now).await?;
+        let outcome = tools::memory_save(
+            self.session.engine(),
+            &arguments,
+            &evidence,
+            self.gate(),
+            now,
+        )
+        .await?;
         Ok(match outcome {
             WriteOutcome::Done((fact, action)) => {
                 if !matches!(action, UpdateAction::Noop) {
@@ -243,7 +238,7 @@ impl MemoryToolbox {
             WriteOutcome::NeedsConfirmation { preview } => reply(json!({
                 "status": "needs_confirmation",
                 "preview": preview,
-                "message": "Web or tool content is part of this turn, so nothing was saved. Tell the user what you would remember and ask them to confirm; save it when they do.",
+                "message": "Web or tool content is part of this turn, so this profile fact or preference was not saved. Tell the user what you would remember and ask them to confirm; save it when they do.",
             })),
             WriteOutcome::Rejected { reason: why } => reply(json!({
                 "status": "rejected",

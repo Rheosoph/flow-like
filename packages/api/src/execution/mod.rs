@@ -37,6 +37,10 @@ pub use dispatch::{
     DispatchTrigger, Dispatcher, ExecutionBackend, StreamChunk, ToolTarget,
     caller_dispatch_profile, fetch_profile_for_dispatch, sink_dispatch_profile,
 };
+#[cfg(feature = "lambda")]
+pub(crate) use dispatch::{
+    LAMBDA_PRELUDE_SEPARATOR, LambdaPreludeScan, apigw_v2_event, scan_lambda_http_prelude,
+};
 pub use jwt::{
     ExecutionClaims, ExecutionJwk, ExecutionJwks, ExecutionJwtError, ExecutionJwtParams,
     PageExecutionJwtContext, get_jwks as get_execution_jwks, is_configured as is_jwt_configured,

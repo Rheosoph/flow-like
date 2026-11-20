@@ -3,15 +3,15 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::db::{ScopeParams, column_reader, resolve_connection, validate_table_name},
+    routes::app::db::{ScopeParams, read_table, validate_table_name},
     state::AppState,
 };
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like_query::table::TableOperation;
 use flow_like_storage::contracts::database::DatabaseSelector;
-use flow_like_storage::databases::vector::{VectorStore, lancedb::LanceDBVectorStore};
 
 #[utoipa::path(
     get,
@@ -40,7 +40,7 @@ pub async fn db_count(
     Path((app_id, table)): Path<(String, String)>,
     Query(scope): Query<ScopeParams>,
     Query(selector): Query<DatabaseSelector>,
-) -> Result<Json<usize>, ApiError> {
+) -> Result<Json<flow_like_types::Value>, ApiError> {
     let permission = ensure_any_permission!(
         user,
         &app_id,
@@ -53,12 +53,15 @@ pub async fn db_count(
         .validate()
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
 
-    let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
-    let db = LanceDBVectorStore::from_connection_with_selector(connection, table, selector)
-        .await?
-        .with_column_reader(column_reader(&permission, &scope));
-
-    let count = db.count(None).await?;
-
+    let count = read_table(
+        &state,
+        &user,
+        &permission,
+        &app_id,
+        &scope,
+        1,
+        TableOperation::Count { table, selector },
+    )
+    .await?;
     Ok(Json(count))
 }

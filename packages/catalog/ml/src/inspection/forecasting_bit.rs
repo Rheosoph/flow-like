@@ -1,5 +1,5 @@
 use super::forecasting::ForecastModelHandle;
-#[cfg(any(any(feature = "inference", feature = "forecasting"), test))]
+#[cfg(any(feature = "studio", test))]
 use flow_like::bit::{BitPack, BitTypes, ForecastingModelParameters};
 use flow_like::{
     bit::Bit,
@@ -10,19 +10,19 @@ use flow_like::{
         variable::VariableType,
     },
 };
-#[cfg(any(feature = "inference", feature = "forecasting"))]
+#[cfg(feature = "studio")]
 use flow_like::{bit::ForecastingModelType, state::FlowLikeState};
-#[cfg(any(feature = "inference", feature = "forecasting"))]
+#[cfg(feature = "studio")]
 use flow_like_ml_forecast::ForecastFamily;
 use flow_like_types::{Result, json::json};
-#[cfg(any(any(feature = "inference", feature = "forecasting"), test))]
+#[cfg(any(feature = "studio", test))]
 use flow_like_types::{anyhow, bail};
-#[cfg(any(any(feature = "inference", feature = "forecasting"), test))]
+#[cfg(any(feature = "studio", test))]
 use std::collections::BTreeMap;
 
 const DEFAULT_MAXIMUM_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
-#[cfg(any(any(feature = "inference", feature = "forecasting"), test))]
+#[cfg(any(feature = "studio", test))]
 fn filename(name: &str) -> Result<()> {
     if name.is_empty()
         || name.contains(['/', '\\'])
@@ -38,7 +38,7 @@ fn filename(name: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(any(feature = "inference", feature = "forecasting"), test))]
+#[cfg(any(feature = "studio", test))]
 fn checkpoint_filename(name: &str) -> Result<()> {
     filename(name)?;
     if name != "config.json"
@@ -54,7 +54,7 @@ fn checkpoint_filename(name: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(any(feature = "inference", feature = "forecasting"), test))]
+#[cfg(any(feature = "studio", test))]
 fn resolve_assets(
     root: &Bit,
     parameters: &ForecastingModelParameters,
@@ -152,6 +152,52 @@ fn resolve_assets(
         }
     }
     Ok(files.into_iter().collect())
+}
+
+/// A Forecasting Bit's checkpoint before anything is staged: the files it consists of and the
+/// model family that loads them.
+#[cfg(feature = "studio")]
+pub struct ForecastCheckpoint {
+    pub family: ForecastFamily,
+    pub repository: Option<String>,
+    pub revision: Option<String>,
+    /// Checkpoint file names (`config.json`, weights, index, shards, LICENSE, NOTICE) with the
+    /// Bit that supplies each.
+    pub files: Vec<(String, Bit)>,
+}
+
+/// Resolves `bit`'s asset pack (cached in the Bit store, else fetched from the asset hubs) and
+/// maps every checkpoint file within `maximum_bytes`, without downloading anything.
+#[cfg(feature = "studio")]
+pub async fn resolve_checkpoint(
+    state: std::sync::Arc<FlowLikeState>,
+    bit: &Bit,
+    maximum_bytes: u64,
+) -> Result<ForecastCheckpoint> {
+    if bit.bit_type != BitTypes::Forecasting {
+        bail!("Load Forecasting Bit requires a Forecasting Bit");
+    }
+    let parameters: ForecastingModelParameters =
+        flow_like_types::json::from_value(bit.parameters.clone())?;
+    parameters.validate()?;
+    if maximum_bytes == 0 {
+        bail!("Forecast checkpoint requires a positive byte limit");
+    }
+    let pack = bit.pack(state).await?;
+    let files = resolve_assets(bit, &parameters, &pack, maximum_bytes)?;
+    let family = match parameters.model_type {
+        ForecastingModelType::Timestral => ForecastFamily::Timestral,
+        ForecastingModelType::Chronos2 => ForecastFamily::Chronos2,
+        ForecastingModelType::Toto2 => ForecastFamily::Toto2,
+        ForecastingModelType::Timesfm25 => ForecastFamily::Timesfm25,
+        ForecastingModelType::TinyTimeMixer => ForecastFamily::TinyTimeMixer,
+    };
+    Ok(ForecastCheckpoint {
+        family,
+        repository: parameters.provider.model_id.or(bit.repository.clone()),
+        revision: parameters.provider.version,
+        files,
+    })
 }
 
 #[cfg(any(feature = "inference", feature = "forecasting"))]
@@ -276,17 +322,12 @@ pub(crate) async fn stage_bit(
     maximum_bytes: u64,
     callback: flow_like_types::intercom::InterComCallback,
 ) -> Result<StagedForecastBit> {
-    if bit.bit_type != BitTypes::Forecasting {
-        bail!("Load Forecasting Bit requires a Forecasting Bit");
-    }
-    let parameters: ForecastingModelParameters =
-        flow_like_types::json::from_value(bit.parameters.clone())?;
-    parameters.validate()?;
-    if maximum_bytes == 0 {
-        bail!("Forecast checkpoint requires a positive byte limit");
-    }
-    let pack = bit.pack(state.clone()).await?;
-    let files = resolve_assets(&bit, &parameters, &pack, maximum_bytes)?;
+    let ForecastCheckpoint {
+        family,
+        repository,
+        revision,
+        files,
+    } = resolve_checkpoint(state.clone(), bit, maximum_bytes).await?;
     let store = FlowLikeState::bit_store(&state).await?;
     let temporary = if matches!(
         store,
@@ -308,19 +349,12 @@ pub(crate) async fn stage_bit(
     } else {
         stage_remote_assets(state, files, maximum_bytes, callback).await?
     };
-    let family = match parameters.model_type {
-        ForecastingModelType::Timestral => ForecastFamily::Timestral,
-        ForecastingModelType::Chronos2 => ForecastFamily::Chronos2,
-        ForecastingModelType::Toto2 => ForecastFamily::Toto2,
-        ForecastingModelType::Timesfm25 => ForecastFamily::Timesfm25,
-        ForecastingModelType::TinyTimeMixer => ForecastFamily::TinyTimeMixer,
-    };
     let handle = ForecastModelHandle {
         cache_key: flow_like_types::create_id(),
         family,
         bit_id: Some(bit.id.clone()),
-        repository: parameters.provider.model_id.or(bit.repository.clone()),
-        revision: parameters.provider.version,
+        repository,
+        revision,
     };
     Ok(StagedForecastBit {
         directory: temporary,

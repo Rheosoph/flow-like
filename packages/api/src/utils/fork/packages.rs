@@ -165,7 +165,7 @@ pub async fn split_pins<C: ConnectionTrait>(
 }
 
 /// The manifest's `package_id -> version` map for a set of pins.
-pub fn pin_map(pins: &[app_package::Model]) -> HashMap<String, String> {
+pub fn pin_map(pins: &[app_package::Model]) -> BTreeMap<String, String> {
     pins.iter()
         .map(|pin| (pin.package_id.clone(), pin.version.clone()))
         .collect()

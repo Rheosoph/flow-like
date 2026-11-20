@@ -18,6 +18,14 @@ const MAX_OBJECTS_PER_TRANSACTION: usize = 500;
 const MAX_SAMPLE_ROUNDS: usize = 8;
 const MAX_CONCURRENT_READS: usize = 32;
 
+const DATASET_SUFFIX: &str = ".lance";
+/// Sequencer of a dataset row that is still taking over its files' rows. Every measurement
+/// sequencer is newer, so the first measurement replaces it.
+const ADOPTING: &str = "0";
+/// File rows moved into a dataset row per transaction, well inside DSQL's 3,000-row limit.
+const ADOPTED_PER_TRANSACTION: i64 = 1_000;
+const MAX_ADOPTION_TRANSACTIONS: usize = 200;
+
 /// A chunk carries many objects, so a lost commit race is worth a longer wait than a single
 /// object's: the budget outlasts several competing commits on the same app. Delays stay within
 /// one second, the range of the sub-second jitter source in `flow_like_db`.
@@ -43,12 +51,51 @@ pub struct Observation {
 
 impl Observation {
     fn id(&self) -> String {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(self.bucket.as_bytes());
-        hasher.update(&[0]);
-        hasher.update(self.key.as_bytes());
-        hasher.finalize().to_hex().to_string()
+        object_id(&self.bucket, &self.key)
     }
+
+    /// A Lance dataset directory, accounted as one row whose size is measured by listing it.
+    pub fn is_dataset(&self) -> bool {
+        dataset_prefix(&self.key).is_some_and(|prefix| prefix.len() == self.key.len())
+    }
+}
+
+fn object_id(bucket: &str, key: &str) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(bucket.as_bytes());
+    hasher.update(&[0]);
+    hasher.update(key.as_bytes());
+    hasher.finalize().to_hex().to_string()
+}
+
+/// The Lance dataset directory `key` lies in: the key up to and including the first path
+/// segment named `<name>.lance` that has more of the key below it. Lance writes many small
+/// immutable files per commit, so its datasets are accounted per directory, not per file.
+pub fn dataset_prefix(key: &str) -> Option<&str> {
+    let mut end = 0;
+    for segment in key.split('/') {
+        end += segment.len();
+        if end == key.len() {
+            return None;
+        }
+        end += 1;
+        if segment.len() > DATASET_SUFFIX.len() && segment.ends_with(DATASET_SUFFIX) {
+            return Some(&key[..end]);
+        }
+    }
+    None
+}
+
+/// Datasets are measured, not replayed from per-object events. A listing that starts after
+/// this instant includes every write S3 acknowledged before it, so measurement start times
+/// order dataset sizes the way event sequencers order object sizes.
+pub fn measurement_sequencer(now: std::time::SystemTime) -> String {
+    format!(
+        "{:x}",
+        now.duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    )
 }
 
 struct Accounted {
@@ -703,6 +750,182 @@ async fn account_chunk<L, LFut, F, Fut>(
     );
 }
 
+fn like_prefix(prefix: &str) -> String {
+    let mut pattern = String::with_capacity(prefix.len() + 1);
+    for character in prefix.chars() {
+        if matches!(character, '\\' | '%' | '_') {
+            pattern.push('\\');
+        }
+        pattern.push(character);
+    }
+    pattern.push('%');
+    pattern
+}
+
+async fn existing_ids(db: &DatabaseConnection, ids: &[String]) -> Result<HashSet<String>, DbErr> {
+    let mut existing = HashSet::new();
+    for chunk in ids.chunks(250) {
+        let rows = db
+            .query_all_raw(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                format!(
+                    r#"SELECT "id" FROM "FileAccountingObject" WHERE "id" IN ({})"#,
+                    parameters(chunk.len())
+                ),
+                chunk.iter().map(|id| Value::from(id.as_str())),
+            ))
+            .await?;
+        existing.extend(ids_of(&rows)?);
+    }
+    Ok(existing)
+}
+
+/// Bytes the legacy baseline still holds for a dataset's files. A file that has an accounting
+/// row imported its baseline when that row was written, so only files without one count.
+async fn legacy_only_bytes(
+    db: &DatabaseConnection,
+    bucket: &str,
+    files: &[(String, i64)],
+) -> Result<i64, DbErr> {
+    let ids = files
+        .iter()
+        .map(|(key, _)| object_id(bucket, key))
+        .collect::<Vec<_>>();
+    let existing = existing_ids(db, &ids).await?;
+    files
+        .iter()
+        .zip(&ids)
+        .filter(|(_, id)| !existing.contains(*id))
+        .try_fold(0_i64, |total, ((_, size), _)| {
+            add_delta(total, non_negative(*size)?)
+        })
+}
+
+async fn create_dataset_row(
+    db: &DatabaseConnection,
+    dialect: DbDialect,
+    app_id: &str,
+    object: &Tracked,
+    legacy_bytes: i64,
+) -> Result<(), DbErr> {
+    let app: Arc<str> = app_id.into();
+    let id: Arc<str> = object.id.as_str().into();
+    let observation = Arc::new(object.observation.clone());
+    retry_transaction::<_, (), DbErr>(db, dialect, None, &CHUNK_RETRY, |txn| {
+        let (app, id, observation) = (app.clone(), id.clone(), observation.clone());
+        Box::pin(async move {
+            flow_like_db::coordination::app_capacity(txn, &app).await?;
+            let payer = app_payer(txn, &app).await?;
+            txn.execute_raw(Statement::from_sql_and_values(txn.get_database_backend(),
+                r#"INSERT INTO "FileAccountingObject" ("id", "bucket", "objectKey", "appId", "userId", "size", "sequencer", "payerId", "updatedAt")
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now()) ON CONFLICT ("id") DO NOTHING"#,
+                [
+                    id.as_ref().into(),
+                    observation.bucket.clone().into(),
+                    observation.key.clone().into(),
+                    app.as_ref().into(),
+                    observation.user_id.clone().into(),
+                    legacy_bytes.into(),
+                    ADOPTING.into(),
+                    payer.into(),
+                ])).await?;
+            Ok(())
+        })
+    })
+    .await
+}
+
+/// Moves one chunk of file rows under the dataset into the dataset's row. Returns false once
+/// none is left or the row has been measured since; no total moves either way.
+async fn adopt_chunk(
+    db: &DatabaseConnection,
+    dialect: DbDialect,
+    app_id: &str,
+    object: &Tracked,
+) -> Result<bool, DbErr> {
+    let app: Arc<str> = app_id.into();
+    let id: Arc<str> = object.id.as_str().into();
+    let bucket: Arc<str> = object.observation.bucket.as_str().into();
+    let pattern: Arc<str> = like_prefix(&object.observation.key).into();
+    retry_transaction::<_, bool, DbErr>(db, dialect, None, &CHUNK_RETRY, |txn| {
+        let (app, id, bucket, pattern) = (app.clone(), id.clone(), bucket.clone(), pattern.clone());
+        Box::pin(async move {
+            let backend = txn.get_database_backend();
+            flow_like_db::coordination::app_capacity(txn, &app).await?;
+            let adopting = txn
+                .query_one_raw(Statement::from_sql_and_values(
+                    backend,
+                    r#"UPDATE "FileAccountingObject" SET "updatedAt" = now() WHERE "id" = $1 AND "sequencer" = $2 RETURNING "id""#,
+                    [id.as_ref().into(), ADOPTING.into()],
+                ))
+                .await?;
+            if adopting.is_none() {
+                return Ok(false);
+            }
+            let moved = txn
+                .query_all_raw(Statement::from_sql_and_values(
+                    backend,
+                    format!(
+                        r#"DELETE FROM "FileAccountingObject" WHERE "id" IN (
+                            SELECT "id" FROM "FileAccountingObject"
+                            WHERE "appId" = $1 AND "bucket" = $2 AND "objectKey" LIKE $3 ESCAPE '\' AND "id" <> $4
+                            LIMIT {ADOPTED_PER_TRANSACTION}) RETURNING "size""#
+                    ),
+                    [app.as_ref().into(), bucket.as_ref().into(), pattern.as_ref().into(), id.as_ref().into()],
+                ))
+                .await?;
+            if moved.is_empty() {
+                return Ok(false);
+            }
+            let bytes = moved.iter().try_fold(0_i64, |total, row| {
+                add_delta(total, row.try_get::<i64>("", "size")?)
+            })?;
+            txn.execute_raw(Statement::from_sql_and_values(
+                backend,
+                r#"UPDATE "FileAccountingObject" SET "size" = "size" + $2 WHERE "id" = $1"#,
+                [id.as_ref().into(), bytes.into()],
+            ))
+            .await?;
+            Ok(true)
+        })
+    })
+    .await
+}
+
+/// Moves the bytes already accounted for a dataset's files onto one row for the dataset
+/// without changing any total, so measuring the dataset afterwards moves totals by exactly the
+/// difference. Files only the legacy baseline holds are imported when the row is created.
+async fn adopt<D, DFut>(
+    db: &DatabaseConnection,
+    dialect: DbDialect,
+    app_id: &str,
+    object: &Tracked,
+    read_legacy_files: &D,
+) -> Result<(), DbErr>
+where
+    D: Fn(&Observation) -> DFut,
+    DFut: Future<Output = Result<Vec<(String, i64)>, DbErr>> + Send + 'static,
+{
+    match accounted(db, &[object.id.as_str()]).await?.get(&object.id) {
+        Some(row) if row.sequencer != ADOPTING => return Ok(()),
+        Some(_) => {}
+        None => {
+            let files = read_legacy_files(&object.observation).await?;
+            let legacy = legacy_only_bytes(db, &object.observation.bucket, &files).await?;
+            create_dataset_row(db, dialect, app_id, object, legacy).await?;
+        }
+    }
+    for _ in 0..MAX_ADOPTION_TRANSACTIONS {
+        if !adopt_chunk(db, dialect, app_id, object).await? {
+            return Ok(());
+        }
+    }
+    Err(DbErr::Custom(format!(
+        "{} still has file rows to adopt; retry the notification",
+        object.observation.key
+    )))
+}
+
 /// Objects by app, each once at its newest sequencer: the size sampled for it reflects every
 /// older event on the same key. Observations that cannot be accounted are failed in `results`.
 fn group(
@@ -743,21 +966,33 @@ fn group(
 
 /// Accounts a notification batch with one transaction per app chunk. Returns, for each
 /// observation, the failure that left it unaccounted; a failed chunk fails only its own objects.
-pub async fn apply_batch<L, LFut, F, Fut>(
+/// A dataset is measured only after its file rows have been adopted.
+pub async fn apply_batch<L, LFut, D, DFut, F, Fut>(
     db: &DatabaseConnection,
     dialect: DbDialect,
     observations: &[Observation],
     read_legacy_size: L,
+    read_legacy_files: D,
     read_current_size: F,
 ) -> Vec<Result<(), Failure>>
 where
     L: Fn(&Observation) -> LFut,
     LFut: Future<Output = Result<i64, DbErr>> + Send + 'static,
+    D: Fn(&Observation) -> DFut,
+    DFut: Future<Output = Result<Vec<(String, i64)>, DbErr>> + Send + 'static,
     F: Fn(&Observation) -> Fut,
     Fut: Future<Output = Result<i64, DbErr>> + Send + 'static,
 {
     let mut results = vec![Ok(()); observations.len()];
     for (app_id, mut tracked) in group(observations, &mut results) {
+        for object in tracked
+            .iter_mut()
+            .filter(|object| object.observation.is_dataset())
+        {
+            if let Err(error) = adopt(db, dialect, &app_id, object, &read_legacy_files).await {
+                object.outcome = Some(Err(Arc::new(error)));
+            }
+        }
         for chunk in tracked.chunks_mut(MAX_OBJECTS_PER_TRANSACTION) {
             account_chunk(
                 db,
@@ -778,6 +1013,11 @@ where
         }
     }
     results
+}
+
+#[cfg(test)]
+fn no_legacy_files(_: &Observation) -> std::future::Ready<Result<Vec<(String, i64)>, DbErr>> {
+    std::future::ready(Ok(Vec::new()))
 }
 
 #[cfg(test)]
@@ -807,6 +1047,7 @@ where
         dialect,
         std::slice::from_ref(&observation),
         move |_| async move { Ok(legacy_size) },
+        no_legacy_files,
         |_| read_current_size(),
     )
     .await;
@@ -828,6 +1069,53 @@ mod tests {
         assert!(newer_than("0", ""));
         assert!(normalize_sequencer("").is_err());
         assert!(normalize_sequencer("xyz").is_err());
+    }
+
+    #[test]
+    fn dataset_prefix_is_the_first_lance_directory_with_content_below_it() {
+        let table = "apps/a/storage/db/t.lance/";
+        assert_eq!(dataset_prefix(&format!("{table}data/x.lance")), Some(table));
+        assert_eq!(
+            dataset_prefix(&format!("{table}_versions/3.manifest")),
+            Some(table)
+        );
+        assert_eq!(
+            dataset_prefix("users/u/apps/a/storage/db/t.lance/_indices/i/index.idx"),
+            Some("users/u/apps/a/storage/db/t.lance/")
+        );
+        assert_eq!(
+            dataset_prefix("apps/a/outer.lance/inner.lance/f"),
+            Some("apps/a/outer.lance/")
+        );
+        assert_eq!(dataset_prefix(table), Some(table));
+        assert_eq!(dataset_prefix("apps/a/storage/db/t.lance"), None);
+        assert_eq!(dataset_prefix("apps/a/.lance/f"), None);
+        assert_eq!(dataset_prefix("apps/a/storage/t.lancedb/f"), None);
+        assert_eq!(dataset_prefix("apps/a/storage/report.pdf"), None);
+
+        let dataset = observed(table, "1");
+        assert!(dataset.is_dataset());
+        assert!(!observed(&format!("{table}data/x.lance"), "1").is_dataset());
+        assert!(!observed("apps/a/.lance/", "1").is_dataset());
+    }
+
+    #[test]
+    fn measurement_sequencers_are_normalized_and_ordered_by_time() {
+        let earlier = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let later = earlier + std::time::Duration::from_nanos(1);
+        let first = measurement_sequencer(earlier);
+        let second = measurement_sequencer(later);
+        assert_eq!(normalize_sequencer(&first).unwrap(), first);
+        assert!(newer_than(&second, &first));
+        assert!(newer_than(&first, ADOPTING));
+    }
+
+    #[test]
+    fn like_prefix_escapes_wildcards() {
+        assert_eq!(
+            like_prefix(r"apps/a_b/50%\x.lance/"),
+            r"apps/a\_b/50\%\\x.lance/%"
+        );
     }
 
     #[test]
@@ -1720,7 +2008,15 @@ mod tests {
             observed("users/u/apps/a/gone", "2"),
             observed("apps/b/unreadable", "1"),
         ];
-        let results = apply_batch(&db, DbDialect::Postgres, &batch, no_legacy, &head).await;
+        let results = apply_batch(
+            &db,
+            DbDialect::Postgres,
+            &batch,
+            no_legacy,
+            no_legacy_files,
+            &head,
+        )
+        .await;
         assert!(results[..6].iter().all(Result::is_ok), "{results:?}");
         assert!(results[6]
             .as_ref()
@@ -1794,7 +2090,15 @@ mod tests {
             observed("apps/a/four", "1"),
             observed("apps/b/more", "1"),
         ];
-        let results = apply_batch(&db, DbDialect::Postgres, &redelivered, no_legacy, &head).await;
+        let results = apply_batch(
+            &db,
+            DbDialect::Postgres,
+            &redelivered,
+            no_legacy,
+            no_legacy_files,
+            &head,
+        )
+        .await;
         assert!(results[0].is_ok() && results[1].is_ok(), "{results:?}");
         assert!(results[2].is_err());
         assert_eq!(
@@ -1812,7 +2116,15 @@ mod tests {
         );
         assert_eq!(total(r#"SELECT count(*) AS n FROM "FileAccountingObject" WHERE "objectKey"='apps/b/more'"#).await, 0);
         sql(&db, r#"ALTER TABLE "App" DROP CONSTRAINT b_frozen"#).await;
-        let results = apply_batch(&db, DbDialect::Postgres, &redelivered, no_legacy, &head).await;
+        let results = apply_batch(
+            &db,
+            DbDialect::Postgres,
+            &redelivered,
+            no_legacy,
+            no_legacy_files,
+            &head,
+        )
+        .await;
         assert!(results.iter().all(Result::is_ok), "{results:?}");
         assert_eq!(
             total(r#"SELECT "totalSize" AS n FROM "App" WHERE id='a'"#).await,
@@ -1833,9 +2145,14 @@ mod tests {
         let burst = (0..=MAX_OBJECTS_PER_TRANSACTION)
             .map(|index| observed(&format!("apps/c/{index}"), "1"))
             .collect::<Vec<_>>();
-        let results = apply_batch(&db, DbDialect::Postgres, &burst, no_legacy, |_| async {
-            Ok(1)
-        })
+        let results = apply_batch(
+            &db,
+            DbDialect::Postgres,
+            &burst,
+            no_legacy,
+            no_legacy_files,
+            |_| async { Ok(1) },
+        )
         .await;
         assert!(results.iter().all(Result::is_ok));
         assert_eq!(
@@ -1846,6 +2163,112 @@ mod tests {
             total(r#"SELECT count(*) AS n FROM "WriteLog" WHERE "table"='App'"#).await,
             2
         );
+        fixture.drop_schema().await;
+    }
+
+    /// Adoption moves file rows and legacy-only files onto the dataset row without touching
+    /// totals; each newer measurement then moves App, User and payer totals by the difference.
+    #[tokio::test]
+    async fn postgres_datasets_adopt_file_rows_then_account_measurements() {
+        let Some(fixture) = Fixture::create("dataset_accounting").await else {
+            return;
+        };
+        let db = fixture.db.clone();
+        let table = "users/user/apps/app/storage/db/t.lance/";
+        let file = |name: &str| format!("{table}{name}");
+        let report = "users/user/apps/app/storage/report.pdf".to_owned();
+        for statement in [
+            r#"INSERT INTO "App" VALUES ('app','owner-role',330)"#,
+            r#"INSERT INTO "User" VALUES ('user',330)"#,
+            r#"INSERT INTO "Membership" VALUES ('user','app','owner-role')"#,
+            r#"INSERT INTO "AccountCapacity" ("payerId", "storageBytes", "initialized") VALUES ('user',330,true)"#,
+            r#"INSERT INTO "ProjectCapacity" VALUES ('app','user')"#,
+        ] {
+            sql(&db, statement).await;
+        }
+        for (key, size) in [
+            (file("data/a.lance"), 100),
+            (file("_versions/1.manifest"), 150),
+            (report.clone(), 50),
+        ] {
+            sql(
+                &db,
+                &format!(
+                    r#"INSERT INTO "FileAccountingObject" VALUES ('{}','bucket','{key}','app','user','user',{size},'5',now())"#,
+                    object_id("bucket", &key)
+                ),
+            )
+            .await;
+        }
+        let no_legacy = |_: &Observation| async { Ok::<_, DbErr>(0) };
+        let legacy_files = {
+            let files = vec![(file("data/a.lance"), 999), (file("data/legacy.lance"), 30)];
+            move |_: &Observation| std::future::ready(Ok::<_, DbErr>(files.clone()))
+        };
+        let measure = |sequencer: &'static str, size: i64| {
+            let db = db.clone();
+            let legacy_files = legacy_files.clone();
+            async move {
+                apply_batch(
+                    &db,
+                    DbDialect::Postgres,
+                    &[observed(table, sequencer)],
+                    no_legacy,
+                    legacy_files,
+                    move |_| async move { Ok(size) },
+                )
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            }
+        };
+        let totals = || async {
+            (
+                value(&db, r#"SELECT "totalSize" AS n FROM "App""#).await,
+                value(&db, r#"SELECT "totalSize" AS n FROM "User""#).await,
+                value(&db, r#"SELECT "storageBytes" AS n FROM "AccountCapacity""#).await,
+            )
+        };
+        let dataset_row = format!(
+            r#"SELECT size AS n FROM "FileAccountingObject" WHERE id = '{}'"#,
+            object_id("bucket", table)
+        );
+
+        measure("100", 400).await;
+        assert_eq!(value(&db, &dataset_row).await, 400);
+        assert_eq!(totals().await, (450, 450, 450));
+        assert_eq!(
+            value(
+                &db,
+                &format!(
+                    r#"SELECT count(*)::BIGINT AS n FROM "FileAccountingObject" WHERE "objectKey" LIKE '{table}%' AND "objectKey" <> '{table}'"#
+                )
+            )
+            .await,
+            0
+        );
+        assert_eq!(
+            value(
+                &db,
+                &format!(
+                    r#"SELECT size AS n FROM "FileAccountingObject" WHERE id = '{}'"#,
+                    object_id("bucket", &report)
+                )
+            )
+            .await,
+            50
+        );
+
+        measure("200", 380).await;
+        assert_eq!(totals().await, (430, 430, 430));
+        measure("150", 999).await;
+        measure("200", 999).await;
+        assert_eq!(value(&db, &dataset_row).await, 380);
+        assert_eq!(totals().await, (430, 430, 430));
+
+        measure("300", 0).await;
+        assert_eq!(totals().await, (50, 50, 50));
         fixture.drop_schema().await;
     }
 }

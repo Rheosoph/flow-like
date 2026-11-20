@@ -219,6 +219,8 @@ pub(super) fn pending_row(
         cleared_at: Set(None),
         cleared_legacy_at: Set(None),
         cleared_seq: Set(None),
+        unread_count: Set(None),
+        last_entry_id: Set(None),
     }
 }
 
@@ -367,6 +369,8 @@ pub(crate) async fn invite_in<C: ConnectionTrait>(
             conversation_member::Column::InvitedBy,
             conversation_member::Column::InvitedAt,
             conversation_member::Column::AcceptedAt,
+            conversation_member::Column::UnreadCount,
+            conversation_member::Column::LastEntryId,
         ])
         .to_owned(),
     )

@@ -150,7 +150,7 @@ export async function loadNativeBotCatalog(
 			const bot = batch[index];
 			catalog.botTasks.push(
 				...result.value
-					.filter((task) => task.kind !== "place")
+					.filter((task) => task.kind !== "place" && task.kind !== "event")
 					.slice(0, 20)
 					.map(
 						(task): NativeBotTask => ({

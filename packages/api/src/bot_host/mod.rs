@@ -6,6 +6,8 @@
 
 pub(crate) mod approvals;
 pub(crate) mod authorization;
+pub(crate) mod calendar_sync;
+pub(crate) mod calendar_tasks;
 mod cap;
 mod decision;
 pub(crate) mod decision_wait;
@@ -206,5 +208,6 @@ pub async fn recover(state: &AppState) -> Result<Recovered, ApiError> {
         kick();
     }
     crate::routes::bots::live_activities::sweep(state).await;
+    calendar_sync::sync_due_logged(state).await;
     Ok(recovered)
 }

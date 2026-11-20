@@ -5,7 +5,7 @@
 //! [`tasks::fire`], whose claim lets each run through once, so the sweep stays the fallback for a
 //! schedule that could not be saved or did not call.
 
-use super::tasks::{self, holds_capability};
+use super::tasks::{self, can_fire};
 use crate::{
     entity::{bot, bot_task},
     error::ApiError,
@@ -56,7 +56,7 @@ fn schedule_of(task: &bot_task::Model, now: DateTime<Utc>) -> Option<CronSinkCon
         return None;
     }
     match TaskKind::parse(&task.kind)? {
-        TaskKind::Once => {
+        TaskKind::Once | TaskKind::Event => {
             let at = minute_after(task.next_run_at?.with_timezone(&Utc));
             (at > now).then(|| CronSinkConfig {
                 expression: String::new(),
@@ -175,7 +175,7 @@ fn verdict(task: &bot_task::Model, bot: Option<&bot::Model>, now: DateTime<Utc>)
     let fires_here = !bot
         .location
         .eq_ignore_ascii_case(BotLocation::Desktop.as_str())
-        && holds_capability(bot);
+        && can_fire(bot, task);
     let Some(due) = task.next_run_at.filter(|_| task.enabled && fires_here) else {
         return Verdict::Skip;
     };
@@ -246,6 +246,7 @@ mod tests {
             place_label: None,
             place_repeat: None,
             place_until: None,
+            event: None,
         }
     }
 
@@ -336,6 +337,19 @@ mod tests {
         deleted.deleted_at = Some(now.fixed_offset());
         assert_eq!(verdict(&due, Some(&deleted), now), Verdict::Missing);
         assert_eq!(verdict(&due, None, now), Verdict::Missing);
+    }
+
+    #[test]
+    fn an_event_task_is_scheduled_once_at_its_next_wake_up() {
+        let now = Utc.with_ymd_and_hms(2026, 11, 4, 10, 0, 0).unwrap();
+        let next = Utc.with_ymd_and_hms(2026, 11, 4, 10, 45, 10).unwrap();
+        let config = schedule_of(&task("EVENT", Some(next), None), now).unwrap();
+        let at = config.scheduled_for.unwrap();
+        assert_eq!(
+            (at.date.as_str(), at.time.as_str()),
+            ("2026-11-04", "10:46")
+        );
+        assert!(schedule_of(&task("EVENT", None, None), now).is_none());
     }
 
     #[test]

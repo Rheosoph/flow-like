@@ -7,6 +7,7 @@ use crate::{
     middleware::jwt::{AppPermissionResponse, AppUser},
     permission::role_permission::RolePermissions,
     state::AppState,
+    utils::fork::upload::upload_id_map,
 };
 use axum::{
     Extension, Json,
@@ -139,13 +140,21 @@ pub async fn upsert_template(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((app_id, template_id)): Path<(String, String)>,
-    Json(template_data): Json<TemplateUpsert>,
+    Json(mut template_data): Json<TemplateUpsert>,
 ) -> Result<Json<TemplateRevision>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteTemplates);
 
     if template_id.is_empty() || app_id.is_empty() {
         return Err(ApiError::FORBIDDEN);
     }
+
+    let template_id = match upload_id_map(&state, &app_id).await? {
+        Some(maps) => {
+            template_data.board_id = maps.mint(&template_data.board_id);
+            maps.mint(&template_id)
+        }
+        None => template_id,
+    };
 
     let template = template::Entity::find()
         .filter(

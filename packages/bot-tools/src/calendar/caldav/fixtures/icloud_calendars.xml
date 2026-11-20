@@ -1,0 +1,162 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<multistatus xmlns='DAV:'>
+  <response>
+    <href>/1234567890/calendars/</href>
+    <propstat>
+      <prop>
+        <resourcetype>
+          <collection/>
+        </resourcetype>
+        <current-user-privilege-set>
+          <privilege><read/></privilege>
+          <privilege><write/></privilege>
+        </current-user-privilege-set>
+      </prop>
+      <status>HTTP/1.1 200 OK</status>
+    </propstat>
+    <propstat>
+      <prop>
+        <displayname/>
+        <supported-calendar-component-set xmlns='urn:ietf:params:xml:ns:caldav'/>
+        <calendar-color xmlns='http://apple.com/ns/ical/'/>
+        <getctag xmlns='http://calendarserver.org/ns/'/>
+        <sync-token/>
+        <calendar-timezone xmlns='urn:ietf:params:xml:ns:caldav'/>
+      </prop>
+      <status>HTTP/1.1 404 Not Found</status>
+    </propstat>
+  </response>
+  <response>
+    <href>/1234567890/calendars/home/</href>
+    <propstat>
+      <prop>
+        <resourcetype>
+          <collection/>
+          <calendar xmlns='urn:ietf:params:xml:ns:caldav'/>
+        </resourcetype>
+        <displayname>Home</displayname>
+        <supported-calendar-component-set xmlns='urn:ietf:params:xml:ns:caldav'>
+          <comp name='VEVENT'/>
+        </supported-calendar-component-set>
+        <calendar-color xmlns='http://apple.com/ns/ical/' symbolic-color='blue'>#1BADF8FF</calendar-color>
+        <getctag xmlns='http://calendarserver.org/ns/'>HwoQEgwAAKmKH7fF/wAAAAEYAhgAIhUIo4jM3JvP2vT4ARDtzcbAzIqcwbkBKAA=</getctag>
+        <sync-token>HwoQEgwAAKmKH7fF/wAAAAEYAhgAIhUIo4jM3JvP2vT4ARDtzcbAzIqcwbkBKAA=</sync-token>
+        <current-user-privilege-set>
+          <privilege><read/></privilege>
+          <privilege><read-free-busy xmlns='urn:ietf:params:xml:ns:caldav'/></privilege>
+          <privilege><write/></privilege>
+          <privilege><write-properties/></privilege>
+          <privilege><write-content/></privilege>
+          <privilege><bind/></privilege>
+          <privilege><unbind/></privilege>
+        </current-user-privilege-set>
+        <calendar-timezone xmlns='urn:ietf:params:xml:ns:caldav'>BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Apple Inc.//iPhone OS 18.1//EN
+CALSCALE:GREGORIAN
+BEGIN:VTIMEZONE
+TZID:Europe/Berlin
+BEGIN:DAYLIGHT
+TZOFFSETFROM:+0100
+RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU
+DTSTART:19810329T020000
+TZNAME:CEST
+TZOFFSETTO:+0200
+END:DAYLIGHT
+BEGIN:STANDARD
+TZOFFSETFROM:+0200
+RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU
+DTSTART:19961027T030000
+TZNAME:CET
+TZOFFSETTO:+0100
+END:STANDARD
+END:VTIMEZONE
+END:VCALENDAR
+</calendar-timezone>
+      </prop>
+      <status>HTTP/1.1 200 OK</status>
+    </propstat>
+  </response>
+  <response>
+    <href>/1234567890/calendars/work/</href>
+    <propstat>
+      <prop>
+        <resourcetype>
+          <collection/>
+          <calendar xmlns='urn:ietf:params:xml:ns:caldav'/>
+        </resourcetype>
+        <displayname>Work</displayname>
+        <supported-calendar-component-set xmlns='urn:ietf:params:xml:ns:caldav'>
+          <comp name='VEVENT'/>
+        </supported-calendar-component-set>
+        <calendar-color xmlns='http://apple.com/ns/ical/' symbolic-color='orange'>#FF9500FF</calendar-color>
+        <current-user-privilege-set>
+          <privilege><read/></privilege>
+          <privilege><all/></privilege>
+        </current-user-privilege-set>
+      </prop>
+      <status>HTTP/1.1 200 OK</status>
+    </propstat>
+  </response>
+  <response>
+    <href>/1234567890/calendars/tasks/</href>
+    <propstat>
+      <prop>
+        <resourcetype>
+          <collection/>
+          <calendar xmlns='urn:ietf:params:xml:ns:caldav'/>
+        </resourcetype>
+        <displayname>Reminders</displayname>
+        <supported-calendar-component-set xmlns='urn:ietf:params:xml:ns:caldav'>
+          <comp name='VTODO'/>
+        </supported-calendar-component-set>
+      </prop>
+      <status>HTTP/1.1 200 OK</status>
+    </propstat>
+  </response>
+  <response>
+    <href>/1234567890/calendars/inbox/</href>
+    <propstat>
+      <prop>
+        <resourcetype>
+          <collection/>
+          <schedule-inbox xmlns='urn:ietf:params:xml:ns:caldav'/>
+        </resourcetype>
+      </prop>
+      <status>HTTP/1.1 200 OK</status>
+    </propstat>
+  </response>
+  <response>
+    <href>/1234567890/calendars/notification/</href>
+    <propstat>
+      <prop>
+        <resourcetype>
+          <collection/>
+          <notification xmlns='http://calendarserver.org/ns/'/>
+        </resourcetype>
+      </prop>
+      <status>HTTP/1.1 200 OK</status>
+    </propstat>
+  </response>
+  <response>
+    <href>/1234567890/calendars/8B1D6F3E-shared/</href>
+    <propstat>
+      <prop>
+        <resourcetype>
+          <collection/>
+          <calendar xmlns='urn:ietf:params:xml:ns:caldav'/>
+          <shared xmlns='http://calendarserver.org/ns/'/>
+        </resourcetype>
+        <displayname>Family</displayname>
+        <supported-calendar-component-set xmlns='urn:ietf:params:xml:ns:caldav'>
+          <comp name='VEVENT'/>
+        </supported-calendar-component-set>
+        <current-user-privilege-set>
+          <privilege><read/></privilege>
+          <privilege><read-free-busy xmlns='urn:ietf:params:xml:ns:caldav'/></privilege>
+        </current-user-privilege-set>
+      </prop>
+      <status>HTTP/1.1 200 OK</status>
+    </propstat>
+  </response>
+</multistatus>

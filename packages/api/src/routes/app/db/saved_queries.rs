@@ -1,15 +1,17 @@
 //! Data Studio saved queries & views: CRUD plus an ad-hoc read-only SQL runner
-//! over native tables or an ontology overlay. Persistence and execution live in
-//! `flow_like_storage::databases::workbench`; this module is the HTTP surface.
+//! over native tables or an ontology overlay. Persistence lives in
+//! `flow_like_storage::databases::workbench`, statements run on the query
+//! service; this module is the HTTP surface.
 
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like_query::{Operation, QueryResponse, QueryShape, SurfaceSpec, ViewSpec};
 use flow_like_storage::databases::{
     graph::lancegraph,
     workbench::{
-        self, WorkbenchSurface, WorkbenchView,
+        self, WorkbenchView,
         saved_query::{
             self, SavedQueryDef, SavedQueryKind, SavedQuerySaveResult, SavedQuerySurface,
         },
@@ -23,11 +25,9 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
+    query::{self, LanceRead, QueryRows},
     routes::app::{
-        db::{
-            ScopeParams, column_reader, resolve_connection, resolve_write_connection,
-            validate_table_name,
-        },
+        db::{ScopeParams, resolve_connection, resolve_write_connection, validate_table_name},
         graph::load_scoped_overlay,
     },
     state::AppState,
@@ -189,6 +189,78 @@ pub(super) async fn collect_views(
             sql: query.sql,
         })
         .collect())
+}
+
+/// Where a workbench statement runs: the app, which of its databases, and the surface.
+pub(super) struct SurfaceTarget<'a> {
+    pub app_id: &'a str,
+    pub scope: &'a ScopeParams,
+    /// `native` or `overlay`.
+    pub surface: &'a str,
+    pub overlay_id: Option<&'a str>,
+}
+
+/// The surface with the saved views registered on it, as the query service receives it.
+async fn workbench_shape(
+    state: &AppState,
+    user: &AppUser,
+    target: &SurfaceTarget<'_>,
+) -> Result<QueryShape, ApiError> {
+    let (surface, views) = match parse_surface(target.surface)? {
+        SavedQuerySurface::Native => {
+            let connection = resolve_connection(state, user, target.app_id, target.scope).await?;
+            let views = collect_views(&connection, SavedQuerySurface::Native, None).await?;
+            (SurfaceSpec::Native, views)
+        }
+        SavedQuerySurface::Overlay => {
+            let overlay_id = target.overlay_id.ok_or_else(|| {
+                ApiError::bad_request("An overlay id is required for the overlay surface")
+            })?;
+            let (connection, overlay) =
+                load_scoped_overlay(state, user, target.app_id, overlay_id, target.scope).await?;
+            let views =
+                collect_views(&connection, SavedQuerySurface::Overlay, Some(overlay_id)).await?;
+            (
+                SurfaceSpec::Overlay {
+                    overlay: Box::new(overlay),
+                },
+                views,
+            )
+        }
+    };
+    Ok(QueryShape::Workbench {
+        surface,
+        views: views
+            .into_iter()
+            .map(|view| ViewSpec {
+                name: view.name,
+                sql: view.sql,
+            })
+            .collect(),
+    })
+}
+
+/// Runs the operation `build` makes for the target's surface on the query service, after the
+/// read check every workbench read makes.
+pub(super) async fn run_on_surface(
+    state: &AppState,
+    user: &AppUser,
+    target: SurfaceTarget<'_>,
+    rows: usize,
+    build: impl FnOnce(QueryShape) -> Operation,
+) -> Result<QueryResponse, ApiError> {
+    let permission = ensure_any_permission!(
+        user,
+        target.app_id,
+        state,
+        RolePermissions::ReadFiles,
+        RolePermissions::ReadDatabase
+    );
+    let shape = workbench_shape(state, user, &target).await?;
+    let read = LanceRead::scoped(user, &permission, target.app_id, target.scope)?;
+    let source = state.query.lance_source(state, &read, None).await?;
+    let request = query::request(vec![source], rows, build(shape));
+    state.query.run(&query::subject(user), &request).await
 }
 
 #[utoipa::path(
@@ -465,57 +537,44 @@ pub async fn delete_saved_query(
     ),
     request_body = ExecuteQueryPayload,
     responses(
-        (status = 200, description = "Query results"),
-        (status = 400, description = "Bad request"),
-        (status = 403, description = "Forbidden")
+        (status = 200, description = "Query results, with `warnings` when the query service lowered a limit"),
+        (status = 400, description = "Bad request, or the query failed"),
+        (status = 403, description = "Forbidden"),
+        (status = 413, description = "The query needs more memory than the query service allows"),
+        (status = 503, description = "The query service is unavailable"),
+        (status = 504, description = "The query ran out of time")
     ),
     security(("bearer_auth" = []), ("api_key" = []), ("pat" = []))
 )]
+#[tracing::instrument(name = "POST /apps/{app_id}/db/queries/execute", skip_all)]
 pub async fn execute_query(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(app_id): Path<String>,
     Query(scope): Query<ScopeParams>,
     Json(payload): Json<ExecuteQueryPayload>,
-) -> Result<Json<workbench::SqlQueryResult>, ApiError> {
-    let permission = ensure_any_permission!(
-        user,
-        &app_id,
-        &state,
-        RolePermissions::ReadFiles,
-        RolePermissions::ReadDatabase
-    );
-
+) -> Result<Json<QueryRows>, ApiError> {
     let params = payload.params.unwrap_or(Value::Null);
-    let (connection, surface, views) = match parse_surface(&payload.surface)? {
-        SavedQuerySurface::Native => {
-            let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
-            let views = collect_views(&connection, SavedQuerySurface::Native, None).await?;
-            (connection, WorkbenchSurface::Native, views)
-        }
-        SavedQuerySurface::Overlay => {
-            let overlay_id = payload.overlay_id.as_deref().ok_or_else(|| {
-                ApiError::bad_request("An overlay id is required for the overlay surface")
-            })?;
-            let (connection, overlay) =
-                load_scoped_overlay(&state, &user, &app_id, overlay_id, &scope).await?;
-            let views =
-                collect_views(&connection, SavedQuerySurface::Overlay, Some(overlay_id)).await?;
-            (connection, WorkbenchSurface::Overlay(overlay), views)
-        }
+    let target = SurfaceTarget {
+        app_id: &app_id,
+        scope: &scope,
+        surface: &payload.surface,
+        overlay_id: payload.overlay_id.as_deref(),
     };
-
-    let result = workbench::execute_readonly_sql(
-        &connection,
-        surface,
-        views,
-        &payload.sql,
-        &params,
-        payload.limit,
-        &column_reader(&permission, &scope),
+    let response = run_on_surface(
+        &state,
+        &user,
+        target,
+        query::workbench_rows(payload.limit),
+        |shape| Operation::Sql {
+            sql: payload.sql,
+            params,
+            shape,
+            reuse_if_unchanged: None,
+        },
     )
     .await?;
-    Ok(Json(result))
+    Ok(Json(QueryRows::from_response(&response)?))
 }
 
 #[cfg(test)]

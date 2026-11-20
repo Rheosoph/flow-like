@@ -346,7 +346,9 @@ pub fn bot_connector_approval(message: Option<fn(&Value) -> String>) -> ToolAppr
 /// destroys one irreplaceable target scopes its memory to that target: approving one table drop
 /// must never authorize dropping every other table for the rest of the session.
 fn approval_session_key(spec: &PlatformToolSpec, args: &Value) -> String {
-    if flow_like_bot_tools::configuration::requires_approval(spec.name) {
+    if flow_like_bot_tools::configuration::requires_approval(spec.name)
+        || flow_like_bot_tools::computer::room_show(spec.name, args).is_some()
+    {
         return format!(
             "{}:{}",
             spec.name,

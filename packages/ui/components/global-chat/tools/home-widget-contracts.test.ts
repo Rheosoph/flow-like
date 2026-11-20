@@ -326,6 +326,25 @@ describe("Home widget config contracts", () => {
 				"data_query_parameter_reserved",
 			]),
 		);
+		const sqlBase = {
+			...base,
+			appId: "",
+			sourceKind: "sql",
+			sql: "select 1 as n from crm.a where x = $__home_v",
+			sources: [{ alias: "public", appId: "app", scope: "project" }],
+		};
+		expect(issueCodes("data", sqlBase)).toEqual(
+			expect.arrayContaining([
+				"data_query_parameter_reserved",
+				"data_sql_alias_reserved",
+			]),
+		);
+		expect(issueCodes("data", sqlBase)).not.toContain(
+			"data_source_missing_app",
+		);
+		expect(
+			issueCodes("data", { ...base, appId: "", sourceKind: "sql" }),
+		).toContain("data_sql_missing");
 		expect(
 			issueCodes("data", {
 				...base,

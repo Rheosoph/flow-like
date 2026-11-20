@@ -1,4 +1,5 @@
 mod bots;
+mod calendar;
 mod connectors;
 mod deletion;
 mod files;

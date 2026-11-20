@@ -107,6 +107,21 @@ using the same filename is accepted and removed as redundant. Other asset
 filenames must refer to a separate Bit. `hub pull --with-dependencies`
 preserves local asset aliases for later publication.
 
+Embedding recipes accept aliases in `parameters.embedding.artifacts`:
+
+```json
+{
+  "backbone": { "bit": "@graph", "path": "onnx/model.onnx" },
+  "backbone_weights": { "bit": "@weights", "path": "onnx/model.onnx.data" },
+  "tokenizer": { "bit": "@tokenizer", "path": "tokenizer.json" }
+}
+```
+
+Artifact references become dependencies automatically. The CLI resolves each
+alias to the identity returned by the Hub and preserves the artifact's relative
+path, including the directory layout required by ONNX external weights.
+`hub pull --with-dependencies` restores these aliases when exporting a recipe.
+
 ### Publish the forecasting catalog
 
 The checked-in bundle contains the supported forecasting checkpoints and their
@@ -126,8 +141,8 @@ license files.
 
 ### Publish the OpenRouter catalog
 
-`specs/hosted-openrouter.json` contains 127 hosted Bits: 31 text-to-speech,
-27 speech-to-text, 31 image generation, and 38 embedding models.
+`specs/hosted-openrouter.json` contains 89 hosted Bits: 31 text-to-speech,
+27 speech-to-text, and 31 image generation models.
 The target Hub needs the corresponding hosted API routes and a
 server-side `OPENROUTER_API_KEY`. The bundle contains
 model identifiers and metadata, with no credentials or model downloads.
@@ -142,7 +157,7 @@ ID on the first push. For hosted entries without files, the CLI uses that ID to
 apply parameter updates when the Hub reuses an existing entry. The printed IDs
 are the catalog IDs to select in a profile or pin to a bot.
 
-Model IDs, default voices, embedding dimensions, and upstream tariffs were checked against
+Model IDs, default voices, and upstream tariffs were checked against
 OpenRouter on 2026-11-05. Each entry links to its upstream model. These catalog
 prices feed usage accounting. Audio prices use integer micro-USD per million
 input characters, UTF-8 bytes, or audio seconds. Deploy the Hub's catalog audio
@@ -152,10 +167,11 @@ Speech clients must honor a Bit's `max_input_characters` when splitting text.
 
 Image prices reserve the highest supported per-image charge, including resolution
 and quality variants. OpenRouter's reported cost determines the final charge when
-available. Embedding Bits include model dimensions, input limits, and retrieval
-prefixes. Free variants remain subject to upstream capacity and usage limits.
+available. Free variants remain subject to upstream capacity and usage limits.
 
 The bundle excludes PCM-only speech, audio priced by output duration or tokens,
 image models that require reference images or SVG output, image models without a
-bounded output tariff, batch-only embeddings, and models with no available
-endpoint. Review availability, retirement dates, and rates when updating it.
+bounded output tariff, and models with no available endpoint. Embedding Bits must
+include local model files and belong in a local artifact bundle, which can also
+configure a hosted fallback. Review availability, retirement dates, and rates
+when updating this bundle.

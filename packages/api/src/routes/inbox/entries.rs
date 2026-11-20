@@ -1127,7 +1127,7 @@ async fn advance_marker<C: ConnectionTrait>(
         return Ok((current, false));
     }
     let (conversation_id, reader) = (&membership.conversation_id, &membership.principal_id);
-    if move_marker(db, conversation_id, reader, read_at).await? {
+    if super::summary::move_marker(db, conversation_id, reader, read_at).await? {
         return Ok((read_at, true));
     }
     let current = active_membership(db, conversation_id, reader).await?;
@@ -1154,31 +1154,6 @@ async fn entry_time<C: ConnectionTrait>(
                 cursor.entry_id
             ))
         })
-}
-
-/// Sets the marker to `read_at` unless it already is there or later; whether it moved.
-async fn move_marker<C: ConnectionTrait>(
-    db: &C,
-    conversation_id: &str,
-    reader: &str,
-    read_at: DateTime<FixedOffset>,
-) -> Result<bool, DbErr> {
-    let updated = conversation_member::Entity::update_many()
-        .col_expr(
-            conversation_member::Column::LastReadAt,
-            Expr::value(read_at),
-        )
-        .filter(conversation_member::Column::ConversationId.eq(conversation_id))
-        .filter(conversation_member::Column::PrincipalId.eq(reader))
-        .filter(super::active_member())
-        .filter(
-            Condition::any()
-                .add(conversation_member::Column::LastReadAt.is_null())
-                .add(conversation_member::Column::LastReadAt.lt(read_at)),
-        )
-        .exec(db)
-        .await?;
-    Ok(updated.rows_affected == 1)
 }
 
 #[utoipa::path(
@@ -1543,14 +1518,13 @@ pub async fn mark_read(
 ) -> Result<Json<MarkReadResponse>, ApiError> {
     let sub = user.sub()?;
     let up_to = parse_cursor("up_to", body.up_to.as_deref())?;
-    let (last_read_at, moved) = mark_read_in(
-        &state.db,
-        &conversation_id,
-        &sub,
-        up_to.as_ref(),
-        now_millis(),
-    )
-    .await?;
+    let now = now_millis();
+    let (last_read_at, moved) = state
+        .transaction(|txn| {
+            let (id, sub, up_to) = (conversation_id.clone(), sub.clone(), up_to.clone());
+            Box::pin(async move { mark_read_in(txn, &id, &sub, up_to.as_ref(), now).await })
+        })
+        .await?;
     if moved {
         wake(&state, [sub]).await;
     }

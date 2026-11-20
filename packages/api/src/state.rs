@@ -366,10 +366,11 @@ fn native_async_credential_lifetime(
                 | CredentialsAccess::InvokeWrite
         )
     {
-        // Native async deployment caps event age and hard execution at 900s
-        // each. Keep another 60s for dispatch preparation and clock skew.
-        // Both cached grants and freshly minted sessions must cover this window.
-        chrono::Duration::seconds(900 + 900 + 60)
+        // Native async deployment caps event age at 900s and hard execution at
+        // Lambda's 1800s maximum. Keep another 60s for dispatch preparation and
+        // clock skew. Both cached grants and freshly minted sessions must cover
+        // this window, which stays inside the one-hour STS role-chaining limit.
+        chrono::Duration::seconds(900 + 1800 + 60)
     } else {
         chrono::Duration::seconds(120)
     }
@@ -686,6 +687,9 @@ pub struct State {
     /// are far more frequent than execution-state reads, and rebuilding a Redis
     /// connection on every call would dominate the latency the cache exists to avoid.
     pub cache: crate::cache::CacheBackendHandle,
+    /// The query service every data read runs on (`QUERY_LAMBDA_FUNCTION` or
+    /// `QUERY_SERVICE_URL`), connected on first use.
+    pub query: crate::query::QueryService,
     /// Execution state backend (`EXECUTION_STATE_BACKEND`), built on first use and shared
     /// by every executor callback and poll. A failed build is not memoized.
     pub(crate) execution_state_store: flow_like_types::tokio::sync::OnceCell<
@@ -1610,6 +1614,7 @@ impl State {
             wasm_registry,
             sink_scheduler,
             cache: cache_backend,
+            query: crate::query::QueryService::default(),
             execution_state_store: flow_like_types::tokio::sync::OnceCell::new(),
             secrets,
             encryption_key,
@@ -3079,7 +3084,7 @@ mod tests {
                 assert_eq!(
                     native_async_credential_lifetime(&mode, Some(backend), Some("worker"))
                         .num_seconds(),
-                    1860
+                    2760
                 );
             }
         }
@@ -3128,7 +3133,7 @@ mod tests {
         );
         // Unknown expiration also fails the native post-mint lifetime check.
         assert!(RuntimeCredentials::Aws(grant.clone()).expires_soon(required));
-        for remaining_seconds in [121, 900, 1800] {
+        for remaining_seconds in [121, 900, 1800, 2700] {
             grant.expiration =
                 Some(chrono::Utc::now() + chrono::Duration::seconds(remaining_seconds));
             assert!(RuntimeCredentials::Aws(grant.clone()).expires_soon(required));

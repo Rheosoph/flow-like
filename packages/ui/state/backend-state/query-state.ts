@@ -26,6 +26,74 @@ export interface ExecuteSqlResult {
 	truncated: boolean;
 }
 
+/** One app's tables in a cross-app query, addressed in SQL as `<alias>.<table>`. */
+export interface CrossAppSqlSource {
+	alias: string;
+	app_id: string;
+	scope: "project" | "personal";
+	/** An external data source of `app_id` instead of the app's own tables. */
+	source_id?: string;
+}
+
+/** A comparison between a `$parameter` and a source column, read as `column <operator> $parameter`. */
+export interface SqlParameterBinding {
+	/** `alias.table` for cross-app SQL, the bare table name on a workbench surface. */
+	table: string;
+	column: string;
+	operator: "eq" | "neq" | "lt" | "lte" | "gt" | "gte" | "like" | "ilike" | "in";
+}
+
+export interface SqlParameterInfo {
+	/** Without the leading `$`. */
+	name: string;
+	/** Arrow type the statement fixes, e.g. `Utf8`, `Int64`, `Timestamp(µs)`. */
+	data_type: string | null;
+	bindings: SqlParameterBinding[];
+}
+
+export interface SqlQueryDescription {
+	columns: QueryColumn[];
+	parameters: SqlParameterInfo[];
+}
+
+export interface SqlParameterOptionsRequest {
+	table: string;
+	column: string;
+	search?: string;
+	/** Ask for `{min, max}` instead of distinct values. */
+	range?: boolean;
+}
+
+export type SqlParameterOptions =
+	| { values: unknown[]; truncated: boolean }
+	| { min: unknown; max: unknown };
+
+export interface CrossAppSqlPayload {
+	sql: string;
+	sources: CrossAppSqlSource[];
+	/** Named `$param` values, keyed by name (no leading `$`). */
+	params?: Record<string, unknown>;
+	limit?: number;
+	/** How long an identical request may reuse this result; 0 disables caching. */
+	cache_seconds?: number;
+	/** Skip any cached result and store the new one. */
+	fresh?: boolean;
+}
+
+export interface CrossAppSqlResult extends ExecuteSqlResult {
+	/** `alias.table` of every scanned table. */
+	tables: string[];
+	/** When the rows were computed, in epoch milliseconds. */
+	computed_at: number;
+	cached: boolean;
+	/** When a cached copy stops being reused, in epoch milliseconds. */
+	expires_at: number | null;
+	/** Served from the cache after a refresh failed; `warnings` says why. */
+	stale?: boolean;
+	/** Soft limits that were passed, or limits the service lowered. */
+	warnings?: string[];
+}
+
 export type ForecastTimestampFormat =
 	| "auto"
 	| "unix_seconds"
@@ -278,6 +346,28 @@ export interface IQueryState {
 		payload: ExecuteSqlPayload,
 		userScoped?: boolean,
 	): Promise<ExecuteSqlResult>;
+	/** One read-only statement over the tables of several apps, with server-side caching. */
+	executeCrossAppSql(payload: CrossAppSqlPayload): Promise<CrossAppSqlResult>;
+	/** Output columns and `$parameters` of cross-app SQL, without running it. */
+	describeCrossAppSql(
+		payload: Pick<CrossAppSqlPayload, "sql" | "sources">,
+	): Promise<SqlQueryDescription>;
+	/** Values (or the range) a cross-app `$parameter` bound to `table.column` can take. */
+	crossAppSqlParameterOptions(
+		payload: Pick<CrossAppSqlPayload, "sources"> & SqlParameterOptionsRequest,
+	): Promise<SqlParameterOptions>;
+	/** Output columns and `$parameters` of workbench SQL, without running it. */
+	describeSql(
+		appId: string,
+		payload: Pick<ExecuteSqlPayload, "sql" | "surface" | "overlay_id">,
+		userScoped?: boolean,
+	): Promise<SqlQueryDescription>;
+	sqlParameterOptions(
+		appId: string,
+		payload: Pick<ExecuteSqlPayload, "surface" | "overlay_id"> &
+			SqlParameterOptionsRequest,
+		userScoped?: boolean,
+	): Promise<SqlParameterOptions>;
 	listSavedQueries(appId: string, userScoped?: boolean): Promise<SavedQuery[]>;
 	getSavedQuery(
 		appId: string,

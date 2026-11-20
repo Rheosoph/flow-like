@@ -10,6 +10,7 @@ use flow_like_bot_tools::Scheduler;
 use flow_like_local_bots::ToolTurn;
 use flow_like_types::{
     Result, anyhow,
+    bot_calendar::{CalendarWake, UpdateCalendarWake},
     bot_task::{BotTask, CreateBotTask, UpdateBotTask},
 };
 use reqwest::Method;
@@ -37,7 +38,7 @@ pub(crate) struct TaskTurn {
     pub conversation_id: Option<String>,
 }
 
-struct LocalScheduler {
+pub(crate) struct LocalScheduler {
     app: AppHandle,
     bot_id: String,
     conversation_id: Option<String>,
@@ -45,6 +46,16 @@ struct LocalScheduler {
 }
 
 impl LocalScheduler {
+    /// The scheduler of a bot outside any turn: the person's own view of the whole store.
+    pub(crate) fn unbound(app: &AppHandle, bot_id: &str) -> Self {
+        Self {
+            app: app.clone(),
+            bot_id: bot_id.to_string(),
+            conversation_id: None,
+            turn_id: None,
+        }
+    }
+
     async fn on_store<T: Send + 'static>(
         &self,
         work: impl FnOnce(&flow_like_local_bots::LocalBotStore) -> flow_like_local_bots::Result<T>
@@ -133,12 +144,31 @@ impl Scheduler for LocalScheduler {
         })
         .await
     }
+
+    async fn in_owner_chat(&self) -> Result<bool> {
+        let (bot_id, conversation_id) = (self.bot_id.clone(), self.conversation_id.clone());
+        self.on_store(move |store| store.in_owner_chat(&bot_id, conversation_id.as_deref()))
+            .await
+    }
+
+    async fn calendar_wake(&self) -> Result<CalendarWake> {
+        let bot_id = self.bot_id.clone();
+        self.on_store(move |store| store.calendar_wake(&bot_id))
+            .await
+    }
+
+    async fn set_calendar_wake(&self, update: UpdateCalendarWake) -> Result<CalendarWake> {
+        let bot_id = self.bot_id.clone();
+        self.on_store(move |store| store.set_calendar_wake(&bot_id, update))
+            .await
+    }
 }
 
-struct AccountScheduler {
-    api: Arc<dyn TaskApi>,
-    bot_id: String,
-    turn_id: Option<String>,
+pub(crate) struct AccountScheduler {
+    pub(crate) api: Arc<dyn TaskApi>,
+    pub(crate) bot_id: String,
+    pub(crate) turn_id: Option<String>,
+    pub(crate) conversation_id: Option<String>,
 }
 
 impl AccountScheduler {
@@ -155,6 +185,13 @@ impl AccountScheduler {
     /// turn: a write without it is the owner's own, and the owner's instruction is authority.
     fn written_in(&self) -> &str {
         self.turn_id.as_deref().unwrap_or_default()
+    }
+
+    fn calendar_path(&self) -> String {
+        format!(
+            "bots/{}/calendar",
+            super::super::native_platform_tools::segment(&self.bot_id)
+        )
     }
 
     fn turn_path(&self, path: String) -> String {
@@ -180,6 +217,7 @@ impl Scheduler for AccountScheduler {
             "title": request.title,
             "monitoring": request.monitoring,
             "place": request.place,
+            "event": request.event,
             "turn_id": self.written_in(),
         });
         let created = self
@@ -243,6 +281,61 @@ impl Scheduler for AccountScheduler {
             .map(|_| true)
             .map_err(|error| anyhow!(error))
     }
+
+    async fn in_owner_chat(&self) -> Result<bool> {
+        let Some(conversation_id) = &self.conversation_id else {
+            return Ok(self.turn_id.is_none());
+        };
+        let bot_path = format!(
+            "bots/{}",
+            super::super::native_platform_tools::segment(&self.bot_id)
+        );
+        let bot = self
+            .api
+            .request(Method::GET, &bot_path, None)
+            .await
+            .map_err(|error| anyhow!(error))?;
+        let Some(owner_id) = bot.get("owner_id").and_then(Value::as_str) else {
+            return Ok(false);
+        };
+        let path = format!(
+            "inbox/conversations/{}",
+            super::super::native_platform_tools::segment(conversation_id)
+        );
+        let conversation = self
+            .api
+            .request(Method::GET, &path, None)
+            .await
+            .map_err(|error| anyhow!(error))?;
+        Ok(flow_like_bot_host::memory::hub_owner_chat(
+            &conversation,
+            &self.bot_id,
+            owner_id,
+        ))
+    }
+
+    async fn calendar_wake(&self) -> Result<CalendarWake> {
+        let settings = self
+            .api
+            .request(Method::GET, &self.calendar_path(), None)
+            .await
+            .map_err(|error| anyhow!(error))?;
+        serde_json::from_value(settings)
+            .map_err(|error| anyhow!("The hub sent unusable calendar settings: {error}"))
+    }
+
+    async fn set_calendar_wake(&self, update: UpdateCalendarWake) -> Result<CalendarWake> {
+        let mut body = serde_json::to_value(&update)
+            .map_err(|error| anyhow!("The calendar settings could not be sent: {error}"))?;
+        body["turn_id"] = json!(self.written_in());
+        let settings = self
+            .api
+            .request(Method::PUT, &self.calendar_path(), Some(&body))
+            .await
+            .map_err(|error| anyhow!(error))?;
+        serde_json::from_value(settings)
+            .map_err(|error| anyhow!("The hub sent unusable calendar settings: {error}"))
+    }
 }
 
 /// The scheduler for `bot_id` in `turn`: the local store's when this device holds the bot, else
@@ -276,6 +369,7 @@ pub(crate) async fn scheduler_for(
             api,
             bot_id: bot_id.to_string(),
             turn_id: turn.turn_id,
+            conversation_id: turn.conversation_id,
         })
     }
 }
@@ -313,6 +407,50 @@ mod tests {
         }
     }
 
+    struct Conversations;
+
+    #[async_trait]
+    impl TaskApi for Conversations {
+        async fn request(
+            &self,
+            _method: Method,
+            path: &str,
+            _body: Option<&Value>,
+        ) -> std::result::Result<Value, String> {
+            let member = |id: &str, kind: &str| json!({ "principal_id": id, "kind": kind });
+            Ok(match path {
+                "bots/bot1" => json!({ "id": "bot1", "owner_id": "owner" }),
+                "inbox/conversations/owners" => json!({
+                    "kind": "direct",
+                    "members": [member("bot1", "bot"), member("owner", "user")]
+                }),
+                "inbox/conversations/strangers" => json!({
+                    "kind": "direct",
+                    "members": [member("bot1", "bot"), member("stranger", "user")]
+                }),
+                "inbox/conversations/room" => json!({
+                    "kind": "group",
+                    "members": [member("bot1", "bot"), member("owner", "user")]
+                }),
+                other => return Err(format!("unexpected path {other}")),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn only_the_owners_own_direct_chat_reads_the_calendar() {
+        let in_chat = |conversation: Option<&str>| AccountScheduler {
+            api: Arc::new(Conversations),
+            bot_id: "bot1".into(),
+            turn_id: Some("turn1".into()),
+            conversation_id: conversation.map(str::to_string),
+        };
+        assert!(in_chat(Some("owners")).in_owner_chat().await.unwrap());
+        assert!(!in_chat(Some("strangers")).in_owner_chat().await.unwrap());
+        assert!(!in_chat(Some("room")).in_owner_chat().await.unwrap());
+        assert!(!in_chat(None).in_owner_chat().await.unwrap());
+    }
+
     #[tokio::test]
     async fn an_account_scheduler_names_its_turn_on_every_task_call() {
         let recorder = Arc::new(Recorder(Mutex::new(Vec::new())));
@@ -320,6 +458,7 @@ mod tests {
             api: recorder.clone(),
             bot_id: "bot1".into(),
             turn_id: Some("turn 1".into()),
+            conversation_id: None,
         };
         scheduler.list().await.unwrap();
         scheduler
@@ -352,6 +491,7 @@ mod tests {
             api: recorder.clone(),
             bot_id: "bot1".into(),
             turn_id: None,
+            conversation_id: None,
         };
         scheduler
             .create(CreateBotTask {

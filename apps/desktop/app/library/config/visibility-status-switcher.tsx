@@ -13,6 +13,7 @@ import {
 } from "@flow-like/flow-like-ui";
 import { BotAccessCard } from "@flow-like/flow-like-ui/components/settings/bot-access/bot-access-card";
 import { AllowForkingCard } from "@flow-like/flow-like-ui/components/settings/forking/allow-forking-card";
+import { ForkLineageCard } from "@flow-like/flow-like-ui/components/settings/forking/fork-lineage-card";
 import { AppAiActWizard } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-ai-act-wizard";
 import {
 	type AppPublicationRequestItem,
@@ -97,6 +98,7 @@ export function AppAccessSection({
 				canEdit={canEdit}
 				onVisibilityChange={handleVisibilityChange}
 			/>
+			<ForkLineageCard localApp={localApp} />
 			{!isOffline && (
 				<AllowForkingCard
 					localApp={localApp}

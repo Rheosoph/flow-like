@@ -3,6 +3,7 @@ import { createI18n } from "@flow-like/locales";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { IBot } from "../../../state/backend-state/bot-state";
+import { orderBotCapabilities } from "./bot-draft";
 import type { BotEditorMode } from "./bot-editor-steps";
 import { findBotPreset } from "./bot-presets";
 import type { BotEditor } from "./use-bot-editor";
@@ -125,10 +126,9 @@ describe("useBotEditor in create mode", () => {
 		expect(draft.name).toBe("Secretary");
 		expect(draft.description).toBe("book meetings in my calendar");
 		expect(draft.instructions.length).toBeGreaterThan(0);
-		expect(draft.capabilities).toEqual([
-			...preset("secretary").capabilities,
-			"memory",
-		]);
+		expect(draft.capabilities).toEqual(
+			orderBotCapabilities([...preset("secretary").capabilities, "memory"]),
+		);
 		expect(current().dirty).toBe(true);
 	});
 

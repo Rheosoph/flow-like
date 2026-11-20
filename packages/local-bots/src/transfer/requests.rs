@@ -10,6 +10,7 @@ use crate::{
 use chrono::{DateTime, FixedOffset};
 use flow_like_types::{
     bot::{BotCapability, BotLocation, BotModelPolicy},
+    bot_calendar::CalendarWake,
     data_classification::DataSensitivity,
     inbox::{ConversationKind, InboxEntryKind, is_tombstone, plain_envelope},
 };
@@ -48,6 +49,7 @@ pub(crate) struct ImportBotRequest<'a> {
     classification: &'a DataSensitivity,
     capabilities: &'a [BotCapability],
     profile_id: Option<&'a str>,
+    calendar_wake: &'a CalendarWake,
     location: BotLocation,
     device_id: Option<&'a str>,
     app_ids: &'a [String],
@@ -74,6 +76,7 @@ impl<'a> ImportBotRequest<'a> {
             classification: &bot.classification,
             capabilities: &bot.capabilities,
             profile_id: bot.profile_id.as_deref(),
+            calendar_wake: &bot.calendar_wake,
             location: bot.location,
             device_id: bot.device_id.as_deref(),
             app_ids: &bundle.app_ids,

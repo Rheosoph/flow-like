@@ -10,7 +10,7 @@ import {
 	PlusIcon,
 	Trash2Icon,
 } from "lucide-react";
-import { useId, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
 	useBotTasks,
@@ -34,6 +34,7 @@ import {
 	browserTimeZone,
 	describeSchedule,
 	emptyTaskDraft,
+	scheduledTasks,
 	taskRequest,
 	taskState,
 } from "./bot-task-model";
@@ -334,9 +335,10 @@ export function BotTasks({ bot }: Readonly<{ bot: IBot }>) {
 	const update = useUpdateBotTask();
 	const remove = useDeleteBotTask();
 	const onError = (error: Error) => toast.error(error.message);
+	const listed = useMemo(() => scheduledTasks(tasks.data ?? []), [tasks.data]);
 	return (
 		<BotTasksView
-			tasks={tasks.data ?? []}
+			tasks={listed}
 			busy={create.isPending || update.isPending || remove.isPending}
 			onCreate={(request) =>
 				create.mutate({ botId: bot.id, request }, { onError })

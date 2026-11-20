@@ -1,19 +1,14 @@
 use crate::{
-    ensure_any_permission,
-    error::ApiError,
-    middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions,
-    routes::app::db::{ScopeParams, column_reader},
-    state::AppState,
+    ensure_any_permission, error::ApiError, middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions, routes::app::db::ScopeParams, state::AppState,
 };
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
 use flow_like_catalog_core::DEFAULT_GRAPH_NEIGHBORS_DIRECTION;
-use flow_like_storage::databases::graph::{
-    GraphStore, SubgraphResult, TraversalDirection, lancegraph,
-};
+use flow_like_query::graph::{GraphOperation, ObjectRef};
+use flow_like_storage::databases::graph::{SubgraphResult, TraversalDirection};
 use utoipa::ToSchema;
 
 #[derive(Debug, serde::Deserialize, ToSchema)]
@@ -51,9 +46,11 @@ fn default_direction() -> String {
     request_body = NeighborsPayload,
     responses(
         (status = 200, description = "Subgraph result", body = Object),
-        (status = 400, description = "Bad request"),
+        (status = 400, description = "Bad request, or the traversal failed"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden")
+        (status = 403, description = "Forbidden"),
+        (status = 503, description = "The query service is unavailable"),
+        (status = 504, description = "The traversal ran out of time")
     ),
     security(
         ("bearer_auth" = []),
@@ -86,26 +83,26 @@ pub async fn neighbors(
         _ => TraversalDirection::Both,
     };
 
-    let (connection, overlay) =
-        super::load_scoped_overlay(&state, &user, &app_id, &overlay_id, &scope).await?;
-    let store = lancegraph::LanceGraphStore::new_for(
-        connection,
-        overlay,
-        None,
-        column_reader(&permission, &scope),
+    let result = super::read_overlay(
+        &state,
+        &user,
+        &permission,
+        &app_id,
+        &overlay_id,
+        &scope,
+        |overlay| GraphOperation::Neighbors {
+            limit: payload.limit.unwrap_or(overlay.default_limit),
+            overlay: Box::new(overlay),
+            object: ObjectRef {
+                label: payload.label,
+                id: payload.node_id,
+            },
+            depth: payload.depth,
+            direction,
+            edge_labels: payload.edge_labels,
+        },
     )
     .await?;
-
-    let result = store
-        .neighbors(
-            &payload.label,
-            payload.node_id,
-            payload.depth,
-            direction,
-            payload.limit,
-            payload.edge_labels.as_deref(),
-        )
-        .await?;
 
     Ok(Json(result))
 }

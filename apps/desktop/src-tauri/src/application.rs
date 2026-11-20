@@ -37,6 +37,8 @@ mod frontend_assets;
 #[cfg(target_os = "macos")]
 mod fullscreen_hide;
 mod functions;
+#[cfg(not(target_os = "android"))]
+mod keychain_cache;
 mod local_page_actions;
 #[cfg(any(test, not(debug_assertions)))]
 mod logging;
@@ -1331,8 +1333,10 @@ pub fn run() {
             functions::app::sharing::inspect_app_archive,
             functions::app::sharing::cancel_archive_operation,
             functions::app::fork::apply_fork_bundle,
+            functions::app::fork::download_fork_files,
             functions::app::fork::summarize_local_app_bundle,
-            functions::app::fork::upload_local_app_content_bundle,
+            functions::app::fork::list_local_app_content,
+            functions::app::fork::upload_local_app_files,
             functions::app::duplicate::duplicate_local_app,
             functions::app::tables::db_table_names,
             functions::app::tables::db_table_names_user,
@@ -1387,6 +1391,11 @@ pub fn run() {
             functions::app::saved_queries::query_saved_update,
             functions::app::saved_queries::query_saved_delete,
             functions::app::saved_queries::query_execute_sql,
+            functions::app::saved_queries::query_describe_sql,
+            functions::app::saved_queries::query_sql_parameter_options,
+            functions::app::cross_app_query::query_execute_cross_app,
+            functions::app::cross_app_query::query_describe_cross_app,
+            functions::app::cross_app_query::query_cross_app_parameter_options,
             functions::app::forecasting::query_forecast,
             functions::app::saved_forecasts::studio_forecast_list,
             functions::app::saved_forecasts::studio_forecast_get,
@@ -1646,6 +1655,9 @@ pub fn run() {
             bot_host::task_commands::local_bot_create_task,
             bot_host::task_commands::local_bot_update_task,
             bot_host::task_commands::local_bot_delete_task,
+            bot_host::calendar::bot_calendar_events,
+            bot_host::calendar::local_bot_calendar_wake,
+            bot_host::calendar::local_bot_set_calendar_wake,
             bot_host::skill_commands::local_bot_skills,
             bot_host::skill_commands::local_bot_create_skill,
             bot_host::skill_commands::local_bot_update_skill,

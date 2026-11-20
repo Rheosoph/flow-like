@@ -337,6 +337,7 @@ fn an_approval_answer_rebases_the_deadline_and_keeps_revision_and_state() {
         room: None,
         secret: None,
         invite: None,
+        picture: None,
         configuration_changes: None,
         items: Vec::new(),
     };

@@ -2,10 +2,9 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like_query::table::TableOperation;
 use flow_like_storage::{
-    contracts::database::{
-        DatabaseAction, DatabaseActionResult, DatabaseDiff, DatabaseHistory, DatabaseSelector,
-    },
+    contracts::database::{DatabaseAction, DatabaseActionResult, DatabaseSelector},
     databases::vector::lancedb::LanceDBVectorStore,
 };
 
@@ -14,10 +13,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::db::{
-        ScopeParams, column_reader, resolve_connection, resolve_write_connection,
-        validate_table_name,
-    },
+    routes::app::db::{ScopeParams, read_table, resolve_write_connection, validate_table_name},
     state::AppState,
 };
 
@@ -52,8 +48,8 @@ pub async fn history(
     Path((app_id, table)): Path<(String, String)>,
     Query(scope): Query<ScopeParams>,
     Query(selector): Query<DatabaseSelector>,
-) -> Result<Json<DatabaseHistory>, ApiError> {
-    ensure_any_permission!(
+) -> Result<Json<flow_like_types::Value>, ApiError> {
+    let permission = ensure_any_permission!(
         user,
         &app_id,
         &state,
@@ -64,9 +60,17 @@ pub async fn history(
     selector
         .validate()
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
-    let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
-    let db = LanceDBVectorStore::from_connection_with_selector(connection, table, selector).await?;
-    Ok(Json(db.history().await?))
+    let history = read_table(
+        &state,
+        &user,
+        &permission,
+        &app_id,
+        &scope,
+        1,
+        TableOperation::History { table, selector },
+    )
+    .await?;
+    Ok(Json(history))
 }
 
 #[utoipa::path(
@@ -178,7 +182,7 @@ pub async fn compare(
     Query(scope): Query<ScopeParams>,
     Query(selector): Query<DatabaseSelector>,
     Json(payload): Json<ComparePayload>,
-) -> Result<Json<DatabaseDiff>, ApiError> {
+) -> Result<Json<flow_like_types::Value>, ApiError> {
     let permission = ensure_any_permission!(
         user,
         &app_id,
@@ -194,28 +198,24 @@ pub async fn compare(
         .other
         .validate()
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
-    let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
-    let reader = column_reader(&permission, &scope);
-    let source = LanceDBVectorStore::from_connection_with_selector(
-        connection.clone(),
-        table.clone(),
-        selector,
+    let limit = payload.limit.unwrap_or(100).min(1000);
+    let diff = read_table(
+        &state,
+        &user,
+        &permission,
+        &app_id,
+        &scope,
+        1,
+        TableOperation::Compare {
+            table,
+            selector,
+            other: payload.other,
+            key: payload.key,
+            limit,
+        },
     )
-    .await?
-    .with_column_reader(reader.clone());
-    let target =
-        LanceDBVectorStore::from_connection_with_selector(connection, table, payload.other)
-            .await?
-            .with_column_reader(reader);
-    Ok(Json(
-        source
-            .compare(
-                &target,
-                &payload.key,
-                payload.limit.unwrap_or(100).min(1000),
-            )
-            .await?,
-    ))
+    .await?;
+    Ok(Json(diff))
 }
 
 #[cfg(test)]

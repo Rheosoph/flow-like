@@ -17,6 +17,8 @@ pub mod job;
 pub mod packages;
 pub mod policy;
 pub mod preview;
+pub mod transfer;
+pub mod upload;
 use flow_like::app::remap::{self, remap_widget_json};
 use flow_like::utils::compression::{
     compress_to_file, compress_to_file_json, from_compressed, from_compressed_json,
@@ -31,7 +33,7 @@ use sea_orm::{
     ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QuerySelect,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use utoipa::ToSchema;
 
@@ -855,7 +857,7 @@ pub async fn compute_offline_fork_bundle(
 
     // Routes only land in the manifest if they point at an event
     // whose blob shipped — same dangling-reference guard.
-    let mut new_routes = HashMap::new();
+    let mut new_routes = BTreeMap::new();
     for (path, event_id) in manifest_proto.route_mappings.iter() {
         if shipped_events.contains(event_id) {
             new_routes.insert(path.clone(), maps.translate_event(event_id));
@@ -880,10 +882,7 @@ pub async fn compute_offline_fork_bundle(
 
     manifest_proto.visibility = proto::AppVisibility::Offline as i32;
     manifest_proto.status = proto::AppStatus::Active as i32;
-    manifest_proto.forked_from = Some(src_app_id.to_string());
-    manifest_proto.forked_at = Some(flow_like_types::Timestamp::from(
-        std::time::SystemTime::now(),
-    ));
+    stamp_fork_lineage(&mut manifest_proto, src_app_id, &maps.seed);
     manifest_proto.allow_forking = Some(false);
     manifest_proto.rating_sum = 0;
     manifest_proto.rating_count = 0;
@@ -947,6 +946,19 @@ pub async fn compute_offline_fork_bundle(
         content_exclude_prefixes,
         db_table_schemas,
     })
+}
+
+/// Mark `manifest` as a fork of `src_app_id` whose ids were derived with
+/// `seed`. Replaces the source's own lineage: a fork's upstream is the app
+/// it was forked from, whatever that app was forked from.
+fn stamp_fork_lineage(manifest: &mut proto::App, src_app_id: &str, seed: &str) {
+    manifest.forked_from = Some(src_app_id.to_string());
+    manifest.forked_at = Some(flow_like_types::Timestamp::from(
+        std::time::SystemTime::now(),
+    ));
+    manifest.fork_id_seeds = Some(proto::ForkIdSeeds {
+        seeds: vec![seed.to_string()],
+    });
 }
 
 /// Overlay the App DB row's authoritative fields onto the manifest
@@ -2153,7 +2165,7 @@ pub(crate) async fn materialize_meta(
     // the source events that actually carry routes; that way the
     // destination's manifest reflects current state regardless of
     // whether the source manifest had drifted.
-    let mut new_routes = HashMap::new();
+    let mut new_routes = BTreeMap::new();
     for e in rewritten_events.values() {
         if let Some(path) = e.route.as_ref() {
             new_routes.insert(path.clone(), e.id.clone());
@@ -2169,12 +2181,7 @@ pub(crate) async fn materialize_meta(
     src_app_proto.route_mappings = new_routes;
     src_app_proto.visibility = db_visibility_to_proto(dst_visibility);
     src_app_proto.status = proto::AppStatus::Active as i32;
-    // Lineage — every fork carries the source app id so the UI can show
-    // "forked from" and so we can later compute fork trees.
-    src_app_proto.forked_from = Some(src_app_id.to_string());
-    src_app_proto.forked_at = Some(flow_like_types::Timestamp::from(
-        std::time::SystemTime::now(),
-    ));
+    stamp_fork_lineage(&mut src_app_proto, src_app_id, seed);
     src_app_proto.allow_forking = Some(false);
     // Bits are carried verbatim — bit ids are global registry ids, not
     // app-scoped, so a fork's bits set is just a clone of the source.
@@ -3931,6 +3938,24 @@ mod tests {
     }
 
     #[test]
+    fn a_fork_of_a_fork_records_its_own_parent_and_seed() {
+        let mut manifest = proto::App {
+            forked_from: Some("grandparent".into()),
+            fork_id_seeds: Some(proto::ForkIdSeeds {
+                seeds: vec!["parent_job".into()],
+            }),
+            ..Default::default()
+        };
+        stamp_fork_lineage(&mut manifest, "parent", "fork_job");
+        assert_eq!(manifest.forked_from.as_deref(), Some("parent"));
+        assert!(manifest.forked_at.is_some());
+        assert_eq!(
+            manifest.fork_id_seeds.map(|ids| ids.seeds),
+            Some(vec!["fork_job".to_string()])
+        );
+    }
+
+    #[test]
     fn reserved_etag_dispatch_version_is_detected_on_primary_and_canary_selectors() {
         assert!(is_reserved_etag_dispatch_version_tuple(
             ETAG_BOUND_LATEST_VERSION_SENTINEL
@@ -4210,7 +4235,7 @@ mod tests {
         proto::Board {
             id: "source".into(),
             format_version,
-            variables: HashMap::from([(variable.id.clone(), variable)]),
+            variables: BTreeMap::from([(variable.id.clone(), variable)]),
             version_major: 1,
             version_minor: 2,
             version_patch: 3,
@@ -4287,13 +4312,13 @@ mod tests {
         let node = proto::Node {
             id: "src_node".to_string(),
             name: "a2ui_get_element".to_string(),
-            pins: HashMap::from([(pin.id.clone(), pin)]),
+            pins: BTreeMap::from([(pin.id.clone(), pin)]),
             ..Default::default()
         };
         let board = proto::Board {
             id: "src_board".to_string(),
             page_ids: vec!["src_page".to_string()],
-            nodes: HashMap::from([(node.id.clone(), node)]),
+            nodes: BTreeMap::from([(node.id.clone(), node)]),
             ..Default::default()
         };
 

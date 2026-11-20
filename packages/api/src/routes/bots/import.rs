@@ -26,6 +26,7 @@ use crate::{
 use axum::{Extension, Json, extract::State, http::StatusCode};
 use chrono::{DateTime, FixedOffset};
 use flow_like_types::bot::{BotCapability, BotExecutionMode, BotLocation};
+use flow_like_types::bot_calendar::CalendarWake;
 use flow_like_types::bot_restrictions::{APP_REFUSES_BOTS, app_refuses_bots_message};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait,
@@ -58,6 +59,10 @@ pub struct ImportBotRequest {
     pub app_ids: Vec<String>,
     /// When the bot was created on the device; a time in the future counts as now.
     pub created_at: Option<DateTime<FixedOffset>>,
+    /// The bot's calendar wake-up settings on the device; missing keeps the defaults (off).
+    #[serde(default)]
+    #[schema(value_type = Option<Object>)]
+    pub calendar_wake: Option<CalendarWake>,
 }
 
 /// The part of a bot an issue is about.
@@ -169,6 +174,7 @@ pub(super) struct NewBot {
     pub settings: BotSettings,
     pub app_ids: Vec<String>,
     pub created_at: Option<DateTime<FixedOffset>>,
+    pub calendar_wake: Option<CalendarWake>,
 }
 
 /// What importing a bot would do.
@@ -259,6 +265,12 @@ pub(super) async fn review<C: ConnectionTrait>(
     }
     let app_ids = requested_apps(&request.app_ids);
     issues.extend(app_issues(db, owner_id, &app_ids).await?);
+    let calendar_wake = request
+        .calendar_wake
+        .clone()
+        .map(CalendarWake::check)
+        .transpose()
+        .map_err(ApiError::bad_request)?;
     Ok(match settings {
         Some((preset_id, settings)) if issues.is_empty() => Review::Ready(NewBot {
             import_key: request.local_id.clone(),
@@ -266,6 +278,7 @@ pub(super) async fn review<C: ConnectionTrait>(
             settings,
             app_ids,
             created_at: request.created_at,
+            calendar_wake,
         }),
         _ => Review::Blocked(issues),
     })
@@ -510,6 +523,11 @@ async fn insert<C: ConnectionTrait>(
     let created_at = ready.created_at.filter(|at| *at <= now).unwrap_or(now);
     let mut row = new_bot_row(owner_id, None, ready.preset_id, &ready.settings, created_at)?;
     row.import_key = Set(Some(ready.import_key));
+    row.calendar_wake = Set(ready
+        .calendar_wake
+        .as_ref()
+        .map(crate::bot_host::calendar_tasks::wake_json)
+        .transpose()?);
     row.updated_at = Set(now);
     let stored = row.insert(db).await?;
     if !ready.app_ids.is_empty() {

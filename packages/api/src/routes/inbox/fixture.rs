@@ -40,7 +40,8 @@ const TABLES: [&str; 8] = [
         "principalKind" TEXT NOT NULL, "addedBy" TEXT, "joinedAt" TEXT NOT NULL,
         "leftAt" TEXT, "lastReadAt" TEXT,
         "status" TEXT NOT NULL DEFAULT 'ACTIVE', "limits" TEXT, "invitedBy" TEXT, "invitedAt" TEXT,
-        "acceptedAt" TEXT, "hiddenAt" TEXT, "clearedAt" TEXT, "clearedLegacyAt" TEXT, "clearedSeq" INTEGER, PRIMARY KEY ("conversationId", "principalId"))"#,
+        "acceptedAt" TEXT, "hiddenAt" TEXT, "clearedAt" TEXT, "clearedLegacyAt" TEXT, "clearedSeq" INTEGER,
+        "unreadCount" INTEGER, "lastEntryId" TEXT, PRIMARY KEY ("conversationId", "principalId"))"#,
     r#"CREATE TABLE public."InboxEntry" (
         "id" TEXT PRIMARY KEY, "inboxId" TEXT NOT NULL, "conversationId" TEXT NOT NULL,
         "messageId" TEXT NOT NULL, "senderId" TEXT NOT NULL, "kind" TEXT NOT NULL,
@@ -183,6 +184,8 @@ pub(crate) async fn insert_bot(db: &DatabaseConnection, id: &str, owner_id: &str
         image_model: Set(None),
         vision_model: Set(None),
         subtask_model: Set(None),
+        calendar_wake: Set(None),
+        calendar_synced_at: Set(None),
     }
     .insert(db)
     .await

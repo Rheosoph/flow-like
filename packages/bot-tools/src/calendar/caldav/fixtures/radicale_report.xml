@@ -1,0 +1,110 @@
+<?xml version='1.0' encoding='utf-8'?>
+<multistatus xmlns="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+<response><href>/felix/a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d/design-sync.ics</href><propstat><prop><getetag>"5c1a"</getetag><C:calendar-data>BEGIN:VCALENDAR
+PRODID:-//Microsoft Corporation//Outlook 16.0 MIMEDIR//EN
+VERSION:2.0
+METHOD:PUBLISH
+X-MS-OLK-FORCEINSPECTOROPEN:TRUE
+BEGIN:VTIMEZONE
+TZID:W. Europe Standard Time
+BEGIN:STANDARD
+DTSTART:16011028T030000
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10
+TZOFFSETFROM:+0200
+TZOFFSETTO:+0100
+END:STANDARD
+BEGIN:DAYLIGHT
+DTSTART:16010325T020000
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3
+TZOFFSETFROM:+0100
+TZOFFSETTO:+0200
+END:DAYLIGHT
+END:VTIMEZONE
+BEGIN:VEVENT
+CLASS:PUBLIC
+CREATED:20260920T080000Z
+DESCRIPTION:Weekly sync with the design team. Agenda: review open tickets\
+ , plan the next sprint and check the release notes before Friday.\n
+DTEND;TZID="W. Europe Standard Time":20261005T093000
+DTSTAMP:20260920T080000Z
+DTSTART;TZID="W. Europe Standard Time":20261005T090000
+EXDATE;TZID="W. Europe Standard Time":20261109T090000
+LOCATION:Room 4.12
+PRIORITY:5
+RRULE:FREQ=WEEKLY;BYDAY=MO
+SEQUENCE:0
+SUMMARY;LANGUAGE=en-us:Design sync
+TRANSP:OPAQUE
+UID:040000008200E00074C5B7101A82E00800000000
+X-MICROSOFT-CDO-BUSYSTATUS:BUSY
+END:VEVENT
+BEGIN:VEVENT
+DTEND;TZID="W. Europe Standard Time":20261116T110000
+DTSTAMP:20261101T080000Z
+DTSTART;TZID="W. Europe Standard Time":20261116T100000
+RECURRENCE-ID;TZID="W. Europe Standard Time":20261116T090000
+SEQUENCE:1
+SUMMARY:Design sync (moved)
+UID:040000008200E00074C5B7101A82E00800000000
+END:VEVENT
+END:VCALENDAR
+</C:calendar-data></prop><status>HTTP/1.1 200 OK</status></propstat></response>
+<response><href>/felix/a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d/lunch.ics</href><propstat><prop><getetag>"77"</getetag><C:calendar-data>BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Radicale//NONSGML Radicale Server//EN
+BEGIN:VEVENT
+UID:lunch-1@example.org
+DTSTAMP:20261001T100000Z
+DTSTART:20261022T123000
+DTEND:20261022T133000
+SUMMARY:Lunch with Anna
+END:VEVENT
+END:VCALENDAR
+</C:calendar-data></prop><status>HTTP/1.1 200 OK</status></propstat></response>
+<response><href>/felix/a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d/birthday-mia.ics</href><propstat><prop><getetag>"78"</getetag><C:calendar-data>BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Mozilla.org/NONSGML Mozilla Calendar V1.1//EN
+BEGIN:VEVENT
+UID:birthday-mia@example.org
+DTSTAMP:20200101T100000Z
+DTSTART;VALUE=DATE:19901102
+DTEND;VALUE=DATE:19901103
+RRULE:FREQ=YEARLY
+SUMMARY:Mia's birthday
+TRANSP:TRANSPARENT
+END:VEVENT
+END:VCALENDAR
+</C:calendar-data></prop><status>HTTP/1.1 200 OK</status></propstat></response>
+<response><href>/felix/a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d/concert.ics</href><propstat><prop><getetag>"79"</getetag><C:calendar-data>BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Mozilla.org/NONSGML Mozilla Calendar V1.1//EN
+BEGIN:VTIMEZONE
+TZID:/mozilla.org/20050126_1/Europe/Berlin
+X-LIC-LOCATION:Europe/Berlin
+BEGIN:STANDARD
+TZOFFSETFROM:+0200
+TZOFFSETTO:+0100
+DTSTART:19701025T030000
+END:STANDARD
+END:VTIMEZONE
+BEGIN:VEVENT
+UID:concert@example.org
+DTSTAMP:20261001T100000Z
+DTSTART;TZID=/mozilla.org/20050126_1/Europe/Berlin:20261103T180000
+DURATION:PT2H30M
+SUMMARY:Concert
+END:VEVENT
+END:VCALENDAR
+</C:calendar-data></prop><status>HTTP/1.1 200 OK</status></propstat></response>
+<response><href>/felix/a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d/mars.ics</href><propstat><prop><getetag>"80"</getetag><C:calendar-data>BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Example//Broken//EN
+BEGIN:VEVENT
+UID:mars@example.org
+DTSTAMP:20261001T100000Z
+DTSTART;TZID=Mars/Olympus_Mons:20261104T090000
+SUMMARY:Landing
+END:VEVENT
+END:VCALENDAR
+</C:calendar-data></prop><status>HTTP/1.1 200 OK</status></propstat></response>
+</multistatus>

@@ -239,12 +239,19 @@ struct AttachArgs {
     mime: Option<String>,
 }
 
+/// The group chat a reply goes to; showing a kept screenshot there asks the owner first.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct GroupChat {
+    pub(super) title: Option<String>,
+}
+
 /// Answers `file_attach` and hands every other call on.
 pub(super) struct ReplyFilesBridge {
     files: ReplyFiles,
     workspace: Option<String>,
     label: Arc<TurnLabel>,
     frames: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    group_chat: Option<GroupChat>,
     inner: Arc<dyn PlatformToolBridge>,
 }
 
@@ -261,8 +268,14 @@ impl ReplyFilesBridge {
             workspace,
             label,
             frames,
+            group_chat: None,
             inner,
         }
+    }
+
+    pub(super) fn in_group_chat(mut self, group_chat: Option<GroupChat>) -> Self {
+        self.group_chat = group_chat;
+        self
     }
 
     async fn attach(&self, arguments: Value) -> String {
@@ -317,8 +330,51 @@ impl ReplyFilesBridge {
             Some(handle) => handle,
             None => self.saved_copy(file).await?,
         };
+        self.shown_to_group(&handle).await?;
         let name = name.unwrap_or_else(|| file_name(&handle.path));
         Ok(ReplyFile::stored(name, handle))
+    }
+
+    /// The call that asks the owner to show `handle` in the group chat: for a kept screenshot of
+    /// a group-chat reply only.
+    fn group_show(&self, handle: &WorkspaceHandle) -> Option<Value> {
+        let group = self.group_chat.as_ref()?;
+        (Some(handle.app_id.as_str()) == self.workspace.as_deref()
+            && tools::computer::is_kept_screenshot(&handle.path))
+        .then(|| tools::computer::show_in_room_args(handle, group.title.as_deref()))
+    }
+
+    /// In a group chat a kept screenshot joins the reply only once the owner allowed showing it.
+    /// A pending approval comes back as the gate's own output, so the turn parks on it.
+    async fn shown_to_group(&self, handle: &WorkspaceHandle) -> Result<(), String> {
+        let Some(args) = self.group_show(handle) else {
+            return Ok(());
+        };
+        let output = self
+            .inner
+            .call(tools::computer::COMPUTER_SCREENSHOT, args)
+            .await;
+        if super::run_recovery::gate_waiting_code(&output).is_some() {
+            return Err(output);
+        }
+        let result: Value = serde_json::from_str(&output).unwrap_or(Value::Null);
+        if result.get("status").and_then(Value::as_str) == Some("ok") {
+            return Ok(());
+        }
+        let reason = reason_of(&result).unwrap_or("your owner's approval could not be asked");
+        Err(refusal(
+            "not_shown",
+            format!("The screenshot was not attached to this group chat: {reason}"),
+        ))
+    }
+
+    /// The question a held `file_attach` call asks: none, unless it passes the handle of a kept
+    /// screenshot in a group chat. A screenshot named by its path asks once the call runs.
+    fn held_group_show(&self, arguments: &Value) -> Option<Value> {
+        let file = serde_json::from_value::<AttachArgs>(arguments.clone())
+            .ok()?
+            .file?;
+        self.group_show(&own_handle(&file, self.workspace.as_deref())?)
     }
 
     /// Puts what app calls pushed on the reply and says what joined it.
@@ -465,6 +521,8 @@ impl ReplyFilesBridge {
         serde_json::from_value(result.get("handle")?.clone()).ok()
     }
 
+    /// A copy in the workspace; a kept screenshot named by its path resolves in place, so it
+    /// stays a kept screenshot.
     async fn saved_copy(&self, file: Value) -> Result<WorkspaceHandle, String> {
         if self.workspace.is_none() {
             return Err(refusal(
@@ -472,18 +530,16 @@ impl ReplyFilesBridge {
                 "You have no workspace to keep the file in, so only a `url` can be attached",
             ));
         }
-        let output = self
-            .inner
-            .call(tools::files::FILE_SAVE, json!({ "file": file }))
-            .await;
+        let in_place = kept_screenshot_path(&file, self.workspace.as_deref()).map(str::to_string);
+        let mut args = json!({ "file": file });
+        if let Some(path) = in_place {
+            args["path"] = json!(path);
+        }
+        let output = self.inner.call(tools::files::FILE_SAVE, args).await;
         let result: Value = serde_json::from_str(&output).unwrap_or(Value::Null);
         if result.get("status").and_then(Value::as_str) != Some("ok") {
-            let reason = result
-                .get("error")
-                .and_then(|error| error.get("message"))
-                .or_else(|| result.get("message"))
-                .and_then(Value::as_str)
-                .unwrap_or("the file could not be copied into your workspace");
+            let reason =
+                reason_of(&result).unwrap_or("the file could not be copied into your workspace");
             return Err(refusal(
                 "not_attached",
                 format!("The file was not attached: {reason}"),
@@ -508,7 +564,10 @@ impl PlatformToolBridge for ReplyFilesBridge {
         if tool_name == FILE_ATTACH_TOOL {
             return self.attach(arguments).await;
         }
-        let output = self.inner.call(tool_name, arguments).await;
+        let output = self
+            .inner
+            .call(tool_name, without_room_show(tool_name, arguments))
+            .await;
         if !APP_OUTPUT_TOOLS.contains(&tool_name) {
             return output;
         }
@@ -523,9 +582,18 @@ impl PlatformToolBridge for ReplyFilesBridge {
 
     async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
         if tool_name == FILE_ATTACH_TOOL {
-            return Clearance::Clear;
+            return match self.held_group_show(arguments) {
+                Some(show) => {
+                    self.inner
+                        .clearance(tools::computer::COMPUTER_SCREENSHOT, &show)
+                        .await
+                }
+                None => Clearance::Clear,
+            };
         }
-        self.inner.clearance(tool_name, arguments).await
+        self.inner
+            .clearance(tool_name, &without_room_show(tool_name, arguments.clone()))
+            .await
     }
 
     fn supports_tool(&self, tool_name: &str) -> bool {
@@ -576,6 +644,35 @@ fn valid_name(name: &str) -> bool {
 }
 
 /// A complete handle of a file in the bot's own workspace.
+/// Only [`ReplyFilesBridge`] asks to show a screenshot in a room; the model never does.
+fn without_room_show(tool_name: &str, mut arguments: Value) -> Value {
+    if tool_name == tools::computer::COMPUTER_SCREENSHOT
+        && let Some(object) = arguments.as_object_mut()
+    {
+        object.remove(tools::computer::SHOW_IN_ROOM);
+    }
+    arguments
+}
+
+/// The workspace path of a kept screenshot named by its path, plain or as `app:<workspace>/…`.
+fn kept_screenshot_path<'a>(file: &'a Value, workspace: Option<&str>) -> Option<&'a str> {
+    let reference = file.as_str()?.trim();
+    let path = match reference.strip_prefix("app:") {
+        Some(qualified) => qualified.strip_prefix(workspace?)?.strip_prefix('/')?,
+        None => reference.trim_start_matches('/'),
+    };
+    tools::computer::is_kept_screenshot(path).then_some(path)
+}
+
+/// The message of a failed tool result.
+fn reason_of(result: &Value) -> Option<&str> {
+    result
+        .get("error")
+        .and_then(|error| error.get("message"))
+        .or_else(|| result.get("message"))
+        .and_then(Value::as_str)
+}
+
 fn own_handle(file: &Value, workspace: Option<&str>) -> Option<WorkspaceHandle> {
     let handle = serde_json::from_value::<WorkspaceHandle>(file.clone()).ok()?;
     (Some(handle.app_id.as_str()) == workspace && is_workspace_path(&handle.path)).then_some(handle)
@@ -672,6 +769,8 @@ mod tests {
 
     struct Host {
         calls: Mutex<Vec<(String, Value)>>,
+        replies: Mutex<std::collections::HashMap<String, String>>,
+        clearance: Mutex<Vec<(String, Value)>>,
     }
 
     #[async_trait]
@@ -681,6 +780,9 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((tool_name.to_string(), arguments.clone()));
+            if let Some(reply) = self.replies.lock().unwrap().get(tool_name) {
+                return reply.clone();
+            }
             match tool_name {
                 "file_save" => json!({
                     "status": "ok",
@@ -691,6 +793,14 @@ mod tests {
                 .to_string(),
                 _ => json!({ "status": "ok", "tool": tool_name }).to_string(),
             }
+        }
+
+        async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
+            self.clearance
+                .lock()
+                .unwrap()
+                .push((tool_name.to_string(), arguments.clone()));
+            Clearance::Asks
         }
     }
 
@@ -727,6 +837,8 @@ mod tests {
         let files = ReplyFiles::new();
         let host = Arc::new(Host {
             calls: Mutex::new(Vec::new()),
+            replies: Mutex::new(Default::default()),
+            clearance: Mutex::new(Vec::new()),
         });
         let frames = Arc::new(Mutex::new(Vec::new()));
         let sink = frames.clone();
@@ -811,6 +923,173 @@ mod tests {
             .call(FILE_ATTACH_TOOL, json!({ "file": foreign.clone() }))
             .await;
         assert_eq!(host.calls.lock().unwrap().len(), 2);
+    }
+
+    fn screenshot(path: &str) -> WorkspaceHandle {
+        WorkspaceHandle {
+            mime: "image/png".to_string(),
+            ..handle("ws1", path)
+        }
+    }
+
+    fn reply(host: &Host, tool: &str, output: Value) {
+        host.replies
+            .lock()
+            .unwrap()
+            .insert(tool.to_string(), output.to_string());
+    }
+
+    fn team() -> Option<GroupChat> {
+        Some(GroupChat {
+            title: Some("Team".to_string()),
+        })
+    }
+
+    #[tokio::test]
+    async fn a_kept_screenshot_attaches_without_asking_outside_a_group_chat() {
+        let (bridge, files, host, _) = harness(Some("ws1"), label(None));
+        let shot = screenshot("bot/screenshots/a.png");
+        let output = bridge
+            .call(FILE_ATTACH_TOOL, json!({ "file": shot }))
+            .await;
+        assert_eq!(status(&output).0, "ok");
+        assert!(host.calls.lock().unwrap().is_empty());
+        assert_eq!(files.files().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_group_chat_shows_a_kept_screenshot_only_after_the_owner_allowed_it() {
+        let (bridge, files, host, _) = harness(Some("ws1"), label(None));
+        let bridge = bridge.in_group_chat(team());
+        let shot = screenshot("bot/screenshots/a.png");
+        let attach = json!({ "file": shot });
+        let show = tools::computer::show_in_room_args(&shot, Some("Team"));
+
+        let waiting = json!({
+            "status": "waiting", "tool": "computer_screenshot",
+            "code": "bot_tool_waiting_for_approval", "retryable": false,
+        });
+        reply(&host, "computer_screenshot", waiting.clone());
+        let output = bridge.call(FILE_ATTACH_TOOL, attach.clone()).await;
+        assert_eq!(serde_json::from_str::<Value>(&output).unwrap(), waiting);
+        assert!(files.files().is_empty());
+        assert_eq!(
+            host.calls.lock().unwrap().clone(),
+            [("computer_screenshot".to_string(), show.clone())]
+        );
+
+        reply(
+            &host,
+            "computer_screenshot",
+            json!({ "status": "error", "message": "The owner refused this call." }),
+        );
+        let output = bridge.call(FILE_ATTACH_TOOL, attach.clone()).await;
+        assert_eq!(status(&output), ("error".into(), "not_shown".into()));
+        assert!(output.contains("The owner refused"));
+        assert!(files.files().is_empty());
+
+        reply(
+            &host,
+            "computer_screenshot",
+            json!({ "status": "ok", "tool": "computer_screenshot" }),
+        );
+        let output = bridge.call(FILE_ATTACH_TOOL, attach).await;
+        assert_eq!(status(&output).0, "ok");
+        assert_eq!(files.files().len(), 1);
+
+        let report = handle("ws1", "bot/renders/report.pdf");
+        let output = bridge
+            .call(FILE_ATTACH_TOOL, json!({ "file": report }))
+            .await;
+        assert_eq!(status(&output).0, "ok");
+        assert_eq!(host.calls.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_kept_screenshot_named_by_its_path_resolves_in_place_and_still_asks() {
+        let (bridge, files, host, _) = harness(Some("ws1"), label(None));
+        let bridge = bridge.in_group_chat(team());
+        let shot = screenshot("bot/screenshots/a.png");
+        reply(
+            &host,
+            "file_save",
+            json!({ "status": "ok", "tool": "file_save", "handle": shot }),
+        );
+        for reference in ["bot/screenshots/a.png", "app:ws1/bot/screenshots/a.png"] {
+            bridge
+                .call(FILE_ATTACH_TOOL, json!({ "file": reference }))
+                .await;
+        }
+        let calls = host.calls.lock().unwrap().clone();
+        let show = tools::computer::show_in_room_args(&shot, Some("Team"));
+        assert_eq!(
+            calls,
+            [
+                (
+                    "file_save".to_string(),
+                    json!({ "file": "bot/screenshots/a.png", "path": "bot/screenshots/a.png" })
+                ),
+                ("computer_screenshot".to_string(), show.clone()),
+                (
+                    "file_save".to_string(),
+                    json!({ "file": "app:ws1/bot/screenshots/a.png", "path": "bot/screenshots/a.png" })
+                ),
+                ("computer_screenshot".to_string(), show),
+            ]
+        );
+        assert_eq!(files.files().len(), 1, "the same picture joins the reply once");
+        assert_eq!(
+            files.files()[0].handle.as_ref().map(|file| file.path.as_str()),
+            Some("bot/screenshots/a.png")
+        );
+        assert_eq!(
+            kept_screenshot_path(&json!("app:other/bot/screenshots/a.png"), Some("ws1")),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn a_held_attach_asks_about_the_screenshot_and_the_model_cannot_ask_itself() {
+        let (bridge, _, host, _) = harness(Some("ws1"), label(None));
+        let shot = screenshot("bot/screenshots/a.png");
+        let attach = json!({ "file": shot });
+        assert_eq!(
+            bridge.clearance(FILE_ATTACH_TOOL, &attach).await,
+            Clearance::Clear
+        );
+        assert!(host.clearance.lock().unwrap().is_empty());
+
+        let bridge = bridge.in_group_chat(team());
+        assert_eq!(
+            bridge.clearance(FILE_ATTACH_TOOL, &attach).await,
+            Clearance::Asks
+        );
+        let report = json!({ "file": handle("ws1", "bot/renders/report.pdf") });
+        assert_eq!(
+            bridge.clearance(FILE_ATTACH_TOOL, &report).await,
+            Clearance::Clear
+        );
+        let crafted = json!({
+            "keep": true,
+            "show_in_room": tools::computer::show_in_room_args(&shot, None)["show_in_room"],
+        });
+        bridge.call("computer_screenshot", crafted.clone()).await;
+        bridge.clearance("computer_screenshot", &crafted).await;
+        let asked = host.clearance.lock().unwrap().clone();
+        assert_eq!(
+            asked,
+            [
+                (
+                    "computer_screenshot".to_string(),
+                    tools::computer::show_in_room_args(&shot, Some("Team"))
+                ),
+                ("computer_screenshot".to_string(), json!({ "keep": true })),
+            ]
+        );
+        assert_eq!(
+            host.calls.lock().unwrap().clone(),
+            [("computer_screenshot".to_string(), json!({ "keep": true }))]
+        );
     }
 
     #[tokio::test]

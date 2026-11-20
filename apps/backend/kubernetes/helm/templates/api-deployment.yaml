@@ -388,6 +388,10 @@ spec:
             - name: SINK_IMAGE_PULL_SECRETS
               value: {{ include "flow-like.imagePullSecretNames" . | quote }}
             {{- end }}
+            {{- if .Values.query.enabled }}
+            - name: QUERY_SERVICE_URL
+              value: {{ printf "http://%s-query:%d" (include "flow-like.fullname" .) (int .Values.query.service.port) }}
+            {{- end }}
             {{- if .Values.compiler.enabled }}
             - name: COMPILATION_BACKEND
               value: "http"

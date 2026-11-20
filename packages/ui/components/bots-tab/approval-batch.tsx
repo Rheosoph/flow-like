@@ -60,6 +60,7 @@ import {
 	tallyOf,
 } from "./approval-batch-model";
 import type { ApprovalDecision } from "./approval-entry";
+import { ApprovalPicture } from "./approval-picture";
 import type {
 	ConversationApproval,
 	ConversationApprovalItem,
@@ -373,6 +374,11 @@ function BatchItemRow({
 					) : (
 						<RequestDetails text={item.summary || item.tool} />
 					)}
+				</div>
+			)}
+			{item.picture && (
+				<div className="basis-full pb-1">
+					<ApprovalPicture picture={item.picture} />
 				</div>
 			)}
 		</li>

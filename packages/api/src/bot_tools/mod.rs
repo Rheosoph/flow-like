@@ -14,7 +14,7 @@ mod executor;
 mod host;
 mod images;
 mod routing;
-mod schedule;
+pub(crate) mod schedule;
 mod scope;
 mod secrets;
 pub(crate) mod skills;
@@ -124,7 +124,7 @@ pub(crate) async fn turn_host(
         state,
         owner,
         &bot.bot_id,
-        turn_id,
+        Some(turn_id),
     ));
     let crew = (bot.toolset == flow_like::flow::copilot::BotToolset::FlowPilot).then(|| {
         std::sync::Arc::new(crew::ApiCrew::new(

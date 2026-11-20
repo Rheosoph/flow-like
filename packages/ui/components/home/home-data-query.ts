@@ -2,6 +2,7 @@ import { looksLikeTemporalName } from "../../lib/date";
 import type { IBackendState } from "../../state/backend-state";
 import type { GraphOverlay } from "../../state/backend-state/graph-state";
 import type {
+	CrossAppSqlPayload,
 	ExecuteSqlPayload,
 	QueryColumn,
 	SavedQuery,
@@ -110,8 +111,42 @@ export interface HomeDataFilter {
 	value: string;
 	valueType: "text" | "number" | "boolean" | "viewer";
 }
+export const HOME_DATA_SQL_MAX_SOURCES = 8;
+export const HOME_DATA_SQL_MAX_CHARS = 20_000;
+export const HOME_DATA_CACHE_MAX_SECONDS = 86_400;
+const HOME_DATA_SQL_ALIAS = /^[a-z_][a-z0-9_]{0,62}$/;
+const HOME_DATA_RESERVED_ALIASES = new Set(["public", "information_schema"]);
+/** One app's tables in a cross-app SQL widget, addressed as `<alias>.<table>`. */
+export interface HomeDataSqlSource {
+	id?: string;
+	alias: string;
+	appId: string;
+	scope: "project" | "personal";
+}
+export const HOME_DATA_MAX_LIMIT = 5000;
+export const HOME_DATA_LIMIT_WARNING = 500;
+export const HOME_DATA_MAX_PARAMS = 128;
+
+export const HOME_PARAM_CONTROLS = [
+	"text",
+	"number",
+	"toggle",
+	"date",
+	"datetime",
+	"select",
+	"combobox",
+	"multi-select",
+] as const;
+export type HomeParamControl = (typeof HOME_PARAM_CONTROLS)[number];
+
+export interface HomeDataParamControl {
+	interactive?: boolean;
+	label?: string;
+	control?: HomeParamControl;
+}
+
 export interface HomeDataConfig {
-	sourceKind: "table" | "ontology" | "query";
+	sourceKind: "table" | "ontology" | "query" | "sql";
 	appId: string;
 	scope: "project" | "personal";
 	table: string;
@@ -119,6 +154,10 @@ export interface HomeDataConfig {
 	objectType: string;
 	queryId: string;
 	queryParams: Record<string, unknown>;
+	paramControls: Record<string, HomeDataParamControl>;
+	sql: string;
+	sources: HomeDataSqlSource[];
+	cacheSeconds: number;
 	visualization: HomeDataVisualization;
 	mode: "aggregate" | "records";
 	measures: HomeDataMeasure[];
@@ -164,6 +203,10 @@ export const DEFAULT_HOME_DATA_CONFIG: HomeDataConfig = {
 	objectType: "",
 	queryId: "",
 	queryParams: {},
+	paramControls: {},
+	sql: "",
+	sources: [],
+	cacheSeconds: 300,
 	visualization: "bar",
 	mode: "aggregate",
 	measures: [
@@ -207,6 +250,23 @@ function option<T extends string>(
 ): T {
 	return options.includes(value as T) ? (value as T) : fallback;
 }
+function normalizeParamControls(
+	value: unknown,
+): Record<string, HomeDataParamControl> {
+	const entries: [string, HomeDataParamControl][] = [];
+	for (const [name, raw] of Object.entries(object(value))) {
+		if (entries.length >= HOME_DATA_MAX_PARAMS) break;
+		const item = object(raw);
+		const control: HomeDataParamControl = {};
+		if (item.interactive === true) control.interactive = true;
+		const label = string(item.label).trim().slice(0, 80);
+		if (label) control.label = label;
+		if (HOME_PARAM_CONTROLS.includes(item.control as HomeParamControl))
+			control.control = item.control as HomeParamControl;
+		if (Object.keys(control).length) entries.push([name, control]);
+	}
+	return Object.fromEntries(entries);
+}
 export function normalizeHomeDataConfig(
 	raw: Record<string, unknown>,
 ): HomeDataConfig {
@@ -232,7 +292,11 @@ export function normalizeHomeDataConfig(
 			})
 		: defaults.measures;
 	return {
-		sourceKind: option(raw.sourceKind, ["table", "ontology", "query"], "table"),
+		sourceKind: option(
+			raw.sourceKind,
+			["table", "ontology", "query", "sql"],
+			"table",
+		),
 		appId: string(raw.appId),
 		scope: option(raw.scope, ["project", "personal"], "project"),
 		table: string(raw.table),
@@ -240,6 +304,28 @@ export function normalizeHomeDataConfig(
 		objectType: string(raw.objectType),
 		queryId: string(raw.queryId),
 		queryParams: object(raw.queryParams),
+		paramControls: normalizeParamControls(raw.paramControls),
+		sql: string(raw.sql),
+		sources: Array.isArray(raw.sources)
+			? raw.sources.slice(0, HOME_DATA_SQL_MAX_SOURCES).map((value, index) => {
+					const item = object(value);
+					return {
+						id: string(item.id, `source-${index}`),
+						alias: string(item.alias),
+						appId: string(item.appId),
+						scope: option(item.scope, ["project", "personal"], "project"),
+					};
+				})
+			: [],
+		cacheSeconds:
+			raw.cacheSeconds === 0
+				? 0
+				: bounded(
+						raw.cacheSeconds,
+						defaults.cacheSeconds,
+						30,
+						HOME_DATA_CACHE_MAX_SECONDS,
+					),
 		visualization,
 		mode:
 			RECORD_VIEWS.has(visualization) &&
@@ -279,7 +365,7 @@ export function normalizeHomeDataConfig(
 		),
 		sortBy: string(raw.sortBy, "value"),
 		sortDirection: option(raw.sortDirection, ["asc", "desc"], "desc"),
-		limit: bounded(raw.limit, 20, 1, 500),
+		limit: bounded(raw.limit, 20, 1, HOME_DATA_MAX_LIMIT),
 		refreshSeconds:
 			raw.refreshSeconds === 0 ? 0 : bounded(raw.refreshSeconds, 0, 30, 3600),
 		fields: Array.isArray(raw.fields)
@@ -320,6 +406,67 @@ export function quoteHomeDataIdentifier(identifier: string): string {
 	if (!identifier || identifier.includes("\0"))
 		throw new Error("Choose a valid field or data source.");
 	return `"${identifier.replaceAll('"', '""')}"`;
+}
+
+/** A schema name for an app in cross-app SQL, derived from its name and unique among `taken`. */
+export function homeDataSqlAlias(
+	name: string,
+	taken: Iterable<string> = [],
+): string {
+	const used = new Set(taken);
+	const slug = name
+		.normalize("NFKD")
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "_")
+		.replace(/^_+|_+$/g, "")
+		.slice(0, 40);
+	const named = !slug ? "app" : /^[a-z_]/.test(slug) ? slug : `app_${slug}`;
+	const base = HOME_DATA_RESERVED_ALIASES.has(named) ? `${named}_app` : named;
+	let alias = base;
+	for (let suffix = 2; used.has(alias); suffix++) alias = `${base}_${suffix}`;
+	return alias;
+}
+
+/** Why a cross-app SQL widget cannot run yet, or null when it can. */
+export function homeDataSqlConfigError(
+	config: Pick<HomeDataConfig, "sql" | "sources">,
+): string | null {
+	if (!config.sources.length) return "Add at least one app to query.";
+	const seen = new Set<string>();
+	for (const source of config.sources) {
+		if (!source.appId) return "Choose an app for every source.";
+		if (!HOME_DATA_SQL_ALIAS.test(source.alias))
+			return `“${source.alias}” is not a valid schema name. Use lowercase letters, digits, and _, starting with a letter or _.`;
+		if (HOME_DATA_RESERVED_ALIASES.has(source.alias))
+			return `“${source.alias}” is reserved. Choose another schema name.`;
+		if (seen.has(source.alias))
+			return `The schema name “${source.alias}” is used twice.`;
+		seen.add(source.alias);
+	}
+	if (!config.sql.trim()) return "Write the SQL query for this widget.";
+	if (config.sql.length > HOME_DATA_SQL_MAX_CHARS)
+		return `The SQL query is longer than ${HOME_DATA_SQL_MAX_CHARS.toLocaleString()} characters.`;
+	return null;
+}
+
+/** The request that runs a built widget query over the widget's cross-app sources. */
+export function homeDataCrossAppPayload(
+	config: Pick<HomeDataConfig, "sources" | "cacheSeconds">,
+	query: Pick<ExecuteSqlPayload, "sql" | "params" | "limit">,
+	options: { fresh?: boolean; cached?: boolean } = {},
+): CrossAppSqlPayload {
+	return {
+		sql: query.sql,
+		params: query.params,
+		limit: query.limit,
+		sources: config.sources.map(({ alias, appId, scope }) => ({
+			alias,
+			app_id: appId,
+			scope,
+		})),
+		cache_seconds: options.cached === false ? 0 : config.cacheSeconds,
+		fresh: options.fresh ?? false,
+	};
 }
 
 /** Mask literals and comments before inspecting saved SQL, preserving positions. */
@@ -386,18 +533,32 @@ export function homeSavedQuerySql(sql: string): string {
 		? `${sql.slice(0, code.length - 1)}${sql.slice(code.length)}`
 		: sql;
 }
-/** A zero-row run of a saved query, for learning its column names and types. */
+/** A zero-row run of `sql`, for learning its column names and types. */
+export function homeSchemaProbeSql(sql: string): string {
+	return `SELECT * FROM (\n${homeSavedQuerySql(sql)}\n) AS "__home_schema" WHERE false`;
+}
 export function homeSavedQuerySchemaQuery(
 	savedQuery: SavedQuery,
 	params: Record<string, unknown>,
 ): ExecuteSqlPayload {
 	return {
-		sql: `SELECT * FROM (\n${homeSavedQuerySql(savedQuery.sql)}\n) AS "__home_schema" WHERE false`,
+		sql: homeSchemaProbeSql(savedQuery.sql),
 		params,
 		surface: savedQuery.surface,
 		overlay_id: savedQuery.overlay_id,
 		limit: 1,
 	};
+}
+/** A zero-row, uncached run of the widget's cross-app SQL, for its column names and types. */
+export function homeDataSqlSchemaQuery(
+	config: Pick<HomeDataConfig, "sql" | "sources" | "cacheSeconds">,
+	params: Record<string, unknown>,
+): CrossAppSqlPayload {
+	return homeDataCrossAppPayload(
+		config,
+		{ sql: homeSchemaProbeSql(config.sql), params, limit: 1 },
+		{ cached: false },
+	);
 }
 export function homeDataUsesDates(
 	config: Pick<
@@ -461,6 +622,20 @@ export function homeOntologyColumns(
 		position,
 	}));
 }
+function requireHomeQueryParameters(
+	sql: string,
+	params: Record<string, unknown>,
+	noun: string,
+) {
+	for (const parameter of extractHomeQueryParameters(sql)) {
+		if (parameter.startsWith("__home_"))
+			throw new Error(`${noun} parameter names cannot start with __home_.`);
+		if (!Object.hasOwn(params, parameter))
+			throw new Error(
+				`Enter a value for the ${noun.toLowerCase()} parameter “${parameter}”.`,
+			);
+	}
+}
 export function resolveHomeQueryParams(
 	config: Pick<HomeDataConfig, "queryParams">,
 	viewerId?: string,
@@ -502,6 +677,17 @@ export async function loadHomeDataSourceContext(
 			personal,
 		);
 		loaded.columns = homeOntologyColumns(loaded.overlay, config.objectType);
+	} else if (config.sourceKind === "sql") {
+		if (homeDataUsesDates(config) && !homeDataSqlConfigError(config))
+			loaded.columns = await backend.queryState
+				.executeCrossAppSql(
+					homeDataSqlSchemaQuery(
+						config,
+						resolveHomeQueryParams(config, context.viewerId),
+					),
+				)
+				.then((schema) => schema.columns)
+				.catch(() => undefined);
 	} else if (config.sourceKind === "query") {
 		loaded.savedQuery = await backend.queryState.getSavedQuery(
 			config.appId,
@@ -533,7 +719,7 @@ export function buildHomeDataQuery(
 	config: HomeDataConfig,
 	context: HomeDataSourceContext = {},
 ): ExecuteSqlPayload {
-	if (!config.appId)
+	if (config.sourceKind !== "sql" && !config.appId)
 		throw new Error("Choose an app in this widget's settings.");
 	const quote = quoteHomeDataIdentifier;
 	let source: string;
@@ -541,22 +727,17 @@ export function buildHomeDataQuery(
 	let overlayId: string | undefined;
 	let identity: string | undefined;
 	const params = resolveHomeQueryParams(config, context.viewerId);
-	if (config.sourceKind === "query") {
+	if (config.sourceKind === "sql") {
+		const problem = homeDataSqlConfigError(config);
+		if (problem) throw new Error(problem);
+		requireHomeQueryParameters(config.sql, params, "Query");
+		source = `(\n${homeSavedQuerySql(config.sql)}\n) AS ${quote("__home_source")}`;
+	} else if (config.sourceKind === "query") {
 		const saved = context.savedQuery;
 		if (!saved || saved.id !== config.queryId)
 			throw new Error("Choose an available saved query.");
-		for (const parameter of extractHomeQueryParameters(saved.sql)) {
-			if (parameter.startsWith("__home_"))
-				throw new Error(
-					"Saved query parameter names cannot start with __home_.",
-				);
-			if (!Object.hasOwn(params, parameter))
-				throw new Error(
-					`Enter a value for the saved query parameter “${parameter}”.`,
-				);
-		}
-		const sql = homeSavedQuerySql(saved.sql);
-		source = `(\n${sql}\n) AS ${quote("__home_source")}`;
+		requireHomeQueryParameters(saved.sql, params, "Saved query");
+		source = `(\n${homeSavedQuerySql(saved.sql)}\n) AS ${quote("__home_source")}`;
 		surface = saved.surface;
 		overlayId = saved.overlay_id;
 	} else if (config.sourceKind === "ontology") {
@@ -633,7 +814,18 @@ export function buildHomeDataQuery(
 			conditions.push(`${column} ${operators[filter.operator]} $${key}`);
 		}
 	}
-	if (config.dateRange !== "all") {
+	if (config.dateRange !== "all" && config.sourceKind === "sql") {
+		if (!config.dateField)
+			throw new Error("Choose the date field for this time range.");
+		// Bound parameters would change every request and defeat the shared result cache.
+		const now = "CAST(now() AS TIMESTAMP)";
+		const start =
+			config.dateRange === "year"
+				? `DATE_TRUNC('year', ${now})`
+				: `${now} - INTERVAL '${Number(config.dateRange.slice(0, -1))} days'`;
+		const date = instant(config.dateField);
+		conditions.push(`${date} >= ${start}`, `${date} <= ${now}`);
+	} else if (config.dateRange !== "all") {
 		if (!config.dateField)
 			throw new Error("Choose the date field for this time range.");
 		const now = context.now ?? new Date();
@@ -652,7 +844,10 @@ export function buildHomeDataQuery(
 		conditions.push(`${date} <= CAST($__home_end AS TIMESTAMP)`);
 	}
 	const where = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
-	const limit = Math.min(500, Math.max(1, Math.floor(config.limit)));
+	const limit = Math.min(
+		HOME_DATA_MAX_LIMIT,
+		Math.max(1, Math.floor(config.limit)),
+	);
 	let sql: string;
 	if (config.mode === "records" && config.visualization !== "histogram") {
 		const columns = config.fields.length

@@ -933,6 +933,7 @@ async fn the_check_sends_the_local_id_as_import_key_with_settings_apps_and_creat
             "classification": { "classification": "internal", "pii": false },
             "capabilities": ["internet", "computer_use"],
             "profile_id": "profile-1",
+            "calendar_wake": serde_json::to_value(flow_like_types::bot_calendar::CalendarWake::default()).unwrap(),
             "location": "desktop",
             "device_id": null,
             "app_ids": ["app-1", "app-2"],

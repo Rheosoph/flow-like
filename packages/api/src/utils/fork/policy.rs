@@ -155,6 +155,33 @@ fn skips_database_object(databases: ForkDatabaseMode, relative_under_storage: &s
     }
 }
 
+/// Whether an offline fork leaves the source content object at `relative`
+/// (rooted at `apps/{src_app_id}/`) behind. The server applies it while it
+/// hands out download URLs, so what the desktop receives already follows the
+/// owner's policy.
+pub fn offline_skips_content(policy: &ForkPolicy, relative: &str) -> bool {
+    is_legacy_training_ledger_path(relative)
+        || excluded_category(policy, relative)
+        || relative
+            .strip_prefix("storage/")
+            .is_some_and(|under_storage| storage_skipped(policy.databases, under_storage))
+}
+
+fn excluded_category(policy: &ForkPolicy, relative: &str) -> bool {
+    [
+        (policy.files, "upload/"),
+        (policy.widgets, "metadata/widgets/"),
+        (policy.templates, "metadata/templates/"),
+    ]
+    .iter()
+    .any(|(kept, prefix)| !kept && relative.starts_with(prefix))
+}
+
+fn storage_skipped(databases: ForkDatabaseMode, under_storage: &str) -> bool {
+    (databases != ForkDatabaseMode::WithData && is_published_model(under_storage))
+        || skips_database_object(databases, under_storage)
+}
+
 /// Content-store prefixes (relative to `apps/{src_app_id}/`) the desktop
 /// must not mirror on an offline fork. The legacy training ledger prefixes
 /// are always listed, `storage/models/` whenever the database data stays
@@ -376,5 +403,44 @@ mod tests {
             offline_content_exclude_prefixes(&bare, &tables),
             with_ledger(&["metadata/widgets/", "metadata/templates/"])
         );
+    }
+
+    #[test]
+    fn offline_downloads_skip_what_the_policy_excludes() {
+        let open = ForkPolicy::default();
+        for path in [
+            "upload/a.csv",
+            "metadata/widgets/w/en.meta",
+            "storage/db/notes.lance/data/0.lance",
+            "storage/models/m/model.onnx",
+        ] {
+            assert!(!offline_skips_content(&open, path), "{path}");
+        }
+        assert!(offline_skips_content(
+            &open,
+            "storage/inspection/jobs.sqlite"
+        ));
+
+        let closed = ForkPolicy {
+            files: false,
+            widgets: false,
+            templates: false,
+            databases: ForkDatabaseMode::SchemaOnly,
+            ..Default::default()
+        };
+        for path in [
+            "upload/a.csv",
+            "metadata/widgets/w/en.meta",
+            "metadata/templates/t/en.meta",
+            "storage/db/notes.lance/data/0.lance",
+            "storage/models/m/model.onnx",
+        ] {
+            assert!(offline_skips_content(&closed, path), "{path}");
+        }
+        assert!(!offline_skips_content(&closed, "metadata/en.meta"));
+        assert!(!offline_skips_content(
+            &closed,
+            "storage/db/__flowlike_tables__.lance/data/0.lance"
+        ));
     }
 }

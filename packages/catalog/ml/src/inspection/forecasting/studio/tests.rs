@@ -602,6 +602,63 @@ fn workbench_temporal_types_keep_their_actual_arrow_units() {
 }
 
 #[cfg(any(feature = "inference", feature = "forecasting"))]
+#[test]
+fn rows_read_by_another_runner_get_the_same_checks_and_preparation() {
+    use flow_like_storage::{
+        arrow_schema::DataType,
+        databases::workbench::{SqlColumn, SqlQueryResult},
+    };
+    let mut request = request();
+    request.mapping.series_id = None;
+    request.mapping.past_covariates.clear();
+    request.mapping.known_covariates.clear();
+    request.future_sql = None;
+    request.backtest_horizon = 0;
+    let column = |name: &str, position| SqlColumn {
+        name: name.into(),
+        type_name: DataType::Int64.to_string(),
+        position,
+        metadata: Default::default(),
+    };
+    let rows = |count: i64| SqlQueryResult {
+        columns: vec![column("time", 0), column("target", 1)],
+        rows: (0..count)
+            .map(|step| json!({"time": step * 10, "target": step}))
+            .collect(),
+        row_count: count as usize,
+        truncated: false,
+    };
+    let limits = forecast_budget(&request).unwrap();
+    let empty = checked_rows(rows(0), &limits).unwrap_err();
+    assert_eq!(
+        input_error_message(&empty),
+        Some("Forecast SQL returned no rows")
+    );
+    let cut = SqlQueryResult {
+        truncated: true,
+        ..rows(3)
+    };
+    let truncated = checked_rows(cut, &limits).unwrap_err();
+    assert!(
+        input_error_message(&truncated)
+            .unwrap()
+            .contains("more than")
+    );
+
+    let history = checked_rows(rows(4), &limits).unwrap();
+    assert!(prepare_forecast(request.clone(), limits.clone(), history, None).is_ok());
+    let mut flags = rows(4);
+    flags.columns[1].type_name = DataType::Boolean.to_string();
+    let error = prepare_forecast(request.clone(), limits, flags, None)
+        .err()
+        .unwrap();
+    assert!(input_error_message(&error).is_some());
+
+    request.model_bit_id.clear();
+    assert!(input_error_message(&forecast_budget(&request).unwrap_err()).is_some());
+}
+
+#[cfg(any(feature = "inference", feature = "forecasting"))]
 #[tokio::test]
 #[ignore = "requires an official checkpoint; set FLOWLIKE_TIMESTRAL_CHECKPOINT"]
 async fn installed_bit_runs_workbench_forecast_and_holdout_without_network() {

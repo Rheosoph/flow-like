@@ -15,6 +15,8 @@ pub mod apps;
 pub mod ask;
 pub(crate) mod authorization;
 pub mod avatar;
+pub mod calendar;
+pub mod calendar_feed;
 pub(crate) mod checkpoint;
 pub mod clone;
 pub mod configuration;
@@ -51,6 +53,8 @@ pub mod workspace;
 
 #[cfg(test)]
 mod app_gate_tests;
+#[cfg(test)]
+mod calendar_feed_tests;
 #[cfg(test)]
 mod connectors_tests;
 #[cfg(test)]
@@ -277,6 +281,24 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/{bot_id}/tasks/{task_id}",
             axum::routing::patch(tasks::update_bot_task).delete(tasks::delete_bot_task),
+        )
+        .route(
+            "/{bot_id}/calendar",
+            get(calendar::get_calendar_wake).put(calendar::put_calendar_wake),
+        )
+        .route(
+            "/{bot_id}/calendar/events",
+            get(calendar::list_calendar_events),
+        )
+        .route(
+            "/{bot_id}/calendar/feed",
+            get(calendar_feed::get_calendar_feed)
+                .put(calendar_feed::put_calendar_feed)
+                .delete(calendar_feed::delete_calendar_feed),
+        )
+        .route(
+            "/{bot_id}/calendar/feed/rotate",
+            post(calendar_feed::rotate_calendar_feed),
         )
         .route("/{bot_id}/tasks/{task_id}/fire", post(tasks::fire_bot_task))
         .route(

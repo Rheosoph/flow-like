@@ -3,6 +3,7 @@ import type { IBotTask } from "../../state/backend-state/bot-state";
 import {
 	describeSchedule,
 	emptyTaskDraft,
+	scheduledTasks,
 	taskRequest,
 	taskState,
 } from "./bot-task-model";
@@ -166,5 +167,21 @@ describe("place tasks", () => {
 				now,
 			),
 		).toBe("paused");
+	});
+});
+
+describe("scheduledTasks", () => {
+	test("leaves the bot's calendar events to the Calendar tab", () => {
+		const tasks = [
+			task({ id: "once" }),
+			task({ id: "cron", kind: "cron" }),
+			task({ id: "place", kind: "place" }),
+			task({ id: "event", kind: "event" }),
+		];
+		expect(scheduledTasks(tasks).map((item) => item.id)).toEqual([
+			"once",
+			"cron",
+			"place",
+		]);
 	});
 });

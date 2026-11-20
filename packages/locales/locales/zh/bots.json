@@ -8,6 +8,10 @@
 			"description": "",
 			"label": ""
 		},
+		"calendar": {
+			"description": "",
+			"label": ""
+		},
 		"channels": {
 			"description": "",
 			"label": ""
@@ -490,6 +494,12 @@
 				"nextInRoom": "",
 				"title": "",
 				"why": ""
+			},
+			"picture": {
+				"alt": "",
+				"next": "",
+				"nextInRoom": "",
+				"unavailable": ""
 			}
 		},
 		"botSettings": "",
@@ -2026,6 +2036,7 @@
 		"preparing": "",
 		"refused": "",
 		"tabs": {
+			"calendar": "",
 			"chat": "",
 			"computer": "",
 			"data": "",
@@ -2076,5 +2087,119 @@
 		"deviceStatus": "",
 		"deviceHelp": "",
 		"clearDevice": ""
+	},
+	"calendar": {
+		"details": {
+			"allDay": "",
+			"delete": "",
+			"edit": "",
+			"memoryTitle": "",
+			"openLink": "",
+			"repeats": "",
+			"showMemory": "",
+			"showTasks": "",
+			"sourceBot": ""
+		},
+		"editor": {
+			"allDay": "",
+			"cancel": "",
+			"create": "",
+			"description": "",
+			"editTitle": "",
+			"end": "",
+			"location": "",
+			"newTitle": "",
+			"notes": "",
+			"repeatLabel": "",
+			"save": "",
+			"start": "",
+			"title": ""
+		},
+		"feed": {
+			"apple": "",
+			"button": "",
+			"copied": "",
+			"copy": "",
+			"create": "",
+			"events": "",
+			"failed": "",
+			"google": "",
+			"intro": "",
+			"linkLabel": "",
+			"loadFailed": "",
+			"localOnly": "",
+			"memories": "",
+			"microsoft": "",
+			"notes": "",
+			"off": "",
+			"offBody": "",
+			"offConfirm": "",
+			"offTitle": "",
+			"openFailed": "",
+			"outlook": "",
+			"privacy": "",
+			"rotate": "",
+			"rotateBody": "",
+			"rotateConfirm": "",
+			"rotateTitle": "",
+			"slow": "",
+			"tasks": "",
+			"title": ""
+		},
+		"layers": {
+			"events": "",
+			"external": "",
+			"memories": "",
+			"tasks": ""
+		},
+		"layersLabel": "",
+		"loadFailed": "",
+		"noSources": "",
+		"openSettings": "",
+		"repeats": {
+			"custom": "",
+			"daily": "",
+			"monthly": "",
+			"none": "",
+			"weekdays": "",
+			"weekly": ""
+		},
+		"retry": "",
+		"settings": {
+			"description": "",
+			"enabled": "",
+			"eventHint": "",
+			"external": "",
+			"internal": "",
+			"offsets": "",
+			"onlyMatching": "",
+			"patternPlaceholder": "",
+			"quiet": "",
+			"removePattern": "",
+			"skipAllDay": "",
+			"skipMatching": "",
+			"title": ""
+		},
+		"sourceFailed": "",
+		"viewLabel": "",
+		"views": {
+			"agenda": "",
+			"day": "",
+			"month": "",
+			"week": ""
+		},
+		"wake": {
+			"default": "",
+			"next": "",
+			"off": "",
+			"offsetsHint": "",
+			"offsetsLabel": "",
+			"on": "",
+			"state": "",
+			"stateNone": "",
+			"title": ""
+		},
+		"wakeButton": "",
+		"wakeOff": ""
 	}
 }

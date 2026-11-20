@@ -118,6 +118,9 @@ fn ask_message(tool: &str, args: &Value) -> String {
             "The bot wants to change its {fields}. Review the proposed values. Approved changes take effect on the next turn."
         );
     }
+    if let Some(message) = tools::calendar::ask_message(tool, args) {
+        return message;
+    }
     if tools::services::POLICY_TOOLS.contains(&tool) {
         return connector_ask_message(tool, args);
     }
@@ -242,6 +245,12 @@ registered_tools!(
     "watch_place",
     "list_places",
     "cancel_place",
+    "calendar_list",
+    "calendar_create",
+    "calendar_update",
+    "calendar_delete",
+    "calendar_free_slots",
+    "calendar_wake_settings",
     "shell_run",
     "browser_open",
     "browser_snapshot",
@@ -685,6 +694,43 @@ mod tests {
         assert_eq!(
             message(&json!({ "url": "https://www.cisa.gov/feeds/kev.xml?x=1" })),
             "The bot wants to send a GET request to www.cisa.gov/feeds/kev.xml?x=1."
+        );
+    }
+
+    #[test]
+    fn calendar_tools_need_the_calendar_and_writes_ask_with_the_calendar() {
+        for name in [
+            "calendar_list",
+            "calendar_create",
+            "calendar_update",
+            "calendar_delete",
+            "calendar_free_slots",
+            "calendar_wake_settings",
+        ] {
+            assert_eq!(
+                tool_capability(name),
+                Some(BotCapability::Calendar),
+                "{name}"
+            );
+        }
+        assert!(matches!(
+            bot_tool_spec("calendar_list")
+                .expect("calendar_list")
+                .approval,
+            ToolApprovalSpec::None
+        ));
+        let spec = bot_tool_spec("calendar_create").expect("calendar_create");
+        let ToolApprovalSpec::Mutating { message, .. } = spec.approval else {
+            panic!("calendar_create asks under the connector's policy");
+        };
+        assert_eq!(
+            message(&json!({
+                "title": "Dentist",
+                "starts_at": "2026-11-21T10:00:00+01:00",
+                "calendar": "c-google",
+                "connector_label": "Work",
+            })),
+            "The bot wants to add \"Dentist\" starting 2026-11-21T10:00:00+01:00 to your calendar 'Work'."
         );
     }
 

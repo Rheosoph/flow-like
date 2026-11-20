@@ -184,6 +184,7 @@ export function approvalItems(
 			calls: 1,
 			afterWebContent: approval.afterWebContent === true,
 			...(approval.secret ? { secret: approval.secret } : {}),
+			...(approval.picture ? { picture: approval.picture } : {}),
 		},
 	];
 }

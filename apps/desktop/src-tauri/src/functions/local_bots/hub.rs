@@ -4,8 +4,7 @@
 use super::{CommandError, workspace::DesktopWorkspaces};
 use crate::{
     functions::app::fork::{
-        self, UploadLocalAppContentArgs, is_uploaded_content_path, parse_storage_path,
-        summarize_store_prefix,
+        self, is_uploaded_content_path, parse_storage_path, summarize_store_prefix,
     },
     state::TauriFlowLikeState,
 };
@@ -232,25 +231,16 @@ impl AccountHub for AccountSession {
 
     async fn upload_workspace(&self, app_id: &str, grant: &Value) -> Result<(), HubError> {
         let (prefix, credentials) = upload_target(grant)?;
-        let uploaded = fork::upload_local_app_content_bundle(
-            self.app.clone(),
-            UploadLocalAppContentArgs {
-                source_app_id: app_id.to_string(),
-                destination_content_prefix: prefix,
-                credentials,
-            },
-        )
-        .await
-        .map_err(|error| workspace_failed(app_id, "copy", error))?;
-        match uploaded.failures.first() {
+        let failures = copy_workspace_content(&self.app, app_id, &prefix, &credentials)
+            .await
+            .map_err(|error| workspace_failed(app_id, "copy", error))?;
+        match failures.first() {
             None => Ok(()),
-            Some(failure) => Err(HubError::failed(
+            Some((path, reason)) => Err(HubError::failed(
                 WORKSPACE_FAILED,
                 format!(
-                    "{} of the files of workspace {app_id} could not be copied, such as {}: {}",
-                    uploaded.failures.len(),
-                    failure.kind_and_path,
-                    failure.reason
+                    "{} of the files of workspace {app_id} could not be copied, such as {path}: {reason}",
+                    failures.len(),
                 ),
             )),
         }
@@ -312,6 +302,55 @@ fn workspace_failed(app_id: &str, action: &str, reason: impl std::fmt::Display) 
 }
 
 /// Where the hub wants a workspace's files and the scoped credentials to write them.
+/// Copy the workspace's content files under the hub's grant. Returns the
+/// files that failed with their reasons.
+async fn copy_workspace_content(
+    app: &tauri::AppHandle,
+    app_id: &str,
+    prefix: &str,
+    credentials: &SharedCredentials,
+) -> Result<Vec<(String, String)>, String> {
+    use flow_like::flow_like_storage::{join_object_path, object_store::ObjectStoreExt};
+
+    let local_store = TauriFlowLikeState::get_project_storage_store(app)
+        .await
+        .map_err(|error| error.to_string())?;
+    let remote_store = credentials
+        .to_store(false)
+        .await
+        .map_err(|error| error.to_string())?
+        .as_generic();
+    let local_root = Path::from("apps").join(app_id);
+    let remote_root = parse_storage_path(prefix);
+    let files = summarize_store_prefix(&local_store, &local_root)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut failures = Vec::new();
+    for (path, _) in files
+        .into_iter()
+        .filter(|(path, _)| is_uploaded_content_path(path))
+    {
+        let copied = async {
+            let bytes = local_store
+                .get(&join_object_path(&local_root, &path))
+                .await
+                .map_err(|error| format!("read: {error}"))?
+                .bytes()
+                .await
+                .map_err(|error| format!("read: {error}"))?;
+            remote_store
+                .put(&join_object_path(&remote_root, &path), bytes.into())
+                .await
+                .map_err(|error| format!("put: {error}"))
+        }
+        .await;
+        if let Err(reason) = copied {
+            failures.push((path, reason));
+        }
+    }
+    Ok(failures)
+}
+
 fn upload_target(grant: &Value) -> Result<(String, Arc<SharedCredentials>), HubError> {
     let invalid = |reason: &str| {
         HubError::failed(

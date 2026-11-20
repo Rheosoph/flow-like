@@ -38,6 +38,7 @@ import {
 } from "./approval-batch";
 import { callPhrase, isBatch } from "./approval-batch-model";
 import type { ApprovalDecision } from "./approval-entry";
+import { ApprovalPicture } from "./approval-picture";
 import {
 	BotConfigurationChanges,
 	useBotSettingsApprovalText,
@@ -238,6 +239,11 @@ function SingleApprovalCard({
 			{invite && (
 				<RequestCardBody dense>
 					<InviteRequestDetails invite={invite} room={approval.room} />
+				</RequestCardBody>
+			)}
+			{approval.picture && (
+				<RequestCardBody dense>
+					<ApprovalPicture picture={approval.picture} room={approval.room} />
 				</RequestCardBody>
 			)}
 			{approval.configurationChanges && (

@@ -15,6 +15,7 @@ export const BOT_CAPABILITIES = [
 	"email",
 	"push_notifications",
 	"scheduling",
+	"calendar",
 	"location",
 	"storage",
 	"data_studio",
@@ -141,6 +142,8 @@ export interface IBot {
 	updated_at: string;
 	/** Lives only on this device until it moves to an account. */
 	local?: boolean;
+	/** Which calendar events wake the bot; older hosts leave it out. */
+	calendar_wake?: ICalendarWake;
 }
 
 export interface ICreateBotRequest {
@@ -869,14 +872,19 @@ export interface IBotMailThreadView {
 	mails: IBotMail[];
 }
 
+export type BotTaskKind = "once" | "cron" | "place" | "event";
+
 /** A task a bot runs for its owner at a time: once or on a cron schedule in a time zone. */
 export interface IBotTask {
 	monitoring?: boolean;
 	id: string;
 	bot_id: string;
-	kind: "once" | "cron" | "place";
+	/** `event` is an event of the bot's own calendar; its `next_run_at` is its next wake-up. */
+	kind: BotTaskKind;
 	/** The circle a place task watches; set only when `kind` is `place`. */
 	place?: IBotTaskPlace | null;
+	/** The calendar event of an event task; its `cron` and `tz` make it repeat. */
+	event?: IBotTaskEvent | null;
 	/** RFC 3339 time of a once task. */
 	at?: string | null;
 	/** Five-field cron expression of a cron task. */
@@ -915,14 +923,16 @@ export interface IBotTaskConversation {
 	title?: string | null;
 }
 
+/** An event task needs `event` and a title; a `cron` makes it repeat in `tz`. */
 export interface ICreateBotTaskRequest {
 	monitoring?: boolean;
-	kind: "once" | "cron";
+	kind: "once" | "cron" | "event";
 	at?: string;
 	cron?: string;
 	tz?: string;
 	instruction: string;
 	title?: string;
+	event?: IBotTaskEvent;
 }
 
 export interface IUpdateBotTaskRequest {
@@ -934,6 +944,148 @@ export interface IUpdateBotTaskRequest {
 	title?: string;
 	/** Pausing keeps the task; resuming computes its next run from now. */
 	enabled?: boolean;
+	/** The whole new event of an event task; leaving out `wake` clears its own wake-up. */
+	event?: IBotTaskEvent;
+}
+
+/** An event's own wake-up, overriding the bot's calendar settings for it. */
+export interface IEventWake {
+	/** False never wakes the bot for the event; true wakes it even while the bot's wake-ups are off. */
+	enabled: boolean;
+	/** Minutes before the start, at most 4; empty uses the bot's offsets. */
+	offsets_minutes?: number[];
+}
+
+/** The connected-calendar event an event task keeps wake-ups for. */
+export interface IExternalEventRef {
+	connector_id: string;
+	/** `google` or `microsoft`. */
+	provider: string;
+	calendar_id: string;
+	event_id: string;
+}
+
+/** Mirrors `TaskEvent` of the Rust contracts. */
+export interface IBotTaskEvent {
+	/** RFC 3339 start of the event, or of its first occurrence when it repeats. */
+	starts_at: string;
+	ends_at?: string | null;
+	/** `starts_at` is the start of its first day in the task's `tz`. */
+	all_day?: boolean;
+	location?: string | null;
+	/** None follows the bot's calendar settings. */
+	wake?: IEventWake | null;
+	/** The offsets in effect, largest first; the host works them out and ignores what a client sends. */
+	wake_offsets?: number[];
+	external?: IExternalEventRef | null;
+	/** The event's page at its provider. */
+	link?: string | null;
+}
+
+/** Which calendar events wake a bot and how long before they start. */
+export interface ICalendarWake {
+	/** Off by default; an event's own wake-up works while this is off. */
+	enabled: boolean;
+	/** Minutes before the start, largest first; one to four of them, each up to a week. */
+	offsets_minutes: number[];
+	/** Wakes for the bot's own events. */
+	internal: boolean;
+	/** Wakes for events of the connected calendars. */
+	external: boolean;
+	/** When not empty, wakes only for events whose title or location contains one of these. */
+	only_matching: string[];
+	/** Never wakes for events whose title or location contains one of these. */
+	skip_matching: string[];
+	skip_all_day: boolean;
+	/** A wake-up that finds nothing to do ends without a message. */
+	quiet: boolean;
+}
+
+/** What is missing stays. */
+export type IUpdateCalendarWake = Partial<ICalendarWake>;
+
+/** A bot's private calendar subscription: the link calendar apps subscribe to and what it shows. */
+export interface ICalendarFeed {
+	/** The private https link; anyone who has it can read the feed. */
+	url: string;
+	/** The same link as `webcal://`, which opens the system calendar app. */
+	webcal_url: string;
+	include_events: boolean;
+	include_tasks: boolean;
+	include_memories: boolean;
+	include_notes: boolean;
+	created_at: string;
+	last_fetched_at?: string | null;
+}
+
+/** What is missing stays; a new feed starts with events and tasks. */
+export type IUpdateCalendarFeed = Partial<
+	Pick<
+		ICalendarFeed,
+		"include_events" | "include_tasks" | "include_memories" | "include_notes"
+	>
+>;
+
+export const DEFAULT_CALENDAR_WAKE: ICalendarWake = {
+	enabled: false,
+	offsets_minutes: [15],
+	internal: true,
+	external: true,
+	only_matching: [],
+	skip_matching: [],
+	skip_all_day: true,
+	quiet: true,
+};
+
+/** `bot` is the bot's own calendar, `external` a connected Google or Microsoft calendar. */
+export type CalendarEntrySource = "bot" | "external";
+
+export interface ICalendarEntryWake {
+	/** Minutes before the start, largest first. */
+	offsets_minutes: number[];
+	/** The event has its own wake-up instead of the bot's settings. */
+	own: boolean;
+	next_at?: string | null;
+}
+
+/** One occurrence of an event in a calendar listing. */
+export interface ICalendarEntry {
+	/** The event task's id, or an encoded external event (`ext.<provider>.<connector>.<hex>.<hex>`). */
+	id: string;
+	source: CalendarEntrySource;
+	title: string;
+	/** RFC 3339 start of this occurrence. */
+	starts_at: string;
+	ends_at?: string | null;
+	all_day?: boolean;
+	location?: string | null;
+	/** The instruction of a bot event, the description of an external one. */
+	notes?: string | null;
+	connector_id?: string | null;
+	/** The connector's label for an external entry. */
+	calendar?: string | null;
+	link?: string | null;
+	recurring?: boolean;
+	/** The event task behind the entry: the event itself, or an external event's wake-up row. */
+	task_id?: string | null;
+	/** None when the entry wakes nobody. */
+	wake?: ICalendarEntryWake | null;
+}
+
+/** A connected calendar a listing read, with why it could not when it failed. */
+export interface ICalendarSource {
+	connector_id: string;
+	label: string;
+	provider: string;
+	error?: string | null;
+}
+
+export interface ICalendarRange {
+	from: string;
+	to: string;
+	/** Earliest first. */
+	entries: ICalendarEntry[];
+	sources: ICalendarSource[];
 }
 
 export type BotSkillStatus = "active" | "pending" | "disabled";
@@ -1020,6 +1172,30 @@ export interface IBotState {
 		request: IUpdateBotTaskRequest,
 	): Promise<IBotTask>;
 	deleteTask?(botId: string, taskId: string): Promise<void>;
+	/** Which calendar events wake the bot; the defaults while it never changed them. */
+	getCalendarWake?(botId: string): Promise<ICalendarWake>;
+	/** Saves the change and re-plans the wake-ups of every event of the bot. */
+	setCalendarWake?(
+		botId: string,
+		update: IUpdateCalendarWake,
+	): Promise<ICalendarWake>;
+	/** The subscription link of the bot's calendar; null while there is none and for bots that live only on this device. */
+	getCalendarFeed?(botId: string): Promise<ICalendarFeed | null>;
+	/** Creates the link on the first call, later changes what it shows and keeps it. */
+	updateCalendarFeed?(
+		botId: string,
+		update: IUpdateCalendarFeed,
+	): Promise<ICalendarFeed>;
+	/** A new link; the old one stops working, so calendars subscribed to it stop updating. */
+	rotateCalendarFeed?(botId: string): Promise<ICalendarFeed>;
+	/** Removes the link. */
+	deleteCalendarFeed?(botId: string): Promise<void>;
+	/** The bot's own events and its connected calendars between two RFC 3339 times, at most 92 days apart. */
+	listCalendar?(
+		botId: string,
+		from: string,
+		to: string,
+	): Promise<ICalendarRange>;
 	/** Skills of a bot with the skills capability, by name; absent where skills are not kept. */
 	listSkills?(botId: string): Promise<IBotSkill[]>;
 	/** A skill the person wrote: active at once. */

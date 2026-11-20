@@ -5,6 +5,7 @@
 
 pub mod barcode;
 pub mod browser;
+pub mod calendar;
 pub mod code;
 pub mod computer;
 pub mod configuration;
@@ -181,6 +182,16 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         places::WATCH_PLACE => places::watch_place(env, parse_args(tool, args)?).await,
         places::LIST_PLACES => places::list_places(env, parse_args(tool, args)?).await,
         places::CANCEL_PLACE => places::cancel_place(env, parse_args(tool, args)?).await,
+        calendar::CALENDAR_LIST => calendar::calendar_list(env, parse_args(tool, args)?).await,
+        calendar::CALENDAR_CREATE => calendar::calendar_create(env, parse_args(tool, args)?).await,
+        calendar::CALENDAR_UPDATE => calendar::calendar_update(env, parse_args(tool, args)?).await,
+        calendar::CALENDAR_DELETE => calendar::calendar_delete(env, parse_args(tool, args)?).await,
+        calendar::CALENDAR_FREE_SLOTS => {
+            calendar::calendar_free_slots(env, parse_args(tool, args)?).await
+        }
+        calendar::CALENDAR_WAKE_SETTINGS => {
+            calendar::calendar_wake_settings(env, parse_args(tool, args)?).await
+        }
         skills::SKILL_LOAD => skills::skill_load(env, parse_args(tool, args)?).await,
         skills::SKILL_PROPOSE => skills::skill_propose(env, parse_args(tool, args)?).await,
         skills::SKILL_CALL => skills::skill_call(env, parse_args(tool, args)?).await,

@@ -1,16 +1,13 @@
 use crate::{
-    ensure_any_permission,
-    error::ApiError,
-    middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions,
-    routes::app::db::{ScopeParams, column_reader},
-    state::AppState,
+    ensure_any_permission, error::ApiError, middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions, routes::app::db::ScopeParams, state::AppState,
 };
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use flow_like_storage::databases::graph::{GraphPathsResult, GraphStore, lancegraph};
+use flow_like_query::graph::{GraphOperation, ObjectRef};
+use flow_like_storage::databases::graph::GraphPathsResult;
 use utoipa::ToSchema;
 
 #[derive(Debug, serde::Deserialize, ToSchema)]
@@ -43,10 +40,12 @@ fn default_max_depth() -> usize {
     request_body = PathsPayload,
     responses(
         (status = 200, description = "Paths between the two objects", body = Object),
-        (status = 400, description = "Bad request"),
+        (status = 400, description = "Bad request, or the path search failed"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
-        (status = 404, description = "Overlay not found")
+        (status = 404, description = "Overlay not found"),
+        (status = 503, description = "The query service is unavailable"),
+        (status = 504, description = "The path search ran out of time")
     ),
     security(
         ("bearer_auth" = []),
@@ -73,24 +72,28 @@ pub async fn find_paths(
         RolePermissions::ReadDatabase
     );
 
-    let (connection, overlay) =
-        super::load_scoped_overlay(&state, &user, &app_id, &overlay_id, &scope).await?;
-    let store = lancegraph::LanceGraphStore::new_for(
-        connection,
-        overlay,
-        None,
-        column_reader(&permission, &scope),
+    let result = super::read_overlay(
+        &state,
+        &user,
+        &permission,
+        &app_id,
+        &overlay_id,
+        &scope,
+        |overlay| GraphOperation::Paths {
+            limit: payload.limit.unwrap_or(overlay.default_limit),
+            overlay: Box::new(overlay),
+            from: ObjectRef {
+                label: payload.from_label,
+                id: payload.from_id,
+            },
+            to: ObjectRef {
+                label: payload.to_label,
+                id: payload.to_id,
+            },
+            max_depth: payload.max_depth,
+        },
     )
     .await?;
-
-    let result = store
-        .shortest_paths(
-            (payload.from_label, payload.from_id),
-            (payload.to_label, payload.to_id),
-            payload.max_depth,
-            payload.limit,
-        )
-        .await?;
 
     Ok(Json(result))
 }

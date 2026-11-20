@@ -874,7 +874,7 @@ async fn recall_has(host: &Host, query: &str, needle: &str) -> bool {
 }
 
 #[tokio::test]
-async fn memory_tools_save_with_the_trigger_as_evidence_and_wait_after_foreign_tools() {
+async fn memory_tools_save_on_the_trigger_and_keep_tool_trust_after_foreign_tools() {
     let host = Host::new(small_budget()).await;
     let trigger = host
         .copy
@@ -911,12 +911,38 @@ async fn memory_tools_save_with_the_trigger_as_evidence_and_wait_after_foreign_t
     guarded.note_foreign_call();
     let waiting: Value = serde_json::from_str(
         &guarded
-            .call("memory_save", json!({ "text": "The user likes tea." }))
+            .call(
+                "memory_save",
+                json!({ "text": "The user likes tea.", "kind": "preference" }),
+            )
             .await,
     )
     .unwrap();
-    assert_eq!(waiting["status"], "needs_confirmation");
+    assert_eq!(waiting["status"], "needs_confirmation", "{waiting}");
     assert!(!guarded.wrote());
+
+    let noted: Value = serde_json::from_str(
+        &guarded
+            .call(
+                "memory_save",
+                json!({ "text": "The news digest covers entries up to 2026-11-19T19:05Z." }),
+            )
+            .await,
+    )
+    .unwrap();
+    assert_eq!(noted["status"], "ok", "{noted}");
+    assert!(guarded.wrote());
+    let note = host
+        .session
+        .engine()
+        .stores()
+        .facts
+        .get(noted["id"].as_str().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(note.source, FactSource::ToolUntrusted);
+    assert_eq!(note.evidence[0].seq, trigger);
 
     let unknown: Value =
         serde_json::from_str(&toolbox.call("memory_dream", json!({})).await).unwrap();

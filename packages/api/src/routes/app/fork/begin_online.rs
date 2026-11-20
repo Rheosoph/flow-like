@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
 use crate::{
-    credentials::{CredentialsAccess, RuntimeCredentials},
     error::ApiError,
     middleware::jwt::AppUser,
     state::AppState,
-    utils::fork::job::{self, ForkJobSpec},
+    utils::fork::{
+        job::{self, ForkJobSpec},
+        upload::{self, UploadIdInventory},
+    },
 };
 use axum::{Extension, Json, extract::State};
 use flow_like::{
@@ -16,6 +18,10 @@ use sea_orm::{ConnectionTrait, Statement};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+/// Room for the id inventory of a large app: every node and pin id of every
+/// board, which outgrows the default 2 MiB body.
+pub const BEGIN_BODY_LIMIT: usize = 32 * 1024 * 1024;
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize, ToSchema)]
 pub struct BeginOnlineForkBody {
     /// Source lineage reported by Studio. Project-limit exemption requires
@@ -23,6 +29,14 @@ pub struct BeginOnlineForkBody {
     /// A project created only on the desktop may have no cloud source.
     #[serde(default)]
     pub source_app_id: Option<String>,
+    /// Every id of the local app. With it, the server mints all ids of the
+    /// uploaded app itself and re-keys what the desktop pushes.
+    #[serde(default)]
+    pub id_inventory: Option<UploadIdInventory>,
+    /// The local app's own `fork_id_seeds`: empty when it is no fork, absent
+    /// when the local fork never recorded them.
+    #[serde(default)]
+    pub fork_id_seeds: Option<Vec<String>>,
     /// Local size + count, computed by the desktop before calling.
     /// The server enforces the deployment cap against these values
     /// upfront; if the desktop later uploads more, the finalize
@@ -42,9 +56,10 @@ pub struct BundleSummary {
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct BeginOnlineForkResponse {
-    /// Destination app id allocated by the server. The desktop
-    /// uploads to `apps/{new_app_id}/...` using the returned
-    /// scoped credentials.
+    /// Destination app id allocated by the server. Content files go up
+    /// through signed URLs from `POST /apps/{new_app_id}/fork/online/upload-urls`;
+    /// boards, events, pages and the like through the app-edit endpoints,
+    /// which run every guard and re-key the upload.
     pub new_app_id: String,
     /// The fork job that owns the upload. Readable through
     /// `GET /apps/fork/jobs/{job_id}`; it completes when
@@ -55,27 +70,15 @@ pub struct BeginOnlineForkResponse {
     pub project_limit_exempt: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_limit_notice: Option<String>,
-    /// Path the desktop should treat as the upload root (matches
-    /// the destination prefix on the server's master store).
-    pub upload_path: String,
-    /// Scoped credentials with `EditAppContent` access — the desktop
-    /// uses these only for content objects. Meta objects are pushed
-    /// through app-edit endpoints so DB state stays in sync.
-    pub shared_credentials: serde_json::Value,
-    /// Optional credentials expiration (ISO8601). The desktop must
-    /// finish the upload before this and call `finalize`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expiration: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-/// Allocate a destination app for an offline → online fork. The
-/// desktop computes the bundle locally (already secret-stripped and
-/// token-rewritten on its side per the same rules `fork_app` enforces
-/// server-side) and uploads it directly to object storage using the
-/// scoped credentials this endpoint returns. Once the upload is
-/// complete the desktop calls `POST /apps/fork/online/{session_id}/finalize`
-/// to flip the destination to `Private` and (eventually) materialize
-/// the DB rows from the uploaded manifest.
+/// Allocate a destination app for an offline → online fork. The desktop
+/// computes the bundle locally (already secret-stripped and token-rewritten
+/// on its side per the same rules `fork_app` enforces server-side), puts its
+/// content files through signed URLs into a staging area under `tmp/`, and
+/// pushes everything else through the app-edit endpoints. Once done it calls
+/// `POST /apps/{new_app_id}/fork/online/finalize` to flip the destination to
+/// `Private`.
 #[utoipa::path(
     post,
     path = "/apps/fork/online/begin",
@@ -121,8 +124,15 @@ pub async fn begin_online_fork(
         .map_err(|_| ApiError::bad_request("The fork is too large."))?;
     crate::capacity::check_storage_write(&state, "", &sub, bytes).await?;
     let source_app_id = body.source_app_id.clone();
+    if let Some(inventory) = body.id_inventory.as_ref() {
+        inventory.validate()?;
+    }
+    if let Some(seeds) = body.fork_id_seeds.as_deref() {
+        upload::validate_fork_id_seeds(seeds)?;
+    }
     let language = body.language.clone().unwrap_or_else(|| "en".to_string());
-    let mut spec = ForkJobSpec::offline_upload(&language);
+    let rekeyed = body.id_inventory.is_some();
+    let mut spec = ForkJobSpec::offline_upload(&language, body.id_inventory);
     if let Some(source_id) = source_app_id.as_deref() {
         spec.public_fork_source_id = verified_upload_source(&state, &user, &sub, source_id).await?;
     }
@@ -147,6 +157,11 @@ pub async fn begin_online_fork(
     .await?;
     let (fork_job, _) = job::run_pass(&state, fork_job).await?;
     let new_app_id = fork_job.dest_app_id.clone();
+    // Without an inventory the endpoints store what an older desktop sends,
+    // and pasting each board mints random node ids, so no chain describes it.
+    let fork_id_seeds = rekeyed
+        .then(|| upload::uploaded_fork_id_seeds(body.fork_id_seeds.clone(), &fork_job.id))
+        .flatten();
 
     // The follow-up sync uses the regular app-edit endpoints. Those
     // endpoints load `manifest.app`, so the hidden destination needs a
@@ -169,6 +184,7 @@ pub async fn begin_online_fork(
         drive_app.status = CoreAppStatus::Inactive;
         drive_app.forked_from = source_app_id;
         drive_app.forked_at = Some(std::time::SystemTime::now());
+        drive_app.fork_id_seeds = fork_id_seeds;
         drive_app.save().await?;
         App::load(new_app_id.clone(), flow_like_state).await?;
         Ok::<(), ApiError>(())
@@ -185,56 +201,12 @@ pub async fn begin_online_fork(
         return Err(err);
     }
 
-    // Issue **content-only** scoped credentials so the desktop can
-    // upload metadata/, media/, upload/, storage/ directly to the destination
-    // prefix without putting the API server in the data path. Boards
-    // / events / widgets / templates / pages live in the meta bucket
-    // and must be pushed via the normal app-edit endpoints — that
-    // path runs role-permission gates and per-resource validation
-    // (event-schedule checks, page-event coupling, sink registration,
-    // secret stripping on write). Granting `EditApp` here would let a
-    // misbehaving desktop drop arbitrary `.board` / `.event` files
-    // server-side and bypass every guard.
-    let scoped =
-        RuntimeCredentials::scoped(&sub, &new_app_id, &state, CredentialsAccess::EditAppContent)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to generate scoped credentials for fork: {}", e);
-                ApiError::internal("Failed to generate fork upload credentials")
-            })?;
-
-    let shared_credentials = serde_json::to_value(scoped.clone().into_shared_credentials())
-        .map_err(|e| {
-            tracing::error!("Failed to serialize shared credentials for fork: {}", e);
-            ApiError::internal("Failed to serialize shared credentials")
-        })?;
-
-    let expiration = credentials_expiration(&scoped);
-
-    let upload_path = format!("apps/{}", new_app_id);
     Ok(Json(BeginOnlineForkResponse {
         new_app_id,
         fork_session_id: fork_job.id,
         project_limit_exempt,
         project_limit_notice,
-        upload_path,
-        shared_credentials,
-        expiration,
     }))
-}
-
-fn credentials_expiration(creds: &RuntimeCredentials) -> Option<chrono::DateTime<chrono::Utc>> {
-    match creds {
-        #[cfg(feature = "aws")]
-        RuntimeCredentials::Aws(aws) => aws.expiration,
-        #[cfg(feature = "azure")]
-        RuntimeCredentials::Azure(azure) => azure.expiration,
-        #[cfg(feature = "gcp")]
-        RuntimeCredentials::Gcp(gcp) => gcp.expiration,
-        #[cfg(feature = "r2")]
-        RuntimeCredentials::R2(r2) => r2.expiration,
-        RuntimeCredentials::Mixed(mixed) => credentials_expiration(&mixed.content),
-    }
 }
 
 async fn verified_upload_source(

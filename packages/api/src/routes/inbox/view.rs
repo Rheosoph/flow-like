@@ -43,9 +43,9 @@ struct ConversationRow {
 
 /// The reader's conversations: pinned ones first, newest pin first, then newest activity first,
 /// so a pinned conversation never falls off the limit; with `only`, just that one if the reader
-/// is an active member. Only people pin, so a bot's inbox lists no pins. The correlated counts
-/// run on the at most 200 rows the inner query keeps, each a range scan of the `(inboxId,
-/// conversationId, createdAt)` index.
+/// is an active member. Only people pin, so a bot's inbox lists no pins. Unread counts and newest
+/// messages come from the membership ([`super::summary`]); a membership no write has summarized
+/// yet is counted live, a range scan of the `(inboxId, conversationId, createdAt)` index.
 fn conversations_statement(
     db: &impl ConnectionTrait,
     reader: &Reader,
@@ -64,22 +64,19 @@ fn conversations_statement(
         values.push(conversation_id.into());
         filter.push_str(&format!(r#" AND c."id" = ${}"#, values.len()));
     }
-    let visible = super::deletion::visible_entries_sql("e");
+    let unread = super::summary::unread_sql("$1", r#"p."id""#, "$2", r#"p."lastReadAt""#);
+    let newest = super::summary::newest_sql("$1", r#"p."id""#, "$2");
     let sql = format!(
         r#"SELECT p."id" AS id, p."kind" AS kind, p."title" AS title, p."image" AS image,
        p."encryption" AS encryption,
        p."createdBy" AS created_by, p."createdAt" AS created_at,
        p."lastActivityAt" AS last_activity_at, p."pinnedAt" AS pinned_at, p."clearedAt" AS history_cleared_at,
-       (SELECT COUNT(*) FROM "InboxEntry" e
-         WHERE e."inboxId" = $1 AND e."conversationId" = p."id" AND e."kind" = $2 AND {visible}
-           AND e."senderId" <> $1
-           AND (p."lastReadAt" IS NULL OR e."createdAt" > p."lastReadAt")) AS unread_count,
-       (SELECT e."id" FROM "InboxEntry" e
-         WHERE e."inboxId" = $1 AND e."conversationId" = p."id" AND e."kind" = $2 AND {visible}
-         ORDER BY e."createdAt" DESC, e."id" DESC LIMIT 1) AS last_entry_id
+       CASE WHEN p."unreadCount" IS NULL THEN {unread} ELSE p."unreadCount" END AS unread_count,
+       CASE WHEN p."unreadCount" IS NULL THEN {newest} ELSE p."lastEntryId" END AS last_entry_id
 FROM (
     SELECT c."id", c."kind", c."title", c."image", c."encryption", c."createdBy", c."createdAt",
-           c."lastActivityAt", m."lastReadAt", m."clearedAt", pc."pinnedAt"
+           c."lastActivityAt", m."lastReadAt", m."clearedAt", m."unreadCount", m."lastEntryId",
+           pc."pinnedAt"
     FROM "ConversationMember" m
     JOIN "Conversation" c ON c."id" = m."conversationId"
     LEFT JOIN "PinnedConversation" pc

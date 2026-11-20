@@ -1013,13 +1013,16 @@ const COPY_OVERRIDES: Record<string, CopyOverride> = {
 			"Generate images from text prompts. Hosted through OpenRouter.",
 	},
 	orb01857baeebd6d70ba8934: {
-		model_id: "nvidia/nemotron-3-embed-1b:free",
-		repository: "https://openrouter.ai/nvidia/nemotron-3-embed-1b:free",
+		model_id: "kzzalews/Nemotron-3-Embed-1B-BF16-onnx",
+		repository: "https://huggingface.co/nvidia/Nemotron-3-Embed-1B-BF16",
 		file_name: null,
-		sources: ["https://openrouter.ai/nvidia/nemotron-3-embed-1b:free"],
-		name: "NVIDIA Nemotron 3 Embed 1B (free)",
+		sources: [
+			"https://huggingface.co/nvidia/Nemotron-3-Embed-1B-BF16",
+			"https://huggingface.co/kzzalews/Nemotron-3-Embed-1B-BF16-onnx",
+		],
+		name: "Nemotron 3 Embed 1B",
 		description:
-			"Embed text in 2048 dimensions for semantic search and retrieval.",
+			"Embed multilingual text locally with NVIDIA's Nemotron 3 model. Produces 2,048-dimensional vectors with an optional matching OpenRouter fallback.",
 		previous_description:
 			"Embed text in 2048 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
 	},

@@ -2,7 +2,7 @@ use flow_like::flow::copilot::HostTools;
 use serde_json::Value;
 
 /// Tools the API runs itself: they touch Lance tables and read objects, nothing heavy.
-const IN_PROCESS: [&str; 39] = [
+const IN_PROCESS: [&str; 45] = [
     "bot_configuration",
     "bot_models",
     "bot_update_configuration",
@@ -29,6 +29,12 @@ const IN_PROCESS: [&str; 39] = [
     "watch_place",
     "list_places",
     "cancel_place",
+    "calendar_list",
+    "calendar_create",
+    "calendar_update",
+    "calendar_delete",
+    "calendar_free_slots",
+    "calendar_wake_settings",
     "email_send",
     "email_reply",
     "file_list",

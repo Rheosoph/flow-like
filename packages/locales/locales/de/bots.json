@@ -8,6 +8,10 @@
 			"description": "Einen Webbrowser auf seinem Desktop oder Gerät steuern",
 			"label": "Browser"
 		},
+		"calendar": {
+			"description": "",
+			"label": ""
+		},
 		"channels": {
 			"description": "",
 			"label": ""
@@ -518,6 +522,12 @@
 				"nextInRoom": "",
 				"title": "",
 				"why": ""
+			},
+			"picture": {
+				"alt": "",
+				"next": "",
+				"nextInRoom": "",
+				"unavailable": ""
 			}
 		},
 		"botSettings": "Einstellungen für {{name}}",
@@ -1876,7 +1886,7 @@
 		},
 		"secretary": {
 			"description": "Hält deinen Kalender in Ordnung: findet freie Zeitfenster, bucht Meetings und erinnert dich.",
-			"instructions": "Du bist mein Sekretär. Halte meinen Kalender in Ordnung: Finde freie Zeitfenster, buche und verschiebe Meetings in den Kalender-Apps, die ich dir gebe, und erinnere mich an das, was ansteht. Frag mich, bevor du in meinem Namen etwas annimmst, ablehnst oder absagst.",
+			"instructions": "Du bist mein Sekretär. Halte meinen Kalender in Ordnung: deinen eigenen und die Kalender, die ich mit dir verbinde. Finde freie Zeitfenster, buche und verschiebe Meetings und erinnere mich an das, was ansteht. Lass dich vor Terminen wecken, wenn ich mich vorbereiten muss, und bleib still, wenn ein Termin nichts braucht. Frag mich, bevor du in meinem Namen etwas annimmst, ablehnst oder absagst.",
 			"name": "Sekretär"
 		},
 		"web_tester": {
@@ -2054,6 +2064,7 @@
 		"preparing": "Arbeitsbereich von {{name}} wird eingerichtet …",
 		"refused": "{{name}} kann noch keine eigenen Dateien und Daten speichern.",
 		"tabs": {
+			"calendar": "",
 			"chat": "Chat",
 			"computer": "",
 			"data": "Daten",
@@ -2104,5 +2115,119 @@
 		"deviceStatus": "Status auf diesem Gerät",
 		"deviceHelp": "Diese App-Sitzung kann Meldungen im Vordergrund pausieren. Dein geteilter Status und Push-Nachrichten auf anderen Geräten bleiben unverändert.",
 		"clearDevice": "Gerätestatus aufheben"
+	},
+	"calendar": {
+		"details": {
+			"allDay": "",
+			"delete": "",
+			"edit": "",
+			"memoryTitle": "",
+			"openLink": "",
+			"repeats": "",
+			"showMemory": "",
+			"showTasks": "",
+			"sourceBot": ""
+		},
+		"editor": {
+			"allDay": "",
+			"cancel": "",
+			"create": "",
+			"description": "",
+			"editTitle": "",
+			"end": "",
+			"location": "",
+			"newTitle": "",
+			"notes": "",
+			"repeatLabel": "",
+			"save": "",
+			"start": "",
+			"title": ""
+		},
+		"feed": {
+			"apple": "",
+			"button": "",
+			"copied": "",
+			"copy": "",
+			"create": "",
+			"events": "",
+			"failed": "",
+			"google": "",
+			"intro": "",
+			"linkLabel": "",
+			"loadFailed": "",
+			"localOnly": "",
+			"memories": "",
+			"microsoft": "",
+			"notes": "",
+			"off": "",
+			"offBody": "",
+			"offConfirm": "",
+			"offTitle": "",
+			"openFailed": "",
+			"outlook": "",
+			"privacy": "",
+			"rotate": "",
+			"rotateBody": "",
+			"rotateConfirm": "",
+			"rotateTitle": "",
+			"slow": "",
+			"tasks": "",
+			"title": ""
+		},
+		"layers": {
+			"events": "",
+			"external": "",
+			"memories": "",
+			"tasks": ""
+		},
+		"layersLabel": "",
+		"loadFailed": "",
+		"noSources": "",
+		"openSettings": "",
+		"repeats": {
+			"custom": "",
+			"daily": "",
+			"monthly": "",
+			"none": "",
+			"weekdays": "",
+			"weekly": ""
+		},
+		"retry": "",
+		"settings": {
+			"description": "",
+			"enabled": "",
+			"eventHint": "",
+			"external": "",
+			"internal": "",
+			"offsets": "",
+			"onlyMatching": "",
+			"patternPlaceholder": "",
+			"quiet": "",
+			"removePattern": "",
+			"skipAllDay": "",
+			"skipMatching": "",
+			"title": ""
+		},
+		"sourceFailed": "",
+		"viewLabel": "",
+		"views": {
+			"agenda": "",
+			"day": "",
+			"month": "",
+			"week": ""
+		},
+		"wake": {
+			"default": "",
+			"next": "",
+			"off": "",
+			"offsetsHint": "",
+			"offsetsLabel": "",
+			"on": "",
+			"state": "",
+			"stateNone": "",
+			"title": ""
+		},
+		"wakeButton": "",
+		"wakeOff": ""
 	}
 }

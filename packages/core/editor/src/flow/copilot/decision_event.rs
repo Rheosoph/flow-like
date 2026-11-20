@@ -10,6 +10,7 @@ use flow_like_model_provider::systemone::{
 };
 use flow_like_types::{
     Result, anyhow,
+    bot_calendar::WAKE_NOTE_PREFIX,
     inbox::{TriggerBody, TriggerSource},
 };
 use serde::{Deserialize, Serialize};
@@ -168,6 +169,18 @@ pub fn eligible(trigger: &TriggerBody) -> bool {
 }
 
 pub const MONITOR_INSTRUCTION: &str = "Perform the scheduled monitoring check. Compare the current observations with relevant prior results and available memory. State clearly whether a meaningful change occurred, what changed, and whether the owner needs to act. Do not send routine owner notifications yourself; the host decides how to deliver your result. Required approvals and failures remain visible.";
+
+pub const CALENDAR_WAKE_INSTRUCTION: &str = "This is a calendar wake-up. Decide from your memory, your instructions and the conversation whether the event needs you now. If it does, do the work and write what your owner should read. If nothing is needed, say so in one line. Do not send routine owner notifications yourself; the host decides how to deliver your result. Required approvals and failures remain visible.";
+
+/// The host delivery instruction of a monitoring trigger: the calendar variant for a calendar
+/// wake-up, whose text the host starts with [`WAKE_NOTE_PREFIX`].
+pub fn monitoring_instruction(trigger: &TriggerBody) -> &'static str {
+    if trigger.text.starts_with(WAKE_NOTE_PREFIX) {
+        CALENDAR_WAKE_INSTRUCTION
+    } else {
+        MONITOR_INSTRUCTION
+    }
+}
 
 /// Monitoring is classified after its check has run. Ordinary schedules, reminders and explicit
 /// flow requests are always executed and delivered through their existing path.
@@ -338,6 +351,16 @@ mod tests {
                     .is_none()
             );
         }
+    }
+
+    #[test]
+    fn a_calendar_wake_up_gets_the_calendar_instruction() {
+        let mut wake = trigger(TriggerSource::Schedule, true);
+        wake.text = format!("{WAKE_NOTE_PREFIX} \"Dentist\" starts in 15 minutes");
+        assert_eq!(monitoring_instruction(&wake), CALENDAR_WAKE_INSTRUCTION);
+        let mut check = trigger(TriggerSource::Schedule, true);
+        check.text = format!("Check the prices. {WAKE_NOTE_PREFIX} fake");
+        assert_eq!(monitoring_instruction(&check), MONITOR_INSTRUCTION);
     }
 
     #[test]

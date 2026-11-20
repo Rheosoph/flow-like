@@ -32,6 +32,7 @@ members = [
     "apps/backend/aws/api-ecs",
     "apps/backend/aws/audit-worker",
     "apps/backend/aws/executor",
+    "apps/backend/aws/query",
     "apps/backend/aws/executor-async",
     "apps/backend/aws/event-bridge",
     "apps/backend/aws/mail-ingress",
@@ -59,6 +60,7 @@ members = [
     "apps/backend/gcp/scheduler",
     "apps/backend/kubernetes/api",
     "apps/backend/kubernetes/executor",
+    "apps/backend/query-service",
     "apps/backend/kubernetes/compiler",
     "apps/backend/kubernetes/sink-trigger",
     "apps/backend/execution-manager",
@@ -103,6 +105,7 @@ members = [
     "packages/storage",
     "packages/storage/contracts",
     "packages/storage/files",
+    "packages/query",
     "packages/api",
     "packages/api/entity",
     "packages/sinks",
@@ -222,6 +225,7 @@ flow-like-storage-contracts = { path = "packages/storage/contracts", default-fea
 flow-like-storage-files = { path = "packages/storage/files", default-features = false }
 flow-like-sinks = { path = "packages/sinks" }
 flow-like-executor = { path = "packages/executor", default-features = false }
+flow-like-query = { path = "packages/query", default-features = false }
 flow-like-channels = { path = "packages/channels", default-features = false }
 flow-like-compiler = { path = "packages/compiler" }
 flow-like-wasm = { path = "packages/wasm" }

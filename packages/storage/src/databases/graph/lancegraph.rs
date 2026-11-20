@@ -27,6 +27,7 @@ use futures::TryStreamExt;
 use lance_graph::{CypherQuery, GraphConfig};
 use lancedb::Connection;
 use lancedb::query::{ExecutableQuery, QueryBase};
+use lancedb::table::Table;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
@@ -1504,11 +1505,42 @@ pub(crate) async fn open_table_adapter(
     table_name: &str,
     reader: &ColumnReader,
 ) -> Result<Arc<dyn TableProvider>> {
-    let table = connection
+    let table = open_lance_table(connection, table_name).await?;
+    table_adapter(table, table_name, reader).await
+}
+
+/// An adapter pinned to the version the table has now, and that version, so a
+/// result can later be checked against the table's newest version.
+pub(crate) async fn open_pinned_table_adapter(
+    connection: &Connection,
+    table_name: &str,
+    reader: &ColumnReader,
+) -> Result<(Arc<dyn TableProvider>, u64)> {
+    let table = open_lance_table(connection, table_name).await?;
+    let table = match table.checkout_current().await {
+        Ok(pinned) => pinned,
+        Err(_) => table,
+    };
+    let version = table
+        .version()
+        .await
+        .map_err(|e| anyhow!("Failed to read the version of '{}': {}", table_name, e))?;
+    Ok((table_adapter(table, table_name, reader).await?, version))
+}
+
+pub(crate) async fn open_lance_table(connection: &Connection, table_name: &str) -> Result<Table> {
+    connection
         .open_table(table_name)
         .execute()
         .await
-        .map_err(|e| anyhow!("Failed to open table '{}': {}", table_name, e))?;
+        .map_err(|e| anyhow!("Failed to open table '{}': {}", table_name, e))
+}
+
+async fn table_adapter(
+    table: Table,
+    table_name: &str,
+    reader: &ColumnReader,
+) -> Result<Arc<dyn TableProvider>> {
     let hidden = if reader.is_unrestricted() {
         Vec::new()
     } else {

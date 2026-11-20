@@ -16,6 +16,7 @@ app	status	crate::sea_orm_active_enums::Status
 app	visibility	crate::sea_orm_active_enums::Visibility
 app_cache_entry	scope	crate::sea_orm_active_enums::CacheScope
 app_connection	status	crate::sea_orm_active_enums::AppConnectionStatus
+app_data_source	secret_fields	crate::json_types::StringList
 app_discount	discount_type	crate::sea_orm_active_enums::DiscountType
 app_group	status	crate::sea_orm_active_enums::Status
 app_group	visibility	crate::sea_orm_active_enums::Visibility

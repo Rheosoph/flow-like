@@ -8,6 +8,10 @@
 			"description": "Drive a web browser on its desktop or device",
 			"label": "Browser"
 		},
+		"calendar": {
+			"description": "Keeps its own calendar, reads your connected Google and Microsoft calendars and wakes up before events",
+			"label": "Calendar"
+		},
 		"channels": {
 			"description": "Messages people you chat with, with your approval; Slack, Teams, Telegram and Discord come later",
 			"label": "Channels"
@@ -519,6 +523,12 @@
 				"nextInRoom": "They join {{room}} once they accept. Asked every time.",
 				"title": "{{name}} wants to invite {{person}}",
 				"why": "Why"
+			},
+			"picture": {
+				"alt": "The picture the bot wants to show",
+				"next": "Everyone in this group chat sees this picture once you allow it. Asked every time.",
+				"nextInRoom": "Everyone in {{room}} sees this picture once you allow it. Asked every time.",
+				"unavailable": "The picture could not be loaded."
 			}
 		},
 		"botSettings": "Settings for {{name}}",
@@ -1907,7 +1917,7 @@
 		},
 		"secretary": {
 			"description": "Keeps your calendar in order: finds free slots, books meetings and reminds you.",
-			"instructions": "You are my secretary. Keep my calendar in order: find free slots, book and move meetings in the calendar apps I give you, and remind me of what is coming up. Ask me before you accept, decline or cancel anything on my behalf.",
+			"instructions": "You are my secretary. Keep my calendar in order: your own calendar and the calendars I connect to you. Find free slots, book and move meetings, and remind me of what is coming up. Wake up before events when I need to prepare, and stay quiet when an event needs nothing. Ask me before you accept, decline or cancel anything on my behalf.",
 			"name": "Secretary"
 		},
 		"web_tester": {
@@ -2086,6 +2096,7 @@
 		"preparing": "Setting up {{name}}'s workspace…",
 		"refused": "{{name}} can't keep its own files and data yet.",
 		"tabs": {
+			"calendar": "Calendar",
 			"chat": "Chat",
 			"computer": "Computer",
 			"data": "Data",
@@ -2136,5 +2147,119 @@
 		"deviceStatus": "This device's status",
 		"deviceHelp": "This app session can pause foreground alerts. It does not change your shared status or push notifications on other devices.",
 		"clearDevice": "Clear device status"
+	},
+	"calendar": {
+		"details": {
+			"allDay": "All day",
+			"delete": "Delete",
+			"edit": "Edit",
+			"memoryTitle": "{{name}} remembers",
+			"openLink": "Open in its calendar",
+			"repeats": "Repeats",
+			"showMemory": "Show in Memory",
+			"showTasks": "Show tasks",
+			"sourceBot": "{{name}}'s calendar"
+		},
+		"editor": {
+			"allDay": "All day",
+			"cancel": "Cancel",
+			"create": "Create",
+			"description": "An event in {{name}}'s own calendar.",
+			"editTitle": "Edit event",
+			"end": "End",
+			"location": "Location",
+			"newTitle": "New event",
+			"notes": "Notes for {{name}}",
+			"repeatLabel": "Repeat",
+			"save": "Save",
+			"start": "Start",
+			"title": "Title"
+		},
+		"feed": {
+			"apple": "Apple Calendar",
+			"button": "Show in your calendar",
+			"copied": "Link copied",
+			"copy": "Copy link",
+			"create": "Create link",
+			"events": "Events",
+			"failed": "Couldn't change the calendar link: {{error}}",
+			"google": "Google Calendar",
+			"intro": "Show {{name}}'s calendar in Apple Calendar, Google Calendar, Outlook or any other calendar app. It is read only and keeps itself up to date.",
+			"linkLabel": "Subscription link",
+			"loadFailed": "Couldn't load the calendar link: {{error}}",
+			"localOnly": "A calendar link needs your account: this bot lives only on this device.",
+			"memories": "Memories",
+			"microsoft": "Microsoft 365",
+			"notes": "Include notes",
+			"off": "Turn off",
+			"offBody": "Calendars subscribed to this link stop updating. You can create a new link later.",
+			"offConfirm": "Turn off",
+			"offTitle": "Turn off the calendar link?",
+			"openFailed": "Couldn't open {{app}}; the link is copied instead.",
+			"outlook": "Outlook.com",
+			"privacy": "The link is private, but anyone who has it, and services like Google that fetch it, can read what it shows.",
+			"rotate": "New link",
+			"rotateBody": "Calendars subscribed to the current link stop updating. Subscribe again with the new link.",
+			"rotateConfirm": "Replace link",
+			"rotateTitle": "Replace the link?",
+			"slow": "Google and Outlook refresh subscribed calendars only every few hours.",
+			"tasks": "Tasks",
+			"title": "Show in your calendar"
+		},
+		"layers": {
+			"events": "Events",
+			"external": "Connected",
+			"memories": "Memories",
+			"tasks": "Tasks"
+		},
+		"layersLabel": "Show in the calendar",
+		"loadFailed": "Couldn't load {{name}}'s calendar: {{error}}",
+		"noSources": "No calendar connected. Add a Google or Microsoft account under Connectors in {{name}}'s settings.",
+		"openSettings": "Open settings",
+		"repeats": {
+			"custom": "Custom ({{cron}})",
+			"daily": "Every day",
+			"monthly": "Every month",
+			"none": "Never",
+			"weekdays": "Every weekday",
+			"weekly": "Every week"
+		},
+		"retry": "Try again",
+		"settings": {
+			"description": "{{name}} can wake up a set time before an event, decide whether it needs it, and remind you or prepare what you need.",
+			"enabled": "Wake up before events",
+			"eventHint": "An event's own wake-up, set in its details, overrides these settings.",
+			"external": "Connected calendars",
+			"internal": "Own calendar",
+			"offsets": "When, up to four times",
+			"onlyMatching": "Only events containing",
+			"patternPlaceholder": "A word in the title or location, then Enter",
+			"quiet": "Stay quiet when there's nothing to do",
+			"removePattern": "Remove {{pattern}}",
+			"skipAllDay": "Skip whole-day events",
+			"skipMatching": "Never for events containing",
+			"title": "Wake-ups"
+		},
+		"sourceFailed": "Couldn't read {{label}}: {{error}}",
+		"viewLabel": "Calendar view",
+		"views": {
+			"agenda": "Agenda",
+			"day": "Day",
+			"month": "Month",
+			"week": "Week"
+		},
+		"wake": {
+			"default": "Like the settings",
+			"next": "next {{when}}",
+			"off": "Never",
+			"offsetsHint": "Pick up to four times before the start. None picked uses the times of the settings.",
+			"offsetsLabel": "Wake up before the start",
+			"on": "Wake",
+			"state": "Wakes {{name}} {{offsets}} before",
+			"stateNone": "Doesn't wake {{name}}",
+			"title": "Wake-up"
+		},
+		"wakeButton": "Wake-ups",
+		"wakeOff": "off"
 	}
 }

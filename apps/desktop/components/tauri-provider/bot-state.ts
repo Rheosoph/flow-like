@@ -27,6 +27,9 @@ import type {
 	IBotTurnHost,
 	IBotWebhook,
 	IBotWorkspace,
+	ICalendarFeed,
+	ICalendarRange,
+	ICalendarWake,
 	IConnectedAccount,
 	ICreateBotConnectorRequest,
 	ICreateBotRequest,
@@ -38,9 +41,17 @@ import type {
 	IUpdateBotRequest,
 	IUpdateBotSkillRequest,
 	IUpdateBotTaskRequest,
+	IUpdateCalendarFeed,
+	IUpdateCalendarWake,
 	IUpsertBotSecretRequest,
 } from "@flow-like/flow-like-ui";
 import { getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
+import {
+	expectCalendarFeed,
+	expectCalendarRange,
+	expectCalendarWake,
+	isNoCalendarFeed,
+} from "@flow-like/flow-like-ui/lib/bot-calendar-shape";
 import { createScreenSealing } from "@flow-like/flow-like-ui/lib/bot-screens/screen-sealing";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
@@ -65,6 +76,7 @@ import {
 	LocalStoreError,
 	errorCode,
 	localBots,
+	localCalendar,
 	localPermissions,
 	localTasks,
 	localToolGrants,
@@ -737,6 +749,136 @@ export class BotState implements IBotState {
 			undefined,
 			account.auth,
 		);
+	}
+
+	async getCalendarWake(botId: string): Promise<ICalendarWake> {
+		const account = await this.accountFor(botId);
+		if (!account) return this.here(botId, () => localCalendar.wake(botId));
+		return expectCalendarWake(
+			await get<unknown>(
+				account.profile,
+				`${botPath(account.id)}/calendar`,
+				account.auth,
+			),
+			`read the calendar wake-ups of bot ${botId}`,
+		);
+	}
+
+	async setCalendarWake(
+		botId: string,
+		update: IUpdateCalendarWake,
+	): Promise<ICalendarWake> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			return this.here(botId, () => localCalendar.setWake(botId, update));
+		}
+		return expectCalendarWake(
+			await put<unknown>(
+				account.profile,
+				`${botPath(account.id)}/calendar`,
+				update,
+				account.auth,
+			),
+			`change the calendar wake-ups of bot ${botId}`,
+		);
+	}
+
+	/** Bots that live only on this computer have no hub to serve a link. */
+	async getCalendarFeed(botId: string): Promise<ICalendarFeed | null> {
+		const account = await this.accountFor(botId);
+		if (!account) return null;
+		try {
+			return expectCalendarFeed(
+				await get<unknown>(
+					account.profile,
+					`${botPath(account.id)}/calendar/feed`,
+					account.auth,
+				),
+				`read the calendar link of bot ${botId}`,
+			);
+		} catch (error) {
+			if (isNoCalendarFeed(error)) return null;
+			throw error;
+		}
+	}
+
+	async updateCalendarFeed(
+		botId: string,
+		update: IUpdateCalendarFeed,
+	): Promise<ICalendarFeed> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			throw new Error("A calendar link needs the bot to live on your account");
+		}
+		return expectCalendarFeed(
+			await put<unknown>(
+				account.profile,
+				`${botPath(account.id)}/calendar/feed`,
+				update,
+				account.auth,
+			),
+			`change the calendar link of bot ${botId}`,
+		);
+	}
+
+	async rotateCalendarFeed(botId: string): Promise<ICalendarFeed> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			throw new Error("A calendar link needs the bot to live on your account");
+		}
+		return expectCalendarFeed(
+			await post<unknown>(
+				account.profile,
+				`${botPath(account.id)}/calendar/feed/rotate`,
+				undefined,
+				account.auth,
+			),
+			`replace the calendar link of bot ${botId}`,
+		);
+	}
+
+	async deleteCalendarFeed(botId: string): Promise<void> {
+		const account = await this.accountFor(botId);
+		if (!account) return;
+		await del<void>(
+			account.profile,
+			`${botPath(account.id)}/calendar/feed`,
+			undefined,
+			account.auth,
+		);
+	}
+
+	/** A desktop bot's connected calendars are signed in on its desktop, so this computer reads them. */
+	async listCalendar(
+		botId: string,
+		from: string,
+		to: string,
+	): Promise<ICalendarRange> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			return this.here(botId, () => localCalendar.events(botId, from, to));
+		}
+		if (await this.locatedOnDesktop(botId, account)) {
+			return localCalendar.events(account.id, from, to);
+		}
+		return expectCalendarRange(
+			await get<unknown>(
+				account.profile,
+				`${botPath(account.id)}/calendar/events?${new URLSearchParams({ from, to })}`,
+				account.auth,
+			),
+			`list the calendar of bot ${botId}`,
+		);
+	}
+
+	private async locatedOnDesktop(
+		botId: string,
+		account: IAccountRoute,
+	): Promise<boolean> {
+		const listed = this.accountBots
+			.known(account.sub)
+			.find((bot) => bot.id === account.id);
+		return (listed ?? (await this.getBot(botId))).location === "desktop";
 	}
 
 	async listSkills(botId: string): Promise<IBotSkill[]> {

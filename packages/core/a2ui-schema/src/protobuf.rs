@@ -444,8 +444,8 @@ impl From<WidgetInstance> for proto::WidgetInstance {
             widget_id: value.widget_id,
             instance_id: value.instance_id,
             position: value.position.map(Into::into),
-            customization_values: value.customization_values,
-            exposed_prop_values: value.exposed_prop_values,
+            customization_values: value.customization_values.into_iter().collect(),
+            exposed_prop_values: value.exposed_prop_values.into_iter().collect(),
             style_override: value.style_override.map(Into::into),
             action_bindings: value
                 .action_bindings
@@ -463,8 +463,8 @@ impl From<proto::WidgetInstance> for WidgetInstance {
             widget_id: proto.widget_id,
             instance_id: proto.instance_id,
             position: proto.position.map(Into::into),
-            customization_values: proto.customization_values,
-            exposed_prop_values: proto.exposed_prop_values,
+            customization_values: proto.customization_values.into_iter().collect(),
+            exposed_prop_values: proto.exposed_prop_values.into_iter().collect(),
             style_override: proto.style_override.map(Into::into),
             action_bindings: proto
                 .action_bindings
@@ -557,7 +557,7 @@ impl From<ActionBinding> for proto::ActionBinding {
             },
             ActionBinding::ExternalUrl { url, .. } => proto::ActionBinding {
                 binding_type: Some(proto::action_binding::BindingType::ExternalUrl(url)),
-                context_mapping: std::collections::HashMap::new(),
+                context_mapping: Default::default(),
             },
             ActionBinding::CustomAction {
                 action_name,

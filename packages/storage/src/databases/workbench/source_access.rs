@@ -100,7 +100,8 @@ pub async fn capture(
             crate::databases::graph::lancegraph::CypherSafetyConfig::default().max_concurrent,
         );
         let _permit = semaphore.acquire().await?;
-        let context = build_context(connection, surface, views, sql, reader).await?;
+        let (context, _) =
+            build_context(connection, surface, views, sql, reader, &[], None).await?;
         let plan = context
             .sql(sql)
             .await?

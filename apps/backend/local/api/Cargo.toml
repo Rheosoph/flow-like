@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 flow-like = { workspace = true, features = ["app-runtime"] }
-flow-like-api = { workspace = true, features = ["kubernetes", "redis", "cosmos", "azure", "smtp", "sendgrid", "forecasting"] }
+flow-like-api = { workspace = true, features = ["kubernetes", "redis", "cosmos", "azure", "smtp", "sendgrid", "forecasting", "query-in-process"] }
 flow-like-secrets.workspace = true
 flow-like-types.workspace = true
 flow-like-storage.workspace = true

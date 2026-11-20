@@ -174,7 +174,7 @@ fn connection_scope(args: &Value) -> Option<String> {
 /// The grant scopes that cover one call of `tool`, or `None` when the call is never remembered.
 /// A call is covered when every scope is granted (or the tool is granted for `*`).
 pub fn grant_scopes(tool: &str, args: &Value, context_app: Option<&str>) -> Option<Vec<String>> {
-    if NOT_GRANTABLE.contains(&tool) {
+    if NOT_GRANTABLE.contains(&tool) || tools::computer::room_show(tool, args).is_some() {
         return None;
     }
     let one = |scope: Option<String>| scope.map(|scope| vec![scope]);
@@ -207,7 +207,7 @@ pub fn grant_scopes(tool: &str, args: &Value, context_app: Option<&str>) -> Opti
             })
         }
         "data_sources" => one(connection_scope(args)),
-        "connector_call" | "connector_request" => {
+        _ if flow_like_bot_tools::services::POLICY_TOOLS.contains(&tool) => {
             one(flow_like_bot_tools::services::grant_scope(tool, args))
         }
         "browser_open" => one(clean(arg(args, "url", "url"))
@@ -511,6 +511,7 @@ pub fn approval_request(
         invite: (tool == ROOM_INVITE_TOOL)
             .then(|| tools::rooms::invite_ask(args))
             .flatten(),
+        picture: tools::computer::room_show(tool, args).map(|show| show.file),
         configuration_changes: tools::configuration::proposed_changes(tool, args),
         items: Vec::new(),
     }
@@ -553,6 +554,7 @@ pub async fn headless_answer(
 /// Document cost approvals use their separate gate and never reach inference.
 pub fn permits_authorization_inference(tool: &str, args: &Value) -> bool {
     !NOT_GRANTABLE.contains(&tool)
+        && tools::computer::room_show(tool, args).is_none()
         && tool != DOCUMENTS_TOOL
         && tool != "knowledge_drop"
         && !(tool == "database_tool" && arg(args, "operation", "operation") == "delete_table")
@@ -666,6 +668,7 @@ impl BatchEntry {
             after_web_content: self.after_web_content,
             secret: self.card.secret.clone(),
             invite: self.card.invite.clone(),
+            picture: self.card.picture.clone(),
         }
     }
 
@@ -746,6 +749,7 @@ fn batch_card(turn_id: &str, entries: &[BatchEntry]) -> Option<ApprovalRequest> 
         room: None,
         secret: None,
         invite: None,
+        picture: None,
         configuration_changes: None,
         items,
     })
@@ -2051,6 +2055,10 @@ mod tests {
                 "file_save",
                 json!({"url": "https://files.example.com/a.pdf"}),
             ),
+            (
+                "calendar_create",
+                json!({"calendar": "c-google", "policy": "ask"}),
+            ),
             ("some_tool", json!({})),
         ];
         let mut checked = 0;
@@ -2443,6 +2451,61 @@ mod tests {
             approval_request("bt_1", "code_run", &args, None, "x").secret,
             None
         );
+    }
+
+    #[tokio::test]
+    async fn a_computer_session_grant_never_shows_a_screenshot_in_a_room() {
+        let store = Memory::default();
+        let look = json!({ "keep": true });
+        let HeadlessAnswer::Park(card) =
+            headless_answer(&store, "bt_1", "computer_screenshot", &look, None, "Look").await
+        else {
+            panic!("expected a park");
+        };
+        record_card_answer(&store, &card, ApprovalDecision::Always)
+            .await
+            .unwrap();
+        assert_eq!(
+            headless_answer(&store, "bt_2", "computer_screenshot", &look, None, "").await,
+            HeadlessAnswer::Run
+        );
+
+        let file = flow_like_types::bot_message::WorkspaceHandle {
+            app_id: "ws1".into(),
+            path: "bot/screenshots/a.png".into(),
+            bytes: 4,
+            sha256: "a".repeat(64),
+            mime: "image/png".into(),
+        };
+        let show = tools::computer::show_in_room_args(&file, Some("Team"));
+        let HeadlessAnswer::Park(card) = headless_answer(
+            &store,
+            "bt_2",
+            "computer_screenshot",
+            &show,
+            None,
+            "The bot wants to show the people in “Team” this screenshot of your computer.",
+        )
+        .await
+        else {
+            panic!("a standing grant covered a room show");
+        };
+        assert_eq!(card.scope, "");
+        assert_eq!(card.picture, Some(file));
+        assert!(
+            card.invite.is_none()
+                && approval_request("bt_2", "computer_screenshot", &look, None, "")
+                    .picture
+                    .is_none()
+        );
+        assert!(!permits_authorization_inference(
+            "computer_screenshot",
+            &show
+        ));
+        assert!(permits_authorization_inference(
+            "computer_screenshot",
+            &look
+        ));
     }
 
     #[tokio::test]

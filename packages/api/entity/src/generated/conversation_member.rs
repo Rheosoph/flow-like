@@ -49,6 +49,10 @@ pub struct Model {
     pub cleared_legacy_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "clearedSeq")]
     pub cleared_seq: Option<i64>,
+    #[sea_orm(column_name = "unreadCount")]
+    pub unread_count: Option<i32>,
+    #[sea_orm(column_name = "lastEntryId", column_type = "Text", nullable)]
+    pub last_entry_id: Option<String>,
     #[sea_orm(
         belongs_to,
         from = "conversation_id",

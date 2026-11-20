@@ -1,0 +1,13 @@
+[package]
+name = "query-service"
+version = "0.1.0"
+edition = "2024"
+description = "Flow-Like query service container for docker-compose, Kubernetes, Azure and GCP"
+
+[dependencies]
+flow-like-query = { workspace = true, features = ["server", "client", "all-drivers", "forecast"] }
+mimalloc.workspace = true
+axum.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }

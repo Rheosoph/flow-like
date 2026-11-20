@@ -1153,6 +1153,8 @@ mod tests {
             image_model: None,
             vision_model: None,
             subtask_model: None,
+            calendar_wake: None,
+            calendar_synced_at: None,
         }
     }
 

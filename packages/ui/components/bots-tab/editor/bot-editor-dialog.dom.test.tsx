@@ -519,7 +519,10 @@ describe("BotEditorDialog", () => {
 				"email",
 				"push_notifications",
 				"scheduling",
+				"calendar",
 				"memory",
+				"connectors",
+				"user_context",
 			],
 			classification: { classification: "confidential", pii: true },
 		});

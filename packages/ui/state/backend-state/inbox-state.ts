@@ -226,6 +226,8 @@ export interface IInboxApproval {
 	secret?: IInboxApprovalSecret;
 	/** Set on a `room_invite` card: who the bot wants to bring into the room, and why. */
 	invite?: IInboxApprovalInvite;
+	/** Set on a card that asks to show a picture in a room: the picture, in the bot's workspace. */
+	picture?: IInboxFileHandle;
 	configuration_changes?: Record<string, unknown>;
 	/** A standing grant was set aside because the turn read web pages first. */
 	after_web_content?: boolean;
@@ -244,6 +246,7 @@ export interface IInboxApprovalItem {
 	after_web_content?: boolean;
 	secret?: IInboxApprovalSecret;
 	invite?: IInboxApprovalInvite;
+	picture?: IInboxFileHandle;
 }
 
 /** The exact username or email address the bot was given, and its reason. */

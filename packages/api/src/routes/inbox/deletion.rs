@@ -147,6 +147,7 @@ pub(super) async fn delete_in<C: ConnectionTrait>(
         .filter(conversation_member::Column::PrincipalId.eq(principal))
         .exec(db)
         .await?;
+    super::summary::refresh(db, conversation_id, &[principal.to_string()]).await?;
     pinned_conversation::Entity::delete_by_id((principal.to_string(), conversation_id.to_string()))
         .exec(db)
         .await?;

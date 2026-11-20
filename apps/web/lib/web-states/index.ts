@@ -16,6 +16,7 @@ export { WebRegistryState } from "./registry-state";
 export { WebDatabaseState } from "./database-state";
 export { WebGraphState } from "./graph-state";
 export { WebQueryState } from "./query-state";
+export { WebDataSourceState } from "./data-source-state";
 export { WebAIState } from "./ai-state";
 export { WebApiState } from "./api-state";
 export { WebHelperState } from "./helper-state";

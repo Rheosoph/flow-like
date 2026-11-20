@@ -2262,6 +2262,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-query"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.8",
+ "flow-like-query",
+ "flow-like-types",
+ "lambda_http",
+ "mimalloc",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "aws-runtime"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2287,6 +2301,32 @@ dependencies = [
  "pin-project-lite",
  "tracing",
  "uuid 1.27.0",
+]
+
+[[package]]
+name = "aws-sdk-athena"
+version = "1.116.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41a4a3a08200813ed0b3c6a3554f2ced5df8d09463739135a8d619d549451d2f"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand 2.4.1",
+ "http 0.2.12",
+ "http 1.5.0",
+ "regex-lite",
+ "tracing",
 ]
 
 [[package]]
@@ -10668,6 +10708,7 @@ dependencies = [
  "blake3",
  "bytes",
  "chrono",
+ "chrono-tz",
  "dotenv",
  "ed25519-dalek 2.2.0",
  "eventsource-stream",
@@ -10688,6 +10729,7 @@ dependencies = [
  "flow-like-device-protocol",
  "flow-like-executor",
  "flow-like-gcp-data",
+ "flow-like-query",
  "flow-like-secrets",
  "flow-like-sinks",
  "flow-like-storage",
@@ -10702,6 +10744,7 @@ dependencies = [
  "hmac 0.12.1",
  "hyper 1.10.1",
  "hyper-util",
+ "icalendar",
  "image",
  "ipnetwork 0.21.1",
  "jsonschema",
@@ -10741,6 +10784,7 @@ dependencies = [
  "utoipa-swagger-ui",
  "uuid 1.27.0",
  "webp",
+ "zeroize",
  "zip",
  "zstd 0.13.3",
 ]
@@ -10885,6 +10929,7 @@ dependencies = [
  "async-trait",
  "blake3",
  "chrono",
+ "chrono-tz",
  "flow-like-bot-memory",
  "flow-like-catalog-code-interpreter",
  "flow-like-catalog-data",
@@ -10900,6 +10945,8 @@ dependencies = [
  "pulldown-cmark 0.13.5",
  "reqwest 0.13.4",
  "rmcp",
+ "roxmltree 0.21.1",
+ "rrule",
  "rxing",
  "schemars 1.2.1",
  "serde",
@@ -11124,6 +11171,7 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "async-trait",
+ "aws-sdk-athena",
  "base64 0.22.1",
  "blake3",
  "calamine",
@@ -12574,6 +12622,36 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "flow-like-query"
+version = "0.1.0"
+dependencies = [
+ "arrow-ipc",
+ "async-trait",
+ "axum 0.8.8",
+ "base64 0.22.1",
+ "bytes",
+ "flow-like-catalog-data",
+ "flow-like-catalog-ml",
+ "flow-like-runtime",
+ "flow-like-storage",
+ "flow-like-storage-contracts",
+ "flow-like-types",
+ "futures 0.3.32",
+ "getrandom 0.4.3",
+ "jsonwebtoken",
+ "p256",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower",
+ "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -25624,6 +25702,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "query-service"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.8",
+ "flow-like-query",
+ "mimalloc",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "query_map"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -27172,6 +27262,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "rrule"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "720acfb4980b9d8a6a430f6d7a11933e701ebbeba5eee39cc9d8c5f932aaff74"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "log",
+ "regex",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

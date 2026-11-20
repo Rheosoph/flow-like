@@ -9,7 +9,7 @@
 
 pub(crate) mod egress;
 mod mcp;
-mod rest;
+pub(crate) mod rest;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -41,8 +41,15 @@ pub const CONNECTOR_CALL: &str = "connector_call";
 pub const CONNECTOR_REQUEST: &str = "connector_request";
 /// Internal: the settings refresh asks a server for its tools. Not a model tool.
 pub const CONNECTOR_REFRESH: &str = "connector_refresh";
-/// Tools whose approval depends on the connector's policy.
-pub const POLICY_TOOLS: &[&str] = &[CONNECTOR_CALL, CONNECTOR_REQUEST];
+/// Tools whose approval depends on the connector's policy. The calendar's writes ask only when
+/// they reach a connected calendar ([`crate::calendar::connector_write`]).
+pub const POLICY_TOOLS: &[&str] = &[
+    CONNECTOR_CALL,
+    CONNECTOR_REQUEST,
+    crate::calendar::CALENDAR_CREATE,
+    crate::calendar::CALENDAR_UPDATE,
+    crate::calendar::CALENDAR_DELETE,
+];
 
 /// Arguments core writes into a call after it resolved the connector's policy. A model's own
 /// values are replaced.
@@ -105,7 +112,7 @@ impl Credential {
         self.0.as_deref()
     }
 
-    fn scrub(&self, text: &mut String) {
+    pub(crate) fn scrub(&self, text: &mut String) {
         let Some(header) = &self.0 else { return };
         let token = header.rsplit(' ').next().unwrap_or(header);
         if token.len() >= 8 {
@@ -607,7 +614,7 @@ fn finish(
     });
 }
 
-fn take_call(source: &dyn ConnectorSource) -> ToolResult<()> {
+pub(crate) fn take_call(source: &dyn ConnectorSource) -> ToolResult<()> {
     if source.budget().take() {
         return Ok(());
     }
@@ -810,22 +817,29 @@ fn rest_output(
     )
 }
 
+/// A scope part from the call's arguments, when it is short and plain enough to store.
+pub(crate) fn scope_text<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 200
+                && !value.chars().any(|c| c.is_control() || c == ',')
+        })
+}
+
 /// The grant scope of a connector call: `connector:<id>:<tool>` for an MCP tool,
-/// `connector:<id>:http:<METHOD>` for REST. `None` when the call is never remembered (the tool
-/// is destructive, or core did not resolve the connector).
+/// `connector:<id>:http:<METHOD>` for REST, `connector:<id>:calendar:<METHOD>` for a write to a
+/// connected calendar. `None` when the call is never remembered (the tool is destructive, or
+/// core did not resolve the connector).
 pub fn grant_scope(tool: &str, args: &Value) -> Option<String> {
-    let text = |key: &str| {
-        args.get(key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| {
-                !value.is_empty()
-                    && value.len() <= 200
-                    && !value.chars().any(|c| c.is_control() || c == ',')
-            })
-    };
+    let text = |key: &str| scope_text(args, key);
     if args.get(POLICY_FIELD).and_then(Value::as_str) == Some(POLICY_ASK_EACH) {
         return None;
+    }
+    if crate::calendar::write_method(tool).is_some() {
+        return crate::calendar::grant_scope(tool, args);
     }
     let id = text("connector")?;
     match tool {

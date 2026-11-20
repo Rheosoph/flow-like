@@ -155,6 +155,41 @@ compiler:
   tolerations: []
   affinity: {}
 
+# Query service: runs every data read (SQL, graph, table browsing) outside the API.
+# It holds no storage or database credentials; the API sends short-lived scoped ones per request.
+query:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ghcr.io/rheosoph/flow-like-docker-compose-query
+    tag: dev
+    digest: ""
+    pullPolicy: Always
+  service:
+    port: 8090
+  maxRows: 10000
+  maxTimeoutMs: 50000
+  # 60 % of resources.limits.memory (4Gi); sorts and aggregates spill to the emptyDir before this is reached.
+  memoryBytes: 2576980377
+  spillMaxBytes: 4294967296
+  spillSizeLimit: 4Gi
+  # Self-hosted databases usually sit on private networks; public-only egress otherwise.
+  allowPrivateNetworks: true
+  # Extra NetworkPolicy egress rules for external data sources on private networks (when networkPolicy.enabled).
+  extraEgress: []
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "4Gi"
+      cpu: "2"
+  autoscaling:
+    enabled: false
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # Run reply channels. setup-config.py creates separate broker trust and API signer Secrets.
 channels:
   transport: nats

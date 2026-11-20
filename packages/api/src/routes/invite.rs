@@ -221,7 +221,11 @@ fn safe_image(value: Option<String>) -> Option<String> {
     .then(|| url.to_string())
 }
 
-fn api_url(public_api: Option<&str>, domain: &str, secure: bool) -> Result<Url, ApiError> {
+pub(crate) fn api_url(
+    public_api: Option<&str>,
+    domain: &str,
+    secure: bool,
+) -> Result<Url, ApiError> {
     let configured = match public_api {
         Some(value) => value.to_owned(),
         None => {

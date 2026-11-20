@@ -5,12 +5,16 @@ use crate::{
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     state::AppState,
+    utils::fork::upload::upload_id_map,
 };
 use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use flow_like::a2ui::widget::Widget;
+use flow_like::{
+    a2ui::widget::Widget,
+    app::remap::{ForkIdMap, remap_widget_json},
+};
 use flow_like_types::create_id;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
@@ -23,6 +27,34 @@ use utoipa::ToSchema;
 pub struct WidgetUpsert {
     #[schema(value_type = Object)]
     pub widget: Widget,
+}
+
+/// The widget an upload pushed, moved into the upload's id space together with the nodes,
+/// pages, widgets and events it names.
+fn rekey_uploaded_widget(
+    widget: Widget,
+    app_id: &str,
+    maps: &ForkIdMap,
+) -> Result<Widget, ApiError> {
+    let new_widget_id = maps.mint(&widget.id);
+    let mut document = serde_json::to_value(&widget)
+        .map_err(|e| ApiError::internal(format!("serialize uploaded widget {}: {e}", widget.id)))?;
+    let unrewritten = remap_widget_json(&mut document, maps);
+    if !unrewritten.is_empty() {
+        tracing::warn!(
+            app_id = %app_id,
+            widget_id = %new_widget_id,
+            payloads = ?unrewritten,
+            "uploaded widget has payloads that could not be re-keyed; they keep the local ids"
+        );
+    }
+    let mut widget: Widget = serde_json::from_value(document).map_err(|e| {
+        ApiError::bad_request(format!(
+            "uploaded widget {new_widget_id} could not be read back after re-keying its ids: {e}"
+        ))
+    })?;
+    widget.id = new_widget_id;
+    Ok(widget)
 }
 
 /// Mirrors the widget's name onto its English meta row so a rename made through
@@ -118,7 +150,11 @@ pub async fn upsert_widget(
         .await?;
 
     let mut widget = widget_data.widget;
-    widget.id = widget_id.clone();
+    widget.id = widget_id;
+    if let Some(maps) = upload_id_map(&state, &app_id).await? {
+        widget = rekey_uploaded_widget(widget, &app_id, &maps)?;
+    }
+    let widget_id = widget.id.clone();
 
     app.save_widget(&widget).await?;
 

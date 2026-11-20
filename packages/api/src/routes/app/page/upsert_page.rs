@@ -6,16 +6,20 @@ use crate::{
     permission::role_permission::RolePermissions,
     routes::app::board::sink_rebind::{rebind_latest_sinks, try_rebind_latest_sinks},
     state::AppState,
+    utils::fork::upload::upload_id_map,
 };
 use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use flow_like::a2ui::{
-    page_targets::{RetargetedAction, retarget_page_workflow_actions},
-    widget::Page,
+use flow_like::{
+    a2ui::{
+        page_targets::{RetargetedAction, retarget_page_workflow_actions},
+        widget::Page,
+    },
+    app::remap::{ForkIdMap, remap_page},
 };
-use flow_like_types::anyhow;
+use flow_like_types::{anyhow, proto};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -34,6 +38,23 @@ fn payload_revision(page: &Page) -> chrono::DateTime<chrono::FixedOffset> {
     let stamped: chrono::DateTime<chrono::Utc> = page.updated_at.into();
     let ceiling = chrono::Utc::now() + chrono::Duration::minutes(5);
     stamped.min(ceiling).fixed_offset()
+}
+
+/// The page an upload pushed, moved into the upload's id space together with its board and the
+/// nodes, pages, widgets and events it names.
+fn rekey_uploaded_page(page: Page, app_id: &str, maps: &ForkIdMap) -> Page {
+    let new_page_id = maps.mint(&page.id);
+    let mut proto = proto::Page::from(page);
+    let unrewritten = remap_page(&mut proto, &new_page_id, maps);
+    if !unrewritten.is_empty() {
+        tracing::warn!(
+            app_id = %app_id,
+            page_id = %new_page_id,
+            payloads = ?unrewritten,
+            "uploaded page has payloads that could not be re-keyed; they keep the local ids"
+        );
+    }
+    Page::from(proto)
 }
 
 #[utoipa::path(
@@ -72,7 +93,11 @@ pub async fn upsert_page(
     }
 
     let mut page = page_data.page;
-    page.id = page_id.clone();
+    page.id = page_id;
+    if let Some(maps) = upload_id_map(&state, &app_id).await? {
+        page = rekey_uploaded_page(page, &app_id, &maps);
+    }
+    let page_id = page.id.clone();
 
     // Pages are owned by a board on disk; the path is
     // `apps/{app}/_{board_id}/{page_id}.page`. Without a board id we

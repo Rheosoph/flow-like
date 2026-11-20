@@ -3,8 +3,13 @@ import type {
 	ICreateBotTaskRequest,
 } from "../../state/backend-state/bot-state";
 
-/** Tasks a bot keeps; the server enforces it. */
+/** Tasks a bot keeps, its calendar events apart; the server enforces it. */
 export const MAX_BOT_TASKS = 50;
+
+/** Event tasks are the bot's calendar: the Calendar tab shows them, task lists leave them out. */
+export function scheduledTasks(tasks: readonly IBotTask[]): IBotTask[] {
+	return tasks.filter((task) => task.kind !== "event");
+}
 
 export type TaskDraft = {
 	monitoring?: boolean;

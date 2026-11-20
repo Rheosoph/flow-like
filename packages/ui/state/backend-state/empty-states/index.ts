@@ -4,6 +4,7 @@ export * from "./api-state";
 export * from "./app-state";
 export * from "./bit-state";
 export * from "./board-state";
+export * from "./data-source-state";
 export * from "./event-state";
 export * from "./helper-state";
 export * from "./locked-storage-state";

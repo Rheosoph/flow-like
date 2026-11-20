@@ -146,6 +146,7 @@ fn bots_serialize_like_the_api_plus_local() {
         sorted_keys(&wire),
         [
             "appearance",
+            "calendar_wake",
             "capabilities",
             "classification",
             "created_at",
@@ -790,6 +791,7 @@ fn flowpilot_stays_with_the_bots_that_hold_it() {
         classification: Default::default(),
         capabilities: vec![BotCapability::Flowpilot],
         profile_id: None,
+        calendar_wake: Default::default(),
     };
     for capabilities in [json!([]), json!(["flowpilot", "internet"])] {
         let error = crate::validation::apply_patch(

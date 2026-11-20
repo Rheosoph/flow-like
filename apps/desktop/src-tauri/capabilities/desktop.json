@@ -126,6 +126,10 @@
     "fs:read-all",
     "opener:default",
     {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "webcal://*" }]
+    },
+    {
       "identifier": "opener:allow-open-path",
       "allow": [{ "path": "*" }, { "path": "**/*" }]
     },

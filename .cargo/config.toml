@@ -67,3 +67,8 @@ bits = "run --package bit-cli --"
 #   `.cargo/fast-compile.toml` opts into Clang + LLD when installed;
 # - Windows keeps the MSVC-compatible default. The desktop binary's required
 #   stack reservation is emitted only for that binary by its build script.
+
+# Signs flow-like-desktop with a stable identity before `cargo run`/`tauri dev` start it,
+# so the keychain keeps "Always Allow" across rebuilds. Other binaries run unchanged.
+[target.'cfg(target_os = "macos")']
+runner = "tools/macos-cargo-runner.sh"

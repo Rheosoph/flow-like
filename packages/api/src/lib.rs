@@ -38,6 +38,7 @@ pub mod alerting;
 pub mod audit;
 mod bit_pricing;
 pub(crate) mod bot_app_gate;
+pub mod bot_calendar_feed;
 pub(crate) mod bot_caller;
 pub(crate) mod bot_flow;
 pub mod bot_host;
@@ -57,6 +58,7 @@ pub(crate) mod upload_lifecycle;
 #[cfg(feature = "cosmos")]
 pub(crate) use flow_like_azure_data::cosmos;
 pub mod credentials;
+pub mod data_source_secrets;
 pub mod db;
 pub mod deletion;
 pub(crate) mod devices;
@@ -74,6 +76,7 @@ pub mod payments;
 pub mod permission;
 pub mod publication;
 pub mod push_notifications;
+pub mod query;
 pub mod quota;
 #[cfg(test)]
 mod quota_integration_tests;
@@ -209,6 +212,10 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .nest("/user", routes::user::routes())
         .nest("/profile", routes::profile::routes())
         .nest("/bots", routes::bots::routes())
+        .nest(
+            "/calendar-feeds",
+            routes::bots::calendar_feed::public_routes(),
+        )
         .nest("/inbox", routes::inbox::routes())
         .nest("/meetings", routes::meetings::routes())
         .nest("/apps", routes::app::routes())
