@@ -459,6 +459,8 @@ pub async fn global_chat(
     // The message this window wrote to the bot's inbox: the reply is stored there as the bot and
     // the bot's memory reads and extends that conversation.
     interactive: Option<crate::bot_host::interactive::InteractiveArgs>,
+    // The person asked to compact the conversation: the turn folds its older messages first.
+    compact_context: Option<bool>,
 ) -> Result<UnifiedCopilotResponse, String> {
     let mut finish = None;
     let mut bot_memory = None;
@@ -568,6 +570,7 @@ pub async fn global_chat(
             legacy_memory_read_only,
             legacy_memory_allowed,
             bot_turn_id,
+            compaction_requested: compact_context.unwrap_or(false),
             ..Default::default()
         },
         bot_id,
@@ -730,6 +733,7 @@ pub async fn global_chat_native(
     let seed_taint = options.seed_taint;
     let shared_context = options.shared_context.take();
     let suppress_owner_notifications = options.suppress_owner_notifications;
+    let compaction_requested = options.compaction_requested;
     let legacy_memory_allowed = allows_legacy_owner_memory(
         options.legacy_memory_allowed,
         bot_memory.as_ref().map(|source| source.use_owner_memory),
@@ -873,7 +877,9 @@ pub async fn global_chat_native(
             context.host_tools = std::mem::take(&mut context.host_tools).with_reply_files(files);
         }
         if let Some(key) = conversation_key {
-            context.host_tools = std::mem::take(&mut context.host_tools).with_conversation_key(key);
+            context.host_tools = std::mem::take(&mut context.host_tools)
+                .with_conversation_key(key)
+                .with_compaction_requested(compaction_requested);
         }
         std::sync::Arc::make_mut(&mut bot.context).recovery = recovery.map(Into::into);
         std::sync::Arc::make_mut(&mut bot.context).acknowledgement = acknowledgement;

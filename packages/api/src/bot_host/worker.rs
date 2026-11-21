@@ -444,12 +444,16 @@ async fn turn_requester(
     kind: ConversationKind,
     addressed: bool,
     reactions: Vec<flow_like::flow::copilot::ReactionNote>,
+    talking_with: Option<&str>,
 ) -> Result<flow_like::flow::copilot::TurnRequester, ApiError> {
     let requester_id = turn
         .requester_id
         .clone()
         .unwrap_or_else(|| turn.owner_id.clone());
-    let ids = [requester_id.as_str(), turn.owner_id.as_str()];
+    let ids: Vec<&str> = [requester_id.as_str(), turn.owner_id.as_str()]
+        .into_iter()
+        .chain(talking_with)
+        .collect();
     let names = history::sender_names(db, &ids).await?;
     Ok(flow_like::flow::copilot::TurnRequester {
         requester_name: names.get(&requester_id).cloned(),
@@ -460,6 +464,9 @@ async fn turn_requester(
         room: room.map(str::to_string),
         addressed,
         reactions,
+        talking_with: talking_with.map(|partner| {
+            flow_like::flow::copilot::TalkingWith::of(partner, &turn.bot_id, &names)
+        }),
     })
 }
 
@@ -1075,6 +1082,7 @@ async fn attempt_with(
         kind,
         addressed,
         reactions,
+        transcript.talking_with.as_deref(),
     )
     .await?;
     if let Some(saved) = &checkpoint {

@@ -796,6 +796,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 					onSubmit={handleSubmit}
 					className="relative"
 					data-fl-chat-composer
+					data-guide="chat-composer"
 				>
 					{mentionPicker.menu}
 					{compact ? (

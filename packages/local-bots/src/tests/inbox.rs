@@ -1348,3 +1348,38 @@ fn the_public_send_refuses_triggers_and_activity_but_the_runtime_path_takes_them
             .is_err()
     );
 }
+
+#[test]
+fn a_bots_at_name_for_another_bot_becomes_a_mention() {
+    let f = fixture();
+    let (tiro, story) = (f.bot("Tiro"), f.bot("Story"));
+    let room = f.group(&[&tiro, &story]);
+    let named = f
+        .send(
+            &room.id,
+            &tiro.id,
+            "named",
+            "message",
+            json!({ "text": "@story: bitte als v2 ablegen. `@Tiro` @Tiro" }),
+        )
+        .unwrap();
+    assert_eq!(named.envelope["body"]["mentions"], json!([story.id]));
+    for (sender, message_id, text) in [
+        (tiro.id.as_str(), "bare", "Story, bitte ablegen"),
+        (LOCAL_OWNER_ID, "person", "@Story danke"),
+    ] {
+        let sent = f
+            .send(
+                &room.id,
+                sender,
+                message_id,
+                "message",
+                json!({ "text": text }),
+            )
+            .unwrap();
+        assert!(
+            sent.envelope["body"].get("mentions").is_none(),
+            "{message_id}"
+        );
+    }
+}

@@ -72,16 +72,20 @@ export function configureOAuthSession(
 		if (sessionResolver === resolver) sessionResolver = previous;
 	};
 }
-function currentSessionKey(): string | undefined {
+function currentSession(): OAuthSession | undefined {
 	const session = sessionResolver();
-	return session?.subject ? oauthSessionKey(session) : undefined;
+	return session?.subject || session?.local ? session : undefined;
+}
+function currentSessionKey(): string | undefined {
+	const session = currentSession();
+	return session ? oauthSessionKey(session) : undefined;
 }
 function bindingFor(
 	providerId: string,
 	provider?: IOAuthProvider,
 ): IOAuthBinding | undefined {
-	const session = sessionResolver();
-	if (!session?.subject) return undefined;
+	const session = currentSession();
+	if (!session) return undefined;
 	const key = JSON.stringify([oauthSessionKey(session), providerId]);
 	if (provider) bindings.set(key, oauthBinding(session, provider));
 	return bindings.get(key);

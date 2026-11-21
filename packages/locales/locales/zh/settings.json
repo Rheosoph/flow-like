@@ -1725,6 +1725,7 @@
 	"operate": "运维",
 	"operationsViewHealthSurfacesAndActivity": "运维视图 — 健康状态、界面与活动",
 	"optimizedTable": "",
+	"optimizedTablePruned": "",
 	"optimizeFailedMessage": "",
 	"optinOnlySharesAggregateCountersAndSanitizedPagePathsMdashNeverPromptsBoardContentNamesOrAnyPersonalDataUsageEventsMayBeSampledSoOnlyAShareOfPageViewsIsRecorded": "仅限主动选择加入。仅共享汇总计数和已脱敏的页面路径 — 绝不包含提示词、画布内容、姓名或任何个人数据。使用事件可能会被抽样，因此仅记录部分页面浏览量。",
 	"optional": "",

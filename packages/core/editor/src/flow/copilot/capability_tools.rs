@@ -411,6 +411,7 @@ pub struct HostTools {
     trail: Option<ToolTrail>,
     reply_files: Option<ReplyFiles>,
     conversation_key: Option<String>,
+    compaction_requested: bool,
 }
 
 impl HostTools {
@@ -511,6 +512,17 @@ impl HostTools {
 
     pub fn conversation_key(&self) -> Option<&String> {
         self.conversation_key.as_ref()
+    }
+
+    /// The person asked to compact the conversation: before its first request, the turn folds
+    /// the older messages of the conversation [`Self::with_conversation_key`] names.
+    pub fn with_compaction_requested(mut self, requested: bool) -> Self {
+        self.compaction_requested = requested;
+        self
+    }
+
+    pub fn compaction_requested(&self) -> bool {
+        self.compaction_requested
     }
 
     /// The languages `code_run` runs on this host (`ToolEnv::code_languages`). None: the host

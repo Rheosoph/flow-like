@@ -103,6 +103,8 @@ pub struct NativeRunOptions {
     pub bot_turn_id: Option<String>,
     /// A headless live-call turn's reply as the model writes it, for the call on this computer.
     pub reply_stream: Option<flow_like::flow::copilot::reply_stream::ReplySink>,
+    /// The person asked to compact the conversation before this reply.
+    pub compaction_requested: bool,
 }
 
 impl NativeRunOptions {

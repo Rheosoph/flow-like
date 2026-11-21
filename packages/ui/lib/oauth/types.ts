@@ -77,7 +77,9 @@ export interface IStoredOAuthToken extends IOAuthToken {
 export interface IOAuthBinding {
 	sessionKey: string;
 	providerKey: string;
+	/** The Hub that proxies this provider's secret; it owns the grant only when `local` is unset. */
 	apiBaseUrl: string;
+	local?: true;
 }
 
 /**

@@ -10,7 +10,7 @@ import {
 	getOAuthTokensForProviders,
 	storedTokenToBackendFormat,
 } from "./helpers";
-import type { OAuthSession } from "./scope";
+import { type OAuthSession, localOAuthSession } from "./scope";
 import { OAuthRefreshError, createOAuthService } from "./service";
 import type { IOAuthProvider, IOAuthRuntime, IStoredOAuthToken } from "./types";
 
@@ -27,7 +27,7 @@ const provider: IOAuthProvider = {
 	device_auth_url: "https://provider.test/device",
 };
 let session: OAuthSession | undefined;
-let calls: Array<{ url: string; body: string }>;
+let calls: Array<{ url: string; body: string; binding?: unknown }>;
 let transport: IOAuthRuntime["httpPost"];
 let runtime: IOAuthRuntime;
 function response(body: unknown, status = 200) {
@@ -85,7 +85,7 @@ beforeEach(async () => {
 	runtime = {
 		openUrl: async () => {},
 		httpPost: async (url, body, headers, binding) => {
-			calls.push({ url, body });
+			calls.push({ url, body, binding });
 			return transport(url, body, headers, binding);
 		},
 		httpGet: async () => response({}),
@@ -168,6 +168,91 @@ describe("OAuth credential ownership", () => {
 			client_id: "replacement",
 		});
 		expect(await oauthTokenStore.consumePendingAuth(state)).toBeUndefined();
+	});
+});
+
+describe("signed out of the Hub", () => {
+	const direct = { ...provider, requires_secret_proxy: false };
+	const rawGrant = () =>
+		response({
+			access_token: "local-access",
+			refresh_token: "provider-refresh",
+			expires_in: 3600,
+			scope: "read",
+		});
+	beforeEach(() => {
+		session = localOAuthSession("https://hub.test", "profile-a");
+		transport = async () => rawGrant();
+	});
+	it("keeps local grants apart from Hub accounts and other profiles", async () => {
+		const local = session;
+		const token = await seed({ refresh_token: "provider-refresh" });
+		expect(token.binding?.local).toBe(true);
+		for (const other of [
+			{
+				hub: "https://hub.test",
+				subject: "",
+				issuer: "",
+				profileId: "profile-a",
+			},
+			localOAuthSession("https://hub.test", "profile-b"),
+			{
+				hub: "https://hub.test",
+				subject: "user",
+				issuer: "https://issuer.test",
+			},
+		]) {
+			session = other;
+			expect(
+				await oauthTokenStore.getToken(provider.id, provider),
+			).toBeUndefined();
+		}
+		await expect(oauthTokenStore.setToken(token)).rejects.toThrow("changed");
+		session = local;
+		expect(
+			(await oauthTokenStore.getToken(provider.id, provider))?.access_token,
+		).toBe("old-access");
+	});
+	it("redeems a public client with the provider and never stores a Hub connection", async () => {
+		const auth = service();
+		const { state } = await auth.startAuthorization(direct);
+		const token = await auth.handleCallback(
+			`https://flow-like.com/thirdparty/callback?state=${state}&code=code`,
+			direct,
+		);
+		expect(calls.map((c) => c.url)).toEqual([direct.token_url]);
+		expect(calls[0]?.binding).toBeUndefined();
+		expect(token.refresh_token).toBe("provider-refresh");
+		expect(storedTokenToBackendFormat(token)).toMatchObject({
+			hub_origin: undefined,
+			hub_subject: undefined,
+			refresh_token: "provider-refresh",
+		});
+	});
+	it("uses the Hub only as the secret proxy, without an account", async () => {
+		const auth = service();
+		const { state } = await auth.startAuthorization(provider);
+		const token = await auth.handleCallback(
+			`https://flow-like.com/thirdparty/callback?state=${state}&code=code`,
+			provider,
+		);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.url).toBe("https://hub.test/api/v1/oauth/token/example");
+		expect(calls[0]?.binding).toBeUndefined();
+		expect(token.refresh_token).toBe("provider-refresh");
+		await auth.refreshToken(
+			provider,
+			await seed({ refresh_token: "provider-refresh" }),
+		);
+		expect(calls[1]?.url).toBe("https://hub.test/api/v1/oauth/refresh/example");
+		expect(calls[1]?.binding).toBeUndefined();
+	});
+	it("refreshes a public client's local grant with the provider", async () => {
+		const token = await seed({ refresh_token: "provider-refresh" });
+		const refreshed = await service().refreshToken(direct, token);
+		expect(calls.map((c) => c.url)).toEqual([direct.token_url]);
+		expect(calls[0]?.binding).toBeUndefined();
+		expect(refreshed.access_token).toBe("local-access");
 	});
 });
 
@@ -342,6 +427,54 @@ describe("authorization and revocation", () => {
 		expect(token.refresh_token).toBe("fl_oauth_adopted");
 		expect(token.scopes).toEqual([]);
 		expect(JSON.parse(calls[1]!.body).client_id).toBe(provider.client_id);
+	});
+	it("records offline_access from the refresh token, which Entra never lists in scope", async () => {
+		const microsoft = { ...provider, scopes: ["openid", "offline_access"] };
+		const auth = service();
+		const granted = async (refresh_token?: string) => {
+			transport = async () =>
+				response({
+					access_token: "graph",
+					refresh_token,
+					expires_in: 3600,
+					scope: "openid Calendars.ReadWrite",
+				});
+			const { state } = await auth.startAuthorization(microsoft);
+			const token = await auth.handleCallback(
+				`https://flow-like.com/thirdparty/callback?state=${state}&code=code`,
+				microsoft,
+			);
+			return token.scopes;
+		};
+		expect(await granted("fl_oauth_connection")).toEqual([
+			"openid",
+			"Calendars.ReadWrite",
+			"offline_access",
+		]);
+		expect(await granted()).toEqual(["openid", "Calendars.ReadWrite"]);
+	});
+	it("reports the provider's reason when the Hub cannot redeem a code", async () => {
+		const auth = service();
+		const { state } = await auth.startAuthorization(provider);
+		transport = async () =>
+			response(
+				{
+					error: "oauth_proxy_error",
+					error_description:
+						"Token exchange failed: invalid_request - AADSTS9002327: Tokens issued for the 'Single-Page Application' client-type may only be redeemed via cross-origin requests.\r\nTrace ID: abc",
+				},
+				400,
+			);
+		const failure = await auth
+			.handleCallback(
+				`https://flow-like.com/thirdparty/callback?state=${state}&code=code`,
+				provider,
+			)
+			.catch((error: Error) => error);
+		expect(failure).toBeInstanceOf(Error);
+		expect((failure as Error).message).toBe(
+			"Token exchange failed: 400 - invalid_request - AADSTS9002327: Tokens issued for the 'Single-Page Application' client-type may only be redeemed via cross-origin requests. Trace ID: abc",
+		);
 	});
 	it("rejects unexpected callback destinations without consuming pending state", async () => {
 		const auth = service();

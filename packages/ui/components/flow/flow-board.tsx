@@ -288,6 +288,7 @@ import {
 	modulePathLabel,
 } from "../../lib/flow-modules";
 import { onFlowScriptNamesTableLoaded } from "../../lib/flowscript/names";
+import { emitGuideEvent } from "../../lib/guide/guide-events";
 import { toastError, toastSuccess, toastWarning } from "../../lib/messages";
 import { useNodeSuggestionEngine } from "../../lib/node-suggestions/engine";
 import { plainTextFromRichContent } from "../../lib/plate-text";
@@ -1695,6 +1696,7 @@ function FlowBoardContent({
 	);
 	const announceRunOutcome = useCallback(
 		(runId: string, status: "ok" | "error", executed?: number) => {
+			emitGuideEvent("board:run-finished");
 			if (!runId) return;
 			broadcastRunOutcome(runId, status, executed ?? runExecutedCount(runId));
 		},
@@ -2308,6 +2310,7 @@ function FlowBoardContent({
 			let added = false;
 			let runId = "";
 			let meta: ILogMetadata | undefined = undefined;
+			emitGuideEvent("board:run-started");
 			try {
 				meta = await backend.boardState.executeBoard(
 					appId,
@@ -2446,6 +2449,7 @@ function FlowBoardContent({
 				);
 				return;
 			}
+			emitGuideEvent("board:run-started");
 
 			let added = false;
 			let runId = "";
@@ -6154,6 +6158,7 @@ function FlowBoardContent({
 					// restore on the way back. `visibility` keeps it measured and inert.
 					<div
 						ref={denAnchorRef}
+						data-guide="board-canvas"
 						className="relative flex h-full min-h-0 flex-col"
 						{...boardDenProps}
 					>

@@ -342,19 +342,25 @@ impl Database<'_> {
             )
             .await
             .map_err(err)?,
-            "optimize" => tables::db_optimize(
-                app,
-                id,
-                table,
-                None,
-                payload["keep_versions"].as_bool(),
-                user,
-                sub,
-                None,
-                token,
-            )
-            .await
-            .map_err(err)?,
+            "optimize" => {
+                return serde_json::to_value(
+                    tables::db_optimize(
+                        app,
+                        id,
+                        table,
+                        None,
+                        payload["keep_versions"].as_bool(),
+                        payload["older_than_days"].as_u64(),
+                        user,
+                        sub,
+                        None,
+                        token,
+                    )
+                    .await
+                    .map_err(err)?,
+                )
+                .map_err(err);
+            }
             "add_column" => tables::db_add_column(
                 app,
                 id,

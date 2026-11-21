@@ -28,6 +28,8 @@ pub mod bot_skill;
 #[cfg(feature = "bot-task")]
 pub mod bot_calendar;
 #[cfg(feature = "inbox")]
+pub mod bot_mentions;
+#[cfg(feature = "inbox")]
 pub mod bot_message;
 #[cfg(feature = "inbox")]
 pub mod bot_notes;

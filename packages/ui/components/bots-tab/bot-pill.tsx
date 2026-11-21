@@ -97,6 +97,7 @@ export function BotPill({
 		<button
 			type="button"
 			data-slot="bot-pill"
+			data-guide="bot-pill"
 			aria-expanded={expanded}
 			aria-controls={expanded ? controls : undefined}
 			title={hint}

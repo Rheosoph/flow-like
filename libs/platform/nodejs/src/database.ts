@@ -345,16 +345,25 @@ export function createDatabaseMethods(http: HttpClient) {
 				{ query: { ...options } },
 			);
 		},
+		/** Resolves to the removed-version counts when `keep_versions` is false, else null. */
 		async optimizeTable(
 			appId: string,
 			table: string,
-			options: DatabaseOptions & { keep_versions?: boolean } = {},
-		): Promise<void> {
-			await http.request(
+			options: DatabaseOptions & {
+				keep_versions?: boolean;
+				older_than_days?: number;
+			} = {},
+		): Promise<JsonObject | null> {
+			return http.request<JsonObject | null>(
 				"POST",
 				`${appPath(appId)}/db/${segment(table)}/optimize`,
 				{
-					body: { keep_versions: options.keep_versions ?? true },
+					body: {
+						keep_versions: options.keep_versions ?? true,
+						...(options.older_than_days === undefined
+							? {}
+							: { older_than_days: options.older_than_days }),
+					},
 					query: {
 						scope: options.scope,
 						branch: options.branch,

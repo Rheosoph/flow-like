@@ -5,19 +5,18 @@ import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/utils";
 import { FloatingOrbs } from "./flow-background";
 
+interface EmptyStateAction {
+	label: string;
+	onClick: () => void;
+	/** `data-guide` id, so a guide tour can point at the button. */
+	guide?: string;
+}
+
 interface EmptyStateProps {
 	title: string;
 	description: string;
 	icons?: LucideIcon[];
-	action?:
-		| {
-				label: string;
-				onClick: () => void;
-		  }
-		| {
-				label: string;
-				onClick: () => void;
-		  }[];
+	action?: EmptyStateAction | EmptyStateAction[];
 	className?: string;
 }
 
@@ -85,6 +84,7 @@ export function EmptyState({
 				<Button
 					onClick={action.onClick}
 					variant="outline"
+					data-guide={action.guide}
 					className={cn("relative z-10 mt-4", "shadow-sm active:shadow-none")}
 				>
 					{action.label}
@@ -98,6 +98,7 @@ export function EmptyState({
 							key={a.label}
 							onClick={a.onClick}
 							variant="outline"
+							data-guide={a.guide}
 							className={cn("shadow-sm active:shadow-none")}
 						>
 							{a.label}

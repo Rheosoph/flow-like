@@ -35,6 +35,8 @@ export function UsageEfficiencyPanel({ data }: { data: UsageEfficiency }) {
 		if (status === "reused") return t("usageEfficiency.reused", "Reused");
 		if (status === "stale") return t("usageEfficiency.stale", "Superseded");
 		if (status === "busy") return t("usageEfficiency.deferred", "Deferred");
+		if (status === "skipped")
+			return t("usageEfficiency.skipped", "Nothing to compact");
 		return t("usageEfficiency.pending", "Pending");
 	};
 	const triggerLabel = (trigger: string) => {

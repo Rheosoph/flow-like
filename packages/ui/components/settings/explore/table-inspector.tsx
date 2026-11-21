@@ -270,16 +270,25 @@ function TableInspectorData({
 	]);
 
 	const handleOptimize = useCallback(
-		async (keepVersions = true) => {
+		async (keepVersions = true, olderThanDays?: number) => {
 			try {
-				await backend.dbState.optimize(
+				const cleanup = await backend.dbState.optimize(
 					appId,
 					table,
 					keepVersions,
 					userScoped,
 					selector,
+					olderThanDays,
 				);
-				toast.success(t("optimizedTable", "Optimized table"));
+				toast.success(
+					cleanup
+						? t(
+								"optimizedTablePruned",
+								"Optimized table. Old versions removed: {{versions}}",
+								{ versions: cleanup.old_versions },
+							)
+						: t("optimizedTable", "Optimized table"),
+				);
 				handleRefresh();
 			} catch (err) {
 				toast.error(

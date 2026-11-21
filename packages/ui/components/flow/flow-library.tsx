@@ -24,11 +24,18 @@ import {
 	WorkflowIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { type ReactNode, useCallback, useRef, useState } from "react";
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
 import { cn, formatRelativeTime } from "../../lib";
 import { getErrorMessage } from "../../lib/error-message";
+import { emitGuideEvent } from "../../lib/guide/guide-events";
 import { asArray } from "../../lib/response-shape";
 import { IExecutionMode } from "../../lib/schema/flow/board";
 import type { IBoardSummary } from "../../lib/schema/flow/board-summary";
@@ -279,6 +286,7 @@ function useBoardCreationSubmit(
 		try {
 			await onCreateBoard(draftBoardId.current);
 			draftBoardId.current = null;
+			emitGuideEvent("flows:board-created");
 		} catch (error) {
 			toast.error(
 				t("common:templateFlowCreateFailed", {
@@ -315,10 +323,15 @@ export function FlowLibraryCreateDialog({
 		[discardDraft, setBoardCreation],
 	);
 
+	useEffect(() => {
+		if (boardCreation.open) emitGuideEvent("flows:create-opened");
+	}, [boardCreation.open]);
+
 	return (
 		<Dialog open={boardCreation.open} onOpenChange={handleOpenChange}>
 			<DialogTrigger asChild>
 				<Button
+					data-guide="flows-create"
 					size="lg"
 					className="gap-2 shadow-lg hover:shadow-xl transition-all duration-200 bg-linear-to-r from-primary to-primary/80"
 				>
@@ -387,6 +400,7 @@ export function FlowLibraryCreateDialog({
 						onClick={submit}
 						disabled={creating}
 						aria-busy={creating}
+						data-guide="flows-create-submit"
 						className="gap-2 bg-linear-to-r from-primary to-primary/80"
 					>
 						{creating ? (

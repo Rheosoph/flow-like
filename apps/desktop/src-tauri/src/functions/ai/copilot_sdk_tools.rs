@@ -1047,9 +1047,11 @@ fn global_assistant_specs_for_bot(
 ) -> Vec<PlatformToolSpec> {
     let mut specs = global_assistant_tool_specs(memory_enabled);
     match bot {
-        Some(bot) => specs.extend(bot.tool_specs(memory_enabled).into_iter().filter(|spec| {
-            flow_like_bot_tools::configuration::is_settings_tool(spec.name)
-        })),
+        Some(bot) => specs.extend(
+            bot.tool_specs(memory_enabled)
+                .into_iter()
+                .filter(|spec| flow_like_bot_tools::configuration::is_settings_tool(spec.name)),
+        ),
         None => specs.extend(flow_like::flow::copilot::tool_spec::flowpilot_file_tool_specs()),
     }
     specs
@@ -4500,6 +4502,7 @@ mod tests {
             room: None,
             addressed: true,
             reactions: Vec::new(),
+            talking_with: None,
         });
         assert!(names(Some(&bot)).is_empty());
     }

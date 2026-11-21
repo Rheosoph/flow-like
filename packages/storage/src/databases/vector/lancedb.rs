@@ -793,13 +793,7 @@ impl LanceDBVectorStore {
     pub async fn cleanup_versions(&self, older_than_days: u64) -> Result<DatabaseCleanupStats> {
         self.ensure_unmanaged("version cleanup")?;
         self.ensure_writable()?;
-        if older_than_days == 0 {
-            return Err(anyhow!("Version retention must be at least one day"));
-        }
-        let days =
-            i64::try_from(older_than_days).map_err(|_| anyhow!("Retention period is too large"))?;
-        let retention =
-            Duration::try_days(days).ok_or_else(|| anyhow!("Retention period is too large"))?;
+        let retention = retention_days(older_than_days)?;
         let stats = self
             .raw()
             .await?
@@ -818,6 +812,15 @@ impl LanceDBVectorStore {
             index_files_removed: stats.index_files_removed,
             deletion_files_removed: stats.deletion_files_removed,
         })
+    }
+
+    /// Compact and update indices, then remove history older than `older_than_days` as
+    /// [`Self::cleanup_versions`] does. The retention is checked before any maintenance runs.
+    pub async fn optimize_and_cleanup(&self, older_than_days: u64) -> Result<DatabaseCleanupStats> {
+        retention_days(older_than_days)?;
+        self.run_optimize_actions(optimize_actions(true), false)
+            .await?;
+        self.cleanup_versions(older_than_days).await
     }
 
     /// A shallow clone shares source files. Its retained source tag protects cleanup.
@@ -2061,6 +2064,15 @@ fn index_for_column(selection: Option<&str>, data_type: &DataType) -> Index {
         // Preserve the historical fallback for unrecognized saved selections.
         _ => Index::Auto,
     }
+}
+
+fn retention_days(older_than_days: u64) -> Result<Duration> {
+    if older_than_days == 0 {
+        return Err(anyhow!("Version retention must be at least one day"));
+    }
+    let days =
+        i64::try_from(older_than_days).map_err(|_| anyhow!("Retention period is too large"))?;
+    Duration::try_days(days).ok_or_else(|| anyhow!("Retention period is too large"))
 }
 
 fn optimize_actions(keep_versions: bool) -> Vec<lancedb::table::OptimizeAction> {

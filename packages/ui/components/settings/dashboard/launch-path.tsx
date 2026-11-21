@@ -362,6 +362,7 @@ export function LaunchPath({
 								>
 									<Link
 										href={`/library/config/flows?id=${appId}`}
+										data-guide="app-new-flow"
 										aria-disabled={!permissions.canWriteBoards}
 										tabIndex={permissions.canWriteBoards ? undefined : -1}
 										className={cn(

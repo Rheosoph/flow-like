@@ -6,6 +6,7 @@ import {
 	BarChart3,
 	BellIcon,
 	ChevronsUpDown,
+	CompassIcon,
 	CreditCard,
 	KeyIcon,
 	LogInIcon,
@@ -18,6 +19,7 @@ import {
 import Link from "next/link";
 import { useHub } from "../../hooks/use-hub";
 import { userInitials } from "../../lib/user-display";
+import { useGuideStore } from "../../state/guide-state";
 import { cn } from "../../lib/utils";
 import { useFlowLikeLegalLinks } from "../legal/legal-links";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
@@ -118,6 +120,7 @@ export function AccountMenu({
 		</>
 	);
 	const itemClass = "min-h-9 gap-2.5 rounded-md px-2.5";
+	const requestWelcome = useGuideStore((state) => state.requestWelcome);
 
 	return (
 		<DropdownMenu>
@@ -222,6 +225,13 @@ export function AccountMenu({
 							<SettingsIcon />
 							{t("settings", "Settings")}
 						</Link>
+					</DropdownMenuItem>
+					<DropdownMenuItem
+						className={itemClass}
+						onSelect={() => requestWelcome()}
+					>
+						<CompassIcon />
+						{t("guide:menu.tour", "Show me around")}
 					</DropdownMenuItem>
 					{signedIn && (
 						<DropdownMenuItem asChild className={itemClass}>

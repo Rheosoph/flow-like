@@ -233,6 +233,30 @@ async fn run_conversation(
     history: Vec<ChatMessage>,
     scope: Option<&str>,
 ) -> (Result<String>, Arc<Bridge>) {
+    run_turn(
+        client,
+        rounds,
+        large_results,
+        surface,
+        images,
+        history,
+        scope,
+        false,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_turn(
+    client: &Client,
+    rounds: usize,
+    large_results: bool,
+    surface: PlatformSurface,
+    images: Option<Vec<ChatImage>>,
+    history: Vec<ChatMessage>,
+    scope: Option<&str>,
+    compact: bool,
+) -> (Result<String>, Arc<Bridge>) {
     let state = Arc::new(FlowLikeState::new(
         FlowLikeConfig::new(),
         HTTPClient::new_without_refetch(),
@@ -249,6 +273,7 @@ async fn run_conversation(
         .with_tool_rounds(rounds)
         .with_long_running()
         .with_conversation_scope(scope.map(str::to_owned))
+        .with_compaction_requested(compact)
         .chat_with_client(
             surface,
             "Help the owner.".into(),
@@ -578,6 +603,14 @@ async fn converse(client: &Client, talk: &[ChatMessage], scope: &str) -> String 
         .unwrap()
 }
 
+async fn converse_compacting(client: &Client, talk: &[ChatMessage], scope: Option<&str>) -> String {
+    let surface = PlatformSurface::Orchestrator;
+    run_turn(client, 4, false, surface, None, talk.to_vec(), scope, true)
+        .await
+        .0
+        .unwrap()
+}
+
 fn reply_request(client: &Client) -> String {
     let requests = client.0.requests.lock().unwrap();
     let reply = requests
@@ -692,6 +725,68 @@ async fn the_next_turn_starts_from_the_summary_the_previous_turn_began() {
     let request = reply_request(&fourth);
     assert!(!request.contains("Earlier part of this conversation, summarized"));
     assert!(request.contains("message-10 was edited"));
+}
+
+#[tokio::test]
+async fn a_requested_compaction_folds_a_conversation_below_every_limit_for_later_turns() {
+    let scope = "requested-compaction";
+    let mut talk = long_talk(6);
+    let untouched = Client::new(vec![text("Plain answer.")]);
+    converse(&untouched, &talk, "requested-compaction-control").await;
+    assert_eq!(
+        checkpoints(&untouched),
+        0,
+        "the conversation is below every limit"
+    );
+
+    let first = Client::new(vec![text("First answer.")]);
+    assert_eq!(
+        converse_compacting(&first, &talk, Some(scope)).await,
+        "First answer."
+    );
+    assert_eq!(checkpoints(&first), 1);
+    let request = reply_request(&first);
+    assert!(request.contains("Earlier part of this conversation, summarized"));
+    assert!(!request.contains("message-0 "));
+    assert!(
+        request.contains("message-5 "),
+        "the newest messages stay word for word"
+    );
+
+    talk.extend(exchange("First answer."));
+    let second = Client::new(vec![text("Second answer.")]);
+    converse(&second, &talk, scope).await;
+    let request = reply_request(&second);
+    assert!(request.contains("Earlier part of this conversation, summarized"));
+    assert!(!request.contains("message-0 "));
+    assert_eq!(checkpoints(&second), 0, "the next turn summarized again");
+}
+
+#[tokio::test]
+async fn a_requested_compaction_without_older_messages_or_conversation_writes_no_summary() {
+    let short = Client::new(vec![text("Short answer.")]);
+    let talk = exchange("Earlier answer.");
+    let answer = converse_compacting(&short, &talk, Some("requested-compaction-short")).await;
+    assert_eq!(answer, "Short answer.");
+    assert_eq!(checkpoints(&short), 0);
+
+    let unscoped = Client::new(vec![text("Unscoped answer.")]);
+    assert_eq!(
+        converse_compacting(&unscoped, &long_talk(6), None).await,
+        "Unscoped answer."
+    );
+    assert_eq!(checkpoints(&unscoped), 0);
+}
+
+#[tokio::test]
+async fn a_failed_requested_compaction_still_answers_from_the_full_conversation() {
+    let mut client = Client::new(vec![text("Answer anyway.")]);
+    client.0.fail_checkpoint = true;
+    let scope = Some("requested-compaction-failed");
+    let answer = converse_compacting(&client, &long_talk(6), scope).await;
+    assert_eq!(answer, "Answer anyway.");
+    assert_eq!(checkpoints(&client), 1);
+    assert!(reply_request(&client).contains("message-0 "));
 }
 
 #[tokio::test]

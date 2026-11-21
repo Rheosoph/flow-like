@@ -827,6 +827,9 @@ impl Inner {
                         room: conversation.title.clone(),
                         addressed: transcript.addressed,
                         reactions,
+                        talking_with: transcript.talking_with.as_deref().map(|partner| {
+                            flow_like::flow::copilot::TalkingWith::of(partner, bot_id, &names)
+                        }),
                     }
                 });
         let grants: Arc<dyn GrantStore> = Arc::new(StoreGrants {
@@ -1098,9 +1101,13 @@ impl Inner {
                     kind: member.kind.as_str().to_owned(),
                 })
                 .collect::<Vec<_>>();
-            if let Ok(request) =
-                participation_request(&job, &waiting.message_id, &oldest_first, &participants)
-            {
+            if let Ok(request) = participation_request(
+                &job,
+                &waiting.message_id,
+                &oldest_first,
+                &participants,
+                &names,
+            ) {
                 if call_utterance && transcript.addressed {
                     let (opener, tool_gate) = tool_gate();
                     job.tool_gate = Some(tool_gate);

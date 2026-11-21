@@ -14,6 +14,7 @@ import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import {
 	type IDatabaseAction,
 	type IDatabaseActionResult,
+	type IDatabaseCleanupStats,
 	type IDatabaseDiff,
 	type IDatabaseHistory,
 	type IDatabaseSelector,
@@ -564,12 +565,13 @@ export class DatabaseState implements IDatabaseState {
 		keepVersions?: boolean,
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
-	): Promise<void> {
+		olderThanDays?: number,
+	): Promise<IDatabaseCleanupStats | null> {
 		const target = await this.tableTarget(appId, tableName, userScoped);
 		if (target === "device") throw managedStructureError();
 
 		if (target === "hub") {
-			return await fetcher(
+			const cleanup = await fetcher<IDatabaseCleanupStats | null>(
 				this.backend.profile!,
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/optimize`,
@@ -578,19 +580,27 @@ export class DatabaseState implements IDatabaseState {
 				),
 				{
 					method: "POST",
-					body: JSON.stringify({ keep_versions: keepVersions ?? true }),
+					body: JSON.stringify({
+						keep_versions: keepVersions ?? true,
+						...(olderThanDays === undefined
+							? {}
+							: { older_than_days: olderThanDays }),
+					}),
 				},
 				this.backend.auth,
 			);
+			return cleanup ?? null;
 		}
 
-		return await invoke("db_optimize", {
+		const cleanup = await invoke<IDatabaseCleanupStats | null>("db_optimize", {
 			appId,
 			tableName,
 			keepVersions: keepVersions ?? true,
+			...(olderThanDays === undefined ? {} : { olderThanDays }),
 			userScoped: userScoped ?? false,
 			...(selector ? { selector } : {}),
 		});
+		return cleanup ?? null;
 	}
 
 	async updateItem(

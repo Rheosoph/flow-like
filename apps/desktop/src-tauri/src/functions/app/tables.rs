@@ -1,7 +1,8 @@
 #![allow(clippy::too_many_arguments)]
 
 use flow_like::flow_like_storage::contracts::database::{
-    DatabaseAction, DatabaseActionResult, DatabaseDiff, DatabaseHistory, DatabaseSelector,
+    DatabaseAction, DatabaseActionResult, DatabaseCleanupStats, DatabaseDiff, DatabaseHistory,
+    DatabaseSelector,
 };
 
 use std::sync::Arc;
@@ -662,11 +663,12 @@ pub async fn db_optimize(
     table_name: String,
     credentials: Option<Arc<SharedCredentials>>,
     keep_versions: Option<bool>,
+    older_than_days: Option<u64>,
     user_scoped: Option<bool>,
     sub: Option<String>,
     selector: Option<DatabaseSelector>,
     token: Option<String>,
-) -> Result<(), TauriFunctionError> {
+) -> Result<Option<DatabaseCleanupStats>, TauriFunctionError> {
     let db = db_connection_inner(
         &app_handle,
         app_id,
@@ -678,8 +680,14 @@ pub async fn db_optimize(
         token,
     )
     .await?;
-    db.optimize(keep_versions.unwrap_or(true)).await?;
-    Ok(())
+    if keep_versions.unwrap_or(true) {
+        db.optimize(true).await?;
+        return Ok(None);
+    }
+    Ok(Some(
+        db.optimize_and_cleanup(older_than_days.unwrap_or(7))
+            .await?,
+    ))
 }
 
 #[tauri::command(async)]

@@ -1725,6 +1725,7 @@
 	"operate": "Betrieb",
 	"operationsViewHealthSurfacesAndActivity": "Betriebsansicht – Status, Oberflächen und Aktivität",
 	"optimizedTable": "Optimierte Tabelle",
+	"optimizedTablePruned": "Tabelle optimiert. Entfernte alte Versionen: {{versions}}",
 	"optimizeFailedMessage": "Optimierung fehlgeschlagen: {{message}}",
 	"optinOnlySharesAggregateCountersAndSanitizedPagePathsMdashNeverPromptsBoardContentNamesOrAnyPersonalDataUsageEventsMayBeSampledSoOnlyAShareOfPageViewsIsRecorded": "Nur nach Zustimmung. Teilt aggregierte Zähler und bereinigte Seitenpfade – niemals Prompts, Board-Inhalte, Namen oder personenbezogene Daten. Nutzungsereignisse können stichprobenartig erfasst werden, sodass nur ein Teil der Seitenaufrufe aufgezeichnet wird.",
 	"optional": "Optional",

@@ -5,13 +5,18 @@ import {
 	calDavCreateRequest,
 	calDavFormReady,
 	caldavPreset,
+	calendarAccountProvider,
+	calendarAccountRequest,
 	chosenCalendar,
+	hasCalendarScope,
 	isCalDavSignInError,
+	isCalendarConnector,
 	isDrifted,
 	normalizeCalDavAddress,
 	normalizeMcpUrl,
 	readsWriteTool,
 	toolPolicy,
+	withCalendarScopes,
 	withToolPolicy,
 } from "./bot-connectors-model";
 
@@ -144,4 +149,55 @@ test("a refused sign-in is recognised in the discovery message", () => {
 		isCalDavSignInError("check user name and (app-specific) password"),
 	).toBe(true);
 	expect(isCalDavSignInError("the server could not be reached")).toBe(false);
+});
+
+test("Google and Microsoft accounts and CalDAV connectors count as calendars", () => {
+	expect(
+		calendarAccountProvider({ kind: "oauth", provider_id: " Google " }),
+	).toBe("google");
+	expect(
+		calendarAccountProvider({ kind: "oauth", provider_id: "microsoft" }),
+	).toBe("microsoft");
+	expect(
+		calendarAccountProvider({ kind: "oauth", provider_id: "github" }),
+	).toBe(null);
+	expect(calendarAccountProvider({ kind: "mcp", provider_id: "google" })).toBe(
+		null,
+	);
+	expect(isCalendarConnector({ kind: "caldav", provider_id: null })).toBe(true);
+	expect(isCalendarConnector({ kind: "oauth", provider_id: "notion" })).toBe(
+		false,
+	);
+});
+
+test("an account's calendar access accepts the full calendar scope", () => {
+	expect(hasCalendarScope("google", ["openid", "email"])).toBe(false);
+	expect(
+		hasCalendarScope("google", ["https://www.googleapis.com/auth/calendar"]),
+	).toBe(true);
+	expect(
+		hasCalendarScope("microsoft", [
+			"https://graph.microsoft.com/Calendars.ReadWrite",
+		]),
+	).toBe(true);
+	expect(hasCalendarScope("microsoft", ["Calendars.Read"])).toBe(false);
+});
+
+test("a calendar account keeps its scopes and adds calendar access once", () => {
+	expect(
+		calendarAccountRequest("google", "Google Calendar", {
+			handle: "fl_oauth_1",
+			scopes: ["email", "https://www.googleapis.com/auth/calendar.events"],
+		}),
+	).toEqual({
+		kind: "oauth",
+		label: "Google Calendar",
+		auth: { type: "oauth", provider_id: "google" },
+		grant: "fl_oauth_1",
+		scopes: ["email", "https://www.googleapis.com/auth/calendar.events"],
+	});
+	expect(withCalendarScopes("microsoft", ["Mail.Read"])).toEqual([
+		"Mail.Read",
+		"Calendars.ReadWrite",
+	]);
 });

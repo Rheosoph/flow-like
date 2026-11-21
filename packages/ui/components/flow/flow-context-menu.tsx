@@ -11,6 +11,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { boardModules } from "../../lib/flow-modules";
+import { emitGuideEvent } from "../../lib/guide/guide-events";
 import type { IBoard } from "../../lib/schema/flow/board";
 import type { INode } from "../../lib/schema/flow/node";
 import { type IPin, IPinType, IVariableType } from "../../lib/schema/flow/pin";
@@ -132,6 +133,7 @@ export function FlowContextMenu({
 		setSession((value) => value + 1);
 		setPoint({ x, y });
 		setOpen(true);
+		emitGuideEvent("board:palette-opened");
 	}, []);
 
 	const close = useCallback(() => {

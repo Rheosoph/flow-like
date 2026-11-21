@@ -4,6 +4,7 @@ import type {
 	ICreateTableResult,
 	IDatabaseAction,
 	IDatabaseActionResult,
+	IDatabaseCleanupStats,
 	IDatabaseDiff,
 	IDatabaseHistory,
 	IDatabaseSchemaField,
@@ -112,7 +113,7 @@ export class EmptyDatabaseState implements IDatabaseState {
 		appId: string,
 		tableName: string,
 		keepVersions?: boolean,
-	): Promise<void> {
+	): Promise<IDatabaseCleanupStats | null> {
 		throw new Error("Method not implemented.");
 	}
 	updateItem(

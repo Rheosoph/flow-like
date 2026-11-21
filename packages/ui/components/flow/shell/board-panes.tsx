@@ -100,7 +100,10 @@ export const BoardPanel = memo(function BoardPanel({
 	const { t } = useTranslation("flow");
 	const [toolbar, setToolbar] = useState<HTMLElement | null>(null);
 	return (
-		<section className="flex h-full min-h-0 flex-col bg-background">
+		<section
+			data-guide={`board-panel-${active}`}
+			className="flex h-full min-h-0 flex-col bg-background"
+		>
 			<div className="flex h-8 shrink-0 items-stretch border-b">
 				{tabs.map((tab) => (
 					<button

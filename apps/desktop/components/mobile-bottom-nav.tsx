@@ -1,6 +1,6 @@
 "use client";
 
-import { cn, useSidebar } from "@flow-like/flow-like-ui";
+import { cn, guideTargetForNav, useSidebar } from "@flow-like/flow-like-ui";
 import { BOTS_ROUTE } from "@flow-like/flow-like-ui/components/bots-tab/dock-selection";
 import {
 	BotsNavBotAvatar,
@@ -51,6 +51,7 @@ function NavCell({
 	return (
 		<Link
 			href={dest.href}
+			data-guide={guideTargetForNav(dest.href)}
 			aria-label={dest.title}
 			aria-current={active ? "page" : undefined}
 			className={cn(
@@ -89,6 +90,7 @@ export function MobileBottomNav() {
 
 				<Link
 					href={bots.href}
+					data-guide={guideTargetForNav(BOTS_ROUTE)}
 					aria-label={t("nav:bots", "Bots")}
 					aria-current={botsActive ? "page" : undefined}
 					className="flex flex-1 flex-col items-center justify-center gap-0.5 outline-none"

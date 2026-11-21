@@ -95,6 +95,7 @@ export function CrewBotCard({
 		>
 			<button
 				type="button"
+				data-guide="crew-bot"
 				aria-current={selected ? "true" : undefined}
 				onClick={() => onSelect(member)}
 				className="flex w-full min-w-0 flex-col items-center gap-2 rounded-2xl px-2.5 pt-3 pb-3.5 text-center outline-none focus-visible:ring-2 focus-visible:ring-ring @max-[520px]/crew:flex-row @max-[520px]/crew:gap-3 @max-[520px]/crew:rounded-xl @max-[520px]/crew:px-3 @max-[520px]/crew:py-2.5 @max-[520px]/crew:pr-10 @max-[520px]/crew:text-left"

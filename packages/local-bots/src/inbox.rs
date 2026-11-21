@@ -818,6 +818,56 @@ fn insert_trigger(
     Ok(entry)
 }
 
+/// The other bots that a bot's message names as `@Name` join its `mentions`, as on an account, so
+/// they wake for it.
+fn name_bots(
+    tx: &Connection,
+    conversation_id: &str,
+    sender_id: &str,
+    envelope: &mut Value,
+) -> Result<()> {
+    let Some(body) = envelope.get_mut("body").and_then(Value::as_object_mut) else {
+        return Ok(());
+    };
+    let Some(text) = body
+        .get("text")
+        .and_then(Value::as_str)
+        .filter(|text| text.contains('@'))
+    else {
+        return Ok(());
+    };
+    let mut names = Vec::new();
+    for member in active_members(tx, conversation_id)? {
+        if member.kind != PrincipalKind::Bot || member.principal_id == sender_id {
+            continue;
+        }
+        if let Some(bot) = crate::bots::stored_bot(tx, &member.principal_id)? {
+            names.push((member.principal_id, bot.display_name().to_owned()));
+        }
+    }
+    let named = flow_like_types::bot_mentions::named_mentions(
+        text,
+        names.iter().map(|(id, name)| (id.as_str(), name.as_str())),
+    );
+    let mut mentions: Vec<String> = body
+        .get("mentions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|id| id.as_str().map(str::to_owned))
+        .collect();
+    let known = mentions.len();
+    for id in named {
+        if !mentions.contains(&id) {
+            mentions.push(id);
+        }
+    }
+    if mentions.len() > known {
+        body.insert("mentions".to_owned(), Value::from(mentions));
+    }
+    Ok(())
+}
+
 fn send_in(
     tx: &Connection,
     changes: &mut Changes,
@@ -860,6 +910,9 @@ fn send_in(
     let at = next_event_time(tx, conversation_id)?;
     let mut envelope = outgoing.envelope.clone();
     user_context::mark_derived(tx, conversation_id, sender_id, outgoing.kind, &mut envelope)?;
+    if outgoing.kind == InboxEntryKind::Message && sender_id != LOCAL_OWNER_ID {
+        name_bots(tx, conversation_id, sender_id, &mut envelope)?;
+    }
     let entry = insert_event(
         tx,
         conversation_id,

@@ -6,6 +6,7 @@ import {
 	CardContent,
 	CardHeader,
 	type ISettingsProfile,
+	useGuideStore,
 } from "@flow-like/flow-like-ui";
 import { i18n as i18next } from "@flow-like/locales";
 import { PartyPopper } from "lucide-react";
@@ -44,10 +45,12 @@ export default function DonePage() {
 		{},
 	);
 
+	const requestWelcome = useGuideStore((state) => state.requestWelcome);
 	const onFinish = useCallback(async () => {
 		await profiles.refetch();
+		requestWelcome();
 		router.push("/");
-	}, [router]);
+	}, [router, requestWelcome]);
 
 	return (
 		<main className="relative min-h-dvh w-full overflow-hidden z-10">

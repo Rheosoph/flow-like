@@ -12,6 +12,7 @@ import {
 } from "../../../../state/backend-state/bot-state";
 import { Label } from "../../../ui/label";
 import { Switch } from "../../../ui/switch";
+import { BotCalendarConnectorsCard } from "../../bot-calendar-connectors";
 import { BotConnectorsCard } from "../../bot-connectors";
 import { BotEmailAddress } from "../../bot-mail";
 import { BotSkillsCard } from "../../bot-skills";
@@ -133,6 +134,7 @@ export function AbilitiesStep({
 			</p>
 		),
 		connectors: <BotConnectorsCard botId={botId} />,
+		calendar: <BotCalendarConnectorsCard botId={botId} localOnly={localOnly} />,
 		skills: botId ? (
 			<BotSkillsCard botId={botId} />
 		) : (

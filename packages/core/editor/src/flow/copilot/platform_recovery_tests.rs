@@ -703,13 +703,13 @@ async fn a_resumed_held_round_runs_the_answered_calls_without_a_model_round() {
     assert_eq!(answer.unwrap(), "Twelve feeds read.");
     assert_eq!(resumed.ran().len(), 12);
     assert!(resumed.batch.card().is_none());
+    assert!(grants.list().await.unwrap().is_empty());
     let requests = client.0.requests.lock().unwrap();
     assert_eq!(requests.len(), 1);
     assert_complete_tool_pairs(&requests[0]);
     let restored = serde_json::to_string(&requests[0]).unwrap();
     assert_eq!(restored.matches("feed of https://site").count(), 12);
     assert!(!restored.contains("outcomes are unknown"));
-    assert!(grants.list().await.unwrap().is_empty());
     assert_eq!(saved(&store).state["recoveries"], 0);
 }
 

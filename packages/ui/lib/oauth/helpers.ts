@@ -3,8 +3,10 @@ import type {
 	IBoard,
 	IExecutionMode,
 	IHub,
+	INode,
 	IOAuthProviderConfig,
 } from "../schema";
+import { hubBinding } from "./scope";
 import { OAuthRefreshError } from "./service";
 import { hasRequiredScopes } from "./token-scopes";
 import type {
@@ -47,6 +49,15 @@ export function buildOAuthProviderFromHub(
 	};
 }
 
+interface OAuthNodeFields {
+	only_offline?: boolean | null;
+	oauth_providers?: string[] | null;
+	required_oauth_scopes?: Record<
+		string,
+		string[] | { values?: string[] }
+	> | null;
+}
+
 /**
  * Extract raw OAuth requirements from a board (provider_id + scopes).
  * Useful for offline apps or when you only need the requirements without hub resolution.
@@ -61,7 +72,7 @@ export function extractOAuthRequirementsFromBoard(board: IBoard): {
 } {
 	const scopesMap = new Map<string, Set<string>>();
 	let requiresLocalExecution = false;
-	const nodes = [
+	const nodes: Array<INode & OAuthNodeFields> = [
 		...Object.values(board.nodes ?? {}),
 		...Object.values(board.layers ?? {}).flatMap((layer) =>
 			Object.values(layer?.nodes ?? {}),
@@ -71,11 +82,11 @@ export function extractOAuthRequirementsFromBoard(board: IBoard): {
 	// Providers and their service nodes can appear in either order, including
 	// across function layers. Register all providers before collecting scopes.
 	for (const node of nodes) {
-		if ((node as any).only_offline) {
+		if (node.only_offline) {
 			requiresLocalExecution = true;
 		}
 
-		const providerIds = (node as any).oauth_providers as string[] | undefined;
+		const providerIds = node.oauth_providers;
 		if (providerIds && providerIds.length > 0) {
 			for (const providerId of providerIds) {
 				if (!scopesMap.has(providerId)) {
@@ -88,15 +99,13 @@ export function extractOAuthRequirementsFromBoard(board: IBoard): {
 	for (const node of nodes) {
 		// Service nodes may use other credentials, so scope metadata alone must
 		// not register an OAuth provider.
-		const requiredScopes = (node as any).required_oauth_scopes as
-			| Record<string, string[] | { values?: string[] }>
-			| undefined;
+		const requiredScopes = node.required_oauth_scopes;
 		if (requiredScopes) {
 			for (const [providerId, scopes] of Object.entries(requiredScopes)) {
-				if (!scopesMap.has(providerId)) {
+				const scopeSet = scopesMap.get(providerId);
+				if (!scopeSet) {
 					continue;
 				}
-				const scopeSet = scopesMap.get(providerId)!;
 				const scopeArray = Array.isArray(scopes)
 					? scopes
 					: (scopes?.values ?? []);
@@ -199,16 +208,14 @@ export function extractOAuthProvidersFromBoard(
 export function storedTokenToBackendFormat(
 	token: IStoredOAuthToken,
 ): IOAuthToken {
-	const subject = token.binding
-		? (JSON.parse(token.binding.sessionKey) as [string, string, string])[2]
+	const owner = hubBinding(token.binding);
+	const subject = owner
+		? (JSON.parse(owner.sessionKey) as [string, string, string])[2]
 		: undefined;
-	if (
-		token.refresh_token?.startsWith("fl_oauth_") &&
-		(!token.binding || !subject)
-	)
+	if (token.refresh_token?.startsWith("fl_oauth_") && (!owner || !subject))
 		throw new Error("OAuth connection is missing its Hub owner");
 	return {
-		hub_origin: token.binding?.apiBaseUrl,
+		hub_origin: owner?.apiBaseUrl,
 		hub_subject: subject,
 		access_token: token.access_token,
 		refresh_token: token.refresh_token,

@@ -291,6 +291,30 @@ async fn explicit_compaction_reduces_reads_and_retains_historical_versions() -> 
 }
 
 #[tokio::test]
+async fn optimize_and_cleanup_checks_retention_first_and_keeps_history_inside_it() -> Result<()> {
+    let bucket = CountingBucket::new()?;
+    let mut store = bucket.open().await?;
+    for round in 0..5 {
+        store.insert(rows(round * 5..round * 5 + 5, round)).await?;
+    }
+    assert!(store.optimize_and_cleanup(0).await.is_err());
+    assert_eq!(fragment_ids(&store).await?.len(), 5);
+
+    let stats = store.optimize_and_cleanup(1).await?;
+    assert_eq!(fragment_ids(&store).await?.len(), 1);
+    assert_eq!(stats.old_versions, 0);
+    let first = store
+        .checkout(DatabaseSelector {
+            version: Some(1),
+            read_only: true,
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(first.count(None).await?, 5);
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_stale_writer_commits_after_explicit_compaction() -> Result<()> {
     let bucket = CountingBucket::new()?;
     let mut compacting = bucket.open().await?;

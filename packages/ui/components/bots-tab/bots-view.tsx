@@ -13,6 +13,7 @@ import {
 } from "react";
 import { useAuth } from "react-oidc-context";
 import { botPresence, useBotPresence } from "../../hooks/use-bot-presence";
+import { emitGuideEvent } from "../../lib/guide/guide-events";
 import { useBackend } from "../../state/backend-state";
 import type { IBot } from "../../state/backend-state/bot-state";
 import {
@@ -368,7 +369,10 @@ function CrewLayout(data: Readonly<CrewData>) {
 	}
 
 	const openMember = useCallback(
-		(member: CrewMember) => select(member.selection),
+		(member: CrewMember) => {
+			select(member.selection);
+			emitGuideEvent("bots:chat-opened");
+		},
 		[select],
 	);
 	const editBot = useCallback(

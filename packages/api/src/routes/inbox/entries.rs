@@ -665,6 +665,8 @@ pub(super) async fn fan_out<C: ConnectionTrait>(
         checked_envelopes(txn, conversation_id, sender, outgoing).await?;
     let principals: Vec<Principal> = members.iter().map(Principal::from).collect();
     let bots = live_bots(txn, &principals).await?;
+    let named = super::bot_mentions::with_named_bots(sender, &bots, outgoing, &mut envelopes);
+    let outgoing = named.as_ref().unwrap_or(outgoing);
     if outgoing.interactive.is_some()
         && (ConversationKind::parse(&conversation.kind) != Some(ConversationKind::Direct)
             || members.len() != 2

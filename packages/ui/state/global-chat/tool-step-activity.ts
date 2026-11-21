@@ -58,6 +58,7 @@ const TOOL_ACTIVITIES: Record<
 	room_invite: ["tool", "Inviting someone to the chat"],
 	shell_run: ["terminal", "Running a command"],
 	ask_bot: ["tool", "Asking another bot"],
+	context_checkpoint: ["tool", "Saving progress"],
 };
 
 function toolKey(name: string): string {

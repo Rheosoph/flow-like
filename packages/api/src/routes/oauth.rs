@@ -137,6 +137,61 @@ mod runtime_config_tests {
     }
 
     #[test]
+    fn only_a_credentialless_caller_is_signed_out() {
+        assert!(matches!(
+            Caller::of(&AppUser::Unauthorized),
+            Ok(Caller::SignedOut)
+        ));
+        let bot = AppUser::Bot(crate::middleware::jwt::BotUser {
+            bot_id: "bot".into(),
+            turn_id: "turn".into(),
+            conv_id: None,
+        });
+        let refusal = Caller::of(&bot).err().expect("a bot is not signed out");
+        assert_eq!(refusal.status, StatusCode::FORBIDDEN);
+        let user = AppUser::OpenID(crate::middleware::jwt::OpenIDUser {
+            sub: "user-1".into(),
+            access_token: "token".into(),
+        });
+        assert_eq!(Caller::of(&user).unwrap().owner(), Some("user-1"));
+        assert_eq!(Caller::SignedOut.owner(), None);
+    }
+
+    #[test]
+    fn signed_out_callers_never_use_connection_handles() {
+        let handle = format!("{}connection", connections::HANDLE_PREFIX);
+        let refusal = Caller::SignedOut.refuse_handle(&handle).unwrap_err();
+        assert_eq!(refusal.status, StatusCode::UNAUTHORIZED);
+        assert!(Caller::SignedOut.refuse_handle("provider-token").is_ok());
+        assert!(
+            Caller::Owner("user-1".into())
+                .refuse_handle(&handle)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn signed_out_refresh_branch_stays_out_of_the_connection_store() {
+        let source = include_str!("oauth.rs");
+        let helper = source
+            .split_once("\nasync fn refresh_signed_out(")
+            .expect("refresh_signed_out exists")
+            .1
+            .split_once("\n}\n")
+            .expect("refresh_signed_out ends")
+            .0;
+        for forbidden in [
+            "connection_store(",
+            ".adopt(",
+            ".resolve_scoped(",
+            "resolve_connection_config(",
+        ] {
+            assert!(!helper.contains(forbidden), "{forbidden}");
+        }
+        assert!(helper.contains("refuse_handle("));
+    }
+
+    #[test]
     fn public_client_overrides_keep_the_trusted_endpoint_without_a_secret() {
         let config = ResolvedOAuthConfig {
             client_id: Some("default".into()),
@@ -589,6 +644,8 @@ fn refuse_shadow_refresh(user: &AppUser) -> Result<(), OAuthProxyError> {
         })
 }
 
+const SIGN_IN_REQUIRED: &str = "Sign in to the hub with a user account to manage OAuth connections";
+
 fn require_owner(user: &AppUser) -> Result<String, OAuthProxyError> {
     user.sub().map_err(|_| {
         OAuthProxyError::new(
@@ -597,9 +654,42 @@ fn require_owner(user: &AppUser) -> Result<String, OAuthProxyError> {
             } else {
                 StatusCode::FORBIDDEN
             },
-            "Sign in to the hub with a user account to manage OAuth connections",
+            SIGN_IN_REQUIRED,
         )
     })
+}
+
+/// Who an OAuth proxy call acts for. Only a request without any credential is
+/// `SignedOut`: it gets the provider's raw tokens and nothing is stored.
+enum Caller {
+    Owner(String),
+    SignedOut,
+}
+
+impl Caller {
+    fn of(user: &AppUser) -> Result<Self, OAuthProxyError> {
+        if matches!(user, AppUser::Unauthorized) {
+            return Ok(Self::SignedOut);
+        }
+        require_owner(user).map(Self::Owner)
+    }
+
+    fn owner(&self) -> Option<&str> {
+        match self {
+            Self::Owner(owner) => Some(owner),
+            Self::SignedOut => None,
+        }
+    }
+
+    fn refuse_handle(&self, token: &str) -> Result<(), OAuthProxyError> {
+        if self.owner().is_none() && token.starts_with(connections::HANDLE_PREFIX) {
+            return Err(OAuthProxyError::new(
+                StatusCode::UNAUTHORIZED,
+                SIGN_IN_REQUIRED,
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn select_client_config(
@@ -1122,13 +1212,13 @@ async fn refresh_provider_raw(
     ),
     request_body = TokenExchangeRequest,
     responses(
-        (status = 200, description = "Token exchange successful", body = TokenResponse),
+        (status = 200, description = "Token exchange successful. Signed in, the refresh token is a Hub connection handle. Without a Hub sign-in the provider's own tokens are returned and nothing is stored.", body = TokenResponse),
         (status = 400, description = "Provider rejected the request or requires reconnection", body = ErrorResponse),
-        (status = 401, description = "Hub sign-in required", body = ErrorResponse),
+        (status = 403, description = "Forbidden: the caller is not a user account", body = ErrorResponse),
         (status = 404, description = "Provider not found", body = ErrorResponse),
         (status = 500, description = "Internal error", body = ErrorResponse)
     ),
-    security(("bearer_auth" = []))
+    security((), ("bearer_auth" = []))
 )]
 #[tracing::instrument(name = "POST /oauth/token/:provider_id", skip(state, request, user))]
 pub async fn token_exchange(
@@ -1137,7 +1227,7 @@ pub async fn token_exchange(
     Path(provider_id): Path<String>,
     Json(request): Json<TokenExchangeRequest>,
 ) -> Result<Json<TokenResponse>, OAuthProxyError> {
-    let owner = require_owner(&user)?;
+    let caller = Caller::of(&user)?;
     let configs = get_oauth_configs(&state.secrets, &state.oauth_providers).await;
     let provider_config = require_provider_config(&provider_id, &configs)?;
     let selected_config =
@@ -1218,15 +1308,12 @@ pub async fn token_exchange(
     }
 
     let token_response = parse_token_response(&response_text)?;
+    let Some(owner) = caller.owner() else {
+        return Ok(Json(token_response));
+    };
     Ok(Json(
-        accept_provider_authorization(
-            &state,
-            &provider_id,
-            provider_config,
-            &owner,
-            token_response,
-        )
-        .await?,
+        accept_provider_authorization(&state, &provider_id, provider_config, owner, token_response)
+            .await?,
     ))
 }
 
@@ -1239,14 +1326,14 @@ pub async fn token_exchange(
     ),
     request_body = TokenRefreshRequest,
     responses(
-        (status = 200, description = "Token refresh successful", body = TokenResponse),
+        (status = 200, description = "Token refresh successful. Without a Hub sign-in a provider refresh token is exchanged directly and nothing is stored.", body = TokenResponse),
         (status = 400, description = "Provider rejected the request or requires reconnection", body = ErrorResponse),
-        (status = 401, description = "Hub sign-in required", body = ErrorResponse),
+        (status = 401, description = "Hub sign-in required to use a Hub connection handle", body = ErrorResponse),
         (status = 403, description = "Forbidden: the caller is not a user account, or the run is a regression replay", body = ErrorResponse),
         (status = 404, description = "Provider not found", body = ErrorResponse),
         (status = 500, description = "Internal error", body = ErrorResponse)
     ),
-    security(("bearer_auth" = []))
+    security((), ("bearer_auth" = []))
 )]
 #[tracing::instrument(name = "POST /oauth/refresh/:provider_id", skip(state, request, user))]
 pub async fn token_refresh(
@@ -1266,7 +1353,14 @@ pub async fn token_refresh(
             refuse_shadow_refresh(&user)?;
             None
         }
-        _ => Some(require_owner(&user)?),
+        _ => match Caller::of(&user)? {
+            Caller::Owner(owner) => Some(owner),
+            Caller::SignedOut => {
+                return refresh_signed_out(&state, &provider_id, request)
+                    .await
+                    .map(Json);
+            }
+        },
     };
     let configs = get_oauth_configs(&state.secrets, &state.oauth_providers).await;
     let config = require_provider_config(&provider_id, &configs)?;
@@ -1294,6 +1388,19 @@ pub async fn token_refresh(
             })
             .await?,
     ))
+}
+
+async fn refresh_signed_out(
+    state: &crate::state::State,
+    provider_id: &str,
+    request: TokenRefreshRequest,
+) -> Result<TokenResponse, OAuthProxyError> {
+    Caller::SignedOut.refuse_handle(&request.refresh_token)?;
+    let configs = get_oauth_configs(&state.secrets, &state.oauth_providers).await;
+    let config = require_provider_config(provider_id, &configs)?;
+    let config = select_client_config(provider_id, config, request.client_id.as_deref())?;
+    let scope = normalize_refresh_scope(request.scope.as_deref())?;
+    refresh_provider(&config, &request.refresh_token, scope.as_deref()).await
 }
 
 #[tracing::instrument(name = "POST /oauth/device/start/:provider_id", skip(state, request))]
@@ -1368,6 +1475,22 @@ pub async fn device_start(
     Ok(Json(payload))
 }
 
+#[utoipa::path(
+    post,
+    path = "/oauth/device/poll/{provider_id}",
+    tag = "oauth",
+    params(
+        ("provider_id" = String, Path, description = "OAuth provider identifier")
+    ),
+    request_body = DevicePollRequest,
+    responses(
+        (status = 200, description = "Device authorization complete. Signed in, the refresh token is a Hub connection handle. Without a Hub sign-in the provider's own tokens are returned and nothing is stored.", body = TokenResponse),
+        (status = 400, description = "Authorization pending or rejected by the provider", body = ErrorResponse),
+        (status = 403, description = "Forbidden: the caller is not a user account", body = ErrorResponse),
+        (status = 404, description = "Provider not found", body = ErrorResponse)
+    ),
+    security((), ("bearer_auth" = []))
+)]
 #[tracing::instrument(
     name = "POST /oauth/device/poll/:provider_id",
     skip(state, request, user)
@@ -1378,7 +1501,7 @@ pub async fn device_poll(
     Path(provider_id): Path<String>,
     Json(request): Json<DevicePollRequest>,
 ) -> Result<Response, OAuthProxyError> {
-    let owner = require_owner(&user)?;
+    let caller = Caller::of(&user)?;
     let configs = get_oauth_configs(&state.secrets, &state.oauth_providers).await;
     let provider_config = require_provider_config(&provider_id, &configs)?;
     let selected_config =
@@ -1416,9 +1539,13 @@ pub async fn device_poll(
     let payload = parse_json_or_form_value(&response_text);
     if status.is_success() && payload.get("error").is_none() {
         let token = parse_token_response(&response_text)?;
-        let token =
-            accept_provider_authorization(&state, &provider_id, provider_config, &owner, token)
-                .await?;
+        let token = match caller.owner() {
+            Some(owner) => {
+                accept_provider_authorization(&state, &provider_id, provider_config, owner, token)
+                    .await?
+            }
+            None => token,
+        };
         return Ok((status, Json(token)).into_response());
     }
     Ok((status, Json(payload)).into_response())
@@ -1480,14 +1607,15 @@ pub async fn revoke_token(
     Path(provider_id): Path<String>,
     Json(request): Json<RevokeTokenRequest>,
 ) -> Result<StatusCode, OAuthProxyError> {
-    let owner = require_owner(&user)?;
+    let caller = Caller::of(&user)?;
+    caller.refuse_handle(&request.token)?;
     let configs = get_oauth_configs(&state.secrets, &state.oauth_providers).await;
     let provider_config = require_provider_config(&provider_id, &configs)?;
     let provider_config =
         resolve_connection_config(&state, &provider_id, provider_config, &request.token, None)
             .await?;
     let token = if request.token.starts_with(connections::HANDLE_PREFIX) {
-        let store = connection_store(&state, &provider_id, &provider_config, Some(&owner))?;
+        let store = connection_store(&state, &provider_id, &provider_config, caller.owner())?;
         let token = store.revoke(&request.token).await?;
         if provider_config.revoke_url.is_none() {
             return Ok(StatusCode::NO_CONTENT);
