@@ -1,4 +1,4 @@
-import { oauthCredentialKey, oauthProviderKey } from "./scope";
+import { hubBinding, oauthCredentialKey, oauthProviderKey } from "./scope";
 import { hasRequiredScopes } from "./token-scopes";
 import type {
 	IDeviceAuthResponse,
@@ -68,6 +68,31 @@ async function generateCodeChallenge(verifier: string): Promise<string> {
 		.replace(/=+$/, "");
 }
 
+async function tokenExchangeError(response: {
+	status: number;
+	text: () => Promise<string>;
+}): Promise<Error> {
+	const body = await response.text().catch(() => "");
+	let detail: string | null = null;
+	try {
+		const parsed = JSON.parse(body) as {
+			error?: string;
+			error_description?: string;
+		};
+		detail = parsed.error_description || parsed.error || null;
+	} catch {
+		const form = new URLSearchParams(body);
+		detail = form.get("error_description") || form.get("error");
+	}
+	const reason = detail
+		?.replace(/^Token exchange failed:\s*/, "")
+		.replace(/\s+/g, " ")
+		.trim();
+	return new Error(
+		`Token exchange failed: ${response.status}${reason ? ` - ${reason}` : ""}`,
+	);
+}
+
 interface IRefreshTokenResponse {
 	access_token: string;
 	refresh_token?: string;
@@ -89,10 +114,19 @@ const refreshes = new WeakMap<
 	object,
 	Map<string, Promise<IStoredOAuthToken>>
 >();
-function grantedScopes(scope: unknown, fallback: string[]): string[] {
-	return typeof scope === "string"
-		? scope.split(/[ ,]+/).filter(Boolean)
-		: fallback;
+/** OpenID Connect grants `offline_access` by returning a refresh token; Entra never lists it in `scope`. */
+function grantedScopes(
+	scope: unknown,
+	requested: string[],
+	refreshToken?: string,
+): string[] {
+	if (typeof scope !== "string") return requested;
+	const granted = scope.split(/[ ,]+/).filter(Boolean);
+	return refreshToken &&
+		requested.includes("offline_access") &&
+		!granted.includes("offline_access")
+		? [...granted, "offline_access"]
+		: granted;
 }
 function expiresAt(expiresIn: number | undefined): number | undefined {
 	return typeof expiresIn === "number" && Number.isFinite(expiresIn)
@@ -181,7 +215,11 @@ export function createOAuthService(config: OAuthServiceConfig) {
 		overrideApiBaseUrl?: string,
 	): Promise<T> {
 		await checkBinding(binding);
-		if (!data.refresh_token || data.refresh_token.startsWith("fl_oauth_"))
+		if (
+			!hubBinding(binding) ||
+			!data.refresh_token ||
+			data.refresh_token.startsWith("fl_oauth_")
+		)
 			return data;
 		const apiBaseUrl = await resolveApiBaseUrl(
 			provider,
@@ -242,8 +280,7 @@ export function createOAuthService(config: OAuthServiceConfig) {
 			// Validate client_id is present
 			if (!provider.client_id || provider.client_id.trim() === "") {
 				throw new Error(
-					`OAuth client_id is not configured for ${provider.name}. ` +
-						`Please set the environment variable or provide it via input pin.`,
+					`OAuth client_id is not configured for ${provider.name}. Please set the environment variable or provide it via input pin.`,
 				);
 			}
 
@@ -440,7 +477,11 @@ export function createOAuthService(config: OAuthServiceConfig) {
 				refresh_token: tokenResponse.refresh_token,
 				expires_at: expiresAt(tokenResponse.expires_in),
 				token_type: tokenResponse.token_type ?? "Bearer",
-				scopes: grantedScopes(tokenResponse.scope, pendingAuth.scopes),
+				scopes: grantedScopes(
+					tokenResponse.scope,
+					pendingAuth.scopes,
+					tokenResponse.refresh_token,
+				),
 				storedAt: Date.now(),
 				userInfo,
 			};
@@ -542,8 +583,8 @@ export function createOAuthService(config: OAuthServiceConfig) {
 				hasClientSecret: !!provider.client_secret,
 			});
 
-			// Web clients and providers with secrets must proxy token exchange through the API.
-			if (binding || shouldProxyProviderRequests(provider)) {
+			// A Hub account's grants and providers with secrets exchange through the Hub.
+			if (hubBinding(binding) || shouldProxyProviderRequests(provider)) {
 				const apiBaseUrl = await resolveApiBaseUrl(
 					provider,
 					overrideApiBaseUrl,
@@ -567,16 +608,13 @@ export function createOAuthService(config: OAuthServiceConfig) {
 						"Content-Type": "application/json",
 						Accept: "application/json",
 					},
-					binding,
+					hubBinding(binding),
 				);
 
 				if (!response.ok) {
-					await response.text();
-					console.error(
-						"[OAuth] Proxy token exchange failed:",
-						response.status,
-					);
-					throw new Error(`Token exchange failed: ${response.status}`);
+					const error = await tokenExchangeError(response);
+					console.error("[OAuth] Proxy token exchange failed:", error.message);
+					throw error;
 				}
 
 				const tokenData = (await response.json()) as {
@@ -627,7 +665,7 @@ export function createOAuthService(config: OAuthServiceConfig) {
 				const credentials = btoa(
 					`${provider.client_id}:${provider.client_secret}`,
 				);
-				headers["Authorization"] = `Basic ${credentials}`;
+				headers.Authorization = `Basic ${credentials}`;
 			} else {
 				// Include client_id in body for PKCE flows
 				params.set("client_id", provider.client_id);
@@ -659,9 +697,9 @@ export function createOAuthService(config: OAuthServiceConfig) {
 			);
 
 			if (!response.ok) {
-				await response.text();
-				console.error("[OAuth] Token exchange failed:", response.status);
-				throw new Error(`Token exchange failed: ${response.status}`);
+				const error = await tokenExchangeError(response);
+				console.error("[OAuth] Token exchange failed:", error.message);
+				throw error;
 			}
 
 			const responseText = await response.text();
@@ -751,7 +789,9 @@ export function createOAuthService(config: OAuthServiceConfig) {
 				await checkBinding(current.binding);
 				const handle = current.refresh_token.startsWith("fl_oauth_");
 				const proxy =
-					!!current.binding || handle || shouldProxyProviderRequests(provider);
+					!!hubBinding(current.binding) ||
+					handle ||
+					shouldProxyProviderRequests(provider);
 				const url = proxy
 					? `${await resolveApiBaseUrl(provider, current.binding?.apiBaseUrl)}/api/v1/oauth/refresh/${provider.id}`
 					: provider.token_url;
@@ -777,7 +817,7 @@ export function createOAuthService(config: OAuthServiceConfig) {
 							})
 						: params.toString(),
 					headers,
-					current.binding,
+					hubBinding(current.binding),
 				);
 				if (!response.ok) {
 					let body: { error?: string } = {};
@@ -802,13 +842,19 @@ export function createOAuthService(config: OAuthServiceConfig) {
 					await response.json(),
 					provider.id,
 				);
+				const refreshToken =
+					tokenResponse.refresh_token ?? current.refresh_token;
 				const updated: IStoredOAuthToken = {
 					...current,
 					access_token: tokenResponse.access_token,
-					refresh_token: tokenResponse.refresh_token ?? current.refresh_token,
+					refresh_token: refreshToken,
 					expires_at: expiresAt(tokenResponse.expires_in),
 					token_type: tokenResponse.token_type ?? current.token_type,
-					scopes: grantedScopes(tokenResponse.scope, current.scopes),
+					scopes: grantedScopes(
+						tokenResponse.scope,
+						current.scopes,
+						refreshToken,
+					),
 					storedAt: Date.now(),
 				};
 				if (await replaceToken(current, updated)) return updated;
@@ -876,11 +922,14 @@ export function createOAuthService(config: OAuthServiceConfig) {
 			await tokenStore.getBinding?.(provider);
 			await checkBinding(token.binding);
 			const handle = token.refresh_token?.startsWith("fl_oauth_");
-			if (handle || provider.revoke_url) {
-				const proxy = handle || shouldProxyProviderRequests(provider);
-				const url = proxy
-					? `${await resolveApiBaseUrl(provider, token.binding?.apiBaseUrl)}/api/v1/oauth/revoke/${provider.id}`
-					: provider.revoke_url!;
+			const proxy = handle || shouldProxyProviderRequests(provider);
+			const url =
+				handle || provider.revoke_url
+					? proxy
+						? `${await resolveApiBaseUrl(provider, token.binding?.apiBaseUrl)}/api/v1/oauth/revoke/${provider.id}`
+						: provider.revoke_url
+					: undefined;
+			if (url) {
 				const response = await runtime.httpPost(
 					url,
 					proxy
@@ -897,7 +946,7 @@ export function createOAuthService(config: OAuthServiceConfig) {
 							: "application/x-www-form-urlencoded",
 						Accept: "application/json",
 					},
-					token.binding,
+					hubBinding(token.binding),
 				);
 				if (!response.ok)
 					throw new Error(`Token revocation failed: ${response.status}`);
@@ -1006,8 +1055,7 @@ export function createOAuthService(config: OAuthServiceConfig) {
 			// Validate client_id is present
 			if (!provider.client_id || provider.client_id.trim() === "") {
 				throw new Error(
-					`OAuth client_id is not configured for ${provider.name}. ` +
-						`Please set the environment variable or provide it via input pin.`,
+					`OAuth client_id is not configured for ${provider.name}. Please set the environment variable or provide it via input pin.`,
 				);
 			}
 
@@ -1028,7 +1076,7 @@ export function createOAuthService(config: OAuthServiceConfig) {
 			});
 
 			const response =
-				binding || shouldProxyProviderRequests(provider)
+				hubBinding(binding) || shouldProxyProviderRequests(provider)
 					? await runtime.httpPost(
 							`${await resolveApiBaseUrl(provider, binding?.apiBaseUrl)}/api/v1/oauth/device/start/${provider.id}`,
 							JSON.stringify({
@@ -1039,7 +1087,7 @@ export function createOAuthService(config: OAuthServiceConfig) {
 								"Content-Type": "application/json",
 								Accept: "application/json",
 							},
-							binding,
+							hubBinding(binding),
 						)
 					: await runtime.httpPost(
 							provider.device_auth_url,
@@ -1086,7 +1134,7 @@ export function createOAuthService(config: OAuthServiceConfig) {
 			});
 
 			const response =
-				binding || shouldProxyProviderRequests(provider)
+				hubBinding(binding) || shouldProxyProviderRequests(provider)
 					? await runtime.httpPost(
 							`${await resolveApiBaseUrl(provider, binding?.apiBaseUrl)}/api/v1/oauth/device/poll/${provider.id}`,
 							JSON.stringify({
@@ -1097,7 +1145,7 @@ export function createOAuthService(config: OAuthServiceConfig) {
 								"Content-Type": "application/json",
 								Accept: "application/json",
 							},
-							binding,
+							hubBinding(binding),
 						)
 					: await runtime.httpPost(provider.token_url, params.toString(), {
 							"Content-Type": "application/x-www-form-urlencoded",
@@ -1157,7 +1205,7 @@ export function createOAuthService(config: OAuthServiceConfig) {
 				refresh_token: adopted.refresh_token,
 				expires_at: expiresAt(adopted.expires_in),
 				token_type: adopted.token_type ?? "Bearer",
-				scopes: grantedScopes(adopted.scope, scopes),
+				scopes: grantedScopes(adopted.scope, scopes, adopted.refresh_token),
 				storedAt: Date.now(),
 				userInfo,
 			};

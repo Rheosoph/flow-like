@@ -1097,6 +1097,7 @@ const FlowNodeInner = memo(
 							<button
 								className="bg-background hover:bg-card group/play transition-all rounded-md hover:rounded-lg border p-1"
 								onClick={() => handleLocalExecute()}
+								data-guide="event-run"
 								title={i18next.t("executeLocally", "Execute locally")}
 							>
 								<PlayCircleIcon className="w-3 h-3 group-hover/play:scale-110" />
@@ -1106,6 +1107,7 @@ const FlowNodeInner = memo(
 							<button
 								className="bg-background hover:bg-card group/play transition-all rounded-md hover:rounded-lg border p-1 relative"
 								onClick={() => handleRemoteExecute()}
+								data-guide={canLocalExecute ? undefined : "event-run"}
 								title={i18next.t("executeOnServer", "Execute on server")}
 							>
 								<CloudCog className="w-3 h-3 group-hover/play:scale-110" />
@@ -1123,6 +1125,7 @@ const FlowNodeInner = memo(
 						<div className="absolute left-0 top-0 translate-x-[calc(-120%)] flex flex-col gap-1">
 							<button
 								className="bg-background hover:bg-card group/play transition-all rounded-md hover:rounded-lg border p-1"
+								data-guide="event-run"
 								title={
 									canLocalExecute
 										? "Execute locally"

@@ -377,7 +377,16 @@
 			"signInHint": "",
 			"connect": ""
 		},
-		"addCalDav": ""
+		"calendarSetup": {
+			"afterSave": "",
+			"allow": "",
+			"caldav": "",
+			"finishSignIn": "",
+			"google": "",
+			"localOnly": "",
+			"microsoft": "",
+			"noAccess": ""
+		}
 	},
 	"crew": {
 		"activity": {

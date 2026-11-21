@@ -161,7 +161,7 @@ pub(crate) fn bot_not_found(bot_id: &str) -> Error {
     Error::not_found(format!("Bot '{bot_id}' not found"))
 }
 
-fn stored_bot(db: &Connection, bot_id: &str) -> Result<Option<StoredBot>> {
+pub(crate) fn stored_bot(db: &Connection, bot_id: &str) -> Result<Option<StoredBot>> {
     Ok(db
         .query_row(
             &format!("SELECT {BOT_COLUMNS} FROM bots WHERE id = ?1"),

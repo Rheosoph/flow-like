@@ -4,6 +4,7 @@ pub use flow_like_types_contracts::bot;
 pub use flow_like_types_contracts::bot_calendar;
 pub use flow_like_types_contracts::bot_connector;
 pub use flow_like_types_contracts::bot_effective;
+pub use flow_like_types_contracts::bot_mentions;
 pub use flow_like_types_contracts::bot_message;
 pub use flow_like_types_contracts::bot_notes;
 pub use flow_like_types_contracts::bot_notify;

@@ -39,6 +39,7 @@ import { searchAllBitsOfType } from "../../lib/bit/model-listing";
 import { DEFAULT_CHAT_AI_DISCLOSURE } from "../../lib/chat-appearance";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../lib/flowpilot-debug";
 import { requiresFreshToolApproval } from "../../lib/frontend-tool-approval-scope";
+import { emitGuideEvent } from "../../lib/guide/guide-events";
 import {
 	type NativeActionRequest,
 	assertNativeActionCurrent,
@@ -61,6 +62,7 @@ import {
 	sendInteractiveMessage,
 	webInteractiveBody,
 } from "../../state/global-chat/bot-inbox";
+import { takeCompactionRequest } from "../../state/global-chat/compaction-request";
 import {
 	ASSISTANT_BOT_ID,
 	answersInThisChat,
@@ -1138,6 +1140,7 @@ export function GlobalChatBody({
 					const turnConversationId =
 						useGlobalChatStore.getState().runs[responseMessage.id]
 							?.conversationId ?? currentConversationId(sessionId);
+					const compactContext = takeCompactionRequest(sessionId) || undefined;
 					return (
 						isTauri()
 							? tauriStart(
@@ -1170,6 +1173,7 @@ export function GlobalChatBody({
 											turnConversationId,
 										),
 										conversationId: turnConversationId,
+										compactContext,
 										...desktopChatBotArgs(turnConversationId),
 										...desktopInteractiveArgs(interactive),
 									},
@@ -1217,6 +1221,7 @@ export function GlobalChatBody({
 											attachmentManifest.length > 0
 												? attachmentManifest
 												: undefined,
+										compact_context: compactContext,
 										...webChatBotBody(turnConversationId),
 										...webInteractiveBody(interactive),
 									},
@@ -1263,6 +1268,7 @@ export function GlobalChatBody({
 			pointedAt?: IAppPointedAt,
 		) => {
 			if (!content.trim() && !files?.length) return;
+			emitGuideEvent("bots:message-sent");
 			const state = useGlobalChatStore.getState();
 			const preparation = isGlobalChatAtRunCapacity(state)
 				? undefined
@@ -1753,9 +1759,10 @@ export function GlobalChatBody({
 				chatBot={chatBot}
 				defaultModelLabel={defaultModelLabel}
 				onOpenSettings={openSettings}
+				canCompact={answersHere}
 			/>
 		),
-		[chatBot, defaultModelLabel, openSettings],
+		[chatBot, defaultModelLabel, openSettings, answersHere],
 	);
 
 	const openAppId = useOpenAppId();

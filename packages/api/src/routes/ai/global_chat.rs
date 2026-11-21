@@ -221,6 +221,10 @@ pub struct GlobalChatRequest {
     /// as the bot, and the bot's memory reads and extends that conversation.
     #[serde(default)]
     pub interactive: Option<crate::bot_host::interactive::InteractiveRef>,
+    /// With `interactive`: fold the conversation's older messages into a summary before the
+    /// reply. Later turns of the conversation on the same server start from that summary.
+    #[serde(default)]
+    pub compact_context: bool,
 }
 
 /// A browser-executed tool result: the `value` of the reply pushed into the run's channel. Same
@@ -1833,7 +1837,8 @@ pub(crate) async fn run_global_chat(
         bot.context.ephemeral_user_context = facts.ephemeral_user_context;
         bot.context.live_call = facts.live_call;
         bot.context.host_tools = std::mem::take(&mut bot.context.host_tools)
-            .with_conversation_key(interactive.turn.conversation_id.clone());
+            .with_conversation_key(interactive.turn.conversation_id.clone())
+            .with_compaction_requested(payload.compact_context);
         live_call = facts.live_call;
         if !bot.context.ephemeral_user_context
             && let Some(trail) = interactive.open_trail(&state).await
@@ -2166,17 +2171,18 @@ pub(crate) async fn run_global_chat(
     let (frames_tx, mut frames_rx) = mpsc::unbounded_channel::<GlobalChatFrame>();
     let bridge: Arc<dyn PlatformToolBridge> = Arc::new(match &bot {
         Some(bot) => {
+            let principal = metered_bot.as_ref();
             let bot_tools = crate::bot_tools::turn_host(
                 &state,
                 &sub,
-                &run_id,
+                principal.map_or(run_id.as_str(), |principal| principal.turn_id.as_str()),
                 &bot.context,
                 &profile,
                 &flow_like_state,
                 &selected_model,
                 token.clone(),
                 crate::routes::bots::tool_grants::rows_for_owner(&state, &bot.context.bot_id, &sub),
-                None,
+                principal.and_then(|principal| principal.conv_id.as_deref()),
                 interactive_turn
                     .as_ref()
                     .map(|turn| turn.turn.conversation_id.as_str()),

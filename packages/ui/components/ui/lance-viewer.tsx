@@ -94,6 +94,8 @@ import {
 	Checkbox,
 	Dialog,
 	DialogContent,
+	DialogDescription,
+	DialogFooter,
 	DialogHeader,
 	DialogTitle,
 	DropdownMenu,
@@ -218,7 +220,7 @@ export interface LanceDBExplorerProps {
 		filter: string,
 		updates: Record<string, any>,
 	) => Promise<void>;
-	onOptimize?: (keepVersions?: boolean) => Promise<void>;
+	onOptimize?: (keepVersions?: boolean, olderThanDays?: number) => Promise<void>;
 	onDropColumns?: (columns: string[]) => Promise<void>;
 	onAddColumn?: (column: IAddColumnPayload) => Promise<void>;
 	onAlterColumn?: (column: string, nullable: boolean) => Promise<void>;
@@ -2112,20 +2114,89 @@ const ToolbarIconButton: React.FC<{
 	</Button>
 );
 
+const DEFAULT_PRUNE_RETENTION_DAYS = "1";
+
+const PruneVersionsDialog: React.FC<{
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	onConfirm: (olderThanDays: number) => void;
+}> = ({ open, onOpenChange, onConfirm }) => {
+	const { t } = useTranslation("common");
+	const inputId = React.useId();
+	const [days, setDays] = useState(DEFAULT_PRUNE_RETENTION_DAYS);
+	const retention = Number(days);
+	const valid = Number.isSafeInteger(retention) && retention >= 1;
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className="sm:max-w-md">
+				<DialogHeader>
+					<DialogTitle>
+						{t("pruneVersionsTitle", "Optimize and prune old versions")}
+					</DialogTitle>
+					<DialogDescription>
+						{t(
+							"pruneVersionsDescription",
+							"Compacts the table and updates its indexes, then removes versions older than the retention period. Removed versions can no longer be opened. Tagged versions and branches are kept.",
+						)}
+					</DialogDescription>
+				</DialogHeader>
+				<form
+					className="space-y-4"
+					onSubmit={(event) => {
+						event.preventDefault();
+						if (valid) onConfirm(retention);
+					}}
+				>
+					<div className="space-y-2">
+						<Label htmlFor={inputId}>
+							{t("pruneRetentionDays", "Keep this many days of history")}
+						</Label>
+						<Input
+							id={inputId}
+							type="number"
+							min={1}
+							step={1}
+							value={days}
+							onChange={(event) => setDays(event.target.value)}
+						/>
+					</div>
+					<DialogFooter>
+						<Button
+							type="button"
+							variant="outline"
+							onClick={() => onOpenChange(false)}
+						>
+							{t("cancel", "Cancel")}
+						</Button>
+						<Button type="submit" variant="destructive" disabled={!valid}>
+							{t("pruneVersionsConfirm", "Optimize and prune")}
+						</Button>
+					</DialogFooter>
+				</form>
+			</DialogContent>
+		</Dialog>
+	);
+};
+
 const TableActionsMenu: React.FC<{
-	onOptimize?: (keepVersions?: boolean) => Promise<void>;
+	onOptimize?: (keepVersions?: boolean, olderThanDays?: number) => Promise<void>;
 	children?: React.ReactNode;
 }> = ({ onOptimize, children }) => {
 	const { t } = useTranslation("common");
 	const [optimizing, setOptimizing] = useState(false);
+	const [pruning, setPruning] = useState(false);
 
 	if (!onOptimize && !children) return null;
 
-	const handleOptimize = async (keepVersions: boolean) => {
+	const handleOptimize = async (
+		keepVersions: boolean,
+		olderThanDays?: number,
+	) => {
 		if (!onOptimize) return;
 		setOptimizing(true);
 		try {
-			await onOptimize(keepVersions);
+			await onOptimize(keepVersions, olderThanDays);
 		} catch {
 			// The host reports optimize failures.
 		} finally {
@@ -2134,9 +2205,20 @@ const TableActionsMenu: React.FC<{
 	};
 
 	return (
-		// Items open dialogs; a modal menu closing under a modal dialog can leave
-		// the body without pointer events.
-		<DropdownMenu modal={false}>
+		<>
+			{onOptimize && (
+				<PruneVersionsDialog
+					open={pruning}
+					onOpenChange={setPruning}
+					onConfirm={(olderThanDays) => {
+						setPruning(false);
+						void handleOptimize(false, olderThanDays);
+					}}
+				/>
+			)}
+			{/* Items open dialogs; a modal menu closing under a modal dialog can
+			leave the body without pointer events. */}
+			<DropdownMenu modal={false}>
 			<DropdownMenuTrigger asChild>
 				<Button
 					variant="outline"
@@ -2163,7 +2245,7 @@ const TableActionsMenu: React.FC<{
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							disabled={optimizing}
-							onSelect={() => void handleOptimize(false)}
+							onSelect={() => setPruning(true)}
 						>
 							<Zap />{" "}
 							{t("optimizePruneOldVersions", "Optimize and Prune Old Versions")}
@@ -2174,6 +2256,7 @@ const TableActionsMenu: React.FC<{
 				{children}
 			</DropdownMenuContent>
 		</DropdownMenu>
+		</>
 	);
 };
 

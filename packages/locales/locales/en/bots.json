@@ -377,7 +377,16 @@
 			"signInHint": "Check the user name and the password. Most services need an app password, not your normal one.",
 			"connect": "Connect"
 		},
-		"addCalDav": "Add calendar (CalDAV)"
+		"calendarSetup": {
+			"afterSave": "Save the bot first, then connect its calendars here.",
+			"allow": "Allow calendar access",
+			"caldav": "iCloud & CalDAV",
+			"finishSignIn": "Sign in to {{name}}, then choose {{name}} again to add it.",
+			"google": "Google Calendar",
+			"localOnly": "Google and Outlook calendars need a bot on your account. A bot on this computer reads CalDAV calendars such as iCloud or Nextcloud.",
+			"microsoft": "Outlook calendar",
+			"noAccess": "Connected without calendar access, so the bot can't read this calendar yet."
+		}
 	},
 	"crew": {
 		"activity": {
@@ -2252,7 +2261,7 @@
 		},
 		"layersLabel": "Show in the calendar",
 		"loadFailed": "Couldn't load {{name}}'s calendar: {{error}}",
-		"noSources": "No calendar connected. Add a Google or Microsoft account, or a CalDAV calendar such as iCloud or Nextcloud, under Connectors in {{name}}'s settings.",
+		"noSources": "No calendar connected. Add Google Calendar, Outlook or a CalDAV calendar such as iCloud or Nextcloud under Calendar in {{name}}'s settings.",
 		"openSettings": "Open settings",
 		"repeats": {
 			"custom": "Custom ({{cron}})",

@@ -270,6 +270,69 @@ pub fn room_message(name: &str, is_owner: bool, text: &str) -> String {
     }
 }
 
+/// One room message as [`talking_with`] reads it.
+#[derive(Debug, Clone, Copy)]
+pub struct RoomLine<'a> {
+    pub message_id: &'a str,
+    pub sender_id: &'a str,
+    pub mentions: &'a [String],
+    pub reply_to: Option<&'a str>,
+}
+
+/// Whom `line` names: `Some(Some(id))` for one member, by mention or by a reply to their message;
+/// `Some(None)` for several mentioned members; `None` when it names nobody.
+fn named_by<'a>(line: &RoomLine<'a>, lines: &[RoomLine<'a>]) -> Option<Option<&'a str>> {
+    let mut mentioned = line
+        .mentions
+        .iter()
+        .map(String::as_str)
+        .filter(|id| *id != line.sender_id);
+    if let Some(first) = mentioned.next() {
+        return Some(mentioned.all(|id| id == first).then_some(first));
+    }
+    let target = line.reply_to?;
+    let replied = lines
+        .iter()
+        .find(|other| other.message_id == target)?
+        .sender_id;
+    (replied != line.sender_id).then_some(Some(replied))
+}
+
+/// The member the sender of the last of `lines` (oldest first) is talking with. Their latest run
+/// of messages decides when one of them names someone; otherwise the member their message before
+/// that run named, or the one member who alone answered it. `None` when no single partner shows.
+pub fn talking_with<'a>(lines: &[RoomLine<'a>]) -> Option<&'a str> {
+    let speaker = lines.last()?.sender_id;
+    let run = lines
+        .iter()
+        .rposition(|line| line.sender_id != speaker)
+        .map_or(0, |at| at + 1);
+    if let Some(named) = lines[run..]
+        .iter()
+        .rev()
+        .find_map(|line| named_by(line, lines))
+    {
+        return named;
+    }
+    let previous = lines[..run]
+        .iter()
+        .rposition(|line| line.sender_id == speaker)?;
+    let mut answered: Vec<&'a str> = Vec::new();
+    for line in &lines[previous + 1..run] {
+        if !answered.contains(&line.sender_id) {
+            answered.push(line.sender_id);
+        }
+    }
+    match named_by(&lines[previous], lines) {
+        Some(Some(named)) => (answered.is_empty() || answered.contains(&named)).then_some(named),
+        Some(None) => None,
+        None => match answered.as_slice() {
+            [only] => Some(*only),
+            _ => None,
+        },
+    }
+}
+
 /// The start of a message a cut always keeps, so the speaker line survives notes that fill the
 /// whole budget.
 const MIN_CLIPPED_HEAD_CHARS: usize = 200;
@@ -525,6 +588,120 @@ mod tests {
             room_message("\u{7}\n", true, "hi"),
             "Someone (your owner) wrote: hi"
         );
+    }
+
+    struct Said {
+        id: &'static str,
+        by: &'static str,
+        mentions: Vec<String>,
+        reply_to: Option<&'static str>,
+    }
+
+    fn said(id: &'static str, by: &'static str) -> Said {
+        Said {
+            id,
+            by,
+            mentions: Vec::new(),
+            reply_to: None,
+        }
+    }
+
+    fn mentioning(mut line: Said, ids: &[&str]) -> Said {
+        line.mentions = ids.iter().map(|id| id.to_string()).collect();
+        line
+    }
+
+    fn replying(mut line: Said, to: &'static str) -> Said {
+        line.reply_to = Some(to);
+        line
+    }
+
+    fn partner(said: &[Said]) -> Option<String> {
+        let lines: Vec<RoomLine<'_>> = said
+            .iter()
+            .map(|line| RoomLine {
+                message_id: line.id,
+                sender_id: line.by,
+                mentions: &line.mentions,
+                reply_to: line.reply_to,
+            })
+            .collect();
+        talking_with(&lines).map(str::to_owned)
+    }
+
+    #[test]
+    fn an_unmarked_follow_up_continues_with_the_one_member_who_answered() {
+        let lines = [
+            said("m1", "felix"),
+            replying(said("m2", "story"), "m1"),
+            said("m3", "felix"),
+        ];
+        assert_eq!(partner(&lines).as_deref(), Some("story"));
+    }
+
+    #[test]
+    fn several_answers_or_a_first_message_show_no_partner() {
+        let both = [
+            said("m1", "felix"),
+            replying(said("m2", "story"), "m1"),
+            replying(said("m3", "tiro"), "m1"),
+            said("m4", "felix"),
+        ];
+        assert_eq!(partner(&both), None);
+        assert_eq!(partner(&[said("m1", "tiro"), said("m2", "felix")]), None);
+        assert_eq!(partner(&[]), None);
+    }
+
+    #[test]
+    fn a_mention_or_reply_in_the_latest_run_names_the_partner() {
+        let switched = [
+            said("m1", "felix"),
+            replying(said("m2", "story"), "m1"),
+            mentioning(said("m3", "felix"), &["tiro"]),
+            said("m4", "felix"),
+        ];
+        assert_eq!(partner(&switched).as_deref(), Some("tiro"));
+        let reply = [
+            said("m1", "felix"),
+            replying(said("m2", "tiro"), "m1"),
+            replying(said("m3", "story"), "m1"),
+            replying(said("m4", "felix"), "m2"),
+        ];
+        assert_eq!(partner(&reply).as_deref(), Some("tiro"));
+        let several = [
+            said("m1", "felix"),
+            replying(said("m2", "story"), "m1"),
+            mentioning(said("m3", "felix"), &["story", "tiro"]),
+        ];
+        assert_eq!(partner(&several), None);
+    }
+
+    #[test]
+    fn the_previous_message_s_addressee_holds_until_someone_else_answers_instead() {
+        let pending = [
+            mentioning(said("m1", "felix"), &["story"]),
+            said("m2", "felix"),
+        ];
+        assert_eq!(partner(&pending).as_deref(), Some("story"));
+        let joined = [
+            mentioning(said("m1", "felix"), &["story"]),
+            replying(said("m2", "story"), "m1"),
+            said("m3", "tiro"),
+            said("m4", "felix"),
+        ];
+        assert_eq!(partner(&joined).as_deref(), Some("story"));
+        let other = [
+            mentioning(said("m1", "felix"), &["story"]),
+            said("m2", "anna"),
+            said("m3", "felix"),
+        ];
+        assert_eq!(partner(&other), None);
+    }
+
+    #[test]
+    fn people_talking_together_are_partners_too() {
+        let lines = [said("m1", "felix"), said("m2", "anna"), said("m3", "felix")];
+        assert_eq!(partner(&lines).as_deref(), Some("anna"));
     }
 
     #[test]

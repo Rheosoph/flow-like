@@ -11,6 +11,7 @@ import {
 	flowIrCommitDeliveryId,
 } from "../lib/flowpilot/board-edit-job-delivery";
 import type { FlowScriptApplyOrigin } from "../lib/flowscript-apply-failure";
+import { emitGuideEventsForCommands } from "../lib/guide/guide-events";
 import { toastError, toastWarning } from "../lib/messages";
 import {
 	LAST_EDIT_FIELD,
@@ -240,6 +241,7 @@ export function useCommandExecution({
 				);
 				awarenessRef.current?.setLocalStateField("boardUpdate", Date.now());
 				announceEdit([command]);
+				emitGuideEventsForCommands([command]);
 				return result;
 			});
 		},
@@ -303,6 +305,7 @@ export function useCommandExecution({
 				);
 				awarenessRef.current?.setLocalStateField("boardUpdate", Date.now());
 				announceEdit(commands);
+				emitGuideEventsForCommands(commands);
 				return result;
 			});
 		},

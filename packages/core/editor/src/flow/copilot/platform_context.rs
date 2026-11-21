@@ -35,6 +35,9 @@ const SUMMARY_PROMPT: &str = "Write a factual continuation checkpoint for a runn
 const SUMMARY_CUT_NOTE: &str =
     "\n[The checkpoint reached its size limit here. Verify anything it does not state.]";
 
+/// The trigger of a fold the person asked for before the reply.
+const REQUESTED_TRIGGER: &str = "manual";
+
 /// What a tool result keeps once it is older than the recent rounds and the history is full.
 const STALE_RESULT_HEAD_CHARS: usize = 800;
 const STALE_RESULT_TAIL_CHARS: usize = 400;
@@ -690,9 +693,16 @@ impl Conversation {
         usize::from(self.covered.is_some()) + self.verbatim.len()
     }
 
-    /// How much of the history a summary of the older messages replaces. The newest messages
-    /// stay word for word, up to a quarter of `soft`: a reply usually refers to them.
+    /// How much of the history a summary of the older messages replaces, once they fill half of
+    /// `soft`.
     fn foldable(&self, sizes: &[usize], soft: usize) -> Option<usize> {
+        self.fold_point(sizes, soft)
+            .filter(|&prefix_len| sizes[..prefix_len].iter().sum::<usize>() >= soft / 2)
+    }
+
+    /// Where the newest messages start, which stay word for word up to a quarter of `soft`: a
+    /// reply usually refers to them. `None` when no message before them is left to fold.
+    fn fold_point(&self, sizes: &[usize], soft: usize) -> Option<usize> {
         let len = self.len();
         let mut recent = 0;
         let mut recent_size = 0;
@@ -701,9 +711,7 @@ impl Conversation {
             recent += 1;
         }
         let prefix_len = len - recent;
-        (prefix_len > usize::from(self.covered.is_some())
-            && sizes[..prefix_len].iter().sum::<usize>() >= soft / 2)
-            .then_some(prefix_len)
+        (prefix_len > usize::from(self.covered.is_some())).then_some(prefix_len)
     }
 
     /// What a summary of the first `prefix_len` history messages covers.
@@ -740,6 +748,16 @@ pub(super) struct TurnFacts<'a> {
     pub references: &'a [UserContent],
 }
 
+/// Why a turn waits for the checkpoint being written before its next request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Hold {
+    /// The history is still at the hard limit; the turn cannot go on without the checkpoint.
+    Full,
+    /// The person asked for the conversation to be compacted before this reply. Without the
+    /// checkpoint the turn goes on with the history it has.
+    Requested,
+}
+
 /// A turn's checkpoints. With a `scope`, the summary of the conversation's own messages is kept
 /// for the conversation's next turn, which starts from it and summarizes only what came after.
 /// A checkpoint that also covers the turn's tool results stays with the turn.
@@ -750,6 +768,8 @@ pub(super) struct Compaction {
     pending: Option<Pending>,
     /// A background checkpoint failed; the next one is written once the turn has to wait for it.
     failed: bool,
+    /// Set by [`Self::request`] until the turn's first [`Self::start`].
+    requested: bool,
     conversation: Option<Conversation>,
     events: Vec<CompactionStats>,
 }
@@ -770,6 +790,7 @@ impl Compaction {
             label,
             pending: None,
             failed: false,
+            requested: false,
             conversation: None,
             events: Vec::new(),
         };
@@ -872,16 +893,74 @@ impl Compaction {
         }
     }
 
-    /// Starts a checkpoint once the history is due for one, and at the hard limit shortens stale
-    /// tool results. True when the history is still at the hard limit, so the turn has to
-    /// [`Self::wait`] for the checkpoint before its next request.
+    /// Folds the conversation's older messages before the turn's first request, whatever their
+    /// size: the person asked for it. Only a conversation's own messages are folded, so the
+    /// summary also serves the conversation's later turns.
+    pub(super) fn request(&mut self) {
+        self.requested = true;
+    }
+
+    /// Starts the fold a person asked for. True when a fold of the conversation is being written
+    /// for it, also one an earlier turn left unfinished. Without a conversation, or with nothing
+    /// older than its newest messages, the request is recorded as skipped.
+    fn start_requested(
+        &mut self,
+        completion_client: &(dyn CompletionClientDyn + Send + Sync),
+        model_name: &str,
+        history: &[rig::message::Message],
+        sizes: &[usize],
+        stats: &mut LLMUsageStats,
+    ) -> bool {
+        if let Some(pending) = &self.pending {
+            return pending.covers.is_some();
+        }
+        let due = self.conversation.as_ref().and_then(|conversation| {
+            let prefix_len = conversation.fold_point(sizes, self.budget.soft)?;
+            let label = self.label.as_ref().map(|label| label.get());
+            Some((
+                prefix_len,
+                conversation.covers(prefix_len, label.unwrap_or_default()),
+            ))
+        });
+        let Some((prefix_len, covers)) = due else {
+            let tokens = history_tokens(history);
+            stats.compactions.push(CompactionStats {
+                kind: "conversation".into(),
+                trigger: REQUESTED_TRIGGER.into(),
+                status: "skipped".into(),
+                before_tokens: tokens,
+                after_tokens: Some(tokens),
+                ..Default::default()
+            });
+            return false;
+        };
+        self.pending = Some(Pending {
+            job: Job::spawn(
+                completion_client,
+                model_name,
+                self.thinking.clone(),
+                &history[..prefix_len],
+                None,
+                REQUESTED_TRIGGER,
+                self.budget.summary_output_tokens,
+            ),
+            prefix_len,
+            covers: Some(covers),
+        });
+        true
+    }
+
+    /// Starts a checkpoint once the history is due for one or the person asked for it, and at the
+    /// hard limit shortens stale tool results. Says why the turn has to [`Self::wait`] for the
+    /// checkpoint before its next request, if it has to.
     pub(super) fn start(
         &mut self,
         completion_client: &(dyn CompletionClientDyn + Send + Sync),
         model_name: &str,
         history: &mut [rig::message::Message],
         plan: impl FnOnce() -> Option<String>,
-    ) -> bool {
+        stats: &mut LLMUsageStats,
+    ) -> Option<Hold> {
         let sizes: Vec<usize> = history
             .iter()
             .map(|message| estimated_message_tokens(message).saturating_mul(3))
@@ -890,6 +969,8 @@ impl Compaction {
         let ContextBudget {
             soft, fill, hard, ..
         } = self.budget;
+        let requested = std::mem::take(&mut self.requested)
+            && self.start_requested(completion_client, model_name, history, &sizes, stats);
         // A failed checkpoint is tried again only once the turn depends on it.
         if self.pending.is_none() && (!self.failed || total >= hard) {
             // The conversation's own messages are summarized apart from the turn's tool results,
@@ -933,7 +1014,12 @@ impl Compaction {
                 .map(|message| estimated_message_tokens(message).saturating_mul(3))
                 .sum();
         }
-        self.pending.is_some() && total >= hard
+        match (self.pending.is_some(), total >= hard, requested) {
+            (false, _, _) => None,
+            (true, true, _) => Some(Hold::Full),
+            (true, false, true) => Some(Hold::Requested),
+            (true, false, false) => None,
+        }
     }
 
     /// Waits for the checkpoint being written and swaps it in.

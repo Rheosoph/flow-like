@@ -1,0 +1,141 @@
+{
+	"card": {
+		"doIt": "Do it for me",
+		"done": "Done",
+		"end": "End tour",
+		"expand": "Show guide",
+		"label": "Guide",
+		"minimize": "Minimize guide",
+		"next": "Next",
+		"progress": "{{index}} of {{total}}",
+		"skipStep": "Skip step",
+		"takeMe": "Take me there"
+	},
+	"finished": {
+		"build": {
+			"body": "Next, add a page or a chat to your app, or ask FlowPilot to add steps for you.",
+			"title": "You built and ran a flow."
+		},
+		"close": "Close",
+		"toBuild": "Take the builder tour",
+		"toUse": "Take the bots and apps tour",
+		"use": {
+			"body": "You gave a bot a job and found an app. Curious how apps are made?",
+			"title": "You're set."
+		}
+	},
+	"menu": {
+		"tour": "Show me around"
+	},
+	"tag": {
+		"click": "Click",
+		"drag": "Drag a wire",
+		"open": "Open",
+		"pick": "Pick one",
+		"rightClick": "Right-click",
+		"type": "Type here"
+	},
+	"tours": {
+		"build": {
+			"addEvent": {
+				"body": "Every flow starts with an event: the moment it runs. Pick Event in the palette. On a touch screen, press and hold.",
+				"title": "Right-click the board and add an Event."
+			},
+			"confirmFlow": {
+				"body": "Something like “Main flow” is fine.",
+				"title": "Name it and confirm."
+			},
+			"connect": {
+				"body": "The palette opens with only the nodes that fit. Pick one, for example Log. It gets wired for you.",
+				"title": "Drag from the event's white pin into empty space."
+			},
+			"createApp": {
+				"body": "Any name works. You can change it later.",
+				"title": "Name it, then create it."
+			},
+			"createFlow": {
+				"body": "It opens a short form for the flow's name.",
+				"title": "Create the flow."
+			},
+			"library": {
+				"body": "Apps hold your flows, data, pages and chats.",
+				"title": "Open My Apps."
+			},
+			"logs": {
+				"body": "Logs show what each node did, step by step. Open them any time from the board's side rail.",
+				"title": "That was your first run."
+			},
+			"newApp": {
+				"body": "You'll build a small one in a few minutes.",
+				"title": "Create a new app."
+			},
+			"newFlow": {
+				"body": "A flow is the logic: nodes that do the work. Click New flow.",
+				"title": "Add the app's first flow."
+			},
+			"openFlow": {
+				"body": "The board is where you build. Click your new flow.",
+				"title": "Open the flow."
+			},
+			"run": {
+				"body": "That runs your flow once, right here on the board.",
+				"title": "Press play on the event."
+			},
+			"wait": {
+				"body": "Each node lights up while it works.",
+				"title": "Watch it run."
+			}
+		},
+		"use": {
+			"app": {
+				"body": "Add it and it shows up in My Apps, ready to use. No building needed.",
+				"title": "Open an app that looks useful."
+			},
+			"approve": {
+				"body": "Bots ask before they use your location, send messages or spend money. Allow it once, always, or say no.",
+				"title": "It's asking first. Answer the request."
+			},
+			"bots": {
+				"body": "Bots are helpers that do tasks for you. They have their own tab.",
+				"title": "Click Bots in the sidebar."
+			},
+			"crew": {
+				"body": "Assistant helps with anything, Flux builds flows with you. The chat opens next to your crew.",
+				"title": "Pick a bot from your crew."
+			},
+			"details": {
+				"body": "It opens the details: what the bot can do and what it has to ask you about.",
+				"title": "Click the bot's name above the chat."
+			},
+			"explore": {
+				"body": "Explore has ready-made apps from Flow-Like and the community.",
+				"title": "Now apps: open Explore."
+			},
+			"send": {
+				"body": "Ask for something real, like “What can you do for me?” or “Plan a three-day trip to Lisbon.”",
+				"title": "Send it a message."
+			},
+			"watch": {
+				"body": "Each step shows up as it happens. If it needs something sensitive, it asks you first.",
+				"title": "Watch it work."
+			}
+		}
+	},
+	"welcome": {
+		"body": "We'll walk you through the parts you'll actually use, right in the app. It takes about two minutes and you can stop any time.",
+		"build": {
+			"body": "Make apps and automations on the board. Turns on developer mode.",
+			"cta": "Show me the board",
+			"title": "Build my own"
+		},
+		"eyebrow": "Welcome to Flow-Like",
+		"invite": "Joined through an invite? Your team's apps are already in My Apps.",
+		"skip": "I'll look around myself",
+		"title": "What brings you here?",
+		"use": {
+			"body": "Hand tasks to bots and use ready-made apps. No building.",
+			"cta": "Show me bots and apps",
+			"title": "Get things done"
+		}
+	}
+}

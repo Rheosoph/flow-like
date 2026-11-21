@@ -5,6 +5,15 @@ export interface OAuthSession {
 	hub: string;
 	subject: string;
 	issuer?: string;
+	/** Signed out of the Hub: grants stay on this device, apart from every Hub account. */
+	local?: true;
+}
+
+export function localOAuthSession(
+	hub: string,
+	profileId?: string,
+): OAuthSession {
+	return { hub, subject: "", profileId, local: true };
 }
 
 export function normalizeOAuthHub(hub: string): string {
@@ -15,6 +24,12 @@ export function normalizeOAuthHub(hub: string): string {
 }
 
 export function oauthSessionKey(session: OAuthSession): string {
+	if (session.local)
+		return JSON.stringify([
+			"local",
+			normalizeOAuthHub(session.hub),
+			session.profileId ?? "",
+		]);
 	return JSON.stringify([
 		normalizeOAuthHub(session.hub),
 		session.issuer ?? "",
@@ -40,7 +55,13 @@ export function oauthBinding(
 		sessionKey: oauthSessionKey(session),
 		providerKey: oauthProviderKey(provider),
 		apiBaseUrl: normalizeOAuthHub(session.hub),
+		...(session.local ? { local: true as const } : {}),
 	};
+}
+
+/** The binding when a Hub account owns it; local grants never reach the Hub as connections. */
+export function hubBinding(binding?: IOAuthBinding): IOAuthBinding | undefined {
+	return binding?.local ? undefined : binding;
 }
 
 export function oauthCredentialKey(binding: IOAuthBinding): string {

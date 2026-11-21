@@ -1756,6 +1756,7 @@
 	"operate": "Operar",
 	"operationsViewHealthSurfacesAndActivity": "Vista de operaciones: estado, superficies y actividad",
 	"optimizedTable": "",
+	"optimizedTablePruned": "",
 	"optimizeFailedMessage": "",
 	"optinOnlySharesAggregateCountersAndSanitizedPagePathsMdashNeverPromptsBoardContentNamesOrAnyPersonalDataUsageEventsMayBeSampledSoOnlyAShareOfPageViewsIsRecorded": "Solo con consentimiento. Comparte contadores agregados y rutas de página depuradas; nunca prompts, contenido de tableros, nombres ni ningún dato personal. Los eventos de uso pueden muestrearse, por lo que solo se registra una parte de las vistas de página.",
 	"optional": "",

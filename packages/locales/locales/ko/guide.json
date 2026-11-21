@@ -1,0 +1,141 @@
+{
+	"card": {
+		"doIt": "",
+		"done": "",
+		"end": "",
+		"expand": "",
+		"label": "",
+		"minimize": "",
+		"next": "",
+		"progress": "",
+		"skipStep": "",
+		"takeMe": ""
+	},
+	"finished": {
+		"build": {
+			"body": "",
+			"title": ""
+		},
+		"close": "",
+		"toBuild": "",
+		"toUse": "",
+		"use": {
+			"body": "",
+			"title": ""
+		}
+	},
+	"menu": {
+		"tour": ""
+	},
+	"tag": {
+		"click": "",
+		"drag": "",
+		"open": "",
+		"pick": "",
+		"rightClick": "",
+		"type": ""
+	},
+	"tours": {
+		"build": {
+			"addEvent": {
+				"body": "",
+				"title": ""
+			},
+			"confirmFlow": {
+				"body": "",
+				"title": ""
+			},
+			"connect": {
+				"body": "",
+				"title": ""
+			},
+			"createApp": {
+				"body": "",
+				"title": ""
+			},
+			"createFlow": {
+				"body": "",
+				"title": ""
+			},
+			"library": {
+				"body": "",
+				"title": ""
+			},
+			"logs": {
+				"body": "",
+				"title": ""
+			},
+			"newApp": {
+				"body": "",
+				"title": ""
+			},
+			"newFlow": {
+				"body": "",
+				"title": ""
+			},
+			"openFlow": {
+				"body": "",
+				"title": ""
+			},
+			"run": {
+				"body": "",
+				"title": ""
+			},
+			"wait": {
+				"body": "",
+				"title": ""
+			}
+		},
+		"use": {
+			"app": {
+				"body": "",
+				"title": ""
+			},
+			"approve": {
+				"body": "",
+				"title": ""
+			},
+			"bots": {
+				"body": "",
+				"title": ""
+			},
+			"crew": {
+				"body": "",
+				"title": ""
+			},
+			"details": {
+				"body": "",
+				"title": ""
+			},
+			"explore": {
+				"body": "",
+				"title": ""
+			},
+			"send": {
+				"body": "",
+				"title": ""
+			},
+			"watch": {
+				"body": "",
+				"title": ""
+			}
+		}
+	},
+	"welcome": {
+		"body": "",
+		"build": {
+			"body": "",
+			"cta": "",
+			"title": ""
+		},
+		"eyebrow": "",
+		"invite": "",
+		"skip": "",
+		"title": "",
+		"use": {
+			"body": "",
+			"cta": "",
+			"title": ""
+		}
+	}
+}

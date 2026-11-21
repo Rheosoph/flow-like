@@ -10,7 +10,7 @@ use flow_like_local_bots::InboxEntry;
 use flow_like_types::{
     bot_message::{MessageBody, MessagePart},
     bot_tool_trail::{TrailEntry, TrailSection, trail_of},
-    bot_turn::{clip_keeping_tail, room_message},
+    bot_turn::{RoomLine, clip_keeping_tail, room_message},
     bot_user_context::{ContextHistory, ContextLine},
     inbox::{
         ConversationKind, InboxEntryKind, InterruptedSpeech, ReactionEvent, TranscriptBody,
@@ -44,6 +44,8 @@ pub struct Transcript {
     pub addressed: bool,
     /// Epoch milliseconds of the newest "New topic" marker in the conversation, if any.
     pub topic_at: Option<i64>,
+    /// In a group, the member the answered message's sender is talking with.
+    pub talking_with: Option<String>,
 }
 
 /// When the newest live "New topic" marker of `entries` was written.
@@ -89,6 +91,19 @@ fn addressed_to(lines: &[Line], bot_id: &str) -> bool {
                     .any(|own| own.message_id == target && own.sender_id == bot_id)
             })
     })
+}
+
+fn talking_with(lines: &[Line]) -> Option<String> {
+    let room: Vec<RoomLine<'_>> = lines
+        .iter()
+        .map(|line| RoomLine {
+            message_id: &line.message_id,
+            sender_id: &line.sender_id,
+            mentions: &line.mentions,
+            reply_to: line.reply_to.as_deref(),
+        })
+        .collect();
+    flow_like_types::bot_turn::talking_with(&room).map(str::to_owned)
 }
 
 /// The message's text with a line for the window it points at and for each UI block and file it
@@ -297,6 +312,7 @@ pub fn transcript(
             ),
             addressed: true,
             topic_at: topic_at(&entries[..=upto]),
+            talking_with: None,
         });
     }
     let answered = match lines.last() {
@@ -329,6 +345,9 @@ pub fn transcript(
         history,
         addressed,
         topic_at: topic_at(&entries[..=upto]),
+        talking_with: (kind == ConversationKind::Group)
+            .then(|| talking_with(&lines))
+            .flatten(),
     })
 }
 
@@ -515,6 +534,7 @@ pub fn reaction_turn(
             history,
             addressed,
             topic_at: topic_at(entries),
+            talking_with: None,
         },
         reactions,
     }
@@ -703,6 +723,23 @@ mod tests {
         assert!(shared_context(&entries, "revoked", "bot").is_none());
         let before = &entries[..entries.len() - 1];
         assert!(shared_context(before, "reply", "bot").is_some());
+    }
+
+    #[test]
+    fn an_unmarked_room_follow_up_names_the_bot_that_answered_the_last_one() {
+        let message =
+            |id: &str, sender: &str, body: Value| entry(id, sender, InboxEntryKind::Message, body);
+        let entries = vec![
+            message("m1", "felix", json!({"text": "Who has the brief?"})),
+            message("m2", "story", json!({"text": "I do.", "reply_to": "m1"})),
+            message("m3", "felix", json!({"text": "Send it to us."})),
+        ];
+        let names = HashMap::new();
+        let read = |kind| transcript("tiro", kind, "m3", &entries, &names, "felix").unwrap();
+        let group = read(ConversationKind::Group);
+        assert!(!group.addressed);
+        assert_eq!(group.talking_with.as_deref(), Some("story"));
+        assert_eq!(read(ConversationKind::Direct).talking_with, None);
     }
 
     #[test]

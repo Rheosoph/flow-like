@@ -97,6 +97,25 @@ const MAX_PLATFORM_TOOL_INLINE_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PLATFORM_TOOL_INLINE_TOTAL_BYTES: usize = 24 * 1024 * 1024;
 const MAX_PLATFORM_TOOL_INLINE_BASE64_CHARS: usize =
     MAX_PLATFORM_TOOL_INLINE_IMAGE_BYTES.div_ceil(3) * 4;
+/// Plan-step kind for context checkpoints; "think" is reserved for model reasoning.
+const CONTEXT_CHECKPOINT_STEP: &str = "context_checkpoint";
+
+/// A held checkpoint's step text while it is written, once written, and once it failed.
+fn checkpoint_step_texts(hold: context::Hold) -> [&'static str; 3] {
+    match hold {
+        context::Hold::Full => [
+            "Summarizing earlier steps so the work can continue",
+            "Earlier steps summarized",
+            "Could not summarize earlier steps",
+        ],
+        context::Hold::Requested => [
+            "Compacting the earlier conversation",
+            "Earlier conversation compacted",
+            "Could not compact the earlier conversation",
+        ],
+    }
+}
+
 static SEARCH_CONCURRENCY: LazyLock<tokio::sync::Semaphore> =
     LazyLock::new(|| tokio::sync::Semaphore::new(MAX_CONCURRENT_SEARCH_CALLS));
 
@@ -902,6 +921,7 @@ pub struct PlatformCopilot {
     web_access: WebAccess,
     turn_label: Option<Arc<TurnLabel>>,
     conversation_scope: Option<String>,
+    compaction_requested: bool,
     initial_usage: LLMUsageStats,
     vision: Option<Arc<ImageDetour>>,
 }
@@ -931,6 +951,7 @@ impl PlatformCopilot {
             web_access: WebAccess::default(),
             turn_label: None,
             conversation_scope: None,
+            compaction_requested: false,
             initial_usage: LLMUsageStats::default(),
             vision: None,
         }
@@ -947,6 +968,13 @@ impl PlatformCopilot {
     /// from this run's summary of the older messages instead of summarizing them again.
     pub(super) fn with_conversation_scope(mut self, scope: Option<String>) -> Self {
         self.conversation_scope = scope;
+        self
+    }
+
+    /// Folds the conversation's older messages before the first request when `requested`: the
+    /// person asked to compact the conversation.
+    pub(super) fn with_compaction_requested(mut self, requested: bool) -> Self {
+        self.compaction_requested = requested;
         self
     }
 
@@ -1604,6 +1632,9 @@ impl PlatformCopilot {
                 .filter(|_| long_running && !resumed),
             &mut current_history,
         );
+        if self.compaction_requested && !resumed {
+            compaction.request();
+        }
 
         macro_rules! snapshot {
             ($phase:expr, $pending:expr, $answer:expr) => {
@@ -1773,19 +1804,22 @@ impl PlatformCopilot {
                             .collect(&mut current_history, &facts, &mut session_stats)
                             .await;
                         // The checkpoint is written beside the turn. Only a history that is still at the
-                        // hard limit after its stale tool results were shortened holds the request back.
-                        if compaction.start(
+                        // hard limit after its stale tool results were shortened, or a fold the
+                        // person asked for, holds the request back.
+                        if let Some(hold) = compaction.start(
                             completion_client,
                             &model_name,
                             &mut current_history,
                             || work_plan.context(),
+                            &mut session_stats,
                         ) {
+                            let [writing, written, failed] = checkpoint_step_texts(hold);
                             if let Some(callback) = &on_token {
                                 callback(plan_step_frame(
                                     format!("checkpoint_{iteration}"),
-                                    "Preserving progress for the next steps".into(),
+                                    writing.into(),
                                     PlanStepStatus::InProgress,
-                                    "think",
+                                    CONTEXT_CHECKPOINT_STEP,
                                 ));
                             }
                             let preserved = context::cancellable(
@@ -1796,21 +1830,22 @@ impl PlatformCopilot {
                             if let Some(callback) = &on_token {
                                 callback(plan_step_frame(
                                     format!("checkpoint_{iteration}"),
-                                    if preserved.is_ok() {
-                                        "Progress preserved"
-                                    } else {
-                                        "Could not preserve progress"
-                                    }
-                                    .into(),
+                                    if preserved.is_ok() { written } else { failed }.into(),
                                     if preserved.is_ok() {
                                         PlanStepStatus::Completed
                                     } else {
                                         PlanStepStatus::Failed
                                     },
-                                    "think",
+                                    CONTEXT_CHECKPOINT_STEP,
                                 ));
                             }
-                            if let Err(error) = preserved {
+                            if let Err(error) = &preserved
+                                && hold == context::Hold::Requested
+                            {
+                                tracing::warn!(
+                                    "Requested conversation compaction failed: {error:#}"
+                                );
+                            } else if let Err(error) = preserved {
                                 tracing::warn!("Long-running bot checkpoint failed: {error:#}");
                                 let notice = "\n\nI stopped because I could not preserve the working context for the next steps. The task is unfinished; actions already completed have not been repeated.";
                                 full_response.push_str(notice);

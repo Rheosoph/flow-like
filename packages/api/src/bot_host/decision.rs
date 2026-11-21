@@ -88,6 +88,11 @@ pub(super) async fn evaluate(
         "interaction": if trigger_kind == Some(InboxEntryKind::Transcript) { "call" } else { "chat" },
         "history": history,
         "reactions": reactions,
+        "talking_with": bot
+            .requester
+            .as_ref()
+            .and_then(|requester| requester.talking_with.as_ref())
+            .map(|partner| partner.decision_context()),
         "message": decision::excerpt(&transcript.prompt, 4_000),
     }), &participants).map_err(|e| ApiError::bad_request(e.to_string()))?;
     let response = invoke(state, turn, bit_id, &request).await?;

@@ -2701,7 +2701,12 @@ pub fn database_tool_schema(operations: &[&str]) -> Value {
             "optimize": { "type": "boolean" },
             "keep_versions": {
                 "type": "boolean",
-                "description": "Defaults to true. False prunes versions older than seven days after compaction and index maintenance."
+                "description": "Defaults to true. False prunes old versions after compaction and index maintenance."
+            },
+            "older_than_days": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "With keep_versions false: days of history to keep (default 7). Tagged versions and branches are always kept."
             },
             "nullable": { "type": "boolean" },
             "column_definition": {

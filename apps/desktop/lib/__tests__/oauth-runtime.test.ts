@@ -9,8 +9,8 @@ vi.mock("@flow-like/flow-like-ui", async () => ({
 }));
 vi.mock("@tauri-apps/plugin-http", () => ({ fetch: state.fetch }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
-import { tauriOAuthRuntime } from "../tauri-oauth-runtime";
 import { bindHubAuth } from "../hub-auth";
+import { tauriOAuthRuntime } from "../tauri-oauth-runtime";
 const owner = {
 	hub: "https://hub.test",
 	subject: "alice",
@@ -119,4 +119,30 @@ it("does not send an adoption or refresh after an account switch during Hub rene
 	finish(user("alice"));
 	await expect(pending).rejects.toThrow("Sign in again");
 	expect(state.fetch).not.toHaveBeenCalled();
+});
+it("sends direct provider requests without an Origin", async () => {
+	await tauriOAuthRuntime.httpPost(
+		"https://provider.test/token",
+		"grant_type=authorization_code",
+		{ "Content-Type": "application/x-www-form-urlencoded" },
+	);
+	expect(new Headers(state.fetch.mock.calls[0][1].headers).get("Origin")).toBe(
+		"",
+	);
+});
+it("lets a signed-out profile use only its own Hub's secret proxy, without credentials", async () => {
+	state.backend = { profile: { hub: owner.hub, secure: true } };
+	await tauriOAuthRuntime.httpPost(endpoint, "{}", {});
+	expect(
+		new Headers(state.fetch.mock.calls[0][1].headers).has("Authorization"),
+	).toBe(false);
+	await expect(
+		tauriOAuthRuntime.httpPost(
+			"https://other.test/api/v1/oauth/refresh/provider",
+			"{}",
+			{},
+		),
+	).rejects.toThrow("Hub");
+	await expect(request()).rejects.toThrow("Hub");
+	expect(state.fetch).toHaveBeenCalledOnce();
 });

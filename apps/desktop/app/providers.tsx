@@ -13,6 +13,7 @@ import { ThemeProvider } from "@flow-like/flow-like-ui/components/theme-provider
 import { NetworkStatusIndicator } from "@flow-like/flow-like-ui/components/ui/network-status-indicator";
 import { Toaster } from "@flow-like/flow-like-ui/components/ui/sonner";
 import { TooltipProvider } from "@flow-like/flow-like-ui/components/ui/tooltip";
+import { GuideProvider } from "@flow-like/flow-like-ui/components/guide/guide-provider";
 import { GlobalUpgradeDialog } from "@flow-like/flow-like-ui/components/upgrade/upgrade-dialog";
 import { useNetworkStatus } from "@flow-like/flow-like-ui/hooks/use-network-status";
 import { purgeLegacyPageSurfaceCache } from "@flow-like/flow-like-ui/lib/page-surface-cache";
@@ -219,6 +220,7 @@ export function Providers({
 																				<GlobalChatOverlay />
 																				<BotDen />
 																				<GlobalUpgradeDialog />
+																				<GuideProvider />
 																			</AppLocalPrincipals>
 																		</TelemetryProvider>
 																	</SpotlightWrapper>

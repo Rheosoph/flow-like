@@ -3,6 +3,7 @@ import type {
 	IBotConnector,
 	IBotConnectorCalendar,
 	IBotConnectorTool,
+	IConnectedAccount,
 	ICreateBotConnectorRequest,
 } from "../../state/backend-state/bot-state";
 
@@ -184,4 +185,79 @@ export function chosenCalendar(
 /** The discovery error means the server refused the sign-in. */
 export function isCalDavSignInError(message: string): boolean {
 	return /\b401\b|unauthori[sz]ed|password|credentials/i.test(message);
+}
+
+/** Accounts whose primary calendar the bot reads through an OAuth connector. */
+export const CALENDAR_ACCOUNT_PROVIDERS = ["google", "microsoft"] as const;
+export type CalendarAccountProvider =
+	(typeof CALENDAR_ACCOUNT_PROVIDERS)[number];
+
+/** What the calendar tools need: reading and, after asking, changing events. */
+export const CALENDAR_ACCOUNT_SCOPES: Readonly<
+	Record<CalendarAccountProvider, readonly string[]>
+> = {
+	google: ["https://www.googleapis.com/auth/calendar.events"],
+	microsoft: ["Calendars.ReadWrite"],
+};
+
+const CALENDAR_SCOPE_EQUIVALENTS: Readonly<
+	Record<CalendarAccountProvider, readonly string[]>
+> = {
+	google: [
+		"https://www.googleapis.com/auth/calendar",
+		"https://www.googleapis.com/auth/calendar.events",
+	],
+	microsoft: [
+		"Calendars.ReadWrite",
+		"https://graph.microsoft.com/Calendars.ReadWrite",
+	],
+};
+
+/** The provider whose calendar an account connector reads, as the host matches it. */
+export function calendarAccountProvider(
+	connector: Pick<IBotConnector, "kind" | "provider_id">,
+): CalendarAccountProvider | null {
+	if (connector.kind !== "oauth") return null;
+	const id = connector.provider_id?.trim().toLowerCase();
+	return CALENDAR_ACCOUNT_PROVIDERS.find((provider) => provider === id) ?? null;
+}
+
+export function isCalendarConnector(
+	connector: Pick<IBotConnector, "kind" | "provider_id">,
+): boolean {
+	return (
+		connector.kind === "caldav" || calendarAccountProvider(connector) !== null
+	);
+}
+
+export function hasCalendarScope(
+	provider: CalendarAccountProvider,
+	scopes: readonly string[],
+): boolean {
+	return scopes.some((scope) =>
+		CALENDAR_SCOPE_EQUIVALENTS[provider].includes(scope),
+	);
+}
+
+/** `scopes` plus the calendar scopes, without duplicates. */
+export function withCalendarScopes(
+	provider: CalendarAccountProvider,
+	scopes: readonly string[],
+): string[] {
+	return [...new Set([...scopes, ...CALENDAR_ACCOUNT_SCOPES[provider]])];
+}
+
+/** The connector reading an account's calendar, asking for calendar access with its other scopes. */
+export function calendarAccountRequest(
+	provider: CalendarAccountProvider,
+	label: string,
+	account: Pick<IConnectedAccount, "handle" | "scopes">,
+): ICreateBotConnectorRequest {
+	return {
+		kind: "oauth",
+		label,
+		auth: { type: "oauth", provider_id: provider },
+		grant: account.handle,
+		scopes: withCalendarScopes(provider, account.scopes),
+	};
 }

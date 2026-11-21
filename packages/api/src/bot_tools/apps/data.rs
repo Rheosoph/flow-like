@@ -188,6 +188,7 @@ fn parse_change(operation: &str, args: &Value) -> Result<(String, TableChange), 
         "drop_index" => TableChange::DropIndex(required(args, "index_name")?.to_string()),
         "optimize" => TableChange::Optimize(OptimizePayload {
             keep_versions: flag(args, "keep_versions").unwrap_or(true),
+            older_than_days: args.get("older_than_days").and_then(Value::as_u64),
         }),
         "add_column" => TableChange::AddColumn(column_definition(args)?),
         "drop_columns" => TableChange::DropColumns(dropped_columns(args)?),
@@ -357,11 +358,17 @@ impl AppTools {
                 Ok(json!({ "status": "ok", "table_name": table, "index_name": index_name }))
             }
             TableChange::Optimize(payload) => {
-                optimize_table(state, user, path(), scope(), selector(), Json(payload))
-                    .await
-                    .map_err(failed)?
-                    .0;
-                Ok(done())
+                let cleanup =
+                    optimize_table(state, user, path(), scope(), selector(), Json(payload))
+                        .await
+                        .map_err(failed)?
+                        .0;
+                Ok(match cleanup {
+                    Some(cleanup) => {
+                        json!({ "status": "ok", "table_name": table, "cleanup": cleanup })
+                    }
+                    None => done(),
+                })
             }
             TableChange::AddColumn(payload) => {
                 let column = payload.name.clone();

@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import { useEffect } from "react";
 import {
 	BanIcon,
 	CheckCheckIcon,
@@ -15,6 +16,7 @@ import {
 import { useBotSecretSealing } from "../../hooks/use-bot-secret-sealing";
 import { useBot, useBotLabels, useUpsertBotSecret } from "../../hooks/use-bots";
 import { requiresFreshToolApproval } from "../../lib/frontend-tool-approval-scope";
+import { emitGuideEvent } from "../../lib/guide/guide-events";
 import { BotAvatar } from "../bots/bot-avatar";
 import type { BotAppearance } from "../bots/types";
 import type { IMessageApproval } from "../interfaces/chat-default/chat-db";
@@ -121,7 +123,14 @@ function SingleApprovalCard({
 		.map((scope) => grantLabel(approval.tool, scope))
 		.join(", ");
 
-	const answer = (next: ApprovalDecision) => state.send(next);
+	const answer = (next: ApprovalDecision) => {
+		emitGuideEvent("bots:approval-answered");
+		state.send(next);
+	};
+
+	useEffect(() => {
+		if (waiting && !readOnly) emitGuideEvent("bots:approval-shown");
+	}, [waiting, readOnly]);
 
 	const secret = approval.secret;
 	const invite = approval.invite;
@@ -150,6 +159,7 @@ function SingleApprovalCard({
 	return (
 		<RequestCard
 			data-slot="approval-card"
+			data-guide={waiting ? "approval" : undefined}
 			aria-label={t("crew.approval.label", "Approval request")}
 			tone={tone}
 			live={waiting}

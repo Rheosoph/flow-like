@@ -237,7 +237,7 @@ fn decode(text: &str) -> Option<String> {
 }
 
 /// Fenced blocks and inline code spans, in bytes.
-fn code_ranges(text: &str) -> Vec<Range<usize>> {
+pub(crate) fn code_ranges(text: &str) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
     let mut fence: Option<(usize, &str)> = None;
     let mut line_start = 0;

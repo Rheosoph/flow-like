@@ -32,6 +32,7 @@ import {
 	DropdownMenuTrigger,
 	FlowBackground,
 	GlobalPermission,
+	GuideDock,
 	IBitTypes,
 	Input,
 	Label,
@@ -55,6 +56,7 @@ import {
 	SidebarRail,
 	Textarea,
 	clearStoredPat,
+	guideTargetForNav,
 	useBackend,
 	useDeveloperMode,
 	useInvalidateInvoke,
@@ -283,6 +285,7 @@ function InnerSidebar() {
 				<Flows />
 			</SidebarContent>
 			<SidebarFooter>
+				<GuideDock />
 				<div className="flex flex-col gap-1">
 					<LanguageSwitcher />
 					<DropdownMenu>
@@ -733,6 +736,7 @@ function NavFlatItem({
 			>
 				<MotionLink
 					href={bots?.href ?? item.url}
+					data-guide={guideTargetForNav(item.url)}
 					aria-current={active ? "page" : undefined}
 					initial="initial"
 					whileHover="hover"

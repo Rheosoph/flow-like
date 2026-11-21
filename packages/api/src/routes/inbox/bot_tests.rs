@@ -660,3 +660,82 @@ async fn the_owners_direct_chat_with_a_bot_follows_its_encryption() {
     assert!(sync_own_bot_direct(&db, &bot).await.unwrap());
     assert_eq!(encryption(chat).await, "PLAIN");
 }
+
+#[tokio::test]
+async fn a_bots_at_name_wakes_the_bot_it_names_and_a_bare_name_does_not() {
+    let db = database().await;
+    insert_bot(&db, "tiro", "felix", "DESKTOP").await;
+    insert_bot(&db, "story", "felix", "DESKTOP").await;
+    let plan = NewConversation {
+        kind: ConversationKind::Group,
+        title: Some("Files".into()),
+        members: Vec::new(),
+        encryption: ConversationEncryption::Plain,
+    };
+    let others = [
+        user("christian"),
+        bot_principal("tiro"),
+        bot_principal("story"),
+    ];
+    start_group(&db, "files", "felix", &plan, &others, at(0))
+        .await
+        .unwrap();
+    let bare = outgoing(
+        "tiro-bare",
+        InboxEntryKind::Message,
+        json!({ "text": "Story, bitte ablegen. `@Story` steht nur im Code." }),
+    );
+    let sent = send_in(&db, "files", "tiro", &bare, at(1)).await.unwrap();
+    assert!(
+        sent.bots
+            .iter()
+            .all(|recipient| !recipient.mentioned && !recipient.read_along)
+    );
+    assert!(bot_turn::Entity::find().all(&db).await.unwrap().is_empty());
+
+    let named = outgoing(
+        "tiro-named",
+        InboxEntryKind::Message,
+        json!({ "text": "@Story: Das angehängte PDF ist die neue Fassung, bitte als v2 ablegen. Christian, ich arbeite weiter." }),
+    );
+    let sent = send_in(&db, "files", "tiro", &named, at(2)).await.unwrap();
+    assert_eq!(
+        sent.bots
+            .iter()
+            .map(|recipient| (recipient.bot_id.as_str(), recipient.mentioned))
+            .collect::<Vec<_>>(),
+        [("story", true)]
+    );
+    let stored = copies(&db, "tiro-named").await;
+    assert_eq!(stored.len(), 4);
+    for copy in stored {
+        assert_eq!(
+            copy.envelope["body"]["mentions"],
+            json!(["story"]),
+            "{}",
+            copy.inbox_id
+        );
+    }
+    let turns = bot_turn::Entity::find().all(&db).await.unwrap();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].bot_id, "story");
+    assert_eq!(turns[0].trigger_message_id, "tiro-named");
+    assert_eq!(turns[0].status, "QUEUED");
+
+    let person = outgoing(
+        "felix-named",
+        InboxEntryKind::Message,
+        json!({ "text": "@Story danke" }),
+    );
+    let sent = send_in(&db, "files", "felix", &person, at(3))
+        .await
+        .unwrap();
+    assert!(sent.bots.iter().all(|recipient| !recipient.mentioned));
+    assert!(
+        copies(&db, "felix-named")
+            .await
+            .iter()
+            .all(|copy| copy.envelope["body"].get("mentions").is_none()),
+        "a person's client names whom it mentions; the server adds nothing to it"
+    );
+}

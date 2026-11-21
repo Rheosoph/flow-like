@@ -10,7 +10,7 @@ use flow_like::flow::copilot::{ChatMessage, ChatRole, ReactionNote};
 use flow_like_types::{
     bot_message::{MessageBody, MessagePart},
     bot_tool_trail::{TrailEntry, TrailSection, trail_of},
-    bot_turn::{clip_keeping_tail, room_message},
+    bot_turn::{RoomLine, clip_keeping_tail, room_message},
     bot_user_context::{ContextHistory, ContextLine},
     inbox::{
         ConversationKind, InboxEntryKind, PLAIN_ENCRYPTION, ReactionEvent, TranscriptBody,
@@ -46,6 +46,8 @@ pub(crate) struct Transcript {
     pub trail: Option<TrailSection>,
     /// What the entries read put into the turn's taint.
     pub reads: flow_like::flow::copilot::TurnReads,
+    /// In a group, the member the answered message's sender is talking with.
+    pub talking_with: Option<String>,
 }
 
 #[derive(Debug)]
@@ -100,6 +102,19 @@ fn addressed_to(lines: &[Line], bot_id: &str) -> bool {
                     .any(|own| own.message_id == target && own.sender_id == bot_id)
             })
     })
+}
+
+fn talking_with(lines: &[Line]) -> Option<String> {
+    let room: Vec<RoomLine<'_>> = lines
+        .iter()
+        .map(|line| RoomLine {
+            message_id: &line.message_id,
+            sender_id: &line.sender_id,
+            mentions: &line.mentions,
+            reply_to: line.reply_to.as_deref(),
+        })
+        .collect();
+    flow_like_types::bot_turn::talking_with(&room).map(str::to_owned)
 }
 
 pub(super) fn plain_body(envelope: &serde_json::Value) -> Option<&serde_json::Value> {
@@ -361,21 +376,24 @@ pub(crate) async fn sender_names<C: ConnectionTrait>(
         .all(db)
         .await?;
     for (id, name, system) in bots {
-        let name = name.filter(|name| !name.trim().is_empty()).or_else(|| {
-            use flow_like_types::bot::BotSystemKind;
-            system
-                .as_deref()
-                .and_then(BotSystemKind::parse)
-                .map(|kind| match kind {
-                    BotSystemKind::General => "Assistant".to_owned(),
-                    BotSystemKind::Flux => "Flux".to_owned(),
-                })
-        });
-        if let Some(name) = name {
+        if let Some(name) = bot_display_name(name, system.as_deref()) {
             names.insert(id, name);
         }
     }
     Ok(names)
+}
+
+/// A bot's name as rooms show it: its own, else its built-in kind's.
+pub(crate) fn bot_display_name(name: Option<String>, system: Option<&str>) -> Option<String> {
+    use flow_like_types::bot::BotSystemKind;
+    name.filter(|name| !name.trim().is_empty()).or_else(|| {
+        system
+            .and_then(BotSystemKind::parse)
+            .map(|kind| match kind {
+                BotSystemKind::General => "Assistant".to_owned(),
+                BotSystemKind::Flux => "Flux".to_owned(),
+            })
+    })
 }
 
 /// The turn's transcript: the entries up to `trigger_message_id` in the bot's copy of the
@@ -485,6 +503,9 @@ pub(crate) async fn transcript<C: ConnectionTrait>(
     if context_prompt.is_none() {
         history.pop();
     }
+    let talking_with = (context_prompt.is_none() && kind == ConversationKind::Group)
+        .then(|| talking_with(&lines))
+        .flatten();
     Ok(Transcript {
         prompt: clip_keeping_tail(&spoken(&answered), answered.keep, MAX_PROMPT_CHARS),
         history,
@@ -494,6 +515,7 @@ pub(crate) async fn transcript<C: ConnectionTrait>(
         topic_at: topic_at_of(&window),
         trail: tool_trail(bot_id, &window),
         reads: super::taint::reads_of(db, &window, bot_id).await?,
+        talking_with,
     })
 }
 
@@ -729,6 +751,7 @@ pub(crate) async fn reaction_turn<C: ConnectionTrait>(
             topic_at: topic_at_of(&window),
             trail: None,
             reads: super::taint::reads_of(db, &window, bot_id).await?,
+            talking_with: None,
         },
         reactions,
     })

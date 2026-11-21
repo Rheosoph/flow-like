@@ -920,6 +920,7 @@ pub(crate) async fn ask_result_transcript<C: ConnectionTrait>(
         topic_at: None,
         trail: None,
         reads: Default::default(),
+        talking_with: None,
     })
 }
 

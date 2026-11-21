@@ -203,7 +203,11 @@ export function CreateFlowDialog({
 							Cancel
 						</Button>
 					</DialogClose>
-					<Button onClick={handleStartCoding} disabled={isCreating}>
+					<Button
+						onClick={handleStartCoding}
+						disabled={isCreating}
+						data-guide="create-app-submit"
+					>
 						{isCreating ? (
 							<>
 								<Loader2 className="mr-2 h-4 w-4 animate-spin" />

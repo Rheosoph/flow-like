@@ -50,6 +50,7 @@ const ACTIVITY_KEYS = {
 	"Saving a prediction": "toolActivity.savingPrediction",
 	"Fetching a URL": "toolActivity.fetchingUrl",
 	"Sending an HTTP request": "toolActivity.sendingHttpRequest",
+	"Saving progress": "toolActivity.savingProgress",
 	Working: "toolActivity.working",
 	Step: "toolActivity.step",
 } as const;

@@ -1725,6 +1725,7 @@
 	"operate": "Operate",
 	"operationsViewHealthSurfacesAndActivity": "Operations view — health, surfaces and activity",
 	"optimizedTable": "Optimized table",
+	"optimizedTablePruned": "Optimized table. Old versions removed: {{versions}}",
 	"optimizeFailedMessage": "Optimize failed: {{message}}",
 	"optinOnlySharesAggregateCountersAndSanitizedPagePathsMdashNeverPromptsBoardContentNamesOrAnyPersonalDataUsageEventsMayBeSampledSoOnlyAShareOfPageViewsIsRecorded": "Opt-in only. Shares aggregate counters and sanitized page paths — never prompts, board content, names, or any personal data. Usage events may be sampled, so only a share of page views is recorded.",
 	"optional": "Optional",

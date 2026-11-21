@@ -13,7 +13,8 @@
 		"audit",
 		"payments",
 		"devices",
-		"bots"
+		"bots",
+		"guide"
 	],
 	"languages": ["de", "en", "es", "fr", "ja", "ko", "pl", "pt-BR", "zh"]
 }

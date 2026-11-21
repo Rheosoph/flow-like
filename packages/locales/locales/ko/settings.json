@@ -1725,6 +1725,7 @@
 	"operate": "운영",
 	"operationsViewHealthSurfacesAndActivity": "운영 뷰 — 상태, 표면 영역 및 활동",
 	"optimizedTable": "",
+	"optimizedTablePruned": "",
 	"optimizeFailedMessage": "",
 	"optinOnlySharesAggregateCountersAndSanitizedPagePathsMdashNeverPromptsBoardContentNamesOrAnyPersonalDataUsageEventsMayBeSampledSoOnlyAShareOfPageViewsIsRecorded": "옵트인 방식입니다. 집계 카운터와 정제된 페이지 경로만 공유하며, 프롬프트·보드 콘텐츠·이름 등 개인 정보는 절대 공유되지 않습니다. 사용 이벤트는 샘플링될 수 있어 페이지 조회의 일부만 기록됩니다.",
 	"optional": "",

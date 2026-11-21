@@ -79,7 +79,7 @@ export function DatabaseHistoryControls({
 	const [open, setOpen] = useState(false);
 	const [pending, setPending] = useState<PendingAction | null>(null);
 	const [name, setName] = useState("");
-	const [days, setDays] = useState("30");
+	const [days, setDays] = useState("1");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const reference = history.error ? undefined : history.data?.reference;
@@ -341,7 +341,7 @@ export function DatabaseHistoryControls({
 									variant="outline"
 									onClick={() =>
 										request({
-											action: { action: "cleanup", older_than_days: 30 },
+											action: { action: "cleanup", older_than_days: 1 },
 											title: "Clean up old versions",
 											description:
 												"Remove unprotected versions older than the retention period. Removed versions can no longer be opened. Tags and branch references remain protected.",

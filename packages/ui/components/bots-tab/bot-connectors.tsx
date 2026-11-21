@@ -205,10 +205,15 @@ function AccountRows({
 	);
 }
 
-function ConnectorItem({
+export function ConnectorItem({
 	botId,
 	connector,
-}: Readonly<{ botId: string; connector: IBotConnector }>) {
+	children,
+}: Readonly<{
+	botId: string;
+	connector: IBotConnector;
+	children?: ReactNode;
+}>) {
 	const { t } = useTranslation("bots");
 	const action = useBotConnectorAction();
 	const mcp = connector.kind === "mcp";
@@ -269,6 +274,7 @@ function ConnectorItem({
 					<Trash2Icon aria-hidden />
 				</Button>
 			</div>
+			{children}
 			{caldav ? (
 				<CalendarPicker
 					connector={connector}
@@ -423,7 +429,7 @@ const ACCOUNT_PROVIDERS = [
  * provider when needed and records their consent for the workspace, which is what lets the
  * desktop send the account's token for this bot. Resolves false when nothing was needed.
  */
-function useWorkspaceConsent(botId: string) {
+export function useWorkspaceConsent(botId: string) {
 	const backend = useBackend();
 	const { query } = useBotWorkspace(botId);
 	const appId = query.data?.app_id;
@@ -720,7 +726,7 @@ function CalDavHelp({ preset }: Readonly<{ preset: CalDavPresetId }>) {
 
 type CalDavStep = { stage: "form" } | { stage: "connected"; id: string };
 
-function AddCalDav({
+export function AddCalDav({
 	botId,
 	onDone,
 }: Readonly<{ botId: string; onDone: () => void }>) {
@@ -933,15 +939,16 @@ function AddCalDav({
 	);
 }
 
-/** The MCP servers and accounts the bot may use, with what each tool may do unasked. */
+/**
+ * The MCP servers and accounts the bot may use, with what each tool may do unasked. CalDAV
+ * calendars live under the Calendar ability.
+ */
 export function BotConnectorsCard({
 	botId,
 }: Readonly<{ botId: string | null }>) {
 	const { t } = useTranslation("bots");
 	const connectors = useBotConnectors(botId);
-	const [adding, setAdding] = useState<"mcp" | "account" | "caldav" | null>(
-		null,
-	);
+	const [adding, setAdding] = useState<"mcp" | "account" | null>(null);
 	if (!botId) {
 		return (
 			<p className="text-xs text-muted-foreground">
@@ -952,7 +959,9 @@ export function BotConnectorsCard({
 			</p>
 		);
 	}
-	const list = connectors.data ?? [];
+	const list = (connectors.data ?? []).filter(
+		(connector) => connector.kind !== "caldav",
+	);
 	return (
 		<div data-slot="bot-connectors" className="flex flex-col gap-2.5">
 			<BotNotice>
@@ -978,9 +987,6 @@ export function BotConnectorsCard({
 			{adding === "account" && (
 				<AddAccount botId={botId} onDone={() => setAdding(null)} />
 			)}
-			{adding === "caldav" && (
-				<AddCalDav botId={botId} onDone={() => setAdding(null)} />
-			)}
 			{adding === null && (
 				<div className="flex flex-wrap gap-2">
 					<Button
@@ -1000,15 +1006,6 @@ export function BotConnectorsCard({
 					>
 						<PlusIcon aria-hidden />
 						{t("connectors.addAccount", "Add account")}
-					</Button>
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						onClick={() => setAdding("caldav")}
-					>
-						<PlusIcon aria-hidden />
-						{t("connectors.addCalDav", "Add calendar (CalDAV)")}
 					</Button>
 				</div>
 			)}

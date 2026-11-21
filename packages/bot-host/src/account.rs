@@ -23,7 +23,7 @@ use crate::{
     transcript,
 };
 use flow_like::flow::copilot::{
-    ReplyFiles, ToolTrail, TurnRequester,
+    ReplyFiles, TalkingWith, ToolTrail, TurnRequester,
     bot_notes::NotesHandle,
     bot_talk::AnsweredRound,
     decision::{self, Decision, DecisionParticipant},
@@ -788,6 +788,10 @@ impl Inner {
             room: None,
             addressed: transcript.addressed,
             reactions,
+            talking_with: transcript
+                .talking_with
+                .as_deref()
+                .map(|partner| TalkingWith::of(partner, bot_id, &names)),
         };
         if reacting && no_prompt {
             return self.stay_silent(lead).await;
@@ -1118,12 +1122,17 @@ impl Inner {
                         })
                     })
                     .collect::<Vec<_>>();
-                let request =
-                    participation_request(&job, &lead.trigger_message_id, &entries, &participants)
-                        .map_err(|error| RunError::Failed {
-                            code: CODE_SETUP.into(),
-                            message: error.to_string(),
-                        })?;
+                let request = participation_request(
+                    &job,
+                    &lead.trigger_message_id,
+                    &entries,
+                    &participants,
+                    &names,
+                )
+                .map_err(|error| RunError::Failed {
+                    code: CODE_SETUP.into(),
+                    message: error.to_string(),
+                })?;
                 self.runner.decide(&job, &request).await
             };
             let mut decide = Box::pin(tokio::time::timeout(
@@ -1519,6 +1528,7 @@ impl Inner {
             history,
             addressed: true,
             topic_at: transcript::topic_at(&origin),
+            talking_with: None,
         };
         let answered_round = asked.answered_round();
         Ok(Some(LateContinuation {

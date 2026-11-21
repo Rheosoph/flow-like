@@ -11,19 +11,31 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type { AuthContextProps } from "react-oidc-context";
 import { hubAuthHeaders, withHubAuth } from "./hub-auth";
 
+/** An empty Origin makes the HTTP plugin send none: Entra refuses cross-origin redemption of desktop grants (AADSTS9002326). */
+function withoutOrigin(init: RequestInit): RequestInit {
+	const headers = new Headers(init.headers);
+	headers.set("Origin", "");
+	return { ...init, headers };
+}
+
 async function oauthRequest(
 	url: string,
 	init: RequestInit,
 	binding?: IOAuthBinding,
 ): Promise<Response> {
 	if (!new URL(url).pathname.includes("/api/v1/oauth/"))
-		return tauriFetch(url, init);
+		return tauriFetch(url, withoutOrigin(init));
 	const backend = useBackendStore.getState().backend as {
 		profile?: IProfile;
 		auth?: AuthContextProps;
 	} | null;
 	const profile = backend?.profile;
 	const hub = profile?.hub;
+	const ownHub =
+		!!hub && url.startsWith(`${normalizeOAuthHub(hub)}/api/v1/oauth/`);
+	// Signed out, the Hub only proxies the provider's secret and keeps nothing.
+	if (ownHub && !binding && !backend?.auth?.user?.profile.sub)
+		return tauriFetch(url, init);
 	if (
 		!profile ||
 		!hub ||

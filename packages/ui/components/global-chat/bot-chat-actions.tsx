@@ -21,6 +21,7 @@ import { DefaultModelChip, pinnedBotModel } from "./bot-chat-parts";
 import { ChatActivityMenu } from "./chat-activity";
 import { ChatMemorySettings } from "./chat-memory-settings";
 import { ChatModelSettings } from "./chat-model-settings";
+import { ContextMeter } from "./context-meter";
 import { GlobalChatHistory } from "./global-chat-history";
 import type { GlobalChatBotView } from "./use-global-chat-bot";
 
@@ -61,18 +62,21 @@ function AutoModeToggle() {
 
 /**
  * What a bot's composer adds to the standard one: the chat's default model for a bot that pins none
- * (a pinned model can't be changed here, so it isn't shown), Auto, and a menu with updates, Flux's
- * history and, for a bot without a row, its settings.
+ * (a pinned model can't be changed here, so it isn't shown), Auto, the context meter, and a menu
+ * with updates, Flux's history and, for a bot without a row, its settings.
  */
 export function BotChatActions({
 	chatBot,
 	defaultModelLabel,
 	onOpenSettings,
+	canCompact,
 }: Readonly<{
 	chatBot: GlobalChatBotView;
 	/** The chat's default model, for a bot that pins none; null until it is known. */
 	defaultModelLabel: string | null;
 	onOpenSettings: () => void;
+	/** The chat runs the bot's turns itself, so a compaction request reaches the next one. */
+	canCompact: boolean;
 }>) {
 	const { t } = useTranslation("chat");
 	const options = t("conversationOptions", "Conversation options");
@@ -82,6 +86,7 @@ export function BotChatActions({
 				<DefaultModelChip botName={chatBot.name} label={defaultModelLabel} />
 			)}
 			<AutoModeToggle />
+			<ContextMeter canCompact={canCompact} />
 			<Popover>
 				<PopoverTrigger asChild>
 					<Button

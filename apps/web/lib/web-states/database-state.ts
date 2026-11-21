@@ -2,6 +2,7 @@ import type { IColumnMetadata, IDatabaseState } from "@flow-like/flow-like-ui";
 import {
 	type IDatabaseAction,
 	type IDatabaseActionResult,
+	type IDatabaseCleanupStats,
 	type IDatabaseDiff,
 	type IDatabaseHistory,
 	type IDatabaseSelector,
@@ -315,12 +316,19 @@ export class WebDatabaseState implements IDatabaseState {
 		keepVersions?: boolean,
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
-	): Promise<void> {
-		await apiPost(
+		olderThanDays?: number,
+	): Promise<IDatabaseCleanupStats | null> {
+		const cleanup = await apiPost<IDatabaseCleanupStats | null>(
 			`apps/${appId}/db/${encodeURIComponent(tableName)}/optimize${this.scopeQuery(userScoped, selector)}`,
-			{ keep_versions: keepVersions ?? true },
+			{
+				keep_versions: keepVersions ?? true,
+				...(olderThanDays === undefined
+					? {}
+					: { older_than_days: olderThanDays }),
+			},
 			this.backend.auth,
 		);
+		return cleanup ?? null;
 	}
 
 	async updateItem(

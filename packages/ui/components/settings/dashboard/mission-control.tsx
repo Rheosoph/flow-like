@@ -634,7 +634,10 @@ export function MissionControl({
 					</SectionCard>
 
 					{permissions.canWriteBoards && (
-						<Link href={`/library/config/flows?id=${appId}`}>
+						<Link
+							href={`/library/config/flows?id=${appId}`}
+							data-guide="app-new-flow"
+						>
 							<Button variant="outline" size="sm" className="w-full">
 								<PlusIcon className="mr-1.5 h-3 w-3" />
 								{t("newFlow", "New flow")}

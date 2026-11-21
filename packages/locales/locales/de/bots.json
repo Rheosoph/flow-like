@@ -377,7 +377,16 @@
 			"signInHint": "Prüfe den Benutzernamen und das Passwort. Die meisten Dienste benötigen ein App-Passwort statt deines normalen Passworts.",
 			"connect": "Verbinden"
 		},
-		"addCalDav": "Kalender hinzufügen (CalDAV)"
+		"calendarSetup": {
+			"afterSave": "Speichere den Bot zuerst, dann verbinde hier seine Kalender.",
+			"allow": "Kalenderzugriff erlauben",
+			"caldav": "iCloud & CalDAV",
+			"finishSignIn": "Melde dich bei {{name}} an und wähle dann noch einmal {{name}}, um ihn hinzuzufügen.",
+			"google": "Google Kalender",
+			"localOnly": "Google- und Outlook-Kalender brauchen einen Bot in deinem Konto. Ein Bot auf diesem Computer liest CalDAV-Kalender wie iCloud oder Nextcloud.",
+			"microsoft": "Outlook-Kalender",
+			"noAccess": "Ohne Kalenderzugriff verbunden, deshalb kann der Bot diesen Kalender noch nicht lesen."
+		}
 	},
 	"crew": {
 		"activity": {
@@ -2252,7 +2261,7 @@
 		},
 		"layersLabel": "Im Kalender anzeigen",
 		"loadFailed": "Der Kalender von {{name}} konnte nicht geladen werden: {{error}}",
-		"noSources": "Kein Kalender verbunden. Füge unter „Verbindungen“ in den Einstellungen von {{name}} ein Google- oder Microsoft-Konto oder einen CalDAV-Kalender wie iCloud oder Nextcloud hinzu.",
+		"noSources": "Kein Kalender verbunden. Füge unter „Kalender“ in den Einstellungen von {{name}} Google Kalender, Outlook oder einen CalDAV-Kalender wie iCloud oder Nextcloud hinzu.",
 		"openSettings": "Einstellungen öffnen",
 		"repeats": {
 			"custom": "Benutzerdefiniert ({{cron}})",

@@ -1,6 +1,7 @@
 "use client";
 
 import { type ReactNode, useId } from "react";
+import { emitGuideEvent } from "../../lib/guide/guide-events";
 import type { DraftRelay } from "../global-chat/chat-bot-avatar";
 import type { GlobalChatBotView } from "../global-chat/use-global-chat-bot";
 import type { BotPanelActions } from "./bot-details";
@@ -99,9 +100,10 @@ export function BotChatFrame({
 							relay={relay}
 							expanded={tab !== null}
 							controls={panelId}
-							onToggle={() =>
-								panel.onTabChange(tab === null ? DEFAULT_BOT_PANEL_TAB : null)
-							}
+							onToggle={() => {
+								if (tab === null) emitGuideEvent("bots:details-opened");
+								panel.onTabChange(tab === null ? DEFAULT_BOT_PANEL_TAB : null);
+							}}
 						/>
 					}
 				/>

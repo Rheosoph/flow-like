@@ -627,6 +627,14 @@ const routeCases: {
 		body: { keep_versions: true },
 	},
 	{
+		name: "optimize with chosen retention",
+		invoke: (s) =>
+			s.optimizeTable("a", "t", { keep_versions: false, older_than_days: 1 }),
+		method: "POST",
+		path: "/apps/a/db/t/optimize",
+		body: { keep_versions: false, older_than_days: 1 },
+	},
+	{
 		name: "history",
 		invoke: (s) => s.getTableHistory("a", "t", { branch: "release" }),
 		method: "GET",
