@@ -553,7 +553,8 @@
 				"badge": "Asked again",
 				"hint": "You always allow {{target}}, but this turn read web pages first, so it asks once more. Turns without web content still use your permission.",
 				"noAlways": "Can't be remembered after the turn read web pages",
-				"notice": "Asked again because this turn read web pages."
+				"notice": "Asked again because this turn read web pages.",
+				"siteHint": "This turn read web pages, so auto approval no longer covers sites you haven't allowed. Always allow this site to read from it without asking."
 			},
 			"invite": {
 				"allow": "Invite",
@@ -1756,7 +1757,7 @@
 		},
 		"grants": {
 			"auto": {
-				"description": "{{name}} acts without asking you first. Deleting data, changing settings and sending data to a site after reading the web still ask.",
+				"description": "{{name}} acts without asking you first. Deleting data, changing settings and, after reading the web, sending data to a site or reading from one you haven't allowed still ask.",
 				"title": "Approve automatically"
 			},
 			"expires": "Lapses on {{date}} if unused",

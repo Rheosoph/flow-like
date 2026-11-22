@@ -201,9 +201,22 @@ test("tallies count identical calls each and skip unanswered ones", () => {
 	).toEqual({ allowed: 3, denied: 1 });
 });
 
-test("Always is blocked after web content, for secrets and for calls without scopes", () => {
+test("Always is blocked after web content but for a site read, for secrets and for calls without scopes", () => {
 	expect(alwaysBlock(item("a"))).toBeUndefined();
-	expect(alwaysBlock(item("a", { afterWebContent: true }))).toBe("webContent");
+	expect(alwaysBlock(item("a", { afterWebContent: true }))).toBeUndefined();
+	expect(
+		alwaysBlock(
+			item("a", { afterWebContent: true, scopes: ["web:cisa.gov:write"] }),
+		),
+	).toBe("webContent");
+	expect(
+		alwaysBlock(
+			item("a", {
+				afterWebContent: true,
+				scopes: ["web:cisa.gov:read", "web:cisa.gov:secret:KEY"],
+			}),
+		),
+	).toBe("webContent");
 	expect(alwaysBlock(item("a", { scopes: [] }))).toBe("notRememberable");
 	expect(
 		alwaysBlock(item("a", { secret: { name: "API_KEY", description: "x" } })),

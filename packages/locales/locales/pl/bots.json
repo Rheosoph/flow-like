@@ -567,7 +567,8 @@
 				"badge": "",
 				"hint": "",
 				"noAlways": "",
-				"notice": ""
+				"notice": "",
+				"siteHint": ""
 			},
 			"invite": {
 				"allow": "",

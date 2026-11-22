@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { grantKeys, grantScopes } from "./tool-grant-scopes";
+import {
+	grantKeys,
+	grantScopes,
+	isSiteReadScope,
+	siteReadsOnly,
+} from "./tool-grant-scopes";
 
 type Row = [
 	name: string,
@@ -254,6 +259,70 @@ const ROWS: Row[] = [
 		null,
 	],
 	[
+		"web_request reads a site, www kept",
+		"web_request",
+		{ url: "https://WWW.cisa.gov./feeds/kev.xml?x=1" },
+		undefined,
+		["web:www.cisa.gov:read"],
+	],
+	[
+		"web_request writes apart and keeps a port",
+		"web_request",
+		{ url: "http://localhost:8123/api", method: " post " },
+		undefined,
+		["web:localhost:8123:write"],
+	],
+	[
+		"web_request HEAD is a read, default port dropped",
+		"web_request",
+		{ url: "https://api.example.com:443/x", method: "HEAD" },
+		undefined,
+		["web:api.example.com:read"],
+	],
+	[
+		"web_request grants each secret per site",
+		"web_request",
+		{
+			url: "https://api.github.com/x?key={{secret:Z_KEY}}",
+			headers: { Authorization: "Bearer {{secret:GITHUB_TOKEN}}" },
+		},
+		undefined,
+		[
+			"web:api.github.com:read",
+			"web:api.github.com:secret:GITHUB_TOKEN",
+			"web:api.github.com:secret:Z_KEY",
+		],
+	],
+	[
+		"web_request to a private network",
+		"web_request",
+		{ url: "https://nas.example.com/x", allow_private: true },
+		undefined,
+		["web:nas.example.com:private:read"],
+	],
+	[
+		"web_request with credentials in the url",
+		"web_request",
+		{ url: "https://user:pw@example.com/" },
+		undefined,
+		null,
+	],
+	[
+		"web_request that is not http",
+		"web_request",
+		{ url: "ftp://example.com/file" },
+		undefined,
+		null,
+	],
+	[
+		"file_save downloads under the site's read",
+		"file_save",
+		{ url: "https://api.osv.dev/v1/all.zip", path: "osv.zip" },
+		undefined,
+		["web:api.osv.dev:read"],
+	],
+	["file_save without a url", "file_save", { path: "x" }, undefined, null],
+	[
 		"any other tool is granted whole",
 		"file_write",
 		{ path: "x" },
@@ -280,5 +349,38 @@ describe("grantKeys", () => {
 
 	test("a call that is never remembered writes nothing", () => {
 		expect(grantKeys("http_request", { url: "https://x.com" })).toEqual([]);
+	});
+});
+
+describe("siteReadsOnly", () => {
+	test("only plain site reads keep their grant after web content", () => {
+		for (const scope of [
+			"web:api.example.com:read",
+			"web:localhost:8123:read",
+			"web:[::1]:8080:read",
+			"web:secret:read",
+		]) {
+			expect(isSiteReadScope(scope)).toBe(true);
+		}
+		for (const scope of [
+			"web:api.example.com:write",
+			"web:nas.example.com:private:read",
+			"web:api.example.com:secret:API_TOKEN",
+			"web:api.example.com:secret:read",
+			"web::read",
+			"browser:example.com",
+			"*",
+		]) {
+			expect(isSiteReadScope(scope)).toBe(false);
+		}
+	});
+
+	test("every scope of the call must be a site read", () => {
+		expect(siteReadsOnly(["web:a.com:read"])).toBe(true);
+		expect(siteReadsOnly(["web:a.com:read", "web:a.com:secret:KEY"])).toBe(
+			false,
+		);
+		expect(siteReadsOnly([])).toBe(false);
+		expect(siteReadsOnly(null)).toBe(false);
 	});
 });

@@ -38,7 +38,7 @@ function AutoApproveSwitch({
 				<p className="text-xs text-muted-foreground">
 					{t(
 						"panel.grants.auto.description",
-						"{{name}} acts without asking you first. Deleting data, changing settings and sending data to a site after reading the web still ask.",
+						"{{name}} acts without asking you first. Deleting data, changing settings and, after reading the web, sending data to a site or reading from one you haven't allowed still ask.",
 						{ name },
 					)}
 				</p>

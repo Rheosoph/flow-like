@@ -274,7 +274,7 @@ pub struct ApprovalItem {
     #[serde(default = "one_call", skip_serializing_if = "is_one_call")]
     pub calls: u32,
     /// The turn read web content before this call, so the owner's standing grants for it were set
-    /// aside and it asks again; "always" is not offered.
+    /// aside and it asks again; "always" is offered only when every scope is a plain site read.
     #[serde(default, skip_serializing_if = "is_false")]
     pub after_web_content: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

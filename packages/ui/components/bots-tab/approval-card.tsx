@@ -1,7 +1,6 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useEffect } from "react";
 import {
 	BanIcon,
 	CheckCheckIcon,
@@ -13,10 +12,12 @@ import {
 	TimerOffIcon,
 	UserPlusIcon,
 } from "lucide-react";
+import { useEffect } from "react";
 import { useBotSecretSealing } from "../../hooks/use-bot-secret-sealing";
 import { useBot, useBotLabels, useUpsertBotSecret } from "../../hooks/use-bots";
 import { requiresFreshToolApproval } from "../../lib/frontend-tool-approval-scope";
 import { emitGuideEvent } from "../../lib/guide/guide-events";
+import { siteReadsOnly } from "../../lib/tool-grant-scopes";
 import { BotAvatar } from "../bots/bot-avatar";
 import type { BotAppearance } from "../bots/types";
 import type { IMessageApproval } from "../interfaces/chat-default/chat-db";
@@ -38,7 +39,7 @@ import {
 	WebContentNotice,
 	useDecisionText,
 } from "./approval-batch";
-import { callPhrase, isBatch } from "./approval-batch-model";
+import { approvalItems, callPhrase, isBatch } from "./approval-batch-model";
 import type { ApprovalDecision } from "./approval-entry";
 import { ApprovalPicture } from "./approval-picture";
 import {
@@ -114,9 +115,13 @@ function SingleApprovalCard({
 	const waiting = !decision && !closure;
 	const isConfiguration = requiresFreshToolApproval(approval.tool);
 	const settingsText = useBotSettingsApprovalText(approval.tool);
-	const flagged = approval.afterWebContent === true;
+	const flagged =
+		approval.afterWebContent === true ||
+		approvalItems(approval).some((item) => item.afterWebContent);
 	const rememberable =
-		!isConfiguration && !flagged && approval.scopes.length > 0;
+		!isConfiguration &&
+		approval.scopes.length > 0 &&
+		(!flagged || siteReadsOnly(approval.scopes));
 	const tone = decisionTone(decision, closure);
 	const disabled = readOnly || state.pending || state.elsewhere;
 	const target = approval.scopes

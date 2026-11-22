@@ -4,7 +4,7 @@ export const SCOPE_DOCUMENTS_EXPENSIVE = "documents.expensive";
 /**
  * The tool of the auto-approval grant `(*, *)`: everything a grant could cover runs without
  * asking. Deleting data, changing settings, cost checks and web destinations after web content
- * still ask.
+ * still ask; of those, only a site the owner always allows reading is read without asking.
  */
 export const AUTO_APPROVE_TOOL = "*";
 
@@ -103,6 +103,87 @@ export function siteOf(url: string): string | undefined {
 	return host || undefined;
 }
 
+/**
+ * The site `web_request` grants are kept for: the lowercase host, `host:port` off the default
+ * port, `www.` kept. Mirrors `site_of` in `packages/bot-tools/src/web/mod.rs`.
+ */
+function webSiteOf(raw: string): string | undefined {
+	let url: URL;
+	try {
+		url = new URL(raw.trim());
+	} catch {
+		return undefined;
+	}
+	if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+	if (url.username || url.password) return undefined;
+	const host = url.hostname.toLowerCase().replace(/\.+$/, "");
+	if (!host) return undefined;
+	return url.port ? `${host}:${url.port}` : host;
+}
+
+const SECRET_REFERENCE = /\{\{secret:([\s\S]*?)\}\}/g;
+const SECRET_NAME = /^[A-Za-z0-9_.-]{1,128}$/;
+
+/** The `{{secret:NAME}}` names anywhere in a call's arguments, sorted. */
+function referencedSecrets(args: unknown): string[] {
+	const names = new Set<string>();
+	const collect = (value: unknown) => {
+		if (typeof value === "string") {
+			for (const [, name] of value.matchAll(SECRET_REFERENCE)) {
+				if (SECRET_NAME.test(name)) names.add(name);
+			}
+		} else if (Array.isArray(value)) {
+			value.forEach(collect);
+		} else if (isRecord(value)) {
+			Object.values(value).forEach(collect);
+		}
+	};
+	collect(args);
+	return [...names].sort();
+}
+
+/**
+ * `web:<site>:read` or `:write` (`:private:read`/`:private:write` with `allow_private`), plus
+ * `web:<site>:secret:<NAME>` per secret sent. Mirrors `grant_scopes` in
+ * `packages/bot-tools/src/web/mod.rs`.
+ */
+function webScopes(args: Args): string[] | null {
+	if (typeof args.url !== "string") return null;
+	const site = webSiteOf(args.url);
+	if (!site) return null;
+	const method =
+		typeof args.method === "string" && args.method.trim()
+			? args.method.trim().toUpperCase()
+			: "GET";
+	const kind = method === "GET" || method === "HEAD" ? "read" : "write";
+	const privateNet = args.allow_private === true ? "private:" : "";
+	const scopes = [
+		`web:${site}:${privateNet}${kind}`,
+		...referencedSecrets(args).map((name) => `web:${site}:secret:${name}`),
+	].map(cleanScopePart);
+	return scopes.every(Boolean) ? (scopes as string[]) : null;
+}
+
+/** A plain read of a site, `web:<site>:read`: not private-network, a write or a secret. */
+export function isSiteReadScope(scope: string): boolean {
+	const site = scope.startsWith("web:")
+		? scope.slice(4).match(/^(.+):read$/)?.[1]
+		: undefined;
+	return (
+		site !== undefined &&
+		!site.endsWith(":private") &&
+		!site.includes(":secret")
+	);
+}
+
+/**
+ * Whether every scope is a plain site read, the one web destination whose grant still covers a
+ * call after the turn read web pages. Mirrors `site_reads_only` in `tool_grants.rs`.
+ */
+export function siteReadsOnly(scopes: readonly string[] | null): boolean {
+	return !!scopes && scopes.length > 0 && scopes.every(isSiteReadScope);
+}
+
 function recipientDomain(address: string): string | undefined {
 	const at = address.trim().lastIndexOf("@");
 	if (at < 1) return undefined;
@@ -192,6 +273,12 @@ export function grantScopes(
 			const program = programName(args.command, args.shell === true);
 			return single(program ? cleanScopePart(`command:${program}`) : undefined);
 		}
+		case "web_request":
+			return webScopes(args);
+		case "file_save":
+			return typeof args.url === "string" && args.url.trim()
+				? webScopes({ url: args.url })
+				: null;
 		default:
 			return [SCOPE_ALL];
 	}

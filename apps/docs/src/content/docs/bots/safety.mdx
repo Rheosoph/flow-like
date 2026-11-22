@@ -52,6 +52,8 @@ Review and revoke standing approvals in the bot's details under **Allowed action
 
 **Auto mode.** In a chat you're watching, Auto mode runs tools and applies changes without asking each time, except for the actions above. Use it when you'll review the result afterwards.
 
+**After reading the web.** A web page can contain instructions meant for the bot. So once a turn has read web pages, calls that reach a website ask again, even when you always allow them and even in Auto mode or with **Approve automatically**: writing to a site, sending a secret, reaching a private network and opening a site in the browser. Reading from a site you always allow still runs without asking. For a site you haven't allowed yet, choose **Always allow** on the card and later turns read from it without asking.
+
 **Background turns.** When a schedule, webhook or mail wakes the bot and nobody is watching, the bot's decision model checks whether your own messages or the bot's instructions clearly cover the exact call. A yes runs that one call and is never saved as an approval. Content from the trigger itself, such as the text of a mail, never counts as permission. Otherwise the turn pauses until you answer, for up to 7 days.
 
 ## Data labels

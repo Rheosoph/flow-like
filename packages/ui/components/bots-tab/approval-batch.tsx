@@ -24,6 +24,7 @@ import {
 import { useBotSecretSealing } from "../../hooks/use-bot-secret-sealing";
 import { useUpsertBotSecret } from "../../hooks/use-bots";
 import type { BotSecretSealing } from "../../lib/bot-secret-sealing";
+import { siteReadsOnly } from "../../lib/tool-grant-scopes";
 import { cn } from "../../lib/utils";
 import { BotAvatar } from "../bots/bot-avatar";
 import type { BotAppearance } from "../bots/types";
@@ -105,7 +106,10 @@ export function useDecisionText() {
  * "Asked again", with why on hover and focus. In a list narrower than 24rem it keeps only the globe
  * the header's notice shows; the words stay for screen readers.
  */
-export function AskedAgainPill({ target }: Readonly<{ target: string }>) {
+export function AskedAgainPill({
+	target,
+	siteRead,
+}: Readonly<{ target: string; siteRead: boolean }>) {
 	const { t } = useTranslation("bots");
 	return (
 		<Tooltip>
@@ -124,11 +128,16 @@ export function AskedAgainPill({ target }: Readonly<{ target: string }>) {
 				</RequestPill>
 			</TooltipTrigger>
 			<TooltipContent className="max-w-72">
-				{t(
-					"crew.approval.webContent.hint",
-					"You always allow {{target}}, but this turn read web pages first, so it asks once more. Turns without web content still use your permission.",
-					{ target },
-				)}
+				{siteRead
+					? t(
+							"crew.approval.webContent.siteHint",
+							"This turn read web pages, so auto approval no longer covers sites you haven't allowed. Always allow this site to read from it without asking.",
+						)
+					: t(
+							"crew.approval.webContent.hint",
+							"You always allow {{target}}, but this turn read web pages first, so it asks once more. Turns without web content still use your permission.",
+							{ target },
+						)}
 			</TooltipContent>
 		</Tooltip>
 	);
@@ -411,7 +420,12 @@ function BatchGroup({
 					<span className="min-w-0 truncate font-medium text-foreground/90">
 						{target}
 					</span>
-					{group.flagged && mode.flags && <AskedAgainPill target={target} />}
+					{group.flagged && mode.flags && (
+						<AskedAgainPill
+							target={target}
+							siteRead={siteReadsOnly(group.scopes)}
+						/>
+					)}
 					<span className="sr-only">, </span>
 					{!choose && (
 						<span className="ml-auto shrink-0 pl-2 text-[11px] tabular-nums text-muted-foreground">
