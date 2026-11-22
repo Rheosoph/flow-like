@@ -478,18 +478,42 @@ describe("ApprovalCard for one call", () => {
 		expect(container.textContent).not.toContain("Asked again");
 	});
 
-	test("asked again after web content: says why and offers no Always allow", async () => {
+	test("a site read asked again after web content: says why and offers Always allow", async () => {
+		const summary = "The bot wants to send a GET request to cisa.gov/alerts.";
 		await show(
 			card({
 				tool: "web_request",
-				summary: "The bot wants to send a GET request to cisa.gov/alerts.",
+				summary,
 				scopes: ["web:cisa.gov:read"],
-				afterWebContent: true,
+				items: [
+					{
+						argsHash: "h1",
+						tool: "web_request",
+						summary,
+						scopes: ["web:cisa.gov:read"],
+						calls: 1,
+						afterWebContent: true,
+					},
+				],
 			}),
 		);
 		const text = container.textContent ?? "";
 		expect(text).toContain("Read from cisa.gov");
-		expect(text).toContain("Asked again");
+		expect(text).toContain("Asked again because this turn read web pages.");
+		expect(footerButtons()).toEqual(["Deny", "Allow once", "Always allow"]);
+	});
+
+	test("a write asked again after web content: says why and offers no Always allow", async () => {
+		await show(
+			card({
+				tool: "web_request",
+				summary: "The bot wants to send a POST request to cisa.gov/report.",
+				scopes: ["web:cisa.gov:write"],
+				afterWebContent: true,
+			}),
+		);
+		const text = container.textContent ?? "";
+		expect(text).toContain("Write to cisa.gov");
 		expect(text).toContain("Asked again because this turn read web pages.");
 		expect(footerButtons()).toEqual(["Deny", "Allow once"]);
 	});
@@ -792,16 +816,14 @@ describe("ApprovalCard with a batch of calls", () => {
 		);
 	});
 
-	test("a call asked again after web content: notice, badge, and no Always anywhere", async () => {
-		await show(
-			card(
-				batch([
-					read("h1", 1, { afterWebContent: true }),
-					read("h2", 2, { afterWebContent: true }),
-					mail,
-				]),
-			),
-		);
+	test("a write asked again after web content: notice, badge, and no Always anywhere", async () => {
+		const post = (hash: string, page: number) =>
+			read(hash, page, {
+				summary: `The bot wants to send a POST request to cisa.gov/report?p=${page}.`,
+				scopes: ["web:cisa.gov:write"],
+				afterWebContent: true,
+			});
+		await show(card(batch([post("h1", 1), post("h2", 2), mail])));
 		expect(container.textContent).toContain(
 			"Asked again because this turn read web pages.",
 		);
@@ -813,7 +835,7 @@ describe("ApprovalCard with a batch of calls", () => {
 			"Allow all once",
 		]);
 		await click(button("Choose per call"));
-		const always = radio(cisa, "always");
+		const always = radio("Answer for 2 calls to Write to cisa.gov", "always");
 		expect(always?.disabled).toBe(true);
 		const reason = window.document.getElementById(
 			always?.getAttribute("aria-describedby") ?? "",
@@ -822,6 +844,29 @@ describe("ApprovalCard with a batch of calls", () => {
 			"Can't be remembered after the turn read web pages",
 		);
 		expect(radio(acme, "always")?.disabled).toBe(false);
+	});
+
+	test("site reads asked again after web content may be always allowed", async () => {
+		await show(
+			card(
+				batch([
+					read("h1", 1, { afterWebContent: true }),
+					read("h2", 2, { afterWebContent: true }),
+				]),
+			),
+		);
+		expect(container.textContent).toContain(
+			"Asked again because this turn read web pages.",
+		);
+		expect(groups()[0]).toContain("Asked again");
+		expect(footerButtons()).toEqual([
+			"Choose per call",
+			"Deny all",
+			"Allow all once",
+			"Always allow all",
+		]);
+		await click(button("Choose per call"));
+		expect(radio(cisa, "always")?.disabled).toBe(false);
 	});
 
 	test("a secret row holds the shortcuts until it is saved or declined", async () => {

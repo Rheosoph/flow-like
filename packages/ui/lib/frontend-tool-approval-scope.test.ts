@@ -461,4 +461,29 @@ describe("a call asked again after web content", () => {
 			rememberable: false,
 		});
 	});
+
+	test("a plain site read keeps its site's key and may be remembered", () => {
+		const read = {
+			requestId: "r1",
+			toolName: "web_request",
+			arguments: { url: "https://api.osv.dev/v1/vulns/X" },
+			approvalKind: "mutating",
+			approvalSessionKey: "web_request:web:api.osv.dev:read",
+			asksAgain: "web_content" as const,
+		};
+		expect(resolveFrontendToolApprovalScope(read)).toEqual({
+			sessionKey: "web_request:web:api.osv.dev:read",
+			rememberable: true,
+		});
+		for (const args of [
+			{ url: "https://api.osv.dev/v1/query", method: "POST" },
+			{ url: "https://api.osv.dev/v1", allow_private: true },
+			{ url: "https://api.osv.dev/v1?k={{secret:OSV_KEY}}" },
+		]) {
+			expect(
+				resolveFrontendToolApprovalScope({ ...read, arguments: args })
+					.rememberable,
+			).toBe(false);
+		}
+	});
 });

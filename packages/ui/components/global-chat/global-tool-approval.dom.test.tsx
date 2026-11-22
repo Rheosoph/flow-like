@@ -399,6 +399,59 @@ describe("standing approvals belong to the run that asks", () => {
 		expect((await askedAgain.answer(false))?.approved).toBe(false);
 	});
 
+	test("a site read asked again after web content runs on its site's grant only", async () => {
+		const saved: Array<[string, string, string]> = [];
+		useBackendStore.getState().setBackend({
+			userState: { getProfile: async () => ({ id: "profile-1" }) },
+			boardState: {},
+			botState: {
+				listToolGrants: async () => [
+					{ tool: "web_request", scope: "web:api.osv.dev:read" },
+					{ tool: "web_request", scope: "*" },
+				],
+				putToolGrant: async (botId: string, tool: string, scope: string) => {
+					saved.push([botId, tool, scope]);
+					return { tool, scope };
+				},
+			},
+		} as never);
+		useGlobalChatStore.getState().setAutoMode(true, "bot:bot_scout");
+		const webCall = (url: string, method = "GET"): FrontendToolRequest => {
+			requestCount += 1;
+			return {
+				requestId: `request-${requestCount}`,
+				toolName: "web_request",
+				arguments: { url, method },
+				approval: {
+					kind: "mutating",
+					title: "Approve web_request",
+					sessionKey: `web_request:web:${new URL(url).host}:${method === "GET" ? "read" : "write"}`,
+					asks_again: "web_content",
+				},
+				approvalOnly: true,
+				context: { runId: RUNS.scout.runId },
+			};
+		};
+
+		const granted = await ask(webCall("https://api.osv.dev/v1/vulns/X"));
+		expect(granted.prompt).toBeNull();
+		expect(granted.answered()?.approved).toBe(true);
+
+		const newSite = await ask(webCall("https://api.github.com/advisories"));
+		expect(newSite.prompt).toMatchObject({
+			asksAgain: "web_content",
+			rememberable: true,
+		});
+		expect((await newSite.answer(true, true))?.approved).toBe(true);
+		expect(saved).toEqual([
+			["bot_scout", "web_request", "web:api.github.com:read"],
+		]);
+
+		const write = await ask(webCall("https://api.osv.dev/v1/query", "POST"));
+		expect(write.prompt).toMatchObject({ rememberable: false });
+		expect((await write.answer(false))?.approved).toBe(false);
+	});
+
 	test("auto mode switched on in Flux leaves bots asking", async () => {
 		useGlobalChatStore.getState().setAutoMode(true);
 		const flux = await ask(appEventCall(RUNS.flux.runId));

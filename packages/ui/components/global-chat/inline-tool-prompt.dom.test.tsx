@@ -269,14 +269,32 @@ test("an event the app can't name keeps its id", async () => {
 	);
 });
 
-test("a call asked again after web content says why and offers no Don't ask again", async () => {
-	const respond = vi.fn();
+test("a site read asked again after web content says why and may be remembered", async () => {
 	await show(
 		approval({
 			toolName: "web_request",
 			title: "Approve web_request",
 			description: "Send a GET request to cisa.gov/alerts",
 			appId: undefined,
+			rememberAppId: undefined,
+			asksAgain: "web_content",
+		}),
+	);
+	expect(
+		host.querySelector("[data-slot='web-content-notice']")?.textContent,
+	).toBe("Asked again because this turn read web pages.");
+	expect(host.querySelector("#inline-tool-prompt-remember")).not.toBeNull();
+});
+
+test("a write asked again after web content says why and offers no Don't ask again", async () => {
+	const respond = vi.fn();
+	await show(
+		approval({
+			toolName: "web_request",
+			title: "Approve web_request",
+			description: "Send a POST request to cisa.gov/report",
+			appId: undefined,
+			rememberable: false,
 			rememberAppId: undefined,
 			asksAgain: "web_content",
 			respond,

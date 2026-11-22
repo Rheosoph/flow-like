@@ -579,6 +579,10 @@ fn fetch(id: &str, url: &str) -> Vec<RawStreamingChoice<()>> {
     call(id, "web_request", json!({"method": "GET", "url": url}))
 }
 
+fn post(id: &str, url: &str) -> Vec<RawStreamingChoice<()>> {
+    call(id, "web_request", json!({"method": "POST", "url": url}))
+}
+
 fn web_search(id: &str) -> Vec<RawStreamingChoice<()>> {
     call(id, INTERNET_SEARCH_TOOL, json!({"query": "kev feed"}))
 }
@@ -883,15 +887,23 @@ async fn a_research_turn_searches_and_reads_without_a_card() {
     assert_eq!(saved(&store).state["web_content"], true);
 }
 
-async fn granted_site(grants: &Grants, url: &str) {
-    let scope = grant_scopes("web_request", &json!({"method": "GET", "url": url}), None)
+async fn granted(grants: &Grants, method: &str, url: &str) {
+    let scope = grant_scopes("web_request", &json!({"method": method, "url": url}), None)
         .unwrap()
         .remove(0);
     grants.put("web_request", &scope).await.unwrap();
 }
 
+async fn granted_site(grants: &Grants, url: &str) {
+    granted(grants, "GET", url).await;
+}
+
+async fn granted_write(grants: &Grants, url: &str) {
+    granted(grants, "POST", url).await;
+}
+
 #[tokio::test]
-async fn a_granted_web_request_written_after_a_search_round_parks() {
+async fn a_granted_site_read_after_a_search_round_runs() {
     let store = Arc::new(Store::default());
     let grants = Arc::new(Grants::default());
     granted_site(&grants, "https://cisa.gov/kev").await;
@@ -899,6 +911,26 @@ async fn a_granted_web_request_written_after_a_search_round_parks() {
     let client = Client::new(vec![
         web_search("search"),
         fetch("fetch", "https://cisa.gov/kev"),
+        text("Read it."),
+    ]);
+    let tools = [INTERNET_SEARCH_TOOL, "web_request"];
+    assert_eq!(
+        attempt(&store, &client, &host, &tools).await.unwrap(),
+        "Read it."
+    );
+    assert_eq!(host.ran(), vec!["https://cisa.gov/kev"]);
+    assert!(host.batch.card().is_none());
+}
+
+#[tokio::test]
+async fn a_granted_web_write_after_a_search_round_parks() {
+    let store = Arc::new(Store::default());
+    let grants = Arc::new(Grants::default());
+    granted_write(&grants, "https://cisa.gov/kev").await;
+    let host = GateHost::new(&grants);
+    let client = Client::new(vec![
+        web_search("search"),
+        post("post", "https://cisa.gov/kev"),
     ]);
     let tools = [INTERNET_SEARCH_TOOL, "web_request"];
     assert!(waits(attempt(&store, &client, &host, &tools).await));
@@ -936,14 +968,14 @@ async fn a_granted_web_request_in_the_search_round_runs() {
 async fn the_mark_survives_a_park_and_does_not_reask_the_held_round() {
     let store = Arc::new(Store::default());
     let grants = Arc::new(Grants::default());
-    granted_site(&grants, "https://cisa.gov/kev").await;
-    granted_site(&grants, "https://nvd.nist.gov/feed").await;
+    granted_write(&grants, "https://cisa.gov/kev").await;
+    granted_write(&grants, "https://nvd.nist.gov/feed").await;
     let host = GateHost::new(&grants);
     let client = Client::new(vec![
         web_search("search"),
         [
-            fetch("fetch-1", "https://cisa.gov/kev"),
-            fetch("fetch-2", "https://nvd.nist.gov/feed"),
+            post("post-1", "https://cisa.gov/kev"),
+            post("post-2", "https://nvd.nist.gov/feed"),
         ]
         .concat(),
     ]);

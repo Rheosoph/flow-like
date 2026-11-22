@@ -904,12 +904,16 @@ async fn a_later_asking_call_joins_the_batch() {
 }
 
 #[flow_like_types::tokio::test]
-async fn a_granted_web_request_parks_with_a_flagged_item_after_web_content() {
+async fn a_granted_web_write_parks_with_a_flagged_item_after_web_content() {
     use flow_like::flow::copilot::run_recovery::{CallScope, scope_call};
-    let feed = json!({ "method": "GET", "url": "https://cisa.gov/kev.json" });
+    let feed = json!({ "method": "POST", "url": "https://cisa.gov/kev.json" });
+    let read = json!({ "method": "GET", "url": "https://cisa.gov/kev.json" });
     let site = grant_scopes("web_request", &feed, None).unwrap().remove(0);
     let grants = Arc::new(MemoryGrants::default());
     grants.put("web_request", &site).await.unwrap();
+    for scope in grant_scopes("web_request", &read, None).unwrap() {
+        grants.put("web_request", &scope).await.unwrap();
+    }
     let host = executor_host(grants).await;
     let mutating = AtomicBool::new(false);
     assert!(host.covers("web_request", &feed).await);
@@ -926,6 +930,10 @@ async fn a_granted_web_request_parks_with_a_flagged_item_after_web_content() {
         held_replay: false,
     };
     assert!(!scope_call(marked(), host.covers("web_request", &feed)).await);
+    assert!(
+        scope_call(marked(), host.covers("web_request", &read)).await,
+        "the site's read grant survives web content"
+    );
     let waiting = parse(
         &scope_call(
             marked(),

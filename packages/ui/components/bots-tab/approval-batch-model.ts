@@ -1,4 +1,5 @@
 import { requiresFreshToolApproval } from "../../lib/frontend-tool-approval-scope";
+import { siteReadsOnly } from "../../lib/tool-grant-scopes";
 import type { IBotApprovalItemDecision } from "../../state/backend-state/bot-state";
 import type { ApprovalDecision } from "./approval-entry";
 import type {
@@ -203,7 +204,7 @@ export type AlwaysBlock = "notRememberable" | "webContent";
 export function alwaysBlock(
 	item: ConversationApprovalItem,
 ): AlwaysBlock | undefined {
-	if (item.afterWebContent) return "webContent";
+	if (item.afterWebContent && !siteReadsOnly(item.scopes)) return "webContent";
 	if (
 		item.secret ||
 		item.scopes.length === 0 ||

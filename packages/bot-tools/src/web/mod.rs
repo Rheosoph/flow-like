@@ -149,6 +149,17 @@ pub fn grant_scopes(args: &Value) -> Option<Vec<String>> {
     Some(scopes)
 }
 
+/// Whether `scope` is the plain read scope of a site, `web:<site>:read`: not a private-network
+/// read, a write or a secret.
+pub fn is_site_read_scope(scope: &str) -> bool {
+    scope
+        .strip_prefix("web:")
+        .and_then(|rest| rest.strip_suffix(":read"))
+        .is_some_and(|site| {
+            !site.is_empty() && !site.ends_with(":private") && !site.contains(":secret")
+        })
+}
+
 fn query_text(url: &Url) -> String {
     let Some(query) = url.query().filter(|query| !query.is_empty()) else {
         return String::new();

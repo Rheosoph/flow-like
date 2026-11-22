@@ -316,8 +316,7 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 	const isConfiguration =
 		isApproval && requiresFreshToolApproval(prompt.toolName);
 	const settingsText = useBotSettingsApprovalText(prompt.toolName);
-	const rememberable =
-		!isConfiguration && !prompt.asksAgain && prompt.rememberable !== false;
+	const rememberable = !isConfiguration && prompt.rememberable !== false;
 	const tone: RequestTone = isApproval ? "warning" : "primary";
 
 	const canSend = isAskUserFormComplete(ask, drafts);

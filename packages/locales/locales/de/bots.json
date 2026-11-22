@@ -553,7 +553,8 @@
 				"badge": "Erneute Rückfrage",
 				"hint": "Du erlaubst {{target}} immer. Da dieser Durchlauf zuvor Webseiten gelesen hat, wird erneut gefragt. Für Durchläufe ohne Webinhalte gilt deine Freigabe weiterhin.",
 				"noAlways": "Kann nach dem Lesen von Webseiten in diesem Durchlauf nicht dauerhaft erlaubt werden",
-				"notice": "Erneute Rückfrage, weil dieser Durchlauf Webseiten gelesen hat."
+				"notice": "Erneute Rückfrage, weil dieser Durchlauf Webseiten gelesen hat.",
+				"siteHint": "Dieser Durchlauf hat Webseiten gelesen, daher deckt die automatische Freigabe keine Websites mehr ab, die du nicht erlaubt hast. Erlaube diese Website immer, um ohne Rückfrage von ihr zu lesen."
 			},
 			"invite": {
 				"allow": "Einladen",
@@ -1756,7 +1757,7 @@
 		},
 		"grants": {
 			"auto": {
-				"description": "{{name}} handelt, ohne dich vorher zu fragen. Das Löschen von Daten, Änderungen an Einstellungen und das Senden von Daten an eine Website nach dem Lesen von Webinhalten erfordern weiterhin deine Zustimmung.",
+				"description": "{{name}} handelt, ohne dich vorher zu fragen. Das Löschen von Daten, Änderungen an Einstellungen und – nach dem Lesen von Webinhalten – das Senden von Daten an eine Website oder das Lesen von einer Website, die du nicht erlaubt hast, erfordern weiterhin deine Zustimmung.",
 				"title": "Automatisch genehmigen"
 			},
 			"expires": "Verfällt am {{date}}, wenn ungenutzt",
