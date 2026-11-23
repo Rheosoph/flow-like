@@ -282,6 +282,28 @@ async fn run_maintenance_job(
                 },
             )))
         }
+        MaintenanceRunRequest::TableMaintenance => {
+            let result = traced!(
+                "maintenance.table_maintenance",
+                crate::table_maintenance::run_pass(&state)
+            )
+            .await
+            .map_err(|error| {
+                tracing::error!(error = %error, "Scheduled table maintenance pass failed");
+                error
+            })?;
+
+            tracing::info!(
+                evaluated = result.evaluated,
+                compacted = result.compacted,
+                reindexed = result.reindexed,
+                failed = result.failed,
+                deferred = result.deferred,
+                "Maintenance table pass completed"
+            );
+
+            Ok(Json(MaintenanceRunResponse::TableMaintenance(result)))
+        }
     }
 }
 

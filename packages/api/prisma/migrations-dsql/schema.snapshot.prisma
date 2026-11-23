@@ -2648,6 +2648,8 @@ model FileAccountingObject {
   @@index([userId])
   // Retention sweep: zero-size tombstones ordered by age, see storage_accounting.rs.
   @@index([size, updatedAt])
+  // Table maintenance: Lance datasets written recently, see table_maintenance.rs.
+  @@index([updatedAt])
 }
 
 // ---- flowscript.prisma

@@ -242,7 +242,7 @@ impl FieldTally {
     }
 }
 
-fn tally_fields(objects: &[&mut Object]) -> BTreeMap<&str, FieldTally> {
+fn tally_fields<'a>(objects: &'a [&mut Object]) -> BTreeMap<&'a str, FieldTally> {
     let mut tallies: BTreeMap<&str, FieldTally> = BTreeMap::new();
     for object in objects {
         for (key, value) in object.iter() {

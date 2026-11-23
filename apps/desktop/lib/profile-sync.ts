@@ -66,6 +66,58 @@ export const toLocalProfile = (onlineProfile: OnlineProfile) => ({
 	created: onlineProfile.created_at,
 });
 
+/** A stored signed image URL is renewed once less than this much of its lifetime remains. */
+const SIGNED_IMAGE_RENEW_MS = 150_000;
+
+/** When a signed S3, GCS or Azure URL stops working, if its query states it. */
+export function signedUrlExpiresAt(value: string): number | undefined {
+	let params: URLSearchParams;
+	try {
+		params = new URL(value).searchParams;
+	} catch {
+		return undefined;
+	}
+	const azureExpiry = params.get("se");
+	if (azureExpiry) {
+		const expiresAt = Date.parse(azureExpiry);
+		return Number.isNaN(expiresAt) ? undefined : expiresAt;
+	}
+	const signedAt = params.get("X-Amz-Date") ?? params.get("X-Goog-Date");
+	const lifetime = params.get("X-Amz-Expires") ?? params.get("X-Goog-Expires");
+	const parts = signedAt?.match(
+		/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/,
+	);
+	if (!parts || !lifetime || !/^\d+$/.test(lifetime)) return undefined;
+	return (
+		Date.UTC(
+			Number(parts[1]),
+			Number(parts[2]) - 1,
+			Number(parts[3]),
+			Number(parts[4]),
+			Number(parts[5]),
+			Number(parts[6]),
+		) +
+		Number(lifetime) * 1000
+	);
+}
+
+/**
+ * The hub signs profile images anew on every read. A stored URL for the same image
+ * stays until its signature runs low, so an unchanged profile is not rewritten on
+ * every sync.
+ */
+export function storedSignedImageIsCurrent(
+	stored: string | null | undefined,
+	remote: string,
+	now = Date.now(),
+): boolean {
+	if (!stored) return false;
+	const image = (url: string) => url.split("?", 1)[0];
+	if (image(stored) !== image(remote)) return false;
+	const expiresAt = signedUrlExpiresAt(stored);
+	return expiresAt !== undefined && expiresAt - now > SIGNED_IMAGE_RENEW_MS;
+}
+
 export const getDefaultApiBase = () => {
 	const baseUrl = process.env.NEXT_PUBLIC_API_URL ?? "api.flow-like.com";
 	const full = baseUrl.startsWith("http") ? baseUrl : `https://${baseUrl}`;

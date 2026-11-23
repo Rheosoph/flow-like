@@ -87,6 +87,7 @@ import {
 	type OnlineProfile,
 	createProfileSyncQueue,
 	mergeRemoteProfileMetadata,
+	storedSignedImageIsCurrent,
 	toLocalProfile,
 } from "../lib/profile-sync";
 import {
@@ -2258,7 +2259,11 @@ export function ProfileSyncer({
 								let needsUpdate = false;
 								if (
 									onlineProfile.icon &&
-									shouldReplaceWithServerImage(localProfile.hub_profile.icon)
+									shouldReplaceWithServerImage(localProfile.hub_profile.icon) &&
+									!storedSignedImageIsCurrent(
+										localProfile.hub_profile.icon,
+										onlineProfile.icon,
+									)
 								) {
 									localProfile.hub_profile.icon = onlineProfile.icon;
 									needsUpdate = true;
@@ -2267,6 +2272,10 @@ export function ProfileSyncer({
 									onlineProfile.thumbnail &&
 									shouldReplaceWithServerImage(
 										localProfile.hub_profile.thumbnail,
+									) &&
+									!storedSignedImageIsCurrent(
+										localProfile.hub_profile.thumbnail,
+										onlineProfile.thumbnail,
 									)
 								) {
 									localProfile.hub_profile.thumbnail = onlineProfile.thumbnail;

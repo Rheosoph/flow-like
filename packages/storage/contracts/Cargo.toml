@@ -12,7 +12,7 @@ vector = ["dep:arrow-schema"]
 
 [dependencies]
 anyhow = "1"
-arrow-schema = { version = "=58.4.0", features = ["serde"], optional = true }
+arrow-schema = { version = "=58.4.2", features = ["serde"], optional = true }
 async-trait = "0.1.89"
 flow-like-types-contracts = { workspace = true, features = ["data-classification"], optional = true }
 schemars = { version = "1.1.0", features = ["preserve_order"], optional = true }

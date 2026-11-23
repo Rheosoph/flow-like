@@ -298,6 +298,16 @@ async fn maintenance_handler(event: LambdaEvent<ScheduledMaintenancePayload>) ->
                 "Regression suite maintenance completed"
             )
         }
+        (MaintenanceJob::TableMaintenance, MaintenanceRunResponse::TableMaintenance(result)) => {
+            tracing::info!(
+                evaluated = result.evaluated,
+                compacted = result.compacted,
+                reindexed = result.reindexed,
+                failed = result.failed,
+                deferred = result.deferred,
+                "Table maintenance completed"
+            )
+        }
         (job, response) => {
             // The API answered for a different job than we asked for. Fail the
             // invocation so the mismatch surfaces instead of being logged as success.
@@ -386,6 +396,21 @@ mod tests {
         assert_eq!(
             MaintenanceRunRequest::from(parsed.job),
             MaintenanceRunRequest::RegressionSuites
+        );
+    }
+
+    #[test]
+    fn scheduler_payload_accepts_table_maintenance() {
+        let parsed: ScheduledMaintenancePayload = serde_json::from_value(serde_json::json!({
+            "job": "table_maintenance",
+            "scheduled_time": "2026-11-23T10:00:00Z"
+        }))
+        .unwrap();
+
+        assert_eq!(parsed.job, MaintenanceJob::TableMaintenance);
+        assert_eq!(
+            MaintenanceRunRequest::from(parsed.job),
+            MaintenanceRunRequest::TableMaintenance
         );
     }
 
