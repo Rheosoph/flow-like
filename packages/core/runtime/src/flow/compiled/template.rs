@@ -174,7 +174,12 @@ pub struct CompiledRunTemplate {
     pub log_level: LogLevel,
     pub(crate) function_topology: Arc<FunctionTopology>,
     /// The logic this template runs for each node type it places.
-    logic_by_type: Box<[(Arc<str>, Arc<dyn NodeLogic>)]>,
+    logic_by_type: Box<[TypeLogic]>,
+}
+
+struct TypeLogic {
+    node_type: Arc<str>,
+    logic: Arc<dyn NodeLogic>,
 }
 
 impl CompiledRunTemplate {
@@ -190,12 +195,12 @@ impl CompiledRunTemplate {
     /// reloads a package registers new logic under an unchanged fingerprint, and a template
     /// built before the reload would go on running the previous one.
     pub fn holds_logic_of(&self, registry: &FlowNodeRegistryInner) -> bool {
-        self.logic_by_type.iter().all(|(node_type, logic)| {
+        self.logic_by_type.iter().all(|placed| {
             registry
                 .registry
-                .get(node_type.as_ref())
+                .get(placed.node_type.as_ref())
                 .is_some_and(|(_, current)| {
-                    std::ptr::addr_eq(Arc::as_ptr(logic), Arc::as_ptr(current))
+                    std::ptr::addr_eq(Arc::as_ptr(&placed.logic), Arc::as_ptr(current))
                 })
         })
     }
@@ -397,7 +402,10 @@ impl CompiledRunTemplate {
         let logic_by_type = nodes
             .iter()
             .filter(|node| node_types.insert(node.name.clone()))
-            .map(|node| (node.name.clone(), node.logic.clone()))
+            .map(|node| TypeLogic {
+                node_type: node.name.clone(),
+                logic: node.logic.clone(),
+            })
             .collect();
         Ok(Self {
             widget_snapshot: None,
