@@ -15,7 +15,7 @@
 //! on [`FlowLikeState`].
 
 use crate::app::App;
-use crate::flow::board::Board;
+use crate::flow::board::{Board, LoadedPages, PageMetadataSource};
 use crate::state::FlowLikeState;
 use flow_like_types::{Value, async_trait, tokio};
 use serde::{Deserialize, Serialize};
@@ -349,13 +349,20 @@ tokio::task_local! {
     static BOARD_WIDGET_SCOPE: Arc<BoardWidgetScope>;
 }
 
-/// Successful inventory reads shared by one board's schema-update sweep. The
-/// task-local scope ends on completion or cancellation; failed reads can retry.
+/// Successful inventory and page reads shared by one board's schema-update
+/// sweep. The task-local scope ends on completion or cancellation; failed reads
+/// can retry.
 pub(crate) struct BoardWidgetScope {
     app_id: Option<String>,
     state: Option<Arc<FlowLikeState>>,
     declarative: tokio::sync::OnceCell<Arc<Vec<Widget>>>,
     package_widgets: tokio::sync::OnceCell<Arc<Vec<PackageWidgetRef>>>,
+    board_id: String,
+    board_dir: flow_like_storage::Path,
+    page_ids: Vec<String>,
+    page_source: PageMetadataSource,
+    draft_pages: tokio::sync::OnceCell<Arc<LoadedPages>>,
+    metadata_pages: tokio::sync::OnceCell<Arc<LoadedPages>>,
 }
 
 impl BoardWidgetScope {
@@ -365,6 +372,12 @@ impl BoardWidgetScope {
             state: board.app_state.clone(),
             declarative: tokio::sync::OnceCell::new(),
             package_widgets: tokio::sync::OnceCell::new(),
+            board_id: board.id.clone(),
+            board_dir: board.board_dir.clone(),
+            page_ids: board.page_ids.clone(),
+            page_source: board.page_metadata_source(),
+            draft_pages: tokio::sync::OnceCell::new(),
+            metadata_pages: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -378,6 +391,52 @@ impl BoardWidgetScope {
                 .state
                 .as_ref()
                 .is_some_and(|expected| Arc::ptr_eq(expected, state))
+    }
+
+    /// Everything a page read is addressed by: the page files live under the board's directory
+    /// and id, are listed by `page_ids`, and come from the state's store.
+    fn serves_pages_of(&self, board: &Board) -> bool {
+        self.board_id == board.id
+            && self.board_dir == board.board_dir
+            && self.page_ids == board.page_ids
+            && self.page_source == board.page_metadata_source()
+            && match (&self.state, &board.app_state) {
+                (Some(expected), Some(state)) => Arc::ptr_eq(expected, state),
+                _ => false,
+            }
+    }
+
+    fn for_pages_of(board: &Board) -> Option<Arc<Self>> {
+        BOARD_WIDGET_SCOPE
+            .try_with(|scope| scope.serves_pages_of(board).then(|| scope.clone()))
+            .ok()
+            .flatten()
+    }
+}
+
+/// [`Board::load_all_pages`], read once per schema-update sweep of `board`.
+pub(crate) async fn sweep_draft_pages(board: &Board) -> flow_like_types::Result<Arc<LoadedPages>> {
+    match BoardWidgetScope::for_pages_of(board) {
+        Some(scope) => scope
+            .draft_pages
+            .get_or_try_init(|| async { board.load_all_pages(None).await.map(Arc::new) })
+            .await
+            .cloned(),
+        None => board.load_all_pages(None).await.map(Arc::new),
+    }
+}
+
+/// [`Board::load_pages_for_metadata`], read once per schema-update sweep of `board`.
+pub(crate) async fn sweep_metadata_pages(
+    board: &Board,
+) -> flow_like_types::Result<Arc<LoadedPages>> {
+    match BoardWidgetScope::for_pages_of(board) {
+        Some(scope) => scope
+            .metadata_pages
+            .get_or_try_init(|| async { board.load_pages_for_metadata(None).await.map(Arc::new) })
+            .await
+            .cloned(),
+        None => board.load_pages_for_metadata(None).await.map(Arc::new),
     }
 }
 

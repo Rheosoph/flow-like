@@ -1607,7 +1607,9 @@ mod tests {
     fn fork_id_seeds_keep_absent_apart_from_empty() {
         for seeds in [None, Some(vec![])] {
             let proto = flow_like_types::proto::App {
-                fork_id_seeds: seeds.clone().map(|seeds| flow_like_types::proto::ForkIdSeeds { seeds }),
+                fork_id_seeds: seeds
+                    .clone()
+                    .map(|seeds| flow_like_types::proto::ForkIdSeeds { seeds }),
                 ..Default::default()
             };
             let mut buf = Vec::new();
@@ -2039,7 +2041,8 @@ mod tests {
         use crate::flow::event::Event;
 
         let (mut app, _state) = page_test_app("upload-remap-test-app").await;
-        let mut device = Board::new_detached(Some("device-board".to_string()), Path::from("unused"));
+        let mut device =
+            Board::new_detached(Some("device-board".to_string()), Path::from("unused"));
         let node = Node::new("events_simple", "Simple Event", "", "Events");
         let device_node = node.id.clone();
         device.nodes.insert(device_node.clone(), node);

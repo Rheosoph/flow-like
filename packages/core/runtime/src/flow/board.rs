@@ -2985,6 +2985,20 @@ impl Board {
         self.page_metadata_source
     }
 
+    /// [`Self::load_all_pages`] for `on_update`: a schema-update sweep reads the pages once
+    /// instead of once per node and pass.
+    pub async fn load_all_pages_shared(&self) -> flow_like_types::Result<Arc<LoadedPages>> {
+        crate::a2ui::micro_widget::sweep_draft_pages(self).await
+    }
+
+    /// [`Self::load_pages_for_metadata`] for `on_update`, shared like
+    /// [`Self::load_all_pages_shared`].
+    pub async fn load_pages_for_metadata_shared(
+        &self,
+    ) -> flow_like_types::Result<Arc<LoadedPages>> {
+        crate::a2ui::micro_widget::sweep_metadata_pages(self).await
+    }
+
     /// Load contracts from the same page revision as the board being inspected.
     pub async fn load_pages_for_metadata(
         &self,
@@ -5394,6 +5408,53 @@ mod tests {
         assert_eq!(loaded.unreadable.len(), 1);
         assert_eq!(loaded.unreadable[0].page_id, "page-missing");
         assert!(!loaded.unreadable[0].reason.is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_sweep_reads_pages_once_and_only_for_its_own_board() {
+        use crate::a2ui::micro_widget::BoardWidgetScope;
+        use crate::a2ui::widget::Page;
+
+        let state = flow_state().await;
+        let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+        board
+            .save_page(&Page::new("page-1", "First", "/"), None)
+            .await
+            .unwrap();
+        let mut other = super::Board::new(None, Path::from("boards"), state);
+        other
+            .save_page(&Page::new("page-2", "Second", "/"), None)
+            .await
+            .unwrap();
+
+        BoardWidgetScope::new(&board)
+            .run(async {
+                let first = board.load_all_pages_shared().await.unwrap();
+                board
+                    .save_page(&Page::new("page-1", "Renamed", "/"), None)
+                    .await
+                    .unwrap();
+                let second = board.load_all_pages_shared().await.unwrap();
+                assert!(Arc::ptr_eq(&first, &second));
+                assert_eq!(second.pages[0].name, "First");
+                assert!(Arc::ptr_eq(
+                    &board.load_pages_for_metadata_shared().await.unwrap(),
+                    &board.load_pages_for_metadata_shared().await.unwrap(),
+                ));
+
+                let foreign = other.load_all_pages_shared().await.unwrap();
+                assert_eq!(foreign.pages[0].id, "page-2");
+
+                let mut relocated = board.clone();
+                relocated.board_dir = Path::from("elsewhere");
+                let relocated = relocated.load_all_pages_shared().await.unwrap();
+                assert!(relocated.pages.is_empty());
+                assert_eq!(relocated.unreadable.len(), 1);
+            })
+            .await;
+
+        let fresh = board.load_all_pages_shared().await.unwrap();
+        assert_eq!(fresh.pages[0].name, "Renamed");
     }
 
     #[tokio::test]

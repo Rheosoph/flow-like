@@ -115,6 +115,8 @@ import {
 import type { IElementDemand } from "@flow-like/flow-like-ui/lib/schema/flow/element-demand";
 import type {
 	IBoardRunRequirements,
+	IBoardRunRequirementsOptions,
+	IExecuteBoardOptions,
 	IFlowIrCommitReadback,
 } from "@flow-like/flow-like-ui/state/backend-state/board-state";
 import type { IOAuthRequiredError } from "@flow-like/flow-like-ui/state/backend-state/event-state";
@@ -1389,12 +1391,14 @@ export class BoardState implements IBoardState {
 	 * The run preflight's view of a board, answered from the host's current revision. Keeps
 	 * what `getBoard(…, forceFresh)` guaranteed before a run: a board this device does not hold
 	 * yet is materialized first, and a Latest board of an online app takes the hub's newer
-	 * revision (within the refresh cap) before its requirements are read.
+	 * revision (within the refresh cap) before its requirements are read, unless the caller
+	 * already holds the board live-synced (`skipHubRefresh`).
 	 */
 	async getBoardRunRequirements(
 		appId: string,
 		boardId: string,
 		version?: [number, number, number],
+		options?: IBoardRunRequirementsOptions,
 	): Promise<IBoardRunRequirements> {
 		const read = () =>
 			invoke<IBoardRunRequirements>("get_board_run_requirements", {
@@ -1413,6 +1417,7 @@ export class BoardState implements IBoardState {
 		}
 		if (
 			typeof version !== "undefined" ||
+			options?.skipHubRefresh ||
 			!this.backend.profile ||
 			!this.backend.auth ||
 			!this.backend.queryClient ||
@@ -1930,6 +1935,7 @@ export class BoardState implements IBoardState {
 		eventId?: (id: string) => void,
 		cb?: (event: IIntercomEvent[]) => void,
 		skipConsentCheck?: boolean,
+		options?: IExecuteBoardOptions,
 	): Promise<ILogMetadata | undefined> {
 		return withDeviceCommandBridge(
 			{ appId, executionTarget: "local" },
@@ -1943,6 +1949,7 @@ export class BoardState implements IBoardState {
 					eventId,
 					bridgeCallback,
 					skipConsentCheck,
+					options,
 				),
 		);
 	}
@@ -1955,6 +1962,7 @@ export class BoardState implements IBoardState {
 		eventId?: (id: string) => void,
 		cb?: (event: IIntercomEvent[]) => void,
 		skipConsentCheck?: boolean,
+		options?: IExecuteBoardOptions,
 	): Promise<ILogMetadata | undefined> {
 		// Check if board requires local execution (computer automation)
 		// and verify RPA permissions before proceeding
@@ -1964,6 +1972,7 @@ export class BoardState implements IBoardState {
 				appId,
 				boardId,
 				normalizeBoardVersion(payload.version),
+				{ skipHubRefresh: options?.liveBoard },
 			);
 		} catch (error) {
 			// Everything below reads the flow to prepare a local run. A user who

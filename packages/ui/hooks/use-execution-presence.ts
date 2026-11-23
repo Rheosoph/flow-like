@@ -4,6 +4,10 @@ import {
 	type RunStatus,
 	sanitizeLastRun,
 } from "../lib/realtime/presence-signals";
+import {
+	type IRunExecution,
+	useRunExecutionStore,
+} from "../state/run-execution-state";
 
 export interface ExecutionPresenceState {
 	/** Nodes currently being executed by this peer */
@@ -18,15 +22,6 @@ interface UseExecutionPresenceProps {
 	// biome-ignore lint/suspicious/noExplicitAny: Yjs awareness is untyped
 	awareness: any | undefined;
 	sub?: string;
-	/** Local execution store to watch */
-	runs: Map<
-		string,
-		{
-			boardId: string;
-			nodes: Set<string>;
-			already_executed: Set<string>;
-		}
-	>;
 	boardId: string;
 }
 
@@ -39,7 +34,6 @@ export interface RemoteExecution {
 export function useExecutionPresence({
 	awareness,
 	sub,
-	runs,
 	boardId,
 }: UseExecutionPresenceProps) {
 	const [remoteExecutions, setRemoteExecutions] = useState<RemoteExecution[]>(
@@ -47,31 +41,46 @@ export function useExecutionPresence({
 	);
 	const lastBroadcastRef = useRef<string>("");
 
-	// Broadcast local execution state to peers
+	// Broadcast local execution state to peers. Subscribes to the run store instead of taking
+	// `runs` as a prop, so run progress never re-renders the component that hosts this hook.
 	useEffect(() => {
 		if (!awareness || !sub) return;
 
-		const executingNodes: string[] = [];
-		let activeRunId: string | undefined;
+		const broadcast = (runs: ReadonlyMap<string, IRunExecution>) => {
+			const executingNodes: string[] = [];
+			let activeRunId: string | undefined;
 
-		for (const [runId, run] of runs) {
-			if (run.boardId !== boardId) continue;
-			if (run.nodes.size > 0) {
-				activeRunId = runId;
-				executingNodes.push(...Array.from(run.nodes));
+			for (const [runId, run] of runs) {
+				if (run.boardId !== boardId) continue;
+				if (run.nodes.size > 0) {
+					activeRunId = runId;
+					executingNodes.push(...Array.from(run.nodes));
+				}
 			}
-		}
 
-		const key = executingNodes.sort().join(",") + (activeRunId ?? "");
-		if (key === lastBroadcastRef.current) return;
-		lastBroadcastRef.current = key;
+			const key = executingNodes.sort().join(",") + (activeRunId ?? "");
+			if (key === lastBroadcastRef.current) return;
+			lastBroadcastRef.current = key;
 
-		awareness.setLocalStateField("executionPresence", {
-			executingNodes,
-			runId: activeRunId,
-			sub,
-		} satisfies ExecutionPresenceState);
-	}, [awareness, sub, runs, boardId]);
+			awareness.setLocalStateField("executionPresence", {
+				executingNodes,
+				runId: activeRunId,
+				sub,
+			} satisfies ExecutionPresenceState);
+		};
+
+		broadcast(useRunExecutionStore.getState().runs);
+		return useRunExecutionStore.subscribe((state, previous) => {
+			if (state.runs === previous.runs) return;
+			// A throw here would end the store's notification loop before the listeners after
+			// this one, so a presence failure must not escape it.
+			try {
+				broadcast(state.runs);
+			} catch (error) {
+				console.warn("Failed to broadcast execution presence", error);
+			}
+		});
+	}, [awareness, sub, boardId]);
 
 	// Collect remote execution states from peers. Peers broadcast cursors at ~20Hz,
 	// so awareness "change" fires constantly; coalesce to one frame and bail unless

@@ -114,20 +114,47 @@ function statusOf(
 	sources: StatusSources,
 	level: number | undefined,
 ): NodeStatus | undefined {
+	const status: NodeStatus = {};
 	const run = sources.runs && nodeExecutionState(sources.runs, node.id);
-	const live = run?.status === "none" ? undefined : run;
-	const fields = Object.entries({
-		run: live?.status,
-		runId: live?.runId,
-		logs: logBadge(sources, node.id, level !== undefined),
-		severity: level === undefined ? undefined : RUN_SEVERITY[level],
-		heat: heat(sources, node.id),
-		quality: quality(sources, node),
-		remote: node.data.remoteExecuting === true || undefined,
-	}).filter(([, value]) => value !== undefined);
-	return fields.length > 0
-		? (Object.fromEntries(fields) as NodeStatus)
-		: undefined;
+	if (run && run.status !== "none") {
+		status.run = run.status;
+		if (run.runId !== undefined) status.runId = run.runId;
+	}
+	const logs = logBadge(sources, node.id, level !== undefined);
+	if (logs) status.logs = logs;
+	const severity = level === undefined ? undefined : RUN_SEVERITY[level];
+	if (severity) status.severity = severity;
+	const heatMark = heat(sources, node.id);
+	if (heatMark) status.heat = heatMark;
+	const qualityMark = quality(sources, node);
+	if (qualityMark) status.quality = qualityMark;
+	if (node.data.remoteExecuting === true) status.remote = true;
+	return Object.keys(status).length > 0 ? status : undefined;
+}
+
+/** Every node id a source mentions. Nodes outside it (bar remote runs) have nothing to show. */
+function mentionedNodeIds(
+	sources: StatusSources,
+	logged: ReadonlyMap<string, number>,
+): Set<string> {
+	const ids = new Set(logged.keys());
+	for (const run of sources.runs?.values() ?? []) {
+		for (const nodeId of run.nodes) ids.add(nodeId);
+		for (const nodeId of run.already_executed) ids.add(nodeId);
+	}
+	if (sources.currentMetadata?.run_id === sources.currentSummaryRunId) {
+		for (const nodeId of Object.keys(sources.currentSummary?.nodes ?? {}))
+			ids.add(nodeId);
+	}
+	if (sources.heatmapEnabled) {
+		for (const nodeId of Object.keys(sources.heatmap?.nodes ?? {}))
+			ids.add(nodeId);
+	}
+	if (sources.qualityInline) {
+		for (const marks of Object.values(sources.qualityMarks ?? {}))
+			for (const nodeId of Object.keys(marks)) ids.add(nodeId);
+	}
+	return ids;
 }
 
 /**
@@ -143,8 +170,10 @@ export function collectNodeStatus(
 		if (typeof nodeId === "string")
 			logged.set(nodeId, typeof level === "number" ? level : 0);
 	}
+	const mentioned = mentionedNodeIds(sources, logged);
 	const result: Record<string, NodeStatus> = {};
 	for (const node of nodes) {
+		if (!mentioned.has(node.id) && node.data.remoteExecuting !== true) continue;
 		const status = statusOf(node, sources, logged.get(node.id));
 		if (status) result[node.id] = status;
 	}

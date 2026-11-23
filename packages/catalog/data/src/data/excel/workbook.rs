@@ -16,7 +16,9 @@ impl XlsxCell {
     /// A string starting with `=` becomes a formula.
     pub fn from_text(text: &str) -> Self {
         match text.strip_prefix('=') {
-            Some(formula) if !formula.trim().is_empty() => Self::Formula(formula.trim().to_string()),
+            Some(formula) if !formula.trim().is_empty() => {
+                Self::Formula(formula.trim().to_string())
+            }
             _ => Self::Text(text.to_string()),
         }
     }
@@ -68,7 +70,11 @@ fn unique_names(sheets: &[XlsxSheet]) -> Vec<String> {
     names
 }
 
-fn fill_sheet(book: &mut Spreadsheet, index: usize, sheet: &XlsxSheet) -> flow_like_types::Result<()> {
+fn fill_sheet(
+    book: &mut Spreadsheet,
+    index: usize,
+    sheet: &XlsxSheet,
+) -> flow_like_types::Result<()> {
     let worksheet = book
         .get_sheet_mut(&index)
         .ok_or_else(|| flow_like_types::anyhow!("The workbook lost sheet {index}"))?;
@@ -97,7 +103,10 @@ fn fill_sheet(book: &mut Spreadsheet, index: usize, sheet: &XlsxSheet) -> flow_l
                 && let Some(format) = sheet.formats.get(column_index).filter(|f| !f.is_empty())
                 && !matches!(cell, XlsxCell::Text(_))
             {
-                target.get_style_mut().get_number_format_mut().set_format_code(format.clone());
+                target
+                    .get_style_mut()
+                    .get_number_format_mut()
+                    .set_format_code(format.clone());
             }
             if is_header {
                 let style = target.get_style_mut();
@@ -118,7 +127,9 @@ fn fill_sheet(book: &mut Spreadsheet, index: usize, sheet: &XlsxSheet) -> flow_l
 
 pub fn build_workbook(sheets: &[XlsxSheet]) -> flow_like_types::Result<Vec<u8>> {
     if sheets.is_empty() {
-        return Err(flow_like_types::anyhow!("A workbook needs at least one sheet"));
+        return Err(flow_like_types::anyhow!(
+            "A workbook needs at least one sheet"
+        ));
     }
     let names = unique_names(sheets);
     let mut book = umya_spreadsheet::new_file_empty_worksheet();
@@ -145,7 +156,10 @@ mod tests {
             rows: vec![
                 vec![XlsxCell::from_text("Item"), XlsxCell::from_text("Price")],
                 vec![XlsxCell::from_text("A"), XlsxCell::Number(1234.5)],
-                vec![XlsxCell::from_text("Total"), XlsxCell::from_text("=SUM(B2:B2)")],
+                vec![
+                    XlsxCell::from_text("Total"),
+                    XlsxCell::from_text("=SUM(B2:B2)"),
+                ],
             ],
             header: true,
             widths: vec![20.0, 12.0],
@@ -156,8 +170,11 @@ mod tests {
     #[test]
     fn builds_a_workbook_with_formula_format_and_header() {
         let bytes = build_workbook(&sample()).unwrap();
-        let book = umya_spreadsheet::reader::xlsx::read_reader(std::io::Cursor::new(&bytes), true).unwrap();
-        let sheet = book.get_sheet_by_name("Sales Q1").expect("sheet name is cleaned");
+        let book = umya_spreadsheet::reader::xlsx::read_reader(std::io::Cursor::new(&bytes), true)
+            .unwrap();
+        let sheet = book
+            .get_sheet_by_name("Sales Q1")
+            .expect("sheet name is cleaned");
         assert_eq!(sheet.get_cell((2, 3)).unwrap().get_formula(), "SUM(B2:B2)");
         assert_eq!(sheet.get_cell((2, 2)).unwrap().get_value(), "1234.5");
         let format = sheet
@@ -169,17 +186,35 @@ mod tests {
             .get_format_code()
             .to_string();
         assert_eq!(format, "#,##0.00");
-        let bold = sheet.get_cell((1, 1)).unwrap().get_style().get_font().map(|f| *f.get_bold());
+        let bold = sheet
+            .get_cell((1, 1))
+            .unwrap()
+            .get_style()
+            .get_font()
+            .map(|f| *f.get_bold());
         assert_eq!(bold, Some(true));
-        assert!(sheet.get_column_dimension("A").is_some_and(|c| *c.get_width() >= 20.0));
+        assert!(
+            sheet
+                .get_column_dimension("A")
+                .is_some_and(|c| *c.get_width() >= 20.0)
+        );
     }
 
     #[test]
     fn sheet_names_are_unique_and_valid() {
         let sheets = vec![
-            XlsxSheet { name: "Data".into(), ..Default::default() },
-            XlsxSheet { name: "data".into(), ..Default::default() },
-            XlsxSheet { name: "///".into(), ..Default::default() },
+            XlsxSheet {
+                name: "Data".into(),
+                ..Default::default()
+            },
+            XlsxSheet {
+                name: "data".into(),
+                ..Default::default()
+            },
+            XlsxSheet {
+                name: "///".into(),
+                ..Default::default()
+            },
         ];
         assert_eq!(unique_names(&sheets), vec!["Data", "data (2)", "Sheet3"]);
     }
