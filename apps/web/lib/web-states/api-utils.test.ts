@@ -13,7 +13,7 @@ import {
 } from "@flow-like/flow-like-ui/lib/request-deadline";
 import type { AuthContextProps } from "react-oidc-context";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { apiFetch, apiGet, apiPost } from "./api-utils";
+import { apiFetch, apiGet, apiGetConditional, apiPost } from "./api-utils";
 
 const auth = { user: { access_token: "client-token" } } as AuthContextProps;
 
@@ -84,6 +84,44 @@ test("GET options forward cache bypass headers with authentication", async () =>
 	});
 	expect(sentHeaders?.get("Cache-Control")).toBe("no-cache");
 	expect(sentHeaders?.get("Authorization")).toBe("Bearer client-token");
+});
+
+describe("apiGetConditional", () => {
+	const path = "apps/example/nodes?format=lean";
+
+	test("names the held copy and reports a 304 as unchanged", async () => {
+		let sentHeaders: Headers | undefined;
+		vi.stubGlobal(
+			"fetch",
+			async (_url: RequestInfo | URL, init?: RequestInit) => {
+				sentHeaders = new Headers(init?.headers);
+				return new Response(null, { status: 304 });
+			},
+		);
+		const answer = await apiGetConditional(path, auth, '"held"');
+		expect(sentHeaders?.get("If-None-Match")).toBe('"held"');
+		expect(answer).toEqual({ notModified: true });
+	});
+
+	test("returns the new body when the copy is out of date", async () => {
+		vi.stubGlobal("fetch", async () => Response.json({ v: 1 }));
+		const answer = await apiGetConditional(path, auth, '"held"');
+		expect(answer).toEqual({ notModified: false, data: { v: 1 } });
+	});
+
+	test("sends no tag and treats a 304 as a failure when it holds no copy", async () => {
+		let sentHeaders: Headers | undefined;
+		vi.stubGlobal(
+			"fetch",
+			async (_url: RequestInfo | URL, init?: RequestInit) => {
+				sentHeaders = new Headers(init?.headers);
+				return new Response(null, { status: 304 });
+			},
+		);
+		const { error } = await outcomeOf(apiGetConditional(path, auth));
+		expect(sentHeaders?.has("If-None-Match")).toBe(false);
+		expect(error).toBeInstanceOf(ApiResponseError);
+	});
 });
 
 test.each([

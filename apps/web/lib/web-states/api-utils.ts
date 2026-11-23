@@ -127,11 +127,21 @@ export function ensureProtectedAppRouteAuth(
 	);
 }
 
-export async function apiFetch<T>(
+/**
+ * A conditional read: `notModified` says the hub confirmed the copy the caller named and
+ * deliberately sent no body, so `data` is absent without that being a failure.
+ */
+export interface IConditionalResponse<T> {
+	readonly notModified: boolean;
+	readonly data?: T;
+}
+
+async function requestJson<T>(
 	path: string,
 	options?: RequestInit,
 	auth?: AuthContextProps,
-): Promise<T> {
+	ifNoneMatch?: string,
+): Promise<IConditionalResponse<T>> {
 	const method = methodOf(options);
 	ensureProtectedAppRouteAuth(path, auth, method);
 	const accessToken = auth?.user?.access_token;
@@ -146,6 +156,7 @@ export async function apiFetch<T>(
 	new Headers(options?.headers).forEach((value, key) =>
 		headers.set(key, value),
 	);
+	if (ifNoneMatch) headers.set("If-None-Match", ifNoneMatch);
 
 	const url = constructApiUrl(path);
 	const safePath = redactApiPathSecrets(path) ?? path;
@@ -153,7 +164,7 @@ export async function apiFetch<T>(
 	const bodyBytes = typeof init.body === "string" ? init.body.length : 0;
 	// The deadline spans the body read too: a stalled body parks the caller as
 	// surely as stalled headers do.
-	return withRequestDeadline<T>(
+	return withRequestDeadline<IConditionalResponse<T>>(
 		safePath,
 		async (deadline) => {
 			const response = await fetchWithSession(
@@ -166,6 +177,12 @@ export async function apiFetch<T>(
 				auth,
 			);
 
+			// Only a caller that named a copy can interpret a 304; without one it would be an
+			// unexpected empty answer, so it keeps falling through to the error path below.
+			if (response.status === 304 && ifNoneMatch) {
+				return { notModified: true };
+			}
+
 			if (!response.ok) {
 				const errorText = await response.text();
 				const error = apiResponseError(response, errorText, path);
@@ -177,7 +194,7 @@ export async function apiFetch<T>(
 			}
 
 			const text = await response.text();
-			if (!text) return undefined as T;
+			if (!text) return { notModified: false };
 
 			let data: unknown;
 			try {
@@ -193,13 +210,35 @@ export async function apiFetch<T>(
 				);
 				throw upstreamError;
 			}
-			return data as T;
+			return { notModified: false, data: data as T };
 		},
 		{
 			timeoutMs: requestTimeoutMs(cleanApiPath(path), method, bodyBytes),
 			signal,
 		},
 	);
+}
+
+export async function apiFetch<T>(
+	path: string,
+	options?: RequestInit,
+	auth?: AuthContextProps,
+): Promise<T> {
+	const { data } = await requestJson<T>(path, options, auth);
+	return data as T;
+}
+
+/**
+ * A read that names the copy the caller holds. Because the page sets `If-None-Match` itself,
+ * the browser hands the hub's 304 through instead of answering from its own cache, and the
+ * caller can keep what it already decoded.
+ */
+export async function apiGetConditional<T>(
+	path: string,
+	auth?: AuthContextProps,
+	etag?: string,
+): Promise<IConditionalResponse<T>> {
+	return requestJson<T>(path, { method: "GET" }, auth, etag);
 }
 
 export async function apiGet<T>(

@@ -85,6 +85,9 @@ async fn main() -> Result<(), Error> {
 
     // Initialize catalog runtime (ONNX execution providers, etc.)
     initialize_catalog();
+    // Build the node registry beside the rest of startup instead of inside the first run. The
+    // first request waits for whatever is left of it, never longer than building it there.
+    tokio::task::spawn_blocking(flow_like_executor::prepare_runtime);
 
     // Create executor state from environment
     let state = ExecutorState::new(ExecutorConfig::from_env().with_required_terminal_status_ack());

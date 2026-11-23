@@ -109,7 +109,7 @@ function WidgetThumbnail({
 	return (
 		<div
 			className={cn(
-				"relative aspect-video w-full overflow-hidden rounded-md border bg-muted dark:border-white/15",
+				"relative aspect-video w-full overflow-hidden rounded-md border bg-muted dark:border-border-strong",
 				className,
 			)}
 		>
@@ -236,7 +236,7 @@ function LivePreview({
 	return (
 		<div
 			ref={containerRef}
-			className="overflow-hidden rounded-md border bg-muted/40 dark:border-white/15"
+			className="overflow-hidden rounded-md border bg-muted/40 dark:border-border-strong"
 		>
 			<PreviewErrorBoundary onError={onError}>
 				{appId ? (

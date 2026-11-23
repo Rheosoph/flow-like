@@ -24,6 +24,100 @@
 			"title": ""
 		}
 	},
+	"intro": {
+		"app": {
+			"amount": "",
+			"body": "",
+			"due": "",
+			"dueSoon": "",
+			"kicker": "",
+			"lookInside": "",
+			"name": "",
+			"new": "",
+			"title": "",
+			"total": "",
+			"updatedBy": "",
+			"vendor": ""
+		},
+		"ask": {
+			"body": "",
+			"hint": "",
+			"kicker": "",
+			"title": ""
+		},
+		"back": "",
+		"chat": {
+			"allow": "",
+			"allowed": "",
+			"approvalBody": "",
+			"approvalTitle": "",
+			"decline": "",
+			"declined": "",
+			"found": "",
+			"placeholder": "",
+			"reading": "",
+			"reply": "",
+			"request": "",
+			"role": "",
+			"sample": "",
+			"send": "",
+			"typing": ""
+		},
+		"choose": {
+			"body": "",
+			"inside": "",
+			"kicker": "",
+			"or": "",
+			"stay": "",
+			"title": ""
+		},
+		"flow": {
+			"boardLabel": "",
+			"body": "",
+			"kicker": "",
+			"kind": {
+				"ai": "",
+				"data": "",
+				"event": "",
+				"mail": ""
+			},
+			"node": {
+				"extract": "",
+				"read": "",
+				"schedule": "",
+				"store": "",
+				"summary": ""
+			},
+			"ran": {
+				"cloud": "",
+				"device": "",
+				"server": ""
+			},
+			"title": ""
+		},
+		"next": "",
+		"progress": "",
+		"rail": {
+			"app": "",
+			"appHint": "",
+			"bot": "",
+			"botHint": "",
+			"flow": "",
+			"flowHint": "",
+			"you": "",
+			"youHint": ""
+		},
+		"replay": "",
+		"sample": "",
+		"skip": "",
+		"stageLabel": "",
+		"where": {
+			"cloud": "",
+			"device": "",
+			"label": "",
+			"server": ""
+		}
+	},
 	"menu": {
 		"tour": ""
 	},

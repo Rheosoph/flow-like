@@ -53,6 +53,10 @@ import {
 	type IBoardSyncResponse,
 } from "@flow-like/flow-like-ui/lib/board-sync";
 import {
+	CatalogReader,
+	LEAN_CATALOG_QUERY,
+} from "@flow-like/flow-like-ui/lib/catalog-wire";
+import {
 	cancelChannel,
 	isChannelHandle,
 } from "@flow-like/flow-like-ui/lib/channel";
@@ -104,6 +108,7 @@ import {
 	type WebBackendRef,
 	apiDelete,
 	apiGet,
+	apiGetConditional,
 	apiPatch,
 	apiPost,
 	apiPut,
@@ -248,6 +253,25 @@ export class WebBoardState implements IBoardState {
 	/** The hub answered `/sync` as an unknown route; boards load whole from then on. */
 	private boardSyncUnsupported = false;
 	private readonly mediaProjector = new BoardMediaProjector();
+	/**
+	 * The built-in nodes are fetched by digest, which the browser may keep for good, and are
+	 * decoded once for every app. An app's own nodes are re-read with their tag, so an
+	 * unchanged catalog is a 304 and the list already in memory.
+	 */
+	private readonly catalogs = new CatalogReader({
+		app: (appId, etag) =>
+			apiGetConditional<unknown>(
+				`apps/${appId}/nodes?${LEAN_CATALOG_QUERY}`,
+				this.backend.auth,
+				etag,
+			),
+		builtIn: (digest) =>
+			apiGet<unknown>(
+				`apps/nodes?${LEAN_CATALOG_QUERY}&digest=${digest}`,
+				this.backend.auth,
+			),
+		plain: (appId) => apiGet<INode[]>(`apps/${appId}/nodes`, this.backend.auth),
+	});
 
 	constructor(private readonly backend: WebBackendRef) {}
 
@@ -350,10 +374,7 @@ export class WebBoardState implements IBoardState {
 
 	async getCatalog(appId: string): Promise<INode[]> {
 		try {
-			const nodes = await apiGet<INode[]>(
-				`apps/${appId}/nodes`,
-				this.backend.auth,
-			);
+			const nodes = await this.catalogs.read(appId);
 			// Lets subsequent board syncs ship catalog-owned node fields lean.
 			this.boardSync.setCatalog(appId, nodes);
 			return nodes;

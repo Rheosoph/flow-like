@@ -107,17 +107,6 @@ pub async fn upsert_page(
         .clone()
         .ok_or_else(|| ApiError::bad_request("page payload is missing `board_id`".to_string()))?;
 
-    // Resolve credentials and storage before taking mutation locks so lock holders never wait for
-    // another pooled database connection during app setup.
-    let app = state
-        .scoped_app(
-            &sub,
-            &app_id,
-            &state,
-            crate::credentials::CredentialsAccess::EditApp,
-        )
-        .await?;
-
     // A page copied out of another app keeps that app's `workflow_event` targets, and the runtime
     // prefers the action's context over the surface it renders on. Normalizing before the write is
     // what keeps a stored page from firing a foreign app's nodes.
@@ -163,34 +152,30 @@ pub async fn upsert_page(
         }
     }
 
-    let board = app
-        .open_board(board_id.clone(), None, None)
+    // The lease above keeps every other board writer out, and the shared cache revalidates its
+    // entry against storage, so this is the stored draft without a full reload when it is current.
+    let mut board = match state
+        .master_board(&sub, &app_id, &board_id, &state, None)
         .await
-        .map_err(|e| {
-            if let Some(upgrade) = ApiError::from_board_format_error(&e) {
-                return upgrade;
-            }
-            // A board this app does not own is a bad request, not a server fault — but the
-            // manifest alone cannot decide that. `manifest.app` is a last-write-wins document
-            // several endpoints rewrite without a shared lock, so a board created moments ago can
-            // be missing from it while its file is perfectly readable; only a failed open plus an
-            // absent manifest entry means the board is really not here.
-            if app.boards.contains(&board_id) {
-                ApiError::internal_error(anyhow!("open board {}: {e}", board_id))
-            } else {
-                ApiError::bad_request(format!(
-                    "board '{board_id}' is not a board of app '{app_id}', so page '{page_id}' has nowhere to live"
-                ))
-            }
-        })?;
+    {
+        Ok(board) => board,
+        Err(error) => {
+            return Err(board_open_error(&state, &sub, &app_id, &board_id, &page_id, error).await);
+        }
+    };
 
     // A page is part of its board's draft, so its editor is a board editor.
     try_rebind_latest_sinks(&state, &app_id, &board_id, &user).await?;
-    {
-        let mut board_guard = board.write().await;
+    page_id_guard.ensure_held()?;
+    let board_before_page = board.content_hash();
+    board.save_page(&page, None).await?;
+    // A rewritten board gets a new storage identity even when its content is the same, and every
+    // API instance then rehydrates it on its next read. Persist the board only when the page
+    // changed it: a new page id, or page event nodes whose options follow the page.
+    if board.content_hash() != board_before_page {
         page_id_guard.ensure_held()?;
-        board_guard.save_page(&page, None).await?;
-        board_guard.save(None).await?;
+        let put = board.save(None).await?;
+        state.seed_board_cache(&app_id, &board_id, board, &put);
     }
     rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
 
@@ -238,6 +223,32 @@ pub async fn upsert_page(
         );
     }
     Ok(Json(page))
+}
+
+/// A board this app does not own is a bad request, not a server fault — but the manifest alone
+/// cannot decide that. `manifest.app` is a last-write-wins document several endpoints rewrite
+/// without a shared lock, so a board created moments ago can be missing from it while its file is
+/// perfectly readable; only a failed open plus an absent manifest entry means the board is really
+/// not here.
+async fn board_open_error(
+    state: &AppState,
+    sub: &str,
+    app_id: &str,
+    board_id: &str,
+    page_id: &str,
+    error: flow_like_types::Error,
+) -> ApiError {
+    if let Some(upgrade) = ApiError::from_board_format_error(&error) {
+        return upgrade;
+    }
+    match state.master_app(sub, app_id, state).await {
+        Ok(app) if !app.boards.iter().any(|listed| listed == board_id) => {
+            ApiError::bad_request(format!(
+                "board '{board_id}' is not a board of app '{app_id}', so page '{page_id}' has nowhere to live"
+            ))
+        }
+        _ => ApiError::internal_error(anyhow!("open board {board_id}: {error}")),
+    }
 }
 
 const MAX_AUDITED_FOREIGN_APPS: usize = 8;

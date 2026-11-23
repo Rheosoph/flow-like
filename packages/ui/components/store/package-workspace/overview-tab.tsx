@@ -224,7 +224,7 @@ function RegistryCard({
 				<Field label={t("rating", "Rating")}>
 					{rated ? (
 						<span className="flex items-center gap-1.5 tabular-nums">
-							<Star className="size-3.5 fill-yellow-500 text-yellow-500" />
+							<Star className="size-3.5 fill-tab-yellow text-tab-yellow" />
 							{(entry.avgRating ?? 0).toFixed(1)}
 							<span className="text-muted-foreground">{`(${entry.ratingCount})`}</span>
 						</span>
@@ -415,7 +415,7 @@ function ListingHealthCard({
 				</div>
 			) : health.complete ? (
 				<p className="flex items-center gap-2 text-sm">
-					<CheckCircle2 className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+					<CheckCircle2 className="size-4 shrink-0 text-good" />
 					{t("workspaceListingComplete", "Listing complete")}
 				</p>
 			) : (
@@ -485,7 +485,10 @@ function PermissionsCard({
 				</Field>
 				{(access?.allowedHosts.length ?? 0) > 0 && (
 					<Field label={t("workspaceHosts", "Hosts")}>
-						<span className="truncate font-mono text-xs">
+						<span
+							className="truncate font-mono text-xs"
+							title={access?.allowedHosts.join("\n")}
+						>
 							{access?.allowedHosts.join(", ")}
 						</span>
 					</Field>

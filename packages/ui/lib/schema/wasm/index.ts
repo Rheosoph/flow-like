@@ -513,12 +513,27 @@ export interface PackageUser {
 export interface PackageInvitation {
 	id: string;
 	packageId: string;
+	packageName?: string | null;
 	inviteeId: string;
 	invitedById: string;
 	permission: number;
 	status: InvitationStatus;
 	createdAt: string;
 	expiresAt?: string;
+}
+
+/** A package's own pending invitation, as its maintainers see it. */
+export interface PackagePendingInvitation {
+	id: string;
+	inviteeId: string;
+	username?: string | null;
+	name?: string | null;
+	avatar?: string | null;
+	invitedById: string;
+	invitedByName?: string | null;
+	permission: number;
+	createdAt: string;
+	expiresAt?: string | null;
 }
 
 export interface InviteUserRequest {
@@ -686,6 +701,9 @@ export interface RequestAccessResponse {
 export interface AccessRequest {
 	id: string;
 	userId: string;
+	username?: string | null;
+	name?: string | null;
+	avatar?: string | null;
 	packageId: string;
 	comment?: string;
 	createdAt: string;

@@ -17,9 +17,9 @@ function SeverityIcon({ severity }: { severity: LintSeverity }) {
 		case "error":
 			return <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" />;
 		case "warning":
-			return <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />;
+			return <AlertTriangle className="h-3.5 w-3.5 text-warning shrink-0" />;
 		case "info":
-			return <Info className="h-3.5 w-3.5 text-blue-500 shrink-0" />;
+			return <Info className="h-3.5 w-3.5 text-info shrink-0" />;
 	}
 }
 
@@ -70,8 +70,8 @@ export function LintPanel({
 							className={cn(
 								"text-[10px] cursor-pointer gap-1",
 								filter === "warning"
-									? "bg-amber-500/20 text-amber-600 border-amber-500/40"
-									: "text-amber-600 border-amber-500/20",
+									? "bg-warning-bg text-warning border-warning-solid"
+									: "text-warning border-warning-line",
 							)}
 							onClick={() =>
 								setFilter(filter === "warning" ? "all" : "warning")
@@ -91,20 +91,23 @@ export function LintPanel({
 							className={cn(
 								"text-[10px] cursor-pointer gap-1",
 								filter === "info"
-									? "bg-blue-500/20 text-blue-600 border-blue-500/40"
-									: "text-blue-600 border-blue-500/20",
+									? "bg-info-bg text-info border-info-solid"
+									: "text-info border-info-line",
 							)}
 							onClick={() => setFilter(filter === "info" ? "all" : "info")}
 						>
 							<Info className="h-3 w-3" />
-							{t("infosInfo", "{{infos}} info", { infos: counts.infos })}
-							{counts.infos !== 1 ? "s" : ""}
+							{t("countInfos", {
+								defaultValue_one: "{{count}} info",
+								defaultValue_other: "{{count}} infos",
+								count: counts.infos,
+							})}
 						</Badge>
 					)}
 					{total === 0 && (
 						<Badge
 							variant="outline"
-							className="text-[10px] gap-1 text-green-600 border-green-500/20"
+							className="text-[10px] gap-1 text-good border-good-line"
 						>
 							<CheckCircle2 className="h-3 w-3" />
 							{t("allClear", "All clear")}
@@ -115,7 +118,7 @@ export function LintPanel({
 
 			{filtered.length === 0 ? (
 				<div className="text-center py-8">
-					<CheckCircle2 className="h-8 w-8 text-green-500/30 mx-auto mb-2" />
+					<CheckCircle2 className="h-8 w-8 text-good/30 mx-auto mb-2" />
 					<p className="text-sm text-muted-foreground/60">
 						{t("noIssuesMatchingFilter", {
 							defaultValue_zero: "No issues found",
@@ -136,8 +139,8 @@ export function LintPanel({
 									issue.severity === "error"
 										? "border-destructive/20 bg-destructive/5"
 										: issue.severity === "warning"
-											? "border-amber-500/20 bg-amber-500/5"
-											: "border-blue-500/20 bg-blue-500/5",
+											? "border-warning-line bg-warning-bg"
+											: "border-info-line bg-info-bg",
 								)}
 								onClick={() => onJumpToNode(issue.nodeIndex)}
 							>

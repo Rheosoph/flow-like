@@ -119,6 +119,10 @@ export function PackageCard({
 	const visibleCapabilities = capabilities.slice(0, MAX_VISIBLE_CAPABILITIES);
 	const hiddenCapabilityCount =
 		capabilities.length - visibleCapabilities.length;
+	const visibilityLabel =
+		pkg.visibility === "private"
+			? t("common:workspaceVisibilityPrivate", "Private")
+			: t("common:workspaceVisibilityRequestAccess", "On request");
 	const featured = variant === "featured";
 	const compact = variant === "compact";
 	const landscape = variant === "landscape";
@@ -161,8 +165,8 @@ export function PackageCard({
 					) : (
 						<span
 							className={cn(
-								"absolute inset-0 flex items-center justify-center font-mono text-2xl font-bold text-white/50",
-								featured && "text-6xl tracking-tighter text-white/65",
+								"absolute inset-0 flex items-center justify-center font-mono text-2xl font-bold text-background/60",
+								featured && "text-6xl tracking-tighter text-background/70",
 							)}
 						>
 							{getPackageInitials(displayName)}
@@ -172,7 +176,7 @@ export function PackageCard({
 			)}
 			<span
 				className={cn(
-					"absolute bottom-1.5 left-1.5 rounded-md border border-white/20 bg-black/50 px-1.5 py-0.5 font-mono text-[10px] leading-none text-white/90 backdrop-blur-sm",
+					"absolute bottom-1.5 left-1.5 rounded-md border border-border/60 bg-background/85 px-1.5 py-0.5 font-mono text-[10px] leading-none text-foreground backdrop-blur-sm",
 					versionLabel !== undefined && "max-w-[calc(100%-0.75rem)] truncate",
 				)}
 			>
@@ -186,7 +190,7 @@ export function PackageCard({
 			{featured && (
 				<span
 					aria-hidden="true"
-					className="absolute right-3 top-3 flex size-8 items-center justify-center rounded-full border border-white/25 bg-black/15 text-white backdrop-blur-sm transition-transform group-hover:-rotate-12"
+					className="absolute right-3 top-3 flex size-8 items-center justify-center rounded-full border border-border/60 bg-background/70 text-foreground backdrop-blur-sm transition-transform group-hover:-rotate-12"
 				>
 					<ArrowUpRight className="size-4" />
 				</span>
@@ -251,13 +255,15 @@ export function PackageCard({
 						{pkg.verified && (
 							<Shield
 								aria-label={t("verified", "Verified")}
-								className="h-3.5 w-3.5 shrink-0 text-sky-500 dark:text-sky-400"
+								className="h-3.5 w-3.5 shrink-0 text-info"
 							/>
 						)}
 						{pkg.visibility !== "public" && (
 							<span
 								className="shrink-0 rounded-md border border-border/60 p-1 text-muted-foreground"
-								title={pkg.visibility}
+								role="img"
+								aria-label={visibilityLabel}
+								title={visibilityLabel}
 							>
 								{pkg.visibility === "private" ? (
 									<Lock className="h-3 w-3" />
@@ -404,9 +410,7 @@ export function PackageCard({
 }
 
 export function PackageRatingStar() {
-	return (
-		<Star className="h-3 w-3 fill-yellow-500 text-yellow-500 dark:fill-yellow-400 dark:text-yellow-400" />
-	);
+	return <Star className="h-3 w-3 fill-tab-yellow text-tab-yellow" />;
 }
 
 export function PackageCardStats({

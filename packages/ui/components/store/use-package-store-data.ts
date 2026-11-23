@@ -1,8 +1,10 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
+import { apiErrorMessage } from "../../lib/api-error";
 import { openExternalUrl } from "../../lib/open-external";
 import type { RegistryEntry } from "../../lib/schema/wasm";
 import type {
@@ -70,6 +72,7 @@ export function usePackageStoreData(
 	auth?: unknown,
 	onAccessChanged?: () => void,
 ) {
+	const { t } = useTranslation("store");
 	const backend = useBackend();
 	const purchasingAllowed = usePaymentDistribution();
 	const marketplaceEnabled = usePayments().config?.marketplace_enabled === true;
@@ -81,6 +84,7 @@ export function usePackageStoreData(
 
 	const [isPurchasing, setIsPurchasing] = useState(false);
 	const [isRequesting, setIsRequesting] = useState(false);
+	const [accessRequested, setAccessRequested] = useState(false);
 	const [grantedAccess, setGrantedAccess] = useState(false);
 	const [awaitingCheckout, setAwaitingCheckout] = useState(false);
 	const [checkoutOpen, setCheckoutOpen] = useState(false);
@@ -100,10 +104,13 @@ export function usePackageStoreData(
 		stopAwaitingCheckout,
 	);
 
-	const formatPrice = useCallback((price?: number | null) => {
-		if (!price || price <= 0) return "Free";
-		return `€${(price / 100).toFixed(2)}`;
-	}, []);
+	const formatPrice = useCallback(
+		(price?: number | null) => {
+			if (!price || price <= 0) return t("free", "Free");
+			return `€${(price / 100).toFixed(2)}`;
+		},
+		[t],
+	);
 
 	const priceLabel = formatPrice(pkg?.price ?? null);
 
@@ -130,7 +137,9 @@ export function usePackageStoreData(
 			);
 
 			if (result.alreadyHasAccess) {
-				toast.info("You already have access to this package!");
+				toast.info(
+					t("packageAlreadyHasAccess", "You already have this package."),
+				);
 				setGrantedAccess(true);
 				onAccessChanged?.();
 				return;
@@ -140,11 +149,24 @@ export function usePackageStoreData(
 				await openExternalUrl(result.checkoutUrl, "checkout");
 				setAwaitingCheckout(true);
 			} else {
-				toast.error("Unable to start purchase. Please try again.");
+				toast.error(
+					t(
+						"packagePurchaseStartFailed",
+						"Couldn't start the purchase. Please try again.",
+					),
+				);
 			}
 		} catch (e) {
 			console.error("Purchase error:", e);
-			toast.error("Failed to start purchase. Please try again later.");
+			toast.error(
+				apiErrorMessage(
+					e,
+					t(
+						"packagePurchaseStartFailed",
+						"Couldn't start the purchase. Please try again.",
+					),
+				),
+			);
 		} finally {
 			setIsPurchasing(false);
 		}
@@ -157,6 +179,7 @@ export function usePackageStoreData(
 		fetcher,
 		auth,
 		onAccessChanged,
+		t,
 	]);
 
 	const onRequestAccess = useCallback(async () => {
@@ -176,27 +199,41 @@ export function usePackageStoreData(
 			);
 
 			if (result.granted) {
-				toast.success("Access granted! You can now use this package.");
+				toast.success(
+					t("packageAccessGranted", "You have access to this package now."),
+				);
 				setGrantedAccess(true);
 				onAccessChanged?.();
 				return;
 			}
 
 			if (result.requiresPurchase) {
-				toast.info("This package requires a purchase.");
+				toast.info(t("packageRequiresPurchase", "This package is paid."));
 				await onBuy();
 				return;
 			}
 
 			if (result.queued) {
+				setAccessRequested(true);
 				toast.success(
-					"Access request sent! The author will review your request.",
+					t(
+						"packageAccessRequestSent",
+						"Request sent. A maintainer of the package decides on it.",
+					),
 				);
 				return;
 			}
 		} catch (e) {
 			console.error("Access request error:", e);
-			toast.error("Failed to request access. Please try again later.");
+			toast.error(
+				apiErrorMessage(
+					e,
+					t(
+						"packageAccessRequestFailed",
+						"Couldn't send the access request. Please try again.",
+					),
+				),
+			);
 		} finally {
 			setIsRequesting(false);
 		}
@@ -208,6 +245,7 @@ export function usePackageStoreData(
 		auth,
 		onAccessChanged,
 		onBuy,
+		t,
 	]);
 
 	const onGetOrBuy = useCallback(async () => {
@@ -226,12 +264,13 @@ export function usePackageStoreData(
 			return;
 		}
 
-		toast.error("You don't have access to this package.");
-	}, [pkg, packageId, onBuy, onRequestAccess]);
+		toast.error(t("packageNoAccess", "You don't have access to this package."));
+	}, [pkg, packageId, onBuy, onRequestAccess, t]);
 
 	return {
 		isPurchasing,
 		isRequesting,
+		accessRequested,
 		awaitingCheckout,
 		checkoutOpen,
 		setCheckoutOpen,

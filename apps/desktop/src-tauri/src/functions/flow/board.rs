@@ -1423,15 +1423,77 @@ pub async fn element_demand(
     board_id: String,
     version: Option<(u32, u32, u32)>,
 ) -> Result<ElementDemandResponse, TauriFunctionError> {
-    let cache_key = local_snapshot_key(&board_id, version);
-    let board = open_board_for_read(&handler, app_id, board_id, version).await?;
-    let (board, revision) = board.snapshot_with_revision();
-    let manifest = revision_prerun_manifest(cache_key, &board, revision);
+    let manifest = prerun_facts(&handler, &app_id, &board_id, version)
+        .await?
+        .manifest;
     Ok(ElementDemandResponse {
         selectors: manifest.element_selectors.clone(),
         dynamic: manifest.element_reads_dynamic,
         signature: manifest.signature.clone(),
     })
+}
+
+/// What a run of a board requires before it starts.
+struct PrerunFacts {
+    manifest: Arc<PrerunManifest>,
+    instantiates_widgets: bool,
+    has_prompt_variables: bool,
+}
+
+impl PrerunFacts {
+    /// `board` may be the source board or its compiled view: both carry the node types and
+    /// the variable flags read here.
+    fn of(board: &Board, manifest: Arc<PrerunManifest>) -> Self {
+        Self {
+            manifest,
+            instantiates_widgets: instantiates_widgets(board),
+            has_prompt_variables: board
+                .variables
+                .values()
+                .any(|variable| variable.runtime_configured || variable.secret),
+        }
+    }
+
+    fn of_open(board_id: &str, version: Option<(u32, u32, u32)>, cell: &BoardCell) -> Self {
+        let (board, revision) = cell.snapshot_with_revision();
+        let manifest =
+            revision_prerun_manifest(local_snapshot_key(board_id, version), &board, revision);
+        Self::of(&board, manifest)
+    }
+}
+
+/// A board the editor holds answers for what the editor shows. Any other board answers from
+/// its compiled baseline, which describes the stored board without loading it and
+/// re-deriving every node; that is what an event or a Page on the use route starts from.
+async fn prerun_facts(
+    handler: &AppHandle,
+    app_id: &str,
+    board_id: &str,
+    version: Option<(u32, u32, u32)>,
+) -> Result<PrerunFacts, TauriFunctionError> {
+    let state = TauriFlowLikeState::construct(handler).await?;
+    let open = state
+        .board_registry
+        .get(&local_snapshot_key(board_id, version))
+        .map(|entry| entry.value().clone());
+    if let Some(cell) = open {
+        return Ok(PrerunFacts::of_open(board_id, version, &cell));
+    }
+    match super::run::resolve_page_baseline(&state, app_id, board_id, version).await {
+        Ok(baseline) => Ok(PrerunFacts::of(
+            baseline.board(),
+            Arc::new(baseline.facts().prerun.clone()),
+        )),
+        // No baseline can be built for a board that places a node type whose package is not
+        // loaded yet, and these requirements are what tells the caller to install it.
+        Err(error) => {
+            tracing::debug!(board_id, %error, "No compiled baseline for the board; reading its source");
+            let cell =
+                open_board_for_read(handler, app_id.to_string(), board_id.to_string(), version)
+                    .await?;
+            Ok(PrerunFacts::of_open(board_id, version, &cell))
+        }
+    }
 }
 
 /// The last prerun manifest per open board, valid while its revision is still the published one.
@@ -1464,6 +1526,9 @@ pub struct BoardRunRequirements {
     pub wasm_package_ids: Vec<String>,
     pub wasm_package_permissions: HashMap<String, Vec<String>>,
     pub instantiates_widgets: bool,
+    /// The board has runtime-configured or secret variables, the ones a local run may have
+    /// to ask for. Without any, the caller has no reason to read the board for them.
+    pub has_prompt_variables: bool,
 }
 
 /// The pre-run facts of a board without shipping the board: derived from the published revision
@@ -1475,10 +1540,11 @@ pub async fn get_board_run_requirements(
     board_id: String,
     version: Option<(u32, u32, u32)>,
 ) -> Result<BoardRunRequirements, TauriFunctionError> {
-    let cache_key = local_snapshot_key(&board_id, version);
-    let board = open_board_for_read(&handler, app_id, board_id, version).await?;
-    let (board, revision) = board.snapshot_with_revision();
-    let manifest = revision_prerun_manifest(cache_key, &board, revision);
+    let PrerunFacts {
+        manifest,
+        instantiates_widgets,
+        has_prompt_variables,
+    } = prerun_facts(&handler, &app_id, &board_id, version).await?;
     Ok(BoardRunRequirements {
         runtime_variables: manifest.runtime_variables.clone(),
         oauth_requirements: manifest.oauth_requirements.clone(),
@@ -1486,7 +1552,8 @@ pub async fn get_board_run_requirements(
         execution_mode: manifest.execution_mode.clone(),
         wasm_package_ids: manifest.wasm_package_ids.clone(),
         wasm_package_permissions: manifest.wasm_package_permissions.iter().cloned().collect(),
-        instantiates_widgets: instantiates_widgets(&board),
+        instantiates_widgets,
+        has_prompt_variables,
     })
 }
 

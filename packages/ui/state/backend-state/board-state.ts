@@ -174,6 +174,8 @@ export interface IBoardRunRequirements {
 	wasm_package_ids: string[];
 	wasm_package_permissions: Record<string, string[]>;
 	instantiates_widgets: boolean;
+	/** The board has runtime-configured or secret variables a local run may have to ask for. */
+	has_prompt_variables?: boolean;
 }
 
 export interface IBoardRunRequirementsOptions {

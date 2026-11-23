@@ -1,4 +1,4 @@
-use super::{CODEC_ZSTD, CompiledBoard, HEADER_LEN, PAYLOAD_LEN_PREFIX, peek_header};
+use super::{CODEC_ZSTD, CompiledBoard, append_extension_frame, extension_frames, peek_header};
 use crate::a2ui::widget::Widget;
 use flow_like_types::{Result, anyhow};
 use serde::{Deserialize, Serialize};
@@ -6,7 +6,6 @@ use std::collections::BTreeSet;
 
 pub const WIDGET_SNAPSHOT_FORMAT_VERSION: u16 = 1;
 pub const MAX_WIDGET_SNAPSHOT_BYTES: usize = 2 * 1024 * 1024;
-const SKIPPABLE_MAGIC: u32 = 0x184D_2A50;
 const SNAPSHOT_MAGIC: &[u8] = b"flow-like/widget-snapshot\0";
 
 /// Definitions selected from the app's current widgets when an artifact is dispatched.
@@ -95,17 +94,10 @@ pub fn append_widget_snapshot(bytes: &[u8], snapshot: &ArtifactWidgetSnapshot) -
     snapshot.validate()?;
     let value = canonical_value(serde_json::to_value(snapshot)?);
     let json = serde_json::to_vec(&value)?;
-    let length = SNAPSHOT_MAGIC.len() + json.len();
-    if length > MAX_WIDGET_SNAPSHOT_BYTES {
+    if SNAPSHOT_MAGIC.len() + json.len() > MAX_WIDGET_SNAPSHOT_BYTES {
         return Err(anyhow!("widget snapshot exceeds its byte limit"));
     }
-    let mut output = Vec::with_capacity(bytes.len() + 8 + length);
-    output.extend_from_slice(bytes);
-    output.extend_from_slice(&SKIPPABLE_MAGIC.to_le_bytes());
-    output.extend_from_slice(&(length as u32).to_le_bytes());
-    output.extend_from_slice(SNAPSHOT_MAGIC);
-    output.extend_from_slice(&json);
-    Ok(output)
+    Ok(append_extension_frame(bytes, SNAPSHOT_MAGIC, &json))
 }
 
 fn canonical_value(value: serde_json::Value) -> serde_json::Value {
@@ -129,34 +121,14 @@ fn canonical_value(value: serde_json::Value) -> serde_json::Value {
 
 /// Older artifacts and unknown extension versions keep the live widget lookup.
 pub fn decode_widget_snapshot(bytes: &[u8]) -> Result<Option<ArtifactWidgetSnapshot>> {
-    if peek_header(bytes)?.codec != CODEC_ZSTD {
+    let Some(frames) = extension_frames(bytes)? else {
         return Ok(None);
-    }
-    let payload = bytes
-        .get(HEADER_LEN + PAYLOAD_LEN_PREFIX..)
-        .ok_or_else(|| anyhow!("compiled board artifact payload truncated"))?;
-    let first_frame = zstd::zstd_safe::find_frame_compressed_size(payload)
-        .map_err(|_| anyhow!("compiled board Zstd frame is invalid"))?;
-    let mut remaining = &payload[first_frame..];
+    };
     let mut snapshot = None;
-    while !remaining.is_empty() {
-        if remaining.len() < 8 {
-            return Err(anyhow!("compiled board extension header truncated"));
-        }
-        let magic = u32::from_le_bytes(remaining[..4].try_into()?);
-        if magic & 0xFFFF_FFF0 != SKIPPABLE_MAGIC {
-            return Err(anyhow!("compiled board has an unsupported trailing frame"));
-        }
-        let length = u32::from_le_bytes(remaining[4..8].try_into()?) as usize;
-        let end = 8_usize
-            .checked_add(length)
-            .ok_or_else(|| anyhow!("compiled board extension length overflowed"))?;
-        let frame = remaining
-            .get(8..end)
-            .ok_or_else(|| anyhow!("compiled board extension payload truncated"))?;
-        remaining = &remaining[end..];
+    for frame in frames {
+        let frame = frame?;
         if let Some(json) = frame.strip_prefix(SNAPSHOT_MAGIC) {
-            if length > MAX_WIDGET_SNAPSHOT_BYTES || snapshot.is_some() {
+            if frame.len() > MAX_WIDGET_SNAPSHOT_BYTES || snapshot.is_some() {
                 return Err(anyhow!(
                     "compiled board widget extension exceeds its bounds"
                 ));
@@ -175,6 +147,7 @@ pub fn decode_widget_snapshot(bytes: &[u8]) -> Result<Option<ArtifactWidgetSnaps
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::flow::compiled::{HEADER_LEN, PAYLOAD_LEN_PREFIX, SKIPPABLE_MAGIC};
     use crate::flow::{
         board::{Board, Layer, LayerType},
         node::Node,

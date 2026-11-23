@@ -5,7 +5,12 @@ import {
 	FolderOpenIcon,
 	PencilIcon,
 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import {
+	type MouseEvent as ReactMouseEvent,
+	useCallback,
+	useMemo,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks";
 import {
@@ -59,7 +64,7 @@ export function FileOrFolder({
 	highlight: boolean;
 	changePrefix?: (prefix: string) => void;
 	loadFile?: (file: string) => void;
-	shareFile?: (file: string, e: any) => void;
+	shareFile?: (file: string, e: ReactMouseEvent) => void;
 	deleteFile?: (file: string) => void;
 	renameFile?: (file: IStorageItem) => void;
 	downloadFile?: (file: string) => void;
@@ -91,9 +96,18 @@ export function FileOrFolder({
 	});
 
 	const backend = useBackend();
-	const catalog = useInvoke(backend.boardState.getCatalog, backend.boardState, [
-		appId,
-	]);
+	// Only "Copy Path" needs the catalog, and copying has to happen inside the click, so
+	// the read starts when the actions menu opens instead of with every listed row.
+	const [actionsOpened, setActionsOpened] = useState(false);
+	const loadCatalog = useCallback((open: boolean) => {
+		if (open) setActionsOpened(true);
+	}, []);
+	const catalog = useInvoke(
+		backend.boardState.getCatalog,
+		backend.boardState,
+		[appId],
+		actionsOpened,
+	);
 
 	const copyPath = useCallback(() => {
 		const fragment = buildStoragePathNodes({
@@ -142,7 +156,7 @@ export function FileOrFolder({
 							</Badge>
 						</div>
 					</button>
-					<DropdownMenu>
+					<DropdownMenu onOpenChange={loadCatalog}>
 						<DropdownMenuTrigger asChild>
 							<Button
 								type="button"
@@ -259,7 +273,7 @@ export function FileOrFolder({
 						</div>
 					</div>
 				</button>
-				<DropdownMenu>
+				<DropdownMenu onOpenChange={loadCatalog}>
 					<DropdownMenuTrigger asChild>
 						<Button
 							type="button"

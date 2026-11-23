@@ -3,6 +3,7 @@ use aws_config::SdkConfig;
 use axum::body::Body;
 use flow_like::app::App;
 use flow_like::flow::board::Board;
+use flow_like::flow::board::format::{CURRENT_BOARD_FORMAT_VERSION, with_supported_version};
 use flow_like::flow::node::NodeLogic;
 use flow_like::flow_like_model_provider::provider::{ModelProviderConfiguration, OpenAIConfig};
 use flow_like::flow_like_storage::Path;
@@ -165,6 +166,11 @@ const CACHED_PAGE_REVISIONS_PER_BOARD: usize = 64;
 /// board keeps resolving on this instance.
 const PINNED_BOARD_REVALIDATE_AFTER: Duration = Duration::from_secs(5 * 60);
 
+/// A detached load has no request deadline to cancel it, and it holds the board's single-flight
+/// lock. The limit is as long as the longest request may run, so it never cuts a load a request
+/// could have finished, and a load that never returns cannot block the board for good.
+const DETACHED_BOARD_LOAD_LIMIT: Duration = Duration::from_secs(15 * 60);
+
 impl CachedBoard {
     pub(crate) fn new(e_tag: String, board: Board) -> Self {
         Self {
@@ -293,6 +299,90 @@ impl TrustedUntil {
         let mut current = self.0.lock();
         *current = Some(current.map_or(until, |current| current.max(until)));
     }
+}
+
+/// Run a board load to completion even when the request awaiting it is cancelled.
+///
+/// Hydrating a large board can outlast a request's deadline. Dropping the load with the request
+/// would throw the work away, and every retry would start over and time out again. The task
+/// keeps the single-flight guard until the load is done, so a retry queues behind it and is
+/// answered from the entry it leaves in the cache.
+async fn detached_board_load<F>(
+    single_flight: flow_like_types::tokio::sync::OwnedMutexGuard<()>,
+    load: F,
+) -> flow_like_types::Result<Arc<CachedBoard>>
+where
+    F: Future<Output = flow_like_types::Result<Arc<CachedBoard>>> + Send + 'static,
+{
+    // Entering the request's span would keep it, and the request's trace, open until a load that
+    // outlives the request has finished.
+    let span = tracing::debug_span!(parent: None, "detached_board_load");
+    span.follows_from(tracing::Span::current());
+    flow_like_types::tokio::spawn(
+        async move {
+            let _single_flight = single_flight;
+            flow_like_types::tokio::time::timeout(DETACHED_BOARD_LOAD_LIMIT, load)
+                .await
+                .map_err(|_| {
+                    anyhow!(
+                        "board load did not finish within {} s",
+                        DETACHED_BOARD_LOAD_LIMIT.as_secs()
+                    )
+                })?
+        }
+        .instrument(span),
+    )
+    .await
+    .map_err(|error| anyhow!("board load task did not finish: {error}"))?
+}
+
+/// Confirm or replace the cached hydration of a board with one conditional storage read.
+async fn refresh_cached_board(
+    board_cache: moka::sync::Cache<String, Arc<CachedBoard>>,
+    cache_key: String,
+    app_id: String,
+    board_id: String,
+    app_state: Arc<FlowLikeState>,
+    version: Option<(u32, u32, u32)>,
+) -> flow_like_types::Result<Arc<CachedBoard>> {
+    let cached = board_cache.get(&cache_key);
+    let store = Board::meta_store(&app_state).await?;
+    let storage_root = Path::from("apps").join(app_id.as_str());
+    let verification_started_at = Instant::now();
+    let read = Board::load_proto_if_changed(
+        store,
+        &storage_root,
+        &board_id,
+        version,
+        cached.as_ref().map(|entry| entry.e_tag.as_str()),
+    )
+    .await?;
+
+    let (proto, meta) = match read {
+        ConditionalRead::NotModified => {
+            let cached = cached.ok_or_else(|| {
+                anyhow!(
+                    "storage reported NotModified for {app_id}/{board_id} without a cached ETag"
+                )
+            })?;
+            cached.mark_verified(verification_started_at);
+            return Ok(cached);
+        }
+        ConditionalRead::Fresh(proto, meta) => (proto, meta),
+    };
+
+    let board =
+        Board::from_loaded_proto_for_version(proto, storage_root, app_state, version).await?;
+    let entry = Arc::new(CachedBoard::new(
+        meta.e_tag.clone().unwrap_or_default(),
+        board,
+    ));
+    entry.mark_verified(verification_started_at);
+    // An object without an ETag can never be validated, so it is never cached.
+    if meta.e_tag.is_some() {
+        board_cache.insert(cache_key, entry.clone());
+    }
+    Ok(entry)
 }
 
 /// A registry of per-key process-local mutexes that forget themselves once nobody holds them.
@@ -1933,7 +2023,7 @@ impl State {
             return pinned;
         }
         let load_lock = keyed_local_lock(&self.board_load_locks, cache_key.clone());
-        let _single_flight = load_lock.lock().await;
+        let single_flight = load_lock.lock_owned().await;
         // A queued burst shares a fresh check instead of serializing one storage
         // round trip per action. Later requests still revalidate floating drafts.
         if let Some(cached) =
@@ -1943,44 +2033,21 @@ impl State {
             return Ok(cached);
         }
 
-        let cached = self.board_cache.get(&cache_key);
-        let store = Board::meta_store(&app_state).await?;
-        let storage_root = Path::from("apps").join(app_id.to_string());
-        let verification_started_at = Instant::now();
-        let read = Board::load_proto_if_changed(
-            store,
-            &storage_root,
-            board_id,
-            version,
-            cached.as_ref().map(|entry| entry.e_tag.as_str()),
-        )
-        .await?;
-
-        let (proto, meta) = match read {
-            ConditionalRead::NotModified => {
-                let cached = cached.ok_or_else(|| {
-                    flow_like_types::anyhow!(
-                        "storage reported NotModified for {app_id}/{board_id} without a cached ETag"
-                    )
-                })?;
-                cached.board.ensure_supported_format()?;
-                cached.mark_verified(verification_started_at);
-                return Ok(cached);
-            }
-            ConditionalRead::Fresh(proto, meta) => (proto, meta),
-        };
-
-        let board =
-            Board::from_loaded_proto_for_version(proto, storage_root, app_state, version).await?;
-        let entry = Arc::new(CachedBoard::new(
-            meta.e_tag.clone().unwrap_or_default(),
-            board,
-        ));
-        entry.mark_verified(verification_started_at);
-        // An object without an ETag can never be validated, so it is never cached.
-        if meta.e_tag.is_some() {
-            self.board_cache.insert(cache_key, entry.clone());
-        }
+        // The entry is shared by clients of every board format, so it is hydrated at the
+        // runtime's own ceiling and each caller checks its declared format afterwards.
+        let refresh = with_supported_version(
+            CURRENT_BOARD_FORMAT_VERSION,
+            refresh_cached_board(
+                self.board_cache.clone(),
+                cache_key,
+                app_id.to_string(),
+                board_id.to_string(),
+                app_state,
+                version,
+            ),
+        );
+        let entry = detached_board_load(single_flight, refresh).await?;
+        entry.board.ensure_supported_format()?;
         Ok(entry)
     }
 
@@ -2918,6 +2985,55 @@ mod tests {
             super::verified_board_after_wait(&cache, &key, None, std::time::Instant::now())
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn a_board_load_outlives_its_cancelled_request_and_answers_the_retry() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let cache = moka::sync::Cache::builder().max_capacity(4).build();
+        let key = super::board_cache_key("app-1", "board-1", None);
+        let locks = parking_lot::Mutex::new(HashMap::new());
+        let loads = std::sync::Arc::new(AtomicUsize::new(0));
+        let (finish, finished) = tokio::sync::oneshot::channel::<()>();
+
+        let guard = super::keyed_local_lock(&locks, key.clone())
+            .lock_owned()
+            .await;
+        let request = super::detached_board_load(guard, {
+            let (cache, key, loads) = (cache.clone(), key.clone(), loads.clone());
+            async move {
+                loads.fetch_add(1, Ordering::SeqCst);
+                finished.await.unwrap();
+                let entry = cached_board();
+                cache.insert(key, entry.clone());
+                Ok(entry)
+            }
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), request)
+                .await
+                .is_err(),
+            "the request gives up while the board is still hydrating"
+        );
+
+        let retry_lock = super::keyed_local_lock(&locks, key.clone());
+        let retry = tokio::spawn({
+            let (cache, key) = (cache.clone(), key.clone());
+            async move {
+                let _single_flight = retry_lock.lock_owned().await;
+                cache.get(&key)
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!retry.is_finished(), "the retry waits for the running load");
+
+        finish.send(()).unwrap();
+        assert!(
+            retry.await.unwrap().is_some(),
+            "the load of the cancelled request filled the cache"
+        );
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
     }
 
     #[test]

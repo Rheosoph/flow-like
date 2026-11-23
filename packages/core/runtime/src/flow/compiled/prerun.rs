@@ -707,7 +707,10 @@ impl PageExecutionRevisionSource {
     }
 }
 
-fn validate_page_execution(board: &Board, execution: &PrerunPageExecution) -> Result<()> {
+pub(super) fn validate_page_execution(
+    board: &Board,
+    execution: &PrerunPageExecution,
+) -> Result<()> {
     if !board.page_ids.is_empty()
         && !board
             .page_ids
@@ -774,7 +777,7 @@ fn validate_page_execution(board: &Board, execution: &PrerunPageExecution) -> Re
     Ok(())
 }
 
-fn hash_page_execution_revision(
+pub(super) fn hash_page_execution_revision(
     board: &Board,
     execution: &PrerunPageExecution,
     board_manifest_signature: &str,

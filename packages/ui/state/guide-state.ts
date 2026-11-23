@@ -14,17 +14,16 @@ import { GUIDE_TOURS } from "../lib/guide/guide-tours";
 
 interface GuideState {
 	/**
-	 * "unknown" until the provider decides whether this is a new user; "pending"
-	 * shows the welcome question; "done" never shows it again on its own.
+	 * "unknown" until Home has decided whether this is a new user, who is then
+	 * sent to the welcome page once. Any other value means it was decided.
 	 */
-	welcome: "unknown" | "pending" | "done";
+	welcome: "unknown" | "done";
 	role: GuideTourId | null;
 	run: IGuideRun | null;
 	/** The tour that just ended by being completed, for the closing card. */
 	finished: GuideTourId | null;
 	completed: GuideTourId[];
-	requestWelcome: () => void;
-	decideWelcome: (show: boolean) => void;
+	settleWelcome: () => void;
 	answerWelcome: (tour: GuideTourId | null) => void;
 	startTour: (tour: GuideTourId) => void;
 	signal: (signal: GuideSignal) => void;
@@ -58,12 +57,9 @@ export const useGuideStore = create<GuideState>()(
 			run: null,
 			finished: null,
 			completed: [],
-			requestWelcome: () => set({ welcome: "pending" }),
-			decideWelcome: (show) =>
+			settleWelcome: () =>
 				set((state) =>
-					state.welcome === "unknown"
-						? { welcome: show ? "pending" : "done" }
-						: {},
+					state.welcome === "unknown" ? { welcome: "done" } : {},
 				),
 			answerWelcome: (tour) =>
 				set({

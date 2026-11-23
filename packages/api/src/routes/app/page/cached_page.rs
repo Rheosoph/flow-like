@@ -1,11 +1,17 @@
 use crate::{
     cache::{CacheBackendHandle, best_effort},
     routes::app::artifact_cache::{ARTIFACT_TTL, revision_key},
+    state::CachedBoard,
 };
 use flow_like::{
-    a2ui::widget::Page, flow::board::Board, utils::compression::from_compressed_with_meta,
+    a2ui::widget::Page,
+    flow::board::Board,
+    utils::compression::{ConditionalRead, from_compressed_with_meta},
 };
-use flow_like_storage::object_store::{ObjectStore, ObjectStoreExt};
+use flow_like_storage::{
+    Path,
+    object_store::{ObjectStore, ObjectStoreExt},
+};
 use flow_like_types::{Result, proto};
 use std::sync::Arc;
 
@@ -72,6 +78,51 @@ async fn uncached(
     }
 }
 
+/// A handle that addresses a board's page files, or `None` when the board (or the pinned version)
+/// does not exist.
+///
+/// Reading a page needs only the board's identity and storage root. Hydrating the board runs
+/// every node's update, which on a large board takes longer than a read is allowed, so the board
+/// document is only checked for existence.
+pub(super) async fn page_owner(
+    store: &Arc<dyn ObjectStore>,
+    storage_root: &Path,
+    board_id: String,
+    version: Option<(u32, u32, u32)>,
+) -> Option<Board> {
+    store
+        .head(&Board::proto_path(storage_root, &board_id, version))
+        .await
+        .ok()?;
+    Some(Board::new_detached(Some(board_id), storage_root.clone()))
+}
+
+/// [`page_owner`] for a draft board, carrying the pages it lists. A cached hydration answers when
+/// storage confirms its ETag; otherwise the stored document is decoded for its page ids alone.
+pub(super) async fn page_listing(
+    store: Arc<dyn ObjectStore>,
+    storage_root: &Path,
+    board_id: &str,
+    cached: Option<&CachedBoard>,
+) -> Option<Board> {
+    let read = Board::load_proto_if_changed(
+        store,
+        storage_root,
+        board_id,
+        None,
+        cached.map(|entry| entry.e_tag.as_str()),
+    )
+    .await
+    .ok()?;
+    let page_ids = match read {
+        ConditionalRead::NotModified => cached?.board.page_ids.clone(),
+        ConditionalRead::Fresh(proto, _) => proto.page_ids,
+    };
+    let mut board = Board::new_detached(Some(board_id.to_string()), storage_root.clone());
+    board.page_ids = page_ids;
+    Some(board)
+}
+
 pub(super) async fn find_by_route(
     store: Arc<dyn ObjectStore>,
     board: &Board,
@@ -99,11 +150,82 @@ mod tests {
     use super::*;
     use crate::routes::app::artifact_cache::test_support::TestStore;
     use flow_like::utils::compression::{compress_to_file, compress_to_file_json};
-    use flow_like_storage::{Path, object_store::PutPayload};
+    use flow_like_storage::object_store::{PutPayload, memory::InMemory};
     use std::sync::atomic::Ordering;
 
     fn board() -> Board {
         Board::new_detached(Some("board".into()), Path::from("apps/app"))
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn pages_are_addressed_only_for_a_board_that_exists() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let root = Path::from("apps").join("app");
+        assert!(
+            page_owner(&store, &root, "board".into(), None)
+                .await
+                .is_none()
+        );
+
+        store
+            .put(
+                &Board::proto_path(&root, "board", None),
+                PutPayload::from_static(b"board"),
+            )
+            .await
+            .unwrap();
+        let owner = page_owner(&store, &root, "board".into(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            owner.page_path("page").as_ref(),
+            "apps/app/_board/page.page"
+        );
+        assert!(
+            page_owner(&store, &root, "board".into(), Some((1, 0, 0)))
+                .await
+                .is_none(),
+            "a draft does not stand in for a version that was never published"
+        );
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn page_listings_come_from_a_confirmed_cache_or_the_stored_document() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let root = Path::from("apps").join("app");
+        assert!(
+            page_listing(store.clone(), &root, "board", None)
+                .await
+                .is_none()
+        );
+
+        let mut stored = Board::new_detached(Some("board".into()), root.clone());
+        stored.page_ids = vec!["stored".into()];
+        let put = stored.save(Some(store.clone())).await.unwrap();
+
+        let listing = page_listing(store.clone(), &root, "board", None)
+            .await
+            .unwrap();
+        assert_eq!(listing.page_ids, ["stored"]);
+        assert_eq!(listing.page_path("stored"), stored.page_path("stored"));
+
+        let mut hydrated = stored.clone();
+        hydrated.page_ids = vec!["cached".into()];
+        let current = CachedBoard::new(put.e_tag.clone().unwrap(), hydrated.clone());
+        let listing = page_listing(store.clone(), &root, "board", Some(&current))
+            .await
+            .unwrap();
+        assert_eq!(
+            listing.page_ids,
+            ["cached"],
+            "a confirmed hydration answers without a body"
+        );
+
+        let stale = CachedBoard::new("\"stale\"".into(), hydrated);
+        let listing = page_listing(store, &root, "board", Some(&stale))
+            .await
+            .unwrap();
+        assert_eq!(listing.page_ids, ["stored"]);
     }
 
     async fn write_page(store: Arc<TestStore>, path: Path, page: &Page) {

@@ -850,7 +850,10 @@ export function ExecutionServiceProvider({
 					isRemote,
 				);
 
-				if (!isRemote) {
+				// A local run also asks for the board's secrets, which the prerun does not
+				// list, so the board is read for them — unless the host already answered that
+				// the board has no runtime-configured or secret variable at all.
+				if (!isRemote && prerunResult.has_prompt_variables !== false) {
 					try {
 						const event = await timeRunStep("service.get_event", () =>
 							backend.eventState.getEvent(appId, eventIdStr),

@@ -159,6 +159,7 @@ export function useMinePackages({
 				access: "maintainer",
 				limit: MAINTAINER_LIMIT,
 				includeDisabled: true,
+				includeDeprecated: true,
 			}),
 		enabled: signedIn,
 		staleTime: REGISTRY_STALE_MS,

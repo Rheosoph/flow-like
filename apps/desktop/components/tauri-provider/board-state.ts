@@ -78,6 +78,10 @@ import {
 	type IBoardSyncRequest,
 	type IBoardSyncResponse,
 } from "@flow-like/flow-like-ui/lib/board-sync";
+import {
+	LEAN_CATALOG_QUERY,
+	decodeCatalog,
+} from "@flow-like/flow-like-ui/lib/catalog-wire";
 import { withDeviceCommandBridge } from "@flow-like/flow-like-ui/lib/device-bridge";
 import {
 	type FlowVersionState,
@@ -127,7 +131,7 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import { isObject } from "lodash-es";
 import type { CSSProperties } from "react";
 import { toast } from "sonner";
-import { fetcher } from "../../lib/api";
+import { fetcher, fetcherConditional } from "../../lib/api";
 import {
 	dispatchFlowNotificationEvent,
 	dispatchFlowNotificationEvents,
@@ -567,6 +571,14 @@ export class BoardState implements IBoardState {
 	private readonly boardMutationSequences = new Map<string, Promise<void>>();
 	/** Remote boards are fetched incrementally; this holds the last assembled copy per board. */
 	private readonly remoteBoardSync = new BoardSyncClient();
+	/**
+	 * The hub's catalog per app with the tag it was served under. The Tauri HTTP plugin has no
+	 * cache, so the tag is what turns the next read into a 304 and spares download and decode.
+	 */
+	private readonly remoteCatalogs = new Map<
+		string,
+		{ readonly etag: string; readonly nodes: INode[] }
+	>();
 	/**
 	 * Local boards cross the Tauri bridge incrementally too: `get_board` serialises the whole
 	 * board on every refetch, and refetches happen after every own or peer edit. Kept separate
@@ -1173,17 +1185,7 @@ export class BoardState implements IBoardState {
 
 		if (!isOffline && this.backend.profile && this.backend.auth) {
 			try {
-				const nodes = await fetcher<INode[]>(
-					this.backend.profile,
-					`apps/${appId}/nodes`,
-					{ method: "GET", timeoutMs: HUB_REFRESH_TIMEOUT_MS },
-					this.backend.auth,
-				);
-				if (!Array.isArray(nodes)) {
-					throw new Error(
-						`Remote catalog for app ${appId} was not a node list (${typeof nodes})`,
-					);
-				}
+				const nodes = await this.fetchRemoteCatalog(appId);
 				// The remote catalog is what the server compares against when it decides which
 				// nodes may ship lean, so only it may feed remote-board hydration.
 				this.remoteBoardSync.setCatalog(appId, nodes);
@@ -1202,7 +1204,49 @@ export class BoardState implements IBoardState {
 			? []
 			: await syncRemoteAppPackages(this.backend, appId);
 		await this.ensureRemoteAppPackagesInstalled(appId, remotePackages);
-		const nodes: INode[] = await invoke("get_catalog", { appId });
+		const nodes = decodeCatalog(
+			await invoke<unknown>("get_catalog", { appId }),
+		);
+		if (!nodes) {
+			throw new Error(
+				`The local catalog of app ${appId} uses a layout this build cannot read`,
+			);
+		}
+		return nodes;
+	}
+
+	/** The hub's catalog, re-downloaded and re-decoded only when its tag changed. */
+	private async fetchRemoteCatalog(appId: string): Promise<INode[]> {
+		const { profile, auth } = this.backend;
+		if (!profile) {
+			throw new Error(
+				`No hub profile to read the catalog of app ${appId} from`,
+			);
+		}
+		const path = `apps/${appId}/nodes`;
+		const options = { method: "GET", timeoutMs: HUB_REFRESH_TIMEOUT_MS };
+		const held = this.remoteCatalogs.get(appId);
+		const response = await fetcherConditional<unknown>(
+			profile,
+			`${path}?${LEAN_CATALOG_QUERY}`,
+			options,
+			auth,
+			held?.etag,
+		);
+		if (response.notModified && held) return held.nodes;
+
+		const decoded = decodeCatalog(response.data);
+		// A hub with a catalog layout this build does not know still serves the plain list.
+		const nodes =
+			decoded ?? (await fetcher<INode[]>(profile, path, options, auth));
+		if (!Array.isArray(nodes)) {
+			throw new Error(
+				`Remote catalog for app ${appId} was not a node list (${typeof nodes})`,
+			);
+		}
+		if (decoded && response.etag) {
+			this.remoteCatalogs.set(appId, { etag: response.etag, nodes });
+		}
 		return nodes;
 	}
 	/**

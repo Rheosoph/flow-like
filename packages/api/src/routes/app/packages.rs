@@ -360,7 +360,8 @@ pub async fn list_packages(
         (status = 401, description = "Unauthorized"),
         (status = 402, description = "Paid package the caller has not bought (PACKAGE_LICENSE_REQUIRED)"),
         (status = 403, description = "Forbidden, or no access to a private or request-access package (PACKAGE_ACCESS_REQUIRED)"),
-        (status = 404, description = "Package not found")
+        (status = 404, description = "Package not found"),
+        (status = 409, description = "The app already uses this package")
     ),
     security(
         ("bearer_auth" = []),
@@ -389,6 +390,19 @@ pub async fn add_package(
         .ok_or(ApiError::not_found("Package not found"))?;
 
     package_license::ensure_holds(&state.db, &user_id, &wasm_pkg).await?;
+
+    let already_pinned = app_package::Entity::find()
+        .filter(app_package::Column::AppId.eq(&app_id))
+        .filter(app_package::Column::PackageId.eq(&request.package_id))
+        .one(&state.db)
+        .await?
+        .is_some();
+    if already_pinned {
+        return Err(ApiError::conflict(format!(
+            "This project already uses package {}; change its version on the project's Packages page",
+            request.package_id
+        )));
+    }
 
     let mem = membership::Entity::find()
         .filter(membership::Column::AppId.eq(&app_id))

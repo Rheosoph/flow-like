@@ -148,14 +148,8 @@ const REGISTRY_STATE_TONE: Record<
 	WorkspaceRegistryState,
 	{ pill: string; dot: string }
 > = {
-	live: {
-		pill: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-		dot: "bg-emerald-500",
-	},
-	in_review: {
-		pill: "bg-sky-500/10 text-sky-600 dark:text-sky-400",
-		dot: "bg-sky-500",
-	},
+	live: { pill: "bg-good-bg text-good", dot: "bg-good-solid" },
+	in_review: { pill: "bg-info-bg text-info", dot: "bg-info-solid" },
 	disabled: {
 		pill: "bg-destructive/10 text-destructive",
 		dot: "bg-destructive",
@@ -214,7 +208,7 @@ const CHECK_ICON: Record<OverviewCheckStatus, LucideIcon> = {
 };
 
 const CHECK_TONE: Record<OverviewCheckStatus, string> = {
-	ok: "text-emerald-600 dark:text-emerald-400",
+	ok: "text-good",
 	warning: "text-tertiary",
 	error: "text-destructive",
 	pending: "text-muted-foreground",

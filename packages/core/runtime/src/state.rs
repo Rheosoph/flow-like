@@ -388,6 +388,32 @@ impl FlowNodeRegistryInner {
             *hasher.finalize().as_bytes()
         })
     }
+
+    /// [`Self::fingerprint`] narrowed to the named node types. Two registries agree on it
+    /// exactly when each of those types is registered identically in both or missing from
+    /// both, so an artifact of a board that uses only these types is as valid under one
+    /// registry as under the other, whatever else differs between them.
+    pub fn fingerprint_of<'a>(&self, node_types: impl IntoIterator<Item = &'a str>) -> [u8; 32] {
+        let node_types: std::collections::BTreeSet<&str> = node_types.into_iter().collect();
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"flow-like/node-types");
+        for name in node_types {
+            hasher.update(name.as_bytes());
+            hasher.update(&[0]);
+            match self.registry.get(name) {
+                Some((node, _)) => {
+                    hasher.update(&[1]);
+                    hasher.update(&node.version.unwrap_or(u32::MAX).to_le_bytes());
+                    hasher.update(&node.semantic_hash().to_le_bytes());
+                    hasher.update(&[node.only_offline as u8]);
+                }
+                None => {
+                    hasher.update(&[0]);
+                }
+            }
+        }
+        *hasher.finalize().as_bytes()
+    }
 }
 
 #[cfg(feature = "flow-metadata")]

@@ -508,6 +508,11 @@ export interface IPrerunEventResponse {
 	wasm_package_ids?: string[];
 	/** Per-package deduplicated permissions declared by WASM nodes */
 	wasm_package_permissions?: Record<string, string[]>;
+	/**
+	 * Whether the board has runtime-configured or secret variables, the ones a local run may
+	 * have to ask for. Only a local prerun knows; absent means the board has to be read.
+	 */
+	has_prompt_variables?: boolean;
 	/** See {@link IPrerunBoardResponse.signature}. */
 	signature?: string;
 	/** Present for a governed Page trigger prerun. */

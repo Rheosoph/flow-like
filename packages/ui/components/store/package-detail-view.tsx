@@ -11,6 +11,7 @@ import {
 	Download,
 	ExternalLink,
 	FileCode,
+	FolderPlus,
 	Github,
 	Globe,
 	HelpCircle,
@@ -28,7 +29,12 @@ import {
 	User,
 } from "lucide-react";
 import Link from "next/link";
+import { useState } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
+import {
+	readManifestAccess,
+	readManifestOAuthScopes,
+} from "../../lib/app-package-overview";
 import { getErrorMessage } from "../../lib/error-message";
 import {
 	readManifestWidgetBundleHash,
@@ -45,6 +51,15 @@ import {
 import { useBackend } from "../../state/backend-state";
 import type { GenericFetcher } from "../pages/store/store-package-detail";
 import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+	AlertDialogTrigger,
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
@@ -68,7 +83,10 @@ import {
 	type CompileStatus,
 	PackageStatusBadge,
 } from "../ui/package-status-badge";
+import { AddToProjectDialog } from "./add-to-project-dialog";
+import { useAccessLabels } from "./app-packages/parts";
 import { PackageReviewsTab } from "./package-reviews-tab";
+import { fetchPackageMeta } from "./package-workspace/use-workspace-data";
 import { packageWorkspaceHref } from "./package-workspace/workspace-href";
 import { WidgetCardGrid } from "./widget-card";
 import { WidgetNetworkAccessCard } from "./widget-network-access";
@@ -82,6 +100,46 @@ function PermissionBadge({
 			{enabled ? <Check className="h-3 w-3" /> : null}
 			{label}
 		</Badge>
+	);
+}
+
+function UninstallButton({
+	name,
+	busy,
+	onConfirm,
+}: Readonly<{ name: string; busy: boolean; onConfirm?: () => void }>) {
+	const { t } = useTranslation("store");
+	return (
+		<AlertDialog>
+			<AlertDialogTrigger asChild>
+				<Button variant="destructive" disabled={busy}>
+					{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+					{t("uninstall", "Uninstall")}
+				</Button>
+			</AlertDialogTrigger>
+			<AlertDialogContent>
+				<AlertDialogHeader>
+					<AlertDialogTitle>
+						{t("packageUninstallTitle", "Uninstall {{name}}?", { name })}
+					</AlertDialogTitle>
+					<AlertDialogDescription>
+						{t(
+							"packageUninstallDescription",
+							"The package is removed from this device. You keep your access and can install it again any time.",
+						)}
+					</AlertDialogDescription>
+				</AlertDialogHeader>
+				<AlertDialogFooter>
+					<AlertDialogCancel>{t("cancel", "Cancel")}</AlertDialogCancel>
+					<AlertDialogAction
+						className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+						onClick={onConfirm}
+					>
+						{t("uninstall", "Uninstall")}
+					</AlertDialogAction>
+				</AlertDialogFooter>
+			</AlertDialogContent>
+		</AlertDialog>
 	);
 }
 
@@ -173,6 +231,13 @@ export interface PackageDetailViewProps {
 	hasAccess?: boolean;
 	isPurchasing?: boolean;
 	isRequesting?: boolean;
+	/** The viewer asked for access in this visit and a maintainer has not answered yet. */
+	accessRequested?: boolean;
+	/**
+	 * `device` installs into this machine's package cache (desktop); `project`
+	 * has no device cache (web) and offers "Add to project" instead.
+	 */
+	installMode?: "device" | "project";
 	awaitingCheckout?: boolean;
 	onBuy?: () => void;
 	onRequestAccess?: () => void;
@@ -205,6 +270,8 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 		hasAccess,
 		isPurchasing,
 		isRequesting,
+		accessRequested,
+		installMode = "device",
 		awaitingCheckout,
 		onBuy,
 		onRequestAccess,
@@ -216,6 +283,8 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 	} = props;
 
 	const backend = useBackend();
+	const accessLabels = useAccessLabels();
+	const [addToProjectOpen, setAddToProjectOpen] = useState(false);
 	const profile = useInvoke(
 		backend.userState.getSettingsProfile,
 		backend.userState,
@@ -226,16 +295,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 		queryKey: ["package-meta", pkg?.id],
 		queryFn: async () => {
 			if (!profile.data || !pkg?.id || !fetcher) return null;
-			try {
-				return await fetcher<PackageMeta>(
-					profile.data.hub_profile,
-					`registry/package/${pkg.id}/meta`,
-					{ method: "GET" },
-					auth,
-				);
-			} catch {
-				return null;
-			}
+			return fetchPackageMeta(fetcher, profile.data.hub_profile, pkg.id, auth);
 		},
 		enabled: !!profile.data && !!pkg?.id && !!fetcher,
 	});
@@ -310,6 +370,9 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 	}
 
 	const manifest = pkg.manifest;
+	const manifestAccess = readManifestAccess(manifest);
+	const capabilityTags = new Set(manifestAccess?.capabilityTags);
+	const oauthScopes = readManifestOAuthScopes(manifest);
 	const versions = asArray(pkg.versions);
 	const widgets = readManifestWidgets(manifest);
 	const canManage =
@@ -336,7 +399,10 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 		pkg.status === PackageStatus.Active ||
 		pkg.status === PackageStatus.Deprecated ||
 		canInstallForReview;
-	const isInstalled = !!installedVersion;
+	const isInstalled = installMode === "device" && !!installedVersion;
+	const projectVersion = versions.find(
+		(v) => !v.yanked && v.status === PackageStatus.Active,
+	)?.version;
 	const hasUpdate =
 		isInstallable &&
 		isInstalled &&
@@ -437,17 +503,26 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 										{meta?.description || manifest.description}
 									</CardDescription>
 									<div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-sm text-muted-foreground">
-										<span className="flex items-center gap-1">
-											<Tag className="h-4 w-4" />
-											{`v${latestVersion}`}
-										</span>
+										{latestVersion && (
+											<span className="flex items-center gap-1">
+												<Tag className="h-4 w-4" />
+												{`v${latestVersion}`}
+											</span>
+										)}
 										<span className="flex items-center gap-1">
 											<Download className="h-4 w-4" />
-											{(pkg.downloadCount ?? 0).toLocaleString()} downloads
+											{t("downloadCount", {
+												count: pkg.downloadCount ?? 0,
+												formattedCount: (
+													pkg.downloadCount ?? 0
+												).toLocaleString(),
+												defaultValue_one: "{{formattedCount}} download",
+												defaultValue_other: "{{formattedCount}} downloads",
+											})}
 										</span>
 										{(pkg.ratingCount ?? 0) > 0 && (
 											<span className="flex items-center gap-1">
-												<Star className="h-4 w-4 text-yellow-500 fill-yellow-500" />
+												<Star className="h-4 w-4 fill-tab-yellow text-tab-yellow" />
 												{(pkg.avgRating ?? 0).toFixed(1)}
 												<span className="text-xs">{`(${pkg.ratingCount})`}</span>
 											</span>
@@ -472,7 +547,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 								{isInstalled ? (
 									<>
 										<div className="flex items-center gap-2 text-sm text-muted-foreground">
-											<Check className="h-4 w-4 text-green-500" />
+											<Check className="h-4 w-4 text-good" />
 											{t(
 												"installedVinstalledversion",
 												"Installed v{{installedVersion}}",
@@ -503,14 +578,27 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 													{unavailableActionMessage}
 												</p>
 											)}
-										<Button
-											variant="destructive"
-											onClick={onUninstall}
-											disabled={isUninstalling}
-										>
-											{t("uninstall", "Uninstall")}
-										</Button>
+										<UninstallButton
+											name={meta?.name || manifest.name || pkg.id}
+											busy={!!isUninstalling}
+											onConfirm={onUninstall}
+										/>
 									</>
+								) : hasAccess === false &&
+									visibility === "public_request_access" &&
+									accessRequested ? (
+									<div className="flex max-w-xs flex-col gap-1">
+										<Button variant="outline" disabled>
+											<Check className="mr-2 h-4 w-4" />
+											{t("packageAccessRequested", "Request sent")}
+										</Button>
+										<p className="text-xs text-muted-foreground">
+											{t(
+												"packageAccessRequestedHint",
+												"You get access once a maintainer approves it.",
+											)}
+										</p>
+									</div>
 								) : hasAccess === false &&
 									visibility === "public_request_access" ? (
 									<Button onClick={onRequestAccess} disabled={isRequesting}>
@@ -571,12 +659,27 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											</>
 										)}
 									</Button>
-								) : !isInstallable ? (
+								) : !isInstallable ||
+									(installMode === "project" && !projectVersion) ? (
 									<>
 										<Button disabled>{unavailableActionLabel}</Button>
 										<p className="max-w-xs text-sm text-muted-foreground">
 											{unavailableActionMessage}
 										</p>
+									</>
+								) : installMode === "project" && projectVersion ? (
+									<>
+										<Button onClick={() => setAddToProjectOpen(true)}>
+											<FolderPlus className="mr-2 h-4 w-4" />
+											{t("addToProject", "Add to project")}
+										</Button>
+										<AddToProjectDialog
+											packageId={pkg.id}
+											packageName={meta?.name || manifest.name || pkg.id}
+											version={projectVersion}
+											open={addToProjectOpen}
+											onOpenChange={setAddToProjectOpen}
+										/>
 									</>
 								) : (
 									<Button
@@ -691,7 +794,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 									{(() => {
 										const tags = meta?.tags?.length
 											? meta.tags
-											: manifest.keywords;
+											: asArray(manifest.keywords);
 										if (!tags.length) return null;
 										return (
 											<div>
@@ -857,7 +960,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 										<p className="text-2xl font-bold">
 											{(pkg.ratingCount ?? 0) > 0
 												? (pkg.avgRating ?? 0).toFixed(1)
-												: "N/A"}
+												: "—"}
 										</p>
 										<p className="text-sm text-muted-foreground">
 											{t("avgRating", "Avg Rating")}
@@ -917,7 +1020,8 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											{t("memory", "Memory")}
 										</p>
 										<Badge variant="outline" className="mt-1">
-											{manifest.permissions?.memory}
+											{accessLabels.memory(manifestAccess?.memory) ??
+												accessLabels.memory("standard")}
 										</Badge>
 									</div>
 									<div>
@@ -925,7 +1029,8 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											{t("timeout", "Timeout")}
 										</p>
 										<Badge variant="outline" className="mt-1">
-											{manifest.permissions?.timeout}
+											{accessLabels.timeout(manifestAccess?.timeout) ??
+												accessLabels.timeout("standard")}
 										</Badge>
 									</div>
 								</div>
@@ -942,71 +1047,68 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 								<div className="flex flex-wrap gap-2">
 									<PermissionBadge
 										label={t("httpRequests", "HTTP Requests")}
-										enabled={manifest.permissions?.network?.httpEnabled}
+										enabled={capabilityTags.has("net.http")}
 									/>
 									<PermissionBadge
 										label={t("websocket", "WebSocket")}
-										enabled={manifest.permissions?.network?.websocketEnabled}
+										enabled={capabilityTags.has("net.ws")}
 									/>
 									<PermissionBadge
 										label={t("nodeStorage", "Node Storage")}
-										enabled={manifest.permissions?.filesystem?.nodeStorage}
+										enabled={capabilityTags.has("storage.node")}
 									/>
 									<PermissionBadge
 										label={t("userStorage", "User Storage")}
-										enabled={manifest.permissions?.filesystem?.userStorage}
+										enabled={capabilityTags.has("storage.user")}
 									/>
 									<PermissionBadge
 										label={t("variables", "Variables")}
-										enabled={manifest.permissions?.variables}
+										enabled={capabilityTags.has("variables")}
 									/>
 									<PermissionBadge
 										label={t("cache", "Cache")}
-										enabled={manifest.permissions?.cache}
+										enabled={capabilityTags.has("cache")}
 									/>
 									<PermissionBadge
 										label={t("streaming", "Streaming")}
-										enabled={manifest.permissions?.streaming}
+										enabled={capabilityTags.has("streaming")}
 									/>
 									<PermissionBadge
 										label="A2UI"
-										enabled={manifest.permissions?.a2ui}
+										enabled={capabilityTags.has("a2ui")}
 									/>
 									<PermissionBadge
 										label={t("modelsLlm", "Models/LLM")}
-										enabled={manifest.permissions?.models}
+										enabled={capabilityTags.has("models")}
 									/>
 								</div>
 
-								{manifest.permissions?.network?.httpEnabled &&
-									(manifest.permissions?.network?.allowedHosts?.length ?? 0) >
-										0 && (
+								{capabilityTags.has("net.http") &&
+									(manifestAccess?.allowedHosts.length ?? 0) > 0 && (
 										<div className="mt-4">
 											<p className="text-sm font-medium mb-2">
 												{t("allowedHosts", "Allowed Hosts")}
 											</p>
 											<div className="flex flex-wrap gap-1">
-												{manifest.permissions?.network?.allowedHosts?.map(
-													(host) => (
-														<Badge
-															key={host}
-															variant="outline"
-															className="font-mono text-xs"
-														>
-															{host}
-														</Badge>
-													),
-												)}
+												{manifestAccess?.allowedHosts.map((host) => (
+													<Badge
+														key={host}
+														variant="outline"
+														className="font-mono text-xs"
+													>
+														{host}
+													</Badge>
+												))}
 											</div>
 										</div>
 									)}
 
-								{(manifest.permissions?.oauthScopes?.length ?? 0) > 0 && (
+								{oauthScopes.length > 0 && (
 									<div className="mt-4">
 										<p className="text-sm font-medium mb-2">
 											{t("oauthScopes", "OAuth Scopes")}
 										</p>
-										{manifest.permissions?.oauthScopes?.map((oauth) => (
+										{oauthScopes.map((oauth) => (
 											<div
 												key={`${oauth.provider}:${oauth.scopes.join(",")}:${oauth.reason}`}
 												className="p-3 rounded-lg bg-muted mt-2"
@@ -1055,11 +1157,11 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 									</p>
 								) : (
 									<div className="divide-y">
-										{versions.map((v, idx) => (
+										{versions.map((v) => (
 											<VersionRow
 												key={v.version}
 												version={v}
-												isLatest={idx === 0}
+												isLatest={v.version === latestVersion}
 											/>
 										))}
 									</div>

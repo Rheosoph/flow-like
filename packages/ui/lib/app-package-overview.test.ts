@@ -8,6 +8,7 @@ import {
 	hasElevatedAccess,
 	packageAccess,
 	readManifestAccess,
+	readManifestOAuthScopes,
 } from "./app-package-overview";
 import { INodePermission } from "./schema/flow/board";
 import type { INode } from "./schema/flow/node";
@@ -42,6 +43,31 @@ const SNAKE_MANIFEST = {
 		models: false,
 	},
 };
+
+describe("readManifestOAuthScopes", () => {
+	test("reads the snake_case wire and the camelCase mirror", () => {
+		const expected = [
+			{ provider: "google", scopes: ["drive"], reason: "x", required: false },
+		];
+		expect(readManifestOAuthScopes(SNAKE_MANIFEST)).toEqual(expected);
+		expect(
+			readManifestOAuthScopes({
+				permissions: {
+					oauthScopes: [{ provider: "google", scopes: ["drive"], reason: "x" }],
+				},
+			}),
+		).toEqual(expected);
+	});
+
+	test("drops entries without a provider and tolerates junk", () => {
+		expect(readManifestOAuthScopes(null)).toEqual([]);
+		expect(
+			readManifestOAuthScopes({
+				permissions: { oauth_scopes: [{ scopes: ["x"] }, "nope", null] },
+			}),
+		).toEqual([]);
+	});
+});
 
 describe("readManifestAccess", () => {
 	test("reads the snake_case wire", () => {

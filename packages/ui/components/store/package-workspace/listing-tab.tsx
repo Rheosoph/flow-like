@@ -384,7 +384,7 @@ function StorePreview({
 							<>
 								<span>·</span>
 								<span className="inline-flex items-center gap-1">
-									<Star className="size-3 fill-yellow-500 text-yellow-500" />
+									<Star className="size-3 fill-tab-yellow text-tab-yellow" />
 									{`${(summary.avgRating ?? 0).toFixed(1)} (${summary.ratingCount})`}
 								</span>
 							</>

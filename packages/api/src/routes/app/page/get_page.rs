@@ -10,6 +10,7 @@ use axum::{
 };
 use flow_like::a2ui::widget::Page;
 use flow_like::{app::App, flow::board::Board, flow::event::Event};
+use flow_like_storage::Path as StoragePath;
 use flow_like_types::anyhow;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
@@ -179,24 +180,24 @@ pub async fn get_page(
     let app_state = state.master_state(&state).await?;
     let store = Board::meta_store(&app_state).await?;
     let storage_scope = state.storage_identity.meta.cache_scope();
+    let storage_root = StoragePath::from("apps").join(app_id.as_str());
 
     let try_board = |board_id: String| {
         let state = &state;
         let app_id = &app_id;
         let page_id = &page_id;
         let store = store.clone();
+        let storage_root = &storage_root;
         let storage_scope = storage_scope.as_deref();
         async move {
-            let board = state
-                .master_board_shared(app_id, &board_id, state, version_opt)
-                .await
-                .ok()?;
+            let board =
+                super::cached_page::page_owner(&store, storage_root, board_id, version_opt).await?;
             super::cached_page::load(
                 &state.cache,
                 store,
                 storage_scope,
                 app_id,
-                &board.board,
+                &board,
                 page_id,
                 version_opt,
             )

@@ -57,7 +57,7 @@ pub fn reconstruct_board(
     board_dir: Path,
     catalog: Option<&FlowNodeRegistryInner>,
 ) -> Result<Board> {
-    compiled.validate()?;
+    let format_version = compiled.validated_format_version()?;
     let pin_ids: Vec<&str> = compiled.pins.iter().map(|p| p.id.as_str()).collect();
     let mut root_node_count = 0;
     let mut layer_node_counts = vec![0; compiled.layers.len()];
@@ -129,8 +129,10 @@ pub fn reconstruct_board(
         variables.insert(v.id.clone(), v);
     }
 
-    let board = Board {
-        format_version: compiled.required_board_format_version(),
+    // The view holds exactly the pins, variables and refs `format_version` was inferred from
+    // and was checked against this task's ceiling above, so it is not inferred a second time.
+    Ok(Board {
+        format_version,
         id: compiled.id.clone(),
         name: compiled.name.clone(),
         description: String::new(),
@@ -155,9 +157,7 @@ pub fn reconstruct_board(
         app_state: None,
         pin_index: None,
         page_metadata_source: Default::default(),
-    };
-    board.ensure_supported_format()?;
-    Ok(board)
+    })
 }
 
 fn reconstruct_node(

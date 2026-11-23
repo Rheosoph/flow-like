@@ -53,6 +53,8 @@ const DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
  * Anything known to be large belongs here so that cost is never paid at all.
  * `project-runs` refetches every 60s carrying each run's whole input payload,
  * and `getBoardSummaries` with metrics/node_types has always exceeded the cap.
+ * The node catalog (`getCatalog`, `app-catalog-nodes`) is megabytes for every app
+ * and is revalidated by ETag instead.
  */
 const DENY_KEY_PREFIXES: ReadonlySet<string> = new Set([
 	"admin",
@@ -61,6 +63,8 @@ const DENY_KEY_PREFIXES: ReadonlySet<string> = new Set([
 	"getRoutes",
 	"project-runs",
 	"getBoardSummaries",
+	"getCatalog",
+	"app-catalog-nodes",
 ]);
 
 interface PersistableQuery {

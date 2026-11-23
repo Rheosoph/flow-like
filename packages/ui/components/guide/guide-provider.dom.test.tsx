@@ -1,7 +1,16 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	mock,
+	test,
+} from "bun:test";
 import { act, createElement } from "react";
 import {
 	fakeI18n,
+	installDomGlobals,
 	restoreDomGlobals,
 	settle,
 	translate,
@@ -42,13 +51,18 @@ const { useBackendStore } = await import("../../state/backend-state");
 const { useDeveloperMode } = await import("../../hooks/use-developer-mode");
 
 let serverDevMode = false;
+let tutorialCompleted = false;
+let profileApps: string[] = [];
 const userUpdates: { dev_mode?: boolean }[] = [];
 const previousBackend = useBackendStore.getState().backend;
 useBackendStore.setState({
 	backend: {
 		userState: {
-			getInfo: async () => ({ dev_mode: serverDevMode }),
-			getProfile: async () => ({ apps: [] }),
+			getInfo: async () => ({
+				dev_mode: serverDevMode,
+				tutorial_completed: tutorialCompleted,
+			}),
+			getProfile: async () => ({ apps: profileApps }),
 			updateUser: async (update: { dev_mode?: boolean }) => {
 				userUpdates.push(update);
 				serverDevMode = update.dev_mode ?? serverDevMode;
@@ -111,9 +125,14 @@ function clickButton(label: string) {
 	});
 }
 
+beforeAll(installDomGlobals);
+
 beforeEach(() => {
 	pathname = "/";
 	pushed.length = 0;
+	tutorialCompleted = false;
+	profileApps = [];
+	window.localStorage.removeItem("tutorial-finished-new");
 	body().innerHTML = "";
 	useGuideStore.setState({
 		welcome: "done",
@@ -183,18 +202,35 @@ describe("GuideProvider", () => {
 		await act(async () => root.unmount());
 	});
 
-	test("the welcome question starts the tour the user picks", async () => {
-		useGuideStore.setState({ welcome: "pending" });
+	test("sends a new user from Home to the welcome page, once", async () => {
+		useGuideStore.setState({ welcome: "unknown" });
 		const root = await mount();
-		expect(text()).toContain("What brings you here?");
-		const choice = [...body().querySelectorAll("button")].find((button) =>
-			button.textContent?.includes("Build my own"),
-		);
-		await act(async () => choice?.click());
-		await settle();
-		const state = useGuideStore.getState();
-		expect(state.welcome).toBe("done");
-		expect(state.run?.tour).toBe("build");
+		await settle(50);
+		expect(pushed).toEqual(["/onboarding/welcome"]);
+		expect(useGuideStore.getState().welcome).toBe("done");
+
+		await renderApp(root);
+		await settle(50);
+		expect(pushed).toEqual(["/onboarding/welcome"]);
+		await act(async () => root.unmount());
+	});
+
+	test("leaves people who have apps or finished the intro on Home", async () => {
+		profileApps = ["app-1"];
+		useGuideStore.setState({ welcome: "unknown" });
+		let root = await mount();
+		await settle(50);
+		expect(pushed).toEqual([]);
+		expect(useGuideStore.getState().welcome).toBe("done");
+		await act(async () => root.unmount());
+
+		profileApps = [];
+		tutorialCompleted = true;
+		useGuideStore.setState({ welcome: "unknown" });
+		body().innerHTML = "";
+		root = await mount();
+		await settle(50);
+		expect(pushed).toEqual([]);
 		await act(async () => root.unmount());
 	});
 
@@ -218,10 +254,10 @@ describe("GuideProvider", () => {
 	});
 
 	test("stays out of the way during onboarding", async () => {
-		pathname = "/onboarding";
-		useGuideStore.setState({ welcome: "pending" });
+		pathname = "/onboarding/welcome";
+		useGuideStore.getState().startTour("use");
 		const root = await mount();
-		expect(text()).not.toContain("What brings you here?");
+		expect(text()).not.toContain("Click Bots in the sidebar.");
 		await act(async () => root.unmount());
 	});
 });

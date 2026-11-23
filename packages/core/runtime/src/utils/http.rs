@@ -7,10 +7,15 @@ use flow_like_types::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     sync::{Arc, OnceLock},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use super::cache::{cache_file_exists, delete_cache_file, read_cache_file, write_cache_file};
+
+/// How long a cached response is served before a read queues its revalidation.
+/// Profile reads resolve every bit through this cache, so revalidating on every
+/// read sent one hub request per bit each time a profile was read.
+const REVALIDATE_AFTER: Duration = Duration::from_secs(5 * 60);
 
 /// Client for hub metadata requests.
 ///
@@ -63,6 +68,10 @@ pub struct HTTPClient {
 
     #[serde(skip)]
     sender: Option<mpsc::Sender<Refetch>>,
+
+    /// When each cached response was last fetched or queued for revalidation.
+    #[serde(skip)]
+    checked_at: Arc<DashMap<String, Option<Instant>>>,
 
     /// Lazily initialized to avoid triggering iOS Network.framework
     /// before the run loop is active (causes `nw_dictionary_copy null`).
@@ -119,6 +128,8 @@ impl HTTPClient {
         }
         let parsed = flow_like_types::json::from_value::<T>(value.clone())?;
         let _ = self.put(request_hash, &value);
+        self.checked_at
+            .insert(request_hash.to_string(), Some(Instant::now()));
         Ok(parsed)
     }
 
@@ -128,6 +139,7 @@ impl HTTPClient {
             HTTPClient {
                 cache: Arc::new(DashMap::new()),
                 sender: Some(tx),
+                checked_at: Arc::new(DashMap::new()),
                 client: OnceLock::new(),
             },
             rx,
@@ -138,16 +150,32 @@ impl HTTPClient {
         HTTPClient {
             cache: Arc::new(DashMap::new()),
             sender: None,
+            checked_at: Arc::new(DashMap::new()),
             client: OnceLock::new(),
         }
     }
 
-    /// Queues a background revalidation. A cached read never waits for it: when
-    /// the queue is full (the hub is slow or unreachable) the refetch is dropped.
-    fn refetch<T: DeserializeOwned>(&self, request: &Request) {
+    /// Claims the revalidation of a cached response when it was last fetched or
+    /// queued at least [`REVALIDATE_AFTER`] before `now`.
+    fn revalidation_due(&self, request_hash: &str, now: Instant) -> bool {
+        let mut checked = self.checked_at.entry(request_hash.to_string()).or_default();
+        if checked.is_some_and(|at| now.saturating_duration_since(at) < REVALIDATE_AFTER) {
+            return false;
+        }
+        *checked = Some(now);
+        true
+    }
+
+    /// Queues a background revalidation, at most once per [`REVALIDATE_AFTER`]
+    /// for each request. A cached read never waits for it: when the queue is full
+    /// (the hub is slow or unreachable) the refetch is dropped.
+    fn refetch<T: DeserializeOwned>(&self, request_hash: &str, request: &Request) {
         let Some(sender) = &self.sender else {
             return;
         };
+        if !self.revalidation_due(request_hash, Instant::now()) {
+            return;
+        }
         let Some(request) = request.try_clone() else {
             tracing::debug!("Skipping refetch: request body is not clonable");
             return;
@@ -184,7 +212,7 @@ impl HTTPClient {
         let value = flow_like_types::json::from_value::<T>(value)?;
 
         if let Some(request) = request {
-            self.refetch::<T>(request);
+            self.refetch::<T>(request_hash, request);
         }
         Ok(value)
     }
@@ -217,7 +245,7 @@ impl HTTPClient {
             .insert(request_hash.to_string(), generic_value.clone());
         let value = flow_like_types::json::from_value::<T>(generic_value)?;
         if let Some(request) = request {
-            self.refetch::<T>(request);
+            self.refetch::<T>(request_hash, request);
         }
         Ok(value)
     }
@@ -348,6 +376,42 @@ mod tests {
         assert!(!is_upstream_failure_envelope(
             &json!({ "errorType": 1, "errorMessage": "not an envelope" })
         ));
+    }
+
+    #[test]
+    fn a_cached_response_is_revalidated_at_most_once_per_interval() {
+        let (http, mut refetches) = HTTPClient::new();
+        let request = http
+            .client()
+            .get("http://127.0.0.1:9/api/v1/bit/cached")
+            .build()
+            .unwrap();
+        let hash = http.quick_hash(&request);
+
+        http.refetch::<Value>(&hash, &request);
+        http.refetch::<Value>(&hash, &request);
+        assert!(refetches.try_recv().is_ok());
+        assert!(refetches.try_recv().is_err());
+
+        let now = Instant::now();
+        assert!(!http.revalidation_due(&hash, now));
+        assert!(http.revalidation_due(&hash, now + REVALIDATE_AFTER));
+    }
+
+    #[tokio::test]
+    async fn a_freshly_fetched_response_is_not_revalidated_by_the_next_read() {
+        let (url, server) = serve_once(200, r#"["model"]"#).await;
+        let (http, mut refetches) = HTTPClient::new();
+        let request = || http.client().get(&url).build().unwrap();
+        let hash = http.quick_hash(&request());
+
+        let fetched = http.hashed_request::<Vec<String>>(request()).await.unwrap();
+        server.await.unwrap();
+        let cached = http.hashed_request::<Vec<String>>(request()).await.unwrap();
+
+        assert_eq!(fetched, cached);
+        assert!(refetches.try_recv().is_err());
+        let _ = delete_cache_file(&format!("http/{hash}"));
     }
 
     async fn serve_once(status: u16, body: &'static str) -> (String, JoinHandle<()>) {

@@ -14,9 +14,10 @@ import {
 	Upload,
 	X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
+import { apiErrorMessage } from "../../lib/api-error";
 import { asArray } from "../../lib/response-shape";
 import type {
 	PackageMeta,
@@ -36,6 +37,7 @@ import {
 	Label,
 	TextEditor,
 } from "../ui";
+import { fetchPackageMeta } from "./package-workspace/use-workspace-data";
 
 const ACCEPTED_IMAGE_TYPES = "image/jpeg,image/png,image/webp";
 const MAX_ICON_SIZE = 20 * 1024 * 1024;
@@ -63,21 +65,24 @@ export function PackageMetaTab({
 	const iconInputRef = useRef<HTMLInputElement>(null);
 	const thumbnailInputRef = useRef<HTMLInputElement>(null);
 
-	const queryKey = ["package-meta", packageId];
+	const queryKey = useMemo(() => ["package-meta", packageId], [packageId]);
 
-	const { data: meta, isLoading } = useQuery<PackageMeta | null>({
+	const {
+		data: meta,
+		isLoading,
+		isError,
+		error,
+		refetch,
+	} = useQuery<PackageMeta | null>({
 		queryKey,
-		queryFn: async () => {
-			try {
-				return await fetcher<PackageMeta>(
-					profile.data!.hub_profile,
-					`registry/package/${packageId}/meta`,
-					{ method: "GET" },
-					auth,
-				);
-			} catch {
-				return null;
-			}
+		queryFn: () => {
+			if (!profile.data) throw new Error("Profile not loaded");
+			return fetchPackageMeta(
+				fetcher,
+				profile.data.hub_profile,
+				packageId,
+				auth,
+			);
 		},
 		enabled: !!profile.data,
 	});
@@ -160,13 +165,14 @@ export function PackageMetaTab({
 
 	const saveMutation = useMutation({
 		mutationFn: () => {
+			if (!profile.data) throw new Error("Profile not loaded");
 			const payload = {
 				...form,
 				longDescription: longDescriptionRef.current,
 				releaseNotes: releaseNotesRef.current,
 			};
 			return fetcher<PackageMeta>(
-				profile.data!.hub_profile,
+				profile.data.hub_profile,
 				`registry/package/${packageId}/meta`,
 				{
 					method: "PUT",
@@ -258,6 +264,30 @@ export function PackageMetaTab({
 			<Card>
 				<CardContent className="flex items-center justify-center py-12">
 					<Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+				</CardContent>
+			</Card>
+		);
+	}
+
+	if (isError && meta === undefined) {
+		return (
+			<Card>
+				<CardContent className="flex flex-col items-center gap-3 py-10 text-center">
+					<p className="text-sm font-medium">
+						{t("packageListingLoadFailed", "Couldn't load the listing")}
+					</p>
+					<p className="max-w-md text-sm text-muted-foreground">
+						{apiErrorMessage(
+							error,
+							t(
+								"packageListingLoadFailedHint",
+								"The form stays closed so an empty copy can't replace your listing. Try again.",
+							),
+						)}
+					</p>
+					<Button size="sm" variant="outline" onClick={() => void refetch()}>
+						{t("retry", "Retry")}
+					</Button>
 				</CardContent>
 			</Card>
 		);

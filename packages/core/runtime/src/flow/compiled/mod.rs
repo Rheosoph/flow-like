@@ -22,9 +22,11 @@
 //! both invisible next to one storage round trip. The header is readable
 //! without decompressing, so a loader can reject a stale artifact from the
 //! first bytes alone.
-//! API artifacts may append a Zstd skippable frame containing widget definitions.
-//! The board archive and format version stay unchanged for older readers.
+//! Extensions follow the archive as Zstd skippable frames: the facts about the source board
+//! ([`baseline`]) and, on API artifacts, widget definitions. The board archive and format
+//! version stay unchanged for older readers.
 
+pub mod baseline;
 pub mod codes;
 pub mod compile;
 pub mod format;
@@ -34,6 +36,7 @@ pub mod template;
 pub mod view;
 pub mod widget_snapshot;
 
+pub use baseline::{BaselineFacts, append_baseline_facts, decode_baseline_facts};
 pub use compile::{compile_board, compile_board_with_catalog};
 pub use format::{CompiledBoard, FORMAT_VERSION, MAGIC};
 pub use prerun::{
@@ -261,6 +264,78 @@ fn decode_archive(bytes: &[u8], header: &ArtifactHeader) -> Result<CompiledBoard
         .map_err(|e| anyhow!("compiled board artifact failed validation: {e}"))?;
     rkyv::deserialize::<CompiledBoard, rkyv::rancor::Error>(archived)
         .map_err(|e| anyhow!("failed to deserialize compiled board artifact: {e}"))
+}
+
+/// Zstd skippable-frame magic. Extensions travel in such frames behind the board archive, so a
+/// reader that does not know one still decompresses the same board.
+const SKIPPABLE_MAGIC: u32 = 0x184D_2A50;
+
+/// Append one extension, identified by `tag`, behind the artifact.
+fn append_extension_frame(bytes: &[u8], tag: &[u8], body: &[u8]) -> Vec<u8> {
+    let length = tag.len() + body.len();
+    let mut output = Vec::with_capacity(bytes.len() + 8 + length);
+    output.extend_from_slice(bytes);
+    output.extend_from_slice(&SKIPPABLE_MAGIC.to_le_bytes());
+    output.extend_from_slice(&(length as u32).to_le_bytes());
+    output.extend_from_slice(tag);
+    output.extend_from_slice(body);
+    output
+}
+
+/// The extension frames behind the board archive, in order. `None` for a codec that carries none.
+fn extension_frames(bytes: &[u8]) -> Result<Option<ExtensionFrames<'_>>> {
+    if peek_header(bytes)?.codec != CODEC_ZSTD {
+        return Ok(None);
+    }
+    let payload = bytes
+        .get(HEADER_LEN + PAYLOAD_LEN_PREFIX..)
+        .ok_or_else(|| anyhow!("compiled board artifact payload truncated"))?;
+    let first_frame = zstd::zstd_safe::find_frame_compressed_size(payload)
+        .map_err(|_| anyhow!("compiled board Zstd frame is invalid"))?;
+    Ok(Some(ExtensionFrames {
+        remaining: &payload[first_frame..],
+    }))
+}
+
+struct ExtensionFrames<'a> {
+    remaining: &'a [u8],
+}
+
+impl<'a> ExtensionFrames<'a> {
+    fn take(&mut self) -> Result<&'a [u8]> {
+        if self.remaining.len() < 8 {
+            return Err(anyhow!("compiled board extension header truncated"));
+        }
+        let magic = u32::from_le_bytes(self.remaining[..4].try_into()?);
+        if magic & 0xFFFF_FFF0 != SKIPPABLE_MAGIC {
+            return Err(anyhow!("compiled board has an unsupported trailing frame"));
+        }
+        let length = u32::from_le_bytes(self.remaining[4..8].try_into()?) as usize;
+        let end = 8_usize
+            .checked_add(length)
+            .ok_or_else(|| anyhow!("compiled board extension length overflowed"))?;
+        let frame = self
+            .remaining
+            .get(8..end)
+            .ok_or_else(|| anyhow!("compiled board extension payload truncated"))?;
+        self.remaining = &self.remaining[end..];
+        Ok(frame)
+    }
+}
+
+impl<'a> Iterator for ExtensionFrames<'a> {
+    type Item = Result<&'a [u8]>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining.is_empty() {
+            return None;
+        }
+        let frame = self.take();
+        if frame.is_err() {
+            self.remaining = &[];
+        }
+        Some(frame)
+    }
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@ import { useTranslation } from "@flow-like/locales";
 import { User } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useProjectUserSearch } from "../../hooks/use-project-user-search";
-import { PackagePermissionBits } from "../../lib/permission/wasm-package-permission";
+import { type AssignableRole, roleBits } from "../../lib/package-people";
 import type { InviteUserRequest } from "../../lib/schema/wasm";
 import {
 	Dialog,
@@ -30,7 +30,10 @@ interface PackageInviteDialogProps {
 	onOpenChange: (open: boolean) => void;
 	/** Resolves `true` once the invitation exists; the dialog then closes. */
 	onInvite: (request: InviteUserRequest) => Promise<boolean>;
+	/** People already on the package or already invited. */
 	memberIds: ReadonlySet<string>;
+	/** Roles the caller may hand out; a Maintainer invites Users only. */
+	roles?: readonly AssignableRole[];
 }
 
 export function PackageInviteDialog({
@@ -38,12 +41,12 @@ export function PackageInviteDialog({
 	onOpenChange,
 	onInvite,
 	memberIds,
+	roles = ["maintainer", "user"],
 }: PackageInviteDialogProps) {
 	const { t } = useTranslation("store");
 	const [query, setQuery] = useState("");
-	const [permissionLevel, setPermissionLevel] = useState<"maintainer" | "user">(
-		"user",
-	);
+	const [permissionLevel, setPermissionLevel] =
+		useState<AssignableRole>("user");
 	const userSearch = useProjectUserSearch(undefined, query, open);
 
 	const handleOpenChange = useCallback(
@@ -59,13 +62,11 @@ export function PackageInviteDialog({
 
 	const handleInvite = useCallback(
 		async (inviteeId: string) => {
-			const permission =
-				permissionLevel === "maintainer"
-					? PackagePermissionBits.Maintainer
-					: PackagePermissionBits.User;
-			if (await onInvite({ inviteeId, permission })) handleOpenChange(false);
+			const level = roles.includes(permissionLevel) ? permissionLevel : "user";
+			if (await onInvite({ inviteeId, permission: roleBits(level) }))
+				handleOpenChange(false);
 		},
-		[permissionLevel, onInvite, handleOpenChange],
+		[permissionLevel, roles, onInvite, handleOpenChange],
 	);
 
 	return (
@@ -103,27 +104,38 @@ export function PackageInviteDialog({
 						</div>
 					</div>
 
-					<div className="space-y-2">
-						<Label htmlFor="invite-permission">
-							{t("permissionLevel", "Permission Level")}
-						</Label>
-						<Select
-							value={permissionLevel}
-							onValueChange={(v) =>
-								setPermissionLevel(v as "maintainer" | "user")
-							}
-						>
-							<SelectTrigger id="invite-permission">
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
-								<SelectItem value="user">{t("user", "User")}</SelectItem>
-								<SelectItem value="maintainer">
-									{t("maintainer", "Maintainer")}
-								</SelectItem>
-							</SelectContent>
-						</Select>
-					</div>
+					{roles.length > 1 && (
+						<div className="space-y-2">
+							<Label htmlFor="invite-permission">
+								{t("permissionLevel", "Permission Level")}
+							</Label>
+							<Select
+								value={permissionLevel}
+								onValueChange={(v) => setPermissionLevel(v as AssignableRole)}
+							>
+								<SelectTrigger id="invite-permission">
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value="user">{t("user", "User")}</SelectItem>
+									<SelectItem value="maintainer">
+										{t("maintainer", "Maintainer")}
+									</SelectItem>
+								</SelectContent>
+							</Select>
+							<p className="text-xs text-muted-foreground">
+								{permissionLevel === "maintainer"
+									? t(
+											"packageInviteMaintainerHint",
+											"Maintainers publish versions, edit the listing and manage Users.",
+										)
+									: t(
+											"packageInviteUserHint",
+											"Users install and use the package, even while it is private.",
+										)}
+							</p>
+						</div>
+					)}
 
 					<div className="space-y-3">
 						<Separator />

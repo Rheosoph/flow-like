@@ -40,6 +40,7 @@ use flow_like_runtime::{flow::node::Node, state::FlowNodeRegistryInner};
 
 #[cfg(feature = "draft-testing")]
 pub mod draft_test;
+pub mod wire;
 
 #[cfg(all(test, feature = "draft-testing"))]
 mod benchmark_case_tests;

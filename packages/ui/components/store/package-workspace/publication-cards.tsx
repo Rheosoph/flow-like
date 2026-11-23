@@ -3,6 +3,8 @@
 import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Loader2, RefreshCw, Send } from "lucide-react";
+import { toast } from "sonner";
+import { apiErrorMessage } from "../../../lib/api-error";
 import { asArray } from "../../../lib/response-shape";
 import {
 	type PackageReview,
@@ -76,7 +78,7 @@ export function PublicationReviewCard({
 				: t("reviewHistory", "Review history");
 
 	return (
-		<Card className="border-amber-500/30 bg-amber-500/5">
+		<Card className="border-warning-line bg-warning-bg">
 			<CardHeader>
 				<CardTitle className="text-base flex items-center gap-2">
 					<RefreshCw className="h-4 w-4" />
@@ -180,7 +182,16 @@ export function PublicationRequestCard({
 			);
 		},
 		onSuccess: () => {
+			toast.success(
+				t(
+					"publicationReviewRequestedWeWillReviewYourPackageAndNotifyYouOnceADecisionHasBeenMade",
+					"Publication review requested. We will review your package and notify you once a decision has been made.",
+				),
+			);
 			invalidatePackageLists(queryClient, packageId);
+			queryClient.invalidateQueries({
+				queryKey: ["package-publication-reviews", packageId],
+			});
 			queryClient.invalidateQueries({
 				queryKey: ["admin", "packages"],
 			});
@@ -188,6 +199,13 @@ export function PublicationRequestCard({
 				queryKey: ["admin", "packages", "publications"],
 			});
 		},
+		onError: (error) =>
+			toast.error(
+				apiErrorMessage(
+					error,
+					t("failedToRequestPublication", "Failed to request publication"),
+				),
+			),
 	});
 
 	return (
@@ -205,38 +223,19 @@ export function PublicationRequestCard({
 				</CardDescription>
 			</CardHeader>
 			<CardContent>
-				{requestMutation.isSuccess ? (
-					<div className="flex items-center gap-2 text-sm text-green-600">
-						<Check className="h-4 w-4" />
-						{t(
-							"publicationReviewRequestedWeWillReviewYourPackageAndNotifyYouOnceADecisionHasBeenMade",
-							"Publication review requested. We will review your package and notify you once a decision has been made.",
-						)}
-					</div>
-				) : (
-					<div className="flex items-center gap-3">
-						<Button
-							onClick={() => requestMutation.mutate()}
-							disabled={requestMutation.isPending}
-						>
-							{requestMutation.isPending ? (
-								<Loader2 className="mr-2 h-4 w-4 animate-spin" />
-							) : (
-								<Send className="mr-2 h-4 w-4" />
-							)}
-							{t("requestPublicationReview", "Request Publication Review")}
-						</Button>
-						{requestMutation.isError && (
-							<p className="text-sm text-destructive">
-								{requestMutation.error?.message ??
-									t(
-										"failedToRequestPublication",
-										"Failed to request publication",
-									)}
-							</p>
-						)}
-					</div>
-				)}
+				<Button
+					onClick={() => requestMutation.mutate()}
+					disabled={requestMutation.isPending || requestMutation.isSuccess}
+				>
+					{requestMutation.isPending ? (
+						<Loader2 className="mr-2 h-4 w-4 animate-spin" />
+					) : requestMutation.isSuccess ? (
+						<Check className="mr-2 h-4 w-4" />
+					) : (
+						<Send className="mr-2 h-4 w-4" />
+					)}
+					{t("requestPublicationReview", "Request Publication Review")}
+				</Button>
 			</CardContent>
 		</Card>
 	);

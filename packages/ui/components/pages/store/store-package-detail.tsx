@@ -57,10 +57,11 @@ export function StorePackageDetail({
 		});
 	}, [auth]);
 
+	const installsOnDevice = !!backend.registryState.installsOnDevice;
 	const installedVersion = useQuery({
 		queryKey: ["installed-package", packageId],
 		queryFn: () => backend.registryState.getInstalledVersion(packageId),
-		enabled: !!packageId,
+		enabled: !!packageId && installsOnDevice,
 	});
 
 	const installMutation = useMutation({
@@ -99,6 +100,7 @@ export function StorePackageDetail({
 	const {
 		isPurchasing,
 		isRequesting,
+		accessRequested,
 		awaitingCheckout,
 		checkoutOpen,
 		setCheckoutOpen,
@@ -158,6 +160,8 @@ export function StorePackageDetail({
 				hasAccess={hasAccess}
 				isPurchasing={isPurchasing}
 				isRequesting={isRequesting}
+				accessRequested={accessRequested}
+				installMode={installsOnDevice ? "device" : "project"}
 				awaitingCheckout={awaitingCheckout}
 				onBuy={onBuy}
 				onRequestAccess={onRequestAccess}
