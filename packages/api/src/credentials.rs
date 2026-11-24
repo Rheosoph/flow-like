@@ -10,11 +10,14 @@ use flow_like::credentials::SharedCredentials;
 use flow_like::flow::execution::ExecutionEnvironment;
 use flow_like::flow_like_model_provider::egress::ProviderEgress;
 use flow_like::flow_like_storage::files::store::FlowLikeStore;
+use flow_like::hub::{Hub, hub_api_url};
 use flow_like::state::FlowLikeState;
+use flow_like::utils::http::{HTTPClient, HubEgress};
 use flow_like_storage::lance::session::Session as LanceSession;
 use flow_like_storage::lancedb::connection::ConnectBuilder;
 use flow_like_types::Result;
 use flow_like_types::async_trait;
+use flow_like_types::reqwest::Url;
 #[cfg(feature = "gcp")]
 use gcp_credentials::GcpRuntimeCredentials;
 #[cfg(feature = "r2")]
@@ -45,6 +48,22 @@ fn process_lance_session() -> Arc<LanceSession> {
     static SESSION: LazyLock<Arc<LanceSession>> =
         LazyLock::new(|| FlowLikeState::retained_lance_session(None));
     SESSION.clone()
+}
+
+/// URLs of the hubs the operator configured: the platform's own and the ones it depends on.
+fn platform_hub_urls<'a>(domain: &'a str, hubs: &'a [String]) -> impl Iterator<Item = Url> + 'a {
+    std::iter::once(domain)
+        .chain(hubs.iter().map(String::as_str))
+        .filter_map(|hub| hub_api_url(hub, true, &[]).ok())
+}
+
+/// The hub client of anything the API resolves for a caller. A profile names the hubs its
+/// Bits are read from, and so does every Bit and every hub's own dependency list, so a hub
+/// other than the platform's own must pass the server's egress mode before it is asked.
+pub(crate) fn server_hub_client(platform: &Hub) -> Result<HTTPClient> {
+    let own_hubs = platform_hub_urls(&platform.domain, &platform.hubs);
+    HTTPClient::new_without_refetch()
+        .confined_to(HubEgress::new(ProviderEgress::for_server(), own_hubs))
 }
 
 /// Validates that a path component (sub, app_id) does not contain path traversal
@@ -430,6 +449,7 @@ impl RuntimeCredentials {
     #[instrument(skip(self, state), level = "debug")]
     pub async fn to_state(&self, state: AppState) -> Result<FlowLikeState> {
         let package_widget_source = state.wasm_registry.clone();
+        let hub_client = server_hub_client(&state.platform_config)?;
         let mut flow_state = match self {
             #[cfg(feature = "aws")]
             RuntimeCredentials::Aws(aws) => aws.to_state(state).await,
@@ -444,9 +464,11 @@ impl RuntimeCredentials {
 
         // The API is a shared server: anything built on this state must not
         // fall back to the process's own cloud identity, and calls to a private
-        // model's own endpoint must stay out of the network the API runs in.
+        // model's own endpoint or to a hub a profile names must stay out of the
+        // network the API runs in.
         flow_state.execution_environment = ExecutionEnvironment::Server;
         flow_state.model_egress = ProviderEgress::for_server();
+        flow_state.http_client = Arc::new(hub_client);
 
         if let Some(package_widget_source) = package_widget_source {
             flow_state
@@ -470,6 +492,63 @@ impl RuntimeCredentials {
             RuntimeCredentials::R2(r2) => r2.into_shared_credentials(),
             RuntimeCredentials::Mixed(mixed) => mixed.into_shared_credentials(),
         }
+    }
+}
+
+#[cfg(test)]
+mod hub_client_tests {
+    use super::*;
+
+    #[test]
+    fn the_operators_hubs_are_the_platform_domain_and_its_dependency_hubs() {
+        let hubs = [
+            "hub.partner.io".to_string(),
+            " ".to_string(),
+            "http://api:8080".to_string(),
+        ];
+        let urls: Vec<String> = platform_hub_urls("api.example.com", &hubs)
+            .map(String::from)
+            .collect();
+        assert_eq!(
+            urls,
+            [
+                "https://api.example.com/api/v1",
+                "https://hub.partner.io/api/v1",
+                "http://api:8080/api/v1"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_profile_hub_on_the_servers_own_network_is_refused() {
+        let own = platform_hub_urls("api.example.com", &[]);
+        let http = Arc::new(
+            HTTPClient::new_without_refetch()
+                .confined_to(HubEgress::new(ProviderEgress::for_server(), own))
+                .unwrap(),
+        );
+        for hub in [
+            "169.254.169.254",
+            "127.0.0.1:8080",
+            "localhost",
+            "[fd00:ec2::254]",
+        ] {
+            let refused = Hub::new(hub, http.clone()).await.unwrap_err().to_string();
+            assert!(
+                refused.contains("is outside the addresses this server may reach"),
+                "{hub}: {refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_state_and_dependency_lookup_the_api_builds_uses_the_confined_hub_client() {
+        let state = include_str!("credentials.rs");
+        assert!(state.contains("let hub_client = server_hub_client(&state.platform_config)?;"));
+        assert!(state.contains("flow_state.http_client = Arc::new(hub_client);"));
+        let dependencies = include_str!("routes/bit/get_with_dependencies.rs");
+        assert!(dependencies.contains("server_hub_client(&state.platform_config)?"));
+        assert!(!dependencies.contains("HTTPClient::new_without_refetch()"));
     }
 }
 

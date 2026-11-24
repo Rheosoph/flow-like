@@ -25,6 +25,7 @@ export {
 } from "./admin-package-detail-view";
 
 export { StoreHero } from "./store-hero";
+export * from "./showcase";
 export {
 	StoreForkButton,
 	type StoreForkButtonProps,

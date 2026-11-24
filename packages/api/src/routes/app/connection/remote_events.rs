@@ -176,7 +176,8 @@ pub async fn get_remote_event_detail(
     Path((app_id, target_app_id, event_id)): Path<(String, String, String)>,
     Query(query): Query<RemoteEventDetailQuery>,
 ) -> Result<Json<RemoteEventDetail>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
+    let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
+    super::ensure_connected_app_reads_data(&user, &permission)?;
     ensure_connection_role(
         &state,
         &app_id,
@@ -332,7 +333,8 @@ pub async fn get_remote_events(
     Extension(user): Extension<AppUser>,
     Path((app_id, target_app_id)): Path<(String, String)>,
 ) -> Result<Json<Vec<RemoteEvent>>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
+    let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
+    super::ensure_connected_app_reads_data(&user, &permission)?;
     ensure_connection_role(
         &state,
         &app_id,

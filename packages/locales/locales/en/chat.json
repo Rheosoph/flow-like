@@ -304,6 +304,8 @@
 		"requested": "Requested",
 		"previousTurn": "Previous turn",
 		"contextLimit": "Context threshold",
+		"withoutModel": "Without a model",
+		"failureCode": "Reason: {{code}}",
 		"title": "Cache and context",
 		"promptCache": "Prompt cache",
 		"cacheHint": "Input reused by the model provider.",

@@ -1993,6 +1993,7 @@
 	"rows": "Zeilen",
 	"runAQueryToSeeResults": "Abfrage ausführen, um Ergebnisse anzuzeigen",
 	"runError": "Fehler",
+	"runEuHosted": "In der EU gehostet",
 	"runFatal": "Schwerwiegender Fehler",
 	"runHosted": "Gehostet",
 	"runId": "Ausführungs-ID",

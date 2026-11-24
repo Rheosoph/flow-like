@@ -251,6 +251,7 @@ mod tests {
             app_type: None,
             bot_id: None,
             refuse_bots: None,
+            showcase: None,
         }
     }
 

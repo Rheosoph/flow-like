@@ -7,8 +7,12 @@ use serde::Serialize;
 use utoipa::ToSchema;
 
 use crate::{
-    entity::{app_connection, meta, role, sea_orm_active_enums::AppConnectionStatus},
+    entity::{
+        app, app_connection, membership, meta, role,
+        sea_orm_active_enums::{AppConnectionStatus, Visibility},
+    },
     error::ApiError,
+    permission::role_permission::{RolePermissions, has_role_permission},
     state::AppState,
 };
 
@@ -177,6 +181,126 @@ pub(crate) async fn app_meta_lookup(
         .collect())
 }
 
+/// The two facts that let a viewer learn an app's name whatever relation brought the app up:
+/// the store lists it, or a given person is in it. Naming an app by its id in a connection
+/// request or a suite invitation must not be a way to read what a private app is called.
+#[derive(Default)]
+pub(crate) struct AppSight {
+    listed: std::collections::HashSet<String>,
+    members: std::collections::HashMap<String, std::collections::HashSet<String>>,
+}
+
+impl AppSight {
+    /// Loads which of `app_ids` are listed and which of `user_ids` are members of which.
+    pub(crate) async fn load<C: sea_orm::ConnectionTrait>(
+        db: &C,
+        app_ids: &[String],
+        user_ids: &[String],
+    ) -> Result<Self, ApiError> {
+        use sea_orm::QuerySelect;
+        use sea_orm::sea_query::ExprTrait;
+
+        if app_ids.is_empty() {
+            return Ok(Self::default());
+        }
+        let listed = app::Entity::find()
+            .select_only()
+            .column(app::Column::Id)
+            .filter(app::Column::Id.is_in(app_ids.iter().cloned()))
+            .filter(
+                app::Column::Visibility
+                    .eq(Visibility::Public)
+                    .or(app::Column::Visibility.eq(Visibility::PublicRequestAccess)),
+            )
+            .into_tuple::<String>()
+            .all(db)
+            .await?
+            .into_iter()
+            .collect();
+
+        let mut members: std::collections::HashMap<String, std::collections::HashSet<String>> =
+            std::collections::HashMap::new();
+        if !user_ids.is_empty() {
+            let rows = membership::Entity::find()
+                .select_only()
+                .column(membership::Column::AppId)
+                .column(membership::Column::UserId)
+                .filter(membership::Column::AppId.is_in(app_ids.iter().cloned()))
+                .filter(membership::Column::UserId.is_in(user_ids.iter().cloned()))
+                .into_tuple::<(String, String)>()
+                .all(db)
+                .await?;
+            for (app_id, user_id) in rows {
+                members.entry(app_id).or_default().insert(user_id);
+            }
+        }
+        Ok(Self { listed, members })
+    }
+
+    pub(crate) fn is_listed(&self, app_id: &str) -> bool {
+        self.listed.contains(app_id)
+    }
+
+    pub(crate) fn has_member(&self, app_id: &str, user_id: Option<&str>) -> bool {
+        user_id.is_some_and(|user_id| {
+            self.members
+                .get(app_id)
+                .is_some_and(|users| users.contains(user_id))
+        })
+    }
+
+    /// Listed, or `viewer` is in it.
+    pub(crate) fn shows(&self, app_id: &str, viewer: Option<&str>) -> bool {
+        self.is_listed(app_id) || self.has_member(app_id, viewer)
+    }
+}
+
+/// The app on the other end of `connection`, seen from `viewer_app_id`.
+pub(crate) fn other_app_id<'a>(
+    connection: &'a app_connection::Model,
+    viewer_app_id: &str,
+) -> &'a str {
+    if connection.target_app_id == viewer_app_id {
+        &connection.source_app_id
+    } else {
+        &connection.target_app_id
+    }
+}
+
+/// The person who set up `connection` from the viewer's end: whoever granted or approved it
+/// when the viewer's app is the target, whoever asked for it when it is the source.
+pub(crate) fn own_end_actor<'a>(
+    connection: &'a app_connection::Model,
+    viewer_app_id: &str,
+) -> Option<&'a str> {
+    if connection.target_app_id == viewer_app_id {
+        connection.approved_by_user_id.as_deref()
+    } else {
+        connection.requested_by_user_id.as_deref()
+    }
+}
+
+/// Whether someone looking at `connection` from `viewer_app_id` is told what the app on the
+/// other end is called. That app is named once it took part: it asked for the connection, or
+/// it answered one. Before that its name goes only to those who could see it anyway: it is
+/// listed, the viewer is in it, or the person who set up the viewer's end is.
+pub(crate) fn names_other_app(
+    connection: &app_connection::Model,
+    viewer_app_id: &str,
+    viewer: Option<&str>,
+    sight: &AppSight,
+) -> bool {
+    let other = other_app_id(connection, viewer_app_id);
+    let other_took_part = if connection.target_app_id == viewer_app_id {
+        connection.requested_by_user_id.is_some()
+    } else {
+        connection.status == AppConnectionStatus::Active
+    };
+    other_took_part
+        || sight.shows(other, viewer)
+        || sight.has_member(other, own_end_actor(connection, viewer_app_id))
+}
+
 /// Role id → name and role id → raw permission bits for the given role ids,
 /// from a single query.
 pub(crate) type RoleLookup = (
@@ -260,8 +384,6 @@ pub(crate) async fn validate_connection_role(
     app_id: &str,
     role_id: &str,
 ) -> Result<role::Model, ApiError> {
-    use crate::permission::role_permission::RolePermissions;
-
     let role_model = role::Entity::find_by_id(role_id)
         .filter(role::Column::AppId.eq(app_id))
         .one(&state.db)
@@ -288,7 +410,6 @@ pub(crate) async fn admin_user_ids(
     app_id: &str,
 ) -> Result<Vec<String>, ApiError> {
     use crate::entity::membership;
-    use crate::permission::role_permission::RolePermissions;
 
     let admin_role_ids: Vec<String> = role::Entity::find()
         .filter(role::Column::AppId.eq(app_id))
@@ -398,6 +519,15 @@ pub(crate) async fn app_display_name(state: &AppState, app_id: &str) -> String {
         .unwrap_or_else(|| app_id.to_string())
 }
 
+/// An app's name for people it never agreed to deal with, as in a notice that it turned them
+/// down: `None` unless the store lists the app.
+pub(crate) async fn listed_app_name(state: &AppState, app_id: &str) -> Option<String> {
+    crate::routes::app::ensure_app_publicly_visible(app_id, state)
+        .await
+        .ok()?;
+    Some(app_display_name(state, app_id).await)
+}
+
 /// App connections must be managed by people (or their API keys), never by
 /// another app acting through a connection token.
 pub(crate) fn deny_connected_app(user: &crate::middleware::jwt::AppUser) -> Result<(), ApiError> {
@@ -407,4 +537,275 @@ pub(crate) fn deny_connected_app(user: &crate::middleware::jwt::AppUser) -> Resu
         ));
     }
     Ok(())
+}
+
+/// What a project's own connections share with it (tables, ontologies, events of a third
+/// project) is part of its data. A connected app reads that only when its connection role may
+/// read this project's files or databases; people are judged by the route's own permission.
+pub(crate) fn ensure_connected_app_reads_data(
+    user: &crate::middleware::jwt::AppUser,
+    permission: &crate::middleware::jwt::AppPermissionResponse,
+) -> Result<(), ApiError> {
+    if shares_closed_to(user.is_connected_app(), &permission.permissions) {
+        return Err(ApiError::forbidden(
+            "This app connection cannot read the project's files or databases, so it cannot read what the project's own connections share",
+        ));
+    }
+    Ok(())
+}
+
+fn shares_closed_to(connected_app: bool, permissions: &RolePermissions) -> bool {
+    connected_app
+        && !has_role_permission(permissions, RolePermissions::ReadFiles)
+        && !has_role_permission(permissions, RolePermissions::ReadDatabase)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::{ConnectOptions, ConnectionTrait, Database};
+
+    const MINE: &str = "mine";
+    const THEIRS: &str = "theirs";
+
+    fn connection(
+        source: &str,
+        target: &str,
+        status: AppConnectionStatus,
+        requested_by: Option<&str>,
+        approved_by: Option<&str>,
+    ) -> app_connection::Model {
+        let now = chrono::Utc::now().fixed_offset();
+        app_connection::Model {
+            id: format!("{source}-{target}"),
+            source_app_id: source.to_string(),
+            target_app_id: target.to_string(),
+            role_id: None,
+            comment: None,
+            requested_by_user_id: requested_by.map(str::to_string),
+            approved_by_user_id: approved_by.map(str::to_string),
+            created_at: now,
+            updated_at: now,
+            status,
+        }
+    }
+
+    fn sight(listed: &[&str], members: &[(&str, &str)]) -> AppSight {
+        let mut sight = AppSight {
+            listed: listed.iter().map(|app| app.to_string()).collect(),
+            ..Default::default()
+        };
+        for (app, user) in members {
+            sight
+                .members
+                .entry(app.to_string())
+                .or_default()
+                .insert(user.to_string());
+        }
+        sight
+    }
+
+    #[test]
+    fn an_app_asked_for_by_its_id_is_not_named_until_it_answers() {
+        let nobody = sight(&[], &[]);
+        let asked = connection(MINE, THEIRS, AppConnectionStatus::Pending, Some("me"), None);
+        assert_eq!(other_app_id(&asked, MINE), THEIRS);
+        assert!(!names_other_app(&asked, MINE, Some("me"), &nobody));
+
+        let answered = connection(
+            MINE,
+            THEIRS,
+            AppConnectionStatus::Active,
+            Some("me"),
+            Some("them"),
+        );
+        assert!(names_other_app(&answered, MINE, Some("me"), &nobody));
+        assert!(names_other_app(&answered, MINE, None, &nobody));
+    }
+
+    #[test]
+    fn an_app_handed_access_unasked_is_not_named_to_the_app_that_gave_it() {
+        let nobody = sight(&[], &[]);
+        let handed = connection(THEIRS, MINE, AppConnectionStatus::Active, None, Some("me"));
+        assert_eq!(other_app_id(&handed, MINE), THEIRS);
+        assert!(!names_other_app(&handed, MINE, Some("me"), &nobody));
+
+        for status in [AppConnectionStatus::Pending, AppConnectionStatus::Active] {
+            let they_asked = connection(THEIRS, MINE, status, Some("them"), None);
+            assert!(names_other_app(&they_asked, MINE, Some("me"), &nobody));
+        }
+    }
+
+    #[test]
+    fn an_app_that_has_not_taken_part_is_named_only_to_those_who_see_it_anyway() {
+        let asked = connection(
+            MINE,
+            THEIRS,
+            AppConnectionStatus::Pending,
+            Some("asker"),
+            None,
+        );
+        let handed = connection(
+            THEIRS,
+            MINE,
+            AppConnectionStatus::Active,
+            None,
+            Some("granter"),
+        );
+        for one_sided in [&asked, &handed] {
+            assert!(names_other_app(
+                one_sided,
+                MINE,
+                None,
+                &sight(&[THEIRS], &[])
+            ));
+            assert!(names_other_app(
+                one_sided,
+                MINE,
+                Some("viewer"),
+                &sight(&[], &[(THEIRS, "viewer")])
+            ));
+            for unrelated in [
+                sight(&[MINE], &[]),
+                sight(&[], &[(MINE, "viewer")]),
+                sight(&[], &[(THEIRS, "someone-else")]),
+            ] {
+                assert!(!names_other_app(
+                    one_sided,
+                    MINE,
+                    Some("viewer"),
+                    &unrelated
+                ));
+            }
+        }
+
+        // A teammate sees the name when the person who set up their end is in the other app.
+        assert_eq!(own_end_actor(&asked, MINE), Some("asker"));
+        assert_eq!(own_end_actor(&handed, MINE), Some("granter"));
+        assert!(names_other_app(
+            &asked,
+            MINE,
+            Some("teammate"),
+            &sight(&[], &[(THEIRS, "asker")])
+        ));
+        assert!(names_other_app(
+            &handed,
+            MINE,
+            Some("teammate"),
+            &sight(&[], &[(THEIRS, "granter")])
+        ));
+    }
+
+    #[tokio::test]
+    async fn sight_loads_the_listed_apps_and_the_memberships_asked_for() {
+        let mut options = ConnectOptions::new("sqlite::memory:");
+        options.max_connections(1);
+        let db = Database::connect(options).await.unwrap();
+        for statement in [
+            "ATTACH DATABASE ':memory:' AS public",
+            r#"CREATE TABLE public."App" (id TEXT PRIMARY KEY, visibility TEXT NOT NULL)"#,
+            r#"CREATE TABLE public."Membership" (id TEXT PRIMARY KEY, "userId" TEXT NOT NULL, "appId" TEXT NOT NULL)"#,
+            r#"INSERT INTO public."App" VALUES ('listed', 'PUBLIC'), ('on-request', 'PUBLIC_REQUEST_ACCESS'), ('private', 'PRIVATE'), ('prototype', 'PROTOTYPE'), ('offline', 'OFFLINE'), ('not-asked', 'PUBLIC')"#,
+            r#"INSERT INTO public."Membership" VALUES ('m1', 'alice', 'private'), ('m2', 'carol', 'private'), ('m3', 'alice', 'not-asked')"#,
+        ] {
+            db.execute_unprepared(statement).await.unwrap();
+        }
+        let apps: Vec<String> = ["listed", "on-request", "private", "prototype", "offline"]
+            .map(str::to_string)
+            .to_vec();
+        let people = ["alice".to_string(), "bob".to_string()];
+
+        let sight = AppSight::load(&db, &apps, &people).await.unwrap();
+        for (app, listed) in [
+            ("listed", true),
+            ("on-request", true),
+            ("private", false),
+            ("prototype", false),
+            ("offline", false),
+            ("not-asked", false),
+        ] {
+            assert_eq!(sight.is_listed(app), listed, "{app}");
+        }
+        assert!(sight.has_member("private", Some("alice")));
+        assert!(sight.shows("private", Some("alice")));
+        for outsider in [Some("bob"), Some("carol"), None] {
+            assert!(!sight.has_member("private", outsider), "{outsider:?}");
+            assert!(!sight.shows("private", outsider), "{outsider:?}");
+        }
+        assert!(!sight.has_member("not-asked", Some("alice")));
+
+        let nothing = AppSight::load(&db, &[], &people).await.unwrap();
+        assert!(!nothing.is_listed("listed"));
+        let no_people = AppSight::load(&db, &apps, &[]).await.unwrap();
+        assert!(no_people.is_listed("listed"));
+        assert!(!no_people.has_member("private", Some("alice")));
+    }
+
+    #[test]
+    fn the_connection_list_fetches_metadata_only_for_the_apps_it_may_name() {
+        let source = include_str!("connection/get_connections.rs");
+        assert!(source.contains("app_meta_lookup(&state, &named_app_ids)"));
+        assert_eq!(source.matches("app_meta_lookup(").count(), 1);
+        assert!(source.contains("names_other_app(connection, app_id, viewer.as_deref(), &sight)"));
+        for (name, declined) in [
+            (
+                "connection request",
+                include_str!("connection/manage_connection.rs")
+                    .split_once("pub async fn reject_connection_request(")
+                    .expect("reject_connection_request exists")
+                    .1,
+            ),
+            (
+                "suite invitation",
+                include_str!("groups/requests.rs")
+                    .split_once("pub async fn decline_group_request(")
+                    .expect("decline_group_request exists")
+                    .1,
+            ),
+        ] {
+            assert!(declined.contains("listed_app_name("), "{name}");
+            assert!(!declined.contains("app_display_name("), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_connected_app_reads_another_connections_shares_only_with_a_data_permission() {
+        let boards_only = RolePermissions::ReadBoards | RolePermissions::ExecuteEvents;
+        assert!(shares_closed_to(true, &boards_only));
+        for data in [RolePermissions::ReadFiles, RolePermissions::ReadDatabase] {
+            assert!(!shares_closed_to(true, &(boards_only | data)), "{data:?}");
+        }
+        // People keep the route's own permission: a builder without data access still picks
+        // remote tables, events and ontologies in the editor.
+        assert!(!shares_closed_to(false, &boards_only));
+    }
+
+    #[test]
+    fn every_remote_read_asks_whether_a_connected_app_reads_data() {
+        for (name, source, reads) in [
+            (
+                "remote_tables",
+                include_str!("connection/remote_tables.rs"),
+                1,
+            ),
+            (
+                "remote_events",
+                include_str!("connection/remote_events.rs"),
+                2,
+            ),
+            (
+                "remote_ontologies",
+                include_str!("connection/remote_ontologies.rs"),
+                1,
+            ),
+        ] {
+            assert_eq!(
+                source
+                    .matches("ensure_connected_app_reads_data(&user, &permission)?")
+                    .count(),
+                reads,
+                "{name}"
+            );
+        }
+    }
 }

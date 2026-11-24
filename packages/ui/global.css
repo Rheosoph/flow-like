@@ -2976,3 +2976,27 @@ html[data-engine="webkit"] [class*="backdrop-blur"] {
 		transition: none;
 	}
 }
+
+:root {
+	--showcase-text: #2a78d6;
+	--showcase-number: #eb6834;
+	--showcase-time: #1baf7a;
+	--showcase-vector: #eda100;
+	--showcase-geo: #e87ba4;
+	--showcase-other: #9a9aa6;
+}
+
+.dark {
+	--showcase-text: #3987e5;
+	--showcase-number: #d95926;
+	--showcase-time: #199e70;
+	--showcase-vector: #c98500;
+	--showcase-geo: #d55181;
+	--showcase-other: #6b7080;
+}
+
+@keyframes showcase-flow {
+	to {
+		stroke-dashoffset: -12;
+	}
+}

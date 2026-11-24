@@ -1993,6 +1993,7 @@
 	"rows": "",
 	"runAQueryToSeeResults": "쿼리를 실행하여 결과를 확인하세요",
 	"runError": "",
+	"runEuHosted": "",
 	"runFatal": "",
 	"runHosted": "",
 	"runId": "",

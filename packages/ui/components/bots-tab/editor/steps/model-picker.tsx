@@ -15,6 +15,7 @@ import { cn } from "../../../../lib/utils";
 import { Input } from "../../../ui/input";
 import {
 	DeploymentLabel,
+	HostingRegionBadge,
 	ProviderGlyph,
 	providerLabel,
 } from "../../../ui/model-kit";
@@ -423,6 +424,7 @@ function ModelChoice({
 						kind={option.local ? "local" : "hosted"}
 						className="shrink-0"
 					/>
+					<HostingRegionBadge bit={option.bit} />
 				</span>
 				{description && (
 					<span className="line-clamp-1 text-xs text-muted-foreground/80">

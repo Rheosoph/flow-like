@@ -116,7 +116,12 @@ pub async fn run_pass(state: &AppState) -> Result<TableMaintenanceResult, ApiErr
             break;
         }
         result.evaluated += 1;
-        match tokio::time::timeout(TABLE_BUDGET, maintain_table(&credentials, location)).await {
+        match flow_like_types::tokio::time::timeout(
+            TABLE_BUDGET,
+            maintain_table(&credentials, location),
+        )
+        .await
+        {
             Ok(Ok(needs)) => {
                 result.compacted += u64::from(needs.compact);
                 result.reindexed += u64::from(needs.index);
@@ -156,15 +161,17 @@ pub async fn run_pass(state: &AppState) -> Result<TableMaintenanceResult, ApiErr
     Ok(result)
 }
 
-pub fn spawn_table_maintenance(state: AppState) -> Option<tokio::task::JoinHandle<()>> {
+pub fn spawn_table_maintenance(
+    state: AppState,
+) -> Option<flow_like_types::tokio::task::JoinHandle<()>> {
     let Some(interval) = crate::interval_lease::interval_from_env(INTERVAL_ENV, DEFAULT_INTERVAL)
     else {
         tracing::info!("Table maintenance disabled via {INTERVAL_ENV}=0");
         return None;
     };
-    Some(tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(interval);
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    Some(flow_like_types::tokio::spawn(async move {
+        let mut ticker = flow_like_types::tokio::time::interval(interval);
+        ticker.set_missed_tick_behavior(flow_like_types::tokio::time::MissedTickBehavior::Delay);
         ticker.tick().await;
         loop {
             ticker.tick().await;

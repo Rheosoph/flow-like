@@ -217,6 +217,8 @@ impl From<App> for app::Model {
             bot_id: app.bot_id,
             // Changed only through `PATCH /apps/{app_id}/settings/bots`, never by a whole-app save.
             refuse_bots: None,
+            // Changed only through `PUT /apps/{app_id}/settings/showcase`.
+            showcase: None,
         }
     }
 }

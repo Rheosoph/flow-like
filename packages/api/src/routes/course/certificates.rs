@@ -233,7 +233,7 @@ pub async fn list_my_certificates(
         ("language" = Option<String>, Query, description = "Preferred language (default: en)")
     ),
     responses(
-        (status = 200, description = "Returns certificate details (recipient name, course name, hash) if the certificate exists", body = CertificateView),
+        (status = 200, description = "Returns certificate details (recipient name, course name, hash) if the certificate exists. `user_id` is left empty: anyone holding the link may verify, and the recipient's account id is not part of that", body = CertificateView),
         (status = 404, description = "Certificate not found")
     )
 )]
@@ -255,5 +255,41 @@ pub async fn verify_certificate(
             .ok_or(ApiError::NOT_FOUND)?,
     };
     let language = q.language.clone().unwrap_or_else(|| "en".to_string());
-    Ok(Json(enrich_certificate(&state, row, &language).await?))
+    Ok(Json(without_account_id(
+        enrich_certificate(&state, row, &language).await?,
+    )))
+}
+
+/// A certificate as anyone holding its link sees it: who it names, never which account that is.
+fn without_account_id(mut certificate: CertificateView) -> CertificateView {
+    certificate.user_id.clear();
+    certificate
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_publicly_verified_certificate_does_not_name_the_recipients_account() {
+        let certificate = without_account_id(CertificateView {
+            id: "certificate-1".into(),
+            user_id: "user-1".into(),
+            course_id: "course-1".into(),
+            issued_at: "2026-11-24T00:00:00+00:00".into(),
+            hash: "hash".into(),
+            pdf_url: None,
+            recipient_name: Some("Ada".into()),
+            course_name: Some("Flows".into()),
+        });
+        assert_eq!(certificate.user_id, "");
+        assert_eq!(certificate.recipient_name.as_deref(), Some("Ada"));
+
+        let verify = include_str!("certificates.rs")
+            .split_once("pub async fn verify_certificate(")
+            .expect("verify_certificate exists")
+            .1;
+        let answered = verify.find("Ok(Json(").expect("verify_certificate answers");
+        assert!(verify[answered..].starts_with("Ok(Json(without_account_id("));
+    }
 }

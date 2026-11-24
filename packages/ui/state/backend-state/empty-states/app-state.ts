@@ -23,6 +23,12 @@ import type {
 	IOnlineForkBody,
 	IOnlineForkResponse,
 } from "@flow-like/flow-like-ui/lib/schema/app/fork";
+import {
+	type IAppShowcase,
+	type IAppShowcaseSettings,
+	emptyShowcase,
+	emptyShowcaseSettings,
+} from "@flow-like/flow-like-ui/lib/schema/app/showcase";
 import type {
 	AppCommentsResponse,
 	IMediaItem,
@@ -138,6 +144,18 @@ export class EmptyAppState implements IAppState {
 		links: IAppLegalLinks,
 	): Promise<IAppLegalLinks> {
 		throw new Error("Method not implemented.");
+	}
+	getShowcaseSettings(appId: string): Promise<IAppShowcaseSettings> {
+		return Promise.resolve(emptyShowcaseSettings());
+	}
+	updateShowcaseSettings(
+		appId: string,
+		settings: IAppShowcaseSettings,
+	): Promise<IAppShowcaseSettings> {
+		return Promise.resolve(settings);
+	}
+	getShowcase(appId: string): Promise<IAppShowcase> {
+		return Promise.resolve(emptyShowcase(appId));
 	}
 	changeAppAllowForking(appId: string, allow: boolean): Promise<void> {
 		throw new Error("Method not implemented.");

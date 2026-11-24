@@ -591,7 +591,7 @@ pub fn decrypt_token(encrypted: &str, key: &[u8; 32]) -> Option<String> {
 }
 
 /// Extract cron expression from event config bytes
-pub(super) fn extract_cron_expression(config: &[u8]) -> Option<String> {
+pub(crate) fn extract_cron_expression(config: &[u8]) -> Option<String> {
     if config.is_empty() {
         return None;
     }
@@ -611,7 +611,7 @@ pub(super) fn extract_cron_expression(config: &[u8]) -> Option<String> {
 }
 
 /// Extract cron timezone from event config bytes
-fn extract_cron_timezone(config: &[u8]) -> Option<String> {
+pub(crate) fn extract_cron_timezone(config: &[u8]) -> Option<String> {
     if config.is_empty() {
         return None;
     }
@@ -645,7 +645,7 @@ pub(crate) fn extract_scheduled_for(config: &[u8]) -> Option<flow_like_sinks::Sc
 }
 
 /// Extract HTTP path from event config bytes (for api/http/webhook events)
-fn extract_http_path(config: &[u8]) -> Option<String> {
+pub(crate) fn extract_http_path(config: &[u8]) -> Option<String> {
     if config.is_empty() {
         return None;
     }
@@ -660,7 +660,7 @@ fn extract_http_path(config: &[u8]) -> Option<String> {
 }
 
 /// Extract HTTP method from event config bytes (for api/http/webhook events)
-fn extract_http_method(config: &[u8]) -> Option<String> {
+pub(crate) fn extract_http_method(config: &[u8]) -> Option<String> {
     if config.is_empty() {
         return None;
     }
@@ -711,7 +711,8 @@ fn extract_http_auth_token(config: &[u8]) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Delete an event from the database.
+/// Delete an event of `app_id` from the database. Every statement names the app, so an event id
+/// that belongs to another app deletes nothing.
 ///
 /// The inbound rows are drained in bounded batches first — registrations
 /// before the auth rows they point at — so the event delete itself only
@@ -719,12 +720,15 @@ fn extract_http_auth_token(config: &[u8]) -> Option<String> {
 pub async fn delete_event_from_db(
     db: &DatabaseConnection,
     dialect: DbDialect,
+    app_id: &str,
     event_id: &str,
 ) -> flow_like_types::Result<()> {
     delete_in_batches::<event_remote_registration::Entity>(
         db,
         dialect,
-        Condition::all().add(event_remote_registration::Column::EventId.eq(event_id)),
+        Condition::all()
+            .add(event_remote_registration::Column::EventId.eq(event_id))
+            .add(event_remote_registration::Column::AppId.eq(app_id)),
         DEFAULT_WRITE_CHUNK,
         None,
     )
@@ -732,28 +736,35 @@ pub async fn delete_event_from_db(
     delete_in_batches::<event_remote_auth::Entity>(
         db,
         dialect,
-        Condition::all().add(event_remote_auth::Column::EventId.eq(event_id)),
+        Condition::all()
+            .add(event_remote_auth::Column::EventId.eq(event_id))
+            .add(event_remote_auth::Column::AppId.eq(app_id)),
         DEFAULT_WRITE_CHUNK,
         None,
     )
     .await?;
-    event::Entity::delete_by_id(event_id).exec(db).await?;
+    event::Entity::delete_many()
+        .filter(event::Column::Id.eq(event_id))
+        .filter(event::Column::AppId.eq(app_id))
+        .exec(db)
+        .await?;
     Ok(())
 }
 
-/// Delete an event and its sink from the database (and external scheduler)
+/// Delete an event of `app_id` and its sink from the database (and external scheduler)
 pub async fn delete_event_with_sink(
     db: &DatabaseConnection,
     state: &crate::state::AppState,
+    app_id: &str,
     event_id: &str,
 ) -> flow_like_types::Result<()> {
     use crate::routes::sink::service::delete_sink;
 
     // Delete sink first (handles external scheduler cleanup)
-    delete_sink(db, state, event_id).await?;
+    delete_sink(db, state, app_id, event_id).await?;
 
     // Then delete the event
-    delete_event_from_db(db, state.db_dialect, event_id).await?;
+    delete_event_from_db(db, state.db_dialect, app_id, event_id).await?;
 
     Ok(())
 }
@@ -1693,6 +1704,132 @@ mod tests {
             toggle,
             "active: Set(turning_on)",
             &["bind_run_as("],
+        );
+    }
+
+    async fn event_tables() -> DatabaseConnection {
+        use sea_orm::{ConnectOptions, Database, Schema, sea_query::Table};
+
+        let mut options = ConnectOptions::new("sqlite::memory:");
+        options.max_connections(1);
+        let db = Database::connect(options).await.unwrap();
+        db.execute_unprepared("ATTACH DATABASE ':memory:' AS public")
+            .await
+            .unwrap();
+        let schema = Schema::new(db.get_database_backend());
+        for source in [
+            schema.create_table_from_entity(event::Entity),
+            schema.create_table_from_entity(event_remote_registration::Entity),
+            schema.create_table_from_entity(event_remote_auth::Entity),
+        ] {
+            let mut table = Table::create();
+            table.table(source.get_table_name().unwrap().clone());
+            for column in source.get_columns() {
+                table.col(column.clone());
+            }
+            db.execute(&table).await.unwrap();
+        }
+        db
+    }
+
+    async fn insert_published_event(db: &DatabaseConnection, app_id: &str, event_id: &str) {
+        let mut event = event_with(HashMap::new());
+        event.id = event_id.to_string();
+        event_to_db_model(app_id, &event).insert(db).await.unwrap();
+        let now = chrono::Utc::now().fixed_offset();
+        event_remote_auth::ActiveModel {
+            id: Set(format!("auth-{event_id}")),
+            app_id: Set(app_id.to_string()),
+            event_id: Set(event_id.to_string()),
+            event_version: Set("1.0.0".to_string()),
+            node_id: Set("node-1".to_string()),
+            kind: Set("rest".to_string()),
+            config_json: Set(json!({"type": "none"})),
+            created_at: Set(now),
+            updated_at: Set(now),
+            variant: Set("stable".to_string()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+        event_remote_registration::ActiveModel {
+            id: Set(format!("registration-{event_id}")),
+            app_id: Set(app_id.to_string()),
+            event_id: Set(event_id.to_string()),
+            event_version: Set("1.0.0".to_string()),
+            kind: Set("rest_fn".to_string()),
+            method: Set(Some("GET".to_string())),
+            path: Set("/".to_string()),
+            node_id: Set(None),
+            schema_json: Set(None),
+            extras_json: Set(None),
+            auth_id: Set(Some(format!("auth-{event_id}"))),
+            created_at: Set(now),
+            variant: Set("stable".to_string()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+
+    async fn rows_of(db: &DatabaseConnection, event_id: &str) -> (u64, u64, u64) {
+        use sea_orm::PaginatorTrait;
+
+        (
+            event::Entity::find()
+                .filter(event::Column::Id.eq(event_id))
+                .count(db)
+                .await
+                .unwrap(),
+            event_remote_registration::Entity::find()
+                .filter(event_remote_registration::Column::EventId.eq(event_id))
+                .count(db)
+                .await
+                .unwrap(),
+            event_remote_auth::Entity::find()
+                .filter(event_remote_auth::Column::EventId.eq(event_id))
+                .count(db)
+                .await
+                .unwrap(),
+        )
+    }
+
+    #[tokio::test]
+    async fn deleting_an_event_under_another_app_leaves_its_rows_alone() {
+        let db = event_tables().await;
+        insert_published_event(&db, "victim", "evt-victim").await;
+
+        delete_event_from_db(&db, DbDialect::Postgres, "attacker", "evt-victim")
+            .await
+            .unwrap();
+        assert_eq!(rows_of(&db, "evt-victim").await, (1, 1, 1));
+
+        delete_event_from_db(&db, DbDialect::Postgres, "victim", "evt-victim")
+            .await
+            .unwrap();
+        assert_eq!(rows_of(&db, "evt-victim").await, (0, 0, 0));
+    }
+
+    #[test]
+    fn every_event_removal_step_names_the_app() {
+        let handler = include_str!("delete_event.rs");
+        assert!(handler.contains("cleanup_event(state, &app_id, event_id)"));
+        assert!(handler.contains("delete_event_with_sink(&state.db, state, &app_id, event_id)"));
+        let sink = include_str!("../../sink/service.rs")
+            .split_once("\npub async fn delete_sink(")
+            .expect("delete_sink exists")
+            .1;
+        let sink = &sink[..sink.find("\n}\n").unwrap()];
+        assert!(sink.contains("event_sink::Column::AppId.eq(app_id)"));
+        let teams = include_str!("../../../teams/management.rs")
+            .split_once("\npub(crate) async fn cleanup_event(")
+            .expect("cleanup_event exists")
+            .1;
+        assert!(
+            teams[..teams.find("\n}\n").unwrap()]
+                .contains("app_event_connection(state, app, event)")
         );
     }
 }

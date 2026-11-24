@@ -19,6 +19,17 @@ fn is_checkpoint(request: &CompletionRequest) -> bool {
         message,
         rig::message::Message::System { content } if content.starts_with("Write a factual continuation checkpoint")
     )) || request.preamble.as_deref().is_some_and(|preamble| preamble.starts_with("Write a factual continuation checkpoint"))
+        || is_cached_checkpoint(request)
+}
+
+/// A checkpoint asked for at the end of the turn's own request.
+fn is_cached_checkpoint(request: &CompletionRequest) -> bool {
+    match request.chat_history.last() {
+        rig::message::Message::User { content } => content.iter().any(|item| {
+            matches!(item, UserContent::Text(text) if text.text.contains("Write a factual continuation checkpoint"))
+        }),
+        _ => false,
+    }
 }
 
 #[derive(Clone)]
@@ -463,6 +474,10 @@ async fn compaction_preserves_tool_pairs_original_request_steering_and_recent_im
     assert!(run(&client, 20, true).await.0.is_ok());
     let requests = client.0.requests.lock().unwrap();
     assert!(requests.iter().any(is_checkpoint));
+    assert!(
+        !requests.iter().any(is_cached_checkpoint),
+        "a history with screenshots is summarized from a transcript"
+    );
     let mut saw_recent_images = false;
     for request in requests.iter().filter(|request| !is_checkpoint(request)) {
         assert_complete_tool_pairs(request);
@@ -648,39 +663,121 @@ async fn a_checkpoint_that_never_arrives_does_not_hold_the_turn_back() {
 }
 
 #[tokio::test]
-async fn a_failed_checkpoint_stops_the_turn_only_when_nothing_else_frees_context() {
+async fn a_failed_checkpoint_at_the_hard_limit_folds_without_a_model_and_the_turn_goes_on() {
     let mut client = Client::new(large_rounds(12));
     client.0.fail_checkpoint = true;
     let (answer, bridge) = run(&client, 20, true).await;
     assert!(answer.unwrap().contains("Verified every page."));
     assert_eq!(bridge.calls.load(Ordering::Relaxed), 12);
 
-    let mut client = Client::new(vec![call("call-0", "list_apps", json!({}))]);
+    let mut client = Client::new(vec![
+        call("call-0", "list_apps", json!({})),
+        text("Answered from the shortened record."),
+    ]);
     client.0.fail_checkpoint = true;
     let surface = PlatformSurface::Orchestrator;
     let (answer, bridge) =
         run_conversation(&client, 20, false, surface, None, long_talk(34), None).await;
-    assert!(answer.unwrap().contains("task is unfinished"));
-    assert_eq!(bridge.calls.load(Ordering::Relaxed), 0);
-    assert!(is_checkpoint(
-        client.0.requests.lock().unwrap().last().unwrap()
-    ));
+    let answer = answer.unwrap();
+    assert!(answer.contains("Answered from the shortened record."));
+    assert!(!answer.contains("task is unfinished"));
+    assert_eq!(bridge.calls.load(Ordering::Relaxed), 1);
+    let requests = client.0.requests.lock().unwrap();
+    // The cached request came back empty, so the transcript was tried once before the fold.
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| is_checkpoint(request))
+            .count(),
+        2
+    );
+    let reply = requests
+        .iter()
+        .find(|request| !is_checkpoint(request))
+        .unwrap();
+    assert_complete_tool_pairs(reply);
+    let reply = serde_json::to_string(reply).unwrap();
+    assert!(reply.contains("Written without a model"));
+    assert!(reply.contains("Inspect every page and save the report."));
+    assert!(reply.contains("message-33"));
+    assert!(!reply.contains("message-0 "));
 }
 
 #[tokio::test]
-async fn a_stop_at_the_hard_limit_leaves_recorded_artifacts_and_remaining_work_in_saved_reply() {
+async fn a_checkpoint_without_images_rereads_the_turn_request_with_tools_unusable() {
+    let mut rounds: Vec<_> = (0..10)
+        .map(|index| {
+            let mut round = text(&format!(
+                "Inspecting page {index}. {}",
+                "detail ".repeat(4_000)
+            ));
+            round.extend(call(&format!("call-{index}"), "list_apps", json!({})));
+            round
+        })
+        .collect();
+    rounds.push(text("Verified every page."));
+    let client = Client::new(rounds);
+    let answer = run(&client, 20, false).await.0.unwrap();
+    assert!(answer.contains("Verified every page."));
+    let requests = client.0.requests.lock().unwrap();
+    let cached: Vec<_> = requests
+        .iter()
+        .filter(|request| is_cached_checkpoint(request))
+        .collect();
+    assert!(
+        !cached.is_empty(),
+        "no checkpoint reused the turn's request"
+    );
+    for request in cached {
+        assert_complete_tool_pairs(request);
+        let system = request.preamble.clone().or_else(|| {
+            request
+                .chat_history
+                .iter()
+                .find_map(|message| match message {
+                    rig::message::Message::System { content } => Some(content.clone()),
+                    _ => None,
+                })
+        });
+        assert!(system.is_some_and(|system| system.starts_with("Help the owner.")));
+        assert!(!request.tools.is_empty());
+        assert!(matches!(
+            request.tool_choice,
+            Some(rig::message::ToolChoice::None)
+        ));
+    }
+    let last = serde_json::to_string(requests.last().unwrap()).unwrap();
+    assert!(last.contains("untrusted_historical_checkpoint"));
+    assert!(last.contains("workspace/report.txt"));
+}
+
+#[tokio::test]
+async fn a_checkpoint_that_keeps_failing_never_ends_the_turn() {
     let mut rounds = vec![call("plan", UPDATE_WORK_PLAN_TOOL, plan(0, "active"))];
     rounds.extend((0..10).map(|index| {
         let mut round = text(&"Inspecting pages. ".repeat(1_500));
         round.extend(call(&format!("call-{index}"), "list_apps", json!({})));
         round
     }));
+    rounds.push(call(
+        "plan-done",
+        UPDATE_WORK_PLAN_TOOL,
+        plan(1, "completed"),
+    ));
+    rounds.push(text("Report saved to workspace/report.txt."));
     let mut client = Client::new(rounds);
     client.0.fail_checkpoint = true;
-    let answer = run(&client, 20, false).await.0.unwrap();
-    assert!(answer.contains("task is unfinished"));
-    assert!(answer.contains("Report path: workspace/report.txt"));
-    assert!(answer.contains("Unfinished: Inspect pages and verify the report"));
+    let (answer, bridge) = run(&client, 20, false).await;
+    let answer = answer.unwrap();
+    assert!(answer.contains("Report saved to workspace/report.txt."));
+    assert!(!answer.contains("task is unfinished"));
+    assert_eq!(bridge.calls.load(Ordering::Relaxed), 10);
+    let requests = client.0.requests.lock().unwrap();
+    for request in requests.iter().filter(|request| !is_checkpoint(request)) {
+        assert_complete_tool_pairs(request);
+    }
+    let last = serde_json::to_string(requests.last().unwrap()).unwrap();
+    assert!(last.contains("Written without a model"));
 }
 
 #[tokio::test]

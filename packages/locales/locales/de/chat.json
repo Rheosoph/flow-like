@@ -304,6 +304,8 @@
 		"requested": "Angefordert",
 		"previousTurn": "Vorheriger Durchlauf",
 		"contextLimit": "Kontextgrenze",
+		"withoutModel": "Ohne Modell",
+		"failureCode": "Grund: {{code}}",
 		"title": "Cache und Kontext",
 		"promptCache": "Prompt-Cache",
 		"cacheHint": "Eingabe, die der Modellanbieter wiederverwendet hat.",

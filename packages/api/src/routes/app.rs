@@ -42,6 +42,7 @@ pub mod publication;
 pub mod roles;
 pub mod route;
 pub mod sales;
+pub mod showcase;
 pub mod team;
 pub mod template;
 pub mod wasm_catalog;
@@ -103,6 +104,15 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/{app_id}/settings/bots",
             patch(internal::change_bot_access::change_bot_access),
+        )
+        .route(
+            "/{app_id}/settings/showcase",
+            get(showcase::settings::get_showcase_settings)
+                .put(showcase::settings::put_showcase_settings),
+        )
+        .route(
+            "/{app_id}/showcase",
+            get(showcase::get_showcase::get_showcase),
         )
         .route("/{app_id}/fork", post(fork::online_fork::online_fork))
         .route(

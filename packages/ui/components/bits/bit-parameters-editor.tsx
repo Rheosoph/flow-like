@@ -1,7 +1,5 @@
 "use client";
 
-import { isHostedAudio } from "../../lib/bit/hosted-audio";
-import { HostedAudioConfiguration } from "./hosted-audio-configuration";
 import {
 	Braces,
 	ChevronDown,
@@ -14,7 +12,9 @@ import {
 	supportsCustomRequestParams,
 	withCustomRequestParams,
 } from "../../lib/bit/custom-request-params";
+import { isHostedAudio } from "../../lib/bit/hosted-audio";
 import { isHostedImageGeneration } from "../../lib/bit/hosted-image-generation";
+import { HOSTING_REGION_KEY } from "../../lib/bit/hosting-region";
 import { isHostedLlmProviderName } from "../../lib/bit/local-model-filter";
 import { IBitTypes } from "../../lib/schema/bit/bit";
 import { useBackend } from "../../state/backend-state";
@@ -25,9 +25,11 @@ import { Textarea } from "../ui/textarea";
 import { EditorField, EditorSection, StringList } from "./bit-editor-fields";
 import { record } from "./bit-editor-model";
 import { ForecastingConfiguration } from "./forecasting-configuration";
+import { HostedAudioConfiguration } from "./hosted-audio-configuration";
 import { HostedEmbeddingConfiguration } from "./hosted-embedding-configuration";
 import { HostedImageGenerationConfiguration } from "./hosted-image-generation-configuration";
 import { HostedPricing } from "./hosted-model-pricing";
+import { HostingRegionField } from "./hosting-region-field";
 import { SystemOneConfiguration } from "./systemone-configuration";
 
 const LABELS: Record<string, string> = {
@@ -473,12 +475,32 @@ export function BitParametersEditor({
 				params: withCustomRequestParams(providerParams, value),
 			},
 		});
-	const showPricing =
+	const hostedProvider = isHostedLlmProviderName(
+		typeof providerName === "string" ? providerName : undefined,
+	);
+	const showPricing = scope === "admin" && isModel && hostedProvider;
+	const remoteEmbedding =
+		[IBitTypes.Embedding, IBitTypes.ImageEmbedding].includes(bitType) &&
+		(params.remote != null || providerParams.remote != null);
+	const showHostingRegion =
 		scope === "admin" &&
-		isModel &&
-		isHostedLlmProviderName(
-			typeof providerName === "string" ? providerName : undefined,
-		);
+		!isForecasting &&
+		(hostedProvider ||
+			remoteEmbedding ||
+			Object.hasOwn(params, HOSTING_REGION_KEY));
+	const sectionKeys =
+		showHostedImage || showHostedAudio
+			? ["provider", "pricing"]
+			: isSystemOne
+				? ["provider", "context_length", "pricing"]
+				: showHostedEmbedding
+					? ["remote", "pricing"]
+					: showPricing
+						? ["pricing"]
+						: [];
+	const hiddenKeys = showHostingRegion
+		? [...sectionKeys, HOSTING_REGION_KEY]
+		: sectionKeys;
 	return (
 		<ProviderScope.Provider value={scope}>
 			<EditorSection
@@ -585,6 +607,9 @@ export function BitParametersEditor({
 						{showPricing && (
 							<HostedPricing parameters={params} onChange={onChange} />
 						)}
+						{showHostingRegion && (
+							<HostingRegionField parameters={params} onChange={onChange} />
+						)}
 						{isModel && !Object.hasOwn(params, "context_length") && (
 							<Button
 								variant="outline"
@@ -628,17 +653,7 @@ export function BitParametersEditor({
 								value={params}
 								onChange={onChange}
 								path="parameter"
-								hiddenKeys={
-									showHostedImage || showHostedAudio
-										? ["provider", "pricing"]
-										: isSystemOne
-											? ["provider", "context_length", "pricing"]
-											: showHostedEmbedding
-												? ["remote", "pricing"]
-												: showPricing
-													? ["pricing"]
-													: []
-								}
+								hiddenKeys={hiddenKeys}
 							/>
 						) : (
 							<div className="rounded-lg border border-dashed p-5 text-sm text-muted-foreground">

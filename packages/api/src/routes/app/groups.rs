@@ -17,7 +17,7 @@ use crate::{
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::app::connection::{
-        AppMetaPreview, app_meta_lookup,
+        AppMetaPreview, AppSight, app_meta_lookup,
         graph::{presign_media, presign_media_under},
         notify_app_admins,
     },
@@ -236,10 +236,53 @@ pub(crate) fn group_meta_as_app_meta(
         .collect()
 }
 
+/// A member the suite names to everyone who may see the suite: its anchor app, and an app
+/// whose membership is active, which takes that app's own admins or a connection it took part
+/// in (see [`resolve_member_status`]).
+fn is_confirmed_member(member: &app_group_member::Model) -> bool {
+    member.kind == AppGroupMemberKind::Primary || member.status == AppGroupMemberStatus::Active
+}
+
+/// Whether `viewer` is told the name, description and icon of `member`'s app. An invited app
+/// that has not accepted is named only to those who could see it anyway: it is listed, the
+/// viewer is in it, or the person who invited it is.
+fn names_member(member: &app_group_member::Model, viewer: Option<&str>, sight: &AppSight) -> bool {
+    is_confirmed_member(member)
+        || sight.shows(&member.app_id, viewer)
+        || sight.has_member(&member.app_id, member.added_by_user_id.as_deref())
+}
+
+/// The member apps `viewer` is told about by name. See [`names_member`].
+async fn named_member_apps(
+    state: &AppState,
+    viewer: Option<&str>,
+    members: &[app_group_member::Model],
+) -> Result<Vec<String>, ApiError> {
+    let invited: Vec<&app_group_member::Model> = members
+        .iter()
+        .filter(|member| !is_confirmed_member(member))
+        .collect();
+    let invited_app_ids: Vec<String> = invited.iter().map(|member| member.app_id.clone()).collect();
+    let people: Vec<String> = invited
+        .iter()
+        .filter_map(|member| member.added_by_user_id.as_deref())
+        .chain(viewer)
+        .map(str::to_string)
+        .collect();
+    let sight = AppSight::load(&state.db, &invited_app_ids, &people).await?;
+    Ok(members
+        .iter()
+        .filter(|member| names_member(member, viewer, &sight))
+        .map(|member| member.app_id.clone())
+        .collect())
+}
+
 /// Builds full `GroupInfo` objects (branding + members) for the given groups,
-/// batching all metadata/presign lookups to avoid N+1 queries.
+/// batching all metadata/presign lookups to avoid N+1 queries. `viewer` is the
+/// person the result is for; it decides which invited apps are named.
 pub(crate) async fn assemble_groups(
     state: &AppState,
+    viewer: Option<&str>,
     groups: Vec<app_group::Model>,
     members: Vec<app_group_member::Model>,
 ) -> Result<Vec<GroupInfo>, ApiError> {
@@ -248,8 +291,8 @@ pub(crate) async fn assemble_groups(
     let group_media =
         presign_media_under(state, "groups", &group_meta_as_app_meta(&group_meta)).await;
 
-    let member_app_ids: Vec<String> = members.iter().map(|m| m.app_id.clone()).collect();
-    let member_meta = app_meta_lookup(state, &member_app_ids).await?;
+    let named_app_ids = named_member_apps(state, viewer, &members).await?;
+    let member_meta = app_meta_lookup(state, &named_app_ids).await?;
     let member_media = presign_media(state, &member_meta).await;
 
     let mut members_by_group: HashMap<String, Vec<app_group_member::Model>> = HashMap::new();
@@ -332,48 +375,66 @@ pub(crate) async fn group_app_ids(
 }
 
 /// Consent resolution for adding an app to a group. Activates immediately when
-/// the caller admins the member app or an active `AppConnection` already links
-/// it to the group; otherwise leaves the membership PENDING for the member
-/// app's owners to accept. Never grants any runtime data-access permission.
+/// the caller admins the member app or an active `AppConnection` the member app
+/// took part in already links it to the group; otherwise leaves the membership
+/// PENDING for the member app's owners to accept. Never grants any runtime
+/// data-access permission.
 pub(crate) async fn resolve_member_status(
     state: &AppState,
     user: &AppUser,
     group_app_ids: &[String],
     member_app_id: &str,
 ) -> Result<AppGroupMemberStatus, ApiError> {
-    use crate::entity::{app_connection, sea_orm_active_enums::AppConnectionStatus};
-    use sea_orm::Condition;
-
     if let Ok(sub) = user.app_permission(member_app_id, state).await
         && sub.has_permission(RolePermissions::Admin)
     {
         return Ok(AppGroupMemberStatus::Active);
     }
 
-    if !group_app_ids.is_empty() {
-        let ids: Vec<String> = group_app_ids.to_vec();
-        let condition = Condition::any()
-            .add(
-                Condition::all()
-                    .add(app_connection::Column::SourceAppId.eq(member_app_id))
-                    .add(app_connection::Column::TargetAppId.is_in(ids.clone())),
-            )
-            .add(
-                Condition::all()
-                    .add(app_connection::Column::TargetAppId.eq(member_app_id))
-                    .add(app_connection::Column::SourceAppId.is_in(ids)),
-            );
-        let connected = app_connection::Entity::find()
-            .filter(app_connection::Column::Status.eq(AppConnectionStatus::Active))
-            .filter(condition)
-            .one(&state.db)
-            .await?;
-        if connected.is_some() {
-            return Ok(AppGroupMemberStatus::Active);
-        }
+    if connected_by_own_choice(&state.db, group_app_ids, member_app_id).await? {
+        return Ok(AppGroupMemberStatus::Active);
     }
 
     Ok(AppGroupMemberStatus::Pending)
+}
+
+/// Whether an active connection the member app took part in links it to one of
+/// `group_app_ids`: it gave one of them access to itself, or it asked one of them for access
+/// and got it. Access a suite app handed to the member unasked says nothing about what the
+/// member wants, so it does not stand in for the member's consent.
+async fn connected_by_own_choice<C: sea_orm::ConnectionTrait>(
+    db: &C,
+    group_app_ids: &[String],
+    member_app_id: &str,
+) -> Result<bool, sea_orm::DbErr> {
+    use crate::entity::{app_connection, sea_orm_active_enums::AppConnectionStatus};
+    use sea_orm::{Condition, QuerySelect};
+
+    if group_app_ids.is_empty() {
+        return Ok(false);
+    }
+    let ids: Vec<String> = group_app_ids.to_vec();
+    let took_part = Condition::any()
+        .add(
+            Condition::all()
+                .add(app_connection::Column::SourceAppId.eq(member_app_id))
+                .add(app_connection::Column::TargetAppId.is_in(ids.clone()))
+                .add(app_connection::Column::RequestedByUserId.is_not_null()),
+        )
+        .add(
+            Condition::all()
+                .add(app_connection::Column::TargetAppId.eq(member_app_id))
+                .add(app_connection::Column::SourceAppId.is_in(ids)),
+        );
+    let connected = app_connection::Entity::find()
+        .select_only()
+        .column(app_connection::Column::Id)
+        .filter(app_connection::Column::Status.eq(AppConnectionStatus::Active))
+        .filter(took_part)
+        .into_tuple::<String>()
+        .one(db)
+        .await?;
+    Ok(connected.is_some())
 }
 
 /// English name of a group for notifications, falling back to a generic label.
@@ -451,4 +512,204 @@ pub(crate) async fn notify_member_app(
         )
     };
     notify_app_admins(state, member_app_id, title, body).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::{ConnectOptions, ConnectionTrait, Database};
+
+    const INVITED: &str = "invited-app";
+
+    fn member(
+        kind: AppGroupMemberKind,
+        status: AppGroupMemberStatus,
+        added_by: Option<&str>,
+    ) -> app_group_member::Model {
+        let now = chrono::Utc::now().fixed_offset();
+        app_group_member::Model {
+            id: "member-1".to_string(),
+            group_id: "suite-1".to_string(),
+            app_id: INVITED.to_string(),
+            position: 1,
+            added_by_user_id: added_by.map(str::to_string),
+            approved_by_user_id: None,
+            created_at: now,
+            updated_at: now,
+            kind,
+            status,
+        }
+    }
+
+    async fn sight(listed: bool, members: &[&str]) -> AppSight {
+        let mut options = ConnectOptions::new("sqlite::memory:");
+        options.max_connections(1);
+        let db = Database::connect(options).await.unwrap();
+        let visibility = if listed { "PUBLIC" } else { "PRIVATE" };
+        for statement in [
+            "ATTACH DATABASE ':memory:' AS public".to_string(),
+            r#"CREATE TABLE public."App" (id TEXT PRIMARY KEY, visibility TEXT NOT NULL)"#.to_string(),
+            r#"CREATE TABLE public."Membership" (id TEXT PRIMARY KEY, "userId" TEXT NOT NULL, "appId" TEXT NOT NULL)"#.to_string(),
+            format!(r#"INSERT INTO public."App" VALUES ('{INVITED}', '{visibility}')"#),
+        ] {
+            db.execute_unprepared(&statement).await.unwrap();
+        }
+        for user in members {
+            db.execute_unprepared(&format!(
+                r#"INSERT INTO public."Membership" VALUES ('{user}', '{user}', '{INVITED}')"#
+            ))
+            .await
+            .unwrap();
+        }
+        let people: Vec<String> = ["viewer", "inviter", "someone-else"]
+            .map(str::to_string)
+            .to_vec();
+        AppSight::load(&db, &[INVITED.to_string()], &people)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_invited_app_is_not_named_until_it_accepts() {
+        let nobody = sight(false, &[]).await;
+        let invited = member(
+            AppGroupMemberKind::Member,
+            AppGroupMemberStatus::Pending,
+            Some("inviter"),
+        );
+        assert!(!is_confirmed_member(&invited));
+        assert!(!names_member(&invited, Some("viewer"), &nobody));
+        assert!(!names_member(&invited, None, &nobody));
+
+        let accepted = member(
+            AppGroupMemberKind::Member,
+            AppGroupMemberStatus::Active,
+            Some("inviter"),
+        );
+        let anchor = member(
+            AppGroupMemberKind::Primary,
+            AppGroupMemberStatus::Active,
+            None,
+        );
+        for confirmed in [&accepted, &anchor] {
+            assert!(names_member(confirmed, None, &nobody));
+        }
+    }
+
+    #[tokio::test]
+    async fn an_invited_app_is_named_to_those_who_see_it_anyway() {
+        let invited = member(
+            AppGroupMemberKind::Member,
+            AppGroupMemberStatus::Pending,
+            Some("inviter"),
+        );
+        assert!(names_member(&invited, None, &sight(true, &[]).await));
+        assert!(names_member(
+            &invited,
+            Some("viewer"),
+            &sight(false, &["viewer"]).await
+        ));
+        assert!(names_member(
+            &invited,
+            Some("viewer"),
+            &sight(false, &["inviter"]).await
+        ));
+        assert!(!names_member(
+            &invited,
+            Some("viewer"),
+            &sight(false, &["someone-else"]).await
+        ));
+    }
+
+    #[tokio::test]
+    async fn only_a_connection_the_member_took_part_in_stands_for_its_consent() {
+        let mut options = ConnectOptions::new("sqlite::memory:");
+        options.max_connections(1);
+        let db = Database::connect(options).await.unwrap();
+        for statement in [
+            "ATTACH DATABASE ':memory:' AS public",
+            r#"CREATE TABLE public."AppConnection" (id TEXT PRIMARY KEY, "sourceAppId" TEXT NOT NULL, "targetAppId" TEXT NOT NULL, status TEXT NOT NULL, "requestedByUserId" TEXT)"#,
+            r#"INSERT INTO public."AppConnection" VALUES
+                ('c1', 'handed-access', 'suite', 'ACTIVE', NULL),
+                ('c2', 'asked-and-got', 'suite', 'ACTIVE', 'asker'),
+                ('c3', 'suite', 'gave-access', 'ACTIVE', NULL),
+                ('c4', 'still-asking', 'suite', 'PENDING', 'asker'),
+                ('c5', 'suite', 'being-asked', 'PENDING', 'suite-admin'),
+                ('c6', 'asked-elsewhere', 'other-suite', 'ACTIVE', 'asker')"#,
+        ] {
+            db.execute_unprepared(statement).await.unwrap();
+        }
+        let suite = ["suite".to_string(), "suite-member".to_string()];
+        for (member_app, consented) in [
+            ("handed-access", false),
+            ("asked-and-got", true),
+            ("gave-access", true),
+            ("still-asking", false),
+            ("being-asked", false),
+            ("asked-elsewhere", false),
+            ("unconnected", false),
+        ] {
+            assert_eq!(
+                connected_by_own_choice(&db, &suite, member_app)
+                    .await
+                    .unwrap(),
+                consented,
+                "{member_app}"
+            );
+        }
+        assert!(
+            !connected_by_own_choice(&db, &[], "asked-and-got")
+                .await
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn a_suite_view_is_built_for_its_viewer_and_an_invitation_opens_no_suite() {
+        let assemble = include_str!("groups.rs")
+            .split_once("pub(crate) async fn assemble_groups(")
+            .expect("assemble_groups exists")
+            .1;
+        let assemble = assemble
+            .split_once("\n}\n")
+            .map_or(assemble, |(body, _)| body);
+        assert!(assemble.contains("named_member_apps(state, viewer, &members)"));
+        assert!(assemble.contains("app_meta_lookup(state, &named_app_ids)"));
+        assert_eq!(assemble.matches("app_meta_lookup(").count(), 1);
+        for (name, source, handler) in [
+            (
+                "list_groups",
+                include_str!("groups/crud.rs"),
+                "pub async fn list_groups(",
+            ),
+            (
+                "get_user_groups",
+                include_str!("../user/groups.rs"),
+                "pub async fn get_user_groups(",
+            ),
+        ] {
+            let body = source
+                .split_once(handler)
+                .unwrap_or_else(|| panic!("{name} exists"))
+                .1;
+            let body = body.split_once("\n}\n").map_or(body, |(body, _)| body);
+            let active_only = body
+                .find("app_group_member::Column::Status.eq(AppGroupMemberStatus::Active)")
+                .unwrap_or_else(|| {
+                    panic!("{name} lists only suites the app is an active member of")
+                });
+            let assembled = body
+                .find("assemble_groups(")
+                .unwrap_or_else(|| panic!("{name} assembles its suites"));
+            assert!(active_only < assembled, "{name}");
+        }
+        let store = include_str!("../store.rs");
+        assert_eq!(store.matches("assemble_groups(&state, None, ").count(), 2);
+        assert_eq!(
+            store
+                .matches("filter_public_members(&state, members)")
+                .count(),
+            2
+        );
+    }
 }

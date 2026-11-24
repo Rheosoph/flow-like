@@ -750,6 +750,10 @@ pub struct CompactionStats {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
+    /// Why a failed reduction failed, as a short code without provider text, which can carry
+    /// private details.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]

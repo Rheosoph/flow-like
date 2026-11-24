@@ -101,18 +101,15 @@ const MAX_PLATFORM_TOOL_INLINE_BASE64_CHARS: usize =
 const CONTEXT_CHECKPOINT_STEP: &str = "context_checkpoint";
 
 /// A held checkpoint's step text while it is written, once written, and once it failed.
-fn checkpoint_step_texts(hold: context::Hold) -> [&'static str; 3] {
-    match hold {
-        context::Hold::Full => [
-            "Summarizing earlier steps so the work can continue",
-            "Earlier steps summarized",
-            "Could not summarize earlier steps",
-        ],
-        context::Hold::Requested => [
-            "Compacting the earlier conversation",
-            "Earlier conversation compacted",
-            "Could not compact the earlier conversation",
-        ],
+fn checkpoint_step_text(hold: context::Hold, waited: Option<context::Waited>) -> &'static str {
+    use context::{Hold, Waited};
+    match (hold, waited) {
+        (Hold::Full, None) => "Summarizing earlier steps so the work can continue",
+        (Hold::Full, Some(Waited::Summarized)) => "Earlier steps summarized",
+        (Hold::Full, Some(_)) => "Earlier steps shortened without a summary",
+        (Hold::Requested, None) => "Compacting the earlier conversation",
+        (Hold::Requested, Some(Waited::Summarized)) => "Earlier conversation compacted",
+        (Hold::Requested, Some(_)) => "Could not compact the earlier conversation",
     }
 }
 
@@ -1622,6 +1619,13 @@ impl PlatformCopilot {
                 session_stats.merge(&usage);
             }
         }
+        // The provider caches the turn's request. A summary asked for at its end reads that cache,
+        // unless it would send other thinking settings, which some providers key the cache on.
+        let continuation =
+            (thinking == model_context.checkpoint_thinking).then(|| context::Continuation {
+                system: system_prompt.clone(),
+                tools: tool_definitions.clone(),
+            });
         // A resumed run's history is its saved working context, not the conversation as passed.
         let mut compaction = context::Compaction::open(
             context::ContextBudget::for_window(model_context.window_tokens),
@@ -1632,6 +1636,7 @@ impl PlatformCopilot {
                 .filter(|_| long_running && !resumed),
             &mut current_history,
         );
+        compaction.set_continuation(continuation);
         if self.compaction_requested && !resumed {
             compaction.request();
         }
@@ -1799,62 +1804,55 @@ impl PlatformCopilot {
                             model_context.window_tokens,
                             fixed.estimated_tokens,
                             reserved_output_tokens,
+                            session_stats
+                                .context
+                                .as_ref()
+                                .map_or(1.0, context::estimate_scale),
                         ));
                         compaction
                             .collect(&mut current_history, &facts, &mut session_stats)
                             .await;
                         // The checkpoint is written beside the turn. Only a history that is still at the
                         // hard limit after its stale tool results were shortened, or a fold the
-                        // person asked for, holds the request back.
+                        // person asked for, holds the request back. A checkpoint that fails at the
+                        // hard limit is replaced by a shortened record, so the turn goes on.
                         if let Some(hold) = compaction.start(
                             completion_client,
                             &model_name,
                             &mut current_history,
+                            &facts,
                             || work_plan.context(),
                             &mut session_stats,
                         ) {
-                            let [writing, written, failed] = checkpoint_step_texts(hold);
                             if let Some(callback) = &on_token {
                                 callback(plan_step_frame(
                                     format!("checkpoint_{iteration}"),
-                                    writing.into(),
+                                    checkpoint_step_text(hold, None).into(),
                                     PlanStepStatus::InProgress,
                                     CONTEXT_CHECKPOINT_STEP,
                                 ));
                             }
-                            let preserved = context::cancellable(
+                            let waited = context::cancellable(
                                 &bridge,
-                                compaction.wait(&mut current_history, &facts, &mut session_stats),
+                                compaction.wait(
+                                    hold,
+                                    &mut current_history,
+                                    &facts,
+                                    &mut session_stats,
+                                ),
                             )
                             .await?;
                             if let Some(callback) = &on_token {
                                 callback(plan_step_frame(
                                     format!("checkpoint_{iteration}"),
-                                    if preserved.is_ok() { written } else { failed }.into(),
-                                    if preserved.is_ok() {
-                                        PlanStepStatus::Completed
-                                    } else {
+                                    checkpoint_step_text(hold, Some(waited)).into(),
+                                    if waited == context::Waited::Failed {
                                         PlanStepStatus::Failed
+                                    } else {
+                                        PlanStepStatus::Completed
                                     },
                                     CONTEXT_CHECKPOINT_STEP,
                                 ));
-                            }
-                            if let Err(error) = &preserved
-                                && hold == context::Hold::Requested
-                            {
-                                tracing::warn!(
-                                    "Requested conversation compaction failed: {error:#}"
-                                );
-                            } else if let Err(error) = preserved {
-                                tracing::warn!("Long-running bot checkpoint failed: {error:#}");
-                                let notice = "\n\nI stopped because I could not preserve the working context for the next steps. The task is unfinished; actions already completed have not been repeated.";
-                                full_response.push_str(notice);
-                                if let Some(callback) = &on_token {
-                                    callback(notice.into());
-                                }
-                                answer_closed = true;
-                                stop_reason = Some(WorkStopReason::Blocked);
-                                break;
                             }
                         }
                     }

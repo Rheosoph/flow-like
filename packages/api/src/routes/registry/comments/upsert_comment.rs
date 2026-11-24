@@ -33,7 +33,7 @@ pub struct CommentResponse {
     put,
     path = "/registry/package/{package_id}/comments",
     tag = "package-comments",
-    description = "Create or update a review for a WASM package. One review per user per package.",
+    description = "Create or update a review for a WASM package. One review per user per package. A private package takes reviews only from the people it is shared with.",
     params(
         ("package_id" = String, Path, description = "Package ID")
     ),
@@ -41,6 +41,7 @@ pub struct CommentResponse {
     responses(
         (status = 200, description = "Comment upserted", body = CommentResponse),
         (status = 401, description = "Unauthorized"),
+        (status = 403, description = "The package is private and not shared with you"),
         (status = 404, description = "Package not found")
     ),
     security(
@@ -63,10 +64,7 @@ pub async fn upsert_comment(
         .sub()
         .map_err(|_| ApiError::unauthorized("Authentication required"))?;
 
-    wasm_package::Entity::find_by_id(&package_id)
-        .one(&state.db)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
+    super::ensure_reviewable(&state.db, &user, &package_id).await?;
 
     let new_rating = body.rating.clamp(1, 5);
 

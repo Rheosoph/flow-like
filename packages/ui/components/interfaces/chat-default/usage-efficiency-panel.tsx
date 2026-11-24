@@ -48,6 +48,8 @@ export function UsageEfficiencyPanel({ data }: { data: UsageEfficiency }) {
 			return t("usageEfficiency.requested", "Requested");
 		if (trigger === "reused" || trigger === "reuse" || trigger === "carry")
 			return t("usageEfficiency.previousTurn", "Previous turn");
+		if (trigger === "fallback")
+			return t("usageEfficiency.withoutModel", "Without a model");
 		return t("usageEfficiency.contextLimit", "Context threshold");
 	};
 
@@ -256,6 +258,13 @@ export function UsageEfficiencyPanel({ data }: { data: UsageEfficiency }) {
 											{statusLabel(event.status)}
 										</span>
 									</div>
+									{event.status === "failed" && event.error && (
+										<p className="text-[11px] text-muted-foreground">
+											{t("usageEfficiency.failureCode", "Reason: {{code}}", {
+												code: event.error,
+											})}
+										</p>
+									)}
 									<div className="flex flex-wrap items-baseline justify-between gap-2">
 										<span className="text-sm tabular-nums">
 											{number(event.before_tokens)}{" "}

@@ -75,9 +75,13 @@ export interface IForkPreviewResponse {
 	max_file_count: number;
 	/** Whether the fork fits both caps *after* the owner's policy is applied. */
 	within_limits: boolean;
-	/** The source owner's policy. Display-only for the forker. */
-	fork_policy: IForkPolicy;
-	size_breakdown: IForkSizeBreakdown;
+	/**
+	 * The source owner's policy. Display-only for the forker. Absent when the
+	 * caller can neither fork the app nor see it, and on hubs that predate it.
+	 */
+	fork_policy?: IForkPolicy;
+	/** Absent under the same conditions as `fork_policy`. */
+	size_breakdown?: IForkSizeBreakdown;
 	/** Bytes actually copied once the policy is applied. */
 	selected_size_bytes: number;
 	/** Objects actually copied once the policy is applied. */

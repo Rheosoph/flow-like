@@ -64,6 +64,22 @@ pub(super) async fn event_connection(
         .transpose()
 }
 
+/// The connection of `event` when that event belongs to `app`.
+pub(super) async fn app_event_connection(
+    state: &AppState,
+    app: &str,
+    event: &str,
+) -> Result<Option<(Connection, i32)>, ApiError> {
+    let row = Row::find_by_statement(sql(
+        r#"SELECT "data","revision" FROM "TeamsBotConnection" WHERE "eventId"=$1 AND "appId"=$2"#,
+        vec![event.into(), app.into()],
+    ))
+    .one(&state.db)
+    .await?;
+    row.map(|row| Ok((decode(state, &row.data)?, row.revision)))
+        .transpose()
+}
+
 pub(super) async fn insert_connection(
     state: &AppState,
     value: &Connection,

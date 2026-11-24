@@ -1993,6 +1993,7 @@
 	"rows": "",
 	"runAQueryToSeeResults": "クエリを実行して結果を表示",
 	"runError": "",
+	"runEuHosted": "",
 	"runFatal": "",
 	"runHosted": "",
 	"runId": "",

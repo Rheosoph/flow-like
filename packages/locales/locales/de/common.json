@@ -1372,6 +1372,8 @@
 	"hostedStt": "Gehostete STT",
 	"hostedTierOnly": "Die API steuert vorgelagerte Endpunkte, Anmeldedaten und Anfrage-Header.",
 	"hostingAndDevices": "Hosting und Geräte",
+	"hostingRegionEu": "EU",
+	"hostingRegionEuTitle": "In der EU gehostet: Anfragen an dieses Modell werden in Rechenzentren in der EU verarbeitet.",
 	"hourshAgo": "vor {{hours}} Std.",
 	"hourshWindow": "Fenster {{hours}}h",
 	"hoursOfMaterial": "Stunden Material",

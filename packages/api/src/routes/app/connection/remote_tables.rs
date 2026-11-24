@@ -43,7 +43,8 @@ pub async fn get_remote_tables(
     Extension(user): Extension<AppUser>,
     Path((app_id, target_app_id)): Path<(String, String)>,
 ) -> Result<Json<Vec<String>>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
+    let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
+    super::ensure_connected_app_reads_data(&user, &permission)?;
 
     let connection = app_connection::Entity::find()
         .filter(

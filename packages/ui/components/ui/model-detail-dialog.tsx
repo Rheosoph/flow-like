@@ -51,6 +51,7 @@ import {
 import {
 	type Deployment,
 	DeploymentBadge,
+	HostingRegionBadge,
 	MODALITY,
 	ModalityFlow,
 	ProviderGlyph,
@@ -328,6 +329,10 @@ export function ModelDetailDialog({
 						</DialogDescription>
 						<div className="mt-2.5 flex flex-wrap items-center gap-1.5">
 							<DeploymentBadge kind={deployment.kind} />
+							<HostingRegionBadge
+								bit={displayBit}
+								className="h-5.5 gap-1 rounded-md px-2 text-[11px] font-semibold"
+							/>
 							<ModalityFlow type={displayBit.type} />
 							<ModelRatingBadge rating={rating} type={displayBit.type} />
 							{isInProfile && (

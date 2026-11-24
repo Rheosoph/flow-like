@@ -1012,12 +1012,15 @@ pub fn purchase_confirmation(
                 {receipt_html}
             </td>
         </tr>"##,
-        package_name = package_name,
+        package_name = escape_html(package_name),
         info_card = info_card(
             "Order Summary",
             vec![
-                ("Package", package_name.to_string()),
-                ("Amount", format!("{} {}", price_display, currency)),
+                ("Package", escape_html(package_name)),
+                (
+                    "Amount",
+                    escape_html(&format!("{} {}", price_display, currency))
+                ),
                 ("Status", "✓ Paid".to_string()),
             ]
         ),
@@ -1110,5 +1113,22 @@ mod security_tests {
             !cta_button("Click", "https://example.com/\" onclick=\"alert(1)")
                 .contains("\" onclick=")
         );
+    }
+
+    #[test]
+    fn purchase_confirmation_escapes_the_package_name_in_html_only() {
+        let name = "Tools & <a href=\"https://evil.example\">more</a>";
+        let (html, text) =
+            purchase_confirmation(name, "https://example.com/store", "9.99", "EUR", None);
+        assert!(!html.contains(name));
+        assert_eq!(
+            html.matches(
+                "Tools &amp; &lt;a href=&quot;https://evil.example&quot;&gt;more&lt;/a&gt;"
+            )
+            .count(),
+            2
+        );
+        assert!(html.contains("9.99 EUR"));
+        assert!(text.contains(name));
     }
 }

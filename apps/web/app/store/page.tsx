@@ -1,16 +1,22 @@
 "use client";
 
 import {
+	ABOUT_DOM_ID,
 	AboutSection,
 	AppReviewsSection,
 	HeroSkeleton,
+	REVIEWS_DOM_ID,
+	ShowcaseCapabilities,
+	ShowcaseNav,
 	StoreEmptyState,
 	StoreForkButton,
 	StoreHero,
 	StoreRecommendations,
+	StoreShowcase,
 	TextEditor,
 	exploreHref,
 	legacyAppsExploreTarget,
+	useAppShowcase,
 	useStoreData,
 } from "@flow-like/flow-like-ui";
 import { MarketplaceCheckoutDialog } from "@flow-like/flow-like-ui/components/payments/checkout-dialog";
@@ -50,6 +56,7 @@ export default function Page() {
 		onJoinOrRequest,
 		refetchAppData,
 	} = useStoreData(id, router, EVENT_CONFIG);
+	const showcase = useAppShowcase(id);
 	const handledPurchaseRef = useRef<string | null>(null);
 
 	useEffect(() => {
@@ -160,6 +167,11 @@ export default function Page() {
 				onSettings={onSettings}
 				onBuy={onBuy}
 				onJoinOrRequest={onJoinOrRequest}
+				capabilities={
+					showcase ? (
+						<ShowcaseCapabilities app={appData} showcase={showcase} />
+					) : null
+				}
 				actionsExtra={
 					appData.allow_forking ? (
 						<StoreForkButton
@@ -172,16 +184,27 @@ export default function Page() {
 				}
 			/>
 
+			{showcase && <ShowcaseNav app={appData} showcase={showcase} />}
+
 			<div className="max-w-5xl mx-auto w-full px-6 md:px-10 pt-8 pb-12 space-y-10">
-				<AboutSection app={appData} meta={metaData} />
+				<div id={ABOUT_DOM_ID} className="scroll-mt-16 space-y-10">
+					<AboutSection app={appData} meta={metaData} />
 
-				{metaData?.long_description && (
-					<div className="leading-relaxed">
-						<TextEditor initialContent={metaData.long_description} isMarkdown />
-					</div>
-				)}
+					{metaData?.long_description && (
+						<div className="leading-relaxed">
+							<TextEditor
+								initialContent={metaData.long_description}
+								isMarkdown
+							/>
+						</div>
+					)}
+				</div>
 
-				<AppReviewsSection appId={id} onReviewChanged={refetchAppData} />
+				{showcase && <StoreShowcase app={appData} showcase={showcase} />}
+
+				<div id={REVIEWS_DOM_ID} className="scroll-mt-16">
+					<AppReviewsSection appId={id} onReviewChanged={refetchAppData} />
+				</div>
 
 				<StoreRecommendations excludeAppId={id} />
 			</div>

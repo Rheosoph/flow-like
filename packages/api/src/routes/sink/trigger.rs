@@ -2079,7 +2079,7 @@ pub async fn trigger_http(
                 Json(TriggerResponse {
                     triggered: false,
                     run_id: Some(run_id),
-                    message: format!("Failed to create run record: {}", e),
+                    message: "Failed to create run record".to_string(),
                 }),
             )
                 .into_response());
@@ -3529,6 +3529,21 @@ async fn is_token_revoked(db: &sea_orm::DatabaseConnection, jti: &str) -> Result
     }
 }
 
+/// Refuses a sink service token an admin revoked. Every route a sink service calls asks this:
+/// the lists of schedules and sink configurations hold every app's trigger settings.
+async fn ensure_not_revoked(
+    db: &sea_orm::DatabaseConnection,
+    claims: &SinkTriggerClaims,
+) -> Result<(), ApiError> {
+    if let Some(jti) = &claims.jti
+        && is_token_revoked(db, jti).await?
+    {
+        tracing::warn!(jti = %jti, "Attempted use of revoked sink token");
+        return Err(ApiError::unauthorized("Token has been revoked"));
+    }
+    Ok(())
+}
+
 /// POST /sink/trigger/async
 ///
 /// Service-to-service trigger endpoint for internal sink services (cron, discord bot, telegram bot, etc.)
@@ -3597,14 +3612,7 @@ pub async fn trigger_service(
         .as_deref()
         .ok_or_else(|| ApiError::internal_error(anyhow!("SINK_SECRET not configured")))?;
     let claims = validate_sink_trigger_jwt(token, sink_secret)?;
-
-    // Check if token has been revoked (if jti is present)
-    if let Some(ref jti) = claims.jti
-        && is_token_revoked(&state.db, jti).await?
-    {
-        tracing::warn!(jti = %jti, "Attempted use of revoked sink token");
-        return Err(ApiError::unauthorized("Token has been revoked"));
-    }
+    ensure_not_revoked(&state.db, &claims).await?;
 
     // Check if this JWT is allowed to trigger this sink type
     if !claims.sink_types.contains(&request.sink_type) {
@@ -3925,6 +3933,7 @@ pub async fn get_cron_sinks(
         .as_deref()
         .ok_or_else(|| ApiError::internal_error(anyhow!("SINK_SECRET not configured")))?;
     let claims = validate_sink_trigger_jwt(token, sink_secret)?;
+    ensure_not_revoked(&state.db, &claims).await?;
 
     // Only allow tokens with cron access to list schedules
     if !claims.sink_types.contains(&"cron".to_string()) {
@@ -4038,6 +4047,7 @@ pub async fn get_sink_configs(
         .as_deref()
         .ok_or_else(|| ApiError::internal_error(anyhow!("SINK_SECRET not configured")))?;
     let claims = validate_sink_trigger_jwt(token, sink_secret)?;
+    ensure_not_revoked(&state.db, &claims).await?;
 
     // Only allow tokens with access to the requested sink type
     if !claims.sink_types.contains(&query.sink_type)
@@ -4494,6 +4504,24 @@ mod tests {
                 skip.matches(".await").count(),
                 1,
                 "{name}: a skip records and writes nothing"
+            );
+        }
+    }
+
+    /// A revoked sink service token is refused before any sink row is read, on the trigger and
+    /// on both lists: the lists return every app's schedules and trigger settings.
+    #[test]
+    fn every_sink_service_route_refuses_a_revoked_token() {
+        let source = include_str!("trigger.rs");
+        for name in ["trigger_service", "get_cron_sinks", "get_sink_configs"] {
+            in_order(
+                handler(source, name),
+                name,
+                &[
+                    "validate_sink_trigger_jwt(",
+                    "ensure_not_revoked(&state.db, &claims).await?",
+                    "event_sink::Entity::find()",
+                ],
             );
         }
     }

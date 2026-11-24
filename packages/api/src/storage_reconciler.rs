@@ -7,9 +7,9 @@ use std::{future::ready, sync::Arc, time::Duration};
 
 use flow_like_file_accounting::{apply_batch, measurement_sequencer, reconcile};
 use flow_like_storage::Path;
+use flow_like_types::tokio::task::JoinHandle;
 use futures::TryStreamExt;
 use sea_orm::{ConnectionTrait, Statement};
-use tokio::task::JoinHandle;
 
 use crate::{error::ApiError, interval_lease, state::AppState};
 
@@ -98,9 +98,9 @@ pub fn spawn_storage_reconciler(state: AppState) -> Option<JoinHandle<()>> {
         tracing::info!("Storage reconciler disabled via {INTERVAL_ENV}=0");
         return None;
     };
-    Some(tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(interval);
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    Some(flow_like_types::tokio::spawn(async move {
+        let mut ticker = flow_like_types::tokio::time::interval(interval);
+        ticker.set_missed_tick_behavior(flow_like_types::tokio::time::MissedTickBehavior::Delay);
         ticker.tick().await;
         loop {
             ticker.tick().await;

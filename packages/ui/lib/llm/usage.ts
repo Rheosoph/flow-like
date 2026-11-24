@@ -34,6 +34,8 @@ export interface ICompactionUsage {
 	duration_ms: number;
 	model?: string | null;
 	usage?: IModelUsage | null;
+	/** Why a failed compaction failed, as a short code. */
+	error?: string | null;
 }
 
 export interface ILLMUsageStats {
@@ -168,7 +170,7 @@ export function readUsageStat(data: unknown): IChatUsageStat | null {
 			)
 				return [];
 			const event = { ...value };
-			cleanOptional(event, ["after_tokens"], ["model"]);
+			cleanOptional(event, ["after_tokens"], ["model", "error"]);
 			if (event.usage != null) {
 				const usage = modelUsage(event.usage);
 				if (usage) event.usage = usage;

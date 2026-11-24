@@ -9,7 +9,7 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use flow_like::{bit::Bit, utils::http::HTTPClient};
+use flow_like::bit::Bit;
 use flow_like_types::create_id;
 use sea_orm::{ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, sea_query::OnConflict};
 use serde_json::from_value;
@@ -144,7 +144,7 @@ pub async fn get_with_dependencies(
 async fn fetch_dependencies(bit: &Bit, state: &AppState) -> flow_like_types::Result<Vec<Bit>> {
     let mut bits = vec![bit.clone()];
     let self_domain = state.platform_config.domain.clone();
-    let http_client = HTTPClient::new_without_refetch();
+    let http_client = crate::credentials::server_hub_client(&state.platform_config)?;
     let http_client = Arc::new(http_client);
     let mut hubs: HashMap<String, flow_like::hub::Hub> = HashMap::new();
 
