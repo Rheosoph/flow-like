@@ -450,7 +450,7 @@ describe("desktop cards", () => {
 			}),
 		});
 		await lookupSettled("free-pkg");
-		expect(calls[0]).toEqual({ access: "library", limit: 100 });
+		expect(calls[0]).toEqual({ access: "library", limit: 48, offset: 0 });
 		expect(calls[1]).toMatchObject({ ids: ["free-pkg"] });
 		const bought = card("bought-pkg");
 		expect(bought.textContent).toContain("Bought");
@@ -569,11 +569,68 @@ describe("desktop cards", () => {
 		expect(uninstall).toBeDefined();
 		const start = log.length;
 		if (uninstall) await click(uninstall);
+		expect(log).not.toContain("uninstall:free-pkg");
+		await until(
+			() => body().textContent?.includes("Uninstall free-pkg?") ?? false,
+			"the uninstall confirmation",
+		);
+		const confirm = [
+			...body().querySelectorAll<HTMLElement>('[role="alertdialog"] button'),
+		].find((element) => element.textContent?.trim() === "Uninstall");
+		expect(confirm).toBeDefined();
+		if (confirm) await click(confirm);
 		expect(log).toContain("uninstall:free-pkg");
 		await until(() => {
 			const after = log.slice(start);
 			return after.includes("installed") && after.includes("owned");
 		}, "the installed and library refetch");
+	});
+});
+
+describe("pagination", () => {
+	test("loads the library page by page instead of stopping at one page", async () => {
+		const calls: { limit?: number; offset?: number }[] = [];
+		const all = Array.from({ length: 60 }, (_, index) =>
+			summary(`pkg-${String(index).padStart(2, "0")}`, { viewerPermission: 4 }),
+		);
+		await mount({
+			signedIn: true,
+			registry: {
+				...webRegistry([]),
+				getOwnedPackages: async (filters: {
+					limit?: number;
+					offset?: number;
+				}) => {
+					calls.push(filters);
+					const offset = filters.offset ?? 0;
+					return {
+						packages: all.slice(offset, offset + (filters.limit ?? 0)),
+						totalCount: all.length,
+						offset,
+						limit: filters.limit ?? 0,
+					};
+				},
+			},
+		});
+		await until(
+			() => host.querySelectorAll("[data-library-package]").length > 0,
+			"the first page",
+		);
+		const pager = () => host.querySelector<HTMLElement>("[data-library-pager]");
+		expect(host.querySelectorAll("[data-library-package]").length).toBe(48);
+		expect(pager()?.textContent).toContain("48 of 60 loaded");
+
+		const loadMore = buttonsOf(pager()).find(
+			(element) => element.textContent?.trim() === "Load more",
+		);
+		expect(loadMore).toBeDefined();
+		if (loadMore) await click(loadMore);
+		await until(
+			() => host.querySelectorAll("[data-library-package]").length === 60,
+			"the second page",
+		);
+		expect(calls.map((call) => call.offset)).toEqual([0, 48]);
+		expect(pager()).toBeNull();
 	});
 });
 

@@ -815,12 +815,21 @@ pub(super) async fn execute(
             Ok(json!({"status":"ok","table_name":table,"index_name":name}))
         }
         "optimize" => {
-            db.write(
-                operation,
-                json!({"keep_versions":boolean(args,"keep_versions","keepVersions",true)}),
-            )
-            .await?;
-            Ok(json!({"status":"ok","table_name":table}))
+            let mut payload =
+                json!({"keep_versions":boolean(args,"keep_versions","keepVersions",true)});
+            if let Some(days) = args
+                .get("older_than_days")
+                .or_else(|| args.get("olderThanDays"))
+                .and_then(Value::as_u64)
+            {
+                payload["older_than_days"] = json!(days);
+            }
+            let cleanup = db.write(operation, payload).await?;
+            let mut result = json!({"status":"ok","table_name":table});
+            if !cleanup.is_null() {
+                result["cleanup"] = cleanup;
+            }
+            Ok(result)
         }
         "add_column" => {
             let column = &args["column_definition"];

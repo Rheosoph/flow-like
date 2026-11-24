@@ -24,6 +24,100 @@
 			"title": "You're set."
 		}
 	},
+	"intro": {
+		"app": {
+			"amount": "Amount",
+			"body": "An app is a finished tool, here a table of invoices with a summary. Use the ones your team made, take more from Explore, or build your own.",
+			"due": "Due",
+			"dueSoon": "Due this week",
+			"kicker": "The bot uses an app",
+			"lookInside": "Look inside the app",
+			"name": "Invoice Inbox",
+			"new": "New",
+			"title": "Post did it with an app.",
+			"total": "Total",
+			"updatedBy": "Updated by Post",
+			"vendor": "Vendor"
+		},
+		"ask": {
+			"body": "Tell a bot what you need, the way you'd tell a colleague. Bots are teammates with a name, a face and a job, and they ask before anything that matters.",
+			"hint": "Try it: press Send, then answer Post.",
+			"kicker": "You ask",
+			"title": "It starts with a sentence."
+		},
+		"back": "Back",
+		"chat": {
+			"allow": "Allow",
+			"allowed": "Allowed for this job",
+			"approvalBody": "Read only, only for this job. You can take it back any time.",
+			"approvalTitle": "Let Post read the Finance inbox?",
+			"decline": "Not now",
+			"declined": "Not allowed",
+			"found": "Found 4 new invoices. I put them in Invoice Inbox for you.",
+			"placeholder": "Message Post",
+			"reading": "Reading Finance inbox",
+			"reply": "Happy to. First, I need to read your Finance inbox.",
+			"request": "Every Monday, send me a summary of new invoices.",
+			"role": "Handles your mail",
+			"sample": "Okay, I'll leave your inbox alone. Here's a sample in Invoice Inbox instead.",
+			"send": "Send",
+			"typing": "Post is typing"
+		},
+		"choose": {
+			"body": "You've seen it from the top and from the inside. Pick a side; the guide comes along in the real app.",
+			"inside": "Go inside · Flows",
+			"kicker": "Your turn",
+			"or": "or go inside",
+			"stay": "Stay up here · You, bots, apps",
+			"title": "Where do you want to start?"
+		},
+		"flow": {
+			"boardLabel": "The Invoice Inbox flow: every Monday it reads the Finance inbox, extracts each invoice, adds it to the table and sends a summary.",
+			"body": "The steps, drawn on a board. You never have to open it, but it's always there to read. And it runs where you choose: on this device, on your own servers or in the cloud.",
+			"kicker": "Inside the app",
+			"kind": {
+				"ai": "AI",
+				"data": "Data",
+				"event": "Event",
+				"mail": "Mail"
+			},
+			"node": {
+				"extract": "Extract invoice",
+				"read": "Read Finance inbox",
+				"schedule": "Every Monday 8:00",
+				"store": "Add to table",
+				"summary": "Send summary"
+			},
+			"ran": {
+				"cloud": "Ran in the cloud · 3.8 s · 5 steps",
+				"device": "Ran on this device · 3.8 s · 5 steps",
+				"server": "Ran on your servers · 3.8 s · 5 steps"
+			},
+			"title": "Inside every app is a flow."
+		},
+		"next": "Next",
+		"progress": "{{current}} of {{total}} · {{kicker}}",
+		"rail": {
+			"app": "An app",
+			"appHint": "does the routine",
+			"bot": "A bot",
+			"botHint": "does it, asks first",
+			"flow": "A flow",
+			"flowHint": "what the app is made of",
+			"you": "You",
+			"youHint": "say what you need"
+		},
+		"replay": "Replay intro",
+		"sample": "A sample. Nothing here touches your real inbox.",
+		"skip": "Skip to the question",
+		"stageLabel": "The example",
+		"where": {
+			"cloud": "Cloud",
+			"device": "This device",
+			"label": "Where it runs",
+			"server": "Your servers"
+		}
+	},
 	"menu": {
 		"tour": "Show me around"
 	},

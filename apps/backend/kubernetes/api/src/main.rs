@@ -97,6 +97,10 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         flow_like_api::bot_host::WorkerConfig::from_env(),
     );
     let _package_license_sweeper = flow_like_api::package_license::spawn_sweeper(state.clone());
+    let _storage_reconciler =
+        flow_like_api::storage_reconciler::spawn_storage_reconciler(state.clone());
+    let _table_maintenance =
+        flow_like_api::table_maintenance::spawn_table_maintenance(state.clone());
     let _execution_usage_rollup = flow_like_api::execution_usage_rollup::spawn(state.clone());
     let _device_certificate_sweeper =
         flow_like_api::spawn_device_certificate_sweeper(state.clone());

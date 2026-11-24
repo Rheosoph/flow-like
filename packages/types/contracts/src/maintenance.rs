@@ -18,6 +18,8 @@ pub enum MaintenanceJob {
     RegressionSuites,
     DeletionQueue,
     Payments,
+    TableMaintenance,
+    CapacityRepair,
 }
 
 impl MaintenanceJob {
@@ -30,6 +32,8 @@ impl MaintenanceJob {
             Self::RegressionSuites => "regression_suites",
             Self::DeletionQueue => "deletion_queue",
             Self::Payments => "payments",
+            Self::TableMaintenance => "table_maintenance",
+            Self::CapacityRepair => "capacity_repair",
         }
     }
 }
@@ -44,6 +48,8 @@ pub enum MaintenanceRunRequest {
     RegressionSuites,
     DeletionQueue,
     Payments,
+    TableMaintenance,
+    CapacityRepair,
 }
 
 impl MaintenanceRunRequest {
@@ -56,6 +62,8 @@ impl MaintenanceRunRequest {
             Self::RegressionSuites => MaintenanceJob::RegressionSuites,
             Self::DeletionQueue => MaintenanceJob::DeletionQueue,
             Self::Payments => MaintenanceJob::Payments,
+            Self::TableMaintenance => MaintenanceJob::TableMaintenance,
+            Self::CapacityRepair => MaintenanceJob::CapacityRepair,
         }
     }
 }
@@ -70,6 +78,8 @@ impl From<MaintenanceJob> for MaintenanceRunRequest {
             MaintenanceJob::RegressionSuites => Self::RegressionSuites,
             MaintenanceJob::DeletionQueue => Self::DeletionQueue,
             MaintenanceJob::Payments => Self::Payments,
+            MaintenanceJob::TableMaintenance => Self::TableMaintenance,
+            MaintenanceJob::CapacityRepair => Self::CapacityRepair,
         }
     }
 }
@@ -135,6 +145,28 @@ pub struct PaymentsMaintenanceResult {
     pub deferred: u32,
 }
 
+/// One pass over recently written Lance tables: those whose manifest was checked, the
+/// maintenance actually applied, failures, and tables left for the next pass by the budget.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableMaintenanceResult {
+    pub evaluated: u64,
+    pub compacted: u64,
+    pub reindexed: u64,
+    pub failed: u64,
+    pub deferred: u64,
+}
+
+/// A run of the on-demand payer storage repair. `complete` is false when the time budget ran out
+/// first; running the job again continues, since the repair is idempotent.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapacityRepairResult {
+    pub checked: u64,
+    pub repaired: u64,
+    pub complete: bool,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "job", content = "result", rename_all = "snake_case")]
 pub enum MaintenanceRunResponse {
@@ -145,6 +177,8 @@ pub enum MaintenanceRunResponse {
     RegressionSuites(RegressionSuitesMaintenanceResult),
     DeletionQueue(DeletionQueueMaintenanceResult),
     Payments(PaymentsMaintenanceResult),
+    TableMaintenance(TableMaintenanceResult),
+    CapacityRepair(CapacityRepairResult),
 }
 
 #[cfg(test)]
@@ -184,6 +218,46 @@ mod tests {
             deferred: 1,
         });
         let wire = json!({"job":"payments","result":{"inboxCompleted":2,"effectsCompleted":3,"deferred":1}});
+        assert_eq!(serde_json::to_value(response).unwrap(), wire);
+        assert_eq!(
+            serde_json::from_value::<MaintenanceRunResponse>(wire).unwrap(),
+            response
+        );
+    }
+
+    #[test]
+    fn table_maintenance_round_trips() {
+        let request: MaintenanceRunRequest =
+            serde_json::from_value(json!({"job":"table_maintenance"})).unwrap();
+        assert_eq!(request, MaintenanceRunRequest::TableMaintenance);
+        assert_eq!(request.job().as_str(), "table_maintenance");
+        let response = MaintenanceRunResponse::TableMaintenance(TableMaintenanceResult {
+            evaluated: 5,
+            compacted: 2,
+            reindexed: 1,
+            failed: 1,
+            deferred: 3,
+        });
+        let wire = json!({"job":"table_maintenance","result":{"evaluated":5,"compacted":2,"reindexed":1,"failed":1,"deferred":3}});
+        assert_eq!(serde_json::to_value(response).unwrap(), wire);
+        assert_eq!(
+            serde_json::from_value::<MaintenanceRunResponse>(wire).unwrap(),
+            response
+        );
+    }
+
+    #[test]
+    fn capacity_repair_round_trips() {
+        let request: MaintenanceRunRequest =
+            serde_json::from_value(json!({"job":"capacity_repair"})).unwrap();
+        assert_eq!(request.job().as_str(), "capacity_repair");
+        let response = MaintenanceRunResponse::CapacityRepair(CapacityRepairResult {
+            checked: 4,
+            repaired: 1,
+            complete: true,
+        });
+        let wire =
+            json!({"job":"capacity_repair","result":{"checked":4,"repaired":1,"complete":true}});
         assert_eq!(serde_json::to_value(response).unwrap(), wire);
         assert_eq!(
             serde_json::from_value::<MaintenanceRunResponse>(wire).unwrap(),

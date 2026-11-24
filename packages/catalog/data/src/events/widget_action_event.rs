@@ -220,7 +220,7 @@ impl NodeLogic for WidgetActionEvent {
         }
 
         if !board.page_ids.is_empty() {
-            match board.load_pages_for_metadata(None).await {
+            match board.load_pages_for_metadata_shared().await {
                 Ok(loaded) => {
                     let mut definitions: BTreeMap<String, Value> = BTreeMap::new();
                     let mut contracts = BTreeMap::new();
@@ -250,7 +250,7 @@ impl NodeLogic for WidgetActionEvent {
                         board_id: &board.id,
                         node_id: &node.id,
                     };
-                    for page in loaded.pages {
+                    for page in &loaded.pages {
                         if let Ok(page) = flow_like_types::json::to_value(page) {
                             infer_page(&page, &target, &definitions, &contracts, &mut inference);
                         }

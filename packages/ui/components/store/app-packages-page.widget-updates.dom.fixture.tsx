@@ -164,6 +164,9 @@ const backend = {
 		installPackage,
 	},
 	boardState: { getCatalog: async () => [], getBoard: async () => {} },
+	roleState: {
+		getOwnRole: async () => ({ permissions: 1, is_owner: true }),
+	},
 	pageState: {
 		getPagesAuthoritative: async () =>
 			pages.map((stored) => ({

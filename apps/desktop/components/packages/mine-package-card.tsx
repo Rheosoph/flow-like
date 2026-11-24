@@ -208,6 +208,11 @@ function useVersionLabel(entry: MineEntry): string {
 			version: entry.liveVersion,
 		});
 	}
+	if (entry.registry?.status === PackageStatus.Rejected) {
+		return t("versionRejected", "v{{version}} · rejected", {
+			version: entry.liveVersion,
+		});
+	}
 	return entry.registry?.status === PackageStatus.PendingReview
 		? t("versionInReview", "v{{version}} in review", {
 				version: entry.liveVersion,
@@ -222,6 +227,11 @@ function useStateStat(entry: MineEntry): { label: string; className: string } {
 		return { label: t("rejected", "Rejected"), className: "text-destructive" };
 	if (status === PackageStatus.Disabled)
 		return { label: t("disabled", "Disabled"), className: "text-destructive" };
+	if (status === PackageStatus.Deprecated)
+		return {
+			label: t("deprecated", "Deprecated"),
+			className: "text-muted-foreground",
+		};
 	if (entry.state === "local-only")
 		return { label: t("draft", "Draft"), className: "text-muted-foreground" };
 	if (entry.state === "unpublished-changes")
@@ -332,6 +342,15 @@ function StatusMessage({ entry }: { entry: MineEntry }) {
 							"disabledOnlyAnOwnerCanRestore",
 							"Disabled — only an Owner can restore it",
 						)}
+			</StatusText>
+		);
+	if (entry.registry?.status === PackageStatus.Rejected)
+		return (
+			<StatusText icon={AlertCircle} className="font-medium text-destructive">
+				{t(
+					"registryMineRejectedLine",
+					"Review rejected — see Releases for the feedback",
+				)}
 			</StatusText>
 		);
 	if (issue?.kind === "lint")
@@ -452,7 +471,7 @@ function CheckoutsPopover({
 										</CheckoutTag>
 									)}
 									{checkout.matchesLive && (
-										<CheckoutTag className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+										<CheckoutTag className="bg-good-bg text-good">
 											{t("equalsLive", "= live")}
 										</CheckoutTag>
 									)}
@@ -897,7 +916,7 @@ export function MinePackageCard({
 				}
 				className={cn(
 					entry.state === "not-on-this-machine" &&
-						"border-dashed border-violet-500/50",
+						"border-dashed border-tab-purple/50",
 					entry.state === "disabled" && "border-dashed border-destructive/40",
 				)}
 				actions={

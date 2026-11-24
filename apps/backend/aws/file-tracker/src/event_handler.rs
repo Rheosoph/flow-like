@@ -1,4 +1,3 @@
-use crate::accounting::{self, Failure, Observation};
 use aws_lambda_events::{
     s3::{S3Event, S3EventRecord},
     sqs::{BatchItemFailure, SqsBatchResponse, SqsEvent, SqsMessage},
@@ -6,6 +5,7 @@ use aws_lambda_events::{
 use aws_sdk_dynamodb::{types::AttributeValue, Client as DynamoClient};
 use aws_sdk_s3::Client as S3Client;
 use flow_like_db::DbDialect;
+use flow_like_file_accounting::{self as accounting, Failure, Observation};
 use lambda_runtime::{tracing, Error, LambdaEvent};
 use sea_orm::{DatabaseConnection, DbErr};
 use std::collections::BTreeMap;
@@ -222,31 +222,19 @@ fn observation(
         .name
         .clone()
         .ok_or("Object bucket is missing")?;
-    let (user_id, app_id) = parse_key_identity(&key)?;
-    if let Some(dataset) = accounting::dataset_prefix(&key) {
-        return Ok(Observation {
-            bucket,
-            key: dataset.to_owned(),
-            app_id,
-            user_id,
-            sequencer: dataset_sequencer.to_owned(),
-            legacy_size: 0,
-        });
-    }
-    let sequencer = event
-        .s3
-        .object
-        .sequencer
-        .as_deref()
-        .ok_or("Object sequencer is missing")?;
-    Ok(Observation {
-        bucket,
-        key,
-        app_id,
-        user_id,
-        sequencer: accounting::normalize_sequencer(sequencer)?,
-        legacy_size: 0,
-    })
+    let object_sequencer = match accounting::dataset_prefix(&key) {
+        Some(_) => String::new(),
+        None => accounting::normalize_sequencer(
+            event
+                .s3
+                .object
+                .sequencer
+                .as_deref()
+                .ok_or("Object sequencer is missing")?,
+        )?,
+    };
+    accounting::observe(&bucket, &key, &object_sequencer, dataset_sequencer)
+        .ok_or_else(|| "Invalid object key identity".into())
 }
 
 async fn head_size(s3: S3Client, bucket: String, key: String) -> Result<i64, DbErr> {
@@ -367,17 +355,6 @@ fn legacy_item_size(
     Ok(size)
 }
 
-fn parse_key_identity(key: &str) -> Result<(Option<String>, String), Error> {
-    let parts: Vec<&str> = key.split('/').collect();
-    match parts.as_slice() {
-        ["apps", app, ..] if !app.is_empty() => Ok((None, (*app).into())),
-        ["users", user, "apps", app, ..] if !user.is_empty() && !app.is_empty() => {
-            Ok((Some((*user).into()), (*app).into()))
-        }
-        _ => Err("Invalid object key identity".into()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,20 +452,6 @@ mod tests {
             decode("media/image+%281%29+copy%2B1.jpg").unwrap(),
             "media/image (1) copy+1.jpg"
         );
-    }
-
-    #[test]
-    fn object_identity_requires_the_expected_prefix() {
-        assert_eq!(
-            parse_key_identity("apps/a/file").unwrap(),
-            (None, "a".into())
-        );
-        assert_eq!(
-            parse_key_identity("users/u/apps/a/file").unwrap(),
-            (Some("u".into()), "a".into())
-        );
-        assert!(parse_key_identity("users/u/other/a/file").is_err());
-        assert!(parse_key_identity("apps//file").is_err());
     }
 
     #[test]

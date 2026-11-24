@@ -431,7 +431,7 @@ function WorkspaceIcon({
 			) : iconSrc ? (
 				<img src={iconSrc} alt="" className="size-full object-cover" />
 			) : (
-				<span className="flex size-full items-center justify-center font-mono text-lg font-bold text-white/70">
+				<span className="flex size-full items-center justify-center font-mono text-lg font-bold text-background/70">
 					{getPackageInitials(name)}
 				</span>
 			)}
@@ -948,6 +948,7 @@ function WorkspaceShell({
 						<TabsContent value="releases">
 							<ReleasesTab
 								entry={managed}
+								displayName={name}
 								isOwner={full.isOwner}
 								canInstall={!!desktop?.canInstall}
 								publishAction={local?.primaryAction}

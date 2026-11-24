@@ -174,6 +174,21 @@ export interface IBoardRunRequirements {
 	wasm_package_ids: string[];
 	wasm_package_permissions: Record<string, string[]>;
 	instantiates_widgets: boolean;
+	/** The board has runtime-configured or secret variables a local run may have to ask for. */
+	has_prompt_variables?: boolean;
+}
+
+export interface IBoardRunRequirementsOptions {
+	/** Read the board as held locally, without first pulling a newer hub revision. */
+	readonly skipHubRefresh?: boolean;
+}
+
+export interface IExecuteBoardOptions {
+	/**
+	 * The caller shows this board live-synced (the editor), so the run uses the board as the user
+	 * sees it instead of waiting on a hub refresh first.
+	 */
+	readonly liveBoard?: boolean;
 }
 
 /** One queued batch, described well enough for a user to decide whether to discard it. */
@@ -315,6 +330,7 @@ export interface IBoardState {
 		appId: string,
 		boardId: string,
 		version?: [number, number, number],
+		options?: IBoardRunRequirementsOptions,
 	): Promise<IBoardRunRequirements>;
 
 	/** Undelivered local edits for one board. Absent on backends without an offline queue. */
@@ -348,6 +364,7 @@ export interface IBoardState {
 		eventId?: (id: string) => void,
 		cb?: (event: IIntercomEvent[]) => void,
 		skipConsentCheck?: boolean,
+		options?: IExecuteBoardOptions,
 	): Promise<ILogMetadata | undefined>;
 
 	executeBoardRemote?(

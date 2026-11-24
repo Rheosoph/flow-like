@@ -325,6 +325,7 @@ import {
 	useAssistantSurface,
 } from "../../state/assistant-surface";
 import { useBackend } from "../../state/backend-state";
+import type { IExecuteBoardOptions } from "../../state/backend-state/board-state";
 import { useBoardQualityStore } from "../../state/board-quality-state";
 import {
 	boardTestSummary,
@@ -384,6 +385,8 @@ import { WasmSandboxWarningDialog } from "./wasm-sandbox-warning-dialog";
 const MAIN_DOCUMENT: IEditorDocument = { kind: "board", fileId: MAIN_FILE_ID };
 const MAIN_TAB_KEY = documentKey(MAIN_DOCUMENT);
 const OPEN_TABS_STORAGE_PREFIX = "flow-board-tabs";
+/** The editor holds its board live-synced: runs start from it without a hub refresh. */
+const LIVE_BOARD_RUN: IExecuteBoardOptions = { liveBoard: true };
 
 /** Canvas nodes and comments that can be moved between modules. Functions move from their editor. */
 const MOVABLE_SELECTION_TYPES = new Set([
@@ -897,7 +900,9 @@ function FlowBoardContent({
 	selectorDataRef.current.loadElements = loadElementOptions;
 	selectorDataRef.current.loadBits = loadBitOptions;
 	const app = useInvoke(backend.appState.getApp, backend.appState, [appId]);
-	const { addRun, removeRun, pushUpdate } = useRunExecutionStore();
+	const addRun = useRunExecutionStore((state) => state.addRun);
+	const removeRun = useRunExecutionStore((state) => state.removeRun);
+	const pushUpdate = useRunExecutionStore((state) => state.pushUpdate);
 	const {
 		screenToFlowPosition,
 		getViewport,
@@ -1679,12 +1684,10 @@ function FlowBoardContent({
 	);
 
 	// Execution presence
-	const executionRuns = useRunExecutionStore((state) => state.runs);
 	const { remoteExecutingNodeIds, remoteExecutions, broadcastRunOutcome } =
 		useExecutionPresence({
 			awareness,
 			sub,
-			runs: executionRuns,
 			boardId,
 		});
 	// Peers get "Anna's run finished — 1 error": a closed status and a count.
@@ -2342,6 +2345,7 @@ function FlowBoardContent({
 						pushUpdate(firstItem.runId, runUpdates);
 					},
 					skipConsentCheck,
+					LIVE_BOARD_RUN,
 				);
 			} catch (error) {
 				console.warn("Failed to execute board", error);
@@ -2733,6 +2737,8 @@ function FlowBoardContent({
 						}
 						pushUpdate(firstItem.runId, runUpdates);
 					},
+					undefined,
+					LIVE_BOARD_RUN,
 				);
 			} catch (error) {
 				// Same recovery events the Run button dispatches, so consent

@@ -24,6 +24,100 @@
 			"title": "Du bist startklar."
 		}
 	},
+	"intro": {
+		"app": {
+			"amount": "Betrag",
+			"body": "Eine App ist ein fertiges Werkzeug, hier eine Tabelle mit Rechnungen und einer Zusammenfassung. Nutz die Apps deines Teams, hol dir weitere aus Erkunden oder bau deine eigenen.",
+			"due": "Fällig",
+			"dueSoon": "Diese Woche fällig",
+			"kicker": "Der Bot nutzt eine App",
+			"lookInside": "In die App hineinschauen",
+			"name": "Rechnungseingang",
+			"new": "Neu",
+			"title": "Post hat es mit einer App erledigt.",
+			"total": "Summe",
+			"updatedBy": "Von Post aktualisiert",
+			"vendor": "Lieferant"
+		},
+		"ask": {
+			"body": "Sag einem Bot, was du brauchst, so wie du es einer Kollegin sagen würdest. Bots sind Teammitglieder mit Namen, Gesicht und Aufgabe, und sie fragen, bevor sie etwas Wichtiges tun.",
+			"hint": "Probier es aus: Drück auf Senden und antworte Post.",
+			"kicker": "Du fragst",
+			"title": "Es beginnt mit einem Satz."
+		},
+		"back": "Zurück",
+		"chat": {
+			"allow": "Erlauben",
+			"allowed": "Für diese Aufgabe erlaubt",
+			"approvalBody": "Nur lesen, nur für diese Aufgabe. Du kannst es jederzeit zurücknehmen.",
+			"approvalTitle": "Darf Post das Finance-Postfach lesen?",
+			"decline": "Jetzt nicht",
+			"declined": "Nicht erlaubt",
+			"found": "4 neue Rechnungen gefunden. Ich habe sie für dich in den Rechnungseingang gelegt.",
+			"placeholder": "Nachricht an Post",
+			"reading": "Lese das Finance-Postfach",
+			"reply": "Gern. Zuerst muss ich dein Finance-Postfach lesen.",
+			"request": "Schick mir jeden Montag eine Zusammenfassung der neuen Rechnungen.",
+			"role": "Kümmert sich um deine Mails",
+			"sample": "Okay, ich lasse dein Postfach in Ruhe. Hier ist stattdessen ein Beispiel im Rechnungseingang.",
+			"send": "Senden",
+			"typing": "Post schreibt"
+		},
+		"choose": {
+			"body": "Du hast es von oben und von innen gesehen. Such dir eine Seite aus, der Guide begleitet dich in der echten App.",
+			"inside": "Nach innen · Flows",
+			"kicker": "Du bist dran",
+			"or": "oder nach innen",
+			"stay": "Hier oben bleiben · Du, Bots, Apps",
+			"title": "Wo möchtest du anfangen?"
+		},
+		"flow": {
+			"boardLabel": "Der Flow von Rechnungseingang: Jeden Montag liest er das Finance-Postfach, liest jede Rechnung aus, fügt sie zur Tabelle hinzu und schickt eine Zusammenfassung.",
+			"body": "Die Schritte, auf ein Board gezeichnet. Du musst es nie öffnen, aber du kannst es jederzeit nachlesen. Und es läuft, wo du willst: auf diesem Gerät, auf deinen eigenen Servern oder in der Cloud.",
+			"kicker": "In der App",
+			"kind": {
+				"ai": "KI",
+				"data": "Daten",
+				"event": "Event",
+				"mail": "Mail"
+			},
+			"node": {
+				"extract": "Rechnung auslesen",
+				"read": "Finance-Postfach lesen",
+				"schedule": "Jeden Montag 8:00",
+				"store": "Zur Tabelle hinzufügen",
+				"summary": "Zusammenfassung senden"
+			},
+			"ran": {
+				"cloud": "Lief in der Cloud · 3,8 s · 5 Schritte",
+				"device": "Lief auf diesem Gerät · 3,8 s · 5 Schritte",
+				"server": "Lief auf deinen Servern · 3,8 s · 5 Schritte"
+			},
+			"title": "In jeder App steckt ein Flow."
+		},
+		"next": "Weiter",
+		"progress": "{{current}} von {{total}} · {{kicker}}",
+		"rail": {
+			"app": "Eine App",
+			"appHint": "erledigt die Routine",
+			"bot": "Ein Bot",
+			"botHint": "macht es, fragt vorher",
+			"flow": "Ein Flow",
+			"flowHint": "woraus die App besteht",
+			"you": "Du",
+			"youHint": "sagst, was du brauchst"
+		},
+		"replay": "Intro noch mal ansehen",
+		"sample": "Ein Beispiel. Nichts davon berührt dein echtes Postfach.",
+		"skip": "Direkt zur Frage",
+		"stageLabel": "Das Beispiel",
+		"where": {
+			"cloud": "Cloud",
+			"device": "Dieses Gerät",
+			"label": "Wo es läuft",
+			"server": "Deine Server"
+		}
+	},
 	"menu": {
 		"tour": "Rundgang starten"
 	},

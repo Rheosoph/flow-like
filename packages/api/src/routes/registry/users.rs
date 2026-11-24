@@ -1,5 +1,5 @@
 use crate::entity::sea_orm_active_enums::{InvitationStatus, NotificationType};
-use crate::entity::{user, wasm_package_invitation, wasm_package_user};
+use crate::entity::{user, wasm_package, wasm_package_invitation, wasm_package_user};
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::permission::wasm_package_permission::WasmPackagePermission;
@@ -52,6 +52,7 @@ pub struct PackageUserResponse {
 pub struct InvitationResponse {
     pub id: String,
     pub package_id: String,
+    pub package_name: Option<String>,
     pub invitee_id: String,
     pub invited_by_id: String,
     pub permission: i64,
@@ -60,11 +61,79 @@ pub struct InvitationResponse {
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-const AVATAR_CONCURRENCY: usize = 16;
+pub(super) const AVATAR_CONCURRENCY: usize = 16;
+
+/// The public handle and display name of a user, as every package surface shows them.
+pub(super) fn public_identity(u: Option<&user::Model>) -> (Option<String>, Option<String>) {
+    let Some(u) = u else {
+        return (None, None);
+    };
+    (
+        u.preferred_username.as_deref().and_then(public_handle),
+        public_display_name(u.name.as_deref(), None, u.email.as_deref()),
+    )
+}
+
+pub(super) async fn users_by_id(
+    state: &AppState,
+    ids: impl IntoIterator<Item = String>,
+) -> Result<std::collections::HashMap<String, user::Model>, ApiError> {
+    let ids: std::collections::HashSet<String> = ids.into_iter().collect();
+    if ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let users = user::Entity::find()
+        .filter(user::Column::Id.is_in(ids))
+        .all(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
+    Ok(users.into_iter().map(|u| (u.id.clone(), u)).collect())
+}
+
+async fn package_names(
+    state: &AppState,
+    ids: impl IntoIterator<Item = String>,
+) -> Result<std::collections::HashMap<String, String>, ApiError> {
+    let ids: std::collections::HashSet<String> = ids.into_iter().collect();
+    if ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let packages = wasm_package::Entity::find()
+        .filter(wasm_package::Column::Id.is_in(ids))
+        .all(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
+    Ok(packages
+        .into_iter()
+        .filter(|p| !p.name.trim().is_empty())
+        .map(|p| (p.id, p.name))
+        .collect())
+}
+
+/// Invitations and role changes hand out exactly one non-owner role. Owner moves
+/// only through a transfer; Buyer only through a purchase.
+pub(super) fn assignable_role(bits: i64) -> Option<WasmPackagePermission> {
+    let permission = WasmPackagePermission::from_bits(bits)?;
+    (permission == WasmPackagePermission::Maintainer || permission == WasmPackagePermission::User)
+        .then_some(permission)
+}
+
+fn role_rank(permission: i64) -> u8 {
+    let permission = WasmPackagePermission::from_bits_truncate(permission);
+    if permission.contains(WasmPackagePermission::Owner) {
+        0
+    } else if permission.contains(WasmPackagePermission::Maintainer) {
+        1
+    } else if permission.contains(WasmPackagePermission::User) {
+        2
+    } else {
+        3
+    }
+}
 
 /// `user.avatar` is an object-store id, not a URL, so it is signed the same way
 /// `/user/lookup` signs it and honours the same `lookup.avatar` opt-out.
-async fn signed_avatar(state: &AppState, u: Option<&user::Model>) -> Option<String> {
+pub(super) async fn signed_avatar(state: &AppState, u: Option<&user::Model>) -> Option<String> {
     if !state.platform_config.lookup.avatar {
         return None;
     }
@@ -85,26 +154,26 @@ async fn build_user_response(
     u: Option<user::Model>,
 ) -> PackageUserResponse {
     let avatar = signed_avatar(state, u.as_ref()).await;
+    let (username, name) = public_identity(u.as_ref());
     PackageUserResponse {
         id: pu.id,
         user_id: pu.user_id,
-        username: u
-            .as_ref()
-            .and_then(|u| u.preferred_username.as_deref())
-            .and_then(public_handle),
-        name: u
-            .as_ref()
-            .and_then(|u| public_display_name(u.name.as_deref(), None, u.email.as_deref())),
+        username,
+        name,
         avatar,
         permission: pu.permission,
         granted_at: pu.granted_at.to_utc(),
     }
 }
 
-fn build_invitation_response(inv: wasm_package_invitation::Model) -> InvitationResponse {
+fn build_invitation_response(
+    inv: wasm_package_invitation::Model,
+    package_name: Option<String>,
+) -> InvitationResponse {
     InvitationResponse {
         id: inv.id,
         package_id: inv.package_id,
+        package_name,
         invitee_id: inv.invitee_id,
         invited_by_id: inv.invited_by_id,
         permission: inv.permission,
@@ -122,13 +191,17 @@ fn build_invitation_response(inv: wasm_package_invitation::Model) -> InvitationR
 
 fn invitation_notification(
     invitation: &wasm_package_invitation::Model,
+    package_name: Option<&str>,
 ) -> DispatchNotificationInput {
     DispatchNotificationInput {
         notification_priority: Default::default(),
         bot_context: None,
         user_id: invitation.invitee_id.clone(),
         app_id: None,
-        title: format!("You've been invited to package {}", invitation.package_id),
+        title: format!(
+            "You've been invited to package {}",
+            package_name.unwrap_or(&invitation.package_id)
+        ),
         description: Some("Open your invitations to accept or decline.".to_string()),
         icon: Some("mail".to_string()),
         link: Some("/notifications".to_string()),
@@ -185,21 +258,18 @@ pub async fn list_users(
     crate::check_wasm_access!(state, &caller_id, &package_id)
         .ok_or_else(|| ApiError::forbidden("You are not a member of this package"))?;
 
-    let package_users = wasm_package_user::Entity::find()
+    let mut package_users = wasm_package_user::Entity::find()
         .filter(wasm_package_user::Column::PackageId.eq(&package_id))
         .all(&state.db)
         .await
         .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
+    package_users.sort_by(|a, b| {
+        role_rank(a.permission)
+            .cmp(&role_rank(b.permission))
+            .then(a.granted_at.cmp(&b.granted_at))
+    });
 
-    let user_ids: Vec<String> = package_users.iter().map(|pu| pu.user_id.clone()).collect();
-    let users = user::Entity::find()
-        .filter(user::Column::Id.is_in(&user_ids))
-        .all(&state.db)
-        .await
-        .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
-
-    let user_map: std::collections::HashMap<String, user::Model> =
-        users.into_iter().map(|u| (u.id.clone(), u)).collect();
+    let user_map = users_by_id(&state, package_users.iter().map(|pu| pu.user_id.clone())).await?;
 
     let response: Vec<PackageUserResponse> = stream::iter(package_users)
         .map(|pu| {
@@ -246,12 +316,12 @@ pub async fn invite_user(
     let caller_perm = crate::check_wasm_access!(state, &caller_id, &package_id)
         .ok_or_else(|| ApiError::forbidden("You are not a member of this package"))?;
 
-    let target_perm = WasmPackagePermission::from_bits_truncate(request.permission);
-    if target_perm.contains(WasmPackagePermission::Owner) {
-        return Err(ApiError::bad_request(
-            "Cannot invite as Owner. Use permission transfer instead.",
-        ));
-    }
+    let target_perm = assignable_role(request.permission).ok_or_else(|| {
+        ApiError::bad_request(format!(
+            "Invitations grant Maintainer or User, not permission {}. Transfer ownership to make someone Owner.",
+            request.permission
+        ))
+    })?;
     if !caller_perm.can_manage_level(target_perm) {
         return Err(ApiError::forbidden(
             "You cannot invite at this permission level",
@@ -330,7 +400,15 @@ pub async fn invite_user(
         .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?
         .ok_or_else(|| ApiError::internal("Invitation missing after upsert".to_string()))?;
 
-    if let Err(error) = dispatch_notification(&state, invitation_notification(&result)).await {
+    let package_name = package_names(&state, [package_id.clone()])
+        .await?
+        .remove(&package_id);
+    if let Err(error) = dispatch_notification(
+        &state,
+        invitation_notification(&result, package_name.as_deref()),
+    )
+    .await
+    {
         tracing::warn!(
             error = %error,
             invitation_id = %result.id,
@@ -344,7 +422,7 @@ pub async fn invite_user(
             .await;
     }
 
-    Ok(Json(build_invitation_response(result)))
+    Ok(Json(build_invitation_response(result, package_name)))
 }
 
 #[utoipa::path(
@@ -477,8 +555,7 @@ pub async fn update_user_permission(
         .as_ref()
         .ok_or_else(|| ApiError::service_unavailable("WASM registry not configured"))?;
 
-    let new_perm = WasmPackagePermission::from_bits_truncate(request.permission);
-    if new_perm.contains(WasmPackagePermission::Owner) {
+    if request.permission == WasmPackagePermission::Owner.bits() {
         let updated = state
             .transaction(|txn| {
                 let package_id = package_id.clone();
@@ -500,6 +577,13 @@ pub async fn update_user_permission(
         ));
     }
 
+    let new_perm = assignable_role(request.permission).ok_or_else(|| {
+        ApiError::bad_request(format!(
+            "A package role is Owner, Maintainer or User, not permission {}",
+            request.permission
+        ))
+    })?;
+
     let caller_perm = crate::check_wasm_access!(state, &caller_id, &package_id)
         .ok_or_else(|| ApiError::forbidden("You are not a member of this package"))?;
     let target_entry = wasm_package_user::Entity::find()
@@ -509,6 +593,11 @@ pub async fn update_user_permission(
         .await?
         .ok_or_else(|| ApiError::not_found("Target user not found on this package"))?;
     let target_current_perm = WasmPackagePermission::from_bits_truncate(target_entry.permission);
+    if target_current_perm.contains(WasmPackagePermission::Owner) {
+        return Err(ApiError::bad_request(
+            "The Owner keeps the role until ownership is transferred to someone else",
+        ));
+    }
     if !caller_perm.can_manage_level(target_current_perm) {
         return Err(ApiError::forbidden(
             "You cannot manage a user at this permission level",
@@ -598,15 +687,18 @@ pub async fn remove_user(
 
     let target_perm = WasmPackagePermission::from_bits_truncate(target_entry.permission);
 
-    // Owner cannot remove themselves — they must transfer ownership first
-    // or delete the entire package
-    if caller_id == target_user_id && target_perm.contains(WasmPackagePermission::Owner) {
-        return Err(ApiError::bad_request(
-            "Owner cannot remove themselves. Transfer ownership first or delete the package.",
-        ));
-    }
-
-    if !caller_perm.can_manage_level(target_perm) {
+    if caller_id == target_user_id {
+        if target_perm.contains(WasmPackagePermission::Owner) {
+            return Err(ApiError::bad_request(
+                "Owner cannot remove themselves. Transfer ownership first or delete the package.",
+            ));
+        }
+        if target_perm.contains(WasmPackagePermission::Buyer) {
+            return Err(ApiError::bad_request(
+                "A purchase cannot be given up by leaving the package",
+            ));
+        }
+    } else if !caller_perm.can_manage_level(target_perm) {
         return Err(ApiError::forbidden(
             "You cannot remove a user at this permission level",
         ));
@@ -657,9 +749,13 @@ pub async fn list_my_invitations(
         .await
         .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
 
+    let names = package_names(&state, invitations.iter().map(|i| i.package_id.clone())).await?;
     let response: Vec<InvitationResponse> = invitations
         .into_iter()
-        .map(build_invitation_response)
+        .map(|inv| {
+            let name = names.get(&inv.package_id).cloned();
+            build_invitation_response(inv, name)
+        })
         .collect();
 
     Ok(Json(response))
@@ -691,21 +787,66 @@ mod tests {
             (InvitationStatus::Rejected, "rejected"),
             (InvitationStatus::Expired, "expired"),
         ] {
-            let response =
-                serde_json::to_value(build_invitation_response(invitation(status))).unwrap();
+            let response = serde_json::to_value(build_invitation_response(
+                invitation(status),
+                Some("Reports".to_string()),
+            ))
+            .unwrap();
             assert_eq!(response["status"], expected);
             assert_eq!(response["inviteeId"], "recipient");
             assert_eq!(response["packageId"], "acme/reports");
+            assert_eq!(response["packageName"], "Reports");
         }
     }
 
     #[test]
     fn package_invitation_notifies_the_recipient_without_an_app_foreign_key() {
-        let input = invitation_notification(&invitation(InvitationStatus::Pending));
+        let input = invitation_notification(&invitation(InvitationStatus::Pending), None);
         assert_eq!(input.user_id, "recipient");
         assert_eq!(input.app_id, None);
         assert_eq!(input.notification_type, NotificationType::System);
         assert_eq!(input.link.as_deref(), Some("/notifications"));
         assert!(input.title.contains("acme/reports"));
+    }
+
+    #[test]
+    fn package_invitation_notification_names_the_package() {
+        let input = invitation_notification(&invitation(InvitationStatus::Pending), Some("Reports"));
+        assert!(input.title.contains("Reports"));
+        assert!(!input.title.contains("acme/reports"));
+    }
+
+    #[test]
+    fn only_maintainer_and_user_are_assignable() {
+        let maintainer = WasmPackagePermission::Maintainer.bits();
+        let user = WasmPackagePermission::User.bits();
+        assert_eq!(assignable_role(maintainer), Some(WasmPackagePermission::Maintainer));
+        assert_eq!(assignable_role(user), Some(WasmPackagePermission::User));
+        for refused in [
+            0,
+            WasmPackagePermission::Owner.bits(),
+            WasmPackagePermission::Buyer.bits(),
+            maintainer | user,
+            user | WasmPackagePermission::Buyer.bits(),
+            1 << 20,
+        ] {
+            assert_eq!(assignable_role(refused), None, "permission {refused}");
+        }
+    }
+
+    #[test]
+    fn package_people_list_owners_first_then_maintainers_users_buyers() {
+        let mut ranks: Vec<(u8, &str)> = [
+            (WasmPackagePermission::Buyer, "buyer"),
+            (WasmPackagePermission::User, "user"),
+            (WasmPackagePermission::Owner, "owner"),
+            (WasmPackagePermission::Maintainer, "maintainer"),
+        ]
+        .into_iter()
+        .map(|(permission, name)| (role_rank(permission.bits()), name))
+        .collect();
+        ranks.sort();
+        let order: Vec<&str> = ranks.into_iter().map(|(_, name)| name).collect();
+        assert_eq!(order, ["owner", "maintainer", "user", "buyer"]);
     }
 }

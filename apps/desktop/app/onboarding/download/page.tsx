@@ -232,7 +232,7 @@ export default function ProfileCreation() {
 						</div>
 						<button
 							onClick={() => {
-								router.push("/");
+								router.push("/onboarding/done");
 							}}
 							className="border p-2 bg-primary text-primary-foreground hover:bg-background hover:text-foreground transition-all"
 						>

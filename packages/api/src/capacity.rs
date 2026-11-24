@@ -977,6 +977,65 @@ async fn reserve_uploads_in(
     Ok(())
 }
 
+/// Payers whose stored bytes a repair pass checked and changed, and whether it covered them all.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StorageRepair {
+    pub checked: u64,
+    pub repaired: u64,
+    pub complete: bool,
+}
+
+/// Sets every initialized payer's stored bytes to the sum of its retained projects' totals,
+/// the invariant storage accounting keeps. Repairs accounts whose storage deltas were never
+/// applied, as on Azure and GCP before their trackers settled payer capacity. Each payer is
+/// recomputed under its account lock, the lock storage accounting takes before moving a total.
+pub async fn repair_storage_totals(
+    state: &AppState,
+    budget: std::time::Duration,
+) -> Result<StorageRepair, ApiError> {
+    let started = std::time::Instant::now();
+    let mut repair = StorageRepair::default();
+    let mut cursor = String::new();
+    loop {
+        let rows = state.db.query_all_raw(Statement::from_sql_and_values(state.db.get_database_backend(),
+            r#"SELECT "payerId" FROM "AccountCapacity" WHERE initialized = true AND "payerId" > $1 ORDER BY "payerId" LIMIT 100"#,
+            [cursor.clone().into()])).await?;
+        if rows.is_empty() {
+            repair.complete = true;
+            return Ok(repair);
+        }
+        for row in rows {
+            if started.elapsed() >= budget {
+                return Ok(repair);
+            }
+            let payer_id: String = row.try_get("", "payerId")?;
+            let changed = state
+                .transaction(|txn| {
+                    let payer_id = payer_id.clone();
+                    Box::pin(async move { repair_payer_storage(txn, &payer_id).await })
+                })
+                .await?;
+            repair.checked += 1;
+            repair.repaired += u64::from(changed);
+            cursor = payer_id;
+        }
+    }
+}
+
+async fn repair_payer_storage(txn: &DatabaseTransaction, payer_id: &str) -> Result<bool, ApiError> {
+    lock_account(txn, payer_id).await?;
+    let total = txn.query_one_raw(Statement::from_sql_and_values(txn.get_database_backend(),
+        r#"SELECT COALESCE(SUM(GREATEST(a."totalSize",0)),0)::BIGINT AS total FROM "ProjectCapacity" p JOIN "App" a ON a.id=p."appId" WHERE p."payerId"=$1"#,
+        [payer_id.into()])).await?
+        .map(|row| row.try_get::<i64>("", "total"))
+        .transpose()?
+        .unwrap_or(0);
+    let changed = txn.query_one_raw(Statement::from_sql_and_values(txn.get_database_backend(),
+        r#"UPDATE "AccountCapacity" SET "storageBytes"=$2,"updatedAt"=now() WHERE "payerId"=$1 AND "storageBytes"<>$2 RETURNING "payerId""#,
+        [payer_id.into(), total.into()])).await?;
+    Ok(changed.is_some())
+}
+
 /// Bounded reconciliation after grant expiry. A grace period covers uploads that
 /// started while a URL was valid. Unknown storage state retains its reservation.
 /// This is eventual enforcement: S3 cannot revoke a request already in flight.

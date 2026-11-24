@@ -207,7 +207,7 @@ export function PackageDetailUI({
 								{isInstalled ? (
 									<>
 										<div className="flex items-center gap-2 text-sm text-muted-foreground">
-											<Check className="h-4 w-4 text-green-500" />
+											<Check className="h-4 w-4 text-good" />
 											{t(
 												"installedVinstalledversion",
 												"Installed v{{installedVersion}}",
@@ -319,9 +319,9 @@ export function PackageDetailUI({
 												{t("authors", "Authors")}
 											</h4>
 											<div className="flex flex-wrap gap-2">
-												{manifest.authors.map((author, idx) => (
+												{manifest.authors.map((author) => (
 													<div
-														key={idx}
+														key={`${author.name}:${author.email ?? ""}:${author.url ?? ""}`}
 														className="flex items-center gap-1 text-sm"
 													>
 														<User className="h-4 w-4 text-muted-foreground" />
@@ -458,7 +458,7 @@ export function PackageDetailUI({
 										enabled={manifest.permissions.process}
 									/>
 									<PermissionBadge
-										label={`FFI`}
+										label="FFI"
 										enabled={manifest.permissions.ffi}
 									/>
 								</div>

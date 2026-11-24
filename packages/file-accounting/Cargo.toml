@@ -1,0 +1,14 @@
+[package]
+name = "flow-like-file-accounting"
+version = "0.1.0"
+edition = "2024"
+description = "Storage accounting shared by every deployment target: the per-object ledger, Lance dataset accounting, and payer capacity and upload-grant settlement"
+
+[dependencies]
+blake3.workspace = true
+flow-like-db.workspace = true
+sea-orm.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }

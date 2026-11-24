@@ -823,6 +823,76 @@ impl LanceDBVectorStore {
         self.cleanup_versions(older_than_days).await
     }
 
+    /// What routine maintenance would improve, from the latest manifest and index metadata.
+    pub async fn maintenance_needs(&self) -> Result<MaintenanceNeeds> {
+        let table = self.require_table().await?;
+        table.checkout_latest().await?;
+        let dataset = table
+            .dataset()
+            .ok_or_else(|| anyhow!("Table maintenance requires a native Lance table"))?
+            .get()
+            .await?;
+        let fragments = dataset.manifest().fragments.iter().map(|fragment| {
+            let deleted = fragment
+                .deletion_file
+                .as_ref()
+                .and_then(|file| file.num_deleted_rows)
+                .unwrap_or(0);
+            (fragment.physical_rows.unwrap_or(0), deleted)
+        });
+        let compact = fragments_need_compaction(fragments);
+        let mut index = false;
+        for config in table.list_indices().await? {
+            if let Some(stats) = table.index_stats(&config.name).await? {
+                if index_needs_update(stats.num_indexed_rows, stats.num_unindexed_rows) {
+                    index = true;
+                    break;
+                }
+            }
+        }
+        Ok(MaintenanceNeeds { compact, index })
+    }
+
+    /// Compacts and brings indexes up to date as `needs` asks, keeping every version. The
+    /// automatic-cleanup policy older lancedb releases wrote into every table is removed first:
+    /// it would prune history on a maintenance commit, which this never does.
+    pub async fn maintain(&self, needs: MaintenanceNeeds) -> Result<()> {
+        if !needs.any() {
+            return Ok(());
+        }
+        self.remove_legacy_cleanup_policy().await?;
+        let actions = if needs.compact {
+            optimize_actions(true)
+        } else {
+            vec![lancedb::table::OptimizeAction::Index(OptimizeOptions::new())]
+        };
+        self.run_optimize_actions(actions, true).await
+    }
+
+    async fn remove_legacy_cleanup_policy(&self) -> Result<()> {
+        self.ensure_unmanaged("table maintenance")?;
+        self.ensure_writable()?;
+        let table = self.require_table().await?;
+        let Some(wrapper) = table.dataset() else {
+            return Ok(());
+        };
+        wrapper.ensure_mutable()?;
+        wrapper.reload().await?;
+        let mut dataset = wrapper.get().await?.as_ref().clone();
+        let present = LEGACY_CLEANUP_KEYS
+            .into_iter()
+            .filter(|key| dataset.config().contains_key(*key))
+            .collect::<Vec<_>>();
+        if present.is_empty() {
+            return Ok(());
+        }
+        dataset
+            .update_config(present.into_iter().map(|key| (key, None::<&str>)))
+            .await?;
+        wrapper.update(dataset);
+        Ok(())
+    }
+
     /// A shallow clone shares source files. Its retained source tag protects cleanup.
     pub async fn clone_table(&self, target: &str) -> Result<Self> {
         self.ensure_reference_management()?;
@@ -2073,6 +2143,54 @@ fn retention_days(older_than_days: u64) -> Result<Duration> {
     let days =
         i64::try_from(older_than_days).map_err(|_| anyhow!("Retention period is too large"))?;
     Duration::try_days(days).ok_or_else(|| anyhow!("Retention period is too large"))
+}
+
+/// What routine maintenance should do for a table.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MaintenanceNeeds {
+    pub compact: bool,
+    pub index: bool,
+}
+
+impl MaintenanceNeeds {
+    pub fn any(self) -> bool {
+        self.compact || self.index
+    }
+}
+
+/// lancedb's own `stats()` threshold for a small fragment.
+const SMALL_FRAGMENT_ROWS: usize = 100_000;
+const MAINTENANCE_SMALL_FRAGMENTS: usize = 16;
+/// Lance's default `materialize_deletions_threshold`, so a flagged fragment is one compaction
+/// actually rewrites.
+const MAINTENANCE_DELETED_SHARE: f64 = 0.1;
+const MAINTENANCE_UNINDEXED_SHARE: f64 = 0.1;
+const MAINTENANCE_UNINDEXED_ROWS: usize = 50_000;
+
+const LEGACY_CLEANUP_KEYS: [&str; 3] = [
+    "lance.auto_cleanup.interval",
+    "lance.auto_cleanup.older_than",
+    "lance.auto_cleanup.retain_versions",
+];
+
+/// Fragments as (physical rows, deleted rows).
+fn fragments_need_compaction(fragments: impl IntoIterator<Item = (usize, usize)>) -> bool {
+    let mut small = 0;
+    for (physical, deleted) in fragments {
+        if physical > 0 && deleted as f64 > physical as f64 * MAINTENANCE_DELETED_SHARE {
+            return true;
+        }
+        if physical < SMALL_FRAGMENT_ROWS {
+            small += 1;
+        }
+    }
+    small >= MAINTENANCE_SMALL_FRAGMENTS
+}
+
+fn index_needs_update(indexed: usize, unindexed: usize) -> bool {
+    unindexed >= MAINTENANCE_UNINDEXED_ROWS
+        || (unindexed > 0
+            && unindexed as f64 >= (indexed + unindexed) as f64 * MAINTENANCE_UNINDEXED_SHARE)
 }
 
 fn optimize_actions(keep_versions: bool) -> Vec<lancedb::table::OptimizeAction> {

@@ -7,6 +7,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like::{a2ui::widget::Page, flow::board::Board};
+use flow_like_storage::Path as StoragePath;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
@@ -47,23 +48,30 @@ pub async fn get_page_by_route(
     let app = state.master_app(&user.sub()?, &app_id, &state).await?;
     let app_state = state.master_state(&state).await?;
     let store = Board::meta_store(&app_state).await?;
+    let storage_root = StoragePath::from("apps").join(app_id.as_str());
 
     for board_id in app.boards.iter() {
-        if let Ok(board) = state
-            .master_board_shared(&app_id, board_id, &state, None)
-            .await
+        let cached = state.cached_draft_board(&app_id, board_id);
+        let Some(board) = super::cached_page::page_listing(
+            store.clone(),
+            &storage_root,
+            board_id,
+            cached.as_deref(),
+        )
+        .await
+        else {
+            continue;
+        };
+        // Keep manifest/board order authoritative. A long-lived locator can
+        // hide a newly added earlier route, even when its target is unchanged.
+        // Stop reading pages as soon as the first match is found.
+        if let Some(page) =
+            super::cached_page::find_by_route(store.clone(), &board, &params.route).await
         {
-            // Keep manifest/board order authoritative. A long-lived locator can
-            // hide a newly added earlier route, even when its target is unchanged.
-            // Stop reading pages as soon as the first match is found.
-            if let Some(page) =
-                super::cached_page::find_by_route(store.clone(), &board.board, &params.route).await
-            {
-                return Ok(Json(Some(PageWithBoardId {
-                    page,
-                    board_id: Some(board_id.clone()),
-                })));
-            }
+            return Ok(Json(Some(PageWithBoardId {
+                page,
+                board_id: Some(board_id.clone()),
+            })));
         }
     }
 

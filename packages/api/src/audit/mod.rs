@@ -16,6 +16,7 @@ pub mod merkle;
 pub mod record;
 pub mod request;
 pub mod signer;
+pub(crate) mod storage_access;
 pub mod verify;
 pub mod wire;
 pub mod worker;

@@ -276,6 +276,36 @@ test("Page prerun handoff also works without a runtime variables provider", asyn
 	expect(backend.eventState.executeEvent.mock.calls[0]?.[9]).toBe(prepared);
 });
 
+test("a local run reads the board for its variables unless the host ruled them out", async () => {
+	const getEvent = mock(async () => ({ board_version: null }));
+	const getBoard = mock(async () => ({
+		variables: {},
+		execution_mode: "Hybrid",
+	}));
+	const local = { can_execute_locally: true, execution_mode: "Hybrid" };
+	prerunByEvent.set("ruled-out", {
+		...local,
+		has_prompt_variables: false,
+	} as Partial<IPrerunEventResponse>);
+	prerunByEvent.set("unknown", local as Partial<IPrerunEventResponse>);
+	Object.assign(backend.eventState, { alwaysRemote: false, getEvent });
+	Object.assign(backend.boardState, { getBoard });
+	try {
+		await start("app", "ruled-out");
+		expect(getBoard).not.toHaveBeenCalled();
+		expect(getEvent).not.toHaveBeenCalled();
+		await start("app", "unknown");
+		expect(getBoard).toHaveBeenCalledTimes(1);
+		expect(
+			backend.eventState.executeEvent.mock.calls.map(([, eventId]) => eventId),
+		).toEqual(["ruled-out", "unknown"]);
+	} finally {
+		Object.assign(backend.eventState, { alwaysRemote: true });
+		Reflect.deleteProperty(backend.eventState, "getEvent");
+		Reflect.deleteProperty(backend.boardState, "getBoard");
+	}
+});
+
 afterEach(async () => {
 	if (mounted) await act(async () => root.unmount());
 	mounted = false;

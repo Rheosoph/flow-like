@@ -20,6 +20,7 @@ import {
 } from "../../a2ui/micro-widget-policy";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
+import { Skeleton } from "../../ui/skeleton";
 import {
 	Table,
 	TableBody,
@@ -45,6 +46,8 @@ export interface PackageAccessRow {
 	widgets: readonly PackageWidgetEntry[];
 	pinState: PackagePinState;
 	timeLeftLabel?: string;
+	/** Manifest or catalog still loading: "None" would read as a security statement. */
+	loading?: boolean;
 }
 
 export function PackageAccessSection({
@@ -83,9 +86,13 @@ export function PackageAccessSection({
 						</TableRow>
 					</TableHeader>
 					<TableBody>
-						{rows.map((row) => (
-							<AccessRow key={row.packageId} row={row} />
-						))}
+						{rows.map((row) =>
+							row.loading ? (
+								<LoadingAccessRow key={row.packageId} name={row.name} />
+							) : (
+								<AccessRow key={row.packageId} row={row} />
+							),
+						)}
 					</TableBody>
 				</Table>
 			</div>
@@ -118,6 +125,26 @@ export function PackageAccessSection({
 
 function Empty() {
 	return <span className="text-muted-foreground">—</span>;
+}
+
+const LOADING_CELLS = ["network", "files", "limits", "other", "widgets"];
+
+function LoadingAccessRow({ name }: Readonly<{ name: string }>) {
+	return (
+		<TableRow aria-busy="true" className="align-top">
+			<TableCell className="pl-4 font-medium whitespace-normal">
+				{name}
+			</TableCell>
+			{LOADING_CELLS.map((cell) => (
+				<TableCell
+					key={cell}
+					className={cell === "widgets" ? "pr-4" : undefined}
+				>
+					<Skeleton className="h-5 w-20" />
+				</TableCell>
+			))}
+		</TableRow>
+	);
 }
 
 function None() {

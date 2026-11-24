@@ -11,11 +11,17 @@ use crate::entity::{wasm_package, wasm_package_join_queue, wasm_package_user};
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::permission::wasm_package_permission::WasmPackagePermission;
+use crate::routes::registry::users::{
+    AVATAR_CONCURRENCY, public_identity, signed_avatar, users_by_id,
+};
 use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use flow_like_types::create_id;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use futures::stream::{self, StreamExt};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -321,20 +327,35 @@ pub async fn list_access_requests(
 
     let requests = wasm_package_join_queue::Entity::find()
         .filter(wasm_package_join_queue::Column::PackageId.eq(&package_id))
+        .order_by_asc(wasm_package_join_queue::Column::CreatedAt)
+        .order_by_asc(wasm_package_join_queue::Column::Id)
         .all(&state.db)
         .await
         .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
 
-    let result: Vec<AccessRequest> = requests
-        .into_iter()
-        .map(|r| AccessRequest {
-            id: r.id,
-            user_id: r.user_id,
-            package_id: r.package_id,
-            comment: r.comment,
-            created_at: r.created_at.to_utc(),
+    let people = users_by_id(&state, requests.iter().map(|r| r.user_id.clone())).await?;
+
+    let result: Vec<AccessRequest> = stream::iter(requests)
+        .map(|r| {
+            let person = people.get(&r.user_id);
+            let state = &state;
+            async move {
+                let (username, name) = public_identity(person);
+                AccessRequest {
+                    avatar: signed_avatar(state, person).await,
+                    id: r.id,
+                    user_id: r.user_id,
+                    username,
+                    name,
+                    package_id: r.package_id,
+                    comment: r.comment,
+                    created_at: r.created_at.to_utc(),
+                }
+            }
         })
-        .collect();
+        .buffered(AVATAR_CONCURRENCY)
+        .collect()
+        .await;
 
     Ok(Json(result))
 }
@@ -344,6 +365,9 @@ pub async fn list_access_requests(
 pub struct AccessRequest {
     pub id: String,
     pub user_id: String,
+    pub username: Option<String>,
+    pub name: Option<String>,
+    pub avatar: Option<String>,
     pub package_id: String,
     pub comment: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,

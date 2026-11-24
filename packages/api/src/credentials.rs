@@ -128,28 +128,19 @@ pub trait RuntimeCredentialsTrait {
 pub enum CredentialsAccess {
     EditApp,
     ReadApp,
-    /// Read-only access scoped to the **content** bucket of an app
-    /// only (`apps/{app_id}/...` on the content store). Used by the
-    /// fork-an-app flow: the desktop pulls user content (metadata/,
-    /// upload/, storage/) directly via these credentials, while
-    /// boards/events/widgets/templates/pages on the meta bucket
-    /// always come back via API responses (after server-side
-    /// secret-stripping). Granting `ReadApp` instead would let a
-    /// misbehaving client GET raw `*.board` / `*.event` files
-    /// containing source-app secrets.
+    /// Read access to an app's content bucket prefix (`apps/{app_id}/...`).
+    /// This excludes metadata that must pass through server-side secret stripping.
+    /// Offline forks use individual signed downloads with server-enforced exclusions.
     ReadAppContent,
-    /// Read+write access scoped to the **content** bucket of an app
-    /// only. Used wherever scoped credentials cross the trust
-    /// boundary into a client (presign-data-access for uploads,
-    /// fork-online-begin for desktop bundle uploads). Boards /
-    /// events / widgets / templates / pages live in the meta bucket
-    /// and *must* be written via the API so that authorization
-    /// (RolePermissions::Write*) and validation (event schedule
-    /// checks, page-event coupling, sink registration, etc.) run on
-    /// every change. Granting `EditApp` to the client would let it
-    /// drop arbitrary `.board` / `.event` files server-side,
-    /// bypassing every guard.
+    /// Read and write access to the app's full content prefix, including databases.
+    /// Bot workspace uploads use this scope. Metadata remains behind the API's
+    /// resource permissions and validation; file-only clients use `EditAppFiles`.
     EditAppContent,
+    /// Read access to `apps/{app_id}/upload/*` in the content bucket.
+    /// Project databases and metadata require their own API permissions.
+    ReadAppFiles,
+    /// Read and write access to `apps/{app_id}/upload/*` in the content bucket.
+    EditAppFiles,
     /// Read-only access scoped to the project LanceDB at
     /// `apps/{app_id}/storage/db` on the **content** bucket only.
     /// Exists for app-to-app shared database access: a connected app
@@ -196,6 +187,8 @@ impl Display for CredentialsAccess {
             CredentialsAccess::ReadApp => write!(f, "read_app"),
             CredentialsAccess::ReadAppContent => write!(f, "read_app_content"),
             CredentialsAccess::EditAppContent => write!(f, "edit_app_content"),
+            CredentialsAccess::ReadAppFiles => write!(f, "read_app_files"),
+            CredentialsAccess::EditAppFiles => write!(f, "edit_app_files"),
             CredentialsAccess::ReadAppDb => write!(f, "read_app_db"),
             CredentialsAccess::EditAppDb => write!(f, "edit_app_db"),
             CredentialsAccess::EditUser => write!(f, "edit_user"),
@@ -527,6 +520,34 @@ mod storage_path_segment_tests {
         .to_string();
         assert_ne!(read, write);
         assert_ne!(read, earlier);
+    }
+
+    /// `State::scoped_credentials` caches a grant under this text and the audit
+    /// trail records it, so two modes sharing it would share one grant.
+    #[test]
+    fn every_access_mode_has_its_own_cache_key() {
+        let modes = [
+            CredentialsAccess::EditApp,
+            CredentialsAccess::ReadApp,
+            CredentialsAccess::ReadAppContent,
+            CredentialsAccess::EditAppContent,
+            CredentialsAccess::ReadAppFiles,
+            CredentialsAccess::EditAppFiles,
+            CredentialsAccess::ReadAppDb,
+            CredentialsAccess::EditAppDb,
+            CredentialsAccess::EditUser,
+            CredentialsAccess::ReadUser,
+            CredentialsAccess::InvokeNone,
+            CredentialsAccess::InvokeRead,
+            CredentialsAccess::InvokeWrite,
+            CredentialsAccess::ServerExecute,
+            CredentialsAccess::ShadowExecute,
+            CredentialsAccess::ReadLogs,
+        ];
+        let keys: std::collections::BTreeSet<String> =
+            modes.iter().map(ToString::to_string).collect();
+        assert_eq!(keys.len(), modes.len(), "{keys:?}");
+        assert!(keys.contains("read_app_files") && keys.contains("edit_app_files"));
     }
 
     #[test]

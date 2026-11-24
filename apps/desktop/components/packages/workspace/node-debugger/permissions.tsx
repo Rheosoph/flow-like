@@ -34,7 +34,7 @@ function getPermissionMeta(permission: string): {
 					"allowsOutboundHttpRequestsDuringDebugExecution",
 					"Allows outbound HTTP requests during debug execution.",
 				),
-				className: "text-amber-600 border-amber-500/30",
+				className: "text-tab-orange border-tab-orange/40",
 				icon: Globe,
 			};
 		case "network:websocket":
@@ -44,7 +44,7 @@ function getPermissionMeta(permission: string): {
 					"allowsWebsocketConnectionsFromTheNodeSandbox",
 					"Allows WebSocket connections from the node sandbox.",
 				),
-				className: "text-amber-600 border-amber-500/30",
+				className: "text-tab-orange border-tab-orange/40",
 				icon: Globe,
 			};
 		case "network:tcp":
@@ -54,7 +54,7 @@ function getPermissionMeta(permission: string): {
 					"allowsOutboundTcpSocketsForThisNode",
 					"Allows outbound TCP sockets for this node.",
 				),
-				className: "text-amber-600 border-amber-500/30",
+				className: "text-tab-orange border-tab-orange/40",
 				icon: Globe,
 			};
 		case "network:udp":
@@ -64,7 +64,7 @@ function getPermissionMeta(permission: string): {
 					"allowsOutboundUdpSocketsForThisNode",
 					"Allows outbound UDP sockets for this node.",
 				),
-				className: "text-amber-600 border-amber-500/30",
+				className: "text-tab-orange border-tab-orange/40",
 				icon: Globe,
 			};
 		case "network:dns":
@@ -74,7 +74,7 @@ function getPermissionMeta(permission: string): {
 					"allowsHostnameResolutionDuringExecution",
 					"Allows hostname resolution during execution.",
 				),
-				className: "text-amber-600 border-amber-500/30",
+				className: "text-tab-orange border-tab-orange/40",
 				icon: Globe,
 			};
 		case "storage:read":
@@ -84,7 +84,7 @@ function getPermissionMeta(permission: string): {
 					"allowsReadingNodeOrUserStorageThroughFlowlikeApis",
 					"Allows reading node or user storage through Flow-Like APIs.",
 				),
-				className: "text-blue-600 border-blue-500/30",
+				className: "text-tab-blue border-tab-blue/40",
 				icon: HardDrive,
 			};
 		case "storage:write":
@@ -94,7 +94,7 @@ function getPermissionMeta(permission: string): {
 					"allowsWritingNodeOrUserStorageThroughFlowlikeApis",
 					"Allows writing node or user storage through Flow-Like APIs.",
 				),
-				className: "text-blue-600 border-blue-500/30",
+				className: "text-tab-blue border-tab-blue/40",
 				icon: HardDrive,
 			};
 		case "variables":
@@ -104,7 +104,7 @@ function getPermissionMeta(permission: string): {
 					"allowsReadingAndWritingFlowVariables",
 					"Allows reading and writing flow variables.",
 				),
-				className: "text-slate-600 border-slate-500/30",
+				className: "text-muted-foreground border-border",
 				icon: HardDrive,
 			};
 		case "cache":
@@ -114,7 +114,7 @@ function getPermissionMeta(permission: string): {
 					"allowsAccessToExecutionCacheEntries",
 					"Allows access to execution cache entries.",
 				),
-				className: "text-slate-600 border-slate-500/30",
+				className: "text-muted-foreground border-border",
 				icon: HardDrive,
 			};
 		case "streaming":
@@ -124,7 +124,7 @@ function getPermissionMeta(permission: string): {
 					"allowsIncrementalOutputStreamingWhileTheNodeRuns",
 					"Allows incremental output streaming while the node runs.",
 				),
-				className: "text-emerald-600 border-emerald-500/30",
+				className: "text-tab-green border-tab-green/40",
 				icon: Zap,
 			};
 		case "models":
@@ -134,7 +134,7 @@ function getPermissionMeta(permission: string): {
 					"allowsInvokingLlmOrVlmModelProvidersFromTheHost",
 					"Allows invoking LLM or VLM model providers from the host.",
 				),
-				className: "text-fuchsia-600 border-fuchsia-500/30",
+				className: "text-tab-pink border-tab-pink/40",
 				icon: Sparkles,
 			};
 		case "a2ui":
@@ -144,7 +144,7 @@ function getPermissionMeta(permission: string): {
 					"allowsAgenttouiRenderingFeatures",
 					"Allows agent-to-UI rendering features.",
 				),
-				className: "text-sky-600 border-sky-500/30",
+				className: "text-tab-teal border-tab-teal/40",
 				icon: Shield,
 			};
 		case "oauth":
@@ -154,7 +154,7 @@ function getPermissionMeta(permission: string): {
 					"allowsAccessToOauthbackedCredentials",
 					"Allows access to OAuth-backed credentials.",
 				),
-				className: "text-orange-600 border-orange-500/30",
+				className: "text-tab-yellow border-tab-yellow/40",
 				icon: Lock,
 			};
 		case "functions":
@@ -164,7 +164,7 @@ function getPermissionMeta(permission: string): {
 					"allowsInvokingOtherFunctionsOrSubflows",
 					"Allows invoking other functions or sub-flows.",
 				),
-				className: "text-violet-600 border-violet-500/30",
+				className: "text-tab-purple border-tab-purple/40",
 				icon: Code2,
 			};
 		default:
@@ -243,7 +243,7 @@ export function PermissionsBadges({ manifest }: { manifest: PackageManifest }) {
 			{p.network?.httpEnabled && (
 				<Badge
 					variant="outline"
-					className="gap-1 text-xs text-amber-600 border-amber-500/30"
+					className="gap-1 text-xs text-tab-orange border-tab-orange/40"
 				>
 					<Globe className="h-3 w-3" />
 					{"HTTP"}
@@ -252,7 +252,7 @@ export function PermissionsBadges({ manifest }: { manifest: PackageManifest }) {
 			{(p.filesystem?.nodeStorage || p.filesystem?.userStorage) && (
 				<Badge
 					variant="outline"
-					className="gap-1 text-xs text-blue-600 border-blue-500/30"
+					className="gap-1 text-xs text-tab-blue border-tab-blue/40"
 				>
 					<HardDrive className="h-3 w-3" />
 					{t("storage", "Storage")}
@@ -267,7 +267,7 @@ export function PermissionsBadges({ manifest }: { manifest: PackageManifest }) {
 			{p.models && (
 				<Badge
 					variant="outline"
-					className="gap-1 text-xs text-purple-600 border-purple-500/30"
+					className="gap-1 text-xs text-tab-pink border-tab-pink/40"
 				>
 					<Sparkles className="h-3 w-3" />
 					{t("models", "Models")}
@@ -293,7 +293,7 @@ export function PermissionsBadges({ manifest }: { manifest: PackageManifest }) {
 					<TooltipTrigger>
 						<Badge
 							variant="outline"
-							className="gap-1 text-xs text-orange-600 border-orange-500/30"
+							className="gap-1 text-xs text-tab-yellow border-tab-yellow/40"
 						>
 							<Lock className="h-3 w-3" />
 							{t("oauthLength", "OAuth ({{length}})", {

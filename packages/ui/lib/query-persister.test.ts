@@ -48,6 +48,13 @@ describe("shouldPersistQuery", () => {
 		expect(shouldPersistQuery({ queryKey: ["getRoutes", "app"] })).toBe(false);
 	});
 
+	it("never serializes the node catalog", () => {
+		expect(shouldPersistQuery({ queryKey: ["getCatalog", "app"] })).toBe(false);
+		expect(shouldPersistQuery({ queryKey: ["app-catalog-nodes", "app"] })).toBe(
+			false,
+		);
+	});
+
 	it("denies keys without an identifiable string head", () => {
 		expect(shouldPersistQuery({ queryKey: [] })).toBe(false);
 		expect(shouldPersistQuery({ queryKey: [42, "x"] })).toBe(false);

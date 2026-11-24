@@ -244,7 +244,7 @@ pub(crate) async fn find_component_in_board(
     board: &Board,
     element_id: &str,
 ) -> Option<SurfaceComponent> {
-    let loaded = board.load_all_pages(None).await.ok()?;
+    let loaded = board.load_all_pages_shared().await.ok()?;
 
     // A known Page can arrive before its payload. Do not borrow a different Page's
     // contract while the explicitly selected Page is unavailable.

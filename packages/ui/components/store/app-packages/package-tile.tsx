@@ -81,6 +81,8 @@ export interface PackageTileProps {
 	update?: PackageUpdate;
 	offline: boolean;
 	canReactivate: boolean;
+	/** The member may add, update, reactivate and remove packages (app Admin). */
+	canManage: boolean;
 	pending: PackageTilePending;
 	actions: PackageTileActions;
 	widgetUpdates?: React.ReactNode;
@@ -99,6 +101,7 @@ export function PackageTile({
 	update,
 	offline,
 	canReactivate,
+	canManage,
 	pending,
 	actions,
 	widgetUpdates,
@@ -106,7 +109,7 @@ export function PackageTile({
 	const { t } = useTranslation("store");
 	const locked = pkg.stale || pinState !== "active";
 	const muted = pinState === "stale" || pinState === "expired";
-	const updatable = !!update && !locked && !offline;
+	const updatable = !!update && !locked && !offline && canManage;
 	const price = pkg.price ?? 0;
 
 	return (
@@ -153,6 +156,7 @@ export function PackageTile({
 						locked={locked}
 						offline={offline}
 						canReactivate={canReactivate}
+						canManage={canManage}
 						pending={pending}
 						actions={actions}
 					/>
@@ -190,7 +194,7 @@ export function PackageTile({
 							)}
 						</span>
 					)}
-					{pinState === "stale" && !offline ? (
+					{pinState === "stale" && !offline && canManage ? (
 						<Button
 							size="sm"
 							variant="outline"
@@ -340,6 +344,7 @@ function PackageTileMenu({
 	locked,
 	offline,
 	canReactivate,
+	canManage,
 	pending,
 	actions,
 }: Readonly<{
@@ -349,10 +354,12 @@ function PackageTileMenu({
 	locked: boolean;
 	offline: boolean;
 	canReactivate: boolean;
+	canManage: boolean;
 	pending: PackageTilePending;
 	actions: PackageTileActions;
 }>) {
 	const { t } = useTranslation("store");
+	if (!canManage && offline) return null;
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
@@ -379,7 +386,7 @@ function PackageTileMenu({
 						})}
 					</DropdownMenuItem>
 				)}
-				{!offline && (
+				{!offline && canManage && (
 					<DropdownMenuCheckboxItem
 						checked={pkg.autoUpdate}
 						onCheckedChange={actions.onToggleAutoUpdate}
@@ -388,7 +395,7 @@ function PackageTileMenu({
 						{t("autoupdate", "Auto-update")}
 					</DropdownMenuCheckboxItem>
 				)}
-				{locked && !offline && (
+				{locked && !offline && canManage && (
 					<DropdownMenuItem
 						onSelect={actions.onReactivate}
 						disabled={pending.reactivate || !canReactivate}
@@ -405,15 +412,19 @@ function PackageTileMenu({
 						</Link>
 					</DropdownMenuItem>
 				)}
-				<DropdownMenuSeparator />
-				<DropdownMenuItem
-					variant="destructive"
-					onSelect={actions.onRemove}
-					disabled={pending.remove}
-				>
-					<Trash2 />
-					{t("appPackagesRemoveFromApp", "Remove from app")}
-				</DropdownMenuItem>
+				{canManage && (
+					<>
+						<DropdownMenuSeparator />
+						<DropdownMenuItem
+							variant="destructive"
+							onSelect={actions.onRemove}
+							disabled={pending.remove}
+						>
+							<Trash2 />
+							{t("appPackagesRemoveFromApp", "Remove from app")}
+						</DropdownMenuItem>
+					</>
+				)}
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);

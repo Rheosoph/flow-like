@@ -57,17 +57,10 @@ export {
 	type PackageSearchDialogProps,
 } from "./package-search-dialog";
 export { PackageUsersTab } from "./package-users-tab";
-export {
-	PackageUsersContainer,
-	type PackageUsersContainerProps,
-} from "./package-users-container";
 export { PackageInviteDialog } from "./package-invite-dialog";
 export { PublishDialog, type PublishDialogProps } from "./publish-dialog";
 export { usePackageStoreData } from "./use-package-store-data";
-export {
-	PackageAccessTab,
-	type PackageAccessTabProps,
-} from "./package-access-tab";
+export { PackageAccessTab } from "./package-access-tab";
 export { PackagesHubLayout } from "./packages-hub-layout";
 export * from "./package-library";
 export * from "./explore";

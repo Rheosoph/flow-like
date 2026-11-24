@@ -220,6 +220,7 @@ function runtimeSourcesError(
 }
 
 export class RegistryState implements IRegistryState {
+	readonly installsOnDevice = true;
 	private initPromise: Promise<void> | null = null;
 	private initialized = false;
 

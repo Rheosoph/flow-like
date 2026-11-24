@@ -7,18 +7,9 @@ import type { MineFilter, MineState } from "./mine-model";
 export const MINE_STATE_TONE: Record<MineState, { text: string; dot: string }> =
 	{
 		"unpublished-changes": { text: "text-primary", dot: "bg-primary" },
-		"in-review": {
-			text: "text-sky-600 dark:text-sky-400",
-			dot: "bg-sky-500",
-		},
-		live: {
-			text: "text-emerald-600 dark:text-emerald-400",
-			dot: "bg-emerald-500",
-		},
-		"not-on-this-machine": {
-			text: "text-violet-600 dark:text-violet-400",
-			dot: "bg-violet-500",
-		},
+		"in-review": { text: "text-info", dot: "bg-info-solid" },
+		live: { text: "text-good", dot: "bg-good-solid" },
+		"not-on-this-machine": { text: "text-tab-purple", dot: "bg-tab-purple" },
 		"local-only": {
 			text: "text-muted-foreground",
 			dot: "bg-muted-foreground",

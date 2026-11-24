@@ -14,6 +14,7 @@ import {
 	Package,
 	Search,
 	Sparkles,
+	TriangleAlert,
 	Undo2,
 	WifiOff,
 } from "lucide-react";
@@ -28,6 +29,7 @@ import {
 } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
 import { useSearch } from "../../hooks/use-search-index";
+import { apiErrorMessage } from "../../lib/api-error";
 import { asArray } from "../../lib/response-shape";
 import type { InstalledPackage, SearchResults } from "../../lib/schema/wasm";
 import { cn } from "../../lib/utils";
@@ -339,13 +341,25 @@ export function PackageSearchDialog({
 		offline,
 	]);
 
-	const initialLoading = offline ? localPackages.isLoading : remote.isLoading;
+	const activeQuery = offline ? localPackages : remote;
+	const loadError = activeQuery.data
+		? null
+		: (activeQuery.error ??
+			isOffline.error ??
+			(offline ? null : (profile.error ?? null)));
+	const initialLoading =
+		!loadError && (isOffline.isLoading || activeQuery.isPending);
 	const hasMore = !offline && remote.hasNextPage;
 	const totalRemote = remote.data?.pages[0]?.totalCount ?? 0;
-	const countLabel =
-		!offline && totalRemote > 0
+	const filtered = visible.length !== searched.length;
+	const countLabel = filtered
+		? t("packageShelfFilteredCount", "{{shown}} of {{loaded}} loaded match", {
+				shown: visible.length.toLocaleString(),
+				loaded: searched.length.toLocaleString(),
+			})
+		: !offline && totalRemote > 0
 			? t("showingPackages", "Showing {{shown}} of {{total}} packages", {
-					shown: visible.length.toLocaleString(),
+					shown: searched.length.toLocaleString(),
 					total: totalRemote.toLocaleString(),
 				})
 			: t("packageShelfCount", "{{count}} packages", {
@@ -359,8 +373,48 @@ export function PackageSearchDialog({
 		most: t("packageShelfSortMost", "Most access first"),
 	};
 
+	const railProps: ShelfRailProps = {
+		kind: activeKind,
+		kindCounts:
+			templateCount > 0
+				? {
+						packages: searched.length - templateCount,
+						templates: templateCount,
+					}
+				: undefined,
+		onKind: selectKind,
+		access,
+		accessOptions,
+		onAccess: (facet) => setAccess(facet === access ? null : facet),
+		topic,
+		topicOptions,
+		onTopic: (value) => setTopic(value === topic ? null : value),
+	};
+
 	let body: ReactNode;
-	if (initialLoading) {
+	if (loadError) {
+		body = (
+			<EmptyState
+				icons={[TriangleAlert]}
+				title={t("packageShelfLoadFailed", "Couldn't load packages")}
+				description={apiErrorMessage(
+					loadError,
+					t(
+						"packageShelfLoadFailedHint",
+						"Check your connection and try again.",
+					),
+				)}
+				action={{
+					label: t("retry", "Retry"),
+					onClick: () => {
+						void isOffline.refetch();
+						void profile.refetch();
+						void activeQuery.refetch();
+					},
+				}}
+			/>
+		);
+	} else if (initialLoading) {
 		body = <ShelfSkeleton />;
 	} else if (searched.length === 0) {
 		body = (
@@ -388,7 +442,7 @@ export function PackageSearchDialog({
 				<p className="text-sm text-muted-foreground">
 					{t(
 						"packageShelfNoMatchDescription",
-						"Loosen a filter on the left or change the search.",
+						"Loosen a filter or change the search.",
 					)}
 				</p>
 				<Button
@@ -439,24 +493,7 @@ export function PackageSearchDialog({
 				</DialogHeader>
 
 				<div className="flex min-h-0 flex-1">
-					<ShelfRail
-						kind={activeKind}
-						kindCounts={
-							templateCount > 0
-								? {
-										packages: searched.length - templateCount,
-										templates: templateCount,
-									}
-								: undefined
-						}
-						onKind={selectKind}
-						access={access}
-						accessOptions={accessOptions}
-						onAccess={(facet) => setAccess(facet === access ? null : facet)}
-						topic={topic}
-						topicOptions={topicOptions}
-						onTopic={(value) => setTopic(value === topic ? null : value)}
-					/>
+					<ShelfRail variant="rail" {...railProps} />
 
 					<div className="flex min-w-0 flex-1 flex-col">
 						<div className="flex shrink-0 flex-wrap items-center gap-2 px-5 pt-4 pb-3">
@@ -493,6 +530,7 @@ export function PackageSearchDialog({
 								{countLabel}
 							</span>
 						</div>
+						<ShelfRail variant="chips" {...railProps} />
 
 						<div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5">
 							{body}
@@ -542,17 +580,7 @@ interface RailOptionItem {
 	onSelect: () => void;
 }
 
-function ShelfRail({
-	kind,
-	kindCounts,
-	onKind,
-	access,
-	accessOptions,
-	onAccess,
-	topic,
-	topicOptions,
-	onTopic,
-}: Readonly<{
+interface ShelfRailProps {
 	kind: ShelfKind;
 	kindCounts?: Record<ShelfKind, number>;
 	onKind: (kind: ShelfKind) => void;
@@ -562,7 +590,21 @@ function ShelfRail({
 	topic: string | null;
 	topicOptions: { topic: string; count: number }[];
 	onTopic: (topic: string) => void;
-}>) {
+}
+
+/** The filter rail beside the grid from `md` up; a scrollable chip row above it below that. */
+function ShelfRail({
+	variant,
+	kind,
+	kindCounts,
+	onKind,
+	access,
+	accessOptions,
+	onAccess,
+	topic,
+	topicOptions,
+	onTopic,
+}: Readonly<ShelfRailProps & { variant: "rail" | "chips" }>) {
 	const { t } = useTranslation("store");
 	const facetLabel = useShelfFacetLabel();
 
@@ -611,6 +653,39 @@ function ShelfRail({
 			onSelect: () => onTopic(value),
 		}),
 	);
+
+	if (variant === "chips") {
+		const chips = [...kindItems, ...accessItems, ...topicItems];
+		if (chips.length === 0) return null;
+		return (
+			<nav
+				aria-label={t("packageShelfFilters", "Filter packages")}
+				className="flex shrink-0 gap-1.5 overflow-x-auto px-5 pb-3 md:hidden"
+			>
+				{chips.map((item) => (
+					<button
+						key={item.key}
+						type="button"
+						aria-pressed={item.active}
+						onClick={item.onSelect}
+						className={cn(
+							"flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors",
+							item.active
+								? "border-primary/40 bg-primary/10 text-primary"
+								: "text-foreground/90 hover:bg-muted",
+							item.mono && "font-mono",
+						)}
+					>
+						{item.icon}
+						{item.label}
+						<span className="font-mono tabular-nums text-muted-foreground">
+							{item.count}
+						</span>
+					</button>
+				))}
+			</nav>
+		);
+	}
 
 	return (
 		<nav

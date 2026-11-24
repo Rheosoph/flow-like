@@ -395,25 +395,25 @@ export function NotificationsPageScreen() {
 
 					<div className="relative mt-3 grid gap-2 sm:grid-cols-3">
 						<SummaryTile
-							label="Unread"
+							label={t("notificationsSummaryUnread", "Unread")}
 							value={unreadCount}
 							icon={BellRing}
 							loading={isSummaryLoading}
 							iconClassName="text-primary"
 						/>
 						<SummaryTile
-							label="Invitations"
+							label={t("notificationsSummaryInvitations", "Invitations")}
 							value={invitationCount}
 							icon={UserPlus}
 							loading={isSummaryLoading}
-							iconClassName="text-amber-600"
+							iconClassName="text-warning"
 						/>
 						<SummaryTile
-							label="Workflows"
+							label={t("notificationsSummaryWorkflows", "Workflows")}
 							value={notifications.length}
 							icon={Workflow}
 							loading={isSummaryLoading}
-							iconClassName="text-sky-600"
+							iconClassName="text-info"
 						/>
 					</div>
 				</motion.section>
@@ -883,20 +883,20 @@ function InvitationCard({
 		>
 			<div className="rounded-xl border border-border/50 bg-background/85 px-4 py-3 transition-colors hover:border-primary/20 hover:bg-background/95">
 				<div className="flex items-start gap-3">
-					<div className="mt-0.5 rounded-lg border border-amber-500/20 bg-amber-500/8 p-2">
+					<div className="mt-0.5 rounded-lg border border-warning-line bg-warning-bg p-2">
 						{packageInvite ? (
-							<Package className="size-4 text-amber-600" />
+							<Package className="size-4 text-warning" />
 						) : (
-							<UserPlus className="size-4 text-amber-600" />
+							<UserPlus className="size-4 text-warning" />
 						)}
 					</div>
 
 					<div className="min-w-0 flex-1">
 						<div className="flex items-center justify-between gap-2">
 							<p className="truncate text-sm font-medium text-foreground">
-								{packageInvite?.packageId ??
-									appInvite?.name ??
-									"New invitation"}
+								{(packageInvite
+									? packageInvite.packageName || packageInvite.packageId
+									: appInvite?.name) ?? t("newInvitation", "New invitation")}
 							</p>
 							<span className="shrink-0 text-xs text-muted-foreground">
 								{formatRelativeTime(createdAt)}
@@ -906,13 +906,13 @@ function InvitationCard({
 						<div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
 							<Badge
 								variant="outline"
-								className="border-amber-500/20 bg-amber-500/5 px-1.5 py-0 text-[10px] text-amber-700"
+								className="border-warning-line bg-warning-bg px-1.5 py-0 text-[10px] text-warning"
 							>
 								{packageInvite
 									? t("packageInvitation", "Package invitation")
 									: t("invitation", "Invitation")}
 							</Badge>
-							<span>from</span>
+							<span>{t("invitationFrom", "from")}</span>
 							{inviterLabel ? (
 								<span className="font-medium text-foreground/80">
 									{inviterLabel}

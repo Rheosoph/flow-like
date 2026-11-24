@@ -88,6 +88,21 @@ describe("collectNodeStatus", () => {
 		expect(stale.errors).toEqual({ logs: {}, severity: "error" });
 	});
 
+	test("a node only the summary mentions still gets its log badge", () => {
+		const sources = {
+			currentMetadata: metadata([]),
+			currentSummaryRunId: "run",
+			currentSummary: summary({ summarized: [0, 2, 0, 0, 0] }),
+		};
+		const nodes = [node("summarized"), node("idle")];
+		expect(collectNodeStatus(nodes, sources)).toEqual({
+			summarized: { logs: { count: "2", problems: false, warnings: false } },
+		});
+		expect(
+			collectNodeStatus(nodes, { ...sources, currentSummaryRunId: "older" }),
+		).toEqual({});
+	});
+
 	test("heat, lint marks and collaborator runs follow their toggles", () => {
 		const nodes = [
 			node("hot"),

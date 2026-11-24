@@ -87,6 +87,7 @@ import {
 	type OnlineProfile,
 	createProfileSyncQueue,
 	mergeRemoteProfileMetadata,
+	storedSignedImageIsCurrent,
 	toLocalProfile,
 } from "../lib/profile-sync";
 import {
@@ -1533,6 +1534,7 @@ export function ProfileSyncer({
 
 		const syncProfiles = async () => {
 			if (disposed) return;
+			let changed = false;
 			try {
 				console.log("[ProfileSync] Starting profile sync...");
 
@@ -1602,6 +1604,7 @@ export function ProfileSyncer({
 										await invoke("upsert_profile", {
 											profile: toLocalProfile(onlineProfile),
 										});
+										changed = true;
 										if (!firstProfileId) firstProfileId = onlineProfile.id;
 									} catch (error) {
 										console.error(
@@ -1841,6 +1844,7 @@ export function ProfileSyncer({
 					);
 					try {
 						await deleteProfileLocally(deletedId);
+						changed = true;
 					} catch (error) {
 						console.error(
 							"[ProfileSync] Failed to delete tombstoned profile locally:",
@@ -1919,6 +1923,7 @@ export function ProfileSyncer({
 						localId: local_id,
 						serverId: server_id,
 					});
+					changed = true;
 					if (local_id !== server_id) {
 						uploadedRevisions.set(
 							server_id,
@@ -2098,6 +2103,7 @@ export function ProfileSyncer({
 								);
 								try {
 									const wasCurrent = await deleteProfileLocally(localProfileId);
+									changed = true;
 									if (wasCurrent) deletedCurrentProfile = true;
 								} catch (error) {
 									console.error(
@@ -2169,6 +2175,7 @@ export function ProfileSyncer({
 								await invoke("upsert_profile", {
 									profile: toLocalProfile(onlineProfile),
 								});
+								changed = true;
 							} catch (error) {
 								console.error(
 									"[ProfileSync] Failed to create local profile:",
@@ -2224,6 +2231,8 @@ export function ProfileSyncer({
 								}
 
 								try {
+									// A rejected merge still advances the local revision.
+									changed = true;
 									const applied = await invoke<boolean>(
 										"merge_synced_profile",
 										{
@@ -2250,7 +2259,11 @@ export function ProfileSyncer({
 								let needsUpdate = false;
 								if (
 									onlineProfile.icon &&
-									shouldReplaceWithServerImage(localProfile.hub_profile.icon)
+									shouldReplaceWithServerImage(localProfile.hub_profile.icon) &&
+									!storedSignedImageIsCurrent(
+										localProfile.hub_profile.icon,
+										onlineProfile.icon,
+									)
 								) {
 									localProfile.hub_profile.icon = onlineProfile.icon;
 									needsUpdate = true;
@@ -2259,6 +2272,10 @@ export function ProfileSyncer({
 									onlineProfile.thumbnail &&
 									shouldReplaceWithServerImage(
 										localProfile.hub_profile.thumbnail,
+									) &&
+									!storedSignedImageIsCurrent(
+										localProfile.hub_profile.thumbnail,
+										onlineProfile.thumbnail,
 									)
 								) {
 									localProfile.hub_profile.thumbnail = onlineProfile.thumbnail;
@@ -2268,6 +2285,7 @@ export function ProfileSyncer({
 									needsUpdate ||
 									localProfile.hub_profile.updated !== expectedUpdated
 								) {
+									changed = true;
 									const applied = await invoke<boolean>(
 										"merge_synced_profile",
 										{
@@ -2358,6 +2376,7 @@ export function ProfileSyncer({
 							"prune_missing_profile_bits",
 							{ hub: apiBase, remoteCustomBitIds },
 						);
+						if (prunedBits) changed = true;
 						if (prunedBits && !disposed) {
 							void syncQueueRef.current.request(syncProfiles, true);
 						}
@@ -2365,6 +2384,16 @@ export function ProfileSyncer({
 						console.warn("Failed to remove missing profile bits:", error);
 					}
 
+					console.log("[ProfileSync] Profile sync complete");
+				} catch (error) {
+					console.warn("Failed to pull remote profiles:", error);
+				}
+			} catch (error) {
+				console.error("[ProfileSync] Failed to sync profiles:", error);
+			} finally {
+				// A profile read resolves each of its bits against the hub, so an
+				// unchanged sync must not trigger one.
+				if (changed)
 					await backend.queryClient?.invalidateQueries({
 						predicate: ({ queryKey }) =>
 							[
@@ -2374,12 +2403,6 @@ export function ProfileSyncer({
 								"getAllSettingsProfiles",
 							].includes(String(queryKey[0])),
 					});
-					console.log("[ProfileSync] Profile sync complete");
-				} catch (error) {
-					console.warn("Failed to pull remote profiles:", error);
-				}
-			} catch (error) {
-				console.error("[ProfileSync] Failed to sync profiles:", error);
 			}
 		};
 

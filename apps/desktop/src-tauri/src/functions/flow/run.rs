@@ -3,8 +3,8 @@
 use flow_like::app::App;
 use flow_like::credentials::SharedCredentials;
 use flow_like::flow::compiled::{
-    CompiledRunTemplate, TemplateCache,
-    prerun::{PAGE_ACTION_ID_PREFIX, PrerunPageExecution, page_execution_revision},
+    BaselineFacts, CompiledRunTemplate, TemplateCache,
+    prerun::{PAGE_ACTION_ID_PREFIX, PrerunPageExecution},
 };
 use flow_like::flow::event::Event;
 use flow_like::flow::execution::log::LogMessage;
@@ -17,9 +17,9 @@ use flow_like::flow::execution::{
 };
 use flow_like::flow::execution::{LogLevel, LogMeta, RunPayload, RunStatus, flush_run_cancelled};
 use flow_like::flow::oauth::OAuthToken;
-use flow_like::state::{FlowLikeState, FlowNodeRegistryInner, RunData};
+use flow_like::flow_like_storage::object_store::ObjectStore;
+use flow_like::state::{FlowLikeState, RunData};
 use flow_like_types::intercom::{BufferedInterComHandler, InterComEvent};
-use flow_like_types::sync::DashMap;
 use flow_like_types::tokio_util::sync::CancellationToken;
 use flow_like_types::{Value, json, tokio};
 use serde::Deserialize;
@@ -231,14 +231,6 @@ fn resolve_compiled_page_trigger(
     }
 }
 
-fn is_board_entry_node(board: &flow_like::flow::board::Board, node_id: &str) -> bool {
-    board
-        .nodes
-        .values()
-        .chain(board.layers.values().flat_map(|layer| layer.nodes.values()))
-        .any(|node| node.id == node_id && node.start == Some(true))
-}
-
 async fn resolve_local_page_target(
     state: &Arc<FlowLikeState>,
     app: &App,
@@ -259,8 +251,10 @@ async fn resolve_local_page_target(
         flow_like_types::anyhow!("Page triggers can only invoke Events that own a Page")
     })?;
 
-    let (board, board_revision) = app
-        .open_board(event.board_id.clone(), None, event.board_version)
+    // The Page contract and the run come from one compiled baseline: the artifact of the
+    // board's current source, or a compile of that source when none exists yet. Loading the
+    // source board here instead would re-derive every node on every Page action.
+    let baseline = resolve_page_baseline(state, &app.id, &event.board_id, event.board_version)
         .await
         .map_err(|error| {
             flow_like_types::anyhow!(
@@ -268,8 +262,8 @@ async fn resolve_local_page_target(
                 event.board_id,
                 error
             )
-        })?
-        .snapshot_with_revision();
+        })?;
+    let board = baseline.board();
     timer.lap("open_board");
     if board.id != event.board_id {
         return Err(flow_like_types::anyhow!(
@@ -290,18 +284,17 @@ async fn resolve_local_page_target(
         ));
     }
 
-    let page = match event.board_version {
-        Some(version) => board.load_versioned_page(page_id, version, None).await,
-        None => board.load_page(page_id, None).await,
-    }
-    .map_err(|error| {
-        flow_like_types::anyhow!(
-            "Page '{}' for Event '{}' is unavailable on this device: {}",
-            page_id,
-            event.id,
-            error
-        )
-    })?;
+    let page = baseline
+        .load_page(page_id, event.board_version)
+        .await
+        .map_err(|error| {
+            flow_like_types::anyhow!(
+                "Page '{}' for Event '{}' is unavailable on this device: {}",
+                page_id,
+                event.id,
+                error
+            )
+        })?;
     timer.lap("load_page");
     if page.id != page_id || page.board_id.as_deref().is_some_and(|id| id != board.id) {
         return Err(flow_like_types::anyhow!(
@@ -309,15 +302,9 @@ async fn resolve_local_page_target(
         ));
     }
 
-    let execution = PrerunPageExecution::from_page(&board, &page)?;
-    let revision = page_execution_revision(&board, &execution)?;
-    let allowed_entry_nodes = board
-        .nodes
-        .values()
-        .chain(board.layers.values().flat_map(|layer| layer.nodes.values()))
-        .filter(|node| node.start == Some(true))
-        .map(|node| node.id.clone())
-        .collect::<HashSet<_>>();
+    let execution = PrerunPageExecution::from_page(board, &page)?;
+    let revision = baseline.page_execution_revision(&execution)?;
+    let allowed_entry_nodes = baseline.entry_node_ids();
     let scope = LocalPageActionScope {
         app_id: app.id.clone(),
         event_id: event.id.clone(),
@@ -343,29 +330,19 @@ async fn resolve_local_page_target(
         }
         _ => resolve_compiled_page_trigger(&execution, &revision, trigger)?,
     };
-    if !is_board_entry_node(&board, &node_id) {
+    if !allowed_entry_nodes.contains(&node_id) {
         return Err(flow_like_types::anyhow!(
             "The Page action does not resolve to an executable entry"
         ));
     }
     timer.lap("page_contract");
-    // Build the executable template from the same board snapshot that produced
-    // the Page contract. Reloading Latest through the storage-backed template
-    // cache could observe a concurrent save and execute a different revision;
-    // the page cache is keyed by this snapshot's revision instead.
-    let registry = state.node_registry.read().await.node_registry.clone();
-    let template = page_template(
-        format!("{}/{}@{:?}", app.id, board.id, event.board_version),
-        &board,
-        board_revision,
-        registry.as_ref(),
-    )?;
-    timer.lap("compile");
 
     Ok(ResolvedLocalPageTarget {
         node_id,
         sealing_context: LocalPageActionSealingContext::new(scope, allowed_entry_nodes),
-        template,
+        // The template the Page contract was just read from, so the run cannot execute
+        // another revision of the board than the one the contract describes.
+        template: baseline.template(),
     })
 }
 
@@ -375,39 +352,80 @@ struct ResolvedLocalPageTarget {
     template: Arc<flow_like::flow::compiled::CompiledRunTemplate>,
 }
 
-struct PageTemplate {
-    revision: u64,
-    fingerprint: [u8; 32],
+/// A board's compiled baseline together with what only its source could say about it: the
+/// content hash and prerun manifest a Page contract binds to. Everything a Page needs
+/// before it runs is answered from here, without loading the source board.
+pub(crate) struct PageBaseline {
     template: Arc<CompiledRunTemplate>,
+    facts: Arc<BaselineFacts>,
+    meta_store: Arc<dyn ObjectStore>,
 }
 
-/// The template of the last board revision a Page Event ran against, per board: every page
-/// action between two edits reuses one compile instead of cloning and compiling the board.
-static PAGE_TEMPLATES: LazyLock<DashMap<String, PageTemplate>> = LazyLock::new(DashMap::new);
-
-fn page_template(
-    cache_key: String,
-    board: &Arc<flow_like::flow::board::Board>,
-    revision: u64,
-    registry: &FlowNodeRegistryInner,
-) -> flow_like_types::Result<Arc<CompiledRunTemplate>> {
-    let fingerprint = registry.fingerprint();
-    if let Some(cached) = PAGE_TEMPLATES.get(&cache_key)
-        && cached.revision == revision
-        && cached.fingerprint == fingerprint
-    {
-        return Ok(cached.template.clone());
+impl PageBaseline {
+    /// The compiled board view. Node ids, entry flags, pins and page ids are those of the
+    /// source; editor-only fields are absent.
+    pub(crate) fn board(&self) -> &flow_like::flow::board::Board {
+        &self.template.board
     }
-    let template = Arc::new(CompiledRunTemplate::from_board(board.clone(), registry)?);
-    PAGE_TEMPLATES.insert(
-        cache_key,
-        PageTemplate {
-            revision,
-            fingerprint,
-            template: template.clone(),
-        },
-    );
-    Ok(template)
+
+    pub(crate) fn facts(&self) -> &BaselineFacts {
+        &self.facts
+    }
+
+    pub(crate) fn template(&self) -> Arc<CompiledRunTemplate> {
+        self.template.clone()
+    }
+
+    pub(crate) fn page_execution_revision(
+        &self,
+        execution: &PrerunPageExecution,
+    ) -> flow_like_types::Result<String> {
+        self.facts.page_execution_revision(self.board(), execution)
+    }
+
+    /// Every node of the source board a run may be seeded at.
+    pub(crate) fn entry_node_ids(&self) -> HashSet<String> {
+        self.facts.prerun.entry_node_ids.iter().cloned().collect()
+    }
+
+    pub(crate) async fn load_page(
+        &self,
+        page_id: &str,
+        version: Option<(u32, u32, u32)>,
+    ) -> flow_like_types::Result<flow_like::a2ui::widget::Page> {
+        let store = Some(self.meta_store.clone());
+        match version {
+            Some(version) => {
+                self.board()
+                    .load_versioned_page(page_id, version, store)
+                    .await
+            }
+            None => self.board().load_page(page_id, store).await,
+        }
+    }
+}
+
+/// The compiled baseline of the board's current source: the in-process template when the
+/// source is unchanged, its persisted artifact otherwise, and a compile of the source only
+/// when neither exists yet.
+pub(crate) async fn resolve_page_baseline(
+    state: &Arc<FlowLikeState>,
+    app_id: &str,
+    board_id: &str,
+    version: Option<(u32, u32, u32)>,
+) -> flow_like_types::Result<PageBaseline> {
+    let template = TEMPLATE_CACHE
+        .resolve_with_baseline(state, app_id, board_id, version, "")
+        .await?;
+    let facts = template.baseline.clone().ok_or_else(|| {
+        flow_like_types::anyhow!("Board {board_id} was compiled without its baseline facts")
+    })?;
+    let meta_store = flow_like::flow::board::Board::meta_store(state).await?;
+    Ok(PageBaseline {
+        template,
+        facts,
+        meta_store,
+    })
 }
 
 pub(crate) async fn resolve_run_template(

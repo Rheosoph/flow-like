@@ -28,7 +28,7 @@ flow-like-types.workspace = true
 flow-like-runtime.workspace = true
 flow-like-storage = { workspace = true, features = ["database-runtime", "graph"] }
 flow-like-storage-contracts.workspace = true
-arrow-ipc = { version = "=58.4.0", features = ["lz4"] }
+arrow-ipc = { version = "=58.4.2", features = ["lz4"] }
 async-trait.workspace = true
 base64.workspace = true
 bytes.workspace = true

@@ -220,7 +220,10 @@ export interface LanceDBExplorerProps {
 		filter: string,
 		updates: Record<string, any>,
 	) => Promise<void>;
-	onOptimize?: (keepVersions?: boolean, olderThanDays?: number) => Promise<void>;
+	onOptimize?: (
+		keepVersions?: boolean,
+		olderThanDays?: number,
+	) => Promise<void>;
 	onDropColumns?: (columns: string[]) => Promise<void>;
 	onAddColumn?: (column: IAddColumnPayload) => Promise<void>;
 	onAlterColumn?: (column: string, nullable: boolean) => Promise<void>;
@@ -2180,7 +2183,10 @@ const PruneVersionsDialog: React.FC<{
 };
 
 const TableActionsMenu: React.FC<{
-	onOptimize?: (keepVersions?: boolean, olderThanDays?: number) => Promise<void>;
+	onOptimize?: (
+		keepVersions?: boolean,
+		olderThanDays?: number,
+	) => Promise<void>;
 	children?: React.ReactNode;
 }> = ({ onOptimize, children }) => {
 	const { t } = useTranslation("common");
@@ -2219,43 +2225,47 @@ const TableActionsMenu: React.FC<{
 			{/* Items open dialogs; a modal menu closing under a modal dialog can
 			leave the body without pointer events. */}
 			<DropdownMenu modal={false}>
-			<DropdownMenuTrigger asChild>
-				<Button
-					variant="outline"
-					size="icon"
-					className="size-8"
-					title={t("moreActions", "More actions")}
-					aria-label={t("moreActions", "More actions")}
-				>
-					{optimizing ? (
-						<Loader2 className="animate-spin" />
-					) : (
-						<MoreHorizontal />
+				<DropdownMenuTrigger asChild>
+					<Button
+						variant="outline"
+						size="icon"
+						className="size-8"
+						title={t("moreActions", "More actions")}
+						aria-label={t("moreActions", "More actions")}
+					>
+						{optimizing ? (
+							<Loader2 className="animate-spin" />
+						) : (
+							<MoreHorizontal />
+						)}
+					</Button>
+				</DropdownMenuTrigger>
+				<DropdownMenuContent align="end" className="w-72">
+					{onOptimize && (
+						<>
+							<DropdownMenuItem
+								disabled={optimizing}
+								onSelect={() => void handleOptimize(true)}
+							>
+								<Zap />{" "}
+								{t("optimizeKeepVersions", "Optimize and Keep Versions")}
+							</DropdownMenuItem>
+							<DropdownMenuItem
+								disabled={optimizing}
+								onSelect={() => setPruning(true)}
+							>
+								<Zap />{" "}
+								{t(
+									"optimizePruneOldVersions",
+									"Optimize and Prune Old Versions",
+								)}
+							</DropdownMenuItem>
+						</>
 					)}
-				</Button>
-			</DropdownMenuTrigger>
-			<DropdownMenuContent align="end" className="w-72">
-				{onOptimize && (
-					<>
-						<DropdownMenuItem
-							disabled={optimizing}
-							onSelect={() => void handleOptimize(true)}
-						>
-							<Zap /> {t("optimizeKeepVersions", "Optimize and Keep Versions")}
-						</DropdownMenuItem>
-						<DropdownMenuItem
-							disabled={optimizing}
-							onSelect={() => setPruning(true)}
-						>
-							<Zap />{" "}
-							{t("optimizePruneOldVersions", "Optimize and Prune Old Versions")}
-						</DropdownMenuItem>
-					</>
-				)}
-				{onOptimize && children && <DropdownMenuSeparator />}
-				{children}
-			</DropdownMenuContent>
-		</DropdownMenu>
+					{onOptimize && children && <DropdownMenuSeparator />}
+					{children}
+				</DropdownMenuContent>
+			</DropdownMenu>
 		</>
 	);
 };

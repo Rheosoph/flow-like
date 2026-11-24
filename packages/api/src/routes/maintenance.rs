@@ -7,8 +7,8 @@ use axum::{Json, Router, extract::State, http::HeaderMap, routing::post};
 use flow_like_types::{
     cache::CacheCleanupResult,
     maintenance::{
-        DeletionQueueMaintenanceResult, MaintenanceRunRequest, MaintenanceRunResponse,
-        RegressionSuitesMaintenanceResult, RunSweepMaintenanceResult,
+        CapacityRepairResult, DeletionQueueMaintenanceResult, MaintenanceRunRequest,
+        MaintenanceRunResponse, RegressionSuitesMaintenanceResult, RunSweepMaintenanceResult,
         StateCleanupMaintenanceResult, TelemetryAlertsMaintenanceResult,
     },
 };
@@ -282,8 +282,59 @@ async fn run_maintenance_job(
                 },
             )))
         }
+        MaintenanceRunRequest::TableMaintenance => {
+            let result = traced!(
+                "maintenance.table_maintenance",
+                crate::table_maintenance::run_pass(&state)
+            )
+            .await
+            .map_err(|error| {
+                tracing::error!(error = %error, "Scheduled table maintenance pass failed");
+                error
+            })?;
+
+            tracing::info!(
+                evaluated = result.evaluated,
+                compacted = result.compacted,
+                reindexed = result.reindexed,
+                failed = result.failed,
+                deferred = result.deferred,
+                "Maintenance table pass completed"
+            );
+
+            Ok(Json(MaintenanceRunResponse::TableMaintenance(result)))
+        }
+        MaintenanceRunRequest::CapacityRepair => {
+            let repair = traced!(
+                "maintenance.capacity_repair",
+                crate::capacity::repair_storage_totals(&state, CAPACITY_REPAIR_BUDGET)
+            )
+            .await
+            .map_err(|error| {
+                tracing::error!(error = %error, "Payer storage repair failed");
+                error
+            })?;
+
+            tracing::info!(
+                checked = repair.checked,
+                repaired = repair.repaired,
+                complete = repair.complete,
+                "Maintenance payer storage repair completed"
+            );
+
+            Ok(Json(MaintenanceRunResponse::CapacityRepair(
+                CapacityRepairResult {
+                    checked: repair.checked,
+                    repaired: repair.repaired,
+                    complete: repair.complete,
+                },
+            )))
+        }
     }
 }
+
+/// Inside the 300 s Job deadline with room to answer.
+const CAPACITY_REPAIR_BUDGET: std::time::Duration = std::time::Duration::from_secs(240);
 
 async fn run_sweep(state: &AppState) -> Result<RunSweepMaintenanceResult, ApiError> {
     recover_capacity_and_payloads(state).await;

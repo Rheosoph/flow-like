@@ -373,8 +373,7 @@ function ChangesSection({
 			label: t("workspaceNodesAdded", "Added"),
 			nodes: diff.added,
 			sign: "+",
-			className:
-				"border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400",
+			className: "border-good-line bg-good-bg text-good",
 		},
 		{
 			key: "removed",
@@ -420,7 +419,7 @@ function ChangesSection({
 				</p>
 			) : !hasNodeChanges(diff) ? (
 				<p className="flex items-center gap-2 text-sm">
-					<CheckCircle2 className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+					<CheckCircle2 className="size-4 shrink-0 text-good" />
 					{live
 						? t(
 								"workspaceNoNodeChangesSince",

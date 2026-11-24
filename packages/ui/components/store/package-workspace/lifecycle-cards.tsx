@@ -73,8 +73,8 @@ export function PackageRestoreCard({
 					{t("packageDisabled", "Package Disabled")}
 				</CardTitle>
 			</CardHeader>
-			<CardContent className="flex items-center justify-between">
-				<div>
+			<CardContent className="flex flex-wrap items-center justify-between gap-3">
+				<div className="min-w-0 flex-1 basis-56">
 					<p className="text-sm font-medium">
 						{t("restoreThisPackage", "Restore this package")}
 					</p>
@@ -87,7 +87,7 @@ export function PackageRestoreCard({
 				</div>
 				<Button
 					size="sm"
-					className="gap-1.5 shrink-0 ml-4"
+					className="shrink-0 gap-1.5"
 					onClick={() => restoreMutation.mutate()}
 					disabled={restoreMutation.isPending}
 				>
@@ -147,8 +147,8 @@ export function PackageDangerZoneCard({
 					{t("dangerZone", "Danger Zone")}
 				</CardTitle>
 			</CardHeader>
-			<CardContent className="flex items-center justify-between">
-				<div>
+			<CardContent className="flex flex-wrap items-center justify-between gap-3">
+				<div className="min-w-0 flex-1 basis-56">
 					<p className="text-sm font-medium">
 						{t("deleteThisPackage", "Delete this package")}
 					</p>
@@ -164,7 +164,7 @@ export function PackageDangerZoneCard({
 						<Button
 							variant="destructive"
 							size="sm"
-							className="gap-1.5 shrink-0 ml-4"
+							className="shrink-0 gap-1.5"
 						>
 							<Trash2 className="h-4 w-4" />
 							{t("delete", "Delete")}
@@ -187,7 +187,12 @@ export function PackageDangerZoneCard({
 							<AlertDialogCancel>{t("cancel", "Cancel")}</AlertDialogCancel>
 							<AlertDialogAction
 								className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-								onClick={() => deleteMutation.mutate()}
+								onClick={(event) => {
+									event.preventDefault();
+									deleteMutation.mutate(undefined, {
+										onSettled: () => setShowDeleteDialog(false),
+									});
+								}}
 								disabled={deleteMutation.isPending}
 							>
 								{deleteMutation.isPending ? (

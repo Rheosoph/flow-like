@@ -88,6 +88,9 @@ mod runtime_config;
 pub mod scoped_usage;
 pub mod state;
 pub mod storage_accounting;
+pub mod storage_reconciler;
+pub mod table_maintenance;
+mod interval_lease;
 pub mod storage_config;
 pub mod storage_identity;
 #[cfg(feature = "storage-queue")]

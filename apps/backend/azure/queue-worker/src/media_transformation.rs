@@ -342,7 +342,6 @@ mod tests {
             event_type: crate::blob_events::BLOB_CREATED.into(),
             subject: format!("/blobServices/default/containers/content/blobs/{key}"),
             content_length: None,
-            etag: None,
             sequencer: None,
         }
     }

@@ -1,72 +1,42 @@
 "use client";
 
 import {
-	Button,
-	Card,
-	CardContent,
-	CardHeader,
 	type ISettingsProfile,
-	useGuideStore,
+	guideWelcomeHref,
 } from "@flow-like/flow-like-ui";
-import { i18n as i18next } from "@flow-like/locales";
-import { PartyPopper } from "lucide-react";
+import { useTranslation } from "@flow-like/locales";
+import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback } from "react";
-import Crossfire from "react-canvas-confetti/dist/presets/crossfire";
+import { useEffect } from "react";
 import { useTauriInvoke } from "../../../components/useInvoke";
 
-const CongratsHeader = () => (
-	<CardHeader className="text-center space-y-2">
-		<h2 className="text-2xl sm:text-3xl font-semibold">
-			{i18next.t("congratulations", "🎉 Congratulations!")}
-		</h2>
-		<p className="text-muted-foreground">
-			{i18next.t(
-				"youHaveSuccessfullyCompletedTheOnboardingProcess",
-				"You have successfully completed the onboarding process.",
-			)}
-		</p>
-	</CardHeader>
-);
-
-const FinishSetupButton: React.FC<{ onFinish: () => void }> = ({
-	onFinish,
-}) => (
-	<Button className="gap-2 w-full mt-6" onClick={onFinish}>
-		<PartyPopper className="h-4 w-4" aria-hidden="true" />
-		{i18next.t("finishSetup", "Finish Setup")}
-	</Button>
-);
-
+/** Setup is done: refresh the new profiles, then introduce the app. */
 export default function DonePage() {
+	const { t } = useTranslation("common");
 	const router = useRouter();
 	const profiles = useTauriInvoke<Record<string, ISettingsProfile>>(
 		"get_profiles",
 		{},
 	);
+	const { refetch } = profiles;
 
-	const requestWelcome = useGuideStore((state) => state.requestWelcome);
-	const onFinish = useCallback(async () => {
-		await profiles.refetch();
-		requestWelcome();
-		router.push("/");
-	}, [router, requestWelcome]);
+	useEffect(() => {
+		let cancelled = false;
+		void refetch().finally(() => {
+			if (!cancelled) router.replace(guideWelcomeHref());
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, [refetch, router]);
 
 	return (
-		<main className="relative min-h-dvh w-full overflow-hidden z-10">
-			<div className="relative z-10 flex min-h-dvh flex-col items-center justify-center py-8 sm:py-12">
-				<Crossfire autorun={{ speed: 1 }} />
-				<Card className="w-full max-w-md sm:max-w-lg md:max-w-2xl">
-					<CardContent className="pt-6">
-						<CongratsHeader />
-						<FinishSetupButton
-							onFinish={async () => {
-								await onFinish();
-							}}
-						/>
-					</CardContent>
-				</Card>
-			</div>
-		</main>
+		<output className="relative z-10 flex min-h-dvh items-center justify-center gap-2 text-muted-foreground">
+			<Loader2 className="size-5 animate-spin" aria-hidden="true" />
+			{t(
+				"onboarding.restoringHint",
+				"Getting your workspace ready on this device.",
+			)}
+		</output>
 	);
 }

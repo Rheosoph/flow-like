@@ -432,11 +432,8 @@ impl AzureRuntimeCredentials {
                 )
             }
             CredentialsAccess::ReadAppContent => {
-                // Content-only — boards/events/widgets/templates/pages
-                // live in the meta container and may carry secrets,
-                // so the desktop never gets a meta-side SAS. Source
-                // app's content (metadata/, upload/, storage/) is
-                // safe to expose for fork pulls.
+                // Full app content, including databases. Metadata in the
+                // separate container requires the API's resource permissions.
                 let content_sas = generate_directory_sas(
                     &self.account_name,
                     &self.content_container,
@@ -456,13 +453,8 @@ impl AzureRuntimeCredentials {
                 )
             }
             CredentialsAccess::EditAppContent => {
-                // Content-only write. Used for client-handed upload
-                // credentials (presign-data-access, fork-online-begin
-                // bundle uploads). Boards / events / templates /
-                // widgets / pages must be written through the API
-                // so role-permission gates and per-resource
-                // validation run; we never hand out a meta-container
-                // SAS to a client.
+                // Full app content for bot workspace uploads. Metadata stays
+                // behind the API's resource permissions and validation.
                 let content_sas = generate_directory_sas(
                     &self.account_name,
                     &self.content_container,
@@ -478,6 +470,29 @@ impl AzureRuntimeCredentials {
                     None,
                     None,
                     Some(format!("apps/{}", app_id)),
+                    None,
+                )
+            }
+            CredentialsAccess::ReadAppFiles | CredentialsAccess::EditAppFiles => {
+                let content_sas = generate_directory_sas(
+                    &self.account_name,
+                    &self.content_container,
+                    &format!("apps/{app_id}/upload"),
+                    if matches!(mode, CredentialsAccess::EditAppFiles) {
+                        "rwdl"
+                    } else {
+                        "rl"
+                    },
+                    &expiry_str,
+                    &issuer,
+                )?;
+                (
+                    None,
+                    Some(content_sas),
+                    None,
+                    None,
+                    None,
+                    Some(format!("apps/{app_id}")),
                     None,
                 )
             }
@@ -1429,6 +1444,29 @@ mod integration_tests {
             .and_then(|value| value.parse().ok())
     }
 
+    /// Signs `directory` with the validity window and permissions of `token`.
+    /// A directory SAS names neither its container nor its directory, and the
+    /// depth cannot tell `upload` from `storage`, so an identical result is the
+    /// only proof of what a token covers.
+    fn resigned_for(credentials: &AzureRuntimeCredentials, token: &str, directory: &str) -> String {
+        let query: std::collections::BTreeMap<String, String> =
+            reqwest::Url::parse(&format!("https://account.invalid/container?{token}"))
+                .unwrap()
+                .query_pairs()
+                .into_owned()
+                .collect();
+        generate_shared_key_directory_sas(
+            &credentials.account_name,
+            &credentials.content_container,
+            directory,
+            &query["sp"],
+            &query["st"],
+            &query["se"],
+            credentials.account_key.as_deref().unwrap(),
+        )
+        .unwrap()
+    }
+
     #[tokio::test]
     async fn test_azure_invoke_scopes_do_not_expose_meta_access() {
         let creds = test_azure_runtime_credentials();
@@ -1632,6 +1670,8 @@ mod integration_tests {
             CredentialsAccess::ReadApp,
             CredentialsAccess::ReadAppContent,
             CredentialsAccess::EditAppContent,
+            CredentialsAccess::ReadAppFiles,
+            CredentialsAccess::EditAppFiles,
             CredentialsAccess::ReadUser,
             CredentialsAccess::ReadLogs,
         ] {
@@ -1714,6 +1754,46 @@ mod integration_tests {
             ),
             Some(4)
         );
+    }
+
+    #[tokio::test]
+    async fn app_file_scopes_sign_only_the_upload_directory() {
+        let credentials = test_azure_runtime_credentials();
+        for (mode, permissions) in [
+            (CredentialsAccess::ReadAppFiles, "rl"),
+            (CredentialsAccess::EditAppFiles, "rwdl"),
+        ] {
+            let scoped = credentials
+                .scoped_credentials_for_test(TEST_SUB, TEST_APP_ID, mode.clone())
+                .await
+                .expect("upload directory SAS");
+            let token = scoped.content_sas_token.as_deref().unwrap();
+            assert_eq!(sas_directory_depth(token), Some(3), "{mode}");
+            assert_eq!(sas_permissions(token), Some(permissions), "{mode}");
+
+            let upload = format!("apps/{TEST_APP_ID}/upload");
+            assert_eq!(resigned_for(&credentials, token, &upload), token, "{mode}");
+            for sibling in ["storage", "metadata", "upload-other"] {
+                let sibling = format!("apps/{TEST_APP_ID}/{sibling}");
+                assert_ne!(
+                    resigned_for(&credentials, token, &sibling),
+                    token,
+                    "{mode} must not sign {sibling}"
+                );
+            }
+
+            assert!(scoped.meta_sas_token.is_none());
+            assert!(scoped.user_content_sas_token.is_none());
+            assert!(scoped.logs_sas_token.is_none());
+            // Path metadata stays at the app root: `to_db` appends
+            // `storage/db` to it and must land outside this grant.
+            assert_eq!(
+                scoped.content_path_prefix,
+                Some(format!("apps/{TEST_APP_ID}")),
+                "{mode}"
+            );
+            assert_eq!(scoped.user_content_path_prefix, None, "{mode}");
+        }
     }
 
     #[test]

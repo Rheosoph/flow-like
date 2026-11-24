@@ -3,6 +3,17 @@ import type { GuideTourId, IGuideTour } from "./guide-model";
 export const GUIDE_BOTS_ROUTE = "/bots";
 export const GUIDE_LIBRARY_ROUTE = "/library";
 export const GUIDE_EXPLORE_ROUTE = "/store/explore";
+
+/** The onboarding page with the introduction and the welcome question, in every app. */
+export const GUIDE_WELCOME_ROUTE = "/onboarding/welcome";
+
+export type GuideWelcomeStart = "story" | "question";
+
+export function guideWelcomeHref(start: GuideWelcomeStart = "story"): string {
+	return start === "question"
+		? `${GUIDE_WELCOME_ROUTE}?start=question`
+		: GUIDE_WELCOME_ROUTE;
+}
 const FLOWS_ROUTE = "/library/config/flows";
 const BOARD_ROUTE = "/flow";
 

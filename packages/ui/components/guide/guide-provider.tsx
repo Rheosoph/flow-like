@@ -1,20 +1,23 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { useDeveloperMode } from "../../hooks/use-developer-mode";
 import { useInvoke } from "../../hooks/use-invoke";
 import { GUIDE_EVENT, readGuideEvent } from "../../lib/guide/guide-events";
 import { currentStep, routeMatches } from "../../lib/guide/guide-model";
-import { GUIDE_TOURS } from "../../lib/guide/guide-tours";
+import { GUIDE_TOURS, guideWelcomeHref } from "../../lib/guide/guide-tours";
 import { cn } from "../../lib/utils";
-import { useBackend, useBackendReady } from "../../state/backend-state";
+import {
+	useBackend,
+	useBackendReady,
+	useSignedIn,
+} from "../../state/backend-state";
 import { useGuideStore } from "../../state/guide-state";
 import { GuideCard } from "./guide-card";
 import { useGuideCopy } from "./guide-copy";
 import { useGuideDocked } from "./guide-dock";
 import { GuideSpotlight } from "./guide-spotlight";
-import { GuideWelcomeDialog } from "./guide-welcome-dialog";
 
 /** Routes that own the whole screen before the app is usable. */
 const QUIET_ROUTES = ["/onboarding", "/join", "/callback", "/login", "/notch"];
@@ -31,14 +34,17 @@ function sawLegacyTutorial(): boolean {
 }
 
 /**
- * Decides once, on Home, whether this is a new user: no earlier tutorial and
- * no apps in the current profile. Onboarding can force the welcome instead.
+ * Decides once, on Home, whether this is a new user and sends them to the
+ * welcome page. New means: the account never finished the introduction, no
+ * earlier tutorial on this device and no apps in the current profile.
  */
 function useWelcomeDecision(pathname: string) {
 	const welcome = useGuideStore((state) => state.welcome);
-	const decideWelcome = useGuideStore((state) => state.decideWelcome);
+	const settleWelcome = useGuideStore((state) => state.settleWelcome);
+	const router = useRouter();
 	const backend = useBackend();
 	const ready = useBackendReady();
+	const signedIn = useSignedIn();
 	const deciding = welcome === "unknown" && pathname === "/" && ready;
 	const profile = useInvoke(
 		backend.userState.getProfile,
@@ -46,24 +52,37 @@ function useWelcomeDecision(pathname: string) {
 		[],
 		deciding,
 	);
+	const info = useInvoke(
+		backend.userState.getInfo,
+		backend.userState,
+		[],
+		deciding && signedIn,
+	);
+	const infoSettled = !signedIn || info.isSuccess || info.isError;
 
 	useEffect(() => {
 		if (!deciding) return;
-		if (sawLegacyTutorial()) {
-			decideWelcome(false);
-			return;
-		}
+		const decide = (isNew: boolean) => {
+			settleWelcome();
+			if (isNew) router.replace(guideWelcomeHref());
+		};
+		if (sawLegacyTutorial()) return decide(false);
+		if (!infoSettled) return;
+		if (info.data?.tutorial_completed) return decide(false);
 		if (profile.isSuccess) {
-			decideWelcome((profile.data?.apps?.length ?? 0) === 0);
+			decide((profile.data?.apps?.length ?? 0) === 0);
 		} else if (profile.isError) {
-			decideWelcome(false);
+			decide(false);
 		}
 	}, [
 		deciding,
+		infoSettled,
+		info.data?.tutorial_completed,
 		profile.isSuccess,
 		profile.isError,
 		profile.data,
-		decideWelcome,
+		settleWelcome,
+		router,
 	]);
 }
 
@@ -115,12 +134,11 @@ function ActiveSpotlight({ pathname }: Readonly<{ pathname: string }>) {
 }
 
 /**
- * Mount once per app, next to the other global overlays. It asks new users
- * the welcome question, follows what they do and points at the next control.
+ * Mount once per app, next to the other global overlays. It sends new users
+ * to the welcome page, follows what they do and points at the next control.
  */
 export function GuideProvider() {
 	const pathname = usePathname() ?? "/";
-	const welcome = useGuideStore((state) => state.welcome);
 	const visible = useGuideStore(
 		(state) => state.run !== null || state.finished !== null,
 	);
@@ -135,7 +153,6 @@ export function GuideProvider() {
 	const onBoard = routeMatches(pathname, "/flow");
 	return (
 		<>
-			<GuideWelcomeDialog open={welcome === "pending"} />
 			<ActiveSpotlight pathname={pathname} />
 			{visible && !docked && (
 				<div

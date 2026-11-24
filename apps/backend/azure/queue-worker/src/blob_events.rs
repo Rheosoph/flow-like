@@ -17,7 +17,6 @@ pub struct BlobEvent {
     /// `/blobServices/default/containers/<container>/blobs/<key>`
     pub subject: String,
     pub content_length: Option<i64>,
-    pub etag: Option<String>,
     /// Per-blob monotonic ordering token; compare lexicographically.
     pub sequencer: Option<String>,
 }
@@ -38,8 +37,6 @@ struct WireEvent {
 struct WireData {
     #[serde(rename = "contentLength")]
     content_length: Option<i64>,
-    #[serde(rename = "eTag")]
-    etag: Option<String>,
     sequencer: Option<String>,
 }
 
@@ -65,7 +62,6 @@ impl BlobEvent {
             event_type,
             subject: wire.subject,
             content_length: wire.data.content_length,
-            etag: wire.data.etag,
             sequencer: wire.data.sequencer,
         })
     }
@@ -111,7 +107,6 @@ mod tests {
         let event = BlobEvent::parse(CLOUD_EVENT.as_bytes()).expect("parses");
         assert_eq!(event.event_type, BLOB_CREATED);
         assert_eq!(event.content_length, Some(524288));
-        assert_eq!(event.etag.as_deref(), Some("0x8D4BCC2E4835CD0"));
         assert_eq!(
             event.container_and_key(),
             Some(("content", "apps/app1/storage/db/data.lance"))

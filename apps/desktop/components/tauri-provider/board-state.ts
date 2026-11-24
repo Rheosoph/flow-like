@@ -78,6 +78,10 @@ import {
 	type IBoardSyncRequest,
 	type IBoardSyncResponse,
 } from "@flow-like/flow-like-ui/lib/board-sync";
+import {
+	CatalogReader,
+	LEAN_CATALOG_QUERY,
+} from "@flow-like/flow-like-ui/lib/catalog-wire";
 import { withDeviceCommandBridge } from "@flow-like/flow-like-ui/lib/device-bridge";
 import {
 	type FlowVersionState,
@@ -115,6 +119,8 @@ import {
 import type { IElementDemand } from "@flow-like/flow-like-ui/lib/schema/flow/element-demand";
 import type {
 	IBoardRunRequirements,
+	IBoardRunRequirementsOptions,
+	IExecuteBoardOptions,
 	IFlowIrCommitReadback,
 } from "@flow-like/flow-like-ui/state/backend-state/board-state";
 import type { IOAuthRequiredError } from "@flow-like/flow-like-ui/state/backend-state/event-state";
@@ -125,7 +131,7 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import { isObject } from "lodash-es";
 import type { CSSProperties } from "react";
 import { toast } from "sonner";
-import { fetcher } from "../../lib/api";
+import { fetcher, fetcherConditional } from "../../lib/api";
 import {
 	dispatchFlowNotificationEvent,
 	dispatchFlowNotificationEvents,
@@ -172,6 +178,7 @@ interface DiffEntry {
 
 /** How many stale boards may hydrate at once from a summaries listing. */
 const BOARD_HYDRATION_CONCURRENCY = 3;
+const CATALOG_REQUEST = { method: "GET", timeoutMs: HUB_REFRESH_TIMEOUT_MS };
 
 /**
  * Comment media URLs are display-only, yet presigning them is awaited before a board is
@@ -565,6 +572,52 @@ export class BoardState implements IBoardState {
 	private readonly boardMutationSequences = new Map<string, Promise<void>>();
 	/** Remote boards are fetched incrementally; this holds the last assembled copy per board. */
 	private readonly remoteBoardSync = new BoardSyncClient();
+	/**
+	 * The hub's catalogs. The Tauri HTTP plugin has no cache, so the reader names the copy it
+	 * holds and a 304 spares download and decode; the built-in nodes are fetched by digest
+	 * once and shared by every app.
+	 */
+	private readonly hubCatalogs = new CatalogReader({
+		app: (appId, etag) =>
+			fetcherConditional<unknown>(
+				this.catalogProfile(),
+				`apps/${appId}/nodes?${LEAN_CATALOG_QUERY}`,
+				CATALOG_REQUEST,
+				this.backend.auth,
+				etag,
+			),
+		builtIn: (digest) =>
+			fetcher<unknown>(
+				this.catalogProfile(),
+				`apps/nodes?${LEAN_CATALOG_QUERY}&digest=${digest}`,
+				CATALOG_REQUEST,
+				this.backend.auth,
+			),
+		plain: (appId) =>
+			fetcher<INode[]>(
+				this.catalogProfile(),
+				`apps/${appId}/nodes`,
+				CATALOG_REQUEST,
+				this.backend.auth,
+			),
+	});
+	/**
+	 * This device's own catalogs. An app's nodes are read on every call (they are few); the
+	 * built-in ones cross the bridge only when the registry behind them changed.
+	 */
+	private readonly localCatalogs = new CatalogReader({
+		app: async (appId) => ({
+			notModified: false,
+			data: await invoke<unknown>("get_catalog", { appId }),
+		}),
+		builtIn: () => invoke<unknown>("get_catalog", { builtIn: true }),
+		plain: (appId) =>
+			Promise.reject(
+				new Error(
+					`The local catalog of app ${appId} uses a layout this build cannot read`,
+				),
+			),
+	});
 	/**
 	 * Local boards cross the Tauri bridge incrementally too: `get_board` serialises the whole
 	 * board on every refetch, and refetches happen after every own or peer edit. Kept separate
@@ -1171,17 +1224,7 @@ export class BoardState implements IBoardState {
 
 		if (!isOffline && this.backend.profile && this.backend.auth) {
 			try {
-				const nodes = await fetcher<INode[]>(
-					this.backend.profile,
-					`apps/${appId}/nodes`,
-					{ method: "GET", timeoutMs: HUB_REFRESH_TIMEOUT_MS },
-					this.backend.auth,
-				);
-				if (!Array.isArray(nodes)) {
-					throw new Error(
-						`Remote catalog for app ${appId} was not a node list (${typeof nodes})`,
-					);
-				}
+				const nodes = await this.hubCatalogs.read(appId);
 				// The remote catalog is what the server compares against when it decides which
 				// nodes may ship lean, so only it may feed remote-board hydration.
 				this.remoteBoardSync.setCatalog(appId, nodes);
@@ -1200,8 +1243,13 @@ export class BoardState implements IBoardState {
 			? []
 			: await syncRemoteAppPackages(this.backend, appId);
 		await this.ensureRemoteAppPackagesInstalled(appId, remotePackages);
-		const nodes: INode[] = await invoke("get_catalog", { appId });
-		return nodes;
+		return this.localCatalogs.read(appId);
+	}
+
+	private catalogProfile() {
+		const { profile } = this.backend;
+		if (!profile) throw new Error("No hub profile to read a node catalog from");
+		return profile;
 	}
 	/**
 	 * Bring a board this device does not have onto disk, and prove that it landed.
@@ -1389,12 +1437,14 @@ export class BoardState implements IBoardState {
 	 * The run preflight's view of a board, answered from the host's current revision. Keeps
 	 * what `getBoard(…, forceFresh)` guaranteed before a run: a board this device does not hold
 	 * yet is materialized first, and a Latest board of an online app takes the hub's newer
-	 * revision (within the refresh cap) before its requirements are read.
+	 * revision (within the refresh cap) before its requirements are read, unless the caller
+	 * already holds the board live-synced (`skipHubRefresh`).
 	 */
 	async getBoardRunRequirements(
 		appId: string,
 		boardId: string,
 		version?: [number, number, number],
+		options?: IBoardRunRequirementsOptions,
 	): Promise<IBoardRunRequirements> {
 		const read = () =>
 			invoke<IBoardRunRequirements>("get_board_run_requirements", {
@@ -1413,6 +1463,7 @@ export class BoardState implements IBoardState {
 		}
 		if (
 			typeof version !== "undefined" ||
+			options?.skipHubRefresh ||
 			!this.backend.profile ||
 			!this.backend.auth ||
 			!this.backend.queryClient ||
@@ -1930,6 +1981,7 @@ export class BoardState implements IBoardState {
 		eventId?: (id: string) => void,
 		cb?: (event: IIntercomEvent[]) => void,
 		skipConsentCheck?: boolean,
+		options?: IExecuteBoardOptions,
 	): Promise<ILogMetadata | undefined> {
 		return withDeviceCommandBridge(
 			{ appId, executionTarget: "local" },
@@ -1943,6 +1995,7 @@ export class BoardState implements IBoardState {
 					eventId,
 					bridgeCallback,
 					skipConsentCheck,
+					options,
 				),
 		);
 	}
@@ -1955,6 +2008,7 @@ export class BoardState implements IBoardState {
 		eventId?: (id: string) => void,
 		cb?: (event: IIntercomEvent[]) => void,
 		skipConsentCheck?: boolean,
+		options?: IExecuteBoardOptions,
 	): Promise<ILogMetadata | undefined> {
 		// Check if board requires local execution (computer automation)
 		// and verify RPA permissions before proceeding
@@ -1964,6 +2018,7 @@ export class BoardState implements IBoardState {
 				appId,
 				boardId,
 				normalizeBoardVersion(payload.version),
+				{ skipHubRefresh: options?.liveBoard },
 			);
 		} catch (error) {
 			// Everything below reads the flow to prepare a local run. A user who

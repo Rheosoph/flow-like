@@ -383,7 +383,6 @@ impl GcpRuntimeCredentials {
         let token_source = self.base_token_source();
 
         let apps_prefix = format!("apps/{}", app_id);
-        let db_prefix = format!("{}/storage/db", apps_prefix);
         let user_prefix = format!("users/{}/apps/{}", sub, app_id);
         let log_prefix = format!("runs/{}", app_id);
         // The writers (`/tmp` presign, HTTP-sink offload) run both segments
@@ -395,73 +394,7 @@ impl GcpRuntimeCredentials {
         let (content_path_prefix, user_content_path_prefix) =
             scoped_content_path_prefixes(&apps_prefix, &user_prefix, &mode);
 
-        let (allowed_prefixes, write_access) = match mode {
-            CredentialsAccess::EditApp => (vec![apps_prefix.clone()], true),
-            CredentialsAccess::ReadApp => (vec![apps_prefix.clone()], false),
-            // GCP scoping is prefix-based on a single bucket; we
-            // don't have a per-bucket policy to fall back to.
-            // Practical safety relies on the client only ever using
-            // these creds against the content store; the fork code
-            // enforces that, but a misbehaving client could read or
-            // write meta paths if both stores live in the same
-            // bucket. Same scope as `ReadApp` / `EditApp`.
-            CredentialsAccess::ReadAppContent => (vec![apps_prefix.clone()], false),
-            CredentialsAccess::EditAppContent => (vec![apps_prefix.clone()], true),
-            CredentialsAccess::ReadAppDb => (vec![db_prefix.clone()], false),
-            CredentialsAccess::EditAppDb => (vec![db_prefix.clone()], true),
-            CredentialsAccess::EditUser => (vec![user_prefix.clone()], true),
-            CredentialsAccess::ReadUser => (vec![user_prefix.clone()], false),
-            // Run logs (`runs/{app_id}`) are written only by the server
-            // executor (ServerExecute) and read only through the API
-            // (ReadLogs); the desktop keeps its own local log store. The
-            // client-facing invoke modes therefore never touch that prefix.
-            CredentialsAccess::InvokeNone => (
-                vec![user_prefix.clone(), temporary_user_prefix.clone()],
-                true,
-            ),
-            CredentialsAccess::InvokeRead => (
-                vec![
-                    apps_prefix.clone(),
-                    user_prefix.clone(),
-                    temporary_user_prefix.clone(),
-                    temporary_global_prefix.clone(),
-                ],
-                false,
-            ),
-            CredentialsAccess::InvokeWrite => (
-                vec![
-                    apps_prefix.clone(),
-                    user_prefix.clone(),
-                    temporary_user_prefix.clone(),
-                    temporary_global_prefix.clone(),
-                ],
-                true,
-            ),
-            CredentialsAccess::ServerExecute => (
-                vec![
-                    apps_prefix.clone(),
-                    user_prefix.clone(),
-                    temporary_user_prefix.clone(),
-                    temporary_global_prefix.clone(),
-                    log_prefix.clone(),
-                ],
-                true,
-            ),
-            // Shadow/replay: same reachable prefixes as ServerExecute; the
-            // access-boundary rules below drop writes on app/user content.
-            CredentialsAccess::ShadowExecute => (
-                vec![
-                    apps_prefix.clone(),
-                    user_prefix.clone(),
-                    temporary_user_prefix.clone(),
-                    temporary_global_prefix.clone(),
-                    log_prefix.clone(),
-                ],
-                true,
-            ),
-            CredentialsAccess::ReadLogs => (vec![log_prefix.clone()], false),
-            CredentialsAccess::DeviceExecute { .. } => unreachable!("handled above"),
-        };
+        let (allowed_prefixes, write_access) = scoped_prefixes(sub, app_id, &mode);
 
         // Generate a base access token, then downscope it with Credential Access Boundary
         let base_token = token_source.access_token(state).await?;
@@ -583,7 +516,6 @@ impl GcpRuntimeCredentials {
             .ok_or_else(|| anyhow!("GOOGLE_APPLICATION_CREDENTIALS_JSON is not set"))?;
 
         let apps_prefix = format!("apps/{}", app_id);
-        let db_prefix = format!("{}/storage/db", apps_prefix);
         let user_prefix = format!("users/{}/apps/{}", sub, app_id);
         let log_prefix = format!("runs/{}", app_id);
         // The writers (`/tmp` presign, HTTP-sink offload) run both segments
@@ -595,73 +527,7 @@ impl GcpRuntimeCredentials {
         let (content_path_prefix, user_content_path_prefix) =
             scoped_content_path_prefixes(&apps_prefix, &user_prefix, &mode);
 
-        let (allowed_prefixes, write_access) = match mode {
-            CredentialsAccess::EditApp => (vec![apps_prefix.clone()], true),
-            CredentialsAccess::ReadApp => (vec![apps_prefix.clone()], false),
-            // GCP scoping is prefix-based on a single bucket; we
-            // don't have a per-bucket policy to fall back to.
-            // Practical safety relies on the client only ever using
-            // these creds against the content store; the fork code
-            // enforces that, but a misbehaving client could read or
-            // write meta paths if both stores live in the same
-            // bucket. Same scope as `ReadApp` / `EditApp`.
-            CredentialsAccess::ReadAppContent => (vec![apps_prefix.clone()], false),
-            CredentialsAccess::EditAppContent => (vec![apps_prefix.clone()], true),
-            CredentialsAccess::ReadAppDb => (vec![db_prefix.clone()], false),
-            CredentialsAccess::EditAppDb => (vec![db_prefix.clone()], true),
-            CredentialsAccess::EditUser => (vec![user_prefix.clone()], true),
-            CredentialsAccess::ReadUser => (vec![user_prefix.clone()], false),
-            // Run logs (`runs/{app_id}`) are written only by the server
-            // executor (ServerExecute) and read only through the API
-            // (ReadLogs); the desktop keeps its own local log store. The
-            // client-facing invoke modes therefore never touch that prefix.
-            CredentialsAccess::InvokeNone => (
-                vec![user_prefix.clone(), temporary_user_prefix.clone()],
-                true,
-            ),
-            CredentialsAccess::InvokeRead => (
-                vec![
-                    apps_prefix.clone(),
-                    user_prefix.clone(),
-                    temporary_user_prefix.clone(),
-                    temporary_global_prefix.clone(),
-                ],
-                false,
-            ),
-            CredentialsAccess::InvokeWrite => (
-                vec![
-                    apps_prefix.clone(),
-                    user_prefix.clone(),
-                    temporary_user_prefix.clone(),
-                    temporary_global_prefix.clone(),
-                ],
-                true,
-            ),
-            CredentialsAccess::ServerExecute => (
-                vec![
-                    apps_prefix.clone(),
-                    user_prefix.clone(),
-                    temporary_user_prefix.clone(),
-                    temporary_global_prefix.clone(),
-                    log_prefix.clone(),
-                ],
-                true,
-            ),
-            // Shadow/replay: same reachable prefixes as ServerExecute; the
-            // access-boundary rules below drop writes on app/user content.
-            CredentialsAccess::ShadowExecute => (
-                vec![
-                    apps_prefix.clone(),
-                    user_prefix.clone(),
-                    temporary_user_prefix.clone(),
-                    temporary_global_prefix.clone(),
-                    log_prefix.clone(),
-                ],
-                true,
-            ),
-            CredentialsAccess::ReadLogs => (vec![log_prefix.clone()], false),
-            CredentialsAccess::DeviceExecute { .. } => unreachable!("handled above"),
-        };
+        let (allowed_prefixes, write_access) = scoped_prefixes(sub, app_id, &mode);
 
         // Generate a base access token, then downscope it with Credential Access Boundary
         let base_token =
@@ -758,6 +624,55 @@ impl GcpRuntimeCredentials {
     }
 }
 
+/// Object prefixes an access mode may reach and whether it may write there.
+/// Production and the test-only issuer both read this table, so a scope cannot
+/// pass its tests while a different one ships.
+#[cfg(feature = "gcp")]
+fn scoped_prefixes(sub: &str, app_id: &str, mode: &CredentialsAccess) -> (Vec<String>, bool) {
+    let apps = format!("apps/{app_id}");
+    let db = format!("{apps}/storage/db");
+    let files = format!("{apps}/upload");
+    let user = format!("users/{sub}/apps/{app_id}");
+    let logs = format!("runs/{app_id}");
+    let (tmp_user, tmp_global) = crate::credentials::temporary_prefixes(sub, app_id);
+
+    match mode {
+        CredentialsAccess::EditApp => (vec![apps], true),
+        CredentialsAccess::ReadApp => (vec![apps], false),
+        // GCP scoping is prefix-based on a single bucket; we
+        // don't have a per-bucket policy to fall back to.
+        // Practical safety relies on the client only ever using
+        // these creds against the content store; the fork code
+        // enforces that, but a misbehaving client could read or
+        // write meta paths if both stores live in the same
+        // bucket. Same scope as `ReadApp` / `EditApp`.
+        CredentialsAccess::ReadAppContent => (vec![apps], false),
+        CredentialsAccess::EditAppContent => (vec![apps], true),
+        CredentialsAccess::ReadAppFiles => (vec![files], false),
+        CredentialsAccess::EditAppFiles => (vec![files], true),
+        CredentialsAccess::ReadAppDb => (vec![db], false),
+        CredentialsAccess::EditAppDb => (vec![db], true),
+        CredentialsAccess::EditUser => (vec![user], true),
+        CredentialsAccess::ReadUser => (vec![user], false),
+        // Run logs (`runs/{app_id}`) are written only by the server
+        // executor (ServerExecute) and read only through the API
+        // (ReadLogs); the desktop keeps its own local log store. The
+        // client-facing invoke modes therefore never touch that prefix.
+        CredentialsAccess::InvokeNone => (vec![user, tmp_user], true),
+        CredentialsAccess::InvokeRead => (vec![apps, user, tmp_user, tmp_global], false),
+        CredentialsAccess::InvokeWrite => (vec![apps, user, tmp_user, tmp_global], true),
+        // Shadow/replay reaches the same prefixes as ServerExecute; the
+        // access-boundary rules drop its writes on app/user content.
+        CredentialsAccess::ServerExecute | CredentialsAccess::ShadowExecute => {
+            (vec![apps, user, tmp_user, tmp_global, logs], true)
+        }
+        CredentialsAccess::ReadLogs => (vec![logs], false),
+        CredentialsAccess::DeviceExecute { .. } => {
+            unreachable!("device credentials are minted separately")
+        }
+    }
+}
+
 #[cfg(feature = "gcp")]
 fn scoped_content_path_prefixes(
     apps_prefix: &str,
@@ -770,6 +685,8 @@ fn scoped_content_path_prefixes(
             | CredentialsAccess::ReadApp
             | CredentialsAccess::ReadAppContent
             | CredentialsAccess::EditAppContent
+            | CredentialsAccess::ReadAppFiles
+            | CredentialsAccess::EditAppFiles
             | CredentialsAccess::ReadAppDb
             | CredentialsAccess::EditAppDb
             | CredentialsAccess::InvokeRead
@@ -1971,6 +1888,64 @@ mod tests {
         let condition = access_boundary_condition(&rule);
         assert!(condition.contains("objects/apps/app-1/'"));
         assert!(condition.contains("startsWith('runs/app-1/')"));
+    }
+
+    #[test]
+    fn app_file_modes_reach_only_the_upload_directory() {
+        let app = format!("apps/{TEST_APP_ID}");
+        let user = format!("users/{TEST_SUB}/apps/{TEST_APP_ID}");
+        for (mode, write, roles) in [
+            (
+                CredentialsAccess::ReadAppFiles,
+                false,
+                &["inRole:roles/storage.objectViewer"],
+            ),
+            (
+                CredentialsAccess::EditAppFiles,
+                true,
+                &["inRole:roles/storage.objectAdmin"],
+            ),
+        ] {
+            let (prefixes, write_access) = scoped_prefixes(TEST_SUB, TEST_APP_ID, &mode);
+            assert_eq!(prefixes, vec![format!("{app}/upload")], "{mode}");
+            assert_eq!(write_access, write, "{mode}");
+
+            let rule = GcpAccessRule::new("content".to_string(), prefixes, write_access);
+            assert_eq!(rule.access.roles(), roles, "{mode}");
+            assert_eq!(
+                access_boundary_condition(&rule),
+                format!(
+                    "resource.name.startsWith('projects/_/buckets/content/objects/{app}/upload/') \
+                     || api.getAttribute('storage.googleapis.com/objectListPrefix', '')\
+                     .startsWith('{app}/upload/')"
+                ),
+                "{mode}"
+            );
+            let [directory] = rule.prefixes.as_slice() else {
+                panic!("{mode} must be bound to one directory");
+            };
+            for outside in [
+                format!("{app}/storage/db/table.lance/data/file"),
+                format!("{app}/metadata/secret.json"),
+                format!("{app}/upload-other/report.csv"),
+                format!("{app}0/upload/report.csv"),
+                format!("{user}/upload/report.csv"),
+                format!("{app}/upload"),
+                format!("{app}/"),
+            ] {
+                assert!(
+                    !outside.starts_with(directory.as_str()),
+                    "{mode} must not reach {outside}"
+                );
+            }
+            // Path metadata stays at the app root: `to_db` appends
+            // `storage/db` to it and must land outside this grant.
+            assert_eq!(
+                scoped_content_path_prefixes(&app, &user, &mode),
+                (Some(app.clone()), None),
+                "{mode}"
+            );
+        }
     }
 
     #[test]

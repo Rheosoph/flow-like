@@ -11,7 +11,6 @@ use flow_like_secrets::{
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-mod accounting;
 mod event_handler;
 use std::sync::Arc;
 use std::time::Duration;

@@ -492,6 +492,16 @@ pub async fn upload_to_bot_workspace(
                 tracing::error!(%app_id, %error, "Scoping workspace upload credentials failed");
                 ApiError::internal("Failed to create the workspace upload credentials")
             })?;
+    crate::audit::storage_access::authorize_credentials(
+        &state,
+        &user,
+        &app_id,
+        &sub,
+        &CredentialsAccess::EditAppContent,
+        "bot_workspace_upload",
+        &credentials,
+    )
+    .await?;
     let shared_credentials =
         serde_json::to_value(credentials.into_shared_credentials()).map_err(|error| {
             tracing::error!(%app_id, %error, "Serializing workspace upload credentials failed");

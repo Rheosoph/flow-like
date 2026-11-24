@@ -110,11 +110,8 @@ export const registryMineQueryKey = (user?: string) =>
 	["mine-registry-maintained", user] as const;
 
 const STATE_TONE: Record<RegistryMineState, HubTone> = {
-	live: {
-		text: "text-emerald-600 dark:text-emerald-400",
-		dot: "bg-emerald-500",
-	},
-	in_review: { text: "text-sky-600 dark:text-sky-400", dot: "bg-sky-500" },
+	live: { text: "text-good", dot: "bg-good-solid" },
+	in_review: { text: "text-info", dot: "bg-info-solid" },
 	rejected: { text: "text-destructive", dot: "bg-destructive" },
 	disabled: { text: "text-destructive", dot: "bg-destructive" },
 	deprecated: { text: "text-muted-foreground", dot: "bg-muted-foreground" },

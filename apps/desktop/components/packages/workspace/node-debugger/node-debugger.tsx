@@ -182,13 +182,13 @@ export function NodeDebuggerTabs({
 							{lintCounts.errors}
 						</Badge>
 					) : lintCounts.warnings > 0 ? (
-						<Badge className="text-[10px] ml-1 px-1.5 py-0 h-4 bg-amber-500/10 text-amber-600 border-amber-500/20">
+						<Badge className="text-[10px] ml-1 px-1.5 py-0 h-4 bg-warning-bg text-warning border-warning-line">
 							{lintCounts.warnings}
 						</Badge>
 					) : (
 						<Badge
 							variant="outline"
-							className="text-[10px] ml-1 px-1.5 py-0 h-4 text-green-600"
+							className="text-[10px] ml-1 px-1.5 py-0 h-4 text-good"
 						>
 							0
 						</Badge>
@@ -433,7 +433,7 @@ function RunView({ session }: Readonly<{ session: NodeDebuggerSession }>) {
 						<ScrollArea className="max-h-125">
 							<div className="space-y-4 pr-3">
 								{selectedNodeRequiresModels && missingModelInput && (
-									<div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-700">
+									<div className="rounded-lg border border-warning-line bg-warning-bg p-3 text-xs text-warning">
 										{t(
 											"selectAnLlmOrVlmBitForThisNodeBeforeRunningIt",
 											"Select an LLM or VLM bit for this node before running it.",
@@ -480,7 +480,7 @@ function RunView({ session }: Readonly<{ session: NodeDebuggerSession }>) {
 								(result.error ? (
 									<AlertCircle className="h-3.5 w-3.5 text-destructive" />
 								) : (
-									<CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+									<CheckCircle2 className="h-3.5 w-3.5 text-good" />
 								))}
 						</div>
 						{outputsExpanded ? (

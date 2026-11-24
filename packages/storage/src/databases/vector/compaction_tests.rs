@@ -17,7 +17,10 @@ use lance_object_store::{
 };
 
 use super::super::VectorStore;
-use super::{DatabaseSelector, LanceDBVectorStore, connect_lance};
+use super::{
+    DatabaseSelector, LanceDBVectorStore, MaintenanceNeeds, connect_lance,
+    fragments_need_compaction, index_needs_update,
+};
 
 const ROOT: &str = "countsim://bucket/db";
 const TABLE: &str = "items";
@@ -508,6 +511,129 @@ async fn cleanup_settings_without_an_interval_do_not_block_retaining_optimize() 
             .get("lance.auto_cleanup.older_than")
             .map(String::as_str),
         Some("0s")
+    );
+    Ok(())
+}
+
+#[test]
+fn maintenance_thresholds() {
+    let small = |count: usize| std::iter::repeat_n((10, 0), count);
+    assert!(!fragments_need_compaction(small(15)));
+    assert!(fragments_need_compaction(small(16)));
+    assert!(!fragments_need_compaction(
+        small(15).chain(std::iter::once((200_000, 0)))
+    ));
+    assert!(fragments_need_compaction([(200_000, 20_001)]));
+    assert!(!fragments_need_compaction([(200_000, 20_000), (0, 0)]));
+
+    assert!(!index_needs_update(1_000_000, 49_999));
+    assert!(index_needs_update(1_000_000, 50_000));
+    assert!(index_needs_update(900, 100));
+    assert!(!index_needs_update(901, 99));
+    assert!(!index_needs_update(0, 0));
+}
+
+#[tokio::test]
+async fn maintenance_compacts_past_the_threshold_and_keeps_history() -> Result<()> {
+    let bucket = CountingBucket::new()?;
+    let mut store = bucket.open().await?;
+    insert_one_by_one(&mut store, 0..15, 0).await?;
+    let fragmented = bucket.open().await?;
+    assert_eq!(
+        fragmented.maintenance_needs().await?,
+        MaintenanceNeeds::default()
+    );
+
+    store.insert(rows(15..16, 0)).await?;
+    let fragmented = bucket.open().await?;
+    let needs = fragmented.maintenance_needs().await?;
+    assert!(needs.compact);
+    fragmented.maintain(needs).await?;
+
+    let maintained = bucket.open().await?;
+    assert_eq!(fragment_ids(&maintained).await?.len(), 1);
+    assert_eq!(maintained.count(None).await?, 16);
+    assert_eq!(
+        maintained.maintenance_needs().await?,
+        MaintenanceNeeds::default()
+    );
+    assert_eq!(
+        historical_row_counts(&maintained, 16).await?,
+        (1..=16).collect::<Vec<_>>()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn maintenance_materializes_deletions_only_past_a_tenth() -> Result<()> {
+    let bucket = CountingBucket::new()?;
+    let mut store = bucket.open().await?;
+    store.insert(rows(0..10, 0)).await?;
+    store.delete("id = 'item-3'").await?;
+    assert_eq!(
+        bucket.open().await?.maintenance_needs().await?,
+        MaintenanceNeeds::default()
+    );
+    store.delete("id = 'item-4'").await?;
+    let needs = bucket.open().await?.maintenance_needs().await?;
+    assert!(needs.compact);
+    bucket.open().await?.maintain(needs).await?;
+
+    let table = bucket.open().await?.raw().await?;
+    let dataset = table.dataset().unwrap().get().await?;
+    assert!(
+        dataset
+            .manifest()
+            .fragments
+            .iter()
+            .all(|fragment| fragment.deletion_file.is_none())
+    );
+    assert_eq!(bucket.open().await?.count(None).await?, 8);
+    Ok(())
+}
+
+#[tokio::test]
+async fn maintenance_removes_the_legacy_cleanup_policy_then_compacts() -> Result<()> {
+    let bucket = CountingBucket::new()?;
+    let mut store = bucket.open().await?;
+    insert_one_by_one(&mut store, 0..16, 0).await?;
+    let table = store.raw().await?;
+    let wrapper = table.dataset().unwrap();
+    let mut dataset = wrapper.get().await?.as_ref().clone();
+    dataset
+        .update_config([
+            ("lance.auto_cleanup.interval", "20"),
+            ("lance.auto_cleanup.older_than", "14days"),
+            ("lance.auto_cleanup.retain_versions", "3"),
+            ("unrelated.setting", "kept"),
+        ])
+        .await?;
+    wrapper.update(dataset);
+    let configured = table.version().await?;
+
+    let stale = bucket.open().await?;
+    stale.maintain(stale.maintenance_needs().await?).await?;
+
+    let maintained = bucket.open().await?;
+    let table = maintained.raw().await?;
+    let dataset = table.dataset().unwrap().get().await?;
+    assert!(
+        dataset
+            .config()
+            .keys()
+            .all(|key| !key.starts_with("lance.auto_cleanup."))
+    );
+    assert_eq!(
+        dataset
+            .config()
+            .get("unrelated.setting")
+            .map(String::as_str),
+        Some("kept")
+    );
+    assert_eq!(fragment_ids(&maintained).await?.len(), 1);
+    assert_eq!(
+        historical_row_counts(&maintained, configured).await?,
+        (1..=16).chain(std::iter::once(16)).collect::<Vec<_>>()
     );
     Ok(())
 }

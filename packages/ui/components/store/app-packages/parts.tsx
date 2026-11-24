@@ -10,7 +10,7 @@ import { Badge } from "../../ui/badge";
 export const ELEVATED_CHIP_CLASS =
 	"border-primary/35 bg-primary/10 font-normal text-primary";
 export const LICENSE_WARNING_BADGE_CLASS =
-	"border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400";
+	"border-warning-line bg-warning-bg text-warning";
 
 /** Display labels for manifest tiers and capability tags that have no store label. */
 export function useAccessLabels() {
