@@ -170,9 +170,8 @@ pub struct OfflineMetaBundle {
     pub blobs: Vec<MetaBlob>,
     /// The source owner's policy, so the desktop can show what it got.
     pub policy: ForkPolicy,
-    /// Source-relative content prefixes the desktop must not mirror.
-    /// Advisory — the caller already holds `ReadFiles` on the source, so
-    /// this keeps the copy honest rather than protecting the bytes.
+    /// Source-relative prefixes excluded from the staged download bundle.
+    /// Content downloads enforce the same policy before signing each file.
     pub content_exclude_prefixes: Vec<String>,
     /// Populated for schema-only database forks: the desktop creates
     /// these tables empty in its local project DB.
@@ -211,12 +210,11 @@ pub struct OfflineMetaBundle {
 ///    `apps/{id}` content prefix, while desktop readers expect it
 ///    under `apps/{id}/media`.
 ///
-/// Storage-backed user content (`upload/`, `storage/`, and any legacy
-/// `metadata/` files) is **not** in the bundle — `begin_offline_fork`
-/// hands the desktop a single scoped `ReadAppContent` credential over
-/// the source's content prefix and the desktop pulls those bytes
-/// directly. Inline DB metadata wins if both sources provide the same
-/// destination path.
+/// Storage-backed user content (`upload/`, `storage/`, and legacy
+/// `metadata/` files) is fetched through the paginated offline-files endpoint.
+/// That endpoint applies the owner's policy before signing individual
+/// downloads. The desktop receives no storage credentials. Inline DB
+/// metadata wins if both sources provide the same destination path.
 pub async fn compute_offline_fork_bundle(
     state: &AppState,
     src_app_id: &str,
@@ -253,10 +251,8 @@ pub async fn compute_offline_fork_bundle(
         .ok_or(ApiError::NOT_FOUND)?;
     overlay_app_row_into_manifest(&src_app_row, &mut manifest_proto);
 
-    // Owner-defined policy, loaded server-side. The desktop is told what
-    // it may pull, but the credential it receives still covers the whole
-    // source content prefix — the forker already holds `ReadFiles` on the
-    // source, so narrowing it would protect nothing.
+    // Load the owner's policy here. Bundle staging and content URL signing
+    // enforce its exclusions before any download reaches the desktop.
     let policy = ForkPolicy::from_app_row(&src_app_row);
     let mut warnings: Vec<String> = Vec::new();
 

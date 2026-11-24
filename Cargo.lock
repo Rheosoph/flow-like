@@ -3333,8 +3333,10 @@ dependencies = [
  "flow-like-compiler",
  "flow-like-db",
  "flow-like-executor",
+ "flow-like-file-accounting",
  "flow-like-storage",
  "flow-like-types-contracts",
+ "futures-util",
  "image",
  "mimalloc",
  "sea-orm",
@@ -10528,6 +10530,7 @@ dependencies = [
  "chrono",
  "flow-like-aws-data",
  "flow-like-db",
+ "flow-like-file-accounting",
  "flow-like-secrets",
  "lambda_runtime 0.14.4",
  "sea-orm",
@@ -10726,6 +10729,7 @@ dependencies = [
  "flow-like-db",
  "flow-like-device-protocol",
  "flow-like-executor",
+ "flow-like-file-accounting",
  "flow-like-gcp-data",
  "flow-like-query",
  "flow-like-secrets",
@@ -12320,6 +12324,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "flow-like-file-accounting"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "flow-like-db",
+ "sea-orm",
+ "tokio",
+]
+
+[[package]]
 name = "flow-like-gcp-data"
 version = "0.1.0"
 dependencies = [
@@ -13738,9 +13752,11 @@ dependencies = [
  "flow-like-compiler",
  "flow-like-db",
  "flow-like-executor",
+ "flow-like-file-accounting",
  "flow-like-gcp-data",
  "flow-like-storage",
  "flow-like-types-contracts",
+ "futures 0.3.32",
  "image",
  "jsonwebtoken",
  "mimalloc",

@@ -180,6 +180,8 @@ download helpers obtain a signed URL, then transfer the bytes without forwarding
 platform credentials. Use `get_upload_urls()` or `get_download_urls()` when
 another process should perform the transfer. Pass `user=True` for user storage.
 `presign_data()` returns scoped storage credentials rather than a file download URL.
+The credentials cover the app's whole upload directory, or your private directory
+with `user=True`. `prefix` only selects the path that is returned.
 
 ## Database / LanceDB
 

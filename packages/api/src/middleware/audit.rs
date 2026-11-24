@@ -208,12 +208,23 @@ pub async fn audit_middleware(
         )
         .await;
     }
-    let Some(user) = request.extensions().get::<AppUser>().cloned() else {
-        return next.run(request).await;
+    let Some(user) = request
+        .extensions()
+        .get::<AppUser>()
+        .filter(|user| !matches!(user, AppUser::Unauthorized))
+        .cloned()
+    else {
+        // Public fork grants still need the request IP and audit failure context.
+        return run_scoped(
+            RequestAuditContext {
+                actor_ip,
+                ..Default::default()
+            },
+            mutation,
+            || next.run(request),
+        )
+        .await;
     };
-    if matches!(user, AppUser::Unauthorized) {
-        return next.run(request).await;
-    }
     let Some(route) = request
         .extensions()
         .get::<MatchedPath>()

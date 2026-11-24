@@ -164,12 +164,24 @@ pub async fn begin_offline_fork(
         &bundle.content_exclude_prefixes,
     )
     .await?;
+    let expires_at = signer.expires_at();
+    crate::audit::storage_access::authorize_downloads(
+        &state,
+        &user,
+        &app_id,
+        "fork_metadata",
+        &bundle.new_app_id,
+        Some(&session_id),
+        meta_files.len(),
+        expires_at,
+    )
+    .await?;
     Ok(Json(BeginOfflineForkResponse {
         new_app_id: bundle.new_app_id,
         fork_session_id: session_id,
         source_app_id: app_id,
         meta_files,
-        expires_at: signer.expires_at(),
+        expires_at,
         remote_token_sites: token_sites,
         report: ForkReport {
             id_map: bundle.id_map,

@@ -99,6 +99,16 @@ RUN if [ -n "$CRDB_CA_URL" ]; then \
 
 FROM public.ecr.aws/lambda/provided:al2023-arm64
 
+# Patch runtime packages separately from the builder (ALAS2023-2026-3430).
+ARG AL2023_SECURITY_RELEASE=2023.12.20261112
+RUN set -eu; \
+    dnf upgrade -y --releasever="${AL2023_SECURITY_RELEASE}" rpm rpm-libs; \
+    for package in rpm rpm-libs; do \
+        installed_version="$(rpm -q --qf '%{VERSION}-%{RELEASE}' "$package")"; \
+        test "$(rpm --eval "%{lua:print(rpm.vercmp('${installed_version}', '4.16.1.3-29.amzn2023.0.10'))}")" -ge 0; \
+    done; \
+    dnf clean all
+
 COPY LICENSE /usr/share/licenses/flow-like/LICENSE
 COPY --from=otel-extension /otel/licenses/ /usr/share/licenses/aws-otel-lambda/
 COPY --from=otel-extension /otel/extensions/ /opt/extensions/

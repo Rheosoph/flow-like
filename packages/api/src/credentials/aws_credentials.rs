@@ -3,6 +3,8 @@ use super::RuntimeCredentialsTrait;
 use crate::credentials::CredentialsAccess;
 use crate::state::{AppState, State};
 #[cfg(feature = "aws")]
+use aws_sdk_sts::operation::RequestId;
+#[cfg(feature = "aws")]
 use flow_like::credentials::{
     BucketConfig, SharedCredentials,
     aws_credentials::{AwsSharedCredentials, sse_kms_storage_options},
@@ -205,15 +207,7 @@ impl AwsRuntimeCredentials {
             .get_or_init(|| sts.client(&state.aws_client));
 
         let apps_prefix = format!("apps/{}", app_id);
-        let db_prefix = format!("{}/storage/db", apps_prefix);
         let user_prefix = format!("users/{}/apps/{}", sub, app_id);
-        let runs_prefix = format!("runs/{}", app_id);
-        // The writers (`/tmp` presign, HTTP-sink offload) run both segments
-        // through `storage_path_segment`, so the prefixes this credential
-        // authorises have to as well — a raw `sink:abc` here would name a
-        // directory nothing ever writes to.
-        let (temporary_user_prefix, temporary_global_prefix) =
-            crate::credentials::temporary_prefixes(sub, app_id);
         let (content_path_prefix, user_content_path_prefix) =
             scoped_content_path_prefixes(&apps_prefix, &user_prefix, &mode);
 
@@ -253,59 +247,7 @@ impl AwsRuntimeCredentials {
         }
         let meta_express = sts.provider == S3StsProvider::Aws && meta_bucket_express_zone();
         let kms_actions = kms_session_actions(&mode, meta_express);
-        let policy = match mode {
-            CredentialsAccess::EditApp => edit_app_policy(self, &apps_prefix),
-            CredentialsAccess::ReadApp => read_app_policy(self, &apps_prefix),
-            CredentialsAccess::ReadAppContent => read_app_content_policy(self, &apps_prefix),
-            CredentialsAccess::EditAppContent => edit_app_content_policy(self, &apps_prefix),
-            CredentialsAccess::ReadAppDb => read_app_content_policy(self, &db_prefix),
-            CredentialsAccess::EditAppDb => edit_app_content_policy(self, &db_prefix),
-            CredentialsAccess::EditUser => edit_user_policy(self, &user_prefix),
-            CredentialsAccess::ReadUser => read_user_policy(self, &user_prefix),
-            CredentialsAccess::InvokeNone => {
-                invoke_none_policy(self, &user_prefix, &temporary_user_prefix)
-            }
-            CredentialsAccess::InvokeRead => invoke_read_policy(
-                self,
-                &apps_prefix,
-                &user_prefix,
-                &temporary_user_prefix,
-                &temporary_global_prefix,
-            ),
-            CredentialsAccess::InvokeWrite => invoke_read_write_policy(
-                self,
-                &apps_prefix,
-                &user_prefix,
-                &temporary_user_prefix,
-                &temporary_global_prefix,
-            ),
-            CredentialsAccess::DeviceExecute { write, expires_at } => device_execute_policy(
-                &self.content_bucket,
-                &self.region,
-                &super::device_execute_prefixes(sub, app_id)?
-                    .into_values()
-                    .collect::<Vec<_>>(),
-                write,
-                expires_at,
-            ),
-            CredentialsAccess::ServerExecute => server_execute_policy(
-                self,
-                &apps_prefix,
-                &user_prefix,
-                &runs_prefix,
-                &temporary_user_prefix,
-                &temporary_global_prefix,
-            ),
-            CredentialsAccess::ShadowExecute => shadow_execute_policy(
-                self,
-                &apps_prefix,
-                &user_prefix,
-                &runs_prefix,
-                &temporary_user_prefix,
-                &temporary_global_prefix,
-            ),
-            CredentialsAccess::ReadLogs => read_logs_policy(self, &runs_prefix),
-        };
+        let policy = self.session_policy(sub, app_id, &mode)?;
 
         // A bucket encrypted with a customer-managed key answers every S3 call
         // with AccessDenied unless the session may also use the key.
@@ -323,10 +265,14 @@ impl AwsRuntimeCredentials {
                 "STS session policy exceeds 2048 bytes; use shorter bucket/project/user identifiers or reduce duplicated KMS key configuration"
             ));
         }
+        let policy_sha256 = {
+            use sha2::{Digest, Sha256};
+            hex::encode(Sha256::digest(policy.as_bytes()))
+        };
         let response = client
             .assume_role()
             .role_arn(&sts.role_arn)
-            .role_session_name(session_name)
+            .role_session_name(&session_name)
             .policy(policy)
             .duration_seconds(match &mode {
                 CredentialsAccess::DeviceExecute { expires_at, .. } => {
@@ -364,6 +310,23 @@ impl AwsRuntimeCredentials {
             }
             _ => expiration,
         };
+        if sts.provider == S3StsProvider::Aws {
+            crate::audit::storage_access::record_aws_issuance(
+                state,
+                crate::audit::storage_access::AwsCredentialIssuance {
+                    subject: sub,
+                    app_id,
+                    access: &mode,
+                    role_arn: &sts.role_arn,
+                    session_name: &session_name,
+                    request_id: response.request_id(),
+                    access_key_id: credentials.access_key_id(),
+                    policy_sha256: &policy_sha256,
+                    expiration,
+                },
+            )
+            .await?;
+        }
         Ok(Self {
             access_key_id: Some(credentials.access_key_id().to_owned()),
             secret_access_key: Some(credentials.secret_access_key().to_owned()),
@@ -376,6 +339,173 @@ impl AwsRuntimeCredentials {
             content_path_prefix,
             user_content_path_prefix,
         })
+    }
+
+    /// The S3 statements an access mode is minted with, before the KMS grant.
+    /// `scoped_credentials` sends exactly this to STS, so tests read a mode's
+    /// reach from here.
+    fn session_policy(
+        &self,
+        sub: &str,
+        app_id: &str,
+        mode: &CredentialsAccess,
+    ) -> Result<flow_like_types::Value> {
+        let apps_prefix = format!("apps/{}", app_id);
+        let db_prefix = format!("{}/storage/db", apps_prefix);
+        let user_prefix = format!("users/{}/apps/{}", sub, app_id);
+        let runs_prefix = format!("runs/{}", app_id);
+        // The writers (`/tmp` presign, HTTP-sink offload) run both segments
+        // through `storage_path_segment`, so the prefixes this credential
+        // authorises have to as well — a raw `sink:abc` here would name a
+        // directory nothing ever writes to.
+        let (temporary_user_prefix, temporary_global_prefix) =
+            crate::credentials::temporary_prefixes(sub, app_id);
+
+        Ok(match mode {
+            CredentialsAccess::EditApp => edit_app_policy(self, &apps_prefix),
+            CredentialsAccess::ReadApp => read_app_policy(self, &apps_prefix),
+            CredentialsAccess::ReadAppContent => read_app_content_policy(self, &apps_prefix),
+            CredentialsAccess::EditAppContent => edit_app_content_policy(self, &apps_prefix),
+            CredentialsAccess::ReadAppFiles => app_files_policy(self, &apps_prefix, false),
+            CredentialsAccess::EditAppFiles => app_files_policy(self, &apps_prefix, true),
+            CredentialsAccess::ReadAppDb => read_app_content_policy(self, &db_prefix),
+            CredentialsAccess::EditAppDb => edit_app_content_policy(self, &db_prefix),
+            CredentialsAccess::EditUser => edit_user_policy(self, &user_prefix),
+            CredentialsAccess::ReadUser => read_user_policy(self, &user_prefix),
+            CredentialsAccess::InvokeNone => {
+                invoke_none_policy(self, &user_prefix, &temporary_user_prefix)
+            }
+            CredentialsAccess::InvokeRead => invoke_read_policy(
+                self,
+                &apps_prefix,
+                &user_prefix,
+                &temporary_user_prefix,
+                &temporary_global_prefix,
+            ),
+            CredentialsAccess::InvokeWrite => invoke_read_write_policy(
+                self,
+                &apps_prefix,
+                &user_prefix,
+                &temporary_user_prefix,
+                &temporary_global_prefix,
+            ),
+            CredentialsAccess::DeviceExecute { write, expires_at } => device_execute_policy(
+                &self.content_bucket,
+                &self.region,
+                &super::device_execute_prefixes(sub, app_id)?
+                    .into_values()
+                    .collect::<Vec<_>>(),
+                *write,
+                *expires_at,
+            ),
+            CredentialsAccess::ServerExecute => server_execute_policy(
+                self,
+                &apps_prefix,
+                &user_prefix,
+                &runs_prefix,
+                &temporary_user_prefix,
+                &temporary_global_prefix,
+            ),
+            CredentialsAccess::ShadowExecute => shadow_execute_policy(
+                self,
+                &apps_prefix,
+                &user_prefix,
+                &runs_prefix,
+                &temporary_user_prefix,
+                &temporary_global_prefix,
+            ),
+            CredentialsAccess::ReadLogs => read_logs_policy(self, &runs_prefix),
+        })
+    }
+}
+
+/// Answers what the session policy of an access mode permits, for tests in any
+/// module. It understands the Allow-only shape the client file scopes use and
+/// panics on anything else instead of guessing.
+#[cfg(all(test, feature = "aws"))]
+pub(crate) mod session_scope {
+    use super::{AwsRuntimeCredentials, CredentialsAccess};
+
+    pub(crate) const META_BUCKET: &str = "meta-secret";
+    pub(crate) const CONTENT_BUCKET: &str = "content-data";
+
+    pub(crate) struct SessionScope(flow_like_types::Value);
+
+    impl SessionScope {
+        pub(crate) fn of(sub: &str, app_id: &str, mode: &CredentialsAccess) -> Self {
+            Self(
+                AwsRuntimeCredentials::new(META_BUCKET, CONTENT_BUCKET, "logs", "us-east-1")
+                    .session_policy(sub, app_id, mode)
+                    .expect("the mode has a session policy"),
+            )
+        }
+
+        pub(crate) fn policy(&self) -> &flow_like_types::Value {
+            &self.0
+        }
+
+        /// Whether `action` is allowed on the object `key` in `bucket`.
+        pub(crate) fn allows(&self, action: &str, bucket: &str, key: &str) -> bool {
+            self.permits(action, &format!("arn:aws:s3:::{bucket}/{key}"), None)
+        }
+
+        /// Whether a listing of `bucket` restricted to `prefix` is allowed.
+        pub(crate) fn lists(&self, bucket: &str, prefix: &str) -> bool {
+            self.permits(
+                "s3:ListBucket",
+                &format!("arn:aws:s3:::{bucket}"),
+                Some(prefix),
+            )
+        }
+
+        fn permits(&self, action: &str, resource: &str, list_prefix: Option<&str>) -> bool {
+            let statements = self.0["Statement"].as_array().expect("Statement array");
+            statements.iter().any(|statement| {
+                assert_eq!(statement["Effect"], "Allow", "{statement}");
+                if !any_matches(&statement["Action"], action)
+                    || !any_matches(&statement["Resource"], resource)
+                {
+                    return false;
+                }
+                let Some(condition) = statement.get("Condition") else {
+                    return true;
+                };
+                let fence = &condition["StringLike"]["s3:prefix"];
+                let sole_key = |value: &flow_like_types::Value| {
+                    value.as_object().is_some_and(|object| object.len() == 1)
+                };
+                assert!(
+                    fence.is_array() && sole_key(condition) && sole_key(&condition["StringLike"]),
+                    "only the listing prefix fence is understood: {statement}"
+                );
+                list_prefix.is_some_and(|prefix| any_matches(fence, prefix))
+            })
+        }
+    }
+
+    fn any_matches(patterns: &flow_like_types::Value, value: &str) -> bool {
+        patterns
+            .as_array()
+            .expect("a list of patterns")
+            .iter()
+            .any(|pattern| matches(pattern.as_str().expect("a string pattern"), value))
+    }
+
+    /// The policies end a pattern with `*` or use none at all.
+    fn matches(pattern: &str, value: &str) -> bool {
+        let (literal, open) = match pattern.strip_suffix('*') {
+            Some(prefix) => (prefix, true),
+            None => (pattern, false),
+        };
+        assert!(
+            !literal.contains(['*', '?']),
+            "unsupported wildcard in {pattern}"
+        );
+        if open {
+            value.starts_with(literal)
+        } else {
+            value == literal
+        }
     }
 }
 
@@ -599,6 +729,8 @@ fn scoped_content_path_prefixes(
             | CredentialsAccess::ReadApp
             | CredentialsAccess::ReadAppContent
             | CredentialsAccess::EditAppContent
+            | CredentialsAccess::ReadAppFiles
+            | CredentialsAccess::EditAppFiles
             | CredentialsAccess::ReadAppDb
             | CredentialsAccess::EditAppDb
             | CredentialsAccess::InvokeRead
@@ -962,6 +1094,7 @@ fn kms_session_actions(mode: &CredentialsAccess, meta_express: bool) -> &'static
         mode,
         CredentialsAccess::EditApp
             | CredentialsAccess::EditAppContent
+            | CredentialsAccess::EditAppFiles
             | CredentialsAccess::EditAppDb
             | CredentialsAccess::EditUser
             // Despite their names, all invoke modes may write user/tmp data.
@@ -1595,18 +1728,9 @@ fn edit_app_policy(
     policy
 }
 
-/// Write scope restricted to the **content bucket** only — used
-/// wherever scoped credentials cross the trust boundary to a client
-/// (presign-data-access uploads, fork-online-begin bundle uploads).
-/// Boards / events / widgets / templates / pages on the meta bucket
-/// must always be written through the API so that role-permission
-/// gates (`WriteBoards`, `WriteEvents`, `WriteTemplates`, …) and
-/// per-resource validation (event-schedule checks, page-event
-/// coupling, sink registration, secret stripping on write) run on
-/// every change. The full-fat `EditApp` policy includes meta-bucket
-/// `s3:Put/Get/Delete`, which would let a misbehaving client drop
-/// arbitrary `.board` / `.event` files server-side and bypass those
-/// guards.
+/// Read and write scope within the content bucket. Metadata stays behind the
+/// API's resource permissions and validation. Callers choose the content prefix:
+/// full app content, the project database, or the upload directory.
 fn edit_app_content_policy(
     credentials: &AwsRuntimeCredentials,
     apps_prefix: &str,
@@ -1647,13 +1771,22 @@ fn edit_app_content_policy(
     policy
 }
 
-/// Read scope restricted to the **content bucket** only — used by the
-/// fork-an-app flow. Boards / events / widgets / templates / pages
-/// live in the meta bucket and may contain secrets that the server
-/// strips before they leave through the API; granting the holder of
-/// these credentials read access to the meta bucket would let them
-/// bypass that sanitization. Hence: list + get on the content bucket
-/// only, no meta-bucket statements at all.
+fn app_files_policy(
+    credentials: &AwsRuntimeCredentials,
+    apps_prefix: &str,
+    write: bool,
+) -> flow_like_types::Value {
+    let upload_prefix = format!("{apps_prefix}/upload");
+    if write {
+        edit_app_content_policy(credentials, &upload_prefix)
+    } else {
+        read_app_content_policy(credentials, &upload_prefix)
+    }
+}
+
+/// Read access to the content prefix excludes metadata that needs server-side
+/// secret stripping. Offline forks sign individual files instead of issuing this
+/// broader grant, so their exclusions remain enforced by the server.
 fn read_app_content_policy(
     credentials: &AwsRuntimeCredentials,
     apps_prefix: &str,
@@ -2106,6 +2239,97 @@ mod tests {
         }
     }
 
+    /// Reads each scope through the mode table, so a read mode wired to the
+    /// write policy or to another directory fails here.
+    #[test]
+    fn app_file_modes_isolate_uploads_from_databases_metadata_and_other_apps() {
+        use super::session_scope::{CONTENT_BUCKET, META_BUCKET, SessionScope};
+
+        for (mode, write) in [
+            (CredentialsAccess::ReadAppFiles, false),
+            (CredentialsAccess::EditAppFiles, true),
+        ] {
+            let scope = SessionScope::of("user-1", "app-1", &mode);
+            let upload = "apps/app-1/upload/reports/report.csv";
+            assert!(scope.allows("s3:GetObject", CONTENT_BUCKET, upload));
+            assert_eq!(scope.allows("s3:PutObject", CONTENT_BUCKET, upload), write);
+            assert_eq!(
+                scope.allows("s3:DeleteObject", CONTENT_BUCKET, upload),
+                write
+            );
+
+            for (bucket, key) in [
+                (
+                    CONTENT_BUCKET,
+                    "apps/app-1/storage/db/table.lance/data/file",
+                ),
+                (CONTENT_BUCKET, "apps/app-1/metadata/secret.json"),
+                (META_BUCKET, "apps/app-1/upload/report.csv"),
+                (META_BUCKET, "apps/app-1/boards/secret.board"),
+                (CONTENT_BUCKET, "apps/app-10/upload/report.csv"),
+                (CONTENT_BUCKET, "apps/app-1/upload-other/report.csv"),
+                (CONTENT_BUCKET, "users/user-1/apps/app-1/upload/report.csv"),
+                (CONTENT_BUCKET, "tmp/user/user-1/apps/app-1/report.csv"),
+                ("logs", "runs/app-1/log.lance"),
+            ] {
+                for action in ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"] {
+                    assert!(
+                        !scope.allows(action, bucket, key),
+                        "{mode} must not allow {action} on {bucket}/{key}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn app_file_modes_list_only_inside_the_upload_directory() {
+        use super::session_scope::{CONTENT_BUCKET, META_BUCKET, SessionScope};
+
+        for mode in [
+            CredentialsAccess::ReadAppFiles,
+            CredentialsAccess::EditAppFiles,
+        ] {
+            let scope = SessionScope::of("user-1", "app-1", &mode);
+            assert!(scope.lists(CONTENT_BUCKET, "apps/app-1/upload/"));
+            assert!(scope.lists(CONTENT_BUCKET, "apps/app-1/upload/reports/"));
+            // The bare directory name also prefixes its siblings, so a listing
+            // is granted only from the slash-terminated directory down.
+            for prefix in [
+                "",
+                "apps/app-1/",
+                "apps/app-1/upload",
+                "apps/app-1/storage/db/",
+                "apps/app-10/upload/",
+                "apps/app-1/upload-other/",
+                "users/user-1/apps/app-1/",
+            ] {
+                assert!(
+                    !scope.lists(CONTENT_BUCKET, prefix),
+                    "{mode} must not list {prefix:?}"
+                );
+            }
+            assert!(!scope.lists(META_BUCKET, "apps/app-1/upload/"));
+
+            let mut policy = scope.policy().clone();
+            policy["Statement"]
+                .as_array_mut()
+                .expect("statements")
+                .push(kms_statement(
+                    test_kms_keys(),
+                    &mode,
+                    kms_session_actions(&mode, true),
+                    "eu-central-1",
+                    true,
+                ));
+            assert!(policy.to_string().len() <= STS_POLICY_MAX_CHARS);
+            assert_eq!(
+                scoped_content_path_prefixes("apps/app-1", "users/user-1/apps/app-1", &mode),
+                (Some("apps/app-1".to_owned()), None)
+            );
+        }
+    }
+
     #[tokio::test]
     async fn state_routes_log_sidecars_separately_from_content_and_scratch() {
         let config = test_aws_runtime_credentials()
@@ -2447,6 +2671,7 @@ mod tests {
     fn test_aws_session_kms_actions_follow_effective_s3_access() {
         for mode in [
             CredentialsAccess::ReadAppContent,
+            CredentialsAccess::ReadAppFiles,
             CredentialsAccess::ReadAppDb,
             CredentialsAccess::ReadUser,
             CredentialsAccess::ReadLogs,
@@ -2461,6 +2686,7 @@ mod tests {
         for mode in [
             CredentialsAccess::EditApp,
             CredentialsAccess::EditAppContent,
+            CredentialsAccess::EditAppFiles,
             CredentialsAccess::EditAppDb,
             CredentialsAccess::EditUser,
             CredentialsAccess::InvokeNone,

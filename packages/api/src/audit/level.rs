@@ -29,6 +29,7 @@ const MINIMAL_PREFIXES: &[&str] = &[
     "event.teams.",
     "event.schedule.",
     "device.delegation.",
+    "storage.credentials.",
 ];
 
 /// Lifecycle, publication and irreversible deletions of primary resources.
@@ -55,6 +56,7 @@ const MINIMAL_ACTIONS: &[&str] = &[
     "route.delete",
     "database.table.drop",
     "database.column.access",
+    "file.access.authorize",
     "graph.overlay.delete",
     "inbox.import",
     "locked_file.version.commit",
@@ -70,7 +72,6 @@ const VERBOSE_PREFIXES: &[&str] = &["api.request.", "board.commands.", "executio
 const VERBOSE_ACTIONS: &[&str] = &[
     "graph.nodes.upsert",
     "graph.edges.upsert",
-    "file.access.authorize",
     "locked_file.access.authorize",
     "database.rows.offline_replay",
     "storage.files.offline_replay",
@@ -251,7 +252,8 @@ mod tests {
         ("execution.board.start", AuditLevel::Verbose),
         ("execution.event.fail", AuditLevel::Verbose),
         ("execution.event.start", AuditLevel::Verbose),
-        ("file.access.authorize", AuditLevel::Verbose),
+        ("file.access.authorize", AuditLevel::Minimal),
+        ("storage.credentials.issue", AuditLevel::Minimal),
         ("file.delete", AuditLevel::Standard),
         ("file.rename", AuditLevel::Standard),
         ("file.upload.authorize", AuditLevel::Standard),

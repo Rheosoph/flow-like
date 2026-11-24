@@ -47,6 +47,7 @@ members = [
     "apps/backend/azure/queue-worker",
     "packages/aws-data",
     "packages/db",
+    "packages/file-accounting",
     "packages/azure-data",
     "apps/backend/gcp/api",
     "apps/backend/gcp/queue-worker",
@@ -233,6 +234,7 @@ flow-like-wasm-schema = { path = "packages/wasm/schema", default-features = fals
 flow-like-secrets = { path = "packages/secrets" }
 flow-like-aws-data = { path = "packages/aws-data" }
 flow-like-db = { path = "packages/db" }
+flow-like-file-accounting = { path = "packages/file-accounting" }
 flow-like-device-protocol = { path = "packages/device-protocol" }
 flow-like-offline-writes = { path = "packages/offline-writes" }
 flow-like-bots = { path = "packages/bots", default-features = false }

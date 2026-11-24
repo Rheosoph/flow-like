@@ -243,17 +243,6 @@ impl R2RuntimeCredentials {
             .as_ref()
             .ok_or_else(|| anyhow!("R2_ACCESS_KEY_ID not set"))?;
 
-        // Build prefix list based on access mode
-        let apps_prefix = format!("apps/{}/", app_id);
-        let db_prefix = format!("{}storage/db/", apps_prefix);
-        let user_prefix = format!("users/{}/apps/{}/", sub, app_id);
-        let log_prefix = format!("runs/{}/", app_id);
-        // Same segments the `/tmp` presign route and the HTTP-sink offload
-        // write; R2 prefixes carry a trailing slash where the others do not.
-        let (temporary_user_prefix, temporary_global_prefix) =
-            crate::credentials::temporary_prefixes(sub, app_id);
-        let temporary_user_prefix = format!("{temporary_user_prefix}/");
-        let temporary_global_prefix = format!("{temporary_global_prefix}/");
         let app_content_path_prefix = format!("apps/{}", app_id);
         let user_content_path_prefix_value = format!("users/{}/apps/{}", sub, app_id);
         let (content_path_prefix, user_content_path_prefix) = scoped_content_path_prefixes(
@@ -262,71 +251,7 @@ impl R2RuntimeCredentials {
             &mode,
         );
 
-        let (permission, prefixes) = match mode {
-            CredentialsAccess::EditApp => ("object-read-write", vec![apps_prefix.clone()]),
-            CredentialsAccess::ReadApp => ("object-read-only", vec![apps_prefix.clone()]),
-            // R2 doesn't expose per-bucket policies the way AWS does;
-            // the prefix-based scope is the same for ReadApp and
-            // ReadAppContent (likewise EditApp / EditAppContent).
-            // The content-only restriction is enforced server-side by
-            // only ever pointing the client at the content store.
-            CredentialsAccess::ReadAppContent => ("object-read-only", vec![apps_prefix.clone()]),
-            CredentialsAccess::EditAppContent => ("object-read-write", vec![apps_prefix]),
-            CredentialsAccess::ReadAppDb => ("object-read-only", vec![db_prefix.clone()]),
-            CredentialsAccess::EditAppDb => ("object-read-write", vec![db_prefix]),
-            CredentialsAccess::EditUser => ("object-read-write", vec![user_prefix]),
-            CredentialsAccess::ReadUser => ("object-read-only", vec![user_prefix]),
-            CredentialsAccess::InvokeNone => (
-                "object-read-write",
-                vec![user_prefix, log_prefix, temporary_user_prefix],
-            ),
-            CredentialsAccess::InvokeRead => (
-                "object-read-only",
-                vec![
-                    apps_prefix.clone(),
-                    user_prefix,
-                    log_prefix,
-                    temporary_user_prefix,
-                    temporary_global_prefix,
-                ],
-            ),
-            CredentialsAccess::InvokeWrite => (
-                "object-read-write",
-                vec![
-                    apps_prefix,
-                    user_prefix,
-                    log_prefix,
-                    temporary_user_prefix,
-                    temporary_global_prefix,
-                ],
-            ),
-            CredentialsAccess::ServerExecute => (
-                "object-read-write",
-                vec![
-                    apps_prefix,
-                    user_prefix,
-                    log_prefix,
-                    temporary_user_prefix,
-                    temporary_global_prefix,
-                ],
-            ),
-            // R2 temp credentials carry one permission for every prefix, so a
-            // per-prefix read/write split is not expressible here; shadow runs
-            // mirror ServerExecute and rely on the in-process `ReadOnlyStore`
-            // decorator for app-content write isolation.
-            CredentialsAccess::ShadowExecute => (
-                "object-read-write",
-                vec![
-                    apps_prefix,
-                    user_prefix,
-                    log_prefix,
-                    temporary_user_prefix,
-                    temporary_global_prefix,
-                ],
-            ),
-            CredentialsAccess::ReadLogs => ("object-read-only", vec![log_prefix]),
-            CredentialsAccess::DeviceExecute { .. } => unreachable!("handled above"),
-        };
+        let (permission, prefixes) = scoped_permission_and_prefixes(sub, app_id, &mode);
 
         // Call R2 temp credentials API for each bucket
         // For now, we scope to the content bucket as that's the primary data store
@@ -535,6 +460,63 @@ impl R2RuntimeCredentials {
     }
 }
 
+/// The R2 permission and object prefixes an access mode is minted with on the
+/// content bucket. R2 matches prefixes as plain strings, so each one ends in a
+/// slash to stop at its directory.
+fn scoped_permission_and_prefixes(
+    sub: &str,
+    app_id: &str,
+    mode: &CredentialsAccess,
+) -> (&'static str, Vec<String>) {
+    let apps = format!("apps/{app_id}/");
+    let db = format!("{apps}storage/db/");
+    let files = format!("{apps}upload/");
+    let user = format!("users/{sub}/apps/{app_id}/");
+    let logs = format!("runs/{app_id}/");
+    // Same segments the `/tmp` presign route and the HTTP-sink offload write.
+    let (tmp_user, tmp_global) = crate::credentials::temporary_prefixes(sub, app_id);
+    let (tmp_user, tmp_global) = (format!("{tmp_user}/"), format!("{tmp_global}/"));
+
+    match mode {
+        CredentialsAccess::EditApp => ("object-read-write", vec![apps]),
+        CredentialsAccess::ReadApp => ("object-read-only", vec![apps]),
+        // R2 doesn't expose per-bucket policies the way AWS does;
+        // the prefix-based scope is the same for ReadApp and
+        // ReadAppContent (likewise EditApp / EditAppContent).
+        // The content-only restriction is enforced server-side by
+        // only ever pointing the client at the content store.
+        CredentialsAccess::ReadAppContent => ("object-read-only", vec![apps]),
+        CredentialsAccess::EditAppContent => ("object-read-write", vec![apps]),
+        CredentialsAccess::ReadAppFiles => ("object-read-only", vec![files]),
+        CredentialsAccess::EditAppFiles => ("object-read-write", vec![files]),
+        CredentialsAccess::ReadAppDb => ("object-read-only", vec![db]),
+        CredentialsAccess::EditAppDb => ("object-read-write", vec![db]),
+        CredentialsAccess::EditUser => ("object-read-write", vec![user]),
+        CredentialsAccess::ReadUser => ("object-read-only", vec![user]),
+        CredentialsAccess::InvokeNone => ("object-read-write", vec![user, logs, tmp_user]),
+        CredentialsAccess::InvokeRead => (
+            "object-read-only",
+            vec![apps, user, logs, tmp_user, tmp_global],
+        ),
+        CredentialsAccess::InvokeWrite | CredentialsAccess::ServerExecute => (
+            "object-read-write",
+            vec![apps, user, logs, tmp_user, tmp_global],
+        ),
+        // R2 temp credentials carry one permission for every prefix, so a
+        // per-prefix read/write split is not expressible here; shadow runs
+        // mirror ServerExecute and rely on the in-process `ReadOnlyStore`
+        // decorator for app-content write isolation.
+        CredentialsAccess::ShadowExecute => (
+            "object-read-write",
+            vec![apps, user, logs, tmp_user, tmp_global],
+        ),
+        CredentialsAccess::ReadLogs => ("object-read-only", vec![logs]),
+        CredentialsAccess::DeviceExecute { .. } => {
+            unreachable!("device credentials are minted separately")
+        }
+    }
+}
+
 fn scoped_content_path_prefixes(
     apps_prefix: &str,
     user_prefix: &str,
@@ -546,6 +528,8 @@ fn scoped_content_path_prefixes(
             | CredentialsAccess::ReadApp
             | CredentialsAccess::ReadAppContent
             | CredentialsAccess::EditAppContent
+            | CredentialsAccess::ReadAppFiles
+            | CredentialsAccess::EditAppFiles
             | CredentialsAccess::ReadAppDb
             | CredentialsAccess::EditAppDb
             | CredentialsAccess::InvokeRead
@@ -766,6 +750,39 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[test]
+    fn app_file_modes_reach_only_the_upload_directory() {
+        for (mode, permission) in [
+            (CredentialsAccess::ReadAppFiles, "object-read-only"),
+            (CredentialsAccess::EditAppFiles, "object-read-write"),
+        ] {
+            let (granted, prefixes) = scoped_permission_and_prefixes("user-1", "app-1", &mode);
+            assert_eq!(granted, permission, "{mode}");
+            assert_eq!(prefixes, vec!["apps/app-1/upload/".to_string()], "{mode}");
+            for outside in [
+                "apps/app-1/storage/db/table.lance/data/file",
+                "apps/app-1/metadata/secret.json",
+                "apps/app-1/upload-other/report.csv",
+                "apps/app-10/upload/report.csv",
+                "users/user-1/apps/app-1/upload/report.csv",
+                "apps/app-1/upload",
+                "apps/app-1/",
+            ] {
+                assert!(
+                    !outside.starts_with(prefixes[0].as_str()),
+                    "{mode} must not reach {outside}"
+                );
+            }
+            // Path metadata stays at the app root: `to_db` appends
+            // `storage/db` to it and must land outside this grant.
+            assert_eq!(
+                scoped_content_path_prefixes("apps/app-1", "users/user-1/apps/app-1", &mode),
+                (Some("apps/app-1".to_string()), None),
+                "{mode}"
+            );
+        }
     }
 
     #[test]

@@ -1,12 +1,18 @@
+//! Storage accounting shared by every deployment target. Storage events (or a reconciling pass,
+//! see [`reconcile`]) become [`Observation`]s; [`apply_batch`] keeps one ledger row per object or
+//! Lance dataset and moves App, User and payer totals by the change.
+//!
 //! Object state and aggregate totals share one transaction. Tombstones preserve event ordering.
 //! A notification batch commits one transaction per app chunk, so the app's coordination row and
 //! its App, User and AccountCapacity totals are written once per chunk with the summed delta.
 
-use flow_like_db::{retry_transaction, DbDialect, RetryPolicy};
+pub mod reconcile;
+
+use flow_like_db::{DbDialect, RetryPolicy, retry_transaction};
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbErr, QueryResult, Statement, Value,
 };
-use std::collections::{btree_map, BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, btree_map};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -98,6 +104,49 @@ pub fn measurement_sequencer(now: std::time::SystemTime) -> String {
     )
 }
 
+/// A GCS generation as a sequencer. A delete carries the generation of the version it removes,
+/// so it orders right after that version's finalize and before any newer generation.
+pub fn generation_sequencer(generation: u64, deletion: bool) -> String {
+    format!("{:x}", u128::from(generation) * 2 + u128::from(deletion))
+}
+
+/// `(user, app)` of accounted storage: `apps/{app}/…` is project storage and
+/// `users/{user}/apps/{app}/…` a user's storage inside an app. Any other key is not accounted.
+pub fn key_identity(key: &str) -> Option<(Option<String>, String)> {
+    let parts: Vec<&str> = key.split('/').collect();
+    match parts.as_slice() {
+        ["apps", app, ..] if !app.is_empty() => Some((None, (*app).into())),
+        ["users", user, "apps", app, ..] if !user.is_empty() && !app.is_empty() => {
+            Some((Some((*user).into()), (*app).into()))
+        }
+        _ => None,
+    }
+}
+
+/// What a change to `key` makes the ledger account: the object itself at `object_sequencer`, or
+/// the Lance dataset directory it lies in at `dataset_sequencer`. `None` for unaccounted keys.
+/// `object_sequencer` must already be normalized.
+pub fn observe(
+    bucket: &str,
+    key: &str,
+    object_sequencer: &str,
+    dataset_sequencer: &str,
+) -> Option<Observation> {
+    let (user_id, app_id) = key_identity(key)?;
+    let (key, sequencer) = match dataset_prefix(key) {
+        Some(dataset) => (dataset, dataset_sequencer),
+        None => (key, object_sequencer),
+    };
+    Some(Observation {
+        bucket: bucket.to_owned(),
+        key: key.to_owned(),
+        app_id,
+        user_id,
+        sequencer: sequencer.to_owned(),
+        legacy_size: 0,
+    })
+}
+
 struct Accounted {
     size: i64,
     sequencer: String,
@@ -155,7 +204,9 @@ fn add_delta(total: i64, delta: i64) -> Result<i64, DbErr> {
 
 pub fn normalize_sequencer(value: &str) -> Result<String, String> {
     if value.is_empty() || !value.bytes().all(|ch| ch.is_ascii_hexdigit()) {
-        return Err("S3 event sequencer must be a nonempty hexadecimal number".into());
+        return Err(format!(
+            "storage event sequencer must be a nonempty hexadecimal number, got {value:?}"
+        ));
     }
     let trimmed = value.trim_start_matches('0');
     Ok(if trimmed.is_empty() {
@@ -1111,6 +1162,53 @@ mod tests {
     }
 
     #[test]
+    fn generation_sequencers_order_a_delete_after_its_finalize() {
+        let finalize = generation_sequencer(1_700_000_000_123_456, false);
+        let delete = generation_sequencer(1_700_000_000_123_456, true);
+        let next = generation_sequencer(1_700_000_000_123_457, false);
+        assert_eq!(normalize_sequencer(&finalize).unwrap(), finalize);
+        assert!(newer_than(&delete, &finalize));
+        assert!(newer_than(&next, &delete));
+        assert!(newer_than(&generation_sequencer(0, false), ""));
+    }
+
+    #[test]
+    fn key_identity_requires_the_expected_prefix() {
+        assert_eq!(key_identity("apps/a/file"), Some((None, "a".into())));
+        assert_eq!(
+            key_identity("users/u/apps/a/file"),
+            Some((Some("u".into()), "a".into()))
+        );
+        assert_eq!(key_identity("users/u/other/a/file"), None);
+        assert_eq!(key_identity("apps//file"), None);
+        assert_eq!(key_identity("media/a/file"), None);
+    }
+
+    #[test]
+    fn observe_collapses_dataset_files_onto_their_directory() {
+        let object = observe("bucket", "apps/a/storage/report.pdf", "7", "18a").unwrap();
+        assert_eq!(
+            (object.key.as_str(), object.sequencer.as_str()),
+            ("apps/a/storage/report.pdf", "7")
+        );
+        assert!(!object.is_dataset());
+        let dataset = observe(
+            "bucket",
+            "users/u/apps/a/db/t.lance/_versions/3.manifest",
+            "7",
+            "18a",
+        )
+        .unwrap();
+        assert_eq!(
+            (dataset.key.as_str(), dataset.sequencer.as_str()),
+            ("users/u/apps/a/db/t.lance/", "18a")
+        );
+        assert_eq!(dataset.user_id.as_deref(), Some("u"));
+        assert!(dataset.is_dataset());
+        assert!(observe("bucket", "media/a/x.png", "7", "18a").is_none());
+    }
+
+    #[test]
     fn like_prefix_escapes_wildcards() {
         assert_eq!(
             like_prefix(r"apps/a_b/50%\x.lance/"),
@@ -1200,8 +1298,8 @@ mod tests {
     impl Fixture {
         async fn create(prefix: &str) -> Option<Self> {
             use sea_orm::{
-                sqlx::postgres::{PgConnectOptions, PgPoolOptions},
                 Database,
+                sqlx::postgres::{PgConnectOptions, PgPoolOptions},
             };
             use std::str::FromStr;
             let Ok(url) = std::env::var("FLOW_LIKE_TEST_DATABASE_URL") else {
@@ -1298,9 +1396,11 @@ mod tests {
             sequencer: "2".into(),
             legacy_size: 100,
         };
-        assert!(apply(&db, DbDialect::Postgres, observation.clone(), 150)
-            .await
-            .is_err());
+        assert!(
+            apply(&db, DbDialect::Postgres, observation.clone(), 150)
+                .await
+                .is_err()
+        );
         assert_eq!(
             value(
                 &db,
@@ -1347,9 +1447,11 @@ mod tests {
             sequencer: "3".into(),
             ..observation.clone()
         };
-        assert!(apply(&db, DbDialect::Postgres, deletion.clone(), 0)
-            .await
-            .is_err());
+        assert!(
+            apply(&db, DbDialect::Postgres, deletion.clone(), 0)
+                .await
+                .is_err()
+        );
         assert_eq!(
             value(&db, r#"SELECT size AS n FROM "FileAccountingObject""#).await,
             150
@@ -1390,8 +1492,8 @@ mod tests {
         // A slow HEAD holds no app/account lock. A newer event whose earlier
         // sample loses a race must resample before committing its larger sequencer.
         use std::sync::{
-            atomic::{AtomicI64, AtomicUsize, Ordering},
             Arc,
+            atomic::{AtomicI64, AtomicUsize, Ordering},
         };
         let entered = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
@@ -2018,11 +2120,13 @@ mod tests {
         )
         .await;
         assert!(results[..6].iter().all(Result::is_ok), "{results:?}");
-        assert!(results[6]
-            .as_ref()
-            .unwrap_err()
-            .to_string()
-            .contains("apps/b/unreadable"));
+        assert!(
+            results[6]
+                .as_ref()
+                .unwrap_err()
+                .to_string()
+                .contains("apps/b/unreadable")
+        );
         let mut sampled = heads.lock().unwrap().clone();
         sampled.sort();
         assert_eq!(
@@ -2269,6 +2373,120 @@ mod tests {
 
         measure("300", 0).await;
         assert_eq!(totals().await, (50, 50, 50));
+        fixture.drop_schema().await;
+    }
+
+    /// Reconciling passes alone keep totals equal to what is stored: new, grown and removed
+    /// objects and a growing dataset move them, and an unchanged listing observes nothing.
+    #[tokio::test]
+    async fn postgres_reconcile_passes_keep_totals_equal_to_storage() {
+        let Some(fixture) = Fixture::create("reconcile_accounting").await else {
+            return;
+        };
+        let db = fixture.db.clone();
+        for statement in [
+            r#"INSERT INTO "App" VALUES ('app','owner-role',0)"#,
+            r#"INSERT INTO "User" VALUES ('user',0)"#,
+            r#"INSERT INTO "Membership" VALUES ('user','app','owner-role')"#,
+            r#"INSERT INTO "AccountCapacity" ("payerId", "storageBytes", "initialized") VALUES ('user',0,true)"#,
+            r#"INSERT INTO "ProjectCapacity" VALUES ('app','user')"#,
+        ] {
+            sql(&db, statement).await;
+        }
+        let accounted = || async {
+            db.query_all_raw(Statement::from_string(
+                sea_orm::DatabaseBackend::Postgres,
+                r#"SELECT "objectKey", size FROM "FileAccountingObject""#,
+            ))
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row.try_get::<String>("", "objectKey").unwrap(),
+                    row.try_get::<i64>("", "size").unwrap(),
+                )
+            })
+            .collect::<Vec<_>>()
+        };
+        let reconcile_pass = |sequencer: &'static str, listed: Vec<(&'static str, i64)>| {
+            let db = db.clone();
+            async move {
+                let rows = db
+                    .query_all_raw(Statement::from_string(
+                        sea_orm::DatabaseBackend::Postgres,
+                        r#"SELECT "objectKey", size FROM "FileAccountingObject""#,
+                    ))
+                    .await
+                    .unwrap()
+                    .iter()
+                    .map(|row| {
+                        (
+                            row.try_get::<String>("", "objectKey").unwrap(),
+                            row.try_get::<i64>("", "size").unwrap(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let mut pass = reconcile::diff(
+                    "bucket",
+                    listed.into_iter().map(|(key, size)| (key.to_owned(), size)),
+                    rows,
+                    sequencer,
+                );
+                let observations = std::mem::take(&mut pass.observations);
+                let sizes = Arc::new(pass.sizes);
+                let results = apply_batch(
+                    &db,
+                    DbDialect::Postgres,
+                    &observations,
+                    |_| std::future::ready(Ok(0)),
+                    no_legacy_files,
+                    move |observation| {
+                        std::future::ready(Ok(sizes.get(&observation.key).copied().unwrap_or(0)))
+                    },
+                )
+                .await;
+                assert!(results.iter().all(Result::is_ok));
+                observations.len()
+            }
+        };
+        let totals = || async {
+            (
+                value(&db, r#"SELECT "totalSize" AS n FROM "App""#).await,
+                value(&db, r#"SELECT "totalSize" AS n FROM "User""#).await,
+                value(&db, r#"SELECT "storageBytes" AS n FROM "AccountCapacity""#).await,
+            )
+        };
+
+        let first = vec![
+            ("apps/app/storage/report.pdf", 10),
+            ("apps/app/storage/db/t.lance/data/a.lance", 100),
+            ("apps/app/storage/db/t.lance/_versions/1.manifest", 20),
+            ("users/user/apps/app/storage/notes.md", 5),
+            ("elsewhere/x", 1_000),
+        ];
+        assert_eq!(reconcile_pass("100", first.clone()).await, 3);
+        assert_eq!(totals().await, (135, 5, 135));
+        assert_eq!(reconcile_pass("101", first).await, 0);
+
+        let second = vec![
+            ("apps/app/storage/report.pdf", 30),
+            ("apps/app/storage/db/t.lance/data/a.lance", 100),
+            ("apps/app/storage/db/t.lance/data/b.lance", 50),
+            ("apps/app/storage/db/t.lance/_versions/1.manifest", 20),
+        ];
+        assert_eq!(reconcile_pass("200", second).await, 3);
+        assert_eq!(totals().await, (200, 0, 200));
+        let mut rows = accounted().await;
+        rows.sort();
+        assert_eq!(
+            rows,
+            vec![
+                ("apps/app/storage/db/t.lance/".to_owned(), 170),
+                ("apps/app/storage/report.pdf".to_owned(), 30),
+                ("users/user/apps/app/storage/notes.md".to_owned(), 0),
+            ]
+        );
         fixture.drop_schema().await;
     }
 }

@@ -1,10 +1,12 @@
 //! Routine maintenance of hosted Lance tables.
 //!
-//! A table only degrades when it is written, and the AWS file tracker touches a dataset's
-//! accounting row (`objectKey` ending in `.lance/`) on every write. A pass therefore looks only
-//! at tables written recently and idle since, checks their manifest against the thresholds in
+//! A table only degrades when it is written, and storage accounting (a file tracker, or the
+//! storage reconciler where the store sends no events) touches a dataset's ledger row
+//! (`objectKey` ending in `.lance/`) whenever it changes. A pass therefore looks only at tables
+//! written recently and idle since, checks their manifest against the thresholds in
 //! [`LanceDBVectorStore::maintenance_needs`], and compacts or re-indexes them. History is never
-//! pruned; that stays an explicit Optimize.
+//! pruned; that stays an explicit Optimize. AWS runs passes from its maintenance schedule,
+//! long-running APIs from [`spawn_table_maintenance`].
 
 use std::time::{Duration, Instant};
 
@@ -21,6 +23,8 @@ const IDLE: Duration = Duration::from_secs(120);
 /// Longer than the schedule interval, so every write burst is checked even if a pass fails.
 const DEFAULT_LOOKBACK: Duration = Duration::from_secs(1_800);
 const LOOKBACK_ENV: &str = "TABLE_MAINTENANCE_LOOKBACK_SECS";
+const INTERVAL_ENV: &str = "TABLE_MAINTENANCE_INTERVAL_SECS";
+const DEFAULT_INTERVAL: Duration = Duration::from_secs(900);
 const MAX_CANDIDATES: u32 = 200;
 /// The maintenance runner gives up on the response after 120 s.
 const START_BUDGET: Duration = Duration::from_secs(45);
@@ -150,6 +154,37 @@ pub async fn run_pass(state: &AppState) -> Result<TableMaintenanceResult, ApiErr
         }
     }
     Ok(result)
+}
+
+pub fn spawn_table_maintenance(state: AppState) -> Option<tokio::task::JoinHandle<()>> {
+    let Some(interval) = crate::interval_lease::interval_from_env(INTERVAL_ENV, DEFAULT_INTERVAL)
+    else {
+        tracing::info!("Table maintenance disabled via {INTERVAL_ENV}=0");
+        return None;
+    };
+    Some(tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            if !crate::interval_lease::claim(&state, "table-maintenance", interval).await {
+                continue;
+            }
+            match run_pass(&state).await {
+                Ok(result) if result.evaluated > 0 => tracing::info!(
+                    evaluated = result.evaluated,
+                    compacted = result.compacted,
+                    reindexed = result.reindexed,
+                    failed = result.failed,
+                    deferred = result.deferred,
+                    "Table maintenance pass completed"
+                ),
+                Ok(_) => {}
+                Err(error) => tracing::error!(%error, "Table maintenance pass failed"),
+            }
+        }
+    }))
 }
 
 #[cfg(test)]

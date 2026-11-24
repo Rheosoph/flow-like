@@ -795,7 +795,14 @@ impl WorkloadContext {
                     .ok()
                     .filter(|value| !value.trim().is_empty())
                     .unwrap_or_else(|| file_tracking::DEFAULT_FILES_CONTAINER.to_string());
+                let account = required_env("AZURE_STORAGE_ACCOUNT_NAME")?;
+                validate_account_name(&account)?;
                 let content_container = required_env("AZURE_CONTENT_CONTAINER")?;
+                let store = MicrosoftAzureBuilder::from_env()
+                    .with_account(&account)
+                    .with_container_name(&content_container)
+                    .build()
+                    .map_err(|error| WorkerError::new("blob_store_init", error))?;
                 let postgres_config =
                     ManagedIdentityPostgresConfig::from_env(Some(&config.client_id))
                         .map_err(|error| WorkerError::new("postgres_config", error))?;
@@ -813,6 +820,7 @@ impl WorkloadContext {
                         cosmos,
                         files_container,
                         content_container,
+                        store: Arc::new(store),
                         dialect: DbDialect::resolve(None, &managed.connection).await,
                         database: managed.connection,
                     }),

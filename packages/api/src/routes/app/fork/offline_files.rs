@@ -92,11 +92,23 @@ pub async fn offline_fork_files(
         async move { signer.download(path, &key, Some(size)).await }
     }))
     .await?;
+    let expires_at = signer.expires_at();
+    crate::audit::storage_access::authorize_downloads(
+        &state,
+        &user,
+        &app_id,
+        "fork_content",
+        &query.seed,
+        None,
+        files.len(),
+        expires_at,
+    )
+    .await?;
     Ok(Json(OfflineFilesPage {
         files,
         skipped: page.skipped,
         next: page.next,
-        expires_at: signer.expires_at(),
+        expires_at,
     }))
 }
 
@@ -187,4 +199,110 @@ fn is_seed(seed: &str) -> bool {
         && seed
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::fork::ForkDatabaseMode;
+    use flow_like_storage::object_store::{ObjectStoreExt, memory::InMemory};
+
+    #[tokio::test]
+    async fn offline_listing_enforces_exclusions_and_app_boundaries() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        for key in [
+            "apps/app-1/metadata/en.meta",
+            "apps/app-1/media/icon.png",
+            "apps/app-1/upload/private.csv",
+            "apps/app-1/storage/db/customers.lance/data/part.lance",
+            "apps/app-1/secret.board",
+            "apps/app-10/upload/other-app.csv",
+            "users/other-user/apps/app-1/upload/private.csv",
+        ] {
+            store
+                .put(
+                    &StorePath::from(key),
+                    bytes::Bytes::from_static(b"test").into(),
+                )
+                .await
+                .expect("seed content store");
+        }
+        let policy = ForkPolicy {
+            files: false,
+            databases: ForkDatabaseMode::None,
+            ..ForkPolicy::default()
+        };
+        let page = scan_page(&store, &StorePath::from("apps/app-1"), None, &policy)
+            .await
+            .expect("list permitted content");
+
+        let paths: Vec<_> = page
+            .picked
+            .iter()
+            .map(|(path, _, _)| path.as_str())
+            .collect();
+        assert_eq!(paths, ["media/icon.png", "metadata/en.meta"]);
+        assert_eq!(page.skipped, 2);
+        assert!(page.next.is_none());
+    }
+
+    #[tokio::test]
+    async fn offline_listing_rechecks_policy_on_later_pages() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        for index in 0..=MAX_TRANSFER_BATCH {
+            let key = StorePath::from(format!("apps/app-1/upload/{index:04}.csv"));
+            store
+                .put(&key, bytes::Bytes::from_static(b"test").into())
+                .await
+                .expect("seed file");
+        }
+        let prefix = StorePath::from("apps/app-1");
+        let first = scan_page(&store, &prefix, None, &ForkPolicy::default())
+            .await
+            .expect("first page");
+        assert_eq!(first.picked.len(), MAX_TRANSFER_BATCH);
+        let cursor = first.next.expect("remaining content has a cursor");
+
+        let restricted = ForkPolicy {
+            files: false,
+            ..ForkPolicy::default()
+        };
+        let next = scan_page(&store, &prefix, Some(&cursor), &restricted)
+            .await
+            .expect("recheck the current policy");
+        assert!(next.picked.is_empty());
+        assert_eq!(next.skipped, 1);
+        assert!(next.next.is_none());
+    }
+
+    #[test]
+    fn offline_cursor_and_seed_cannot_escape_the_selected_app() {
+        for seed in ["../other", "app/other", "app*", "app?", "", "app\\other"] {
+            assert!(
+                validate_query(&OfflineFilesQuery {
+                    seed: seed.to_string(),
+                    after: None,
+                })
+                .is_err(),
+                "{seed}"
+            );
+        }
+        for cursor in ["../other/upload/a", "/upload/a", "upload/../a", "upload//a"] {
+            assert!(
+                validate_query(&OfflineFilesQuery {
+                    seed: "new-app".to_string(),
+                    after: Some(cursor.to_string()),
+                })
+                .is_err(),
+                "{cursor}"
+            );
+        }
+        assert_eq!(
+            relative_key(
+                &StorePath::from("apps/app-10/upload/a"),
+                &StorePath::from("apps/app-1")
+            ),
+            None
+        );
+    }
 }

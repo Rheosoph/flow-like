@@ -142,7 +142,9 @@ const isDocument = (value: Fields): value is Fields & ICatalogDocument =>
 export function decodeCatalog(payload: unknown): ICatalogPart | undefined {
 	if (Array.isArray(payload)) return { nodes: payload as INode[] };
 	if (!isFields(payload) || typeof payload.v !== "number") {
-		throw new Error("The node catalog is neither a list nor a catalog document");
+		throw new Error(
+			"The node catalog is neither a list nor a catalog document",
+		);
 	}
 	if (payload.v !== CATALOG_WIRE_VERSION) return undefined;
 	if (!isDocument(payload)) {

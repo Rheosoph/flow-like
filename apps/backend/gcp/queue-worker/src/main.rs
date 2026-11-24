@@ -1015,11 +1015,16 @@ impl WorkloadContext {
                     files_collection = %config.files_collection,
                     "file tracker connected to Firestore and Cloud SQL with its workload identity"
                 );
+                let store = GoogleCloudStorageBuilder::new()
+                    .with_bucket_name(&content_bucket)
+                    .build()
+                    .map_err(|error| WorkerError::new("object_store_init", error))?;
                 Ok((
                     Self::FileTracking(FileTrackingContext {
                         firestore: firestore.clone(),
                         files_collection: config.files_collection.clone(),
                         content_bucket,
+                        store: Arc::new(store),
                         dialect: DbDialect::resolve(None, &managed.connection).await,
                         database: managed.connection,
                     }),

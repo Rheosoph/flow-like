@@ -79,8 +79,8 @@ import {
 	type IBoardSyncResponse,
 } from "@flow-like/flow-like-ui/lib/board-sync";
 import {
+	CatalogReader,
 	LEAN_CATALOG_QUERY,
-	decodeCatalog,
 } from "@flow-like/flow-like-ui/lib/catalog-wire";
 import { withDeviceCommandBridge } from "@flow-like/flow-like-ui/lib/device-bridge";
 import {
@@ -178,6 +178,7 @@ interface DiffEntry {
 
 /** How many stale boards may hydrate at once from a summaries listing. */
 const BOARD_HYDRATION_CONCURRENCY = 3;
+const CATALOG_REQUEST = { method: "GET", timeoutMs: HUB_REFRESH_TIMEOUT_MS };
 
 /**
  * Comment media URLs are display-only, yet presigning them is awaited before a board is
@@ -572,13 +573,51 @@ export class BoardState implements IBoardState {
 	/** Remote boards are fetched incrementally; this holds the last assembled copy per board. */
 	private readonly remoteBoardSync = new BoardSyncClient();
 	/**
-	 * The hub's catalog per app with the tag it was served under. The Tauri HTTP plugin has no
-	 * cache, so the tag is what turns the next read into a 304 and spares download and decode.
+	 * The hub's catalogs. The Tauri HTTP plugin has no cache, so the reader names the copy it
+	 * holds and a 304 spares download and decode; the built-in nodes are fetched by digest
+	 * once and shared by every app.
 	 */
-	private readonly remoteCatalogs = new Map<
-		string,
-		{ readonly etag: string; readonly nodes: INode[] }
-	>();
+	private readonly hubCatalogs = new CatalogReader({
+		app: (appId, etag) =>
+			fetcherConditional<unknown>(
+				this.catalogProfile(),
+				`apps/${appId}/nodes?${LEAN_CATALOG_QUERY}`,
+				CATALOG_REQUEST,
+				this.backend.auth,
+				etag,
+			),
+		builtIn: (digest) =>
+			fetcher<unknown>(
+				this.catalogProfile(),
+				`apps/nodes?${LEAN_CATALOG_QUERY}&digest=${digest}`,
+				CATALOG_REQUEST,
+				this.backend.auth,
+			),
+		plain: (appId) =>
+			fetcher<INode[]>(
+				this.catalogProfile(),
+				`apps/${appId}/nodes`,
+				CATALOG_REQUEST,
+				this.backend.auth,
+			),
+	});
+	/**
+	 * This device's own catalogs. An app's nodes are read on every call (they are few); the
+	 * built-in ones cross the bridge only when the registry behind them changed.
+	 */
+	private readonly localCatalogs = new CatalogReader({
+		app: async (appId) => ({
+			notModified: false,
+			data: await invoke<unknown>("get_catalog", { appId }),
+		}),
+		builtIn: () => invoke<unknown>("get_catalog", { builtIn: true }),
+		plain: (appId) =>
+			Promise.reject(
+				new Error(
+					`The local catalog of app ${appId} uses a layout this build cannot read`,
+				),
+			),
+	});
 	/**
 	 * Local boards cross the Tauri bridge incrementally too: `get_board` serialises the whole
 	 * board on every refetch, and refetches happen after every own or peer edit. Kept separate
@@ -1185,7 +1224,7 @@ export class BoardState implements IBoardState {
 
 		if (!isOffline && this.backend.profile && this.backend.auth) {
 			try {
-				const nodes = await this.fetchRemoteCatalog(appId);
+				const nodes = await this.hubCatalogs.read(appId);
 				// The remote catalog is what the server compares against when it decides which
 				// nodes may ship lean, so only it may feed remote-board hydration.
 				this.remoteBoardSync.setCatalog(appId, nodes);
@@ -1204,50 +1243,13 @@ export class BoardState implements IBoardState {
 			? []
 			: await syncRemoteAppPackages(this.backend, appId);
 		await this.ensureRemoteAppPackagesInstalled(appId, remotePackages);
-		const nodes = decodeCatalog(
-			await invoke<unknown>("get_catalog", { appId }),
-		);
-		if (!nodes) {
-			throw new Error(
-				`The local catalog of app ${appId} uses a layout this build cannot read`,
-			);
-		}
-		return nodes;
+		return this.localCatalogs.read(appId);
 	}
 
-	/** The hub's catalog, re-downloaded and re-decoded only when its tag changed. */
-	private async fetchRemoteCatalog(appId: string): Promise<INode[]> {
-		const { profile, auth } = this.backend;
-		if (!profile) {
-			throw new Error(
-				`No hub profile to read the catalog of app ${appId} from`,
-			);
-		}
-		const path = `apps/${appId}/nodes`;
-		const options = { method: "GET", timeoutMs: HUB_REFRESH_TIMEOUT_MS };
-		const held = this.remoteCatalogs.get(appId);
-		const response = await fetcherConditional<unknown>(
-			profile,
-			`${path}?${LEAN_CATALOG_QUERY}`,
-			options,
-			auth,
-			held?.etag,
-		);
-		if (response.notModified && held) return held.nodes;
-
-		const decoded = decodeCatalog(response.data);
-		// A hub with a catalog layout this build does not know still serves the plain list.
-		const nodes =
-			decoded ?? (await fetcher<INode[]>(profile, path, options, auth));
-		if (!Array.isArray(nodes)) {
-			throw new Error(
-				`Remote catalog for app ${appId} was not a node list (${typeof nodes})`,
-			);
-		}
-		if (decoded && response.etag) {
-			this.remoteCatalogs.set(appId, { etag: response.etag, nodes });
-		}
-		return nodes;
+	private catalogProfile() {
+		const { profile } = this.backend;
+		if (!profile) throw new Error("No hub profile to read a node catalog from");
+		return profile;
 	}
 	/**
 	 * Bring a board this device does not have onto disk, and prove that it landed.

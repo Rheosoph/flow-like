@@ -136,6 +136,59 @@ export interface IConditionalResponse<T> {
 	readonly data?: T;
 }
 
+const requestHeaders = (
+	options: RequestInit | undefined,
+	auth: AuthContextProps | undefined,
+	ifNoneMatch: string | undefined,
+) => {
+	const headers = new Headers({
+		"Content-Type": "application/json",
+		[BOARD_FORMAT_HEADER]: String(CURRENT_BOARD_FORMAT_VERSION),
+	});
+	const accessToken = auth?.user?.access_token;
+	if (accessToken) {
+		headers.set("Authorization", `Bearer ${accessToken}`);
+	}
+	new Headers(options?.headers).forEach((value, key) =>
+		headers.set(key, value),
+	);
+	if (ifNoneMatch) headers.set("If-None-Match", ifNoneMatch);
+	return headers;
+};
+
+/** The body of an answered request: parsed, or the failure the hub reported with it. */
+const readAnswer = async (response: Response, path: string) => {
+	const safePath = redactApiPathSecrets(path) ?? path;
+	if (!response.ok) {
+		const errorText = await response.text();
+		const error = apiResponseError(response, errorText, path);
+		console.error(
+			`API error ${response.status} for ${safePath}:`,
+			apiErrorDiagnostic(error),
+		);
+		throw error;
+	}
+
+	const text = await response.text();
+	if (!text) return undefined;
+
+	let data: unknown;
+	try {
+		data = JSON.parse(text);
+	} catch {
+		data = text;
+	}
+	const upstreamError = upstreamFailureInSuccess(response, data, path);
+	if (upstreamError) {
+		console.error(
+			`API error for ${safePath}:`,
+			apiErrorDiagnostic(upstreamError),
+		);
+		throw upstreamError;
+	}
+	return data;
+};
+
 async function requestJson<T>(
 	path: string,
 	options?: RequestInit,
@@ -144,28 +197,15 @@ async function requestJson<T>(
 ): Promise<IConditionalResponse<T>> {
 	const method = methodOf(options);
 	ensureProtectedAppRouteAuth(path, auth, method);
-	const accessToken = auth?.user?.access_token;
-	const headers = new Headers({
-		"Content-Type": "application/json",
-		[BOARD_FORMAT_HEADER]: String(CURRENT_BOARD_FORMAT_VERSION),
-	});
-
-	if (accessToken) {
-		headers.set("Authorization", `Bearer ${accessToken}`);
-	}
-	new Headers(options?.headers).forEach((value, key) =>
-		headers.set(key, value),
-	);
-	if (ifNoneMatch) headers.set("If-None-Match", ifNoneMatch);
+	const headers = requestHeaders(options, auth, ifNoneMatch);
 
 	const url = constructApiUrl(path);
-	const safePath = redactApiPathSecrets(path) ?? path;
 	const { signal, ...init } = options ?? {};
 	const bodyBytes = typeof init.body === "string" ? init.body.length : 0;
 	// The deadline spans the body read too: a stalled body parks the caller as
 	// surely as stalled headers do.
 	return withRequestDeadline<IConditionalResponse<T>>(
-		safePath,
+		redactApiPathSecrets(path) ?? path,
 		async (deadline) => {
 			const response = await fetchWithSession(
 				url,
@@ -178,39 +218,12 @@ async function requestJson<T>(
 			);
 
 			// Only a caller that named a copy can interpret a 304; without one it would be an
-			// unexpected empty answer, so it keeps falling through to the error path below.
+			// unexpected empty answer, so it falls through to the error path.
 			if (response.status === 304 && ifNoneMatch) {
 				return { notModified: true };
 			}
-
-			if (!response.ok) {
-				const errorText = await response.text();
-				const error = apiResponseError(response, errorText, path);
-				console.error(
-					`API error ${response.status} for ${safePath}:`,
-					apiErrorDiagnostic(error),
-				);
-				throw error;
-			}
-
-			const text = await response.text();
-			if (!text) return { notModified: false };
-
-			let data: unknown;
-			try {
-				data = JSON.parse(text);
-			} catch {
-				data = text;
-			}
-			const upstreamError = upstreamFailureInSuccess(response, data, path);
-			if (upstreamError) {
-				console.error(
-					`API error for ${safePath}:`,
-					apiErrorDiagnostic(upstreamError),
-				);
-				throw upstreamError;
-			}
-			return { notModified: false, data: data as T };
+			const data = (await readAnswer(response, path)) as T | undefined;
+			return { notModified: false, data };
 		},
 		{
 			timeoutMs: requestTimeoutMs(cleanApiPath(path), method, bodyBytes),
