@@ -82,6 +82,9 @@ impl BotUsage {
             if let Some(model) = &mut event.model {
                 *model = model.chars().take(128).collect();
             }
+            if let Some(error) = &mut event.error {
+                *error = error.chars().take(64).collect();
+            }
         }
         let mut records = self
             .0

@@ -130,7 +130,7 @@ const invitation: PackagePendingInvitation = {
 
 function mutation() {
 	return {
-		mutate: mock(() => {}),
+		mutate: mock((_input?: unknown) => {}),
 		mutateAsync: mock(async () => undefined),
 		isPending: false,
 	};

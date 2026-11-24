@@ -5,7 +5,8 @@ use crate::{
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::app::connection::{
-        AppConnectionInfo, app_meta_lookup, graph::presign_media, role_lookup, to_connection_info,
+        AppConnectionInfo, AppSight, app_meta_lookup, graph::presign_media, names_other_app,
+        other_app_id, own_end_actor, role_lookup, to_connection_info,
     },
     state::AppState,
 };
@@ -30,7 +31,7 @@ pub struct AppConnectionsResponse {
     get,
     path = "/apps/{app_id}/connections",
     tag = "team",
-    description = "List app connections: apps with access to this app and apps this app can access.",
+    description = "List app connections: apps with access to this app and apps this app can access. The other app's name, description and icon are left out while that app has not taken part in the connection (it has not asked for it or answered it), unless it is listed in the store or you are a member of it.",
     params(
         ("app_id" = String, Path, description = "Application ID")
     ),
@@ -67,19 +68,10 @@ pub async fn get_connections(
         .iter()
         .filter_map(|c| c.role_id.clone())
         .collect();
-    let other_app_ids: Vec<String> = connections
-        .iter()
-        .map(|c| {
-            if c.target_app_id == app_id {
-                c.source_app_id.clone()
-            } else {
-                c.target_app_id.clone()
-            }
-        })
-        .collect();
+    let named_app_ids = named_other_apps(&state, &user, &app_id, &connections).await?;
 
     let (role_names, role_permissions) = role_lookup(&state, &role_ids).await?;
-    let app_meta = app_meta_lookup(&state, &other_app_ids).await?;
+    let app_meta = app_meta_lookup(&state, &named_app_ids).await?;
     let media = presign_media(&state, &app_meta).await;
 
     let mut incoming = Vec::new();
@@ -87,18 +79,14 @@ pub async fn get_connections(
 
     for connection in connections {
         let is_incoming = connection.target_app_id == app_id;
-        let other_app_id = if is_incoming {
-            connection.source_app_id.clone()
-        } else {
-            connection.target_app_id.clone()
-        };
+        let other = other_app_id(&connection, &app_id).to_string();
         let info = to_connection_info(
             connection,
             &role_names,
             &role_permissions,
             &app_meta,
             &media,
-            &other_app_id,
+            &other,
         );
         if is_incoming {
             incoming.push(info);
@@ -108,4 +96,31 @@ pub async fn get_connections(
     }
 
     Ok(Json(AppConnectionsResponse { incoming, outgoing }))
+}
+
+/// The apps on the other end of `connections` whose name, description and icon this viewer
+/// is told. See [`names_other_app`].
+async fn named_other_apps(
+    state: &AppState,
+    user: &AppUser,
+    app_id: &str,
+    connections: &[app_connection::Model],
+) -> Result<Vec<String>, ApiError> {
+    let viewer = user.sub().ok();
+    let other_app_ids: Vec<String> = connections
+        .iter()
+        .map(|connection| other_app_id(connection, app_id).to_string())
+        .collect();
+    let people: Vec<String> = connections
+        .iter()
+        .filter_map(|connection| own_end_actor(connection, app_id))
+        .chain(viewer.as_deref())
+        .map(str::to_string)
+        .collect();
+    let sight = AppSight::load(&state.db, &other_app_ids, &people).await?;
+    Ok(connections
+        .iter()
+        .filter(|connection| names_other_app(connection, app_id, viewer.as_deref(), &sight))
+        .map(|connection| other_app_id(connection, app_id).to_string())
+        .collect())
 }

@@ -219,6 +219,22 @@ fn apply_mirrored_artifact(bit: &mut bit::Model, artifact: &MirroredArtifact, cd
     ));
 }
 
+/// Regions a hosted Bit may declare in `parameters.hosting_region`; the UI badges and filters by them.
+const HOSTING_REGIONS: [&str; 1] = ["eu"];
+
+fn validate_hosting_region(bit: &Bit) -> Result<(), ApiError> {
+    match bit.parameters.get("hosting_region") {
+        None | Some(serde_json::Value::Null) => Ok(()),
+        Some(serde_json::Value::String(region)) if HOSTING_REGIONS.contains(&region.as_str()) => {
+            Ok(())
+        }
+        Some(other) => Err(ApiError::bad_request(format!(
+            "Unknown hosting_region {other}; expected one of: {}",
+            HOSTING_REGIONS.join(", ")
+        ))),
+    }
+}
+
 #[tracing::instrument(name = "PUT /admin/bit/{bit_id}", skip(state, user, bit))]
 pub async fn upsert_bit(
     State(state): State<AppState>,
@@ -230,6 +246,7 @@ pub async fn upsert_bit(
         .await?;
 
     crate::bit_pricing::validate_bit_pricing(&bit)?;
+    validate_hosting_region(&bit)?;
 
     let (tx, rx) = mpsc::channel::<StreamMsg>(64);
     let state_cloned = state.clone();
@@ -919,6 +936,23 @@ mod tests {
             ..Bit::default()
         }
         .into()
+    }
+
+    #[test]
+    fn hosting_region_accepts_known_regions_and_absence_only() {
+        let with_region = |region: serde_json::Value| Bit {
+            parameters: json!({ "hosting_region": region }),
+            ..Bit::default()
+        };
+        assert!(validate_hosting_region(&Bit::default()).is_ok());
+        assert!(validate_hosting_region(&with_region(serde_json::Value::Null)).is_ok());
+        assert!(validate_hosting_region(&with_region(json!("eu"))).is_ok());
+        for rejected in [json!("EU"), json!("us"), json!(""), json!(true), json!(["eu"])] {
+            assert!(
+                validate_hosting_region(&with_region(rejected.clone())).is_err(),
+                "{rejected} must be rejected"
+            );
+        }
     }
 
     #[test]

@@ -12,6 +12,7 @@ import {
 	parseUint8ArrayToJson,
 } from "../../../../lib/uint8";
 import { DeviceBitBadge } from "../../../settings/devices/models/use/device-model-badge";
+import { HostingRegionBadge } from "../../../ui/model-kit";
 import {
 	type FlowSelectorData,
 	type FlowSelectorDataRef,
@@ -98,6 +99,7 @@ export function BitVariable({
 										<span className="truncate">
 											{bitDisplayName(bit) ?? bit.id}
 										</span>
+										<HostingRegionBadge bit={bit} />
 										<DeviceBitBadge bit={bit} />
 									</span>
 								</SelectItem>

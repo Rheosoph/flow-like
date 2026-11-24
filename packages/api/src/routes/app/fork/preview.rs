@@ -1,5 +1,5 @@
 use crate::{
-    entity::{app, app_package},
+    entity::{app, app_package, sea_orm_active_enums::Visibility},
     error::ApiError,
     middleware::jwt::AppUser,
     permission::fork_permission::{ForkTargetKind, check_can_fork},
@@ -62,11 +62,14 @@ pub struct ForkPreviewResponse {
     /// forkable if the policy excludes its database or files.
     pub within_limits: bool,
     /// The source owner's fork policy. Read-only for the forker: the owner
-    /// decides what a fork of their app contains.
-    pub fork_policy: ForkPolicy,
+    /// decides what a fork of their app contains. Absent for a caller who can
+    /// neither fork the app nor see it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fork_policy: Option<ForkPolicy>,
     /// Per-category sizes of the source, so the UI can show what each
-    /// category costs and what the policy excludes.
-    pub size_breakdown: ForkSizeBreakdown,
+    /// category costs and what the policy excludes. Absent like `fork_policy`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_breakdown: Option<ForkSizeBreakdown>,
     /// Bytes that will actually be copied once the policy is applied.
     pub selected_size_bytes: u64,
     /// Objects that will actually be copied once the policy is applied.
@@ -96,6 +99,52 @@ pub struct ForkPreviewResponse {
     pub repinned_packages: Vec<RepinnedPackage>,
 }
 
+impl ForkPreviewResponse {
+    /// The answer for a caller who can neither fork the app nor see it: whether a fork is
+    /// possible for them and why not. What the app holds stays out of it.
+    fn verdict(
+        source_app_id: String,
+        allow_forking: bool,
+        disallow_reason: String,
+        max_size_bytes: u64,
+        max_file_count: u64,
+    ) -> Self {
+        Self {
+            source_app_id,
+            total_size_bytes: 0,
+            total_object_count: 0,
+            max_size_bytes,
+            max_file_count,
+            within_limits: true,
+            fork_policy: None,
+            size_breakdown: None,
+            selected_size_bytes: 0,
+            selected_object_count: 0,
+            requires_token: false,
+            remote_token_sites: Vec::new(),
+            allow_forking,
+            user_can_fork: false,
+            disallow_reason,
+            blocked_packages: Vec::new(),
+            repinned_packages: Vec::new(),
+        }
+    }
+}
+
+/// Apps the store shows to everyone.
+fn is_listed(visibility: &Visibility) -> bool {
+    matches!(
+        visibility,
+        Visibility::Public | Visibility::PublicRequestAccess
+    )
+}
+
+/// Whether the caller may learn what the app holds without being able to fork it: the app is
+/// listed, or they are in it. The owner looks at this preview while forking is still off.
+async fn sees_app(state: &AppState, user: &AppUser, app_row: &app::Model) -> bool {
+    is_listed(&app_row.visibility) || user.app_permission(&app_row.id, state).await.is_ok()
+}
+
 /// Pre-fork dry run. Returns the size + count totals, detected
 /// remote-token sites, and the permission-gate verdict for the caller.
 /// Does **not** allocate any state — safe to call as a probe before
@@ -104,7 +153,7 @@ pub struct ForkPreviewResponse {
     get,
     path = "/apps/{app_id}/fork/preview",
     tag = "forking",
-    description = "Compute the size and remote-token requirements of a hypothetical fork of this app, and report whether the caller is allowed to perform it.",
+    description = "Compute the size and remote-token requirements of a hypothetical fork of this app, and report whether the caller is allowed to perform it. A caller who can neither fork the app nor see it (it is not listed and they are not a member) gets the verdict only: sizes are zero and the fork policy, size breakdown and token sites are left out.",
     params(
         ("app_id" = String, Path, description = "Source application ID"),
         ForkPreviewQuery
@@ -143,14 +192,25 @@ pub async fn get_fork_preview(
             }
         };
 
+    let max_size_bytes = state.platform_config.forking.max_size_bytes;
+    let max_file_count = state.platform_config.forking.max_file_count;
+
+    if !user_can_fork && !sees_app(&state, &user, &app_row).await {
+        return Ok(Json(ForkPreviewResponse::verdict(
+            app_id,
+            app_row.allow_forking,
+            disallow_reason,
+            max_size_bytes,
+            max_file_count,
+        )));
+    }
+
     let fork_policy = ForkPolicy::from_app_row(&app_row);
     let size_breakdown = compute_fork_size_breakdown(&state, &app_id).await?;
     let (total_size_bytes, total_object_count) = size_breakdown.total();
     let (selected_size_bytes, selected_object_count) = size_breakdown.selected(&fork_policy);
     let remote_token_sites = detect_remote_token_sites(&state, &app_id).await?;
 
-    let max_size_bytes = state.platform_config.forking.max_size_bytes;
-    let max_file_count = state.platform_config.forking.max_file_count;
     // Caps apply to what will actually be copied, not to the whole app —
     // otherwise the policy could never rescue an over-cap app, which is
     // the main reason to exclude a category.
@@ -166,8 +226,8 @@ pub async fn get_fork_preview(
         max_size_bytes,
         max_file_count,
         within_limits,
-        fork_policy,
-        size_breakdown,
+        fork_policy: Some(fork_policy),
+        size_breakdown: Some(size_breakdown),
         selected_size_bytes,
         selected_object_count,
         requires_token: !remote_token_sites.is_empty(),
@@ -197,4 +257,89 @@ async fn package_pins(
         .all(&state.db)
         .await?;
     packages::split_pins(&state.db, user.sub().ok().as_deref(), &pins).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_apps_the_store_shows_are_listed() {
+        for (visibility, listed) in [
+            (Visibility::Public, true),
+            (Visibility::PublicRequestAccess, true),
+            (Visibility::Private, false),
+            (Visibility::Prototype, false),
+            (Visibility::Offline, false),
+        ] {
+            assert_eq!(is_listed(&visibility), listed, "{visibility:?}");
+        }
+    }
+
+    #[test]
+    fn a_verdict_says_why_not_and_nothing_about_what_the_app_holds() {
+        let verdict = ForkPreviewResponse::verdict(
+            "app-1".to_string(),
+            true,
+            "join this app before forking it".to_string(),
+            1_000,
+            10,
+        );
+        let json = serde_json::to_value(&verdict).unwrap();
+        let fields = json.as_object().unwrap();
+        assert_eq!(json["user_can_fork"], false);
+        assert_eq!(json["allow_forking"], true);
+        assert_eq!(json["disallow_reason"], "join this app before forking it");
+        assert_eq!(json["max_size_bytes"], 1_000);
+        assert_eq!(json["max_file_count"], 10);
+        for absent in ["fork_policy", "size_breakdown"] {
+            assert!(!fields.contains_key(absent), "{absent}");
+        }
+        for zero in [
+            "total_size_bytes",
+            "total_object_count",
+            "selected_size_bytes",
+            "selected_object_count",
+        ] {
+            assert_eq!(json[zero], 0, "{zero}");
+        }
+        for empty in [
+            "remote_token_sites",
+            "blocked_packages",
+            "repinned_packages",
+        ] {
+            assert_eq!(json[empty].as_array().map(Vec::len), Some(0), "{empty}");
+        }
+        assert_eq!(json["requires_token"], false);
+    }
+
+    /// The storage listing and the token-site scan run only after the caller is known to fork
+    /// or see the app, and the only earlier answer is the verdict.
+    #[test]
+    fn nothing_about_the_app_is_read_before_the_caller_may_see_it() {
+        let source = include_str!("preview.rs");
+        let handler = source
+            .split_once("\npub async fn get_fork_preview(")
+            .expect("get_fork_preview exists")
+            .1;
+        let handler = handler
+            .split_once("\n}\n")
+            .map_or(handler, |(body, _)| body);
+        let position = |needle: &str| {
+            handler
+                .find(needle)
+                .unwrap_or_else(|| panic!("get_fork_preview contains {needle}"))
+        };
+        let gate = position("if !user_can_fork && !sees_app(&state, &user, &app_row).await {");
+        let verdict = position("ForkPreviewResponse::verdict(");
+        assert!(gate < verdict);
+        for read in [
+            "ForkPolicy::from_app_row(",
+            "compute_fork_size_breakdown(",
+            "detect_remote_token_sites(",
+            "package_pins(",
+        ] {
+            assert!(verdict < position(read), "{read}");
+        }
+    }
 }

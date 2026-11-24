@@ -238,7 +238,7 @@ async fn summarize_one(
     }
 }
 
-fn summarize_field(field: &std::sync::Arc<arrow_schema::Field>) -> ColumnSummary {
+pub(crate) fn summarize_field(field: &std::sync::Arc<arrow_schema::Field>) -> ColumnSummary {
     let (family, vector_size) = if crate::geometry::is_geometry_field(field) {
         (ColumnFamily::Geo, None)
     } else {
@@ -383,7 +383,7 @@ fn collect_consumers(
     summary
 }
 
-fn style_string(node: &NodeMappingDef, key: &str) -> Option<String> {
+pub(crate) fn style_string(node: &NodeMappingDef, key: &str) -> Option<String> {
     node.style
         .get(key)
         .and_then(|value| value.as_str())

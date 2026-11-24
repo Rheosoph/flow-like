@@ -42,6 +42,7 @@ export function StoreHero({
 	onBuy,
 	onJoinOrRequest,
 	actionsExtra,
+	capabilities,
 }: Readonly<{
 	appId: string;
 	hasThumbnail: boolean;
@@ -64,6 +65,7 @@ export function StoreHero({
 	onBuy: () => void;
 	onJoinOrRequest: () => Promise<void> | void;
 	actionsExtra?: React.ReactNode;
+	capabilities?: React.ReactNode;
 }>) {
 	const { t } = useTranslation("store");
 	const categoryLabel = useAppCategoryLabel();
@@ -240,6 +242,7 @@ export function StoreHero({
 						</div>
 					</div>
 				</div>
+				{capabilities}
 			</div>
 		</section>
 	);

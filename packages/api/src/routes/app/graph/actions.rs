@@ -790,7 +790,8 @@ pub(crate) async fn remove_action_events(
         app.save().await?;
     }
     for event_id in removed_event_ids {
-        crate::routes::app::events::db::delete_event_with_sink(&state.db, state, &event_id).await?;
+        crate::routes::app::events::db::delete_event_with_sink(&state.db, state, app_id, &event_id)
+            .await?;
     }
     Ok(())
 }

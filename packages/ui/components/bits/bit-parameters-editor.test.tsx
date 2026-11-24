@@ -132,6 +132,29 @@ test("pricing controls are limited to admin hosted language and vision models", 
 	}
 });
 
+test("hosting region is offered to admins for hosted bits and replaces the raw field", () => {
+	for (const provider of ["Hosted", "hosted:bedrock", "hosted:cloudflare"])
+		expect(renderEditor({ provider })).toContain("Hosting region");
+	for (const props of [{ scope: "custom" as const }, { provider: "Local" }])
+		expect(renderEditor(props)).not.toContain("Hosting region");
+
+	const tagged = renderToStaticMarkup(
+		<BitParametersEditor
+			bitType={IBitTypes.Llm}
+			value={{ provider: { provider_name: "Local" }, hosting_region: "eu" }}
+			onChange={() => {}}
+			jsonText={null}
+			onJsonChange={() => {}}
+			jsonError={null}
+			onApplyJson={() => {}}
+			onResetJson={() => {}}
+		/>,
+	);
+	expect(tagged).toContain("Hosting region");
+	expect(tagged).not.toContain("Unknown hosting region");
+	expect(tagged).not.toContain("hosting_region");
+});
+
 test("admins can add, enter decimal rates, and remove pricing without losing parameters", async () => {
 	const window = new Window();
 	Object.assign(window, { SyntaxError, TypeError });

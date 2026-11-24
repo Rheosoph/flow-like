@@ -48,6 +48,7 @@ import {
 import {
 	type Deployment,
 	DeploymentLabel,
+	HostingRegionBadge,
 	ModalityFlow,
 	ProviderGlyph,
 	providerLabel,
@@ -546,6 +547,7 @@ function ProviderLine({
 			{source !== LOCAL_PROVIDER_LABEL && (
 				<DeploymentLabel kind={view.deployment} className="shrink-0" />
 			)}
+			<HostingRegionBadge bit={view.bit} />
 			<DeviceBitBadge bit={view.bit} />
 		</p>
 	);

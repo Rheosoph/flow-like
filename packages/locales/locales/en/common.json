@@ -1373,6 +1373,8 @@
 	"hostedStt": "Hosted STT",
 	"hostedTierOnly": "The API controls upstream endpoints, credentials, and request headers.",
 	"hostingAndDevices": "Hosting & devices",
+	"hostingRegionEu": "EU",
+	"hostingRegionEuTitle": "Hosted in the European Union: requests to this model are served from EU data centers.",
 	"hourshAgo": "{{hours}}h ago",
 	"hourshWindow": "{{hours}}h window",
 	"hoursOfMaterial": "hours of material",

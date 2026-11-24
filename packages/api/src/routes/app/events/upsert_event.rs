@@ -395,7 +395,7 @@ async fn rollback_failed_setup(
             "rollback: failed to persist bucket cleanup"
         );
     }
-    if let Err(e) = super::db::delete_event_with_sink(&state.db, state, event_id).await {
+    if let Err(e) = super::db::delete_event_with_sink(&state.db, state, app_id, event_id).await {
         tracing::warn!(
             app_id = %app_id,
             event_id = %event_id,

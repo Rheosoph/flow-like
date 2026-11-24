@@ -486,7 +486,7 @@ mod tests {
             include_str!("../page/upsert_page.rs"),
             "pub async fn upsert_page",
             "page_id_guard.ensure_held()?;",
-            "board_guard.save(None)",
+            "board.save(None)",
         ),
     ];
 
@@ -564,7 +564,7 @@ mod tests {
                 include_str!("execute_commands.rs"),
                 "pub async fn execute_commands",
                 "if receipt.request_digest != *digest {",
-                "ExecuteCommandsResponse::new(params.commands, sync)",
+                "idempotent_response.unwrap_or_default()",
             ),
             (
                 include_str!("flow_ir_commit.rs"),

@@ -229,6 +229,11 @@ pub async fn register_message(
     if body.request_id.trim().is_empty() {
         return Err(ApiError::bad_request("request_id must not be empty"));
     }
+    if store::is_reserved_request_id(&body.request_id) {
+        return Err(ApiError::bad_request(
+            "request_id must not start with 'cancel:'",
+        ));
+    }
     let waiter = waiter_for(&user, &channel_id)?;
     let expires_at = store::register_request(
         &state.db,

@@ -20,6 +20,7 @@ import {
 	Lightbulb,
 	ListChecks,
 	type LucideIcon,
+	MapPin,
 	MessageSquare,
 	Mic,
 	PackageCheck,
@@ -41,6 +42,7 @@ import { useInvalidateInvoke, useInvoke } from "../../../hooks/index";
 import { useIsMobile } from "../../../hooks/use-mobile";
 import { useSearch } from "../../../hooks/use-search-index";
 import { Bit } from "../../../lib/bit/bit";
+import { isEuHosted } from "../../../lib/bit/hosting-region";
 import { filterHostableLlmModels } from "../../../lib/bit/local-model-filter";
 import { isMlxModelBit } from "../../../lib/bit/mlx-model-pack";
 import {
@@ -197,6 +199,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 	const [activeTab, setActiveTab] = useState<string>(ALL);
 	const [showInProfileOnly, setShowInProfileOnly] = useState(false);
 	const [showDownloadedOnly, setShowDownloadedOnly] = useState(false);
+	const [showEuHostedOnly, setShowEuHostedOnly] = useState(false);
 	const [runFilters, setRunFilters] = useState<Set<RunFilter>>(new Set());
 	const [priceFilter, setPriceFilter] = useState<PriceFilter>("any");
 	const [ratingFilter, setRatingFilter] = useState<RatingFilter>("any");
@@ -414,6 +417,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		const models = searchedBits.filter((bit) => {
 			if (showInProfileOnly && !profileBitIds.has(bit.id)) return false;
 			if (showDownloadedOnly && !installedBits.has(bit.id)) return false;
+			if (showEuHostedOnly && !isEuHosted(bit)) return false;
 			const price = prices.get(bit.id) ?? { kind: "unlisted" };
 			if (runFilters.size > 0 && !runFilters.has(runKind(bit, price)))
 				return false;
@@ -482,6 +486,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		searchTerm,
 		showInProfileOnly,
 		showDownloadedOnly,
+		showEuHostedOnly,
 		profileBitIds,
 		installedBits,
 		prices,
@@ -624,6 +629,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 
 	const resetFilters = useCallback(() => {
 		setShowDownloadedOnly(false);
+		setShowEuHostedOnly(false);
 		setRunFilters(new Set());
 		setPriceFilter("any");
 		setRatingFilter("any");
@@ -656,6 +662,12 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 				id: "downloaded",
 				label: t("downloaded", "Downloaded"),
 				clear: () => setShowDownloadedOnly(false),
+			});
+		if (showEuHostedOnly)
+			chips.push({
+				id: "eu-hosted",
+				label: t("runEuHosted", "EU hosted"),
+				clear: () => setShowEuHostedOnly(false),
 			});
 		if (priceFilter !== "any")
 			chips.push({
@@ -711,6 +723,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		t,
 		runFilters,
 		showDownloadedOnly,
+		showEuHostedOnly,
 		priceFilter,
 		ratingFilter,
 		inputFilters,
@@ -963,6 +976,8 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 									}
 									showDownloadedOnly={showDownloadedOnly}
 									onToggleDownloaded={() => setShowDownloadedOnly((v) => !v)}
+									showEuHostedOnly={showEuHostedOnly}
+									onToggleEuHosted={() => setShowEuHostedOnly((v) => !v)}
 									priceFilter={priceFilter}
 									onPriceFilter={setPriceFilter}
 									ratingFilter={ratingFilter}
@@ -1346,6 +1361,8 @@ function FilterPanel({
 	onToggleRun,
 	showDownloadedOnly,
 	onToggleDownloaded,
+	showEuHostedOnly,
+	onToggleEuHosted,
 	priceFilter,
 	onPriceFilter,
 	ratingFilter,
@@ -1368,6 +1385,8 @@ function FilterPanel({
 	onToggleRun: (run: RunFilter) => void;
 	showDownloadedOnly: boolean;
 	onToggleDownloaded: () => void;
+	showEuHostedOnly: boolean;
+	onToggleEuHosted: () => void;
 	priceFilter: PriceFilter;
 	onPriceFilter: (value: PriceFilter) => void;
 	ratingFilter: RatingFilter;
@@ -1425,6 +1444,10 @@ function FilterPanel({
 						{run.label}
 					</FilterChip>
 				))}
+				<FilterChip active={showEuHostedOnly} onClick={onToggleEuHosted}>
+					<MapPin className="h-3.5 w-3.5" />
+					{t("runEuHosted", "EU hosted")}
+				</FilterChip>
 				{!webMode && (
 					<FilterChip active={showDownloadedOnly} onClick={onToggleDownloaded}>
 						<PackageCheck className="h-3.5 w-3.5" />

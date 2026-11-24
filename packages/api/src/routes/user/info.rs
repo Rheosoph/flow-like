@@ -51,7 +51,8 @@ async fn should_update(
     tag = "user",
     responses(
         (status = 200, description = "Returns the current user's information"),
-        (status = 401, description = "Unauthorized")
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Executor, API key and app connection tokens cannot read account details")
     ),
     security(
         ("bearer_auth" = [])
@@ -62,7 +63,7 @@ pub async fn user_info(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
 ) -> Result<Json<user::Model>, ApiError> {
-    let sub = user.executor_scoped_sub()?;
+    let sub = account_subject(&user)?;
     let identity_info = match &user {
         AppUser::OpenID(_) => Some(user.user_info(&state).await?),
         _ => None,
@@ -224,9 +225,8 @@ pub async fn user_info(
     Ok(Json(new_user))
 }
 
-/// The account a human token belongs to. `/user/info` switches to it once
-/// executors read their user through [`executor_user_info`].
-#[allow(dead_code)]
+/// The account a human token belongs to. `/user/info` returns the whole account row, so a run
+/// never reads it: runs ask [`executor_user_info`] for the projection other people may see.
 pub(crate) fn account_subject(user: &AppUser) -> Result<String, ApiError> {
     if matches!(user, AppUser::Executor(_)) {
         return Err(ApiError::forbidden(
@@ -548,5 +548,25 @@ mod tests {
                 < position("find_by_id(sub)")
         );
         assert!(position("find_by_id(sub)") < position("UserLookupResponse::parse("));
+    }
+
+    #[test]
+    fn the_account_route_resolves_a_person_before_it_reads_the_row() {
+        let source = include_str!("info.rs");
+        let handler = source
+            .split_once("\npub async fn user_info(")
+            .expect("user_info exists")
+            .1;
+        let handler = handler
+            .split_once("\n}\n")
+            .map_or(handler, |(body, _)| body);
+        let subject = handler
+            .find("account_subject(&user)?")
+            .expect("user_info resolves the caller with account_subject");
+        let read = handler
+            .find("find_by_id(&sub)")
+            .expect("user_info reads the account row");
+        assert!(subject < read);
+        assert!(!handler.contains("executor_scoped_sub"));
     }
 }

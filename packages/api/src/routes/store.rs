@@ -113,7 +113,7 @@ pub async fn list_public_groups(
     };
     let members = filter_public_members(&state, members).await?;
 
-    Ok(Json(assemble_groups(&state, groups, members).await?))
+    Ok(Json(assemble_groups(&state, None, groups, members).await?))
 }
 
 #[utoipa::path(
@@ -156,7 +156,7 @@ pub async fn get_public_group(
         .await?;
     let members = filter_public_members(&state, members).await?;
 
-    assemble_groups(&state, vec![group], members)
+    assemble_groups(&state, None, vec![group], members)
         .await?
         .into_iter()
         .next()

@@ -62,6 +62,8 @@ pub struct Model {
     pub bot_id: Option<String>,
     #[sea_orm(column_name = "refuseBots", nullable)]
     pub refuse_bots: Option<bool>,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub showcase: Option<Json>,
     #[sea_orm(has_many)]
     pub ai_act_assessments: HasMany<super::ai_act_assessment::Entity>,
     #[sea_orm(has_many)]

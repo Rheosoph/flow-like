@@ -49,7 +49,10 @@ mock.module("./use-bot-workspace", () => ({
 }));
 
 const checkOAuthRequirements = mock(
-	async (_appId: string, required: { provider_id: string }[]) => ({
+	async (
+		_appId: string,
+		required: { provider_id: string; scopes?: string[] }[],
+	) => ({
 		missingProviders: required.map((item) => ({ id: item.provider_id })),
 	}),
 );
@@ -162,11 +165,11 @@ function setValue(input: Element, value: string) {
 async function fillAndConnect(view: View) {
 	await act(async () => {
 		setValue(
-			view.container.querySelector("#caldav-user") as Element,
+			view.container.querySelector("#caldav-user") as unknown as Element,
 			"ann@example.com",
 		);
 		setValue(
-			view.container.querySelector("#caldav-password") as Element,
+			view.container.querySelector("#caldav-password") as unknown as Element,
 			"abcd-efgh",
 		);
 	});

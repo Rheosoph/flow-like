@@ -9,6 +9,7 @@ use crate::{
         app::{
             board::{
                 scoring::save_board_and_refresh_summary,
+                sealed_commands::CommandSeal,
                 sink_rebind::{rebind_latest_sinks, try_rebind_latest_sinks},
                 sync_board::seed_board_revision,
             },
@@ -87,7 +88,7 @@ pub async fn apply_flowscript(
     trace: Option<Extension<TraceContext>>,
     Path((app_id, board_id)): Path<(String, String)>,
     Json(params): Json<ApplyFlowScriptBody>,
-) -> Result<Json<ApplyFlowScriptResult>, ApiError> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
     let sub = permission.sub()?;
 
@@ -193,7 +194,7 @@ pub async fn apply_flowscript(
         }
     };
 
-    let result = match result {
+    let mut result: ApplyFlowScriptResult = match result {
         Ok(result) => result,
         Err(error) => {
             if let Some(error) = ApiError::from_board_format_error(&error) {
@@ -248,7 +249,11 @@ pub async fn apply_flowscript(
         );
     }
 
-    Ok(Json(result))
+    // The executed batch carries what the board held before the apply, so it leaves sealed.
+    let commands = std::mem::take(&mut result.commands);
+    let body =
+        CommandSeal::new(&state, &app_id, &board_id).body_with_commands(&result, commands)?;
+    Ok(Json(body))
 }
 
 /// Board-side half of the module-apply validation: `module_id` must name a live

@@ -2,7 +2,7 @@
 //! have to transfer the graph. Shared by the API's `/board/summaries` and the desktop's local
 //! `get_app_board_summaries`; both must stay shape-compatible with `IBoardSummary` on the client.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -52,6 +52,34 @@ pub struct BoardSummaryMetrics {
     pub wasm_permissions: Vec<String>,
     pub variable_counts: BoardVariableCounts,
     pub layer_counts: BoardLayerCounts,
+    /// Table names opened by a literal on an unconnected "Open Database" pin, sorted. Tables
+    /// opened through a variable or wire are not known without running the board.
+    #[serde(default)]
+    pub table_refs: Vec<String>,
+    /// OAuth provider ids the nodes require, each with the sorted union of their scopes.
+    #[serde(default)]
+    pub oauth_providers: BTreeMap<String, Vec<String>>,
+    /// Some node only runs on the member's own device.
+    #[serde(default)]
+    pub requires_local: bool,
+}
+
+const OPEN_DATABASE_NODE: &str = "open_local_db";
+const OPEN_DATABASE_TABLE_PIN: &str = "name";
+
+fn literal_table_ref(node: &super::Node) -> Option<String> {
+    if node.name != OPEN_DATABASE_NODE {
+        return None;
+    }
+    let pin = node.pins.values().find(|pin| {
+        pin.name == OPEN_DATABASE_TABLE_PIN && pin.pin_type == crate::flow::pin::PinType::Input
+    })?;
+    if !pin.depends_on.is_empty() {
+        return None;
+    }
+    let name: String = flow_like_types::json::from_slice(pin.default_value.as_deref()?).ok()?;
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 impl Board {
@@ -85,8 +113,24 @@ impl Board {
         let mut wasm_packages = BTreeSet::new();
         let mut wasm_permissions = BTreeSet::new();
         let mut total_node_count = 0u32;
+        let mut table_refs = BTreeSet::new();
+        let mut oauth: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut requires_local = false;
         let mut collect = |node: &super::Node| {
             total_node_count += 1;
+            requires_local |= node.only_offline;
+            if let Some(table) = literal_table_ref(node) {
+                table_refs.insert(table);
+            }
+            for provider in node.oauth_providers.iter().flatten() {
+                oauth.entry(provider.clone()).or_default();
+            }
+            for (provider, scopes) in node.required_oauth_scopes.iter().flatten() {
+                oauth
+                    .entry(provider.clone())
+                    .or_default()
+                    .extend(scopes.iter().cloned());
+            }
             if let Some(wasm) = &node.wasm {
                 wasm_packages.insert(wasm.package_id.clone());
                 for permission in &wasm.permissions {
@@ -136,6 +180,12 @@ impl Board {
             wasm_permissions: wasm_permissions.into_iter().collect(),
             variable_counts,
             layer_counts,
+            table_refs: table_refs.into_iter().collect(),
+            oauth_providers: oauth
+                .into_iter()
+                .map(|(provider, scopes)| (provider, scopes.into_iter().collect()))
+                .collect(),
+            requires_local,
         }
     }
 }
@@ -147,6 +197,45 @@ mod tests {
     use crate::flow::pin::ValueType;
     use crate::flow::variable::{Variable, VariableType};
     use flow_like_storage::Path;
+
+    #[test]
+    fn metrics_record_literal_tables_oauth_and_local_nodes() {
+        let mut board = Board::new_detached(Some("b".into()), Path::default());
+
+        let mut literal = Node::new(OPEN_DATABASE_NODE, "Open Database", "", "Data");
+        literal
+            .add_input_pin(
+                OPEN_DATABASE_TABLE_PIN,
+                "Table Name",
+                "",
+                VariableType::String,
+            )
+            .set_default_value(Some(flow_like_types::json::json!("orders")));
+        literal.add_oauth_provider("google");
+        literal.add_required_oauth_scopes("google", vec!["mail.read", "drive"]);
+        board.nodes.insert(literal.id.clone(), literal);
+
+        let mut wired = Node::new(OPEN_DATABASE_NODE, "Open Database", "", "Data");
+        let pin = wired.add_input_pin(
+            OPEN_DATABASE_TABLE_PIN,
+            "Table Name",
+            "",
+            VariableType::String,
+        );
+        pin.set_default_value(Some(flow_like_types::json::json!("secret_table")));
+        pin.depends_on.insert("upstream".into());
+        wired.add_required_oauth_scopes("google", vec!["mail.read"]);
+        wired.only_offline = true;
+        board.nodes.insert(wired.id.clone(), wired);
+
+        let metrics = board.summary_metrics();
+        assert_eq!(metrics.table_refs, vec!["orders".to_string()]);
+        assert_eq!(
+            metrics.oauth_providers.get("google"),
+            Some(&vec!["drive".to_string(), "mail.read".to_string()])
+        );
+        assert!(metrics.requires_local);
+    }
 
     #[test]
     fn metrics_cover_layers_wasm_and_variables() {

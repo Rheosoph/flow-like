@@ -55,6 +55,12 @@ export interface IBoardSummaryMetrics {
 	totalNodeCount: number;
 	wasmPackages: string[];
 	wasmPermissions: string[];
+	/** Tables opened by a literal name on "Open Database" nodes. Absent on older summaries. */
+	tableRefs?: string[];
+	/** OAuth provider id → sorted scopes the nodes require. Absent on older summaries. */
+	oauthProviders?: Record<string, string[]>;
+	/** Some node only runs on the member's device. Absent on older summaries. */
+	requiresLocal?: boolean;
 	variableCounts: { total: number; secret: number; promptedAtRuntime: number };
 	layerCounts: {
 		total: number;

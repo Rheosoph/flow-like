@@ -819,8 +819,12 @@ async fn disconnect_connection(
 /// Deleting an event or app never waits on Microsoft: when the registration cannot be
 /// removed, the local connection is still deleted and the orphan is logged and audited
 /// with the ids needed to remove it by hand.
-pub(crate) async fn cleanup_event(state: &AppState, event: &str) -> Result<(), ApiError> {
-    let Some((mut c, mut revision)) = store::event_connection(state, event).await? else {
+pub(crate) async fn cleanup_event(
+    state: &AppState,
+    app: &str,
+    event: &str,
+) -> Result<(), ApiError> {
+    let Some((mut c, mut revision)) = store::app_event_connection(state, app, event).await? else {
         return Ok(());
     };
     if let Err(error) = disconnect_connection(state, &mut c, &mut revision).await {

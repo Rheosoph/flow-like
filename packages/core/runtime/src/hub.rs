@@ -1026,16 +1026,12 @@ pub(crate) async fn bit_exists_on_hub(
                 return Ok(Some(vec![]));
             }
             let response = http_client
-                .client()
                 .get(hub_api_url(&hub, true, &["bit", bit_id])?)
-                .send()
                 .await?;
             if response.status() == flow_like_types::reqwest::StatusCode::NOT_FOUND {
                 // Cached metadata could omit a newly configured dependency.
                 let dependencies = http_client
-                    .client()
                     .get(metadata_url.clone())
-                    .send()
                     .await?
                     .error_for_status()?
                     .json::<Dependencies>()
@@ -1214,9 +1210,10 @@ impl Hub {
         app_id: &str,
     ) -> Result<UserExecutionContext> {
         let context_url = self.construct_url(&format!("api/v1/apps/{}/invoke/context", app_id))?;
-        let client = self.http_client().client();
+        let http_client = self.http_client();
 
-        let request = client
+        let request = http_client
+            .client()
             .get(context_url)
             .header("Authorization", Self::authorization_value(token))
             .build()
@@ -1227,7 +1224,7 @@ impl Hub {
         let unavailable = |message: String| {
             flow_like_types::Error::new(AuthorizationError::Unavailable).context(message)
         };
-        let resp = client
+        let resp = http_client
             .execute(request)
             .await
             .map_err(|e| unavailable(format!("execution context request failed: {}", e)))?;
@@ -1272,18 +1269,16 @@ impl Hub {
 
         let auth_val = Self::authorization_value(token);
 
-        let client = self.http_client().client();
+        let http_client = self.http_client();
 
-        let request = client
+        let request = http_client
+            .client()
             .get(presign_url.clone())
             .header("Authorization", &auth_val)
             .build()
             .map_err(flow_like_types::Error::from)?;
 
-        let resp = client
-            .execute(request)
-            .await
-            .map_err(flow_like_types::Error::from)?;
+        let resp = http_client.execute(request).await?;
 
         let status = resp.status();
         let body_text = resp.text().await.map_err(flow_like_types::Error::from)?;

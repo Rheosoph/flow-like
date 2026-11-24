@@ -176,6 +176,9 @@ enum ClaudeThinking {
     EffortOnly,
     /// `adaptive` or `disabled`, with `output_config.effort`.
     Adaptive,
+    /// `adaptive`, with `output_config.effort`; thinking is turned off with `between_tools`, since
+    /// the API rejects `disabled` ("To turn thinking off on this model, send between_tools").
+    AdaptiveBetweenTools,
     /// Only `enabled` with `budget_tokens`; incompatible with forced tool use.
     Budget,
     Unsupported,
@@ -232,6 +235,7 @@ impl Claude {
         match (self.family, self.version) {
             (Fable | Mythos, _) => ClaudeThinking::EffortOnly,
             (Opus, version) if version >= (5, 0) => ClaudeThinking::EffortOnly,
+            (Sonnet, version) if version >= (5, 0) => ClaudeThinking::AdaptiveBetweenTools,
             (Opus | Sonnet, version) if version >= (4, 6) => ClaudeThinking::Adaptive,
             (Opus | Sonnet, version) if version >= (4, 0) => ClaudeThinking::Budget,
             (Sonnet, (3, 7)) => ClaudeThinking::Budget,
@@ -335,7 +339,10 @@ fn messages_params(history: &History, claude: Option<Claude>) -> Value {
             ClaudeThinking::Adaptive if thinking == HistoryThinking::Off => {
                 object.insert("thinking".into(), json!({ "type": "disabled" }));
             }
-            ClaudeThinking::Adaptive => {
+            ClaudeThinking::AdaptiveBetweenTools if thinking == HistoryThinking::Off => {
+                object.insert("thinking".into(), json!({ "type": "between_tools" }));
+            }
+            ClaudeThinking::Adaptive | ClaudeThinking::AdaptiveBetweenTools => {
                 object.insert("thinking".into(), json!({ "type": "adaptive" }));
                 output_config.insert("effort".into(), json!(effort(thinking)));
             }
@@ -584,7 +591,8 @@ mod tests {
             ("claude-fable-5-1", ClaudeThinking::EffortOnly),
             ("claude-opus-5-5", ClaudeThinking::EffortOnly),
             ("claude-opus-5", ClaudeThinking::EffortOnly),
-            ("claude-sonnet-5", ClaudeThinking::Adaptive),
+            ("claude-sonnet-5", ClaudeThinking::AdaptiveBetweenTools),
+            ("claude-sonnet-5-5", ClaudeThinking::AdaptiveBetweenTools),
             ("claude-opus-4-8", ClaudeThinking::Adaptive),
             ("claude-sonnet-4-6", ClaudeThinking::Adaptive),
             ("claude-opus-4-5", ClaudeThinking::Budget),
@@ -640,11 +648,19 @@ mod tests {
         let effort_only = messages_params(&history, Claude::parse("claude-opus-5-5"));
         let adaptive = messages_params(&history, Claude::parse("claude-sonnet-4-6"));
         let budget = messages_params(&history, Claude::parse("claude-haiku-4-5"));
+        let between_tools = messages_params(&history, Claude::parse("claude-sonnet-5-5"));
 
         assert!(effort_only.get("thinking").is_none());
         assert_eq!(effort_only["output_config"]["effort"], "low");
         assert_eq!(adaptive["thinking"], json!({"type": "disabled"}));
         assert!(budget.get("thinking").is_none());
+        assert_eq!(between_tools["thinking"], json!({"type": "between_tools"}));
+        assert!(between_tools.get("output_config").is_none());
+
+        history.thinking = Some(HistoryThinking::High);
+        let thinking = messages_params(&history, Claude::parse("claude-sonnet-5-5"));
+        assert_eq!(thinking["thinking"], json!({"type": "adaptive"}));
+        assert_eq!(thinking["output_config"]["effort"], "high");
     }
 
     #[test]

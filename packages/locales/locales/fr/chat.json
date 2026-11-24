@@ -314,6 +314,8 @@
 		"requested": "",
 		"previousTurn": "",
 		"contextLimit": "",
+		"withoutModel": "",
+		"failureCode": "",
 		"title": "",
 		"promptCache": "",
 		"cacheHint": "",

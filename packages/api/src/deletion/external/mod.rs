@@ -122,7 +122,7 @@ pub async fn run(
                         return Ok(Flow::Suspend);
                     }
                     pass.checkpoint().await?;
-                    crate::teams::management::cleanup_event(state, &event).await?;
+                    crate::teams::management::cleanup_event(state, &root_id, &event).await?;
                 }
             }
             app::delete_sink_schedules(state, &root_id).await?;

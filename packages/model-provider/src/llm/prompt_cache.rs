@@ -54,6 +54,32 @@ fn stable_system_prefix() -> Option<Arc<str>> {
     STABLE_SYSTEM_PREFIX.try_with(Arc::clone).ok()
 }
 
+/// The cache settings the current task runs with. A spawned task does not inherit task locals,
+/// so work it does for the same conversation runs under [`CacheScope::run`].
+#[derive(Clone, Debug, Default)]
+pub struct CacheScope {
+    prefix: Option<Arc<str>>,
+    session: Option<String>,
+}
+
+impl CacheScope {
+    pub fn current() -> Self {
+        Self {
+            prefix: stable_system_prefix(),
+            session: CACHE_SESSION_KEY.try_with(Clone::clone).ok().flatten(),
+        }
+    }
+
+    pub async fn run<F: Future>(self, future: F) -> F::Output {
+        let Some(prefix) = self.prefix else {
+            return future.await;
+        };
+        CACHE_SESSION_KEY
+            .scope(self.session, STABLE_SYSTEM_PREFIX.scope(prefix, future))
+            .await
+    }
+}
+
 /// Whether OpenRouter routes `model` to a Claude model.
 pub fn is_openrouter_claude(model: &str) -> bool {
     model.trim().to_ascii_lowercase().starts_with("anthropic/")

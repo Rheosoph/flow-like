@@ -23,6 +23,10 @@ import type {
 	IOnlineForkBody,
 	IOnlineForkResponse,
 } from "../../lib/schema/app/fork";
+import type {
+	IAppShowcase,
+	IAppShowcaseSettings,
+} from "../../lib/schema/app/showcase";
 import type { IGroup } from "./types";
 
 export type IMediaItem = "icon" | "thumbnail" | "preview";
@@ -186,6 +190,15 @@ export interface IAppState {
 	 * stores it in its manifest.
 	 */
 	changeAppBotAccess(appId: string, refuseBots: boolean): Promise<void>;
+	/** Owner-only (GET /apps/{app_id}/settings/showcase). Everything off when never set. */
+	getShowcaseSettings(appId: string): Promise<IAppShowcaseSettings>;
+	/** Owner-only (PUT /apps/{app_id}/settings/showcase). Returns the stored settings. */
+	updateShowcaseSettings(
+		appId: string,
+		settings: IAppShowcaseSettings,
+	): Promise<IAppShowcaseSettings>;
+	/** What the store page shows (GET /apps/{app_id}/showcase), filtered by the server. */
+	getShowcase(appId: string): Promise<IAppShowcase>;
 	/**
 	 * Pre-fork dry run — returns size totals, remote-token requirements, and
 	 * the permission verdict. Safe to call as a probe before committing to a

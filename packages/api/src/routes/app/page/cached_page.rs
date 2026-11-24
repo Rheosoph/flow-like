@@ -20,7 +20,7 @@ const NAMESPACE: &str = "page-artifacts-v1";
 /// The route has already authorized the caller and loaded the owning board.
 /// Always validate the page object before using a shared entry, including for
 /// published versions, so deletion and same-version restores remain visible.
-pub(super) async fn load(
+pub(crate) async fn load(
     cache: &CacheBackendHandle,
     store: Arc<dyn ObjectStore>,
     storage_scope: Option<&str>,
@@ -84,7 +84,7 @@ async fn uncached(
 /// Reading a page needs only the board's identity and storage root. Hydrating the board runs
 /// every node's update, which on a large board takes longer than a read is allowed, so the board
 /// document is only checked for existence.
-pub(super) async fn page_owner(
+pub(crate) async fn page_owner(
     store: &Arc<dyn ObjectStore>,
     storage_root: &Path,
     board_id: String,

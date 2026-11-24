@@ -17,6 +17,8 @@ pub mod sql_params;
 #[cfg(all(feature = "database-runtime", feature = "graph"))]
 pub mod table_cascade;
 #[cfg(all(feature = "database-runtime", feature = "graph"))]
+pub mod showcase;
+#[cfg(all(feature = "database-runtime", feature = "graph"))]
 pub mod table_summary;
 #[cfg(feature = "database-runtime")]
 pub mod vector;

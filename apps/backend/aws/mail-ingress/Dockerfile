@@ -7,9 +7,11 @@ RUN yum install -y gcc gcc-c++ git make openssl-devel pkgconf-pkg-config xz && \
     /root/.cargo/bin/rustup toolchain install && \
     yum clean all
 ENV PATH="/root/.cargo/bin:${PATH}"
+ARG CARGO_BUILD_JOBS=1
 COPY . .
-RUN --mount=type=cache,id=flow-like-mail-ingress-cargo-home-rust-beta-2026-09-27,target=/cargo-home,sharing=shared \
-    --mount=type=cache,id=flow-like-mail-ingress-lambda-target-rust-beta-2026-09-27,target=/app/target,sharing=locked \
+RUN --mount=type=cache,id=flow-like-rust-beta-2026-09-27-amazonlinux2023-arm64-home,target=/cargo-home,sharing=shared \
+    --mount=type=cache,id=flow-like-rust-beta-2026-09-27-amazonlinux2023-arm64-target,target=/app/target,sharing=locked \
+    if [ -n "${CARGO_BUILD_JOBS:-}" ]; then export CARGO_BUILD_JOBS; fi && \
     CARGO_HOME=/cargo-home cargo build --locked --release --package aws-mail-ingress && \
     cp /app/target/release/aws-mail-ingress /tmp/bootstrap
 

@@ -24,6 +24,7 @@ pub mod render_flowscript;
 pub mod report_run;
 pub mod run_logs;
 pub mod scoring;
+pub mod sealed_commands;
 pub mod secrets;
 pub mod sink_rebind;
 pub mod summaries;

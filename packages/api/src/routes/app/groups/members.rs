@@ -144,7 +144,7 @@ pub async fn add_member(
         group_id
     );
 
-    single_group(&state, &group_id).await
+    single_group(&state, &user, &group_id).await
 }
 
 #[utoipa::path(

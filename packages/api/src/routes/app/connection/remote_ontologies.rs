@@ -119,7 +119,8 @@ pub async fn get_remote_ontologies(
     Extension(user): Extension<AppUser>,
     Path((app_id, target_app_id)): Path<(String, String)>,
 ) -> Result<Json<Vec<flow_like_catalog_core::GraphOverlay>>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
+    let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
+    super::ensure_connected_app_reads_data(&user, &permission)?;
     let reader = ensure_remote_ontology_access(&state, &app_id, &target_app_id).await?;
 
     let credentials = state.master_credentials().await?;
