@@ -49,6 +49,7 @@ export function ShowcaseSection({
 	eyebrow,
 	title,
 	subtitle,
+	aside,
 	children,
 }: Readonly<{
 	id: string;
@@ -56,6 +57,7 @@ export function ShowcaseSection({
 	eyebrow: string;
 	title: string;
 	subtitle?: string;
+	aside?: ReactNode;
 	children: ReactNode;
 }>) {
 	return (
@@ -64,17 +66,20 @@ export function ShowcaseSection({
 			data-showcase-section={id}
 			className="scroll-mt-16 space-y-5"
 		>
-			<header>
-				<div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-					<Icon className="h-3.5 w-3.5" aria-hidden="true" />
-					{eyebrow}
+			<header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+				<div className="min-w-0">
+					<div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+						<Icon className="h-3.5 w-3.5" aria-hidden="true" />
+						{eyebrow}
+					</div>
+					<h2 className="mt-1 text-xl font-semibold tracking-tight">{title}</h2>
+					{subtitle ? (
+						<p className="mt-1 max-w-prose text-sm text-muted-foreground">
+							{subtitle}
+						</p>
+					) : null}
 				</div>
-				<h2 className="mt-1 text-xl font-semibold tracking-tight">{title}</h2>
-				{subtitle ? (
-					<p className="mt-1 max-w-prose text-sm text-muted-foreground">
-						{subtitle}
-					</p>
-				) : null}
+				{aside}
 			</header>
 			{children}
 		</section>
@@ -83,6 +88,29 @@ export function ShowcaseSection({
 
 export const cardClass =
 	"rounded-xl border border-border bg-card p-4 text-left min-w-0";
+
+export const tabsListClass =
+	"h-auto w-full justify-start gap-5 rounded-none border-b border-border bg-transparent p-0";
+
+export const tabsTriggerClass =
+	"relative h-auto flex-none gap-1.5 rounded-none border-0 bg-transparent px-0 pt-1 pb-2.5 text-[13px] text-muted-foreground shadow-none after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:rounded-full hover:text-foreground focus-visible:rounded-sm focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none data-[state=active]:after:bg-foreground dark:text-muted-foreground dark:data-[state=active]:border-transparent dark:data-[state=active]:bg-transparent dark:data-[state=active]:text-foreground";
+
+export function TabCount({ n }: Readonly<{ n: number }>) {
+	return (
+		<span className="rounded-full bg-muted px-1.5 text-[10.5px] font-medium tabular-nums text-muted-foreground">
+			{n}
+		</span>
+	);
+}
+
+export const gridWrapClass =
+	"overflow-auto overscroll-contain rounded-lg border border-border bg-card";
+export const gridTableClass =
+	"my-0 w-full border-separate border-spacing-0 text-[13px]";
+export const gridHeadClass =
+	"sticky top-0 z-10 whitespace-nowrap border-0 border-b border-border bg-muted px-3 py-2 text-left text-xs font-medium text-muted-foreground";
+export const gridCellClass =
+	"border-0 border-b border-border/60 px-3 py-2 align-middle";
 
 export const interactiveCardClass = cn(
 	cardClass,
@@ -182,7 +210,12 @@ export function familyParts(
 export function CopyButton({
 	getText,
 	className,
-}: Readonly<{ getText: () => string; className?: string }>) {
+	variant = "outline",
+}: Readonly<{
+	getText: () => string;
+	className?: string;
+	variant?: "outline" | "ghost";
+}>) {
 	const { t } = useTranslation("store");
 	const [copied, setCopied] = useState(false);
 	const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -205,7 +238,7 @@ export function CopyButton({
 	return (
 		<Button
 			type="button"
-			variant="outline"
+			variant={variant}
 			size="sm"
 			className={className}
 			onClick={copy}
@@ -222,11 +255,21 @@ export function CopyButton({
 	);
 }
 
-export function CodeBlock({ code }: Readonly<{ code: string }>) {
+export function CodeBlock({
+	code,
+	header,
+}: Readonly<{ code: string; header?: ReactNode }>) {
 	return (
-		<pre className="overflow-x-auto rounded-md border border-border bg-muted/40 px-3.5 py-3 font-mono text-[12.5px] leading-relaxed">
-			{code}
-		</pre>
+		<div className="overflow-hidden rounded-lg border border-border bg-muted/30">
+			{header ? (
+				<div className="flex items-center justify-between gap-2 border-b border-border bg-muted/40 py-1 pr-1.5 pl-3">
+					{header}
+				</div>
+			) : null}
+			<pre className="overflow-x-auto px-3.5 py-3 font-mono text-[12.5px] leading-relaxed">
+				{code}
+			</pre>
+		</div>
 	);
 }
 

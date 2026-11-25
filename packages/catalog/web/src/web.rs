@@ -15,6 +15,7 @@ pub mod tcp;
 pub(crate) mod test_support;
 pub mod tls;
 pub mod udp;
+pub mod webhook_signature;
 pub mod websocket;
 
 #[cfg(feature = "execute")]

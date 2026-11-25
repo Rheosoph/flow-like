@@ -17,7 +17,7 @@ import {
 	cardClass,
 	interactiveCardClass,
 } from "./showcase-ui";
-import { Wireframe } from "./wireframe";
+import { PageFrame, Wireframe } from "./wireframe";
 
 export function ShowcasePages({
 	pages,
@@ -38,35 +38,50 @@ export function ShowcasePages({
 			})}
 		>
 			{previews ? (
-				<div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,240px),1fr))] gap-3.5">
+				<div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,240px),1fr))] gap-x-4 gap-y-6">
 					{pages.map((p) => (
 						<button
 							key={p.id}
 							type="button"
-							className={`${interactiveCardClass} flex flex-col gap-2.5 p-2.5`}
+							className="group flex min-w-0 flex-col gap-2.5 text-left focus-visible:outline-none"
 							onClick={() => onOpen(p.id)}
 						>
-							{p.outline ? (
-								<Wireframe
-									outline={p.outline}
-									label={t(
-										"showcasePagePreview",
-										"Layout preview of {{name}}",
-										{
-											name: p.name,
-										},
-									)}
-								/>
-							) : (
-								<span className="grid aspect-16/10 w-full place-items-center rounded-lg border border-dashed border-border text-muted-foreground">
-									<LayoutDashboard className="h-5 w-5" aria-hidden="true" />
+							<PageFrame
+								route={p.route}
+								className="w-full transition-[border-color,transform] group-hover:border-foreground/25 group-focus-visible:ring-2 group-focus-visible:ring-ring motion-safe:group-hover:-translate-y-0.5"
+							>
+								{p.outline ? (
+									<Wireframe
+										outline={p.outline}
+										label={t(
+											"showcasePagePreview",
+											"Layout preview of {{name}}",
+											{ name: p.name },
+										)}
+									/>
+								) : (
+									<span className="grid aspect-16/10 w-full place-items-center bg-background/60 text-muted-foreground/60">
+										<LayoutDashboard className="h-5 w-5" aria-hidden="true" />
+									</span>
+								)}
+							</PageFrame>
+							<span className="flex min-w-0 flex-col gap-0.5 px-0.5">
+								<span className="flex items-baseline justify-between gap-2">
+									<b className="truncate text-sm font-medium">{p.name}</b>
+									{typeof p.component_count === "number" &&
+									p.component_count > 0 ? (
+										<span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+											{t("showcaseComponentCount", {
+												defaultValue_one: "{{count}} component",
+												defaultValue_other: "{{count}} components",
+												count: p.component_count,
+											})}
+										</span>
+									) : null}
 								</span>
-							)}
-							<span className="flex flex-wrap items-baseline justify-between gap-2 px-1">
-								<b className="text-sm font-medium">{p.name}</b>
-								{p.route ? (
-									<span className="font-mono text-xs text-muted-foreground">
-										{p.route}
+								{p.description ? (
+									<span className="line-clamp-2 text-xs text-muted-foreground">
+										{p.description}
 									</span>
 								) : null}
 							</span>

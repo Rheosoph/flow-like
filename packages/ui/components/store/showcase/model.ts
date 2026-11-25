@@ -527,39 +527,51 @@ export function sqlExample(
 	return null;
 }
 
-const CONTAINER_TYPES = new Set([
+const COLUMN_TYPES = new Set([
+	"page",
 	"column",
 	"stack",
 	"box",
 	"center",
-	"scrollArea",
-	"aspectRatio",
-	"card",
+	"scrollarea",
+	"aspectratio",
 	"tabs",
 	"accordion",
-	"modal",
-	"drawer",
 	"popover",
 	"tooltip",
 	"overlay",
 	"absolute",
 	"form",
+	"widget",
 ]);
 
-export type WireKind =
-	| "col"
-	| "row"
-	| "grid"
-	| "text"
+const HIDDEN_TYPES = new Set(["modal", "drawer"]);
+
+export type WireLeafKind =
 	| "heading"
-	| "media"
-	| "table"
+	| "text"
+	| "paragraph"
+	| "stat"
+	| "image"
+	| "avatar"
 	| "chart"
+	| "table"
 	| "map"
 	| "button"
+	| "icon"
+	| "badge"
 	| "field"
+	| "select"
+	| "check"
+	| "file"
+	| "progress"
+	| "divider"
+	| "spacer"
 	| "list"
+	| "embed"
 	| "block";
+
+export type WireKind = "col" | "row" | "grid" | WireLeafKind;
 
 export interface WireNode {
 	kind: WireKind;
@@ -567,66 +579,102 @@ export interface WireNode {
 	children: WireNode[];
 }
 
-const WIRE_LEAVES: Record<string, WireKind> = {
-	text: "text",
-	markdown: "text",
-	richText: "text",
-	badge: "button",
+const WIRE_LEAVES: Record<string, WireLeafKind> = {
 	heading: "heading",
-	image: "media",
-	video: "media",
-	avatar: "media",
-	lottie: "media",
-	iframe: "media",
+	text: "text",
+	markdown: "paragraph",
+	richtext: "paragraph",
+	dialogue: "paragraph",
+	stat: "stat",
+	image: "image",
+	video: "image",
+	lottie: "image",
+	sprite: "image",
+	imagehotspot: "image",
+	imagelabeler: "image",
+	cameraview: "image",
+	characterportrait: "avatar",
+	avatar: "avatar",
+	userprofile: "avatar",
+	chart: "chart",
+	plotlychart: "chart",
+	nivochart: "chart",
+	forecastchart: "chart",
+	graph: "chart",
+	ontologygraph: "chart",
 	table: "table",
-	tableRow: "table",
+	tablerow: "table",
 	calendar: "table",
 	gantt: "table",
-	chart: "chart",
-	plotlyChart: "chart",
-	nivoChart: "chart",
-	forecastChart: "chart",
-	progress: "chart",
+	inventorygrid: "table",
 	map: "map",
-	geoMap: "map",
+	geomap: "map",
+	minimap: "map",
 	button: "button",
 	link: "button",
-	appLink: "button",
+	applink: "button",
+	choicemenu: "button",
+	icon: "icon",
+	spinner: "icon",
+	badge: "badge",
 	input: "field",
-	textField: "field",
-	select: "field",
+	textfield: "field",
 	textarea: "field",
-	checkbox: "field",
-	switch: "field",
+	datetimeinput: "field",
 	slider: "field",
-	dateTimeInput: "field",
-	radioGroup: "field",
-	fileInput: "field",
+	voiceinput: "field",
+	select: "select",
+	checkbox: "check",
+	switch: "check",
+	radiogroup: "check",
+	fileinput: "file",
+	imageinput: "file",
+	progress: "progress",
+	healthbar: "progress",
+	divider: "divider",
+	spacer: "spacer",
 	list: "list",
-	graph: "chart",
-	ontologyGraph: "chart",
+	iframe: "embed",
+	widgetinstance: "embed",
+	microwidgetinstance: "embed",
+	excalidraw: "embed",
+	fileeditor: "embed",
+	filepreview: "embed",
+	diffview: "embed",
+	skeleton: "block",
 };
 
-const MAX_WIRE_DEPTH = 5;
+const MAX_WIRE_DEPTH = 6;
 const MAX_WIRE_CHILDREN = 8;
-const MAX_WIRE_NODES = 48;
+const MAX_WIRE_NODES = 60;
+
+/** Leaves that keep their own width inside a row; everything else shares the row. */
+export const FIXED_WIDTH_WIRES = new Set<WireKind>([
+	"image",
+	"button",
+	"icon",
+	"badge",
+	"avatar",
+	"check",
+]);
 
 export function outlineToWire(root: IShowcaseOutlineNode): WireNode {
 	let budget = MAX_WIRE_NODES;
 	const walk = (n: IShowcaseOutlineNode, depth: number): WireNode | null => {
-		if (budget <= 0) return null;
+		const type = n.t.toLowerCase();
+		if (budget <= 0 || HIDDEN_TYPES.has(type)) return null;
 		budget -= 1;
 		const children = n.c ?? [];
+		const leaf = WIRE_LEAVES[type];
 		const isContainer =
-			CONTAINER_TYPES.has(n.t) ||
-			n.t === "row" ||
-			n.t === "grid" ||
-			(children.length > 0 && !WIRE_LEAVES[n.t]);
-		if (!isContainer) {
-			return { kind: WIRE_LEAVES[n.t] ?? "block", children: [] };
-		}
+			type === "row" ||
+			type === "grid" ||
+			type === "card" ||
+			COLUMN_TYPES.has(type) ||
+			(children.length > 0 && !leaf);
+		if (!isContainer) return { kind: leaf ?? "block", children: [] };
 		const kind: WireKind =
-			n.t === "row" ? "row" : n.t === "grid" ? "grid" : "col";
+			type === "row" ? "row" : type === "grid" ? "grid" : "col";
 		const kids =
 			depth >= MAX_WIRE_DEPTH
 				? []
@@ -634,9 +682,17 @@ export function outlineToWire(root: IShowcaseOutlineNode): WireNode {
 						.slice(0, MAX_WIRE_CHILDREN)
 						.map((c) => walk(c, depth + 1))
 						.filter((c): c is WireNode => c !== null);
-		return { kind, card: n.t === "card", children: kids };
+		return { kind, card: type === "card", children: kids };
 	};
 	return walk(root, 0) ?? { kind: "col", children: [] };
+}
+
+/** True when the wireframe would draw nothing visible (no leaves anywhere). */
+export function isEmptyWire(node: WireNode): boolean {
+	if (node.card) return false;
+	if (node.kind === "col" || node.kind === "row" || node.kind === "grid")
+		return node.children.every(isEmptyWire);
+	return node.kind === "spacer";
 }
 
 export const showcaseAccess = (price: number | null | undefined) =>

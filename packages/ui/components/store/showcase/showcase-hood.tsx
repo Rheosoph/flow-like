@@ -4,6 +4,7 @@ import { useTranslation } from "@flow-like/locales";
 import {
 	Ban,
 	Check,
+	ChevronRight,
 	Cloud,
 	Cpu,
 	KeyRound,
@@ -14,7 +15,6 @@ import {
 	Smartphone,
 	Sparkles,
 	Workflow,
-	X,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type {
@@ -22,8 +22,12 @@ import type {
 	IShowcaseHood,
 } from "../../../lib/schema/app/showcase";
 import { cn } from "../../../lib/utils";
-import { PERMISSION_LABELS } from "./model";
-import { Chip, ShowcaseSection, cardClass } from "./showcase-ui";
+import { PERMISSION_LABELS, formatNumber } from "./model";
+import { Chip, ShowcaseSection } from "./showcase-ui";
+
+const ACRONYM_KINDS = new Set(["llm", "vlm"]);
+const modelKindLabel = (kind: string) =>
+	ACRONYM_KINDS.has(kind.toLowerCase()) ? kind.toUpperCase() : kind;
 
 export const averageScore = (f: IShowcaseFlow): number | null => {
 	if (!f.scores) return null;
@@ -31,71 +35,113 @@ export const averageScore = (f: IShowcaseFlow): number | null => {
 	return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
 };
 
-function HoodCard({
+function SpecRow({
 	icon: Icon,
 	title,
 	children,
 }: Readonly<{ icon: LucideIcon; title: string; children: ReactNode }>) {
 	return (
-		<div className={`${cardClass} space-y-3`}>
-			<h3 className="flex items-center gap-2 text-sm font-semibold">
-				<Icon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+		<div className="grid gap-x-6 gap-y-2 px-4 py-3.5 sm:grid-cols-[11rem_minmax(0,1fr)]">
+			<h3 className="flex items-center gap-2 text-[13px] font-medium leading-6 tracking-normal text-muted-foreground">
+				<Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
 				{title}
 			</h3>
-			{children}
+			<div className="min-w-0 text-[13px] leading-6">{children}</div>
 		</div>
 	);
 }
 
-function RunOption({
-	on,
+function YesNo({
+	ok,
 	icon: Icon,
 	label,
-}: Readonly<{ on: boolean; icon: LucideIcon; label: string }>) {
+}: Readonly<{ ok: boolean; icon?: LucideIcon; label: string }>) {
 	const { t } = useTranslation("store");
+	const Mark = ok ? Check : Ban;
 	return (
-		<div
+		<li
 			className={cn(
-				"flex items-center gap-2 rounded-md border p-2.5 text-[13px] font-medium",
-				on
-					? "border-border"
-					: "border-dashed border-border text-muted-foreground",
+				"inline-flex items-center gap-1.5",
+				!ok && "text-muted-foreground",
 			)}
 		>
-			<Icon className="h-4 w-4" aria-hidden="true" />
-			<span>{label}</span>
-			{on ? (
-				<Check
-					className="ml-auto h-4 w-4 text-[var(--showcase-time)]"
+			{Icon ? (
+				<Icon
+					className="h-3.5 w-3.5 text-muted-foreground"
 					aria-hidden="true"
 				/>
-			) : (
-				<X className="ml-auto h-4 w-4" aria-hidden="true" />
-			)}
-			<span className="sr-only">
-				{on ? t("showcaseYes", "Yes") : t("showcaseNo", "No")}
-			</span>
-		</div>
-	);
-}
-
-function Policy({
-	ok,
-	yes,
-	no,
-}: Readonly<{ ok: boolean; yes: string; no: string }>) {
-	const Icon = ok ? Check : Ban;
-	return (
-		<li className="flex items-center gap-2">
-			<Icon
+			) : null}
+			{label}
+			<Mark
 				className={cn(
-					"h-4 w-4",
+					"h-3.5 w-3.5",
 					ok ? "text-[var(--showcase-time)]" : "text-muted-foreground",
 				)}
 				aria-hidden="true"
 			/>
-			{ok ? yes : no}
+			<span className="sr-only">
+				{ok ? t("showcaseYes", "Yes") : t("showcaseNo", "No")}
+			</span>
 		</li>
+	);
+}
+
+function FlowRow({
+	flow,
+	onOpen,
+}: Readonly<{ flow: IShowcaseFlow; onOpen: (id: string) => void }>) {
+	const { t } = useTranslation("store");
+	const avg = averageScore(flow);
+	return (
+		<button
+			type="button"
+			className="group grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none sm:grid-cols-[auto_minmax(0,1fr)_9rem_6rem_auto]"
+			onClick={() => onOpen(flow.id)}
+		>
+			<span className="grid h-8 w-8 place-items-center rounded-lg border border-border bg-muted/60 text-muted-foreground">
+				<Workflow className="h-4 w-4" aria-hidden="true" />
+			</span>
+			<span className="flex min-w-0 flex-col">
+				<span className="truncate text-[13.5px] font-medium">{flow.name}</span>
+				{flow.description ? (
+					<small className="truncate text-xs text-muted-foreground">
+						{flow.description}
+					</small>
+				) : null}
+			</span>
+			<span className="hidden items-center gap-2 sm:flex">
+				{avg !== null ? (
+					<>
+						<span
+							className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted"
+							role="img"
+							aria-label={t("showcaseQualityScore", "Quality {{score}}/10", {
+								score: avg.toFixed(1),
+							})}
+						>
+							<span
+								className="block h-full rounded-full bg-primary"
+								style={{ width: `${Math.min(100, avg * 10)}%` }}
+							/>
+						</span>
+						<span className="w-7 text-right text-xs font-medium tabular-nums">
+							{avg.toFixed(1)}
+						</span>
+					</>
+				) : null}
+			</span>
+			<span className="hidden text-right text-xs tabular-nums text-muted-foreground sm:block">
+				{t("showcaseNodeCount", {
+					defaultValue_one: "{{count}} node",
+					defaultValue_other: "{{count}} nodes",
+					count: flow.node_count,
+				})}
+			</span>
+			<ChevronRight
+				className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5"
+				aria-hidden="true"
+			/>
+		</button>
 	);
 }
 
@@ -123,188 +169,171 @@ export function ShowcaseHood({
 			eyebrow={t("showcaseHoodEyebrow", "Under the hood")}
 			title={t("showcaseHoodTitle", "What it needs and what it can reach")}
 		>
-			<div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] items-start gap-3">
+			<div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
 				{mode ? (
-					<HoodCard
+					<SpecRow
 						icon={RunIcon}
 						title={t("showcaseHoodRuns", "Where it runs")}
 					>
-						<div className="grid grid-cols-2 gap-2">
-							<RunOption
-								on={cloud}
+						<ul className="flex flex-wrap gap-x-5 gap-y-1">
+							<YesNo
+								ok={cloud}
 								icon={Cloud}
 								label={t("showcaseHoodCloud", "Cloud")}
 							/>
-							<RunOption
-								on={device}
+							<YesNo
+								ok={device}
 								icon={Smartphone}
 								label={t("showcaseHoodDevice", "Your device")}
 							/>
-						</div>
+						</ul>
 						{hood.requires_local ? (
-							<p className="text-xs text-muted-foreground">
+							<p className="text-xs leading-5 text-muted-foreground">
 								{t(
 									"showcaseHoodRequiresLocal",
 									"Some steps only run on your own device.",
 								)}
 							</p>
 						) : null}
-					</HoodCard>
+					</SpecRow>
 				) : null}
 				{hood.models && hood.models.length > 0 ? (
-					<HoodCard
-						icon={Sparkles}
-						title={t("showcaseHoodModels", "AI models")}
-					>
-						<ul className="flex flex-col gap-2.5">
+					<SpecRow icon={Sparkles} title={t("showcaseHoodModels", "AI models")}>
+						<ul className="flex flex-wrap gap-1.5">
 							{hood.models.map((m) => (
-								<li key={m.id} className="flex items-start gap-2.5">
-									<span className="min-w-0 flex-1 text-[13px] font-medium">
-										{m.name}
-									</span>
-									<Chip>{m.kind}</Chip>
+								<li
+									key={m.id}
+									className="inline-flex items-center gap-2 rounded-md border border-border py-0.5 pr-1 pl-2"
+								>
+									<span className="font-medium">{m.name}</span>
+									<Chip>{modelKindLabel(m.kind)}</Chip>
 								</li>
 							))}
 						</ul>
-					</HoodCard>
+					</SpecRow>
 				) : null}
 				{hood.packages && hood.packages.length > 0 ? (
-					<HoodCard
+					<SpecRow
 						icon={Package}
 						title={t("showcaseHoodPackages", "Node packages")}
 					>
-						<ul className="flex flex-col gap-3">
+						<ul className="flex flex-col gap-2.5">
 							{hood.packages.map((p) => (
-								<li key={p.id} className="flex flex-col gap-1.5">
-									<b className="font-mono text-[13px] font-medium">
+								<li key={p.id} className="flex flex-col gap-1">
+									<span className="font-mono text-[12.5px] font-medium">
 										{p.name}{" "}
 										<span className="text-muted-foreground">{p.version}</span>
-									</b>
+									</span>
 									{p.permissions.length > 0 ? (
-										<>
+										<span className="flex flex-wrap items-center gap-1.5">
 											<small className="text-xs text-muted-foreground">
 												{t(
 													"showcaseHoodSandboxed",
 													"Runs sandboxed. Allowed to use:",
 												)}
 											</small>
-											<span className="flex flex-wrap gap-1.5">
-												{p.permissions.map((perm) => {
-													const label = PERMISSION_LABELS[perm];
-													return (
-														<Chip key={perm}>
-															{label
-																? t(label[0] as "showcasePermCache", label[1])
-																: perm}
-														</Chip>
-													);
-												})}
-											</span>
-										</>
+											{p.permissions.map((perm) => {
+												const label = PERMISSION_LABELS[perm];
+												return (
+													<Chip key={perm}>
+														{label
+															? t(label[0] as "showcasePermCache", label[1])
+															: perm}
+													</Chip>
+												);
+											})}
+										</span>
 									) : null}
 								</li>
 							))}
 						</ul>
-					</HoodCard>
+					</SpecRow>
 				) : null}
 				{hood.oauth ? (
-					<HoodCard
+					<SpecRow
 						icon={KeyRound}
 						title={t("showcaseHoodAccounts", "Accounts you connect")}
 					>
 						{hood.oauth.length > 0 ? (
-							<ul className="flex flex-col gap-3">
+							<ul className="flex flex-col gap-1.5">
 								{hood.oauth.map((a) => (
-									<li key={a.provider} className="flex flex-col gap-1.5">
-										<b className="text-[13px] font-medium">{a.provider}</b>
-										<span className="flex flex-wrap gap-1.5">
-											{a.scopes.map((s) => (
-												<Chip key={s} className="font-mono">
-													{s}
-												</Chip>
-											))}
-										</span>
+									<li
+										key={a.provider}
+										className="flex flex-wrap items-center gap-1.5"
+									>
+										<span className="mr-1 font-medium">{a.provider}</span>
+										{a.scopes.map((s) => (
+											<Chip key={s} className="font-mono">
+												{s}
+											</Chip>
+										))}
 									</li>
 								))}
 							</ul>
 						) : (
-							<p className="text-xs text-muted-foreground">
+							<span className="text-muted-foreground">
 								{t(
 									"showcaseHoodNoAccounts",
 									"None. It works without signing in to other services.",
 								)}
-							</p>
+							</span>
 						)}
-					</HoodCard>
+					</SpecRow>
 				) : null}
-				<HoodCard
+				<SpecRow
 					icon={ShieldCheck}
 					title={t("showcaseHoodPolicies", "Policies")}
 				>
-					<ul className="flex flex-col gap-2 text-[13px]">
-						<Policy
+					<ul className="flex flex-wrap gap-x-5 gap-y-1">
+						<YesNo
 							ok={!hood.refuse_bots}
-							yes={t("showcasePolicyBotsAllowed", "Bots can use it")}
-							no={t("showcasePolicyBotsRefused", "Bots are refused")}
+							label={
+								hood.refuse_bots
+									? t("showcasePolicyBotsRefused", "Bots are refused")
+									: t("showcasePolicyBotsAllowed", "Bots can use it")
+							}
 						/>
-						<Policy
+						<YesNo
 							ok={hood.allow_forking}
-							yes={t("showcasePolicyForkOn", "You can fork it")}
-							no={t("showcasePolicyForkOff", "Forking is off")}
+							label={
+								hood.allow_forking
+									? t("showcasePolicyForkOn", "You can fork it")
+									: t("showcasePolicyForkOff", "Forking is off")
+							}
 						/>
-						<Policy
+						<YesNo
 							ok
-							yes={t(
+							label={t(
 								"showcasePolicyPersonal",
 								"Personal columns are never shown here",
 							)}
-							no=""
 						/>
 					</ul>
-				</HoodCard>
-				{flows.length > 0 ? (
-					<HoodCard icon={Workflow} title={t("showcaseHoodFlows", "Flows")}>
-						<p className="text-[13px]">
+				</SpecRow>
+			</div>
+			{flows.length > 0 ? (
+				<div className="overflow-hidden rounded-xl border border-border bg-card">
+					<div className="flex items-center justify-between gap-3 border-b border-border bg-muted/30 px-4 py-2">
+						<span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+							<Workflow className="h-3.5 w-3.5" aria-hidden="true" />
+							{t("showcaseHoodFlows", "Flows")}
+						</span>
+						<span className="text-xs tabular-nums text-muted-foreground">
 							{t("showcaseHoodFlowTotals", {
 								defaultValue_one: "{{count}} flow · {{nodes}} nodes",
 								defaultValue_other: "{{count}} flows · {{nodes}} nodes",
 								count: flows.length,
-								nodes: totalNodes,
+								nodes: formatNumber(totalNodes),
 							})}
-						</p>
-						<ul className="flex flex-col">
-							{flows.map((f) => {
-								const avg = averageScore(f);
-								return (
-									<li key={f.id}>
-										<button
-											type="button"
-											className="flex w-full items-center justify-between gap-2 border-b border-border py-2 text-left text-[13px] hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-											onClick={() => onOpenFlow(f.id)}
-										>
-											<span className="wrap-anywhere">{f.name}</span>
-											<span className="flex shrink-0 items-center gap-2 text-xs tabular-nums text-muted-foreground">
-												{avg !== null ? (
-													<Chip>
-														{t("showcaseQualityScore", "Quality {{score}}/10", {
-															score: avg.toFixed(1),
-														})}
-													</Chip>
-												) : null}
-												{t("showcaseNodeCount", {
-													defaultValue_one: "{{count}} node",
-													defaultValue_other: "{{count}} nodes",
-													count: f.node_count,
-												})}
-											</span>
-										</button>
-									</li>
-								);
-							})}
-						</ul>
-					</HoodCard>
-				) : null}
-			</div>
+						</span>
+					</div>
+					<div className="divide-y divide-border">
+						{flows.map((f) => (
+							<FlowRow key={f.id} flow={f} onOpen={onOpenFlow} />
+						))}
+					</div>
+				</div>
+			) : null}
 		</ShowcaseSection>
 	);
 }

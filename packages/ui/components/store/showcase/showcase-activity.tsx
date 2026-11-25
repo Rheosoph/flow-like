@@ -2,7 +2,7 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { Activity, History } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
 	IShowcaseActivity,
 	IShowcaseRunDay,
@@ -11,9 +11,8 @@ import { cn } from "../../../lib/utils";
 import { compact, formatNumber, niceMax } from "./model";
 import { ShowcaseSection, cardClass } from "./showcase-ui";
 
-const W = 640;
-const H = 200;
-const PL = 44;
+const H = 180;
+const PL = 40;
 const PR = 8;
 const PT = 12;
 const PB = 26;
@@ -33,20 +32,39 @@ const longDay = (day: string) =>
 		timeZone: "UTC",
 	});
 
+function useWidth(fallback: number) {
+	const ref = useRef<HTMLDivElement>(null);
+	const [width, setWidth] = useState(fallback);
+	useLayoutEffect(() => {
+		const el = ref.current;
+		if (!el) return;
+		const read = () => {
+			if (el.clientWidth > 0) setWidth(el.clientWidth);
+		};
+		read();
+		if (typeof ResizeObserver === "undefined") return;
+		const ro = new ResizeObserver(read);
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, []);
+	return { ref, width };
+}
+
 function RunsChart({ days }: Readonly<{ days: IShowcaseRunDay[] }>) {
 	const { t } = useTranslation("store");
 	const [hover, setHover] = useState<number | null>(null);
+	const { ref, width: W } = useWidth(640);
 	const max = niceMax(Math.max(...days.map((d) => d.runs), 0));
 	const iw = W - PL - PR;
 	const ih = H - PT - PB;
 	const step = iw / days.length;
-	const bw = Math.max(1, step - 2);
+	const bw = Math.max(1, Math.min(step * 0.72, 18));
 	const y = (v: number) => PT + ih - (v / max) * ih;
 
 	const bars = useMemo(
 		() =>
 			days.map((d, i) => {
-				const x0 = PL + i * step + 1;
+				const x0 = PL + i * step + (step - bw) / 2;
 				const h = (ih * d.runs) / max;
 				const r = Math.min(3, h);
 				const y0 = PT + ih - h;
@@ -66,7 +84,7 @@ function RunsChart({ days }: Readonly<{ days: IShowcaseRunDay[] }>) {
 			const i = Math.floor((x - PL) / step);
 			setHover(i >= 0 && i < days.length ? i : null);
 		},
-		[days.length, step],
+		[days.length, step, W],
 	);
 
 	const onKey = useCallback(
@@ -89,10 +107,12 @@ function RunsChart({ days }: Readonly<{ days: IShowcaseRunDay[] }>) {
 	const labelIdx = [0, Math.floor(days.length / 2), days.length - 1];
 
 	return (
-		<div className="relative">
+		<div ref={ref} className="relative">
 			<svg
 				viewBox={`0 0 ${W} ${H}`}
-				className="block h-auto w-full rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+				width={W}
+				height={H}
+				className="block max-w-full rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 				role="img"
 				// biome-ignore lint/a11y/noNoninteractiveTabindex: arrow keys read single days
 				tabIndex={0}
@@ -131,7 +151,7 @@ function RunsChart({ days }: Readonly<{ days: IShowcaseRunDay[] }>) {
 						data-bar={b.i}
 						d={b.path}
 						className={cn(
-							"fill-primary motion-safe:transition-opacity",
+							"fill-primary/85 motion-safe:transition-opacity",
 							hover !== null && hover !== b.i && "opacity-35",
 						)}
 					/>
@@ -163,18 +183,22 @@ function RunsChart({ days }: Readonly<{ days: IShowcaseRunDay[] }>) {
 	);
 }
 
-function StatTile({
+function Stat({
 	label,
 	value,
 	extra,
 }: Readonly<{ label: string; value: string; extra?: string }>) {
 	return (
-		<div className="rounded-xl border border-border bg-card px-4 py-3.5">
-			<small className="block text-xs text-muted-foreground">{label}</small>
-			<b className="text-2xl font-bold tabular-nums tracking-tight">{value}</b>
-			{extra ? (
-				<span className="ml-1.5 text-xs text-muted-foreground">{extra}</span>
-			) : null}
+		<div className="flex flex-col">
+			<small className="text-xs text-muted-foreground">{label}</small>
+			<span className="flex items-baseline gap-1.5">
+				<b className="text-2xl font-semibold tabular-nums tracking-tight">
+					{value}
+				</b>
+				{extra ? (
+					<span className="text-xs text-muted-foreground">{extra}</span>
+				) : null}
+			</span>
 		</div>
 	);
 }
@@ -187,25 +211,23 @@ function RunsBlock({ days }: Readonly<{ days: IShowcaseRunDay[] }>) {
 		return { total, avg: Math.round(total / days.length), peak };
 	}, [days]);
 	return (
-		<div className="space-y-3">
-			<div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,180px),1fr))] gap-3">
-				<StatTile
+		<div className={`${cardClass} space-y-5 p-5`}>
+			<div className="flex flex-wrap gap-x-10 gap-y-3">
+				<Stat
 					label={t("showcaseStatRuns", "Runs, last 30 days")}
 					value={formatNumber(stats.total)}
 				/>
-				<StatTile
+				<Stat
 					label={t("showcaseStatAverage", "Daily average")}
 					value={formatNumber(stats.avg)}
 				/>
-				<StatTile
+				<Stat
 					label={t("showcaseStatBusiest", "Busiest day")}
 					value={formatNumber(stats.peak.runs)}
 					extra={shortDay(stats.peak.day)}
 				/>
 			</div>
-			<div className={cardClass}>
-				<RunsChart days={days} />
-			</div>
+			<RunsChart days={days} />
 		</div>
 	);
 }

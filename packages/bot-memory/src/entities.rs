@@ -295,7 +295,7 @@ impl Mention {
 
     fn participant(id: &str, name: Option<&str>) -> Self {
         Self {
-            name: name.map_or_else(|| id.to_string(), |name| clean_name(name)),
+            name: name.map_or_else(|| id.to_string(), clean_name),
             kind: Some(EntityKind::Person),
             keys: BTreeSet::from([format!("{SPEAKER_PREFIX}{id}")]),
             named: name.is_some(),
