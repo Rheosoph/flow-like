@@ -7,6 +7,30 @@ custom-dependencies:
     metadata:
       homepage: https://www.unixodbc.org/
       description: ODBC driver manager linked dynamically. macOS desktop bundles an unmodified libodbc.2.dylib built by apps/desktop/scripts/prepare-odbc.ts; Linux packages and server images depend on the distribution package. The GPL command-line tools are not shipped.
+  - name: libgit2
+    version: 1.9.7
+    license: GPL-2.0-only WITH GCC-exception-2.0 AND LGPL-2.1-or-later AND BSD-3-Clause AND MIT
+    metadata:
+      homepage: https://libgit2.org/
+      description: C library compiled from the unmodified source bundled in the libgit2-sys crate (feature vendored-libgit2; the crate itself declares MIT OR Apache-2.0) and linked statically for the GitHub repository nodes into the desktop (including iOS and Android), standalone and executor builds. libgit2 itself is GPL-2.0 under the libgit2 linking exception (SPDX GCC-exception-2.0). Its bundled xdiff (deps/xdiff, LibXDiff) is LGPL-2.1-or-later without that exception, so statically linked distributions must allow relinking (Flow-Like source is public) and reverse engineering for debugging modifications. xhistogram.c is EDL-1.0 (BSD-3-Clause); PCRE2, sha1dc, wildmatch and llhttp are BSD/MIT. Full texts in thirdparty/manual-notices/libgit2.md.
+  - name: msodbcsql18
+    version: 18.7.2.1
+    license: LicenseRef-Microsoft-ODBC-Driver-18-EULA
+    metadata:
+      homepage: https://learn.microsoft.com/sql/connect/odbc/download-odbc-driver-for-sql-server
+      description: Microsoft ODBC Driver 18 for SQL Server, installed (ACCEPT_EULA=Y) into the server executor images from packages.microsoft.com; loaded at run time by unixODBC, not linked. License terms https://aka.ms/odbc18eula. See thirdparty/manual-notices/odbc-drivers.md.
+  - name: psqlODBC
+    version: 17.00.0004
+    license: LGPL-2.0-or-later
+    metadata:
+      homepage: https://odbc.postgresql.org/
+      description: PostgreSQL ODBC driver installed from the distribution package into the server executor images (17.00 on Amazon Linux 2023, 13.02 on Debian 12); loaded at run time by unixODBC, not linked.
+  - name: mariadb-connector-odbc
+    version: 3.1.15
+    license: LGPL-2.1-or-later
+    metadata:
+      homepage: https://github.com/mariadb-corporation/mariadb-connector-odbc
+      description: MariaDB/MySQL ODBC driver installed from the Debian 12 package into the Azure, GCP and Kubernetes executor images; loaded at run time by unixODBC, not linked.
   - name: agent-browser
     version: d01253d9db28d75080e36da3c1c31ef89454731e
     license: Apache-2.0

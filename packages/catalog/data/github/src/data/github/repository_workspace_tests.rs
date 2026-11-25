@@ -93,15 +93,13 @@ fn memory_store() -> FlowLikeStore {
 
 fn initialize(path: &Path) {
     fs::create_dir_all(path).unwrap();
-    git::run(path, &["init", "--initial-branch", "main"]).unwrap();
-    git::run(path, &["config", "user.name", "Workspace Test"]).unwrap();
-    git::run(path, &["config", "user.email", "workspace@example.invalid"]).unwrap();
+    git::testing::init(path);
 }
 
 fn commit_file(path: &Path, file: &str, content: &str, message: &str) {
     fs::write(path.join(file), content).unwrap();
-    git::run(path, &["add", "--", file]).unwrap();
-    git::run(path, &["commit", "-m", message]).unwrap();
+    git::testing::stage_path(path, file);
+    git::testing::commit_index(path, message);
 }
 
 #[tokio::test]
@@ -156,23 +154,14 @@ async fn initialized_repository_without_commits_survives_reopen() {
         .await
         .unwrap();
     git::ensure_repository(workspace.path()).unwrap();
-    assert_eq!(
-        git::run(workspace.path(), &["branch", "--show-current"])
-            .unwrap()
-            .trim(),
-        "main"
-    );
-    assert!(
-        git::run(workspace.path(), &["status", "--porcelain=v1"])
-            .unwrap()
-            .is_empty()
-    );
+    assert_eq!(git::testing::current_branch_name(workspace.path()), "main");
+    assert!(git::testing::porcelain(workspace.path()).is_empty());
     commit_file(workspace.path(), "first.txt", "first\n", "First commit");
     workspace.persist().await.unwrap();
 
     let workspace = Workspace::from_store(store, prefix).await.unwrap();
     assert_eq!(
-        git::run(workspace.path(), &["show", "HEAD:first.txt"]).unwrap(),
+        git::testing::show(workspace.path(), "HEAD:first.txt"),
         "first\n"
     );
     workspace.persist().await.unwrap();
@@ -198,14 +187,9 @@ async fn memory_workspace_preserves_index_worktree_and_commit_history() {
         .await
         .unwrap();
     git::ensure_repository(workspace.path()).unwrap();
-    assert_eq!(
-        git::run(workspace.path(), &["branch", "--show-current"])
-            .unwrap()
-            .trim(),
-        "main"
-    );
+    assert_eq!(git::testing::current_branch_name(workspace.path()), "main");
     fs::write(workspace.path().join("tracked.txt"), "staged\n").unwrap();
-    git::run(workspace.path(), &["add", "--", "tracked.txt"]).unwrap();
+    git::testing::stage_path(workspace.path(), "tracked.txt");
     fs::write(workspace.path().join("tracked.txt"), "unstaged\n").unwrap();
     fs::write(workspace.path().join("notes.txt"), "untracked\n").unwrap();
     workspace.persist().await.unwrap();
@@ -214,7 +198,7 @@ async fn memory_workspace_preserves_index_worktree_and_commit_history() {
         .await
         .unwrap();
     assert_eq!(
-        git::run(workspace.path(), &["show", ":tracked.txt"]).unwrap(),
+        git::testing::show(workspace.path(), ":tracked.txt"),
         "staged\n"
     );
     assert_eq!(
@@ -225,19 +209,19 @@ async fn memory_workspace_preserves_index_worktree_and_commit_history() {
         fs::read_to_string(workspace.path().join("notes.txt")).unwrap(),
         "untracked\n"
     );
-    let status = git::run(workspace.path(), &["status", "--porcelain=v1"]).unwrap();
-    assert!(status.lines().any(|line| line == "MM tracked.txt"));
-    assert!(status.lines().any(|line| line == "?? notes.txt"));
-    let result = git::run(workspace.path(), &["commit", "-m", "Commit staged content"]);
-    workspace.finish(result).await.unwrap();
+    let status = git::testing::porcelain(workspace.path());
+    assert!(status.iter().any(|line| line == "MM tracked.txt"));
+    assert!(status.iter().any(|line| line == "?? notes.txt"));
+    git::testing::commit_index(workspace.path(), "Commit staged content");
+    workspace.finish(Ok(())).await.unwrap();
 
     let workspace = Workspace::from_store(store, prefix).await.unwrap();
     assert_eq!(
-        git::run(workspace.path(), &["log", "--format=%s", "-2"]).unwrap(),
+        git::testing::log_subjects(workspace.path(), 2),
         "Commit staged content\nInitial commit\n"
     );
     assert_eq!(
-        git::run(workspace.path(), &["show", "HEAD:tracked.txt"]).unwrap(),
+        git::testing::show(workspace.path(), "HEAD:tracked.txt"),
         "staged\n"
     );
     assert_eq!(
@@ -459,9 +443,9 @@ async fn literal_percent_and_hash_filenames_survive_reopen_without_collisions() 
     ];
     for (name, content) in files {
         fs::write(workspace.path().join(name), content).unwrap();
-        git::run(workspace.path(), &["add", "--", name]).unwrap();
+        git::testing::stage_path(workspace.path(), name);
     }
-    git::run(workspace.path(), &["commit", "-m", "Special filenames"]).unwrap();
+    git::testing::commit_index(workspace.path(), "Special filenames");
     workspace.persist().await.unwrap();
 
     let workspace = Workspace::from_store(store, prefix).await.unwrap();
@@ -471,15 +455,11 @@ async fn literal_percent_and_hash_filenames_survive_reopen_without_collisions() 
             content
         );
         assert_eq!(
-            git::run(workspace.path(), &["show", &format!("HEAD:{name}")]).unwrap(),
+            git::testing::show(workspace.path(), &format!("HEAD:{name}")),
             content
         );
     }
-    assert!(
-        git::run(workspace.path(), &["status", "--porcelain=v1"])
-            .unwrap()
-            .is_empty()
-    );
+    assert!(git::testing::porcelain(workspace.path()).is_empty());
     workspace.persist().await.unwrap();
 }
 
@@ -557,16 +537,16 @@ async fn failed_merge_preserves_conflicts_for_a_later_abort() {
         .unwrap();
     initialize(workspace.path());
     commit_file(workspace.path(), "conflict.txt", "base\n", "Base");
-    git::run(workspace.path(), &["switch", "-c", "topic"]).unwrap();
+    git::testing::switch_new(workspace.path(), "topic");
     commit_file(workspace.path(), "conflict.txt", "topic\n", "Topic");
-    git::run(workspace.path(), &["switch", "main"]).unwrap();
+    git::testing::switch(workspace.path(), "main");
     commit_file(workspace.path(), "conflict.txt", "main\n", "Main");
     workspace.persist().await.unwrap();
 
     let workspace = Workspace::from_store(store.clone(), prefix.clone())
         .await
         .unwrap();
-    let result = git::run(workspace.path(), &["merge", "topic"]);
+    let result = git::testing::merge(workspace.path(), "topic");
     assert!(result.is_err());
     assert!(workspace.finish(result).await.is_err());
 
@@ -575,26 +555,21 @@ async fn failed_merge_preserves_conflicts_for_a_later_abort() {
         .unwrap();
     assert!(workspace.path().join(".git/MERGE_HEAD").is_file());
     assert!(
-        git::run(workspace.path(), &["status", "--porcelain=v1"])
-            .unwrap()
-            .lines()
+        git::testing::porcelain(workspace.path())
+            .iter()
             .any(|line| line == "UU conflict.txt")
     );
     assert!(
         fs::read_to_string(workspace.path().join("conflict.txt"))
             .unwrap()
-            .contains("<<<<<<< HEAD")
+            .contains("<<<<<<<")
     );
-    let result = git::run(workspace.path(), &["merge", "--abort"]);
+    let result = git::testing::abort_merge(workspace.path());
     workspace.finish(result).await.unwrap();
 
     let workspace = Workspace::from_store(store, prefix).await.unwrap();
     assert!(!workspace.path().join(".git/MERGE_HEAD").exists());
-    assert!(
-        git::run(workspace.path(), &["status", "--porcelain=v1"])
-            .unwrap()
-            .is_empty()
-    );
+    assert!(git::testing::porcelain(workspace.path()).is_empty());
     assert_eq!(
         fs::read_to_string(workspace.path().join("conflict.txt")).unwrap(),
         "main\n"
@@ -617,8 +592,9 @@ async fn memory_workspace_preserves_symlinks_and_executable_permissions() {
     fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
     symlink("run.sh", workspace.path().join("tracked-link")).unwrap();
-    git::run(workspace.path(), &["add", "--", "run.sh", "tracked-link"]).unwrap();
-    git::run(workspace.path(), &["commit", "-m", "Executable and link"]).unwrap();
+    git::testing::stage_path(workspace.path(), "run.sh");
+    git::testing::stage_path(workspace.path(), "tracked-link");
+    git::testing::commit_index(workspace.path(), "Executable and link");
     symlink("run.sh", workspace.path().join("untracked-link")).unwrap();
     let untracked_script = workspace.path().join("untracked.sh");
     fs::write(&untracked_script, "#!/bin/sh\nexit 0\n").unwrap();
@@ -649,9 +625,9 @@ async fn memory_workspace_preserves_symlinks_and_executable_permissions() {
         );
     }
     assert!(
-        git::run(workspace.path(), &["diff", "--name-only"])
-            .unwrap()
-            .is_empty()
+        git::testing::porcelain(workspace.path())
+            .iter()
+            .all(|line| line.starts_with("??"))
     );
     workspace.persist().await.unwrap();
 }

@@ -1456,7 +1456,9 @@ async fn generate_video_with_provider(
         PROVIDER_RUNWAY => generate_runway(client, provider, req).await,
         PROVIDER_FAL => generate_fal(client, provider, req).await,
         PROVIDER_REPLICATE => generate_replicate(client, provider, req).await,
-        stablediffusion::PROVIDER_NAME => stablediffusion::generate_video(provider, req).await,
+        stablediffusion::PROVIDER_NAME => {
+            stablediffusion::generate_video(environment, provider, req).await
+        }
         other => bail!("Unsupported video generation provider: {other}"),
     }
 }
@@ -2424,6 +2426,7 @@ impl NodeLogic for GenerateVideoNode {
             &provider,
             &context.profile,
             &context.app_state,
+            context.execution_environment(),
         )
         .await?;
         crate::ensure_vertex_credentials_explicit(context, &provider)?;

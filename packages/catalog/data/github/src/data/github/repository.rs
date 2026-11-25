@@ -28,7 +28,7 @@ pub(crate) fn node(id: &str, title: &str, description: &str, script: &str) -> No
     node.add_input_pin(
         "repository",
         "Repository",
-        "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "FlowPath to a Git working tree in local, cloud, or memory storage.",
         VariableType::Struct,
     )
     .set_schema::<FlowPath>()

@@ -193,6 +193,43 @@ pub struct CopilotToolConfig {
     pub schema: flow_like_types::Value,
 }
 
+/// Error for Copilot features that start host processes, refused on the server executor.
+pub(crate) fn ensure_local_process_allowed(
+    env: flow_like::flow::execution::ExecutionEnvironment,
+    what: &str,
+) -> flow_like_types::Result<()> {
+    if env == flow_like::flow::execution::ExecutionEnvironment::Server {
+        return Err(flow_like_types::anyhow!(
+            "{what} starts a local process and is not available in server-side execution. \
+             Use the Copilot server client with a vetted remote CLI URL instead."
+        ));
+    }
+    Ok(())
+}
+
+/// Refuses MCP server entries that make the Copilot CLI run a local command
+/// (`command`/`cwd` key or a `local`/`stdio` type) when running on the server executor.
+pub(crate) fn ensure_no_local_mcp_servers<'a>(
+    env: flow_like::flow::execution::ExecutionEnvironment,
+    servers: impl IntoIterator<Item = (&'a String, &'a flow_like_types::Value)>,
+) -> flow_like_types::Result<()> {
+    if env != flow_like::flow::execution::ExecutionEnvironment::Server {
+        return Ok(());
+    }
+    for (name, cfg) in servers {
+        let is_local = cfg.get("command").is_some()
+            || cfg.get("cwd").is_some()
+            || cfg
+                .get("type")
+                .and_then(|t| t.as_str())
+                .is_some_and(|t| matches!(t.to_ascii_lowercase().as_str(), "local" | "stdio"));
+        if is_local {
+            return ensure_local_process_allowed(env, &format!("MCP server '{name}'"));
+        }
+    }
+    Ok(())
+}
+
 /// Local MCP server configuration
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct McpLocalServerConfig {
@@ -293,3 +330,61 @@ pub struct CopilotAuthStatus {
 /// Constants for cache key prefixes
 pub const COPILOT_CLIENT_PREFIX: &str = "copilot_client_";
 pub const COPILOT_SESSION_PREFIX: &str = "copilot_session_";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like::flow::execution::ExecutionEnvironment::{Local, Server};
+    use flow_like_types::json::json;
+
+    fn map(v: flow_like_types::Value) -> HashMap<String, flow_like_types::Value> {
+        HashMap::from([("s".to_string(), v)])
+    }
+
+    #[test]
+    fn server_refuses_local_mcp_entries() {
+        for v in [
+            json!({"type":"local","command":"sh","args":["-c","id"]}),
+            json!({"command":"npx"}),
+            json!({"type":"STDIO"}),
+            json!({"type":"http","url":"https://x","cwd":"/"}),
+        ] {
+            assert!(
+                ensure_no_local_mcp_servers(Server, &map(v.clone())).is_err(),
+                "{v}"
+            );
+            assert!(ensure_no_local_mcp_servers(Local, &map(v)).is_ok());
+        }
+        let http = map(json!({"type":"http","url":"https://example.com/mcp"}));
+        assert!(ensure_no_local_mcp_servers(Server, &http).is_ok());
+    }
+
+    #[test]
+    fn local_process_gate() {
+        let err = ensure_local_process_allowed(Server, "X")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("server client"));
+        assert!(ensure_local_process_allowed(Local, "X").is_ok());
+    }
+
+    #[test]
+    fn process_starting_nodes_are_desktop_only() {
+        use flow_like::flow::node::NodeLogic;
+        assert!(
+            client::CopilotLocalClientStartNode::default()
+                .get_node()
+                .only_offline
+        );
+        assert!(
+            mcp::CopilotMcpLocalServerNode::default()
+                .get_node()
+                .only_offline
+        );
+        assert!(
+            !client::CopilotServerClientStartNode::default()
+                .get_node()
+                .only_offline
+        );
+    }
+}

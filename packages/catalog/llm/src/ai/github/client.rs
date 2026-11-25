@@ -236,7 +236,7 @@ impl NodeLogic for CopilotLocalClientStartNode {
         let mut node = Node::new(
             "copilot_local_client_start",
             "Start Local Client",
-            "Starts a local Copilot client using stdio. Requires 'copilot' CLI installed.",
+            "Starts a local Copilot client using stdio. Requires 'copilot' CLI installed. Desktop only: not available in the cloud (use the Copilot server client there).",
             "AI/GitHub/Copilot/Client",
         );
         node.set_flowscript_name("github.copilot", "startLocalClient");
@@ -295,6 +295,7 @@ impl NodeLogic for CopilotLocalClientStartNode {
         );
 
         node.set_long_running(true);
+        node.set_only_offline(true);
 
         node
     }
@@ -306,6 +307,11 @@ impl NodeLogic for CopilotLocalClientStartNode {
         use flow_like::flow::execution::LogLevel as FlowLogLevel;
         use flow_like_types::Cacheable;
         use std::path::PathBuf;
+
+        super::ensure_local_process_allowed(
+            context.execution_environment(),
+            "Copilot local client",
+        )?;
 
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("error").await?;

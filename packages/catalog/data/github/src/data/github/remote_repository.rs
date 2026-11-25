@@ -89,7 +89,7 @@ fn definition(operation: Operation) -> Node {
     if matches!(operation, Operation::Sync | Operation::Init)
         && let Some(pin) = node.pins.values_mut().find(|pin| pin.name == "repository")
     {
-        pin.description = "FlowPath for the exact repository directory in a local, cloud, or memory store. The directory may be missing. Requires Git on the runtime host.".into();
+        pin.description = "FlowPath for the exact repository directory in a local, cloud, or memory store. The directory may be missing.".into();
     }
     if matches!(
         operation,
@@ -292,20 +292,16 @@ async fn execute(
 }
 
 #[cfg(any(feature = "execute", test))]
-fn branch_name(path: &std::path::Path, name: &str) -> flow_like_types::Result<()> {
-    git::validate_ref(name)?;
-    git::run(path, &["check-ref-format", "--branch", name])?;
-    // Git expands @{-1}; node inputs always name a branch literally.
-    if name.contains("@{") {
-        flow_like_types::bail!("Use a literal branch name");
-    }
-    Ok(())
+fn branch_name(_path: &std::path::Path, name: &str) -> flow_like_types::Result<()> {
+    // Node inputs always name a branch literally; @{-1} style shorthand is rejected here.
+    git::validate_branch_name(name)
 }
 
 #[cfg(any(feature = "execute", test))]
 fn current_branch(path: &std::path::Path) -> flow_like_types::Result<String> {
-    let branch = git::run(path, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
-    let branch = branch.trim().to_owned();
+    let repo = git::open(path)?;
+    let branch = git::head_branch(&repo)
+        .ok_or_else(|| flow_like_types::anyhow!("HEAD is detached; switch to a branch first"))?;
     branch_name(path, &branch)?;
     Ok(branch)
 }
@@ -321,16 +317,12 @@ fn remote_branch(
         return Ok(requested.to_owned());
     }
     let current = current_branch(path)?;
-    let tracking_remote = git::run(
-        path,
-        &["config", "--get", &format!("branch.{current}.remote")],
-    )
-    .unwrap_or_default();
+    let config = git::open(path)?.config()?;
+    let tracking_remote = config
+        .get_string(&format!("branch.{current}.remote"))
+        .unwrap_or_default();
     if tracking_remote.trim() == remote {
-        let merge = git::run(
-            path,
-            &["config", "--get", &format!("branch.{current}.merge")],
-        )?;
+        let merge = config.get_string(&format!("branch.{current}.merge"))?;
         if let Some(branch) = merge.trim().strip_prefix("refs/heads/") {
             branch_name(path, branch)?;
             return Ok(branch.to_owned());
@@ -393,7 +385,16 @@ fn perform(
     provider: Option<&GitHubProvider>,
     inputs: &Inputs,
 ) -> flow_like_types::Result<String> {
-    perform_with(operation, path, provider, inputs, &git::run_network)
+    match provider {
+        Some(provider) => perform_with(
+            operation,
+            path,
+            Some(provider),
+            inputs,
+            Some(&git::ProviderNetwork(provider)),
+        ),
+        None => perform_with(operation, path, None, inputs, None),
+    }
 }
 
 #[cfg(any(feature = "execute", test))]
@@ -402,108 +403,126 @@ fn perform_with(
     path: &std::path::Path,
     provider: Option<&GitHubProvider>,
     inputs: &Inputs,
-    network: &impl Fn(&std::path::Path, &[&str], &GitHubProvider) -> flow_like_types::Result<String>,
+    network: Option<&dyn git::Network>,
 ) -> flow_like_types::Result<String> {
+    let network = || network.ok_or_else(|| flow_like_types::anyhow!("Provider is required"));
     if matches!(operation, Operation::Init) {
         if inputs.branch.is_empty() {
             flow_like_types::bail!("Initial branch is required");
         }
         if std::fs::symlink_metadata(path.join(".git")).is_ok()
-            || (path.exists()
-                && (git::ensure_repository(path).is_ok()
-                    || git::run(path, &["rev-parse", "--is-bare-repository"])
-                        .is_ok_and(|value| value.trim() == "true")))
+            || (path.exists() && git::open(path).is_ok())
         {
             flow_like_types::bail!("The target already contains a Git repository");
         }
         let parent = existing_parent(path)?;
         branch_name(parent, &inputs.branch)?;
-        let target = path
-            .to_str()
-            .ok_or_else(|| flow_like_types::anyhow!("Repository path must be UTF-8"))?;
-        return git::run(
-            parent,
-            &["init", "--initial-branch", &inputs.branch, "--", target],
-        );
+        let repo = git2::Repository::init_opts(
+            path,
+            git2::RepositoryInitOptions::new()
+                .initial_head(&inputs.branch)
+                .mkpath(true),
+        )?;
+        return Ok(format!(
+            "Initialized empty Git repository in {}\n",
+            repo.path().display()
+        ));
     }
     if matches!(operation, Operation::Sync) {
         return sync(
             path,
             provider.ok_or_else(|| flow_like_types::anyhow!("Provider is required"))?,
             inputs,
-            network,
+            network()?,
         );
     }
     git::ensure_repository(path)?;
     git::validate_remote(&inputs.remote)?;
+    let repo = git::open(path)?;
     match operation {
-        Operation::AddRemote | Operation::SetRemoteUrl => {
+        Operation::AddRemote => {
             credential_free_url(&inputs.url)?;
-            let command = if matches!(operation, Operation::AddRemote) {
-                "add"
-            } else {
-                "set-url"
-            };
-            git::run(
-                path,
-                &["remote", command, "--", &inputs.remote, &inputs.url],
+            repo.remote(&inputs.remote, &inputs.url)?;
+            Ok(format!(
+                "Added remote '{}' ({})\n",
+                inputs.remote, inputs.url
+            ))
+        }
+        Operation::SetRemoteUrl => {
+            credential_free_url(&inputs.url)?;
+            repo.find_remote(&inputs.remote)
+                .map_err(|_| flow_like_types::anyhow!("No such remote: '{}'", inputs.remote))?;
+            repo.remote_set_url(&inputs.remote, &inputs.url)?;
+            Ok(format!(
+                "Set the URL of remote '{}' to {}\n",
+                inputs.remote, inputs.url
+            ))
+        }
+        Operation::RemoveRemote => {
+            repo.remote_delete(&inputs.remote)?;
+            Ok(format!("Removed remote '{}'\n", inputs.remote))
+        }
+        Operation::Fetch => {
+            let network = network()?;
+            let depth = (inputs.unshallow && repo.is_shallow()).then_some(i32::MAX);
+            network.fetch(
+                &repo,
+                &git::FetchRequest {
+                    remote: &inputs.remote,
+                    refspecs: Vec::new(),
+                    prune: inputs.prune,
+                    tags: inputs.tags,
+                    depth,
+                },
             )
         }
-        Operation::RemoveRemote => git::run(path, &["remote", "remove", &inputs.remote]),
-        Operation::Fetch | Operation::Pull | Operation::Push => {
-            let provider =
-                provider.ok_or_else(|| flow_like_types::anyhow!("Provider is required"))?;
-            let mut args = Vec::new();
-            let branch;
-            let refspec;
-            match operation {
-                Operation::Fetch => {
-                    args.push("fetch");
-                    args.push(if inputs.prune {
-                        "--prune"
-                    } else {
-                        "--no-prune"
-                    });
-                    if inputs.tags {
-                        args.push("--tags");
-                    }
-                    if inputs.unshallow {
-                        args.push("--unshallow");
-                    }
-                    args.extend(["--", inputs.remote.as_str()]);
-                }
-                Operation::Pull => {
-                    git::require_clean(path)?;
-                    current_branch(path)?;
-                    branch = remote_branch(path, &inputs.remote, &inputs.branch)?;
-                    args.extend([
-                        "pull",
-                        "--ff-only",
-                        "--no-rebase",
-                        "--no-autostash",
-                        "--",
-                        inputs.remote.as_str(),
-                        branch.as_str(),
-                    ]);
-                }
-                Operation::Push => {
-                    current_branch(path)?;
-                    branch = remote_branch(path, &inputs.remote, &inputs.branch)?;
-                    refspec = format!("HEAD:refs/heads/{branch}");
-                    args.push("push");
-                    if inputs.set_upstream {
-                        args.push("--set-upstream");
-                    }
-                    if inputs.follow_tags {
-                        args.push("--follow-tags");
-                    }
-                    args.extend(["--", inputs.remote.as_str(), refspec.as_str()]);
-                }
-                _ => unreachable!(),
-            }
-            network(path, &args, provider)
+        Operation::Pull => {
+            let network = network()?;
+            git::require_clean(path)?;
+            current_branch(path)?;
+            let branch = remote_branch(path, &inputs.remote, &inputs.branch)?;
+            let tracking = format!("refs/remotes/{}/{branch}", inputs.remote);
+            let fetched = network.fetch(
+                &repo,
+                &git::FetchRequest {
+                    remote: &inputs.remote,
+                    refspecs: vec![format!("+refs/heads/{branch}:{tracking}")],
+                    prune: false,
+                    tags: false,
+                    depth: None,
+                },
+            )?;
+            // Like `git pull --ff-only`: never merges, rebases or autostashes.
+            let merged = git::fast_forward(&repo, repo.refname_to_id(&tracking)?)?;
+            Ok(format!("{fetched}{merged}"))
         }
-        _ => unreachable!(),
+        Operation::Push => {
+            let network = network()?;
+            let current = current_branch(path)?;
+            let branch = remote_branch(path, &inputs.remote, &inputs.branch)?;
+            let mut output = network.push(
+                &repo,
+                &git::PushRequest {
+                    remote: &inputs.remote,
+                    refspec: format!("refs/heads/{current}:refs/heads/{branch}"),
+                    follow_tags: inputs.follow_tags,
+                },
+            )?;
+            if inputs.set_upstream {
+                let mut config = repo.config()?;
+                config.set_str(&format!("branch.{current}.remote"), &inputs.remote)?;
+                config.set_str(
+                    &format!("branch.{current}.merge"),
+                    &format!("refs/heads/{branch}"),
+                )?;
+                output.push_str(&format!(
+                    "Branch '{current}' set up to track '{}/{branch}'.\n",
+                    inputs.remote
+                ));
+            }
+            Ok(output)
+        }
+        Operation::Sync | Operation::Init => unreachable!(),
     }
 }
 
@@ -525,7 +544,7 @@ fn sync(
     path: &std::path::Path,
     provider: &GitHubProvider,
     inputs: &Inputs,
-    network: &impl Fn(&std::path::Path, &[&str], &GitHubProvider) -> flow_like_types::Result<String>,
+    network: &dyn git::Network,
 ) -> flow_like_types::Result<String> {
     repository::validate_repo_component(&inputs.owner)?;
     repository::validate_repo_component(&inputs.repo)?;
@@ -539,27 +558,23 @@ fn sync(
         if !inputs.branch.is_empty() {
             branch_name(parent, &inputs.branch)?;
         }
-        let depth = inputs.depth.to_string();
-        let mut args = vec!["clone"];
-        if inputs.depth > 0 {
-            args.extend(["--depth", depth.as_str()]);
-        }
-        if !inputs.branch.is_empty() {
-            args.extend(["--branch", inputs.branch.as_str()]);
-        }
-        args.extend([
-            "--",
-            expected.as_str(),
-            path.to_str()
-                .ok_or_else(|| flow_like_types::anyhow!("Repository path must be UTF-8"))?,
-        ]);
-        return network(parent, &args, provider);
+        let depth = (inputs.depth > 0)
+            .then(|| i32::try_from(inputs.depth))
+            .transpose()
+            .map_err(|_| flow_like_types::anyhow!("Depth is too large"))?;
+        network.clone_repo(
+            &expected,
+            path,
+            (!inputs.branch.is_empty()).then_some(inputs.branch.as_str()),
+            depth,
+        )?;
+        return Ok(format!("Cloned {expected}\n"));
     }
     git::ensure_repository(path)?;
     git::require_clean(path)?;
-    let origin = git::run(path, &["config", "--get-all", "remote.origin.url"])?;
-    let urls = origin.lines().collect::<Vec<_>>();
-    if urls.len() != 1 || !same_repository(urls[0], &expected)? {
+    let repo = git::open(path)?;
+    let urls = git::config_values(&repo, "remote.origin.url")?;
+    if urls.len() != 1 || !same_repository(&urls[0], &expected)? {
         flow_like_types::bail!(
             "Existing repository origin does not match Owner and Repository Name"
         );
@@ -576,62 +591,52 @@ fn sync(
         branch.clone()
     };
     // Fetch the selected branch explicitly, including branches omitted by a shallow clone's refspec.
-    let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
-    let mut args = vec!["fetch"];
-    args.push(if inputs.prune {
-        "--prune"
-    } else {
-        "--no-prune"
-    });
-    args.extend(["--", "origin", refspec.as_str()]);
-    let fetched = network(path, &args, provider)?;
     let remote_ref = format!("refs/remotes/origin/{branch}");
+    let fetched = network.fetch(
+        &repo,
+        &git::FetchRequest {
+            remote: "origin",
+            refspecs: vec![format!("+refs/heads/{branch}:{remote_ref}")],
+            prune: inputs.prune,
+            tags: false,
+            depth: None,
+        },
+    )?;
+    let remote_oid = repo.refname_to_id(&remote_ref)?;
     let local_ref = format!("refs/heads/{local_branch}");
-    let exists = git::run(path, &["show-ref", "--verify", "--quiet", &local_ref]).is_ok();
-    if exists {
+    if let Ok(local_oid) = repo.refname_to_id(&local_ref) {
         // Refuse divergence before switching the user's current branch.
-        if git::run(
-            path,
-            &["merge-base", "--is-ancestor", &local_ref, &remote_ref],
-        )
-        .is_err()
-            && git::run(
-                path,
-                &["merge-base", "--is-ancestor", &remote_ref, &local_ref],
-            )
-            .is_err()
+        if !git::is_ancestor(&repo, local_oid, remote_oid)?
+            && !git::is_ancestor(&repo, remote_oid, local_oid)?
         {
             flow_like_types::bail!(
                 "Local branch cannot be fast-forwarded to origin/{branch}; reconcile local commits first"
             );
         }
-        git::run(path, &["switch", "--no-guess", &local_branch])?;
+        git::checkout_commit(&repo, local_oid)?;
+        repo.set_head(&local_ref)?;
     } else {
-        // Shallow clones often track only the initial branch. Git needs a fetch mapping to set up tracking.
-        let fetch_specs =
-            git::run(path, &["config", "--get-all", "remote.origin.fetch"]).unwrap_or_default();
+        // Shallow clones often track only the initial branch. Tracking needs a fetch mapping.
         let selected = format!("refs/heads/{branch}:refs/remotes/origin/{branch}");
-        if !fetch_specs.lines().any(|spec| {
-            let spec = spec.trim_start_matches('+');
-            spec == "refs/heads/*:refs/remotes/origin/*" || spec == selected
-        }) {
-            git::run(
-                path,
-                &["remote", "set-branches", "--add", "origin", &branch],
-            )?;
+        let specs: Vec<String> = repo
+            .find_remote("origin")?
+            .fetch_refspecs()?
+            .iter()
+            .flatten()
+            .map(|spec| spec.trim_start_matches('+').to_owned())
+            .collect();
+        if !specs
+            .iter()
+            .any(|spec| spec == "refs/heads/*:refs/remotes/origin/*" || *spec == selected)
+        {
+            repo.remote_add_fetch("origin", &format!("+{selected}"))?;
         }
-        git::run(
-            path,
-            &[
-                "switch",
-                "--create",
-                &local_branch,
-                "--track",
-                &format!("origin/{branch}"),
-            ],
-        )?;
+        let mut created = repo.branch(&local_branch, &repo.find_commit(remote_oid)?, false)?;
+        created.set_upstream(Some(&format!("origin/{branch}")))?;
+        git::checkout_commit(&repo, remote_oid)?;
+        repo.set_head(&local_ref)?;
     }
-    let merged = git::run(path, &["merge", "--ff-only", "--no-edit", &remote_ref])?;
+    let merged = git::fast_forward(&repo, remote_oid)?;
     Ok(format!("{fetched}{merged}"))
 }
 
@@ -805,6 +810,7 @@ impl NodeLogic for RemoveGitHubRepoRemoteNode {
 
 #[cfg(test)]
 mod tests {
+    use super::git::testing::{LocalNetwork, TempDir, head, identity, init, write_commit};
     use super::*;
     use std::{
         fs,
@@ -812,68 +818,34 @@ mod tests {
     };
 
     struct Fixture {
-        root: PathBuf,
+        _dir: TempDir,
         seed: PathBuf,
         remote: PathBuf,
         checkout: PathBuf,
+        network: LocalNetwork,
     }
     impl Fixture {
         fn new() -> Self {
-            let root =
-                std::env::temp_dir().join(format!("flow-like-network-{}", uuid::Uuid::new_v4()));
-            fs::create_dir(&root).unwrap();
-            let seed = root.join("seed");
-            let remote = root.join("remote.git");
-            let checkout = root.join("checkout");
-            git::run(
-                &root,
-                &["init", "--initial-branch=main", seed.to_str().unwrap()],
-            )
-            .unwrap();
-            identity(&seed);
+            let dir = TempDir::new("flow-like-network");
+            let seed = dir.0.join("seed");
+            let remote = dir.0.join("remote.git");
+            let checkout = dir.0.join("checkout");
+            init(&seed);
             write_commit(&seed, "file.txt", "initial", "Initial");
-            git::run(
-                &root,
-                &[
-                    "clone",
-                    "--bare",
-                    seed.to_str().unwrap(),
-                    remote.to_str().unwrap(),
-                ],
-            )
-            .unwrap();
+            git2::build::RepoBuilder::new()
+                .bare(true)
+                .clone(&format!("file://{}", seed.display()), &remote)
+                .unwrap();
+            let network = LocalNetwork {
+                remote: remote.clone(),
+            };
             Self {
-                root,
+                _dir: dir,
                 seed,
                 remote,
                 checkout,
+                network,
             }
-        }
-        // Only the transport destination changes. Production command options and refspecs run against real Git repositories.
-        fn network(
-            &self,
-            path: &Path,
-            args: &[&str],
-            provider: &GitHubProvider,
-        ) -> flow_like_types::Result<String> {
-            let mut owned: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
-            let index = owned.iter().position(|arg| arg == "--").unwrap() + 1;
-            owned[index] = format!("file://{}", self.remote.display());
-            let output = git::run(path, &owned.iter().map(String::as_str).collect::<Vec<_>>())?;
-            if args[0] == "clone" {
-                let target = Path::new(args.last().unwrap());
-                git::run(
-                    target,
-                    &[
-                        "remote",
-                        "set-url",
-                        "origin",
-                        &provider.clone_url("owner", "repo"),
-                    ],
-                )?;
-                identity(target);
-            }
-            Ok(output)
         }
         fn run(&self, operation: Operation, inputs: &Inputs) -> flow_like_types::Result<String> {
             perform_with(
@@ -881,29 +853,25 @@ mod tests {
                 &self.checkout,
                 Some(&provider()),
                 inputs,
-                &|path, args, provider| self.network(path, args, provider),
+                Some(&self.network),
             )
         }
+        /// Publishes a branch of the seed repository to the bare remote.
         fn publish(&self, branch: &str) {
-            git::run(&self.seed, &["push", self.remote.to_str().unwrap(), branch]).unwrap();
+            let seed = git::open(&self.seed).unwrap();
+            git::push_with(
+                &seed,
+                &format!("file://{}", self.remote.display()),
+                None,
+                &[],
+                &git::PushRequest {
+                    remote: "origin",
+                    refspec: format!("refs/heads/{branch}:refs/heads/{branch}"),
+                    follow_tags: false,
+                },
+            )
+            .unwrap();
         }
-    }
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.root);
-        }
-    }
-    fn identity(path: &Path) {
-        git::run(path, &["config", "user.name", "Git Node Test"]).unwrap();
-        git::run(path, &["config", "user.email", "git-node@example.invalid"]).unwrap();
-    }
-    fn write_commit(path: &Path, file: &str, content: &str, message: &str) {
-        fs::write(path.join(file), content).unwrap();
-        git::run(path, &["add", "--", file]).unwrap();
-        git::run(path, &["commit", "-m", message]).unwrap();
-    }
-    fn head(path: &Path) -> String {
-        git::run(path, &["rev-parse", "HEAD"]).unwrap()
     }
     fn provider() -> GitHubProvider {
         GitHubProvider {
@@ -935,7 +903,10 @@ mod tests {
             fs::read_to_string(fixture.checkout.join("file.txt")).unwrap(),
             "updated"
         );
-        git::run(&fixture.seed, &["switch", "-c", "topic"]).unwrap();
+        let seed = git::open(&fixture.seed).unwrap();
+        let tip = seed.head().unwrap().peel_to_commit().unwrap();
+        seed.branch("topic", &tip, false).unwrap();
+        seed.set_head("refs/heads/topic").unwrap();
         write_commit(&fixture.seed, "topic.txt", "topic", "Topic");
         fixture.publish("topic");
         fixture
@@ -949,19 +920,88 @@ mod tests {
             .unwrap();
         assert_eq!(current_branch(&fixture.checkout).unwrap(), "topic");
         assert_eq!(head(&fixture.checkout), head(&fixture.seed));
+        let checkout = git::open(&fixture.checkout).unwrap();
+        let topic = checkout
+            .find_branch("topic", git2::BranchType::Local)
+            .unwrap();
         assert_eq!(
-            git::run(
-                &fixture.checkout,
-                &["rev-parse", "--abbrev-ref", "@{upstream}"]
-            )
-            .unwrap()
-            .trim(),
+            topic.upstream().unwrap().name().unwrap().unwrap(),
             "origin/topic"
         );
         assert!(
             !fs::read_to_string(fixture.checkout.join(".git/config"))
                 .unwrap()
                 .contains("test-token")
+        );
+    }
+
+    /// Records what a clone would be asked for; the local transport cannot serve shallow requests.
+    #[derive(Default)]
+    struct Recorder(std::cell::RefCell<Vec<(Option<String>, Option<i32>)>>);
+    impl git::Network for Recorder {
+        fn clone_repo(
+            &self,
+            _url: &str,
+            _target: &Path,
+            branch: Option<&str>,
+            depth: Option<i32>,
+        ) -> flow_like_types::Result<()> {
+            self.0.borrow_mut().push((branch.map(str::to_owned), depth));
+            Ok(())
+        }
+        fn fetch(
+            &self,
+            _repo: &git2::Repository,
+            _request: &git::FetchRequest,
+        ) -> flow_like_types::Result<String> {
+            unreachable!()
+        }
+        fn push(
+            &self,
+            _repo: &git2::Repository,
+            _request: &git::PushRequest,
+        ) -> flow_like_types::Result<String> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn sync_forwards_depth_and_branch_to_the_clone() {
+        let fixture = Fixture::new();
+        let recorder = Recorder::default();
+        let run = |inputs: &Inputs| {
+            perform_with(
+                Operation::Sync,
+                &fixture.checkout,
+                Some(&provider()),
+                inputs,
+                Some(&recorder),
+            )
+        };
+        run(&inputs()).unwrap();
+        run(&Inputs {
+            depth: 0,
+            branch: "topic".into(),
+            ..inputs()
+        })
+        .unwrap();
+        assert!(
+            run(&Inputs {
+                depth: -1,
+                ..inputs()
+            })
+            .is_err()
+        );
+        assert!(
+            run(&Inputs {
+                branch: "-bad".into(),
+                ..inputs()
+            })
+            .is_err()
+        );
+        assert_eq!(
+            *recorder.0.borrow(),
+            vec![(None, Some(1)), (Some("topic".to_string()), None)]
         );
     }
 
@@ -1008,6 +1048,8 @@ mod tests {
         fixture.run(Operation::Sync, &inputs()).unwrap();
         write_commit(&fixture.seed, "file.txt", "updated", "Update");
         fixture.publish("main");
+        let fetched = fixture.run(Operation::Fetch, &inputs()).unwrap();
+        assert!(fetched.contains("refs/remotes/origin/main"), "{fetched}");
         fixture.run(Operation::Pull, &inputs()).unwrap();
         assert_eq!(head(&fixture.checkout), head(&fixture.seed));
         fixture
@@ -1019,23 +1061,38 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(
-            git::run(&fixture.checkout, &["rev-parse", "--is-shallow-repository"])
-                .unwrap()
-                .trim(),
-            "false"
-        );
+        assert!(!git::open(&fixture.checkout).unwrap().is_shallow());
         write_commit(&fixture.checkout, "local.txt", "local", "Local");
         fixture.run(Operation::Push, &inputs()).unwrap();
         assert_eq!(head(&fixture.remote), head(&fixture.checkout));
-        git::run(
-            &fixture.seed,
-            &[
-                "pull",
-                "--ff-only",
-                fixture.remote.to_str().unwrap(),
-                "main",
-            ],
+        // The remote-tracking ref follows a successful push.
+        let checkout = git::open(&fixture.checkout).unwrap();
+        assert_eq!(
+            checkout
+                .refname_to_id("refs/remotes/origin/main")
+                .unwrap()
+                .to_string(),
+            head(&fixture.checkout)
+        );
+        // The seed can fast-forward to what was pushed, then diverge from it.
+        let seed = git::open(&fixture.seed).unwrap();
+        git::fetch_with(
+            &seed,
+            &format!("file://{}", fixture.remote.display()),
+            None,
+            &[],
+            &git::FetchRequest {
+                remote: "origin",
+                refspecs: vec!["+refs/heads/main:refs/remotes/origin/main".into()],
+                prune: false,
+                tags: false,
+                depth: None,
+            },
+        )
+        .unwrap();
+        git::fast_forward(
+            &seed,
+            seed.refname_to_id("refs/remotes/origin/main").unwrap(),
         )
         .unwrap();
         write_commit(&fixture.seed, "remote.txt", "remote", "Remote");
@@ -1045,6 +1102,51 @@ mod tests {
         assert!(fixture.run(Operation::Push, &inputs()).is_err());
         assert_eq!(head(&fixture.remote), remote);
         assert!(fixture.run(Operation::Pull, &inputs()).is_err());
+    }
+
+    #[test]
+    fn push_can_set_the_upstream_and_follow_annotated_tags() {
+        let fixture = Fixture::new();
+        fixture.run(Operation::Sync, &inputs()).unwrap();
+        let checkout = git::open(&fixture.checkout).unwrap();
+        identity(&checkout);
+        let commit = write_commit(&fixture.checkout, "feature.txt", "x", "Feature");
+        let object = checkout
+            .find_object(git2::Oid::from_str(&commit).unwrap(), None)
+            .unwrap();
+        let signature = checkout.signature().unwrap();
+        checkout
+            .tag("v1", &object, &signature, "Release", false)
+            .unwrap();
+        checkout.tag_lightweight("light", &object, false).unwrap();
+        let output = fixture
+            .run(
+                Operation::Push,
+                &Inputs {
+                    branch: "feature".into(),
+                    set_upstream: true,
+                    follow_tags: true,
+                    ..inputs()
+                },
+            )
+            .unwrap();
+        assert!(output.contains("refs/heads/feature"), "{output}");
+        let remote = git::open(&fixture.remote).unwrap();
+        assert_eq!(
+            remote
+                .refname_to_id("refs/heads/feature")
+                .unwrap()
+                .to_string(),
+            commit
+        );
+        assert!(remote.refname_to_id("refs/tags/v1").is_ok());
+        assert!(remote.refname_to_id("refs/tags/light").is_err());
+        let config = checkout.config().unwrap();
+        assert_eq!(config.get_string("branch.main.remote").unwrap(), "origin");
+        assert_eq!(
+            config.get_string("branch.main.merge").unwrap(),
+            "refs/heads/feature"
+        );
     }
 
     #[test]
@@ -1084,20 +1186,32 @@ mod tests {
             )
             .is_err()
         );
+        assert!(
+            perform(
+                Operation::Init,
+                &fixture.checkout.join("other"),
+                None,
+                &Inputs {
+                    branch: "bad branch".into(),
+                    ..inputs()
+                }
+            )
+            .is_err()
+        );
         let remote = Inputs {
             url: "https://github.com/owner/repo.git".into(),
             ..inputs()
         };
         perform(Operation::AddRemote, &fixture.checkout, None, &remote).unwrap();
+        assert!(perform(Operation::AddRemote, &fixture.checkout, None, &remote).is_err());
         let changed = Inputs {
             url: "https://github.com/owner/other.git".into(),
             ..inputs()
         };
         perform(Operation::SetRemoteUrl, &fixture.checkout, None, &changed).unwrap();
+        let repo = git::open(&fixture.checkout).unwrap();
         assert_eq!(
-            git::run(&fixture.checkout, &["remote", "get-url", "origin"])
-                .unwrap()
-                .trim(),
+            repo.find_remote("origin").unwrap().url().unwrap(),
             changed.url
         );
         assert!(
@@ -1113,11 +1227,56 @@ mod tests {
             .is_err()
         );
         perform(Operation::RemoveRemote, &fixture.checkout, None, &remote).unwrap();
-        assert!(
-            git::run(&fixture.checkout, &["remote"])
+        assert!(repo.remotes().unwrap().is_empty());
+    }
+
+    #[test]
+    fn pull_and_sync_fail_when_the_remote_branch_disappeared() {
+        let fixture = Fixture::new();
+        fixture.run(Operation::Sync, &inputs()).unwrap();
+        git::testing::switch_new(&fixture.seed, "topic");
+        write_commit(&fixture.seed, "topic.txt", "topic", "Topic");
+        fixture.publish("topic");
+        let topic = Inputs {
+            branch: "topic".into(),
+            ..inputs()
+        };
+        fixture.run(Operation::Pull, &topic).unwrap();
+        git::open(&fixture.remote)
+            .unwrap()
+            .find_reference("refs/heads/topic")
+            .unwrap()
+            .delete()
+            .unwrap();
+        let tracking = |fixture: &Fixture| {
+            git::open(&fixture.checkout)
                 .unwrap()
-                .trim()
-                .is_empty()
+                .refname_to_id("refs/remotes/origin/topic")
+                .ok()
+        };
+        let before = tracking(&fixture);
+        assert!(before.is_some());
+        assert!(fixture.run(Operation::Pull, &topic).is_err());
+        assert!(fixture.run(Operation::Sync, &topic).is_err());
+        assert_eq!(tracking(&fixture), before);
+    }
+
+    #[test]
+    fn set_remote_url_requires_an_existing_remote() {
+        let fixture = Fixture::new();
+        fixture.run(Operation::Sync, &inputs()).unwrap();
+        let ghost = Inputs {
+            remote: "ghost".into(),
+            url: "https://github.com/o/r2".into(),
+            ..inputs()
+        };
+        assert!(perform(Operation::SetRemoteUrl, &fixture.checkout, None, &ghost).is_err());
+        let repo = git::open(&fixture.checkout).unwrap();
+        assert!(
+            repo.config()
+                .unwrap()
+                .get_string("remote.ghost.url")
+                .is_err()
         );
     }
 

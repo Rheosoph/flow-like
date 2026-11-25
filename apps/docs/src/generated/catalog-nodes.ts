@@ -98036,7 +98036,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -98137,7 +98137,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -98258,7 +98258,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -98379,7 +98379,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -98529,7 +98529,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -98660,7 +98660,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -98791,7 +98791,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -98912,7 +98912,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -99023,7 +99023,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -99181,7 +99181,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath for the exact repository directory in a local, cloud, or memory store. The directory may be missing. Requires Git on the runtime host.",
+        "description": "FlowPath for the exact repository directory in a local, cloud, or memory store. The directory may be missing.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -99292,7 +99292,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -99422,7 +99422,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -99541,7 +99541,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -99661,7 +99661,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -99781,7 +99781,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -99902,7 +99902,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -100023,7 +100023,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -100161,7 +100161,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -100319,7 +100319,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -100430,7 +100430,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -100561,7 +100561,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -100701,7 +100701,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -100839,7 +100839,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -100977,7 +100977,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -101098,7 +101098,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -101219,7 +101219,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -101340,7 +101340,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -101461,7 +101461,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath for the exact repository directory in a local, cloud, or memory store. The directory may be missing. Requires Git on the runtime host.",
+        "description": "FlowPath for the exact repository directory in a local, cloud, or memory store. The directory may be missing.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -101629,7 +101629,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "repository",
         "friendlyName": "Repository",
-        "description": "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
+        "description": "FlowPath to a Git working tree in local, cloud, or memory storage.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
