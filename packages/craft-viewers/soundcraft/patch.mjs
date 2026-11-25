@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { prepareLiveMcp } from "../live-mcp.mjs";
+import prepareBrowserAudio from "../pcm-codec-patch.mjs";
 
 export function assertReviewedModules(source, expected, label) {
 	const modules = [
@@ -15,46 +16,25 @@ export function assertReviewedModules(source, expected, label) {
 }
 
 export default function prepare({
+	root,
 	source,
 	directory,
 	original,
 	write,
 	replaceOnce,
 }) {
-	const audio = original("crates/audio-io/src/lib.rs");
-	assertReviewedModules(
-		audio,
-		["aiff", "buffer", "caf", "flac", "mp4", "pcm", "peaks", "symph", "wav"],
-		"SoundCraft audio",
-	);
-	// Keep software compressed codecs outside the selected WASM dependency graph.
-	write(
-		"crates/audio-io/Cargo.toml",
-		replaceOnce(
-			original("crates/audio-io/Cargo.toml"),
-			"symphonia.workspace = true",
-			`[target.'cfg(not(target_arch = "wasm32"))'.dependencies]\nsymphonia.workspace = true`,
-			"native-only Symphonia",
-		),
-	);
-	write(
-		"crates/audio-io/src/lib.rs",
-		replaceOnce(
-			audio,
-			"mod symph;",
-			'#[cfg(not(target_arch = "wasm32"))]\nmod symph;\n#[cfg(target_arch = "wasm32")]\n#[path = "browser_codec.rs"]\nmod symph;',
-			"browser audio decoder boundary",
-		),
-	);
-	write(
-		"crates/audio-io/src/browser_codec.rs",
-		readFileSync(join(directory, "browser-codec.rs"), "utf8"),
-	);
+	const pinnedSourceOverrides = prepareBrowserAudio({
+		root,
+		directory,
+		original,
+		write,
+		replaceOnce,
+	});
 	let engineIo = original("crates/engine/src/io.rs");
 	engineIo += `
 /// The active reader's PCM size, without decoding the complete file.
 pub fn decoded_audio_byte_length(bytes: &[u8], ext: Option<&str>) -> Result<u64> {
-    let info = soundcraft_audio_io::probe(bytes, ext).map_err(|err| EngineError::Io(err.to_string()))?;
+    let info = craft_audio::probe(bytes, ext).map_err(|err| EngineError::Io(err.to_string()))?;
     Ok(info.frames.saturating_mul(u64::from(info.channels)).saturating_mul(4))
 }
 `;
@@ -96,10 +76,10 @@ pub fn open_session_bytes_with_audio(e: &mut Engine, name: &str, bytes: &[u8], d
 	let video = original("crates/video/src/lib.rs");
 	assertReviewedModules(
 		video,
-		["convert", "h264", "movie", "prores", "synth", "tests"],
+		["convert", "movie", "synth", "tests"],
 		"SoundCraft video",
 	);
-	for (const module of ["h264", "prores", "synth"]) {
+	for (const module of ["synth"]) {
 		video = replaceOnce(
 			video,
 			`pub mod ${module};`,
@@ -107,6 +87,21 @@ pub fn open_session_bytes_with_audio(e: &mut Engine, name: &str, bytes: &[u8], d
 			`native-only ${module}`,
 		);
 	}
+	video = replaceOnce(
+		video,
+		"pub use craft_video::{h264::decode as h264, prores};",
+		'#[cfg(not(target_arch = "wasm32"))]\npub use craft_video::{h264::decode as h264, prores};',
+		"native video codec reexports",
+	);
+	write(
+		"crates/video/Cargo.toml",
+		`${replaceOnce(
+			original("crates/video/Cargo.toml"),
+			"craft-video.workspace = true\n",
+			"",
+			"video codec dependency",
+		)}\n[target.'cfg(not(target_arch = "wasm32"))'.dependencies]\ncraft-video.workspace = true\n`,
+	);
 	video = replaceOnce(
 		video,
 		"mod movie;",
@@ -190,4 +185,5 @@ pub fn open_session_bytes_with_audio(e: &mut Engine, name: &str, bytes: &[u8], d
 			),
 	);
 	prepareLiveMcp({ id: "soundcraft", source, write, original, replaceOnce });
+	return { reconcileLock: true, pinnedSourceOverrides };
 }

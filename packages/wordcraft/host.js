@@ -31,7 +31,7 @@ async function loadWasm() {
 		wasm.parts.length > 32 ||
 		!Number.isSafeInteger(wasm.byteLength) ||
 		wasm.byteLength < 1 ||
-		wasm.byteLength > 128 * 1024 * 1024
+		wasm.byteLength > 256 * 1024 * 1024
 	) {
 		throw new Error("The document editor runtime manifest is invalid.");
 	}

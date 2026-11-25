@@ -223,16 +223,58 @@ try {
 				if (runtime === "deckcraft") await page.keyboard.up("Shift");
 				await page.keyboard.up(modifier);
 				await settle();
-				await page.keyboard.type(
-					runtime === "deckcraft"
-						? "Duplicate Slide"
-						: "Rotate pages clockwise",
-					{ delay: 20 },
-				);
+				if (runtime === "pdfcraft") {
+					await page.keyboard.sendCharacter("Rotate pages clockwise");
+					await settle();
+				} else {
+					await page.keyboard.type("Duplicate Slide", { delay: 20 });
+				}
 				await settle();
+				if (runtime === "pdfcraft") {
+					await page.screenshot({
+						path: join(directory, "pdfcraft-palette-selected.png"),
+					});
+				}
 				await page.keyboard.press("Enter");
 				await settle();
 				assert.equal((await waitEvent("dirty")).dirty, true);
+			}
+			if (runtime === "pdfcraft") {
+				const shortcut = async (key: string, shift = false) => {
+					await page.keyboard.down(modifier);
+					if (shift) await page.keyboard.down("Shift");
+					await page.keyboard.press(key);
+					if (shift) await page.keyboard.up("Shift");
+					await page.keyboard.up(modifier);
+					await settle();
+				};
+				const rotation = async (requestId: string) => {
+					const { bytes } = await exportDocument(requestId);
+					return (await PDFDocument.load(bytes)).getPage(0).getRotation().angle;
+				};
+				assert.equal(await rotation("before-palette-shortcut"), 90);
+				await shortcut("KeyK");
+				await shortcut("KeyA");
+				await page.keyboard.press("Backspace");
+				await settle();
+				await page.screenshot({
+					path: join(directory, "pdfcraft-palette-shortcut.png"),
+				});
+				await shortcut("KeyZ");
+				assert.equal(
+					await rotation("palette-shortcut"),
+					90,
+					"Undo must not reach the document behind the palette.",
+				);
+				await page.keyboard.press("Escape");
+				await settle();
+				await page.keyboard.press("Escape");
+				await settle();
+				await focusCanvas();
+				await shortcut("KeyZ");
+				assert.equal(await rotation("undo-shortcut"), 0);
+				await shortcut("KeyZ", true);
+				assert.equal(await rotation("redo-shortcut"), 90);
 			}
 			await page.screenshot({ path: join(directory, `${runtime}-edited.png`) });
 			let exported = await exportDocument("save");

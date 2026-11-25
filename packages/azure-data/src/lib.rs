@@ -6,4 +6,5 @@
 //! SAS material.
 
 pub mod cosmos;
+#[cfg(feature = "postgres")]
 pub mod postgres;

@@ -4,15 +4,13 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use flow_like::hub::AuditConfig;
-use flow_like_api::{
-    audit::{
-        keys,
-        worker::{self, AuditWorkerContext},
-    },
-    db::DbDialect,
+use anyhow::{Context, Result, anyhow};
+use flow_like_audit::AuditConfig;
+use flow_like_audit::{
+    keys,
+    worker::{self, AuditWorkerContext},
 };
-use flow_like_types::{Context, Result, anyhow};
+use flow_like_db::DbDialect;
 use sea_orm::{ConnectOptions, Database};
 use serde::Deserialize;
 
@@ -195,7 +193,7 @@ fn checkpoint_is_fresh(written_at_ms: i64, now_ms: i64, max_age_seconds: i64) ->
 
 async fn verify_checkpoint(path: &str) -> Result<()> {
     // This mode requires no entry key, private key, or storage write credentials.
-    flow_like_api::audit::signer::register_verifying_keys_json(&required("AUDIT_VERIFYING_KEYS")?)?;
+    flow_like_audit::signer::register_verifying_keys_json(&required("AUDIT_VERIFYING_KEYS")?)?;
     let checkpoint: worker::checkpoint::Checkpoint = serde_json::from_slice(&fs::read(path)?)?;
     worker::checkpoint::authenticate(&checkpoint)?;
     let max_age: i64 = value("AUDIT_CHECKPOINT_MAX_AGE_SECONDS")
@@ -208,7 +206,7 @@ async fn verify_checkpoint(path: &str) -> Result<()> {
     )?;
     let db = Database::connect(required("DATABASE_URL")?).await?;
     worker::checkpoint::verify_retained(&db, &checkpoint).await?;
-    let epochs = flow_like_api::audit::verify::verify_epochs(&db, true).await?;
+    let epochs = flow_like_audit::verify::verify_epochs(&db, true).await?;
     if !epochs.valid {
         return Err(anyhow!("audit epoch verification failed"));
     }
@@ -246,7 +244,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{CONFIG, checkpoint_is_fresh, parse_config};
-    use flow_like::hub::{AuditLevel, AuditRetention};
+    use flow_like_audit::{AuditLevel, AuditRetention};
 
     #[test]
     fn the_compiled_in_config_yields_an_enabled_signed_policy() {

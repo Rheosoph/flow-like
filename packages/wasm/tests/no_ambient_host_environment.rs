@@ -1,3 +1,5 @@
+#![cfg(feature = "execution")]
+
 //! Regression guards for Flow-Like's WASM environment isolation boundary.
 
 use std::fs;

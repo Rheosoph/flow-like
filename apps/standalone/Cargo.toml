@@ -5,7 +5,8 @@ edition = "2024"
 description = "Persistent Flow-Like device agent and project service host"
 
 [features]
-default = ["runtime", "training-auto", "playground", "bot-host"]
+default = ["runtime", "training-auto", "playground", "bot-host", "aws-developer-auth"]
+aws-developer-auth = ["dep:aws-config", "aws-config/sso", "aws-config/credentials-login", "aws-config/credentials-process"]
 frontend = ["runtime", "training-auto"]
 training-auto = ["runtime", "flow-like-catalog/training-auto"]
 training-cpu = ["runtime", "flow-like-catalog/training-cpu"]
@@ -47,6 +48,7 @@ bot-host = [
 ]
 
 [dependencies]
+aws-config = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 anyhow = "1"
 flow-like-device-protocol.workspace = true
@@ -107,7 +109,7 @@ croner = { version = "2.2.0", optional = true }
 chrono = { workspace = true, optional = true }
 chrono-tz = { workspace = true, optional = true }
 flow-like-bots = { workspace = true, optional = true }
-flow-like = { workspace = true, optional = true }
+flow-like = { workspace = true, optional = true, features = ["copilot"] }
 flow-like-bot-host = { workspace = true, optional = true }
 flow-like-bot-tools = { workspace = true, optional = true, features = ["documents", "barcodes", "code", "image", "mcp"] }
 flow-like-bot-tools-host = { workspace = true, optional = true }

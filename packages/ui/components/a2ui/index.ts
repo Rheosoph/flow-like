@@ -115,6 +115,7 @@ export type {
 	DividerComponent,
 	BadgeComponent,
 	AvatarComponent,
+	StatComponent,
 	UserProfileComponent,
 	ProgressComponent,
 	SpinnerComponent,
@@ -208,6 +209,7 @@ export { A2UIMarkdown } from "./display/Markdown";
 export { A2UIDivider } from "./display/Divider";
 export { A2UIBadge } from "./display/Badge";
 export { A2UIAvatar } from "./display/Avatar";
+export { A2UIStat } from "./display/Stat";
 export { A2UIUserProfile } from "./display/UserProfile";
 export { A2UIProgress } from "./display/Progress";
 export { A2UISpinner } from "./display/Spinner";

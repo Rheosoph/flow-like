@@ -412,6 +412,53 @@ describe("chat policy", () => {
 	});
 });
 
+describe("chat component defaults", () => {
+	test("cards default to compact density and keep only http(s) hrefs", () => {
+		const surface = surfaceOf(
+			lines(
+				{ id: "root", type: "column", children: ["a", "b", "c", "d"] },
+				{ id: "a", type: "card", title: "A", href: "https://shop.test/a" },
+				{ id: "b", type: "card", title: "B", href: "javascript:alert(1)" },
+				{ id: "c", type: "card", title: "C", density: "comfortable" },
+				{ id: "d", type: "card", title: "D", href: "/relative" },
+			),
+		);
+		expect(props(surface, "a").density).toEqual({ literalString: "compact" });
+		expect(props(surface, "a").href).toEqual({
+			literalString: "https://shop.test/a",
+		});
+		expect(props(surface, "b").href).toBeUndefined();
+		expect(props(surface, "d").href).toBeUndefined();
+		expect(props(surface, "c").density).toEqual({
+			literalString: "comfortable",
+		});
+	});
+
+	test("badges default to the neutral tone unless variant or tone is authored", () => {
+		const surface = surfaceOf(
+			lines(
+				{ id: "root", type: "row", children: ["a", "b", "c"] },
+				{ id: "a", type: "badge", content: "Neu" },
+				{ id: "b", type: "badge", content: "Alt", variant: "outline" },
+				{ id: "c", type: "badge", content: "OK", tone: "success" },
+			),
+		);
+		expect(props(surface, "a").tone).toEqual({ literalString: "neutral" });
+		expect(props(surface, "b").tone).toBeUndefined();
+		expect(props(surface, "c").tone).toEqual({ literalString: "success" });
+	});
+
+	test("stat is allowed in a reply", () => {
+		const surface = surfaceOf(
+			lines(
+				{ id: "root", type: "column", children: ["s"] },
+				{ id: "s", type: "stat", label: "Umsatz", value: "1" },
+			),
+		);
+		expect(props(surface, "s").type).toBe("stat");
+	});
+});
+
 describe("sanitizeChatStyle", () => {
 	test("keeps https and inline image backgrounds, drops other sources and bindings", () => {
 		const https = { image: { url: { literalString: "https://x.test/a.png" } } };

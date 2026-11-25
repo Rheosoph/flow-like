@@ -903,7 +903,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 													),
 											),
 									)
-									.map((item, index) =>
+									.map((item, index, shown) =>
 										item.data.notice ? (
 											<div
 												className={cn(
@@ -936,6 +936,11 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 														index > 0 &&
 														group.runStart?.(item.data as IMessage) &&
 														"mt-3",
+													// Approvals one after another read as one list, not as separate replies.
+													group?.layout !== "room" &&
+														item.data.approval &&
+														shown[index - 1]?.data.approval &&
+														"-mt-8",
 												)}
 												key={`msg-${item.data.id}`}
 												data-chat-message={item.data.id}

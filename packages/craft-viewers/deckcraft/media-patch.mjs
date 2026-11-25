@@ -10,17 +10,11 @@ export function prepareBrowserMedia({
 	const manifest = "crates/media/Cargo.toml";
 	let cargo = original(manifest);
 	const native = [];
-	for (const name of [
-		"isobmff",
-		"matroska",
-		"ogg",
-		"opus",
-		"h264",
-		"hevc",
-		"vp9",
-		"av1",
-	]) {
-		const line = `deckcraft-${name} = { workspace = true }\n`;
+	for (const name of ["media", "audio", "video"]) {
+		const line = cargo.match(
+			new RegExp(`^craft-${name} = [^\\n]+\\n`, "m"),
+		)?.[0];
+		if (!line) throw new Error(`Review DeckCraft's ${name} dependency.`);
 		cargo = replaceOnce(cargo, line, "", `${name} native dependency`);
 		native.push(line.trimEnd());
 	}
@@ -36,6 +30,12 @@ export function prepareBrowserMedia({
 
 	const libPath = "crates/media/src/lib.rs";
 	let lib = original(libPath);
+	lib = replaceOnce(
+		lib,
+		"mod mp4guard;",
+		'#[cfg(not(target_arch = "wasm32"))]\nmod mp4guard;',
+		"native MP4 decoder guard",
+	);
 	for (const module of ["audio", "feed", "player", "probe", "video"]) {
 		lib = replaceOnce(
 			lib,

@@ -1,4 +1,7 @@
+#![cfg(feature = "execution")]
+
 use flow_like_wasm::aot_cache::{host_platform_key, portable_target, WASMTIME_MAJOR_VERSION};
+use flow_like_wasm::compilation::{CompilationConfig, CompilationEngine};
 use flow_like_wasm::{WasmConfig, WasmEngine};
 use tempfile::TempDir;
 use wasmtime::{Config, Engine, ModuleVersionStrategy};
@@ -14,10 +17,10 @@ fn incompatible_engine() -> Engine {
     Engine::new(&config).unwrap()
 }
 
-fn portable_compiler_and_runtime() -> (WasmEngine, WasmEngine) {
+fn portable_compiler_and_runtime() -> (CompilationEngine, WasmEngine) {
     let target = portable_target(std::env::consts::OS, std::env::consts::ARCH).unwrap();
     let compiler =
-        WasmEngine::new(WasmConfig::default().without_cache().with_target(target)).unwrap();
+        CompilationEngine::new(CompilationConfig::default().with_target(target)).unwrap();
     let runtime = WasmEngine::new(WasmConfig::lambda().without_cache()).unwrap();
     (compiler, runtime)
 }

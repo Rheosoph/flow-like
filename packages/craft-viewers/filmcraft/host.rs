@@ -89,6 +89,7 @@ async fn start_app() -> Result<(), String> {
             canvas,
             eframe::WebOptions::default(),
             Box::new(|cc| {
+                filmcraft_ui_egui::install_ime_reset_callbacks(&cc.egui_ctx);
                 crate::set_context(cc.egui_ctx.clone());
                 let ctx = cc.egui_ctx.clone();
                 crate::fs::set_on_data(move || ctx.request_repaint());
@@ -112,6 +113,7 @@ async fn start_app() -> Result<(), String> {
                         app,
                         audio,
                         autosave: crate::recovery::Autosave::default(),
+                        host: None,
                     },
                     opened: false,
                     read_only: true,

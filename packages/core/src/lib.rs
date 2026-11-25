@@ -4,7 +4,7 @@
 
 pub use flow_like_runtime::*;
 
-#[cfg(feature = "flow-metadata")]
+#[cfg(feature = "copilot")]
 pub use flow_like_editor::copilot;
 
 #[cfg(feature = "flow-metadata")]
@@ -14,9 +14,9 @@ pub mod flow {
 }
 
 pub mod a2ui {
-    #[cfg(feature = "flow-metadata")]
+    #[cfg(feature = "copilot")]
     pub use flow_like_editor::a2ui::copilot;
-    #[cfg(feature = "flow-metadata")]
+    #[cfg(feature = "copilot")]
     pub use flow_like_editor::a2ui::copilot::*;
     pub use flow_like_runtime::a2ui::*;
 }

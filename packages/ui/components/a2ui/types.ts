@@ -435,7 +435,18 @@ export interface BadgeComponent extends ComponentBase {
 	type: "badge";
 	content: BoundValue;
 	variant?: BoundValue; // "default" | "secondary" | "destructive" | "outline"
+	tone?: BoundValue; // "neutral" | "info" | "success" | "warning" | "danger"
 	color?: BoundValue;
+}
+
+export interface StatComponent extends ComponentBase {
+	type: "stat";
+	label: BoundValue;
+	value: BoundValue;
+	change?: BoundValue;
+	trend?: BoundValue; // "up" | "down" | "flat"
+	caption?: BoundValue;
+	icon?: BoundValue; // lucide icon name
 }
 
 export interface AvatarComponent extends ComponentBase {
@@ -812,6 +823,9 @@ export interface CardComponent extends ComponentBase {
 	padding?: BoundValue;
 	headerImage?: BoundValue;
 	headerIcon?: BoundValue;
+	href?: BoundValue; // http(s) URL opened in a new tab
+	headerImageAspect?: BoundValue; // "16:9" | "3:2" | "4:3" | "1:1"
+	density?: BoundValue; // "comfortable" | "compact"
 }
 
 export interface ModalComponent extends ComponentBase {
@@ -1892,6 +1906,7 @@ export type A2UIComponent =
 	| DividerComponent
 	| BadgeComponent
 	| AvatarComponent
+	| StatComponent
 	| UserProfileComponent
 	| ProgressComponent
 	| SpinnerComponent

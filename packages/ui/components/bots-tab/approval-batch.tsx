@@ -15,7 +15,6 @@ import {
 import {
 	type ReactNode,
 	type RefObject,
-	useEffect,
 	useId,
 	useMemo,
 	useRef,
@@ -55,6 +54,7 @@ import {
 	alwaysBlock,
 	batchAnswer,
 	callCount,
+	callLine,
 	callTexts,
 	groupChoice,
 	groupItems,
@@ -62,6 +62,12 @@ import {
 } from "./approval-batch-model";
 import type { ApprovalDecision } from "./approval-entry";
 import { ApprovalPicture } from "./approval-picture";
+import {
+	ApprovalReceipt,
+	ReceiptCollapse,
+	useFocusAfterRender,
+	useSettledFold,
+} from "./approval-receipt";
 import type {
 	ConversationApproval,
 	ConversationApprovalItem,
@@ -630,19 +636,6 @@ const NARROW_FOOTER =
 	"@container @max-sm:[&>div:first-child]:basis-auto @max-sm:[&>div:last-child]:contents";
 const NARROW_ALLOW = "@max-sm:grow @max-sm:basis-[40%]";
 
-/** Runs one focus move after the next render, when the element it needs exists. */
-function useFocusAfterRender() {
-	const next = useRef<(() => void) | undefined>(undefined);
-	useEffect(() => {
-		const move = next.current;
-		next.current = undefined;
-		move?.();
-	});
-	return (move: () => void) => {
-		next.current = move;
-	};
-}
-
 /** The checked choice of the list's first radio group, else its first enabled one. */
 function focusFirstChoice(list: HTMLElement | null) {
 	const checked = list?.querySelector<HTMLElement>(
@@ -709,16 +702,20 @@ export function ApprovalBatchCard({
 	botName,
 	botAppearance,
 	readOnly,
+	foldSettled = false,
 }: Readonly<{
 	approval: ConversationApproval;
 	botId: string;
 	botName: string;
 	botAppearance?: Partial<BotAppearance>;
 	readOnly: boolean;
+	foldSettled?: boolean;
 }>) {
 	const { t } = useTranslation("bots");
 	const items = approval.items ?? [];
 	const state = useApprovalAnswer(approval, botId);
+	const grantLabel = useGrantLabel(items.flatMap((item) => item.scopes));
+	const countText = useCountText();
 	const upsertSecret = useUpsertBotSecret();
 	const sealing = useBotSecretSealing(
 		items.some((item) => item.secret) ? botId : null,
@@ -761,10 +758,11 @@ export function ApprovalBatchCard({
 		calls,
 	);
 	const alwaysAll = items.every((item) => !alwaysBlock(item));
+	const fold = useSettledFold(foldSettled, !waiting);
 
 	const send = (answer: BatchAnswer) =>
 		state.send(answer.decision, answer.items, () =>
-			focusAfter(() => statusRef.current?.focus()),
+			focusAfter(() => (statusRef.current ?? fold.receiptRef.current)?.focus()),
 		);
 	const shortcut = (decision: ApprovalDecision) =>
 		send(
@@ -818,6 +816,30 @@ export function ApprovalBatchCard({
 	const showBody = waiting || open;
 	const capped = listOpen && !few;
 
+	if (fold.folded) {
+		const targets = [
+			...secrets.flatMap((item) => (item.secret ? [item.secret.name] : [])),
+			...groups.map((group) =>
+				group.scopes.length > 0
+					? group.scopes
+							.map((scope) => grantLabel(group.tool, scope))
+							.join(", ")
+					: callLine(group.items[0]?.summary || group.tool),
+			),
+		];
+		return (
+			<ApprovalReceipt
+				fold={fold}
+				icon={icon}
+				tone={tone}
+				status={state.closure ? `${eyebrow} · ${countText(calls)}` : eyebrow}
+				statusSlot={state.closure ? "approval-closure" : "approval-answer"}
+				line={targets.join(", ")}
+				onOpen={() => setOpen(true)}
+			/>
+		);
+	}
+
 	return (
 		<RequestCard
 			data-slot="approval-card"
@@ -862,6 +884,7 @@ export function ApprovalBatchCard({
 					</output>
 				}
 				className={showBody ? undefined : "pb-3.5"}
+				aside={fold.unfolded ? <ReceiptCollapse fold={fold} /> : undefined}
 				title={t(
 					"crew.approval.batch.title",
 					"{{name}} wants to make {{count}} calls",

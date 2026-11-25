@@ -1,3 +1,5 @@
+#![cfg(feature = "execution")]
+
 //! Integration tests for WASM Component Model (Python & TypeScript nodes)
 //!
 //! Tests loading and executing WASM components built with componentize-py / componentize-js.

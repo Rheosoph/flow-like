@@ -70,6 +70,22 @@ jobs:
           api-aws-catalog
           query-forecasting
           api-local-ml-catalog
+          core-copilot
+          execution-queue
+          backend-audit-aws
+          backend-audit-azure
+          backend-audit-gcp
+          backend-compiler-lambda
+          backend-compiler-ecs
+          backend-compiler-k8s
+          backend-event-bridge
+          backend-media-transformer
+          backend-gcp-maintenance
+          backend-gcp-scheduler
+          backend-azure-scheduler
+          backend-aws-file-tracker
+          backend-aws-query
+          backend-aws-api
           wasm-host
           api-runtime
           a2ui-schema
@@ -155,3 +171,4 @@ jobs:
           catalog-portable
           catalog-portable-execute
           catalog-server
+          core-copilot

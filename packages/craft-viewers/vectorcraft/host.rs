@@ -116,12 +116,21 @@ async fn start_app() -> Result<(), String> {
             eframe::WebOptions::default(),
             Box::new(|cc| {
                 CONTEXT.with(|ctx| *ctx.borrow_mut() = Some(cc.egui_ctx.clone()));
+                let spec = craft::ui::InstallSpec::new(
+                    craft::host::target::ShellInfo::current(),
+                    std::sync::Arc::new(craft::window::system::SystemWindows),
+                );
+                craft::ui::shell::embed::install(&cc.egui_ctx, spec, &vectorcraft_ui_egui::ui_fonts())
+                    .map_err(|error| error.to_string())?;
+                egui_extras::install_image_loaders(&cc.egui_ctx);
                 let services = Services {
                     host_command: Some(Box::new(host_command)),
                     ..Default::default()
                 };
+                let mut app = VectorcraftApp::new(Session::new(), services);
+                app.adopt_context(&cc.egui_ctx);
                 Ok(Box::new(Host {
-                    app: VectorcraftApp::new(Session::new(), services),
+                    app,
                     opened: false,
                     read_only: true,
                     name: String::new(),
@@ -164,9 +173,9 @@ impl Host {
                 if let Some(response) =
                     live_mcp::receive(&message, read_only, &mut |method, params| {
                         let (request, _reply) =
-                            vectorcraft_ui_egui::ControlRequest::new(method, params);
+                            craft::automation::ControlRequest::new(method, params);
                         match vectorcraft_ui_egui::control::handle(&mut self.app, &ctx, &request) {
-                            vectorcraft_ui_egui::control::Outcome::Done(reply) => {
+                            craft::automation::Reply::Done(reply) => {
                                 live_mcp::unwrap_control(reply)
                             }
                             _ => Err("This operation requires a later editor frame.".into()),
@@ -243,7 +252,13 @@ impl Host {
                     .commit_interaction()
                     .map_err(|e| e.to_string())?;
                 self.read_only = field(&message, "readOnly").as_bool().unwrap_or(true);
-                self.app.ui.dialog = None;
+                if self.read_only {
+                    let ctx = CONTEXT.with(|context| context.borrow().clone()).ok_or("The editor is not ready.")?;
+                    self.app.host_cancel_synthetic(&ctx);
+                    craft::ui::shell::WindowDialogs::of(&ctx, &craft::ui::runtime::env::WindowKey::main()).with(|host| {
+                        for dialog in host.open_dialogs() { host.cancel_by_id(&ctx, dialog.id); }
+                    });
+                }
             }
             Some("export") => {
                 if !self.opened
@@ -406,17 +421,19 @@ impl eframe::App for Host {
             }
         }
         if self.opened && !self.read_only {
-            self.app.logic(ctx);
+            self.app.tick(ctx);
+            craft::ui::shell::embed::logic(ctx, || self.app.close_decision());
         }
         self.report_dirty();
     }
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         raw.dropped_files.clear();
         if self.read_only {
-            self.app.host_cancel_synthetic();
+            self.app.host_cancel_synthetic(ctx);
         }
         if !self.read_only {
-            self.app.raw_input_hook(ctx, raw);
+            self.app.raw_input(ctx, raw);
+            craft::ui::shell::embed::before_input(ctx, |out| self.app.frame_input(out));
         }
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

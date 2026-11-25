@@ -39,9 +39,19 @@ import {
 	WebContentNotice,
 	useDecisionText,
 } from "./approval-batch";
-import { approvalItems, callPhrase, isBatch } from "./approval-batch-model";
+import {
+	approvalItems,
+	callLine,
+	callPhrase,
+	isBatch,
+} from "./approval-batch-model";
 import type { ApprovalDecision } from "./approval-entry";
 import { ApprovalPicture } from "./approval-picture";
+import {
+	ApprovalReceipt,
+	ReceiptCollapse,
+	useSettledFold,
+} from "./approval-receipt";
 import {
 	BotConfigurationChanges,
 	useBotSettingsApprovalText,
@@ -84,6 +94,8 @@ interface ApprovalCardProps {
 	/** The asking bot's look; without it the card shows a shield instead of its face. */
 	botAppearance?: Partial<BotAppearance>;
 	readOnly: boolean;
+	/** Once answered, expired or cancelled, the card folds to one line that opens it again. */
+	foldSettled?: boolean;
 }
 
 /**
@@ -104,6 +116,7 @@ function SingleApprovalCard({
 	botName,
 	botAppearance,
 	readOnly,
+	foldSettled = false,
 }: Readonly<ApprovalCardProps>) {
 	const { t } = useTranslation("bots");
 	const grantLabel = useGrantLabel(approval.scopes);
@@ -128,9 +141,11 @@ function SingleApprovalCard({
 		.map((scope) => grantLabel(approval.tool, scope))
 		.join(", ");
 
+	const fold = useSettledFold(foldSettled, !waiting);
+
 	const answer = (next: ApprovalDecision) => {
 		emitGuideEvent("bots:approval-answered");
-		state.send(next);
+		state.send(next, undefined, fold.focusReceipt);
 	};
 
 	useEffect(() => {
@@ -159,8 +174,39 @@ function SingleApprovalCard({
 			sealed,
 		});
 		await state.sendAsync("once");
+		fold.focusReceipt();
 	};
 	const closed = !waiting;
+	const status = closure
+		? closure === "expired"
+			? t("crew.approval.expired", "Expired")
+			: t("crew.approval.cancelled", "Task cancelled")
+		: decision
+			? isConfiguration
+				? decision === "deny"
+					? settingsText.rejected
+					: settingsText.approved
+				: decisionText(decision, !!secret)
+			: undefined;
+	const statusSlot = closure ? "approval-closure" : "approval-answer";
+	if (fold.folded && status) {
+		return (
+			<ApprovalReceipt
+				fold={fold}
+				icon={icon}
+				tone={tone}
+				status={status}
+				statusSlot={statusSlot}
+				line={
+					secret
+						? secret.name
+						: isConfiguration
+							? t("crew.approval.configuration.title", "Update bot settings")
+							: callLine(approval.summary || approval.tool)
+				}
+			/>
+		);
+	}
 	return (
 		<RequestCard
 			data-slot="approval-card"
@@ -187,24 +233,13 @@ function SingleApprovalCard({
 					</RequestMark>
 				}
 				eyebrow={
-					closure ? (
-						<span data-slot="approval-closure">
-							{closure === "expired"
-								? t("crew.approval.expired", "Expired")
-								: t("crew.approval.cancelled", "Task cancelled")}
-						</span>
-					) : decision ? (
-						<span data-slot="approval-answer">
-							{isConfiguration
-								? decision === "deny"
-									? settingsText.rejected
-									: settingsText.approved
-								: decisionText(decision, !!secret)}
-						</span>
+					status ? (
+						<span data-slot={statusSlot}>{status}</span>
 					) : (
 						t("crew.approval.label", "Approval request")
 					)
 				}
+				aside={fold.unfolded ? <ReceiptCollapse fold={fold} /> : undefined}
 				className={closed ? "pb-3.5" : undefined}
 				title={
 					secret
@@ -368,6 +403,7 @@ export function ChatApprovalCard({
 			}
 			botAppearance={bot?.appearance}
 			readOnly={false}
+			foldSettled
 		/>
 	);
 }

@@ -35,17 +35,17 @@ export default function prepare({
 		appPath,
 		replaceOnce(
 			original(appPath),
-			"            chrome::app_bar(self, ui);",
-			'            egui::Panel::top("flows-vector-menu").show(ui, |ui| { ui.horizontal(|ui| { menus::menu_bar(self, ui); }); });',
+			"            .title_bar_if(true, chrome::app_bar)",
+			"            .title_bar_if(true, |ui, _cx, app: &mut VectorcraftApp| { craft::menu::MenuBarUi::new(&app.menus.laid).show(ui); })",
 			"embedded menu bar",
 		),
 	);
-	const menusPath = "crates/ui-egui/src/menus/bar.rs";
+	const menusPath = "crates/ui-egui/src/menus/model.rs";
 	let menus = original(menusPath);
 	menus = replaceOnce(
 		menus,
-		"    let tree = menu_tree_named(app.session.prefs.font_names_in_english);",
-		'    let tree: Vec<_> = menu_tree_named(app.session.prefs.font_names_in_english).into_iter().filter(|(name, _)| !matches!(*name, "File" | "Help")).collect();',
+		"    let menus: Vec<Menu> = menu_tree_named(app.session.prefs.font_names_in_english, &listed)\n        .into_iter()",
+		'    let menus: Vec<Menu> = menu_tree_named(app.session.prefs.font_names_in_english, &listed)\n        .into_iter()\n        .filter(|(title, _)| !matches!(*title, "File" | "Help"))',
 		"embedded menus",
 	);
 	write(menusPath, menus);
@@ -70,7 +70,7 @@ export default function prepare({
 	// The embedded host supplies the app identity, including in hidden dialogs.
 	write(
 		"crates/ui-egui/src/brand.rs",
-		"pub fn paint_mark(_ui: &egui::Ui, _rect: egui::Rect) {}\n",
+		"pub(crate) const BRAND_KEY: u64 = 0x464c_4f57_5356;\npub(crate) fn image() -> std::sync::Arc<egui::ColorImage> { std::sync::Arc::new(egui::ColorImage::new([1, 1], vec![egui::Color32::TRANSPARENT])) }\n",
 	);
 	const cargoPath = "apps/vectorcraft-web/Cargo.toml";
 	write(
@@ -78,7 +78,7 @@ export default function prepare({
 		replaceOnce(
 			original(cargoPath),
 			"[dependencies]\n",
-			"[dependencies]\nserde_json = { workspace = true }\nvectorcraft-render = { workspace = true }\n",
+			"[dependencies]\nvectorcraft-render = { workspace = true }\n",
 			"host dependencies",
 		),
 	);
@@ -93,7 +93,7 @@ export default function prepare({
 		replaceOnce(
 			block,
 			"dependencies = [\n",
-			'dependencies = [\n "serde_json",\n "vectorcraft-render",\n',
+			'dependencies = [\n "vectorcraft-render",\n',
 			"locked host dependencies",
 		),
 		"web lock entry",
@@ -108,4 +108,43 @@ export default function prepare({
 		'#[cfg(target_arch = "wasm32")]\nmod web;\n#[cfg(target_arch = "wasm32")]\nfn main() { web::start(); }\n#[cfg(not(target_arch = "wasm32"))]\nfn main() {}\n',
 	);
 	prepareLiveMcp({ id: "vectorcraft", source, write, original, replaceOnce });
+	const backendPath = "crates/mcp/src/backend.rs";
+	let backend = original(backendPath);
+	for (const item of [
+		"use std::net::{SocketAddr, ToSocketAddrs};",
+		"use craft::automation::args::{ControlOptions, EnvNames};",
+		"use craft::automation::client::ControlClient;",
+		"pub fn control_token() -> Result<String, String> {",
+		"pub struct Remote {",
+		"impl Remote {",
+		"impl Backend for Remote {",
+	]) {
+		backend = replaceOnce(
+			backend,
+			item,
+			`#[cfg(not(target_arch = "wasm32"))]\n${item}`,
+			"native MCP backend",
+		);
+	}
+	write(backendPath, backend);
+	const mcpLibPath = "crates/mcp/src/lib.rs";
+	write(
+		mcpLibPath,
+		replaceOnce(
+			readFileSync(join(source, mcpLibPath), "utf8"),
+			"pub use backend::{Backend, Remote, control_token};",
+			'pub use backend::Backend;\n#[cfg(not(target_arch = "wasm32"))]\npub use backend::{Remote, control_token};',
+			"native MCP exports",
+		),
+	);
+	const libPath = "crates/ui-egui/src/lib.rs";
+	write(
+		libPath,
+		replaceOnce(
+			readFileSync(join(source, libPath), "utf8"),
+			"pub fn host_cancel_synthetic(&mut self) { self.synthetic.clear(); }",
+			"pub fn host_cancel_synthetic(&mut self, ctx: &egui::Context) { craft::ui::runtime::windows::WindowHost::of(ctx).withdraw_injected(egui::ViewportId::ROOT); }",
+			"shared input cancellation",
+		),
+	);
 }

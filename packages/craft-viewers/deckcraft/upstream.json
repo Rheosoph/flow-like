@@ -1,7 +1,7 @@
 {
 	"repository": "https://github.com/storytold/deckcraft.git",
-	"revision": "ee39ff67816d0039143ec7c98ea604cefe0cd2e5",
-	"version": "0.14.1",
+	"revision": "9db2fa0ca994ad8ae8d9cc5032d860ae985477d5",
+	"version": "0.19.0",
 	"wasmBindgen": "0.2.129",
 	"cargoPackage": "deckcraft-web",
 	"label": "Flows Slides",

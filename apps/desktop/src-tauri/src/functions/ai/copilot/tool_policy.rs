@@ -413,6 +413,8 @@ pub(super) fn is_flowpilot_read_only_tool(tool_name: &str) -> bool {
             | "internet_search"
             | "open_url"
             | "archive_lookup"
+            // A static layout recipe; nothing to change.
+            | "ui_patterns"
     )
 }
 

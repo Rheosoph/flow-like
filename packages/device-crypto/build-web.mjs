@@ -1,9 +1,12 @@
 import { execFileSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	cpSync,
 	existsSync,
+	linkSync,
 	mkdirSync,
 	readFileSync,
+	rmSync,
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -43,6 +46,7 @@ export function rustLibraryEnvironment({
 
 export function wasmLinkerEnvironment({
 	directory,
+	contentAddressed = false,
 	env = process.env,
 	platform = process.platform,
 	probe = (command, args) => rustOutput(command, args, env),
@@ -53,16 +57,37 @@ export function wasmLinkerEnvironment({
 	if (!libraries.DYLD_FALLBACK_LIBRARY_PATH) return {};
 	const targetLib = probe(env.RUSTC || "rustc", ["--print", "target-libdir"]);
 	const linker = join(dirname(targetLib), "bin", "rust-lld");
-	const wrapper = resolve(directory, "rust-lld");
 	const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
 	// macOS strips DYLD_* when a shell-based RUSTC_WRAPPER starts. Set the path
 	// in the linker launcher so it reaches rust-lld even through those wrappers.
-	mkdirSync(directory, { recursive: true });
-	writeFileSync(
-		wrapper,
-		`#!/bin/sh\nexport DYLD_FALLBACK_LIBRARY_PATH=${quote(libraries.DYLD_FALLBACK_LIBRARY_PATH)}\nexec ${quote(linker)} "$@"\n`,
-		{ mode: 0o755 },
-	);
+	const contents = `#!/bin/sh\nexport DYLD_FALLBACK_LIBRARY_PATH=${quote(libraries.DYLD_FALLBACK_LIBRARY_PATH)}\nexec ${quote(linker)} "$@"\n`;
+	const wrapperDirectory = contentAddressed
+		? resolve(directory, createHash("sha256").update(contents).digest("hex"))
+		: directory;
+	const wrapper = resolve(wrapperDirectory, "rust-lld");
+	mkdirSync(wrapperDirectory, { recursive: true });
+	if (contentAddressed) {
+		if (!existsSync(wrapper)) {
+			const temporary = `${wrapper}.${process.pid}.${randomUUID()}.tmp`;
+			try {
+				writeFileSync(temporary, contents, { mode: 0o755, flag: "wx" });
+				try {
+					// Publish the complete executable without replacing another builder's copy.
+					linkSync(temporary, wrapper);
+				} catch (error) {
+					if (error.code !== "EEXIST") throw error;
+				}
+			} finally {
+				rmSync(temporary, { force: true });
+			}
+		}
+		if (readFileSync(wrapper, "utf8") !== contents)
+			throw new Error(
+				`The shared WebAssembly linker launcher was modified: ${wrapper}`,
+			);
+	} else {
+		writeFileSync(wrapper, contents, { mode: 0o755 });
+	}
 	return { CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_LINKER: wrapper };
 }
 

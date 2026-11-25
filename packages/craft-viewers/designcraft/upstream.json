@@ -1,7 +1,7 @@
 {
 	"repository": "https://github.com/storytold/designcraft.git",
-	"revision": "1fe8885bda7451263879cfbb256b9a3d46c411bf",
-	"version": "0.16.0",
+	"revision": "39651f6603ee2aec709c676e4a7b76e350ea1dcc",
+	"version": "0.21.1",
 	"wasmBindgen": "0.2.129",
 	"cargoPackage": "designcraft-web",
 	"label": "Flows Design",

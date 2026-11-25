@@ -1,3 +1,5 @@
+#![cfg(feature = "execution")]
+
 extern crate flow_like_runtime as flow_like;
 
 use flow_like::flow::execution::resources::RunResources;

@@ -1,3 +1,4 @@
+pub mod config;
 pub mod bounded;
 pub mod credentials;
 #[cfg(feature = "lance")]

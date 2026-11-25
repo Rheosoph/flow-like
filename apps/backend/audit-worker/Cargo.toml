@@ -5,14 +5,14 @@ edition = "2024"
 
 [features]
 default = []
-aws = ["flow-like-api/audit-kms-aws"]
-azure = ["flow-like-api/audit-kms-azure"]
-gcp = ["flow-like-api/audit-kms-gcp"]
+aws = ["flow-like-audit/audit-kms-aws"]
+azure = ["flow-like-audit/audit-kms-azure"]
+gcp = ["flow-like-audit/audit-kms-gcp"]
 
 [dependencies]
-flow-like-api = { workspace = true, default-features = false }
-flow-like.workspace = true
-flow-like-types.workspace = true
+flow-like-audit.workspace = true
+flow-like-db.workspace = true
+anyhow = "1.0.97"
 sea-orm.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

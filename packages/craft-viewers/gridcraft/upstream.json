@@ -1,7 +1,7 @@
 {
 	"repository": "https://github.com/storytold/gridcraft.git",
-	"revision": "30b210b4ef03b30616923465efa70766cefba379",
-	"version": "0.15.0",
+	"revision": "1b92ec071e407895f4245b238bf4063ef1efdb68",
+	"version": "0.19.1",
 	"wasmBindgen": "0.2.129",
 	"cargoPackage": "gridcraft-web",
 	"label": "Flows Sheets",

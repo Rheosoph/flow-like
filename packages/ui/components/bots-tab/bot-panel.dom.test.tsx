@@ -597,6 +597,9 @@ describe("the bot's workspace in the panel", () => {
 		expect(panelLink("Open workspace")?.getAttribute("href")).toBe(
 			"/library/config?id=ws-scout",
 		);
+		// Write access comes from the role query, which a loaded machine answers after the first settle.
+		for (let tries = 0; tries < 20 && !shown.storage.at(-1)?.canWrite; tries++)
+			await settle();
 		const files = shown.storage.at(-1);
 		expect(files?.appId).toBe("ws-scout");
 		expect(files?.prefix).toBe("");

@@ -212,26 +212,69 @@ try {
 		packages: {
 			selectedLicense: string;
 			sourceArchive?: string;
+			sourceArchiveSha256?: string;
+			sourceArchiveByteLength?: number;
+			sourceArchiveParts?: {
+				path: string;
+				sha256: string;
+				byteLength: number;
+			}[];
 			checksum?: string;
 		}[];
 	};
 	const sourcePackage = manifest.packages.find(
 		(pkg) =>
 			pkg.sourceArchive &&
-			new URL(pkg.sourceArchive, sourcePage.url()).href === sourceUrl,
+			(new URL(pkg.sourceArchive, sourcePage.url()).href === sourceUrl ||
+				pkg.sourceArchiveParts?.some(
+					(part) => new URL(part.path, sourcePage.url()).href === sourceUrl,
+				)),
 	);
-	assert.ok(sourcePackage?.selectedLicense.includes("MPL-2.0"));
-	assert.match(sourcePackage.checksum ?? "", /^[a-f0-9]{64}$/);
+	assert.ok(sourcePackage?.selectedLicense.split(" AND ").includes("MPL-2.0"));
+	assert.match(
+		sourcePackage.sourceArchive ?? "",
+		/^sources\/[\w.+-]+\.(?:crate|tar\.gz)$/,
+	);
+	const part = sourcePackage.sourceArchiveParts?.find(
+		(entry) => new URL(entry.path, sourcePage.url()).href === sourceUrl,
+	);
+	if (sourcePackage.sourceArchiveParts) assert.ok(part);
+	if (part) {
+		assert.ok(part.path.startsWith(`${sourcePackage.sourceArchive}.part`));
+		assert.match(
+			part.path.slice((sourcePackage.sourceArchive?.length ?? 0) + 5),
+			/^\d{3,}$/,
+		);
+	}
+	if (sourcePackage.sourceArchiveSha256 === undefined) {
+		assert.equal(sourcePackage.sourceArchiveByteLength, undefined);
+		assert.equal(sourcePackage.sourceArchiveParts, undefined);
+		assert.ok(sourcePackage.sourceArchive?.endsWith(".crate"));
+	} else {
+		assert.match(sourcePackage.sourceArchiveSha256, /^[a-f0-9]{64}$/);
+		assert.ok(
+			Number.isSafeInteger(sourcePackage.sourceArchiveByteLength) &&
+				(sourcePackage.sourceArchiveByteLength ?? 0) > 0,
+		);
+	}
+	const sourceChecksum =
+		part?.sha256 ?? sourcePackage.sourceArchiveSha256 ?? sourcePackage.checksum;
+	const sourceByteLength =
+		part?.byteLength ?? sourcePackage.sourceArchiveByteLength;
+	assert.match(sourceChecksum ?? "", /^[a-f0-9]{64}$/);
 	const sourceResponse = await fetch(sourceUrl);
 	assert.ok(
 		sourceResponse.ok,
 		"The MPL source download must be available locally",
 	);
+	const sourceBytes = Buffer.from(await sourceResponse.arrayBuffer());
+	if (sourceByteLength !== undefined) {
+		assert.ok(Number.isSafeInteger(sourceByteLength) && sourceByteLength > 0);
+		assert.equal(sourceBytes.byteLength, sourceByteLength);
+	}
 	assert.equal(
-		createHash("sha256")
-			.update(Buffer.from(await sourceResponse.arrayBuffer()))
-			.digest("hex"),
-		sourcePackage.checksum,
+		createHash("sha256").update(sourceBytes).digest("hex"),
+		sourceChecksum,
 		"The downloadable source must match the runtime's pinned source checksum",
 	);
 	await sourcePage.close();

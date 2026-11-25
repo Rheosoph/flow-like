@@ -882,10 +882,15 @@ export const MessageComponent = memo(
 				};
 			}, [inlineSegments, currentPlanStepId]);
 
-		// A failed turn that never produced text has nothing to render but the error card — an empty
+		// An approval is a request, not an answer: nothing to rate, copy or edit.
+		const approvalOnly = Boolean(message.approval) && !messageContent.text;
+		// A failed turn or an approval without text has nothing to render but its card — an empty
 		// prose block would still reserve a line above it.
 		const hideEmptyBody =
-			!isUser && !loading && !messageContent.text && Boolean(message.error);
+			!isUser &&
+			!loading &&
+			!messageContent.text &&
+			(Boolean(message.error) || approvalOnly);
 
 		// Whatever the segments do not place keeps the legacy spot after the text.
 		const segmentsShown = !hideEmptyBody && inlineSegments !== null;
@@ -1228,7 +1233,7 @@ export const MessageComponent = memo(
 								extra={renderMenu?.(message)}
 							/>
 						)}
-						{room && !loading && (
+						{room && !loading && !approvalOnly && (
 							<RoomMessageActions
 								align={isUser ? "end" : "start"}
 								disabled={interactionDisabled}
@@ -1244,7 +1249,7 @@ export const MessageComponent = memo(
 								menu={renderMenu?.(message)}
 							/>
 						)}
-						{!room && !loading && (
+						{!room && !loading && !approvalOnly && (
 							<MessageActions
 								isUser={isUser}
 								feedbackEnabled={feedbackEnabled}

@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 # Keep vendored upstream test suites out of workspace test runs.
-exclude = ["packages/vendor/swift-rs", "packages/vendor/profirust", "packages/vendor/pytorch-reader", "packages/vendor/telegenic", "packages/vendor/ads", "packages/vendor/dust-dds", "packages/vendor/tauri-plugin-updater"]
+exclude = ["packages/vendor/swift-rs", "packages/vendor/profirust", "packages/vendor/pytorch-reader", "packages/vendor/telegenic", "packages/vendor/ads", "packages/vendor/dust-dds", "packages/vendor/tauri-plugin-updater", "packages/vendor/aws-config", "packages/vendor/aurora-dsql-sqlx-connector"]
 # Bare Cargo commands target the shared editing loop. Product crates remain one
 # short alias away, while CI always passes --workspace explicitly.
 default-members = [
@@ -108,6 +108,8 @@ members = [
     "packages/storage/files",
     "packages/query",
     "packages/api",
+    "packages/audit",
+    "packages/execution-queue",
     "packages/api/entity",
     "packages/sinks",
     "packages/secrets",
@@ -193,6 +195,8 @@ flow-like-geometry = { path = "packages/geometry" }
 flow-like-types-contracts = { path = "packages/types/contracts", default-features = false }
 flow-like-types-proto = { path = "packages/types/proto", default-features = false }
 flow-like-api = { path = "packages/api", default-features = false }
+flow-like-audit = { path = "packages/audit", default-features = false }
+flow-like-execution-queue = { path = "packages/execution-queue", default-features = false }
 flow-like-api-entity = { path = "packages/api/entity", default-features = false }
 flow-like-core-contracts = { path = "packages/core/contracts", default-features = false }
 flow-like-model-provider = { path = "packages/model-provider" }
@@ -229,7 +233,7 @@ flow-like-executor = { path = "packages/executor", default-features = false }
 flow-like-query = { path = "packages/query", default-features = false }
 flow-like-channels = { path = "packages/channels", default-features = false }
 flow-like-compiler = { path = "packages/compiler" }
-flow-like-wasm = { path = "packages/wasm" }
+flow-like-wasm = { path = "packages/wasm", default-features = false }
 flow-like-wasm-schema = { path = "packages/wasm/schema", default-features = false }
 flow-like-secrets = { path = "packages/secrets" }
 flow-like-aws-data = { path = "packages/aws-data" }
@@ -280,7 +284,8 @@ blake3 = "1.8.2"
 sha2 = "0.10"
 constant_time_eq = "0.4.2"
 lambda_runtime = "0.14.2"
-aws-config = "1.11.0"
+aws-config = { version = "1.11.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+cuid2 = { git = "https://github.com/Rheosoph/cuid-rust.git", package = "cuid2" }
 aurora-dsql-sqlx-connector = { version = "0.2.2", features = ["pool", "occ"] }
 aws-sdk-cloudwatch = { version = "1.127.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-dynamodb = { version = "1.80.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
@@ -368,6 +373,10 @@ wasmtime-wasi = "=48.0.10"
 wasmtime-wasi-http = "=48.0.10"
 
 [patch.crates-io]
+# Server role credentials do not need interactive login providers. Desktop and
+# local development explicitly enable the vendored providers' developer features.
+aws-config = { path = "packages/vendor/aws-config" }
+aurora-dsql-sqlx-connector = { path = "packages/vendor/aurora-dsql-sqlx-connector" }
 # Backport dependency security fixes without changing the surrounding platform APIs.
 serenity = { git = "https://github.com/Rheosoph/serenity.git", rev = "22689c4fbb86d7b19ce39124906f88981e0bca86" }
 rumqttc = { git = "https://github.com/Rheosoph/rumqtt.git", rev = "3434ed9cc52914cf3f9a2e2ce4f284fbb486ad43" }

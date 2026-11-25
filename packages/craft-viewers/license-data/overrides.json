@@ -1507,5 +1507,501 @@
       "https://raw.githubusercontent.com/pdf-rs/fax/ac2a4b2237d98830ea1fd37c7d280eec0e87c1d8/LICENSE"
     ],
     "revision": "ac2a4b2237d98830ea1fd37c7d280eec0e87c1d8"
+  },
+  "alloc-stdlib@0.3.0#0a81fd6928ea3b33c8cd484aa4575d50ffb98012": {
+    "files": [
+      "rust-alloc-no-stdlib/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/0a81fd6928ea3b33c8cd484aa4575d50ffb98012/LICENSE"
+    ],
+    "revision": "0a81fd6928ea3b33c8cd484aa4575d50ffb98012"
+  },
+  "ecolor@0.37.0#f5025284445ea19c35f746d96fc0b75468b3f560": {
+    "files": [
+      "egui/LICENSE-APACHE",
+      "egui/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/storytold/egui/f5025284445ea19c35f746d96fc0b75468b3f560/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/storytold/egui/f5025284445ea19c35f746d96fc0b75468b3f560/LICENSE-MIT"
+    ],
+    "revision": "f5025284445ea19c35f746d96fc0b75468b3f560"
+  },
+  "eframe@0.37.0#f5025284445ea19c35f746d96fc0b75468b3f560": {
+    "files": [
+      "egui/LICENSE-APACHE",
+      "egui/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/storytold/egui/f5025284445ea19c35f746d96fc0b75468b3f560/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/storytold/egui/f5025284445ea19c35f746d96fc0b75468b3f560/LICENSE-MIT"
+    ],
+    "revision": "f5025284445ea19c35f746d96fc0b75468b3f560"
+  },
+  "egui@0.37.0#f5025284445ea19c35f746d96fc0b75468b3f560": {
+    "files": [
+      "egui/LICENSE-APACHE",
+      "egui/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/storytold/egui/f5025284445ea19c35f746d96fc0b75468b3f560/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/storytold/egui/f5025284445ea19c35f746d96fc0b75468b3f560/LICENSE-MIT"
+    ],
+    "revision": "f5025284445ea19c35f746d96fc0b75468b3f560"
+  },
+  "egui-wgpu@0.37.0#f5025284445ea19c35f746d96fc0b75468b3f560": {
+    "files": [
+      "egui/LICENSE-APACHE",
+      "egui/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/storytold/egui/f5025284445ea19c35f746d96fc0b75468b3f560/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/storytold/egui/f5025284445ea19c35f746d96fc0b75468b3f560/LICENSE-MIT"
+    ],
+    "revision": "f5025284445ea19c35f746d96fc0b75468b3f560"
+  },
+  "egui_extras@0.37.0#f5025284445ea19c35f746d96fc0b75468b3f560": {
+    "files": [
+      "egui/LICENSE-APACHE",
+      "egui/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/storytold/egui/f5025284445ea19c35f746d96fc0b75468b3f560/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/storytold/egui/f5025284445ea19c35f746d96fc0b75468b3f560/LICENSE-MIT"
+    ],
+    "revision": "f5025284445ea19c35f746d96fc0b75468b3f560"
+  },
+  "egui_glow@0.37.0#f5025284445ea19c35f746d96fc0b75468b3f560": {
+    "files": [
+      "egui/LICENSE-APACHE",
+      "egui/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/storytold/egui/f5025284445ea19c35f746d96fc0b75468b3f560/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/storytold/egui/f5025284445ea19c35f746d96fc0b75468b3f560/LICENSE-MIT"
+    ],
+    "revision": "f5025284445ea19c35f746d96fc0b75468b3f560"
+  },
+  "emath@0.37.0#f5025284445ea19c35f746d96fc0b75468b3f560": {
+    "files": [
+      "egui/LICENSE-APACHE",
+      "egui/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/storytold/egui/f5025284445ea19c35f746d96fc0b75468b3f560/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/storytold/egui/f5025284445ea19c35f746d96fc0b75468b3f560/LICENSE-MIT"
+    ],
+    "revision": "f5025284445ea19c35f746d96fc0b75468b3f560"
+  },
+  "epaint@0.37.0#f5025284445ea19c35f746d96fc0b75468b3f560": {
+    "files": [
+      "egui/LICENSE-APACHE",
+      "egui/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/storytold/egui/f5025284445ea19c35f746d96fc0b75468b3f560/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/storytold/egui/f5025284445ea19c35f746d96fc0b75468b3f560/LICENSE-MIT"
+    ],
+    "revision": "f5025284445ea19c35f746d96fc0b75468b3f560"
+  },
+  "epaint_default_fonts@0.37.0#f5025284445ea19c35f746d96fc0b75468b3f560": {
+    "files": [
+      "egui/LICENSE-APACHE",
+      "egui/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/storytold/egui/f5025284445ea19c35f746d96fc0b75468b3f560/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/storytold/egui/f5025284445ea19c35f746d96fc0b75468b3f560/LICENSE-MIT"
+    ],
+    "revision": "f5025284445ea19c35f746d96fc0b75468b3f560"
+  },
+  "rmcp@3.9.0#5596a8a0bba2a1ec5519cc855cdadf23e4dcecdc": {
+    "files": [
+      "rmcp-0cde3c5cf3e6/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/5596a8a0bba2a1ec5519cc855cdadf23e4dcecdc/LICENSE"
+    ],
+    "revision": "5596a8a0bba2a1ec5519cc855cdadf23e4dcecdc",
+    "additionalLicenses": [
+      "MIT"
+    ],
+    "obligations": "The pinned upstream license retains MIT terms for contributions without relicensing consent. Preserve both the Apache-2.0 and MIT notices."
+  },
+  "rmcp-macros@3.9.0#5596a8a0bba2a1ec5519cc855cdadf23e4dcecdc": {
+    "files": [
+      "rmcp-0cde3c5cf3e6/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/5596a8a0bba2a1ec5519cc855cdadf23e4dcecdc/LICENSE"
+    ],
+    "revision": "5596a8a0bba2a1ec5519cc855cdadf23e4dcecdc",
+    "additionalLicenses": [
+      "MIT"
+    ],
+    "obligations": "The pinned upstream license retains MIT terms for contributions without relicensing consent. Preserve both the Apache-2.0 and MIT notices."
+  },
+  "cadmpeg-codec-freecad@0.6.12#9d7592c64b11bd8dcdac7794087f050506619b75": {
+    "files": [
+      "cadmpeg-0.6.3/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/cadmpeg/cadmpeg/9d7592c64b11bd8dcdac7794087f050506619b75/LICENSE"
+    ],
+    "revision": "9d7592c64b11bd8dcdac7794087f050506619b75"
+  },
+  "cadmpeg-codec-rhino@0.6.12#9d7592c64b11bd8dcdac7794087f050506619b75": {
+    "files": [
+      "cadmpeg-0.6.3/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/cadmpeg/cadmpeg/9d7592c64b11bd8dcdac7794087f050506619b75/LICENSE"
+    ],
+    "revision": "9d7592c64b11bd8dcdac7794087f050506619b75"
+  },
+  "cadmpeg-codec-step@0.6.12#9d7592c64b11bd8dcdac7794087f050506619b75": {
+    "files": [
+      "cadmpeg-0.6.3/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/cadmpeg/cadmpeg/9d7592c64b11bd8dcdac7794087f050506619b75/LICENSE"
+    ],
+    "revision": "9d7592c64b11bd8dcdac7794087f050506619b75"
+  },
+  "cadmpeg-container@0.6.12#9d7592c64b11bd8dcdac7794087f050506619b75": {
+    "files": [
+      "cadmpeg-0.6.3/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/cadmpeg/cadmpeg/9d7592c64b11bd8dcdac7794087f050506619b75/LICENSE"
+    ],
+    "revision": "9d7592c64b11bd8dcdac7794087f050506619b75"
+  },
+  "cadmpeg-core@0.6.12#9d7592c64b11bd8dcdac7794087f050506619b75": {
+    "files": [
+      "cadmpeg-0.6.3/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/cadmpeg/cadmpeg/9d7592c64b11bd8dcdac7794087f050506619b75/LICENSE"
+    ],
+    "revision": "9d7592c64b11bd8dcdac7794087f050506619b75"
+  },
+  "cadmpeg-ir@0.6.12#9d7592c64b11bd8dcdac7794087f050506619b75": {
+    "files": [
+      "cadmpeg-0.6.3/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/cadmpeg/cadmpeg/9d7592c64b11bd8dcdac7794087f050506619b75/LICENSE"
+    ],
+    "revision": "9d7592c64b11bd8dcdac7794087f050506619b75"
+  },
+  "cadmpeg-registry@0.6.12#9d7592c64b11bd8dcdac7794087f050506619b75": {
+    "files": [
+      "cadmpeg-0.6.3/LICENSE",
+      "cadmpeg-0.6.12/LICENSE-docs.txt",
+      "cadmpeg-0.6.12/ATTRIBUTION.txt"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/cadmpeg/cadmpeg/9d7592c64b11bd8dcdac7794087f050506619b75/LICENSE",
+      "https://github.com/cadmpeg/cadmpeg/blob/9d7592c64b11bd8dcdac7794087f050506619b75/README.md#licensing",
+      "https://github.com/cadmpeg/cadmpeg/blob/9d7592c64b11bd8dcdac7794087f050506619b75/LICENSE-docs",
+      "https://github.com/cadmpeg/cadmpeg/blob/9d7592c64b11bd8dcdac7794087f050506619b75/crates/cadmpeg-registry/src/registry.rs#L13-L17",
+      "https://github.com/cadmpeg/cadmpeg/blob/9d7592c64b11bd8dcdac7794087f050506619b75/crates/cadmpeg-registry/docs/dialects.toml",
+      "https://github.com/cadmpeg/cadmpeg/blob/9d7592c64b11bd8dcdac7794087f050506619b75/crates/cadmpeg-registry/docs/dialect-support.toml"
+    ],
+    "revision": "9d7592c64b11bd8dcdac7794087f050506619b75",
+    "additionalLicenses": [
+      "CC-BY-4.0"
+    ],
+    "obligations": "The package embeds unmodified dialect identity and capability registries from its documentation. Preserve their CC-BY-4.0 license, project attribution and original source links alongside the Apache-2.0 code license."
+  },
+  "convert_case@0.10.0#fbbca84796dfa288d5a7b8673858ca2867c0414a": {
+    "files": [
+      "convert_case-0.10.0/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/rutrum/convert-case/fbbca84796dfa288d5a7b8673858ca2867c0414a/LICENSE"
+    ],
+    "revision": "fbbca84796dfa288d5a7b8673858ca2867c0414a"
+  },
+  "wasmparser@0.254.2#371167389828d984aea88320ba7effa9143c7fa7": {
+    "files": [
+      "wasm-tools-e66235859a6e/LICENSE-APACHE",
+      "wasm-tools-e66235859a6e/LICENSE-Apache-2.0_WITH_LLVM-exception",
+      "wasm-tools-e66235859a6e/LICENSE-MIT",
+      "wasmparser-0.254.2/COPYRIGHT.txt"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/bytecodealliance/wasm-tools/371167389828d984aea88320ba7effa9143c7fa7/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/bytecodealliance/wasm-tools/371167389828d984aea88320ba7effa9143c7fa7/LICENSE-Apache-2.0_WITH_LLVM-exception",
+      "https://raw.githubusercontent.com/bytecodealliance/wasm-tools/371167389828d984aea88320ba7effa9143c7fa7/LICENSE-MIT",
+      "https://github.com/bytecodealliance/wasm-tools/blob/371167389828d984aea88320ba7effa9143c7fa7/crates/wasmparser/src/arity.rs",
+      "https://github.com/bytecodealliance/wasm-tools/blob/371167389828d984aea88320ba7effa9143c7fa7/crates/wasmparser/src/binary_reader.rs",
+      "https://github.com/bytecodealliance/wasm-tools/blob/371167389828d984aea88320ba7effa9143c7fa7/crates/wasmparser/src/lib.rs",
+      "https://github.com/bytecodealliance/wasm-tools/blob/371167389828d984aea88320ba7effa9143c7fa7/crates/wasmparser/src/readers/core/producers.rs",
+      "https://github.com/bytecodealliance/wasm-tools/blob/371167389828d984aea88320ba7effa9143c7fa7/crates/wasmparser/src/readers/core/tags.rs"
+    ],
+    "revision": "371167389828d984aea88320ba7effa9143c7fa7"
+  },
+  "wasmparser@0.263.0#7a2fa422cdf9aeeaf488a2acac8bc94a078bfa32": {
+    "files": [
+      "wasm-tools-e66235859a6e/LICENSE-APACHE",
+      "wasm-tools-e66235859a6e/LICENSE-Apache-2.0_WITH_LLVM-exception",
+      "wasm-tools-e66235859a6e/LICENSE-MIT",
+      "wasmparser-0.263.0/COPYRIGHT.txt"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/bytecodealliance/wasm-tools/7a2fa422cdf9aeeaf488a2acac8bc94a078bfa32/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/bytecodealliance/wasm-tools/7a2fa422cdf9aeeaf488a2acac8bc94a078bfa32/LICENSE-Apache-2.0_WITH_LLVM-exception",
+      "https://raw.githubusercontent.com/bytecodealliance/wasm-tools/7a2fa422cdf9aeeaf488a2acac8bc94a078bfa32/LICENSE-MIT",
+      "https://github.com/bytecodealliance/wasm-tools/blob/7a2fa422cdf9aeeaf488a2acac8bc94a078bfa32/crates/wasmparser/src/arity.rs",
+      "https://github.com/bytecodealliance/wasm-tools/blob/7a2fa422cdf9aeeaf488a2acac8bc94a078bfa32/crates/wasmparser/src/binary_reader.rs",
+      "https://github.com/bytecodealliance/wasm-tools/blob/7a2fa422cdf9aeeaf488a2acac8bc94a078bfa32/crates/wasmparser/src/lib.rs",
+      "https://github.com/bytecodealliance/wasm-tools/blob/7a2fa422cdf9aeeaf488a2acac8bc94a078bfa32/crates/wasmparser/src/offsets.rs",
+      "https://github.com/bytecodealliance/wasm-tools/blob/7a2fa422cdf9aeeaf488a2acac8bc94a078bfa32/crates/wasmparser/src/readers/core/producers.rs",
+      "https://github.com/bytecodealliance/wasm-tools/blob/7a2fa422cdf9aeeaf488a2acac8bc94a078bfa32/crates/wasmparser/src/readers/core/tags.rs"
+    ],
+    "revision": "7a2fa422cdf9aeeaf488a2acac8bc94a078bfa32"
+  },
+  "cadmpeg-codec-iges@0.6.12#9d7592c64b11bd8dcdac7794087f050506619b75": {
+    "files": [
+      "cadmpeg-0.6.3/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/cadmpeg/cadmpeg/9d7592c64b11bd8dcdac7794087f050506619b75/LICENSE"
+    ],
+    "revision": "9d7592c64b11bd8dcdac7794087f050506619b75"
+  },
+  "cadmpeg-codec-usd@0.6.12#9d7592c64b11bd8dcdac7794087f050506619b75": {
+    "files": [
+      "cadmpeg-0.6.3/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/cadmpeg/cadmpeg/9d7592c64b11bd8dcdac7794087f050506619b75/LICENSE"
+    ],
+    "revision": "9d7592c64b11bd8dcdac7794087f050506619b75"
+  },
+  "cadmpeg-measure@0.6.12#9d7592c64b11bd8dcdac7794087f050506619b75": {
+    "files": [
+      "cadmpeg-0.6.3/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/cadmpeg/cadmpeg/9d7592c64b11bd8dcdac7794087f050506619b75/LICENSE"
+    ],
+    "revision": "9d7592c64b11bd8dcdac7794087f050506619b75"
+  },
+  "cadmpeg-tessellate@0.6.12#9d7592c64b11bd8dcdac7794087f050506619b75": {
+    "files": [
+      "cadmpeg-0.6.3/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/cadmpeg/cadmpeg/9d7592c64b11bd8dcdac7794087f050506619b75/LICENSE"
+    ],
+    "revision": "9d7592c64b11bd8dcdac7794087f050506619b75"
+  },
+  "krilla@0.8.2#a4b6d3b6ca04a65d5972339b808d1049a14c7167": {
+    "files": [
+      "krilla-3ffdf0588cf9/LICENSE_APACHE",
+      "krilla-3ffdf0588cf9/LICENSE_MIT",
+      "krilla-3ffdf0588cf9/NOTICE.txt",
+      "symphonia/LICENSE",
+      "craft-libs-a4b6d3b6ca04/NOTICE.txt"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/LICENSE_APACHE",
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/LICENSE_MIT",
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/NOTICE.md",
+      "https://github.com/LaurenzV/krilla/blob/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/crates/krilla/src/content.rs#L1275",
+      "https://raw.githubusercontent.com/pdeljanov/Symphonia/6d533f26150953a882a6a111ebd13f0abf7129d5/LICENSE",
+      "https://github.com/storytold/craft-libs/blob/a4b6d3b6ca04a65d5972339b808d1049a14c7167/NOTICE",
+      "https://github.com/storytold/craft-libs/blob/a4b6d3b6ca04a65d5972339b808d1049a14c7167/vendor/krilla/SOURCE.json",
+      "https://github.com/storytold/craft-libs/blob/a4b6d3b6ca04a65d5972339b808d1049a14c7167/vendor/krilla/src/content.rs"
+    ],
+    "revision": "a4b6d3b6ca04a65d5972339b808d1049a14c7167",
+    "additionalLicenses": [
+      "Apache-2.0",
+      "MPL-2.0"
+    ],
+    "obligations": "The pinned upstream NOTICE identifies content_draw_path in src/content.rs as copied or adapted from MPL-licensed resvg code and identifies other Apache-2.0-derived code. Preserve those terms and provide the exact source archive containing the covered portions; other files retain their original licenses."
+  },
+  "krilla@0.8.2#453b0da782ccef39be9a6dac8d27c80b553ef1cc": {
+    "files": [
+      "krilla-3ffdf0588cf9/LICENSE_APACHE",
+      "krilla-3ffdf0588cf9/LICENSE_MIT",
+      "krilla-3ffdf0588cf9/NOTICE.txt",
+      "symphonia/LICENSE",
+      "craft-libs-453b0da782cc/NOTICE.txt"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/LICENSE_APACHE",
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/LICENSE_MIT",
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/NOTICE.md",
+      "https://github.com/LaurenzV/krilla/blob/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/crates/krilla/src/content.rs#L1275",
+      "https://raw.githubusercontent.com/pdeljanov/Symphonia/6d533f26150953a882a6a111ebd13f0abf7129d5/LICENSE",
+      "https://github.com/storytold/craft-libs/blob/453b0da782ccef39be9a6dac8d27c80b553ef1cc/NOTICE",
+      "https://github.com/storytold/craft-libs/blob/453b0da782ccef39be9a6dac8d27c80b553ef1cc/vendor/krilla/SOURCE.json",
+      "https://github.com/storytold/craft-libs/blob/453b0da782ccef39be9a6dac8d27c80b553ef1cc/vendor/krilla/src/content.rs"
+    ],
+    "revision": "453b0da782ccef39be9a6dac8d27c80b553ef1cc",
+    "additionalLicenses": [
+      "Apache-2.0",
+      "MPL-2.0"
+    ],
+    "obligations": "The pinned upstream NOTICE identifies content_draw_path in src/content.rs as copied or adapted from MPL-licensed resvg code and identifies other Apache-2.0-derived code. Preserve those terms and provide the exact source archive containing the covered portions; other files retain their original licenses."
+  },
+  "krilla@0.8.2#33be35625e252cc4f06aa375b3b428521faea37d": {
+    "files": [
+      "krilla-3ffdf0588cf9/LICENSE_APACHE",
+      "krilla-3ffdf0588cf9/LICENSE_MIT",
+      "krilla-3ffdf0588cf9/NOTICE.txt",
+      "symphonia/LICENSE",
+      "craft-libs-33be35625e25/NOTICE.txt"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/LICENSE_APACHE",
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/LICENSE_MIT",
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/NOTICE.md",
+      "https://github.com/LaurenzV/krilla/blob/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/crates/krilla/src/content.rs#L1275",
+      "https://raw.githubusercontent.com/pdeljanov/Symphonia/6d533f26150953a882a6a111ebd13f0abf7129d5/LICENSE",
+      "https://github.com/storytold/craft-libs/blob/33be35625e252cc4f06aa375b3b428521faea37d/NOTICE",
+      "https://github.com/storytold/craft-libs/blob/33be35625e252cc4f06aa375b3b428521faea37d/vendor/krilla/SOURCE.json",
+      "https://github.com/storytold/craft-libs/blob/33be35625e252cc4f06aa375b3b428521faea37d/vendor/krilla/src/content.rs"
+    ],
+    "revision": "33be35625e252cc4f06aa375b3b428521faea37d",
+    "additionalLicenses": [
+      "Apache-2.0",
+      "MPL-2.0"
+    ],
+    "obligations": "The pinned upstream NOTICE identifies content_draw_path in src/content.rs as copied or adapted from MPL-licensed resvg code and identifies other Apache-2.0-derived code. Preserve those terms and provide the exact source archive containing the covered portions; other files retain their original licenses."
+  },
+  "krilla@0.8.2#63196e66f3033a6623eb629af95a104d26986725": {
+    "files": [
+      "krilla-3ffdf0588cf9/LICENSE_APACHE",
+      "krilla-3ffdf0588cf9/LICENSE_MIT",
+      "krilla-3ffdf0588cf9/NOTICE.txt",
+      "symphonia/LICENSE",
+      "craft-libs-63196e66f303/NOTICE.txt"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/LICENSE_APACHE",
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/LICENSE_MIT",
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/NOTICE.md",
+      "https://github.com/LaurenzV/krilla/blob/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/crates/krilla/src/content.rs#L1275",
+      "https://raw.githubusercontent.com/pdeljanov/Symphonia/6d533f26150953a882a6a111ebd13f0abf7129d5/LICENSE",
+      "https://github.com/storytold/craft-libs/blob/63196e66f3033a6623eb629af95a104d26986725/NOTICE",
+      "https://github.com/storytold/craft-libs/blob/63196e66f3033a6623eb629af95a104d26986725/vendor/krilla/SOURCE.json",
+      "https://github.com/storytold/craft-libs/blob/63196e66f3033a6623eb629af95a104d26986725/vendor/krilla/src/content.rs"
+    ],
+    "revision": "63196e66f3033a6623eb629af95a104d26986725",
+    "additionalLicenses": [
+      "Apache-2.0",
+      "MPL-2.0"
+    ],
+    "obligations": "The pinned upstream NOTICE identifies content_draw_path in src/content.rs as copied or adapted from MPL-licensed resvg code and identifies other Apache-2.0-derived code. Preserve those terms and provide the exact source archive containing the covered portions; other files retain their original licenses."
+  },
+  "krilla@0.8.2#b436ae992591173ce53fdb1314421ba2d8897e49": {
+    "files": [
+      "krilla-3ffdf0588cf9/LICENSE_APACHE",
+      "krilla-3ffdf0588cf9/LICENSE_MIT",
+      "krilla-3ffdf0588cf9/NOTICE.txt",
+      "symphonia/LICENSE",
+      "craft-libs-b436ae992591/NOTICE.txt"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/LICENSE_APACHE",
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/LICENSE_MIT",
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/NOTICE.md",
+      "https://github.com/LaurenzV/krilla/blob/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/crates/krilla/src/content.rs#L1275",
+      "https://raw.githubusercontent.com/pdeljanov/Symphonia/6d533f26150953a882a6a111ebd13f0abf7129d5/LICENSE",
+      "https://github.com/storytold/craft-libs/blob/b436ae992591173ce53fdb1314421ba2d8897e49/NOTICE",
+      "https://github.com/storytold/craft-libs/blob/b436ae992591173ce53fdb1314421ba2d8897e49/vendor/krilla/SOURCE.json",
+      "https://github.com/storytold/craft-libs/blob/b436ae992591173ce53fdb1314421ba2d8897e49/vendor/krilla/src/content.rs"
+    ],
+    "revision": "b436ae992591173ce53fdb1314421ba2d8897e49",
+    "additionalLicenses": [
+      "Apache-2.0",
+      "MPL-2.0"
+    ],
+    "obligations": "The pinned upstream NOTICE identifies content_draw_path in src/content.rs as copied or adapted from MPL-licensed resvg code and identifies other Apache-2.0-derived code. Preserve those terms and provide the exact source archive containing the covered portions; other files retain their original licenses."
+  },
+  "ratex-font@0.1.14#08cae05377938391117913ca4f278e6a3ffb6a8a": {
+    "files": [
+      "ratex-08cae0537793/LICENSE",
+      "ratex-08cae0537793/KaTeX-LICENSE.txt"
+    ],
+    "sources": [
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/LICENSE",
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/Cargo.toml",
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/crates/ratex-font",
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/tools/golden_compare/package-lock.json",
+      "https://github.com/KaTeX/KaTeX/blob/90de97946bb60aa82108d6dbb217cf10602d8709/LICENSE"
+    ],
+    "revision": "08cae05377938391117913ca4f278e6a3ffb6a8a"
+  },
+  "ratex-layout@0.1.14#08cae05377938391117913ca4f278e6a3ffb6a8a": {
+    "files": [
+      "ratex-08cae0537793/LICENSE",
+      "ratex-08cae0537793/KaTeX-LICENSE.txt"
+    ],
+    "sources": [
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/LICENSE",
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/Cargo.toml",
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/crates/ratex-layout",
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/tools/golden_compare/package-lock.json",
+      "https://github.com/KaTeX/KaTeX/blob/90de97946bb60aa82108d6dbb217cf10602d8709/LICENSE"
+    ],
+    "revision": "08cae05377938391117913ca4f278e6a3ffb6a8a"
+  },
+  "ratex-lexer@0.1.14#08cae05377938391117913ca4f278e6a3ffb6a8a": {
+    "files": [
+      "ratex-08cae0537793/LICENSE",
+      "ratex-08cae0537793/KaTeX-LICENSE.txt"
+    ],
+    "sources": [
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/LICENSE",
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/Cargo.toml",
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/crates/ratex-lexer",
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/tools/golden_compare/package-lock.json",
+      "https://github.com/KaTeX/KaTeX/blob/90de97946bb60aa82108d6dbb217cf10602d8709/LICENSE"
+    ],
+    "revision": "08cae05377938391117913ca4f278e6a3ffb6a8a"
+  },
+  "ratex-parser@0.1.14#08cae05377938391117913ca4f278e6a3ffb6a8a": {
+    "files": [
+      "ratex-08cae0537793/LICENSE",
+      "ratex-08cae0537793/KaTeX-LICENSE.txt",
+      "ratex-08cae0537793/mhchem-NOTICE.txt",
+      "enum-map/Apache-2.0.txt"
+    ],
+    "sources": [
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/LICENSE",
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/Cargo.toml",
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/crates/ratex-parser",
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/tools/golden_compare/package-lock.json",
+      "https://github.com/KaTeX/KaTeX/blob/90de97946bb60aa82108d6dbb217cf10602d8709/LICENSE",
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/tools/mhchem_reference.js",
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/crates/ratex-parser/src/mhchem/mod.rs",
+      "https://www.apache.org/licenses/LICENSE-2.0.txt"
+    ],
+    "revision": "08cae05377938391117913ca4f278e6a3ffb6a8a",
+    "additionalLicenses": [
+      "Apache-2.0"
+    ],
+    "obligations": "RaTeX ports KaTeX mhchem 3.3.0 into Rust and generated state-machine data. Preserve the KaTeX MIT notice and the MathJax Consortium and Martin Hensel Apache-2.0 notice retained in its reference source."
+  },
+  "ratex-types@0.1.14#08cae05377938391117913ca4f278e6a3ffb6a8a": {
+    "files": [
+      "ratex-08cae0537793/LICENSE",
+      "ratex-08cae0537793/KaTeX-LICENSE.txt"
+    ],
+    "sources": [
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/LICENSE",
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/Cargo.toml",
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/crates/ratex-types",
+      "https://github.com/erweixin/RaTeX/blob/08cae05377938391117913ca4f278e6a3ffb6a8a/tools/golden_compare/package-lock.json",
+      "https://github.com/KaTeX/KaTeX/blob/90de97946bb60aa82108d6dbb217cf10602d8709/LICENSE"
+    ],
+    "revision": "08cae05377938391117913ca4f278e6a3ffb6a8a"
   }
 }

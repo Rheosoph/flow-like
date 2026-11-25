@@ -584,8 +584,21 @@
           ]
         },
         {
+          "name": "tone",
+          "kind": "bound",
+          "description": "Status colour: neutral, info, success, warning or danger. Wins over `variant`.",
+          "values": [
+            "neutral",
+            "info",
+            "success",
+            "warning",
+            "danger"
+          ]
+        },
+        {
           "name": "color",
-          "kind": "bound"
+          "kind": "bound",
+          "unrendered": true
         }
       ]
     },
@@ -688,6 +701,45 @@
         {
           "name": "color",
           "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "props": [
+        {
+          "name": "label",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "value",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "change",
+          "kind": "bound",
+          "description": "Delta line under the value, e.g. \"+4.2%\"."
+        },
+        {
+          "name": "trend",
+          "kind": "bound",
+          "description": "Colours and arrows the change line: up, down or flat.",
+          "values": [
+            "up",
+            "down",
+            "flat"
+          ]
+        },
+        {
+          "name": "caption",
+          "kind": "bound"
+        },
+        {
+          "name": "icon",
+          "kind": "bound",
+          "description": "Lucide icon name shown beside the label."
         }
       ]
     },
@@ -2228,7 +2280,8 @@
         },
         {
           "name": "padding",
-          "kind": "bound"
+          "kind": "bound",
+          "unrendered": true
         },
         {
           "name": "headerImage",
@@ -2239,6 +2292,31 @@
           "name": "headerIcon",
           "kind": "bound",
           "unrendered": true
+        },
+        {
+          "name": "headerImageAspect",
+          "kind": "bound",
+          "description": "Cover picture shape: 16:9 (default), 3:2, 4:3 or 1:1.",
+          "values": [
+            "16:9",
+            "3:2",
+            "4:3",
+            "1:1"
+          ]
+        },
+        {
+          "name": "density",
+          "kind": "bound",
+          "description": "comfortable (default) or compact: tighter padding, body children stacked with the last pinned to the bottom.",
+          "values": [
+            "comfortable",
+            "compact"
+          ]
+        },
+        {
+          "name": "href",
+          "kind": "bound",
+          "description": "http(s) URL the whole card opens in a new tab."
         }
       ]
     },
@@ -3890,6 +3968,7 @@
       "badge",
       "avatar",
       "progress",
+      "stat",
       "divider",
       "skeleton",
       "card",

@@ -43,6 +43,7 @@ pub enum A2UIComponentType {
     Avatar(AvatarProps),
     UserProfile(UserProfileProps),
     Progress(ProgressProps),
+    Stat(StatProps),
     Spinner(SpinnerProps),
     Skeleton(SkeletonProps),
     Table(TableProps),
@@ -417,6 +418,9 @@ pub struct BadgeProps {
     pub content: BoundValue,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variant: Option<BoundValue>,
+    /// Status colour: neutral, info, success, warning or danger. Wins over `variant`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tone: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<BoundValue>,
 }
@@ -455,6 +459,24 @@ pub struct UserProfileProps {
     pub fallback_label: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub muted: Option<BoundValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StatProps {
+    pub label: BoundValue,
+    pub value: BoundValue,
+    /// Delta line under the value, e.g. "+4.2%".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change: Option<BoundValue>,
+    /// Colours and arrows the change line: up, down or flat.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trend: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption: Option<BoundValue>,
+    /// Lucide icon name shown beside the label.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<BoundValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1013,6 +1035,15 @@ pub struct CardProps {
     pub header_image: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub header_icon: Option<BoundValue>,
+    /// Cover picture shape: 16:9 (default), 3:2, 4:3 or 1:1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub header_image_aspect: Option<BoundValue>,
+    /// comfortable (default) or compact: tighter padding, body children stacked with the last pinned to the bottom.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub density: Option<BoundValue>,
+    /// http(s) URL the whole card opens in a new tab.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub href: Option<BoundValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

@@ -11,16 +11,16 @@ flow-like-editor-contracts.workspace = true
 flow-like-core-contracts.workspace = true
 flow-like-types.workspace = true
 flow-like-ast.workspace = true
-flow-like-bot-memory.workspace = true
-flow-like-bot-tools.workspace = true
+flow-like-bot-memory = { workspace = true, optional = true }
+flow-like-bot-tools = { workspace = true, optional = true }
 flow-like-model-provider.workspace = true
 flow-like-storage.workspace = true
 async-trait.workspace = true
 blake3.workspace = true
 chrono.workspace = true
-dom_smoothie = "0.18.2"
+dom_smoothie = { version = "0.18.2", optional = true }
 futures.workspace = true
-htmd = "0.5.4"
+htmd = { version = "0.5.4", optional = true }
 jsonschema.workspace = true
 rig.workspace = true
 schemars.workspace = true
@@ -34,6 +34,7 @@ url = { version = "2.5.4", features = ["serde"] }
 
 [features]
 default = []
+copilot = ["dep:flow-like-bot-memory", "dep:flow-like-bot-tools", "dep:dom_smoothie", "dep:htmd"]
 flow-runtime = ["flow-like-runtime/flow-runtime"]
 
 [dev-dependencies]

@@ -325,6 +325,7 @@ impl FlatDocument {
 /// Produce a source-only analysis view using the compiler's module and call resolution.
 /// Helpers keep their qualified identity after hoisting, so evidence and repair scoring cannot
 /// confuse same-named functions in different modules. This view is never rendered or applied.
+#[cfg(feature = "copilot")]
 pub(crate) fn flowscript_analysis_ast(ast: &BoardAst, catalog: &[NodeMetadata]) -> BoardAst {
     let board = Board::new_detached(None, Default::default());
     let mut source = ast.clone();
@@ -379,6 +380,7 @@ fn analysis_function_name(resolver: &StructuralPlanner<'_>, key: &FnKey) -> Stri
     }
 }
 
+#[cfg(feature = "copilot")]
 fn analysis_call(resolver: &StructuralPlanner<'_>, call: &mut Call) {
     // Resolve before rewriting nested operands: the compiler may inspect their original names
     // when selecting an overload. Fold positional arguments into their declared pins as well.
@@ -404,6 +406,7 @@ fn analysis_call(resolver: &StructuralPlanner<'_>, call: &mut Call) {
     }
 }
 
+#[cfg(feature = "copilot")]
 fn analysis_expr_calls(resolver: &StructuralPlanner<'_>, expression: &mut Expr) {
     match expression {
         Expr::Call(call) => analysis_call(resolver, call),
@@ -446,6 +449,7 @@ fn analysis_expr_calls(resolver: &StructuralPlanner<'_>, expression: &mut Expr) 
     }
 }
 
+#[cfg(feature = "copilot")]
 fn analysis_block_calls(resolver: &StructuralPlanner<'_>, block: &mut Block) {
     for statement in &mut block.stmts {
         match statement {

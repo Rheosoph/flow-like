@@ -1,3 +1,5 @@
+#![cfg(feature = "execution")]
+
 //! Exercises the SDK object registry through the compiled Rust template.
 
 #![cfg(feature = "component-model")]

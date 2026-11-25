@@ -8,16 +8,19 @@ serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 
 [dependencies]
+flow-like-audit.workspace = true
+flow-like-storage-files.workspace = true
 axum.workspace = true
 sea-orm.workspace = true
 flow-like-api-entity = { workspace = true, features = ["domain-conversions"] }
 flow-like-db.workspace = true
+flow-like-execution-queue.workspace = true
 flow-like-file-accounting.workspace = true
 flow-like-device-protocol.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 pin-project-lite = "0.2.16"
 tower.workspace = true
-flow-like = { workspace = true, features = ["app-runtime", "openapi", "remote-ml"] }
+flow-like = { workspace = true, features = ["copilot", "app-runtime", "openapi", "remote-ml"] }
 flow-like-types.workspace = true
 flow-like-storage = { workspace = true, features = ["graph"] }
 flow-like-catalog-core = { workspace = true, features = ["mail"] }
@@ -89,7 +92,6 @@ aws-sdk-sqs = {workspace = true, optional=true}
 aws-sdk-sns = { version = "1.83.0", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
 aws_lambda_events = { workspace = true, features = ["apigw"], optional = true }
 aws-sdk-iotdataplane = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
-aws-sdk-kms = { workspace = true, optional = true }
 # -----
 
 # ----- Azure dependencies ----
@@ -171,7 +173,7 @@ azure = [
 # planes (`firestore`, `pubsub`) stay separate so a deployment that only needs GCS
 # scoped credentials never compiles a state store it does not use — the same split
 # `azure` keeps from `cosmos`/`storage-queue`.
-gcp = ["rsa", "urlencoding", "dep:tokio"]
+gcp = ["rsa", "urlencoding", "dep:tokio", "flow-like-audit/gcp-credentials"]
 r2 = []  # Cloudflare R2 with proprietary temp credentials API
 cognito = ["aws-sdk-cognitoidentityprovider", "aws-config"]
 ses = ["aws-sdk-sesv2", "aws-config", "aws-sdk-s3"]
@@ -189,15 +191,15 @@ storage-queue = ["dep:azure_core", "dep:azure_identity"]
 # against a metadata-server token, so no Google SDK is pulled in.
 pubsub = ["dep:tokio"]
 # State store backends
-redis = ["dep:redis", "dep:tokio"]
+redis = ["dep:redis", "dep:tokio", "flow-like-execution-queue/redis"]
 dynamodb = ["aws-config", "aws-sdk-dynamodb", "dep:tokio"]  # Uses FlowLikeStore (object_store) for large payloads
 cosmos = ["dep:flow-like-azure-data", "dep:tokio"]
 firestore = ["dep:flow-like-gcp-data", "dep:tokio"]
 s3 = ["aws-config", "aws-sdk-s3"]
 # Audit key in a key management service (`AUDIT_KMS_KEY_ID`), one backend per cloud.
-audit-kms-aws = ["aws-config", "dep:aws-sdk-kms"]
-audit-kms-gcp = ["gcp"]
-audit-kms-azure = ["dep:azure_core", "dep:azure_identity"]
+audit-kms-aws = ["flow-like-audit/audit-kms-aws"]
+audit-kms-gcp = ["gcp", "flow-like-audit/audit-kms-gcp"]
+audit-kms-azure = ["flow-like-audit/audit-kms-azure"]
 # Channel transports (`CHANNEL_TRANSPORT`): credential minting + push forwarding per cloud.
 channel-aws = ["aws", "flow-like-channels/aws", "dep:aws-sdk-iotdataplane"]
 channel-azure = ["flow-like-channels/azure"]
@@ -233,7 +235,7 @@ db-chaos = []
 sea-orm = { workspace = true, features = ["sqlx-sqlite"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util", "net", "io-util"] }
 dotenv = { workspace = true }
-flow-like-wasm.workspace = true
+flow-like-wasm = { workspace = true, features = ["execution", "component-model"] }
 flow-like-aws-data.workspace = true
 
 [[example]]

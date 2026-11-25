@@ -306,14 +306,28 @@ function responsiveGrid(props: Props): Props {
 	};
 }
 
+function chatCard(props: Props): Props {
+	const { href: rawHref, ...rest } = props;
+	const href = parseHttpUrl(literalString(rawHref));
+	return {
+		...rest,
+		...(href ? { href: { literalString: href } } : {}),
+		hoverable: props.hoverable ?? { literalBool: true },
+		density: props.density ?? { literalString: "compact" },
+	};
+}
+
 /**
  * A reply never knows the reader's width: grids shed columns and rows wrap unless told not to.
  * Cards respond to the pointer unless told not to.
  */
 function chatLayout(type: string, props: Props): Props {
 	if (type === "grid") return responsiveGrid(props);
-	if (type === "card" && props.hoverable === undefined) {
-		return { ...props, hoverable: { literalBool: true } };
+	if (type === "card") return chatCard(props);
+	if (type === "badge") {
+		return props.variant === undefined && props.tone === undefined
+			? { ...props, tone: { literalString: "neutral" } }
+			: props;
 	}
 	if (type !== "row" || props.wrap !== undefined) return props;
 	return { ...props, wrap: { literalBool: true } };

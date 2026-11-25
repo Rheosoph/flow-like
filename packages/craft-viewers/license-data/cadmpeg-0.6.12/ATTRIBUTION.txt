@@ -1,0 +1,18 @@
+cadmpeg dialect identity and capability registries
+
+The cadmpeg-registry 0.6.12 package embeds the following catalog files from the
+cadmpeg project without changes:
+
+https://github.com/cadmpeg/cadmpeg/blob/9d7592c64b11bd8dcdac7794087f050506619b75/crates/cadmpeg-registry/docs/dialects.toml
+https://github.com/cadmpeg/cadmpeg/blob/9d7592c64b11bd8dcdac7794087f050506619b75/crates/cadmpeg-registry/docs/dialect-support.toml
+
+These documentation and specification files are licensed under Creative Commons
+Attribution 4.0 International (CC-BY-4.0). The license text accompanies this notice
+in LICENSE-docs.txt. The package's Rust code is licensed under Apache-2.0.
+
+License scope:
+https://github.com/cadmpeg/cadmpeg/blob/9d7592c64b11bd8dcdac7794087f050506619b75/README.md#licensing
+
+License:
+https://creativecommons.org/licenses/by/4.0/
+https://github.com/cadmpeg/cadmpeg/blob/9d7592c64b11bd8dcdac7794087f050506619b75/LICENSE-docs

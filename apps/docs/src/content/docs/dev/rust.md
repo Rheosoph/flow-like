@@ -137,6 +137,32 @@ The `async_trait` crate enables async trait methods, and `tokio` provides the ru
 
 ## Feature Flags
 
+Choose features for each deployed binary. Cargo combines features requested by
+its dependencies, so checking several products together can hide an unwanted
+dependency in a smaller worker.
+
+`flow-like/flow-metadata` includes board types and FlowScript editing without
+the database runtime. Enable `flow-like/copilot` for conversational editing and
+bot services; it adds bot memory and its database implementation. The default
+`full` feature includes both. Internal execution services can depend directly
+on `flow-like-runtime` without the editor.
+
+Workers should use `flow-like-audit` for audit processing and
+`flow-like-execution-queue` with `redis` for queue consumption. Neither requires
+the API server. Azure and GCP data clients expose PostgreSQL through a separate
+`postgres` feature, so document-store schedulers can leave it disabled.
+
+The compiler selects `flow-like-wasm` with default features disabled and enables
+`component-model` and `all-arch`. This provides compilation and restricted
+metadata extraction without database or model host functions. Workflow hosts
+enable `execution`; `model` also enables execution and component support.
+
+Desktop, standalone, and local API builds enable `aws-developer-auth` by default
+for AWS SSO, interactive login, and credential-process profiles. Deployed
+backend services use role credentials and leave those providers disabled.
+Consumers of `flow-like-aws-data` can opt into its `developer-auth` feature when
+they need those profiles.
+
 Conditional compilation selects deployment and runtime capabilities. These
 examples come from different workspace crates rather than one shared feature
 table:

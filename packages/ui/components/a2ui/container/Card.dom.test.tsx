@@ -188,3 +188,114 @@ describe("A2UI clickable card semantics", () => {
 		outer.remove();
 	});
 });
+
+function props(extra: Record<string, unknown>, title?: string): CardComponent {
+	const bound = Object.fromEntries(
+		Object.entries(extra).map(([key, value]) => [
+			key,
+			typeof value === "boolean"
+				? { literalBool: value }
+				: { literalString: value },
+		]),
+	);
+	return {
+		type: "card",
+		...(title ? { title: { literalString: title } } : {}),
+		...bound,
+		children: { explicitList: ["a", "b"] },
+	} as CardComponent;
+}
+
+describe("A2UI card href", () => {
+	it("stretches a new-tab title link over a card with a title", async () => {
+		const element = await renderCard(
+			props({ href: "https://shop.test/ix3" }, "iX3"),
+			controls,
+		);
+		const link = element.querySelector<HTMLAnchorElement>("a[data-card-link]");
+		expect(link?.getAttribute("href")).toBe("https://shop.test/ix3");
+		expect(link?.target).toBe("_blank");
+		expect(link?.rel).toBe("noopener noreferrer");
+		expect(link?.textContent).toBe("iX3");
+		expect(link?.className).toContain("after:absolute");
+		expect(element.className).toContain("relative");
+	});
+
+	it("uses a labelled overlay link without a title", async () => {
+		const element = await renderCard(
+			props({ href: "http://shop.test/ix3" }),
+			controls,
+		);
+		const link = element.querySelector<HTMLAnchorElement>("a[data-card-link]");
+		expect(link?.textContent).toBe("http://shop.test/ix3");
+		expect(link?.className).toContain("inset-0");
+	});
+
+	it("ignores anything but http(s) URLs", async () => {
+		for (const href of [
+			"javascript:alert(1)",
+			"/relative",
+			"data:text/html,x",
+		]) {
+			const element = await renderCard(props({ href }, "iX3"), controls);
+			expect(element.querySelector("a[data-card-link]")).toBeNull();
+		}
+	});
+
+	it("keeps controls clickable above the stretched link", async () => {
+		const element = await renderCard(
+			props({ href: "https://shop.test/ix3" }, "iX3"),
+			controls,
+		);
+		expect(element.className).toContain("z-10");
+		await click(byText("Bearbeiten"));
+		expect(actions.trigger).not.toHaveBeenCalled();
+	});
+});
+
+describe("A2UI card density and look", () => {
+	it("stays comfortable by default", async () => {
+		const element = await renderCard(props({}, "iX3"), controls);
+		expect(element.className).not.toContain("gap-3");
+		expect(
+			element.querySelector("[data-slot='card-content']")?.className,
+		).not.toContain("flex-col");
+	});
+
+	it("compact tightens padding and pins the last child to the bottom", async () => {
+		const element = await renderCard(
+			props({ density: "compact" }, "iX3"),
+			controls,
+		);
+		expect(element.className).toContain("py-4");
+		const body = element.querySelector("[data-slot='card-content']");
+		expect(body?.className).toContain("flex-col");
+		expect(body?.className).toContain("mt-auto");
+		expect(body?.className).toContain("px-4");
+	});
+
+	it("shapes the cover by headerImageAspect", async () => {
+		assets.signed.set("bot/a.png", "https://cdn.test/a.png");
+		for (const [aspect, expected] of [
+			["3:2", "aspect-[3/2]"],
+			["4:3", "aspect-[4/3]"],
+			["1:1", "aspect-square"],
+			["bogus", "aspect-video"],
+		]) {
+			const element = await renderCard(
+				props({ headerImage: "bot/a.png", headerImageAspect: aspect }, "x"),
+				controls,
+			);
+			expect(
+				element.querySelector("[data-slot='card-media']")?.className,
+			).toContain(expected);
+		}
+	});
+
+	it("wires the variant", async () => {
+		const bordered = await renderCard(props({ variant: "bordered" }), controls);
+		expect(bordered.className).toContain("shadow-none");
+		const elevated = await renderCard(props({ variant: "elevated" }), controls);
+		expect(elevated.className).toContain("shadow-md");
+	});
+});

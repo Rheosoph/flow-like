@@ -1824,8 +1824,6 @@ dependencies = [
 [[package]]
 name = "aurora-dsql-sqlx-connector"
 version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d696e0e24715632c6c6a99b28a3ef868ab931c8aeb5a9502f17c76054b7fa15"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -2049,15 +2047,17 @@ dependencies = [
 name = "aws-audit-worker"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "blake3",
  "chrono",
- "flow-like-api",
+ "flow-like-audit",
  "flow-like-aws-data",
- "flow-like-catalog",
+ "flow-like-db",
  "flow-like-secrets",
- "flow-like-storage",
- "flow-like-types",
  "lambda_runtime 1.1.2",
  "mimalloc",
+ "sea-orm",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",
@@ -2096,8 +2096,6 @@ dependencies = [
 [[package]]
 name = "aws-config"
 version = "1.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a767267da9e2c2e189b2f9df8b5657e850ecf5352644734ba130d4a57095cf1b"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -2148,12 +2146,13 @@ version = "0.1.0"
 dependencies = [
  "aws-config",
  "aws-sdk-scheduler",
- "flow-like-types",
+ "cuid2",
  "lambda_runtime 1.1.2",
  "mimalloc",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 
@@ -9156,9 +9155,8 @@ name = "docker-compose-runtime"
 version = "0.1.0"
 dependencies = [
  "axum 0.8.8",
- "flow-like",
- "flow-like-api",
  "flow-like-catalog",
+ "flow-like-execution-queue",
  "flow-like-executor",
  "flow-like-storage",
  "futures-util",
@@ -10690,7 +10688,6 @@ dependencies = [
  "aws-sdk-cognitoidentityprovider",
  "aws-sdk-dynamodb",
  "aws-sdk-iotdataplane",
- "aws-sdk-kms",
  "aws-sdk-lambda",
  "aws-sdk-s3",
  "aws-sdk-sesv2",
@@ -10715,6 +10712,7 @@ dependencies = [
  "eventsource-stream",
  "flow-like",
  "flow-like-api-entity",
+ "flow-like-audit",
  "flow-like-aws-data",
  "flow-like-azure-data",
  "flow-like-bot-memory",
@@ -10728,6 +10726,7 @@ dependencies = [
  "flow-like-channels",
  "flow-like-db",
  "flow-like-device-protocol",
+ "flow-like-execution-queue",
  "flow-like-executor",
  "flow-like-file-accounting",
  "flow-like-gcp-data",
@@ -10735,6 +10734,7 @@ dependencies = [
  "flow-like-secrets",
  "flow-like-sinks",
  "flow-like-storage",
+ "flow-like-storage-files",
  "flow-like-types",
  "flow-like-wasm",
  "flow-like-wasm-schema",
@@ -10812,14 +10812,57 @@ dependencies = [
 ]
 
 [[package]]
+name = "flow-like-audit"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm 0.10.3",
+ "anyhow",
+ "async-trait",
+ "aws-config",
+ "aws-sdk-kms",
+ "azure_core 0.32.0",
+ "azure_identity 0.32.0",
+ "base64 0.22.1",
+ "blake3",
+ "chrono",
+ "cuid2",
+ "flow-like-api-entity",
+ "flow-like-core-contracts",
+ "flow-like-db",
+ "flow-like-secrets",
+ "flow-like-storage-files",
+ "flow-like-types-contracts",
+ "futures 0.3.32",
+ "getrandom 0.4.3",
+ "hex",
+ "hmac 0.12.1",
+ "moka",
+ "p256",
+ "reqwest 0.12.28",
+ "rsa",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "utoipa",
+ "uuid 1.27.0",
+ "zstd 0.13.5",
+]
+
+[[package]]
 name = "flow-like-audit-worker"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "blake3",
  "chrono",
- "flow-like",
- "flow-like-api",
- "flow-like-types",
+ "flow-like-audit",
+ "flow-like-db",
  "sea-orm",
  "serde",
  "serde_json",
@@ -11979,7 +12022,10 @@ dependencies = [
 name = "flow-like-core-contracts"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "schemars 1.2.1",
  "serde",
+ "tracing",
 ]
 
 [[package]]
@@ -12002,6 +12048,7 @@ dependencies = [
  "arboard",
  "async-trait",
  "atspi",
+ "aws-config",
  "axum 0.8.8",
  "blake3",
  "block2 0.6.2",
@@ -12288,6 +12335,19 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid 1.27.0",
+]
+
+[[package]]
+name = "flow-like-execution-queue"
+version = "0.1.0"
+dependencies = [
+ "cuid2",
+ "flow-like-types-contracts",
+ "redis",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -12788,6 +12848,7 @@ dependencies = [
  "anyhow",
  "argon2",
  "async-trait",
+ "aws-config",
  "axum 0.8.8",
  "base64 0.22.1",
  "blake3",
@@ -13028,6 +13089,7 @@ dependencies = [
  "blake3",
  "bytes",
  "chrono",
+ "cuid2",
  "dashmap 6.1.0",
  "dirs-next",
  "flow-like-catalog-core",
@@ -17627,7 +17689,6 @@ version = "0.1.0"
 dependencies = [
  "axum 0.8.8",
  "flow-like-compiler",
- "flow-like-types",
  "metrics",
  "metrics-exporter-prometheus",
  "mimalloc",
@@ -20056,6 +20117,7 @@ dependencies = [
 name = "local-api"
 version = "0.1.0"
 dependencies = [
+ "aws-config",
  "dotenv",
  "flow-like",
  "flow-like-api",
@@ -20090,9 +20152,8 @@ version = "0.1.0"
 dependencies = [
  "axum 0.8.8",
  "dotenv",
- "flow-like",
- "flow-like-api",
  "flow-like-catalog",
+ "flow-like-execution-queue",
  "flow-like-executor",
  "flow-like-storage",
  "mimalloc",

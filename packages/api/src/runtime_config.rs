@@ -18,8 +18,12 @@ pub(crate) fn configure_mail_capability(hub: &mut Hub, enabled: bool) {
         .inbound_email = enabled;
 }
 
-impl ConfigSource {
-    pub(crate) async fn load(self, secrets: &SecretStore) -> Result<EffectiveConfig, ConfigError> {
+pub(crate) trait LoadConfig {
+    async fn load(self, secrets: &SecretStore) -> Result<EffectiveConfig, ConfigError>;
+}
+
+impl LoadConfig for ConfigSource {
+    async fn load(self, secrets: &SecretStore) -> Result<EffectiveConfig, ConfigError> {
         self.load_with_parser(secrets, EMBEDDED_CONFIG, EffectiveConfig::parse)
             .await
     }

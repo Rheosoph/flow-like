@@ -52,16 +52,17 @@ use super::subtasks::{
 use super::tool_spec::{
     ARCHIVE_LOOKUP_TOOL, INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL,
     OPEN_URL_TOOL, PlatformToolSpec, READ_ONLY_DATABASE_OPERATIONS, READ_WRITE_DATABASE_OPERATIONS,
-    RESEARCH_AGENT_TOOL, bot_workspace_database_tool_spec, find_data_studio_tool_spec,
-    find_global_tool_spec, find_scout_tool_spec, find_workflow_context_tool_spec,
-    global_assistant_tool_specs, public_web_tool_specs, spec_arg_str,
+    RESEARCH_AGENT_TOOL, UI_PATTERNS_TOOL, bot_workspace_database_tool_spec,
+    find_data_studio_tool_spec, find_global_tool_spec, find_scout_tool_spec,
+    find_workflow_context_tool_spec, global_assistant_tool_specs, public_web_tool_specs,
+    spec_arg_str,
 };
 use super::turn_label::{TurnCompute, TurnLabel};
 use super::types::{ChatImage, ChatMessage};
 use super::vision_reader::ImageDetour;
 use super::web_providers::BotWebProviders;
 use super::work_plan::BOT_TOOL_ROUNDS;
-use crate::a2ui::authoring::chat_ui_prompt_section;
+use crate::a2ui::authoring::{chat_ui_prompt_section, chat_ui_prompt_section_with_patterns};
 use crate::bit::{Bit, BitModelPreference, BitTypes};
 use crate::models::device::Interaction;
 use crate::profile::Profile;
@@ -125,7 +126,7 @@ const ATTACHMENT_TOOLS: [&str; 10] = [
     flow_like_bot_tools::files::FILE_SAVE,
 ];
 /// Tools core runs itself on every host.
-const CORE_TOOLS: [&str; 8] = [
+const CORE_TOOLS: [&str; 9] = [
     INTERNET_SEARCH_TOOL,
     OPEN_URL_TOOL,
     ARCHIVE_LOOKUP_TOOL,
@@ -134,6 +135,7 @@ const CORE_TOOLS: [&str; 8] = [
     MEMORY_SEARCH_TOOL,
     SPAWN_SUBTASKS_TOOL,
     IMAGE_VIEW_TOOL,
+    UI_PATTERNS_TOOL,
 ];
 /// App tools a server worker runs itself, as the bot.
 const HOSTED_APP_TOOLS: [&str; 7] = [
@@ -730,6 +732,7 @@ impl BotRunContext {
         }
         specs.extend(pick(MEMORY_STORE_TOOL));
         specs.extend(pick(MEMORY_SEARCH_TOOL));
+        specs.extend(pick(UI_PATTERNS_TOOL));
         specs.retain(|spec| self.tool_host.runs(spec.name));
         if offers_subtasks(self) {
             specs.push(spawn_subtasks_tool_spec());
@@ -1465,7 +1468,7 @@ pub fn find_bot_tool_spec(tool_name: &str) -> Option<PlatformToolSpec> {
         "get_app_detail" => find_scout_tool_spec(tool_name),
         IMAGE_VIEW_TOOL => Some(image_view_tool_spec()),
         "ask_user" | RESEARCH_AGENT_TOOL | MEMORY_STORE_TOOL | MEMORY_SEARCH_TOOL
-        | INTERNET_SEARCH_TOOL | OPEN_URL_TOOL | ARCHIVE_LOOKUP_TOOL => {
+        | UI_PATTERNS_TOOL | INTERNET_SEARCH_TOOL | OPEN_URL_TOOL | ARCHIVE_LOOKUP_TOOL => {
             find_global_tool_spec(tool_name)
         }
         _ if APP_TOOLS.contains(&tool_name) => find_global_tool_spec(tool_name),
@@ -2201,7 +2204,11 @@ pub(super) fn bot_stable_system_prompt(bot: &BotRunContext) -> String {
         classification_note(&bot.classification)
     ));
     sections.push(CHAT_REPLY_FORMATTING.to_string());
-    sections.push(chat_ui_prompt_section());
+    sections.push(if offered.contains(&UI_PATTERNS_TOOL) {
+        chat_ui_prompt_section_with_patterns()
+    } else {
+        chat_ui_prompt_section()
+    });
     sections.push(reply_closing(&offered));
     sections.join("\n\n")
 }
@@ -3055,7 +3062,7 @@ mod tests {
         bot.tool_specs(memory)
             .iter()
             .map(|spec| spec.name)
-            .filter(|name| *name != IMAGE_VIEW_TOOL)
+            .filter(|name| *name != IMAGE_VIEW_TOOL && *name != UI_PATTERNS_TOOL)
             .collect()
     }
 
@@ -3121,6 +3128,45 @@ mod tests {
         let mut flux = bot(&[]);
         flux.toolset = BotToolset::FlowPilot;
         assert!(!offers(&flux), "the FlowPilot toolset stays FlowPilot's");
+    }
+
+    #[test]
+    fn every_bot_turn_can_load_ui_patterns_and_its_prompt_says_so() {
+        let guide_line = format!("load recipes with `{UI_PATTERNS_TOOL}`");
+        for toolset in [BotToolset::Capabilities, BotToolset::FlowPilot] {
+            for tool_host in [
+                BotToolHost::Chat,
+                BotToolHost::Native,
+                BotToolHost::CoreOnly,
+                BotToolHost::Hosted,
+            ] {
+                for capabilities in [&[][..], &[BotCapability::Flowpilot][..]] {
+                    let mut any = bot(capabilities);
+                    any.toolset = toolset;
+                    any.tool_host = tool_host;
+                    let offered = any.offered_tools();
+                    assert!(
+                        offered.contains(&UI_PATTERNS_TOOL),
+                        "{toolset:?} {tool_host:?} {capabilities:?}"
+                    );
+                    let spec = find_bot_tool_spec(UI_PATTERNS_TOOL).expect("hosts resolve it");
+                    assert_eq!(
+                        spec.approval.effect(),
+                        super::super::tool_spec::ToolEffect::ReadOnly
+                    );
+                    assert!(bot_system_prompt(&any).contains(UI_PATTERNS_TOOL));
+                }
+            }
+        }
+        let mut denied = bot(&[]);
+        denied.toolset = BotToolset::Capabilities;
+        denied
+            .permissions
+            .denied_tools
+            .insert(UI_PATTERNS_TOOL.into());
+        assert!(!denied.offered_tools().contains(&UI_PATTERNS_TOOL));
+        let prompt = bot_system_prompt(&denied);
+        assert!(!prompt.contains(UI_PATTERNS_TOOL), "{guide_line}");
     }
 
     fn code(refusal: &str) -> String {
@@ -3477,7 +3523,7 @@ mod tests {
         assert!(prompt.contains("## LEAVE TO FLUX"));
         assert!(prompt.contains("classified the data you handle as confidential"));
         assert!(prompt.contains("It includes personal data"));
-        let chat_ui = chat_ui_prompt_section();
+        let chat_ui = chat_ui_prompt_section_with_patterns();
         let formatting = prompt.find(CHAT_REPLY_FORMATTING).unwrap();
         let interactive_ui = prompt.find(chat_ui.as_str()).unwrap();
         assert!(formatting < interactive_ui);
@@ -5418,7 +5464,7 @@ mod tests {
             .chain(cross_board_source_tool_specs())
             .chain(public_web_tool_specs())
             .map(|spec| spec.name)
-            .filter(|name| !BOT_TOOLS.contains(name))
+            .filter(|name| !BOT_TOOLS.contains(name) && *name != UI_PATTERNS_TOOL)
             .collect();
         for name in [
             "create_app",
@@ -5529,6 +5575,7 @@ mod tests {
         let global: Vec<&str> = global_assistant_tool_specs(true)
             .iter()
             .map(|spec| spec.name)
+            .filter(|name| *name != UI_PATTERNS_TOOL)
             .collect();
         assert_eq!(names(&untouched, true), global);
 

@@ -1245,13 +1245,100 @@ describe("the approval card in the bot's chat transcript", () => {
 		expect(answerItems).toEqual([undefined]);
 	});
 
-	test("after a reload the answered card shows the decision without buttons", async () => {
+	const receipt = () =>
+		container.querySelector<HTMLButtonElement>(
+			"[data-slot='approval-receipt']",
+		);
+
+	test("after a reload the answered card is one line that opens the card and folds again", async () => {
 		const approval = transcriptOf([card, answer], "bot_a", "bot:bot_a")
 			.messages[0].approval;
 		await show(
 			createElement(ChatApprovalCard, { approval: approval as never }),
 		);
-		expect(container.textContent).toContain("Always allowed");
-		expect(container.querySelectorAll("button")).toHaveLength(0);
+		expect(container.querySelector("section")).toBeNull();
+		expect(receipt()?.textContent).toBe("Always allowed·Run git");
+		expect(receipt()?.getAttribute("aria-expanded")).toBe("false");
+		expect(container.querySelectorAll("button")).toHaveLength(1);
+
+		await click(receipt() ?? undefined);
+		expect(receipt()).toBeNull();
+		expect(container.querySelector("header h3")?.textContent).toBe(
+			"Scout wants to run git",
+		);
+		expect(container.textContent).toContain("Run `git` on the command line");
+		expect(button("Allow once")).toBeUndefined();
+		const collapse = button("Show less");
+		expect(window.document.activeElement).toBe(collapse as never);
+
+		await click(collapse);
+		expect(container.querySelector("section")).toBeNull();
+		expect(window.document.activeElement).toBe(receipt() as never);
+	});
+
+	test("answering in the transcript folds the card to its line and focus follows", async () => {
+		const approval = transcriptOf([card], "bot_a", "bot:bot_a").messages[0]
+			.approval;
+		await show(
+			createElement(ChatApprovalCard, { approval: approval as never }),
+		);
+		await click(button("Always allow"));
+		expect(answers).toEqual([["bot_a", "turn_1", "ap-1", "always"]]);
+		expect(receipt()?.textContent).toContain("Always allowed");
+		expect(window.document.activeElement).toBe(receipt() as never);
+	});
+
+	test("an answered batch is one line with its count and targets, and opens on its calls", async () => {
+		const batch = entry(4, "bot_a", "ap-3", {
+			text: "x",
+			approval: {
+				id: "ap-3",
+				turn_id: "turn_3",
+				tool: "approval_batch",
+				summary: "The bot wants to make 3 calls",
+				scope: "",
+				args_hash: "hb3",
+				items: [
+					{
+						args_hash: "w1",
+						tool: "web_request",
+						summary:
+							"The bot wants to send a GET request to crates.io/api/v1/a",
+						scope: "web:crates.io:read",
+					},
+					{
+						args_hash: "w2",
+						tool: "web_request",
+						summary:
+							"The bot wants to send a GET request to crates.io/api/v1/b",
+						scope: "web:crates.io:read",
+					},
+					{
+						args_hash: "x1",
+						tool: "shell_run",
+						summary: "Run cargo",
+						scope: "command:cargo",
+					},
+				],
+			},
+		});
+		const answered = entry(5, "me", "ar-3", {
+			approval_response: { approval_id: "ap-3", decision: "always" },
+		});
+		const approval = transcriptOf([batch, answered], "bot_a", "bot:bot_a")
+			.messages[0].approval;
+		await show(
+			createElement(ChatApprovalCard, { approval: approval as never }),
+		);
+		expect(
+			container.querySelector("[data-slot='approval-answer']")?.textContent,
+		).toBe("Always allowed · 3 calls");
+		expect(receipt()?.textContent).toContain("Read from crates.io");
+		expect(receipt()?.textContent).toContain("Run `cargo` on the command line");
+
+		await click(receipt() ?? undefined);
+		expect(
+			container.querySelectorAll("[data-slot='approval-group'] li"),
+		).toHaveLength(3);
 	});
 });

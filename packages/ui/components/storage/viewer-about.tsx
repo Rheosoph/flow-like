@@ -161,27 +161,12 @@ async function saveSourceArchive(
 	if (!response.ok)
 		throw new Error("The source inventory could not be loaded.");
 	const manifest = await response.json();
-	const pkg = Array.isArray(manifest?.packages)
-		? manifest.packages.find(
-				(
-					entry: {
-						sourceArchive?: unknown;
-						checksum?: unknown;
-						selectedLicense?: unknown;
-					} | null,
-				) =>
-					entry &&
-					typeof entry === "object" &&
-					typeof entry.sourceArchive === "string" &&
-					/^sources\/[\w.+-]+\.crate$/.test(entry.sourceArchive) &&
-					new URL(entry.sourceArchive, index).href === archive.href &&
-					typeof entry.selectedLicense === "string" &&
-					entry.selectedLicense.split(" AND ").includes("MPL-2.0") &&
-					typeof entry.checksum === "string" &&
-					/^[a-f0-9]{64}$/.test(entry.checksum),
-			)
+	const download = Array.isArray(manifest?.packages)
+		? manifest.packages
+				.map((entry: unknown) => sourceDownload(entry, index, archive))
+				.find((entry: SourceDownload | undefined) => entry)
 		: undefined;
-	if (!pkg)
+	if (!download)
 		throw new Error(
 			"This source download is missing from the editor's inventory.",
 		);
@@ -193,11 +178,16 @@ async function saveSourceArchive(
 	});
 	if (!source.ok) throw new Error("The source archive could not be loaded.");
 	const bytes = await source.arrayBuffer();
+	if (
+		download.byteLength !== undefined &&
+		bytes.byteLength !== download.byteLength
+	)
+		throw new Error("The source archive failed its size check.");
 	const checksum = Array.from(
 		new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
 		(value) => value.toString(16).padStart(2, "0"),
 	).join("");
-	if (checksum !== pkg.checksum)
+	if (checksum !== download.sha256)
 		throw new Error("The source archive failed its integrity check.");
 	if (signal.aborted) return;
 	const url = URL.createObjectURL(
@@ -211,4 +201,65 @@ async function saveSourceArchive(
 	} finally {
 		URL.revokeObjectURL(url);
 	}
+}
+
+type SourceDownload = { sha256: string; byteLength?: number };
+
+function sourceDownload(
+	entry: unknown,
+	index: URL,
+	archive: URL,
+): SourceDownload | undefined {
+	if (!entry || typeof entry !== "object") return;
+	const pkg = entry as Record<string, unknown>;
+	if (
+		typeof pkg.sourceArchive !== "string" ||
+		!/^sources\/[\w.+-]+\.(?:crate|tar\.gz)$/.test(pkg.sourceArchive) ||
+		typeof pkg.selectedLicense !== "string" ||
+		!pkg.selectedLicense.split(" AND ").includes("MPL-2.0")
+	)
+		return;
+	const validHash = (value: unknown): value is string =>
+		typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+	const validLength = (value: unknown): value is number =>
+		typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+	if (pkg.sourceArchiveParts !== undefined) {
+		if (
+			!Array.isArray(pkg.sourceArchiveParts) ||
+			!validHash(pkg.sourceArchiveSha256) ||
+			!validLength(pkg.sourceArchiveByteLength)
+		)
+			return;
+		for (const part of pkg.sourceArchiveParts) {
+			if (
+				part &&
+				typeof part === "object" &&
+				typeof part.path === "string" &&
+				part.path.startsWith(`${pkg.sourceArchive}.part`) &&
+				/^\d{3,}$/.test(part.path.slice(pkg.sourceArchive.length + 5)) &&
+				new URL(part.path, index).href === archive.href &&
+				validHash(part.sha256) &&
+				validLength(part.byteLength) &&
+				part.byteLength <= pkg.sourceArchiveByteLength
+			)
+				return { sha256: part.sha256, byteLength: part.byteLength };
+		}
+		return;
+	}
+	if (new URL(pkg.sourceArchive, index).href !== archive.href) return;
+	if (
+		validHash(pkg.sourceArchiveSha256) &&
+		validLength(pkg.sourceArchiveByteLength)
+	)
+		return {
+			sha256: pkg.sourceArchiveSha256,
+			byteLength: pkg.sourceArchiveByteLength,
+		};
+	if (
+		pkg.sourceArchiveSha256 === undefined &&
+		pkg.sourceArchiveByteLength === undefined &&
+		pkg.sourceArchive.endsWith(".crate") &&
+		validHash(pkg.checksum)
+	)
+		return { sha256: pkg.checksum };
 }

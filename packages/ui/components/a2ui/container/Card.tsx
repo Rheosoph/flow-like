@@ -25,6 +25,7 @@ import { useComponentEventTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { parseHttpUrl } from "../authoring/chat-actions";
 import { resolveChildSpecs } from "../children";
 import { useAssetUrl } from "../hooks/use-asset-url";
 import type { BoundValue, CardComponent } from "../types";
@@ -39,6 +40,26 @@ const CLICK_STOP_SELECTOR = `${CONTROL_SELECTOR}, a, label, [data-card-action-st
  * title and already holds controls (a button must not contain controls).
  */
 type CardActionMode = "title" | "card" | "pointer";
+
+const ASPECT_CLASSES: Record<string, string> = {
+	"16:9": "aspect-video",
+	"3:2": "aspect-[3/2]",
+	"4:3": "aspect-[4/3]",
+	"1:1": "aspect-square",
+};
+
+const VARIANT_CLASSES: Record<string, string> = {
+	bordered: "border-border shadow-none",
+	elevated: "shadow-md",
+};
+
+const LINK_CONTROLS_ABOVE =
+	"[&_:is(a,button,input,select,textarea,summary,[role=button]):not([data-card-link])]:relative [&_:is(a,button,input,select,textarea,summary,[role=button]):not([data-card-link])]:z-10";
+
+const COMPACT_HEADER = "flex flex-col gap-1 px-4";
+
+const COMPACT_BODY =
+	"flex flex-col gap-2 px-4 [&>:last-child:not(:first-child)]:mt-auto";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	const { resolve } = useData();
@@ -69,7 +90,8 @@ function CardMedia({
 	source,
 	alt,
 	zoom,
-}: Readonly<{ source: string; alt: string; zoom: boolean }>) {
+	aspect,
+}: Readonly<{ source: string; alt: string; zoom: boolean; aspect: string }>) {
 	const { url, isLoading, refresh } = useAssetUrl(source);
 	const image = useAssetImage(url);
 	const onError = useCallback(() => {
@@ -80,7 +102,7 @@ function CardMedia({
 	return (
 		<div
 			data-slot="card-media"
-			className="relative aspect-video w-full overflow-hidden bg-muted"
+			className={cn("relative w-full overflow-hidden bg-muted", aspect)}
 		>
 			{image.canRender && (
 				<img
@@ -118,6 +140,11 @@ export function A2UICard({
 		typeof rawHeaderImage === "string" ? rawHeaderImage.trim() : undefined;
 	const hoverable = useResolved<boolean>(component.hoverable);
 	const clickable = useResolved<boolean>(component.clickable);
+	const href = parseHttpUrl(useResolved<unknown>(component.href));
+	const variant = useResolved<string>(component.variant);
+	const density = useResolved<string>(component.density);
+	const aspectValue = useResolved<string>(component.headerImageAspect);
+	const compact = density === "compact";
 	const titleId = useId();
 	const cardRef = useRef<HTMLDivElement | null>(null);
 	const setCardRef = useCallback(
@@ -129,15 +156,16 @@ export function A2UICard({
 	);
 	const containsControl = useContainsControl(
 		cardRef,
-		Boolean(clickable && !title),
+		Boolean(clickable && !title && !href),
 	);
-	const actionMode: CardActionMode | undefined = !clickable
-		? undefined
-		: title
-			? "title"
-			: containsControl
-				? "pointer"
-				: "card";
+	const actionMode: CardActionMode | undefined =
+		!clickable || href
+			? undefined
+			: title
+				? "title"
+				: containsControl
+					? "pointer"
+					: "card";
 
 	const children = resolveChildSpecs(component.children, resolve);
 	const triggerCardAction = () => {
@@ -167,10 +195,13 @@ export function A2UICard({
 			ref={setCardRef}
 			className={cn(
 				"group/card",
+				variant && VARIANT_CLASSES[variant],
+				compact && "gap-3 py-4",
+				href && cn("relative", LINK_CONTROLS_ABOVE),
 				headerImage && "overflow-hidden pt-0",
 				resolveStyle(style),
 				hoverable && "hover:shadow-lg motion-safe:hover:-translate-y-0.5",
-				clickable && "cursor-pointer",
+				(clickable || href) && "cursor-pointer",
 			)}
 			style={resolveInlineStyle(style)}
 			onClick={actionMode ? handleClick : undefined}
@@ -179,18 +210,40 @@ export function A2UICard({
 			aria-labelledby={actionMode === "title" ? titleId : undefined}
 			tabIndex={actionMode === "card" ? 0 : undefined}
 		>
+			{href && !title && (
+				<a
+					data-card-link
+					href={href}
+					target="_blank"
+					rel="noopener noreferrer"
+					className="absolute inset-0 z-0 rounded-[inherit] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+				>
+					<span className="sr-only">{description ?? href}</span>
+				</a>
+			)}
 			{headerImage && (
 				<CardMedia
 					source={headerImage}
 					alt={title ?? ""}
-					zoom={Boolean(hoverable || clickable)}
+					zoom={Boolean(hoverable || clickable || href)}
+					aspect={ASPECT_CLASSES[aspectValue ?? ""] ?? ASPECT_CLASSES["16:9"]}
 				/>
 			)}
 			{(title || description) && (
-				<CardHeader>
+				<CardHeader className={cn(compact && COMPACT_HEADER)}>
 					{title && (
-						<CardTitle id={titleId}>
-							{actionMode === "title" ? (
+						<CardTitle id={titleId} className={cn(compact && "leading-snug")}>
+							{href ? (
+								<a
+									data-card-link
+									href={href}
+									target="_blank"
+									rel="noopener noreferrer"
+									className="rounded-sm outline-none after:absolute after:inset-0 after:rounded-[inherit] focus-visible:ring-[3px] focus-visible:ring-ring/50"
+								>
+									{title}
+								</a>
+							) : actionMode === "title" ? (
 								<button
 									type="button"
 									className="cursor-pointer rounded-sm text-start outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
@@ -207,7 +260,7 @@ export function A2UICard({
 				</CardHeader>
 			)}
 			{children.length > 0 && (
-				<CardContent className="min-h-0 flex-1">
+				<CardContent className={cn("min-h-0 flex-1", compact && COMPACT_BODY)}>
 					{children.map((child) => (
 						<Fragment key={child.key}>
 							{renderChild(child.id, child.scope)}
@@ -215,7 +268,9 @@ export function A2UICard({
 					))}
 				</CardContent>
 			)}
-			{footer && <CardFooter>{footer}</CardFooter>}
+			{footer && (
+				<CardFooter className={cn(compact && "px-4")}>{footer}</CardFooter>
+			)}
 		</ShadCard>
 	);
 }
