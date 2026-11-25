@@ -59,6 +59,15 @@ beforeEach(async () => {
 	);
 	Object.assign(globalThis, globals);
 	Object.assign(window, { SyntaxError, TypeError });
+	// happy-dom has no layout; the sample table's row virtualizer needs a viewport.
+	for (const [prop, size] of [
+		["offsetHeight", 600],
+		["offsetWidth", 1000],
+	] as const)
+		Object.defineProperty(window.HTMLElement.prototype, prop, {
+			configurable: true,
+			get: () => size,
+		});
 	restoreGlobals = () => {
 		for (const [key, descriptor] of descriptors) {
 			if (descriptor) Object.defineProperty(globalThis, key, descriptor);
@@ -217,7 +226,7 @@ describe("store showcase", () => {
 				}) as unknown as Event,
 			);
 		});
-		expect(query("td[data-masked]").length).toBe(2);
+		expect(query("[data-masked]").length).toBe(2);
 		expect(window.document.body.textContent).toContain("Ada");
 		expect(window.document.body.textContent).not.toContain(SECRET);
 	});

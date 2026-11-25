@@ -3525,6 +3525,20 @@ export const generatedNodeSidebar = [
     ]
   },
   {
+    "label": "Bots",
+    "collapsed": true,
+    "items": [
+      {
+        "label": "Overview",
+        "slug": "nodes/bots"
+      },
+      {
+        "label": "Ask Bot",
+        "slug": "nodes/bots/bots-ask-bot"
+      }
+    ]
+  },
+  {
     "label": "Control",
     "collapsed": true,
     "items": [
@@ -4993,6 +5007,10 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/data/files/operations/path-rename"
               },
               {
+                "label": "Search Files",
+                "slug": "nodes/data/files/operations/path-search-files"
+              },
+              {
                 "label": "Sign URL",
                 "slug": "nodes/data/files/operations/sign-url"
               },
@@ -5291,6 +5309,10 @@ export const generatedNodeSidebar = [
             "slug": "nodes/data/github/data-github-get-commit"
           },
           {
+            "label": "Get Contributor Stats",
+            "slug": "nodes/data/github/data-github-get-contributor-stats"
+          },
+          {
             "label": "Get File Contents",
             "slug": "nodes/data/github/data-github-get-file-contents"
           },
@@ -5319,6 +5341,10 @@ export const generatedNodeSidebar = [
             "slug": "nodes/data/github/data-github-get-user"
           },
           {
+            "label": "GitHub (App Key)",
+            "slug": "nodes/data/github/data-github-provider-app-key"
+          },
+          {
             "label": "GitHub (App Token)",
             "slug": "nodes/data/github/data-github-provider-app"
           },
@@ -5335,8 +5361,16 @@ export const generatedNodeSidebar = [
             "slug": "nodes/data/github/data-github-list-branches"
           },
           {
+            "label": "List Code Scanning Alerts",
+            "slug": "nodes/data/github/data-github-list-code-scanning-alerts"
+          },
+          {
             "label": "List Commits",
             "slug": "nodes/data/github/data-github-list-commits"
+          },
+          {
+            "label": "List Dependabot Alerts",
+            "slug": "nodes/data/github/data-github-list-dependabot-alerts"
           },
           {
             "label": "List Issue Comments",
@@ -5369,6 +5403,10 @@ export const generatedNodeSidebar = [
           {
             "label": "List Repositories",
             "slug": "nodes/data/github/data-github-list-repos"
+          },
+          {
+            "label": "List Secret Scanning Alerts",
+            "slug": "nodes/data/github/data-github-list-secret-scanning-alerts"
           },
           {
             "label": "Merge Pull Request",
@@ -7093,6 +7131,10 @@ export const generatedNodeSidebar = [
             ]
           },
           {
+            "label": "Clear Main Widget",
+            "slug": "nodes/events/chat/events-chat-clear-main-widget"
+          },
+          {
             "label": "Extract Attachments",
             "slug": "nodes/events/chat/ai-gen-llm-history-extract-attachments"
           },
@@ -7149,8 +7191,16 @@ export const generatedNodeSidebar = [
             "slug": "nodes/events/chat/events-chat-push-widgets"
           },
           {
+            "label": "React to Message",
+            "slug": "nodes/events/chat/events-chat-react"
+          },
+          {
             "label": "Remove Step",
             "slug": "nodes/events/chat/events-chat-remove-step"
+          },
+          {
+            "label": "Set Main Widget",
+            "slug": "nodes/events/chat/events-chat-set-main-widget"
           }
         ]
       },
@@ -11061,6 +11111,10 @@ export const generatedNodeSidebar = [
             "slug": "nodes/utils/types/utils-types-is-empty"
           },
           {
+            "label": "Is Null",
+            "slug": "nodes/utils/types/utils-types-is-null"
+          },
+          {
             "label": "Select",
             "slug": "nodes/utils/types/utils-types-select"
           },
@@ -11507,6 +11561,10 @@ export const generatedNodeSidebar = [
           {
             "label": "OIDC Discovery Auth",
             "slug": "nodes/web/auth/oidc-discovery-auth"
+          },
+          {
+            "label": "Verify Webhook Signature",
+            "slug": "nodes/web/auth/verify-webhook-signature"
           }
         ]
       },

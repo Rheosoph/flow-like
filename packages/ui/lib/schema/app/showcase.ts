@@ -107,7 +107,7 @@ export interface IShowcaseTable {
 	name: string;
 	/** Present when row counts are shown. */
 	rows?: number | null;
-	/** Present when the schema is shown. */
+	/** Present when the schema or sample rows are shown; samples need the column names. */
 	columns?: IShowcaseColumn[] | null;
 	indexes?: IShowcaseIndex[] | null;
 	/** Present when sample rows are shown and the table has rows. */
