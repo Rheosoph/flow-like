@@ -134,12 +134,8 @@ pub async fn revoke_invitation(
     Path((package_id, invitation_id)): Path<(String, String)>,
 ) -> Result<Json<()>, ApiError> {
     let sub = user.sub()?;
-    let caller = crate::ensure_wasm_permission!(
-        state,
-        &sub,
-        &package_id,
-        WasmPackagePermission::Maintainer
-    );
+    let caller =
+        crate::ensure_wasm_permission!(state, &sub, &package_id, WasmPackagePermission::Maintainer);
 
     let invitation = wasm_package_invitation::Entity::find_by_id(&invitation_id)
         .filter(wasm_package_invitation::Column::PackageId.eq(&package_id))
@@ -149,7 +145,9 @@ pub async fn revoke_invitation(
         .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?
         .ok_or_else(|| ApiError::not_found("No pending invitation with this id on this package"))?;
 
-    if !caller.can_manage_level(WasmPackagePermission::from_bits_truncate(invitation.permission)) {
+    if !caller.can_manage_level(WasmPackagePermission::from_bits_truncate(
+        invitation.permission,
+    )) {
         return Err(ApiError::forbidden(
             "You cannot withdraw an invitation at this role",
         ));

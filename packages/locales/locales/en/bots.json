@@ -37,7 +37,7 @@
 			"label": "Data connections"
 		},
 		"data_studio": {
-			"description": "Keep tables and query them, like an app's Data Studio",
+			"description": "Keep tables and query them, read your apps' tables and graphs, and add graph nodes and edges after you approve each write",
 			"label": "Data Studio"
 		},
 		"delegation": {
@@ -1483,6 +1483,52 @@
 		"deleteFailed": "Couldn't delete memory",
 		"details": "Memory details",
 		"emptyTitle": "No memories saved yet",
+		"entities": {
+			"aliases": "Also called",
+			"also": "also: {{names}}",
+			"back": "All people & things",
+			"cancelRename": "Cancel",
+			"factCount_one": "{{count}} fact",
+			"factCount_other": "{{count}} facts",
+			"facts_one": "{{count}} fact",
+			"facts_other": "{{count}} facts",
+			"forget": "Forget everything about {{name}}",
+			"forgetBody_one": "{{count}} fact that mentions {{name}} is deleted. The chat keeps what was said.",
+			"forgetBody_other": "{{count}} facts that mention {{name}} are deleted. The chat keeps what was said.",
+			"forgetConfirm": "Forget",
+			"forgetTitle": "Forget {{name}}?",
+			"graph": "Connections of {{name}}",
+			"kindLabel": "Kind",
+			"kindNames": {
+				"organization": "Organization",
+				"person": "Person",
+				"place": "Place",
+				"project": "Project",
+				"thing": "Thing"
+			},
+			"kinds": {
+				"organization": "Organizations",
+				"person": "People",
+				"place": "Places",
+				"project": "Projects",
+				"thing": "Things"
+			},
+			"merge": "Merge into…",
+			"mergeEmpty": "Nobody found",
+			"mergeSearch": "Find who {{name}} is the same as…",
+			"moreConnections_one": "+{{count}} more connection",
+			"moreConnections_other": "+{{count}} more connections",
+			"noFacts": "No facts about {{name}} yet.",
+			"noResults": "Nobody matches",
+			"openNeighbour": "Open {{name}}",
+			"ownerHint": "The person this bot works for",
+			"pick": "Pick someone or something to see how it connects.",
+			"rename": "Rename",
+			"room": "Group chat",
+			"saveName": "Save name",
+			"searchPlaceholder": "Search people & things…",
+			"you": "You"
+		},
 		"exploreHistory": "Explore chat history",
 		"expires": "Expires",
 		"factsEmpty": "{{name}} writes down facts, preferences and decisions here as you chat.",
@@ -1557,6 +1603,7 @@
 			"until": "Until {{date}}"
 		},
 		"views": {
+			"entities": "People & things",
 			"label": "Show memories as",
 			"map_one": "Map of {{count}} place",
 			"map_other": "Map of {{count}} places",

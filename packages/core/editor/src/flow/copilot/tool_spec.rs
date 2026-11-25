@@ -800,19 +800,38 @@ fn forecast_save_message(args: &Value) -> String {
     format!("FlowPilot wants to save the completed prediction '{name}' in {scope} for app '{app}'.")
 }
 
+/// Names how many elements go where, so the person approving sees the write's size and target.
 fn graph_element_message(args: &Value) -> String {
     let operation = spec_arg_str(args, "operation", "operation");
     let label = spec_arg_str(args, "label", "label");
-    let what = if operation == "add_edges" {
-        "edges"
+    let overlay = spec_arg_str(args, "overlay_id", "overlayId");
+    let app = spec_arg_str(args, "app_id", "appId");
+    let count = args
+        .get("rows")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let kind = if operation == "add_edges" {
+        "edge"
     } else {
-        "nodes"
+        "node"
     };
-    if label.is_empty() {
-        format!("The Data Studio agent wants to add graph {what}.")
-    } else {
-        format!("The Data Studio agent wants to add {what} to '{label}'.")
+    let what = match count {
+        0 => format!("graph {kind}s"),
+        1 => format!("1 {kind}"),
+        count => format!("{count} {kind}s"),
+    };
+    let mut message = format!("The Data Studio agent wants to add {what}");
+    if !label.is_empty() {
+        message.push_str(&format!(" labelled '{label}'"));
     }
+    if !overlay.is_empty() {
+        message.push_str(&format!(" to graph '{overlay}'"));
+    }
+    if !app.is_empty() {
+        message.push_str(&format!(" in app '{app}'"));
+    }
+    message.push('.');
+    message
 }
 
 fn ontology_action_message(args: &Value) -> String {
@@ -2626,6 +2645,25 @@ pub fn find_data_studio_tool_spec(name: &str) -> Option<PlatformToolSpec> {
         .find(|spec| spec.name == name)
 }
 
+/// Overlay operations a bot may run: it reads ontologies, only Flux changes them.
+pub const BOT_GRAPH_OVERLAY_OPERATIONS: &[&str] = &["list_overlays", "get_overlay", "get_schema"];
+
+fn bot_graph_overlay_tool_schema() -> Value {
+    let mut schema = graph_overlay_tool_schema();
+    schema["properties"]["operation"]["enum"] = json!(BOT_GRAPH_OVERLAY_OPERATIONS);
+    schema
+}
+
+/// `graph_overlay_tool` as a bot runs it: read operations only, so the advertised schema lists
+/// just those.
+pub fn bot_graph_overlay_tool_spec(description: &'static str) -> Option<PlatformToolSpec> {
+    find_data_studio_tool_spec("graph_overlay_tool").map(|spec| PlatformToolSpec {
+        description,
+        schema: bot_graph_overlay_tool_schema,
+        ..spec
+    })
+}
+
 /// Database operations a read-only surface (board/UI specialists) may call.
 pub const READ_ONLY_DATABASE_OPERATIONS: &[&str] = &["list_tables", "describe_table", "query"];
 
@@ -3202,6 +3240,28 @@ pub fn find_scout_tool_spec(name: &str) -> Option<PlatformToolSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn graph_write_approvals_name_the_count_label_graph_and_app() {
+        assert_eq!(
+            graph_element_message(&json!({
+                "operation": "add_nodes",
+                "app_id": "app_crm",
+                "overlay_id": "people",
+                "label": "Person",
+                "rows": [{ "id": "p1" }, { "id": "p2" }]
+            })),
+            "The Data Studio agent wants to add 2 nodes labelled 'Person' to graph 'people' in app 'app_crm'."
+        );
+        assert_eq!(
+            graph_element_message(&json!({ "operation": "add_edges", "rows": [{}] })),
+            "The Data Studio agent wants to add 1 edge."
+        );
+        assert_eq!(
+            graph_element_message(&json!({ "operation": "add_edges" })),
+            "The Data Studio agent wants to add graph edges."
+        );
+    }
 
     #[test]
     fn research_brief_resolves_a_conversation_followup() {

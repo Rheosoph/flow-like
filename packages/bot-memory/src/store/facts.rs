@@ -20,17 +20,22 @@ use super::lance::{
     PreparedEmbeddings, Probe, Table, embed_or_wait, from_millis, in_list, int_field, millis,
     quote, search_pool, similarity, text_field,
 };
+use crate::entities::is_participant_subject;
 use crate::facts::{Fact, FactKind, Neighbour};
 use crate::llm::{Embedder, embed_checked};
 use crate::model::{FactSource, Seq};
 use crate::retrieval::{RRF_K, Recency, TimeRange, recency_factor, rrf};
 
 /// Every column but the vector.
-const COLUMNS: [&str; 23] = [
+const COLUMNS: [&str; 27] = [
     "id",
     "text",
     "kind",
     "subject",
+    "subject_id",
+    "object",
+    "object_id",
+    "relation",
     "geojson",
     "geometry",
     "time",
@@ -55,11 +60,15 @@ const COLUMNS: [&str; 23] = [
 /// Expiry markers older than this no longer guard against re-mined evidence.
 const MARKER_RETENTION_DAYS: i64 = 90;
 
-const METADATA_COLUMNS: [(&str, &str); 4] = [
+const METADATA_COLUMNS: [(&str, &str); 8] = [
     ("geojson", "string"),
     ("geometry", "geometry"),
     ("time", "int64"),
     ("expires_at", "int64"),
+    ("subject_id", "string"),
+    ("object", "string"),
+    ("object_id", "string"),
+    ("relation", "string"),
 ];
 
 /// Most rows a location search without text examines, since each is parsed exactly.
@@ -81,6 +90,10 @@ fn schema() -> Schema {
         text_field("text", false),
         text_field("kind", false),
         text_field("subject", false),
+        text_field("subject_id", true),
+        text_field("object", true),
+        text_field("object_id", true),
+        text_field("relation", true),
         text_field("geojson", true),
         geometry_field("geometry", true),
         int_field("time", true),
@@ -147,6 +160,14 @@ struct FactRow {
     kind: String,
     subject: String,
     #[serde(default)]
+    subject_id: Option<String>,
+    #[serde(default)]
+    object: Option<String>,
+    #[serde(default)]
+    object_id: Option<String>,
+    #[serde(default)]
+    relation: Option<String>,
+    #[serde(default)]
     geojson: Option<String>,
     #[serde(default)]
     geometry: Option<Value>,
@@ -181,6 +202,10 @@ impl FactRow {
             text: fact.text.clone(),
             kind: fact.kind.as_str().to_string(),
             subject: fact.subject.clone(),
+            subject_id: fact.subject_id.clone(),
+            object: fact.object.clone(),
+            object_id: fact.object_id.clone(),
+            relation: fact.relation.clone(),
             geojson: fact
                 .geojson
                 .as_ref()
@@ -222,6 +247,10 @@ impl FactRow {
             text: self.text,
             kind: FactKind::parse(&self.kind).unwrap_or(FactKind::Knowledge),
             subject: self.subject,
+            subject_id: self.subject_id,
+            object: self.object,
+            object_id: self.object_id,
+            relation: self.relation,
             geojson: self
                 .geojson
                 .as_deref()
@@ -245,6 +274,10 @@ impl FactRow {
     /// The columns a metadata update rewrites: everything but the text, its hash and vector.
     fn metadata(self) -> HashMap<String, Value> {
         HashMap::from([
+            ("subject_id".to_string(), json!(self.subject_id)),
+            ("object".to_string(), json!(self.object)),
+            ("object_id".to_string(), json!(self.object_id)),
+            ("relation".to_string(), json!(self.relation)),
             ("geojson".to_string(), json!(self.geojson)),
             ("geometry".to_string(), json!(self.geometry)),
             ("time".to_string(), json!(self.time)),
@@ -280,6 +313,8 @@ pub struct FactFilter {
     pub include_superseded: bool,
     pub kinds: Vec<FactKind>,
     pub subject: Option<String>,
+    /// Facts with this entity as subject or object.
+    pub entity: Option<String>,
     /// Facts whose time overlaps the range: from their start (or, without one, when they were
     /// said) to their end; events last a moment, other facts until they end.
     pub time_range: Option<TimeRange>,
@@ -299,6 +334,10 @@ impl FactFilter {
         }
         if let Some(subject) = &self.subject {
             clauses.push(format!("subject = {}", quote(subject)));
+        }
+        if let Some(entity) = &self.entity {
+            let entity = quote(entity);
+            clauses.push(format!("(subject_id = {entity} OR object_id = {entity})"));
         }
         if let Some(range) = self.time_range {
             clauses.push(overlaps(range));
@@ -620,6 +659,83 @@ impl FactStore {
         self.read(&format!("superseded_by = {}", quote(id))).await
     }
 
+    /// Up to `limit` facts, superseded ones included, stored before their subject had an
+    /// entity.
+    pub(crate) async fn without_subject_entity(&self, limit: usize) -> Result<Vec<Fact>> {
+        if !self.readable().await? {
+            return Ok(Vec::new());
+        }
+        to_facts(
+            self.table
+                .rows("subject_id IS NULL", columns(), limit, 0)
+                .await?,
+        )
+    }
+
+    /// Points every fact on `subject` that has no entity yet at `entity`.
+    pub(crate) async fn assign_subject(&self, subject: &str, entity: &str) -> Result<()> {
+        self.ensure_metadata().await?;
+        let _writes = self.table.write_lock().await;
+        self.table
+            .update(
+                &format!("subject_id IS NULL AND subject = {}", quote(subject)),
+                HashMap::from([("subject_id".to_string(), json!(entity))]),
+            )
+            .await
+    }
+
+    /// Moves every edge of `from` to `into`; a fact that would connect `into` with itself
+    /// loses its object.
+    pub(crate) async fn reassign_entity(&self, from: &str, into: &str) -> Result<()> {
+        self.ensure_metadata().await?;
+        let _writes = self.table.write_lock().await;
+        if self.table.count(None).await? == 0 {
+            return Ok(());
+        }
+        for column in ["subject_id", "object_id"] {
+            self.table
+                .update(
+                    &format!("{column} = {}", quote(from)),
+                    HashMap::from([(column.to_string(), json!(into))]),
+                )
+                .await?;
+        }
+        let into = quote(into);
+        self.table
+            .update(
+                &format!("subject_id = {into} AND object_id = {into}"),
+                HashMap::from([
+                    ("object_id".to_string(), Value::Null),
+                    ("object".to_string(), Value::Null),
+                    ("relation".to_string(), Value::Null),
+                ]),
+            )
+            .await
+    }
+
+    /// `(subject_id, object_id)` of every fact the filter covers that has a subject entity.
+    pub async fn edges(&self, filter: &FactFilter) -> Result<Vec<(String, Option<String>)>> {
+        if !self.table.exists().await? || !self.readable().await? {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<Value> = self
+            .table
+            .all_rows(
+                &format!("{} AND subject_id IS NOT NULL", filter.sql(Utc::now())),
+                &["subject_id", "object_id"],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                Some((
+                    row["subject_id"].as_str()?.to_string(),
+                    row["object_id"].as_str().map(str::to_string),
+                ))
+            })
+            .collect())
+    }
+
     /// A closed fact saying the same as `candidate` when the candidate was said while that
     /// fact still held: the same old statement found again (a retried or re-mined span).
     pub async fn closed_duplicate(&self, candidate: &Fact) -> Result<Option<Fact>> {
@@ -700,14 +816,39 @@ impl FactStore {
         vector: Option<&[f32]>,
         limit: usize,
     ) -> Result<Vec<Neighbour>> {
+        self.neighbours_about(candidate, vector, limit, &[]).await
+    }
+
+    /// Like [`FactStore::neighbours`], scoped to the candidate's subject entity: its facts, and
+    /// facts stored before entities existed under one of `subjects`. A participant's claims
+    /// keep their exact subject.
+    pub(crate) async fn neighbours_about(
+        &self,
+        candidate: &Fact,
+        vector: Option<&[f32]>,
+        limit: usize,
+        subjects: &[String],
+    ) -> Result<Vec<Neighbour>> {
         if !self.table.exists().await? || !self.readable().await? {
             return Ok(Vec::new());
         }
-        let scope = FactFilter {
-            subject: Some(candidate.subject.clone()),
-            ..FactFilter::default()
-        }
-        .sql(candidate.recorded_at);
+        let scope = match &candidate.subject_id {
+            Some(id) if !is_participant_subject(&candidate.subject) => {
+                let legacy = std::iter::once(candidate.subject.as_str())
+                    .chain(subjects.iter().map(String::as_str));
+                format!(
+                    "{} AND (subject_id = {} OR (subject_id IS NULL AND {}))",
+                    FactFilter::default().sql(candidate.recorded_at),
+                    quote(id),
+                    in_list("subject", legacy)
+                )
+            }
+            _ => FactFilter {
+                subject: Some(candidate.subject.clone()),
+                ..FactFilter::default()
+            }
+            .sql(candidate.recorded_at),
+        };
         let mut found: Vec<Neighbour> = Vec::new();
         let same: Vec<FactRow> = self
             .table

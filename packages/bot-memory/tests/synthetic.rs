@@ -264,6 +264,7 @@ async fn needles_survive(compactions: u32) {
                 area: None,
 
                 query: question.into(),
+                about: None,
                 kind: None,
                 time_range: None,
                 include_superseded: None,
@@ -558,6 +559,8 @@ async fn synthetic_injection_never_becomes_preference() {
         evidence_seq: None,
         kind: Some(if gate { "knowledge" } else { "preference" }.into()),
         subject: None,
+        object: None,
+        relation: None,
         valid_from: None,
         valid_to: None,
     };

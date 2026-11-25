@@ -340,6 +340,29 @@ export function bundleLicenses({
 		writeFileSync(join(licenses, path), bytes);
 		return path;
 	};
+	const copyNotices = (base, prefix) =>
+		filesBelow(base)
+			.filter((path) => noticeName.test(basename(path)))
+			.map((path) =>
+				put(
+					`${prefix}/${portable(relative(base, path))}.txt`,
+					readFileSync(path),
+				),
+			);
+	// A Git dependency resolves to its whole checkout, so every crate of that
+	// checkout carries the same notices; write them once per checkout.
+	const checkoutNotices = new Map();
+	const sharedCheckoutNotices = ({ base, source }) => {
+		if (!checkoutNotices.has(base)) {
+			const [location, revision] = source.slice(4).split("#");
+			const name = basename(new URL(location).pathname).replace(/\.git$/, "");
+			checkoutNotices.set(
+				base,
+				copyNotices(base, `dependencies/git/${name}-${revision.slice(0, 12)}`),
+			);
+		}
+		return checkoutNotices.get(base);
+	};
 	for (const pkg of packages) {
 		const key = `${pkg.name}@${pkg.version}`;
 		const localPath =
@@ -392,16 +415,7 @@ export function bundleLicenses({
 			if (localSource) {
 				pkg.source = localSource.source;
 				pkg.modified = true;
-				for (const path of filesBelow(location).filter((path) =>
-					noticeName.test(basename(path)),
-				)) {
-					pkg.notices.push(
-						put(
-							`${prefix}/${portable(relative(location, path))}.txt`,
-							readFileSync(path),
-						),
-					);
-				}
+				pkg.notices.push(...copyNotices(location, prefix));
 				if (!pkg.notices.length)
 					throw new Error(`No license text for modified dependency ${key}.`);
 			} else {
@@ -411,16 +425,11 @@ export function bundleLicenses({
 		} else {
 			pkg.source = resolved.source;
 			pkg.checksum = resolved.checksum;
-			for (const path of filesBelow(resolved.base).filter((path) =>
-				noticeName.test(basename(path)),
-			)) {
-				pkg.notices.push(
-					put(
-						`${prefix}/${portable(relative(resolved.base, path))}.txt`,
-						readFileSync(path),
-					),
-				);
-			}
+			pkg.notices.push(
+				...(resolved.archive
+					? copyNotices(resolved.base, prefix)
+					: sharedCheckoutNotices(resolved)),
+			);
 			if (
 				!override &&
 				Object.keys(overrides).some((name) => name.startsWith(`${pkg.name}@`))

@@ -52,6 +52,7 @@ export function A2UIColumn({
 	return (
 		<div
 			ref={elementRef}
+			data-slot="a2ui-column"
 			className={cn(
 				"flex min-h-0 flex-col",
 				align && alignMap[align],

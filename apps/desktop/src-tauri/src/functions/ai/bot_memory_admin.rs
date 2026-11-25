@@ -3,7 +3,7 @@
 
 use crate::state::TauriFlowLikeState;
 use flow_like::flow::copilot::memory_open::{forget_bot_memory, workspace_connection};
-use flow_like_bot_memory::host::{FactAdmin, FactView};
+use flow_like_bot_memory::host::{EntityUpdate, EntityView, FactAdmin, FactView};
 use tauri::State;
 
 async fn admin(state: &TauriFlowLikeState, app_id: &str) -> Result<FactAdmin, String> {
@@ -54,4 +54,61 @@ pub async fn bot_memory_reset(
         .map_err(|error| error.to_string())?;
     forget_bot_memory(&bot_id);
     Ok(())
+}
+
+#[tauri::command]
+pub async fn bot_memory_entities(
+    state: State<'_, TauriFlowLikeState>,
+    app_id: String,
+) -> Result<Vec<EntityView>, String> {
+    admin(&state, &app_id)
+        .await?
+        .list_entities()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn bot_memory_entity_update(
+    state: State<'_, TauriFlowLikeState>,
+    app_id: String,
+    entity_id: String,
+    scope: Option<String>,
+    name: Option<String>,
+    kind: Option<String>,
+) -> Result<EntityView, String> {
+    admin(&state, &app_id)
+        .await?
+        .update_entity(scope.as_deref(), &entity_id, &EntityUpdate { name, kind })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn bot_memory_entity_merge(
+    state: State<'_, TauriFlowLikeState>,
+    app_id: String,
+    entity_id: String,
+    scope: Option<String>,
+    into: String,
+) -> Result<EntityView, String> {
+    admin(&state, &app_id)
+        .await?
+        .merge_entities(scope.as_deref(), &entity_id, &into)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn bot_memory_entity_forget(
+    state: State<'_, TauriFlowLikeState>,
+    app_id: String,
+    entity_id: String,
+    scope: Option<String>,
+) -> Result<Vec<FactView>, String> {
+    admin(&state, &app_id)
+        .await?
+        .forget_entity(scope.as_deref(), &entity_id)
+        .await
+        .map_err(|error| error.to_string())
 }

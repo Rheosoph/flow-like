@@ -3,10 +3,11 @@ use std::sync::Arc;
 use chrono::{DateTime, Duration, Utc};
 use flow_like_bot_memory::compaction::CompactionConfig;
 use flow_like_bot_memory::engine::MemoryEngine;
+use flow_like_bot_memory::entities::OWNER_ENTITY;
 use flow_like_bot_memory::facts::{Evidence, Fact, FactKind, integrate_facts};
 use flow_like_bot_memory::model::{FactSource, HistoryItem, Role};
 use flow_like_bot_memory::retrieval::Recency;
-use flow_like_bot_memory::store::{FactFilter, FactQuery, FactSort, MemoryStores};
+use flow_like_bot_memory::store::{FactFilter, FactQuery, FactSort, MemoryStores, ScoredFact};
 use flow_like_bot_memory::testing::{HashEmbedder, StubLlm};
 use flow_like_bot_memory::text::content_hash;
 use flow_like_bot_memory::tools::{MemorySaveArgs, WriteGate, WriteOutcome, memory_save};
@@ -25,6 +26,10 @@ fn fact(id: &str, text: &str, at: DateTime<Utc>) -> Fact {
         text: text.into(),
         kind: FactKind::Knowledge,
         subject: "user".into(),
+        subject_id: None,
+        object: None,
+        object_id: None,
+        relation: None,
         geojson: None,
         time: None,
         expires_at: None,
@@ -274,10 +279,24 @@ async fn geometry_migration_backfills_and_indexes_without_changing_spatial_resul
     );
     let engine = engine(reopened);
     engine.optimize(at).await.unwrap();
-    assert_eq!(engine.stores().facts.search(&query).await.unwrap(), before);
+    let owned = |mut fact: Fact| {
+        fact.subject_id = Some(OWNER_ENTITY.to_string());
+        fact
+    };
+    let backfilled: Vec<ScoredFact> = before
+        .into_iter()
+        .map(|hit| ScoredFact {
+            fact: owned(hit.fact),
+            score: hit.score,
+        })
+        .collect();
+    assert_eq!(
+        engine.stores().facts.search(&query).await.unwrap(),
+        backfilled
+    );
     assert_eq!(
         engine.stores().facts.get(&inside.id).await.unwrap(),
-        Some(inside)
+        Some(owned(inside))
     );
     let raw = raw(&dir, "facts").await;
     assert!(flow_like_storage::geometry::is_geometry_field(
@@ -363,17 +382,38 @@ async fn purge_drops_markers_older_than_the_retention_horizon() {
     let mut expired = fact("f_old", "The user's temporary badge is 4411.", old);
     expired.expires_at = Some(old + Duration::hours(1));
     stores.facts.insert(&[expired]).await.unwrap();
-    assert_eq!(stores.facts.purge_expired(old + Duration::days(1)).await.unwrap(), 1);
+    assert_eq!(
+        stores
+            .facts
+            .purge_expired(old + Duration::days(1))
+            .await
+            .unwrap(),
+        1
+    );
     let markers = raw(&dir, "facts_expiry");
     assert_eq!(markers.await.list(None, 10, 0).await.unwrap().len(), 1);
 
     let mut recent = fact("f_recent", "The user's temporary badge is 9900.", at);
     recent.expires_at = Some(at + Duration::hours(1));
     stores.facts.insert(&[recent]).await.unwrap();
-    assert_eq!(stores.facts.purge_expired(at + Duration::hours(2)).await.unwrap(), 1);
-    let markers = raw(&dir, "facts_expiry").await.list(None, 10, 0).await.unwrap();
+    assert_eq!(
+        stores
+            .facts
+            .purge_expired(at + Duration::hours(2))
+            .await
+            .unwrap(),
+        1
+    );
+    let markers = raw(&dir, "facts_expiry")
+        .await
+        .list(None, 10, 0)
+        .await
+        .unwrap();
     assert_eq!(markers.len(), 1);
-    assert_eq!(markers[0]["cutoff"], json!((at + Duration::hours(1)).timestamp_millis()));
+    assert_eq!(
+        markers[0]["cutoff"],
+        json!((at + Duration::hours(1)).timestamp_millis())
+    );
 }
 
 fn location_query(at: DateTime<Utc>) -> FactQuery {
@@ -413,7 +453,10 @@ async fn radius_search_filters_by_distance_and_rejects_invalid_queries_once() {
         .unwrap();
     let found = stores.facts.search(&location_query(at)).await.unwrap();
     assert_eq!(
-        found.iter().map(|hit| hit.fact.id.as_str()).collect::<Vec<_>>(),
+        found
+            .iter()
+            .map(|hit| hit.fact.id.as_str())
+            .collect::<Vec<_>>(),
         ["f_near"]
     );
     let mut invalid = location_query(at);
@@ -483,7 +526,11 @@ async fn geometry_backfill_skips_unindexable_rows_and_marks_the_table_ready() {
 
     let reopened = open_stores(&dir).await;
     let found = reopened.facts.search(&location_query(at)).await.unwrap();
-    assert_eq!(found.len(), 2, "unmigrated rows still resolve by exact parse");
+    assert_eq!(
+        found.len(),
+        2,
+        "unmigrated rows still resolve by exact parse"
+    );
     let engine = engine(reopened);
     engine.optimize(at).await.unwrap();
     assert_eq!(

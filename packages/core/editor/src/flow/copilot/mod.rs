@@ -78,10 +78,10 @@ pub use bot_reply_files::{AppOrigin, AppOutput, REPLY_OUTPUT_FIELD, ReplyFiles};
 pub use bot_run::{
     BotRunContext, BotToolHost, BotToolset, EffectivePermissions, FLUX_BOT_ID, FLUX_BOT_NAME,
     GENERAL_BOT_DESCRIPTION, GENERAL_BOT_ID, GENERAL_BOT_NAME, ReactionNote, SILENT_REPLY,
-    TalkingWith, TurnRequester, bot_model_preference, bot_persona_section, bot_platform_context,
-    bot_system_prompt, bot_thinking, find_bot_tool_spec, resolve_bot_model,
-    resolve_host_completion_model, resolve_host_completion_model_preferring, run_bot_chat,
-    run_bot_chat_with_talk, runnable_completion_model,
+    TalkingWith, TurnRequester, WORKSPACE_GUARDED_GRAPH_TOOLS, bot_model_preference,
+    bot_persona_section, bot_platform_context, bot_system_prompt, bot_thinking, find_bot_tool_spec,
+    resolve_bot_model, resolve_host_completion_model, resolve_host_completion_model_preferring,
+    run_bot_chat, run_bot_chat_with_talk, runnable_completion_model, workspace_graph_refusal,
 };
 pub use bot_trail::ToolTrail;
 pub use capability_tools::{HostTools, bot_tool_spec, linked_tool_names, tool_outcome_output};

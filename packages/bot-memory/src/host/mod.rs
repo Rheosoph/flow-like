@@ -10,7 +10,10 @@ pub(crate) mod recall;
 pub mod session;
 pub mod toolbox;
 
-pub use admin::{EvidenceView, FactAdmin, FactView, MAX_LISTED_FACTS};
+pub use admin::{
+    EntityUpdate, EntityView, EvidenceView, FactAdmin, FactView, MAX_LISTED_ENTITIES,
+    MAX_LISTED_FACTS,
+};
 pub use chrono_tz::Tz;
 pub use entries::{EntrySource, HandleReader, InboxReader, StoredEntry};
 pub use models::{DecisionLlm, ModelEmbedder, ModelLlm, RoutedLlm, SwitchEmbedder, SwitchLlm};

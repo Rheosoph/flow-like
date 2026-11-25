@@ -800,3 +800,70 @@ test("validated local source overrides retain original Git provenance and their 
 		fixture.env.CRAFT_TEST_DEPENDENCIES.replace("\tMIT\t", "\tMPL-2.0\t");
 	assert.throws(() => bundleLicenses(args), /exact modified\/path MPL source/);
 });
+
+test("crates from one Git checkout share a single copy of its notices", (t) => {
+	const fixture = bundleFixture(t, { name: "craft-a", version: "0.1.0" });
+	const repository = join(fixture.directory, "craft-libs");
+	const git = (...args) =>
+		execFileSync("git", args, { cwd: repository, encoding: "utf8" }).trim();
+	put(join(repository, "LICENSE-MIT"), "Workspace notice\n");
+	put(join(repository, "crates/b/NOTICE"), "Crate b notice\n");
+	put(join(repository, "crates/a/src/lib.rs"), "\n");
+	git("init", "--quiet");
+	git("add", ".");
+	git(
+		"-c",
+		"commit.gpgsign=false",
+		"-c",
+		"user.name=License test",
+		"-c",
+		"user.email=license-test@example.invalid",
+		"commit",
+		"--quiet",
+		"-m",
+		"workspace",
+	);
+	const revision = git("rev-parse", "HEAD");
+	cpSync(
+		repository,
+		join(
+			fixture.env.CARGO_HOME,
+			"git/checkouts/craft-libs-fixture",
+			revision.slice(0, 7),
+		),
+		{ recursive: true },
+	);
+	const origin = `https://github.com/example/craft-libs.git?rev=${revision}`;
+	put(
+		join(fixture.source, "Cargo.lock"),
+		["craft-a", "craft-b"]
+			.map(
+				(name) =>
+					`[[package]]\nname = "${name}"\nversion = "0.1.0"\nsource = "git+${origin}#${revision}"\n`,
+			)
+			.join("\n"),
+	);
+	fixture.env.CRAFT_TEST_DEPENDENCIES = ["craft-a", "craft-b"]
+		.map(
+			(name) =>
+				`${name} v0.1.0 (${origin}#${revision.slice(0, 7)})\tMIT OR Apache-2.0\thttps://github.com/example/craft-libs\n`,
+		)
+		.join("");
+	const manifest = bundleLicenses(fixture.args);
+	const shared = `dependencies/git/craft-libs-${revision.slice(0, 12)}`;
+	const [a, b] = manifest.packages;
+	assert.deepEqual(a.notices, [
+		`${shared}/LICENSE-MIT.txt`,
+		`${shared}/crates/b/NOTICE.txt`,
+	]);
+	assert.deepEqual(b.notices, a.notices);
+	assert.equal(
+		readFileSync(join(fixture.output, "licenses", a.notices[1]), "utf8"),
+		"Crate b notice\n",
+	);
+	for (const name of ["craft-a-0.1.0", "craft-b-0.1.0"])
+		assert.equal(
+			existsSync(join(fixture.output, "licenses/dependencies", name)),
+			false,
+		);
+});

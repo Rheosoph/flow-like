@@ -1,6 +1,6 @@
 //! App tools of a headless server turn (room and inbox turns): the bot lists the apps it may
 //! use, reads their interfaces, runs their Events, chats and MCP tools, reads their tables and
-//! ontologies and changes its workspace's tables. Every call goes through the route handlers as
+//! ontologies, adds graph elements to them and changes its workspace's tables. Every call goes through the route handlers as
 //! the bot, so the bot's own rights, quotas and run records apply.
 
 mod chat;
@@ -56,8 +56,10 @@ const CALL_APP_EVENT: &str = "call_app_event";
 const CALL_APP_CHAT: &str = "call_app_chat";
 const DATABASE_TOOL: &str = "database_tool";
 const GRAPH_QUERY_TOOL: &str = "graph_query_tool";
+const GRAPH_ELEMENT_TOOL: &str = "graph_element_tool";
+const GRAPH_OVERLAY_TOOL: &str = "graph_overlay_tool";
 
-const APP_TOOLS: [&str; 7] = [
+const APP_TOOLS: [&str; 9] = [
     LIST_APPS,
     DESCRIBE_APP_INTERFACE,
     GET_APP_DETAIL,
@@ -65,6 +67,8 @@ const APP_TOOLS: [&str; 7] = [
     CALL_APP_CHAT,
     DATABASE_TOOL,
     GRAPH_QUERY_TOOL,
+    GRAPH_ELEMENT_TOOL,
+    GRAPH_OVERLAY_TOOL,
 ];
 
 const MAX_LISTED_APPS: usize = 250;
@@ -441,6 +445,8 @@ impl AppTools {
             CALL_APP_CHAT => self.call_app_chat(&args).await,
             DATABASE_TOOL => self.database(&args).await,
             GRAPH_QUERY_TOOL => self.graph_query(&args).await,
+            GRAPH_ELEMENT_TOOL => self.graph_element(&args).await,
+            GRAPH_OVERLAY_TOOL => self.graph_overlay(&args).await,
             _ => Err("This host does not run this tool.".to_string()),
         };
         match result {

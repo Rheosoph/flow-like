@@ -272,6 +272,9 @@ describe("A2UI card density and look", () => {
 		expect(body?.className).toContain("flex-col");
 		expect(body?.className).toContain("mt-auto");
 		expect(body?.className).toContain("px-4");
+		expect(body?.className).toContain(
+			"[&>[data-slot=a2ui-column]:only-child]:flex-1",
+		);
 	});
 
 	it("shapes the cover by headerImageAspect", async () => {

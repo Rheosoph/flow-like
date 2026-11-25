@@ -97,6 +97,10 @@ fn fact(id: &str, text: &str, seq: Seq) -> Fact {
         text: text.into(),
         kind: FactKind::Profile,
         subject: "user".into(),
+        subject_id: None,
+        object: None,
+        object_id: None,
+        relation: None,
         valid_from: None,
         valid_to: None,
         recorded_at: start(),
@@ -536,6 +540,7 @@ async fn memory_search_pages_neither_repeat_nor_skip() {
                 area: None,
 
                 query: "garden bed tomatoes near the shed".into(),
+                about: None,
                 kind: None,
                 time_range: None,
                 include_superseded: None,
@@ -583,6 +588,8 @@ async fn memory_save_keeps_the_users_words_once() {
         evidence_seq: None,
         kind: Some("profile".into()),
         subject: Some("me".into()),
+        object: None,
+        relation: None,
         valid_from: None,
         valid_to: None,
     };
@@ -649,6 +656,7 @@ async fn memory_search_pages_with_a_cursor_and_checks_its_arguments() {
         area: None,
 
         query: "garden vegetable".into(),
+        about: None,
         kind: kind.map(str::to_string),
         time_range: None,
         include_superseded: None,

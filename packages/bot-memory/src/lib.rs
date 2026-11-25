@@ -8,6 +8,7 @@
 
 pub mod compaction;
 pub mod engine;
+pub mod entities;
 pub mod facts;
 pub mod host;
 pub mod llm;
@@ -24,7 +25,10 @@ pub mod text;
 pub mod tools;
 
 pub use compaction::{CompactionConfig, CompactionPlan, Trigger, TurnPhase, TurnPlan};
-pub use engine::{CompactionInput, CompactionOutcome, DeletionReport, MemoryBusy, MemoryEngine};
+pub use engine::{
+    CompactionInput, CompactionOutcome, DeletionReport, MemoryBusy, MemoryEngine, NoEntity,
+};
+pub use entities::{DeclaredEntity, Entity, EntityKind};
 pub use facts::{Evidence, Fact, FactKind};
 pub use llm::{Embedder, LlmRequest, LlmTask, MemoryLlm};
 pub use model::{

@@ -811,7 +811,8 @@ mod tests {
 
     #[test]
     fn package_invitation_notification_names_the_package() {
-        let input = invitation_notification(&invitation(InvitationStatus::Pending), Some("Reports"));
+        let input =
+            invitation_notification(&invitation(InvitationStatus::Pending), Some("Reports"));
         assert!(input.title.contains("Reports"));
         assert!(!input.title.contains("acme/reports"));
     }
@@ -820,7 +821,10 @@ mod tests {
     fn only_maintainer_and_user_are_assignable() {
         let maintainer = WasmPackagePermission::Maintainer.bits();
         let user = WasmPackagePermission::User.bits();
-        assert_eq!(assignable_role(maintainer), Some(WasmPackagePermission::Maintainer));
+        assert_eq!(
+            assignable_role(maintainer),
+            Some(WasmPackagePermission::Maintainer)
+        );
         assert_eq!(assignable_role(user), Some(WasmPackagePermission::User));
         for refused in [
             0,
