@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { Check, Info, Lock, Minus, ShieldCheck } from "lucide-react";
+import { Info, Lock, ShieldCheck } from "lucide-react";
 import { type ReactNode, useCallback, useMemo, useState } from "react";
 import { useIsMobile } from "../../../hooks/use-mobile";
 import type {
@@ -16,6 +16,11 @@ import type {
 	IShowcaseWidget,
 } from "../../../lib/schema/app/showcase";
 import { cn } from "../../../lib/utils";
+import type { QueryColumn } from "../../../state/backend-state/query-state";
+import {
+	QueryResultTable,
+	type ResultTablePresentation,
+} from "../../settings/data-studio/query-workbench/query-result-table";
 import {
 	Dialog,
 	DialogContent,
@@ -176,140 +181,79 @@ function FamilyDot({ column }: Readonly<{ column: IShowcaseColumn }>) {
 	);
 }
 
-const isNumeric = (c: IShowcaseColumn) => c.family === "number";
-
-function SampleValue({
-	value,
-	column,
-}: Readonly<{ value: unknown; column: IShowcaseColumn }>) {
-	if (value === null || value === undefined || value === "") {
-		return <span className="text-muted-foreground/50">—</span>;
-	}
-	if (typeof value === "boolean") {
-		return value ? (
-			<Check className="h-3.5 w-3.5 text-[var(--showcase-time)]" />
-		) : (
-			<Minus className="h-3.5 w-3.5 text-muted-foreground" />
-		);
-	}
-	if (typeof value === "number") {
-		return (
-			<span className="tabular-nums">
-				{value.toLocaleString(undefined, { maximumFractionDigits: 4 })}
-			</span>
-		);
-	}
-	if (column.family === "time" && typeof value === "string") {
-		const date = new Date(value);
-		if (!Number.isNaN(date.getTime())) {
-			return (
-				<span className="tabular-nums" title={value}>
-					{date.toLocaleString(undefined, {
-						dateStyle: "medium",
-						timeStyle: "short",
-					})}
-				</span>
-			);
-		}
-	}
-	const text =
-		typeof value === "object" ? JSON.stringify(value) : String(value);
+function PlaceholderCell({
+	locked,
+	children,
+}: Readonly<{ locked?: boolean; children: ReactNode }>) {
 	return (
 		<span
-			className={cn(
-				"block max-w-72 truncate",
-				typeof value === "object" && "font-mono text-xs text-muted-foreground",
-			)}
-			title={text}
+			data-masked={locked ? "" : undefined}
+			className="inline-flex select-none items-center gap-1 rounded-sm border border-dashed border-border px-1.5 py-px font-sans text-[11px] text-muted-foreground"
 		>
-			{text}
+			{locked ? <Lock className="h-3 w-3" aria-hidden="true" /> : null}
+			{children}
 		</span>
 	);
 }
 
+const UNSAMPLED_FAMILIES = new Set(["vector", "binary", "geo"]);
+
+const SAMPLE_FRAME =
+	"overflow-hidden rounded-lg border border-border [&_tbody_tr:last-child>td]:border-b-0 [&_tr>*:last-child]:border-r-0";
+
 function SampleGrid({ table }: Readonly<{ table: IShowcaseTable }>) {
 	const { t } = useTranslation("store");
-	const columns = table.columns ?? [];
-	const rows = table.sample?.rows ?? [];
+	const { columns, rows, presentation } = useMemo(() => {
+		const source = table.columns ?? [];
+		const placeholders = new Map<string, ReactNode>();
+		for (const c of source) {
+			if (c.personal)
+				placeholders.set(
+					c.name,
+					<PlaceholderCell locked>
+						{t("showcaseHidden", "hidden")}
+					</PlaceholderCell>,
+				);
+			else if (UNSAMPLED_FAMILIES.has(c.family))
+				placeholders.set(
+					c.name,
+					<PlaceholderCell>
+						{t("showcaseNotSampled", "not in preview")}
+					</PlaceholderCell>,
+				);
+		}
+		const labels = new Map(
+			source.flatMap((c) =>
+				c.display_name && c.display_name !== c.name
+					? [[c.name, c.display_name] as const]
+					: [],
+			),
+		);
+		return {
+			columns: source.map<QueryColumn>((c, position) => ({
+				name: c.name,
+				type_name: c.data_type,
+				position,
+			})),
+			rows: (table.sample?.rows ?? []).map((row) =>
+				Object.fromEntries(source.map((c, i) => [c.name, row[i] ?? null])),
+			),
+			presentation: {
+				label: (name: string) => labels.get(name) ?? name,
+				cell: (name: string) => placeholders.get(name),
+			} satisfies ResultTablePresentation,
+		};
+	}, [table.columns, table.sample, t]);
+
 	return (
 		<div className="space-y-3">
-			<div className={cn(gridWrapClass, "max-h-[min(55dvh,28rem)]")}>
-				<table className={gridTableClass}>
-					<thead>
-						<tr>
-							<th
-								className={cn(
-									gridHeadClass,
-									"left-0 z-20 w-10 text-right tabular-nums",
-								)}
-							>
-								#
-							</th>
-							{columns.map((c) => (
-								<th
-									key={c.name}
-									className={cn(gridHeadClass, isNumeric(c) && "text-right")}
-								>
-									<span
-										className={cn(
-											"inline-flex items-center gap-1.5",
-											isNumeric(c) && "flex-row-reverse",
-										)}
-									>
-										<FamilyDot column={c} />
-										{c.display_name || c.name}
-										{c.personal ? (
-											<Lock className="h-3 w-3" aria-hidden="true" />
-										) : null}
-									</span>
-								</th>
-							))}
-						</tr>
-					</thead>
-					<tbody>
-						{rows.map((r, ri) => (
-							// biome-ignore lint/suspicious/noArrayIndexKey: rows have no ids
-							<tr key={ri} className="group">
-								<td
-									className={cn(
-										gridCellClass,
-										"sticky left-0 bg-card text-right text-xs tabular-nums text-muted-foreground group-hover:bg-muted",
-									)}
-								>
-									{ri + 1}
-								</td>
-								{columns.map((c, ci) =>
-									c.personal ? (
-										<td
-											key={c.name}
-											data-masked
-											className={cn(
-												gridCellClass,
-												"bg-[repeating-linear-gradient(135deg,transparent_0_6px,color-mix(in_oklch,var(--muted-foreground)_8%,transparent)_6px_7px)] text-muted-foreground group-hover:bg-muted/40",
-											)}
-										>
-											<span className="inline-flex items-center gap-1 text-xs">
-												<Lock className="h-3 w-3" aria-hidden="true" />
-												{t("showcaseHidden", "hidden")}
-											</span>
-										</td>
-									) : (
-										<td
-											key={c.name}
-											className={cn(
-												gridCellClass,
-												"whitespace-nowrap group-hover:bg-muted/40",
-												isNumeric(c) && "text-right",
-											)}
-										>
-											<SampleValue value={r[ci]} column={c} />
-										</td>
-									),
-								)}
-							</tr>
-						))}
-					</tbody>
-				</table>
+			<div className={SAMPLE_FRAME}>
+				<QueryResultTable
+					columns={columns}
+					rows={rows}
+					presentation={presentation}
+					inspectRows={false}
+				/>
 			</div>
 			<Caption>
 				{t(
@@ -905,7 +849,7 @@ function DetailSurface({
 				onOpenAutoFocus={focusSurface}
 				className={cn(
 					"max-h-[min(88dvh,56rem)] gap-0 overflow-hidden p-0 outline-none sm:max-w-2xl",
-					wide && "sm:max-w-4xl",
+					wide && "sm:max-w-4xl xl:max-w-6xl",
 				)}
 			>
 				{children}

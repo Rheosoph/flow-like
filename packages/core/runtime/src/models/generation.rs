@@ -1,5 +1,9 @@
 //! Resolve the weight roles declared by an image or video model Bit into local files.
 
+use crate::flow::execution::{
+    ExecutionEnvironment,
+    egress::{client_builder, ensure_url_resolves_allowed},
+};
 use crate::{
     bit::{Bit, BitPack, safe_mlx_asset_path},
     hub::Hub,
@@ -9,7 +13,10 @@ use crate::{
 };
 use flow_like_model_provider::{
     provider::ModelProvider,
-    stablediffusion::{PROVIDER_NAME, StableDiffusionConfig},
+    stablediffusion::{
+        GeneratedAsset, GenerationHost, GenerationRequest, PROVIDER_NAME, StableDiffusionConfig,
+        generate_on,
+    },
 };
 use flow_like_storage::{Path as StorePath, files::store::FlowLikeStore};
 use flow_like_types::{Context, Result, anyhow, bail, tokio::fs};
@@ -166,6 +173,52 @@ fn validate_weight_bit(asset: &WeightAsset, bit: &Bit) -> Result<()> {
     Ok(())
 }
 
+/// Runs stable-diffusion.cpp generation under the environment's policy.
+///
+/// Locally nothing changes. Server-side the managed runtime is refused before
+/// any process starts, host model paths are refused, and the endpoint is
+/// vetted (URL, then DNS at connect time through the guarded resolver, no
+/// redirects) like every other flow-supplied URL; see `flow::execution::egress`
+/// for what that policy covers (private RFC 1918 space is left to the network
+/// layer, loopback / link-local / metadata are refused).
+pub async fn generate_guarded(
+    environment: ExecutionEnvironment,
+    config: &StableDiffusionConfig,
+    request: &GenerationRequest,
+) -> Result<Vec<GeneratedAsset>> {
+    if environment != ExecutionEnvironment::Server {
+        return generate_on(&GenerationHost::Local, config, request).await;
+    }
+    let Some(endpoint) = config.endpoint.as_deref() else {
+        bail!(
+            "The local stable-diffusion.cpp runtime is not available in server-side execution; \
+             configure an sd-server endpoint or use a hosted image/video provider"
+        );
+    };
+    for (flag, path) in config.model_paths() {
+        if path.is_some() {
+            environment.ensure_host_filesystem_access(&format!("stable-diffusion.cpp {flag}"))?;
+        }
+    }
+    config.validate()?;
+    let endpoint_client = server_endpoint_client(environment, endpoint).await?;
+    generate_on(&GenerationHost::Server { endpoint_client }, config, request).await
+}
+
+async fn server_endpoint_client(
+    environment: ExecutionEnvironment,
+    endpoint: &str,
+) -> Result<flow_like_types::reqwest::Client> {
+    let url = flow_like_types::reqwest::Url::parse(endpoint.trim())
+        .context("Invalid sd-server endpoint URL")?;
+    ensure_url_resolves_allowed(environment, &url).await?;
+    client_builder(environment)
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .redirect(flow_like_types::reqwest::redirect::Policy::none())
+        .build()
+        .context("Failed to build sd-server HTTP client")
+}
+
 fn pack_configuration(provider: &ModelProvider) -> Result<StableDiffusionConfig> {
     let mut config: StableDiffusionConfig = provider
         .params
@@ -219,6 +272,18 @@ async fn checked_weight_path(path: &Path, store_root: &Path, bit: &Bit) -> Resul
         .map_err(|_| anyhow!("Generation weight {} path is not valid UTF-8", bit.id))
 }
 
+/// Weight packs download from Bit-chosen hubs and write to the host Bit store, so the
+/// server executor refuses them before any network or disk access.
+fn ensure_weight_packs_allowed(environment: ExecutionEnvironment) -> Result<()> {
+    if environment == ExecutionEnvironment::Server {
+        bail!(
+            "stable-diffusion.cpp weight packs are not available in server-side execution; \
+             configure an sd-server endpoint or use a hosted image/video provider"
+        );
+    }
+    Ok(())
+}
+
 /// Download a model Bit's declared weights and supply their local paths to its provider.
 /// Explicit local-file and remote providers pass through when no asset manifest is present.
 pub async fn resolve_generation_provider(
@@ -226,6 +291,7 @@ pub async fn resolve_generation_provider(
     provider: &ModelProvider,
     profile: &Profile,
     state: &Arc<FlowLikeState>,
+    environment: ExecutionEnvironment,
 ) -> Result<ModelProvider> {
     if provider.provider_name != PROVIDER_NAME {
         return Ok(provider.clone());
@@ -233,6 +299,8 @@ pub async fn resolve_generation_provider(
     let Some(assets) = weight_manifest(root)? else {
         return Ok(provider.clone());
     };
+    // Refuse before any hub request, weight download or Bit-store write.
+    ensure_weight_packs_allowed(environment)?;
     let mut config = pack_configuration(provider)?;
     let FlowLikeStore::Local(store) = FlowLikeState::bit_store(state).await? else {
         bail!("stable-diffusion.cpp weight packs require a local Bit store");
@@ -521,5 +589,113 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    fn sd_request() -> GenerationRequest {
+        GenerationRequest {
+            mode: flow_like_model_provider::stablediffusion::GenerationMode::Image,
+            params: serde_json::json!({"prompt": "a landscape"}),
+        }
+    }
+
+    fn endpoint_config(endpoint: &str) -> StableDiffusionConfig {
+        StableDiffusionConfig {
+            endpoint: Some(endpoint.into()),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn server_refuses_host_plane_endpoints_before_any_request() {
+        for endpoint in [
+            "http://127.0.0.1:7860",
+            "http://169.254.169.254/latest",
+            "http://[::1]:7860",
+            "http://localhost:7860",
+            "http://metadata.google.internal",
+        ] {
+            let error = generate_guarded(
+                ExecutionEnvironment::Server,
+                &endpoint_config(endpoint),
+                &sd_request(),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("refused"), "{endpoint}: {error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn server_endpoint_vetting_allows_public_and_rfc1918_literals() {
+        // Same policy as every other flow-supplied URL: RFC 1918 is the
+        // deployment's own network and is left to the network layer.
+        for endpoint in ["https://93.184.216.34/sd", "http://10.0.0.1:7860"] {
+            server_endpoint_client(ExecutionEnvironment::Server, endpoint)
+                .await
+                .unwrap_or_else(|e| panic!("{endpoint}: {e}"));
+        }
+    }
+
+    #[tokio::test]
+    async fn server_refuses_local_runtime_and_host_paths_without_spawning() {
+        let config = StableDiffusionConfig {
+            model_path: Some("/etc/passwd".into()),
+            ..Default::default()
+        };
+        let error = generate_guarded(ExecutionEnvironment::Server, &config, &sd_request())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("server-side execution"), "{error}");
+        assert!(
+            !error.contains("not found"),
+            "must not reach the runtime: {error}"
+        );
+
+        let mut config = endpoint_config("https://93.184.216.34/sd");
+        config.model_path = Some("/etc/passwd".into());
+        let error = generate_guarded(ExecutionEnvironment::Server, &config, &sd_request())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("host filesystem"), "{error}");
+
+        // The provider layer refuses on its own, independent of the wrapper.
+        let client = flow_like_types::reqwest::Client::new();
+        let error = generate_on(
+            &GenerationHost::Server {
+                endpoint_client: client,
+            },
+            &StableDiffusionConfig {
+                model_path: Some("/nonexistent/model.safetensors".into()),
+                ..Default::default()
+            },
+            &sd_request(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("server-side execution"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn local_still_reaches_private_endpoints() {
+        // Port 1 is closed: the request is attempted and fails on connect,
+        // not on the egress policy.
+        let error = generate_guarded(
+            ExecutionEnvironment::Local,
+            &endpoint_config("http://127.0.0.1:1"),
+            &sd_request(),
+        )
+        .await
+        .unwrap_err();
+        assert!(!format!("{error:#}").contains("network plane"), "{error:#}");
+    }
+
+    #[test]
+    fn server_refuses_weight_packs_before_io() {
+        assert!(ensure_weight_packs_allowed(ExecutionEnvironment::Server).is_err());
+        assert!(ensure_weight_packs_allowed(ExecutionEnvironment::Local).is_ok());
     }
 }

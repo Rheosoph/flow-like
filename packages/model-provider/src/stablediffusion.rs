@@ -111,7 +111,7 @@ impl StableDiffusionConfig {
         Ok(())
     }
 
-    fn model_paths(&self) -> [(&'static str, Option<&str>); 7] {
+    pub fn model_paths(&self) -> [(&'static str, Option<&str>); 7] {
         [
             ("--model", self.model_path.as_deref()),
             ("--diffusion-model", self.diffusion_model_path.as_deref()),
@@ -736,13 +736,46 @@ fn decode_assets(job: &Value, mode: GenerationMode) -> Result<Vec<GeneratedAsset
     }
 }
 
+/// Where generation runs. `Server` never starts a process, and sends endpoint
+/// requests only through the caller's pre-vetted client.
+#[derive(Clone, Debug, Default)]
+pub enum GenerationHost {
+    /// Desktop: a managed local runtime or any endpoint, including private ones.
+    #[default]
+    Local,
+    /// Shared executor: endpoint mode only, through `endpoint_client`. The
+    /// caller owns the egress policy (URL vetting, guarded DNS, no redirects)
+    /// because this crate cannot depend on the runtime that defines it.
+    Server { endpoint_client: Client },
+}
+
 /// Generates media with a user-managed endpoint or an isolated local runtime.
 pub async fn generate(
     config: &StableDiffusionConfig,
     request: &GenerationRequest,
 ) -> Result<Vec<GeneratedAsset>> {
+    generate_on(&GenerationHost::Local, config, request).await
+}
+
+/// Like [`generate`], on an explicit host. On `Server` the local runtime is
+/// refused before anything is spawned or any model path is read.
+pub async fn generate_on(
+    host: &GenerationHost,
+    config: &StableDiffusionConfig,
+    request: &GenerationRequest,
+) -> Result<Vec<GeneratedAsset>> {
     config.validate()?;
     validate_request(request)?;
+    let duration = Duration::from_secs(config.request_timeout_seconds);
+    if let GenerationHost::Server { endpoint_client } = host {
+        let endpoint = config.endpoint.as_deref().ok_or_else(|| {
+            anyhow!(
+                "The local stable-diffusion.cpp runtime is not available in server-side \
+                 execution; configure an sd-server endpoint or use a hosted image/video provider"
+            )
+        })?;
+        return run_generation(endpoint_client, &endpoint_url(endpoint)?, request, duration).await;
+    }
     let mut client = Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .redirect(reqwest::redirect::Policy::none());
@@ -750,7 +783,6 @@ pub async fn generate(
         client = client.no_proxy();
     }
     let client = client.build()?;
-    let duration = Duration::from_secs(config.request_timeout_seconds);
     if let Some(endpoint) = &config.endpoint {
         return run_generation(&client, &endpoint_url(endpoint)?, request, duration).await;
     }

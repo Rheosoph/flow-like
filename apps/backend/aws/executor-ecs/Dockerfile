@@ -100,7 +100,15 @@ RUN set -eu; \
     dnf clean all
 
 COPY LICENSE /usr/share/licenses/flow-like/LICENSE
-RUN dnf install -y unixODBC && dnf clean all
+# ODBC drivers for the database nodes; a connection string names one, e.g.
+# Driver={ODBC Driver 18 for SQL Server} or Driver={PostgreSQL}. SQL Server comes from
+# Microsoft's RHEL 9 repository (ACCEPT_EULA accepts the Microsoft ODBC Driver 18 licence),
+# PostgreSQL is psqlODBC. AL2023 has no MariaDB/MySQL ODBC driver; MySQL, PostgreSQL, SQLite,
+# DuckDB and ClickHouse also have native connectors.
+RUN curl -fsSL https://packages.microsoft.com/config/rhel/9/prod.repo -o /etc/yum.repos.d/mssql-release.repo \
+    && ACCEPT_EULA=Y dnf install -y unixODBC postgresql-odbc msodbcsql18 \
+    && rm -f /etc/yum.repos.d/mssql-release.repo \
+    && dnf clean all
 
 COPY --from=build /opt/onnxruntime/lib/ /usr/lib64/
 COPY --from=build /opt/onnxruntime/LICENSE /usr/share/licenses/onnxruntime/LICENSE

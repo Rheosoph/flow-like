@@ -264,7 +264,7 @@ async fn showcase_one(
     Ok(ShowcaseTable {
         name,
         rows: rows.filter(|_| options.row_counts),
-        columns: options.schema.then_some(columns),
+        columns: (options.schema || sample.is_some()).then_some(columns),
         indexes,
         sample,
         object_type: None,

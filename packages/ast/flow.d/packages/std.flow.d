@@ -550,6 +550,23 @@ declare namespace bool {
     function xor(this: bool, { boolean?: bool, boolean?: bool }): bool;
 }
 
+declare namespace bots {
+    // === Bots ===
+
+    /**
+     * Sends a message to one of your bots, as if a flow event had woken it, and optionally waits for its answer. The exchange lands in the bot's chat with you. Works for bots on a server or on a desktop that is online; a bot that only lives in a local store can't be reached.
+     * @node bots_ask_bot @alias botsAskBot
+     * @param botId (optional) — The id of one of your bots (the person this run acts as)
+     * @param message (optional) — What the bot is asked, at most 8,000 characters
+     * @param waitSeconds (optional) — How long to wait for the bot's answer, at most 100. 0 continues as soon as the turn is queued.
+     * @returns turnId — The turn the message queued
+     * @returns status — queued, running, waiting (for your approval), done, failed or cancelled
+     * @returns reply — The bot's answer; empty when you didn't wait or it hasn't answered yet
+     * @impure has side effects / drives control flow
+     */
+    function askBot({ botId?: string, message?: string, waitSeconds?: int }): { turnId: string, status: string, reply: string };
+}
+
 declare namespace bytes {
     // === Utils/Bytes ===
 
@@ -691,13 +708,14 @@ declare namespace computer {
      * @param session (optional) — Optional automation session, passed through for existing flows
      * @param image — Image to copy
      * @param localOnly (optional) — Prevent cross-device clipboard sharing on supported platforms
-     * @param expiresInSeconds (optional) — Seconds before content expires; zero leaves it on the clipboard. Requires platform support
+     * @param expiresInSeconds (optional) — Seconds before content expires. Zero uses the platform default, or 30 minutes for the private Android clipboard
+     * @param appPrivate (optional) — Store in Flow Like's account-scoped Android clipboard instead of the system clipboard. Supports strict expiration; paste using Private clipboard in the app
      * @param timeoutSeconds (optional) — Maximum time to wait for the invoking client
      * @returns sessionOut — Optional automation session
      * @returns error — Structured error code and message
      * @impure has side effects / drives control flow
      */
-    function clipboardSetImage({ session?: Struct, image: Struct, localOnly?: bool, expiresInSeconds?: int, timeoutSeconds?: int }): { sessionOut: Struct, error: Struct };
+    function clipboardSetImage({ session?: Struct, image: Struct, localOnly?: bool, expiresInSeconds?: int, appPrivate?: bool, timeoutSeconds?: int }): { sessionOut: Struct, error: Struct };
 
     /**
      * Writes to the local device clipboard, or to the calling frontend when this Event runs remotely
@@ -706,13 +724,14 @@ declare namespace computer {
      * @param text — Text to copy
      * @param html (optional) — Optional rich text, with Text as the plain-text fallback
      * @param localOnly (optional) — Prevent cross-device clipboard sharing on supported platforms
-     * @param expiresInSeconds (optional) — Seconds before content expires; zero leaves it on the clipboard. Requires platform support
+     * @param expiresInSeconds (optional) — Seconds before content expires. Zero uses the platform default, or 30 minutes for the private Android clipboard
+     * @param appPrivate (optional) — Store in Flow Like's account-scoped Android clipboard instead of the system clipboard. Supports strict expiration; paste using Private clipboard in the app
      * @param timeoutSeconds (optional) — Maximum time to wait for the invoking client
      * @returns sessionOut — Optional automation session
      * @returns error — Structured error code and message
      * @impure has side effects / drives control flow
      */
-    function clipboardSetText({ session?: Struct, text: string, html?: string, localOnly?: bool, expiresInSeconds?: int, timeoutSeconds?: int }): { sessionOut: Struct, error: Struct };
+    function clipboardSetText({ session?: Struct, text: string, html?: string, localOnly?: bool, expiresInSeconds?: int, appPrivate?: bool, timeoutSeconds?: int }): { sessionOut: Struct, error: Struct };
 }
 
 declare namespace control {
@@ -4454,6 +4473,14 @@ declare namespace types {
     function isEmpty({ value: any, trim?: bool }): bool;
 
     /**
+     * Checks whether a value is null. Empty strings, arrays and structs return false.
+     * @node utils_types_is_null @receiver value @alias utilsTypesIsNull
+     * @param value — Value to inspect (receiver: `this` in `x.isNull(...)`)
+     * @returns isNull — True when the value is null
+     */
+    function isNull(this: any, { value: any }): bool;
+
+    /**
      * Selects between two values based on a boolean condition. Returns A if true, B if false.
      * @node utils_types_select @alias utilsTypesSelect
      * @param a — Value returned when condition is true
@@ -5717,13 +5744,13 @@ declare namespace user {
     function hasPermission({ permission?: string }): bool;
 
     /**
-     * Checks whether a machine rather than a person triggered this run. Machine callers have no human identity (sub): an API key reports its Key ID, an app calling through an app connection reports the calling app instead.
+     * Checks whether a machine rather than a person triggered this run. Machine callers have no human identity (sub): an API key reports its Key ID, an app calling through an app connection reports the calling app instead, and a bot reports its bot id.
      * @node utils_user_is_technical_user @alias utilsUserIsTechnicalUser
-     * @returns isTechnical — True if a machine triggered the run (API key or app connection), false for a person
-     * @returns keyId — The API key identifier, empty for every other caller
-     * @returns principal — How the caller authenticated: 'user', 'apiKey' or 'connectedApp'
+     * @returns isTechnical — True if a machine triggered the run (API key, app connection or bot), false for a person
+     * @returns keyId — The API key identifier, or the bot id when a bot triggered the run, empty for every other caller
+     * @returns principal — How the caller authenticated: 'user', 'apiKey', 'connectedApp' or 'bot'
      * @returns originAppId — The app that made the call when the principal is 'connectedApp', empty otherwise
-     * @returns onBehalfOf — The user the caller reported as the initiator: an API key's creator, or the user an app connection passed through. Attribution only — never authorize against it
+     * @returns onBehalfOf — The user the caller reported as the initiator: an API key's creator, the user an app connection passed through, or the bot's owner. Attribution only — never authorize against it
      */
     function isTechnical(): { isTechnical: bool, keyId: string, principal: string, originAppId: string, onBehalfOf: string };
 

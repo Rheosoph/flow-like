@@ -22,7 +22,7 @@ impl NodeLogic for CopilotMcpLocalServerNode {
         let mut node = Node::new(
             "copilot_mcp_local_server",
             "MCP Local Server",
-            "Configures a local/stdio MCP server for tool integration",
+            "Configures a local/stdio MCP server for tool integration. Desktop only: not available in the cloud.",
             "AI/GitHub/Copilot/MCP",
         );
         node.set_flowscript_name("github.copilot", "mcpLocalServer");
@@ -81,10 +81,16 @@ impl NodeLogic for CopilotMcpLocalServerNode {
         .set_schema::<McpLocalServerConfig>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
+        node.set_only_offline(true);
+
         node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        super::ensure_local_process_allowed(
+            context.execution_environment(),
+            "Copilot local MCP server",
+        )?;
         let command: String = context.evaluate_pin("command").await?;
         let args: Vec<String> = context.evaluate_pin("args").await.unwrap_or_default();
         let tools: Vec<String> = context

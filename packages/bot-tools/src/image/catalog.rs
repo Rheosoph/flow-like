@@ -57,7 +57,7 @@ impl CatalogImages {
                 "Local image generation runs on the owner's desktop, not on a server; pick a remote image model".into(),
             ));
         }
-        let provider = resolve_generation_provider(&bit, &provider, profile, state)
+        let provider = resolve_generation_provider(&bit, &provider, profile, state, environment)
             .await
             .map_err(|error| ImageUnavailable::Unusable(format!("{error:#}")))?;
         Ok(Self {

@@ -54,6 +54,8 @@ import { RowInspectorSheet } from "./row-inspector-sheet";
 
 const GUTTER_WIDTH = 52;
 const ROW_HEIGHT = 33;
+const GUTTER_CELL =
+	"flex w-full items-center justify-end px-2 font-mono text-[11px] tabular-nums text-muted-foreground";
 
 type ResultRow = Record<string, unknown>;
 
@@ -198,11 +200,14 @@ export function QueryResultTable({
 	rows,
 	appId,
 	presentation,
+	inspectRows = true,
 }: Readonly<{
 	columns: QueryColumn[];
 	rows: ResultRow[];
 	appId?: string;
 	presentation?: ResultTablePresentation;
+	/** Off for hosts whose rows are partial, where the row drawer would read gaps as NULL. */
+	inspectRows?: boolean;
 }>) {
 	const { t } = useTranslation("settings");
 	const scrollRef = useRef<HTMLDivElement>(null);
@@ -381,17 +386,29 @@ export function QueryResultTable({
 										className="sticky left-0 z-10 border-b border-r border-l-0 border-t-0 bg-muted p-0 group-hover/row:bg-muted"
 										style={{ width: GUTTER_WIDTH }}
 									>
-										<button
-											type="button"
-											onClick={() => setInspect(row.original)}
-											className="flex w-full items-center justify-end px-2 font-mono text-[11px] tabular-nums text-muted-foreground transition-colors hover:bg-muted-foreground/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-											style={{ height: ROW_HEIGHT - 1 }}
-											aria-label={t("inspectRowVal", "Inspect row {{val}}", {
-												val: virtualRow.index + 1,
-											})}
-										>
-											{virtualRow.index + 1}
-										</button>
+										{inspectRows ? (
+											<button
+												type="button"
+												onClick={() => setInspect(row.original)}
+												className={cn(
+													GUTTER_CELL,
+													"transition-colors hover:bg-muted-foreground/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+												)}
+												style={{ height: ROW_HEIGHT - 1 }}
+												aria-label={t("inspectRowVal", "Inspect row {{val}}", {
+													val: virtualRow.index + 1,
+												})}
+											>
+												{virtualRow.index + 1}
+											</button>
+										) : (
+											<span
+												className={GUTTER_CELL}
+												style={{ height: ROW_HEIGHT - 1 }}
+											>
+												{virtualRow.index + 1}
+											</span>
+										)}
 									</td>
 									{row.getVisibleCells().map((cell) => {
 										const meta = metaById.get(cell.column.id) ?? {
@@ -486,15 +503,17 @@ export function QueryResultTable({
 					if (!open) setInspectedCell(null);
 				}}
 			/>
-			<RowInspectorSheet
-				row={inspect}
-				columns={columns}
-				appId={appId}
-				kindOf={(column) => metaById.get(column.name)?.kind ?? "text"}
-				onOpenChange={(open) => {
-					if (!open) setInspect(null);
-				}}
-			/>
+			{inspectRows && (
+				<RowInspectorSheet
+					row={inspect}
+					columns={columns}
+					appId={appId}
+					kindOf={(column) => metaById.get(column.name)?.kind ?? "text"}
+					onOpenChange={(open) => {
+						if (!open) setInspect(null);
+					}}
+				/>
+			)}
 		</>
 	);
 }

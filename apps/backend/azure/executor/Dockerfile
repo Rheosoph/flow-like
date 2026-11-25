@@ -36,6 +36,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin flowlike
 
+# ODBC drivers for the database nodes; a connection string names one, e.g.
+# Driver={ODBC Driver 18 for SQL Server}, Driver={PostgreSQL} or Driver={MariaDB}.
+# SQL Server comes from Microsoft's Debian 12 repository (ACCEPT_EULA accepts the Microsoft ODBC
+# Driver 18 licence); curl and gnupg are only needed to add that repository.
+RUN apt-get update && apt-get install -y --no-install-recommends curl gnupg \
+    && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" > /etc/apt/sources.list.d/mssql-release.list \
+    && apt-get update \
+    && ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 odbc-postgresql odbc-mariadb \
+    && printf '\n[PostgreSQL]\nDescription=PostgreSQL Unicode (same name as on the AWS images)\nDriver=%s\n\n[MariaDB]\nDescription=MariaDB Unicode\nDriver=%s\n' \
+        "$(dpkg -L odbc-postgresql | grep '/psqlodbcw.so$')" "$(dpkg -L odbc-mariadb | grep '/libmaodbc.so$')" >> /etc/odbcinst.ini \
+    && apt-get purge -y --auto-remove curl gnupg \
+    && rm -rf /var/lib/apt/lists/* /etc/apt/sources.list.d/mssql-release.list
+
 WORKDIR /app
 COPY --from=builder --chown=flowlike:flowlike /tmp/azure-executor /app/executor
 

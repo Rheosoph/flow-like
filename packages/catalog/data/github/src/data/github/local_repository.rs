@@ -170,26 +170,18 @@ where
 }
 
 #[cfg(feature = "execute")]
-fn branch_name(path: &Path, branch: &str) -> flow_like_types::Result<()> {
-    git::validate_ref(branch)?;
+fn branch_name(_path: &Path, branch: &str) -> flow_like_types::Result<()> {
     // Reject checkout shorthand such as @{-1}; branch names must be literal.
     if branch.contains('@') && branch.contains('{') {
         return Err(flow_like_types::anyhow!("Use a literal branch name"));
     }
-    git::run(path, &["check-ref-format", "--branch", branch])?;
-    Ok(())
+    git::validate_branch_name(branch)
 }
 
 #[cfg(feature = "execute")]
 fn commit_ref(path: &Path, revision: &str) -> flow_like_types::Result<String> {
-    git::validate_ref(revision)?;
-    let revision = format!("{revision}^{{commit}}");
-    Ok(git::run(
-        path,
-        &["rev-parse", "--verify", "--end-of-options", &revision],
-    )?
-    .trim()
-    .to_string())
+    let repo = git::open(path)?;
+    Ok(git::resolve_commit(&repo, revision)?.to_string())
 }
 
 #[cfg(feature = "execute")]
@@ -212,50 +204,167 @@ fn validate_paths(paths: &[String]) -> flow_like_types::Result<()> {
     Ok(())
 }
 
+/// Literal repository-relative path specs; an empty spec selects the whole working tree.
+#[cfg(feature = "execute")]
+fn literal_specs(paths: &[String]) -> Vec<String> {
+    paths
+        .iter()
+        .map(|path| {
+            Path::new(path)
+                .components()
+                .filter(|component| !matches!(component, Component::CurDir))
+                .map(|component| component.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .collect()
+}
+
+#[cfg(feature = "execute")]
+fn spec_matches(entry: &[u8], spec: &str) -> bool {
+    let spec = spec.as_bytes();
+    spec.is_empty()
+        || entry == spec
+        || (entry.len() > spec.len() && entry.starts_with(spec) && entry[spec.len()] == b'/')
+}
+
+#[cfg(feature = "execute")]
+fn entry_path(entry: &[u8]) -> std::path::PathBuf {
+    std::path::PathBuf::from(String::from_utf8_lossy(entry).into_owned())
+}
+
+#[cfg(feature = "execute")]
+fn conflict_codes(repo: &git2::Repository) -> flow_like_types::Result<Vec<(Vec<u8>, char, char)>> {
+    let mut codes = Vec::new();
+    for conflict in repo.index()?.conflicts()? {
+        let conflict = conflict?;
+        let path = [&conflict.our, &conflict.their, &conflict.ancestor]
+            .into_iter()
+            .flatten()
+            .map(|entry| entry.path.clone())
+            .next()
+            .unwrap_or_default();
+        // The two-letter codes `git status --porcelain` uses for unmerged paths.
+        let (index, worktree) = match (
+            conflict.ancestor.is_some(),
+            conflict.our.is_some(),
+            conflict.their.is_some(),
+        ) {
+            (false, true, true) => ('A', 'A'),
+            (true, true, false) => ('U', 'D'),
+            (true, false, true) => ('D', 'U'),
+            (false, true, false) => ('A', 'U'),
+            (false, false, true) => ('U', 'A'),
+            (true, false, false) => ('D', 'D'),
+            _ => ('U', 'U'),
+        };
+        codes.push((path, index, worktree));
+    }
+    Ok(codes)
+}
+
 #[cfg(feature = "execute")]
 fn status(path: &Path) -> flow_like_types::Result<LocalGitStatus> {
-    let bytes = git::run_bytes(
-        path,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-    )?;
-    let mut records = bytes
-        .split(|byte| *byte == 0)
-        .filter(|record| !record.is_empty());
+    use git2::Status;
+    let repo = git::open(path)?;
+    let mut options = git2::StatusOptions::new();
+    options
+        .include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .include_ignored(false)
+        .renames_head_to_index(true);
+    let statuses = repo.statuses(Some(&mut options))?;
+    let conflicts = conflict_codes(&repo)?;
     let mut files = Vec::new();
-    while let Some(record) = records.next() {
-        if record.len() < 4 || record[2] != b' ' {
-            return Err(flow_like_types::anyhow!(
-                "Git returned an invalid status record"
-            ));
-        }
-        let index = record[0];
-        let worktree = record[1];
-        let original_path = if matches!(index, b'R' | b'C') || matches!(worktree, b'R' | b'C') {
-            Some(
-                String::from_utf8_lossy(records.next().ok_or_else(|| {
-                    flow_like_types::anyhow!("Git returned an incomplete rename record")
-                })?)
-                .into_owned(),
-            )
+    for entry in statuses.iter() {
+        let flags = entry.status();
+        // libgit2 reports a staged rename under its old path.
+        let bytes = if flags.contains(Status::INDEX_RENAMED) {
+            entry
+                .head_to_index()
+                .and_then(|delta| delta.new_file().path_bytes())
+                .unwrap_or_else(|| entry.path_bytes())
+        } else {
+            entry.path_bytes()
+        };
+        let (index, worktree) = if flags.contains(Status::CONFLICTED) {
+            conflicts
+                .iter()
+                .find(|(path, _, _)| path == bytes)
+                .map_or(('U', 'U'), |(_, index, worktree)| (*index, *worktree))
+        } else if flags == Status::WT_NEW {
+            ('?', '?')
+        } else {
+            let index = [
+                (Status::INDEX_NEW, 'A'),
+                (Status::INDEX_MODIFIED, 'M'),
+                (Status::INDEX_DELETED, 'D'),
+                (Status::INDEX_RENAMED, 'R'),
+                (Status::INDEX_TYPECHANGE, 'T'),
+            ]
+            .into_iter()
+            .find(|(flag, _)| flags.contains(*flag))
+            .map_or(' ', |(_, letter)| letter);
+            let worktree = [
+                (Status::WT_MODIFIED, 'M'),
+                (Status::WT_DELETED, 'D'),
+                (Status::WT_RENAMED, 'R'),
+                (Status::WT_TYPECHANGE, 'T'),
+            ]
+            .into_iter()
+            .find(|(flag, _)| flags.contains(*flag))
+            .map_or(' ', |(_, letter)| letter);
+            (index, worktree)
+        };
+        let original_path = if flags.contains(Status::INDEX_RENAMED) {
+            entry
+                .head_to_index()
+                .and_then(|delta| delta.old_file().path_bytes())
+                .map(|old| String::from_utf8_lossy(old).into_owned())
         } else {
             None
         };
+        let also_untracked = flags.contains(Status::WT_NEW)
+            && flags.intersects(
+                Status::INDEX_NEW
+                    | Status::INDEX_MODIFIED
+                    | Status::INDEX_DELETED
+                    | Status::INDEX_RENAMED
+                    | Status::INDEX_TYPECHANGE,
+            );
+        if also_untracked {
+            files.push(LocalGitFileStatus {
+                path: String::from_utf8_lossy(bytes).into_owned(),
+                original_path: None,
+                index_status: "?".into(),
+                worktree_status: "?".into(),
+                untracked: true,
+                conflicted: false,
+            });
+        }
         files.push(LocalGitFileStatus {
-            path: String::from_utf8_lossy(&record[3..]).into_owned(),
+            path: String::from_utf8_lossy(bytes).into_owned(),
             original_path,
-            index_status: (index as char).to_string(),
-            worktree_status: (worktree as char).to_string(),
-            untracked: index == b'?' && worktree == b'?',
-            conflicted: index == b'U'
-                || worktree == b'U'
-                || matches!((index, worktree), (b'A', b'A') | (b'D', b'D')),
+            index_status: index.to_string(),
+            worktree_status: worktree.to_string(),
+            untracked: index == '?' && worktree == '?',
+            conflicted: flags.contains(Status::CONFLICTED)
+                || index == 'U'
+                || worktree == 'U'
+                || matches!((index, worktree), ('A', 'A') | ('D', 'D')),
         });
     }
-    let branch = git::run(path, &["branch", "--show-current"])?
-        .trim()
-        .to_string();
-    let commit = git::run(path, &["rev-parse", "--verify", "--quiet", "HEAD"])
-        .map(|value| value.trim().to_string())
+    let detached = repo.head_detached().unwrap_or(false);
+    let branch = if detached {
+        String::new()
+    } else {
+        git::head_branch(&repo).unwrap_or_default()
+    };
+    let commit = repo
+        .head()
+        .ok()
+        .and_then(|head| head.target())
+        .map(|oid| oid.to_string())
         .unwrap_or_default();
     Ok(LocalGitStatus {
         detached: branch.is_empty() && !commit.is_empty(),
@@ -274,27 +383,73 @@ fn diff(
     paths: &[String],
 ) -> flow_like_types::Result<String> {
     validate_paths(paths)?;
-    let mut args = vec![
-        "--literal-pathspecs",
-        "diff",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--no-color",
-    ];
-    if staged {
-        args.push("--cached");
+    let repo = git::open(path)?;
+    if let Some(workdir) = repo.workdir() {
+        reject_symlinked_parents(workdir, &literal_specs(paths))?;
     }
-    let revision = if revision.is_empty() {
+    let mut options = git2::DiffOptions::new();
+    // Paths are literal; external diff drivers and text conversion do not exist in libgit2.
+    options.disable_pathspec_match(true).context_lines(3);
+    for path in literal_specs(paths) {
+        options.pathspec(path);
+    }
+    let tree = if revision.is_empty() {
         None
     } else {
-        Some(commit_ref(path, revision)?)
+        Some(
+            repo.find_commit(git::resolve_commit(&repo, revision)?)?
+                .tree()?,
+        )
     };
-    if let Some(revision) = &revision {
-        args.push(revision);
-    }
-    args.push("--");
-    args.extend(paths.iter().map(String::as_str));
-    git::run(path, &args)
+    let mut diff = if staged {
+        let base = tree.or_else(|| repo.head().ok().and_then(|head| head.peel_to_tree().ok()));
+        repo.diff_tree_to_index(base.as_ref(), None, Some(&mut options))?
+    } else if let Some(tree) = tree {
+        repo.diff_tree_to_workdir_with_index(Some(&tree), Some(&mut options))?
+    } else {
+        repo.diff_index_to_workdir(None, Some(&mut options))?
+    };
+    diff.find_similar(None)?;
+    let mut patch = Vec::new();
+    diff.print(git2::DiffFormat::Patch, |_, _, line| {
+        if matches!(line.origin(), '+' | '-' | ' ') {
+            patch.push(line.origin() as u8);
+        }
+        patch.extend_from_slice(line.content());
+        true
+    })?;
+    Ok(git::redact(&String::from_utf8_lossy(&patch)))
+}
+
+/// ISO 8601 with the author's UTC offset, like `git log --format=%aI`.
+#[cfg(feature = "execute")]
+fn iso8601(time: git2::Time) -> String {
+    let offset = i64::from(time.offset_minutes());
+    let local = time.seconds() + offset * 60;
+    let (days, seconds) = (local.div_euclid(86_400), local.rem_euclid(86_400));
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    let sign = if offset < 0 { '-' } else { '+' };
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}{sign}{:02}:{:02}",
+        seconds / 3_600,
+        seconds % 3_600 / 60,
+        seconds % 60,
+        offset.abs() / 60,
+        offset.abs() % 60
+    )
 }
 
 #[cfg(feature = "execute")]
@@ -308,39 +463,23 @@ fn log(
             "Max Count must be between 1 and 10000"
         ));
     }
-    let revision = commit_ref(path, revision)?;
-    let count = max_count.to_string();
-    let bytes = git::run_bytes(
-        path,
-        &[
-            "log",
-            "-z",
-            "--format=%H%x00%P%x00%an%x00%ae%x00%aI%x00%s",
-            "-n",
-            &count,
-            &revision,
-            "--",
-        ],
-    )?;
-    let fields: Vec<&[u8]> = bytes.split(|byte| *byte == 0).collect();
+    let repo = git::open(path)?;
+    let start = git::resolve_commit(&repo, revision)?;
+    let mut walk = repo.revwalk()?;
+    walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
+    walk.push(start)?;
     let mut commits = Vec::new();
-    for record in fields.chunks(6) {
-        if record.len() == 1 && record[0].is_empty() {
-            continue;
-        }
-        if record.len() != 6 {
-            return Err(flow_like_types::anyhow!(
-                "Git returned an invalid log record"
-            ));
-        }
-        let text = |index: usize| String::from_utf8_lossy(record[index]).into_owned();
+    for id in walk.take(max_count as usize) {
+        let commit = repo.find_commit(id?)?;
+        let author = commit.author();
         commits.push(LocalGitCommit {
-            sha: text(0),
-            parents: text(1).split_whitespace().map(str::to_string).collect(),
-            author_name: text(2),
-            author_email: text(3),
-            authored_at: text(4),
-            subject: text(5),
+            sha: commit.id().to_string(),
+            parents: commit.parent_ids().map(|id| id.to_string()).collect(),
+            author_name: String::from_utf8_lossy(author.name_bytes()).into_owned(),
+            author_email: String::from_utf8_lossy(author.email_bytes()).into_owned(),
+            authored_at: iso8601(author.when()),
+            subject: String::from_utf8_lossy(commit.summary_bytes().unwrap_or_default())
+                .into_owned(),
         });
     }
     Ok(commits)
@@ -348,41 +487,51 @@ fn log(
 
 #[cfg(feature = "execute")]
 fn branches(path: &Path, include_remote: bool) -> flow_like_types::Result<Vec<LocalGitBranch>> {
-    let mut args = vec![
-        "for-each-ref",
-        "--format=%(refname)%00%(objectname)%00%(HEAD)%00%(upstream:short)",
-        "refs/heads/",
-    ];
-    if include_remote {
-        args.push("refs/remotes/");
-    }
-    let output = git::run(path, &args)?;
-    output
-        .lines()
-        .map(|line| {
-            let fields: Vec<&str> = line.split('\0').collect();
-            if fields.len() != 4 {
-                return Err(flow_like_types::anyhow!(
-                    "Git returned an invalid branch record"
-                ));
-            }
-            let remote = fields[0].starts_with("refs/remotes/");
-            Ok(LocalGitBranch {
-                name: fields[0]
-                    .strip_prefix(if remote {
-                        "refs/remotes/"
-                    } else {
-                        "refs/heads/"
-                    })
-                    .unwrap_or(fields[0])
-                    .to_string(),
-                commit: fields[1].to_string(),
-                current: fields[2] == "*",
+    let repo = git::open(path)?;
+    let mut result = Vec::new();
+    let kinds: &[git2::BranchType] = if include_remote {
+        &[git2::BranchType::Local, git2::BranchType::Remote]
+    } else {
+        &[git2::BranchType::Local]
+    };
+    for kind in kinds {
+        let remote = *kind == git2::BranchType::Remote;
+        let mut part = Vec::new();
+        for entry in repo.branches(Some(*kind))? {
+            let (branch, _) = entry?;
+            let Some(name) = branch.name()?.map(str::to_owned) else {
+                continue;
+            };
+            // Dangling symbolic refs such as origin/HEAD of an empty remote have no commit.
+            let Some(commit) = branch
+                .get()
+                .resolve()
+                .ok()
+                .and_then(|reference| reference.target())
+            else {
+                continue;
+            };
+            let upstream = if remote {
+                String::new()
+            } else {
+                branch
+                    .upstream()
+                    .ok()
+                    .and_then(|upstream| upstream.name().ok().flatten().map(str::to_owned))
+                    .unwrap_or_default()
+            };
+            part.push(LocalGitBranch {
+                name,
+                commit: commit.to_string(),
+                current: !remote && branch.is_head(),
                 remote,
-                upstream: fields[3].to_string(),
-            })
-        })
-        .collect()
+                upstream,
+            });
+        }
+        part.sort_by(|a, b| a.name.cmp(&b.name));
+        result.extend(part);
+    }
+    Ok(result)
 }
 
 #[cfg(feature = "execute")]
@@ -391,7 +540,18 @@ fn switch_branch(path: &Path, branch: &str, clean: bool) -> flow_like_types::Res
     if clean {
         git::require_clean(path)?;
     }
-    git::run(path, &["switch", "--no-guess", branch])
+    let repo = git::open(path)?;
+    let target = repo
+        .find_branch(branch, git2::BranchType::Local)
+        .map_err(|_| flow_like_types::anyhow!("invalid reference: {branch}"))?;
+    let reference = target
+        .get()
+        .name()
+        .ok_or_else(|| flow_like_types::anyhow!("The branch name is not UTF-8"))?
+        .to_owned();
+    git::checkout_commit(&repo, target.get().peel_to_commit()?.id())?;
+    repo.set_head(&reference)?;
+    Ok(format!("Switched to branch '{branch}'\n"))
 }
 
 #[cfg(feature = "execute")]
@@ -400,7 +560,16 @@ fn checkout_revision(path: &Path, revision: &str, clean: bool) -> flow_like_type
     if clean {
         git::require_clean(path)?;
     }
-    git::run(path, &["switch", "--detach", &revision])
+    let repo = git::open(path)?;
+    let oid = git2::Oid::from_str(&revision)?;
+    git::checkout_commit(&repo, oid)?;
+    repo.set_head_detached(oid)?;
+    let commit = repo.find_commit(oid)?;
+    Ok(format!(
+        "HEAD is now at {} {}\n",
+        git::short(oid),
+        String::from_utf8_lossy(commit.summary_bytes().unwrap_or_default())
+    ))
 }
 
 #[cfg(feature = "execute")]
@@ -414,22 +583,145 @@ fn create_branch(
     let revision = commit_ref(path, start_point)?;
     if switch {
         git::require_clean(path)?;
-        git::run(
-            path,
-            &["switch", "--no-track", "--create", branch, &revision],
-        )
-    } else {
-        git::run(path, &["branch", "--no-track", branch, &revision])
     }
+    let repo = git::open(path)?;
+    let oid = git2::Oid::from_str(&revision)?;
+    let created = repo.branch(branch, &repo.find_commit(oid)?, false)?;
+    if !switch {
+        return Ok(format!(
+            "Created branch '{branch}' at {}\n",
+            git::short(oid)
+        ));
+    }
+    let reference = created
+        .get()
+        .name()
+        .ok_or_else(|| flow_like_types::anyhow!("The branch name is not UTF-8"))?
+        .to_owned();
+    git::checkout_commit(&repo, oid)?;
+    repo.set_head(&reference)?;
+    Ok(format!("Switched to a new branch '{branch}'\n"))
 }
 
 #[cfg(feature = "execute")]
 fn delete_branch(path: &Path, branch: &str, force: bool) -> flow_like_types::Result<String> {
     branch_name(path, branch)?;
-    git::run(
-        path,
-        &["branch", if force { "-D" } else { "-d" }, "--", branch],
-    )
+    let repo = git::open(path)?;
+    let mut target = repo
+        .find_branch(branch, git2::BranchType::Local)
+        .map_err(|_| flow_like_types::anyhow!("branch '{branch}' not found"))?;
+    if target.is_head() {
+        return Err(flow_like_types::anyhow!(
+            "Cannot delete branch '{branch}' checked out in this working tree"
+        ));
+    }
+    let oid = target.get().peel_to_commit()?.id();
+    if !force {
+        // Like `git branch -d`: the work must be contained in the upstream, or in HEAD without one.
+        let base = match target.upstream() {
+            Ok(upstream) => upstream.get().peel_to_commit()?.id(),
+            Err(_) => repo.head()?.peel_to_commit()?.id(),
+        };
+        if !git::is_ancestor(&repo, oid, base)? {
+            return Err(flow_like_types::anyhow!(
+                "The branch '{branch}' is not fully merged. Use Force to delete it anyway."
+            ));
+        }
+    }
+    target.delete()?;
+    Ok(format!(
+        "Deleted branch {branch} (was {}).\n",
+        git::short(oid)
+    ))
+}
+
+/// Refuses a repository path whose parent directories include a symlink: libgit2 would read through
+/// it and index files from outside the checkout (the git CLI reports "beyond a symbolic link").
+#[cfg(feature = "execute")]
+fn reject_symlinked_parents(workdir: &Path, specs: &[String]) -> flow_like_types::Result<()> {
+    for spec in specs {
+        let mut current = workdir.to_path_buf();
+        let mut components = Path::new(spec).components().peekable();
+        while let Some(component) = components.next() {
+            if components.peek().is_none() {
+                break;
+            }
+            current.push(component);
+            if current
+                .symlink_metadata()
+                .is_ok_and(|meta| meta.file_type().is_symlink())
+            {
+                return Err(flow_like_types::anyhow!(
+                    "pathspec '{spec}' is beyond a symbolic link"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Removes symlinks (never following them) that sit where the target tree has a directory, so a
+/// force checkout cannot rmdir or write through them.
+#[cfg(feature = "execute")]
+fn clear_obstructing_symlinks(
+    repo: &git2::Repository,
+    tree: &git2::Tree,
+) -> flow_like_types::Result<()> {
+    let Some(workdir) = repo.workdir() else {
+        return Ok(());
+    };
+    let mut dirs = Vec::new();
+    tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
+        if entry.kind() == Some(git2::ObjectType::Tree)
+            && let Some(name) = entry.name()
+        {
+            dirs.push(format!("{root}{name}"));
+        }
+        git2::TreeWalkResult::Ok
+    })?;
+    for dir in dirs {
+        let full = workdir.join(&dir);
+        if full
+            .symlink_metadata()
+            .is_ok_and(|meta| meta.file_type().is_symlink())
+        {
+            std::fs::remove_file(&full)?;
+        }
+    }
+    Ok(())
+}
+
+/// Adds a file, symlink, or every non-ignored file below a directory to the index.
+#[cfg(feature = "execute")]
+fn add_literal(
+    repo: &git2::Repository,
+    index: &mut git2::Index,
+    workdir: &Path,
+    target: &Path,
+) -> flow_like_types::Result<()> {
+    let Ok(metadata) = target.symlink_metadata() else {
+        return Ok(());
+    };
+    let relative = target.strip_prefix(workdir).unwrap_or(target);
+    if metadata.is_dir() {
+        if relative.file_name().is_some_and(|name| name == ".git") {
+            return Ok(());
+        }
+        // Nested repositories are not recursed into.
+        if !relative.as_os_str().is_empty() && target.join(".git").exists() {
+            return Ok(());
+        }
+        for entry in std::fs::read_dir(target)? {
+            add_literal(repo, index, workdir, &entry?.path())?;
+        }
+        return Ok(());
+    }
+    let tracked = index.get_path(relative, 0).is_some();
+    if !tracked && repo.status_should_ignore(relative)? {
+        return Ok(());
+    }
+    index.add_path(relative)?;
+    Ok(())
 }
 
 #[cfg(feature = "execute")]
@@ -440,15 +732,66 @@ fn stage(path: &Path, paths: &[String], all: bool) -> flow_like_types::Result<St
             "Choose All or provide Paths, not both"
         ));
     }
+    let repo = git::open(path)?;
+    let mut index = repo.index()?;
     if all {
-        return git::run(path, &["add", "--all", "--", "."]);
+        // An empty pathspec selects everything: additions, modifications and deletions.
+        index.add_all(
+            std::iter::empty::<&str>(),
+            git2::IndexAddOption::DEFAULT,
+            None,
+        )?;
+        index.update_all(std::iter::empty::<&str>(), None)?;
+        index.write()?;
+        return Ok("Staged all changes.\n".into());
     }
     if paths.is_empty() {
         return Err(flow_like_types::anyhow!("Provide Paths or enable All"));
     }
-    let mut args = vec!["--literal-pathspecs", "add", "--all", "--"];
-    args.extend(paths.iter().map(String::as_str));
-    git::run(path, &args)
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| flow_like_types::anyhow!("This operation requires a working tree"))?
+        .to_path_buf();
+    let specs = literal_specs(paths);
+    reject_symlinked_parents(&workdir, &specs)?;
+    for (spec, original) in specs.iter().zip(paths) {
+        let known = workdir.join(spec).symlink_metadata().is_ok()
+            || index.iter().any(|entry| spec_matches(&entry.path, spec));
+        if !known {
+            return Err(flow_like_types::anyhow!(
+                "pathspec '{original}' did not match any files"
+            ));
+        }
+        let literal = workdir.join(spec);
+        if literal.symlink_metadata().is_ok_and(|meta| !meta.is_dir())
+            && index.get_path(Path::new(spec), 0).is_none()
+            && repo.status_should_ignore(Path::new(spec))?
+        {
+            return Err(flow_like_types::anyhow!(
+                "The following paths are ignored by one of your .gitignore files: {original}"
+            ));
+        }
+    }
+    // Literal matching: `[` and `*` in a file name are not wildcards, so the files are walked here.
+    for spec in &specs {
+        add_literal(&repo, &mut index, &workdir, &workdir.join(spec))?;
+    }
+    let removed: Vec<Vec<u8>> = index
+        .iter()
+        .filter(|entry| {
+            specs.iter().any(|spec| spec_matches(&entry.path, spec))
+                && workdir
+                    .join(entry_path(&entry.path))
+                    .symlink_metadata()
+                    .is_err()
+        })
+        .map(|entry| entry.path)
+        .collect();
+    for entry in removed {
+        index.remove_path(&entry_path(&entry))?;
+    }
+    index.write()?;
+    Ok(format!("Staged {} path(s).\n", paths.len()))
 }
 
 #[cfg(feature = "execute")]
@@ -462,29 +805,46 @@ fn unstage(path: &Path, paths: &[String], all: bool) -> flow_like_types::Result<
     if !all && paths.is_empty() {
         return Err(flow_like_types::anyhow!("Provide Paths or enable All"));
     }
-    if git::run(path, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_err() {
-        // An unborn branch has no HEAD tree to restore into the index.
-        if all {
-            return git::run(path, &["read-tree", "--empty"]);
-        }
-        let mut args = vec![
-            "--literal-pathspecs",
-            "rm",
-            "--cached",
-            "--ignore-unmatch",
-            "-r",
-            "--",
-        ];
-        args.extend(paths.iter().map(String::as_str));
-        return git::run(path, &args);
+    let repo = git::open(path)?;
+    if let Some(workdir) = repo.workdir() {
+        reject_symlinked_parents(workdir, &literal_specs(paths))?;
     }
-    let mut args = vec!["--literal-pathspecs", "reset", "--quiet", "HEAD", "--"];
+    let mut index = repo.index()?;
+    // An unborn branch has no HEAD tree to restore into the index.
+    let head_tree = repo.head().ok().and_then(|head| head.peel_to_tree().ok());
     if all {
-        args.push(".");
-    } else {
-        args.extend(paths.iter().map(String::as_str));
+        match &head_tree {
+            Some(tree) => index.read_tree(tree)?,
+            None => index.clear()?,
+        }
+        index.write()?;
+        return Ok("Unstaged all changes.\n".into());
     }
-    git::run(path, &args)
+    let mut head_index = git2::Index::new()?;
+    if let Some(tree) = &head_tree {
+        head_index.read_tree(tree)?;
+    }
+    for spec in literal_specs(paths) {
+        let current: Vec<Vec<u8>> = index
+            .iter()
+            .filter(|entry| spec_matches(&entry.path, &spec))
+            .map(|entry| entry.path)
+            .collect();
+        for entry in current {
+            let location = entry_path(&entry);
+            let _ = index.conflict_remove(&location);
+            let _ = index.remove_path(&location);
+        }
+        let restored: Vec<git2::IndexEntry> = head_index
+            .iter()
+            .filter(|entry| spec_matches(&entry.path, &spec))
+            .collect();
+        for entry in restored {
+            index.add(&entry)?;
+        }
+    }
+    index.write()?;
+    Ok(format!("Unstaged {} path(s).\n", paths.len()))
 }
 
 #[cfg(feature = "execute")]
@@ -508,19 +868,76 @@ fn commit(
             "Author identity cannot contain line breaks or NUL bytes"
         ));
     }
-    let name_config = format!("user.name={author_name}");
-    let email_config = format!("user.email={author_email}");
-    let mut args = Vec::new();
-    if !author_name.is_empty() {
-        args.extend(["-c", &name_config, "-c", &email_config]);
+    let mut repo = git::open(path)?;
+    let mut merge_heads = Vec::new();
+    if repo.state() == git2::RepositoryState::Merge {
+        repo.mergehead_foreach(|oid| {
+            merge_heads.push(*oid);
+            true
+        })?;
     }
-    args.extend(["commit", "--no-gpg-sign", "--message", message]);
-    if allow_empty {
-        args.push("--allow-empty");
+    let signature = if author_name.is_empty() {
+        repo.signature().map_err(|_| {
+            flow_like_types::anyhow!(
+                "Author identity unknown: set user.name and user.email, or provide Author Name and Author Email"
+            )
+        })?
+    } else {
+        git2::Signature::now(author_name, author_email)?
+    };
+    let mut index = repo.index()?;
+    if index.has_conflicts() {
+        return Err(flow_like_types::anyhow!(
+            "Committing is not possible because you have unmerged files"
+        ));
     }
-    let output = git::run(path, &args)?;
-    let sha = commit_ref(path, "HEAD")?;
-    Ok(LocalResult::output(output).value("commit", json!(sha)))
+    let tree = repo.find_tree(index.write_tree()?)?;
+    let mut parents = Vec::new();
+    let head = repo
+        .head()
+        .ok()
+        .map(|head| head.peel_to_commit())
+        .transpose()?;
+    let merging = repo.state() == git2::RepositoryState::Merge;
+    if let Some(head) = &head {
+        parents.push(head.clone());
+    }
+    for oid in merge_heads {
+        parents.push(repo.find_commit(oid)?);
+    }
+    let unchanged = match &head {
+        Some(head) => head.tree_id() == tree.id(),
+        None => tree.is_empty(),
+    };
+    if unchanged && !merging && !allow_empty {
+        return Err(flow_like_types::anyhow!(
+            "nothing to commit: stage changes first or enable Allow Empty"
+        ));
+    }
+    let message = git2::message_prettify(message, None)?;
+    let references: Vec<&git2::Commit> = parents.iter().collect();
+    let oid = repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        &message,
+        &tree,
+        &references,
+    )?;
+    if merging {
+        repo.cleanup_state()?;
+    }
+    let branch = git::head_branch(&repo).unwrap_or_else(|| "detached HEAD".into());
+    let root = if parents.is_empty() {
+        " (root-commit)"
+    } else {
+        ""
+    };
+    let subject = message.lines().next().unwrap_or_default();
+    Ok(
+        LocalResult::output(format!("[{branch}{root} {}] {subject}\n", git::short(oid)))
+            .value("commit", json!(oid.to_string())),
+    )
 }
 
 #[cfg(feature = "execute")]
@@ -529,14 +946,26 @@ fn stash_save(
     message: &str,
     include_untracked: bool,
 ) -> flow_like_types::Result<String> {
-    let mut args = vec!["stash", "push"];
+    let mut repo = git::open(path)?;
+    // Stash entries need an identity, but a missing user configuration should not block saving work.
+    let signature = repo
+        .signature()
+        .or_else(|_| git2::Signature::now("Flow-Like", "flow-like@localhost"))?;
+    let mut flags = git2::StashFlags::DEFAULT;
     if include_untracked {
-        args.push("--include-untracked");
+        flags |= git2::StashFlags::INCLUDE_UNTRACKED;
     }
-    if !message.is_empty() {
-        args.extend(["--message", message]);
+    let message = (!message.is_empty()).then_some(message);
+    match repo.stash_save2(&signature, message, Some(flags)) {
+        Ok(oid) => Ok(format!(
+            "Saved working directory and index state {}\n",
+            message.map_or_else(|| git::short(oid), str::to_owned)
+        )),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+            Ok("No local changes to save\n".into())
+        }
+        Err(error) => Err(error.into()),
     }
-    git::run(path, &args)
 }
 
 #[cfg(feature = "execute")]
@@ -544,35 +973,35 @@ fn stash_pop(path: &Path, index: i64, restore_index: bool) -> flow_like_types::R
     if index < 0 {
         return Err(flow_like_types::anyhow!("Stash Index cannot be negative"));
     }
-    let reference = format!("stash@{{{index}}}");
-    let mut args = vec!["stash", "pop"];
+    let mut repo = git::open(path)?;
+    let mut options = git2::StashApplyOptions::new();
     if restore_index {
-        args.push("--index");
+        options.reinstantiate_index();
     }
-    args.push(&reference);
-    git::run(path, &args)
+    // Like `git stash pop`: a conflicting apply reports an error, keeps the stash entry and leaves
+    // the conflicts visible in the working tree. libgit2's own pop would drop the entry regardless.
+    repo.stash_apply(index as usize, Some(&mut options))?;
+    if repo.index()?.has_conflicts() {
+        return Err(flow_like_types::anyhow!(
+            "The stash conflicts with the working tree. Resolve the conflicts; stash@{{{index}}} was kept."
+        ));
+    }
+    repo.stash_drop(index as usize)?;
+    Ok(format!("Dropped stash@{{{index}}}\n"))
 }
 
 #[cfg(feature = "execute")]
 fn stashes(path: &Path) -> flow_like_types::Result<Vec<LocalGitStash>> {
-    let bytes = git::run_bytes(path, &["stash", "list", "-z", "--format=%gd%x00%H%x00%gs"])?;
-    let fields: Vec<&[u8]> = bytes.split(|byte| *byte == 0).collect();
+    let mut repo = git::open(path)?;
     let mut stashes = Vec::new();
-    for record in fields.chunks(3) {
-        if record.len() == 1 && record[0].is_empty() {
-            continue;
-        }
-        if record.len() != 3 {
-            return Err(flow_like_types::anyhow!(
-                "Git returned an invalid stash record"
-            ));
-        }
+    repo.stash_foreach(|index, message, oid| {
         stashes.push(LocalGitStash {
-            reference: String::from_utf8_lossy(record[0]).into_owned(),
-            commit: String::from_utf8_lossy(record[1]).into_owned(),
-            message: String::from_utf8_lossy(record[2]).into_owned(),
+            reference: format!("stash@{{{index}}}"),
+            commit: oid.to_string(),
+            message: message.to_owned(),
         });
-    }
+        true
+    })?;
     Ok(stashes)
 }
 
@@ -583,10 +1012,10 @@ fn reset(
     mode: &str,
     allow_destructive: bool,
 ) -> flow_like_types::Result<String> {
-    let mode = match mode {
-        "soft" => "--soft",
-        "mixed" => "--mixed",
-        "hard" if allow_destructive => "--hard",
+    let kind = match mode {
+        "soft" => git2::ResetType::Soft,
+        "mixed" => git2::ResetType::Mixed,
+        "hard" if allow_destructive => git2::ResetType::Hard,
         "hard" => {
             return Err(flow_like_types::anyhow!(
                 "Hard reset discards tracked changes and may remove obstructing untracked files. Enable Allow Destructive to proceed."
@@ -598,50 +1027,170 @@ fn reset(
             ));
         }
     };
-    let revision = commit_ref(path, revision)?;
-    git::run(path, &["reset", mode, &revision, "--"])
+    let repo = git::open(path)?;
+    let oid = git::resolve_commit(&repo, revision)?;
+    let commit = repo.find_commit(oid)?;
+    if kind == git2::ResetType::Hard {
+        clear_obstructing_symlinks(&repo, &commit.tree()?)?;
+    }
+    let mut checkout = git2::build::CheckoutBuilder::new();
+    checkout.force();
+    repo.reset(commit.as_object(), kind, Some(&mut checkout))?;
+    let subject = String::from_utf8_lossy(commit.summary_bytes().unwrap_or_default()).into_owned();
+    Ok(match kind {
+        git2::ResetType::Hard => format!("HEAD is now at {} {subject}\n", git::short(oid)),
+        _ => format!("Reset ({mode}) to {} {subject}\n", git::short(oid)),
+    })
 }
 
 #[cfg(feature = "execute")]
 fn merge(path: &Path, revision: &str, fast_forward_only: bool) -> flow_like_types::Result<String> {
-    let revision = commit_ref(path, revision)?;
+    let revision_id = commit_ref(path, revision)?;
     git::require_clean(path)?;
-    git::run(
-        path,
-        &[
-            "merge",
-            "--no-edit",
-            "--no-gpg-sign",
-            if fast_forward_only {
-                "--ff-only"
-            } else {
-                "--ff"
-            },
-            &revision,
-        ],
-    )
+    let repo = git::open(path)?;
+    let oid = git2::Oid::from_str(&revision_id)?;
+    let theirs = repo.find_annotated_commit(oid)?;
+    let head = match repo.head() {
+        Ok(head) => head,
+        Err(error) if error.code() == git2::ErrorCode::UnbornBranch => {
+            return git::fast_forward(&repo, oid);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let (analysis, _) = repo.merge_analysis_for_ref(&head, &[&theirs])?;
+    if analysis.is_up_to_date() {
+        return Ok("Already up to date.\n".into());
+    }
+    if analysis.is_fast_forward() {
+        return git::fast_forward(&repo, oid);
+    }
+    if fast_forward_only {
+        return Err(flow_like_types::anyhow!(
+            "Not possible to fast-forward, aborting."
+        ));
+    }
+    let mut checkout = git2::build::CheckoutBuilder::new();
+    checkout.safe();
+    repo.merge(&[&theirs], None, Some(&mut checkout))?;
+    let mut index = repo.index()?;
+    if index.has_conflicts() {
+        let mut conflicted: Vec<String> = Vec::new();
+        for conflict in index.conflicts()? {
+            let conflict = conflict?;
+            if let Some(entry) = conflict.our.or(conflict.their).or(conflict.ancestor) {
+                conflicted.push(String::from_utf8_lossy(&entry.path).into_owned());
+            }
+        }
+        return Err(flow_like_types::anyhow!(
+            "CONFLICT in {}\nAutomatic merge failed; fix conflicts and then commit the result, or abort the merge.",
+            conflicted.join(", ")
+        ));
+    }
+    let tree = repo.find_tree(index.write_tree()?)?;
+    let signature = repo.signature().map_err(|_| {
+        flow_like_types::anyhow!("Author identity unknown: set user.name and user.email")
+    })?;
+    let kind = if repo.find_branch(revision, git2::BranchType::Local).is_ok() {
+        format!("Merge branch '{revision}'")
+    } else if repo
+        .find_reference(&format!("refs/tags/{revision}"))
+        .is_ok()
+    {
+        format!("Merge tag '{revision}'")
+    } else {
+        format!("Merge commit '{revision}'")
+    };
+    let ours = head.peel_to_commit()?;
+    let other = repo.find_commit(oid)?;
+    let merged = repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        &format!("{kind}\n"),
+        &tree,
+        &[&ours, &other],
+    )?;
+    repo.cleanup_state()?;
+    Ok(format!(
+        "Merge made by the 'ort' strategy.\n[{}] {kind}\n",
+        git::short(merged)
+    ))
+}
+
+#[cfg(feature = "execute")]
+fn abort_merge(path: &Path) -> flow_like_types::Result<String> {
+    let repo = git::open(path)?;
+    if repo.state() != git2::RepositoryState::Merge {
+        return Err(flow_like_types::anyhow!(
+            "There is no merge to abort (MERGE_HEAD missing)."
+        ));
+    }
+    let head = repo.head()?.peel_to_commit()?;
+    clear_obstructing_symlinks(&repo, &head.tree()?)?;
+    let mut checkout = git2::build::CheckoutBuilder::new();
+    checkout.force();
+    repo.reset(head.as_object(), git2::ResetType::Hard, Some(&mut checkout))?;
+    repo.cleanup_state()?;
+    Ok("Merge aborted.\n".into())
+}
+
+#[cfg(feature = "execute")]
+fn remote_urls(repo: &git2::Repository, key: &str) -> flow_like_types::Result<Vec<String>> {
+    Ok(git::config_values(repo, key)?
+        .iter()
+        .map(|url| git::redact(url))
+        .collect())
 }
 
 #[cfg(feature = "execute")]
 fn remotes(path: &Path) -> flow_like_types::Result<Vec<LocalGitRemote>> {
-    let names = git::run(path, &["remote"])?;
+    let repo = git::open(path)?;
+    let names = repo.remotes()?;
     names
-        .lines()
+        .iter()
+        .flatten()
         .map(|name| {
             git::validate_remote(name)?;
+            let fetch_urls = remote_urls(&repo, &format!("remote.{name}.url"))?;
+            let mut push_urls = remote_urls(&repo, &format!("remote.{name}.pushurl"))?;
+            if push_urls.is_empty() {
+                push_urls = fetch_urls.clone();
+            }
             Ok(LocalGitRemote {
                 name: name.to_string(),
-                fetch_urls: git::run(path, &["remote", "get-url", "--all", name])?
-                    .lines()
-                    .map(git::redact)
-                    .collect(),
-                push_urls: git::run(path, &["remote", "get-url", "--push", "--all", name])?
-                    .lines()
-                    .map(git::redact)
-                    .collect(),
+                fetch_urls,
+                push_urls,
             })
         })
         .collect()
+}
+
+#[cfg(feature = "execute")]
+fn tag_names(path: &Path) -> flow_like_types::Result<Vec<String>> {
+    let repo = git::open(path)?;
+    let mut names: Vec<String> = repo
+        .tag_names(None)?
+        .iter()
+        .flatten()
+        .map(str::to_owned)
+        .collect();
+    names.sort();
+    Ok(names)
+}
+
+#[cfg(feature = "execute")]
+fn delete_tag(path: &Path, name: &str) -> flow_like_types::Result<String> {
+    git::validate_tag_name(name)?;
+    let repo = git::open(path)?;
+    let target = repo
+        .find_reference(&format!("refs/tags/{name}"))
+        .map_err(|_| flow_like_types::anyhow!("tag '{name}' not found"))?
+        .target();
+    repo.tag_delete(name)?;
+    Ok(format!(
+        "Deleted tag '{name}' (was {})\n",
+        target.map_or_else(String::new, git::short)
+    ))
 }
 
 #[cfg(feature = "execute")]
@@ -651,29 +1200,25 @@ fn create_tag(
     revision: &str,
     message: &str,
 ) -> flow_like_types::Result<String> {
-    git::validate_ref(name)?;
-    git::run(path, &["check-ref-format", &format!("refs/tags/{name}")])?;
-    let revision = commit_ref(path, revision)?;
+    git::validate_tag_name(name)?;
+    let repo = git::open(path)?;
+    let oid = git::resolve_commit(&repo, revision)?;
+    let object = repo.find_object(oid, None)?;
     if message.is_empty() {
-        git::run(
-            path,
-            &["-c", "tag.gpgSign=false", "tag", "--", name, &revision],
-        )
+        repo.tag_lightweight(name, &object, false)?;
     } else {
-        git::run(
-            path,
-            &[
-                "tag",
-                "--no-sign",
-                "--annotate",
-                "--message",
-                message,
-                "--",
-                name,
-                &revision,
-            ],
-        )
+        let signature = repo.signature().map_err(|_| {
+            flow_like_types::anyhow!("Tagger identity unknown: set user.name and user.email")
+        })?;
+        repo.tag(
+            name,
+            &object,
+            &signature,
+            &git2::message_prettify(message, None)?,
+            false,
+        )?;
     }
+    Ok(format!("Created tag '{name}' at {}\n", git::short(oid)))
 }
 
 #[crate::register_node]
@@ -1675,7 +2220,7 @@ impl NodeLogic for AbortLocalGitMergeNode {
         begin_local(context, &[]).await?;
         let repository_path: FlowPath = context.evaluate_pin("repository").await?;
         execute_local(context, &repository_path, move |path| {
-            Ok(LocalResult::output(git::run(path, &["merge", "--abort"])?))
+            Ok(LocalResult::output(abort_merge(path)?))
         })
         .await
     }
@@ -1775,8 +2320,7 @@ impl NodeLogic for ListLocalGitTagsNode {
         begin_local(context, &[("tags", json!([])), ("count", json!(0))]).await?;
         let repository_path: FlowPath = context.evaluate_pin("repository").await?;
         execute_local(context, &repository_path, move |path| {
-            let output = git::run(path, &["tag", "--list", "--sort=refname"])?;
-            let tags: Vec<&str> = output.lines().collect();
+            let tags = tag_names(path)?;
             Ok(LocalResult::output(String::new())
                 .value("count", json!(tags.len()))
                 .value("tags", json!(tags)))
@@ -1881,12 +2425,7 @@ impl NodeLogic for DeleteLocalGitTagNode {
         let repository_path: FlowPath = context.evaluate_pin("repository").await?;
         let name: String = context.evaluate_pin("name").await?;
         execute_local(context, &repository_path, move |path| {
-            git::validate_ref(&name)?;
-            git::run(path, &["check-ref-format", &format!("refs/tags/{name}")])?;
-            Ok(LocalResult::output(git::run(
-                path,
-                &["tag", "--delete", "--", &name],
-            )?))
+            Ok(LocalResult::output(delete_tag(path, &name)?))
         })
         .await
     }
@@ -1912,13 +2451,7 @@ mod tests {
                 std::env::temp_dir().join(format!("flow-like-local-git-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir(&path).unwrap();
             let path = path.canonicalize().unwrap();
-            git::run(&path, &["init", "--initial-branch=main"]).unwrap();
-            git::run(&path, &["config", "user.name", "FlowLike Test"]).unwrap();
-            git::run(
-                &path,
-                &["config", "user.email", "flow-like@example.invalid"],
-            )
-            .unwrap();
+            git::testing::init(&path);
             Self(path)
         }
 
@@ -1937,6 +2470,86 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_directories_are_not_staged_or_removed_through() {
+        let repo = TestRepository::new();
+        let outside =
+            std::env::temp_dir().join(format!("flow-like-outside-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), "TOPSECRET\n").unwrap();
+        std::os::unix::fs::symlink(&outside, repo.0.join("link")).unwrap();
+        let spec = vec!["link/secret.txt".to_string()];
+        assert!(stage(&repo.0, &spec, false).is_err());
+        assert!(unstage(&repo.0, &spec, false).is_err());
+        assert!(diff(&repo.0, true, "", &spec).is_err());
+        assert!(
+            git::open(&repo.0)
+                .unwrap()
+                .index()
+                .unwrap()
+                .get_path(Path::new("link/secret.txt"), 0)
+                .is_none()
+        );
+        std::fs::remove_dir_all(&outside).unwrap();
+
+        // A force checkout must not rmdir the target of a symlink standing where HEAD has a directory.
+        let repo = TestRepository::new();
+        std::fs::create_dir(repo.0.join("link")).unwrap();
+        repo.write("link/f.txt", "f\n");
+        repo.commit("c1");
+        std::fs::remove_dir_all(repo.0.join("link")).unwrap();
+        let empty = std::env::temp_dir().join(format!("flow-like-empty-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&empty).unwrap();
+        std::os::unix::fs::symlink(&empty, repo.0.join("link")).unwrap();
+        reset(&repo.0, "HEAD", "hard", true).unwrap();
+        assert!(empty.exists());
+        assert!(repo.0.join("link/f.txt").is_file());
+        std::fs::remove_dir_all(&empty).unwrap();
+    }
+
+    #[test]
+    fn status_stage_log_merge_match_git_edge_cases() {
+        let repo = TestRepository::new();
+        // Merge on an unborn HEAD fast-forwards.
+        repo.write("a.txt", "a\n");
+        repo.commit("c1");
+        let first = commit_ref(&repo.0, "HEAD").unwrap();
+        let raw = git::open(&repo.0).unwrap();
+        raw.branch(
+            "feature",
+            &raw.find_commit(git2::Oid::from_str(&first).unwrap())
+                .unwrap(),
+            false,
+        )
+        .unwrap();
+        let unborn = TestRepository::new();
+        let other = git::open(&unborn.0).unwrap();
+        let mut remote = other
+            .remote_anonymous(raw.path().to_str().unwrap())
+            .unwrap();
+        remote
+            .fetch(&["refs/heads/feature:refs/heads/feature"], None, None)
+            .unwrap();
+        merge(&unborn.0, "feature", false).unwrap();
+        assert_eq!(commit_ref(&unborn.0, "HEAD").unwrap(), first);
+
+        // Deleted in the index and recreated in the worktree yields two records.
+        let mut index = raw.index().unwrap();
+        index.remove_path(std::path::Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+        let current = status(&repo.0).unwrap();
+        let records: Vec<_> = current.files.iter().filter(|f| f.path == "a.txt").collect();
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().any(|f| f.index_status == "D"));
+        assert!(records.iter().any(|f| f.untracked));
+
+        // An explicitly named ignored file is an error.
+        repo.write(".gitignore", "ign.txt\n");
+        repo.write("ign.txt", "x\n");
+        assert!(stage(&repo.0, &["ign.txt".to_string()], false).is_err());
     }
 
     #[test]
@@ -2051,27 +2664,18 @@ mod tests {
         assert_eq!(log(&repo.0, "HEAD~1", 1).unwrap()[0].sha, first);
         create_tag(&repo.0, "v1", &first, "").unwrap();
         create_tag(&repo.0, "v2", "HEAD", "Release notes").unwrap();
-        assert_eq!(
-            git::run(&repo.0, &["cat-file", "-t", "refs/tags/v1"])
-                .unwrap()
-                .trim(),
-            "commit"
-        );
-        assert_eq!(
-            git::run(&repo.0, &["cat-file", "-t", "refs/tags/v2"])
-                .unwrap()
-                .trim(),
-            "tag"
-        );
+        let raw = git::open(&repo.0).unwrap();
+        let kind = |name: &str| {
+            let id = raw.refname_to_id(name).unwrap();
+            raw.find_object(id, None).unwrap().kind().unwrap()
+        };
+        assert_eq!(kind("refs/tags/v1"), git2::ObjectType::Commit);
+        assert_eq!(kind("refs/tags/v2"), git2::ObjectType::Tag);
         assert_eq!(commit_ref(&repo.0, "v1").unwrap(), first);
         assert!(create_tag(&repo.0, "v1", "HEAD", "").is_err());
-        git::run(&repo.0, &["tag", "--delete", "--", "v1"]).unwrap();
-        assert_eq!(
-            git::run(&repo.0, &["tag", "--list", "--sort=refname"])
-                .unwrap()
-                .trim(),
-            "v2"
-        );
+        delete_tag(&repo.0, "v1").unwrap();
+        assert!(delete_tag(&repo.0, "v1").is_err());
+        assert_eq!(tag_names(&repo.0).unwrap(), vec!["v2".to_string()]);
     }
 
     #[test]
@@ -2162,7 +2766,8 @@ mod tests {
                 .iter()
                 .any(|file| file.conflicted)
         );
-        git::run(&repo.0, &["merge", "--abort"]).unwrap();
+        abort_merge(&repo.0).unwrap();
+        assert!(abort_merge(&repo.0).is_err());
         assert!(status(&repo.0).unwrap().clean);
         assert_eq!(commit_ref(&repo.0, "HEAD").unwrap(), before);
         assert_eq!(
@@ -2174,21 +2779,108 @@ mod tests {
     #[test]
     fn remote_lists_redact_existing_url_credentials() {
         let repo = TestRepository::new();
-        git::run(
-            &repo.0,
-            &[
-                "remote",
-                "add",
+        git::open(&repo.0)
+            .unwrap()
+            .remote(
                 "origin",
                 "https://user:secret@example.invalid/repository.git",
-            ],
-        )
-        .unwrap();
+            )
+            .unwrap();
         let entries = remotes(&repo.0).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "origin");
         assert!(entries[0].fetch_urls[0].contains("example.invalid/repository.git"));
         assert!(!entries[0].fetch_urls[0].contains("secret"));
         assert!(!entries[0].push_urls[0].contains("secret"));
+    }
+
+    #[test]
+    fn diff_is_a_unified_patch_and_log_uses_iso_timestamps() {
+        let repo = TestRepository::new();
+        repo.write("file.txt", "one\ntwo\n");
+        let first = repo.commit("Initial");
+        repo.write("file.txt", "one\nchanged\n");
+        let unstaged = diff(&repo.0, false, "", &[]).unwrap();
+        assert!(
+            unstaged.starts_with("diff --git a/file.txt b/file.txt\n"),
+            "{unstaged}"
+        );
+        assert!(
+            unstaged.contains("@@ -1,2 +1,2 @@\n one\n-two\n+changed\n"),
+            "{unstaged}"
+        );
+        assert!(diff(&repo.0, true, "", &[]).unwrap().is_empty());
+        assert!(
+            diff(&repo.0, false, &first, &["file.txt".to_string()])
+                .unwrap()
+                .contains("+changed")
+        );
+        assert!(
+            diff(&repo.0, false, "", &["other.txt".to_string()])
+                .unwrap()
+                .is_empty()
+        );
+        let entries = log(&repo.0, "HEAD", 5).unwrap();
+        let stamp = &entries[0].authored_at;
+        assert_eq!(stamp.len(), 25, "{stamp}");
+        assert!(stamp.as_bytes()[10] == b'T' && stamp.ends_with(|c: char| c.is_ascii_digit()));
+        assert_eq!(iso8601(git2::Time::new(0, 0)), "1970-01-01T00:00:00+00:00");
+        assert_eq!(
+            iso8601(git2::Time::new(1_700_000_000, -90)),
+            "2023-11-14T20:43:20-01:30"
+        );
+    }
+
+    #[test]
+    fn staging_directories_and_deletions_is_literal() {
+        let repo = TestRepository::new();
+        std::fs::create_dir(repo.0.join("dir")).unwrap();
+        repo.write("dir/a.txt", "a\n");
+        repo.write("dir/b.txt", "b\n");
+        repo.write("other.txt", "o\n");
+        stage(&repo.0, &["dir".to_string()], false).unwrap();
+        let staged: Vec<_> = status(&repo.0)
+            .unwrap()
+            .files
+            .into_iter()
+            .filter(|file| file.index_status == "A")
+            .map(|file| file.path)
+            .collect();
+        assert_eq!(staged, vec!["dir/a.txt", "dir/b.txt"]);
+        repo.commit("Add dir");
+        std::fs::remove_file(repo.0.join("dir/a.txt")).unwrap();
+        stage(&repo.0, &["dir/a.txt".to_string()], false).unwrap();
+        let current = status(&repo.0).unwrap();
+        assert_eq!(current.files[0].path, "dir/a.txt");
+        assert_eq!(current.files[0].index_status, "D");
+        unstage(&repo.0, &["dir".to_string()], false).unwrap();
+        assert_eq!(status(&repo.0).unwrap().files[0].worktree_status, "D");
+        assert!(stage(&repo.0, &["missing.txt".to_string()], false).is_err());
+    }
+
+    #[test]
+    fn commits_need_changes_and_conclude_merges() {
+        let repo = TestRepository::new();
+        repo.write("file.txt", "initial\n");
+        repo.commit("Initial");
+        assert!(commit(&repo.0, "Nothing", "", "", false).is_err());
+        let empty = commit(&repo.0, "Empty", "", "", true).unwrap();
+        assert!(empty.output.contains("Empty"));
+        create_branch(&repo.0, "topic", "HEAD", true).unwrap();
+        repo.write("topic.txt", "topic\n");
+        repo.commit("Topic");
+        switch_branch(&repo.0, "main", true).unwrap();
+        repo.write("main.txt", "main\n");
+        repo.commit("Main");
+        // A divergent merge without conflicts creates a merge commit with both parents.
+        let output = merge(&repo.0, "topic", false).unwrap();
+        assert!(output.contains("Merge branch 'topic'"), "{output}");
+        let entries = log(&repo.0, "HEAD", 1).unwrap();
+        assert_eq!(entries[0].parents.len(), 2);
+        assert!(status(&repo.0).unwrap().clean);
+        assert_eq!(
+            merge(&repo.0, "topic", false).unwrap(),
+            "Already up to date.\n"
+        );
     }
 }

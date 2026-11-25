@@ -47,6 +47,13 @@ declare namespace chat {
     // === Events/Chat ===
 
     /**
+     * Removes the chat's main widget and returns the space to the messages.
+     * @node events_chat_clear_main_widget @alias eventsChatClearMainWidget
+     * @impure has side effects / drives control flow
+     */
+    function clearMainWidget(): void;
+
+    /**
      * Pushes a response chunk to the chat
      * @node events_chat_push_attachment @alias eventsChatPushAttachment
      * @param attachment — Attachment to the Chat
@@ -98,9 +105,10 @@ declare namespace chat {
      * Pushes a response to the chat
      * @node events_chat_push_response @alias eventsChatPushResponse
      * @param response — Chat Response
+     * @param newMessage (optional) — Start a new message. Later chat pushes belong to this message.
      * @impure has side effects / drives control flow
      */
-    function pushResponse({ response: Struct }): void;
+    function pushResponse({ response: Struct, newMessage?: bool }): void;
 
     /**
      * Pushes a single LLM usage stat to the chat for transparent model usage display
@@ -171,6 +179,16 @@ declare namespace chat {
      * @impure has side effects / drives control flow
      */
     function removeStep({ stepId: int }): void;
+
+    /**
+     * Shows or replaces the chat's main widget beside the messages. Connect an Instantiate Widget reference; element nodes can update the displayed widget.
+     * @node events_chat_set_main_widget @alias eventsChatSetMainWidget
+     * @param elementRef — Widget instance to display (from Instantiate Widget)
+     * @param title (optional) — Title shown above the main widget
+     * @param display (optional) — Open beside the chat, collapse the pane, or maximize it
+     * @impure has side effects / drives control flow
+     */
+    function setMainWidget({ elementRef: Struct, title?: string, display?: string }): void;
 
     // === Events/Chat/Attachments ===
 
@@ -2789,6 +2807,25 @@ declare namespace files {
     function rename(this: FlowPath, { from: Struct, to: Struct, overwrite?: bool }): void;
 
     /**
+     * Searches the text files below a directory for a literal string or regular expression and returns each matching line with its line number and surrounding lines. Works on every store type. Binary files and files above the size limit are skipped, and lines longer than 1,000 characters are shortened.
+     * @node path_search_files @receiver directory @alias pathSearchFiles
+     * @param directory — Directory to search recursively (receiver: `this` in `x.searchFiles(...)`)
+     * @param pattern — Text or regular expression to search for
+     * @param isRegex (optional) — Treat the pattern as a regular expression
+     * @param caseSensitive (optional) — Match upper and lower case exactly
+     * @param include (optional) — Only search paths matching one of these globs, e.g. *.rs or src/**/*.{ts,tsx}. A glob without / matches any path segment. Empty searches all files
+     * @param exclude (optional) — Skip paths matching one of these globs, e.g. node_modules or **/*.min.js
+     * @param maxFileSize (optional) — Skip files larger than this many bytes
+     * @param maxResults (optional) — Stop after this many matching lines
+     * @param contextLines (optional) — Lines to include before and after each match
+     * @returns matches — Matching lines with path, line number and context
+     * @returns truncated — True when more matches exist than Max Results allowed
+     * @returns filesScanned — Number of text files that were searched
+     * @impure has side effects / drives control flow
+     */
+    function searchFiles(this: FlowPath, { directory: Struct, pattern: string, isRegex?: bool, caseSensitive?: bool, include?: string[], exclude?: string[], maxFileSize?: int, maxResults?: int, contextLines?: int }): { matches: Struct[], truncated: bool, filesScanned: int };
+
+    /**
      * Generates a signed URL for accessing a file
      * @node sign_url @receiver path @alias signUrl
      * @param path — FlowPath (receiver: `this` in `x.signUrl(...)`)
@@ -3071,6 +3108,20 @@ declare namespace github {
     function getCommit({ provider: Struct, owner: string, repo: string, sha: string }): { commit: Struct, message: string, additions: int, deletions: int };
 
     /**
+     * Weekly commit, addition and deletion statistics per contributor (top 100 by commits). GitHub computes these on demand, so the node retries while the statistics are being prepared. Repositories with 10,000 or more commits report zero additions and deletions.
+     * @node data_github_get_contributor_stats @alias dataGithubGetContributorStats
+     * @param provider — GitHub provider
+     * @param owner — Repository owner
+     * @param repo — Repository name
+     * @param recentWeeks (optional) — Window for the recent commit, addition and deletion totals
+     * @param maxAttempts (optional) — How often to ask while GitHub is still computing the statistics
+     * @returns contributors — Contributors sorted by recent commits
+     * @returns recentTotal — Commits by all listed contributors within the recent window
+     * @impure has side effects / drives control flow
+     */
+    function getContributorStats({ provider: Struct, owner: string, repo: string, recentWeeks?: int, maxAttempts?: int }): { contributors: Struct[], recentTotal: int };
+
+    /**
      * Get the contents of a file from a repository
      * @node data_github_get_file_contents @alias dataGithubGetFileContents
      * @param provider — GitHub provider
@@ -3180,6 +3231,22 @@ declare namespace github {
     function listBranches({ provider: Struct, owner: string, repo: string, protectedOnly?: bool, perPage?: int, page?: int }): { branches: Struct[], count: int };
 
     /**
+     * List code scanning alerts (e.g. CodeQL) of a repository or organization with rule, tool, severity and the location of the most recent instance
+     * @node data_github_list_code_scanning_alerts @alias dataGithubListCodeScanningAlerts
+     * @param provider — GitHub provider
+     * @param owner — Repository owner or organization
+     * @param repo (optional) — Repository name. Leave empty to list the alerts of the whole organization
+     * @param state (optional) — Only alerts in this state. Empty returns all states
+     * @param severity (optional) — Only alerts with this severity. Empty returns all severities
+     * @param maxItems (optional) — Stop after this many alerts
+     * @returns alerts — Code scanning alerts
+     * @returns count — Number of alerts returned
+     * @returns truncated — True when more alerts exist than Max Items allowed
+     * @impure has side effects / drives control flow
+     */
+    function listCodeScanningAlerts({ provider: Struct, owner: string, repo?: string, state?: string, severity?: string, maxItems?: int }): { alerts: Struct[], count: int, truncated: bool };
+
+    /**
      * List commits for a repository
      * @node data_github_list_commits @alias dataGithubListCommits
      * @param provider — GitHub provider
@@ -3198,6 +3265,22 @@ declare namespace github {
      * @impure has side effects / drives control flow
      */
     function listCommits({ provider: Struct, owner: string, repo: string, sha?: string, path?: string, author?: string, committer?: string, since?: string, until?: string, perPage?: int, page?: int }): { commits: Struct[], count: int };
+
+    /**
+     * List Dependabot alerts of a repository or organization: vulnerable dependencies with advisory (GHSA/CVE), affected package, vulnerable range and first patched version
+     * @node data_github_list_dependabot_alerts @alias dataGithubListDependabotAlerts
+     * @param provider — GitHub provider
+     * @param owner — Repository owner or organization
+     * @param repo (optional) — Repository name. Leave empty to list the alerts of the whole organization
+     * @param state (optional) — Only alerts in this state. Empty returns all states
+     * @param severity (optional) — Only alerts with this severity. Empty returns all severities
+     * @param maxItems (optional) — Stop after this many alerts
+     * @returns alerts — Dependabot alerts
+     * @returns count — Number of alerts returned
+     * @returns truncated — True when more alerts exist than Max Items allowed
+     * @impure has side effects / drives control flow
+     */
+    function listDependabotAlerts({ provider: Struct, owner: string, repo?: string, state?: string, severity?: string, maxItems?: int }): { alerts: Struct[], count: int, truncated: bool };
 
     /**
      * List comments on an issue or pull request
@@ -3335,6 +3418,21 @@ declare namespace github {
     function listRepos({ provider: Struct, org?: string, type?: string, sort?: string, direction?: string, perPage?: int, page?: int }): { repos: Struct[], count: int };
 
     /**
+     * List secret scanning alerts of a repository or organization. The secret value is never requested or returned, only its type, validity, state and first location
+     * @node data_github_list_secret_scanning_alerts @alias dataGithubListSecretScanningAlerts
+     * @param provider — GitHub provider
+     * @param owner — Repository owner or organization
+     * @param repo (optional) — Repository name. Leave empty to list the alerts of the whole organization
+     * @param state (optional) — Only alerts in this state. Empty returns all states
+     * @param maxItems (optional) — Stop after this many alerts
+     * @returns alerts — Secret scanning alerts without secret values
+     * @returns count — Number of alerts returned
+     * @returns truncated — True when more alerts exist than Max Items allowed
+     * @impure has side effects / drives control flow
+     */
+    function listSecretScanningAlerts({ provider: Struct, owner: string, repo?: string, state?: string, maxItems?: int }): { alerts: Struct[], count: int, truncated: bool };
+
+    /**
      * Merge a pull request
      * @node data_github_merge_pull_request @alias dataGithubMergePullRequest
      * @param provider — GitHub provider
@@ -3359,6 +3457,22 @@ declare namespace github {
      * @returns provider — GitHub provider with authentication
      */
     function providerApp({ installationToken: string, baseUrl?: string }): Struct;
+
+    /**
+     * Authenticate as a GitHub App installation using the App ID and private key. Signs a short-lived JWT, resolves the installation (by ID, or by organization, user or repository) and exchanges it for an installation token that expires after one hour.
+     * @node data_github_provider_app_key @alias dataGithubProviderAppKey
+     * @param appId — GitHub App ID or Client ID
+     * @param privateKey — Private key of the GitHub App in PEM format
+     * @param installationId (optional) — Installation ID. Leave at 0 to look the installation up by owner (and repository)
+     * @param owner (optional) — Organization or user the App is installed on. Used when no installation ID is set
+     * @param repo (optional) — Optional repository name to look up a repository-level installation
+     * @param baseUrl (optional) — GitHub API base URL. Use 'https://api.github.com' for github.com or 'https://your-enterprise.com/api/v3' for Enterprise
+     * @returns provider — GitHub provider authenticated with the installation token
+     * @returns expiresAt — Expiry of the installation token (ISO 8601)
+     * @returns resolvedInstallationId — Installation ID the token was issued for
+     * @impure has side effects / drives control flow
+     */
+    function providerAppKey({ appId: string, privateKey: string, installationId?: int, owner?: string, repo?: string, baseUrl?: string }): { provider: Struct, expiresAt: string, resolvedInstallationId: int };
 
     /**
      * Connect to GitHub using OAuth Device Flow.

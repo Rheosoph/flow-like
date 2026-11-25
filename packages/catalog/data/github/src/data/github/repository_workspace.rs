@@ -189,7 +189,7 @@ impl Workspace {
         }
         // Make links last so no downloaded object can be written through a link.
         for (relative, attributes) in &metadata {
-            let path = safe_path(&self.path, &relative)?;
+            let path = safe_path(&self.path, relative)?;
             if is_git_path(relative) {
                 bail!("Stored file metadata must not redirect Git metadata");
             }

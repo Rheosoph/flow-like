@@ -5,6 +5,7 @@
 // Audio -> audio.flow.d
 // Automation -> automation.flow.d
 // Bit -> bit.flow.d
+// Bots -> bots.flow.d
 // Control -> control.flow.d
 // Data -> data.flow.d
 // Data Studio -> data-studio.flow.d
